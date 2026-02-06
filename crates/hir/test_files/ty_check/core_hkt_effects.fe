@@ -40,7 +40,7 @@ fn result_monad_chain(start: Result<(), i32>) -> Result<(), i32> {
     let functor_mapped = start.map(AddOne{})
 
     let func: Result<(), AddOne> = Ok(AddOne{})
-    let value: Result<(), i32> = move functor_mapped
+    let value: Result<(), i32> = functor_mapped
     let applied = func.ap(value)
 
     applied.bind(ToEvenResult{})
@@ -67,7 +67,7 @@ pub fn log_and_chain(x: i32) -> Result<(), Option<i32>>
     let res_chain = result_monad_chain(start: base)
 
     match res_chain {
-        Ok(_) => Ok(move opt_chain)
+        Ok(_) => Ok(opt_chain)
         Err(e) => Err(e)
     }
 }

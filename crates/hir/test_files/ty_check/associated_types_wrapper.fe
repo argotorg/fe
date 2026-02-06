@@ -27,5 +27,5 @@ impl Tr1 for S {
 fn test() {
     let w = Wrapper { inner: S{} }
     let wa = w.make_foo()
-    let a: A = move wa.inner
+    let a: A = wa.inner
 }

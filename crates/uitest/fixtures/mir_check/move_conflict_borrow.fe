@@ -1,6 +1,14 @@
+struct Boxed {
+    value: u256,
+}
+
+fn consume(move value: Boxed) {
+    value.value
+}
+
 pub fn move_conflict_borrow() {
-    let mut x: u256 = 0
-    let p: mut u256 = mut x
-    move x
-    p = 1
+    let mut x: Boxed = Boxed { value: 0 }
+    let p: mut Boxed = mut x
+    consume(x)
+    p.value = 1
 }

@@ -7,7 +7,7 @@ fn foo() {
     let x = 1
     let y = "FOO"
 
-    let f = Foo {x, y: move y}
+    let f = Foo {x, y}
 
     let f2 = Foo {x: 1, y: "FOO"}
 
@@ -22,9 +22,9 @@ struct Bar<T, U> {
 fn foo2<Z>(b: bool, z: Z) {
     let t = false
     let u = "Bar"
-    let f = Bar {t, u: move u}
+    let f = Bar {t, u}
 
-    let f2 = Bar {t: move z, u: move f}
+    let f2 = Bar {t: z, u: f}
 }
 
 struct Wrapper<T, U>
@@ -35,7 +35,7 @@ where T: * -> * -> *
 
 fn foo3() {
     let bar = Bar { t: 1, u: false }
-    let x = Wrapper { t: move bar }
+    let x = Wrapper { t: bar }
 }
 
 enum G<T> {

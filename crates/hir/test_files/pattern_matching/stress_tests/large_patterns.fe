@@ -313,7 +313,7 @@ fn test_struct_tuple_mix(data: (Point, (u8, bool), ComplexData)) -> u8 {
 
 // Test nested struct patterns with tuples
 fn test_nested_struct_patterns(rect: Rectangle, data: (ShapeVariant, (bool, u8))) -> u8 {
-    match (move rect, move data) {
+    match (rect, data) {
         (Rectangle { top_left: Point { x: 0, y: 0 }, bottom_right: Point { x: 10, y: 10 } }, (ShapeVariant::Circle(Point { x: 5, y: 5 }, radius), (true, _))) => radius + 200
         (Rectangle { top_left: Point { x, y }, bottom_right: _ }, (ShapeVariant::Rect(Rectangle { top_left: Point { x: inner_x, y: inner_y }, bottom_right: _ }), (false, val))) => x + y + inner_x + inner_y + val
         (Rectangle { top_left: _, bottom_right: Point { x: bx, y: by } }, (ShapeVariant::Line(Point { x: x1, y: y1 }, Point { x: x2, y: y2 }), (_, count))) => bx + by + x1 + y1 + x2 + y2 + count

@@ -1,5 +1,5 @@
 fn make_pair<A, B>(a: A, b: B) -> (A, B) {
-    (move a, move b)
+    (a, b)
 }
 
 fn make_pair_copy<A, B>(a: A, b: B) -> (A, B)
@@ -11,5 +11,5 @@ where
 }
 
 fn make_pair2<A, B>(a: A, b: B) -> (A, B) {
-    (move a, move b)
+    (a, b)
 }

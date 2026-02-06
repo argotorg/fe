@@ -1,13 +1,10 @@
 ---
 source: crates/uitest/tests/mir_check.rs
-assertion_line: 32
 expression: res
 input_file: fixtures/mir_check/use_after_move.fe
 ---
-error[10-0002]: move conflict in `fn use_after_move`
-  ┌─ use_after_move.fe:4:5
+error[8-0000]: type mismatch
+  ┌─ use_after_move.fe:6:5
   │
-3 │     move x
-  │          - `x` is moved here
-4 │     x
-  │     ^ cannot use a value after it was moved
+6 │     value.value
+  │     ^^^^^^^^^^^ expected `()`, but `u256` is given

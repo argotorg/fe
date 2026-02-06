@@ -1,4 +1,0 @@
-pub fn move_view_param(x: u256) -> u256 {
-    move x
-}
-

@@ -1,6 +1,5 @@
 ---
 source: crates/hir/tests/ty_check.rs
-assertion_line: 40
 expression: res
 input_file: test_files/ty_check/record_init.fe
 ---
@@ -44,32 +43,26 @@ note:
 note: 
    ┌─ record_init.fe:10:9
    │
-10 │     let f = Foo {x, y: move y}
+10 │     let f = Foo {x, y}
    │         ^ Foo
 
 note: 
    ┌─ record_init.fe:10:13
    │
-10 │     let f = Foo {x, y: move y}
-   │             ^^^^^^^^^^^^^^^^^^ Foo
+10 │     let f = Foo {x, y}
+   │             ^^^^^^^^^^ Foo
 
 note: 
    ┌─ record_init.fe:10:18
    │
-10 │     let f = Foo {x, y: move y}
+10 │     let f = Foo {x, y}
    │                  ^ i32
 
 note: 
-   ┌─ record_init.fe:10:24
+   ┌─ record_init.fe:10:21
    │
-10 │     let f = Foo {x, y: move y}
-   │                        ^^^^^^ String<10>
-
-note: 
-   ┌─ record_init.fe:10:29
-   │
-10 │     let f = Foo {x, y: move y}
-   │                             ^ String<10>
+10 │     let f = Foo {x, y}
+   │                     ^ String<10>
 
 note: 
    ┌─ record_init.fe:12:9
@@ -126,9 +119,9 @@ note:
    │ ╭───────────────────────────^
 23 │ │     let t = false
 24 │ │     let u = "Bar"
-25 │ │     let f = Bar {t, u: move u}
+25 │ │     let f = Bar {t, u}
 26 │ │ 
-27 │ │     let f2 = Bar {t: move z, u: move f}
+27 │ │     let f2 = Bar {t: z, u: f}
 28 │ │ }
    │ ╰─^ ()
 
@@ -159,68 +152,50 @@ note:
 note: 
    ┌─ record_init.fe:25:9
    │
-25 │     let f = Bar {t, u: move u}
+25 │     let f = Bar {t, u}
    │         ^ Bar<bool, String<3>>
 
 note: 
    ┌─ record_init.fe:25:13
    │
-25 │     let f = Bar {t, u: move u}
-   │             ^^^^^^^^^^^^^^^^^^ Bar<bool, String<3>>
+25 │     let f = Bar {t, u}
+   │             ^^^^^^^^^^ Bar<bool, String<3>>
 
 note: 
    ┌─ record_init.fe:25:18
    │
-25 │     let f = Bar {t, u: move u}
+25 │     let f = Bar {t, u}
    │                  ^ bool
 
 note: 
-   ┌─ record_init.fe:25:24
+   ┌─ record_init.fe:25:21
    │
-25 │     let f = Bar {t, u: move u}
-   │                        ^^^^^^ String<3>
-
-note: 
-   ┌─ record_init.fe:25:29
-   │
-25 │     let f = Bar {t, u: move u}
-   │                             ^ String<3>
+25 │     let f = Bar {t, u}
+   │                     ^ String<3>
 
 note: 
    ┌─ record_init.fe:27:9
    │
-27 │     let f2 = Bar {t: move z, u: move f}
+27 │     let f2 = Bar {t: z, u: f}
    │         ^^ Bar<Z, Bar<bool, String<3>>>
 
 note: 
    ┌─ record_init.fe:27:14
    │
-27 │     let f2 = Bar {t: move z, u: move f}
-   │              ^^^^^^^^^^^^^^^^^^^^^^^^^^ Bar<Z, Bar<bool, String<3>>>
+27 │     let f2 = Bar {t: z, u: f}
+   │              ^^^^^^^^^^^^^^^^ Bar<Z, Bar<bool, String<3>>>
 
 note: 
    ┌─ record_init.fe:27:22
    │
-27 │     let f2 = Bar {t: move z, u: move f}
-   │                      ^^^^^^ Z
+27 │     let f2 = Bar {t: z, u: f}
+   │                      ^ Z
 
 note: 
-   ┌─ record_init.fe:27:27
+   ┌─ record_init.fe:27:28
    │
-27 │     let f2 = Bar {t: move z, u: move f}
-   │                           ^ Z
-
-note: 
-   ┌─ record_init.fe:27:33
-   │
-27 │     let f2 = Bar {t: move z, u: move f}
-   │                                 ^^^^^^ Bar<bool, String<3>>
-
-note: 
-   ┌─ record_init.fe:27:38
-   │
-27 │     let f2 = Bar {t: move z, u: move f}
-   │                                      ^ Bar<bool, String<3>>
+27 │     let f2 = Bar {t: z, u: f}
+   │                            ^ Bar<bool, String<3>>
 
 note: 
    ┌─ record_init.fe:36:11
@@ -228,7 +203,7 @@ note:
 36 │   fn foo3() {
    │ ╭───────────^
 37 │ │     let bar = Bar { t: 1, u: false }
-38 │ │     let x = Wrapper { t: move bar }
+38 │ │     let x = Wrapper { t: bar }
 39 │ │ }
    │ ╰─^ ()
 
@@ -259,26 +234,20 @@ note:
 note: 
    ┌─ record_init.fe:38:9
    │
-38 │     let x = Wrapper { t: move bar }
+38 │     let x = Wrapper { t: bar }
    │         ^ Wrapper<Bar, bool>
 
 note: 
    ┌─ record_init.fe:38:13
    │
-38 │     let x = Wrapper { t: move bar }
-   │             ^^^^^^^^^^^^^^^^^^^^^^^ Wrapper<Bar, bool>
+38 │     let x = Wrapper { t: bar }
+   │             ^^^^^^^^^^^^^^^^^^ Wrapper<Bar, bool>
 
 note: 
    ┌─ record_init.fe:38:26
    │
-38 │     let x = Wrapper { t: move bar }
-   │                          ^^^^^^^^ Bar<i32, bool>
-
-note: 
-   ┌─ record_init.fe:38:31
-   │
-38 │     let x = Wrapper { t: move bar }
-   │                               ^^^ Bar<i32, bool>
+38 │     let x = Wrapper { t: bar }
+   │                          ^^^ Bar<i32, bool>
 
 note: 
    ┌─ record_init.fe:45:19

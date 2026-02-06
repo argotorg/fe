@@ -23,7 +23,7 @@ fn full() {
     bump(mut x)
 
     let a: u256 = 1
-    let a2 = take_u256(move a)
+    let a2 = take_u256(a)
     a2
 
     let mut s = Pair {a: 1, b: 2}
@@ -34,7 +34,7 @@ fn full() {
         ma += 1
         mb += 1
     }
-    let moved_a = move s.a
+    let moved_a = s.a
     s.a = moved_a
 
     let mut arr: [u256; 2] = [10, 20]
@@ -46,6 +46,6 @@ fn full() {
     }
 
     let mut z: u256 = 5
-    let w = move z
+    let w = z
     z = w
 }

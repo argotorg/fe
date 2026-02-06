@@ -1,6 +1,5 @@
 ---
 source: crates/hir/tests/ty_check.rs
-assertion_line: 40
 expression: res
 input_file: test_files/ty_check/assoc_type_subst.fe
 ---
@@ -9,27 +8,21 @@ note:
    │  
 18 │       fn get(self) -> Self::Output {
    │ ╭──────────────────────────────────^
-19 │ │         move self.value
+19 │ │         self.value
 20 │ │     }
    │ ╰─────^ T
 
 note: 
    ┌─ assoc_type_subst.fe:19:9
    │
-19 │         move self.value
-   │         ^^^^^^^^^^^^^^^ T
+19 │         self.value
+   │         ^^^^ SimpleImpl<T>
 
 note: 
-   ┌─ assoc_type_subst.fe:19:14
+   ┌─ assoc_type_subst.fe:19:9
    │
-19 │         move self.value
-   │              ^^^^ SimpleImpl<T>
-
-note: 
-   ┌─ assoc_type_subst.fe:19:14
-   │
-19 │         move self.value
-   │              ^^^^^^^^^^ T
+19 │         self.value
+   │         ^^^^^^^^^^ T
 
 note: 
    ┌─ assoc_type_subst.fe:38:49

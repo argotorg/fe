@@ -66,7 +66,7 @@ struct MockCtx {
 }
 impl Ctx for MockCtx {
     fn caller(self) -> Address {
-        move self.caller
+        self.caller
     }
 }
 

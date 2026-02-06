@@ -12,5 +12,5 @@ struct Wrapper {
 pub fn noesc_storage_escape_field() uses (mut slot: Wrapper) {
     let mut x: u256 = 0
     let e: Esc = Esc { h: mut x, tag: 0 }
-    slot.e = move e
+    slot.e = e
 }

@@ -1,6 +1,5 @@
 ---
 source: crates/hir/tests/ty_check.rs
-assertion_line: 40
 expression: res
 input_file: test_files/ty_check/method/infer_by_constraints.fe
 ---
@@ -30,39 +29,33 @@ note:
    │  
 18 │       fn foo(self) -> (T, i32) {
    │ ╭──────────────────────────────^
-19 │ │         (move self.t, 1)
+19 │ │         (self.t, 1)
 20 │ │     }
    │ ╰─────^ (T, i32)
 
 note: 
    ┌─ infer_by_constraints.fe:19:9
    │
-19 │         (move self.t, 1)
-   │         ^^^^^^^^^^^^^^^^ (T, i32)
+19 │         (self.t, 1)
+   │         ^^^^^^^^^^^ (T, i32)
 
 note: 
    ┌─ infer_by_constraints.fe:19:10
    │
-19 │         (move self.t, 1)
-   │          ^^^^^^^^^^^ T
+19 │         (self.t, 1)
+   │          ^^^^ S<T>
 
 note: 
-   ┌─ infer_by_constraints.fe:19:15
+   ┌─ infer_by_constraints.fe:19:10
    │
-19 │         (move self.t, 1)
-   │               ^^^^ S<T>
+19 │         (self.t, 1)
+   │          ^^^^^^ T
 
 note: 
-   ┌─ infer_by_constraints.fe:19:15
+   ┌─ infer_by_constraints.fe:19:18
    │
-19 │         (move self.t, 1)
-   │               ^^^^^^ T
-
-note: 
-   ┌─ infer_by_constraints.fe:19:23
-   │
-19 │         (move self.t, 1)
-   │                       ^ i32
+19 │         (self.t, 1)
+   │                  ^ i32
 
 note: 
    ┌─ infer_by_constraints.fe:24:32

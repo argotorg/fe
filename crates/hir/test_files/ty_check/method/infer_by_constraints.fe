@@ -16,7 +16,7 @@ trait Foo<T, U> {
 
 impl<T> Foo<T, i32> for S<T> {
     fn foo(self) -> (T, i32) {
-        (move self.t, 1)
+        (self.t, 1)
     }
 }
 

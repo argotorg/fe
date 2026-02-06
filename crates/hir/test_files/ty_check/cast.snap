@@ -1,6 +1,5 @@
 ---
 source: crates/hir/tests/ty_check.rs
-assertion_line: 40
 expression: res
 input_file: test_files/ty_check/cast.fe
 ---
@@ -13,7 +12,7 @@ note:
  9 │ │     let b: u8 = arr[idx as usize]
 10 │ │ 
    · │
-21 │ │     (b, i, word, z, move a2)
+21 │ │     (b, i, word, z, a2)
 22 │ │ }
    │ ╰─^ (u8, i64, u256, u256, Address)
 
@@ -128,26 +127,20 @@ note:
 note: 
    ┌─ cast.fe:14:9
    │
-14 │     let word: u256 = (move w) as u256
+14 │     let word: u256 = (w) as u256
    │         ^^^^ u256
 
 note: 
    ┌─ cast.fe:14:22
    │
-14 │     let word: u256 = (move w) as u256
-   │                      ^^^^^^^^^^^^^^^^ u256
+14 │     let word: u256 = (w) as u256
+   │                      ^^^^^^^^^^^ u256
 
 note: 
    ┌─ cast.fe:14:23
    │
-14 │     let word: u256 = (move w) as u256
-   │                       ^^^^^^ WrapU32
-
-note: 
-   ┌─ cast.fe:14:28
-   │
-14 │     let word: u256 = (move w) as u256
-   │                            ^ WrapU32
+14 │     let word: u256 = (w) as u256
+   │                       ^ WrapU32
 
 note: 
    ┌─ cast.fe:16:9
@@ -176,26 +169,20 @@ note:
 note: 
    ┌─ cast.fe:18:9
    │
-18 │     let a_word: u256 = (move a) as u256
+18 │     let a_word: u256 = (a) as u256
    │         ^^^^^^ u256
 
 note: 
    ┌─ cast.fe:18:24
    │
-18 │     let a_word: u256 = (move a) as u256
-   │                        ^^^^^^^^^^^^^^^^ u256
+18 │     let a_word: u256 = (a) as u256
+   │                        ^^^^^^^^^^^ u256
 
 note: 
    ┌─ cast.fe:18:25
    │
-18 │     let a_word: u256 = (move a) as u256
-   │                         ^^^^^^ Address
-
-note: 
-   ┌─ cast.fe:18:30
-   │
-18 │     let a_word: u256 = (move a) as u256
-   │                              ^ Address
+18 │     let a_word: u256 = (a) as u256
+   │                         ^ Address
 
 note: 
    ┌─ cast.fe:19:9
@@ -218,44 +205,38 @@ note:
 note: 
    ┌─ cast.fe:21:5
    │
-21 │     (b, i, word, z, move a2)
-   │     ^^^^^^^^^^^^^^^^^^^^^^^^ (u8, i64, u256, u256, Address)
+21 │     (b, i, word, z, a2)
+   │     ^^^^^^^^^^^^^^^^^^^ (u8, i64, u256, u256, Address)
 
 note: 
    ┌─ cast.fe:21:6
    │
-21 │     (b, i, word, z, move a2)
+21 │     (b, i, word, z, a2)
    │      ^ u8
 
 note: 
    ┌─ cast.fe:21:9
    │
-21 │     (b, i, word, z, move a2)
+21 │     (b, i, word, z, a2)
    │         ^ i64
 
 note: 
    ┌─ cast.fe:21:12
    │
-21 │     (b, i, word, z, move a2)
+21 │     (b, i, word, z, a2)
    │            ^^^^ u256
 
 note: 
    ┌─ cast.fe:21:18
    │
-21 │     (b, i, word, z, move a2)
+21 │     (b, i, word, z, a2)
    │                  ^ u256
 
 note: 
    ┌─ cast.fe:21:21
    │
-21 │     (b, i, word, z, move a2)
-   │                     ^^^^^^^ Address
-
-note: 
-   ┌─ cast.fe:21:26
-   │
-21 │     (b, i, word, z, move a2)
-   │                          ^^ Address
+21 │     (b, i, word, z, a2)
+   │                     ^^ Address
 
 note: 
    ┌─ cast.fe:24:29

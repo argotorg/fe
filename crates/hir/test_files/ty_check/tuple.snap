@@ -1,6 +1,5 @@
 ---
 source: crates/hir/tests/ty_check.rs
-assertion_line: 40
 expression: res
 input_file: test_files/ty_check/tuple.fe
 ---
@@ -10,8 +9,8 @@ note:
  6 │   fn foo() {
    │ ╭──────────^
  7 │ │     let f = Foo {x: 1, y: 2}
- 8 │ │     let tup_1 = (move f, true, false)
- 9 │ │     let tup_2 = (("Foo", true), move tup_1, "BAZ")
+ 8 │ │     let tup_1 = (f, true, false)
+ 9 │ │     let tup_2 = (("Foo", true), tup_1, "BAZ")
 10 │ │ }
    │ ╰─^ ()
 
@@ -42,83 +41,71 @@ note:
 note: 
   ┌─ tuple.fe:8:9
   │
-8 │     let tup_1 = (move f, true, false)
+8 │     let tup_1 = (f, true, false)
   │         ^^^^^ (Foo, bool, bool)
 
 note: 
   ┌─ tuple.fe:8:17
   │
-8 │     let tup_1 = (move f, true, false)
-  │                 ^^^^^^^^^^^^^^^^^^^^^ (Foo, bool, bool)
+8 │     let tup_1 = (f, true, false)
+  │                 ^^^^^^^^^^^^^^^^ (Foo, bool, bool)
 
 note: 
   ┌─ tuple.fe:8:18
   │
-8 │     let tup_1 = (move f, true, false)
-  │                  ^^^^^^ Foo
+8 │     let tup_1 = (f, true, false)
+  │                  ^ Foo
 
 note: 
-  ┌─ tuple.fe:8:23
+  ┌─ tuple.fe:8:21
   │
-8 │     let tup_1 = (move f, true, false)
-  │                       ^ Foo
+8 │     let tup_1 = (f, true, false)
+  │                     ^^^^ bool
 
 note: 
-  ┌─ tuple.fe:8:26
+  ┌─ tuple.fe:8:27
   │
-8 │     let tup_1 = (move f, true, false)
-  │                          ^^^^ bool
-
-note: 
-  ┌─ tuple.fe:8:32
-  │
-8 │     let tup_1 = (move f, true, false)
-  │                                ^^^^^ bool
+8 │     let tup_1 = (f, true, false)
+  │                           ^^^^^ bool
 
 note: 
   ┌─ tuple.fe:9:9
   │
-9 │     let tup_2 = (("Foo", true), move tup_1, "BAZ")
+9 │     let tup_2 = (("Foo", true), tup_1, "BAZ")
   │         ^^^^^ ((String<3>, bool), (Foo, bool, bool), String<3>)
 
 note: 
   ┌─ tuple.fe:9:17
   │
-9 │     let tup_2 = (("Foo", true), move tup_1, "BAZ")
-  │                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ((String<3>, bool), (Foo, bool, bool), String<3>)
+9 │     let tup_2 = (("Foo", true), tup_1, "BAZ")
+  │                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ((String<3>, bool), (Foo, bool, bool), String<3>)
 
 note: 
   ┌─ tuple.fe:9:18
   │
-9 │     let tup_2 = (("Foo", true), move tup_1, "BAZ")
+9 │     let tup_2 = (("Foo", true), tup_1, "BAZ")
   │                  ^^^^^^^^^^^^^ (String<3>, bool)
 
 note: 
   ┌─ tuple.fe:9:19
   │
-9 │     let tup_2 = (("Foo", true), move tup_1, "BAZ")
+9 │     let tup_2 = (("Foo", true), tup_1, "BAZ")
   │                   ^^^^^ String<3>
 
 note: 
   ┌─ tuple.fe:9:26
   │
-9 │     let tup_2 = (("Foo", true), move tup_1, "BAZ")
+9 │     let tup_2 = (("Foo", true), tup_1, "BAZ")
   │                          ^^^^ bool
 
 note: 
   ┌─ tuple.fe:9:33
   │
-9 │     let tup_2 = (("Foo", true), move tup_1, "BAZ")
-  │                                 ^^^^^^^^^^ (Foo, bool, bool)
+9 │     let tup_2 = (("Foo", true), tup_1, "BAZ")
+  │                                 ^^^^^ (Foo, bool, bool)
 
 note: 
-  ┌─ tuple.fe:9:38
+  ┌─ tuple.fe:9:40
   │
-9 │     let tup_2 = (("Foo", true), move tup_1, "BAZ")
-  │                                      ^^^^^ (Foo, bool, bool)
-
-note: 
-  ┌─ tuple.fe:9:45
-  │
-9 │     let tup_2 = (("Foo", true), move tup_1, "BAZ")
-  │                                             ^^^^^ String<3>
+9 │     let tup_2 = (("Foo", true), tup_1, "BAZ")
+  │                                        ^^^^^ String<3>

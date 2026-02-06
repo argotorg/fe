@@ -1,6 +1,0 @@
-pub fn borrowck_read_under_mut() {
-    let mut x: u256 = 0
-    let p: mut u256 = mut x
-    let y: u256 = x
-    p = y
-}

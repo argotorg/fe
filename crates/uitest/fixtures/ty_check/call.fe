@@ -10,7 +10,7 @@ pub fn use_add() -> i32 {
 }
 
 pub fn make_tuple<T, U>(move _ t: T, move _ u: U) -> (T, U) {
-    (move t, move u)
+    (t, u)
 }
 
 pub fn use_make_tuple() -> (i32, u32) {

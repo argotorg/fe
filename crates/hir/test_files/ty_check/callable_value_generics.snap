@@ -1,6 +1,5 @@
 ---
 source: crates/hir/tests/ty_check.rs
-assertion_line: 40
 expression: res
 input_file: test_files/ty_check/callable_value_generics.fe
 ---
@@ -8,42 +7,30 @@ note:
   ┌─ callable_value_generics.fe:3:1
   │  
 3 │ ╭ {
-4 │ │     move x
+4 │ │     x
 5 │ │ }
   │ ╰─^ T
 
 note: 
   ┌─ callable_value_generics.fe:4:5
   │
-4 │     move x
-  │     ^^^^^^ T
-
-note: 
-  ┌─ callable_value_generics.fe:4:10
-  │
-4 │     move x
-  │          ^ T
+4 │     x
+  │     ^ T
 
 note: 
    ┌─ callable_value_generics.fe:12:31
    │  
 12 │       fn id<T>(self, x: T) -> T {
    │ ╭───────────────────────────────^
-13 │ │         move x
+13 │ │         x
 14 │ │     }
    │ ╰─────^ T
 
 note: 
    ┌─ callable_value_generics.fe:13:9
    │
-13 │         move x
-   │         ^^^^^^ T
-
-note: 
-   ┌─ callable_value_generics.fe:13:14
-   │
-13 │         move x
-   │              ^ T
+13 │         x
+   │         ^ T
 
 note: 
    ┌─ callable_value_generics.fe:17:11
@@ -52,7 +39,7 @@ note:
    │ ╭───────────^
 18 │ │     let f = foo<u256>
 19 │ │     let m = Bar::id<u256>
-20 │ │     let _ = (move f, move m)
+20 │ │     let _ = (f, m)
 21 │ │ }
    │ ╰─^ ()
 
@@ -83,35 +70,23 @@ note:
 note: 
    ┌─ callable_value_generics.fe:20:9
    │
-20 │     let _ = (move f, move m)
+20 │     let _ = (f, m)
    │         ^ (fn foo<u256>, fn id<u256>)
 
 note: 
    ┌─ callable_value_generics.fe:20:13
    │
-20 │     let _ = (move f, move m)
-   │             ^^^^^^^^^^^^^^^^ (fn foo<u256>, fn id<u256>)
+20 │     let _ = (f, m)
+   │             ^^^^^^ (fn foo<u256>, fn id<u256>)
 
 note: 
    ┌─ callable_value_generics.fe:20:14
    │
-20 │     let _ = (move f, move m)
-   │              ^^^^^^ fn foo<u256>
+20 │     let _ = (f, m)
+   │              ^ fn foo<u256>
 
 note: 
-   ┌─ callable_value_generics.fe:20:19
+   ┌─ callable_value_generics.fe:20:17
    │
-20 │     let _ = (move f, move m)
-   │                   ^ fn foo<u256>
-
-note: 
-   ┌─ callable_value_generics.fe:20:22
-   │
-20 │     let _ = (move f, move m)
-   │                      ^^^^^^ fn id<u256>
-
-note: 
-   ┌─ callable_value_generics.fe:20:27
-   │
-20 │     let _ = (move f, move m)
-   │                           ^ fn id<u256>
+20 │     let _ = (f, m)
+   │                 ^ fn id<u256>

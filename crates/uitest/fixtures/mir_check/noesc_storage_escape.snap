@@ -6,7 +6,7 @@ input_file: fixtures/mir_check/noesc_storage_escape.fe
 error[10-0001]: cannot store `Esc` in `Storage`
    ┌─ noesc_storage_escape.fe:11:5
    │
-11 │     slot = move e
-   │     ^^^^^^^^^^^^^ this value cannot be written to `Storage`
+11 │     slot = e
+   │     ^^^^^^^^ this value cannot be written to `Storage`
    │
    = note: this value contains a borrow handle (`mut`/`ref`)

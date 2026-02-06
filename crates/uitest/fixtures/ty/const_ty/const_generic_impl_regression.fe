@@ -25,8 +25,8 @@ impl<const N: usize> Sized<N> for Fixed<N> {
 // Case 2: Type param in impl target
 impl<T> Convert<T> for Wrapper<T> {
     fn convert(move self) -> T {
-        let Self { inner } = move self
-        move inner
+        let Self { inner } = self
+        inner
     }
 }
 

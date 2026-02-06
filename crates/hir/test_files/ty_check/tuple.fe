@@ -5,6 +5,6 @@ struct Foo {
 
 fn foo() {
     let f = Foo {x: 1, y: 2}
-    let tup_1 = (move f, true, false)
-    let tup_2 = (("Foo", true), move tup_1, "BAZ")
+    let tup_1 = (f, true, false)
+    let tup_2 = (("Foo", true), tup_1, "BAZ")
 }

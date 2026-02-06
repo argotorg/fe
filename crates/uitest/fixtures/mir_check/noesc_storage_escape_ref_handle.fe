@@ -8,5 +8,5 @@ struct Esc {
 pub fn noesc_storage_escape_ref_handle() uses (mut slot: Esc) {
     let mut x: u256 = 0
     let e: Esc = Esc { h: ref x, tag: 0 }
-    slot = move e
+    slot = e
 }

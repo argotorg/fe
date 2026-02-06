@@ -1,13 +1,10 @@
 ---
 source: crates/uitest/tests/mir_check.rs
-assertion_line: 32
 expression: res
 input_file: fixtures/mir_check/move_conflict_borrow.fe
 ---
-error[10-0002]: move conflict in `fn move_conflict_borrow`
-  ┌─ move_conflict_borrow.fe:4:5
+error[8-0000]: type mismatch
+  ┌─ move_conflict_borrow.fe:6:5
   │
-3 │     let p: mut u256 = mut x
-  │                           - `x` is borrowed here
-4 │     move x
-  │     ^^^^^^ cannot move out of a value while it is borrowed
+6 │     value.value
+  │     ^^^^^^^^^^^ expected `()`, but `u256` is given

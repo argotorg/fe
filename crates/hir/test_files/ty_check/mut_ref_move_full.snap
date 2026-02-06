@@ -1,6 +1,5 @@
 ---
 source: crates/hir/tests/ty_check.rs
-assertion_line: 40
 expression: res
 input_file: test_files/ty_check/mut_ref_move_full.fe
 ---
@@ -204,32 +203,26 @@ note:
 note: 
    ┌─ mut_ref_move_full.fe:26:9
    │
-26 │     let a2 = take_u256(move a)
+26 │     let a2 = take_u256(a)
    │         ^^ u256
 
 note: 
    ┌─ mut_ref_move_full.fe:26:14
    │
-26 │     let a2 = take_u256(move a)
+26 │     let a2 = take_u256(a)
    │              ^^^^^^^^^ fn take_u256
 
 note: 
    ┌─ mut_ref_move_full.fe:26:14
    │
-26 │     let a2 = take_u256(move a)
-   │              ^^^^^^^^^^^^^^^^^ u256
+26 │     let a2 = take_u256(a)
+   │              ^^^^^^^^^^^^ u256
 
 note: 
    ┌─ mut_ref_move_full.fe:26:24
    │
-26 │     let a2 = take_u256(move a)
-   │                        ^^^^^^ u256
-
-note: 
-   ┌─ mut_ref_move_full.fe:26:29
-   │
-26 │     let a2 = take_u256(move a)
-   │                             ^ u256
+26 │     let a2 = take_u256(a)
+   │                        ^ u256
 
 note: 
    ┌─ mut_ref_move_full.fe:27:5
@@ -401,26 +394,20 @@ note:
 note: 
    ┌─ mut_ref_move_full.fe:37:9
    │
-37 │     let moved_a = move s.a
+37 │     let moved_a = s.a
    │         ^^^^^^^ u256
 
 note: 
    ┌─ mut_ref_move_full.fe:37:19
    │
-37 │     let moved_a = move s.a
-   │                   ^^^^^^^^ u256
+37 │     let moved_a = s.a
+   │                   ^ Pair
 
 note: 
-   ┌─ mut_ref_move_full.fe:37:24
+   ┌─ mut_ref_move_full.fe:37:19
    │
-37 │     let moved_a = move s.a
-   │                        ^ Pair
-
-note: 
-   ┌─ mut_ref_move_full.fe:37:24
-   │
-37 │     let moved_a = move s.a
-   │                        ^^^ u256
+37 │     let moved_a = s.a
+   │                   ^^^ u256
 
 note: 
    ┌─ mut_ref_move_full.fe:38:5
@@ -610,20 +597,14 @@ note:
 note: 
    ┌─ mut_ref_move_full.fe:49:9
    │
-49 │     let w = move z
+49 │     let w = z
    │         ^ u256
 
 note: 
    ┌─ mut_ref_move_full.fe:49:13
    │
-49 │     let w = move z
-   │             ^^^^^^ u256
-
-note: 
-   ┌─ mut_ref_move_full.fe:49:18
-   │
-49 │     let w = move z
-   │                  ^ u256
+49 │     let w = z
+   │             ^ u256
 
 note: 
    ┌─ mut_ref_move_full.fe:50:5

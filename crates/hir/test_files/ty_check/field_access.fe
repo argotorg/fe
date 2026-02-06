@@ -4,9 +4,9 @@ fn foo1(x: (i32, u32)) -> i32 {
 }
 
 fn swap<T, U>(x: (T, U)) -> (U, T) {
-    let elem0 = move x.0
-    let elem1 = move x.1
-    (move elem1, move elem0)
+    let elem0 = x.0
+    let elem1 = x.1
+    (elem1, elem0)
 }
 
 struct Bar<T, U> {
@@ -15,7 +15,7 @@ struct Bar<T, U> {
 }
 
 fn swap2<T>(bar: Bar<T, i32>) -> Bar<i32, T> {
-    let u = move bar.t
+    let u = bar.t
     let t = bar.u
-    Bar {t, u: move u}
+    Bar {t, u}
 }

@@ -1,6 +1,5 @@
 ---
 source: crates/hir/tests/ty_check.rs
-assertion_line: 40
 expression: res
 input_file: test_files/ty_check/contract_effects.fe
 ---
@@ -294,27 +293,21 @@ note:
    │  
 68 │       fn caller(self) -> Address {
    │ ╭────────────────────────────────^
-69 │ │         move self.caller
+69 │ │         self.caller
 70 │ │     }
    │ ╰─────^ Address
 
 note: 
    ┌─ contract_effects.fe:69:9
    │
-69 │         move self.caller
-   │         ^^^^^^^^^^^^^^^^ Address
+69 │         self.caller
+   │         ^^^^ MockCtx
 
 note: 
-   ┌─ contract_effects.fe:69:14
+   ┌─ contract_effects.fe:69:9
    │
-69 │         move self.caller
-   │              ^^^^ MockCtx
-
-note: 
-   ┌─ contract_effects.fe:69:14
-   │
-69 │         move self.caller
-   │              ^^^^^^^^^^^ Address
+69 │         self.caller
+   │         ^^^^^^^^^^^ Address
 
 note: 
    ┌─ contract_effects.fe:73:20

@@ -1,5 +1,13 @@
-pub fn use_after_move() -> u256 {
-    let mut x: u256 = 0
-    move x
+struct Boxed {
+    value: u256,
+}
+
+fn consume(move value: Boxed) {
+    value.value
+}
+
+pub fn use_after_move() -> Boxed {
+    let x: Boxed = Boxed { value: 0 }
+    consume(x)
     x
 }

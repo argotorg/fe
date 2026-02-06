@@ -16,7 +16,7 @@ struct Repeat<T> {
 impl<T> Iterator for Repeat<T> {
     type Item = T
     fn next(self) -> Option<T> {
-        Option::Some(move self.val)
+        Option::Some(self.val)
     }
 }
 

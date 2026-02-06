@@ -1,6 +1,5 @@
 ---
 source: crates/hir/tests/ty_check.rs
-assertion_line: 40
 expression: res
 input_file: test_files/ty_check/method.fe
 ---
@@ -31,7 +30,7 @@ note:
 17 │       pub fn and<U>(self, rhs: Option<U>) -> Option<U> {
    │ ╭──────────────────────────────────────────────────────^
 18 │ │         match self {
-19 │ │             Self::Some(t) => move rhs
+19 │ │             Self::Some(t) => rhs
 20 │ │             Self::None => Option::None
 21 │ │         }
 22 │ │     }
@@ -41,7 +40,7 @@ note:
    ┌─ method.fe:18:9
    │  
 18 │ ╭         match self {
-19 │ │             Self::Some(t) => move rhs
+19 │ │             Self::Some(t) => rhs
 20 │ │             Self::None => Option::None
 21 │ │         }
    │ ╰─────────^ Option<U>
@@ -55,26 +54,20 @@ note:
 note: 
    ┌─ method.fe:19:13
    │
-19 │             Self::Some(t) => move rhs
+19 │             Self::Some(t) => rhs
    │             ^^^^^^^^^^^^^ Option<T>
 
 note: 
    ┌─ method.fe:19:24
    │
-19 │             Self::Some(t) => move rhs
+19 │             Self::Some(t) => rhs
    │                        ^ T
 
 note: 
    ┌─ method.fe:19:30
    │
-19 │             Self::Some(t) => move rhs
-   │                              ^^^^^^^^ Option<U>
-
-note: 
-   ┌─ method.fe:19:35
-   │
-19 │             Self::Some(t) => move rhs
-   │                                   ^^^ Option<U>
+19 │             Self::Some(t) => rhs
+   │                              ^^^ Option<U>
 
 note: 
    ┌─ method.fe:20:13
@@ -94,7 +87,7 @@ note:
 24 │       pub fn get_or_insert(mut self, inner: T) -> T {
    │ ╭───────────────────────────────────────────────────^
 25 │ │         match self {
-26 │ │             Self::Some(t) => move t
+26 │ │             Self::Some(t) => t
 27 │ │             Self::None => {
    · │
 31 │ │         }
@@ -105,10 +98,10 @@ note:
    ┌─ method.fe:25:9
    │  
 25 │ ╭         match self {
-26 │ │             Self::Some(t) => move t
+26 │ │             Self::Some(t) => t
 27 │ │             Self::None => {
-28 │ │                 self = Self::Some(move inner)
-29 │ │                 move inner
+28 │ │                 self = Self::Some(inner)
+29 │ │                 inner
 30 │ │             }
 31 │ │         }
    │ ╰─────────^ T
@@ -122,26 +115,20 @@ note:
 note: 
    ┌─ method.fe:26:13
    │
-26 │             Self::Some(t) => move t
+26 │             Self::Some(t) => t
    │             ^^^^^^^^^^^^^ Option<T>
 
 note: 
    ┌─ method.fe:26:24
    │
-26 │             Self::Some(t) => move t
+26 │             Self::Some(t) => t
    │                        ^ T
 
 note: 
    ┌─ method.fe:26:30
    │
-26 │             Self::Some(t) => move t
-   │                              ^^^^^^ T
-
-note: 
-   ┌─ method.fe:26:35
-   │
-26 │             Self::Some(t) => move t
-   │                                   ^ T
+26 │             Self::Some(t) => t
+   │                              ^ T
 
 note: 
    ┌─ method.fe:27:13
@@ -154,58 +141,46 @@ note:
    │  
 27 │               Self::None => {
    │ ╭───────────────────────────^
-28 │ │                 self = Self::Some(move inner)
-29 │ │                 move inner
+28 │ │                 self = Self::Some(inner)
+29 │ │                 inner
 30 │ │             }
    │ ╰─────────────^ T
 
 note: 
    ┌─ method.fe:28:17
    │
-28 │                 self = Self::Some(move inner)
+28 │                 self = Self::Some(inner)
    │                 ^^^^ Option<T>
 
 note: 
    ┌─ method.fe:28:17
    │
-28 │                 self = Self::Some(move inner)
-   │                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
+28 │                 self = Self::Some(inner)
+   │                 ^^^^^^^^^^^^^^^^^^^^^^^^ ()
 
 note: 
    ┌─ method.fe:28:24
    │
-28 │                 self = Self::Some(move inner)
+28 │                 self = Self::Some(inner)
    │                        ^^^^^^^^^^ fn Some<T>
 
 note: 
    ┌─ method.fe:28:24
    │
-28 │                 self = Self::Some(move inner)
-   │                        ^^^^^^^^^^^^^^^^^^^^^^ Option<T>
+28 │                 self = Self::Some(inner)
+   │                        ^^^^^^^^^^^^^^^^^ Option<T>
 
 note: 
    ┌─ method.fe:28:35
    │
-28 │                 self = Self::Some(move inner)
-   │                                   ^^^^^^^^^^ T
-
-note: 
-   ┌─ method.fe:28:40
-   │
-28 │                 self = Self::Some(move inner)
-   │                                        ^^^^^ T
+28 │                 self = Self::Some(inner)
+   │                                   ^^^^^ T
 
 note: 
    ┌─ method.fe:29:17
    │
-29 │                 move inner
-   │                 ^^^^^^^^^^ T
-
-note: 
-   ┌─ method.fe:29:22
-   │
-29 │                 move inner
-   │                      ^^^^^ T
+29 │                 inner
+   │                 ^^^^^ T
 
 note: 
    ┌─ method.fe:36:42
@@ -214,7 +189,7 @@ note:
    │ ╭──────────────────────────────────────────^
 37 │ │         match self {
 38 │ │             Self::None => evm::abort()
-39 │ │             Self::Some(t) => move t
+39 │ │             Self::Some(t) => t
 40 │ │         }
 41 │ │     }
    │ ╰─────^ T
@@ -224,7 +199,7 @@ note:
    │  
 37 │ ╭         match self {
 38 │ │             Self::None => evm::abort()
-39 │ │             Self::Some(t) => move t
+39 │ │             Self::Some(t) => t
 40 │ │         }
    │ ╰─────────^ T
 
@@ -255,26 +230,20 @@ note:
 note: 
    ┌─ method.fe:39:13
    │
-39 │             Self::Some(t) => move t
+39 │             Self::Some(t) => t
    │             ^^^^^^^^^^^^^ Option<T>
 
 note: 
    ┌─ method.fe:39:24
    │
-39 │             Self::Some(t) => move t
+39 │             Self::Some(t) => t
    │                        ^ T
 
 note: 
    ┌─ method.fe:39:30
    │
-39 │             Self::Some(t) => move t
-   │                              ^^^^^^ T
-
-note: 
-   ┌─ method.fe:39:35
-   │
-39 │             Self::Some(t) => move t
-   │                                   ^ T
+39 │             Self::Some(t) => t
+   │                              ^ T
 
 note: 
    ┌─ method.fe:44:20
