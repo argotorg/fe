@@ -20,7 +20,7 @@ use revm::{
 };
 use solc_runner::{ContractBytecode, YulcError, compile_single_contract};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     fmt,
     io::Write,
     path::{Path, PathBuf},
@@ -269,7 +269,7 @@ fn trace_tx(evm: &MainnetEvm<MainnetContext<InMemoryDB>>, tx: TxEnv) {
     struct RingTrace {
         keep: usize,
         stack_n: usize,
-        steps: Vec<Step>,
+        steps: VecDeque<Step>,
         total_steps: u64,
     }
 
@@ -278,7 +278,7 @@ fn trace_tx(evm: &MainnetEvm<MainnetContext<InMemoryDB>>, tx: TxEnv) {
             Self {
                 keep,
                 stack_n,
-                steps: Vec::with_capacity(keep),
+                steps: VecDeque::with_capacity(keep),
                 total_steps: 0,
             }
         }
@@ -286,9 +286,9 @@ fn trace_tx(evm: &MainnetEvm<MainnetContext<InMemoryDB>>, tx: TxEnv) {
         fn push(&mut self, step: Step) {
             self.total_steps += 1;
             if self.steps.len() == self.keep {
-                self.steps.remove(0);
+                self.steps.pop_front();
             }
-            self.steps.push(step);
+            self.steps.push_back(step);
         }
 
         fn format(&self) -> String {

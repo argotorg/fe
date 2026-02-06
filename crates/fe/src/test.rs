@@ -9,7 +9,10 @@ use crate::report::{
     panic_payload_to_string, sanitize_filename, tar_gz_dir, write_report_meta,
 };
 use camino::Utf8PathBuf;
-use codegen::{ExpectedRevert, TestMetadata, emit_test_module_sonatina, emit_test_module_yul};
+use codegen::{
+    ExpectedRevert, TestMetadata, TestModuleOutput, emit_test_module_sonatina,
+    emit_test_module_yul,
+};
 use colored::Colorize;
 use common::InputDb;
 use contract_harness::{ExecutionOptions, RuntimeInstance};
@@ -526,6 +529,42 @@ fn run_tests_ingot(
     )
 }
 
+/// Emit a test module with panic recovery and report integration.
+///
+/// Wraps `emit_fn` in `catch_unwind`, writes error/panic info into the report
+/// staging directory when present, and returns the output or an early-return
+/// error result vector.
+fn emit_with_catch_unwind<E: std::fmt::Display>(
+    emit_fn: impl FnOnce() -> Result<TestModuleOutput, E>,
+    backend_label: &str,
+    suite: &str,
+    report: Option<&ReportContext>,
+) -> Result<TestModuleOutput, Vec<TestResult>> {
+    let _hook = report.map(|r| install_report_panic_hook(r, "codegen_panic_full.txt"));
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(emit_fn)) {
+        Ok(Ok(output)) => Ok(output),
+        Ok(Err(err)) => {
+            let msg = format!("Failed to emit test {backend_label}: {err}");
+            eprintln!("{msg}");
+            if let Some(report) = report {
+                write_report_error(report, "codegen_error.txt", &msg);
+            }
+            Err(suite_error_result(suite, "codegen", msg))
+        }
+        Err(payload) => {
+            let msg = format!(
+                "{backend_label} backend panicked while emitting test module: {}",
+                panic_payload_to_string(payload.as_ref())
+            );
+            eprintln!("{msg}");
+            if let Some(report) = report {
+                write_report_error(report, "codegen_panic.txt", &msg);
+            }
+            Err(suite_error_result(suite, "codegen", msg))
+        }
+    }
+}
+
 /// Discovers `#[test]` functions, compiles them, and executes each one.
 ///
 /// * `db` - Driver database used for compilation.
@@ -545,57 +584,19 @@ fn discover_and_run_tests(
     report: Option<&ReportContext>,
 ) -> Vec<TestResult> {
     let backend = backend.to_lowercase();
-    let output = match backend.as_str() {
-        "yul" => match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _hook = report.map(|r| install_report_panic_hook(r, "codegen_panic_full.txt"));
-            emit_test_module_yul(db, top_mod)
-        })) {
-            Ok(Ok(output)) => output,
-            Ok(Err(err)) => {
-                let msg = format!("Failed to emit test Yul: {err}");
-                eprintln!("{msg}");
-                if let Some(report) = report {
-                    write_report_error(report, "codegen_error.txt", &msg);
-                }
-                return suite_error_result(suite, "codegen", msg);
-            }
-            Err(payload) => {
-                let msg = format!(
-                    "Yul backend panicked while emitting test module: {}",
-                    panic_payload_to_string(payload.as_ref())
-                );
-                eprintln!("{msg}");
-                if let Some(report) = report {
-                    write_report_error(report, "codegen_panic.txt", &msg);
-                }
-                return suite_error_result(suite, "codegen", msg);
-            }
-        },
-        "sonatina" => match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _hook = report.map(|r| install_report_panic_hook(r, "codegen_panic_full.txt"));
-            emit_test_module_sonatina(db, top_mod)
-        })) {
-            Ok(Ok(output)) => output,
-            Ok(Err(err)) => {
-                let msg = format!("Failed to emit test Sonatina bytecode: {err}");
-                eprintln!("{msg}");
-                if let Some(report) = report {
-                    write_report_error(report, "codegen_error.txt", &msg);
-                }
-                return suite_error_result(suite, "codegen", msg);
-            }
-            Err(payload) => {
-                let msg = format!(
-                    "Sonatina backend panicked while emitting test module: {}",
-                    panic_payload_to_string(payload.as_ref())
-                );
-                eprintln!("{msg}");
-                if let Some(report) = report {
-                    write_report_error(report, "codegen_panic.txt", &msg);
-                }
-                return suite_error_result(suite, "codegen", msg);
-            }
-        },
+    let emit_result = match backend.as_str() {
+        "yul" => emit_with_catch_unwind(
+            || emit_test_module_yul(db, top_mod),
+            "Yul",
+            suite,
+            report,
+        ),
+        "sonatina" => emit_with_catch_unwind(
+            || emit_test_module_sonatina(db, top_mod),
+            "Sonatina",
+            suite,
+            report,
+        ),
         other => {
             return suite_error_result(
                 suite,
@@ -603,6 +604,10 @@ fn discover_and_run_tests(
                 format!("unknown backend `{other}` (expected 'yul' or 'sonatina')"),
             );
         }
+    };
+    let output = match emit_result {
+        Ok(output) => output,
+        Err(results) => return results,
     };
 
     if output.tests.is_empty() {
