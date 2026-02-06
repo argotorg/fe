@@ -16,4 +16,7 @@ pub use ir::{
     MirModule, MirProjection, MirProjectionPath, Rvalue, SwitchTarget, SwitchValue,
     TerminatingCall, Terminator, ValueData, ValueId, ValueOrigin, ValueRepr,
 };
-pub use lower::{MirLowerError, MirLowerResult, lower_module};
+pub use lower::{
+    MirDiagnosticsMode, MirDiagnosticsOutput, MirLowerError, MirLowerResult,
+    collect_mir_diagnostics, lower_module,
+};

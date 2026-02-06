@@ -4,7 +4,7 @@
 
 use std::{error::Error, fmt};
 
-use common::diagnostics::Span;
+use common::diagnostics::{CompleteDiagnostic, Span};
 use common::ingot::IngotKind;
 use hir::analysis::{
     HirAnalysisDb,
@@ -109,6 +109,121 @@ impl Error for MirLowerError {}
 
 pub type MirLowerResult<T> = Result<T, MirLowerError>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MirDiagnosticsMode {
+    TemplatesOnly,
+    CompilerParity,
+}
+
+#[derive(Debug, Default)]
+pub struct MirDiagnosticsOutput {
+    pub diagnostics: Vec<CompleteDiagnostic>,
+    pub internal_errors: Vec<MirLowerError>,
+}
+
+fn collect_funcs_to_lower<'db>(
+    db: &'db dyn SpannedHirAnalysisDb,
+    top_mod: TopLevelMod<'db>,
+) -> Vec<Func<'db>> {
+    let mut funcs_to_lower = Vec::new();
+    let mut seen = FxHashSet::default();
+
+    let mut queue_func = |func: Func<'db>| {
+        if seen.insert(func) {
+            funcs_to_lower.push(func);
+        }
+    };
+
+    for &func in top_mod.all_funcs(db) {
+        queue_func(func);
+    }
+    for &impl_block in top_mod.all_impls(db) {
+        for func in impl_block.funcs(db) {
+            queue_func(func);
+        }
+    }
+    for &impl_trait in top_mod.all_impl_traits(db) {
+        for func in impl_trait.methods(db) {
+            queue_func(func);
+        }
+    }
+
+    funcs_to_lower
+}
+
+pub fn collect_mir_diagnostics<'db>(
+    db: &'db dyn SpannedHirAnalysisDb,
+    top_mod: TopLevelMod<'db>,
+    mode: MirDiagnosticsMode,
+) -> MirDiagnosticsOutput {
+    let mut output = MirDiagnosticsOutput::default();
+    let mut templates = Vec::new();
+
+    for func in collect_funcs_to_lower(db, top_mod) {
+        if func.body(db).is_none() {
+            continue;
+        }
+        let (diags, typed_body) = check_func_body(db, func);
+        if !diags.is_empty() {
+            continue;
+        }
+        match lower_function(db, func, typed_body.clone(), None, Vec::new(), Vec::new()) {
+            Ok(lowered) => templates.push(lowered),
+            Err(err) => output.internal_errors.push(err),
+        }
+    }
+
+    match contracts::lower_contract_templates(db, top_mod) {
+        Ok(contract_templates) => templates.extend(contract_templates),
+        Err(err) => output.internal_errors.push(err),
+    }
+
+    match crate::analysis::borrowck::compute_borrow_summaries(db, &templates) {
+        Ok(template_borrow_summaries) => {
+            for func in &templates {
+                if let Some(diag) =
+                    crate::analysis::borrowck::check_borrows(db, func, &template_borrow_summaries)
+                {
+                    output.diagnostics.push(diag);
+                }
+            }
+        }
+        Err(err) => output.diagnostics.push(err.diagnostic.clone()),
+    }
+
+    if matches!(mode, MirDiagnosticsMode::TemplatesOnly) {
+        return output;
+    }
+
+    let mut functions = monomorphize_functions(db, templates);
+    for func in &mut functions {
+        crate::transform::canonicalize_transparent_newtypes(db, &mut func.body);
+        crate::transform::insert_temp_binds(db, &mut func.body);
+        crate::transform::canonicalize_zero_sized(db, &mut func.body);
+    }
+
+    for func in &functions {
+        if let Some(diag) = crate::analysis::noesc::check_noesc_escapes(db, func) {
+            output.diagnostics.push(diag);
+        }
+    }
+
+    match crate::analysis::borrowck::compute_borrow_summaries(db, &functions) {
+        Ok(borrow_summaries) => {
+            for func in &functions {
+                if let Some(diag) =
+                    crate::analysis::borrowck::check_borrows(db, func, &borrow_summaries)
+                {
+                    output.diagnostics.push(diag);
+                }
+            }
+        }
+        Err(err) => output.diagnostics.push(err.diagnostic.clone()),
+    }
+
+    output
+}
+
 /// Field type and byte offset information used when lowering record/variant accesses.
 pub(super) struct FieldAccessInfo<'db> {
     pub(super) field_ty: TyId<'db>,
@@ -128,31 +243,7 @@ pub fn lower_module<'db>(
     top_mod: TopLevelMod<'db>,
 ) -> MirLowerResult<MirModule<'db>> {
     let mut templates = Vec::new();
-    let mut funcs_to_lower = Vec::new();
-    let mut seen = FxHashSet::default();
-
-    let mut queue_func = |func: Func<'db>| {
-        if seen.insert(func) {
-            funcs_to_lower.push(func);
-        }
-    };
-
-    for &func in top_mod.all_funcs(db) {
-        queue_func(func);
-    }
-
-    for &impl_block in top_mod.all_impls(db) {
-        for func in impl_block.funcs(db) {
-            queue_func(func);
-        }
-    }
-    for &impl_trait in top_mod.all_impl_traits(db) {
-        for func in impl_trait.methods(db) {
-            queue_func(func);
-        }
-    }
-
-    for func in funcs_to_lower {
+    for func in collect_funcs_to_lower(db, top_mod) {
         if func.body(db).is_none() {
             continue;
         }
