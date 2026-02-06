@@ -452,3 +452,342 @@ pub fn generate_lsif(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use driver::DriverDataBase;
+    use std::collections::{HashMap as StdHashMap, HashSet};
+
+    /// Parse LSIF output into a list of JSON values, one per line.
+    fn parse_lsif(output: &str) -> Vec<serde_json::Value> {
+        output
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(|l| serde_json::from_str(l).expect("valid JSON line"))
+            .collect()
+    }
+
+    /// Validate structural correctness of LSIF output.
+    fn validate_lsif(elements: &[serde_json::Value]) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+        let mut seen_ids: HashSet<u64> = HashSet::new();
+        let mut vertex_labels: StdHashMap<u64, String> = StdHashMap::new();
+
+        // Check first element is metaData
+        if let Some(first) = elements.first() {
+            if first.get("label").and_then(|l| l.as_str()) != Some("metaData") {
+                errors.push("first element must be metaData vertex".into());
+            }
+        } else {
+            errors.push("empty LSIF output".into());
+            return Err(errors);
+        }
+
+        // Validate each element
+        for (i, el) in elements.iter().enumerate() {
+            let id = el.get("id").and_then(|v| v.as_u64());
+            let el_type = el.get("type").and_then(|v| v.as_str());
+            let label = el.get("label").and_then(|v| v.as_str());
+
+            // Every element needs id, type, label
+            if id.is_none() {
+                errors.push(format!("element {i} missing 'id'"));
+            }
+            if el_type.is_none() {
+                errors.push(format!("element {i} missing 'type'"));
+            }
+            if label.is_none() {
+                errors.push(format!("element {i} missing 'label'"));
+            }
+
+            if let Some(id) = id {
+                if !seen_ids.insert(id) {
+                    errors.push(format!("duplicate id {id}"));
+                }
+                if let (Some(t), Some(l)) = (el_type, label) {
+                    if t == "vertex" {
+                        vertex_labels.insert(id, l.to_string());
+                    }
+                }
+            }
+        }
+
+        // Validate edges reference existing vertices
+        for el in elements {
+            if el.get("type").and_then(|v| v.as_str()) != Some("edge") {
+                continue;
+            }
+            if let Some(out_v) = el.get("outV").and_then(|v| v.as_u64()) {
+                if !seen_ids.contains(&out_v) {
+                    errors.push(format!("edge references non-existent outV {out_v}"));
+                }
+            } else {
+                let id = el.get("id").and_then(|v| v.as_u64()).unwrap_or(0);
+                errors.push(format!("edge {id} missing 'outV'"));
+            }
+
+            // Check inV or inVs
+            let has_in_v = el.get("inV").and_then(|v| v.as_u64()).is_some();
+            let has_in_vs = el.get("inVs").and_then(|v| v.as_array()).is_some();
+            if !has_in_v && !has_in_vs {
+                let id = el.get("id").and_then(|v| v.as_u64()).unwrap_or(0);
+                errors.push(format!("edge {id} missing both 'inV' and 'inVs'"));
+            }
+
+            if let Some(in_v) = el.get("inV").and_then(|v| v.as_u64()) {
+                if !seen_ids.contains(&in_v) {
+                    errors.push(format!("edge references non-existent inV {in_v}"));
+                }
+            }
+            if let Some(in_vs) = el.get("inVs").and_then(|v| v.as_array()) {
+                for v in in_vs {
+                    if let Some(id) = v.as_u64() {
+                        if !seen_ids.contains(&id) {
+                            errors.push(format!("edge references non-existent inVs member {id}"));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Check required vertex types exist
+        let labels: HashSet<&str> = vertex_labels.values().map(|s| s.as_str()).collect();
+        for required in ["metaData", "project"] {
+            if !labels.contains(required) {
+                errors.push(format!("missing required vertex type: {required}"));
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+
+    fn generate_test_lsif(code: &str) -> String {
+        let mut db = DriverDataBase::default();
+        let url = url::Url::parse("file:///test.fe").unwrap();
+        db.workspace().touch(&mut db, url.clone(), Some(code.to_string()));
+
+        let ingot_url = url::Url::parse("file:///").unwrap();
+        let mut output = Vec::new();
+        let _ = generate_lsif(&mut db, &ingot_url, &mut output);
+        String::from_utf8(output).unwrap()
+    }
+
+    #[test]
+    fn test_lsif_basic_structure() {
+        let output = generate_test_lsif("struct Foo {\n    x: i32\n}\n");
+        let elements = parse_lsif(&output);
+
+        assert!(!elements.is_empty(), "should produce LSIF output");
+        match validate_lsif(&elements) {
+            Ok(()) => {}
+            Err(errors) => panic!("LSIF validation errors:\n{}", errors.join("\n")),
+        }
+    }
+
+    #[test]
+    fn test_lsif_has_document_vertex() {
+        let output = generate_test_lsif("fn hello() -> i32 {\n    42\n}\n");
+        let elements = parse_lsif(&output);
+
+        let docs: Vec<_> = elements
+            .iter()
+            .filter(|e| e.get("label").and_then(|l| l.as_str()) == Some("document"))
+            .collect();
+        assert!(!docs.is_empty(), "should have at least one document vertex");
+
+        let doc = &docs[0];
+        assert_eq!(
+            doc.get("languageId").and_then(|l| l.as_str()),
+            Some("fe"),
+            "document languageId should be 'fe'"
+        );
+    }
+
+    #[test]
+    fn test_lsif_definitions_and_references() {
+        let code = r#"struct Point {
+    x: i32
+    y: i32
+}
+
+fn make_point() -> Point {
+    Point { x: 1, y: 2 }
+}
+"#;
+        let output = generate_test_lsif(code);
+        let elements = parse_lsif(&output);
+
+        match validate_lsif(&elements) {
+            Ok(()) => {}
+            Err(errors) => panic!("validation errors:\n{}", errors.join("\n")),
+        }
+
+        // Should have definitionResult vertices
+        let def_results: Vec<_> = elements
+            .iter()
+            .filter(|e| e.get("label").and_then(|l| l.as_str()) == Some("definitionResult"))
+            .collect();
+        assert!(
+            def_results.len() >= 2,
+            "should have definition results for Point and make_point, got {}",
+            def_results.len()
+        );
+
+        // Should have referenceResult vertices
+        let ref_results: Vec<_> = elements
+            .iter()
+            .filter(|e| e.get("label").and_then(|l| l.as_str()) == Some("referenceResult"))
+            .collect();
+        assert!(
+            ref_results.len() >= 2,
+            "should have reference results for both items"
+        );
+
+        // Should have hover results
+        let hovers: Vec<_> = elements
+            .iter()
+            .filter(|e| e.get("label").and_then(|l| l.as_str()) == Some("hoverResult"))
+            .collect();
+        assert!(!hovers.is_empty(), "should have hover results");
+    }
+
+    #[test]
+    fn test_lsif_monikers() {
+        let output = generate_test_lsif("fn greet() -> i32 {\n    1\n}\n");
+        let elements = parse_lsif(&output);
+
+        let monikers: Vec<_> = elements
+            .iter()
+            .filter(|e| e.get("label").and_then(|l| l.as_str()) == Some("moniker"))
+            .collect();
+        assert!(!monikers.is_empty(), "should have moniker vertices");
+
+        let moniker = &monikers[0];
+        assert_eq!(
+            moniker.get("scheme").and_then(|s| s.as_str()),
+            Some("fe"),
+            "moniker scheme should be 'fe'"
+        );
+        assert!(
+            moniker.get("identifier").and_then(|s| s.as_str()).is_some(),
+            "moniker should have identifier"
+        );
+    }
+
+    #[test]
+    fn test_lsif_contains_edges() {
+        let output = generate_test_lsif("fn foo() -> i32 {\n    1\n}\n");
+        let elements = parse_lsif(&output);
+
+        let contains_edges: Vec<_> = elements
+            .iter()
+            .filter(|e| {
+                e.get("type").and_then(|t| t.as_str()) == Some("edge")
+                    && e.get("label").and_then(|l| l.as_str()) == Some("contains")
+            })
+            .collect();
+        assert!(
+            contains_edges.len() >= 2,
+            "should have contains edges for document->ranges and project->documents, got {}",
+            contains_edges.len()
+        );
+    }
+
+    #[test]
+    fn test_lsif_no_duplicate_document_ids() {
+        let output = generate_test_lsif("struct A {\n    x: i32\n}\nstruct B {\n    y: i32\n}\n");
+        let elements = parse_lsif(&output);
+
+        let doc_ids: Vec<u64> = elements
+            .iter()
+            .filter(|e| e.get("label").and_then(|l| l.as_str()) == Some("document"))
+            .filter_map(|e| e.get("id").and_then(|v| v.as_u64()))
+            .collect();
+        let unique: HashSet<u64> = doc_ids.iter().copied().collect();
+        assert_eq!(
+            doc_ids.len(),
+            unique.len(),
+            "should have no duplicate document IDs"
+        );
+    }
+
+    #[test]
+    fn test_lsif_hover_content() {
+        let code = "struct Widget {\n    count: i32\n}\n";
+        let output = generate_test_lsif(code);
+        let elements = parse_lsif(&output);
+
+        let hovers: Vec<_> = elements
+            .iter()
+            .filter(|e| e.get("label").and_then(|l| l.as_str()) == Some("hoverResult"))
+            .collect();
+
+        assert!(!hovers.is_empty(), "should have hover results");
+        let hover = &hovers[0];
+        let contents = hover
+            .get("result")
+            .and_then(|r| r.get("contents"))
+            .and_then(|c| c.as_array());
+        assert!(contents.is_some(), "hover should have contents array");
+
+        let first_content = &contents.unwrap()[0];
+        assert_eq!(
+            first_content.get("language").and_then(|l| l.as_str()),
+            Some("fe")
+        );
+        let value = first_content.get("value").and_then(|v| v.as_str()).unwrap();
+        assert!(
+            value.contains("Widget"),
+            "hover for Widget should contain 'Widget', got: {value}"
+        );
+    }
+
+    #[test]
+    fn test_lsif_range_positions() {
+        let output = generate_test_lsif("fn test_fn() -> i32 {\n    42\n}\n");
+        let elements = parse_lsif(&output);
+
+        let ranges: Vec<_> = elements
+            .iter()
+            .filter(|e| e.get("label").and_then(|l| l.as_str()) == Some("range"))
+            .collect();
+        assert!(!ranges.is_empty(), "should have range vertices");
+
+        for range in &ranges {
+            let start = range.get("start").expect("range must have start");
+            let end = range.get("end").expect("range must have end");
+            assert!(start.get("line").is_some(), "start must have line");
+            assert!(start.get("character").is_some(), "start must have character");
+            assert!(end.get("line").is_some(), "end must have line");
+            assert!(end.get("character").is_some(), "end must have character");
+
+            let start_line = start["line"].as_u64().unwrap();
+            let end_line = end["line"].as_u64().unwrap();
+            assert!(
+                end_line >= start_line,
+                "end line should be >= start line"
+            );
+        }
+    }
+
+    #[test]
+    fn test_lsif_metadata() {
+        let output = generate_test_lsif("fn x() -> i32 { 1 }\n");
+        let elements = parse_lsif(&output);
+
+        let meta = &elements[0];
+        assert_eq!(meta["label"].as_str(), Some("metaData"));
+        assert_eq!(meta["version"].as_str(), Some("0.4.0"));
+        assert_eq!(meta["positionEncoding"].as_str(), Some("utf-16"));
+        assert!(meta.get("toolInfo").is_some());
+        assert_eq!(
+            meta["toolInfo"]["name"].as_str(),
+            Some("fe-lsif")
+        );
+    }
+}
