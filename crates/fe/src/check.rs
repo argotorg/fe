@@ -703,6 +703,20 @@ fn check_ingot(
     backend: &dyn Backend,
     report: Option<&ReportContext>,
 ) -> bool {
+    let mut seen = HashSet::new();
+    check_ingot_inner(db, dir_path, dump_mir, emit_yul_min, backend_kind, backend, report, &mut seen)
+}
+
+fn check_ingot_inner(
+    db: &mut DriverDataBase,
+    dir_path: &Utf8PathBuf,
+    dump_mir: bool,
+    emit_yul_min: bool,
+    backend_kind: BackendKind,
+    backend: &dyn Backend,
+    report: Option<&ReportContext>,
+    seen: &mut HashSet<Url>,
+) -> bool {
     let canonical_path = match dir_path.canonicalize_utf8() {
         Ok(path) => path,
         Err(_) => {
@@ -719,6 +733,9 @@ fn check_ingot(
             return true;
         }
     };
+    if !seen.insert(ingot_url.clone()) {
+        return false;
+    }
     let had_init_diagnostics = driver::init_ingot(db, &ingot_url);
     if had_init_diagnostics {
         if let Some(report) = report {
@@ -787,8 +804,10 @@ fn check_ingot(
     // Collect all dependencies with errors
     let mut dependency_errors = Vec::new();
     for dependency_url in db.dependency_graph().dependency_urls(db, &ingot_url) {
+        if !seen.insert(dependency_url.clone()) {
+            continue;
+        }
         let Some(ingot) = db.workspace().containing_ingot(db, dependency_url.clone()) else {
-            // Skip dependencies that can't be resolved
             continue;
         };
         let diags = db.run_on_ingot(ingot);

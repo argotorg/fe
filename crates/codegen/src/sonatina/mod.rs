@@ -1024,7 +1024,11 @@ fn lower_instruction<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                         .locals
                         .get(dest_local.index())
                         .map(|l| l.ty)
-                        .unwrap_or_else(|| body.values[0].ty); // fallback shouldn't happen
+                        .ok_or_else(|| {
+                            LowerError::Internal(format!(
+                                "missing local type for {dest_local:?}"
+                            ))
+                        })?;
                     apply_from_word(fb, db, result_val, dest_ty, is)
                 } else {
                     result_val
