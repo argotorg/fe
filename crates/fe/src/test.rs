@@ -22,7 +22,7 @@ use url::Url;
 
 fn install_report_panic_hook(report: &ReportContext, filename: &str) -> PanicReportGuard {
     let dir = report.root_dir.join("errors");
-    create_dir_all_utf8(&dir);
+    let _ = create_dir_all_utf8(&dir);
     let path = dir.join(filename);
     enable_panic_report(path)
 }
@@ -51,7 +51,7 @@ fn suite_error_result(suite: &str, kind: &str, message: String) -> Vec<TestResul
 
 fn write_report_error(report: &ReportContext, filename: &str, contents: &str) {
     let dir = report.root_dir.join("errors");
-    create_dir_all_utf8(&dir);
+    let _ = create_dir_all_utf8(&dir);
     let _ = std::fs::write(dir.join(filename), contents);
 }
 
@@ -78,7 +78,7 @@ impl TestDebugOptions {
         unsafe { std::env::set_var(key, value) }
     }
 
-    fn configure_process_env(&self) {
+    fn configure_process_env(&self) -> Result<(), String> {
         if self.trace_evm {
             Self::set_env("FE_TRACE_EVM", "1");
             Self::set_env("FE_TRACE_EVM_KEEP", self.trace_evm_keep.to_string());
@@ -104,13 +104,11 @@ impl TestDebugOptions {
         }
 
         let Some(dir) = &self.debug_dir else {
-            return;
+            return Ok(());
         };
 
-        if let Err(err) = std::fs::create_dir_all(dir) {
-            eprintln!("Error: failed to create debug dir `{dir}`: {err}");
-            std::process::exit(1);
-        }
+        std::fs::create_dir_all(dir)
+            .map_err(|err| format!("failed to create debug dir `{dir}`: {err}"))?;
 
         if self.trace_evm {
             // When writing traces to files, suppress stderr spam by default.
@@ -119,21 +117,23 @@ impl TestDebugOptions {
 
         if self.sonatina_symtab {
             let path = dir.join("sonatina_symtab.txt");
-            truncate_file(&path);
+            truncate_file(&path)?;
             Self::set_env("FE_SONATINA_DUMP_SYMTAB_OUT", path.as_str());
         }
 
         if self.sonatina_stackify_trace {
             let path = dir.join("sonatina_stackify_trace.txt");
-            truncate_file(&path);
+            truncate_file(&path)?;
             Self::set_env("SONATINA_STACKIFY_TRACE_OUT", path.as_str());
         }
 
         if self.sonatina_transient_malloc_trace {
             let path = dir.join("sonatina_transient_malloc_trace.txt");
-            truncate_file(&path);
+            truncate_file(&path)?;
             Self::set_env("SONATINA_TRANSIENT_MALLOC_TRACE_OUT", path.as_str());
         }
+
+        Ok(())
     }
 
     fn configure_per_test_env(&self, test_suite: Option<&str>, test_name: &str) {
@@ -157,16 +157,16 @@ impl TestDebugOptions {
             file = "test".to_string();
         }
         let path = dir.join(format!("{file}.evm_trace.txt"));
-        truncate_file(&path);
+        if let Err(err) = truncate_file(&path) {
+            eprintln!("warning: {err}");
+        }
         Self::set_env("FE_TRACE_EVM_OUT", path.as_str());
     }
 }
 
-fn truncate_file(path: &Utf8PathBuf) {
-    if let Err(err) = std::fs::write(path, "") {
-        eprintln!("Error: failed to truncate `{path}`: {err}");
-        std::process::exit(1);
-    }
+fn truncate_file(path: &Utf8PathBuf) -> Result<(), String> {
+    std::fs::write(path, "")
+        .map_err(|err| format!("failed to truncate `{path}`: {err}"))
 }
 
 fn unique_report_path(dir: &Utf8PathBuf, suite: &str) -> Utf8PathBuf {
@@ -199,7 +199,8 @@ fn unique_report_path(dir: &Utf8PathBuf, suite: &str) -> Utf8PathBuf {
 /// * `backend` - Codegen backend for test artifacts ("yul" or "sonatina")
 /// * `report_out` - Optional report output path (`.tar.gz`)
 ///
-/// Returns nothing; exits the process on invalid input or test failures.
+/// Returns `Ok(true)` if any tests failed, `Ok(false)` if all passed,
+/// or `Err` on fatal setup errors.
 pub fn run_tests(
     paths: &[Utf8PathBuf],
     filter: Option<&str>,
@@ -209,8 +210,8 @@ pub fn run_tests(
     report_out: Option<&Utf8PathBuf>,
     report_dir: Option<&Utf8PathBuf>,
     report_failed_only: bool,
-) {
-    let input_paths = expand_test_paths(paths);
+) -> Result<bool, String> {
+    let input_paths = expand_test_paths(paths)?;
 
     let mut test_results = Vec::new();
     let multi = input_paths.len() > 1;
@@ -219,21 +220,22 @@ pub fn run_tests(
     }
 
     if let Some(dir) = report_dir {
-        // Used only for per-suite report output; create it eagerly to fail fast on invalid paths.
-        create_dir_all_utf8(dir);
+        create_dir_all_utf8(dir)?;
     }
 
-    let report_root = report_out.map(|out| {
-        let staging = create_run_report_staging();
-        let out = normalize_report_out_path(out);
-        (out, staging)
-    });
+    let report_root = report_out
+        .map(|out| -> Result<_, String> {
+            let staging = create_run_report_staging()?;
+            let out = normalize_report_out_path(out)?;
+            Ok((out, staging))
+        })
+        .transpose()?;
 
     if let Some((_, staging)) = report_root.as_ref() {
         let root = &staging.root_dir;
-        create_dir_all_utf8(&root.join("passed"));
-        create_dir_all_utf8(&root.join("failed"));
-        create_dir_all_utf8(&root.join("tmp"));
+        create_dir_all_utf8(&root.join("passed"))?;
+        create_dir_all_utf8(&root.join("failed"))?;
+        create_dir_all_utf8(&root.join("tmp"))?;
         write_report_meta(root, "fe test report", None);
     }
 
@@ -244,29 +246,31 @@ pub fn run_tests(
             println!("==> {path}");
         }
 
-        let suite_report = report_dir.map(|dir| {
-            let staging = create_suite_report_staging(&suite);
-            let out = unique_report_path(dir, &suite);
-            (out, staging)
-        });
+        let suite_report = report_dir
+            .map(|dir| -> Result<_, String> {
+                let staging = create_suite_report_staging(&suite)?;
+                let out = unique_report_path(dir, &suite);
+                Ok((out, staging))
+            })
+            .transpose()?;
 
         let report_ctx = if let Some((_, staging)) = suite_report.as_ref() {
             let suite_dir = staging.root_dir.clone();
             write_report_meta(&suite_dir, "fe test report (suite)", Some(&suite));
             let inputs_dir = suite_dir.join("inputs");
-            create_dir_all_utf8(&inputs_dir);
-            copy_input_into_report(&path, &inputs_dir);
+            create_dir_all_utf8(&inputs_dir)?;
+            copy_input_into_report(&path, &inputs_dir)?;
             Some(ReportContext {
                 root_dir: suite_dir,
             })
         } else if let Some((_, staging)) = report_root.as_ref() {
             let root = &staging.root_dir;
             let suite_dir = root.join("tmp").join(&suite);
-            create_dir_all_utf8(&suite_dir);
+            create_dir_all_utf8(&suite_dir)?;
             write_report_meta(&suite_dir, "fe test report (suite)", Some(&suite));
             let inputs_dir = suite_dir.join("inputs");
-            create_dir_all_utf8(&inputs_dir);
-            copy_input_into_report(&path, &inputs_dir);
+            create_dir_all_utf8(&inputs_dir)?;
+            copy_input_into_report(&path, &inputs_dir)?;
             Some(ReportContext {
                 root_dir: suite_dir,
             })
@@ -282,7 +286,7 @@ pub fn run_tests(
             suite_debug.sonatina_transient_malloc_trace = true;
             suite_debug.debug_dir = report_ctx.as_ref().map(|ctx| ctx.root_dir.join("debug"));
         }
-        suite_debug.configure_process_env();
+        suite_debug.configure_process_env()?;
 
         let mut db = DriverDataBase::default();
         let suite_results = if path.is_file() && path.extension() == Some("fe") {
@@ -308,8 +312,7 @@ pub fn run_tests(
                 report_ctx.as_ref(),
             )
         } else {
-            eprintln!("Error: Path must be either a .fe file or a directory containing fe.toml");
-            std::process::exit(1);
+            return Err("Path must be either a .fe file or a directory containing fe.toml".into());
         };
 
         if let Some((out, staging)) = suite_report {
@@ -367,13 +370,8 @@ pub fn run_tests(
         }
     }
 
-    // Print summary
     print_summary(&test_results);
-
-    // Exit with code 1 if any tests failed
-    if test_results.iter().any(|r| !r.passed) {
-        std::process::exit(1);
-    }
+    Ok(test_results.iter().any(|r| !r.passed))
 }
 
 /// Runs tests defined in a single `.fe` source file.
@@ -398,8 +396,7 @@ fn run_tests_single_file(
     let file_url = match Url::from_file_path(file_path.canonicalize_utf8().unwrap()) {
         Ok(url) => url,
         Err(_) => {
-            eprintln!("Error: Invalid file path: {file_path}");
-            std::process::exit(1);
+            return suite_error_result(suite, "setup", format!("Invalid file path: {file_path}"));
         }
     };
 
@@ -407,8 +404,11 @@ fn run_tests_single_file(
     let content = match std::fs::read_to_string(file_path) {
         Ok(content) => content,
         Err(err) => {
-            eprintln!("Error reading file {file_path}: {err}");
-            std::process::exit(1);
+            return suite_error_result(
+                suite,
+                "setup",
+                format!("Error reading file {file_path}: {err}"),
+            );
         }
     };
 
@@ -417,8 +417,11 @@ fn run_tests_single_file(
 
     // Get the top-level module
     let Some(file) = db.workspace().get(db, &file_url) else {
-        eprintln!("Error: Could not process file {file_path}");
-        std::process::exit(1);
+        return suite_error_result(
+            suite,
+            "setup",
+            format!("Could not process file {file_path}"),
+        );
     };
 
     let top_mod = db.top_mod(file);
@@ -468,16 +471,22 @@ fn run_tests_ingot(
     let canonical_path = match dir_path.canonicalize_utf8() {
         Ok(path) => path,
         Err(_) => {
-            eprintln!("Error: Invalid or non-existent directory path: {dir_path}");
-            std::process::exit(1);
+            return suite_error_result(
+                suite,
+                "setup",
+                format!("Invalid or non-existent directory path: {dir_path}"),
+            );
         }
     };
 
     let ingot_url = match Url::from_directory_path(canonical_path.as_str()) {
         Ok(url) => url,
         Err(_) => {
-            eprintln!("Error: Invalid directory path: {dir_path}");
-            std::process::exit(1);
+            return suite_error_result(
+                suite,
+                "setup",
+                format!("Invalid directory path: {dir_path}"),
+            );
         }
     };
 
@@ -492,8 +501,11 @@ fn run_tests_ingot(
     }
 
     let Some(ingot) = db.workspace().containing_ingot(db, ingot_url.clone()) else {
-        eprintln!("Error: Could not resolve ingot from directory");
-        std::process::exit(1);
+        return suite_error_result(
+            suite,
+            "setup",
+            "Could not resolve ingot from directory".to_string(),
+        );
     };
 
     // Check for compilation errors
@@ -585,8 +597,11 @@ fn discover_and_run_tests(
             }
         },
         other => {
-            eprintln!("Error: unknown backend `{other}` (expected 'yul' or 'sonatina')");
-            std::process::exit(1);
+            return suite_error_result(
+                suite,
+                "setup",
+                format!("unknown backend `{other}` (expected 'yul' or 'sonatina')"),
+            );
         }
     };
 
@@ -652,7 +667,7 @@ fn maybe_write_suite_ir(
     };
 
     let artifacts_dir = report.root_dir.join("artifacts");
-    create_dir_all_utf8(&artifacts_dir);
+    let _ = create_dir_all_utf8(&artifacts_dir);
 
     match lower_module(db, top_mod) {
         Ok(mir) => {
@@ -719,7 +734,7 @@ fn suite_name_for_path(path: &Utf8PathBuf) -> String {
     }
 }
 
-fn expand_test_paths(inputs: &[Utf8PathBuf]) -> Vec<Utf8PathBuf> {
+fn expand_test_paths(inputs: &[Utf8PathBuf]) -> Result<Vec<Utf8PathBuf>, String> {
     let mut expanded = Vec::new();
     let mut seen: FxHashSet<String> = FxHashSet::default();
 
@@ -734,36 +749,22 @@ fn expand_test_paths(inputs: &[Utf8PathBuf]) -> Vec<Utf8PathBuf> {
 
         let pattern = input.as_str();
         if !looks_like_glob(pattern) {
-            eprintln!("Error: path does not exist: {input}");
-            std::process::exit(1);
+            return Err(format!("path does not exist: {input}"));
         }
 
         let mut matches = Vec::new();
-        let entries = glob::glob(pattern).unwrap_or_else(|err| {
-            eprintln!("Error: invalid glob pattern `{pattern}`: {err}");
-            std::process::exit(1);
-        });
+        let entries = glob::glob(pattern)
+            .map_err(|err| format!("invalid glob pattern `{pattern}`: {err}"))?;
         for entry in entries {
-            let path = match entry {
-                Ok(path) => path,
-                Err(err) => {
-                    eprintln!("Error: glob entry error for `{pattern}`: {err}");
-                    std::process::exit(1);
-                }
-            };
-            let utf8 = match Utf8PathBuf::from_path_buf(path) {
-                Ok(path) => path,
-                Err(path) => {
-                    eprintln!("Error: non-utf8 path matched by `{pattern}`: {path:?}");
-                    std::process::exit(1);
-                }
-            };
+            let path = entry
+                .map_err(|err| format!("glob entry error for `{pattern}`: {err}"))?;
+            let utf8 = Utf8PathBuf::from_path_buf(path)
+                .map_err(|path| format!("non-utf8 path matched by `{pattern}`: {path:?}"))?;
             matches.push(utf8);
         }
 
         if matches.is_empty() {
-            eprintln!("Error: glob pattern matched no paths: `{pattern}`");
-            std::process::exit(1);
+            return Err(format!("glob pattern matched no paths: `{pattern}`"));
         }
 
         matches.sort();
@@ -775,18 +776,18 @@ fn expand_test_paths(inputs: &[Utf8PathBuf]) -> Vec<Utf8PathBuf> {
         }
     }
 
-    expanded
+    Ok(expanded)
 }
 
 fn looks_like_glob(pattern: &str) -> bool {
     pattern.contains('*') || pattern.contains('?') || pattern.contains('[')
 }
 
-fn create_run_report_staging() -> ReportStaging {
+fn create_run_report_staging() -> Result<ReportStaging, String> {
     create_report_staging_root("target/fe-test-report-staging", "fe-test-report")
 }
 
-fn create_suite_report_staging(suite: &str) -> ReportStaging {
+fn create_suite_report_staging(suite: &str) -> Result<ReportStaging, String> {
     let name = format!("fe-test-report-{}", sanitize_filename(suite));
     create_report_staging_root("target/fe-test-report-staging", &name)
 }
@@ -901,7 +902,7 @@ fn write_sonatina_case_artifacts(report: &ReportContext, case: &TestMetadata) {
         .join("tests")
         .join(sanitize_filename(&case.display_name))
         .join("sonatina");
-    create_dir_all_utf8(&dir);
+    let _ = create_dir_all_utf8(&dir);
 
     let init_path = dir.join("initcode.hex");
     let _ = std::fs::write(&init_path, hex::encode(&case.bytecode));
@@ -919,7 +920,7 @@ fn write_yul_case_artifacts(report: &ReportContext, case: &TestMetadata) {
         .join("tests")
         .join(sanitize_filename(&case.display_name))
         .join("yul");
-    create_dir_all_utf8(&dir);
+    let _ = create_dir_all_utf8(&dir);
 
     let _ = std::fs::write(dir.join("source.yul"), &case.yul);
 

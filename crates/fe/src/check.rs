@@ -72,43 +72,37 @@ pub fn check(
     backend_name: &str,
     report_out: Option<&Utf8PathBuf>,
     report_failed_only: bool,
-) {
-    // Parse backend selection
-    let backend_kind: BackendKind = match backend_name.parse() {
-        Ok(kind) => kind,
-        Err(err) => {
-            eprintln!("❌ Error: {err}");
-            std::process::exit(1);
-        }
-    };
+) -> Result<bool, String> {
+    let backend_kind: BackendKind = backend_name
+        .parse()
+        .map_err(|err| format!("{err}"))?;
     let backend = backend_kind.create();
     let mut db = DriverDataBase::default();
 
-    let report_root = report_out.map(|out| {
-        let staging = create_report_staging_dir("target/fe-check-report-staging");
-        let out = normalize_report_out_path(out);
-        (out, staging)
-    });
+    let report_root = report_out
+        .map(|out| -> Result<_, String> {
+            let staging = create_report_staging_dir("target/fe-check-report-staging")?;
+            let out = normalize_report_out_path(out)?;
+            Ok((out, staging))
+        })
+        .transpose()?;
 
-    let report_ctx = report_root.as_ref().map(|(_, staging)| {
-        let inputs_dir = staging.join("inputs");
-        create_dir_all_utf8(&inputs_dir);
-        copy_input_into_report(path, &inputs_dir);
-        create_dir_all_utf8(&staging.join("artifacts"));
-        create_dir_all_utf8(&staging.join("errors"));
-        write_report_meta(staging, "fe check report", None);
-        ReportContext {
-            root_dir: staging.clone(),
-        }
-    });
+    let report_ctx = report_root
+        .as_ref()
+        .map(|(_, staging)| -> Result<_, String> {
+            let inputs_dir = staging.join("inputs");
+            create_dir_all_utf8(&inputs_dir)?;
+            copy_input_into_report(path, &inputs_dir)?;
+            create_dir_all_utf8(&staging.join("artifacts"))?;
+            create_dir_all_utf8(&staging.join("errors"))?;
+            write_report_meta(staging, "fe check report", None);
+            Ok(ReportContext {
+                root_dir: staging.clone(),
+            })
+        })
+        .transpose()?;
 
-    let target = match resolve_check_target(&mut db, path) {
-        Ok(target) => target,
-        Err(message) => {
-            eprintln!("❌ Error: {message}");
-            std::process::exit(1);
-        }
-    };
+    let target = resolve_check_target(&mut db, path)?;
 
     let has_errors = match target {
         CheckTarget::StandaloneFile(file_path) => check_single_file(
@@ -163,9 +157,7 @@ pub fn check(
         }
     }
 
-    if has_errors {
-        std::process::exit(1);
-    }
+    Ok(has_errors)
 }
 
 fn resolve_check_target(

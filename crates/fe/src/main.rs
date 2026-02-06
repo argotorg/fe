@@ -181,15 +181,25 @@ pub fn run(opts: &Options) {
             report_out,
             report_failed_only,
         } => {
-            //: TODO readd custom core
-            check(
+            // TODO readd custom core
+            match check(
                 path,
                 *dump_mir,
                 *emit_yul_min,
                 backend,
                 (*report).then_some(report_out),
                 *report_failed_only,
-            );
+            ) {
+                Ok(has_errors) => {
+                    if has_errors {
+                        std::process::exit(1);
+                    }
+                }
+                Err(err) => {
+                    eprintln!("❌ Error: {err}");
+                    std::process::exit(1);
+                }
+            }
         }
         #[cfg(not(target_arch = "wasm32"))]
         Command::Tree { path } => {
@@ -233,7 +243,7 @@ pub fn run(opts: &Options) {
             } else {
                 paths.clone()
             };
-            test::run_tests(
+            match test::run_tests(
                 &paths,
                 filter.as_deref(),
                 *show_logs,
@@ -242,7 +252,17 @@ pub fn run(opts: &Options) {
                 (*report).then_some(report_out),
                 report_dir.as_ref(),
                 *report_failed_only,
-            );
+            ) {
+                Ok(has_failures) => {
+                    if has_failures {
+                        std::process::exit(1);
+                    }
+                }
+                Err(err) => {
+                    eprintln!("❌ Error: {err}");
+                    std::process::exit(1);
+                }
+            }
         }
         Command::New {
             path,
