@@ -92,6 +92,57 @@ fn adt_ref_to_hierarchy_item(
     }
 }
 
+/// Find supertypes for an item (traits it implements, or super-traits).
+fn find_supertypes(
+    db: &driver::DriverDataBase,
+    item: ItemKind,
+) -> Vec<TypeHierarchyItem> {
+    match item {
+        ItemKind::Struct(s) => s
+            .all_impl_traits(db)
+            .into_iter()
+            .filter_map(|it| {
+                let trait_ = it.trait_def(db)?;
+                trait_to_hierarchy_item(db, trait_)
+            })
+            .collect(),
+        ItemKind::Enum(e) => e
+            .all_impl_traits(db)
+            .into_iter()
+            .filter_map(|it| {
+                let trait_ = it.trait_def(db)?;
+                trait_to_hierarchy_item(db, trait_)
+            })
+            .collect(),
+        ItemKind::Trait(trait_) => trait_
+            .super_trait_bounds(db)
+            .filter_map(|inst| {
+                let super_trait = inst.def(db);
+                trait_to_hierarchy_item(db, super_trait)
+            })
+            .collect(),
+        _ => vec![],
+    }
+}
+
+/// Find subtypes for an item (structs/enums implementing a trait).
+fn find_subtypes(
+    db: &driver::DriverDataBase,
+    item: ItemKind,
+) -> Vec<TypeHierarchyItem> {
+    match item {
+        ItemKind::Trait(trait_) => trait_
+            .all_impl_traits(db)
+            .into_iter()
+            .filter_map(|it| {
+                let adt = it.implementing_adt(db)?;
+                adt_ref_to_hierarchy_item(db, adt)
+            })
+            .collect(),
+        _ => vec![],
+    }
+}
+
 /// Handle textDocument/prepareTypeHierarchy.
 pub async fn handle_prepare(
     backend: &Backend,
@@ -163,33 +214,8 @@ pub async fn handle_supertypes(
         return Ok(None);
     };
 
-    let items: Vec<TypeHierarchyItem> = match target {
-        Target::Scope(scope) => match scope.item() {
-            ItemKind::Struct(s) => s
-                .all_impl_traits(&backend.db)
-                .into_iter()
-                .filter_map(|it| {
-                    let trait_ = it.trait_def(&backend.db)?;
-                    trait_to_hierarchy_item(&backend.db, trait_)
-                })
-                .collect(),
-            ItemKind::Enum(e) => e
-                .all_impl_traits(&backend.db)
-                .into_iter()
-                .filter_map(|it| {
-                    let trait_ = it.trait_def(&backend.db)?;
-                    trait_to_hierarchy_item(&backend.db, trait_)
-                })
-                .collect(),
-            ItemKind::Trait(trait_) => trait_
-                .super_trait_bounds(&backend.db)
-                .filter_map(|inst| {
-                    let super_trait = inst.def(&backend.db);
-                    trait_to_hierarchy_item(&backend.db, super_trait)
-                })
-                .collect(),
-            _ => vec![],
-        },
+    let items = match target {
+        Target::Scope(scope) => find_supertypes(&backend.db, scope.item()),
         _ => vec![],
     };
 
@@ -227,18 +253,8 @@ pub async fn handle_subtypes(
         return Ok(None);
     };
 
-    let items: Vec<TypeHierarchyItem> = match target {
-        Target::Scope(scope) => match scope.item() {
-            ItemKind::Trait(trait_) => trait_
-                .all_impl_traits(&backend.db)
-                .into_iter()
-                .filter_map(|it| {
-                    let adt = it.implementing_adt(&backend.db)?;
-                    adt_ref_to_hierarchy_item(&backend.db, adt)
-                })
-                .collect(),
-            _ => vec![],
-        },
+    let items = match target {
+        Target::Scope(scope) => find_subtypes(&backend.db, scope.item()),
         _ => vec![],
     };
 
@@ -246,5 +262,183 @@ pub async fn handle_subtypes(
         Ok(None)
     } else {
         Ok(Some(items))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use driver::DriverDataBase;
+    use hir::lower::map_file_to_mod;
+    use url::Url;
+
+    fn item_at<'db>(
+        db: &'db DriverDataBase,
+        top_mod: hir::hir_def::TopLevelMod<'db>,
+        offset: u32,
+    ) -> Option<ItemKind<'db>> {
+        let cursor = parser::TextSize::from(offset);
+        let resolution = top_mod.target_at(db, cursor);
+        match resolution.first()? {
+            Target::Scope(scope) => Some(scope.item()),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn test_prepare_struct() {
+        let mut db = DriverDataBase::default();
+        let code = "struct Foo {\n    x: i32\n}\n";
+        let file = db.workspace().touch(
+            &mut db,
+            Url::parse("file:///test.fe").unwrap(),
+            Some(code.to_string()),
+        );
+        let top_mod = map_file_to_mod(&db, file);
+
+        let offset = code.find("Foo").unwrap() as u32;
+        let item = item_at(&db, top_mod, offset);
+        assert!(matches!(item, Some(ItemKind::Struct(_))));
+
+        if let Some(ItemKind::Struct(s)) = item {
+            let hierarchy = struct_to_hierarchy_item(&db, s);
+            assert!(hierarchy.is_some());
+            let h = hierarchy.unwrap();
+            assert_eq!(h.name, "Foo");
+            assert_eq!(h.kind, SymbolKind::STRUCT);
+        }
+    }
+
+    #[test]
+    fn test_prepare_trait() {
+        let mut db = DriverDataBase::default();
+        let code = "trait Bar {\n    fn do_thing(self) -> i32\n}\n";
+        let file = db.workspace().touch(
+            &mut db,
+            Url::parse("file:///test.fe").unwrap(),
+            Some(code.to_string()),
+        );
+        let top_mod = map_file_to_mod(&db, file);
+
+        let offset = code.find("Bar").unwrap() as u32;
+        let item = item_at(&db, top_mod, offset);
+        assert!(matches!(item, Some(ItemKind::Trait(_))));
+
+        if let Some(ItemKind::Trait(t)) = item {
+            let hierarchy = trait_to_hierarchy_item(&db, t);
+            assert!(hierarchy.is_some());
+            let h = hierarchy.unwrap();
+            assert_eq!(h.name, "Bar");
+            assert_eq!(h.kind, SymbolKind::INTERFACE);
+        }
+    }
+
+    #[test]
+    fn test_supertypes_of_struct() {
+        let mut db = DriverDataBase::default();
+        let code = r#"trait Greetable {
+    fn greet(self) -> i32
+}
+
+struct Person {
+    age: i32
+}
+
+impl Greetable for Person {
+    fn greet(self) -> i32 {
+        self.age
+    }
+}
+"#;
+        let file = db.workspace().touch(
+            &mut db,
+            Url::parse("file:///test.fe").unwrap(),
+            Some(code.to_string()),
+        );
+        let top_mod = map_file_to_mod(&db, file);
+
+        let offset = code.find("Person").unwrap() as u32;
+        let item = item_at(&db, top_mod, offset).expect("should find struct");
+        let supertypes = find_supertypes(&db, item);
+
+        let names: Vec<&str> = supertypes.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["Greetable"]);
+    }
+
+    #[test]
+    fn test_subtypes_of_trait() {
+        let mut db = DriverDataBase::default();
+        let code = r#"trait Printable {
+    fn print(self) -> i32
+}
+
+struct Doc {
+    pages: i32
+}
+
+impl Printable for Doc {
+    fn print(self) -> i32 {
+        self.pages
+    }
+}
+
+struct Report {
+    lines: i32
+}
+
+impl Printable for Report {
+    fn print(self) -> i32 {
+        self.lines
+    }
+}
+"#;
+        let file = db.workspace().touch(
+            &mut db,
+            Url::parse("file:///test.fe").unwrap(),
+            Some(code.to_string()),
+        );
+        let top_mod = map_file_to_mod(&db, file);
+
+        let offset = code.find("Printable").unwrap() as u32;
+        let item = item_at(&db, top_mod, offset).expect("should find trait");
+        let subtypes = find_subtypes(&db, item);
+
+        let mut names: Vec<&str> = subtypes.iter().map(|s| s.name.as_str()).collect();
+        names.sort();
+        assert_eq!(names, vec!["Doc", "Report"]);
+    }
+
+    #[test]
+    fn test_struct_no_supertypes() {
+        let mut db = DriverDataBase::default();
+        let code = "struct Lonely {\n    x: i32\n}\n";
+        let file = db.workspace().touch(
+            &mut db,
+            Url::parse("file:///test.fe").unwrap(),
+            Some(code.to_string()),
+        );
+        let top_mod = map_file_to_mod(&db, file);
+
+        let offset = code.find("Lonely").unwrap() as u32;
+        let item = item_at(&db, top_mod, offset).expect("should find struct");
+        let supertypes = find_supertypes(&db, item);
+        assert!(supertypes.is_empty());
+    }
+
+    #[test]
+    fn test_trait_no_subtypes() {
+        let mut db = DriverDataBase::default();
+        let code = "trait Unimplemented {\n    fn nope(self) -> i32\n}\n";
+        let file = db.workspace().touch(
+            &mut db,
+            Url::parse("file:///test.fe").unwrap(),
+            Some(code.to_string()),
+        );
+        let top_mod = map_file_to_mod(&db, file);
+
+        let offset = code.find("Unimplemented").unwrap() as u32;
+        let item = item_at(&db, top_mod, offset).expect("should find trait");
+        let subtypes = find_subtypes(&db, item);
+        assert!(subtypes.is_empty());
     }
 }
