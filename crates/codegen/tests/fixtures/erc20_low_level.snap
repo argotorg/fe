@@ -292,7 +292,7 @@ object "Erc20Contract" {
         leave
       }
       function $storagemap_storage_slot_with_salt__Address_h257056268eac7027__5ab99f7153cdba29($key, $salt) -> ret {
-        let v0 := 4096
+        let v0 := 8192
         let v1 := $address_h257056268eac7027_storagekey_hf9e3d38a13ff4409_write_key(v0, $key)
         mstore(add(v0, v1), $salt)
         let v2 := keccak256(v0, add(v1, 32))
@@ -300,7 +300,7 @@ object "Erc20Contract" {
         leave
       }
       function $storagemap_storage_slot_with_salt___Address__Address___c32d499da259c78e($key, $salt) -> ret {
-        let v0 := 4096
+        let v0 := 8192
         let v1 := $_a__b__h47f120de72304a2d_storagekey_hf9e3d38a13ff4409_write_key__Address_h257056268eac7027_Address_h257056268eac7027__af929e62fa4c68f2(v0, $key)
         mstore(add(v0, v1), $salt)
         let v2 := keccak256(v0, add(v1, 32))

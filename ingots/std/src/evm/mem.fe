@@ -20,9 +20,9 @@ pub fn alloc(size: u256) -> u256 {
         // Use `msize()` so we don't clobber backend-reserved memory slots (e.g. Sonatina's
         // stack/frame metadata).
         ptr = msize()
-        if ptr < MIN_FREE_MEMORY {
-            ptr = MIN_FREE_MEMORY
-        }
+    }
+    if ptr < MIN_FREE_MEMORY {
+        ptr = MIN_FREE_MEMORY
     }
 
     mstore(FREE_MEMORY_PTR, ptr + size)

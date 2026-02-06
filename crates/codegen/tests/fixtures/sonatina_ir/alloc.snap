@@ -34,22 +34,21 @@ func public %alloc(v0.i256) -> i256 {
 
     block3:
         v10.i256 = evm_msize;
-        v12.i256 = lt v10 8192.i256;
-        br v12 block5 block6;
+        jump block4;
 
     block4:
-        v14.i256 = phi (v0 block2) (v0 block6);
-        v13.i256 = phi (v8 block2) (v16 block6);
-        v15.i256 = add v13 v14;
-        mstore 64.i256 v15 i256;
-        return v13;
+        v11.i256 = phi (v8 block2) (v10 block3);
+        v13.i256 = lt v11 8192.i256;
+        br v13 block5 block6;
 
     block5:
         jump block6;
 
     block6:
-        v16.i256 = phi (v10 block3) (8192.i256 block5);
-        jump block4;
+        v14.i256 = phi (v11 block4) (8192.i256 block5);
+        v16.i256 = add v14 v0;
+        mstore 64.i256 v16 i256;
+        return v14;
 }
 
 func public %__fe_sonatina_entry() {

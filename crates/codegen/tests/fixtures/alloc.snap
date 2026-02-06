@@ -24,17 +24,12 @@ function $alloc($size) -> ret {
   if v3 {
     let v4 := msize()
     v0 := v4
-    let v5 := lt(v0, 8192)
-    if v5 {
-      v0 := 8192
-    }
-    mstore(64, add(v0, $size))
-    ret := v0
-    leave
   }
-  if iszero(v3) {
-    mstore(64, add(v0, $size))
-    ret := v0
-    leave
+  let v5 := lt(v0, 8192)
+  if v5 {
+    v0 := 8192
   }
+  mstore(64, add(v0, $size))
+  ret := v0
+  leave
 }

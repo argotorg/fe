@@ -91,15 +91,15 @@ fn alloc(v0: u256) -> u256:
   bb3:
     v3: u256 = msize()
     v1 = v3
-    br (v1 < 8192) bb5 bb6
+    jmp bb4
   bb4:
-    eval mstore(64, (v1 + v0))
-    ret v1
+    br (v1 < 8192) bb5 bb6
   bb5:
     v1 = 8192
     jmp bb6
   bb6:
-    jmp bb4
+    eval mstore(64, (v1 + v0))
+    ret v1
 
 fn sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v0: I) -> SolDecoder<MemoryBytes>:
   bb0:
