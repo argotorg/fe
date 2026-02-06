@@ -495,6 +495,7 @@ fn test_cli_workspace_exclude_skips_member() {
     dir: "$CARGO_MANIFEST_DIR/tests/fixtures/fe_test_runner",
     glob: "*_debug.fe",
 )]
+#[allow(dead_code)]
 fn test_fe_test_runner_debug(fixture: Fixture<&str>) {
     let args = ["test", "--debug", fixture.path()];
     let (output, _) = run_fe_main(&args);

@@ -1,6 +1,6 @@
 ---
 source: crates/fe/tests/cli_output.rs
-assertion_line: 173
+assertion_line: 232
 expression: output
 input_file: tests/fixtures/fe_test_runner/fail_assert.fe
 ---
@@ -14,5 +14,32 @@ failures:
 
 === STDERR ===
     Test reverted: 0x
+
+---- yul output for test test_assert (test_test_assert) ----
+object "test_test_assert" {
+  code {
+    datacopy(0, dataoffset("runtime"), datasize("runtime"))
+    return(0, datasize("runtime"))
+  }
+
+  object "runtime" {
+    code {
+      function $assert($b) {
+        let v0 := iszero($b)
+        if v0 {
+          revert(0, 0)
+        }
+        leave
+      }
+      function $test_assert() {
+        $assert(0)
+        leave
+      }
+      $test_assert()
+      return(0, 0)
+    }
+  }
+}
+---- end yul output ----
 
 === EXIT CODE: 1 ===
