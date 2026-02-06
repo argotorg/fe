@@ -133,65 +133,6 @@ pub async fn handle_code_lens(
     }
 }
 
-/// Count lenses for each item kind in a module's scope graph.
-fn collect_lens_data<'db>(
-    db: &'db driver::DriverDataBase,
-    top_mod: hir::hir_def::TopLevelMod<'db>,
-) -> Vec<(String, String, usize)> {
-    let scope_graph = top_mod.scope_graph(db);
-    let ingot = top_mod.ingot(db);
-
-    let mut results = Vec::new();
-
-    for item in scope_graph.items_dfs(db) {
-        let (name, kind, count) = match item {
-            ItemKind::Func(func) => {
-                let target = Target::Scope(func.scope());
-                let count = count_references(db, ingot, &target);
-                let name = func
-                    .name(db)
-                    .to_opt()
-                    .map(|n| n.data(db).to_string())
-                    .unwrap_or_default();
-                (name, "func".to_string(), count)
-            }
-            ItemKind::Trait(trait_) => {
-                let count = trait_.all_impl_traits(db).len();
-                let name = trait_
-                    .name(db)
-                    .to_opt()
-                    .map(|n| n.data(db).to_string())
-                    .unwrap_or_default();
-                (name, "trait".to_string(), count)
-            }
-            ItemKind::Struct(s) => {
-                let target = Target::Scope(s.scope());
-                let count = count_references(db, ingot, &target);
-                let name = s
-                    .name(db)
-                    .to_opt()
-                    .map(|n| n.data(db).to_string())
-                    .unwrap_or_default();
-                (name, "struct".to_string(), count)
-            }
-            ItemKind::Enum(e) => {
-                let target = Target::Scope(e.scope());
-                let count = count_references(db, ingot, &target);
-                let name = e
-                    .name(db)
-                    .to_opt()
-                    .map(|n| n.data(db).to_string())
-                    .unwrap_or_default();
-                (name, "enum".to_string(), count)
-            }
-            _ => continue,
-        };
-        results.push((name, kind, count));
-    }
-
-    results
-}
-
 fn count_references<'db>(
     db: &'db driver::DriverDataBase,
     ingot: common::ingot::Ingot<'db>,
@@ -214,6 +155,63 @@ mod tests {
     use driver::DriverDataBase;
     use hir::lower::map_file_to_mod;
     use url::Url;
+
+    fn collect_lens_data<'db>(
+        db: &'db DriverDataBase,
+        top_mod: hir::hir_def::TopLevelMod<'db>,
+    ) -> Vec<(String, String, usize)> {
+        let scope_graph = top_mod.scope_graph(db);
+        let ingot = top_mod.ingot(db);
+        let mut results = Vec::new();
+
+        for item in scope_graph.items_dfs(db) {
+            let (name, kind, count) = match item {
+                ItemKind::Func(func) => {
+                    let target = Target::Scope(func.scope());
+                    let count = count_references(db, ingot, &target);
+                    let name = func
+                        .name(db)
+                        .to_opt()
+                        .map(|n| n.data(db).to_string())
+                        .unwrap_or_default();
+                    (name, "func".to_string(), count)
+                }
+                ItemKind::Trait(trait_) => {
+                    let count = trait_.all_impl_traits(db).len();
+                    let name = trait_
+                        .name(db)
+                        .to_opt()
+                        .map(|n| n.data(db).to_string())
+                        .unwrap_or_default();
+                    (name, "trait".to_string(), count)
+                }
+                ItemKind::Struct(s) => {
+                    let target = Target::Scope(s.scope());
+                    let count = count_references(db, ingot, &target);
+                    let name = s
+                        .name(db)
+                        .to_opt()
+                        .map(|n| n.data(db).to_string())
+                        .unwrap_or_default();
+                    (name, "struct".to_string(), count)
+                }
+                ItemKind::Enum(e) => {
+                    let target = Target::Scope(e.scope());
+                    let count = count_references(db, ingot, &target);
+                    let name = e
+                        .name(db)
+                        .to_opt()
+                        .map(|n| n.data(db).to_string())
+                        .unwrap_or_default();
+                    (name, "enum".to_string(), count)
+                }
+                _ => continue,
+            };
+            results.push((name, kind, count));
+        }
+
+        results
+    }
 
     #[test]
     fn test_code_lens_references() {
