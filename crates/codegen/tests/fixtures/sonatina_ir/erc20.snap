@@ -629,22 +629,21 @@ func public %alloc(v0.i256) -> i256 {
 
     block3:
         v10.i256 = evm_msize;
-        v12.i256 = lt v10 8192.i256;
-        br v12 block5 block6;
+        jump block4;
 
     block4:
-        v14.i256 = phi (v0 block2) (v0 block6);
-        v13.i256 = phi (v8 block2) (v16 block6);
-        v15.i256 = add v13 v14;
-        mstore 64.i256 v15 i256;
-        return v13;
+        v11.i256 = phi (v8 block2) (v10 block3);
+        v13.i256 = lt v11 8192.i256;
+        br v13 block5 block6;
 
     block5:
         jump block6;
 
     block6:
-        v16.i256 = phi (v10 block3) (8192.i256 block5);
-        jump block4;
+        v14.i256 = phi (v11 block4) (8192.i256 block5);
+        v16.i256 = add v14 v0;
+        mstore 64.i256 v16 i256;
+        return v14;
 }
 
 func public %sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v0.i256) -> i256 {
@@ -1135,31 +1134,31 @@ func public %u8_hbc9d6eeaea22ffb5_encode_hab7243eccf2714fb_encode__Sol_hfd482bb8
 
 func public %storagemap_storage_slot_with_salt__Address_h257056268eac7027__5ab99f7153cdba29(v0.i256, v1.i256) -> i256 {
     block0:
-        v4.i256 = call %address_h257056268eac7027_storagekey_hf9e3d38a13ff4409_write_key 4096.i256 v0;
-        v5.i256 = add 4096.i256 v4;
+        v4.i256 = call %address_h257056268eac7027_storagekey_hf9e3d38a13ff4409_write_key 8192.i256 v0;
+        v5.i256 = add 8192.i256 v4;
         mstore v5 v1 i256;
         v7.i256 = add v4 32.i256;
-        v8.i256 = evm_keccak256 4096.i256 v7;
+        v8.i256 = evm_keccak256 8192.i256 v7;
         return v8;
 }
 
 func public %storagemap_storage_slot_with_salt___Address__Address___c32d499da259c78e(v0.i256, v1.i256) -> i256 {
     block0:
-        v4.i256 = call %_a__b__h47f120de72304a2d_storagekey_hf9e3d38a13ff4409_write_key__Address_h257056268eac7027_Address_h257056268eac7027__af929e62fa4c68f2 4096.i256 v0;
-        v5.i256 = add 4096.i256 v4;
+        v4.i256 = call %_a__b__h47f120de72304a2d_storagekey_hf9e3d38a13ff4409_write_key__Address_h257056268eac7027_Address_h257056268eac7027__af929e62fa4c68f2 8192.i256 v0;
+        v5.i256 = add 8192.i256 v4;
         mstore v5 v1 i256;
         v7.i256 = add v4 32.i256;
-        v8.i256 = evm_keccak256 4096.i256 v7;
+        v8.i256 = evm_keccak256 8192.i256 v7;
         return v8;
 }
 
 func public %storagemap_storage_slot_with_salt___u256__Address___c7c570db20cdd393(v0.i256, v1.i256) -> i256 {
     block0:
-        v4.i256 = call %_a__b__h47f120de72304a2d_storagekey_hf9e3d38a13ff4409_write_key__u256_Address_h257056268eac7027__802280feae02d9df 4096.i256 v0;
-        v5.i256 = add 4096.i256 v4;
+        v4.i256 = call %_a__b__h47f120de72304a2d_storagekey_hf9e3d38a13ff4409_write_key__u256_Address_h257056268eac7027__802280feae02d9df 8192.i256 v0;
+        v5.i256 = add 8192.i256 v4;
         mstore v5 v1 i256;
         v7.i256 = add v4 32.i256;
-        v8.i256 = evm_keccak256 4096.i256 v7;
+        v8.i256 = evm_keccak256 8192.i256 v7;
         return v8;
 }
 

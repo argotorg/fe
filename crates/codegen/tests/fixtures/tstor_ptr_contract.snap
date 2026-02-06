@@ -46,19 +46,14 @@ object "GuardContract" {
       if v3 {
         let v4 := msize()
         v0 := v4
-        let v5 := lt(v0, 8192)
-        if v5 {
-          v0 := 8192
-        }
-        mstore(64, add(v0, $size))
-        ret := v0
-        leave
       }
-      if iszero(v3) {
-        mstore(64, add(v0, $size))
-        ret := v0
-        leave
+      let v5 := lt(v0, 8192)
+      if v5 {
+        v0 := 8192
       }
+      mstore(64, add(v0, $size))
+      ret := v0
+      leave
     }
     function $cursor_i__h140a998c67d6d59c_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b($input) -> ret {
       let v0 := mload(0x40)
@@ -161,19 +156,14 @@ object "GuardContract" {
         if v3 {
           let v4 := msize()
           v0 := v4
-          let v5 := lt(v0, 8192)
-          if v5 {
-            v0 := 8192
-          }
-          mstore(64, add(v0, $size))
-          ret := v0
-          leave
         }
-        if iszero(v3) {
-          mstore(64, add(v0, $size))
-          ret := v0
-          leave
+        let v5 := lt(v0, 8192)
+        if v5 {
+          v0 := 8192
         }
+        mstore(64, add(v0, $size))
+        ret := v0
+        leave
       }
       function $bool_h947c0c03c59c6f07_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383($self, $e) {
         let v0 := $self

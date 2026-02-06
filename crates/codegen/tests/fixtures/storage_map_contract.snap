@@ -121,7 +121,7 @@ object "BalanceMap" {
         leave
       }
       function $storagemap_storage_slot_with_salt__u256__3271ca15373d4483($key, $salt) -> ret {
-        let v0 := 4096
+        let v0 := 8192
         let v1 := $u256_h3271ca15373d4483_storagekey_hf9e3d38a13ff4409_write_key(v0, $key)
         mstore(add(v0, v1), $salt)
         let v2 := keccak256(v0, add(v1, 32))

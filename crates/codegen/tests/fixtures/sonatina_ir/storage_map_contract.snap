@@ -233,11 +233,11 @@ func public %storagemap_set_word_with_salt__u256__3271ca15373d4483(v0.i256, v1.i
 
 func public %storagemap_storage_slot_with_salt__u256__3271ca15373d4483(v0.i256, v1.i256) -> i256 {
     block0:
-        v4.i256 = call %u256_h3271ca15373d4483_storagekey_hf9e3d38a13ff4409_write_key 4096.i256 v0;
-        v5.i256 = add 4096.i256 v4;
+        v4.i256 = call %u256_h3271ca15373d4483_storagekey_hf9e3d38a13ff4409_write_key 8192.i256 v0;
+        v5.i256 = add 8192.i256 v4;
         mstore v5 v1 i256;
         v7.i256 = add v4 32.i256;
-        v8.i256 = evm_keccak256 4096.i256 v7;
+        v8.i256 = evm_keccak256 8192.i256 v7;
         return v8;
 }
 

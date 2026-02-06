@@ -88,19 +88,14 @@ object "CoolCoin" {
       if v3 {
         let v4 := msize()
         v0 := v4
-        let v5 := lt(v0, 8192)
-        if v5 {
-          v0 := 8192
-        }
-        mstore(64, add(v0, $size))
-        ret := v0
-        leave
       }
-      if iszero(v3) {
-        mstore(64, add(v0, $size))
-        ret := v0
-        leave
+      let v5 := lt(v0, 8192)
+      if v5 {
+        v0 := 8192
       }
+      mstore(64, add(v0, $size))
+      ret := v0
+      leave
     }
     function $assert($b) {
       let v0 := iszero($b)
@@ -277,7 +272,7 @@ object "CoolCoin" {
       leave
     }
     function $storagemap_storage_slot_with_salt__Address_h257056268eac7027__5ab99f7153cdba29($key, $salt) -> ret {
-      let v0 := 4096
+      let v0 := 8192
       let v1 := $address_h257056268eac7027_storagekey_hf9e3d38a13ff4409_write_key(v0, $key)
       mstore(add(v0, v1), $salt)
       let v2 := keccak256(v0, add(v1, 32))
@@ -285,7 +280,7 @@ object "CoolCoin" {
       leave
     }
     function $storagemap_storage_slot_with_salt___u256__Address___c7c570db20cdd393($key, $salt) -> ret {
-      let v0 := 4096
+      let v0 := 8192
       let v1 := $_a__b__h47f120de72304a2d_storagekey_hf9e3d38a13ff4409_write_key__u256_Address_h257056268eac7027__802280feae02d9df(v0, $key)
       mstore(add(v0, v1), $salt)
       let v2 := keccak256(v0, add(v1, 32))
@@ -598,19 +593,14 @@ object "CoolCoin" {
         if v3 {
           let v4 := msize()
           v0 := v4
-          let v5 := lt(v0, 8192)
-          if v5 {
-            v0 := 8192
-          }
-          mstore(64, add(v0, $size))
-          ret := v0
-          leave
         }
-        if iszero(v3) {
-          mstore(64, add(v0, $size))
-          ret := v0
-          leave
+        let v5 := lt(v0, 8192)
+        if v5 {
+          v0 := 8192
         }
+        mstore(64, add(v0, $size))
+        ret := v0
+        leave
       }
       function $allowance_h4bb1267f662bd2a8_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966($d) -> ret {
         let v0 := $address_h257056268eac7027_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98($d)
@@ -1120,7 +1110,7 @@ object "CoolCoin" {
         leave
       }
       function $storagemap_storage_slot_with_salt__Address_h257056268eac7027__5ab99f7153cdba29($key, $salt) -> ret {
-        let v0 := 4096
+        let v0 := 8192
         let v1 := $address_h257056268eac7027_storagekey_hf9e3d38a13ff4409_write_key(v0, $key)
         mstore(add(v0, v1), $salt)
         let v2 := keccak256(v0, add(v1, 32))
@@ -1128,7 +1118,7 @@ object "CoolCoin" {
         leave
       }
       function $storagemap_storage_slot_with_salt___Address__Address___c32d499da259c78e($key, $salt) -> ret {
-        let v0 := 4096
+        let v0 := 8192
         let v1 := $_a__b__h47f120de72304a2d_storagekey_hf9e3d38a13ff4409_write_key__Address_h257056268eac7027_Address_h257056268eac7027__af929e62fa4c68f2(v0, $key)
         mstore(add(v0, v1), $salt)
         let v2 := keccak256(v0, add(v1, 32))
@@ -1136,7 +1126,7 @@ object "CoolCoin" {
         leave
       }
       function $storagemap_storage_slot_with_salt___u256__Address___c7c570db20cdd393($key, $salt) -> ret {
-        let v0 := 4096
+        let v0 := 8192
         let v1 := $_a__b__h47f120de72304a2d_storagekey_hf9e3d38a13ff4409_write_key__u256_Address_h257056268eac7027__802280feae02d9df(v0, $key)
         mstore(add(v0, v1), $salt)
         let v2 := keccak256(v0, add(v1, 32))

@@ -102,19 +102,14 @@ object "Factory" {
         if v3 {
           let v4 := msize()
           v0 := v4
-          let v5 := lt(v0, 8192)
-          if v5 {
-            v0 := 8192
-          }
-          mstore(64, add(v0, $size))
-          ret := v0
-          leave
         }
-        if iszero(v3) {
-          mstore(64, add(v0, $size))
-          ret := v0
-          leave
+        let v5 := lt(v0, 8192)
+        if v5 {
+          v0 := 8192
         }
+        mstore(64, add(v0, $size))
+        ret := v0
+        leave
       }
       function $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len($self) -> ret {
         let v0 := calldatasize()
@@ -453,19 +448,14 @@ object "Factory" {
           if v3 {
             let v4 := msize()
             v0 := v4
-            let v5 := lt(v0, 8192)
-            if v5 {
-              v0 := 8192
-            }
-            mstore(64, add(v0, $size))
-            ret := v0
-            leave
           }
-          if iszero(v3) {
-            mstore(64, add(v0, $size))
-            ret := v0
-            leave
+          let v5 := lt(v0, 8192)
+          if v5 {
+            v0 := 8192
           }
+          mstore(64, add(v0, $size))
+          ret := v0
+          leave
         }
         function $cursor_i__h140a998c67d6d59c_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b($input) -> ret {
           let v0 := mload(0x40)
