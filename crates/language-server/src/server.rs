@@ -14,10 +14,11 @@ use async_lsp::lsp_types::notification::{
 use async_lsp::lsp_types::request::{
     CallHierarchyIncomingCalls, CallHierarchyOutgoingCalls, CallHierarchyPrepare,
     CodeActionRequest, CodeLensRequest, Completion, DocumentHighlightRequest,
-    DocumentSymbolRequest, Formatting, GotoDefinition, GotoImplementation, GotoTypeDefinition,
-    HoverRequest, InlayHintRequest, References, Rename, SelectionRangeRequest,
-    SemanticTokensFullRequest, Shutdown, SignatureHelpRequest, TypeHierarchyPrepare,
-    TypeHierarchySubtypes, TypeHierarchySupertypes, WorkspaceSymbolRequest,
+    DocumentSymbolRequest, FoldingRangeRequest, Formatting, GotoDeclaration, GotoDefinition,
+    GotoImplementation, GotoTypeDefinition, HoverRequest, InlayHintRequest, References, Rename,
+    SelectionRangeRequest, SemanticTokensFullRequest, Shutdown, SignatureHelpRequest,
+    TypeHierarchyPrepare, TypeHierarchySubtypes, TypeHierarchySupertypes,
+    WorkspaceSymbolRequest,
 };
 use async_std::stream::StreamExt;
 use futures_batch::ChunksTimeoutStreamExt;
@@ -27,9 +28,10 @@ use tracing::{info, warn};
 
 use crate::backend::Backend;
 use crate::functionality::{
-    call_hierarchy, code_actions, code_lens, completion, document_symbols, goto, handlers,
-    highlight, implementations, inlay_hints, references, rename, selection_range, semantic_tokens,
-    signature_help, type_definition, type_hierarchy, workspace_symbols,
+    call_hierarchy, code_actions, code_lens, completion, declaration, document_symbols,
+    folding_range, goto, handlers, highlight, implementations, inlay_hints, references, rename,
+    selection_range, semantic_tokens, signature_help, type_definition, type_hierarchy,
+    workspace_symbols,
 };
 use async_lsp::lsp_types::request::Initialize;
 use async_lsp::router::Router;
@@ -84,6 +86,10 @@ pub(crate) fn setup(
         .handle_request::<CodeLensRequest>(code_lens::handle_code_lens)
         // selection range
         .handle_request::<SelectionRangeRequest>(selection_range::handle_selection_range)
+        // folding range
+        .handle_request::<FoldingRangeRequest>(folding_range::handle_folding_range)
+        // go to declaration
+        .handle_request::<GotoDeclaration>(declaration::handle_goto_declaration)
         .handle_notification::<DidOpenTextDocument>(handlers::handle_did_open_text_document)
         .handle_notification::<DidChangeTextDocument>(handlers::handle_did_change_text_document)
         .handle_notification::<DidChangeWatchedFiles>(handlers::handle_did_change_watched_files)
