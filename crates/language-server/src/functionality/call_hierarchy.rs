@@ -125,28 +125,7 @@ pub async fn handle_incoming_calls(
         _ => return Ok(None),
     };
 
-    let ingot = top_mod.ingot(&backend.db);
-    let all_funcs = ingot.all_funcs(&backend.db);
-
-    // Map from calling function -> Vec<Range> of call sites
-    let mut callers: FxHashMap<Func, Vec<async_lsp::lsp_types::Range>> = FxHashMap::default();
-
-    for &func in all_funcs {
-        let Some(body) = func.body(&backend.db) else {
-            continue;
-        };
-        for call_site in body.call_sites(&backend.db) {
-            if let Some(CallableDef::Func(callee)) = call_site.target(&backend.db) {
-                if callee == target_func {
-                    if let Ok(loc) =
-                        to_lsp_location_from_lazy_span(&backend.db, call_site.callee_span())
-                    {
-                        callers.entry(func).or_default().push(loc.range);
-                    }
-                }
-            }
-        }
-    }
+    let callers = find_incoming_calls(&backend.db, target_func, top_mod);
 
     let items: Vec<_> = callers
         .into_iter()
@@ -164,6 +143,56 @@ pub async fn handle_incoming_calls(
     } else {
         Ok(Some(items))
     }
+}
+
+/// Find all functions that call the given target function, with call site spans.
+fn find_incoming_calls<'db>(
+    db: &'db driver::DriverDataBase,
+    target_func: Func<'db>,
+    top_mod: hir::hir_def::TopLevelMod<'db>,
+) -> Vec<(Func<'db>, Vec<async_lsp::lsp_types::Range>)> {
+    let ingot = top_mod.ingot(db);
+    let all_funcs = ingot.all_funcs(db);
+    let mut callers: FxHashMap<Func, Vec<async_lsp::lsp_types::Range>> = FxHashMap::default();
+
+    for &func in all_funcs {
+        let Some(body) = func.body(db) else {
+            continue;
+        };
+        for call_site in body.call_sites(db) {
+            if let Some(CallableDef::Func(callee)) = call_site.target(db) {
+                if callee == target_func {
+                    if let Ok(loc) = to_lsp_location_from_lazy_span(db, call_site.callee_span()) {
+                        callers.entry(func).or_default().push(loc.range);
+                    }
+                }
+            }
+        }
+    }
+
+    callers.into_iter().collect()
+}
+
+/// Find all functions called by the given source function, with call site spans.
+fn find_outgoing_calls<'db>(
+    db: &'db driver::DriverDataBase,
+    source_func: Func<'db>,
+) -> Vec<(Func<'db>, Vec<async_lsp::lsp_types::Range>)> {
+    let Some(body) = source_func.body(db) else {
+        return vec![];
+    };
+
+    let mut targets: FxHashMap<Func, Vec<async_lsp::lsp_types::Range>> = FxHashMap::default();
+
+    for call_site in body.call_sites(db) {
+        if let Some(CallableDef::Func(callee)) = call_site.target(db) {
+            if let Ok(loc) = to_lsp_location_from_lazy_span(db, call_site.callee_span()) {
+                targets.entry(callee).or_default().push(loc.range);
+            }
+        }
+    }
+
+    targets.into_iter().collect()
 }
 
 /// Handle callHierarchy/outgoingCalls.
@@ -201,22 +230,7 @@ pub async fn handle_outgoing_calls(
         _ => return Ok(None),
     };
 
-    let Some(body) = source_func.body(&backend.db) else {
-        return Ok(None);
-    };
-
-    // Group call sites by target function
-    let mut targets: FxHashMap<Func, Vec<async_lsp::lsp_types::Range>> = FxHashMap::default();
-
-    for call_site in body.call_sites(&backend.db) {
-        if let Some(CallableDef::Func(callee)) = call_site.target(&backend.db) {
-            if let Ok(loc) =
-                to_lsp_location_from_lazy_span(&backend.db, call_site.callee_span())
-            {
-                targets.entry(callee).or_default().push(loc.range);
-            }
-        }
-    }
+    let targets = find_outgoing_calls(&backend.db, source_func);
 
     let items: Vec<_> = targets
         .into_iter()
@@ -233,5 +247,158 @@ pub async fn handle_outgoing_calls(
         Ok(None)
     } else {
         Ok(Some(items))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use driver::DriverDataBase;
+    use hir::lower::map_file_to_mod;
+    use url::Url;
+
+    fn find_func_at<'db>(
+        db: &'db DriverDataBase,
+        top_mod: hir::hir_def::TopLevelMod<'db>,
+        offset: u32,
+    ) -> Option<Func<'db>> {
+        let cursor = parser::TextSize::from(offset);
+        let resolution = top_mod.target_at(db, cursor);
+        match resolution.first()? {
+            Target::Scope(scope) => match scope.item() {
+                ItemKind::Func(f) => Some(f),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn test_call_hierarchy_prepare() {
+        let mut db = DriverDataBase::default();
+        let code = "fn foo() -> i32 {\n    1\n}\n";
+        let file = db.workspace().touch(
+            &mut db,
+            Url::parse("file:///test.fe").unwrap(),
+            Some(code.to_string()),
+        );
+        let top_mod = map_file_to_mod(&db, file);
+
+        // "foo" starts at offset 3 (after "fn ")
+        let func = find_func_at(&db, top_mod, 3);
+        assert!(func.is_some(), "should find function at cursor");
+
+        let item = func_to_hierarchy_item(&db, func.unwrap());
+        assert!(item.is_some());
+        let item = item.unwrap();
+        assert_eq!(item.name, "foo");
+        assert_eq!(item.kind, SymbolKind::FUNCTION);
+    }
+
+    #[test]
+    fn test_incoming_calls() {
+        let mut db = DriverDataBase::default();
+        let code = r#"fn target() -> i32 {
+    42
+}
+
+fn caller_a() -> i32 {
+    target()
+}
+
+fn caller_b() -> i32 {
+    target()
+}
+
+fn no_call() -> i32 {
+    1
+}
+"#;
+        let file = db.workspace().touch(
+            &mut db,
+            Url::parse("file:///test.fe").unwrap(),
+            Some(code.to_string()),
+        );
+        let top_mod = map_file_to_mod(&db, file);
+
+        // "target" starts at offset 3 (after "fn ")
+        let target_func = find_func_at(&db, top_mod, 3).expect("should find target function");
+        let callers = find_incoming_calls(&db, target_func, top_mod);
+
+        let mut caller_names: Vec<String> = callers
+            .iter()
+            .filter_map(|(f, _)| Some(f.name(&db).to_opt()?.data(&db).to_string()))
+            .collect();
+        caller_names.sort();
+
+        assert_eq!(caller_names.len(), 2, "should have 2 callers");
+        assert_eq!(caller_names, vec!["caller_a", "caller_b"]);
+    }
+
+    #[test]
+    fn test_outgoing_calls() {
+        let mut db = DriverDataBase::default();
+        let code = r#"fn helper_a() -> i32 {
+    1
+}
+
+fn helper_b() -> i32 {
+    2
+}
+
+fn main_func() -> i32 {
+    helper_a()
+    helper_b()
+}
+"#;
+        let file = db.workspace().touch(
+            &mut db,
+            Url::parse("file:///test.fe").unwrap(),
+            Some(code.to_string()),
+        );
+        let top_mod = map_file_to_mod(&db, file);
+
+        let offset = code.find("main_func").unwrap() as u32;
+        let main_func = find_func_at(&db, top_mod, offset).expect("should find main_func");
+        let targets = find_outgoing_calls(&db, main_func);
+
+        let mut target_names: Vec<String> = targets
+            .iter()
+            .filter_map(|(f, _)| Some(f.name(&db).to_opt()?.data(&db).to_string()))
+            .collect();
+        target_names.sort();
+
+        assert_eq!(target_names.len(), 2, "should have 2 outgoing calls");
+        assert_eq!(target_names, vec!["helper_a", "helper_b"]);
+    }
+
+    #[test]
+    fn test_no_incoming_calls() {
+        let mut db = DriverDataBase::default();
+        let code = "fn lonely() -> i32 {\n    1\n}\n";
+        let file = db.workspace().touch(
+            &mut db,
+            Url::parse("file:///test.fe").unwrap(),
+            Some(code.to_string()),
+        );
+        let top_mod = map_file_to_mod(&db, file);
+        let func = find_func_at(&db, top_mod, 3).expect("should find function");
+        let callers = find_incoming_calls(&db, func, top_mod);
+        assert!(callers.is_empty(), "lonely function should have no callers");
+    }
+
+    #[test]
+    fn test_no_outgoing_calls() {
+        let mut db = DriverDataBase::default();
+        let code = "fn leaf() -> i32 {\n    42\n}\n";
+        let file = db.workspace().touch(
+            &mut db,
+            Url::parse("file:///test.fe").unwrap(),
+            Some(code.to_string()),
+        );
+        let top_mod = map_file_to_mod(&db, file);
+        let func = find_func_at(&db, top_mod, 3).expect("should find function");
+        let targets = find_outgoing_calls(&db, func);
+        assert!(targets.is_empty(), "leaf function should have no outgoing calls");
     }
 }
