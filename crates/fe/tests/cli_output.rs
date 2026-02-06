@@ -32,7 +32,8 @@ fn run_fe_tree(path: &str) -> (String, i32) {
 ///
 /// Returns the combined CLI output and exit code.
 fn run_fe_test(path: &str) -> (String, i32) {
-    run_fe_command("test", path)
+    run_fe_command_with_args("test", path, &["--backend", "yul"]);
+    run_fe_command_with_args("test", path, &["--backend", "sonatina"])
 }
 
 // Helper function to run fe binary with specified subcommand
