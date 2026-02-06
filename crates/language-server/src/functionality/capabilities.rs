@@ -52,6 +52,18 @@ pub(crate) fn server_capabilities() -> ServerCapabilities {
             retrigger_characters: Some(vec![",".to_string()]),
             work_done_progress_options: Default::default(),
         }),
+        // call hierarchy
+        call_hierarchy_provider: Some(
+            async_lsp::lsp_types::CallHierarchyServerCapability::Simple(true),
+        ),
+        // code lens
+        code_lens_provider: Some(async_lsp::lsp_types::CodeLensOptions {
+            resolve_provider: Some(false),
+        }),
+        // selection range
+        selection_range_provider: Some(
+            async_lsp::lsp_types::SelectionRangeProviderCapability::Simple(true),
+        ),
         // code actions (quick fixes)
         code_action_provider: Some(async_lsp::lsp_types::CodeActionProviderCapability::Simple(
             true,
