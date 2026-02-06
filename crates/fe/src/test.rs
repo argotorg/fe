@@ -9,7 +9,7 @@ use crate::report::{
     panic_payload_to_string, sanitize_filename, tar_gz_dir, write_report_meta,
 };
 use camino::Utf8PathBuf;
-use codegen::{TestMetadata, emit_test_module_sonatina, emit_test_module_yul};
+use codegen::{ExpectedRevert, TestMetadata, emit_test_module_sonatina, emit_test_module_yul};
 use colored::Colorize;
 use common::InputDb;
 use contract_harness::{ExecutionOptions, RuntimeInstance};
@@ -845,7 +845,12 @@ fn compile_and_run_test(
         }
 
         let bytecode_hex = hex::encode(&case.bytecode);
-        let (result, logs) = execute_test(&case.display_name, &bytecode_hex, show_logs);
+        let (result, logs) = execute_test(
+            &case.display_name,
+            &bytecode_hex,
+            show_logs,
+            case.expected_revert.as_ref(),
+        );
         return TestOutcome { result, logs };
     }
 
@@ -880,7 +885,12 @@ fn compile_and_run_test(
     };
 
     // Execute the test bytecode in revm
-    let (result, logs) = execute_test(&case.display_name, &bytecode, show_logs);
+    let (result, logs) = execute_test(
+        &case.display_name,
+        &bytecode,
+        show_logs,
+        case.expected_revert.as_ref(),
+    );
     TestOutcome { result, logs }
 }
 
@@ -998,7 +1008,12 @@ fn write_report_manifest(
 /// * `show_logs` - Whether to execute with log collection enabled.
 ///
 /// Returns the test result and any emitted logs.
-fn execute_test(name: &str, bytecode_hex: &str, show_logs: bool) -> (TestResult, Vec<String>) {
+fn execute_test(
+    name: &str,
+    bytecode_hex: &str,
+    show_logs: bool,
+    expected_revert: Option<&ExpectedRevert>,
+) -> (TestResult, Vec<String>) {
     // Deploy the test contract
     let mut instance = match RuntimeInstance::deploy(bytecode_hex) {
         Ok(instance) => instance,
@@ -1024,8 +1039,9 @@ fn execute_test(name: &str, bytecode_hex: &str, show_logs: bool) -> (TestResult,
         instance.call_raw(&[], options).map(|_| Vec::new())
     };
 
-    match call_result {
-        Ok(logs) => (
+    match (call_result, expected_revert) {
+        // Normal test: execution succeeded
+        (Ok(logs), None) => (
             TestResult {
                 name: name.to_string(),
                 passed: true,
@@ -1033,11 +1049,42 @@ fn execute_test(name: &str, bytecode_hex: &str, show_logs: bool) -> (TestResult,
             },
             logs,
         ),
-        Err(err) => (
+        // Normal test: execution reverted (failure)
+        (Err(err), None) => (
             TestResult {
                 name: name.to_string(),
                 passed: false,
                 error_message: Some(format_harness_error(err)),
+            },
+            Vec::new(),
+        ),
+        // Expected revert: execution succeeded (failure - should have reverted)
+        (Ok(_), Some(_)) => (
+            TestResult {
+                name: name.to_string(),
+                passed: false,
+                error_message: Some("Expected test to revert, but it succeeded".to_string()),
+            },
+            Vec::new(),
+        ),
+        // Expected revert: execution reverted (success)
+        (Err(contract_harness::HarnessError::Revert(_)), Some(ExpectedRevert::Any)) => (
+            TestResult {
+                name: name.to_string(),
+                passed: true,
+                error_message: None,
+            },
+            Vec::new(),
+        ),
+        // Expected revert: execution failed for a different reason (failure)
+        (Err(err), Some(ExpectedRevert::Any)) => (
+            TestResult {
+                name: name.to_string(),
+                passed: false,
+                error_message: Some(format!(
+                    "Expected test to revert, but it failed with: {}",
+                    format_harness_error(err)
+                )),
             },
             Vec::new(),
         ),
