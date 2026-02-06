@@ -5,7 +5,7 @@ input_file: crates/codegen/tests/fixtures/match_return.fe
 ---
 target = evm-ethereum-osaka
 
-func public %f(v0.i256, v1.i256) {
+func public %f__Evm_hef0af3106e109414__3af54274b2985741(v0.i256, v1.i256) {
     block0:
         jump block3;
 
@@ -30,7 +30,7 @@ func public %f(v0.i256, v1.i256) {
 
 func public %__fe_sonatina_entry() {
     block0:
-        call %f 0.i256 0.i256;
+        call %f__Evm_hef0af3106e109414__3af54274b2985741 0.i256 0.i256;
         evm_stop;
 }
 

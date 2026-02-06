@@ -5,7 +5,7 @@ input_file: crates/codegen/tests/fixtures/keccak_intrinsic.fe
 ---
 target = evm-ethereum-osaka
 
-func public %hash(v0.i256, v1.i256, v2.i256) -> i256 {
+func public %hash__Evm_hef0af3106e109414__3af54274b2985741(v0.i256, v1.i256, v2.i256) -> i256 {
     block0:
         v4.i256 = evm_keccak256 v0 v1;
         return v4;
@@ -13,7 +13,7 @@ func public %hash(v0.i256, v1.i256, v2.i256) -> i256 {
 
 func public %__fe_sonatina_entry() {
     block0:
-        v1.i256 = call %hash 0.i256 0.i256 0.i256;
+        v1.i256 = call %hash__Evm_hef0af3106e109414__3af54274b2985741 0.i256 0.i256 0.i256;
         evm_stop;
 }
 

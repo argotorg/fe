@@ -5,7 +5,7 @@ input_file: crates/codegen/tests/fixtures/nested_struct.fe
 ---
 target = evm-ethereum-osaka
 
-func public %abi_encode(v0.i256, v1.i256) {
+func public %abi_encode__Evm_hef0af3106e109414__3af54274b2985741(v0.i256, v1.i256) {
     block0:
         mstore 0.i256 v0 i256;
         evm_return 0.i256 32.i256;
@@ -38,7 +38,7 @@ func public %init__StorPtr_Evm___207f35a85ac4062e() {
 
 func public %runtime__StorPtr_Evm___207f35a85ac4062e() {
     block0:
-        v1.i256 = call %stor_ptr__Evm_Outer__31089a952466fa6f 0.i256;
+        v1.i256 = call %stor_ptr__Evm_hef0af3106e109414_Outer_hccd04e332bd35653__177c3c9a6f7ae368 0.i256;
         v2.i256 = evm_calldata_load 0.i256;
         v4.i256 = shr 224.i256 v2;
         jump block5;
@@ -46,18 +46,18 @@ func public %runtime__StorPtr_Evm___207f35a85ac4062e() {
     block1:
         v6.i256 = evm_calldata_load 4.i256;
         call %write_inner__StorPtr_Outer___dab28b9da6c3e28 v6 v1;
-        call %abi_encode v6 0.i256;
+        call %abi_encode__Evm_hef0af3106e109414__3af54274b2985741 v6 0.i256;
         evm_invalid;
 
     block2:
         v9.i256 = call %read_inner__StorPtr_Outer___dab28b9da6c3e28 v1;
-        call %abi_encode v9 0.i256;
+        call %abi_encode__Evm_hef0af3106e109414__3af54274b2985741 v9 0.i256;
         evm_invalid;
 
     block3:
         v10.i256 = evm_calldata_load 4.i256;
         v11.i256 = call %mem_read v10;
-        call %abi_encode v11 0.i256;
+        call %abi_encode__Evm_hef0af3106e109414__3af54274b2985741 v11 0.i256;
         evm_invalid;
 
     block4:
@@ -76,13 +76,13 @@ func public %runtime__StorPtr_Evm___207f35a85ac4062e() {
         br v18 block3 block4;
 }
 
-func public %stor_ptr__Evm_Outer__31089a952466fa6f(v0.i256) -> i256 {
+func public %stor_ptr__Evm_hef0af3106e109414_Outer_hccd04e332bd35653__177c3c9a6f7ae368(v0.i256) -> i256 {
     block0:
-        v2.i256 = call %storptr_t__effectref_from_raw__Outer__ffb1d3cc5087d727 v0;
+        v2.i256 = call %storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Outer_hccd04e332bd35653__f44d0100de7cf929 v0;
         return v2;
 }
 
-func public %storptr_t__effectref_from_raw__Outer__ffb1d3cc5087d727(v0.i256) -> i256 {
+func public %storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Outer_hccd04e332bd35653__f44d0100de7cf929(v0.i256) -> i256 {
     block0:
         return v0;
 }

@@ -18,11 +18,11 @@ func public %bump__StorPtr_Foo___3698cc3c4b2626e3(v0.i256) {
         return;
 }
 
-func public %test_effect_ptr_domains(v0.i256, v1.i256) {
+func public %test_effect_ptr_domains__Evm_hef0af3106e109414_Evm_hef0af3106e109414__7ab75559784fbc59(v0.i256, v1.i256) {
     block0:
-        v4.i256 = call %mem_ptr__mem__RawMem_Foo__19292a5189c12f79 256.i256;
+        v4.i256 = call %mem_ptr__Evm_hef0af3106e109414_Foo_h6dbce71a6ea992b8__c09e6c6fc5a7b23d 256.i256;
         call %bump__MemPtr_Foo___cdd30998d577b6ea v4;
-        v5.i256 = call %stor_ptr__st__RawStorage_Foo__d44156c896232646 0.i256;
+        v5.i256 = call %stor_ptr__Evm_hef0af3106e109414_Foo_h6dbce71a6ea992b8__c09e6c6fc5a7b23d 0.i256;
         call %bump__StorPtr_Foo___3698cc3c4b2626e3 v5;
         v7.i256 = evm_malloc 64.i256;
         mstore v7 10.i256 i256;
@@ -32,9 +32,9 @@ func public %test_effect_ptr_domains(v0.i256, v1.i256) {
         return;
 }
 
-func public %mem_ptr__mem__RawMem_Foo__19292a5189c12f79(v0.i256) -> i256 {
+func public %mem_ptr__Evm_hef0af3106e109414_Foo_h6dbce71a6ea992b8__c09e6c6fc5a7b23d(v0.i256) -> i256 {
     block0:
-        v2.i256 = call %memptr_t__effectref_from_raw__Foo__668f96d7165c93b v0;
+        v2.i256 = call %memptr_t__hf71ec14ffe47fb3f_effecthandle_hfc52f915596f993a_from_raw__Foo_h6dbce71a6ea992b8__21493237fe9c2c26 v0;
         return v2;
 }
 
@@ -51,18 +51,18 @@ func public %bump__MemPtr_Foo___cdd30998d577b6ea(v0.i256) {
         return;
 }
 
-func public %stor_ptr__st__RawStorage_Foo__d44156c896232646(v0.i256) -> i256 {
+func public %stor_ptr__Evm_hef0af3106e109414_Foo_h6dbce71a6ea992b8__c09e6c6fc5a7b23d(v0.i256) -> i256 {
     block0:
-        v2.i256 = call %storptr_t__effectref_from_raw__Foo__668f96d7165c93b v0;
+        v2.i256 = call %storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Foo_h6dbce71a6ea992b8__21493237fe9c2c26 v0;
         return v2;
 }
 
-func public %memptr_t__effectref_from_raw__Foo__668f96d7165c93b(v0.i256) -> i256 {
+func public %memptr_t__hf71ec14ffe47fb3f_effecthandle_hfc52f915596f993a_from_raw__Foo_h6dbce71a6ea992b8__21493237fe9c2c26(v0.i256) -> i256 {
     block0:
         return v0;
 }
 
-func public %storptr_t__effectref_from_raw__Foo__668f96d7165c93b(v0.i256) -> i256 {
+func public %storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Foo_h6dbce71a6ea992b8__21493237fe9c2c26(v0.i256) -> i256 {
     block0:
         return v0;
 }

@@ -32,7 +32,7 @@ func public %transfer_result_code(v0.i256) -> i256 {
         br v7 block3 block5;
 }
 
-func public %abi_encode(v0.i256, v1.i256) {
+func public %abi_encode__Evm_hef0af3106e109414__3af54274b2985741(v0.i256, v1.i256) {
     block0:
         mstore 0.i256 v0 i256;
         evm_return 0.i256 32.i256;
@@ -242,8 +242,8 @@ func public %init__StorPtr_Evm___207f35a85ac4062e() {
 
 func public %runtime__StorPtr_Evm___207f35a85ac4062e() {
     block0:
-        v1.i256 = call %stor_ptr__Evm_CoinStore__d1ec7298de486d2f 0.i256;
-        v3.i256 = call %stor_ptr__Evm_TotalSupply__b0f1a753085dcbd 2.i256;
+        v1.i256 = call %stor_ptr__Evm_hef0af3106e109414_CoinStore_hd26a92ca525e0e79__b6feb5585dda62f1 0.i256;
+        v3.i256 = call %stor_ptr__Evm_hef0af3106e109414_TotalSupply_hddb16bb19b5b088e__f5679b0709de743a 2.i256;
         v4.i256 = evm_calldata_load 0.i256;
         v6.i256 = shr 224.i256 v4;
         jump block14;
@@ -259,7 +259,7 @@ func public %runtime__StorPtr_Evm___207f35a85ac4062e() {
 
     block3:
         v15.i256 = phi (v14 block2) (v19 block4);
-        call %abi_encode v15 0.i256;
+        call %abi_encode__Evm_hef0af3106e109414__3af54274b2985741 v15 0.i256;
         evm_invalid;
 
     block4:
@@ -273,7 +273,7 @@ func public %runtime__StorPtr_Evm___207f35a85ac4062e() {
     block6:
         v22.i256 = evm_calldata_load 4.i256;
         v24.i256 = call %balance_of_raw__StorPtr_CoinStore___ba1c0d0726e89ba2 v22 v1;
-        call %abi_encode v24 0.i256;
+        call %abi_encode__Evm_hef0af3106e109414__3af54274b2985741 v24 0.i256;
         evm_invalid;
 
     block7:
@@ -288,7 +288,7 @@ func public %runtime__StorPtr_Evm___207f35a85ac4062e() {
     block9:
         v30.i256 = phi (v29 block8) (v34 block10);
         v31.i256 = call %transfer_result_code v30;
-        call %abi_encode v31 0.i256;
+        call %abi_encode__Evm_hef0af3106e109414__3af54274b2985741 v31 0.i256;
         evm_invalid;
 
     block10:
@@ -301,7 +301,7 @@ func public %runtime__StorPtr_Evm___207f35a85ac4062e() {
 
     block12:
         v38.i256 = call %total_supply__StorPtr_TotalSupply___2e654c25952f42f9 v3;
-        call %abi_encode v38 0.i256;
+        call %abi_encode__Evm_hef0af3106e109414__3af54274b2985741 v38 0.i256;
         evm_invalid;
 
     block13:
@@ -324,19 +324,19 @@ func public %runtime__StorPtr_Evm___207f35a85ac4062e() {
         br v47 block12 block13;
 }
 
-func public %stor_ptr__Evm_CoinStore__d1ec7298de486d2f(v0.i256) -> i256 {
+func public %stor_ptr__Evm_hef0af3106e109414_CoinStore_hd26a92ca525e0e79__b6feb5585dda62f1(v0.i256) -> i256 {
     block0:
-        v2.i256 = call %storptr_t__effectref_from_raw__CoinStore__fc61705bf538fde2 v0;
+        v2.i256 = call %storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__CoinStore_hd26a92ca525e0e79__a9c0a742c4f0cede v0;
         return v2;
 }
 
-func public %stor_ptr__Evm_TotalSupply__b0f1a753085dcbd(v0.i256) -> i256 {
+func public %stor_ptr__Evm_hef0af3106e109414_TotalSupply_hddb16bb19b5b088e__f5679b0709de743a(v0.i256) -> i256 {
     block0:
-        v2.i256 = call %storptr_t__effectref_from_raw__CoinStore__fc61705bf538fde2 v0;
+        v2.i256 = call %storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__CoinStore_hd26a92ca525e0e79__a9c0a742c4f0cede v0;
         return v2;
 }
 
-func public %storptr_t__effectref_from_raw__CoinStore__fc61705bf538fde2(v0.i256) -> i256 {
+func public %storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__CoinStore_hd26a92ca525e0e79__a9c0a742c4f0cede(v0.i256) -> i256 {
     block0:
         return v0;
 }

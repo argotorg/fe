@@ -1,19 +1,18 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
 expression: output
-input_file: crates/codegen/tests/fixtures/revert.fe
+input_file: crates/codegen/tests/fixtures/keccak_in_fn.fe
 ---
 target = evm-ethereum-osaka
 
-func public %fail__Evm_hef0af3106e109414__3af54274b2985741(v0.i256) {
+func public %main() -> i256 {
     block0:
-        mstore 0.i256 42.i256 i256;
-        evm_revert 0.i256 32.i256;
+        return 12910348618308260923200348219926901280687058984330794534952861439530514639560.i256;
 }
 
 func public %__fe_sonatina_entry() {
     block0:
-        call %fail__Evm_hef0af3106e109414__3af54274b2985741 0.i256;
+        v0.i256 = call %main;
         evm_stop;
 }
 
