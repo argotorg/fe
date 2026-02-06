@@ -1,113 +1,118 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
 expression: output
-input_file: crates/codegen/tests/fixtures/newtype_storage_byplace_effect_arg.fe
+input_file: crates/codegen/tests/fixtures/by_ref_trait_provider_storage_bug.fe
 ---
 target = evm-ethereum-osaka
 
-func public %bump__StorPtr_Wrap___5036bb3e02939b91(v0.i256) {
+func public %pair_h956dff41e88ee341_ctx_h4952b3c1f066f039_sum(v0.i256) -> i256 {
     block0:
-        v2.i256 = evm_sload v0;
-        v4.i256 = add v2 1.i256;
-        evm_sstore v0 v4;
-        return;
-}
-
-func public %__NewtypeByPlaceEffectArg_init_contract() {
-    block0:
-        return;
-}
-
-func public %__NewtypeByPlaceEffectArg_recv_0_0(v0.i256, v1.i256) -> i256 {
-    block0:
-        call %bump__StorPtr_Wrap___5036bb3e02939b91 v0;
-        v3.i256 = evm_sload v1;
-        v5.i256 = add v3 1.i256;
-        evm_sstore v1 v5;
-        v6.i256 = evm_sload v1;
+        v2.i256 = mload v0 i256;
+        v4.i256 = add v0 32.i256;
+        v5.i256 = mload v4 i256;
+        v6.i256 = add v2 v5;
         return v6;
 }
 
-func public %__NewtypeByPlaceEffectArg_init() {
+func public %__ByRefTraitProviderStorageBug_init_contract(v0.i256) {
     block0:
-        v1.i256 = call %init_field__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9 0.i256;
-        v3.i256 = call %init_field__Evm_hef0af3106e109414_Wrap_haf9e70905fcbd513__fd5231d549c91f24 1.i256;
-        v4.i256 = sym_addr &__NewtypeByPlaceEffectArg_runtime;
-        v5.i256 = sym_size &__NewtypeByPlaceEffectArg_runtime;
-        v6.i256 = evm_code_size;
-        v7.i256 = add v4 v5;
-        v8.i256 = add v4 v5;
-        v9.i256 = lt v6 v8;
-        br v9 block1 block2;
-
-    block1:
-        call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort;
-        evm_invalid;
-
-    block2:
-        v12.i256 = add v4 v5;
-        v14.i256 = add v4 v5;
-        v15.i256 = sub v6 v14;
-        v16.i256 = add v4 v5;
-        v17.i256 = sub v6 v16;
-        v18.i256 = evm_malloc v17;
-        v19.i256 = add v4 v5;
-        v20.i256 = add v4 v5;
-        v21.i256 = sub v6 v20;
-        evm_code_copy v18 v19 v21;
-        v23.i256 = evm_malloc 64.i256;
-        mstore v23 v18 i256;
-        v24.i256 = add v4 v5;
-        v25.i256 = sub v6 v24;
-        v27.i256 = add v23 32.i256;
-        mstore v27 v25 i256;
-        v28.i256 = call %sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b v23;
-        call %__NewtypeByPlaceEffectArg_init_contract;
-        evm_code_copy 0.i256 v4 v5;
-        evm_return 0.i256 v5;
+        v3.i256 = evm_malloc 64.i256;
+        mstore v3 40.i256 i256;
+        v7.i256 = add v3 32.i256;
+        mstore v7 2.i256 i256;
+        v8.i256 = mload v3 i256;
+        evm_sstore v0 v8;
+        v9.i256 = add v3 32.i256;
+        v10.i256 = mload v9 i256;
+        v12.i256 = add v0 1.i256;
+        evm_sstore v12 v10;
+        return;
 }
 
-func public %__NewtypeByPlaceEffectArg_runtime() {
+func public %__ByRefTraitProviderStorageBug_recv_0_0(v0.i256) -> i256 {
     block0:
-        v1.i256 = call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__u256__3271ca15373d4483 0.i256;
-        v3.i256 = call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Wrap_haf9e70905fcbd513__945a70bbbf171dbd 1.i256;
-        v4.i256 = call %runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2;
-        v5.i256 = call %runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2;
-        v6.i256 = eq v4 1.i256;
-        br v6 block2 block1;
-
-    block1:
-        call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort;
-        evm_invalid;
-
-    block2:
-        call %bump_hfb5a53c6af92b8a6_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966 v5;
-        v10.i256 = call %__NewtypeByPlaceEffectArg_recv_0_0 v3 v1;
-        call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f v10;
-        evm_invalid;
-}
-
-func public %__NewtypeByPlaceEffectArg_init_code_offset() -> i256 {
-    block0:
-        v1.i256 = sym_addr &__NewtypeByPlaceEffectArg_init;
-        return v1;
-}
-
-func public %__NewtypeByPlaceEffectArg_init_code_len() -> i256 {
-    block0:
-        v1.i256 = sym_size &__NewtypeByPlaceEffectArg_init;
-        return v1;
-}
-
-func public %init_field__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9(v0.i256) -> i256 {
-    block0:
-        v2.i256 = call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__u256__3271ca15373d4483 v0;
+        v2.i256 = call %use_ctx_eff0_stor__Pair_h956dff41e88ee341__acec41afdc898140 v0;
         return v2;
 }
 
-func public %init_field__Evm_hef0af3106e109414_Wrap_haf9e70905fcbd513__fd5231d549c91f24(v0.i256) -> i256 {
+func public %__ByRefTraitProviderStorageBug_init() {
     block0:
-        v2.i256 = call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Wrap_haf9e70905fcbd513__945a70bbbf171dbd v0;
+        v1.i256 = call %init_field__Evm_hef0af3106e109414_Pair_h956dff41e88ee341__18f2eb617f185785 0.i256;
+        v2.i256 = sym_addr &__ByRefTraitProviderStorageBug_runtime;
+        v3.i256 = sym_size &__ByRefTraitProviderStorageBug_runtime;
+        v4.i256 = evm_code_size;
+        v5.i256 = add v2 v3;
+        v6.i256 = add v2 v3;
+        v7.i256 = lt v4 v6;
+        br v7 block1 block2;
+
+    block1:
+        call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort;
+        evm_invalid;
+
+    block2:
+        v10.i256 = add v2 v3;
+        v12.i256 = add v2 v3;
+        v13.i256 = sub v4 v12;
+        v14.i256 = add v2 v3;
+        v15.i256 = sub v4 v14;
+        v16.i256 = evm_malloc v15;
+        v17.i256 = add v2 v3;
+        v18.i256 = add v2 v3;
+        v19.i256 = sub v4 v18;
+        evm_code_copy v16 v17 v19;
+        v21.i256 = evm_malloc 64.i256;
+        mstore v21 v16 i256;
+        v22.i256 = add v2 v3;
+        v23.i256 = sub v4 v22;
+        v25.i256 = add v21 32.i256;
+        mstore v25 v23 i256;
+        v26.i256 = call %sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b v21;
+        call %__ByRefTraitProviderStorageBug_init_contract v1;
+        evm_code_copy 0.i256 v2 v3;
+        evm_return 0.i256 v3;
+}
+
+func public %__ByRefTraitProviderStorageBug_runtime() {
+    block0:
+        v1.i256 = call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Pair_h956dff41e88ee341__acec41afdc898140 0.i256;
+        v2.i256 = call %runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2;
+        v3.i256 = call %runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2;
+        v5.i256 = eq v2 1.i256;
+        br v5 block2 block1;
+
+    block1:
+        call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort;
+        evm_invalid;
+
+    block2:
+        call %go_h50739b8917c22b82_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966 v3;
+        v8.i256 = call %__ByRefTraitProviderStorageBug_recv_0_0 v1;
+        call %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f v8;
+        evm_invalid;
+}
+
+func public %__ByRefTraitProviderStorageBug_init_code_offset() -> i256 {
+    block0:
+        v1.i256 = sym_addr &__ByRefTraitProviderStorageBug_init;
+        return v1;
+}
+
+func public %__ByRefTraitProviderStorageBug_init_code_len() -> i256 {
+    block0:
+        v1.i256 = sym_size &__ByRefTraitProviderStorageBug_init;
+        return v1;
+}
+
+func public %use_ctx_eff0_stor__Pair_h956dff41e88ee341__acec41afdc898140(v0.i256) -> i256 {
+    block0:
+        v2.i256 = call %pair_h956dff41e88ee341_ctx_h4952b3c1f066f039_sum_stor v0;
+        return v2;
+}
+
+func public %init_field__Evm_hef0af3106e109414_Pair_h956dff41e88ee341__18f2eb617f185785(v0.i256) -> i256 {
+    block0:
+        v2.i256 = call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Pair_h956dff41e88ee341__acec41afdc898140 v0;
         return v2;
 }
 
@@ -157,15 +162,9 @@ func public %sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryByte
         return v2;
 }
 
-func public %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__u256__3271ca15373d4483(v0.i256) -> i256 {
+func public %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Pair_h956dff41e88ee341__acec41afdc898140(v0.i256) -> i256 {
     block0:
-        v2.i256 = call %stor_ptr__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9 v0;
-        return v2;
-}
-
-func public %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Wrap_haf9e70905fcbd513__945a70bbbf171dbd(v0.i256) -> i256 {
-    block0:
-        v2.i256 = call %stor_ptr__Evm_hef0af3106e109414_Wrap_haf9e70905fcbd513__fd5231d549c91f24 v0;
+        v2.i256 = call %stor_ptr__Evm_hef0af3106e109414_Pair_h956dff41e88ee341__18f2eb617f185785 v0;
         return v2;
 }
 
@@ -193,7 +192,7 @@ func public %runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f
         return v3;
 }
 
-func public %bump_hfb5a53c6af92b8a6_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966(v0.i256) {
+func public %go_h50739b8917c22b82_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966(v0.i256) {
     block0:
         return;
 }
@@ -209,6 +208,15 @@ func public %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b
         v8.i256 = mload v7 i256;
         call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes v6 v8;
         evm_invalid;
+}
+
+func public %pair_h956dff41e88ee341_ctx_h4952b3c1f066f039_sum_stor(v0.i256) -> i256 {
+    block0:
+        v2.i256 = evm_sload v0;
+        v4.i256 = add v0 1.i256;
+        v5.i256 = evm_sload v4;
+        v6.i256 = add v2 v5;
+        return v6;
 }
 
 func public %soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v0.i256) -> i256 {
@@ -230,15 +238,9 @@ func public %soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b_
         return v4;
 }
 
-func public %stor_ptr__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9(v0.i256) -> i256 {
+func public %stor_ptr__Evm_hef0af3106e109414_Pair_h956dff41e88ee341__18f2eb617f185785(v0.i256) -> i256 {
     block0:
-        v2.i256 = call %storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__u256__3271ca15373d4483 v0;
-        return v2;
-}
-
-func public %stor_ptr__Evm_hef0af3106e109414_Wrap_haf9e70905fcbd513__fd5231d549c91f24(v0.i256) -> i256 {
-    block0:
-        v2.i256 = call %storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__u256__3271ca15373d4483 v0;
+        v2.i256 = call %storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Pair_h956dff41e88ee341__acec41afdc898140 v0;
         return v2;
 }
 
@@ -325,7 +327,7 @@ func public %cursor_i__h140a998c67d6d59c_new__MemoryBytes_h1e381015a9b0111b__59e
         return v3;
 }
 
-func public %storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__u256__3271ca15373d4483(v0.i256) -> i256 {
+func public %storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Pair_h956dff41e88ee341__acec41afdc898140(v0.i256) -> i256 {
     block0:
         return v0;
 }
@@ -425,12 +427,12 @@ func public %cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5f
 }
 
 
-object @NewtypeByPlaceEffectArg {
+object @ByRefTraitProviderStorageBug {
     section init {
-        entry %__NewtypeByPlaceEffectArg_init;
-        embed .runtime as &__NewtypeByPlaceEffectArg_runtime;
+        entry %__ByRefTraitProviderStorageBug_init;
+        embed .runtime as &__ByRefTraitProviderStorageBug_runtime;
     }
     section runtime {
-        entry %__NewtypeByPlaceEffectArg_runtime;
+        entry %__ByRefTraitProviderStorageBug_runtime;
     }
 }

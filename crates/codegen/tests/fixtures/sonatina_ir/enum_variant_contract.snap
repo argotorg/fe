@@ -5,7 +5,7 @@ input_file: crates/codegen/tests/fixtures/enum_variant_contract.fe
 ---
 target = evm-ethereum-osaka
 
-func public %abi_encode_u256(v0.i256, v1.i256) {
+func public %abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741(v0.i256, v1.i256) {
     block0:
         mstore 0.i256 v0 i256;
         evm_return 0.i256 32.i256;
@@ -45,7 +45,7 @@ func public %runtime__StorPtr_Evm___207f35a85ac4062e() {
 
     block4:
         v19.i256 = phi (v18 block3) (0.i256 block5);
-        call %abi_encode_u256 v19 0.i256;
+        call %abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741 v19 0.i256;
         evm_invalid;
 
     block5:
@@ -75,7 +75,7 @@ func public %runtime__StorPtr_Evm___207f35a85ac4062e() {
 
     block11:
         v31.i256 = phi (v30 block10) (0.i256 block12);
-        call %abi_encode_u256 v31 0.i256;
+        call %abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741 v31 0.i256;
         evm_invalid;
 
     block12:
@@ -105,7 +105,7 @@ func public %runtime__StorPtr_Evm___207f35a85ac4062e() {
 
     block18:
         v39.i256 = phi (1.i256 block17) (0.i256 block19);
-        call %abi_encode_u256 v39 0.i256;
+        call %abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741 v39 0.i256;
         evm_invalid;
 
     block19:

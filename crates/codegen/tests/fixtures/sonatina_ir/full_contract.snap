@@ -5,7 +5,7 @@ input_file: crates/codegen/tests/fixtures/full_contract.fe
 ---
 target = evm-ethereum-osaka
 
-func public %point_area(v0.i256) -> i256 {
+func public %point_hac92469562809d28_area(v0.i256) -> i256 {
     block0:
         v2.i256 = mload v0 i256;
         v4.i256 = add v0 32.i256;
@@ -14,13 +14,13 @@ func public %point_area(v0.i256) -> i256 {
         return v6;
 }
 
-func public %square_area(v0.i256) -> i256 {
+func public %square_h97afaa872b6ea17e_area(v0.i256) -> i256 {
     block0:
         v2.i256 = mul v0 v0;
         return v2;
 }
 
-func public %abi_encode(v0.i256, v1.i256) {
+func public %abi_encode__Evm_hef0af3106e109414__3af54274b2985741(v0.i256, v1.i256) {
     block0:
         mstore 0.i256 v0 i256;
         evm_return 0.i256 32.i256;
@@ -56,8 +56,8 @@ func public %dispatch__StorPtr_Evm___207f35a85ac4062e() {
         v20.i256 = add v18 2.i256;
         v21.i256 = add v11 32.i256;
         mstore v21 v20 i256;
-        v22.i256 = call %point_area_mem v11;
-        call %abi_encode v22 0.i256;
+        v22.i256 = call %point_hac92469562809d28_area v11;
+        call %abi_encode__Evm_hef0af3106e109414__3af54274b2985741 v22 0.i256;
         evm_invalid;
 
     block2:
@@ -67,21 +67,12 @@ func public %dispatch__StorPtr_Evm___207f35a85ac4062e() {
     block3:
         v26.i256 = evm_calldata_load 4.i256;
         v28.i256 = add v26 3.i256;
-        v29.i256 = call %square_area v28;
-        call %abi_encode v29 0.i256;
+        v29.i256 = call %square_h97afaa872b6ea17e_area v28;
+        call %abi_encode__Evm_hef0af3106e109414__3af54274b2985741 v29 0.i256;
         evm_invalid;
 
     block4:
         evm_return 0.i256 0.i256;
-}
-
-func public %point_area_mem(v0.i256) -> i256 {
-    block0:
-        v2.i256 = mload v0 i256;
-        v4.i256 = add v0 32.i256;
-        v5.i256 = mload v4 i256;
-        v6.i256 = mul v2 v5;
-        return v6;
 }
 
 

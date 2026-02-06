@@ -7,7 +7,7 @@ target = evm-ethereum-osaka
 
 func public %sum_const() -> i256 {
     block0:
-        v1.i256 = call %range_known_const_s__usize___known_const_e__usize___seq_len__0_4__f9605efabd18106c;
+        v1.i256 = call %range_known_const_s__usize___known_const_e__usize___hc7c7abc3858dd85e_seq_ha637d2df505bccf2_len__0_4__f9605efabd18106c;
         jump block1;
 
     block1:
@@ -18,7 +18,7 @@ func public %sum_const() -> i256 {
         br v4 block2 block4;
 
     block2:
-        v6.i256 = call %range_known_const_s__usize___known_const_e__usize___seq_get__0_4__f9605efabd18106c v2;
+        v6.i256 = call %range_known_const_s__usize___known_const_e__usize___hc7c7abc3858dd85e_seq_ha637d2df505bccf2_get__0_4__f9605efabd18106c v2;
         v8.i256 = add v14 v6;
         jump block3;
 
@@ -34,7 +34,7 @@ func public %sum_dynamic_end(v0.i256) -> i256 {
     block0:
         v3.i256 = evm_malloc 32.i256;
         mstore v3 v0 i256;
-        v4.i256 = call %range_known_const_s__usize___unknown__seq_len__0__fc6647014fb554e5 v3;
+        v4.i256 = call %range_known_const_s__usize___unknown__h4e84f6b6b8307914_seq_ha637d2df505bccf2_len__0__fc6647014fb554e5 v3;
         jump block1;
 
     block1:
@@ -45,7 +45,7 @@ func public %sum_dynamic_end(v0.i256) -> i256 {
         br v7 block2 block4;
 
     block2:
-        v9.i256 = call %range_known_const_s__usize___known_const_e__usize___seq_get__0_4__f9605efabd18106c v5;
+        v9.i256 = call %range_known_const_s__usize___known_const_e__usize___hc7c7abc3858dd85e_seq_ha637d2df505bccf2_get__0_4__f9605efabd18106c v5;
         v11.i256 = add v17 v9;
         jump block3;
 
@@ -61,7 +61,7 @@ func public %sum_dynamic_start(v0.i256) -> i256 {
     block0:
         v3.i256 = evm_malloc 32.i256;
         mstore v3 v0 i256;
-        v4.i256 = call %range_unknown__known_const_e__usize___seq_len__4__f248ae0e02044d7e v3;
+        v4.i256 = call %range_unknown__known_const_e__usize___h7984c64777ae465_seq_ha637d2df505bccf2_len__4__f248ae0e02044d7e v3;
         jump block1;
 
     block1:
@@ -73,7 +73,7 @@ func public %sum_dynamic_start(v0.i256) -> i256 {
         br v7 block2 block4;
 
     block2:
-        v10.i256 = call %range_unknown__known_const_e__usize___seq_get__4__f248ae0e02044d7e v18 v5;
+        v10.i256 = call %range_unknown__known_const_e__usize___h7984c64777ae465_seq_ha637d2df505bccf2_get__4__f248ae0e02044d7e v18 v5;
         v12.i256 = add v20 v10;
         jump block3;
 
@@ -91,7 +91,7 @@ func public %sum_dynamic(v0.i256, v1.i256) -> i256 {
         mstore v4 v0 i256;
         v6.i256 = add v4 32.i256;
         mstore v6 v1 i256;
-        v7.i256 = call %range_unknown__unknown__seq_len v4;
+        v7.i256 = call %range_unknown__unknown__h1dfb0ca64ed7bf96_seq_ha637d2df505bccf2_len v4;
         jump block1;
 
     block1:
@@ -103,7 +103,7 @@ func public %sum_dynamic(v0.i256, v1.i256) -> i256 {
         br v10 block2 block4;
 
     block2:
-        v13.i256 = call %range_unknown__known_const_e__usize___seq_get__4__f248ae0e02044d7e v21 v8;
+        v13.i256 = call %range_unknown__known_const_e__usize___h7984c64777ae465_seq_ha637d2df505bccf2_get__4__f248ae0e02044d7e v21 v8;
         v15.i256 = add v23 v13;
         jump block3;
 
@@ -115,7 +115,7 @@ func public %sum_dynamic(v0.i256, v1.i256) -> i256 {
         return v23;
 }
 
-func public %range_known_const_s__usize___known_const_e__usize___seq_len__0_4__f9605efabd18106c() -> i256 {
+func public %range_known_const_s__usize___known_const_e__usize___hc7c7abc3858dd85e_seq_ha637d2df505bccf2_len__0_4__f9605efabd18106c() -> i256 {
     block0:
         v2.i256 = lt 4.i256 0.i256;
         v4.i256 = eq v2 1.i256;
@@ -137,13 +137,13 @@ func public %range_known_const_s__usize___known_const_e__usize___seq_len__0_4__f
         br v5 block2 block2;
 }
 
-func public %range_known_const_s__usize___known_const_e__usize___seq_get__0_4__f9605efabd18106c(v0.i256) -> i256 {
+func public %range_known_const_s__usize___known_const_e__usize___hc7c7abc3858dd85e_seq_ha637d2df505bccf2_get__0_4__f9605efabd18106c(v0.i256) -> i256 {
     block0:
         v2.i256 = add 0.i256 v0;
         return v2;
 }
 
-func public %range_known_const_s__usize___unknown__seq_len__0__fc6647014fb554e5(v0.i256) -> i256 {
+func public %range_known_const_s__usize___unknown__h4e84f6b6b8307914_seq_ha637d2df505bccf2_len__0__fc6647014fb554e5(v0.i256) -> i256 {
     block0:
         v2.i256 = mload v0 i256;
         v3.i256 = lt v2 0.i256;
@@ -167,7 +167,7 @@ func public %range_known_const_s__usize___unknown__seq_len__0__fc6647014fb554e5(
         br v6 block2 block2;
 }
 
-func public %range_unknown__known_const_e__usize___seq_len__4__f248ae0e02044d7e(v0.i256) -> i256 {
+func public %range_unknown__known_const_e__usize___h7984c64777ae465_seq_ha637d2df505bccf2_len__4__f248ae0e02044d7e(v0.i256) -> i256 {
     block0:
         v2.i256 = mload v0 i256;
         v4.i256 = lt 4.i256 v2;
@@ -191,14 +191,14 @@ func public %range_unknown__known_const_e__usize___seq_len__4__f248ae0e02044d7e(
         br v7 block2 block2;
 }
 
-func public %range_unknown__known_const_e__usize___seq_get__4__f248ae0e02044d7e(v0.i256, v1.i256) -> i256 {
+func public %range_unknown__known_const_e__usize___h7984c64777ae465_seq_ha637d2df505bccf2_get__4__f248ae0e02044d7e(v0.i256, v1.i256) -> i256 {
     block0:
         v3.i256 = mload v0 i256;
         v4.i256 = add v3 v1;
         return v4;
 }
 
-func public %range_unknown__unknown__seq_len(v0.i256) -> i256 {
+func public %range_unknown__unknown__h1dfb0ca64ed7bf96_seq_ha637d2df505bccf2_len(v0.i256) -> i256 {
     block0:
         v3.i256 = add v0 32.i256;
         v4.i256 = mload v3 i256;
