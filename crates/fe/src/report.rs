@@ -8,35 +8,34 @@ pub fn sanitize_filename(component: &str) -> String {
         .collect()
 }
 
-pub fn normalize_report_out_path(out: &Utf8PathBuf) -> Utf8PathBuf {
+pub fn normalize_report_out_path(out: &Utf8PathBuf) -> Result<Utf8PathBuf, String> {
     let s = out.as_str();
     if !s.ends_with(".tar.gz") {
-        eprintln!("Error: report output path must end with `.tar.gz`: `{out}`");
-        std::process::exit(1);
+        return Err(format!(
+            "report output path must end with `.tar.gz`: `{out}`"
+        ));
     }
 
     if !out.exists() {
-        return out.clone();
+        return Ok(out.clone());
     }
 
     let base = s.strip_suffix(".tar.gz").expect("checked .tar.gz suffix");
     for idx in 1.. {
         let candidate = Utf8PathBuf::from(format!("{base}-{idx}.tar.gz"));
         if !candidate.exists() {
-            return candidate;
+            return Ok(candidate);
         }
     }
     unreachable!()
 }
 
-pub fn create_dir_all_utf8(path: &Utf8PathBuf) {
-    if let Err(err) = std::fs::create_dir_all(path) {
-        eprintln!("Error: failed to create dir `{path}`: {err}");
-        std::process::exit(1);
-    }
+pub fn create_dir_all_utf8(path: &Utf8PathBuf) -> Result<(), String> {
+    std::fs::create_dir_all(path)
+        .map_err(|err| format!("failed to create dir `{path}`: {err}"))
 }
 
-pub fn create_report_staging_dir(base: &str) -> Utf8PathBuf {
+pub fn create_report_staging_dir(base: &str) -> Result<Utf8PathBuf, String> {
     let base = Utf8PathBuf::from(base);
     let _ = std::fs::create_dir_all(&base);
     let pid = std::process::id();
@@ -45,8 +44,8 @@ pub fn create_report_staging_dir(base: &str) -> Utf8PathBuf {
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     let dir = base.join(format!("report-{pid}-{nanos}"));
-    create_dir_all_utf8(&dir);
-    dir
+    create_dir_all_utf8(&dir)?;
+    Ok(dir)
 }
 
 #[derive(Debug, Clone)]
@@ -55,11 +54,11 @@ pub struct ReportStaging {
     pub temp_dir: Utf8PathBuf,
 }
 
-pub fn create_report_staging_root(base: &str, root_name: &str) -> ReportStaging {
-    let temp_dir = create_report_staging_dir(base);
+pub fn create_report_staging_root(base: &str, root_name: &str) -> Result<ReportStaging, String> {
+    let temp_dir = create_report_staging_dir(base)?;
     let root_dir = temp_dir.join(root_name);
-    create_dir_all_utf8(&root_dir);
-    ReportStaging { root_dir, temp_dir }
+    create_dir_all_utf8(&root_dir)?;
+    Ok(ReportStaging { root_dir, temp_dir })
 }
 
 pub fn tar_gz_dir(staging: &Utf8PathBuf, out: &Utf8PathBuf) -> Result<(), String> {
@@ -85,22 +84,20 @@ pub fn tar_gz_dir(staging: &Utf8PathBuf, out: &Utf8PathBuf) -> Result<(), String
     Ok(())
 }
 
-pub fn copy_input_into_report(input: &Utf8PathBuf, inputs_dir: &Utf8PathBuf) {
+pub fn copy_input_into_report(input: &Utf8PathBuf, inputs_dir: &Utf8PathBuf) -> Result<(), String> {
     if input.is_file() {
         let name = input
             .file_name()
             .map(|s| s.to_string())
             .unwrap_or_else(|| "input.fe".to_string());
         let dest = inputs_dir.join(name);
-        if let Err(err) = std::fs::copy(input, &dest) {
-            eprintln!("Error: failed to copy `{input}` to `{dest}`: {err}");
-            std::process::exit(1);
-        }
-        return;
+        std::fs::copy(input, &dest)
+            .map_err(|err| format!("failed to copy `{input}` to `{dest}`: {err}"))?;
+        return Ok(());
     }
 
     if !input.is_dir() {
-        return;
+        return Ok(());
     }
 
     // Keep the report small but useful: include `fe.toml` and all `.fe` sources under `src/`.
@@ -112,11 +109,11 @@ pub fn copy_input_into_report(input: &Utf8PathBuf, inputs_dir: &Utf8PathBuf) {
 
     let src_dir = input.join("src");
     if !src_dir.is_dir() {
-        return;
+        return Ok(());
     }
 
     let dest_src = inputs_dir.join("src");
-    create_dir_all_utf8(&dest_src);
+    create_dir_all_utf8(&dest_src)?;
 
     for entry in walkdir::WalkDir::new(src_dir.as_std_path())
         .follow_links(false)
@@ -144,6 +141,7 @@ pub fn copy_input_into_report(input: &Utf8PathBuf, inputs_dir: &Utf8PathBuf) {
         }
         let _ = std::fs::copy(path, dest);
     }
+    Ok(())
 }
 
 pub fn panic_payload_to_string(payload: &(dyn std::any::Any + Send)) -> String {
