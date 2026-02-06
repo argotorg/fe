@@ -16,3 +16,12 @@ impl<T, const N: usize> Seq<T> for [T; N] {
         ref self[i]
     }
 }
+
+fn use_seq() {
+    let arr: [u256; 2] = [1, 2]
+    let borrowed: ref [u256; 2] = ref arr
+    let first: ref u256 = borrowed.get(0)
+    let second: ref u256 = (ref arr).get(1)
+    first
+    second
+}

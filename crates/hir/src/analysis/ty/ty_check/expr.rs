@@ -1357,15 +1357,41 @@ impl<'db> TyChecker<'db> {
             return ExprProp::invalid(self.db);
         }
 
-        let canonical_r_ty = Canonicalized::new(self.db, receiver_prop.ty);
-        let candidate = match select_method_candidate(
+        let receiver_place_ty = receiver_prop
+            .ty
+            .as_borrow(self.db)
+            .map(|(_, inner)| inner)
+            .unwrap_or(receiver_prop.ty);
+
+        let mut canonical_r_ty = Canonicalized::new(self.db, receiver_prop.ty);
+        let mut candidate = select_method_candidate(
             self.db,
             canonical_r_ty.value,
             method_name,
             self.env.scope(),
             self.env.assumptions(),
             None,
-        ) {
+        );
+
+        // Methods may be defined on the underlying place type while the receiver expression
+        // is already a borrow handle value (`ref T` / `mut T`).
+        if candidate.is_err() && receiver_place_ty != receiver_prop.ty {
+            let fallback_canonical = Canonicalized::new(self.db, receiver_place_ty);
+            if let Ok(fallback_candidate) = select_method_candidate(
+                self.db,
+                fallback_canonical.value,
+                method_name,
+                self.env.scope(),
+                self.env.assumptions(),
+                None,
+            ) {
+                canonical_r_ty = fallback_canonical;
+                candidate = Ok(fallback_candidate);
+            }
+        }
+
+        let selected_receiver_ty = canonical_r_ty.value.value;
+        let candidate = match candidate {
             Ok(candidate) => candidate,
             Err(err) => {
                 match err {
@@ -1392,7 +1418,7 @@ impl<'db> TyChecker<'db> {
 
                         self.env.register_pending_method(super::env::PendingMethod {
                             expr,
-                            recv_ty: receiver_prop.ty,
+                            recv_ty: selected_receiver_ty,
                             method_name,
                             candidates: cands,
                             span: call_span.method_name().into(),
@@ -1425,7 +1451,7 @@ impl<'db> TyChecker<'db> {
             MethodCandidate::TraitMethod(cand) => {
                 let inst = canonical_r_ty.extract_solution(&mut self.table, cand.inst);
                 let func_ty =
-                    self.instantiate_trait_method_to_term(cand.method, receiver_prop.ty, inst);
+                    self.instantiate_trait_method_to_term(cand.method, selected_receiver_ty, inst);
                 (func_ty, Some(inst))
             }
 
@@ -1434,7 +1460,7 @@ impl<'db> TyChecker<'db> {
                 self.env
                     .register_confirmation(inst, call_span.clone().into());
                 let func_ty =
-                    self.instantiate_trait_method_to_term(cand.method, receiver_prop.ty, inst);
+                    self.instantiate_trait_method_to_term(cand.method, selected_receiver_ty, inst);
                 (func_ty, Some(inst))
             }
         };

@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/def/method_receiver_modes.fe
+---
+error[8-0068]: explicit reborrow required
+   ┌─ method_receiver_modes.fe:23:31
+   │
+23 │     let value_ref: ref u256 = by_ref.value_ref()
+   │                               ^^^^^^ this argument must be explicitly borrowed as `ref`
+   │
+   = help: use `ref <place>` when passing a place to a `ref` parameter

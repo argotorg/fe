@@ -559,12 +559,22 @@ impl<'db> FuncParamView<'db> {
             && !ty.has_invalid(db)
             && !expected.has_invalid(db)
         {
-            let (exp_base, exp_args) = expected.decompose_ty_app(db);
             let ty_norm = normalize_ty(db, ty, func.scope(), assumptions);
-            let (ty_base, ty_args) = ty_norm.decompose_ty_app(db);
-            let same_base = ty_base == exp_base;
-            let same_args = exp_args.iter().zip(ty_args.iter()).all(|(a, b)| a == b);
-            if !(same_base && same_args) {
+
+            let matches_expected = |candidate: TyId<'db>| {
+                let (exp_base, exp_args) = expected.decompose_ty_app(db);
+                let (cand_base, cand_args) = candidate.decompose_ty_app(db);
+                cand_base == exp_base
+                    && cand_args.len() >= exp_args.len()
+                    && exp_args.iter().zip(cand_args.iter()).all(|(a, b)| a == b)
+            };
+
+            let is_allowed_self_ty = matches_expected(ty_norm)
+                || ty_norm
+                    .as_borrow(db)
+                    .is_some_and(|(_, inner)| matches_expected(inner));
+
+            if !is_allowed_self_ty {
                 out.push(
                     ImplDiag::InvalidSelfType {
                         span: ty_span,

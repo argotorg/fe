@@ -1,7 +1,7 @@
 use parser::ast::{self};
 
 use super::FileLowerCtxt;
-use crate::core::hir_def::{Body, IdentId, Partial, TypeId, params::*};
+use crate::core::hir_def::{Body, IdentId, Partial, TypeId, TypeKind, TypeMode, params::*};
 
 impl<'db> GenericArgListId<'db> {
     pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::GenericArgList) -> Self {
@@ -163,6 +163,7 @@ impl<'db> FuncParam<'db> {
             FuncParamMode::View
         };
         let is_mut = ast.mut_token().is_some();
+        let is_ref = ast.ref_token().is_some();
         let is_label_suppressed = ast.is_label_suppressed();
         let name = ast.name().map(|ast| FuncParamName::lower_ast(ctxt, ast));
 
@@ -170,7 +171,15 @@ impl<'db> FuncParam<'db> {
             name.is_some_and(|name| name.is_self(ctxt.db())) && ast.ty().is_none();
 
         let ty = if self_ty_fallback {
-            Partial::Present(TypeId::fallback_self_ty(ctxt.db()))
+            let fallback_self = TypeId::fallback_self_ty(ctxt.db());
+            if is_ref {
+                Partial::Present(TypeId::new(
+                    ctxt.db(),
+                    TypeKind::Mode(TypeMode::Ref, Partial::Present(fallback_self)),
+                ))
+            } else {
+                Partial::Present(fallback_self)
+            }
         } else {
             TypeId::lower_ast_partial(ctxt, ast.ty())
         };

@@ -571,7 +571,10 @@ impl<'db> TyChecker<'db> {
                                     .env
                                     .typed_expr(receiver)
                                     .unwrap_or_else(|| ExprProp::invalid(db));
-                                let recv_ty = receiver_prop.ty;
+                                let recv_ty = {
+                                    let mut prober = env::Prober::new(&mut self.table);
+                                    pending.recv_ty.fold_with(db, &mut prober)
+                                };
 
                                 let trait_method = *inst
                                     .def(db)

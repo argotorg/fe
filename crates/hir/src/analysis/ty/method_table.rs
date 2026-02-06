@@ -170,7 +170,11 @@ impl<'db> MethodCollector<'db> {
 
     fn insert(&mut self, ty: TyId<'db>, func: CallableDef<'db>) {
         let ty = if let Some(receiver) = func.receiver_ty(self.db) {
-            receiver.instantiate_identity()
+            let receiver_ty = receiver.instantiate_identity();
+            receiver_ty
+                .as_borrow(self.db)
+                .map(|(_, inner)| inner)
+                .unwrap_or(receiver_ty)
         } else {
             ty
         };

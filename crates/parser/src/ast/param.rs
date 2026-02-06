@@ -25,6 +25,11 @@ impl FuncParam {
         support::token(self.syntax(), SK::MoveKw)
     }
 
+    /// Returns the `ref` keyword for shorthand borrowed receivers (`ref self`).
+    pub fn ref_token(&self) -> Option<SyntaxToken> {
+        support::token(self.syntax(), SK::RefKw)
+    }
+
     /// Returns the `mut` keyword if the parameter is mutable.
     pub fn mut_token(&self) -> Option<SyntaxToken> {
         support::token(self.syntax(), SK::MutKw)
