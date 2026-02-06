@@ -64,6 +64,14 @@ pub(crate) fn server_capabilities() -> ServerCapabilities {
         selection_range_provider: Some(
             async_lsp::lsp_types::SelectionRangeProviderCapability::Simple(true),
         ),
+        // folding range
+        folding_range_provider: Some(
+            async_lsp::lsp_types::FoldingRangeProviderCapability::Simple(true),
+        ),
+        // go to declaration
+        declaration_provider: Some(
+            async_lsp::lsp_types::DeclarationCapability::Simple(true),
+        ),
         // code actions (quick fixes)
         code_action_provider: Some(async_lsp::lsp_types::CodeActionProviderCapability::Simple(
             true,
