@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io::{self, Write};
 
 use common::InputDb;
@@ -307,13 +308,29 @@ pub fn generate_lsif(
         .map(|v| v.to_string())
         .unwrap_or_else(|| "0.0.0".to_string());
 
-    let mut document_ids = Vec::new();
+    // Track documents: url -> (vertex_id, range_ids)
+    let mut documents: HashMap<String, (u64, Vec<u64>)> = HashMap::new();
 
-    // Process each module
+    // Pre-emit document vertices for each module
+    for top_mod in ingot.all_modules(db) {
+        let doc_span = top_mod.span().resolve(db);
+        let doc_url = match &doc_span {
+            Some(span) => match span.file.url(db) {
+                Some(url) => url.to_string(),
+                None => continue,
+            },
+            None => continue,
+        };
+        if !documents.contains_key(&doc_url) {
+            let doc_id = emitter.emit_document(&doc_url)?;
+            documents.insert(doc_url, (doc_id, Vec::new()));
+        }
+    }
+
+    // Process each module's items
     for top_mod in ingot.all_modules(db) {
         let scope_graph = top_mod.scope_graph(db);
 
-        // Determine document URI from the top-level module span
         let doc_span = top_mod.span().resolve(db);
         let doc_url = match &doc_span {
             Some(span) => match span.file.url(db) {
@@ -323,16 +340,11 @@ pub fn generate_lsif(
             None => continue,
         };
 
-        let doc_id = emitter.emit_document(&doc_url)?;
-        document_ids.push(doc_id);
+        let doc_id = documents[&doc_url].0;
 
-        let mut doc_range_ids = Vec::new();
-
-        // Iterate all items in this module
         for item in scope_graph.items_dfs(db) {
             let scope = ScopeId::from_item(item);
 
-            // Get name span for the item
             let name_span = match item.name_span() {
                 Some(ns) => ns,
                 None => continue,
@@ -348,7 +360,7 @@ pub fn generate_lsif(
 
             // Emit range + resultSet
             let range_id = emitter.emit_range(name_range)?;
-            doc_range_ids.push(range_id);
+            documents.get_mut(&doc_url).unwrap().1.push(range_id);
 
             let result_set_id = emitter.emit_result_set()?;
             emitter.emit_edge("next", range_id, result_set_id)?;
@@ -364,7 +376,7 @@ pub fn generate_lsif(
                 emitter.emit_edge("textDocument/hover", result_set_id, hover_id)?;
             }
 
-            // Reference result: find all references across the ingot
+            // Reference result
             let target = hir::core::semantic::reference::Target::Scope(scope);
             let ref_result_id = emitter.emit_reference_result()?;
             emitter.emit_edge("textDocument/references", result_set_id, ref_result_id)?;
@@ -372,14 +384,13 @@ pub fn generate_lsif(
             // Definition is also a reference
             emitter.emit_edge_many("item", ref_result_id, &[range_id], Some(doc_id))?;
 
-            // Collect references from all modules in the ingot
+            // Collect references from all modules
             for ref_mod in ingot.all_modules(db) {
                 let refs = ref_mod.references_to_target(db, &target);
                 if refs.is_empty() {
                     continue;
                 }
 
-                // Determine the document for these references
                 let ref_doc_span = ref_mod.span().resolve(db);
                 let ref_doc_url = match &ref_doc_span {
                     Some(span) => match span.file.url(db) {
@@ -389,8 +400,6 @@ pub fn generate_lsif(
                     None => continue,
                 };
 
-                // We need a document ID for each referenced file
-                // For simplicity, emit ref ranges and item edges inline
                 let mut ref_range_ids = Vec::new();
                 for reference in refs {
                     let ref_span = reference.span();
@@ -403,20 +412,13 @@ pub fn generate_lsif(
                 }
 
                 if !ref_range_ids.is_empty() {
-                    // Find or create the document for this reference file
-                    let ref_doc_id = if ref_doc_url == doc_url {
-                        doc_range_ids.extend_from_slice(&ref_range_ids);
-                        doc_id
-                    } else {
-                        // We need a separate document vertex for cross-file references
-                        // TODO: cache document IDs to avoid duplicates across items
-                        let rd = emitter.emit_document(&ref_doc_url)?;
-                        document_ids.push(rd);
-                        // We'd need to track ranges per document for contains edges
-                        // For now, emit a contains edge for this batch
-                        emitter.emit_edge_many("contains", rd, &ref_range_ids, None)?;
-                        rd
-                    };
+                    // Look up existing document (guaranteed to exist from pre-emission)
+                    let ref_doc_id = documents[&ref_doc_url].0;
+                    documents
+                        .get_mut(&ref_doc_url)
+                        .unwrap()
+                        .1
+                        .extend_from_slice(&ref_range_ids);
                     emitter.emit_edge_many(
                         "item",
                         ref_result_id,
@@ -433,10 +435,13 @@ pub fn generate_lsif(
                 emitter.emit_edge("moniker/attach", result_set_id, moniker_id)?;
             }
         }
+    }
 
-        // Contains edge: document -> all ranges in this document
-        if !doc_range_ids.is_empty() {
-            emitter.emit_edge_many("contains", doc_id, &doc_range_ids, None)?;
+    // Emit contains edges for all documents
+    let document_ids: Vec<u64> = documents.values().map(|(id, _)| *id).collect();
+    for (_, (doc_id, range_ids)) in &documents {
+        if !range_ids.is_empty() {
+            emitter.emit_edge_many("contains", *doc_id, range_ids, None)?;
         }
     }
 
