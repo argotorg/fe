@@ -113,43 +113,35 @@ pub async fn handle_selection_range(
     Ok(Some(results))
 }
 
-/// Build a selection range chain for a cursor position in a module.
-fn build_selection_ranges_at(
-    db: &driver::DriverDataBase,
-    top_mod: hir::hir_def::TopLevelMod,
-    cursor: parser::TextSize,
-) -> Option<SelectionRange> {
-    let scope_graph = top_mod.scope_graph(db);
-    let mut containing_spans = Vec::new();
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use driver::DriverDataBase;
+    use hir::lower::map_file_to_mod;
+    use url::Url;
 
-    for item in scope_graph.items_dfs(db) {
-        let item_span: hir::span::DynLazySpan = item.span().into();
-        if let Some(span) = item_span.resolve(db) {
-            let start: usize = span.range.start().into();
-            let end: usize = span.range.end().into();
-            if start <= cursor.into() && usize::from(cursor) <= end {
-                if let Ok(range) = to_lsp_range_from_span(span.clone(), db) {
-                    containing_spans.push((end - start, range));
-                }
-            }
-        }
+    fn build_selection_ranges_at(
+        db: &driver::DriverDataBase,
+        top_mod: hir::hir_def::TopLevelMod,
+        cursor: parser::TextSize,
+    ) -> Option<SelectionRange> {
+        let scope_graph = top_mod.scope_graph(db);
+        let mut containing_spans = Vec::new();
 
-        if let Some(name_span) = item.name_span() {
-            if let Some(span) = name_span.resolve(db) {
+        for item in scope_graph.items_dfs(db) {
+            let item_span: hir::span::DynLazySpan = item.span().into();
+            if let Some(span) = item_span.resolve(db) {
                 let start: usize = span.range.start().into();
                 let end: usize = span.range.end().into();
                 if start <= cursor.into() && usize::from(cursor) <= end {
-                    if let Ok(range) = to_lsp_range_from_span(span, db) {
+                    if let Ok(range) = to_lsp_range_from_span(span.clone(), db) {
                         containing_spans.push((end - start, range));
                     }
                 }
             }
-        }
 
-        if let ItemKind::Func(func) = item {
-            if let Some(body) = func.body(db) {
-                let body_span: hir::span::DynLazySpan = body.span().into();
-                if let Some(span) = body_span.resolve(db) {
+            if let Some(name_span) = item.name_span() {
+                if let Some(span) = name_span.resolve(db) {
                     let start: usize = span.range.start().into();
                     let end: usize = span.range.end().into();
                     if start <= cursor.into() && usize::from(cursor) <= end {
@@ -159,29 +151,36 @@ fn build_selection_ranges_at(
                     }
                 }
             }
+
+            if let ItemKind::Func(func) = item {
+                if let Some(body) = func.body(db) {
+                    let body_span: hir::span::DynLazySpan = body.span().into();
+                    if let Some(span) = body_span.resolve(db) {
+                        let start: usize = span.range.start().into();
+                        let end: usize = span.range.end().into();
+                        if start <= cursor.into() && usize::from(cursor) <= end {
+                            if let Ok(range) = to_lsp_range_from_span(span, db) {
+                                containing_spans.push((end - start, range));
+                            }
+                        }
+                    }
+                }
+            }
         }
-    }
 
-    containing_spans.sort_by_key(|(size, _)| *size);
-    containing_spans.dedup_by_key(|(_, range)| *range);
+        containing_spans.sort_by_key(|(size, _)| *size);
+        containing_spans.dedup_by_key(|(_, range)| *range);
 
-    containing_spans
-        .into_iter()
-        .rev()
-        .fold(None, |parent, (_, range)| {
-            Some(SelectionRange {
-                range,
-                parent: parent.map(Box::new),
+        containing_spans
+            .into_iter()
+            .rev()
+            .fold(None, |parent, (_, range)| {
+                Some(SelectionRange {
+                    range,
+                    parent: parent.map(Box::new),
+                })
             })
-        })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use driver::DriverDataBase;
-    use hir::lower::map_file_to_mod;
-    use url::Url;
+    }
 
     /// Count the depth of nested selection ranges.
     fn selection_depth(sel: &SelectionRange) -> usize {
