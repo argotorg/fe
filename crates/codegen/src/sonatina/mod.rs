@@ -842,9 +842,6 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         // Maps MIR block IDs to Sonatina block IDs
         let mut block_map: FxHashMap<mir::BasicBlockId, BlockId> = FxHashMap::default();
 
-        // Maps MIR value IDs to Sonatina value IDs
-        let mut value_map: FxHashMap<mir::ValueId, ValueId> = FxHashMap::default();
-
         // Maps MIR local IDs to Sonatina SSA variables.
         let mut local_vars: FxHashMap<mir::LocalId, Variable> = FxHashMap::default();
         for (idx, _local) in func.body.locals.iter().enumerate() {
@@ -865,10 +862,10 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         // explicitly set it. Currently we assume MIR block 0 is entry and that
         // Sonatina treats the first appended block as entry.
         let entry_block = func.body.entry;
-        let _sonatina_entry = block_map[&entry_block];
+        let sonatina_entry = block_map[&entry_block];
 
         // Map function arguments to parameter locals (regular params + effect params).
-        fb.switch_to_block(_sonatina_entry);
+        fb.switch_to_block(sonatina_entry);
         let all_param_locals: Vec<_> = func
             .body
             .param_locals
@@ -925,7 +922,6 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             db: self.db,
             target_layout: &self.target_layout,
             body: &func.body,
-            value_map: &mut value_map,
             local_vars: &local_vars,
             name_map: &self.name_map,
             returns_value_map: &self.returns_value_map,
@@ -964,7 +960,6 @@ struct LowerCtx<'a, 'db, C: sonatina_ir::func_cursor::FuncCursor> {
     db: &'db DriverDataBase,
     target_layout: &'a TargetDataLayout,
     body: &'a mir::MirBody<'db>,
-    value_map: &'a mut FxHashMap<mir::ValueId, ValueId>,
     local_vars: &'a FxHashMap<mir::LocalId, Variable>,
     name_map: &'a FxHashMap<String, FuncRef>,
     returns_value_map: &'a FxHashMap<String, bool>,
@@ -1489,14 +1484,7 @@ fn lower_value<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     //
     // This can be revisited once we have a robust notion of which MIR values are stable across
     // blocks after SSA sealing.
-    let cacheable = false;
-
-    let result = lower_value_origin(ctx, &value_data.origin)?;
-
-    if cacheable {
-        ctx.value_map.insert(value_id, result);
-    }
-    Ok(result)
+    lower_value_origin(ctx, &value_data.origin)
 }
 
 /// Lower a MIR value origin to a Sonatina value.
@@ -1517,7 +1505,7 @@ fn lower_value_origin<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 Ok(ctx.fb.make_imm_value(val))
             }
             SyntheticValue::Bytes(bytes) => {
-                // Convert bytes to I256 (right-padded to 32 bytes)
+                // Convert bytes to I256 (left-padded to 32 bytes)
                 let i256_val = bytes_to_i256(bytes);
                 Ok(ctx.fb.make_imm_value(i256_val))
             }
