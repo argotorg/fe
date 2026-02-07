@@ -636,8 +636,7 @@ fn discover_and_run_tests(
         debug.configure_per_test_env(Some(suite), &case.display_name);
 
         // Compile and run the test
-        let outcome =
-            compile_and_run_test(case, show_logs, backend.as_str(), report, call_trace);
+        let outcome = compile_and_run_test(case, show_logs, backend.as_str(), report, call_trace);
 
         if outcome.result.passed {
             println!("{}", "ok".green());
