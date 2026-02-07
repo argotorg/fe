@@ -154,6 +154,7 @@ fn init_ingot_graph(db: &mut DriverDataBase, ingot_url: &Url) -> bool {
 
         let diag = IngotInitDiagnostics::IngotDependencyCycle { tree_display };
         tracing::warn!(target: "resolver", "{diag}");
+        eprintln!("❌ {diag}");
         had_diagnostics = true;
     }
 
