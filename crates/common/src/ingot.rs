@@ -301,22 +301,41 @@ impl Workspace {
                 }
             }
 
-            Some(Ingot::new(db, base_url.clone(), None, kind))
-        } else {
-            // Make a standalone ingot if no config is found
-            let base = location.directory().unwrap_or_else(|| location.clone());
-            let specific_root_file = if location.path().ends_with(".fe") {
-                db.workspace().get(db, &location)
-            } else {
-                None
-            };
-            Some(Ingot::new(
-                db,
-                base,
-                specific_root_file,
-                IngotKind::StandAlone,
-            ))
+            // Check that the file is actually under the ingot's source tree.
+            // A file like `crates/language-server/test_files/goto.fe` shouldn't
+            // be claimed by a `fe.toml` at the repo root if it's not under `src/`.
+            let src_prefix = base_url
+                .join("src/")
+                .expect("failed to join src/ to base URL");
+            let is_under_src = location.as_str().starts_with(src_prefix.as_str());
+            let is_at_root = location
+                .directory()
+                .is_some_and(|dir| dir.as_str() == base_url.as_str());
+
+            if is_under_src || is_at_root {
+                return Some(Ingot::new(db, base_url.clone(), None, kind));
+            }
+
+            tracing::debug!(
+                "File {} is not under ingot src/ at {}; treating as standalone",
+                location,
+                base_url,
+            );
         }
+
+        // Make a standalone ingot if no config is found (or config's ingot has no root)
+        let base = location.directory().unwrap_or_else(|| location.clone());
+        let specific_root_file = if location.path().ends_with(".fe") {
+            db.workspace().get(db, &location)
+        } else {
+            None
+        };
+        Some(Ingot::new(
+            db,
+            base,
+            specific_root_file,
+            IngotKind::StandAlone,
+        ))
     }
 
     pub fn touch_ingot<'db>(
