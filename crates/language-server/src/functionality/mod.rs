@@ -1,11 +1,11 @@
-mod capabilities;
 pub(super) mod call_hierarchy;
+mod capabilities;
 pub(super) mod code_actions;
 pub(super) mod code_lens;
-pub(super) mod declaration;
-pub(super) mod folding_range;
 pub(super) mod completion;
+pub(super) mod declaration;
 pub(super) mod document_symbols;
+pub(super) mod folding_range;
 pub(super) mod goto;
 pub(super) mod handlers;
 pub(super) mod highlight;

@@ -1,16 +1,9 @@
 use async_lsp::ResponseError;
 use async_lsp::lsp_types::{FoldingRange, FoldingRangeKind, FoldingRangeParams};
 use common::InputDb;
-use hir::{
-    hir_def::ItemKind,
-    lower::map_file_to_mod,
-    span::LazySpan,
-};
+use hir::{hir_def::ItemKind, lower::map_file_to_mod, span::LazySpan};
 
-use crate::{
-    backend::Backend,
-    util::to_lsp_range_from_span,
-};
+use crate::{backend::Backend, util::to_lsp_range_from_span};
 
 /// Handle textDocument/foldingRange.
 pub async fn handle_folding_range(

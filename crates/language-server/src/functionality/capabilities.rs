@@ -53,9 +53,9 @@ pub(crate) fn server_capabilities() -> ServerCapabilities {
             work_done_progress_options: Default::default(),
         }),
         // call hierarchy
-        call_hierarchy_provider: Some(
-            async_lsp::lsp_types::CallHierarchyServerCapability::Simple(true),
-        ),
+        call_hierarchy_provider: Some(async_lsp::lsp_types::CallHierarchyServerCapability::Simple(
+            true,
+        )),
         // code lens
         code_lens_provider: Some(async_lsp::lsp_types::CodeLensOptions {
             resolve_provider: Some(false),
@@ -69,9 +69,7 @@ pub(crate) fn server_capabilities() -> ServerCapabilities {
             async_lsp::lsp_types::FoldingRangeProviderCapability::Simple(true),
         ),
         // go to declaration
-        declaration_provider: Some(
-            async_lsp::lsp_types::DeclarationCapability::Simple(true),
-        ),
+        declaration_provider: Some(async_lsp::lsp_types::DeclarationCapability::Simple(true)),
         // code actions (quick fixes)
         code_action_provider: Some(async_lsp::lsp_types::CodeActionProviderCapability::Simple(
             true,

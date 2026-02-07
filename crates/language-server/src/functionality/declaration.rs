@@ -1,10 +1,7 @@
 use async_lsp::ResponseError;
 use async_lsp::lsp_types::{GotoDefinitionParams, GotoDefinitionResponse};
 use common::InputDb;
-use hir::{
-    core::semantic::reference::Target,
-    lower::map_file_to_mod,
-};
+use hir::{core::semantic::reference::Target, lower::map_file_to_mod};
 
 use crate::{
     backend::Backend,
@@ -66,9 +63,7 @@ mod tests {
     use common::InputDb;
     use driver::DriverDataBase;
     use hir::{
-        core::semantic::reference::Target,
-        hir_def::ItemKind,
-        lower::map_file_to_mod,
+        core::semantic::reference::Target, hir_def::ItemKind, lower::map_file_to_mod,
         span::LazySpan,
     };
     use url::Url;
@@ -99,7 +94,14 @@ mod tests {
                 // Definition: if impl trait method, goes to trait method
                 let def_name = if let ItemKind::Func(func) = scope.item() {
                     if let Some(trait_method) = func.trait_method_def(db) {
-                        Some(format!("trait_method:{}", trait_method.name(db).to_opt().map(|n| n.data(db).to_string()).unwrap_or_default()))
+                        Some(format!(
+                            "trait_method:{}",
+                            trait_method
+                                .name(db)
+                                .to_opt()
+                                .map(|n| n.data(db).to_string())
+                                .unwrap_or_default()
+                        ))
                     } else {
                         decl_name.clone()
                     }
@@ -128,7 +130,10 @@ mod tests {
         let cursor = parser::TextSize::from(offset);
         let resolution = top_mod.target_at(&db, cursor);
 
-        assert!(resolution.first().is_some(), "should resolve struct at cursor");
+        assert!(
+            resolution.first().is_some(),
+            "should resolve struct at cursor"
+        );
         match resolution.first().unwrap() {
             Target::Scope(scope) => {
                 assert!(matches!(scope.item(), ItemKind::Struct(_)));
@@ -175,10 +180,13 @@ impl Greetable for Person {
         // For an impl method, definition redirects to trait method,
         // but declaration stays at the impl method itself
         // So they should differ
-        if let Some(def_str) = &def {
-            if def_str.starts_with("trait_method:") {
-                assert_ne!(decl, def, "declaration and definition should differ for impl trait methods");
-            }
+        if let Some(def_str) = &def
+            && def_str.starts_with("trait_method:")
+        {
+            assert_ne!(
+                decl, def,
+                "declaration and definition should differ for impl trait methods"
+            );
         }
     }
 
@@ -198,6 +206,9 @@ impl Greetable for Person {
 
         // For a regular function, declaration == definition
         assert!(decl.is_some());
-        assert_eq!(decl, def, "declaration and definition should be same for regular functions");
+        assert_eq!(
+            decl, def,
+            "declaration and definition should be same for regular functions"
+        );
     }
 }
