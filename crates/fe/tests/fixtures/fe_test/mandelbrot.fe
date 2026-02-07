@@ -1,0 +1,325 @@
+/// Mandelbrot set computation using unsigned fixed-point arithmetic.
+///
+/// Exercises: struct init, nested structs, operator trait impls (Add, Sub,
+/// Neg, Mul for custom types), while loops, for/range loops, match with
+/// return, enum with data, comparisons, bit shifts, arithmetic, function
+/// calls in loops, wildcard patterns, if-expressions.
+///
+/// KNOWN FAILURE: This test fails on both backends due to the EVM memory
+/// layout bug — sub-word fields (bool) corrupt adjacent memory because
+/// MSTORE always writes 32 bytes. See docs/evm-memory-layout-bug.md.
+
+use std::evm::{Evm, Call}
+use std::evm::effects::assert
+use core::abi::{Abi, AbiEncoder, AbiSize, Encode}
+use std::abi::Sol
+use core::ops::{Add, Sub, Neg, Mul}
+
+// ---------- Fixed-point signed number ----------
+// We represent signed values as (magnitude, sign).
+// neg: false = positive, true = negative.
+// Scale factor: 2^64.  So 1.0 = 2^64, 2.0 = 2^65, etc.
+
+const SCALE: u256 = 0x10000000000000000  // 2^64
+const FOUR_SCALED: u256 = 0x40000000000000000  // 4 * 2^64 (escape radius squared)
+
+struct SFixed {
+    mag: u256,
+    neg: bool,
+}
+
+impl SFixed {
+    fn from_int(value: u256, neg: bool) -> Self {
+        SFixed { mag: value * SCALE, neg: neg }
+    }
+
+    fn zero() -> Self {
+        SFixed { mag: 0, neg: false }
+    }
+
+    // Magnitude squared (always non-negative): returns raw scaled value
+    fn mag_sq(self) -> u256 {
+        (self.mag * self.mag) >> 64
+    }
+}
+
+impl Neg for SFixed {
+    fn neg(self) -> SFixed {
+        SFixed { mag: self.mag, neg: !self.neg }
+    }
+}
+
+impl Add for SFixed {
+    fn add(self, _ other: SFixed) -> SFixed {
+        if self.neg == other.neg {
+            // Same sign: magnitudes add, sign preserved
+            SFixed { mag: self.mag + other.mag, neg: self.neg }
+        } else if self.mag >= other.mag {
+            // Different signs, self larger: subtract, keep self's sign
+            SFixed { mag: self.mag - other.mag, neg: self.neg }
+        } else {
+            // Different signs, other larger: subtract, take other's sign
+            SFixed { mag: other.mag - self.mag, neg: other.neg }
+        }
+    }
+}
+
+impl Sub for SFixed {
+    fn sub(self, _ other: SFixed) -> SFixed {
+        self + (-other)
+    }
+}
+
+impl Mul for SFixed {
+    fn mul(self, _ other: SFixed) -> SFixed {
+        let product = self.mag * other.mag
+        let result_neg = self.neg != other.neg
+        SFixed { mag: product >> 64, neg: result_neg }
+    }
+}
+
+
+// ---------- Complex number (nested struct) ----------
+
+struct Complex {
+    re: SFixed,
+    im: SFixed,
+}
+
+impl Complex {
+    fn zero() -> Self {
+        Complex { re: SFixed::zero(), im: SFixed::zero() }
+    }
+
+    // |z|^2 in fixed-point
+    fn mag_sq(self) -> u256 {
+        self.re.mag_sq() + self.im.mag_sq()
+    }
+
+    // z^2 + c
+    // (a+bi)^2 = (a^2 - b^2) + (2ab)i
+    fn square_add(self, c: Complex) -> Complex {
+        let aa = self.re * self.re
+        let bb = self.im * self.im
+        let ab = self.re * self.im
+        Complex {
+            re: aa - bb + c.re,
+            im: ab + ab + c.im,
+        }
+    }
+}
+
+
+// ---------- Escape result ----------
+
+enum EscapeResult {
+    Escaped(u256),   // iteration count when it escaped
+    InSet,           // didn't escape within max iterations
+}
+
+
+// ---------- Core iteration ----------
+
+fn iterate(c: Complex, max_iter: u256) -> EscapeResult {
+    let mut z = Complex::zero()
+    let mut i: u256 = 0
+
+    while i < max_iter {
+        if z.mag_sq() >= FOUR_SCALED {
+            return EscapeResult::Escaped(i)
+        }
+        z = z.square_add(c)
+        i += 1
+    }
+
+    // Final check after last iteration
+    if z.mag_sq() >= FOUR_SCALED {
+        return EscapeResult::Escaped(max_iter)
+    }
+    EscapeResult::InSet
+}
+
+// Classify a point: returns iteration count (0 = in set)
+fn classify(c: Complex, max_iter: u256) -> u256 {
+    match iterate(c, max_iter) {
+        EscapeResult::Escaped(n) => n
+        EscapeResult::InSet => 0
+    }
+}
+
+// Compute a row: sum of iteration counts across pixels.
+// Uses for/range loop to iterate over pixel columns.
+fn compute_row_sum(
+    row_im: SFixed,
+    re_start: SFixed,
+    re_step: SFixed,
+    width: usize,
+    max_iter: u256,
+) -> u256 {
+    let mut sum: u256 = 0
+    let mut re = re_start
+    for _px in 0..width {
+        let c = Complex { re: re, im: row_im }
+        sum += classify(c, max_iter)
+        re = re + re_step
+    }
+    sum
+}
+
+
+// ---------- Contract ----------
+
+msg MandelbrotMsg {
+    #[selector = 0x01]
+    ClassifyPoint {
+        re_mag: u256,
+        re_neg: bool,
+        im_mag: u256,
+        im_neg: bool,
+        max_iter: u256,
+    } -> u256,
+
+    #[selector = 0x02]
+    ComputeRowSum {
+        im_mag: u256,
+        im_neg: bool,
+        re_start_mag: u256,
+        re_start_neg: bool,
+        re_step_mag: u256,
+        width: usize,
+        max_iter: u256,
+    } -> u256,
+}
+
+pub contract Mandelbrot {
+    recv MandelbrotMsg {
+        ClassifyPoint { re_mag, re_neg, im_mag, im_neg, max_iter } -> u256 {
+            let c = Complex {
+                re: SFixed { mag: re_mag, neg: re_neg },
+                im: SFixed { mag: im_mag, neg: im_neg },
+            }
+            classify(c, max_iter)
+        }
+
+        ComputeRowSum { im_mag, im_neg, re_start_mag, re_start_neg, re_step_mag, width, max_iter } -> u256 {
+            let im = SFixed { mag: im_mag, neg: im_neg }
+            let re_start = SFixed { mag: re_start_mag, neg: re_start_neg }
+            let re_step = SFixed { mag: re_step_mag, neg: false }
+            compute_row_sum(im, re_start, re_step, width, max_iter)
+        }
+    }
+}
+
+
+// ---------- Tests ----------
+
+#[test]
+fn test_mandelbrot_known_points() uses (mut evm: Evm) {
+    let addr = evm.create2<Mandelbrot>(value: 0, args: (), salt: 0)
+    assert(addr.inner != 0)
+
+    // (0, 0) is in the Mandelbrot set: z stays at 0 forever.
+    let res: u256 = evm.call(
+        addr: addr,
+        gas: 10000000,
+        value: 0,
+        message: MandelbrotMsg::ClassifyPoint {
+            re_mag: 0, re_neg: false,
+            im_mag: 0, im_neg: false,
+            max_iter: 50,
+        }
+    )
+    assert(res == 0)
+
+    // (-1, 0) is in the set: z oscillates 0 -> -1 -> 0 -> -1 ...
+    let res: u256 = evm.call(
+        addr: addr,
+        gas: 10000000,
+        value: 0,
+        message: MandelbrotMsg::ClassifyPoint {
+            re_mag: SCALE, re_neg: true,
+            im_mag: 0, im_neg: false,
+            max_iter: 50,
+        }
+    )
+    assert(res == 0)
+
+    // (2, 0) escapes at iteration 1.
+    // z0=0, z1=2, |z1|^2=4 >= 4.
+    let res: u256 = evm.call(
+        addr: addr,
+        gas: 10000000,
+        value: 0,
+        message: MandelbrotMsg::ClassifyPoint {
+            re_mag: 2 * SCALE, re_neg: false,
+            im_mag: 0, im_neg: false,
+            max_iter: 50,
+        }
+    )
+    assert(res == 1)
+
+    // (0, 2) escapes at iteration 1.
+    // z0=0, z1=2i, |z1|^2=4 >= 4.
+    let res: u256 = evm.call(
+        addr: addr,
+        gas: 10000000,
+        value: 0,
+        message: MandelbrotMsg::ClassifyPoint {
+            re_mag: 0, re_neg: false,
+            im_mag: 2 * SCALE, im_neg: false,
+            max_iter: 50,
+        }
+    )
+    assert(res == 1)
+
+    // (1, 0) escapes at iteration 2.
+    // z0=0, z1=1, z2=1+1=2, |z2|^2=4 >= 4.
+    let res: u256 = evm.call(
+        addr: addr,
+        gas: 10000000,
+        value: 0,
+        message: MandelbrotMsg::ClassifyPoint {
+            re_mag: SCALE, re_neg: false,
+            im_mag: 0, im_neg: false,
+            max_iter: 50,
+        }
+    )
+    assert(res == 2)
+
+    // (-2, 0) escapes at iteration 1.
+    // z0=0, z1=-2, |z1|^2=4 >= 4.
+    let res: u256 = evm.call(
+        addr: addr,
+        gas: 10000000,
+        value: 0,
+        message: MandelbrotMsg::ClassifyPoint {
+            re_mag: 2 * SCALE, re_neg: true,
+            im_mag: 0, im_neg: false,
+            max_iter: 50,
+        }
+    )
+    assert(res == 1)
+}
+
+#[test]
+fn test_mandelbrot_row() uses (mut evm: Evm) {
+    let addr = evm.create2<Mandelbrot>(value: 0, args: (), salt: 1)
+    assert(addr.inner != 0)
+
+    // Row along real axis (im=0) from re=-2 to re=2, 5 pixels (step=1.0).
+    // Pixels at re = -2, -1, 0, 1, 2.
+    // Expected: escape(1) + inset(0) + inset(0) + escape(2) + escape(1) = 4
+    let row_sum: u256 = evm.call(
+        addr: addr,
+        gas: 10000000,
+        value: 0,
+        message: MandelbrotMsg::ComputeRowSum {
+            im_mag: 0, im_neg: false,
+            re_start_mag: 2 * SCALE, re_start_neg: true,
+            re_step_mag: SCALE,
+            width: 5,
+            max_iter: 50,
+        }
+    )
+    assert(row_sum == 4)
+}
