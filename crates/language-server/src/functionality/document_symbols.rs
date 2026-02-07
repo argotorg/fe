@@ -51,32 +51,38 @@ fn item_to_symbol(db: &dyn hir::SpannedHirDb, item: ItemKind) -> Option<Document
     let (kind, name) = match item {
         ItemKind::Func(func) => (
             SymbolKind::FUNCTION,
-            func.name(db).to_opt()?.data(db).to_string(),
+            format!("fn {}", func.name(db).to_opt()?.data(db)),
         ),
         ItemKind::Struct(s) => (
             SymbolKind::STRUCT,
-            s.name(db).to_opt()?.data(db).to_string(),
+            format!("struct {}", s.name(db).to_opt()?.data(db)),
         ),
-        ItemKind::Enum(e) => (SymbolKind::ENUM, e.name(db).to_opt()?.data(db).to_string()),
+        ItemKind::Enum(e) => (
+            SymbolKind::ENUM,
+            format!("enum {}", e.name(db).to_opt()?.data(db)),
+        ),
         ItemKind::Trait(t) => (
             SymbolKind::INTERFACE,
-            t.name(db).to_opt()?.data(db).to_string(),
+            format!("trait {}", t.name(db).to_opt()?.data(db)),
         ),
         ItemKind::TypeAlias(ta) => (
             SymbolKind::CLASS,
-            ta.name(db).to_opt()?.data(db).to_string(),
+            format!("type {}", ta.name(db).to_opt()?.data(db)),
         ),
         ItemKind::Const(c) => (
             SymbolKind::CONSTANT,
-            c.name(db).to_opt()?.data(db).to_string(),
+            format!("const {}", c.name(db).to_opt()?.data(db)),
         ),
         ItemKind::Mod(m) => (
             SymbolKind::MODULE,
-            m.name(db).to_opt()?.data(db).to_string(),
+            format!("mod {}", m.name(db).to_opt()?.data(db)),
         ),
         ItemKind::Impl(_) => (SymbolKind::CLASS, "impl".to_string()),
         ItemKind::ImplTrait(_) => (SymbolKind::CLASS, "impl trait".to_string()),
-        ItemKind::Contract(c) => (SymbolKind::CLASS, c.name(db).to_opt()?.data(db).to_string()),
+        ItemKind::Contract(c) => (
+            SymbolKind::CLASS,
+            format!("contract {}", c.name(db).to_opt()?.data(db)),
+        ),
         _ => return None,
     };
 
