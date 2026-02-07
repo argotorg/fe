@@ -18,7 +18,7 @@ use sonatina_ir::{
 };
 use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 
-use crate::{TestMetadata, TestModuleOutput};
+use crate::{ExpectedRevert, TestMetadata, TestModuleOutput};
 
 use super::{LowerError, ModuleLowerer};
 
@@ -91,7 +91,7 @@ pub fn emit_test_module_sonatina(
             bytecode: init_bytecode,
             value_param_count: test.value_param_count,
             effect_param_count: test.effect_param_count,
-            expected_revert: None,
+            expected_revert: test.expected_revert.clone(),
         });
     }
 
@@ -108,6 +108,7 @@ struct TestInfo {
     object_name: String,
     value_param_count: usize,
     effect_param_count: usize,
+    expected_revert: Option<ExpectedRevert>,
 }
 
 fn collect_tests(db: &DriverDataBase, functions: &[MirFunction<'_>]) -> Vec<TestInfo> {
@@ -117,12 +118,14 @@ fn collect_tests(db: &DriverDataBase, functions: &[MirFunction<'_>]) -> Vec<Test
             let MirFunctionOrigin::Hir(hir_func) = mir_func.origin else {
                 return None;
             };
-            if !ItemKind::from(hir_func)
-                .attrs(db)
-                .is_some_and(|attrs| attrs.has_attr(db, "test"))
-            {
-                return None;
-            }
+            let attrs = ItemKind::from(hir_func).attrs(db)?;
+            let test_attr = attrs.get_attr(db, "test")?;
+
+            let expected_revert = if test_attr.has_arg(db, "should_revert") {
+                Some(ExpectedRevert::Any)
+            } else {
+                None
+            };
 
             let hir_name = hir_func
                 .name(db)
@@ -138,6 +141,7 @@ fn collect_tests(db: &DriverDataBase, functions: &[MirFunction<'_>]) -> Vec<Test
                 object_name: String::new(),
                 value_param_count,
                 effect_param_count,
+                expected_revert,
             })
         })
         .collect();
