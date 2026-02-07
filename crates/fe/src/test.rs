@@ -41,6 +41,7 @@ pub struct TestResult {
 struct TestOutcome {
     result: TestResult,
     logs: Vec<String>,
+    trace: Option<contract_harness::CallTrace>,
 }
 
 fn suite_error_result(suite: &str, kind: &str, message: String) -> Vec<TestResult> {
@@ -212,6 +213,7 @@ pub fn run_tests(
     report_out: Option<&Utf8PathBuf>,
     report_dir: Option<&Utf8PathBuf>,
     report_failed_only: bool,
+    call_trace: bool,
 ) -> Result<bool, String> {
     let input_paths = expand_test_paths(paths)?;
 
@@ -301,6 +303,7 @@ pub fn run_tests(
                 backend,
                 &suite_debug,
                 report_ctx.as_ref(),
+                call_trace,
             )
         } else if path.is_dir() {
             run_tests_ingot(
@@ -312,6 +315,7 @@ pub fn run_tests(
                 backend,
                 &suite_debug,
                 report_ctx.as_ref(),
+                call_trace,
             )
         } else {
             return Err("Path must be either a .fe file or a directory containing fe.toml".into());
@@ -394,6 +398,7 @@ fn run_tests_single_file(
     backend: &str,
     debug: &TestDebugOptions,
     report: Option<&ReportContext>,
+    call_trace: bool,
 ) -> Vec<TestResult> {
     // Create a file URL for the single .fe file
     let file_url = match Url::from_file_path(file_path.canonicalize_utf8().unwrap()) {
@@ -449,7 +454,7 @@ fn run_tests_single_file(
     // Discover and run tests
     maybe_write_suite_ir(db, top_mod, backend, report);
     discover_and_run_tests(
-        db, top_mod, suite, filter, show_logs, backend, debug, report,
+        db, top_mod, suite, filter, show_logs, backend, debug, report, call_trace,
     )
 }
 
@@ -471,6 +476,7 @@ fn run_tests_ingot(
     backend: &str,
     debug: &TestDebugOptions,
     report: Option<&ReportContext>,
+    call_trace: bool,
 ) -> Vec<TestResult> {
     let canonical_path = match dir_path.canonicalize_utf8() {
         Ok(path) => path,
@@ -526,7 +532,7 @@ fn run_tests_ingot(
     let root_mod = ingot.root_mod(db);
     maybe_write_suite_ir(db, root_mod, backend, report);
     discover_and_run_tests(
-        db, root_mod, suite, filter, show_logs, backend, debug, report,
+        db, root_mod, suite, filter, show_logs, backend, debug, report, call_trace,
     )
 }
 
@@ -584,6 +590,7 @@ fn discover_and_run_tests(
     backend: &str,
     debug: &TestDebugOptions,
     report: Option<&ReportContext>,
+    call_trace: bool,
 ) -> Vec<TestResult> {
     let backend = backend.to_lowercase();
     let emit_result = match backend.as_str() {
@@ -629,7 +636,8 @@ fn discover_and_run_tests(
         debug.configure_per_test_env(Some(suite), &case.display_name);
 
         // Compile and run the test
-        let outcome = compile_and_run_test(case, show_logs, backend.as_str(), report);
+        let outcome =
+            compile_and_run_test(case, show_logs, backend.as_str(), report, call_trace);
 
         if outcome.result.passed {
             println!("{}", "ok".green());
@@ -638,6 +646,12 @@ fn discover_and_run_tests(
             if let Some(ref msg) = outcome.result.error_message {
                 eprintln!("    {}", msg);
             }
+        }
+
+        if let Some(trace) = &outcome.trace {
+            println!("--- call trace ---");
+            print!("{trace}");
+            println!("--- end trace ---");
         }
 
         if show_logs {
@@ -798,6 +812,7 @@ fn compile_and_run_test(
     show_logs: bool,
     backend: &str,
     report: Option<&ReportContext>,
+    call_trace: bool,
 ) -> TestOutcome {
     if case.value_param_count > 0 {
         return TestOutcome {
@@ -810,6 +825,7 @@ fn compile_and_run_test(
                 )),
             },
             logs: Vec::new(),
+            trace: None,
         };
     }
 
@@ -824,6 +840,7 @@ fn compile_and_run_test(
                 )),
             },
             logs: Vec::new(),
+            trace: None,
         };
     }
 
@@ -839,6 +856,7 @@ fn compile_and_run_test(
                     )),
                 },
                 logs: Vec::new(),
+                trace: None,
             };
         }
 
@@ -847,13 +865,18 @@ fn compile_and_run_test(
         }
 
         let bytecode_hex = hex::encode(&case.bytecode);
-        let (result, logs) = execute_test(
+        let (result, logs, trace) = execute_test(
             &case.display_name,
             &bytecode_hex,
             show_logs,
             case.expected_revert.as_ref(),
+            call_trace,
         );
-        return TestOutcome { result, logs };
+        return TestOutcome {
+            result,
+            logs,
+            trace,
+        };
     }
 
     // Default backend: compile Yul to bytecode using solc.
@@ -865,6 +888,7 @@ fn compile_and_run_test(
                 error_message: Some(format!("missing test Yul for `{}`", case.display_name)),
             },
             logs: Vec::new(),
+            trace: None,
         };
     }
 
@@ -882,18 +906,24 @@ fn compile_and_run_test(
                     error_message: Some(format!("Failed to compile test: {}", err.0)),
                 },
                 logs: Vec::new(),
+                trace: None,
             };
         }
     };
 
     // Execute the test bytecode in revm
-    let (result, logs) = execute_test(
+    let (result, logs, trace) = execute_test(
         &case.display_name,
         &bytecode,
         show_logs,
         case.expected_revert.as_ref(),
+        call_trace,
     );
-    TestOutcome { result, logs }
+    TestOutcome {
+        result,
+        logs,
+        trace,
+    }
 }
 
 fn write_sonatina_case_artifacts(report: &ReportContext, case: &TestMetadata) {
@@ -1015,7 +1045,8 @@ fn execute_test(
     bytecode_hex: &str,
     show_logs: bool,
     expected_revert: Option<&ExpectedRevert>,
-) -> (TestResult, Vec<String>) {
+    call_trace: bool,
+) -> (TestResult, Vec<String>, Option<contract_harness::CallTrace>) {
     // Deploy the test contract
     let mut instance = match RuntimeInstance::deploy(bytecode_hex) {
         Ok(instance) => instance,
@@ -1027,12 +1058,22 @@ fn execute_test(
                     error_message: Some(format!("Failed to deploy test: {err}")),
                 },
                 Vec::new(),
+                None,
             );
         }
     };
 
     // Execute the test (empty calldata since test functions take no args)
     let options = ExecutionOptions::default();
+
+    // Capture call trace BEFORE the real execution so the cloned context
+    // has the right pre-call state (contract deployed but not yet called).
+    let trace = if call_trace {
+        Some(instance.call_raw_traced(&[], options))
+    } else {
+        None
+    };
+
     let call_result = if show_logs {
         instance
             .call_raw_with_logs(&[], options)
@@ -1050,6 +1091,7 @@ fn execute_test(
                 error_message: None,
             },
             logs,
+            trace,
         ),
         // Normal test: execution reverted (failure)
         (Err(err), None) => (
@@ -1059,6 +1101,7 @@ fn execute_test(
                 error_message: Some(format_harness_error(err)),
             },
             Vec::new(),
+            trace,
         ),
         // Expected revert: execution succeeded (failure - should have reverted)
         (Ok(_), Some(_)) => (
@@ -1068,6 +1111,7 @@ fn execute_test(
                 error_message: Some("Expected test to revert, but it succeeded".to_string()),
             },
             Vec::new(),
+            trace,
         ),
         // Expected revert: execution reverted (success)
         (Err(contract_harness::HarnessError::Revert(_)), Some(ExpectedRevert::Any)) => (
@@ -1077,6 +1121,7 @@ fn execute_test(
                 error_message: None,
             },
             Vec::new(),
+            trace,
         ),
         // Expected revert: execution failed for a different reason (failure)
         (Err(err), Some(ExpectedRevert::Any)) => (
@@ -1089,6 +1134,7 @@ fn execute_test(
                 )),
             },
             Vec::new(),
+            trace,
         ),
     }
 }
