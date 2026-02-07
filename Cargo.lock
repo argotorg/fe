@@ -4721,6 +4721,7 @@ dependencies = [
 [[package]]
 name = "sonatina-codegen"
 version = "0.0.3-alpha"
+source = "git+https://github.com/fe-lang/sonatina?branch=main#eb2e3a314f837403028300a5947b52e8c0f3ca6f"
 dependencies = [
  "bit-set",
  "cranelift-entity 0.126.2",
@@ -4737,6 +4738,7 @@ dependencies = [
 [[package]]
 name = "sonatina-ir"
 version = "0.0.3-alpha"
+source = "git+https://github.com/fe-lang/sonatina?branch=main#eb2e3a314f837403028300a5947b52e8c0f3ca6f"
 dependencies = [
  "bitflags 2.10.0",
  "cranelift-entity 0.126.2",
@@ -4756,6 +4758,7 @@ dependencies = [
 [[package]]
 name = "sonatina-macros"
 version = "0.0.3-alpha"
+source = "git+https://github.com/fe-lang/sonatina?branch=main#eb2e3a314f837403028300a5947b52e8c0f3ca6f"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4765,6 +4768,7 @@ dependencies = [
 [[package]]
 name = "sonatina-triple"
 version = "0.0.3-alpha"
+source = "git+https://github.com/fe-lang/sonatina?branch=main#eb2e3a314f837403028300a5947b52e8c0f3ca6f"
 dependencies = [
  "thiserror 2.0.18",
 ]
