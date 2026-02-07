@@ -73,9 +73,7 @@ pub fn check(
     report_out: Option<&Utf8PathBuf>,
     report_failed_only: bool,
 ) -> Result<bool, String> {
-    let backend_kind: BackendKind = backend_name
-        .parse()
-        .map_err(|err| format!("{err}"))?;
+    let backend_kind: BackendKind = backend_name.parse().map_err(|err| format!("{err}"))?;
     let backend = backend_kind.create();
     let mut db = DriverDataBase::default();
 
@@ -696,7 +694,16 @@ fn check_ingot(
     report: Option<&ReportContext>,
 ) -> bool {
     let mut seen = HashSet::new();
-    check_ingot_inner(db, dir_path, dump_mir, emit_yul_min, backend_kind, backend, report, &mut seen)
+    check_ingot_inner(
+        db,
+        dir_path,
+        dump_mir,
+        emit_yul_min,
+        backend_kind,
+        backend,
+        report,
+        &mut seen,
+    )
 }
 
 fn check_ingot_inner(

@@ -984,8 +984,7 @@ fn lower_instruction<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                         "alloc rvalue without destination local".to_string(),
                     ));
                 };
-                let value =
-                    lower_alloc(ctx, *dest_local, *address_space)?;
+                let value = lower_alloc(ctx, *dest_local, *address_space)?;
                 let dest_var = ctx.local_vars.get(dest_local).copied().ok_or_else(|| {
                     LowerError::Internal(format!("missing SSA variable for local {dest_local:?}"))
                 })?;
@@ -1000,14 +999,13 @@ fn lower_instruction<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 })?;
                 // Apply from_word conversion for Load operations
                 let converted = if matches!(rvalue, mir::Rvalue::Load { .. }) {
-                    let dest_ty = ctx.body
+                    let dest_ty = ctx
+                        .body
                         .locals
                         .get(dest_local.index())
                         .map(|l| l.ty)
                         .ok_or_else(|| {
-                            LowerError::Internal(format!(
-                                "missing local type for {dest_local:?}"
-                            ))
+                            LowerError::Internal(format!("missing local type for {dest_local:?}"))
                         })?;
                     apply_from_word(ctx.fb, ctx.db, result_val, dest_ty, ctx.is)
                 } else {
@@ -1078,11 +1076,14 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                         }
                         match (callee_name.as_str(), args.as_slice()) {
                             ("log0", [offset, len]) => {
-                                ctx.fb.insert_inst_no_result(EvmLog0::new(ctx.is, *offset, *len));
+                                ctx.fb
+                                    .insert_inst_no_result(EvmLog0::new(ctx.is, *offset, *len));
                                 return Ok(None);
                             }
                             ("log1", [offset, len, topic0]) => {
-                                ctx.fb.insert_inst_no_result(EvmLog1::new(ctx.is, *offset, *len, *topic0));
+                                ctx.fb.insert_inst_no_result(EvmLog1::new(
+                                    ctx.is, *offset, *len, *topic0,
+                                ));
                                 return Ok(None);
                             }
                             ("log2", [offset, len, topic0, topic1]) => {
@@ -1121,33 +1122,61 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                     }
 
                     // Environment
-                    "address" => return Ok(Some(ctx.fb.insert_inst(EvmAddress::new(ctx.is), Type::I256))),
-                    "callvalue" => {
-                        return Ok(Some(ctx.fb.insert_inst(EvmCallValue::new(ctx.is), Type::I256)));
+                    "address" => {
+                        return Ok(Some(
+                            ctx.fb.insert_inst(EvmAddress::new(ctx.is), Type::I256),
+                        ));
                     }
-                    "origin" => return Ok(Some(ctx.fb.insert_inst(EvmOrigin::new(ctx.is), Type::I256))),
+                    "callvalue" => {
+                        return Ok(Some(
+                            ctx.fb.insert_inst(EvmCallValue::new(ctx.is), Type::I256),
+                        ));
+                    }
+                    "origin" => {
+                        return Ok(Some(ctx.fb.insert_inst(EvmOrigin::new(ctx.is), Type::I256)));
+                    }
                     "gasprice" => {
                         return Err(LowerError::Unsupported(
                             "gasprice is not supported by the Sonatina backend".to_string(),
                         ));
                     }
                     "coinbase" => {
-                        return Ok(Some(ctx.fb.insert_inst(EvmCoinBase::new(ctx.is), Type::I256)));
+                        return Ok(Some(
+                            ctx.fb.insert_inst(EvmCoinBase::new(ctx.is), Type::I256),
+                        ));
                     }
                     "timestamp" => {
-                        return Ok(Some(ctx.fb.insert_inst(EvmTimestamp::new(ctx.is), Type::I256)));
+                        return Ok(Some(
+                            ctx.fb.insert_inst(EvmTimestamp::new(ctx.is), Type::I256),
+                        ));
                     }
-                    "number" => return Ok(Some(ctx.fb.insert_inst(EvmNumber::new(ctx.is), Type::I256))),
+                    "number" => {
+                        return Ok(Some(ctx.fb.insert_inst(EvmNumber::new(ctx.is), Type::I256)));
+                    }
                     "prevrandao" => {
-                        return Ok(Some(ctx.fb.insert_inst(EvmPrevRandao::new(ctx.is), Type::I256)));
+                        return Ok(Some(
+                            ctx.fb.insert_inst(EvmPrevRandao::new(ctx.is), Type::I256),
+                        ));
                     }
                     "gaslimit" => {
-                        return Ok(Some(ctx.fb.insert_inst(EvmGasLimit::new(ctx.is), Type::I256)));
+                        return Ok(Some(
+                            ctx.fb.insert_inst(EvmGasLimit::new(ctx.is), Type::I256),
+                        ));
                     }
-                    "chainid" => return Ok(Some(ctx.fb.insert_inst(EvmChainId::new(ctx.is), Type::I256))),
-                    "basefee" => return Ok(Some(ctx.fb.insert_inst(EvmBaseFee::new(ctx.is), Type::I256))),
+                    "chainid" => {
+                        return Ok(Some(
+                            ctx.fb.insert_inst(EvmChainId::new(ctx.is), Type::I256),
+                        ));
+                    }
+                    "basefee" => {
+                        return Ok(Some(
+                            ctx.fb.insert_inst(EvmBaseFee::new(ctx.is), Type::I256),
+                        ));
+                    }
                     "selfbalance" => {
-                        return Ok(Some(ctx.fb.insert_inst(EvmSelfBalance::new(ctx.is), Type::I256)));
+                        return Ok(Some(
+                            ctx.fb.insert_inst(EvmSelfBalance::new(ctx.is), Type::I256),
+                        ));
                     }
                     "blockhash" => {
                         let [block] = call.args.as_slice() else {
@@ -1157,13 +1186,16 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                         };
                         let block = lower_value(ctx, *block)?;
                         return Ok(Some(
-                            ctx.fb.insert_inst(EvmBlockHash::new(ctx.is, block), Type::I256),
+                            ctx.fb
+                                .insert_inst(EvmBlockHash::new(ctx.is, block), Type::I256),
                         ));
                     }
                     "gas" => return Ok(Some(ctx.fb.insert_inst(EvmGas::new(ctx.is), Type::I256))),
 
                     // Memory size
-                    "msize" => return Ok(Some(ctx.fb.insert_inst(EvmMsize::new(ctx.is), Type::I256))),
+                    "msize" => {
+                        return Ok(Some(ctx.fb.insert_inst(EvmMsize::new(ctx.is), Type::I256)));
+                    }
 
                     // Calls / create
                     "create" => {
@@ -1175,9 +1207,10 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                         let val = lower_value(ctx, *val)?;
                         let offset = lower_value(ctx, *offset)?;
                         let len = lower_value(ctx, *len)?;
-                        return Ok(Some(
-                            ctx.fb.insert_inst(EvmCreate::new(ctx.is, val, offset, len), Type::I256),
-                        ));
+                        return Ok(Some(ctx.fb.insert_inst(
+                            EvmCreate::new(ctx.is, val, offset, len),
+                            Type::I256,
+                        )));
                     }
                     "create2" => {
                         let [val, offset, len, salt] = call.args.as_slice() else {
@@ -1275,7 +1308,8 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                                 "alloc expects 1 argument (size)".to_string(),
                             ));
                         };
-                        let size_ty = ctx.body
+                        let size_ty = ctx
+                            .body
                             .values
                             .get(size.index())
                             .ok_or_else(|| {
@@ -1288,12 +1322,15 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                             ));
                         }
                         let size = lower_value(ctx, *size)?;
-                        return Ok(Some(ctx.fb.insert_inst(EvmMalloc::new(ctx.is, size), Type::I256)));
+                        return Ok(Some(
+                            ctx.fb.insert_inst(EvmMalloc::new(ctx.is, size), Type::I256),
+                        ));
                     }
                     "evm_create_create_raw" => {
                         let mut lowered = Vec::new();
                         for &arg in &call.args {
-                            let arg_ty = ctx.body
+                            let arg_ty = ctx
+                                .body
                                 .values
                                 .get(arg.index())
                                 .ok_or_else(|| {
@@ -1312,14 +1349,16 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                                 lowered.len()
                             )));
                         };
-                        return Ok(Some(
-                            ctx.fb.insert_inst(EvmCreate::new(ctx.is, *val, *offset, *len), Type::I256),
-                        ));
+                        return Ok(Some(ctx.fb.insert_inst(
+                            EvmCreate::new(ctx.is, *val, *offset, *len),
+                            Type::I256,
+                        )));
                     }
                     "evm_create_create2_raw" => {
                         let mut lowered = Vec::new();
                         for &arg in &call.args {
-                            let arg_ty = ctx.body
+                            let arg_ty = ctx
+                                .body
                                 .values
                                 .get(arg.index())
                                 .ok_or_else(|| {
@@ -1347,7 +1386,8 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 }
             }
 
-            let func_ref = ctx.name_map
+            let func_ref = ctx
+                .name_map
                 .get(callee_name)
                 .ok_or_else(|| LowerError::Internal(format!("unknown function: {callee_name}")))?;
 
@@ -1371,14 +1411,14 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                     if !*keep {
                         continue;
                     }
-                    let val =
-                        lower_value(ctx, arg)?;
+                    let val = lower_value(ctx, arg)?;
                     args.push(val);
                 }
             } else {
                 // Fallback for callees without a declared signature/mask (e.g. externs).
                 for &arg in &call.args {
-                    let arg_ty = ctx.body
+                    let arg_ty = ctx
+                        .body
                         .values
                         .get(arg.index())
                         .ok_or_else(|| LowerError::Internal("unknown call argument".to_string()))?
@@ -1386,12 +1426,12 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                     if is_erased_runtime_ty(ctx.db, ctx.target_layout, arg_ty) {
                         continue;
                     }
-                    let val =
-                        lower_value(ctx, arg)?;
+                    let val = lower_value(ctx, arg)?;
                     args.push(val);
                 }
                 for &effect_arg in &call.effect_args {
-                    let arg_ty = ctx.body
+                    let arg_ty = ctx
+                        .body
                         .values
                         .get(effect_arg.index())
                         .ok_or_else(|| {
@@ -1408,7 +1448,8 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
 
             // If the caller erased some compile-time-only arguments but the callee signature still
             // expects stack words for them, pad with zeroes to keep the internal call ABI aligned.
-            let expected_argc = ctx.fb
+            let expected_argc = ctx
+                .fb
                 .module_builder
                 .ctx
                 .func_sig(*func_ref, |sig| sig.args().len());
@@ -1424,11 +1465,15 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
 
             // Emit call instruction with proper return type
             let call_inst = Call::new(ctx.is, *func_ref, args.into());
-            let callee_returns = ctx.returns_value_map.get(callee_name).copied().ok_or_else(|| {
-                LowerError::Internal(format!(
-                    "missing return type metadata for function: {callee_name}"
-                ))
-            })?;
+            let callee_returns =
+                ctx.returns_value_map
+                    .get(callee_name)
+                    .copied()
+                    .ok_or_else(|| {
+                        LowerError::Internal(format!(
+                            "missing return type metadata for function: {callee_name}"
+                        ))
+                    })?;
             if callee_returns {
                 let result = ctx.fb.insert_inst(call_inst, types::word_type());
                 Ok(Some(result))
@@ -1525,10 +1570,8 @@ fn lower_value_origin<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             lower_unary_op(ctx.fb, *op, inner_val, ctx.is)
         }
         ValueOrigin::Binary { op, lhs, rhs } => {
-            let lhs_val =
-                lower_value(ctx, *lhs)?;
-            let rhs_val =
-                lower_value(ctx, *rhs)?;
+            let lhs_val = lower_value(ctx, *lhs)?;
+            let rhs_val = lower_value(ctx, *rhs)?;
             lower_binary_op(ctx.fb, *op, lhs_val, rhs_val, ctx.is)
         }
         ValueOrigin::TransparentCast { value } => {
@@ -1706,7 +1749,8 @@ fn lower_intrinsic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 "code region intrinsics require 1 argument".to_string(),
             ));
         };
-        let value_data = ctx.body
+        let value_data = ctx
+            .body
             .values
             .get(func_item.index())
             .ok_or_else(|| LowerError::Internal("unknown code region argument".to_string()))?;
@@ -1726,12 +1770,12 @@ fn lower_intrinsic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         let embed_sym = EmbedSymbol::from(symbol.to_string());
         let sym = SymbolRef::Embed(embed_sym);
         return match op {
-            IntrinsicOp::CodeRegionOffset => {
-                Ok(Some(ctx.fb.insert_inst(SymAddr::new(ctx.is, sym), Type::I256)))
-            }
-            IntrinsicOp::CodeRegionLen => {
-                Ok(Some(ctx.fb.insert_inst(SymSize::new(ctx.is, sym), Type::I256)))
-            }
+            IntrinsicOp::CodeRegionOffset => Ok(Some(
+                ctx.fb.insert_inst(SymAddr::new(ctx.is, sym), Type::I256),
+            )),
+            IntrinsicOp::CodeRegionLen => Ok(Some(
+                ctx.fb.insert_inst(SymSize::new(ctx.is, sym), Type::I256),
+            )),
             _ => unreachable!(),
         };
     }
@@ -1758,9 +1802,10 @@ fn lower_intrinsic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                     "mload requires address argument".to_string(),
                 ));
             };
-            Ok(Some(
-                ctx.fb.insert_inst(Mload::new(ctx.is, addr, Type::I256), Type::I256),
-            ))
+            Ok(Some(ctx.fb.insert_inst(
+                Mload::new(ctx.is, addr, Type::I256),
+                Type::I256,
+            )))
         }
         IntrinsicOp::Mstore => {
             let [addr, val] = lowered_args.as_slice() else {
@@ -1768,7 +1813,8 @@ fn lower_intrinsic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                     "mstore requires 2 arguments".to_string(),
                 ));
             };
-            ctx.fb.insert_inst_no_result(Mstore::new(ctx.is, *addr, *val, Type::I256));
+            ctx.fb
+                .insert_inst_no_result(Mstore::new(ctx.is, *addr, *val, Type::I256));
             Ok(None)
         }
         IntrinsicOp::Mstore8 => {
@@ -1777,7 +1823,8 @@ fn lower_intrinsic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                     "mstore8 requires 2 arguments".to_string(),
                 ));
             };
-            ctx.fb.insert_inst_no_result(EvmMstore8::new(ctx.is, *addr, *val));
+            ctx.fb
+                .insert_inst_no_result(EvmMstore8::new(ctx.is, *addr, *val));
             Ok(None)
         }
         IntrinsicOp::Sload => {
@@ -1786,7 +1833,9 @@ fn lower_intrinsic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                     "sload requires 1 argument".to_string(),
                 ));
             };
-            Ok(Some(ctx.fb.insert_inst(EvmSload::new(ctx.is, key), Type::I256)))
+            Ok(Some(
+                ctx.fb.insert_inst(EvmSload::new(ctx.is, key), Type::I256),
+            ))
         }
         IntrinsicOp::Sstore => {
             let [key, val] = lowered_args.as_slice() else {
@@ -1794,7 +1843,8 @@ fn lower_intrinsic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                     "sstore requires 2 arguments".to_string(),
                 ));
             };
-            ctx.fb.insert_inst_no_result(EvmSstore::new(ctx.is, *key, *val));
+            ctx.fb
+                .insert_inst_no_result(EvmSstore::new(ctx.is, *key, *val));
             Ok(None)
         }
         IntrinsicOp::Calldataload => {
@@ -1803,40 +1853,49 @@ fn lower_intrinsic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                     "calldataload requires 1 argument".to_string(),
                 ));
             };
-            Ok(Some(
-                ctx.fb.insert_inst(EvmCalldataLoad::new(ctx.is, offset), Type::I256),
-            ))
+            Ok(Some(ctx.fb.insert_inst(
+                EvmCalldataLoad::new(ctx.is, offset),
+                Type::I256,
+            )))
         }
-        IntrinsicOp::Calldatasize => Ok(Some(ctx.fb.insert_inst(EvmCalldataSize::new(ctx.is), Type::I256))),
+        IntrinsicOp::Calldatasize => Ok(Some(
+            ctx.fb.insert_inst(EvmCalldataSize::new(ctx.is), Type::I256),
+        )),
         IntrinsicOp::Calldatacopy => {
             let [dst, offset, len] = lowered_args.as_slice() else {
                 return Err(LowerError::Internal(
                     "calldatacopy requires 3 arguments".to_string(),
                 ));
             };
-            ctx.fb.insert_inst_no_result(EvmCalldataCopy::new(ctx.is, *dst, *offset, *len));
+            ctx.fb
+                .insert_inst_no_result(EvmCalldataCopy::new(ctx.is, *dst, *offset, *len));
             Ok(None)
         }
-        IntrinsicOp::Returndatasize => {
-            Ok(Some(ctx.fb.insert_inst(EvmReturnDataSize::new(ctx.is), Type::I256)))
-        }
+        IntrinsicOp::Returndatasize => Ok(Some(
+            ctx.fb
+                .insert_inst(EvmReturnDataSize::new(ctx.is), Type::I256),
+        )),
         IntrinsicOp::Returndatacopy => {
             let [dst, offset, len] = lowered_args.as_slice() else {
                 return Err(LowerError::Internal(
                     "returndatacopy requires 3 arguments".to_string(),
                 ));
             };
-            ctx.fb.insert_inst_no_result(EvmReturnDataCopy::new(ctx.is, *dst, *offset, *len));
+            ctx.fb
+                .insert_inst_no_result(EvmReturnDataCopy::new(ctx.is, *dst, *offset, *len));
             Ok(None)
         }
-        IntrinsicOp::Codesize => Ok(Some(ctx.fb.insert_inst(EvmCodeSize::new(ctx.is), Type::I256))),
+        IntrinsicOp::Codesize => Ok(Some(
+            ctx.fb.insert_inst(EvmCodeSize::new(ctx.is), Type::I256),
+        )),
         IntrinsicOp::Codecopy => {
             let [dst, offset, len] = lowered_args.as_slice() else {
                 return Err(LowerError::Internal(
                     "codecopy requires 3 arguments".to_string(),
                 ));
             };
-            ctx.fb.insert_inst_no_result(EvmCodeCopy::new(ctx.is, *dst, *offset, *len));
+            ctx.fb
+                .insert_inst_no_result(EvmCodeCopy::new(ctx.is, *dst, *offset, *len));
             Ok(None)
         }
         IntrinsicOp::CodeRegionOffset | IntrinsicOp::CodeRegionLen => {
@@ -2119,8 +2178,9 @@ fn lower_place_address<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                         // Flush accumulated offset first
                         if total_offset != 0 {
                             let offset_val = ctx.fb.make_imm_value(I256::from(total_offset as u64));
-                            base_val =
-                                ctx.fb.insert_inst(Add::new(ctx.is, base_val, offset_val), Type::I256);
+                            base_val = ctx
+                                .fb
+                                .insert_inst(Add::new(ctx.is, base_val, offset_val), Type::I256);
                             total_offset = 0;
                         }
                         // Compute dynamic index offset: idx * stride
@@ -2129,9 +2189,12 @@ fn lower_place_address<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                             idx_val
                         } else {
                             let stride_val = ctx.fb.make_imm_value(I256::from(stride as u64));
-                            ctx.fb.insert_inst(Mul::new(ctx.is, idx_val, stride_val), Type::I256)
+                            ctx.fb
+                                .insert_inst(Mul::new(ctx.is, idx_val, stride_val), Type::I256)
                         };
-                        base_val = ctx.fb.insert_inst(Add::new(ctx.is, base_val, offset_val), Type::I256);
+                        base_val = ctx
+                            .fb
+                            .insert_inst(Add::new(ctx.is, base_val, offset_val), Type::I256);
                     }
                 }
 
@@ -2152,7 +2215,9 @@ fn lower_place_address<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     // Add any remaining accumulated offset
     if total_offset != 0 {
         let offset_val = ctx.fb.make_imm_value(I256::from(total_offset as u64));
-        base_val = ctx.fb.insert_inst(Add::new(ctx.is, base_val, offset_val), Type::I256);
+        base_val = ctx
+            .fb
+            .insert_inst(Add::new(ctx.is, base_val, offset_val), Type::I256);
     }
 
     Ok(base_val)
@@ -2182,12 +2247,14 @@ fn lower_terminator<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 } else {
                     None
                 };
-                ctx.fb.insert_inst_no_result(Return::new(ctx.is, ret_sonatina));
+                ctx.fb
+                    .insert_inst_no_result(Return::new(ctx.is, ret_sonatina));
             }
         }
         Terminator::Goto { target } => {
             let target_block = ctx.block_map[target];
-            ctx.fb.insert_inst_no_result(Jump::new(ctx.is, target_block));
+            ctx.fb
+                .insert_inst_no_result(Jump::new(ctx.is, target_block));
         }
         Terminator::Branch {
             cond,
@@ -2198,7 +2265,8 @@ fn lower_terminator<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             let then_block = ctx.block_map[then_bb];
             let else_block = ctx.block_map[else_bb];
             // Br: cond, nz_dest (then), z_dest (else)
-            ctx.fb.insert_inst_no_result(Br::new(ctx.is, cond_val, then_block, else_block));
+            ctx.fb
+                .insert_inst_no_result(Br::new(ctx.is, cond_val, then_block, else_block));
         }
         Terminator::Switch {
             discr,
@@ -2211,13 +2279,16 @@ fn lower_terminator<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             // NOTE: Sonatina's current EVM backend `BrTable` lowering is broken (it does not
             // compare against the scrutinee). Lower to a chain of `Eq` + `Br` instead.
             if targets.is_empty() {
-                ctx.fb.insert_inst_no_result(Jump::new(ctx.is, default_block));
+                ctx.fb
+                    .insert_inst_no_result(Jump::new(ctx.is, default_block));
                 return Ok(());
             }
 
             let mut cases = Vec::with_capacity(targets.len());
             for target in targets {
-                let value = ctx.fb.make_imm_value(biguint_to_i256(&target.value.as_biguint()));
+                let value = ctx
+                    .fb
+                    .make_imm_value(biguint_to_i256(&target.value.as_biguint()));
                 let dest = ctx.block_map[&target.block];
                 cases.push((value, dest));
             }
@@ -2238,8 +2309,11 @@ fn lower_terminator<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 } else {
                     default_block
                 };
-                let cond = ctx.fb.insert_inst(Eq::new(ctx.is, discr_val, case_value), Type::I256);
-                ctx.fb.insert_inst_no_result(Br::new(ctx.is, cond, case_dest, else_dest));
+                let cond = ctx
+                    .fb
+                    .insert_inst(Eq::new(ctx.is, discr_val, case_value), Type::I256);
+                ctx.fb
+                    .insert_inst_no_result(Br::new(ctx.is, cond, case_dest, else_dest));
             }
         }
         Terminator::TerminatingCall(call) => match call {
@@ -2266,7 +2340,8 @@ fn lower_terminator<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                                 ));
                             };
                             let addr = lower_value(ctx, *addr)?;
-                            ctx.fb.insert_inst_no_result(EvmSelfDestruct::new(ctx.is, addr));
+                            ctx.fb
+                                .insert_inst_no_result(EvmSelfDestruct::new(ctx.is, addr));
                             return Ok(());
                         }
                         _ => {}
@@ -2300,7 +2375,8 @@ fn lower_terminator<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                     }
                 } else {
                     for &arg in &call.args {
-                        let arg_ty = ctx.body
+                        let arg_ty = ctx
+                            .body
                             .values
                             .get(arg.index())
                             .ok_or_else(|| {
@@ -2313,7 +2389,8 @@ fn lower_terminator<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                         args.push(lower_value(ctx, arg)?);
                     }
                     for &arg in &call.effect_args {
-                        let arg_ty = ctx.body
+                        let arg_ty = ctx
+                            .body
                             .values
                             .get(arg.index())
                             .ok_or_else(|| {
@@ -2327,7 +2404,8 @@ fn lower_terminator<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                     }
                 }
 
-                let expected_argc = ctx.fb
+                let expected_argc = ctx
+                    .fb
                     .module_builder
                     .ctx
                     .func_sig(*func_ref, |sig| sig.args().len());
@@ -2341,7 +2419,8 @@ fn lower_terminator<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                     args.push(ctx.fb.make_imm_value(I256::zero()));
                 }
 
-                ctx.fb.insert_inst_no_result(Call::new(ctx.is, *func_ref, args.into()));
+                ctx.fb
+                    .insert_inst_no_result(Call::new(ctx.is, *func_ref, args.into()));
                 ctx.fb.insert_inst_no_result(EvmInvalid::new(ctx.is));
             }
             mir::TerminatingCall::Intrinsic { op, args } => {
@@ -2356,7 +2435,8 @@ fn lower_terminator<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                                 "return_data requires 2 arguments".to_string(),
                             ));
                         };
-                        ctx.fb.insert_inst_no_result(EvmReturn::new(ctx.is, *addr, *len));
+                        ctx.fb
+                            .insert_inst_no_result(EvmReturn::new(ctx.is, *addr, *len));
                     }
                     IntrinsicOp::Revert => {
                         let [addr, len] = lowered_args.as_slice() else {
@@ -2364,7 +2444,8 @@ fn lower_terminator<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                                 "revert requires 2 arguments".to_string(),
                             ));
                         };
-                        ctx.fb.insert_inst_no_result(EvmRevert::new(ctx.is, *addr, *len));
+                        ctx.fb
+                            .insert_inst_no_result(EvmRevert::new(ctx.is, *addr, *len));
                     }
                     _ => {
                         return Err(LowerError::Unsupported(format!(
@@ -2395,13 +2476,15 @@ fn lower_alloc<C: sonatina_ir::func_cursor::FuncCursor>(
         ));
     }
 
-    let alloc_ty = ctx.body
+    let alloc_ty = ctx
+        .body
         .locals
         .get(dest.index())
         .ok_or_else(|| LowerError::Internal(format!("unknown local: {dest:?}")))?
         .ty;
 
-    let Some(size_bytes) = layout::ty_size_bytes_or_word_aligned_in(ctx.db, ctx.target_layout, alloc_ty)
+    let Some(size_bytes) =
+        layout::ty_size_bytes_or_word_aligned_in(ctx.db, ctx.target_layout, alloc_ty)
     else {
         return Err(LowerError::Unsupported(format!(
             "cannot determine allocation size for `{}`",
@@ -2416,7 +2499,9 @@ fn lower_alloc<C: sonatina_ir::func_cursor::FuncCursor>(
     // Use Sonatina's EvmMalloc to allocate memory. This delegates memory management
     // to Sonatina's codegen, avoiding conflicts with its stack frame handling.
     let size_val = ctx.fb.make_imm_value(I256::from(size_bytes as u64));
-    let ptr = ctx.fb.insert_inst(EvmMalloc::new(ctx.is, size_val), Type::I256);
+    let ptr = ctx
+        .fb
+        .insert_inst(EvmMalloc::new(ctx.is, size_val), Type::I256);
 
     Ok(ptr)
 }
@@ -2426,7 +2511,8 @@ fn lower_store_inst<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     place: &Place<'db>,
     value: mir::ValueId,
 ) -> Result<(), LowerError> {
-    let value_data = ctx.body
+    let value_data = ctx
+        .body
         .values
         .get(value.index())
         .ok_or_else(|| LowerError::Internal(format!("unknown value: {value:?}")))?;
@@ -2454,13 +2540,16 @@ fn store_word_to_place<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     let addr = lower_place_address(ctx, place)?;
     match ctx.body.place_address_space(place) {
         AddressSpaceKind::Memory => {
-            ctx.fb.insert_inst_no_result(Mstore::new(ctx.is, addr, val, Type::I256));
+            ctx.fb
+                .insert_inst_no_result(Mstore::new(ctx.is, addr, val, Type::I256));
         }
         AddressSpaceKind::Storage => {
-            ctx.fb.insert_inst_no_result(EvmSstore::new(ctx.is, addr, val));
+            ctx.fb
+                .insert_inst_no_result(EvmSstore::new(ctx.is, addr, val));
         }
         AddressSpaceKind::TransientStorage => {
-            ctx.fb.insert_inst_no_result(EvmTstore::new(ctx.is, addr, val));
+            ctx.fb
+                .insert_inst_no_result(EvmTstore::new(ctx.is, addr, val));
         }
         AddressSpaceKind::Calldata => {
             return Err(LowerError::Unsupported("store to calldata".to_string()));
@@ -2480,10 +2569,16 @@ fn load_place_typed<'db, C: sonatina_ir::func_cursor::FuncCursor>(
 
     let addr = lower_place_address(ctx, place)?;
     let raw = match ctx.body.place_address_space(place) {
-        AddressSpaceKind::Memory => ctx.fb.insert_inst(Mload::new(ctx.is, addr, Type::I256), Type::I256),
+        AddressSpaceKind::Memory => ctx
+            .fb
+            .insert_inst(Mload::new(ctx.is, addr, Type::I256), Type::I256),
         AddressSpaceKind::Storage => ctx.fb.insert_inst(EvmSload::new(ctx.is, addr), Type::I256),
-        AddressSpaceKind::TransientStorage => ctx.fb.insert_inst(EvmTload::new(ctx.is, addr), Type::I256),
-        AddressSpaceKind::Calldata => ctx.fb.insert_inst(EvmCalldataLoad::new(ctx.is, addr), Type::I256),
+        AddressSpaceKind::TransientStorage => {
+            ctx.fb.insert_inst(EvmTload::new(ctx.is, addr), Type::I256)
+        }
+        AddressSpaceKind::Calldata => ctx
+            .fb
+            .insert_inst(EvmCalldataLoad::new(ctx.is, addr), Type::I256),
     };
     Ok(apply_from_word(ctx.fb, ctx.db, raw, loaded_ty, ctx.is))
 }
@@ -2558,7 +2653,8 @@ fn deep_copy_enum_from_places<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     let discr = load_place_typed(ctx, src_place, discr_ty)?;
     store_word_to_place(ctx, dst_place, discr)?;
 
-    let origin_block = ctx.fb
+    let origin_block = ctx
+        .fb
         .current_block()
         .ok_or_else(|| LowerError::Internal("missing current block".to_string()))?;
     let cont_block = ctx.fb.append_block();
@@ -2591,8 +2687,11 @@ fn deep_copy_enum_from_places<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             } else {
                 cont_block
             };
-            let cond = ctx.fb.insert_inst(Eq::new(ctx.is, discr, case_value), Type::I256);
-            ctx.fb.insert_inst_no_result(Br::new(ctx.is, cond, case_dest, else_dest));
+            let cond = ctx
+                .fb
+                .insert_inst(Eq::new(ctx.is, discr, case_value), Type::I256);
+            ctx.fb
+                .insert_inst_no_result(Br::new(ctx.is, cond, case_dest, else_dest));
         }
     }
 
