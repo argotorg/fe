@@ -334,7 +334,16 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         use mir::ir::{ContractFunctionKind, MirFunctionOrigin, SyntheticId};
 
         let name = &func.symbol_name;
-        let linkage = sonatina_ir::Linkage::Public; // TODO: proper linkage
+        let linkage = match func.origin {
+            MirFunctionOrigin::Hir(hir_func) => {
+                if hir_func.vis(self.db).is_pub() {
+                    sonatina_ir::Linkage::Public
+                } else {
+                    sonatina_ir::Linkage::Private
+                }
+            }
+            MirFunctionOrigin::Synthetic(_) => sonatina_ir::Linkage::Private,
+        };
 
         // Contract init/runtime entrypoints are executed directly by the EVM with an empty stack.
         // Even though MIR models them as taking effect args (e.g. `StorPtr<Evm>`), we cannot
@@ -857,10 +866,9 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             block_map.insert(block_id, sonatina_block);
         }
 
-        // Get the entry block and its Sonatina equivalent
-        // TODO: Verify that Sonatina infers entry from the first appended block or
-        // explicitly set it. Currently we assume MIR block 0 is entry and that
-        // Sonatina treats the first appended block as entry.
+        // Get the entry block and its Sonatina equivalent.
+        // Sonatina's Layout::append_block sets `entry_block` to the first block appended,
+        // so the iteration order above (MIR block 0 first) guarantees the entry is correct.
         let entry_block = func.body.entry;
         let sonatina_entry = block_map[&entry_block];
 
@@ -1586,9 +1594,22 @@ fn lower_value_origin<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             // Compute the full address including projections
             lower_place_address(ctx, place)
         }
-        ValueOrigin::FieldPtr(_) => {
-            // TODO: field pointer arithmetic
-            Err(LowerError::Unsupported("field pointer".to_string()))
+        ValueOrigin::FieldPtr(field_ptr) => {
+            let base = lower_value(ctx, field_ptr.base)?;
+            if field_ptr.offset_bytes == 0 {
+                Ok(base)
+            } else {
+                let offset = match field_ptr.addr_space {
+                    AddressSpaceKind::Memory | AddressSpaceKind::Calldata => field_ptr.offset_bytes,
+                    AddressSpaceKind::Storage | AddressSpaceKind::TransientStorage => {
+                        field_ptr.offset_bytes / 32
+                    }
+                };
+                let offset_val = ctx.fb.make_imm_value(I256::from(offset as u64));
+                Ok(ctx
+                    .fb
+                    .insert_inst(Add::new(ctx.is, base, offset_val), Type::I256))
+            }
         }
         ValueOrigin::FuncItem(_) => {
             // Function items are zero-sized and should never be used as runtime values.
