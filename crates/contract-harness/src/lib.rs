@@ -366,19 +366,19 @@ fn trace_tx(evm: &MainnetEvm<MainnetContext<InMemoryDB>>, tx: TxEnv) {
         {
             Ok(()) => {
                 if trace_evm_write_stderr(true) {
-                    eprintln!("{formatted}");
+                    tracing::debug!("{formatted}");
                 }
             }
             Err(err) => {
-                eprintln!(
+                tracing::error!(
                     "FE_TRACE_EVM_OUT: failed to write `{}`: {err}",
                     path.display()
                 );
-                eprintln!("{formatted}");
+                tracing::debug!("{formatted}");
             }
         }
     } else {
-        eprintln!("{formatted}");
+        tracing::debug!("{formatted}");
     }
 }
 

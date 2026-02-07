@@ -212,7 +212,7 @@ fn runtime_argc(db: &DriverDataBase, func: &MirFunction<'_>) -> usize {
             let Some(local_ty) = local_ty else {
                 return true;
             };
-            !layout::ty_size_bytes_in(db, &layout::EVM_LAYOUT, local_ty).is_some_and(|s| s == 0)
+            layout::ty_size_bytes_in(db, &layout::EVM_LAYOUT, local_ty).is_none_or(|s| s != 0)
         })
         .count()
 }
@@ -352,6 +352,7 @@ fn code_region_section_name(symbol: &str) -> SectionName {
     SectionName::from(format!("code_region_{}", sanitize_symbol(symbol)))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compile_test_objects(
     db: &DriverDataBase,
     mir_module: &mir::MirModule<'_>,
@@ -755,15 +756,15 @@ fn compile_runtime_section(module: &Module, object_name: &str) -> Result<Vec<u8>
             let offset = match parsed {
                 Ok(v) => v,
                 Err(_) => {
-                    eprintln!("FE_SONATINA_DUMP_BYTE_AT: invalid offset `{raw}`");
+                    tracing::warn!("FE_SONATINA_DUMP_BYTE_AT: invalid offset `{raw}`");
                     continue;
                 }
             };
             match runtime_section.bytes.get(offset) {
-                Some(byte) => eprintln!(
+                Some(byte) => tracing::debug!(
                     "SONATINA BYTE object={object_name} section=runtime off={offset} byte=0x{byte:02x}"
                 ),
-                None => eprintln!(
+                None => tracing::warn!(
                     "SONATINA BYTE object={object_name} section=runtime off={offset} (out of bounds, len={})",
                     runtime_section.bytes.len()
                 ),
@@ -792,18 +793,18 @@ fn emit_debug_output(out_path_env: &str, stderr_env: &str, contents: &str) {
         {
             Ok(()) => {}
             Err(err) => {
-                eprintln!(
+                tracing::error!(
                     "{out_path_env}: failed to write `{}`: {err}",
                     path.display()
                 );
-                eprintln!("{contents}");
+                tracing::debug!("{contents}");
                 return;
             }
         }
     }
 
     if write_stderr {
-        eprint!("{contents}");
+        tracing::debug!("{contents}");
     }
 }
 

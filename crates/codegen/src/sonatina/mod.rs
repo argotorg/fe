@@ -917,38 +917,35 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             }
         }
 
-        let mut ctx = LowerCtx {
-            fb: &mut fb,
-            db: self.db,
-            target_layout: &self.target_layout,
-            body: &func.body,
-            local_vars: &local_vars,
-            name_map: &self.name_map,
-            returns_value_map: &self.returns_value_map,
-            runtime_param_masks: &self.runtime_param_masks,
-            block_map: &block_map,
-            is,
-            is_entry,
-        };
+        {
+            let mut ctx = LowerCtx {
+                fb: &mut fb,
+                db: self.db,
+                target_layout: &self.target_layout,
+                body: &func.body,
+                local_vars: &local_vars,
+                name_map: &self.name_map,
+                returns_value_map: &self.returns_value_map,
+                runtime_param_masks: &self.runtime_param_masks,
+                block_map: &block_map,
+                is,
+                is_entry,
+            };
 
-        // Lower each block
-        for (idx, block) in ctx.body.blocks.iter().enumerate() {
-            let block_id = mir::BasicBlockId(idx as u32);
-            let sonatina_block = ctx.block_map[&block_id];
-            ctx.fb.switch_to_block(sonatina_block);
+            for (idx, block) in ctx.body.blocks.iter().enumerate() {
+                let block_id = mir::BasicBlockId(idx as u32);
+                let sonatina_block = ctx.block_map[&block_id];
+                ctx.fb.switch_to_block(sonatina_block);
 
-            // Lower instructions in this block
-            for inst in block.insts.iter() {
-                lower_instruction(&mut ctx, inst)?;
+                for inst in block.insts.iter() {
+                    lower_instruction(&mut ctx, inst)?;
+                }
+
+                lower_terminator(&mut ctx, &block.terminator)?;
             }
 
-            // Lower terminator
-            lower_terminator(&mut ctx, &block.terminator)?;
+            ctx.fb.seal_all();
         }
-
-        // Seal all blocks and finalize
-        ctx.fb.seal_all();
-        drop(ctx);
         fb.finish();
 
         Ok(())
