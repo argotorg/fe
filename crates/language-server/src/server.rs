@@ -17,8 +17,7 @@ use async_lsp::lsp_types::request::{
     DocumentSymbolRequest, FoldingRangeRequest, Formatting, GotoDeclaration, GotoDefinition,
     GotoImplementation, GotoTypeDefinition, HoverRequest, InlayHintRequest, References, Rename,
     SelectionRangeRequest, SemanticTokensFullRequest, Shutdown, SignatureHelpRequest,
-    TypeHierarchyPrepare, TypeHierarchySubtypes, TypeHierarchySupertypes,
-    WorkspaceSymbolRequest,
+    TypeHierarchyPrepare, TypeHierarchySubtypes, TypeHierarchySupertypes, WorkspaceSymbolRequest,
 };
 use async_std::stream::StreamExt;
 use futures_batch::ChunksTimeoutStreamExt;
