@@ -21,7 +21,7 @@ pub async fn handle_rename(
     params: async_lsp::lsp_types::RenameParams,
 ) -> Result<Option<WorkspaceEdit>, ResponseError> {
     let lsp_uri = params.text_document_position.text_document.uri.clone();
-    if backend.is_builtin_tmp_uri(&lsp_uri) {
+    if backend.is_virtual_uri(&lsp_uri) {
         return Err(ResponseError::new(
             async_lsp::ErrorCode::INVALID_REQUEST,
             "Renaming symbols in built-in library files is not supported.".to_string(),
