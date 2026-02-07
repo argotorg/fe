@@ -108,6 +108,7 @@ impl<'a> IngotHandler<'a> {
         }
         self.had_diagnostics = true;
         tracing::warn!(target: "resolver", "{diagnostic_string}");
+        eprintln!("❌ {diagnostic_string}");
     }
 
     fn report_error(&mut self, diagnostic: IngotInitDiagnostics) {
@@ -117,6 +118,7 @@ impl<'a> IngotHandler<'a> {
         }
         self.had_diagnostics = true;
         tracing::error!(target: "resolver", "{diagnostic_string}");
+        eprintln!("❌ {diagnostic_string}");
     }
 
     fn record_files(&mut self, files: &[resolver::files::File]) {
