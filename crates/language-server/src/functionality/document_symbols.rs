@@ -48,40 +48,32 @@ fn collect_symbols(
 }
 
 fn item_to_symbol(db: &dyn hir::SpannedHirDb, item: ItemKind) -> Option<DocumentSymbol> {
-    let (kind, label) = match item {
+    let (kind, name) = match item {
         ItemKind::Func(func) => {
-            let name = func.name(db).to_opt()?.data(db).to_string();
-            (SymbolKind::FUNCTION, format!("fn {}", name))
+            (SymbolKind::FUNCTION, func.name(db).to_opt()?.data(db).to_string())
         }
         ItemKind::Struct(s) => {
-            let name = s.name(db).to_opt()?.data(db).to_string();
-            (SymbolKind::STRUCT, format!("struct {}", name))
+            (SymbolKind::STRUCT, s.name(db).to_opt()?.data(db).to_string())
         }
         ItemKind::Enum(e) => {
-            let name = e.name(db).to_opt()?.data(db).to_string();
-            (SymbolKind::ENUM, format!("enum {}", name))
+            (SymbolKind::ENUM, e.name(db).to_opt()?.data(db).to_string())
         }
         ItemKind::Trait(t) => {
-            let name = t.name(db).to_opt()?.data(db).to_string();
-            (SymbolKind::INTERFACE, format!("trait {}", name))
+            (SymbolKind::INTERFACE, t.name(db).to_opt()?.data(db).to_string())
         }
         ItemKind::TypeAlias(ta) => {
-            let name = ta.name(db).to_opt()?.data(db).to_string();
-            (SymbolKind::CLASS, format!("type {}", name))
+            (SymbolKind::CLASS, ta.name(db).to_opt()?.data(db).to_string())
         }
         ItemKind::Const(c) => {
-            let name = c.name(db).to_opt()?.data(db).to_string();
-            (SymbolKind::CONSTANT, format!("const {}", name))
+            (SymbolKind::CONSTANT, c.name(db).to_opt()?.data(db).to_string())
         }
         ItemKind::Mod(m) => {
-            let name = m.name(db).to_opt()?.data(db).to_string();
-            (SymbolKind::MODULE, format!("mod {}", name))
+            (SymbolKind::MODULE, m.name(db).to_opt()?.data(db).to_string())
         }
         ItemKind::Impl(_) => (SymbolKind::CLASS, "impl".to_string()),
         ItemKind::ImplTrait(_) => (SymbolKind::CLASS, "impl trait".to_string()),
         ItemKind::Contract(c) => {
-            let name = c.name(db).to_opt()?.data(db).to_string();
-            (SymbolKind::CLASS, format!("contract {}", name))
+            (SymbolKind::CLASS, c.name(db).to_opt()?.data(db).to_string())
         }
         _ => return None,
     };
@@ -91,7 +83,7 @@ fn item_to_symbol(db: &dyn hir::SpannedHirDb, item: ItemKind) -> Option<Document
 
     #[allow(deprecated)]
     Some(DocumentSymbol {
-        name: label,
+        name,
         detail: None,
         kind,
         tags: None,
