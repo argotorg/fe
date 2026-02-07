@@ -289,16 +289,16 @@ impl<'db> CallSiteView<'db> {
         use crate::analysis::ty::ty_check::check_func_body;
         let func = self.body.containing_func(db)?;
         let (_, typed_body) = check_func_body(db, func);
-        typed_body.callable_expr(self.expr_id).map(|c| c.callable_def)
+        typed_body
+            .callable_expr(self.expr_id)
+            .map(|c| c.callable_def)
     }
 
     /// Span of the callee name at the call site (function path or method name).
     pub fn callee_span(&self) -> crate::span::DynLazySpan<'db> {
         let expr_span = self.expr_id.span(self.body);
         match &self.kind {
-            CallSiteKind::FnCall => {
-                expr_span.into_call_expr().callee().into()
-            }
+            CallSiteKind::FnCall => expr_span.into_call_expr().callee().into(),
             CallSiteKind::MethodCall { .. } => {
                 expr_span.into_method_call_expr().method_name().into()
             }

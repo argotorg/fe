@@ -5,11 +5,7 @@ use common::InputDb;
 use common::diagnostics::Span;
 use hir::{
     HirDb, SpannedHirDb,
-    hir_def::{
-        Attr, ItemKind,
-        scope_graph::ScopeId,
-        HirIngot,
-    },
+    hir_def::{Attr, HirIngot, ItemKind, scope_graph::ScopeId},
     span::LazySpan,
 };
 
@@ -79,10 +75,7 @@ struct LsifEmitter<W: Write> {
 
 impl<W: Write> LsifEmitter<W> {
     fn new(writer: W) -> Self {
-        Self {
-            writer,
-            next_id: 1,
-        }
+        Self { writer, next_id: 1 }
     }
 
     fn next_id(&mut self) -> u64 {
@@ -255,8 +248,7 @@ fn get_item_definition(db: &dyn SpannedHirDb, item: ItemKind) -> Option<String> 
     if let Some(name_span) = name_span {
         let file_text = span.file.text(db).as_str();
         let mut name_line_start: usize = name_span.range.start().into();
-        while name_line_start > 0 && file_text.as_bytes().get(name_line_start - 1) != Some(&b'\n')
-        {
+        while name_line_start > 0 && file_text.as_bytes().get(name_line_start - 1) != Some(&b'\n') {
             name_line_start -= 1;
         }
         start = name_line_start;
@@ -321,9 +313,9 @@ pub fn generate_lsif(
             },
             None => continue,
         };
-        if !documents.contains_key(&doc_url) {
-            let doc_id = emitter.emit_document(&doc_url)?;
-            documents.insert(doc_url, (doc_id, Vec::new()));
+        if let std::collections::hash_map::Entry::Vacant(entry) = documents.entry(doc_url) {
+            let doc_id = emitter.emit_document(entry.key())?;
+            entry.insert((doc_id, Vec::new()));
         }
     }
 
@@ -403,11 +395,11 @@ pub fn generate_lsif(
                 let mut ref_range_ids = Vec::new();
                 for reference in refs {
                     let ref_span = reference.span();
-                    if let Some(resolved) = ref_span.resolve(db) {
-                        if let Some(r) = span_to_range(&resolved, db) {
-                            let ref_range_id = emitter.emit_range(r)?;
-                            ref_range_ids.push(ref_range_id);
-                        }
+                    if let Some(resolved) = ref_span.resolve(db)
+                        && let Some(r) = span_to_range(&resolved, db)
+                    {
+                        let ref_range_id = emitter.emit_range(r)?;
+                        ref_range_ids.push(ref_range_id);
                     }
                 }
 
@@ -439,7 +431,7 @@ pub fn generate_lsif(
 
     // Emit contains edges for all documents
     let document_ids: Vec<u64> = documents.values().map(|(id, _)| *id).collect();
-    for (_, (doc_id, range_ids)) in &documents {
+    for (doc_id, range_ids) in documents.values() {
         if !range_ids.is_empty() {
             emitter.emit_edge_many("contains", *doc_id, range_ids, None)?;
         }
@@ -505,10 +497,10 @@ mod tests {
                 if !seen_ids.insert(id) {
                     errors.push(format!("duplicate id {id}"));
                 }
-                if let (Some(t), Some(l)) = (el_type, label) {
-                    if t == "vertex" {
-                        vertex_labels.insert(id, l.to_string());
-                    }
+                if let (Some(t), Some(l)) = (el_type, label)
+                    && t == "vertex"
+                {
+                    vertex_labels.insert(id, l.to_string());
                 }
             }
         }
@@ -535,17 +527,17 @@ mod tests {
                 errors.push(format!("edge {id} missing both 'inV' and 'inVs'"));
             }
 
-            if let Some(in_v) = el.get("inV").and_then(|v| v.as_u64()) {
-                if !seen_ids.contains(&in_v) {
-                    errors.push(format!("edge references non-existent inV {in_v}"));
-                }
+            if let Some(in_v) = el.get("inV").and_then(|v| v.as_u64())
+                && !seen_ids.contains(&in_v)
+            {
+                errors.push(format!("edge references non-existent inV {in_v}"));
             }
             if let Some(in_vs) = el.get("inVs").and_then(|v| v.as_array()) {
                 for v in in_vs {
-                    if let Some(id) = v.as_u64() {
-                        if !seen_ids.contains(&id) {
-                            errors.push(format!("edge references non-existent inVs member {id}"));
-                        }
+                    if let Some(id) = v.as_u64()
+                        && !seen_ids.contains(&id)
+                    {
+                        errors.push(format!("edge references non-existent inVs member {id}"));
                     }
                 }
             }
@@ -569,7 +561,8 @@ mod tests {
     fn generate_test_lsif(code: &str) -> String {
         let mut db = DriverDataBase::default();
         let url = url::Url::parse("file:///test.fe").unwrap();
-        db.workspace().touch(&mut db, url.clone(), Some(code.to_string()));
+        db.workspace()
+            .touch(&mut db, url.clone(), Some(code.to_string()));
 
         let ingot_url = url::Url::parse("file:///").unwrap();
         let mut output = Vec::new();
@@ -762,16 +755,16 @@ fn make_point() -> Point {
             let start = range.get("start").expect("range must have start");
             let end = range.get("end").expect("range must have end");
             assert!(start.get("line").is_some(), "start must have line");
-            assert!(start.get("character").is_some(), "start must have character");
+            assert!(
+                start.get("character").is_some(),
+                "start must have character"
+            );
             assert!(end.get("line").is_some(), "end must have line");
             assert!(end.get("character").is_some(), "end must have character");
 
             let start_line = start["line"].as_u64().unwrap();
             let end_line = end["line"].as_u64().unwrap();
-            assert!(
-                end_line >= start_line,
-                "end line should be >= start line"
-            );
+            assert!(end_line >= start_line, "end line should be >= start line");
         }
     }
 
@@ -785,9 +778,6 @@ fn make_point() -> Point {
         assert_eq!(meta["version"].as_str(), Some("0.4.0"));
         assert_eq!(meta["positionEncoding"].as_str(), Some("utf-16"));
         assert!(meta.get("toolInfo").is_some());
-        assert_eq!(
-            meta["toolInfo"]["name"].as_str(),
-            Some("fe-lsif")
-        );
+        assert_eq!(meta["toolInfo"]["name"].as_str(), Some("fe-lsif"));
     }
 }

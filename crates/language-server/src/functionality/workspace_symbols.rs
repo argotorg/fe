@@ -53,30 +53,32 @@ fn item_to_workspace_symbol(
     query: &str,
 ) -> Option<SymbolInformation> {
     let (kind, name) = match item {
-        ItemKind::Func(func) => {
-            (SymbolKind::FUNCTION, func.name(db).to_opt()?.data(db).to_string())
-        }
-        ItemKind::Struct(s) => {
-            (SymbolKind::STRUCT, s.name(db).to_opt()?.data(db).to_string())
-        }
-        ItemKind::Enum(e) => {
-            (SymbolKind::ENUM, e.name(db).to_opt()?.data(db).to_string())
-        }
-        ItemKind::Trait(t) => {
-            (SymbolKind::INTERFACE, t.name(db).to_opt()?.data(db).to_string())
-        }
-        ItemKind::TypeAlias(ta) => {
-            (SymbolKind::CLASS, ta.name(db).to_opt()?.data(db).to_string())
-        }
-        ItemKind::Const(c) => {
-            (SymbolKind::CONSTANT, c.name(db).to_opt()?.data(db).to_string())
-        }
-        ItemKind::Mod(m) => {
-            (SymbolKind::MODULE, m.name(db).to_opt()?.data(db).to_string())
-        }
-        ItemKind::Contract(c) => {
-            (SymbolKind::CLASS, c.name(db).to_opt()?.data(db).to_string())
-        }
+        ItemKind::Func(func) => (
+            SymbolKind::FUNCTION,
+            func.name(db).to_opt()?.data(db).to_string(),
+        ),
+        ItemKind::Struct(s) => (
+            SymbolKind::STRUCT,
+            s.name(db).to_opt()?.data(db).to_string(),
+        ),
+        ItemKind::Enum(e) => (SymbolKind::ENUM, e.name(db).to_opt()?.data(db).to_string()),
+        ItemKind::Trait(t) => (
+            SymbolKind::INTERFACE,
+            t.name(db).to_opt()?.data(db).to_string(),
+        ),
+        ItemKind::TypeAlias(ta) => (
+            SymbolKind::CLASS,
+            ta.name(db).to_opt()?.data(db).to_string(),
+        ),
+        ItemKind::Const(c) => (
+            SymbolKind::CONSTANT,
+            c.name(db).to_opt()?.data(db).to_string(),
+        ),
+        ItemKind::Mod(m) => (
+            SymbolKind::MODULE,
+            m.name(db).to_opt()?.data(db).to_string(),
+        ),
+        ItemKind::Contract(c) => (SymbolKind::CLASS, c.name(db).to_opt()?.data(db).to_string()),
         _ => return None,
     };
 

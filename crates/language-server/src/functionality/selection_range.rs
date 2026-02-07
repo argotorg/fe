@@ -1,11 +1,7 @@
 use async_lsp::ResponseError;
 use async_lsp::lsp_types::{SelectionRange, SelectionRangeParams};
 use common::InputDb;
-use hir::{
-    hir_def::ItemKind,
-    lower::map_file_to_mod,
-    span::LazySpan,
-};
+use hir::{hir_def::ItemKind, lower::map_file_to_mod, span::LazySpan};
 
 use crate::{
     backend::Backend,
@@ -48,38 +44,41 @@ pub async fn handle_selection_range(
             if let Some(span) = item_span.resolve(&backend.db) {
                 let start: usize = span.range.start().into();
                 let end: usize = span.range.end().into();
-                if start <= cursor.into() && usize::from(cursor) <= end {
-                    if let Ok(range) = to_lsp_range_from_span(span.clone(), &backend.db) {
-                        containing_spans.push((end - start, range));
-                    }
+                if start <= cursor.into()
+                    && usize::from(cursor) <= end
+                    && let Ok(range) = to_lsp_range_from_span(span.clone(), &backend.db)
+                {
+                    containing_spans.push((end - start, range));
                 }
             }
 
             // Also add the name span if available (narrower selection)
-            if let Some(name_span) = item.name_span() {
-                if let Some(span) = name_span.resolve(&backend.db) {
-                    let start: usize = span.range.start().into();
-                    let end: usize = span.range.end().into();
-                    if start <= cursor.into() && usize::from(cursor) <= end {
-                        if let Ok(range) = to_lsp_range_from_span(span, &backend.db) {
-                            containing_spans.push((end - start, range));
-                        }
-                    }
+            if let Some(name_span) = item.name_span()
+                && let Some(span) = name_span.resolve(&backend.db)
+            {
+                let start: usize = span.range.start().into();
+                let end: usize = span.range.end().into();
+                if start <= cursor.into()
+                    && usize::from(cursor) <= end
+                    && let Ok(range) = to_lsp_range_from_span(span, &backend.db)
+                {
+                    containing_spans.push((end - start, range));
                 }
             }
 
             // For functions, also add parameter list and body spans
-            if let ItemKind::Func(func) = item {
-                if let Some(body) = func.body(&backend.db) {
-                    let body_span: hir::span::DynLazySpan = body.span().into();
-                    if let Some(span) = body_span.resolve(&backend.db) {
-                        let start: usize = span.range.start().into();
-                        let end: usize = span.range.end().into();
-                        if start <= cursor.into() && usize::from(cursor) <= end {
-                            if let Ok(range) = to_lsp_range_from_span(span, &backend.db) {
-                                containing_spans.push((end - start, range));
-                            }
-                        }
+            if let ItemKind::Func(func) = item
+                && let Some(body) = func.body(&backend.db)
+            {
+                let body_span: hir::span::DynLazySpan = body.span().into();
+                if let Some(span) = body_span.resolve(&backend.db) {
+                    let start: usize = span.range.start().into();
+                    let end: usize = span.range.end().into();
+                    if start <= cursor.into()
+                        && usize::from(cursor) <= end
+                        && let Ok(range) = to_lsp_range_from_span(span, &backend.db)
+                    {
+                        containing_spans.push((end - start, range));
                     }
                 }
             }
@@ -90,15 +89,16 @@ pub async fn handle_selection_range(
         containing_spans.dedup_by_key(|(_, range)| *range);
 
         // Build nested SelectionRange from outermost to innermost
-        let selection_range = containing_spans
-            .into_iter()
-            .rev()
-            .fold(None, |parent, (_, range)| {
-                Some(SelectionRange {
-                    range,
-                    parent: parent.map(Box::new),
-                })
-            });
+        let selection_range =
+            containing_spans
+                .into_iter()
+                .rev()
+                .fold(None, |parent, (_, range)| {
+                    Some(SelectionRange {
+                        range,
+                        parent: parent.map(Box::new),
+                    })
+                });
 
         // If we found no containing items, create a trivial selection at the position
         results.push(selection_range.unwrap_or(SelectionRange {
@@ -133,36 +133,39 @@ mod tests {
             if let Some(span) = item_span.resolve(db) {
                 let start: usize = span.range.start().into();
                 let end: usize = span.range.end().into();
-                if start <= cursor.into() && usize::from(cursor) <= end {
-                    if let Ok(range) = to_lsp_range_from_span(span.clone(), db) {
-                        containing_spans.push((end - start, range));
-                    }
+                if start <= cursor.into()
+                    && usize::from(cursor) <= end
+                    && let Ok(range) = to_lsp_range_from_span(span.clone(), db)
+                {
+                    containing_spans.push((end - start, range));
                 }
             }
 
-            if let Some(name_span) = item.name_span() {
-                if let Some(span) = name_span.resolve(db) {
+            if let Some(name_span) = item.name_span()
+                && let Some(span) = name_span.resolve(db)
+            {
+                let start: usize = span.range.start().into();
+                let end: usize = span.range.end().into();
+                if start <= cursor.into()
+                    && usize::from(cursor) <= end
+                    && let Ok(range) = to_lsp_range_from_span(span, db)
+                {
+                    containing_spans.push((end - start, range));
+                }
+            }
+
+            if let ItemKind::Func(func) = item
+                && let Some(body) = func.body(db)
+            {
+                let body_span: hir::span::DynLazySpan = body.span().into();
+                if let Some(span) = body_span.resolve(db) {
                     let start: usize = span.range.start().into();
                     let end: usize = span.range.end().into();
-                    if start <= cursor.into() && usize::from(cursor) <= end {
-                        if let Ok(range) = to_lsp_range_from_span(span, db) {
-                            containing_spans.push((end - start, range));
-                        }
-                    }
-                }
-            }
-
-            if let ItemKind::Func(func) = item {
-                if let Some(body) = func.body(db) {
-                    let body_span: hir::span::DynLazySpan = body.span().into();
-                    if let Some(span) = body_span.resolve(db) {
-                        let start: usize = span.range.start().into();
-                        let end: usize = span.range.end().into();
-                        if start <= cursor.into() && usize::from(cursor) <= end {
-                            if let Ok(range) = to_lsp_range_from_span(span, db) {
-                                containing_spans.push((end - start, range));
-                            }
-                        }
+                    if start <= cursor.into()
+                        && usize::from(cursor) <= end
+                        && let Ok(range) = to_lsp_range_from_span(span, db)
+                    {
+                        containing_spans.push((end - start, range));
                     }
                 }
             }
@@ -207,11 +210,17 @@ mod tests {
         // Cursor on "hello" (offset 3)
         let cursor = parser::TextSize::from(3);
         let sel = build_selection_ranges_at(&db, top_mod, cursor);
-        assert!(sel.is_some(), "should have selection ranges on function name");
+        assert!(
+            sel.is_some(),
+            "should have selection ranges on function name"
+        );
 
         let sel = sel.unwrap();
         // Innermost should be the name "hello", outermost should be the whole function
-        assert!(selection_depth(&sel) >= 2, "should have at least name and function spans");
+        assert!(
+            selection_depth(&sel) >= 2,
+            "should have at least name and function spans"
+        );
     }
 
     #[test]
@@ -233,7 +242,10 @@ mod tests {
 
         let sel = sel.unwrap();
         // Should have at least body and function
-        assert!(selection_depth(&sel) >= 2, "should have body and function spans");
+        assert!(
+            selection_depth(&sel) >= 2,
+            "should have body and function spans"
+        );
     }
 
     #[test]
@@ -264,7 +276,11 @@ impl Wrapper {
 
         let sel = sel.unwrap();
         // Should have: method name -> method -> impl block (at least 3)
-        assert!(selection_depth(&sel) >= 3, "should have name, method, and impl spans, got {}", selection_depth(&sel));
+        assert!(
+            selection_depth(&sel) >= 3,
+            "should have name, method, and impl spans, got {}",
+            selection_depth(&sel)
+        );
     }
 
     #[test]

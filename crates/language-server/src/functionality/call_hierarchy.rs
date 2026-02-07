@@ -18,10 +18,7 @@ use crate::{
 };
 
 /// Build a `CallHierarchyItem` from a function.
-fn func_to_hierarchy_item(
-    db: &driver::DriverDataBase,
-    func: Func,
-) -> Option<CallHierarchyItem> {
+fn func_to_hierarchy_item(db: &driver::DriverDataBase, func: Func) -> Option<CallHierarchyItem> {
     let location = to_lsp_location_from_scope(db, func.scope()).ok()?;
     let name = func.name(db).to_opt()?.data(db).to_string();
 
@@ -106,10 +103,7 @@ pub async fn handle_incoming_calls(
     };
 
     let file_text = file.text(&backend.db);
-    let cursor = to_offset_from_position(
-        params.item.selection_range.start,
-        file_text.as_str(),
-    );
+    let cursor = to_offset_from_position(params.item.selection_range.start, file_text.as_str());
 
     let top_mod = map_file_to_mod(&backend.db, file);
     let resolution = top_mod.target_at(&backend.db, cursor);
@@ -160,12 +154,11 @@ fn find_incoming_calls<'db>(
             continue;
         };
         for call_site in body.call_sites(db) {
-            if let Some(CallableDef::Func(callee)) = call_site.target(db) {
-                if callee == target_func {
-                    if let Ok(loc) = to_lsp_location_from_lazy_span(db, call_site.callee_span()) {
-                        callers.entry(func).or_default().push(loc.range);
-                    }
-                }
+            if let Some(CallableDef::Func(callee)) = call_site.target(db)
+                && callee == target_func
+                && let Ok(loc) = to_lsp_location_from_lazy_span(db, call_site.callee_span())
+            {
+                callers.entry(func).or_default().push(loc.range);
             }
         }
     }
@@ -185,10 +178,10 @@ fn find_outgoing_calls<'db>(
     let mut targets: FxHashMap<Func, Vec<async_lsp::lsp_types::Range>> = FxHashMap::default();
 
     for call_site in body.call_sites(db) {
-        if let Some(CallableDef::Func(callee)) = call_site.target(db) {
-            if let Ok(loc) = to_lsp_location_from_lazy_span(db, call_site.callee_span()) {
-                targets.entry(callee).or_default().push(loc.range);
-            }
+        if let Some(CallableDef::Func(callee)) = call_site.target(db)
+            && let Ok(loc) = to_lsp_location_from_lazy_span(db, call_site.callee_span())
+        {
+            targets.entry(callee).or_default().push(loc.range);
         }
     }
 
@@ -211,10 +204,7 @@ pub async fn handle_outgoing_calls(
     };
 
     let file_text = file.text(&backend.db);
-    let cursor = to_offset_from_position(
-        params.item.selection_range.start,
-        file_text.as_str(),
-    );
+    let cursor = to_offset_from_position(params.item.selection_range.start, file_text.as_str());
 
     let top_mod = map_file_to_mod(&backend.db, file);
     let resolution = top_mod.target_at(&backend.db, cursor);
@@ -399,6 +389,9 @@ fn main_func() -> i32 {
         let top_mod = map_file_to_mod(&db, file);
         let func = find_func_at(&db, top_mod, 3).expect("should find function");
         let targets = find_outgoing_calls(&db, func);
-        assert!(targets.is_empty(), "leaf function should have no outgoing calls");
+        assert!(
+            targets.is_empty(),
+            "leaf function should have no outgoing calls"
+        );
     }
 }

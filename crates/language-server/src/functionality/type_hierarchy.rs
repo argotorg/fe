@@ -5,9 +5,7 @@ use async_lsp::lsp_types::{
 };
 use common::InputDb;
 use hir::{
-    analysis::ty::adt_def::AdtRef,
-    core::semantic::reference::Target,
-    hir_def::ItemKind,
+    analysis::ty::adt_def::AdtRef, core::semantic::reference::Target, hir_def::ItemKind,
     lower::map_file_to_mod,
 };
 
@@ -93,10 +91,7 @@ fn adt_ref_to_hierarchy_item(
 }
 
 /// Find supertypes for an item (traits it implements, or super-traits).
-fn find_supertypes(
-    db: &driver::DriverDataBase,
-    item: ItemKind,
-) -> Vec<TypeHierarchyItem> {
+fn find_supertypes(db: &driver::DriverDataBase, item: ItemKind) -> Vec<TypeHierarchyItem> {
     match item {
         ItemKind::Struct(s) => s
             .all_impl_traits(db)
@@ -126,10 +121,7 @@ fn find_supertypes(
 }
 
 /// Find subtypes for an item (structs/enums implementing a trait).
-fn find_subtypes(
-    db: &driver::DriverDataBase,
-    item: ItemKind,
-) -> Vec<TypeHierarchyItem> {
+fn find_subtypes(db: &driver::DriverDataBase, item: ItemKind) -> Vec<TypeHierarchyItem> {
     match item {
         ItemKind::Trait(trait_) => trait_
             .all_impl_traits(db)
@@ -203,10 +195,7 @@ pub async fn handle_supertypes(
     };
 
     let file_text = file.text(&backend.db);
-    let cursor = to_offset_from_position(
-        params.item.selection_range.start,
-        file_text.as_str(),
-    );
+    let cursor = to_offset_from_position(params.item.selection_range.start, file_text.as_str());
 
     let top_mod = map_file_to_mod(&backend.db, file);
     let resolution = top_mod.target_at(&backend.db, cursor);
@@ -242,10 +231,7 @@ pub async fn handle_subtypes(
     };
 
     let file_text = file.text(&backend.db);
-    let cursor = to_offset_from_position(
-        params.item.selection_range.start,
-        file_text.as_str(),
-    );
+    let cursor = to_offset_from_position(params.item.selection_range.start, file_text.as_str());
 
     let top_mod = map_file_to_mod(&backend.db, file);
     let resolution = top_mod.target_at(&backend.db, cursor);

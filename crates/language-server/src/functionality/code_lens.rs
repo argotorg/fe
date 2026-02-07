@@ -1,16 +1,9 @@
 use async_lsp::ResponseError;
 use async_lsp::lsp_types::{CodeLens, CodeLensParams, Command};
 use common::InputDb;
-use hir::{
-    core::semantic::reference::Target,
-    hir_def::ItemKind,
-    lower::map_file_to_mod,
-};
+use hir::{core::semantic::reference::Target, hir_def::ItemKind, lower::map_file_to_mod};
 
-use crate::{
-    backend::Backend,
-    util::to_lsp_location_from_scope,
-};
+use crate::{backend::Backend, util::to_lsp_location_from_scope};
 
 /// Handle textDocument/codeLens.
 pub async fn handle_code_lens(
@@ -243,14 +236,20 @@ fn use_point() -> i32 {
         assert!(point_data.is_some(), "should find Point in lens data");
         let (_, kind, count) = point_data.unwrap();
         assert_eq!(kind, "struct");
-        assert!(*count >= 2, "Point should have at least 2 references, got {count}");
+        assert!(
+            *count >= 2,
+            "Point should have at least 2 references, got {count}"
+        );
 
         // make_point should have a reference (called in use_point)
         let make_point = data.iter().find(|(n, _, _)| n == "make_point");
         assert!(make_point.is_some(), "should find make_point");
         let (_, kind, count) = make_point.unwrap();
         assert_eq!(kind, "func");
-        assert!(*count >= 1, "make_point should have at least 1 reference, got {count}");
+        assert!(
+            *count >= 1,
+            "make_point should have at least 1 reference, got {count}"
+        );
     }
 
     #[test]
