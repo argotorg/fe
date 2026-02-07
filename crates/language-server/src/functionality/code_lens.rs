@@ -119,6 +119,34 @@ pub async fn handle_code_lens(
         }
     }
 
+    // Add codegen view lenses (once per file, at line 0)
+    let codegen_range = async_lsp::lsp_types::Range {
+        start: async_lsp::lsp_types::Position {
+            line: 0,
+            character: 0,
+        },
+        end: async_lsp::lsp_types::Position {
+            line: 0,
+            character: 0,
+        },
+    };
+    let uri_string = params.text_document.uri.to_string();
+    for (label, cmd) in [
+        ("MIR", "fe.viewMir"),
+        ("Yul", "fe.viewYul"),
+        ("Sonatina IR", "fe.viewSonatinaIr"),
+    ] {
+        lenses.push(CodeLens {
+            range: codegen_range,
+            command: Some(Command {
+                title: label.to_string(),
+                command: cmd.to_string(),
+                arguments: Some(vec![serde_json::json!(uri_string)]),
+            }),
+            data: None,
+        });
+    }
+
     if lenses.is_empty() {
         Ok(None)
     } else {

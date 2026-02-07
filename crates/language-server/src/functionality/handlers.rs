@@ -238,7 +238,7 @@ pub async fn handle_file_change(
     backend: &mut Backend,
     message: FileChange,
 ) -> Result<(), ResponseError> {
-    if backend.is_builtin_tmp_uri(&message.uri) {
+    if backend.is_virtual_uri(&message.uri) {
         if matches!(message.kind, ChangeKind::Edit(_))
             && backend.readonly_warnings.insert(message.uri.clone())
         {
@@ -465,7 +465,7 @@ pub async fn handle_formatting(
     backend: &Backend,
     params: DocumentFormattingParams,
 ) -> Result<Option<Vec<TextEdit>>, ResponseError> {
-    if backend.is_builtin_tmp_uri(&params.text_document.uri) {
+    if backend.is_virtual_uri(&params.text_document.uri) {
         return Ok(None);
     }
 

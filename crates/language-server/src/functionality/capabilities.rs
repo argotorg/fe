@@ -74,6 +74,15 @@ pub(crate) fn server_capabilities() -> ServerCapabilities {
         code_action_provider: Some(async_lsp::lsp_types::CodeActionProviderCapability::Simple(
             true,
         )),
+        // execute command (codegen views)
+        execute_command_provider: Some(async_lsp::lsp_types::ExecuteCommandOptions {
+            commands: vec![
+                "fe.viewMir".into(),
+                "fe.viewYul".into(),
+                "fe.viewSonatinaIr".into(),
+            ],
+            ..Default::default()
+        }),
         // support for workspace add/remove changes
         workspace: Some(async_lsp::lsp_types::WorkspaceServerCapabilities {
             workspace_folders: Some(async_lsp::lsp_types::WorkspaceFoldersServerCapabilities {
