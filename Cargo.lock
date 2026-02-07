@@ -1909,6 +1909,7 @@ dependencies = [
  "sonatina-codegen",
  "sonatina-ir",
  "sonatina-triple",
+ "tracing",
  "url",
 ]
 
@@ -1946,6 +1947,7 @@ dependencies = [
  "revm",
  "serde_json",
  "thiserror 1.0.69",
+ "tracing",
  "url",
 ]
 
@@ -4686,7 +4688,6 @@ dependencies = [
 [[package]]
 name = "sonatina-codegen"
 version = "0.0.3-alpha"
-source = "git+https://github.com/fe-lang/sonatina?branch=main#178af345431b905177ddefc70f7fa308d2010e2c"
 dependencies = [
  "bit-set",
  "cranelift-entity 0.126.2",
@@ -4703,7 +4704,6 @@ dependencies = [
 [[package]]
 name = "sonatina-ir"
 version = "0.0.3-alpha"
-source = "git+https://github.com/fe-lang/sonatina?branch=main#178af345431b905177ddefc70f7fa308d2010e2c"
 dependencies = [
  "bitflags 2.10.0",
  "cranelift-entity 0.126.2",
@@ -4723,7 +4723,6 @@ dependencies = [
 [[package]]
 name = "sonatina-macros"
 version = "0.0.3-alpha"
-source = "git+https://github.com/fe-lang/sonatina?branch=main#178af345431b905177ddefc70f7fa308d2010e2c"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4733,7 +4732,6 @@ dependencies = [
 [[package]]
 name = "sonatina-triple"
 version = "0.0.3-alpha"
-source = "git+https://github.com/fe-lang/sonatina?branch=main#178af345431b905177ddefc70f7fa308d2010e2c"
 dependencies = [
  "thiserror 2.0.17",
 ]

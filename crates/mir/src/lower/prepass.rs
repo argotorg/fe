@@ -214,6 +214,18 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 }
                 Some((args, arg_exprs))
             }
+            // Operator expressions desugared to trait method calls:
+            // binary `a + b` → Add::add(a, b), unary `-a` → Neg::neg(a), etc.
+            Expr::Bin(lhs, rhs, _) => {
+                let args = vec![self.lower_expr(*lhs), self.lower_expr(*rhs)];
+                let arg_exprs = vec![*lhs, *rhs];
+                Some((args, arg_exprs))
+            }
+            Expr::Un(inner, _) => {
+                let args = vec![self.lower_expr(*inner)];
+                let arg_exprs = vec![*inner];
+                Some((args, arg_exprs))
+            }
             _ => None,
         }
     }

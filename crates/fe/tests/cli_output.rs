@@ -209,22 +209,32 @@ fn test_fe_test_backends_agree(fixture: Fixture<&str>) {
         None,
     );
     let sonatina = run_fe_main_impl(
-        &["test", "--call-trace", "--backend", "sonatina", fixture.path()],
+        &[
+            "test",
+            "--call-trace",
+            "--backend",
+            "sonatina",
+            fixture.path(),
+        ],
         None,
     );
 
     assert_eq!(
-        yul.exit_code, sonatina.exit_code,
+        yul.exit_code,
+        sonatina.exit_code,
         "Exit code mismatch for {path}:\n\n--- yul (exit {ye}) ---\n{yo}\n\n--- sonatina (exit {se}) ---\n{so}",
         path = fixture.path(),
-        ye = yul.exit_code, yo = yul.combined(),
-        se = sonatina.exit_code, so = sonatina.combined(),
+        ye = yul.exit_code,
+        yo = yul.combined(),
+        se = sonatina.exit_code,
+        so = sonatina.combined(),
     );
 
     // Compare stdout (test names + pass/fail lines). Stderr may contain
     // backend-specific diagnostics so we only check stdout here.
     assert_eq!(
-        yul.stdout, sonatina.stdout,
+        yul.stdout,
+        sonatina.stdout,
         "Test output mismatch for {path}:\n\n--- yul ---\n{yo}\n\n--- sonatina ---\n{so}",
         path = fixture.path(),
         yo = yul.stdout,
