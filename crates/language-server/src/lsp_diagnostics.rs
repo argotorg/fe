@@ -1,7 +1,11 @@
 use async_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range, Url};
 use camino::Utf8Path;
 use codespan_reporting::files as cs_files;
-use common::{diagnostics::CompleteDiagnostic, file::File, ingot::IngotKind};
+use common::{
+    diagnostics::CompleteDiagnostic,
+    file::{File, IngotFileKind},
+    ingot::IngotKind,
+};
 use driver::DriverDataBase;
 use hir::Ingot;
 use hir::analysis::analysis_pass::{AnalysisPassManager, MsgLowerPass, ParsingPass};
@@ -35,6 +39,10 @@ impl LspDiagnostics for DriverDataBase {
         let is_standalone = ingot.kind(self) == IngotKind::StandAlone;
 
         for (url, file) in ingot_files.iter() {
+            if !matches!(file.kind(self), Some(IngotFileKind::Source)) {
+                continue;
+            }
+
             // initialize an empty diagnostic list for this file
             // (to clear any previous diagnostics)
             let file_diags = result.entry(url.clone()).or_default();
