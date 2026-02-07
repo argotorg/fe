@@ -41,13 +41,11 @@ fn sonatina_ir_snap(fixture: Fixture<&str>) {
     let output = match emit_module_sonatina_ir(&db, top_mod) {
         Ok(ir) => ir,
         Err(fe_codegen::LowerError::Unsupported(msg)) => {
-            // Skip unsupported fixtures - they'll be tracked separately
-            eprintln!("SKIP {}: unsupported ({})", fixture.path(), msg);
+            tracing::info!("SKIP {}: unsupported ({msg})", fixture.path());
             return;
         }
         Err(fe_codegen::LowerError::Internal(msg)) => {
-            // Skip fixtures with internal errors (missing features, etc.)
-            eprintln!("SKIP {}: internal error ({})", fixture.path(), msg);
+            tracing::warn!("SKIP {}: internal error ({msg})", fixture.path());
             return;
         }
         Err(err) => panic!("Sonatina IR lowering failed: {err}"),

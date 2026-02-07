@@ -244,10 +244,10 @@ pub fn write_report_meta(root: &Utf8PathBuf, kind: &str, suite: Option<&str>) {
         write_best_effort(&meta.join("suite.txt"), format!("{suite}\n"));
     }
 
-    if let Ok(cwd) = std::env::current_dir() {
-        if let Ok(cwd) = Utf8PathBuf::from_path_buf(cwd) {
-            write_best_effort(&meta.join("cwd.txt"), format!("{cwd}\n"));
-        }
+    if let Ok(cwd) = std::env::current_dir()
+        && let Ok(cwd) = Utf8PathBuf::from_path_buf(cwd)
+    {
+        write_best_effort(&meta.join("cwd.txt"), format!("{cwd}\n"));
     }
 
     let mut args = String::new();
@@ -288,52 +288,50 @@ pub fn write_report_meta(root: &Utf8PathBuf, kind: &str, suite: Option<&str>) {
 
     if let Ok(manifest_dir) =
         Utf8PathBuf::from_path_buf(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")))
+        && let Some(repo) = find_git_repo_root(&manifest_dir)
     {
-        if let Some(repo) = find_git_repo_root(&manifest_dir) {
-            let mut git_txt = String::new();
-            git_txt.push_str(&format!("fe_repo: {repo}\n"));
-            if let Some(head) = capture_cmd(&repo, "git", &["rev-parse", "HEAD"]) {
-                git_txt.push_str(&format!("fe_head: {head}\n"));
+        let mut git_txt = String::new();
+        git_txt.push_str(&format!("fe_repo: {repo}\n"));
+        if let Some(head) = capture_cmd(&repo, "git", &["rev-parse", "HEAD"]) {
+            git_txt.push_str(&format!("fe_head: {head}\n"));
+        }
+        if let Some(status) = capture_cmd(&repo, "git", &["status", "--porcelain=v1"]) {
+            let dirty = if status.trim().is_empty() {
+                "no"
+            } else {
+                "yes"
+            };
+            git_txt.push_str(&format!("fe_dirty: {dirty}\n"));
+        }
+
+        let sonatina_guess = repo.join("../sonatina");
+        if sonatina_guess.exists()
+            && let Some(sonatina_repo) = find_git_repo_root(&sonatina_guess)
+        {
+            git_txt.push_str(&format!("\nsonatina_repo: {sonatina_repo}\n"));
+            if let Some(head) = capture_cmd(&sonatina_repo, "git", &["rev-parse", "HEAD"]) {
+                git_txt.push_str(&format!("sonatina_head: {head}\n"));
             }
-            if let Some(status) = capture_cmd(&repo, "git", &["status", "--porcelain=v1"]) {
+            if let Some(status) = capture_cmd(&sonatina_repo, "git", &["status", "--porcelain=v1"])
+            {
                 let dirty = if status.trim().is_empty() {
                     "no"
                 } else {
                     "yes"
                 };
-                git_txt.push_str(&format!("fe_dirty: {dirty}\n"));
+                git_txt.push_str(&format!("sonatina_dirty: {dirty}\n"));
             }
-
-            let sonatina_guess = repo.join("../sonatina");
-            if sonatina_guess.exists() {
-                if let Some(sonatina_repo) = find_git_repo_root(&sonatina_guess) {
-                    git_txt.push_str(&format!("\nsonatina_repo: {sonatina_repo}\n"));
-                    if let Some(head) = capture_cmd(&sonatina_repo, "git", &["rev-parse", "HEAD"]) {
-                        git_txt.push_str(&format!("sonatina_head: {head}\n"));
-                    }
-                    if let Some(status) =
-                        capture_cmd(&sonatina_repo, "git", &["status", "--porcelain=v1"])
-                    {
-                        let dirty = if status.trim().is_empty() {
-                            "no"
-                        } else {
-                            "yes"
-                        };
-                        git_txt.push_str(&format!("sonatina_dirty: {dirty}\n"));
-                    }
-                }
-            }
-
-            write_best_effort(&meta.join("git.txt"), git_txt);
         }
+
+        write_best_effort(&meta.join("git.txt"), git_txt);
     }
 
-    if let Ok(out) = std::process::Command::new("rustc").arg("-Vv").output() {
-        if out.status.success() {
-            let mut txt = String::new();
-            txt.push_str(&String::from_utf8_lossy(&out.stdout));
-            txt.push_str(&String::from_utf8_lossy(&out.stderr));
-            write_best_effort(&meta.join("rustc.txt"), txt);
-        }
+    if let Ok(out) = std::process::Command::new("rustc").arg("-Vv").output()
+        && out.status.success()
+    {
+        let mut txt = String::new();
+        txt.push_str(&String::from_utf8_lossy(&out.stdout));
+        txt.push_str(&String::from_utf8_lossy(&out.stderr));
+        write_best_effort(&meta.join("rustc.txt"), txt);
     }
 }

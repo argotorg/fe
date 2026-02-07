@@ -73,7 +73,7 @@ pub fn check(
     report_out: Option<&Utf8PathBuf>,
     report_failed_only: bool,
 ) -> Result<bool, String> {
-    let backend_kind: BackendKind = backend_name.parse().map_err(|err| format!("{err}"))?;
+    let backend_kind: BackendKind = backend_name.parse()?;
     let backend = backend_kind.create();
     let mut db = DriverDataBase::default();
 
@@ -465,6 +465,7 @@ fn check_ingot_url(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn check_workspace(
     db: &mut DriverDataBase,
     dir_path: &Utf8PathBuf,
@@ -516,6 +517,7 @@ fn check_workspace(
     has_errors
 }
 
+#[allow(clippy::too_many_arguments)]
 fn check_ingot_and_dependencies(
     db: &mut DriverDataBase,
     ingot_url: &Url,
@@ -706,6 +708,7 @@ fn check_ingot(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn check_ingot_inner(
     db: &mut DriverDataBase,
     dir_path: &Utf8PathBuf,

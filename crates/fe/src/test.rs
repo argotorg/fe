@@ -202,6 +202,7 @@ fn unique_report_path(dir: &Utf8PathBuf, suite: &str) -> Utf8PathBuf {
 ///
 /// Returns `Ok(true)` if any tests failed, `Ok(false)` if all passed,
 /// or `Err` on fatal setup errors.
+#[allow(clippy::too_many_arguments)]
 pub fn run_tests(
     paths: &[Utf8PathBuf],
     filter: Option<&str>,
@@ -383,6 +384,7 @@ pub fn run_tests(
 /// * `show_logs` - Whether to show event logs from test execution.
 ///
 /// Returns the collected test results.
+#[allow(clippy::too_many_arguments)]
 fn run_tests_single_file(
     db: &mut DriverDataBase,
     file_path: &Utf8PathBuf,
@@ -459,6 +461,7 @@ fn run_tests_single_file(
 /// * `show_logs` - Whether to show event logs from test execution.
 ///
 /// Returns the collected test results.
+#[allow(clippy::too_many_arguments)]
 fn run_tests_ingot(
     db: &mut DriverDataBase,
     dir_path: &Utf8PathBuf,
@@ -571,6 +574,7 @@ fn emit_with_catch_unwind<E: std::fmt::Display>(
 /// * `show_logs` - Whether to show event logs from test execution.
 ///
 /// Returns the collected test results.
+#[allow(clippy::too_many_arguments)]
 fn discover_and_run_tests(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,
