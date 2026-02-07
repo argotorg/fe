@@ -31,8 +31,7 @@ pub fn normalize_report_out_path(out: &Utf8PathBuf) -> Result<Utf8PathBuf, Strin
 }
 
 pub fn create_dir_all_utf8(path: &Utf8PathBuf) -> Result<(), String> {
-    std::fs::create_dir_all(path)
-        .map_err(|err| format!("failed to create dir `{path}`: {err}"))
+    std::fs::create_dir_all(path).map_err(|err| format!("failed to create dir `{path}`: {err}"))
 }
 
 pub fn create_report_staging_dir(base: &str) -> Result<Utf8PathBuf, String> {

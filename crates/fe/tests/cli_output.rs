@@ -26,7 +26,6 @@ fn run_fe_tree(path: &str) -> (String, i32) {
     run_fe_command("tree", path)
 }
 
-
 // Helper function to run fe binary with specified subcommand
 fn run_fe_command(subcommand: &str, path: &str) -> (String, i32) {
     run_fe_command_with_args(subcommand, path, &[])
@@ -72,8 +71,7 @@ fn run_fe_main_impl(args: &[&str], cwd: Option<&Path>) -> (String, i32) {
         .join("fe");
 
     let mut cmd = Command::new(&fe_binary);
-    cmd.args(args)
-        .env("NO_COLOR", "1");
+    cmd.args(args).env("NO_COLOR", "1");
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
     }
@@ -155,10 +153,15 @@ fn test_tree_output(fixture: Fixture<&str>) {
     glob: "*.fe",
 )]
 fn test_fe_test_yul(fixture: Fixture<&str>) {
-    let (output, exit_code) = run_fe_command_with_args("test", fixture.path(), &["--backend", "yul"]);
-    assert_eq!(exit_code, 0,
+    let (output, exit_code) =
+        run_fe_command_with_args("test", fixture.path(), &["--backend", "yul"]);
+    assert_eq!(
+        exit_code,
+        0,
         "fe test (yul) failed for {path}:\n{output}\n\nTo reproduce:\n  cargo run --bin fe -- test --backend yul --report {path}",
-        path = fixture.path(), output = output);
+        path = fixture.path(),
+        output = output
+    );
 }
 
 #[dir_test(
@@ -166,10 +169,15 @@ fn test_fe_test_yul(fixture: Fixture<&str>) {
     glob: "*.fe",
 )]
 fn test_fe_test_sonatina(fixture: Fixture<&str>) {
-    let (output, exit_code) = run_fe_command_with_args("test", fixture.path(), &["--backend", "sonatina"]);
-    assert_eq!(exit_code, 0,
+    let (output, exit_code) =
+        run_fe_command_with_args("test", fixture.path(), &["--backend", "sonatina"]);
+    assert_eq!(
+        exit_code,
+        0,
         "fe test (sonatina) failed for {path}:\n{output}\n\nTo reproduce:\n  cargo run --bin fe -- test --backend sonatina --report {path}",
-        path = fixture.path(), output = output);
+        path = fixture.path(),
+        output = output
+    );
 }
 
 /// Runs `fe test` and snapshots the output to verify behavior of passing/failing tests and logs.

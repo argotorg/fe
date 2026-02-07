@@ -10,8 +10,7 @@ use crate::report::{
 };
 use camino::Utf8PathBuf;
 use codegen::{
-    ExpectedRevert, TestMetadata, TestModuleOutput, emit_test_module_sonatina,
-    emit_test_module_yul,
+    ExpectedRevert, TestMetadata, TestModuleOutput, emit_test_module_sonatina, emit_test_module_yul,
 };
 use colored::Colorize;
 use common::InputDb;
@@ -168,8 +167,7 @@ impl TestDebugOptions {
 }
 
 fn truncate_file(path: &Utf8PathBuf) -> Result<(), String> {
-    std::fs::write(path, "")
-        .map_err(|err| format!("failed to truncate `{path}`: {err}"))
+    std::fs::write(path, "").map_err(|err| format!("failed to truncate `{path}`: {err}"))
 }
 
 fn unique_report_path(dir: &Utf8PathBuf, suite: &str) -> Utf8PathBuf {
@@ -585,12 +583,7 @@ fn discover_and_run_tests(
 ) -> Vec<TestResult> {
     let backend = backend.to_lowercase();
     let emit_result = match backend.as_str() {
-        "yul" => emit_with_catch_unwind(
-            || emit_test_module_yul(db, top_mod),
-            "Yul",
-            suite,
-            report,
-        ),
+        "yul" => emit_with_catch_unwind(|| emit_test_module_yul(db, top_mod), "Yul", suite, report),
         "sonatina" => emit_with_catch_unwind(
             || emit_test_module_sonatina(db, top_mod),
             "Sonatina",
@@ -761,8 +754,7 @@ fn expand_test_paths(inputs: &[Utf8PathBuf]) -> Result<Vec<Utf8PathBuf>, String>
         let entries = glob::glob(pattern)
             .map_err(|err| format!("invalid glob pattern `{pattern}`: {err}"))?;
         for entry in entries {
-            let path = entry
-                .map_err(|err| format!("glob entry error for `{pattern}`: {err}"))?;
+            let path = entry.map_err(|err| format!("glob entry error for `{pattern}`: {err}"))?;
             let utf8 = Utf8PathBuf::from_path_buf(path)
                 .map_err(|path| format!("non-utf8 path matched by `{pattern}`: {path:?}"))?;
             matches.push(utf8);
