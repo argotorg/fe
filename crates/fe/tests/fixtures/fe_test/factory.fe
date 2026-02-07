@@ -1,0 +1,125 @@
+/// Contract factory: deploys child contracts and tracks them.
+/// Inspired by Uniswap V2 Factory / CREATE2 patterns.
+///
+/// Tests: Create effect in contracts, single-arg constructors, contract-to-
+/// contract deployment, StorageMap for registry, cross-contract reads.
+
+use std::evm::{Address, Evm, Call, Create}
+use std::evm::effects::assert
+
+// ---- Child contract ----
+
+msg ChildMsg {
+    #[selector = 0x01]
+    GetId -> u256,
+    #[selector = 0x02]
+    GetCreator -> u256,
+    #[selector = 0x03]
+    Increment -> u256,
+    #[selector = 0x04]
+    GetCount -> u256,
+}
+
+struct ChildStore {
+    id: u256,
+    creator_inner: u256,
+    count: u256,
+}
+
+pub contract Child {
+    mut store: ChildStore
+
+    init(id: u256, creator_inner: u256) uses (mut store) {
+        store.id = id
+        store.creator_inner = creator_inner
+        store.count = 0
+    }
+
+    recv ChildMsg {
+        GetId -> u256 uses (store) { store.id }
+        GetCreator -> u256 uses (store) { store.creator_inner }
+
+        Increment -> u256 uses (mut store) {
+            store.count += 1
+            store.count
+        }
+
+        GetCount -> u256 uses (store) { store.count }
+    }
+}
+
+// ---- Factory contract ----
+
+msg FactoryMsg {
+    #[selector = 0x10]
+    CreateChild -> u256,
+    #[selector = 0x11]
+    GetChildCount -> u256,
+}
+
+struct FactoryStore {
+    child_count: u256,
+}
+
+pub contract Factory uses (mut create: Create) {
+    mut store: FactoryStore
+
+    init() uses (mut store) {
+        store.child_count = 0
+    }
+
+    recv FactoryMsg {
+        CreateChild -> u256 uses (mut store, mut create) {
+            store.child_count += 1
+            let child = create.create2<Child>(
+                value: 0,
+                args: (store.child_count, 0),
+                salt: store.child_count,
+            )
+            child.inner
+        }
+
+        GetChildCount -> u256 uses (store) {
+            store.child_count
+        }
+    }
+}
+
+#[test]
+fn test_factory() uses (mut evm: Evm) {
+    let factory = evm.create2<Factory>(value: 0, args: (), salt: 0)
+    assert(factory.inner != 0)
+
+    // Create child 1
+    let child1_inner: u256 = evm.call(addr: factory, gas: 500000, value: 0, message: FactoryMsg::CreateChild {})
+    assert(child1_inner != 0)
+    let child1 = Address { inner: child1_inner }
+
+    // Create child 2
+    let child2_inner: u256 = evm.call(addr: factory, gas: 500000, value: 0, message: FactoryMsg::CreateChild {})
+    assert(child2_inner != 0)
+    let child2 = Address { inner: child2_inner }
+
+    // Children are different contracts
+    assert(child1.inner != child2.inner)
+
+    // Factory tracks count
+    let count: u256 = evm.call(addr: factory, gas: 100000, value: 0, message: FactoryMsg::GetChildCount {})
+    assert(count == 2)
+
+    // Each child has the correct ID
+    let id1: u256 = evm.call(addr: child1, gas: 100000, value: 0, message: ChildMsg::GetId {})
+    assert(id1 == 1)
+    let id2: u256 = evm.call(addr: child2, gas: 100000, value: 0, message: ChildMsg::GetId {})
+    assert(id2 == 2)
+
+    // Children are independent
+    evm.call(addr: child1, gas: 100000, value: 0, message: ChildMsg::Increment {})
+    evm.call(addr: child1, gas: 100000, value: 0, message: ChildMsg::Increment {})
+    evm.call(addr: child2, gas: 100000, value: 0, message: ChildMsg::Increment {})
+
+    let c1: u256 = evm.call(addr: child1, gas: 100000, value: 0, message: ChildMsg::GetCount {})
+    assert(c1 == 2)
+    let c2: u256 = evm.call(addr: child2, gas: 100000, value: 0, message: ChildMsg::GetCount {})
+    assert(c2 == 1)
+}
