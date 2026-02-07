@@ -41,14 +41,42 @@ fn run_fe_command_with_args(subcommand: &str, path: &str, extra: &[&str]) -> (St
 
 // Helper function to run fe binary with specified args
 fn run_fe_main(args: &[&str]) -> (String, i32) {
-    run_fe_main_impl(args, None)
+    let out = run_fe_main_impl(args, None);
+    (out.combined(), out.exit_code)
 }
 
 fn run_fe_main_in_dir(args: &[&str], cwd: &Path) -> (String, i32) {
-    run_fe_main_impl(args, Some(cwd))
+    let out = run_fe_main_impl(args, Some(cwd));
+    (out.combined(), out.exit_code)
 }
 
-fn run_fe_main_impl(args: &[&str], cwd: Option<&Path>) -> (String, i32) {
+struct FeOutput {
+    stdout: String,
+    stderr: String,
+    exit_code: i32,
+}
+
+impl FeOutput {
+    /// Combined display format used by snapshot tests.
+    fn combined(&self) -> String {
+        let mut out = String::new();
+        if !self.stdout.is_empty() {
+            out.push_str("=== STDOUT ===\n");
+            out.push_str(&self.stdout);
+        }
+        if !self.stderr.is_empty() {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str("=== STDERR ===\n");
+            out.push_str(&self.stderr);
+        }
+        out.push_str(&format!("\n=== EXIT CODE: {} ===", self.exit_code));
+        normalize_output(&out)
+    }
+}
+
+fn run_fe_main_impl(args: &[&str], cwd: Option<&Path>) -> FeOutput {
     let cargo_exe = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
     let output = Command::new(&cargo_exe)
         .args(["build", "--bin", "fe"])
@@ -79,23 +107,11 @@ fn run_fe_main_impl(args: &[&str], cwd: Option<&Path>) -> (String, i32) {
         .output()
         .unwrap_or_else(|_| panic!("Failed to run fe {:?}", args));
 
-    let mut full_output = String::new();
-    if !output.stdout.is_empty() {
-        full_output.push_str("=== STDOUT ===\n");
-        full_output.push_str(&String::from_utf8_lossy(&output.stdout));
+    FeOutput {
+        stdout: normalize_output(&String::from_utf8_lossy(&output.stdout)),
+        stderr: normalize_output(&String::from_utf8_lossy(&output.stderr)),
+        exit_code: output.status.code().unwrap_or(-1),
     }
-    if !output.stderr.is_empty() {
-        if !full_output.is_empty() {
-            full_output.push('\n');
-        }
-        full_output.push_str("=== STDERR ===\n");
-        full_output.push_str(&String::from_utf8_lossy(&output.stderr));
-    }
-    let exit_code = output.status.code().unwrap_or(-1);
-    full_output.push_str(&format!("\n=== EXIT CODE: {exit_code} ==="));
-
-    let normalized_output = normalize_output(&full_output);
-    (normalized_output, exit_code)
 }
 
 #[dir_test(
@@ -177,6 +193,42 @@ fn test_fe_test_sonatina(fixture: Fixture<&str>) {
         "fe test (sonatina) failed for {path}:\n{output}\n\nTo reproduce:\n  cargo run --bin fe -- test --backend sonatina --report {path}",
         path = fixture.path(),
         output = output
+    );
+}
+
+/// Runs both backends on the same fixture and asserts they produce identical test results.
+/// Catches behavioral divergence: if a test passes on one backend but fails on the other,
+/// or if the backends discover different tests, this will fail.
+#[dir_test(
+    dir: "$CARGO_MANIFEST_DIR/tests/fixtures/fe_test",
+    glob: "*.fe",
+)]
+fn test_fe_test_backends_agree(fixture: Fixture<&str>) {
+    let yul = run_fe_main_impl(
+        &["test", "--call-trace", "--backend", "yul", fixture.path()],
+        None,
+    );
+    let sonatina = run_fe_main_impl(
+        &["test", "--call-trace", "--backend", "sonatina", fixture.path()],
+        None,
+    );
+
+    assert_eq!(
+        yul.exit_code, sonatina.exit_code,
+        "Exit code mismatch for {path}:\n\n--- yul (exit {ye}) ---\n{yo}\n\n--- sonatina (exit {se}) ---\n{so}",
+        path = fixture.path(),
+        ye = yul.exit_code, yo = yul.combined(),
+        se = sonatina.exit_code, so = sonatina.combined(),
+    );
+
+    // Compare stdout (test names + pass/fail lines). Stderr may contain
+    // backend-specific diagnostics so we only check stdout here.
+    assert_eq!(
+        yul.stdout, sonatina.stdout,
+        "Test output mismatch for {path}:\n\n--- yul ---\n{yo}\n\n--- sonatina ---\n{so}",
+        path = fixture.path(),
+        yo = yul.stdout,
+        so = sonatina.stdout,
     );
 }
 

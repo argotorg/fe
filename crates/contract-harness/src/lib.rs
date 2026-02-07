@@ -116,7 +116,7 @@ impl Default for ExecutionOptions {
     fn default() -> Self {
         Self {
             caller: Address::ZERO,
-            gas_limit: 1_000_000,
+            gas_limit: 10_000_000,
             gas_price: 0,
             value: U256::ZERO,
             nonce: None,
@@ -382,6 +382,238 @@ fn trace_tx(evm: &MainnetEvm<MainnetContext<InMemoryDB>>, tx: TxEnv) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Call-trace inspector: captures CALL/CREATE events at contract boundaries
+// ---------------------------------------------------------------------------
+
+/// Normalized address in a call trace (sequential ID, not raw address).
+type AddrId = usize;
+
+/// A single event in a call trace.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CallTraceEvent {
+    Call {
+        target: AddrId,
+        calldata: Vec<u8>,
+        output: Vec<u8>,
+        success: bool,
+    },
+    Create {
+        scheme: &'static str,
+        address: AddrId,
+        success: bool,
+    },
+}
+
+/// Address-normalized call trace from a single test execution.
+#[derive(Debug, Clone, Default)]
+pub struct CallTrace {
+    pub events: Vec<CallTraceEvent>,
+    addr_map: HashMap<Address, AddrId>,
+}
+
+impl CallTrace {
+    /// Replaces known addresses in a hex-encoded byte string with their `$N` IDs.
+    ///
+    /// EVM addresses are 20 bytes. In ABI-encoded return data, they appear as
+    /// 32-byte words with 12 zero bytes followed by the 20-byte address.
+    /// We scan for both raw 20-byte occurrences and zero-padded 32-byte words.
+    fn normalize_hex(hex_str: &str, addr_map: &HashMap<Address, AddrId>) -> String {
+        if addr_map.is_empty() || hex_str.is_empty() {
+            return hex_str.to_string();
+        }
+
+        let mut result = hex_str.to_string();
+        // Sort by longest hex representation first to avoid partial replacements
+        let mut entries: Vec<_> = addr_map.iter().collect();
+        entries.sort_by(|a, b| b.0.to_string().len().cmp(&a.0.to_string().len()));
+
+        for (addr, id) in entries {
+            let addr_hex = hex::encode(addr.as_slice()); // 40 hex chars
+            // Replace zero-padded 32-byte ABI word (24 zeros + 40 hex chars)
+            let padded = format!("000000000000000000000000{addr_hex}");
+            result = result.replace(&padded, &format!("${id}"));
+            // Also replace bare 20-byte address
+            result = result.replace(&addr_hex, &format!("${id}"));
+        }
+        result
+    }
+}
+
+impl fmt::Display for CallTrace {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for event in &self.events {
+            match event {
+                CallTraceEvent::Call {
+                    target,
+                    calldata,
+                    output,
+                    success,
+                } => {
+                    let status = if *success { "ok" } else { "revert" };
+                    let ret_hex = CallTrace::normalize_hex(
+                        &hex::encode(output),
+                        &self.addr_map,
+                    );
+                    let data_hex = CallTrace::normalize_hex(
+                        &hex::encode(calldata),
+                        &self.addr_map,
+                    );
+                    writeln!(
+                        f,
+                        "CALL ${target} data={data_hex} -> {status} ret={ret_hex}",
+                    )?;
+                }
+                CallTraceEvent::Create {
+                    scheme,
+                    address,
+                    success,
+                } => {
+                    let status = if *success { "ok" } else { "fail" };
+                    writeln!(f, "{scheme} {status} -> ${address}")?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Tracks whether we are inside a CALL or CREATE frame.
+#[derive(Debug, Clone)]
+enum PendingFrame {
+    Call {
+        target: AddrId,
+        calldata: Vec<u8>,
+    },
+    Create {
+        scheme: &'static str,
+    },
+}
+
+/// Inspector that records every CALL/CREATE at contract boundaries.
+///
+/// Addresses are normalized to sequential IDs so that traces from different
+/// backends (which produce different bytecode and therefore different
+/// CREATE-derived addresses) can be compared directly.
+#[derive(Debug)]
+pub struct CallTracer {
+    addr_map: HashMap<Address, AddrId>,
+    next_id: AddrId,
+    stack: Vec<PendingFrame>,
+    events: Vec<CallTraceEvent>,
+}
+
+impl CallTracer {
+    pub fn new() -> Self {
+        Self {
+            addr_map: HashMap::new(),
+            next_id: 0,
+            stack: Vec::new(),
+            events: Vec::new(),
+        }
+    }
+
+    fn resolve_addr(&mut self, addr: Address) -> AddrId {
+        let next = self.next_id;
+        *self.addr_map.entry(addr).or_insert_with(|| {
+            self.next_id = next + 1;
+            next
+        })
+    }
+
+    fn assign_new_addr(&mut self, addr: Address) -> AddrId {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.addr_map.insert(addr, id);
+        id
+    }
+
+    pub fn into_trace(self) -> CallTrace {
+        CallTrace {
+            events: self.events,
+            addr_map: self.addr_map,
+        }
+    }
+}
+
+impl<CTX: revm::context_interface::ContextTr, INTR: revm::interpreter::InterpreterTypes>
+    revm::Inspector<CTX, INTR> for CallTracer
+{
+    fn call(
+        &mut self,
+        context: &mut CTX,
+        inputs: &mut revm::interpreter::CallInputs,
+    ) -> Option<revm::interpreter::CallOutcome> {
+        let target_id = self.resolve_addr(inputs.target_address);
+        let calldata = inputs.input.bytes(context).to_vec();
+        self.stack.push(PendingFrame::Call {
+            target: target_id,
+            calldata,
+        });
+        None
+    }
+
+    fn call_end(
+        &mut self,
+        _context: &mut CTX,
+        _inputs: &revm::interpreter::CallInputs,
+        outcome: &mut revm::interpreter::CallOutcome,
+    ) {
+        let Some(frame) = self.stack.pop() else {
+            return;
+        };
+        if let PendingFrame::Call { target, calldata } = frame {
+            self.events.push(CallTraceEvent::Call {
+                target,
+                calldata,
+                output: outcome.result.output.to_vec(),
+                success: outcome.result.result.is_ok(),
+            });
+        }
+    }
+
+    fn create(
+        &mut self,
+        _context: &mut CTX,
+        inputs: &mut revm::interpreter::CreateInputs,
+    ) -> Option<revm::interpreter::CreateOutcome> {
+        let scheme = match inputs.scheme {
+            revm::context_interface::CreateScheme::Create => "CREATE",
+            revm::context_interface::CreateScheme::Create2 { .. } => "CREATE2",
+            revm::context_interface::CreateScheme::Custom { .. } => "CREATE_CUSTOM",
+        };
+        self.stack.push(PendingFrame::Create { scheme });
+        None
+    }
+
+    fn create_end(
+        &mut self,
+        _context: &mut CTX,
+        _inputs: &revm::interpreter::CreateInputs,
+        outcome: &mut revm::interpreter::CreateOutcome,
+    ) {
+        let Some(frame) = self.stack.pop() else {
+            return;
+        };
+        if let PendingFrame::Create { scheme } = frame {
+            let success = outcome.result.result.is_ok();
+            let addr_id = if let Some(addr) = outcome.address {
+                self.assign_new_addr(addr)
+            } else {
+                // Failed create — assign a placeholder ID
+                let id = self.next_id;
+                self.next_id += 1;
+                id
+            };
+            self.events.push(CallTraceEvent::Create {
+                scheme,
+                address: addr_id,
+                success,
+            });
+        }
+    }
+}
+
 /// Formats raw EVM logs into debug strings for display.
 ///
 /// * `logs` - Logs emitted by the EVM execution.
@@ -540,6 +772,37 @@ impl RuntimeInstance {
     ) -> Result<CallResult, HarnessError> {
         let calldata = encode_function_call(signature, args)?;
         self.call_raw(&calldata, options)
+    }
+
+    /// Re-executes the last transaction on a **cloned** EVM context with the
+    /// `CallTracer` inspector attached, producing a normalized call trace.
+    ///
+    /// Uses `&self` because it clones the context — does not mutate real state.
+    pub fn call_raw_traced(&self, calldata: &[u8], options: ExecutionOptions) -> CallTrace {
+        let ctx = self.evm.ctx.clone();
+        let mut tracer = CallTracer::new();
+        let mut trace_evm = ctx.build_mainnet_with_inspector(&mut tracer);
+
+        // Use nonce 0 for the trace run — this is a replay on a clone.
+        let nonce = self
+            .next_nonce_by_caller
+            .get(&options.caller)
+            .copied()
+            .unwrap_or(0);
+
+        let tx = TxEnv::builder()
+            .caller(options.caller)
+            .gas_limit(options.gas_limit)
+            .gas_price(options.gas_price)
+            .to(self.address)
+            .value(options.value)
+            .data(EvmBytes::copy_from_slice(calldata))
+            .nonce(nonce)
+            .build()
+            .expect("tx builder is valid");
+
+        let _ = trace_evm.inspect_tx_commit(tx);
+        tracer.into_trace()
     }
 
     /// Returns the contract address assigned to this runtime instance.

@@ -136,6 +136,9 @@ pub enum Command {
         /// When used with `--report-dir`, only write reports for suites that failed.
         #[arg(long, requires = "report_dir")]
         report_failed_only: bool,
+        /// Print a normalized call trace for each test (for backend comparison).
+        #[arg(long)]
+        call_trace: bool,
     },
     /// Create a new ingot or workspace.
     New {
@@ -226,6 +229,7 @@ pub fn run(opts: &Options) {
             report_out,
             report_dir,
             report_failed_only,
+            call_trace,
         } => {
             let debug = TestDebugOptions {
                 trace_evm: *trace_evm,
@@ -252,6 +256,7 @@ pub fn run(opts: &Options) {
                 (*report).then_some(report_out),
                 report_dir.as_ref(),
                 *report_failed_only,
+                *call_trace,
             ) {
                 Ok(has_failures) => {
                     if has_failures {
