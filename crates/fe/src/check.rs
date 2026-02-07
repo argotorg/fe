@@ -9,7 +9,7 @@ use common::{
 };
 use driver::DriverDataBase;
 use hir::hir_def::{HirIngot, TopLevelMod};
-use mir::lower_module;
+use mir::{MirDiagnosticsMode, collect_mir_diagnostics, lower_module};
 use resolver::ResolutionHandler;
 use resolver::ingot::{FeTomlProbe, infer_config_kind};
 use resolver::{Resolver, files::ancestor_fe_toml_dirs};
@@ -354,11 +354,26 @@ fn check_single_file(
     // Try to get the file and check it for errors
     if let Some(file) = db.workspace().get(db, &file_url) {
         let top_mod = db.top_mod(file);
-        let diags = db.run_on_top_mod(top_mod);
-        if !diags.is_empty() {
+        let hir_diags = db.run_on_top_mod(top_mod);
+        let mut has_errors = false;
+        if !hir_diags.is_empty() {
             eprintln!("errors in {file_url}");
             eprintln!();
-            diags.emit(db);
+            hir_diags.emit(db);
+            has_errors = true;
+        }
+
+        let mir_output = collect_mir_diagnostics(db, top_mod, MirDiagnosticsMode::CompilerParity);
+        if !mir_output.diagnostics.is_empty() {
+            if !has_errors {
+                eprintln!("errors in {file_url}");
+                eprintln!();
+            }
+            db.emit_complete_diagnostics(&mir_output.diagnostics);
+            has_errors = true;
+        }
+
+        if has_errors {
             return true;
         }
         if dump_mir {
@@ -515,7 +530,15 @@ fn check_ingot_and_dependencies(
     if !diags.is_empty() {
         diags.emit(db);
         has_errors = true;
-    } else {
+    }
+
+    let mir_diags = db.mir_diagnostics_for_ingot(ingot, MirDiagnosticsMode::CompilerParity);
+    if !mir_diags.is_empty() {
+        db.emit_complete_diagnostics(&mir_diags);
+        has_errors = true;
+    }
+
+    if !has_errors {
         let root_mod = ingot.root_mod(db);
         if dump_mir {
             dump_module_mir(db, root_mod);
@@ -538,9 +561,10 @@ fn check_ingot_and_dependencies(
             has_errors = true;
             continue;
         }
-        let diags = db.run_on_ingot(ingot);
-        if !diags.is_empty() {
-            dependency_errors.push((dependency_url, diags));
+        let hir_diags = db.run_on_ingot(ingot);
+        let mir_diags = db.mir_diagnostics_for_ingot(ingot, MirDiagnosticsMode::CompilerParity);
+        if !hir_diags.is_empty() || !mir_diags.is_empty() {
+            dependency_errors.push((dependency_url, hir_diags, mir_diags));
         }
     }
 
@@ -552,9 +576,14 @@ fn check_ingot_and_dependencies(
             eprintln!("❌ Errors in downstream ingots");
         }
 
-        for (dependency_url, diags) in dependency_errors {
+        for (dependency_url, hir_diags, mir_diags) in dependency_errors {
             print_dependency_info(db, &dependency_url);
-            diags.emit(db);
+            if !hir_diags.is_empty() {
+                hir_diags.emit(db);
+            }
+            if !mir_diags.is_empty() {
+                db.emit_complete_diagnostics(&mir_diags);
+            }
         }
     }
 

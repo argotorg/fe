@@ -63,11 +63,28 @@ impl DriverDataBase {
         mode: MirDiagnosticsMode,
     ) -> Vec<CompleteDiagnostic> {
         let top_mod = ingot.root_mod(self);
-        let output = collect_mir_diagnostics(self, top_mod, mode);
+        let mut output = collect_mir_diagnostics(self, top_mod, mode);
         for err in output.internal_errors {
             tracing::debug!(target: "lsp", "MIR diagnostics internal error: {err}");
         }
+        sort_and_dedup_complete_diagnostics(&mut output.diagnostics);
         output.diagnostics
+    }
+
+    pub fn emit_complete_diagnostics(&self, diagnostics: &[CompleteDiagnostic]) {
+        let writer = BufferWriter::stderr(ColorChoice::Auto);
+        let mut buffer = writer.buffer();
+        let config = term::Config::default();
+        let mut diagnostics = diagnostics.to_vec();
+        sort_and_dedup_complete_diagnostics(&mut diagnostics);
+
+        for diag in diagnostics {
+            term::emit(&mut buffer, &config, &CsDbWrapper(self), &diag.to_cs(self)).unwrap();
+        }
+
+        writer
+            .print(&buffer)
+            .expect("Failed to write diagnostics to stderr");
     }
 }
 
@@ -106,12 +123,21 @@ impl DiagnosticsCollection<'_> {
 
     fn finalize(&self, db: &DriverDataBase) -> Vec<CompleteDiagnostic> {
         let mut diags: Vec<_> = self.0.iter().map(|d| d.as_ref().to_complete(db)).collect();
-        diags.sort_by(|lhs, rhs| match lhs.error_code.cmp(&rhs.error_code) {
-            std::cmp::Ordering::Equal => lhs.primary_span().cmp(&rhs.primary_span()),
-            ord => ord,
-        });
+        sort_complete_diagnostics(&mut diags);
         diags
     }
+}
+
+fn sort_complete_diagnostics(diags: &mut [CompleteDiagnostic]) {
+    diags.sort_by(|lhs, rhs| match lhs.error_code.cmp(&rhs.error_code) {
+        std::cmp::Ordering::Equal => lhs.primary_span().cmp(&rhs.primary_span()),
+        ord => ord,
+    });
+}
+
+fn sort_and_dedup_complete_diagnostics(diags: &mut Vec<CompleteDiagnostic>) {
+    sort_complete_diagnostics(diags);
+    diags.dedup();
 }
 
 fn initialize_analysis_pass() -> AnalysisPassManager {

@@ -1,0 +1,22 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/cli_output/single_files/mir_move_error.fe
+---
+=== STDERR ===
+errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/mir_move_error.fe
+
+error[10-0002]: move conflict in `fn mir_move_error`
+   ┌─ mir_move_error.fe:9:34
+   │  
+ 9 │   pub fn mir_move_error() -> Boxed {
+   │ ╭──────────────────────────────────^
+10 │ │     let x = Boxed { value: 0 }
+11 │ │     consume(x)
+   │ │             - `x` is moved here
+12 │ │     x
+13 │ │ }
+   │ ╰─^ cannot use a value after it was moved
+
+
+=== EXIT CODE: 1 ===
