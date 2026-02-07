@@ -1,5 +1,4 @@
 mod backend;
-mod builtin_files;
 mod cli;
 mod fallback;
 mod functionality;
@@ -11,6 +10,7 @@ mod server;
 #[cfg(test)]
 mod test_utils;
 mod util;
+mod virtual_files;
 
 use std::net::SocketAddr;
 use std::time::Duration;
