@@ -1,6 +1,5 @@
 ---
 source: crates/mir/tests/lowering_snapshots.rs
-assertion_line: 26
 expression: mir_output
 ---
 fn __EchoContract_init_contract(v0: u256, v1: u256, v2: u256) -> ():
@@ -81,7 +80,7 @@ fn __EchoContract_init_code_len() -> u256:
 
 fn init_field__Evm_hef0af3106e109414_Foo_h6dbce71a6ea992b8__c09e6c6fc5a7b23d(v0: Self, v1: u256) -> StorPtr<Foo>:
   bb0:
-    v2: StorPtr<Foo> = evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Foo_h6dbce71a6ea992b8__21493237fe9c2c26(v0, v1)
+    v2: StorPtr<Foo> = evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Foo_h6dbce71a6ea992b8__21493237fe9c2c26((), v1)
     ret v2
 
 fn evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort(v0: Evm) -> !:
@@ -91,11 +90,23 @@ fn evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort(v0: Evm) -> !:
 fn alloc(v0: u256) -> u256:
   bb0:
     v1: u256 = mload(64)
-    br (v1 == 0) bb1 bb2
+    v2: u256 = mload(128)
+    br (v2 > v1) bb1 bb2
   bb1:
-    v1 = 128
+    v1 = v2
     jmp bb2
   bb2:
+    br (v1 == 0) bb3 bb4
+  bb3:
+    v3: u256 = msize()
+    v1 = v3
+    jmp bb4
+  bb4:
+    br (v1 < 8192) bb5 bb6
+  bb5:
+    v1 = 8192
+    jmp bb6
+  bb6:
     eval mstore(64, (v1 + v0))
     ret v1
 
@@ -116,11 +127,11 @@ fn evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Foo_h6dbce71a6ea9
 
 fn runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2(v0: Self) -> u32:
   bb0:
-    v1: CallData = evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input(v0)
+    v1: CallData = evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input(())
     v2: u256 = calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len(v1)
     br (v2 < 4) bb1 bb2
   bb1:
-    terminate evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort(v0)
+    terminate evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort(())
   bb2:
     v3: u256 = calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at(v1, 0)
     v4: u32 = sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_selector_from_prefix(v3)
@@ -128,7 +139,7 @@ fn runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805
 
 fn runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2(v0: Self) -> SolDecoder<CallData>:
   bb0:
-    v1: CallData = evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input(v0)
+    v1: CallData = evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input(())
     v2: SolDecoder<CallData> = sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v1, 4)
     ret v2
 
@@ -145,7 +156,7 @@ fn return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef
     v4: (u256, u256) = solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish(v2)
     v5: u256 = load mem[v4].0
     v6: u256 = load mem[v4].1
-    terminate evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes(v0, v5, v6)
+    terminate evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes((), v5, v6)
 
 fn echo_h9f932a87feb06bd2_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966(v0: D) -> Echo:
   bb0:

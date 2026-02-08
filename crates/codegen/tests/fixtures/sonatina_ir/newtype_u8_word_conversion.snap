@@ -1,0 +1,33 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+expression: output
+input_file: crates/codegen/tests/fixtures/newtype_u8_word_conversion.fe
+---
+target = evm-ethereum-osaka
+
+func public %newtype_u8_roundtrip(v0.i256) -> i256 {
+    block0:
+        v3.i256 = evm_malloc 33.i256;
+        v4.i8 = trunc v0 i8;
+        v5.i256 = zext v4 i256;
+        mstore v3 v5 i256;
+        v7.i256 = add v3 1.i256;
+        mstore v7 0.i256 i256;
+        v8.i256 = mload v3 i256;
+        v9.i8 = trunc v8 i8;
+        v10.i256 = zext v9 i256;
+        return v10;
+}
+
+func public %__fe_sonatina_entry() {
+    block0:
+        v1.i256 = call %newtype_u8_roundtrip 0.i256;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+    }
+}
