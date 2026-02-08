@@ -6,7 +6,7 @@ struct Point {
     y: u8,
 }
 
-pub fn match_struct_fields(p: Point) -> u8 {
+pub fn match_struct_fields(p: own Point) -> u8 {
     match p {
         Point { x: 0, y: 0 } => 0,
         Point { x: 0, y } => y,
@@ -15,7 +15,7 @@ pub fn match_struct_fields(p: Point) -> u8 {
     }
 }
 
-pub fn match_struct_wildcard(p: Point) -> u8 {
+pub fn match_struct_wildcard(p: own Point) -> u8 {
     match p {
         Point { x: 0, y: _ } => 1,
         Point { x: _, y: 0 } => 2,

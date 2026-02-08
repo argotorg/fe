@@ -23,6 +23,7 @@ fn maybe_inc(v0: Opt) -> u64:
     v2 = v3
     jmp bb3
   bb3:
+    bind move_out(mem[v0])
     v1: u64 = v2
     v6: u64 = 0
     jmp bb6

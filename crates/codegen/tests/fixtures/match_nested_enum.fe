@@ -10,7 +10,7 @@ enum Outer {
 }
 
 // Test nested enum pattern matching with bindings
-pub fn match_nested_enum(outer: Outer) -> u8 {
+pub fn match_nested_enum(outer: own Outer) -> u8 {
     match outer {
         Outer::First(Inner::Unit) => 0
         Outer::First(Inner::Value(x)) => x
