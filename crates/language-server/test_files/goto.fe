@@ -11,5 +11,5 @@ fn main() {
 }
 
 mod baz {
-   pub struct Baz {}
+    pub struct Baz {}
 }

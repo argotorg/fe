@@ -1,0 +1,57 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+expression: output
+input_file: crates/codegen/tests/fixtures/comparison_ops.fe
+---
+target = evm-ethereum-osaka
+
+func public %comparison_ops() -> i256 {
+    block0:
+        v5.i256 = evm_malloc 6.i256;
+        v6.i256 = eq 1.i256 1.i256;
+        v7.i256 = is_zero v6;
+        v8.i256 = is_zero v7;
+        mstore v5 v8 i256;
+        v9.i256 = eq 1.i256 2.i256;
+        v10.i256 = is_zero v9;
+        v11.i256 = is_zero v10;
+        v12.i256 = is_zero v11;
+        v13.i256 = add v5 1.i256;
+        mstore v13 v12 i256;
+        v14.i256 = lt 1.i256 2.i256;
+        v15.i256 = is_zero v14;
+        v16.i256 = is_zero v15;
+        v17.i256 = add v5 2.i256;
+        mstore v17 v16 i256;
+        v18.i256 = gt 2.i256 2.i256;
+        v19.i256 = is_zero v18;
+        v20.i256 = is_zero v19;
+        v21.i256 = is_zero v20;
+        v22.i256 = add v5 3.i256;
+        mstore v22 v21 i256;
+        v23.i256 = gt 3.i256 2.i256;
+        v24.i256 = is_zero v23;
+        v25.i256 = is_zero v24;
+        v27.i256 = add v5 4.i256;
+        mstore v27 v25 i256;
+        v28.i256 = lt 3.i256 3.i256;
+        v29.i256 = is_zero v28;
+        v30.i256 = is_zero v29;
+        v31.i256 = is_zero v30;
+        v33.i256 = add v5 5.i256;
+        mstore v33 v31 i256;
+        return v5;
+}
+
+func public %__fe_sonatina_entry() {
+    block0:
+        v0.i256 = call %comparison_ops;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+    }
+}

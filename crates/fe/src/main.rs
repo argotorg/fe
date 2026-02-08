@@ -1,6 +1,8 @@
 #![allow(clippy::print_stderr, clippy::print_stdout)]
 mod check;
 mod cli;
+mod lsif;
+mod report;
 mod test;
 #[cfg(not(target_arch = "wasm32"))]
 mod tree;
@@ -14,6 +16,8 @@ use colored::Colorize;
 use fmt as fe_fmt;
 use similar::{ChangeTag, TextDiff};
 use walkdir::WalkDir;
+
+use crate::test::TestDebugOptions;
 
 #[derive(Debug, Clone, Parser)]
 #[command(version, about, long_about = None)]
@@ -37,6 +41,23 @@ pub enum Command {
         dump_mir: bool,
         #[arg(long)]
         emit_yul_min: bool,
+        /// Code generation backend to use (yul or sonatina).
+        #[arg(long, default_value = "yul")]
+        backend: String,
+        /// Write a debugging report as a `.tar.gz` file (includes sources, IR, backend output).
+        #[arg(long)]
+        report: bool,
+        /// Output path for `--report` (must end with `.tar.gz`).
+        #[arg(
+            long,
+            value_name = "OUT",
+            default_value = "fe-check-report.tar.gz",
+            requires = "report"
+        )]
+        report_out: Utf8PathBuf,
+        /// Only write the report if `fe check` fails.
+        #[arg(long, requires = "report")]
+        report_failed_only: bool,
     },
     #[cfg(not(target_arch = "wasm32"))]
     Tree {
@@ -53,15 +74,72 @@ pub enum Command {
     },
     /// Run Fe tests in a file or directory.
     Test {
-        /// Path to a .fe file or directory containing an ingot with tests.
-        #[arg(default_value_t = default_project_path())]
-        path: Utf8PathBuf,
+        /// Path(s) to .fe files or directories containing ingots with tests.
+        ///
+        /// Supports glob patterns (e.g. `crates/fe/tests/fixtures/fe_test/*.fe`).
+        ///
+        /// When omitted, defaults to the current project root (like `cargo test`).
+        #[arg(value_name = "PATH", num_args = 0..)]
+        paths: Vec<Utf8PathBuf>,
         /// Optional filter pattern for test names.
         #[arg(short, long)]
         filter: Option<String>,
         /// Show event logs from test execution.
         #[arg(long)]
         show_logs: bool,
+        /// Backend to use for codegen (yul or sonatina).
+        #[arg(long, default_value = "yul")]
+        backend: String,
+        /// Trace executed EVM opcodes while running tests.
+        #[arg(long)]
+        trace_evm: bool,
+        /// How many EVM steps to keep in the trace ring buffer.
+        #[arg(long, default_value_t = 200)]
+        trace_evm_keep: usize,
+        /// How many stack items to print per EVM step in traces.
+        #[arg(long, default_value_t = 16)]
+        trace_evm_stack_n: usize,
+        /// Dump the Sonatina runtime symbol table (function offsets/sizes).
+        #[arg(long)]
+        sonatina_symtab: bool,
+        /// Emit Sonatina stackify traces (internal call/stack planning).
+        #[arg(long)]
+        sonatina_stackify_trace: bool,
+        /// Substring filter for Sonatina stackify traces (function name contains this).
+        #[arg(long)]
+        sonatina_stackify_filter: Option<String>,
+        /// Trace which `evm_malloc` sites are treated as transient by Sonatina's analysis.
+        #[arg(long)]
+        sonatina_transient_malloc_trace: bool,
+        /// Substring filter for Sonatina transient-malloc traces (function name contains this).
+        #[arg(long)]
+        sonatina_transient_malloc_filter: Option<String>,
+        /// Directory to write debug outputs (traces, symtabs) into.
+        #[arg(long)]
+        debug_dir: Option<Utf8PathBuf>,
+        /// Write a debugging report as a `.tar.gz` file (includes sources, IR, bytecode, traces).
+        #[arg(long)]
+        report: bool,
+        /// Output path for `--report` (must end with `.tar.gz`).
+        #[arg(
+            long,
+            value_name = "OUT",
+            default_value = "fe-test-report.tar.gz",
+            requires = "report"
+        )]
+        report_out: Utf8PathBuf,
+        /// Write one `.tar.gz` report per input suite into this directory.
+        ///
+        /// Useful when running a glob over many fixtures: each failing suite can be shared as a
+        /// standalone artifact.
+        #[arg(long, value_name = "DIR", conflicts_with = "report")]
+        report_dir: Option<Utf8PathBuf>,
+        /// When used with `--report-dir`, only write reports for suites that failed.
+        #[arg(long, requires = "report_dir")]
+        report_failed_only: bool,
+        /// Print a normalized call trace for each test (for backend comparison).
+        #[arg(long)]
+        call_trace: bool,
     },
     /// Create a new ingot or workspace.
     New {
@@ -76,6 +154,15 @@ pub enum Command {
         /// Override the default version (default: 0.1.0).
         #[arg(long)]
         version: Option<String>,
+    },
+    /// Generate LSIF index for code navigation.
+    Lsif {
+        /// Path to the ingot directory.
+        #[arg(default_value_t = default_project_path())]
+        path: Utf8PathBuf,
+        /// Output file (defaults to stdout).
+        #[arg(short, long)]
+        output: Option<Utf8PathBuf>,
     },
 }
 
@@ -96,9 +183,30 @@ pub fn run(opts: &Options) {
             core: _,
             dump_mir,
             emit_yul_min,
+            backend,
+            report,
+            report_out,
+            report_failed_only,
         } => {
-            //: TODO readd custom core
-            check(path, *dump_mir, *emit_yul_min);
+            // TODO readd custom core
+            match check(
+                path,
+                *dump_mir,
+                *emit_yul_min,
+                backend,
+                (*report).then_some(report_out),
+                *report_failed_only,
+            ) {
+                Ok(has_errors) => {
+                    if has_errors {
+                        std::process::exit(1);
+                    }
+                }
+                Err(err) => {
+                    eprintln!("❌ Error: {err}");
+                    std::process::exit(1);
+                }
+            }
         }
         #[cfg(not(target_arch = "wasm32"))]
         Command::Tree { path } => {
@@ -108,11 +216,62 @@ pub fn run(opts: &Options) {
             run_fmt(path.as_ref(), *check);
         }
         Command::Test {
-            path,
+            paths,
             filter,
             show_logs,
+            backend,
+            trace_evm,
+            trace_evm_keep,
+            trace_evm_stack_n,
+            sonatina_symtab,
+            sonatina_stackify_trace,
+            sonatina_stackify_filter,
+            sonatina_transient_malloc_trace,
+            sonatina_transient_malloc_filter,
+            debug_dir,
+            report,
+            report_out,
+            report_dir,
+            report_failed_only,
+            call_trace,
         } => {
-            test::run_tests(path, filter.as_deref(), *show_logs);
+            let debug = TestDebugOptions {
+                trace_evm: *trace_evm,
+                trace_evm_keep: *trace_evm_keep,
+                trace_evm_stack_n: *trace_evm_stack_n,
+                sonatina_symtab: *sonatina_symtab,
+                sonatina_stackify_trace: *sonatina_stackify_trace,
+                sonatina_stackify_filter: sonatina_stackify_filter.clone(),
+                sonatina_transient_malloc_trace: *sonatina_transient_malloc_trace,
+                sonatina_transient_malloc_filter: sonatina_transient_malloc_filter.clone(),
+                debug_dir: debug_dir.clone(),
+            };
+            let paths = if paths.is_empty() {
+                vec![default_project_path()]
+            } else {
+                paths.clone()
+            };
+            match test::run_tests(
+                &paths,
+                filter.as_deref(),
+                *show_logs,
+                backend,
+                &debug,
+                (*report).then_some(report_out),
+                report_dir.as_ref(),
+                *report_failed_only,
+                *call_trace,
+            ) {
+                Ok(has_failures) => {
+                    if has_failures {
+                        std::process::exit(1);
+                    }
+                }
+                Err(err) => {
+                    eprintln!("❌ Error: {err}");
+                    std::process::exit(1);
+                }
+            }
         }
         Command::New {
             path,
@@ -125,6 +284,57 @@ pub fn run(opts: &Options) {
                 std::process::exit(1);
             }
         }
+        Command::Lsif { path, output } => {
+            run_lsif(path, output.as_ref());
+        }
+    }
+}
+
+fn run_lsif(path: &Utf8PathBuf, output: Option<&Utf8PathBuf>) {
+    use driver::DriverDataBase;
+
+    let mut db = DriverDataBase::default();
+
+    let canonical_path = match path.canonicalize_utf8() {
+        Ok(p) => p,
+        Err(_) => {
+            eprintln!("Error: Invalid or non-existent directory path: {path}");
+            std::process::exit(1);
+        }
+    };
+
+    let ingot_url = match url::Url::from_directory_path(canonical_path.as_str()) {
+        Ok(url) => url,
+        Err(_) => {
+            eprintln!("Error: Invalid directory path: {path}");
+            std::process::exit(1);
+        }
+    };
+
+    let had_init_diagnostics = driver::init_ingot(&mut db, &ingot_url);
+    if had_init_diagnostics {
+        eprintln!("Warning: ingot had initialization diagnostics");
+    }
+
+    let result = if let Some(output_path) = output {
+        let file = match std::fs::File::create(output_path.as_std_path()) {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!("Error creating output file: {e}");
+                std::process::exit(1);
+            }
+        };
+        let writer = std::io::BufWriter::new(file);
+        lsif::generate_lsif(&mut db, &ingot_url, writer)
+    } else {
+        let stdout = std::io::stdout().lock();
+        let writer = std::io::BufWriter::new(stdout);
+        lsif::generate_lsif(&mut db, &ingot_url, writer)
+    };
+
+    if let Err(e) = result {
+        eprintln!("Error generating LSIF: {e}");
+        std::process::exit(1);
     }
 }
 
