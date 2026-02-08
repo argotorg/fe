@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 33
 expression: output
 input_file: tests/fixtures/name_collisions.fe
 ---
@@ -28,28 +27,12 @@ function $test_generic_type_collision() -> ret {
   ret := 42
   leave
 }
-function $widget_h8588afca9d68e578_process($self) -> ret {
-  ret := mul($self, 2)
-  leave
-}
-function $widget_h6847c0e3e0e4aa1e_process($self) -> ret {
-  ret := mul($self, 3)
-  leave
-}
 function $test_impl_method_collision() -> ret {
   let v0 := 10
   let v1 := 20
   let v2 := $widget_h8588afca9d68e578_process(v0)
   let v3 := $widget_h6847c0e3e0e4aa1e_process(v1)
   ret := v2
-  leave
-}
-function $multitraitimpl_h60cc862fc809464_trait_h79853acec5b2b3ad_same_method($self) -> ret {
-  ret := add($self, 1)
-  leave
-}
-function $multitraitimpl_h60cc862fc809464_trait_ha6da5e54b37dd39c_same_method($self) -> ret {
-  ret := add($self, 2)
   leave
 }
 function $test_trait_method_collision() -> ret {
@@ -117,6 +100,22 @@ function $main() -> ret {
   let v7 := $test_yul_reserved_fn_collision()
   pop(v7)
   ret := 0
+  leave
+}
+function $widget_h8588afca9d68e578_process($self) -> ret {
+  ret := mul($self, 2)
+  leave
+}
+function $widget_h6847c0e3e0e4aa1e_process($self) -> ret {
+  ret := mul($self, 3)
+  leave
+}
+function $multitraitimpl_h60cc862fc809464_trait_h79853acec5b2b3ad_same_method($self) -> ret {
+  ret := add($self, 1)
+  leave
+}
+function $multitraitimpl_h60cc862fc809464_trait_ha6da5e54b37dd39c_same_method($self) -> ret {
+  ret := add($self, 2)
   leave
 }
 function $generic_fn__S_h730d9dc564aaaf27__8d32801e7ec9d42b($val) -> ret {

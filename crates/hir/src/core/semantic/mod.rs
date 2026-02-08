@@ -73,7 +73,8 @@ use crate::analysis::ty::visitor::{TyVisitor, walk_ty};
 use crate::analysis::ty::{
     diagnostics::{TraitConstraintDiag, TyDiagCollection},
     trait_resolution::{
-        GoalSatisfiability, PredicateListId, WellFormedness, check_ty_wf, is_goal_satisfiable,
+        GoalSatisfiability, PredicateListId, TraitSolveCx, WellFormedness, check_ty_wf,
+        is_goal_satisfiable,
     },
     ty_check::EffectParamSite,
     ty_def::{InvalidCause, PrimTy, TyId},
@@ -113,7 +114,16 @@ pub fn constraints_for<'db>(
             collect_func_def_constraints(db, f.into(), true).instantiate_identity()
         }
         ItemKind::Impl(i) => collect_constraints(db, i.into()).instantiate_identity(),
-        ItemKind::Trait(t) => collect_constraints(db, t.into()).instantiate_identity(),
+        ItemKind::Trait(t) => {
+            let mut preds = collect_constraints(db, t.into()).instantiate_identity();
+            let self_pred = TraitInstId::new(db, t, t.params(db).to_vec(), IndexMap::new());
+            if !preds.list(db).contains(&self_pred) {
+                let mut merged = preds.list(db).to_vec();
+                merged.push(self_pred);
+                preds = PredicateListId::new(db, merged);
+            }
+            preds
+        }
         ItemKind::ImplTrait(i) => collect_constraints(db, i.into()).instantiate_identity(),
         _ => PredicateListId::empty_list(db),
     }
@@ -532,9 +542,11 @@ impl<'db> FuncParamView<'db> {
         }
 
         // Well-formedness / trait-bound satisfaction for parameter type
-        if let WellFormedness::IllFormed { goal, subgoal } =
-            check_ty_wf(db, func.top_mod(db).ingot(db), ty, assumptions)
-        {
+        if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(
+            db,
+            TraitSolveCx::new(db, func.scope()).with_assumptions(assumptions),
+            ty,
+        ) {
             out.push(
                 TraitConstraintDiag::TraitBoundNotSat {
                     span: ty_span.clone(),
@@ -893,7 +905,6 @@ impl<'db> Contract<'db> {
     ) -> IndexMap<IdentId<'db>, ContractFieldInfo<'db>> {
         let scope = self.top_mod(db).scope();
         let assumptions = PredicateListId::empty_list(db);
-        let ingot = self.top_mod(db).ingot(db);
 
         let effect_handle = resolve_core_trait(db, scope, &["effect_ref", "EffectHandle"])
             .expect("missing required core trait `core::effect_ref::EffectHandle`");
@@ -911,7 +922,7 @@ impl<'db> Contract<'db> {
                 let inst = TraitInstId::new(db, effect_handle, vec![declared_ty], IndexMap::new());
                 let goal = Canonicalized::new(db, inst).value;
                 let (is_provider, target_ty) =
-                    match is_goal_satisfiable(db, ingot, goal, assumptions) {
+                    match is_goal_satisfiable(db, TraitSolveCx::new(db, scope), goal) {
                         GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid => {
                             (false, None)
                         }
@@ -1336,6 +1347,7 @@ fn get_variant_selector<'db>(db: &'db dyn HirAnalysisDb, struct_: Struct<'db>) -
     match try_eval_const_body(db, body, expected_ty)? {
         ConstValue::Int(value) => value.to_u32(),
         ConstValue::Bool(_) => None,
+        ConstValue::Bytes(_) => None,
     }
 }
 
@@ -1761,9 +1773,11 @@ impl<'db> TypeAlias<'db> {
         };
         let assumptions = constraints_for(db, self.into());
         let ty = lower_hir_ty(db, hir_ty, self.scope(), assumptions);
-        if let WellFormedness::IllFormed { goal, subgoal } =
-            check_ty_wf(db, self.top_mod(db).ingot(db), ty, assumptions)
-        {
+        if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(
+            db,
+            TraitSolveCx::new(db, self.scope()).with_assumptions(assumptions),
+            ty,
+        ) {
             vec![
                 TraitConstraintDiag::TraitBoundNotSat {
                     span: self.span().ty().into(),
@@ -2484,9 +2498,11 @@ impl<'db> ImplAssocTypeView<'db> {
         }
 
         let ty = lower_hir_ty(db, hir, self.owner.scope(), assumptions);
-        let ingot = self.owner.top_mod(db).ingot(db);
-        if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(db, ingot, ty, assumptions)
-        {
+        if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(
+            db,
+            TraitSolveCx::new(db, self.owner.scope()).with_assumptions(assumptions),
+            ty,
+        ) {
             return vec![
                 TraitConstraintDiag::TraitBoundNotSat {
                     span: ty_span.into(),
@@ -2848,6 +2864,10 @@ impl<'db> ImplAssocConstView<'db> {
         self.def(db).value.to_opt().is_some()
     }
 
+    pub fn value_body(self, db: &'db dyn HirDb) -> Option<crate::core::hir_def::Body<'db>> {
+        self.def(db).value.to_opt()
+    }
+
     /// Semantic type of this associated const implementation.
     pub fn ty(self, db: &'db dyn HirAnalysisDb) -> Option<TyId<'db>> {
         let hir = self.def(db).ty.to_opt()?;
@@ -3038,9 +3058,11 @@ impl<'db> FieldView<'db> {
         // Trait-bound well-formedness for field type.
         let owner_item = self.owner_item();
         let assumptions = constraints_for(db, owner_item);
-        if let WellFormedness::IllFormed { goal, subgoal } =
-            check_ty_wf(db, owner_item.top_mod(db).ingot(db), ty, assumptions)
-        {
+        if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(
+            db,
+            TraitSolveCx::new(db, owner_item.scope()).with_assumptions(assumptions),
+            ty,
+        ) {
             out.push(
                 TraitConstraintDiag::TraitBoundNotSat {
                     span: span.clone(),

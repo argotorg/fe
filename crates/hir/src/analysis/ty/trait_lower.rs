@@ -260,7 +260,8 @@ pub(crate) fn collect_implementor_methods<'db>(
     let mut methods = IndexMap::default();
     let impl_trait = match implementor.origin(db) {
         super::trait_def::ImplementorOrigin::Hir(impl_trait) => impl_trait,
-        super::trait_def::ImplementorOrigin::VirtualContract(_) => return methods,
+        super::trait_def::ImplementorOrigin::VirtualContract(_)
+        | super::trait_def::ImplementorOrigin::Assumption => return methods,
     };
     let scope = impl_trait.scope();
     let graph = scope.scope_graph(db);

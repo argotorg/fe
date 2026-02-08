@@ -21,7 +21,9 @@ use crate::{
             diagnostics::{BodyDiag, FuncBodyDiag, TraitConstraintDiag, TyDiagCollection},
             trait_def::TraitInstId,
             trait_def::impls_for_ty,
-            trait_resolution::{GoalSatisfiability, PredicateListId, is_goal_satisfiable},
+            trait_resolution::{
+                GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable,
+            },
             ty_check::check_body,
             ty_def::{PrimTy, TyBase, TyData, TyId},
         },
@@ -85,12 +87,11 @@ fn resolve_sol_abi_ty<'db>(
 #[allow(clippy::too_many_arguments)]
 fn check_ty_decodable<'db>(
     db: &'db dyn HirAnalysisDb,
-    contract_ingot: common::ingot::Ingot<'db>,
+    solve_cx: TraitSolveCx<'db>,
     decode_trait: crate::hir_def::Trait<'db>,
     sol_ty: TyId<'db>,
     ty: TyId<'db>,
     span: DynLazySpan<'db>,
-    assumptions: PredicateListId<'db>,
     diags: &mut Vec<FuncBodyDiag<'db>>,
 ) {
     if ty.has_invalid(db) {
@@ -101,12 +102,11 @@ fn check_ty_decodable<'db>(
         for elem in ty.field_types(db) {
             check_ty_decodable(
                 db,
-                contract_ingot,
+                solve_cx,
                 decode_trait,
                 sol_ty,
                 elem,
                 span.clone(),
-                assumptions,
                 diags,
             );
         }
@@ -120,9 +120,7 @@ fn check_ty_decodable<'db>(
     let inst = TraitInstId::new(db, decode_trait, vec![ty, sol_ty], IndexMap::new());
     let canonical_inst = Canonical::new(db, inst);
 
-    if let GoalSatisfiability::UnSat(_) =
-        is_goal_satisfiable(db, contract_ingot, canonical_inst, assumptions)
-    {
+    if let GoalSatisfiability::UnSat(_) = is_goal_satisfiable(db, solve_cx, canonical_inst) {
         diags.push(
             TyDiagCollection::from(TraitConstraintDiag::TraitBoundNotSat {
                 span,
@@ -142,24 +140,22 @@ fn check_recv_variant_param_types_decodable<'db>(
     assumptions: PredicateListId<'db>,
     diags: &mut Vec<FuncBodyDiag<'db>>,
 ) {
-    let contract_ingot = contract.top_mod(db).ingot(db);
-
     let Some(sol_ty) = resolve_sol_abi_ty(db, contract.scope(), assumptions) else {
         return;
     };
     let Some(decode_trait) = resolve_core_trait(db, contract.scope(), &["abi", "Decode"]) else {
         return;
     };
+    let solve_cx = TraitSolveCx::new(db, contract.scope()).with_assumptions(assumptions);
 
     for field_ty in variant.ty.field_types(db) {
         check_ty_decodable(
             db,
-            contract_ingot,
+            solve_cx,
             decode_trait,
             sol_ty,
             field_ty,
             span.clone(),
-            assumptions,
             diags,
         );
     }
@@ -782,12 +778,21 @@ pub(super) fn get_msg_variant_return_type<'db>(
     let msg_variant_trait = resolve_core_trait(db, scope, &["message", "MsgVariant"])?;
 
     let canonical_ty = Canonical::new(db, variant_ty);
-    let ingot = scope.ingot(db);
+    let scope_ingot = scope.ingot(db);
+    let search_ingots = [
+        Some(scope_ingot),
+        variant_ty.ingot(db).filter(|&ingot| ingot != scope_ingot),
+    ];
 
-    // Find the MsgVariant impl specifically
-    let msg_variant_impl = impls_for_ty(db, ingot, canonical_ty)
-        .iter()
-        .find(|impl_| impl_.skip_binder().trait_def(db).eq(&msg_variant_trait))?;
+    // Find the MsgVariant impl specifically, probing both:
+    // - the call-site ingot (for local traits implemented for external types), and
+    // - the receiver type's ingot (for external traits implemented in the type's ingot).
+    let msg_variant_impl = search_ingots.into_iter().flatten().find_map(|ingot| {
+        impls_for_ty(db, ingot, canonical_ty)
+            .iter()
+            .find(|impl_| impl_.skip_binder().trait_def(db).eq(&msg_variant_trait))
+            .copied()
+    })?;
 
     // Get the Return associated type from the impl
     let return_name = IdentId::new(db, "Return".to_string());

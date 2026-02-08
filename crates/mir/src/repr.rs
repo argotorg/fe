@@ -19,7 +19,7 @@ use hir::analysis::ty::{
     canonical::Canonicalized,
     corelib::resolve_core_trait,
     trait_def::TraitInstId,
-    trait_resolution::{GoalSatisfiability, PredicateListId, is_goal_satisfiable},
+    trait_resolution::{GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable},
 };
 use hir::hir_def::IdentId;
 
@@ -98,7 +98,6 @@ fn effect_provider_space_via_domain_trait<'db>(
 ) -> Option<AddressSpaceKind> {
     let effect_handle = resolve_core_trait(db, core.scope, &["effect_ref", "EffectHandle"])
         .expect("missing required core trait `core::effect_ref::EffectHandle`");
-    let ingot = core.scope.top_mod(db).ingot(db);
     let assumptions = PredicateListId::empty_list(db);
 
     let address_space_ident = IdentId::new(db, "AddressSpace".to_string());
@@ -106,7 +105,11 @@ fn effect_provider_space_via_domain_trait<'db>(
     // First, determine whether `ty` is an effect provider at all.
     let inst = TraitInstId::new(db, effect_handle, vec![ty], IndexMap::new());
     let goal = Canonicalized::new(db, inst).value;
-    match is_goal_satisfiable(db, ingot, goal, assumptions) {
+    match is_goal_satisfiable(
+        db,
+        TraitSolveCx::new(db, core.scope).with_assumptions(assumptions),
+        goal,
+    ) {
         GoalSatisfiability::Satisfied(_) => {}
         GoalSatisfiability::NeedsConfirmation(_) => return None,
         GoalSatisfiability::ContainsInvalid | GoalSatisfiability::UnSat(_) => return None,
@@ -125,7 +128,11 @@ fn effect_provider_space_via_domain_trait<'db>(
         assoc.insert(address_space_ident, space_ty);
         let inst = TraitInstId::new(db, effect_handle, vec![ty], assoc);
         let goal = Canonicalized::new(db, inst).value;
-        match is_goal_satisfiable(db, ingot, goal, assumptions) {
+        match is_goal_satisfiable(
+            db,
+            TraitSolveCx::new(db, core.scope).with_assumptions(assumptions),
+            goal,
+        ) {
             GoalSatisfiability::Satisfied(_) => return Some(space_kind),
             GoalSatisfiability::NeedsConfirmation(_) => return None,
             GoalSatisfiability::ContainsInvalid | GoalSatisfiability::UnSat(_) => {}

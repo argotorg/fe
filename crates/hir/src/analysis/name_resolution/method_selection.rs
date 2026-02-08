@@ -11,7 +11,9 @@ use crate::analysis::{
         canonical::{Canonical, Canonicalized, Solution},
         method_table::probe_method,
         trait_def::{TraitInstId, impls_for_ty},
-        trait_resolution::{GoalSatisfiability, PredicateListId, is_goal_satisfiable},
+        trait_resolution::{
+            GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable,
+        },
         ty_def::{TyData, TyId},
         unify::UnificationTable,
     },
@@ -133,7 +135,7 @@ impl<'db> CandidateAssembler<'db> {
     }
 
     fn assemble_trait_method_candidates(&mut self) {
-        let ingot = self.scope.ingot(self.db);
+        let scope_ingot = self.scope.ingot(self.db);
 
         // When the receiver is a type parameter (e.g. `D` in `fn f<D: Trait>(d: D)`),
         // we don't know its concrete type yet, so probing impls would pull in many
@@ -147,8 +149,17 @@ impl<'db> CandidateAssembler<'db> {
         );
 
         if !receiver_is_ty_param {
-            for &imp in impls_for_ty(self.db, ingot, self.receiver_ty) {
-                self.insert_trait_method_cand(imp.skip_binder().trait_(self.db));
+            let search_ingots = [
+                Some(scope_ingot),
+                self.receiver_ty
+                    .value
+                    .ingot(self.db)
+                    .filter(|&ingot| ingot != scope_ingot),
+            ];
+            for ingot in search_ingots.into_iter().flatten() {
+                for &imp in impls_for_ty(self.db, ingot, self.receiver_ty) {
+                    self.insert_trait_method_cand(imp.skip_binder().trait_(self.db));
+                }
             }
         }
 
@@ -319,13 +330,12 @@ impl<'db> MethodSelector<'db> {
 
         match is_goal_satisfiable(
             self.db,
-            self.scope.ingot(self.db),
+            TraitSolveCx::new(self.db, self.scope).with_assumptions(self.assumptions),
             canonical_cand.value,
-            self.assumptions,
         ) {
             GoalSatisfiability::Satisfied(solution) => {
                 // Map back the solution to the current context.
-                let solution = canonical_cand.extract_solution(&mut table, *solution);
+                let solution = canonical_cand.extract_solution(&mut table, *solution).inst;
                 // Replace TyParams in the solved instance with fresh inference vars so
                 // downstream unification can bind them (e.g., T = u32). For receiver type
                 // parameters, keep the bound's args intact.

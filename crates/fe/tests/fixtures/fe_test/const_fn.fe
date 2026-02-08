@@ -1,0 +1,43 @@
+use core::intrinsic::{__as_bytes, __keccak256}
+use core::keccak
+use core::bytes::AsBytes
+use std::evm::Address
+use std::evm::effects::assert
+
+trait SolCompat {
+    type S: AsBytes
+    const SOL_TYPE: Self::S
+}
+
+impl SolCompat for u256 {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "uint256"
+}
+
+impl SolCompat for Address {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "address"
+}
+
+impl SolCompat for Transfer {
+    type S = String<8>
+    const SOL_TYPE: Self::S = "Transfer"
+}
+
+trait Event {
+    const SIG: u256
+}
+
+struct Transfer { from: Address, to: Address, val: u256 }
+
+
+impl Event for Transfer {
+    const SIG: u256 = keccak((Transfer::SOL_TYPE, "(", Address::SOL_TYPE, ",", Address::SOL_TYPE, ",", u256::SOL_TYPE, ")"))
+}
+
+#[test]
+fn transfer_sig() {
+    assert(
+        Transfer::SIG == 0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef,
+    )
+}

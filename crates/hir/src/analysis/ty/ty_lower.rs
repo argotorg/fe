@@ -7,10 +7,12 @@ use salsa::Update;
 use smallvec::smallvec;
 
 use super::{
+    const_expr::{ConstExpr, ConstExprId},
     const_ty::{ConstTyData, ConstTyId},
     effects::{EffectKeyKind, effect_key_kind},
     fold::{TyFoldable, TyFolder},
-    trait_resolution::{PredicateListId, constraint::collect_constraints},
+    trait_def::TraitInstId,
+    trait_resolution::{PredicateListId, TraitSolveCx, constraint::collect_constraints},
     ty_def::{InvalidCause, Kind, TyData, TyId, TyParam},
 };
 use crate::analysis::name_resolution::{PathRes, PathResErrorKind, resolve_path};
@@ -96,6 +98,37 @@ fn lower_path<'db>(
                             TyId::const_ty(db, const_ty)
                         } else {
                             TyId::invalid(db, InvalidCause::ParseError)
+                        }
+                    }
+                    PathRes::TraitConst(recv_ty, inst, name) => {
+                        let mut args = inst.args(db).clone();
+                        if let Some(self_arg) = args.first_mut() {
+                            *self_arg = recv_ty;
+                        }
+                        let inst = TraitInstId::new(
+                            db,
+                            inst.def(db),
+                            args,
+                            inst.assoc_type_bindings(db).clone(),
+                        );
+
+                        let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
+                        if let Some(const_ty) =
+                            super::const_ty::const_ty_from_trait_const(db, solve_cx, inst, name)
+                        {
+                            TyId::const_ty(db, const_ty)
+                        } else if let Some(expected_ty) = inst
+                            .def(db)
+                            .const_(db, name)
+                            .and_then(|v| v.ty_binder(db))
+                            .map(|b| b.instantiate(db, inst.args(db)))
+                        {
+                            let expr = ConstExprId::new(db, ConstExpr::TraitConst { inst, name });
+                            let const_ty =
+                                ConstTyId::new(db, ConstTyData::Abstract(expr, expected_ty));
+                            TyId::const_ty(db, const_ty)
+                        } else {
+                            TyId::invalid(db, InvalidCause::Other)
                         }
                     }
                     other => TyId::invalid(db, InvalidCause::NotAType(other)),
@@ -278,7 +311,67 @@ pub(crate) fn lower_generic_arg_list<'db>(
     args.data(db)
         .iter()
         .map(|arg| match arg {
-            GenericArg::Type(ty_arg) => lower_opt_hir_ty(db, ty_arg.ty, scope, assumptions),
+            GenericArg::Type(ty_arg) => {
+                // Generic args are syntactically ambiguous: `String<N>` may parse `N` as a type
+                // even when `String` expects a const generic arg. When a type-arg is a path that
+                // resolves as a value const/trait-const, lower it as a const-ty argument so
+                // downstream `TyId::app` sees a const generic.
+                if let Some(hir_ty) = ty_arg.ty.to_opt()
+                    && let HirTyKind::Path(path) = hir_ty.data(db)
+                    && let Some(path) = path.to_opt()
+                    && let Ok(resolved) = resolve_path(db, path, scope, assumptions, true)
+                {
+                    match resolved {
+                        PathRes::Const(const_def, ty) => {
+                            if let Some(body) = const_def.body(db).to_opt() {
+                                let const_ty =
+                                    ConstTyId::from_body(db, body, Some(ty), Some(const_def));
+                                return TyId::const_ty(db, const_ty);
+                            }
+                            return TyId::invalid(db, InvalidCause::ParseError);
+                        }
+                        PathRes::TraitConst(recv_ty, inst, name) => {
+                            let mut args = inst.args(db).clone();
+                            if let Some(self_arg) = args.first_mut() {
+                                *self_arg = recv_ty;
+                            }
+                            let inst = TraitInstId::new(
+                                db,
+                                inst.def(db),
+                                args,
+                                inst.assoc_type_bindings(db).clone(),
+                            );
+
+                            let solve_cx =
+                                TraitSolveCx::new(db, scope).with_assumptions(assumptions);
+                            if let Some(const_ty) =
+                                super::const_ty::const_ty_from_trait_const(db, solve_cx, inst, name)
+                            {
+                                return TyId::const_ty(db, const_ty);
+                            }
+                            if let Some(expected_ty) = inst
+                                .def(db)
+                                .const_(db, name)
+                                .and_then(|v| v.ty_binder(db))
+                                .map(|b| b.instantiate(db, inst.args(db)))
+                            {
+                                let expr =
+                                    ConstExprId::new(db, ConstExpr::TraitConst { inst, name });
+                                let const_ty =
+                                    ConstTyId::new(db, ConstTyData::Abstract(expr, expected_ty));
+                                return TyId::const_ty(db, const_ty);
+                            }
+                        }
+                        PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {
+                            if let TyData::ConstTy(const_ty) = ty.data(db) {
+                                return TyId::const_ty(db, *const_ty);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                lower_opt_hir_ty(db, ty_arg.ty, scope, assumptions)
+            }
             GenericArg::Const(const_arg) => {
                 let const_ty = ConstTyId::from_opt_body(db, const_arg.body);
                 TyId::const_ty(db, const_ty)

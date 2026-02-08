@@ -1,0 +1,10 @@
+---
+source: crates/codegen/tests/yul.rs
+assertion_line: 33
+expression: output
+input_file: tests/fixtures/const_fn_mapping_slot_hash.fe
+---
+function $main() -> ret {
+  ret := 3253375974595066614526584426541216327299611994431550246078837110170861790149
+  leave
+}

@@ -16,7 +16,9 @@ use hir::analysis::{
         fold::{TyFoldable, TyFolder},
         normalize::normalize_ty,
         trait_def::{TraitInstId, resolve_trait_method_instance},
-        trait_resolution::{GoalSatisfiability, PredicateListId, is_goal_satisfiable},
+        trait_resolution::{
+            GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable,
+        },
         ty_check::check_func_body,
         ty_def::{TyBase, TyData, TyId},
     },
@@ -265,9 +267,13 @@ impl<'db> Monomorphizer<'db> {
                             ),
                         )
                         .value;
-                        let ingot = func.top_mod(self.db).ingot(self.db);
                         if !matches!(
-                            is_goal_satisfiable(self.db, ingot, goal, assumptions),
+                            is_goal_satisfiable(
+                                self.db,
+                                TraitSolveCx::new(self.db, func.scope())
+                                    .with_assumptions(assumptions),
+                                goal
+                            ),
                             GoalSatisfiability::Satisfied(_)
                         ) {
                             can_seed = false;
@@ -310,6 +316,22 @@ impl<'db> Monomorphizer<'db> {
             Vec<Option<AddressSpaceKind>>,
         )> = {
             let function = &self.instances[func_idx];
+            let solve_cx = TraitSolveCx::new(
+                self.db,
+                match function.origin {
+                    crate::ir::MirFunctionOrigin::Hir(func) => func.scope(),
+                    crate::ir::MirFunctionOrigin::Synthetic(synth) => match synth {
+                        crate::ir::SyntheticId::ContractInitEntrypoint(contract)
+                        | crate::ir::SyntheticId::ContractRuntimeEntrypoint(contract)
+                        | crate::ir::SyntheticId::ContractInitHandler(contract)
+                        | crate::ir::SyntheticId::ContractInitCodeOffset(contract)
+                        | crate::ir::SyntheticId::ContractInitCodeLen(contract) => contract.scope(),
+                        crate::ir::SyntheticId::ContractRecvArmHandler { contract, .. } => {
+                            contract.scope()
+                        }
+                    },
+                },
+            );
             let mut sites = Vec::new();
             for (bb_idx, block) in function.body.blocks.iter().enumerate() {
                 for (inst_idx, inst) in block.insts.iter().enumerate() {
@@ -317,7 +339,7 @@ impl<'db> Monomorphizer<'db> {
                         rvalue: crate::ir::Rvalue::Call(call),
                         ..
                     } = inst
-                        && let Some((target_func, args)) = self.resolve_call_target(call)
+                        && let Some((target_func, args)) = self.resolve_call_target(solve_cx, call)
                     {
                         let effect_param_space_overrides = self.call_effect_param_space_overrides(
                             function,
@@ -338,7 +360,7 @@ impl<'db> Monomorphizer<'db> {
 
                 if let crate::Terminator::TerminatingCall(crate::ir::TerminatingCall::Call(call)) =
                     &block.terminator
-                    && let Some((target_func, args)) = self.resolve_call_target(call)
+                    && let Some((target_func, args)) = self.resolve_call_target(solve_cx, call)
                 {
                     let effect_param_space_overrides =
                         self.call_effect_param_space_overrides(function, call, target_func, &args);
@@ -580,6 +602,7 @@ impl<'db> Monomorphizer<'db> {
     /// Returns the concrete HIR function targeted by the given call, accounting for trait impls.
     fn resolve_call_target(
         &self,
+        solve_cx: TraitSolveCx<'db>,
         call: &CallOrigin<'db>,
     ) -> Option<(CallTarget<'db>, Vec<TyId<'db>>)> {
         let hir_target = call.hir_target.as_ref()?;
@@ -606,7 +629,7 @@ impl<'db> Monomorphizer<'db> {
                 );
             }
             if let Some((func, impl_args)) =
-                resolve_trait_method_instance(self.db, inst, method_name)
+                resolve_trait_method_instance(self.db, solve_cx, inst, method_name)
             {
                 let mut resolved_args = impl_args;
                 resolved_args.extend_from_slice(&base_args[trait_arg_len..]);

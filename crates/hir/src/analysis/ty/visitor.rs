@@ -5,7 +5,7 @@ use super::{
     const_expr::ConstExpr,
     const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
     trait_def::{ImplementorId, TraitInstId},
-    trait_resolution::PredicateListId,
+    trait_resolution::{PredicateListId, TraitGoalSolution},
     ty_check::ExprProp,
     ty_def::{AssocTy, InvalidCause, PrimTy, TyBase, TyData, TyFlags, TyId, TyParam, TyVar},
 };
@@ -126,9 +126,27 @@ where
                 generic_args.visit_with(visitor);
                 args.visit_with(visitor);
             }
+            ConstExpr::UserConstFnCall {
+                generic_args, args, ..
+            } => {
+                generic_args.visit_with(visitor);
+                args.visit_with(visitor);
+            }
+            ConstExpr::ArithBinOp { lhs, rhs, .. } => {
+                lhs.visit_with(visitor);
+                rhs.visit_with(visitor);
+            }
+            ConstExpr::UnOp { expr, .. } => {
+                expr.visit_with(visitor);
+            }
+            ConstExpr::Cast { expr, to } => {
+                expr.visit_with(visitor);
+                to.visit_with(visitor);
+            }
             ConstExpr::TraitConst { inst, .. } => {
                 inst.visit_with(visitor);
             }
+            ConstExpr::LocalBinding(_) => {}
         },
         ConstTyData::UnEvaluated { .. } => {}
     }
@@ -215,6 +233,16 @@ impl<'db> TyVisitable<'db> for PredicateListId<'db> {
         V: TyVisitor<'db> + ?Sized,
     {
         self.list(visitor.db()).visit_with(visitor)
+    }
+}
+
+impl<'db> TyVisitable<'db> for TraitGoalSolution<'db> {
+    fn visit_with<V>(&self, visitor: &mut V)
+    where
+        V: TyVisitor<'db> + ?Sized,
+    {
+        self.inst.visit_with(visitor);
+        self.implementor.visit_with(visitor);
     }
 }
 

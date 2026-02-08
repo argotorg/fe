@@ -20,6 +20,13 @@ impl AsBytes for u256 {
     const fn as_bytes(self) -> [u8; Self::N] { intrinsic::__as_bytes(self) }
 }
 
+impl<T0> AsBytes for (T0,)
+    where T0: AsBytes
+{
+    const N: usize = T0::N
+    const fn as_bytes(self) -> [u8; Self::N] { self.0.as_bytes() }
+}
+
 impl<T0, T1> AsBytes for (T0, T1)
     where T0: AsBytes,
           T1: AsBytes
@@ -61,6 +68,374 @@ impl<T0, T1, T2, T3> AsBytes for (T0, T1, T2, T3)
         let c: [u8; T2::N] = self.2.as_bytes()
         let d: [u8; T3::N] = self.3.as_bytes()
         let out: [u8; Self::N] = intrinsic::__as_bytes((a, b, c, d))
+        out
+    }
+}
+
+impl<T0, T1, T2, T3, T4> AsBytes for (T0, T1, T2, T3, T4)
+    where T0: AsBytes,
+          T1: AsBytes,
+          T2: AsBytes,
+          T3: AsBytes,
+          T4: AsBytes
+{
+    const N: usize = T0::N + T1::N + T2::N + T3::N + T4::N
+    const fn as_bytes(self) -> [u8; Self::N] {
+        let a: [u8; T0::N] = self.0.as_bytes()
+        let b: [u8; T1::N] = self.1.as_bytes()
+        let c: [u8; T2::N] = self.2.as_bytes()
+        let d: [u8; T3::N] = self.3.as_bytes()
+        let e: [u8; T4::N] = self.4.as_bytes()
+        let out: [u8; Self::N] = intrinsic::__as_bytes((a, b, c, d, e))
+        out
+    }
+}
+
+impl<T0, T1, T2, T3, T4, T5> AsBytes for (T0, T1, T2, T3, T4, T5)
+    where T0: AsBytes,
+          T1: AsBytes,
+          T2: AsBytes,
+          T3: AsBytes,
+          T4: AsBytes,
+          T5: AsBytes
+{
+    const N: usize = T0::N + T1::N + T2::N + T3::N + T4::N + T5::N
+    const fn as_bytes(self) -> [u8; Self::N] {
+        let a: [u8; T0::N] = self.0.as_bytes()
+        let b: [u8; T1::N] = self.1.as_bytes()
+        let c: [u8; T2::N] = self.2.as_bytes()
+        let d: [u8; T3::N] = self.3.as_bytes()
+        let e: [u8; T4::N] = self.4.as_bytes()
+        let f: [u8; T5::N] = self.5.as_bytes()
+        let out: [u8; Self::N] = intrinsic::__as_bytes((a, b, c, d, e, f))
+        out
+    }
+}
+
+impl<T0, T1, T2, T3, T4, T5, T6> AsBytes for (T0, T1, T2, T3, T4, T5, T6)
+    where T0: AsBytes,
+          T1: AsBytes,
+          T2: AsBytes,
+          T3: AsBytes,
+          T4: AsBytes,
+          T5: AsBytes,
+          T6: AsBytes
+{
+    const N: usize = T0::N + T1::N + T2::N + T3::N + T4::N + T5::N + T6::N
+    const fn as_bytes(self) -> [u8; Self::N] {
+        let a: [u8; T0::N] = self.0.as_bytes()
+        let b: [u8; T1::N] = self.1.as_bytes()
+        let c: [u8; T2::N] = self.2.as_bytes()
+        let d: [u8; T3::N] = self.3.as_bytes()
+        let e: [u8; T4::N] = self.4.as_bytes()
+        let f: [u8; T5::N] = self.5.as_bytes()
+        let g: [u8; T6::N] = self.6.as_bytes()
+        let out: [u8; Self::N] = intrinsic::__as_bytes((a, b, c, d, e, f, g))
+        out
+    }
+}
+
+impl<T0, T1, T2, T3, T4, T5, T6, T7> AsBytes for (T0, T1, T2, T3, T4, T5, T6, T7)
+    where T0: AsBytes,
+          T1: AsBytes,
+          T2: AsBytes,
+          T3: AsBytes,
+          T4: AsBytes,
+          T5: AsBytes,
+          T6: AsBytes,
+          T7: AsBytes
+{
+    const N: usize = T0::N + T1::N + T2::N + T3::N + T4::N + T5::N + T6::N + T7::N
+    const fn as_bytes(self) -> [u8; Self::N] {
+        let a: [u8; T0::N] = self.0.as_bytes()
+        let b: [u8; T1::N] = self.1.as_bytes()
+        let c: [u8; T2::N] = self.2.as_bytes()
+        let d: [u8; T3::N] = self.3.as_bytes()
+        let e: [u8; T4::N] = self.4.as_bytes()
+        let f: [u8; T5::N] = self.5.as_bytes()
+        let g: [u8; T6::N] = self.6.as_bytes()
+        let h: [u8; T7::N] = self.7.as_bytes()
+        let out: [u8; Self::N] = intrinsic::__as_bytes((a, b, c, d, e, f, g, h))
+        out
+    }
+}
+
+impl<T0, T1, T2, T3, T4, T5, T6, T7, T8> AsBytes for (T0, T1, T2, T3, T4, T5, T6, T7, T8)
+    where T0: AsBytes,
+          T1: AsBytes,
+          T2: AsBytes,
+          T3: AsBytes,
+          T4: AsBytes,
+          T5: AsBytes,
+          T6: AsBytes,
+          T7: AsBytes,
+          T8: AsBytes
+{
+    const N: usize =
+        T0::N + T1::N + T2::N + T3::N + T4::N + T5::N + T6::N + T7::N + T8::N
+    const fn as_bytes(self) -> [u8; Self::N] {
+        let a: [u8; T0::N] = self.0.as_bytes()
+        let b: [u8; T1::N] = self.1.as_bytes()
+        let c: [u8; T2::N] = self.2.as_bytes()
+        let d: [u8; T3::N] = self.3.as_bytes()
+        let e: [u8; T4::N] = self.4.as_bytes()
+        let f: [u8; T5::N] = self.5.as_bytes()
+        let g: [u8; T6::N] = self.6.as_bytes()
+        let h: [u8; T7::N] = self.7.as_bytes()
+        let i: [u8; T8::N] = self.8.as_bytes()
+        let out: [u8; Self::N] = intrinsic::__as_bytes((a, b, c, d, e, f, g, h, i))
+        out
+    }
+}
+
+impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9> AsBytes for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9)
+    where T0: AsBytes,
+          T1: AsBytes,
+          T2: AsBytes,
+          T3: AsBytes,
+          T4: AsBytes,
+          T5: AsBytes,
+          T6: AsBytes,
+          T7: AsBytes,
+          T8: AsBytes,
+          T9: AsBytes
+{
+    const N: usize =
+        T0::N + T1::N + T2::N + T3::N + T4::N + T5::N + T6::N + T7::N + T8::N + T9::N
+    const fn as_bytes(self) -> [u8; Self::N] {
+        let a: [u8; T0::N] = self.0.as_bytes()
+        let b: [u8; T1::N] = self.1.as_bytes()
+        let c: [u8; T2::N] = self.2.as_bytes()
+        let d: [u8; T3::N] = self.3.as_bytes()
+        let e: [u8; T4::N] = self.4.as_bytes()
+        let f: [u8; T5::N] = self.5.as_bytes()
+        let g: [u8; T6::N] = self.6.as_bytes()
+        let h: [u8; T7::N] = self.7.as_bytes()
+        let i: [u8; T8::N] = self.8.as_bytes()
+        let j: [u8; T9::N] = self.9.as_bytes()
+        let out: [u8; Self::N] = intrinsic::__as_bytes((a, b, c, d, e, f, g, h, i, j))
+        out
+    }
+}
+
+impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10> AsBytes for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10)
+    where T0: AsBytes,
+          T1: AsBytes,
+          T2: AsBytes,
+          T3: AsBytes,
+          T4: AsBytes,
+          T5: AsBytes,
+          T6: AsBytes,
+          T7: AsBytes,
+          T8: AsBytes,
+          T9: AsBytes,
+          T10: AsBytes
+{
+    const N: usize =
+        T0::N + T1::N + T2::N + T3::N + T4::N + T5::N + T6::N + T7::N + T8::N + T9::N + T10::N
+    const fn as_bytes(self) -> [u8; Self::N] {
+        let a: [u8; T0::N] = self.0.as_bytes()
+        let b: [u8; T1::N] = self.1.as_bytes()
+        let c: [u8; T2::N] = self.2.as_bytes()
+        let d: [u8; T3::N] = self.3.as_bytes()
+        let e: [u8; T4::N] = self.4.as_bytes()
+        let f: [u8; T5::N] = self.5.as_bytes()
+        let g: [u8; T6::N] = self.6.as_bytes()
+        let h: [u8; T7::N] = self.7.as_bytes()
+        let i: [u8; T8::N] = self.8.as_bytes()
+        let j: [u8; T9::N] = self.9.as_bytes()
+        let k: [u8; T10::N] = self.10.as_bytes()
+        let out: [u8; Self::N] = intrinsic::__as_bytes((a, b, c, d, e, f, g, h, i, j, k))
+        out
+    }
+}
+
+impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11> AsBytes for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11)
+    where T0: AsBytes,
+          T1: AsBytes,
+          T2: AsBytes,
+          T3: AsBytes,
+          T4: AsBytes,
+          T5: AsBytes,
+          T6: AsBytes,
+          T7: AsBytes,
+          T8: AsBytes,
+          T9: AsBytes,
+          T10: AsBytes,
+          T11: AsBytes
+{
+    const N: usize =
+        T0::N + T1::N + T2::N + T3::N + T4::N + T5::N + T6::N + T7::N + T8::N + T9::N + T10::N + T11::N
+    const fn as_bytes(self) -> [u8; Self::N] {
+        let a: [u8; T0::N] = self.0.as_bytes()
+        let b: [u8; T1::N] = self.1.as_bytes()
+        let c: [u8; T2::N] = self.2.as_bytes()
+        let d: [u8; T3::N] = self.3.as_bytes()
+        let e: [u8; T4::N] = self.4.as_bytes()
+        let f: [u8; T5::N] = self.5.as_bytes()
+        let g: [u8; T6::N] = self.6.as_bytes()
+        let h: [u8; T7::N] = self.7.as_bytes()
+        let i: [u8; T8::N] = self.8.as_bytes()
+        let j: [u8; T9::N] = self.9.as_bytes()
+        let k: [u8; T10::N] = self.10.as_bytes()
+        let l: [u8; T11::N] = self.11.as_bytes()
+        let out: [u8; Self::N] = intrinsic::__as_bytes((a, b, c, d, e, f, g, h, i, j, k, l))
+        out
+    }
+}
+
+impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12> AsBytes for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12)
+    where T0: AsBytes,
+          T1: AsBytes,
+          T2: AsBytes,
+          T3: AsBytes,
+          T4: AsBytes,
+          T5: AsBytes,
+          T6: AsBytes,
+          T7: AsBytes,
+          T8: AsBytes,
+          T9: AsBytes,
+          T10: AsBytes,
+          T11: AsBytes,
+          T12: AsBytes
+{
+    const N: usize =
+        T0::N + T1::N + T2::N + T3::N + T4::N + T5::N + T6::N + T7::N + T8::N + T9::N + T10::N + T11::N + T12::N
+    const fn as_bytes(self) -> [u8; Self::N] {
+        let a: [u8; T0::N] = self.0.as_bytes()
+        let b: [u8; T1::N] = self.1.as_bytes()
+        let c: [u8; T2::N] = self.2.as_bytes()
+        let d: [u8; T3::N] = self.3.as_bytes()
+        let e: [u8; T4::N] = self.4.as_bytes()
+        let f: [u8; T5::N] = self.5.as_bytes()
+        let g: [u8; T6::N] = self.6.as_bytes()
+        let h: [u8; T7::N] = self.7.as_bytes()
+        let i: [u8; T8::N] = self.8.as_bytes()
+        let j: [u8; T9::N] = self.9.as_bytes()
+        let k: [u8; T10::N] = self.10.as_bytes()
+        let l: [u8; T11::N] = self.11.as_bytes()
+        let m: [u8; T12::N] = self.12.as_bytes()
+        let out: [u8; Self::N] = intrinsic::__as_bytes((a, b, c, d, e, f, g, h, i, j, k, l, m))
+        out
+    }
+}
+
+impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13> AsBytes for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13)
+    where T0: AsBytes,
+          T1: AsBytes,
+          T2: AsBytes,
+          T3: AsBytes,
+          T4: AsBytes,
+          T5: AsBytes,
+          T6: AsBytes,
+          T7: AsBytes,
+          T8: AsBytes,
+          T9: AsBytes,
+          T10: AsBytes,
+          T11: AsBytes,
+          T12: AsBytes,
+          T13: AsBytes
+{
+    const N: usize =
+        T0::N + T1::N + T2::N + T3::N + T4::N + T5::N + T6::N + T7::N + T8::N + T9::N + T10::N + T11::N + T12::N + T13::N
+    const fn as_bytes(self) -> [u8; Self::N] {
+        let a: [u8; T0::N] = self.0.as_bytes()
+        let b: [u8; T1::N] = self.1.as_bytes()
+        let c: [u8; T2::N] = self.2.as_bytes()
+        let d: [u8; T3::N] = self.3.as_bytes()
+        let e: [u8; T4::N] = self.4.as_bytes()
+        let f: [u8; T5::N] = self.5.as_bytes()
+        let g: [u8; T6::N] = self.6.as_bytes()
+        let h: [u8; T7::N] = self.7.as_bytes()
+        let i: [u8; T8::N] = self.8.as_bytes()
+        let j: [u8; T9::N] = self.9.as_bytes()
+        let k: [u8; T10::N] = self.10.as_bytes()
+        let l: [u8; T11::N] = self.11.as_bytes()
+        let m: [u8; T12::N] = self.12.as_bytes()
+        let n: [u8; T13::N] = self.13.as_bytes()
+        let out: [u8; Self::N] = intrinsic::__as_bytes((a, b, c, d, e, f, g, h, i, j, k, l, m, n))
+        out
+    }
+}
+
+impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14> AsBytes for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14)
+    where T0: AsBytes,
+          T1: AsBytes,
+          T2: AsBytes,
+          T3: AsBytes,
+          T4: AsBytes,
+          T5: AsBytes,
+          T6: AsBytes,
+          T7: AsBytes,
+          T8: AsBytes,
+          T9: AsBytes,
+          T10: AsBytes,
+          T11: AsBytes,
+          T12: AsBytes,
+          T13: AsBytes,
+          T14: AsBytes
+{
+    const N: usize =
+        T0::N + T1::N + T2::N + T3::N + T4::N + T5::N + T6::N + T7::N + T8::N + T9::N + T10::N + T11::N + T12::N + T13::N + T14::N
+    const fn as_bytes(self) -> [u8; Self::N] {
+        let a: [u8; T0::N] = self.0.as_bytes()
+        let b: [u8; T1::N] = self.1.as_bytes()
+        let c: [u8; T2::N] = self.2.as_bytes()
+        let d: [u8; T3::N] = self.3.as_bytes()
+        let e: [u8; T4::N] = self.4.as_bytes()
+        let f: [u8; T5::N] = self.5.as_bytes()
+        let g: [u8; T6::N] = self.6.as_bytes()
+        let h: [u8; T7::N] = self.7.as_bytes()
+        let i: [u8; T8::N] = self.8.as_bytes()
+        let j: [u8; T9::N] = self.9.as_bytes()
+        let k: [u8; T10::N] = self.10.as_bytes()
+        let l: [u8; T11::N] = self.11.as_bytes()
+        let m: [u8; T12::N] = self.12.as_bytes()
+        let n: [u8; T13::N] = self.13.as_bytes()
+        let o: [u8; T14::N] = self.14.as_bytes()
+        let out: [u8; Self::N] = intrinsic::__as_bytes((a, b, c, d, e, f, g, h, i, j, k, l, m, n, o))
+        out
+    }
+}
+
+impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15> AsBytes for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15)
+    where T0: AsBytes,
+          T1: AsBytes,
+          T2: AsBytes,
+          T3: AsBytes,
+          T4: AsBytes,
+          T5: AsBytes,
+          T6: AsBytes,
+          T7: AsBytes,
+          T8: AsBytes,
+          T9: AsBytes,
+          T10: AsBytes,
+          T11: AsBytes,
+          T12: AsBytes,
+          T13: AsBytes,
+          T14: AsBytes,
+          T15: AsBytes
+{
+    const N: usize =
+        T0::N + T1::N + T2::N + T3::N + T4::N + T5::N + T6::N + T7::N + T8::N + T9::N + T10::N + T11::N + T12::N + T13::N + T14::N + T15::N
+    const fn as_bytes(self) -> [u8; Self::N] {
+        let a: [u8; T0::N] = self.0.as_bytes()
+        let b: [u8; T1::N] = self.1.as_bytes()
+        let c: [u8; T2::N] = self.2.as_bytes()
+        let d: [u8; T3::N] = self.3.as_bytes()
+        let e: [u8; T4::N] = self.4.as_bytes()
+        let f: [u8; T5::N] = self.5.as_bytes()
+        let g: [u8; T6::N] = self.6.as_bytes()
+        let h: [u8; T7::N] = self.7.as_bytes()
+        let i: [u8; T8::N] = self.8.as_bytes()
+        let j: [u8; T9::N] = self.9.as_bytes()
+        let k: [u8; T10::N] = self.10.as_bytes()
+        let l: [u8; T11::N] = self.11.as_bytes()
+        let m: [u8; T12::N] = self.12.as_bytes()
+        let n: [u8; T13::N] = self.13.as_bytes()
+        let o: [u8; T14::N] = self.14.as_bytes()
+        let p: [u8; T15::N] = self.15.as_bytes()
+        let out: [u8; Self::N] = intrinsic::__as_bytes((a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p))
         out
     }
 }

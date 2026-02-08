@@ -46,7 +46,7 @@ use super::{
     diagnostics::{BodyDiag, FuncBodyDiag, TraitConstraintDiag, TyDiagCollection, TyLowerDiag},
     effects::EffectKeyKind,
     trait_def::TraitInstId,
-    trait_resolution::{GoalSatisfiability, PredicateListId, is_goal_satisfiable},
+    trait_resolution::{GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable},
     ty_def::{InvalidCause, Kind, TyId, TyVarSort},
     ty_lower::lower_hir_ty,
     unify::{InferenceKey, UnificationError, UnificationTable},
@@ -268,7 +268,6 @@ impl<'db> TyChecker<'db> {
         let assumptions = PredicateListId::empty_list(self.db);
         let root_effect_ty =
             super::resolve_default_root_effect_ty(self.db, contract.scope(), assumptions);
-        let contract_ingot = contract.top_mod(self.db).ingot(self.db);
 
         for (idx, effect) in effects.data(self.db).iter().enumerate() {
             let Some(key_path) = effect.key_path.to_opt() else {
@@ -293,7 +292,11 @@ impl<'db> TyChecker<'db> {
                             super::instantiate_trait_self(self.db, trait_inst, root_effect_ty);
                         let goal = Canonicalized::new(self.db, trait_req).value;
                         if matches!(
-                            is_goal_satisfiable(self.db, contract_ingot, goal, assumptions),
+                            is_goal_satisfiable(
+                                self.db,
+                                TraitSolveCx::new(self.db, contract.scope()),
+                                goal
+                            ),
                             GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
                         ) {
                             self.push_diag(BodyDiag::ContractRootEffectTraitNotImplemented {
@@ -357,7 +360,6 @@ impl<'db> TyChecker<'db> {
         let body = self.env.body();
         let scope = self.env.scope();
         let assumptions = self.env.assumptions();
-        let ingot = body.top_mod(db).ingot(db);
 
         let is_viable = |this: &mut Self,
                          pending: &env::PendingMethod<'db>,
@@ -465,10 +467,15 @@ impl<'db> TyChecker<'db> {
                         };
                         let inst = inst.normalize(db, scope, assumptions);
                         let canonical_inst = Canonicalized::new(db, inst);
-                        match is_goal_satisfiable(db, ingot, canonical_inst.value, assumptions) {
+                        match is_goal_satisfiable(
+                            db,
+                            TraitSolveCx::new(db, scope).with_assumptions(assumptions),
+                            canonical_inst.value,
+                        ) {
                             GoalSatisfiability::Satisfied(solution) => {
-                                let solution =
-                                    canonical_inst.extract_solution(&mut self.table, *solution);
+                                let solution = canonical_inst
+                                    .extract_solution(&mut self.table, *solution)
+                                    .inst;
                                 self.table.unify(inst, solution).unwrap();
                                 let new_can =
                                     Canonical::new(db, inst.fold_with(db, &mut self.table));
@@ -597,11 +604,15 @@ impl<'db> TyChecker<'db> {
                     };
                     let inst = inst.normalize(db, scope, assumptions);
                     let canonical_inst = Canonicalized::new(db, inst);
-                    match is_goal_satisfiable(db, ingot, canonical_inst.value, assumptions) {
+                    match is_goal_satisfiable(
+                        db,
+                        TraitSolveCx::new(db, scope).with_assumptions(assumptions),
+                        canonical_inst.value,
+                    ) {
                         GoalSatisfiability::NeedsConfirmation(ambiguous) => {
                             let cands = ambiguous
                                 .iter()
-                                .map(|s| canonical_inst.extract_solution(&mut self.table, *s))
+                                .map(|s| canonical_inst.extract_solution(&mut self.table, *s).inst)
                                 .collect::<thin_vec::ThinVec<_>>();
                             if !inst.self_ty(db).has_var(db) {
                                 self.push_diag(BodyDiag::AmbiguousTraitInst {
@@ -1503,9 +1514,8 @@ impl<'db> TyCheckerFinalizer<'db> {
             return;
         }
 
-        let hir_db = self.db;
-        let ingot = self.body.body.unwrap().top_mod(hir_db).ingot(hir_db);
-        if let Some(diag) = ty.emit_wf_diag(self.db, ingot, self.assumptions, span) {
+        let solve_cx = TraitSolveCx::new(self.db, self.body.body.unwrap().scope());
+        if let Some(diag) = ty.emit_wf_diag(self.db, solve_cx, self.assumptions, span) {
             self.diags.push(diag.into());
         }
     }

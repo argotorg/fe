@@ -1,12 +1,7 @@
 ---
 source: crates/mir/tests/lowering_snapshots.rs
-assertion_line: 26
 expression: mir_output
 ---
-fn bar_h9f829bcd60910980_t_ha4fe9660e49389ad_make() -> Bar:
-  bb0:
-    ret 10
-
 fn example() -> Bar:
   bb0:
     v0: Bar = bar_h9f829bcd60910980_t_ha4fe9660e49389ad_make()
@@ -27,3 +22,7 @@ fn f() -> Bar:
   bb0:
     v0: Bar = bar_h9f829bcd60910980_t_ha4fe9660e49389ad_make()
     ret v0
+
+fn bar_h9f829bcd60910980_t_ha4fe9660e49389ad_make() -> Bar:
+  bb0:
+    ret 10

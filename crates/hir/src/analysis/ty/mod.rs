@@ -1,7 +1,7 @@
 use crate::analysis::ty::canonical::Canonicalized;
 use crate::analysis::ty::diagnostics::BodyDiag;
 use crate::analysis::ty::trait_resolution::{
-    GoalSatisfiability, PredicateListId, is_goal_satisfiable,
+    GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable,
 };
 use crate::analysis::ty::ty_check::EffectParamOwner;
 use crate::core::adt_lower::lower_adt;
@@ -213,7 +213,6 @@ impl ModuleAnalysisPass for ContractAnalysisPass {
             // 2. Validate contract-level effects (`contract Foo uses (ctx: Ctx)`).
             let assumptions = PredicateListId::empty_list(db);
             let root_effect_ty = resolve_default_root_effect_ty(db, contract.scope(), assumptions);
-            let contract_ingot = contract.top_mod(db).ingot(db);
             for (idx, effect) in contract.effects(db).data(db).iter().enumerate() {
                 let Some(key_path) = effect.key_path.to_opt() else {
                     continue;
@@ -229,7 +228,12 @@ impl ModuleAnalysisPass for ContractAnalysisPass {
                         let trait_req = instantiate_trait_self(db, trait_inst, root_effect_ty);
                         let goal = Canonicalized::new(db, trait_req).value;
                         if matches!(
-                            is_goal_satisfiable(db, contract_ingot, goal, assumptions),
+                            is_goal_satisfiable(
+                                db,
+                                TraitSolveCx::new(db, contract.scope())
+                                    .with_assumptions(assumptions),
+                                goal
+                            ),
                             GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
                         ) {
                             diags.push(Box::new(BodyDiag::ContractRootEffectTraitNotImplemented {

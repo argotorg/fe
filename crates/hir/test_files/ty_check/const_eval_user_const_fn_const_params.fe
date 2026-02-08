@@ -1,0 +1,16 @@
+const fn plus1(x: usize) -> usize {
+    x + 1
+}
+
+struct Foo<const N: usize, const M: usize = plus1(N)> {}
+struct Bar<const N: usize, const M: usize = { N + 1 }> {}
+
+fn use_defaults() {
+    let x: Foo<4>
+    let y: Bar<4>
+}
+
+fn use_param<const N: usize>() {
+    let a: Foo<{ N }>
+    let b: Bar<{ N }>
+}

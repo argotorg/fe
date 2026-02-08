@@ -1,0 +1,61 @@
+---
+source: crates/hir/tests/ty_check.rs
+assertion_line: 40
+expression: res
+input_file: test_files/ty_check/const_eval_const_fn_uninit_let.fe
+---
+note: 
+  ┌─ const_eval_const_fn_uninit_let.fe:1:34
+  │  
+1 │   const fn add1(x: usize) -> usize {
+  │ ╭──────────────────────────────────^
+2 │ │     let y: usize
+3 │ │     x + 1
+4 │ │ }
+  │ ╰─^ usize
+
+note: 
+  ┌─ const_eval_const_fn_uninit_let.fe:2:9
+  │
+2 │     let y: usize
+  │         ^ usize
+
+note: 
+  ┌─ const_eval_const_fn_uninit_let.fe:3:5
+  │
+3 │     x + 1
+  │     ^ usize
+
+note: 
+  ┌─ const_eval_const_fn_uninit_let.fe:3:5
+  │
+3 │     x + 1
+  │     ^^^^^ usize
+
+note: 
+  ┌─ const_eval_const_fn_uninit_let.fe:3:9
+  │
+3 │     x + 1
+  │         ^ usize
+
+note: 
+   ┌─ const_eval_const_fn_uninit_let.fe:8:8
+   │  
+ 8 │   fn f() {
+   │ ╭────────^
+ 9 │ │     let a: Foo<add1(1)>
+10 │ │     let b: Foo<{ add1(2) }>
+11 │ │ }
+   │ ╰─^ ()
+
+note: 
+  ┌─ const_eval_const_fn_uninit_let.fe:9:9
+  │
+9 │     let a: Foo<add1(1)>
+  │         ^ Foo<2>
+
+note: 
+   ┌─ const_eval_const_fn_uninit_let.fe:10:9
+   │
+10 │     let b: Foo<{ add1(2) }>
+   │         ^ Foo<3>

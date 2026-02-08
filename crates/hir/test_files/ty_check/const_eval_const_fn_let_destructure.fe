@@ -1,0 +1,23 @@
+struct Pair {
+    a: usize,
+    b: usize,
+}
+
+const fn sum_tuple(pair: (usize, usize)) -> usize {
+    let (a, b) = pair
+    a + b
+}
+
+const fn sum_record(pair: Pair) -> usize {
+    let Pair { a, b } = pair
+    a + b
+}
+
+struct Foo<const N: usize> {}
+
+fn f() {
+    let a: Foo<sum_tuple((5, 6))>
+    let b: Foo<sum_record(Pair { a: 5, b: 6 })>
+    let c: Foo<{ sum_tuple((5, 6)) }>
+    let d: Foo<{ sum_record(Pair { a: 5, b: 6 }) }>
+}

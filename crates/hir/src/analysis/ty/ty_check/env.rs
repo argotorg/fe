@@ -25,7 +25,10 @@ use crate::analysis::{
         effects::{EffectKeyKind, effect_key_kind, place_effect_provider_param_index_map},
         fold::{TyFoldable, TyFolder},
         trait_def::TraitInstId,
-        trait_resolution::{PredicateListId, constraint::collect_func_def_constraints},
+        trait_resolution::{
+            PredicateListId,
+            constraint::{collect_constraints, collect_func_def_constraints},
+        },
         ty_def::{InvalidCause, TyData, TyId, TyVarSort},
         ty_lower::lower_hir_ty,
         unify::UnificationTable,
@@ -113,8 +116,34 @@ impl<'db> TyCheckEnv<'db> {
                     let assumptions = preds.extend_all_bounds(db);
                     (preds, assumptions)
                 } else {
-                    let empty = PredicateListId::empty_list(db);
-                    (empty, empty)
+                    // Walk up through nested body scopes to find an enclosing item (trait/impl).
+                    let mut enclosing = owner_scope;
+                    let mut parent_item = enclosing.parent_item(db);
+                    while let Some(ItemKind::Body(parent)) = parent_item {
+                        enclosing = parent.scope();
+                        parent_item = enclosing.parent_item(db);
+                    }
+
+                    let preds = match parent_item {
+                        Some(ItemKind::Trait(trait_)) => {
+                            let self_pred = TraitInstId::new(
+                                db,
+                                trait_,
+                                trait_.params(db).to_vec(),
+                                IndexMap::new(),
+                            );
+                            PredicateListId::new(db, vec![self_pred])
+                        }
+                        Some(ItemKind::ImplTrait(impl_trait)) => {
+                            collect_constraints(db, impl_trait.into()).instantiate_identity()
+                        }
+                        Some(ItemKind::Impl(impl_)) => {
+                            collect_constraints(db, impl_.into()).instantiate_identity()
+                        }
+                        _ => PredicateListId::empty_list(db),
+                    };
+                    let assumptions = preds.extend_all_bounds(db);
+                    (preds, assumptions)
                 }
             }
             _ => {

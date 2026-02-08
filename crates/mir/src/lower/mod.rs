@@ -127,8 +127,12 @@ pub fn lower_module<'db>(
         }
     };
 
+    // Skip associated functions here to avoid pulling in trait methods (which may refer to
+    // abstract associated items) as MIR templates. Impl/impl-trait functions are queued below.
     for &func in top_mod.all_funcs(db) {
-        queue_func(func);
+        if !func.is_associated_func(db) {
+            queue_func(func);
+        }
     }
 
     for &impl_block in top_mod.all_impls(db) {
@@ -231,10 +235,16 @@ pub(crate) fn lower_function<'db>(
 
     if let Some(expr) = first_unlowered_expr_used_by_mir(&mir_body) {
         let expr_context = format_hir_expr_context(db, body, expr);
-        return Err(MirLowerError::UnloweredHirExpr {
-            func_name: symbol_name.clone(),
-            expr: expr_context,
-        });
+        // Generic functions are re-lowered from HIR during monomorphization, so their initial
+        // templates are never codegen'd. Allow construction-time placeholders here.
+        let is_uninstantiated_generic =
+            generic_args.is_empty() && !CallableDef::Func(func).params(db).is_empty();
+        if !is_uninstantiated_generic {
+            return Err(MirLowerError::UnloweredHirExpr {
+                func_name: symbol_name.clone(),
+                expr: expr_context,
+            });
+        }
     }
 
     // Note: `MirFunction` may be used as a generic template during monomorphization.
@@ -1260,9 +1270,23 @@ fn first_unlowered_expr_used_by_mir<'db>(body: &MirBody<'db>) -> Option<ExprId> 
         }
     }
 
-    for value_id in used_values {
-        if let ValueOrigin::Expr(expr) = &body.value(value_id).origin {
-            return Some(*expr);
+    let mut worklist: Vec<ValueId> = used_values.into_iter().collect();
+    let mut visited: FxHashSet<ValueId> = FxHashSet::default();
+
+    while let Some(value_id) = worklist.pop() {
+        if !visited.insert(value_id) {
+            continue;
+        }
+
+        match &body.value(value_id).origin {
+            ValueOrigin::Expr(expr) => return Some(*expr),
+            ValueOrigin::Unary { inner, .. } => worklist.push(*inner),
+            ValueOrigin::Binary { lhs, rhs, .. } => {
+                worklist.push(*lhs);
+                worklist.push(*rhs);
+            }
+            ValueOrigin::TransparentCast { value } => worklist.push(*value),
+            _ => {}
         }
     }
 

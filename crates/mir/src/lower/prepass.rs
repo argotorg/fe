@@ -242,6 +242,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             let value = match try_eval_const_ref(self.db, cref, ty)? {
                 ConstValue::Int(int) => SyntheticValue::Int(int),
                 ConstValue::Bool(flag) => SyntheticValue::Bool(flag),
+                ConstValue::Bytes(bytes) => SyntheticValue::Bytes(bytes),
             };
 
             let value_id = self.alloc_synthetic_value(ty, value);
@@ -289,6 +290,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 match try_eval_const_body(self.db, *body, expected_ty)? {
                     ConstValue::Int(value) => SyntheticValue::Int(value),
                     ConstValue::Bool(flag) => SyntheticValue::Bool(flag),
+                    ConstValue::Bytes(bytes) => SyntheticValue::Bytes(bytes),
                 }
             }
             _ => return None,
