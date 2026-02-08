@@ -218,7 +218,7 @@ pub enum IngotSelectionError {
 
 type SelectionResult<T> = Result<T, Box<IngotSelectionError>>;
 
-pub trait RemoteProgress {
+pub trait RemoteProgress: Send {
     fn start(&mut self, description: &GitDescription);
     fn success(&mut self, description: &GitDescription, ingot_url: &Url);
     fn error(&mut self, description: &GitDescription, error: &IngotResolutionError);

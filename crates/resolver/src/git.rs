@@ -1,4 +1,8 @@
-use std::{fmt, fs, io};
+use std::{
+    collections::HashMap,
+    fmt, fs, io,
+    sync::{Arc, Mutex, OnceLock},
+};
 
 use camino::{Utf8Path, Utf8PathBuf};
 use git2::{Repository, build::CheckoutBuilder};
@@ -49,6 +53,17 @@ pub struct GitResolver {
     pub checkout_root: Utf8PathBuf,
 }
 
+static CHECKOUT_LOCKS: OnceLock<Mutex<HashMap<Utf8PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
+
+fn checkout_lock(checkout_path: &Utf8PathBuf) -> Arc<Mutex<()>> {
+    let locks = CHECKOUT_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut locks = locks.lock().expect("checkout locks mutex");
+    locks
+        .entry(checkout_path.clone())
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone()
+}
+
 impl GitResolver {
     pub fn new(checkout_root: impl Into<Utf8PathBuf>) -> Self {
         Self {
@@ -89,8 +104,11 @@ impl GitResolver {
         &self,
         description: &GitDescription,
     ) -> Result<GitResource, GitResolutionError> {
-        self.ensure_checkout_root()?;
         let checkout_path = self.checkout_path(description);
+        let lock = checkout_lock(&checkout_path);
+        let _guard = lock.lock().expect("checkout lock");
+
+        self.ensure_checkout_root()?;
         let status = self.ensure_checkout(description, &checkout_path)?;
         Ok(GitResource {
             reused_checkout: matches!(status, CheckoutStatus::Existing),
