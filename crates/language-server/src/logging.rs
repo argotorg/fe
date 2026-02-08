@@ -11,7 +11,7 @@ use std::{backtrace::Backtrace, sync::Arc};
 pub fn setup_default_subscriber(client: ClientSocket) -> Option<tracing::subscriber::DefaultGuard> {
     let client_socket_writer = ClientSocketWriterMaker::new(client);
     let subscriber = tracing_subscriber::registry()
-        .with(tracing_subscriber::filter::LevelFilter::INFO)
+        .with(tracing_subscriber::filter::LevelFilter::WARN)
         .with(
             HierarchicalLayer::new(2)
                 .with_thread_ids(true)

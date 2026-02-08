@@ -42,6 +42,24 @@ impl VirtualFiles {
                 .with_context(|| format!("create dir {}", parent.display()))?;
         }
 
+        // If the file already exists as readonly, make it writable before overwriting
+        if out_path.exists() {
+            let mut perms = std::fs::metadata(&out_path)
+                .with_context(|| format!("read metadata {}", out_path.display()))?
+                .permissions();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                perms.set_mode(0o644);
+            }
+            #[cfg(not(unix))]
+            {
+                perms.set_readonly(false);
+            }
+            std::fs::set_permissions(&out_path, perms)
+                .with_context(|| format!("make writable {}", out_path.display()))?;
+        }
+
         std::fs::write(&out_path, content)
             .with_context(|| format!("write file {}", out_path.display()))?;
 
