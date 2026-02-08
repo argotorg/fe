@@ -8,9 +8,7 @@ use act_locally::actor::ActorRef;
 use act_locally::message::MessageKey;
 use act_locally::types::ActorError;
 use serde_json::Value;
-use tracing::info;
 
-// use async_lsp::can_handle::CanHandle;
 use async_lsp::{AnyEvent, AnyNotification, AnyRequest, Error, LspService, ResponseError};
 use std::any::TypeId;
 use tower::Service;
@@ -45,28 +43,24 @@ impl<S: 'static> Service<AnyRequest> for LspActorService<S> {
 
     fn call(&mut self, req: AnyRequest) -> Self::Future {
         let method = req.method.clone();
-        info!("got LSP request: {method:?}");
+        tracing::debug!("handling LSP request: {method:?}");
         let actor_ref = self.actor_ref.clone();
         let dispatcher = self.dispatcher.clone();
-        let method_log = method.clone().to_owned();
-        let result = Box::pin(async move {
-            let dispatcher = dispatcher.as_ref();
-            let ask = actor_ref.ask::<_, Self::Response, _>(dispatcher, req);
-            let lsp_result: Result<Self::Response, _> = ask.await.map_err(|e| match e {
-                ActorError::HandlerNotFound => ResponseError::new(
-                    async_lsp::ErrorCode::METHOD_NOT_FOUND,
-                    "Method not found".to_string(),
-                ),
-                _ => ResponseError::new(
-                    async_lsp::ErrorCode::INTERNAL_ERROR,
-                    format!("There was an internal error... {e:?}"),
-                ),
-            });
-            info!("Prepared LSP response for: {method_log:?}");
-            lsp_result
-        });
-        info!("Prepared future for LSP request: {method:?}");
-        result
+        Box::pin(async move {
+            actor_ref
+                .ask::<_, Value, _>(dispatcher.as_ref(), req)
+                .await
+                .map_err(|e| match e {
+                    ActorError::HandlerNotFound => ResponseError::new(
+                        async_lsp::ErrorCode::METHOD_NOT_FOUND,
+                        "Method not found".to_string(),
+                    ),
+                    _ => ResponseError::new(
+                        async_lsp::ErrorCode::INTERNAL_ERROR,
+                        format!("There was an internal error... {e:?}"),
+                    ),
+                })
+        })
     }
 }
 
