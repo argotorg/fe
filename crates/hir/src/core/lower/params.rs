@@ -159,6 +159,7 @@ impl<'db> FuncParam<'db> {
     fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::FuncParam) -> Self {
         let is_mut = ast.mut_token().is_some();
         let is_ref = ast.ref_token().is_some();
+        let is_own = ast.own_token().is_some();
         let is_label_suppressed = ast.is_label_suppressed();
         let name = ast.name().map(|ast| FuncParamName::lower_ast(ctxt, ast));
 
@@ -171,6 +172,11 @@ impl<'db> FuncParam<'db> {
                 Partial::Present(TypeId::new(
                     ctxt.db(),
                     TypeKind::Mode(TypeMode::Ref, Partial::Present(fallback_self)),
+                ))
+            } else if is_own {
+                Partial::Present(TypeId::new(
+                    ctxt.db(),
+                    TypeKind::Mode(TypeMode::Own, Partial::Present(fallback_self)),
                 ))
             } else {
                 Partial::Present(fallback_self)

@@ -25,6 +25,11 @@ impl FuncParam {
         support::token(self.syntax(), SK::RefKw)
     }
 
+    /// Returns the `own` keyword for shorthand owned receivers (`own self`).
+    pub fn own_token(&self) -> Option<SyntaxToken> {
+        support::token(self.syntax(), SK::OwnKw)
+    }
+
     /// Returns the `mut` keyword if the parameter is mutable.
     pub fn mut_token(&self) -> Option<SyntaxToken> {
         support::token(self.syntax(), SK::MutKw)
