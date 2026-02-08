@@ -20,11 +20,6 @@ ast_node! {
     SK::FnParam,
 }
 impl FuncParam {
-    /// Returns the `move` keyword if the parameter is move-by-value.
-    pub fn move_token(&self) -> Option<SyntaxToken> {
-        support::token(self.syntax(), SK::MoveKw)
-    }
-
     /// Returns the `ref` keyword for shorthand borrowed receivers (`ref self`).
     pub fn ref_token(&self) -> Option<SyntaxToken> {
         support::token(self.syntax(), SK::RefKw)

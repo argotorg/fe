@@ -3,7 +3,7 @@ struct Wrap {
 }
 
 impl Wrap {
-    fn bump(move mut self) -> Self {
+    fn bump(mut self: own Self) -> Self {
         self.inner += 1
         self
     }

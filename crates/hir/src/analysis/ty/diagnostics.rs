@@ -357,8 +357,8 @@ pub enum BodyDiag<'db> {
         kind: BorrowKind,
     },
 
-    /// `move` parameters must have owned types. Borrow-handle types (`mut`/`ref`) are not owned.
-    MoveParamCannotBeBorrow {
+    /// `own` parameters must have owned types. Borrow-handle types (`mut`/`ref`) are not owned.
+    OwnParamCannotBeBorrow {
         primary: DynLazySpan<'db>,
         ty: TyId<'db>,
     },
@@ -655,7 +655,7 @@ impl<'db> BodyDiag<'db> {
             Self::BorrowFromNonPlace { .. } => 65,
             Self::CannotBorrowMut { .. } => 66,
             Self::ExplicitReborrowRequired { .. } => 68,
-            Self::MoveParamCannotBeBorrow { .. } => 70,
+            Self::OwnParamCannotBeBorrow { .. } => 70,
             Self::ArrayRepeatRequiresCopy { .. } => 71,
             Self::NonAssignableExpr(..) => 17,
             Self::ImmutableAssignment { .. } => 18,

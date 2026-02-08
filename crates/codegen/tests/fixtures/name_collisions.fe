@@ -49,7 +49,7 @@ mod types_b {
     }
 }
 
-fn generic_fn<T>(move val: T) -> T {
+fn generic_fn<T>(val: own T) -> T {
     val
 }
 

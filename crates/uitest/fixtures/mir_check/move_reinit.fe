@@ -9,4 +9,4 @@ pub fn move_reinit(b: bool) -> Foo {
     x
 }
 
-fn consume(move f: Foo) {}
+fn consume(f: own Foo) {}

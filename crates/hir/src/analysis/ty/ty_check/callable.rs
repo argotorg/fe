@@ -264,7 +264,7 @@ impl<'db> Callable<'db> {
 
             // Enforce explicit call-site borrow syntax for places.
             //
-            // Borrow handles are copyable values, and `move` parameters consume their argument.
+            // Borrow handles are copyable values, and `own` parameters consume their argument.
             // Requiring explicit `ref`/`mut` on *place* arguments makes aliasing visible at the
             // call site, and ensures MIR borrow checking sees the right loan operations.
             if let Some(params) = func_params.as_ref() {
@@ -291,9 +291,9 @@ impl<'db> Callable<'db> {
                     .copied()
                     .unwrap_or_else(|| panic!("missing func param at index {i}"))
                     .mode(db);
-                if mode == FuncParamMode::Move {
+                if mode == FuncParamMode::Own {
                     if expected.as_borrow(db).is_some() {
-                        tc.push_diag(BodyDiag::MoveParamCannotBeBorrow {
+                        tc.push_diag(BodyDiag::OwnParamCannotBeBorrow {
                             primary: given.expr_span.clone(),
                             ty: expected,
                         });

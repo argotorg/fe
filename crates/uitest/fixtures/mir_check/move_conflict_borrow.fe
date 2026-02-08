@@ -2,7 +2,7 @@ struct Boxed {
     value: u256,
 }
 
-fn consume(move value: Boxed) {
+fn consume(value: own Boxed) {
     value.value
 }
 

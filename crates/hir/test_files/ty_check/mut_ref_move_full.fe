@@ -12,7 +12,7 @@ fn bump_pair(p: mut Pair) {
     bump(mut p.b)
 }
 
-fn take_u256(move x: u256) -> u256 {
+fn take_u256(x: own u256) -> u256 {
     x
 }
 

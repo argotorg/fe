@@ -10,4 +10,4 @@ pub fn move_use_after_branch(b: bool) -> u8 {
     x.v
 }
 
-fn consume(move f: Foo) {}
+fn consume(f: own Foo) {}

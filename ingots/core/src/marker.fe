@@ -1,7 +1,7 @@
 // Marker traits for language-level behavior.
 //
 // `Copy` is used by the compiler's ownership model: values of `Copy` types can be
-// duplicated implicitly (e.g. when assigning from a place or passing to a `move`
+// duplicated implicitly (e.g. when assigning from a place or passing to an `own`
 // parameter). Values of non-`Copy` types are moved (consumed) implicitly when
 // used in an owned context.
 

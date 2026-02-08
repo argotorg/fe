@@ -1,5 +1,6 @@
 ---
 source: crates/hir/tests/ty_check.rs
+assertion_line: 40
 expression: res
 input_file: test_files/ty_check/mut_ref_move_full.fe
 ---
@@ -101,10 +102,10 @@ note:
    │              ^^^ u256
 
 note: 
-   ┌─ mut_ref_move_full.fe:15:36
+   ┌─ mut_ref_move_full.fe:15:35
    │  
-15 │   fn take_u256(move x: u256) -> u256 {
-   │ ╭────────────────────────────────────^
+15 │   fn take_u256(x: own u256) -> u256 {
+   │ ╭───────────────────────────────────^
 16 │ │     x
 17 │ │ }
    │ ╰─^ u256

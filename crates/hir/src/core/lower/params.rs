@@ -157,11 +157,6 @@ impl<'db> GenericParam<'db> {
 
 impl<'db> FuncParam<'db> {
     fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::FuncParam) -> Self {
-        let mode = if ast.move_token().is_some() {
-            FuncParamMode::Move
-        } else {
-            FuncParamMode::View
-        };
         let is_mut = ast.mut_token().is_some();
         let is_ref = ast.ref_token().is_some();
         let is_label_suppressed = ast.is_label_suppressed();
@@ -183,6 +178,12 @@ impl<'db> FuncParam<'db> {
         } else {
             TypeId::lower_ast_partial(ctxt, ast.ty())
         };
+
+        let mode = ty
+            .to_opt()
+            .is_some_and(|ty| matches!(ty.data(ctxt.db()), TypeKind::Mode(TypeMode::Own, _)))
+            .then_some(FuncParamMode::Own)
+            .unwrap_or(FuncParamMode::View);
 
         Self {
             mode,

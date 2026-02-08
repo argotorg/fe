@@ -224,9 +224,6 @@ pub enum SyntaxKind {
     /// `own`
     #[token("own")]
     OwnKw,
-    /// `move`
-    #[token("move")]
-    MoveKw,
     /// `use`
     #[token("use")]
     UseKw,
@@ -650,7 +647,6 @@ impl SyntaxKind {
             SyntaxKind::MutKw => "`mut`",
             SyntaxKind::RefKw => "`ref`",
             SyntaxKind::OwnKw => "`own`",
-            SyntaxKind::MoveKw => "`move`",
             SyntaxKind::UseKw => "`use`",
             SyntaxKind::ExternKw => "`extern`",
             SyntaxKind::UnsafeKw => "`unsafe`",
@@ -866,7 +862,6 @@ impl SyntaxKind {
                 | SyntaxKind::MutKw
                 | SyntaxKind::RefKw
                 | SyntaxKind::OwnKw
-                | SyntaxKind::MoveKw
                 | SyntaxKind::UseKw
                 | SyntaxKind::ExternKw
                 | SyntaxKind::UnsafeKw

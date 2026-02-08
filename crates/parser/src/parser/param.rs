@@ -42,7 +42,6 @@ impl super::Parse for FnParamScope {
             p.bump_if(SyntaxKind::RefKw) && p.current_kind() == Some(SyntaxKind::SelfKw)
         });
 
-        parser.bump_if(SyntaxKind::MoveKw);
         parser.bump_if(SyntaxKind::MutKw);
         if allow_ref_self_shorthand {
             parser.bump_expected(SyntaxKind::RefKw);

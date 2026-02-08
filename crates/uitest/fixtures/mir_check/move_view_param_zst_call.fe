@@ -1,4 +1,4 @@
-fn make_pair2<A, B>(move a: A, move b: B) -> (A, B) {
+fn make_pair2<A, B>(a: own A, b: own B) -> (A, B) {
     (a, b)
 }
 

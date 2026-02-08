@@ -220,7 +220,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                 hir_func.params(db).map(|param| param.mode(db)).collect()
             }
             crate::ir::MirFunctionOrigin::Synthetic(_) => {
-                vec![FuncParamMode::Move; body.param_locals.len()]
+                vec![FuncParamMode::Own; body.param_locals.len()]
             }
         };
         if param_modes.len() != body.param_locals.len() {
@@ -724,7 +724,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                     let mode = self.param_modes[param_index as usize];
                     let mode_str = match mode {
                         FuncParamMode::View => "view",
-                        FuncParamMode::Move => "move",
+                        FuncParamMode::Own => "own",
                     };
                     let param_span = self.span_for_source(param.source);
 

@@ -185,8 +185,8 @@ pub struct AssocTypeGenericArg<'db> {
 pub enum FuncParamMode {
     /// Default `x: T`: readable but cannot be moved-out.
     View,
-    /// `move x: T`: callee takes ownership of the argument.
-    Move,
+    /// `x: own T`: callee takes ownership of the argument.
+    Own,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

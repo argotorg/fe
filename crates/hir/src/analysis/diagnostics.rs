@@ -2453,19 +2453,19 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
 
-            Self::MoveParamCannotBeBorrow { primary, ty } => CompleteDiagnostic {
+            Self::OwnParamCannotBeBorrow { primary, ty } => CompleteDiagnostic {
                 severity: Severity::Error,
-                message: "invalid `move` parameter".to_string(),
+                message: "invalid `own` parameter".to_string(),
                 sub_diagnostics: vec![SubDiagnostic {
                     style: LabelStyle::Primary,
                     message: format!(
-                        "`move` parameters must have owned types (found `{}`)",
+                        "`own` parameters must have owned types (found `{}`)",
                         ty.pretty_print(db)
                     ),
                     span: primary.resolve(db),
                 }],
                 notes: vec![
-                    "remove `move`, or change the parameter type to an owned type".to_string(),
+                    "remove `own`, or change the parameter type to an owned type".to_string(),
                 ],
                 error_code,
             },
