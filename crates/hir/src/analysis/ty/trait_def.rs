@@ -379,8 +379,22 @@ pub fn assoc_const_body_for_trait_inst<'db>(
     inst: TraitInstId<'db>,
     const_name: IdentId<'db>,
 ) -> Option<crate::hir_def::Body<'db>> {
-    let mut match_body: Option<crate::hir_def::Body<'db>> = None;
+    assoc_const_body_and_impl_args_for_trait_inst(db, inst, const_name).map(|(body, _)| body)
+}
+
+/// Looks up the HIR body for an associated const defined in the selected trait impl, if unique,
+/// returning both the body and the impl's instantiated generic arguments.
+///
+/// The returned generic args correspond to the impl's own generic parameters (not the trait's),
+/// and are suitable for CTFE/type checking of the impl const body.
+pub(super) fn assoc_const_body_and_impl_args_for_trait_inst<'db>(
+    db: &'db dyn HirAnalysisDb,
+    inst: TraitInstId<'db>,
+    const_name: IdentId<'db>,
+) -> Option<(crate::hir_def::Body<'db>, Vec<TyId<'db>>)> {
+    let mut match_info: Option<(crate::hir_def::Body<'db>, Vec<TyId<'db>>)> = None;
     let canonical_self_ty = Canonical::new(db, inst.self_ty(db));
+    let canonical_inst = Canonical::new(db, inst);
 
     for ingot in [inst.self_ty(db).ingot(db), Some(inst.def(db).ingot(db))] {
         let Some(ingot) = ingot else { continue };
@@ -389,8 +403,12 @@ pub fn assoc_const_body_for_trait_inst<'db>(
             // associated const lookups to work for generic impls like
             // `impl<const N: usize> AbiSize for String<N>`.
             let mut table = UnificationTable::new(db);
+            let target_inst = canonical_inst.extract_identity(&mut table);
             let implementor = table.instantiate_with_fresh_vars(*implementor);
-            if table.unify(implementor.trait_inst(db), inst).is_err() {
+            if table
+                .unify(implementor.trait_inst(db), target_inst)
+                .is_err()
+            {
                 continue;
             }
 
@@ -410,14 +428,21 @@ pub fn assoc_const_body_for_trait_inst<'db>(
                 continue;
             };
 
-            match match_body {
-                None => match_body = Some(body),
-                Some(existing) if existing == body => {}
+            let impl_args = implementor
+                .params(db)
+                .iter()
+                .map(|&ty| ty.fold_with(db, &mut table))
+                .collect::<Vec<_>>();
+
+            match &match_info {
+                None => match_info = Some((body, impl_args)),
+                Some((existing_body, existing_args))
+                    if *existing_body == body && *existing_args == impl_args => {}
                 Some(_) => return None,
             }
         }
     }
-    match_body
+    match_info
 }
 
 /// Represents the trait environment of an ingot, which maintain all trait

@@ -11,7 +11,11 @@ use smallvec1::SmallVec;
 use crate::analysis::HirAnalysisDb;
 use crate::analysis::name_resolution;
 use crate::analysis::ty;
-use crate::analysis::ty::diagnostics::{TraitConstraintDiag, TyDiagCollection, TyLowerDiag};
+use crate::analysis::ty::diagnostics::{
+    BodyDiag, FuncBodyDiag, TraitConstraintDiag, TyDiagCollection, TyLowerDiag,
+};
+use crate::analysis::ty::trait_lower::lower_impl_trait;
+use crate::analysis::ty::ty_check::check_anon_const_body;
 use crate::analysis::ty::ty_def::{InvalidCause, TyId};
 use crate::hir_def::scope_graph::ScopeId;
 use crate::hir_def::{
@@ -52,6 +56,32 @@ where
     defs.into_iter()
         .filter_map(|(_name, idxs)| (idxs.len() > 1).then_some(create_diag(idxs)))
         .collect()
+}
+
+fn const_ty_mismatch_diag<'db>(
+    span: DynLazySpan<'db>,
+    expected: TyId<'db>,
+    given: TyId<'db>,
+) -> TyDiagCollection<'db> {
+    TyLowerDiag::ConstTyMismatch {
+        span,
+        expected,
+        given,
+    }
+    .into()
+}
+
+fn extract_type_mismatch<'db>(
+    diag: &FuncBodyDiag<'db>,
+) -> Option<(DynLazySpan<'db>, TyId<'db>, TyId<'db>)> {
+    match diag {
+        FuncBodyDiag::Body(BodyDiag::TypeMismatch {
+            span,
+            expected,
+            given,
+        }) => Some((span.clone(), *expected, *given)),
+        _ => None,
+    }
 }
 
 impl<'db> SuperTraitRefView<'db> {
@@ -567,21 +597,17 @@ impl<'db> ImplTrait<'db> {
     }
 
     /// Diagnostics for associated const values and validity.
-    pub fn diags_assoc_const_values(
-        self,
-        db: &'db dyn HirAnalysisDb,
-    ) -> Vec<TyDiagCollection<'db>> {
+    pub fn diags_assoc_consts(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         use ty::diagnostics::ImplDiag;
-        use ty::trait_lower::lower_impl_trait;
 
-        let mut diags = Vec::new();
         let Some(implementor) = lower_impl_trait(db, self) else {
-            return diags;
+            return Vec::new();
         };
         let implementor = implementor.instantiate_identity();
         let trait_hir = implementor.trait_def(db);
+        let trait_args = implementor.trait_(db).args(db);
 
-        // Check impl consts have values and are defined in trait
+        let mut diags = Vec::new();
         for impl_const in self.assoc_consts(db) {
             let Some(name) = impl_const.name(db) else {
                 continue;
@@ -611,6 +637,26 @@ impl<'db> ImplTrait<'db> {
                 );
             }
         }
+
+        for impl_const in self.assoc_consts(db) {
+            let Some(name) = impl_const.name(db) else {
+                continue;
+            };
+            let Some(body) = impl_const.value_body(db) else {
+                continue;
+            };
+            let Some(expected) = trait_hir.const_(db, name).and_then(|c| c.ty_binder(db)) else {
+                continue;
+            };
+
+            let expected_ty = expected.instantiate(db, trait_args);
+            let (body_diags, _) = check_anon_const_body(db, body, expected_ty);
+            if let Some((span, expected, given)) = body_diags.iter().find_map(extract_type_mismatch)
+            {
+                diags.push(const_ty_mismatch_diag(span, expected, given));
+            }
+        }
+
         diags
     }
 
@@ -1050,14 +1096,7 @@ impl<'db> GenericParamOwner<'db> {
                             );
                         }
                         InvalidCause::ConstTyMismatch { expected, given } => {
-                            out.push(
-                                TyLowerDiag::ConstTyMismatch {
-                                    span: span.into(),
-                                    expected,
-                                    given,
-                                }
-                                .into(),
-                            );
+                            out.push(const_ty_mismatch_diag(span.into(), expected, given));
                         }
                         _ => {}
                     }
@@ -1397,7 +1436,7 @@ impl<'db> Diagnosable<'db> for ImplTrait<'db> {
         out.extend(self.diags_missing_assoc_types(db));
         out.extend(self.diags_assoc_types_bounds(db));
         out.extend(self.diags_missing_assoc_consts(db));
-        out.extend(self.diags_assoc_const_values(db));
+        out.extend(self.diags_assoc_consts(db));
         out.extend(GenericParamOwner::ImplTrait(self).diags(db));
         out
     }

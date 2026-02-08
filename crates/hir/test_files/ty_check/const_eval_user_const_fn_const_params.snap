@@ -1,0 +1,76 @@
+---
+source: crates/hir/tests/ty_check.rs
+assertion_line: 40
+expression: res
+input_file: test_files/ty_check/const_eval_user_const_fn_const_params.fe
+---
+note: 
+  ┌─ const_eval_user_const_fn_const_params.fe:1:35
+  │  
+1 │   const fn plus1(x: usize) -> usize {
+  │ ╭───────────────────────────────────^
+2 │ │     x + 1
+3 │ │ }
+  │ ╰─^ usize
+
+note: 
+  ┌─ const_eval_user_const_fn_const_params.fe:2:5
+  │
+2 │     x + 1
+  │     ^ usize
+
+note: 
+  ┌─ const_eval_user_const_fn_const_params.fe:2:5
+  │
+2 │     x + 1
+  │     ^^^^^ usize
+
+note: 
+  ┌─ const_eval_user_const_fn_const_params.fe:2:9
+  │
+2 │     x + 1
+  │         ^ usize
+
+note: 
+   ┌─ const_eval_user_const_fn_const_params.fe:8:19
+   │  
+ 8 │   fn use_defaults() {
+   │ ╭───────────────────^
+ 9 │ │     let x: Foo<4>
+10 │ │     let y: Bar<4>
+11 │ │ }
+   │ ╰─^ ()
+
+note: 
+  ┌─ const_eval_user_const_fn_const_params.fe:9:9
+  │
+9 │     let x: Foo<4>
+  │         ^ Foo<4, plus1(4)>
+
+note: 
+   ┌─ const_eval_user_const_fn_const_params.fe:10:9
+   │
+10 │     let y: Bar<4>
+   │         ^ Bar<4, (4 + 1)>
+
+note: 
+   ┌─ const_eval_user_const_fn_const_params.fe:13:32
+   │  
+13 │   fn use_param<const N: usize>() {
+   │ ╭────────────────────────────────^
+14 │ │     let a: Foo<{ N }>
+15 │ │     let b: Bar<{ N }>
+16 │ │ }
+   │ ╰─^ ()
+
+note: 
+   ┌─ const_eval_user_const_fn_const_params.fe:14:9
+   │
+14 │     let a: Foo<{ N }>
+   │         ^ Foo<const N: usize, plus1(N)>
+
+note: 
+   ┌─ const_eval_user_const_fn_const_params.fe:15:9
+   │
+15 │     let b: Bar<{ N }>
+   │         ^ Bar<const N: usize, (N + 1)>

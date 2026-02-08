@@ -20,6 +20,7 @@ use crate::{
     },
     span::HirOrigin,
 };
+pub use event::{EventError, EventErrorKind};
 pub use item::{SelectorError, SelectorErrorKind};
 pub use parse::parse_file_impl;
 
@@ -28,6 +29,7 @@ pub(crate) mod parse;
 mod attr;
 mod body;
 mod contract;
+mod event;
 mod expr;
 mod hir_builder;
 mod item;

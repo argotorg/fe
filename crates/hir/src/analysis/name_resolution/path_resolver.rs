@@ -776,27 +776,12 @@ where
 
     match parent_res {
         Some(PathRes::Ty(ty) | PathRes::TyAlias(_, ty)) => {
-            // Try to resolve as an associated const on the receiver type
-            if is_tail && resolve_tail_as_value {
-                match select_assoc_const_candidate(db, ty, ident, parent_scope, assumptions) {
-                    AssocConstSelection::Found(inst) => {
-                        let r = PathRes::TraitConst(ty, inst, ident);
-                        observer(path, &r);
-                        return Ok(r);
-                    }
-                    AssocConstSelection::Ambiguous(traits) => {
-                        return Err(PathResError::new(
-                            PathResErrorKind::AmbiguousAssociatedConst {
-                                name: ident,
-                                trait_insts: traits,
-                            },
-                            path,
-                        ));
-                    }
-                    AssocConstSelection::NotFound => {}
-                }
-            }
-            // Fast paths for qualified types `<A as Trait>::...`
+            // Fast paths for qualified types `<A as Trait>::...`.
+            //
+            // NOTE: This must run before generic associated-const probing, otherwise
+            // `<A as Trait>::CONST` can be mis-resolved with `recv_ty` set to the
+            // *qualified type* instead of `A`, which then breaks downstream trait-const
+            // evaluation/CTFE.
             if let TyData::QualifiedTy(trait_inst) = ty.data(db) {
                 // Associated type projection
                 if let Some(assoc_ty) = trait_inst.assoc_ty(db, ident) {
@@ -820,6 +805,29 @@ where
                     let r = PathRes::TraitConst(trait_inst.self_ty(db), *trait_inst, ident);
                     observer(path, &r);
                     return Ok(r);
+                }
+            }
+
+            // Try to resolve as an associated const on the receiver type
+            if is_tail && resolve_tail_as_value {
+                // Use the receiver type's scope when probing impls so `OtherIngotType::CONST`
+                // can find associated consts whose impls live in the receiver ingot.
+                match select_assoc_const_candidate(db, ty, ident, parent_scope, assumptions) {
+                    AssocConstSelection::Found(inst) => {
+                        let r = PathRes::TraitConst(ty, inst, ident);
+                        observer(path, &r);
+                        return Ok(r);
+                    }
+                    AssocConstSelection::Ambiguous(traits) => {
+                        return Err(PathResError::new(
+                            PathResErrorKind::AmbiguousAssociatedConst {
+                                name: ident,
+                                trait_insts: traits,
+                            },
+                            path,
+                        ));
+                    }
+                    AssocConstSelection::NotFound => {}
                 }
             }
 

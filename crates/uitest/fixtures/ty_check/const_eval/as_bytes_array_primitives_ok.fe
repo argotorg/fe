@@ -1,0 +1,33 @@
+use core::intrinsic
+
+const fn len_from_u256_array() -> usize {
+    let xs: [u256; 2] = [1, 2]
+    let bytes: [u8; 64] = intrinsic::__as_bytes(xs)
+    bytes[63] as usize
+}
+
+const fn len_from_u16_array() -> usize {
+    let xs: [u16; 2] = [258, 772]
+    let bytes: [u8; 4] = intrinsic::__as_bytes(xs)
+    bytes[3] as usize
+}
+
+const fn len_from_bool_array() -> usize {
+    let xs: [bool; 2] = [false, true]
+    let bytes: [u8; 2] = intrinsic::__as_bytes(xs)
+    bytes[1] as usize
+}
+
+type ArrU256 = [u8; len_from_u256_array()]
+type ArrU16 = [u8; len_from_u16_array()]
+type ArrBool = [u8; len_from_bool_array()]
+
+fn takes_u256(_x: ArrU256) {}
+fn takes_u16(_x: ArrU16) {}
+fn takes_bool(_x: ArrBool) {}
+
+fn ok(x: ArrU256, y: ArrU16, z: ArrBool) {
+    takes_u256(x)
+    takes_u16(y)
+    takes_bool(z)
+}

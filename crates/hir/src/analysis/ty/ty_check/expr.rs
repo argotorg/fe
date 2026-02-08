@@ -1707,7 +1707,18 @@ impl<'db> TyChecker<'db> {
                     self.env.register_callable(expr, callable);
                     ExprProp::new(func_ty, true)
                 }
-                PathRes::TraitConst(_recv_ty, inst, name) => {
+                PathRes::TraitConst(recv_ty, inst, name) => {
+                    let mut args = inst.args(self.db).clone();
+                    if let Some(self_arg) = args.first_mut() {
+                        *self_arg = recv_ty;
+                    }
+                    let inst = TraitInstId::new(
+                        self.db,
+                        inst.def(self.db),
+                        args,
+                        inst.assoc_type_bindings(self.db).clone(),
+                    );
+
                     self.env
                         .register_const_ref(expr, ConstRef::TraitConst { inst, name });
                     // Look up the associated const's declared type in the trait and
@@ -1719,6 +1730,7 @@ impl<'db> TyChecker<'db> {
                         // Instantiate with the concrete args of the trait instance
                         let instantiated = ty_binder.instantiate(self.db, inst.args(self.db));
                         let ty = self.table.instantiate_to_term(instantiated);
+
                         ExprProp::new(ty, true)
                     } else {
                         // Fallback to invalid type if the declaration isn't found

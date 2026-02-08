@@ -1,0 +1,7 @@
+use std::evm::{Address, StorageMap}
+
+#[event]
+struct Bad {
+    value: StorageMap<Address, u256, 0>,
+}
+

@@ -1,0 +1,16 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/event_shadowed_address_type.fe
+---
+error[8-0000]: type mismatch
+   ┌─ event_shadowed_address_type.fe:5:1
+   │  
+ 5 │ ╭ #[event]
+ 6 │ │ struct BadEvent {
+ 7 │ │     #[indexed]
+ 8 │ │     from: Address,
+ 9 │ │     #[indexed]
+10 │ │     to: std::evm::Address,
+11 │ │ }
+   │ ╰─^ expected `Address`, but `Address` is given

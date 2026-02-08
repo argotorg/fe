@@ -127,8 +127,12 @@ pub fn lower_module<'db>(
         }
     };
 
+    // Skip associated functions here to avoid pulling in trait methods (which may refer to
+    // abstract associated items) as MIR templates. Impl/impl-trait functions are queued below.
     for &func in top_mod.all_funcs(db) {
-        queue_func(func);
+        if !func.is_associated_func(db) {
+            queue_func(func);
+        }
     }
 
     for &impl_block in top_mod.all_impls(db) {
@@ -231,10 +235,16 @@ pub(crate) fn lower_function<'db>(
 
     if let Some(expr) = first_unlowered_expr_used_by_mir(&mir_body) {
         let expr_context = format_hir_expr_context(db, body, expr);
-        return Err(MirLowerError::UnloweredHirExpr {
-            func_name: symbol_name.clone(),
-            expr: expr_context,
-        });
+        // Generic functions are re-lowered from HIR during monomorphization, so their initial
+        // templates are never codegen'd. Allow construction-time placeholders here.
+        let is_uninstantiated_generic =
+            generic_args.is_empty() && !CallableDef::Func(func).params(db).is_empty();
+        if !is_uninstantiated_generic {
+            return Err(MirLowerError::UnloweredHirExpr {
+                func_name: symbol_name.clone(),
+                expr: expr_context,
+            });
+        }
     }
 
     // Note: `MirFunction` may be used as a generic template during monomorphization.

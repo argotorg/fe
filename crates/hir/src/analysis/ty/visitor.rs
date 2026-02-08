@@ -126,9 +126,27 @@ where
                 generic_args.visit_with(visitor);
                 args.visit_with(visitor);
             }
+            ConstExpr::UserConstFnCall {
+                generic_args, args, ..
+            } => {
+                generic_args.visit_with(visitor);
+                args.visit_with(visitor);
+            }
+            ConstExpr::ArithBinOp { lhs, rhs, .. } => {
+                lhs.visit_with(visitor);
+                rhs.visit_with(visitor);
+            }
+            ConstExpr::UnOp { expr, .. } => {
+                expr.visit_with(visitor);
+            }
+            ConstExpr::Cast { expr, to } => {
+                expr.visit_with(visitor);
+                to.visit_with(visitor);
+            }
             ConstExpr::TraitConst { inst, .. } => {
                 inst.visit_with(visitor);
             }
+            ConstExpr::LocalBinding(_) => {}
         },
         ConstTyData::UnEvaluated { .. } => {}
     }

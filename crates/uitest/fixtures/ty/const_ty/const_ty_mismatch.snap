@@ -1,5 +1,6 @@
 ---
 source: crates/uitest/tests/ty.rs
+assertion_line: 46
 expression: diags
 input_file: fixtures/ty/const_ty/const_ty_mismatch.fe
 ---

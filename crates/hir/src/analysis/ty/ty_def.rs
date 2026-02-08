@@ -1675,6 +1675,10 @@ pub(crate) fn ty_flags<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyFlag
             self.flags.insert(TyFlags::HAS_PARAM)
         }
 
+        fn visit_const_param(&mut self, _: &TyParam<'db>, _: TyId<'db>) {
+            self.flags.insert(TyFlags::HAS_PARAM)
+        }
+
         fn visit_invalid(&mut self, _: &InvalidCause) {
             self.flags.insert(TyFlags::HAS_INVALID);
         }

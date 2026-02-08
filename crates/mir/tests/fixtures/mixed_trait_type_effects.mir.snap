@@ -1,12 +1,7 @@
 ---
 source: crates/mir/tests/lowering_snapshots.rs
-assertion_line: 26
 expression: mir_output
 ---
-fn mockctx_he3e49fc78f7932c8_ctx_h4952b3c1f066f039_inc(v0: MockCtx) -> u256:
-  bb0:
-    ret (v0 + 1)
-
 fn entry() -> u256:
   bb0:
     v0: u256 = 10
@@ -17,6 +12,10 @@ fn entry() -> u256:
     v2: u256 = bump__MockCtx_he3e49fc78f7932c8_MemPtr_u256___f74b9f9dc1aeb45d(31, v1)
     v0 = load mem[v1]
     ret v2
+
+fn mockctx_he3e49fc78f7932c8_ctx_h4952b3c1f066f039_inc(v0: MockCtx) -> u256:
+  bb0:
+    ret (v0 + 1)
 
 fn bump__MockCtx_he3e49fc78f7932c8_MemPtr_u256___f74b9f9dc1aeb45d(v0: u256, v1: u256) -> u256:
   bb0:

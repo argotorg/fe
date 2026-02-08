@@ -113,7 +113,16 @@ pub fn constraints_for<'db>(
             collect_func_def_constraints(db, f.into(), true).instantiate_identity()
         }
         ItemKind::Impl(i) => collect_constraints(db, i.into()).instantiate_identity(),
-        ItemKind::Trait(t) => collect_constraints(db, t.into()).instantiate_identity(),
+        ItemKind::Trait(t) => {
+            let mut preds = collect_constraints(db, t.into()).instantiate_identity();
+            let self_pred = TraitInstId::new(db, t, t.params(db).to_vec(), IndexMap::new());
+            if !preds.list(db).contains(&self_pred) {
+                let mut merged = preds.list(db).to_vec();
+                merged.push(self_pred);
+                preds = PredicateListId::new(db, merged);
+            }
+            preds
+        }
         ItemKind::ImplTrait(i) => collect_constraints(db, i.into()).instantiate_identity(),
         _ => PredicateListId::empty_list(db),
     }
@@ -1336,6 +1345,7 @@ fn get_variant_selector<'db>(db: &'db dyn HirAnalysisDb, struct_: Struct<'db>) -
     match try_eval_const_body(db, body, expected_ty)? {
         ConstValue::Int(value) => value.to_u32(),
         ConstValue::Bool(_) => None,
+        ConstValue::Bytes(_) => None,
     }
 }
 
@@ -2846,6 +2856,10 @@ impl<'db> ImplAssocConstView<'db> {
     /// Returns true if this associated const has a value defined.
     pub fn has_value(self, db: &'db dyn HirDb) -> bool {
         self.def(db).value.to_opt().is_some()
+    }
+
+    pub fn value_body(self, db: &'db dyn HirDb) -> Option<crate::core::hir_def::Body<'db>> {
+        self.def(db).value.to_opt()
     }
 
     /// Semantic type of this associated const implementation.
