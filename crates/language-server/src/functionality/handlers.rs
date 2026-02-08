@@ -262,6 +262,20 @@ pub async fn handle_file_change(
         }
     };
 
+    if backend.classify_git_cache_path(&message.uri, &path) {
+        if matches!(message.kind, ChangeKind::Edit(_))
+            && backend.readonly_warnings.insert(message.uri.clone())
+        {
+            let _ = backend.client.clone().show_message(ShowMessageParams {
+                typ: MessageType::ERROR,
+                message:
+                    "Git dependency cache files are read-only in the editor; edits are ignored."
+                        .to_string(),
+            });
+        }
+        return Ok(());
+    }
+
     let path_str = match path.to_str() {
         Some(p) => p,
         None => {
@@ -465,7 +479,9 @@ pub async fn handle_formatting(
     backend: &Backend,
     params: DocumentFormattingParams,
 ) -> Result<Option<Vec<TextEdit>>, ResponseError> {
-    if backend.is_builtin_tmp_uri(&params.text_document.uri) {
+    if backend.is_builtin_tmp_uri(&params.text_document.uri)
+        || backend.is_git_cache_uri(&params.text_document.uri)
+    {
         return Ok(None);
     }
 

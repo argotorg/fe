@@ -446,6 +446,14 @@ impl IngotResolverImpl {
     {
         let checkout_path = self.git.checkout_path(description);
         if self.git.has_valid_cached_checkout(description) {
+            if let Err(error) = self.git.enforce_readonly(checkout_path.as_path()) {
+                tracing::warn!(
+                    target: "resolver",
+                    "Failed to mark git checkout read-only at {}: {}",
+                    checkout_path,
+                    error
+                );
+            }
             return Ok((checkout_path, true, false));
         }
 

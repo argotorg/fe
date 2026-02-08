@@ -27,6 +27,12 @@ pub async fn handle_rename(
             "Renaming symbols in built-in library files is not supported.".to_string(),
         ));
     }
+    if backend.is_git_cache_uri(&lsp_uri) {
+        return Err(ResponseError::new(
+            async_lsp::ErrorCode::INVALID_REQUEST,
+            "Renaming symbols in git dependency cache files is not supported.".to_string(),
+        ));
+    }
 
     let internal_url = backend.map_client_uri_to_internal(lsp_uri);
     let Some(file) = backend.db.workspace().get(&backend.db, &internal_url) else {
@@ -50,11 +56,13 @@ pub async fn handle_rename(
             .name_span(&backend.db)
             .and_then(|span| span.resolve(&backend.db))
             .and_then(|span| span.file.url(&backend.db))
-            .is_some_and(|url| url.scheme().starts_with("builtin-"))
+            .is_some_and(|url| {
+                url.scheme().starts_with("builtin-") || backend.is_git_cache_uri(&url)
+            })
     {
         return Err(ResponseError::new(
             async_lsp::ErrorCode::INVALID_REQUEST,
-            "Renaming symbols defined in the built-in libraries is not supported.".to_string(),
+            "Renaming symbols defined in read-only library sources is not supported.".to_string(),
         ));
     }
 
@@ -153,7 +161,8 @@ pub async fn handle_rename(
     }
 
     // Never propose edits to embedded built-in library sources.
-    changes.retain(|url, _| !url.scheme().starts_with("builtin-"));
+    changes
+        .retain(|url, _| !url.scheme().starts_with("builtin-") && !backend.is_git_cache_uri(url));
 
     if changes.is_empty() {
         Ok(None)
