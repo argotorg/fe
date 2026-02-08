@@ -1,0 +1,4 @@
+fn make_pair<A, B>(a: A, b: B) -> (A, B) {
+    (a, b)
+}
+

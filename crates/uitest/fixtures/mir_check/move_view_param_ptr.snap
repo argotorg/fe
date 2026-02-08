@@ -1,0 +1,14 @@
+---
+source: crates/uitest/tests/mir_check.rs
+assertion_line: 32
+expression: res
+input_file: fixtures/mir_check/move_view_param_ptr.fe
+---
+error[10-0002]: move conflict in `fn example`
+  ┌─ move_view_param_ptr.fe:1:65
+  │  
+1 │   fn example(p: std::evm::MemPtr<u256>) -> std::evm::MemPtr<u256> {
+  │ ╭─────────────────────────────────────────────────────────────────^
+2 │ │     p
+3 │ │ }
+  │ ╰─^ cannot move out of a view parameter

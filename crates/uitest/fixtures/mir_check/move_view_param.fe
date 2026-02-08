@@ -1,15 +1,4 @@
-fn make_pair<A, B>(a: A, b: B) -> (A, B) {
-    (a, b)
-}
-
-fn make_pair_copy<A, B>(a: A, b: B) -> (A, B)
-where
-    A: Copy,
-    B: Copy,
-{
-    (a, b)
-}
-
-fn make_pair2<A, B>(a: A, b: B) -> (A, B) {
-    (a, b)
+struct Foo {}
+fn add(a: Foo, b: Foo) -> Foo {
+    a
 }

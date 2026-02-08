@@ -1305,11 +1305,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     return None;
                 }
 
-                match crate::repr::repr_kind_for_ty(self.db, &self.core, ty) {
-                    crate::repr::ReprKind::Zst | crate::repr::ReprKind::Ptr(_) => return None,
-                    crate::repr::ReprKind::Word | crate::repr::ReprKind::Ref => {}
-                }
-
                 let local = self.local_for_binding(binding)?;
                 let addr_space = self.address_space_for_binding(&binding);
                 let base_value =

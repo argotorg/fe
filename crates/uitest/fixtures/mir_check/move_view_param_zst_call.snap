@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/mir_check.rs
+assertion_line: 32
+expression: res
+input_file: fixtures/mir_check/move_view_param_zst_call.fe
+---
+error[10-0002]: move conflict in `fn example`
+  ┌─ move_view_param_zst_call.fe:8:16
+  │
+8 │     make_pair2(a, b)
+  │                ^  ^ cannot move out of a view parameter
+  │                │   
+  │                cannot move out of a view parameter
