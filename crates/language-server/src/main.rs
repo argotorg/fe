@@ -19,7 +19,6 @@ use async_compat::CompatExt;
 use async_lsp::concurrency::ConcurrencyLayer;
 use async_lsp::panic::CatchUnwindLayer;
 use async_lsp::server::LifecycleLayer;
-use async_lsp::tracing::TracingLayer;
 use async_std::net::TcpListener;
 use clap::Parser;
 use cli::{CliArgs, Commands};
@@ -59,13 +58,11 @@ async fn main() {
 
 async fn start_stdio_server() {
     let (server, client) = async_lsp::MainLoop::new_server(|client| {
-        let tracing_layer = TracingLayer::default();
         let lsp_service = setup(client.clone(), "LSP actor".to_string());
         ServiceBuilder::new()
             .layer(LifecycleLayer::default())
             .layer(CatchUnwindLayer::default())
             .layer(ConcurrencyLayer::default())
-            .layer(tracing_layer)
             .layer(ClientProcessMonitorLayer::new(client.clone()))
             .service(lsp_service)
     });
@@ -93,13 +90,11 @@ async fn start_tcp_server(port: u16, timeout: Duration) {
 
     while let Some(Ok(stream)) = incoming.next().with_current_subscriber().await {
         let client_address = stream.peer_addr().unwrap();
-        let tracing_layer = TracingLayer::default();
         let connections_count = Arc::clone(&connections_count);
         let task = async move {
             let (server, client) = async_lsp::MainLoop::new_server(|client| {
                 let router = setup(client.clone(), format!("LSP actor for {client_address}"));
                 ServiceBuilder::new()
-                    .layer(tracing_layer)
                     .layer(LifecycleLayer::default())
                     .layer(CatchUnwindLayer::default())
                     .layer(ConcurrencyLayer::default())

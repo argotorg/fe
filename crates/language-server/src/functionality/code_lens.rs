@@ -57,7 +57,7 @@ pub async fn handle_code_lens(
                         range: location.range,
                         command: Some(Command {
                             title,
-                            command: "editor.action.showReferences".to_string(),
+                            command: "fe.showReferences".to_string(),
                             arguments: Some(vec![
                                 serde_json::json!(location.uri),
                                 serde_json::json!(location.range.start),
@@ -132,7 +132,7 @@ fn make_references_lens(location: &async_lsp::lsp_types::Location, refs: &[async
         range: location.range,
         command: Some(Command {
             title,
-            command: "editor.action.showReferences".to_string(),
+            command: "fe.showReferences".to_string(),
             arguments: Some(vec![
                 serde_json::json!(location.uri),
                 serde_json::json!(location.range.start),

@@ -1,4 +1,9 @@
-use async_lsp::lsp_types::{ExecuteCommandParams, ShowDocumentParams};
+use async_lsp::lsp_types::{
+    ApplyWorkspaceEditParams, CreateFile, CreateFileOptions, DocumentChangeOperation,
+    DocumentChanges, ExecuteCommandParams, MessageType, OneOf, OptionalVersionedTextDocumentIdentifier,
+    Position, Range, ResourceOp, ShowDocumentParams, ShowMessageParams, TextDocumentEdit,
+    TextEdit, WorkspaceEdit,
+};
 use async_lsp::{ErrorCode, LanguageClient, ResponseError};
 use common::InputDb;
 use driver::DriverDataBase;
@@ -105,12 +110,20 @@ pub async fn handle_execute_command(
             })?;
 
         let top_mod = map_file_to_mod(&backend.db, file);
-        generate_codegen_string(&backend.db, top_mod, &kind).map_err(|e| {
-            ResponseError::new(
-                ErrorCode::INTERNAL_ERROR,
-                format!("codegen failed ({}): {e}", kind.label()),
-            )
-        })?
+        match generate_codegen_string(&backend.db, top_mod, &kind) {
+            Ok(content) => content,
+            Err(e) => {
+                let _ = backend.client.clone().show_message(ShowMessageParams {
+                    typ: MessageType::WARNING,
+                    message: format!(
+                        "Can't generate {} - fix errors first:\n{}",
+                        kind.label(),
+                        if e.len() > 300 { &e[..300] } else { &e }
+                    ),
+                });
+                return Ok(None);
+            }
+        }
     };
 
     // Write to VFS (borrows backend mutably)
@@ -122,7 +135,7 @@ pub async fn handle_execute_command(
     })?;
 
     let tmp_url = vfs
-        .write_file("codegen", &output_path, &content, true)
+        .write_file("codegen", &output_path, &content, false)
         .map_err(|e| {
             ResponseError::new(
                 ErrorCode::INTERNAL_ERROR,
@@ -130,13 +143,56 @@ pub async fn handle_execute_command(
             )
         })?;
 
-    let _ = backend
+    // Try window/showDocument first (works in VS Code)
+    let show_result = backend
         .client
         .show_document(ShowDocumentParams {
-            uri: tmp_url,
+            uri: tmp_url.clone(),
             external: None,
             take_focus: Some(true),
             selection: None,
+        })
+        .await;
+
+    if show_result.is_ok() {
+        return Ok(None);
+    }
+
+    // Fallback: workspace/applyEdit to open the file in editors that don't
+    // support showDocument (e.g. Zed). CreateFile + TextDocumentEdit forces
+    // the editor to open it. Note: Zed opens two tabs for this due to
+    // lacking window/showDocument support (tracked: zed-industries/zed#24852).
+    let line_count = content.lines().count() as u32;
+    let edit = WorkspaceEdit {
+        changes: None,
+        document_changes: Some(DocumentChanges::Operations(vec![
+            DocumentChangeOperation::Op(ResourceOp::Create(CreateFile {
+                uri: tmp_url.clone(),
+                options: Some(CreateFileOptions {
+                    overwrite: Some(true),
+                    ignore_if_exists: None,
+                }),
+                annotation_id: None,
+            })),
+            DocumentChangeOperation::Edit(TextDocumentEdit {
+                text_document: OptionalVersionedTextDocumentIdentifier {
+                    uri: tmp_url,
+                    version: None,
+                },
+                edits: vec![OneOf::Left(TextEdit {
+                    range: Range::new(Position::new(0, 0), Position::new(line_count, 0)),
+                    new_text: content,
+                })],
+            }),
+        ])),
+        change_annotations: None,
+    };
+
+    let _ = backend
+        .client
+        .apply_edit(ApplyWorkspaceEditParams {
+            label: Some(format!("View {}", kind.label())),
+            edit,
         })
         .await;
 
