@@ -121,10 +121,11 @@ object "NewtypeStorageFieldMutMethodCall" {
   object "NewtypeStorageFieldMutMethodCall_deployed" {
     code {
       function $__NewtypeStorageFieldMutMethodCall_recv_0_0($args, $w) -> ret {
-        let v0 := $wrap_haf9e70905fcbd513_bump(sload($w))
-        sstore($w, v0)
-        let v1 := sload($w)
-        ret := v1
+        let v0 := sload($w)
+        let v1 := $wrap_haf9e70905fcbd513_bump(v0)
+        sstore($w, v1)
+        let v2 := sload($w)
+        ret := v2
         leave
       }
       function $__NewtypeStorageFieldMutMethodCall_runtime() {
@@ -347,8 +348,7 @@ object "NewtypeStorageFieldMutMethodCall" {
         leave
       }
       function $wrap_haf9e70905fcbd513_bump($self) -> ret {
-        $self := add($self, 1)
-        ret := $self
+        ret := add($self, 1)
         leave
       }
       $__NewtypeStorageFieldMutMethodCall_runtime()

@@ -10,7 +10,7 @@ impl Wrap {
 }
 
 pub fn newtype_word_mut_method_call(x: u256) -> u256 {
-    let mut w = Wrap { inner: x }
-    w = w.bump()
+    let w = Wrap { inner: x }
+    let w = w.bump()
     w.inner
 }

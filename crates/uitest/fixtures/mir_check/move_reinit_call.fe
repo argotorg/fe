@@ -1,0 +1,13 @@
+struct Boxed {
+    value: u256,
+}
+
+fn consume(move value: Boxed) {
+    let _ = value.value
+}
+
+pub fn move_reinit_call() {
+    let mut x: Boxed = Boxed { value: 0 }
+    consume(x)
+    x = Boxed { value: 1 }
+}

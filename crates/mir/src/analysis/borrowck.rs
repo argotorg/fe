@@ -1076,6 +1076,50 @@ impl<'db, 'a> Borrowck<'db, 'a> {
 
         match inst {
             MirInst::Assign {
+                dest: Some(dest), ..
+            } => {
+                let mut assigned = FxHashSet::default();
+                assigned.insert(CanonPlace {
+                    root: self.root_for_local(*dest),
+                    proj: crate::MirProjectionPath::new(),
+                });
+                if let Some((moved, moved_name)) = self.moved_overlap_origin(&assigned, moved) {
+                    let mut diag = self.diag_at_inst(
+                        2,
+                        inst,
+                        self.move_conflict_header(),
+                        "cannot assign to a value after it was moved".to_string(),
+                    );
+                    self.push_move_origin_label(&mut diag, moved, moved_name);
+                    return Some(diag);
+                }
+            }
+            MirInst::Store { place, .. }
+            | MirInst::InitAggregate { place, .. }
+            | MirInst::SetDiscriminant { place, .. } => {
+                let written = self.canonicalize_place(state, place);
+                let assigned: FxHashSet<_> = written
+                    .into_iter()
+                    .filter(|place| place.proj.iter().next().is_none())
+                    .collect();
+                if !assigned.is_empty()
+                    && let Some((moved, moved_name)) = self.moved_overlap_origin(&assigned, moved)
+                {
+                    let mut diag = self.diag_at_inst(
+                        2,
+                        inst,
+                        self.move_conflict_header(),
+                        "cannot assign to a value after it was moved".to_string(),
+                    );
+                    self.push_move_origin_label(&mut diag, moved, moved_name);
+                    return Some(diag);
+                }
+            }
+            _ => {}
+        }
+
+        match inst {
+            MirInst::Assign {
                 rvalue: Rvalue::Load { place },
                 ..
             } => {
