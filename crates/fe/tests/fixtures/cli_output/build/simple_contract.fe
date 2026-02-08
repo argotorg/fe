@@ -1,5 +1,4 @@
 use core::abi::{Abi, AbiEncoder, AbiSize, Encode}
-use lib::foo
 use std::abi::Sol
 
 msg FooMsg {
@@ -10,8 +9,8 @@ msg FooMsg {
 pub contract Foo {
     recv FooMsg {
         Ping -> u256 {
-            foo()
             return 1
         }
     }
 }
+

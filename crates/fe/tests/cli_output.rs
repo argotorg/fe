@@ -1,5 +1,6 @@
 use dir_test::{Fixture, dir_test};
-use std::{io::IsTerminal, path::Path, process::Command};
+use std::{fs, io::IsTerminal, path::Path, process::Command};
+use tempfile::tempdir;
 use test_utils::snap_test;
 
 // Helper function to normalize paths in output for portability
@@ -50,6 +51,10 @@ fn run_fe_command_with_args(subcommand: &str, path: &str, extra: &[&str]) -> (St
 
 // Helper function to run fe binary with specified args
 fn run_fe_main(args: &[&str]) -> (String, i32) {
+    run_fe_main_with_env(args, &[])
+}
+
+fn run_fe_main_with_env(args: &[&str], extra_env: &[(&str, &str)]) -> (String, i32) {
     let cargo_exe = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
     let output = Command::new(&cargo_exe)
         .args(["build", "--bin", "fe"])
@@ -71,9 +76,12 @@ fn run_fe_main(args: &[&str]) -> (String, i32) {
         .expect("Failed to get parent")
         .join("fe");
 
-    let output = Command::new(&fe_binary)
-        .args(args)
-        .env("NO_COLOR", "1") // Disable color output for consistent snapshots across environments
+    let mut command = Command::new(&fe_binary);
+    command.args(args).env("NO_COLOR", "1"); // Disable color output for consistent snapshots across environments
+    for (key, value) in extra_env {
+        command.env(key, value);
+    }
+    let output = command
         .output()
         .unwrap_or_else(|_| panic!("Failed to run fe {:?}", args));
 
@@ -99,6 +107,14 @@ fn run_fe_main(args: &[&str]) -> (String, i32) {
 }
 
 fn run_fe_main_in_dir(args: &[&str], cwd: &Path) -> (String, i32) {
+    run_fe_main_in_dir_with_env(args, cwd, &[])
+}
+
+fn run_fe_main_in_dir_with_env(
+    args: &[&str],
+    cwd: &Path,
+    extra_env: &[(&str, &str)],
+) -> (String, i32) {
     let cargo_exe = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
     let output = Command::new(&cargo_exe)
         .args(["build", "--bin", "fe"])
@@ -120,10 +136,15 @@ fn run_fe_main_in_dir(args: &[&str], cwd: &Path) -> (String, i32) {
         .expect("Failed to get parent")
         .join("fe");
 
-    let output = Command::new(&fe_binary)
+    let mut command = Command::new(&fe_binary);
+    command
         .args(args)
         .env("NO_COLOR", "1") // Disable color output for consistent snapshots across environments
-        .current_dir(cwd)
+        .current_dir(cwd);
+    for (key, value) in extra_env {
+        command.env(key, value);
+    }
+    let output = command
         .output()
         .unwrap_or_else(|_| panic!("Failed to run fe {:?} in {:?}", args, cwd));
 
@@ -144,6 +165,101 @@ fn run_fe_main_in_dir(args: &[&str], cwd: &Path) -> (String, i32) {
 
     let normalized_output = normalize_output(&full_output);
     (normalized_output, exit_code)
+}
+
+#[cfg(unix)]
+fn write_fake_solc(temp: &tempfile::TempDir) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let path = temp.path().join("fake-solc");
+    let script = r#"#!/bin/sh
+set -e
+if [ "$1" = "--version" ]; then
+  echo "solc, the Solidity compiler version 0.0.0+fake"
+  exit 0
+fi
+cat >/dev/null
+NAME="${FAKE_SOLC_CONTRACT:-Foo}"
+cat <<EOF
+{"contracts":{"input.yul":{"$NAME":{"evm":{"bytecode":{"object":"6000"},"deployedBytecode":{"object":"6000"}}}}}}
+EOF
+"#;
+    fs::write(&path, script).expect("write fake solc");
+    let mut perms = fs::metadata(&path).expect("stat fake solc").permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&path, perms).expect("chmod fake solc");
+    path
+}
+
+#[dir_test(
+    dir: "$CARGO_MANIFEST_DIR/tests/fixtures/cli_output/build",
+    glob: "*.fe",
+)]
+fn test_cli_build_contract_not_found(fixture: Fixture<&str>) {
+    let fixture_path = std::path::Path::new(fixture.path());
+    let fixture_name = fixture_path
+        .file_stem()
+        .expect("fixture should have stem")
+        .to_str()
+        .expect("fixture stem should be utf8");
+    let snapshot_path = fixture_path
+        .parent()
+        .expect("fixture should have parent")
+        .join(format!("{fixture_name}_build_contract_not_found.case"));
+    let (output, exit_code) = run_fe_main(&["build", "--contract", "DoesNotExist", fixture.path()]);
+    assert_ne!(exit_code, 0, "expected non-zero exit code:\n{output}");
+    snap_test!(output, snapshot_path.to_str().unwrap());
+}
+
+#[cfg(unix)]
+#[dir_test(
+    dir: "$CARGO_MANIFEST_DIR/tests/fixtures/cli_output/build",
+    glob: "*.fe",
+)]
+fn test_cli_build_fake_solc_artifacts(fixture: Fixture<&str>) {
+    let temp = tempdir().expect("tempdir");
+    let fake_solc = write_fake_solc(&temp);
+
+    let out_dir = temp.path().join("out");
+    let out_dir_str = out_dir.to_string_lossy().to_string();
+
+    let (output, exit_code) = run_fe_main_with_env(
+        &[
+            "build",
+            "--contract",
+            "Foo",
+            "--out-dir",
+            out_dir_str.as_str(),
+            fixture.path(),
+        ],
+        &[
+            ("FE_SOLC_PATH", fake_solc.to_str().expect("fake solc utf8")),
+            ("FAKE_SOLC_CONTRACT", "Foo"),
+        ],
+    );
+    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
+
+    let deploy_path = out_dir.join("Foo.bin");
+    let runtime_path = out_dir.join("Foo.runtime.bin");
+    let deploy = fs::read_to_string(&deploy_path).expect("read deploy bytecode");
+    let runtime = fs::read_to_string(&runtime_path).expect("read runtime bytecode");
+
+    let mut snapshot = output.replace(&out_dir_str, "<out>");
+    snapshot.push_str("\n\n=== ARTIFACTS ===\n");
+    snapshot.push_str(&format!("Foo.bin: {}\n", deploy.trim()));
+    snapshot.push_str(&format!("Foo.runtime.bin: {}\n", runtime.trim()));
+
+    let fixture_path = std::path::Path::new(fixture.path());
+    let fixture_name = fixture_path
+        .file_stem()
+        .expect("fixture should have stem")
+        .to_str()
+        .expect("fixture stem should be utf8");
+    let snapshot_path = fixture_path
+        .parent()
+        .expect("fixture should have parent")
+        .join(format!("{fixture_name}_build_fake_solc.case"));
+    snap_test!(snapshot, snapshot_path.to_str().unwrap());
 }
 
 #[dir_test(
@@ -339,6 +455,56 @@ fn test_cli_workspace_dependency_in_scope() {
     let snapshot_path = root.join("dependency_in_scope.case");
     let (output, _) = run_fe_main_in_dir(&["check", "ingots/app"], &root);
     snap_test!(output, snapshot_path.to_str().unwrap());
+}
+
+#[test]
+fn test_cli_workspace_dependency_in_scope_file_path() {
+    let root = workspace_fixture("dependency_scope");
+    let snapshot_path = root.join("dependency_in_scope_file_path.case");
+    let (output, _) = run_fe_main_in_dir(&["check", "ingots/app/src/lib.fe"], &root);
+    snap_test!(output, snapshot_path.to_str().unwrap());
+}
+
+#[cfg(unix)]
+#[test]
+fn test_cli_build_workspace_dependency_in_scope_file_path_fake_solc_artifacts() {
+    let root = workspace_fixture("dependency_scope");
+
+    let temp = tempdir().expect("tempdir");
+    let fake_solc = write_fake_solc(&temp);
+
+    let out_dir = temp.path().join("out");
+    let out_dir_str = out_dir.to_string_lossy().to_string();
+
+    let (output, exit_code) = run_fe_main_in_dir_with_env(
+        &[
+            "build",
+            "--contract",
+            "Foo",
+            "--out-dir",
+            out_dir_str.as_str(),
+            "ingots/app/src/lib.fe",
+        ],
+        &root,
+        &[
+            ("FE_SOLC_PATH", fake_solc.to_str().expect("fake solc utf8")),
+            ("FAKE_SOLC_CONTRACT", "Foo"),
+        ],
+    );
+    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
+
+    let deploy_path = out_dir.join("Foo.bin");
+    let runtime_path = out_dir.join("Foo.runtime.bin");
+    let deploy = fs::read_to_string(&deploy_path).expect("read deploy bytecode");
+    let runtime = fs::read_to_string(&runtime_path).expect("read runtime bytecode");
+
+    let mut snapshot = output.replace(&out_dir_str, "<out>");
+    snapshot.push_str("\n\n=== ARTIFACTS ===\n");
+    snapshot.push_str(&format!("Foo.bin: {}\n", deploy.trim()));
+    snapshot.push_str(&format!("Foo.runtime.bin: {}\n", runtime.trim()));
+
+    let snapshot_path = root.join("build_dependency_in_scope_file_path_fake_solc.case");
+    snap_test!(snapshot, snapshot_path.to_str().unwrap());
 }
 
 #[test]

@@ -1,4 +1,5 @@
 #![allow(clippy::print_stderr, clippy::print_stdout)]
+mod build;
 mod check;
 mod cli;
 mod test;
@@ -7,6 +8,7 @@ mod tree;
 
 use std::fs;
 
+use build::build;
 use camino::Utf8PathBuf;
 use check::check;
 use clap::{Parser, Subcommand};
@@ -27,7 +29,21 @@ pub struct Options {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum Command {
-    Build,
+    /// Compile Fe code to EVM bytecode using solc.
+    Build {
+        /// Path to an ingot/workspace directory (containing fe.toml) or a .fe file.
+        #[arg(default_value_t = default_project_path())]
+        path: Utf8PathBuf,
+        /// Build a specific contract by name (defaults to all contracts in the target).
+        #[arg(long)]
+        contract: Option<String>,
+        /// Enable solc optimizer.
+        #[arg(long)]
+        optimize: bool,
+        /// Output directory for artifacts.
+        #[arg(long)]
+        out_dir: Option<Utf8PathBuf>,
+    },
     Check {
         #[arg(default_value_t = default_project_path())]
         path: Utf8PathBuf,
@@ -90,7 +106,12 @@ fn main() {
 pub fn run(opts: &Options) {
     driver::set_resolver_verbose(opts.verbose);
     match &opts.command {
-        Command::Build => eprintln!("`fe build` doesn't work at the moment"),
+        Command::Build {
+            path,
+            contract,
+            optimize,
+            out_dir,
+        } => build(path, contract.as_deref(), *optimize, out_dir.as_ref()),
         Command::Check {
             path,
             core: _,

@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, fs};
 
 use camino::Utf8PathBuf;
 use codegen::emit_module_yul;
@@ -85,6 +85,22 @@ fn resolve_check_target(
 
     if path.is_file() {
         if path.extension() == Some("fe") {
+            // If the file lives under an ingot, check from that directory so imports resolve
+            // in context. For workspace roots, prefer treating the file as standalone unless
+            // the user explicitly targets the workspace.
+            if let Ok(canonical) = path.canonicalize_utf8()
+                && let Some(root) = ancestor_fe_toml_dirs(canonical.as_std_path())
+                    .first()
+                    .and_then(|root| Utf8PathBuf::from_path_buf(root.to_path_buf()).ok())
+            {
+                let config_path = root.join("fe.toml");
+                if let Ok(content) = fs::read_to_string(&config_path)
+                    && matches!(Config::parse(&content), Ok(Config::Ingot(_)))
+                {
+                    return Ok(CheckTarget::Directory(root));
+                }
+            }
+
             return Ok(CheckTarget::StandaloneFile(path.clone()));
         }
         return Err("Path must be either a .fe file or a directory containing fe.toml".into());
