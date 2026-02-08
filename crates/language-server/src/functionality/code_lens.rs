@@ -3,7 +3,10 @@ use async_lsp::lsp_types::{CodeLens, CodeLensParams, Command};
 use common::InputDb;
 use hir::{core::semantic::reference::Target, hir_def::ItemKind, lower::map_file_to_mod};
 
-use crate::{backend::Backend, util::to_lsp_location_from_scope};
+use crate::{
+    backend::Backend,
+    util::{to_lsp_location_from_lazy_span, to_lsp_location_from_scope},
+};
 
 /// Handle textDocument/codeLens.
 pub async fn handle_code_lens(
@@ -30,42 +33,36 @@ pub async fn handle_code_lens(
         match item {
             ItemKind::Func(func) => {
                 let target = Target::Scope(func.scope());
-                let ref_count = count_references(&backend.db, ingot, &target);
-
                 if let Ok(location) = to_lsp_location_from_scope(&backend.db, func.scope()) {
-                    let title = if ref_count == 1 {
-                        "1 reference".to_string()
-                    } else {
-                        format!("{ref_count} references")
-                    };
-
-                    lenses.push(CodeLens {
-                        range: location.range,
-                        command: Some(Command {
-                            title,
-                            command: "fe.showReferences".to_string(),
-                            arguments: None,
-                        }),
-                        data: None,
-                    });
+                    let refs = collect_reference_locations(&backend.db, ingot, &target);
+                    lenses.push(make_references_lens(&location, &refs));
                 }
             }
             ItemKind::Trait(trait_) => {
-                let impl_count = trait_.all_impl_traits(&backend.db).len();
-
                 if let Ok(location) = to_lsp_location_from_scope(&backend.db, trait_.scope()) {
-                    let title = if impl_count == 1 {
+                    let impls: Vec<async_lsp::lsp_types::Location> = trait_
+                        .all_impl_traits(&backend.db)
+                        .iter()
+                        .filter_map(|imp| {
+                            to_lsp_location_from_scope(&backend.db, imp.scope()).ok()
+                        })
+                        .collect();
+                    let count = impls.len();
+                    let title = if count == 1 {
                         "1 implementation".to_string()
                     } else {
-                        format!("{impl_count} implementations")
+                        format!("{count} implementations")
                     };
-
                     lenses.push(CodeLens {
                         range: location.range,
                         command: Some(Command {
                             title,
-                            command: "fe.showImplementations".to_string(),
-                            arguments: None,
+                            command: "editor.action.showReferences".to_string(),
+                            arguments: Some(vec![
+                                serde_json::json!(location.uri),
+                                serde_json::json!(location.range.start),
+                                serde_json::json!(impls),
+                            ]),
                         }),
                         data: None,
                     });
@@ -73,46 +70,16 @@ pub async fn handle_code_lens(
             }
             ItemKind::Struct(s) => {
                 let target = Target::Scope(s.scope());
-                let ref_count = count_references(&backend.db, ingot, &target);
-
                 if let Ok(location) = to_lsp_location_from_scope(&backend.db, s.scope()) {
-                    let title = if ref_count == 1 {
-                        "1 reference".to_string()
-                    } else {
-                        format!("{ref_count} references")
-                    };
-
-                    lenses.push(CodeLens {
-                        range: location.range,
-                        command: Some(Command {
-                            title,
-                            command: "fe.showReferences".to_string(),
-                            arguments: None,
-                        }),
-                        data: None,
-                    });
+                    let refs = collect_reference_locations(&backend.db, ingot, &target);
+                    lenses.push(make_references_lens(&location, &refs));
                 }
             }
             ItemKind::Enum(e) => {
                 let target = Target::Scope(e.scope());
-                let ref_count = count_references(&backend.db, ingot, &target);
-
                 if let Ok(location) = to_lsp_location_from_scope(&backend.db, e.scope()) {
-                    let title = if ref_count == 1 {
-                        "1 reference".to_string()
-                    } else {
-                        format!("{ref_count} references")
-                    };
-
-                    lenses.push(CodeLens {
-                        range: location.range,
-                        command: Some(Command {
-                            title,
-                            command: "fe.showReferences".to_string(),
-                            arguments: None,
-                        }),
-                        data: None,
-                    });
+                    let refs = collect_reference_locations(&backend.db, ingot, &target);
+                    lenses.push(make_references_lens(&location, &refs));
                 }
             }
             _ => {}
@@ -154,20 +121,46 @@ pub async fn handle_code_lens(
     }
 }
 
-fn count_references<'db>(
+fn make_references_lens(location: &async_lsp::lsp_types::Location, refs: &[async_lsp::lsp_types::Location]) -> CodeLens {
+    let count = refs.len();
+    let title = if count == 1 {
+        "1 reference".to_string()
+    } else {
+        format!("{count} references")
+    };
+    CodeLens {
+        range: location.range,
+        command: Some(Command {
+            title,
+            command: "editor.action.showReferences".to_string(),
+            arguments: Some(vec![
+                serde_json::json!(location.uri),
+                serde_json::json!(location.range.start),
+                serde_json::json!(refs),
+            ]),
+        }),
+        data: None,
+    }
+}
+
+fn collect_reference_locations<'db>(
     db: &'db driver::DriverDataBase,
     ingot: common::ingot::Ingot<'db>,
     target: &Target<'db>,
-) -> usize {
-    let mut count = 0usize;
+) -> Vec<async_lsp::lsp_types::Location> {
+    let mut locations = Vec::new();
     for (url, file) in ingot.files(db).iter() {
         if !url.path().ends_with(".fe") {
             continue;
         }
         let mod_ = map_file_to_mod(db, file);
-        count += mod_.references_to_target(db, target).len();
+        for reference in mod_.references_to_target(db, target) {
+            if let Ok(loc) = to_lsp_location_from_lazy_span(db, reference.span()) {
+                locations.push(loc);
+            }
+        }
     }
-    count
+    locations
 }
 
 #[cfg(test)]
@@ -189,7 +182,7 @@ mod tests {
             let (name, kind, count) = match item {
                 ItemKind::Func(func) => {
                     let target = Target::Scope(func.scope());
-                    let count = count_references(db, ingot, &target);
+                    let count = collect_reference_locations(db, ingot, &target).len();
                     let name = func
                         .name(db)
                         .to_opt()
@@ -208,7 +201,7 @@ mod tests {
                 }
                 ItemKind::Struct(s) => {
                     let target = Target::Scope(s.scope());
-                    let count = count_references(db, ingot, &target);
+                    let count = collect_reference_locations(db, ingot, &target).len();
                     let name = s
                         .name(db)
                         .to_opt()
@@ -218,7 +211,7 @@ mod tests {
                 }
                 ItemKind::Enum(e) => {
                     let target = Target::Scope(e.scope());
-                    let count = count_references(db, ingot, &target);
+                    let count = collect_reference_locations(db, ingot, &target).len();
                     let name = e
                         .name(db)
                         .to_opt()
