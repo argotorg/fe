@@ -1288,7 +1288,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     // NOTE: array index expressions are lowered via `lower_index_expr` so scalar loads become
     // explicit `MirInst::Load` instructions.
 
-    fn place_for_borrow_expr(&mut self, expr: ExprId) -> Option<Place<'db>> {
+    pub(super) fn place_for_borrow_expr(&mut self, expr: ExprId) -> Option<Place<'db>> {
         match expr.data(self.db, self.body) {
             Partial::Present(Expr::Path(_)) => {
                 let ty = self.typed_body.expr_ty(self.db, expr);

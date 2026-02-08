@@ -91,7 +91,20 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         };
 
         // Build pattern matrix from match arms
-        let scrutinee_ty = self.typed_body.expr_ty(self.db, scrutinee);
+        let scrutinee_expr_ty = self.typed_body.expr_ty(self.db, scrutinee);
+        let (scrutinee_value, scrutinee_ty) =
+            if let Some((_, inner_ty)) = scrutinee_expr_ty.as_borrow(self.db) {
+                let scrutinee_value = self.alloc_value(
+                    inner_ty,
+                    ValueOrigin::TransparentCast {
+                        value: scrutinee_value,
+                    },
+                    ValueRepr::Ptr(AddressSpaceKind::Memory),
+                );
+                (scrutinee_value, inner_ty)
+            } else {
+                (scrutinee_value, scrutinee_expr_ty)
+            };
         let Some(body) = self.typed_body.body() else {
             // No body available - this shouldn't happen for valid code.
             self.move_to_block(scrut_block);
@@ -143,6 +156,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let tree = build_decision_tree(self.db, &matrix);
 
         let leaf_bindings = self.collect_leaf_bindings(&tree);
+        let consume_scrutinee = scrutinee_expr_ty.as_borrow(self.db).is_none()
+            && leaf_bindings.values().any(|bindings| !bindings.is_empty());
 
         let result_local = produces_value.then(|| {
             let local = self.alloc_temp_local(match_ty, true, "match");
@@ -181,8 +196,13 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     let Some(local) = self.local_for_binding(binding) else {
                         continue;
                     };
-                    let (_place, value_id) =
-                        self.lower_projection_path_for_binding(path, scrutinee_value, scrutinee_ty);
+                    let binding_ty = self.typed_body.pat_ty(self.db, binding_pat);
+                    let (_place, value_id) = self.lower_projection_path_for_binding(
+                        path,
+                        scrutinee_value,
+                        scrutinee_ty,
+                        binding_ty,
+                    );
                     self.assign(None, Some(local), crate::ir::Rvalue::Value(value_id));
                 }
             }
@@ -227,6 +247,21 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         if let Some(merge) = merge_block {
             self.move_to_block(merge);
+            if consume_scrutinee && let Some(place) = self.place_for_borrow_expr(scrutinee) {
+                let moved = self.alloc_value(
+                    scrutinee_expr_ty,
+                    ValueOrigin::MoveOut {
+                        place: place.clone(),
+                    },
+                    self.value_repr_for_ty(scrutinee_expr_ty, self.value_address_space(place.base)),
+                );
+                let source = self.source_for_expr(scrutinee);
+                self.builder.body.values[moved.index()].source = source;
+                self.push_inst_here(MirInst::BindValue {
+                    source,
+                    value: moved,
+                });
+            }
         }
         value
     }
@@ -526,6 +561,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         path: &ProjectionPath<'db>,
         scrutinee_value: ValueId,
         scrutinee_ty: TyId<'db>,
+        binding_ty: TyId<'db>,
     ) -> (ValueId, ValueId) {
         fn alloc_local_value<'db>(
             builder: &mut MirBuilder<'db, '_>,
@@ -539,20 +575,32 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         // Empty path means we bind to the scrutinee itself
         if path.is_empty() {
+            if binding_ty.as_borrow(self.db).is_some() {
+                let place = Place::new(scrutinee_value, MirProjectionPath::new());
+                let handle = self.alloc_value(
+                    binding_ty,
+                    ValueOrigin::PlaceRef(place),
+                    ValueRepr::Ptr(AddressSpaceKind::Memory),
+                );
+                return (handle, handle);
+            }
             return (scrutinee_value, scrutinee_value);
         }
 
         // Compute the final type by walking the projection path
-        let final_ty = self.compute_projection_result_type(scrutinee_ty, path);
-        let is_by_ref = self.is_by_ref_ty(final_ty);
+        let projected_ty = self.compute_projection_result_type(scrutinee_ty, path);
+        let is_borrow = binding_ty.as_borrow(self.db).is_some();
+        let is_by_ref = self.is_by_ref_ty(binding_ty);
 
-        if let Some(cast) = self.try_lower_non_ref_scrutinee_projection_as_transparent_cast(
-            "match binding projection path",
-            scrutinee_value,
-            scrutinee_ty,
-            path,
-            final_ty,
-        ) {
+        if !is_borrow
+            && let Some(cast) = self.try_lower_non_ref_scrutinee_projection_as_transparent_cast(
+                "match binding projection path",
+                scrutinee_value,
+                scrutinee_ty,
+                path,
+                projected_ty,
+            )
+        {
             return (cast, cast);
         }
         let addr_space = self.value_address_space(scrutinee_value);
@@ -564,19 +612,23 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         );
 
         let place_ref_id = self.alloc_value(
-            final_ty,
+            binding_ty,
             ValueOrigin::PlaceRef(place.clone()),
-            ValueRepr::Ref(addr_space),
+            if is_borrow {
+                ValueRepr::Ptr(AddressSpaceKind::Memory)
+            } else {
+                ValueRepr::Ref(addr_space)
+            },
         );
 
         // Use PlaceRef for by-ref values (pointer only), explicit load for word-like values.
         // When by-ref, re-use the place ref as the "value".
-        let value_id = if is_by_ref {
+        let value_id = if is_borrow || is_by_ref {
             place_ref_id
         } else {
-            let dest = self.alloc_temp_local(final_ty, false, "load");
+            let dest = self.alloc_temp_local(binding_ty, false, "load");
             self.assign(None, Some(dest), crate::ir::Rvalue::Load { place });
-            alloc_local_value(self, final_ty, dest)
+            alloc_local_value(self, binding_ty, dest)
         };
 
         (place_ref_id, value_id)

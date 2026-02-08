@@ -97,38 +97,22 @@ impl<'db> TyChecker<'db> {
 
         if let Some(expr) = expr {
             let prop = self.check_expr(*expr, ascription);
+            let (pat_expected, mode) = self.destructure_source_mode(prop.ty);
+            self.check_pat(*pat, pat_expected);
 
-            fn pat_binds_any<'db>(
-                db: &'db dyn HirAnalysisDb,
-                body: crate::hir_def::Body<'db>,
-                pat: crate::hir_def::PatId,
-            ) -> bool {
-                let Partial::Present(pat_data) = pat.data(db, body) else {
-                    return false;
-                };
-                match pat_data {
-                    crate::hir_def::Pat::WildCard
-                    | crate::hir_def::Pat::Rest
-                    | crate::hir_def::Pat::Lit(_) => false,
-                    crate::hir_def::Pat::Path(..) => true,
-                    crate::hir_def::Pat::Tuple(pats) | crate::hir_def::Pat::PathTuple(_, pats) => {
-                        pats.iter().any(|p| pat_binds_any(db, body, *p))
-                    }
-                    crate::hir_def::Pat::Record(_, fields) => fields
-                        .iter()
-                        .any(|field| pat_binds_any(db, body, field.pat)),
-                    crate::hir_def::Pat::Or(a, b) => {
-                        pat_binds_any(db, body, *a) || pat_binds_any(db, body, *b)
+            match mode {
+                super::DestructureSourceMode::Owned => {
+                    if self.pattern_binds_any(*pat) {
+                        self.record_implicit_move_for_owned_expr(*expr, prop.ty);
                     }
                 }
+                super::DestructureSourceMode::Borrow(kind) => {
+                    self.retype_pattern_bindings_for_borrow(*pat, kind);
+                }
             }
-
-            if pat_binds_any(self.db, self.body(), *pat) {
-                self.record_implicit_move_for_owned_expr(*expr, prop.ty);
-            }
+        } else {
+            self.check_pat(*pat, ascription);
         }
-
-        self.check_pat(*pat, ascription);
         self.env.flush_pending_bindings();
         TyId::unit(self.db)
     }

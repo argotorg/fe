@@ -47,7 +47,7 @@ use super::{
     effects::EffectKeyKind,
     trait_def::TraitInstId,
     trait_resolution::{GoalSatisfiability, PredicateListId, is_goal_satisfiable},
-    ty_def::{InvalidCause, Kind, TyId, TyVarSort},
+    ty_def::{BorrowKind, InvalidCause, Kind, TyId, TyVarSort},
     ty_lower::lower_hir_ty,
     unify::{InferenceKey, UnificationError, UnificationTable},
 };
@@ -144,6 +144,12 @@ pub struct TyChecker<'db> {
     expected: TyId<'db>,
     effect_provider_keys: FxHashSet<InferenceKey<'db>>,
     diags: Vec<FuncBodyDiag<'db>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DestructureSourceMode {
+    Owned,
+    Borrow(BorrowKind),
 }
 
 impl<'db> TyChecker<'db> {
@@ -952,6 +958,72 @@ impl<'db> TyChecker<'db> {
 
     fn fresh_tys_n(&mut self, n: usize) -> Vec<TyId<'db>> {
         (0..n).map(|_| self.fresh_ty()).collect()
+    }
+
+    fn pattern_binds_any(&self, pat: PatId) -> bool {
+        let Partial::Present(pat_data) = pat.data(self.db, self.body()) else {
+            return false;
+        };
+        match pat_data {
+            Pat::WildCard | Pat::Rest | Pat::Lit(_) => false,
+            Pat::Path(..) => self
+                .env
+                .pat_binding(pat)
+                .is_some_and(|binding| matches!(binding, LocalBinding::Local { .. })),
+            Pat::Tuple(pats) | Pat::PathTuple(_, pats) => {
+                pats.iter().any(|pat| self.pattern_binds_any(*pat))
+            }
+            Pat::Record(_, fields) => fields.iter().any(|field| self.pattern_binds_any(field.pat)),
+            Pat::Or(lhs, rhs) => self.pattern_binds_any(*lhs) || self.pattern_binds_any(*rhs),
+        }
+    }
+
+    fn destructure_source_mode(&self, ty: TyId<'db>) -> (TyId<'db>, DestructureSourceMode) {
+        if let Some((kind, inner)) = ty.as_borrow(self.db) {
+            (inner, DestructureSourceMode::Borrow(kind))
+        } else {
+            (ty, DestructureSourceMode::Owned)
+        }
+    }
+
+    fn retype_pattern_bindings_for_borrow(&mut self, pat: PatId, kind: BorrowKind) {
+        let Partial::Present(pat_data) = pat.data(self.db, self.body()) else {
+            return;
+        };
+        match pat_data {
+            Pat::Path(..) => {
+                let Some(binding) = self.env.pat_binding(pat) else {
+                    return;
+                };
+                if !matches!(binding, LocalBinding::Local { .. }) {
+                    return;
+                }
+                let inner = self.env.lookup_binding_ty(&binding);
+                if inner.has_invalid(self.db) || inner.as_borrow(self.db).is_some() {
+                    return;
+                }
+                let borrow_ty = match kind {
+                    BorrowKind::Mut => TyId::borrow_mut_of(self.db, inner),
+                    BorrowKind::Ref => TyId::borrow_ref_of(self.db, inner),
+                };
+                self.env.type_pat(pat, borrow_ty);
+            }
+            Pat::Tuple(pats) | Pat::PathTuple(_, pats) => {
+                for pat in pats {
+                    self.retype_pattern_bindings_for_borrow(*pat, kind);
+                }
+            }
+            Pat::Record(_, fields) => {
+                for field in fields {
+                    self.retype_pattern_bindings_for_borrow(field.pat, kind);
+                }
+            }
+            Pat::Or(lhs, rhs) => {
+                self.retype_pattern_bindings_for_borrow(*lhs, kind);
+                self.retype_pattern_bindings_for_borrow(*rhs, kind);
+            }
+            Pat::WildCard | Pat::Rest | Pat::Lit(..) => {}
+        }
     }
 
     /// Ensure all binding patterns are registered in the current scope.

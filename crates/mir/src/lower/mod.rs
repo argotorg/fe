@@ -975,7 +975,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         field_ty: TyId<'db>,
     ) -> ValueId {
         // Transparent newtype access: field 0 is a representation-preserving cast.
-        if field_idx == 0 && crate::repr::transparent_newtype_field_ty(self.db, tuple_ty).is_some()
+        if field_ty.as_borrow(self.db).is_none()
+            && field_idx == 0
+            && crate::repr::transparent_newtype_field_ty(self.db, tuple_ty).is_some()
         {
             let base_repr = self.builder.body.value(tuple_value).repr;
             if !base_repr.is_ref() {
@@ -995,6 +997,13 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             tuple_value,
             MirProjectionPath::from_projection(hir::projection::Projection::Field(field_idx)),
         );
+        if field_ty.as_borrow(self.db).is_some() {
+            return self.alloc_value(
+                field_ty,
+                ValueOrigin::PlaceRef(place),
+                ValueRepr::Ptr(AddressSpaceKind::Memory),
+            );
+        }
         if self.is_by_ref_ty(field_ty) {
             return self.alloc_value(
                 field_ty,

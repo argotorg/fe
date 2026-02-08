@@ -664,6 +664,10 @@ impl<'db> TyCheckEnv<'db> {
         }
     }
 
+    pub(super) fn pat_binding(&self, pat: PatId) -> Option<LocalBinding<'db>> {
+        self.pat_bindings.get(&pat).copied()
+    }
+
     pub(super) fn push_effect_frame(&mut self) {
         self.effect_env.push_frame();
     }

@@ -2151,6 +2151,7 @@ impl<'db> TyChecker<'db> {
 
         let scrutinee_ty = self.fresh_ty();
         let scrutinee_ty = self.check_expr(*scrutinee, scrutinee_ty).ty;
+        let (scrutinee_pat_ty, mode) = self.destructure_source_mode(scrutinee_ty);
 
         let Partial::Present(arms) = arms else {
             return ExprProp::invalid(self.db);
@@ -2162,7 +2163,10 @@ impl<'db> TyChecker<'db> {
 
         // First loop: Type check patterns, collect HIR patterns for analysis, and type check arm bodies.
         for arm in arms.iter() {
-            self.check_pat(arm.pat, scrutinee_ty);
+            self.check_pat(arm.pat, scrutinee_pat_ty);
+            if let super::DestructureSourceMode::Borrow(kind) = mode {
+                self.retype_pattern_bindings_for_borrow(arm.pat, kind);
+            }
 
             let pat_data_partial = arm.pat.data(self.db, self.body());
             if let Partial::Present(actual_pat_data) = pat_data_partial {
@@ -2190,7 +2194,7 @@ impl<'db> TyChecker<'db> {
             &collected_hir_pats,
             self.body(),
             self.env.scope(),
-            scrutinee_ty,
+            scrutinee_pat_ty,
         );
 
         for (i, is_reachable) in reachability.iter().enumerate() {
@@ -2209,11 +2213,11 @@ impl<'db> TyChecker<'db> {
             &collected_hir_pats,
             self.body(),
             self.env.scope(),
-            scrutinee_ty,
+            scrutinee_pat_ty,
         ) {
             let diag = BodyDiag::NonExhaustiveMatch {
                 primary: expr.span(self.body()).into(),
-                scrutinee_ty,
+                scrutinee_ty: scrutinee_pat_ty,
                 missing_patterns,
             };
             self.push_diag(diag);
