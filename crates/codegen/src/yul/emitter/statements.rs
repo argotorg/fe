@@ -268,6 +268,9 @@ impl<'db> FunctionEmitter<'db> {
     ) -> Result<(), YulError> {
         let value_data = self.mir_func.body.value(value);
         let value_ty = value_data.ty;
+        if layout::ty_size_bytes_in(self.db, &self.layout, value_ty).is_some_and(|size| size == 0) {
+            return Ok(());
+        }
         if value_data.repr.is_ref() {
             if state.value_temp(value.index()).is_none() {
                 let rhs = self.lower_value(value, state)?;

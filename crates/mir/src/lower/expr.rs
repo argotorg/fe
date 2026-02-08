@@ -278,6 +278,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         let Some(place) = self.place_for_borrow_expr(*inner) else {
                             panic!("borrow operand must lower to a place");
                         };
+                        self.ensure_place_is_spilled(&place);
                         self.builder.body.values[value_id.index()].origin =
                             ValueOrigin::PlaceRef(place);
                         self.builder.body.values[value_id.index()].repr =
@@ -1031,6 +1032,21 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let Some(binding) = prop.binding else {
             return value_id;
         };
+        if let Some(local) = self.local_for_binding(binding)
+            && self.builder.body.spill_slots.contains_key(&local)
+            && let Some(place) = self.place_for_borrow_expr(expr)
+        {
+            let dest = self.alloc_temp_local(ty, false, "spill");
+            let source = self.source_for_expr(expr);
+            self.push_inst_here(MirInst::Assign {
+                source,
+                dest: Some(dest),
+                rvalue: Rvalue::Load { place },
+            });
+            self.builder.body.values[value_id.index()].origin = ValueOrigin::Local(dest);
+            self.builder.body.values[value_id.index()].repr = self.value_repr_for_expr(expr, ty);
+            return value_id;
+        }
         let is_effect_binding = matches!(binding, LocalBinding::EffectParam { .. })
             || matches!(
                 binding,
@@ -1306,7 +1322,21 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 }
 
                 let local = self.local_for_binding(binding)?;
-                let addr_space = self.address_space_for_binding(&binding);
+                let addr_space = if self.is_by_ref_ty(ty)
+                    || matches!(
+                        binding,
+                        LocalBinding::Param {
+                            site: ParamSite::EffectField(_),
+                            ..
+                        }
+                    )
+                    || matches!(binding, LocalBinding::EffectParam { .. })
+                        && self.effect_param_key_is_type(binding)
+                {
+                    self.address_space_for_binding(&binding)
+                } else {
+                    AddressSpaceKind::Memory
+                };
                 let base_value =
                     self.alloc_value(ty, ValueOrigin::Local(local), ValueRepr::Ref(addr_space));
                 Some(Place::new(base_value, MirProjectionPath::new()))
@@ -1347,6 +1377,58 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             }
             _ => None,
         }
+    }
+
+    fn ensure_place_is_spilled(&mut self, place: &Place<'db>) {
+        let base_value = self.builder.body.value(place.base);
+        let ValueOrigin::Local(local) = &base_value.origin else {
+            return;
+        };
+        if !matches!(base_value.repr, ValueRepr::Ref(_))
+            || self.builder.body.effect_param_locals.contains(local)
+            || matches!(
+                crate::repr::repr_kind_for_ty(self.db, &self.core, base_value.ty),
+                crate::repr::ReprKind::Ref
+            )
+        {
+            return;
+        }
+
+        self.ensure_spill_slot_for_local(*local, base_value.ty);
+    }
+
+    fn ensure_spill_slot_for_local(&mut self, local: LocalId, ty: TyId<'db>) -> LocalId {
+        if let Some(&spill) = self.builder.body.spill_slots.get(&local) {
+            return spill;
+        }
+
+        let spill = self.alloc_temp_local(ty, false, "spill");
+        self.builder.body.locals[spill.index()].address_space = AddressSpaceKind::Memory;
+        self.builder.body.spill_slots.insert(local, spill);
+        self.assign(
+            None,
+            Some(spill),
+            Rvalue::Alloc {
+                address_space: AddressSpaceKind::Memory,
+            },
+        );
+
+        if !layout::is_zero_sized_ty(self.db, ty) {
+            let place_base = self.alloc_value(ty, ValueOrigin::Local(spill), ValueRepr::Word);
+            let place = Place::new(place_base, MirProjectionPath::new());
+            let value = self.alloc_value(
+                ty,
+                ValueOrigin::Local(local),
+                self.value_repr_for_ty(ty, AddressSpaceKind::Memory),
+            );
+            self.push_inst_here(MirInst::Store {
+                source: SourceInfoId::SYNTHETIC,
+                place,
+                value,
+            });
+        }
+
+        spill
     }
 
     fn place_for_expr(&mut self, expr: ExprId) -> Option<Place<'db>> {
@@ -1484,7 +1566,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return Some(RootLvalue::Place(place));
         }
         let binding = self.typed_body.expr_prop(self.db, expr).binding?;
-        self.local_for_binding(binding).map(RootLvalue::Local)
+        let local = self.local_for_binding(binding)?;
+        if self.builder.body.spill_slots.contains_key(&local) {
+            return self.place_for_borrow_expr(expr).map(RootLvalue::Place);
+        }
+        Some(RootLvalue::Local(local))
     }
 
     fn store_to_root_lvalue(

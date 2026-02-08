@@ -86,6 +86,8 @@ pub struct MirBody<'db> {
     pub param_locals: Vec<LocalId>,
     /// Local IDs for effect parameters in source order.
     pub effect_param_locals: Vec<LocalId>,
+    /// Mapping from an address-taken word/ptr/ZST local to its spill slot local.
+    pub spill_slots: FxHashMap<LocalId, LocalId>,
     pub expr_values: FxHashMap<ExprId, ValueId>,
     pub pat_address_space: FxHashMap<PatId, AddressSpaceKind>,
     pub loop_headers: FxHashMap<BasicBlockId, LoopInfo>,
@@ -101,6 +103,7 @@ impl<'db> MirBody<'db> {
             source_infos: vec![SourceInfo { span: None }],
             param_locals: Vec::new(),
             effect_param_locals: Vec::new(),
+            spill_slots: FxHashMap::default(),
             expr_values: FxHashMap::default(),
             pat_address_space: FxHashMap::default(),
             loop_headers: FxHashMap::default(),

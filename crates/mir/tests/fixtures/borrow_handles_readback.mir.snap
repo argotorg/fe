@@ -3,14 +3,12 @@ source: crates/mir/tests/lowering_snapshots.rs
 assertion_line: 26
 expression: mir_output
 ---
-fn borrow_handles() -> ():
+fn borrow_handles_readback() -> u256:
   bb0:
     v0: u256 = 0
     v2: u256 = alloc mem
     store mem[v2] = v0
     v1: mut u256 = &mem[v0]
-    store mem[v1] = 1
-    bind v1
-    v3: u256 = load mem[v1]
-    store mem[v1] = (v3 + 1)
-    ret
+    store mem[v1] = 5
+    v3: u256 = load mem[v0]
+    ret v3

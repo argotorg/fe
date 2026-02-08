@@ -339,6 +339,7 @@ impl<'db> FunctionEmitter<'db> {
                         | ValueRepr::Ref(AddressSpaceKind::Calldata)
                 )
                 && !self.mir_func.body.effect_param_locals.contains(local)
+                && !self.mir_func.body.spill_slots.contains_key(local)
             {
                 let local_word = self.lower_value(place.base, state)?;
                 return Ok(self.apply_from_word_conversion(&local_word, loaded_ty));
@@ -479,14 +480,30 @@ impl<'db> FunctionEmitter<'db> {
         place: &Place<'db>,
         state: &BlockState,
     ) -> Result<String, YulError> {
-        let mut base_expr = self.lower_value(place.base, state)?;
+        let base_value = self.mir_func.body.value(place.base);
+        let mut base_expr = if let ValueOrigin::Local(local) = &base_value.origin
+            && base_value.repr.is_ref()
+            && let Some(spill) = self.mir_func.body.spill_slots.get(local)
+        {
+            state.resolve_local(*spill).ok_or_else(|| {
+                let local_data = self.mir_func.body.local(*spill);
+                YulError::Unsupported(format!(
+                    "unbound MIR spill slot local reached codegen (func={}, local=l{} `{}`, ty={})",
+                    self.mir_func.symbol_name,
+                    spill.index(),
+                    local_data.name,
+                    local_data.ty.pretty_print(self.db),
+                ))
+            })?
+        } else {
+            self.lower_value(place.base, state)?
+        };
 
         if place.projection.is_empty() {
             return Ok(base_expr);
         }
 
         // Get the base value's type to navigate projections
-        let base_value = self.mir_func.body.value(place.base);
         let mut current_ty = base_value.ty;
         let mut total_offset: usize = 0;
         let is_slot_addressed = matches!(
