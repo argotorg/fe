@@ -9,7 +9,7 @@ use std::fs;
 
 use camino::Utf8PathBuf;
 use check::check;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use colored::Colorize;
 use fmt as fe_fmt;
 use similar::{ChangeTag, TextDiff};
@@ -77,6 +77,12 @@ pub enum Command {
         #[arg(long)]
         version: Option<String>,
     },
+    /// Generate shell completion scripts.
+    Completion {
+        /// Shell to generate completions for
+        #[arg(value_name = "shell")]
+        shell: clap_complete::Shell,
+    },
 }
 
 fn default_project_path() -> Utf8PathBuf {
@@ -124,6 +130,14 @@ pub fn run(opts: &Options) {
                 eprintln!("❌ {err}");
                 std::process::exit(1);
             }
+        }
+        Command::Completion { shell } => {
+            clap_complete::generate(
+                *shell,
+                &mut Options::command(),
+                "fe",
+                &mut std::io::stdout(),
+            );
         }
     }
 }

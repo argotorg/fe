@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 clap.workspace = true
+clap_complete.workspace = true
 driver.workspace = true
 tracing.workspace = true
 common.workspace = true
