@@ -20,6 +20,7 @@ use hir::analysis::ty::{
     corelib::resolve_core_trait,
     trait_def::TraitInstId,
     trait_resolution::{GoalSatisfiability, PredicateListId, is_goal_satisfiable},
+    ty_is_borrow,
 };
 use hir::hir_def::IdentId;
 
@@ -150,6 +151,10 @@ pub fn repr_kind_for_ty<'db>(
 ) -> ReprKind {
     if layout::is_zero_sized_ty(db, ty) {
         return ReprKind::Zst;
+    }
+
+    if ty_is_borrow(db, ty).is_some() {
+        return ReprKind::Ptr(AddressSpaceKind::Memory);
     }
 
     if let Some(space) = effect_provider_space_for_ty(db, core, ty) {

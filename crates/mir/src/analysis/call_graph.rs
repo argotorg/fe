@@ -28,8 +28,10 @@ pub fn build_call_graph(functions: &[MirFunction<'_>]) -> CallGraph {
                 }
             }
 
-            if let Terminator::TerminatingCall(crate::TerminatingCall::Call(call)) =
-                &block.terminator
+            if let Terminator::TerminatingCall {
+                call: crate::TerminatingCall::Call(call),
+                ..
+            } = &block.terminator
                 && let Some(target) = &call.resolved_name
                 && known.contains(target)
             {

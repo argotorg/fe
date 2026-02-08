@@ -432,6 +432,14 @@ impl<'db> FuncParamView<'db> {
         }
     }
 
+    pub fn mode(self, db: &'db dyn HirDb) -> crate::hir_def::params::FuncParamMode {
+        let list = self.func.params_list(db).to_opt();
+        match list.and_then(|l| l.data(db).get(self.idx)) {
+            Some(p) => p.mode,
+            None => crate::hir_def::params::FuncParamMode::View,
+        }
+    }
+
     pub fn span(self) -> crate::span::params::LazyFuncParamSpan<'db> {
         self.func.span().params().param(self.idx)
     }

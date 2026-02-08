@@ -1,0 +1,12 @@
+// NoEsc (stack-only) values must not be written into storage.
+
+struct Esc {
+    h: mut u256,
+    tag: u256,
+}
+
+pub fn noesc_storage_escape() uses (mut slot: Esc) {
+    let mut x: u256 = 0
+    let e: Esc = Esc { h: mut x, tag: 0 }
+    slot = e
+}

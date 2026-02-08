@@ -8,6 +8,7 @@ use crate::{
 };
 
 use crate::hir_def::CallableDef;
+use crate::hir_def::params::FuncParamMode;
 use common::indexmap::IndexMap;
 use num_bigint::BigUint;
 use rustc_hash::FxHashMap;
@@ -163,6 +164,7 @@ impl<'db> TyCheckEnv<'db> {
                     let var = LocalBinding::Param {
                         site: ParamSite::Func(func),
                         idx,
+                        mode: view.mode(db),
                         ty,
                         is_mut: view.is_mut(db),
                     };
@@ -192,6 +194,7 @@ impl<'db> TyCheckEnv<'db> {
                     let var = LocalBinding::Param {
                         site: ParamSite::ContractInit(contract),
                         idx,
+                        mode: param.mode,
                         ty,
                         is_mut: param.is_mut,
                     };
@@ -431,6 +434,7 @@ impl<'db> TyCheckEnv<'db> {
                 let binding = LocalBinding::Param {
                     site: ParamSite::EffectField(list_site),
                     idx: idx_in_body,
+                    mode: FuncParamMode::View,
                     ty: field_ty,
                     is_mut: effect.is_mut,
                 };
@@ -1227,6 +1231,7 @@ pub enum LocalBinding<'db> {
     Param {
         site: ParamSite<'db>,
         idx: usize,
+        mode: FuncParamMode,
         ty: TyId<'db>,
         is_mut: bool,
     },

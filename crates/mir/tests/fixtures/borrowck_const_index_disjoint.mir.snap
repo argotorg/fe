@@ -1,0 +1,14 @@
+---
+source: crates/mir/tests/lowering_snapshots.rs
+expression: mir_output
+---
+fn borrowck_const_index_disjoint() -> ():
+  bb0:
+    v1: [u256; 2] = alloc mem
+    init mem[v1] { [0] = 0, [1] = 0 }
+    v0: [u256; 2] = v1
+    v2: mut u256 = &mem[v0][0]
+    v3: mut u256 = &mem[v0][1]
+    store mem[v2] = 1
+    store mem[v3] = 2
+    ret

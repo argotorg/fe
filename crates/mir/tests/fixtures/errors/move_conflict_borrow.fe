@@ -1,0 +1,7 @@
+pub fn move_conflict_borrow() {
+    let mut x: u256 = 0
+    let p: mut u256 = mut x
+    let y: u256 = move x
+    p = 1
+}
+

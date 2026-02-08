@@ -95,7 +95,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let Some(body) = self.typed_body.body() else {
             // No body available - this shouldn't happen for valid code.
             self.move_to_block(scrut_block);
-            self.set_current_terminator(Terminator::Unreachable);
+            self.set_current_terminator(Terminator::Unreachable {
+                source: crate::ir::SourceInfoId::SYNTHETIC,
+            });
             return value;
         };
         let scope = body.scope();
@@ -128,7 +130,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 arms.len()
             );
             self.move_to_block(scrut_block);
-            self.set_current_terminator(Terminator::Unreachable);
+            self.set_current_terminator(Terminator::Unreachable {
+                source: crate::ir::SourceInfoId::SYNTHETIC,
+            });
             return value;
         }
 
@@ -179,11 +183,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     };
                     let (_place, value_id) =
                         self.lower_projection_path_for_binding(path, scrutinee_value, scrutinee_ty);
-                    self.push_inst_here(MirInst::Assign {
-                        stmt: None,
-                        dest: Some(local),
-                        rvalue: crate::ir::Rvalue::Value(value_id),
-                    });
+                    self.assign(None, Some(local), crate::ir::Rvalue::Value(value_id));
                 }
             }
 
@@ -200,11 +200,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 };
                 self.move_to_block(end_block);
                 if let Some(result_local) = result_local {
-                    self.push_inst_here(MirInst::Assign {
-                        stmt: None,
-                        dest: Some(result_local),
-                        rvalue: crate::ir::Rvalue::Value(arm_value),
-                    });
+                    self.assign(
+                        None,
+                        Some(result_local),
+                        crate::ir::Rvalue::Value(arm_value),
+                    );
                 }
                 self.goto(merge);
             }
@@ -221,11 +221,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         // Set scrut_block to jump to the tree entry
         self.move_to_block(scrut_block);
         if let Some(result_local) = result_local {
-            self.push_inst_here(MirInst::Assign {
-                stmt: None,
-                dest: Some(result_local),
-                rvalue: crate::ir::Rvalue::ZeroInit,
-            });
+            self.assign(None, Some(result_local), crate::ir::Rvalue::ZeroInit);
         }
         self.goto(tree_entry);
 
@@ -343,7 +339,12 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         // having codegen rediscover it.
         let default = default_block.or(ctx.wildcard_arm_block).unwrap_or_else(|| {
             let unreachable = self.alloc_block();
-            self.set_terminator(unreachable, Terminator::Unreachable);
+            self.set_terminator(
+                unreachable,
+                Terminator::Unreachable {
+                    source: crate::ir::SourceInfoId::SYNTHETIC,
+                },
+            );
             unreachable
         });
 
@@ -399,13 +400,13 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let space = scrutinee_repr
             .address_space()
             .unwrap_or(AddressSpaceKind::Memory);
-        Some(self.builder.body.alloc_value(ValueData {
-            ty: result_ty,
-            origin: ValueOrigin::TransparentCast {
+        Some(self.alloc_value(
+            result_ty,
+            ValueOrigin::TransparentCast {
                 value: scrutinee_value,
             },
-            repr: self.value_repr_for_ty(result_ty, space),
-        }))
+            self.value_repr_for_ty(result_ty, space),
+        ))
     }
 
     /// Extracts a value from the scrutinee based on a projection path.
@@ -424,11 +425,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             local: LocalId,
         ) -> ValueId {
             let space = builder.builder.body.local(local).address_space;
-            builder.builder.body.alloc_value(ValueData {
-                ty,
-                origin: ValueOrigin::Local(local),
-                repr: builder.value_repr_for_ty(ty, space),
-            })
+            let repr = builder.value_repr_for_ty(ty, space);
+            builder.alloc_value(ty, ValueOrigin::Local(local), repr)
         }
 
         fn emit_load_to_temp<'db>(
@@ -437,11 +435,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             place: Place<'db>,
         ) -> ValueId {
             let dest = builder.alloc_temp_local(ty, false, "load");
-            builder.push_inst_here(MirInst::Assign {
-                stmt: None,
-                dest: Some(dest),
-                rvalue: crate::ir::Rvalue::Load { place },
-            });
+            builder.assign(None, Some(dest), crate::ir::Rvalue::Load { place });
             alloc_local_value(builder, ty, dest)
         }
 
@@ -489,11 +483,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         // Use PlaceRef for by-ref values (pointer), explicit load for word-like values.
         let current_value = if self.is_by_ref_ty(result_ty) {
-            self.builder.body.alloc_value(ValueData {
-                ty: result_ty,
-                origin: ValueOrigin::PlaceRef(place),
-                repr: ValueRepr::Ref(addr_space),
-            })
+            self.alloc_value(
+                result_ty,
+                ValueOrigin::PlaceRef(place),
+                ValueRepr::Ref(addr_space),
+            )
         } else {
             emit_load_to_temp(self, result_ty, place)
         };
@@ -539,11 +533,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             local: LocalId,
         ) -> ValueId {
             let space = builder.builder.body.local(local).address_space;
-            builder.builder.body.alloc_value(ValueData {
-                ty,
-                origin: ValueOrigin::Local(local),
-                repr: builder.value_repr_for_ty(ty, space),
-            })
+            let repr = builder.value_repr_for_ty(ty, space);
+            builder.alloc_value(ty, ValueOrigin::Local(local), repr)
         }
 
         // Empty path means we bind to the scrutinee itself
@@ -572,11 +563,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             self.mir_projection_from_decision_path(path),
         );
 
-        let place_ref_id = self.builder.body.alloc_value(ValueData {
-            ty: final_ty,
-            origin: ValueOrigin::PlaceRef(place.clone()),
-            repr: ValueRepr::Ref(addr_space),
-        });
+        let place_ref_id = self.alloc_value(
+            final_ty,
+            ValueOrigin::PlaceRef(place.clone()),
+            ValueRepr::Ref(addr_space),
+        );
 
         // Use PlaceRef for by-ref values (pointer only), explicit load for word-like values.
         // When by-ref, re-use the place ref as the "value".
@@ -584,11 +575,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             place_ref_id
         } else {
             let dest = self.alloc_temp_local(final_ty, false, "load");
-            self.push_inst_here(MirInst::Assign {
-                stmt: None,
-                dest: Some(dest),
-                rvalue: crate::ir::Rvalue::Load { place },
-            });
+            self.assign(None, Some(dest), crate::ir::Rvalue::Load { place });
             alloc_local_value(self, final_ty, dest)
         };
 

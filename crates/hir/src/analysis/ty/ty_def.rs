@@ -235,6 +235,26 @@ impl<'db> TyId<'db> {
         Self::new(db, TyData::TyBase(TyBase::Prim(PrimTy::Ptr)))
     }
 
+    pub fn borrow_mut_of(db: &'db dyn HirAnalysisDb, inner: TyId<'db>) -> TyId<'db> {
+        let ctor = Self::new(db, TyData::TyBase(TyBase::Prim(PrimTy::BorrowMut)));
+        Self::app(db, ctor, inner)
+    }
+
+    pub fn borrow_ref_of(db: &'db dyn HirAnalysisDb, inner: TyId<'db>) -> TyId<'db> {
+        let ctor = Self::new(db, TyData::TyBase(TyBase::Prim(PrimTy::BorrowRef)));
+        Self::app(db, ctor, inner)
+    }
+
+    pub fn as_borrow(self, db: &'db dyn HirAnalysisDb) -> Option<(BorrowKind, TyId<'db>)> {
+        let (base, args) = self.decompose_ty_app(db);
+        let inner = args.first().copied()?;
+        match base.data(db) {
+            TyData::TyBase(TyBase::Prim(PrimTy::BorrowMut)) => Some((BorrowKind::Mut, inner)),
+            TyData::TyBase(TyBase::Prim(PrimTy::BorrowRef)) => Some((BorrowKind::Ref, inner)),
+            _ => None,
+        }
+    }
+
     pub(super) fn tuple(db: &'db dyn HirAnalysisDb, n: usize) -> Self {
         Self::new(db, TyData::TyBase(TyBase::tuple(n)))
     }
@@ -1267,6 +1287,8 @@ impl<'db> TyBase<'db> {
                 PrimTy::Array => "[]",
                 PrimTy::Tuple(_) => "()",
                 PrimTy::Ptr => "*",
+                PrimTy::BorrowMut => "BorrowMut",
+                PrimTy::BorrowRef => "BorrowRef",
             }
             .to_string(),
 
@@ -1356,6 +1378,14 @@ pub enum PrimTy {
     Array,
     Tuple(usize),
     Ptr,
+    BorrowMut,
+    BorrowRef,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BorrowKind {
+    Mut,
+    Ref,
 }
 
 impl PrimTy {
@@ -1455,6 +1485,7 @@ impl HasKind for PrimTy {
             Self::Tuple(n) => (0..*n).fold(Kind::Star, |acc, _| Kind::abs(Kind::Star, acc)),
             Self::Ptr => Kind::abs(Kind::Star, Kind::Star),
             Self::String => Kind::abs(Kind::Star, Kind::Star),
+            Self::BorrowMut | Self::BorrowRef => Kind::abs(Kind::Star, Kind::Star),
             _ => Kind::Star,
         }
     }
@@ -1550,6 +1581,20 @@ fn pretty_print_ty_app<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> String
 
     let (base, args) = decompose_ty_app(db, ty);
     match base.data(db) {
+        TyData::TyBase(Prim(BorrowMut)) => {
+            let Some(inner) = args.first() else {
+                return "mut <missing>".to_string();
+            };
+            format!("mut {}", inner.pretty_print(db))
+        }
+
+        TyData::TyBase(Prim(BorrowRef)) => {
+            let Some(inner) = args.first() else {
+                return "ref <missing>".to_string();
+            };
+            format!("ref {}", inner.pretty_print(db))
+        }
+
         TyData::TyBase(Prim(Array)) => {
             let elem_ty = args[0].pretty_print(db);
             let len = args[1].pretty_print(db);

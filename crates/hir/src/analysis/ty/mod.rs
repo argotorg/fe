@@ -15,7 +15,7 @@ use diagnostics::{DefConflictError, TraitLowerDiag, TyLowerDiag};
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec1::SmallVec;
 use trait_resolution::constraint::super_trait_cycle;
-use ty_def::{InvalidCause, TyData, TyId};
+use ty_def::{BorrowKind, InvalidCause, TyData, TyId};
 use ty_lower::lower_type_alias;
 
 use crate::analysis::name_resolution::{PathRes, resolve_path};
@@ -57,6 +57,63 @@ pub mod visitor;
 pub use msg_selector::MsgSelectorAnalysisPass;
 
 const DEFAULT_TARGET_TY_PATH: &[&str] = &["std", "evm", "EvmTarget"];
+
+pub fn ty_is_borrow<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+) -> Option<(BorrowKind, TyId<'db>)> {
+    ty.as_borrow(db)
+}
+
+pub fn ty_is_noesc<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
+    fn inner<'db>(
+        db: &'db dyn HirAnalysisDb,
+        ty: TyId<'db>,
+        visiting: &mut FxHashSet<TyId<'db>>,
+    ) -> bool {
+        if !visiting.insert(ty) {
+            return false;
+        }
+
+        let result = if ty.as_borrow(db).is_some() {
+            true
+        } else if ty.is_tuple(db) {
+            ty.field_types(db)
+                .into_iter()
+                .any(|field_ty| inner(db, field_ty, visiting))
+        } else if ty.is_array(db) {
+            let (_, args) = ty.decompose_ty_app(db);
+            args.first()
+                .copied()
+                .is_some_and(|elem_ty| inner(db, elem_ty, visiting))
+        } else if let Some(adt_def) = ty.adt_def(db) {
+            match adt_def.adt_ref(db) {
+                AdtRef::Struct(_) => ty
+                    .field_types(db)
+                    .into_iter()
+                    .any(|field_ty| inner(db, field_ty, visiting)),
+                AdtRef::Enum(_) => {
+                    let args = ty.generic_args(db);
+                    adt_def.fields(db).iter().any(|variant| {
+                        variant
+                            .iter_types(db)
+                            .any(|field_ty| inner(db, field_ty.instantiate(db, args), visiting))
+                    })
+                }
+            }
+        } else {
+            false
+        };
+
+        visiting.remove(&ty);
+        result
+    }
+
+    match ty.data(db) {
+        TyData::TyVar(_) | TyData::Invalid(_) => false,
+        _ => inner(db, ty, &mut FxHashSet::default()),
+    }
+}
 
 /// An analysis pass for type definitions.
 pub struct AdtDefAnalysisPass {}

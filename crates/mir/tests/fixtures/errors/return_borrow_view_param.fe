@@ -1,0 +1,8 @@
+fn borrow_view(x: u256) -> ref u256 {
+    ref x
+}
+
+pub fn return_borrow_view_param() {
+    let x: u256 = 0
+    let p: ref u256 = borrow_view(x)
+}

@@ -1,7 +1,7 @@
 use crate::core::hir_def::{
     Body, GenericArg, GenericArgListId, GenericParam, GenericParamOwner, GenericParamView, IdentId,
     KindBound as HirKindBound, Partial, PathId, TypeAlias as HirTypeAlias, TypeBound,
-    TypeId as HirTyId, TypeKind as HirTyKind, scope_graph::ScopeId,
+    TypeId as HirTyId, TypeKind as HirTyKind, TypeMode, scope_graph::ScopeId,
 };
 use salsa::Update;
 use smallvec::smallvec;
@@ -29,6 +29,15 @@ pub fn lower_hir_ty<'db>(
             let pointee = lower_opt_hir_ty(db, *pointee, scope, assumptions);
             let ptr = TyId::ptr(db);
             TyId::app(db, ptr, pointee)
+        }
+
+        HirTyKind::Mode(mode, inner) => {
+            let inner = lower_opt_hir_ty(db, *inner, scope, assumptions);
+            match mode {
+                TypeMode::Mut => TyId::borrow_mut_of(db, inner),
+                TypeMode::Ref => TyId::borrow_ref_of(db, inner),
+                TypeMode::Own => inner,
+            }
         }
 
         HirTyKind::Path(path) => lower_path(db, scope, *path, assumptions),

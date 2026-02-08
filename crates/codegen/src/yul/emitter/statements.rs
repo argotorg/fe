@@ -47,14 +47,16 @@ impl<'db> FunctionEmitter<'db> {
             mir::MirInst::Assign { dest, rvalue, .. } => {
                 self.emit_assign_inst(docs, *dest, rvalue, state)?
             }
-            mir::MirInst::BindValue { value } => self.emit_bind_value_inst(docs, *value, state)?,
-            mir::MirInst::Store { place, value } => {
+            mir::MirInst::BindValue { value, .. } => {
+                self.emit_bind_value_inst(docs, *value, state)?
+            }
+            mir::MirInst::Store { place, value, .. } => {
                 self.emit_store_inst(docs, place, *value, state)?
             }
-            mir::MirInst::InitAggregate { place, inits } => {
+            mir::MirInst::InitAggregate { place, inits, .. } => {
                 self.emit_init_aggregate_inst(docs, place, inits, state)?
             }
-            mir::MirInst::SetDiscriminant { place, variant } => {
+            mir::MirInst::SetDiscriminant { place, variant, .. } => {
                 self.emit_set_discriminant_inst(docs, place, *variant, state)?
             }
         }

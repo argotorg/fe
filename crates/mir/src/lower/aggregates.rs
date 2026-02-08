@@ -32,8 +32,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         self.builder.body.locals[dest.index()].address_space = AddressSpaceKind::Memory;
+        let source = self.source_for_expr(expr);
         self.push_inst_here(MirInst::Assign {
-            stmt: None,
+            source,
             dest: Some(dest),
             rvalue: crate::ir::Rvalue::Alloc {
                 address_space: AddressSpaceKind::Memory,
@@ -53,7 +54,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return;
         }
         let place = Place::new(base_value, MirProjectionPath::new());
-        self.push_inst_here(MirInst::InitAggregate { place, inits });
+        self.push_inst_here(MirInst::InitAggregate {
+            source: self.builder.body.value(base_value).source,
+            place,
+            inits,
+        });
     }
 
     /// Lowers a record literal into an allocation plus `store_field` calls.
@@ -329,6 +334,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         self.builder.body.alloc_value(ValueData {
             ty,
             origin: ValueOrigin::Synthetic(SyntheticValue::Int(value)),
+            source: crate::ir::SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Word,
         })
     }

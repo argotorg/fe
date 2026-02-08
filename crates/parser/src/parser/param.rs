@@ -38,6 +38,7 @@ impl super::Parse for FnParamScope {
     type Error = Recovery<ErrProof>;
 
     fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        parser.bump_if(SyntaxKind::MoveKw);
         parser.bump_if(SyntaxKind::MutKw);
         parser.expect(
             &[

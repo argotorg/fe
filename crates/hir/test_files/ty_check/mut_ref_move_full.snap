@@ -1,0 +1,644 @@
+---
+source: crates/hir/tests/ty_check.rs
+assertion_line: 40
+expression: res
+input_file: test_files/ty_check/mut_ref_move_full.fe
+---
+note: 
+  ┌─ mut_ref_move_full.fe:6:22
+  │  
+6 │   fn bump(x: mut u256) {
+  │ ╭──────────────────────^
+7 │ │     x += 1
+8 │ │ }
+  │ ╰─^ ()
+
+note: 
+  ┌─ mut_ref_move_full.fe:7:5
+  │
+7 │     x += 1
+  │     ^ mut u256
+
+note: 
+  ┌─ mut_ref_move_full.fe:7:5
+  │
+7 │     x += 1
+  │     ^^^^^^ ()
+
+note: 
+  ┌─ mut_ref_move_full.fe:7:10
+  │
+7 │     x += 1
+  │          ^ u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:10:27
+   │  
+10 │   fn bump_pair(p: mut Pair) {
+   │ ╭───────────────────────────^
+11 │ │     bump(mut p.a)
+12 │ │     bump(mut p.b)
+13 │ │ }
+   │ ╰─^ ()
+
+note: 
+   ┌─ mut_ref_move_full.fe:11:5
+   │
+11 │     bump(mut p.a)
+   │     ^^^^ fn bump
+
+note: 
+   ┌─ mut_ref_move_full.fe:11:5
+   │
+11 │     bump(mut p.a)
+   │     ^^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ mut_ref_move_full.fe:11:10
+   │
+11 │     bump(mut p.a)
+   │          ^^^^^^^ mut u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:11:14
+   │
+11 │     bump(mut p.a)
+   │              ^ mut Pair
+
+note: 
+   ┌─ mut_ref_move_full.fe:11:14
+   │
+11 │     bump(mut p.a)
+   │              ^^^ u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:12:5
+   │
+12 │     bump(mut p.b)
+   │     ^^^^ fn bump
+
+note: 
+   ┌─ mut_ref_move_full.fe:12:5
+   │
+12 │     bump(mut p.b)
+   │     ^^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ mut_ref_move_full.fe:12:10
+   │
+12 │     bump(mut p.b)
+   │          ^^^^^^^ mut u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:12:14
+   │
+12 │     bump(mut p.b)
+   │              ^ mut Pair
+
+note: 
+   ┌─ mut_ref_move_full.fe:12:14
+   │
+12 │     bump(mut p.b)
+   │              ^^^ u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:15:36
+   │  
+15 │   fn take_u256(move x: u256) -> u256 {
+   │ ╭────────────────────────────────────^
+16 │ │     x
+17 │ │ }
+   │ ╰─^ u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:16:5
+   │
+16 │     x
+   │     ^ u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:19:11
+   │  
+19 │   fn full() {
+   │ ╭───────────^
+20 │ │     let mut x: u256 = 0
+21 │ │     let r: ref u256 = ref x
+22 │ │     r
+   · │
+50 │ │     z = w
+51 │ │ }
+   │ ╰─^ ()
+
+note: 
+   ┌─ mut_ref_move_full.fe:20:9
+   │
+20 │     let mut x: u256 = 0
+   │         ^^^^^ u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:20:23
+   │
+20 │     let mut x: u256 = 0
+   │                       ^ u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:21:9
+   │
+21 │     let r: ref u256 = ref x
+   │         ^ ref u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:21:23
+   │
+21 │     let r: ref u256 = ref x
+   │                       ^^^^^ ref u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:21:27
+   │
+21 │     let r: ref u256 = ref x
+   │                           ^ u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:22:5
+   │
+22 │     r
+   │     ^ ref u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:23:5
+   │
+23 │     bump(mut x)
+   │     ^^^^ fn bump
+
+note: 
+   ┌─ mut_ref_move_full.fe:23:5
+   │
+23 │     bump(mut x)
+   │     ^^^^^^^^^^^ ()
+
+note: 
+   ┌─ mut_ref_move_full.fe:23:10
+   │
+23 │     bump(mut x)
+   │          ^^^^^ mut u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:23:14
+   │
+23 │     bump(mut x)
+   │              ^ u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:25:9
+   │
+25 │     let a: u256 = 1
+   │         ^ u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:25:19
+   │
+25 │     let a: u256 = 1
+   │                   ^ u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:26:9
+   │
+26 │     let a2 = take_u256(move a)
+   │         ^^ u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:26:14
+   │
+26 │     let a2 = take_u256(move a)
+   │              ^^^^^^^^^ fn take_u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:26:14
+   │
+26 │     let a2 = take_u256(move a)
+   │              ^^^^^^^^^^^^^^^^^ u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:26:24
+   │
+26 │     let a2 = take_u256(move a)
+   │                        ^^^^^^ u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:26:29
+   │
+26 │     let a2 = take_u256(move a)
+   │                             ^ u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:27:5
+   │
+27 │     a2
+   │     ^^ u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:29:9
+   │
+29 │     let mut s = Pair {a: 1, b: 2}
+   │         ^^^^^ Pair
+
+note: 
+   ┌─ mut_ref_move_full.fe:29:17
+   │
+29 │     let mut s = Pair {a: 1, b: 2}
+   │                 ^^^^^^^^^^^^^^^^^ Pair
+
+note: 
+   ┌─ mut_ref_move_full.fe:29:26
+   │
+29 │     let mut s = Pair {a: 1, b: 2}
+   │                          ^ u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:29:32
+   │
+29 │     let mut s = Pair {a: 1, b: 2}
+   │                                ^ u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:30:5
+   │
+30 │     bump_pair(mut s)
+   │     ^^^^^^^^^ fn bump_pair
+
+note: 
+   ┌─ mut_ref_move_full.fe:30:5
+   │
+30 │     bump_pair(mut s)
+   │     ^^^^^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ mut_ref_move_full.fe:30:15
+   │
+30 │     bump_pair(mut s)
+   │               ^^^^^ mut Pair
+
+note: 
+   ┌─ mut_ref_move_full.fe:30:19
+   │
+30 │     bump_pair(mut s)
+   │                   ^ Pair
+
+note: 
+   ┌─ mut_ref_move_full.fe:31:5
+   │  
+31 │ ╭     if true {
+32 │ │         let ma: mut u256 = mut s.a
+33 │ │         let mb: mut u256 = mut s.b
+34 │ │         ma += 1
+35 │ │         mb += 1
+36 │ │     }
+   │ ╰─────^ ()
+
+note: 
+   ┌─ mut_ref_move_full.fe:31:8
+   │
+31 │     if true {
+   │        ^^^^ bool
+
+note: 
+   ┌─ mut_ref_move_full.fe:31:13
+   │  
+31 │       if true {
+   │ ╭─────────────^
+32 │ │         let ma: mut u256 = mut s.a
+33 │ │         let mb: mut u256 = mut s.b
+34 │ │         ma += 1
+35 │ │         mb += 1
+36 │ │     }
+   │ ╰─────^ ()
+
+note: 
+   ┌─ mut_ref_move_full.fe:32:13
+   │
+32 │         let ma: mut u256 = mut s.a
+   │             ^^ mut u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:32:28
+   │
+32 │         let ma: mut u256 = mut s.a
+   │                            ^^^^^^^ mut u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:32:32
+   │
+32 │         let ma: mut u256 = mut s.a
+   │                                ^ Pair
+
+note: 
+   ┌─ mut_ref_move_full.fe:32:32
+   │
+32 │         let ma: mut u256 = mut s.a
+   │                                ^^^ u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:33:13
+   │
+33 │         let mb: mut u256 = mut s.b
+   │             ^^ mut u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:33:28
+   │
+33 │         let mb: mut u256 = mut s.b
+   │                            ^^^^^^^ mut u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:33:32
+   │
+33 │         let mb: mut u256 = mut s.b
+   │                                ^ Pair
+
+note: 
+   ┌─ mut_ref_move_full.fe:33:32
+   │
+33 │         let mb: mut u256 = mut s.b
+   │                                ^^^ u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:34:9
+   │
+34 │         ma += 1
+   │         ^^ mut u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:34:9
+   │
+34 │         ma += 1
+   │         ^^^^^^^ ()
+
+note: 
+   ┌─ mut_ref_move_full.fe:34:15
+   │
+34 │         ma += 1
+   │               ^ u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:35:9
+   │
+35 │         mb += 1
+   │         ^^ mut u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:35:9
+   │
+35 │         mb += 1
+   │         ^^^^^^^ ()
+
+note: 
+   ┌─ mut_ref_move_full.fe:35:15
+   │
+35 │         mb += 1
+   │               ^ u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:37:9
+   │
+37 │     let moved_a = move s.a
+   │         ^^^^^^^ u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:37:19
+   │
+37 │     let moved_a = move s.a
+   │                   ^^^^^^^^ u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:37:24
+   │
+37 │     let moved_a = move s.a
+   │                        ^ Pair
+
+note: 
+   ┌─ mut_ref_move_full.fe:37:24
+   │
+37 │     let moved_a = move s.a
+   │                        ^^^ u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:38:5
+   │
+38 │     s.a = moved_a
+   │     ^ Pair
+
+note: 
+   ┌─ mut_ref_move_full.fe:38:5
+   │
+38 │     s.a = moved_a
+   │     ^^^ u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:38:5
+   │
+38 │     s.a = moved_a
+   │     ^^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ mut_ref_move_full.fe:38:11
+   │
+38 │     s.a = moved_a
+   │           ^^^^^^^ u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:40:9
+   │
+40 │     let mut arr: [u256; 2] = [10, 20]
+   │         ^^^^^^^ [u256; 2]
+
+note: 
+   ┌─ mut_ref_move_full.fe:40:30
+   │
+40 │     let mut arr: [u256; 2] = [10, 20]
+   │                              ^^^^^^^^ [u256; 2]
+
+note: 
+   ┌─ mut_ref_move_full.fe:40:31
+   │
+40 │     let mut arr: [u256; 2] = [10, 20]
+   │                               ^^ u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:40:35
+   │
+40 │     let mut arr: [u256; 2] = [10, 20]
+   │                                   ^^ u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:41:5
+   │  
+41 │ ╭     if true {
+42 │ │         let p0: mut u256 = mut arr[0]
+43 │ │         let p1: mut u256 = mut arr[1]
+44 │ │         p0 += 1
+45 │ │         p1 += 1
+46 │ │     }
+   │ ╰─────^ ()
+
+note: 
+   ┌─ mut_ref_move_full.fe:41:8
+   │
+41 │     if true {
+   │        ^^^^ bool
+
+note: 
+   ┌─ mut_ref_move_full.fe:41:13
+   │  
+41 │       if true {
+   │ ╭─────────────^
+42 │ │         let p0: mut u256 = mut arr[0]
+43 │ │         let p1: mut u256 = mut arr[1]
+44 │ │         p0 += 1
+45 │ │         p1 += 1
+46 │ │     }
+   │ ╰─────^ ()
+
+note: 
+   ┌─ mut_ref_move_full.fe:42:13
+   │
+42 │         let p0: mut u256 = mut arr[0]
+   │             ^^ mut u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:42:28
+   │
+42 │         let p0: mut u256 = mut arr[0]
+   │                            ^^^^^^^^^^ mut u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:42:32
+   │
+42 │         let p0: mut u256 = mut arr[0]
+   │                                ^^^ [u256; 2]
+
+note: 
+   ┌─ mut_ref_move_full.fe:42:32
+   │
+42 │         let p0: mut u256 = mut arr[0]
+   │                                ^^^^^^ u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:42:36
+   │
+42 │         let p0: mut u256 = mut arr[0]
+   │                                    ^ usize
+
+note: 
+   ┌─ mut_ref_move_full.fe:43:13
+   │
+43 │         let p1: mut u256 = mut arr[1]
+   │             ^^ mut u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:43:28
+   │
+43 │         let p1: mut u256 = mut arr[1]
+   │                            ^^^^^^^^^^ mut u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:43:32
+   │
+43 │         let p1: mut u256 = mut arr[1]
+   │                                ^^^ [u256; 2]
+
+note: 
+   ┌─ mut_ref_move_full.fe:43:32
+   │
+43 │         let p1: mut u256 = mut arr[1]
+   │                                ^^^^^^ u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:43:36
+   │
+43 │         let p1: mut u256 = mut arr[1]
+   │                                    ^ usize
+
+note: 
+   ┌─ mut_ref_move_full.fe:44:9
+   │
+44 │         p0 += 1
+   │         ^^ mut u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:44:9
+   │
+44 │         p0 += 1
+   │         ^^^^^^^ ()
+
+note: 
+   ┌─ mut_ref_move_full.fe:44:15
+   │
+44 │         p0 += 1
+   │               ^ u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:45:9
+   │
+45 │         p1 += 1
+   │         ^^ mut u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:45:9
+   │
+45 │         p1 += 1
+   │         ^^^^^^^ ()
+
+note: 
+   ┌─ mut_ref_move_full.fe:45:15
+   │
+45 │         p1 += 1
+   │               ^ u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:48:9
+   │
+48 │     let mut z: u256 = 5
+   │         ^^^^^ u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:48:23
+   │
+48 │     let mut z: u256 = 5
+   │                       ^ u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:49:9
+   │
+49 │     let w = move z
+   │         ^ u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:49:13
+   │
+49 │     let w = move z
+   │             ^^^^^^ u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:49:18
+   │
+49 │     let w = move z
+   │                  ^ u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:50:5
+   │
+50 │     z = w
+   │     ^ u256
+
+note: 
+   ┌─ mut_ref_move_full.fe:50:5
+   │
+50 │     z = w
+   │     ^^^^^ ()
+
+note: 
+   ┌─ mut_ref_move_full.fe:50:9
+   │
+50 │     z = w
+   │         ^ u256

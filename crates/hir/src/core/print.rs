@@ -355,7 +355,11 @@ impl<'db> FuncParam<'db> {
         let mut result = String::new();
         let name = unwrap_partial(self.name, "FuncParam::name");
 
-        // Mutability comes first
+        if matches!(self.mode, FuncParamMode::Move) {
+            result.push_str("move ");
+        }
+
+        // Mutability comes next
         if self.is_mut {
             result.push_str("mut ");
         }
@@ -566,11 +570,12 @@ impl<'db> Expr<'db> {
 
             Expr::Un(expr, op) => {
                 let expr = unwrap_partial_ref(expr.data(db, body), "Un::expr");
-                format!(
-                    "{}{}",
-                    op.pretty_print(),
-                    expr.pretty_print(db, body, indent)
-                )
+                let op_str = op.pretty_print();
+                if matches!(op, UnOp::Mut | UnOp::Ref | UnOp::Move) {
+                    format!("{op_str} {}", expr.pretty_print(db, body, indent))
+                } else {
+                    format!("{op_str}{}", expr.pretty_print(db, body, indent))
+                }
             }
 
             Expr::Cast(expr, ty) => {
@@ -893,6 +898,9 @@ impl UnOp {
             UnOp::Minus => "-",
             UnOp::Not => "!",
             UnOp::BitNot => "~",
+            UnOp::Mut => "mut",
+            UnOp::Ref => "ref",
+            UnOp::Move => "move",
         }
     }
 }

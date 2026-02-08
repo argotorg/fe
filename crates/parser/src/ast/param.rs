@@ -20,6 +20,11 @@ ast_node! {
     SK::FnParam,
 }
 impl FuncParam {
+    /// Returns the `move` keyword if the parameter is move-by-value.
+    pub fn move_token(&self) -> Option<SyntaxToken> {
+        support::token(self.syntax(), SK::MoveKw)
+    }
+
     /// Returns the `mut` keyword if the parameter is mutable.
     pub fn mut_token(&self) -> Option<SyntaxToken> {
         support::token(self.syntax(), SK::MutKw)

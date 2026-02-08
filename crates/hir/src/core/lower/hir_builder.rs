@@ -6,11 +6,11 @@ use crate::{
     HirDb,
     hir_def::{
         AssocConstDef, AssocTyDef, AttrListId, Body, BodyKind, EffectParamListId, Expr, ExprId,
-        FieldDefListId, Func, FuncModifiers, FuncParam, FuncParamListId, FuncParamName,
-        GenericArgListId, GenericParam, GenericParamListId, IdentId, ImplTrait, IntegerId,
-        ItemKind, LitKind, Mod, Partial, Pat, PatId, PathId, RecordPatField, Stmt, StmtId, Struct,
-        TopLevelMod, TrackedItemId, TrackedItemVariant, TraitRefId, TypeBound, TypeGenericParam,
-        TypeId, TypeKind, Visibility, WhereClauseId, expr::CallArg,
+        FieldDefListId, Func, FuncModifiers, FuncParam, FuncParamListId, FuncParamMode,
+        FuncParamName, GenericArgListId, GenericParam, GenericParamListId, IdentId, ImplTrait,
+        IntegerId, ItemKind, LitKind, Mod, Partial, Pat, PatId, PathId, RecordPatField, Stmt,
+        StmtId, Struct, TopLevelMod, TrackedItemId, TrackedItemVariant, TraitRefId, TypeBound,
+        TypeGenericParam, TypeId, TypeKind, Visibility, WhereClauseId, expr::CallArg,
     },
     span::{DesugaredOrigin, HirOrigin},
 };
@@ -178,6 +178,7 @@ where
     pub(super) fn param_self(&self) -> FuncParam<'db> {
         let db = self.db();
         FuncParam {
+            mode: FuncParamMode::View,
             is_mut: false,
             is_label_suppressed: false,
             name: Partial::Present(FuncParamName::Ident(IdentId::make_self(db))),
@@ -192,6 +193,7 @@ where
         ty: TypeId<'db>,
     ) -> FuncParam<'db> {
         FuncParam {
+            mode: FuncParamMode::View,
             is_mut: true,
             is_label_suppressed: true,
             name: Partial::Present(FuncParamName::Ident(name)),

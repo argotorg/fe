@@ -291,6 +291,9 @@ impl UnOp {
             ast::UnOp::Minus(_) => Self::Minus,
             ast::UnOp::Not(_) => Self::Not,
             ast::UnOp::BitNot(_) => Self::BitNot,
+            ast::UnOp::Mut(_) => Self::Mut,
+            ast::UnOp::Ref(_) => Self::Ref,
+            ast::UnOp::Move(_) => Self::Move,
         }
     }
 }

@@ -1,0 +1,43 @@
+struct Foo {}
+
+struct Own<T> {
+    inner: T
+}
+
+struct Borrow<T> {
+    inner: ref T
+}
+
+struct MutBorrow<T> {
+    inner: mut T
+}
+
+struct Mixed<A, B, C> {
+    a: A,
+    b: ref B,
+    c: mut C
+}
+
+fn make_foo() -> Foo {
+    Foo {}
+}
+
+fn take_view(_x: Foo) {}
+fn take_mut(_x: mut Foo) {}
+fn take_ref(_x: ref Foo) -> ref Foo { return _x }
+fn take_own(_x: own Foo) {}
+
+fn places() {
+    let a: Foo = make_foo()
+    let mut b: Foo = make_foo()
+    let c: ref Foo = ref a
+    let d: mut Foo = mut b
+    let e: Foo = move a
+
+    take_view(b)
+    take_mut(mut b)
+    take_ref(ref b)
+    take_own(move b)
+    take_view(make_foo())
+}
+

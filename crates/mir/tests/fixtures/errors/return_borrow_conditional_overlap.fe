@@ -1,0 +1,14 @@
+fn choose(b: bool, x: mut u256, y: mut u256) -> mut u256 {
+    if b { x } else { y }
+}
+
+pub fn return_borrow_conditional_overlap(b: bool) {
+    let mut x: u256 = 0
+    let mut y: u256 = 0
+    let px: mut u256 = mut x
+    let py: mut u256 = mut y
+    let p: mut u256 = choose(b, px, py)
+    let q: mut u256 = mut x
+    p = 1
+    q = 2
+}

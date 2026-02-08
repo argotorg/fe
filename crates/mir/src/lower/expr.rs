@@ -10,7 +10,7 @@ use hir::{
 use hir::analysis::ty::effects::EffectKeyKind;
 
 use crate::{
-    ir::{Place, Rvalue},
+    ir::{Place, Rvalue, SourceInfoId},
     layout::{self, ty_storage_slots},
 };
 
@@ -79,6 +79,13 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             Partial::Present(Expr::Lit(LitKind::Int(int_id))) => Some(int_id.data(self.db).clone()),
             _ => None,
         }
+    }
+
+    fn lower_index_source(&mut self, expr: ExprId) -> IndexSource<ValueId> {
+        self.u256_lit_from_expr(expr)
+            .and_then(|lit| lit.to_usize())
+            .map(IndexSource::Constant)
+            .unwrap_or_else(|| IndexSource::Dynamic(self.lower_expr(expr)))
     }
 
     fn contract_field_slot_offset(&self, contract_name: &str, field_idx: usize) -> Option<usize> {
@@ -209,7 +216,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         if self.is_unit_ty(ty) {
                             self.assign(None, None, Rvalue::Value(value));
                         } else {
-                            self.push_inst_here(MirInst::BindValue { value });
+                            let source = self.source_for_expr(binding.value);
+                            self.push_inst_here(MirInst::BindValue { source, value });
                         }
                     }
                 }
@@ -244,9 +252,45 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 let _ = call_args;
                 self.lower_call_expr(expr)
             }
-            Partial::Present(Expr::Un(inner, _)) => {
-                let _ = self.lower_expr(*inner);
-                self.ensure_value(expr)
+            Partial::Present(Expr::Un(inner, op)) => {
+                let value_id = self.ensure_value(expr);
+                if self.current_block().is_none() {
+                    return value_id;
+                }
+
+                match op {
+                    hir::hir_def::expr::UnOp::Mut | hir::hir_def::expr::UnOp::Ref => {
+                        let Some(place) = self.place_for_borrow_expr(*inner) else {
+                            panic!("borrow operand must lower to a place");
+                        };
+                        self.builder.body.values[value_id.index()].origin =
+                            ValueOrigin::PlaceRef(place);
+                        self.builder.body.values[value_id.index()].repr =
+                            ValueRepr::Ptr(AddressSpaceKind::Memory);
+                    }
+                    hir::hir_def::expr::UnOp::Move => {
+                        let Some(place) = self.place_for_borrow_expr(*inner) else {
+                            panic!("move operand must lower to a place");
+                        };
+                        self.builder.body.values[value_id.index()].origin =
+                            ValueOrigin::MoveOut { place };
+                    }
+                    _ => {
+                        let _ = self.lower_expr(*inner);
+                    }
+                }
+                if matches!(
+                    op,
+                    hir::hir_def::expr::UnOp::Mut
+                        | hir::hir_def::expr::UnOp::Ref
+                        | hir::hir_def::expr::UnOp::Move
+                ) && let Some(span) = expr.span(self.body).into_un_expr().op().resolve(self.db)
+                {
+                    self.builder.body.values[value_id.index()].source =
+                        self.source_info_for_span(Some(span));
+                }
+
+                value_id
             }
             Partial::Present(Expr::Cast(inner, _)) => {
                 let _ = self.lower_expr(*inner);
@@ -320,7 +364,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let Some((args, arg_exprs)) = self.collect_call_args(expr) else {
             return value_id;
         };
-
         let provider_space = self.effect_provider_space_for_provider_ty(ty);
         let result_space = provider_space.unwrap_or_else(|| self.expr_address_space(expr));
 
@@ -427,7 +470,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         value_id,
                         MirProjectionPath::from_projection(Projection::Field(0)),
                     );
+                    let source = self.source_for_expr(expr);
                     self.push_inst_here(MirInst::Store {
+                        source,
                         place,
                         value: word_value,
                     });
@@ -517,9 +562,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             receiver_space,
         };
         if ty.is_never(self.db) {
-            self.set_current_terminator(Terminator::TerminatingCall(
-                crate::ir::TerminatingCall::Call(call_origin),
-            ));
+            let source = self.source_for_expr(expr);
+            self.set_current_terminator(Terminator::TerminatingCall {
+                source,
+                call: crate::ir::TerminatingCall::Call(call_origin),
+            });
             self.builder.body.values[value_id.index()].origin = ValueOrigin::Unit;
             return value_id;
         }
@@ -659,6 +706,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         );
         let place = Place::new(addr_value, crate::ir::MirProjectionPath::new());
         self.push_inst_here(MirInst::Store {
+            source: SourceInfoId::SYNTHETIC,
             place: place.clone(),
             value,
         });
@@ -859,16 +907,14 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     return value_id;
                 };
                 let base_value = self.lower_expr(*lhs);
-                let index_value = self.lower_expr(*rhs);
+                let index_source = self.lower_index_source(*rhs);
                 if self.current_block().is_none() {
                     return value_id;
                 }
                 let addr_space = self.value_address_space(base_value);
                 let place = Place::new(
                     base_value,
-                    MirProjectionPath::from_projection(Projection::Index(IndexSource::Dynamic(
-                        index_value,
-                    ))),
+                    MirProjectionPath::from_projection(Projection::Index(index_source)),
                 );
 
                 if self.is_by_ref_ty(elem_ty) {
@@ -1027,13 +1073,17 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         let lhs_ty = self.typed_body.expr_ty(self.db, lhs);
-        let Some(info) = self.field_access_info(lhs_ty, field_index) else {
+        let (lhs_is_borrow, lhs_place_ty) = lhs_ty
+            .as_borrow(self.db)
+            .map(|(_, inner)| (true, inner))
+            .unwrap_or((false, lhs_ty));
+        let Some(info) = self.field_access_info(lhs_place_ty, field_index) else {
             return value_id;
         };
 
         // Transparent newtype access: field 0 is a representation-preserving cast.
         if info.field_idx == 0
-            && crate::repr::transparent_newtype_field_ty(self.db, lhs_ty).is_some()
+            && crate::repr::transparent_newtype_field_ty(self.db, lhs_place_ty).is_some()
         {
             let base_repr = self.builder.body.value(base_value).repr;
             if !base_repr.is_ref() {
@@ -1048,6 +1098,15 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             }
         }
 
+        let base_value = if lhs_is_borrow {
+            self.alloc_value(
+                lhs_place_ty,
+                ValueOrigin::TransparentCast { value: base_value },
+                ValueRepr::Ptr(AddressSpaceKind::Memory),
+            )
+        } else {
+            base_value
+        };
         let addr_space = self.value_address_space(base_value);
         let place = Place::new(
             base_value,
@@ -1141,25 +1200,36 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         let lhs_ty = self.typed_body.expr_ty(self.db, lhs);
-        if !lhs_ty.is_array(self.db) {
+        let (lhs_is_borrow, lhs_place_ty) = lhs_ty
+            .as_borrow(self.db)
+            .map(|(_, inner)| (true, inner))
+            .unwrap_or((false, lhs_ty));
+        if !lhs_place_ty.is_array(self.db) {
             return value_id;
         }
-        let Some(elem_ty) = lhs_ty.generic_args(self.db).first().copied() else {
+        let Some(elem_ty) = lhs_place_ty.generic_args(self.db).first().copied() else {
             return value_id;
         };
 
         let base_value = self.lower_expr(lhs);
-        let index_value = self.lower_expr(rhs);
+        let index_source = self.lower_index_source(rhs);
         if self.current_block().is_none() {
             return value_id;
         }
 
+        let base_value = if lhs_is_borrow {
+            self.alloc_value(
+                lhs_place_ty,
+                ValueOrigin::TransparentCast { value: base_value },
+                ValueRepr::Ptr(AddressSpaceKind::Memory),
+            )
+        } else {
+            base_value
+        };
         let addr_space = self.value_address_space(base_value);
         let place = Place::new(
             base_value,
-            MirProjectionPath::from_projection(Projection::Index(IndexSource::Dynamic(
-                index_value,
-            ))),
+            MirProjectionPath::from_projection(Projection::Index(index_source)),
         );
 
         if self.is_by_ref_ty(elem_ty) {
@@ -1187,24 +1257,27 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     // NOTE: array index expressions are lowered via `lower_index_expr` so scalar loads become
     // explicit `MirInst::Load` instructions.
 
-    fn place_for_expr(&mut self, expr: ExprId) -> Option<Place<'db>> {
+    fn place_for_borrow_expr(&mut self, expr: ExprId) -> Option<Place<'db>> {
         match expr.data(self.db, self.body) {
             Partial::Present(Expr::Path(_)) => {
-                let binding = self.typed_body.expr_prop(self.db, expr).binding?;
-                match binding {
-                    LocalBinding::EffectParam { .. } => {
-                        if self.effect_param_key_is_trait(binding) {
-                            return None;
-                        }
-                    }
-                    LocalBinding::Param {
-                        site: ParamSite::EffectField(_),
-                        ..
-                    } => {}
-                    _ => return None,
+                let ty = self.typed_body.expr_ty(self.db, expr);
+                if let Some((_, inner_ty)) = ty.as_borrow(self.db) {
+                    let handle = self.ensure_value(expr);
+                    let base = self.alloc_value(
+                        inner_ty,
+                        ValueOrigin::TransparentCast { value: handle },
+                        ValueRepr::Ptr(AddressSpaceKind::Memory),
+                    );
+                    return Some(Place::new(base, MirProjectionPath::new()));
                 }
 
-                let ty = self.typed_body.expr_ty(self.db, expr);
+                let binding = self.typed_body.expr_prop(self.db, expr).binding?;
+                if matches!(binding, LocalBinding::EffectParam { .. })
+                    && self.effect_param_key_is_trait(binding)
+                {
+                    return None;
+                }
+
                 match crate::repr::repr_kind_for_ty(self.db, &self.core, ty) {
                     crate::repr::ReprKind::Zst | crate::repr::ReprKind::Ptr(_) => return None,
                     crate::repr::ReprKind::Word | crate::repr::ReprKind::Ref => {}
@@ -1219,12 +1292,93 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             Partial::Present(Expr::Field(lhs, field_index)) => {
                 let field_index = field_index.to_opt()?;
                 let lhs_ty = self.typed_body.expr_ty(self.db, *lhs);
-                let info = self.field_access_info(lhs_ty, field_index)?;
+                let lhs_place_ty = lhs_ty
+                    .as_borrow(self.db)
+                    .map(|(_, inner)| inner)
+                    .unwrap_or(lhs_ty);
+                let info = self.field_access_info(lhs_place_ty, field_index)?;
+
+                let Place {
+                    base,
+                    mut projection,
+                } = self.place_for_borrow_expr(*lhs)?;
+                projection.push(Projection::Field(info.field_idx));
+                Some(Place::new(base, projection))
+            }
+            Partial::Present(Expr::Bin(lhs, rhs, BinOp::Index)) => {
+                let lhs_ty = self.typed_body.expr_ty(self.db, *lhs);
+                let lhs_place_ty = lhs_ty
+                    .as_borrow(self.db)
+                    .map(|(_, inner)| inner)
+                    .unwrap_or(lhs_ty);
+                if !lhs_place_ty.is_array(self.db) {
+                    return None;
+                }
+
+                let Place {
+                    base,
+                    mut projection,
+                } = self.place_for_borrow_expr(*lhs)?;
+                let index_source = self.lower_index_source(*rhs);
+                projection.push(Projection::Index(index_source));
+                Some(Place::new(base, projection))
+            }
+            _ => None,
+        }
+    }
+
+    fn place_for_expr(&mut self, expr: ExprId) -> Option<Place<'db>> {
+        match expr.data(self.db, self.body) {
+            Partial::Present(Expr::Path(_)) => {
+                let ty = self.typed_body.expr_ty(self.db, expr);
+                if let Some((_, inner_ty)) = ty.as_borrow(self.db) {
+                    let handle = self.ensure_value(expr);
+                    let base = self.alloc_value(
+                        inner_ty,
+                        ValueOrigin::TransparentCast { value: handle },
+                        ValueRepr::Ptr(AddressSpaceKind::Memory),
+                    );
+                    return Some(Place::new(base, MirProjectionPath::new()));
+                }
+
+                let binding = self.typed_body.expr_prop(self.db, expr).binding?;
+                match binding {
+                    LocalBinding::EffectParam { .. } => {
+                        if self.effect_param_key_is_trait(binding) {
+                            return None;
+                        }
+                    }
+                    LocalBinding::Param {
+                        site: ParamSite::EffectField(_),
+                        ..
+                    } => {}
+                    _ => return None,
+                }
+
+                match crate::repr::repr_kind_for_ty(self.db, &self.core, ty) {
+                    crate::repr::ReprKind::Zst | crate::repr::ReprKind::Ptr(_) => return None,
+                    crate::repr::ReprKind::Word | crate::repr::ReprKind::Ref => {}
+                }
+
+                let local = self.local_for_binding(binding)?;
+                let addr_space = self.address_space_for_binding(&binding);
+                let base_value =
+                    self.alloc_value(ty, ValueOrigin::Local(local), ValueRepr::Ref(addr_space));
+                Some(Place::new(base_value, MirProjectionPath::new()))
+            }
+            Partial::Present(Expr::Field(lhs, field_index)) => {
+                let field_index = field_index.to_opt()?;
+                let lhs_ty = self.typed_body.expr_ty(self.db, *lhs);
+                let (lhs_is_borrow, lhs_place_ty) = lhs_ty
+                    .as_borrow(self.db)
+                    .map(|(_, inner)| (true, inner))
+                    .unwrap_or((false, lhs_ty));
+                let info = self.field_access_info(lhs_place_ty, field_index)?;
 
                 // Transparent newtypes: treat field 0 as the same place when the base is
                 // already addressable, otherwise fall back to scalar newtype semantics.
                 if info.field_idx == 0
-                    && crate::repr::transparent_newtype_field_ty(self.db, lhs_ty).is_some()
+                    && crate::repr::transparent_newtype_field_ty(self.db, lhs_place_ty).is_some()
                 {
                     if let Some(place) = self.place_for_expr(*lhs) {
                         return Some(place);
@@ -1237,6 +1391,15 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 }
 
                 let addr_value = self.lower_expr(*lhs);
+                let addr_value = if lhs_is_borrow {
+                    self.alloc_value(
+                        lhs_place_ty,
+                        ValueOrigin::TransparentCast { value: addr_value },
+                        ValueRepr::Ptr(AddressSpaceKind::Memory),
+                    )
+                } else {
+                    addr_value
+                };
                 Some(Place::new(
                     addr_value,
                     MirProjectionPath::from_projection(Projection::Field(info.field_idx)),
@@ -1244,16 +1407,27 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             }
             Partial::Present(Expr::Bin(lhs, rhs, BinOp::Index)) => {
                 let lhs_ty = self.typed_body.expr_ty(self.db, *lhs);
-                if !lhs_ty.is_array(self.db) {
+                let (lhs_is_borrow, lhs_place_ty) = lhs_ty
+                    .as_borrow(self.db)
+                    .map(|(_, inner)| (true, inner))
+                    .unwrap_or((false, lhs_ty));
+                if !lhs_place_ty.is_array(self.db) {
                     return None;
                 }
                 let addr_value = self.lower_expr(*lhs);
-                let index_value = self.lower_expr(*rhs);
+                let addr_value = if lhs_is_borrow {
+                    self.alloc_value(
+                        lhs_place_ty,
+                        ValueOrigin::TransparentCast { value: addr_value },
+                        ValueRepr::Ptr(AddressSpaceKind::Memory),
+                    )
+                } else {
+                    addr_value
+                };
+                let index_source = self.lower_index_source(*rhs);
                 Some(Place::new(
                     addr_value,
-                    MirProjectionPath::from_projection(Projection::Index(IndexSource::Dynamic(
-                        index_value,
-                    ))),
+                    MirProjectionPath::from_projection(Projection::Index(index_source)),
                 ))
             }
             _ => None,
@@ -1299,7 +1473,14 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     ) {
         match lvalue {
             RootLvalue::Place(place) => {
-                self.push_inst_here(MirInst::Store { place, value });
+                let source = stmt
+                    .map(|stmt| self.source_for_stmt(stmt))
+                    .unwrap_or(SourceInfoId::SYNTHETIC);
+                self.push_inst_here(MirInst::Store {
+                    source,
+                    place,
+                    value,
+                });
             }
             RootLvalue::Local(local) => {
                 self.assign(stmt, Some(local), Rvalue::Value(value));
@@ -1340,6 +1521,10 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let root_expr = if is_peeled { peeled_target } else { target };
         let root_ty = self.typed_body.expr_ty(self.db, root_expr);
         let lhs_ty = self.typed_body.expr_ty(self.db, target);
+        let lhs_place_ty = lhs_ty
+            .as_borrow(self.db)
+            .map(|(_, inner)| inner)
+            .unwrap_or(lhs_ty);
 
         let Some(root_lvalue) = self.root_lvalue_for_expr(root_expr) else {
             return;
@@ -1347,7 +1532,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         let lhs_value = match &root_lvalue {
             RootLvalue::Place(place) => {
-                let loaded_local = self.alloc_temp_local(lhs_ty, false, "load");
+                let loaded_local = self.alloc_temp_local(lhs_place_ty, false, "load");
                 self.builder.body.locals[loaded_local.index()].address_space =
                     self.expr_address_space(target);
                 self.assign(
@@ -1357,7 +1542,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         place: place.clone(),
                     },
                 );
-                self.alloc_value(lhs_ty, ValueOrigin::Local(loaded_local), ValueRepr::Word)
+                self.alloc_value(
+                    lhs_place_ty,
+                    ValueOrigin::Local(loaded_local),
+                    ValueRepr::Word,
+                )
             }
             RootLvalue::Local(local) => {
                 if is_peeled {
@@ -1381,7 +1570,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         };
 
         let updated = self.alloc_value(
-            lhs_ty,
+            lhs_place_ty,
             ValueOrigin::Binary {
                 op: BinOp::Arith(op),
                 lhs: lhs_value,
@@ -1495,22 +1684,32 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             }
             Stmt::Return(value) => {
                 self.move_to_block(block);
+                let source = self.source_for_stmt(stmt_id);
                 if let Some(expr) = value {
                     let ret_ty = self.return_ty;
                     let returns_value = !self.is_unit_ty(ret_ty) && !ret_ty.is_never(self.db);
                     if returns_value {
                         let ret_value = Some(self.lower_expr(*expr));
                         if self.current_block().is_some() {
-                            self.set_current_terminator(Terminator::Return(ret_value));
+                            self.set_current_terminator(Terminator::Return {
+                                source,
+                                value: ret_value,
+                            });
                         }
                     } else {
                         self.lower_expr_stmt(stmt_id, *expr);
                         if self.current_block().is_some() {
-                            self.set_current_terminator(Terminator::Return(None));
+                            self.set_current_terminator(Terminator::Return {
+                                source,
+                                value: None,
+                            });
                         }
                     }
                 } else if self.current_block().is_some() {
-                    self.set_current_terminator(Terminator::Return(None));
+                    self.set_current_terminator(Terminator::Return {
+                        source,
+                        value: None,
+                    });
                 }
             }
             Stmt::Expr(expr) => self.lower_expr_stmt(stmt_id, *expr),
@@ -1664,20 +1863,16 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         // Condition: idx < len
         self.move_to_block(cond_entry);
-        let idx_value = self.builder.body.alloc_value(ValueData {
-            ty: usize_ty,
-            origin: ValueOrigin::Local(idx_local),
-            repr: ValueRepr::Word,
-        });
-        let cond_value = self.builder.body.alloc_value(ValueData {
-            ty: TyId::new(self.db, TyData::TyBase(TyBase::Prim(PrimTy::Bool))),
-            origin: ValueOrigin::Binary {
+        let idx_value = self.alloc_value(usize_ty, ValueOrigin::Local(idx_local), ValueRepr::Word);
+        let cond_value = self.alloc_value(
+            TyId::bool(self.db),
+            ValueOrigin::Binary {
                 op: BinOp::Comp(hir::hir_def::expr::CompBinOp::Lt),
                 lhs: idx_value,
                 rhs: len_value,
             },
-            repr: ValueRepr::Word,
-        });
+            ValueRepr::Word,
+        );
         let cond_header = cond_entry;
 
         // Set up loop scope
@@ -1690,11 +1885,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         self.move_to_block(body_block);
 
         // Call Seq::get to get the element
-        let idx_for_get = self.builder.body.alloc_value(ValueData {
-            ty: usize_ty,
-            origin: ValueOrigin::Local(idx_local),
-            repr: ValueRepr::Word,
-        });
+        let idx_for_get =
+            self.alloc_value(usize_ty, ValueOrigin::Local(idx_local), ValueRepr::Word);
         let elem_value = self.emit_seq_get_call(
             iterable_value,
             idx_for_get,
@@ -1720,20 +1912,17 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         // Increment block: idx = idx + 1; goto cond
         self.move_to_block(inc_block);
         let one = self.synthetic_u256(BigUint::from(1u64));
-        let current_idx = self.builder.body.alloc_value(ValueData {
-            ty: usize_ty,
-            origin: ValueOrigin::Local(idx_local),
-            repr: ValueRepr::Word,
-        });
-        let incremented = self.builder.body.alloc_value(ValueData {
-            ty: usize_ty,
-            origin: ValueOrigin::Binary {
+        let current_idx =
+            self.alloc_value(usize_ty, ValueOrigin::Local(idx_local), ValueRepr::Word);
+        let incremented = self.alloc_value(
+            usize_ty,
+            ValueOrigin::Binary {
                 op: BinOp::Arith(ArithBinOp::Add),
                 lhs: current_idx,
                 rhs: one,
             },
-            repr: ValueRepr::Word,
-        });
+            ValueRepr::Word,
+        );
         self.assign(None, Some(idx_local), Rvalue::Value(incremented));
         let Some(inc_end) = self.current_block() else {
             return;
@@ -1814,11 +2003,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             self.assign(None, Some(dest), Rvalue::Load { place });
         }
 
-        self.builder.body.alloc_value(ValueData {
-            ty: usize_ty,
-            origin: ValueOrigin::Local(result_local),
-            repr: ValueRepr::Word,
-        })
+        self.alloc_value(usize_ty, ValueOrigin::Local(result_local), ValueRepr::Word)
     }
 
     /// Emit a synthesized call to Seq::get(self, i: usize) -> T
@@ -1887,11 +2072,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             self.assign(None, Some(dest), Rvalue::Load { place });
         }
 
-        self.builder.body.alloc_value(ValueData {
-            ty: elem_ty,
-            origin: ValueOrigin::Local(result_local),
-            repr,
-        })
+        self.alloc_value(elem_ty, ValueOrigin::Local(result_local), repr)
     }
 
     /// Lower a for-loop over an array.
@@ -1950,20 +2131,16 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         // Condition: idx < len
         self.move_to_block(cond_entry);
-        let idx_value = self.builder.body.alloc_value(ValueData {
-            ty: usize_ty,
-            origin: ValueOrigin::Local(idx_local),
-            repr: ValueRepr::Word,
-        });
-        let cond_value = self.builder.body.alloc_value(ValueData {
-            ty: TyId::new(self.db, TyData::TyBase(TyBase::Prim(PrimTy::Bool))),
-            origin: ValueOrigin::Binary {
+        let idx_value = self.alloc_value(usize_ty, ValueOrigin::Local(idx_local), ValueRepr::Word);
+        let cond_value = self.alloc_value(
+            TyId::bool(self.db),
+            ValueOrigin::Binary {
                 op: BinOp::Comp(hir::hir_def::expr::CompBinOp::Lt),
                 lhs: idx_value,
                 rhs: len_value,
             },
-            repr: ValueRepr::Word,
-        });
+            ValueRepr::Word,
+        );
         let cond_header = cond_entry;
 
         // Set up loop scope
@@ -1976,11 +2153,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         self.move_to_block(body_block);
 
         // Bind element: elem = arr[idx]
-        let idx_for_access = self.builder.body.alloc_value(ValueData {
-            ty: usize_ty,
-            origin: ValueOrigin::Local(idx_local),
-            repr: ValueRepr::Word,
-        });
+        let idx_for_access =
+            self.alloc_value(usize_ty, ValueOrigin::Local(idx_local), ValueRepr::Word);
 
         let place = Place::new(
             array_value,
@@ -1991,19 +2165,19 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         let elem_value = if self.is_by_ref_ty(elem_ty) {
             let addr_space = self.value_address_space(array_value);
-            self.builder.body.alloc_value(ValueData {
-                ty: elem_ty,
-                origin: ValueOrigin::PlaceRef(place),
-                repr: ValueRepr::Ref(addr_space),
-            })
+            self.alloc_value(
+                elem_ty,
+                ValueOrigin::PlaceRef(place),
+                ValueRepr::Ref(addr_space),
+            )
         } else {
             let dest = self.alloc_temp_local(elem_ty, false, "load");
             self.assign(None, Some(dest), Rvalue::Load { place });
-            self.builder.body.alloc_value(ValueData {
-                ty: elem_ty,
-                origin: ValueOrigin::Local(dest),
-                repr: self.value_repr_for_ty(elem_ty, AddressSpaceKind::Memory),
-            })
+            self.alloc_value(
+                elem_ty,
+                ValueOrigin::Local(dest),
+                self.value_repr_for_ty(elem_ty, AddressSpaceKind::Memory),
+            )
         };
 
         self.bind_pat_value(pat, elem_value);
@@ -2023,20 +2197,17 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         self.move_to_block(inc_block);
         let one = self.synthetic_u256(BigUint::from(1u64));
-        let current_idx = self.builder.body.alloc_value(ValueData {
-            ty: usize_ty,
-            origin: ValueOrigin::Local(idx_local),
-            repr: ValueRepr::Word,
-        });
-        let incremented = self.builder.body.alloc_value(ValueData {
-            ty: usize_ty,
-            origin: ValueOrigin::Binary {
+        let current_idx =
+            self.alloc_value(usize_ty, ValueOrigin::Local(idx_local), ValueRepr::Word);
+        let incremented = self.alloc_value(
+            usize_ty,
+            ValueOrigin::Binary {
                 op: BinOp::Arith(ArithBinOp::Add),
                 lhs: current_idx,
                 rhs: one,
             },
-            repr: ValueRepr::Word,
-        });
+            ValueRepr::Word,
+        );
         self.assign(None, Some(idx_local), Rvalue::Value(incremented));
         let Some(inc_end) = self.current_block() else {
             return;
@@ -2248,7 +2419,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             Expr::Assign(target, value) => {
                 self.move_to_block(block);
                 let value_id = self.lower_expr(*value);
-                if let Some(binding) = self.typed_body.expr_prop(self.db, *target).binding
+                if self.place_for_expr(*target).is_none()
+                    && let Some(binding) = self.typed_body.expr_prop(self.db, *target).binding
                     && let LocalBinding::Local { pat, .. } = binding
                 {
                     let pat_ty = self.typed_body.pat_ty(self.db, pat);
@@ -2267,7 +2439,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             Expr::AugAssign(target, value, op) => {
                 self.move_to_block(block);
                 let value_id = self.lower_expr(*value);
-                if let Some(binding) = self.typed_body.expr_prop(self.db, *target).binding
+                if self.place_for_expr(*target).is_none()
+                    && let Some(binding) = self.typed_body.expr_prop(self.db, *target).binding
                     && let LocalBinding::Local { pat, .. } = binding
                 {
                     let pat_ty = self.typed_body.pat_ty(self.db, pat);
