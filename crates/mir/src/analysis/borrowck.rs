@@ -639,6 +639,8 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         let mut worklist: Vec<BasicBlockId> = vec![body.entry];
         let mut in_worklist = FxHashSet::default();
         in_worklist.insert(body.entry);
+        let mut reached = FxHashSet::default();
+        reached.insert(body.entry);
 
         while let Some(bb) = worklist.pop() {
             in_worklist.remove(&bb);
@@ -648,7 +650,9 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             }
 
             for succ in successors(&body.blocks[bb.index()].terminator) {
-                if self.join_entry_state(succ, &state) && in_worklist.insert(succ) {
+                let changed = self.join_entry_state(succ, &state);
+                let first_reach = reached.insert(succ);
+                if (changed || first_reach) && in_worklist.insert(succ) {
                     worklist.push(succ);
                 }
             }
@@ -862,6 +866,8 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         let mut worklist: Vec<BasicBlockId> = vec![body.entry];
         let mut in_worklist = FxHashSet::default();
         in_worklist.insert(body.entry);
+        let mut reached = FxHashSet::default();
+        reached.insert(body.entry);
 
         while let Some(bb) = worklist.pop() {
             in_worklist.remove(&bb);
@@ -879,7 +885,9 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             );
 
             for succ in successors(&body.blocks[bb.index()].terminator) {
-                if self.join_moved_entry_state(succ, &moved) && in_worklist.insert(succ) {
+                let changed = self.join_moved_entry_state(succ, &moved);
+                let first_reach = reached.insert(succ);
+                if (changed || first_reach) && in_worklist.insert(succ) {
                     worklist.push(succ);
                 }
             }
@@ -892,18 +900,19 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         moved: &FxHashMap<CanonPlace<'db>, MoveOrigin>,
     ) -> bool {
         let entry = &mut self.moved_entry[succ.index()];
-        let before = entry.len();
+        let mut changed = false;
         for (place, origin) in moved {
-            entry
-                .entry(place.clone())
-                .and_modify(|existing| {
-                    if origin.source.0 < existing.source.0 {
-                        *existing = *origin;
-                    }
-                })
-                .or_insert(*origin);
+            if let Some(existing) = entry.get_mut(place) {
+                if origin.source.0 < existing.source.0 {
+                    *existing = *origin;
+                    changed = true;
+                }
+                continue;
+            }
+            entry.insert(place.clone(), *origin);
+            changed = true;
         }
-        entry.len() != before
+        changed
     }
 
     fn update_moved_for_inst(

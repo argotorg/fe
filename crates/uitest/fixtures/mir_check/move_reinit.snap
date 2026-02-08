@@ -5,9 +5,10 @@ expression: res
 input_file: fixtures/mir_check/move_reinit.fe
 ---
 error[10-0002]: move conflict in `fn move_reinit`
-  ┌─ move_reinit.fe:4:5
+  ┌─ move_reinit.fe:8:5
   │
-3 │     let y: u256 = move x
-  │                        - `x` is moved here
-4 │     x = 1
-  │     ^^^^^ cannot assign to a value after it was moved
+6 │         consume(x)
+  │                 - `x` is moved here
+7 │     }
+8 │     x = Foo { v: 2 }
+  │     ^^^^^^^^^^^^^^^^ cannot assign to a value after it was moved
