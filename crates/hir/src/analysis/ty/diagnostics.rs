@@ -4,10 +4,8 @@ use super::{
     ty_check::{RecordLike, TraitOps},
     ty_def::{BorrowKind, Kind, TyId},
 };
-use crate::{
-    analysis::HirAnalysisDb,
-    hir_def::{Body, Trait},
-};
+use crate::visitor::prelude::*;
+use crate::{analysis::HirAnalysisDb, hir_def::Trait};
 use crate::{analysis::diagnostics::DiagnosticVoucher, hir_def::PathId};
 use crate::{analysis::name_resolution::diagnostics::PathResDiag, hir_def::ItemKind};
 use crate::{analysis::ty::ty_check::EffectParamOwner, span::DynLazySpan};
@@ -17,7 +15,6 @@ use crate::{
     },
     hir_def::TypeAlias,
 };
-use crate::{hir_def::ExprId, visitor::prelude::*};
 use either::Either;
 use salsa::Update;
 use smallvec1::SmallVec;
@@ -351,17 +348,6 @@ pub enum BodyDiag<'db> {
         binding: Option<(IdentId<'db>, DynLazySpan<'db>)>,
     },
 
-    /// A non-`Copy` place is used in a context that requires an owned value.
-    ///
-    /// `Copy` types can be duplicated implicitly; non-`Copy` types must be moved explicitly with
-    /// `move <place>` so ownership transfer is visible to the borrow checker.
-    ExplicitMoveRequired {
-        primary: DynLazySpan<'db>,
-        body: Body<'db>,
-        expr: ExprId,
-        ty: TyId<'db>,
-    },
-
     /// A call argument is a place, but the callee requires an explicit borrow handle (`mut`/`ref`).
     ///
     /// This makes reborrows explicit at the call site and prevents unsound aliasing when
@@ -369,11 +355,6 @@ pub enum BodyDiag<'db> {
     ExplicitReborrowRequired {
         primary: DynLazySpan<'db>,
         kind: BorrowKind,
-    },
-
-    /// `move <expr>` is only valid for owned places, not for borrow-handle places (`mut`/`ref`).
-    MoveOnBorrowHandle {
-        primary: DynLazySpan<'db>,
     },
 
     /// `move` parameters must have owned types. Borrow-handle types (`mut`/`ref`) are not owned.
@@ -673,9 +654,7 @@ impl<'db> BodyDiag<'db> {
             Self::UnsupportedUnaryPlus(..) => 52,
             Self::BorrowFromNonPlace { .. } => 65,
             Self::CannotBorrowMut { .. } => 66,
-            Self::ExplicitMoveRequired { .. } => 67,
             Self::ExplicitReborrowRequired { .. } => 68,
-            Self::MoveOnBorrowHandle { .. } => 69,
             Self::MoveParamCannotBeBorrow { .. } => 70,
             Self::ArrayRepeatRequiresCopy { .. } => 71,
             Self::NonAssignableExpr(..) => 17,

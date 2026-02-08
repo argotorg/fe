@@ -38,21 +38,21 @@ impl<T> Option<T> {
 
     pub fn unwrap(self) -> T {
         match self {
-            Self::Some(t) => move t
+            Self::Some(t) => t
             Self::None => panic()
         }
     }
 
     pub fn unwrap_or(self, default: T) -> T {
         match self {
-            Self::Some(x) => move x
-            Self::None => move default
+            Self::Some(x) => x
+            Self::None => default
         }
     }
 
     pub fn unwrap_or_else<F: Fn<(), T>>(self, _ default_func: F) -> T {
         match self {
-            Self::Some(value) => move value
+            Self::Some(value) => value
             Self::None => default_func.call(())
         }
     }
@@ -61,7 +61,7 @@ impl<T> Option<T> {
 impl<T> Option<T> where T: Default {
     pub fn unwrap_or_default(self) -> T {
         match self {
-            Self::Some(x) => move x
+            Self::Some(x) => x
             Self::None => T::default()
         }
     }
@@ -84,11 +84,11 @@ impl Functor for Option {
 
 impl Applicative for Option {
     fn pure<T>(_ value: T) -> Self<T> {
-        Option::Some(move value)
+        Option::Some(value)
     }
 
     fn ap<T, U, F: Fn<T, U>>(self: Self<F>, _ value: Self<T>) -> Self<U> {
-        match (move self, move value) {
+        match (self, value) {
             (Option::Some(func), Option::Some(arg)) => Option::Some(func.call(arg))
             _ => Option::None
         }

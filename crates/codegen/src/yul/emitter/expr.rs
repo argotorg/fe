@@ -103,7 +103,6 @@ impl<'db> FunctionEmitter<'db> {
                     UnOp::Not => Ok(format!("iszero({value})")),
                     UnOp::Plus => Ok(value),
                     UnOp::BitNot => Ok(format!("not({value})")),
-                    UnOp::Move => todo!(),
                     UnOp::Mut => todo!(),
                     UnOp::Ref => todo!(),
                 }

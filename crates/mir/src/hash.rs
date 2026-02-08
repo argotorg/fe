@@ -144,7 +144,6 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
                     hir::hir_def::expr::UnOp::BitNot => 3,
                     hir::hir_def::expr::UnOp::Mut => 4,
                     hir::hir_def::expr::UnOp::Ref => 5,
-                    hir::hir_def::expr::UnOp::Move => 6,
                 });
                 let inner = self.placeholder_value(*inner);
                 self.write_u32(inner);

@@ -2432,32 +2432,6 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
 
-            Self::ExplicitMoveRequired {
-                primary,
-                body,
-                expr,
-                ty,
-            } => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: "explicit move required".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: "this value must be explicitly moved".to_string(),
-                    span: primary.resolve(db),
-                }],
-                notes: vec![
-                    format!(
-                        "`{}` doesn't implement the `Copy` trait",
-                        ty.pretty_print(db)
-                    ),
-                    format!(
-                        "try `move {}`",
-                        expr.data(db, *body).unwrap_ref().pretty_print(db, *body, 0)
-                    ),
-                ],
-                error_code,
-            },
-
             Self::ExplicitReborrowRequired { primary, kind } => {
                 let kw = match kind {
                     crate::analysis::ty::ty_def::BorrowKind::Mut => "mut",
@@ -2478,18 +2452,6 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     error_code,
                 }
             }
-
-            Self::MoveOnBorrowHandle { primary } => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: "cannot move a borrow handle".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: "`move` is only allowed on owned places".to_string(),
-                    span: primary.resolve(db),
-                }],
-                notes: vec!["borrow handles (`mut`/`ref`) are copyable; remove `move`".to_string()],
-                error_code,
-            },
 
             Self::MoveParamCannotBeBorrow { primary, ty } => CompleteDiagnostic {
                 severity: Severity::Error,

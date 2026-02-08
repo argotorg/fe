@@ -571,7 +571,7 @@ impl<'db> Expr<'db> {
             Expr::Un(expr, op) => {
                 let expr = unwrap_partial_ref(expr.data(db, body), "Un::expr");
                 let op_str = op.pretty_print();
-                if matches!(op, UnOp::Mut | UnOp::Ref | UnOp::Move) {
+                if matches!(op, UnOp::Mut | UnOp::Ref) {
                     format!("{op_str} {}", expr.pretty_print(db, body, indent))
                 } else {
                     format!("{op_str}{}", expr.pretty_print(db, body, indent))
@@ -900,7 +900,6 @@ impl UnOp {
             UnOp::BitNot => "~",
             UnOp::Mut => "mut",
             UnOp::Ref => "ref",
-            UnOp::Move => "move",
         }
     }
 }

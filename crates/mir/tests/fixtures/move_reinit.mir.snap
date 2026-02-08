@@ -6,6 +6,6 @@ expression: mir_output
 fn move_reinit() -> u256:
   bb0:
     v0: u256 = 0
-    v1: u256 = move_out(mem[v0])
+    v1: u256 = v0
     v2: u256 = 1
     ret v2

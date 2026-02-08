@@ -8,5 +8,5 @@ pub fn make_dummy() -> Dummy {
         a: 42,
         b: 99,
     }
-    move dum
+    dum
 }

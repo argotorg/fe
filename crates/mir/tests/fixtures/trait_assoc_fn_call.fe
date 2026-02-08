@@ -13,11 +13,11 @@ impl T for Bar {
 fn example() -> Bar {
     let b: Bar = T::make()
     let c: Bar = Bar::make()
-    let d: Bar = if true { move b } else { move c }
-    move d
+    let d: Bar = if true { b } else { c }
+    d
 }
 
 fn f() -> Bar {
     let b = T::make()
-    move b
+    b
 }

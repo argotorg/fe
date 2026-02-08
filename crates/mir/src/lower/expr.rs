@@ -284,25 +284,13 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         self.builder.body.values[value_id.index()].repr =
                             ValueRepr::Ptr(AddressSpaceKind::Memory);
                     }
-                    hir::hir_def::expr::UnOp::Move => {
-                        if let Some(place) = self.place_for_borrow_expr(*inner) {
-                            self.builder.body.values[value_id.index()].origin =
-                                ValueOrigin::MoveOut { place };
-                        } else {
-                            let inner_value = self.lower_expr(*inner);
-                            self.builder.body.values[value_id.index()].origin =
-                                ValueOrigin::TransparentCast { value: inner_value };
-                        }
-                    }
                     _ => {
                         let _ = self.lower_expr(*inner);
                     }
                 }
                 if matches!(
                     op,
-                    hir::hir_def::expr::UnOp::Mut
-                        | hir::hir_def::expr::UnOp::Ref
-                        | hir::hir_def::expr::UnOp::Move
+                    hir::hir_def::expr::UnOp::Mut | hir::hir_def::expr::UnOp::Ref
                 ) && let Some(span) = expr.span(self.body).into_un_expr().op().resolve(self.db)
                 {
                     self.builder.body.values[value_id.index()].source =

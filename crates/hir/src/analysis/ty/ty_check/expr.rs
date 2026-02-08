@@ -243,7 +243,7 @@ impl<'db> TyChecker<'db> {
             return prop;
         }
 
-        if matches!(op, UnOp::Mut | UnOp::Ref | UnOp::Move) {
+        if matches!(op, UnOp::Mut | UnOp::Ref) {
             if self.env.expr_place(*lhs).is_none() {
                 self.push_diag(BodyDiag::BorrowFromNonPlace {
                     primary: expr.span(self.body()).into(),
@@ -251,7 +251,6 @@ impl<'db> TyChecker<'db> {
                 return ExprProp::invalid(self.db);
             }
 
-            let is_borrow_handle = prop.ty.as_borrow(self.db).is_some();
             let place_ty = prop
                 .ty
                 .as_borrow(self.db)
@@ -272,15 +271,6 @@ impl<'db> TyChecker<'db> {
                         return ExprProp::invalid(self.db);
                     }
                     ExprProp::new(TyId::borrow_mut_of(self.db, place_ty), true)
-                }
-                UnOp::Move => {
-                    if is_borrow_handle {
-                        self.push_diag(BodyDiag::MoveOnBorrowHandle {
-                            primary: expr.span(self.body()).into(),
-                        });
-                        return ExprProp::invalid(self.db);
-                    }
-                    ExprProp::new(place_ty, true)
                 }
                 _ => unreachable!(),
             };
@@ -2683,7 +2673,6 @@ impl TraitOps for UnOp {
             UnOp::BitNot => ["BitNot", "bit_not", "~"],
             UnOp::Mut => ["MutBorrow", "mut_borrow", "mut"],
             UnOp::Ref => ["RefBorrow", "ref_borrow", "ref"],
-            UnOp::Move => ["Move", "move", "move"],
         }
     }
 }

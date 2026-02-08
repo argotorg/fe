@@ -509,7 +509,7 @@ pub enum ValueOrigin<'db> {
     FieldPtr(FieldPtrOrigin),
     /// Reference to a place (for aggregates - pointer arithmetic only, no load).
     PlaceRef(Place<'db>),
-    /// Marker for `move <place>` expressions (runtime no-op, analysis hook).
+    /// Marker for ownership moves from places (runtime no-op, analysis hook).
     MoveOut {
         place: Place<'db>,
     },

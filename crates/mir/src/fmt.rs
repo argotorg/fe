@@ -232,7 +232,6 @@ fn format_value_inner(
                 UnOp::BitNot => format!("(~{inner})"),
                 UnOp::Mut => format!("(mut {inner})"),
                 UnOp::Ref => format!("(ref {inner})"),
-                UnOp::Move => format!("(move {inner})"),
             }
         }
         ValueOrigin::Binary { op, lhs, rhs } => {

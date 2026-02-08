@@ -158,8 +158,6 @@ pub enum UnOp {
     Mut,
     /// `ref`
     Ref,
-    /// `move`
-    Move,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]

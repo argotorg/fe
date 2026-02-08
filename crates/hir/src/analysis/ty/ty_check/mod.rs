@@ -844,7 +844,6 @@ impl<'db> TyChecker<'db> {
         };
 
         match expr_data {
-            Expr::Un(_, crate::hir_def::expr::UnOp::Move) => {}
             Expr::Block(stmts) => {
                 let Some(last) = stmts.last() else {
                     return;

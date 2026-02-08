@@ -170,7 +170,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
     ) -> Self {
         let body = &func.body;
         let hir_body = func.typed_body.as_ref().and_then(|typed| typed.body());
-        // Pick one "best" HIR ExprId per MIR ValueId for diagnostics (prefer `mut/ref/move` ops).
+        // Pick one "best" HIR ExprId per MIR ValueId for diagnostics (prefer `mut/ref` ops).
         let mut value_to_expr = vec![None; body.values.len()];
         let unop_rank = |expr: ExprId| {
             let Some(body) = hir_body else {
@@ -178,7 +178,6 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             };
             match expr.data(db, body) {
                 Partial::Present(Expr::Un(_, UnOp::Mut | UnOp::Ref)) => 2,
-                Partial::Present(Expr::Un(_, UnOp::Move)) => 1,
                 _ => 0,
             }
         };
@@ -449,12 +448,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
     }
 
     fn moved_place_span(&self, expr: ExprId) -> Option<common::diagnostics::Span> {
-        let body = self.hir_body?;
-        let target = match expr.data(self.db, body) {
-            Partial::Present(Expr::Un(inner, UnOp::Move)) => *inner,
-            _ => expr,
-        };
-        let &value = self.func.body.expr_values.get(&target)?;
+        let &value = self.func.body.expr_values.get(&expr)?;
         self.func
             .body
             .source_span(self.func.body.value(value).source)

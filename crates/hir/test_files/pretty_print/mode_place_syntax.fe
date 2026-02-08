@@ -32,12 +32,11 @@ fn places() {
     let mut b: Foo = make_foo()
     let c: ref Foo = ref a
     let d: mut Foo = mut b
-    let e: Foo = move a
+    let e: Foo = a
 
     take_view(b)
     take_mut(mut b)
     take_ref(ref b)
-    take_own(move b)
+    take_own(b)
     take_view(make_foo())
 }
-

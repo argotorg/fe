@@ -69,7 +69,7 @@ impl<I> AbiDecoder<Sol> for SolDecoder<I>
     type Input = I
 
     fn input(self) -> Self::Input {
-        move self.cur.input
+        self.cur.input
     }
 
     fn base(self) -> u256 {
