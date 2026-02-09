@@ -1,5 +1,6 @@
 ---
 source: crates/hir/tests/ty_check.rs
+assertion_line: 40
 expression: res
 input_file: test_files/ty_check/method.fe
 ---
@@ -225,7 +226,7 @@ note:
    ┌─ method.fe:38:27
    │
 38 │             Self::None => evm::abort()
-   │                           ^^^^^^^^^^^^ !
+   │                           ^^^^^^^^^^^^ T
 
 note: 
    ┌─ method.fe:39:13

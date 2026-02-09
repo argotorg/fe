@@ -99,7 +99,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     ValueOrigin::TransparentCast {
                         value: scrutinee_value,
                     },
-                    ValueRepr::Ptr(AddressSpaceKind::Memory),
+                    self.value_repr_for_ty(inner_ty, AddressSpaceKind::Memory),
                 );
                 (scrutinee_value, inner_ty)
             } else {

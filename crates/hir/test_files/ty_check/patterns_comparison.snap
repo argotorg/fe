@@ -1,5 +1,6 @@
 ---
-source: crates/hir-analysis/tests/ty_check.rs
+source: crates/hir/tests/ty_check.rs
+assertion_line: 40
 expression: res
 input_file: test_files/ty_check/patterns_comparison.fe
 ---
@@ -47,7 +48,7 @@ note:
    │ ╭──────────────────────^
 24 │ │             return 1
 25 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ u8
 
 note: 
    ┌─ patterns_comparison.fe:24:20
@@ -68,7 +69,7 @@ note:
    │ ╭──────────────────────^
 27 │ │             return 2
 28 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ u8
 
 note: 
    ┌─ patterns_comparison.fe:27:20
@@ -89,7 +90,7 @@ note:
    │ ╭──────────────────────^
 30 │ │             return 3
 31 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ u8
 
 note: 
    ┌─ patterns_comparison.fe:30:20
@@ -141,7 +142,7 @@ note:
    │ ╭─────────────────^
 41 │ │             return 1
 42 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ u8
 
 note: 
    ┌─ patterns_comparison.fe:41:20
@@ -162,7 +163,7 @@ note:
    │ ╭─────────────────^
 44 │ │             return 2
 45 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ u8
 
 note: 
    ┌─ patterns_comparison.fe:44:20
@@ -183,7 +184,7 @@ note:
    │ ╭─────────────────^
 47 │ │             return 3
 48 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ u8
 
 note: 
    ┌─ patterns_comparison.fe:47:20
@@ -235,7 +236,7 @@ note:
    │ ╭───────────────────────^
 56 │ │             return 1
 57 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ u8
 
 note: 
    ┌─ patterns_comparison.fe:56:20
@@ -256,7 +257,7 @@ note:
    │ ╭─────────────────────────^
 59 │ │             return 2
 60 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ u8
 
 note: 
    ┌─ patterns_comparison.fe:59:20
@@ -277,7 +278,7 @@ note:
    │ ╭────────────────────────^
 62 │ │             return 3
 63 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ u8
 
 note: 
    ┌─ patterns_comparison.fe:62:20
@@ -316,7 +317,7 @@ note:
    │ ╭────────────────────────────────^
 65 │ │             return r + g + b
 66 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ u8
 
 note: 
    ┌─ patterns_comparison.fe:65:20
@@ -392,7 +393,7 @@ note:
    │ ╭────────────────^
 76 │ │             return 1
 77 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ u8
 
 note: 
    ┌─ patterns_comparison.fe:76:20
@@ -413,7 +414,7 @@ note:
    │ ╭──────────────────^
 79 │ │             return 2
 80 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ u8
 
 note: 
    ┌─ patterns_comparison.fe:79:20
@@ -434,7 +435,7 @@ note:
    │ ╭─────────────────^
 82 │ │             return 3
 83 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ u8
 
 note: 
    ┌─ patterns_comparison.fe:82:20
@@ -473,7 +474,7 @@ note:
    │ ╭─────────────────────────^
 85 │ │             return r + g + b
 86 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ u8
 
 note: 
    ┌─ patterns_comparison.fe:85:20
@@ -825,7 +826,7 @@ note:
     │ ╭────────────────────────────^
 131 │ │             return 10
 132 │ │         }
-    │ ╰─────────^ !
+    │ ╰─────────^ u8
 
 note: 
     ┌─ patterns_comparison.fe:131:20
@@ -852,7 +853,7 @@ note:
     │ ╭────────────────────────────^
 134 │ │             return 20
 135 │ │         }
-    │ ╰─────────^ !
+    │ ╰─────────^ u8
 
 note: 
     ┌─ patterns_comparison.fe:134:20
@@ -879,7 +880,7 @@ note:
     │ ╭────────────────────────────^
 137 │ │             return 30
 138 │ │         }
-    │ ╰─────────^ !
+    │ ╰─────────^ u8
 
 note: 
     ┌─ patterns_comparison.fe:137:20
@@ -906,7 +907,7 @@ note:
     │ ╭───────────────────────────^
 140 │ │             return 1
 141 │ │         }
-    │ ╰─────────^ !
+    │ ╰─────────^ u8
 
 note: 
     ┌─ patterns_comparison.fe:140:20
@@ -933,7 +934,7 @@ note:
     │ ╭─────────────────────────────^
 143 │ │             return 2
 144 │ │         } 
-    │ ╰─────────^ !
+    │ ╰─────────^ u8
 
 note: 
     ┌─ patterns_comparison.fe:143:20
@@ -960,7 +961,7 @@ note:
     │ ╭────────────────────────────^
 146 │ │             return 3
 147 │ │         }
-    │ ╰─────────^ !
+    │ ╰─────────^ u8
 
 note: 
     ┌─ patterns_comparison.fe:146:20
@@ -1005,7 +1006,7 @@ note:
     │ ╭────────────────────────────────────^
 149 │ │             return r + g + b
 150 │ │         }
-    │ ╰─────────^ !
+    │ ╰─────────^ u8
 
 note: 
     ┌─ patterns_comparison.fe:149:20
@@ -1056,7 +1057,7 @@ note:
     │ ╭──────────────────────────────^
 152 │ │             return val
 153 │ │         }
-    │ ╰─────────^ !
+    │ ╰─────────^ u8
 
 note: 
     ┌─ patterns_comparison.fe:152:20

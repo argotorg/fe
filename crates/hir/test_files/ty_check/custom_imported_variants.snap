@@ -1,5 +1,6 @@
 ---
-source: crates/hir-analysis/tests/ty_check.rs
+source: crates/hir/tests/ty_check.rs
+assertion_line: 40
 expression: res
 input_file: test_files/ty_check/custom_imported_variants.fe
 ---
@@ -47,7 +48,7 @@ note:
    │ ╭──────────────────────^
 18 │ │             return 1
 19 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ u8
 
 note: 
    ┌─ custom_imported_variants.fe:18:20
@@ -68,7 +69,7 @@ note:
    │ ╭──────────────────────^
 21 │ │             return 2
 22 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ u8
 
 note: 
    ┌─ custom_imported_variants.fe:21:20
@@ -89,7 +90,7 @@ note:
    │ ╭──────────────────────^
 24 │ │             return 3
 25 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ u8
 
 note: 
    ┌─ custom_imported_variants.fe:24:20
@@ -141,7 +142,7 @@ note:
    │ ╭─────────────────^
 35 │ │             return 1
 36 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ u8
 
 note: 
    ┌─ custom_imported_variants.fe:35:20
@@ -162,7 +163,7 @@ note:
    │ ╭─────────────────^
 38 │ │             return 2  // If Tag2 is treated as a wildcard, this might be unreachable
 39 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ u8
 
 note: 
    ┌─ custom_imported_variants.fe:38:20
@@ -183,7 +184,7 @@ note:
    │ ╭─────────────────^
 41 │ │             return 3  // If Tag2 is treated as a wildcard, this would definitely be unreachable
 42 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ u8
 
 note: 
    ┌─ custom_imported_variants.fe:41:20
@@ -235,7 +236,7 @@ note:
    │ ╭─────────────────^
 52 │ │             return 1
 53 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ u8
 
 note: 
    ┌─ custom_imported_variants.fe:52:20
@@ -256,7 +257,7 @@ note:
    │ ╭──────────────^
 55 │ │             return 0
 56 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ u8
 
 note: 
    ┌─ custom_imported_variants.fe:55:20
@@ -277,7 +278,7 @@ note:
    │ ╭─────────────────^
 60 │ │             return 2
 61 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ u8
 
 note: 
    ┌─ custom_imported_variants.fe:60:20
@@ -329,7 +330,7 @@ note:
    │ ╭──────────────────────^
 69 │ │             return 1
 70 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ u8
 
 note: 
    ┌─ custom_imported_variants.fe:69:20
@@ -350,7 +351,7 @@ note:
    │ ╭──────────────^
 72 │ │             return 0
 73 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ u8
 
 note: 
    ┌─ custom_imported_variants.fe:72:20
@@ -371,7 +372,7 @@ note:
    │ ╭──────────────────────^
 76 │ │             return 2
 77 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ u8
 
 note: 
    ┌─ custom_imported_variants.fe:76:20
@@ -423,7 +424,7 @@ note:
    │ ╭────────────────^
 87 │ │             return 1
 88 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ u8
 
 note: 
    ┌─ custom_imported_variants.fe:87:20
@@ -444,7 +445,7 @@ note:
    │ ╭──────────────────^
 90 │ │             return 2
 91 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ u8
 
 note: 
    ┌─ custom_imported_variants.fe:90:20
@@ -465,7 +466,7 @@ note:
    │ ╭─────────────────^
 93 │ │             return 3
 94 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ u8
 
 note: 
    ┌─ custom_imported_variants.fe:93:20
@@ -504,7 +505,7 @@ note:
    │ ╭─────────────────────────^
 96 │ │             return r + g + b
 97 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ u8
 
 note: 
    ┌─ custom_imported_variants.fe:96:20
@@ -580,7 +581,7 @@ note:
     │ ╭───────────────────────^
 105 │ │             return 1
 106 │ │         }
-    │ ╰─────────^ !
+    │ ╰─────────^ u8
 
 note: 
     ┌─ custom_imported_variants.fe:105:20
@@ -601,7 +602,7 @@ note:
     │ ╭─────────────────────────^
 108 │ │             return 2
 109 │ │         }
-    │ ╰─────────^ !
+    │ ╰─────────^ u8
 
 note: 
     ┌─ custom_imported_variants.fe:108:20
@@ -622,7 +623,7 @@ note:
     │ ╭────────────────────────^
 111 │ │             return 3
 112 │ │         }
-    │ ╰─────────^ !
+    │ ╰─────────^ u8
 
 note: 
     ┌─ custom_imported_variants.fe:111:20
@@ -661,7 +662,7 @@ note:
     │ ╭────────────────────────────────^
 114 │ │             return r + g + b
 115 │ │         }
-    │ ╰─────────^ !
+    │ ╰─────────^ u8
 
 note: 
     ┌─ custom_imported_variants.fe:114:20

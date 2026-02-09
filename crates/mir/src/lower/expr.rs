@@ -1035,6 +1035,36 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             self.builder.body.values[value_id.index()].repr = self.value_repr_for_expr(expr, ty);
             return value_id;
         }
+        if let Some(local) = self.local_for_binding(binding) {
+            let local_ty = self.builder.body.local(local).ty;
+            let local_address_space = self.builder.body.local(local).address_space;
+            if let Some((_, inner_ty)) = local_ty.as_borrow(self.db)
+                && ty == inner_ty
+            {
+                let handle = self.alloc_value(
+                    local_ty,
+                    ValueOrigin::Local(local),
+                    self.value_repr_for_ty(local_ty, local_address_space),
+                );
+                let base = self.alloc_value(
+                    inner_ty,
+                    ValueOrigin::TransparentCast { value: handle },
+                    ValueRepr::Ptr(AddressSpaceKind::Memory),
+                );
+                let place = Place::new(base, MirProjectionPath::new());
+                let dest = self.alloc_temp_local(ty, false, "load");
+                let source = self.source_for_expr(expr);
+                self.push_inst_here(MirInst::Assign {
+                    source,
+                    dest: Some(dest),
+                    rvalue: Rvalue::Load { place },
+                });
+                self.builder.body.values[value_id.index()].origin = ValueOrigin::Local(dest);
+                self.builder.body.values[value_id.index()].repr =
+                    self.value_repr_for_expr(expr, ty);
+                return value_id;
+            }
+        }
         let is_effect_binding = matches!(binding, LocalBinding::EffectParam { .. })
             || matches!(
                 binding,

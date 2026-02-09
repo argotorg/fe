@@ -73,6 +73,7 @@ object "BalanceMap" {
           default {
             return(0, 0)
           }
+        leave
       }
       function $set_allowance__MemPtr_StorageMap_u256__u256__1____e8f0bd5888eece94($addr, $value, $allowances) {
         $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set__u256_u256_1__3c02c0f2b86be0bb($allowances, $addr, $value)

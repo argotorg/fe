@@ -834,6 +834,37 @@ impl<'db> TyChecker<'db> {
         crate::analysis::ty::ty_is_copy(self.db, self.env.scope(), ty, self.env.assumptions())
     }
 
+    fn copy_inner_from_borrow(&self, ty: TyId<'db>) -> Option<TyId<'db>> {
+        let (_, inner) = ty.as_borrow(self.db)?;
+        self.ty_is_copy(inner).then_some(inner)
+    }
+
+    /// Contextual coercion from borrow handle to copied value.
+    ///
+    /// This allows `ref T` / `mut T` to be used where `T` is expected, when `T: Copy`.
+    /// Coercion is only attempted for non-borrow, non-inference expected types.
+    fn try_coerce_copy_borrow_to_expected(
+        &mut self,
+        actual: TyId<'db>,
+        expected: TyId<'db>,
+    ) -> Option<TyId<'db>> {
+        if expected.as_borrow(self.db).is_some() || expected.is_ty_var(self.db) {
+            return None;
+        }
+
+        let inner = self.copy_inner_from_borrow(actual)?;
+        let inner = self.normalize_ty(inner);
+        let expected = self.normalize_ty(expected);
+        if inner.has_invalid(self.db) || expected.has_invalid(self.db) {
+            return None;
+        }
+
+        let snapshot = self.table.snapshot();
+        let unifies = self.table.unify(inner, expected).is_ok();
+        self.table.rollback_to(snapshot);
+        unifies.then_some(inner)
+    }
+
     /// In "owned" contexts, non-`Copy` values are implicitly moved from places.
     ///
     /// `Copy` values may be duplicated implicitly.

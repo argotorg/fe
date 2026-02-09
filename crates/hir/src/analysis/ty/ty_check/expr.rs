@@ -185,7 +185,7 @@ impl<'db> TyChecker<'db> {
             Expr::Array(..) => self.check_array(expr, expr_data, expected),
             Expr::ArrayRep(..) => self.check_array_rep(expr, expr_data, expected),
             Expr::If(..) => self.check_if(expr, expr_data),
-            Expr::Match(..) => self.check_match(expr, expr_data),
+            Expr::Match(..) => self.check_match(expr, expr_data, expected),
             Expr::Assign(..) => self.check_assign(expr, expr_data),
             Expr::AugAssign(..) => self.check_aug_assign(expr, expr_data),
             Expr::With(bindings, body) => self.check_with(bindings, *body, expected),
@@ -193,6 +193,9 @@ impl<'db> TyChecker<'db> {
         self.env.leave_expr();
 
         actual.ty = normalize_ty(self.db, actual.ty, self.env.scope(), self.env.assumptions());
+        if let Some(coerced) = self.try_coerce_copy_borrow_to_expected(actual.ty, expected) {
+            actual.ty = coerced;
+        }
         let typeable = Typeable::Expr(expr, actual.clone());
         actual.ty = self.unify_ty(typeable, actual.ty, expected);
         actual
@@ -292,7 +295,12 @@ impl<'db> TyChecker<'db> {
             return ExprProp::invalid(self.db);
         }
 
-        self.check_ops_trait(expr, prop.ty, op, None)
+        let lhs_ty = self.copy_inner_from_borrow(prop.ty).unwrap_or(prop.ty);
+        if lhs_ty != prop.ty {
+            self.unify_ty(Typeable::Expr(*lhs, prop.clone()), lhs_ty, lhs_ty);
+        }
+
+        self.check_ops_trait(expr, lhs_ty, op, None)
     }
 
     fn check_cast(
@@ -596,7 +604,12 @@ impl<'db> TyChecker<'db> {
             return ExprProp::invalid(self.db);
         }
 
-        self.check_ops_trait(expr, lhs.ty, &op, Some(rhs_expr))
+        let lhs_ty = self.copy_inner_from_borrow(lhs.ty).unwrap_or(lhs.ty);
+        if lhs_ty != lhs.ty {
+            self.unify_ty(Typeable::Expr(lhs_expr, lhs.clone()), lhs_ty, lhs_ty);
+        }
+
+        self.check_ops_trait(expr, lhs_ty, &op, Some(rhs_expr))
     }
 
     /// Check a range expression `start..end` and return the Range type.
@@ -2144,7 +2157,12 @@ impl<'db> TyChecker<'db> {
         ExprProp::new(ty, true)
     }
 
-    fn check_match(&mut self, expr: ExprId, expr_data: &Expr<'db>) -> ExprProp<'db> {
+    fn check_match(
+        &mut self,
+        expr: ExprId,
+        expr_data: &Expr<'db>,
+        expected: TyId<'db>,
+    ) -> ExprProp<'db> {
         let Expr::Match(scrutinee, arms) = expr_data else {
             unreachable!()
         };
@@ -2157,7 +2175,7 @@ impl<'db> TyChecker<'db> {
             return ExprProp::invalid(self.db);
         };
 
-        let mut match_ty = self.fresh_ty();
+        let mut match_ty = expected;
         // Store cloned HirPat data and the original PatId for diagnostics.
         let mut hir_pats_with_ids: Vec<(&Pat<'db>, PatId)> = Vec::with_capacity(arms.len());
 
@@ -2298,16 +2316,32 @@ impl<'db> TyChecker<'db> {
             return ExprProp::invalid(self.db);
         };
 
-        let c_lhs_ty = Canonicalized::new(self.db, lhs_ty);
-
-        let (method, inst) = match select_method_candidate(
+        let mut selected_lhs_ty = lhs_ty;
+        let mut c_lhs_ty = Canonicalized::new(self.db, selected_lhs_ty);
+        let mut method_candidate = select_method_candidate(
             self.db,
             c_lhs_ty.value,
             op.trait_method(self.db),
             self.env.scope(),
             self.env.assumptions(),
             Some(trait_def),
-        ) {
+        );
+        if matches!(method_candidate, Err(MethodSelectionError::NotFound))
+            && let Some(inner) = self.copy_inner_from_borrow(lhs_ty)
+        {
+            selected_lhs_ty = inner;
+            c_lhs_ty = Canonicalized::new(self.db, selected_lhs_ty);
+            method_candidate = select_method_candidate(
+                self.db,
+                c_lhs_ty.value,
+                op.trait_method(self.db),
+                self.env.scope(),
+                self.env.assumptions(),
+                Some(trait_def),
+            );
+        }
+
+        let (method, inst) = match method_candidate {
             Ok(MethodCandidate::InherentMethod(_)) => unreachable!(),
             Ok(
                 res @ (MethodCandidate::TraitMethod(cand)
@@ -2319,7 +2353,8 @@ impl<'db> TyChecker<'db> {
                         .register_confirmation(inst, expr.span(self.body()).into());
                 }
 
-                let func_ty = self.instantiate_trait_method_to_term(cand.method, lhs_ty, inst);
+                let func_ty =
+                    self.instantiate_trait_method_to_term(cand.method, selected_lhs_ty, inst);
 
                 if let Some(rhs_expr) = rhs_expr {
                     // Derive expected RHS type from the instantiated function type
@@ -2356,7 +2391,7 @@ impl<'db> TyChecker<'db> {
                         self.db,
                         trait_method,
                         &mut self.table,
-                        lhs_ty,
+                        selected_lhs_ty,
                         inst,
                     );
                     let candidate_func_ty = self.table.instantiate_to_term(candidate_func_ty);
@@ -2369,7 +2404,10 @@ impl<'db> TyChecker<'db> {
                         } else {
                             unreachable!("candidate func ty should be a func");
                         };
-                    let unifies = self.table.unify(rhs.ty, expected_rhs).is_ok();
+                    let rhs_ty = self
+                        .try_coerce_copy_borrow_to_expected(rhs.ty, expected_rhs)
+                        .unwrap_or(rhs.ty);
+                    let unifies = self.table.unify(rhs_ty, expected_rhs).is_ok();
                     self.table.rollback_to(snapshot);
                     if unifies {
                         viable.push((candidate_func_ty, inst, expected_rhs));
@@ -2391,7 +2429,10 @@ impl<'db> TyChecker<'db> {
                         let (func_ty, inst, expected_rhs) = viable.pop().unwrap();
                         self.env
                             .register_confirmation(inst, expr.span(self.body()).into());
-                        self.unify_ty(Typeable::Expr(rhs_expr, rhs.clone()), rhs.ty, expected_rhs);
+                        let rhs_ty = self
+                            .try_coerce_copy_borrow_to_expected(rhs.ty, expected_rhs)
+                            .unwrap_or(rhs.ty);
+                        self.unify_ty(Typeable::Expr(rhs_expr, rhs.clone()), rhs_ty, expected_rhs);
                         (func_ty, inst)
                     }
                     _ => {
