@@ -1906,6 +1906,7 @@ dependencies = [
  "hex",
  "num-bigint",
  "rustc-hash 2.1.1",
+ "smallvec 1.15.1",
  "sonatina-codegen",
  "sonatina-ir",
  "sonatina-triple",

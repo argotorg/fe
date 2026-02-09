@@ -16,16 +16,17 @@ use mir::ir::{AddressSpaceKind, IntrinsicOp, Place, SyntheticValue};
 use mir::{MirModule, layout, layout::TargetDataLayout, lower_module};
 use num_bigint::BigUint;
 use rustc_hash::{FxHashMap, FxHashSet};
+use smallvec1::SmallVec;
 use sonatina_ir::{
     BlockId, I256, Module, Signature, Type, ValueId,
     builder::{ModuleBuilder, Variable},
     func_cursor::InstInserter,
     inst::{
         arith::{Add, Mul, Neg, Shl, Shr, Sub},
-        cast::{Sext, Trunc, Zext},
+        cast::{IntToPtr, PtrToInt, Sext, Trunc, Zext},
         cmp::{Eq, Gt, IsZero, Lt, Ne},
         control_flow::{Br, Call, Jump, Return},
-        data::{Mload, Mstore, SymAddr, SymSize, SymbolRef},
+        data::{Gep, Mload, Mstore, SymAddr, SymSize, SymbolRef},
         evm::{
             EvmAddress, EvmBaseFee, EvmBlockHash, EvmCall, EvmCallValue, EvmCalldataCopy,
             EvmCalldataLoad, EvmCalldataSize, EvmCaller, EvmChainId, EvmCodeCopy, EvmCodeSize,
@@ -261,6 +262,10 @@ struct ModuleLowerer<'db, 'a> {
     ///
     /// These entry functions emit `evm_stop` instead of internal `Return`.
     entry_func_idxs: FxHashSet<usize>,
+    /// Cache for Fe type → sonatina type mapping (GEP support).
+    gep_type_cache: FxHashMap<String, Option<Type>>,
+    /// Counter for generating unique sonatina struct type names.
+    gep_name_counter: usize,
 }
 
 impl<'db, 'a> ModuleLowerer<'db, 'a> {
@@ -282,6 +287,8 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             returns_value_map: FxHashMap::default(),
             runtime_param_masks: FxHashMap::default(),
             entry_func_idxs: FxHashSet::default(),
+            gep_type_cache: FxHashMap::default(),
+            gep_name_counter: 0,
         }
     }
 
@@ -840,7 +847,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
     /// If `is_entry` is true, this is the entry function executed directly by the EVM.
     /// Entry functions emit `evm_stop` instead of internal `Return` for their terminators.
     fn lower_function(
-        &self,
+        &mut self,
         func_ref: FuncRef,
         func: &mir::MirFunction<'db>,
         is_entry: bool,
@@ -938,6 +945,8 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 block_map: &block_map,
                 is,
                 is_entry,
+                gep_type_cache: &mut self.gep_type_cache,
+                gep_name_counter: &mut self.gep_name_counter,
             };
 
             for (idx, block) in ctx.body.blocks.iter().enumerate() {
@@ -972,6 +981,10 @@ struct LowerCtx<'a, 'db, C: sonatina_ir::func_cursor::FuncCursor> {
     block_map: &'a FxHashMap<mir::BasicBlockId, BlockId>,
     is: &'a sonatina_ir::inst::evm::inst_set::EvmInstSet,
     is_entry: bool,
+    /// Cache for Fe type → sonatina type mapping (GEP support).
+    gep_type_cache: &'a mut FxHashMap<String, Option<Type>>,
+    /// Counter for generating unique sonatina struct type names.
+    gep_name_counter: &'a mut usize,
 }
 
 /// Lower a MIR instruction.
@@ -2090,6 +2103,140 @@ fn apply_to_word<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     }
 }
 
+/// Maps a Fe type to a sonatina struct/array type for GEP-based addressing.
+///
+/// Returns `Some(Type)` for types that can be represented as sonatina compound types
+/// (structs, tuples, arrays of such). Returns `None` for types where we should fall
+/// back to manual offset arithmetic (enums, zero-sized types, plain scalars).
+///
+/// Uses a cache to avoid creating duplicate struct type definitions. The cache is keyed
+/// by the Fe `TyId` debug representation (salsa-interned, so stable within a session).
+fn fe_ty_to_sonatina<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
+    db: &'db DriverDataBase,
+    target_layout: &TargetDataLayout,
+    ty: hir::analysis::ty::ty_def::TyId<'db>,
+    cache: &mut FxHashMap<String, Option<Type>>,
+    name_counter: &mut usize,
+) -> Option<Type> {
+    let cache_key = format!("{ty:?}");
+    if let Some(cached) = cache.get(&cache_key) {
+        return *cached;
+    }
+
+    let result = fe_ty_to_sonatina_inner(fb, db, target_layout, ty, cache, name_counter);
+    cache.insert(cache_key, result);
+    result
+}
+
+fn fe_ty_to_sonatina_inner<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
+    db: &'db DriverDataBase,
+    target_layout: &TargetDataLayout,
+    ty: hir::analysis::ty::ty_def::TyId<'db>,
+    cache: &mut FxHashMap<String, Option<Type>>,
+    name_counter: &mut usize,
+) -> Option<Type> {
+    if is_erased_runtime_ty(db, target_layout, ty) {
+        return Some(Type::Unit);
+    }
+
+    let base_ty = ty.base_ty(db);
+    match base_ty.data(db) {
+        TyData::TyBase(TyBase::Prim(prim)) => match prim {
+            // Scalars: all map to I256 on EVM
+            PrimTy::Bool
+            | PrimTy::U8
+            | PrimTy::I8
+            | PrimTy::U16
+            | PrimTy::I16
+            | PrimTy::U32
+            | PrimTy::I32
+            | PrimTy::U64
+            | PrimTy::I64
+            | PrimTy::U128
+            | PrimTy::I128
+            | PrimTy::U256
+            | PrimTy::I256
+            | PrimTy::Usize
+            | PrimTy::Isize
+            | PrimTy::Ptr => Some(Type::I256),
+            PrimTy::String => None,
+            PrimTy::Tuple(_) => {
+                let field_tys = ty.field_types(db);
+                if field_tys.is_empty() {
+                    return Some(Type::Unit);
+                }
+                let mut sonatina_fields = Vec::with_capacity(field_tys.len());
+                for ft in &field_tys {
+                    sonatina_fields.push(fe_ty_to_sonatina(
+                        fb,
+                        db,
+                        target_layout,
+                        *ft,
+                        cache,
+                        name_counter,
+                    )?);
+                }
+                let id = *name_counter;
+                *name_counter += 1;
+                Some(fb.declare_struct_type(&format!("__fe_tuple_{id}"), &sonatina_fields, false))
+            }
+            PrimTy::Array => {
+                let elem_ty = layout::array_elem_ty(db, ty)?;
+                let len = layout::array_len(db, ty)?;
+                let sonatina_elem =
+                    fe_ty_to_sonatina(fb, db, target_layout, elem_ty, cache, name_counter)?;
+                Some(fb.declare_array_type(sonatina_elem, len))
+            }
+        },
+        TyData::TyBase(TyBase::Adt(adt_def)) => {
+            match adt_def.adt_ref(db) {
+                AdtRef::Struct(_) => {
+                    let field_tys = ty.field_types(db);
+                    let mut sonatina_fields = Vec::with_capacity(field_tys.len());
+                    for ft in &field_tys {
+                        sonatina_fields.push(fe_ty_to_sonatina(
+                            fb,
+                            db,
+                            target_layout,
+                            *ft,
+                            cache,
+                            name_counter,
+                        )?);
+                    }
+                    let name = adt_def
+                        .adt_ref(db)
+                        .name(db)
+                        .map(|id| id.data(db).to_string())
+                        .unwrap_or_else(|| "anon".to_string());
+                    let id = *name_counter;
+                    *name_counter += 1;
+                    Some(fb.declare_struct_type(
+                        &format!("__fe_{name}_{id}"),
+                        &sonatina_fields,
+                        false,
+                    ))
+                }
+                // Enums: fall back to manual arithmetic
+                AdtRef::Enum(_) => None,
+            }
+        }
+        TyData::TyBase(TyBase::Contract(_)) | TyData::TyBase(TyBase::Func(_)) => Some(Type::Unit),
+        _ => None,
+    }
+}
+
+/// Checks whether a projection chain is eligible for GEP-based addressing.
+///
+/// Returns true when all projections are Field or Index (no VariantField, Discriminant, or Deref).
+fn projections_eligible_for_gep(place: &Place<'_>) -> bool {
+    place
+        .projection
+        .iter()
+        .all(|p| matches!(p, Projection::Field(_) | Projection::Index(_)))
+}
+
 /// Computes the address for a place by walking the projection path.
 ///
 /// For memory, computes byte offsets. For storage, computes slot offsets.
@@ -2098,7 +2245,7 @@ fn lower_place_address<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     ctx: &mut LowerCtx<'_, 'db, C>,
     place: &Place<'db>,
 ) -> Result<ValueId, LowerError> {
-    let mut base_val = lower_value(ctx, place.base)?;
+    let base_val = lower_value(ctx, place.base)?;
 
     if place.projection.is_empty() {
         return Ok(base_val);
@@ -2106,15 +2253,161 @@ fn lower_place_address<'db, C: sonatina_ir::func_cursor::FuncCursor>(
 
     // Get the base value's type to navigate projections
     let base_value = &ctx.body.values[place.base.index()];
-    let mut current_ty = base_value.ty;
+    let current_ty = base_value.ty;
     if is_erased_runtime_ty(ctx.db, ctx.target_layout, current_ty) {
         return Ok(base_val);
     }
-    let mut total_offset: usize = 0;
+
     let is_slot_addressed = matches!(
         ctx.body.place_address_space(place),
         AddressSpaceKind::Storage | AddressSpaceKind::TransientStorage
     );
+
+    // Use GEP for memory-addressed places where all projections are Field or Index
+    if !is_slot_addressed
+        && projections_eligible_for_gep(place)
+        && let Some(sonatina_ty) = fe_ty_to_sonatina(
+            ctx.fb,
+            ctx.db,
+            ctx.target_layout,
+            current_ty,
+            ctx.gep_type_cache,
+            ctx.gep_name_counter,
+        )
+    {
+        return lower_place_address_gep(ctx, place, base_val, current_ty, sonatina_ty);
+    }
+
+    // Fall back to manual offset arithmetic
+    lower_place_address_arithmetic(ctx, place, base_val, current_ty, is_slot_addressed)
+}
+
+/// GEP-based place address computation for memory-addressed struct/array paths.
+fn lower_place_address_gep<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, 'db, C>,
+    place: &Place<'db>,
+    base_val: ValueId,
+    base_fe_ty: hir::analysis::ty::ty_def::TyId<'db>,
+    base_sonatina_ty: Type,
+) -> Result<ValueId, LowerError> {
+    let ptr_ty = ctx.fb.ptr_type(base_sonatina_ty);
+
+    // IntToPtr: cast I256 base address to typed pointer
+    let typed_ptr = ctx
+        .fb
+        .insert_inst(IntToPtr::new(ctx.is, base_val, ptr_ty), ptr_ty);
+
+    // Build GEP index list, tracking types through the chain
+    let mut gep_values: SmallVec<[ValueId; 8]> = SmallVec::new();
+    gep_values.push(typed_ptr);
+
+    // Initial dereference index (standard GEP convention: index 0 dereferences the pointer)
+    let zero = ctx.fb.make_imm_value(I256::zero());
+    gep_values.push(zero);
+
+    let mut current_fe_ty = base_fe_ty;
+    let mut current_sonatina_ty = base_sonatina_ty;
+
+    for proj in place.projection.iter() {
+        match proj {
+            Projection::Field(field_idx) => {
+                let idx_val = ctx.fb.make_imm_value(I256::from(*field_idx as u64));
+                gep_values.push(idx_val);
+
+                // Navigate Fe type
+                let field_types = current_fe_ty.field_types(ctx.db);
+                current_fe_ty = *field_types.get(*field_idx).ok_or_else(|| {
+                    LowerError::Unsupported(format!("gep: field {field_idx} out of bounds"))
+                })?;
+
+                // Navigate sonatina type to the field's type
+                current_sonatina_ty =
+                    sonatina_struct_field_ty(ctx, current_sonatina_ty, *field_idx)?;
+            }
+            Projection::Index(idx_source) => {
+                let idx_val = match idx_source {
+                    IndexSource::Constant(idx) => ctx.fb.make_imm_value(I256::from(*idx as u64)),
+                    IndexSource::Dynamic(value_id) => lower_value(ctx, *value_id)?,
+                };
+                gep_values.push(idx_val);
+
+                // Navigate Fe type
+                current_fe_ty = layout::array_elem_ty(ctx.db, current_fe_ty).ok_or_else(|| {
+                    LowerError::Unsupported("gep: array index on non-array type".to_string())
+                })?;
+
+                // Navigate sonatina type to array element
+                current_sonatina_ty = sonatina_array_elem_ty(ctx, current_sonatina_ty)?;
+            }
+            _ => unreachable!("projections_eligible_for_gep ensures only Field/Index"),
+        }
+    }
+
+    // The GEP result is a pointer to the final element type
+    let result_ptr_ty = ctx.fb.ptr_type(current_sonatina_ty);
+    let gep_result = ctx
+        .fb
+        .insert_inst(Gep::new(ctx.is, gep_values), result_ptr_ty);
+
+    // PtrToInt: cast back to I256 for mload/mstore
+    let result = ctx
+        .fb
+        .insert_inst(PtrToInt::new(ctx.is, gep_result, Type::I256), Type::I256);
+
+    Ok(result)
+}
+
+/// Resolves the sonatina type of a struct field by index.
+fn sonatina_struct_field_ty<C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, '_, C>,
+    struct_ty: Type,
+    field_idx: usize,
+) -> Result<Type, LowerError> {
+    let fields = ctx
+        .fb
+        .module_builder
+        .ctx
+        .with_ty_store(|s| s.struct_def(struct_ty).map(|sd| sd.fields.clone()));
+    match fields {
+        Some(f) => f.get(field_idx).copied().ok_or_else(|| {
+            LowerError::Internal(format!(
+                "gep: sonatina struct field {field_idx} out of bounds"
+            ))
+        }),
+        None => Err(LowerError::Internal(
+            "gep: expected sonatina struct type for Field projection".to_string(),
+        )),
+    }
+}
+
+/// Resolves the sonatina element type of an array type.
+fn sonatina_array_elem_ty<C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, '_, C>,
+    array_ty: Type,
+) -> Result<Type, LowerError> {
+    let elem = ctx
+        .fb
+        .module_builder
+        .ctx
+        .with_ty_store(|s| s.array_def(array_ty).map(|(elem, _len)| elem));
+    match elem {
+        Some(e) => Ok(e),
+        None => Err(LowerError::Internal(
+            "gep: expected sonatina array type for Index projection".to_string(),
+        )),
+    }
+}
+
+/// Manual offset arithmetic path for place address computation.
+/// Used for storage-addressed places and any memory path with enum projections.
+fn lower_place_address_arithmetic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, 'db, C>,
+    place: &Place<'db>,
+    mut base_val: ValueId,
+    mut current_ty: hir::analysis::ty::ty_def::TyId<'db>,
+    is_slot_addressed: bool,
+) -> Result<ValueId, LowerError> {
+    let mut total_offset: usize = 0;
 
     for proj in place.projection.iter() {
         match proj {

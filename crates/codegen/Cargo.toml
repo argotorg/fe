@@ -14,6 +14,7 @@ rustc-hash.workspace = true
 sonatina-ir.workspace = true
 sonatina-triple.workspace = true
 sonatina-codegen.workspace = true
+smallvec1.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
