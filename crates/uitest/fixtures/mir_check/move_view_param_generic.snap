@@ -11,3 +11,7 @@ error[10-0002]: move conflict in `fn make_pair`
   │      ^  ^ cannot move out of a view parameter
   │      │   
   │      cannot move out of a view parameter
+  │
+  = help: consider changing `a: A` to `a: own A`
+  = help: consider changing `b: B` to `b: own B`
+  = help: if you only need to destructure/inspect `a`, use explicit borrowing (`match ref a { ... }` or `let ... = ref a`)

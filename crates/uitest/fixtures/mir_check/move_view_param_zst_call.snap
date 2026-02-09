@@ -11,3 +11,7 @@ error[10-0002]: move conflict in `fn example`
   │                ^  ^ cannot move out of a view parameter
   │                │   
   │                cannot move out of a view parameter
+  │
+  = help: consider changing `a: Foo` to `a: own Foo`
+  = help: consider changing `b: Foo` to `b: own Foo`
+  = help: if you only need to destructure/inspect `a`, use explicit borrowing (`match ref a { ... }` or `let ... = ref a`)

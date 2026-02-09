@@ -63,6 +63,9 @@ enum MoveConflictNote {
         moved_name: Option<String>,
     },
     Loan(LoanId),
+    ViewParam {
+        param_index: u32,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -401,6 +404,41 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             .unwrap_or_else(|| "value is moved here".to_string());
         diag.sub_diagnostics
             .push(SubDiagnostic::new(LabelStyle::Secondary, msg, Some(span)));
+    }
+
+    fn push_view_param_move_help_notes(
+        &self,
+        diag: &mut CompleteDiagnostic,
+        param_indices: impl IntoIterator<Item = u32>,
+    ) {
+        let mut param_indices: Vec<_> = param_indices.into_iter().collect();
+        param_indices.sort_unstable();
+        param_indices.dedup();
+        if param_indices.is_empty() {
+            return;
+        }
+
+        let mut first_param_name = None;
+        for param_index in param_indices {
+            let Some(param_local) = self.func.body.param_locals.get(param_index as usize) else {
+                continue;
+            };
+            let param = self.func.body.local(*param_local);
+            if first_param_name.is_none() {
+                first_param_name = Some(param.name.to_string());
+            }
+            let ty = param.ty.pretty_print(self.db);
+            diag.notes.push(format!(
+                "help: consider changing `{}: {}` to `{}: own {}`",
+                param.name, ty, param.name, ty
+            ));
+        }
+        if let Some(param_name) = first_param_name {
+            diag.notes.push(format!(
+                "help: if you only need to destructure/inspect `{param_name}`, use explicit \
+                 borrowing (`match ref {param_name} {{ ... }}` or `let ... = ref {param_name}`)"
+            ));
+        }
     }
 
     fn moved_overlap_origin(
@@ -1015,7 +1053,8 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         active: &FxHashSet<LoanId>,
         suspended: &FxHashSet<LoanId>,
     ) -> Option<CompleteDiagnostic> {
-        let mut no_note_conflicts = Vec::new();
+        let mut no_note_conflicts: Vec<(ValueId, String)> = Vec::new();
+        let mut view_param_conflicts = Vec::new();
         for (place, move_value) in move_places_in_inst(&self.func.body, inst) {
             if let Some(MoveConflict { label, note }) =
                 self.check_move_out_place(&place, state, moved, active, suspended)
@@ -1032,6 +1071,10 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                             self.diag_at_inst(2, inst, self.move_conflict_header(), label);
                         self.push_loan_origin_label(&mut diag, loan);
                         return Some(diag);
+                    }
+                    Some(MoveConflictNote::ViewParam { param_index }) => {
+                        no_note_conflicts.push((move_value, label));
+                        view_param_conflicts.push(param_index);
                     }
                     None => {
                         no_note_conflicts.push((move_value, label));
@@ -1054,6 +1097,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                     Some(span),
                 ));
             }
+            self.push_view_param_move_help_notes(&mut diag, view_param_conflicts);
             return Some(diag);
         }
 
@@ -1199,6 +1243,9 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                     Some(MoveConflictNote::Loan(loan)) => {
                         self.push_loan_origin_label(&mut diag, loan)
                     }
+                    Some(MoveConflictNote::ViewParam { param_index }) => {
+                        self.push_view_param_move_help_notes(&mut diag, [param_index]);
+                    }
                     None => {}
                 }
                 return Some(diag);
@@ -1332,7 +1379,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             if mode == FuncParamMode::View {
                 return Some(MoveConflict {
                     label: "cannot move out of a view parameter".to_string(),
-                    note: None,
+                    note: Some(MoveConflictNote::ViewParam { param_index: idx }),
                 });
             }
         }

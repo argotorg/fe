@@ -9,3 +9,6 @@ error[10-0002]: move conflict in `fn match_pattern_owned_view_param`
   │
 6 │     match foo {
   │           ^^^ cannot move out of a view parameter
+  │
+  = help: consider changing `foo: Foo` to `foo: own Foo`
+  = help: if you only need to destructure/inspect `foo`, use explicit borrowing (`match ref foo { ... }` or `let ... = ref foo`)
