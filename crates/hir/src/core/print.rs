@@ -408,11 +408,11 @@ impl<'db> EffectParam<'db> {
 
         // If we have a name binding, print it first
         if let Some(name) = self.name {
+            result.push_str(name.data(db));
+            result.push_str(": ");
             if self.is_mut {
                 result.push_str("mut ");
             }
-            result.push_str(name.data(db));
-            result.push_str(": ");
             let path = unwrap_partial(self.key_path, "EffectParam::key_path").pretty_print(db);
             result.push_str(&path);
         } else {

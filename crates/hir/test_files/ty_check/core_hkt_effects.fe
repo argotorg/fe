@@ -56,7 +56,7 @@ impl Logger for ConsoleLogger {
 }
 
 pub fn log_and_chain(x: i32) -> Result<(), Option<i32>>
-  uses (mut logger: Logger)
+  uses (logger: mut Logger)
 {
     logger.log()
 
@@ -79,7 +79,7 @@ pub fn with_logger<R, L: Logger, F: Fn<(), R>>(logger: L, _ func: F) -> R {
 }
 
 pub fn log_once()
-  uses (mut logger: Logger)
+  uses (logger: mut Logger)
 {
     logger.log()
 }

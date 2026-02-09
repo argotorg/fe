@@ -3,7 +3,7 @@ use std::evm::{Evm, RawMem, RawOps, RawStorage, StorageMap, StorPtr}
 const BALANCES_SALT: u256 = 0
 const ALLOWANCES_SALT: u256 = 1
 
-fn abi_encode(value: u256) -> ! uses (mut ops: RawOps) {
+fn abi_encode(value: u256) -> ! uses (ops: mut RawOps) {
     let ptr: u256 = 0
     ops.mstore(ptr, value)
     ops.return_data(ptr, 32)
@@ -17,7 +17,7 @@ fn get_balance(addr: u256) -> u256
 }
 
 fn set_balance(addr: u256, value: u256)
-    uses (mut balances: StorageMap<u256, u256, BALANCES_SALT>)
+    uses (balances: mut StorageMap<u256, u256, BALANCES_SALT>)
 {
     balances.set(key: addr, value)
 }
@@ -29,13 +29,13 @@ fn get_allowance(addr: u256) -> u256
 }
 
 fn set_allowance(addr: u256, value: u256)
-    uses (mut allowances: StorageMap<u256, u256, ALLOWANCES_SALT>)
+    uses (allowances: mut StorageMap<u256, u256, ALLOWANCES_SALT>)
 {
     allowances.set(key: addr, value)
 }
 
 fn transfer(from: u256, to: u256, amount: u256) -> u256
-    uses (mut balances: StorageMap<u256, u256, BALANCES_SALT>)
+    uses (balances: mut StorageMap<u256, u256, BALANCES_SALT>)
 {
     let from_balance = balances.get(key: from)
     if from_balance < amount {
@@ -48,7 +48,7 @@ fn transfer(from: u256, to: u256, amount: u256) -> u256
 }
 
 #[contract_init(BalanceMap)]
-fn init() uses (mut evm: Evm) {
+fn init() uses (evm: mut Evm) {
     let len = evm.code_region_len(runtime)
     let offset = evm.code_region_offset(runtime)
     evm.codecopy(dest: 0, offset, len)
@@ -56,7 +56,7 @@ fn init() uses (mut evm: Evm) {
 }
 
 #[contract_runtime(BalanceMap)]
-fn runtime() uses (mut evm: Evm) {
+fn runtime() uses (evm: mut Evm) {
     let mut balances: StorageMap<u256, u256, BALANCES_SALT> = StorageMap::new()
     let mut allowances: StorageMap<u256, u256, ALLOWANCES_SALT> = StorageMap::new()
     let selector = evm.calldataload(0) >> 224

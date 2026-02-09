@@ -48,7 +48,7 @@ pub contract EnumContract {
 }
 
 #[test]
-fn test_enum() uses (mut evm: Evm) {
+fn test_enum() uses (evm: mut Evm) {
     let contract_addr = evm.create2<EnumContract>(value: 0, args: (), salt: 0)
     assert(contract_addr.inner != 0)
 

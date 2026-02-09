@@ -6,7 +6,7 @@ struct Counter {
     i: usize,
 }
 
-fn next_idx() -> usize uses (mut counter: Counter) {
+fn next_idx() -> usize uses (counter: mut Counter) {
     counter.i = counter.i + 1
     counter.i
 }

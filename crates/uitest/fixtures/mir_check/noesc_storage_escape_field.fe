@@ -9,7 +9,7 @@ struct Wrapper {
     e: Esc,
 }
 
-pub fn noesc_storage_escape_field() uses (mut slot: Wrapper) {
+pub fn noesc_storage_escape_field() uses (slot: mut Wrapper) {
     let mut x: u256 = 0
     let e: Esc = Esc { h: mut x, tag: 0 }
     slot.e = e

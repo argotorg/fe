@@ -6,7 +6,7 @@ pub struct Worker {}
 
 impl Worker {
     pub fn run(self)
-      uses (mut storage: Storage)
+      uses (storage: mut Storage)
     {
         storage.value += 1
     }

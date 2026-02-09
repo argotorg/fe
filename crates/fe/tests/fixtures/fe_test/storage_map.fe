@@ -65,7 +65,7 @@ pub contract BalanceMap {
 }
 
 #[test]
-fn test_storage_map() uses (mut evm: Evm) {
+fn test_storage_map() uses (evm: mut Evm) {
     let contract_addr = evm.create2<BalanceMap>(value: 0, args: (), salt: 0)
     assert(contract_addr.inner != 0)
 

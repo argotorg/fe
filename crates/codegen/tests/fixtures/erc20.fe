@@ -11,7 +11,7 @@ const BALANCES_SALT: u256 = 0
 const ALLOWANCES_SALT: u256 = 1
 const ROLES_SALT: u256 = 2
 
-pub contract CoolCoin uses (mut ctx: Ctx, mut log: Log) {
+pub contract CoolCoin uses (ctx: mut Ctx, log: mut Log) {
     // Storage fields. These act as effects within the contract.
     mut store: TokenStore,
     mut auth: AccessControl,
@@ -104,7 +104,7 @@ pub contract CoolCoin uses (mut ctx: Ctx, mut log: Log) {
 }
 
 fn transfer(from: Address, to: Address, amount: u256)
-    uses (mut store: TokenStore, mut log: Log)
+    uses (store: mut TokenStore, log: mut Log)
 {
     assert(from != Address::zero())
     assert(to != Address::zero())
@@ -119,7 +119,7 @@ fn transfer(from: Address, to: Address, amount: u256)
 }
 
 fn mint(to: Address, amount: u256)
-    uses (mut store: TokenStore, mut log: Log)
+    uses (store: mut TokenStore, log: mut Log)
 {
     assert(to != Address::zero())
 
@@ -130,7 +130,7 @@ fn mint(to: Address, amount: u256)
 }
 
 fn burn(from: Address, amount: u256)
-    uses (mut store: TokenStore, mut log: Log)
+    uses (store: mut TokenStore, log: mut Log)
 {
     assert(from != Address::zero())
 
@@ -144,7 +144,7 @@ fn burn(from: Address, amount: u256)
 }
 
 fn approve(owner: Address, spender: Address, amount: u256)
-    uses (mut store: TokenStore, mut log: Log)
+    uses (store: mut TokenStore, log: mut Log)
 {
     assert(owner != Address::zero())
     assert(spender != Address::zero())
@@ -156,7 +156,7 @@ fn approve(owner: Address, spender: Address, amount: u256)
 
 // Internal function to spend allowance
 fn spend_allowance(owner: Address, spender: Address, amount: u256)
-    uses (mut store: TokenStore)
+    uses (store: mut TokenStore)
 {
     let current = store.allowances.get((owner, spender))
     // if current != u256::MAX { // TODO: define ::MAX constants

@@ -1,5 +1,5 @@
 pub  unsafe fn  advanced_expressions<T, U: Trait>(  arr : Array<i32,10> ,  ctx:Ctx , storage:Storage<T> )
-  uses (ctx: Ctx, mut st: Storage<T>)
+  uses (ctx: Ctx, st: mut Storage<T>)
   where T: Trait2, U: Trait3 {
     let  first=arr[ 0 ]
     let  nested=(arr[ 1 ]  +  (arr[2]) )

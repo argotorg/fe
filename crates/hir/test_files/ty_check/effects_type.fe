@@ -17,7 +17,7 @@ pub fn mint_twice(_ amount: u64)
 }
 
 pub fn mint(_ amount: u64)
-  uses (mut st: Storage)
+  uses (st: mut Storage)
 {
     st.value += amount
 }

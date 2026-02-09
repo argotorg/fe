@@ -12,7 +12,7 @@ struct MemOuter {
     inner: Inner,
 }
 
-fn abi_encode(value: u256) -> ! uses (mut ops: RawOps) {
+fn abi_encode(value: u256) -> ! uses (ops: mut RawOps) {
     ops.mstore(0, value)
     ops.return_data(0, 32)
 }
@@ -24,7 +24,7 @@ fn read_inner() -> u256
 }
 
 fn write_inner(value: u256)
-  uses (mut outer: Outer)
+  uses (outer: mut Outer)
 {
     outer.inner.value = value
 }
@@ -36,7 +36,7 @@ fn mem_read(value: u256) -> u256 {
 }
 
 #[contract_init(NestedStruct)]
-fn init() uses (mut evm: Evm) {
+fn init() uses (evm: mut Evm) {
     let len = evm.code_region_len(runtime)
     let offset = evm.code_region_offset(runtime)
     evm.codecopy(dest: 0, offset, len)
@@ -44,7 +44,7 @@ fn init() uses (mut evm: Evm) {
 }
 
 #[contract_runtime(NestedStruct)]
-fn runtime() uses (mut evm: Evm) {
+fn runtime() uses (evm: mut Evm) {
     let mut outer: StorPtr<Outer> = evm.stor_ptr(0)
     with (outer, RawOps = evm) {
         let selector = evm.calldataload(0) >> 224

@@ -5,12 +5,12 @@ use std::evm::{Address, Ctx, Evm, RawMem, RawOps, RawStorage, StorageMap, StorPt
 const BALANCES_SALT: u256 = 0
 const ALLOWANCES_SALT: u256 = 1
 
-fn abi_encode_u256(value: u256) -> ! uses (mut ops: RawOps) {
+fn abi_encode_u256(value: u256) -> ! uses (ops: mut RawOps) {
     ops.mstore(0, value)
     ops.return_data(0, 32)
 }
 
-fn abi_encode_string(word: u256, len: u256) -> ! uses (mut ops: RawOps) {
+fn abi_encode_string(word: u256, len: u256) -> ! uses (ops: mut RawOps) {
     // ABI encoding for a single dynamic string literal
     ops.mstore(0, 32)   // offset to data
     ops.mstore(32, len) // string length
@@ -83,7 +83,7 @@ impl Erc20 {
     }
 }
 
-fn do_init() uses (mut erc20: Erc20, ctx: Ctx, ops: RawOps) {
+fn do_init() uses (erc20: mut Erc20, ctx: Ctx, ops: RawOps) {
     erc20.set_owner_once(owner: ctx.caller())
 }
 
@@ -95,22 +95,22 @@ fn allowance(owner: Address, spender: Address) -> u256 uses (erc20: Erc20) {
     erc20.allowances.get(key: (owner, spender))
 }
 
-fn transfer(to: Address, amount: u256) -> u256 uses (mut erc20: Erc20, ctx: Ctx, ops: RawOps) {
+fn transfer(to: Address, amount: u256) -> u256 uses (erc20: mut Erc20, ctx: Ctx, ops: RawOps) {
     erc20.transfer(from: ctx.caller(), to: to, amount: amount)
     1
 }
 
-fn approve(spender: Address, amount: u256) -> u256 uses (mut erc20: Erc20, ctx: Ctx) {
+fn approve(spender: Address, amount: u256) -> u256 uses (erc20: mut Erc20, ctx: Ctx) {
     erc20.approve(owner: ctx.caller(), spender: spender, value: amount)
     1
 }
 
-fn transfer_from(from: Address, to: Address, amount: u256) -> u256 uses (mut erc20: Erc20, ctx: Ctx, ops: RawOps) {
+fn transfer_from(from: Address, to: Address, amount: u256) -> u256 uses (erc20: mut Erc20, ctx: Ctx, ops: RawOps) {
     erc20.transfer_from(owner: from, to: to, amount: amount)
     1
 }
 
-fn mint(to: Address, amount: u256) -> u256 uses (mut erc20: Erc20, ctx: Ctx, ops: RawOps) {
+fn mint(to: Address, amount: u256) -> u256 uses (erc20: mut Erc20, ctx: Ctx, ops: RawOps) {
     erc20.mint(to: to, amount: amount)
     1
 }
@@ -118,7 +118,7 @@ fn mint(to: Address, amount: u256) -> u256 uses (mut erc20: Erc20, ctx: Ctx, ops
 // Entry points ----------------------------------------------------------
 
 #[contract_init(Erc20Contract)]
-fn init() uses (mut evm: Evm) {
+fn init() uses (evm: mut Evm) {
     let mut erc20: StorPtr<Erc20> = evm.stor_ptr(0)
     with (erc20, Ctx = evm, RawOps = evm) {
         do_init()
@@ -130,7 +130,7 @@ fn init() uses (mut evm: Evm) {
 }
 
 #[contract_runtime(Erc20Contract)]
-fn runtime() uses (mut evm: Evm) {
+fn runtime() uses (evm: mut Evm) {
     let mut erc20: StorPtr<Erc20> = evm.stor_ptr(0)
     let selector = evm.calldataload(0) >> 224
     with (erc20, Ctx = evm, RawOps = evm) {

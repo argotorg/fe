@@ -51,7 +51,7 @@ impl core::ops::Eq for Address {
 }
 
 fn withdraw(amount: u256) -> bool
-  uses (ctx: Ctx, owner: Address, mut balance: u256)
+  uses (ctx: Ctx, owner: Address, balance: mut u256)
 {
     if ctx.caller() == owner && amount >= balance {
         balance -= amount
