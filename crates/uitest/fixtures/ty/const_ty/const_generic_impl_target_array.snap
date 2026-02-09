@@ -1,5 +1,6 @@
 ---
 source: crates/uitest/tests/ty.rs
+assertion_line: 46
 expression: diags
 input_file: fixtures/ty/const_ty/const_generic_impl_target_array.fe
 ---
@@ -8,11 +9,3 @@ error[8-0000]: type mismatch
    │
 26 │     second
    │     ^^^^^^ expected `()`, but `ref u256` is given
-
-error[8-0068]: explicit reborrow required
-   ┌─ const_generic_impl_target_array.fe:23:27
-   │
-23 │     let first: ref u256 = borrowed.get(0)
-   │                           ^^^^^^^^ this argument must be explicitly borrowed as `ref`
-   │
-   = help: use `ref <place>` when passing a place to a `ref` parameter

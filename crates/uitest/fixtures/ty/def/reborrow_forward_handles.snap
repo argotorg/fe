@@ -2,6 +2,6 @@
 source: crates/uitest/tests/ty.rs
 assertion_line: 27
 expression: diags
-input_file: fixtures/ty/def/method_receiver_modes.fe
+input_file: fixtures/ty/def/reborrow_forward_handles.fe
 ---
 

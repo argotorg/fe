@@ -259,7 +259,10 @@ impl<'db> Callable<'db> {
             }
             let expected = tc.normalize_ty(expected);
 
-            tc.equate_ty(given.expr_prop.ty, expected, given.expr_span.clone());
+            let actual = tc
+                .try_coerce_copy_borrow_to_expected(given.expr_prop.ty, expected)
+                .unwrap_or(given.expr_prop.ty);
+            tc.equate_ty(actual, expected, given.expr_span.clone());
             let expected = tc.normalize_ty(expected);
 
             // Enforce explicit call-site borrow syntax for places.
@@ -270,6 +273,10 @@ impl<'db> Callable<'db> {
             if let Some(params) = func_params.as_ref() {
                 let arg_is_place = tc.env.expr_place(given.expr).is_some();
 
+                let given_borrow_kind = tc
+                    .normalize_ty(given.expr_prop.ty)
+                    .as_borrow(db)
+                    .map(|(kind, _)| kind);
                 if let Some((kind, _)) = expected.as_borrow(db)
                     && arg_is_place
                     && !is_unary(
@@ -279,6 +286,7 @@ impl<'db> Callable<'db> {
                             BorrowKind::Ref => UnOp::Ref,
                         },
                     )
+                    && given_borrow_kind != Some(kind)
                 {
                     tc.push_diag(BodyDiag::ExplicitReborrowRequired {
                         primary: given.expr_span.clone(),

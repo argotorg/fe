@@ -1,0 +1,29 @@
+struct NoCopy {
+    value: u8,
+}
+
+fn take_u8(x: u8) -> u8 {
+    x
+}
+
+fn take_no_copy(_x: NoCopy) {}
+
+fn copy_from_ref(mut value: u8) -> u8 {
+    let r: ref u8 = ref value
+    take_u8(r)
+}
+
+fn copy_from_mut(mut value: u8) -> u8 {
+    let m: mut u8 = mut value
+    take_u8(m)
+}
+
+fn no_copy_from_ref(mut value: NoCopy) {
+    let r: ref NoCopy = ref value
+    take_no_copy(r)
+}
+
+fn no_copy_from_mut(mut value: NoCopy) {
+    let m: mut NoCopy = mut value
+    take_no_copy(m)
+}

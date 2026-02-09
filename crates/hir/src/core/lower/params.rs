@@ -185,11 +185,14 @@ impl<'db> FuncParam<'db> {
             TypeId::lower_ast_partial(ctxt, ast.ty())
         };
 
-        let mode = ty
+        let mode = if ty
             .to_opt()
             .is_some_and(|ty| matches!(ty.data(ctxt.db()), TypeKind::Mode(TypeMode::Own, _)))
-            .then_some(FuncParamMode::Own)
-            .unwrap_or(FuncParamMode::View);
+        {
+            FuncParamMode::Own
+        } else {
+            FuncParamMode::View
+        };
 
         Self {
             mode,
