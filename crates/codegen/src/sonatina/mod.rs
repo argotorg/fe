@@ -2123,7 +2123,7 @@ fn lower_place_address<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 total_offset += if is_slot_addressed {
                     layout::field_offset_slots(ctx.db, current_ty, *field_idx)
                 } else {
-                    layout::field_offset_bytes_or_word_aligned_in(
+                    layout::field_offset_memory_in(
                         ctx.db,
                         ctx.target_layout,
                         current_ty,
@@ -2148,7 +2148,7 @@ fn lower_place_address<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                         layout::variant_field_offset_slots(ctx.db, *enum_ty, *variant, *field_idx);
                 } else {
                     total_offset += ctx.target_layout.discriminant_size_bytes;
-                    total_offset += layout::variant_field_offset_bytes_or_word_aligned_in(
+                    total_offset += layout::variant_field_offset_memory_in(
                         ctx.db,
                         ctx.target_layout,
                         *enum_ty,
@@ -2182,7 +2182,7 @@ fn lower_place_address<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 let stride = if is_slot_addressed {
                     layout::array_elem_stride_slots(ctx.db, current_ty)
                 } else {
-                    layout::array_elem_stride_bytes_in(ctx.db, ctx.target_layout, current_ty)
+                    layout::array_elem_stride_memory_in(ctx.db, ctx.target_layout, current_ty)
                 }
                 .ok_or_else(|| {
                     LowerError::Unsupported("projection: array index on non-array type".to_string())
@@ -2501,8 +2501,7 @@ fn lower_alloc<C: sonatina_ir::func_cursor::FuncCursor>(
         .ok_or_else(|| LowerError::Internal(format!("unknown local: {dest:?}")))?
         .ty;
 
-    let Some(size_bytes) =
-        layout::ty_size_bytes_or_word_aligned_in(ctx.db, ctx.target_layout, alloc_ty)
+    let Some(size_bytes) = layout::ty_memory_size_or_word_in(ctx.db, ctx.target_layout, alloc_ty)
     else {
         return Err(LowerError::Unsupported(format!(
             "cannot determine allocation size for `{}`",

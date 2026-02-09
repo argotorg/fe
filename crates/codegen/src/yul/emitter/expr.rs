@@ -494,7 +494,7 @@ impl<'db> FunctionEmitter<'db> {
                     total_offset += if is_slot_addressed {
                         layout::field_offset_slots(self.db, current_ty, *field_idx)
                     } else {
-                        layout::field_offset_bytes_or_word_aligned_in(
+                        layout::field_offset_memory_in(
                             self.db,
                             &self.layout,
                             current_ty,
@@ -524,7 +524,7 @@ impl<'db> FunctionEmitter<'db> {
                         );
                     } else {
                         total_offset += self.layout.discriminant_size_bytes;
-                        total_offset += layout::variant_field_offset_bytes_or_word_aligned_in(
+                        total_offset += layout::variant_field_offset_memory_in(
                             self.db,
                             &self.layout,
                             *enum_ty,
@@ -550,7 +550,7 @@ impl<'db> FunctionEmitter<'db> {
                     let stride = if is_slot_addressed {
                         layout::array_elem_stride_slots(self.db, current_ty)
                     } else {
-                        layout::array_elem_stride_bytes_in(self.db, &self.layout, current_ty)
+                        layout::array_elem_stride_memory_in(self.db, &self.layout, current_ty)
                     }
                     .ok_or_else(|| {
                         YulError::Unsupported(

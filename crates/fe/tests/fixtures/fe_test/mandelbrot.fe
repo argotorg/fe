@@ -5,10 +5,6 @@
 /// return, enum with data, comparisons, bit shifts, arithmetic, function
 /// calls in loops, wildcard patterns, if-expressions.
 ///
-/// KNOWN FAILURE: This test fails on both backends due to the EVM memory
-/// layout bug — sub-word fields (bool) corrupt adjacent memory because
-/// MSTORE always writes 32 bytes. See docs/evm-memory-layout-bug.md.
-
 use std::evm::{Evm, Call}
 use std::evm::effects::assert
 use core::abi::{Abi, AbiEncoder, AbiSize, Encode}
