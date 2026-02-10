@@ -367,11 +367,17 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         let root_value = self.builder.body.value(root);
-        match root_value.origin {
-            ValueOrigin::Local(_) => true,
-            ValueOrigin::PlaceRef(_) | ValueOrigin::MoveOut { .. } | ValueOrigin::FieldPtr(_) => {
-                true
+        if root_value.ty.as_capability(self.db).is_some() {
+            match crate::repr::repr_kind_for_ty(self.db, &self.core, root_value.ty) {
+                crate::repr::ReprKind::Zst | crate::repr::ReprKind::Word => return false,
+                crate::repr::ReprKind::Ptr(_) | crate::repr::ReprKind::Ref => {}
             }
+        }
+        match root_value.origin {
+            ValueOrigin::Local(_)
+            | ValueOrigin::PlaceRef(_)
+            | ValueOrigin::MoveOut { .. }
+            | ValueOrigin::FieldPtr(_) => true,
             _ => false,
         }
     }
