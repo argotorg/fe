@@ -49,16 +49,13 @@ pub async fn handle_prepare(
     backend: &Backend,
     params: CallHierarchyPrepareParams,
 ) -> Result<Option<Vec<CallHierarchyItem>>, ResponseError> {
-    let path_str = params
-        .text_document_position_params
-        .text_document
-        .uri
-        .path();
-
-    let Ok(url) = url::Url::from_file_path(path_str) else {
-        return Ok(None);
-    };
-
+    let url = backend.map_client_uri_to_internal(
+        params
+            .text_document_position_params
+            .text_document
+            .uri
+            .clone(),
+    );
     let Some(file) = backend.db.workspace().get(&backend.db, &url) else {
         return Ok(None);
     };
@@ -83,7 +80,10 @@ pub async fn handle_prepare(
         _ => return Ok(None),
     };
 
-    let item = func_to_hierarchy_item(&backend.db, func);
+    let item = func_to_hierarchy_item(&backend.db, func).map(|mut item| {
+        item.uri = backend.map_internal_uri_to_client(item.uri);
+        item
+    });
     Ok(item.map(|i| vec![i]))
 }
 
@@ -92,12 +92,7 @@ pub async fn handle_incoming_calls(
     backend: &Backend,
     params: CallHierarchyIncomingCallsParams,
 ) -> Result<Option<Vec<CallHierarchyIncomingCall>>, ResponseError> {
-    let path_str = params.item.uri.path();
-
-    let Ok(url) = url::Url::from_file_path(path_str) else {
-        return Ok(None);
-    };
-
+    let url = backend.map_client_uri_to_internal(params.item.uri.clone());
     let Some(file) = backend.db.workspace().get(&backend.db, &url) else {
         return Ok(None);
     };
@@ -125,6 +120,8 @@ pub async fn handle_incoming_calls(
         .into_iter()
         .filter_map(|(caller, ranges)| {
             let item = func_to_hierarchy_item(&backend.db, caller)?;
+            let mut item = item;
+            item.uri = backend.map_internal_uri_to_client(item.uri);
             Some(CallHierarchyIncomingCall {
                 from: item,
                 from_ranges: ranges,
@@ -193,12 +190,7 @@ pub async fn handle_outgoing_calls(
     backend: &Backend,
     params: CallHierarchyOutgoingCallsParams,
 ) -> Result<Option<Vec<CallHierarchyOutgoingCall>>, ResponseError> {
-    let path_str = params.item.uri.path();
-
-    let Ok(url) = url::Url::from_file_path(path_str) else {
-        return Ok(None);
-    };
-
+    let url = backend.map_client_uri_to_internal(params.item.uri.clone());
     let Some(file) = backend.db.workspace().get(&backend.db, &url) else {
         return Ok(None);
     };
@@ -226,6 +218,8 @@ pub async fn handle_outgoing_calls(
         .into_iter()
         .filter_map(|(callee, ranges)| {
             let item = func_to_hierarchy_item(&backend.db, callee)?;
+            let mut item = item;
+            item.uri = backend.map_internal_uri_to_client(item.uri);
             Some(CallHierarchyOutgoingCall {
                 to: item,
                 from_ranges: ranges,
