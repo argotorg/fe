@@ -14,16 +14,16 @@ fn example() -> Bar:
     v3: Bar = 0
     switch true [true => bb1, false => bb2] else bb2
   bb1:
-    v3 = move_out(mem[v0])
+    v3 = v0
     jmp bb3
   bb2:
-    v3 = move_out(mem[v1])
+    v3 = v1
     jmp bb3
   bb3:
     v2: Bar = v3
-    ret move_out(mem[v2])
+    ret v2
 
 fn f() -> Bar:
   bb0:
     v0: Bar = bar_h9f829bcd60910980_t_ha4fe9660e49389ad_make()
-    ret move_out(mem[v0])
+    ret v0

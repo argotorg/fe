@@ -199,7 +199,6 @@ pub fn collect_mir_diagnostics<'db>(
     for func in &mut functions {
         crate::transform::canonicalize_transparent_newtypes(db, &mut func.body);
         crate::transform::insert_temp_binds(db, &mut func.body);
-        crate::transform::canonicalize_zero_sized(db, &mut func.body);
     }
 
     for func in &functions {
@@ -296,7 +295,6 @@ pub fn lower_module<'db>(
     for func in &mut functions {
         crate::transform::canonicalize_transparent_newtypes(db, &mut func.body);
         crate::transform::insert_temp_binds(db, &mut func.body);
-        crate::transform::canonicalize_zero_sized(db, &mut func.body);
     }
     for func in &functions {
         if let Some(diag) = crate::analysis::noesc::check_noesc_escapes(db, func) {

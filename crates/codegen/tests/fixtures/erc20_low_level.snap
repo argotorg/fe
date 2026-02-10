@@ -80,7 +80,7 @@ object "Erc20Contract" {
         mstore(0x40, add(v0, 64))
         mstore(v0, $owner)
         mstore(add(v0, 32), $spender)
-        let v1 := $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get___Address__Address__u256_1__12414c27d5bfff1f(0, v0)
+        let v1 := $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor___Address__Address__u256_1__12414c27d5bfff1f(0, v0)
         ret := v1
         leave
       }
@@ -92,7 +92,7 @@ object "Erc20Contract" {
       }
       function $balance_of__StorPtr_Erc20___2745299687a147d4($addr, $erc20) -> ret {
         pop($erc20)
-        let v0 := $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(0, $addr)
+        let v0 := $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(0, $addr)
         ret := v0
         leave
       }
@@ -105,7 +105,7 @@ object "Erc20Contract" {
         mstore(0x40, add(v0, 64))
         mstore(v0, $owner)
         mstore(add(v0, 32), $spender)
-        let v1 := $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get___Address__Address__u256_1__12414c27d5bfff1f(0, v0)
+        let v1 := $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor___Address__Address__u256_1__12414c27d5bfff1f(0, v0)
         ret := v1
         leave
       }
@@ -118,12 +118,12 @@ object "Erc20Contract" {
         mstore(0x40, add(v0, 64))
         mstore(v0, $owner)
         mstore(add(v0, 32), $spender)
-        $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set___Address__Address__u256_1__12414c27d5bfff1f(0, v0, $value)
+        $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor___Address__Address__u256_1__12414c27d5bfff1f(0, v0, $value)
         leave
       }
       function $erc20_h7a8a7a2800ba6809_balance_of_stor($self, $addr) -> ret {
         pop($self)
-        let v0 := $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(0, $addr)
+        let v0 := $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(0, $addr)
         ret := v0
         leave
       }
@@ -136,7 +136,7 @@ object "Erc20Contract" {
         }
         let v3 := $erc20_h7a8a7a2800ba6809_balance_of_stor($self, $to)
         pop($self)
-        $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(0, $to, add(v3, $amount))
+        $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(0, $to, add(v3, $amount))
         let v4 := sload($self)
         sstore($self, add(v4, $amount))
         leave
@@ -157,7 +157,7 @@ object "Erc20Contract" {
         mstore(0x40, add(v3, 64))
         mstore(v3, $owner)
         mstore(add(v3, 32), v0)
-        $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set___Address__Address__u256_1__12414c27d5bfff1f(0, v3, sub(v1, $amount))
+        $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor___Address__Address__u256_1__12414c27d5bfff1f(0, v3, sub(v1, $amount))
         leave
       }
       function $erc20_h7a8a7a2800ba6809_transfer_stor__Evm_hef0af3106e109414__3af54274b2985741($self, $from, $to, $amount, $ops) {
@@ -168,9 +168,9 @@ object "Erc20Contract" {
         }
         let v2 := $erc20_h7a8a7a2800ba6809_balance_of_stor($self, $to)
         pop($self)
-        $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(0, $from, sub(v0, $amount))
+        $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(0, $from, sub(v0, $amount))
         pop($self)
-        $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(0, $to, add(v2, $amount))
+        $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(0, $to, add(v2, $amount))
         leave
       }
       function $mint__StorPtr_Erc20__Evm_hef0af3106e109414_Evm_hef0af3106e109414__a43599a61c4c3ec5($to, $amount, $erc20, $ctx, $ops) -> ret {
@@ -259,24 +259,24 @@ object "Erc20Contract" {
         ret := v1
         leave
       }
-      function $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3($self, $key) -> ret {
+      function $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3($self, $key) -> ret {
         let v0 := $storagemap_get_word_with_salt__Address_h257056268eac7027__5ab99f7153cdba29($key, 0)
         let v1 := $u256_h3271ca15373d4483_wordrepr_h7483d41ac8178d88_from_word(v0)
         ret := v1
         leave
       }
-      function $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get___Address__Address__u256_1__12414c27d5bfff1f($self, $key) -> ret {
+      function $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor___Address__Address__u256_1__12414c27d5bfff1f($self, $key) -> ret {
         let v0 := $storagemap_get_word_with_salt___Address__Address___c32d499da259c78e($key, 1)
         let v1 := $u256_h3271ca15373d4483_wordrepr_h7483d41ac8178d88_from_word(v0)
         ret := v1
         leave
       }
-      function $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3($self, $key, $value) {
+      function $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3($self, $key, $value) {
         let v0 := $u256_h3271ca15373d4483_wordrepr_h7483d41ac8178d88_to_word($value)
         $storagemap_set_word_with_salt__Address_h257056268eac7027__5ab99f7153cdba29($key, 0, v0)
         leave
       }
-      function $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set___Address__Address__u256_1__12414c27d5bfff1f($self, $key, $value) {
+      function $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor___Address__Address__u256_1__12414c27d5bfff1f($self, $key, $value) {
         let v0 := $u256_h3271ca15373d4483_wordrepr_h7483d41ac8178d88_to_word($value)
         $storagemap_set_word_with_salt___Address__Address___c32d499da259c78e($key, 1, v0)
         leave

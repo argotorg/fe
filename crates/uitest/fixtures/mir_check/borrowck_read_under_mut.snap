@@ -5,9 +5,9 @@ expression: res
 input_file: fixtures/mir_check/borrowck_read_under_mut.fe
 ---
 error[10-0002]: borrow conflict in `fn borrowck_read_under_mut`
-  ┌─ borrowck_read_under_mut.fe:6:19
+  ┌─ borrowck_read_under_mut.fe:6:5
   │
 5 │     let p: mut u256 = mut x
   │                           - `x` is borrowed here
 6 │     let y: u256 = x
-  │                   ^ access overlaps an active `mut` borrow
+  │     ^^^^^^^^^^^^^^^ access overlaps an active `mut` borrow

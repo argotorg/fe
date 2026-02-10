@@ -411,6 +411,17 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return Some(Place::new(base, MirProjectionPath::new()));
         }
 
+        let mut root = value;
+        while let ValueOrigin::TransparentCast { value } = &self.builder.body.value(root).origin {
+            root = *value;
+        }
+        if let ValueOrigin::Local(local) | ValueOrigin::PlaceRoot(local) =
+            &self.builder.body.value(root).origin
+        {
+            let base = self.alloc_value(inner_ty, ValueOrigin::PlaceRoot(*local), ValueRepr::Word);
+            return Some(Place::new(base, MirProjectionPath::new()));
+        }
+
         // Capability-typed rvalues can appear as immediates (e.g. integer literals coerced to
         // `view T`). Materialize storage in memory so subsequent loads don't treat the immediate
         // word as a pointer address (like `mload(10)`).
@@ -921,28 +932,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         let mut receiver_space = None;
         if self.is_method_call(expr) && !args.is_empty() {
-            let needs_space = if let Some(trait_inst) = callable.trait_inst() {
-                trait_inst.args(self.db).first().copied().is_some_and(|ty| {
-                    self.value_repr_for_ty(ty, AddressSpaceKind::Memory)
-                        .address_space()
-                        .is_some()
-                })
-            } else {
-                callable
-                    .callable_def
-                    .receiver_ty(self.db)
-                    .is_some_and(|binder| {
-                        let ty = binder.instantiate_identity();
-                        self.value_repr_for_ty(ty, AddressSpaceKind::Memory)
-                            .address_space()
-                            .is_some()
-                    })
-            };
-            if needs_space {
-                let space = self.value_address_space(args[0]);
-                if !matches!(space, AddressSpaceKind::Memory) {
-                    receiver_space = Some(space);
-                }
+            let space = self.value_address_space_or_memory(args[0]);
+            if space != AddressSpaceKind::Memory {
+                receiver_space = Some(space);
             }
         }
 
@@ -1906,58 +1898,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
     }
 
-    fn ensure_place_is_spilled(&mut self, place: &Place<'db>) {
-        let base_value = self.builder.body.value(place.base);
-        let ValueOrigin::Local(local) = &base_value.origin else {
-            return;
-        };
-        if !matches!(base_value.repr, ValueRepr::Ref(_))
-            || self.builder.body.effect_param_locals.contains(local)
-            || matches!(
-                crate::repr::repr_kind_for_ty(self.db, &self.core, base_value.ty),
-                crate::repr::ReprKind::Ref
-            )
-        {
-            return;
-        }
-
-        self.ensure_spill_slot_for_local(*local, base_value.ty);
-    }
-
-    fn ensure_spill_slot_for_local(&mut self, local: LocalId, ty: TyId<'db>) -> LocalId {
-        if let Some(&spill) = self.builder.body.spill_slots.get(&local) {
-            return spill;
-        }
-
-        let spill = self.alloc_temp_local(ty, false, "spill");
-        self.builder.body.locals[spill.index()].address_space = AddressSpaceKind::Memory;
-        self.builder.body.spill_slots.insert(local, spill);
-        self.assign(
-            None,
-            Some(spill),
-            Rvalue::Alloc {
-                address_space: AddressSpaceKind::Memory,
-            },
-        );
-
-        if !layout::is_zero_sized_ty(self.db, ty) {
-            let place_base = self.alloc_value(ty, ValueOrigin::Local(spill), ValueRepr::Word);
-            let place = Place::new(place_base, MirProjectionPath::new());
-            let value = self.alloc_value(
-                ty,
-                ValueOrigin::Local(local),
-                self.value_repr_for_ty(ty, AddressSpaceKind::Memory),
-            );
-            self.push_inst_here(MirInst::Store {
-                source: SourceInfoId::SYNTHETIC,
-                place,
-                value,
-            });
-        }
-
-        spill
-    }
-
     fn place_for_expr(&mut self, expr: ExprId) -> Option<Place<'db>> {
         match expr.data(self.db, self.body) {
             Partial::Present(Expr::Path(_)) => {
@@ -2591,17 +2531,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let result_local = self.alloc_temp_local(usize_ty, false, "seq_len");
 
         let mut receiver_space = None;
-        let needs_space = callable
-            .callable_def
-            .receiver_ty(self.db)
-            .is_some_and(|binder| {
-                let ty = binder.instantiate_identity();
-                self.value_repr_for_ty(ty, AddressSpaceKind::Memory)
-                    .address_space()
-                    .is_some()
-            });
-        if needs_space {
-            receiver_space = Some(self.value_address_space(receiver));
+        let space = self.value_address_space_or_memory(receiver);
+        if space != AddressSpaceKind::Memory {
+            receiver_space = Some(space);
         }
 
         let mut effect_args = Vec::new();
@@ -2660,17 +2592,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         let mut receiver_space = None;
-        let needs_space = callable
-            .callable_def
-            .receiver_ty(self.db)
-            .is_some_and(|binder| {
-                let ty = binder.instantiate_identity();
-                self.value_repr_for_ty(ty, AddressSpaceKind::Memory)
-                    .address_space()
-                    .is_some()
-            });
-        if needs_space {
-            receiver_space = Some(self.value_address_space(receiver));
+        let space = self.value_address_space_or_memory(receiver);
+        if space != AddressSpaceKind::Memory {
+            receiver_space = Some(space);
         }
 
         let mut effect_args = Vec::new();
