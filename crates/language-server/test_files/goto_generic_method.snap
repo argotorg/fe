@@ -1,0 +1,65 @@
+---
+source: crates/language-server/src/functionality/goto.rs
+assertion_line: 316
+expression: snapshot
+input_file: test_files/goto_generic_method.fe
+---
+note: 
+  ┌─ goto_generic_method.fe:2:16
+  │
+2 │     fn process(self) -> i32
+  │                ^^^^ -> goto_generic_method::Processor
+
+note: 
+  ┌─ goto_generic_method.fe:9:6
+  │
+9 │ impl Processor for Widget {
+  │      ^^^^^^^^^ -> goto_generic_method::Processor
+
+note: 
+  ┌─ goto_generic_method.fe:9:20
+  │
+9 │ impl Processor for Widget {
+  │                    ^^^^^^ -> goto_generic_method::Widget
+
+note: 
+   ┌─ goto_generic_method.fe:10:16
+   │
+10 │     fn process(self) -> i32 {
+   │                ^^^^ -> local: Widget
+
+note: 
+   ┌─ goto_generic_method.fe:11:9
+   │
+11 │         self.id
+   │         ^^^^ -> local: Widget
+
+note: 
+   ┌─ goto_generic_method.fe:15:19
+   │
+15 │ fn use_generic<P: Processor>(p: P) -> i32 {
+   │                   ^^^^^^^^^ -> goto_generic_method::Processor
+
+note: 
+   ┌─ goto_generic_method.fe:15:33
+   │
+15 │ fn use_generic<P: Processor>(p: P) -> i32 {
+   │                                 ^ -> goto_generic_method::use_generic::P
+
+note: 
+   ┌─ goto_generic_method.fe:16:5
+   │
+16 │     p.process()
+   │     ^ -> local: P
+
+note: 
+   ┌─ goto_generic_method.fe:19:20
+   │
+19 │ fn use_concrete(w: Widget) -> i32 {
+   │                    ^^^^^^ -> goto_generic_method::Widget
+
+note: 
+   ┌─ goto_generic_method.fe:20:5
+   │
+20 │     w.process()
+   │     ^ -> local: Widget

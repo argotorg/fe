@@ -6,7 +6,9 @@ use async_lsp::lsp_types::{
 };
 use common::InputDb;
 use hir::{
-    core::semantic::reference::{HasReferences, Target},
+    core::semantic::reference::{
+        HasReferences, ReferenceView, Target, TargetResolution, resolve_path_to_scopes,
+    },
     hir_def::ItemKind,
     lower::map_file_to_mod,
     span::LazySpan,
@@ -78,17 +80,67 @@ pub async fn handle_semantic_tokens_full(
     let scope_graph = top_mod.scope_graph(&backend.db);
     for item in scope_graph.items_dfs(&backend.db) {
         for reference in item.references(&backend.db) {
-            // Get the span of the reference
+            // For path references, emit a separate token per segment so that
+            // each part of `C::init_code_offset` gets its own token type
+            // (type param vs function). This also fixes ctrl+hover underline
+            // in editors that use semantic tokens for word boundary detection.
+            if let ReferenceView::Path(view) = reference {
+                let last_idx = view.path.segment_index(&backend.db);
+                for idx in 0..=last_idx {
+                    let Some(seg_span) =
+                        view.span.clone().segment(idx).resolve(&backend.db)
+                    else {
+                        continue;
+                    };
+                    if seg_span.file.url(&backend.db) != Some(url.clone()) {
+                        continue;
+                    }
+
+                    // Resolve this segment to its target
+                    let token_type = if let Some(seg_path) = view.path.segment(&backend.db, idx)
+                    {
+                        let scopes =
+                            resolve_path_to_scopes(&backend.db, seg_path, view.scope);
+                        match TargetResolution::from_scopes(scopes).first() {
+                            Some(Target::Scope(scope)) => {
+                                item_kind_to_token_type(scope.item())
+                            }
+                            _ => None,
+                        }
+                    } else {
+                        // Fallback: use whole-path target for last segment
+                        match reference.target(&backend.db).first() {
+                            Some(Target::Scope(scope)) => {
+                                item_kind_to_token_type(scope.item())
+                            }
+                            Some(Target::Local { .. }) => Some(3),
+                            None => None,
+                        }
+                    };
+
+                    if let Some(token_type) = token_type {
+                        let start_offset: usize = seg_span.range.start().into();
+                        let end_offset: usize = seg_span.range.end().into();
+                        let length = (end_offset - start_offset) as u32;
+                        let line = line_offsets
+                            .binary_search(&start_offset)
+                            .unwrap_or_else(|x| x.saturating_sub(1));
+                        let col =
+                            start_offset - line_offsets.get(line).copied().unwrap_or(0);
+                        tokens.push((line as u32, col as u32, length, token_type, 0));
+                    }
+                }
+                continue;
+            }
+
+            // Non-path references: single token for the reference span
             let Some(span) = reference.span().resolve(&backend.db) else {
                 continue;
             };
-
-            // Only include tokens from this file
             if span.file.url(&backend.db) != Some(url.clone()) {
                 continue;
             }
 
-            // Determine the token type from the resolved target
             let token_type = match reference.target(&backend.db).first() {
                 Some(Target::Scope(scope)) => item_kind_to_token_type(scope.item()),
                 Some(Target::Local { .. }) => Some(3), // variable
@@ -99,12 +151,9 @@ pub async fn handle_semantic_tokens_full(
                 continue;
             };
 
-            // Calculate line and column from offset
             let start_offset: usize = span.range.start().into();
             let end_offset: usize = span.range.end().into();
             let length = (end_offset - start_offset) as u32;
-
-            // Find the line containing this offset
             let line = line_offsets
                 .binary_search(&start_offset)
                 .unwrap_or_else(|x| x.saturating_sub(1));

@@ -1,0 +1,58 @@
+// Reproduction of hover/goto bugs from effects.fe.
+//
+// Bug 1: Hovering over associated type in generic arg position
+//         should underline just that type, not the whole call.
+//
+// Bug 2: Zero-arg calls get no underline at all in Zed.
+
+trait Encode<A> {}
+
+trait Contract {
+    type InitArgs: Encode<u256>
+
+    fn init_code_offset() -> u256
+    fn init_code_len() -> u256
+}
+
+fn encoded_size<T>() -> u256 {
+    0
+}
+
+pub struct Address {
+    pub inner: u256
+}
+
+struct Encoder {
+    pub start: u256
+    pub pos: u256
+    pub end: u256
+}
+
+mod ops {
+    extern {
+        pub fn returndatasize() -> u256
+        pub fn returndatacopy(_: u256, _: u256, _: u256)
+        pub fn codecopy(_: u256, _: u256, _: u256)
+        pub fn create(_: u256, _: u256, _: u256) -> u256
+        pub fn revert(_: u256, _: u256)
+    }
+}
+
+mod mem {
+    pub fn alloc(_ size: u256) -> u256 {
+        0
+    }
+}
+
+fn create<C: Contract>() {
+    let init_len = C::init_code_len()
+    let init_off = C::init_code_offset()
+    let args_len = encoded_size<C::InitArgs>()
+    let total_len = init_len + args_len
+
+    let init_ptr = mem::alloc(total_len)
+
+    let ret_len = ops::returndatasize()
+    let ret_ptr = mem::alloc(ret_len)
+    ops::revert(ret_ptr, ret_len)
+}
