@@ -10,7 +10,7 @@ use common::diagnostics::{
 use hir::analysis::ty::ty_def::BorrowKind;
 use hir::analysis::{
     HirAnalysisDb,
-    ty::{ty_is_borrow, ty_is_noesc},
+    ty::{ty_check::LocalBinding, ty_is_borrow, ty_is_noesc},
 };
 use hir::hir_def::{
     Body, ExprId, FuncParamMode, Partial,
@@ -155,6 +155,7 @@ struct Borrowck<'db, 'a> {
     tracked_local_idx: Vec<Option<usize>>,
     tracked_locals: Vec<LocalId>,
     param_index_of_local: Vec<Option<u32>>,
+    semantic_parent_of_local: Vec<Option<LocalId>>,
     param_loan_for_local: Vec<Option<LoanId>>,
     loan_for_value: FxHashMap<ValueId, LoanId>,
     call_loan_for_value: FxHashMap<ValueId, LoanId>,
@@ -212,6 +213,67 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         for (idx, local) in body.param_locals.iter().enumerate() {
             param_index_of_local[local.index()] = Some(idx as u32);
         }
+        let mut semantic_parent_of_local = vec![None; body.locals.len()];
+        for (&owner, &spill) in &body.spill_slots {
+            semantic_parent_of_local[spill.index()] = Some(owner);
+        }
+        for block in &body.blocks {
+            for inst in &block.insts {
+                let MirInst::Assign {
+                    dest: Some(dest),
+                    rvalue: Rvalue::Value(value),
+                    ..
+                } = inst
+                else {
+                    continue;
+                };
+                if !body.spill_slots.contains_key(dest) {
+                    continue;
+                }
+                let source_local = local_source_through_casts(body, *value)
+                    .or_else(|| {
+                        let typed_body = func.typed_body.as_ref()?;
+                        let source_expr = expr_source_through_casts(body, *value)?;
+                        let binding = typed_body.expr_prop(db, source_expr).binding?;
+                        match binding {
+                            LocalBinding::Param { idx, .. } => body.param_locals.get(idx).copied(),
+                            LocalBinding::EffectParam { idx, .. } => {
+                                body.effect_param_locals.get(idx).copied()
+                            }
+                            LocalBinding::Local { .. } => None,
+                        }
+                    })
+                    .or_else(|| {
+                        let typed_body = func.typed_body.as_ref()?;
+                        let root_value = strip_casts(body, *value);
+                        let source_expr =
+                            value_to_expr.get(root_value.index()).copied().flatten()?;
+                        let binding = typed_body.expr_prop(db, source_expr).binding?;
+                        match binding {
+                            LocalBinding::Param { idx, .. } => body.param_locals.get(idx).copied(),
+                            LocalBinding::EffectParam { idx, .. } => {
+                                body.effect_param_locals.get(idx).copied()
+                            }
+                            LocalBinding::Local { .. } => None,
+                        }
+                    });
+                let Some(source_local) = source_local else {
+                    continue;
+                };
+                let source_ty = body.local(source_local).ty;
+                let dest_ty = body.local(*dest).ty;
+                let source_matches = source_ty
+                    .as_capability(db)
+                    .map(|(_, inner)| inner == dest_ty)
+                    .unwrap_or(source_ty == dest_ty);
+                if !source_matches {
+                    continue;
+                }
+                if semantic_parent_of_local[dest.index()].is_none() {
+                    semantic_parent_of_local[dest.index()] = Some(source_local);
+                }
+            }
+        }
         let borrow_param: Vec<_> = body
             .param_locals
             .iter()
@@ -241,6 +303,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             tracked_local_idx,
             tracked_locals,
             param_index_of_local,
+            semantic_parent_of_local,
             param_loan_for_local: vec![None; body.locals.len()],
             loan_for_value: FxHashMap::default(),
             call_loan_for_value: FxHashMap::default(),
@@ -515,7 +578,13 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                     .copied()?;
                 Some(self.func.body.local(local).name.clone())
             }
-            Root::Local(local) => Some(self.func.body.local(local).name.clone()),
+            Root::Local(local) => Some(
+                self.func
+                    .body
+                    .local(self.semantic_owner_local(local))
+                    .name
+                    .clone(),
+            ),
         }
     }
 
@@ -1368,9 +1437,11 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         }
 
         for target in &targets {
-            let Root::Param(idx) = target.root else {
-                continue;
+            let idx = match target.root {
+                Root::Param(idx) => Some(idx),
+                Root::Local(local) => self.param_index_of_semantic_owner(local),
             };
+            let Some(idx) = idx else { continue };
             let mode = self
                 .param_modes
                 .get(idx as usize)
@@ -1780,6 +1851,33 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             .flatten()
             .map(Root::Param)
             .unwrap_or(Root::Local(local))
+    }
+
+    fn semantic_owner_local(&self, local: LocalId) -> LocalId {
+        let mut current = local;
+        for _ in 0..self.semantic_parent_of_local.len() {
+            let Some(owner) = self
+                .semantic_parent_of_local
+                .get(current.index())
+                .copied()
+                .flatten()
+            else {
+                return current;
+            };
+            if owner == current {
+                return current;
+            }
+            current = owner;
+        }
+        current
+    }
+
+    fn param_index_of_semantic_owner(&self, local: LocalId) -> Option<u32> {
+        let owner = self.semantic_owner_local(local);
+        self.param_index_of_local
+            .get(owner.index())
+            .copied()
+            .flatten()
     }
 
     fn loans_for_handle_value(
@@ -2721,6 +2819,36 @@ fn root_memory_local<'db>(body: &MirBody<'db>, place: &Place<'db>) -> Option<Loc
         (ValueOrigin::Local(local), ValueRepr::Ref(AddressSpaceKind::Memory)) => Some(*local),
         _ => None,
     }
+}
+
+fn local_source_through_casts<'db>(body: &MirBody<'db>, value: ValueId) -> Option<LocalId> {
+    let mut current = value;
+    while let ValueOrigin::TransparentCast { value } = &body.value(current).origin {
+        current = *value;
+    }
+    match body.value(current).origin {
+        ValueOrigin::Local(local) => Some(local),
+        _ => None,
+    }
+}
+
+fn expr_source_through_casts<'db>(body: &MirBody<'db>, value: ValueId) -> Option<ExprId> {
+    let mut current = value;
+    while let ValueOrigin::TransparentCast { value } = &body.value(current).origin {
+        current = *value;
+    }
+    match body.value(current).origin {
+        ValueOrigin::Expr(expr) => Some(expr),
+        _ => None,
+    }
+}
+
+fn strip_casts<'db>(body: &MirBody<'db>, value: ValueId) -> ValueId {
+    let mut current = value;
+    while let ValueOrigin::TransparentCast { value } = &body.value(current).origin {
+        current = *value;
+    }
+    current
 }
 
 fn loans_overlap<'db>(a: &Loan<'db>, b: &Loan<'db>) -> bool {
