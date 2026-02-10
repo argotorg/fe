@@ -11,7 +11,7 @@ use hir::projection::{IndexSource, Projection};
 use hir::span::LazySpan;
 use mir::{
     CallOrigin, ValueId, ValueOrigin,
-    ir::{AddressSpaceKind, FieldPtrOrigin, MirFunctionOrigin, Place, SyntheticValue, ValueRepr},
+    ir::{FieldPtrOrigin, MirFunctionOrigin, Place, SyntheticValue},
     layout,
 };
 
@@ -341,28 +341,6 @@ impl<'db> FunctionEmitter<'db> {
         if layout::ty_size_bytes_in(self.db, &self.layout, loaded_ty).is_some_and(|size| size == 0)
         {
             return Ok("0".into());
-        }
-
-        // `place_for_borrow_expr` and related helpers model locals/params as "places" by creating
-        // synthetic `ValueRepr::Ref` bases so borrowck can reason about them. These are not real
-        // memory/storage addresses, so emitting `mload`/`sload` would be incorrect. For an empty
-        // projection, the correct value is just the local itself.
-        if place.projection.is_empty() {
-            let base_value = self.mir_func.body.value(place.base);
-            if let ValueOrigin::Local(local) = &base_value.origin
-                && matches!(
-                    base_value.repr,
-                    ValueRepr::Ref(AddressSpaceKind::Memory)
-                        | ValueRepr::Ref(AddressSpaceKind::Storage)
-                        | ValueRepr::Ref(AddressSpaceKind::TransientStorage)
-                        | ValueRepr::Ref(AddressSpaceKind::Calldata)
-                )
-                && !self.mir_func.body.effect_param_locals.contains(local)
-                && !self.mir_func.body.spill_slots.contains_key(local)
-            {
-                let local_word = self.lower_value(place.base, state)?;
-                return Ok(self.apply_from_word_conversion(&local_word, loaded_ty));
-            }
         }
 
         let addr = self.lower_place_address(place, state)?;

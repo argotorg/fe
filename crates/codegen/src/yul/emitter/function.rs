@@ -1,6 +1,6 @@
 use driver::DriverDataBase;
 use mir::layout::TargetDataLayout;
-use mir::{BasicBlockId, MirFunction, Terminator, ir::MirFunctionOrigin};
+use mir::{BasicBlockId, MirBackend, MirFunction, MirStage, Terminator, ir::MirFunctionOrigin};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::yul::{doc::YulDoc, errors::YulError, state::BlockState};
@@ -31,6 +31,9 @@ impl<'db> FunctionEmitter<'db> {
         code_regions: &'db FxHashMap<String, String>,
         layout: TargetDataLayout,
     ) -> Result<Self, YulError> {
+        mir_func
+            .body
+            .assert_stage(MirStage::Repr(MirBackend::EvmYul));
         if let MirFunctionOrigin::Hir(func) = mir_func.origin
             && func.body(db).is_none()
         {
