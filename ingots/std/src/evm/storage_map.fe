@@ -1,5 +1,6 @@
 use super::effects::Address
-use ingot::evm::ops::{keccak256, mload, mstore, sload, sstore}
+use super::mem
+use ingot::evm::ops::{keccak256, mstore, sload, sstore}
 use ingot::evm::word::WordRepr
 use core::{EffectRef, EffectRefMut}
 
@@ -33,9 +34,9 @@ fn storagemap_storage_slot_with_salt<K>(key: K, salt: u256) -> u256
     where K: StorageKey
 {
     // keccak256(key ++ slot) - standard Solidity mapping layout
-    // Use a dedicated scratch region above MIN_FREE_MEMORY (0x2000) to avoid
-    // collisions with the backend-reserved zone (0x80-0x2000).
-    let ptr: u256 = 0x2000
+    // Use the current heap pointer as scratch to avoid clobbering live heap data.
+    // `mem::alloc(0)` also ensures we stay above any backend-reserved zones.
+    let ptr = mem::alloc(0)
     let key_len = K::write_key(ptr, key)
     mstore(ptr + key_len, salt)
     keccak256(ptr, key_len + 32)
