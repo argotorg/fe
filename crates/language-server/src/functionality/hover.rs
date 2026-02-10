@@ -53,7 +53,10 @@ pub fn hover_helper(
             }
             seg_range
         }
-        _ => r.span().resolve(db).and_then(|s| to_lsp_range_from_span(s, db).ok()),
+        _ => r
+            .span()
+            .resolve(db)
+            .and_then(|s| to_lsp_range_from_span(s, db).ok()),
     };
 
     // Build hover content

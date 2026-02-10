@@ -12,6 +12,7 @@ pub struct Backend {
     pub(super) workers: tokio::runtime::Runtime,
     pub(super) virtual_files: Option<VirtualFiles>,
     pub(super) readonly_warnings: FxHashSet<Url>,
+    pub(super) definition_link_support: bool,
 }
 
 impl Backend {
@@ -36,6 +37,7 @@ impl Backend {
             workers,
             virtual_files,
             readonly_warnings: FxHashSet::default(),
+            definition_link_support: false,
         }
     }
 
@@ -61,5 +63,9 @@ impl Backend {
 
     pub fn virtual_files_mut(&mut self) -> Option<&mut VirtualFiles> {
         self.virtual_files.as_mut()
+    }
+
+    pub fn supports_definition_link(&self) -> bool {
+        self.definition_link_support
     }
 }

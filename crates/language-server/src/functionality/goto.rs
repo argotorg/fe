@@ -6,7 +6,7 @@ use hir::{
     lower::map_file_to_mod,
     span::LazySpan,
 };
-use tracing::warn;
+use tracing::debug;
 
 use crate::{
     backend::Backend,
@@ -35,14 +35,12 @@ pub async fn handle_goto_definition(
     params: async_lsp::lsp_types::GotoDefinitionParams,
 ) -> Result<Option<async_lsp::lsp_types::GotoDefinitionResponse>, ResponseError> {
     let params = params.text_document_position_params;
-    warn!(
-        "goto_definition: pos=({},{}), uri={}",
-        params.position.line, params.position.character, params.text_document.uri
-    );
-
     let internal_url = backend.map_client_uri_to_internal(params.text_document.uri.clone());
     let Some(file) = backend.db.workspace().get(&backend.db, &internal_url) else {
-        warn!("goto_definition: file not found for uri={}", params.text_document.uri);
+        debug!(
+            "goto_definition: file not found for uri={}",
+            params.text_document.uri
+        );
         return Ok(None);
     };
 
@@ -51,13 +49,6 @@ pub async fn handle_goto_definition(
 
     let top_mod = map_file_to_mod(&backend.db, file);
     let resolution = goto_target_at_cursor(&backend.db, top_mod, cursor);
-
-    warn!(
-        "goto_definition: cursor={:?}, targets={}, ref_found={}",
-        cursor,
-        resolution.as_slice().len(),
-        top_mod.reference_at(&backend.db, cursor).is_some(),
-    );
 
     // Compute origin_selection_range: the span of the identifier being clicked.
     // For paths like `ops::returndatasize`, this is the specific segment at the cursor.
@@ -69,13 +60,16 @@ pub async fn handle_goto_definition(
             ReferenceView::Path(pv) => {
                 for idx in 0..=pv.path.segment_index(&backend.db) {
                     // Use full segment span to check cursor containment (includes generics)
-                    let Some(seg_resolved) = pv.span.clone().segment(idx).resolve(&backend.db) else {
+                    let Some(seg_resolved) = pv.span.clone().segment(idx).resolve(&backend.db)
+                    else {
                         continue;
                     };
                     if seg_resolved.range.contains(cursor) {
                         // But return just the ident span (excludes generics like <C::InitArgs>)
                         // so Zed doesn't cache/underline too wide a region
-                        if let Some(ident_resolved) = pv.span.clone().segment(idx).ident().resolve(&backend.db) {
+                        if let Some(ident_resolved) =
+                            pv.span.clone().segment(idx).ident().resolve(&backend.db)
+                        {
                             return to_lsp_range_from_span(ident_resolved, &backend.db).ok();
                         }
                         return to_lsp_range_from_span(seg_resolved, &backend.db).ok();
@@ -112,16 +106,18 @@ pub async fn handle_goto_definition(
                 .unwrap_or(text.len());
             let line_offsets = crate::util::calculate_line_offsets(text);
             let to_pos = |off: usize| -> async_lsp::lsp_types::Position {
-                let line = line_offsets.partition_point(|&o| o <= off).saturating_sub(1);
+                let line = line_offsets
+                    .partition_point(|&o| o <= off)
+                    .saturating_sub(1);
                 let col = off - line_offsets[line];
                 async_lsp::lsp_types::Position::new(line as u32, col as u32)
             };
             Some(async_lsp::lsp_types::Range::new(to_pos(start), to_pos(end)))
         });
 
-    // Convert targets to LSP LocationLinks
-    // Special case: if this is a method in an impl trait block, navigate to the trait method
-    let links: Vec<_> = resolution
+    // Convert targets to LSP locations.
+    // Special case: if this is a method in an impl trait block, navigate to the trait method.
+    let locations: Vec<_> = resolution
         .as_slice()
         .iter()
         .filter_map(|target| match target {
@@ -140,29 +136,41 @@ pub async fn handle_goto_definition(
         })
         .map(|mut location| {
             location.uri = backend.map_internal_uri_to_client(location.uri);
-            async_lsp::lsp_types::LocationLink {
-                origin_selection_range: origin_range,
-                target_uri: location.uri,
-                target_range: location.range,
-                target_selection_range: location.range,
-            }
+            location
         })
         .collect();
 
-    if links.is_empty() {
-        warn!("goto_definition: no links found at cursor {:?}", cursor);
+    if locations.is_empty() {
+        debug!("goto_definition: no locations found at cursor {:?}", cursor);
         return Ok(None);
     }
 
-    warn!(
-        "goto_definition: returning {} links, origin_range={:?}",
-        links.len(),
-        origin_range,
-    );
+    if backend.supports_definition_link() {
+        let links: Vec<_> = locations
+            .into_iter()
+            .map(|location| {
+                let target_range = location.range;
+                async_lsp::lsp_types::LocationLink {
+                    origin_selection_range: origin_range.clone(),
+                    target_uri: location.uri,
+                    target_range: target_range.clone(),
+                    target_selection_range: target_range,
+                }
+            })
+            .collect();
+        return Ok(Some(async_lsp::lsp_types::GotoDefinitionResponse::Link(
+            links,
+        )));
+    }
 
-    Ok(Some(async_lsp::lsp_types::GotoDefinitionResponse::Link(
-        links,
-    )))
+    match locations.len() {
+        1 => Ok(Some(async_lsp::lsp_types::GotoDefinitionResponse::Scalar(
+            locations.into_iter().next().unwrap(),
+        ))),
+        _ => Ok(Some(async_lsp::lsp_types::GotoDefinitionResponse::Array(
+            locations,
+        ))),
+    }
 }
 // }
 #[cfg(test)]
@@ -312,7 +320,11 @@ mod tests {
                     };
 
                     // Use ident span if available (excludes generics)
-                    let ident_range = lazy_span.clone().segment(idx).ident().resolve(db)
+                    let ident_range = lazy_span
+                        .clone()
+                        .segment(idx)
+                        .ident()
+                        .resolve(db)
                         .map(|s| s.range)
                         .unwrap_or(seg_span.range);
 
@@ -351,9 +363,8 @@ mod tests {
         let diags: BTreeMap<_, _> = annotations
             .into_iter()
             .map(|ann| {
-                let mut labels = vec![
-                    Label::primary(file_id, ann.ident_range).with_message(&ann.label),
-                ];
+                let mut labels =
+                    vec![Label::primary(file_id, ann.ident_range).with_message(&ann.label)];
 
                 // When full segment span is wider than ident (e.g. includes <C::InitArgs>),
                 // show it so we can verify the handler won't over-cache.
@@ -528,15 +539,24 @@ fn create<C: Contract>() -> i32 {
 
         // Step 1: Does find_enclosing_items find the function?
         let items = top_mod.find_enclosing_items(&db, cursor_on_init);
-        assert!(!items.is_empty(), "find_enclosing_items should find items at cursor");
+        assert!(
+            !items.is_empty(),
+            "find_enclosing_items should find items at cursor"
+        );
         let item_kinds: Vec<_> = items.iter().map(|i| format!("{:?}", i)).collect();
         eprintln!("Step 1 - enclosing items: {:?}", item_kinds);
 
         // Step 2: Does reference_at find a reference?
         let reference = top_mod.reference_at(&db, cursor_on_init);
-        assert!(reference.is_some(), "reference_at should find a reference at cursor on init_code_offset");
+        assert!(
+            reference.is_some(),
+            "reference_at should find a reference at cursor on init_code_offset"
+        );
         let ref_view = reference.unwrap();
-        eprintln!("Step 2 - reference kind: {:?}", std::mem::discriminant(ref_view));
+        eprintln!(
+            "Step 2 - reference kind: {:?}",
+            std::mem::discriminant(ref_view)
+        );
 
         // Step 3: Does target_at resolve?
         let resolution = top_mod.target_at(&db, cursor_on_init);
