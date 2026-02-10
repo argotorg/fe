@@ -288,7 +288,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         };
                         let space = self.value_address_space(place.base);
                         let value_ty = self.builder.body.value(value_id).ty;
-                        self.ensure_place_is_spilled(&place);
                         self.builder.body.values[value_id.index()].origin =
                             ValueOrigin::PlaceRef(place);
                         self.builder.body.values[value_id.index()].repr =
@@ -1832,7 +1831,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 }
 
                 let local = self.local_for_binding(binding)?;
-                let addr_space = if self.is_by_ref_ty(ty)
+                let is_runtime_place = self.is_by_ref_ty(ty)
                     || matches!(
                         binding,
                         LocalBinding::Param {
@@ -1841,14 +1840,13 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         }
                     )
                     || matches!(binding, LocalBinding::EffectParam { .. })
-                        && self.effect_param_key_is_type(binding)
-                {
-                    self.address_space_for_binding(&binding)
+                        && self.effect_param_key_is_type(binding);
+                let base_value = if is_runtime_place {
+                    let addr_space = self.address_space_for_binding(&binding);
+                    self.alloc_value(ty, ValueOrigin::Local(local), ValueRepr::Ref(addr_space))
                 } else {
-                    AddressSpaceKind::Memory
+                    self.alloc_value(ty, ValueOrigin::PlaceRoot(local), ValueRepr::Word)
                 };
-                let base_value =
-                    self.alloc_value(ty, ValueOrigin::Local(local), ValueRepr::Ref(addr_space));
                 Some(Place::new(base_value, MirProjectionPath::new()))
             }
             Partial::Present(Expr::Field(lhs, field_index)) => {
