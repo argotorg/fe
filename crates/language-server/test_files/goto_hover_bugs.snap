@@ -1,0 +1,169 @@
+---
+source: crates/language-server/src/functionality/goto.rs
+expression: snapshot
+input_file: test_files/goto_hover_bugs.fe
+---
+note: 
+   ┌─ goto_hover_bugs.fe:50:14
+   │
+50 │ fn create<C: Contract>() {
+   │              ^^^^^^^^ -> goto_hover_bugs::Contract
+
+note: 
+   ┌─ goto_hover_bugs.fe:53:9
+   │
+53 │     let init_len = C::init_code_len()
+   │         ^^^^^^^^ -> local: u256
+
+note: 
+   ┌─ goto_hover_bugs.fe:53:20
+   │
+53 │     let init_len = C::init_code_len()
+   │                    ^ -> goto_hover_bugs::create::C
+
+note: 
+   ┌─ goto_hover_bugs.fe:53:23
+   │
+53 │     let init_len = C::init_code_len()
+   │                       ^^^^^^^^^^^^^ -> goto_hover_bugs::Contract::init_code_len
+
+note: 
+   ┌─ goto_hover_bugs.fe:54:9
+   │
+54 │     let init_off = C::init_code_offset()
+   │         ^^^^^^^^ -> local: u256
+
+note: 
+   ┌─ goto_hover_bugs.fe:54:20
+   │
+54 │     let init_off = C::init_code_offset()
+   │                    ^ -> goto_hover_bugs::create::C
+
+note: 
+   ┌─ goto_hover_bugs.fe:54:23
+   │
+54 │     let init_off = C::init_code_offset()
+   │                       ^^^^^^^^^^^^^^^^ -> goto_hover_bugs::Contract::init_code_offset
+
+note: 
+   ┌─ goto_hover_bugs.fe:55:9
+   │
+55 │     let args_len = encoded_size<C::InitArgs>()
+   │         ^^^^^^^^ -> local: u256
+
+note: 
+   ┌─ goto_hover_bugs.fe:55:20
+   │
+55 │     let args_len = encoded_size<C::InitArgs>()
+   │                    ^^^^^^^^^^^^-------------
+   │                    │
+   │                    full segment (includes generics)
+   │                    -> goto_hover_bugs::encoded_size
+
+note: 
+   ┌─ goto_hover_bugs.fe:56:9
+   │
+56 │     let total_len = init_len + args_len
+   │         ^^^^^^^^^ -> local: u256
+
+note: 
+   ┌─ goto_hover_bugs.fe:56:21
+   │
+56 │     let total_len = init_len + args_len
+   │                     ^^^^^^^^ -> local: u256
+
+note: 
+   ┌─ goto_hover_bugs.fe:56:32
+   │
+56 │     let total_len = init_len + args_len
+   │                                ^^^^^^^^ -> local: u256
+
+note: 
+   ┌─ goto_hover_bugs.fe:58:9
+   │
+58 │     let init_ptr = mem::alloc(total_len)
+   │         ^^^^^^^^ -> local: u256
+
+note: 
+   ┌─ goto_hover_bugs.fe:58:20
+   │
+58 │     let init_ptr = mem::alloc(total_len)
+   │                    ^^^ -> goto_hover_bugs::mem
+
+note: 
+   ┌─ goto_hover_bugs.fe:58:25
+   │
+58 │     let init_ptr = mem::alloc(total_len)
+   │                         ^^^^^ -> goto_hover_bugs::mem::alloc
+
+note: 
+   ┌─ goto_hover_bugs.fe:58:31
+   │
+58 │     let init_ptr = mem::alloc(total_len)
+   │                               ^^^^^^^^^ -> local: u256
+
+note: 
+   ┌─ goto_hover_bugs.fe:61:9
+   │
+61 │     let ret_len = ops::returndatasize()
+   │         ^^^^^^^ -> local: u256
+
+note: 
+   ┌─ goto_hover_bugs.fe:61:19
+   │
+61 │     let ret_len = ops::returndatasize()
+   │                   ^^^ -> goto_hover_bugs::ops
+
+note: 
+   ┌─ goto_hover_bugs.fe:61:24
+   │
+61 │     let ret_len = ops::returndatasize()
+   │                        ^^^^^^^^^^^^^^ -> goto_hover_bugs::ops::returndatasize
+
+note: 
+   ┌─ goto_hover_bugs.fe:62:9
+   │
+62 │     let ret_ptr = mem::alloc(ret_len)
+   │         ^^^^^^^ -> local: u256
+
+note: 
+   ┌─ goto_hover_bugs.fe:62:19
+   │
+62 │     let ret_ptr = mem::alloc(ret_len)
+   │                   ^^^ -> goto_hover_bugs::mem
+
+note: 
+   ┌─ goto_hover_bugs.fe:62:24
+   │
+62 │     let ret_ptr = mem::alloc(ret_len)
+   │                        ^^^^^ -> goto_hover_bugs::mem::alloc
+
+note: 
+   ┌─ goto_hover_bugs.fe:62:30
+   │
+62 │     let ret_ptr = mem::alloc(ret_len)
+   │                              ^^^^^^^ -> local: u256
+
+note: 
+   ┌─ goto_hover_bugs.fe:63:5
+   │
+63 │     ops::revert(ret_ptr, ret_len)
+   │     ^^^ -> goto_hover_bugs::ops
+
+note: 
+   ┌─ goto_hover_bugs.fe:63:10
+   │
+63 │     ops::revert(ret_ptr, ret_len)
+   │          ^^^^^^ -> goto_hover_bugs::ops::revert
+
+note: 
+   ┌─ goto_hover_bugs.fe:63:17
+   │
+63 │     ops::revert(ret_ptr, ret_len)
+   │                 ^^^^^^^ -> local: u256
+
+note: 
+   ┌─ goto_hover_bugs.fe:63:26
+   │
+63 │     ops::revert(ret_ptr, ret_len)
+   │                          ^^^^^^^ -> local: u256

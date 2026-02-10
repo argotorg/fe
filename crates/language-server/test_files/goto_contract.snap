@@ -1,0 +1,365 @@
+---
+source: crates/language-server/src/functionality/goto.rs
+assertion_line: 397
+expression: snapshot
+input_file: test_files/goto_contract.fe
+---
+note: 
+   ┌─ goto_contract.fe:26:17
+   │
+26 │     fn validate(self) -> bool
+   │                 ^^^^ -> goto_contract::Validator
+
+note: 
+   ┌─ goto_contract.fe:30:20
+   │
+30 │     fn get_balance(self) -> u256
+   │                    ^^^^ -> goto_contract::HasBalance
+
+note: 
+   ┌─ goto_contract.fe:35:6
+   │
+35 │ impl Validator for TokenStore {
+   │      ^^^^^^^^^ -> goto_contract::Validator
+
+note: 
+   ┌─ goto_contract.fe:35:20
+   │
+35 │ impl Validator for TokenStore {
+   │                    ^^^^^^^^^^ -> goto_contract::TokenStore
+
+note: 
+   ┌─ goto_contract.fe:36:17
+   │
+36 │     fn validate(self) -> bool {
+   │                 ^^^^ -> local: TokenStore
+
+note: 
+   ┌─ goto_contract.fe:41:6
+   │
+41 │ impl HasBalance for TokenStore {
+   │      ^^^^^^^^^^ -> goto_contract::HasBalance
+
+note: 
+   ┌─ goto_contract.fe:41:21
+   │
+41 │ impl HasBalance for TokenStore {
+   │                     ^^^^^^^^^^ -> goto_contract::TokenStore
+
+note: 
+   ┌─ goto_contract.fe:42:20
+   │
+42 │     fn get_balance(self) -> u256 {
+   │                    ^^^^ -> local: TokenStore
+
+note: 
+   ┌─ goto_contract.fe:43:16
+   │
+43 │         return self.supply
+   │                ^^^^ -> local: TokenStore
+
+note: 
+   ┌─ goto_contract.fe:47:6
+   │
+47 │ impl AccessControl {
+   │      ^^^^^^^^^^^^^ -> goto_contract::AccessControl
+
+note: 
+   ┌─ goto_contract.fe:48:22
+   │
+48 │     fn is_authorized(self) -> bool {
+   │                      ^^^^ -> local: AccessControl
+
+note: 
+   ┌─ goto_contract.fe:56:12
+   │
+56 │     return a + b
+   │            ^ -> local: u256
+
+note: 
+   ┌─ goto_contract.fe:56:16
+   │
+56 │     return a + b
+   │                ^ -> local: u256
+
+note: 
+   ┌─ goto_contract.fe:59:29
+   │
+59 │ fn make_store(val: u256) -> TokenStore {
+   │                             ^^^^^^^^^^ -> goto_contract::TokenStore
+
+note: 
+   ┌─ goto_contract.fe:60:12
+   │
+60 │     return TokenStore(supply: val, name_hash: 0)
+   │            ^^^^^^^^^^ -> goto_contract::TokenStore
+
+note: 
+   ┌─ goto_contract.fe:60:31
+   │
+60 │     return TokenStore(supply: val, name_hash: 0)
+   │                               ^^^ -> goto_contract::make_store::val
+
+note: 
+   ┌─ goto_contract.fe:70:5
+   │
+70 │     Mint { to: u256, amount: u256 } -> bool,
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ -> local: Mint
+
+note: 
+   ┌─ goto_contract.fe:71:5
+   │
+71 │     GetSupply -> u256,
+   │     ^^^^^^^^^^^^^^^^^ -> local: GetSupply
+
+note: 
+   ┌─ goto_contract.fe:75:5
+   │
+75 │     SetOwner { new_owner: u256 } -> bool,
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ -> local: SetOwner
+
+note: 
+   ┌─ goto_contract.fe:76:5
+   │
+76 │     GetOwner -> u256,
+   │     ^^^^^^^^^^^^^^^^ -> local: GetOwner
+
+note: 
+   ┌─ goto_contract.fe:81:31
+   │
+81 │ pub contract Token uses (ctx: Ctx) {
+   │                               ^^^ -> goto_contract::Ctx
+
+note: 
+   ┌─ goto_contract.fe:82:16
+   │
+82 │     mut store: TokenStore
+   │                ^^^^^^^^^^ -> goto_contract::TokenStore
+
+note: 
+   ┌─ goto_contract.fe:83:15
+   │
+83 │     mut auth: AccessControl
+   │               ^^^^^^^^^^^^^ -> goto_contract::AccessControl
+
+note: 
+   ┌─ goto_contract.fe:84:17
+   │
+84 │     allowances: Allowances
+   │                 ^^^^^^^^^^ -> goto_contract::Allowances
+
+note: 
+   ┌─ goto_contract.fe:86:60
+   │
+86 │     init(initial_supply: u256, owner_addr: u256) uses (mut store, mut auth) {
+   │                                                            ^^^^^ -> goto_contract::Token::store
+
+note: 
+   ┌─ goto_contract.fe:86:71
+   │
+86 │     init(initial_supply: u256, owner_addr: u256) uses (mut store, mut auth) {
+   │                                                                       ^^^^ -> goto_contract::Token::auth
+
+note: 
+   ┌─ goto_contract.fe:87:9
+   │
+87 │         store.supply = initial_supply
+   │         ^^^^^ -> local: TokenStore
+
+note: 
+   ┌─ goto_contract.fe:87:24
+   │
+87 │         store.supply = initial_supply
+   │                        ^^^^^^^^^^^^^^ -> local: u256
+
+note: 
+   ┌─ goto_contract.fe:88:9
+   │
+88 │         store.name_hash = compute_hash(initial_supply, owner_addr)
+   │         ^^^^^ -> local: TokenStore
+
+note: 
+   ┌─ goto_contract.fe:88:27
+   │
+88 │         store.name_hash = compute_hash(initial_supply, owner_addr)
+   │                           ^^^^^^^^^^^^ -> goto_contract::compute_hash
+
+note: 
+   ┌─ goto_contract.fe:88:40
+   │
+88 │         store.name_hash = compute_hash(initial_supply, owner_addr)
+   │                                        ^^^^^^^^^^^^^^ -> local: u256
+
+note: 
+   ┌─ goto_contract.fe:88:56
+   │
+88 │         store.name_hash = compute_hash(initial_supply, owner_addr)
+   │                                                        ^^^^^^^^^^ -> local: u256
+
+note: 
+   ┌─ goto_contract.fe:89:9
+   │
+89 │         auth.owner = owner_addr
+   │         ^^^^ -> local: AccessControl
+
+note: 
+   ┌─ goto_contract.fe:89:22
+   │
+89 │         auth.owner = owner_addr
+   │                      ^^^^^^^^^^ -> local: u256
+
+note: 
+   ┌─ goto_contract.fe:92:10
+   │
+92 │     recv TokenMsg {
+   │          ^^^^^^^^ -> goto_contract::TokenMsg
+
+note: 
+   ┌─ goto_contract.fe:93:16
+   │
+93 │         Mint { to, amount } -> bool uses (mut store) {
+   │                ^^ -> local: u256
+
+note: 
+   ┌─ goto_contract.fe:93:20
+   │
+93 │         Mint { to, amount } -> bool uses (mut store) {
+   │                    ^^^^^^ -> local: u256
+
+note: 
+   ┌─ goto_contract.fe:93:47
+   │
+93 │         Mint { to, amount } -> bool uses (mut store) {
+   │                                               ^^^^^ -> goto_contract::Token::store
+
+note: 
+   ┌─ goto_contract.fe:94:13
+   │
+94 │             store.supply = store.supply + amount
+   │             ^^^^^ -> local: TokenStore
+
+note: 
+   ┌─ goto_contract.fe:94:28
+   │
+94 │             store.supply = store.supply + amount
+   │                            ^^^^^ -> local: TokenStore
+
+note: 
+   ┌─ goto_contract.fe:94:43
+   │
+94 │             store.supply = store.supply + amount
+   │                                           ^^^^^^ -> local: u256
+
+note: 
+   ┌─ goto_contract.fe:95:17
+   │
+95 │             let new_supply: u256 = store.supply
+   │                 ^^^^^^^^^^ -> local: u256
+
+note: 
+   ┌─ goto_contract.fe:95:36
+   │
+95 │             let new_supply: u256 = store.supply
+   │                                    ^^^^^ -> local: TokenStore
+
+note: 
+   ┌─ goto_contract.fe:96:17
+   │
+96 │             let valid: bool = store.validate()
+   │                 ^^^^^ -> local: bool
+
+note: 
+   ┌─ goto_contract.fe:96:31
+   │
+96 │             let valid: bool = store.validate()
+   │                               ^^^^^ -> local: TokenStore
+
+note: 
+   ┌─ goto_contract.fe:97:20
+   │
+97 │             return valid
+   │                    ^^^^^ -> local: bool
+
+note: 
+    ┌─ goto_contract.fe:100:9
+    │
+100 │         GetSupply -> u256 uses store {
+    │         ^^^^^^^^^ -> local: GetSupply
+
+note: 
+    ┌─ goto_contract.fe:100:32
+    │
+100 │         GetSupply -> u256 uses store {
+    │                                ^^^^^ -> goto_contract::Token::store
+
+note: 
+    ┌─ goto_contract.fe:101:20
+    │
+101 │             return store.get_balance()
+    │                    ^^^^^ -> local: TokenStore
+
+note: 
+    ┌─ goto_contract.fe:105:10
+    │
+105 │     recv AdminMsg {
+    │          ^^^^^^^^ -> goto_contract::AdminMsg
+
+note: 
+    ┌─ goto_contract.fe:106:20
+    │
+106 │         SetOwner { new_owner } -> bool uses (mut auth) {
+    │                    ^^^^^^^^^ -> local: u256
+
+note: 
+    ┌─ goto_contract.fe:106:50
+    │
+106 │         SetOwner { new_owner } -> bool uses (mut auth) {
+    │                                                  ^^^^ -> goto_contract::Token::auth
+
+note: 
+    ┌─ goto_contract.fe:107:13
+    │
+107 │             auth.owner = new_owner
+    │             ^^^^ -> local: AccessControl
+
+note: 
+    ┌─ goto_contract.fe:107:26
+    │
+107 │             auth.owner = new_owner
+    │                          ^^^^^^^^^ -> local: u256
+
+note: 
+    ┌─ goto_contract.fe:108:17
+    │
+108 │             let ok: bool = auth.is_authorized()
+    │                 ^^ -> local: bool
+
+note: 
+    ┌─ goto_contract.fe:108:28
+    │
+108 │             let ok: bool = auth.is_authorized()
+    │                            ^^^^ -> local: AccessControl
+
+note: 
+    ┌─ goto_contract.fe:109:20
+    │
+109 │             return ok
+    │                    ^^ -> local: bool
+
+note: 
+    ┌─ goto_contract.fe:112:9
+    │
+112 │         GetOwner -> u256 uses auth {
+    │         ^^^^^^^^ -> local: GetOwner
+
+note: 
+    ┌─ goto_contract.fe:112:31
+    │
+112 │         GetOwner -> u256 uses auth {
+    │                               ^^^^ -> goto_contract::Token::auth
+
+note: 
+    ┌─ goto_contract.fe:113:20
+    │
+113 │             return auth.owner
+    │                    ^^^^ -> local: AccessControl

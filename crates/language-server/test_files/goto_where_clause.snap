@@ -19,7 +19,10 @@ note:
   ┌─ goto_where_clause.fe:9:9
   │
 9 │ impl<T> Container<T>
-  │         ^^^^^^^^^^^^ -> goto_where_clause::Container
+  │         ^^^^^^^^^---
+  │         │
+  │         full segment (includes generics)
+  │         -> goto_where_clause::Container
 
 note: 
    ┌─ goto_where_clause.fe:10:11

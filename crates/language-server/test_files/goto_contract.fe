@@ -1,0 +1,116 @@
+// --- Supporting types ---
+
+struct TokenStore {
+    supply: u256,
+    name_hash: u256,
+}
+
+struct Ctx {}
+
+struct AccessControl {
+    owner: u256,
+}
+
+struct Allowances {
+    data: u256,
+}
+
+enum Status {
+    Active
+    Inactive
+}
+
+// --- Traits ---
+
+trait Validator {
+    fn validate(self) -> bool
+}
+
+trait HasBalance {
+    fn get_balance(self) -> u256
+}
+
+// --- Impl blocks ---
+
+impl Validator for TokenStore {
+    fn validate(self) -> bool {
+        return true
+    }
+}
+
+impl HasBalance for TokenStore {
+    fn get_balance(self) -> u256 {
+        return self.supply
+    }
+}
+
+impl AccessControl {
+    fn is_authorized(self) -> bool {
+        return true
+    }
+}
+
+// --- Free functions ---
+
+fn compute_hash(a: u256, b: u256) -> u256 {
+    return a + b
+}
+
+fn make_store(val: u256) -> TokenStore {
+    return TokenStore(supply: val, name_hash: 0)
+}
+
+// --- Type alias ---
+
+type Balance = u256
+
+// --- Message definitions ---
+
+msg TokenMsg {
+    Mint { to: u256, amount: u256 } -> bool,
+    GetSupply -> u256,
+}
+
+msg AdminMsg {
+    SetOwner { new_owner: u256 } -> bool,
+    GetOwner -> u256,
+}
+
+// --- Contract ---
+
+pub contract Token uses (ctx: Ctx) {
+    mut store: TokenStore
+    mut auth: AccessControl
+    allowances: Allowances
+
+    init(initial_supply: u256, owner_addr: u256) uses (mut store, mut auth) {
+        store.supply = initial_supply
+        store.name_hash = compute_hash(initial_supply, owner_addr)
+        auth.owner = owner_addr
+    }
+
+    recv TokenMsg {
+        Mint { to, amount } -> bool uses (mut store) {
+            store.supply = store.supply + amount
+            let new_supply: u256 = store.supply
+            let valid: bool = store.validate()
+            return valid
+        }
+
+        GetSupply -> u256 uses store {
+            return store.get_balance()
+        }
+    }
+
+    recv AdminMsg {
+        SetOwner { new_owner } -> bool uses (mut auth) {
+            auth.owner = new_owner
+            let ok: bool = auth.is_authorized()
+            return ok
+        }
+
+        GetOwner -> u256 uses auth {
+            return auth.owner
+        }
+    }
+}

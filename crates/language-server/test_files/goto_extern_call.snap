@@ -1,0 +1,76 @@
+---
+source: crates/language-server/src/functionality/goto.rs
+expression: snapshot
+input_file: test_files/goto_extern_call.fe
+---
+note: 
+   ┌─ goto_extern_call.fe:15:9
+   │
+15 │     let ret_len = ops::returndatasize()
+   │         ^^^^^^^ -> local: u256
+
+note: 
+   ┌─ goto_extern_call.fe:15:19
+   │
+15 │     let ret_len = ops::returndatasize()
+   │                   ^^^ -> goto_extern_call::ops
+
+note: 
+   ┌─ goto_extern_call.fe:15:24
+   │
+15 │     let ret_len = ops::returndatasize()
+   │                        ^^^^^^^^^^^^^^ -> goto_extern_call::ops::returndatasize
+
+note: 
+   ┌─ goto_extern_call.fe:16:9
+   │
+16 │     let ret_ptr = ops::alloc(ret_len)
+   │         ^^^^^^^ -> local: u256
+
+note: 
+   ┌─ goto_extern_call.fe:16:19
+   │
+16 │     let ret_ptr = ops::alloc(ret_len)
+   │                   ^^^ -> goto_extern_call::ops
+
+note: 
+   ┌─ goto_extern_call.fe:16:24
+   │
+16 │     let ret_ptr = ops::alloc(ret_len)
+   │                        ^^^^^ -> goto_extern_call::ops::alloc
+
+note: 
+   ┌─ goto_extern_call.fe:16:30
+   │
+16 │     let ret_ptr = ops::alloc(ret_len)
+   │                              ^^^^^^^ -> local: u256
+
+note: 
+   ┌─ goto_extern_call.fe:17:5
+   │
+17 │     ops::revert(ret_ptr, ret_len)
+   │     ^^^ -> goto_extern_call::ops
+
+note: 
+   ┌─ goto_extern_call.fe:17:10
+   │
+17 │     ops::revert(ret_ptr, ret_len)
+   │          ^^^^^^ -> goto_extern_call::ops::revert
+
+note: 
+   ┌─ goto_extern_call.fe:17:17
+   │
+17 │     ops::revert(ret_ptr, ret_len)
+   │                 ^^^^^^^ -> local: u256
+
+note: 
+   ┌─ goto_extern_call.fe:17:26
+   │
+17 │     ops::revert(ret_ptr, ret_len)
+   │                          ^^^^^^^ -> local: u256
+
+note: 
+   ┌─ goto_extern_call.fe:18:5
+   │
+18 │     returndatasize()
+   │     ^^^^^^^^^^^^^^ -> goto_extern_call::returndatasize

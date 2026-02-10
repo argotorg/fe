@@ -1,0 +1,199 @@
+---
+source: crates/language-server/src/functionality/goto.rs
+expression: snapshot
+input_file: test_files/goto_origin_range.fe
+---
+note: 
+   ┌─ goto_origin_range.fe:25:14
+   │
+25 │ fn create<C: Contract>() {
+   │              ^^^^^^^^ -> goto_origin_range::Contract
+
+note: 
+   ┌─ goto_origin_range.fe:26:9
+   │
+26 │     let init_len = C::init_code_len()
+   │         ^^^^^^^^ -> local: u256
+
+note: 
+   ┌─ goto_origin_range.fe:26:20
+   │
+26 │     let init_len = C::init_code_len()
+   │                    ^ -> goto_origin_range::create::C
+
+note: 
+   ┌─ goto_origin_range.fe:26:23
+   │
+26 │     let init_len = C::init_code_len()
+   │                       ^^^^^^^^^^^^^ -> goto_origin_range::Contract::init_code_len
+
+note: 
+   ┌─ goto_origin_range.fe:27:9
+   │
+27 │     let init_off = C::init_code_offset()
+   │         ^^^^^^^^ -> local: u256
+
+note: 
+   ┌─ goto_origin_range.fe:27:20
+   │
+27 │     let init_off = C::init_code_offset()
+   │                    ^ -> goto_origin_range::create::C
+
+note: 
+   ┌─ goto_origin_range.fe:27:23
+   │
+27 │     let init_off = C::init_code_offset()
+   │                       ^^^^^^^^^^^^^^^^ -> goto_origin_range::Contract::init_code_offset
+
+note: 
+   ┌─ goto_origin_range.fe:28:9
+   │
+28 │     let args_len = encoded_size<C>()
+   │         ^^^^^^^^ -> local: u256
+
+note: 
+   ┌─ goto_origin_range.fe:28:20
+   │
+28 │     let args_len = encoded_size<C>()
+   │                    ^^^^^^^^^^^^---
+   │                    │
+   │                    full segment (includes generics)
+   │                    -> goto_origin_range::encoded_size
+
+note: 
+   ┌─ goto_origin_range.fe:29:9
+   │
+29 │     let total_len = init_len + init_off
+   │         ^^^^^^^^^ -> local: u256
+
+note: 
+   ┌─ goto_origin_range.fe:29:21
+   │
+29 │     let total_len = init_len + init_off
+   │                     ^^^^^^^^ -> local: u256
+
+note: 
+   ┌─ goto_origin_range.fe:29:32
+   │
+29 │     let total_len = init_len + init_off
+   │                                ^^^^^^^^ -> local: u256
+
+note: 
+   ┌─ goto_origin_range.fe:31:9
+   │
+31 │     let init_ptr = mem::alloc(total_len)
+   │         ^^^^^^^^ -> local: u256
+
+note: 
+   ┌─ goto_origin_range.fe:31:20
+   │
+31 │     let init_ptr = mem::alloc(total_len)
+   │                    ^^^ -> goto_origin_range::mem
+
+note: 
+   ┌─ goto_origin_range.fe:31:25
+   │
+31 │     let init_ptr = mem::alloc(total_len)
+   │                         ^^^^^ -> goto_origin_range::mem::alloc
+
+note: 
+   ┌─ goto_origin_range.fe:31:31
+   │
+31 │     let init_ptr = mem::alloc(total_len)
+   │                               ^^^^^^^^^ -> local: u256
+
+note: 
+   ┌─ goto_origin_range.fe:32:5
+   │
+32 │     ops::codecopy(init_ptr, init_off, init_len)
+   │     ^^^ -> goto_origin_range::ops
+
+note: 
+   ┌─ goto_origin_range.fe:32:10
+   │
+32 │     ops::codecopy(init_ptr, init_off, init_len)
+   │          ^^^^^^^^ -> goto_origin_range::ops::codecopy
+
+note: 
+   ┌─ goto_origin_range.fe:32:19
+   │
+32 │     ops::codecopy(init_ptr, init_off, init_len)
+   │                   ^^^^^^^^ -> local: u256
+
+note: 
+   ┌─ goto_origin_range.fe:32:29
+   │
+32 │     ops::codecopy(init_ptr, init_off, init_len)
+   │                             ^^^^^^^^ -> local: u256
+
+note: 
+   ┌─ goto_origin_range.fe:32:39
+   │
+32 │     ops::codecopy(init_ptr, init_off, init_len)
+   │                                       ^^^^^^^^ -> local: u256
+
+note: 
+   ┌─ goto_origin_range.fe:34:9
+   │
+34 │     let ret_len = ops::returndatasize()
+   │         ^^^^^^^ -> local: u256
+
+note: 
+   ┌─ goto_origin_range.fe:34:19
+   │
+34 │     let ret_len = ops::returndatasize()
+   │                   ^^^ -> goto_origin_range::ops
+
+note: 
+   ┌─ goto_origin_range.fe:34:24
+   │
+34 │     let ret_len = ops::returndatasize()
+   │                        ^^^^^^^^^^^^^^ -> goto_origin_range::ops::returndatasize
+
+note: 
+   ┌─ goto_origin_range.fe:35:9
+   │
+35 │     let ret_ptr = mem::alloc(ret_len)
+   │         ^^^^^^^ -> local: u256
+
+note: 
+   ┌─ goto_origin_range.fe:35:19
+   │
+35 │     let ret_ptr = mem::alloc(ret_len)
+   │                   ^^^ -> goto_origin_range::mem
+
+note: 
+   ┌─ goto_origin_range.fe:35:24
+   │
+35 │     let ret_ptr = mem::alloc(ret_len)
+   │                        ^^^^^ -> goto_origin_range::mem::alloc
+
+note: 
+   ┌─ goto_origin_range.fe:35:30
+   │
+35 │     let ret_ptr = mem::alloc(ret_len)
+   │                              ^^^^^^^ -> local: u256
+
+note: 
+   ┌─ goto_origin_range.fe:36:5
+   │
+36 │     ops::revert(ret_ptr, ret_len)
+   │     ^^^ -> goto_origin_range::ops
+
+note: 
+   ┌─ goto_origin_range.fe:36:10
+   │
+36 │     ops::revert(ret_ptr, ret_len)
+   │          ^^^^^^ -> goto_origin_range::ops::revert
+
+note: 
+   ┌─ goto_origin_range.fe:36:17
+   │
+36 │     ops::revert(ret_ptr, ret_len)
+   │                 ^^^^^^^ -> local: u256
+
+note: 
+   ┌─ goto_origin_range.fe:36:26
+   │
+36 │     ops::revert(ret_ptr, ret_len)
+   │                          ^^^^^^^ -> local: u256

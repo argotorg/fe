@@ -1,0 +1,19 @@
+trait Container {
+    type Item
+    fn get(self) -> Self::Item
+}
+
+struct IntBox {
+    val: i32
+}
+
+impl Container for IntBox {
+    type Item = i32
+    fn get(self) -> i32 {
+        self.val
+    }
+}
+
+fn extract<C: Container>(c: C) -> C::Item {
+    c.get()
+}

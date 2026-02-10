@@ -1,0 +1,9 @@
+trait Contract {
+    fn init_code_offset() -> i32
+    fn init_code_len() -> i32
+}
+
+fn create<C: Contract>() -> i32 {
+    let off = C::init_code_offset()
+    off
+}
