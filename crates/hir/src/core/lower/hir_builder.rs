@@ -175,18 +175,6 @@ where
         (params, self.ty_ident(ident))
     }
 
-    pub(super) fn param_self(&self) -> FuncParam<'db> {
-        let db = self.db();
-        FuncParam {
-            mode: FuncParamMode::View,
-            is_mut: false,
-            is_label_suppressed: false,
-            name: Partial::Present(FuncParamName::Ident(IdentId::make_self(db))),
-            ty: Partial::Present(self.self_ty()),
-            self_ty_fallback: true,
-        }
-    }
-
     pub(super) fn param_own_self(&self) -> FuncParam<'db> {
         let db = self.db();
         FuncParam {
