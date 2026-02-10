@@ -132,6 +132,14 @@ pub async fn initialize(
 ) -> Result<InitializeResult, ResponseError> {
     info!("initializing language server!");
 
+    backend.definition_link_support = message
+        .capabilities
+        .text_document
+        .as_ref()
+        .and_then(|text| text.definition.as_ref())
+        .and_then(|def| def.link_support)
+        .unwrap_or(false);
+
     let root = message
         .workspace_folders
         .and_then(|folders| folders.first().cloned())

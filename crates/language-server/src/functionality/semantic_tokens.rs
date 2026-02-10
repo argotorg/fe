@@ -87,8 +87,12 @@ pub async fn handle_semantic_tokens_full(
             if let ReferenceView::Path(view) = reference {
                 let last_idx = view.path.segment_index(&backend.db);
                 for idx in 0..=last_idx {
-                    let Some(seg_span) =
-                        view.span.clone().segment(idx).resolve(&backend.db)
+                    let segment_span = view.span.clone().segment(idx);
+                    let Some(seg_span) = segment_span
+                        .clone()
+                        .ident()
+                        .resolve(&backend.db)
+                        .or_else(|| segment_span.resolve(&backend.db))
                     else {
                         continue;
                     };
@@ -97,22 +101,16 @@ pub async fn handle_semantic_tokens_full(
                     }
 
                     // Resolve this segment to its target
-                    let token_type = if let Some(seg_path) = view.path.segment(&backend.db, idx)
-                    {
-                        let scopes =
-                            resolve_path_to_scopes(&backend.db, seg_path, view.scope);
+                    let token_type = if let Some(seg_path) = view.path.segment(&backend.db, idx) {
+                        let scopes = resolve_path_to_scopes(&backend.db, seg_path, view.scope);
                         match TargetResolution::from_scopes(scopes).first() {
-                            Some(Target::Scope(scope)) => {
-                                item_kind_to_token_type(scope.item())
-                            }
+                            Some(Target::Scope(scope)) => item_kind_to_token_type(scope.item()),
                             _ => None,
                         }
                     } else {
                         // Fallback: use whole-path target for last segment
                         match reference.target(&backend.db).first() {
-                            Some(Target::Scope(scope)) => {
-                                item_kind_to_token_type(scope.item())
-                            }
+                            Some(Target::Scope(scope)) => item_kind_to_token_type(scope.item()),
                             Some(Target::Local { .. }) => Some(3),
                             None => None,
                         }
@@ -125,8 +123,7 @@ pub async fn handle_semantic_tokens_full(
                         let line = line_offsets
                             .binary_search(&start_offset)
                             .unwrap_or_else(|x| x.saturating_sub(1));
-                        let col =
-                            start_offset - line_offsets.get(line).copied().unwrap_or(0);
+                        let col = start_offset - line_offsets.get(line).copied().unwrap_or(0);
                         tokens.push((line as u32, col as u32, length, token_type, 0));
                     }
                 }

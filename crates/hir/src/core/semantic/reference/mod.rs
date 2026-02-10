@@ -28,9 +28,9 @@ use crate::{
         },
         ty_def::TyId,
     },
-    hir_def::{GenericParamOwner, HirIngot},
     hir_def::scope_graph::ScopeId,
     hir_def::{Body, Expr, ExprId, FieldIndex, ItemKind, Partial, PathId, Use, UsePathSegment},
+    hir_def::{GenericParamOwner, HirIngot},
     span::{
         DynLazySpan, LazySpan,
         lazy_spans::{LazyFieldExprSpan, LazyMethodCallExprSpan, LazyPathSpan, LazyUsePathSpan},
@@ -115,9 +115,7 @@ fn scopes_from_resolution<'db>(
             PathResErrorKind::NotFound { bucket, .. } => {
                 bucket.iter_ok().flat_map(|r| r.scope()).collect()
             }
-            PathResErrorKind::Ambiguous(vec) => {
-                vec.iter().flat_map(|r| r.scope()).collect()
-            }
+            PathResErrorKind::Ambiguous(vec) => vec.iter().flat_map(|r| r.scope()).collect(),
             _ => vec![],
         },
     }
