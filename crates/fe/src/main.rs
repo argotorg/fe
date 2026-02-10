@@ -3,6 +3,7 @@ mod check;
 mod cli;
 mod lsif;
 mod report;
+mod scip_index;
 mod test;
 #[cfg(not(target_arch = "wasm32"))]
 mod tree;
@@ -165,6 +166,15 @@ pub enum Command {
         #[arg(short, long)]
         output: Option<Utf8PathBuf>,
     },
+    /// Generate SCIP index for code navigation.
+    Scip {
+        /// Path to the ingot directory.
+        #[arg(default_value_t = default_project_path())]
+        path: Utf8PathBuf,
+        /// Output file (defaults to index.scip).
+        #[arg(short, long, default_value = "index.scip")]
+        output: Utf8PathBuf,
+    },
 }
 
 fn default_project_path() -> Utf8PathBuf {
@@ -308,6 +318,9 @@ pub fn run(opts: &Options) {
         Command::Lsif { path, output } => {
             run_lsif(path, output.as_ref());
         }
+        Command::Scip { path, output } => {
+            run_scip(path, output);
+        }
     }
 }
 
@@ -355,6 +368,46 @@ fn run_lsif(path: &Utf8PathBuf, output: Option<&Utf8PathBuf>) {
 
     if let Err(e) = result {
         eprintln!("Error generating LSIF: {e}");
+        std::process::exit(1);
+    }
+}
+
+fn run_scip(path: &Utf8PathBuf, output: &Utf8PathBuf) {
+    use driver::DriverDataBase;
+
+    let mut db = DriverDataBase::default();
+
+    let canonical_path = match path.canonicalize_utf8() {
+        Ok(p) => p,
+        Err(_) => {
+            eprintln!("Error: Invalid or non-existent directory path: {path}");
+            std::process::exit(1);
+        }
+    };
+
+    let ingot_url = match url::Url::from_directory_path(canonical_path.as_str()) {
+        Ok(url) => url,
+        Err(_) => {
+            eprintln!("Error: Invalid directory path: {path}");
+            std::process::exit(1);
+        }
+    };
+
+    let had_init_diagnostics = driver::init_ingot(&mut db, &ingot_url);
+    if had_init_diagnostics {
+        eprintln!("Warning: ingot had initialization diagnostics");
+    }
+
+    let index = match scip_index::generate_scip(&mut db, &ingot_url) {
+        Ok(index) => index,
+        Err(e) => {
+            eprintln!("Error generating SCIP: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    if let Err(e) = scip::write_message_to_file(output.as_std_path(), index) {
+        eprintln!("Error writing SCIP file: {e}");
         std::process::exit(1);
     }
 }
