@@ -1,4 +1,4 @@
-fn foo<T>(x: T) -> T
+fn foo<T>(x: own T) -> T
   uses (balance: u256)
 {
     x
@@ -9,7 +9,7 @@ struct Bar {
 }
 
 impl Bar {
-    fn id<T>(self, x: T) -> T {
+    fn id<T>(self, x: own T) -> T {
         x
     }
 }

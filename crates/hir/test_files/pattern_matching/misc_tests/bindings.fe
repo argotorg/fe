@@ -191,7 +191,7 @@ fn test_unknown_error_type() -> i32 {
 }
 
 // Generic function return without context
-fn identity<T>(_ value: T) -> T {
+fn identity<T>(_ value: own T) -> T {
     value
 }
 

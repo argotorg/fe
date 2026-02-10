@@ -19,7 +19,7 @@ mod CounterMsg {
 
     impl core::abi::Encode<std::abi::Sol> for Increment {
     
-        fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(self, mut _ e: E) {}
+        fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(own self, mut _ e: E) {}
     }
 
     impl core::abi::Decode<std::abi::Sol> for Increment {
@@ -38,7 +38,7 @@ mod CounterMsg {
 
     impl core::abi::Encode<std::abi::Sol> for Get {
     
-        fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(self, mut _ e: E) {}
+        fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(own self, mut _ e: E) {}
     }
 
     impl core::abi::Decode<std::abi::Sol> for Get {
@@ -59,7 +59,7 @@ mod CounterMsg {
 
     impl core::abi::Encode<std::abi::Sol> for Set {
     
-        fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(self, mut _ e: E) {
+        fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(own self, mut _ e: E) {
             self.val.encode(e)
         }
     }

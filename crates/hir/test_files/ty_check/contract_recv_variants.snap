@@ -1,5 +1,6 @@
 ---
 source: crates/hir/tests/ty_check.rs
+assertion_line: 40
 expression: res
 input_file: test_files/ty_check/contract_recv_variants.fe
 ---
@@ -18,10 +19,10 @@ note:
    │ ╰────────────────────────────────────^ u64
 
 note: 
-   ┌─ contract_recv_variants.fe:26:78
+   ┌─ contract_recv_variants.fe:26:82
    │  
-26 │           fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(self, mut _ e: E) {
-   │ ╭──────────────────────────────────────────────────────────────────────────────^
+26 │           fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(own self, mut _ e: E) {
+   │ ╭──────────────────────────────────────────────────────────────────────────────────^
 27 │ │             let Self { to, amount } = self
 28 │ │             to.encode(e)
 29 │ │             amount.encode(e)
@@ -166,10 +167,10 @@ note:
    │                        ^^^^^^ u64
 
 note: 
-   ┌─ contract_recv_variants.fe:51:78
+   ┌─ contract_recv_variants.fe:51:82
    │  
-51 │           fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(self, mut _ e: E) {
-   │ ╭──────────────────────────────────────────────────────────────────────────────^
+51 │           fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(own self, mut _ e: E) {
+   │ ╭──────────────────────────────────────────────────────────────────────────────────^
 52 │ │             let Self { addr } = self
 53 │ │             addr.encode(e)
 54 │ │         }
@@ -258,10 +259,10 @@ note:
    │                    ^^^^ u64
 
 note: 
-   ┌─ contract_recv_variants.fe:78:74
+   ┌─ contract_recv_variants.fe:78:78
    │  
-78 │       fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(self, mut _ e: E) {
-   │ ╭──────────────────────────────────────────────────────────────────────────^
+78 │       fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(own self, mut _ e: E) {
+   │ ╭──────────────────────────────────────────────────────────────────────────────^
 79 │ │         let Self { key } = self
 80 │ │         key.encode(e)
 81 │ │     }

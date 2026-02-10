@@ -1,5 +1,6 @@
 ---
 source: crates/hir/tests/body_references.rs
+assertion_line: 79
 expression: res
 input_file: test_files/body_references/field_method.fe
 ---
@@ -31,7 +32,7 @@ note:
    ┌─ field_method.fe:12:14
    │
 12 │         self.x * self.x + self.y * self.y
-   │              ^ field -> field
+   │              ^ field access
 
 note: 
    ┌─ field_method.fe:12:18
@@ -43,7 +44,7 @@ note:
    ┌─ field_method.fe:12:23
    │
 12 │         self.x * self.x + self.y * self.y
-   │                       ^ field -> field
+   │                       ^ field access
 
 note: 
    ┌─ field_method.fe:12:27
@@ -55,7 +56,7 @@ note:
    ┌─ field_method.fe:12:32
    │
 12 │         self.x * self.x + self.y * self.y
-   │                                ^ field -> field
+   │                                ^ field access
 
 note: 
    ┌─ field_method.fe:12:36
@@ -67,7 +68,7 @@ note:
    ┌─ field_method.fe:12:41
    │
 12 │         self.x * self.x + self.y * self.y
-   │                                         ^ field -> field
+   │                                         ^ field access
 
 note: 
    ┌─ field_method.fe:17:9

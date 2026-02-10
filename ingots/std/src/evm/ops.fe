@@ -6,32 +6,32 @@ extern {
     // -------------------------------------------------------------------------
     // Memory
     // -------------------------------------------------------------------------
-    pub fn mload(_: u256) -> u256
-    pub fn mstore(_: u256, _: u256)
-    pub fn mstore8(_: u256, _: u8)
+    pub fn mload(_: own u256) -> u256
+    pub fn mstore(_: own u256, _: own u256)
+    pub fn mstore8(_: own u256, _: own u8)
     pub fn msize() -> u256
 
     // -------------------------------------------------------------------------
     // Storage
     // -------------------------------------------------------------------------
-    pub fn sload(_: u256) -> u256
-    pub fn sstore(slot: u256, value: u256)
+    pub fn sload(_: own u256) -> u256
+    pub fn sstore(slot: own u256, value: own u256)
 
     // -------------------------------------------------------------------------
     // Calldata / returndata
     // -------------------------------------------------------------------------
-    pub fn calldataload(_: u256) -> u256
-    pub fn calldatacopy(dest: u256, offset: u256, len: u256)
+    pub fn calldataload(_: own u256) -> u256
+    pub fn calldatacopy(dest: own u256, offset: own u256, len: own u256)
     pub fn calldatasize() -> u256
-    pub fn returndatacopy(dest: u256, offset: u256, len: u256)
+    pub fn returndatacopy(dest: own u256, offset: own u256, len: own u256)
     pub fn returndatasize() -> u256
 
     // -------------------------------------------------------------------------
     // Code / hashing
     // -------------------------------------------------------------------------
-    pub fn codecopy(dest: u256, offset: u256, len: u256)
+    pub fn codecopy(dest: own u256, offset: own u256, len: own u256)
     pub fn codesize() -> u256
-    pub fn keccak256(_: u256, _: u256) -> u256
+    pub fn keccak256(_: own u256, _: own u256) -> u256
 
     // -------------------------------------------------------------------------
     // Environment
@@ -49,54 +49,54 @@ extern {
     pub fn chainid() -> u256
     pub fn basefee() -> u256
     pub fn selfbalance() -> u256
-    pub fn blockhash(_: u256) -> u256
+    pub fn blockhash(_: own u256) -> u256
     pub fn gas() -> u256
 
     // -------------------------------------------------------------------------
     // Calls / create
     // -------------------------------------------------------------------------
     pub fn call(
-        gas: u256,
-        addr: u256,
-        value: u256,
-        args_offset: u256,
-        args_len: u256,
-        ret_offset: u256,
-        ret_len: u256,
+        gas: own u256,
+        addr: own u256,
+        value: own u256,
+        args_offset: own u256,
+        args_len: own u256,
+        ret_offset: own u256,
+        ret_len: own u256,
     ) -> u256
     pub fn staticcall(
-        gas: u256,
-        addr: u256,
-        args_offset: u256,
-        args_len: u256,
-        ret_offset: u256,
-        ret_len: u256,
+        gas: own u256,
+        addr: own u256,
+        args_offset: own u256,
+        args_len: own u256,
+        ret_offset: own u256,
+        ret_len: own u256,
     ) -> u256
     pub fn delegatecall(
-        gas: u256,
-        addr: u256,
-        args_offset: u256,
-        args_len: u256,
-        ret_offset: u256,
-        ret_len: u256,
+        gas: own u256,
+        addr: own u256,
+        args_offset: own u256,
+        args_len: own u256,
+        ret_offset: own u256,
+        ret_len: own u256,
     ) -> u256
-    pub fn create(value: u256, offset: u256, len: u256) -> u256
-    pub fn create2(value: u256, offset: u256, len: u256, salt: u256) -> u256
+    pub fn create(value: own u256, offset: own u256, len: own u256) -> u256
+    pub fn create2(value: own u256, offset: own u256, len: own u256, salt: own u256) -> u256
 
     // -------------------------------------------------------------------------
     // Logs
     // -------------------------------------------------------------------------
-    pub fn log0(offset: u256, len: u256)
-    pub fn log1(offset: u256, len: u256, topic0: u256)
-    pub fn log2(offset: u256, len: u256, topic0: u256, topic1: u256)
-    pub fn log3(offset: u256, len: u256, topic0: u256, topic1: u256, topic2: u256)
-    pub fn log4(offset: u256, len: u256, topic0: u256, topic1: u256, topic2: u256, topic3: u256)
+    pub fn log0(offset: own u256, len: own u256)
+    pub fn log1(offset: own u256, len: own u256, topic0: own u256)
+    pub fn log2(offset: own u256, len: own u256, topic0: own u256, topic1: own u256)
+    pub fn log3(offset: own u256, len: own u256, topic0: own u256, topic1: own u256, topic2: own u256)
+    pub fn log4(offset: own u256, len: own u256, topic0: own u256, topic1: own u256, topic2: own u256, topic3: own u256)
 
     // -------------------------------------------------------------------------
     // Control flow
     // -------------------------------------------------------------------------
-    pub fn revert(_: u256, _: u256) -> !
-    pub fn return_data(_: u256, _: u256) -> !
-    pub fn selfdestruct(_: u256) -> !
+    pub fn revert(_: own u256, _: own u256) -> !
+    pub fn return_data(_: own u256, _: own u256) -> !
+    pub fn selfdestruct(_: own u256) -> !
     pub fn stop() -> !
 }

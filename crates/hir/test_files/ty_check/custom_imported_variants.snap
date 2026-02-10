@@ -1,6 +1,5 @@
 ---
 source: crates/hir/tests/ty_check.rs
-assertion_line: 40
 expression: res
 input_file: test_files/ty_check/custom_imported_variants.fe
 ---
@@ -484,19 +483,19 @@ note:
    ┌─ custom_imported_variants.fe:95:13
    │
 95 │         Rgb(r, g, b) => {
-   │             ^ u8
+   │             ^ ref u8
 
 note: 
    ┌─ custom_imported_variants.fe:95:16
    │
 95 │         Rgb(r, g, b) => {
-   │                ^ u8
+   │                ^ ref u8
 
 note: 
    ┌─ custom_imported_variants.fe:95:19
    │
 95 │         Rgb(r, g, b) => {
-   │                   ^ u8
+   │                   ^ ref u8
 
 note: 
    ┌─ custom_imported_variants.fe:95:25
@@ -641,19 +640,19 @@ note:
     ┌─ custom_imported_variants.fe:113:20
     │
 113 │         Color::Rgb(r, g, b) => {
-    │                    ^ u8
+    │                    ^ ref u8
 
 note: 
     ┌─ custom_imported_variants.fe:113:23
     │
 113 │         Color::Rgb(r, g, b) => {
-    │                       ^ u8
+    │                       ^ ref u8
 
 note: 
     ┌─ custom_imported_variants.fe:113:26
     │
 113 │         Color::Rgb(r, g, b) => {
-    │                          ^ u8
+    │                          ^ ref u8
 
 note: 
     ┌─ custom_imported_variants.fe:113:32

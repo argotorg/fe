@@ -142,7 +142,12 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     /// # Returns
     /// A `CodeRegionRoot` describing the referenced function, or `None` on failure.
     pub(super) fn code_region_target(&self, expr: ExprId) -> Option<CodeRegionRoot<'db>> {
-        let ty = self.typed_body.expr_ty(self.db, expr);
+        let ty = self
+            .typed_body
+            .expr_ty(self.db, expr)
+            .as_capability(self.db)
+            .map(|(_, inner)| inner)
+            .unwrap_or_else(|| self.typed_body.expr_ty(self.db, expr));
         let (base, args) = ty.decompose_ty_app(self.db);
         let TyData::TyBase(TyBase::Func(CallableDef::Func(func))) = base.data(self.db) else {
             return None;
@@ -168,6 +173,10 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     /// where the value has no runtime representation but the *type* still uniquely identifies the
     /// referenced contract entrypoint.
     pub(super) fn code_region_target_from_ty(&self, ty: TyId<'db>) -> Option<CodeRegionRoot<'db>> {
+        let ty = ty
+            .as_capability(self.db)
+            .map(|(_, inner)| inner)
+            .unwrap_or(ty);
         let (base, args) = ty.decompose_ty_app(self.db);
         let TyData::TyBase(TyBase::Func(CallableDef::Func(func))) = base.data(self.db) else {
             return None;

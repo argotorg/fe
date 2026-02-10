@@ -4,14 +4,4 @@ assertion_line: 27
 expression: diags
 input_file: fixtures/ty/def/view_param_handle_args.fe
 ---
-error[8-0000]: type mismatch
-   ┌─ view_param_handle_args.fe:23:18
-   │
-23 │     take_no_copy(r)
-   │                  ^ expected `NoCopy`, but `ref NoCopy` is given
 
-error[8-0000]: type mismatch
-   ┌─ view_param_handle_args.fe:28:18
-   │
-28 │     take_no_copy(m)
-   │                  ^ expected `NoCopy`, but `mut NoCopy` is given

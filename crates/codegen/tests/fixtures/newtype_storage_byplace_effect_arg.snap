@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 33
 expression: output
 input_file: tests/fixtures/newtype_storage_byplace_effect_arg.fe
 ---
@@ -61,12 +62,12 @@ object "NewtypeByPlaceEffectArg" {
       revert(0, 0)
     }
     function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Wrap_haf9e70905fcbd513__945a70bbbf171dbd($self, $slot) -> ret {
-      let v0 := $stor_ptr__Evm_hef0af3106e109414_Wrap_haf9e70905fcbd513__fd5231d549c91f24(0, $slot)
+      let v0 := $stor_ptr__Evm_hef0af3106e109414_Wrap_haf9e70905fcbd513__fd5231d549c91f24($self, $slot)
       ret := v0
       leave
     }
     function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__u256__3271ca15373d4483($self, $slot) -> ret {
-      let v0 := $stor_ptr__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9(0, $slot)
+      let v0 := $stor_ptr__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9($self, $slot)
       ret := v0
       leave
     }
@@ -197,12 +198,12 @@ object "NewtypeByPlaceEffectArg" {
         revert(0, 0)
       }
       function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Wrap_haf9e70905fcbd513__945a70bbbf171dbd($self, $slot) -> ret {
-        let v0 := $stor_ptr__Evm_hef0af3106e109414_Wrap_haf9e70905fcbd513__fd5231d549c91f24(0, $slot)
+        let v0 := $stor_ptr__Evm_hef0af3106e109414_Wrap_haf9e70905fcbd513__fd5231d549c91f24($self, $slot)
         ret := v0
         leave
       }
       function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__u256__3271ca15373d4483($self, $slot) -> ret {
-        let v0 := $stor_ptr__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9(0, $slot)
+        let v0 := $stor_ptr__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9($self, $slot)
         ret := v0
         leave
       }

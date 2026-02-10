@@ -354,10 +354,18 @@ impl<'db> FuncParam<'db> {
     pub fn pretty_print(&self, db: &'db dyn HirDb) -> String {
         let mut result = String::new();
         let name = unwrap_partial(self.name, "FuncParam::name");
+        let mode_prefix = match self.mode {
+            FuncParamMode::View => "",
+            FuncParamMode::Own => "own ",
+        };
 
         // Mutability comes next
         if self.is_mut {
             result.push_str("mut ");
+        }
+
+        if self.self_ty_fallback {
+            result.push_str(mode_prefix);
         }
 
         if self.is_label_suppressed {

@@ -14,12 +14,12 @@ function $foo_h6dbce71a6ea992b8_gen_value($self) -> ret {
   leave
 }
 function $foo_h6dbce71a6ea992b8_return_value($self) -> ret {
-  let v0 := $foo_h6dbce71a6ea992b8_gen_value(0)
+  let v0 := $foo_h6dbce71a6ea992b8_gen_value($self)
   ret := v0
   leave
 }
 function $call_method($foo) -> ret {
-  let v0 := $foo_h6dbce71a6ea992b8_return_value(0)
+  let v0 := $foo_h6dbce71a6ea992b8_return_value($foo)
   ret := v0
   leave
 }

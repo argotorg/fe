@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 33
 expression: output
 input_file: tests/fixtures/erc20.fe
 ---
@@ -58,7 +59,7 @@ object "CoolCoin" {
       mstore(0x40, add(v0, 64))
       mstore(v0, $role)
       mstore(add(v0, 32), $to)
-      $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set___u256__Address__bool_2__74418d210da55cc0(0, v0, 1)
+      $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set___u256__Address__bool_2__74418d210da55cc0($self, v0, 1)
       leave
     }
     function $address_h257056268eac7027_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_MemoryBytes___a53dbc6192a658d6($d) -> ret {
@@ -124,12 +125,12 @@ object "CoolCoin" {
       revert(0, 0)
     }
     function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__AccessControl_habee575e9e30e01d__f52682fed70e578f($self, $slot) -> ret {
-      let v0 := $stor_ptr__Evm_hef0af3106e109414_AccessControl_habee575e9e30e01d__7a393cee43403dd7(0, $slot)
+      let v0 := $stor_ptr__Evm_hef0af3106e109414_AccessControl_habee575e9e30e01d__7a393cee43403dd7($self, $slot)
       ret := v0
       leave
     }
     function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__TokenStore_h8a54a7cdf902b04e__cd360c9a577ac085($self, $slot) -> ret {
-      let v0 := $stor_ptr__Evm_hef0af3106e109414_TokenStore_h8a54a7cdf902b04e__4c5f1b1c5623342d(0, $slot)
+      let v0 := $stor_ptr__Evm_hef0af3106e109414_TokenStore_h8a54a7cdf902b04e__4c5f1b1c5623342d($self, $slot)
       ret := v0
       leave
     }
@@ -546,7 +547,7 @@ object "CoolCoin" {
         mstore(0x40, add(v1, 64))
         mstore(v1, $role)
         mstore(add(v1, 32), v0)
-        let v2 := $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get___u256__Address__bool_2__74418d210da55cc0(0, v1)
+        let v2 := $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get___u256__Address__bool_2__74418d210da55cc0($self, v1)
         $assert(eq(v2, 1))
         leave
       }
@@ -744,12 +745,12 @@ object "CoolCoin" {
         revert(0, 0)
       }
       function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__AccessControl_habee575e9e30e01d__f52682fed70e578f($self, $slot) -> ret {
-        let v0 := $stor_ptr__Evm_hef0af3106e109414_AccessControl_habee575e9e30e01d__7a393cee43403dd7(0, $slot)
+        let v0 := $stor_ptr__Evm_hef0af3106e109414_AccessControl_habee575e9e30e01d__7a393cee43403dd7($self, $slot)
         ret := v0
         leave
       }
       function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__TokenStore_h8a54a7cdf902b04e__cd360c9a577ac085($self, $slot) -> ret {
-        let v0 := $stor_ptr__Evm_hef0af3106e109414_TokenStore_h8a54a7cdf902b04e__4c5f1b1c5623342d(0, $slot)
+        let v0 := $stor_ptr__Evm_hef0af3106e109414_TokenStore_h8a54a7cdf902b04e__4c5f1b1c5623342d($self, $slot)
         ret := v0
         leave
       }

@@ -580,7 +580,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         // Borrow-handle params are treated as pre-existing loans rooted at `Param(i)`.
         for (idx, &local) in self.func.body.param_locals.iter().enumerate() {
             let ty = self.func.body.local(local).ty;
-            let Some((kind, _)) = ty_is_borrow(self.db, ty) else {
+            let Some((kind, _)) = ty.as_borrow(self.db) else {
                 continue;
             };
             let loan = LoanId(self.loans.len() as u32);
@@ -1650,13 +1650,6 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             return;
         };
 
-        if !matches!(
-            self.func.body.place_address_space(place),
-            AddressSpaceKind::Memory
-        ) {
-            panic!("borrow handles must point into memory");
-        }
-
         let targets = self.canonicalize_place(state, place);
         let before = self.loans[loan_id.0 as usize].targets.len();
         self.loans[loan_id.0 as usize].targets.extend(targets);
@@ -1755,6 +1748,14 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             let mut out = FxHashSet::default();
             for loan in self.loans_for_handle_value(state, base) {
                 out.extend(self.loans[loan.0 as usize].targets.iter().cloned());
+            }
+            if out.is_empty()
+                && let ValueOrigin::Local(local) = data.origin
+            {
+                out.insert(CanonPlace {
+                    root: self.root_for_local(local),
+                    proj: crate::MirProjectionPath::new(),
+                });
             }
             return out;
         }
@@ -2378,7 +2379,9 @@ fn collect_word_locals_in_value<'db>(
                 inner(body, *rhs, out, visiting);
             }
             (ValueOrigin::PlaceRef(place) | ValueOrigin::MoveOut { place }, _) => {
-                inner(body, place.base, out, visiting);
+                // Borrow-handle values (`PlaceRef`/`MoveOut`) are checked through
+                // place-access rules. Treating their base local as a plain word
+                // read introduces self-conflicts for same-instruction reborrows.
                 for proj in place.projection.iter() {
                     if let hir::projection::Projection::Index(
                         hir::projection::IndexSource::Dynamic(idx),

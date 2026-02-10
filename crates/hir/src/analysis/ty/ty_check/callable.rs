@@ -16,7 +16,7 @@ use crate::analysis::{
         fold::{AssocTySubst, TyFoldable, TyFolder},
         trait_def::TraitInstId,
         trait_resolution::constraint::collect_func_def_constraints,
-        ty_def::BorrowKind,
+        ty_def::{BorrowKind, CapabilityKind},
         ty_def::{TyBase, TyData, TyId},
         ty_lower::lower_generic_arg_list,
         visitor::{TyVisitable, TyVisitor},
@@ -176,6 +176,7 @@ impl<'db> Callable<'db> {
         } else {
             call_args.len()
         };
+        let has_receiver = receiver.is_some();
         if given_arity != expected_arity {
             let diag = BodyDiag::CallArgNumMismatch {
                 primary: span.into(),
@@ -258,10 +259,45 @@ impl<'db> Callable<'db> {
                 expected = expected.fold_with(db, &mut subst);
             }
             let expected = tc.normalize_ty(expected);
+            let mode = func_params
+                .as_ref()
+                .and_then(|params| params.get(i).copied())
+                .map(|param| param.mode(db));
+            let given_ty = tc.normalize_ty(given.expr_prop.ty);
 
-            let actual = tc
-                .try_coerce_copy_borrow_to_expected(given.expr_prop.ty, expected)
-                .unwrap_or(given.expr_prop.ty);
+            let mut actual = if mode == Some(FuncParamMode::Own)
+                && expected.is_ty_var(db)
+                && let Some((_, inner)) = given_ty.as_capability(db)
+                && (tc.ty_is_copy(inner) || tc.expr_can_move_from_place(given.expr))
+            {
+                inner
+            } else {
+                tc.try_coerce_capability_for_expr_to_expected(
+                    given.expr,
+                    given.expr_prop.ty,
+                    expected,
+                )
+                .unwrap_or(given.expr_prop.ty)
+            };
+            if has_receiver
+                && i == 0
+                && let Some((required_kind, required_inner)) = expected.as_capability(db)
+                && matches!(required_kind, CapabilityKind::Mut | CapabilityKind::Ref)
+                && actual == given.expr_prop.ty
+                && tc.ty_unifies(given_ty, required_inner)
+            {
+                actual = match required_kind {
+                    CapabilityKind::Mut => TyId::borrow_mut_of(db, given_ty),
+                    CapabilityKind::Ref => TyId::borrow_ref_of(db, given_ty),
+                    CapabilityKind::View => unreachable!(),
+                };
+            } else if let Some((CapabilityKind::Mut, required_inner)) = expected.as_capability(db)
+                && actual == given.expr_prop.ty
+                && given.expr_prop.is_mut
+                && tc.ty_unifies(given_ty, required_inner)
+            {
+                actual = TyId::borrow_mut_of(db, given_ty);
+            }
             tc.equate_ty(actual, expected, given.expr_span.clone());
             let expected = tc.normalize_ty(expected);
 
@@ -273,32 +309,42 @@ impl<'db> Callable<'db> {
             if let Some(params) = func_params.as_ref() {
                 let arg_is_place = tc.env.expr_place(given.expr).is_some();
 
-                let given_borrow_kind = tc
+                let given_capability = tc
                     .normalize_ty(given.expr_prop.ty)
-                    .as_borrow(db)
+                    .as_capability(db)
                     .map(|(kind, _)| kind);
-                if let Some((kind, _)) = expected.as_borrow(db)
+                if let Some((kind, _)) = expected.as_capability(db)
+                    && matches!(kind, CapabilityKind::Mut | CapabilityKind::Ref)
                     && arg_is_place
+                    && !(has_receiver && i == 0)
+                    && !(matches!(kind, CapabilityKind::Mut) && given.expr_prop.is_mut)
                     && !is_unary(
                         given.expr,
                         match kind {
-                            BorrowKind::Mut => UnOp::Mut,
-                            BorrowKind::Ref => UnOp::Ref,
+                            CapabilityKind::Mut => UnOp::Mut,
+                            CapabilityKind::Ref => UnOp::Ref,
+                            CapabilityKind::View => unreachable!(),
                         },
                     )
-                    && given_borrow_kind != Some(kind)
+                    && given_capability.is_none()
                 {
                     tc.push_diag(BodyDiag::ExplicitReborrowRequired {
                         primary: given.expr_span.clone(),
-                        kind,
+                        kind: match kind {
+                            CapabilityKind::Mut => BorrowKind::Mut,
+                            CapabilityKind::Ref => BorrowKind::Ref,
+                            CapabilityKind::View => unreachable!(),
+                        },
                     });
                 }
 
-                let mode = params
-                    .get(i)
-                    .copied()
-                    .unwrap_or_else(|| panic!("missing func param at index {i}"))
-                    .mode(db);
+                let mode = mode.unwrap_or_else(|| {
+                    params
+                        .get(i)
+                        .copied()
+                        .unwrap_or_else(|| panic!("missing func param at index {i}"))
+                        .mode(db)
+                });
                 if mode == FuncParamMode::Own {
                     if expected.as_borrow(db).is_some() {
                         tc.push_diag(BodyDiag::OwnParamCannotBeBorrow {

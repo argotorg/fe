@@ -63,7 +63,7 @@ impl<K: StorageKey, V: WordRepr, const SALT: u256> StorageMap<K, V, SALT> {
         V::from_word(word: storagemap_get_word_with_salt(key, SALT))
     }
 
-    pub fn set(self, key: K, value: V) {
+    pub fn set(self, key: K, value: own V) {
         storagemap_set_word_with_salt(key, SALT, value.to_word())
     }
 }

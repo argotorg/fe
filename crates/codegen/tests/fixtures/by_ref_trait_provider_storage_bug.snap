@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 33
 expression: output
 input_file: tests/fixtures/by_ref_trait_provider_storage_bug.fe
 ---
@@ -70,7 +71,7 @@ object "ByRefTraitProviderStorageBug" {
       revert(0, 0)
     }
     function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Pair_h956dff41e88ee341__acec41afdc898140($self, $slot) -> ret {
-      let v0 := $stor_ptr__Evm_hef0af3106e109414_Pair_h956dff41e88ee341__18f2eb617f185785(0, $slot)
+      let v0 := $stor_ptr__Evm_hef0af3106e109414_Pair_h956dff41e88ee341__18f2eb617f185785($self, $slot)
       ret := v0
       leave
     }
@@ -180,7 +181,7 @@ object "ByRefTraitProviderStorageBug" {
         revert(0, 0)
       }
       function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Pair_h956dff41e88ee341__acec41afdc898140($self, $slot) -> ret {
-        let v0 := $stor_ptr__Evm_hef0af3106e109414_Pair_h956dff41e88ee341__18f2eb617f185785(0, $slot)
+        let v0 := $stor_ptr__Evm_hef0af3106e109414_Pair_h956dff41e88ee341__18f2eb617f185785($self, $slot)
         ret := v0
         leave
       }

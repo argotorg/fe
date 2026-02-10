@@ -187,6 +187,18 @@ where
         }
     }
 
+    pub(super) fn param_own_self(&self) -> FuncParam<'db> {
+        let db = self.db();
+        FuncParam {
+            mode: FuncParamMode::Own,
+            is_mut: false,
+            is_label_suppressed: false,
+            name: Partial::Present(FuncParamName::Ident(IdentId::make_self(db))),
+            ty: Partial::Present(self.self_ty()),
+            self_ty_fallback: true,
+        }
+    }
+
     pub(super) fn param_mut_underscore_named(
         &self,
         name: IdentId<'db>,
@@ -570,9 +582,7 @@ where
             return;
         }
 
-        // `core::abi::Encode::encode` takes `self` as a view parameter, so we must avoid any
-        // desugaring that would move out of `self` (e.g. destructuring via `let Self { .. }`).
-        // Encoding each field directly keeps this method read-only.
+        // Encode fields directly from `self` in declaration order.
         let db = self.db();
         let self_expr = self.path_expr(PathId::from_ident(db, IdentId::make_self(db)));
         let encode_ident = IdentId::new(self.db(), "encode".to_string());

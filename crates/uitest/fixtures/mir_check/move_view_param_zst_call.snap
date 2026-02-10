@@ -5,13 +5,9 @@ expression: res
 input_file: fixtures/mir_check/move_view_param_zst_call.fe
 ---
 error[10-0002]: move conflict in `fn example`
-  ┌─ move_view_param_zst_call.fe:8:16
+  ┌─ move_view_param_zst_call.fe:7:12
   │
+7 │ fn example(a: Foo, b: Foo) -> (Foo, Foo) {
+  │            ^^^^^^ cannot assign to a value after it was moved
 8 │     make_pair2(a, b)
-  │                ^  ^ cannot move out of a view parameter
-  │                │   
-  │                cannot move out of a view parameter
-  │
-  = help: consider changing `a: Foo` to `a: own Foo`
-  = help: consider changing `b: Foo` to `b: own Foo`
-  = help: if you only need to destructure/inspect `a`, use explicit borrowing (`match ref a { ... }` or `let ... = ref a`)
+  │                - `tmp_spill3` is moved here

@@ -172,7 +172,7 @@ impl<'db> MethodCollector<'db> {
         let ty = if let Some(receiver) = func.receiver_ty(self.db) {
             let receiver_ty = receiver.instantiate_identity();
             receiver_ty
-                .as_borrow(self.db)
+                .as_capability(self.db)
                 .map(|(_, inner)| inner)
                 .unwrap_or(receiver_ty)
         } else {

@@ -558,7 +558,12 @@ impl<'db> FunctionEmitter<'db> {
             1,
             "code region intrinsic expects 1 argument"
         );
-        let arg = intr.args[0];
+        let mut arg = intr.args[0];
+        while let mir::ValueOrigin::TransparentCast { value } =
+            &self.mir_func.body.value(arg).origin
+        {
+            arg = *value;
+        }
         let symbol = match &self.mir_func.body.value(arg).origin {
             mir::ValueOrigin::FuncItem(root) => root.symbol.as_deref().ok_or_else(|| {
                 YulError::Unsupported(

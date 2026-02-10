@@ -1,13 +1,14 @@
 ---
 source: crates/hir/tests/ty_check.rs
+assertion_line: 40
 expression: res
 input_file: test_files/ty_check/contract_recv_generic_variant.fe
 ---
 note: 
-   ┌─ contract_recv_generic_variant.fe:10:74
+   ┌─ contract_recv_generic_variant.fe:10:78
    │  
-10 │       fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(self, mut _ e: E) {
-   │ ╭──────────────────────────────────────────────────────────────────────────^
+10 │       fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(own self, mut _ e: E) {
+   │ ╭──────────────────────────────────────────────────────────────────────────────^
 11 │ │         let Self { value } = self
 12 │ │         value.encode(e)
 13 │ │     }

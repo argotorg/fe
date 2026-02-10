@@ -15,11 +15,11 @@ impl ByteInput for MemoryBytes {
         self.len
     }
 
-    fn word_at(self, byte_offset: u256) -> u256 {
+    fn word_at(self, byte_offset: own u256) -> u256 {
         mload(self.base + byte_offset)
     }
 
-    fn byte_at(self, byte_offset: u256) -> u8 {
+    fn byte_at(self, byte_offset: own u256) -> u8 {
         let word_offset = byte_offset - (byte_offset % 32)
         let word = mload(self.base + word_offset)
         let idx = byte_offset - word_offset

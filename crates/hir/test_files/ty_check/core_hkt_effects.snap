@@ -4,10 +4,10 @@ expression: res
 input_file: test_files/ty_check/core_hkt_effects.fe
 ---
 note: 
-  ┌─ core_hkt_effects.fe:7:40
+  ┌─ core_hkt_effects.fe:7:44
   │  
-7 │       fn call(self, _ value: i32) -> i32 {
-  │ ╭────────────────────────────────────────^
+7 │       fn call(self, _ value: own i32) -> i32 {
+  │ ╭────────────────────────────────────────────^
 8 │ │         value + 1
 9 │ │     }
   │ ╰─────^ i32
@@ -31,10 +31,10 @@ note:
   │                 ^ i32
 
 note: 
-   ┌─ core_hkt_effects.fe:14:48
+   ┌─ core_hkt_effects.fe:14:52
    │  
-14 │       fn call(self, _ value: i32) -> Option<i32> {
-   │ ╭────────────────────────────────────────────────^
+14 │       fn call(self, _ value: own i32) -> Option<i32> {
+   │ ╭────────────────────────────────────────────────────^
 15 │ │         if value > 0 {
 16 │ │             Some(value)
 17 │ │         } else {
@@ -114,10 +114,10 @@ note:
    │             ^^^^ Option<i32>
 
 note: 
-   ┌─ core_hkt_effects.fe:25:52
+   ┌─ core_hkt_effects.fe:25:56
    │  
-25 │       fn call(self, _ value: i32) -> Result<(), i32> {
-   │ ╭────────────────────────────────────────────────────^
+25 │       fn call(self, _ value: own i32) -> Result<(), i32> {
+   │ ╭────────────────────────────────────────────────────────^
 26 │ │         if value % 2 == 0 {
 27 │ │             Ok(value)
 28 │ │         } else {
@@ -221,10 +221,10 @@ note:
    │                 ^^ ()
 
 note: 
-   ┌─ core_hkt_effects.fe:34:58
+   ┌─ core_hkt_effects.fe:34:62
    │  
-34 │   fn option_monad_chain(start: Option<i32>) -> Option<i32> {
-   │ ╭──────────────────────────────────────────────────────────^
+34 │   fn option_monad_chain(start: own Option<i32>) -> Option<i32> {
+   │ ╭──────────────────────────────────────────────────────────────^
 35 │ │     let mapped = start.map(AddOne{})
 36 │ │     mapped.and_then(ToPositive{})
 37 │ │ }
@@ -273,10 +273,10 @@ note:
    │                     ^^^^^^^^^^^^ ToPositive
 
 note: 
-   ┌─ core_hkt_effects.fe:39:66
+   ┌─ core_hkt_effects.fe:39:70
    │  
-39 │   fn result_monad_chain(start: Result<(), i32>) -> Result<(), i32> {
-   │ ╭──────────────────────────────────────────────────────────────────^
+39 │   fn result_monad_chain(start: own Result<(), i32>) -> Result<(), i32> {
+   │ ╭──────────────────────────────────────────────────────────────────────^
 40 │ │     let functor_mapped = start.map(AddOne{})
 41 │ │ 
 42 │ │     let func: Result<(), AddOne> = Ok(AddOne{})
@@ -661,10 +661,10 @@ note:
    │     ^^^^^^^^^^^^ ()
 
 note: 
-   ┌─ core_hkt_effects.fe:89:58
+   ┌─ core_hkt_effects.fe:89:62
    │  
-89 │       fn call(self, _ unit: ()) -> Result<(), Option<i32>> {
-   │ ╭──────────────────────────────────────────────────────────^
+89 │       fn call(self, _ unit: own ()) -> Result<(), Option<i32>> {
+   │ ╭──────────────────────────────────────────────────────────────^
 90 │ │         with (Logger = ConsoleLogger {}) {
 91 │ │             log_once()
 92 │ │             log_and_chain(x: 10)

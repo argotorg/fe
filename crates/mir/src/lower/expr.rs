@@ -10,7 +10,7 @@ use hir::{
 use hir::analysis::ty::effects::EffectKeyKind;
 
 use crate::{
-    ir::{Place, Rvalue, SourceInfoId},
+    ir::{Place, Rvalue, SourceInfoId, try_value_address_space_in},
     layout::{self, ty_storage_slots},
 };
 
@@ -197,14 +197,22 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             let assumptions =
                 hir::analysis::ty::trait_resolution::PredicateListId::empty_list(self.db);
             let ty = self.typed_body.expr_ty(self.db, expr);
-            if hir::analysis::ty::ty_is_copy(self.db, self.core.scope, ty, assumptions) {
-                return self.ensure_value(expr);
-            }
-
-            let value_id = self.ensure_value(expr);
-            if let Some(place) = self.place_for_borrow_expr(expr) {
-                self.builder.body.values[value_id.index()].origin = ValueOrigin::MoveOut { place };
-                return value_id;
+            let move_ty = ty
+                .as_capability(self.db)
+                .map(|(_, inner)| inner)
+                .unwrap_or(ty);
+            if !hir::analysis::ty::ty_is_copy(self.db, self.core.scope, move_ty, assumptions) {
+                let value_id = self.ensure_value(expr);
+                if let Some(place) = self.place_for_borrow_expr(expr) {
+                    if let Some((_, inner_ty)) = ty.as_capability(self.db) {
+                        let repr = self.value_repr_for_ty(inner_ty, self.expr_address_space(expr));
+                        self.builder.body.values[value_id.index()].ty = inner_ty;
+                        self.builder.body.values[value_id.index()].repr = repr;
+                    }
+                    self.builder.body.values[value_id.index()].origin =
+                        ValueOrigin::MoveOut { place };
+                    return value_id;
+                }
             }
         }
 
@@ -278,11 +286,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         let Some(place) = self.place_for_borrow_expr(*inner) else {
                             panic!("borrow operand must lower to a place");
                         };
+                        let space = self.value_address_space(place.base);
                         self.ensure_place_is_spilled(&place);
                         self.builder.body.values[value_id.index()].origin =
                             ValueOrigin::PlaceRef(place);
-                        self.builder.body.values[value_id.index()].repr =
-                            ValueRepr::Ptr(AddressSpaceKind::Memory);
+                        self.builder.body.values[value_id.index()].repr = ValueRepr::Ptr(space);
                     }
                     _ => {
                         let _ = self.lower_expr(*inner);
@@ -311,9 +319,18 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 self.lower_range_expr(expr, *lhs, *rhs)
             }
             Partial::Present(Expr::Bin(lhs, rhs, _)) => {
-                let _ = self.lower_expr(*lhs);
-                let _ = self.lower_expr(*rhs);
-                self.ensure_value(expr)
+                let lhs_value = self.lower_expr(*lhs);
+                let rhs_value = self.lower_expr(*rhs);
+                let coerced_lhs = self.coerce_binary_operand_if_copy_capability(*lhs, lhs_value);
+                let coerced_rhs = self.coerce_binary_operand_if_copy_capability(*rhs, rhs_value);
+                let value_id = self.ensure_value(expr);
+                if let ValueOrigin::Binary { lhs, rhs, .. } =
+                    &mut self.builder.body.values[value_id.index()].origin
+                {
+                    *lhs = coerced_lhs;
+                    *rhs = coerced_rhs;
+                }
+                value_id
             }
             Partial::Present(Expr::Field(lhs, field_index)) => {
                 self.lower_field_expr(expr, *lhs, *field_index)
@@ -329,6 +346,385 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
     fn lower_call_expr(&mut self, expr: ExprId) -> ValueId {
         self.lower_call_expr_inner(expr, None, None)
+    }
+
+    fn call_expected_arg_tys(&self, callable: &Callable<'db>) -> Vec<TyId<'db>> {
+        callable
+            .callable_def
+            .arg_tys(self.db)
+            .into_iter()
+            .map(|binder| binder.instantiate(self.db, callable.generic_args()))
+            .collect()
+    }
+
+    pub(super) fn capability_value_is_address_backed(&self, value: ValueId) -> bool {
+        let mut root = value;
+        while let ValueOrigin::TransparentCast { value: inner } =
+            &self.builder.body.value(root).origin
+        {
+            root = *inner;
+        }
+
+        let root_value = self.builder.body.value(root);
+        match root_value.origin {
+            ValueOrigin::Local(_) => root_value.repr.address_space().is_some(),
+            ValueOrigin::PlaceRef(_) | ValueOrigin::MoveOut { .. } | ValueOrigin::FieldPtr(_) => {
+                true
+            }
+            _ => false,
+        }
+    }
+
+    pub(super) fn place_from_capability_value(
+        &mut self,
+        value: ValueId,
+        ty: TyId<'db>,
+    ) -> Option<Place<'db>> {
+        let (_, inner_ty) = ty.as_capability(self.db)?;
+        if self.capability_value_is_address_backed(value)
+            && self
+                .builder
+                .body
+                .value(value)
+                .repr
+                .address_space()
+                .is_some()
+        {
+            let space = self.value_address_space(value);
+            let base = self.alloc_value(
+                inner_ty,
+                ValueOrigin::TransparentCast { value },
+                ValueRepr::Ptr(space),
+            );
+            return Some(Place::new(base, MirProjectionPath::new()));
+        }
+
+        // Capability-typed rvalues can appear as immediates (e.g. integer literals coerced to
+        // `view T`). Materialize storage in memory so subsequent loads don't treat the immediate
+        // word as a pointer address (like `mload(10)`).
+        let inner_value = self.alloc_value(
+            inner_ty,
+            ValueOrigin::TransparentCast { value },
+            self.value_repr_for_ty(inner_ty, AddressSpaceKind::Memory),
+        );
+        let temp = self.alloc_temp_local(inner_ty, false, "captmp");
+        self.builder.body.locals[temp.index()].address_space = AddressSpaceKind::Memory;
+        self.assign(None, Some(temp), Rvalue::Value(inner_value));
+        let spill = self.ensure_spill_slot_for_local(temp, inner_ty);
+        let base = self.alloc_value(
+            inner_ty,
+            ValueOrigin::Local(spill),
+            ValueRepr::Ref(AddressSpaceKind::Memory),
+        );
+        Some(Place::new(base, MirProjectionPath::new()))
+    }
+
+    fn value_address_space_or_memory(&self, value: ValueId) -> AddressSpaceKind {
+        crate::ir::try_value_address_space_in(
+            &self.builder.body.values,
+            &self.builder.body.locals,
+            value,
+        )
+        .unwrap_or(AddressSpaceKind::Memory)
+    }
+
+    fn coerce_call_arg_value(
+        &mut self,
+        arg_expr: ExprId,
+        arg_value: ValueId,
+        expected_ty: TyId<'db>,
+    ) -> ValueId {
+        let actual_ty = self.builder.body.value(arg_value).ty;
+        let arg_space = self
+            .builder
+            .body
+            .value(arg_value)
+            .repr
+            .address_space()
+            .unwrap_or(AddressSpaceKind::Memory);
+        if actual_ty == expected_ty {
+            if let Some((_, inner_ty)) = expected_ty.as_capability(self.db) {
+                let expected_repr = self.value_repr_for_ty(expected_ty, arg_space);
+                if expected_repr.address_space().is_some()
+                    && !self.capability_value_is_address_backed(arg_value)
+                    && let Some(place) = self
+                        .place_for_borrow_expr(arg_expr)
+                        .or_else(|| self.place_from_capability_value(arg_value, expected_ty))
+                {
+                    let place_space = self.value_address_space(place.base);
+                    let expected_repr = self.value_repr_for_ty(expected_ty, place_space);
+                    let base = self.alloc_value(
+                        inner_ty,
+                        ValueOrigin::PlaceRef(place),
+                        self.value_repr_for_ty(inner_ty, place_space),
+                    );
+                    return self.alloc_value(
+                        expected_ty,
+                        ValueOrigin::TransparentCast { value: base },
+                        expected_repr,
+                    );
+                }
+            }
+            return arg_value;
+        }
+
+        if let Some((required_cap, required_inner)) = expected_ty.as_capability(self.db) {
+            let expected_repr = self.value_repr_for_ty(expected_ty, arg_space);
+            if expected_repr.address_space().is_none() {
+                if let Some((_, given_inner)) = actual_ty.as_capability(self.db)
+                    && given_inner == required_inner
+                {
+                    if let Some(place) = self
+                        .place_for_borrow_expr(arg_expr)
+                        .or_else(|| self.place_from_capability_value(arg_value, actual_ty))
+                    {
+                        let place_space = self.value_address_space(place.base);
+                        let expected_repr = self.value_repr_for_ty(expected_ty, place_space);
+                        let loaded = self.alloc_temp_local(required_inner, false, "viewword");
+                        self.builder.body.locals[loaded.index()].address_space = place_space;
+                        self.assign(None, Some(loaded), Rvalue::Load { place });
+                        let loaded_value = self.alloc_value(
+                            required_inner,
+                            ValueOrigin::Local(loaded),
+                            self.value_repr_for_ty(required_inner, place_space),
+                        );
+                        return self.alloc_value(
+                            expected_ty,
+                            ValueOrigin::TransparentCast {
+                                value: loaded_value,
+                            },
+                            expected_repr,
+                        );
+                    }
+                    return self.alloc_value(
+                        expected_ty,
+                        ValueOrigin::TransparentCast { value: arg_value },
+                        expected_repr,
+                    );
+                }
+
+                if actual_ty == required_inner {
+                    return self.alloc_value(
+                        expected_ty,
+                        ValueOrigin::TransparentCast { value: arg_value },
+                        expected_repr,
+                    );
+                }
+
+                return arg_value;
+            }
+
+            if let Some((given_cap, given_inner)) = actual_ty.as_capability(self.db)
+                && given_inner == required_inner
+                && given_cap.rank() >= required_cap.rank()
+            {
+                if self
+                    .builder
+                    .body
+                    .value(arg_value)
+                    .repr
+                    .address_space()
+                    .is_some()
+                {
+                    if let Some(place) = self.place_for_borrow_expr(arg_expr) {
+                        let place_space = self.value_address_space(place.base);
+                        if place_space != arg_space {
+                            let expected_repr = self.value_repr_for_ty(expected_ty, place_space);
+                            return self.alloc_value(
+                                expected_ty,
+                                ValueOrigin::PlaceRef(place),
+                                expected_repr,
+                            );
+                        }
+                    }
+                    return self.alloc_value(
+                        expected_ty,
+                        ValueOrigin::TransparentCast { value: arg_value },
+                        expected_repr,
+                    );
+                }
+
+                if let Some(place) = self
+                    .place_for_borrow_expr(arg_expr)
+                    .or_else(|| self.place_from_capability_value(arg_value, actual_ty))
+                {
+                    let place_space = self.value_address_space(place.base);
+                    let expected_repr = self.value_repr_for_ty(expected_ty, place_space);
+                    return self.alloc_value(
+                        expected_ty,
+                        ValueOrigin::PlaceRef(place),
+                        expected_repr,
+                    );
+                }
+            }
+
+            if actual_ty == required_inner && self.is_by_ref_ty(actual_ty) {
+                return self.alloc_value(
+                    expected_ty,
+                    ValueOrigin::TransparentCast { value: arg_value },
+                    expected_repr,
+                );
+            }
+
+            if let Some(place) = self.place_for_borrow_expr(arg_expr) {
+                let place_space = self.value_address_space(place.base);
+                let expected_repr = self.value_repr_for_ty(expected_ty, place_space);
+                return self.alloc_value(expected_ty, ValueOrigin::PlaceRef(place), expected_repr);
+            }
+
+            let temp = self.alloc_temp_local(actual_ty, false, "viewtmp");
+            self.builder.body.locals[temp.index()].address_space = AddressSpaceKind::Memory;
+            self.assign(None, Some(temp), Rvalue::Value(arg_value));
+            let spill = self.ensure_spill_slot_for_local(temp, actual_ty);
+            let base = self.alloc_value(
+                actual_ty,
+                ValueOrigin::Local(spill),
+                ValueRepr::Ref(AddressSpaceKind::Memory),
+            );
+            let place = Place::new(base, MirProjectionPath::new());
+            let expected_repr = self.value_repr_for_ty(expected_ty, AddressSpaceKind::Memory);
+            return self.alloc_value(expected_ty, ValueOrigin::PlaceRef(place), expected_repr);
+        }
+
+        if let Some((_, inner_ty)) = actual_ty.as_capability(self.db)
+            && expected_ty == inner_ty
+        {
+            let expected_repr = self.value_repr_for_ty(expected_ty, arg_space);
+            if expected_repr.address_space().is_some() {
+                return self.alloc_value(
+                    expected_ty,
+                    ValueOrigin::TransparentCast { value: arg_value },
+                    expected_repr,
+                );
+            }
+
+            if !self.capability_value_is_address_backed(arg_value) {
+                return self.alloc_value(
+                    expected_ty,
+                    ValueOrigin::TransparentCast { value: arg_value },
+                    expected_repr,
+                );
+            }
+
+            let Some(place) = self
+                .place_for_borrow_expr(arg_expr)
+                .or_else(|| self.place_from_capability_value(arg_value, actual_ty))
+            else {
+                return arg_value;
+            };
+
+            let dest = self.alloc_temp_local(expected_ty, false, "copyarg");
+            self.builder.body.locals[dest.index()].address_space =
+                self.value_address_space(place.base);
+            self.assign(None, Some(dest), Rvalue::Load { place });
+            return self.alloc_value(expected_ty, ValueOrigin::Local(dest), expected_repr);
+        }
+
+        arg_value
+    }
+
+    fn coerce_call_args_to_expected(
+        &mut self,
+        callable: &Callable<'db>,
+        arg_exprs: &[ExprId],
+        args: &mut [ValueId],
+    ) {
+        let expected_arg_tys = self.call_expected_arg_tys(callable);
+        for (idx, arg) in args.iter_mut().enumerate() {
+            let Some(&arg_expr) = arg_exprs.get(idx) else {
+                continue;
+            };
+            let Some(&expected_ty) = expected_arg_tys.get(idx) else {
+                continue;
+            };
+            let coerced = self.coerce_call_arg_value(arg_expr, *arg, expected_ty);
+            *arg = self.materialize_capability_call_arg(arg_expr, coerced, expected_ty);
+        }
+    }
+
+    fn materialize_capability_call_arg(
+        &mut self,
+        arg_expr: ExprId,
+        arg_value: ValueId,
+        expected_ty: TyId<'db>,
+    ) -> ValueId {
+        let Some((_, _)) = expected_ty.as_capability(self.db) else {
+            return arg_value;
+        };
+
+        let expected_repr =
+            self.value_repr_for_ty(expected_ty, self.value_address_space_or_memory(arg_value));
+        if expected_repr.address_space().is_none()
+            || self.capability_value_is_address_backed(arg_value)
+        {
+            return arg_value;
+        }
+
+        let Some(place) = self.place_for_borrow_expr(arg_expr).or_else(|| {
+            let source_ty = self.builder.body.value(arg_value).ty;
+            if source_ty.as_capability(self.db).is_some() {
+                return self.place_from_capability_value(arg_value, source_ty);
+            }
+
+            let temp = self.alloc_temp_local(source_ty, false, "viewtmp");
+            self.builder.body.locals[temp.index()].address_space = AddressSpaceKind::Memory;
+            self.assign(None, Some(temp), Rvalue::Value(arg_value));
+            let spill = self.ensure_spill_slot_for_local(temp, source_ty);
+            let base = self.alloc_value(
+                source_ty,
+                ValueOrigin::Local(spill),
+                ValueRepr::Ref(AddressSpaceKind::Memory),
+            );
+            Some(Place::new(base, MirProjectionPath::new()))
+        }) else {
+            return arg_value;
+        };
+
+        let place_space = self.value_address_space(place.base);
+        let expected_repr = self.value_repr_for_ty(expected_ty, place_space);
+        self.alloc_value(expected_ty, ValueOrigin::PlaceRef(place), expected_repr)
+    }
+
+    fn coerce_binary_operand_if_copy_capability(
+        &mut self,
+        operand_expr: ExprId,
+        operand_value: ValueId,
+    ) -> ValueId {
+        let operand_ty = self.builder.body.value(operand_value).ty;
+        let Some((_, inner_ty)) = operand_ty.as_capability(self.db) else {
+            return operand_value;
+        };
+
+        let assumptions = hir::analysis::ty::trait_resolution::PredicateListId::empty_list(self.db);
+        if !hir::analysis::ty::ty_is_copy(self.db, self.core.scope, inner_ty, assumptions) {
+            return operand_value;
+        }
+
+        if !self.capability_value_is_address_backed(operand_value) {
+            return self.alloc_value(
+                inner_ty,
+                ValueOrigin::TransparentCast {
+                    value: operand_value,
+                },
+                self.value_repr_for_ty(inner_ty, AddressSpaceKind::Memory),
+            );
+        }
+
+        let Some(place) = self
+            .place_for_borrow_expr(operand_expr)
+            .or_else(|| self.place_from_capability_value(operand_value, operand_ty))
+        else {
+            return operand_value;
+        };
+
+        let dest = self.alloc_temp_local(inner_ty, false, "binload");
+        self.builder.body.locals[dest.index()].address_space = AddressSpaceKind::Memory;
+        self.assign(None, Some(dest), Rvalue::Load { place });
+        self.alloc_value(
+            inner_ty,
+            ValueOrigin::Local(dest),
+            self.value_repr_for_ty(inner_ty, AddressSpaceKind::Memory),
+        )
     }
 
     fn lower_call_expr_inner(
@@ -368,9 +764,10 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         };
         let callable_def = callable.callable_def;
 
-        let Some((args, arg_exprs)) = self.collect_call_args(expr) else {
+        let Some((mut args, arg_exprs)) = self.collect_call_args(expr) else {
             return value_id;
         };
+        self.coerce_call_args_to_expected(&callable, &arg_exprs, &mut args);
         let provider_space = self.effect_provider_space_for_provider_ty(ty);
         let result_space = provider_space.unwrap_or_else(|| self.expr_address_space(expr));
 
@@ -415,8 +812,27 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         if let Some(op) = self.intrinsic_kind(callable_def) {
             let mut intrinsic_args = args.clone();
+            let mut intrinsic_arg_exprs = arg_exprs.clone();
             if self.is_method_call(expr) && !intrinsic_args.is_empty() {
                 intrinsic_args.remove(0);
+                intrinsic_arg_exprs.remove(0);
+            }
+            for (idx, arg) in intrinsic_args.iter_mut().enumerate() {
+                let Some(&arg_expr) = intrinsic_arg_exprs.get(idx) else {
+                    continue;
+                };
+                *arg = self.coerce_binary_operand_if_copy_capability(arg_expr, *arg);
+            }
+            if matches!(
+                op,
+                IntrinsicOp::CodeRegionOffset | IntrinsicOp::CodeRegionLen
+            ) && let Some(arg) = intrinsic_args.first_mut()
+                && let Some(target) =
+                    self.code_region_target_from_ty(self.builder.body.value(*arg).ty)
+            {
+                let ty = self.builder.body.value(*arg).ty;
+                let repr = self.builder.body.value(*arg).repr;
+                *arg = self.alloc_value(ty, ValueOrigin::FuncItem(target), repr);
             }
             if op.returns_value() {
                 // Intrinsics are word-producing operations, but some std/core APIs wrap them
@@ -858,13 +1274,27 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     return value_id;
                 }
                 let lhs_ty = self.typed_body.expr_ty(self.db, *lhs);
-                let Some(info) = self.field_access_info(lhs_ty, field_index) else {
+                let lhs_place_ty = lhs_ty
+                    .as_capability(self.db)
+                    .map(|(_, inner)| inner)
+                    .unwrap_or(lhs_ty);
+                let lhs_is_borrow = lhs_ty.as_capability(self.db).is_some()
+                    && self
+                        .builder
+                        .body
+                        .value(base_value)
+                        .repr
+                        .address_space()
+                        .is_some();
+                let Some(info) = self.field_access_info_for_expr(expr, lhs_place_ty, field_index)
+                else {
                     return value_id;
                 };
 
                 // Transparent newtype access: field 0 is a representation-preserving cast.
-                if info.field_idx == 0
-                    && crate::repr::transparent_newtype_field_ty(self.db, lhs_ty).is_some()
+                if !lhs_is_borrow
+                    && info.field_idx == 0
+                    && crate::repr::transparent_newtype_field_ty(self.db, lhs_place_ty).is_some()
                 {
                     let base_repr = self.builder.body.value(base_value).repr;
                     if !base_repr.is_ref() {
@@ -887,6 +1317,16 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     }
                 }
 
+                let base_value = if lhs_is_borrow {
+                    let space = self.value_address_space(base_value);
+                    self.alloc_value(
+                        lhs_place_ty,
+                        ValueOrigin::TransparentCast { value: base_value },
+                        ValueRepr::Ptr(space),
+                    )
+                } else {
+                    base_value
+                };
                 let addr_space = self.value_address_space(base_value);
                 let place = Place::new(
                     base_value,
@@ -1038,7 +1478,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         if let Some(local) = self.local_for_binding(binding) {
             let local_ty = self.builder.body.local(local).ty;
             let local_address_space = self.builder.body.local(local).address_space;
-            if let Some((_, inner_ty)) = local_ty.as_borrow(self.db)
+            if let Some((_, inner_ty)) = local_ty.as_capability(self.db)
                 && ty == inner_ty
             {
                 let handle = self.alloc_value(
@@ -1046,22 +1486,32 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     ValueOrigin::Local(local),
                     self.value_repr_for_ty(local_ty, local_address_space),
                 );
-                let base = self.alloc_value(
-                    inner_ty,
-                    ValueOrigin::TransparentCast { value: handle },
-                    ValueRepr::Ptr(AddressSpaceKind::Memory),
-                );
-                let place = Place::new(base, MirProjectionPath::new());
-                let dest = self.alloc_temp_local(ty, false, "load");
-                let source = self.source_for_expr(expr);
-                self.push_inst_here(MirInst::Assign {
-                    source,
-                    dest: Some(dest),
-                    rvalue: Rvalue::Load { place },
-                });
-                self.builder.body.values[value_id.index()].origin = ValueOrigin::Local(dest);
-                self.builder.body.values[value_id.index()].repr =
-                    self.value_repr_for_expr(expr, ty);
+                let target_repr = self.value_repr_for_expr(expr, ty);
+                if target_repr.address_space().is_some() {
+                    self.builder.body.values[value_id.index()].origin =
+                        ValueOrigin::TransparentCast { value: handle };
+                    self.builder.body.values[value_id.index()].repr = target_repr;
+                    return value_id;
+                }
+
+                if self.capability_value_is_address_backed(handle) {
+                    let Some(place) = self.place_from_capability_value(handle, local_ty) else {
+                        return value_id;
+                    };
+                    let dest = self.alloc_temp_local(ty, false, "load");
+                    let source = self.source_for_expr(expr);
+                    self.push_inst_here(MirInst::Assign {
+                        source,
+                        dest: Some(dest),
+                        rvalue: Rvalue::Load { place },
+                    });
+                    self.builder.body.values[value_id.index()].origin = ValueOrigin::Local(dest);
+                    self.builder.body.values[value_id.index()].repr = target_repr;
+                } else {
+                    self.builder.body.values[value_id.index()].origin =
+                        ValueOrigin::TransparentCast { value: handle };
+                    self.builder.body.values[value_id.index()].repr = target_repr;
+                }
                 return value_id;
             }
         }
@@ -1133,11 +1583,19 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         let lhs_ty = self.typed_body.expr_ty(self.db, lhs);
-        let (lhs_is_borrow, lhs_place_ty) = lhs_ty
-            .as_borrow(self.db)
-            .map(|(_, inner)| (true, inner))
-            .unwrap_or((false, lhs_ty));
-        let Some(info) = self.field_access_info(lhs_place_ty, field_index) else {
+        let lhs_place_ty = lhs_ty
+            .as_capability(self.db)
+            .map(|(_, inner)| inner)
+            .unwrap_or(lhs_ty);
+        let lhs_is_borrow = lhs_ty.as_capability(self.db).is_some()
+            && self
+                .builder
+                .body
+                .value(base_value)
+                .repr
+                .address_space()
+                .is_some();
+        let Some(info) = self.field_access_info_for_expr(expr, lhs_place_ty, field_index) else {
             return value_id;
         };
 
@@ -1160,10 +1618,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         let base_value = if lhs_is_borrow {
+            let space = self.value_address_space(base_value);
             self.alloc_value(
                 lhs_place_ty,
                 ValueOrigin::TransparentCast { value: base_value },
-                ValueRepr::Ptr(AddressSpaceKind::Memory),
+                ValueRepr::Ptr(space),
             )
         } else {
             base_value
@@ -1261,10 +1720,10 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         let lhs_ty = self.typed_body.expr_ty(self.db, lhs);
-        let (lhs_is_borrow, lhs_place_ty) = lhs_ty
-            .as_borrow(self.db)
-            .map(|(_, inner)| (true, inner))
-            .unwrap_or((false, lhs_ty));
+        let lhs_place_ty = lhs_ty
+            .as_capability(self.db)
+            .map(|(_, inner)| inner)
+            .unwrap_or(lhs_ty);
         if !lhs_place_ty.is_array(self.db) {
             return value_id;
         }
@@ -1278,11 +1737,20 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return value_id;
         }
 
+        let lhs_is_borrow = lhs_ty.as_capability(self.db).is_some()
+            && self
+                .builder
+                .body
+                .value(base_value)
+                .repr
+                .address_space()
+                .is_some();
         let base_value = if lhs_is_borrow {
+            let space = self.value_address_space(base_value);
             self.alloc_value(
                 lhs_place_ty,
                 ValueOrigin::TransparentCast { value: base_value },
-                ValueRepr::Ptr(AddressSpaceKind::Memory),
+                ValueRepr::Ptr(space),
             )
         } else {
             base_value
@@ -1306,6 +1774,24 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         value_id
     }
 
+    fn field_access_info_for_expr(
+        &self,
+        expr: ExprId,
+        owner_ty: TyId<'db>,
+        field_index: FieldIndex<'db>,
+    ) -> Option<FieldAccessInfo<'db>> {
+        self.field_access_info(owner_ty, field_index).or_else(|| {
+            let FieldIndex::Index(integer) = field_index else {
+                return None;
+            };
+            let field_idx = integer.data(self.db).to_usize()?;
+            Some(FieldAccessInfo {
+                field_ty: self.typed_body.expr_ty(self.db, expr),
+                field_idx,
+            })
+        })
+    }
+
     /// Returns true if the expression is a method call (as opposed to a regular function call).
     fn is_method_call(&self, expr: ExprId) -> bool {
         let exprs = self.body.exprs(self.db);
@@ -1322,14 +1808,18 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         match expr.data(self.db, self.body) {
             Partial::Present(Expr::Path(_)) => {
                 let ty = self.typed_body.expr_ty(self.db, expr);
-                if let Some((_, inner_ty)) = ty.as_borrow(self.db) {
+                if ty.as_capability(self.db).is_some() {
                     let handle = self.ensure_value(expr);
-                    let base = self.alloc_value(
-                        inner_ty,
-                        ValueOrigin::TransparentCast { value: handle },
-                        ValueRepr::Ptr(AddressSpaceKind::Memory),
-                    );
-                    return Some(Place::new(base, MirProjectionPath::new()));
+                    if self.capability_value_is_address_backed(handle) {
+                        let (_, inner_ty) = ty.as_capability(self.db)?;
+                        let base = self.alloc_value(
+                            inner_ty,
+                            ValueOrigin::TransparentCast { value: handle },
+                            self.value_repr_for_ty(inner_ty, AddressSpaceKind::Memory),
+                        );
+                        return Some(Place::new(base, MirProjectionPath::new()));
+                    }
+                    return self.place_from_capability_value(handle, ty);
                 }
 
                 let binding = self.typed_body.expr_prop(self.db, expr).binding?;
@@ -1363,10 +1853,10 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 let field_index = field_index.to_opt()?;
                 let lhs_ty = self.typed_body.expr_ty(self.db, *lhs);
                 let lhs_place_ty = lhs_ty
-                    .as_borrow(self.db)
+                    .as_capability(self.db)
                     .map(|(_, inner)| inner)
                     .unwrap_or(lhs_ty);
-                let info = self.field_access_info(lhs_place_ty, field_index)?;
+                let info = self.field_access_info_for_expr(expr, lhs_place_ty, field_index)?;
 
                 let Place {
                     base,
@@ -1378,7 +1868,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             Partial::Present(Expr::Bin(lhs, rhs, BinOp::Index)) => {
                 let lhs_ty = self.typed_body.expr_ty(self.db, *lhs);
                 let lhs_place_ty = lhs_ty
-                    .as_borrow(self.db)
+                    .as_capability(self.db)
                     .map(|(_, inner)| inner)
                     .unwrap_or(lhs_ty);
                 if !lhs_place_ty.is_array(self.db) {
@@ -1453,12 +1943,15 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         match expr.data(self.db, self.body) {
             Partial::Present(Expr::Path(_)) => {
                 let ty = self.typed_body.expr_ty(self.db, expr);
-                if let Some((_, inner_ty)) = ty.as_borrow(self.db) {
+                if let Some((_, inner_ty)) = ty.as_capability(self.db) {
                     let handle = self.ensure_value(expr);
+                    if !self.capability_value_is_address_backed(handle) {
+                        return None;
+                    }
                     let base = self.alloc_value(
                         inner_ty,
                         ValueOrigin::TransparentCast { value: handle },
-                        ValueRepr::Ptr(AddressSpaceKind::Memory),
+                        self.value_repr_for_ty(inner_ty, AddressSpaceKind::Memory),
                     );
                     return Some(Place::new(base, MirProjectionPath::new()));
                 }
@@ -1491,11 +1984,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             Partial::Present(Expr::Field(lhs, field_index)) => {
                 let field_index = field_index.to_opt()?;
                 let lhs_ty = self.typed_body.expr_ty(self.db, *lhs);
-                let (lhs_is_borrow, lhs_place_ty) = lhs_ty
-                    .as_borrow(self.db)
-                    .map(|(_, inner)| (true, inner))
-                    .unwrap_or((false, lhs_ty));
-                let info = self.field_access_info(lhs_place_ty, field_index)?;
+                let lhs_place_ty = lhs_ty
+                    .as_capability(self.db)
+                    .map(|(_, inner)| inner)
+                    .unwrap_or(lhs_ty);
+                let info = self.field_access_info_for_expr(expr, lhs_place_ty, field_index)?;
 
                 // Transparent newtypes: treat field 0 as the same place when the base is
                 // already addressable, otherwise fall back to scalar newtype semantics.
@@ -1513,11 +2006,20 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 }
 
                 let addr_value = self.lower_expr(*lhs);
+                let lhs_is_borrow = lhs_ty.as_capability(self.db).is_some()
+                    && self
+                        .builder
+                        .body
+                        .value(addr_value)
+                        .repr
+                        .address_space()
+                        .is_some();
                 let addr_value = if lhs_is_borrow {
+                    let space = self.value_address_space(addr_value);
                     self.alloc_value(
                         lhs_place_ty,
                         ValueOrigin::TransparentCast { value: addr_value },
-                        ValueRepr::Ptr(AddressSpaceKind::Memory),
+                        ValueRepr::Ptr(space),
                     )
                 } else {
                     addr_value
@@ -1529,19 +2031,28 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             }
             Partial::Present(Expr::Bin(lhs, rhs, BinOp::Index)) => {
                 let lhs_ty = self.typed_body.expr_ty(self.db, *lhs);
-                let (lhs_is_borrow, lhs_place_ty) = lhs_ty
-                    .as_borrow(self.db)
-                    .map(|(_, inner)| (true, inner))
-                    .unwrap_or((false, lhs_ty));
+                let lhs_place_ty = lhs_ty
+                    .as_capability(self.db)
+                    .map(|(_, inner)| inner)
+                    .unwrap_or(lhs_ty);
                 if !lhs_place_ty.is_array(self.db) {
                     return None;
                 }
                 let addr_value = self.lower_expr(*lhs);
+                let lhs_is_borrow = lhs_ty.as_capability(self.db).is_some()
+                    && self
+                        .builder
+                        .body
+                        .value(addr_value)
+                        .repr
+                        .address_space()
+                        .is_some();
                 let addr_value = if lhs_is_borrow {
+                    let space = self.value_address_space(addr_value);
                     self.alloc_value(
                         lhs_place_ty,
                         ValueOrigin::TransparentCast { value: addr_value },
-                        ValueRepr::Ptr(AddressSpaceKind::Memory),
+                        ValueRepr::Ptr(space),
                     )
                 } else {
                     addr_value
@@ -1648,7 +2159,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let root_ty = self.typed_body.expr_ty(self.db, root_expr);
         let lhs_ty = self.typed_body.expr_ty(self.db, target);
         let lhs_place_ty = lhs_ty
-            .as_borrow(self.db)
+            .as_capability(self.db)
             .map(|(_, inner)| inner)
             .unwrap_or(lhs_ty);
 
@@ -2554,8 +3065,12 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         .value_repr_for_ty(pat_ty, AddressSpaceKind::Memory)
                         .address_space()
                         .is_some()
+                        && let Some(space) = try_value_address_space_in(
+                            &self.builder.body.values,
+                            &self.builder.body.locals,
+                            value_id,
+                        )
                     {
-                        let space = self.value_address_space(value_id);
                         self.set_pat_address_space(pat, space);
                     }
                 }
@@ -2574,8 +3089,12 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         .value_repr_for_ty(pat_ty, AddressSpaceKind::Memory)
                         .address_space()
                         .is_some()
+                        && let Some(space) = try_value_address_space_in(
+                            &self.builder.body.values,
+                            &self.builder.body.locals,
+                            value_id,
+                        )
                     {
-                        let space = self.value_address_space(value_id);
                         self.set_pat_address_space(pat, space);
                     }
                 }

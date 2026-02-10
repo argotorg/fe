@@ -119,7 +119,14 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     if self
                         .hir_func
                         .is_some_and(|func| extract_contract_function(self.db, func).is_some())
-                        && matches!(binding, LocalBinding::EffectParam { .. })
+                        && matches!(
+                            binding,
+                            LocalBinding::EffectParam { .. }
+                                | LocalBinding::Param {
+                                    site: ParamSite::EffectField(_),
+                                    ..
+                                }
+                        )
                     {
                         // TODO: document/enforce this rule:
                         //   effect params on contract_init/contract_runtime must be zero-sized concrete types

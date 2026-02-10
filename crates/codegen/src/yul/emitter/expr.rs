@@ -125,7 +125,9 @@ impl<'db> FunctionEmitter<'db> {
                         ArithBinOp::BitXor => Ok(format!("xor({left}, {right})")),
                         // Range should be lowered to Range type construction before codegen
                         ArithBinOp::Range => {
-                            todo!("Range operator should be handled during type checking/MIR lowering")
+                            todo!(
+                                "Range operator should be handled during type checking/MIR lowering"
+                            )
                         }
                     },
                     BinOp::Comp(op) => {
@@ -151,20 +153,28 @@ impl<'db> FunctionEmitter<'db> {
                     )),
                 }
             }
-            ValueOrigin::Local(local) => state
-                .resolve_local(*local)
-                .ok_or_else(|| {
-                    let local_data = self.mir_func.body.local(*local);
-                    let is_param = self.mir_func.body.param_locals.contains(local);
-                    let is_effect = self.mir_func.body.effect_param_locals.contains(local);
-                    YulError::Unsupported(format!(
-                        "unbound MIR local reached codegen (func={}, local=l{} `{}`, ty={}, param={is_param}, effect={is_effect})",
-                        self.mir_func.symbol_name,
-                        local.index(),
-                        local_data.name,
-                        local_data.ty.pretty_print(self.db),
-                    ))
-                }),
+            ValueOrigin::Local(local) => {
+                if let Some(name) = state.resolve_local(*local) {
+                    return Ok(name);
+                }
+
+                let local_data = self.mir_func.body.local(*local);
+                let is_param = self.mir_func.body.param_locals.contains(local);
+                let is_effect = self.mir_func.body.effect_param_locals.contains(local);
+                if is_effect && self.mir_func.contract_function.is_some() {
+                    // Contract entrypoints lower host/effect handles as compile-time symbols
+                    // rather than runtime parameters.
+                    return Ok("0".into());
+                }
+
+                Err(YulError::Unsupported(format!(
+                    "unbound MIR local reached codegen (func={}, local=l{} `{}`, ty={}, param={is_param}, effect={is_effect})",
+                    self.mir_func.symbol_name,
+                    local.index(),
+                    local_data.name,
+                    local_data.ty.pretty_print(self.db),
+                )))
+            }
             ValueOrigin::FuncItem(_) => {
                 debug_assert!(
                     layout::is_zero_sized_ty_in(self.db, &self.layout, value.ty),
@@ -415,6 +425,7 @@ impl<'db> FunctionEmitter<'db> {
                 | PrimTy::Array
                 | PrimTy::Tuple(_)
                 | PrimTy::Ptr
+                | PrimTy::View
                 | PrimTy::BorrowMut
                 | PrimTy::BorrowRef => raw_load.to_string(),
             }
@@ -450,6 +461,7 @@ impl<'db> FunctionEmitter<'db> {
                 | PrimTy::Array
                 | PrimTy::Tuple(_)
                 | PrimTy::Ptr
+                | PrimTy::View
                 | PrimTy::BorrowMut
                 | PrimTy::BorrowRef => raw_value.to_string(),
             }

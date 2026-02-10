@@ -27,6 +27,7 @@ impl<'db> PatternMatrix<'db> {
         scope: ScopeId<'db>,
         ty: TyId<'db>,
     ) -> Self {
+        let ty = normalize_pattern_ty(db, ty);
         let rows = patterns
             .iter()
             .enumerate()
@@ -187,9 +188,12 @@ impl<'db> PatternMatrix<'db> {
                 }
             }
 
-            SimplifiedPatternKind::Or(pats) => pats
-                .iter()
-                .any(|pat| self.is_pattern_useful(db, &PatternRowVec::new(vec![pat.clone()]))),
+            SimplifiedPatternKind::Or(pats) => pats.iter().any(|pat| {
+                let mut expanded = Vec::with_capacity(pat_vec.len());
+                expanded.push(pat.clone());
+                expanded.extend_from_slice(&pat_vec.inner[1..]);
+                self.is_pattern_useful(db, &PatternRowVec::new(expanded))
+            }),
 
             // Errored patterns are ignored for usefulness; keep them but
             // don't cause later patterns to become unreachable.
@@ -240,6 +244,24 @@ impl<'db> PatternMatrix<'db> {
     }
 }
 
+fn normalize_pattern_ty<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+    if let Some((_, inner)) = ty.as_capability(db) {
+        return normalize_pattern_ty(db, inner);
+    }
+
+    if ty.is_tuple(db) {
+        let elems: Vec<_> = ty
+            .generic_args(db)
+            .iter()
+            .copied()
+            .map(|elem| normalize_pattern_ty(db, elem))
+            .collect();
+        return TyId::tuple_with_elems(db, &elems);
+    }
+
+    ty
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PatternRowVec<'db> {
     pub inner: Vec<SimplifiedPattern<'db>>,
@@ -285,7 +307,13 @@ impl<'db> PatternRowVec<'db> {
             SimplifiedPatternKind::Constructor { kind, fields } => {
                 if *kind == ctor {
                     let mut inner = Vec::with_capacity(self.inner.len() + ctor_fields.len() - 1);
-                    inner.extend_from_slice(fields);
+                    for (idx, field_ty) in ctor_fields.iter().copied().enumerate() {
+                        if let Some(field) = fields.get(idx) {
+                            inner.push(field.clone());
+                        } else {
+                            inner.push(SimplifiedPattern::wildcard(None, field_ty));
+                        }
+                    }
                     inner.extend_from_slice(&self.inner[1..]);
                     vec![Self::new(inner)]
                 } else {

@@ -1,5 +1,6 @@
 ---
 source: crates/hir/tests/body_references.rs
+assertion_line: 79
 expression: res
 input_file: test_files/body_references/trait_impl.fe
 ---
@@ -13,7 +14,7 @@ note:
    ┌─ trait_impl.fe:11:14
    │
 11 │         self.age
-   │              ^^^ field -> field
+   │              ^^^ field access
 
 note: 
    ┌─ trait_impl.fe:16:5

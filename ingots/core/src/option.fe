@@ -11,46 +11,46 @@ pub enum Option<T> {
 }
 
 impl<T> Option<T> {
-    pub fn is_some(self) -> bool {
+    pub fn is_some(self: own Self) -> bool {
         match self {
             Self::Some(_) => true
             Self::None => false
         }
     }
 
-    pub fn is_none(self) -> bool {
+    pub fn is_none(self: own Self) -> bool {
         !self.is_some()
     }
 
-    pub fn map<U, F: Fn<T, U>>(self, _ func: F) -> Option<U> {
+    pub fn map<U, F: Fn<T, U>>(self: own Self, _ func: F) -> Option<U> {
         match self {
             Self::Some(value) => Option::Some(func.call(value))
             Self::None => Option::None
         }
     }
 
-    pub fn and_then<U, F: Fn<T, Option<U>>>(self, _ func: F) -> Option<U> {
+    pub fn and_then<U, F: Fn<T, Option<U>>>(self: own Self, _ func: F) -> Option<U> {
         match self {
             Self::Some(value) => func.call(value)
             Self::None => Option::None
         }
     }
 
-    pub fn unwrap(self) -> T {
+    pub fn unwrap(self: own Self) -> T {
         match self {
             Self::Some(t) => t
             Self::None => panic()
         }
     }
 
-    pub fn unwrap_or(self, default: T) -> T {
+    pub fn unwrap_or(self: own Self, default: own T) -> T {
         match self {
             Self::Some(x) => x
             Self::None => default
         }
     }
 
-    pub fn unwrap_or_else<F: Fn<(), T>>(self, _ default_func: F) -> T {
+    pub fn unwrap_or_else<F: Fn<(), T>>(self: own Self, _ default_func: F) -> T {
         match self {
             Self::Some(value) => value
             Self::None => default_func.call(())
@@ -59,7 +59,7 @@ impl<T> Option<T> {
 }
 
 impl<T> Option<T> where T: Default {
-    pub fn unwrap_or_default(self) -> T {
+    pub fn unwrap_or_default(self: own Self) -> T {
         match self {
             Self::Some(x) => x
             Self::None => T::default()
@@ -74,7 +74,7 @@ impl<T> Default for Option<T> {
 }
 
 impl Functor for Option {
-    fn map<T, U, F: Fn<T, U>>(self: Self<T>, _ func: F) -> Self<U> {
+    fn map<T, U, F: Fn<T, U>>(self: own Self<T>, _ func: F) -> Self<U> {
         match self {
             Option::Some(value) => Option::Some(func.call(value))
             Option::None => Option::None
@@ -83,11 +83,11 @@ impl Functor for Option {
 }
 
 impl Applicative for Option {
-    fn pure<T>(_ value: T) -> Self<T> {
+    fn pure<T>(_ value: own T) -> Self<T> {
         Option::Some(value)
     }
 
-    fn ap<T, U, F: Fn<T, U>>(self: Self<F>, _ value: Self<T>) -> Self<U> {
+    fn ap<T, U, F: Fn<T, U>>(self: own Self<F>, _ value: own Self<T>) -> Self<U> {
         match (self, value) {
             (Option::Some(func), Option::Some(arg)) => Option::Some(func.call(arg))
             _ => Option::None
@@ -96,7 +96,7 @@ impl Applicative for Option {
 }
 
 impl Monad for Option {
-    fn bind<T, U, F: Fn<T, Self<U>>>(self: Self<T>, _ func: F) -> Self<U> {
+    fn bind<T, U, F: Fn<T, Self<U>>>(self: own Self<T>, _ func: F) -> Self<U> {
         match self {
             Option::Some(value) => func.call(value)
             Option::None => Option::None

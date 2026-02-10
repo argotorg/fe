@@ -97,7 +97,11 @@ impl<'db> TyChecker<'db> {
                 continue;
             }
 
-            self.check_pat(pat_tup[pat_idx], pat_ty);
+            let (pat_expected, mode) = self.destructure_source_mode(pat_ty);
+            self.check_pat(pat_tup[pat_idx], pat_expected);
+            if let super::DestructureSourceMode::Borrow(kind) = mode {
+                self.retype_pattern_bindings_for_borrow(pat_tup[pat_idx], kind);
+            }
             pat_idx += 1;
         }
 
@@ -338,7 +342,11 @@ impl<'db> TyChecker<'db> {
             } else if !rest_range.contains(&i) {
                 // This is an explicit pattern from the source (not '..'),
                 // and it corresponds to a variant field not covered by any '..'.
-                self.check_pat(current_pat_id, elem_ty);
+                let (pat_expected, mode) = self.destructure_source_mode(elem_ty);
+                self.check_pat(current_pat_id, pat_expected);
+                if let super::DestructureSourceMode::Borrow(kind) = mode {
+                    self.retype_pattern_bindings_for_borrow(current_pat_id, kind);
+                }
                 arg_idx += 1;
             }
             // If rest_range.contains(&i) and current_pat_id is not Pat::Rest,
@@ -477,7 +485,13 @@ impl<'db> TyChecker<'db> {
                     }
                 };
 
-            rec_checker.tc.check_pat(field_pat.pat, expected);
+            let (pat_expected, mode) = rec_checker.tc.destructure_source_mode(expected);
+            rec_checker.tc.check_pat(field_pat.pat, pat_expected);
+            if let super::DestructureSourceMode::Borrow(kind) = mode {
+                rec_checker
+                    .tc
+                    .retype_pattern_bindings_for_borrow(field_pat.pat, kind);
+            }
         }
 
         if let Err(diag) = rec_checker.finalize(pat_span.fields().into(), contains_rest) {

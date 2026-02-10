@@ -20,7 +20,7 @@ use hir::analysis::ty::{
     corelib::resolve_core_trait,
     trait_def::TraitInstId,
     trait_resolution::{GoalSatisfiability, PredicateListId, is_goal_satisfiable},
-    ty_is_borrow,
+    ty_def::CapabilityKind,
 };
 use hir::hir_def::IdentId;
 
@@ -84,6 +84,10 @@ pub fn effect_provider_space_for_ty<'db>(
     core: &CoreLib<'db>,
     ty: TyId<'db>,
 ) -> Option<AddressSpaceKind> {
+    if let Some((_, inner)) = ty.as_capability(db) {
+        return effect_provider_space_for_ty(db, core, inner);
+    }
+
     if let Some(space) = effect_provider_space_via_domain_trait(db, core, ty) {
         return Some(space);
     }
@@ -153,8 +157,11 @@ pub fn repr_kind_for_ty<'db>(
         return ReprKind::Zst;
     }
 
-    if ty_is_borrow(db, ty).is_some() {
-        return ReprKind::Ptr(AddressSpaceKind::Memory);
+    if let Some((capability, inner)) = ty.as_capability(db) {
+        return match capability {
+            CapabilityKind::Mut | CapabilityKind::Ref => ReprKind::Ptr(AddressSpaceKind::Memory),
+            CapabilityKind::View => repr_kind_for_ty(db, core, inner),
+        };
     }
 
     if let Some(space) = effect_provider_space_for_ty(db, core, ty) {

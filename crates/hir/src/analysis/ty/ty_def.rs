@@ -245,6 +245,28 @@ impl<'db> TyId<'db> {
         Self::app(db, ctor, inner)
     }
 
+    pub fn view_of(db: &'db dyn HirAnalysisDb, inner: TyId<'db>) -> TyId<'db> {
+        let ctor = Self::new(db, TyData::TyBase(TyBase::Prim(PrimTy::View)));
+        Self::app(db, ctor, inner)
+    }
+
+    pub fn as_view(self, db: &'db dyn HirAnalysisDb) -> Option<TyId<'db>> {
+        let (base, args) = self.decompose_ty_app(db);
+        let inner = args.first().copied()?;
+        matches!(base.data(db), TyData::TyBase(TyBase::Prim(PrimTy::View))).then_some(inner)
+    }
+
+    pub fn as_capability(self, db: &'db dyn HirAnalysisDb) -> Option<(CapabilityKind, TyId<'db>)> {
+        let (base, args) = self.decompose_ty_app(db);
+        let inner = args.first().copied()?;
+        match base.data(db) {
+            TyData::TyBase(TyBase::Prim(PrimTy::BorrowMut)) => Some((CapabilityKind::Mut, inner)),
+            TyData::TyBase(TyBase::Prim(PrimTy::BorrowRef)) => Some((CapabilityKind::Ref, inner)),
+            TyData::TyBase(TyBase::Prim(PrimTy::View)) => Some((CapabilityKind::View, inner)),
+            _ => None,
+        }
+    }
+
     pub fn as_borrow(self, db: &'db dyn HirAnalysisDb) -> Option<(BorrowKind, TyId<'db>)> {
         let (base, args) = self.decompose_ty_app(db);
         let inner = args.first().copied()?;
@@ -1287,6 +1309,7 @@ impl<'db> TyBase<'db> {
                 PrimTy::Array => "[]",
                 PrimTy::Tuple(_) => "()",
                 PrimTy::Ptr => "*",
+                PrimTy::View => "View",
                 PrimTy::BorrowMut => "BorrowMut",
                 PrimTy::BorrowRef => "BorrowRef",
             }
@@ -1378,6 +1401,7 @@ pub enum PrimTy {
     Array,
     Tuple(usize),
     Ptr,
+    View,
     BorrowMut,
     BorrowRef,
 }
@@ -1386,6 +1410,23 @@ pub enum PrimTy {
 pub enum BorrowKind {
     Mut,
     Ref,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CapabilityKind {
+    Mut,
+    Ref,
+    View,
+}
+
+impl CapabilityKind {
+    pub fn rank(self) -> u8 {
+        match self {
+            Self::Mut => 3,
+            Self::Ref => 2,
+            Self::View => 1,
+        }
+    }
 }
 
 impl PrimTy {
@@ -1485,7 +1526,7 @@ impl HasKind for PrimTy {
             Self::Tuple(n) => (0..*n).fold(Kind::Star, |acc, _| Kind::abs(Kind::Star, acc)),
             Self::Ptr => Kind::abs(Kind::Star, Kind::Star),
             Self::String => Kind::abs(Kind::Star, Kind::Star),
-            Self::BorrowMut | Self::BorrowRef => Kind::abs(Kind::Star, Kind::Star),
+            Self::View | Self::BorrowMut | Self::BorrowRef => Kind::abs(Kind::Star, Kind::Star),
             _ => Kind::Star,
         }
     }
@@ -1593,6 +1634,13 @@ fn pretty_print_ty_app<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> String
                 return "ref <missing>".to_string();
             };
             format!("ref {}", inner.pretty_print(db))
+        }
+
+        TyData::TyBase(Prim(View)) => {
+            let Some(inner) = args.first() else {
+                return "<missing>".to_string();
+            };
+            inner.pretty_print(db).to_string()
         }
 
         TyData::TyBase(Prim(Array)) => {

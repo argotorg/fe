@@ -188,6 +188,9 @@ impl<'db> TyCheckEnv<'db> {
                         Some(hir_ty) => lower_hir_ty(db, hir_ty, owner_scope, assumptions),
                         None => TyId::invalid(db, InvalidCause::ParseError),
                     };
+                    if param.mode == FuncParamMode::View && ty.as_capability(db).is_none() {
+                        ty = TyId::view_of(db, ty);
+                    }
 
                     if !ty.is_star_kind(db) {
                         ty = TyId::invalid(db, InvalidCause::Other);

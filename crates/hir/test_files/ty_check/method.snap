@@ -1,6 +1,5 @@
 ---
 source: crates/hir/tests/ty_check.rs
-assertion_line: 40
 expression: res
 input_file: test_files/ty_check/method.fe
 ---
@@ -26,10 +25,10 @@ note:
   │     ^^^^^^^^^^^^ !
 
 note: 
-   ┌─ method.fe:17:54
+   ┌─ method.fe:17:68
    │  
-17 │       pub fn and<U>(self, rhs: Option<U>) -> Option<U> {
-   │ ╭──────────────────────────────────────────────────────^
+17 │       pub fn and<U>(self: own Self, rhs: own Option<U>) -> Option<U> {
+   │ ╭────────────────────────────────────────────────────────────────────^
 18 │ │         match self {
 19 │ │             Self::Some(t) => rhs
 20 │ │             Self::None => Option::None
@@ -83,10 +82,10 @@ note:
    │                           ^^^^^^^^^^^^ Option<U>
 
 note: 
-   ┌─ method.fe:24:51
+   ┌─ method.fe:24:65
    │  
-24 │       pub fn get_or_insert(mut self, inner: T) -> T {
-   │ ╭───────────────────────────────────────────────────^
+24 │       pub fn get_or_insert(mut self: own Self, inner: own T) -> T {
+   │ ╭─────────────────────────────────────────────────────────────────^
 25 │ │         match self {
 26 │ │             Self::Some(t) => t
 27 │ │             Self::None => {
@@ -184,10 +183,10 @@ note:
    │                 ^^^^^ T
 
 note: 
-   ┌─ method.fe:36:42
+   ┌─ method.fe:36:46
    │  
-36 │       pub fn unwrap<T>(self: Self<T>) -> T {
-   │ ╭──────────────────────────────────────────^
+36 │       pub fn unwrap<T>(self: own Self<T>) -> T {
+   │ ╭──────────────────────────────────────────────^
 37 │ │         match self {
 38 │ │             Self::None => evm::abort()
 39 │ │             Self::Some(t) => t
@@ -273,11 +272,11 @@ note:
 48 │   fn foo() -> Option<bool> {
    │ ╭──────────────────────────^
 49 │ │     let mut x: Option<i32> = Option::Some(1)
-50 │ │     let func_obj = get_t
-51 │ │     x.get_or_insert(inner: func_obj())
-52 │ │ 
-53 │ │     x.and(rhs: Option::Some(false))
-54 │ │ }
+50 │ │     let y: Option<i32> = Option::Some(2)
+51 │ │     let func_obj = get_t
+   · │
+54 │ │     x.and(rhs: Option::Some(false))
+55 │ │ }
    │ ╰─^ Option<bool>
 
 note: 
@@ -307,65 +306,89 @@ note:
 note: 
    ┌─ method.fe:50:9
    │
-50 │     let func_obj = get_t
+50 │     let y: Option<i32> = Option::Some(2)
+   │         ^ Option<i32>
+
+note: 
+   ┌─ method.fe:50:26
+   │
+50 │     let y: Option<i32> = Option::Some(2)
+   │                          ^^^^^^^^^^^^ fn Some<i32>
+
+note: 
+   ┌─ method.fe:50:26
+   │
+50 │     let y: Option<i32> = Option::Some(2)
+   │                          ^^^^^^^^^^^^^^^ Option<i32>
+
+note: 
+   ┌─ method.fe:50:39
+   │
+50 │     let y: Option<i32> = Option::Some(2)
+   │                                       ^ i32
+
+note: 
+   ┌─ method.fe:51:9
+   │
+51 │     let func_obj = get_t
    │         ^^^^^^^^ fn get_t<i32>
 
 note: 
-   ┌─ method.fe:50:20
+   ┌─ method.fe:51:20
    │
-50 │     let func_obj = get_t
+51 │     let func_obj = get_t
    │                    ^^^^^ fn get_t<i32>
 
 note: 
-   ┌─ method.fe:51:5
+   ┌─ method.fe:52:5
    │
-51 │     x.get_or_insert(inner: func_obj())
+52 │     y.get_or_insert(inner: func_obj())
    │     ^ Option<i32>
 
 note: 
-   ┌─ method.fe:51:5
+   ┌─ method.fe:52:5
    │
-51 │     x.get_or_insert(inner: func_obj())
+52 │     y.get_or_insert(inner: func_obj())
    │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ i32
 
 note: 
-   ┌─ method.fe:51:28
+   ┌─ method.fe:52:28
    │
-51 │     x.get_or_insert(inner: func_obj())
+52 │     y.get_or_insert(inner: func_obj())
    │                            ^^^^^^^^ fn get_t<i32>
 
 note: 
-   ┌─ method.fe:51:28
+   ┌─ method.fe:52:28
    │
-51 │     x.get_or_insert(inner: func_obj())
+52 │     y.get_or_insert(inner: func_obj())
    │                            ^^^^^^^^^^ i32
 
 note: 
-   ┌─ method.fe:53:5
+   ┌─ method.fe:54:5
    │
-53 │     x.and(rhs: Option::Some(false))
+54 │     x.and(rhs: Option::Some(false))
    │     ^ Option<i32>
 
 note: 
-   ┌─ method.fe:53:5
+   ┌─ method.fe:54:5
    │
-53 │     x.and(rhs: Option::Some(false))
+54 │     x.and(rhs: Option::Some(false))
    │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Option<bool>
 
 note: 
-   ┌─ method.fe:53:16
+   ┌─ method.fe:54:16
    │
-53 │     x.and(rhs: Option::Some(false))
+54 │     x.and(rhs: Option::Some(false))
    │                ^^^^^^^^^^^^ fn Some<bool>
 
 note: 
-   ┌─ method.fe:53:16
+   ┌─ method.fe:54:16
    │
-53 │     x.and(rhs: Option::Some(false))
+54 │     x.and(rhs: Option::Some(false))
    │                ^^^^^^^^^^^^^^^^^^^ Option<bool>
 
 note: 
-   ┌─ method.fe:53:29
+   ┌─ method.fe:54:29
    │
-53 │     x.and(rhs: Option::Some(false))
+54 │     x.and(rhs: Option::Some(false))
    │                             ^^^^^ bool

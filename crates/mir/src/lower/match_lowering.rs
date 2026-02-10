@@ -93,14 +93,43 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         // Build pattern matrix from match arms
         let scrutinee_expr_ty = self.typed_body.expr_ty(self.db, scrutinee);
         let (scrutinee_value, scrutinee_ty) =
-            if let Some((_, inner_ty)) = scrutinee_expr_ty.as_borrow(self.db) {
-                let scrutinee_value = self.alloc_value(
-                    inner_ty,
-                    ValueOrigin::TransparentCast {
-                        value: scrutinee_value,
-                    },
-                    self.value_repr_for_ty(inner_ty, AddressSpaceKind::Memory),
-                );
+            if let Some((_, inner_ty)) = scrutinee_expr_ty.as_capability(self.db) {
+                let inner_repr = self.value_repr_for_ty(inner_ty, AddressSpaceKind::Memory);
+                let scrutinee_value = if inner_repr.address_space().is_none() {
+                    self.alloc_value(
+                        inner_ty,
+                        ValueOrigin::TransparentCast {
+                            value: scrutinee_value,
+                        },
+                        inner_repr,
+                    )
+                } else if self.capability_value_is_address_backed(scrutinee_value) {
+                    let space = self.value_address_space(scrutinee_value);
+                    self.alloc_value(
+                        inner_ty,
+                        ValueOrigin::TransparentCast {
+                            value: scrutinee_value,
+                        },
+                        self.value_repr_for_ty(inner_ty, space),
+                    )
+                } else if let Some(place) =
+                    self.place_from_capability_value(scrutinee_value, scrutinee_expr_ty)
+                {
+                    let space = self.value_address_space(place.base);
+                    self.alloc_value(
+                        inner_ty,
+                        ValueOrigin::PlaceRef(place),
+                        self.value_repr_for_ty(inner_ty, space),
+                    )
+                } else {
+                    self.alloc_value(
+                        inner_ty,
+                        ValueOrigin::TransparentCast {
+                            value: scrutinee_value,
+                        },
+                        inner_repr,
+                    )
+                };
                 (scrutinee_value, inner_ty)
             } else {
                 (scrutinee_value, scrutinee_expr_ty)
@@ -156,7 +185,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let tree = build_decision_tree(self.db, &matrix);
 
         let leaf_bindings = self.collect_leaf_bindings(&tree);
-        let consume_scrutinee = scrutinee_expr_ty.as_borrow(self.db).is_none()
+        let consume_scrutinee = scrutinee_expr_ty.as_capability(self.db).is_none()
             && leaf_bindings.values().any(|bindings| !bindings.is_empty());
 
         let result_local = produces_value.then(|| {
@@ -575,7 +604,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         // Empty path means we bind to the scrutinee itself
         if path.is_empty() {
-            if binding_ty.as_borrow(self.db).is_some() {
+            if binding_ty.as_capability(self.db).is_some() {
                 let place = Place::new(scrutinee_value, MirProjectionPath::new());
                 let handle = self.alloc_value(
                     binding_ty,
@@ -589,7 +618,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         // Compute the final type by walking the projection path
         let projected_ty = self.compute_projection_result_type(scrutinee_ty, path);
-        let is_borrow = binding_ty.as_borrow(self.db).is_some();
+        let is_borrow = binding_ty.as_capability(self.db).is_some();
         let is_by_ref = self.is_by_ref_ty(binding_ty);
 
         if !is_borrow

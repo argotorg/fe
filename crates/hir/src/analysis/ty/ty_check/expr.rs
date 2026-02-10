@@ -30,7 +30,7 @@ use crate::analysis::ty::{
         is_goal_satisfiable,
     },
     ty_check::callable::Callable,
-    ty_def::{BorrowKind, PrimTy, TyBase, TyData, prim_int_bits},
+    ty_def::{CapabilityKind, PrimTy, TyBase, TyData, prim_int_bits},
 };
 use crate::analysis::{
     HirAnalysisDb, Spanned,
@@ -193,7 +193,9 @@ impl<'db> TyChecker<'db> {
         self.env.leave_expr();
 
         actual.ty = normalize_ty(self.db, actual.ty, self.env.scope(), self.env.assumptions());
-        if let Some(coerced) = self.try_coerce_copy_borrow_to_expected(actual.ty, expected) {
+        if let Some(coerced) =
+            self.try_coerce_capability_for_expr_to_expected(expr, actual.ty, expected)
+        {
             actual.ty = coerced;
         }
         let typeable = Typeable::Expr(expr, actual.clone());
@@ -256,7 +258,7 @@ impl<'db> TyChecker<'db> {
 
             let place_ty = prop
                 .ty
-                .as_borrow(self.db)
+                .as_capability(self.db)
                 .map(|(_, inner)| inner)
                 .unwrap_or(prop.ty);
 
@@ -324,13 +326,22 @@ impl<'db> TyChecker<'db> {
             return ExprProp::invalid(self.db);
         }
 
-        let from = normalize_ty(
+        let mut from = normalize_ty(
             self.db,
             inner_prop.ty,
             self.env.scope(),
             self.env.assumptions(),
         );
         let to = normalize_ty(self.db, target_ty, self.env.scope(), self.env.assumptions());
+
+        // Casts operate on values, so for Copy capabilities treat the source as
+        // the inner value type. This allows widening/narrowing checks such as
+        // `(selector as u256)` when `selector` comes from a view parameter.
+        if let Some((_, inner)) = from.as_capability(self.db)
+            && self.ty_is_copy(inner)
+        {
+            from = inner;
+        }
 
         if from == to {
             return ExprProp::new(to, true);
@@ -571,7 +582,7 @@ impl<'db> TyChecker<'db> {
 
         let lhs_place_ty = lhs
             .ty
-            .as_borrow(self.db)
+            .as_capability(self.db)
             .map(|(_, inner)| inner)
             .unwrap_or(lhs.ty);
 
@@ -1360,13 +1371,21 @@ impl<'db> TyChecker<'db> {
             return ExprProp::invalid(self.db);
         }
 
-        let receiver_place_ty = receiver_prop
-            .ty
-            .as_borrow(self.db)
-            .map(|(_, inner)| inner)
-            .unwrap_or(receiver_prop.ty);
+        let mut receiver_tys = vec![receiver_prop.ty];
+        if let Some((cap, inner)) = receiver_prop.ty.as_capability(self.db) {
+            if matches!(cap, CapabilityKind::Mut) {
+                receiver_tys.push(TyId::borrow_ref_of(self.db, inner));
+            }
+            if !matches!(cap, CapabilityKind::View) {
+                receiver_tys.push(TyId::view_of(self.db, inner));
+            }
+            receiver_tys.push(inner);
+        } else {
+            receiver_tys.push(TyId::view_of(self.db, receiver_prop.ty));
+        }
+        receiver_tys.dedup();
 
-        let mut canonical_r_ty = Canonicalized::new(self.db, receiver_prop.ty);
+        let mut canonical_r_ty = Canonicalized::new(self.db, receiver_tys[0]);
         let mut candidate = select_method_candidate(
             self.db,
             canonical_r_ty.value,
@@ -1375,21 +1394,23 @@ impl<'db> TyChecker<'db> {
             self.env.assumptions(),
             None,
         );
+        if matches!(candidate, Err(MethodSelectionError::NotFound)) {
+            for &receiver_ty in receiver_tys.iter().skip(1) {
+                let fallback_canonical = Canonicalized::new(self.db, receiver_ty);
+                let fallback = select_method_candidate(
+                    self.db,
+                    fallback_canonical.value,
+                    method_name,
+                    self.env.scope(),
+                    self.env.assumptions(),
+                    None,
+                );
 
-        // Methods may be defined on the underlying place type while the receiver expression
-        // is already a borrow handle value (`ref T` / `mut T`).
-        if candidate.is_err() && receiver_place_ty != receiver_prop.ty {
-            let fallback_canonical = Canonicalized::new(self.db, receiver_place_ty);
-            if let Ok(fallback_candidate) = select_method_candidate(
-                self.db,
-                fallback_canonical.value,
-                method_name,
-                self.env.scope(),
-                self.env.assumptions(),
-                None,
-            ) {
-                canonical_r_ty = fallback_canonical;
-                candidate = Ok(fallback_candidate);
+                if fallback.is_ok() || !matches!(fallback, Err(MethodSelectionError::NotFound)) {
+                    canonical_r_ty = fallback_canonical;
+                    candidate = fallback;
+                    break;
+                }
             }
         }
 
@@ -1572,8 +1593,12 @@ impl<'db> TyChecker<'db> {
             ResolvedPathInBody::Binding(binding) => {
                 let ty = self.env.lookup_binding_ty(&binding);
                 let mut is_mut = binding.is_mut();
-                if let Some((kind, _)) = ty.as_borrow(self.db) {
-                    is_mut = matches!(kind, BorrowKind::Mut);
+                if let Some((cap, _)) = ty.as_capability(self.db) {
+                    is_mut = match cap {
+                        CapabilityKind::Mut => true,
+                        CapabilityKind::Ref => false,
+                        CapabilityKind::View => binding.is_mut(),
+                    };
                 }
                 ExprProp::new_binding_ref(ty, is_mut, binding)
             }
@@ -1965,7 +1990,7 @@ impl<'db> TyChecker<'db> {
         let typed_lhs = self.check_expr(*lhs, lhs_ty);
         let lhs_ty = typed_lhs.ty;
         let lhs_place_ty = lhs_ty
-            .as_borrow(self.db)
+            .as_capability(self.db)
             .map(|(_, inner)| inner)
             .unwrap_or(lhs_ty);
         // let lhs_ty = normalize_ty(self.db, lhs_ty, self.env.scope(), self.env.assumptions());
@@ -2252,7 +2277,7 @@ impl<'db> TyChecker<'db> {
         let typed_lhs = self.check_expr_unknown(*lhs);
         let lhs_ty = typed_lhs
             .ty
-            .as_borrow(self.db)
+            .as_capability(self.db)
             .map(|(_, inner)| inner)
             .unwrap_or(typed_lhs.ty);
         let rhs_prop = self.check_expr(*rhs, lhs_ty);
@@ -2273,7 +2298,7 @@ impl<'db> TyChecker<'db> {
         let typed_lhs = self.check_expr_unknown(*lhs);
         let lhs_ty = typed_lhs.ty;
         let lhs_place_ty = lhs_ty
-            .as_borrow(self.db)
+            .as_capability(self.db)
             .map(|(_, inner)| inner)
             .unwrap_or(lhs_ty);
         if lhs_ty.has_invalid(self.db) {
@@ -2316,7 +2341,21 @@ impl<'db> TyChecker<'db> {
             return ExprProp::invalid(self.db);
         };
 
-        let mut selected_lhs_ty = lhs_ty;
+        let mut lhs_candidates = vec![lhs_ty];
+        if let Some((cap, inner)) = lhs_ty.as_capability(self.db) {
+            if matches!(cap, CapabilityKind::Mut) {
+                lhs_candidates.push(TyId::borrow_ref_of(self.db, inner));
+            }
+            if !matches!(cap, CapabilityKind::View) {
+                lhs_candidates.push(TyId::view_of(self.db, inner));
+            }
+            lhs_candidates.push(inner);
+        } else {
+            lhs_candidates.push(TyId::view_of(self.db, lhs_ty));
+        }
+        lhs_candidates.dedup();
+
+        let mut selected_lhs_ty = lhs_candidates[0];
         let mut c_lhs_ty = Canonicalized::new(self.db, selected_lhs_ty);
         let mut method_candidate = select_method_candidate(
             self.db,
@@ -2326,19 +2365,24 @@ impl<'db> TyChecker<'db> {
             self.env.assumptions(),
             Some(trait_def),
         );
-        if matches!(method_candidate, Err(MethodSelectionError::NotFound))
-            && let Some(inner) = self.copy_inner_from_borrow(lhs_ty)
-        {
-            selected_lhs_ty = inner;
-            c_lhs_ty = Canonicalized::new(self.db, selected_lhs_ty);
-            method_candidate = select_method_candidate(
-                self.db,
-                c_lhs_ty.value,
-                op.trait_method(self.db),
-                self.env.scope(),
-                self.env.assumptions(),
-                Some(trait_def),
-            );
+        if matches!(method_candidate, Err(MethodSelectionError::NotFound)) {
+            for &candidate_ty in lhs_candidates.iter().skip(1) {
+                let c_candidate_ty = Canonicalized::new(self.db, candidate_ty);
+                let fallback = select_method_candidate(
+                    self.db,
+                    c_candidate_ty.value,
+                    op.trait_method(self.db),
+                    self.env.scope(),
+                    self.env.assumptions(),
+                    Some(trait_def),
+                );
+                if fallback.is_ok() || !matches!(fallback, Err(MethodSelectionError::NotFound)) {
+                    selected_lhs_ty = candidate_ty;
+                    c_lhs_ty = c_candidate_ty;
+                    method_candidate = fallback;
+                    break;
+                }
+            }
         }
 
         let (method, inst) = match method_candidate {
@@ -2405,7 +2449,7 @@ impl<'db> TyChecker<'db> {
                             unreachable!("candidate func ty should be a func");
                         };
                     let rhs_ty = self
-                        .try_coerce_copy_borrow_to_expected(rhs.ty, expected_rhs)
+                        .try_coerce_capability_for_expr_to_expected(rhs_expr, rhs.ty, expected_rhs)
                         .unwrap_or(rhs.ty);
                     let unifies = self.table.unify(rhs_ty, expected_rhs).is_ok();
                     self.table.rollback_to(snapshot);
@@ -2430,7 +2474,11 @@ impl<'db> TyChecker<'db> {
                         self.env
                             .register_confirmation(inst, expr.span(self.body()).into());
                         let rhs_ty = self
-                            .try_coerce_copy_borrow_to_expected(rhs.ty, expected_rhs)
+                            .try_coerce_capability_for_expr_to_expected(
+                                rhs_expr,
+                                rhs.ty,
+                                expected_rhs,
+                            )
                             .unwrap_or(rhs.ty);
                         self.unify_ty(Typeable::Expr(rhs_expr, rhs.clone()), rhs_ty, expected_rhs);
                         (func_ty, inst)

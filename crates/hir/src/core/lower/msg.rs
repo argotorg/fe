@@ -154,7 +154,7 @@ fn lower_msg_variant_encode_impl<'db>(
 
         let encoder_ident = builder.ident("e");
         let params = builder.params([
-            builder.param_self(),
+            builder.param_own_self(),
             builder.param_mut_underscore_named(encoder_ident, e_ty),
         ]);
 

@@ -167,11 +167,19 @@ impl<'db> Func<'db> {
             Some(params) => params
                 .data(db)
                 .iter()
-                .map(|p| match p.ty.to_opt() {
-                    Some(hir_ty) => {
-                        Binder::bind(lower_hir_ty(db, hir_ty, self.scope(), assumptions))
-                    }
-                    None => Binder::bind(TyId::invalid(db, InvalidCause::ParseError)),
+                .map(|p| {
+                    let ty = match p.ty.to_opt() {
+                        Some(hir_ty) => lower_hir_ty(db, hir_ty, self.scope(), assumptions),
+                        None => TyId::invalid(db, InvalidCause::ParseError),
+                    };
+                    let ty = if p.mode == crate::hir_def::params::FuncParamMode::View
+                        && ty.as_capability(db).is_none()
+                    {
+                        TyId::view_of(db, ty)
+                    } else {
+                        ty
+                    };
+                    Binder::bind(ty)
                 })
                 .collect(),
             None => Vec::new(),

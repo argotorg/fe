@@ -1,6 +1,5 @@
 ---
 source: crates/hir/tests/ty_check.rs
-assertion_line: 40
 expression: res
 input_file: test_files/ty_check/pat/match_stmt.fe
 ---
@@ -108,19 +107,19 @@ note:
    ┌─ match_stmt.fe:21:20
    │
 21 │         Color::Rgb(r, g, b) => { 
-   │                    ^ u8
+   │                    ^ ref u8
 
 note: 
    ┌─ match_stmt.fe:21:23
    │
 21 │         Color::Rgb(r, g, b) => { 
-   │                       ^ u8
+   │                       ^ ref u8
 
 note: 
    ┌─ match_stmt.fe:21:26
    │
 21 │         Color::Rgb(r, g, b) => { 
-   │                          ^ u8
+   │                          ^ ref u8
 
 note: 
    ┌─ match_stmt.fe:21:32
@@ -178,19 +177,19 @@ note:
    ┌─ match_stmt.fe:29:20
    │
 29 │         Color::Rgb(r, g, b) => {
-   │                    ^ u8
+   │                    ^ ref u8
 
 note: 
    ┌─ match_stmt.fe:29:23
    │
 29 │         Color::Rgb(r, g, b) => {
-   │                       ^ u8
+   │                       ^ ref u8
 
 note: 
    ┌─ match_stmt.fe:29:26
    │
 29 │         Color::Rgb(r, g, b) => {
-   │                          ^ u8
+   │                          ^ ref u8
 
 note: 
    ┌─ match_stmt.fe:29:32
@@ -417,7 +416,7 @@ note:
    ┌─ match_stmt.fe:51:20
    │
 51 │         Color::Rgb(r, ..) => { // Rest pattern
-   │                    ^ u8
+   │                    ^ ref u8
 
 note: 
    ┌─ match_stmt.fe:51:23
@@ -438,7 +437,7 @@ note:
    ┌─ match_stmt.fe:52:20
    │
 52 │             return r
-   │                    ^ u8
+   │                    ^ ref u8
 
 note: 
    ┌─ match_stmt.fe:54:9

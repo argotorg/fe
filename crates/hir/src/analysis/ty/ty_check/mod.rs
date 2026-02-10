@@ -47,7 +47,7 @@ use super::{
     effects::EffectKeyKind,
     trait_def::TraitInstId,
     trait_resolution::{GoalSatisfiability, PredicateListId, is_goal_satisfiable},
-    ty_def::{BorrowKind, InvalidCause, Kind, TyId, TyVarSort},
+    ty_def::{BorrowKind, CapabilityKind, InvalidCause, Kind, TyId, TyVarSort},
     ty_lower::lower_hir_ty,
     unify::{InferenceKey, UnificationError, UnificationTable},
 };
@@ -427,7 +427,10 @@ impl<'db> TyChecker<'db> {
                 };
 
                 let inst_self = this.table.instantiate_to_term(inst.self_ty(db));
-                this.table.unify(inst_self, recv_ty).ok()?;
+                if this.table.unify(inst_self, recv_ty).is_err() {
+                    let recv_inner = recv_ty.as_capability(db).map(|(_, inner)| inner)?;
+                    this.table.unify(inst_self, recv_inner).ok()?;
+                }
 
                 let trait_method = *inst.def(db).method_defs(db).get(&pending.method_name)?;
                 let func_ty =
@@ -484,6 +487,9 @@ impl<'db> TyChecker<'db> {
                     );
                     let given =
                         normalize_ty(db, given.fold_with(db, &mut this.table), scope, assumptions);
+                    let given = this
+                        .try_coerce_capability_to_expected(given, expected)
+                        .unwrap_or(given);
                     this.table.unify(given, expected).ok()?;
                 }
 
@@ -835,45 +841,130 @@ impl<'db> TyChecker<'db> {
     }
 
     fn copy_inner_from_borrow(&self, ty: TyId<'db>) -> Option<TyId<'db>> {
-        let (_, inner) = ty.as_borrow(self.db)?;
+        let (_, inner) = ty.as_capability(self.db)?;
         self.ty_is_copy(inner).then_some(inner)
     }
 
-    /// Contextual coercion from borrow handle to copied value.
-    ///
-    /// This allows `ref T` / `mut T` to be used where `T` is expected, when `T: Copy`.
-    /// Coercion is only attempted for non-borrow, non-inference expected types.
-    fn try_coerce_copy_borrow_to_expected(
+    fn ty_unifies(&mut self, lhs: TyId<'db>, rhs: TyId<'db>) -> bool {
+        let snapshot = self.table.snapshot();
+        let unifies = self.table.unify(lhs, rhs).is_ok();
+        self.table.rollback_to(snapshot);
+        unifies
+    }
+
+    /// Contextual capability coercion:
+    /// - `mut T -> ref T`
+    /// - `mut/ref/view T -> view T`
+    /// - `mut/ref/view T -> T` when `T: Copy`
+    /// - `T -> view T`
+    fn try_coerce_capability_to_expected(
         &mut self,
         actual: TyId<'db>,
         expected: TyId<'db>,
     ) -> Option<TyId<'db>> {
-        if expected.as_borrow(self.db).is_some() || expected.is_ty_var(self.db) {
+        self.try_coerce_capability_expr_to_expected(None, actual, expected)
+    }
+
+    fn try_coerce_capability_for_expr_to_expected(
+        &mut self,
+        expr: ExprId,
+        actual: TyId<'db>,
+        expected: TyId<'db>,
+    ) -> Option<TyId<'db>> {
+        self.try_coerce_capability_expr_to_expected(Some(expr), actual, expected)
+    }
+
+    fn try_coerce_capability_expr_to_expected(
+        &mut self,
+        expr: Option<ExprId>,
+        actual: TyId<'db>,
+        expected: TyId<'db>,
+    ) -> Option<TyId<'db>> {
+        if expected.is_ty_var(self.db) {
+            let actual = self.normalize_ty(actual);
+            if let Some((CapabilityKind::View, inner)) = actual.as_capability(self.db)
+                && self.ty_is_copy(inner)
+            {
+                return Some(inner);
+            }
             return None;
         }
 
-        let inner = self.copy_inner_from_borrow(actual)?;
-        let inner = self.normalize_ty(inner);
+        let actual = self.normalize_ty(actual);
         let expected = self.normalize_ty(expected);
-        if inner.has_invalid(self.db) || expected.has_invalid(self.db) {
+        if actual.has_invalid(self.db) || expected.has_invalid(self.db) {
             return None;
         }
 
-        let snapshot = self.table.snapshot();
-        let unifies = self.table.unify(inner, expected).is_ok();
-        self.table.rollback_to(snapshot);
-        unifies.then_some(inner)
+        let actual_cap = actual.as_capability(self.db);
+        let expected_cap = expected.as_capability(self.db);
+
+        match (actual_cap, expected_cap) {
+            (Some((given_kind, given_inner)), Some((required_kind, required_inner))) => {
+                if given_kind.rank() < required_kind.rank() {
+                    return None;
+                }
+                if !self.ty_unifies(given_inner, required_inner) {
+                    return None;
+                }
+                let coerced = match required_kind {
+                    CapabilityKind::Mut => TyId::borrow_mut_of(self.db, given_inner),
+                    CapabilityKind::Ref => TyId::borrow_ref_of(self.db, given_inner),
+                    CapabilityKind::View => TyId::view_of(self.db, given_inner),
+                };
+                Some(coerced)
+            }
+            (Some((given_kind, given_inner)), None) => {
+                if !self.ty_unifies(given_inner, expected) {
+                    return None;
+                }
+
+                if self.ty_is_copy(given_inner)
+                    || (matches!(given_kind, CapabilityKind::View)
+                        && expr.is_some_and(|expr| self.expr_can_move_from_place(expr)))
+                {
+                    return Some(given_inner);
+                }
+
+                None
+            }
+            (None, Some((CapabilityKind::View, required_inner))) => {
+                if !self.ty_unifies(actual, required_inner) {
+                    return None;
+                }
+                Some(TyId::view_of(self.db, actual))
+            }
+            (None, Some((CapabilityKind::Ref | CapabilityKind::Mut, _))) | (None, None) => None,
+        }
+    }
+
+    fn expr_can_move_from_place(&self, expr: ExprId) -> bool {
+        let Partial::Present(expr_data) = expr.data(self.db, self.body()) else {
+            return false;
+        };
+
+        match expr_data {
+            Expr::Path(_) => true,
+            Expr::Field(lhs, _) => self.expr_can_move_from_place(*lhs),
+            Expr::Bin(lhs, _, crate::hir_def::expr::BinOp::Index) => {
+                self.expr_can_move_from_place(*lhs)
+            }
+            _ => false,
+        }
     }
 
     /// In "owned" contexts, non-`Copy` values are implicitly moved from places.
     ///
     /// `Copy` values may be duplicated implicitly.
     fn record_implicit_move_for_owned_expr(&mut self, expr: ExprId, ty: TyId<'db>) {
-        let _ = ty;
-        self.record_implicit_move_for_owned_expr_inner(expr);
+        self.record_implicit_move_for_owned_expr_inner(expr, Some(ty));
     }
 
-    fn record_implicit_move_for_owned_expr_inner(&mut self, expr: ExprId) {
+    fn record_implicit_move_for_owned_expr_inner(
+        &mut self,
+        expr: ExprId,
+        expected_ty: Option<TyId<'db>>,
+    ) {
         let db = self.db;
         let body = self.body();
         let Partial::Present(expr_data) = expr.data(db, body) else {
@@ -891,21 +982,21 @@ impl<'db> TyChecker<'db> {
                 let crate::hir_def::Stmt::Expr(tail) = stmt else {
                     return;
                 };
-                self.record_implicit_move_for_owned_expr_inner(*tail);
+                self.record_implicit_move_for_owned_expr_inner(*tail, expected_ty);
             }
             Expr::With(_, body_expr) | Expr::Cast(body_expr, _) | Expr::If(_, body_expr, None) => {
-                self.record_implicit_move_for_owned_expr_inner(*body_expr);
+                self.record_implicit_move_for_owned_expr_inner(*body_expr, expected_ty);
             }
             Expr::If(_, then_expr, Some(else_expr)) => {
-                self.record_implicit_move_for_owned_expr_inner(*then_expr);
-                self.record_implicit_move_for_owned_expr_inner(*else_expr);
+                self.record_implicit_move_for_owned_expr_inner(*then_expr, expected_ty);
+                self.record_implicit_move_for_owned_expr_inner(*else_expr, expected_ty);
             }
             Expr::Match(_, arms) => {
                 let Partial::Present(arms) = arms else {
                     return;
                 };
                 for arm in arms {
-                    self.record_implicit_move_for_owned_expr_inner(arm.body);
+                    self.record_implicit_move_for_owned_expr_inner(arm.body, expected_ty);
                 }
             }
             _ => {
@@ -916,12 +1007,25 @@ impl<'db> TyChecker<'db> {
                 let Some(prop) = self.env.typed_expr(expr) else {
                     return;
                 };
-                let ty = prop.ty.fold_with(self.db, &mut self.table);
-                let ty = self.normalize_ty(ty);
-                if ty.has_invalid(self.db) || ty == TyId::unit(self.db) || ty.is_never(self.db) {
+                let expr_ty = prop.ty.fold_with(self.db, &mut self.table);
+                let expr_ty = self.normalize_ty(expr_ty);
+                if expr_ty.has_invalid(self.db)
+                    || expr_ty == TyId::unit(self.db)
+                    || expr_ty.is_never(self.db)
+                {
                     return;
                 }
-                if self.ty_is_copy(ty) {
+
+                let expected_ty = expected_ty
+                    .map(|ty| self.normalize_ty(ty))
+                    .filter(|ty| {
+                        !ty.has_invalid(self.db)
+                            && *ty != TyId::unit(self.db)
+                            && !ty.is_never(self.db)
+                    })
+                    .unwrap_or(expr_ty);
+
+                if self.ty_is_copy(expected_ty) {
                     return;
                 }
 
@@ -1010,8 +1114,12 @@ impl<'db> TyChecker<'db> {
     }
 
     fn destructure_source_mode(&self, ty: TyId<'db>) -> (TyId<'db>, DestructureSourceMode) {
-        if let Some((kind, inner)) = ty.as_borrow(self.db) {
-            (inner, DestructureSourceMode::Borrow(kind))
+        if let Some((kind, inner)) = ty.as_capability(self.db) {
+            let borrow_kind = match kind {
+                CapabilityKind::Mut => BorrowKind::Mut,
+                CapabilityKind::Ref | CapabilityKind::View => BorrowKind::Ref,
+            };
+            (inner, DestructureSourceMode::Borrow(borrow_kind))
         } else {
             (ty, DestructureSourceMode::Owned)
         }
@@ -1030,7 +1138,7 @@ impl<'db> TyChecker<'db> {
                     return;
                 }
                 let inner = self.env.lookup_binding_ty(&binding);
-                if inner.has_invalid(self.db) || inner.as_borrow(self.db).is_some() {
+                if inner.has_invalid(self.db) || inner.as_capability(self.db).is_some() {
                     return;
                 }
                 let borrow_ty = match kind {

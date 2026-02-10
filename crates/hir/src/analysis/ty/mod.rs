@@ -62,7 +62,13 @@ pub fn ty_is_borrow<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
 ) -> Option<(BorrowKind, TyId<'db>)> {
-    ty.as_borrow(db)
+    match ty.as_capability(db) {
+        Some((ty_def::CapabilityKind::Mut, inner)) => Some((BorrowKind::Mut, inner)),
+        Some((ty_def::CapabilityKind::Ref | ty_def::CapabilityKind::View, inner)) => {
+            Some((BorrowKind::Ref, inner))
+        }
+        None => None,
+    }
 }
 
 pub fn ty_is_copy<'db>(
@@ -71,8 +77,9 @@ pub fn ty_is_copy<'db>(
     ty: TyId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> bool {
-    // Borrow handles (`mut`/`ref`) are always copyable, even without an explicit `Copy` impl.
-    if ty.as_borrow(db).is_some() {
+    // Borrow/view handles (`mut`/`ref`/`view`) are always copyable, even without an explicit
+    // `Copy` impl.
+    if ty.as_capability(db).is_some() {
         return true;
     }
 
@@ -127,7 +134,7 @@ pub fn ty_is_noesc<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
             return false;
         }
 
-        let result = if ty.as_borrow(db).is_some() {
+        let result = if ty.as_capability(db).is_some() {
             true
         } else if ty.is_tuple(db) {
             ty.field_types(db)

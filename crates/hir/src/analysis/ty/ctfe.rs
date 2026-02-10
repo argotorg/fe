@@ -1197,6 +1197,7 @@ fn int_layout<'db>(
     body: Body<'db>,
     expr: ExprId,
 ) -> Result<(usize, bool), InvalidCause<'db>> {
+    let ty = ty.as_capability(db).map(|(_, inner)| inner).unwrap_or(ty);
     let TyData::TyBase(TyBase::Prim(prim)) = ty.base_ty(db).data(db) else {
         return Err(InvalidCause::ConstEvalUnsupported { body, expr });
     };

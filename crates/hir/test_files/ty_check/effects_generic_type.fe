@@ -4,7 +4,7 @@ pub struct Storage<T> {
 
 pub struct Ctx {}
 
-pub fn put<T>(amount: T)
+pub fn put<T>(amount: own T)
   uses (ctx: Ctx, st: mut Storage<T>)
 {
     let _ = ctx

@@ -4,16 +4,4 @@ assertion_line: 27
 expression: diags
 input_file: fixtures/ty/def/reborrow_mut_to_ref.fe
 ---
-error[8-0000]: type mismatch
-  ┌─ reborrow_mut_to_ref.fe:6:14
-  │
-6 │     take_ref(y)
-  │              ^ expected `ref u8`, but `mut u8` is given
 
-error[8-0068]: explicit reborrow required
-  ┌─ reborrow_mut_to_ref.fe:6:14
-  │
-6 │     take_ref(y)
-  │              ^ this argument must be explicitly borrowed as `ref`
-  │
-  = help: use `ref <place>` when passing a place to a `ref` parameter
