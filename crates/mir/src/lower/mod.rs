@@ -14,14 +14,13 @@ use hir::analysis::{
         ty_check::{
             EffectParamSite, LocalBinding, ParamSite, RecordLike, TypedBody, check_func_body,
         },
-        ty_def::{InvalidCause, PrimTy, TyBase, TyData, TyId},
+        ty_def::{PrimTy, TyBase, TyData, TyId},
     },
 };
 use hir::hir_def::{
     Attr, AttrArg, AttrArgValue, Body, CallableDef, Const, Expr, ExprId, Field, FieldIndex, Func,
     IdentId, ItemKind, LitKind, MatchArm, Partial, Pat, PatId, Stmt, StmtId, TopLevelMod,
-    VariantKind,
-    expr::{BinOp, UnOp},
+    VariantKind, expr::BinOp,
 };
 
 use crate::{
@@ -954,7 +953,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
     pub(super) fn value_repr_for_expr(&self, expr: ExprId, ty: TyId<'db>) -> ValueRepr {
         if ty.as_capability(self.db).is_some() {
-            if !self.capability_expr_is_address_backed(expr) {
+            if matches!(self.builder.body.stage, crate::ir::MirStage::Capability) {
                 return ValueRepr::Word;
             }
             let space = self.expr_address_space(expr);
@@ -974,6 +973,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
     pub(super) fn value_repr_for_ty(&self, ty: TyId<'db>, space: AddressSpaceKind) -> ValueRepr {
         if ty.as_capability(self.db).is_some() {
+            if matches!(self.builder.body.stage, crate::ir::MirStage::Capability) {
+                return ValueRepr::Word;
+            }
             return match crate::repr::repr_kind_for_ty(self.db, &self.core, ty) {
                 crate::repr::ReprKind::Ptr(_) => ValueRepr::Ptr(space),
                 crate::repr::ReprKind::Ref => ValueRepr::Ref(space),
@@ -985,39 +987,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             crate::repr::ReprKind::Ptr(space) => ValueRepr::Ptr(space),
             crate::repr::ReprKind::Ref => ValueRepr::Ref(space),
             crate::repr::ReprKind::Zst | crate::repr::ReprKind::Word => ValueRepr::Word,
-        }
-    }
-
-    fn binding_declared_ty(&self, binding: LocalBinding<'db>) -> TyId<'db> {
-        match binding {
-            LocalBinding::Local { pat, .. } => self.typed_body.pat_ty(self.db, pat),
-            LocalBinding::Param { ty, .. } => ty,
-            LocalBinding::EffectParam { .. } => TyId::invalid(self.db, InvalidCause::Other),
-        }
-    }
-
-    fn capability_expr_is_address_backed(&self, expr: ExprId) -> bool {
-        let ty = self.typed_body.expr_ty(self.db, expr);
-        if ty.as_capability(self.db).is_none() {
-            return false;
-        }
-
-        match expr.data(self.db, self.body) {
-            Partial::Present(Expr::Un(_, UnOp::Mut | UnOp::Ref)) => true,
-            Partial::Present(Expr::Path(_)) => self
-                .typed_body
-                .expr_prop(self.db, expr)
-                .binding
-                .is_some_and(|binding| {
-                    self.binding_declared_ty(binding)
-                        .as_capability(self.db)
-                        .is_some()
-                }),
-            Partial::Present(Expr::Field(base, _)) => self.capability_expr_is_address_backed(*base),
-            Partial::Present(Expr::Bin(base, _, BinOp::Index)) => {
-                self.capability_expr_is_address_backed(*base)
-            }
-            _ => false,
         }
     }
 

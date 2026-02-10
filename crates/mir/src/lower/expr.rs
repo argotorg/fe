@@ -368,7 +368,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         let root_value = self.builder.body.value(root);
         match root_value.origin {
-            ValueOrigin::Local(_) => root_value.repr.address_space().is_some(),
+            ValueOrigin::Local(_) => true,
             ValueOrigin::PlaceRef(_) | ValueOrigin::MoveOut { .. } | ValueOrigin::FieldPtr(_) => {
                 true
             }
@@ -382,21 +382,26 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         ty: TyId<'db>,
     ) -> Option<Place<'db>> {
         let (_, inner_ty) = ty.as_capability(self.db)?;
-        if self.capability_value_is_address_backed(value)
-            && self
-                .builder
-                .body
-                .value(value)
-                .repr
-                .address_space()
-                .is_some()
-        {
-            let space = self.value_address_space(value);
-            let base = self.alloc_value(
-                inner_ty,
-                ValueOrigin::TransparentCast { value },
-                ValueRepr::Ptr(space),
-            );
+        if self.capability_value_is_address_backed(value) {
+            let base_repr = match self.builder.body.stage {
+                crate::ir::MirStage::Capability => ValueRepr::Word,
+                crate::ir::MirStage::Repr(_) => {
+                    if self
+                        .builder
+                        .body
+                        .value(value)
+                        .repr
+                        .address_space()
+                        .is_some()
+                    {
+                        ValueRepr::Ptr(self.value_address_space(value))
+                    } else {
+                        ValueRepr::Word
+                    }
+                }
+            };
+            let base =
+                self.alloc_value(inner_ty, ValueOrigin::TransparentCast { value }, base_repr);
             return Some(Place::new(base, MirProjectionPath::new()));
         }
 
@@ -411,12 +416,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let temp = self.alloc_temp_local(inner_ty, false, "captmp");
         self.builder.body.locals[temp.index()].address_space = AddressSpaceKind::Memory;
         self.assign(None, Some(temp), Rvalue::Value(inner_value));
-        let spill = self.ensure_spill_slot_for_local(temp, inner_ty);
-        let base = self.alloc_value(
-            inner_ty,
-            ValueOrigin::Local(spill),
-            ValueRepr::Ref(AddressSpaceKind::Memory),
-        );
+        let base = self.alloc_value(inner_ty, ValueOrigin::PlaceRoot(temp), ValueRepr::Word);
         Some(Place::new(base, MirProjectionPath::new()))
     }
 
@@ -576,12 +576,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             let temp = self.alloc_temp_local(actual_ty, false, "viewtmp");
             self.builder.body.locals[temp.index()].address_space = AddressSpaceKind::Memory;
             self.assign(None, Some(temp), Rvalue::Value(arg_value));
-            let spill = self.ensure_spill_slot_for_local(temp, actual_ty);
-            let base = self.alloc_value(
-                actual_ty,
-                ValueOrigin::Local(spill),
-                ValueRepr::Ref(AddressSpaceKind::Memory),
-            );
+            let base = self.alloc_value(actual_ty, ValueOrigin::PlaceRoot(temp), ValueRepr::Word);
             let place = Place::new(base, MirProjectionPath::new());
             let expected_repr = self.value_repr_for_ty(expected_ty, AddressSpaceKind::Memory);
             return self.alloc_value(expected_ty, ValueOrigin::PlaceRef(place), expected_repr);
@@ -670,12 +665,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             let temp = self.alloc_temp_local(source_ty, false, "viewtmp");
             self.builder.body.locals[temp.index()].address_space = AddressSpaceKind::Memory;
             self.assign(None, Some(temp), Rvalue::Value(arg_value));
-            let spill = self.ensure_spill_slot_for_local(temp, source_ty);
-            let base = self.alloc_value(
-                source_ty,
-                ValueOrigin::Local(spill),
-                ValueRepr::Ref(AddressSpaceKind::Memory),
-            );
+            let base = self.alloc_value(source_ty, ValueOrigin::PlaceRoot(temp), ValueRepr::Word);
             Some(Place::new(base, MirProjectionPath::new()))
         }) else {
             return arg_value;
@@ -1279,22 +1269,43 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     .as_capability(self.db)
                     .map(|(_, inner)| inner)
                     .unwrap_or(lhs_ty);
-                let lhs_is_borrow = lhs_ty.as_capability(self.db).is_some()
-                    && self
-                        .builder
-                        .body
-                        .value(base_value)
-                        .repr
-                        .address_space()
-                        .is_some();
                 let Some(info) = self.field_access_info_for_expr(expr, lhs_place_ty, field_index)
                 else {
                     return value_id;
                 };
 
+                if lhs_ty.as_capability(self.db).is_some() {
+                    let Some(mut place) = self.place_from_capability_value(base_value, lhs_ty)
+                    else {
+                        return value_id;
+                    };
+                    place.projection.push(Projection::Field(info.field_idx));
+
+                    let addr_space = self.value_address_space(place.base);
+                    if self.is_by_ref_ty(info.field_ty) {
+                        let place_value = self.alloc_value(
+                            info.field_ty,
+                            ValueOrigin::PlaceRef(place),
+                            ValueRepr::Ref(addr_space),
+                        );
+                        self.builder.body.locals[dest.index()].address_space = addr_space;
+                        self.assign(Some(stmt), Some(dest), Rvalue::Value(place_value));
+                        self.builder.body.values[value_id.index()].origin =
+                            ValueOrigin::Local(dest);
+                        self.builder.body.values[value_id.index()].repr =
+                            ValueRepr::Ref(addr_space);
+                        return value_id;
+                    }
+
+                    self.builder.body.locals[dest.index()].address_space =
+                        self.expr_address_space(expr);
+                    self.assign(Some(stmt), Some(dest), Rvalue::Load { place });
+                    self.builder.body.values[value_id.index()].origin = ValueOrigin::Local(dest);
+                    return value_id;
+                }
+
                 // Transparent newtype access: field 0 is a representation-preserving cast.
-                if !lhs_is_borrow
-                    && info.field_idx == 0
+                if info.field_idx == 0
                     && crate::repr::transparent_newtype_field_ty(self.db, lhs_place_ty).is_some()
                 {
                     let base_repr = self.builder.body.value(base_value).repr;
@@ -1318,16 +1329,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     }
                 }
 
-                let base_value = if lhs_is_borrow {
-                    let space = self.value_address_space(base_value);
-                    self.alloc_value(
-                        lhs_place_ty,
-                        ValueOrigin::TransparentCast { value: base_value },
-                        ValueRepr::Ptr(space),
-                    )
-                } else {
-                    base_value
-                };
                 let addr_space = self.value_address_space(base_value);
                 let place = Place::new(
                     base_value,
@@ -1356,10 +1357,14 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             Partial::Present(Expr::Bin(lhs, rhs, BinOp::Index)) => {
                 let value_id = self.ensure_value(expr);
                 let lhs_ty = self.typed_body.expr_ty(self.db, *lhs);
-                if !lhs_ty.is_array(self.db) {
+                let lhs_place_ty = lhs_ty
+                    .as_capability(self.db)
+                    .map(|(_, inner)| inner)
+                    .unwrap_or(lhs_ty);
+                if !lhs_place_ty.is_array(self.db) {
                     return value_id;
                 }
-                let Some(elem_ty) = lhs_ty.generic_args(self.db).first().copied() else {
+                let Some(elem_ty) = lhs_place_ty.generic_args(self.db).first().copied() else {
                     return value_id;
                 };
                 let base_value = self.lower_expr(*lhs);
@@ -1367,11 +1372,21 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 if self.current_block().is_none() {
                     return value_id;
                 }
-                let addr_space = self.value_address_space(base_value);
-                let place = Place::new(
-                    base_value,
-                    MirProjectionPath::from_projection(Projection::Index(index_source)),
-                );
+                let (base, projection) = if lhs_ty.as_capability(self.db).is_some() {
+                    let Some(mut place) = self.place_from_capability_value(base_value, lhs_ty)
+                    else {
+                        return value_id;
+                    };
+                    place.projection.push(Projection::Index(index_source));
+                    (place.base, place.projection)
+                } else {
+                    (
+                        base_value,
+                        MirProjectionPath::from_projection(Projection::Index(index_source)),
+                    )
+                };
+                let addr_space = self.value_address_space(base);
+                let place = Place::new(base, projection);
 
                 if self.is_by_ref_ty(elem_ty) {
                     let place_value = self.alloc_value(
@@ -1588,21 +1603,32 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             .as_capability(self.db)
             .map(|(_, inner)| inner)
             .unwrap_or(lhs_ty);
-        let lhs_is_borrow = lhs_ty.as_capability(self.db).is_some()
-            && self
-                .builder
-                .body
-                .value(base_value)
-                .repr
-                .address_space()
-                .is_some();
         let Some(info) = self.field_access_info_for_expr(expr, lhs_place_ty, field_index) else {
             return value_id;
         };
 
+        if lhs_ty.as_capability(self.db).is_some() {
+            let Some(mut place) = self.place_from_capability_value(base_value, lhs_ty) else {
+                return value_id;
+            };
+            place.projection.push(Projection::Field(info.field_idx));
+
+            let addr_space = self.value_address_space(place.base);
+            if self.is_by_ref_ty(info.field_ty) {
+                self.builder.body.values[value_id.index()].origin = ValueOrigin::PlaceRef(place);
+                self.builder.body.values[value_id.index()].repr = ValueRepr::Ref(addr_space);
+                return value_id;
+            }
+
+            let dest = self.alloc_temp_local(info.field_ty, false, "load");
+            self.builder.body.locals[dest.index()].address_space = self.expr_address_space(expr);
+            self.assign(None, Some(dest), Rvalue::Load { place });
+            self.builder.body.values[value_id.index()].origin = ValueOrigin::Local(dest);
+            return value_id;
+        }
+
         // Transparent newtype access: field 0 is a representation-preserving cast.
-        if !lhs_is_borrow
-            && info.field_idx == 0
+        if info.field_idx == 0
             && crate::repr::transparent_newtype_field_ty(self.db, lhs_place_ty).is_some()
         {
             let base_repr = self.builder.body.value(base_value).repr;
@@ -1618,16 +1644,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             }
         }
 
-        let base_value = if lhs_is_borrow {
-            let space = self.value_address_space(base_value);
-            self.alloc_value(
-                lhs_place_ty,
-                ValueOrigin::TransparentCast { value: base_value },
-                ValueRepr::Ptr(space),
-            )
-        } else {
-            base_value
-        };
         let addr_space = self.value_address_space(base_value);
         let place = Place::new(
             base_value,
@@ -1738,29 +1754,20 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return value_id;
         }
 
-        let lhs_is_borrow = lhs_ty.as_capability(self.db).is_some()
-            && self
-                .builder
-                .body
-                .value(base_value)
-                .repr
-                .address_space()
-                .is_some();
-        let base_value = if lhs_is_borrow {
-            let space = self.value_address_space(base_value);
-            self.alloc_value(
-                lhs_place_ty,
-                ValueOrigin::TransparentCast { value: base_value },
-                ValueRepr::Ptr(space),
-            )
+        let (base, projection) = if lhs_ty.as_capability(self.db).is_some() {
+            let Some(mut place) = self.place_from_capability_value(base_value, lhs_ty) else {
+                return value_id;
+            };
+            place.projection.push(Projection::Index(index_source));
+            (place.base, place.projection)
         } else {
-            base_value
+            (
+                base_value,
+                MirProjectionPath::from_projection(Projection::Index(index_source)),
+            )
         };
-        let addr_space = self.value_address_space(base_value);
-        let place = Place::new(
-            base_value,
-            MirProjectionPath::from_projection(Projection::Index(index_source)),
-        );
+        let addr_space = self.value_address_space(base);
+        let place = Place::new(base, projection);
 
         if self.is_by_ref_ty(elem_ty) {
             self.builder.body.values[value_id.index()].origin = ValueOrigin::PlaceRef(place);
@@ -1813,10 +1820,16 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     let handle = self.ensure_value(expr);
                     if self.capability_value_is_address_backed(handle) {
                         let (_, inner_ty) = ty.as_capability(self.db)?;
+                        let base_repr = match self.builder.body.stage {
+                            crate::ir::MirStage::Capability => ValueRepr::Word,
+                            crate::ir::MirStage::Repr(_) => {
+                                self.value_repr_for_ty(inner_ty, AddressSpaceKind::Memory)
+                            }
+                        };
                         let base = self.alloc_value(
                             inner_ty,
                             ValueOrigin::TransparentCast { value: handle },
-                            self.value_repr_for_ty(inner_ty, AddressSpaceKind::Memory),
+                            base_repr,
                         );
                         return Some(Place::new(base, MirProjectionPath::new()));
                     }
@@ -1943,17 +1956,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         match expr.data(self.db, self.body) {
             Partial::Present(Expr::Path(_)) => {
                 let ty = self.typed_body.expr_ty(self.db, expr);
-                if let Some((_, inner_ty)) = ty.as_capability(self.db) {
+                if ty.as_capability(self.db).is_some() {
                     let handle = self.ensure_value(expr);
-                    if !self.capability_value_is_address_backed(handle) {
-                        return None;
-                    }
-                    let base = self.alloc_value(
-                        inner_ty,
-                        ValueOrigin::TransparentCast { value: handle },
-                        self.value_repr_for_ty(inner_ty, AddressSpaceKind::Memory),
-                    );
-                    return Some(Place::new(base, MirProjectionPath::new()));
+                    return self.place_from_capability_value(handle, ty);
                 }
 
                 let binding = self.typed_body.expr_prop(self.db, expr).binding?;
@@ -1990,6 +1995,16 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     .unwrap_or(lhs_ty);
                 let info = self.field_access_info_for_expr(expr, lhs_place_ty, field_index)?;
 
+                if lhs_ty.as_capability(self.db).is_some() {
+                    let addr_value = self.lower_expr(*lhs);
+                    let Some(mut place) = self.place_from_capability_value(addr_value, lhs_ty)
+                    else {
+                        return None;
+                    };
+                    place.projection.push(Projection::Field(info.field_idx));
+                    return Some(place);
+                }
+
                 // Transparent newtypes: treat field 0 as the same place when the base is
                 // already addressable, otherwise fall back to scalar newtype semantics.
                 if info.field_idx == 0
@@ -2006,24 +2021,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 }
 
                 let addr_value = self.lower_expr(*lhs);
-                let lhs_is_borrow = lhs_ty.as_capability(self.db).is_some()
-                    && self
-                        .builder
-                        .body
-                        .value(addr_value)
-                        .repr
-                        .address_space()
-                        .is_some();
-                let addr_value = if lhs_is_borrow {
-                    let space = self.value_address_space(addr_value);
-                    self.alloc_value(
-                        lhs_place_ty,
-                        ValueOrigin::TransparentCast { value: addr_value },
-                        ValueRepr::Ptr(space),
-                    )
-                } else {
-                    addr_value
-                };
                 Some(Place::new(
                     addr_value,
                     MirProjectionPath::from_projection(Projection::Field(info.field_idx)),
@@ -2038,25 +2035,17 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 if !lhs_place_ty.is_array(self.db) {
                     return None;
                 }
+                if lhs_ty.as_capability(self.db).is_some() {
+                    let addr_value = self.lower_expr(*lhs);
+                    let Some(mut place) = self.place_from_capability_value(addr_value, lhs_ty)
+                    else {
+                        return None;
+                    };
+                    let index_source = self.lower_index_source(*rhs);
+                    place.projection.push(Projection::Index(index_source));
+                    return Some(place);
+                }
                 let addr_value = self.lower_expr(*lhs);
-                let lhs_is_borrow = lhs_ty.as_capability(self.db).is_some()
-                    && self
-                        .builder
-                        .body
-                        .value(addr_value)
-                        .repr
-                        .address_space()
-                        .is_some();
-                let addr_value = if lhs_is_borrow {
-                    let space = self.value_address_space(addr_value);
-                    self.alloc_value(
-                        lhs_place_ty,
-                        ValueOrigin::TransparentCast { value: addr_value },
-                        ValueRepr::Ptr(space),
-                    )
-                } else {
-                    addr_value
-                };
                 let index_source = self.lower_index_source(*rhs);
                 Some(Place::new(
                     addr_value,
