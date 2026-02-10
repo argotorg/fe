@@ -189,6 +189,10 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
                 self.write_u8(0x08);
                 self.write_u32(local.0);
             }
+            ValueOrigin::PlaceRoot(local) => {
+                self.write_u8(0x18);
+                self.write_u32(local.0);
+            }
             ValueOrigin::FuncItem(root) => {
                 self.write_u8(0x09);
                 let symbol = root

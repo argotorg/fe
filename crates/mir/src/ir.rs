@@ -216,6 +216,7 @@ pub(crate) fn try_value_address_space_in<'db>(
     }
     match &value_data.origin {
         ValueOrigin::Local(local) => locals.get(local.index()).map(|l| l.address_space),
+        ValueOrigin::PlaceRoot(local) => locals.get(local.index()).map(|l| l.address_space),
         ValueOrigin::TransparentCast { value } => {
             try_value_address_space_in(values, locals, *value)
         }
@@ -521,6 +522,11 @@ pub enum ValueOrigin<'db> {
     Synthetic(SyntheticValue),
     /// Reference a MIR local (function parameter, effect parameter, or local variable).
     Local(LocalId),
+    /// A semantic root place for a local.
+    ///
+    /// This is used by capability-stage MIR to model "place" operations (load/store/projections)
+    /// over locals/params without implying the local is backed by a runtime address.
+    PlaceRoot(LocalId),
     /// A first-class reference to a function item (compile-time only).
     ///
     /// This is not a runtime value, but can be consumed by intrinsics like

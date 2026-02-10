@@ -601,7 +601,7 @@ pub(crate) fn canonicalize_zero_sized<'db>(db: &'db dyn HirAnalysisDb, body: &mu
     // removed for ZSTs above. Any MIR `ValueId` that still points at such locals must be
     // canonicalized to `Unit` so codegen never needs to bind/resolve a runtime representation.
     for value in values.iter_mut() {
-        if let ValueOrigin::Local(local) = &value.origin
+        if let ValueOrigin::Local(local) | ValueOrigin::PlaceRoot(local) = &value.origin
             && zst_locals.get(local.index()).copied().unwrap_or(false)
         {
             value.origin = ValueOrigin::Unit;
@@ -630,6 +630,7 @@ fn value_should_bind(
             ValueOrigin::Unit
                 | ValueOrigin::Synthetic(..)
                 | ValueOrigin::Local(..)
+                | ValueOrigin::PlaceRoot(..)
                 | ValueOrigin::FuncItem(..)
         )
 }
@@ -654,6 +655,7 @@ fn value_deps_in_eval_order(origin: &ValueOrigin<'_>) -> Vec<ValueId> {
         | ValueOrigin::Unit
         | ValueOrigin::Synthetic(..)
         | ValueOrigin::Local(..)
+        | ValueOrigin::PlaceRoot(..)
         | ValueOrigin::FuncItem(..) => Vec::new(),
     }
 }

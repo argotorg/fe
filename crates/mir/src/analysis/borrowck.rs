@@ -1832,6 +1832,14 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         }
 
         match (&data.origin, data.repr) {
+            (ValueOrigin::PlaceRoot(local), _) => {
+                let mut out = FxHashSet::default();
+                out.insert(CanonPlace {
+                    root: self.root_for_local(*local),
+                    proj: crate::MirProjectionPath::new(),
+                });
+                out
+            }
             (ValueOrigin::Local(local), ValueRepr::Ref(_)) => {
                 let mut out = FxHashSet::default();
                 out.insert(CanonPlace {
@@ -1845,6 +1853,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
     }
 
     fn root_for_local(&self, local: LocalId) -> Root {
+        let local = self.semantic_owner_local(local);
         self.param_index_of_local
             .get(local.index())
             .copied()

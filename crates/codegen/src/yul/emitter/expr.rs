@@ -175,6 +175,9 @@ impl<'db> FunctionEmitter<'db> {
                     local_data.ty.pretty_print(self.db),
                 )))
             }
+            ValueOrigin::PlaceRoot(_) => Err(YulError::Unsupported(
+                "capability-stage place root reached codegen".into(),
+            )),
             ValueOrigin::FuncItem(_) => {
                 debug_assert!(
                     layout::is_zero_sized_ty_in(self.db, &self.layout, value.ty),

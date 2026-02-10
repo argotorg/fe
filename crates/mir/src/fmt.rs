@@ -254,6 +254,7 @@ fn format_value_inner(
             crate::ir::SyntheticValue::Bytes(bytes) => format_bytes(bytes),
         },
         ValueOrigin::Local(local) => format_local(*local),
+        ValueOrigin::PlaceRoot(local) => format!("place_root({})", format_local(*local)),
         ValueOrigin::FuncItem(root) => format!(
             "func_item({})",
             root.symbol.as_deref().unwrap_or("<unresolved>")
