@@ -1,8 +1,8 @@
 use async_lsp::lsp_types::{
     ApplyWorkspaceEditParams, CreateFile, CreateFileOptions, DocumentChangeOperation,
-    DocumentChanges, ExecuteCommandParams, MessageType, OneOf, OptionalVersionedTextDocumentIdentifier,
-    Position, Range, ResourceOp, ShowDocumentParams, ShowMessageParams, TextDocumentEdit,
-    TextEdit, WorkspaceEdit,
+    DocumentChanges, ExecuteCommandParams, MessageType, OneOf,
+    OptionalVersionedTextDocumentIdentifier, Position, Range, ResourceOp, ShowDocumentParams,
+    ShowMessageParams, TextDocumentEdit, TextEdit, WorkspaceEdit,
 };
 use async_lsp::{ErrorCode, LanguageClient, ResponseError};
 use common::InputDb;

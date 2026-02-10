@@ -43,9 +43,7 @@ pub async fn handle_code_lens(
                     let impls: Vec<async_lsp::lsp_types::Location> = trait_
                         .all_impl_traits(&backend.db)
                         .iter()
-                        .filter_map(|imp| {
-                            to_lsp_location_from_scope(&backend.db, imp.scope()).ok()
-                        })
+                        .filter_map(|imp| to_lsp_location_from_scope(&backend.db, imp.scope()).ok())
                         .collect();
                     let count = impls.len();
                     let title = if count == 1 {
@@ -121,7 +119,10 @@ pub async fn handle_code_lens(
     }
 }
 
-fn make_references_lens(location: &async_lsp::lsp_types::Location, refs: &[async_lsp::lsp_types::Location]) -> CodeLens {
+fn make_references_lens(
+    location: &async_lsp::lsp_types::Location,
+    refs: &[async_lsp::lsp_types::Location],
+) -> CodeLens {
     let count = refs.len();
     let title = if count == 1 {
         "1 reference".to_string()
