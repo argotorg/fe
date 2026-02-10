@@ -11,6 +11,10 @@ use crate::ir::{
 };
 use crate::layout;
 
+mod lower_capability_to_repr;
+
+pub(crate) use lower_capability_to_repr::lower_capability_to_repr;
+
 struct StabilizeCtx<'db, 'a, 'b> {
     db: &'db dyn HirAnalysisDb,
     values: &'a [ValueData<'db>],

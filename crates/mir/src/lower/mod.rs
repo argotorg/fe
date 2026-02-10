@@ -332,6 +332,20 @@ pub fn lower_module<'db>(
             });
         }
     }
+
+    // Lower semantic capability MIR into backend-specific representation MIR for codegen.
+    let core = CoreLib::new(db, top_mod.scope());
+    for func in &mut functions {
+        crate::transform::lower_capability_to_repr(
+            db,
+            &core,
+            crate::ir::MirBackend::EvmYul,
+            &mut func.body,
+        );
+        crate::transform::canonicalize_transparent_newtypes(db, &mut func.body);
+        crate::transform::insert_temp_binds(db, &mut func.body);
+        crate::transform::canonicalize_zero_sized(db, &mut func.body);
+    }
     Ok(MirModule { top_mod, functions })
 }
 
