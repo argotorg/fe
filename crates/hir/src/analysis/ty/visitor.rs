@@ -6,10 +6,11 @@ use super::{
     const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
     trait_def::{ImplementorId, TraitInstId},
     trait_resolution::{PredicateListId, TraitGoalSolution},
-    ty_check::ExprProp,
+    ty_check::{EffectArg, ExprProp, LocalBinding, ResolvedEffectArg},
     ty_def::{AssocTy, InvalidCause, PrimTy, TyBase, TyData, TyFlags, TyId, TyParam, TyVar},
 };
 use crate::analysis::HirAnalysisDb;
+use crate::analysis::place::{Place, PlaceBase};
 use crate::hir_def::CallableDef;
 
 pub trait TyVisitable<'db> {
@@ -252,6 +253,63 @@ impl<'db> TyVisitable<'db> for ExprProp<'db> {
         V: TyVisitor<'db> + ?Sized,
     {
         self.ty.visit_with(visitor)
+    }
+}
+
+impl<'db> TyVisitable<'db> for LocalBinding<'db> {
+    fn visit_with<V>(&self, visitor: &mut V)
+    where
+        V: TyVisitor<'db> + ?Sized,
+    {
+        match self {
+            LocalBinding::Param { ty, .. } => ty.visit_with(visitor),
+            LocalBinding::Local { .. } | LocalBinding::EffectParam { .. } => {}
+        }
+    }
+}
+
+impl<'db> TyVisitable<'db> for PlaceBase<'db> {
+    fn visit_with<V>(&self, visitor: &mut V)
+    where
+        V: TyVisitor<'db> + ?Sized,
+    {
+        match self {
+            PlaceBase::Binding(binding) => binding.visit_with(visitor),
+        }
+    }
+}
+
+impl<'db> TyVisitable<'db> for Place<'db> {
+    fn visit_with<V>(&self, visitor: &mut V)
+    where
+        V: TyVisitor<'db> + ?Sized,
+    {
+        self.base.visit_with(visitor);
+    }
+}
+
+impl<'db> TyVisitable<'db> for EffectArg<'db> {
+    fn visit_with<V>(&self, visitor: &mut V)
+    where
+        V: TyVisitor<'db> + ?Sized,
+    {
+        match self {
+            EffectArg::Place(place) => place.visit_with(visitor),
+            EffectArg::Binding(binding) => binding.visit_with(visitor),
+            EffectArg::Value(_) | EffectArg::Unknown => {}
+        }
+    }
+}
+
+impl<'db> TyVisitable<'db> for ResolvedEffectArg<'db> {
+    fn visit_with<V>(&self, visitor: &mut V)
+    where
+        V: TyVisitor<'db> + ?Sized,
+    {
+        self.arg.visit_with(visitor);
+        if let Some(ty) = self.instantiated_target_ty {
+            ty.visit_with(visitor);
+        }
     }
 }
 

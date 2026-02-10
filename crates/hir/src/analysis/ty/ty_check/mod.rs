@@ -1190,6 +1190,28 @@ impl<'db> TyFoldable<'db> for TypedBody<'db> {
             .into_iter()
             .map(|(expr, callable)| (expr, callable.fold_with(db, folder)))
             .collect();
+        let call_effect_args = self
+            .call_effect_args
+            .into_iter()
+            .map(|(expr, args)| {
+                (
+                    expr,
+                    args.into_iter()
+                        .map(|arg| arg.fold_with(db, folder))
+                        .collect(),
+                )
+            })
+            .collect();
+        let param_bindings = self
+            .param_bindings
+            .into_iter()
+            .map(|binding| binding.fold_with(db, folder))
+            .collect();
+        let pat_bindings = self
+            .pat_bindings
+            .into_iter()
+            .map(|(pat, binding)| (pat, binding.fold_with(db, folder)))
+            .collect();
         let for_loop_seq = self
             .for_loop_seq
             .into_iter()
@@ -1202,9 +1224,9 @@ impl<'db> TyFoldable<'db> for TypedBody<'db> {
             expr_ty,
             const_refs,
             callables,
-            call_effect_args: self.call_effect_args,
-            param_bindings: self.param_bindings,
-            pat_bindings: self.pat_bindings,
+            call_effect_args,
+            param_bindings,
+            pat_bindings,
             for_loop_seq,
         }
     }
