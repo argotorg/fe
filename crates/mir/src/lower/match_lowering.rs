@@ -606,11 +606,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         if path.is_empty() {
             if binding_ty.as_capability(self.db).is_some() {
                 let place = Place::new(scrutinee_value, MirProjectionPath::new());
-                let handle = self.alloc_value(
-                    binding_ty,
-                    ValueOrigin::PlaceRef(place),
-                    ValueRepr::Ptr(AddressSpaceKind::Memory),
-                );
+                let repr = self.value_repr_for_ty(binding_ty, AddressSpaceKind::Memory);
+                let handle = self.alloc_value(binding_ty, ValueOrigin::PlaceRef(place), repr);
                 return (handle, handle);
             }
             return (scrutinee_value, scrutinee_value);
@@ -644,7 +641,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             binding_ty,
             ValueOrigin::PlaceRef(place.clone()),
             if is_borrow {
-                ValueRepr::Ptr(AddressSpaceKind::Memory)
+                self.value_repr_for_ty(binding_ty, addr_space)
             } else {
                 ValueRepr::Ref(addr_space)
             },

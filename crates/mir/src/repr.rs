@@ -159,7 +159,8 @@ pub fn repr_kind_for_ty<'db>(
 
     if let Some((capability, inner)) = ty.as_capability(db) {
         return match capability {
-            CapabilityKind::Mut | CapabilityKind::Ref => ReprKind::Ptr(AddressSpaceKind::Memory),
+            CapabilityKind::Mut => ReprKind::Ptr(AddressSpaceKind::Memory),
+            CapabilityKind::Ref => repr_kind_for_ref_inner(db, core, inner),
             CapabilityKind::View => repr_kind_for_ty(db, core, inner),
         };
     }
@@ -184,6 +185,17 @@ pub fn repr_kind_for_ty<'db>(
     }
 
     ReprKind::Word
+}
+
+fn repr_kind_for_ref_inner<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    inner: TyId<'db>,
+) -> ReprKind {
+    match repr_kind_for_ty(db, core, inner) {
+        ReprKind::Word | ReprKind::Zst => ReprKind::Word,
+        ReprKind::Ptr(_) | ReprKind::Ref => ReprKind::Ptr(AddressSpaceKind::Memory),
+    }
 }
 
 /// Returns the leaf type that should drive word conversion (`WordRepr::{from_word,to_word}`).

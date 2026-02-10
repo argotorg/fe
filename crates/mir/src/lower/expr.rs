@@ -287,10 +287,12 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                             panic!("borrow operand must lower to a place");
                         };
                         let space = self.value_address_space(place.base);
+                        let value_ty = self.builder.body.value(value_id).ty;
                         self.ensure_place_is_spilled(&place);
                         self.builder.body.values[value_id.index()].origin =
                             ValueOrigin::PlaceRef(place);
-                        self.builder.body.values[value_id.index()].repr = ValueRepr::Ptr(space);
+                        self.builder.body.values[value_id.index()].repr =
+                            self.value_repr_for_ty(value_ty, space);
                     }
                     _ => {
                         let _ = self.lower_expr(*inner);

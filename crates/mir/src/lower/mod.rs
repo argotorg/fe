@@ -1056,7 +1056,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return self.alloc_value(
                 field_ty,
                 ValueOrigin::PlaceRef(place),
-                ValueRepr::Ptr(field_space),
+                self.value_repr_for_ty(field_ty, field_space),
             );
         }
         if self.is_by_ref_ty(field_ty) {

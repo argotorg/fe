@@ -16,25 +16,21 @@ function $match_struct_fields($p) -> ret {
           v0 := 0
         }
         default {
-          let v4 := v1
-          let v5 := and(mload(v4), 0xff)
-          v0 := v5
+          let v4 := and(mload(v1), 0xff)
+          v0 := v4
         }
     }
     default {
-      let v6 := and(mload(v1), 0xff)
-      switch v6
+      let v5 := and(mload(v1), 0xff)
+      switch v5
         case 0 {
-          let v7 := add(v1, 1)
-          let v8 := and(mload(v7), 0xff)
-          v0 := v8
+          let v6 := and(mload(add(v1, 1)), 0xff)
+          v0 := v6
         }
         default {
-          let v9 := add(v1, 1)
-          let v10 := v1
-          let v11 := and(mload(v10), 0xff)
-          let v12 := and(mload(v9), 0xff)
-          v0 := add(v11, v12)
+          let v7 := and(mload(add(v1, 1)), 0xff)
+          let v8 := and(mload(v1), 0xff)
+          v0 := add(v8, v7)
         }
     }
   ret := v0

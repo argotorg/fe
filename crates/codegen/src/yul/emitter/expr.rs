@@ -185,9 +185,16 @@ impl<'db> FunctionEmitter<'db> {
             }
             ValueOrigin::Synthetic(synth) => self.lower_synthetic_value(synth),
             ValueOrigin::FieldPtr(field_ptr) => self.lower_field_ptr(field_ptr, state),
-            ValueOrigin::PlaceRef(place) => self.lower_place_ref(place, state),
+            ValueOrigin::PlaceRef(place) => {
+                if value.repr.address_space().is_none()
+                    && let Some((_, inner_ty)) = value.ty.as_capability(self.db)
+                {
+                    return self.lower_place_load(place, inner_ty, state);
+                }
+                self.lower_place_ref(place, state)
+            }
             ValueOrigin::MoveOut { place } => {
-                if value.repr.is_ref() {
+                if value.repr.address_space().is_some() {
                     self.lower_place_ref(place, state)
                 } else {
                     self.lower_place_load(place, value.ty, state)
