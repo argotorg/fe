@@ -5,18 +5,20 @@ use parser::TextSize;
 use crate::{
     HirDb, SpannedHirDb,
     analysis::HirAnalysisDb,
-    analysis::ty::ty_check::{LocalBinding, check_func_body},
+    analysis::ty::ty_check::LocalBinding,
     hir_def::scope_graph::ScopeId,
     hir_def::{Body, Func, ItemKind, TopLevelMod},
     span::{DynLazySpan, LazySpan},
 };
 
-use super::collector::{
-    body_references, enum_references, func_signature_references, impl_references,
-    impl_trait_references, struct_references, trait_references, type_alias_references,
-    use_references,
-};
+use super::typed_body_for_body;
 use super::{ReferenceView, Target};
+
+use super::collector::{
+    body_references, contract_references, enum_references, func_signature_references,
+    impl_references, impl_trait_references, struct_references, trait_references,
+    type_alias_references, use_references,
+};
 
 /// Empty reference slice for types that don't contain references.
 static EMPTY_REFS: &[ReferenceView<'static>] = &[];
@@ -52,17 +54,29 @@ impl<'db> HasReferences<'db> for ScopeId<'db> {
 }
 
 impl<'db> ScopeId<'db> {
-    /// Find the reference at a cursor position within this scope.
+    /// Find the most specific reference at a cursor position within this scope.
+    ///
+    /// When references are nested (e.g. `C::InitArgs` inside
+    /// `encoded_size<C::InitArgs>()`), selects the narrowest span containing
+    /// the cursor so that goto-definition resolves the inner type argument
+    /// rather than the outer function call.
     pub fn reference_at(
         self,
         db: &'db dyn SpannedHirDb,
         cursor: TextSize,
     ) -> Option<&'db ReferenceView<'db>> {
-        self.references(db).iter().find(|r| {
-            r.span()
-                .resolve(db)
-                .is_some_and(|s| s.range.contains(cursor))
-        })
+        self.references(db)
+            .iter()
+            .filter_map(|r| {
+                let span = r.span().resolve(db)?;
+                if span.range.contains(cursor) {
+                    Some((r, span.range.len()))
+                } else {
+                    None
+                }
+            })
+            .min_by_key(|(_, len)| *len)
+            .map(|(r, _)| r)
     }
 }
 
@@ -81,8 +95,7 @@ impl<'db> HasReferences<'db> for ItemKind<'db> {
             ItemKind::Const(c) => c.body(db).to_opt().map_or(EMPTY_REFS, |b| b.references(db)),
             // Modules don't contain references themselves
             ItemKind::TopMod(_) | ItemKind::Mod(_) => EMPTY_REFS,
-            // Contract references could be added in the future
-            ItemKind::Contract(_) => EMPTY_REFS,
+            ItemKind::Contract(contract) => contract_references(db, *contract),
         }
     }
 }
@@ -131,16 +144,20 @@ impl<'db> TopLevelMod<'db> {
         DB: HirAnalysisDb + SpannedHirDb,
     {
         // Find the enclosing function
-        let func = self.find_enclosing_func(db, cursor)?;
+        if let Some(func) = self.find_enclosing_func(db, cursor) {
+            return self.func_param_binding_at(db, func, cursor);
+        }
 
-        // Check if cursor is on a param name
-        // (must be checked before references because `self` params have a fallback
-        // `Self` type that overlaps with the param name position)
-        self.param_binding_at(db, func, cursor)
+        // Try contract init params
+        if let Some(contract) = self.find_enclosing_contract(db, cursor) {
+            return self.contract_init_param_binding_at(db, contract, cursor);
+        }
+
+        None
     }
 
     /// Check if cursor is on a function parameter name.
-    fn param_binding_at<DB>(
+    fn func_param_binding_at<DB>(
         self,
         db: &'db DB,
         func: Func<'db>,
@@ -149,7 +166,8 @@ impl<'db> TopLevelMod<'db> {
     where
         DB: HirAnalysisDb + SpannedHirDb,
     {
-        let (_, typed_body) = check_func_body(db, func);
+        let body = func.body(db)?;
+        let typed_body = typed_body_for_body(db, body)?;
 
         // Check each param's name span
         for (idx, param_view) in func.params(db).enumerate() {
@@ -168,7 +186,45 @@ impl<'db> TopLevelMod<'db> {
                 return Some(Target::Local {
                     span: name_span.into(),
                     ty,
-                    func,
+                    body,
+                    binding,
+                });
+            }
+        }
+
+        None
+    }
+
+    /// Check if cursor is on a contract init parameter name.
+    fn contract_init_param_binding_at<DB>(
+        self,
+        db: &'db DB,
+        contract: crate::hir_def::Contract<'db>,
+        cursor: TextSize,
+    ) -> Option<Target<'db>>
+    where
+        DB: HirAnalysisDb + SpannedHirDb,
+    {
+        let init = contract.init(db)?;
+        let body = init.body(db);
+        let typed_body = typed_body_for_body(db, body)?;
+
+        // Check each init param's name span
+        for (idx, _param) in init.params(db).data(db).iter().enumerate() {
+            let name_span = contract.span().init_block().params().param(idx).name();
+
+            if let Some(resolved) = name_span.resolve(db)
+                && resolved.range.contains(cursor)
+            {
+                let binding = typed_body.param_binding(idx)?;
+                let LocalBinding::Param { ty, .. } = binding else {
+                    return None;
+                };
+
+                return Some(Target::Local {
+                    span: name_span.into(),
+                    ty,
+                    body,
                     binding,
                 });
             }
@@ -184,12 +240,26 @@ impl<'db> TopLevelMod<'db> {
             match item {
                 ItemKind::Func(func) => return Some(func),
                 ItemKind::Body(body) => {
-                    // Body is inside a function - get the parent func
                     if let Some(func) = body.containing_func(db) {
                         return Some(func);
                     }
                 }
                 _ => {}
+            }
+        }
+        None
+    }
+
+    /// Find the innermost contract containing the cursor.
+    fn find_enclosing_contract(
+        self,
+        db: &'db dyn SpannedHirDb,
+        cursor: TextSize,
+    ) -> Option<crate::hir_def::Contract<'db>> {
+        let items = self.find_enclosing_items(db, cursor);
+        for item in items {
+            if let ItemKind::Contract(contract) = item {
+                return Some(contract);
             }
         }
         None
@@ -293,9 +363,8 @@ impl<'db> TopLevelMod<'db> {
                 }
                 results
             }
-            Target::Local { func, binding, .. } => {
-                let (_, typed_body) = check_func_body(db, *func);
-                let Some(body) = typed_body.body() else {
+            Target::Local { body, binding, .. } => {
+                let Some(typed_body) = typed_body_for_body(db, *body) else {
                     return vec![];
                 };
 

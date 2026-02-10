@@ -6,8 +6,8 @@
 use crate::{
     HirDb,
     hir_def::{
-        Body, Enum, Expr, ExprId, Func, Impl, ImplTrait, Pat, PatId, Struct, Trait, TypeAlias, Use,
-        UsePathId,
+        Body, Contract, Enum, Expr, ExprId, Func, Impl, ImplTrait, Pat, PatId, Struct, Trait,
+        TypeAlias, Use, UsePathId,
     },
     span::lazy_spans::{LazyBodySpan, LazyExprSpan, LazyPatSpan, LazyPathSpan, LazyUsePathSpan},
     visitor::{Visitor, VisitorCtxt, walk_expr, walk_pat, walk_path, walk_use_path},
@@ -260,5 +260,17 @@ pub fn use_references<'db>(db: &'db dyn HirDb, use_item: Use<'db>) -> Vec<Refere
     let mut collector = ReferenceCollector::new(db, false);
     let mut ctxt = VisitorCtxt::with_use(db, use_item);
     collector.visit_use(&mut ctxt, use_item);
+    collector.refs
+}
+
+#[salsa::tracked(return_ref)]
+pub fn contract_references<'db>(
+    db: &'db dyn HirDb,
+    contract: Contract<'db>,
+) -> Vec<ReferenceView<'db>> {
+    // skip_body: true — body references are handled separately via body_references
+    let mut collector = ReferenceCollector::new(db, true);
+    let mut ctxt = VisitorCtxt::with_contract(db, contract);
+    collector.visit_contract(&mut ctxt, contract);
     collector.refs
 }

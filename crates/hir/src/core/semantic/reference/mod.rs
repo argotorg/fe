@@ -17,14 +17,18 @@ use crate::{
     SpannedHirDb,
     analysis::HirAnalysisDb,
     analysis::name_resolution::{
-        EarlyNameQueryId, PathResErrorKind, QueryDirective, resolve_path, resolve_query,
+        EarlyNameQueryId, PathRes, PathResError, PathResErrorKind, QueryDirective, resolve_path,
+        resolve_query,
     },
     analysis::ty::{
-        trait_resolution::PredicateListId,
-        ty_check::{LocalBinding, RecordLike, check_func_body},
+        trait_resolution::{PredicateListId, constraint::collect_constraints},
+        ty_check::{
+            LocalBinding, RecordLike, TypedBody, check_contract_init_body,
+            check_contract_recv_arm_body, check_func_body,
+        },
         ty_def::TyId,
     },
-    hir_def::HirIngot,
+    hir_def::{GenericParamOwner, HirIngot},
     hir_def::scope_graph::ScopeId,
     hir_def::{Body, Expr, ExprId, FieldIndex, ItemKind, Partial, PathId, Use, UsePathSegment},
     span::{
@@ -35,32 +39,111 @@ use crate::{
 
 pub use has_references::HasReferences;
 
+/// Collect the trait bound assumptions visible at `scope` by walking up the
+/// scope chain to the nearest enclosing generic param owner (function, impl,
+/// trait, etc.). Returns empty assumptions if no owner is found.
+pub(crate) fn enclosing_assumptions<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+) -> PredicateListId<'db> {
+    let mut current = scope;
+    loop {
+        if let Some(owner) = GenericParamOwner::from_item_opt(current.item()) {
+            return collect_constraints(db, owner).instantiate_identity();
+        }
+        match current.parent(db) {
+            Some(parent) => current = parent,
+            None => return PredicateListId::empty_list(db),
+        }
+    }
+}
+
+/// Get the TypedBody for any Body, regardless of its owner.
+///
+/// Bodies can belong to functions, contract init blocks, or contract recv arms.
+/// This function identifies the owner and calls the appropriate type checker.
+pub(crate) fn typed_body_for_body<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+) -> Option<&'db TypedBody<'db>> {
+    // Try function body first (most common case)
+    if let Some(func) = body.containing_func(db) {
+        return Some(&check_func_body(db, func).1);
+    }
+
+    // Try contract bodies (init and recv arms)
+    let scope_graph = body.scope().scope_graph(db);
+    for item in scope_graph.items_dfs(db) {
+        if let ItemKind::Contract(contract) = item {
+            // Check init body
+            if let Some(init) = contract.init(db) {
+                if init.body(db) == body {
+                    return Some(&check_contract_init_body(db, contract).1);
+                }
+            }
+            // Check recv arm bodies
+            for (recv_idx, recv) in contract.recvs(db).data(db).iter().enumerate() {
+                for (arm_idx, arm) in recv.arms.data(db).iter().enumerate() {
+                    if arm.body == body {
+                        return Some(
+                            &check_contract_recv_arm_body(
+                                db,
+                                contract,
+                                recv_idx as u32,
+                                arm_idx as u32,
+                            )
+                            .1,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Extract all resolvable scopes from a path resolution result, including
+/// ambiguous and partial matches.
+fn scopes_from_resolution<'db>(
+    db: &'db dyn HirAnalysisDb,
+    result: &Result<PathRes<'db>, PathResError<'db>>,
+) -> Vec<ScopeId<'db>> {
+    match result {
+        Ok(res) => res.as_scope(db).into_iter().collect(),
+        Err(err) => match &err.kind {
+            PathResErrorKind::NotFound { bucket, .. } => {
+                bucket.iter_ok().flat_map(|r| r.scope()).collect()
+            }
+            PathResErrorKind::Ambiguous(vec) => {
+                vec.iter().flat_map(|r| r.scope()).collect()
+            }
+            _ => vec![],
+        },
+    }
+}
+
 /// Resolve a path to all possible scopes, including ambiguous candidates.
 ///
 /// For ambiguous paths that can resolve to multiple items (e.g., a module
 /// and a function with the same name), this returns all candidates.
-pub(crate) fn resolve_path_to_scopes<'db>(
+pub fn resolve_path_to_scopes<'db>(
     db: &'db dyn HirAnalysisDb,
     path: PathId<'db>,
     scope: ScopeId<'db>,
 ) -> Vec<ScopeId<'db>> {
-    let assumptions = PredicateListId::empty_list(db);
-    match resolve_path(db, path, scope, assumptions, false) {
-        Ok(res) => res.as_scope(db).into_iter().collect(),
-        Err(err) => {
-            match err.kind {
-                PathResErrorKind::NotFound { bucket, .. } => {
-                    // The bucket may contain valid results even on "NotFound"
-                    bucket.iter_ok().flat_map(|r| r.scope()).collect()
-                }
-                PathResErrorKind::Ambiguous(vec) => {
-                    // Return all ambiguous candidates
-                    vec.into_iter().flat_map(|r| r.scope()).collect()
-                }
-                _ => vec![],
-            }
-        }
+    // Try type-domain resolution first (resolve_tail_as_value=false).
+    let result = resolve_path(db, path, scope, PredicateListId::empty_list(db), false);
+    let scopes = scopes_from_resolution(db, &result);
+    if !scopes.is_empty() {
+        return scopes;
     }
+
+    // Retry with value-domain resolution to find methods on type parameters
+    // (e.g., `C::method()` where `C: Trait`).
+    let assumptions = enclosing_assumptions(db, scope);
+    let result = resolve_path(db, path, scope, assumptions, true);
+    scopes_from_resolution(db, &result)
 }
 
 /// The resolved target of a reference.
@@ -75,8 +158,8 @@ pub enum Target<'db> {
     Local {
         span: DynLazySpan<'db>,
         ty: TyId<'db>,
-        /// The containing function (needed to find other references to this local)
-        func: crate::hir_def::Func<'db>,
+        /// The containing body (needed to find other references to this local)
+        body: Body<'db>,
         /// The binding itself (param, local variable, or effect param)
         binding: LocalBinding<'db>,
     },
@@ -98,6 +181,15 @@ pub enum TargetResolution<'db> {
 }
 
 impl<'db> TargetResolution<'db> {
+    /// Build a `TargetResolution` from a set of resolved scopes.
+    pub fn from_scopes(scopes: Vec<ScopeId<'db>>) -> Self {
+        match scopes.len() {
+            0 => Self::None,
+            1 => Self::Single(Target::Scope(scopes.into_iter().next().unwrap())),
+            _ => Self::Ambiguous(scopes.into_iter().map(Target::Scope).collect()),
+        }
+    }
+
     pub fn first(&self) -> Option<&Target<'db>> {
         match self {
             Self::None => None,
@@ -164,12 +256,7 @@ impl<'db> PathView<'db> {
         if let Some(local) = self.local_target(db) {
             return TargetResolution::Single(local);
         }
-        let scopes = resolve_path_to_scopes(db, self.path, self.scope);
-        match scopes.len() {
-            0 => TargetResolution::None,
-            1 => TargetResolution::Single(Target::Scope(scopes.into_iter().next().unwrap())),
-            _ => TargetResolution::Ambiguous(scopes.into_iter().map(Target::Scope).collect()),
-        }
+        TargetResolution::from_scopes(resolve_path_to_scopes(db, self.path, self.scope))
     }
 
     /// Resolve at a specific cursor position (segment-aware: `foo` in `foo::Bar` → foo).
@@ -192,16 +279,9 @@ impl<'db> PathView<'db> {
                 }
 
                 if let Some(seg_path) = self.path.segment(db, idx) {
-                    let scopes = resolve_path_to_scopes(db, seg_path, self.scope);
-                    return match scopes.len() {
-                        0 => TargetResolution::None,
-                        1 => TargetResolution::Single(Target::Scope(
-                            scopes.into_iter().next().unwrap(),
-                        )),
-                        _ => TargetResolution::Ambiguous(
-                            scopes.into_iter().map(Target::Scope).collect(),
-                        ),
-                    };
+                    return TargetResolution::from_scopes(resolve_path_to_scopes(
+                        db, seg_path, self.scope,
+                    ));
                 }
                 return TargetResolution::None;
             }
@@ -216,20 +296,19 @@ impl<'db> PathView<'db> {
     {
         let body_ctx = self.body_ctx?;
         let body = self.scope.body()?;
-        let func = body.containing_func(db)?;
-        let (_, typed_body) = check_func_body(db, func);
+        let typed_body = typed_body_for_body(db, body)?;
 
         match body_ctx {
             BodyPathContext::Expr(expr_id) => {
                 // Expression reference (e.g., `p` in `p.foo()` or `x + 1`)
-                let def_span = typed_body.expr_binding_def_span(func, expr_id)?;
+                let def_span = typed_body.expr_binding_def_span_in_body(body, expr_id)?;
                 let ty = typed_body.expr_ty(db, expr_id);
                 let binding = typed_body.expr_binding(expr_id)?;
 
                 Some(Target::Local {
                     span: def_span,
                     ty,
-                    func,
+                    body,
                     binding,
                 })
             }
@@ -244,7 +323,7 @@ impl<'db> PathView<'db> {
                 Some(Target::Local {
                     span: def_span,
                     ty,
-                    func,
+                    body,
                     binding,
                 })
             }
@@ -293,13 +372,10 @@ impl<'db> FieldAccessView<'db> {
             return TargetResolution::None; // Tuple field access (e.g., tuple.0) doesn't have a scope
         };
 
-        // Get the containing function for type checking
-        let Some(func) = self.body.containing_func(db) else {
+        // Get the typed body (works for functions, contract init, recv arms)
+        let Some(typed_body) = typed_body_for_body(db, self.body) else {
             return TargetResolution::None;
         };
-
-        // Run type checking to get typed body
-        let (_, typed_body) = check_func_body(db, func);
 
         // Get the type of the receiver expression
         let receiver_ty = typed_body.expr_ty(db, *receiver);
@@ -337,13 +413,10 @@ impl<'db> MethodCallView<'db> {
     ///
     /// Uses the typed body's callable information to find the resolved method.
     pub fn target(&self, db: &'db dyn HirAnalysisDb) -> TargetResolution<'db> {
-        // Get the containing function for type checking
-        let Some(func) = self.body.containing_func(db) else {
+        // Get the typed body (works for functions, contract init, recv arms)
+        let Some(typed_body) = typed_body_for_body(db, self.body) else {
             return TargetResolution::None;
         };
-
-        // Run type checking to get typed body with callable information
-        let (_, typed_body) = check_func_body(db, func);
 
         // Get the callable for this method call expression
         let Some(callable) = typed_body.callable_expr(self.expr) else {
