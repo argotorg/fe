@@ -1295,6 +1295,18 @@ impl<'db> TypedBody<'db> {
         Some(binding.def_span_with(body, func))
     }
 
+    /// Like `expr_binding_def_span` but takes a `Body` directly.
+    ///
+    /// Use this when the body may not belong to a function (e.g., contract bodies).
+    pub fn expr_binding_def_span_in_body(
+        &self,
+        body: Body<'db>,
+        expr: ExprId,
+    ) -> Option<DynLazySpan<'db>> {
+        let binding = self.expr_binding(expr)?;
+        Some(binding.def_span_in_body(body))
+    }
+
     /// Get the binding kind for an expression that references a local binding.
     ///
     /// Returns the identity of the binding (param index, pattern id, or effect param ident).

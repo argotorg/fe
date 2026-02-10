@@ -1310,6 +1310,11 @@ impl<'db> LocalBinding<'db> {
     /// This is used by `TypedBody::expr_binding_def_span` to get the definition
     /// span without needing a full `TyCheckEnv`.
     pub(super) fn def_span_with(&self, body: Body<'db>, _func: Func<'db>) -> DynLazySpan<'db> {
+        self.def_span_in_body(body)
+    }
+
+    /// Get the definition span for this binding given just the body.
+    pub(super) fn def_span_in_body(&self, body: Body<'db>) -> DynLazySpan<'db> {
         match self {
             LocalBinding::Local { pat, .. } => pat.span(body).into(),
             LocalBinding::Param { site, idx, .. } => param_span(*site, *idx),

@@ -87,7 +87,7 @@ fn first_assoc_scope<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<S
                 return;
             }
             if let TyData::AssocTy(assoc) = ty.data(self.db) {
-                self.scope = Some(assoc.scope(self.db));
+                self.scope = assoc.scope(self.db);
                 return;
             }
             walk_ty(self, ty);

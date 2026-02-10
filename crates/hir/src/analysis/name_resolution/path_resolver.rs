@@ -497,7 +497,15 @@ impl<'db> PathRes<'db> {
             PathRes::EnumVariant(variant) => Some(ScopeId::Variant(variant.variant)),
             PathRes::FuncParam(item, idx) => Some(ScopeId::FuncParam(*item, *idx)),
             PathRes::Mod(scope) => Some(*scope),
-            PathRes::Method(ty, _) => ty.as_scope(db),
+            PathRes::Method(_, cand) => {
+                let scope = match cand {
+                    MethodCandidate::InherentMethod(func_def) => func_def.scope(),
+                    MethodCandidate::TraitMethod(c) | MethodCandidate::NeedsConfirmation(c) => {
+                        c.method.scope()
+                    }
+                };
+                Some(scope)
+            }
         }
     }
 
