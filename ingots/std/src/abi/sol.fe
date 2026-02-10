@@ -23,7 +23,7 @@ impl Abi for Sol {
     type Encoder = SolEncoder
     const SELECTOR_SIZE: u256 = 4
 
-    fn selector_from_prefix(_ prefix: own u256) -> Self::Selector {
+    fn selector_from_prefix(_ prefix: u256) -> Self::Selector {
         (prefix >> 224).downcast_unchecked()
     }
 
@@ -31,7 +31,7 @@ impl Abi for Sol {
         SolDecoder::new(input)
     }
 
-    fn decoder_with_base<I: ByteInput>(_ input: own I, base: own u256) -> Self::Decoder<I> {
+    fn decoder_with_base<I: ByteInput>(_ input: own I, base: u256) -> Self::Decoder<I> {
         SolDecoder::with_base(input, base)
     }
 
@@ -55,7 +55,7 @@ impl<I> SolDecoder<I>
         }
     }
 
-    pub fn with_base(input: own I, base: own u256) -> Self {
+    pub fn with_base(input: own I, base: u256) -> Self {
         SolDecoder {
             cur: Cursor::new(input).fork(base),
             base,
@@ -80,7 +80,7 @@ impl<I> AbiDecoder<Sol> for SolDecoder<I>
         self.cur.pos
     }
 
-    fn set_pos(mut self, new_pos: own u256) {
+    fn set_pos(mut self, new_pos: u256) {
         self.cur.pos = new_pos
     }
 
@@ -106,7 +106,7 @@ impl<I> AbiDecoder<Sol> for SolDecoder<I>
         w
     }
 
-    fn peek_word(self, at: own u256) -> u256 {
+    fn peek_word(self, at: u256) -> u256 {
         let len = self.cur.input.len()
         let end = at + 32
         if end < at || end > len {
@@ -115,7 +115,7 @@ impl<I> AbiDecoder<Sol> for SolDecoder<I>
         self.cur.input.word_at(at)
     }
 
-    fn alloc(mut self, size: own u256) -> u256 {
+    fn alloc(mut self, size: u256) -> u256 {
         mem::alloc(size)
     }
 }
@@ -135,7 +135,7 @@ impl SolEncoder {
         }
     }
 
-    fn ensure_init(mut self, bytes: own u256) {
+    fn ensure_init(mut self, bytes: u256) {
         if self.start == 0 {
             let ptr = mem::alloc(bytes)
             self.start = ptr
@@ -154,31 +154,31 @@ impl AbiEncoder<Sol> for SolEncoder {
         self.pos
     }
 
-    fn set_pos(mut self, new_pos: own u256) {
+    fn set_pos(mut self, new_pos: u256) {
         self.pos = new_pos
     }
 
-    fn write_u8(mut self, v: own u8) {
+    fn write_u8(mut self, v: u8) {
         mstore8(self.pos, v)
         self.pos = self.pos + 1
     }
 
-    fn write_word(mut self, v: own u256) {
+    fn write_word(mut self, v: u256) {
         let p = self.pos
         mstore(p, v)
         self.pos = p + 32
     }
 
-    fn write_word_at(mut self, at: own u256, v: own u256) {
+    fn write_word_at(mut self, at: u256, v: u256) {
         mstore(at, v)
     }
 
-    fn reserve_head(mut self, bytes: own u256) -> u256 {
+    fn reserve_head(mut self, bytes: u256) -> u256 {
         self.ensure_init(bytes)
         self.start
     }
 
-    fn append_tail(mut self, bytes: own u256) -> u256 {
+    fn append_tail(mut self, bytes: u256) -> u256 {
         let ptr = mem::alloc(bytes)
         self.end = ptr + bytes
         ptr

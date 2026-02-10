@@ -373,13 +373,13 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 crate::repr::ReprKind::Ptr(_) | crate::repr::ReprKind::Ref => {}
             }
         }
-        match root_value.origin {
+        matches!(
+            root_value.origin,
             ValueOrigin::Local(_)
-            | ValueOrigin::PlaceRef(_)
-            | ValueOrigin::MoveOut { .. }
-            | ValueOrigin::FieldPtr(_) => true,
-            _ => false,
-        }
+                | ValueOrigin::PlaceRef(_)
+                | ValueOrigin::MoveOut { .. }
+                | ValueOrigin::FieldPtr(_)
+        )
     }
 
     pub(super) fn place_from_capability_value(
@@ -1943,10 +1943,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
                 if lhs_ty.as_capability(self.db).is_some() {
                     let addr_value = self.lower_expr(*lhs);
-                    let Some(mut place) = self.place_from_capability_value(addr_value, lhs_ty)
-                    else {
-                        return None;
-                    };
+                    let mut place = self.place_from_capability_value(addr_value, lhs_ty)?;
                     place.projection.push(Projection::Field(info.field_idx));
                     return Some(place);
                 }
@@ -1983,10 +1980,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 }
                 if lhs_ty.as_capability(self.db).is_some() {
                     let addr_value = self.lower_expr(*lhs);
-                    let Some(mut place) = self.place_from_capability_value(addr_value, lhs_ty)
-                    else {
-                        return None;
-                    };
+                    let mut place = self.place_from_capability_value(addr_value, lhs_ty)?;
                     let index_source = self.lower_index_source(*rhs);
                     place.projection.push(Projection::Index(index_source));
                     return Some(place);

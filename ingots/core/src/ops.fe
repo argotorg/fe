@@ -86,17 +86,17 @@ pub trait BitNot {
 
 // Comparison operators
 pub trait Eq<T = Self> {
-    fn eq(own self, _ other: own T) -> bool
-    fn ne(own self, _ other: own T) -> bool {
+    fn eq(self, _ other: T) -> bool
+    fn ne(self, _ other: T) -> bool {
         !self.eq(other)
     }
 }
 
 pub trait Ord<T = Self> {
-    fn lt(own self, _ other: own T) -> bool
-    fn le(own self, _ other: own T) -> bool
-    fn gt(own self, _ other: own T) -> bool
-    fn ge(own self, _ other: own T) -> bool
+    fn lt(self, _ other: T) -> bool
+    fn le(self, _ other: T) -> bool
+    fn gt(self, _ other: T) -> bool
+    fn ge(self, _ other: T) -> bool
 }
 
 // Indexing operator

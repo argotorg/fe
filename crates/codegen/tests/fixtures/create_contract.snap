@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 33
 expression: output
 input_file: tests/fixtures/create_contract.fe
 ---
@@ -106,8 +105,9 @@ object "Factory" {
         leave
       }
       function $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at($self, $byte_offset) -> ret {
-        let v0 := calldataload(add($self, $byte_offset))
-        ret := v0
+        let v0 := add($self, $byte_offset)
+        let v1 := calldataload(v0)
+        ret := v1
         leave
       }
       function $create2_stor__Evm_hef0af3106e109414_Child_hdfa2e9d62e9c9ad3__8303e18f50f8d8ed($self, $value, $args, $salt) -> ret {
@@ -465,8 +465,9 @@ object "Factory" {
         }
         function $memorybytes_h1e381015a9b0111b_byteinput_hc4c2cb44299530ae_word_at($self, $byte_offset) -> ret {
           let v0 := mload($self)
-          let v1 := mload(add(v0, $byte_offset))
-          ret := v1
+          let v1 := add(v0, $byte_offset)
+          let v2 := mload(v1)
+          ret := v2
           leave
         }
         function $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b($input) -> ret {
@@ -538,8 +539,9 @@ object "Factory" {
             leave
           }
           function $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at($self, $byte_offset) -> ret {
-            let v0 := calldataload(add($self, $byte_offset))
-            ret := v0
+            let v0 := add($self, $byte_offset)
+            let v1 := calldataload(v0)
+            ret := v1
             leave
           }
           function $cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($self, $pos) -> ret {

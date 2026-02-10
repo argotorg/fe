@@ -61,7 +61,7 @@ pub trait EffectHandle {
     type AddressSpace
 
     /// Construct the effect provider from the raw pointer/handle used by the backend.
-    fn from_raw(raw: own u256) -> Self
+    fn from_raw(raw: u256) -> Self
 
     /// Return the raw pointer/handle used by the backend (e.g. memory address or storage slot).
     fn raw(self) -> u256
@@ -78,7 +78,7 @@ impl<T> EffectHandle for MemPtr<T> {
     type Target = T
     type AddressSpace = Memory
 
-    fn from_raw(raw: own u256) -> Self {
+    fn from_raw(raw: u256) -> Self {
         Self { addr: raw }
     }
 
@@ -95,7 +95,7 @@ impl<T> EffectHandle for StorPtr<T> {
     type Target = T
     type AddressSpace = Storage
 
-    fn from_raw(raw: own u256) -> Self {
+    fn from_raw(raw: u256) -> Self {
         Self { handle: raw }
     }
 

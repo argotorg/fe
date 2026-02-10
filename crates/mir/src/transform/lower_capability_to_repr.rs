@@ -326,12 +326,21 @@ pub(crate) fn lower_capability_to_repr<'db>(
         spill_addr_value_for_owner[owner.index()] = Some(spill_value);
     }
 
-    for idx in 0..initial_values_len {
-        body.values[idx].repr = desired_repr[idx];
+    for (value, desired) in body
+        .values
+        .iter_mut()
+        .zip(desired_repr.iter().copied())
+        .take(initial_values_len)
+    {
+        value.repr = desired;
     }
 
-    for idx in 0..initial_values_len {
-        let desired = desired_repr[idx];
+    for (idx, desired) in desired_repr
+        .iter()
+        .copied()
+        .enumerate()
+        .take(initial_values_len)
+    {
         let origin = body.values[idx].origin.clone();
         let new_origin = match origin {
             ValueOrigin::PlaceRef(mut place) => {

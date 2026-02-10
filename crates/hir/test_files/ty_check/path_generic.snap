@@ -3,248 +3,248 @@ source: crates/hir/tests/ty_check.rs
 expression: res
 input_file: test_files/ty_check/path_generic.fe
 ---
-note: 
+note:
    ┌─ path_generic.fe:10:22
-   │  
+   │
 10 │       fn method() -> T {
    │ ╭──────────────────────^
 11 │ │         T::default()
 12 │ │     }
    │ ╰─────^ T
 
-note: 
+note:
    ┌─ path_generic.fe:11:9
    │
 11 │         T::default()
    │         ^^^^^^^^^^ fn default<T>
 
-note: 
+note:
    ┌─ path_generic.fe:11:9
    │
 11 │         T::default()
    │         ^^^^^^^^^^^^ T
 
-note: 
+note:
    ┌─ path_generic.fe:16:26
-   │  
+   │
 16 │       fn default() -> Self {
    │ ╭──────────────────────────^
 17 │ │         0
 18 │ │     }
    │ ╰─────^ i32
 
-note: 
+note:
    ┌─ path_generic.fe:17:9
    │
 17 │         0
    │         ^ i32
 
-note: 
+note:
    ┌─ path_generic.fe:29:39
-   │  
+   │
 29 │       fn gimme<U>(_ val: own U) -> E<U> {
    │ ╭───────────────────────────────────────^
 30 │ │         E::B(val)
 31 │ │     }
    │ ╰─────^ E<U>
 
-note: 
+note:
    ┌─ path_generic.fe:30:9
    │
 30 │         E::B(val)
    │         ^^^^ fn B<U>
 
-note: 
+note:
    ┌─ path_generic.fe:30:9
    │
 30 │         E::B(val)
    │         ^^^^^^^^^ E<U>
 
-note: 
+note:
    ┌─ path_generic.fe:30:14
    │
 30 │         E::B(val)
    │              ^^^ U
 
-note: 
+note:
    ┌─ path_generic.fe:39:65
-   │  
+   │
 39 │       fn replace<T, U>(self: own Self<T>, with: own U) -> Self<U> {
    │ ╭─────────────────────────────────────────────────────────────────^
 40 │ │         Self::B(with)
 41 │ │     }
    │ ╰─────^ E<U>
 
-note: 
+note:
    ┌─ path_generic.fe:40:9
    │
 40 │         Self::B(with)
    │         ^^^^^^^ fn B<U>
 
-note: 
+note:
    ┌─ path_generic.fe:40:9
    │
 40 │         Self::B(with)
    │         ^^^^^^^^^^^^^ E<U>
 
-note: 
+note:
    ┌─ path_generic.fe:40:17
    │
 40 │         Self::B(with)
    │                 ^^^^ U
 
-note: 
+note:
    ┌─ path_generic.fe:44:10
-   │  
+   │
 44 │   fn foo() {
    │ ╭──────────^
 45 │ │     // Deciding the `Foo` type is not possible without a type argument for `Foo`.
 46 │ │     // let x = Foo::method()
-47 │ │ 
+47 │ │
    · │
 56 │ │     let e5 = e1.replace(with: "hi")
 57 │ │ }
    │ ╰─^ ()
 
-note: 
+note:
    ┌─ path_generic.fe:48:9
    │
 48 │     let x = Foo<i32>::method()
    │         ^ i32
 
-note: 
+note:
    ┌─ path_generic.fe:48:13
    │
 48 │     let x = Foo<i32>::method()
    │             ^^^^^^^^^^^^^^^^ fn method<i32>
 
-note: 
+note:
    ┌─ path_generic.fe:48:13
    │
 48 │     let x = Foo<i32>::method()
    │             ^^^^^^^^^^^^^^^^^^ i32
 
-note: 
+note:
    ┌─ path_generic.fe:50:9
    │
 50 │     let e0 = E::B(x)
    │         ^^ E<i32>
 
-note: 
+note:
    ┌─ path_generic.fe:50:14
    │
 50 │     let e0 = E::B(x)
    │              ^^^^ fn B<i32>
 
-note: 
+note:
    ┌─ path_generic.fe:50:14
    │
 50 │     let e0 = E::B(x)
    │              ^^^^^^^ E<i32>
 
-note: 
+note:
    ┌─ path_generic.fe:50:19
    │
 50 │     let e0 = E::B(x)
    │                   ^ i32
 
-note: 
+note:
    ┌─ path_generic.fe:51:9
    │
 51 │     let e1 = E<u64>::C(10)
    │         ^^ E<u64>
 
-note: 
+note:
    ┌─ path_generic.fe:51:14
    │
 51 │     let e1 = E<u64>::C(10)
    │              ^^^^^^^^^ fn C<u64>
 
-note: 
+note:
    ┌─ path_generic.fe:51:14
    │
 51 │     let e1 = E<u64>::C(10)
    │              ^^^^^^^^^^^^^ E<u64>
 
-note: 
+note:
    ┌─ path_generic.fe:51:24
    │
 51 │     let e1 = E<u64>::C(10)
    │                        ^^ i32
 
-note: 
+note:
    ┌─ path_generic.fe:52:9
    │
 52 │     let e2 = E<u64>::A
    │         ^^ E<u64>
 
-note: 
+note:
    ┌─ path_generic.fe:52:14
    │
 52 │     let e2 = E<u64>::A
    │              ^^^^^^^^^ E<u64>
 
-note: 
+note:
    ┌─ path_generic.fe:53:9
    │
 53 │     let e3 = E<u64>::D { x: 10 }
    │         ^^ E<u64>
 
-note: 
+note:
    ┌─ path_generic.fe:53:14
    │
 53 │     let e3 = E<u64>::D { x: 10 }
    │              ^^^^^^^^^^^^^^^^^^^ E<u64>
 
-note: 
+note:
    ┌─ path_generic.fe:53:29
    │
 53 │     let e3 = E<u64>::D { x: 10 }
    │                             ^^ i32
 
-note: 
+note:
    ┌─ path_generic.fe:55:9
    │
 55 │     let e4 = E<()>::gimme<u64>(10)
    │         ^^ E<u64>
 
-note: 
+note:
    ┌─ path_generic.fe:55:14
    │
 55 │     let e4 = E<()>::gimme<u64>(10)
    │              ^^^^^^^^^^^^^^^^^ fn gimme<(), u64>
 
-note: 
+note:
    ┌─ path_generic.fe:55:14
    │
 55 │     let e4 = E<()>::gimme<u64>(10)
    │              ^^^^^^^^^^^^^^^^^^^^^ E<u64>
 
-note: 
+note:
    ┌─ path_generic.fe:55:32
    │
 55 │     let e4 = E<()>::gimme<u64>(10)
    │                                ^^ u64
 
-note: 
+note:
    ┌─ path_generic.fe:56:9
    │
 56 │     let e5 = e1.replace(with: "hi")
    │         ^^ E<String<2>>
 
-note: 
+note:
    ┌─ path_generic.fe:56:14
    │
 56 │     let e5 = e1.replace(with: "hi")
    │              ^^ E<u64>
 
-note: 
+note:
    ┌─ path_generic.fe:56:14
    │
 56 │     let e5 = e1.replace(with: "hi")
    │              ^^^^^^^^^^^^^^^^^^^^^^ E<String<2>>
 
-note: 
+note:
    ┌─ path_generic.fe:56:31
    │
 56 │     let e5 = e1.replace(with: "hi")

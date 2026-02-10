@@ -389,7 +389,7 @@ trait IntWord {
     const IS_SIGNED: bool
 
     fn to_word(own self) -> u256
-    fn from_word(word: own u256) -> Self
+    fn from_word(word: u256) -> Self
 }
 
 impl IntWord for u8 {
@@ -398,7 +398,7 @@ impl IntWord for u8 {
     const IS_SIGNED: bool = false
 
     fn to_word(own self) -> u256 { self as u256 }
-    fn from_word(word: own u256) -> Self { __bitcast(word) }
+    fn from_word(word: u256) -> Self { __bitcast(word) }
 }
 
 impl IntWord for u16 {
@@ -407,7 +407,7 @@ impl IntWord for u16 {
     const IS_SIGNED: bool = false
 
     fn to_word(own self) -> u256 { self as u256 }
-    fn from_word(word: own u256) -> Self { __bitcast(word) }
+    fn from_word(word: u256) -> Self { __bitcast(word) }
 }
 
 impl IntWord for u32 {
@@ -416,7 +416,7 @@ impl IntWord for u32 {
     const IS_SIGNED: bool = false
 
     fn to_word(own self) -> u256 { self as u256 }
-    fn from_word(word: own u256) -> Self { __bitcast(word) }
+    fn from_word(word: u256) -> Self { __bitcast(word) }
 }
 
 impl IntWord for u64 {
@@ -425,7 +425,7 @@ impl IntWord for u64 {
     const IS_SIGNED: bool = false
 
     fn to_word(own self) -> u256 { self as u256 }
-    fn from_word(word: own u256) -> Self { __bitcast(word) }
+    fn from_word(word: u256) -> Self { __bitcast(word) }
 }
 
 impl IntWord for u128 {
@@ -434,7 +434,7 @@ impl IntWord for u128 {
     const IS_SIGNED: bool = false
 
     fn to_word(own self) -> u256 { self as u256 }
-    fn from_word(word: own u256) -> Self { __bitcast(word) }
+    fn from_word(word: u256) -> Self { __bitcast(word) }
 }
 
 impl IntWord for u256 {
@@ -443,7 +443,7 @@ impl IntWord for u256 {
     const IS_SIGNED: bool = false
 
     fn to_word(own self) -> u256 { self }
-    fn from_word(word: own u256) -> Self { word }
+    fn from_word(word: u256) -> Self { word }
 }
 
 impl IntWord for usize {
@@ -452,7 +452,7 @@ impl IntWord for usize {
     const IS_SIGNED: bool = false
 
     fn to_word(own self) -> u256 { self as u256 }
-    fn from_word(word: own u256) -> Self { __bitcast(word) }
+    fn from_word(word: u256) -> Self { __bitcast(word) }
 }
 
 impl IntWord for i8 {
@@ -461,7 +461,7 @@ impl IntWord for i8 {
     const IS_SIGNED: bool = true
 
     fn to_word(own self) -> u256 { __bitcast(self as i256) }
-    fn from_word(word: own u256) -> Self { __bitcast(word) }
+    fn from_word(word: u256) -> Self { __bitcast(word) }
 }
 
 impl IntWord for i16 {
@@ -470,7 +470,7 @@ impl IntWord for i16 {
     const IS_SIGNED: bool = true
 
     fn to_word(own self) -> u256 { __bitcast(self as i256) }
-    fn from_word(word: own u256) -> Self { __bitcast(word) }
+    fn from_word(word: u256) -> Self { __bitcast(word) }
 }
 
 impl IntWord for i32 {
@@ -479,7 +479,7 @@ impl IntWord for i32 {
     const IS_SIGNED: bool = true
 
     fn to_word(own self) -> u256 { __bitcast(self as i256) }
-    fn from_word(word: own u256) -> Self { __bitcast(word) }
+    fn from_word(word: u256) -> Self { __bitcast(word) }
 }
 
 impl IntWord for i64 {
@@ -488,7 +488,7 @@ impl IntWord for i64 {
     const IS_SIGNED: bool = true
 
     fn to_word(own self) -> u256 { __bitcast(self as i256) }
-    fn from_word(word: own u256) -> Self { __bitcast(word) }
+    fn from_word(word: u256) -> Self { __bitcast(word) }
 }
 
 impl IntWord for i128 {
@@ -497,7 +497,7 @@ impl IntWord for i128 {
     const IS_SIGNED: bool = true
 
     fn to_word(own self) -> u256 { __bitcast(self as i256) }
-    fn from_word(word: own u256) -> Self { __bitcast(word) }
+    fn from_word(word: u256) -> Self { __bitcast(word) }
 }
 
 impl IntWord for i256 {
@@ -506,7 +506,7 @@ impl IntWord for i256 {
     const IS_SIGNED: bool = true
 
     fn to_word(own self) -> u256 { __bitcast(self) }
-    fn from_word(word: own u256) -> Self { __bitcast(word) }
+    fn from_word(word: u256) -> Self { __bitcast(word) }
 }
 
 impl IntWord for isize {
@@ -515,7 +515,7 @@ impl IntWord for isize {
     const IS_SIGNED: bool = true
 
     fn to_word(own self) -> u256 { __bitcast(self as i256) }
-    fn from_word(word: own u256) -> Self { __bitcast(word) }
+    fn from_word(word: u256) -> Self { __bitcast(word) }
 }
 
 impl<S: IntWord, T: IntWord> IntDowncast<T> for S {
@@ -609,7 +609,7 @@ impl<S: IntWord, T: IntWord> IntDowncast<T> for S {
 }
 
 /// Performs two's-complement sign extension within the provided mask/sign bit.
-fn sign_extend(word: own u256, _ mask: own u256, _ sign_bit: own u256) -> u256 {
+fn sign_extend(word: u256, _ mask: u256, _ sign_bit: u256) -> u256 {
     let value = word & mask
     if value & sign_bit != 0 {
         value | (!mask)
@@ -633,8 +633,8 @@ impl BitAnd for u8 { fn bitand(own self, _ other: own u8) -> u8 { __bitand_u8(se
 impl BitOr for u8 { fn bitor(own self, _ other: own u8) -> u8 { __bitor_u8(self, other) } }
 impl BitXor for u8 { fn bitxor(own self, _ other: own u8) -> u8 { __bitxor_u8(self, other) } }
 impl Eq for u8 {
-    fn eq(own self, _ other: own u8) -> bool { __eq_u8(self, other) }
-    fn ne(own self, _ other: own u8) -> bool { __ne_u8(self, other) }
+    fn eq(self, _ other: u8) -> bool { __eq_u8(self, other) }
+    fn ne(self, _ other: u8) -> bool { __ne_u8(self, other) }
 }
 impl Ord for u8 {
     fn lt(own self, _ other: own u8) -> bool { __lt_u8(self, other) }
@@ -671,8 +671,8 @@ impl BitAnd for i8 { fn bitand(own self, _ other: own i8) -> i8 { __bitand_i8(se
 impl BitOr for i8 { fn bitor(own self, _ other: own i8) -> i8 { __bitor_i8(self, other) } }
 impl BitXor for i8 { fn bitxor(own self, _ other: own i8) -> i8 { __bitxor_i8(self, other) } }
 impl Eq for i8 {
-    fn eq(own self, _ other: own i8) -> bool { __eq_i8(self, other) }
-    fn ne(own self, _ other: own i8) -> bool { __ne_i8(self, other) }
+    fn eq(self, _ other: i8) -> bool { __eq_i8(self, other) }
+    fn ne(self, _ other: i8) -> bool { __ne_i8(self, other) }
 }
 impl Ord for i8 {
     fn lt(own self, _ other: own i8) -> bool { __lt_i8(self, other) }
@@ -709,8 +709,8 @@ impl BitAnd for i16 { fn bitand(own self, _ other: own i16) -> i16 { __bitand_i1
 impl BitOr for i16 { fn bitor(own self, _ other: own i16) -> i16 { __bitor_i16(self, other) } }
 impl BitXor for i16 { fn bitxor(own self, _ other: own i16) -> i16 { __bitxor_i16(self, other) } }
 impl Eq for i16 {
-    fn eq(own self, _ other: own i16) -> bool { __eq_i16(self, other) }
-    fn ne(own self, _ other: own i16) -> bool { __ne_i16(self, other) }
+    fn eq(self, _ other: i16) -> bool { __eq_i16(self, other) }
+    fn ne(self, _ other: i16) -> bool { __ne_i16(self, other) }
 }
 impl Ord for i16 {
     fn lt(own self, _ other: own i16) -> bool { __lt_i16(self, other) }
@@ -746,8 +746,8 @@ impl BitAnd for u16 { fn bitand(own self, _ other: own u16) -> u16 { __bitand_u1
 impl BitOr for u16 { fn bitor(own self, _ other: own u16) -> u16 { __bitor_u16(self, other) } }
 impl BitXor for u16 { fn bitxor(own self, _ other: own u16) -> u16 { __bitxor_u16(self, other) } }
 impl Eq for u16 {
-    fn eq(own self, _ other: own u16) -> bool { __eq_u16(self, other) }
-    fn ne(own self, _ other: own u16) -> bool { __ne_u16(self, other) }
+    fn eq(self, _ other: u16) -> bool { __eq_u16(self, other) }
+    fn ne(self, _ other: u16) -> bool { __ne_u16(self, other) }
 }
 impl Ord for u16 {
     fn lt(own self, _ other: own u16) -> bool { __lt_u16(self, other) }
@@ -785,8 +785,8 @@ impl BitAnd for i32 { fn bitand(own self, _ other: own i32) -> i32 { __bitand_i3
 impl BitOr for i32 { fn bitor(own self, _ other: own i32) -> i32 { __bitor_i32(self, other) } }
 impl BitXor for i32 { fn bitxor(own self, _ other: own i32) -> i32 { __bitxor_i32(self, other) } }
 impl Eq for i32 {
-    fn eq(own self, _ other: own i32) -> bool { __eq_i32(self, other) }
-    fn ne(own self, _ other: own i32) -> bool { __ne_i32(self, other) }
+    fn eq(self, _ other: i32) -> bool { __eq_i32(self, other) }
+    fn ne(self, _ other: i32) -> bool { __ne_i32(self, other) }
 }
 impl Ord for i32 {
     fn lt(own self, _ other: own i32) -> bool { __lt_i32(self, other) }
@@ -822,8 +822,8 @@ impl BitAnd for u32 { fn bitand(own self, _ other: own u32) -> u32 { __bitand_u3
 impl BitOr for u32 { fn bitor(own self, _ other: own u32) -> u32 { __bitor_u32(self, other) } }
 impl BitXor for u32 { fn bitxor(own self, _ other: own u32) -> u32 { __bitxor_u32(self, other) } }
 impl Eq for u32 {
-    fn eq(own self, _ other: own u32) -> bool { __eq_u32(self, other) }
-    fn ne(own self, _ other: own u32) -> bool { __ne_u32(self, other) }
+    fn eq(self, _ other: u32) -> bool { __eq_u32(self, other) }
+    fn ne(self, _ other: u32) -> bool { __ne_u32(self, other) }
 }
 impl Ord for u32 {
     fn lt(own self, _ other: own u32) -> bool { __lt_u32(self, other) }
@@ -860,8 +860,8 @@ impl BitAnd for i64 { fn bitand(own self, _ other: own i64) -> i64 { __bitand_i6
 impl BitOr for i64 { fn bitor(own self, _ other: own i64) -> i64 { __bitor_i64(self, other) } }
 impl BitXor for i64 { fn bitxor(own self, _ other: own i64) -> i64 { __bitxor_i64(self, other) } }
 impl Eq for i64 {
-    fn eq(own self, _ other: own i64) -> bool { __eq_i64(self, other) }
-    fn ne(own self, _ other: own i64) -> bool { __ne_i64(self, other) }
+    fn eq(self, _ other: i64) -> bool { __eq_i64(self, other) }
+    fn ne(self, _ other: i64) -> bool { __ne_i64(self, other) }
 }
 impl Ord for i64 {
     fn lt(own self, _ other: own i64) -> bool { __lt_i64(self, other) }
@@ -898,8 +898,8 @@ impl BitAnd for i128 { fn bitand(own self, _ other: own i128) -> i128 { __bitand
 impl BitOr for i128 { fn bitor(own self, _ other: own i128) -> i128 { __bitor_i128(self, other) } }
 impl BitXor for i128 { fn bitxor(own self, _ other: own i128) -> i128 { __bitxor_i128(self, other) } }
 impl Eq for i128 {
-    fn eq(own self, _ other: own i128) -> bool { __eq_i128(self, other) }
-    fn ne(own self, _ other: own i128) -> bool { __ne_i128(self, other) }
+    fn eq(self, _ other: i128) -> bool { __eq_i128(self, other) }
+    fn ne(self, _ other: i128) -> bool { __ne_i128(self, other) }
 }
 impl Ord for i128 {
     fn lt(own self, _ other: own i128) -> bool { __lt_i128(self, other) }
@@ -935,8 +935,8 @@ impl BitAnd for u64 { fn bitand(own self, _ other: own u64) -> u64 { __bitand_u6
 impl BitOr for u64 { fn bitor(own self, _ other: own u64) -> u64 { __bitor_u64(self, other) } }
 impl BitXor for u64 { fn bitxor(own self, _ other: own u64) -> u64 { __bitxor_u64(self, other) } }
 impl Eq for u64 {
-    fn eq(own self, _ other: own u64) -> bool { __eq_u64(self, other) }
-    fn ne(own self, _ other: own u64) -> bool { __ne_u64(self, other) }
+    fn eq(self, _ other: u64) -> bool { __eq_u64(self, other) }
+    fn ne(self, _ other: u64) -> bool { __ne_u64(self, other) }
 }
 impl Ord for u64 {
     fn lt(own self, _ other: own u64) -> bool { __lt_u64(self, other) }
@@ -972,8 +972,8 @@ impl BitAnd for u128 { fn bitand(own self, _ other: own u128) -> u128 { __bitand
 impl BitOr for u128 { fn bitor(own self, _ other: own u128) -> u128 { __bitor_u128(self, other) } }
 impl BitXor for u128 { fn bitxor(own self, _ other: own u128) -> u128 { __bitxor_u128(self, other) } }
 impl Eq for u128 {
-    fn eq(own self, _ other: own u128) -> bool { __eq_u128(self, other) }
-    fn ne(own self, _ other: own u128) -> bool { __ne_u128(self, other) }
+    fn eq(self, _ other: u128) -> bool { __eq_u128(self, other) }
+    fn ne(self, _ other: u128) -> bool { __ne_u128(self, other) }
 }
 impl Ord for u128 {
     fn lt(own self, _ other: own u128) -> bool { __lt_u128(self, other) }
@@ -1009,8 +1009,8 @@ impl BitAnd for usize { fn bitand(own self, _ other: own usize) -> usize { __bit
 impl BitOr for usize { fn bitor(own self, _ other: own usize) -> usize { __bitor_usize(self, other) } }
 impl BitXor for usize { fn bitxor(own self, _ other: own usize) -> usize { __bitxor_usize(self, other) } }
 impl Eq for usize {
-    fn eq(own self, _ other: own usize) -> bool { __eq_usize(self, other) }
-    fn ne(own self, _ other: own usize) -> bool { __ne_usize(self, other) }
+    fn eq(self, _ other: usize) -> bool { __eq_usize(self, other) }
+    fn ne(self, _ other: usize) -> bool { __ne_usize(self, other) }
 }
 impl Ord for usize {
     fn lt(own self, _ other: own usize) -> bool { __lt_usize(self, other) }
@@ -1036,8 +1036,8 @@ impl BitAnd for i256 { fn bitand(own self, _ other: own i256) -> i256 { __bitand
 impl BitOr for i256 { fn bitor(own self, _ other: own i256) -> i256 { __bitor_i256(self, other) } }
 impl BitXor for i256 { fn bitxor(own self, _ other: own i256) -> i256 { __bitxor_i256(self, other) } }
 impl Eq for i256 {
-    fn eq(own self, _ other: own i256) -> bool { __eq_i256(self, other) }
-    fn ne(own self, _ other: own i256) -> bool { __ne_i256(self, other) }
+    fn eq(self, _ other: i256) -> bool { __eq_i256(self, other) }
+    fn ne(self, _ other: i256) -> bool { __ne_i256(self, other) }
 }
 impl Ord for i256 {
     fn lt(own self, _ other: own i256) -> bool { __lt_i256(self, other) }
@@ -1073,8 +1073,8 @@ impl BitAnd for u256 { fn bitand(own self, _ other: own u256) -> u256 { __bitand
 impl BitOr for u256 { fn bitor(own self, _ other: own u256) -> u256 { __bitor_u256(self, other) } }
 impl BitXor for u256 { fn bitxor(own self, _ other: own u256) -> u256 { __bitxor_u256(self, other) } }
 impl Eq for u256 {
-    fn eq(own self, _ other: own u256) -> bool { __eq_u256(self, other) }
-    fn ne(own self, _ other: own u256) -> bool { __ne_u256(self, other) }
+    fn eq(self, _ other: u256) -> bool { __eq_u256(self, other) }
+    fn ne(self, _ other: u256) -> bool { __ne_u256(self, other) }
 }
 impl Ord for u256 {
     fn lt(own self, _ other: own u256) -> bool { __lt_u256(self, other) }
@@ -1111,8 +1111,8 @@ impl BitAnd for isize { fn bitand(own self, _ other: own isize) -> isize { __bit
 impl BitOr for isize { fn bitor(own self, _ other: own isize) -> isize { __bitor_isize(self, other) } }
 impl BitXor for isize { fn bitxor(own self, _ other: own isize) -> isize { __bitxor_isize(self, other) } }
 impl Eq for isize {
-    fn eq(own self, _ other: own isize) -> bool { __eq_isize(self, other) }
-    fn ne(own self, _ other: own isize) -> bool { __ne_isize(self, other) }
+    fn eq(self, _ other: isize) -> bool { __eq_isize(self, other) }
+    fn ne(self, _ other: isize) -> bool { __ne_isize(self, other) }
 }
 impl Ord for isize {
     fn lt(own self, _ other: own isize) -> bool { __lt_isize(self, other) }
@@ -1140,7 +1140,7 @@ impl BitOr for bool { fn bitor(own self, _ other: own bool) -> bool { __bitor_bo
 impl BitXor for bool { fn bitxor(own self, _ other: own bool) -> bool { __bitxor_bool(self, other) } }
 impl BitOrAssign for bool { fn bitor_assign(mut self, _ other: own bool) { self = self | other } }
 impl Eq for bool {
-    fn eq(own self, _ other: own bool) -> bool { __eq_bool(self, other) }
-    fn ne(own self, _ other: own bool) -> bool { __ne_bool(self, other) }
+    fn eq(self, _ other: bool) -> bool { __eq_bool(self, other) }
+    fn ne(self, _ other: bool) -> bool { __ne_bool(self, other) }
 }
 impl Default for bool { fn default() -> Self { false } }

@@ -14,15 +14,15 @@ pub trait ContractHost {
     fn input(self) -> Self::Input
     fn init_input<F>(mut self, runtime: F) -> Self::InitInput
 
-    fn field<T>(mut self, slot: own u256) -> StorPtr<T>
-    fn init_field<T>(mut self, slot: own u256) -> StorPtr<T> {
+    fn field<T>(mut self, slot: u256) -> StorPtr<T>
+    fn init_field<T>(mut self, slot: u256) -> StorPtr<T> {
         self.field(slot)
     }
 
     fn create_contract<F>(mut self, runtime: F) -> !
     fn abort(self) -> !
 
-    fn return_bytes(self, ptr: own u256, len: own u256) -> !
+    fn return_bytes(self, ptr: u256, len: u256) -> !
     fn return_unit(self) -> ! {
         self.return_bytes(0, 0)
     }

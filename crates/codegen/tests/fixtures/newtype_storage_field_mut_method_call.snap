@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 33
 expression: output
 input_file: tests/fixtures/newtype_storage_field_mut_method_call.fe
 ---
@@ -162,8 +161,9 @@ object "NewtypeStorageFieldMutMethodCall" {
         leave
       }
       function $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at($self, $byte_offset) -> ret {
-        let v0 := calldataload(add($self, $byte_offset))
-        ret := v0
+        let v0 := add($self, $byte_offset)
+        let v1 := calldataload(v0)
+        ret := v1
         leave
       }
       function $cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($self, $pos) -> ret {

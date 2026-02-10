@@ -1,25 +1,25 @@
 trait Add<T = Self> {
     type Output = Self
 
-    fn add(self: own Self, _ rhs: own T) -> Self::Output
+    fn add(own self, _ rhs: own T) -> Self::Output
 }
 trait Sub<T = Self> {
     type Output = Self
 
-    fn sub(self: own Self, _ rhs: own T) -> Self::Output
+    fn sub(own self, _ rhs: own T) -> Self::Output
 }
 
 struct Foo {}
 struct Bar {}
 
 impl Add for Foo {
-    fn add(self: own Self, _ rhs: own Self) -> Self { self }
+    fn add(own self, _ rhs: own Self) -> Self { self }
 }
 impl Sub for Foo {
-    fn sub(self: own Self, _ rhs: own Self) -> Self { self }
+    fn sub(own self, _ rhs: own Self) -> Self { self }
 }
 impl Add for Bar {
-    fn add(self: own Self, _ rhs: own Self) -> Self { self }
+    fn add(own self, _ rhs: own Self) -> Self { self }
 }
 
 fn f(x: own Foo, y: own Bar) -> Foo {

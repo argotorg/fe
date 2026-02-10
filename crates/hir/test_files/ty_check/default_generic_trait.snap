@@ -4,40 +4,40 @@ expression: res
 input_file: test_files/ty_check/default_generic_trait.fe
 ---
 note: 
-   ┌─ default_generic_trait.fe:16:53
+   ┌─ default_generic_trait.fe:16:47
    │
-16 │     fn add(self: own Self, _ rhs: own Self) -> Self { self }
-   │                                                     ^^^^^^^^ Foo
+16 │     fn add(own self, _ rhs: own Self) -> Self { self }
+   │                                               ^^^^^^^^ Foo
 
 note: 
-   ┌─ default_generic_trait.fe:16:55
+   ┌─ default_generic_trait.fe:16:49
    │
-16 │     fn add(self: own Self, _ rhs: own Self) -> Self { self }
-   │                                                       ^^^^ Foo
+16 │     fn add(own self, _ rhs: own Self) -> Self { self }
+   │                                                 ^^^^ Foo
 
 note: 
-   ┌─ default_generic_trait.fe:19:53
+   ┌─ default_generic_trait.fe:19:47
    │
-19 │     fn sub(self: own Self, _ rhs: own Self) -> Self { self }
-   │                                                     ^^^^^^^^ Foo
+19 │     fn sub(own self, _ rhs: own Self) -> Self { self }
+   │                                               ^^^^^^^^ Foo
 
 note: 
-   ┌─ default_generic_trait.fe:19:55
+   ┌─ default_generic_trait.fe:19:49
    │
-19 │     fn sub(self: own Self, _ rhs: own Self) -> Self { self }
-   │                                                       ^^^^ Foo
+19 │     fn sub(own self, _ rhs: own Self) -> Self { self }
+   │                                                 ^^^^ Foo
 
 note: 
-   ┌─ default_generic_trait.fe:22:53
+   ┌─ default_generic_trait.fe:22:47
    │
-22 │     fn add(self: own Self, _ rhs: own Self) -> Self { self }
-   │                                                     ^^^^^^^^ Bar
+22 │     fn add(own self, _ rhs: own Self) -> Self { self }
+   │                                               ^^^^^^^^ Bar
 
 note: 
-   ┌─ default_generic_trait.fe:22:55
+   ┌─ default_generic_trait.fe:22:49
    │
-22 │     fn add(self: own Self, _ rhs: own Self) -> Self { self }
-   │                                                       ^^^^ Bar
+22 │     fn add(own self, _ rhs: own Self) -> Self { self }
+   │                                                 ^^^^ Bar
 
 note: 
    ┌─ default_generic_trait.fe:25:37

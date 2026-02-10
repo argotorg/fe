@@ -193,6 +193,7 @@ fn calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len(v0: CallData) -> u
 
 fn calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at(v0: CallData, v1: u256) -> u256:
   bb0:
+    bind (v0 + v1)
     v2: u256 = calldataload((v0 + v1))
     ret v2
 
@@ -253,6 +254,7 @@ fn memorybytes_h1e381015a9b0111b_byteinput_hc4c2cb44299530ae_len(v0: MemoryBytes
 fn memorybytes_h1e381015a9b0111b_byteinput_hc4c2cb44299530ae_word_at(v0: MemoryBytes, v1: u256) -> u256:
   bb0:
     v2: u256 = load mem[v0].0
+    bind (v2 + v1)
     v3: u256 = mload((v2 + v1))
     ret v3
 

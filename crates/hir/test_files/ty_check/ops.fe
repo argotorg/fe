@@ -21,7 +21,7 @@ fn flip(ok: Ok) -> Ok {
 }
 
 impl Eq for Ok {
-    fn eq(own self, _ other: own Ok) -> bool {
+    fn eq(self, _ other: Ok) -> bool {
         match (self, other) {
             (Ok::Yes, Ok::Yes) | (Ok::No, Ok::No) => true
             _ => false
