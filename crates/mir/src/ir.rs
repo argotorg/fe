@@ -71,9 +71,21 @@ pub enum SyntheticId<'db> {
     ContractInitCodeLen(Contract<'db>),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MirBackend {
+    EvmYul,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MirStage {
+    Capability,
+    Repr(MirBackend),
+}
+
 /// A function body expressed as basic blocks.
 #[derive(Debug, Clone)]
 pub struct MirBody<'db> {
+    pub stage: MirStage,
     pub entry: BasicBlockId,
     pub blocks: Vec<BasicBlock<'db>>,
     pub values: Vec<ValueData<'db>>,
@@ -96,6 +108,7 @@ pub struct MirBody<'db> {
 impl<'db> MirBody<'db> {
     pub fn new() -> Self {
         Self {
+            stage: MirStage::Capability,
             entry: BasicBlockId(0),
             blocks: Vec::new(),
             values: Vec::new(),
@@ -108,6 +121,14 @@ impl<'db> MirBody<'db> {
             pat_address_space: FxHashMap::default(),
             loop_headers: FxHashMap::default(),
         }
+    }
+
+    pub fn assert_stage(&self, expected: MirStage) {
+        debug_assert!(
+            self.stage == expected,
+            "expected MIR stage {expected:?}, got {:?}",
+            self.stage
+        );
     }
 
     pub fn source_span(&self, source: SourceInfoId) -> Option<Span> {
