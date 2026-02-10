@@ -25,44 +25,49 @@ struct LsifRange {
 
 /// Compute line offsets for a text string.
 fn calculate_line_offsets(text: &str) -> Vec<usize> {
-    text.lines()
-        .scan(0, |state, line| {
-            let offset = *state;
-            *state += line.len() + 1;
-            Some(offset)
-        })
-        .collect()
+    let mut offsets = vec![0];
+    for (i, b) in text.bytes().enumerate() {
+        if b == b'\n' {
+            offsets.push(i + 1);
+        }
+    }
+    offsets
+}
+
+fn utf16_column(text: &str, line_start: usize, offset: usize) -> Option<u32> {
+    if line_start > offset || offset > text.len() {
+        return None;
+    }
+    let prefix = text.get(line_start..offset)?;
+    Some(prefix.encode_utf16().count() as u32)
 }
 
 /// Convert a Span to an LsifRange.
 fn span_to_range(span: &Span, db: &dyn InputDb) -> Option<LsifRange> {
     let text = span.file.text(db);
     let line_offsets = calculate_line_offsets(text);
-    if line_offsets.is_empty() {
-        return None;
-    }
 
     let start: usize = span.range.start().into();
     let end: usize = span.range.end().into();
 
     let start_line = line_offsets
-        .binary_search(&start)
-        .unwrap_or_else(|x| x.saturating_sub(1));
+        .partition_point(|&line_start| line_start <= start)
+        .saturating_sub(1);
     let end_line = line_offsets
-        .binary_search(&end)
-        .unwrap_or_else(|x| x.saturating_sub(1));
+        .partition_point(|&line_start| line_start <= end)
+        .saturating_sub(1);
 
-    let start_character = start.saturating_sub(line_offsets[start_line]);
-    let end_character = end.saturating_sub(line_offsets[end_line]);
+    let start_character = utf16_column(text, line_offsets[start_line], start)?;
+    let end_character = utf16_column(text, line_offsets[end_line], end)?;
 
     Some(LsifRange {
         start: LsifPos {
             line: start_line as u32,
-            character: start_character as u32,
+            character: start_character,
         },
         end: LsifPos {
             line: end_line as u32,
-            character: end_character as u32,
+            character: end_character,
         },
     })
 }
@@ -779,5 +784,17 @@ fn make_point() -> Point {
         assert_eq!(meta["positionEncoding"].as_str(), Some("utf-16"));
         assert!(meta.get("toolInfo").is_some());
         assert_eq!(meta["toolInfo"]["name"].as_str(), Some("fe-lsif"));
+    }
+
+    #[test]
+    fn test_utf16_column_counts_surrogate_pairs() {
+        let text = "a😀b";
+        let line_offsets = calculate_line_offsets(text);
+        assert_eq!(line_offsets, vec![0]);
+
+        // byte offsets: a=0..1, 😀=1..5, b=5..6
+        assert_eq!(utf16_column(text, line_offsets[0], 1), Some(1));
+        assert_eq!(utf16_column(text, line_offsets[0], 5), Some(3));
+        assert_eq!(utf16_column(text, line_offsets[0], 6), Some(4));
     }
 }
