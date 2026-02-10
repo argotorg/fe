@@ -86,6 +86,7 @@ pub async fn handle_execute_command(
 
     let uri = Url::parse(uri_str)
         .map_err(|e| ResponseError::new(ErrorCode::INVALID_PARAMS, format!("invalid URI: {e}")))?;
+    let internal_uri = backend.map_client_uri_to_internal(uri.clone());
 
     // Derive a relative source path for the output filename
     let source_path = uri.path().rsplit('/').next().unwrap_or("output");
@@ -101,7 +102,7 @@ pub async fn handle_execute_command(
         let file = backend
             .db
             .workspace()
-            .get(&backend.db, &uri)
+            .get(&backend.db, &internal_uri)
             .ok_or_else(|| {
                 ResponseError::new(
                     ErrorCode::INVALID_PARAMS,

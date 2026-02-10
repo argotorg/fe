@@ -13,13 +13,8 @@ pub async fn handle_code_lens(
     backend: &Backend,
     params: CodeLensParams,
 ) -> Result<Option<Vec<CodeLens>>, ResponseError> {
-    let path_str = params.text_document.uri.path();
-
-    let Ok(url) = url::Url::from_file_path(path_str) else {
-        return Ok(None);
-    };
-
-    let Some(file) = backend.db.workspace().get(&backend.db, &url) else {
+    let internal_url = backend.map_client_uri_to_internal(params.text_document.uri.clone());
+    let Some(file) = backend.db.workspace().get(&backend.db, &internal_url) else {
         return Ok(None);
     };
 
@@ -34,16 +29,30 @@ pub async fn handle_code_lens(
             ItemKind::Func(func) => {
                 let target = Target::Scope(func.scope());
                 if let Ok(location) = to_lsp_location_from_scope(&backend.db, func.scope()) {
-                    let refs = collect_reference_locations(&backend.db, ingot, &target);
+                    let mut location = location;
+                    location.uri = backend.map_internal_uri_to_client(location.uri);
+                    let refs = collect_reference_locations(&backend.db, ingot, &target)
+                        .into_iter()
+                        .map(|mut loc| {
+                            loc.uri = backend.map_internal_uri_to_client(loc.uri);
+                            loc
+                        })
+                        .collect::<Vec<_>>();
                     lenses.push(make_references_lens(&location, &refs));
                 }
             }
             ItemKind::Trait(trait_) => {
                 if let Ok(location) = to_lsp_location_from_scope(&backend.db, trait_.scope()) {
+                    let mut location = location;
+                    location.uri = backend.map_internal_uri_to_client(location.uri);
                     let impls: Vec<async_lsp::lsp_types::Location> = trait_
                         .all_impl_traits(&backend.db)
                         .iter()
                         .filter_map(|imp| to_lsp_location_from_scope(&backend.db, imp.scope()).ok())
+                        .map(|mut loc| {
+                            loc.uri = backend.map_internal_uri_to_client(loc.uri);
+                            loc
+                        })
                         .collect();
                     let count = impls.len();
                     let title = if count == 1 {
@@ -69,14 +78,30 @@ pub async fn handle_code_lens(
             ItemKind::Struct(s) => {
                 let target = Target::Scope(s.scope());
                 if let Ok(location) = to_lsp_location_from_scope(&backend.db, s.scope()) {
-                    let refs = collect_reference_locations(&backend.db, ingot, &target);
+                    let mut location = location;
+                    location.uri = backend.map_internal_uri_to_client(location.uri);
+                    let refs = collect_reference_locations(&backend.db, ingot, &target)
+                        .into_iter()
+                        .map(|mut loc| {
+                            loc.uri = backend.map_internal_uri_to_client(loc.uri);
+                            loc
+                        })
+                        .collect::<Vec<_>>();
                     lenses.push(make_references_lens(&location, &refs));
                 }
             }
             ItemKind::Enum(e) => {
                 let target = Target::Scope(e.scope());
                 if let Ok(location) = to_lsp_location_from_scope(&backend.db, e.scope()) {
-                    let refs = collect_reference_locations(&backend.db, ingot, &target);
+                    let mut location = location;
+                    location.uri = backend.map_internal_uri_to_client(location.uri);
+                    let refs = collect_reference_locations(&backend.db, ingot, &target)
+                        .into_iter()
+                        .map(|mut loc| {
+                            loc.uri = backend.map_internal_uri_to_client(loc.uri);
+                            loc
+                        })
+                        .collect::<Vec<_>>();
                     lenses.push(make_references_lens(&location, &refs));
                 }
             }

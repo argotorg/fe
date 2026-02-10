@@ -140,16 +140,13 @@ pub async fn handle_prepare(
     backend: &Backend,
     params: TypeHierarchyPrepareParams,
 ) -> Result<Option<Vec<TypeHierarchyItem>>, ResponseError> {
-    let path_str = params
-        .text_document_position_params
-        .text_document
-        .uri
-        .path();
-
-    let Ok(url) = url::Url::from_file_path(path_str) else {
-        return Ok(None);
-    };
-
+    let url = backend.map_client_uri_to_internal(
+        params
+            .text_document_position_params
+            .text_document
+            .uri
+            .clone(),
+    );
     let Some(file) = backend.db.workspace().get(&backend.db, &url) else {
         return Ok(None);
     };
@@ -176,7 +173,12 @@ pub async fn handle_prepare(
         _ => None,
     };
 
-    Ok(item.map(|i| vec![i]))
+    Ok(item
+        .map(|mut i| {
+            i.uri = backend.map_internal_uri_to_client(i.uri);
+            i
+        })
+        .map(|i| vec![i]))
 }
 
 /// Handle typeHierarchy/supertypes.
@@ -184,12 +186,7 @@ pub async fn handle_supertypes(
     backend: &Backend,
     params: TypeHierarchySupertypesParams,
 ) -> Result<Option<Vec<TypeHierarchyItem>>, ResponseError> {
-    let path_str = params.item.uri.path();
-
-    let Ok(url) = url::Url::from_file_path(path_str) else {
-        return Ok(None);
-    };
-
+    let url = backend.map_client_uri_to_internal(params.item.uri.clone());
     let Some(file) = backend.db.workspace().get(&backend.db, &url) else {
         return Ok(None);
     };
@@ -206,7 +203,13 @@ pub async fn handle_supertypes(
     let items = match target {
         Target::Scope(scope) => find_supertypes(&backend.db, scope.item()),
         _ => vec![],
-    };
+    }
+    .into_iter()
+    .map(|mut item| {
+        item.uri = backend.map_internal_uri_to_client(item.uri);
+        item
+    })
+    .collect::<Vec<_>>();
 
     if items.is_empty() {
         Ok(None)
@@ -220,12 +223,7 @@ pub async fn handle_subtypes(
     backend: &Backend,
     params: TypeHierarchySubtypesParams,
 ) -> Result<Option<Vec<TypeHierarchyItem>>, ResponseError> {
-    let path_str = params.item.uri.path();
-
-    let Ok(url) = url::Url::from_file_path(path_str) else {
-        return Ok(None);
-    };
-
+    let url = backend.map_client_uri_to_internal(params.item.uri.clone());
     let Some(file) = backend.db.workspace().get(&backend.db, &url) else {
         return Ok(None);
     };
@@ -242,7 +240,13 @@ pub async fn handle_subtypes(
     let items = match target {
         Target::Scope(scope) => find_subtypes(&backend.db, scope.item()),
         _ => vec![],
-    };
+    }
+    .into_iter()
+    .map(|mut item| {
+        item.uri = backend.map_internal_uri_to_client(item.uri);
+        item
+    })
+    .collect::<Vec<_>>();
 
     if items.is_empty() {
         Ok(None)

@@ -10,13 +10,8 @@ pub async fn handle_folding_range(
     backend: &Backend,
     params: FoldingRangeParams,
 ) -> Result<Option<Vec<FoldingRange>>, ResponseError> {
-    let path_str = params.text_document.uri.path();
-
-    let Ok(url) = url::Url::from_file_path(path_str) else {
-        return Ok(None);
-    };
-
-    let Some(file) = backend.db.workspace().get(&backend.db, &url) else {
+    let internal_url = backend.map_client_uri_to_internal(params.text_document.uri);
+    let Some(file) = backend.db.workspace().get(&backend.db, &internal_url) else {
         return Ok(None);
     };
 
