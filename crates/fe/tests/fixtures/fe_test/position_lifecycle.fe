@@ -7,6 +7,24 @@ struct Position {
     version: u8,
 }
 
+impl Position {
+    fn accrue_fee(mut self, fee: u256) {
+        self.debt += fee
+    }
+
+    fn bump_version(mut self) {
+        self.version += 1
+    }
+}
+
+fn accrue_fee(p: mut Position, fee: u256) {
+    p.debt += fee
+}
+
+fn bump_version(p: mut Position) {
+    p.version += 1
+}
+
 fn read_health(p: ref Position) -> u256 {
     if p.debt == 0 {
         return 9999
@@ -29,8 +47,8 @@ fn identity_u256(x: u256) -> u256 {
     x
 }
 
-fn next_version(v: u8) -> u8 {
-    v + 1
+fn increment_version(v: mut u8) {
+    v += 1
 }
 
 fn close_position(p: own Position) -> (u256, u256, u8) {
@@ -49,10 +67,8 @@ fn test_position_lifecycle() {
     let health_before = read_health(ref p)
     assert(health_before == 5)
 
-    let debt_handle: mut u256 = mut p.debt
-    debt_handle += 50
-    let version_handle: mut u8 = mut p.version
-    version_handle += 1
+    accrue_fee(mut p, 50)
+    bump_version(mut p)
     assert(p.owner == 7)
     assert(p.debt == 250)
     assert(p.version == 2)
@@ -63,18 +79,19 @@ fn test_position_lifecycle() {
 
     let ver_handle: mut u8 = mut p.version
     ver_handle += 3
-    let projected = next_version(ver_handle)
-    assert(projected == 6)
+    increment_version(ver_handle)
+    bump_version(mut p)
+    assert(p.version == 7)
 
     let p = settle(p, 80)
     assert(p.collateral == 1000)
     assert(p.debt == 170)
-    assert(p.version == 6)
+    assert(p.version == 8)
 
     let (collateral, debt, version) = close_position(p)
     assert(collateral == 1000)
     assert(debt == 170)
-    assert(version == 6)
+    assert(version == 8)
 }
 
 #[test]
