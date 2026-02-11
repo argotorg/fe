@@ -20,6 +20,14 @@ fn take<I, T: core::Seq<I> + core::Copy>(n: usize, seq: ref T) -> Take<I, T> {
     Take { n, base: seq }
 }
 
+fn reverse_u256<T: core::Seq<u256> + core::Copy>(seq: ref T) -> Reverse<u256, T> {
+    reverse(seq)
+}
+
+fn take_u256<T: core::Seq<u256> + core::Copy>(n: usize, seq: ref T) -> Take<u256, T> {
+    take(n, seq)
+}
+
 impl<I, T: core::Seq<I> + core::Copy> core::Seq<I> for Reverse<I, T> {
     fn len(self) -> usize {
         let base: T = self.base
@@ -52,16 +60,17 @@ impl<I, T: core::Seq<I> + core::Copy> core::Seq<I> for Take<I, T> {
 
 fn sum_last4(arr: [u256; 8]) -> u256 {
     let mut total = 0
-    let rev: Reverse<u256, [u256; 8]> = reverse(ref arr)
-    for i in 0..4 {
-        total += rev.get(i)
+    let rev = reverse_u256(ref arr)
+    let tail = take_u256(4, ref rev)
+    for x in tail {
+        total += x
     }
     total
 }
 
 fn sum_first4(arr: [u256; 8]) -> u256 {
     let mut total = 0
-    let head: Take<u256, [u256; 8]> = take(4, ref arr)
+    let head = take_u256(4, ref arr)
     for x in head {
         total += x
     }

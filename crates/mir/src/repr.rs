@@ -193,8 +193,8 @@ fn repr_kind_for_ref_inner<'db>(
     inner: TyId<'db>,
 ) -> ReprKind {
     match repr_kind_for_ty(db, core, inner) {
-        ReprKind::Word | ReprKind::Zst => ReprKind::Word,
-        ReprKind::Ptr(_) | ReprKind::Ref => ReprKind::Ptr(AddressSpaceKind::Memory),
+        ReprKind::Word | ReprKind::Zst | ReprKind::Ptr(_) => ReprKind::Word,
+        ReprKind::Ref => ReprKind::Ptr(AddressSpaceKind::Memory),
     }
 }
 
