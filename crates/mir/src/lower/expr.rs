@@ -2205,12 +2205,18 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                                 return;
                             }
                             let pat_ty = self.typed_body.pat_ty(self.db, *pat);
-                            if self
+                            let carries_space = self
                                 .value_repr_for_ty(pat_ty, AddressSpaceKind::Memory)
                                 .address_space()
                                 .is_some()
+                                || pat_ty.as_capability(self.db).is_some();
+                            if carries_space
+                                && let Some(space) = try_value_address_space_in(
+                                    &self.builder.body.values,
+                                    &self.builder.body.locals,
+                                    value_id,
+                                )
                             {
-                                let space = self.value_address_space(value_id);
                                 self.set_pat_address_space(*pat, space);
                             }
                         } else {
@@ -2982,10 +2988,12 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     && let LocalBinding::Local { pat, .. } = binding
                 {
                     let pat_ty = self.typed_body.pat_ty(self.db, pat);
-                    if self
+                    let carries_space = self
                         .value_repr_for_ty(pat_ty, AddressSpaceKind::Memory)
                         .address_space()
                         .is_some()
+                        || pat_ty.as_capability(self.db).is_some();
+                    if carries_space
                         && let Some(space) = try_value_address_space_in(
                             &self.builder.body.values,
                             &self.builder.body.locals,
@@ -3006,10 +3014,12 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     && let LocalBinding::Local { pat, .. } = binding
                 {
                     let pat_ty = self.typed_body.pat_ty(self.db, pat);
-                    if self
+                    let carries_space = self
                         .value_repr_for_ty(pat_ty, AddressSpaceKind::Memory)
                         .address_space()
                         .is_some()
+                        || pat_ty.as_capability(self.db).is_some();
+                    if carries_space
                         && let Some(space) = try_value_address_space_in(
                             &self.builder.body.values,
                             &self.builder.body.locals,

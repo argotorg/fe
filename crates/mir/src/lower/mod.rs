@@ -1077,12 +1077,18 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 self.move_to_block(block);
                 self.assign(None, Some(local), Rvalue::Value(value));
                 let pat_ty = self.typed_body.pat_ty(self.db, pat);
-                if self
+                let carries_space = self
                     .value_repr_for_ty(pat_ty, AddressSpaceKind::Memory)
                     .address_space()
                     .is_some()
-                {
-                    let space = self.value_address_space(value);
+                    || pat_ty.as_capability(self.db).is_some();
+                if carries_space {
+                    let space = crate::ir::try_value_address_space_in(
+                        &self.builder.body.values,
+                        &self.builder.body.locals,
+                        value,
+                    )
+                    .unwrap_or(AddressSpaceKind::Memory);
                     self.set_pat_address_space(pat, space);
                 }
             }
@@ -1414,6 +1420,19 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     /// - `space`: Address space kind to record.
     pub(super) fn set_pat_address_space(&mut self, pat: PatId, space: AddressSpaceKind) {
         self.pat_address_space.insert(pat, space);
+        let locals_to_update: Vec<LocalId> = self
+            .binding_locals
+            .iter()
+            .filter_map(|(binding, local)| match binding {
+                LocalBinding::Local {
+                    pat: binding_pat, ..
+                } if *binding_pat == pat => Some(*local),
+                _ => None,
+            })
+            .collect();
+        for local in locals_to_update {
+            self.builder.body.locals[local.index()].address_space = space;
+        }
     }
 }
 
