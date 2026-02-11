@@ -438,12 +438,22 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     }
 
     fn value_address_space_or_memory(&self, value: ValueId) -> AddressSpaceKind {
-        crate::ir::try_value_address_space_in(
+        if let Some(space) = crate::ir::try_value_address_space_in(
             &self.builder.body.values,
             &self.builder.body.locals,
             value,
-        )
-        .unwrap_or(AddressSpaceKind::Memory)
+        ) {
+            return space;
+        }
+
+        let data = self.builder.body.value(value);
+        debug_assert!(
+            data.repr.address_space().is_none(),
+            "missing address space for pointer-like value in lowering: repr={:?}, origin={:?}",
+            data.repr,
+            data.origin
+        );
+        AddressSpaceKind::Memory
     }
 
     fn coerce_call_arg_value(

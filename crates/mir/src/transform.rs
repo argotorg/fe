@@ -6,8 +6,8 @@ use hir::projection::{IndexSource, Projection};
 use rustc_hash::FxHashSet;
 
 use crate::ir::{
-    AddressSpaceKind, LocalData, MirBody, MirInst, MirProjectionPath, Place, Rvalue, SourceInfoId,
-    TerminatingCall, Terminator, ValueData, ValueId, ValueOrigin, ValueRepr,
+    LocalData, MirBody, MirInst, MirProjectionPath, Place, Rvalue, SourceInfoId, TerminatingCall,
+    Terminator, ValueData, ValueId, ValueOrigin, ValueRepr,
 };
 use crate::layout;
 
@@ -294,7 +294,7 @@ pub(crate) fn canonicalize_transparent_newtypes<'db>(
                     base
                 } else {
                     let addr_space = crate::ir::try_value_address_space_in(values, locals, base)
-                        .unwrap_or(AddressSpaceKind::Memory);
+                        .expect("pointer-like canonicalize base must carry an address space");
                     let prefix_place = Place::new(base, path);
                     alloc_value(
                         values,
@@ -753,5 +753,101 @@ fn bump_place_path<'db>(bump: &mut impl FnMut(ValueId), path: &crate::ir::MirPro
         if let Projection::Index(IndexSource::Dynamic(value)) = proj {
             bump(*value);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use common::InputDb;
+    use driver::DriverDataBase;
+    use url::Url;
+
+    use crate::{
+        ir::{
+            AddressSpaceKind, BasicBlock, LocalData, MirBody, MirProjectionPath, Place,
+            SourceInfoId, Terminator, ValueData, ValueOrigin, ValueRepr,
+        },
+        lower_module,
+    };
+
+    #[test]
+    fn transparent_newtype_projection_keeps_non_memory_space() {
+        let mut db = DriverDataBase::default();
+        let url =
+            Url::parse("file:///transparent_newtype_projection_keeps_non_memory_space.fe").unwrap();
+        let src = r#"
+struct Wrap {
+    inner: u256,
+}
+
+pub fn transparent_newtype_projection_keeps_non_memory_space(w: mut Wrap) {}
+"#;
+        let file = db.workspace().touch(&mut db, url, Some(src.to_string()));
+        let top_mod = db.top_mod(file);
+        let module = lower_module(&db, top_mod).expect("module should lower");
+        let wrap_fn = module
+            .functions
+            .iter()
+            .find(|func| {
+                func.symbol_name == "transparent_newtype_projection_keeps_non_memory_space"
+            })
+            .expect("function should exist");
+        let wrap_ty = wrap_fn.body.local(wrap_fn.body.param_locals[0]).ty;
+        let (_, wrap_inner_ty) = wrap_ty
+            .as_capability(&db)
+            .expect("parameter should be a capability type");
+        let inner_ty = wrap_inner_ty.field_types(&db)[0];
+
+        let mut body = MirBody::new();
+        body.blocks.push(BasicBlock {
+            insts: Vec::new(),
+            terminator: Terminator::Return {
+                source: SourceInfoId::SYNTHETIC,
+                value: None,
+            },
+        });
+
+        let wrap_local = body.alloc_local(LocalData {
+            name: "w".to_string(),
+            ty: wrap_inner_ty,
+            is_mut: true,
+            source: SourceInfoId::SYNTHETIC,
+            address_space: AddressSpaceKind::Storage,
+        });
+        let base = body.alloc_value(ValueData {
+            ty: wrap_inner_ty,
+            origin: ValueOrigin::Local(wrap_local),
+            source: SourceInfoId::SYNTHETIC,
+            repr: ValueRepr::Ref(AddressSpaceKind::Storage),
+        });
+        let value = body.alloc_value(ValueData {
+            ty: inner_ty,
+            origin: ValueOrigin::Synthetic(crate::ir::SyntheticValue::Int(1u8.into())),
+            source: SourceInfoId::SYNTHETIC,
+            repr: ValueRepr::Word,
+        });
+        body.blocks[0].insts.push(crate::MirInst::Store {
+            source: SourceInfoId::SYNTHETIC,
+            place: Place::new(
+                base,
+                MirProjectionPath::from_projection(hir::projection::Projection::Field(0)),
+            ),
+            value,
+        });
+
+        super::canonicalize_transparent_newtypes(&db, &mut body);
+
+        let crate::MirInst::Store { place, .. } = &body.blocks[0].insts[0] else {
+            panic!("expected rewritten store");
+        };
+        assert!(
+            place.projection.is_empty(),
+            "transparent field projection should be peeled"
+        );
+        assert_eq!(
+            body.value(place.base).repr.address_space(),
+            Some(AddressSpaceKind::Storage),
+            "peeled base must preserve non-memory address space",
+        );
     }
 }

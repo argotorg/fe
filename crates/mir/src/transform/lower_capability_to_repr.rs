@@ -160,6 +160,7 @@ pub(crate) fn lower_capability_to_repr<'db>(
                 ValueOrigin::MoveOut { place } => {
                     crate::ir::try_value_address_space_in(values, locals, place.base)
                 }
+                ValueOrigin::FieldPtr(field_ptr) => Some(field_ptr.addr_space),
                 ValueOrigin::TransparentCast { value } => {
                     origin_address_space(values, locals, &values.get(value.index())?.origin)
                 }
@@ -1100,4 +1101,87 @@ pub(crate) fn lower_capability_to_repr<'db>(
     }
 
     body.stage = MirStage::Repr(backend);
+}
+
+#[cfg(test)]
+mod tests {
+    use common::InputDb;
+    use driver::DriverDataBase;
+    use url::Url;
+
+    use crate::{
+        MirBackend, core_lib::CoreLib, ir::AddressSpaceKind, ir::BasicBlock, ir::FieldPtrOrigin,
+        ir::LocalData, ir::MirBody, ir::MirStage, ir::SourceInfoId, ir::Terminator, ir::ValueData,
+        ir::ValueOrigin, ir::ValueRepr,
+    };
+
+    use super::lower_capability_to_repr;
+
+    #[test]
+    fn field_ptr_origin_preserves_address_space_for_capability_values() {
+        let mut db = DriverDataBase::default();
+        let url = Url::parse("file:///field_ptr_origin_preserves_address_space.fe").unwrap();
+        let src = r#"
+pub fn field_ptr_origin_preserves_address_space(x: mut u256) {}
+"#;
+        let file = db.workspace().touch(&mut db, url, Some(src.to_string()));
+        let top_mod = db.top_mod(file);
+        let hir_func = top_mod
+            .all_funcs(&db)
+            .iter()
+            .copied()
+            .find(|func| {
+                func.name(&db).to_opt().is_some_and(|name| {
+                    name.data(&db) == "field_ptr_origin_preserves_address_space"
+                })
+            })
+            .expect("function should exist");
+        let core = CoreLib::new(&db, hir_func.scope());
+        let capability_ty = hir_func
+            .params(&db)
+            .next()
+            .expect("parameter should exist")
+            .ty(&db);
+
+        let mut body = MirBody::new();
+        body.stage = MirStage::Capability;
+        body.blocks.push(BasicBlock {
+            insts: Vec::new(),
+            terminator: Terminator::Return {
+                source: SourceInfoId::SYNTHETIC,
+                value: None,
+            },
+        });
+        body.locals.push(LocalData {
+            name: "base".to_string(),
+            ty: capability_ty,
+            is_mut: false,
+            source: SourceInfoId::SYNTHETIC,
+            address_space: AddressSpaceKind::Storage,
+        });
+        let base = body.alloc_value(ValueData {
+            ty: capability_ty,
+            origin: ValueOrigin::Local(crate::ir::LocalId(0)),
+            source: SourceInfoId::SYNTHETIC,
+            repr: ValueRepr::Ptr(AddressSpaceKind::Storage),
+        });
+        let field_ptr = body.alloc_value(ValueData {
+            ty: capability_ty,
+            origin: ValueOrigin::FieldPtr(FieldPtrOrigin {
+                base,
+                offset_bytes: 0,
+                addr_space: AddressSpaceKind::Storage,
+            }),
+            source: SourceInfoId::SYNTHETIC,
+            repr: ValueRepr::Word,
+        });
+
+        lower_capability_to_repr(&db, &core, MirBackend::EvmYul, &mut body);
+
+        assert_eq!(
+            body.values[field_ptr.index()].repr,
+            ValueRepr::Ptr(AddressSpaceKind::Storage),
+            "FieldPtr-based capability values must preserve their originating address space",
+        );
+    }
 }
