@@ -1267,9 +1267,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 }
 
                 // Transparent newtype access: field 0 is a representation-preserving cast.
-                if crate::repr::transparent_field0_inner_ty(self.db, lhs_place_ty, info.field_idx)
-                    .is_some()
-                {
+                if self.is_transparent_field0(lhs_place_ty, info.field_idx) {
                     let base_repr = self.builder.body.value(base_value).repr;
                     if !base_repr.is_ref() {
                         let space = base_repr
@@ -1590,8 +1588,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         // Transparent newtype access: field 0 is a representation-preserving cast.
-        if crate::repr::transparent_field0_inner_ty(self.db, lhs_place_ty, info.field_idx).is_some()
-        {
+        if self.is_transparent_field0(lhs_place_ty, info.field_idx) {
             let base_repr = self.builder.body.value(base_value).repr;
             if !base_repr.is_ref() {
                 let space = base_repr
@@ -1761,6 +1758,10 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         })
     }
 
+    fn is_transparent_field0(&self, owner_ty: TyId<'db>, field_idx: usize) -> bool {
+        crate::repr::transparent_field0_inner_ty(self.db, owner_ty, field_idx).is_some()
+    }
+
     /// Returns true if the expression is a method call (as opposed to a regular function call).
     fn is_method_call(&self, expr: ExprId) -> bool {
         let exprs = self.body.exprs(self.db);
@@ -1913,9 +1914,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
                 // Transparent newtypes: treat field 0 as the same place when the base is
                 // already addressable, otherwise fall back to scalar newtype semantics.
-                if crate::repr::transparent_field0_inner_ty(self.db, lhs_place_ty, info.field_idx)
-                    .is_some()
-                {
+                if self.is_transparent_field0(lhs_place_ty, info.field_idx) {
                     if let Some(place) = self.place_for_expr(*lhs) {
                         return Some(place);
                     }
@@ -1972,8 +1971,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             let Some(info) = self.field_access_info(base_ty, field_index) else {
                 return expr;
             };
-            if crate::repr::transparent_field0_inner_ty(self.db, base_ty, info.field_idx).is_some()
-            {
+            if self.is_transparent_field0(base_ty, info.field_idx) {
                 expr = *base;
                 continue;
             }

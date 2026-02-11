@@ -146,6 +146,13 @@ struct MoveConflict {
     note: Option<MoveConflictNote>,
 }
 
+#[derive(Clone, Copy)]
+enum DiagSite<'a, 'db> {
+    Inst(&'a MirInst<'db>),
+    Value(ValueId),
+    Terminator(&'a Terminator<'db>),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BorrowTransform<'db> {
     pub param_index: u32,
@@ -543,72 +550,33 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         )
     }
 
-    fn diag_at_inst(
+    fn source_for_diag_site(&self, site: DiagSite<'_, 'db>) -> SourceInfoId {
+        match site {
+            DiagSite::Inst(inst) => inst_source(inst),
+            DiagSite::Value(value) => self.func.body.value(value).source,
+            DiagSite::Terminator(term) => terminator_source(term),
+        }
+    }
+
+    fn diag_at(
         &self,
         local_code: u16,
-        inst: &MirInst<'db>,
+        site: DiagSite<'_, 'db>,
         header: String,
         label: String,
     ) -> CompleteDiagnostic {
-        self.diag_at_source(local_code, inst_source(inst), header, label)
+        self.diag_at_source(local_code, self.source_for_diag_site(site), header, label)
     }
 
-    fn diag_at_inst_with_loan(
+    fn diag_at_with_loan(
         &self,
         local_code: u16,
-        inst: &MirInst<'db>,
+        site: DiagSite<'_, 'db>,
         header: String,
         label: String,
         loan: LoanId,
     ) -> CompleteDiagnostic {
-        let mut diag = self.diag_at_inst(local_code, inst, header, label);
-        self.push_loan_origin_label(&mut diag, loan);
-        diag
-    }
-
-    fn diag_at_value(
-        &self,
-        local_code: u16,
-        value: ValueId,
-        header: String,
-        label: String,
-    ) -> CompleteDiagnostic {
-        let source = self.func.body.value(value).source;
-        self.diag_at_source(local_code, source, header, label)
-    }
-
-    fn diag_at_value_with_loan(
-        &self,
-        local_code: u16,
-        value: ValueId,
-        header: String,
-        label: String,
-        loan: LoanId,
-    ) -> CompleteDiagnostic {
-        let mut diag = self.diag_at_value(local_code, value, header, label);
-        self.push_loan_origin_label(&mut diag, loan);
-        diag
-    }
-
-    fn diag_at_terminator(
-        &self,
-        local_code: u16,
-        term: &Terminator<'db>,
-        header: String,
-        label: String,
-    ) -> CompleteDiagnostic {
-        self.diag_at_source(local_code, terminator_source(term), header, label)
-    }
-
-    fn diag_at_terminator_with_loan(
-        &self,
-        local_code: u16,
-        term: &Terminator<'db>,
-        header: String,
-        label: String,
-        loan: LoanId,
-    ) -> CompleteDiagnostic {
-        let mut diag = self.diag_at_terminator(local_code, term, header, label);
+        let mut diag = self.diag_at(local_code, site, header, label);
         self.push_loan_origin_label(&mut diag, loan);
         diag
     }
@@ -625,6 +593,23 @@ impl<'db, 'a> Borrowck<'db, 'a> {
 
     fn invalid_return_borrow_header(&self) -> String {
         format!("invalid return borrow in `fn {}`", self.func.symbol_name)
+    }
+
+    fn borrow_conflict_diag(&self, site: DiagSite<'_, 'db>, label: String) -> CompleteDiagnostic {
+        self.diag_at(2, site, self.borrow_conflict_header(), label)
+    }
+
+    fn borrow_conflict_diag_with_loan(
+        &self,
+        site: DiagSite<'_, 'db>,
+        label: String,
+        loan: LoanId,
+    ) -> CompleteDiagnostic {
+        self.diag_at_with_loan(2, site, self.borrow_conflict_header(), label, loan)
+    }
+
+    fn move_conflict_diag(&self, site: DiagSite<'_, 'db>, label: String) -> CompleteDiagnostic {
+        self.diag_at(2, site, self.move_conflict_header(), label)
     }
 
     fn push_loan_origin_label(&self, diag: &mut CompleteDiagnostic, loan: LoanId) {
@@ -1012,9 +997,9 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                     Root::Local(local) => {
                         let local_name = self.func.body.local(local).name.clone();
                         let local_span = self.span_for_source(self.func.body.local(local).source);
-                        let mut diag = self.diag_at_value(
+                        let mut diag = self.diag_at(
                             3,
-                            *value,
+                            DiagSite::Value(*value),
                             self.invalid_return_borrow_header(),
                             format!("cannot return a borrow to local `{local_name}`"),
                         );
@@ -1042,9 +1027,9 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                     };
                     let param_span = self.span_for_source(param.source);
 
-                    let mut diag = self.diag_at_value(
+                    let mut diag = self.diag_at(
                         3,
-                        *value,
+                        DiagSite::Value(*value),
                         self.invalid_return_borrow_header(),
                         "return borrows must be derived from explicit borrow parameters"
                             .to_string(),
@@ -1069,9 +1054,9 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                         hir::projection::IndexSource::Dynamic(_),
                     ) = proj
                     {
-                        return Err(self.diag_at_value(
+                        return Err(self.diag_at(
                             3,
-                            *value,
+                            DiagSite::Value(*value),
                             self.invalid_return_borrow_header(),
                             "return borrows with dynamic indices are not supported".to_string(),
                         ));
@@ -1340,14 +1325,12 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             {
                 match note {
                     Some(MoveConflictNote::Moved { moved, moved_name }) => {
-                        let mut diag =
-                            self.diag_at_inst(2, inst, self.move_conflict_header(), label);
+                        let mut diag = self.move_conflict_diag(DiagSite::Inst(inst), label);
                         self.push_move_origin_label(&mut diag, moved, moved_name);
                         return Some(diag);
                     }
                     Some(MoveConflictNote::Loan(loan)) => {
-                        let mut diag =
-                            self.diag_at_inst(2, inst, self.move_conflict_header(), label);
+                        let mut diag = self.move_conflict_diag(DiagSite::Inst(inst), label);
                         self.push_loan_origin_label(&mut diag, loan);
                         return Some(diag);
                     }
@@ -1362,12 +1345,8 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             }
         }
         if let Some((first_value, first_label)) = no_note_conflicts.first() {
-            let mut diag = self.diag_at_value(
-                2,
-                *first_value,
-                self.move_conflict_header(),
-                first_label.clone(),
-            );
+            let mut diag =
+                self.move_conflict_diag(DiagSite::Value(*first_value), first_label.clone());
             for (value, label) in no_note_conflicts.into_iter().skip(1) {
                 let span = self.span_for_source(self.func.body.value(value).source);
                 diag.sub_diagnostics
@@ -1386,10 +1365,8 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             };
             let accessed = self.canonicalize_place(state, place);
             if let Some((moved, moved_name)) = self.moved_overlap_origin(&accessed, moved) {
-                let mut diag = self.diag_at_value(
-                    2,
-                    value,
-                    self.move_conflict_header(),
+                let mut diag = self.move_conflict_diag(
+                    DiagSite::Value(value),
                     "cannot borrow a moved value".to_string(),
                 );
                 self.push_move_origin_label(&mut diag, moved, moved_name);
@@ -1407,10 +1384,8 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                     proj: crate::MirProjectionPath::new(),
                 });
                 if let Some((moved, moved_name)) = self.moved_overlap_origin(&assigned, moved) {
-                    let mut diag = self.diag_at_inst(
-                        2,
-                        inst,
-                        self.move_conflict_header(),
+                    let mut diag = self.move_conflict_diag(
+                        DiagSite::Inst(inst),
                         "cannot assign to a value after it was moved".to_string(),
                     );
                     self.push_move_origin_label(&mut diag, moved, moved_name);
@@ -1428,10 +1403,8 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                 if !assigned.is_empty()
                     && let Some((moved, moved_name)) = self.moved_overlap_origin(&assigned, moved)
                 {
-                    let mut diag = self.diag_at_inst(
-                        2,
-                        inst,
-                        self.move_conflict_header(),
+                    let mut diag = self.move_conflict_diag(
+                        DiagSite::Inst(inst),
                         "cannot assign to a value after it was moved".to_string(),
                     );
                     self.push_move_origin_label(&mut diag, moved, moved_name);
@@ -1448,10 +1421,8 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             } => {
                 let accessed = self.canonicalize_place(state, place);
                 if let Some((moved, moved_name)) = self.moved_overlap_origin(&accessed, moved) {
-                    let mut diag = self.diag_at_inst(
-                        2,
-                        inst,
-                        self.move_conflict_header(),
+                    let mut diag = self.move_conflict_diag(
+                        DiagSite::Inst(inst),
                         "cannot use a value after it was moved".to_string(),
                     );
                     self.push_move_origin_label(&mut diag, moved, moved_name);
@@ -1463,10 +1434,8 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                 if let Some((moved, moved_name)) =
                     self.check_write_through_moved_parent(&written, moved)
                 {
-                    let mut diag = self.diag_at_inst(
-                        2,
-                        inst,
-                        self.move_conflict_header(),
+                    let mut diag = self.move_conflict_diag(
+                        DiagSite::Inst(inst),
                         "cannot write through a moved value".to_string(),
                     );
                     self.push_move_origin_label(&mut diag, moved, moved_name);
@@ -1511,7 +1480,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             if let Some(MoveConflict { label, note }) =
                 self.check_move_out_place(&place, state, moved, active, suspended)
             {
-                let mut diag = self.diag_at_terminator(2, term, self.move_conflict_header(), label);
+                let mut diag = self.move_conflict_diag(DiagSite::Terminator(term), label);
                 match note {
                     Some(MoveConflictNote::Moved { moved, moved_name }) => {
                         self.push_move_origin_label(&mut diag, moved, moved_name)
@@ -1537,10 +1506,8 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             };
             let accessed = self.canonicalize_place(state, place);
             if let Some((moved, moved_name)) = self.moved_overlap_origin(&accessed, moved) {
-                let mut diag = self.diag_at_value(
-                    2,
-                    value,
-                    self.move_conflict_header(),
+                let mut diag = self.move_conflict_diag(
+                    DiagSite::Value(value),
                     "cannot borrow a moved value".to_string(),
                 );
                 self.push_move_origin_label(&mut diag, moved, moved_name);
@@ -1575,10 +1542,8 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             })
             .collect();
         if let Some((moved, moved_name)) = self.moved_overlap_origin(&accessed, moved) {
-            let mut diag = self.diag_at_value(
-                2,
-                value,
-                self.move_conflict_header(),
+            let mut diag = self.move_conflict_diag(
+                DiagSite::Value(value),
                 "cannot use a value after it was moved".to_string(),
             );
             self.push_move_origin_label(&mut diag, moved, moved_name);
@@ -1662,13 +1627,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             }
         }
 
-        let mut effective: Vec<_> = active
-            .iter()
-            .copied()
-            .filter(|loan| !suspended.contains(loan))
-            .collect();
-        effective.sort_by_key(|loan| loan.0);
-        for loan in effective {
+        for loan in self.sorted_effective_loans(active, suspended) {
             if place_set_overlaps(&self.loans[loan.0 as usize].targets, &targets) {
                 return Some(MoveConflict {
                     label: "cannot move out of a value while it is borrowed".to_string(),
@@ -1698,12 +1657,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                     call_loan = Some(loan);
                 }
                 let suspended = self.suspended_loans(&active);
-                let mut effective: Vec<_> = active
-                    .iter()
-                    .copied()
-                    .filter(|l| !suspended.contains(l))
-                    .collect();
-                effective.sort_by_key(|loan| loan.0);
+                let effective = self.sorted_effective_loans(&active, &suspended);
 
                 if let Some(err) =
                     self.check_moved_and_moves_in_inst(inst, &state, &moved, &active, &suspended)
@@ -1718,10 +1672,8 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                         (false, true) => a,
                         _ => a,
                     };
-                    return Some(self.diag_at_inst_with_loan(
-                        2,
-                        inst,
-                        self.borrow_conflict_header(),
+                    return Some(self.borrow_conflict_diag_with_loan(
+                        DiagSite::Inst(inst),
                         self.overlapping_loans_msg(a, b, created_a, created_b),
                         culprit,
                     ));
@@ -1751,12 +1703,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                 }
             }
             let suspended = self.suspended_loans(&active);
-            let mut effective: Vec<_> = active
-                .iter()
-                .copied()
-                .filter(|l| !suspended.contains(l))
-                .collect();
-            effective.sort_by_key(|loan| loan.0);
+            let effective = self.sorted_effective_loans(&active, &suspended);
             if let Some(err) = self.check_moved_and_moves_in_terminator(
                 &block.terminator,
                 &state,
@@ -1772,10 +1719,8 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                 return Some(err);
             }
             if let Some((a, b)) = self.active_set_conflict(&effective) {
-                let mut diag = self.diag_at_terminator(
-                    2,
-                    &block.terminator,
-                    self.borrow_conflict_header(),
+                let mut diag = self.borrow_conflict_diag(
+                    DiagSite::Terminator(&block.terminator),
                     self.overlapping_loans_msg(a, b, false, false),
                 );
                 self.push_loan_origin_label(&mut diag, a);
@@ -2226,6 +2171,20 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         suspended
     }
 
+    fn sorted_effective_loans(
+        &self,
+        active: &FxHashSet<LoanId>,
+        suspended: &FxHashSet<LoanId>,
+    ) -> Vec<LoanId> {
+        let mut effective: Vec<_> = active
+            .iter()
+            .copied()
+            .filter(|loan| !suspended.contains(loan))
+            .collect();
+        effective.sort_by_key(|loan| loan.0);
+        effective
+    }
+
     fn active_set_conflict(&self, active: &[LoanId]) -> Option<(LoanId, LoanId)> {
         for (idx, &a) in active.iter().enumerate() {
             for &b in &active[idx + 1..] {
@@ -2270,10 +2229,8 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         if let Some((call_value, loan)) = self.call_loan_in_inst(inst)
             && let Some(other) = self.loan_creation_conflicts(loan, active, suspended)
         {
-            return Some(self.diag_at_value_with_loan(
-                2,
-                call_value,
-                self.borrow_conflict_header(),
+            return Some(self.borrow_conflict_diag_with_loan(
+                DiagSite::Value(call_value),
                 self.overlapping_loans_msg(loan, other, true, false),
                 other,
             ));
@@ -2296,13 +2253,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         }
         let kind = self.loans[loan.0 as usize].kind;
         let parents = &self.loans[loan.0 as usize].parents;
-        let mut effective: Vec<_> = active
-            .iter()
-            .copied()
-            .filter(|other| !suspended.contains(other))
-            .collect();
-        effective.sort_by_key(|loan| loan.0);
-        for other in effective {
+        for other in self.sorted_effective_loans(active, suspended) {
             if other == loan || parents.contains(&other) || suspended.contains(&other) {
                 continue;
             }
@@ -2329,10 +2280,8 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                 continue;
             };
             if let Some(other) = self.loan_creation_conflicts(loan, active, suspended) {
-                return Some(self.diag_at_value_with_loan(
-                    2,
-                    *value,
-                    self.borrow_conflict_header(),
+                return Some(self.borrow_conflict_diag_with_loan(
+                    DiagSite::Value(*value),
                     self.overlapping_loans_msg(loan, other, true, false),
                     other,
                 ));
@@ -2349,13 +2298,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         suspended: &FxHashSet<LoanId>,
     ) -> Option<CompleteDiagnostic> {
         if let Some((loan, err)) = self.check_word_value_reads(inst, state, active, suspended) {
-            return Some(self.diag_at_inst_with_loan(
-                2,
-                inst,
-                self.borrow_conflict_header(),
-                err,
-                loan,
-            ));
+            return Some(self.borrow_conflict_diag_with_loan(DiagSite::Inst(inst), err, loan));
         }
         match inst {
             MirInst::Assign {
@@ -2368,10 +2311,8 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                 if let Some((loan, err)) =
                     self.check_place_access(state, place, AccessKind::Read, active, suspended)
                 {
-                    return Some(self.diag_at_inst_with_loan(
-                        2,
-                        inst,
-                        self.borrow_conflict_header(),
+                    return Some(self.borrow_conflict_diag_with_loan(
+                        DiagSite::Inst(inst),
                         err,
                         loan,
                     ));
@@ -2388,7 +2329,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                     suspended,
                 )
                 .map(|(loan, err)| {
-                    self.diag_at_inst_with_loan(2, inst, self.borrow_conflict_header(), err, loan)
+                    self.borrow_conflict_diag_with_loan(DiagSite::Inst(inst), err, loan)
                 })
             }
             MirInst::Assign {
@@ -2406,7 +2347,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                     suspended,
                 )
                 .map(|(loan, err)| {
-                    self.diag_at_inst_with_loan(2, inst, self.borrow_conflict_header(), err, loan)
+                    self.borrow_conflict_diag_with_loan(DiagSite::Inst(inst), err, loan)
                 })
             }
             MirInst::Assign {
@@ -2415,22 +2356,22 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             } => self
                 .check_place_access(state, place, AccessKind::Read, active, suspended)
                 .map(|(loan, err)| {
-                    self.diag_at_inst_with_loan(2, inst, self.borrow_conflict_header(), err, loan)
+                    self.borrow_conflict_diag_with_loan(DiagSite::Inst(inst), err, loan)
                 }),
             MirInst::Store { place, .. } => self
                 .check_place_access(state, place, AccessKind::Write, active, suspended)
                 .map(|(loan, err)| {
-                    self.diag_at_inst_with_loan(2, inst, self.borrow_conflict_header(), err, loan)
+                    self.borrow_conflict_diag_with_loan(DiagSite::Inst(inst), err, loan)
                 }),
             MirInst::InitAggregate { place, .. } => self
                 .check_place_access(state, place, AccessKind::Write, active, suspended)
                 .map(|(loan, err)| {
-                    self.diag_at_inst_with_loan(2, inst, self.borrow_conflict_header(), err, loan)
+                    self.borrow_conflict_diag_with_loan(DiagSite::Inst(inst), err, loan)
                 }),
             MirInst::SetDiscriminant { place, .. } => self
                 .check_place_access(state, place, AccessKind::Write, active, suspended)
                 .map(|(loan, err)| {
-                    self.diag_at_inst_with_loan(2, inst, self.borrow_conflict_header(), err, loan)
+                    self.borrow_conflict_diag_with_loan(DiagSite::Inst(inst), err, loan)
                 }),
             _ => None,
         }
@@ -2445,7 +2386,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
     ) -> Option<CompleteDiagnostic> {
         self.check_word_value_reads_in_terminator(term, state, active, suspended)
             .map(|(loan, err)| {
-                self.diag_at_terminator_with_loan(2, term, self.borrow_conflict_header(), err, loan)
+                self.borrow_conflict_diag_with_loan(DiagSite::Terminator(term), err, loan)
             })
     }
 
@@ -2479,13 +2420,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             return Some((loan, "cannot use reborrowed `mut` handle".to_string()));
         }
 
-        let mut effective: Vec<_> = active
-            .iter()
-            .copied()
-            .filter(|l| !suspended.contains(l))
-            .collect();
-        effective.sort_by_key(|loan| loan.0);
-        for loan in effective {
+        for loan in self.sorted_effective_loans(active, suspended) {
             let loan_data = &self.loans[loan.0 as usize];
             if !place_set_overlaps(&loan_data.targets, accessed) {
                 continue;
@@ -2579,11 +2514,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         else {
             return None;
         };
-        self.call_arg_alias_conflict(
-            state,
-            call.args.iter().chain(call.effect_args.iter()).copied(),
-        )
-        .map(|label| self.diag_at_inst(2, inst, self.borrow_conflict_header(), label))
+        self.check_call_arg_aliases(DiagSite::Inst(inst), state, call)
     }
 
     fn check_call_arg_aliases_in_terminator(
@@ -2597,11 +2528,28 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         let crate::TerminatingCall::Call(call) = call else {
             return None;
         };
+        self.check_call_arg_aliases(DiagSite::Terminator(term), state, call)
+    }
+
+    fn check_call_arg_aliases(
+        &self,
+        site: DiagSite<'_, 'db>,
+        state: &[LocalLoanState<'db>],
+        call: &CallOrigin<'db>,
+    ) -> Option<CompleteDiagnostic> {
+        self.call_arg_alias_conflict_for_call(state, call)
+            .map(|label| self.borrow_conflict_diag(site, label))
+    }
+
+    fn call_arg_alias_conflict_for_call(
+        &self,
+        state: &[LocalLoanState<'db>],
+        call: &CallOrigin<'db>,
+    ) -> Option<String> {
         self.call_arg_alias_conflict(
             state,
             call.args.iter().chain(call.effect_args.iter()).copied(),
         )
-        .map(|label| self.diag_at_terminator(2, term, self.borrow_conflict_header(), label))
     }
 
     fn call_arg_alias_conflict(
