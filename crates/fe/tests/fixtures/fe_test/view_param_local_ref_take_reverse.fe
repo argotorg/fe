@@ -1,49 +1,48 @@
 use std::evm::effects::assert
+use core::{Seq, Copy}
 
-struct Reverse<I, T: core::Seq<I> + core::Copy> {
+struct Reverse<I, T: Seq<I>> {
     base: ref T,
 }
 
-struct Take<I, T: core::Seq<I> + core::Copy> {
+struct Take<I, T: Seq<I>> {
     n: usize,
     base: ref T,
 }
 
-impl<I, T: core::Seq<I> + core::Copy> core::Copy for Reverse<I, T> {}
-impl<I, T: core::Seq<I> + core::Copy> core::Copy for Take<I, T> {}
+impl<I, T: Seq<I>> Copy for Reverse<I, T> {}
+impl<I, T: Seq<I>> Copy for Take<I, T> {}
 
-fn reverse<I, T: core::Seq<I> + core::Copy>(seq: ref T) -> Reverse<I, T> {
+fn reverse<I, T: Seq<I>>(seq: ref T) -> Reverse<I, T> {
     Reverse { base: seq }
 }
 
-fn take<I, T: core::Seq<I> + core::Copy>(n: usize, seq: ref T) -> Take<I, T> {
+fn take<I, T: Seq<I>>(n: usize, seq: ref T) -> Take<I, T> {
     Take { n, base: seq }
 }
 
-fn reverse_u256<T: core::Seq<u256> + core::Copy>(seq: ref T) -> Reverse<u256, T> {
+fn reverse_u256<T: Seq<u256>>(seq: ref T) -> Reverse<u256, T> {
     reverse(seq)
 }
 
-fn take_u256<T: core::Seq<u256> + core::Copy>(n: usize, seq: ref T) -> Take<u256, T> {
+fn take_u256<T: Seq<u256>>(n: usize, seq: ref T) -> Take<u256, T> {
     take(n, seq)
 }
 
-impl<I, T: core::Seq<I> + core::Copy> core::Seq<I> for Reverse<I, T> {
+impl<I, T: Seq<I>> Seq<I> for Reverse<I, T> {
     fn len(self) -> usize {
-        let base: T = self.base
-        base.len()
+        self.base.len()
     }
 
     fn get(self, i: usize) -> I {
-        let base: T = self.base
-        let n = base.len()
-        base.get(n - 1 - i)
+        let n = self.base.len()
+        self.base.get(n - 1 - i)
     }
 }
 
-impl<I, T: core::Seq<I> + core::Copy> core::Seq<I> for Take<I, T> {
+impl<I, T: Seq<I>> Seq<I> for Take<I, T> {
     fn len(self) -> usize {
-        let base: T = self.base
+        let base = self.base
         let total = base.len()
         if self.n < total {
             self.n
@@ -53,8 +52,7 @@ impl<I, T: core::Seq<I> + core::Copy> core::Seq<I> for Take<I, T> {
     }
 
     fn get(self, i: usize) -> I {
-        let base: T = self.base
-        base.get(i)
+        self.base.get(i)
     }
 }
 
