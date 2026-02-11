@@ -492,6 +492,14 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 if let Some((_, given_inner)) = actual_ty.as_capability(self.db)
                     && given_inner == required_inner
                 {
+                    if self.is_by_ref_ty(required_inner) {
+                        return self.alloc_value(
+                            expected_ty,
+                            ValueOrigin::TransparentCast { value: arg_value },
+                            expected_repr,
+                        );
+                    }
+
                     if let Some(place) = self
                         .place_for_borrow_expr(arg_expr)
                         .or_else(|| self.place_from_capability_value(arg_value, actual_ty))

@@ -17,14 +17,6 @@ impl Position {
     }
 }
 
-fn accrue_fee(p: mut Position, fee: u256) {
-    p.debt += fee
-}
-
-fn bump_version(p: mut Position) {
-    p.version += 1
-}
-
 fn read_health(p: ref Position) -> u256 {
     if p.debt == 0 {
         return 9999
@@ -67,8 +59,8 @@ fn test_position_lifecycle() {
     let health_before = read_health(ref p)
     assert(health_before == 5)
 
-    accrue_fee(mut p, 50)
-    bump_version(mut p)
+    (mut p).accrue_fee(50)
+    (mut p).bump_version()
     assert(p.owner == 7)
     assert(p.debt == 250)
     assert(p.version == 2)
@@ -80,7 +72,7 @@ fn test_position_lifecycle() {
     let ver_handle: mut u8 = mut p.version
     ver_handle += 3
     increment_version(ver_handle)
-    bump_version(mut p)
+    (mut p).bump_version()
     assert(p.version == 7)
 
     let p = settle(p, 80)

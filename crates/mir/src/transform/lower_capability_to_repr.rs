@@ -716,6 +716,12 @@ pub(crate) fn lower_capability_to_repr<'db>(
                     value,
                 } => {
                     if let Some(local) = resolve_place_root_local(values, place.base) {
+                        let local_ty = locals[local.index()].ty;
+                        let local_place_ty = local_ty
+                            .as_capability(db)
+                            .map(|(_, inner)| inner)
+                            .unwrap_or(local_ty);
+
                         if place.projection.is_empty() {
                             rewritten.push(MirInst::Assign {
                                 source,
@@ -752,6 +758,92 @@ pub(crate) fn lower_capability_to_repr<'db>(
                                 });
                             }
                             continue;
+                        }
+
+                        if let Some(projected_ty) =
+                            apply_transparent_field0_chain(db, local_place_ty, &place.projection)
+                        {
+                            let stored_place_value = if values[value.index()].ty == local_place_ty {
+                                Some(value)
+                            } else if values[value.index()].ty == projected_ty {
+                                let repr = repr_for_plain_ty(
+                                    db,
+                                    core,
+                                    local_place_ty,
+                                    locals[local.index()].address_space,
+                                );
+                                Some(alloc_value(
+                                    values,
+                                    ValueData {
+                                        ty: local_place_ty,
+                                        origin: ValueOrigin::TransparentCast { value },
+                                        source: SourceInfoId::SYNTHETIC,
+                                        repr,
+                                    },
+                                ))
+                            } else {
+                                None
+                            };
+
+                            if let Some(stored_place_value) = stored_place_value {
+                                let assign_value = if local_ty == local_place_ty {
+                                    stored_place_value
+                                } else {
+                                    let repr = repr_for_plain_ty(
+                                        db,
+                                        core,
+                                        local_ty,
+                                        locals[local.index()].address_space,
+                                    );
+                                    alloc_value(
+                                        values,
+                                        ValueData {
+                                            ty: local_ty,
+                                            origin: ValueOrigin::TransparentCast {
+                                                value: stored_place_value,
+                                            },
+                                            source: SourceInfoId::SYNTHETIC,
+                                            repr,
+                                        },
+                                    )
+                                };
+                                rewritten.push(MirInst::Assign {
+                                    source,
+                                    dest: Some(local),
+                                    rvalue: Rvalue::Value(assign_value),
+                                });
+                                if spill_local_for_owner
+                                    .get(local.index())
+                                    .copied()
+                                    .flatten()
+                                    .is_some()
+                                    && !layout::is_zero_sized_ty(db, local_ty)
+                                {
+                                    let spill_base =
+                                        spill_addr_value_for_owner[local.index()].unwrap();
+                                    let repr = repr_for_plain_ty(
+                                        db,
+                                        core,
+                                        local_ty,
+                                        locals[local.index()].address_space,
+                                    );
+                                    let value = alloc_value(
+                                        values,
+                                        ValueData {
+                                            ty: local_ty,
+                                            origin: ValueOrigin::Local(local),
+                                            source: SourceInfoId::SYNTHETIC,
+                                            repr,
+                                        },
+                                    );
+                                    rewritten.push(MirInst::Store {
+                                        source: SourceInfoId::SYNTHETIC,
+                                        place: Place::new(spill_base, MirProjectionPath::new()),
+                                        value,
+                                    });
+                                }
+                                continue;
+                            }
                         }
 
                         let Some(spill_base) = spill_addr_value_for_owner

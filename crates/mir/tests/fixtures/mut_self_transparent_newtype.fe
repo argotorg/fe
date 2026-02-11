@@ -1,0 +1,15 @@
+struct Wrap {
+    value: u8,
+}
+
+impl Wrap {
+    fn bump(mut self) {
+        self.value += 1
+    }
+}
+
+pub fn mut_self_transparent_newtype(x: u8) -> u8 {
+    let mut w = Wrap { value: x }
+    (mut w).bump()
+    w.value
+}
