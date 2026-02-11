@@ -2240,6 +2240,9 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         active: &FxHashSet<LoanId>,
         suspended: &FxHashSet<LoanId>,
     ) -> Option<(LoanId, String)> {
+        if matches!(inst, MirInst::BindValue { .. }) {
+            return None;
+        }
         let mut locals = FxHashSet::default();
         for value in value_operands_in_inst(inst) {
             collect_word_locals_in_value(&self.func.body, value, &mut locals);
