@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 42
 expression: output
 input_file: tests/fixtures/match_nested_enum.fe
 ---
@@ -15,7 +14,7 @@ function $match_nested_enum($outer) -> ret {
           v0 := 0
         }
         case 1 {
-          let v3 := and(mload(add($outer, 64)), 0xff)
+          let v3 := and(shr(248, mload(add($outer, 64))), 0xff)
           let v4 := v3
           v0 := v4
         }
@@ -23,7 +22,7 @@ function $match_nested_enum($outer) -> ret {
         }
     }
     case 1 {
-      let v5 := and(mload(add($outer, 32)), 0xff)
+      let v5 := and(shr(248, mload(add($outer, 32))), 0xff)
       let v6 := v5
       v0 := v6
     }

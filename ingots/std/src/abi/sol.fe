@@ -280,23 +280,24 @@ impl SolCompat for bool {
 // ---------------------------------------------------------------------------
 
 impl TopicValue for u8 {
-    fn as_topic(self) -> u256 { self.downcast_unchecked() }
+    fn as_topic(self) -> u256 { self as u256 }
 }
 impl TopicValue for u16 {
-    fn as_topic(self) -> u256 { self.downcast_unchecked() }
+    fn as_topic(self) -> u256 { self as u256 }
 }
 impl TopicValue for u32 {
-    fn as_topic(self) -> u256 { self.downcast_unchecked() }
+    fn as_topic(self) -> u256 { self as u256 }
 }
 impl TopicValue for u64 {
-    fn as_topic(self) -> u256 { self.downcast_unchecked() }
+    fn as_topic(self) -> u256 { self as u256 }
 }
 impl TopicValue for u128 {
-    fn as_topic(self) -> u256 { self.downcast_unchecked() }
+    fn as_topic(self) -> u256 { self as u256 }
 }
 impl TopicValue for u256 {
     fn as_topic(self) -> u256 { self }
 }
+
 impl TopicValue for i8 {
     fn as_topic(self) -> u256 { self.downcast_unchecked() }
 }
@@ -768,82 +769,82 @@ impl<A: Abi> Encode<A> for Int248 {
 // ---------------------------------------------------------------------------
 
 impl TopicValue for Uint24 {
-    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+    fn as_topic(self) -> u256 { self.val as u256 }
 }
 impl TopicValue for Uint40 {
-    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+    fn as_topic(self) -> u256 { self.val as u256 }
 }
 impl TopicValue for Uint48 {
-    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+    fn as_topic(self) -> u256 { self.val as u256 }
 }
 impl TopicValue for Uint56 {
-    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+    fn as_topic(self) -> u256 { self.val as u256 }
 }
 impl TopicValue for Uint72 {
-    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+    fn as_topic(self) -> u256 { self.val as u256 }
 }
 impl TopicValue for Uint80 {
-    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+    fn as_topic(self) -> u256 { self.val as u256 }
 }
 impl TopicValue for Uint88 {
-    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+    fn as_topic(self) -> u256 { self.val as u256 }
 }
 impl TopicValue for Uint96 {
-    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+    fn as_topic(self) -> u256 { self.val as u256 }
 }
 impl TopicValue for Uint104 {
-    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+    fn as_topic(self) -> u256 { self.val as u256 }
 }
 impl TopicValue for Uint112 {
-    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+    fn as_topic(self) -> u256 { self.val as u256 }
 }
 impl TopicValue for Uint120 {
-    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+    fn as_topic(self) -> u256 { self.val as u256 }
 }
 impl TopicValue for Uint136 {
-    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+    fn as_topic(self) -> u256 { self.val }
 }
 impl TopicValue for Uint144 {
-    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+    fn as_topic(self) -> u256 { self.val }
 }
 impl TopicValue for Uint152 {
-    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+    fn as_topic(self) -> u256 { self.val }
 }
 impl TopicValue for Uint160 {
-    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+    fn as_topic(self) -> u256 { self.val }
 }
 impl TopicValue for Uint168 {
-    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+    fn as_topic(self) -> u256 { self.val }
 }
 impl TopicValue for Uint176 {
-    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+    fn as_topic(self) -> u256 { self.val }
 }
 impl TopicValue for Uint184 {
-    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+    fn as_topic(self) -> u256 { self.val }
 }
 impl TopicValue for Uint192 {
-    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+    fn as_topic(self) -> u256 { self.val }
 }
 impl TopicValue for Uint200 {
-    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+    fn as_topic(self) -> u256 { self.val }
 }
 impl TopicValue for Uint208 {
-    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+    fn as_topic(self) -> u256 { self.val }
 }
 impl TopicValue for Uint216 {
-    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+    fn as_topic(self) -> u256 { self.val }
 }
 impl TopicValue for Uint224 {
-    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+    fn as_topic(self) -> u256 { self.val }
 }
 impl TopicValue for Uint232 {
-    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+    fn as_topic(self) -> u256 { self.val }
 }
 impl TopicValue for Uint240 {
-    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+    fn as_topic(self) -> u256 { self.val }
 }
 impl TopicValue for Uint248 {
-    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+    fn as_topic(self) -> u256 { self.val }
 }
 impl TopicValue for Int24 {
     fn as_topic(self) -> u256 { self.val.downcast_unchecked() }

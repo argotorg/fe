@@ -281,6 +281,24 @@ impl<'db> FunctionEmitter<'db> {
         let rhs = self.lower_value(value, state)?;
         let stored = self.apply_to_word_conversion(&rhs, value_ty);
         let space = self.mir_func.body.place_address_space(place);
+
+        // For byte-addressed spaces (memory), sub-word values must be left-shifted
+        // before mstore so they occupy the correct high bytes (EVM is big-endian).
+        // mstore always writes 32 bytes; subsequent field stores will overwrite the
+        // zero-padded low bytes.
+        let stored = if matches!(space, mir::ir::AddressSpaceKind::Memory) {
+            let field_size =
+                layout::ty_size_bytes_in(self.db, &self.layout, value_ty).unwrap_or(32);
+            if field_size < 32 {
+                let shift_bits = (32 - field_size) * 8;
+                format!("shl({shift_bits}, {stored})")
+            } else {
+                stored
+            }
+        } else {
+            stored
+        };
+
         docs.push(YulDoc::line(Self::yul_store(space, &addr, &stored)));
         Ok(())
     }
