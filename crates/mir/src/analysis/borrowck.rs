@@ -18,7 +18,9 @@ use hir::hir_def::{
 };
 use hir::projection::Aliasing;
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::collections::VecDeque;
 
+use crate::analysis::build_call_graph;
 use crate::ir::{
     AddressSpaceKind, BasicBlockId, CallOrigin, LocalId, MirBody, MirFunction, MirInst, Place,
     Rvalue, SourceInfoId, Terminator, ValueId, ValueOrigin, ValueRepr,
@@ -172,45 +174,88 @@ pub fn compute_borrow_summaries<'db>(
     db: &'db dyn HirAnalysisDb,
     functions: &[MirFunction<'db>],
 ) -> Result<BorrowSummaryMap<'db>, Box<BorrowSummaryError>> {
+    compute_borrow_summaries_worklist(db, functions, |_| {})
+}
+
+fn compute_borrow_summaries_worklist<'db>(
+    db: &'db dyn HirAnalysisDb,
+    functions: &[MirFunction<'db>],
+    mut on_analyze: impl FnMut(usize),
+) -> Result<BorrowSummaryMap<'db>, Box<BorrowSummaryError>> {
+    let callers_by_callee = build_callers_by_callee(functions);
     let mut summaries: BorrowSummaryMap<'db> = functions
         .iter()
         .map(|func| (func.symbol_name.clone(), FxHashSet::default()))
         .collect();
+    let mut worklist: VecDeque<usize> = (0..functions.len()).collect();
+    let mut in_worklist = vec![true; functions.len()];
 
-    loop {
-        let mut changed = false;
-        for func in functions {
-            let func_name = match func.origin {
-                crate::ir::MirFunctionOrigin::Hir(hir_func) => hir_func.pretty_print_signature(db),
-                crate::ir::MirFunctionOrigin::Synthetic(_) => func.symbol_name.clone(),
-            };
+    while let Some(func_idx) = worklist.pop_front() {
+        in_worklist[func_idx] = false;
+        on_analyze(func_idx);
+        let func = &functions[func_idx];
+        let func_name = match func.origin {
+            crate::ir::MirFunctionOrigin::Hir(hir_func) => hir_func.pretty_print_signature(db),
+            crate::ir::MirFunctionOrigin::Synthetic(_) => func.symbol_name.clone(),
+        };
 
-            let summary = Borrowck::new(db, func, &summaries)
-                .borrow_summary()
-                .map_err(|err| {
-                    Box::new(BorrowSummaryError {
-                        func_name,
-                        diagnostic: err,
-                    })
-                })?;
+        let summary = Borrowck::new(db, func, &summaries)
+            .borrow_summary()
+            .map_err(|err| {
+                Box::new(BorrowSummaryError {
+                    func_name,
+                    diagnostic: err,
+                })
+            })?;
 
-            let Some(summary) = summary else {
-                continue;
-            };
-            let Some(existing) = summaries.get_mut(&func.symbol_name) else {
-                panic!("borrow summary missing for {}", func.symbol_name);
-            };
+        let Some(summary) = summary else {
+            continue;
+        };
+        let Some(existing) = summaries.get_mut(&func.symbol_name) else {
+            panic!("borrow summary missing for {}", func.symbol_name);
+        };
 
-            let before = existing.len();
-            existing.extend(summary);
-            changed |= existing.len() != before;
-        }
-        if !changed {
-            break;
+        let before = existing.len();
+        existing.extend(summary);
+        if existing.len() != before {
+            for &caller in &callers_by_callee[func_idx] {
+                if !in_worklist[caller] {
+                    in_worklist[caller] = true;
+                    worklist.push_back(caller);
+                }
+            }
         }
     }
 
     Ok(summaries)
+}
+
+fn build_callers_by_callee(functions: &[MirFunction<'_>]) -> Vec<Vec<usize>> {
+    let symbol_to_idx: FxHashMap<String, usize> = functions
+        .iter()
+        .enumerate()
+        .map(|(idx, func)| (func.symbol_name.clone(), idx))
+        .collect();
+    let mut callers_by_callee = vec![Vec::new(); functions.len()];
+    let call_graph = build_call_graph(functions);
+
+    for (caller, callees) in call_graph {
+        let Some(&caller_idx) = symbol_to_idx.get(&caller) else {
+            continue;
+        };
+        for callee in callees {
+            if let Some(&callee_idx) = symbol_to_idx.get(&callee) {
+                callers_by_callee[callee_idx].push(caller_idx);
+            }
+        }
+    }
+
+    for callers in &mut callers_by_callee {
+        callers.sort_unstable();
+        callers.dedup();
+    }
+
+    callers_by_callee
 }
 
 pub fn check_borrows<'db>(
@@ -3265,4 +3310,197 @@ fn place_set_overlaps<'db>(a: &FxHashSet<CanonPlace<'db>>, b: &FxHashSet<CanonPl
 
 fn places_overlap<'db>(a: &CanonPlace<'db>, b: &CanonPlace<'db>) -> bool {
     a.root == b.root && !matches!(a.proj.may_alias(&b.proj), Aliasing::No)
+}
+
+#[cfg(test)]
+mod tests {
+    use common::InputDb;
+    use driver::DriverDataBase;
+    use hir::analysis::HirAnalysisDb;
+    use url::Url;
+
+    use super::{BorrowSummaryError, BorrowSummaryMap, Borrowck, compute_borrow_summaries};
+    use crate::MirFunction;
+
+    fn compute_borrow_summaries_naive<'db>(
+        db: &'db dyn HirAnalysisDb,
+        functions: &[MirFunction<'db>],
+        mut on_analyze: impl FnMut(usize),
+    ) -> Result<BorrowSummaryMap<'db>, Box<BorrowSummaryError>> {
+        let mut summaries: BorrowSummaryMap<'db> = functions
+            .iter()
+            .map(|func| (func.symbol_name.clone(), rustc_hash::FxHashSet::default()))
+            .collect();
+
+        loop {
+            let mut changed = false;
+            for (func_idx, func) in functions.iter().enumerate() {
+                on_analyze(func_idx);
+                let func_name = match func.origin {
+                    crate::ir::MirFunctionOrigin::Hir(hir_func) => {
+                        hir_func.pretty_print_signature(db)
+                    }
+                    crate::ir::MirFunctionOrigin::Synthetic(_) => func.symbol_name.clone(),
+                };
+
+                let summary = Borrowck::new(db, func, &summaries)
+                    .borrow_summary()
+                    .map_err(|err| {
+                        Box::new(BorrowSummaryError {
+                            func_name,
+                            diagnostic: err,
+                        })
+                    })?;
+
+                let Some(summary) = summary else {
+                    continue;
+                };
+                let Some(existing) = summaries.get_mut(&func.symbol_name) else {
+                    panic!("borrow summary missing for {}", func.symbol_name);
+                };
+
+                let before = existing.len();
+                existing.extend(summary);
+                changed |= existing.len() != before;
+            }
+            if !changed {
+                break;
+            }
+        }
+
+        Ok(summaries)
+    }
+
+    fn find_function<'db>(functions: &[MirFunction<'db>], symbol: &str) -> MirFunction<'db> {
+        functions
+            .iter()
+            .find(|func| func.symbol_name == symbol)
+            .cloned()
+            .unwrap_or_else(|| panic!("missing function `{symbol}`"))
+    }
+
+    #[test]
+    fn worklist_solver_matches_naive_fixed_point() {
+        let mut db = DriverDataBase::default();
+        let url = Url::parse("file:///borrow_summary_worklist_matches_naive.fe").unwrap();
+        let src = r#"
+extern {
+    fn ext_passthrough(x: ref u256) -> ref u256
+}
+
+fn top(x: ref u256) -> ref u256 {
+    mid(x)
+}
+
+fn mid(x: ref u256) -> ref u256 {
+    leaf(x)
+}
+
+fn leaf(x: ref u256) -> ref u256 {
+    x
+}
+
+fn isolated(x: ref u256) -> ref u256 {
+    x
+}
+
+fn via_extern(x: ref u256) -> ref u256 {
+    ext_passthrough(x)
+}
+
+pub fn entry(x: ref u256) -> ref u256 {
+    top(x)
+}
+"#;
+
+        let file = db.workspace().touch(&mut db, url, Some(src.to_string()));
+        let top_mod = db.top_mod(file);
+        let module = crate::lower_module(&db, top_mod).expect("module should lower");
+        let functions = vec![
+            find_function(&module.functions, "top"),
+            find_function(&module.functions, "mid"),
+            find_function(&module.functions, "leaf"),
+            find_function(&module.functions, "isolated"),
+            find_function(&module.functions, "via_extern"),
+            find_function(&module.functions, "entry"),
+        ];
+
+        let worklist = compute_borrow_summaries(&db, &functions).expect("worklist summaries");
+        let naive =
+            compute_borrow_summaries_naive(&db, &functions, |_| {}).expect("naive summaries");
+        assert_eq!(worklist, naive);
+    }
+
+    #[test]
+    fn worklist_reanalyzes_only_affected_callers() {
+        let mut db = DriverDataBase::default();
+        let url = Url::parse("file:///borrow_summary_worklist_affected_only.fe").unwrap();
+        let src = r#"
+fn top(x: ref u256) -> ref u256 {
+    mid(x)
+}
+
+fn mid(x: ref u256) -> ref u256 {
+    leaf(x)
+}
+
+fn leaf(x: ref u256) -> ref u256 {
+    x
+}
+
+fn isolated(x: ref u256) -> ref u256 {
+    x
+}
+
+pub fn entry(x: ref u256) -> ref u256 {
+    top(x)
+}
+"#;
+
+        let file = db.workspace().touch(&mut db, url, Some(src.to_string()));
+        let top_mod = db.top_mod(file);
+        let module = crate::lower_module(&db, top_mod).expect("module should lower");
+        let functions = vec![
+            find_function(&module.functions, "top"),
+            find_function(&module.functions, "mid"),
+            find_function(&module.functions, "leaf"),
+            find_function(&module.functions, "isolated"),
+            find_function(&module.functions, "entry"),
+        ];
+
+        let mut worklist_counts = vec![0usize; functions.len()];
+        let worklist_summaries = super::compute_borrow_summaries_worklist(&db, &functions, |idx| {
+            worklist_counts[idx] += 1;
+        })
+        .expect("worklist summaries should succeed");
+        assert_eq!(
+            worklist_counts[0], 2,
+            "top should be revisited after mid changes"
+        );
+        assert_eq!(
+            worklist_counts[1], 2,
+            "mid should be revisited after leaf changes"
+        );
+        assert_eq!(
+            worklist_counts[2], 1,
+            "leaf has no in-module callee dependencies"
+        );
+        assert_eq!(worklist_counts[3], 1, "isolated should not be re-analyzed");
+        assert_eq!(
+            worklist_counts[4], 1,
+            "entry should not be re-analyzed when top's summary stays unchanged"
+        );
+
+        let mut naive_counts = vec![0usize; functions.len()];
+        let naive_summaries = compute_borrow_summaries_naive(&db, &functions, |idx| {
+            naive_counts[idx] += 1;
+        })
+        .expect("naive summaries should succeed");
+
+        assert_eq!(worklist_summaries, naive_summaries);
+        assert!(
+            naive_counts[3] > worklist_counts[3],
+            "naive solver should rescan isolated functions"
+        );
+    }
 }
