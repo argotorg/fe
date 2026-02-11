@@ -23,7 +23,7 @@ fn use_receiver_modes() -> u256 {
     let value_ref: ref u256 = by_ref.value_ref()
     value_ref
 
-    let value_mut: mut u256 = (mut counter).value_mut()
+    let value_mut: mut u256 = counter.value_mut()
     value_mut += 1
     counter.value
 }

@@ -12,8 +12,6 @@ fn wrap_haf9e70905fcbd513_bump(v0: mut Wrap) -> ():
 
 fn mut_self_transparent_newtype(v0: u8) -> u8:
   bb0:
-    v2: Wrap = alloc mem
     v1: Wrap = v0
-    store mem[v2] = v1
-    eval wrap_haf9e70905fcbd513_bump(&mem[v2])
+    eval wrap_haf9e70905fcbd513_bump(v1)
     ret v1

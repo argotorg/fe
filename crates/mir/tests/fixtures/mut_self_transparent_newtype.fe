@@ -10,6 +10,6 @@ impl Wrap {
 
 pub fn mut_self_transparent_newtype(x: u8) -> u8 {
     let mut w = Wrap { value: x }
-    (mut w).bump()
+    w.bump()
     w.value
 }
