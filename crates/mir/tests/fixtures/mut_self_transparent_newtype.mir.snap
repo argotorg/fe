@@ -3,18 +3,17 @@ source: crates/mir/tests/lowering_snapshots.rs
 assertion_line: 26
 expression: mir_output
 ---
-fn wrap_haf9e70905fcbd513_bump(v0: Wrap) -> ():
+fn wrap_haf9e70905fcbd513_bump(v0: mut Wrap) -> ():
   bb0:
-    v1: u8 = v0
-    bind (v1 + 1)
-    v0 = (v1 + 1)
+    bind v0
+    v1: u8 = load mem[v0]
+    store mem[v0] = (v1 + 1)
     ret
 
 fn mut_self_transparent_newtype(v0: u8) -> u8:
   bb0:
-    v3: Wrap = alloc mem
+    v2: Wrap = alloc mem
     v1: Wrap = v0
-    store mem[v3] = v1
-    v2: Wrap = load mem[&mem[v3]]
-    eval wrap_haf9e70905fcbd513_bump(v2)
+    store mem[v2] = v1
+    eval wrap_haf9e70905fcbd513_bump(&mem[v2])
     ret v1

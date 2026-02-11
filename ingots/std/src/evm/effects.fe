@@ -48,13 +48,13 @@ impl AbiSize for Address {
 
 impl<A: Abi> Decode<A> for Address {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
-        Address { inner: d.read_word() }
+        Address { inner: (mut d).read_word() }
     }
 }
 
 impl<A: Abi> Encode<A> for Address {
     fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) {
-        e.write_word(self.inner)
+        (mut e).write_word(self.inner)
     }
 }
 
@@ -217,10 +217,10 @@ pub trait Create {
         let init_ptr = mem::alloc(total_len)
         ops::codecopy(dest: init_ptr, offset: init_off, len: init_len)
         let args_ptr = init_ptr + init_len
-        let enc = SolEncoder { start: args_ptr, pos: args_ptr, end: args_ptr + args_len }
-        args.encode(enc)
+        let mut enc = SolEncoder { start: args_ptr, pos: args_ptr, end: args_ptr + args_len }
+        args.encode(mut enc)
 
-        let addr = self.create_raw(value, init_ptr, total_len)
+        let addr = (mut self).create_raw(value, init_ptr, total_len)
 
         // Solidity-style behavior: bubble revert data if creation fails.
         if addr.inner == 0 {
@@ -244,10 +244,10 @@ pub trait Create {
         let init_ptr = mem::alloc(total_len)
         ops::codecopy(dest: init_ptr, offset: init_off, len: init_len)
         let args_ptr = init_ptr + init_len
-        let enc = SolEncoder { start: args_ptr, pos: args_ptr, end: args_ptr + args_len }
-        args.encode(enc)
+        let mut enc = SolEncoder { start: args_ptr, pos: args_ptr, end: args_ptr + args_len }
+        args.encode(mut enc)
 
-        let addr = self.create2_raw(value, init_ptr, total_len, salt)
+        let addr = (mut self).create2_raw(value, init_ptr, total_len, salt)
 
         // Solidity-style behavior: bubble revert data if creation fails.
         if addr.inner == 0 {
@@ -370,7 +370,7 @@ fn encode_calldata<M>(selector: u32, message: own M) -> (u256, u256)
     ops::mstore(base, selector_word)
 
     enc.set_pos(base + selector_size)
-    message.encode(enc)
+    message.encode(mut enc)
     enc.finish()
 }
 

@@ -2077,7 +2077,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         active: &FxHashSet<LoanId>,
         suspended: &FxHashSet<LoanId>,
     ) -> Option<CompleteDiagnostic> {
-        if let Some((loan, err)) = self.check_word_value_reads(inst, active, suspended) {
+        if let Some((loan, err)) = self.check_word_value_reads(inst, state, active, suspended) {
             return Some(self.diag_at_inst_with_loan(
                 2,
                 inst,
@@ -2225,10 +2225,29 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         state: &[FxHashSet<LoanId>],
         mut base: ValueId,
     ) -> FxHashSet<LoanId> {
-        while let ValueOrigin::TransparentCast { value } = &self.func.body.value(base).origin {
-            base = *value;
+        loop {
+            match &self.func.body.value(base).origin {
+                ValueOrigin::TransparentCast { value } => base = *value,
+                ValueOrigin::PlaceRef(place) => base = place.base,
+                _ => break,
+            }
         }
         if ty_is_borrow(self.db, self.func.body.value(base).ty).is_none() {
+            let owner = match self.func.body.value(base).origin {
+                ValueOrigin::Local(local) | ValueOrigin::PlaceRoot(local) => {
+                    let owner = self.semantic_owner_local(local);
+                    (owner != local).then_some(owner)
+                }
+                _ => None,
+            };
+            if let Some(owner) = owner
+                && let Some(idx) = self.tracked_local_idx.get(owner.index()).copied().flatten()
+            {
+                let loans = state[idx].clone();
+                if !loans.is_empty() {
+                    return loans;
+                }
+            }
             return FxHashSet::default();
         }
         self.loans_for_handle_value(state, base)
@@ -2237,6 +2256,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
     fn check_word_value_reads(
         &self,
         inst: &MirInst<'db>,
+        state: &[FxHashSet<LoanId>],
         active: &FxHashSet<LoanId>,
         suspended: &FxHashSet<LoanId>,
     ) -> Option<(LoanId, String)> {
@@ -2253,9 +2273,24 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                 root: self.root_for_local(local),
                 proj: crate::MirProjectionPath::new(),
             };
+            let owner = self.semantic_owner_local(local);
+            let through = if ty_is_borrow(self.db, self.func.body.local(owner).ty).is_some() {
+                self.tracked_local_idx
+                    .get(owner.index())
+                    .copied()
+                    .flatten()
+                    .map(|idx| state[idx].clone())
+                    .unwrap_or_else(|| {
+                        self.param_loan_for_local[owner.index()]
+                            .into_iter()
+                            .collect::<FxHashSet<_>>()
+                    })
+            } else {
+                FxHashSet::default()
+            };
             if let Some(err) = self.check_access_set(
                 &FxHashSet::from_iter([accessed]),
-                FxHashSet::default(),
+                through,
                 AccessKind::Read,
                 active,
                 suspended,

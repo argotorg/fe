@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 33
 expression: output
 input_file: tests/fixtures/tstor_ptr_contract.fe
 ---
@@ -62,7 +63,7 @@ object "GuardContract" {
       revert(0, 0)
     }
     function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__u256__3271ca15373d4483($self, $slot) -> ret {
-      let v0 := $stor_ptr__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9($self, $slot)
+      let v0 := $stor_ptr__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9(0, $slot)
       ret := v0
       leave
     }
@@ -191,7 +192,7 @@ object "GuardContract" {
         revert(0, 0)
       }
       function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__u256__3271ca15373d4483($self, $slot) -> ret {
-        let v0 := $stor_ptr__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9($self, $slot)
+        let v0 := $stor_ptr__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9(0, $slot)
         ret := v0
         leave
       }
@@ -213,10 +214,10 @@ object "GuardContract" {
         let v2 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish(v0)
         let v3 := mload(v2)
         let v4 := mload(add(v2, 32))
-        $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes($self, v3, v4)
+        $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes(0, v3, v4)
       }
       function $runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2($self) -> ret {
-        let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input($self)
+        let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input(0)
         let v1 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0, 4)
         ret := v1
         leave
@@ -283,18 +284,6 @@ object "GuardContract" {
         leave
       }
       function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head($self, $bytes) -> ret {
-        $solencoder_h1b9228b90dad6928_ensure_init($self, $bytes)
-        let v0 := mload($self)
-        ret := v0
-        leave
-      }
-      function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word($self, $v) {
-        let v0 := mload(add($self, 32))
-        mstore(v0, $v)
-        mstore(add($self, 32), add(v0, 32))
-        leave
-      }
-      function $solencoder_h1b9228b90dad6928_ensure_init($self, $bytes) {
         let v0 := mload($self)
         let v1 := eq(v0, 0)
         if v1 {
@@ -303,6 +292,14 @@ object "GuardContract" {
           mstore(add($self, 32), v2)
           mstore(add($self, 64), add(v2, $bytes))
         }
+        let v3 := mload($self)
+        ret := v3
+        leave
+      }
+      function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word($self, $v) {
+        let v0 := mload(add($self, 32))
+        mstore(v0, $v)
+        mstore(add($self, 32), add(v0, 32))
         leave
       }
       function $solencoder_h1b9228b90dad6928_new() -> ret {

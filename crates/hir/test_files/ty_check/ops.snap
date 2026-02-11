@@ -258,7 +258,7 @@ note:
    ┌─ ops.fe:38:13
    │
 38 │             self = Ok::Yes
-   │             ^^^^ Ok
+   │             ^^^^ mut Ok
 
 note: 
    ┌─ ops.fe:38:13

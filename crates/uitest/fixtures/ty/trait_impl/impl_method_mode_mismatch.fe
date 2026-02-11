@@ -1,0 +1,25 @@
+pub trait OwnMode {
+    fn bad(self, x: i32)
+}
+
+pub trait RefMode {
+    fn bad(self, x: ref i32)
+}
+
+pub trait MutMode {
+    fn bad(self, x: mut i32)
+}
+
+pub struct S {}
+
+impl OwnMode for S {
+    fn bad(self, x: own i32) {}
+}
+
+impl RefMode for S {
+    fn bad(self, x: mut i32) {}
+}
+
+impl MutMode for S {
+    fn bad(self, x: i32) {}
+}

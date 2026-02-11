@@ -143,10 +143,10 @@ pub trait Encode<A: Abi> {
     fn encode<E: AbiEncoder<A>>(own self, mut _: E)
 }
 
-pub fn decode_or_revert<A: Abi, T, D>(d: D) -> T
+pub fn decode_or_revert<A: Abi, T, D>(mut d: D) -> T
     where T: Decode<A>, D: AbiDecoder<A>
 {
-    T::decode(d)
+    T::decode(mut d)
 }
 
 pub struct BytesView<I> {
@@ -382,13 +382,13 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11> AbiSize for (T0, T1, T2, 
 
 impl<A: Abi> Decode<A> for u256 {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
-        d.read_word()
+        (mut d).read_word()
     }
 }
 
 impl<A: Abi> Encode<A> for u256 {
     fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) {
-        e.write_word(self)
+        (mut e).write_word(self)
     }
 }
 
@@ -400,190 +400,190 @@ impl<A: Abi, const N: usize> Decode<A> for String<N> {
 
 impl<A: Abi, const N: usize> Encode<A> for String<N> {
     fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) {
-        e.write_word(super::addr_of(self))
+        (mut e).write_word(super::addr_of(self))
     }
 }
 
 impl<A: Abi> Decode<A> for bool {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
-        d.read_word() != 0
+        (mut d).read_word() != 0
     }
 }
 
 impl<A: Abi> Encode<A> for bool {
     fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) {
         if self {
-            e.write_word(1)
+            (mut e).write_word(1)
         } else {
-            e.write_word(0)
+            (mut e).write_word(0)
         }
     }
 }
 
 impl<A: Abi> Decode<A> for u8 {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
-        d.read_word().downcast_unchecked()
+        (mut d).read_word().downcast_unchecked()
     }
 }
 
 impl<A: Abi> Encode<A> for u8 {
     fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) {
-        e.write_word(self as u256)
+        (mut e).write_word(self as u256)
     }
 }
 
 impl<A: Abi> Decode<A> for u16 {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
-        d.read_word().downcast_unchecked()
+        (mut d).read_word().downcast_unchecked()
     }
 }
 
 impl<A: Abi> Encode<A> for u16 {
     fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) {
-        e.write_word(self as u256)
+        (mut e).write_word(self as u256)
     }
 }
 
 impl<A: Abi> Decode<A> for u32 {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
-        d.read_word().downcast_unchecked()
+        (mut d).read_word().downcast_unchecked()
     }
 }
 
 impl<A: Abi> Encode<A> for u32 {
     fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) {
-        e.write_word(self as u256)
+        (mut e).write_word(self as u256)
     }
 }
 
 impl<A: Abi> Decode<A> for u64 {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
-        d.read_word().downcast_unchecked()
+        (mut d).read_word().downcast_unchecked()
     }
 }
 
 impl<A: Abi> Encode<A> for u64 {
     fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) {
-        e.write_word(self as u256)
+        (mut e).write_word(self as u256)
     }
 }
 
 impl<A: Abi> Decode<A> for u128 {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
-        d.read_word().downcast_unchecked()
+        (mut d).read_word().downcast_unchecked()
     }
 }
 
 impl<A: Abi> Encode<A> for u128 {
     fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) {
-        e.write_word(self as u256)
+        (mut e).write_word(self as u256)
     }
 }
 
 impl<A: Abi> Decode<A> for i8 {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
-        d.read_word().downcast_unchecked()
+        (mut d).read_word().downcast_unchecked()
     }
 }
 
 impl<A: Abi> Encode<A> for i8 {
     fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) {
-        e.write_word(self.downcast_unchecked())
+        (mut e).write_word(self.downcast_unchecked())
     }
 }
 
 impl<A: Abi> Decode<A> for i16 {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
-        d.read_word().downcast_unchecked()
+        (mut d).read_word().downcast_unchecked()
     }
 }
 
 impl<A: Abi> Encode<A> for i16 {
     fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) {
-        e.write_word(self.downcast_unchecked())
+        (mut e).write_word(self.downcast_unchecked())
     }
 }
 
 impl<A: Abi> Decode<A> for i32 {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
-        d.read_word().downcast_unchecked()
+        (mut d).read_word().downcast_unchecked()
     }
 }
 
 impl<A: Abi> Encode<A> for i32 {
     fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) {
-        e.write_word(self.downcast_unchecked())
+        (mut e).write_word(self.downcast_unchecked())
     }
 }
 
 impl<A: Abi> Decode<A> for i64 {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
-        d.read_word().downcast_unchecked()
+        (mut d).read_word().downcast_unchecked()
     }
 }
 
 impl<A: Abi> Encode<A> for i64 {
     fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) {
-        e.write_word(self.downcast_unchecked())
+        (mut e).write_word(self.downcast_unchecked())
     }
 }
 
 impl<A: Abi> Decode<A> for i128 {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
-        d.read_word().downcast_unchecked()
+        (mut d).read_word().downcast_unchecked()
     }
 }
 
 impl<A: Abi> Encode<A> for i128 {
     fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) {
-        e.write_word(self.downcast_unchecked())
+        (mut e).write_word(self.downcast_unchecked())
     }
 }
 
 impl<A: Abi> Decode<A> for i256 {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
-        d.read_word().downcast_unchecked()
+        (mut d).read_word().downcast_unchecked()
     }
 }
 
 impl<A: Abi> Encode<A> for i256 {
     fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) {
-        e.write_word(self.downcast_unchecked())
+        (mut e).write_word(self.downcast_unchecked())
     }
 }
 
 impl<A: Abi> Decode<A> for usize {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
-        d.read_word() as usize
+        (mut d).read_word() as usize
     }
 }
 
 impl<A: Abi> Encode<A> for usize {
     fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) {
-        e.write_word(self as u256)
+        (mut e).write_word(self as u256)
     }
 }
 
 impl<A: Abi> Decode<A> for isize {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
-        d.read_word().downcast_unchecked()
+        (mut d).read_word().downcast_unchecked()
     }
 }
 
 impl<A: Abi> Encode<A> for isize {
     fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) {
-        e.write_word(self.downcast_unchecked())
+        (mut e).write_word(self.downcast_unchecked())
     }
 }
 
 impl<A: Abi> Decode<A> for () {
-    fn decode<D: AbiDecoder<A>>(_ d: D) -> Self {
+    fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
         ()
     }
 }
 
 impl<A: Abi> Encode<A> for () {
-    fn encode<E: AbiEncoder<A>>(own self, _ e: E) {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) {
     }
 }
 
@@ -591,7 +591,7 @@ impl<A: Abi, T0> Decode<A> for (T0,)
     where T0: Decode<A>
 {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
-        (T0::decode(d),)
+        (T0::decode(mut d),)
     }
 }
 
@@ -599,7 +599,7 @@ impl<A: Abi, T0> Encode<A> for (T0,)
     where T0: Encode<A>
 {
     fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) {
-        self.0.encode(e)
+        self.0.encode(mut e)
     }
 }
 
@@ -607,7 +607,7 @@ impl<A: Abi, T0, T1> Decode<A> for (T0, T1)
     where T0: Decode<A>, T1: Decode<A>
 {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
-        (T0::decode(d), T1::decode(d))
+        (T0::decode(mut d), T1::decode(mut d))
     }
 }
 
@@ -615,8 +615,8 @@ impl<A: Abi, T0, T1> Encode<A> for (T0, T1)
     where T0: Encode<A>, T1: Encode<A>
 {
     fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) {
-        self.0.encode(e)
-        self.1.encode(e)
+        self.0.encode(mut e)
+        self.1.encode(mut e)
     }
 }
 
@@ -624,7 +624,7 @@ impl<A: Abi, T0, T1, T2> Decode<A> for (T0, T1, T2)
     where T0: Decode<A>, T1: Decode<A>, T2: Decode<A>
 {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
-        (T0::decode(d), T1::decode(d), T2::decode(d))
+        (T0::decode(mut d), T1::decode(mut d), T2::decode(mut d))
     }
 }
 
@@ -632,9 +632,9 @@ impl<A: Abi, T0, T1, T2> Encode<A> for (T0, T1, T2)
     where T0: Encode<A>, T1: Encode<A>, T2: Encode<A>
 {
     fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) {
-        self.0.encode(e)
-        self.1.encode(e)
-        self.2.encode(e)
+        self.0.encode(mut e)
+        self.1.encode(mut e)
+        self.2.encode(mut e)
     }
 }
 
@@ -642,7 +642,7 @@ impl<A: Abi, T0, T1, T2, T3> Decode<A> for (T0, T1, T2, T3)
     where T0: Decode<A>, T1: Decode<A>, T2: Decode<A>, T3: Decode<A>
 {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
-        (T0::decode(d), T1::decode(d), T2::decode(d), T3::decode(d))
+        (T0::decode(mut d), T1::decode(mut d), T2::decode(mut d), T3::decode(mut d))
     }
 }
 
@@ -650,10 +650,10 @@ impl<A: Abi, T0, T1, T2, T3> Encode<A> for (T0, T1, T2, T3)
     where T0: Encode<A>, T1: Encode<A>, T2: Encode<A>, T3: Encode<A>
 {
     fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) {
-        self.0.encode(e)
-        self.1.encode(e)
-        self.2.encode(e)
-        self.3.encode(e)
+        self.0.encode(mut e)
+        self.1.encode(mut e)
+        self.2.encode(mut e)
+        self.3.encode(mut e)
     }
 }
 
@@ -662,11 +662,11 @@ impl<A: Abi, T0, T1, T2, T3, T4> Decode<A> for (T0, T1, T2, T3, T4)
 {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
         (
-            T0::decode(d),
-            T1::decode(d),
-            T2::decode(d),
-            T3::decode(d),
-            T4::decode(d),
+            T0::decode(mut d),
+            T1::decode(mut d),
+            T2::decode(mut d),
+            T3::decode(mut d),
+            T4::decode(mut d),
         )
     }
 }
@@ -675,11 +675,11 @@ impl<A: Abi, T0, T1, T2, T3, T4> Encode<A> for (T0, T1, T2, T3, T4)
     where T0: Encode<A>, T1: Encode<A>, T2: Encode<A>, T3: Encode<A>, T4: Encode<A>
 {
     fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) {
-        self.0.encode(e)
-        self.1.encode(e)
-        self.2.encode(e)
-        self.3.encode(e)
-        self.4.encode(e)
+        self.0.encode(mut e)
+        self.1.encode(mut e)
+        self.2.encode(mut e)
+        self.3.encode(mut e)
+        self.4.encode(mut e)
     }
 }
 
@@ -688,12 +688,12 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5> Decode<A> for (T0, T1, T2, T3, T4, T5)
 {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
         (
-            T0::decode(d),
-            T1::decode(d),
-            T2::decode(d),
-            T3::decode(d),
-            T4::decode(d),
-            T5::decode(d),
+            T0::decode(mut d),
+            T1::decode(mut d),
+            T2::decode(mut d),
+            T3::decode(mut d),
+            T4::decode(mut d),
+            T5::decode(mut d),
         )
     }
 }
@@ -702,12 +702,12 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5> Encode<A> for (T0, T1, T2, T3, T4, T5)
     where T0: Encode<A>, T1: Encode<A>, T2: Encode<A>, T3: Encode<A>, T4: Encode<A>, T5: Encode<A>
 {
     fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) {
-        self.0.encode(e)
-        self.1.encode(e)
-        self.2.encode(e)
-        self.3.encode(e)
-        self.4.encode(e)
-        self.5.encode(e)
+        self.0.encode(mut e)
+        self.1.encode(mut e)
+        self.2.encode(mut e)
+        self.3.encode(mut e)
+        self.4.encode(mut e)
+        self.5.encode(mut e)
     }
 }
 
@@ -716,13 +716,13 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6> Decode<A> for (T0, T1, T2, T3, T4, T5, 
 {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
         (
-            T0::decode(d),
-            T1::decode(d),
-            T2::decode(d),
-            T3::decode(d),
-            T4::decode(d),
-            T5::decode(d),
-            T6::decode(d),
+            T0::decode(mut d),
+            T1::decode(mut d),
+            T2::decode(mut d),
+            T3::decode(mut d),
+            T4::decode(mut d),
+            T5::decode(mut d),
+            T6::decode(mut d),
         )
     }
 }
@@ -731,13 +731,13 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6> Encode<A> for (T0, T1, T2, T3, T4, T5, 
     where T0: Encode<A>, T1: Encode<A>, T2: Encode<A>, T3: Encode<A>, T4: Encode<A>, T5: Encode<A>, T6: Encode<A>
 {
     fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) {
-        self.0.encode(e)
-        self.1.encode(e)
-        self.2.encode(e)
-        self.3.encode(e)
-        self.4.encode(e)
-        self.5.encode(e)
-        self.6.encode(e)
+        self.0.encode(mut e)
+        self.1.encode(mut e)
+        self.2.encode(mut e)
+        self.3.encode(mut e)
+        self.4.encode(mut e)
+        self.5.encode(mut e)
+        self.6.encode(mut e)
     }
 }
 
@@ -746,14 +746,14 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7> Decode<A> for (T0, T1, T2, T3, T4, 
 {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
         (
-            T0::decode(d),
-            T1::decode(d),
-            T2::decode(d),
-            T3::decode(d),
-            T4::decode(d),
-            T5::decode(d),
-            T6::decode(d),
-            T7::decode(d),
+            T0::decode(mut d),
+            T1::decode(mut d),
+            T2::decode(mut d),
+            T3::decode(mut d),
+            T4::decode(mut d),
+            T5::decode(mut d),
+            T6::decode(mut d),
+            T7::decode(mut d),
         )
     }
 }
@@ -762,14 +762,14 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7> Encode<A> for (T0, T1, T2, T3, T4, 
     where T0: Encode<A>, T1: Encode<A>, T2: Encode<A>, T3: Encode<A>, T4: Encode<A>, T5: Encode<A>, T6: Encode<A>, T7: Encode<A>
 {
     fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) {
-        self.0.encode(e)
-        self.1.encode(e)
-        self.2.encode(e)
-        self.3.encode(e)
-        self.4.encode(e)
-        self.5.encode(e)
-        self.6.encode(e)
-        self.7.encode(e)
+        self.0.encode(mut e)
+        self.1.encode(mut e)
+        self.2.encode(mut e)
+        self.3.encode(mut e)
+        self.4.encode(mut e)
+        self.5.encode(mut e)
+        self.6.encode(mut e)
+        self.7.encode(mut e)
     }
 }
 
@@ -778,15 +778,15 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8> Decode<A> for (T0, T1, T2, T3, 
 {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
         (
-            T0::decode(d),
-            T1::decode(d),
-            T2::decode(d),
-            T3::decode(d),
-            T4::decode(d),
-            T5::decode(d),
-            T6::decode(d),
-            T7::decode(d),
-            T8::decode(d),
+            T0::decode(mut d),
+            T1::decode(mut d),
+            T2::decode(mut d),
+            T3::decode(mut d),
+            T4::decode(mut d),
+            T5::decode(mut d),
+            T6::decode(mut d),
+            T7::decode(mut d),
+            T8::decode(mut d),
         )
     }
 }
@@ -795,15 +795,15 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8> Encode<A> for (T0, T1, T2, T3, 
     where T0: Encode<A>, T1: Encode<A>, T2: Encode<A>, T3: Encode<A>, T4: Encode<A>, T5: Encode<A>, T6: Encode<A>, T7: Encode<A>, T8: Encode<A>
 {
     fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) {
-        self.0.encode(e)
-        self.1.encode(e)
-        self.2.encode(e)
-        self.3.encode(e)
-        self.4.encode(e)
-        self.5.encode(e)
-        self.6.encode(e)
-        self.7.encode(e)
-        self.8.encode(e)
+        self.0.encode(mut e)
+        self.1.encode(mut e)
+        self.2.encode(mut e)
+        self.3.encode(mut e)
+        self.4.encode(mut e)
+        self.5.encode(mut e)
+        self.6.encode(mut e)
+        self.7.encode(mut e)
+        self.8.encode(mut e)
     }
 }
 
@@ -813,16 +813,16 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9> Decode<A>
 {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
         (
-            T0::decode(d),
-            T1::decode(d),
-            T2::decode(d),
-            T3::decode(d),
-            T4::decode(d),
-            T5::decode(d),
-            T6::decode(d),
-            T7::decode(d),
-            T8::decode(d),
-            T9::decode(d),
+            T0::decode(mut d),
+            T1::decode(mut d),
+            T2::decode(mut d),
+            T3::decode(mut d),
+            T4::decode(mut d),
+            T5::decode(mut d),
+            T6::decode(mut d),
+            T7::decode(mut d),
+            T8::decode(mut d),
+            T9::decode(mut d),
         )
     }
 }
@@ -832,16 +832,16 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9> Encode<A>
     where T0: Encode<A>, T1: Encode<A>, T2: Encode<A>, T3: Encode<A>, T4: Encode<A>, T5: Encode<A>, T6: Encode<A>, T7: Encode<A>, T8: Encode<A>, T9: Encode<A>
 {
     fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) {
-        self.0.encode(e)
-        self.1.encode(e)
-        self.2.encode(e)
-        self.3.encode(e)
-        self.4.encode(e)
-        self.5.encode(e)
-        self.6.encode(e)
-        self.7.encode(e)
-        self.8.encode(e)
-        self.9.encode(e)
+        self.0.encode(mut e)
+        self.1.encode(mut e)
+        self.2.encode(mut e)
+        self.3.encode(mut e)
+        self.4.encode(mut e)
+        self.5.encode(mut e)
+        self.6.encode(mut e)
+        self.7.encode(mut e)
+        self.8.encode(mut e)
+        self.9.encode(mut e)
     }
 }
 
@@ -851,17 +851,17 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10> Decode<A>
 {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
         (
-            T0::decode(d),
-            T1::decode(d),
-            T2::decode(d),
-            T3::decode(d),
-            T4::decode(d),
-            T5::decode(d),
-            T6::decode(d),
-            T7::decode(d),
-            T8::decode(d),
-            T9::decode(d),
-            T10::decode(d),
+            T0::decode(mut d),
+            T1::decode(mut d),
+            T2::decode(mut d),
+            T3::decode(mut d),
+            T4::decode(mut d),
+            T5::decode(mut d),
+            T6::decode(mut d),
+            T7::decode(mut d),
+            T8::decode(mut d),
+            T9::decode(mut d),
+            T10::decode(mut d),
         )
     }
 }
@@ -871,17 +871,17 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10> Encode<A>
     where T0: Encode<A>, T1: Encode<A>, T2: Encode<A>, T3: Encode<A>, T4: Encode<A>, T5: Encode<A>, T6: Encode<A>, T7: Encode<A>, T8: Encode<A>, T9: Encode<A>, T10: Encode<A>
 {
     fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) {
-        self.0.encode(e)
-        self.1.encode(e)
-        self.2.encode(e)
-        self.3.encode(e)
-        self.4.encode(e)
-        self.5.encode(e)
-        self.6.encode(e)
-        self.7.encode(e)
-        self.8.encode(e)
-        self.9.encode(e)
-        self.10.encode(e)
+        self.0.encode(mut e)
+        self.1.encode(mut e)
+        self.2.encode(mut e)
+        self.3.encode(mut e)
+        self.4.encode(mut e)
+        self.5.encode(mut e)
+        self.6.encode(mut e)
+        self.7.encode(mut e)
+        self.8.encode(mut e)
+        self.9.encode(mut e)
+        self.10.encode(mut e)
     }
 }
 
@@ -891,18 +891,18 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11> Decode<A>
 {
     fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
         (
-            T0::decode(d),
-            T1::decode(d),
-            T2::decode(d),
-            T3::decode(d),
-            T4::decode(d),
-            T5::decode(d),
-            T6::decode(d),
-            T7::decode(d),
-            T8::decode(d),
-            T9::decode(d),
-            T10::decode(d),
-            T11::decode(d),
+            T0::decode(mut d),
+            T1::decode(mut d),
+            T2::decode(mut d),
+            T3::decode(mut d),
+            T4::decode(mut d),
+            T5::decode(mut d),
+            T6::decode(mut d),
+            T7::decode(mut d),
+            T8::decode(mut d),
+            T9::decode(mut d),
+            T10::decode(mut d),
+            T11::decode(mut d),
         )
     }
 }
@@ -912,17 +912,17 @@ impl<A: Abi, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11> Encode<A>
     where T0: Encode<A>, T1: Encode<A>, T2: Encode<A>, T3: Encode<A>, T4: Encode<A>, T5: Encode<A>, T6: Encode<A>, T7: Encode<A>, T8: Encode<A>, T9: Encode<A>, T10: Encode<A>, T11: Encode<A>
 {
     fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) {
-        self.0.encode(e)
-        self.1.encode(e)
-        self.2.encode(e)
-        self.3.encode(e)
-        self.4.encode(e)
-        self.5.encode(e)
-        self.6.encode(e)
-        self.7.encode(e)
-        self.8.encode(e)
-        self.9.encode(e)
-        self.10.encode(e)
-        self.11.encode(e)
+        self.0.encode(mut e)
+        self.1.encode(mut e)
+        self.2.encode(mut e)
+        self.3.encode(mut e)
+        self.4.encode(mut e)
+        self.5.encode(mut e)
+        self.6.encode(mut e)
+        self.7.encode(mut e)
+        self.8.encode(mut e)
+        self.9.encode(mut e)
+        self.10.encode(mut e)
+        self.11.encode(mut e)
     }
 }

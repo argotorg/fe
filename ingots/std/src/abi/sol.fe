@@ -174,7 +174,12 @@ impl AbiEncoder<Sol> for SolEncoder {
     }
 
     fn reserve_head(mut self, bytes: u256) -> u256 {
-        self.ensure_init(bytes)
+        if self.start == 0 {
+            let ptr = mem::alloc(bytes)
+            self.start = ptr
+            self.pos = ptr
+            self.end = ptr + bytes
+        }
         self.start
     }
 

@@ -1,5 +1,6 @@
 ---
 source: crates/mir/tests/lowering_snapshots.rs
+assertion_line: 26
 expression: mir_output
 ---
 fn bump_lock__StorPtr_u256___64779554cfbf0358(v0: u256) -> ():
@@ -106,11 +107,11 @@ fn runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805
     v4: u32 = sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_selector_from_prefix(v3)
     ret v4
 
-fn runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2(v0: Self) -> SolDecoder<CallData>:
+fn runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2(v0: mut Self) -> SolDecoder<CallData>:
   bb0:
-    v1: CallData = evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input(v0)
-    v2: SolDecoder<CallData> = sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v1, 4)
-    ret v2
+    v2: CallData = evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input(())
+    v3: SolDecoder<CallData> = sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v2, 4)
+    ret v3
 
 fn enter_h591c597fc9aaddcc_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966(v0: D) -> Enter:
   bb0:

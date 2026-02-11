@@ -72,15 +72,22 @@ fn format_method_param_ty<'db>(
     ty: TyId<'db>,
 ) -> String {
     let ty = ty.pretty_print(db).to_string();
-    let mode = match callable {
-        CallableDef::Func(func) => func.params(db).nth(param_idx).map(|param| param.mode(db)),
+    let Some(param) = (match callable {
+        CallableDef::Func(func) => func.params(db).nth(param_idx),
         CallableDef::VariantCtor(_) => None,
+    }) else {
+        return ty;
     };
 
-    match mode {
-        Some(FuncParamMode::Own) => format!("own {ty}"),
-        Some(FuncParamMode::View) | None => ty,
+    let mut rendered = String::new();
+    if param.is_mut(db) {
+        rendered.push_str("mut ");
     }
+    if param.mode(db) == FuncParamMode::Own && !ty.starts_with("own ") {
+        rendered.push_str("own ");
+    }
+    rendered.push_str(&ty);
+    rendered
 }
 
 /// All diagnostics accumulated in salsa-db should implement
