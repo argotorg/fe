@@ -1,11 +1,13 @@
 use hir::analysis::HirAnalysisDb;
 use hir::analysis::ty::ty_def::TyId;
+use hir::hir_def::EnumVariant;
 use hir::projection::Projection;
 
 use crate::core_lib::CoreLib;
 use crate::ir::{
-    AddressSpaceKind, LocalData, LocalId, MirBackend, MirBody, MirInst, MirProjectionPath,
-    MirStage, Place, Rvalue, SourceInfoId, ValueData, ValueId, ValueOrigin, ValueRepr,
+    AddressSpaceKind, BasicBlock, LocalData, LocalId, MirBackend, MirBody, MirInst,
+    MirProjectionPath, MirStage, Place, Rvalue, SourceInfoId, ValueData, ValueId, ValueOrigin,
+    ValueRepr,
 };
 use crate::{layout, repr};
 
@@ -96,6 +98,584 @@ fn value_spill_owner<'db>(
             }
             _ => return None,
         }
+    }
+}
+
+fn compute_owner_for_spill_local<'db>(
+    blocks: &[BasicBlock<'db>],
+    values: &[ValueData<'db>],
+    mut owner_for_spill_local: Vec<Option<LocalId>>,
+) -> Vec<Option<LocalId>> {
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for block in blocks {
+            for inst in &block.insts {
+                let MirInst::Assign {
+                    dest: Some(dest),
+                    rvalue: Rvalue::Value(value),
+                    ..
+                } = inst
+                else {
+                    continue;
+                };
+                if owner_for_spill_local
+                    .get(dest.index())
+                    .copied()
+                    .flatten()
+                    .is_some()
+                {
+                    continue;
+                }
+                let Some(owner) = value_spill_owner(values, &owner_for_spill_local, *value) else {
+                    continue;
+                };
+                owner_for_spill_local[dest.index()] = Some(owner);
+                changed = true;
+            }
+        }
+    }
+    owner_for_spill_local
+}
+
+struct LowerReprCtx<'db, 'a> {
+    db: &'db dyn HirAnalysisDb,
+    core: &'a CoreLib<'db>,
+    values: &'a mut Vec<ValueData<'db>>,
+    locals: &'a [LocalData<'db>],
+    spill_local_for_owner: &'a [Option<LocalId>],
+    owner_for_spill_local: &'a [Option<LocalId>],
+    spill_addr_value_for_owner: &'a [Option<ValueId>],
+}
+
+impl<'db, 'a> LowerReprCtx<'db, 'a> {
+    fn local_repr(&self, local: LocalId) -> ValueRepr {
+        repr_for_plain_ty(
+            self.db,
+            self.core,
+            self.locals[local.index()].ty,
+            self.locals[local.index()].address_space,
+        )
+    }
+
+    fn has_spill_slot(&self, local: LocalId) -> bool {
+        self.spill_local_for_owner
+            .get(local.index())
+            .copied()
+            .flatten()
+            .is_some()
+            && !layout::is_zero_sized_ty(self.db, self.locals[local.index()].ty)
+    }
+
+    fn spill_base_for_owner(&self, owner: LocalId) -> Option<ValueId> {
+        self.spill_addr_value_for_owner
+            .get(owner.index())
+            .copied()
+            .flatten()
+    }
+
+    fn owner_for_place_base(&self, base: ValueId) -> Option<LocalId> {
+        place_base_spill_owner(self.values, self.owner_for_spill_local, base)
+    }
+
+    fn emit_spill_sync_for_local(&mut self, local: LocalId) -> Option<MirInst<'db>> {
+        if !self.has_spill_slot(local) {
+            return None;
+        }
+        let spill_base = self.spill_base_for_owner(local).expect(
+            "spill slot must have a spill base address value (repr pass invariant violated)",
+        );
+        let value = alloc_value(
+            self.values,
+            ValueData {
+                ty: self.locals[local.index()].ty,
+                origin: ValueOrigin::Local(local),
+                source: SourceInfoId::SYNTHETIC,
+                repr: self.local_repr(local),
+            },
+        );
+        Some(MirInst::Store {
+            source: SourceInfoId::SYNTHETIC,
+            place: Place::new(spill_base, MirProjectionPath::new()),
+            value,
+        })
+    }
+
+    fn emit_local_reload_from_spill(&self, local: LocalId) -> Option<MirInst<'db>> {
+        let spill_base = self.spill_base_for_owner(local)?;
+        let update_place = Place::new(spill_base, MirProjectionPath::new());
+        Some(MirInst::Assign {
+            source: SourceInfoId::SYNTHETIC,
+            dest: Some(local),
+            rvalue: Rvalue::Load {
+                place: update_place,
+            },
+        })
+    }
+
+    fn emit_owner_reload_for_place_base(&self, base: ValueId) -> Option<MirInst<'db>> {
+        let owner = self.owner_for_place_base(base)?;
+        self.emit_local_reload_from_spill(owner)
+    }
+
+    fn emit_owner_refresh_after_store(
+        &self,
+        place: &Place<'db>,
+        value: ValueId,
+    ) -> Option<MirInst<'db>> {
+        let owner = self.owner_for_place_base(place.base)?;
+        let spill_base = self.spill_base_for_owner(owner)?;
+        if place.projection.is_empty()
+            && self.locals[owner.index()].ty == self.values[value.index()].ty
+        {
+            return Some(MirInst::Assign {
+                source: SourceInfoId::SYNTHETIC,
+                dest: Some(owner),
+                rvalue: Rvalue::Value(value),
+            });
+        }
+        let update_place = Place::new(spill_base, MirProjectionPath::new());
+        Some(MirInst::Assign {
+            source: SourceInfoId::SYNTHETIC,
+            dest: Some(owner),
+            rvalue: Rvalue::Load {
+                place: update_place,
+            },
+        })
+    }
+
+    fn rewrite_assign_load(
+        &mut self,
+        source: SourceInfoId,
+        dest: Option<LocalId>,
+        place: Place<'db>,
+        out: &mut Vec<MirInst<'db>>,
+    ) {
+        let loaded_ty = dest
+            .map(|dest| self.locals[dest.index()].ty)
+            .unwrap_or(self.values[place.base.index()].ty);
+        let base_ty = self.values[place.base.index()].ty;
+
+        // Loading a transparent field-0 projection from a non-by-ref base is a
+        // representation-preserving cast, not a memory read.
+        if !place.projection.is_empty()
+            && loaded_ty.as_capability(self.db).is_some()
+            && !self.values[place.base.index()].repr.is_ref()
+            && resolve_place_root_local(self.values, place.base).is_none()
+            && let Some(projected_ty) =
+                apply_transparent_field0_chain(self.db, base_ty, &place.projection)
+            && projected_ty == loaded_ty
+        {
+            let base_repr = self.values[place.base.index()].repr;
+            let loaded_value = if loaded_ty == base_ty {
+                place.base
+            } else {
+                alloc_value(
+                    self.values,
+                    ValueData {
+                        ty: loaded_ty,
+                        origin: ValueOrigin::TransparentCast { value: place.base },
+                        source: SourceInfoId::SYNTHETIC,
+                        repr: base_repr,
+                    },
+                )
+            };
+            out.push(MirInst::Assign {
+                source,
+                dest,
+                rvalue: Rvalue::Value(loaded_value),
+            });
+            return;
+        }
+
+        if let Some(local) = resolve_place_root_local(self.values, place.base) {
+            let Some(projected_ty) =
+                apply_transparent_field0_chain(self.db, base_ty, &place.projection)
+            else {
+                let Some(spill_base) = self.spill_base_for_owner(local) else {
+                    out.push(MirInst::Assign {
+                        source,
+                        dest,
+                        rvalue: Rvalue::Load { place },
+                    });
+                    return;
+                };
+                out.push(MirInst::Assign {
+                    source,
+                    dest,
+                    rvalue: Rvalue::Load {
+                        place: Place::new(spill_base, place.projection),
+                    },
+                });
+                return;
+            };
+
+            if projected_ty != loaded_ty {
+                let Some(spill_base) = self.spill_base_for_owner(local) else {
+                    out.push(MirInst::Assign {
+                        source,
+                        dest,
+                        rvalue: Rvalue::Load { place },
+                    });
+                    return;
+                };
+                out.push(MirInst::Assign {
+                    source,
+                    dest,
+                    rvalue: Rvalue::Load {
+                        place: Place::new(spill_base, place.projection),
+                    },
+                });
+                return;
+            }
+
+            let local_value = alloc_value(
+                self.values,
+                ValueData {
+                    ty: base_ty,
+                    origin: ValueOrigin::Local(local),
+                    source: SourceInfoId::SYNTHETIC,
+                    repr: self.local_repr(local),
+                },
+            );
+            let loaded_value = if loaded_ty == base_ty {
+                local_value
+            } else {
+                alloc_value(
+                    self.values,
+                    ValueData {
+                        ty: loaded_ty,
+                        origin: ValueOrigin::TransparentCast { value: local_value },
+                        source: SourceInfoId::SYNTHETIC,
+                        repr: self.local_repr(local),
+                    },
+                )
+            };
+            out.push(MirInst::Assign {
+                source,
+                dest,
+                rvalue: Rvalue::Value(loaded_value),
+            });
+            return;
+        }
+
+        out.push(MirInst::Assign {
+            source,
+            dest,
+            rvalue: Rvalue::Load { place },
+        });
+        if let Some(dest) = dest
+            && let Some(spill_sync) = self.emit_spill_sync_for_local(dest)
+        {
+            out.push(spill_sync);
+        }
+    }
+
+    fn rewrite_assign_spill_dest(
+        &mut self,
+        source: SourceInfoId,
+        dest: LocalId,
+        rvalue: Rvalue<'db>,
+        out: &mut Vec<MirInst<'db>>,
+    ) {
+        out.push(MirInst::Assign {
+            source,
+            dest: Some(dest),
+            rvalue: rvalue.clone(),
+        });
+        if let Some(spill_sync) = self.emit_spill_sync_for_local(dest) {
+            out.push(spill_sync);
+        }
+    }
+
+    fn rewrite_assign_generic(
+        &mut self,
+        source: SourceInfoId,
+        dest: Option<LocalId>,
+        rvalue: Rvalue<'db>,
+        out: &mut Vec<MirInst<'db>>,
+    ) {
+        let rvalue = match rvalue {
+            Rvalue::Value(value) => {
+                rewrite_place_root_value(self.db, self.core, self.values, self.locals, value)
+                    .map(Rvalue::Value)
+                    .unwrap_or(Rvalue::Value(value))
+            }
+            Rvalue::Call(mut call) => {
+                for value in call.args.iter_mut().chain(call.effect_args.iter_mut()) {
+                    if let Some(rewritten) = rewrite_place_root_value(
+                        self.db,
+                        self.core,
+                        self.values,
+                        self.locals,
+                        *value,
+                    ) {
+                        *value = rewritten;
+                    }
+                }
+                Rvalue::Call(call)
+            }
+            Rvalue::Intrinsic { op, mut args } => {
+                for value in &mut args {
+                    if let Some(rewritten) = rewrite_place_root_value(
+                        self.db,
+                        self.core,
+                        self.values,
+                        self.locals,
+                        *value,
+                    ) {
+                        *value = rewritten;
+                    }
+                }
+                Rvalue::Intrinsic { op, args }
+            }
+            other => other,
+        };
+        out.push(MirInst::Assign {
+            source,
+            dest,
+            rvalue,
+        });
+    }
+
+    fn rewrite_store_inst(
+        &mut self,
+        source: SourceInfoId,
+        place: Place<'db>,
+        value: ValueId,
+        out: &mut Vec<MirInst<'db>>,
+    ) {
+        if let Some(local) = resolve_place_root_local(self.values, place.base) {
+            let local_ty = self.locals[local.index()].ty;
+            let local_place_ty = local_ty
+                .as_capability(self.db)
+                .map(|(_, inner)| inner)
+                .unwrap_or(local_ty);
+
+            if place.projection.is_empty() {
+                out.push(MirInst::Assign {
+                    source,
+                    dest: Some(local),
+                    rvalue: Rvalue::Value(value),
+                });
+                if let Some(spill_sync) = self.emit_spill_sync_for_local(local) {
+                    out.push(spill_sync);
+                }
+                return;
+            }
+
+            if let Some(projected_ty) =
+                apply_transparent_field0_chain(self.db, local_place_ty, &place.projection)
+            {
+                let stored_place_value = if self.values[value.index()].ty == local_place_ty {
+                    Some(value)
+                } else if self.values[value.index()].ty == projected_ty {
+                    Some(alloc_value(
+                        self.values,
+                        ValueData {
+                            ty: local_place_ty,
+                            origin: ValueOrigin::TransparentCast { value },
+                            source: SourceInfoId::SYNTHETIC,
+                            repr: repr_for_plain_ty(
+                                self.db,
+                                self.core,
+                                local_place_ty,
+                                self.locals[local.index()].address_space,
+                            ),
+                        },
+                    ))
+                } else {
+                    None
+                };
+
+                if let Some(stored_place_value) = stored_place_value {
+                    let assign_value = if local_ty == local_place_ty {
+                        stored_place_value
+                    } else {
+                        alloc_value(
+                            self.values,
+                            ValueData {
+                                ty: local_ty,
+                                origin: ValueOrigin::TransparentCast {
+                                    value: stored_place_value,
+                                },
+                                source: SourceInfoId::SYNTHETIC,
+                                repr: self.local_repr(local),
+                            },
+                        )
+                    };
+                    out.push(MirInst::Assign {
+                        source,
+                        dest: Some(local),
+                        rvalue: Rvalue::Value(assign_value),
+                    });
+                    if let Some(spill_sync) = self.emit_spill_sync_for_local(local) {
+                        out.push(spill_sync);
+                    }
+                    return;
+                }
+            }
+
+            let Some(spill_base) = self.spill_base_for_owner(local) else {
+                out.push(MirInst::Store {
+                    source,
+                    place,
+                    value,
+                });
+                return;
+            };
+            out.push(MirInst::Store {
+                source,
+                place: Place::new(spill_base, place.projection),
+                value,
+            });
+            if let Some(reload) = self.emit_local_reload_from_spill(local) {
+                out.push(reload);
+            }
+            return;
+        }
+
+        out.push(MirInst::Store {
+            source,
+            place: place.clone(),
+            value,
+        });
+        if let Some(refresh) = self.emit_owner_refresh_after_store(&place, value) {
+            out.push(refresh);
+        }
+    }
+
+    fn rewrite_init_aggregate_inst(
+        &mut self,
+        source: SourceInfoId,
+        place: Place<'db>,
+        inits: Vec<(MirProjectionPath<'db>, ValueId)>,
+        out: &mut Vec<MirInst<'db>>,
+    ) {
+        if let Some(local) = resolve_place_root_local(self.values, place.base) {
+            let Some(spill_base) = self.spill_base_for_owner(local) else {
+                out.push(MirInst::InitAggregate {
+                    source,
+                    place,
+                    inits,
+                });
+                return;
+            };
+            out.push(MirInst::InitAggregate {
+                source,
+                place: Place::new(spill_base, place.projection),
+                inits,
+            });
+            if let Some(reload) = self.emit_local_reload_from_spill(local) {
+                out.push(reload);
+            }
+            return;
+        }
+
+        out.push(MirInst::InitAggregate {
+            source,
+            place: place.clone(),
+            inits,
+        });
+        if let Some(reload) = self.emit_owner_reload_for_place_base(place.base) {
+            out.push(reload);
+        }
+    }
+
+    fn rewrite_set_discriminant_inst(
+        &mut self,
+        source: SourceInfoId,
+        place: Place<'db>,
+        variant: EnumVariant<'db>,
+        out: &mut Vec<MirInst<'db>>,
+    ) {
+        if let Some(local) = resolve_place_root_local(self.values, place.base) {
+            let Some(spill_base) = self.spill_base_for_owner(local) else {
+                out.push(MirInst::SetDiscriminant {
+                    source,
+                    place,
+                    variant,
+                });
+                return;
+            };
+            out.push(MirInst::SetDiscriminant {
+                source,
+                place: Place::new(spill_base, place.projection),
+                variant,
+            });
+            if let Some(reload) = self.emit_local_reload_from_spill(local) {
+                out.push(reload);
+            }
+            return;
+        }
+
+        out.push(MirInst::SetDiscriminant {
+            source,
+            place: place.clone(),
+            variant,
+        });
+        if let Some(reload) = self.emit_owner_reload_for_place_base(place.base) {
+            out.push(reload);
+        }
+    }
+
+    fn rewrite_bind_value_inst(
+        &mut self,
+        source: SourceInfoId,
+        value: ValueId,
+        out: &mut Vec<MirInst<'db>>,
+    ) {
+        let value = rewrite_place_root_value(self.db, self.core, self.values, self.locals, value)
+            .unwrap_or(value);
+        out.push(MirInst::BindValue { source, value });
+    }
+
+    fn rewrite_inst(&mut self, inst: MirInst<'db>, out: &mut Vec<MirInst<'db>>) {
+        match inst {
+            MirInst::Assign {
+                source,
+                dest,
+                rvalue: Rvalue::Load { place },
+            } => self.rewrite_assign_load(source, dest, place, out),
+            MirInst::Assign {
+                source,
+                dest: Some(dest),
+                rvalue,
+            } if self.has_spill_slot(dest) => {
+                self.rewrite_assign_spill_dest(source, dest, rvalue, out)
+            }
+            MirInst::Assign {
+                source,
+                dest,
+                rvalue,
+            } => self.rewrite_assign_generic(source, dest, rvalue, out),
+            MirInst::Store {
+                source,
+                place,
+                value,
+            } => self.rewrite_store_inst(source, place, value, out),
+            MirInst::InitAggregate {
+                source,
+                place,
+                inits,
+            } => self.rewrite_init_aggregate_inst(source, place, inits, out),
+            MirInst::SetDiscriminant {
+                source,
+                place,
+                variant,
+            } => self.rewrite_set_discriminant_inst(source, place, variant, out),
+            MirInst::BindValue { source, value } => {
+                self.rewrite_bind_value_inst(source, value, out)
+            }
+        }
+    }
+
+    fn rewrite_block(&mut self, block: &mut BasicBlock<'db>) {
+        let mut rewritten = Vec::with_capacity(block.insts.len());
+        for inst in std::mem::take(&mut block.insts) {
+            self.rewrite_inst(inst, &mut rewritten);
+        }
+        block.insts = rewritten;
     }
 }
 
@@ -439,624 +1019,23 @@ pub(crate) fn lower_capability_to_repr<'db>(
         body.values[idx].origin = new_origin;
     }
 
-    let owner_for_spill_local = {
-        let mut owner_for_spill_local = owner_for_spill_local;
-        let mut changed = true;
-        while changed {
-            changed = false;
-            for block in &body.blocks {
-                for inst in &block.insts {
-                    let MirInst::Assign {
-                        dest: Some(dest),
-                        rvalue: Rvalue::Value(value),
-                        ..
-                    } = inst
-                    else {
-                        continue;
-                    };
-                    if owner_for_spill_local
-                        .get(dest.index())
-                        .copied()
-                        .flatten()
-                        .is_some()
-                    {
-                        continue;
-                    }
-                    let Some(owner) =
-                        value_spill_owner(&body.values, &owner_for_spill_local, *value)
-                    else {
-                        continue;
-                    };
-                    owner_for_spill_local[dest.index()] = Some(owner);
-                    changed = true;
-                }
-            }
+    let owner_for_spill_local =
+        compute_owner_for_spill_local(&body.blocks, &body.values, owner_for_spill_local);
+
+    {
+        let (blocks, values, locals) = (&mut body.blocks, &mut body.values, &body.locals);
+        let mut ctx = LowerReprCtx {
+            db,
+            core,
+            values,
+            locals,
+            spill_local_for_owner: &spill_local_for_owner,
+            owner_for_spill_local: &owner_for_spill_local,
+            spill_addr_value_for_owner: &spill_addr_value_for_owner,
+        };
+        for block in blocks {
+            ctx.rewrite_block(block);
         }
-        owner_for_spill_local
-    };
-
-    let (blocks, values, locals) = (&mut body.blocks, &mut body.values, &body.locals);
-    for block in blocks {
-        let mut rewritten: Vec<MirInst<'db>> = Vec::with_capacity(block.insts.len());
-        for inst in std::mem::take(&mut block.insts) {
-            match inst {
-                MirInst::Assign {
-                    source,
-                    dest,
-                    rvalue: Rvalue::Load { place },
-                } => {
-                    let loaded_ty = dest
-                        .map(|dest| locals[dest.index()].ty)
-                        .unwrap_or(values[place.base.index()].ty);
-                    let base_ty = values[place.base.index()].ty;
-
-                    // Loading a transparent field-0 projection from a non-by-ref base is a
-                    // representation-preserving cast, not a memory read.
-                    if !place.projection.is_empty()
-                        && loaded_ty.as_capability(db).is_some()
-                        && !values[place.base.index()].repr.is_ref()
-                        && resolve_place_root_local(values, place.base).is_none()
-                        && let Some(projected_ty) =
-                            apply_transparent_field0_chain(db, base_ty, &place.projection)
-                        && projected_ty == loaded_ty
-                    {
-                        let base_repr = values[place.base.index()].repr;
-                        let loaded_value = if loaded_ty == base_ty {
-                            place.base
-                        } else {
-                            alloc_value(
-                                values,
-                                ValueData {
-                                    ty: loaded_ty,
-                                    origin: ValueOrigin::TransparentCast { value: place.base },
-                                    source: SourceInfoId::SYNTHETIC,
-                                    repr: base_repr,
-                                },
-                            )
-                        };
-                        rewritten.push(MirInst::Assign {
-                            source,
-                            dest,
-                            rvalue: Rvalue::Value(loaded_value),
-                        });
-                        continue;
-                    }
-
-                    if let Some(local) = resolve_place_root_local(values, place.base) {
-                        let Some(projected_ty) =
-                            apply_transparent_field0_chain(db, base_ty, &place.projection)
-                        else {
-                            let Some(spill_base) = spill_addr_value_for_owner
-                                .get(local.index())
-                                .copied()
-                                .flatten()
-                            else {
-                                rewritten.push(MirInst::Assign {
-                                    source,
-                                    dest,
-                                    rvalue: Rvalue::Load { place },
-                                });
-                                continue;
-                            };
-                            rewritten.push(MirInst::Assign {
-                                source,
-                                dest,
-                                rvalue: Rvalue::Load {
-                                    place: Place::new(spill_base, place.projection),
-                                },
-                            });
-                            continue;
-                        };
-
-                        if projected_ty != loaded_ty {
-                            let Some(spill_base) = spill_addr_value_for_owner
-                                .get(local.index())
-                                .copied()
-                                .flatten()
-                            else {
-                                rewritten.push(MirInst::Assign {
-                                    source,
-                                    dest,
-                                    rvalue: Rvalue::Load { place },
-                                });
-                                continue;
-                            };
-                            rewritten.push(MirInst::Assign {
-                                source,
-                                dest,
-                                rvalue: Rvalue::Load {
-                                    place: Place::new(spill_base, place.projection),
-                                },
-                            });
-                            continue;
-                        }
-
-                        let local_repr = repr_for_plain_ty(
-                            db,
-                            core,
-                            locals[local.index()].ty,
-                            locals[local.index()].address_space,
-                        );
-                        let local_value = alloc_value(
-                            values,
-                            ValueData {
-                                ty: base_ty,
-                                origin: ValueOrigin::Local(local),
-                                source: SourceInfoId::SYNTHETIC,
-                                repr: local_repr,
-                            },
-                        );
-                        let loaded_value = if loaded_ty == base_ty {
-                            local_value
-                        } else {
-                            alloc_value(
-                                values,
-                                ValueData {
-                                    ty: loaded_ty,
-                                    origin: ValueOrigin::TransparentCast { value: local_value },
-                                    source: SourceInfoId::SYNTHETIC,
-                                    repr: local_repr,
-                                },
-                            )
-                        };
-
-                        rewritten.push(MirInst::Assign {
-                            source,
-                            dest,
-                            rvalue: Rvalue::Value(loaded_value),
-                        });
-                        continue;
-                    }
-
-                    rewritten.push(MirInst::Assign {
-                        source,
-                        dest,
-                        rvalue: Rvalue::Load { place },
-                    });
-
-                    if let Some(dest) = dest
-                        && spill_local_for_owner
-                            .get(dest.index())
-                            .copied()
-                            .flatten()
-                            .is_some()
-                        && !layout::is_zero_sized_ty(db, locals[dest.index()].ty)
-                    {
-                        let spill_base = spill_addr_value_for_owner[dest.index()].unwrap();
-                        let repr = repr_for_plain_ty(
-                            db,
-                            core,
-                            locals[dest.index()].ty,
-                            locals[dest.index()].address_space,
-                        );
-                        let value = alloc_value(
-                            values,
-                            ValueData {
-                                ty: locals[dest.index()].ty,
-                                origin: ValueOrigin::Local(dest),
-                                source: SourceInfoId::SYNTHETIC,
-                                repr,
-                            },
-                        );
-                        rewritten.push(MirInst::Store {
-                            source: SourceInfoId::SYNTHETIC,
-                            place: Place::new(spill_base, MirProjectionPath::new()),
-                            value,
-                        });
-                    }
-                }
-                MirInst::Assign {
-                    source,
-                    dest: Some(dest),
-                    rvalue,
-                } if spill_local_for_owner
-                    .get(dest.index())
-                    .copied()
-                    .flatten()
-                    .is_some()
-                    && !layout::is_zero_sized_ty(db, locals[dest.index()].ty) =>
-                {
-                    rewritten.push(MirInst::Assign {
-                        source,
-                        dest: Some(dest),
-                        rvalue: rvalue.clone(),
-                    });
-                    let spill_base = spill_addr_value_for_owner[dest.index()].unwrap();
-                    let repr = repr_for_plain_ty(
-                        db,
-                        core,
-                        locals[dest.index()].ty,
-                        locals[dest.index()].address_space,
-                    );
-                    let value = alloc_value(
-                        values,
-                        ValueData {
-                            ty: locals[dest.index()].ty,
-                            origin: ValueOrigin::Local(dest),
-                            source: SourceInfoId::SYNTHETIC,
-                            repr,
-                        },
-                    );
-                    rewritten.push(MirInst::Store {
-                        source: SourceInfoId::SYNTHETIC,
-                        place: Place::new(spill_base, MirProjectionPath::new()),
-                        value,
-                    });
-                }
-                MirInst::Assign {
-                    source,
-                    dest,
-                    rvalue,
-                } => {
-                    let rvalue = match rvalue {
-                        Rvalue::Value(value) => {
-                            rewrite_place_root_value(db, core, values, locals, value)
-                                .map(Rvalue::Value)
-                                .unwrap_or(Rvalue::Value(value))
-                        }
-                        Rvalue::Call(mut call) => {
-                            for value in call.args.iter_mut().chain(call.effect_args.iter_mut()) {
-                                if let Some(rewritten) =
-                                    rewrite_place_root_value(db, core, values, locals, *value)
-                                {
-                                    *value = rewritten;
-                                }
-                            }
-                            Rvalue::Call(call)
-                        }
-                        Rvalue::Intrinsic { op, mut args } => {
-                            for value in &mut args {
-                                if let Some(rewritten) =
-                                    rewrite_place_root_value(db, core, values, locals, *value)
-                                {
-                                    *value = rewritten;
-                                }
-                            }
-                            Rvalue::Intrinsic { op, args }
-                        }
-                        other => other,
-                    };
-                    rewritten.push(MirInst::Assign {
-                        source,
-                        dest,
-                        rvalue,
-                    });
-                }
-                MirInst::Store {
-                    source,
-                    place,
-                    value,
-                } => {
-                    if let Some(local) = resolve_place_root_local(values, place.base) {
-                        let local_ty = locals[local.index()].ty;
-                        let local_place_ty = local_ty
-                            .as_capability(db)
-                            .map(|(_, inner)| inner)
-                            .unwrap_or(local_ty);
-
-                        if place.projection.is_empty() {
-                            rewritten.push(MirInst::Assign {
-                                source,
-                                dest: Some(local),
-                                rvalue: Rvalue::Value(value),
-                            });
-                            if spill_local_for_owner
-                                .get(local.index())
-                                .copied()
-                                .flatten()
-                                .is_some()
-                                && !layout::is_zero_sized_ty(db, locals[local.index()].ty)
-                            {
-                                let spill_base = spill_addr_value_for_owner[local.index()].unwrap();
-                                let repr = repr_for_plain_ty(
-                                    db,
-                                    core,
-                                    locals[local.index()].ty,
-                                    locals[local.index()].address_space,
-                                );
-                                let value = alloc_value(
-                                    values,
-                                    ValueData {
-                                        ty: locals[local.index()].ty,
-                                        origin: ValueOrigin::Local(local),
-                                        source: SourceInfoId::SYNTHETIC,
-                                        repr,
-                                    },
-                                );
-                                rewritten.push(MirInst::Store {
-                                    source: SourceInfoId::SYNTHETIC,
-                                    place: Place::new(spill_base, MirProjectionPath::new()),
-                                    value,
-                                });
-                            }
-                            continue;
-                        }
-
-                        if let Some(projected_ty) =
-                            apply_transparent_field0_chain(db, local_place_ty, &place.projection)
-                        {
-                            let stored_place_value = if values[value.index()].ty == local_place_ty {
-                                Some(value)
-                            } else if values[value.index()].ty == projected_ty {
-                                let repr = repr_for_plain_ty(
-                                    db,
-                                    core,
-                                    local_place_ty,
-                                    locals[local.index()].address_space,
-                                );
-                                Some(alloc_value(
-                                    values,
-                                    ValueData {
-                                        ty: local_place_ty,
-                                        origin: ValueOrigin::TransparentCast { value },
-                                        source: SourceInfoId::SYNTHETIC,
-                                        repr,
-                                    },
-                                ))
-                            } else {
-                                None
-                            };
-
-                            if let Some(stored_place_value) = stored_place_value {
-                                let assign_value = if local_ty == local_place_ty {
-                                    stored_place_value
-                                } else {
-                                    let repr = repr_for_plain_ty(
-                                        db,
-                                        core,
-                                        local_ty,
-                                        locals[local.index()].address_space,
-                                    );
-                                    alloc_value(
-                                        values,
-                                        ValueData {
-                                            ty: local_ty,
-                                            origin: ValueOrigin::TransparentCast {
-                                                value: stored_place_value,
-                                            },
-                                            source: SourceInfoId::SYNTHETIC,
-                                            repr,
-                                        },
-                                    )
-                                };
-                                rewritten.push(MirInst::Assign {
-                                    source,
-                                    dest: Some(local),
-                                    rvalue: Rvalue::Value(assign_value),
-                                });
-                                if spill_local_for_owner
-                                    .get(local.index())
-                                    .copied()
-                                    .flatten()
-                                    .is_some()
-                                    && !layout::is_zero_sized_ty(db, local_ty)
-                                {
-                                    let spill_base =
-                                        spill_addr_value_for_owner[local.index()].unwrap();
-                                    let repr = repr_for_plain_ty(
-                                        db,
-                                        core,
-                                        local_ty,
-                                        locals[local.index()].address_space,
-                                    );
-                                    let value = alloc_value(
-                                        values,
-                                        ValueData {
-                                            ty: local_ty,
-                                            origin: ValueOrigin::Local(local),
-                                            source: SourceInfoId::SYNTHETIC,
-                                            repr,
-                                        },
-                                    );
-                                    rewritten.push(MirInst::Store {
-                                        source: SourceInfoId::SYNTHETIC,
-                                        place: Place::new(spill_base, MirProjectionPath::new()),
-                                        value,
-                                    });
-                                }
-                                continue;
-                            }
-                        }
-
-                        let Some(spill_base) = spill_addr_value_for_owner
-                            .get(local.index())
-                            .copied()
-                            .flatten()
-                        else {
-                            rewritten.push(MirInst::Store {
-                                source,
-                                place,
-                                value,
-                            });
-                            continue;
-                        };
-                        let place = Place::new(spill_base, place.projection);
-                        rewritten.push(MirInst::Store {
-                            source,
-                            place,
-                            value,
-                        });
-                        let update_place = Place::new(spill_base, MirProjectionPath::new());
-                        rewritten.push(MirInst::Assign {
-                            source: SourceInfoId::SYNTHETIC,
-                            dest: Some(local),
-                            rvalue: Rvalue::Load {
-                                place: update_place,
-                            },
-                        });
-                        continue;
-                    }
-
-                    rewritten.push(MirInst::Store {
-                        source,
-                        place: place.clone(),
-                        value,
-                    });
-
-                    let Some(owner) =
-                        place_base_spill_owner(values, &owner_for_spill_local, place.base)
-                    else {
-                        continue;
-                    };
-                    let Some(spill_base) = spill_addr_value_for_owner
-                        .get(owner.index())
-                        .copied()
-                        .flatten()
-                    else {
-                        continue;
-                    };
-
-                    if place.projection.is_empty()
-                        && locals[owner.index()].ty == values[value.index()].ty
-                    {
-                        rewritten.push(MirInst::Assign {
-                            source: SourceInfoId::SYNTHETIC,
-                            dest: Some(owner),
-                            rvalue: Rvalue::Value(value),
-                        });
-                    } else {
-                        let update_place = Place::new(spill_base, MirProjectionPath::new());
-                        rewritten.push(MirInst::Assign {
-                            source: SourceInfoId::SYNTHETIC,
-                            dest: Some(owner),
-                            rvalue: Rvalue::Load {
-                                place: update_place,
-                            },
-                        });
-                    }
-                }
-                MirInst::InitAggregate {
-                    source,
-                    place,
-                    inits,
-                } => {
-                    if let Some(local) = resolve_place_root_local(values, place.base) {
-                        let Some(spill_base) = spill_addr_value_for_owner
-                            .get(local.index())
-                            .copied()
-                            .flatten()
-                        else {
-                            rewritten.push(MirInst::InitAggregate {
-                                source,
-                                place,
-                                inits,
-                            });
-                            continue;
-                        };
-                        let place = Place::new(spill_base, place.projection);
-                        rewritten.push(MirInst::InitAggregate {
-                            source,
-                            place,
-                            inits,
-                        });
-                        let update_place = Place::new(spill_base, MirProjectionPath::new());
-                        rewritten.push(MirInst::Assign {
-                            source: SourceInfoId::SYNTHETIC,
-                            dest: Some(local),
-                            rvalue: Rvalue::Load {
-                                place: update_place,
-                            },
-                        });
-                        continue;
-                    }
-
-                    rewritten.push(MirInst::InitAggregate {
-                        source,
-                        place: place.clone(),
-                        inits,
-                    });
-
-                    let Some(owner) =
-                        place_base_spill_owner(values, &owner_for_spill_local, place.base)
-                    else {
-                        continue;
-                    };
-                    let Some(spill_base) = spill_addr_value_for_owner
-                        .get(owner.index())
-                        .copied()
-                        .flatten()
-                    else {
-                        continue;
-                    };
-                    let update_place = Place::new(spill_base, MirProjectionPath::new());
-                    rewritten.push(MirInst::Assign {
-                        source: SourceInfoId::SYNTHETIC,
-                        dest: Some(owner),
-                        rvalue: Rvalue::Load {
-                            place: update_place,
-                        },
-                    });
-                }
-                MirInst::SetDiscriminant {
-                    source,
-                    place,
-                    variant,
-                } => {
-                    if let Some(local) = resolve_place_root_local(values, place.base) {
-                        let Some(spill_base) = spill_addr_value_for_owner
-                            .get(local.index())
-                            .copied()
-                            .flatten()
-                        else {
-                            rewritten.push(MirInst::SetDiscriminant {
-                                source,
-                                place,
-                                variant,
-                            });
-                            continue;
-                        };
-                        let place = Place::new(spill_base, place.projection);
-                        rewritten.push(MirInst::SetDiscriminant {
-                            source,
-                            place,
-                            variant,
-                        });
-                        let update_place = Place::new(spill_base, MirProjectionPath::new());
-                        rewritten.push(MirInst::Assign {
-                            source: SourceInfoId::SYNTHETIC,
-                            dest: Some(local),
-                            rvalue: Rvalue::Load {
-                                place: update_place,
-                            },
-                        });
-                        continue;
-                    }
-
-                    rewritten.push(MirInst::SetDiscriminant {
-                        source,
-                        place: place.clone(),
-                        variant,
-                    });
-
-                    let Some(owner) =
-                        place_base_spill_owner(values, &owner_for_spill_local, place.base)
-                    else {
-                        continue;
-                    };
-                    let Some(spill_base) = spill_addr_value_for_owner
-                        .get(owner.index())
-                        .copied()
-                        .flatten()
-                    else {
-                        continue;
-                    };
-                    let update_place = Place::new(spill_base, MirProjectionPath::new());
-                    rewritten.push(MirInst::Assign {
-                        source: SourceInfoId::SYNTHETIC,
-                        dest: Some(owner),
-                        rvalue: Rvalue::Load {
-                            place: update_place,
-                        },
-                    });
-                }
-                MirInst::BindValue { source, value } => {
-                    let value =
-                        rewrite_place_root_value(db, core, values, locals, value).unwrap_or(value);
-                    rewritten.push(MirInst::BindValue { source, value });
-                }
-            }
-        }
-        block.insts = rewritten;
     }
 
     let mut spill_prelude = Vec::new();
@@ -1107,15 +1086,80 @@ pub(crate) fn lower_capability_to_repr<'db>(
 mod tests {
     use common::InputDb;
     use driver::DriverDataBase;
+    use hir::analysis::ty::adt_def::AdtRef;
+    use hir::analysis::ty::ty_def::TyId;
+    use hir::hir_def::{EnumVariant, TopLevelMod};
+    use hir::projection::Projection;
     use url::Url;
 
     use crate::{
-        MirBackend, core_lib::CoreLib, ir::AddressSpaceKind, ir::BasicBlock, ir::FieldPtrOrigin,
-        ir::LocalData, ir::MirBody, ir::MirStage, ir::SourceInfoId, ir::Terminator, ir::ValueData,
-        ir::ValueOrigin, ir::ValueRepr,
+        MirBackend, MirInst, core_lib::CoreLib, ir::AddressSpaceKind, ir::BasicBlock,
+        ir::FieldPtrOrigin, ir::LocalData, ir::LocalId, ir::MirBody, ir::MirStage, ir::Place,
+        ir::Rvalue, ir::SourceInfoId, ir::Terminator, ir::ValueData, ir::ValueOrigin,
+        ir::ValueRepr,
     };
 
     use super::lower_capability_to_repr;
+
+    fn load_func_param_ty<'db>(
+        db: &'db DriverDataBase,
+        top_mod: TopLevelMod<'db>,
+        func_name: &str,
+    ) -> (CoreLib<'db>, TyId<'db>) {
+        let hir_func = top_mod
+            .all_funcs(db)
+            .iter()
+            .copied()
+            .find(|func| {
+                func.name(db)
+                    .to_opt()
+                    .is_some_and(|name| name.data(db) == func_name)
+            })
+            .expect("function should exist");
+        let core = CoreLib::new(db, hir_func.scope());
+        let capability_ty = hir_func
+            .params(db)
+            .next()
+            .expect("parameter should exist")
+            .ty(db);
+        (core, capability_ty)
+    }
+
+    fn make_place_root_body<'db>(local_ty: TyId<'db>) -> (MirBody<'db>, LocalId, crate::ValueId) {
+        let mut body = MirBody::new();
+        body.stage = MirStage::Capability;
+        body.blocks.push(BasicBlock {
+            insts: Vec::new(),
+            terminator: Terminator::Return {
+                source: SourceInfoId::SYNTHETIC,
+                value: None,
+            },
+        });
+        let local = body.alloc_local(LocalData {
+            name: "owner".to_string(),
+            ty: local_ty,
+            is_mut: true,
+            source: SourceInfoId::SYNTHETIC,
+            address_space: AddressSpaceKind::Memory,
+        });
+        let base = body.alloc_value(ValueData {
+            ty: local_ty,
+            origin: ValueOrigin::PlaceRoot(local),
+            source: SourceInfoId::SYNTHETIC,
+            repr: ValueRepr::Word,
+        });
+        (body, local, base)
+    }
+
+    fn projection_is_field0<'db>(path: &crate::MirProjectionPath<'db>) -> bool {
+        let mut it = path.iter();
+        matches!(it.next(), Some(Projection::Field(0))) && it.next().is_none()
+    }
+
+    fn projection_is_field1<'db>(path: &crate::MirProjectionPath<'db>) -> bool {
+        let mut it = path.iter();
+        matches!(it.next(), Some(Projection::Field(1))) && it.next().is_none()
+    }
 
     #[test]
     fn field_ptr_origin_preserves_address_space_for_capability_values() {
@@ -1126,22 +1170,8 @@ pub fn field_ptr_origin_preserves_address_space(x: mut u256) {}
 "#;
         let file = db.workspace().touch(&mut db, url, Some(src.to_string()));
         let top_mod = db.top_mod(file);
-        let hir_func = top_mod
-            .all_funcs(&db)
-            .iter()
-            .copied()
-            .find(|func| {
-                func.name(&db).to_opt().is_some_and(|name| {
-                    name.data(&db) == "field_ptr_origin_preserves_address_space"
-                })
-            })
-            .expect("function should exist");
-        let core = CoreLib::new(&db, hir_func.scope());
-        let capability_ty = hir_func
-            .params(&db)
-            .next()
-            .expect("parameter should exist")
-            .ty(&db);
+        let (core, capability_ty) =
+            load_func_param_ty(&db, top_mod, "field_ptr_origin_preserves_address_space");
 
         let mut body = MirBody::new();
         body.stage = MirStage::Capability;
@@ -1182,6 +1212,262 @@ pub fn field_ptr_origin_preserves_address_space(x: mut u256) {}
             body.values[field_ptr.index()].repr,
             ValueRepr::Ptr(AddressSpaceKind::Storage),
             "FieldPtr-based capability values must preserve their originating address space",
+        );
+    }
+
+    #[test]
+    fn store_place_root_projection_rewrites_through_spill_and_reloads_owner() {
+        let mut db = DriverDataBase::default();
+        let url = Url::parse(
+            "file:///store_place_root_projection_rewrites_through_spill_and_reloads_owner.fe",
+        )
+        .unwrap();
+        let src = r#"
+struct Pair {
+    a: u256,
+    b: u256,
+}
+
+pub fn store_place_root_projection_rewrites_through_spill_and_reloads_owner(x: mut Pair) {}
+"#;
+        let file = db.workspace().touch(&mut db, url, Some(src.to_string()));
+        let top_mod = db.top_mod(file);
+        let (core, pair_capability_ty) = load_func_param_ty(
+            &db,
+            top_mod,
+            "store_place_root_projection_rewrites_through_spill_and_reloads_owner",
+        );
+        let (_, pair_ty) = pair_capability_ty
+            .as_capability(&db)
+            .expect("param should be a capability");
+        let u256_ty = pair_ty.field_types(&db)[0];
+
+        let (mut body, owner, base) = make_place_root_body(pair_capability_ty);
+        let value = body.alloc_value(ValueData {
+            ty: u256_ty,
+            origin: ValueOrigin::Synthetic(crate::ir::SyntheticValue::Int(1u8.into())),
+            source: SourceInfoId::SYNTHETIC,
+            repr: ValueRepr::Word,
+        });
+        body.blocks[0].insts.push(MirInst::Store {
+            source: SourceInfoId::SYNTHETIC,
+            place: Place::new(
+                base,
+                crate::MirProjectionPath::from_projection(Projection::Field(1)),
+            ),
+            value,
+        });
+
+        lower_capability_to_repr(&db, &core, MirBackend::EvmYul, &mut body);
+
+        let spill = *body
+            .spill_slots
+            .get(&owner)
+            .expect("owner should have a spill slot");
+        let mut saw_spill_store = false;
+        let mut saw_owner_reload = false;
+        for inst in &body.blocks[0].insts {
+            match inst {
+                MirInst::Store { place, .. } => {
+                    if projection_is_field1(&place.projection)
+                        && matches!(body.value(place.base).origin, ValueOrigin::Local(local) if local == spill)
+                    {
+                        saw_spill_store = true;
+                    }
+                }
+                MirInst::Assign {
+                    dest: Some(local),
+                    rvalue: Rvalue::Load { place },
+                    ..
+                } => {
+                    if *local == owner
+                        && place.projection.is_empty()
+                        && matches!(body.value(place.base).origin, ValueOrigin::Local(base_local) if base_local == spill)
+                    {
+                        saw_owner_reload = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        assert!(saw_spill_store, "store should target spill-backed place");
+        assert!(
+            saw_owner_reload,
+            "store should reload the owner local from spill"
+        );
+    }
+
+    #[test]
+    fn init_aggregate_place_root_projection_rewrites_through_spill_and_reloads_owner() {
+        let mut db = DriverDataBase::default();
+        let url = Url::parse(
+            "file:///init_aggregate_place_root_projection_rewrites_through_spill_and_reloads_owner.fe",
+        )
+        .unwrap();
+        let src = r#"
+struct Pair {
+    a: u256,
+    b: u256,
+}
+
+pub fn init_aggregate_place_root_projection_rewrites_through_spill_and_reloads_owner(x: mut Pair) {}
+"#;
+        let file = db.workspace().touch(&mut db, url, Some(src.to_string()));
+        let top_mod = db.top_mod(file);
+        let (core, pair_capability_ty) = load_func_param_ty(
+            &db,
+            top_mod,
+            "init_aggregate_place_root_projection_rewrites_through_spill_and_reloads_owner",
+        );
+        let (_, pair_ty) = pair_capability_ty
+            .as_capability(&db)
+            .expect("param should be a capability");
+        let u256_ty = pair_ty.field_types(&db)[0];
+
+        let (mut body, owner, base) = make_place_root_body(pair_capability_ty);
+        let value = body.alloc_value(ValueData {
+            ty: u256_ty,
+            origin: ValueOrigin::Synthetic(crate::ir::SyntheticValue::Int(1u8.into())),
+            source: SourceInfoId::SYNTHETIC,
+            repr: ValueRepr::Word,
+        });
+        body.blocks[0].insts.push(MirInst::InitAggregate {
+            source: SourceInfoId::SYNTHETIC,
+            place: Place::new(
+                base,
+                crate::MirProjectionPath::from_projection(Projection::Field(1)),
+            ),
+            inits: vec![(crate::MirProjectionPath::new(), value)],
+        });
+
+        lower_capability_to_repr(&db, &core, MirBackend::EvmYul, &mut body);
+
+        let spill = *body
+            .spill_slots
+            .get(&owner)
+            .expect("owner should have a spill slot");
+        let mut saw_spill_init = false;
+        let mut saw_owner_reload = false;
+        for inst in &body.blocks[0].insts {
+            match inst {
+                MirInst::InitAggregate { place, .. } => {
+                    if projection_is_field1(&place.projection)
+                        && matches!(body.value(place.base).origin, ValueOrigin::Local(local) if local == spill)
+                    {
+                        saw_spill_init = true;
+                    }
+                }
+                MirInst::Assign {
+                    dest: Some(local),
+                    rvalue: Rvalue::Load { place },
+                    ..
+                } => {
+                    if *local == owner
+                        && place.projection.is_empty()
+                        && matches!(body.value(place.base).origin, ValueOrigin::Local(base_local) if base_local == spill)
+                    {
+                        saw_owner_reload = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        assert!(
+            saw_spill_init,
+            "init aggregate should target spill-backed place"
+        );
+        assert!(
+            saw_owner_reload,
+            "init aggregate should reload the owner local from spill"
+        );
+    }
+
+    #[test]
+    fn set_discriminant_place_root_projection_rewrites_through_spill_and_reloads_owner() {
+        let mut db = DriverDataBase::default();
+        let url = Url::parse(
+            "file:///set_discriminant_place_root_projection_rewrites_through_spill_and_reloads_owner.fe",
+        )
+        .unwrap();
+        let src = r#"
+enum E {
+    A,
+    B,
+}
+
+struct Wrap {
+    e: E,
+    pad: u256,
+}
+
+pub fn set_discriminant_place_root_projection_rewrites_through_spill_and_reloads_owner(x: mut Wrap) {}
+"#;
+        let file = db.workspace().touch(&mut db, url, Some(src.to_string()));
+        let top_mod = db.top_mod(file);
+        let (core, wrap_capability_ty) = load_func_param_ty(
+            &db,
+            top_mod,
+            "set_discriminant_place_root_projection_rewrites_through_spill_and_reloads_owner",
+        );
+        let (_, wrap_ty) = wrap_capability_ty
+            .as_capability(&db)
+            .expect("param should be a capability");
+        let enum_ty = wrap_ty.field_types(&db)[0];
+        let adt = enum_ty.adt_def(&db).expect("enum field should be an ADT");
+        let AdtRef::Enum(enum_def) = adt.adt_ref(&db) else {
+            panic!("field should be an enum type");
+        };
+        let variant_b = EnumVariant::new(enum_def, 1);
+
+        let (mut body, owner, base) = make_place_root_body(wrap_capability_ty);
+        body.blocks[0].insts.push(MirInst::SetDiscriminant {
+            source: SourceInfoId::SYNTHETIC,
+            place: Place::new(
+                base,
+                crate::MirProjectionPath::from_projection(Projection::Field(0)),
+            ),
+            variant: variant_b,
+        });
+
+        lower_capability_to_repr(&db, &core, MirBackend::EvmYul, &mut body);
+
+        let spill = *body
+            .spill_slots
+            .get(&owner)
+            .expect("owner should have a spill slot");
+        let mut saw_spill_discriminant = false;
+        let mut saw_owner_reload = false;
+        for inst in &body.blocks[0].insts {
+            match inst {
+                MirInst::SetDiscriminant { place, .. } => {
+                    if projection_is_field0(&place.projection)
+                        && matches!(body.value(place.base).origin, ValueOrigin::Local(local) if local == spill)
+                    {
+                        saw_spill_discriminant = true;
+                    }
+                }
+                MirInst::Assign {
+                    dest: Some(local),
+                    rvalue: Rvalue::Load { place },
+                    ..
+                } => {
+                    if *local == owner
+                        && place.projection.is_empty()
+                        && matches!(body.value(place.base).origin, ValueOrigin::Local(base_local) if base_local == spill)
+                    {
+                        saw_owner_reload = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        assert!(
+            saw_spill_discriminant,
+            "set discriminant should target spill-backed place"
+        );
+        assert!(
+            saw_owner_reload,
+            "set discriminant should reload the owner local from spill"
         );
     }
 }
