@@ -52,19 +52,10 @@ struct Loan<'db> {
     origin_expr: Option<ExprId>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 struct LocalLoanState<'db> {
     unknown: FxHashSet<LoanId>,
     slots: FxHashMap<crate::MirProjectionPath<'db>, FxHashSet<LoanId>>,
-}
-
-impl<'db> Default for LocalLoanState<'db> {
-    fn default() -> Self {
-        Self {
-            unknown: FxHashSet::default(),
-            slots: FxHashMap::default(),
-        }
-    }
 }
 
 impl<'db> LocalLoanState<'db> {
@@ -2021,26 +2012,26 @@ impl<'db, 'a> Borrowck<'db, 'a> {
 
         let mut targets = FxHashSet::default();
         let mut parents = FxHashSet::default();
-        if let Some(callee) = call.resolved_name.as_ref() {
-            if let Some(summary) = self.summaries.get(callee) {
-                for transform in summary {
-                    let Some(&arg) = call.args.get(transform.param_index as usize) else {
-                        self.record_internal_error(
-                            source,
-                            format!(
-                                "borrow summary for `{callee}` references missing argument index {}",
-                                transform.param_index
-                            ),
-                        );
-                        return;
-                    };
-                    parents.extend(self.mut_loans_for_handle_value(state, arg));
-                    for base in self.canonicalize_base(state, arg) {
-                        targets.insert(CanonPlace {
-                            root: base.root,
-                            proj: base.proj.concat(&transform.proj),
-                        });
-                    }
+        if let Some(callee) = call.resolved_name.as_ref()
+            && let Some(summary) = self.summaries.get(callee)
+        {
+            for transform in summary {
+                let Some(&arg) = call.args.get(transform.param_index as usize) else {
+                    self.record_internal_error(
+                        source,
+                        format!(
+                            "borrow summary for `{callee}` references missing argument index {}",
+                            transform.param_index
+                        ),
+                    );
+                    return;
+                };
+                parents.extend(self.mut_loans_for_handle_value(state, arg));
+                for base in self.canonicalize_base(state, arg) {
+                    targets.insert(CanonPlace {
+                        root: base.root,
+                        proj: base.proj.concat(&transform.proj),
+                    });
                 }
             }
         }
