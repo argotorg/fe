@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/mir_check.rs
+assertion_line: 32
+expression: res
+input_file: fixtures/mir_check/borrowck_terminating_call_read_under_mut.fe
+---
+error[10-0002]: borrow conflict in `fn borrowck_terminating_call_read_under_mut`
+  ┌─ borrowck_terminating_call_read_under_mut.fe:8:9
+  │
+8 │     let mut x: u256 = 0
+  │         ^^^^^ access overlaps an active `mut` borrow
+9 │     let p: mut u256 = mut x
+  │                           - `x` is borrowed here

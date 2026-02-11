@@ -164,6 +164,7 @@ struct Borrowck<'db, 'a> {
     moved_entry: Vec<FxHashMap<CanonPlace<'db>, MoveOrigin>>,
     live_before: Vec<Vec<FxHashSet<LocalId>>>,
     live_before_term: Vec<FxHashSet<LocalId>>,
+    analysis_error: Option<CompleteDiagnostic>,
 }
 
 impl<'db, 'a> Borrowck<'db, 'a> {
@@ -312,6 +313,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             moved_entry: Vec::new(),
             live_before: Vec::new(),
             live_before_term: Vec::new(),
+            analysis_error: None,
         }
     }
 
@@ -321,8 +323,14 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             self.func.body.blocks.len()
         ];
         self.init_loans();
+        if self.analysis_error.is_some() {
+            return;
+        }
         self.seed_param_loans();
         self.compute_entry_states();
+        if self.analysis_error.is_some() {
+            return;
+        }
         self.compute_loan_targets_and_parents();
     }
 
@@ -331,28 +339,53 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             return Ok(None);
         }
         self.analyze();
+        if let Some(diag) = self.analysis_error.take() {
+            return Err(diag);
+        }
         self.compute_return_summary().map(Some)
     }
 
     fn check(mut self) -> Option<CompleteDiagnostic> {
         self.analyze();
+        if let Some(diag) = self.analysis_error.take() {
+            return Some(diag);
+        }
         self.compute_moved_entry_states();
+        if let Some(diag) = self.analysis_error.take() {
+            return Some(diag);
+        }
         self.compute_liveness();
+        if let Some(diag) = self.analysis_error.take() {
+            return Some(diag);
+        }
         self.check_conflicts()
     }
 
-    fn span_for_source(&self, source: SourceInfoId) -> common::diagnostics::Span {
-        self.func
-            .body
-            .source_span(source)
-            .or_else(|| {
-                self.func
-                    .body
-                    .source_infos
-                    .iter()
-                    .find_map(|info| info.span.clone())
-            })
-            .expect("borrowck diagnostic missing a span")
+    fn span_for_source(&self, source: SourceInfoId) -> Option<common::diagnostics::Span> {
+        self.func.body.source_span(source).or_else(|| {
+            self.func
+                .body
+                .source_infos
+                .iter()
+                .find_map(|info| info.span.clone())
+        })
+    }
+
+    fn internal_error_header(&self) -> String {
+        format!(
+            "internal borrow checking error in `fn {}`",
+            self.func.symbol_name
+        )
+    }
+
+    fn record_internal_error(&mut self, source: SourceInfoId, label: String) {
+        if self.analysis_error.is_some() {
+            return;
+        }
+        let mut diag = self.diag_at_source(4, source, self.internal_error_header(), label);
+        diag.notes
+            .push("this indicates a compiler bug; please report it".to_string());
+        self.analysis_error = Some(diag);
     }
 
     fn diag_at_source(
@@ -366,7 +399,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         CompleteDiagnostic::new(
             Severity::Error,
             header,
-            vec![SubDiagnostic::new(LabelStyle::Primary, label, Some(span))],
+            vec![SubDiagnostic::new(LabelStyle::Primary, label, span)],
             Vec::new(),
             GlobalErrorCode::new(DiagnosticPass::Mir, local_code),
         )
@@ -427,6 +460,19 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         label: String,
     ) -> CompleteDiagnostic {
         self.diag_at_source(local_code, terminator_source(term), header, label)
+    }
+
+    fn diag_at_terminator_with_loan(
+        &self,
+        local_code: u16,
+        term: &Terminator<'db>,
+        header: String,
+        label: String,
+        loan: LoanId,
+    ) -> CompleteDiagnostic {
+        let mut diag = self.diag_at_terminator(local_code, term, header, label);
+        self.push_loan_origin_label(&mut diag, loan);
+        diag
     }
 
     // Diagnostics convention: keep the primary label short, and put high-level context (category,
@@ -704,10 +750,18 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                     continue;
                 };
                 let Some(expr) = call.expr else {
-                    panic!("borrow-handle call must carry its ExprId for analysis");
+                    self.record_internal_error(
+                        inst_source(inst),
+                        "borrow-handle call is missing ExprId".to_string(),
+                    );
+                    continue;
                 };
                 let Some(&call_value) = self.func.body.expr_values.get(&expr) else {
-                    panic!("missing value id for call expr {expr:?}");
+                    self.record_internal_error(
+                        inst_source(inst),
+                        format!("missing MIR value for borrow-handle call expr {expr:?}"),
+                    );
+                    continue;
                 };
                 let loan = LoanId(self.loans.len() as u32);
                 self.call_loan_for_value.insert(call_value, loan);
@@ -748,6 +802,9 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             let mut state = self.entry_states[bb.index()].clone();
             for inst in &body.blocks[bb.index()].insts {
                 self.update_state_for_inst(inst, &mut state);
+                if self.analysis_error.is_some() {
+                    return;
+                }
             }
 
             for succ in successors(&body.blocks[bb.index()].terminator) {
@@ -768,9 +825,18 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                 let mut state = self.entry_states[bb_idx].clone();
                 for inst in &block.insts {
                     self.update_loan_info_for_inst(inst, &state, &mut changed);
+                    if self.analysis_error.is_some() {
+                        return;
+                    }
                     self.update_state_for_inst(inst, &mut state);
+                    if self.analysis_error.is_some() {
+                        return;
+                    }
                 }
                 self.update_loan_info_for_terminator(&block.terminator, &state, &mut changed);
+                if self.analysis_error.is_some() {
+                    return;
+                }
             }
             if !changed {
                 break;
@@ -778,7 +844,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         }
     }
 
-    fn compute_return_summary(&self) -> Result<BorrowSummary<'db>, CompleteDiagnostic> {
+    fn compute_return_summary(&mut self) -> Result<BorrowSummary<'db>, CompleteDiagnostic> {
         let body = &self.func.body;
         let (ret_kind, _) = ty_is_borrow(self.db, self.func.ret_ty)
             .unwrap_or_else(|| panic!("borrow summary requires a borrow return type"));
@@ -792,6 +858,9 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             let mut state = self.entry_states[bb_idx].clone();
             for inst in &block.insts {
                 self.update_state_for_inst(inst, &mut state);
+                if let Some(diag) = self.analysis_error.take() {
+                    return Err(diag);
+                }
             }
             let Terminator::Return {
                 value: Some(value), ..
@@ -814,7 +883,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                         diag.sub_diagnostics.push(SubDiagnostic::new(
                             LabelStyle::Secondary,
                             format!("`{local_name}` is a local value created here"),
-                            Some(local_span),
+                            local_span,
                         ));
                         return Err(diag);
                     }
@@ -845,7 +914,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                     diag.sub_diagnostics.push(SubDiagnostic::new(
                         LabelStyle::Secondary,
                         format!("`{}` is a `{mode_str}` parameter", param.name),
-                        Some(param_span),
+                        param_span,
                     ));
                     diag.notes.push(format!(
                         "help: consider changing `{}: {}` to `{}: {borrow_kw} {}`",
@@ -978,6 +1047,9 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             for inst in &body.blocks[bb.index()].insts {
                 self.update_moved_for_inst(inst, &state, &mut moved);
                 self.update_state_for_inst(inst, &mut state);
+                if self.analysis_error.is_some() {
+                    return;
+                }
             }
             self.update_moved_for_terminator(
                 &body.blocks[bb.index()].terminator,
@@ -1160,11 +1232,8 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             );
             for (value, label) in no_note_conflicts.into_iter().skip(1) {
                 let span = self.span_for_source(self.func.body.value(value).source);
-                diag.sub_diagnostics.push(SubDiagnostic::new(
-                    LabelStyle::Primary,
-                    label,
-                    Some(span),
-                ));
+                diag.sub_diagnostics
+                    .push(SubDiagnostic::new(LabelStyle::Primary, label, span));
             }
             self.push_view_param_move_help_notes(&mut diag, view_param_conflicts);
             return Some(diag);
@@ -1473,7 +1542,10 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         None
     }
 
-    fn check_conflicts(self) -> Option<CompleteDiagnostic> {
+    fn check_conflicts(mut self) -> Option<CompleteDiagnostic> {
+        if let Some(diag) = self.analysis_error.take() {
+            return Some(diag);
+        }
         let body = &self.func.body;
         for (bb_idx, block) in body.blocks.iter().enumerate() {
             let mut state = self.entry_states[bb_idx].clone();
@@ -1525,6 +1597,9 @@ impl<'db, 'a> Borrowck<'db, 'a> {
 
                 self.update_moved_for_inst(inst, &state, &mut moved);
                 self.update_state_for_inst(inst, &mut state);
+                if let Some(diag) = self.analysis_error.take() {
+                    return Some(diag);
+                }
             }
 
             let mut active = self.active_loans(&state, &self.live_before_term[bb_idx]);
@@ -1548,6 +1623,11 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                 &active,
                 &suspended,
             ) {
+                return Some(err);
+            }
+            if let Some(err) =
+                self.check_accesses_in_terminator(&block.terminator, &state, &active, &suspended)
+            {
                 return Some(err);
             }
             if let Some((a, b)) = self.active_set_conflict(&effective) {
@@ -1693,7 +1773,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             ..
         } = inst
         {
-            self.update_loan_from_call(state, *dest, call, changed);
+            self.update_loan_from_call(state, *dest, call, inst_source(inst), changed);
         }
         for value in borrow_values_in_inst(&self.func.body, inst) {
             self.update_loan_from_value(state, value, changed);
@@ -1740,19 +1820,29 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         state: &[FxHashSet<LoanId>],
         dest: LocalId,
         call: &CallOrigin<'db>,
+        source: SourceInfoId,
         changed: &mut bool,
     ) {
         if ty_is_borrow(self.db, self.func.body.local(dest).ty).is_none() {
             return;
         }
         let Some(expr) = call.expr else {
-            panic!("borrow-handle call must carry its ExprId for analysis");
+            self.record_internal_error(source, "borrow-handle call is missing ExprId".to_string());
+            return;
         };
         let Some(&call_value) = self.func.body.expr_values.get(&expr) else {
-            panic!("missing value id for call expr {expr:?}");
+            self.record_internal_error(
+                source,
+                format!("missing MIR value for borrow-handle call expr {expr:?}"),
+            );
+            return;
         };
         let Some(&loan_id) = self.call_loan_for_value.get(&call_value) else {
-            panic!("missing loan id for borrow-handle call expr {expr:?}");
+            self.record_internal_error(
+                source,
+                format!("missing loan id for borrow-handle call expr {expr:?}"),
+            );
+            return;
         };
         let Some(callee) = call.resolved_name.as_ref() else {
             // Generic templates may contain unresolved call targets; skip summary application in
@@ -1769,7 +1859,14 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         let mut parents = FxHashSet::default();
         for transform in summary {
             let Some(&arg) = call.args.get(transform.param_index as usize) else {
-                panic!("borrow summary index out of bounds for `{callee}`");
+                self.record_internal_error(
+                    source,
+                    format!(
+                        "borrow summary for `{callee}` references missing argument index {}",
+                        transform.param_index
+                    ),
+                );
+                return;
             };
             parents.extend(self.mut_loans_for_handle_value(state, arg));
             for base in self.canonicalize_base(state, arg) {
@@ -2159,8 +2256,26 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                 .map(|(loan, err)| {
                     self.diag_at_inst_with_loan(2, inst, self.borrow_conflict_header(), err, loan)
                 }),
+            MirInst::SetDiscriminant { place, .. } => self
+                .check_place_access(state, place, AccessKind::Write, active, suspended)
+                .map(|(loan, err)| {
+                    self.diag_at_inst_with_loan(2, inst, self.borrow_conflict_header(), err, loan)
+                }),
             _ => None,
         }
+    }
+
+    fn check_accesses_in_terminator(
+        &self,
+        term: &Terminator<'db>,
+        state: &[FxHashSet<LoanId>],
+        active: &FxHashSet<LoanId>,
+        suspended: &FxHashSet<LoanId>,
+    ) -> Option<CompleteDiagnostic> {
+        self.check_word_value_reads_in_terminator(term, state, active, suspended)
+            .map(|(loan, err)| {
+                self.diag_at_terminator_with_loan(2, term, self.borrow_conflict_header(), err, loan)
+            })
     }
 
     fn check_place_access(
@@ -2266,9 +2381,31 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         if matches!(inst, MirInst::BindValue { .. }) {
             return None;
         }
+        let values = value_operands_in_inst(inst);
+        self.check_word_value_reads_in_values(&values, state, active, suspended)
+    }
+
+    fn check_word_value_reads_in_terminator(
+        &self,
+        term: &Terminator<'db>,
+        state: &[FxHashSet<LoanId>],
+        active: &FxHashSet<LoanId>,
+        suspended: &FxHashSet<LoanId>,
+    ) -> Option<(LoanId, String)> {
+        let values = value_operands_in_terminator(term);
+        self.check_word_value_reads_in_values(&values, state, active, suspended)
+    }
+
+    fn check_word_value_reads_in_values(
+        &self,
+        values: &[ValueId],
+        state: &[FxHashSet<LoanId>],
+        active: &FxHashSet<LoanId>,
+        suspended: &FxHashSet<LoanId>,
+    ) -> Option<(LoanId, String)> {
         let mut locals = FxHashSet::default();
-        for value in value_operands_in_inst(inst) {
-            collect_word_locals_in_value(&self.func.body, value, &mut locals);
+        for value in values {
+            collect_word_locals_in_value(&self.func.body, *value, &mut locals);
         }
 
         for local in locals {
