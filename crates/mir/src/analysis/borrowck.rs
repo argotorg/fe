@@ -50,6 +50,85 @@ struct Loan<'db> {
     origin_expr: Option<ExprId>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LocalLoanState<'db> {
+    unknown: FxHashSet<LoanId>,
+    slots: FxHashMap<crate::MirProjectionPath<'db>, FxHashSet<LoanId>>,
+}
+
+impl<'db> Default for LocalLoanState<'db> {
+    fn default() -> Self {
+        Self {
+            unknown: FxHashSet::default(),
+            slots: FxHashMap::default(),
+        }
+    }
+}
+
+impl<'db> LocalLoanState<'db> {
+    fn from_root_loan(loan: LoanId) -> Self {
+        let mut state = Self::default();
+        state.insert_root_loan(loan);
+        state
+    }
+
+    fn insert_root_loan(&mut self, loan: LoanId) {
+        self.slots
+            .entry(crate::MirProjectionPath::new())
+            .or_default()
+            .insert(loan);
+    }
+
+    fn all_loans(&self) -> FxHashSet<LoanId> {
+        let mut out = self.unknown.clone();
+        for loans in self.slots.values() {
+            out.extend(loans.iter().copied());
+        }
+        out
+    }
+
+    fn overwrite_place(&mut self, place: &crate::MirProjectionPath<'db>, value: &Self) {
+        self.slots
+            .retain(|existing, _| !projection_paths_overlap(existing, place));
+
+        for (subpath, loans) in &value.slots {
+            if loans.is_empty() {
+                continue;
+            }
+            let dest_path = place.concat(subpath);
+            self.slots
+                .entry(dest_path)
+                .or_default()
+                .extend(loans.iter().copied());
+        }
+
+        self.unknown.extend(value.unknown.iter().copied());
+    }
+
+    fn merge_from(&mut self, other: &Self) {
+        self.unknown.extend(other.unknown.iter().copied());
+        for (path, loans) in &other.slots {
+            self.slots
+                .entry(path.clone())
+                .or_default()
+                .extend(loans.iter().copied());
+        }
+    }
+
+    fn join_from(&mut self, other: &Self) -> bool {
+        let before_unknown = self.unknown.len();
+        self.unknown.extend(other.unknown.iter().copied());
+        let mut changed = self.unknown.len() != before_unknown;
+        for (path, loans) in &other.slots {
+            let entry = self.slots.entry(path.clone()).or_default();
+            let before = entry.len();
+            entry.extend(loans.iter().copied());
+            changed |= entry.len() != before;
+        }
+        changed
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct MoveOrigin {
     source: SourceInfoId,
@@ -160,7 +239,7 @@ struct Borrowck<'db, 'a> {
     loan_for_value: FxHashMap<ValueId, LoanId>,
     call_loan_for_value: FxHashMap<ValueId, LoanId>,
     loans: Vec<Loan<'db>>,
-    entry_states: Vec<Vec<FxHashSet<LoanId>>>,
+    entry_states: Vec<Vec<LocalLoanState<'db>>>,
     moved_entry: Vec<FxHashMap<CanonPlace<'db>, MoveOrigin>>,
     live_before: Vec<Vec<FxHashSet<LocalId>>>,
     live_before_term: Vec<FxHashSet<LocalId>>,
@@ -342,7 +421,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
 
     fn analyze(&mut self) {
         self.entry_states = vec![
-            vec![FxHashSet::default(); self.tracked_locals.len()];
+            vec![LocalLoanState::default(); self.tracked_locals.len()];
             self.func.body.blocks.len()
         ];
         self.init_loans();
@@ -806,7 +885,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             };
             if let Some(tracked_idx) = self.tracked_local_idx.get(local.index()).copied().flatten()
             {
-                self.entry_states[self.func.body.entry.index()][tracked_idx].insert(loan);
+                self.entry_states[self.func.body.entry.index()][tracked_idx].insert_root_loan(loan);
             }
         }
     }
@@ -1114,7 +1193,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
     fn update_moved_for_inst(
         &self,
         inst: &MirInst<'db>,
-        state: &[FxHashSet<LoanId>],
+        state: &[LocalLoanState<'db>],
         moved: &mut FxHashMap<CanonPlace<'db>, MoveOrigin>,
     ) {
         let source = inst_source(inst);
@@ -1172,7 +1251,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
     fn update_moved_for_terminator(
         &self,
         term: &Terminator<'db>,
-        state: &[FxHashSet<LoanId>],
+        state: &[LocalLoanState<'db>],
         moved: &mut FxHashMap<CanonPlace<'db>, MoveOrigin>,
     ) {
         let source = terminator_source(term);
@@ -1212,7 +1291,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
     fn check_moved_and_moves_in_inst(
         &self,
         inst: &MirInst<'db>,
-        state: &[FxHashSet<LoanId>],
+        state: &[LocalLoanState<'db>],
         moved: &FxHashMap<CanonPlace<'db>, MoveOrigin>,
         active: &FxHashSet<LoanId>,
         suspended: &FxHashSet<LoanId>,
@@ -1387,7 +1466,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
     fn check_moved_and_moves_in_terminator(
         &self,
         term: &Terminator<'db>,
-        state: &[FxHashSet<LoanId>],
+        state: &[LocalLoanState<'db>],
         moved: &FxHashMap<CanonPlace<'db>, MoveOrigin>,
         active: &FxHashSet<LoanId>,
         suspended: &FxHashSet<LoanId>,
@@ -1507,7 +1586,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
     fn check_move_out_place(
         &self,
         place: &Place<'db>,
-        state: &[FxHashSet<LoanId>],
+        state: &[LocalLoanState<'db>],
         moved: &FxHashMap<CanonPlace<'db>, MoveOrigin>,
         active: &FxHashSet<LoanId>,
         suspended: &FxHashSet<LoanId>,
@@ -1679,18 +1758,16 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         None
     }
 
-    fn join_entry_state(&mut self, succ: BasicBlockId, state: &[FxHashSet<LoanId>]) -> bool {
+    fn join_entry_state(&mut self, succ: BasicBlockId, state: &[LocalLoanState<'db>]) -> bool {
         let succ_state = &mut self.entry_states[succ.index()];
         let mut changed = false;
         for (idx, loans) in succ_state.iter_mut().enumerate() {
-            let before = loans.len();
-            loans.extend(state[idx].iter().copied());
-            changed |= loans.len() != before;
+            changed |= loans.join_from(&state[idx]);
         }
         changed
     }
 
-    fn update_state_for_inst(&self, inst: &MirInst<'db>, state: &mut [FxHashSet<LoanId>]) {
+    fn update_state_for_inst(&self, inst: &MirInst<'db>, state: &mut [LocalLoanState<'db>]) {
         let body = &self.func.body;
         match inst {
             MirInst::Assign {
@@ -1705,16 +1782,16 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                 // Other NoEsc call results (e.g. aggregates containing handles) still clear the
                 // destination's previous loans on assignment.
                 let Some(expr) = call.expr else {
-                    state[idx].clear();
+                    state[idx] = LocalLoanState::default();
                     return;
                 };
                 let Some(&call_value) = body.expr_values.get(&expr) else {
-                    state[idx].clear();
+                    state[idx] = LocalLoanState::default();
                     return;
                 };
-                state[idx].clear();
+                state[idx] = LocalLoanState::default();
                 if let Some(&loan) = self.call_loan_for_value.get(&call_value) {
-                    state[idx].insert(loan);
+                    state[idx].insert_root_loan(loan);
                 }
             }
             MirInst::Assign {
@@ -1725,21 +1802,23 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                 let Some(idx) = self.tracked_local_idx.get(dest.index()).copied().flatten() else {
                     return;
                 };
-                state[idx] = self.loans_in_rvalue(state, rvalue);
+                state[idx] = self.local_loans_in_rvalue(state, rvalue);
             }
             MirInst::Store { place, value, .. } => {
                 if let Some(root) = root_memory_local(body, place)
                     && let Some(idx) = self.tracked_local_idx.get(root.index()).copied().flatten()
                 {
-                    state[idx].extend(self.loans_in_value(state, *value));
+                    let value_state = self.local_loans_in_value(state, *value);
+                    state[idx].overwrite_place(&place.projection, &value_state);
                 }
             }
             MirInst::InitAggregate { place, inits, .. } => {
                 if let Some(root) = root_memory_local(body, place)
                     && let Some(idx) = self.tracked_local_idx.get(root.index()).copied().flatten()
                 {
-                    for (_, value) in inits {
-                        state[idx].extend(self.loans_in_value(state, *value));
+                    for (path, value) in inits {
+                        let value_state = self.local_loans_in_value(state, *value);
+                        state[idx].overwrite_place(&place.projection.concat(path), &value_state);
                     }
                 }
             }
@@ -1747,30 +1826,32 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         }
     }
 
-    fn loans_in_rvalue(
+    fn local_loans_in_rvalue(
         &self,
-        state: &[FxHashSet<LoanId>],
+        state: &[LocalLoanState<'db>],
         rvalue: &Rvalue<'db>,
-    ) -> FxHashSet<LoanId> {
+    ) -> LocalLoanState<'db> {
         match rvalue {
-            Rvalue::Value(value) => self.loans_in_value(state, *value),
+            Rvalue::Value(value) => self.local_loans_in_value(state, *value),
             Rvalue::Load { .. }
             | Rvalue::ZeroInit
             | Rvalue::Call(_)
             | Rvalue::Intrinsic { .. }
-            | Rvalue::Alloc { .. } => FxHashSet::default(),
+            | Rvalue::Alloc { .. } => LocalLoanState::default(),
         }
     }
 
-    fn loans_in_value(&self, state: &[FxHashSet<LoanId>], value: ValueId) -> FxHashSet<LoanId> {
+    fn local_loans_in_value(
+        &self,
+        state: &[LocalLoanState<'db>],
+        value: ValueId,
+    ) -> LocalLoanState<'db> {
         let value_data = self.func.body.value(value);
         if !ty_is_noesc(self.db, value_data.ty) {
-            return FxHashSet::default();
+            return LocalLoanState::default();
         }
         if let Some(&loan) = self.loan_for_value.get(&value) {
-            let mut out = FxHashSet::default();
-            out.insert(loan);
-            return out;
+            return LocalLoanState::from_root_loan(loan);
         }
         match &value_data.origin {
             ValueOrigin::Local(local) => self
@@ -1779,22 +1860,25 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                 .copied()
                 .flatten()
                 .map(|idx| state[idx].clone())
+                .or_else(|| {
+                    self.param_loan_for_local[local.index()].map(LocalLoanState::from_root_loan)
+                })
                 .unwrap_or_default(),
-            ValueOrigin::TransparentCast { value } => self.loans_in_value(state, *value),
-            ValueOrigin::Unary { inner, .. } => self.loans_in_value(state, *inner),
+            ValueOrigin::TransparentCast { value } => self.local_loans_in_value(state, *value),
+            ValueOrigin::Unary { inner, .. } => self.local_loans_in_value(state, *inner),
             ValueOrigin::Binary { lhs, rhs, .. } => {
-                let mut out = self.loans_in_value(state, *lhs);
-                out.extend(self.loans_in_value(state, *rhs));
+                let mut out = self.local_loans_in_value(state, *lhs);
+                out.merge_from(&self.local_loans_in_value(state, *rhs));
                 out
             }
-            _ => FxHashSet::default(),
+            _ => LocalLoanState::default(),
         }
     }
 
     fn update_loan_info_for_inst(
         &mut self,
         inst: &MirInst<'db>,
-        state: &[FxHashSet<LoanId>],
+        state: &[LocalLoanState<'db>],
         changed: &mut bool,
     ) {
         if let MirInst::Assign {
@@ -1813,7 +1897,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
     fn update_loan_info_for_terminator(
         &mut self,
         term: &Terminator<'db>,
-        state: &[FxHashSet<LoanId>],
+        state: &[LocalLoanState<'db>],
         changed: &mut bool,
     ) {
         for value in borrow_values_in_terminator(&self.func.body, term) {
@@ -1823,7 +1907,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
 
     fn update_loan_from_value(
         &mut self,
-        state: &[FxHashSet<LoanId>],
+        state: &[LocalLoanState<'db>],
         value: ValueId,
         changed: &mut bool,
     ) {
@@ -1847,7 +1931,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
 
     fn update_loan_from_call(
         &mut self,
-        state: &[FxHashSet<LoanId>],
+        state: &[LocalLoanState<'db>],
         dest: LocalId,
         call: &CallOrigin<'db>,
         source: SourceInfoId,
@@ -1918,7 +2002,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
 
     fn canonicalize_place(
         &self,
-        state: &[FxHashSet<LoanId>],
+        state: &[LocalLoanState<'db>],
         place: &Place<'db>,
     ) -> FxHashSet<CanonPlace<'db>> {
         let mut out = FxHashSet::default();
@@ -1933,7 +2017,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
 
     fn canonicalize_base(
         &self,
-        state: &[FxHashSet<LoanId>],
+        state: &[LocalLoanState<'db>],
         mut base: ValueId,
     ) -> FxHashSet<CanonPlace<'db>> {
         loop {
@@ -2021,7 +2105,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
 
     fn loans_for_handle_value(
         &self,
-        state: &[FxHashSet<LoanId>],
+        state: &[LocalLoanState<'db>],
         mut value: ValueId,
     ) -> FxHashSet<LoanId> {
         while let ValueOrigin::TransparentCast { value: inner } =
@@ -2043,13 +2127,13 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             .get(local.index())
             .copied()
             .flatten()
-            .map(|idx| state[idx].clone())
+            .map(|idx| state[idx].all_loans())
             .unwrap_or_default()
     }
 
     fn mut_loans_for_handle_value(
         &self,
-        state: &[FxHashSet<LoanId>],
+        state: &[LocalLoanState<'db>],
         value: ValueId,
     ) -> FxHashSet<LoanId> {
         self.loans_for_handle_value(state, value)
@@ -2060,13 +2144,13 @@ impl<'db, 'a> Borrowck<'db, 'a> {
 
     fn active_loans(
         &self,
-        state: &[FxHashSet<LoanId>],
+        state: &[LocalLoanState<'db>],
         live: &FxHashSet<LocalId>,
     ) -> FxHashSet<LoanId> {
         let mut out = FxHashSet::default();
         for local in live {
             if let Some(idx) = self.tracked_local_idx.get(local.index()).copied().flatten() {
-                out.extend(state[idx].iter().copied());
+                out.extend(state[idx].all_loans());
             }
         }
         out
@@ -2203,7 +2287,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
     fn check_accesses(
         &self,
         inst: &MirInst<'db>,
-        state: &[FxHashSet<LoanId>],
+        state: &[LocalLoanState<'db>],
         active: &FxHashSet<LoanId>,
         suspended: &FxHashSet<LoanId>,
     ) -> Option<CompleteDiagnostic> {
@@ -2298,7 +2382,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
     fn check_accesses_in_terminator(
         &self,
         term: &Terminator<'db>,
-        state: &[FxHashSet<LoanId>],
+        state: &[LocalLoanState<'db>],
         active: &FxHashSet<LoanId>,
         suspended: &FxHashSet<LoanId>,
     ) -> Option<CompleteDiagnostic> {
@@ -2310,7 +2394,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
 
     fn check_place_access(
         &self,
-        state: &[FxHashSet<LoanId>],
+        state: &[LocalLoanState<'db>],
         place: &Place<'db>,
         access: AccessKind,
         active: &FxHashSet<LoanId>,
@@ -2370,7 +2454,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
 
     fn loans_for_place_base(
         &self,
-        state: &[FxHashSet<LoanId>],
+        state: &[LocalLoanState<'db>],
         mut base: ValueId,
     ) -> FxHashSet<LoanId> {
         loop {
@@ -2391,7 +2475,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             if let Some(owner) = owner
                 && let Some(idx) = self.tracked_local_idx.get(owner.index()).copied().flatten()
             {
-                let loans = state[idx].clone();
+                let loans = state[idx].all_loans();
                 if !loans.is_empty() {
                     return loans;
                 }
@@ -2404,7 +2488,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
     fn check_word_value_reads(
         &self,
         inst: &MirInst<'db>,
-        state: &[FxHashSet<LoanId>],
+        state: &[LocalLoanState<'db>],
         active: &FxHashSet<LoanId>,
         suspended: &FxHashSet<LoanId>,
     ) -> Option<(LoanId, String)> {
@@ -2418,7 +2502,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
     fn check_word_value_reads_in_terminator(
         &self,
         term: &Terminator<'db>,
-        state: &[FxHashSet<LoanId>],
+        state: &[LocalLoanState<'db>],
         active: &FxHashSet<LoanId>,
         suspended: &FxHashSet<LoanId>,
     ) -> Option<(LoanId, String)> {
@@ -2429,7 +2513,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
     fn check_call_arg_aliases_in_inst(
         &self,
         inst: &MirInst<'db>,
-        state: &[FxHashSet<LoanId>],
+        state: &[LocalLoanState<'db>],
     ) -> Option<CompleteDiagnostic> {
         let MirInst::Assign {
             rvalue: Rvalue::Call(call),
@@ -2448,7 +2532,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
     fn check_call_arg_aliases_in_terminator(
         &self,
         term: &Terminator<'db>,
-        state: &[FxHashSet<LoanId>],
+        state: &[LocalLoanState<'db>],
     ) -> Option<CompleteDiagnostic> {
         let Terminator::TerminatingCall { call, .. } = term else {
             return None;
@@ -2465,7 +2549,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
 
     fn call_arg_alias_conflict(
         &self,
-        state: &[FxHashSet<LoanId>],
+        state: &[LocalLoanState<'db>],
         args: impl Iterator<Item = ValueId>,
     ) -> Option<String> {
         let mut borrows = Vec::new();
@@ -2504,7 +2588,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
     fn check_word_value_reads_in_values(
         &self,
         values: &[ValueId],
-        state: &[FxHashSet<LoanId>],
+        state: &[LocalLoanState<'db>],
         active: &FxHashSet<LoanId>,
         suspended: &FxHashSet<LoanId>,
     ) -> Option<(LoanId, String)> {
@@ -2524,7 +2608,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                     .get(owner.index())
                     .copied()
                     .flatten()
-                    .map(|idx| state[idx].clone())
+                    .map(|idx| state[idx].all_loans())
                     .unwrap_or_else(|| {
                         self.param_loan_for_local[owner.index()]
                             .into_iter()
@@ -3141,6 +3225,13 @@ fn strip_casts<'db>(body: &MirBody<'db>, value: ValueId) -> ValueId {
         current = *value;
     }
     current
+}
+
+fn projection_paths_overlap<'db>(
+    a: &crate::MirProjectionPath<'db>,
+    b: &crate::MirProjectionPath<'db>,
+) -> bool {
+    !matches!(a.may_alias(b), Aliasing::No)
 }
 
 fn loans_overlap<'db>(a: &Loan<'db>, b: &Loan<'db>) -> bool {
