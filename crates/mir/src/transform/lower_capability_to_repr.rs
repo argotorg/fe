@@ -345,48 +345,37 @@ pub(crate) fn lower_capability_to_repr<'db>(
         let new_origin = match origin {
             ValueOrigin::PlaceRef(mut place) => {
                 if let Some(local) = resolve_place_root_local(&body.values, place.base) {
-                    if desired.address_space().is_none() {
-                        let local_ty = body.local(local).ty;
-                        if let Some(projected_ty) =
-                            apply_transparent_field0_chain(db, local_ty, &place.projection)
-                        {
-                            let local_repr = repr_for_plain_ty(
-                                db,
-                                core,
-                                local_ty,
-                                body.local(local).address_space,
-                            );
-                            let local_value = alloc_value(
+                    let local_ty = body.local(local).ty;
+                    if let Some(projected_ty) =
+                        apply_transparent_field0_chain(db, local_ty, &place.projection)
+                        && (desired.address_space().is_none() || !place.projection.is_empty())
+                    {
+                        let local_repr =
+                            repr_for_plain_ty(db, core, local_ty, body.local(local).address_space);
+                        let local_value = alloc_value(
+                            &mut body.values,
+                            ValueData {
+                                ty: local_ty,
+                                origin: ValueOrigin::Local(local),
+                                source: SourceInfoId::SYNTHETIC,
+                                repr: local_repr,
+                            },
+                        );
+                        let source_value = if projected_ty == local_ty {
+                            local_value
+                        } else {
+                            alloc_value(
                                 &mut body.values,
                                 ValueData {
-                                    ty: local_ty,
-                                    origin: ValueOrigin::Local(local),
+                                    ty: projected_ty,
+                                    origin: ValueOrigin::TransparentCast { value: local_value },
                                     source: SourceInfoId::SYNTHETIC,
                                     repr: local_repr,
                                 },
-                            );
-                            let source_value = if projected_ty == local_ty {
-                                local_value
-                            } else {
-                                alloc_value(
-                                    &mut body.values,
-                                    ValueData {
-                                        ty: projected_ty,
-                                        origin: ValueOrigin::TransparentCast { value: local_value },
-                                        source: SourceInfoId::SYNTHETIC,
-                                        repr: local_repr,
-                                    },
-                                )
-                            };
-                            ValueOrigin::TransparentCast {
-                                value: source_value,
-                            }
-                        } else {
-                            let spill_base = spill_addr_value_for_owner[local.index()].expect(
-                                "missing spill slot for PlaceRoot-backed PlaceRef value (repr pass bug)",
-                            );
-                            place.base = spill_base;
-                            ValueOrigin::PlaceRef(place)
+                            )
+                        };
+                        ValueOrigin::TransparentCast {
+                            value: source_value,
                         }
                     } else {
                         let spill_base = spill_addr_value_for_owner[local.index()].expect(
@@ -401,48 +390,37 @@ pub(crate) fn lower_capability_to_repr<'db>(
             }
             ValueOrigin::MoveOut { mut place } => {
                 if let Some(local) = resolve_place_root_local(&body.values, place.base) {
-                    if desired.address_space().is_none() {
-                        let local_ty = body.local(local).ty;
-                        if let Some(projected_ty) =
-                            apply_transparent_field0_chain(db, local_ty, &place.projection)
-                        {
-                            let local_repr = repr_for_plain_ty(
-                                db,
-                                core,
-                                local_ty,
-                                body.local(local).address_space,
-                            );
-                            let local_value = alloc_value(
+                    let local_ty = body.local(local).ty;
+                    if let Some(projected_ty) =
+                        apply_transparent_field0_chain(db, local_ty, &place.projection)
+                        && (desired.address_space().is_none() || !place.projection.is_empty())
+                    {
+                        let local_repr =
+                            repr_for_plain_ty(db, core, local_ty, body.local(local).address_space);
+                        let local_value = alloc_value(
+                            &mut body.values,
+                            ValueData {
+                                ty: local_ty,
+                                origin: ValueOrigin::Local(local),
+                                source: SourceInfoId::SYNTHETIC,
+                                repr: local_repr,
+                            },
+                        );
+                        let source_value = if projected_ty == local_ty {
+                            local_value
+                        } else {
+                            alloc_value(
                                 &mut body.values,
                                 ValueData {
-                                    ty: local_ty,
-                                    origin: ValueOrigin::Local(local),
+                                    ty: projected_ty,
+                                    origin: ValueOrigin::TransparentCast { value: local_value },
                                     source: SourceInfoId::SYNTHETIC,
                                     repr: local_repr,
                                 },
-                            );
-                            let source_value = if projected_ty == local_ty {
-                                local_value
-                            } else {
-                                alloc_value(
-                                    &mut body.values,
-                                    ValueData {
-                                        ty: projected_ty,
-                                        origin: ValueOrigin::TransparentCast { value: local_value },
-                                        source: SourceInfoId::SYNTHETIC,
-                                        repr: local_repr,
-                                    },
-                                )
-                            };
-                            ValueOrigin::TransparentCast {
-                                value: source_value,
-                            }
-                        } else {
-                            let spill_base = spill_addr_value_for_owner[local.index()].expect(
-                                "missing spill slot for PlaceRoot-backed MoveOut value (repr pass bug)",
-                            );
-                            place.base = spill_base;
-                            ValueOrigin::MoveOut { place }
+                            )
+                        };
+                        ValueOrigin::TransparentCast {
+                            value: source_value,
                         }
                     } else {
                         let spill_base = spill_addr_value_for_owner[local.index()].expect(
@@ -506,11 +484,44 @@ pub(crate) fn lower_capability_to_repr<'db>(
                     dest,
                     rvalue: Rvalue::Load { place },
                 } => {
+                    let loaded_ty = dest
+                        .map(|dest| locals[dest.index()].ty)
+                        .unwrap_or(values[place.base.index()].ty);
+                    let base_ty = values[place.base.index()].ty;
+
+                    // Loading a transparent field-0 projection from a non-by-ref base is a
+                    // representation-preserving cast, not a memory read.
+                    if !place.projection.is_empty()
+                        && loaded_ty.as_capability(db).is_some()
+                        && !values[place.base.index()].repr.is_ref()
+                        && resolve_place_root_local(values, place.base).is_none()
+                        && let Some(projected_ty) =
+                            apply_transparent_field0_chain(db, base_ty, &place.projection)
+                        && projected_ty == loaded_ty
+                    {
+                        let base_repr = values[place.base.index()].repr;
+                        let loaded_value = if loaded_ty == base_ty {
+                            place.base
+                        } else {
+                            alloc_value(
+                                values,
+                                ValueData {
+                                    ty: loaded_ty,
+                                    origin: ValueOrigin::TransparentCast { value: place.base },
+                                    source: SourceInfoId::SYNTHETIC,
+                                    repr: base_repr,
+                                },
+                            )
+                        };
+                        rewritten.push(MirInst::Assign {
+                            source,
+                            dest,
+                            rvalue: Rvalue::Value(loaded_value),
+                        });
+                        continue;
+                    }
+
                     if let Some(local) = resolve_place_root_local(values, place.base) {
-                        let loaded_ty = dest
-                            .map(|dest| locals[dest.index()].ty)
-                            .unwrap_or(values[place.base.index()].ty);
-                        let base_ty = values[place.base.index()].ty;
                         let Some(projected_ty) =
                             apply_transparent_field0_chain(db, base_ty, &place.projection)
                         else {

@@ -1,5 +1,5 @@
 use std::evm::effects::assert
-use core::{Seq, Copy}
+use core::Seq
 
 struct Reverse<I, T: Seq<I>> {
     base: ref T,
@@ -9,9 +9,6 @@ struct Take<I, T: Seq<I>> {
     n: usize,
     base: ref T,
 }
-
-impl<I, T: Seq<I>> Copy for Reverse<I, T> {}
-impl<I, T: Seq<I>> Copy for Take<I, T> {}
 
 fn reverse<I, T: Seq<I>>(seq: ref T) -> Reverse<I, T> {
     Reverse { base: seq }
