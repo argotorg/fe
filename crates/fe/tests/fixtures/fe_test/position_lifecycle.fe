@@ -1,0 +1,94 @@
+use std::evm::effects::assert
+
+struct Position {
+    owner: u256,
+    collateral: u256,
+    debt: u256,
+    version: u8,
+}
+
+fn read_health(p: ref Position) -> u256 {
+    if p.debt == 0 {
+        return 9999
+    }
+    p.collateral / p.debt
+}
+
+fn settle(mut p: own Position, payment: u256) -> Position {
+    if payment >= p.debt {
+        p.collateral += payment - p.debt
+        p.debt = 0
+    } else {
+        p.debt -= payment
+    }
+    p.version += 1
+    p
+}
+
+fn identity_u256(x: u256) -> u256 {
+    x
+}
+
+fn next_version(v: u8) -> u8 {
+    v + 1
+}
+
+fn close_position(p: own Position) -> (u256, u256, u8) {
+    (p.collateral, p.debt, p.version)
+}
+
+#[test]
+fn test_position_lifecycle() {
+    let mut p = Position {
+        owner: 7,
+        collateral: 1000,
+        debt: 200,
+        version: 1,
+    }
+
+    let health_before = read_health(ref p)
+    assert(health_before == 5)
+
+    let debt_handle: mut u256 = mut p.debt
+    debt_handle += 50
+    let version_handle: mut u8 = mut p.version
+    version_handle += 1
+    assert(p.owner == 7)
+    assert(p.debt == 250)
+    assert(p.version == 2)
+
+    let debt_ref: ref u256 = ref p.debt
+    let debt_copy = identity_u256(debt_ref)
+    assert(debt_copy == 250)
+
+    let ver_handle: mut u8 = mut p.version
+    ver_handle += 3
+    let projected = next_version(ver_handle)
+    assert(projected == 6)
+
+    let p = settle(p, 80)
+    assert(p.collateral == 1000)
+    assert(p.debt == 170)
+    assert(p.version == 6)
+
+    let (collateral, debt, version) = close_position(p)
+    assert(collateral == 1000)
+    assert(debt == 170)
+    assert(version == 6)
+}
+
+#[test]
+fn test_position_full_repay() {
+    let p = Position {
+        owner: 42,
+        collateral: 300,
+        debt: 90,
+        version: 0,
+    }
+
+    let p = settle(p, 120)
+    assert(p.owner == 42)
+    assert(p.collateral == 330)
+    assert(p.debt == 0)
+    assert(p.version == 1)
+}
