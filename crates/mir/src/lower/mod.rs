@@ -231,7 +231,12 @@ pub(crate) fn lower_function<'db>(
             builder.set_terminator(block, Terminator::Return(None));
         }
     }
+    let deferred_error = builder.deferred_error.take();
     let mir_body = builder.finish();
+
+    if let Some(err) = deferred_error {
+        return Err(err);
+    }
 
     if let Some(expr) = first_unlowered_expr_used_by_mir(&mir_body) {
         let expr_context = format_hir_expr_context(db, body, expr);
@@ -286,6 +291,8 @@ pub(super) struct MirBuilder<'db, 'a> {
     pub(super) effect_param_spaces: Vec<AddressSpaceKind>,
     /// Address space overrides for effect bindings not tied to a function effect list.
     pub(super) effect_binding_spaces: FxHashMap<LocalBinding<'db>, AddressSpaceKind>,
+    /// Deferred error from intrinsic lowering (e.g. `encoded_size` on a non-static type).
+    pub(super) deferred_error: Option<MirLowerError>,
 }
 
 /// Loop context capturing break/continue targets.
@@ -334,6 +341,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             receiver_space,
             effect_param_spaces: Vec::new(),
             effect_binding_spaces: FxHashMap::default(),
+            deferred_error: None,
         };
 
         builder.effect_param_spaces = builder.compute_effect_param_spaces();

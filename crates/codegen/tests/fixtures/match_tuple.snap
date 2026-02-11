@@ -1,15 +1,14 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 42
 expression: output
 input_file: tests/fixtures/match_tuple.fe
 ---
 function $match_bool_tuple($t) -> ret {
   let v0 := 0
-  let v1 := iszero(eq(mload(add($t, 1)), 0))
+  let v1 := iszero(eq(shr(248, mload(add($t, 1))), 0))
   switch v1
     case 1 {
-      let v2 := iszero(eq(mload($t), 0))
+      let v2 := iszero(eq(shr(248, mload($t)), 0))
       switch v2
         case 1 {
           v0 := 3
@@ -21,7 +20,7 @@ function $match_bool_tuple($t) -> ret {
         }
     }
     case 0 {
-      let v3 := iszero(eq(mload($t), 0))
+      let v3 := iszero(eq(shr(248, mload($t)), 0))
       switch v3
         case 1 {
           v0 := 2
@@ -39,7 +38,7 @@ function $match_bool_tuple($t) -> ret {
 }
 function $match_tuple_with_wildcard($t) -> ret {
   let v0 := 0
-  let v1 := iszero(eq(mload($t), 0))
+  let v1 := iszero(eq(shr(248, mload($t)), 0))
   switch v1
     case 1 {
       v0 := 1
@@ -54,10 +53,10 @@ function $match_tuple_with_wildcard($t) -> ret {
 }
 function $match_mixed_tuple($t) -> ret {
   let v0 := 0
-  let v1 := iszero(eq(mload($t), 0))
+  let v1 := iszero(eq(shr(248, mload($t)), 0))
   switch v1
     case 1 {
-      let v2 := and(mload(add($t, 1)), 0xff)
+      let v2 := and(shr(248, mload(add($t, 1))), 0xff)
       switch v2
         case 0 {
           v0 := 10

@@ -338,11 +338,31 @@ impl<'db> FunctionEmitter<'db> {
             return Ok("0".into());
         }
         let addr = self.lower_place_address(place, state)?;
-        let raw_load = match self.mir_func.body.place_address_space(place) {
+        let address_space = self.mir_func.body.place_address_space(place);
+        let raw_load = match address_space {
             mir::ir::AddressSpaceKind::Memory => format!("mload({addr})"),
             mir::ir::AddressSpaceKind::Calldata => format!("calldataload({addr})"),
             mir::ir::AddressSpaceKind::Storage => format!("sload({addr})"),
             mir::ir::AddressSpaceKind::TransientStorage => format!("tload({addr})"),
+        };
+
+        // For byte-addressed spaces (memory, calldata), sub-word fields in packed
+        // structs are left-aligned in the loaded 32-byte word (EVM is big-endian).
+        // Right-shift to move the value into the least-significant bytes before
+        // apply_from_word_conversion extracts/sign-extends it.
+        let raw_load = match address_space {
+            mir::ir::AddressSpaceKind::Memory | mir::ir::AddressSpaceKind::Calldata => {
+                let field_size =
+                    layout::ty_size_bytes_in(self.db, &self.layout, loaded_ty).unwrap_or(32);
+                if field_size < 32 {
+                    let shift_bits = (32 - field_size) * 8;
+                    format!("shr({shift_bits}, {raw_load})")
+                } else {
+                    raw_load
+                }
+            }
+            // Storage/transient storage are word-addressed; values are right-aligned.
+            _ => raw_load,
         };
 
         // Apply type-specific conversion (std::evm::word::WordRepr::from_word equivalent)

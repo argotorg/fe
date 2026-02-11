@@ -1,0 +1,26 @@
+use super::effects::Log
+
+/// Trait implemented by `#[event]` structs.
+///
+/// `Event.emit(self, log)` emits an EVM log whose first topic (`topic0`) is the
+/// keccak256 hash of the Solidity-compatible event signature, followed by up to
+/// 3 indexed field topics, and ABI-encoded data for any non-indexed fields.
+///
+/// The ergonomic API is `std::evm::Log::emit(log, event)`, which delegates to
+/// this method for `#[event]` structs.
+pub trait Event {
+    /// The keccak256 hash of the Solidity-compatible event signature.
+    const TOPIC0: u256
+
+    /// Emit this event using the given EVM effect provider.
+    fn emit<L: Log>(self, mut log: L)
+}
+
+/// Converts an indexed event field value to a `u256` log topic.
+///
+/// The `#[event]` desugaring generates `value.as_topic()` calls for each
+/// `#[indexed]` field. Implement this trait for custom types to use them as
+/// indexed event fields.
+pub trait TopicValue {
+    fn as_topic(self) -> u256
+}

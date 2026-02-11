@@ -1,0 +1,12 @@
+use std::evm::Evm
+
+#[event]
+struct Signed {
+    #[indexed]
+    val: i8,
+    data: u256,
+}
+
+fn emit_signed(mut evm: Evm, val: i8, data: u256) {
+    evm.emit(Signed { val, data })
+}
