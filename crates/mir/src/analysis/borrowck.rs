@@ -1768,7 +1768,6 @@ impl<'db, 'a> Borrowck<'db, 'a> {
     }
 
     fn update_state_for_inst(&self, inst: &MirInst<'db>, state: &mut [LocalLoanState<'db>]) {
-        let body = &self.func.body;
         match inst {
             MirInst::Assign {
                 dest: Some(dest),
@@ -1778,21 +1777,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                 let Some(idx) = self.tracked_local_idx.get(dest.index()).copied().flatten() else {
                     return;
                 };
-                // Only borrow-handle call results have a synthesized loan id.
-                // Other NoEsc call results (e.g. aggregates containing handles) still clear the
-                // destination's previous loans on assignment.
-                let Some(expr) = call.expr else {
-                    state[idx] = LocalLoanState::default();
-                    return;
-                };
-                let Some(&call_value) = body.expr_values.get(&expr) else {
-                    state[idx] = LocalLoanState::default();
-                    return;
-                };
-                state[idx] = LocalLoanState::default();
-                if let Some(&loan) = self.call_loan_for_value.get(&call_value) {
-                    state[idx].insert_root_loan(loan);
-                }
+                state[idx] = self.local_loans_in_call_result(state, *dest, call);
             }
             MirInst::Assign {
                 dest: Some(dest),
@@ -1805,7 +1790,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                 state[idx] = self.local_loans_in_rvalue(state, rvalue);
             }
             MirInst::Store { place, value, .. } => {
-                if let Some(root) = root_memory_local(body, place)
+                if let Some(root) = root_memory_local(&self.func.body, place)
                     && let Some(idx) = self.tracked_local_idx.get(root.index()).copied().flatten()
                 {
                     let value_state = self.local_loans_in_value(state, *value);
@@ -1813,7 +1798,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                 }
             }
             MirInst::InitAggregate { place, inits, .. } => {
-                if let Some(root) = root_memory_local(body, place)
+                if let Some(root) = root_memory_local(&self.func.body, place)
                     && let Some(idx) = self.tracked_local_idx.get(root.index()).copied().flatten()
                 {
                     for (path, value) in inits {
@@ -1824,6 +1809,36 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             }
             _ => {}
         }
+    }
+
+    fn local_loans_in_call_result(
+        &self,
+        state: &[LocalLoanState<'db>],
+        dest: LocalId,
+        call: &CallOrigin<'db>,
+    ) -> LocalLoanState<'db> {
+        if ty_is_borrow(self.db, self.func.body.local(dest).ty).is_some() {
+            let Some(expr) = call.expr else {
+                return LocalLoanState::default();
+            };
+            let Some(&call_value) = self.func.body.expr_values.get(&expr) else {
+                return LocalLoanState::default();
+            };
+            let mut out = LocalLoanState::default();
+            if let Some(&loan) = self.call_loan_for_value.get(&call_value) {
+                out.insert_root_loan(loan);
+            }
+            return out;
+        }
+
+        // Calls returning non-borrow NoEsc values (e.g. aggregates containing handles) do not
+        // currently have a precise projection summary. Keep analysis sound by conservatively
+        // propagating all argument-derived loans into the destination.
+        let mut out = LocalLoanState::default();
+        for arg in call.args.iter().chain(call.effect_args.iter()) {
+            out.merge_from(&self.local_loans_in_value(state, *arg));
+        }
+        out
     }
 
     fn local_loans_in_rvalue(
@@ -1958,36 +1973,42 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             );
             return;
         };
-        let Some(callee) = call.resolved_name.as_ref() else {
-            // Generic templates may contain unresolved call targets; skip summary application in
-            // that case so we can still report local borrow/move conflicts.
-            return;
-        };
-        let Some(summary) = self.summaries.get(callee) else {
-            // If we don't have a summary (e.g. callee not in this analysis set), treat it as not
-            // contributing any borrow transforms.
-            return;
-        };
 
         let mut targets = FxHashSet::default();
         let mut parents = FxHashSet::default();
-        for transform in summary {
-            let Some(&arg) = call.args.get(transform.param_index as usize) else {
-                self.record_internal_error(
-                    source,
-                    format!(
-                        "borrow summary for `{callee}` references missing argument index {}",
-                        transform.param_index
-                    ),
-                );
-                return;
-            };
-            parents.extend(self.mut_loans_for_handle_value(state, arg));
-            for base in self.canonicalize_base(state, arg) {
-                targets.insert(CanonPlace {
-                    root: base.root,
-                    proj: base.proj.concat(&transform.proj),
-                });
+        if let Some(callee) = call.resolved_name.as_ref() {
+            if let Some(summary) = self.summaries.get(callee) {
+                for transform in summary {
+                    let Some(&arg) = call.args.get(transform.param_index as usize) else {
+                        self.record_internal_error(
+                            source,
+                            format!(
+                                "borrow summary for `{callee}` references missing argument index {}",
+                                transform.param_index
+                            ),
+                        );
+                        return;
+                    };
+                    parents.extend(self.mut_loans_for_handle_value(state, arg));
+                    for base in self.canonicalize_base(state, arg) {
+                        targets.insert(CanonPlace {
+                            root: base.root,
+                            proj: base.proj.concat(&transform.proj),
+                        });
+                    }
+                }
+            }
+        }
+
+        if targets.is_empty() {
+            // Conservative fallback for unresolved/unknown call targets: treat a borrow return as
+            // potentially derived from any borrow argument.
+            for arg in call.args.iter().chain(call.effect_args.iter()) {
+                if ty_is_borrow(self.db, self.func.body.value(*arg).ty).is_none() {
+                    continue;
+                }
+                parents.extend(self.mut_loans_for_handle_value(state, *arg));
+                targets.extend(self.canonicalize_base(state, *arg));
             }
         }
 
