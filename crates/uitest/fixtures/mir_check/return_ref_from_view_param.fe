@@ -1,0 +1,11 @@
+pub fn return_ref_from_view_param(x: u256) -> ref u256 {
+    ref x
+}
+
+struct NonCopy {
+    v: u256,
+}
+
+pub fn return_ref_from_view_param_noncopy(s: NonCopy) -> ref u256 {
+    ref s.v
+}

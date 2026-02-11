@@ -236,9 +236,9 @@ pub(crate) fn lower_capability_to_repr<'db>(
         };
 
         let is_word_place = desired_repr[idx].address_space().is_none();
-        let base_ty = body.values[place.base.index()].ty;
+        let local_ty = body.local(local).ty;
         let is_transparent_place =
-            apply_transparent_field0_chain(db, base_ty, &place.projection).is_some();
+            apply_transparent_field0_chain(db, local_ty, &place.projection).is_some();
         if !(is_word_place && is_transparent_place) {
             locals_need_spill[local.index()] = true;
         }

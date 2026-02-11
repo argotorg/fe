@@ -277,7 +277,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         let borrow_param: Vec<_> = body
             .param_locals
             .iter()
-            .map(|local| ty_is_borrow(db, body.local(*local).ty).is_some())
+            .map(|local| body.local(*local).ty.as_borrow(db).is_some())
             .collect();
 
         let param_modes = match func.origin {
@@ -1591,18 +1591,21 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                 let Some(idx) = self.tracked_local_idx.get(dest.index()).copied().flatten() else {
                     return;
                 };
+                // Only borrow-handle call results have a synthesized loan id.
+                // Other NoEsc call results (e.g. aggregates containing handles) still clear the
+                // destination's previous loans on assignment.
                 let Some(expr) = call.expr else {
-                    panic!("borrow-handle call must carry its ExprId for analysis");
+                    state[idx].clear();
+                    return;
                 };
                 let Some(&call_value) = body.expr_values.get(&expr) else {
-                    panic!("missing value id for call expr {expr:?}");
+                    state[idx].clear();
+                    return;
                 };
-                let Some(&loan) = self.call_loan_for_value.get(&call_value) else {
-                    panic!("missing loan id for borrow-handle call expr {expr:?}");
-                };
-
                 state[idx].clear();
-                state[idx].insert(loan);
+                if let Some(&loan) = self.call_loan_for_value.get(&call_value) {
+                    state[idx].insert(loan);
+                }
             }
             MirInst::Assign {
                 dest: Some(dest),

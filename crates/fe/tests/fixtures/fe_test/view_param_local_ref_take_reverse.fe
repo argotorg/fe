@@ -1,37 +1,42 @@
 use std::evm::effects::assert
-use ingot::seq::Seq
 
-struct Reverse<I, T: Seq<I>> {
+struct Reverse<I, T: core::Seq<I> + core::Copy> {
     base: ref T,
 }
 
-struct Take<I, T: Seq<I>> {
+struct Take<I, T: core::Seq<I> + core::Copy> {
     n: usize,
     base: ref T,
 }
 
-fn reverse<I, T: Seq<I>>(seq: ref T) -> Reverse<I, T> {
+impl<I, T: core::Seq<I> + core::Copy> core::Copy for Reverse<I, T> {}
+impl<I, T: core::Seq<I> + core::Copy> core::Copy for Take<I, T> {}
+
+fn reverse<I, T: core::Seq<I> + core::Copy>(seq: ref T) -> Reverse<I, T> {
     Reverse { base: seq }
 }
 
-fn take<I, T: Seq<I>>(n: usize, seq: ref T) -> Take<I, T> {
+fn take<I, T: core::Seq<I> + core::Copy>(n: usize, seq: ref T) -> Take<I, T> {
     Take { n, base: seq }
 }
 
-impl<I, T: Seq<I>> Seq<I> for Reverse<I, T> {
+impl<I, T: core::Seq<I> + core::Copy> core::Seq<I> for Reverse<I, T> {
     fn len(self) -> usize {
-        self.base.len()
+        let base: T = self.base
+        base.len()
     }
 
     fn get(self, i: usize) -> I {
-        let n = self.base.len()
-        self.base.get(n - 1 - i)
+        let base: T = self.base
+        let n = base.len()
+        base.get(n - 1 - i)
     }
 }
 
-impl<I, T: Seq<I>> Seq<I> for Take<I, T> {
+impl<I, T: core::Seq<I> + core::Copy> core::Seq<I> for Take<I, T> {
     fn len(self) -> usize {
-        let total = self.base.len()
+        let base: T = self.base
+        let total = base.len()
         if self.n < total {
             self.n
         } else {
@@ -40,13 +45,24 @@ impl<I, T: Seq<I>> Seq<I> for Take<I, T> {
     }
 
     fn get(self, i: usize) -> I {
-        self.base.get(i)
+        let base: T = self.base
+        base.get(i)
     }
 }
 
 fn sum_last4(arr: [u256; 8]) -> u256 {
-    let total = 0
-    for x in take(4, reverse(arr)) {
+    let mut total = 0
+    let rev: Reverse<u256, [u256; 8]> = reverse(ref arr)
+    for i in 0..4 {
+        total += rev.get(i)
+    }
+    total
+}
+
+fn sum_first4(arr: [u256; 8]) -> u256 {
+    let mut total = 0
+    let head: Take<u256, [u256; 8]> = take(4, ref arr)
+    for x in head {
         total += x
     }
     total
@@ -56,4 +72,5 @@ fn sum_last4(arr: [u256; 8]) -> u256 {
 fn test_view_param_local_ref_take_reverse() {
     let arr: [u256; 8] = [1, 2, 3, 4, 5, 6, 7, 8]
     assert(sum_last4(arr) == 26)
+    assert(sum_first4(arr) == 10)
 }
