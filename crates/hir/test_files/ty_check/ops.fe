@@ -27,7 +27,7 @@ impl Eq for Ok {
             _ => false
          }
     }
-    fn ne(own self, _ other: own Ok) -> bool {
+    fn ne(self, _ other: Ok) -> bool {
         !self.eq(other)
     }
 }

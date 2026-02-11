@@ -27,7 +27,7 @@ pub trait Applicative: Functor
 {
     fn pure<T>(_ value: own T) -> Self<T>
 
-    fn ap<T, U, F: Fn<T, U>>(self: own Self<F>, _ value: self: own Self<T>) -> Self<U>
+    fn ap<T, U, F: Fn<T, U>>(self: own Self<F>, _ value: own Self<T>) -> Self<U>
 }
 
 /// A monad in the sense of functional programming.

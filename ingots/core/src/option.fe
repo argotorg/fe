@@ -87,7 +87,7 @@ impl Applicative for Option {
         Option::Some(value)
     }
 
-    fn ap<T, U, F: Fn<T, U>>(self: own Self<F>, _ value: self: own Self<T>) -> Self<U> {
+    fn ap<T, U, F: Fn<T, U>>(self: own Self<F>, _ value: own Self<T>) -> Self<U> {
         match (self, value) {
             (Option::Some(func), Option::Some(arg)) => Option::Some(func.call(arg))
             _ => Option::None

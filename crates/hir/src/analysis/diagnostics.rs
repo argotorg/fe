@@ -13,12 +13,12 @@ use crate::analysis::{
         },
         trait_def::TraitInstId,
         ty_check::{EffectParamOwner, RecordLike},
-        ty_def::{TyData, TyVarSort},
+        ty_def::{TyData, TyId, TyVarSort},
     },
 };
 use crate::{
     ParserError, SpannedHirDb,
-    hir_def::{CallableDef, FieldIndex, GenericParamOwner, PathKind, Trait},
+    hir_def::{CallableDef, FieldIndex, GenericParamOwner, PathKind, Trait, params::FuncParamMode},
     span::LazySpan,
 };
 use common::diagnostics::{
@@ -63,6 +63,24 @@ fn cmp_trait_inst_by_name<'db>(
         let b_self = b.self_ty(db).pretty_print(db).to_string();
         a_self.cmp(&b_self)
     })
+}
+
+fn format_method_param_ty<'db>(
+    db: &'db dyn SpannedHirAnalysisDb,
+    callable: CallableDef<'db>,
+    param_idx: usize,
+    ty: TyId<'db>,
+) -> String {
+    let ty = ty.pretty_print(db).to_string();
+    let mode = match callable {
+        CallableDef::Func(func) => func.params(db).nth(param_idx).map(|param| param.mode(db)),
+        CallableDef::VariantCtor(_) => None,
+    };
+
+    match mode {
+        Some(FuncParamMode::Own) => format!("own {ty}"),
+        Some(FuncParamMode::View) | None => ty,
+    }
 }
 
 /// All diagnostics accumulated in salsa-db should implement
@@ -3707,6 +3725,8 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                 param_idx,
             } => {
                 let method_name = impl_m.name(db).expect("methods have names").data(db);
+                let expected = format_method_param_ty(db, *trait_m, *param_idx, *trait_m_ty);
+                let found = format_method_param_ty(db, *impl_m, *param_idx, *impl_m_ty);
 
                 CompleteDiagnostic {
                     severity,
@@ -3714,11 +3734,7 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                     sub_diagnostics: vec![
                         SubDiagnostic {
                             style: LabelStyle::Primary,
-                            message: format!(
-                                "expected `{}`, found `{}`",
-                                trait_m_ty.pretty_print(db),
-                                impl_m_ty.pretty_print(db)
-                            ),
+                            message: format!("expected `{expected}`, found `{found}`"),
                             span: impl_m.param_span(*param_idx).resolve(db),
                         },
                         SubDiagnostic {

@@ -131,10 +131,10 @@ note:
    │ ╰───────────────────^ Balance
 
 note: 
-   ┌─ contract_effects.fe:50:48
+   ┌─ contract_effects.fe:50:40
    │  
-50 │       fn eq(own self, _ other: own Self) -> bool {
-   │ ╭────────────────────────────────────────────────^
+50 │       fn eq(self, _ other: Self) -> bool {
+   │ ╭────────────────────────────────────────^
 51 │ │         self.inner == other.inner
 52 │ │     }
    │ ╰─────^ bool

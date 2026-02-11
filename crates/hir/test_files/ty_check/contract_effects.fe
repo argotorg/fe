@@ -47,7 +47,7 @@ struct Address {
 impl Copy for Address {}
 
 impl core::ops::Eq for Address {
-    fn eq(own self, _ other: own Self) -> bool {
+    fn eq(self, _ other: Self) -> bool {
         self.inner == other.inner
     }
 }

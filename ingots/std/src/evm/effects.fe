@@ -35,7 +35,7 @@ impl Address {
 }
 
 impl core::ops::Eq for Address {
-    fn eq(own self, _ other: own Address) -> bool {
+    fn eq(self, _ other: Address) -> bool {
         self.inner == other.inner
     }
 }

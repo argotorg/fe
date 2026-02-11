@@ -637,10 +637,10 @@ impl Eq for u8 {
     fn ne(self, _ other: u8) -> bool { __ne_u8(self, other) }
 }
 impl Ord for u8 {
-    fn lt(own self, _ other: own u8) -> bool { __lt_u8(self, other) }
-    fn le(own self, _ other: own u8) -> bool { __le_u8(self, other) }
-    fn gt(own self, _ other: own u8) -> bool { __gt_u8(self, other) }
-    fn ge(own self, _ other: own u8) -> bool { __ge_u8(self, other) }
+    fn lt(self, _ other: u8) -> bool { __lt_u8(self, other) }
+    fn le(self, _ other: u8) -> bool { __le_u8(self, other) }
+    fn gt(self, _ other: u8) -> bool { __gt_u8(self, other) }
+    fn ge(self, _ other: u8) -> bool { __ge_u8(self, other) }
 }
 impl AddAssign for u8 { fn add_assign(mut self, _ other: own u8) { self = self + other } }
 impl SubAssign for u8 { fn sub_assign(mut self, _ other: own u8) { self = self - other } }
@@ -675,10 +675,10 @@ impl Eq for i8 {
     fn ne(self, _ other: i8) -> bool { __ne_i8(self, other) }
 }
 impl Ord for i8 {
-    fn lt(own self, _ other: own i8) -> bool { __lt_i8(self, other) }
-    fn le(own self, _ other: own i8) -> bool { __le_i8(self, other) }
-    fn gt(own self, _ other: own i8) -> bool { __gt_i8(self, other) }
-    fn ge(own self, _ other: own i8) -> bool { __ge_i8(self, other) }
+    fn lt(self, _ other: i8) -> bool { __lt_i8(self, other) }
+    fn le(self, _ other: i8) -> bool { __le_i8(self, other) }
+    fn gt(self, _ other: i8) -> bool { __gt_i8(self, other) }
+    fn ge(self, _ other: i8) -> bool { __ge_i8(self, other) }
 }
 impl AddAssign for i8 { fn add_assign(mut self, _ other: own i8) { self = self + other } }
 impl SubAssign for i8 { fn sub_assign(mut self, _ other: own i8) { self = self - other } }
@@ -713,10 +713,10 @@ impl Eq for i16 {
     fn ne(self, _ other: i16) -> bool { __ne_i16(self, other) }
 }
 impl Ord for i16 {
-    fn lt(own self, _ other: own i16) -> bool { __lt_i16(self, other) }
-    fn le(own self, _ other: own i16) -> bool { __le_i16(self, other) }
-    fn gt(own self, _ other: own i16) -> bool { __gt_i16(self, other) }
-    fn ge(own self, _ other: own i16) -> bool { __ge_i16(self, other) }
+    fn lt(self, _ other: i16) -> bool { __lt_i16(self, other) }
+    fn le(self, _ other: i16) -> bool { __le_i16(self, other) }
+    fn gt(self, _ other: i16) -> bool { __gt_i16(self, other) }
+    fn ge(self, _ other: i16) -> bool { __ge_i16(self, other) }
 }
 impl AddAssign for i16 { fn add_assign(mut self, _ other: own i16) { self = self + other } }
 impl SubAssign for i16 { fn sub_assign(mut self, _ other: own i16) { self = self - other } }
@@ -750,10 +750,10 @@ impl Eq for u16 {
     fn ne(self, _ other: u16) -> bool { __ne_u16(self, other) }
 }
 impl Ord for u16 {
-    fn lt(own self, _ other: own u16) -> bool { __lt_u16(self, other) }
-    fn le(own self, _ other: own u16) -> bool { __le_u16(self, other) }
-    fn gt(own self, _ other: own u16) -> bool { __gt_u16(self, other) }
-    fn ge(own self, _ other: own u16) -> bool { __ge_u16(self, other) }
+    fn lt(self, _ other: u16) -> bool { __lt_u16(self, other) }
+    fn le(self, _ other: u16) -> bool { __le_u16(self, other) }
+    fn gt(self, _ other: u16) -> bool { __gt_u16(self, other) }
+    fn ge(self, _ other: u16) -> bool { __ge_u16(self, other) }
 }
 impl AddAssign for u16 { fn add_assign(mut self, _ other: own u16) { self = self + other } }
 impl SubAssign for u16 { fn sub_assign(mut self, _ other: own u16) { self = self - other } }
@@ -789,10 +789,10 @@ impl Eq for i32 {
     fn ne(self, _ other: i32) -> bool { __ne_i32(self, other) }
 }
 impl Ord for i32 {
-    fn lt(own self, _ other: own i32) -> bool { __lt_i32(self, other) }
-    fn le(own self, _ other: own i32) -> bool { __le_i32(self, other) }
-    fn gt(own self, _ other: own i32) -> bool { __gt_i32(self, other) }
-    fn ge(own self, _ other: own i32) -> bool { __ge_i32(self, other) }
+    fn lt(self, _ other: i32) -> bool { __lt_i32(self, other) }
+    fn le(self, _ other: i32) -> bool { __le_i32(self, other) }
+    fn gt(self, _ other: i32) -> bool { __gt_i32(self, other) }
+    fn ge(self, _ other: i32) -> bool { __ge_i32(self, other) }
 }
 impl AddAssign for i32 { fn add_assign(mut self, _ other: own i32) { self = self + other } }
 impl SubAssign for i32 { fn sub_assign(mut self, _ other: own i32) { self = self - other } }
@@ -826,10 +826,10 @@ impl Eq for u32 {
     fn ne(self, _ other: u32) -> bool { __ne_u32(self, other) }
 }
 impl Ord for u32 {
-    fn lt(own self, _ other: own u32) -> bool { __lt_u32(self, other) }
-    fn le(own self, _ other: own u32) -> bool { __le_u32(self, other) }
-    fn gt(own self, _ other: own u32) -> bool { __gt_u32(self, other) }
-    fn ge(own self, _ other: own u32) -> bool { __ge_u32(self, other) }
+    fn lt(self, _ other: u32) -> bool { __lt_u32(self, other) }
+    fn le(self, _ other: u32) -> bool { __le_u32(self, other) }
+    fn gt(self, _ other: u32) -> bool { __gt_u32(self, other) }
+    fn ge(self, _ other: u32) -> bool { __ge_u32(self, other) }
 }
 impl AddAssign for u32 { fn add_assign(mut self, _ other: own u32) { self = self + other } }
 impl SubAssign for u32 { fn sub_assign(mut self, _ other: own u32) { self = self - other } }
@@ -864,10 +864,10 @@ impl Eq for i64 {
     fn ne(self, _ other: i64) -> bool { __ne_i64(self, other) }
 }
 impl Ord for i64 {
-    fn lt(own self, _ other: own i64) -> bool { __lt_i64(self, other) }
-    fn le(own self, _ other: own i64) -> bool { __le_i64(self, other) }
-    fn gt(own self, _ other: own i64) -> bool { __gt_i64(self, other) }
-    fn ge(own self, _ other: own i64) -> bool { __ge_i64(self, other) }
+    fn lt(self, _ other: i64) -> bool { __lt_i64(self, other) }
+    fn le(self, _ other: i64) -> bool { __le_i64(self, other) }
+    fn gt(self, _ other: i64) -> bool { __gt_i64(self, other) }
+    fn ge(self, _ other: i64) -> bool { __ge_i64(self, other) }
 }
 impl AddAssign for i64 { fn add_assign(mut self, _ other: own i64) { self = self + other } }
 impl SubAssign for i64 { fn sub_assign(mut self, _ other: own i64) { self = self - other } }
@@ -902,10 +902,10 @@ impl Eq for i128 {
     fn ne(self, _ other: i128) -> bool { __ne_i128(self, other) }
 }
 impl Ord for i128 {
-    fn lt(own self, _ other: own i128) -> bool { __lt_i128(self, other) }
-    fn le(own self, _ other: own i128) -> bool { __le_i128(self, other) }
-    fn gt(own self, _ other: own i128) -> bool { __gt_i128(self, other) }
-    fn ge(own self, _ other: own i128) -> bool { __ge_i128(self, other) }
+    fn lt(self, _ other: i128) -> bool { __lt_i128(self, other) }
+    fn le(self, _ other: i128) -> bool { __le_i128(self, other) }
+    fn gt(self, _ other: i128) -> bool { __gt_i128(self, other) }
+    fn ge(self, _ other: i128) -> bool { __ge_i128(self, other) }
 }
 impl AddAssign for i128 { fn add_assign(mut self, _ other: own i128) { self = self + other } }
 impl SubAssign for i128 { fn sub_assign(mut self, _ other: own i128) { self = self - other } }
@@ -939,10 +939,10 @@ impl Eq for u64 {
     fn ne(self, _ other: u64) -> bool { __ne_u64(self, other) }
 }
 impl Ord for u64 {
-    fn lt(own self, _ other: own u64) -> bool { __lt_u64(self, other) }
-    fn le(own self, _ other: own u64) -> bool { __le_u64(self, other) }
-    fn gt(own self, _ other: own u64) -> bool { __gt_u64(self, other) }
-    fn ge(own self, _ other: own u64) -> bool { __ge_u64(self, other) }
+    fn lt(self, _ other: u64) -> bool { __lt_u64(self, other) }
+    fn le(self, _ other: u64) -> bool { __le_u64(self, other) }
+    fn gt(self, _ other: u64) -> bool { __gt_u64(self, other) }
+    fn ge(self, _ other: u64) -> bool { __ge_u64(self, other) }
 }
 impl AddAssign for u64 { fn add_assign(mut self, _ other: own u64) { self = self + other } }
 impl SubAssign for u64 { fn sub_assign(mut self, _ other: own u64) { self = self - other } }
@@ -976,10 +976,10 @@ impl Eq for u128 {
     fn ne(self, _ other: u128) -> bool { __ne_u128(self, other) }
 }
 impl Ord for u128 {
-    fn lt(own self, _ other: own u128) -> bool { __lt_u128(self, other) }
-    fn le(own self, _ other: own u128) -> bool { __le_u128(self, other) }
-    fn gt(own self, _ other: own u128) -> bool { __gt_u128(self, other) }
-    fn ge(own self, _ other: own u128) -> bool { __ge_u128(self, other) }
+    fn lt(self, _ other: u128) -> bool { __lt_u128(self, other) }
+    fn le(self, _ other: u128) -> bool { __le_u128(self, other) }
+    fn gt(self, _ other: u128) -> bool { __gt_u128(self, other) }
+    fn ge(self, _ other: u128) -> bool { __ge_u128(self, other) }
 }
 impl AddAssign for u128 { fn add_assign(mut self, _ other: own u128) { self = self + other } }
 impl SubAssign for u128 { fn sub_assign(mut self, _ other: own u128) { self = self - other } }
@@ -1013,10 +1013,10 @@ impl Eq for usize {
     fn ne(self, _ other: usize) -> bool { __ne_usize(self, other) }
 }
 impl Ord for usize {
-    fn lt(own self, _ other: own usize) -> bool { __lt_usize(self, other) }
-    fn le(own self, _ other: own usize) -> bool { __le_usize(self, other) }
-    fn gt(own self, _ other: own usize) -> bool { __gt_usize(self, other) }
-    fn ge(own self, _ other: own usize) -> bool { __ge_usize(self, other) }
+    fn lt(self, _ other: usize) -> bool { __lt_usize(self, other) }
+    fn le(self, _ other: usize) -> bool { __le_usize(self, other) }
+    fn gt(self, _ other: usize) -> bool { __gt_usize(self, other) }
+    fn ge(self, _ other: usize) -> bool { __ge_usize(self, other) }
 }
 impl Default for usize { fn default() -> Self { 0 } }
 
@@ -1040,10 +1040,10 @@ impl Eq for i256 {
     fn ne(self, _ other: i256) -> bool { __ne_i256(self, other) }
 }
 impl Ord for i256 {
-    fn lt(own self, _ other: own i256) -> bool { __lt_i256(self, other) }
-    fn le(own self, _ other: own i256) -> bool { __le_i256(self, other) }
-    fn gt(own self, _ other: own i256) -> bool { __gt_i256(self, other) }
-    fn ge(own self, _ other: own i256) -> bool { __ge_i256(self, other) }
+    fn lt(self, _ other: i256) -> bool { __lt_i256(self, other) }
+    fn le(self, _ other: i256) -> bool { __le_i256(self, other) }
+    fn gt(self, _ other: i256) -> bool { __gt_i256(self, other) }
+    fn ge(self, _ other: i256) -> bool { __ge_i256(self, other) }
 }
 impl AddAssign for i256 { fn add_assign(mut self, _ other: own i256) { self = self + other } }
 impl SubAssign for i256 { fn sub_assign(mut self, _ other: own i256) { self = self - other } }
@@ -1077,10 +1077,10 @@ impl Eq for u256 {
     fn ne(self, _ other: u256) -> bool { __ne_u256(self, other) }
 }
 impl Ord for u256 {
-    fn lt(own self, _ other: own u256) -> bool { __lt_u256(self, other) }
-    fn le(own self, _ other: own u256) -> bool { __le_u256(self, other) }
-    fn gt(own self, _ other: own u256) -> bool { __gt_u256(self, other) }
-    fn ge(own self, _ other: own u256) -> bool { __ge_u256(self, other) }
+    fn lt(self, _ other: u256) -> bool { __lt_u256(self, other) }
+    fn le(self, _ other: u256) -> bool { __le_u256(self, other) }
+    fn gt(self, _ other: u256) -> bool { __gt_u256(self, other) }
+    fn ge(self, _ other: u256) -> bool { __ge_u256(self, other) }
 }
 impl AddAssign for u256 { fn add_assign(mut self, _ other: own u256) { self = self + other } }
 impl SubAssign for u256 { fn sub_assign(mut self, _ other: own u256) { self = self - other } }
@@ -1115,10 +1115,10 @@ impl Eq for isize {
     fn ne(self, _ other: isize) -> bool { __ne_isize(self, other) }
 }
 impl Ord for isize {
-    fn lt(own self, _ other: own isize) -> bool { __lt_isize(self, other) }
-    fn le(own self, _ other: own isize) -> bool { __le_isize(self, other) }
-    fn gt(own self, _ other: own isize) -> bool { __gt_isize(self, other) }
-    fn ge(own self, _ other: own isize) -> bool { __ge_isize(self, other) }
+    fn lt(self, _ other: isize) -> bool { __lt_isize(self, other) }
+    fn le(self, _ other: isize) -> bool { __le_isize(self, other) }
+    fn gt(self, _ other: isize) -> bool { __gt_isize(self, other) }
+    fn ge(self, _ other: isize) -> bool { __ge_isize(self, other) }
 }
 impl AddAssign for isize { fn add_assign(mut self, _ other: own isize) { self = self + other } }
 impl SubAssign for isize { fn sub_assign(mut self, _ other: own isize) { self = self - other } }

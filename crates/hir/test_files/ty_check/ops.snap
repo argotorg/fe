@@ -77,10 +77,10 @@ note:
    │      ^^ Ok
 
 note: 
-   ┌─ ops.fe:24:46
+   ┌─ ops.fe:24:38
    │  
-24 │       fn eq(own self, _ other: own Ok) -> bool {
-   │ ╭──────────────────────────────────────────────^
+24 │       fn eq(self, _ other: Ok) -> bool {
+   │ ╭──────────────────────────────────────^
 25 │ │         match (self, other) {
 26 │ │             (Ok::Yes, Ok::Yes) | (Ok::No, Ok::No) => true
 27 │ │             _ => false
@@ -176,10 +176,10 @@ note:
    │                  ^^^^^ bool
 
 note: 
-   ┌─ ops.fe:30:46
+   ┌─ ops.fe:30:38
    │  
-30 │       fn ne(own self, _ other: own Ok) -> bool {
-   │ ╭──────────────────────────────────────────────^
+30 │       fn ne(self, _ other: Ok) -> bool {
+   │ ╭──────────────────────────────────────^
 31 │ │         !self.eq(other)
 32 │ │     }
    │ ╰─────^ bool
