@@ -120,7 +120,88 @@ version = "{version}"
     )?;
 
     let src_lib = src_dir.join("lib.fe");
-    write_if_absent(&src_lib, "pub fn main() {\n    // add your code here\n}\n")?;
+    write_if_absent(
+        &src_lib,
+        r#"// A simple Counter contract to get you started.
+// Run `fe test` to see it in action!
+
+use std::abi::sol
+use std::evm::{Evm, Call}
+use std::evm::effects::assert
+
+// Messages define your contract's public interface.
+// Each variant becomes a callable function with a unique selector.
+// The `sol()` const fn computes the standard Solidity selector at compile time.
+msg CounterMsg {
+    #[selector = sol("increment()")]
+    Increment,
+    #[selector = sol("get()")]
+    Get -> u256,
+}
+
+// Storage is defined as a regular struct.
+// Its fields are persisted on-chain between calls.
+struct CounterStore {
+    value: u256,
+}
+
+// The contract itself: declares its storage and handles messages.
+pub contract Counter {
+    mut store: CounterStore
+
+    // The constructor runs once when the contract is deployed.
+    init() uses (mut store) {
+        store.value = 0
+    }
+
+    // The recv block routes incoming messages to handlers.
+    recv CounterMsg {
+        Increment uses (mut store) {
+            store.value = store.value + 1
+        }
+
+        Get -> u256 uses (store) {
+            store.value
+        }
+    }
+}
+
+// Tests can deploy and interact with contracts.
+// Run with: fe test
+#[test]
+fn test_counter() uses (mut evm: Evm) {
+    // Deploy the contract
+    let addr = evm.create2<Counter>(value: 0, args: (), salt: 0)
+    assert(addr.inner != 0)
+
+    // Initially the counter is 0
+    let val: u256 = evm.call(
+        addr: addr,
+        gas: 100000,
+        value: 0,
+        message: CounterMsg::Get {}
+    )
+    assert(val == 0)
+
+    // Increment the counter
+    evm.call(
+        addr: addr,
+        gas: 100000,
+        value: 0,
+        message: CounterMsg::Increment {}
+    )
+
+    // Now it should be 1
+    let val: u256 = evm.call(
+        addr: addr,
+        gas: 100000,
+        value: 0,
+        message: CounterMsg::Get {}
+    )
+    assert(val == 1)
+}
+"#,
+    )?;
 
     println!("Created ingot at {base}");
     Ok(())

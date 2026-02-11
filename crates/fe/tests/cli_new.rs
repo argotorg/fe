@@ -69,7 +69,13 @@ fn new_creates_ingot_layout() {
     assert!(config.contains("version = \"0.1.0\""));
 
     assert!(ingot_dir.join("src").is_dir(), "missing src/");
-    assert!(ingot_dir.join("src/lib.fe").is_file(), "missing src/lib.fe");
+    let lib_fe = ingot_dir.join("src/lib.fe");
+    assert!(lib_fe.is_file(), "missing src/lib.fe");
+    let lib_content = std::fs::read_to_string(&lib_fe).expect("read lib.fe");
+    assert!(
+        lib_content.contains("contract Counter"),
+        "expected lib.fe to contain Counter contract template, got:\n{lib_content}"
+    );
 }
 
 #[test]
@@ -426,5 +432,21 @@ exclude = ["target"]
     assert!(
         member_dir.join("fe.toml").is_file(),
         "expected ingot fe.toml to be created"
+    );
+}
+
+#[test]
+fn new_generated_project_passes_fe_test() {
+    let tmp = TempDir::new().expect("tempdir");
+    let ingot_dir = tmp.path().join("my_counter");
+
+    let (output, exit_code) = run_fe(&["new", ingot_dir.to_str().unwrap()], tmp.path());
+    assert_eq!(exit_code, 0, "fe new failed:\n{output}");
+
+    let (output, exit_code) = run_fe(&["test"], &ingot_dir);
+    assert_eq!(exit_code, 0, "fe test failed:\n{output}");
+    assert!(
+        output.contains("test_counter") && output.contains("ok"),
+        "expected test_counter to pass, got:\n{output}"
     );
 }
