@@ -287,8 +287,8 @@ pub(crate) fn canonicalize_transparent_newtypes<'db>(
 
         for proj in place.projection.iter() {
             // Peel transparent-newtype field 0 projections by retyping the base address.
-            if let Projection::Field(0) = proj
-                && let Some(inner_ty) = crate::repr::transparent_newtype_field_ty(db, current_ty)
+            if let Some(inner_ty) =
+                crate::repr::transparent_field0_projection_step_ty(db, current_ty, proj)
             {
                 let base_at_point = if path.is_empty() {
                     base

@@ -436,22 +436,16 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         // For nested newtypes (`A { inner: B { inner: u256 } }`), the decision-tree projection
         // path can contain multiple `Field(0)` steps. These are all representation-preserving
         // casts that must not be lowered as place/projection loads.
-        let mut current_ty = scrutinee_ty;
-        for proj in path.iter() {
-            if let Projection::Field(0) = proj
-                && let Some(inner) = crate::repr::transparent_newtype_field_ty(self.db, current_ty)
-            {
-                current_ty = inner;
-                continue;
-            }
-
+        let Some(current_ty) =
+            crate::repr::peel_transparent_field0_projection_path(self.db, scrutinee_ty, path)
+        else {
             panic!(
                 "{context} requires `Ref` scrutinee (ty={}, repr={:?}, path_len={})",
                 scrutinee_ty.pretty_print(self.db),
                 scrutinee_repr,
                 path.len()
             );
-        }
+        };
 
         debug_assert_eq!(
             current_ty,

@@ -9,10 +9,13 @@ use common::ingot::IngotKind;
 use hir::analysis::{
     HirAnalysisDb,
     diagnostics::SpannedHirAnalysisDb,
+    place::PlaceBase,
     ty::{
         adt_def::AdtRef,
+        effects::EffectKeyKind,
         ty_check::{
-            EffectParamSite, LocalBinding, ParamSite, RecordLike, TypedBody, check_func_body,
+            EffectArg, EffectParamSite, EffectPassMode, LocalBinding, ParamSite, RecordLike,
+            ResolvedEffectArg, TypedBody, check_func_body,
         },
         ty_def::{PrimTy, TyBase, TyData, TyId},
     },
@@ -472,6 +475,26 @@ pub(super) struct LoopScope {
     pub(super) break_target: BasicBlockId,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum EffectProviderInferenceRationale {
+    ConcreteProviderTy,
+    ByRefProviderDefaultsToMemory,
+    ContractFieldProviderTy,
+    ByTempPlaceMemPtr,
+    ForwardedEffectParamProviderTy,
+    ForwardedEffectParamFallbackMemPtr,
+    ContractFieldFallbackStorPtr,
+    DefaultMemPtr,
+    StorageDefault,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct InferredEffectProvider<'db> {
+    pub(super) provider_ty: Option<TyId<'db>>,
+    pub(super) address_space: AddressSpaceKind,
+    pub(super) rationale: EffectProviderInferenceRationale,
+}
+
 impl<'db, 'a> MirBuilder<'db, 'a> {
     /// Constructs a new builder for the given HIR body and typed information.
     ///
@@ -649,38 +672,211 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         let mut spaces = vec![AddressSpaceKind::Storage; func.effect_params(self.db).count()];
         for effect in func.effect_params(self.db) {
-            let effect_idx = effect.index();
-            if let Some(provider_arg_idx) = provider_arg_idx_by_effect
-                .get(effect_idx)
-                .copied()
-                .flatten()
-                && let Some(provider_ty) = self.generic_args.get(provider_arg_idx).copied()
-            {
-                if let Some(space) = self.effect_provider_space_for_provider_ty(provider_ty) {
-                    spaces[effect_idx] = space;
-                    continue;
-                }
-
-                // By-ref provider values are passed as pointers; default to memory so callers and
-                // callees agree on the address space for projections.
-                if matches!(
-                    crate::repr::repr_kind_for_ty(self.db, &self.core, provider_ty),
-                    crate::repr::ReprKind::Ref
-                ) {
-                    spaces[effect_idx] = AddressSpaceKind::Memory;
-                    continue;
-                }
-            }
-
-            if let Some(provider_ty) = self
-                .contract_field_provider_ty_for_effect_site(EffectParamSite::Func(func), effect_idx)
-                && let Some(space) = self.effect_provider_space_for_provider_ty(provider_ty)
-            {
-                spaces[effect_idx] = space;
-            }
+            let inferred = self.infer_effect_provider_for_effect_param(
+                func,
+                effect.index(),
+                provider_arg_idx_by_effect,
+            );
+            let _rationale = inferred.rationale;
+            spaces[effect.index()] = inferred.address_space;
         }
 
         spaces
+    }
+
+    fn infer_effect_provider_from_provider_ty(
+        &self,
+        provider_ty: TyId<'db>,
+        concrete_rationale: EffectProviderInferenceRationale,
+    ) -> Option<InferredEffectProvider<'db>> {
+        if let Some(space) = self.effect_provider_space_for_provider_ty(provider_ty) {
+            return Some(InferredEffectProvider {
+                provider_ty: Some(provider_ty),
+                address_space: space,
+                rationale: concrete_rationale,
+            });
+        }
+
+        // By-ref provider values are passed as pointers; default to memory so callers and
+        // callees agree on the address space for projections.
+        if matches!(
+            crate::repr::repr_kind_for_ty(self.db, &self.core, provider_ty),
+            crate::repr::ReprKind::Ref
+        ) {
+            return Some(InferredEffectProvider {
+                provider_ty: Some(provider_ty),
+                address_space: AddressSpaceKind::Memory,
+                rationale: EffectProviderInferenceRationale::ByRefProviderDefaultsToMemory,
+            });
+        }
+
+        None
+    }
+
+    fn infer_effect_provider_for_effect_param(
+        &self,
+        func: Func<'db>,
+        effect_idx: usize,
+        provider_arg_idx_by_effect: &[Option<usize>],
+    ) -> InferredEffectProvider<'db> {
+        if let Some(provider_arg_idx) = provider_arg_idx_by_effect
+            .get(effect_idx)
+            .copied()
+            .flatten()
+            && let Some(provider_ty) = self.generic_args.get(provider_arg_idx).copied()
+            && let Some(inferred) = self.infer_effect_provider_from_provider_ty(
+                provider_ty,
+                EffectProviderInferenceRationale::ConcreteProviderTy,
+            )
+        {
+            return inferred;
+        }
+
+        if let Some(provider_ty) =
+            self.contract_field_provider_ty_for_effect_site(EffectParamSite::Func(func), effect_idx)
+            && let Some(inferred) = self.infer_effect_provider_from_provider_ty(
+                provider_ty,
+                EffectProviderInferenceRationale::ContractFieldProviderTy,
+            )
+        {
+            return inferred;
+        }
+
+        InferredEffectProvider {
+            provider_ty: None,
+            address_space: AddressSpaceKind::Storage,
+            rationale: EffectProviderInferenceRationale::StorageDefault,
+        }
+    }
+
+    fn infer_effect_provider_or_fallback(
+        &self,
+        provider_ty: TyId<'db>,
+        concrete_rationale: EffectProviderInferenceRationale,
+        fallback_space: AddressSpaceKind,
+        fallback_rationale: EffectProviderInferenceRationale,
+    ) -> InferredEffectProvider<'db> {
+        self.infer_effect_provider_from_provider_ty(provider_ty, concrete_rationale)
+            .unwrap_or(InferredEffectProvider {
+                provider_ty: Some(provider_ty),
+                address_space: fallback_space,
+                rationale: fallback_rationale,
+            })
+    }
+
+    fn caller_effect_param_provider_ty(
+        &self,
+        binding: LocalBinding<'db>,
+        caller_provider_arg_idx_by_effect: Option<&[Option<usize>]>,
+    ) -> Option<TyId<'db>> {
+        let LocalBinding::EffectParam { site, idx, .. } = binding else {
+            return None;
+        };
+        let current_func = self.hir_func?;
+        let EffectParamSite::Func(binding_func) = site else {
+            return None;
+        };
+        if binding_func != current_func {
+            return None;
+        }
+
+        let provider_idx = caller_provider_arg_idx_by_effect?
+            .get(idx)
+            .copied()
+            .flatten()?;
+        if let Some(concrete) = self.generic_args.get(provider_idx).copied() {
+            return Some(concrete);
+        }
+        CallableDef::Func(current_func)
+            .params(self.db)
+            .get(provider_idx)
+            .copied()
+    }
+
+    fn infer_effect_provider_for_resolved_arg(
+        &self,
+        resolved_arg: &ResolvedEffectArg<'db>,
+        caller_provider_arg_idx_by_effect: Option<&[Option<usize>]>,
+    ) -> Option<InferredEffectProvider<'db>> {
+        if !matches!(resolved_arg.key_kind, EffectKeyKind::Type) {
+            return None;
+        }
+        let target_ty = resolved_arg.instantiated_target_ty?;
+
+        match resolved_arg.pass_mode {
+            EffectPassMode::ByTempPlace => {
+                let provider_ty = TyId::app(self.db, self.core.mem_ptr_ctor, target_ty);
+                Some(self.infer_effect_provider_or_fallback(
+                    provider_ty,
+                    EffectProviderInferenceRationale::ByTempPlaceMemPtr,
+                    AddressSpaceKind::Memory,
+                    EffectProviderInferenceRationale::ByTempPlaceMemPtr,
+                ))
+            }
+            EffectPassMode::ByPlace => {
+                let EffectArg::Place(place) = &resolved_arg.arg else {
+                    return None;
+                };
+                let PlaceBase::Binding(binding) = place.base;
+                match binding {
+                    binding @ LocalBinding::EffectParam { .. } => {
+                        if let Some(provider_ty) = self.caller_effect_param_provider_ty(
+                            binding,
+                            caller_provider_arg_idx_by_effect,
+                        ) {
+                            return Some(self.infer_effect_provider_or_fallback(
+                                provider_ty,
+                                EffectProviderInferenceRationale::ForwardedEffectParamProviderTy,
+                                AddressSpaceKind::Storage,
+                                EffectProviderInferenceRationale::StorageDefault,
+                            ));
+                        }
+
+                        let provider_ty = TyId::app(self.db, self.core.mem_ptr_ctor, target_ty);
+                        Some(self.infer_effect_provider_or_fallback(
+                            provider_ty,
+                            EffectProviderInferenceRationale::ForwardedEffectParamFallbackMemPtr,
+                            AddressSpaceKind::Memory,
+                            EffectProviderInferenceRationale::ForwardedEffectParamFallbackMemPtr,
+                        ))
+                    }
+                    LocalBinding::Param {
+                        site: ParamSite::EffectField(effect_site),
+                        idx,
+                        ..
+                    } => {
+                        if let Some(provider_ty) =
+                            self.contract_field_provider_ty_for_effect_site(effect_site, idx)
+                        {
+                            return Some(self.infer_effect_provider_or_fallback(
+                                provider_ty,
+                                EffectProviderInferenceRationale::ContractFieldProviderTy,
+                                AddressSpaceKind::Storage,
+                                EffectProviderInferenceRationale::StorageDefault,
+                            ));
+                        }
+
+                        let provider_ty = TyId::app(self.db, self.core.stor_ptr_ctor, target_ty);
+                        Some(self.infer_effect_provider_or_fallback(
+                            provider_ty,
+                            EffectProviderInferenceRationale::ContractFieldFallbackStorPtr,
+                            AddressSpaceKind::Storage,
+                            EffectProviderInferenceRationale::ContractFieldFallbackStorPtr,
+                        ))
+                    }
+                    _ => {
+                        let provider_ty = TyId::app(self.db, self.core.mem_ptr_ctor, target_ty);
+                        Some(self.infer_effect_provider_or_fallback(
+                            provider_ty,
+                            EffectProviderInferenceRationale::DefaultMemPtr,
+                            AddressSpaceKind::Memory,
+                            EffectProviderInferenceRationale::DefaultMemPtr,
+                        ))
+                    }
+                }
+            }
+            _ => None,
+        }
     }
 
     fn contract_field_provider_ty_for_effect_site(
@@ -1011,8 +1207,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     ) -> ValueId {
         // Transparent newtype access: field 0 is a representation-preserving cast.
         if field_ty.as_capability(self.db).is_none()
-            && field_idx == 0
-            && crate::repr::transparent_newtype_field_ty(self.db, tuple_ty).is_some()
+            && crate::repr::transparent_field0_inner_ty(self.db, tuple_ty, field_idx).is_some()
         {
             let base_repr = self.builder.body.value(tuple_value).repr;
             if !base_repr.is_ref() {

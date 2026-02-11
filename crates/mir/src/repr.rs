@@ -22,7 +22,8 @@ use hir::analysis::ty::{
     trait_resolution::{GoalSatisfiability, PredicateListId, is_goal_satisfiable},
     ty_def::CapabilityKind,
 };
-use hir::hir_def::IdentId;
+use hir::hir_def::{EnumVariant, IdentId};
+use hir::projection::{Projection, ProjectionPath};
 
 use crate::core_lib::CoreLib;
 use crate::ir::AddressSpaceKind;
@@ -68,6 +69,41 @@ pub fn transparent_newtype_field_ty<'db>(
     }
     let field_tys = ty.field_types(db);
     (field_tys.len() == 1).then(|| field_tys[0])
+}
+
+/// Returns the field type for a transparent field-0 projection step.
+pub fn transparent_field0_inner_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner_ty: TyId<'db>,
+    field_idx: usize,
+) -> Option<TyId<'db>> {
+    (field_idx == 0)
+        .then(|| transparent_newtype_field_ty(db, owner_ty))
+        .flatten()
+}
+
+/// Returns the next type for a transparent field-0 projection step.
+pub fn transparent_field0_projection_step_ty<'db, Idx>(
+    db: &'db dyn HirAnalysisDb,
+    owner_ty: TyId<'db>,
+    proj: &Projection<TyId<'db>, EnumVariant<'db>, Idx>,
+) -> Option<TyId<'db>> {
+    let Projection::Field(field_idx) = proj else {
+        return None;
+    };
+    transparent_field0_inner_ty(db, owner_ty, *field_idx)
+}
+
+/// Peels a projection path that must consist entirely of transparent field-0 steps.
+pub fn peel_transparent_field0_projection_path<'db, Idx>(
+    db: &'db dyn HirAnalysisDb,
+    mut base_ty: TyId<'db>,
+    path: &ProjectionPath<TyId<'db>, EnumVariant<'db>, Idx>,
+) -> Option<TyId<'db>> {
+    for proj in path.iter() {
+        base_ty = transparent_field0_projection_step_ty(db, base_ty, proj)?;
+    }
+    Some(base_ty)
 }
 
 /// Peel all transparent newtype layers from `ty`, returning the first non-newtype type.

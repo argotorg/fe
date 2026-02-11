@@ -1035,13 +1035,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 continue;
             };
 
-            if !matches!(resolved_arg.key_kind, EffectKeyKind::Type) {
-                continue;
-            }
-            let Some(target_ty) = resolved_arg.instantiated_target_ty else {
-                continue;
-            };
-
             // Don't stomp explicit provider arguments (HIR unifies those already).
             if let Some(existing) = callable.generic_args().get(provider_arg_idx).copied()
                 && !matches!(existing.data(self.db), TyData::TyVar(_))
@@ -1049,61 +1042,14 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 continue;
             }
 
-            let inferred_provider_ty = match resolved_arg.pass_mode {
-                EffectPassMode::ByTempPlace => {
-                    TyId::app(self.db, self.core.mem_ptr_ctor, target_ty)
-                }
-                EffectPassMode::ByPlace => {
-                    let provider_for_effect_param_binding =
-                        |this: &Self, binding: LocalBinding<'db>| -> Option<TyId<'db>> {
-                            let LocalBinding::EffectParam { site, idx, .. } = binding else {
-                                return None;
-                            };
-                            let current_func = this.hir_func?;
-                            let EffectParamSite::Func(binding_func) = site else {
-                                return None;
-                            };
-                            if binding_func != current_func {
-                                return None;
-                            }
-                            let caller_provider_arg_idx_by_effect =
-                                caller_provider_arg_idx_by_effect?;
-                            let provider_idx = caller_provider_arg_idx_by_effect
-                                .get(idx)
-                                .copied()
-                                .flatten()?;
-                            if let Some(concrete) = this.generic_args.get(provider_idx).copied() {
-                                return Some(concrete);
-                            }
-                            CallableDef::Func(current_func)
-                                .params(this.db)
-                                .get(provider_idx)
-                                .copied()
-                        };
-
-                    let EffectArg::Place(place) = &resolved_arg.arg else {
-                        continue;
-                    };
-                    let PlaceBase::Binding(binding) = place.base;
-                    match binding {
-                        binding @ LocalBinding::EffectParam { .. } => {
-                            provider_for_effect_param_binding(self, binding).unwrap_or_else(|| {
-                                TyId::app(self.db, self.core.mem_ptr_ctor, target_ty)
-                            })
-                        }
-                        LocalBinding::Param {
-                            site: ParamSite::EffectField(effect_site),
-                            idx,
-                            ..
-                        } => self
-                            .contract_field_provider_ty_for_effect_site(effect_site, idx)
-                            .unwrap_or_else(|| {
-                                TyId::app(self.db, self.core.stor_ptr_ctor, target_ty)
-                            }),
-                        _ => TyId::app(self.db, self.core.mem_ptr_ctor, target_ty),
-                    }
-                }
-                _ => continue,
+            let Some(inferred) = self.infer_effect_provider_for_resolved_arg(
+                resolved_arg,
+                caller_provider_arg_idx_by_effect.map(|map| map.as_slice()),
+            ) else {
+                continue;
+            };
+            let Some(inferred_provider_ty) = inferred.provider_ty else {
+                continue;
             };
 
             if let Some(slot) = callable.generic_args_mut().get_mut(provider_arg_idx) {
@@ -1321,8 +1267,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 }
 
                 // Transparent newtype access: field 0 is a representation-preserving cast.
-                if info.field_idx == 0
-                    && crate::repr::transparent_newtype_field_ty(self.db, lhs_place_ty).is_some()
+                if crate::repr::transparent_field0_inner_ty(self.db, lhs_place_ty, info.field_idx)
+                    .is_some()
                 {
                     let base_repr = self.builder.body.value(base_value).repr;
                     if !base_repr.is_ref() {
@@ -1644,8 +1590,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         // Transparent newtype access: field 0 is a representation-preserving cast.
-        if info.field_idx == 0
-            && crate::repr::transparent_newtype_field_ty(self.db, lhs_place_ty).is_some()
+        if crate::repr::transparent_field0_inner_ty(self.db, lhs_place_ty, info.field_idx).is_some()
         {
             let base_repr = self.builder.body.value(base_value).repr;
             if !base_repr.is_ref() {
@@ -1968,8 +1913,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
                 // Transparent newtypes: treat field 0 as the same place when the base is
                 // already addressable, otherwise fall back to scalar newtype semantics.
-                if info.field_idx == 0
-                    && crate::repr::transparent_newtype_field_ty(self.db, lhs_place_ty).is_some()
+                if crate::repr::transparent_field0_inner_ty(self.db, lhs_place_ty, info.field_idx)
+                    .is_some()
                 {
                     if let Some(place) = self.place_for_expr(*lhs) {
                         return Some(place);
@@ -2027,8 +1972,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             let Some(info) = self.field_access_info(base_ty, field_index) else {
                 return expr;
             };
-            if info.field_idx == 0
-                && crate::repr::transparent_newtype_field_ty(self.db, base_ty).is_some()
+            if crate::repr::transparent_field0_inner_ty(self.db, base_ty, info.field_idx).is_some()
             {
                 expr = *base;
                 continue;
