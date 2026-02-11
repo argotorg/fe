@@ -1,0 +1,59 @@
+use std::evm::effects::assert
+use ingot::seq::Seq
+
+struct Reverse<T: Seq<u256>> {
+    base: ref T,
+}
+
+struct Take<T: Seq<u256>> {
+    n: usize,
+    base: ref T,
+}
+
+fn reverse<T: Seq<u256>>(seq: ref T) -> Reverse<T> {
+    Reverse { base: seq }
+}
+
+fn take<T: Seq<u256>>(n: usize, seq: ref T) -> Take<T> {
+    Take { n, base: seq }
+}
+
+impl<T: Seq<u256>> Seq<u256> for Reverse<T> {
+    fn len(self) -> usize {
+        self.base.len()
+    }
+
+    fn get(self, i: usize) -> u256 {
+        let n = self.base.len()
+        self.base.get(n - 1 - i)
+    }
+}
+
+impl<T: Seq<u256>> Seq<u256> for Take<T> {
+    fn len(self) -> usize {
+        let total = self.base.len()
+        if self.n < total {
+            self.n
+        } else {
+            total
+        }
+    }
+
+    fn get(self, i: usize) -> u256 {
+        self.base.get(i)
+    }
+}
+
+fn sum_last4(arr: [u256; 8]) -> u256 {
+    let total = 0
+    for x in take(4, reverse(arr)) {
+        total += x
+    }
+    total
+}
+
+#[test]
+fn test_view_param_local_ref_take_reverse() {
+    let arr: [u256; 8] = [1, 2, 3, 4, 5, 6, 7, 8]
+    assert(sum_last4(arr) == 26)
+}
