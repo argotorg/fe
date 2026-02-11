@@ -1,0 +1,15 @@
+struct Pair {
+    a: u256,
+    b: u256,
+}
+
+impl Copy for Pair {}
+
+pub fn borrowck_local_copy_alias_overlap() {
+    let mut p: Pair = Pair { a: 1, b: 2 }
+    let mut q: Pair = p
+    let mut pa: mut u256 = mut p.a
+    let mut qa: mut u256 = mut q.a
+    pa = 3
+    qa = 4
+}

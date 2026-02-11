@@ -218,6 +218,19 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         for (&owner, &spill) in &body.spill_slots {
             semantic_parent_of_local[spill.index()] = Some(owner);
         }
+        let semantic_owner = |parents: &[Option<LocalId>], local: LocalId| {
+            let mut current = local;
+            for _ in 0..parents.len() {
+                let Some(parent) = parents.get(current.index()).copied().flatten() else {
+                    return current;
+                };
+                if parent == current {
+                    return current;
+                }
+                current = parent;
+            }
+            current
+        };
         for block in &body.blocks {
             for inst in &block.insts {
                 let MirInst::Assign {
@@ -228,7 +241,14 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                 else {
                     continue;
                 };
-                if !body.spill_slots.contains_key(dest) {
+                if semantic_parent_of_local[dest.index()].is_some()
+                    || param_index_of_local[dest.index()].is_some()
+                    || body.local(*dest).source == SourceInfoId::SYNTHETIC
+                    || !matches!(
+                        body.value(strip_casts(body, *value)).repr,
+                        ValueRepr::Ref(_)
+                    )
+                {
                     continue;
                 }
                 let source_local = local_source_through_casts(body, *value)
@@ -270,8 +290,11 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                 if !source_matches {
                     continue;
                 }
-                if semantic_parent_of_local[dest.index()].is_none() {
-                    semantic_parent_of_local[dest.index()] = Some(source_local);
+                let source_owner = semantic_owner(&semantic_parent_of_local, source_local);
+                if source_owner != *dest
+                    && body.local(source_owner).source != SourceInfoId::SYNTHETIC
+                {
+                    semantic_parent_of_local[dest.index()] = Some(source_owner);
                 }
             }
         }
@@ -1594,6 +1617,9 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                 if let Some(err) = self.check_accesses(inst, &state, &active, &suspended) {
                     return Some(err);
                 }
+                if let Some(err) = self.check_call_arg_aliases_in_inst(inst, &state) {
+                    return Some(err);
+                }
 
                 self.update_moved_for_inst(inst, &state, &mut moved);
                 self.update_state_for_inst(inst, &mut state);
@@ -1642,6 +1668,10 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             }
             if let Some(err) =
                 self.check_borrow_creations_in_values(&term_borrows, &active, &suspended)
+            {
+                return Some(err);
+            }
+            if let Some(err) = self.check_call_arg_aliases_in_terminator(&block.terminator, &state)
             {
                 return Some(err);
             }
@@ -2394,6 +2424,81 @@ impl<'db, 'a> Borrowck<'db, 'a> {
     ) -> Option<(LoanId, String)> {
         let values = value_operands_in_terminator(term);
         self.check_word_value_reads_in_values(&values, state, active, suspended)
+    }
+
+    fn check_call_arg_aliases_in_inst(
+        &self,
+        inst: &MirInst<'db>,
+        state: &[FxHashSet<LoanId>],
+    ) -> Option<CompleteDiagnostic> {
+        let MirInst::Assign {
+            rvalue: Rvalue::Call(call),
+            ..
+        } = inst
+        else {
+            return None;
+        };
+        self.call_arg_alias_conflict(
+            state,
+            call.args.iter().chain(call.effect_args.iter()).copied(),
+        )
+        .map(|label| self.diag_at_inst(2, inst, self.borrow_conflict_header(), label))
+    }
+
+    fn check_call_arg_aliases_in_terminator(
+        &self,
+        term: &Terminator<'db>,
+        state: &[FxHashSet<LoanId>],
+    ) -> Option<CompleteDiagnostic> {
+        let Terminator::TerminatingCall { call, .. } = term else {
+            return None;
+        };
+        let crate::TerminatingCall::Call(call) = call else {
+            return None;
+        };
+        self.call_arg_alias_conflict(
+            state,
+            call.args.iter().chain(call.effect_args.iter()).copied(),
+        )
+        .map(|label| self.diag_at_terminator(2, term, self.borrow_conflict_header(), label))
+    }
+
+    fn call_arg_alias_conflict(
+        &self,
+        state: &[FxHashSet<LoanId>],
+        args: impl Iterator<Item = ValueId>,
+    ) -> Option<String> {
+        let mut borrows = Vec::new();
+        for arg in args {
+            let Some((kind, _)) = ty_is_borrow(self.db, self.func.body.value(arg).ty) else {
+                continue;
+            };
+            let targets = self.canonicalize_base(state, arg);
+            if !targets.is_empty() {
+                borrows.push((kind, targets));
+            }
+        }
+
+        for (idx, (a_kind, a_targets)) in borrows.iter().enumerate() {
+            for (b_kind, b_targets) in &borrows[idx + 1..] {
+                if !place_set_overlaps(a_targets, b_targets)
+                    || matches!((a_kind, b_kind), (BorrowKind::Ref, BorrowKind::Ref))
+                {
+                    continue;
+                }
+                return Some(match (a_kind, b_kind) {
+                    (BorrowKind::Mut, BorrowKind::Mut) => {
+                        "cannot pass overlapping mutable borrows as call arguments".to_string()
+                    }
+                    (BorrowKind::Mut, BorrowKind::Ref) | (BorrowKind::Ref, BorrowKind::Mut) => {
+                        "cannot pass overlapping mutable and immutable borrows as call arguments"
+                            .to_string()
+                    }
+                    (BorrowKind::Ref, BorrowKind::Ref) => unreachable!(),
+                });
+            }
+        }
+        None
     }
 
     fn check_word_value_reads_in_values(
