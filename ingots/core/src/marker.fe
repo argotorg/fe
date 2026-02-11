@@ -27,8 +27,3 @@ impl Copy for i64 {}
 impl Copy for i128 {}
 impl Copy for i256 {}
 impl Copy for isize {}
-
-// Arrays of `Copy` values are `Copy`.
-impl<T, const LEN: usize> Copy for [T; LEN]
-    where T: Copy
-{}
