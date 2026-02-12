@@ -58,6 +58,18 @@ struct LocalLoanState<'db> {
     slots: FxHashMap<crate::MirProjectionPath<'db>, FxHashSet<LoanId>>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct OverwrittenLoans {
+    must: FxHashSet<LoanId>,
+    may: FxHashSet<LoanId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct OverwriteSlots<'db> {
+    retained: FxHashMap<crate::MirProjectionPath<'db>, FxHashSet<LoanId>>,
+    overwritten: OverwrittenLoans,
+}
+
 impl<'db> LocalLoanState<'db> {
     fn from_root_loan(loan: LoanId) -> Self {
         let mut state = Self::default();
@@ -72,26 +84,52 @@ impl<'db> LocalLoanState<'db> {
             .insert(loan);
     }
 
-    fn all_loans(&self) -> FxHashSet<LoanId> {
+    fn loans_at(&self, place: &crate::MirProjectionPath<'db>) -> FxHashSet<LoanId> {
         let mut out = self.unknown.clone();
-        for loans in self.slots.values() {
-            out.extend(loans.iter().copied());
+        for (slot, loans) in &self.slots {
+            if !matches!(slot.may_alias(place), Aliasing::No) {
+                out.extend(loans.iter().copied());
+            }
+        }
+        out
+    }
+
+    fn all_loans(&self) -> FxHashSet<LoanId> {
+        self.loans_at(&crate::MirProjectionPath::new())
+    }
+
+    fn overwritten_by(&self, place: &crate::MirProjectionPath<'db>) -> OverwrittenLoans {
+        let mut out = OverwrittenLoans::default();
+        for (slot, loans) in &self.slots {
+            match slot.may_alias(place) {
+                Aliasing::Must => out.must.extend(loans.iter().copied()),
+                Aliasing::May => out.may.extend(loans.iter().copied()),
+                Aliasing::No => {}
+            }
+        }
+        out
+    }
+
+    fn split_overwrite_slots(
+        &mut self,
+        place: &crate::MirProjectionPath<'db>,
+    ) -> OverwriteSlots<'db> {
+        let mut out = OverwriteSlots {
+            overwritten: self.overwritten_by(place),
+            ..OverwriteSlots::default()
+        };
+        for (slot, loans) in std::mem::take(&mut self.slots) {
+            if matches!(slot.may_alias(place), Aliasing::No) {
+                out.retained.insert(slot, loans);
+            }
         }
         out
     }
 
     fn overwrite_place(&mut self, place: &crate::MirProjectionPath<'db>, value: &Self) {
-        let mut retained = FxHashMap::default();
-        for (existing, loans) in std::mem::take(&mut self.slots) {
-            match existing.may_alias(place) {
-                Aliasing::Must => {}
-                Aliasing::May => self.unknown.extend(loans),
-                Aliasing::No => {
-                    retained.insert(existing, loans);
-                }
-            }
-        }
-        self.slots = retained;
+        let overwritten = self.split_overwrite_slots(place);
+        self.slots = overwritten.retained;
+        self.unknown.extend(overwritten.overwritten.may);
 
         for (subpath, loans) in &value.slots {
             if loans.is_empty() {
@@ -2114,6 +2152,31 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             .flatten()
     }
 
+    fn tracked_local_loans_at(
+        &self,
+        state: &[LocalLoanState<'db>],
+        local: LocalId,
+        place: &crate::MirProjectionPath<'db>,
+    ) -> Option<FxHashSet<LoanId>> {
+        self.tracked_local_idx
+            .get(local.index())
+            .copied()
+            .flatten()
+            .map(|idx| state[idx].loans_at(place))
+    }
+
+    fn tracked_local_all_loans(
+        &self,
+        state: &[LocalLoanState<'db>],
+        local: LocalId,
+    ) -> Option<FxHashSet<LoanId>> {
+        self.tracked_local_idx
+            .get(local.index())
+            .copied()
+            .flatten()
+            .map(|idx| state[idx].all_loans())
+    }
+
     fn loans_for_handle_value(
         &self,
         state: &[LocalLoanState<'db>],
@@ -2134,11 +2197,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         let ValueOrigin::Local(local) = self.func.body.value(value).origin else {
             return FxHashSet::default();
         };
-        self.tracked_local_idx
-            .get(local.index())
-            .copied()
-            .flatten()
-            .map(|idx| state[idx].all_loans())
+        self.tracked_local_all_loans(state, local)
             .unwrap_or_default()
     }
 
@@ -2160,8 +2219,8 @@ impl<'db, 'a> Borrowck<'db, 'a> {
     ) -> FxHashSet<LoanId> {
         let mut out = FxHashSet::default();
         for local in live {
-            if let Some(idx) = self.tracked_local_idx.get(local.index()).copied().flatten() {
-                out.extend(state[idx].all_loans());
+            if let Some(loans) = self.tracked_local_all_loans(state, *local) {
+                out.extend(loans);
             }
         }
         out
@@ -2473,10 +2532,10 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                 }
                 _ => None,
             };
-            if let Some(owner) = owner
-                && let Some(idx) = self.tracked_local_idx.get(owner.index()).copied().flatten()
-            {
-                let loans = state[idx].all_loans();
+            if let Some(owner) = owner {
+                let loans = self
+                    .tracked_local_loans_at(state, owner, &crate::MirProjectionPath::new())
+                    .unwrap_or_default();
                 if !loans.is_empty() {
                     return loans;
                 }
@@ -2618,11 +2677,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             };
             let owner = self.semantic_owner_local(local);
             let through = if ty_is_borrow(self.db, self.func.body.local(owner).ty).is_some() {
-                self.tracked_local_idx
-                    .get(owner.index())
-                    .copied()
-                    .flatten()
-                    .map(|idx| state[idx].all_loans())
+                self.tracked_local_all_loans(state, owner)
                     .unwrap_or_else(|| {
                         self.param_loan_for_local[owner.index()]
                             .into_iter()
@@ -3278,6 +3333,10 @@ mod tests {
         ))))
     }
 
+    fn constant_index_path<'db>(idx: usize) -> MirProjectionPath<'db> {
+        MirProjectionPath::from_projection(Projection::Index(IndexSource::Constant(idx)))
+    }
+
     fn compute_borrow_summaries_naive<'db>(
         db: &'db dyn HirAnalysisDb,
         functions: &[MirFunction<'db>],
@@ -3469,6 +3528,57 @@ pub fn entry(x: ref u256) -> ref u256 {
         state.overwrite_place(&field_path(0), &LocalLoanState::default());
         assert!(state.slots.is_empty());
         assert!(state.unknown.is_empty());
+    }
+
+    #[test]
+    fn loans_at_for_projected_place_ignores_disjoint_slots() {
+        let mut state = LocalLoanState::default();
+        state
+            .slots
+            .insert(field_path(0), FxHashSet::from_iter([LoanId(0)]));
+        state
+            .slots
+            .insert(field_path(1), FxHashSet::from_iter([LoanId(1)]));
+        state.unknown.insert(LoanId(2));
+
+        assert_eq!(
+            state.loans_at(&field_path(0)),
+            FxHashSet::from_iter([LoanId(0), LoanId(2)])
+        );
+    }
+
+    #[test]
+    fn loans_at_dynamic_index_keeps_may_alias_slots() {
+        let mut state = LocalLoanState::default();
+        state
+            .slots
+            .insert(constant_index_path(0), FxHashSet::from_iter([LoanId(0)]));
+        state
+            .slots
+            .insert(constant_index_path(1), FxHashSet::from_iter([LoanId(1)]));
+
+        assert_eq!(
+            state.loans_at(&dynamic_index_path(7)),
+            FxHashSet::from_iter([LoanId(0), LoanId(1)])
+        );
+    }
+
+    #[test]
+    fn overwritten_by_reports_must_and_may_sets() {
+        let mut state = LocalLoanState::default();
+        state
+            .slots
+            .insert(field_path(0), FxHashSet::from_iter([LoanId(0)]));
+        state
+            .slots
+            .insert(dynamic_index_path(0), FxHashSet::from_iter([LoanId(1)]));
+        state
+            .slots
+            .insert(field_path(1), FxHashSet::from_iter([LoanId(2)]));
+
+        let overwritten = state.overwritten_by(&field_path(0));
+        assert_eq!(overwritten.must, FxHashSet::from_iter([LoanId(0)]));
+        assert_eq!(overwritten.may, FxHashSet::from_iter([LoanId(1)]));
     }
 
     #[test]
