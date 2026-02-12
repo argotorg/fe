@@ -1,0 +1,33 @@
+---
+source: crates/uitest/tests/ty.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty/def/implicit_mut_alias_reborrow_required.fe
+---
+error[8-0000]: type mismatch
+  ┌─ implicit_mut_alias_reborrow_required.fe:5:18
+  │
+5 │     take_two_mut(x, x)
+  │                  ^ expected `mut u256`, but `u256` is given
+
+error[8-0000]: type mismatch
+  ┌─ implicit_mut_alias_reborrow_required.fe:5:21
+  │
+5 │     take_two_mut(x, x)
+  │                     ^ expected `mut u256`, but `u256` is given
+
+error[8-0068]: explicit reborrow required
+  ┌─ implicit_mut_alias_reborrow_required.fe:5:18
+  │
+5 │     take_two_mut(x, x)
+  │                  ^ this argument must be explicitly borrowed as `mut`
+  │
+  = help: use `mut <place>` when passing a place to a `mut` parameter
+
+error[8-0068]: explicit reborrow required
+  ┌─ implicit_mut_alias_reborrow_required.fe:5:21
+  │
+5 │     take_two_mut(x, x)
+  │                     ^ this argument must be explicitly borrowed as `mut`
+  │
+  = help: use `mut <place>` when passing a place to a `mut` parameter

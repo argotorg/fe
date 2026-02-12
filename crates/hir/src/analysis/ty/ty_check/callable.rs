@@ -291,12 +291,6 @@ impl<'db> Callable<'db> {
                     CapabilityKind::Ref => TyId::borrow_ref_of(db, given_ty),
                     CapabilityKind::View => unreachable!(),
                 };
-            } else if let Some((CapabilityKind::Mut, required_inner)) = expected.as_capability(db)
-                && actual == given.expr_prop.ty
-                && given.expr_prop.is_mut
-                && tc.ty_unifies(given_ty, required_inner)
-            {
-                actual = TyId::borrow_mut_of(db, given_ty);
             }
             tc.equate_ty(actual, expected, given.expr_span.clone());
             let expected = tc.normalize_ty(expected);
@@ -317,7 +311,6 @@ impl<'db> Callable<'db> {
                     && matches!(kind, CapabilityKind::Mut | CapabilityKind::Ref)
                     && arg_is_place
                     && !(has_receiver && i == 0)
-                    && !(matches!(kind, CapabilityKind::Mut) && given.expr_prop.is_mut)
                     && !is_unary(
                         given.expr,
                         match kind {
