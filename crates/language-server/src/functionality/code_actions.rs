@@ -19,7 +19,7 @@ pub async fn handle_code_action(
     params: CodeActionParams,
 ) -> Result<Option<CodeActionResponse>, ResponseError> {
     let lsp_uri = params.text_document.uri.clone();
-    if backend.is_builtin_tmp_uri(&lsp_uri) {
+    if backend.is_builtin_tmp_uri(&lsp_uri) || backend.is_git_cache_uri(&lsp_uri) {
         return Ok(None);
     }
 

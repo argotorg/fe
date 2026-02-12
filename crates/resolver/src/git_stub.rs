@@ -1,6 +1,6 @@
-use std::{error::Error, fmt};
+use std::{error::Error, fmt, io};
 
-use camino::Utf8PathBuf;
+use camino::{Utf8Path, Utf8PathBuf};
 use url::Url;
 
 use crate::{ResolutionHandler, Resolver};
@@ -95,6 +95,10 @@ impl GitResolver {
         _description: &GitDescription,
     ) -> Result<GitResource, GitResolutionError> {
         Err(GitResolutionError::UnsupportedTarget)
+    }
+
+    pub fn enforce_readonly(&self, _checkout_path: &Utf8Path) -> io::Result<()> {
+        Ok(())
     }
 }
 

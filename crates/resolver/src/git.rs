@@ -1,4 +1,4 @@
-use std::{fmt, fs, io};
+use std::{fmt, fs, io, path::Path};
 
 use camino::{Utf8Path, Utf8PathBuf};
 use git2::{Repository, build::CheckoutBuilder};
@@ -92,10 +92,22 @@ impl GitResolver {
         self.ensure_checkout_root()?;
         let checkout_path = self.checkout_path(description);
         let status = self.ensure_checkout(description, &checkout_path)?;
+        if let Err(error) = self.enforce_readonly(checkout_path.as_path()) {
+            tracing::warn!(
+                target: "resolver",
+                "Failed to mark git checkout read-only at {}: {}",
+                checkout_path,
+                error
+            );
+        }
         Ok(GitResource {
             reused_checkout: matches!(status, CheckoutStatus::Existing),
             checkout_path,
         })
+    }
+
+    pub fn enforce_readonly(&self, checkout_path: &Utf8Path) -> io::Result<()> {
+        enforce_readonly_recursive(checkout_path.as_std_path())
     }
 
     fn ensure_checkout_root(&self) -> Result<(), GitResolutionError> {
@@ -223,9 +235,76 @@ impl GitResolver {
     }
 }
 
+fn enforce_readonly_recursive(root: &Path) -> io::Result<()> {
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() {
+            continue;
+        }
+
+        let file_name = entry.file_name();
+        if file_name.as_os_str() == std::ffi::OsStr::new(".git") {
+            continue;
+        }
+
+        let path = entry.path();
+        if file_type.is_dir() {
+            enforce_readonly_recursive(&path)?;
+        } else if file_type.is_file() {
+            make_file_readonly(&path)?;
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(unix)]
+fn make_file_readonly(path: &Path) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut perms = fs::metadata(path)?.permissions();
+    let mode = perms.mode();
+    perms.set_mode(mode & !0o222);
+    fs::set_permissions(path, perms)?;
+
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn make_file_readonly(path: &Path) -> io::Result<()> {
+    let mut perms = fs::metadata(path)?.permissions();
+    perms.set_readonly(true);
+    fs::set_permissions(path, perms)?;
+    Ok(())
+}
+
 enum CheckoutStatus {
     Fresh,
     Existing,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn enforce_readonly_marks_files_readonly() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = Utf8Path::from_path(dir.path()).expect("utf8 root");
+        let nested = root.join("nested");
+        fs::create_dir_all(nested.as_std_path()).expect("create nested dir");
+        let file_path = nested.join("file.txt");
+        fs::write(file_path.as_std_path(), "hi").expect("write file");
+
+        let resolver = GitResolver::new(root.to_owned());
+        resolver
+            .enforce_readonly(root)
+            .expect("set checkout readonly");
+
+        let metadata = fs::metadata(file_path.as_std_path()).expect("metadata");
+        assert!(metadata.permissions().readonly());
+    }
 }
 
 #[derive(Debug, Clone)]
