@@ -268,8 +268,25 @@ impl<'db> Callable<'db> {
                 .and_then(|params| params.get(i).copied())
                 .map(|param| param.mode(db));
             let given_ty = tc.normalize_ty(given.expr_prop.ty);
+            let own_view_inner = if mode == Some(FuncParamMode::Own)
+                && let Some((CapabilityKind::View, inner)) = given_ty.as_capability(db)
+                && tc.ty_unifies(inner, expected)
+                && !tc.ty_is_copy(inner)
+                && !tc.expr_can_move_from_place(given.expr)
+            {
+                Some(inner)
+            } else {
+                None
+            };
             let own_tyvar = mode == Some(FuncParamMode::Own) && expected.is_ty_var(db);
-            let mut actual = if own_tyvar && let Some((kind, inner)) = given_ty.as_capability(db) {
+            let mut actual = if let Some(inner) = own_view_inner {
+                tc.push_diag(BodyDiag::OwnArgMustBeOwnedMove {
+                    primary: given.expr_span.clone(),
+                    kind: CapabilityKind::View,
+                    given: inner,
+                });
+                TyId::invalid(db, InvalidCause::Other)
+            } else if own_tyvar && let Some((kind, inner)) = given_ty.as_capability(db) {
                 if tc.ty_is_copy(inner) || tc.expr_can_move_from_place(given.expr) {
                     inner
                 } else {
