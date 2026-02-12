@@ -1,0 +1,14 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/cli_output/workspaces/build_contract_ambiguity/build_contract_ambiguity_collisions.case
+---
+=== STDERR ===
+Error: Contract names collide in a flat workspace output directory
+Conflicts:
+  - Foo
+    - Foo in a (ingots/a)
+    - Foo in b (ingots/b)
+Hint: build a specific member by name or path instead.
+
+=== EXIT CODE: 1 ===

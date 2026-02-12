@@ -20,17 +20,17 @@ docker-wasm-test:
 check-wasm:
 	@echo "Checking core crates for wasm32-unknown-unknown..."
 	cargo check -p fe-common -p fe-parser -p fe-hir -p fe-hir-analysis --target wasm32-unknown-unknown
-	@echo "✓ Core crates support wasm32-unknown-unknown"
+	@echo "Core crates support wasm32-unknown-unknown"
 
 .PHONY: check-wasi
 check-wasi:
 	@echo "Checking filesystem-dependent crates for wasm32-wasip1..."
 	cargo check -p fe-driver -p fe-resolver -p fe --target wasm32-wasip1
-	@echo "✓ Filesystem crates support wasm32-wasip1"
+	@echo "Filesystem crates support wasm32-wasip1"
 
 .PHONY: check-wasm-all
 check-wasm-all: check-wasm check-wasi
-	@echo "✓ All WASM/WASI checks passed"
+	@echo "All WASM/WASI checks passed"
 
 .PHONY: coverage
 coverage:

@@ -3,7 +3,7 @@ source: crates/fe/tests/cli_output.rs
 expression: output
 ---
 === STDERR ===
-❌ Erroneous fe.toml file in file://<project>/crates/fe/tests/fixtures/cli_output/ingots/missing_name/: Missing ingot name
-❌ Failed to resolve ingot dependency 'file://<project>/crates/fe/tests/fixtures/cli_output/ingots/missing_name/nonexistent/': Directory does not exist: file://<project>/crates/fe/tests/fixtures/cli_output/ingots/missing_name/nonexistent/
+Error: Erroneous fe.toml file in file://<project>/crates/fe/tests/fixtures/cli_output/ingots/missing_name/: Missing ingot name
+Error: Failed to resolve ingot dependency 'file://<project>/crates/fe/tests/fixtures/cli_output/ingots/missing_name/nonexistent/': Directory does not exist: file://<project>/crates/fe/tests/fixtures/cli_output/ingots/missing_name/nonexistent/
 
 === EXIT CODE: 1 ===

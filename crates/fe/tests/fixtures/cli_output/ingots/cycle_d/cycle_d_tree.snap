@@ -5,14 +5,14 @@ expression: output
 === STDOUT ===
 [31mcycle_d v0.1.0[0m
 └── [31mcycle_e v0.1.0[0m
-    └── [31mcycle_d v0.1.0 🔄 [cycle][0m
+    └── [31mcycle_d v0.1.0 [cycle][0m
 
 === STDERR ===
-❌ Detected cycle(s) in ingot dependencies:
+Error: Detected cycle(s) in ingot dependencies:
 
 [31mcycle_d v0.1.0[0m
 └── [31mcycle_e v0.1.0[0m
-    └── [31mcycle_d v0.1.0 🔄 [cycle][0m
+    └── [31mcycle_d v0.1.0 [cycle][0m
 
 
 === EXIT CODE: 0 ===

@@ -6,6 +6,6 @@ expression: output
 test vnull
 
 === STDERR ===
-❌ Erroneous fe.toml file in file://<project>/crates/fe/tests/fixtures/cli_output/ingots/invalid_version/: Invalid ingot version ""not.a.version""
+Error: Erroneous fe.toml file in file://<project>/crates/fe/tests/fixtures/cli_output/ingots/invalid_version/: Invalid ingot version ""not.a.version""
 
 === EXIT CODE: 0 ===

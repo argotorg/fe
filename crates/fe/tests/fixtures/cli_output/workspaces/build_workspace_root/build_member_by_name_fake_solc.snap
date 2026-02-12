@@ -1,0 +1,16 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: snapshot
+input_file: tests/fixtures/cli_output/workspaces/build_workspace_root/build_member_by_name_fake_solc.case
+---
+
+=== STDOUT ===
+Wrote <out>/Foo.bin
+Wrote <out>/Foo.runtime.bin
+
+=== EXIT CODE: 0 ===
+
+=== ARTIFACTS ===
+Foo.bin: 6000
+Foo.runtime.bin: 6000
+

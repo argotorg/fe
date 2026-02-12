@@ -1,10 +1,9 @@
 ---
 source: crates/fe/tests/cli_output.rs
-assertion_line: 387
 expression: output
 input_file: tests/fixtures/cli_output/workspaces/inter_workspace_select_name_not_found/name_not_found.case
 ---
 === STDERR ===
-❌ Failed to resolve workspace member for 'lib_b' in file://<project>/crates/fe/tests/fixtures/cli_output/workspaces/inter_workspace_select_name_not_found/workspace_a/ingots/app/: No workspace member named "does_not_exist" found in file://<project>/crates/fe/tests/fixtures/cli_output/workspaces/inter_workspace_select_name_not_found/workspace_b/
+Error: Failed to resolve workspace member for 'lib_b' in file://<project>/crates/fe/tests/fixtures/cli_output/workspaces/inter_workspace_select_name_not_found/workspace_a/ingots/app/: No workspace member named "does_not_exist" found in file://<project>/crates/fe/tests/fixtures/cli_output/workspaces/inter_workspace_select_name_not_found/workspace_b/
 
 === EXIT CODE: 1 ===

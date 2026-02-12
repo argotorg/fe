@@ -6,6 +6,6 @@ expression: output
 test v0.1.0
 
 === STDERR ===
-❌ Failed to resolve ingot dependency 'file://<project>/crates/fe/tests/fixtures/cli_output/ingots/nonexistent_dependency/nonexistent/': Directory does not exist: file://<project>/crates/fe/tests/fixtures/cli_output/ingots/nonexistent_dependency/nonexistent/
+Error: Failed to resolve ingot dependency 'file://<project>/crates/fe/tests/fixtures/cli_output/ingots/nonexistent_dependency/nonexistent/': Directory does not exist: file://<project>/crates/fe/tests/fixtures/cli_output/ingots/nonexistent_dependency/nonexistent/
 
 === EXIT CODE: 0 ===

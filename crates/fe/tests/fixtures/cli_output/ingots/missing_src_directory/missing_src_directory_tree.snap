@@ -6,7 +6,7 @@ expression: output
 test v0.1.0
 
 === STDERR ===
-❌ File resolution error: Missing required directory 'src' in ingot at file://<project>/crates/fe/tests/fixtures/cli_output/ingots/missing_src_directory/
-❌ File resolution error: Missing required file 'src/lib.fe' in ingot at file://<project>/crates/fe/tests/fixtures/cli_output/ingots/missing_src_directory/
+Error: File resolution error: Missing required directory 'src' in ingot at file://<project>/crates/fe/tests/fixtures/cli_output/ingots/missing_src_directory/
+Error: File resolution error: Missing required file 'src/lib.fe' in ingot at file://<project>/crates/fe/tests/fixtures/cli_output/ingots/missing_src_directory/
 
 === EXIT CODE: 0 ===

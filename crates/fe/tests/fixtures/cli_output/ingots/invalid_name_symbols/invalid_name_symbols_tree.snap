@@ -6,6 +6,6 @@ expression: output
 null v0.1.0
 
 === STDERR ===
-❌ Erroneous fe.toml file in file://<project>/crates/fe/tests/fixtures/cli_output/ingots/invalid_name_symbols/: Invalid ingot name "invalid@name!"
+Error: Erroneous fe.toml file in file://<project>/crates/fe/tests/fixtures/cli_output/ingots/invalid_name_symbols/: Invalid ingot name "invalid@name!"
 
 === EXIT CODE: 0 ===

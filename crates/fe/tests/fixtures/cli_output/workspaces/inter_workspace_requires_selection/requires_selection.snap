@@ -1,10 +1,9 @@
 ---
 source: crates/fe/tests/cli_output.rs
-assertion_line: 342
 expression: output
 input_file: tests/fixtures/cli_output/workspaces/inter_workspace_requires_selection/requires_selection.case
 ---
 === STDERR ===
-❌ Dependency 'lib_b' in file://<project>/crates/fe/tests/fixtures/cli_output/workspaces/inter_workspace_requires_selection/workspace_a/ingots/app/ points to a workspace at file://<project>/crates/fe/tests/fixtures/cli_output/workspaces/inter_workspace_requires_selection/workspace_b/; provide an ingot path or a name/version
+Error: Dependency 'lib_b' in file://<project>/crates/fe/tests/fixtures/cli_output/workspaces/inter_workspace_requires_selection/workspace_a/ingots/app/ points to a workspace at file://<project>/crates/fe/tests/fixtures/cli_output/workspaces/inter_workspace_requires_selection/workspace_b/; provide an ingot path or a name/version
 
 === EXIT CODE: 1 ===

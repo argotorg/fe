@@ -1,0 +1,8 @@
+[workspace]
+name = "build_workspace_root"
+version = "0.1.0"
+members = [
+  { path = "ingots/a", name = "a" },
+  { path = "ingots/b", name = "b" },
+]
+

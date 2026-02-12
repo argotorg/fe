@@ -10,7 +10,7 @@ pub fn print_tree(path: &Utf8PathBuf) {
     let mut db = DriverDataBase::default();
     if let Some(name) = name_candidate(path) {
         if let Err(err) = print_workspace_member_tree_by_name(&mut db, &name) {
-            eprintln!("❌ {err}");
+            eprintln!("Error: {err}");
         }
         return;
     }
@@ -26,7 +26,7 @@ pub fn print_tree(path: &Utf8PathBuf) {
     let _ = init_ingot(&mut db, &target_url);
     if let Ok(Some(Config::Workspace(workspace_config))) = config_from_db(&db, &target_url) {
         if let Err(err) = print_workspace_trees(&db, &workspace_config, &target_url) {
-            eprintln!("❌ {err}");
+            eprintln!("Error: {err}");
         }
         return;
     }

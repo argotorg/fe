@@ -3,11 +3,11 @@ source: crates/fe/tests/cli_output.rs
 expression: output
 ---
 === STDERR ===
-❌ Erroneous fe.toml file in file://<project>/crates/fe/tests/fixtures/cli_output/ingots/multiple_config_errors/:
+Error: Erroneous fe.toml file in file://<project>/crates/fe/tests/fixtures/cli_output/ingots/multiple_config_errors/:
   • Missing ingot name
   • Invalid ingot version ""not.a.version""
   • Invalid dependency alias "bad alias!"
 
-❌ Failed to resolve ingot dependency 'file://<project>/crates/fe/tests/fixtures/cli_output/ingots/multiple_config_errors/nonexistent/': Directory does not exist: file://<project>/crates/fe/tests/fixtures/cli_output/ingots/multiple_config_errors/nonexistent/
+Error: Failed to resolve ingot dependency 'file://<project>/crates/fe/tests/fixtures/cli_output/ingots/multiple_config_errors/nonexistent/': Directory does not exist: file://<project>/crates/fe/tests/fixtures/cli_output/ingots/multiple_config_errors/nonexistent/
 
 === EXIT CODE: 1 ===

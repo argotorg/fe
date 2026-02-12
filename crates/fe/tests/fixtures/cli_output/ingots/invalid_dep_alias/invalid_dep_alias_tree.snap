@@ -6,7 +6,7 @@ expression: output
 test v0.1.0
 
 === STDERR ===
-❌ Erroneous fe.toml file in file://<project>/crates/fe/tests/fixtures/cli_output/ingots/invalid_dep_alias/: Invalid dependency alias "bad-alias!"
-❌ Failed to resolve ingot dependency 'file://<project>/crates/fe/tests/fixtures/cli_output/ingots/invalid_dep_alias/nonexistent/': Directory does not exist: file://<project>/crates/fe/tests/fixtures/cli_output/ingots/invalid_dep_alias/nonexistent/
+Error: Erroneous fe.toml file in file://<project>/crates/fe/tests/fixtures/cli_output/ingots/invalid_dep_alias/: Invalid dependency alias "bad-alias!"
+Error: Failed to resolve ingot dependency 'file://<project>/crates/fe/tests/fixtures/cli_output/ingots/invalid_dep_alias/nonexistent/': Directory does not exist: file://<project>/crates/fe/tests/fixtures/cli_output/ingots/invalid_dep_alias/nonexistent/
 
 === EXIT CODE: 0 ===

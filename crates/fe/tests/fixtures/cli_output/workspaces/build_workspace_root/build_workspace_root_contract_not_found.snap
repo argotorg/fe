@@ -1,0 +1,8 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+---
+=== STDERR ===
+Error: No workspace members contained the requested contract
+
+=== EXIT CODE: 1 ===

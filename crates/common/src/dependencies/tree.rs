@@ -214,11 +214,11 @@ fn print_node_with_alias(
     let mut label = base_label;
 
     if will_close_cycle {
-        label = format!("{label} 🔄 [cycle]");
+        label = format!("{label} [cycle]");
     }
 
     if is_remote_edge {
-        label = format!("{label} 🌐 [remote]");
+        label = format!("{label} [remote]");
     }
 
     if is_in_cycle {

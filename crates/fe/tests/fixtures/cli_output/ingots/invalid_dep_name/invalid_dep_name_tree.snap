@@ -6,7 +6,7 @@ expression: output
 test v0.1.0
 
 === STDERR ===
-❌ Erroneous fe.toml file in file://<project>/crates/fe/tests/fixtures/cli_output/ingots/invalid_dep_name/: Invalid dependency name "bad name!"
-❌ Failed to resolve ingot dependency 'file://<project>/crates/fe/tests/fixtures/cli_output/ingots/invalid_dep_name/nonexistent/': Directory does not exist: file://<project>/crates/fe/tests/fixtures/cli_output/ingots/invalid_dep_name/nonexistent/
+Error: Erroneous fe.toml file in file://<project>/crates/fe/tests/fixtures/cli_output/ingots/invalid_dep_name/: Invalid dependency name "bad name!"
+Error: Failed to resolve ingot dependency 'file://<project>/crates/fe/tests/fixtures/cli_output/ingots/invalid_dep_name/nonexistent/': Directory does not exist: file://<project>/crates/fe/tests/fixtures/cli_output/ingots/invalid_dep_name/nonexistent/
 
 === EXIT CODE: 0 ===

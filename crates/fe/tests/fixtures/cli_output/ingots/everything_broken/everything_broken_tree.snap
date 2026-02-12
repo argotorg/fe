@@ -6,7 +6,7 @@ expression: output
 [invalid fe.toml]
 
 === STDERR ===
-❌ Invalid fe.toml file in ingot file://<project>/crates/fe/tests/fixtures/cli_output/ingots/everything_broken/: Failed to parse file://<project>/crates/fe/tests/fixtures/cli_output/ingots/everything_broken/fe.toml: TOML parse error at line 1, column 7
+Error: Invalid fe.toml file in ingot file://<project>/crates/fe/tests/fixtures/cli_output/ingots/everything_broken/: Failed to parse file://<project>/crates/fe/tests/fixtures/cli_output/ingots/everything_broken/fe.toml: TOML parse error at line 1, column 7
   |
 1 | [ingot
   |       ^

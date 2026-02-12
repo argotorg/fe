@@ -4,6 +4,6 @@ expression: output
 input_file: tests/fixtures/cli_output/workspaces/workspace_dependency_version_mismatch/workspace_dependency_version_mismatch.case
 ---
 === STDERR ===
-❌ Dependency 'utils' in file://<project>/crates/fe/tests/fixtures/cli_output/workspaces/workspace_dependency_version_mismatch/ingots/app/ expected utils@9.9.9 at file://<project>/crates/fe/tests/fixtures/cli_output/workspaces/workspace_dependency_version_mismatch/vendor/utils/ but found utils@0.1.0
+Error: Dependency 'utils' in file://<project>/crates/fe/tests/fixtures/cli_output/workspaces/workspace_dependency_version_mismatch/ingots/app/ expected utils@9.9.9 at file://<project>/crates/fe/tests/fixtures/cli_output/workspaces/workspace_dependency_version_mismatch/vendor/utils/ but found utils@0.1.0
 
 === EXIT CODE: 1 ===

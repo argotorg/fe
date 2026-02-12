@@ -124,7 +124,7 @@ impl<'a> IngotHandler<'a> {
             tracing::warn!(target: "resolver", "{diagnostic_string}");
         }
         if self.stdout_enabled {
-            eprintln!("❌ {diagnostic_string}");
+            eprintln!("Error: {diagnostic_string}");
         }
     }
 
@@ -138,7 +138,7 @@ impl<'a> IngotHandler<'a> {
             tracing::error!(target: "resolver", "{diagnostic_string}");
         }
         if self.stdout_enabled {
-            eprintln!("❌ {diagnostic_string}");
+            eprintln!("Error: {diagnostic_string}");
         }
     }
 
@@ -681,7 +681,7 @@ impl<'a> ResolutionHandler<IngotResolverImpl> for IngotHandler<'a> {
                     tracing::info!(target: "resolver", "Checking out {description}");
                 }
                 if self.stdout_enabled {
-                    println!("Checking out {description}");
+                    eprintln!("Checking out {description}");
                 }
             }
             IngotResolutionEvent::RemoteCheckoutComplete {
@@ -698,15 +698,15 @@ impl<'a> ResolutionHandler<IngotResolverImpl> for IngotHandler<'a> {
                         tracing::debug!(target: "resolver", "Using cached checkout {}", ingot_url);
                     }
                     if self.stdout_enabled && self.verbose_enabled {
-                        println!("Using cached checkout {}", ingot_url);
+                        eprintln!("Using cached checkout {}", ingot_url);
                     }
                     return;
                 }
                 if self.trace_enabled {
-                    tracing::info!(target: "resolver", "✅ Checked out {}", ingot_url);
+                    tracing::info!(target: "resolver", "Checked out {}", ingot_url);
                 }
                 if self.stdout_enabled {
-                    println!("✅ Checked out {}", ingot_url);
+                    eprintln!("Checked out {}", ingot_url);
                 }
             }
         }
@@ -724,11 +724,11 @@ impl<'a> ResolutionHandler<IngotResolverImpl> for IngotHandler<'a> {
             if self.trace_enabled {
                 tracing::error!(
                     target: "resolver",
-                    "❌ Failed to check out {description}: {error}"
+                    "Failed to check out {description}: {error}"
                 );
             }
             if self.stdout_enabled {
-                eprintln!("❌ Failed to check out {description}: {error}");
+                eprintln!("Error: Failed to check out {description}: {error}");
             }
         }
 
@@ -827,7 +827,7 @@ impl<'a> ResolutionHandler<IngotResolverImpl> for IngotHandler<'a> {
                 }
                 if self.stdout_enabled {
                     eprintln!(
-                        "❌ Unhandled name-only dependency resolution error for {description}: {error}"
+                        "Error: Unhandled name-only dependency resolution error for {description}: {error}"
                     );
                 }
             }

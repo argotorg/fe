@@ -1,10 +1,9 @@
 ---
 source: crates/fe/tests/cli_output.rs
-assertion_line: 378
 expression: output
 input_file: tests/fixtures/cli_output/workspaces/inter_workspace_select_version_mismatch/version_mismatch.case
 ---
 === STDERR ===
-❌ Dependency 'lib_b' in file://<project>/crates/fe/tests/fixtures/cli_output/workspaces/inter_workspace_select_version_mismatch/workspace_a/ingots/app/ expected lib_b@9.9.9 at file://<project>/crates/fe/tests/fixtures/cli_output/workspaces/inter_workspace_select_version_mismatch/workspace_b/ingots/lib_b/ but found lib_b@0.1.0
+Error: Dependency 'lib_b' in file://<project>/crates/fe/tests/fixtures/cli_output/workspaces/inter_workspace_select_version_mismatch/workspace_a/ingots/app/ expected lib_b@9.9.9 at file://<project>/crates/fe/tests/fixtures/cli_output/workspaces/inter_workspace_select_version_mismatch/workspace_b/ingots/lib_b/ but found lib_b@0.1.0
 
 === EXIT CODE: 1 ===

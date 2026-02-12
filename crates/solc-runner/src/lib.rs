@@ -51,8 +51,21 @@ pub fn compile_single_contract(
     optimize: bool,
     verify_runtime_bytecode: bool,
 ) -> Result<ContractBytecode, YulcError> {
+    compile_single_contract_with_solc(name, yul_src, optimize, verify_runtime_bytecode, None)
+}
+
+/// Compiles a single contract by forwarding the Yul source to a specific `solc` binary.
+///
+/// When `solc_path` is `None`, falls back to `FE_SOLC_PATH` and then `solc` on `PATH`.
+pub fn compile_single_contract_with_solc(
+    name: &str,
+    yul_src: &str,
+    optimize: bool,
+    verify_runtime_bytecode: bool,
+    solc_path: Option<&str>,
+) -> Result<ContractBytecode, YulcError> {
     let input_json = build_standard_json(yul_src, optimize)?;
-    let solc_output = run_solc(&input_json)?;
+    let solc_output = run_solc_with_path(&input_json, solc_path)?;
     parse_contract_output(name, &solc_output, verify_runtime_bytecode)
 }
 
@@ -95,8 +108,12 @@ fn build_standard_json(yul_src: &str, optimize: bool) -> Result<String, YulcErro
 ///
 /// Returns the raw stdout emitted by `solc`, or a [`YulcError`] if the process fails or produces
 /// invalid UTF-8.
-fn run_solc(input: &str) -> Result<String, YulcError> {
-    let solc_path = env::var(SOLC_ENV).unwrap_or_else(|_| "solc".into());
+fn run_solc_with_path(input: &str, solc_path: Option<&str>) -> Result<String, YulcError> {
+    let solc_path = solc_path
+        .map(str::to_string)
+        .or_else(|| env::var(SOLC_ENV).ok())
+        .unwrap_or_else(|| "solc".into());
+
     let mut child = Command::new(&solc_path)
         .arg("--standard-json")
         .stdin(Stdio::piped())
