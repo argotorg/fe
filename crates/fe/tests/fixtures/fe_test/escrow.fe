@@ -1,0 +1,194 @@
+/// Payment escrow with role-based access control.
+/// Inspired by basic escrow and multisig patterns in DeFi.
+///
+/// Roles: buyer (deployer), arbiter (constructor arg).
+/// State: Pending(0) -> Active(1) -> Released(2) or Refunded(3).
+///
+/// Tests: ctx.caller() in init, multi-arg constructor, address-based roles,
+/// cross-contract arbiter proxy, state machine transitions.
+
+use std::evm::{Address, Evm, Call, Ctx}
+use std::evm::effects::assert
+
+msg EscrowMsg {
+    #[selector = 0x01]
+    Deposit { amount: u256 } -> u256,
+    #[selector = 0x02]
+    Release -> u256,
+    #[selector = 0x03]
+    Refund -> u256,
+    #[selector = 0x04]
+    GetState -> u256,
+    #[selector = 0x05]
+    GetBuyerDeposit -> u256,
+    #[selector = 0x06]
+    GetSellerPayout -> u256,
+    #[selector = 0x07]
+    GetBuyer -> u256,
+    #[selector = 0x08]
+    GetArbiter -> u256,
+}
+
+struct EscrowStore {
+    state: u256,
+    deposit_required: u256,
+    buyer_inner: u256,
+    arbiter_inner: u256,
+    buyer_deposit: u256,
+    seller_payout: u256,
+}
+
+pub contract Escrow uses (ctx: Ctx) {
+    mut store: EscrowStore
+
+    init(deposit_required: u256, arbiter: Address) uses (mut store, ctx) {
+        store.state = 0
+        store.deposit_required = deposit_required
+        store.buyer_inner = ctx.caller().inner
+        store.arbiter_inner = arbiter.inner
+        store.buyer_deposit = 0
+        store.seller_payout = 0
+    }
+
+    recv EscrowMsg {
+        Deposit { amount } -> u256 uses (mut store, ctx) {
+            if store.state != 0 {
+                return 1
+            }
+            // Only buyer can deposit
+            if ctx.caller().inner != store.buyer_inner {
+                return 2
+            }
+            store.buyer_deposit += amount
+            if store.buyer_deposit >= store.deposit_required {
+                store.state = 1
+            }
+            return 0
+        }
+
+        Release -> u256 uses (mut store, ctx) {
+            if store.state != 1 {
+                return 1
+            }
+            // Only arbiter can release
+            if ctx.caller().inner != store.arbiter_inner {
+                return 2
+            }
+            store.seller_payout = store.buyer_deposit
+            store.buyer_deposit = 0
+            store.state = 2
+            return 0
+        }
+
+        Refund -> u256 uses (mut store, ctx) {
+            if store.state != 1 {
+                return 1
+            }
+            // Only arbiter can refund
+            if ctx.caller().inner != store.arbiter_inner {
+                return 2
+            }
+            store.state = 3
+            return 0
+        }
+
+        GetState -> u256 uses (store) { store.state }
+        GetBuyerDeposit -> u256 uses (store) { store.buyer_deposit }
+        GetSellerPayout -> u256 uses (store) { store.seller_payout }
+        GetBuyer -> u256 uses (store) { store.buyer_inner }
+        GetArbiter -> u256 uses (store) { store.arbiter_inner }
+    }
+}
+
+/// Arbiter proxy: can call Release or Refund on the escrow.
+msg ArbiterProxyMsg {
+    #[selector = 0x10]
+    DoRelease { escrow: Address } -> u256,
+    #[selector = 0x11]
+    DoRefund { escrow: Address } -> u256,
+}
+
+pub contract ArbiterProxy uses (mut call: Call) {
+    recv ArbiterProxyMsg {
+        DoRelease { escrow } -> u256 uses (mut call) {
+            call.call(addr: escrow, gas: 100000, value: 0, message: EscrowMsg::Release {})
+        }
+        DoRefund { escrow } -> u256 uses (mut call) {
+            call.call(addr: escrow, gas: 100000, value: 0, message: EscrowMsg::Refund {})
+        }
+    }
+}
+
+#[test]
+fn test_escrow_release() uses (mut evm: Evm) {
+    // Deploy arbiter proxy first
+    let arbiter = evm.create2<ArbiterProxy>(value: 0, args: (), salt: 0)
+    assert(arbiter.inner != 0)
+
+    // Deploy escrow: test runner is buyer, arbiter proxy is arbiter
+    let escrow = evm.create2<Escrow>(value: 0, args: (100, arbiter), salt: 1)
+    assert(escrow.inner != 0)
+
+    // Verify roles
+    let buyer: u256 = evm.call(addr: escrow, gas: 100000, value: 0, message: EscrowMsg::GetBuyer {})
+    assert(buyer != 0)
+    let arb: u256 = evm.call(addr: escrow, gas: 100000, value: 0, message: EscrowMsg::GetArbiter {})
+    assert(arb == arbiter.inner)
+
+    // Test runner (buyer) can't release — wrong role
+    let res: u256 = evm.call(addr: escrow, gas: 100000, value: 0, message: EscrowMsg::Release {})
+    assert(res == 1)  // wrong state
+
+    // Arbiter can't release yet — not active
+    let res: u256 = evm.call(addr: arbiter, gas: 200000, value: 0, message: ArbiterProxyMsg::DoRelease { escrow })
+    assert(res == 1)
+
+    // Buyer deposits
+    let res: u256 = evm.call(addr: escrow, gas: 100000, value: 0, message: EscrowMsg::Deposit { amount: 100 })
+    assert(res == 0)
+
+    let state: u256 = evm.call(addr: escrow, gas: 100000, value: 0, message: EscrowMsg::GetState {})
+    assert(state == 1)  // active
+
+    // Test runner (buyer) can't release — wrong role
+    let res: u256 = evm.call(addr: escrow, gas: 100000, value: 0, message: EscrowMsg::Release {})
+    assert(res == 2)  // not arbiter
+
+    // Arbiter releases
+    let res: u256 = evm.call(addr: arbiter, gas: 200000, value: 0, message: ArbiterProxyMsg::DoRelease { escrow })
+    assert(res == 0)
+
+    let state: u256 = evm.call(addr: escrow, gas: 100000, value: 0, message: EscrowMsg::GetState {})
+    assert(state == 2)  // released
+
+    let payout: u256 = evm.call(addr: escrow, gas: 100000, value: 0, message: EscrowMsg::GetSellerPayout {})
+    assert(payout == 100)
+}
+
+#[test]
+fn test_escrow_refund() uses (mut evm: Evm) {
+    let arbiter = evm.create2<ArbiterProxy>(value: 0, args: (), salt: 2)
+    assert(arbiter.inner != 0)
+
+    let escrow = evm.create2<Escrow>(value: 0, args: (200, arbiter), salt: 3)
+    assert(escrow.inner != 0)
+
+    // Deposit full amount
+    let res: u256 = evm.call(addr: escrow, gas: 100000, value: 0, message: EscrowMsg::Deposit { amount: 200 })
+    assert(res == 0)
+
+    // Arbiter refunds
+    let res: u256 = evm.call(addr: arbiter, gas: 200000, value: 0, message: ArbiterProxyMsg::DoRefund { escrow })
+    assert(res == 0)
+
+    let state: u256 = evm.call(addr: escrow, gas: 100000, value: 0, message: EscrowMsg::GetState {})
+    assert(state == 3)
+
+    // Deposit still recorded
+    let dep: u256 = evm.call(addr: escrow, gas: 100000, value: 0, message: EscrowMsg::GetBuyerDeposit {})
+    assert(dep == 200)
+
+    // Can't refund again
+    let res: u256 = evm.call(addr: arbiter, gas: 200000, value: 0, message: ArbiterProxyMsg::DoRefund { escrow })
+    assert(res == 1)
+}

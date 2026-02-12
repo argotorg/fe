@@ -676,6 +676,39 @@ pub fn walk_contract<'db, V>(
         },
     );
 
+    // Init block: walk parameter types and effects.
+    // Note: we walk param types individually (not via visit_func_param_list)
+    // because the scope builder doesn't create FuncParam scopes for contract
+    // init params, so with_new_scoped_ctxt would panic.
+    // The body itself is visited via child items below.
+    if let Some(init) = contract.init(ctxt.db) {
+        ctxt.with_new_ctxt(
+            |span| span.init_block(),
+            |ctxt| {
+                let params = init.params(ctxt.db);
+                ctxt.with_new_ctxt(
+                    |span| span.params(),
+                    |ctxt| {
+                        for (idx, param) in params.data(ctxt.db).iter().enumerate() {
+                            if let Some(ty) = param.ty.to_opt() {
+                                ctxt.with_new_ctxt(
+                                    |span| span.param(idx).ty(),
+                                    |ctxt| visitor.visit_ty(ctxt, ty),
+                                );
+                            }
+                        }
+                    },
+                );
+                ctxt.with_new_ctxt(
+                    |span| span.effects(),
+                    |ctxt| {
+                        visitor.visit_effect_param_list(ctxt, init.effects(ctxt.db));
+                    },
+                );
+            },
+        );
+    }
+
     let scope = ScopeId::from_item(contract.into());
     let graph = scope.scope_graph(ctxt.db);
     if graph.scopes.contains_key(&scope) {

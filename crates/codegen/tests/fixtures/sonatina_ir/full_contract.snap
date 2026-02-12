@@ -1,0 +1,87 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+expression: output
+input_file: crates/codegen/tests/fixtures/full_contract.fe
+---
+target = evm-ethereum-osaka
+
+func public %point_hac92469562809d28_area(v0.i256) -> i256 {
+    block0:
+        v2.i256 = mload v0 i256;
+        v4.i256 = add v0 32.i256;
+        v5.i256 = mload v4 i256;
+        v6.i256 = mul v2 v5;
+        return v6;
+}
+
+func public %square_h97afaa872b6ea17e_area(v0.i256) -> i256 {
+    block0:
+        v2.i256 = mul v0 v0;
+        return v2;
+}
+
+func public %abi_encode__Evm_hef0af3106e109414__3af54274b2985741(v0.i256, v1.i256) {
+    block0:
+        mstore 0.i256 v0 i256;
+        evm_return 0.i256 32.i256;
+}
+
+func public %init__StorPtr_Evm___207f35a85ac4062e() {
+    block0:
+        v1.i256 = sym_size &dispatch__StorPtr_Evm___207f35a85ac4062e;
+        v2.i256 = sym_addr &dispatch__StorPtr_Evm___207f35a85ac4062e;
+        evm_code_copy 0.i256 v2 v1;
+        evm_return 0.i256 v1;
+}
+
+func public %dispatch__StorPtr_Evm___207f35a85ac4062e() {
+    block0:
+        v1.i256 = evm_calldata_load 0.i256;
+        v3.i256 = shr 224.i256 v1;
+        v5.i256 = eq v3 151146943.i256;
+        br v5 block1 block2;
+
+    block1:
+        v7.i256 = evm_calldata_load 4.i256;
+        v9.i256 = evm_calldata_load 36.i256;
+        v11.i256 = evm_malloc 64.i256;
+        mstore v11 v7 i256;
+        v13.i256 = add v11 32.i256;
+        mstore v13 v9 i256;
+        v14.i256 = mload v11 i256;
+        v16.i256 = add v14 1.i256;
+        mstore v11 v16 i256;
+        v17.i256 = add v11 32.i256;
+        v18.i256 = mload v17 i256;
+        v20.i256 = add v18 2.i256;
+        v21.i256 = add v11 32.i256;
+        mstore v21 v20 i256;
+        v22.i256 = call %point_hac92469562809d28_area v11;
+        call %abi_encode__Evm_hef0af3106e109414__3af54274b2985741 v22 0.i256;
+        evm_invalid;
+
+    block2:
+        v25.i256 = eq v3 2066295049.i256;
+        br v25 block3 block4;
+
+    block3:
+        v26.i256 = evm_calldata_load 4.i256;
+        v28.i256 = add v26 3.i256;
+        v29.i256 = call %square_h97afaa872b6ea17e_area v28;
+        call %abi_encode__Evm_hef0af3106e109414__3af54274b2985741 v29 0.i256;
+        evm_invalid;
+
+    block4:
+        evm_return 0.i256 0.i256;
+}
+
+
+object @ShapeDispatcher {
+    section init {
+        entry %init__StorPtr_Evm___207f35a85ac4062e;
+        embed .runtime as &dispatch__StorPtr_Evm___207f35a85ac4062e;
+    }
+    section runtime {
+        entry %dispatch__StorPtr_Evm___207f35a85ac4062e;
+    }
+}

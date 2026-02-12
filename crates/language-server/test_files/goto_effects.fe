@@ -1,0 +1,96 @@
+// --- Effect-related types ---
+
+struct State {
+    value: u256,
+    count: u256,
+}
+
+struct Logger {
+    entries: u256,
+}
+
+// --- Traits used as effect types ---
+
+trait Ctx {
+    fn caller(self) -> u256
+    fn timestamp(self) -> u256
+}
+
+trait Signer {
+    fn verify(self, data: u256) -> bool
+}
+
+// --- Impl blocks for effect traits ---
+
+impl Ctx for State {
+    fn caller(self) -> u256 {
+        return self.value
+    }
+    fn timestamp(self) -> u256 {
+        return self.count
+    }
+}
+
+// --- Free functions with uses clauses ---
+
+fn get_caller() -> u256 uses (ctx: Ctx) {
+    return ctx.caller()
+}
+
+fn log_and_get(x: u256) -> u256 uses (mut log: Logger) {
+    log.entries = log.entries + x
+    return log.entries
+}
+
+fn multi_effect(a: u256) -> u256 uses (ctx: Ctx, mut state: State) {
+    let c: u256 = ctx.caller()
+    state.value = a + c
+    return state.value
+}
+
+// --- Struct with methods that use effects ---
+
+struct Calculator {
+    base: u256,
+}
+
+impl Calculator {
+    fn add(self, x: u256) -> u256 {
+        return self.base + x
+    }
+
+    fn compute(self, x: u256) -> u256 uses (ctx: Ctx) {
+        let caller_val: u256 = ctx.caller()
+        return self.base + x + caller_val
+    }
+}
+
+// --- Contract with typed effects ---
+
+msg CalcMsg {
+    Add { x: u256 } -> u256,
+    GetState -> u256,
+}
+
+pub contract EffectContract uses (ctx: Ctx) {
+    mut state: State
+    mut log: Logger
+
+    init(start: u256) uses (mut state) {
+        state.value = start
+        state.count = 0
+    }
+
+    recv CalcMsg {
+        Add { x } -> u256 uses (ctx, mut state, mut log) {
+            let c: u256 = ctx.caller()
+            state.value = state.value + x + c
+            log.entries = log.entries + 1
+            return state.value
+        }
+
+        GetState -> u256 uses state {
+            return state.value
+        }
+    }
+}
