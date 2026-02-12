@@ -122,6 +122,12 @@ pub enum TyLowerDiag<'db> {
         given: TyId<'db>,
     },
 
+    /// `own` parameters must have owned types. Borrow-handle types (`mut`/`ref`) are not owned.
+    OwnParamCannotBeBorrow {
+        span: DynLazySpan<'db>,
+        ty: TyId<'db>,
+    },
+
     InvalidConstTyExpr(DynLazySpan<'db>),
 
     ConstEvalUnsupported(DynLazySpan<'db>),
@@ -156,6 +162,7 @@ impl TyLowerDiag<'_> {
             Self::ConstTyMismatch { .. } => 11,
             Self::ConstTyExpected { .. } => 12,
             Self::NormalTypeExpected { .. } => 13,
+            Self::OwnParamCannotBeBorrow { .. } => 14,
             Self::InvalidConstTyExpr(_) => 15,
             Self::ConstEvalUnsupported(_) => 23,
             Self::ConstEvalNonConstCall(_) => 24,

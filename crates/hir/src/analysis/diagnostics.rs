@@ -1488,6 +1488,23 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 error_code,
             },
 
+            Self::OwnParamCannotBeBorrow { span, ty } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "invalid `own` parameter".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "`own` parameters must have owned types (found `{}`)",
+                        ty.pretty_print(db)
+                    ),
+                    span: span.resolve(db),
+                }],
+                notes: vec![
+                    "remove `own`, or change the parameter type to an owned type".to_string(),
+                ],
+                error_code,
+            },
+
             Self::InvalidConstTyExpr(span) => primary_diag(
                 Severity::Error,
                 "the expression is not supported in a const type context",
@@ -2469,7 +2486,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     sub_diagnostics: vec![SubDiagnostic {
                         style: LabelStyle::Primary,
                         message: format!(
-                            "temporaries and immediate values cannot be used where `{kw}` is expected"
+                            "temporaries and literal values cannot be used where `{kw}` is expected"
                         ),
                         span: primary.resolve(db),
                     }],
@@ -2489,10 +2506,6 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     crate::analysis::ty::ty_def::BorrowKind::Mut => "mut",
                     crate::analysis::ty::ty_def::BorrowKind::Ref => "ref",
                 };
-                let help = suggestion
-                    .as_ref()
-                    .map(|s| format!("help: try `{s}`"))
-                    .unwrap_or_else(|| format!("help: try `{kw} <place>`"));
 
                 CompleteDiagnostic {
                     severity: Severity::Error,
@@ -2502,7 +2515,12 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                         message: format!("this argument must be explicitly borrowed as `{kw}`"),
                         span: primary.resolve(db),
                     }],
-                    notes: vec![format!("{help} when passing a place to a `{kw}` parameter")],
+                    notes: vec![
+                        suggestion
+                            .as_ref()
+                            .map(|s| format!("help: try `{s}`"))
+                            .unwrap_or_else(|| format!("help: try `{kw} <place>`")),
+                    ],
                     error_code,
                 }
             }

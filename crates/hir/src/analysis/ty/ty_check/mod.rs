@@ -195,20 +195,7 @@ impl<'db> TyChecker<'db> {
 
     fn check_own_param_types(&mut self) {
         match self.env.owner() {
-            BodyOwner::Func(func) => {
-                for param in func.params(self.db) {
-                    if param.mode(self.db) != crate::hir_def::params::FuncParamMode::Own {
-                        continue;
-                    }
-                    let ty = param.ty(self.db);
-                    if ty.as_borrow(self.db).is_some() {
-                        self.push_diag(BodyDiag::OwnParamCannotBeBorrow {
-                            primary: param.span().ty().into(),
-                            ty,
-                        });
-                    }
-                }
-            }
+            BodyOwner::Func(_) => {}
             BodyOwner::ContractInit { contract } => {
                 let Some(init) = contract.init(self.db) else {
                     return;

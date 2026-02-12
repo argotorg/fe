@@ -1,0 +1,9 @@
+trait T {
+    fn bad_trait(x: own ref u8)
+}
+
+extern {
+    fn bad_extern(x: own mut u8)
+}
+
+fn bad_def(x: own ref u8) {}

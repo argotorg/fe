@@ -1,6 +1,5 @@
 ---
 source: crates/uitest/tests/ty.rs
-assertion_line: 27
 expression: diags
 input_file: fixtures/ty/def/implicit_mut_alias_reborrow_required.fe
 ---
@@ -22,7 +21,7 @@ error[8-0069]: explicit borrow required
 5 │     take_two_mut(x, x)
   │                  ^ this argument must be explicitly borrowed as `mut`
   │
-  = help: try `mut x` when passing a place to a `mut` parameter
+  = help: try `mut x`
 
 error[8-0069]: explicit borrow required
   ┌─ implicit_mut_alias_reborrow_required.fe:5:21
@@ -30,4 +29,4 @@ error[8-0069]: explicit borrow required
 5 │     take_two_mut(x, x)
   │                     ^ this argument must be explicitly borrowed as `mut`
   │
-  = help: try `mut x` when passing a place to a `mut` parameter
+  = help: try `mut x`

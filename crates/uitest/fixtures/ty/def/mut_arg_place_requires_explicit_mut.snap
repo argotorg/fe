@@ -1,6 +1,5 @@
 ---
 source: crates/uitest/tests/ty.rs
-assertion_line: 27
 expression: diags
 input_file: fixtures/ty/def/mut_arg_place_requires_explicit_mut.fe
 ---
@@ -16,4 +15,4 @@ error[8-0069]: explicit borrow required
 5 │     bump(x)
   │          ^ this argument must be explicitly borrowed as `mut`
   │
-  = help: try `mut x` when passing a place to a `mut` parameter
+  = help: try `mut x`

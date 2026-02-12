@@ -547,6 +547,17 @@ impl<'db> FuncParamView<'db> {
             return out;
         }
 
+        if self.mode(db) == crate::hir_def::params::FuncParamMode::Own && ty.as_borrow(db).is_some()
+        {
+            out.push(
+                TyLowerDiag::OwnParamCannotBeBorrow {
+                    span: ty_span.clone(),
+                    ty,
+                }
+                .into(),
+            );
+        }
+
         // Well-formedness / trait-bound satisfaction for parameter type
         if let WellFormedness::IllFormed { goal, subgoal } =
             check_ty_wf(db, func.top_mod(db).ingot(db), ty, assumptions)
