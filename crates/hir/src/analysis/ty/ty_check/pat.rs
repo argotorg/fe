@@ -306,8 +306,12 @@ impl<'db> TyChecker<'db> {
             .iter()
             .map(|hir_ty| match hir_ty.to_opt() {
                 Some(ty) => {
-                    let ty =
-                        lower_hir_ty(self.db, ty, variant.enum_(self.db).scope(), self.env.assumptions());
+                    let ty = lower_hir_ty(
+                        self.db,
+                        ty,
+                        variant.enum_(self.db).scope(),
+                        self.env.assumptions(),
+                    );
                     let instantiated =
                         Binder::bind(ty).instantiate(self.db, variant.ty.generic_args(self.db));
                     self.normalize_ty(instantiated)
