@@ -28,7 +28,7 @@ pub use resolver::workspace::{ExpandedWorkspaceMember, expand_workspace_members}
 use resolver::{
     files::FilesResolutionDiagnostic,
     git::{GitDescription, GitResolver},
-    graph::{GraphResolver, GraphResolverImpl},
+    graph::{AsyncGraphResolverImpl, GraphResolver},
     ingot::{IngotDescriptor, IngotResolutionError, IngotResolverImpl, RemoteProgress},
 };
 use url::Url;
@@ -109,7 +109,9 @@ fn init_ingot_graph(db: &mut DriverDataBase, ingot_url: &Url) -> bool {
     let mut handler = IngotHandler::new(db)
         .with_stdout(true)
         .with_verbose(resolver_verbose());
-    let mut ingot_graph_resolver = GraphResolverImpl::new(ingot_resolver(checkout_root));
+    let checkout_root_clone = checkout_root.clone();
+    let mut ingot_graph_resolver =
+        AsyncGraphResolverImpl::new(move || ingot_resolver(checkout_root_clone.clone()));
 
     // Root ingot resolution should never fail since directory existence is validated earlier.
     // If it fails, it indicates a bug in the resolver or an unexpected system condition.
