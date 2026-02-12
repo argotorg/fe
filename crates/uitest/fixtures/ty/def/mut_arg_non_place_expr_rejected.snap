@@ -1,0 +1,11 @@
+---
+source: crates/uitest/tests/ty.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty/def/mut_arg_non_place_expr_rejected.fe
+---
+error[8-0000]: type mismatch
+  ┌─ mut_arg_non_place_expr_rejected.fe:5:10
+  │
+5 │     bump(x + 1)
+  │          ^^^^^ expected `mut u256`, but `u256` is given
