@@ -81,8 +81,17 @@ impl<'db> LocalLoanState<'db> {
     }
 
     fn overwrite_place(&mut self, place: &crate::MirProjectionPath<'db>, value: &Self) {
-        self.slots
-            .retain(|existing, _| !projection_paths_overlap(existing, place));
+        let mut retained = FxHashMap::default();
+        for (existing, loans) in std::mem::take(&mut self.slots) {
+            match existing.may_alias(place) {
+                Aliasing::Must => {}
+                Aliasing::May => self.unknown.extend(loans),
+                Aliasing::No => {
+                    retained.insert(existing, loans);
+                }
+            }
+        }
+        self.slots = retained;
 
         for (subpath, loans) in &value.slots {
             if loans.is_empty() {
@@ -3232,13 +3241,6 @@ fn strip_casts<'db>(body: &MirBody<'db>, value: ValueId) -> ValueId {
     current
 }
 
-fn projection_paths_overlap<'db>(
-    a: &crate::MirProjectionPath<'db>,
-    b: &crate::MirProjectionPath<'db>,
-) -> bool {
-    !matches!(a.may_alias(b), Aliasing::No)
-}
-
 fn loans_overlap<'db>(a: &Loan<'db>, b: &Loan<'db>) -> bool {
     place_set_overlaps(&a.targets, &b.targets)
 }
@@ -3256,10 +3258,25 @@ mod tests {
     use common::InputDb;
     use driver::DriverDataBase;
     use hir::analysis::HirAnalysisDb;
+    use hir::projection::{IndexSource, Projection};
+    use rustc_hash::FxHashSet;
     use url::Url;
 
-    use super::{BorrowSummaryError, BorrowSummaryMap, Borrowck, compute_borrow_summaries};
-    use crate::MirFunction;
+    use super::{
+        BorrowSummaryError, BorrowSummaryMap, Borrowck, LoanId, LocalLoanState,
+        compute_borrow_summaries,
+    };
+    use crate::{MirFunction, MirProjectionPath, ValueId};
+
+    fn field_path<'db>(idx: usize) -> MirProjectionPath<'db> {
+        MirProjectionPath::from_projection(Projection::Field(idx))
+    }
+
+    fn dynamic_index_path<'db>(idx_value: u32) -> MirProjectionPath<'db> {
+        MirProjectionPath::from_projection(Projection::Index(IndexSource::Dynamic(ValueId(
+            idx_value,
+        ))))
+    }
 
     fn compute_borrow_summaries_naive<'db>(
         db: &'db dyn HirAnalysisDb,
@@ -3441,5 +3458,41 @@ pub fn entry(x: ref u256) -> ref u256 {
             naive_counts[3] > worklist_counts[3],
             "naive solver should rescan isolated functions"
         );
+    }
+
+    #[test]
+    fn overwrite_place_kills_only_must_alias_slots() {
+        let mut state = LocalLoanState::default();
+        state
+            .slots
+            .insert(field_path(0), FxHashSet::from_iter([LoanId(0)]));
+        state.overwrite_place(&field_path(0), &LocalLoanState::default());
+        assert!(state.slots.is_empty());
+        assert!(state.unknown.is_empty());
+    }
+
+    #[test]
+    fn overwrite_place_moves_may_alias_slots_to_unknown() {
+        let mut state = LocalLoanState::default();
+        state
+            .slots
+            .insert(dynamic_index_path(0), FxHashSet::from_iter([LoanId(0)]));
+        state.overwrite_place(&dynamic_index_path(1), &LocalLoanState::default());
+        assert!(state.slots.is_empty());
+        assert_eq!(state.unknown, FxHashSet::from_iter([LoanId(0)]));
+    }
+
+    #[test]
+    fn overwrite_place_keeps_disjoint_slots() {
+        let mut state = LocalLoanState::default();
+        state
+            .slots
+            .insert(field_path(0), FxHashSet::from_iter([LoanId(0)]));
+        state.overwrite_place(&field_path(1), &LocalLoanState::default());
+        assert_eq!(
+            state.slots.get(&field_path(0)),
+            Some(&FxHashSet::from_iter([LoanId(0)]))
+        );
+        assert!(state.unknown.is_empty());
     }
 }
