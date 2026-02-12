@@ -1371,19 +1371,7 @@ impl<'db> TyChecker<'db> {
             return ExprProp::invalid(self.db);
         }
 
-        let mut receiver_tys = vec![receiver_prop.ty];
-        if let Some((cap, inner)) = receiver_prop.ty.as_capability(self.db) {
-            if matches!(cap, CapabilityKind::Mut) {
-                receiver_tys.push(TyId::borrow_ref_of(self.db, inner));
-            }
-            if !matches!(cap, CapabilityKind::View) {
-                receiver_tys.push(TyId::view_of(self.db, inner));
-            }
-            receiver_tys.push(inner);
-        } else {
-            receiver_tys.push(TyId::view_of(self.db, receiver_prop.ty));
-        }
-        receiver_tys.dedup();
+        let receiver_tys = self.capability_fallback_candidates(receiver_prop.ty);
 
         let mut canonical_r_ty = Canonicalized::new(self.db, receiver_tys[0]);
         let mut candidate = select_method_candidate(
@@ -2341,19 +2329,7 @@ impl<'db> TyChecker<'db> {
             return ExprProp::invalid(self.db);
         };
 
-        let mut lhs_candidates = vec![lhs_ty];
-        if let Some((cap, inner)) = lhs_ty.as_capability(self.db) {
-            if matches!(cap, CapabilityKind::Mut) {
-                lhs_candidates.push(TyId::borrow_ref_of(self.db, inner));
-            }
-            if !matches!(cap, CapabilityKind::View) {
-                lhs_candidates.push(TyId::view_of(self.db, inner));
-            }
-            lhs_candidates.push(inner);
-        } else {
-            lhs_candidates.push(TyId::view_of(self.db, lhs_ty));
-        }
-        lhs_candidates.dedup();
+        let lhs_candidates = self.capability_fallback_candidates(lhs_ty);
 
         let mut selected_lhs_ty = lhs_candidates[0];
         let mut c_lhs_ty = Canonicalized::new(self.db, selected_lhs_ty);

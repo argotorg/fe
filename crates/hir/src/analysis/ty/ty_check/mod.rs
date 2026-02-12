@@ -1095,6 +1095,23 @@ impl<'db> TyChecker<'db> {
         (0..n).map(|_| self.fresh_ty()).collect()
     }
 
+    fn capability_fallback_candidates(&self, ty: TyId<'db>) -> Vec<TyId<'db>> {
+        let mut candidates = vec![ty];
+        if let Some((cap, inner)) = ty.as_capability(self.db) {
+            if matches!(cap, CapabilityKind::Mut) {
+                candidates.push(TyId::borrow_ref_of(self.db, inner));
+            }
+            if !matches!(cap, CapabilityKind::View) {
+                candidates.push(TyId::view_of(self.db, inner));
+            }
+            candidates.push(inner);
+        } else {
+            candidates.push(TyId::view_of(self.db, ty));
+        }
+        candidates.dedup();
+        candidates
+    }
+
     fn pattern_binds_any(&self, pat: PatId) -> bool {
         let Partial::Present(pat_data) = pat.data(self.db, self.body()) else {
             return false;

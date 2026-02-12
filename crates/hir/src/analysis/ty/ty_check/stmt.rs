@@ -10,7 +10,7 @@ use crate::analysis::ty::{
     diagnostics::BodyDiag,
     fold::{TyFoldable, TyFolder},
     trait_def::{TraitInstId, impls_for_ty},
-    ty_def::{CapabilityKind, InvalidCause, TyId},
+    ty_def::{InvalidCause, TyId},
     visitor::TyVisitable,
 };
 
@@ -178,17 +178,7 @@ impl<'db> TyChecker<'db> {
             return (TyId::invalid(self.db, InvalidCause::Other), None);
         };
 
-        let mut iterable_candidates = vec![iterable_ty];
-        if let Some((cap, inner)) = iterable_ty.as_capability(self.db) {
-            if matches!(cap, CapabilityKind::Mut) {
-                iterable_candidates.push(TyId::borrow_ref_of(self.db, inner));
-            }
-            if !matches!(cap, CapabilityKind::View) {
-                iterable_candidates.push(TyId::view_of(self.db, inner));
-            }
-            iterable_candidates.push(inner);
-        }
-        iterable_candidates.dedup();
+        let iterable_candidates = self.capability_fallback_candidates(iterable_ty);
 
         let ingot = self.env.body().top_mod(self.db).ingot(self.db);
         for iterable_lookup_ty in iterable_candidates {
