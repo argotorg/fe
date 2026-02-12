@@ -20,7 +20,7 @@ use crate::analysis::{
         trait_def::TraitInstId,
         trait_resolution::constraint::collect_func_def_constraints,
         ty_def::{BorrowKind, CapabilityKind},
-        ty_def::{TyBase, TyData, TyId},
+        ty_def::{InvalidCause, TyBase, TyData, TyId},
         ty_lower::lower_generic_arg_list,
         visitor::{TyVisitable, TyVisitor},
     },
@@ -268,13 +268,18 @@ impl<'db> Callable<'db> {
                 .and_then(|params| params.get(i).copied())
                 .map(|param| param.mode(db));
             let given_ty = tc.normalize_ty(given.expr_prop.ty);
-
-            let mut actual = if mode == Some(FuncParamMode::Own)
-                && expected.is_ty_var(db)
-                && let Some((_, inner)) = given_ty.as_capability(db)
-                && (tc.ty_is_copy(inner) || tc.expr_can_move_from_place(given.expr))
-            {
-                inner
+            let own_tyvar = mode == Some(FuncParamMode::Own) && expected.is_ty_var(db);
+            let mut actual = if own_tyvar && let Some((kind, inner)) = given_ty.as_capability(db) {
+                if tc.ty_is_copy(inner) || tc.expr_can_move_from_place(given.expr) {
+                    inner
+                } else {
+                    tc.push_diag(BodyDiag::OwnArgMustBeOwnedMove {
+                        primary: given.expr_span.clone(),
+                        kind,
+                        given: inner,
+                    });
+                    TyId::invalid(db, InvalidCause::Other)
+                }
             } else {
                 tc.try_coerce_capability_for_expr_to_expected(
                     given.expr,

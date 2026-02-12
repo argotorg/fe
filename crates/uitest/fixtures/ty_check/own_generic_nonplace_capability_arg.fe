@@ -1,0 +1,9 @@
+struct Boxed {
+    x: u8
+}
+
+fn consume<T>(_value: own T) {}
+
+fn repro(cond: bool, v: Boxed) {
+    consume(if cond { v } else { v })
+}

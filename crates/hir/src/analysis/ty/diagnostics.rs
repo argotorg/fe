@@ -2,7 +2,7 @@ use super::{
     adt_def::AdtCycleMember,
     trait_def::TraitInstId,
     ty_check::{RecordLike, TraitOps},
-    ty_def::{BorrowKind, Kind, TyId},
+    ty_def::{BorrowKind, CapabilityKind, Kind, TyId},
 };
 use crate::visitor::prelude::*;
 use crate::{analysis::HirAnalysisDb, hir_def::Trait};
@@ -374,6 +374,16 @@ pub enum BodyDiag<'db> {
         ty: TyId<'db>,
     },
 
+    /// `own` call arguments must denote a transferable owned value.
+    ///
+    /// Capability-typed expressions (`mut`/`ref`/`view`) can only satisfy this when the checker
+    /// can safely unwrap them to an owned inner value.
+    OwnArgMustBeOwnedMove {
+        primary: DynLazySpan<'db>,
+        kind: CapabilityKind,
+        given: TyId<'db>,
+    },
+
     /// Array repetition literals (`[x; N]`) duplicate the element value.
     ///
     /// Duplicating a value requires that the element type implement `core::marker::Copy`.
@@ -668,6 +678,7 @@ impl<'db> BodyDiag<'db> {
             Self::BorrowArgMustBePlace { .. } => 68,
             Self::ExplicitBorrowRequired { .. } => 69,
             Self::OwnParamCannotBeBorrow { .. } => 70,
+            Self::OwnArgMustBeOwnedMove { .. } => 72,
             Self::ArrayRepeatRequiresCopy { .. } => 71,
             Self::NonAssignableExpr(..) => 17,
             Self::ImmutableAssignment { .. } => 18,

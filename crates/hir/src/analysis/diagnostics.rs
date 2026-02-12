@@ -2542,6 +2542,36 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             },
 
+            Self::OwnArgMustBeOwnedMove {
+                primary,
+                kind,
+                given,
+            } => {
+                let kind = match kind {
+                    crate::analysis::ty::ty_def::CapabilityKind::Mut => "mut",
+                    crate::analysis::ty::ty_def::CapabilityKind::Ref => "ref",
+                    crate::analysis::ty::ty_def::CapabilityKind::View => "view",
+                };
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "`own` argument requires an owned movable value".to_string(),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!(
+                            "this expression has `{kind} {}` capability and cannot be moved as owned here",
+                            given.pretty_print(db)
+                        ),
+                        span: primary.resolve(db),
+                    }],
+                    notes: vec![
+                        "pass an owned place value, or change the callee parameter mode to borrow/view"
+                            .to_string(),
+                    ],
+                    error_code,
+                }
+            }
+
             Self::ArrayRepeatRequiresCopy { primary, ty } => CompleteDiagnostic {
                 severity: Severity::Error,
                 message: "array repetition requires `Copy`".to_string(),
