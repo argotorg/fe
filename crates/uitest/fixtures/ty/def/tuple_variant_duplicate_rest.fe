@@ -1,0 +1,7 @@
+enum Data {
+    Pair(u8, u8),
+}
+
+fn tuple_variant_duplicate_rest(v: Data) {
+    let Data::Pair(.., ..) = v
+}

@@ -1,0 +1,11 @@
+---
+source: crates/uitest/tests/ty.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty/def/tuple_variant_rest_mismatched_field_count.fe
+---
+error[8-0007]: field count mismatch
+  ┌─ tuple_variant_rest_mismatched_field_count.fe:6:9
+  │
+6 │     let Data::Pair(a, .., b, c) = v
+  │         ^^^^^^^^^^^^^^^^^^^^^^^ expected 2 fields here, but 3 given
