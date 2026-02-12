@@ -2457,7 +2457,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
 
-            Self::ExplicitReborrowRequired { primary, kind } => {
+            Self::BorrowArgMustBePlace { primary, kind } => {
                 let kw = match kind {
                     crate::analysis::ty::ty_def::BorrowKind::Mut => "mut",
                     crate::analysis::ty::ty_def::BorrowKind::Ref => "ref",
@@ -2465,15 +2465,44 @@ impl DiagnosticVoucher for BodyDiag<'_> {
 
                 CompleteDiagnostic {
                     severity: Severity::Error,
-                    message: "explicit reborrow required".to_string(),
+                    message: format!("`{kw}` argument must be a place"),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!(
+                            "temporaries and immediate values cannot be used where `{kw}` is expected"
+                        ),
+                        span: primary.resolve(db),
+                    }],
+                    notes: vec![format!(
+                        "help: bind the value to a named local first, then pass `{kw} <place>`"
+                    )],
+                    error_code,
+                }
+            }
+
+            Self::ExplicitBorrowRequired {
+                primary,
+                kind,
+                suggestion,
+            } => {
+                let kw = match kind {
+                    crate::analysis::ty::ty_def::BorrowKind::Mut => "mut",
+                    crate::analysis::ty::ty_def::BorrowKind::Ref => "ref",
+                };
+                let help = suggestion
+                    .as_ref()
+                    .map(|s| format!("help: try `{s}`"))
+                    .unwrap_or_else(|| format!("help: try `{kw} <place>`"));
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "explicit borrow required".to_string(),
                     sub_diagnostics: vec![SubDiagnostic {
                         style: LabelStyle::Primary,
                         message: format!("this argument must be explicitly borrowed as `{kw}`"),
                         span: primary.resolve(db),
                     }],
-                    notes: vec![format!(
-                        "help: use `{kw} <place>` when passing a place to a `{kw}` parameter"
-                    )],
+                    notes: vec![format!("{help} when passing a place to a `{kw}` parameter")],
                     error_code,
                 }
             }

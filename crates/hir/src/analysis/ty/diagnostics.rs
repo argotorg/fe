@@ -348,13 +348,17 @@ pub enum BodyDiag<'db> {
         binding: Option<(IdentId<'db>, DynLazySpan<'db>)>,
     },
 
-    /// A call argument is a place, but the callee requires an explicit borrow handle (`mut`/`ref`).
-    ///
-    /// This makes reborrows explicit at the call site and prevents unsound aliasing when
-    /// copyable borrow handles are passed around.
-    ExplicitReborrowRequired {
+    /// A call argument is not a place, but the callee requires a borrow handle (`mut`/`ref`).
+    BorrowArgMustBePlace {
         primary: DynLazySpan<'db>,
         kind: BorrowKind,
+    },
+
+    /// A call argument is a place, but the callee requires an explicit borrow handle (`mut`/`ref`).
+    ExplicitBorrowRequired {
+        primary: DynLazySpan<'db>,
+        kind: BorrowKind,
+        suggestion: Option<String>,
     },
 
     /// `own` parameters must have owned types. Borrow-handle types (`mut`/`ref`) are not owned.
@@ -654,7 +658,8 @@ impl<'db> BodyDiag<'db> {
             Self::UnsupportedUnaryPlus(..) => 52,
             Self::BorrowFromNonPlace { .. } => 65,
             Self::CannotBorrowMut { .. } => 66,
-            Self::ExplicitReborrowRequired { .. } => 68,
+            Self::BorrowArgMustBePlace { .. } => 68,
+            Self::ExplicitBorrowRequired { .. } => 69,
             Self::OwnParamCannotBeBorrow { .. } => 70,
             Self::ArrayRepeatRequiresCopy { .. } => 71,
             Self::NonAssignableExpr(..) => 17,

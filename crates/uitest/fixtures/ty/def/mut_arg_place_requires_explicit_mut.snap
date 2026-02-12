@@ -10,10 +10,10 @@ error[8-0000]: type mismatch
 5 │     bump(x)
   │          ^ expected `mut u256`, but `u256` is given
 
-error[8-0068]: explicit reborrow required
+error[8-0069]: explicit borrow required
   ┌─ mut_arg_place_requires_explicit_mut.fe:5:10
   │
 5 │     bump(x)
   │          ^ this argument must be explicitly borrowed as `mut`
   │
-  = help: use `mut <place>` when passing a place to a `mut` parameter
+  = help: try `mut x` when passing a place to a `mut` parameter

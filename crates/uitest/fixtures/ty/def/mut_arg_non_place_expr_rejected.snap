@@ -9,3 +9,11 @@ error[8-0000]: type mismatch
   │
 5 │     bump(x + 1)
   │          ^^^^^ expected `mut u256`, but `u256` is given
+
+error[8-0068]: `mut` argument must be a place
+  ┌─ mut_arg_non_place_expr_rejected.fe:5:10
+  │
+5 │     bump(x + 1)
+  │          ^^^^^ temporaries and immediate values cannot be used where `mut` is expected
+  │
+  = help: bind the value to a named local first, then pass `mut <place>`

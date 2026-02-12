@@ -1,5 +1,8 @@
 use crate::{
-    hir_def::{CallArg as HirCallArg, Expr, ExprId, GenericArgListId, IdentId, Partial, UnOp},
+    hir_def::{
+        BinOp, CallArg as HirCallArg, Expr, ExprId, FieldIndex, GenericArgListId, IdentId, LitKind,
+        Partial, UnOp,
+    },
     span::{
         DynLazySpan,
         expr::{LazyCallArgListSpan, LazyCallArgSpan},
@@ -22,6 +25,7 @@ use crate::analysis::{
         visitor::{TyVisitable, TyVisitor},
     },
 };
+use crate::hir_def::Body;
 use crate::hir_def::CallableDef;
 use crate::hir_def::params::FuncParamMode;
 
@@ -309,26 +313,40 @@ impl<'db> Callable<'db> {
                     .map(|(kind, _)| kind);
                 if let Some((kind, _)) = expected.as_capability(db)
                     && matches!(kind, CapabilityKind::Mut | CapabilityKind::Ref)
-                    && arg_is_place
                     && !(has_receiver && i == 0)
-                    && !is_unary(
-                        given.expr,
-                        match kind {
-                            CapabilityKind::Mut => UnOp::Mut,
-                            CapabilityKind::Ref => UnOp::Ref,
-                            CapabilityKind::View => unreachable!(),
-                        },
-                    )
                     && given_capability.is_none()
+                    && !given.expr_prop.ty.has_invalid(db)
                 {
-                    tc.push_diag(BodyDiag::ExplicitReborrowRequired {
-                        primary: given.expr_span.clone(),
-                        kind: match kind {
-                            CapabilityKind::Mut => BorrowKind::Mut,
-                            CapabilityKind::Ref => BorrowKind::Ref,
-                            CapabilityKind::View => unreachable!(),
-                        },
-                    });
+                    let borrow_kind = match kind {
+                        CapabilityKind::Mut => BorrowKind::Mut,
+                        CapabilityKind::Ref => BorrowKind::Ref,
+                        CapabilityKind::View => unreachable!(),
+                    };
+                    let unary_borrow = match kind {
+                        CapabilityKind::Mut => UnOp::Mut,
+                        CapabilityKind::Ref => UnOp::Ref,
+                        CapabilityKind::View => unreachable!(),
+                    };
+
+                    if arg_is_place {
+                        if !is_unary(given.expr, unary_borrow) {
+                            tc.push_diag(BodyDiag::ExplicitBorrowRequired {
+                                primary: given.expr_span.clone(),
+                                kind: borrow_kind,
+                                suggestion: place_borrow_suggestion(
+                                    db,
+                                    tc.body(),
+                                    given.expr,
+                                    borrow_kind,
+                                ),
+                            });
+                        }
+                    } else {
+                        tc.push_diag(BodyDiag::BorrowArgMustBePlace {
+                            primary: given.expr_span.clone(),
+                            kind: borrow_kind,
+                        });
+                    }
                 }
 
                 let mode = mode.unwrap_or_else(|| {
@@ -353,6 +371,54 @@ impl<'db> Callable<'db> {
                 tc.record_implicit_move_for_owned_expr(given.expr, expected);
             }
         }
+    }
+}
+
+fn place_borrow_suggestion<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+    expr: ExprId,
+    kind: BorrowKind,
+) -> Option<String> {
+    let kw = match kind {
+        BorrowKind::Mut => "mut",
+        BorrowKind::Ref => "ref",
+    };
+    place_expr_hint(db, body, expr).map(|place| format!("{kw} {place}"))
+}
+
+fn place_expr_hint<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+    expr: ExprId,
+) -> Option<String> {
+    match expr.data(db, body) {
+        Partial::Present(Expr::Path(Partial::Present(path))) => Some(path.pretty_print(db)),
+        Partial::Present(Expr::Field(base, Partial::Present(field_idx))) => {
+            let base = place_expr_hint(db, body, *base)?;
+            match field_idx {
+                FieldIndex::Ident(ident) => Some(format!("{base}.{}", ident.data(db))),
+                FieldIndex::Index(index) => Some(format!("{base}.{}", index.data(db))),
+            }
+        }
+        Partial::Present(Expr::Bin(base, index, BinOp::Index)) => {
+            let base = place_expr_hint(db, body, *base)?;
+            let index = expr_hint(db, body, *index)?;
+            Some(format!("{base}[{index}]"))
+        }
+        _ => None,
+    }
+}
+
+fn expr_hint<'db>(db: &'db dyn HirAnalysisDb, body: Body<'db>, expr: ExprId) -> Option<String> {
+    match expr.data(db, body) {
+        Partial::Present(Expr::Path(Partial::Present(path))) => Some(path.pretty_print(db)),
+        Partial::Present(Expr::Lit(lit)) => match lit {
+            LitKind::Int(int_id) => Some(int_id.data(db).to_string()),
+            LitKind::Bool(value) => Some(value.to_string()),
+            LitKind::String(value) => Some(format!("{:?}", value.data(db))),
+        },
+        _ => None,
     }
 }
 
