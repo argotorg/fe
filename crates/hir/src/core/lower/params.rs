@@ -164,8 +164,15 @@ impl<'db> FuncParam<'db> {
         let is_label_suppressed = ast.is_label_suppressed();
         let name = ast.name().map(|ast| FuncParamName::lower_ast(ctxt, ast));
 
-        let self_ty_fallback =
-            name.is_some_and(|name| name.is_self(ctxt.db())) && ast.ty().is_none();
+        let name_is_self = name.is_some_and(|name| name.is_self(ctxt.db()));
+        let self_ty_fallback = name_is_self && ast.ty().is_none();
+        let receiver_prefixed_mode = if is_ref {
+            Some(TypeMode::Ref)
+        } else if is_own {
+            Some(TypeMode::Own)
+        } else {
+            None
+        };
 
         let ty = if self_ty_fallback {
             let fallback_self = TypeId::fallback_self_ty(ctxt.db());
@@ -190,7 +197,17 @@ impl<'db> FuncParam<'db> {
                 Partial::Present(fallback_self)
             }
         } else {
-            TypeId::lower_ast_partial(ctxt, ast.ty())
+            let base_ty = TypeId::lower_ast_partial(ctxt, ast.ty());
+            if name_is_self && let Some(mode) = receiver_prefixed_mode {
+                base_ty
+                    .to_opt()
+                    .map(|inner| {
+                        TypeId::new(ctxt.db(), TypeKind::Mode(mode, Partial::Present(inner)))
+                    })
+                    .into()
+            } else {
+                base_ty
+            }
         };
 
         let mode = if ty

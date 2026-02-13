@@ -1,0 +1,9 @@
+struct S {
+    value: u8,
+}
+
+impl S {
+    fn read(ref self: Self) -> ref u8 {
+        ref self.value
+    }
+}
