@@ -4,6 +4,8 @@ use super::*;
 use hir::analysis::name_resolution::{PathRes, resolve_path};
 use hir::analysis::ty::const_eval::{ConstValue, try_eval_const_body, try_eval_const_ref};
 use hir::analysis::ty::const_ty::{ConstTyData, EvaluatedConstTy};
+use hir::analysis::ty::fold::TyFoldable;
+use hir::analysis::ty::normalize::normalize_ty;
 use hir::analysis::ty::trait_resolution::PredicateListId;
 
 impl<'db, 'a> MirBuilder<'db, 'a> {
@@ -239,20 +241,76 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         };
         let path = path.to_opt()?;
 
-        if let Some(cref) = self.typed_body.expr_const_ref(expr) {
+        if let Some(mut cref) = self.typed_body.expr_const_ref(expr) {
             if let hir::analysis::ty::ty_check::ConstRef::Const(const_def) = cref
                 && let Some(&cached) = self.const_cache.get(&const_def)
             {
                 return Some(cached);
             }
 
-            let ty = self.typed_body.expr_ty(self.db, expr);
-            let value = match try_eval_const_ref(self.db, cref, ty)? {
+            struct GenericSubst<'a, 'db> {
+                generic_args: &'a [TyId<'db>],
+            }
+            impl<'db> hir::analysis::ty::fold::TyFolder<'db> for GenericSubst<'_, 'db> {
+                fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+                    match ty.data(db) {
+                        hir::analysis::ty::ty_def::TyData::TyParam(param) => {
+                            self.generic_args.get(param.idx).copied().unwrap_or(ty)
+                        }
+                        hir::analysis::ty::ty_def::TyData::ConstTy(const_ty) => {
+                            if let ConstTyData::TyParam(param, _) = const_ty.data(db)
+                                && let Some(rep) = self.generic_args.get(param.idx).copied()
+                            {
+                                return rep;
+                            }
+                            ty.super_fold_with(db, self)
+                        }
+                        _ => ty.super_fold_with(db, self),
+                    }
+                }
+            }
+
+            let mut subst = GenericSubst {
+                generic_args: self.generic_args,
+            };
+            cref = cref.fold_with(self.db, &mut subst);
+            if let hir::analysis::ty::ty_check::ConstRef::TraitConst { inst, name } = cref
+                && matches!(
+                    inst.self_ty(self.db).data(self.db),
+                    hir::analysis::ty::ty_def::TyData::TyParam(_)
+                        | hir::analysis::ty::ty_def::TyData::TyVar(_)
+                )
+                && let Some(&self_arg) = self.generic_args.first()
+            {
+                let mut args = inst.args(self.db).to_vec();
+                if let Some(arg) = args.first_mut() {
+                    *arg = self_arg;
+                }
+                cref = hir::analysis::ty::ty_check::ConstRef::TraitConst {
+                    inst: hir::analysis::ty::trait_def::TraitInstId::new(
+                        self.db,
+                        inst.def(self.db),
+                        args,
+                        inst.assoc_type_bindings(self.db).clone(),
+                    ),
+                    name,
+                };
+            }
+
+            let assumptions = PredicateListId::empty_list(self.db);
+            let expected_ty = normalize_ty(
+                self.db,
+                self.typed_body.expr_ty(self.db, expr),
+                self.body.scope(),
+                assumptions,
+            );
+            let value = match try_eval_const_ref(self.db, cref, expected_ty)? {
                 ConstValue::Int(int) => SyntheticValue::Int(int),
                 ConstValue::Bool(flag) => SyntheticValue::Bool(flag),
                 ConstValue::Bytes(bytes) => SyntheticValue::Bytes(bytes),
             };
 
+            let ty = self.typed_body.expr_ty(self.db, expr);
             let value_id = self.alloc_synthetic_value(ty, value);
             if let hir::analysis::ty::ty_check::ConstRef::Const(const_def) = cref {
                 self.const_cache.insert(const_def, value_id);

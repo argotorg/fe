@@ -610,8 +610,12 @@ impl<'db> CtfeInterpreter<'db> {
     fn eval_const_ref(
         &mut self,
         cref: ConstRef<'db>,
-        expected_ty: TyId<'db>,
+        mut expected_ty: TyId<'db>,
     ) -> Result<ConstTyId<'db>, InvalidCause<'db>> {
+        if let Some((_, inner)) = expected_ty.as_capability(self.db) {
+            expected_ty = inner;
+        }
+
         let const_ty = match cref {
             ConstRef::Const(const_def) => {
                 let body = const_def
