@@ -287,7 +287,10 @@ impl<'db> Callable<'db> {
                 });
                 TyId::invalid(db, InvalidCause::Other)
             } else if own_tyvar && let Some((kind, inner)) = given_ty.as_capability(db) {
-                if tc.ty_is_copy(inner) || tc.expr_can_move_from_place(given.expr) {
+                if tc.ty_is_copy(inner)
+                    || (matches!(kind, CapabilityKind::View)
+                        && tc.expr_can_move_from_place(given.expr))
+                {
                     inner
                 } else {
                     tc.push_diag(BodyDiag::OwnArgMustBeOwnedMove {
