@@ -1,0 +1,11 @@
+---
+source: crates/uitest/tests/mir_check.rs
+assertion_line: 32
+expression: res
+input_file: fixtures/mir_check/borrowck_call_nested_handle_arg_overlap.fe
+---
+error[10-0002]: borrow conflict in `fn borrowck_call_nested_handle_arg_overlap`
+   ┌─ borrowck_call_nested_handle_arg_overlap.fe:11:9
+   │
+11 │     let mut value: u256 = 0
+   │         ^^^^^^^^^ cannot pass overlapping mutable borrows as call arguments

@@ -2625,37 +2625,69 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         state: &[LocalLoanState<'db>],
         args: impl Iterator<Item = ValueId>,
     ) -> Option<String> {
-        let mut borrows = Vec::new();
-        for arg in args {
-            let Some((kind, _)) = ty_is_borrow(self.db, self.func.body.value(arg).ty) else {
-                continue;
-            };
-            let targets = self.canonicalize_base(state, arg);
-            if !targets.is_empty() {
-                borrows.push((kind, targets));
-            }
-        }
+        let arg_borrows: Vec<_> = args
+            .map(|arg| self.call_arg_borrows(state, arg))
+            .filter(|borrows| !borrows.is_empty())
+            .collect();
 
-        for (idx, (a_kind, a_targets)) in borrows.iter().enumerate() {
-            for (b_kind, b_targets) in &borrows[idx + 1..] {
-                if !place_set_overlaps(a_targets, b_targets)
-                    || matches!((a_kind, b_kind), (BorrowKind::Ref, BorrowKind::Ref))
-                {
-                    continue;
+        for (idx, a_borrows) in arg_borrows.iter().enumerate() {
+            for b_borrows in &arg_borrows[idx + 1..] {
+                for (a_kind, a_targets) in a_borrows {
+                    for (b_kind, b_targets) in b_borrows {
+                        if !place_set_overlaps(a_targets, b_targets)
+                            || matches!((a_kind, b_kind), (BorrowKind::Ref, BorrowKind::Ref))
+                        {
+                            continue;
+                        }
+                        return Some(match (a_kind, b_kind) {
+                            (BorrowKind::Mut, BorrowKind::Mut) => {
+                                "cannot pass overlapping mutable borrows as call arguments"
+                                    .to_string()
+                            }
+                            (BorrowKind::Mut, BorrowKind::Ref)
+                            | (BorrowKind::Ref, BorrowKind::Mut) => {
+                                "cannot pass overlapping mutable and immutable borrows as call arguments"
+                                    .to_string()
+                            }
+                            (BorrowKind::Ref, BorrowKind::Ref) => unreachable!(),
+                        });
+                    }
                 }
-                return Some(match (a_kind, b_kind) {
-                    (BorrowKind::Mut, BorrowKind::Mut) => {
-                        "cannot pass overlapping mutable borrows as call arguments".to_string()
-                    }
-                    (BorrowKind::Mut, BorrowKind::Ref) | (BorrowKind::Ref, BorrowKind::Mut) => {
-                        "cannot pass overlapping mutable and immutable borrows as call arguments"
-                            .to_string()
-                    }
-                    (BorrowKind::Ref, BorrowKind::Ref) => unreachable!(),
-                });
             }
         }
         None
+    }
+
+    fn call_arg_borrows(
+        &self,
+        state: &[LocalLoanState<'db>],
+        arg: ValueId,
+    ) -> Vec<(BorrowKind, FxHashSet<CanonPlace<'db>>)> {
+        let mut out = Vec::new();
+        let mut loans: Vec<_> = self
+            .local_loans_in_value(state, arg)
+            .all_loans()
+            .into_iter()
+            .collect();
+        loans.sort_by_key(|loan| loan.0);
+
+        for loan in loans {
+            let loan = &self.loans[loan.0 as usize];
+            if !loan.targets.is_empty() {
+                out.push((loan.kind, loan.targets.clone()));
+            }
+        }
+
+        if out.is_empty()
+            && let Some((kind, _)) = ty_is_borrow(self.db, self.func.body.value(arg).ty)
+        {
+            let targets = self.canonicalize_base(state, arg);
+            if !targets.is_empty() {
+                out.push((kind, targets));
+            }
+        }
+
+        out
     }
 
     fn check_word_value_reads_in_values(

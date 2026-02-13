@@ -1,0 +1,16 @@
+struct HandleBox {
+    h: mut u256,
+}
+
+fn take2(mut a: HandleBox, mut b: HandleBox) {
+    a.h += 1
+    b.h += 1
+}
+
+pub fn borrowck_call_nested_handle_arg_overlap() {
+    let mut value: u256 = 0
+    let handle: mut u256 = mut value
+    let a: HandleBox = HandleBox { h: handle }
+    let b: HandleBox = HandleBox { h: handle }
+    take2(a, b)
+}
