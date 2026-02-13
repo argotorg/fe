@@ -1876,12 +1876,50 @@ impl<'db, 'a> Borrowck<'db, 'a> {
     ) -> LocalLoanState<'db> {
         match rvalue {
             Rvalue::Value(value) => self.local_loans_in_value(state, *value),
-            Rvalue::Load { .. }
-            | Rvalue::ZeroInit
+            Rvalue::Load { place } => self.local_loans_from_load_place(state, place),
+            Rvalue::ZeroInit
             | Rvalue::Call(_)
             | Rvalue::Intrinsic { .. }
             | Rvalue::Alloc { .. } => LocalLoanState::default(),
         }
+    }
+
+    fn local_loans_from_load_place(
+        &self,
+        state: &[LocalLoanState<'db>],
+        place: &Place<'db>,
+    ) -> LocalLoanState<'db> {
+        if let Some(root) = root_memory_local(&self.func.body, place)
+            && let Some(idx) = self.tracked_local_idx.get(root.index()).copied().flatten()
+        {
+            let source = &state[idx];
+            let mut out = LocalLoanState::default();
+            for (slot, loans) in &source.slots {
+                match slot.may_alias(&place.projection) {
+                    Aliasing::No => {}
+                    Aliasing::May => out.unknown.extend(loans.iter().copied()),
+                    Aliasing::Must => {
+                        if let Some(suffix) = projection_suffix_if_prefixed(&place.projection, slot)
+                        {
+                            out.slots
+                                .entry(suffix)
+                                .or_default()
+                                .extend(loans.iter().copied());
+                        } else {
+                            out.unknown.extend(loans.iter().copied());
+                        }
+                    }
+                }
+            }
+            out.unknown.extend(source.unknown.iter().copied());
+            return out;
+        }
+
+        let mut out = LocalLoanState::default();
+        for loan in self.loans_for_place_base(state, place.base) {
+            out.insert_root_loan(loan);
+        }
+        out
     }
 
     fn local_loans_in_value(
@@ -3285,6 +3323,21 @@ fn collect_borrow_values_in_place_path<'db>(
             collect_borrow_values(body, *value, out);
         }
     }
+}
+
+fn projection_suffix_if_prefixed<'db>(
+    prefix: &crate::MirProjectionPath<'db>,
+    full: &crate::MirProjectionPath<'db>,
+) -> Option<crate::MirProjectionPath<'db>> {
+    if !prefix.is_prefix_of(full) {
+        return None;
+    }
+
+    let mut suffix = crate::MirProjectionPath::new();
+    for projection in full.iter().skip(prefix.len()) {
+        suffix.push(projection.clone());
+    }
+    Some(suffix)
 }
 
 fn root_memory_local<'db>(body: &MirBody<'db>, place: &Place<'db>) -> Option<LocalId> {
