@@ -114,6 +114,14 @@ struct CandidateAssembler<'db> {
     candidates: AssembledCandidates<'db>,
 }
 
+fn receiver_is_ty_param_like<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
+    let receiver_ty = ty.as_capability(db).map(|(_, inner)| inner).unwrap_or(ty);
+    matches!(
+        receiver_ty.base_ty(db).data(db),
+        TyData::TyParam(_) | TyData::AssocTy(_) | TyData::QualifiedTy(_)
+    )
+}
+
 impl<'db> CandidateAssembler<'db> {
     fn assemble(mut self) -> AssembledCandidates<'db> {
         if self.trait_.is_none() {
@@ -143,10 +151,7 @@ impl<'db> CandidateAssembler<'db> {
         //
         // In that case, rely on in-scope bounds (`assumptions`) to provide method
         // candidates.
-        let receiver_is_ty_param = matches!(
-            self.receiver_ty.value.base_ty(self.db).data(self.db),
-            TyData::TyParam(_) | TyData::AssocTy(_) | TyData::QualifiedTy(_)
-        );
+        let receiver_is_ty_param = receiver_is_ty_param_like(self.db, self.receiver_ty.value);
 
         if !receiver_is_ty_param {
             let search_ingots = [
@@ -291,9 +296,23 @@ impl<'db> MethodSelector<'db> {
                 Ok(self.check_inst(def, method))
             }
 
-            _ => Err(MethodSelectionError::AmbiguousTraitMethod(
-                visible_traits.into_iter().map(|cand| cand.0).collect(),
-            )),
+            _ => {
+                // Some candidates are equivalent after trait solving (e.g., an explicit
+                // bound and an implied/blanket-derived bound for the same method).
+                // Collapse by the selected method candidate before reporting ambiguity.
+                let mut selected = IndexSet::default();
+                for (inst, method) in visible_traits.iter().copied() {
+                    selected.insert(self.check_inst(inst, method));
+                }
+
+                if selected.len() == 1 {
+                    return Ok(*selected.iter().next().unwrap());
+                }
+
+                Err(MethodSelectionError::AmbiguousTraitMethod(
+                    visible_traits.into_iter().map(|cand| cand.0).collect(),
+                ))
+            }
         }
     }
 
@@ -316,10 +335,7 @@ impl<'db> MethodSelector<'db> {
         // introducing fresh inference vars. Otherwise, unconstrained trait args
         // can trigger spurious "type annotation needed" diagnostics on method calls
         // whose signatures don't mention those args (e.g. `AbiDecoder<A>::read_word`).
-        let receiver_is_ty_param = matches!(
-            self.receiver.value.base_ty(self.db).data(self.db),
-            TyData::TyParam(_) | TyData::AssocTy(_) | TyData::QualifiedTy(_)
-        );
+        let receiver_is_ty_param = receiver_is_ty_param_like(self.db, self.receiver.value);
 
         let canonical_cand = Canonicalized::new(self.db, inst);
         let inst = if receiver_is_ty_param {

@@ -498,6 +498,30 @@ impl<'db> TyChecker<'db> {
             result
         };
 
+        let dedup_equivalent_insts = |insts: Vec<TraitInstId<'db>>| -> Vec<TraitInstId<'db>> {
+            let mut unique: Vec<TraitInstId<'db>> = Vec::new();
+            'outer: for inst in insts {
+                for &seen in &unique {
+                    if inst.def(db) != seen.def(db) {
+                        continue;
+                    }
+
+                    let mut table = UnificationTable::new(db);
+                    let lhs = table.instantiate_with_fresh_vars(
+                        crate::analysis::ty::binder::Binder::bind(inst),
+                    );
+                    let rhs = table.instantiate_with_fresh_vars(
+                        crate::analysis::ty::binder::Binder::bind(seen),
+                    );
+                    if table.unify(lhs, rhs).is_ok() {
+                        continue 'outer;
+                    }
+                }
+                unique.push(inst);
+            }
+            unique
+        };
+
         // Fixed-point pass over deferred tasks.
         let mut progressed = true;
         while progressed {
@@ -526,6 +550,25 @@ impl<'db> TyChecker<'db> {
                                     Canonical::new(db, inst.fold_with(db, &mut self.table));
                                 if new_can != canonical_inst.value {
                                     progressed = true;
+                                }
+                            }
+                            GoalSatisfiability::NeedsConfirmation(ambiguous) => {
+                                let cands = dedup_equivalent_insts(
+                                    ambiguous
+                                        .iter()
+                                        .map(|s| {
+                                            canonical_inst
+                                                .extract_solution(&mut self.table, *s)
+                                                .inst
+                                        })
+                                        .collect(),
+                                );
+                                if let [solution] = cands.as_slice() {
+                                    if self.table.unify(inst, *solution).is_ok() {
+                                        progressed = true;
+                                    }
+                                } else {
+                                    self.env.register_confirmation(inst, span);
                                 }
                             }
                             _ => self.env.register_confirmation(inst, span),
@@ -568,6 +611,7 @@ impl<'db> TyChecker<'db> {
                                 )
                             })
                             .collect();
+                        let viable = dedup_equivalent_insts(viable);
 
                         if let [inst] = viable.as_slice() {
                             if self.env.callable_expr(pending.expr).is_none() {
@@ -658,14 +702,18 @@ impl<'db> TyChecker<'db> {
                         canonical_inst.value,
                     ) {
                         GoalSatisfiability::NeedsConfirmation(ambiguous) => {
-                            let cands = ambiguous
-                                .iter()
-                                .map(|s| canonical_inst.extract_solution(&mut self.table, *s).inst)
-                                .collect::<thin_vec::ThinVec<_>>();
-                            if !inst.self_ty(db).has_var(db) {
+                            let cands = dedup_equivalent_insts(
+                                ambiguous
+                                    .iter()
+                                    .map(|s| {
+                                        canonical_inst.extract_solution(&mut self.table, *s).inst
+                                    })
+                                    .collect(),
+                            );
+                            if cands.len() > 1 && !inst.self_ty(db).has_var(db) {
                                 self.push_diag(BodyDiag::AmbiguousTraitInst {
                                     primary: span.clone(),
-                                    cands,
+                                    cands: cands.into_iter().collect(),
                                 });
                             }
                         }
@@ -704,7 +752,7 @@ impl<'db> TyChecker<'db> {
                         _ => continue,
                     };
 
-                    let viable: thin_vec::ThinVec<_> = pending
+                    let viable: Vec<_> = pending
                         .candidates
                         .iter()
                         .copied()
@@ -720,11 +768,12 @@ impl<'db> TyChecker<'db> {
                             )
                         })
                         .collect();
+                    let viable = dedup_equivalent_insts(viable);
                     if viable.len() > 1 {
                         self.push_diag(BodyDiag::AmbiguousTrait {
                             primary: pending.span.clone(),
                             method_name: pending.method_name,
-                            traits: viable,
+                            traits: viable.into_iter().collect(),
                         });
                     }
                 }
