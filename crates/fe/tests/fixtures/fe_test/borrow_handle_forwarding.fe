@@ -1,0 +1,40 @@
+use std::evm::effects::assert
+
+struct Wallet {
+    balance: u256,
+    nonce: u8,
+}
+
+fn read_balance(x: ref u256) -> u256 {
+    x
+}
+
+fn bump_nonce(x: mut u8) {
+    x += 1
+}
+
+fn consume_wallet(w: own Wallet) -> (u256, u8) {
+    (w.balance, w.nonce)
+}
+
+#[test]
+fn test_borrow_handle_forwarding() {
+    let mut w = Wallet {
+        balance: 100,
+        nonce: 1,
+    }
+
+    let b_ref: ref u256 = ref w.balance
+    assert(read_balance(b_ref) == 100)
+
+    {
+        let n_handle: mut u8 = mut w.nonce
+        bump_nonce(n_handle)
+        n_handle += 2
+    }
+    assert(w.nonce == 4)
+
+    let (bal, nonce) = consume_wallet(w)
+    assert(bal == 100)
+    assert(nonce == 4)
+}

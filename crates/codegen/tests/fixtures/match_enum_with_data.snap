@@ -1,6 +1,6 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 42
+assertion_line: 33
 expression: output
 input_file: tests/fixtures/match_enum_with_data.fe
 ---
@@ -29,6 +29,7 @@ function $match_option($opt) -> ret {
     }
     default {
     }
+  let v4 := $opt
   ret := v0
   leave
 }

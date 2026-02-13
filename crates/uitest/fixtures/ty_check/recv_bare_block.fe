@@ -20,9 +20,8 @@ struct CustomMsg {
 }
 
 impl core::abi::Encode<std::abi::Sol> for CustomMsg {
-    fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(self, mut _ e: E) {
-        let Self { data } = self
-        data.encode(e)
+    fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(own self, mut _ e: E) {
+        self.data.encode(e)
     }
 }
 

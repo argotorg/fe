@@ -5,7 +5,7 @@ msg Msg {
     Enter -> (),
 }
 
-fn bump_lock() uses (mut lock: u256) {
+fn bump_lock() uses (lock: mut u256) {
     lock += 1
 }
 

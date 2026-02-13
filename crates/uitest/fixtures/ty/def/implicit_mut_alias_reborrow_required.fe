@@ -1,0 +1,6 @@
+fn take_two_mut(_a: mut u256, _b: mut u256) {}
+
+pub fn implicit_mut_alias_reborrow_required() {
+    let mut x: u256 = 0
+    take_two_mut(x, x)
+}

@@ -15,3 +15,4 @@ driver.workspace = true
 test-utils.workspace = true
 common.workspace = true
 hir.workspace = true
+mir.workspace = true

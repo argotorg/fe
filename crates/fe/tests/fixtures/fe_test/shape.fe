@@ -50,7 +50,7 @@ pub contract ShapeDispatcher {
 }
 
 #[test]
-fn test_shape() uses (mut evm: Evm) {
+fn test_shape() uses (evm: mut Evm) {
     let contract_addr = evm.create2<ShapeDispatcher>(value: 0, args: (), salt: 0)
     assert(contract_addr.inner != 0)
 

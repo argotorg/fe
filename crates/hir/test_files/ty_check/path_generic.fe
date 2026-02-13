@@ -26,17 +26,17 @@ enum E<T> {
 }
 
 impl<T> E<T> {
-    fn gimme<U>(_ val: U) -> E<U> {
+    fn gimme<U>(_ val: own U) -> E<U> {
         E::B(val)
     }
 }
 
 trait F where Self: * -> * {
-    fn replace<T, U>(self: Self<T>, with: U) -> Self<U>
+    fn replace<T, U>(self: own Self<T>, with: own U) -> Self<U>
 }
 
 impl F for E {
-    fn replace<T, U>(self: Self<T>, with: U) -> Self<U> {
+    fn replace<T, U>(self: own Self<T>, with: own U) -> Self<U> {
         Self::B(with)
     }
 }

@@ -1,5 +1,5 @@
 ---
-source: crates/hir-analysis/tests/ty_check.rs
+source: crates/hir/tests/ty_check.rs
 expression: res
 input_file: test_files/ty_check/associated_types_wrapper.fe
 ---

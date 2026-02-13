@@ -2,7 +2,7 @@ fn read_x() -> u256 uses (x: u256) {
     x
 }
 
-fn bump_x() uses (mut x: u256) {
+fn bump_x() uses (x: mut u256) {
     x += 1
 }
 

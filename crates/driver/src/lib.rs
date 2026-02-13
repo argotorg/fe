@@ -20,6 +20,7 @@ use common::{
 };
 pub use db::DriverDataBase;
 use ingot_handler::IngotHandler;
+pub use mir::{MirDiagnosticsMode, MirDiagnosticsOutput};
 use smol_str::SmolStr;
 
 use hir::analysis::core_requirements;

@@ -354,10 +354,18 @@ impl<'db> FuncParam<'db> {
     pub fn pretty_print(&self, db: &'db dyn HirDb) -> String {
         let mut result = String::new();
         let name = unwrap_partial(self.name, "FuncParam::name");
+        let mode_prefix = match self.mode {
+            FuncParamMode::View => "",
+            FuncParamMode::Own => "own ",
+        };
 
-        // Mutability comes first
+        // Mutability comes next
         if self.is_mut {
             result.push_str("mut ");
+        }
+
+        if self.self_ty_fallback {
+            result.push_str(mode_prefix);
         }
 
         if self.is_label_suppressed {
@@ -408,11 +416,11 @@ impl<'db> EffectParam<'db> {
 
         // If we have a name binding, print it first
         if let Some(name) = self.name {
+            result.push_str(name.data(db));
+            result.push_str(": ");
             if self.is_mut {
                 result.push_str("mut ");
             }
-            result.push_str(name.data(db));
-            result.push_str(": ");
             let path = unwrap_partial(self.key_path, "EffectParam::key_path").pretty_print(db);
             result.push_str(&path);
         } else {
@@ -566,11 +574,12 @@ impl<'db> Expr<'db> {
 
             Expr::Un(expr, op) => {
                 let expr = unwrap_partial_ref(expr.data(db, body), "Un::expr");
-                format!(
-                    "{}{}",
-                    op.pretty_print(),
-                    expr.pretty_print(db, body, indent)
-                )
+                let op_str = op.pretty_print();
+                if matches!(op, UnOp::Mut | UnOp::Ref) {
+                    format!("{op_str} {}", expr.pretty_print(db, body, indent))
+                } else {
+                    format!("{op_str}{}", expr.pretty_print(db, body, indent))
+                }
             }
 
             Expr::Cast(expr, ty) => {
@@ -893,6 +902,8 @@ impl UnOp {
             UnOp::Minus => "-",
             UnOp::Not => "!",
             UnOp::BitNot => "~",
+            UnOp::Mut => "mut",
+            UnOp::Ref => "ref",
         }
     }
 }

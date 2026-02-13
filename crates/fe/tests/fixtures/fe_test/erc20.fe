@@ -103,7 +103,7 @@ pub contract CoolCoin uses (ctx: Ctx) {
 }
 
 #[test]
-fn test_erc20() uses (mut evm: Evm) {
+fn test_erc20() uses (evm: mut Evm) {
     let owner = Address { inner: 1 }
     let alice = Address { inner: 2 }
     let bob = Address { inner: 3 }

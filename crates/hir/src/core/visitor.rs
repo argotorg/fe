@@ -2001,6 +2001,12 @@ pub fn walk_type<'db, V>(
             }
         }
 
+        TypeKind::Mode(_, ty) => {
+            if let Some(ty) = ty.to_opt() {
+                visitor.visit_ty(ctxt, ty);
+            }
+        }
+
         TypeKind::Path(path) => ctxt.with_new_ctxt(
             |span| span.into_path_type(),
             |ctxt| {

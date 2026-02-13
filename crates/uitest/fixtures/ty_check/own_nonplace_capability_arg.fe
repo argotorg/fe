@@ -1,0 +1,9 @@
+struct NoCopy {
+    x: u8
+}
+
+fn consume(_v: own NoCopy) {}
+
+fn repro(cond: bool, v: NoCopy) {
+    consume(if cond { v } else { v })
+}

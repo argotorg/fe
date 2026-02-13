@@ -1,0 +1,13 @@
+struct Foo {
+    v: u8,
+}
+
+pub fn move_use_after_branch(b: bool) -> u8 {
+    let x: Foo = Foo { v: 1 }
+    if b {
+        consume(x)
+    }
+    x.v
+}
+
+fn consume(f: own Foo) {}

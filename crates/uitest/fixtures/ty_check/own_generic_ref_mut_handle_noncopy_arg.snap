@@ -1,0 +1,21 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/own_generic_ref_mut_handle_noncopy_arg.fe
+---
+error[8-0072]: `own` argument requires an owned movable value
+   ┌─ own_generic_ref_mut_handle_noncopy_arg.fe:10:13
+   │
+10 │     consume(r)
+   │             ^ this expression has `ref NoCopy` capability and cannot be moved as owned here
+   │
+   = pass an owned place value, or change the callee parameter mode to borrow/view
+
+error[8-0072]: `own` argument requires an owned movable value
+   ┌─ own_generic_ref_mut_handle_noncopy_arg.fe:16:13
+   │
+16 │     consume(m)
+   │             ^ this expression has `mut NoCopy` capability and cannot be moved as owned here
+   │
+   = pass an owned place value, or change the callee parameter mode to borrow/view

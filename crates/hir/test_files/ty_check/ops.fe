@@ -5,8 +5,10 @@ enum Ok {
     No, Yes
 }
 
+impl Copy for Ok {}
+
 impl Not for Ok {
-    fn not(self) -> Ok {
+    fn not(own self) -> Ok {
         match self {
             Ok::No => Ok::Yes
             Ok::Yes => Ok::No
@@ -31,7 +33,7 @@ impl Eq for Ok {
 }
 
 impl AddAssign for Ok {
-    fn add_assign(mut self, _ other: Ok) {
+    fn add_assign(mut self, _ other: own Ok) {
         if other == Ok::Yes {
             self = Ok::Yes
         }
@@ -43,8 +45,10 @@ struct Point {
     y: i32,
 }
 
+impl Copy for Point {}
+
 impl Add for Point {
-    fn add(self, _ p: Point) -> Point {
+    fn add(own self, _ p: own Point) -> Point {
         Point {
             x: self.x + p.x,
             y: self.y + p.y,
@@ -53,7 +57,7 @@ impl Add for Point {
 }
 
 impl Add<i32> for Point {
-    fn add(self, _ n: i32) -> Point {
+    fn add(own self, _ n: own i32) -> Point {
         Point {
             x: self.x + n,
             y: self.y + n,

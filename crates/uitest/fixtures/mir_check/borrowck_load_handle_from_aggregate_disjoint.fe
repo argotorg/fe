@@ -1,0 +1,13 @@
+struct PairHandles {
+    left: mut u256,
+    right: mut u256,
+}
+
+pub fn borrowck_load_handle_from_aggregate_disjoint() {
+    let mut left: u256 = 0
+    let mut right: u256 = 0
+    let pair: PairHandles = PairHandles { left: mut left, right: mut right }
+    let left_handle: mut u256 = pair.left
+    right = 1
+    left_handle = 2
+}

@@ -1,0 +1,8 @@
+struct Foo {
+    x: u8,
+}
+
+pub fn let_pattern_owned_view_param(foo: Foo) -> u8 {
+    let Foo { x } = foo
+    x
+}

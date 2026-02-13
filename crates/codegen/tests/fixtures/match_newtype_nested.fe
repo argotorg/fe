@@ -6,7 +6,7 @@ struct A {
     inner: B,
 }
 
-pub fn match_newtype_nested(a: A) -> u256 {
+pub fn match_newtype_nested(a: own A) -> u256 {
     match a {
         A { inner: B { inner: 0 } } => 0,
         A { inner: B { inner: x } } => x,

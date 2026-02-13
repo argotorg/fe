@@ -22,7 +22,7 @@ pub contract Child {
     }
 }
 
-pub contract Factory uses (mut create: Create) {
+pub contract Factory uses (create: mut Create) {
     recv FactoryMsg {
         Deploy { x, y } -> Address uses (mut create) {
             create.create<Child>(value: 0, args: (x, y))

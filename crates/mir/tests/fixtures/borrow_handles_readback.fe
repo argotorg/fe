@@ -1,0 +1,8 @@
+pub fn borrow_handles_readback() -> u256 {
+    let mut x: u256 = 0
+    let p: mut u256 = mut x
+    p = 5
+    p += 1
+    p += 1
+    x
+}

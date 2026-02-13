@@ -4,7 +4,7 @@ use std::evm::effects::assert
 use std::evm::Evm
 
 #[test]
-fn test_int_downcast() uses (mut evm: Evm) {
+fn test_int_downcast() uses (evm: mut Evm) {
     let x: u256 = 256
     let y: Option<u8> = x.downcast()
     assert(y.is_none())

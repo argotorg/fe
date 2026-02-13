@@ -1,0 +1,18 @@
+struct Pair {
+    a: u256,
+    b: u256,
+}
+
+struct RefWrap {
+    x: ref u256,
+}
+
+fn read_ref(x: ref u256) -> u256 {
+    x
+}
+
+pub fn scalar_ref_transparent_wrapper() -> u256 {
+    let pair: Pair = Pair { a: 7, b: 1 }
+    let wrapped: RefWrap = RefWrap { x: ref pair.a }
+    read_ref(wrapped.x)
+}

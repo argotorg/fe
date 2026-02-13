@@ -1,0 +1,13 @@
+// Loans should respect projections: reading an aliased field under `mut` loan is rejected.
+
+struct S {
+    a: u256,
+    b: u256,
+}
+
+pub fn borrowck_read_field_under_mut() {
+    let mut s: S = S { a: 0, b: 1 }
+    let p: mut u256 = mut s.a
+    let y: u256 = s.a
+    p = y
+}

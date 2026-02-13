@@ -1,6 +1,5 @@
 ---
 source: crates/hir/tests/ty_check.rs
-assertion_line: 40
 expression: res
 input_file: test_files/ty_check/cast.fe
 ---
@@ -128,20 +127,20 @@ note:
 note: 
    ┌─ cast.fe:14:9
    │
-14 │     let word: u256 = w as u256
+14 │     let word: u256 = (w) as u256
    │         ^^^^ u256
 
 note: 
    ┌─ cast.fe:14:22
    │
-14 │     let word: u256 = w as u256
-   │                      ^ WrapU32
+14 │     let word: u256 = (w) as u256
+   │                      ^^^^^^^^^^^ u256
 
 note: 
-   ┌─ cast.fe:14:22
+   ┌─ cast.fe:14:23
    │
-14 │     let word: u256 = w as u256
-   │                      ^^^^^^^^^ u256
+14 │     let word: u256 = (w) as u256
+   │                       ^ WrapU32
 
 note: 
    ┌─ cast.fe:16:9
@@ -170,20 +169,20 @@ note:
 note: 
    ┌─ cast.fe:18:9
    │
-18 │     let a_word: u256 = a as u256
+18 │     let a_word: u256 = (a) as u256
    │         ^^^^^^ u256
 
 note: 
    ┌─ cast.fe:18:24
    │
-18 │     let a_word: u256 = a as u256
-   │                        ^ Address
+18 │     let a_word: u256 = (a) as u256
+   │                        ^^^^^^^^^^^ u256
 
 note: 
-   ┌─ cast.fe:18:24
+   ┌─ cast.fe:18:25
    │
-18 │     let a_word: u256 = a as u256
-   │                        ^^^^^^^^^ u256
+18 │     let a_word: u256 = (a) as u256
+   │                         ^ Address
 
 note: 
    ┌─ cast.fe:19:9

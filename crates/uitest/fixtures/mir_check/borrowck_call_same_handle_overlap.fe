@@ -1,0 +1,14 @@
+fn bump2(a: mut u256, b: mut u256) {
+    a += 1
+    b += 1
+}
+
+fn call_same_handle(h: mut u256) {
+    bump2(h, h)
+}
+
+pub fn borrowck_call_same_handle_overlap() -> u256 {
+    let mut p: u256 = 0
+    call_same_handle(mut p)
+    p
+}

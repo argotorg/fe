@@ -1,0 +1,43 @@
+use std::evm::effects::assert
+
+struct Stats {
+    a: u256,
+    b: u256,
+    total: u256,
+}
+
+fn sum_fields(s: ref Stats) -> u256 {
+    s.a + s.b
+}
+
+fn finalize(s: own Stats) -> u256 {
+    s.total
+}
+
+#[test]
+fn test_borrow_destructure_paths() {
+    let mut s = Stats {
+        a: 2,
+        b: 3,
+        total: 5,
+    }
+
+    {
+        let a_mut: mut u256 = mut s.a
+        a_mut += 7
+    }
+
+    {
+        let b_mut: mut u256 = mut s.b
+        b_mut += 11
+    }
+
+    s.total = s.a + s.b
+
+    let borrowed_sum = sum_fields(ref s)
+    assert(borrowed_sum == 23)
+    assert(s.total == 23)
+
+    let done = finalize(s)
+    assert(done == 23)
+}

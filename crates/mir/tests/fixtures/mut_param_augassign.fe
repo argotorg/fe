@@ -1,0 +1,10 @@
+fn bump(v: mut u8) {
+    v += 1
+    v -= 1
+}
+
+pub fn mut_param_augassign() -> u8 {
+    let mut x: u8 = 7
+    bump(mut x)
+    x
+}

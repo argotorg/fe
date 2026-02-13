@@ -1,0 +1,12 @@
+struct Point {
+    x: u8,
+    y: u8,
+}
+
+pub fn match_pattern_ref_copy_coerce(p: Point) -> u8 {
+    match ref p {
+        Point { x: 0, y } => y,
+        Point { x, y: 0 } => x,
+        Point { x, y } => x + y,
+    }
+}

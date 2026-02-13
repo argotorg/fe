@@ -1,0 +1,10 @@
+fn make_pair2<A, B>(a: own A, b: own B) -> (A, B) {
+    (a, b)
+}
+
+struct Foo {}
+
+fn example(a: Foo, b: Foo) -> (Foo, Foo) {
+    make_pair2(a, b)
+}
+

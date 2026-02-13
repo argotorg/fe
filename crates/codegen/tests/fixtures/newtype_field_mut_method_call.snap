@@ -27,8 +27,9 @@ function $newtype_field_mut_method_call($x) -> ret {
   leave
 }
 function $counter_h872958864d1ad471_bump($self) {
-  let v0 := mload($self)
-  mstore($self, add(v0, 1))
+  let v0 := $self
+  let v1 := mload(v0)
+  mstore(v0, add(v1, 1))
   leave
 }
 function $wrapcounter_hbcbd3a74a267488b_bump($self) {

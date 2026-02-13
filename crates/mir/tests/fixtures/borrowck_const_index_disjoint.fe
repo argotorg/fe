@@ -1,0 +1,7 @@
+pub fn borrowck_const_index_disjoint() {
+    let mut arr: [u256; 2] = [0; 2]
+    let p0: mut u256 = mut arr[0]
+    let p1: mut u256 = mut arr[1]
+    p0 = 1
+    p1 = 2
+}

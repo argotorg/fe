@@ -1,0 +1,8 @@
+enum Data {
+    Quad(u32, bool, u16, u32),
+}
+
+fn tuple_variant_rest_middle_ok(v: Data) -> u32 {
+    let Data::Quad(a, .., d) = v
+    a + d
+}

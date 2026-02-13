@@ -1,0 +1,15 @@
+---
+source: crates/codegen/tests/yul.rs
+assertion_line: 33
+expression: output
+input_file: tests/fixtures/borrow_storage_field_handle.fe
+---
+function $borrow_storage_field_handle__StorPtr_CoinStore___ba1c0d0726e89ba2($store) -> ret {
+  let v0 := $store
+  let v1 := v0
+  let v2 := sload(v1)
+  sstore(v1, add(v2, 1))
+  let v3 := sload($store)
+  ret := v3
+  leave
+}

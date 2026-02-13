@@ -18,10 +18,10 @@ note:
   │     ^ T
 
 note: 
-   ┌─ callable_value_generics.fe:12:31
+   ┌─ callable_value_generics.fe:12:35
    │  
-12 │       fn id<T>(self, x: T) -> T {
-   │ ╭───────────────────────────────^
+12 │       fn id<T>(self, x: own T) -> T {
+   │ ╭───────────────────────────────────^
 13 │ │         x
 14 │ │     }
    │ ╰─────^ T

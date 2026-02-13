@@ -3,4 +3,17 @@ source: crates/uitest/tests/ty_check.rs
 expression: diags
 input_file: fixtures/ty_check/functor.fe
 ---
+error[8-0000]: type mismatch
+   ┌─ functor.fe:31:31
+   │
+31 │             Result::Err(e) => Result::Err(e)
+   │                               ^^^^^^^^^^^^^^ expected `Result<(), U>`, but `Result<ref (), _>` is given
 
+error[8-0031]: type annotation is needed
+   ┌─ functor.fe:31:31
+   │
+31 │             Result::Err(e) => Result::Err(e)
+   │                               ^^^^^^^^^^^
+   │                               │
+   │                               type annotation is needed
+   │                               consider giving `: fn Err<ref (), _>` here

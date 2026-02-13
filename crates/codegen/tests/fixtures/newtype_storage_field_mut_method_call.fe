@@ -8,9 +8,8 @@ struct Wrap {
 }
 
 impl Wrap {
-    fn bump(mut self) -> Self {
-        self.inner += 1
-        self
+    fn bump(self) -> Self {
+        Wrap { inner: self.inner + 1 }
     }
 }
 

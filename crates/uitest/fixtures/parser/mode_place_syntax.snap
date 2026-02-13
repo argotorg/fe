@@ -1,0 +1,7 @@
+---
+source: crates/uitest/tests/parser.rs
+assertion_line: 26
+expression: diags
+input_file: fixtures/parser/mode_place_syntax.fe
+---
+

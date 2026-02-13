@@ -1,0 +1,11 @@
+---
+source: crates/uitest/tests/parser.rs
+assertion_line: 26
+expression: diags
+input_file: fixtures/parser/move_param_removed.fe
+---
+error[1-0001]: parameter label renaming is not supported; use the parameter name as the label
+  ┌─ move_param_removed.fe:1:13
+  │
+1 │ fn bad(move x: u256) {}
+  │             ^ parameter label renaming is not supported; use the parameter name as the label

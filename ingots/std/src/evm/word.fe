@@ -6,14 +6,14 @@ use core::num::*
 /// single trait that supports both primitives and user-defined newtypes.
 pub trait WordRepr {
     fn from_word(word: u256) -> Self
-    fn to_word(self) -> u256
+    fn to_word(own self) -> u256
 }
 
 impl WordRepr for u8 {
     fn from_word(word: u256) -> Self {
         word.downcast_truncate()
     }
-    fn to_word(self) -> u256 {
+    fn to_word(own self) -> u256 {
         self as u256
     }
 }
@@ -22,7 +22,7 @@ impl WordRepr for u16 {
     fn from_word(word: u256) -> Self {
         word.downcast_truncate()
     }
-    fn to_word(self) -> u256 {
+    fn to_word(own self) -> u256 {
         self as u256
     }
 }
@@ -31,7 +31,7 @@ impl WordRepr for u32 {
     fn from_word(word: u256) -> Self {
         word.downcast_truncate()
     }
-    fn to_word(self) -> u256 {
+    fn to_word(own self) -> u256 {
         self as u256
     }
 }
@@ -40,7 +40,7 @@ impl WordRepr for u64 {
     fn from_word(word: u256) -> Self {
         word.downcast_truncate()
     }
-    fn to_word(self) -> u256 {
+    fn to_word(own self) -> u256 {
         self as u256
     }
 }
@@ -49,7 +49,7 @@ impl WordRepr for u128 {
     fn from_word(word: u256) -> Self {
         word.downcast_truncate()
     }
-    fn to_word(self) -> u256 {
+    fn to_word(own self) -> u256 {
         self as u256
     }
 }
@@ -58,7 +58,7 @@ impl WordRepr for u256 {
     fn from_word(word: u256) -> Self {
         word
     }
-    fn to_word(self) -> u256 {
+    fn to_word(own self) -> u256 {
         self
     }
 }
@@ -67,7 +67,7 @@ impl WordRepr for usize {
     fn from_word(word: u256) -> Self {
         word as usize
     }
-    fn to_word(self) -> u256 {
+    fn to_word(own self) -> u256 {
         self as u256
     }
 }
@@ -76,7 +76,7 @@ impl WordRepr for bool {
     fn from_word(word: u256) -> Self {
         word != 0
     }
-    fn to_word(self) -> u256 {
+    fn to_word(own self) -> u256 {
         if self { 1 } else { 0 }
     }
 }
@@ -85,7 +85,7 @@ impl WordRepr for i8 {
     fn from_word(word: u256) -> Self {
         word.downcast_truncate()
     }
-    fn to_word(self) -> u256 {
+    fn to_word(own self) -> u256 {
         self.downcast_unchecked()
     }
 }
@@ -94,7 +94,7 @@ impl WordRepr for i16 {
     fn from_word(word: u256) -> Self {
         word.downcast_truncate()
     }
-    fn to_word(self) -> u256 {
+    fn to_word(own self) -> u256 {
         self.downcast_unchecked()
     }
 }
@@ -103,7 +103,7 @@ impl WordRepr for i32 {
     fn from_word(word: u256) -> Self {
         word.downcast_truncate()
     }
-    fn to_word(self) -> u256 {
+    fn to_word(own self) -> u256 {
         self.downcast_unchecked()
     }
 }
@@ -112,7 +112,7 @@ impl WordRepr for i64 {
     fn from_word(word: u256) -> Self {
         word.downcast_truncate()
     }
-    fn to_word(self) -> u256 {
+    fn to_word(own self) -> u256 {
         self.downcast_unchecked()
     }
 }
@@ -121,7 +121,7 @@ impl WordRepr for i128 {
     fn from_word(word: u256) -> Self {
         word.downcast_truncate()
     }
-    fn to_word(self) -> u256 {
+    fn to_word(own self) -> u256 {
         self.downcast_unchecked()
     }
 }
@@ -130,7 +130,7 @@ impl WordRepr for i256 {
     fn from_word(word: u256) -> Self {
         word.downcast_truncate()
     }
-    fn to_word(self) -> u256 {
+    fn to_word(own self) -> u256 {
         self.downcast_unchecked()
     }
 }
@@ -139,7 +139,7 @@ impl WordRepr for isize {
     fn from_word(word: u256) -> Self {
         word.downcast_unchecked()
     }
-    fn to_word(self) -> u256 {
+    fn to_word(own self) -> u256 {
         self.downcast_unchecked()
     }
 }

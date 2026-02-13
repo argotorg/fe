@@ -1,0 +1,23 @@
+---
+source: crates/hir/tests/pattern_matching.rs
+assertion_line: 242
+expression: diagnostic_output
+input_file: test_files/pattern_matching/stress_tests/large_patterns.fe
+---
+Stress test file large_patterns.fe has 2 diagnostic(s):
+
+error[8-0067]: explicit move required
+    ┌─ large_patterns.fe:316:12
+    │
+316 │     match (rect, data) {
+    │            ^^^^ this value must be explicitly moved
+    │
+    = help: use `move <place>` to move a non-`Copy` value out of a place
+
+error[8-0067]: explicit move required
+    ┌─ large_patterns.fe:316:18
+    │
+316 │     match (rect, data) {
+    │                  ^^^^ this value must be explicitly moved
+    │
+    = help: use `move <place>` to move a non-`Copy` value out of a place

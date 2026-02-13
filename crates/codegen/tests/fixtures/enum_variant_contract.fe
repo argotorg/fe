@@ -5,14 +5,14 @@ enum MyOption {
     Some(u256),
 }
 
-fn abi_encode_u256(value: u256) -> ! uses (mut ops: RawOps) {
+fn abi_encode_u256(value: u256) -> ! uses (ops: mut RawOps) {
     let ptr: u256 = 0
     ops.mstore(ptr, value)
     ops.return_data(ptr, 32)
 }
 
 #[contract_init(EnumContract)]
-fn init() uses (mut evm: Evm) {
+fn init() uses (evm: mut Evm) {
     let len = evm.code_region_len(runtime)
     let offset = evm.code_region_offset(runtime)
     evm.codecopy(dest: 0, offset, len)
@@ -20,7 +20,7 @@ fn init() uses (mut evm: Evm) {
 }
 
 #[contract_runtime(EnumContract)]
-fn runtime() uses (mut evm: Evm) {
+fn runtime() uses (evm: mut Evm) {
     let selector = evm.calldataload(0) >> 224
 
     // make_some(uint256) -> returns the value back

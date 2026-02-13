@@ -84,7 +84,12 @@ impl<'db> SimplifiedPattern<'db> {
                 if let Some((ctor, ctor_ty)) =
                     Self::resolve_constructor(path_partial, db, scope, Some(expected_ty))
                 {
-                    SimplifiedPattern::constructor(ctor, vec![], ctor_ty)
+                    let fields = ctor
+                        .field_types(db)
+                        .into_iter()
+                        .map(|field_ty| SimplifiedPattern::wildcard(None, field_ty))
+                        .collect();
+                    SimplifiedPattern::constructor(ctor, fields, ctor_ty)
                 } else if let Some(lit) =
                     Self::resolve_literal_pat_from_path(path_partial, db, scope, expected_ty)
                 {

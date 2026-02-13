@@ -1,0 +1,16 @@
+// NoEsc escapes should be diagnosed when a NoEsc struct is written into a storage field.
+
+struct Esc {
+    h: mut u256,
+    tag: u256,
+}
+
+struct Wrapper {
+    e: Esc,
+}
+
+pub fn noesc_storage_escape_field() uses (slot: mut Wrapper) {
+    let mut x: u256 = 0
+    let e: Esc = Esc { h: mut x, tag: 0 }
+    slot.e = e
+}

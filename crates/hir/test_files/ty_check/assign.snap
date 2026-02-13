@@ -1,5 +1,6 @@
 ---
-source: crates/hir-analysis/tests/ty_check.rs
+source: crates/hir/tests/ty_check.rs
+assertion_line: 40
 expression: res
 input_file: test_files/ty_check/assign.fe
 ---
@@ -16,7 +17,7 @@ note:
    ┌─ assign.fe:21:9
    │
 21 │         self.inner = Inner { x, y }
-   │         ^^^^ Outer
+   │         ^^^^ mut Outer
 
 note: 
    ┌─ assign.fe:21:9
@@ -49,10 +50,10 @@ note:
    │                                 ^ u32
 
 note: 
-   ┌─ assign.fe:25:30
+   ┌─ assign.fe:25:34
    │  
-25 │   pub fn foo(opt: Option<i32>) {
-   │ ╭──────────────────────────────^
+25 │   pub fn foo(opt: own Option<i32>) {
+   │ ╭──────────────────────────────────^
 26 │ │     let mut x = 1
 27 │ │     let y = 2
 28 │ │ 

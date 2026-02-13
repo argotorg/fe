@@ -1,0 +1,16 @@
+trait Add {
+    fn add(own self) -> Self
+}
+
+struct Foo {}
+
+impl Add for Foo {
+    fn add(mut own self) -> Self {
+        self
+    }
+}
+
+fn use_add() -> Foo {
+    let foo = Foo {}
+    foo.add()
+}

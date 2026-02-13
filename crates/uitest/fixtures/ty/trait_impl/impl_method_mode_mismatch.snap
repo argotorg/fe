@@ -1,0 +1,32 @@
+---
+source: crates/uitest/tests/ty.rs
+assertion_line: 84
+expression: diags
+input_file: fixtures/ty/trait_impl/impl_method_mode_mismatch.fe
+---
+error[6-0007]: method `bad` has incompatible argument type
+   ┌─ impl_method_mode_mismatch.fe:16:18
+   │
+ 2 │     fn bad(self, x: i32)
+   │                  ------ trait requires this type
+   ·
+16 │     fn bad(self, x: own i32) {}
+   │                  ^^^^^^^^^^ expected `i32`, found `own i32`
+
+error[6-0007]: method `bad` has incompatible argument type
+   ┌─ impl_method_mode_mismatch.fe:20:18
+   │
+ 6 │     fn bad(self, x: ref i32)
+   │                  ---------- trait requires this type
+   ·
+20 │     fn bad(self, x: mut i32) {}
+   │                  ^^^^^^^^^^ expected `ref i32`, found `mut i32`
+
+error[6-0007]: method `bad` has incompatible argument type
+   ┌─ impl_method_mode_mismatch.fe:24:18
+   │
+10 │     fn bad(self, x: mut i32)
+   │                  ---------- trait requires this type
+   ·
+24 │     fn bad(self, x: i32) {}
+   │                  ^^^^^^ expected `mut i32`, found `i32`

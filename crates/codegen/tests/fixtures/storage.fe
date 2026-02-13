@@ -26,14 +26,14 @@ fn transfer_result_code(res: TransferResult) -> u256 {
     }
 }
 
-fn abi_encode(value: u256) -> ! uses (mut ops: RawOps) {
+fn abi_encode(value: u256) -> ! uses (ops: mut RawOps) {
     let ptr: u256 = 0
     ops.mstore(ptr, value)
     ops.return_data(ptr, 32)
 }
 
 fn credit(user: User, amount: u256) -> u256
-    uses (mut store: CoinStore, mut supply: TotalSupply)
+    uses (store: mut CoinStore, supply: mut TotalSupply)
 {
     match user {
         User::Alice => credit_alice(amount)
@@ -42,7 +42,7 @@ fn credit(user: User, amount: u256) -> u256
 }
 
 fn transfer(from: User, amount: u256) -> TransferResult
-    uses (mut store: CoinStore)
+    uses (store: mut CoinStore)
 {
     match from {
         User::Alice => transfer_from_alice(amount)
@@ -76,7 +76,7 @@ fn total_supply() -> u256
 }
 
 fn credit_alice(amount: u256) -> u256
-    uses (mut store: CoinStore, mut supply: TotalSupply)
+    uses (store: mut CoinStore, supply: mut TotalSupply)
 {
     store.alice = store.alice + amount
     supply.total = supply.total + amount
@@ -84,7 +84,7 @@ fn credit_alice(amount: u256) -> u256
 }
 
 fn credit_bob(amount: u256) -> u256
-    uses (mut store: CoinStore, mut supply: TotalSupply)
+    uses (store: mut CoinStore, supply: mut TotalSupply)
 {
     store.bob = store.bob + amount
     supply.total = supply.total + amount
@@ -92,7 +92,7 @@ fn credit_bob(amount: u256) -> u256
 }
 
 fn transfer_from_alice(amount: u256) -> TransferResult
-    uses (mut store: CoinStore)
+    uses (store: mut CoinStore)
 {
     if store.alice < amount {
         return TransferResult::Insufficient
@@ -103,7 +103,7 @@ fn transfer_from_alice(amount: u256) -> TransferResult
 }
 
 fn transfer_from_bob(amount: u256) -> TransferResult
-    uses (mut store: CoinStore)
+    uses (store: mut CoinStore)
 {
     if store.bob < amount {
         return TransferResult::Insufficient
@@ -114,7 +114,7 @@ fn transfer_from_bob(amount: u256) -> TransferResult
 }
 
 #[contract_init(Coin)]
-fn init() uses (mut evm: Evm) {
+fn init() uses (evm: mut Evm) {
     let len = evm.code_region_len(runtime)
     let offset = evm.code_region_offset(runtime)
     evm.codecopy(dest: 0, offset, len)
@@ -122,7 +122,7 @@ fn init() uses (mut evm: Evm) {
 }
 
 #[contract_runtime(Coin)]
-fn runtime() uses (mut evm: Evm) {
+fn runtime() uses (evm: mut Evm) {
     let mut store: StorPtr<CoinStore> = evm.stor_ptr(0)
     let mut supply: StorPtr<TotalSupply> = evm.stor_ptr(2)
     with (store, supply, RawOps = evm) {

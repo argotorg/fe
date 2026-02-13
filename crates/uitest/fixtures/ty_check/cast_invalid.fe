@@ -18,6 +18,7 @@ mod wrapper {
     pub struct PrivateFieldWrapper {
         inner: u32
     }
+    impl Copy for PrivateFieldWrapper {}
 }
 
 pub fn cast_to_private_field_struct(x: u32) -> wrapper::PrivateFieldWrapper {

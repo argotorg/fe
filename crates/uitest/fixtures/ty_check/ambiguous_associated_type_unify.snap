@@ -1,5 +1,6 @@
 ---
 source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/ambiguous_associated_type_unify.fe
 ---
@@ -49,4 +50,4 @@ error[8-0000]: type mismatch
    ┌─ ambiguous_associated_type_unify.fe:54:9
    │
 54 │         t.transform() // Returns Transformer::Output (bool for Dual)
-   │         ^^^^^^^^^^^^^ expected `T::Output`, but `T::Output` is given
+   │         ^^^^^^^^^^^^^ expected `<T as Producer>::Output`, but `<T as Transformer>::Output` is given

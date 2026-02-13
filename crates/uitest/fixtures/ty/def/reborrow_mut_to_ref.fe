@@ -1,0 +1,7 @@
+fn take_ref(x: ref u8) -> u8 {
+    x
+}
+
+fn mut_to_ref(y: mut u8) -> u8 {
+    take_ref(y)
+}

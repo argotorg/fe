@@ -1,119 +1,120 @@
 ---
-source: crates/hir-analysis/tests/ty_check.rs
+source: crates/hir/tests/ty_check.rs
+assertion_line: 40
 expression: res
-input_file: crates/hir-analysis/test_files/ty_check/array.fe
+input_file: test_files/ty_check/array.fe
 ---
 note: 
-   ┌─ array.fe:3:10
+   ┌─ array.fe:5:10
    │  
- 3 │   fn foo() {
+ 5 │   fn foo() {
    │ ╭──────────^
- 4 │ │     let i_array: [i32; 2] = [1, 2]
- 5 │ │     let b_array = [true, false]
- 6 │ │     
+ 6 │ │     let i_array: [i32; 2] = [1, 2]
+ 7 │ │     let b_array = [true, false]
+ 8 │ │     
    · │
- 9 │ │     let array_rep3: [i32; 5] = [1; 5]
-10 │ │ }
+11 │ │     let array_rep3: [i32; 5] = [1; 5]
+12 │ │ }
    │ ╰─^ ()
 
 note: 
-  ┌─ array.fe:4:9
+  ┌─ array.fe:6:9
   │
-4 │     let i_array: [i32; 2] = [1, 2]
+6 │     let i_array: [i32; 2] = [1, 2]
   │         ^^^^^^^ [i32; 2]
 
 note: 
-  ┌─ array.fe:4:29
+  ┌─ array.fe:6:29
   │
-4 │     let i_array: [i32; 2] = [1, 2]
+6 │     let i_array: [i32; 2] = [1, 2]
   │                             ^^^^^^ [i32; 2]
 
 note: 
-  ┌─ array.fe:4:30
+  ┌─ array.fe:6:30
   │
-4 │     let i_array: [i32; 2] = [1, 2]
+6 │     let i_array: [i32; 2] = [1, 2]
   │                              ^ i32
 
 note: 
-  ┌─ array.fe:4:33
+  ┌─ array.fe:6:33
   │
-4 │     let i_array: [i32; 2] = [1, 2]
+6 │     let i_array: [i32; 2] = [1, 2]
   │                                 ^ i32
-
-note: 
-  ┌─ array.fe:5:9
-  │
-5 │     let b_array = [true, false]
-  │         ^^^^^^^ [bool; 2]
-
-note: 
-  ┌─ array.fe:5:19
-  │
-5 │     let b_array = [true, false]
-  │                   ^^^^^^^^^^^^^ [bool; 2]
-
-note: 
-  ┌─ array.fe:5:20
-  │
-5 │     let b_array = [true, false]
-  │                    ^^^^ bool
-
-note: 
-  ┌─ array.fe:5:26
-  │
-5 │     let b_array = [true, false]
-  │                          ^^^^^ bool
 
 note: 
   ┌─ array.fe:7:9
   │
-7 │     let array_rep = [true; 10]
-  │         ^^^^^^^^^ [bool; 10]
+7 │     let b_array = [true, false]
+  │         ^^^^^^^ [bool; 2]
 
 note: 
-  ┌─ array.fe:7:21
+  ┌─ array.fe:7:19
   │
-7 │     let array_rep = [true; 10]
-  │                     ^^^^^^^^^^ [bool; 10]
+7 │     let b_array = [true, false]
+  │                   ^^^^^^^^^^^^^ [bool; 2]
 
 note: 
-  ┌─ array.fe:7:22
+  ┌─ array.fe:7:20
   │
-7 │     let array_rep = [true; 10]
-  │                      ^^^^ bool
+7 │     let b_array = [true, false]
+  │                    ^^^^ bool
 
 note: 
-  ┌─ array.fe:8:9
+  ┌─ array.fe:7:26
   │
-8 │     let array_rep2 = [Foo {}; 5]
-  │         ^^^^^^^^^^ [Foo; 5]
-
-note: 
-  ┌─ array.fe:8:22
-  │
-8 │     let array_rep2 = [Foo {}; 5]
-  │                      ^^^^^^^^^^^ [Foo; 5]
-
-note: 
-  ┌─ array.fe:8:23
-  │
-8 │     let array_rep2 = [Foo {}; 5]
-  │                       ^^^^^^ Foo
+7 │     let b_array = [true, false]
+  │                          ^^^^^ bool
 
 note: 
   ┌─ array.fe:9:9
   │
-9 │     let array_rep3: [i32; 5] = [1; 5]
-  │         ^^^^^^^^^^ [i32; 5]
+9 │     let array_rep = [true; 10]
+  │         ^^^^^^^^^ [bool; 10]
 
 note: 
-  ┌─ array.fe:9:32
+  ┌─ array.fe:9:21
   │
-9 │     let array_rep3: [i32; 5] = [1; 5]
-  │                                ^^^^^^ [i32; 5]
+9 │     let array_rep = [true; 10]
+  │                     ^^^^^^^^^^ [bool; 10]
 
 note: 
-  ┌─ array.fe:9:33
+  ┌─ array.fe:9:22
   │
-9 │     let array_rep3: [i32; 5] = [1; 5]
-  │                                 ^ i32
+9 │     let array_rep = [true; 10]
+  │                      ^^^^ bool
+
+note: 
+   ┌─ array.fe:10:9
+   │
+10 │     let array_rep2 = [Foo {}; 5]
+   │         ^^^^^^^^^^ [Foo; 5]
+
+note: 
+   ┌─ array.fe:10:22
+   │
+10 │     let array_rep2 = [Foo {}; 5]
+   │                      ^^^^^^^^^^^ [Foo; 5]
+
+note: 
+   ┌─ array.fe:10:23
+   │
+10 │     let array_rep2 = [Foo {}; 5]
+   │                       ^^^^^^ Foo
+
+note: 
+   ┌─ array.fe:11:9
+   │
+11 │     let array_rep3: [i32; 5] = [1; 5]
+   │         ^^^^^^^^^^ [i32; 5]
+
+note: 
+   ┌─ array.fe:11:32
+   │
+11 │     let array_rep3: [i32; 5] = [1; 5]
+   │                                ^^^^^^ [i32; 5]
+
+note: 
+   ┌─ array.fe:11:33
+   │
+11 │     let array_rep3: [i32; 5] = [1; 5]
+   │                                 ^ i32

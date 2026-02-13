@@ -1,0 +1,12 @@
+struct Pair {
+    a: u256,
+    b: u256,
+}
+
+pub fn borrowck_field_disjoint() {
+    let mut s = Pair { a: 0, b: 0 }
+    let pa: mut u256 = mut s.a
+    let pb: mut u256 = mut s.b
+    pa = 1
+    pb = 2
+}

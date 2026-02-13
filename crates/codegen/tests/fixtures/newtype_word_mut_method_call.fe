@@ -3,14 +3,14 @@ struct Wrap {
 }
 
 impl Wrap {
-    fn bump(mut self) -> Self {
+    fn bump(mut own self) -> Self {
         self.inner += 1
         self
     }
 }
 
 pub fn newtype_word_mut_method_call(x: u256) -> u256 {
-    let mut w = Wrap { inner: x }
-    w = w.bump()
+    let w = Wrap { inner: x }
+    let w = w.bump()
     w.inner
 }

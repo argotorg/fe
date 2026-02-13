@@ -22,7 +22,7 @@ impl Outer {
     } 
 }
 
-pub fn foo(opt: Option<i32>) {
+pub fn foo(opt: own Option<i32>) {
     let mut x = 1
     let y = 2
 

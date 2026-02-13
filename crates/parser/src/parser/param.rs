@@ -39,6 +39,18 @@ impl super::Parse for FnParamScope {
 
     fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
         parser.bump_if(SyntaxKind::MutKw);
+        let allow_ref_self_shorthand = parser.dry_run(|p| {
+            p.bump_if(SyntaxKind::RefKw) && p.current_kind() == Some(SyntaxKind::SelfKw)
+        });
+        let allow_own_self_shorthand = parser.dry_run(|p| {
+            p.bump_if(SyntaxKind::OwnKw) && p.current_kind() == Some(SyntaxKind::SelfKw)
+        });
+        if allow_ref_self_shorthand {
+            parser.bump_expected(SyntaxKind::RefKw);
+        }
+        if allow_own_self_shorthand {
+            parser.bump_expected(SyntaxKind::OwnKw);
+        }
         parser.expect(
             &[
                 SyntaxKind::SelfKw,

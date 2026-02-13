@@ -1,0 +1,13 @@
+struct Position {
+    a: u256,
+    b: u256,
+}
+
+fn read_a(p: Position) -> u256 {
+    p.a
+}
+
+pub fn mut_handle_to_view_byref() -> u256 {
+    let mut p = Position { a: 7, b: 9 }
+    read_a(mut p)
+}

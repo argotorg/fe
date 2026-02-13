@@ -1,0 +1,39 @@
+use std::evm::effects::assert
+
+struct Packet {
+    version: u256,
+    size: u256,
+}
+
+impl Packet {
+    fn bump(mut self) {
+        self.version += 1
+    }
+
+    fn retag(mut own self, by: u256) -> Packet {
+        self.version += by
+        self
+    }
+
+    fn freeze(own self) -> (u256, u256) {
+        (self.version, self.size)
+    }
+}
+
+#[test]
+fn test_mut_own_self_methods() {
+    let mut p = Packet {
+        version: 1,
+        size: 50,
+    }
+
+    p.bump()
+    assert(p.version == 2)
+
+    let p = p.retag(3)
+    assert(p.version == 5)
+
+    let (version, size) = p.freeze()
+    assert(version == 5)
+    assert(size == 50)
+}

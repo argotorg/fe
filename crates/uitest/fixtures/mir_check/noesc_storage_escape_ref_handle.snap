@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/mir_check.rs
+expression: res
+input_file: fixtures/mir_check/noesc_storage_escape_ref_handle.fe
+---
+error[10-0001]: cannot store `Esc` in `Storage`
+   ┌─ noesc_storage_escape_ref_handle.fe:11:5
+   │
+11 │     slot = e
+   │     ^^^^^^^^ this value cannot be written to `Storage`
+   │
+   = note: this value contains a borrow handle (`mut`/`ref`)

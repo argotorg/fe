@@ -1,0 +1,7 @@
+enum Data {
+    Pair(u8, u8),
+}
+
+fn tuple_variant_rest_mismatched_field_count(v: Data) {
+    let Data::Pair(a, .., b, c) = v
+}

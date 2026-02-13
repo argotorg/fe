@@ -1,0 +1,7 @@
+---
+source: crates/uitest/tests/ty.rs
+assertion_line: 84
+expression: diags
+input_file: fixtures/ty/trait_impl/own_self_mut_mismatch_allowed.fe
+---
+

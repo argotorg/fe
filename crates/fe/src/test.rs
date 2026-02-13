@@ -3,6 +3,7 @@
 //! Discovers functions marked with `#[test]` attribute, compiles them, and
 //! executes them using revm.
 
+use crate::TestDebug;
 use camino::Utf8PathBuf;
 use codegen::{ExpectedRevert, TestMetadata, emit_test_module_yul};
 use colored::Colorize;
@@ -11,6 +12,7 @@ use contract_harness::{ExecutionOptions, RuntimeInstance};
 use driver::DriverDataBase;
 use hir::hir_def::{HirIngot, TopLevelMod};
 use solc_runner::compile_single_contract;
+use std::io::Write;
 use url::Url;
 
 /// Result of running a single test.
@@ -33,16 +35,22 @@ struct TestOutcome {
 /// * `path` - Path to a .fe file or directory containing an ingot
 /// * `filter` - Optional filter pattern for test names
 /// * `show_logs` - Whether to show event logs from test execution
+/// * `debug` - Whether to print Yul output (`failures` or `all`)
 ///
 /// Returns nothing; exits the process on invalid input or test failures.
-pub fn run_tests(path: &Utf8PathBuf, filter: Option<&str>, show_logs: bool) {
+pub fn run_tests(
+    path: &Utf8PathBuf,
+    filter: Option<&str>,
+    show_logs: bool,
+    debug: Option<TestDebug>,
+) {
     let mut db = DriverDataBase::default();
 
     // Determine if we're dealing with a single file or an ingot directory
     let test_results = if path.is_file() && path.extension() == Some("fe") {
-        run_tests_single_file(&mut db, path, filter, show_logs)
+        run_tests_single_file(&mut db, path, filter, show_logs, debug)
     } else if path.is_dir() {
-        run_tests_ingot(&mut db, path, filter, show_logs)
+        run_tests_ingot(&mut db, path, filter, show_logs, debug)
     } else {
         eprintln!("Error: Path must be either a .fe file or a directory containing fe.toml");
         std::process::exit(1);
@@ -70,6 +78,7 @@ fn run_tests_single_file(
     file_path: &Utf8PathBuf,
     filter: Option<&str>,
     show_logs: bool,
+    debug: Option<TestDebug>,
 ) -> Vec<TestResult> {
     // Create a file URL for the single .fe file
     let file_url = match Url::from_file_path(file_path.canonicalize_utf8().unwrap()) {
@@ -110,7 +119,7 @@ fn run_tests_single_file(
     }
 
     // Discover and run tests
-    discover_and_run_tests(db, top_mod, filter, show_logs)
+    discover_and_run_tests(db, top_mod, filter, show_logs, debug)
 }
 
 /// Runs tests in an ingot directory (containing `fe.toml`).
@@ -126,6 +135,7 @@ fn run_tests_ingot(
     dir_path: &Utf8PathBuf,
     filter: Option<&str>,
     show_logs: bool,
+    debug: Option<TestDebug>,
 ) -> Vec<TestResult> {
     let canonical_path = match dir_path.canonicalize_utf8() {
         Ok(path) => path,
@@ -161,7 +171,7 @@ fn run_tests_ingot(
     }
 
     let root_mod = ingot.root_mod(db);
-    discover_and_run_tests(db, root_mod, filter, show_logs)
+    discover_and_run_tests(db, root_mod, filter, show_logs, debug)
 }
 
 /// Discovers `#[test]` functions, compiles them, and executes each one.
@@ -177,6 +187,7 @@ fn discover_and_run_tests(
     top_mod: TopLevelMod<'_>,
     filter: Option<&str>,
     show_logs: bool,
+    debug: Option<TestDebug>,
 ) -> Vec<TestResult> {
     let output = match emit_test_module_yul(db, top_mod) {
         Ok(output) => output,
@@ -218,6 +229,16 @@ fn discover_and_run_tests(
             }
         }
 
+        let should_dump_yul = match debug {
+            None => false,
+            Some(TestDebug::Failures) => !outcome.result.passed,
+            Some(TestDebug::All) => true,
+        };
+        if should_dump_yul {
+            let _ = std::io::stdout().flush();
+            print_test_yul(case);
+        }
+
         if show_logs {
             if !outcome.logs.is_empty() {
                 for log in &outcome.logs {
@@ -234,6 +255,16 @@ fn discover_and_run_tests(
     }
 
     results
+}
+
+fn print_test_yul(case: &TestMetadata) {
+    eprintln!();
+    eprintln!(
+        "---- yul output for test {} ({}) ----",
+        case.display_name, case.object_name
+    );
+    eprintln!("{}", case.yul);
+    eprintln!("---- end yul output ----");
 }
 
 /// Compiles a test function to bytecode and executes it in revm.

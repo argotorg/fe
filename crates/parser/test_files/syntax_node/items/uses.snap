@@ -1,9 +1,10 @@
 ---
 source: crates/parser/tests/syntax_node.rs
+assertion_line: 15
 expression: node
 input_file: test_files/syntax_node/items/uses.fe
 ---
-Root@0..99
+Root@0..98
   ItemList@0..97
     Item@0..18
       Func@0..18
@@ -90,10 +91,10 @@ Root@0..99
               Comma@81..82 ","
               WhiteSpace@82..83 " "
               UsesParam@83..93
-                MutKw@83..86 "mut"
-                WhiteSpace@86..87 " "
-                Ident@87..88 "f"
-                Colon@88..89 ":"
+                Ident@83..84 "f"
+                Colon@84..85 ":"
+                WhiteSpace@85..86 " "
+                MutKw@86..89 "mut"
                 WhiteSpace@89..90 " "
                 Path@90..93
                   PathSegment@90..93
@@ -103,4 +104,4 @@ Root@0..99
         BlockExpr@95..97
           LBrace@95..96 "{"
           RBrace@96..97 "}"
-  Newline@97..99 "\n\n"
+  Newline@97..98 "\n"

@@ -789,6 +789,7 @@ impl ToDoc for ast::SuperTraitList {
 impl ToDoc for ast::Type {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
         match self.kind() {
+            TypeKind::Mode(_) => todo!(),
             TypeKind::Ptr(ptr) => ptr.to_doc(ctx),
             TypeKind::Path(path) => path.to_doc(ctx),
             TypeKind::Tuple(tuple) => tuple.to_doc(ctx),

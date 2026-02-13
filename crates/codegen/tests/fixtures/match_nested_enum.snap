@@ -1,6 +1,6 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 42
+assertion_line: 33
 expression: output
 input_file: tests/fixtures/match_nested_enum.fe
 ---
@@ -29,6 +29,7 @@ function $match_nested_enum($outer) -> ret {
     }
     default {
     }
+  let v7 := $outer
   ret := v0
   leave
 }

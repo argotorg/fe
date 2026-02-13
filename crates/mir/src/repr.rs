@@ -20,8 +20,10 @@ use hir::analysis::ty::{
     corelib::resolve_core_trait,
     trait_def::TraitInstId,
     trait_resolution::{GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable},
+    ty_def::CapabilityKind,
 };
-use hir::hir_def::IdentId;
+use hir::hir_def::{EnumVariant, IdentId};
+use hir::projection::{Projection, ProjectionPath};
 
 use crate::core_lib::CoreLib;
 use crate::ir::AddressSpaceKind;
@@ -69,6 +71,41 @@ pub fn transparent_newtype_field_ty<'db>(
     (field_tys.len() == 1).then(|| field_tys[0])
 }
 
+/// Returns the field type for a transparent field-0 projection step.
+pub fn transparent_field0_inner_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner_ty: TyId<'db>,
+    field_idx: usize,
+) -> Option<TyId<'db>> {
+    (field_idx == 0)
+        .then(|| transparent_newtype_field_ty(db, owner_ty))
+        .flatten()
+}
+
+/// Returns the next type for a transparent field-0 projection step.
+pub fn transparent_field0_projection_step_ty<'db, Idx>(
+    db: &'db dyn HirAnalysisDb,
+    owner_ty: TyId<'db>,
+    proj: &Projection<TyId<'db>, EnumVariant<'db>, Idx>,
+) -> Option<TyId<'db>> {
+    let Projection::Field(field_idx) = proj else {
+        return None;
+    };
+    transparent_field0_inner_ty(db, owner_ty, *field_idx)
+}
+
+/// Peels a projection path that must consist entirely of transparent field-0 steps.
+pub fn peel_transparent_field0_projection_path<'db, Idx>(
+    db: &'db dyn HirAnalysisDb,
+    mut base_ty: TyId<'db>,
+    path: &ProjectionPath<TyId<'db>, EnumVariant<'db>, Idx>,
+) -> Option<TyId<'db>> {
+    for proj in path.iter() {
+        base_ty = transparent_field0_projection_step_ty(db, base_ty, proj)?;
+    }
+    Some(base_ty)
+}
+
 /// Peel all transparent newtype layers from `ty`, returning the first non-newtype type.
 pub fn peel_transparent_newtypes<'db>(db: &'db dyn HirAnalysisDb, mut ty: TyId<'db>) -> TyId<'db> {
     while let Some(inner) = transparent_newtype_field_ty(db, ty) {
@@ -83,6 +120,10 @@ pub fn effect_provider_space_for_ty<'db>(
     core: &CoreLib<'db>,
     ty: TyId<'db>,
 ) -> Option<AddressSpaceKind> {
+    if let Some((_, inner)) = ty.as_capability(db) {
+        return effect_provider_space_for_ty(db, core, inner);
+    }
+
     if let Some(space) = effect_provider_space_via_domain_trait(db, core, ty) {
         return Some(space);
     }
@@ -159,6 +200,14 @@ pub fn repr_kind_for_ty<'db>(
         return ReprKind::Zst;
     }
 
+    if let Some((capability, inner)) = ty.as_capability(db) {
+        return match capability {
+            CapabilityKind::Mut => ReprKind::Ptr(AddressSpaceKind::Memory),
+            CapabilityKind::Ref => repr_kind_for_ref_inner(db, core, inner),
+            CapabilityKind::View => repr_kind_for_ty(db, core, inner),
+        };
+    }
+
     if let Some(space) = effect_provider_space_for_ty(db, core, ty) {
         return ReprKind::Ptr(space);
     }
@@ -179,6 +228,17 @@ pub fn repr_kind_for_ty<'db>(
     }
 
     ReprKind::Word
+}
+
+fn repr_kind_for_ref_inner<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    inner: TyId<'db>,
+) -> ReprKind {
+    match repr_kind_for_ty(db, core, inner) {
+        ReprKind::Word | ReprKind::Zst | ReprKind::Ptr(_) => ReprKind::Word,
+        ReprKind::Ref => ReprKind::Ptr(AddressSpaceKind::Memory),
+    }
 }
 
 /// Returns the leaf type that should drive word conversion (`WordRepr::{from_word,to_word}`).

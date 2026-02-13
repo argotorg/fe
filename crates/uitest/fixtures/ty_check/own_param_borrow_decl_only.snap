@@ -1,0 +1,29 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/own_param_borrow_decl_only.fe
+---
+error[3-0014]: invalid `own` parameter
+  ┌─ own_param_borrow_decl_only.fe:2:21
+  │
+2 │     fn bad_trait(x: own ref u8)
+  │                     ^^^^^^^^^^ `own` parameters must have owned types (found `ref u8`)
+  │
+  = remove `own`, or change the parameter type to an owned type
+
+error[3-0014]: invalid `own` parameter
+  ┌─ own_param_borrow_decl_only.fe:6:22
+  │
+6 │     fn bad_extern(x: own mut u8)
+  │                      ^^^^^^^^^^ `own` parameters must have owned types (found `mut u8`)
+  │
+  = remove `own`, or change the parameter type to an owned type
+
+error[3-0014]: invalid `own` parameter
+  ┌─ own_param_borrow_decl_only.fe:9:15
+  │
+9 │ fn bad_def(x: own ref u8) {}
+  │               ^^^^^^^^^^ `own` parameters must have owned types (found `ref u8`)
+  │
+  = remove `own`, or change the parameter type to an owned type

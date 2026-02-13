@@ -4,7 +4,7 @@ use camino::Utf8Path;
 use codespan_reporting as cs;
 use common::{
     InputDb,
-    diagnostics::{LabelStyle, Severity},
+    diagnostics::{CompleteDiagnostic, LabelStyle, Severity},
     file::File,
 };
 use cs::{diagnostic as cs_diag, files as cs_files};
@@ -22,37 +22,39 @@ where
     T: DiagnosticVoucher,
 {
     fn to_cs(&self, db: &dyn SpannedInputDb) -> cs_diag::Diagnostic<File> {
-        let complete = self.to_complete(db);
+        complete_to_cs(self.to_complete(db))
+    }
+}
 
-        let severity = convert_severity(complete.severity);
-        let code = Some(complete.error_code.to_string());
-        let message = complete.message;
+fn complete_to_cs(complete: CompleteDiagnostic) -> cs_diag::Diagnostic<File> {
+    let severity = convert_severity(complete.severity);
+    let code = Some(complete.error_code.to_string());
+    let message = complete.message;
 
-        let labels = complete
-            .sub_diagnostics
-            .into_iter()
-            .filter_map(|sub_diag| {
-                let span = sub_diag.span?;
-                match sub_diag.style {
-                    LabelStyle::Primary => {
-                        cs_diag::Label::new(cs_diag::LabelStyle::Primary, span.file, span.range)
-                    }
-                    LabelStyle::Secondary => {
-                        cs_diag::Label::new(cs_diag::LabelStyle::Secondary, span.file, span.range)
-                    }
+    let labels = complete
+        .sub_diagnostics
+        .into_iter()
+        .filter_map(|sub_diag| {
+            let span = sub_diag.span?;
+            match sub_diag.style {
+                LabelStyle::Primary => {
+                    cs_diag::Label::new(cs_diag::LabelStyle::Primary, span.file, span.range)
                 }
-                .with_message(sub_diag.message)
-                .into()
-            })
-            .collect();
+                LabelStyle::Secondary => {
+                    cs_diag::Label::new(cs_diag::LabelStyle::Secondary, span.file, span.range)
+                }
+            }
+            .with_message(sub_diag.message)
+            .into()
+        })
+        .collect();
 
-        cs_diag::Diagnostic {
-            severity,
-            code,
-            message,
-            labels,
-            notes: complete.notes,
-        }
+    cs_diag::Diagnostic {
+        severity,
+        code,
+        message,
+        labels,
+        notes: complete.notes,
     }
 }
 

@@ -154,6 +154,10 @@ pub enum UnOp {
     Not,
     /// `~`
     BitNot,
+    /// `mut`
+    Mut,
+    /// `ref`
+    Ref,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]

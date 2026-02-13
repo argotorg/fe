@@ -9,6 +9,6 @@ struct Container {
 
 pub fn newtype_u8_roundtrip(x: u8) -> u8 {
     let c = Container { w: WrapU8 { inner: x }, pad: 0 }
-    let w = c.w
+    let w = ref c.w
     w.inner
 }

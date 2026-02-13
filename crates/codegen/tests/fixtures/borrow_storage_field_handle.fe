@@ -1,0 +1,11 @@
+struct CoinStore {
+    alice: u256,
+}
+
+fn borrow_storage_field_handle() -> u256
+    uses (store: mut CoinStore)
+{
+    let p: mut u256 = mut store.alice
+    p += 1
+    store.alice
+}

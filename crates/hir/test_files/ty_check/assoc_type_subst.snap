@@ -1,5 +1,5 @@
 ---
-source: crates/hir-analysis/tests/ty_check.rs
+source: crates/hir/tests/ty_check.rs
 expression: res
 input_file: test_files/ty_check/assoc_type_subst.fe
 ---
@@ -90,4 +90,3 @@ note:
    │
 46 │     let result: u32 = n.get_nested()
    │                       ^^^^^^^^^^^^^^ u32
-

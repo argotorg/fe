@@ -43,8 +43,12 @@ pub fn try_eval_const_ref<'db>(
 pub fn eval_const_ref<'db>(
     db: &'db dyn HirAnalysisDb,
     cref: ConstRef<'db>,
-    expected_ty: TyId<'db>,
+    mut expected_ty: TyId<'db>,
 ) -> Result<Option<ConstValue>, InvalidCause<'db>> {
+    if let Some((_, inner)) = expected_ty.as_capability(db) {
+        expected_ty = inner;
+    }
+
     let const_ty = match cref {
         ConstRef::Const(const_def) => {
             let body = const_def

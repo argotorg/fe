@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/own_generic_nonplace_capability_arg.fe
+---
+error[8-0072]: `own` argument requires an owned movable value
+  ┌─ own_generic_nonplace_capability_arg.fe:8:13
+  │
+8 │     consume(if cond { v } else { v })
+  │             ^^^^^^^^^^^^^^^^^^^^^^^^ this expression has `view Boxed` capability and cannot be moved as owned here
+  │
+  = pass an owned place value, or change the callee parameter mode to borrow/view

@@ -1,0 +1,11 @@
+---
+source: crates/uitest/tests/ty.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty/def/tuple_variant_duplicate_rest.fe
+---
+error[8-0002]: duplicate `..` in pattern
+  ┌─ tuple_variant_duplicate_rest.fe:6:24
+  │
+6 │     let Data::Pair(.., ..) = v
+  │                        ^^ `..` can be used only once

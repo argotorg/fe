@@ -1,0 +1,11 @@
+struct Boxed {
+    value: u256,
+}
+
+fn mutate_own_immutable(x: own Boxed) {
+    x.value = 1
+}
+
+fn mutate_own_mutable(mut x: own Boxed) {
+    x.value = 1
+}

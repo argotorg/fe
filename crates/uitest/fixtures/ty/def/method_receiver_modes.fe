@@ -1,0 +1,29 @@
+trait CounterOps {
+    fn value_ref(self: ref Self) -> ref u256
+    fn value_mut(self: mut Self) -> mut u256
+}
+
+struct Counter {
+    value: u256,
+}
+
+impl CounterOps for Counter {
+    fn value_ref(self: ref Self) -> ref u256 {
+        ref self.value
+    }
+
+    fn value_mut(self: mut Self) -> mut u256 {
+        mut self.value
+    }
+}
+
+fn use_receiver_modes() -> u256 {
+    let mut counter = Counter { value: 1 }
+    let by_ref: ref Counter = ref counter
+    let value_ref: ref u256 = by_ref.value_ref()
+    value_ref
+
+    let value_mut: mut u256 = counter.value_mut()
+    value_mut += 1
+    counter.value
+}

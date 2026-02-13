@@ -1,0 +1,5 @@
+fn bump(_x: mut u256) {}
+
+pub fn mut_arg_non_place_literal_rejected() {
+    bump(1 as u256)
+}

@@ -1,0 +1,14 @@
+struct Pair {
+    a: u256,
+    b: u256,
+}
+
+fn borrow_a(x: mut Pair) -> mut u256 {
+    mut x.a
+}
+
+pub fn return_borrow_direct() {
+    let mut s = Pair { a: 0, b: 0 }
+    let p: mut u256 = borrow_a(mut s)
+    p = 1
+}

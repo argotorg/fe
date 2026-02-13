@@ -1,0 +1,7 @@
+struct Foo {}
+
+fn bad_legacy() uses (mut x: Foo) {}
+
+fn bad_ref() uses (x: ref Foo) {}
+
+fn bad_own() uses (x: own Foo) {}

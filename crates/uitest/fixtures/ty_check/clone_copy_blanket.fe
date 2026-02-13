@@ -1,0 +1,29 @@
+struct CopyStruct {}
+
+impl Copy for CopyStruct {}
+
+fn dup<T>(x: T) -> T
+where T: Copy + Clone
+{
+    x.clone()
+}
+
+fn takes_clone<T>(x: T) -> T
+where T: Clone
+{
+    x.clone()
+}
+
+pub fn clone_copy_type() {
+    let x: u8 = 1
+    let y = x.clone()
+    let _z: u8 = y
+    let _ = takes_clone(x)
+
+    let v: u32 = 9
+    let _ = dup(v)
+
+    let p = CopyStruct {}
+    let _ = p.clone()
+    let _ = takes_clone(p)
+}

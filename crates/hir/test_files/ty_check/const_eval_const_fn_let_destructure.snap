@@ -1,6 +1,5 @@
 ---
 source: crates/hir/tests/ty_check.rs
-assertion_line: 40
 expression: res
 input_file: test_files/ty_check/const_eval_const_fn_let_destructure.fe
 ---
@@ -24,13 +23,13 @@ note:
   ┌─ const_eval_const_fn_let_destructure.fe:7:10
   │
 7 │     let (a, b) = pair
-  │          ^ usize
+  │          ^ ref usize
 
 note: 
   ┌─ const_eval_const_fn_let_destructure.fe:7:13
   │
 7 │     let (a, b) = pair
-  │             ^ usize
+  │             ^ ref usize
 
 note: 
   ┌─ const_eval_const_fn_let_destructure.fe:7:18
@@ -76,13 +75,13 @@ note:
    ┌─ const_eval_const_fn_let_destructure.fe:12:16
    │
 12 │     let Pair { a, b } = pair
-   │                ^ usize
+   │                ^ ref usize
 
 note: 
    ┌─ const_eval_const_fn_let_destructure.fe:12:19
    │
 12 │     let Pair { a, b } = pair
-   │                   ^ usize
+   │                   ^ ref usize
 
 note: 
    ┌─ const_eval_const_fn_let_destructure.fe:12:25

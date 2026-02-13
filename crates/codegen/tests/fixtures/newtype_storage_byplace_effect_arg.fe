@@ -7,7 +7,7 @@ struct Wrap {
     inner: u256,
 }
 
-fn bump() uses (mut w: Wrap) {
+fn bump() uses (w: mut Wrap) {
     w.inner += 1
 }
 

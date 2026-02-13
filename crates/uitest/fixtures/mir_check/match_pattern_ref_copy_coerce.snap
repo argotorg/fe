@@ -1,0 +1,7 @@
+---
+source: crates/uitest/tests/mir_check.rs
+assertion_line: 32
+expression: res
+input_file: fixtures/mir_check/match_pattern_ref_copy_coerce.fe
+---
+

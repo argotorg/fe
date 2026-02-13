@@ -1,7 +1,9 @@
 use parser::ast::{self};
 
 use super::FileLowerCtxt;
-use crate::core::hir_def::{Body, Partial, PathId, TraitRefId, TupleTypeId, TypeId, TypeKind};
+use crate::core::hir_def::{
+    Body, Partial, PathId, TraitRefId, TupleTypeId, TypeId, TypeKind, TypeMode,
+};
 
 impl<'db> TypeId<'db> {
     pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::Type) -> Self {
@@ -9,6 +11,17 @@ impl<'db> TypeId<'db> {
             ast::TypeKind::Ptr(ty) => {
                 let inner = Self::lower_ast_partial(ctxt, ty.inner());
                 TypeKind::Ptr(inner)
+            }
+
+            ast::TypeKind::Mode(ty) => {
+                let mode = match ty.mode() {
+                    Some(ast::TypeMode::Mut(_)) => TypeMode::Mut,
+                    Some(ast::TypeMode::Ref(_)) => TypeMode::Ref,
+                    Some(ast::TypeMode::Own(_)) => TypeMode::Own,
+                    None => TypeMode::Ref,
+                };
+                let inner = Self::lower_ast_partial(ctxt, ty.inner());
+                TypeKind::Mode(mode, inner)
             }
 
             ast::TypeKind::Path(ty) => {

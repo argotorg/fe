@@ -12,12 +12,12 @@ enum Opt {
     Some(u64),
 }
 
-fn bump() uses (mut foo: Foo) {
+fn bump() uses (foo: mut Foo) {
     foo.a = foo.a + 1
     foo.b = foo.b + 2
 }
 
-fn maybe_inc(opt: Opt) -> u64 {
+fn maybe_inc(opt: own Opt) -> u64 {
     // Mixed return + value-producing arms
     let x = match opt {
         Opt::None => { return 0 }
@@ -32,7 +32,7 @@ fn maybe_inc(opt: Opt) -> u64 {
     x + i
 }
 
-fn test_effects_and_aggregates() uses (mut sto: RawStorage, mut mem: RawMem) {
+fn test_effects_and_aggregates() uses (sto: mut RawStorage, mem: mut RawMem) {
     // Exercise `with` effects across domains and aggregate init
     let mp: MemPtr<Foo> = mem.mem_ptr(0x100)
     with (mp) { bump() }
@@ -58,7 +58,7 @@ fn get_balance(key: u256) -> u256
 }
 
 fn set_balance(key: u256, value: u256)
-    uses (mut balances: StorageMap<u256, u256, BALANCES_SALT>)
+    uses (balances: mut StorageMap<u256, u256, BALANCES_SALT>)
 {
     balances.set(key: key, value: value)
 }

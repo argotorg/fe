@@ -1,0 +1,11 @@
+// Reading a value in a terminating call argument while a `mut` loan is live should be rejected.
+
+extern {
+    fn trap(_: mut u256, _: u256) -> !
+}
+
+pub fn borrowck_terminating_call_read_under_mut() {
+    let mut x: u256 = 0
+    let p: mut u256 = mut x
+    trap(p, x)
+}

@@ -1,5 +1,7 @@
 pub use super::{
+    clone::Clone,
     default::Default,
+    marker::Copy,
     message::MsgVariant,
     num::IntDowncast,
     option::Option::{self, *},

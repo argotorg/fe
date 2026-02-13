@@ -31,7 +31,7 @@ struct S<T> {
     __priv: T
 }
 impl<T> S<T> {
-    fn new(_ t: T) -> Self {
+    fn new(_ t: own T) -> Self {
         Self {
             __priv: t
         }

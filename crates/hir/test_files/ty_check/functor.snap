@@ -1,13 +1,13 @@
 ---
-source: crates/hir-analysis/tests/ty_check.rs
+source: crates/hir/tests/ty_check.rs
 expression: res
 input_file: test_files/ty_check/functor.fe
 ---
 note: 
-   ┌─ functor.fe:22:37
+   ┌─ functor.fe:22:41
    │  
-22 │       fn call(self, _ t: i32) -> bool {
-   │ ╭─────────────────────────────────────^
+22 │       fn call(self, _ t: own i32) -> bool {
+   │ ╭─────────────────────────────────────────^
 23 │ │         return true
 24 │ │     }
    │ ╰─────^ bool
@@ -19,10 +19,10 @@ note:
    │                ^^^^ bool
 
 note: 
-   ┌─ functor.fe:28:65
+   ┌─ functor.fe:28:69
    │  
-28 │       fn map<T, U, F: Fn<T, U>>(self: Self<T>, _ f: F) -> Self<U> {
-   │ ╭─────────────────────────────────────────────────────────────────^
+28 │       fn map<T, U, F: Fn<T, U>>(self: own Self<T>, _ f: F) -> Self<U> {
+   │ ╭─────────────────────────────────────────────────────────────────────^
 29 │ │         match self {
 30 │ │             Result::Ok(t) => Result::Ok(f.call(t))
 31 │ │             Result::Err(e) => Result::Err(e)

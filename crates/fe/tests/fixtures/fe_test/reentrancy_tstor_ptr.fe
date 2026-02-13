@@ -17,7 +17,7 @@ msg BMsg {
     Get -> u256
 }
 
-pub contract A uses (ctx: Ctx, mut call: Call) {
+pub contract A uses (ctx: Ctx, call: mut Call) {
     recv AMsg {
         Start { b } -> u256 uses (ctx, mut call) {
             let self_addr = ctx.address()
@@ -50,7 +50,7 @@ pub contract B {
 
     recv BMsg {
         Enter { a } -> u256
-          uses (mut locked, protected_access_count, ctx: Ctx, mut call: Call)
+          uses (mut locked, protected_access_count, ctx: Ctx, call: mut Call)
         {
             // Non-reentrant entry sets the transient lock for the duration of this call.
             assert(!locked)
@@ -86,7 +86,7 @@ pub contract B {
 }
 
 #[test]
-fn test_reentrancy_guard() uses (mut cr: Create, mut ca: Call, mut evm: Evm) {
+fn test_reentrancy_guard() uses (cr: mut Create, ca: mut Call, evm: mut Evm) {
     let a = cr.create2<A>(value: 0, args: (), salt: 1)
     let b = cr.create2<B>(value: 0, args: (), salt: 2)
     assert(a.inner != 0)

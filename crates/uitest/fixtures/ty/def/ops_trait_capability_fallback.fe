@@ -1,0 +1,6 @@
+fn ops_trait_capability_fallback() -> u8 {
+    let mut x: u8 = 1
+    let h: mut u8 = mut x
+    h += 2
+    x
+}

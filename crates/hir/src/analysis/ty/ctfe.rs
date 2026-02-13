@@ -610,8 +610,12 @@ impl<'db> CtfeInterpreter<'db> {
     fn eval_const_ref(
         &mut self,
         cref: ConstRef<'db>,
-        expected_ty: TyId<'db>,
+        mut expected_ty: TyId<'db>,
     ) -> Result<ConstTyId<'db>, InvalidCause<'db>> {
+        if let Some((_, inner)) = expected_ty.as_capability(self.db) {
+            expected_ty = inner;
+        }
+
         let const_ty = match cref {
             ConstRef::Const(const_def) => {
                 let body = const_def
@@ -717,6 +721,8 @@ impl<'db> CtfeInterpreter<'db> {
                 };
                 Ok(lit_int(self.db, ty, out))
             }
+
+            UnOp::Mut | UnOp::Ref => Err(InvalidCause::ConstEvalUnsupported { body, expr }.into()),
         }
     }
 
@@ -1623,6 +1629,7 @@ fn int_layout<'db>(
     body: Body<'db>,
     expr: ExprId,
 ) -> Result<(usize, bool), InvalidCause<'db>> {
+    let ty = ty.as_capability(db).map(|(_, inner)| inner).unwrap_or(ty);
     let TyData::TyBase(TyBase::Prim(prim)) = ty.base_ty(db).data(db) else {
         return Err(InvalidCause::ConstEvalUnsupported { body, expr });
     };

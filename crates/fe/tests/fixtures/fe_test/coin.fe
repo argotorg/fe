@@ -78,7 +78,7 @@ pub contract Coin {
 }
 
 #[test]
-fn test_coin() uses (mut evm: Evm) {
+fn test_coin() uses (evm: mut Evm) {
     let contract_addr = evm.create2<Coin>(value: 0, args: (), salt: 0)
     assert(contract_addr.inner != 0)
 

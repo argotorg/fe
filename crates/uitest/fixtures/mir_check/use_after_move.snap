@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/mir_check.rs
+expression: res
+input_file: fixtures/mir_check/use_after_move.fe
+---
+error[8-0000]: type mismatch
+  ┌─ use_after_move.fe:6:5
+  │
+6 │     value.value
+  │     ^^^^^^^^^^^ expected `()`, but `u256` is given

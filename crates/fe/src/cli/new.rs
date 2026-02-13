@@ -169,7 +169,7 @@ pub contract Counter {
 // Tests can deploy and interact with contracts.
 // Run with: fe test
 #[test]
-fn test_counter() uses (mut evm: Evm) {
+fn test_counter() uses (evm: mut Evm) {
     // Deploy the contract
     let addr = evm.create2<Counter>(value: 0, args: (), salt: 0)
     assert(addr.inner != 0)

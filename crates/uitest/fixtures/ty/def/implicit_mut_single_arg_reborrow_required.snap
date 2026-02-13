@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty/def/implicit_mut_single_arg_reborrow_required.fe
+---
+error[8-0069]: explicit borrow required
+  ┌─ implicit_mut_single_arg_reborrow_required.fe:5:14
+  │
+5 │     take_mut(x)
+  │              ^ this argument must be explicitly borrowed as `mut`
+  │
+  = help: try `mut x`

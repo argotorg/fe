@@ -4,7 +4,7 @@ struct S {
     z: u8,
 }
 
-fn test_rest(s: S) -> u8 {
+fn test_rest(s: own S) -> u8 {
     match s {
         S { x: 10, .. } => 10
         S { y: 20, .. } => 20
