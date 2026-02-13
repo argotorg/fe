@@ -262,7 +262,7 @@ impl<'db> Callable<'db> {
                 let mut subst = AssocTySubst::new(inst);
                 expected = expected.fold_with(db, &mut subst);
             }
-            let expected = tc.normalize_ty(expected);
+            let mut expected = tc.normalize_ty(expected);
             let mode = func_params
                 .as_ref()
                 .and_then(|params| params.get(i).copied())
@@ -321,8 +321,7 @@ impl<'db> Callable<'db> {
                     CapabilityKind::View => unreachable!(),
                 };
             }
-            tc.equate_ty(actual, expected, given.expr_span.clone());
-            let expected = tc.normalize_ty(expected);
+            let mut has_targeted_borrow_diag = false;
 
             // Enforce explicit call-site borrow syntax for places.
             //
@@ -365,13 +364,20 @@ impl<'db> Callable<'db> {
                                     borrow_kind,
                                 ),
                             });
+                            has_targeted_borrow_diag = true;
                         }
                     } else {
                         tc.push_diag(BodyDiag::BorrowArgMustBePlace {
                             primary: given.expr_span.clone(),
                             kind: borrow_kind,
                         });
+                        has_targeted_borrow_diag = true;
                     }
+                }
+
+                if !has_targeted_borrow_diag {
+                    tc.equate_ty(actual, expected, given.expr_span.clone());
+                    expected = tc.normalize_ty(expected);
                 }
 
                 let mode = mode.unwrap_or_else(|| {
@@ -392,6 +398,8 @@ impl<'db> Callable<'db> {
                     }
                 }
             } else {
+                tc.equate_ty(actual, expected, given.expr_span.clone());
+                expected = tc.normalize_ty(expected);
                 // Variant constructors materialize their fields immediately (owned context).
                 tc.record_implicit_move_for_owned_expr(given.expr, expected);
             }
