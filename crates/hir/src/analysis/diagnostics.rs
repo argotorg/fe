@@ -31,6 +31,131 @@ use std::cmp::Ordering;
 
 use common::file::File;
 
+fn pretty_print_ty_for_mismatch<'db>(db: &'db dyn SpannedHirAnalysisDb, ty: TyId<'db>) -> String {
+    match ty.data(db) {
+        TyData::TyVar(_) | TyData::TyParam(_) => ty.pretty_print(db).to_string(),
+        TyData::AssocTy(assoc_ty) => {
+            let self_ty = pretty_print_ty_for_mismatch(db, assoc_ty.trait_.self_ty(db));
+            format!(
+                "<{} as {}>::{}",
+                self_ty,
+                assoc_ty.trait_.pretty_print(db, false),
+                assoc_ty.name.data(db)
+            )
+        }
+        TyData::QualifiedTy(trait_inst) => {
+            let self_ty = pretty_print_ty_for_mismatch(db, trait_inst.self_ty(db));
+            format!("<{} as {}>", self_ty, trait_inst.pretty_print(db, false))
+        }
+        TyData::TyApp(_, _) => pretty_print_ty_app_for_mismatch(db, ty),
+        TyData::TyBase(base) => {
+            use crate::analysis::ty::ty_def::TyBase;
+
+            match base {
+                TyBase::Adt(adt) => adt
+                    .scope(db)
+                    .pretty_path(db)
+                    .unwrap_or_else(|| ty.pretty_print(db).to_string()),
+                TyBase::Contract(contract) => contract
+                    .scope()
+                    .pretty_path(db)
+                    .unwrap_or_else(|| ty.pretty_print(db).to_string()),
+                TyBase::Prim(_) | TyBase::Func(_) => ty.pretty_print(db).to_string(),
+            }
+        }
+        TyData::ConstTy(_) => ty.pretty_print(db).to_string(),
+        TyData::Never => "!".to_string(),
+        TyData::Invalid(cause) => format!("invalid({})", cause.pretty_print(db)),
+    }
+}
+
+fn pretty_print_ty_app_for_mismatch<'db>(
+    db: &'db dyn SpannedHirAnalysisDb,
+    ty: TyId<'db>,
+) -> String {
+    use crate::analysis::ty::ty_def::{PrimTy, TyBase};
+
+    let (base, args) = ty.decompose_ty_app(db);
+    match base.data(db) {
+        TyData::TyBase(TyBase::Prim(PrimTy::BorrowMut)) => {
+            let Some(inner) = args.first().copied() else {
+                return "mut <missing>".to_string();
+            };
+            format!("mut {}", pretty_print_ty_for_mismatch(db, inner))
+        }
+        TyData::TyBase(TyBase::Prim(PrimTy::BorrowRef)) => {
+            let Some(inner) = args.first().copied() else {
+                return "ref <missing>".to_string();
+            };
+            format!("ref {}", pretty_print_ty_for_mismatch(db, inner))
+        }
+        TyData::TyBase(TyBase::Prim(PrimTy::View)) => {
+            let Some(inner) = args.first().copied() else {
+                return "view <missing>".to_string();
+            };
+            format!("view {}", pretty_print_ty_for_mismatch(db, inner))
+        }
+        TyData::TyBase(TyBase::Prim(PrimTy::Array)) => {
+            let Some(elem) = args.first().copied() else {
+                return "[<missing>; <missing>]".to_string();
+            };
+            let Some(len) = args.get(1).copied() else {
+                return format!("[{}; <missing>]", pretty_print_ty_for_mismatch(db, elem));
+            };
+            format!(
+                "[{}; {}]",
+                pretty_print_ty_for_mismatch(db, elem),
+                pretty_print_ty_for_mismatch(db, len)
+            )
+        }
+        TyData::TyBase(TyBase::Prim(PrimTy::Tuple(_))) => {
+            let mut rendered = String::from("(");
+            if let Some((first, rest)) = args.split_first() {
+                rendered.push_str(&pretty_print_ty_for_mismatch(db, *first));
+                for arg in rest {
+                    rendered.push_str(", ");
+                    rendered.push_str(&pretty_print_ty_for_mismatch(db, *arg));
+                }
+            }
+            rendered.push(')');
+            rendered
+        }
+        _ => {
+            let mut rendered = pretty_print_ty_for_mismatch(db, base);
+            if let Some((first, rest)) = args.split_first() {
+                rendered.push('<');
+                rendered.push_str(&pretty_print_ty_for_mismatch(db, *first));
+                for arg in rest {
+                    rendered.push_str(", ");
+                    rendered.push_str(&pretty_print_ty_for_mismatch(db, *arg));
+                }
+                rendered.push('>');
+            }
+            rendered
+        }
+    }
+}
+
+fn format_type_mismatch_message<'db>(
+    db: &'db dyn SpannedHirAnalysisDb,
+    expected: TyId<'db>,
+    given: TyId<'db>,
+) -> String {
+    let expected_plain = expected.pretty_print(db);
+    let given_plain = given.pretty_print(db);
+    if expected_plain != given_plain {
+        return format!("expected `{expected_plain}`, but `{given_plain}` is given");
+    }
+
+    let expected_detailed = pretty_print_ty_for_mismatch(db, expected);
+    let given_detailed = pretty_print_ty_for_mismatch(db, given);
+    if expected_detailed != given_detailed {
+        return format!("expected `{expected_detailed}`, but `{given_detailed}` is given");
+    }
+
+    format!("expected `{expected_plain}`, but `{given_plain}` is given")
+}
+
 fn primary_diag(
     severity: Severity,
     message: &str,
@@ -1625,11 +1750,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 message: "type mismatch".to_string(),
                 sub_diagnostics: vec![SubDiagnostic {
                     style: LabelStyle::Primary,
-                    message: format!(
-                        "expected `{}`, but `{}` is given",
-                        expected.pretty_print(db),
-                        given.pretty_print(db),
-                    ),
+                    message: format_type_mismatch_message(db, *expected, *given),
                     span: span.resolve(db),
                 }],
                 error_code,

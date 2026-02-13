@@ -8,7 +8,7 @@ error[8-0000]: type mismatch
   ┌─ effect_resolution.fe:5:17
   │
 5 │         owner = foo.caller()
-  │                 ^^^^^^^^^^^^ expected `Address`, but `Address` is given
+  │                 ^^^^^^^^^^^^ expected `effect_resolution::Address`, but `lib::evm::effects::Address` is given
 
 error[8-0012]: undefined variable
    ┌─ effect_resolution.fe:39:5
