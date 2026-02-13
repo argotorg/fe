@@ -335,3 +335,30 @@ pub fn write_report_meta(root: &Utf8PathBuf, kind: &str, suite: Option<&str>) {
         write_best_effort(&meta.join("rustc.txt"), txt);
     }
 }
+
+pub fn is_verifier_error_text(text: &str) -> bool {
+    let normalized = text.to_ascii_lowercase();
+    normalized.contains("verifierfailed")
+        || normalized.contains("verificationreport")
+        || normalized.contains("verifier failed")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_verifier_error_text;
+
+    #[test]
+    fn detects_verifier_error_markers() {
+        assert!(is_verifier_error_text(
+            "internal error: VerifierFailed { report: VerificationReport { ... } }"
+        ));
+        assert!(is_verifier_error_text(
+            "backend verifier failed while compiling module"
+        ));
+    }
+
+    #[test]
+    fn ignores_non_verifier_errors() {
+        assert!(!is_verifier_error_text("failed to lower MIR"));
+    }
+}

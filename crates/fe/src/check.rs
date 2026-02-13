@@ -17,7 +17,8 @@ use url::Url;
 
 use crate::report::{
     copy_input_into_report, create_dir_all_utf8, create_report_staging_dir, enable_panic_report,
-    normalize_report_out_path, panic_payload_to_string, tar_gz_dir, write_report_meta,
+    is_verifier_error_text, normalize_report_out_path, panic_payload_to_string, tar_gz_dir,
+    write_report_meta,
 };
 
 #[derive(Debug, Clone)]
@@ -63,6 +64,13 @@ fn write_report_file(report: &ReportContext, rel: &str, contents: &str) {
         let _ = std::fs::create_dir_all(parent);
     }
     let _ = std::fs::write(path, contents);
+}
+
+fn write_codegen_report_error(report: &ReportContext, contents: &str) {
+    write_report_file(report, "errors/codegen_error.txt", contents);
+    if is_verifier_error_text(contents) {
+        write_report_file(report, "errors/verifier_error.txt", contents);
+    }
 }
 
 pub fn check(
@@ -568,7 +576,7 @@ fn check_ingot_and_dependencies(
             emit_codegen(db, root_mod, backend);
         }
         if let Some(report) = report {
-            write_check_artifacts(db, root_mod, backend_kind, backend, report);
+            has_errors |= write_check_artifacts(db, root_mod, backend_kind, backend, report);
         }
     }
 
@@ -675,8 +683,10 @@ fn check_single_file(
         if emit_yul_min {
             emit_codegen(db, top_mod, backend);
         }
-        if let Some(report) = report {
-            write_check_artifacts(db, top_mod, backend_kind, backend, report);
+        if let Some(report) = report
+            && write_check_artifacts(db, top_mod, backend_kind, backend, report)
+        {
+            return true;
         }
     } else {
         eprintln!("❌ Error: Could not process file {file_path}");
@@ -799,7 +809,7 @@ fn check_ingot_inner(
             emit_codegen(db, root_mod, backend);
         }
         if let Some(report) = report {
-            write_check_artifacts(db, root_mod, backend_kind, backend, report);
+            has_errors |= write_check_artifacts(db, root_mod, backend_kind, backend, report);
         }
     }
 
@@ -923,7 +933,7 @@ fn write_check_artifacts(
     backend_kind: BackendKind,
     backend: &dyn Backend,
     report: &ReportContext,
-) {
+) -> bool {
     match lower_module(db, top_mod) {
         Ok(mir) => {
             write_report_file(
@@ -975,6 +985,7 @@ fn write_check_artifacts(
         Ok(Ok(output)) => match output {
             codegen::BackendOutput::Yul(yul) => {
                 write_report_file(report, "artifacts/backend_output.yul", &yul);
+                false
             }
             codegen::BackendOutput::Bytecode(bytes) => {
                 write_report_file(
@@ -987,10 +998,13 @@ fn write_check_artifacts(
                     "artifacts/backend_bytecode_len.txt",
                     &format!("{}\n", bytes.len()),
                 );
+                false
             }
         },
         Ok(Err(err)) => {
-            write_report_file(report, "errors/codegen_error.txt", &format!("{err}"));
+            let err = format!("{err}");
+            write_codegen_report_error(report, &err);
+            true
         }
         Err(payload) => {
             write_report_file(
@@ -1001,6 +1015,7 @@ fn write_check_artifacts(
                     panic_payload_to_string(payload.as_ref())
                 ),
             );
+            true
         }
     }
 }

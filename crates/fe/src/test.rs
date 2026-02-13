@@ -5,8 +5,9 @@
 
 use crate::report::{
     PanicReportGuard, ReportStaging, copy_input_into_report, create_dir_all_utf8,
-    create_report_staging_root, enable_panic_report, normalize_report_out_path,
-    panic_payload_to_string, sanitize_filename, tar_gz_dir, write_report_meta,
+    create_report_staging_root, enable_panic_report, is_verifier_error_text,
+    normalize_report_out_path, panic_payload_to_string, sanitize_filename, tar_gz_dir,
+    write_report_meta,
 };
 use camino::Utf8PathBuf;
 use codegen::{
@@ -56,6 +57,13 @@ fn write_report_error(report: &ReportContext, filename: &str, contents: &str) {
     let dir = report.root_dir.join("errors");
     let _ = create_dir_all_utf8(&dir);
     let _ = std::fs::write(dir.join(filename), contents);
+}
+
+fn write_codegen_report_error(report: &ReportContext, contents: &str) {
+    write_report_error(report, "codegen_error.txt", contents);
+    if is_verifier_error_text(contents) {
+        write_report_error(report, "verifier_error.txt", contents);
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -554,7 +562,7 @@ fn emit_with_catch_unwind<E: std::fmt::Display>(
             let msg = format!("Failed to emit test {backend_label}: {err}");
             eprintln!("{msg}");
             if let Some(report) = report {
-                write_report_error(report, "codegen_error.txt", &msg);
+                write_codegen_report_error(report, &msg);
             }
             Err(suite_error_result(suite, "codegen", msg))
         }
