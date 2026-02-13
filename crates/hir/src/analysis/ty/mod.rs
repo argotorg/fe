@@ -91,8 +91,6 @@ pub fn ty_is_copy<'db>(
     let Some(copy_trait) = corelib::resolve_core_trait(db, scope, &["marker", "Copy"]) else {
         return false;
     };
-    let ingot = scope.top_mod(db).ingot(db);
-
     let inst = trait_def::TraitInstId::new_simple(db, copy_trait, vec![ty]);
     let inst = inst.normalize(db, scope, assumptions);
     if assumptions
@@ -103,8 +101,9 @@ pub fn ty_is_copy<'db>(
         return true;
     }
     let canonical_inst = Canonicalized::new(db, inst);
+    let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
     matches!(
-        is_goal_satisfiable(db, ingot, canonical_inst.value, assumptions),
+        is_goal_satisfiable(db, solve_cx, canonical_inst.value),
         GoalSatisfiability::Satisfied(_)
     )
 }

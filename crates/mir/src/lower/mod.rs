@@ -124,7 +124,7 @@ pub struct MirDiagnosticsOutput {
     pub internal_errors: Vec<MirLowerError>,
 }
 
- fn collect_funcs_to_lower<'db>(
+fn collect_funcs_to_lower<'db>(
     db: &'db dyn SpannedHirAnalysisDb,
     top_mod: TopLevelMod<'db>,
 ) -> Vec<Func<'db>> {

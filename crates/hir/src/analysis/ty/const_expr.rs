@@ -134,8 +134,14 @@ impl<'db> ConstExprId<'db> {
                     UnOp::Minus => "-",
                     UnOp::Not => "!",
                     UnOp::BitNot => "~",
+                    UnOp::Mut => "mut",
+                    UnOp::Ref => "ref",
                 };
-                format!("({op_str}{})", expr.pretty_print(db))
+                if matches!(op, UnOp::Mut | UnOp::Ref) {
+                    format!("({op_str} {})", expr.pretty_print(db))
+                } else {
+                    format!("({op_str}{})", expr.pretty_print(db))
+                }
             }
             ConstExpr::Cast { expr, to } => {
                 format!("({} as {})", expr.pretty_print(db), to.pretty_print(db))

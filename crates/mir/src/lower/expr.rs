@@ -5,9 +5,8 @@ use hir::{
     analysis::ty::{
         const_eval::{ConstValue, eval_const_expr},
         ty_check::{Callable, ForLoopSeq, ResolvedEffectArg},
+        ty_def::CapabilityKind,
     },
-    ty_check::{Callable, ForLoopSeq, ResolvedEffectArg},
-    analysis::ty::ty_def::CapabilityKind,
     projection::{IndexSource, Projection},
 };
 
