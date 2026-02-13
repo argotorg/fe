@@ -1,5 +1,5 @@
 use hir::analysis::HirAnalysisDb;
-use hir::analysis::ty::ty_def::TyId;
+use hir::analysis::ty::ty_def::{CapabilityKind, TyId};
 use hir::hir_def::EnumVariant;
 use hir::projection::Projection;
 
@@ -45,6 +45,30 @@ fn apply_transparent_field0_chain<'db>(
         base_ty = repr::transparent_newtype_field_ty(db, base_ty)?;
     }
     Some(base_ty)
+}
+
+fn is_scalar_ref_inner_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    ty: TyId<'db>,
+) -> bool {
+    matches!(
+        repr::repr_kind_for_ty(db, core, ty),
+        repr::ReprKind::Word | repr::ReprKind::Zst | repr::ReprKind::Ptr(_)
+    )
+}
+
+fn is_scalar_ref_word_capability_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    ty: TyId<'db>,
+    desired: ValueRepr,
+) -> bool {
+    ty.as_capability(db).is_some_and(|(kind, inner)| {
+        matches!(kind, CapabilityKind::Ref)
+            && desired.address_space().is_none()
+            && is_scalar_ref_inner_ty(db, core, inner)
+    })
 }
 
 fn repr_for_plain_ty<'db>(
@@ -812,6 +836,9 @@ pub(crate) fn lower_capability_to_repr<'db>(
         let (ValueOrigin::PlaceRef(place) | ValueOrigin::MoveOut { place }) = &value.origin else {
             continue;
         };
+        if is_scalar_ref_word_capability_ty(db, core, value.ty, desired_repr[idx]) {
+            continue;
+        }
         let Some(local) = resolve_place_root_local(&body.values, place.base) else {
             continue;
         };
@@ -959,9 +986,19 @@ pub(crate) fn lower_capability_to_repr<'db>(
                             value: source_value,
                         }
                     } else {
-                        let spill_base = spill_addr_value_for_owner[local.index()].expect(
-                            "missing spill slot for PlaceRoot-backed PlaceRef value (repr pass bug)",
-                        );
+                        let local_space = body.local(local).address_space;
+                        let spill_base =
+                            spill_addr_value_for_owner[local.index()].unwrap_or_else(|| {
+                                alloc_value(
+                                    &mut body.values,
+                                    ValueData {
+                                        ty: local_ty,
+                                        origin: ValueOrigin::Local(local),
+                                        source: SourceInfoId::SYNTHETIC,
+                                        repr: repr_for_plain_ty(db, core, local_ty, local_space),
+                                    },
+                                )
+                            });
                         place.base = spill_base;
                         ValueOrigin::PlaceRef(place)
                     }
@@ -1004,9 +1041,19 @@ pub(crate) fn lower_capability_to_repr<'db>(
                             value: source_value,
                         }
                     } else {
-                        let spill_base = spill_addr_value_for_owner[local.index()].expect(
-                            "missing spill slot for PlaceRoot-backed MoveOut value (repr pass bug)",
-                        );
+                        let local_space = body.local(local).address_space;
+                        let spill_base =
+                            spill_addr_value_for_owner[local.index()].unwrap_or_else(|| {
+                                alloc_value(
+                                    &mut body.values,
+                                    ValueData {
+                                        ty: local_ty,
+                                        origin: ValueOrigin::Local(local),
+                                        source: SourceInfoId::SYNTHETIC,
+                                        repr: repr_for_plain_ty(db, core, local_ty, local_space),
+                                    },
+                                )
+                            });
                         place.base = spill_base;
                         ValueOrigin::MoveOut { place }
                     }

@@ -4,6 +4,7 @@
 use hir::{
     analysis::ty::const_eval::{ConstValue, try_eval_const_expr},
     analysis::ty::ty_check::{Callable, ForLoopSeq, ResolvedEffectArg},
+    analysis::ty::ty_def::CapabilityKind,
     projection::{IndexSource, Projection},
 };
 
@@ -382,12 +383,24 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         )
     }
 
+    fn ty_is_scalar_ref_capability(&self, ty: TyId<'db>) -> bool {
+        ty.as_capability(self.db).is_some_and(|(kind, inner)| {
+            matches!(kind, CapabilityKind::Ref)
+                && matches!(
+                    crate::repr::repr_kind_for_ty(self.db, &self.core, inner),
+                    crate::repr::ReprKind::Word
+                        | crate::repr::ReprKind::Zst
+                        | crate::repr::ReprKind::Ptr(_)
+                )
+        })
+    }
+
     pub(super) fn place_from_capability_value(
         &mut self,
         value: ValueId,
         ty: TyId<'db>,
     ) -> Option<Place<'db>> {
-        let (_, inner_ty) = ty.as_capability(self.db)?;
+        let (kind, inner_ty) = ty.as_capability(self.db)?;
         if self.capability_value_is_address_backed(value) {
             let base_repr = match self.builder.body.stage {
                 crate::ir::MirStage::Capability => ValueRepr::Word,
@@ -420,6 +433,10 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         {
             let base = self.alloc_value(inner_ty, ValueOrigin::PlaceRoot(*local), ValueRepr::Word);
             return Some(Place::new(base, MirProjectionPath::new()));
+        }
+
+        if matches!(kind, CapabilityKind::Ref) && self.ty_is_scalar_ref_capability(ty) {
+            return None;
         }
 
         // Capability-typed rvalues can appear as immediates (e.g. integer literals coerced to
