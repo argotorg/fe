@@ -268,29 +268,26 @@ impl<'db> Callable<'db> {
                 .and_then(|params| params.get(i).copied())
                 .map(|param| param.mode(db));
             let given_ty = tc.normalize_ty(given.expr_prop.ty);
-            let own_view_inner = if mode == Some(FuncParamMode::Own)
-                && let Some((CapabilityKind::View, inner)) = given_ty.as_capability(db)
+            let own_capability_inner = if mode == Some(FuncParamMode::Own)
+                && !expected.is_ty_var(db)
+                && let Some((kind, inner)) = given_ty.as_capability(db)
                 && tc.ty_unifies(inner, expected)
                 && !tc.ty_is_copy(inner)
-                && !tc.expr_can_move_from_place(given.expr)
             {
-                Some(inner)
+                Some((kind, inner))
             } else {
                 None
             };
             let own_tyvar = mode == Some(FuncParamMode::Own) && expected.is_ty_var(db);
-            let mut actual = if let Some(inner) = own_view_inner {
+            let mut actual = if let Some((kind, inner)) = own_capability_inner {
                 tc.push_diag(BodyDiag::OwnArgMustBeOwnedMove {
                     primary: given.expr_span.clone(),
-                    kind: CapabilityKind::View,
+                    kind,
                     given: inner,
                 });
                 TyId::invalid(db, InvalidCause::Other)
             } else if own_tyvar && let Some((kind, inner)) = given_ty.as_capability(db) {
-                if tc.ty_is_copy(inner)
-                    || (matches!(kind, CapabilityKind::View)
-                        && tc.expr_can_move_from_place(given.expr))
-                {
+                if tc.ty_is_copy(inner) {
                     inner
                 } else {
                     tc.push_diag(BodyDiag::OwnArgMustBeOwnedMove {

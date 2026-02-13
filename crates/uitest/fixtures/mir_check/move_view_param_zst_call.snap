@@ -4,14 +4,18 @@ assertion_line: 32
 expression: res
 input_file: fixtures/mir_check/move_view_param_zst_call.fe
 ---
-error[10-0002]: move conflict in `fn example`
+error[8-0072]: `own` argument requires an owned movable value
   ┌─ move_view_param_zst_call.fe:8:16
   │
 8 │     make_pair2(a, b)
-  │                ^  ^ cannot move out of a view parameter
-  │                │   
-  │                cannot move out of a view parameter
+  │                ^ this expression has `view Foo` capability and cannot be moved as owned here
   │
-  = help: consider changing `a: Foo` to `a: own Foo`
-  = help: consider changing `b: Foo` to `b: own Foo`
-  = help: if you only need to destructure/inspect `a`, use explicit borrowing (`match ref a { ... }` or `let ... = ref a`)
+  = pass an owned place value, or change the callee parameter mode to borrow/view
+
+error[8-0072]: `own` argument requires an owned movable value
+  ┌─ move_view_param_zst_call.fe:8:19
+  │
+8 │     make_pair2(a, b)
+  │                   ^ this expression has `view Foo` capability and cannot be moved as owned here
+  │
+  = pass an owned place value, or change the callee parameter mode to borrow/view
