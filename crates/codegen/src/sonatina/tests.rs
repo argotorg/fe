@@ -17,6 +17,7 @@ use sonatina_ir::{
     object::{Directive, Embed, EmbedSymbol, Object, ObjectName, Section, SectionName, SectionRef},
 };
 use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
+use sonatina_verifier::{VerificationLevel, VerifierConfig};
 
 use crate::{ExpectedRevert, TestMetadata, TestModuleOutput};
 
@@ -694,7 +695,8 @@ fn compile_runtime_section(module: &Module, object_name: &str) -> Result<Vec<u8>
     let isa = Evm::new(triple);
     let backend = EvmBackend::new(isa);
 
-    let opts: CompileOptions<_> = CompileOptions::default();
+    let mut opts: CompileOptions<_> = CompileOptions::default();
+    opts.verifier_cfg = VerifierConfig::for_level(VerificationLevel::Full);
     let artifact = compile_object(module, &backend, object_name, &opts).map_err(|errors| {
         let msg = errors
             .iter()
