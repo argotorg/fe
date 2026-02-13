@@ -1,4 +1,5 @@
 use crate::analysis::HirAnalysisDb;
+use crate::analysis::ty::adt_def::AdtRef;
 use crate::analysis::ty::diagnostics::{BodyDiag, FuncBodyDiag};
 use crate::analysis::ty::ty_check::TypedBody;
 use crate::hir_def::{Body, CallableDef, Expr, ExprId, Func, Partial, Pat, Stmt, StmtId};
@@ -72,7 +73,7 @@ impl<'db> ConstFnChecker<'db, '_> {
 
         match stmt_data {
             Stmt::Let(pat, _ty, init) => {
-                self.check_pat_simple(*pat);
+                self.check_let_pat(*pat);
                 if let Some(init) = init {
                     self.check_expr(*init);
                 }
@@ -89,19 +90,39 @@ impl<'db> ConstFnChecker<'db, '_> {
         }
     }
 
-    fn check_pat_simple(&mut self, pat: crate::hir_def::PatId) {
+    fn check_let_pat(&mut self, pat: crate::hir_def::PatId) {
         let Partial::Present(pat_data) = pat.data(self.db, self.body) else {
             return;
         };
 
         match pat_data {
-            Pat::WildCard => {}
+            Pat::WildCard | Pat::Rest => {}
             Pat::Path(_, is_mut) => {
                 if *is_mut {
                     self.push(BodyDiag::ConstFnMutableBindingNotAllowed(
                         pat.span(self.body).into(),
                     ));
                 }
+
+                if self.typed_body.pat_binding(pat).is_none() {
+                    self.push(BodyDiag::ConstFnAggregateNotAllowed(
+                        pat.span(self.body).into(),
+                    ));
+                }
+            }
+            Pat::Tuple(elems) => elems.iter().for_each(|elem| self.check_let_pat(*elem)),
+            Pat::Record(_, fields) => {
+                let ty = self.typed_body.pat_ty(self.db, pat);
+                if !matches!(ty.adt_ref(self.db), Some(AdtRef::Struct(_))) {
+                    self.push(BodyDiag::ConstFnAggregateNotAllowed(
+                        pat.span(self.body).into(),
+                    ));
+                    return;
+                }
+
+                fields
+                    .iter()
+                    .for_each(|field| self.check_let_pat(field.pat));
             }
             _ => self.push(BodyDiag::ConstFnAggregateNotAllowed(
                 pat.span(self.body).into(),
@@ -155,11 +176,11 @@ impl<'db> ConstFnChecker<'db, '_> {
             Expr::Match(scrutinee, arms) => {
                 self.check_expr(*scrutinee);
                 if let Some(arms) = arms.clone().to_opt() {
-                    arms.iter().for_each(|arm| self.check_expr(arm.body));
+                    arms.iter().for_each(|arm| {
+                        self.check_match_pat(arm.pat);
+                        self.check_expr(arm.body);
+                    });
                 }
-                self.push(BodyDiag::ConstFnMatchNotAllowed(
-                    expr.span(self.body).into(),
-                ));
             }
             Expr::Assign(lhs, rhs) | Expr::AugAssign(lhs, rhs, _) => {
                 self.check_expr(*lhs);
@@ -178,6 +199,56 @@ impl<'db> ConstFnChecker<'db, '_> {
             Expr::Tuple(elems) | Expr::Array(elems) => {
                 elems.iter().for_each(|elem| self.check_expr(*elem));
             }
+        }
+    }
+
+    fn check_match_pat(&mut self, pat: crate::hir_def::PatId) {
+        let Partial::Present(pat_data) = pat.data(self.db, self.body) else {
+            return;
+        };
+
+        match pat_data {
+            Pat::WildCard | Pat::Rest => {}
+            Pat::Lit(Partial::Present(
+                crate::hir_def::LitKind::Int(_)
+                | crate::hir_def::LitKind::Bool(_)
+                | crate::hir_def::LitKind::String(_),
+            )) => {}
+            Pat::Lit(Partial::Absent) => {}
+            Pat::Path(_, is_mut) => {
+                if *is_mut {
+                    self.push(BodyDiag::ConstFnMutableBindingNotAllowed(
+                        pat.span(self.body).into(),
+                    ));
+                }
+
+                if self.typed_body.pat_binding(pat).is_none() {
+                    self.push(BodyDiag::ConstFnAggregateNotAllowed(
+                        pat.span(self.body).into(),
+                    ));
+                }
+            }
+            Pat::Tuple(elems) => elems.iter().for_each(|elem| self.check_match_pat(*elem)),
+            Pat::Record(_, fields) => {
+                let ty = self.typed_body.pat_ty(self.db, pat);
+                if !matches!(ty.adt_ref(self.db), Some(AdtRef::Struct(_))) {
+                    self.push(BodyDiag::ConstFnAggregateNotAllowed(
+                        pat.span(self.body).into(),
+                    ));
+                    return;
+                }
+
+                fields
+                    .iter()
+                    .for_each(|field| self.check_match_pat(field.pat));
+            }
+            Pat::Or(lhs, rhs) => {
+                self.check_match_pat(*lhs);
+                self.check_match_pat(*rhs);
+            }
+            _ => self.push(BodyDiag::ConstFnAggregateNotAllowed(
+                pat.span(self.body).into(),
+            )),
         }
     }
 }

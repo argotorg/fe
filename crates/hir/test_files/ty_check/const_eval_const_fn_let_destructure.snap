@@ -1,0 +1,145 @@
+---
+source: crates/hir/tests/ty_check.rs
+assertion_line: 40
+expression: res
+input_file: test_files/ty_check/const_eval_const_fn_let_destructure.fe
+---
+note: 
+  ┌─ const_eval_const_fn_let_destructure.fe:6:51
+  │  
+6 │   const fn sum_tuple(pair: (usize, usize)) -> usize {
+  │ ╭───────────────────────────────────────────────────^
+7 │ │     let (a, b) = pair
+8 │ │     a + b
+9 │ │ }
+  │ ╰─^ usize
+
+note: 
+  ┌─ const_eval_const_fn_let_destructure.fe:7:9
+  │
+7 │     let (a, b) = pair
+  │         ^^^^^^ (usize, usize)
+
+note: 
+  ┌─ const_eval_const_fn_let_destructure.fe:7:10
+  │
+7 │     let (a, b) = pair
+  │          ^ usize
+
+note: 
+  ┌─ const_eval_const_fn_let_destructure.fe:7:13
+  │
+7 │     let (a, b) = pair
+  │             ^ usize
+
+note: 
+  ┌─ const_eval_const_fn_let_destructure.fe:7:18
+  │
+7 │     let (a, b) = pair
+  │                  ^^^^ (usize, usize)
+
+note: 
+  ┌─ const_eval_const_fn_let_destructure.fe:8:5
+  │
+8 │     a + b
+  │     ^ usize
+
+note: 
+  ┌─ const_eval_const_fn_let_destructure.fe:8:5
+  │
+8 │     a + b
+  │     ^^^^^ usize
+
+note: 
+  ┌─ const_eval_const_fn_let_destructure.fe:8:9
+  │
+8 │     a + b
+  │         ^ usize
+
+note: 
+   ┌─ const_eval_const_fn_let_destructure.fe:11:42
+   │  
+11 │   const fn sum_record(pair: Pair) -> usize {
+   │ ╭──────────────────────────────────────────^
+12 │ │     let Pair { a, b } = pair
+13 │ │     a + b
+14 │ │ }
+   │ ╰─^ usize
+
+note: 
+   ┌─ const_eval_const_fn_let_destructure.fe:12:9
+   │
+12 │     let Pair { a, b } = pair
+   │         ^^^^^^^^^^^^^ Pair
+
+note: 
+   ┌─ const_eval_const_fn_let_destructure.fe:12:16
+   │
+12 │     let Pair { a, b } = pair
+   │                ^ usize
+
+note: 
+   ┌─ const_eval_const_fn_let_destructure.fe:12:19
+   │
+12 │     let Pair { a, b } = pair
+   │                   ^ usize
+
+note: 
+   ┌─ const_eval_const_fn_let_destructure.fe:12:25
+   │
+12 │     let Pair { a, b } = pair
+   │                         ^^^^ Pair
+
+note: 
+   ┌─ const_eval_const_fn_let_destructure.fe:13:5
+   │
+13 │     a + b
+   │     ^ usize
+
+note: 
+   ┌─ const_eval_const_fn_let_destructure.fe:13:5
+   │
+13 │     a + b
+   │     ^^^^^ usize
+
+note: 
+   ┌─ const_eval_const_fn_let_destructure.fe:13:9
+   │
+13 │     a + b
+   │         ^ usize
+
+note: 
+   ┌─ const_eval_const_fn_let_destructure.fe:18:8
+   │  
+18 │   fn f() {
+   │ ╭────────^
+19 │ │     let a: Foo<sum_tuple((5, 6))>
+20 │ │     let b: Foo<sum_record(Pair { a: 5, b: 6 })>
+21 │ │     let c: Foo<{ sum_tuple((5, 6)) }>
+22 │ │     let d: Foo<{ sum_record(Pair { a: 5, b: 6 }) }>
+23 │ │ }
+   │ ╰─^ ()
+
+note: 
+   ┌─ const_eval_const_fn_let_destructure.fe:19:9
+   │
+19 │     let a: Foo<sum_tuple((5, 6))>
+   │         ^ Foo<11>
+
+note: 
+   ┌─ const_eval_const_fn_let_destructure.fe:20:9
+   │
+20 │     let b: Foo<sum_record(Pair { a: 5, b: 6 })>
+   │         ^ Foo<11>
+
+note: 
+   ┌─ const_eval_const_fn_let_destructure.fe:21:9
+   │
+21 │     let c: Foo<{ sum_tuple((5, 6)) }>
+   │         ^ Foo<11>
+
+note: 
+   ┌─ const_eval_const_fn_let_destructure.fe:22:9
+   │
+22 │     let d: Foo<{ sum_record(Pair { a: 5, b: 6 }) }>
+   │         ^ Foo<11>

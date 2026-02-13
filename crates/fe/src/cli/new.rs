@@ -13,7 +13,6 @@ pub fn run(
     workspace: bool,
     name: Option<&str>,
     version: Option<&str>,
-    no_workspace_update: bool,
 ) -> Result<(), String> {
     let target = absolute_target(path)?;
 
@@ -28,31 +27,22 @@ pub fn run(
         return Ok(());
     }
 
-    let workspace_root = if no_workspace_update {
-        None
-    } else {
-        let mut start_dir = target.parent().unwrap_or(target.as_path());
-        while !start_dir.exists() {
-            let Some(parent) = start_dir.parent() else {
-                break;
-            };
-            start_dir = parent;
-        }
-        find_workspace_root(start_dir)?
-    };
+    let mut start_dir = target.parent().unwrap_or(target.as_path());
+    while !start_dir.exists() {
+        let Some(parent) = start_dir.parent() else {
+            break;
+        };
+        start_dir = parent;
+    }
+    let workspace_root = find_workspace_root(start_dir)?;
 
     create_ingot_layout(&target, name, version)?;
 
     if let Some(root) = workspace_root {
-        let updated = update_workspace_members(&root, &target)?;
-        if updated {
-            println!(
-                "Added workspace member {} to {}",
-                target
-                    .strip_prefix(&root)
-                    .map_err(|_| "Ingot path is not inside workspace".to_string())?,
-                root.join("fe.toml")
-            );
+        match workspace_member_suggestion(&root, &target) {
+            Ok(Some(message)) => println!("{message}"),
+            Ok(None) => {}
+            Err(err) => eprintln!("⚠️  failed to check workspace members: {err}"),
         }
     }
 
@@ -130,7 +120,88 @@ version = "{version}"
     )?;
 
     let src_lib = src_dir.join("lib.fe");
-    write_if_absent(&src_lib, "pub fn main() {\n    // add your code here\n}\n")?;
+    write_if_absent(
+        &src_lib,
+        r#"// A simple Counter contract to get you started.
+// Run `fe test` to see it in action!
+
+use std::abi::sol
+use std::evm::{Evm, Call}
+use std::evm::effects::assert
+
+// Messages define your contract's public interface.
+// Each variant becomes a callable function with a unique selector.
+// The `sol()` const fn computes the standard Solidity selector at compile time.
+msg CounterMsg {
+    #[selector = sol("increment()")]
+    Increment,
+    #[selector = sol("get()")]
+    Get -> u256,
+}
+
+// Storage is defined as a regular struct.
+// Its fields are persisted on-chain between calls.
+struct CounterStore {
+    value: u256,
+}
+
+// The contract itself: declares its storage and handles messages.
+pub contract Counter {
+    mut store: CounterStore
+
+    // The constructor runs once when the contract is deployed.
+    init() uses (mut store) {
+        store.value = 0
+    }
+
+    // The recv block routes incoming messages to handlers.
+    recv CounterMsg {
+        Increment uses (mut store) {
+            store.value = store.value + 1
+        }
+
+        Get -> u256 uses (store) {
+            store.value
+        }
+    }
+}
+
+// Tests can deploy and interact with contracts.
+// Run with: fe test
+#[test]
+fn test_counter() uses (mut evm: Evm) {
+    // Deploy the contract
+    let addr = evm.create2<Counter>(value: 0, args: (), salt: 0)
+    assert(addr.inner != 0)
+
+    // Initially the counter is 0
+    let val: u256 = evm.call(
+        addr: addr,
+        gas: 100000,
+        value: 0,
+        message: CounterMsg::Get {}
+    )
+    assert(val == 0)
+
+    // Increment the counter
+    evm.call(
+        addr: addr,
+        gas: 100000,
+        value: 0,
+        message: CounterMsg::Increment {}
+    )
+
+    // Now it should be 1
+    let val: u256 = evm.call(
+        addr: addr,
+        gas: 100000,
+        value: 0,
+        message: CounterMsg::Get {}
+    )
+    assert(val == 1)
+}
+"#,
+    )?;
 
     println!("Created ingot at {base}");
     Ok(())
@@ -204,10 +275,10 @@ fn find_workspace_root(start: &Utf8Path) -> Result<Option<Utf8PathBuf>, String> 
     Ok(Some(path))
 }
 
-fn update_workspace_members(
+fn workspace_member_suggestion(
     workspace_root: &Utf8PathBuf,
     member_dir: &Utf8PathBuf,
-) -> Result<bool, String> {
+) -> Result<Option<String>, String> {
     let config_path = workspace_root.join("fe.toml");
     let config_str = fs::read_to_string(config_path.as_std_path())
         .map_err(|err| format!("Failed to read {}: {err}", config_path))?;
@@ -215,7 +286,7 @@ fn update_workspace_members(
         .map_err(|err| format!("Failed to parse {}: {err}", config_path))?;
     let workspace = match config_file {
         Config::Workspace(workspace_config) => workspace_config.workspace,
-        Config::Ingot(_) => return Err(format!("{} is not a workspace config", config_path)),
+        Config::Ingot(_) => return Ok(None),
     };
 
     let relative_member = member_dir
@@ -223,7 +294,7 @@ fn update_workspace_members(
         .map_err(|_| "Ingot path is not inside workspace".to_string())?
         .to_path_buf();
     if relative_member.as_str().is_empty() {
-        return Ok(false);
+        return Ok(None);
     }
 
     let base_url = Url::from_directory_path(workspace_root.as_std_path())
@@ -232,14 +303,14 @@ fn update_workspace_members(
         expand_workspace_members(&workspace, &base_url, WorkspaceMemberSelection::All)
         && expanded.iter().any(|member| member.path == relative_member)
     {
-        return Ok(false);
+        return Ok(None);
     }
 
-    let mut value: Value = config_str
+    let value: Value = config_str
         .parse()
         .map_err(|err| format!("Failed to parse {}: {err}", config_path))?;
     let root_table = value
-        .as_table_mut()
+        .as_table()
         .ok_or_else(|| format!("{} is not a workspace config", config_path))?;
     let has_workspace_table = root_table
         .get("workspace")
@@ -247,45 +318,37 @@ fn update_workspace_members(
         .is_some();
     let workspace_table = if has_workspace_table {
         root_table
-            .get_mut("workspace")
-            .and_then(|value| value.as_table_mut())
+            .get("workspace")
+            .and_then(|value| value.as_table())
             .ok_or_else(|| "workspace is not a table".to_string())?
     } else {
         root_table
     };
 
-    let members = workspace_members_array(workspace_table)?;
-    if !members
-        .iter()
-        .any(|value| value.as_str() == Some(relative_member.as_str()))
-    {
-        members.push(Value::String(relative_member.to_string()));
-    } else {
-        return Ok(false);
-    }
-
-    let updated = toml::to_string_pretty(&value)
-        .map_err(|err| format!("Failed to serialize {}: {err}", config_path))?;
-    fs::write(config_path.as_std_path(), updated)
-        .map_err(|err| format!("Failed to write {}: {err}", config_path))?;
-    Ok(true)
-}
-
-fn workspace_members_array(table: &mut toml::value::Table) -> Result<&mut Vec<Value>, String> {
-    let members_value = table
-        .entry("members")
-        .or_insert_with(|| Value::Array(Vec::new()));
-
-    match members_value {
-        Value::Array(array) => Ok(array),
-        Value::Table(member_table) => {
-            let main_value = member_table
-                .entry("main")
-                .or_insert_with(|| Value::Array(Vec::new()));
-            main_value
-                .as_array_mut()
-                .ok_or_else(|| "members.main is not an array".to_string())
+    let members_path = match workspace_table.get("members") {
+        Some(Value::Array(_)) | None => {
+            if has_workspace_table {
+                "[workspace].members"
+            } else {
+                "members"
+            }
         }
-        _ => Err("members is not an array or table".to_string()),
-    }
+        Some(Value::Table(_)) => {
+            if has_workspace_table {
+                "[workspace].members.main"
+            } else {
+                "members.main"
+            }
+        }
+        Some(_) => {
+            return Err(format!(
+                "members is not an array or table in {}",
+                config_path
+            ));
+        }
+    };
+
+    Ok(Some(format!(
+        "Workspace detected at {workspace_root}. To include this ingot, add \"{relative_member}\" to {members_path} in {config_path}."
+    )))
 }

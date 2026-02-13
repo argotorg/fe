@@ -776,27 +776,12 @@ where
 
     match parent_res {
         Some(PathRes::Ty(ty) | PathRes::TyAlias(_, ty)) => {
-            // Try to resolve as an associated const on the receiver type
-            if is_tail && resolve_tail_as_value {
-                match select_assoc_const_candidate(db, ty, ident, parent_scope, assumptions) {
-                    AssocConstSelection::Found(inst) => {
-                        let r = PathRes::TraitConst(ty, inst, ident);
-                        observer(path, &r);
-                        return Ok(r);
-                    }
-                    AssocConstSelection::Ambiguous(traits) => {
-                        return Err(PathResError::new(
-                            PathResErrorKind::AmbiguousAssociatedConst {
-                                name: ident,
-                                trait_insts: traits,
-                            },
-                            path,
-                        ));
-                    }
-                    AssocConstSelection::NotFound => {}
-                }
-            }
-            // Fast paths for qualified types `<A as Trait>::...`
+            // Fast paths for qualified types `<A as Trait>::...`.
+            //
+            // NOTE: This must run before generic associated-const probing, otherwise
+            // `<A as Trait>::CONST` can be mis-resolved with `recv_ty` set to the
+            // *qualified type* instead of `A`, which then breaks downstream trait-const
+            // evaluation/CTFE.
             if let TyData::QualifiedTy(trait_inst) = ty.data(db) {
                 // Associated type projection
                 if let Some(assoc_ty) = trait_inst.assoc_ty(db, ident) {
@@ -820,6 +805,29 @@ where
                     let r = PathRes::TraitConst(trait_inst.self_ty(db), *trait_inst, ident);
                     observer(path, &r);
                     return Ok(r);
+                }
+            }
+
+            // Try to resolve as an associated const on the receiver type
+            if is_tail && resolve_tail_as_value {
+                // Probe impls across both the call-site scope and the receiver type's ingot so
+                // `OtherIngotType::CONST` and `ExternalType::LOCAL_TRAIT_CONST` both resolve.
+                match select_assoc_const_candidate(db, ty, ident, scope, assumptions) {
+                    AssocConstSelection::Found(inst) => {
+                        let r = PathRes::TraitConst(ty, inst, ident);
+                        observer(path, &r);
+                        return Ok(r);
+                    }
+                    AssocConstSelection::Ambiguous(traits) => {
+                        return Err(PathResError::new(
+                            PathResErrorKind::AmbiguousAssociatedConst {
+                                name: ident,
+                                trait_insts: traits,
+                            },
+                            path,
+                        ));
+                    }
+                    AssocConstSelection::NotFound => {}
                 }
             }
 
@@ -1047,29 +1055,32 @@ fn select_assoc_const_candidate<'db>(
         };
     }
 
-    // Find trait impls for the receiver type that define the associated const.
-    let ingot = scope.ingot(db);
-    let candidates = impls_for_ty_with_constraints(
-        db,
-        ingot,
-        Canonicalized::new(db, receiver_ty).value,
-        assumptions,
-    );
+    let canonical_receiver = Canonicalized::new(db, receiver_ty).value;
+    let scope_ingot = scope.ingot(db);
 
-    let mut matches: ThinVec<TraitInstId<'db>> = ThinVec::new();
-    for cand in candidates {
-        let inst = cand.skip_binder().trait_(db);
-        let trait_ = inst.def(db);
-        // Check if the trait defines the associated const
-        if trait_.const_(db, name).is_some() {
-            matches.push(inst);
+    // Find trait impls for the receiver type that define the associated const, searching both:
+    // - the call-site ingot (for local traits implemented for external types), and
+    // - the receiver type's ingot (for external traits implemented in the receiver ingot).
+    let search_ingots = [
+        Some(scope_ingot),
+        receiver_ty.ingot(db).filter(|&ingot| ingot != scope_ingot),
+    ];
+
+    let mut matches: IndexSet<TraitInstId<'db>> = IndexSet::default();
+    for ingot in search_ingots.into_iter().flatten() {
+        for cand in impls_for_ty_with_constraints(db, ingot, canonical_receiver, assumptions) {
+            let inst = cand.skip_binder().trait_(db);
+            let trait_ = inst.def(db);
+            if trait_.const_(db, name).is_some() {
+                matches.insert(inst);
+            }
         }
     }
 
     match matches.len() {
         0 => AssocConstSelection::NotFound,
-        1 => AssocConstSelection::Found(matches.pop().unwrap()),
-        _ => AssocConstSelection::Ambiguous(matches),
+        1 => AssocConstSelection::Found(*matches.iter().next().unwrap()),
+        _ => AssocConstSelection::Ambiguous(matches.into_iter().collect()),
     }
 }
 
@@ -1087,7 +1098,7 @@ pub fn find_associated_type<'db>(
         return smallvec![(*trait_inst, proj)];
     }
 
-    let ingot = scope.ingot(db);
+    let scope_ingot = scope.ingot(db);
     // Use a single unification table and snapshots to preserve outer
     // substitutions while isolating per-candidate attempts.
     let mut table = UnificationTable::new(db);
@@ -1131,18 +1142,25 @@ pub fn find_associated_type<'db>(
         }
     }
 
-    // check all impls for ty
-    for impl_ in impls_for_ty_with_constraints(db, ingot, ty, assumptions) {
-        let snapshot = table.snapshot();
-        let impl_ = table.instantiate_with_fresh_vars(impl_);
+    let search_ingots = [
+        Some(scope_ingot),
+        ty.value.ingot(db).filter(|&ingot| ingot != scope_ingot),
+    ];
 
-        if table.unify(lhs_ty, impl_.self_ty(db)).is_ok()
-            && let Some(ty) = impl_.assoc_ty(db, name)
-        {
-            let folded = ty.fold_with(db, &mut table);
-            candidates.push((impl_.trait_(db), folded));
+    // Check impls for `ty` across both the call-site ingot and `ty`'s defining ingot.
+    for ingot in search_ingots.into_iter().flatten() {
+        for impl_ in impls_for_ty_with_constraints(db, ingot, ty, assumptions) {
+            let snapshot = table.snapshot();
+            let impl_ = table.instantiate_with_fresh_vars(impl_);
+
+            if table.unify(lhs_ty, impl_.self_ty(db)).is_ok()
+                && let Some(ty) = impl_.assoc_ty(db, name)
+            {
+                let folded = ty.fold_with(db, &mut table);
+                candidates.push((impl_.trait_(db), folded));
+            }
+            table.rollback_to(snapshot);
         }
-        table.rollback_to(snapshot);
     }
 
     // Case 3: The LHS `ty` is an associated type (e.g., `T::Encoder` in `T::Encoder::Output`).

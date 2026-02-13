@@ -26,8 +26,8 @@ use crate::analysis::ty::{
     fold::{AssocTySubst, TyFoldable as _, TyFolder},
     trait_def::TraitInstId,
     trait_resolution::{
-        GoalSatisfiability, PredicateListId, constraint::collect_func_def_constraints,
-        is_goal_satisfiable,
+        GoalSatisfiability, PredicateListId, TraitSolveCx,
+        constraint::collect_func_def_constraints, is_goal_satisfiable,
     },
     ty_check::callable::Callable,
     ty_def::{CapabilityKind, PrimTy, TyBase, TyData, prim_int_bits},
@@ -817,7 +817,6 @@ impl<'db> TyChecker<'db> {
             .instantiate_identity()
             .extend_all_bounds(self.db);
 
-        let ingot = self.env.body().top_mod(self.db).ingot(self.db);
         let effect_ref_trait =
             resolve_core_trait(self.db, self.env.scope(), &["effect_ref", "EffectRef"])
                 .expect("missing required core trait `core::effect_ref::EffectRef`");
@@ -865,6 +864,8 @@ impl<'db> TyChecker<'db> {
                                   provided_ty: TyId<'db>,
                                   required_mut: bool|
          -> Option<TyId<'db>> {
+            let solve_cx = TraitSolveCx::new(this.db, this.env.scope())
+                .with_assumptions(this.env.assumptions());
             let effect_handle_inst = TraitInstId::new(
                 this.db,
                 effect_handle_trait,
@@ -872,12 +873,7 @@ impl<'db> TyChecker<'db> {
                 IndexMap::new(),
             );
             let canonical_handle = Canonicalized::new(this.db, effect_handle_inst);
-            let handle_sat = is_goal_satisfiable(
-                this.db,
-                ingot,
-                canonical_handle.value,
-                this.env.assumptions(),
-            );
+            let handle_sat = is_goal_satisfiable(this.db, solve_cx, canonical_handle.value);
 
             let target_ty = match handle_sat {
                 GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid => provided_ty,
@@ -900,8 +896,7 @@ impl<'db> TyChecker<'db> {
                 IndexMap::new(),
             );
             let canonical_ref = Canonicalized::new(this.db, effect_ref_inst);
-            let ref_sat =
-                is_goal_satisfiable(this.db, ingot, canonical_ref.value, this.env.assumptions());
+            let ref_sat = is_goal_satisfiable(this.db, solve_cx, canonical_ref.value);
             if matches!(
                 ref_sat,
                 GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
@@ -917,12 +912,7 @@ impl<'db> TyChecker<'db> {
                     IndexMap::new(),
                 );
                 let canonical_mut = Canonicalized::new(this.db, effect_ref_mut_inst);
-                let mut_sat = is_goal_satisfiable(
-                    this.db,
-                    ingot,
-                    canonical_mut.value,
-                    this.env.assumptions(),
-                );
+                let mut_sat = is_goal_satisfiable(this.db, solve_cx, canonical_mut.value);
                 if matches!(
                     mut_sat,
                     GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
@@ -1035,9 +1025,9 @@ impl<'db> TyChecker<'db> {
                             if !matches!(
                                 is_goal_satisfiable(
                                     self.db,
-                                    ingot,
-                                    canonical.value,
-                                    self.env.assumptions(),
+                                    TraitSolveCx::new(self.db, self.env.scope())
+                                        .with_assumptions(self.env.assumptions()),
+                                    canonical.value
                                 ),
                                 GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
                             ) {
@@ -1118,9 +1108,9 @@ impl<'db> TyChecker<'db> {
                             let canonical = Canonicalized::new(self.db, trait_req);
                             let sat = is_goal_satisfiable(
                                 self.db,
-                                ingot,
+                                TraitSolveCx::new(self.db, self.env.scope())
+                                    .with_assumptions(self.env.assumptions()),
                                 canonical.value,
-                                self.env.assumptions(),
                             );
 
                             if matches!(
@@ -1801,7 +1791,18 @@ impl<'db> TyChecker<'db> {
                     self.env.register_callable(expr, callable);
                     ExprProp::new(func_ty, true)
                 }
-                PathRes::TraitConst(_recv_ty, inst, name) => {
+                PathRes::TraitConst(recv_ty, inst, name) => {
+                    let mut args = inst.args(self.db).clone();
+                    if let Some(self_arg) = args.first_mut() {
+                        *self_arg = recv_ty;
+                    }
+                    let inst = TraitInstId::new(
+                        self.db,
+                        inst.def(self.db),
+                        args,
+                        inst.assoc_type_bindings(self.db).clone(),
+                    );
+
                     self.env
                         .register_const_ref(expr, ConstRef::TraitConst { inst, name });
                     // Look up the associated const's declared type in the trait and
@@ -1813,6 +1814,7 @@ impl<'db> TyChecker<'db> {
                         // Instantiate with the concrete args of the trait instance
                         let instantiated = ty_binder.instantiate(self.db, inst.args(self.db));
                         let ty = self.table.instantiate_to_term(instantiated);
+
                         ExprProp::new(ty, true)
                     } else {
                         // Fallback to invalid type if the declaration isn't found

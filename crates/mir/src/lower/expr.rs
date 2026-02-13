@@ -2,8 +2,11 @@
 //! to specialized lowering helpers.
 
 use hir::{
-    analysis::ty::const_eval::{ConstValue, try_eval_const_expr},
-    analysis::ty::ty_check::{Callable, ForLoopSeq, ResolvedEffectArg},
+    analysis::ty::{
+        const_eval::{ConstValue, eval_const_expr},
+        ty_check::{Callable, ForLoopSeq, ResolvedEffectArg},
+    },
+    ty_check::{Callable, ForLoopSeq, ResolvedEffectArg},
     analysis::ty::ty_def::CapabilityKind,
     projection::{IndexSource, Projection},
 };
@@ -64,7 +67,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         let ConstValue::Int(value) =
-            try_eval_const_expr(self.db, self.body, self.typed_body, self.generic_args, expr)?
+            eval_const_expr(self.db, self.body, self.typed_body, self.generic_args, expr)
+                .ok()
+                .flatten()?
         else {
             return None;
         };

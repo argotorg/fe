@@ -10,7 +10,7 @@ use std::fs;
 use camino::Utf8PathBuf;
 use check::check;
 use clap::ValueEnum;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use colored::Colorize;
 use fmt as fe_fmt;
 use similar::{ChangeTag, TextDiff};
@@ -94,9 +94,12 @@ pub enum Command {
         /// Override the default version (default: 0.1.0).
         #[arg(long)]
         version: Option<String>,
-        /// Do not attempt to add this ingot to an enclosing workspace.
-        #[arg(long)]
-        no_workspace_update: bool,
+    },
+    /// Generate shell completion scripts.
+    Completion {
+        /// Shell to generate completions for
+        #[arg(value_name = "shell")]
+        shell: clap_complete::Shell,
     },
 }
 
@@ -141,18 +144,19 @@ pub fn run(opts: &Options) {
             workspace,
             name,
             version,
-            no_workspace_update,
         } => {
-            if let Err(err) = cli::new::run(
-                path,
-                *workspace,
-                name.as_deref(),
-                version.as_deref(),
-                *no_workspace_update,
-            ) {
+            if let Err(err) = cli::new::run(path, *workspace, name.as_deref(), version.as_deref()) {
                 eprintln!("❌ {err}");
                 std::process::exit(1);
             }
+        }
+        Command::Completion { shell } => {
+            clap_complete::generate(
+                *shell,
+                &mut Options::command(),
+                "fe",
+                &mut std::io::stdout(),
+            );
         }
     }
 }

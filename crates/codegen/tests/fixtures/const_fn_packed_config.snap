@@ -1,0 +1,74 @@
+---
+source: crates/codegen/tests/yul.rs
+assertion_line: 33
+expression: output
+input_file: tests/fixtures/const_fn_packed_config.fe
+---
+function $token_params($kind) -> ret {
+  let v0 := 0
+  switch $kind
+    case 0 {
+      let v1 := mload(0x40)
+      if iszero(v1) {
+        v1 := 0x80
+      }
+      mstore(0x40, add(v1, 3))
+      mstore(v1, and(18, 0xff))
+      mstore(add(v1, 1), and(30, 0xffff))
+      v0 := v1
+    }
+    case 1 {
+      let v2 := mload(0x40)
+      if iszero(v2) {
+        v2 := 0x80
+      }
+      mstore(0x40, add(v2, 3))
+      mstore(v2, and(6, 0xff))
+      mstore(add(v2, 1), and(5, 0xffff))
+      v0 := v2
+    }
+    default {
+      let v3 := mload(0x40)
+      if iszero(v3) {
+        v3 := 0x80
+      }
+      mstore(0x40, add(v3, 3))
+      mstore(v3, and(18, 0xff))
+      mstore(add(v3, 1), and(0, 0xffff))
+      v0 := v3
+    }
+  ret := v0
+  leave
+}
+function $pack_config($decimals, $paused, $fee_bps) -> ret {
+  let v0 := 0
+  switch $paused
+    case 1 {
+      v0 := 1
+    }
+    case 0 {
+      v0 := 0
+    }
+    default {
+      v0 := 0
+    }
+  let v1 := v0
+  let v2 := $decimals
+  let v3 := $fee_bps
+  ret := or(or(shl(24, v1), shl(16, v2)), v3)
+  leave
+}
+function $packed_token_config($kind, $paused) -> ret {
+  let v0 := $token_params($kind)
+  let v1 := and(mload(v0), 0xff)
+  let v2 := v1
+  let v3 := and(mload(add(v0, 1)), 0xffff)
+  let v4 := v3
+  let v5 := $pack_config(v2, $paused, v4)
+  ret := v5
+  leave
+}
+function $main() -> ret {
+  ret := 1179678
+  leave
+}

@@ -1,0 +1,11 @@
+const fn add1(x: usize) -> usize {
+    let y: usize
+    x + 1
+}
+
+struct Foo<const N: usize> {}
+
+fn f() {
+    let a: Foo<add1(1)>
+    let b: Foo<{ add1(2) }>
+}

@@ -15,10 +15,10 @@ test-utils = { path = "crates/test-utils", package = "fe-test-utils" }
 resolver = { path = "crates/resolver", package = "fe-resolver" }
 mir = { path = "crates/mir", package = "fe-mir" }
 cranelift-entity = "0.115"
-
 url = "2.5.4"
 camino = "1.1.9"
 clap = { version = "4.5.26", features = ["derive"] }
+clap_complete = "4.5.65"
 codespan-reporting = "0.11"
 derive_more = { version = "1.0", default-features = false, features = [
     "from",

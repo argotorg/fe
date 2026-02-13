@@ -6,7 +6,7 @@ use common::indexmap::{IndexMap, IndexSet};
 
 use super::{
     trait_def::{ImplementorId, TraitInstId},
-    trait_resolution::PredicateListId,
+    trait_resolution::{PredicateListId, TraitGoalSolution},
     ty_check::ExprProp,
     ty_def::{TyData, TyId},
     visitor::TyVisitable,
@@ -100,12 +100,19 @@ impl<'db> TyFoldable<'db> for TyId<'db> {
                         body,
                         ty,
                         const_def,
+                        generic_args,
                     } => {
                         let ty = ty.map(|t| folder.fold_ty(db, t));
+                        let generic_args = generic_args
+                            .iter()
+                            .copied()
+                            .map(|arg| folder.fold_ty(db, arg))
+                            .collect();
                         UnEvaluated {
                             body: *body,
                             ty,
                             const_def: *const_def,
+                            generic_args,
                         }
                     }
                 };
@@ -170,10 +177,49 @@ where
                 },
             )
         }
+        ConstExpr::UserConstFnCall {
+            func,
+            generic_args,
+            args,
+        } => {
+            let generic_args = generic_args
+                .iter()
+                .copied()
+                .map(|arg| folder.fold_ty(db, arg))
+                .collect();
+            let args = args
+                .iter()
+                .copied()
+                .map(|arg| folder.fold_ty(db, arg))
+                .collect();
+            ConstExprId::new(
+                db,
+                ConstExpr::UserConstFnCall {
+                    func: *func,
+                    generic_args,
+                    args,
+                },
+            )
+        }
+        ConstExpr::ArithBinOp { op, lhs, rhs } => {
+            let lhs = folder.fold_ty(db, *lhs);
+            let rhs = folder.fold_ty(db, *rhs);
+            ConstExprId::new(db, ConstExpr::ArithBinOp { op: *op, lhs, rhs })
+        }
+        ConstExpr::UnOp { op, expr } => {
+            let expr = folder.fold_ty(db, *expr);
+            ConstExprId::new(db, ConstExpr::UnOp { op: *op, expr })
+        }
+        ConstExpr::Cast { expr, to } => {
+            let expr = folder.fold_ty(db, *expr);
+            let to = folder.fold_ty(db, *to);
+            ConstExprId::new(db, ConstExpr::Cast { expr, to })
+        }
         ConstExpr::TraitConst { inst, name } => {
             let inst = inst.fold_with(db, folder);
             ConstExprId::new(db, ConstExpr::TraitConst { inst, name: *name })
         }
+        ConstExpr::LocalBinding(binding) => ConstExprId::new(db, ConstExpr::LocalBinding(*binding)),
     }
 }
 
@@ -262,6 +308,18 @@ impl<'db> TyFoldable<'db> for PredicateListId<'db> {
             .collect::<Vec<_>>();
 
         Self::new(db, predicates)
+    }
+}
+
+impl<'db> TyFoldable<'db> for TraitGoalSolution<'db> {
+    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
+    where
+        F: TyFolder<'db>,
+    {
+        Self {
+            inst: self.inst.fold_with(db, folder),
+            implementor: self.implementor.fold_with(db, folder),
+        }
     }
 }
 

@@ -1,5 +1,0 @@
-extern {
-    const fn next_slot<T>() -> usize
-}
-
-const fn foo() {}

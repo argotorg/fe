@@ -9,6 +9,7 @@ use num_bigint::BigUint;
 
 use super::{
     binder::Binder,
+    const_expr::{ConstExpr, ConstExprId},
     fold::{TyFoldable, TyFolder},
     trait_def::{ImplementorId, TraitInstId},
     ty_def::{ApplicableTyProp, Kind, TyData, TyId, TyVar, TyVarSort, inference_keys},
@@ -168,7 +169,13 @@ where
                         if const_ty1 == const_ty2 {
                             Ok(())
                         } else {
-                            Err(UnificationError::TypeMismatch)
+                            match (const_ty1.data(self.db), const_ty2.data(self.db)) {
+                                (
+                                    ConstTyData::Abstract(expr1, _),
+                                    ConstTyData::Abstract(expr2, _),
+                                ) => self.unify_const_expr(*expr1, *expr2),
+                                _ => Err(UnificationError::TypeMismatch),
+                            }
                         }
                     }
 
@@ -189,6 +196,117 @@ where
                 Err(UnificationError::TypeMismatch)
             }
 
+            _ => Err(UnificationError::TypeMismatch),
+        }
+    }
+
+    fn unify_const_expr(
+        &mut self,
+        expr1: ConstExprId<'db>,
+        expr2: ConstExprId<'db>,
+    ) -> UnificationResult {
+        use ConstExpr::*;
+
+        if expr1 == expr2 {
+            return Ok(());
+        }
+
+        match (expr1.data(self.db), expr2.data(self.db)) {
+            (
+                TraitConst {
+                    inst: inst1,
+                    name: name1,
+                },
+                TraitConst {
+                    inst: inst2,
+                    name: name2,
+                },
+            ) => {
+                if name1 != name2 {
+                    return Err(UnificationError::TypeMismatch);
+                }
+                self.unify(*inst1, *inst2)
+            }
+            (
+                ArithBinOp {
+                    op: op1,
+                    lhs: lhs1,
+                    rhs: rhs1,
+                },
+                ArithBinOp {
+                    op: op2,
+                    lhs: lhs2,
+                    rhs: rhs2,
+                },
+            ) => {
+                if op1 != op2 {
+                    return Err(UnificationError::TypeMismatch);
+                }
+                self.unify_ty(*lhs1, *lhs2)?;
+                self.unify_ty(*rhs1, *rhs2)
+            }
+            (
+                UnOp {
+                    op: op1,
+                    expr: inner1,
+                },
+                UnOp {
+                    op: op2,
+                    expr: inner2,
+                },
+            ) => {
+                if op1 != op2 {
+                    return Err(UnificationError::TypeMismatch);
+                }
+                self.unify_ty(*inner1, *inner2)
+            }
+            (Cast { expr: e1, to: t1 }, Cast { expr: e2, to: t2 }) => {
+                self.unify_ty(*t1, *t2)?;
+                self.unify_ty(*e1, *e2)
+            }
+            (
+                ExternConstFnCall {
+                    func: f1,
+                    generic_args: ga1,
+                    args: a1,
+                },
+                ExternConstFnCall {
+                    func: f2,
+                    generic_args: ga2,
+                    args: a2,
+                },
+            )
+            | (
+                UserConstFnCall {
+                    func: f1,
+                    generic_args: ga1,
+                    args: a1,
+                },
+                UserConstFnCall {
+                    func: f2,
+                    generic_args: ga2,
+                    args: a2,
+                },
+            ) => {
+                if f1 != f2 || ga1.len() != ga2.len() || a1.len() != a2.len() {
+                    return Err(UnificationError::TypeMismatch);
+                }
+
+                for (&g1, &g2) in ga1.iter().zip(ga2.iter()) {
+                    self.unify_ty(g1, g2)?;
+                }
+                for (&arg1, &arg2) in a1.iter().zip(a2.iter()) {
+                    self.unify_ty(arg1, arg2)?;
+                }
+                Ok(())
+            }
+            (LocalBinding(b1), LocalBinding(b2)) => {
+                if b1 == b2 {
+                    Ok(())
+                } else {
+                    Err(UnificationError::TypeMismatch)
+                }
+            }
             _ => Err(UnificationError::TypeMismatch),
         }
     }

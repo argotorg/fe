@@ -60,7 +60,31 @@ impl<'db> FunctionEmitter<'db> {
         };
 
         let expr_data = match expr.data(self.db, body) {
-            hir::hir_def::Partial::Present(expr) => format!("{expr:?}"),
+            hir::hir_def::Partial::Present(expr_data) => match expr_data {
+                hir::hir_def::Expr::Path(path) => path
+                    .to_opt()
+                    .map(|path| format!("Path({})", path.pretty_print(self.db)))
+                    .unwrap_or_else(|| "Path(<absent>)".into()),
+                hir::hir_def::Expr::Call(callee, args) => {
+                    let callee_data = match callee.data(self.db, body) {
+                        hir::hir_def::Partial::Present(hir::hir_def::Expr::Path(path)) => path
+                            .to_opt()
+                            .map(|path| format!("Path({})", path.pretty_print(self.db)))
+                            .unwrap_or_else(|| "Path(<absent>)".into()),
+                        hir::hir_def::Partial::Present(other) => format!("{other:?}"),
+                        hir::hir_def::Partial::Absent => "<absent>".into(),
+                    };
+                    format!("Call({callee:?} {callee_data}, {args:?})")
+                }
+                hir::hir_def::Expr::MethodCall(receiver, method, _, args) => {
+                    let method_name = method
+                        .to_opt()
+                        .map(|id| id.data(self.db).to_string())
+                        .unwrap_or_else(|| "<absent>".into());
+                    format!("MethodCall({receiver:?}, {method_name}, {args:?})")
+                }
+                other => format!("{other:?}"),
+            },
             hir::hir_def::Partial::Absent => "<absent>".into(),
         };
 
