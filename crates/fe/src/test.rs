@@ -86,6 +86,7 @@ struct EvmRuntimeMetrics {
     jump_ops: usize,
     jumpi_ops: usize,
     jumpdest_ops: usize,
+    iszero_ops: usize,
     mload_ops: usize,
     mstore_ops: usize,
     sload_ops: usize,
@@ -143,6 +144,7 @@ struct OpcodeAggregateTotals {
     pop_ops_sum: u128,
     jump_ops_sum: u128,
     jumpi_ops_sum: u128,
+    iszero_ops_sum: u128,
     mem_rw_ops_sum: u128,
     storage_rw_ops_sum: u128,
     mload_ops_sum: u128,
@@ -302,6 +304,7 @@ impl OpcodeAggregateTotals {
         self.pop_ops_sum += metrics.pop_ops as u128;
         self.jump_ops_sum += metrics.jump_ops as u128;
         self.jumpi_ops_sum += metrics.jumpi_ops as u128;
+        self.iszero_ops_sum += metrics.iszero_ops as u128;
         self.mem_rw_ops_sum += metrics.mem_rw_ops_total() as u128;
         self.storage_rw_ops_sum += metrics.storage_rw_ops_total() as u128;
         self.mload_ops_sum += metrics.mload_ops as u128;
@@ -321,6 +324,7 @@ impl OpcodeAggregateTotals {
         self.pop_ops_sum += other.pop_ops_sum;
         self.jump_ops_sum += other.jump_ops_sum;
         self.jumpi_ops_sum += other.jumpi_ops_sum;
+        self.iszero_ops_sum += other.iszero_ops_sum;
         self.mem_rw_ops_sum += other.mem_rw_ops_sum;
         self.storage_rw_ops_sum += other.storage_rw_ops_sum;
         self.mload_ops_sum += other.mload_ops_sum;
@@ -1545,6 +1549,7 @@ fn evm_runtime_metrics_from_bytes(bytes: &[u8]) -> EvmRuntimeMetrics {
             0x56 => metrics.jump_ops += 1,
             0x57 => metrics.jumpi_ops += 1,
             0x5b => metrics.jumpdest_ops += 1,
+            0x15 => metrics.iszero_ops += 1,
             0x20 => metrics.keccak_ops += 1,
             0x37 => metrics.calldatacopy_ops += 1,
             0x3e => metrics.returndatacopy_ops += 1,
@@ -1756,6 +1761,10 @@ fn write_opcode_magnitude_rows(out: &mut String, side: &str, totals: OpcodeAggre
     out.push_str(&format!("{side},pop_ops_sum,{}\n", totals.pop_ops_sum));
     out.push_str(&format!("{side},jump_ops_sum,{}\n", totals.jump_ops_sum));
     out.push_str(&format!("{side},jumpi_ops_sum,{}\n", totals.jumpi_ops_sum));
+    out.push_str(&format!(
+        "{side},iszero_ops_sum,{}\n",
+        totals.iszero_ops_sum
+    ));
     out.push_str(&format!(
         "{side},mem_rw_ops_sum,{}\n",
         totals.mem_rw_ops_sum
@@ -2001,6 +2010,7 @@ fn parse_gas_opcode_magnitude_csv(contents: &str) -> OpcodeMagnitudeTotals {
             "pop_ops_sum" => target.pop_ops_sum = parsed,
             "jump_ops_sum" => target.jump_ops_sum = parsed,
             "jumpi_ops_sum" => target.jumpi_ops_sum = parsed,
+            "iszero_ops_sum" => target.iszero_ops_sum = parsed,
             "mem_rw_ops_sum" => target.mem_rw_ops_sum = parsed,
             "storage_rw_ops_sum" => target.storage_rw_ops_sum = parsed,
             "mload_ops_sum" => target.mload_ops_sum = parsed,
@@ -2244,6 +2254,12 @@ fn append_opcode_magnitude_summary(out: &mut String, totals: OpcodeMagnitudeTota
     );
     append_opcode_delta_metric(
         out,
+        "iszero_ops_sum",
+        totals.yul_opt.iszero_ops_sum,
+        totals.sonatina.iszero_ops_sum,
+    );
+    append_opcode_delta_metric(
+        out,
         "mem_rw_ops_sum",
         totals.yul_opt.mem_rw_ops_sum,
         totals.sonatina.mem_rw_ops_sum,
@@ -2314,6 +2330,8 @@ fn append_opcode_inflation_attribution(out: &mut String, totals: OpcodeMagnitude
     let pop_delta = totals.sonatina.pop_ops_sum as i128 - totals.yul_opt.pop_ops_sum as i128;
     let jump_delta = totals.sonatina.jump_ops_sum as i128 - totals.yul_opt.jump_ops_sum as i128;
     let jumpi_delta = totals.sonatina.jumpi_ops_sum as i128 - totals.yul_opt.jumpi_ops_sum as i128;
+    let iszero_delta =
+        totals.sonatina.iszero_ops_sum as i128 - totals.yul_opt.iszero_ops_sum as i128;
     let mem_rw_delta =
         totals.sonatina.mem_rw_ops_sum as i128 - totals.yul_opt.mem_rw_ops_sum as i128;
     let storage_rw_delta =
@@ -2335,6 +2353,11 @@ fn append_opcode_inflation_attribution(out: &mut String, totals: OpcodeMagnitude
         "- control_flow_delta (jump+jumpi): {} ({})\n",
         control_delta,
         format_percent_cell(ratio_percent_i128(control_delta, runtime_ops_delta))
+    ));
+    out.push_str(&format!(
+        "- bool_normalization_delta (iszero): {} ({})\n",
+        iszero_delta,
+        format_percent_cell(ratio_percent_i128(iszero_delta, runtime_ops_delta))
     ));
     out.push_str(&format!(
         "- stack_control_delta (swap+pop+jump+jumpi): {} ({})\n",
@@ -2448,7 +2471,7 @@ fn append_trace_symbol_hotspots_summary(out: &mut String, rows: &[TraceSymbolHot
 }
 
 fn gas_opcode_comparison_header() -> &'static str {
-    "test,symbol,yul_unopt_steps,yul_opt_steps,sonatina_steps,steps_ratio_vs_yul_unopt,steps_ratio_vs_yul_opt,yul_unopt_runtime_bytes,yul_opt_runtime_bytes,sonatina_runtime_bytes,bytes_ratio_vs_yul_unopt,bytes_ratio_vs_yul_opt,yul_unopt_runtime_ops,yul_opt_runtime_ops,sonatina_runtime_ops,ops_ratio_vs_yul_unopt,ops_ratio_vs_yul_opt,yul_unopt_stack_ops_pct,yul_opt_stack_ops_pct,sonatina_stack_ops_pct,yul_opt_swap_ops,sonatina_swap_ops,swap_ratio_vs_yul_opt,yul_opt_pop_ops,sonatina_pop_ops,pop_ratio_vs_yul_opt,yul_opt_jump_ops,sonatina_jump_ops,jump_ratio_vs_yul_opt,yul_opt_jumpi_ops,sonatina_jumpi_ops,jumpi_ratio_vs_yul_opt,yul_opt_mem_rw_ops,sonatina_mem_rw_ops,mem_rw_ratio_vs_yul_opt,yul_opt_storage_rw_ops,sonatina_storage_rw_ops,storage_rw_ratio_vs_yul_opt,yul_opt_keccak_ops,sonatina_keccak_ops,keccak_ratio_vs_yul_opt,yul_opt_call_family_ops,sonatina_call_family_ops,call_family_ratio_vs_yul_opt,yul_opt_copy_ops,sonatina_copy_ops,copy_ratio_vs_yul_opt,note"
+    "test,symbol,yul_unopt_steps,yul_opt_steps,sonatina_steps,steps_ratio_vs_yul_unopt,steps_ratio_vs_yul_opt,yul_unopt_runtime_bytes,yul_opt_runtime_bytes,sonatina_runtime_bytes,bytes_ratio_vs_yul_unopt,bytes_ratio_vs_yul_opt,yul_unopt_runtime_ops,yul_opt_runtime_ops,sonatina_runtime_ops,ops_ratio_vs_yul_unopt,ops_ratio_vs_yul_opt,yul_unopt_stack_ops_pct,yul_opt_stack_ops_pct,sonatina_stack_ops_pct,yul_opt_swap_ops,sonatina_swap_ops,swap_ratio_vs_yul_opt,yul_opt_pop_ops,sonatina_pop_ops,pop_ratio_vs_yul_opt,yul_opt_jump_ops,sonatina_jump_ops,jump_ratio_vs_yul_opt,yul_opt_jumpi_ops,sonatina_jumpi_ops,jumpi_ratio_vs_yul_opt,yul_opt_iszero_ops,sonatina_iszero_ops,iszero_ratio_vs_yul_opt,yul_opt_mem_rw_ops,sonatina_mem_rw_ops,mem_rw_ratio_vs_yul_opt,yul_opt_storage_rw_ops,sonatina_storage_rw_ops,storage_rw_ratio_vs_yul_opt,yul_opt_keccak_ops,sonatina_keccak_ops,keccak_ratio_vs_yul_opt,yul_opt_call_family_ops,sonatina_call_family_ops,call_family_ratio_vs_yul_opt,yul_opt_copy_ops,sonatina_copy_ops,copy_ratio_vs_yul_opt,note"
 }
 
 fn write_gas_comparison_report(
@@ -2478,8 +2501,8 @@ fn write_gas_comparison_report(
     opcode_markdown.push_str(
         "Static runtime opcode shape and dynamic EVM step counts for the same test call.\n\n",
     );
-    opcode_markdown.push_str("| test | steps_ratio_vs_opt | bytes_ratio_vs_opt | ops_ratio_vs_opt | swap_ratio_vs_opt | pop_ratio_vs_opt | jump_ratio_vs_opt | jumpi_ratio_vs_opt | mem_rw_ratio_vs_opt | storage_rw_ratio_vs_opt | keccak_ratio_vs_opt | call_family_ratio_vs_opt | copy_ratio_vs_opt | note |\n");
-    opcode_markdown.push_str("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n");
+    opcode_markdown.push_str("| test | steps_ratio_vs_opt | bytes_ratio_vs_opt | ops_ratio_vs_opt | swap_ratio_vs_opt | pop_ratio_vs_opt | jump_ratio_vs_opt | jumpi_ratio_vs_opt | iszero_ratio_vs_opt | mem_rw_ratio_vs_opt | storage_rw_ratio_vs_opt | keccak_ratio_vs_opt | call_family_ratio_vs_opt | copy_ratio_vs_opt | note |\n");
+    opcode_markdown.push_str("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n");
 
     let mut csv = String::new();
     csv.push_str(
@@ -2656,6 +2679,10 @@ fn write_gas_comparison_report(
         let sonatina_jumpi = sonatina_metrics.map(|metrics| metrics.jumpi_ops);
         let jumpi_ratio_opt = ratio_cell_usize(sonatina_jumpi, yul_opt_jumpi);
 
+        let yul_opt_iszero = yul_opt_metrics.map(|metrics| metrics.iszero_ops);
+        let sonatina_iszero = sonatina_metrics.map(|metrics| metrics.iszero_ops);
+        let iszero_ratio_opt = ratio_cell_usize(sonatina_iszero, yul_opt_iszero);
+
         let yul_opt_mem_rw = yul_opt_metrics.map(|metrics| metrics.mem_rw_ops_total());
         let sonatina_mem_rw = sonatina_metrics.map(|metrics| metrics.mem_rw_ops_total());
         let mem_rw_ratio_opt = ratio_cell_usize(sonatina_mem_rw, yul_opt_mem_rw);
@@ -2692,7 +2719,7 @@ fn write_gas_comparison_report(
         }
 
         opcode_markdown.push_str(&format!(
-            "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
+            "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
             case.display_name,
             steps_ratio_opt,
             bytes_ratio_opt,
@@ -2701,6 +2728,7 @@ fn write_gas_comparison_report(
             pop_ratio_opt,
             jump_ratio_opt,
             jumpi_ratio_opt,
+            iszero_ratio_opt,
             mem_rw_ratio_opt,
             storage_rw_ratio_opt,
             keccak_ratio_opt,
@@ -2742,6 +2770,9 @@ fn write_gas_comparison_report(
             csv_escape(&usize_cell(yul_opt_jumpi)),
             csv_escape(&usize_cell(sonatina_jumpi)),
             csv_escape(&jumpi_ratio_opt),
+            csv_escape(&usize_cell(yul_opt_iszero)),
+            csv_escape(&usize_cell(sonatina_iszero)),
+            csv_escape(&iszero_ratio_opt),
             csv_escape(&usize_cell(yul_opt_mem_rw)),
             csv_escape(&usize_cell(sonatina_mem_rw)),
             csv_escape(&mem_rw_ratio_opt),
