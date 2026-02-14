@@ -19,7 +19,7 @@ use contract_harness::{ExecutionOptions, RuntimeInstance};
 use driver::DriverDataBase;
 use hir::hir_def::{HirIngot, TopLevelMod};
 use mir::{fmt as mir_fmt, lower_module};
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use solc_runner::compile_single_contract;
 use url::Url;
 
@@ -36,6 +36,7 @@ pub struct TestResult {
     pub name: String,
     pub passed: bool,
     pub error_message: Option<String>,
+    pub gas_used: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -45,11 +46,47 @@ struct TestOutcome {
     trace: Option<contract_harness::CallTrace>,
 }
 
+#[derive(Debug, Clone)]
+struct GasComparisonCase {
+    display_name: String,
+    symbol_name: String,
+    yul: Option<TestMetadata>,
+    sonatina: Option<TestMetadata>,
+}
+
+#[derive(Debug, Clone)]
+struct GasMeasurement {
+    gas_used: Option<u64>,
+    passed: bool,
+    error_message: Option<String>,
+}
+
+impl GasMeasurement {
+    fn from_test_result(result: &TestResult) -> Self {
+        Self {
+            gas_used: result.gas_used,
+            passed: result.passed,
+            error_message: result.error_message.clone(),
+        }
+    }
+
+    fn status_label(&self) -> String {
+        if self.passed {
+            "ok".to_string()
+        } else if let Some(msg) = &self.error_message {
+            format!("failed: {msg}")
+        } else {
+            "failed".to_string()
+        }
+    }
+}
+
 fn suite_error_result(suite: &str, kind: &str, message: String) -> Vec<TestResult> {
     vec![TestResult {
         name: format!("{suite}::{kind}"),
         passed: false,
         error_message: Some(message),
+        gas_used: None,
     }]
 }
 
@@ -626,15 +663,23 @@ fn discover_and_run_tests(
         return Vec::new();
     }
 
+    let gas_comparison_cases = report.map(|ctx| {
+        collect_gas_comparison_cases(
+            db,
+            top_mod,
+            suite,
+            filter,
+            ctx,
+            backend.as_str(),
+            &output.tests,
+        )
+    });
+
     let mut results = Vec::new();
+    let mut primary_measurements = FxHashMap::default();
 
     for case in &output.tests {
-        // Apply filter if provided
-        if let Some(pattern) = filter
-            && !case.hir_name.contains(pattern)
-            && !case.symbol_name.contains(pattern)
-            && !case.display_name.contains(pattern)
-        {
+        if !test_case_matches_filter(case, filter) {
             continue;
         }
 
@@ -673,10 +718,271 @@ fn discover_and_run_tests(
             }
         }
 
+        primary_measurements.insert(
+            case.symbol_name.clone(),
+            GasMeasurement::from_test_result(&outcome.result),
+        );
         results.push(outcome.result);
     }
 
+    if let (Some(report), Some(cases)) = (report, gas_comparison_cases.as_ref()) {
+        write_gas_comparison_report(report, backend.as_str(), cases, &primary_measurements);
+    }
+
     results
+}
+
+fn test_case_matches_filter(case: &TestMetadata, filter: Option<&str>) -> bool {
+    let Some(pattern) = filter else {
+        return true;
+    };
+    case.hir_name.contains(pattern)
+        || case.symbol_name.contains(pattern)
+        || case.display_name.contains(pattern)
+}
+
+fn collect_gas_comparison_cases(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+    suite: &str,
+    filter: Option<&str>,
+    report: &ReportContext,
+    primary_backend: &str,
+    primary_cases: &[TestMetadata],
+) -> Vec<GasComparisonCase> {
+    let mut by_symbol: FxHashMap<String, GasComparisonCase> = FxHashMap::default();
+    let mut setup_errors = Vec::new();
+
+    for case in primary_cases
+        .iter()
+        .filter(|case| test_case_matches_filter(case, filter))
+    {
+        let key = case.symbol_name.clone();
+        let entry = by_symbol
+            .entry(key.clone())
+            .or_insert_with(|| GasComparisonCase {
+                display_name: case.display_name.clone(),
+                symbol_name: key,
+                yul: None,
+                sonatina: None,
+            });
+
+        if primary_backend.eq_ignore_ascii_case("yul") {
+            entry.yul = Some(case.clone());
+        } else if primary_backend.eq_ignore_ascii_case("sonatina") {
+            entry.sonatina = Some(case.clone());
+        }
+    }
+
+    if primary_backend.eq_ignore_ascii_case("yul") {
+        match emit_with_catch_unwind(
+            || emit_test_module_sonatina(db, top_mod),
+            "Sonatina",
+            suite,
+            None,
+        ) {
+            Ok(output) => {
+                for case in output
+                    .tests
+                    .into_iter()
+                    .filter(|case| test_case_matches_filter(case, filter))
+                {
+                    let key = case.symbol_name.clone();
+                    let entry = by_symbol
+                        .entry(key.clone())
+                        .or_insert_with(|| GasComparisonCase {
+                            display_name: case.display_name.clone(),
+                            symbol_name: key,
+                            yul: None,
+                            sonatina: None,
+                        });
+                    entry.sonatina = Some(case);
+                }
+            }
+            Err(results) => {
+                setup_errors.push(format!(
+                    "failed to emit Sonatina tests for gas comparison:\n{}",
+                    format_results_for_report(&results)
+                ));
+            }
+        }
+    } else if primary_backend.eq_ignore_ascii_case("sonatina") {
+        match emit_with_catch_unwind(|| emit_test_module_yul(db, top_mod), "Yul", suite, None) {
+            Ok(output) => {
+                for case in output
+                    .tests
+                    .into_iter()
+                    .filter(|case| test_case_matches_filter(case, filter))
+                {
+                    let key = case.symbol_name.clone();
+                    let entry = by_symbol
+                        .entry(key.clone())
+                        .or_insert_with(|| GasComparisonCase {
+                            display_name: case.display_name.clone(),
+                            symbol_name: key,
+                            yul: None,
+                            sonatina: None,
+                        });
+                    entry.yul = Some(case);
+                }
+            }
+            Err(results) => {
+                setup_errors.push(format!(
+                    "failed to emit Yul tests for gas comparison:\n{}",
+                    format_results_for_report(&results)
+                ));
+            }
+        }
+    } else {
+        setup_errors.push(format!(
+            "unknown backend `{primary_backend}` (expected 'yul' or 'sonatina')"
+        ));
+    }
+
+    if !setup_errors.is_empty() {
+        write_report_error(
+            report,
+            "gas_comparison_setup_error.txt",
+            &setup_errors.join("\n\n"),
+        );
+    }
+
+    let mut cases: Vec<_> = by_symbol.into_values().collect();
+    cases.sort_by(|a, b| a.display_name.cmp(&b.display_name));
+    cases
+}
+
+fn format_results_for_report(results: &[TestResult]) -> String {
+    let mut out = String::new();
+    for result in results {
+        out.push_str(&format!("- {}\n", result.name));
+        if let Some(msg) = &result.error_message {
+            out.push_str(&format!("  {msg}\n"));
+        }
+    }
+    if out.is_empty() {
+        "no additional details".to_string()
+    } else {
+        out
+    }
+}
+
+fn measure_case_gas(case: &TestMetadata, backend: &str) -> GasMeasurement {
+    let outcome = compile_and_run_test(case, false, backend, None, false);
+    GasMeasurement::from_test_result(&outcome.result)
+}
+
+fn write_gas_comparison_report(
+    report: &ReportContext,
+    primary_backend: &str,
+    cases: &[GasComparisonCase],
+    primary_measurements: &FxHashMap<String, GasMeasurement>,
+) {
+    let artifacts_dir = report.root_dir.join("artifacts");
+    let _ = create_dir_all_utf8(&artifacts_dir);
+
+    let mut out = String::new();
+    out.push_str("# Gas Comparison\n\n");
+    out.push_str("Comparison of runtime test-call gas usage (`gas_used`) between Yul and Sonatina backends.\n");
+    out.push_str("`delta` is `sonatina - yul`; negative means Sonatina used less gas.\n\n");
+    out.push_str("| test | yul | sonatina | delta | note |\n");
+    out.push_str("| --- | ---: | ---: | ---: | --- |\n");
+
+    let mut compared = 0usize;
+    let mut sonatina_lower = 0usize;
+    let mut sonatina_higher = 0usize;
+    let mut equal = 0usize;
+    let mut incomplete = 0usize;
+
+    for case in cases {
+        let yul = if primary_backend.eq_ignore_ascii_case("yul") {
+            primary_measurements.get(&case.symbol_name).cloned()
+        } else {
+            case.yul.as_ref().map(|test| measure_case_gas(test, "yul"))
+        };
+
+        let sonatina = if primary_backend.eq_ignore_ascii_case("sonatina") {
+            primary_measurements.get(&case.symbol_name).cloned()
+        } else {
+            case.sonatina
+                .as_ref()
+                .map(|test| measure_case_gas(test, "sonatina"))
+        };
+
+        let yul_cell = yul
+            .as_ref()
+            .and_then(|measurement| measurement.gas_used)
+            .map(|gas| gas.to_string())
+            .unwrap_or_else(|| "n/a".to_string());
+        let sonatina_cell = sonatina
+            .as_ref()
+            .and_then(|measurement| measurement.gas_used)
+            .map(|gas| gas.to_string())
+            .unwrap_or_else(|| "n/a".to_string());
+
+        let mut notes = Vec::new();
+        if case.yul.is_none() {
+            notes.push("missing yul test metadata".to_string());
+        }
+        if case.sonatina.is_none() {
+            notes.push("missing sonatina test metadata".to_string());
+        }
+        if let Some(measurement) = &yul
+            && (!measurement.passed || measurement.gas_used.is_none())
+        {
+            notes.push(format!("yul {}", measurement.status_label()));
+        }
+        if let Some(measurement) = &sonatina
+            && (!measurement.passed || measurement.gas_used.is_none())
+        {
+            notes.push(format!("sonatina {}", measurement.status_label()));
+        }
+
+        let delta = match (
+            yul.as_ref().and_then(|measurement| measurement.gas_used),
+            sonatina
+                .as_ref()
+                .and_then(|measurement| measurement.gas_used),
+        ) {
+            (Some(yul_gas), Some(sonatina_gas)) => {
+                compared += 1;
+                let diff = sonatina_gas as i128 - yul_gas as i128;
+                if diff < 0 {
+                    sonatina_lower += 1;
+                } else if diff > 0 {
+                    sonatina_higher += 1;
+                } else {
+                    equal += 1;
+                }
+                diff.to_string()
+            }
+            _ => {
+                incomplete += 1;
+                "n/a".to_string()
+            }
+        };
+
+        let note = if notes.is_empty() {
+            String::new()
+        } else {
+            notes.join("; ")
+        };
+
+        out.push_str(&format!(
+            "| {} | {} | {} | {} | {} |\n",
+            case.display_name, yul_cell, sonatina_cell, delta, note
+        ));
+    }
+
+    out.push_str("\n## Summary\n\n");
+    out.push_str(&format!("- tests_in_scope: {}\n", cases.len()));
+    out.push_str(&format!("- compared_with_gas: {compared}\n"));
+    out.push_str(&format!("- sonatina_lower: {sonatina_lower}\n"));
+    out.push_str(&format!("- sonatina_higher: {sonatina_higher}\n"));
+    out.push_str(&format!("- equal: {equal}\n"));
+    out.push_str(&format!("- incomplete: {incomplete}\n"));
+
+    let _ = std::fs::write(artifacts_dir.join("gas_comparison.md"), out);
 }
 
 fn maybe_write_suite_ir(
@@ -830,6 +1136,7 @@ fn compile_and_run_test(
                     "tests with value parameters are not supported (found {})",
                     case.value_param_count
                 )),
+                gas_used: None,
             },
             logs: Vec::new(),
             trace: None,
@@ -845,6 +1152,7 @@ fn compile_and_run_test(
                     "missing test object name for `{}`",
                     case.display_name
                 )),
+                gas_used: None,
             },
             logs: Vec::new(),
             trace: None,
@@ -861,6 +1169,7 @@ fn compile_and_run_test(
                         "missing test bytecode for `{}`",
                         case.display_name
                     )),
+                    gas_used: None,
                 },
                 logs: Vec::new(),
                 trace: None,
@@ -893,6 +1202,7 @@ fn compile_and_run_test(
                 name: case.display_name.clone(),
                 passed: false,
                 error_message: Some(format!("missing test Yul for `{}`", case.display_name)),
+                gas_used: None,
             },
             logs: Vec::new(),
             trace: None,
@@ -911,6 +1221,7 @@ fn compile_and_run_test(
                     name: case.display_name.clone(),
                     passed: false,
                     error_message: Some(format!("Failed to compile test: {}", err.0)),
+                    gas_used: None,
                 },
                 logs: Vec::new(),
                 trace: None,
@@ -1024,6 +1335,7 @@ fn write_report_manifest(
     out.push_str(&format!("filter: {}\n", filter.unwrap_or("<none>")));
     out.push_str(&format!("fe_version: {}\n", env!("CARGO_PKG_VERSION")));
     out.push_str("details: see `meta/args.txt` and `meta/git.txt` for exact repro context\n");
+    out.push_str("gas_comparison: see `artifacts/gas_comparison.md` when available\n");
     out.push_str(&format!("tests: {}\n", results.len()));
     let passed = results.iter().filter(|r| r.passed).count();
     out.push_str(&format!("passed: {passed}\n"));
@@ -1063,6 +1375,7 @@ fn execute_test(
                     name: name.to_string(),
                     passed: false,
                     error_message: Some(format!("Failed to deploy test: {err}")),
+                    gas_used: None,
                 },
                 Vec::new(),
                 None,
@@ -1084,38 +1397,46 @@ fn execute_test(
     let call_result = if show_logs {
         instance
             .call_raw_with_logs(&[], options)
-            .map(|outcome| outcome.logs)
+            .map(|outcome| (outcome.result.gas_used, outcome.logs))
     } else {
-        instance.call_raw(&[], options).map(|_| Vec::new())
+        instance
+            .call_raw(&[], options)
+            .map(|result| (result.gas_used, Vec::new()))
     };
 
     match (call_result, expected_revert) {
         // Normal test: execution succeeded
-        (Ok(logs), None) => (
+        (Ok((gas_used, logs)), None) => (
             TestResult {
                 name: name.to_string(),
                 passed: true,
                 error_message: None,
+                gas_used: Some(gas_used),
             },
             logs,
             trace,
         ),
         // Normal test: execution reverted (failure)
-        (Err(err), None) => (
-            TestResult {
-                name: name.to_string(),
-                passed: false,
-                error_message: Some(format_harness_error(err)),
-            },
-            Vec::new(),
-            trace,
-        ),
+        (Err(err), None) => {
+            let gas_used = harness_error_gas_used(&err);
+            (
+                TestResult {
+                    name: name.to_string(),
+                    passed: false,
+                    error_message: Some(format_harness_error(err)),
+                    gas_used,
+                },
+                Vec::new(),
+                trace,
+            )
+        }
         // Expected revert: execution succeeded (failure - should have reverted)
-        (Ok(_), Some(_)) => (
+        (Ok((gas_used, _)), Some(_)) => (
             TestResult {
                 name: name.to_string(),
                 passed: false,
                 error_message: Some("Expected test to revert, but it succeeded".to_string()),
+                gas_used: Some(gas_used),
             },
             Vec::new(),
             trace,
@@ -1126,23 +1447,28 @@ fn execute_test(
                 name: name.to_string(),
                 passed: true,
                 error_message: None,
+                gas_used: None,
             },
             Vec::new(),
             trace,
         ),
         // Expected revert: execution failed for a different reason (failure)
-        (Err(err), Some(ExpectedRevert::Any)) => (
-            TestResult {
-                name: name.to_string(),
-                passed: false,
-                error_message: Some(format!(
-                    "Expected test to revert, but it failed with: {}",
-                    format_harness_error(err)
-                )),
-            },
-            Vec::new(),
-            trace,
-        ),
+        (Err(err), Some(ExpectedRevert::Any)) => {
+            let gas_used = harness_error_gas_used(&err);
+            (
+                TestResult {
+                    name: name.to_string(),
+                    passed: false,
+                    error_message: Some(format!(
+                        "Expected test to revert, but it failed with: {}",
+                        format_harness_error(err)
+                    )),
+                    gas_used,
+                },
+                Vec::new(),
+                trace,
+            )
+        }
     }
 }
 
@@ -1154,6 +1480,13 @@ fn format_harness_error(err: contract_harness::HarnessError) -> String {
             format!("Test halted: {reason:?} (gas: {gas_used})")
         }
         other => format!("Test execution error: {other}"),
+    }
+}
+
+fn harness_error_gas_used(err: &contract_harness::HarnessError) -> Option<u64> {
+    match err {
+        contract_harness::HarnessError::Halted { gas_used, .. } => Some(*gas_used),
+        _ => None,
     }
 }
 
