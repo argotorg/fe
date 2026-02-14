@@ -19,13 +19,14 @@ use sonatina_ir::{
 use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 use sonatina_verifier::{VerificationLevel, VerifierConfig};
 
-use crate::{ExpectedRevert, TestMetadata, TestModuleOutput};
+use crate::{ExpectedRevert, OptLevel, TestMetadata, TestModuleOutput};
 
 use super::{LowerError, ModuleLowerer};
 
 pub fn emit_test_module_sonatina(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,
+    opt_level: OptLevel,
 ) -> Result<TestModuleOutput, LowerError> {
     let mir_module = lower_module(db, top_mod)?;
     let tests = collect_tests(db, &mir_module.functions);
@@ -77,7 +78,7 @@ pub fn emit_test_module_sonatina(
         &region_deps,
     )?;
     super::ensure_module_sonatina_ir_valid(&module)?;
-    run_default_sonatina_optimization_pipeline(&mut module);
+    run_sonatina_optimization_pipeline(&mut module, opt_level);
     super::ensure_module_sonatina_ir_valid(&module)?;
 
     let mut output_tests = Vec::with_capacity(tests.len());
@@ -103,9 +104,14 @@ pub fn emit_test_module_sonatina(
     })
 }
 
-fn run_default_sonatina_optimization_pipeline(module: &mut Module) {
-    let pipeline = sonatina_codegen::optim::Pipeline::default_pipeline();
-    pipeline.run(module);
+fn run_sonatina_optimization_pipeline(module: &mut Module, opt_level: OptLevel) {
+    match opt_level {
+        OptLevel::O0 => { /* no optimization */ }
+        OptLevel::O1 | OptLevel::O2 => {
+            let pipeline = sonatina_codegen::optim::Pipeline::default_pipeline();
+            pipeline.run(module);
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

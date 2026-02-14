@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use camino::Utf8PathBuf;
-use codegen::{Backend, BackendKind};
+use codegen::{Backend, BackendKind, OptLevel};
 use common::{
     InputDb,
     config::{Config, WorkspaceConfig},
@@ -78,6 +78,7 @@ pub fn check(
     dump_mir: bool,
     emit_yul_min: bool,
     backend_name: &str,
+    opt_level: OptLevel,
     report_out: Option<&Utf8PathBuf>,
     report_failed_only: bool,
 ) -> Result<bool, String> {
@@ -118,6 +119,7 @@ pub fn check(
             emit_yul_min,
             backend_kind,
             backend.as_ref(),
+            opt_level,
             report_ctx.as_ref(),
         ),
         CheckTarget::WorkspaceMember(dir_path) => check_ingot(
@@ -127,6 +129,7 @@ pub fn check(
             emit_yul_min,
             backend_kind,
             backend.as_ref(),
+            opt_level,
             report_ctx.as_ref(),
         ),
         CheckTarget::Directory(dir_path) => check_directory(
@@ -136,6 +139,7 @@ pub fn check(
             emit_yul_min,
             backend_kind,
             backend.as_ref(),
+            opt_level,
             report_ctx.as_ref(),
         ),
     };
@@ -149,6 +153,7 @@ pub fn check(
                 dump_mir,
                 emit_yul_min,
                 backend_name,
+                opt_level,
                 has_errors,
             );
             if let Err(err) = tar_gz_dir(&staging, &out) {
@@ -233,6 +238,7 @@ fn check_directory(
     emit_yul_min: bool,
     backend_kind: BackendKind,
     backend: &dyn Backend,
+    opt_level: OptLevel,
     report: Option<&ReportContext>,
 ) -> bool {
     let ingot_url = match dir_url(dir_path) {
@@ -276,6 +282,7 @@ fn check_directory(
             emit_yul_min,
             backend_kind,
             backend,
+            opt_level,
             report,
         ),
         Config::Ingot(_) => check_ingot_url(
@@ -285,6 +292,7 @@ fn check_directory(
             emit_yul_min,
             backend_kind,
             backend,
+            opt_level,
             report,
         ),
     }
@@ -432,6 +440,7 @@ fn check_ingot_url(
     emit_yul_min: bool,
     backend_kind: BackendKind,
     backend: &dyn Backend,
+    opt_level: OptLevel,
     report: Option<&ReportContext>,
 ) -> bool {
     if db
@@ -468,6 +477,7 @@ fn check_ingot_url(
         emit_yul_min,
         backend_kind,
         backend,
+        opt_level,
         report,
         &mut seen,
     )
@@ -482,6 +492,7 @@ fn check_workspace(
     emit_yul_min: bool,
     backend_kind: BackendKind,
     backend: &dyn Backend,
+    opt_level: OptLevel,
     report: Option<&ReportContext>,
 ) -> bool {
     let workspace_url = match dir_url(dir_path) {
@@ -516,6 +527,7 @@ fn check_workspace(
             emit_yul_min,
             backend_kind,
             backend,
+            opt_level,
             report,
             &mut seen,
         );
@@ -533,6 +545,7 @@ fn check_ingot_and_dependencies(
     emit_yul_min: bool,
     backend_kind: BackendKind,
     backend: &dyn Backend,
+    opt_level: OptLevel,
     report: Option<&ReportContext>,
     seen: &mut HashSet<Url>,
 ) -> bool {
@@ -573,10 +586,11 @@ fn check_ingot_and_dependencies(
             dump_module_mir(db, root_mod);
         }
         if emit_yul_min {
-            emit_codegen(db, root_mod, backend);
+            emit_codegen(db, root_mod, backend, opt_level);
         }
         if let Some(report) = report {
-            has_errors |= write_check_artifacts(db, root_mod, backend_kind, backend, report);
+            has_errors |=
+                write_check_artifacts(db, root_mod, backend_kind, backend, opt_level, report);
         }
     }
 
@@ -640,6 +654,7 @@ fn check_single_file(
     emit_yul_min: bool,
     backend_kind: BackendKind,
     backend: &dyn Backend,
+    opt_level: OptLevel,
     report: Option<&ReportContext>,
 ) -> bool {
     // Create a file URL for the single .fe file
@@ -681,10 +696,10 @@ fn check_single_file(
             dump_module_mir(db, top_mod);
         }
         if emit_yul_min {
-            emit_codegen(db, top_mod, backend);
+            emit_codegen(db, top_mod, backend, opt_level);
         }
         if let Some(report) = report
-            && write_check_artifacts(db, top_mod, backend_kind, backend, report)
+            && write_check_artifacts(db, top_mod, backend_kind, backend, opt_level, report)
         {
             return true;
         }
@@ -703,6 +718,7 @@ fn check_ingot(
     emit_yul_min: bool,
     backend_kind: BackendKind,
     backend: &dyn Backend,
+    opt_level: OptLevel,
     report: Option<&ReportContext>,
 ) -> bool {
     let mut seen = HashSet::new();
@@ -713,6 +729,7 @@ fn check_ingot(
         emit_yul_min,
         backend_kind,
         backend,
+        opt_level,
         report,
         &mut seen,
     )
@@ -726,6 +743,7 @@ fn check_ingot_inner(
     emit_yul_min: bool,
     backend_kind: BackendKind,
     backend: &dyn Backend,
+    opt_level: OptLevel,
     report: Option<&ReportContext>,
     seen: &mut HashSet<Url>,
 ) -> bool {
@@ -806,10 +824,11 @@ fn check_ingot_inner(
             dump_module_mir(db, root_mod);
         }
         if emit_yul_min {
-            emit_codegen(db, root_mod, backend);
+            emit_codegen(db, root_mod, backend, opt_level);
         }
         if let Some(report) = report {
-            has_errors |= write_check_artifacts(db, root_mod, backend_kind, backend, report);
+            has_errors |=
+                write_check_artifacts(db, root_mod, backend_kind, backend, opt_level, report);
         }
     }
 
@@ -879,9 +898,14 @@ fn print_dependency_info(db: &DriverDataBase, dependency_url: &Url) {
     eprintln!();
 }
 
-fn emit_codegen(db: &DriverDataBase, top_mod: TopLevelMod<'_>, backend: &dyn Backend) {
+fn emit_codegen(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+    backend: &dyn Backend,
+    opt_level: OptLevel,
+) {
     println!("=== {} backend ===", backend.name());
-    match backend.compile(db, top_mod, layout::EVM_LAYOUT) {
+    match backend.compile(db, top_mod, layout::EVM_LAYOUT, opt_level) {
         Ok(output) => match output {
             codegen::BackendOutput::Yul(yul) => {
                 println!("{yul}");
@@ -911,12 +935,14 @@ fn write_check_manifest(
     dump_mir: bool,
     emit_yul_min: bool,
     backend: &str,
+    opt_level: OptLevel,
     has_errors: bool,
 ) {
     let mut out = String::new();
     out.push_str("fe check report\n");
     out.push_str(&format!("path: {path}\n"));
     out.push_str(&format!("backend: {backend}\n"));
+    out.push_str(&format!("opt_level: {opt_level}\n"));
     out.push_str(&format!("dump_mir: {dump_mir}\n"));
     out.push_str(&format!("emit_yul_min: {emit_yul_min}\n"));
     out.push_str(&format!(
@@ -932,6 +958,7 @@ fn write_check_artifacts(
     top_mod: TopLevelMod<'_>,
     backend_kind: BackendKind,
     backend: &dyn Backend,
+    opt_level: OptLevel,
     report: &ReportContext,
 ) -> bool {
     match lower_module(db, top_mod) {
@@ -980,7 +1007,7 @@ fn write_check_artifacts(
     );
 
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        backend.compile(db, top_mod, layout::EVM_LAYOUT)
+        backend.compile(db, top_mod, layout::EVM_LAYOUT, opt_level)
     })) {
         Ok(Ok(output)) => match output {
             codegen::BackendOutput::Yul(yul) => {

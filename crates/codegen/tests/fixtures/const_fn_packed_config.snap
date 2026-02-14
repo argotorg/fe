@@ -12,9 +12,9 @@ function $token_params($kind) -> ret {
       if iszero(v1) {
         v1 := 0x80
       }
-      mstore(0x40, add(v1, 3))
+      mstore(0x40, add(v1, 64))
       mstore(v1, and(18, 0xff))
-      mstore(add(v1, 1), and(30, 0xffff))
+      mstore(add(v1, 32), and(30, 0xffff))
       v0 := v1
     }
     case 1 {
@@ -22,9 +22,9 @@ function $token_params($kind) -> ret {
       if iszero(v2) {
         v2 := 0x80
       }
-      mstore(0x40, add(v2, 3))
+      mstore(0x40, add(v2, 64))
       mstore(v2, and(6, 0xff))
-      mstore(add(v2, 1), and(5, 0xffff))
+      mstore(add(v2, 32), and(5, 0xffff))
       v0 := v2
     }
     default {
@@ -32,9 +32,9 @@ function $token_params($kind) -> ret {
       if iszero(v3) {
         v3 := 0x80
       }
-      mstore(0x40, add(v3, 3))
+      mstore(0x40, add(v3, 64))
       mstore(v3, and(18, 0xff))
-      mstore(add(v3, 1), and(0, 0xffff))
+      mstore(add(v3, 32), and(0, 0xffff))
       v0 := v3
     }
   ret := v0
@@ -62,7 +62,7 @@ function $packed_token_config($kind, $paused) -> ret {
   let v0 := $token_params($kind)
   let v1 := and(mload(v0), 0xff)
   let v2 := v1
-  let v3 := and(mload(add(v0, 1)), 0xffff)
+  let v3 := and(mload(add(v0, 32)), 0xffff)
   let v4 := v3
   let v5 := $pack_config(v2, $paused, v4)
   ret := v5

@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 33
 expression: output
 input_file: tests/fixtures/storage_map_contract.fe
 ---
@@ -20,6 +21,26 @@ object "BalanceMap" {
         let v0 := 0
         mstore(v0, $value)
         return(v0, 32)
+      }
+      function $alloc($size) -> ret {
+        let v0 := mload(64)
+        let v1 := mload(128)
+        let v2 := gt(v1, v0)
+        if v2 {
+          v0 := v1
+        }
+        let v3 := eq(v0, 0)
+        if v3 {
+          let v4 := msize()
+          v0 := v4
+        }
+        let v5 := lt(v0, 8192)
+        if v5 {
+          v0 := 8192
+        }
+        mstore(64, add(v0, $size))
+        ret := v0
+        leave
       }
       function $get_allowance__MemPtr_StorageMap_u256__u256__1____e8f0bd5888eece94($addr, $allowances) -> ret {
         let v0 := $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get__u256_u256_1__3c02c0f2b86be0bb($allowances, $addr)
@@ -121,7 +142,7 @@ object "BalanceMap" {
         leave
       }
       function $storagemap_storage_slot_with_salt__u256__3271ca15373d4483($key, $salt) -> ret {
-        let v0 := 8192
+        let v0 := $alloc(0)
         let v1 := $u256_h3271ca15373d4483_storagekey_hf9e3d38a13ff4409_write_key(v0, $key)
         mstore(add(v0, v1), $salt)
         let v2 := keccak256(v0, add(v1, 32))

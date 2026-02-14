@@ -11,7 +11,8 @@ use crate::report::{
 };
 use camino::Utf8PathBuf;
 use codegen::{
-    ExpectedRevert, TestMetadata, TestModuleOutput, emit_test_module_sonatina, emit_test_module_yul,
+    ExpectedRevert, OptLevel, TestMetadata, TestModuleOutput, emit_test_module_sonatina,
+    emit_test_module_yul,
 };
 use colored::Colorize;
 use common::InputDb;
@@ -326,6 +327,7 @@ pub fn run_tests(
     filter: Option<&str>,
     show_logs: bool,
     backend: &str,
+    opt_level: OptLevel,
     debug: &TestDebugOptions,
     report_out: Option<&Utf8PathBuf>,
     report_dir: Option<&Utf8PathBuf>,
@@ -418,6 +420,7 @@ pub fn run_tests(
                 filter,
                 show_logs,
                 backend,
+                opt_level,
                 &suite_debug,
                 report_ctx.as_ref(),
                 call_trace,
@@ -430,6 +433,7 @@ pub fn run_tests(
                 filter,
                 show_logs,
                 backend,
+                opt_level,
                 &suite_debug,
                 report_ctx.as_ref(),
                 call_trace,
@@ -441,7 +445,7 @@ pub fn run_tests(
         if let Some((out, staging)) = suite_report {
             let should_write = !report_failed_only || suite_results.iter().any(|r| !r.passed);
             if should_write {
-                write_report_manifest(&staging.root_dir, backend, filter, &suite_results);
+                write_report_manifest(&staging.root_dir, backend, opt_level, filter, &suite_results);
                 if let Err(err) = tar_gz_dir(&staging.root_dir, &out) {
                     eprintln!("Error: failed to write report `{out}`: {err}");
                     eprintln!("Report staging directory left at `{}`", staging.temp_dir);
@@ -482,8 +486,8 @@ pub fn run_tests(
         // Clean up tmp dir, if any suites were moved.
         let _ = std::fs::remove_dir_all(staging.root_dir.join("tmp"));
 
-        write_run_gas_comparison_summary(&staging.root_dir);
-        write_report_manifest(&staging.root_dir, backend, filter, &test_results);
+        write_run_gas_comparison_summary(&staging.root_dir, opt_level);
+        write_report_manifest(&staging.root_dir, backend, opt_level, filter, &test_results);
         if let Err(err) = tar_gz_dir(&staging.root_dir, &out) {
             eprintln!("Error: failed to write report `{out}`: {err}");
             eprintln!("Report staging directory left at `{}`", staging.temp_dir);
@@ -514,6 +518,7 @@ fn run_tests_single_file(
     filter: Option<&str>,
     show_logs: bool,
     backend: &str,
+    opt_level: OptLevel,
     debug: &TestDebugOptions,
     report: Option<&ReportContext>,
     call_trace: bool,
@@ -572,7 +577,7 @@ fn run_tests_single_file(
     // Discover and run tests
     maybe_write_suite_ir(db, top_mod, backend, report);
     discover_and_run_tests(
-        db, top_mod, suite, filter, show_logs, backend, debug, report, call_trace,
+        db, top_mod, suite, filter, show_logs, backend, opt_level, debug, report, call_trace,
     )
 }
 
@@ -592,6 +597,7 @@ fn run_tests_ingot(
     filter: Option<&str>,
     show_logs: bool,
     backend: &str,
+    opt_level: OptLevel,
     debug: &TestDebugOptions,
     report: Option<&ReportContext>,
     call_trace: bool,
@@ -650,7 +656,7 @@ fn run_tests_ingot(
     let root_mod = ingot.root_mod(db);
     maybe_write_suite_ir(db, root_mod, backend, report);
     discover_and_run_tests(
-        db, root_mod, suite, filter, show_logs, backend, debug, report, call_trace,
+        db, root_mod, suite, filter, show_logs, backend, opt_level, debug, report, call_trace,
     )
 }
 
@@ -706,6 +712,7 @@ fn discover_and_run_tests(
     filter: Option<&str>,
     show_logs: bool,
     backend: &str,
+    opt_level: OptLevel,
     debug: &TestDebugOptions,
     report: Option<&ReportContext>,
     call_trace: bool,
@@ -714,7 +721,7 @@ fn discover_and_run_tests(
     let emit_result = match backend.as_str() {
         "yul" => emit_with_catch_unwind(|| emit_test_module_yul(db, top_mod), "Yul", suite, report),
         "sonatina" => emit_with_catch_unwind(
-            || emit_test_module_sonatina(db, top_mod),
+            || emit_test_module_sonatina(db, top_mod, opt_level),
             "Sonatina",
             suite,
             report,
@@ -744,6 +751,7 @@ fn discover_and_run_tests(
             filter,
             ctx,
             backend.as_str(),
+            opt_level,
             &output.tests,
         )
     });
@@ -807,7 +815,13 @@ fn discover_and_run_tests(
     }
 
     if let (Some(report), Some(cases)) = (report, gas_comparison_cases.as_ref()) {
-        write_gas_comparison_report(report, backend.as_str(), cases, &primary_measurements);
+        write_gas_comparison_report(
+            report,
+            backend.as_str(),
+            opt_level,
+            cases,
+            &primary_measurements,
+        );
     }
 
     results
@@ -829,6 +843,7 @@ fn collect_gas_comparison_cases(
     filter: Option<&str>,
     report: &ReportContext,
     primary_backend: &str,
+    opt_level: OptLevel,
     primary_cases: &[TestMetadata],
 ) -> Vec<GasComparisonCase> {
     let mut by_symbol: FxHashMap<String, GasComparisonCase> = FxHashMap::default();
@@ -857,7 +872,7 @@ fn collect_gas_comparison_cases(
 
     if primary_backend.eq_ignore_ascii_case("yul") {
         match emit_with_catch_unwind(
-            || emit_test_module_sonatina(db, top_mod),
+            || emit_test_module_sonatina(db, top_mod, opt_level),
             "Sonatina",
             suite,
             None,
@@ -1080,14 +1095,14 @@ fn format_delta_percent(delta: i128, baseline: u64) -> String {
     }
 }
 
-fn gas_comparison_settings_text() -> String {
+fn gas_comparison_settings_text(opt_level: OptLevel) -> String {
     let mut out = String::new();
     out.push_str(&format!("yul.primary.optimize={PRIMARY_YUL_OPTIMIZE}\n"));
     out.push_str("yul.compare.unoptimized.optimize=false\n");
     out.push_str("yul.compare.optimized.optimize=true\n");
     out.push_str(&format!("yul.solc.verify_runtime={YUL_VERIFY_RUNTIME}\n"));
+    out.push_str(&format!("sonatina.opt_level={opt_level}\n"));
     out.push_str("sonatina.codegen.path=emit_test_module_sonatina (default)\n");
-    out.push_str("sonatina.optimization.pipeline=default_pipeline (enabled)\n");
     out.push_str("measurement.call=RuntimeInstance::call_raw(empty calldata)\n");
     out
 }
@@ -1268,6 +1283,7 @@ fn gas_opcode_comparison_header() -> &'static str {
 fn write_gas_comparison_report(
     report: &ReportContext,
     primary_backend: &str,
+    opt_level: OptLevel,
     cases: &[GasComparisonCase],
     primary_measurements: &FxHashMap<String, GasMeasurement>,
 ) {
@@ -1275,7 +1291,7 @@ fn write_gas_comparison_report(
     let _ = create_dir_all_utf8(&artifacts_dir);
     let _ = std::fs::write(
         artifacts_dir.join("gas_comparison_settings.txt"),
-        gas_comparison_settings_text(),
+        gas_comparison_settings_text(opt_level),
     );
 
     let mut markdown = String::new();
@@ -1529,7 +1545,7 @@ fn write_gas_comparison_report(
     );
 
     markdown.push_str("\n## Optimization Settings\n\n");
-    for line in gas_comparison_settings_text().lines() {
+    for line in gas_comparison_settings_text(opt_level).lines() {
         markdown.push_str(&format!("- {line}\n"));
     }
     markdown.push_str(
@@ -1546,12 +1562,12 @@ fn write_gas_comparison_report(
     write_gas_totals_csv(&artifacts_dir.join("gas_comparison_totals.csv"), totals);
 }
 
-fn write_run_gas_comparison_summary(root_dir: &Utf8PathBuf) {
+fn write_run_gas_comparison_summary(root_dir: &Utf8PathBuf, opt_level: OptLevel) {
     let artifacts_dir = root_dir.join("artifacts");
     let _ = create_dir_all_utf8(&artifacts_dir);
     let _ = std::fs::write(
         artifacts_dir.join("gas_comparison_settings.txt"),
-        gas_comparison_settings_text(),
+        gas_comparison_settings_text(opt_level),
     );
 
     let mut suite_dirs: Vec<(String, Utf8PathBuf)> = Vec::new();
@@ -1651,7 +1667,7 @@ fn write_run_gas_comparison_summary(root_dir: &Utf8PathBuf) {
         totals.tests_in_scope,
     );
     summary.push_str("\n## Optimization Settings\n\n");
-    for line in gas_comparison_settings_text().lines() {
+    for line in gas_comparison_settings_text(opt_level).lines() {
         summary.push_str(&format!("- {line}\n"));
     }
     if wrote_any_rows {
@@ -2036,12 +2052,14 @@ fn extract_runtime_from_sonatina_initcode(init: &[u8]) -> Option<&[u8]> {
 fn write_report_manifest(
     staging: &Utf8PathBuf,
     backend: &str,
+    opt_level: OptLevel,
     filter: Option<&str>,
     results: &[TestResult],
 ) {
     let mut out = String::new();
     out.push_str("fe test report\n");
     out.push_str(&format!("backend: {backend}\n"));
+    out.push_str(&format!("opt_level: {opt_level}\n"));
     out.push_str(&format!("filter: {}\n", filter.unwrap_or("<none>")));
     out.push_str(&format!("fe_version: {}\n", env!("CARGO_PKG_VERSION")));
     out.push_str("details: see `meta/args.txt` and `meta/git.txt` for exact repro context\n");

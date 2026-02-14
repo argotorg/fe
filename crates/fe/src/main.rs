@@ -43,6 +43,9 @@ pub enum Command {
         /// Code generation backend to use (yul or sonatina).
         #[arg(long, default_value = "yul")]
         backend: String,
+        /// Optimization level (0 = none, 1 = balanced, 2 = aggressive).
+        #[arg(long, default_value = "1", value_name = "LEVEL")]
+        opt_level: String,
         /// Write a debugging report as a `.tar.gz` file (includes sources, IR, backend output).
         #[arg(long)]
         report: bool,
@@ -89,6 +92,9 @@ pub enum Command {
         /// Backend to use for codegen (yul or sonatina).
         #[arg(long, default_value = "yul")]
         backend: String,
+        /// Optimization level (0 = none, 1 = balanced, 2 = aggressive).
+        #[arg(long, default_value = "1", value_name = "LEVEL")]
+        opt_level: String,
         /// Trace executed EVM opcodes while running tests.
         #[arg(long)]
         trace_evm: bool,
@@ -180,16 +186,25 @@ pub fn run(opts: &Options) {
             dump_mir,
             emit_yul_min,
             backend,
+            opt_level,
             report,
             report_out,
             report_failed_only,
         } => {
+            let opt_level: codegen::OptLevel = match opt_level.parse() {
+                Ok(level) => level,
+                Err(err) => {
+                    eprintln!("❌ Error: {err}");
+                    std::process::exit(1);
+                }
+            };
             // TODO readd custom core
             match check(
                 path,
                 *dump_mir,
                 *emit_yul_min,
                 backend,
+                opt_level,
                 (*report).then_some(report_out),
                 *report_failed_only,
             ) {
@@ -216,6 +231,7 @@ pub fn run(opts: &Options) {
             filter,
             show_logs,
             backend,
+            opt_level,
             trace_evm,
             trace_evm_keep,
             trace_evm_stack_n,
@@ -231,6 +247,13 @@ pub fn run(opts: &Options) {
             report_failed_only,
             call_trace,
         } => {
+            let opt_level: codegen::OptLevel = match opt_level.parse() {
+                Ok(level) => level,
+                Err(err) => {
+                    eprintln!("❌ Error: {err}");
+                    std::process::exit(1);
+                }
+            };
             let debug = TestDebugOptions {
                 trace_evm: *trace_evm,
                 trace_evm_keep: *trace_evm_keep,
@@ -252,6 +275,7 @@ pub fn run(opts: &Options) {
                 filter.as_deref(),
                 *show_logs,
                 backend,
+                opt_level,
                 &debug,
                 (*report).then_some(report_out),
                 report_dir.as_ref(),

@@ -1,12 +1,12 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 42
+assertion_line: 33
 expression: output
 input_file: tests/fixtures/momo.fe
 ---
 function $read_x($val) -> ret {
   let v0 := and(mload($val), 0xff)
-  let v1 := and(mload(add($val, 1)), 0xff)
+  let v1 := and(mload(add($val, 32)), 0xff)
   ret := add(v0, v1)
   leave
 }

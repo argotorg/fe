@@ -10,6 +10,43 @@ use hir::hir_def::TopLevelMod;
 use mir::layout::TargetDataLayout;
 use std::fmt;
 
+/// Optimization level for code generation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OptLevel {
+    /// No optimization — maximum debuggability.
+    O0,
+    /// Balanced optimization (default).
+    #[default]
+    O1,
+    /// Aggressive optimization.
+    O2,
+}
+
+impl std::str::FromStr for OptLevel {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "0" => Ok(OptLevel::O0),
+            "1" => Ok(OptLevel::O1),
+            "2" => Ok(OptLevel::O2),
+            _ => Err(format!(
+                "unknown optimization level: {s} (expected '0', '1', or '2')"
+            )),
+        }
+    }
+}
+
+impl fmt::Display for OptLevel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            OptLevel::O0 => write!(f, "0"),
+            OptLevel::O1 => write!(f, "1"),
+            OptLevel::O2 => write!(f, "2"),
+        }
+    }
+}
+
 /// Output produced by a backend compilation.
 #[derive(Debug, Clone)]
 pub enum BackendOutput {
@@ -113,6 +150,7 @@ pub trait Backend {
     /// * `db` - Driver database for compiler queries
     /// * `top_mod` - The HIR module to compile
     /// * `layout` - Target data layout for type sizing
+    /// * `opt_level` - Optimization level for code generation
     ///
     /// # Returns
     /// The compiled output or an error.
@@ -121,6 +159,7 @@ pub trait Backend {
         db: &DriverDataBase,
         top_mod: TopLevelMod<'_>,
         layout: TargetDataLayout,
+        opt_level: OptLevel,
     ) -> Result<BackendOutput, BackendError>;
 }
 
@@ -183,7 +222,9 @@ impl Backend for YulBackend {
         db: &DriverDataBase,
         top_mod: TopLevelMod<'_>,
         layout: TargetDataLayout,
+        _opt_level: OptLevel,
     ) -> Result<BackendOutput, BackendError> {
+        // Yul text output doesn't optimize; solc optimization happens downstream.
         let yul = crate::emit_module_yul_with_layout(db, top_mod, layout)?;
         Ok(BackendOutput::Yul(yul))
     }
@@ -206,6 +247,7 @@ impl Backend for SonatinaBackend {
         db: &DriverDataBase,
         top_mod: TopLevelMod<'_>,
         layout: TargetDataLayout,
+        opt_level: OptLevel,
     ) -> Result<BackendOutput, BackendError> {
         use sonatina_codegen::isa::evm::EvmBackend;
         use sonatina_codegen::object::{CompileOptions, compile_object};
@@ -214,8 +256,18 @@ impl Backend for SonatinaBackend {
         use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 
         // Lower to Sonatina IR
-        let module = crate::sonatina::compile_module(db, top_mod, layout)?;
+        let mut module = crate::sonatina::compile_module(db, top_mod, layout)?;
         crate::sonatina::ensure_module_sonatina_ir_valid(&module)?;
+
+        // Run the optimization pipeline based on opt_level.
+        match opt_level {
+            OptLevel::O0 => { /* no optimization */ }
+            OptLevel::O1 | OptLevel::O2 => {
+                let pipeline = sonatina_codegen::optim::Pipeline::default_pipeline();
+                pipeline.run(&mut module);
+                crate::sonatina::ensure_module_sonatina_ir_valid(&module)?;
+            }
+        }
 
         // Check if there are any objects to compile
         if module.objects.is_empty() {

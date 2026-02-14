@@ -970,7 +970,7 @@ pub fn compile_runtime_sonatina_from_source(source: &str) -> Result<String, Harn
     }
 
     let output = SonatinaBackend
-        .compile(&db, top_mod, layout::EVM_LAYOUT)
+        .compile(&db, top_mod, layout::EVM_LAYOUT, codegen::OptLevel::default())
         .map_err(|err| HarnessError::EmitSonatina(err.to_string()))?;
     let bytes = output
         .as_bytecode()

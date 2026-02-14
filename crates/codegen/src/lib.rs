@@ -2,7 +2,9 @@ mod backend;
 mod sonatina;
 mod yul;
 
-pub use backend::{Backend, BackendError, BackendKind, BackendOutput, SonatinaBackend, YulBackend};
+pub use backend::{
+    Backend, BackendError, BackendKind, BackendOutput, OptLevel, SonatinaBackend, YulBackend,
+};
 pub use sonatina::{
     LowerError, emit_module_sonatina_ir, emit_test_module_sonatina, validate_module_sonatina_ir,
 };

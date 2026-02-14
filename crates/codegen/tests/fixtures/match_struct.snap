@@ -1,12 +1,12 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 42
+assertion_line: 33
 expression: output
 input_file: tests/fixtures/match_struct.fe
 ---
 function $match_struct_fields($p) -> ret {
   let v0 := 0
-  let v1 := and(mload(add($p, 1)), 0xff)
+  let v1 := and(mload(add($p, 32)), 0xff)
   switch v1
     case 0 {
       let v2 := and(mload($p), 0xff)
@@ -24,12 +24,12 @@ function $match_struct_fields($p) -> ret {
       let v5 := and(mload($p), 0xff)
       switch v5
         case 0 {
-          let v6 := and(mload(add($p, 1)), 0xff)
+          let v6 := and(mload(add($p, 32)), 0xff)
           let v7 := v6
           v0 := v7
         }
         default {
-          let v8 := and(mload(add($p, 1)), 0xff)
+          let v8 := and(mload(add($p, 32)), 0xff)
           let v9 := v8
           let v10 := and(mload($p), 0xff)
           let v11 := v10
@@ -47,7 +47,7 @@ function $match_struct_wildcard($p) -> ret {
       v0 := 1
     }
     default {
-      let v2 := and(mload(add($p, 1)), 0xff)
+      let v2 := and(mload(add($p, 32)), 0xff)
       switch v2
         case 0 {
           v0 := 2
