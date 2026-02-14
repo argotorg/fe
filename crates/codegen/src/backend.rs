@@ -269,11 +269,11 @@ impl Backend for SonatinaBackend {
         // Run the optimization pipeline based on opt_level.
         match opt_level {
             OptLevel::O0 => { /* no optimization */ }
-            OptLevel::O1 | OptLevel::O2 => {
-                let pipeline = sonatina_codegen::optim::Pipeline::default_pipeline();
-                pipeline.run(&mut module);
-                crate::sonatina::ensure_module_sonatina_ir_valid(&module)?;
-            }
+            OptLevel::O1 => sonatina_codegen::optim::Pipeline::balanced().run(&mut module),
+            OptLevel::O2 => sonatina_codegen::optim::Pipeline::aggressive().run(&mut module),
+        }
+        if opt_level != OptLevel::O0 {
+            crate::sonatina::ensure_module_sonatina_ir_valid(&module)?;
         }
 
         // Check if there are any objects to compile
