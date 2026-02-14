@@ -2520,6 +2520,14 @@ fn write_gas_comparison_report(
     let mut opcode_magnitude_totals = OpcodeMagnitudeTotals::default();
 
     for case in cases {
+        // In Sonatina-primary runs, comparisons are still made against Yul.
+        // Persist the exact Yul source/bytecode pair used for those baselines.
+        if primary_backend.eq_ignore_ascii_case("sonatina")
+            && let Some(yul_case) = case.yul.as_ref()
+        {
+            write_yul_case_artifacts(report, yul_case);
+        }
+
         let yul_opt = if primary_backend.eq_ignore_ascii_case("yul") {
             primary_measurements.get(&case.symbol_name).cloned()
         } else {
@@ -3488,6 +3496,7 @@ fn write_report_manifest(
     out.push_str(&format!("fe_version: {}\n", env!("CARGO_PKG_VERSION")));
     out.push_str("details: see `meta/args.txt` and `meta/git.txt` for exact repro context\n");
     out.push_str("gas_comparison: see `artifacts/gas_comparison.md`, `artifacts/gas_comparison.csv`, `artifacts/gas_comparison_totals.csv`, `artifacts/gas_comparison_magnitude.csv`, `artifacts/gas_opcode_magnitude.csv`, and `artifacts/gas_comparison_settings.txt` when available\n");
+    out.push_str("gas_comparison_yul_artifacts: in Sonatina comparison runs, Yul baselines are stored under `artifacts/tests/<test>/yul/{source.yul,bytecode.unopt.hex,bytecode.opt.hex,runtime.unopt.hex,runtime.opt.hex}`\n");
     out.push_str("gas_comparison_aggregate: run-level reports also include `artifacts/gas_comparison_all.csv`, `artifacts/gas_comparison_summary.md`, `artifacts/gas_comparison_magnitude.csv`, `artifacts/gas_opcode_magnitude.csv`, `artifacts/gas_hotspots_vs_yul_opt.csv`, `artifacts/gas_suite_delta_summary.csv`, and `artifacts/gas_tail_trace_symbol_hotspots.csv`\n");
     out.push_str("gas_opcode_profile: see `artifacts/gas_opcode_comparison.md` and `artifacts/gas_opcode_comparison.csv` for opcode and step-count diagnostics when available\n");
     out.push_str("gas_opcode_profile_aggregate: run-level reports also include `artifacts/gas_opcode_comparison_all.csv`\n");
