@@ -180,6 +180,8 @@ where
         FuncParam {
             mode: FuncParamMode::Own,
             is_mut: false,
+            has_ref_prefix: false,
+            has_own_prefix: false,
             is_label_suppressed: false,
             name: Partial::Present(FuncParamName::Ident(IdentId::make_self(db))),
             ty: Partial::Present(self.self_ty()),
@@ -195,6 +197,8 @@ where
         FuncParam {
             mode: FuncParamMode::View,
             is_mut: true,
+            has_ref_prefix: false,
+            has_own_prefix: false,
             is_label_suppressed: true,
             name: Partial::Present(FuncParamName::Ident(name)),
             ty: Partial::Present(ty),

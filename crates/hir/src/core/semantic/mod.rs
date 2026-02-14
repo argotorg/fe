@@ -518,15 +518,42 @@ impl<'db> FuncParamView<'db> {
         let func = self.func;
         let assumptions = func.assumptions(db);
 
-        let Some(hir_ty) = self
+        let Some(param) = self
             .func
             .params_list(db)
             .to_opt()
             .and_then(|l| l.data(db).get(self.idx))
-            .and_then(|p| p.ty.to_opt())
         else {
             return Vec::new();
         };
+        let Some(hir_ty) = param.ty.to_opt() else {
+            return Vec::new();
+        };
+
+        if self.is_self_param(db) && !param.self_ty_fallback {
+            if param.has_ref_prefix {
+                return vec![
+                    TyLowerDiag::MixedRefSelfPrefixWithExplicitType {
+                        span: self.span().ref_kw().into(),
+                    }
+                    .into(),
+                ];
+            }
+
+            if param.has_own_prefix {
+                return vec![
+                    TyLowerDiag::MixedOwnSelfPrefixWithExplicitType {
+                        span: self.span().own_kw().into(),
+                    }
+                    .into(),
+                ];
+            }
+
+            if param.is_mut && !allows_mut_self_prefix_with_explicit_ty(db, hir_ty) {
+                let span = self.span().mut_kw().into();
+                return vec![TyLowerDiag::InvalidMutSelfPrefixWithExplicitType { span }.into()];
+            }
+        }
 
         // Surface name-resolution errors for the parameter type first
         let errs =
@@ -618,6 +645,26 @@ impl<'db> FuncParamView<'db> {
         }
 
         out
+    }
+}
+
+fn allows_mut_self_prefix_with_explicit_ty<'db>(db: &'db dyn HirDb, hir_ty: TypeId<'db>) -> bool {
+    if let TypeKind::Mode(TypeMode::Own, inner) = hir_ty.data(db)
+        && let Some(inner) = inner.to_opt()
+    {
+        !is_bare_self_ty(db, inner)
+    } else {
+        false
+    }
+}
+
+fn is_bare_self_ty<'db>(db: &'db dyn HirDb, hir_ty: TypeId<'db>) -> bool {
+    if let TypeKind::Path(path) = hir_ty.data(db)
+        && let Some(path) = path.to_opt()
+    {
+        path.is_self_ty(db) && path.generic_args(db).is_empty(db)
+    } else {
+        false
     }
 }
 

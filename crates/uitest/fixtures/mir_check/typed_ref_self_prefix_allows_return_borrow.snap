@@ -1,7 +1,0 @@
----
-source: crates/uitest/tests/mir_check.rs
-assertion_line: 32
-expression: res
-input_file: fixtures/mir_check/typed_ref_self_prefix_allows_return_borrow.fe
----
-

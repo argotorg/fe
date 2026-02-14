@@ -128,6 +128,16 @@ pub enum TyLowerDiag<'db> {
         ty: TyId<'db>,
     },
 
+    MixedRefSelfPrefixWithExplicitType {
+        span: DynLazySpan<'db>,
+    },
+    MixedOwnSelfPrefixWithExplicitType {
+        span: DynLazySpan<'db>,
+    },
+    InvalidMutSelfPrefixWithExplicitType {
+        span: DynLazySpan<'db>,
+    },
+
     InvalidConstTyExpr(DynLazySpan<'db>),
 
     ConstEvalUnsupported(DynLazySpan<'db>),
@@ -169,6 +179,9 @@ impl TyLowerDiag<'_> {
             Self::ConstEvalDivisionByZero(_) => 25,
             Self::ConstEvalStepLimitExceeded(_) => 26,
             Self::ConstEvalRecursionLimitExceeded(_) => 27,
+            Self::MixedRefSelfPrefixWithExplicitType { .. } => 28,
+            Self::MixedOwnSelfPrefixWithExplicitType { .. } => 29,
+            Self::InvalidMutSelfPrefixWithExplicitType { .. } => 30,
             Self::TooManyGenericArgs { .. } => 16,
             Self::DuplicateFieldName(..) => 17,
             Self::DuplicateVariantName(..) => 18,

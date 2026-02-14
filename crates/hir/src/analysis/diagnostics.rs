@@ -1630,6 +1630,52 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 error_code,
             },
 
+            Self::MixedRefSelfPrefixWithExplicitType { span } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "invalid mixed receiver syntax".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "`ref self: ...` cannot be used with an explicit `self` type"
+                        .to_string(),
+                    span: span.resolve(db),
+                }],
+                notes: vec![
+                    "use shorthand receiver syntax instead: `ref self`".to_string(),
+                    "or move the mode into the type and remove the prefix: `self: ref ...`"
+                        .to_string(),
+                ],
+                error_code,
+            },
+
+            Self::MixedOwnSelfPrefixWithExplicitType { span } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "invalid mixed receiver syntax".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "`own self: ...` cannot be used with an explicit `self` type"
+                        .to_string(),
+                    span: span.resolve(db),
+                }],
+                notes: vec![
+                    "use shorthand receiver syntax instead: `own self`".to_string(),
+                    "or move the mode into the type and remove the prefix: `self: own ...`"
+                        .to_string(),
+                ],
+                error_code,
+            },
+
+            Self::InvalidMutSelfPrefixWithExplicitType { span } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "invalid mixed receiver syntax".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "`mut self: ...` is only allowed as `mut self: own X` where `X` is not bare `Self`".to_string(),
+                    span: span.resolve(db),
+                }],
+                notes: vec!["for a mutable owned receiver, use shorthand receiver syntax: `mut own self`".to_string()],
+                error_code,
+            },
+
             Self::InvalidConstTyExpr(span) => primary_diag(
                 Severity::Error,
                 "the expression is not supported in a const type context",

@@ -193,6 +193,8 @@ pub enum FuncParamMode {
 pub struct FuncParam<'db> {
     pub mode: FuncParamMode,
     pub is_mut: bool,
+    pub has_ref_prefix: bool,
+    pub has_own_prefix: bool,
     pub is_label_suppressed: bool,
     pub name: Partial<FuncParamName<'db>>,
     pub ty: Partial<TypeId<'db>>,

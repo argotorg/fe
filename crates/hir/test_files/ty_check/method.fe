@@ -21,7 +21,7 @@ impl<T> Option<T> {
         }
     }
 
-    pub fn get_or_insert(mut self: own Self, inner: own T) -> T {
+    pub fn get_or_insert(mut own self, inner: own T) -> T {
         match self {
             Self::Some(t) => t
             Self::None => {

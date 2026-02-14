@@ -222,6 +222,8 @@ impl<'db> FuncParam<'db> {
         Self {
             mode,
             is_mut,
+            has_ref_prefix: is_ref,
+            has_own_prefix: is_own,
             is_label_suppressed,
             name: name.into(),
             ty,
