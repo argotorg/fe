@@ -24,7 +24,6 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use solc_runner::compile_single_contract;
 use url::Url;
 
-const PRIMARY_YUL_OPTIMIZE: bool = true;
 const YUL_VERIFY_RUNTIME: bool = true;
 
 fn install_report_panic_hook(report: &ReportContext, filename: &str) -> PanicReportGuard {
@@ -774,7 +773,7 @@ fn discover_and_run_tests(
             case,
             show_logs,
             backend.as_str(),
-            PRIMARY_YUL_OPTIMIZE,
+            opt_level.yul_optimize(),
             report,
             call_trace,
             report.is_some(),
@@ -1097,7 +1096,7 @@ fn format_delta_percent(delta: i128, baseline: u64) -> String {
 
 fn gas_comparison_settings_text(opt_level: OptLevel) -> String {
     let mut out = String::new();
-    out.push_str(&format!("yul.primary.optimize={PRIMARY_YUL_OPTIMIZE}\n"));
+    out.push_str(&format!("yul.primary.optimize={}\n", opt_level.yul_optimize()));
     out.push_str("yul.compare.unoptimized.optimize=false\n");
     out.push_str("yul.compare.optimized.optimize=true\n");
     out.push_str(&format!("yul.solc.verify_runtime={YUL_VERIFY_RUNTIME}\n"));
@@ -1342,7 +1341,7 @@ fn write_gas_comparison_report(
         } else {
             case.sonatina
                 .as_ref()
-                .map(|test| measure_case_gas(test, "sonatina", PRIMARY_YUL_OPTIMIZE, true))
+                .map(|test| measure_case_gas(test, "sonatina", opt_level.yul_optimize(), true))
         };
 
         let yul_unopt_gas = yul_unopt

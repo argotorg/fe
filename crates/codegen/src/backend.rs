@@ -37,6 +37,13 @@ impl std::str::FromStr for OptLevel {
     }
 }
 
+impl OptLevel {
+    /// Whether the solc Yul optimizer should be enabled for this level.
+    pub fn yul_optimize(&self) -> bool {
+        !matches!(self, OptLevel::O0)
+    }
+}
+
 impl fmt::Display for OptLevel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
