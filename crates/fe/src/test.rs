@@ -161,6 +161,40 @@ struct OpcodeMagnitudeTotals {
     sonatina: OpcodeAggregateTotals,
 }
 
+#[derive(Debug, Clone)]
+struct GasHotspotRow {
+    suite: String,
+    test: String,
+    symbol: String,
+    yul_opt_gas: Option<u64>,
+    sonatina_gas: Option<u64>,
+    delta_vs_yul_opt: i128,
+    delta_vs_yul_opt_pct: String,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct SuiteDeltaTotals {
+    tests_with_delta: usize,
+    delta_vs_yul_opt_sum: i128,
+}
+
+#[derive(Debug, Clone)]
+struct SymtabEntry {
+    start: u32,
+    end: u32,
+    symbol: String,
+}
+
+#[derive(Debug, Clone)]
+struct TraceSymbolHotspotRow {
+    suite: String,
+    test: String,
+    symbol: String,
+    tail_steps_total: usize,
+    tail_steps_mapped: usize,
+    steps_in_symbol: usize,
+}
+
 impl GasMeasurement {
     fn from_test_outcome(outcome: &TestOutcome) -> Self {
         Self {
@@ -1379,6 +1413,118 @@ fn csv_escape(value: &str) -> String {
     }
 }
 
+fn parse_csv_fields(line: &str) -> Vec<String> {
+    let mut fields = Vec::new();
+    let mut current = String::new();
+    let mut chars = line.chars().peekable();
+    let mut in_quotes = false;
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            '"' => {
+                if in_quotes {
+                    if chars.peek() == Some(&'"') {
+                        current.push('"');
+                        let _ = chars.next();
+                    } else {
+                        in_quotes = false;
+                    }
+                } else if current.is_empty() {
+                    in_quotes = true;
+                } else {
+                    current.push(ch);
+                }
+            }
+            ',' if !in_quotes => {
+                fields.push(current);
+                current = String::new();
+            }
+            _ => current.push(ch),
+        }
+    }
+    fields.push(current);
+    fields
+}
+
+fn parse_optional_u64_cell(value: &str) -> Option<u64> {
+    value.trim().parse::<u64>().ok()
+}
+
+fn parse_optional_i128_cell(value: &str) -> Option<i128> {
+    value.trim().parse::<i128>().ok()
+}
+
+fn parse_symtab_entries(contents: &str) -> Vec<SymtabEntry> {
+    let mut rows = Vec::new();
+    for line in contents.lines() {
+        let line = line.trim();
+        if !line.starts_with("off=") {
+            continue;
+        }
+        // Format:
+        // off=  3996 size=   700 test_erc20__StorPtr_Evm___...
+        let mut parts = line.split_whitespace();
+        let off_token = parts.next().unwrap_or_default();
+        let off_value = parts.next().unwrap_or_default();
+        let size_token = parts.next().unwrap_or_default();
+        let size_value = parts.next().unwrap_or_default();
+        if off_token != "off=" || size_token != "size=" {
+            continue;
+        }
+        let Ok(start) = off_value.parse::<u32>() else {
+            continue;
+        };
+        let Ok(size) = size_value.parse::<u32>() else {
+            continue;
+        };
+        let symbol = parts.collect::<Vec<_>>().join(" ");
+        if symbol.is_empty() {
+            continue;
+        }
+        rows.push(SymtabEntry {
+            start,
+            end: start.saturating_add(size),
+            symbol,
+        });
+    }
+    rows.sort_by_key(|row| row.start);
+    rows
+}
+
+fn parse_trace_tail_pcs(contents: &str) -> Vec<u32> {
+    let mut pcs = Vec::new();
+    for line in contents.lines() {
+        let Some(rest) = line.strip_prefix("pc=") else {
+            continue;
+        };
+        let mut parts = rest.split_whitespace();
+        let Some(pc_text) = parts.next() else {
+            continue;
+        };
+        if let Ok(pc) = pc_text.parse::<u32>() {
+            pcs.push(pc);
+        }
+    }
+    pcs
+}
+
+fn map_pc_to_symbol(pc: u32, symtab: &[SymtabEntry]) -> Option<&str> {
+    let mut lo = 0usize;
+    let mut hi = symtab.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        let row = &symtab[mid];
+        if pc < row.start {
+            hi = mid;
+        } else if pc >= row.end {
+            lo = mid + 1;
+        } else {
+            return Some(&row.symbol);
+        }
+    }
+    None
+}
+
 fn evm_runtime_metrics_from_bytes(bytes: &[u8]) -> EvmRuntimeMetrics {
     let mut metrics = EvmRuntimeMetrics {
         byte_len: bytes.len(),
@@ -1648,6 +1794,105 @@ fn write_opcode_magnitude_csv(path: &Utf8PathBuf, totals: OpcodeMagnitudeTotals)
     ));
     write_opcode_magnitude_rows(&mut out, "yul_opt", totals.yul_opt);
     write_opcode_magnitude_rows(&mut out, "sonatina", totals.sonatina);
+    let _ = std::fs::write(path, out);
+}
+
+fn write_gas_hotspots_csv(path: &Utf8PathBuf, rows: &[GasHotspotRow]) {
+    let mut sorted = rows.to_vec();
+    sorted.sort_by(|a, b| b.delta_vs_yul_opt.cmp(&a.delta_vs_yul_opt));
+
+    let total_delta: i128 = sorted.iter().map(|row| row.delta_vs_yul_opt).sum();
+    let mut cumulative: i128 = 0;
+
+    let mut out = String::new();
+    out.push_str("rank,suite,test,symbol,yul_opt_gas,sonatina_gas,delta_vs_yul_opt,delta_vs_yul_opt_pct,share_of_total_delta_pct,cumulative_share_pct\n");
+    for (idx, row) in sorted.into_iter().enumerate() {
+        cumulative += row.delta_vs_yul_opt;
+        let share = ratio_percent_i128(row.delta_vs_yul_opt, total_delta)
+            .map(|v| format!("{v:.2}%"))
+            .unwrap_or_else(|| "n/a".to_string());
+        let cumulative_share = ratio_percent_i128(cumulative, total_delta)
+            .map(|v| format!("{v:.2}%"))
+            .unwrap_or_else(|| "n/a".to_string());
+        out.push_str(&format!(
+            "{},{},{},{},{},{},{},{},{},{}\n",
+            idx + 1,
+            csv_escape(&row.suite),
+            csv_escape(&row.test),
+            csv_escape(&row.symbol),
+            csv_escape(&u64_cell(row.yul_opt_gas)),
+            csv_escape(&u64_cell(row.sonatina_gas)),
+            row.delta_vs_yul_opt,
+            csv_escape(&row.delta_vs_yul_opt_pct),
+            csv_escape(&share),
+            csv_escape(&cumulative_share)
+        ));
+    }
+    let _ = std::fs::write(path, out);
+}
+
+fn write_suite_delta_summary_csv(path: &Utf8PathBuf, suite_rollup: &[(String, SuiteDeltaTotals)]) {
+    let total_delta: i128 = suite_rollup
+        .iter()
+        .map(|(_, totals)| totals.delta_vs_yul_opt_sum)
+        .sum();
+    let mut out = String::new();
+    out.push_str("suite,tests_with_delta,delta_vs_yul_opt_sum,avg_delta_vs_yul_opt,share_of_total_delta_pct\n");
+    for (suite, totals) in suite_rollup {
+        let avg = if totals.tests_with_delta == 0 {
+            "n/a".to_string()
+        } else {
+            format!(
+                "{:.2}",
+                totals.delta_vs_yul_opt_sum as f64 / totals.tests_with_delta as f64
+            )
+        };
+        let share = ratio_percent_i128(totals.delta_vs_yul_opt_sum, total_delta)
+            .map(|v| format!("{v:.2}%"))
+            .unwrap_or_else(|| "n/a".to_string());
+        out.push_str(&format!(
+            "{},{},{},{},{}\n",
+            csv_escape(suite),
+            totals.tests_with_delta,
+            totals.delta_vs_yul_opt_sum,
+            csv_escape(&avg),
+            csv_escape(&share),
+        ));
+    }
+    let _ = std::fs::write(path, out);
+}
+
+fn write_trace_symbol_hotspots_csv(path: &Utf8PathBuf, rows: &[TraceSymbolHotspotRow]) {
+    let mut sorted = rows.to_vec();
+    sorted.sort_by(|a, b| {
+        b.steps_in_symbol
+            .cmp(&a.steps_in_symbol)
+            .then_with(|| a.suite.cmp(&b.suite))
+            .then_with(|| a.test.cmp(&b.test))
+    });
+
+    let mut out = String::new();
+    out.push_str("suite,test,symbol,tail_steps_total,tail_steps_mapped,steps_in_symbol,symbol_share_of_tail_pct\n");
+    for row in sorted {
+        let pct = if row.tail_steps_total == 0 {
+            "n/a".to_string()
+        } else {
+            format!(
+                "{:.2}%",
+                (row.steps_in_symbol as f64 * 100.0) / row.tail_steps_total as f64
+            )
+        };
+        out.push_str(&format!(
+            "{},{},{},{},{},{},{}\n",
+            csv_escape(&row.suite),
+            csv_escape(&row.test),
+            csv_escape(&row.symbol),
+            row.tail_steps_total,
+            row.tail_steps_mapped,
+            row.steps_in_symbol,
+            csv_escape(&pct)
+        ));
+    }
     let _ = std::fs::write(path, out);
 }
 
@@ -2051,6 +2296,154 @@ fn append_opcode_magnitude_summary(out: &mut String, totals: OpcodeMagnitudeTota
         totals.yul_opt.copy_ops_sum,
         totals.sonatina.copy_ops_sum,
     );
+    out.push('\n');
+}
+
+fn ratio_percent_i128(numerator: i128, denominator: i128) -> Option<f64> {
+    if denominator == 0 {
+        None
+    } else {
+        Some((numerator as f64 * 100.0) / denominator as f64)
+    }
+}
+
+fn append_opcode_inflation_attribution(out: &mut String, totals: OpcodeMagnitudeTotals) {
+    let runtime_ops_delta =
+        totals.sonatina.runtime_ops_sum as i128 - totals.yul_opt.runtime_ops_sum as i128;
+    let swap_delta = totals.sonatina.swap_ops_sum as i128 - totals.yul_opt.swap_ops_sum as i128;
+    let pop_delta = totals.sonatina.pop_ops_sum as i128 - totals.yul_opt.pop_ops_sum as i128;
+    let jump_delta = totals.sonatina.jump_ops_sum as i128 - totals.yul_opt.jump_ops_sum as i128;
+    let jumpi_delta = totals.sonatina.jumpi_ops_sum as i128 - totals.yul_opt.jumpi_ops_sum as i128;
+    let mem_rw_delta =
+        totals.sonatina.mem_rw_ops_sum as i128 - totals.yul_opt.mem_rw_ops_sum as i128;
+    let storage_rw_delta =
+        totals.sonatina.storage_rw_ops_sum as i128 - totals.yul_opt.storage_rw_ops_sum as i128;
+
+    let swap_pop_delta = swap_delta + pop_delta;
+    let control_delta = jump_delta + jumpi_delta;
+    let mem_storage_delta = mem_rw_delta + storage_rw_delta;
+    let stack_control_delta = swap_pop_delta + control_delta;
+
+    out.push_str("## Inflation Attribution Snapshot\n\n");
+    out.push_str(&format!("- runtime_ops_delta: {runtime_ops_delta}\n"));
+    out.push_str(&format!(
+        "- swap_pop_delta: {} ({})\n",
+        swap_pop_delta,
+        format_percent_cell(ratio_percent_i128(swap_pop_delta, runtime_ops_delta))
+    ));
+    out.push_str(&format!(
+        "- control_flow_delta (jump+jumpi): {} ({})\n",
+        control_delta,
+        format_percent_cell(ratio_percent_i128(control_delta, runtime_ops_delta))
+    ));
+    out.push_str(&format!(
+        "- stack_control_delta (swap+pop+jump+jumpi): {} ({})\n",
+        stack_control_delta,
+        format_percent_cell(ratio_percent_i128(stack_control_delta, runtime_ops_delta))
+    ));
+    out.push_str(&format!(
+        "- mem_storage_delta (mem_rw+storage_rw): {} ({})\n",
+        mem_storage_delta,
+        format_percent_cell(ratio_percent_i128(mem_storage_delta, runtime_ops_delta))
+    ));
+    out.push('\n');
+}
+
+fn append_hotspot_summary(
+    out: &mut String,
+    hotspots: &[GasHotspotRow],
+    suite_rollup: &[(String, SuiteDeltaTotals)],
+) {
+    let total_delta: i128 = hotspots.iter().map(|row| row.delta_vs_yul_opt).sum();
+    let mut sorted = hotspots.to_vec();
+    sorted.sort_by(|a, b| b.delta_vs_yul_opt.cmp(&a.delta_vs_yul_opt));
+
+    out.push_str("## Top Gas Regressions (vs Yul optimized)\n\n");
+    out.push_str(&format!("- rows_with_delta: {}\n", sorted.len()));
+    out.push_str(&format!("- total_delta_vs_yul_opt: {}\n\n", total_delta));
+    out.push_str("| rank | suite | test | delta_vs_yul_opt | pct_vs_yul_opt | share_of_total |\n");
+    out.push_str("| ---: | --- | --- | ---: | ---: | ---: |\n");
+
+    let mut cumulative: i128 = 0;
+    for (idx, row) in sorted.iter().take(10).enumerate() {
+        cumulative += row.delta_vs_yul_opt;
+        let share = format_percent_cell(ratio_percent_i128(row.delta_vs_yul_opt, total_delta));
+        out.push_str(&format!(
+            "| {} | {} | {} | {} | {} | {} |\n",
+            idx + 1,
+            row.suite,
+            row.test,
+            row.delta_vs_yul_opt,
+            row.delta_vs_yul_opt_pct,
+            share
+        ));
+    }
+    out.push_str(&format!(
+        "\n- top_10_cumulative_share: {}\n\n",
+        format_percent_cell(ratio_percent_i128(cumulative, total_delta))
+    ));
+
+    out.push_str("## Suite Delta Rollup (vs Yul optimized)\n\n");
+    out.push_str("| suite | tests_with_delta | delta_vs_yul_opt_sum | avg_delta_vs_yul_opt | share_of_total |\n");
+    out.push_str("| --- | ---: | ---: | ---: | ---: |\n");
+    for (suite, totals) in suite_rollup.iter().take(10) {
+        let avg = if totals.tests_with_delta == 0 {
+            "n/a".to_string()
+        } else {
+            format!(
+                "{:.2}",
+                totals.delta_vs_yul_opt_sum as f64 / totals.tests_with_delta as f64
+            )
+        };
+        out.push_str(&format!(
+            "| {} | {} | {} | {} | {} |\n",
+            suite,
+            totals.tests_with_delta,
+            totals.delta_vs_yul_opt_sum,
+            avg,
+            format_percent_cell(ratio_percent_i128(totals.delta_vs_yul_opt_sum, total_delta))
+        ));
+    }
+    out.push('\n');
+}
+
+fn append_trace_symbol_hotspots_summary(out: &mut String, rows: &[TraceSymbolHotspotRow]) {
+    if rows.is_empty() {
+        return;
+    }
+    let mut sorted = rows.to_vec();
+    sorted.sort_by(|a, b| {
+        b.steps_in_symbol
+            .cmp(&a.steps_in_symbol)
+            .then_with(|| a.suite.cmp(&b.suite))
+            .then_with(|| a.test.cmp(&b.test))
+    });
+
+    out.push_str("## Tail Trace Symbol Attribution (Sonatina)\n\n");
+    out.push_str(
+        "Sampled from each suite trace artifact (`debug/*.evm_trace.txt`), which keeps the last N steps.\n\n",
+    );
+    out.push_str("| rank | suite | test | symbol | steps_in_symbol | symbol_share_of_tail |\n");
+    out.push_str("| ---: | --- | --- | --- | ---: | ---: |\n");
+    for (idx, row) in sorted.iter().take(12).enumerate() {
+        let pct = if row.tail_steps_total == 0 {
+            "n/a".to_string()
+        } else {
+            format!(
+                "{:.2}%",
+                (row.steps_in_symbol as f64 * 100.0) / row.tail_steps_total as f64
+            )
+        };
+        out.push_str(&format!(
+            "| {} | {} | {} | {} | {} | {} |\n",
+            idx + 1,
+            row.suite,
+            row.test,
+            row.symbol,
+            row.steps_in_symbol,
+            pct
+        ));
+    }
     out.push('\n');
 }
 
@@ -2465,6 +2858,9 @@ fn write_run_gas_comparison_summary(root_dir: &Utf8PathBuf, opt_level: OptLevel)
     let mut totals = GasTotals::default();
     let mut magnitude_totals = GasMagnitudeTotals::default();
     let mut opcode_magnitude_totals = OpcodeMagnitudeTotals::default();
+    let mut hotspots: Vec<GasHotspotRow> = Vec::new();
+    let mut suite_rollup: FxHashMap<String, SuiteDeltaTotals> = FxHashMap::default();
+    let mut trace_symbol_hotspots: Vec<TraceSymbolHotspotRow> = Vec::new();
 
     for (suite, suite_dir) in suite_dirs {
         let suite_rows_path = suite_dir.join("artifacts").join("gas_comparison.csv");
@@ -2472,6 +2868,25 @@ fn write_run_gas_comparison_summary(root_dir: &Utf8PathBuf, opt_level: OptLevel)
             for (idx, line) in contents.lines().enumerate() {
                 if idx == 0 || line.trim().is_empty() {
                     continue;
+                }
+                let fields = parse_csv_fields(line);
+                if fields.len() >= 9 {
+                    let yul_opt_gas = parse_optional_u64_cell(&fields[3]);
+                    let sonatina_gas = parse_optional_u64_cell(&fields[4]);
+                    if let Some(delta_vs_yul_opt) = parse_optional_i128_cell(&fields[7]) {
+                        hotspots.push(GasHotspotRow {
+                            suite: suite.clone(),
+                            test: fields[0].clone(),
+                            symbol: fields[1].clone(),
+                            yul_opt_gas,
+                            sonatina_gas,
+                            delta_vs_yul_opt,
+                            delta_vs_yul_opt_pct: fields[8].clone(),
+                        });
+                        let entry = suite_rollup.entry(suite.clone()).or_default();
+                        entry.tests_with_delta += 1;
+                        entry.delta_vs_yul_opt_sum += delta_vs_yul_opt;
+                    }
                 }
                 all_rows.push_str(&csv_escape(&suite));
                 all_rows.push(',');
@@ -2516,10 +2931,80 @@ fn write_run_gas_comparison_summary(root_dir: &Utf8PathBuf, opt_level: OptLevel)
         if let Ok(contents) = std::fs::read_to_string(&suite_opcode_magnitude_path) {
             opcode_magnitude_totals.add(parse_gas_opcode_magnitude_csv(&contents));
         }
+
+        let debug_dir = suite_dir.join("debug");
+        let symtab_entries = std::fs::read_to_string(debug_dir.join("sonatina_symtab.txt"))
+            .ok()
+            .map(|contents| parse_symtab_entries(&contents))
+            .unwrap_or_default();
+        if !symtab_entries.is_empty()
+            && let Ok(entries) = std::fs::read_dir(&debug_dir)
+        {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !path.is_file() {
+                    continue;
+                }
+                let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+                    continue;
+                };
+                if !file_name.ends_with(".evm_trace.txt") {
+                    continue;
+                }
+                let Ok(contents) = std::fs::read_to_string(&path) else {
+                    continue;
+                };
+                let pcs = parse_trace_tail_pcs(&contents);
+                if pcs.is_empty() {
+                    continue;
+                }
+                let mut counts: FxHashMap<String, usize> = FxHashMap::default();
+                let mut mapped = 0usize;
+                for pc in &pcs {
+                    if let Some(symbol) = map_pc_to_symbol(*pc, &symtab_entries) {
+                        *counts.entry(symbol.to_string()).or_default() += 1;
+                        mapped += 1;
+                    }
+                }
+                let test_name = file_name
+                    .strip_suffix(".evm_trace.txt")
+                    .unwrap_or(file_name)
+                    .to_string();
+                for (symbol, steps_in_symbol) in counts {
+                    trace_symbol_hotspots.push(TraceSymbolHotspotRow {
+                        suite: suite.clone(),
+                        test: test_name.clone(),
+                        symbol,
+                        tail_steps_total: pcs.len(),
+                        tail_steps_mapped: mapped,
+                        steps_in_symbol,
+                    });
+                }
+            }
+        }
     }
+
+    let mut suite_rollup_rows: Vec<(String, SuiteDeltaTotals)> = suite_rollup.into_iter().collect();
+    suite_rollup_rows.sort_by(|a, b| {
+        b.1.delta_vs_yul_opt_sum
+            .cmp(&a.1.delta_vs_yul_opt_sum)
+            .then_with(|| a.0.cmp(&b.0))
+    });
 
     if wrote_any_rows {
         let _ = std::fs::write(artifacts_dir.join("gas_comparison_all.csv"), all_rows);
+        write_gas_hotspots_csv(
+            &artifacts_dir.join("gas_hotspots_vs_yul_opt.csv"),
+            &hotspots,
+        );
+        write_suite_delta_summary_csv(
+            &artifacts_dir.join("gas_suite_delta_summary.csv"),
+            &suite_rollup_rows,
+        );
+        write_trace_symbol_hotspots_csv(
+            &artifacts_dir.join("gas_tail_trace_symbol_hotspots.csv"),
+            &trace_symbol_hotspots,
+        );
     }
     if wrote_any_opcode_rows {
         let _ = std::fs::write(
@@ -2566,13 +3051,18 @@ fn write_run_gas_comparison_summary(root_dir: &Utf8PathBuf, opt_level: OptLevel)
         magnitude_totals.vs_yul_opt,
     );
     append_opcode_magnitude_summary(&mut summary, opcode_magnitude_totals);
+    append_opcode_inflation_attribution(&mut summary, opcode_magnitude_totals);
+    if wrote_any_rows {
+        append_hotspot_summary(&mut summary, &hotspots, &suite_rollup_rows);
+        append_trace_symbol_hotspots_summary(&mut summary, &trace_symbol_hotspots);
+    }
     summary.push_str("\n## Optimization Settings\n\n");
     for line in gas_comparison_settings_text(opt_level).lines() {
         summary.push_str(&format!("- {line}\n"));
     }
     if wrote_any_rows {
         summary.push_str(
-            "\nSee `artifacts/gas_comparison_all.csv`, `artifacts/gas_comparison_totals.csv`, `artifacts/gas_comparison_magnitude.csv`, and `artifacts/gas_opcode_magnitude.csv` for machine-readable totals.\n",
+            "\nSee `artifacts/gas_comparison_all.csv`, `artifacts/gas_comparison_totals.csv`, `artifacts/gas_comparison_magnitude.csv`, `artifacts/gas_opcode_magnitude.csv`, `artifacts/gas_hotspots_vs_yul_opt.csv`, `artifacts/gas_suite_delta_summary.csv`, and `artifacts/gas_tail_trace_symbol_hotspots.csv` for machine-readable totals and rollups.\n",
         );
     }
     if wrote_any_opcode_rows {
@@ -2967,7 +3457,7 @@ fn write_report_manifest(
     out.push_str(&format!("fe_version: {}\n", env!("CARGO_PKG_VERSION")));
     out.push_str("details: see `meta/args.txt` and `meta/git.txt` for exact repro context\n");
     out.push_str("gas_comparison: see `artifacts/gas_comparison.md`, `artifacts/gas_comparison.csv`, `artifacts/gas_comparison_totals.csv`, `artifacts/gas_comparison_magnitude.csv`, `artifacts/gas_opcode_magnitude.csv`, and `artifacts/gas_comparison_settings.txt` when available\n");
-    out.push_str("gas_comparison_aggregate: run-level reports also include `artifacts/gas_comparison_all.csv`, `artifacts/gas_comparison_summary.md`, `artifacts/gas_comparison_magnitude.csv`, and `artifacts/gas_opcode_magnitude.csv`\n");
+    out.push_str("gas_comparison_aggregate: run-level reports also include `artifacts/gas_comparison_all.csv`, `artifacts/gas_comparison_summary.md`, `artifacts/gas_comparison_magnitude.csv`, `artifacts/gas_opcode_magnitude.csv`, `artifacts/gas_hotspots_vs_yul_opt.csv`, `artifacts/gas_suite_delta_summary.csv`, and `artifacts/gas_tail_trace_symbol_hotspots.csv`\n");
     out.push_str("gas_opcode_profile: see `artifacts/gas_opcode_comparison.md` and `artifacts/gas_opcode_comparison.csv` for opcode and step-count diagnostics when available\n");
     out.push_str("gas_opcode_profile_aggregate: run-level reports also include `artifacts/gas_opcode_comparison_all.csv`\n");
     out.push_str(&format!("tests: {}\n", results.len()));
