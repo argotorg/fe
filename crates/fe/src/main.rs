@@ -86,6 +86,9 @@ pub enum Command {
         /// Optional filter pattern for test names.
         #[arg(short, long)]
         filter: Option<String>,
+        /// Number of suites to run in parallel (0 = auto).
+        #[arg(long, default_value_t = 8, value_name = "N")]
+        jobs: usize,
         /// Show event logs from test execution.
         #[arg(long)]
         show_logs: bool,
@@ -217,6 +220,7 @@ pub fn run(opts: &Options) {
         Command::Test {
             paths,
             filter,
+            jobs,
             show_logs,
             backend,
             opt_level,
@@ -253,6 +257,7 @@ pub fn run(opts: &Options) {
             match test::run_tests(
                 &paths,
                 filter.as_deref(),
+                *jobs,
                 *show_logs,
                 backend,
                 opt_level,

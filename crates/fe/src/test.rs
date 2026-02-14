@@ -22,6 +22,13 @@ use hir::hir_def::{HirIngot, TopLevelMod};
 use mir::{fmt as mir_fmt, lower_module};
 use rustc_hash::{FxHashMap, FxHashSet};
 use solc_runner::compile_single_contract;
+use std::{
+    fmt::Write as _,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        mpsc,
+    },
+};
 use url::Url;
 
 const YUL_VERIFY_RUNTIME: bool = true;
@@ -34,7 +41,7 @@ fn install_report_panic_hook(report: &ReportContext, filename: &str) -> PanicRep
 }
 
 /// Result of running a single test.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TestResult {
     pub name: String,
     pub passed: bool,
@@ -180,6 +187,25 @@ struct ReportContext {
     root_dir: Utf8PathBuf,
 }
 
+#[derive(Debug, Clone)]
+struct SuitePlan {
+    index: usize,
+    path: Utf8PathBuf,
+    suite: String,
+    suite_key: String,
+    suite_report_out: Option<Utf8PathBuf>,
+}
+
+#[derive(Debug)]
+struct SuiteRunResult {
+    index: usize,
+    path: Utf8PathBuf,
+    suite_key: String,
+    output: String,
+    results: Vec<TestResult>,
+    aggregate_suite_staging: Option<ReportStaging>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct TestDebugOptions {
     pub trace_evm: bool,
@@ -265,25 +291,78 @@ fn truncate_file(path: &Utf8PathBuf) -> Result<(), String> {
     std::fs::write(path, "").map_err(|err| format!("failed to truncate `{path}`: {err}"))
 }
 
-fn unique_report_path(dir: &Utf8PathBuf, suite: &str) -> Utf8PathBuf {
-    let base = sanitize_filename(suite);
-    let base = if base.is_empty() {
-        "tests".to_string()
-    } else {
-        base
-    };
-    let mut candidate = dir.join(format!("{base}.tar.gz"));
-    if !candidate.exists() {
-        return candidate;
-    }
-
-    for idx in 1.. {
-        candidate = dir.join(format!("{base}-{idx}.tar.gz"));
-        if !candidate.exists() {
+fn plan_suite_report_path(
+    dir: &Utf8PathBuf,
+    base: &str,
+    reserved: &mut FxHashSet<String>,
+) -> Utf8PathBuf {
+    let mut suffix = 0usize;
+    loop {
+        let file = if suffix == 0 {
+            format!("{base}.tar.gz")
+        } else {
+            format!("{base}-{suffix}.tar.gz")
+        };
+        let candidate = dir.join(file);
+        let key = candidate.as_str().to_string();
+        if !candidate.exists() && reserved.insert(key) {
             return candidate;
         }
+        suffix += 1;
     }
-    unreachable!()
+}
+
+fn build_suite_plans(
+    input_paths: Vec<Utf8PathBuf>,
+    report_dir: Option<&Utf8PathBuf>,
+) -> Result<Vec<SuitePlan>, String> {
+    let mut plans = Vec::with_capacity(input_paths.len());
+    let mut seen_suite_names: FxHashMap<String, usize> = FxHashMap::default();
+    for (index, path) in input_paths.into_iter().enumerate() {
+        let suite = suite_name_for_path(&path);
+        let seen = seen_suite_names.entry(suite.clone()).or_insert(0);
+        *seen += 1;
+        let suite_key = if *seen == 1 {
+            suite.clone()
+        } else {
+            format!("{suite}-{}", seen)
+        };
+        plans.push(SuitePlan {
+            index,
+            path,
+            suite,
+            suite_key,
+            suite_report_out: None,
+        });
+    }
+
+    if let Some(dir) = report_dir {
+        let mut reserved = FxHashSet::default();
+        for plan in &mut plans {
+            let base = if plan.suite_key.is_empty() {
+                "tests".to_string()
+            } else {
+                sanitize_filename(&plan.suite_key)
+            };
+            plan.suite_report_out = Some(plan_suite_report_path(dir, &base, &mut reserved));
+        }
+    }
+
+    Ok(plans)
+}
+
+fn effective_jobs(requested: usize, suite_count: usize) -> usize {
+    if suite_count == 0 {
+        return 1;
+    }
+    let requested = if requested == 0 {
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+    } else {
+        requested
+    };
+    requested.clamp(1, suite_count)
 }
 
 /// Run tests in the given path.
@@ -301,6 +380,7 @@ fn unique_report_path(dir: &Utf8PathBuf, suite: &str) -> Utf8PathBuf {
 pub fn run_tests(
     paths: &[Utf8PathBuf],
     filter: Option<&str>,
+    jobs: usize,
     show_logs: bool,
     backend: &str,
     opt_level: OptLevel,
@@ -311,11 +391,14 @@ pub fn run_tests(
     call_trace: bool,
 ) -> Result<bool, String> {
     let input_paths = expand_test_paths(paths)?;
-
-    let mut test_results = Vec::new();
-    let multi = input_paths.len() > 1;
+    let suite_plans = build_suite_plans(input_paths, report_dir)?;
+    let worker_count = effective_jobs(jobs, suite_plans.len());
+    let multi = suite_plans.len() > 1;
     if multi {
-        println!("running `fe test` for {} inputs\n", input_paths.len());
+        println!(
+            "running `fe test` for {} inputs (jobs={worker_count})\n",
+            suite_plans.len()
+        );
     }
 
     if let Some(dir) = report_dir {
@@ -334,141 +417,110 @@ pub fn run_tests(
         let root = &staging.root_dir;
         create_dir_all_utf8(&root.join("passed"))?;
         create_dir_all_utf8(&root.join("failed"))?;
-        create_dir_all_utf8(&root.join("tmp"))?;
         write_report_meta(root, "fe test report", None);
     }
 
-    for path in input_paths {
-        let suite = suite_name_for_path(&path);
+    let aggregate_report = report_root.is_some();
+    let mut suite_runs = Vec::with_capacity(suite_plans.len());
+    if worker_count == 1 || suite_plans.len() <= 1 {
+        for plan in &suite_plans {
+            suite_runs.push(run_single_suite(
+                plan,
+                filter,
+                show_logs,
+                backend,
+                opt_level,
+                debug,
+                report_failed_only,
+                aggregate_report,
+                call_trace,
+            )?);
+        }
+    } else {
+        let (tx, rx) = mpsc::channel::<Result<SuiteRunResult, String>>();
+        let next = AtomicUsize::new(0);
+        std::thread::scope(|scope| {
+            for _ in 0..worker_count {
+                let tx = tx.clone();
+                let plans = &suite_plans;
+                let next = &next;
+                scope.spawn(move || {
+                    loop {
+                        let idx = next.fetch_add(1, Ordering::Relaxed);
+                        if idx >= plans.len() {
+                            break;
+                        }
+                        let result = run_single_suite(
+                            &plans[idx],
+                            filter,
+                            show_logs,
+                            backend,
+                            opt_level,
+                            debug,
+                            report_failed_only,
+                            aggregate_report,
+                            call_trace,
+                        );
+                        let _ = tx.send(result);
+                    }
+                });
+            }
+        });
+        drop(tx);
 
+        for _ in 0..suite_plans.len() {
+            let result = rx
+                .recv()
+                .map_err(|err| format!("suite worker failed: {err}"))?;
+            suite_runs.push(result?);
+        }
+    }
+
+    suite_runs.sort_unstable_by_key(|run| run.index);
+
+    let mut test_results = Vec::new();
+    for suite_run in suite_runs {
+        let SuiteRunResult {
+            path,
+            suite_key,
+            output,
+            results,
+            aggregate_suite_staging,
+            ..
+        } = suite_run;
         if multi {
             println!("==> {path}");
         }
-
-        let suite_report = report_dir
-            .map(|dir| -> Result<_, String> {
-                let staging = create_suite_report_staging(&suite)?;
-                let out = unique_report_path(dir, &suite);
-                Ok((out, staging))
-            })
-            .transpose()?;
-
-        let report_ctx = if let Some((_, staging)) = suite_report.as_ref() {
-            let suite_dir = staging.root_dir.clone();
-            write_report_meta(&suite_dir, "fe test report (suite)", Some(&suite));
-            let inputs_dir = suite_dir.join("inputs");
-            create_dir_all_utf8(&inputs_dir)?;
-            copy_input_into_report(&path, &inputs_dir)?;
-            Some(ReportContext {
-                root_dir: suite_dir,
-            })
-        } else if let Some((_, staging)) = report_root.as_ref() {
-            let root = &staging.root_dir;
-            let suite_dir = root.join("tmp").join(&suite);
-            create_dir_all_utf8(&suite_dir)?;
-            write_report_meta(&suite_dir, "fe test report (suite)", Some(&suite));
-            let inputs_dir = suite_dir.join("inputs");
-            create_dir_all_utf8(&inputs_dir)?;
-            copy_input_into_report(&path, &inputs_dir)?;
-            Some(ReportContext {
-                root_dir: suite_dir,
-            })
-        } else {
-            None
-        };
-
-        let mut suite_debug = debug.clone();
-        if report_ctx.is_some() {
-            // Reports should be self-contained and actionable by default.
-            suite_debug.trace_evm = true;
-            suite_debug.sonatina_symtab = true;
-            suite_debug.debug_dir = report_ctx.as_ref().map(|ctx| ctx.root_dir.join("debug"));
-        }
-        let sonatina_debug = suite_debug.sonatina_debug_config()?;
-
-        let mut db = DriverDataBase::default();
-        let suite_results = if path.is_file() && path.extension() == Some("fe") {
-            run_tests_single_file(
-                &mut db,
-                &path,
-                &suite,
-                filter,
-                show_logs,
-                backend,
-                opt_level,
-                &suite_debug,
-                &sonatina_debug,
-                report_ctx.as_ref(),
-                call_trace,
-            )
-        } else if path.is_dir() {
-            run_tests_ingot(
-                &mut db,
-                &path,
-                &suite,
-                filter,
-                show_logs,
-                backend,
-                opt_level,
-                &suite_debug,
-                &sonatina_debug,
-                report_ctx.as_ref(),
-                call_trace,
-            )
-        } else {
-            return Err("Path must be either a .fe file or a directory containing fe.toml".into());
-        };
-
-        if let Some((out, staging)) = suite_report {
-            let should_write = !report_failed_only || suite_results.iter().any(|r| !r.passed);
-            if should_write {
-                write_report_manifest(
-                    &staging.root_dir,
-                    backend,
-                    opt_level,
-                    filter,
-                    &suite_results,
-                );
-                if let Err(err) = tar_gz_dir(&staging.root_dir, &out) {
-                    eprintln!("Error: failed to write report `{out}`: {err}");
-                    eprintln!("Report staging directory left at `{}`", staging.temp_dir);
-                } else {
-                    let _ = std::fs::remove_dir_all(&staging.temp_dir);
-                    println!("wrote report: {out}");
-                }
-            } else {
-                let _ = std::fs::remove_dir_all(&staging.temp_dir);
-            }
+        if !output.is_empty() {
+            print!("{output}");
         }
 
-        if let Some((_, staging)) = &report_root
-            && report_ctx.is_some()
-        {
-            let root = &staging.root_dir;
-            let status_dir = if suite_results.iter().any(|r| !r.passed) {
-                "failed"
-            } else {
-                "passed"
-            };
-            let from = root.join("tmp").join(&suite);
-            let to = root.join(status_dir).join(&suite);
-            if from.exists() {
-                let _ = std::fs::remove_dir_all(&to);
-                let _ = std::fs::rename(&from, &to);
-            }
-        }
-
-        if suite_results.is_empty() {
+        let suite_failed = results.iter().any(|r| !r.passed);
+        if results.is_empty() {
             eprintln!("No tests found in {path}");
         } else {
-            test_results.extend(suite_results);
+            test_results.extend(results);
+        }
+
+        if let Some((_, root_staging)) = &report_root
+            && let Some(staging) = aggregate_suite_staging
+        {
+            let status_dir = if suite_failed { "failed" } else { "passed" };
+            let to = root_staging.root_dir.join(status_dir).join(&suite_key);
+            let _ = std::fs::remove_dir_all(&to);
+            match std::fs::rename(&staging.root_dir, &to) {
+                Ok(()) => {
+                    let _ = std::fs::remove_dir_all(&staging.temp_dir);
+                }
+                Err(err) => {
+                    eprintln!("Error: failed to stage suite report `{suite_key}`: {err}");
+                    eprintln!("Report staging directory left at `{}`", staging.temp_dir);
+                }
+            }
         }
     }
 
     if let Some((out, staging)) = report_root {
-        // Clean up tmp dir, if any suites were moved.
-        let _ = std::fs::remove_dir_all(staging.root_dir.join("tmp"));
-
         write_run_gas_comparison_summary(&staging.root_dir, opt_level);
         write_report_manifest(&staging.root_dir, backend, opt_level, filter, &test_results);
         if let Err(err) = tar_gz_dir(&staging.root_dir, &out) {
@@ -483,6 +535,123 @@ pub fn run_tests(
 
     print_summary(&test_results);
     Ok(test_results.iter().any(|r| !r.passed))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_single_suite(
+    plan: &SuitePlan,
+    filter: Option<&str>,
+    show_logs: bool,
+    backend: &str,
+    opt_level: OptLevel,
+    debug: &TestDebugOptions,
+    report_failed_only: bool,
+    aggregate_report: bool,
+    call_trace: bool,
+) -> Result<SuiteRunResult, String> {
+    let suite_report_staging = if plan.suite_report_out.is_some() || aggregate_report {
+        Some(create_suite_report_staging(&plan.suite_key)?)
+    } else {
+        None
+    };
+
+    let report_ctx = if let Some(staging) = suite_report_staging.as_ref() {
+        let suite_dir = staging.root_dir.clone();
+        write_report_meta(&suite_dir, "fe test report (suite)", Some(&plan.suite));
+        let inputs_dir = suite_dir.join("inputs");
+        create_dir_all_utf8(&inputs_dir)?;
+        copy_input_into_report(&plan.path, &inputs_dir)?;
+        Some(ReportContext {
+            root_dir: suite_dir,
+        })
+    } else {
+        None
+    };
+
+    let mut suite_debug = debug.clone();
+    if report_ctx.is_some() {
+        suite_debug.trace_evm = true;
+        suite_debug.sonatina_symtab = true;
+        suite_debug.debug_dir = report_ctx.as_ref().map(|ctx| ctx.root_dir.join("debug"));
+    }
+    let sonatina_debug = suite_debug.sonatina_debug_config()?;
+
+    let mut output = String::new();
+    let mut db = DriverDataBase::default();
+    let suite_results = if plan.path.is_file() && plan.path.extension() == Some("fe") {
+        run_tests_single_file(
+            &mut db,
+            &plan.path,
+            &plan.suite,
+            filter,
+            show_logs,
+            backend,
+            opt_level,
+            &suite_debug,
+            &sonatina_debug,
+            report_ctx.as_ref(),
+            call_trace,
+            &mut output,
+        )
+    } else if plan.path.is_dir() {
+        run_tests_ingot(
+            &mut db,
+            &plan.path,
+            &plan.suite,
+            filter,
+            show_logs,
+            backend,
+            opt_level,
+            &suite_debug,
+            &sonatina_debug,
+            report_ctx.as_ref(),
+            call_trace,
+            &mut output,
+        )
+    } else {
+        return Err("Path must be either a .fe file or a directory containing fe.toml".to_string());
+    };
+
+    let mut aggregate_suite_staging = suite_report_staging;
+    if let Some(out) = &plan.suite_report_out
+        && let Some(staging) = aggregate_suite_staging.take()
+    {
+        let should_write = !report_failed_only || suite_results.iter().any(|r| !r.passed);
+        if should_write {
+            write_report_manifest(
+                &staging.root_dir,
+                backend,
+                opt_level,
+                filter,
+                &suite_results,
+            );
+            match tar_gz_dir(&staging.root_dir, out) {
+                Ok(()) => {
+                    let _ = std::fs::remove_dir_all(&staging.temp_dir);
+                    let _ = writeln!(&mut output, "wrote report: {out}");
+                }
+                Err(err) => {
+                    let _ = writeln!(&mut output, "Error: failed to write report `{out}`: {err}");
+                    let _ = writeln!(
+                        &mut output,
+                        "Report staging directory left at `{}`",
+                        staging.temp_dir
+                    );
+                }
+            }
+        } else {
+            let _ = std::fs::remove_dir_all(&staging.temp_dir);
+        }
+    }
+
+    Ok(SuiteRunResult {
+        index: plan.index,
+        path: plan.path.clone(),
+        suite_key: plan.suite_key.clone(),
+        output,
+        results: suite_results,
+        aggregate_suite_staging,
+    })
 }
 
 /// Runs tests defined in a single `.fe` source file.
@@ -506,6 +675,7 @@ fn run_tests_single_file(
     sonatina_debug: &SonatinaTestDebugConfig,
     report: Option<&ReportContext>,
     call_trace: bool,
+    output: &mut String,
 ) -> Vec<TestResult> {
     // Create a file URL for the single .fe file
     let file_url = match Url::from_file_path(file_path.canonicalize_utf8().unwrap()) {
@@ -545,9 +715,9 @@ fn run_tests_single_file(
     let diags = db.run_on_top_mod(top_mod);
     if !diags.is_empty() {
         let formatted = diags.format_diags(db);
-        eprintln!("Compilation errors in {file_url}");
-        eprintln!();
-        diags.emit(db);
+        let _ = writeln!(output, "Compilation errors in {file_url}");
+        let _ = writeln!(output);
+        let _ = writeln!(output, "{formatted}");
         if let Some(report) = report {
             write_report_error(report, "compilation_errors.txt", &formatted);
         }
@@ -572,6 +742,7 @@ fn run_tests_single_file(
         sonatina_debug,
         report,
         call_trace,
+        output,
     )
 }
 
@@ -596,6 +767,7 @@ fn run_tests_ingot(
     sonatina_debug: &SonatinaTestDebugConfig,
     report: Option<&ReportContext>,
     call_trace: bool,
+    output: &mut String,
 ) -> Vec<TestResult> {
     let canonical_path = match dir_path.canonicalize_utf8() {
         Ok(path) => path,
@@ -622,7 +794,7 @@ fn run_tests_ingot(
     let had_init_diagnostics = driver::init_ingot(db, &ingot_url);
     if had_init_diagnostics {
         let msg = format!("Compilation errors while initializing ingot `{dir_path}`");
-        eprintln!("{msg}");
+        let _ = writeln!(output, "{msg}");
         if let Some(report) = report {
             write_report_error(report, "compilation_errors.txt", &msg);
         }
@@ -641,7 +813,7 @@ fn run_tests_ingot(
     let diags = db.run_on_ingot(ingot);
     if !diags.is_empty() {
         let formatted = diags.format_diags(db);
-        diags.emit(db);
+        let _ = writeln!(output, "{formatted}");
         if let Some(report) = report {
             write_report_error(report, "compilation_errors.txt", &formatted);
         }
@@ -662,6 +834,7 @@ fn run_tests_ingot(
         sonatina_debug,
         report,
         call_trace,
+        output,
     )
 }
 
@@ -675,13 +848,14 @@ fn emit_with_catch_unwind<E: std::fmt::Display>(
     backend_label: &str,
     suite: &str,
     report: Option<&ReportContext>,
+    output: &mut String,
 ) -> Result<TestModuleOutput, Vec<TestResult>> {
     let _hook = report.map(|r| install_report_panic_hook(r, "codegen_panic_full.txt"));
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(emit_fn)) {
         Ok(Ok(output)) => Ok(output),
         Ok(Err(err)) => {
             let msg = format!("Failed to emit test {backend_label}: {err}");
-            eprintln!("{msg}");
+            let _ = writeln!(output, "{msg}");
             if let Some(report) = report {
                 write_codegen_report_error(report, &msg);
             }
@@ -692,7 +866,7 @@ fn emit_with_catch_unwind<E: std::fmt::Display>(
                 "{backend_label} backend panicked while emitting test module: {}",
                 panic_payload_to_string(payload.as_ref())
             );
-            eprintln!("{msg}");
+            let _ = writeln!(output, "{msg}");
             if let Some(report) = report {
                 write_report_error(report, "codegen_panic.txt", &msg);
             }
@@ -722,15 +896,23 @@ fn discover_and_run_tests(
     sonatina_debug: &SonatinaTestDebugConfig,
     report: Option<&ReportContext>,
     call_trace: bool,
+    output: &mut String,
 ) -> Vec<TestResult> {
     let backend = backend.to_lowercase();
     let emit_result = match backend.as_str() {
-        "yul" => emit_with_catch_unwind(|| emit_test_module_yul(db, top_mod), "Yul", suite, report),
+        "yul" => emit_with_catch_unwind(
+            || emit_test_module_yul(db, top_mod),
+            "Yul",
+            suite,
+            report,
+            output,
+        ),
         "sonatina" => emit_with_catch_unwind(
             || emit_test_module_sonatina(db, top_mod, opt_level, sonatina_debug),
             "Sonatina",
             suite,
             report,
+            output,
         ),
         other => {
             return suite_error_result(
@@ -740,12 +922,12 @@ fn discover_and_run_tests(
             );
         }
     };
-    let output = match emit_result {
+    let module_output = match emit_result {
         Ok(output) => output,
         Err(results) => return results,
     };
 
-    if output.tests.is_empty() {
+    if module_output.tests.is_empty() {
         return Vec::new();
     }
 
@@ -758,26 +940,23 @@ fn discover_and_run_tests(
             ctx,
             backend.as_str(),
             opt_level,
-            &output.tests,
+            &module_output.tests,
         )
     });
 
     let mut results = Vec::new();
     let mut primary_measurements = FxHashMap::default();
 
-    for case in &output.tests {
+    for case in &module_output.tests {
         if !test_case_matches_filter(case, filter) {
             continue;
         }
 
-        // Print test name
-        print!("test {} ... ", case.display_name);
-
         let evm_trace = match debug.evm_trace_options_for_test(Some(suite), &case.display_name) {
             Ok(v) => v,
             Err(err) => {
-                println!("{}", "FAILED".red());
-                eprintln!("    {err}");
+                let _ = writeln!(output, "test {} ... {}", case.display_name, "FAILED".red());
+                let _ = writeln!(output, "    {err}");
                 results.push(TestResult {
                     name: case.display_name.clone(),
                     passed: false,
@@ -801,29 +980,29 @@ fn discover_and_run_tests(
         );
 
         if outcome.result.passed {
-            println!("{}", "ok".green());
+            let _ = writeln!(output, "test {} ... {}", case.display_name, "ok".green());
         } else {
-            println!("{}", "FAILED".red());
+            let _ = writeln!(output, "test {} ... {}", case.display_name, "FAILED".red());
             if let Some(ref msg) = outcome.result.error_message {
-                eprintln!("    {}", msg);
+                let _ = writeln!(output, "    {msg}");
             }
         }
 
         if let Some(trace) = &outcome.trace {
-            println!("--- call trace ---");
-            print!("{trace}");
-            println!("--- end trace ---");
+            let _ = writeln!(output, "--- call trace ---");
+            let _ = write!(output, "{trace}");
+            let _ = writeln!(output, "--- end trace ---");
         }
 
         if show_logs {
             if !outcome.logs.is_empty() {
                 for log in &outcome.logs {
-                    println!("    log {}", log);
+                    let _ = writeln!(output, "    log {log}");
                 }
             } else if outcome.result.passed {
-                println!("    log (none)");
+                let _ = writeln!(output, "    log (none)");
             } else {
-                println!("    log (unavailable for failed tests)");
+                let _ = writeln!(output, "    log (unavailable for failed tests)");
             }
         }
 
@@ -891,6 +1070,7 @@ fn collect_gas_comparison_cases(
     }
 
     if primary_backend.eq_ignore_ascii_case("yul") {
+        let mut emit_output = String::new();
         match emit_with_catch_unwind(
             || {
                 emit_test_module_sonatina(
@@ -903,6 +1083,7 @@ fn collect_gas_comparison_cases(
             "Sonatina",
             suite,
             None,
+            &mut emit_output,
         ) {
             Ok(output) => {
                 for case in output
@@ -930,7 +1111,14 @@ fn collect_gas_comparison_cases(
             }
         }
     } else if primary_backend.eq_ignore_ascii_case("sonatina") {
-        match emit_with_catch_unwind(|| emit_test_module_yul(db, top_mod), "Yul", suite, None) {
+        let mut emit_output = String::new();
+        match emit_with_catch_unwind(
+            || emit_test_module_yul(db, top_mod),
+            "Yul",
+            suite,
+            None,
+            &mut emit_output,
+        ) {
             Ok(output) => {
                 for case in output
                     .tests
