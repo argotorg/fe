@@ -47,7 +47,7 @@ use sonatina_ir::{
 use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 
 use crate::BackendError;
-pub use tests::emit_test_module_sonatina;
+pub use tests::{DebugOutputSink, SonatinaTestDebugConfig, emit_test_module_sonatina};
 
 /// Error type for Sonatina lowering failures.
 #[derive(Debug)]

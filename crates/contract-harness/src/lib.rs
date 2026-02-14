@@ -112,6 +112,30 @@ pub struct ExecutionOptions {
     pub nonce: Option<u64>,
 }
 
+/// Optional tracing settings for a runtime call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EvmTraceOptions {
+    /// Number of trailing EVM steps to keep in the ring buffer.
+    pub keep_steps: usize,
+    /// Number of stack values to render for each traced step.
+    pub stack_n: usize,
+    /// Optional output file for trace text. When absent, tracing only goes to stderr.
+    pub out_path: Option<PathBuf>,
+    /// Whether to mirror trace output to stderr.
+    pub write_stderr: bool,
+}
+
+impl Default for EvmTraceOptions {
+    fn default() -> Self {
+        Self {
+            keep_steps: 200,
+            stack_n: 0,
+            out_path: None,
+            write_stderr: true,
+        }
+    }
+}
+
 impl Default for ExecutionOptions {
     fn default() -> Self {
         Self {
@@ -153,8 +177,9 @@ fn transact(
     calldata: &[u8],
     options: ExecutionOptions,
     nonce: u64,
+    trace_options: Option<&EvmTraceOptions>,
 ) -> Result<CallResult, HarnessError> {
-    let outcome = transact_with_logs(evm, address, calldata, options, nonce)?;
+    let outcome = transact_with_logs(evm, address, calldata, options, nonce, trace_options)?;
     Ok(outcome.result)
 }
 
@@ -173,6 +198,7 @@ fn transact_with_logs(
     calldata: &[u8],
     options: ExecutionOptions,
     nonce: u64,
+    trace_options: Option<&EvmTraceOptions>,
 ) -> Result<CallResultWithLogs, HarnessError> {
     let build_tx = || {
         TxEnv::builder()
@@ -186,8 +212,8 @@ fn transact_with_logs(
             .build()
     };
 
-    if should_trace_evm() {
-        trace_tx(evm, build_tx().expect("tx builder is valid"));
+    if let Some(trace_options) = trace_options {
+        trace_tx(evm, build_tx().expect("tx builder is valid"), trace_options);
     }
 
     let tx = build_tx().map_err(|err| HarnessError::Execution(format!("{err:?}")))?;
@@ -221,41 +247,7 @@ fn transact_with_logs(
     }
 }
 
-fn should_trace_evm() -> bool {
-    std::env::var("FE_TRACE_EVM")
-        .map(|v| v != "0" && !v.is_empty())
-        .unwrap_or(false)
-}
-
-fn trace_evm_keep_steps() -> usize {
-    std::env::var("FE_TRACE_EVM_KEEP")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .filter(|n| *n > 0)
-        .unwrap_or(200)
-}
-
-fn trace_evm_stack_n() -> usize {
-    std::env::var("FE_TRACE_EVM_STACK_N")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(0)
-}
-
-fn trace_evm_out_path() -> Option<PathBuf> {
-    std::env::var_os("FE_TRACE_EVM_OUT").map(PathBuf::from)
-}
-
-fn trace_evm_write_stderr(has_out_file: bool) -> bool {
-    if !has_out_file {
-        return true;
-    }
-    std::env::var("FE_TRACE_EVM_STDERR")
-        .map(|v| v != "0" && !v.is_empty())
-        .unwrap_or(false)
-}
-
-fn trace_tx(evm: &MainnetEvm<MainnetContext<InMemoryDB>>, tx: TxEnv) {
+fn trace_tx(evm: &MainnetEvm<MainnetContext<InMemoryDB>>, tx: TxEnv, options: &EvmTraceOptions) {
     #[derive(Clone, Debug)]
     struct Step {
         pc: usize,
@@ -348,36 +340,35 @@ fn trace_tx(evm: &MainnetEvm<MainnetContext<InMemoryDB>>, tx: TxEnv) {
 
     // Clone the EVM (including DB state) for tracing so we don't disturb the caller's state.
     let ctx = evm.ctx.clone();
-    let mut trace_evm = ctx
-        .build_mainnet_with_inspector(RingTrace::new(trace_evm_keep_steps(), trace_evm_stack_n()));
+    let mut trace_evm =
+        ctx.build_mainnet_with_inspector(RingTrace::new(options.keep_steps, options.stack_n));
 
     let result = trace_evm.inspect_tx_commit(tx);
     let formatted = format!(
         "{}\ntrace result: {result:?}\n",
         trace_evm.inspector.format()
     );
-    let out_path = trace_evm_out_path();
-    if let Some(path) = out_path {
+    if let Some(path) = &options.out_path {
         match std::fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open(&path)
+            .open(path)
             .and_then(|mut f| f.write_all(formatted.as_bytes()))
         {
             Ok(()) => {
-                if trace_evm_write_stderr(true) {
+                if options.write_stderr {
                     tracing::debug!("{formatted}");
                 }
             }
             Err(err) => {
                 tracing::error!(
-                    "FE_TRACE_EVM_OUT: failed to write `{}`: {err}",
+                    "EVM trace output: failed to write `{}`: {err}",
                     path.display()
                 );
                 tracing::debug!("{formatted}");
             }
         }
-    } else {
+    } else if options.write_stderr {
         tracing::debug!("{formatted}");
     }
 }
@@ -623,6 +614,7 @@ pub struct RuntimeInstance {
     evm: MainnetEvm<MainnetContext<InMemoryDB>>,
     address: Address,
     next_nonce_by_caller: HashMap<Address, u64>,
+    trace_options: Option<EvmTraceOptions>,
 }
 
 impl RuntimeInstance {
@@ -640,6 +632,7 @@ impl RuntimeInstance {
             evm,
             address,
             next_nonce_by_caller: HashMap::new(),
+            trace_options: None,
         })
     }
 
@@ -700,6 +693,7 @@ impl RuntimeInstance {
                     evm,
                     address: deployed_address,
                     next_nonce_by_caller,
+                    trace_options: None,
                 })
             }
             ExecutionResult::Success { output, .. } => Err(HarnessError::Execution(format!(
@@ -734,7 +728,14 @@ impl RuntimeInstance {
         options: ExecutionOptions,
     ) -> Result<CallResult, HarnessError> {
         let nonce = self.effective_nonce(options);
-        transact(&mut self.evm, self.address, calldata, options, nonce)
+        transact(
+            &mut self.evm,
+            self.address,
+            calldata,
+            options,
+            nonce,
+            self.trace_options.as_ref(),
+        )
     }
 
     /// Executes the runtime with arbitrary calldata, returning execution logs.
@@ -744,7 +745,14 @@ impl RuntimeInstance {
         options: ExecutionOptions,
     ) -> Result<CallResultWithLogs, HarnessError> {
         let nonce = self.effective_nonce(options);
-        transact_with_logs(&mut self.evm, self.address, calldata, options, nonce)
+        transact_with_logs(
+            &mut self.evm,
+            self.address,
+            calldata,
+            options,
+            nonce,
+            self.trace_options.as_ref(),
+        )
     }
 
     /// Executes the runtime at an arbitrary address using the same underlying EVM state.
@@ -755,7 +763,19 @@ impl RuntimeInstance {
         options: ExecutionOptions,
     ) -> Result<CallResult, HarnessError> {
         let nonce = self.effective_nonce(options);
-        transact(&mut self.evm, address, calldata, options, nonce)
+        transact(
+            &mut self.evm,
+            address,
+            calldata,
+            options,
+            nonce,
+            self.trace_options.as_ref(),
+        )
+    }
+
+    /// Configures optional step-by-step EVM tracing for subsequent calls.
+    pub fn set_trace_options(&mut self, trace_options: Option<EvmTraceOptions>) {
+        self.trace_options = trace_options;
     }
 
     /// Executes a strongly-typed function call using ABI encoding.
@@ -970,7 +990,12 @@ pub fn compile_runtime_sonatina_from_source(source: &str) -> Result<String, Harn
     }
 
     let output = SonatinaBackend
-        .compile(&db, top_mod, layout::EVM_LAYOUT, codegen::OptLevel::default())
+        .compile(
+            &db,
+            top_mod,
+            layout::EVM_LAYOUT,
+            codegen::OptLevel::default(),
+        )
         .map_err(|err| HarnessError::EmitSonatina(err.to_string()))?;
     let bytes = output
         .as_bytecode()

@@ -23,10 +23,32 @@ use crate::{ExpectedRevert, OptLevel, TestMetadata, TestModuleOutput};
 
 use super::{LowerError, ModuleLowerer};
 
+#[derive(Debug, Clone, Default)]
+pub struct SonatinaTestDebugConfig {
+    pub symtab_output: Option<DebugOutputSink>,
+    pub runtime_byte_offsets: Vec<usize>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DebugOutputSink {
+    pub path: Option<std::path::PathBuf>,
+    pub write_stderr: bool,
+}
+
+impl Default for DebugOutputSink {
+    fn default() -> Self {
+        Self {
+            path: None,
+            write_stderr: true,
+        }
+    }
+}
+
 pub fn emit_test_module_sonatina(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,
     opt_level: OptLevel,
+    debug: &SonatinaTestDebugConfig,
 ) -> Result<TestModuleOutput, LowerError> {
     let mir_module = lower_module(db, top_mod)?;
     let tests = collect_tests(db, &mir_module.functions);
@@ -83,7 +105,7 @@ pub fn emit_test_module_sonatina(
 
     let mut output_tests = Vec::with_capacity(tests.len());
     for test in tests {
-        let runtime = compile_runtime_section(&module, &test.object_name)?;
+        let runtime = compile_runtime_section(&module, &test.object_name, debug)?;
         let init_bytecode = wrap_as_init_code(&runtime);
 
         output_tests.push(TestMetadata {
@@ -692,7 +714,11 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
     }
 }
 
-fn compile_runtime_section(module: &Module, object_name: &str) -> Result<Vec<u8>, LowerError> {
+fn compile_runtime_section(
+    module: &Module,
+    object_name: &str,
+    debug: &SonatinaTestDebugConfig,
+) -> Result<Vec<u8>, LowerError> {
     use sonatina_codegen::isa::evm::EvmBackend;
     use sonatina_codegen::object::SymbolId;
     use sonatina_codegen::object::{CompileOptions, compile_object};
@@ -728,10 +754,7 @@ fn compile_runtime_section(module: &Module, object_name: &str) -> Result<Vec<u8>
         ))
     })?;
 
-    if std::env::var("FE_SONATINA_DUMP_SYMTAB")
-        .map(|v| v != "0" && !v.is_empty())
-        .unwrap_or(false)
-    {
+    if let Some(sink) = &debug.symtab_output {
         let mut defs: Vec<(u32, u32, String)> = Vec::new();
         for (sym, def) in &runtime_section.symtab {
             let name = match sym {
@@ -753,65 +776,38 @@ fn compile_runtime_section(module: &Module, object_name: &str) -> Result<Vec<u8>
         for (offset, size, name) in defs {
             out.push_str(&format!("  off={offset:>6} size={size:>6} {name}\n"));
         }
-        emit_debug_output(
-            "FE_SONATINA_DUMP_SYMTAB_OUT",
-            "FE_SONATINA_DUMP_SYMTAB_STDERR",
-            &out,
-        );
+        emit_debug_output(sink, &out);
     }
 
-    if let Ok(offsets) = std::env::var("FE_SONATINA_DUMP_BYTE_AT") {
-        for raw in offsets
-            .split(',')
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-        {
-            let parsed = raw
-                .strip_prefix("0x")
-                .map(|hex| usize::from_str_radix(hex, 16))
-                .unwrap_or_else(|| raw.parse());
-            let offset = match parsed {
-                Ok(v) => v,
-                Err(_) => {
-                    tracing::warn!("FE_SONATINA_DUMP_BYTE_AT: invalid offset `{raw}`");
-                    continue;
-                }
-            };
-            match runtime_section.bytes.get(offset) {
-                Some(byte) => tracing::debug!(
-                    "SONATINA BYTE object={object_name} section=runtime off={offset} byte=0x{byte:02x}"
-                ),
-                None => tracing::warn!(
-                    "SONATINA BYTE object={object_name} section=runtime off={offset} (out of bounds, len={})",
-                    runtime_section.bytes.len()
-                ),
-            }
+    for &offset in &debug.runtime_byte_offsets {
+        match runtime_section.bytes.get(offset) {
+            Some(byte) => tracing::debug!(
+                "SONATINA BYTE object={object_name} section=runtime off={offset} byte=0x{byte:02x}"
+            ),
+            None => tracing::warn!(
+                "SONATINA BYTE object={object_name} section=runtime off={offset} (out of bounds, len={})",
+                runtime_section.bytes.len()
+            ),
         }
     }
 
     Ok(runtime_section.bytes.clone())
 }
 
-fn emit_debug_output(out_path_env: &str, stderr_env: &str, contents: &str) {
+fn emit_debug_output(sink: &DebugOutputSink, contents: &str) {
     use std::io::Write;
 
-    let out_path = std::env::var_os(out_path_env).map(std::path::PathBuf::from);
-    let write_stderr = out_path.is_none()
-        || std::env::var(stderr_env)
-            .map(|v| v != "0" && !v.is_empty())
-            .unwrap_or(false);
-
-    if let Some(path) = out_path {
+    if let Some(path) = &sink.path {
         match std::fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open(&path)
+            .open(path)
             .and_then(|mut f| f.write_all(contents.as_bytes()))
         {
             Ok(()) => {}
             Err(err) => {
                 tracing::error!(
-                    "{out_path_env}: failed to write `{}`: {err}",
+                    "failed to write Sonatina debug output `{}`: {err}",
                     path.display()
                 );
                 tracing::debug!("{contents}");
@@ -820,7 +816,7 @@ fn emit_debug_output(out_path_env: &str, stderr_env: &str, contents: &str) {
         }
     }
 
-    if write_stderr {
+    if sink.write_stderr {
         tracing::debug!("{contents}");
     }
 }

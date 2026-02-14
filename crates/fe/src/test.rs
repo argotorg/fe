@@ -11,12 +11,12 @@ use crate::report::{
 };
 use camino::Utf8PathBuf;
 use codegen::{
-    ExpectedRevert, OptLevel, TestMetadata, TestModuleOutput, emit_test_module_sonatina,
-    emit_test_module_yul,
+    DebugOutputSink, ExpectedRevert, OptLevel, SonatinaTestDebugConfig, TestMetadata,
+    TestModuleOutput, emit_test_module_sonatina, emit_test_module_yul,
 };
 use colored::Colorize;
 use common::InputDb;
-use contract_harness::{ExecutionOptions, RuntimeInstance};
+use contract_harness::{EvmTraceOptions, ExecutionOptions, RuntimeInstance};
 use driver::DriverDataBase;
 use hir::hir_def::{HirIngot, TopLevelMod};
 use mir::{fmt as mir_fmt, lower_module};
@@ -186,101 +186,78 @@ pub struct TestDebugOptions {
     pub trace_evm_keep: usize,
     pub trace_evm_stack_n: usize,
     pub sonatina_symtab: bool,
-    pub sonatina_stackify_trace: bool,
-    pub sonatina_stackify_filter: Option<String>,
-    pub sonatina_transient_malloc_trace: bool,
-    pub sonatina_transient_malloc_filter: Option<String>,
     pub debug_dir: Option<Utf8PathBuf>,
 }
 
 impl TestDebugOptions {
-    fn set_env<K: AsRef<std::ffi::OsStr>, V: AsRef<std::ffi::OsStr>>(key: K, value: V) {
-        unsafe { std::env::set_var(key, value) }
-    }
-
-    fn configure_process_env(&self) -> Result<(), String> {
-        if self.trace_evm {
-            Self::set_env("FE_TRACE_EVM", "1");
-            Self::set_env("FE_TRACE_EVM_KEEP", self.trace_evm_keep.to_string());
-            Self::set_env("FE_TRACE_EVM_STACK_N", self.trace_evm_stack_n.to_string());
-        }
-
-        if self.sonatina_symtab {
-            Self::set_env("FE_SONATINA_DUMP_SYMTAB", "1");
-        }
-
-        if self.sonatina_stackify_trace {
-            Self::set_env("SONATINA_STACKIFY_TRACE", "1");
-            if let Some(filter) = &self.sonatina_stackify_filter {
-                Self::set_env("SONATINA_STACKIFY_TRACE_FUNC", filter);
-            }
-        }
-
-        if self.sonatina_transient_malloc_trace {
-            Self::set_env("SONATINA_TRANSIENT_MALLOC_TRACE", "1");
-            if let Some(filter) = &self.sonatina_transient_malloc_filter {
-                Self::set_env("SONATINA_TRANSIENT_MALLOC_TRACE_FUNC", filter);
-            }
-        }
-
+    fn ensure_debug_dir(&self) -> Result<(), String> {
         let Some(dir) = &self.debug_dir else {
             return Ok(());
         };
-
         std::fs::create_dir_all(dir)
-            .map_err(|err| format!("failed to create debug dir `{dir}`: {err}"))?;
-
-        if self.trace_evm {
-            // When writing traces to files, suppress stderr spam by default.
-            Self::set_env("FE_TRACE_EVM_STDERR", "0");
-        }
-
-        if self.sonatina_symtab {
-            let path = dir.join("sonatina_symtab.txt");
-            truncate_file(&path)?;
-            Self::set_env("FE_SONATINA_DUMP_SYMTAB_OUT", path.as_str());
-        }
-
-        if self.sonatina_stackify_trace {
-            let path = dir.join("sonatina_stackify_trace.txt");
-            truncate_file(&path)?;
-            Self::set_env("SONATINA_STACKIFY_TRACE_OUT", path.as_str());
-        }
-
-        if self.sonatina_transient_malloc_trace {
-            let path = dir.join("sonatina_transient_malloc_trace.txt");
-            truncate_file(&path)?;
-            Self::set_env("SONATINA_TRANSIENT_MALLOC_TRACE_OUT", path.as_str());
-        }
-
-        Ok(())
+            .map_err(|err| format!("failed to create debug dir `{dir}`: {err}"))
     }
 
-    fn configure_per_test_env(&self, test_suite: Option<&str>, test_name: &str) {
-        let Some(dir) = &self.debug_dir else {
-            return;
-        };
-        if !self.trace_evm {
-            return;
+    fn sonatina_debug_config(&self) -> Result<SonatinaTestDebugConfig, String> {
+        self.ensure_debug_dir()?;
+        let mut config = SonatinaTestDebugConfig::default();
+
+        if self.sonatina_symtab {
+            let sink = if let Some(dir) = &self.debug_dir {
+                let path = dir.join("sonatina_symtab.txt");
+                truncate_file(&path)?;
+                DebugOutputSink {
+                    path: Some(path.into_std_path_buf()),
+                    write_stderr: false,
+                }
+            } else {
+                DebugOutputSink {
+                    path: None,
+                    write_stderr: true,
+                }
+            };
+            config.symtab_output = Some(sink);
         }
 
-        let mut file = String::new();
-        if let Some(suite) = test_suite {
-            let suite = sanitize_filename(suite);
-            if !suite.is_empty() {
-                file.push_str(&suite);
-                file.push_str("__");
+        Ok(config)
+    }
+
+    fn evm_trace_options_for_test(
+        &self,
+        test_suite: Option<&str>,
+        test_name: &str,
+    ) -> Result<Option<EvmTraceOptions>, String> {
+        if !self.trace_evm {
+            return Ok(None);
+        }
+
+        let mut options = EvmTraceOptions {
+            keep_steps: self.trace_evm_keep.max(1),
+            stack_n: self.trace_evm_stack_n,
+            out_path: None,
+            write_stderr: true,
+        };
+
+        if let Some(dir) = &self.debug_dir {
+            let mut file = String::new();
+            if let Some(suite) = test_suite {
+                let suite = sanitize_filename(suite);
+                if !suite.is_empty() {
+                    file.push_str(&suite);
+                    file.push_str("__");
+                }
             }
+            file.push_str(&sanitize_filename(test_name));
+            if file.is_empty() {
+                file = "test".to_string();
+            }
+            let path = dir.join(format!("{file}.evm_trace.txt"));
+            truncate_file(&path)?;
+            options.out_path = Some(path.into_std_path_buf());
+            options.write_stderr = false;
         }
-        file.push_str(&sanitize_filename(test_name));
-        if file.is_empty() {
-            file = "test".to_string();
-        }
-        let path = dir.join(format!("{file}.evm_trace.txt"));
-        if let Err(err) = truncate_file(&path) {
-            eprintln!("warning: {err}");
-        }
-        Self::set_env("FE_TRACE_EVM_OUT", path.as_str());
+
+        Ok(Some(options))
     }
 }
 
@@ -405,10 +382,9 @@ pub fn run_tests(
             // Reports should be self-contained and actionable by default.
             suite_debug.trace_evm = true;
             suite_debug.sonatina_symtab = true;
-            suite_debug.sonatina_transient_malloc_trace = true;
             suite_debug.debug_dir = report_ctx.as_ref().map(|ctx| ctx.root_dir.join("debug"));
         }
-        suite_debug.configure_process_env()?;
+        let sonatina_debug = suite_debug.sonatina_debug_config()?;
 
         let mut db = DriverDataBase::default();
         let suite_results = if path.is_file() && path.extension() == Some("fe") {
@@ -421,6 +397,7 @@ pub fn run_tests(
                 backend,
                 opt_level,
                 &suite_debug,
+                &sonatina_debug,
                 report_ctx.as_ref(),
                 call_trace,
             )
@@ -434,6 +411,7 @@ pub fn run_tests(
                 backend,
                 opt_level,
                 &suite_debug,
+                &sonatina_debug,
                 report_ctx.as_ref(),
                 call_trace,
             )
@@ -444,7 +422,13 @@ pub fn run_tests(
         if let Some((out, staging)) = suite_report {
             let should_write = !report_failed_only || suite_results.iter().any(|r| !r.passed);
             if should_write {
-                write_report_manifest(&staging.root_dir, backend, opt_level, filter, &suite_results);
+                write_report_manifest(
+                    &staging.root_dir,
+                    backend,
+                    opt_level,
+                    filter,
+                    &suite_results,
+                );
                 if let Err(err) = tar_gz_dir(&staging.root_dir, &out) {
                     eprintln!("Error: failed to write report `{out}`: {err}");
                     eprintln!("Report staging directory left at `{}`", staging.temp_dir);
@@ -519,6 +503,7 @@ fn run_tests_single_file(
     backend: &str,
     opt_level: OptLevel,
     debug: &TestDebugOptions,
+    sonatina_debug: &SonatinaTestDebugConfig,
     report: Option<&ReportContext>,
     call_trace: bool,
 ) -> Vec<TestResult> {
@@ -576,7 +561,17 @@ fn run_tests_single_file(
     // Discover and run tests
     maybe_write_suite_ir(db, top_mod, backend, report);
     discover_and_run_tests(
-        db, top_mod, suite, filter, show_logs, backend, opt_level, debug, report, call_trace,
+        db,
+        top_mod,
+        suite,
+        filter,
+        show_logs,
+        backend,
+        opt_level,
+        debug,
+        sonatina_debug,
+        report,
+        call_trace,
     )
 }
 
@@ -598,6 +593,7 @@ fn run_tests_ingot(
     backend: &str,
     opt_level: OptLevel,
     debug: &TestDebugOptions,
+    sonatina_debug: &SonatinaTestDebugConfig,
     report: Option<&ReportContext>,
     call_trace: bool,
 ) -> Vec<TestResult> {
@@ -655,7 +651,17 @@ fn run_tests_ingot(
     let root_mod = ingot.root_mod(db);
     maybe_write_suite_ir(db, root_mod, backend, report);
     discover_and_run_tests(
-        db, root_mod, suite, filter, show_logs, backend, opt_level, debug, report, call_trace,
+        db,
+        root_mod,
+        suite,
+        filter,
+        show_logs,
+        backend,
+        opt_level,
+        debug,
+        sonatina_debug,
+        report,
+        call_trace,
     )
 }
 
@@ -713,6 +719,7 @@ fn discover_and_run_tests(
     backend: &str,
     opt_level: OptLevel,
     debug: &TestDebugOptions,
+    sonatina_debug: &SonatinaTestDebugConfig,
     report: Option<&ReportContext>,
     call_trace: bool,
 ) -> Vec<TestResult> {
@@ -720,7 +727,7 @@ fn discover_and_run_tests(
     let emit_result = match backend.as_str() {
         "yul" => emit_with_catch_unwind(|| emit_test_module_yul(db, top_mod), "Yul", suite, report),
         "sonatina" => emit_with_catch_unwind(
-            || emit_test_module_sonatina(db, top_mod, opt_level),
+            || emit_test_module_sonatina(db, top_mod, opt_level, sonatina_debug),
             "Sonatina",
             suite,
             report,
@@ -766,7 +773,20 @@ fn discover_and_run_tests(
         // Print test name
         print!("test {} ... ", case.display_name);
 
-        debug.configure_per_test_env(Some(suite), &case.display_name);
+        let evm_trace = match debug.evm_trace_options_for_test(Some(suite), &case.display_name) {
+            Ok(v) => v,
+            Err(err) => {
+                println!("{}", "FAILED".red());
+                eprintln!("    {err}");
+                results.push(TestResult {
+                    name: case.display_name.clone(),
+                    passed: false,
+                    error_message: Some(err),
+                    gas_used: None,
+                });
+                continue;
+            }
+        };
 
         // Compile and run the test
         let outcome = compile_and_run_test(
@@ -774,6 +794,7 @@ fn discover_and_run_tests(
             show_logs,
             backend.as_str(),
             opt_level.yul_optimize(),
+            evm_trace.as_ref(),
             report,
             call_trace,
             report.is_some(),
@@ -871,7 +892,14 @@ fn collect_gas_comparison_cases(
 
     if primary_backend.eq_ignore_ascii_case("yul") {
         match emit_with_catch_unwind(
-            || emit_test_module_sonatina(db, top_mod, opt_level),
+            || {
+                emit_test_module_sonatina(
+                    db,
+                    top_mod,
+                    opt_level,
+                    &SonatinaTestDebugConfig::default(),
+                )
+            },
             "Sonatina",
             suite,
             None,
@@ -973,6 +1001,7 @@ fn measure_case_gas(
         false,
         backend,
         yul_optimize,
+        None,
         None,
         false,
         collect_step_count,
@@ -1096,7 +1125,10 @@ fn format_delta_percent(delta: i128, baseline: u64) -> String {
 
 fn gas_comparison_settings_text(opt_level: OptLevel) -> String {
     let mut out = String::new();
-    out.push_str(&format!("yul.primary.optimize={}\n", opt_level.yul_optimize()));
+    out.push_str(&format!(
+        "yul.primary.optimize={}\n",
+        opt_level.yul_optimize()
+    ));
     out.push_str("yul.compare.unoptimized.optimize=false\n");
     out.push_str("yul.compare.optimized.optimize=true\n");
     out.push_str(&format!("yul.solc.verify_runtime={YUL_VERIFY_RUNTIME}\n"));
@@ -1822,6 +1854,7 @@ fn compile_and_run_test(
     show_logs: bool,
     backend: &str,
     yul_optimize: bool,
+    evm_trace: Option<&EvmTraceOptions>,
     report: Option<&ReportContext>,
     call_trace: bool,
     collect_step_count: bool,
@@ -1893,6 +1926,7 @@ fn compile_and_run_test(
             &bytecode_hex,
             show_logs,
             case.expected_revert.as_ref(),
+            evm_trace,
             call_trace,
             collect_step_count,
         );
@@ -1957,6 +1991,7 @@ fn compile_and_run_test(
         &bytecode,
         show_logs,
         case.expected_revert.as_ref(),
+        evm_trace,
         call_trace,
         collect_step_count,
     );
@@ -2094,6 +2129,7 @@ fn execute_test(
     bytecode_hex: &str,
     show_logs: bool,
     expected_revert: Option<&ExpectedRevert>,
+    evm_trace: Option<&EvmTraceOptions>,
     call_trace: bool,
     collect_step_count: bool,
 ) -> (
@@ -2119,6 +2155,7 @@ fn execute_test(
             );
         }
     };
+    instance.set_trace_options(evm_trace.cloned());
 
     // Execute the test (empty calldata since test functions take no args)
     let options = ExecutionOptions::default();

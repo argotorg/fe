@@ -58,7 +58,7 @@ impl fmt::Display for OptLevel {
 #[derive(Debug, Clone)]
 pub enum BackendOutput {
     /// Yul text output (to be compiled by solc).
-    Yul(String),
+    Yul { source: String, solc_optimize: bool },
     /// Raw EVM bytecode.
     Bytecode(Vec<u8>),
 }
@@ -67,7 +67,15 @@ impl BackendOutput {
     /// Returns the Yul text if this is a Yul output.
     pub fn as_yul(&self) -> Option<&str> {
         match self {
-            BackendOutput::Yul(s) => Some(s),
+            BackendOutput::Yul { source, .. } => Some(source),
+            _ => None,
+        }
+    }
+
+    /// Returns whether the solc optimizer should be enabled for this Yul output.
+    pub fn yul_solc_optimize(&self) -> Option<bool> {
+        match self {
+            BackendOutput::Yul { solc_optimize, .. } => Some(*solc_optimize),
             _ => None,
         }
     }
@@ -83,7 +91,7 @@ impl BackendOutput {
     /// Consumes self and returns the Yul text if this is a Yul output.
     pub fn into_yul(self) -> Option<String> {
         match self {
-            BackendOutput::Yul(s) => Some(s),
+            BackendOutput::Yul { source, .. } => Some(source),
             _ => None,
         }
     }
@@ -229,11 +237,13 @@ impl Backend for YulBackend {
         db: &DriverDataBase,
         top_mod: TopLevelMod<'_>,
         layout: TargetDataLayout,
-        _opt_level: OptLevel,
+        opt_level: OptLevel,
     ) -> Result<BackendOutput, BackendError> {
-        // Yul text output doesn't optimize; solc optimization happens downstream.
         let yul = crate::emit_module_yul_with_layout(db, top_mod, layout)?;
-        Ok(BackendOutput::Yul(yul))
+        Ok(BackendOutput::Yul {
+            source: yul,
+            solc_optimize: opt_level.yul_optimize(),
+        })
     }
 }
 

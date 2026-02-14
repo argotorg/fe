@@ -257,22 +257,7 @@ pub fn write_report_meta(root: &Utf8PathBuf, kind: &str, suite: Option<&str>) {
     }
     write_best_effort(&meta.join("args.txt"), args);
 
-    let keys = [
-        "RUST_BACKTRACE",
-        "FE_TRACE_EVM",
-        "FE_TRACE_EVM_KEEP",
-        "FE_TRACE_EVM_STACK_N",
-        "FE_TRACE_EVM_OUT",
-        "FE_TRACE_EVM_STDERR",
-        "FE_SONATINA_DUMP_SYMTAB",
-        "FE_SONATINA_DUMP_SYMTAB_OUT",
-        "SONATINA_STACKIFY_TRACE",
-        "SONATINA_STACKIFY_TRACE_FUNC",
-        "SONATINA_STACKIFY_TRACE_OUT",
-        "SONATINA_TRANSIENT_MALLOC_TRACE",
-        "SONATINA_TRANSIENT_MALLOC_TRACE_FUNC",
-        "SONATINA_TRANSIENT_MALLOC_TRACE_OUT",
-    ];
+    let keys = ["RUST_BACKTRACE", "FE_SOLC_PATH"];
     let mut env_txt = String::new();
     for k in keys {
         if let Ok(v) = std::env::var(k) {

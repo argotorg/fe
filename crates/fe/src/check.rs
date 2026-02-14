@@ -907,8 +907,12 @@ fn emit_codegen(
     println!("=== {} backend ===", backend.name());
     match backend.compile(db, top_mod, layout::EVM_LAYOUT, opt_level) {
         Ok(output) => match output {
-            codegen::BackendOutput::Yul(yul) => {
-                println!("{yul}");
+            codegen::BackendOutput::Yul {
+                source,
+                solc_optimize,
+            } => {
+                println!("// solc optimizer enabled: {solc_optimize}");
+                println!("{source}");
             }
             codegen::BackendOutput::Bytecode(bytes) => {
                 println!("bytecode ({} bytes):", bytes.len());
@@ -1010,8 +1014,16 @@ fn write_check_artifacts(
         backend.compile(db, top_mod, layout::EVM_LAYOUT, opt_level)
     })) {
         Ok(Ok(output)) => match output {
-            codegen::BackendOutput::Yul(yul) => {
-                write_report_file(report, "artifacts/backend_output.yul", &yul);
+            codegen::BackendOutput::Yul {
+                source,
+                solc_optimize,
+            } => {
+                write_report_file(report, "artifacts/backend_output.yul", &source);
+                write_report_file(
+                    report,
+                    "artifacts/backend_output_yul_solc_optimize.txt",
+                    &format!("{solc_optimize}\n"),
+                );
                 false
             }
             codegen::BackendOutput::Bytecode(bytes) => {

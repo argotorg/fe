@@ -107,18 +107,6 @@ pub enum Command {
         /// Dump the Sonatina runtime symbol table (function offsets/sizes).
         #[arg(long)]
         sonatina_symtab: bool,
-        /// Emit Sonatina stackify traces (internal call/stack planning).
-        #[arg(long)]
-        sonatina_stackify_trace: bool,
-        /// Substring filter for Sonatina stackify traces (function name contains this).
-        #[arg(long)]
-        sonatina_stackify_filter: Option<String>,
-        /// Trace which `evm_malloc` sites are treated as transient by Sonatina's analysis.
-        #[arg(long)]
-        sonatina_transient_malloc_trace: bool,
-        /// Substring filter for Sonatina transient-malloc traces (function name contains this).
-        #[arg(long)]
-        sonatina_transient_malloc_filter: Option<String>,
         /// Directory to write debug outputs (traces, symtabs) into.
         #[arg(long)]
         debug_dir: Option<Utf8PathBuf>,
@@ -236,10 +224,6 @@ pub fn run(opts: &Options) {
             trace_evm_keep,
             trace_evm_stack_n,
             sonatina_symtab,
-            sonatina_stackify_trace,
-            sonatina_stackify_filter,
-            sonatina_transient_malloc_trace,
-            sonatina_transient_malloc_filter,
             debug_dir,
             report,
             report_out,
@@ -259,10 +243,6 @@ pub fn run(opts: &Options) {
                 trace_evm_keep: *trace_evm_keep,
                 trace_evm_stack_n: *trace_evm_stack_n,
                 sonatina_symtab: *sonatina_symtab,
-                sonatina_stackify_trace: *sonatina_stackify_trace,
-                sonatina_stackify_filter: sonatina_stackify_filter.clone(),
-                sonatina_transient_malloc_trace: *sonatina_transient_malloc_trace,
-                sonatina_transient_malloc_filter: sonatina_transient_malloc_filter.clone(),
                 debug_dir: debug_dir.clone(),
             };
             let paths = if paths.is_empty() {
