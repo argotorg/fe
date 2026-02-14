@@ -800,6 +800,52 @@ impl RuntimeInstance {
         tracer.into_trace()
     }
 
+    /// Re-executes the call on a cloned EVM context and returns total EVM steps.
+    ///
+    /// Uses `&self` because this is a read-only replay that does not mutate the
+    /// runtime state used by real executions.
+    pub fn call_raw_step_count(&self, calldata: &[u8], options: ExecutionOptions) -> u64 {
+        #[derive(Default)]
+        struct StepCounter {
+            total_steps: u64,
+        }
+
+        impl<CTX, INTR: revm::interpreter::InterpreterTypes> revm::Inspector<CTX, INTR> for StepCounter {
+            fn step(
+                &mut self,
+                _interp: &mut revm::interpreter::Interpreter<INTR>,
+                _context: &mut CTX,
+            ) {
+                self.total_steps += 1;
+            }
+        }
+
+        let ctx = self.evm.ctx.clone();
+        let mut counter = StepCounter::default();
+        let mut trace_evm = ctx.build_mainnet_with_inspector(&mut counter);
+
+        // Use nonce 0 for the trace run — this is a replay on a clone.
+        let nonce = self
+            .next_nonce_by_caller
+            .get(&options.caller)
+            .copied()
+            .unwrap_or(0);
+
+        let tx = TxEnv::builder()
+            .caller(options.caller)
+            .gas_limit(options.gas_limit)
+            .gas_price(options.gas_price)
+            .to(self.address)
+            .value(options.value)
+            .data(EvmBytes::copy_from_slice(calldata))
+            .nonce(nonce)
+            .build()
+            .expect("tx builder is valid");
+
+        let _ = trace_evm.inspect_tx_commit(tx);
+        counter.total_steps
+    }
+
     /// Returns the contract address assigned to this runtime instance.
     pub fn address(&self) -> Address {
         self.address

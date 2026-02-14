@@ -47,6 +47,8 @@ struct TestOutcome {
     result: TestResult,
     logs: Vec<String>,
     trace: Option<contract_harness::CallTrace>,
+    step_count: Option<u64>,
+    runtime_metrics: Option<EvmRuntimeMetrics>,
 }
 
 #[derive(Debug, Clone)]
@@ -60,8 +62,35 @@ struct GasComparisonCase {
 #[derive(Debug, Clone)]
 struct GasMeasurement {
     gas_used: Option<u64>,
+    step_count: Option<u64>,
+    runtime_metrics: Option<EvmRuntimeMetrics>,
     passed: bool,
     error_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct EvmRuntimeMetrics {
+    byte_len: usize,
+    op_count: usize,
+    push_ops: usize,
+    dup_ops: usize,
+    swap_ops: usize,
+    pop_ops: usize,
+    jump_ops: usize,
+    jumpi_ops: usize,
+    jumpdest_ops: usize,
+    mload_ops: usize,
+    mstore_ops: usize,
+    sload_ops: usize,
+    sstore_ops: usize,
+    keccak_ops: usize,
+    call_ops: usize,
+    staticcall_ops: usize,
+    returndatacopy_ops: usize,
+    calldatacopy_ops: usize,
+    mcopy_ops: usize,
+    return_ops: usize,
+    revert_ops: usize,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -81,11 +110,13 @@ struct GasTotals {
 }
 
 impl GasMeasurement {
-    fn from_test_result(result: &TestResult) -> Self {
+    fn from_test_outcome(outcome: &TestOutcome) -> Self {
         Self {
-            gas_used: result.gas_used,
-            passed: result.passed,
-            error_message: result.error_message.clone(),
+            gas_used: outcome.result.gas_used,
+            step_count: outcome.step_count,
+            runtime_metrics: outcome.runtime_metrics,
+            passed: outcome.result.passed,
+            error_message: outcome.result.error_message.clone(),
         }
     }
 
@@ -113,6 +144,12 @@ impl GasTotals {
         self.vs_yul_opt.sonatina_higher += other.vs_yul_opt.sonatina_higher;
         self.vs_yul_opt.equal += other.vs_yul_opt.equal;
         self.vs_yul_opt.incomplete += other.vs_yul_opt.incomplete;
+    }
+}
+
+impl EvmRuntimeMetrics {
+    fn stack_ops_total(self) -> usize {
+        self.push_ops + self.dup_ops + self.swap_ops + self.pop_ops
     }
 }
 
@@ -732,6 +769,7 @@ fn discover_and_run_tests(
             PRIMARY_YUL_OPTIMIZE,
             report,
             call_trace,
+            report.is_some(),
         );
 
         if outcome.result.passed {
@@ -763,7 +801,7 @@ fn discover_and_run_tests(
 
         primary_measurements.insert(
             case.symbol_name.clone(),
-            GasMeasurement::from_test_result(&outcome.result),
+            GasMeasurement::from_test_outcome(&outcome),
         );
         results.push(outcome.result);
     }
@@ -910,9 +948,22 @@ fn format_results_for_report(results: &[TestResult]) -> String {
     }
 }
 
-fn measure_case_gas(case: &TestMetadata, backend: &str, yul_optimize: bool) -> GasMeasurement {
-    let outcome = compile_and_run_test(case, false, backend, yul_optimize, None, false);
-    GasMeasurement::from_test_result(&outcome.result)
+fn measure_case_gas(
+    case: &TestMetadata,
+    backend: &str,
+    yul_optimize: bool,
+    collect_step_count: bool,
+) -> GasMeasurement {
+    let outcome = compile_and_run_test(
+        case,
+        false,
+        backend,
+        yul_optimize,
+        None,
+        false,
+        collect_step_count,
+    );
+    GasMeasurement::from_test_outcome(&outcome)
 }
 
 fn normalize_inline_text(value: &str) -> String {
@@ -925,6 +976,90 @@ fn csv_escape(value: &str) -> String {
         format!("\"{}\"", value.replace('"', "\"\""))
     } else {
         value
+    }
+}
+
+fn evm_runtime_metrics_from_bytes(bytes: &[u8]) -> EvmRuntimeMetrics {
+    let mut metrics = EvmRuntimeMetrics {
+        byte_len: bytes.len(),
+        ..EvmRuntimeMetrics::default()
+    };
+    let mut idx = 0usize;
+    while idx < bytes.len() {
+        let op = bytes[idx];
+        idx += 1;
+        metrics.op_count += 1;
+        match op {
+            0x5f => metrics.push_ops += 1, // PUSH0
+            0x50 => metrics.pop_ops += 1,
+            0x51 => metrics.mload_ops += 1,
+            0x52 => metrics.mstore_ops += 1,
+            0x54 => metrics.sload_ops += 1,
+            0x55 => metrics.sstore_ops += 1,
+            0x56 => metrics.jump_ops += 1,
+            0x57 => metrics.jumpi_ops += 1,
+            0x5b => metrics.jumpdest_ops += 1,
+            0x20 => metrics.keccak_ops += 1,
+            0x37 => metrics.calldatacopy_ops += 1,
+            0x3e => metrics.returndatacopy_ops += 1,
+            0x5e => metrics.mcopy_ops += 1,
+            0xf1 => metrics.call_ops += 1,
+            0xfa => metrics.staticcall_ops += 1,
+            0xf3 => metrics.return_ops += 1,
+            0xfd => metrics.revert_ops += 1,
+            0x60..=0x7f => {
+                metrics.push_ops += 1;
+                let push_n = (op - 0x5f) as usize;
+                idx = idx.saturating_add(push_n).min(bytes.len());
+            }
+            0x80..=0x8f => metrics.dup_ops += 1,
+            0x90..=0x9f => metrics.swap_ops += 1,
+            _ => {}
+        }
+    }
+    metrics
+}
+
+fn evm_runtime_metrics_from_hex(runtime_hex: &str) -> Option<EvmRuntimeMetrics> {
+    let bytes = hex::decode(runtime_hex.trim()).ok()?;
+    Some(evm_runtime_metrics_from_bytes(&bytes))
+}
+
+fn usize_cell(value: Option<usize>) -> String {
+    value
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "n/a".to_string())
+}
+
+fn u64_cell(value: Option<u64>) -> String {
+    value
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "n/a".to_string())
+}
+
+fn ratio_cell_usize(numerator: Option<usize>, denominator: Option<usize>) -> String {
+    match (numerator, denominator) {
+        (Some(n), Some(d)) if d > 0 => format!("{:.2}", n as f64 / d as f64),
+        _ => "n/a".to_string(),
+    }
+}
+
+fn ratio_cell_u64(numerator: Option<u64>, denominator: Option<u64>) -> String {
+    match (numerator, denominator) {
+        (Some(n), Some(d)) if d > 0 => format!("{:.2}", n as f64 / d as f64),
+        _ => "n/a".to_string(),
+    }
+}
+
+fn stack_ops_pct_cell(metrics: Option<EvmRuntimeMetrics>) -> String {
+    match metrics {
+        Some(metrics) if metrics.op_count > 0 => {
+            format!(
+                "{:.2}%",
+                (metrics.stack_ops_total() as f64 * 100.0) / (metrics.op_count as f64)
+            )
+        }
+        _ => "n/a".to_string(),
     }
 }
 
@@ -1126,6 +1261,10 @@ fn append_comparison_summary(
     ));
 }
 
+fn gas_opcode_comparison_header() -> &'static str {
+    "test,symbol,yul_unopt_steps,yul_opt_steps,sonatina_steps,steps_ratio_vs_yul_unopt,steps_ratio_vs_yul_opt,yul_unopt_runtime_bytes,yul_opt_runtime_bytes,sonatina_runtime_bytes,bytes_ratio_vs_yul_unopt,bytes_ratio_vs_yul_opt,yul_unopt_runtime_ops,yul_opt_runtime_ops,sonatina_runtime_ops,ops_ratio_vs_yul_unopt,ops_ratio_vs_yul_opt,yul_unopt_stack_ops_pct,yul_opt_stack_ops_pct,sonatina_stack_ops_pct,yul_opt_swap_ops,sonatina_swap_ops,swap_ratio_vs_yul_opt,yul_opt_pop_ops,sonatina_pop_ops,pop_ratio_vs_yul_opt,yul_opt_jump_ops,sonatina_jump_ops,jump_ratio_vs_yul_opt,yul_opt_jumpi_ops,sonatina_jumpi_ops,jumpi_ratio_vs_yul_opt,note"
+}
+
 fn write_gas_comparison_report(
     report: &ReportContext,
     primary_backend: &str,
@@ -1147,11 +1286,21 @@ fn write_gas_comparison_report(
     );
     markdown.push_str("| test | yul_unopt | yul_opt | sonatina | delta_vs_unopt | pct_vs_unopt | delta_vs_opt | pct_vs_opt | note |\n");
     markdown.push_str("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n");
+    let mut opcode_markdown = String::new();
+    opcode_markdown.push_str("# EVM Opcode/Trace Comparison\n\n");
+    opcode_markdown.push_str(
+        "Static runtime opcode shape and dynamic EVM step counts for the same test call.\n\n",
+    );
+    opcode_markdown.push_str("| test | steps_ratio_vs_opt | bytes_ratio_vs_opt | ops_ratio_vs_opt | swap_ratio_vs_opt | pop_ratio_vs_opt | jump_ratio_vs_opt | jumpi_ratio_vs_opt | note |\n");
+    opcode_markdown.push_str("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n");
 
     let mut csv = String::new();
     csv.push_str(
         "test,symbol,yul_unopt_gas,yul_opt_gas,sonatina_gas,delta_vs_yul_unopt,delta_vs_yul_unopt_pct,delta_vs_yul_opt,delta_vs_yul_opt_pct,yul_unopt_status,yul_opt_status,sonatina_status,note\n",
     );
+    let mut opcode_csv = String::new();
+    opcode_csv.push_str(gas_opcode_comparison_header());
+    opcode_csv.push('\n');
 
     let mut totals = GasTotals {
         tests_in_scope: cases.len(),
@@ -1164,20 +1313,20 @@ fn write_gas_comparison_report(
         } else {
             case.yul
                 .as_ref()
-                .map(|test| measure_case_gas(test, "yul", true))
+                .map(|test| measure_case_gas(test, "yul", true, true))
         };
 
         let yul_unopt = case
             .yul
             .as_ref()
-            .map(|test| measure_case_gas(test, "yul", false));
+            .map(|test| measure_case_gas(test, "yul", false, true));
 
         let sonatina = if primary_backend.eq_ignore_ascii_case("sonatina") {
             primary_measurements.get(&case.symbol_name).cloned()
         } else {
             case.sonatina
                 .as_ref()
-                .map(|test| measure_case_gas(test, "sonatina", PRIMARY_YUL_OPTIMIZE))
+                .map(|test| measure_case_gas(test, "sonatina", PRIMARY_YUL_OPTIMIZE, true))
         };
 
         let yul_unopt_gas = yul_unopt
@@ -1260,6 +1409,107 @@ fn write_gas_comparison_report(
             csv_escape(sonatina_status),
             csv_escape(&note),
         ));
+
+        let yul_unopt_steps = yul_unopt
+            .as_ref()
+            .and_then(|measurement| measurement.step_count);
+        let yul_opt_steps = yul_opt
+            .as_ref()
+            .and_then(|measurement| measurement.step_count);
+        let sonatina_steps = sonatina
+            .as_ref()
+            .and_then(|measurement| measurement.step_count);
+
+        let yul_unopt_metrics = yul_unopt
+            .as_ref()
+            .and_then(|measurement| measurement.runtime_metrics);
+        let yul_opt_metrics = yul_opt
+            .as_ref()
+            .and_then(|measurement| measurement.runtime_metrics);
+        let sonatina_metrics = sonatina
+            .as_ref()
+            .and_then(|measurement| measurement.runtime_metrics);
+
+        let yul_unopt_bytes = yul_unopt_metrics.map(|metrics| metrics.byte_len);
+        let yul_opt_bytes = yul_opt_metrics.map(|metrics| metrics.byte_len);
+        let sonatina_bytes = sonatina_metrics.map(|metrics| metrics.byte_len);
+
+        let yul_unopt_ops = yul_unopt_metrics.map(|metrics| metrics.op_count);
+        let yul_opt_ops = yul_opt_metrics.map(|metrics| metrics.op_count);
+        let sonatina_ops = sonatina_metrics.map(|metrics| metrics.op_count);
+
+        let steps_ratio_unopt = ratio_cell_u64(sonatina_steps, yul_unopt_steps);
+        let steps_ratio_opt = ratio_cell_u64(sonatina_steps, yul_opt_steps);
+        let bytes_ratio_unopt = ratio_cell_usize(sonatina_bytes, yul_unopt_bytes);
+        let bytes_ratio_opt = ratio_cell_usize(sonatina_bytes, yul_opt_bytes);
+        let ops_ratio_unopt = ratio_cell_usize(sonatina_ops, yul_unopt_ops);
+        let ops_ratio_opt = ratio_cell_usize(sonatina_ops, yul_opt_ops);
+
+        let yul_opt_swap = yul_opt_metrics.map(|metrics| metrics.swap_ops);
+        let sonatina_swap = sonatina_metrics.map(|metrics| metrics.swap_ops);
+        let swap_ratio_opt = ratio_cell_usize(sonatina_swap, yul_opt_swap);
+
+        let yul_opt_pop = yul_opt_metrics.map(|metrics| metrics.pop_ops);
+        let sonatina_pop = sonatina_metrics.map(|metrics| metrics.pop_ops);
+        let pop_ratio_opt = ratio_cell_usize(sonatina_pop, yul_opt_pop);
+
+        let yul_opt_jump = yul_opt_metrics.map(|metrics| metrics.jump_ops);
+        let sonatina_jump = sonatina_metrics.map(|metrics| metrics.jump_ops);
+        let jump_ratio_opt = ratio_cell_usize(sonatina_jump, yul_opt_jump);
+
+        let yul_opt_jumpi = yul_opt_metrics.map(|metrics| metrics.jumpi_ops);
+        let sonatina_jumpi = sonatina_metrics.map(|metrics| metrics.jumpi_ops);
+        let jumpi_ratio_opt = ratio_cell_usize(sonatina_jumpi, yul_opt_jumpi);
+
+        opcode_markdown.push_str(&format!(
+            "| {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
+            case.display_name,
+            steps_ratio_opt,
+            bytes_ratio_opt,
+            ops_ratio_opt,
+            swap_ratio_opt,
+            pop_ratio_opt,
+            jump_ratio_opt,
+            jumpi_ratio_opt,
+            note
+        ));
+
+        opcode_csv.push_str(&format!(
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+            csv_escape(&case.display_name),
+            csv_escape(&case.symbol_name),
+            csv_escape(&u64_cell(yul_unopt_steps)),
+            csv_escape(&u64_cell(yul_opt_steps)),
+            csv_escape(&u64_cell(sonatina_steps)),
+            csv_escape(&steps_ratio_unopt),
+            csv_escape(&steps_ratio_opt),
+            csv_escape(&usize_cell(yul_unopt_bytes)),
+            csv_escape(&usize_cell(yul_opt_bytes)),
+            csv_escape(&usize_cell(sonatina_bytes)),
+            csv_escape(&bytes_ratio_unopt),
+            csv_escape(&bytes_ratio_opt),
+            csv_escape(&usize_cell(yul_unopt_ops)),
+            csv_escape(&usize_cell(yul_opt_ops)),
+            csv_escape(&usize_cell(sonatina_ops)),
+            csv_escape(&ops_ratio_unopt),
+            csv_escape(&ops_ratio_opt),
+            csv_escape(&stack_ops_pct_cell(yul_unopt_metrics)),
+            csv_escape(&stack_ops_pct_cell(yul_opt_metrics)),
+            csv_escape(&stack_ops_pct_cell(sonatina_metrics)),
+            csv_escape(&usize_cell(yul_opt_swap)),
+            csv_escape(&usize_cell(sonatina_swap)),
+            csv_escape(&swap_ratio_opt),
+            csv_escape(&usize_cell(yul_opt_pop)),
+            csv_escape(&usize_cell(sonatina_pop)),
+            csv_escape(&pop_ratio_opt),
+            csv_escape(&usize_cell(yul_opt_jump)),
+            csv_escape(&usize_cell(sonatina_jump)),
+            csv_escape(&jump_ratio_opt),
+            csv_escape(&usize_cell(yul_opt_jumpi)),
+            csv_escape(&usize_cell(sonatina_jumpi)),
+            csv_escape(&jumpi_ratio_opt),
+            csv_escape(&note),
+        ));
     }
 
     markdown.push_str("\n## Summary\n\n");
@@ -1282,9 +1532,17 @@ fn write_gas_comparison_report(
     for line in gas_comparison_settings_text().lines() {
         markdown.push_str(&format!("- {line}\n"));
     }
+    markdown.push_str(
+        "\n## Opcode/Trace Profile\n\nSee `artifacts/gas_opcode_comparison.md` and `artifacts/gas_opcode_comparison.csv` for bytecode shape and dynamic step-count diagnostics.\n",
+    );
 
     let _ = std::fs::write(artifacts_dir.join("gas_comparison.md"), markdown);
     let _ = std::fs::write(artifacts_dir.join("gas_comparison.csv"), csv);
+    let _ = std::fs::write(
+        artifacts_dir.join("gas_opcode_comparison.md"),
+        opcode_markdown,
+    );
+    let _ = std::fs::write(artifacts_dir.join("gas_opcode_comparison.csv"), opcode_csv);
     write_gas_totals_csv(&artifacts_dir.join("gas_comparison_totals.csv"), totals);
 }
 
@@ -1317,7 +1575,12 @@ fn write_run_gas_comparison_summary(root_dir: &Utf8PathBuf) {
 
     let mut all_rows = String::new();
     all_rows.push_str("suite,test,symbol,yul_unopt_gas,yul_opt_gas,sonatina_gas,delta_vs_yul_unopt,delta_vs_yul_unopt_pct,delta_vs_yul_opt,delta_vs_yul_opt_pct,yul_unopt_status,yul_opt_status,sonatina_status,note\n");
+    let mut all_opcode_rows = String::new();
+    all_opcode_rows.push_str("suite,");
+    all_opcode_rows.push_str(gas_opcode_comparison_header());
+    all_opcode_rows.push('\n');
     let mut wrote_any_rows = false;
+    let mut wrote_any_opcode_rows = false;
     let mut totals = GasTotals::default();
 
     for (suite, suite_dir) in suite_dirs {
@@ -1335,6 +1598,22 @@ fn write_run_gas_comparison_summary(root_dir: &Utf8PathBuf) {
             }
         }
 
+        let suite_opcode_rows_path = suite_dir
+            .join("artifacts")
+            .join("gas_opcode_comparison.csv");
+        if let Ok(contents) = std::fs::read_to_string(&suite_opcode_rows_path) {
+            for (idx, line) in contents.lines().enumerate() {
+                if idx == 0 || line.trim().is_empty() {
+                    continue;
+                }
+                all_opcode_rows.push_str(&csv_escape(&suite));
+                all_opcode_rows.push(',');
+                all_opcode_rows.push_str(line);
+                all_opcode_rows.push('\n');
+                wrote_any_opcode_rows = true;
+            }
+        }
+
         let suite_totals_path = suite_dir
             .join("artifacts")
             .join("gas_comparison_totals.csv");
@@ -1345,6 +1624,12 @@ fn write_run_gas_comparison_summary(root_dir: &Utf8PathBuf) {
 
     if wrote_any_rows {
         let _ = std::fs::write(artifacts_dir.join("gas_comparison_all.csv"), all_rows);
+    }
+    if wrote_any_opcode_rows {
+        let _ = std::fs::write(
+            artifacts_dir.join("gas_opcode_comparison_all.csv"),
+            all_opcode_rows,
+        );
     }
     write_gas_totals_csv(&artifacts_dir.join("gas_comparison_totals.csv"), totals);
 
@@ -1372,6 +1657,11 @@ fn write_run_gas_comparison_summary(root_dir: &Utf8PathBuf) {
     if wrote_any_rows {
         summary.push_str(
             "\nSee `artifacts/gas_comparison_all.csv` for per-test rows and `artifacts/gas_comparison_totals.csv` for machine-readable totals.\n",
+        );
+    }
+    if wrote_any_opcode_rows {
+        summary.push_str(
+            "See `artifacts/gas_opcode_comparison_all.csv` for aggregated opcode and step-count diagnostics.\n",
         );
     }
     let _ = std::fs::write(artifacts_dir.join("gas_comparison_summary.md"), summary);
@@ -1519,6 +1809,7 @@ fn compile_and_run_test(
     yul_optimize: bool,
     report: Option<&ReportContext>,
     call_trace: bool,
+    collect_step_count: bool,
 ) -> TestOutcome {
     if case.value_param_count > 0 {
         return TestOutcome {
@@ -1533,6 +1824,8 @@ fn compile_and_run_test(
             },
             logs: Vec::new(),
             trace: None,
+            step_count: None,
+            runtime_metrics: None,
         };
     }
 
@@ -1549,6 +1842,8 @@ fn compile_and_run_test(
             },
             logs: Vec::new(),
             trace: None,
+            step_count: None,
+            runtime_metrics: None,
         };
     }
 
@@ -1566,6 +1861,8 @@ fn compile_and_run_test(
                 },
                 logs: Vec::new(),
                 trace: None,
+                step_count: None,
+                runtime_metrics: None,
             };
         }
 
@@ -1573,18 +1870,23 @@ fn compile_and_run_test(
             write_sonatina_case_artifacts(report, case);
         }
 
+        let runtime_metrics = extract_runtime_from_sonatina_initcode(&case.bytecode)
+            .map(evm_runtime_metrics_from_bytes);
         let bytecode_hex = hex::encode(&case.bytecode);
-        let (result, logs, trace) = execute_test(
+        let (result, logs, trace, step_count) = execute_test(
             &case.display_name,
             &bytecode_hex,
             show_logs,
             case.expected_revert.as_ref(),
             call_trace,
+            collect_step_count,
         );
         return TestOutcome {
             result,
             logs,
             trace,
+            step_count,
+            runtime_metrics,
         };
     }
 
@@ -1599,6 +1901,8 @@ fn compile_and_run_test(
             },
             logs: Vec::new(),
             trace: None,
+            step_count: None,
+            runtime_metrics: None,
         };
     }
 
@@ -1606,13 +1910,16 @@ fn compile_and_run_test(
         write_yul_case_artifacts(report, case);
     }
 
-    let bytecode = match compile_single_contract(
+    let (bytecode, runtime_metrics) = match compile_single_contract(
         &case.object_name,
         &case.yul,
         yul_optimize,
         YUL_VERIFY_RUNTIME,
     ) {
-        Ok(contract) => contract.bytecode,
+        Ok(contract) => (
+            contract.bytecode,
+            evm_runtime_metrics_from_hex(&contract.runtime_bytecode),
+        ),
         Err(err) => {
             return TestOutcome {
                 result: TestResult {
@@ -1623,22 +1930,27 @@ fn compile_and_run_test(
                 },
                 logs: Vec::new(),
                 trace: None,
+                step_count: None,
+                runtime_metrics: None,
             };
         }
     };
 
     // Execute the test bytecode in revm
-    let (result, logs, trace) = execute_test(
+    let (result, logs, trace, step_count) = execute_test(
         &case.display_name,
         &bytecode,
         show_logs,
         case.expected_revert.as_ref(),
         call_trace,
+        collect_step_count,
     );
     TestOutcome {
         result,
         logs,
         trace,
+        step_count,
+        runtime_metrics,
     }
 }
 
@@ -1735,6 +2047,8 @@ fn write_report_manifest(
     out.push_str("details: see `meta/args.txt` and `meta/git.txt` for exact repro context\n");
     out.push_str("gas_comparison: see `artifacts/gas_comparison.md`, `artifacts/gas_comparison.csv`, `artifacts/gas_comparison_totals.csv`, and `artifacts/gas_comparison_settings.txt` when available\n");
     out.push_str("gas_comparison_aggregate: run-level reports also include `artifacts/gas_comparison_all.csv` and `artifacts/gas_comparison_summary.md`\n");
+    out.push_str("gas_opcode_profile: see `artifacts/gas_opcode_comparison.md` and `artifacts/gas_opcode_comparison.csv` for opcode and step-count diagnostics when available\n");
+    out.push_str("gas_opcode_profile_aggregate: run-level reports also include `artifacts/gas_opcode_comparison_all.csv`\n");
     out.push_str(&format!("tests: {}\n", results.len()));
     let passed = results.iter().filter(|r| r.passed).count();
     out.push_str(&format!("passed: {passed}\n"));
@@ -1764,7 +2078,13 @@ fn execute_test(
     show_logs: bool,
     expected_revert: Option<&ExpectedRevert>,
     call_trace: bool,
-) -> (TestResult, Vec<String>, Option<contract_harness::CallTrace>) {
+    collect_step_count: bool,
+) -> (
+    TestResult,
+    Vec<String>,
+    Option<contract_harness::CallTrace>,
+    Option<u64>,
+) {
     // Deploy the test contract
     let mut instance = match RuntimeInstance::deploy(bytecode_hex) {
         Ok(instance) => instance,
@@ -1778,6 +2098,7 @@ fn execute_test(
                 },
                 Vec::new(),
                 None,
+                None,
             );
         }
     };
@@ -1789,6 +2110,11 @@ fn execute_test(
     // has the right pre-call state (contract deployed but not yet called).
     let trace = if call_trace {
         Some(instance.call_raw_traced(&[], options))
+    } else {
+        None
+    };
+    let step_count = if collect_step_count {
+        Some(instance.call_raw_step_count(&[], options))
     } else {
         None
     };
@@ -1814,6 +2140,7 @@ fn execute_test(
             },
             logs,
             trace,
+            step_count,
         ),
         // Normal test: execution reverted (failure)
         (Err(err), None) => {
@@ -1827,6 +2154,7 @@ fn execute_test(
                 },
                 Vec::new(),
                 trace,
+                step_count,
             )
         }
         // Expected revert: execution succeeded (failure - should have reverted)
@@ -1839,6 +2167,7 @@ fn execute_test(
             },
             Vec::new(),
             trace,
+            step_count,
         ),
         // Expected revert: execution reverted (success)
         (Err(contract_harness::HarnessError::Revert(_)), Some(ExpectedRevert::Any)) => (
@@ -1850,6 +2179,7 @@ fn execute_test(
             },
             Vec::new(),
             trace,
+            step_count,
         ),
         // Expected revert: execution failed for a different reason (failure)
         (Err(err), Some(ExpectedRevert::Any)) => {
@@ -1866,6 +2196,7 @@ fn execute_test(
                 },
                 Vec::new(),
                 trace,
+                step_count,
             )
         }
     }
