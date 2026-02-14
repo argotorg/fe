@@ -116,6 +116,24 @@ struct GasTotals {
     vs_yul_opt: ComparisonTotals,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+struct DeltaMagnitudeTotals {
+    compared_with_gas: usize,
+    pct_rows: usize,
+    baseline_gas_sum: u128,
+    sonatina_gas_sum: u128,
+    delta_gas_sum: i128,
+    abs_delta_gas_sum: u128,
+    delta_pct_sum: f64,
+    abs_delta_pct_sum: f64,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct GasMagnitudeTotals {
+    vs_yul_unopt: DeltaMagnitudeTotals,
+    vs_yul_opt: DeltaMagnitudeTotals,
+}
+
 impl GasMeasurement {
     fn from_test_outcome(outcome: &TestOutcome) -> Self {
         Self {
@@ -151,6 +169,66 @@ impl GasTotals {
         self.vs_yul_opt.sonatina_higher += other.vs_yul_opt.sonatina_higher;
         self.vs_yul_opt.equal += other.vs_yul_opt.equal;
         self.vs_yul_opt.incomplete += other.vs_yul_opt.incomplete;
+    }
+}
+
+impl DeltaMagnitudeTotals {
+    fn add(&mut self, other: Self) {
+        self.compared_with_gas += other.compared_with_gas;
+        self.pct_rows += other.pct_rows;
+        self.baseline_gas_sum += other.baseline_gas_sum;
+        self.sonatina_gas_sum += other.sonatina_gas_sum;
+        self.delta_gas_sum += other.delta_gas_sum;
+        self.abs_delta_gas_sum += other.abs_delta_gas_sum;
+        self.delta_pct_sum += other.delta_pct_sum;
+        self.abs_delta_pct_sum += other.abs_delta_pct_sum;
+    }
+
+    fn mean_delta_gas(self) -> Option<f64> {
+        if self.compared_with_gas == 0 {
+            None
+        } else {
+            Some(self.delta_gas_sum as f64 / self.compared_with_gas as f64)
+        }
+    }
+
+    fn mean_abs_delta_gas(self) -> Option<f64> {
+        if self.compared_with_gas == 0 {
+            None
+        } else {
+            Some(self.abs_delta_gas_sum as f64 / self.compared_with_gas as f64)
+        }
+    }
+
+    fn mean_delta_pct(self) -> Option<f64> {
+        if self.pct_rows == 0 {
+            None
+        } else {
+            Some(self.delta_pct_sum / self.pct_rows as f64)
+        }
+    }
+
+    fn mean_abs_delta_pct(self) -> Option<f64> {
+        if self.pct_rows == 0 {
+            None
+        } else {
+            Some(self.abs_delta_pct_sum / self.pct_rows as f64)
+        }
+    }
+
+    fn weighted_delta_pct(self) -> Option<f64> {
+        if self.baseline_gas_sum == 0 {
+            None
+        } else {
+            Some(self.delta_gas_sum as f64 * 100.0 / self.baseline_gas_sum as f64)
+        }
+    }
+}
+
+impl GasMagnitudeTotals {
+    fn add(&mut self, other: Self) {
+        self.vs_yul_unopt.add(other.vs_yul_unopt);
+        self.vs_yul_opt.add(other.vs_yul_opt);
     }
 }
 
@@ -1387,6 +1465,46 @@ fn write_gas_totals_csv(path: &Utf8PathBuf, totals: GasTotals) {
     let _ = std::fs::write(path, out);
 }
 
+fn write_magnitude_totals_rows(out: &mut String, baseline: &str, totals: DeltaMagnitudeTotals) {
+    out.push_str(&format!(
+        "{baseline},compared_with_gas,{}\n",
+        totals.compared_with_gas
+    ));
+    out.push_str(&format!("{baseline},pct_rows,{}\n", totals.pct_rows));
+    out.push_str(&format!(
+        "{baseline},baseline_gas_sum,{}\n",
+        totals.baseline_gas_sum
+    ));
+    out.push_str(&format!(
+        "{baseline},sonatina_gas_sum,{}\n",
+        totals.sonatina_gas_sum
+    ));
+    out.push_str(&format!(
+        "{baseline},delta_gas_sum,{}\n",
+        totals.delta_gas_sum
+    ));
+    out.push_str(&format!(
+        "{baseline},abs_delta_gas_sum,{}\n",
+        totals.abs_delta_gas_sum
+    ));
+    out.push_str(&format!(
+        "{baseline},delta_pct_sum,{:.6}\n",
+        totals.delta_pct_sum
+    ));
+    out.push_str(&format!(
+        "{baseline},abs_delta_pct_sum,{:.6}\n",
+        totals.abs_delta_pct_sum
+    ));
+}
+
+fn write_gas_magnitude_csv(path: &Utf8PathBuf, totals: GasMagnitudeTotals) {
+    let mut out = String::new();
+    out.push_str("baseline,metric,value\n");
+    write_magnitude_totals_rows(&mut out, "yul_unopt", totals.vs_yul_unopt);
+    write_magnitude_totals_rows(&mut out, "yul_opt", totals.vs_yul_opt);
+    let _ = std::fs::write(path, out);
+}
+
 fn parse_gas_totals_csv(contents: &str) -> GasTotals {
     let mut totals = GasTotals::default();
     for (idx, line) in contents.lines().enumerate() {
@@ -1412,6 +1530,52 @@ fn parse_gas_totals_csv(contents: &str) -> GasTotals {
             ("yul_opt", "sonatina_higher") => totals.vs_yul_opt.sonatina_higher = count,
             ("yul_opt", "equal") => totals.vs_yul_opt.equal = count,
             ("yul_opt", "incomplete") => totals.vs_yul_opt.incomplete = count,
+            _ => {}
+        }
+    }
+    totals
+}
+
+fn parse_gas_magnitude_csv(contents: &str) -> GasMagnitudeTotals {
+    let mut totals = GasMagnitudeTotals::default();
+    for (idx, line) in contents.lines().enumerate() {
+        if idx == 0 || line.trim().is_empty() {
+            continue;
+        }
+        let mut parts = line.splitn(3, ',');
+        let baseline = parts.next().unwrap_or_default().trim();
+        let metric = parts.next().unwrap_or_default().trim();
+        let value = parts.next().unwrap_or_default().trim();
+        let target = match baseline {
+            "yul_unopt" => &mut totals.vs_yul_unopt,
+            "yul_opt" => &mut totals.vs_yul_opt,
+            _ => continue,
+        };
+        match metric {
+            "compared_with_gas" => {
+                target.compared_with_gas = value.parse::<usize>().unwrap_or(0);
+            }
+            "pct_rows" => {
+                target.pct_rows = value.parse::<usize>().unwrap_or(0);
+            }
+            "baseline_gas_sum" => {
+                target.baseline_gas_sum = value.parse::<u128>().unwrap_or(0);
+            }
+            "sonatina_gas_sum" => {
+                target.sonatina_gas_sum = value.parse::<u128>().unwrap_or(0);
+            }
+            "delta_gas_sum" => {
+                target.delta_gas_sum = value.parse::<i128>().unwrap_or(0);
+            }
+            "abs_delta_gas_sum" => {
+                target.abs_delta_gas_sum = value.parse::<u128>().unwrap_or(0);
+            }
+            "delta_pct_sum" => {
+                target.delta_pct_sum = value.parse::<f64>().unwrap_or(0.0);
+            }
+            "abs_delta_pct_sum" => {
+                target.abs_delta_pct_sum = value.parse::<f64>().unwrap_or(0.0);
+            }
             _ => {}
         }
     }
@@ -1461,6 +1625,34 @@ fn record_delta(
     }
 }
 
+fn record_delta_magnitude(
+    baseline_gas: Option<u64>,
+    sonatina_gas: Option<u64>,
+    totals: &mut DeltaMagnitudeTotals,
+) {
+    let (Some(baseline_gas), Some(sonatina_gas)) = (baseline_gas, sonatina_gas) else {
+        return;
+    };
+
+    let delta_gas = sonatina_gas as i128 - baseline_gas as i128;
+    totals.compared_with_gas += 1;
+    totals.baseline_gas_sum += baseline_gas as u128;
+    totals.sonatina_gas_sum += sonatina_gas as u128;
+    totals.delta_gas_sum += delta_gas;
+    totals.abs_delta_gas_sum += if delta_gas < 0 {
+        (-delta_gas) as u128
+    } else {
+        delta_gas as u128
+    };
+
+    if baseline_gas > 0 {
+        let delta_pct = (delta_gas as f64 * 100.0) / baseline_gas as f64;
+        totals.pct_rows += 1;
+        totals.delta_pct_sum += delta_pct;
+        totals.abs_delta_pct_sum += delta_pct.abs();
+    }
+}
+
 fn append_comparison_summary(
     out: &mut String,
     label: &str,
@@ -1492,6 +1684,55 @@ fn append_comparison_summary(
         "- incomplete: {} ({})\n\n",
         totals.incomplete,
         format_ratio_percent(totals.incomplete, tests_in_scope)
+    ));
+}
+
+fn format_percent_cell(value: Option<f64>) -> String {
+    value
+        .map(|v| format!("{v:.2}%"))
+        .unwrap_or_else(|| "n/a".to_string())
+}
+
+fn format_float_cell(value: Option<f64>) -> String {
+    value
+        .map(|v| format!("{v:.2}"))
+        .unwrap_or_else(|| "n/a".to_string())
+}
+
+fn append_magnitude_summary(out: &mut String, label: &str, totals: DeltaMagnitudeTotals) {
+    out.push_str(&format!("### {label}\n\n"));
+    out.push_str(&format!(
+        "- compared_with_gas: {}\n",
+        totals.compared_with_gas
+    ));
+    out.push_str(&format!(
+        "- baseline_gas_sum: {}\n",
+        totals.baseline_gas_sum
+    ));
+    out.push_str(&format!(
+        "- sonatina_gas_sum: {}\n",
+        totals.sonatina_gas_sum
+    ));
+    out.push_str(&format!("- total_delta_gas: {}\n", totals.delta_gas_sum));
+    out.push_str(&format!(
+        "- weighted_delta_pct: {}\n",
+        format_percent_cell(totals.weighted_delta_pct())
+    ));
+    out.push_str(&format!(
+        "- mean_delta_gas: {}\n",
+        format_float_cell(totals.mean_delta_gas())
+    ));
+    out.push_str(&format!(
+        "- mean_abs_delta_gas: {}\n",
+        format_float_cell(totals.mean_abs_delta_gas())
+    ));
+    out.push_str(&format!(
+        "- mean_delta_pct: {}\n",
+        format_percent_cell(totals.mean_delta_pct())
+    ));
+    out.push_str(&format!(
+        "- mean_abs_delta_pct: {}\n\n",
+        format_percent_cell(totals.mean_abs_delta_pct())
     ));
 }
 
@@ -1541,6 +1782,7 @@ fn write_gas_comparison_report(
         tests_in_scope: cases.len(),
         ..GasTotals::default()
     };
+    let mut magnitude_totals = GasMagnitudeTotals::default();
 
     for case in cases {
         let yul_opt = if primary_backend.eq_ignore_ascii_case("yul") {
@@ -1608,6 +1850,12 @@ fn write_gas_comparison_report(
             record_delta(yul_unopt_gas, sonatina_gas, &mut totals.vs_yul_unopt);
         let (delta_opt_cell, delta_opt_pct_cell) =
             record_delta(yul_opt_gas, sonatina_gas, &mut totals.vs_yul_opt);
+        record_delta_magnitude(
+            yul_unopt_gas,
+            sonatina_gas,
+            &mut magnitude_totals.vs_yul_unopt,
+        );
+        record_delta_magnitude(yul_opt_gas, sonatina_gas, &mut magnitude_totals.vs_yul_opt);
 
         let note = if notes.is_empty() {
             String::new()
@@ -1762,11 +2010,25 @@ fn write_gas_comparison_report(
         totals.vs_yul_opt,
         totals.tests_in_scope,
     );
+    markdown.push_str("\n## Aggregate Delta Metrics\n\n");
+    append_magnitude_summary(
+        &mut markdown,
+        "vs Yul (unoptimized)",
+        magnitude_totals.vs_yul_unopt,
+    );
+    append_magnitude_summary(
+        &mut markdown,
+        "vs Yul (optimized)",
+        magnitude_totals.vs_yul_opt,
+    );
 
     markdown.push_str("\n## Optimization Settings\n\n");
     for line in gas_comparison_settings_text(opt_level).lines() {
         markdown.push_str(&format!("- {line}\n"));
     }
+    markdown.push_str(
+        "\nMachine-readable aggregates: `artifacts/gas_comparison_totals.csv` and `artifacts/gas_comparison_magnitude.csv`.\n",
+    );
     markdown.push_str(
         "\n## Opcode/Trace Profile\n\nSee `artifacts/gas_opcode_comparison.md` and `artifacts/gas_opcode_comparison.csv` for bytecode shape and dynamic step-count diagnostics.\n",
     );
@@ -1779,6 +2041,10 @@ fn write_gas_comparison_report(
     );
     let _ = std::fs::write(artifacts_dir.join("gas_opcode_comparison.csv"), opcode_csv);
     write_gas_totals_csv(&artifacts_dir.join("gas_comparison_totals.csv"), totals);
+    write_gas_magnitude_csv(
+        &artifacts_dir.join("gas_comparison_magnitude.csv"),
+        magnitude_totals,
+    );
 }
 
 fn write_run_gas_comparison_summary(root_dir: &Utf8PathBuf, opt_level: OptLevel) {
@@ -1817,6 +2083,7 @@ fn write_run_gas_comparison_summary(root_dir: &Utf8PathBuf, opt_level: OptLevel)
     let mut wrote_any_rows = false;
     let mut wrote_any_opcode_rows = false;
     let mut totals = GasTotals::default();
+    let mut magnitude_totals = GasMagnitudeTotals::default();
 
     for (suite, suite_dir) in suite_dirs {
         let suite_rows_path = suite_dir.join("artifacts").join("gas_comparison.csv");
@@ -1855,6 +2122,13 @@ fn write_run_gas_comparison_summary(root_dir: &Utf8PathBuf, opt_level: OptLevel)
         if let Ok(contents) = std::fs::read_to_string(&suite_totals_path) {
             totals.add(parse_gas_totals_csv(&contents));
         }
+
+        let suite_magnitude_path = suite_dir
+            .join("artifacts")
+            .join("gas_comparison_magnitude.csv");
+        if let Ok(contents) = std::fs::read_to_string(&suite_magnitude_path) {
+            magnitude_totals.add(parse_gas_magnitude_csv(&contents));
+        }
     }
 
     if wrote_any_rows {
@@ -1867,6 +2141,10 @@ fn write_run_gas_comparison_summary(root_dir: &Utf8PathBuf, opt_level: OptLevel)
         );
     }
     write_gas_totals_csv(&artifacts_dir.join("gas_comparison_totals.csv"), totals);
+    write_gas_magnitude_csv(
+        &artifacts_dir.join("gas_comparison_magnitude.csv"),
+        magnitude_totals,
+    );
 
     let mut summary = String::new();
     summary.push_str("# Gas Comparison Summary\n\n");
@@ -1885,13 +2163,24 @@ fn write_run_gas_comparison_summary(root_dir: &Utf8PathBuf, opt_level: OptLevel)
         totals.vs_yul_opt,
         totals.tests_in_scope,
     );
+    summary.push_str("\n## Aggregate Delta Metrics\n\n");
+    append_magnitude_summary(
+        &mut summary,
+        "vs Yul (unoptimized)",
+        magnitude_totals.vs_yul_unopt,
+    );
+    append_magnitude_summary(
+        &mut summary,
+        "vs Yul (optimized)",
+        magnitude_totals.vs_yul_opt,
+    );
     summary.push_str("\n## Optimization Settings\n\n");
     for line in gas_comparison_settings_text(opt_level).lines() {
         summary.push_str(&format!("- {line}\n"));
     }
     if wrote_any_rows {
         summary.push_str(
-            "\nSee `artifacts/gas_comparison_all.csv` for per-test rows and `artifacts/gas_comparison_totals.csv` for machine-readable totals.\n",
+            "\nSee `artifacts/gas_comparison_all.csv`, `artifacts/gas_comparison_totals.csv`, and `artifacts/gas_comparison_magnitude.csv` for machine-readable totals.\n",
         );
     }
     if wrote_any_opcode_rows {
@@ -2285,8 +2574,8 @@ fn write_report_manifest(
     out.push_str(&format!("filter: {}\n", filter.unwrap_or("<none>")));
     out.push_str(&format!("fe_version: {}\n", env!("CARGO_PKG_VERSION")));
     out.push_str("details: see `meta/args.txt` and `meta/git.txt` for exact repro context\n");
-    out.push_str("gas_comparison: see `artifacts/gas_comparison.md`, `artifacts/gas_comparison.csv`, `artifacts/gas_comparison_totals.csv`, and `artifacts/gas_comparison_settings.txt` when available\n");
-    out.push_str("gas_comparison_aggregate: run-level reports also include `artifacts/gas_comparison_all.csv` and `artifacts/gas_comparison_summary.md`\n");
+    out.push_str("gas_comparison: see `artifacts/gas_comparison.md`, `artifacts/gas_comparison.csv`, `artifacts/gas_comparison_totals.csv`, `artifacts/gas_comparison_magnitude.csv`, and `artifacts/gas_comparison_settings.txt` when available\n");
+    out.push_str("gas_comparison_aggregate: run-level reports also include `artifacts/gas_comparison_all.csv`, `artifacts/gas_comparison_summary.md`, and `artifacts/gas_comparison_magnitude.csv`\n");
     out.push_str("gas_opcode_profile: see `artifacts/gas_opcode_comparison.md` and `artifacts/gas_opcode_comparison.csv` for opcode and step-count diagnostics when available\n");
     out.push_str("gas_opcode_profile_aggregate: run-level reports also include `artifacts/gas_opcode_comparison_all.csv`\n");
     out.push_str(&format!("tests: {}\n", results.len()));
