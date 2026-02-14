@@ -1340,9 +1340,7 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                             ));
                         }
                         let size = lower_value(ctx, *size)?;
-                        return Ok(Some(
-                            ctx.fb.insert_inst(EvmMalloc::new(ctx.is, size), Type::I256),
-                        ));
+                        return Ok(Some(emit_evm_malloc_word_addr(ctx.fb, size, ctx.is)));
                     }
                     "evm_create_create_raw" => {
                         let mut lowered = Vec::new();
@@ -1649,8 +1647,9 @@ fn lower_unary_op<C: sonatina_ir::func_cursor::FuncCursor>(
 ) -> Result<ValueId, LowerError> {
     match op {
         UnOp::Not => {
-            // Logical not: iszero
-            let result = fb.insert_inst(IsZero::new(is, inner), Type::I256);
+            // Logical not: normalize to i1, then keep Fe's word-level bool representation.
+            let is_zero = fb.insert_inst(IsZero::new(is, inner), Type::I1);
+            let result = fb.insert_inst(Zext::new(is, is_zero, Type::I256), Type::I256);
             Ok(result)
         }
         UnOp::Minus => {
@@ -1727,23 +1726,35 @@ fn lower_comp_op<C: sonatina_ir::func_cursor::FuncCursor>(
     is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
 ) -> Result<ValueId, LowerError> {
     let result = match op {
-        CompBinOp::Eq => fb.insert_inst(Eq::new(is, lhs, rhs), Type::I256),
+        CompBinOp::Eq => {
+            let eq = fb.insert_inst(Eq::new(is, lhs, rhs), Type::I1);
+            fb.insert_inst(Zext::new(is, eq, Type::I256), Type::I256)
+        }
         CompBinOp::NotEq => {
             // neq = iszero(eq(lhs, rhs))
-            let eq_result = fb.insert_inst(Eq::new(is, lhs, rhs), Type::I256);
-            fb.insert_inst(IsZero::new(is, eq_result), Type::I256)
+            let eq_result = fb.insert_inst(Eq::new(is, lhs, rhs), Type::I1);
+            let neq_i1 = fb.insert_inst(IsZero::new(is, eq_result), Type::I1);
+            fb.insert_inst(Zext::new(is, neq_i1, Type::I256), Type::I256)
         }
-        CompBinOp::Lt => fb.insert_inst(Lt::new(is, lhs, rhs), Type::I256),
+        CompBinOp::Lt => {
+            let lt = fb.insert_inst(Lt::new(is, lhs, rhs), Type::I1);
+            fb.insert_inst(Zext::new(is, lt, Type::I256), Type::I256)
+        }
         CompBinOp::LtEq => {
             // lhs <= rhs  <==>  !(lhs > rhs)
-            let gt_result = fb.insert_inst(Gt::new(is, lhs, rhs), Type::I256);
-            fb.insert_inst(IsZero::new(is, gt_result), Type::I256)
+            let gt_result = fb.insert_inst(Gt::new(is, lhs, rhs), Type::I1);
+            let lte_i1 = fb.insert_inst(IsZero::new(is, gt_result), Type::I1);
+            fb.insert_inst(Zext::new(is, lte_i1, Type::I256), Type::I256)
         }
-        CompBinOp::Gt => fb.insert_inst(Gt::new(is, lhs, rhs), Type::I256),
+        CompBinOp::Gt => {
+            let gt = fb.insert_inst(Gt::new(is, lhs, rhs), Type::I1);
+            fb.insert_inst(Zext::new(is, gt, Type::I256), Type::I256)
+        }
         CompBinOp::GtEq => {
             // lhs >= rhs  <==>  !(lhs < rhs)
-            let lt_result = fb.insert_inst(Lt::new(is, lhs, rhs), Type::I256);
-            fb.insert_inst(IsZero::new(is, lt_result), Type::I256)
+            let lt_result = fb.insert_inst(Lt::new(is, lhs, rhs), Type::I1);
+            let gte_i1 = fb.insert_inst(IsZero::new(is, lt_result), Type::I1);
+            fb.insert_inst(Zext::new(is, gte_i1, Type::I256), Type::I256)
         }
     };
     Ok(result)
@@ -2079,9 +2090,11 @@ fn apply_to_word<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             PrimTy::Bool => {
                 // bool: iszero(iszero(value)) → 0 or 1
                 let is_zero1 = IsZero::new(is, value);
-                let z1 = fb.insert_inst(is_zero1, Type::I256);
+                let z1 = fb.insert_inst(is_zero1, Type::I1);
                 let is_zero2 = IsZero::new(is, z1);
-                fb.insert_inst(is_zero2, Type::I256)
+                let z2 = fb.insert_inst(is_zero2, Type::I1);
+                let ext = Zext::new(is, z2, Type::I256);
+                fb.insert_inst(ext, Type::I256)
             }
             PrimTy::U8 | PrimTy::U16 | PrimTy::U32 | PrimTy::U64 | PrimTy::U128 => {
                 // Unsigned: truncate then zero-extend to mask high bits
@@ -2573,11 +2586,12 @@ fn lower_terminator<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             else_bb,
         } => {
             let cond_val = lower_value(ctx, *cond)?;
+            let cond_i1 = condition_to_i1(ctx.fb, cond_val, ctx.is);
             let then_block = ctx.block_map[then_bb];
             let else_block = ctx.block_map[else_bb];
             // Br: cond, nz_dest (then), z_dest (else)
             ctx.fb
-                .insert_inst_no_result(Br::new(ctx.is, cond_val, then_block, else_block));
+                .insert_inst_no_result(Br::new(ctx.is, cond_i1, then_block, else_block));
         }
         Terminator::Switch {
             discr,
@@ -2622,7 +2636,7 @@ fn lower_terminator<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 };
                 let cond = ctx
                     .fb
-                    .insert_inst(Eq::new(ctx.is, discr_val, case_value), Type::I256);
+                    .insert_inst(Eq::new(ctx.is, discr_val, case_value), Type::I1);
                 ctx.fb
                     .insert_inst_no_result(Br::new(ctx.is, cond, case_dest, else_dest));
             }
@@ -2809,9 +2823,7 @@ fn lower_alloc<C: sonatina_ir::func_cursor::FuncCursor>(
     // Use Sonatina's EvmMalloc to allocate memory. This delegates memory management
     // to Sonatina's codegen, avoiding conflicts with its stack frame handling.
     let size_val = ctx.fb.make_imm_value(I256::from(size_bytes as u64));
-    let ptr = ctx
-        .fb
-        .insert_inst(EvmMalloc::new(ctx.is, size_val), Type::I256);
+    let ptr = emit_evm_malloc_word_addr(ctx.fb, size_val, ctx.is);
 
     Ok(ptr)
 }
@@ -2999,7 +3011,7 @@ fn deep_copy_enum_from_places<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             };
             let cond = ctx
                 .fb
-                .insert_inst(Eq::new(ctx.is, discr, case_value), Type::I256);
+                .insert_inst(Eq::new(ctx.is, discr, case_value), Type::I1);
             ctx.fb
                 .insert_inst_no_result(Br::new(ctx.is, cond, case_dest, else_dest));
         }
@@ -3031,4 +3043,27 @@ fn extend_place<'db>(place: &Place<'db>, proj: mir::ir::MirProjection<'db>) -> P
     let mut path = place.projection.clone();
     path.push(proj);
     Place::new(place.base, path)
+}
+
+fn condition_to_i1<C: sonatina_ir::func_cursor::FuncCursor>(
+    fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
+    cond: ValueId,
+    is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
+) -> ValueId {
+    if fb.type_of(cond) == Type::I1 {
+        cond
+    } else {
+        let zero = fb.make_imm_value(I256::zero());
+        fb.insert_inst(Ne::new(is, cond, zero), Type::I1)
+    }
+}
+
+fn emit_evm_malloc_word_addr<C: sonatina_ir::func_cursor::FuncCursor>(
+    fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
+    size: ValueId,
+    is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
+) -> ValueId {
+    let ptr_ty = fb.ptr_type(Type::I8);
+    let ptr = fb.insert_inst(EvmMalloc::new(is, size), ptr_ty);
+    fb.insert_inst(PtrToInt::new(is, ptr, Type::I256), Type::I256)
 }
