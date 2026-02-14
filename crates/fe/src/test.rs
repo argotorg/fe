@@ -134,6 +134,33 @@ struct GasMagnitudeTotals {
     vs_yul_opt: DeltaMagnitudeTotals,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+struct OpcodeAggregateTotals {
+    steps_sum: u128,
+    runtime_bytes_sum: u128,
+    runtime_ops_sum: u128,
+    swap_ops_sum: u128,
+    pop_ops_sum: u128,
+    jump_ops_sum: u128,
+    jumpi_ops_sum: u128,
+    mem_rw_ops_sum: u128,
+    storage_rw_ops_sum: u128,
+    mload_ops_sum: u128,
+    mstore_ops_sum: u128,
+    sload_ops_sum: u128,
+    sstore_ops_sum: u128,
+    keccak_ops_sum: u128,
+    call_family_ops_sum: u128,
+    copy_ops_sum: u128,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct OpcodeMagnitudeTotals {
+    compared_with_metrics: usize,
+    yul_opt: OpcodeAggregateTotals,
+    sonatina: OpcodeAggregateTotals,
+}
+
 impl GasMeasurement {
     fn from_test_outcome(outcome: &TestOutcome) -> Self {
         Self {
@@ -232,9 +259,73 @@ impl GasMagnitudeTotals {
     }
 }
 
+impl OpcodeAggregateTotals {
+    fn add_observation(&mut self, steps: u64, metrics: EvmRuntimeMetrics) {
+        self.steps_sum += steps as u128;
+        self.runtime_bytes_sum += metrics.byte_len as u128;
+        self.runtime_ops_sum += metrics.op_count as u128;
+        self.swap_ops_sum += metrics.swap_ops as u128;
+        self.pop_ops_sum += metrics.pop_ops as u128;
+        self.jump_ops_sum += metrics.jump_ops as u128;
+        self.jumpi_ops_sum += metrics.jumpi_ops as u128;
+        self.mem_rw_ops_sum += metrics.mem_rw_ops_total() as u128;
+        self.storage_rw_ops_sum += metrics.storage_rw_ops_total() as u128;
+        self.mload_ops_sum += metrics.mload_ops as u128;
+        self.mstore_ops_sum += metrics.mstore_ops as u128;
+        self.sload_ops_sum += metrics.sload_ops as u128;
+        self.sstore_ops_sum += metrics.sstore_ops as u128;
+        self.keccak_ops_sum += metrics.keccak_ops as u128;
+        self.call_family_ops_sum += metrics.call_family_ops_total() as u128;
+        self.copy_ops_sum += metrics.copy_ops_total() as u128;
+    }
+
+    fn add(&mut self, other: Self) {
+        self.steps_sum += other.steps_sum;
+        self.runtime_bytes_sum += other.runtime_bytes_sum;
+        self.runtime_ops_sum += other.runtime_ops_sum;
+        self.swap_ops_sum += other.swap_ops_sum;
+        self.pop_ops_sum += other.pop_ops_sum;
+        self.jump_ops_sum += other.jump_ops_sum;
+        self.jumpi_ops_sum += other.jumpi_ops_sum;
+        self.mem_rw_ops_sum += other.mem_rw_ops_sum;
+        self.storage_rw_ops_sum += other.storage_rw_ops_sum;
+        self.mload_ops_sum += other.mload_ops_sum;
+        self.mstore_ops_sum += other.mstore_ops_sum;
+        self.sload_ops_sum += other.sload_ops_sum;
+        self.sstore_ops_sum += other.sstore_ops_sum;
+        self.keccak_ops_sum += other.keccak_ops_sum;
+        self.call_family_ops_sum += other.call_family_ops_sum;
+        self.copy_ops_sum += other.copy_ops_sum;
+    }
+}
+
+impl OpcodeMagnitudeTotals {
+    fn add(&mut self, other: Self) {
+        self.compared_with_metrics += other.compared_with_metrics;
+        self.yul_opt.add(other.yul_opt);
+        self.sonatina.add(other.sonatina);
+    }
+}
+
 impl EvmRuntimeMetrics {
     fn stack_ops_total(self) -> usize {
         self.push_ops + self.dup_ops + self.swap_ops + self.pop_ops
+    }
+
+    fn mem_rw_ops_total(self) -> usize {
+        self.mload_ops + self.mstore_ops
+    }
+
+    fn storage_rw_ops_total(self) -> usize {
+        self.sload_ops + self.sstore_ops
+    }
+
+    fn call_family_ops_total(self) -> usize {
+        self.call_ops + self.staticcall_ops
+    }
+
+    fn copy_ops_total(self) -> usize {
+        self.calldatacopy_ops + self.returndatacopy_ops + self.mcopy_ops
     }
 }
 
@@ -1505,6 +1596,61 @@ fn write_gas_magnitude_csv(path: &Utf8PathBuf, totals: GasMagnitudeTotals) {
     let _ = std::fs::write(path, out);
 }
 
+fn write_opcode_magnitude_rows(out: &mut String, side: &str, totals: OpcodeAggregateTotals) {
+    out.push_str(&format!("{side},steps_sum,{}\n", totals.steps_sum));
+    out.push_str(&format!(
+        "{side},runtime_bytes_sum,{}\n",
+        totals.runtime_bytes_sum
+    ));
+    out.push_str(&format!(
+        "{side},runtime_ops_sum,{}\n",
+        totals.runtime_ops_sum
+    ));
+    out.push_str(&format!("{side},swap_ops_sum,{}\n", totals.swap_ops_sum));
+    out.push_str(&format!("{side},pop_ops_sum,{}\n", totals.pop_ops_sum));
+    out.push_str(&format!("{side},jump_ops_sum,{}\n", totals.jump_ops_sum));
+    out.push_str(&format!("{side},jumpi_ops_sum,{}\n", totals.jumpi_ops_sum));
+    out.push_str(&format!(
+        "{side},mem_rw_ops_sum,{}\n",
+        totals.mem_rw_ops_sum
+    ));
+    out.push_str(&format!(
+        "{side},storage_rw_ops_sum,{}\n",
+        totals.storage_rw_ops_sum
+    ));
+    out.push_str(&format!("{side},mload_ops_sum,{}\n", totals.mload_ops_sum));
+    out.push_str(&format!(
+        "{side},mstore_ops_sum,{}\n",
+        totals.mstore_ops_sum
+    ));
+    out.push_str(&format!("{side},sload_ops_sum,{}\n", totals.sload_ops_sum));
+    out.push_str(&format!(
+        "{side},sstore_ops_sum,{}\n",
+        totals.sstore_ops_sum
+    ));
+    out.push_str(&format!(
+        "{side},keccak_ops_sum,{}\n",
+        totals.keccak_ops_sum
+    ));
+    out.push_str(&format!(
+        "{side},call_family_ops_sum,{}\n",
+        totals.call_family_ops_sum
+    ));
+    out.push_str(&format!("{side},copy_ops_sum,{}\n", totals.copy_ops_sum));
+}
+
+fn write_opcode_magnitude_csv(path: &Utf8PathBuf, totals: OpcodeMagnitudeTotals) {
+    let mut out = String::new();
+    out.push_str("side,metric,value\n");
+    out.push_str(&format!(
+        "all,compared_with_metrics,{}\n",
+        totals.compared_with_metrics
+    ));
+    write_opcode_magnitude_rows(&mut out, "yul_opt", totals.yul_opt);
+    write_opcode_magnitude_rows(&mut out, "sonatina", totals.sonatina);
+    let _ = std::fs::write(path, out);
+}
+
 fn parse_gas_totals_csv(contents: &str) -> GasTotals {
     let mut totals = GasTotals::default();
     for (idx, line) in contents.lines().enumerate() {
@@ -1576,6 +1722,49 @@ fn parse_gas_magnitude_csv(contents: &str) -> GasMagnitudeTotals {
             "abs_delta_pct_sum" => {
                 target.abs_delta_pct_sum = value.parse::<f64>().unwrap_or(0.0);
             }
+            _ => {}
+        }
+    }
+    totals
+}
+
+fn parse_gas_opcode_magnitude_csv(contents: &str) -> OpcodeMagnitudeTotals {
+    let mut totals = OpcodeMagnitudeTotals::default();
+    for (idx, line) in contents.lines().enumerate() {
+        if idx == 0 || line.trim().is_empty() {
+            continue;
+        }
+        let mut parts = line.splitn(3, ',');
+        let side = parts.next().unwrap_or_default().trim();
+        let metric = parts.next().unwrap_or_default().trim();
+        let value = parts.next().unwrap_or_default().trim();
+        if side == "all" && metric == "compared_with_metrics" {
+            totals.compared_with_metrics = value.parse::<usize>().unwrap_or(0);
+            continue;
+        }
+        let target = match side {
+            "yul_opt" => &mut totals.yul_opt,
+            "sonatina" => &mut totals.sonatina,
+            _ => continue,
+        };
+        let parsed = value.parse::<u128>().unwrap_or(0);
+        match metric {
+            "steps_sum" => target.steps_sum = parsed,
+            "runtime_bytes_sum" => target.runtime_bytes_sum = parsed,
+            "runtime_ops_sum" => target.runtime_ops_sum = parsed,
+            "swap_ops_sum" => target.swap_ops_sum = parsed,
+            "pop_ops_sum" => target.pop_ops_sum = parsed,
+            "jump_ops_sum" => target.jump_ops_sum = parsed,
+            "jumpi_ops_sum" => target.jumpi_ops_sum = parsed,
+            "mem_rw_ops_sum" => target.mem_rw_ops_sum = parsed,
+            "storage_rw_ops_sum" => target.storage_rw_ops_sum = parsed,
+            "mload_ops_sum" => target.mload_ops_sum = parsed,
+            "mstore_ops_sum" => target.mstore_ops_sum = parsed,
+            "sload_ops_sum" => target.sload_ops_sum = parsed,
+            "sstore_ops_sum" => target.sstore_ops_sum = parsed,
+            "keccak_ops_sum" => target.keccak_ops_sum = parsed,
+            "call_family_ops_sum" => target.call_family_ops_sum = parsed,
+            "copy_ops_sum" => target.copy_ops_sum = parsed,
             _ => {}
         }
     }
@@ -1736,8 +1925,137 @@ fn append_magnitude_summary(out: &mut String, label: &str, totals: DeltaMagnitud
     ));
 }
 
+fn delta_pct_from_sums(baseline_sum: u128, sonatina_sum: u128) -> Option<f64> {
+    if baseline_sum == 0 {
+        None
+    } else {
+        Some((sonatina_sum as f64 - baseline_sum as f64) * 100.0 / baseline_sum as f64)
+    }
+}
+
+fn append_opcode_delta_metric(
+    out: &mut String,
+    label: &str,
+    baseline_sum: u128,
+    sonatina_sum: u128,
+) {
+    let delta = sonatina_sum as i128 - baseline_sum as i128;
+    out.push_str(&format!(
+        "- {label}: {} -> {} (delta {}, {})\n",
+        baseline_sum,
+        sonatina_sum,
+        delta,
+        format_percent_cell(delta_pct_from_sums(baseline_sum, sonatina_sum))
+    ));
+}
+
+fn append_opcode_magnitude_summary(out: &mut String, totals: OpcodeMagnitudeTotals) {
+    out.push_str("## Opcode Aggregate Delta Metrics (vs Yul optimized)\n\n");
+    out.push_str(&format!(
+        "- compared_with_metrics: {}\n",
+        totals.compared_with_metrics
+    ));
+    append_opcode_delta_metric(
+        out,
+        "steps_sum",
+        totals.yul_opt.steps_sum,
+        totals.sonatina.steps_sum,
+    );
+    append_opcode_delta_metric(
+        out,
+        "runtime_bytes_sum",
+        totals.yul_opt.runtime_bytes_sum,
+        totals.sonatina.runtime_bytes_sum,
+    );
+    append_opcode_delta_metric(
+        out,
+        "runtime_ops_sum",
+        totals.yul_opt.runtime_ops_sum,
+        totals.sonatina.runtime_ops_sum,
+    );
+    append_opcode_delta_metric(
+        out,
+        "swap_ops_sum",
+        totals.yul_opt.swap_ops_sum,
+        totals.sonatina.swap_ops_sum,
+    );
+    append_opcode_delta_metric(
+        out,
+        "pop_ops_sum",
+        totals.yul_opt.pop_ops_sum,
+        totals.sonatina.pop_ops_sum,
+    );
+    append_opcode_delta_metric(
+        out,
+        "jump_ops_sum",
+        totals.yul_opt.jump_ops_sum,
+        totals.sonatina.jump_ops_sum,
+    );
+    append_opcode_delta_metric(
+        out,
+        "jumpi_ops_sum",
+        totals.yul_opt.jumpi_ops_sum,
+        totals.sonatina.jumpi_ops_sum,
+    );
+    append_opcode_delta_metric(
+        out,
+        "mem_rw_ops_sum",
+        totals.yul_opt.mem_rw_ops_sum,
+        totals.sonatina.mem_rw_ops_sum,
+    );
+    append_opcode_delta_metric(
+        out,
+        "storage_rw_ops_sum",
+        totals.yul_opt.storage_rw_ops_sum,
+        totals.sonatina.storage_rw_ops_sum,
+    );
+    append_opcode_delta_metric(
+        out,
+        "mload_ops_sum",
+        totals.yul_opt.mload_ops_sum,
+        totals.sonatina.mload_ops_sum,
+    );
+    append_opcode_delta_metric(
+        out,
+        "mstore_ops_sum",
+        totals.yul_opt.mstore_ops_sum,
+        totals.sonatina.mstore_ops_sum,
+    );
+    append_opcode_delta_metric(
+        out,
+        "sload_ops_sum",
+        totals.yul_opt.sload_ops_sum,
+        totals.sonatina.sload_ops_sum,
+    );
+    append_opcode_delta_metric(
+        out,
+        "sstore_ops_sum",
+        totals.yul_opt.sstore_ops_sum,
+        totals.sonatina.sstore_ops_sum,
+    );
+    append_opcode_delta_metric(
+        out,
+        "keccak_ops_sum",
+        totals.yul_opt.keccak_ops_sum,
+        totals.sonatina.keccak_ops_sum,
+    );
+    append_opcode_delta_metric(
+        out,
+        "call_family_ops_sum",
+        totals.yul_opt.call_family_ops_sum,
+        totals.sonatina.call_family_ops_sum,
+    );
+    append_opcode_delta_metric(
+        out,
+        "copy_ops_sum",
+        totals.yul_opt.copy_ops_sum,
+        totals.sonatina.copy_ops_sum,
+    );
+    out.push('\n');
+}
+
 fn gas_opcode_comparison_header() -> &'static str {
-    "test,symbol,yul_unopt_steps,yul_opt_steps,sonatina_steps,steps_ratio_vs_yul_unopt,steps_ratio_vs_yul_opt,yul_unopt_runtime_bytes,yul_opt_runtime_bytes,sonatina_runtime_bytes,bytes_ratio_vs_yul_unopt,bytes_ratio_vs_yul_opt,yul_unopt_runtime_ops,yul_opt_runtime_ops,sonatina_runtime_ops,ops_ratio_vs_yul_unopt,ops_ratio_vs_yul_opt,yul_unopt_stack_ops_pct,yul_opt_stack_ops_pct,sonatina_stack_ops_pct,yul_opt_swap_ops,sonatina_swap_ops,swap_ratio_vs_yul_opt,yul_opt_pop_ops,sonatina_pop_ops,pop_ratio_vs_yul_opt,yul_opt_jump_ops,sonatina_jump_ops,jump_ratio_vs_yul_opt,yul_opt_jumpi_ops,sonatina_jumpi_ops,jumpi_ratio_vs_yul_opt,note"
+    "test,symbol,yul_unopt_steps,yul_opt_steps,sonatina_steps,steps_ratio_vs_yul_unopt,steps_ratio_vs_yul_opt,yul_unopt_runtime_bytes,yul_opt_runtime_bytes,sonatina_runtime_bytes,bytes_ratio_vs_yul_unopt,bytes_ratio_vs_yul_opt,yul_unopt_runtime_ops,yul_opt_runtime_ops,sonatina_runtime_ops,ops_ratio_vs_yul_unopt,ops_ratio_vs_yul_opt,yul_unopt_stack_ops_pct,yul_opt_stack_ops_pct,sonatina_stack_ops_pct,yul_opt_swap_ops,sonatina_swap_ops,swap_ratio_vs_yul_opt,yul_opt_pop_ops,sonatina_pop_ops,pop_ratio_vs_yul_opt,yul_opt_jump_ops,sonatina_jump_ops,jump_ratio_vs_yul_opt,yul_opt_jumpi_ops,sonatina_jumpi_ops,jumpi_ratio_vs_yul_opt,yul_opt_mem_rw_ops,sonatina_mem_rw_ops,mem_rw_ratio_vs_yul_opt,yul_opt_storage_rw_ops,sonatina_storage_rw_ops,storage_rw_ratio_vs_yul_opt,yul_opt_keccak_ops,sonatina_keccak_ops,keccak_ratio_vs_yul_opt,yul_opt_call_family_ops,sonatina_call_family_ops,call_family_ratio_vs_yul_opt,yul_opt_copy_ops,sonatina_copy_ops,copy_ratio_vs_yul_opt,note"
 }
 
 fn write_gas_comparison_report(
@@ -1767,8 +2085,8 @@ fn write_gas_comparison_report(
     opcode_markdown.push_str(
         "Static runtime opcode shape and dynamic EVM step counts for the same test call.\n\n",
     );
-    opcode_markdown.push_str("| test | steps_ratio_vs_opt | bytes_ratio_vs_opt | ops_ratio_vs_opt | swap_ratio_vs_opt | pop_ratio_vs_opt | jump_ratio_vs_opt | jumpi_ratio_vs_opt | note |\n");
-    opcode_markdown.push_str("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n");
+    opcode_markdown.push_str("| test | steps_ratio_vs_opt | bytes_ratio_vs_opt | ops_ratio_vs_opt | swap_ratio_vs_opt | pop_ratio_vs_opt | jump_ratio_vs_opt | jumpi_ratio_vs_opt | mem_rw_ratio_vs_opt | storage_rw_ratio_vs_opt | keccak_ratio_vs_opt | call_family_ratio_vs_opt | copy_ratio_vs_opt | note |\n");
+    opcode_markdown.push_str("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n");
 
     let mut csv = String::new();
     csv.push_str(
@@ -1783,6 +2101,7 @@ fn write_gas_comparison_report(
         ..GasTotals::default()
     };
     let mut magnitude_totals = GasMagnitudeTotals::default();
+    let mut opcode_magnitude_totals = OpcodeMagnitudeTotals::default();
 
     for case in cases {
         let yul_opt = if primary_backend.eq_ignore_ascii_case("yul") {
@@ -1944,8 +2263,43 @@ fn write_gas_comparison_report(
         let sonatina_jumpi = sonatina_metrics.map(|metrics| metrics.jumpi_ops);
         let jumpi_ratio_opt = ratio_cell_usize(sonatina_jumpi, yul_opt_jumpi);
 
+        let yul_opt_mem_rw = yul_opt_metrics.map(|metrics| metrics.mem_rw_ops_total());
+        let sonatina_mem_rw = sonatina_metrics.map(|metrics| metrics.mem_rw_ops_total());
+        let mem_rw_ratio_opt = ratio_cell_usize(sonatina_mem_rw, yul_opt_mem_rw);
+
+        let yul_opt_storage_rw = yul_opt_metrics.map(|metrics| metrics.storage_rw_ops_total());
+        let sonatina_storage_rw = sonatina_metrics.map(|metrics| metrics.storage_rw_ops_total());
+        let storage_rw_ratio_opt = ratio_cell_usize(sonatina_storage_rw, yul_opt_storage_rw);
+
+        let yul_opt_keccak = yul_opt_metrics.map(|metrics| metrics.keccak_ops);
+        let sonatina_keccak = sonatina_metrics.map(|metrics| metrics.keccak_ops);
+        let keccak_ratio_opt = ratio_cell_usize(sonatina_keccak, yul_opt_keccak);
+
+        let yul_opt_call_family = yul_opt_metrics.map(|metrics| metrics.call_family_ops_total());
+        let sonatina_call_family = sonatina_metrics.map(|metrics| metrics.call_family_ops_total());
+        let call_family_ratio_opt = ratio_cell_usize(sonatina_call_family, yul_opt_call_family);
+
+        let yul_opt_copy = yul_opt_metrics.map(|metrics| metrics.copy_ops_total());
+        let sonatina_copy = sonatina_metrics.map(|metrics| metrics.copy_ops_total());
+        let copy_ratio_opt = ratio_cell_usize(sonatina_copy, yul_opt_copy);
+
+        if let (Some(y_steps), Some(y_metrics), Some(s_steps), Some(s_metrics)) = (
+            yul_opt_steps,
+            yul_opt_metrics,
+            sonatina_steps,
+            sonatina_metrics,
+        ) {
+            opcode_magnitude_totals.compared_with_metrics += 1;
+            opcode_magnitude_totals
+                .yul_opt
+                .add_observation(y_steps, y_metrics);
+            opcode_magnitude_totals
+                .sonatina
+                .add_observation(s_steps, s_metrics);
+        }
+
         opcode_markdown.push_str(&format!(
-            "| {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
+            "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
             case.display_name,
             steps_ratio_opt,
             bytes_ratio_opt,
@@ -1954,11 +2308,15 @@ fn write_gas_comparison_report(
             pop_ratio_opt,
             jump_ratio_opt,
             jumpi_ratio_opt,
+            mem_rw_ratio_opt,
+            storage_rw_ratio_opt,
+            keccak_ratio_opt,
+            call_family_ratio_opt,
+            copy_ratio_opt,
             note
         ));
 
-        opcode_csv.push_str(&format!(
-            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+        let opcode_cells = vec![
             csv_escape(&case.display_name),
             csv_escape(&case.symbol_name),
             csv_escape(&u64_cell(yul_unopt_steps)),
@@ -1991,8 +2349,25 @@ fn write_gas_comparison_report(
             csv_escape(&usize_cell(yul_opt_jumpi)),
             csv_escape(&usize_cell(sonatina_jumpi)),
             csv_escape(&jumpi_ratio_opt),
+            csv_escape(&usize_cell(yul_opt_mem_rw)),
+            csv_escape(&usize_cell(sonatina_mem_rw)),
+            csv_escape(&mem_rw_ratio_opt),
+            csv_escape(&usize_cell(yul_opt_storage_rw)),
+            csv_escape(&usize_cell(sonatina_storage_rw)),
+            csv_escape(&storage_rw_ratio_opt),
+            csv_escape(&usize_cell(yul_opt_keccak)),
+            csv_escape(&usize_cell(sonatina_keccak)),
+            csv_escape(&keccak_ratio_opt),
+            csv_escape(&usize_cell(yul_opt_call_family)),
+            csv_escape(&usize_cell(sonatina_call_family)),
+            csv_escape(&call_family_ratio_opt),
+            csv_escape(&usize_cell(yul_opt_copy)),
+            csv_escape(&usize_cell(sonatina_copy)),
+            csv_escape(&copy_ratio_opt),
             csv_escape(&note),
-        ));
+        ];
+        opcode_csv.push_str(&opcode_cells.join(","));
+        opcode_csv.push('\n');
     }
 
     markdown.push_str("\n## Summary\n\n");
@@ -2021,13 +2396,14 @@ fn write_gas_comparison_report(
         "vs Yul (optimized)",
         magnitude_totals.vs_yul_opt,
     );
+    append_opcode_magnitude_summary(&mut markdown, opcode_magnitude_totals);
 
     markdown.push_str("\n## Optimization Settings\n\n");
     for line in gas_comparison_settings_text(opt_level).lines() {
         markdown.push_str(&format!("- {line}\n"));
     }
     markdown.push_str(
-        "\nMachine-readable aggregates: `artifacts/gas_comparison_totals.csv` and `artifacts/gas_comparison_magnitude.csv`.\n",
+        "\nMachine-readable aggregates: `artifacts/gas_comparison_totals.csv`, `artifacts/gas_comparison_magnitude.csv`, and `artifacts/gas_opcode_magnitude.csv`.\n",
     );
     markdown.push_str(
         "\n## Opcode/Trace Profile\n\nSee `artifacts/gas_opcode_comparison.md` and `artifacts/gas_opcode_comparison.csv` for bytecode shape and dynamic step-count diagnostics.\n",
@@ -2044,6 +2420,10 @@ fn write_gas_comparison_report(
     write_gas_magnitude_csv(
         &artifacts_dir.join("gas_comparison_magnitude.csv"),
         magnitude_totals,
+    );
+    write_opcode_magnitude_csv(
+        &artifacts_dir.join("gas_opcode_magnitude.csv"),
+        opcode_magnitude_totals,
     );
 }
 
@@ -2084,6 +2464,7 @@ fn write_run_gas_comparison_summary(root_dir: &Utf8PathBuf, opt_level: OptLevel)
     let mut wrote_any_opcode_rows = false;
     let mut totals = GasTotals::default();
     let mut magnitude_totals = GasMagnitudeTotals::default();
+    let mut opcode_magnitude_totals = OpcodeMagnitudeTotals::default();
 
     for (suite, suite_dir) in suite_dirs {
         let suite_rows_path = suite_dir.join("artifacts").join("gas_comparison.csv");
@@ -2129,6 +2510,12 @@ fn write_run_gas_comparison_summary(root_dir: &Utf8PathBuf, opt_level: OptLevel)
         if let Ok(contents) = std::fs::read_to_string(&suite_magnitude_path) {
             magnitude_totals.add(parse_gas_magnitude_csv(&contents));
         }
+
+        let suite_opcode_magnitude_path =
+            suite_dir.join("artifacts").join("gas_opcode_magnitude.csv");
+        if let Ok(contents) = std::fs::read_to_string(&suite_opcode_magnitude_path) {
+            opcode_magnitude_totals.add(parse_gas_opcode_magnitude_csv(&contents));
+        }
     }
 
     if wrote_any_rows {
@@ -2144,6 +2531,10 @@ fn write_run_gas_comparison_summary(root_dir: &Utf8PathBuf, opt_level: OptLevel)
     write_gas_magnitude_csv(
         &artifacts_dir.join("gas_comparison_magnitude.csv"),
         magnitude_totals,
+    );
+    write_opcode_magnitude_csv(
+        &artifacts_dir.join("gas_opcode_magnitude.csv"),
+        opcode_magnitude_totals,
     );
 
     let mut summary = String::new();
@@ -2174,13 +2565,14 @@ fn write_run_gas_comparison_summary(root_dir: &Utf8PathBuf, opt_level: OptLevel)
         "vs Yul (optimized)",
         magnitude_totals.vs_yul_opt,
     );
+    append_opcode_magnitude_summary(&mut summary, opcode_magnitude_totals);
     summary.push_str("\n## Optimization Settings\n\n");
     for line in gas_comparison_settings_text(opt_level).lines() {
         summary.push_str(&format!("- {line}\n"));
     }
     if wrote_any_rows {
         summary.push_str(
-            "\nSee `artifacts/gas_comparison_all.csv`, `artifacts/gas_comparison_totals.csv`, and `artifacts/gas_comparison_magnitude.csv` for machine-readable totals.\n",
+            "\nSee `artifacts/gas_comparison_all.csv`, `artifacts/gas_comparison_totals.csv`, `artifacts/gas_comparison_magnitude.csv`, and `artifacts/gas_opcode_magnitude.csv` for machine-readable totals.\n",
         );
     }
     if wrote_any_opcode_rows {
@@ -2574,8 +2966,8 @@ fn write_report_manifest(
     out.push_str(&format!("filter: {}\n", filter.unwrap_or("<none>")));
     out.push_str(&format!("fe_version: {}\n", env!("CARGO_PKG_VERSION")));
     out.push_str("details: see `meta/args.txt` and `meta/git.txt` for exact repro context\n");
-    out.push_str("gas_comparison: see `artifacts/gas_comparison.md`, `artifacts/gas_comparison.csv`, `artifacts/gas_comparison_totals.csv`, `artifacts/gas_comparison_magnitude.csv`, and `artifacts/gas_comparison_settings.txt` when available\n");
-    out.push_str("gas_comparison_aggregate: run-level reports also include `artifacts/gas_comparison_all.csv`, `artifacts/gas_comparison_summary.md`, and `artifacts/gas_comparison_magnitude.csv`\n");
+    out.push_str("gas_comparison: see `artifacts/gas_comparison.md`, `artifacts/gas_comparison.csv`, `artifacts/gas_comparison_totals.csv`, `artifacts/gas_comparison_magnitude.csv`, `artifacts/gas_opcode_magnitude.csv`, and `artifacts/gas_comparison_settings.txt` when available\n");
+    out.push_str("gas_comparison_aggregate: run-level reports also include `artifacts/gas_comparison_all.csv`, `artifacts/gas_comparison_summary.md`, `artifacts/gas_comparison_magnitude.csv`, and `artifacts/gas_opcode_magnitude.csv`\n");
     out.push_str("gas_opcode_profile: see `artifacts/gas_opcode_comparison.md` and `artifacts/gas_opcode_comparison.csv` for opcode and step-count diagnostics when available\n");
     out.push_str("gas_opcode_profile_aggregate: run-level reports also include `artifacts/gas_opcode_comparison_all.csv`\n");
     out.push_str(&format!("tests: {}\n", results.len()));
