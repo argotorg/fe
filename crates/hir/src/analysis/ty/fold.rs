@@ -353,7 +353,11 @@ impl<'db> TyFoldable<'db> for ExprProp<'db> {
     {
         let ty = self.ty.fold_with(db, folder);
         let binding = self.binding.map(|binding| binding.fold_with(db, folder));
-        Self { ty, binding, ..self }
+        Self {
+            ty,
+            binding,
+            ..self
+        }
     }
 }
 

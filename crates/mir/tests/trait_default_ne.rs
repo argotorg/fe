@@ -41,8 +41,10 @@ fn main(a: Address, b: Address) -> bool {
         "`ne` receiver should not be zero-sized after monomorphization"
     );
 
-    let self_used = ne_fn.body.values.iter().any(|value| {
-        matches!(value.origin, ValueOrigin::Local(local) if local == self_local)
-    });
+    let self_used = ne_fn
+        .body
+        .values
+        .iter()
+        .any(|value| matches!(value.origin, ValueOrigin::Local(local) if local == self_local));
     assert!(self_used, "`ne` should use its receiver param");
 }
