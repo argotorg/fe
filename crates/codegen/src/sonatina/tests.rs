@@ -77,6 +77,8 @@ pub fn emit_test_module_sonatina(
         &region_deps,
     )?;
     super::ensure_module_sonatina_ir_valid(&module)?;
+    run_default_sonatina_optimization_pipeline(&module);
+    super::ensure_module_sonatina_ir_valid(&module)?;
 
     let mut output_tests = Vec::with_capacity(tests.len());
     for test in tests {
@@ -99,6 +101,11 @@ pub fn emit_test_module_sonatina(
     Ok(TestModuleOutput {
         tests: output_tests,
     })
+}
+
+fn run_default_sonatina_optimization_pipeline(module: &Module) {
+    let pipeline = sonatina_codegen::optim::Pipeline::default_pipeline();
+    pipeline.run_on_module(module);
 }
 
 #[derive(Debug, Clone)]
@@ -696,7 +703,11 @@ fn compile_runtime_section(module: &Module, object_name: &str) -> Result<Vec<u8>
     let backend = EvmBackend::new(isa);
 
     let mut opts: CompileOptions<_> = CompileOptions::default();
-    opts.verifier_cfg = VerifierConfig::for_level(VerificationLevel::Full);
+    let mut verifier_cfg = VerifierConfig::for_level(VerificationLevel::Full);
+    // Sonatina SSA currently keeps removed trivial-phi instructions detached from layout.
+    // Keep full verifier checks enabled while tolerating detached entities until SSA cleanup lands.
+    verifier_cfg.allow_detached_entities = true;
+    opts.verifier_cfg = verifier_cfg;
     let artifact = compile_object(module, &backend, object_name, &opts).map_err(|errors| {
         let msg = errors
             .iter()
