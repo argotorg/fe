@@ -2823,6 +2823,26 @@ fn successors(term: &Terminator<'_>) -> Vec<BasicBlockId> {
     }
 }
 
+fn for_each_call_arg<'db>(call: &CallOrigin<'db>, mut f: impl FnMut(ValueId)) {
+    for arg in call.args.iter().chain(call.effect_args.iter()) {
+        f(*arg);
+    }
+}
+
+fn for_each_terminating_call_arg<'db>(
+    call: &crate::TerminatingCall<'db>,
+    mut f: impl FnMut(ValueId),
+) {
+    match call {
+        crate::TerminatingCall::Call(call) => for_each_call_arg(call, &mut f),
+        crate::TerminatingCall::Intrinsic { args, .. } => {
+            for arg in args {
+                f(*arg);
+            }
+        }
+    }
+}
+
 fn locals_used_by_inst<'db>(body: &MirBody<'db>, inst: &MirInst<'db>) -> FxHashSet<LocalId> {
     let mut out = FxHashSet::default();
     match inst {
@@ -2830,9 +2850,7 @@ fn locals_used_by_inst<'db>(body: &MirBody<'db>, inst: &MirInst<'db>) -> FxHashS
             Rvalue::ZeroInit | Rvalue::Alloc { .. } => {}
             Rvalue::Value(value) => collect_locals_in_value(body, *value, &mut out),
             Rvalue::Call(call) => {
-                for arg in call.args.iter().chain(call.effect_args.iter()) {
-                    collect_locals_in_value(body, *arg, &mut out);
-                }
+                for_each_call_arg(call, |arg| collect_locals_in_value(body, arg, &mut out));
             }
             Rvalue::Intrinsic { args, .. } => {
                 for arg in args {
@@ -2875,18 +2893,9 @@ fn locals_used_by_terminator<'db>(
         Terminator::Return {
             value: Some(value), ..
         } => collect_locals_in_value(body, *value, &mut out),
-        Terminator::TerminatingCall { call, .. } => match call {
-            crate::TerminatingCall::Call(call) => {
-                for arg in call.args.iter().chain(call.effect_args.iter()) {
-                    collect_locals_in_value(body, *arg, &mut out);
-                }
-            }
-            crate::TerminatingCall::Intrinsic { args, .. } => {
-                for arg in args {
-                    collect_locals_in_value(body, *arg, &mut out);
-                }
-            }
-        },
+        Terminator::TerminatingCall { call, .. } => {
+            for_each_terminating_call_arg(call, |arg| collect_locals_in_value(body, arg, &mut out));
+        }
         Terminator::Branch { cond, .. } | Terminator::Switch { discr: cond, .. } => {
             collect_locals_in_value(body, *cond, &mut out);
         }
@@ -3014,12 +3023,11 @@ fn value_operands_in_inst(inst: &MirInst<'_>) -> Vec<ValueId> {
     match inst {
         MirInst::Assign { rvalue, .. } => match rvalue {
             Rvalue::Value(value) => vec![*value],
-            Rvalue::Call(call) => call
-                .args
-                .iter()
-                .chain(call.effect_args.iter())
-                .copied()
-                .collect(),
+            Rvalue::Call(call) => {
+                let mut out = Vec::with_capacity(call.args.len() + call.effect_args.len());
+                for_each_call_arg(call, |arg| out.push(arg));
+                out
+            }
             Rvalue::Intrinsic { args, .. } => args.clone(),
             Rvalue::Load { .. } | Rvalue::ZeroInit | Rvalue::Alloc { .. } => Vec::new(),
         },
@@ -3035,15 +3043,11 @@ fn value_operands_in_terminator(term: &Terminator<'_>) -> Vec<ValueId> {
         Terminator::Return {
             value: Some(value), ..
         } => vec![*value],
-        Terminator::TerminatingCall { call, .. } => match call {
-            crate::TerminatingCall::Call(call) => call
-                .args
-                .iter()
-                .chain(call.effect_args.iter())
-                .copied()
-                .collect(),
-            crate::TerminatingCall::Intrinsic { args, .. } => args.clone(),
-        },
+        Terminator::TerminatingCall { call, .. } => {
+            let mut out = Vec::new();
+            for_each_terminating_call_arg(call, |arg| out.push(arg));
+            out
+        }
         Terminator::Branch { cond, .. } => vec![*cond],
         Terminator::Switch { discr, .. } => vec![*discr],
         Terminator::Return { value: None, .. }
@@ -3076,9 +3080,7 @@ fn borrow_values_in_inst<'db>(body: &MirBody<'db>, inst: &MirInst<'db>) -> FxHas
                 collect_borrow_values_in_place_path(body, &place.projection, &mut out);
             }
             Rvalue::Call(call) => {
-                for arg in call.args.iter().chain(call.effect_args.iter()) {
-                    collect_borrow_values(body, *arg, &mut out);
-                }
+                for_each_call_arg(call, |arg| collect_borrow_values(body, arg, &mut out));
             }
             Rvalue::Intrinsic { args, .. } => {
                 for arg in args {
@@ -3118,18 +3120,9 @@ fn borrow_values_in_terminator<'db>(
         Terminator::Return {
             value: Some(value), ..
         } => collect_borrow_values(body, *value, &mut out),
-        Terminator::TerminatingCall { call, .. } => match call {
-            crate::TerminatingCall::Call(call) => {
-                for arg in call.args.iter().chain(call.effect_args.iter()) {
-                    collect_borrow_values(body, *arg, &mut out);
-                }
-            }
-            crate::TerminatingCall::Intrinsic { args, .. } => {
-                for arg in args {
-                    collect_borrow_values(body, *arg, &mut out);
-                }
-            }
-        },
+        Terminator::TerminatingCall { call, .. } => {
+            for_each_terminating_call_arg(call, |arg| collect_borrow_values(body, arg, &mut out));
+        }
         Terminator::Branch { cond, .. } | Terminator::Switch { discr: cond, .. } => {
             collect_borrow_values(body, *cond, &mut out);
         }
@@ -3153,9 +3146,7 @@ fn move_places_in_inst<'db>(
                 collect_move_places_in_place_path(body, &place.projection, &mut out);
             }
             Rvalue::Call(call) => {
-                for arg in call.args.iter().chain(call.effect_args.iter()) {
-                    collect_move_places(body, *arg, &mut out);
-                }
+                for_each_call_arg(call, |arg| collect_move_places(body, arg, &mut out));
             }
             Rvalue::Intrinsic { args, .. } => {
                 for arg in args {
@@ -3195,18 +3186,9 @@ fn move_places_in_terminator<'db>(
         Terminator::Return {
             value: Some(value), ..
         } => collect_move_places(body, *value, &mut out),
-        Terminator::TerminatingCall { call, .. } => match call {
-            crate::TerminatingCall::Call(call) => {
-                for arg in call.args.iter().chain(call.effect_args.iter()) {
-                    collect_move_places(body, *arg, &mut out);
-                }
-            }
-            crate::TerminatingCall::Intrinsic { args, .. } => {
-                for arg in args {
-                    collect_move_places(body, *arg, &mut out);
-                }
-            }
-        },
+        Terminator::TerminatingCall { call, .. } => {
+            for_each_terminating_call_arg(call, |arg| collect_move_places(body, arg, &mut out));
+        }
         Terminator::Branch { cond, .. } | Terminator::Switch { discr: cond, .. } => {
             collect_move_places(body, *cond, &mut out);
         }

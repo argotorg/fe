@@ -158,6 +158,57 @@ fn collect_funcs_to_lower<'db>(
     funcs_to_lower
 }
 
+fn mir_func_name<'db>(db: &'db dyn SpannedHirAnalysisDb, func: &MirFunction<'db>) -> String {
+    match func.origin {
+        crate::ir::MirFunctionOrigin::Hir(hir_func) => hir_func.pretty_print_signature(db),
+        crate::ir::MirFunctionOrigin::Synthetic(_) => func.symbol_name.clone(),
+    }
+}
+
+fn run_borrow_checks_collect<'db>(
+    db: &'db dyn SpannedHirAnalysisDb,
+    functions: &[MirFunction<'db>],
+    output: &mut MirDiagnosticsOutput,
+) {
+    match crate::analysis::borrowck::compute_borrow_summaries(db, functions) {
+        Ok(borrow_summaries) => {
+            for func in functions {
+                if let Some(diag) =
+                    crate::analysis::borrowck::check_borrows(db, func, &borrow_summaries)
+                {
+                    output.diagnostics.push(diag);
+                }
+            }
+        }
+        Err(err) => output.diagnostics.push(err.diagnostic.clone()),
+    }
+}
+
+fn run_borrow_checks_or_error<'db>(
+    db: &'db dyn SpannedHirAnalysisDb,
+    functions: &[MirFunction<'db>],
+) -> MirLowerResult<()> {
+    let borrow_summaries = crate::analysis::borrowck::compute_borrow_summaries(db, functions)
+        .map_err(|err| {
+            let diagnostics = hir::analysis::diagnostics::format_diags(db, [&err.diagnostic]);
+            MirLowerError::MirDiagnostics {
+                func_name: err.func_name,
+                diagnostics,
+            }
+        })?;
+
+    for func in functions {
+        if let Some(diag) = crate::analysis::borrowck::check_borrows(db, func, &borrow_summaries) {
+            let diagnostics = hir::analysis::diagnostics::format_diags(db, [&diag]);
+            return Err(MirLowerError::MirDiagnostics {
+                func_name: mir_func_name(db, func),
+                diagnostics,
+            });
+        }
+    }
+    Ok(())
+}
+
 pub fn collect_mir_diagnostics<'db>(
     db: &'db dyn SpannedHirAnalysisDb,
     top_mod: TopLevelMod<'db>,
@@ -185,18 +236,7 @@ pub fn collect_mir_diagnostics<'db>(
         Err(err) => output.internal_errors.push(err),
     }
 
-    match crate::analysis::borrowck::compute_borrow_summaries(db, &templates) {
-        Ok(template_borrow_summaries) => {
-            for func in &templates {
-                if let Some(diag) =
-                    crate::analysis::borrowck::check_borrows(db, func, &template_borrow_summaries)
-                {
-                    output.diagnostics.push(diag);
-                }
-            }
-        }
-        Err(err) => output.diagnostics.push(err.diagnostic.clone()),
-    }
+    run_borrow_checks_collect(db, &templates, &mut output);
 
     if matches!(mode, MirDiagnosticsMode::TemplatesOnly) {
         return output;
@@ -214,18 +254,7 @@ pub fn collect_mir_diagnostics<'db>(
         }
     }
 
-    match crate::analysis::borrowck::compute_borrow_summaries(db, &functions) {
-        Ok(borrow_summaries) => {
-            for func in &functions {
-                if let Some(diag) =
-                    crate::analysis::borrowck::check_borrows(db, func, &borrow_summaries)
-                {
-                    output.diagnostics.push(diag);
-                }
-            }
-        }
-        Err(err) => output.diagnostics.push(err.diagnostic.clone()),
-    }
+    run_borrow_checks_collect(db, &functions, &mut output);
 
     output
 }
@@ -274,29 +303,7 @@ pub fn lower_module<'db>(
 
     // Run MIR diagnostics on the generic templates as well as the monomorphized instances. This
     // ensures borrow/move errors are surfaced even when a generic function is never instantiated.
-    let template_borrow_summaries =
-        crate::analysis::borrowck::compute_borrow_summaries(db, &templates).map_err(|err| {
-            let diagnostics = hir::analysis::diagnostics::format_diags(db, [&err.diagnostic]);
-            MirLowerError::MirDiagnostics {
-                func_name: err.func_name,
-                diagnostics,
-            }
-        })?;
-    for func in &templates {
-        if let Some(diag) =
-            crate::analysis::borrowck::check_borrows(db, func, &template_borrow_summaries)
-        {
-            let func_name = match func.origin {
-                crate::ir::MirFunctionOrigin::Hir(hir_func) => hir_func.pretty_print_signature(db),
-                crate::ir::MirFunctionOrigin::Synthetic(_) => func.symbol_name.clone(),
-            };
-            let diagnostics = hir::analysis::diagnostics::format_diags(db, [&diag]);
-            return Err(MirLowerError::MirDiagnostics {
-                func_name,
-                diagnostics,
-            });
-        }
-    }
+    run_borrow_checks_or_error(db, &templates)?;
 
     let mut functions = monomorphize_functions(db, templates);
     for func in &mut functions {
@@ -316,27 +323,7 @@ pub fn lower_module<'db>(
             });
         }
     }
-    let borrow_summaries = crate::analysis::borrowck::compute_borrow_summaries(db, &functions)
-        .map_err(|err| {
-            let diagnostics = hir::analysis::diagnostics::format_diags(db, [&err.diagnostic]);
-            MirLowerError::MirDiagnostics {
-                func_name: err.func_name,
-                diagnostics,
-            }
-        })?;
-    for func in &functions {
-        if let Some(diag) = crate::analysis::borrowck::check_borrows(db, func, &borrow_summaries) {
-            let func_name = match func.origin {
-                crate::ir::MirFunctionOrigin::Hir(hir_func) => hir_func.pretty_print_signature(db),
-                crate::ir::MirFunctionOrigin::Synthetic(_) => func.symbol_name.clone(),
-            };
-            let diagnostics = hir::analysis::diagnostics::format_diags(db, [&diag]);
-            return Err(MirLowerError::MirDiagnostics {
-                func_name,
-                diagnostics,
-            });
-        }
-    }
+    run_borrow_checks_or_error(db, &functions)?;
 
     // Lower semantic capability MIR into backend-specific representation MIR for codegen.
     let core = CoreLib::new(db, top_mod.scope());

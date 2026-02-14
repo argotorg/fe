@@ -2,7 +2,9 @@
 
 use super::*;
 use hir::analysis::name_resolution::{PathRes, resolve_path};
-use hir::analysis::ty::const_eval::{ConstValue, try_eval_const_body, try_eval_const_ref};
+use hir::analysis::ty::const_eval::{
+    ConstValue, eval_const_expr, try_eval_const_body, try_eval_const_ref,
+};
 use hir::analysis::ty::const_ty::{ConstTyData, EvaluatedConstTy};
 use hir::analysis::ty::fold::TyFoldable;
 use hir::analysis::ty::normalize::normalize_ty;
@@ -42,11 +44,16 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             |expr| matches!(expr, Expr::Path(..)),
             |this, expr_id| {
                 if let Some(value_id) = this.try_const_expr(expr_id) {
-                    this.builder
-                        .body
-                        .expr_values
-                        .entry(expr_id)
-                        .or_insert(value_id);
+                    if let Some(&existing) = this.builder.body.expr_values.get(&expr_id) {
+                        if matches!(
+                            this.builder.body.values[existing.index()].origin,
+                            ValueOrigin::Expr(_)
+                        ) {
+                            this.builder.body.expr_values.insert(expr_id, value_id);
+                        }
+                    } else {
+                        this.builder.body.expr_values.insert(expr_id, value_id);
+                    }
                 }
             },
         );
@@ -297,25 +304,39 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 };
             }
 
-            let assumptions = PredicateListId::empty_list(self.db);
-            let expected_ty = normalize_ty(
-                self.db,
-                self.typed_body.expr_ty(self.db, expr),
-                self.body.scope(),
-                assumptions,
-            );
-            let value = match try_eval_const_ref(self.db, cref, expected_ty)? {
-                ConstValue::Int(int) => SyntheticValue::Int(int),
-                ConstValue::Bool(flag) => SyntheticValue::Bool(flag),
-                ConstValue::Bytes(bytes) => SyntheticValue::Bytes(bytes),
-            };
-
             let ty = self.typed_body.expr_ty(self.db, expr);
-            let value_id = self.alloc_synthetic_value(ty, value);
-            if let hir::analysis::ty::ty_check::ConstRef::Const(const_def) = cref {
-                self.const_cache.insert(const_def, value_id);
+            let assumptions = PredicateListId::empty_list(self.db);
+            let expected_ty = normalize_ty(self.db, ty, self.body.scope(), assumptions);
+            let capability_expected_ty = expected_ty.as_capability(self.db).map(|(_, ty)| ty);
+            let base_expected_ty = expected_ty.base_ty(self.db);
+            if let Some(value) = try_eval_const_ref(self.db, cref, expected_ty)
+                .or_else(|| {
+                    capability_expected_ty.and_then(|inner_expected_ty| {
+                        try_eval_const_ref(self.db, cref, inner_expected_ty)
+                    })
+                })
+                .or_else(|| {
+                    (base_expected_ty != expected_ty)
+                        .then(|| try_eval_const_ref(self.db, cref, base_expected_ty))
+                        .flatten()
+                })
+                .or_else(|| {
+                    eval_const_expr(self.db, self.body, self.typed_body, self.generic_args, expr)
+                        .ok()
+                        .flatten()
+                })
+            {
+                let value = match value {
+                    ConstValue::Int(int) => SyntheticValue::Int(int),
+                    ConstValue::Bool(flag) => SyntheticValue::Bool(flag),
+                    ConstValue::Bytes(bytes) => SyntheticValue::Bytes(bytes),
+                };
+                let value_id = self.alloc_synthetic_value(ty, value);
+                if let hir::analysis::ty::ty_check::ConstRef::Const(const_def) = cref {
+                    self.const_cache.insert(const_def, value_id);
+                }
+                return Some(value_id);
             }
-            return Some(value_id);
         }
 
         // Const generic parameter (e.g. `const SALT: u256`).
@@ -345,6 +366,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         };
 
         let expected_ty = self.typed_body.expr_ty(self.db, expr);
+        let expected_ty = normalize_ty(self.db, expected_ty, self.body.scope(), assumptions);
+        let capability_expected_ty = expected_ty.as_capability(self.db).map(|(_, ty)| ty);
+        let base_expected_ty = expected_ty.base_ty(self.db);
         let value = match const_arg.data(self.db) {
             ConstTyData::Evaluated(EvaluatedConstTy::LitInt(value), _) => {
                 SyntheticValue::Int(value.data(self.db).clone())
@@ -353,10 +377,23 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 SyntheticValue::Bool(*flag)
             }
             ConstTyData::UnEvaluated { body, .. } => {
-                match try_eval_const_body(self.db, *body, expected_ty)? {
-                    ConstValue::Int(value) => SyntheticValue::Int(value),
-                    ConstValue::Bool(flag) => SyntheticValue::Bool(flag),
-                    ConstValue::Bytes(bytes) => SyntheticValue::Bytes(bytes),
+                match try_eval_const_body(self.db, *body, expected_ty)
+                    .or_else(|| {
+                        capability_expected_ty.and_then(|inner_expected_ty| {
+                            try_eval_const_body(self.db, *body, inner_expected_ty)
+                        })
+                    })
+                    .or_else(|| {
+                        (base_expected_ty != expected_ty)
+                            .then(|| try_eval_const_body(self.db, *body, base_expected_ty))
+                            .flatten()
+                    }) {
+                    Some(value) => match value {
+                        ConstValue::Int(value) => SyntheticValue::Int(value),
+                        ConstValue::Bool(flag) => SyntheticValue::Bool(flag),
+                        ConstValue::Bytes(bytes) => SyntheticValue::Bytes(bytes),
+                    },
+                    None => return None,
                 }
             }
             _ => return None,
