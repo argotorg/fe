@@ -21,7 +21,7 @@ func public %match_with_wildcard(v0.i256) -> i256 {
 
     block4:
         v5.i256 = mload v0 i256;
-        v6.i256 = eq v5 0.i256;
+        v6.i1 = eq v5 0.i256;
         br v6 block1 block3;
 }
 
@@ -40,7 +40,7 @@ func public %wildcard_not_last(v0.i256) -> i256 {
         jump block2;
 
     block4:
-        v6.i256 = eq v0 0.i256;
+        v6.i1 = eq v0 0.i256;
         br v6 block1 block3;
 }
 
@@ -63,11 +63,11 @@ func public %multiple_before_wildcard(v0.i256) -> i256 {
 
     block5:
         v7.i256 = mload v0 i256;
-        v8.i256 = eq v7 0.i256;
+        v8.i1 = eq v7 0.i256;
         br v8 block1 block6;
 
     block6:
-        v9.i256 = eq v7 1.i256;
+        v9.i1 = eq v7 1.i256;
         br v9 block3 block4;
 }
 

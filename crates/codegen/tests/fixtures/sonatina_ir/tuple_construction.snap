@@ -5,28 +5,47 @@ input_file: crates/codegen/tests/fixtures/tuple_construction.fe
 ---
 target = evm-ethereum-osaka
 
+type @__fe_tuple_0 = {i256, i256};
+type @__fe_tuple_1 = {i256, i256, i256};
+
 func public %make_tuple() -> i256 {
     block0:
-        v2.i256 = evm_malloc 40.i256;
-        v4.i64 = trunc 42.i256 i64;
-        v5.i256 = zext v4 i256;
-        mstore v2 v5 i256;
-        v8.i256 = add v2 8.i256;
-        mstore v8 99.i256 i256;
-        return v2;
+        v2.*i8 = evm_malloc 64.i256;
+        v3.i256 = ptr_to_int v2 i256;
+        v5.i64 = trunc 42.i256 i64;
+        v6.i256 = zext v5 i256;
+        v7.*@__fe_tuple_0 = int_to_ptr v3 *@__fe_tuple_0;
+        v8.*i256 = gep v7 0.i256 0.i256;
+        v9.i256 = ptr_to_int v8 i256;
+        mstore v9 v6 i256;
+        v11.*@__fe_tuple_0 = int_to_ptr v3 *@__fe_tuple_0;
+        v13.*i256 = gep v11 0.i256 1.i256;
+        v14.i256 = ptr_to_int v13 i256;
+        mstore v14 99.i256 i256;
+        return v3;
 }
 
 func public %access_tuple() -> i256 {
     block0:
-        v2.i256 = evm_malloc 96.i256;
-        mstore v2 1.i256 i256;
-        v6.i256 = add v2 32.i256;
-        mstore v6 2.i256 i256;
-        v9.i256 = add v2 64.i256;
-        mstore v9 3.i256 i256;
-        v10.i256 = add v2 32.i256;
-        v11.i256 = mload v10 i256;
-        return v11;
+        v2.*i8 = evm_malloc 96.i256;
+        v3.i256 = ptr_to_int v2 i256;
+        v5.*@__fe_tuple_1 = int_to_ptr v3 *@__fe_tuple_1;
+        v6.*i256 = gep v5 0.i256 0.i256;
+        v7.i256 = ptr_to_int v6 i256;
+        mstore v7 1.i256 i256;
+        v9.*@__fe_tuple_1 = int_to_ptr v3 *@__fe_tuple_1;
+        v10.*i256 = gep v9 0.i256 1.i256;
+        v11.i256 = ptr_to_int v10 i256;
+        mstore v11 2.i256 i256;
+        v13.*@__fe_tuple_1 = int_to_ptr v3 *@__fe_tuple_1;
+        v14.*i256 = gep v13 0.i256 2.i256;
+        v15.i256 = ptr_to_int v14 i256;
+        mstore v15 3.i256 i256;
+        v16.*@__fe_tuple_1 = int_to_ptr v3 *@__fe_tuple_1;
+        v17.*i256 = gep v16 0.i256 1.i256;
+        v18.i256 = ptr_to_int v17 i256;
+        v19.i256 = mload v18 i256;
+        return v19;
 }
 
 func public %__fe_sonatina_entry() {

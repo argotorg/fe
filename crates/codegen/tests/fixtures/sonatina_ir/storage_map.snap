@@ -5,13 +5,13 @@ input_file: crates/codegen/tests/fixtures/storage_map.fe
 ---
 target = evm-ethereum-osaka
 
-func public %get_balance__StorPtr_StorageMap_u256__u256__0____4a2331212cb04e60(v0.i256, v1.i256) -> i256 {
+func private %get_balance__StorPtr_StorageMap_u256__u256__0____4a2331212cb04e60(v0.i256, v1.i256) -> i256 {
     block0:
         v3.i256 = call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get__u256_u256_0__6a346ad3c930d971 v0;
         return v3;
 }
 
-func public %set_balance__StorPtr_StorageMap_u256__u256__0____4a2331212cb04e60(v0.i256, v1.i256, v2.i256) {
+func private %set_balance__StorPtr_StorageMap_u256__u256__0____4a2331212cb04e60(v0.i256, v1.i256, v2.i256) {
     block0:
         call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set__u256_u256_0__6a346ad3c930d971 v0 v1;
         return;
@@ -31,41 +31,83 @@ func public %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set__u256_u256
         return;
 }
 
-func public %storagemap_get_word_with_salt__u256__3271ca15373d4483(v0.i256, v1.i256) -> i256 {
+func private %storagemap_get_word_with_salt__u256__3271ca15373d4483(v0.i256, v1.i256) -> i256 {
     block0:
         v3.i256 = call %storagemap_storage_slot_with_salt__u256__3271ca15373d4483 v0 v1;
         v4.i256 = evm_sload v3;
         return v4;
 }
 
-func public %u256_h3271ca15373d4483_wordrepr_h7483d41ac8178d88_from_word(v0.i256) -> i256 {
+func private %u256_h3271ca15373d4483_wordrepr_h7483d41ac8178d88_from_word(v0.i256) -> i256 {
     block0:
         return v0;
 }
 
-func public %u256_h3271ca15373d4483_wordrepr_h7483d41ac8178d88_to_word(v0.i256) -> i256 {
+func private %u256_h3271ca15373d4483_wordrepr_h7483d41ac8178d88_to_word(v0.i256) -> i256 {
     block0:
         return v0;
 }
 
-func public %storagemap_set_word_with_salt__u256__3271ca15373d4483(v0.i256, v1.i256, v2.i256) {
+func private %storagemap_set_word_with_salt__u256__3271ca15373d4483(v0.i256, v1.i256, v2.i256) {
     block0:
         v4.i256 = call %storagemap_storage_slot_with_salt__u256__3271ca15373d4483 v0 v1;
         evm_sstore v4 v2;
         return;
 }
 
-func public %storagemap_storage_slot_with_salt__u256__3271ca15373d4483(v0.i256, v1.i256) -> i256 {
+func private %storagemap_storage_slot_with_salt__u256__3271ca15373d4483(v0.i256, v1.i256) -> i256 {
     block0:
-        v4.i256 = call %u256_h3271ca15373d4483_storagekey_hf9e3d38a13ff4409_write_key 8192.i256 v0;
-        v5.i256 = add 8192.i256 v4;
-        mstore v5 v1 i256;
-        v7.i256 = add v4 32.i256;
-        v8.i256 = evm_keccak256 8192.i256 v7;
-        return v8;
+        v3.*i8 = evm_malloc 0.i256;
+        v4.i256 = ptr_to_int v3 i256;
+        v5.i256 = call %u256_h3271ca15373d4483_storagekey_hf9e3d38a13ff4409_write_key v4 v0;
+        v6.i256 = add v4 v5;
+        mstore v6 v1 i256;
+        v8.i256 = add v5 32.i256;
+        v9.i256 = evm_keccak256 v4 v8;
+        return v9;
 }
 
-func public %u256_h3271ca15373d4483_storagekey_hf9e3d38a13ff4409_write_key(v0.i256, v1.i256) -> i256 {
+func public %alloc(v0.i256) -> i256 {
+    block0:
+        v3.i256 = mload 64.i256 i256;
+        v5.i256 = mload 128.i256 i256;
+        v6.i1 = gt v5 v3;
+        v7.i256 = zext v6 i256;
+        v8.i1 = ne v7 0.i256;
+        br v8 block1 block2;
+
+    block1:
+        jump block2;
+
+    block2:
+        v10.i256 = phi (v3 block0) (v5 block1);
+        v11.i1 = eq v10 0.i256;
+        v12.i256 = zext v11 i256;
+        v13.i1 = ne v12 0.i256;
+        br v13 block3 block4;
+
+    block3:
+        v14.i256 = evm_msize;
+        jump block4;
+
+    block4:
+        v15.i256 = phi (v10 block2) (v14 block3);
+        v17.i1 = lt v15 8192.i256;
+        v18.i256 = zext v17 i256;
+        v19.i1 = ne v18 0.i256;
+        br v19 block5 block6;
+
+    block5:
+        jump block6;
+
+    block6:
+        v20.i256 = phi (v15 block4) (8192.i256 block5);
+        v22.i256 = add v20 v0;
+        mstore 64.i256 v22 i256;
+        return v20;
+}
+
+func private %u256_h3271ca15373d4483_storagekey_hf9e3d38a13ff4409_write_key(v0.i256, v1.i256) -> i256 {
     block0:
         mstore v0 v1 i256;
         return 32.i256;

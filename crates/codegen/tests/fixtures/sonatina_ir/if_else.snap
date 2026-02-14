@@ -7,7 +7,7 @@ target = evm-ethereum-osaka
 
 func public %if_else(v0.i256) -> i256 {
     block0:
-        v3.i256 = eq v0 1.i256;
+        v3.i1 = eq v0 1.i256;
         br v3 block1 block4;
 
     block1:
@@ -23,11 +23,11 @@ func public %if_else(v0.i256) -> i256 {
         return v8;
 
     block4:
-        v4.i256 = eq v0 0.i256;
+        v4.i1 = eq v0 0.i256;
         br v4 block2 block2;
 }
 
-func public %helper(v0.i256) -> i256 {
+func private %helper(v0.i256) -> i256 {
     block0:
         v3.i256 = add v0 1.i256;
         return v3;

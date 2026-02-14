@@ -32,13 +32,13 @@ func public %match_nested_enum(v0.i256) -> i256 {
 
     block5:
         v16.i256 = mload v0 i256;
-        v18.i256 = eq v16 0.i256;
+        v18.i1 = eq v16 0.i256;
         br v18 block6 block9;
 
     block6:
         v21.i256 = add v0 32.i256;
         v22.i256 = mload v21 i256;
-        v23.i256 = eq v22 0.i256;
+        v23.i1 = eq v22 0.i256;
         br v23 block1 block10;
 
     block7:
@@ -48,11 +48,11 @@ func public %match_nested_enum(v0.i256) -> i256 {
         evm_invalid;
 
     block9:
-        v19.i256 = eq v16 1.i256;
+        v19.i1 = eq v16 1.i256;
         br v19 block4 block8;
 
     block10:
-        v24.i256 = eq v22 1.i256;
+        v24.i1 = eq v22 1.i256;
         br v24 block3 block7;
 }
 

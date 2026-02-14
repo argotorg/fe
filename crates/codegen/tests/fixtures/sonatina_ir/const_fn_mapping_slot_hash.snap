@@ -1,13 +1,13 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
 expression: output
-input_file: crates/codegen/tests/fixtures/const_keccak.fe
+input_file: crates/codegen/tests/fixtures/const_fn_mapping_slot_hash.fe
 ---
 target = evm-ethereum-osaka
 
 func private %main() -> i256 {
     block0:
-        return 12910348618308260923200348219926901280687058984330794534952861439530514639560.i256;
+        return 3253375974595066614526584426541216327299611994431550246078837110170861790149.i256;
 }
 
 func public %__fe_sonatina_entry() {

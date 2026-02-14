@@ -5,10 +5,11 @@ input_file: crates/codegen/tests/fixtures/while_cond_call.fe
 ---
 target = evm-ethereum-osaka
 
-func public %lt_ten(v0.i256) -> i256 {
+func private %lt_ten(v0.i256) -> i256 {
     block0:
-        v3.i256 = lt v0 10.i256;
-        return v3;
+        v3.i1 = lt v0 10.i256;
+        v4.i256 = zext v3 i256;
+        return v4;
 }
 
 func public %while_cond_call() -> i256 {
@@ -16,12 +17,13 @@ func public %while_cond_call() -> i256 {
         jump block1;
 
     block1:
-        v1.i256 = phi (0.i256 block0) (v5 block2);
+        v1.i256 = phi (0.i256 block0) (v6 block2);
         v2.i256 = call %lt_ten v1;
-        br v2 block2 block3;
+        v3.i1 = ne v2 0.i256;
+        br v3 block2 block3;
 
     block2:
-        v5.i256 = add v1 1.i256;
+        v6.i256 = add v1 1.i256;
         jump block1;
 
     block3:

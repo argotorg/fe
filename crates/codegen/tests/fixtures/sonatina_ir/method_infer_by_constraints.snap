@@ -5,23 +5,31 @@ input_file: crates/codegen/tests/fixtures/method_infer_by_constraints.fe
 ---
 target = evm-ethereum-osaka
 
+type @__fe_tuple_0 = {i256, i256};
+
 func public %call() -> i256 {
     block0:
         v2.i256 = call %s_t__h10779c135f64b393_foo_h6dbce71a6ea992b8_foo__u64__aee7f05a097ffa16 10.i256;
         return v2;
 }
 
-func public %s_t__h10779c135f64b393_foo_h6dbce71a6ea992b8_foo__u64__aee7f05a097ffa16(v0.i256) -> i256 {
+func private %s_t__h10779c135f64b393_foo_h6dbce71a6ea992b8_foo__u64__aee7f05a097ffa16(v0.i256) -> i256 {
     block0:
-        v3.i256 = evm_malloc 16.i256;
-        v4.i64 = trunc v0 i64;
-        v5.i256 = zext v4 i256;
-        mstore v3 v5 i256;
-        v7.i64 = trunc 1.i256 i64;
-        v8.i256 = zext v7 i256;
-        v10.i256 = add v3 8.i256;
-        mstore v10 v8 i256;
-        return v3;
+        v3.*i8 = evm_malloc 64.i256;
+        v4.i256 = ptr_to_int v3 i256;
+        v5.i64 = trunc v0 i64;
+        v6.i256 = zext v5 i256;
+        v7.*@__fe_tuple_0 = int_to_ptr v4 *@__fe_tuple_0;
+        v8.*i256 = gep v7 0.i256 0.i256;
+        v9.i256 = ptr_to_int v8 i256;
+        mstore v9 v6 i256;
+        v11.i64 = trunc 1.i256 i64;
+        v12.i256 = zext v11 i256;
+        v13.*@__fe_tuple_0 = int_to_ptr v4 *@__fe_tuple_0;
+        v14.*i256 = gep v13 0.i256 1.i256;
+        v15.i256 = ptr_to_int v14 i256;
+        mstore v15 v12 i256;
+        return v4;
 }
 
 func public %__fe_sonatina_entry() {

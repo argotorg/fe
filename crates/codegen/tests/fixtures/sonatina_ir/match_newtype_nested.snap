@@ -20,11 +20,11 @@ func public %match_newtype_nested(v0.i256) -> i256 {
         jump block2;
 
     block4:
-        v5.i256 = eq v0 0.i256;
+        v5.i1 = eq v0 0.i256;
         br v5 block1 block3;
 }
 
-func public %f() -> i256 {
+func private %f() -> i256 {
     block0:
         v2.i256 = call %match_newtype_nested 10.i256;
         return v2;

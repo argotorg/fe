@@ -5,24 +5,24 @@ input_file: crates/codegen/tests/fixtures/generic_identity.fe
 ---
 target = evm-ethereum-osaka
 
-func public %call_identity_u32() -> i256 {
+func private %call_identity_u32() -> i256 {
     block0:
         v2.i256 = call %identity__u32__20aa0c10687491ad 7.i256;
         return v2;
 }
 
-func public %call_identity_bool() -> i256 {
+func private %call_identity_bool() -> i256 {
     block0:
         v2.i256 = call %identity__bool__947c0c03c59c6f07 1.i256;
         return v2;
 }
 
-func public %identity__u32__20aa0c10687491ad(v0.i256) -> i256 {
+func private %identity__u32__20aa0c10687491ad(v0.i256) -> i256 {
     block0:
         return v0;
 }
 
-func public %identity__bool__947c0c03c59c6f07(v0.i256) -> i256 {
+func private %identity__bool__947c0c03c59c6f07(v0.i256) -> i256 {
     block0:
         return v0;
 }

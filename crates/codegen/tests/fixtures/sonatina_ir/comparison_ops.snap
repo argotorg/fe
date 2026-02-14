@@ -5,42 +5,70 @@ input_file: crates/codegen/tests/fixtures/comparison_ops.fe
 ---
 target = evm-ethereum-osaka
 
+type @__fe_tuple_0 = {i256, i256, i256, i256, i256, i256};
+
 func public %comparison_ops() -> i256 {
     block0:
-        v5.i256 = evm_malloc 6.i256;
-        v6.i256 = eq 1.i256 1.i256;
-        v7.i256 = is_zero v6;
-        v8.i256 = is_zero v7;
-        mstore v5 v8 i256;
-        v9.i256 = eq 1.i256 2.i256;
-        v10.i256 = is_zero v9;
-        v11.i256 = is_zero v10;
-        v12.i256 = is_zero v11;
-        v13.i256 = add v5 1.i256;
-        mstore v13 v12 i256;
-        v14.i256 = lt 1.i256 2.i256;
-        v15.i256 = is_zero v14;
-        v16.i256 = is_zero v15;
-        v17.i256 = add v5 2.i256;
-        mstore v17 v16 i256;
-        v18.i256 = gt 2.i256 2.i256;
-        v19.i256 = is_zero v18;
-        v20.i256 = is_zero v19;
-        v21.i256 = is_zero v20;
-        v22.i256 = add v5 3.i256;
-        mstore v22 v21 i256;
-        v23.i256 = gt 3.i256 2.i256;
-        v24.i256 = is_zero v23;
-        v25.i256 = is_zero v24;
-        v27.i256 = add v5 4.i256;
-        mstore v27 v25 i256;
-        v28.i256 = lt 3.i256 3.i256;
-        v29.i256 = is_zero v28;
-        v30.i256 = is_zero v29;
-        v31.i256 = is_zero v30;
-        v33.i256 = add v5 5.i256;
-        mstore v33 v31 i256;
-        return v5;
+        v5.*i8 = evm_malloc 192.i256;
+        v6.i256 = ptr_to_int v5 i256;
+        v7.i1 = eq 1.i256 1.i256;
+        v8.i256 = zext v7 i256;
+        v9.i1 = is_zero v8;
+        v10.i1 = is_zero v9;
+        v11.i256 = zext v10 i256;
+        v12.*@__fe_tuple_0 = int_to_ptr v6 *@__fe_tuple_0;
+        v13.*i256 = gep v12 0.i256 0.i256;
+        v14.i256 = ptr_to_int v13 i256;
+        mstore v14 v11 i256;
+        v15.i1 = eq 1.i256 2.i256;
+        v16.i1 = is_zero v15;
+        v17.i256 = zext v16 i256;
+        v18.i1 = is_zero v17;
+        v19.i1 = is_zero v18;
+        v20.i256 = zext v19 i256;
+        v21.*@__fe_tuple_0 = int_to_ptr v6 *@__fe_tuple_0;
+        v22.*i256 = gep v21 0.i256 1.i256;
+        v23.i256 = ptr_to_int v22 i256;
+        mstore v23 v20 i256;
+        v24.i1 = lt 1.i256 2.i256;
+        v25.i256 = zext v24 i256;
+        v26.i1 = is_zero v25;
+        v27.i1 = is_zero v26;
+        v28.i256 = zext v27 i256;
+        v29.*@__fe_tuple_0 = int_to_ptr v6 *@__fe_tuple_0;
+        v30.*i256 = gep v29 0.i256 2.i256;
+        v31.i256 = ptr_to_int v30 i256;
+        mstore v31 v28 i256;
+        v32.i1 = gt 2.i256 2.i256;
+        v33.i1 = is_zero v32;
+        v34.i256 = zext v33 i256;
+        v35.i1 = is_zero v34;
+        v36.i1 = is_zero v35;
+        v37.i256 = zext v36 i256;
+        v38.*@__fe_tuple_0 = int_to_ptr v6 *@__fe_tuple_0;
+        v39.*i256 = gep v38 0.i256 3.i256;
+        v40.i256 = ptr_to_int v39 i256;
+        mstore v40 v37 i256;
+        v41.i1 = gt 3.i256 2.i256;
+        v42.i256 = zext v41 i256;
+        v43.i1 = is_zero v42;
+        v44.i1 = is_zero v43;
+        v45.i256 = zext v44 i256;
+        v46.*@__fe_tuple_0 = int_to_ptr v6 *@__fe_tuple_0;
+        v48.*i256 = gep v46 0.i256 4.i256;
+        v49.i256 = ptr_to_int v48 i256;
+        mstore v49 v45 i256;
+        v50.i1 = lt 3.i256 3.i256;
+        v51.i1 = is_zero v50;
+        v52.i256 = zext v51 i256;
+        v53.i1 = is_zero v52;
+        v54.i1 = is_zero v53;
+        v55.i256 = zext v54 i256;
+        v56.*@__fe_tuple_0 = int_to_ptr v6 *@__fe_tuple_0;
+        v58.*i256 = gep v56 0.i256 5.i256;
+        v59.i256 = ptr_to_int v58 i256;
+        mstore v59 v55 i256;
+        return v6;
 }
 
 func public %__fe_sonatina_entry() {

@@ -24,23 +24,23 @@ func public %nested_with_defaults(v0.i256) -> i256 {
 
     block5:
         v6.i256 = mload v0 i256;
-        v7.i256 = eq v6 0.i256;
+        v7.i1 = eq v6 0.i256;
         br v7 block6 block8;
 
     block6:
         v11.i256 = add v0 32.i256;
         v12.i256 = mload v11 i256;
-        v13.i256 = eq v12 0.i256;
+        v13.i1 = eq v12 0.i256;
         br v13 block1 block4;
 
     block7:
         v15.i256 = add v0 32.i256;
         v16.i256 = mload v15 i256;
-        v17.i256 = eq v16 1.i256;
+        v17.i1 = eq v16 1.i256;
         br v17 block3 block4;
 
     block8:
-        v8.i256 = eq v6 1.i256;
+        v8.i1 = eq v6 1.i256;
         br v8 block7 block4;
 }
 
@@ -63,13 +63,13 @@ func public %outer_specific_inner_wildcard(v0.i256) -> i256 {
 
     block5:
         v7.i256 = mload v0 i256;
-        v8.i256 = eq v7 0.i256;
+        v8.i1 = eq v7 0.i256;
         br v8 block6 block4;
 
     block6:
         v11.i256 = add v0 32.i256;
         v12.i256 = mload v11 i256;
-        v13.i256 = eq v12 0.i256;
+        v13.i1 = eq v12 0.i256;
         br v13 block1 block3;
 }
 
@@ -89,19 +89,19 @@ func public %deeply_nested_wildcard(v0.i256) -> i256 {
 
     block4:
         v5.i256 = mload v0 i256;
-        v6.i256 = eq v5 0.i256;
+        v6.i1 = eq v5 0.i256;
         br v6 block5 block3;
 
     block5:
         v9.i256 = add v0 32.i256;
         v10.i256 = mload v9 i256;
-        v11.i256 = eq v10 0.i256;
+        v11.i1 = eq v10 0.i256;
         br v11 block6 block3;
 
     block6:
         v14.i256 = add v0 64.i256;
         v15.i256 = mload v14 i256;
-        v16.i256 = eq v15 0.i256;
+        v16.i1 = eq v15 0.i256;
         br v16 block1 block3;
 }
 
@@ -127,21 +127,21 @@ func public %exhaustive_inner_outer_wildcard(v0.i256) -> i256 {
 
     block6:
         v7.i256 = mload v0 i256;
-        v8.i256 = eq v7 0.i256;
+        v8.i1 = eq v7 0.i256;
         br v8 block7 block5;
 
     block7:
         v11.i256 = add v0 32.i256;
         v12.i256 = mload v11 i256;
-        v13.i256 = eq v12 0.i256;
+        v13.i1 = eq v12 0.i256;
         br v13 block1 block8;
 
     block8:
-        v14.i256 = eq v12 1.i256;
+        v14.i1 = eq v12 1.i256;
         br v14 block3 block9;
 
     block9:
-        v15.i256 = eq v12 2.i256;
+        v15.i1 = eq v12 2.i256;
         br v15 block4 block5;
 }
 

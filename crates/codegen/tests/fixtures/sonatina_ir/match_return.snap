@@ -5,7 +5,7 @@ input_file: crates/codegen/tests/fixtures/match_return.fe
 ---
 target = evm-ethereum-osaka
 
-func public %f__Evm_hef0af3106e109414__3af54274b2985741(v0.i256, v1.i256) {
+func private %f__Evm_hef0af3106e109414__3af54274b2985741(v0.i256, v1.i256) {
     block0:
         jump block3;
 
@@ -17,14 +17,14 @@ func public %f__Evm_hef0af3106e109414__3af54274b2985741(v0.i256, v1.i256) {
 
     block3:
         v4.i256 = mload v0 i256;
-        v6.i256 = eq v4 0.i256;
+        v6.i1 = eq v4 0.i256;
         br v6 block1 block5;
 
     block4:
         evm_invalid;
 
     block5:
-        v7.i256 = eq v4 1.i256;
+        v7.i1 = eq v4 1.i256;
         br v7 block2 block4;
 }
 

@@ -7,13 +7,14 @@ target = evm-ethereum-osaka
 
 func public %make_some(v0.i256) -> i256 {
     block0:
-        v3.i256 = evm_malloc 40.i256;
-        mstore v3 1.i256 i256;
-        v5.i64 = trunc v0 i64;
-        v6.i256 = zext v5 i256;
-        v8.i256 = add v3 32.i256;
-        mstore v8 v6 i256;
-        return v3;
+        v3.*i8 = evm_malloc 64.i256;
+        v4.i256 = ptr_to_int v3 i256;
+        mstore v4 1.i256 i256;
+        v6.i64 = trunc v0 i64;
+        v7.i256 = zext v6 i256;
+        v9.i256 = add v4 32.i256;
+        mstore v9 v7 i256;
+        return v4;
 }
 
 func public %match_option(v0.i256) -> i256 {
@@ -36,14 +37,14 @@ func public %match_option(v0.i256) -> i256 {
 
     block4:
         v10.i256 = mload v0 i256;
-        v12.i256 = eq v10 1.i256;
+        v12.i1 = eq v10 1.i256;
         br v12 block1 block6;
 
     block5:
         evm_invalid;
 
     block6:
-        v13.i256 = eq v10 0.i256;
+        v13.i1 = eq v10 0.i256;
         br v13 block3 block5;
 }
 

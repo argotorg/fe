@@ -5,19 +5,19 @@ input_file: crates/codegen/tests/fixtures/effect_ptr_calldata_domain.fe
 ---
 target = evm-ethereum-osaka
 
-func public %read_x__StorPtr_u256___64779554cfbf0358(v0.i256) -> i256 {
+func private %read_x__StorPtr_u256___64779554cfbf0358(v0.i256) -> i256 {
     block0:
         v2.i256 = evm_sload v0;
         return v2;
 }
 
-func public %test_calldata_ptr_domain() {
+func private %test_calldata_ptr_domain() {
     block0:
         v1.i256 = call %read_x__CalldataPtr_u256___1e20dc3e834a8f96 0.i256;
         return;
 }
 
-func public %read_x__CalldataPtr_u256___1e20dc3e834a8f96(v0.i256) -> i256 {
+func private %read_x__CalldataPtr_u256___1e20dc3e834a8f96(v0.i256) -> i256 {
     block0:
         v2.i256 = evm_calldata_load v0;
         return v2;

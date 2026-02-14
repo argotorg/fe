@@ -5,18 +5,30 @@ input_file: crates/codegen/tests/fixtures/newtype_u8_word_conversion.fe
 ---
 target = evm-ethereum-osaka
 
+type @__fe_WrapU8_0 = {i256};
+type @__fe_Container_1 = {@__fe_WrapU8_0, i256};
+
 func public %newtype_u8_roundtrip(v0.i256) -> i256 {
     block0:
-        v3.i256 = evm_malloc 33.i256;
-        v4.i8 = trunc v0 i8;
-        v5.i256 = zext v4 i256;
-        mstore v3 v5 i256;
-        v7.i256 = add v3 1.i256;
-        mstore v7 0.i256 i256;
-        v8.i256 = mload v3 i256;
-        v9.i8 = trunc v8 i8;
-        v10.i256 = zext v9 i256;
-        return v10;
+        v3.*i8 = evm_malloc 64.i256;
+        v4.i256 = ptr_to_int v3 i256;
+        v5.i8 = trunc v0 i8;
+        v6.i256 = zext v5 i256;
+        v7.*@__fe_Container_1 = int_to_ptr v4 *@__fe_Container_1;
+        v8.*@__fe_WrapU8_0 = gep v7 0.i256 0.i256;
+        v9.i256 = ptr_to_int v8 i256;
+        mstore v9 v6 i256;
+        v10.*@__fe_Container_1 = int_to_ptr v4 *@__fe_Container_1;
+        v12.*i256 = gep v10 0.i256 1.i256;
+        v13.i256 = ptr_to_int v12 i256;
+        mstore v13 0.i256 i256;
+        v14.*@__fe_Container_1 = int_to_ptr v4 *@__fe_Container_1;
+        v15.*@__fe_WrapU8_0 = gep v14 0.i256 0.i256;
+        v16.i256 = ptr_to_int v15 i256;
+        v17.i256 = mload v16 i256;
+        v18.i8 = trunc v17 i8;
+        v19.i256 = zext v18 i256;
+        return v19;
 }
 
 func public %__fe_sonatina_entry() {

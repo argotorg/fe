@@ -35,14 +35,14 @@ func public %match_single_element_tuple(v0.i256) -> i256 {
         jump block2;
 
     block4:
-        v5.i256 = eq v0 1.i256;
+        v5.i1 = eq v0 1.i256;
         br v5 block1 block6;
 
     block5:
         evm_invalid;
 
     block6:
-        v6.i256 = eq v0 0.i256;
+        v6.i1 = eq v0 0.i256;
         br v6 block3 block5;
 }
 

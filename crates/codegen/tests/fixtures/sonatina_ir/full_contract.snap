@@ -5,28 +5,15 @@ input_file: crates/codegen/tests/fixtures/full_contract.fe
 ---
 target = evm-ethereum-osaka
 
-func public %point_hac92469562809d28_area(v0.i256) -> i256 {
-    block0:
-        v2.i256 = mload v0 i256;
-        v4.i256 = add v0 32.i256;
-        v5.i256 = mload v4 i256;
-        v6.i256 = mul v2 v5;
-        return v6;
-}
+type @__fe_Point_0 = {i256, i256};
 
-func public %square_h97afaa872b6ea17e_area(v0.i256) -> i256 {
-    block0:
-        v2.i256 = mul v0 v0;
-        return v2;
-}
-
-func public %abi_encode__Evm_hef0af3106e109414__3af54274b2985741(v0.i256, v1.i256) {
+func private %abi_encode__Evm_hef0af3106e109414__3af54274b2985741(v0.i256, v1.i256) {
     block0:
         mstore 0.i256 v0 i256;
         evm_return 0.i256 32.i256;
 }
 
-func public %init__StorPtr_Evm___207f35a85ac4062e() {
+func private %init__StorPtr_Evm___207f35a85ac4062e() {
     block0:
         v1.i256 = sym_size &dispatch__StorPtr_Evm___207f35a85ac4062e;
         v2.i256 = sym_addr &dispatch__StorPtr_Evm___207f35a85ac4062e;
@@ -34,45 +21,85 @@ func public %init__StorPtr_Evm___207f35a85ac4062e() {
         evm_return 0.i256 v1;
 }
 
-func public %dispatch__StorPtr_Evm___207f35a85ac4062e() {
+func private %dispatch__StorPtr_Evm___207f35a85ac4062e() {
     block0:
         v1.i256 = evm_calldata_load 0.i256;
         v3.i256 = shr 224.i256 v1;
-        v5.i256 = eq v3 151146943.i256;
-        br v5 block1 block2;
+        v5.i1 = eq v3 151146943.i256;
+        v6.i256 = zext v5 i256;
+        v7.i1 = ne v6 0.i256;
+        br v7 block1 block2;
 
     block1:
-        v7.i256 = evm_calldata_load 4.i256;
-        v9.i256 = evm_calldata_load 36.i256;
-        v11.i256 = evm_malloc 64.i256;
-        mstore v11 v7 i256;
-        v13.i256 = add v11 32.i256;
-        mstore v13 v9 i256;
-        v14.i256 = mload v11 i256;
-        v16.i256 = add v14 1.i256;
-        mstore v11 v16 i256;
-        v17.i256 = add v11 32.i256;
-        v18.i256 = mload v17 i256;
-        v20.i256 = add v18 2.i256;
-        v21.i256 = add v11 32.i256;
-        mstore v21 v20 i256;
-        v22.i256 = call %point_hac92469562809d28_area v11;
-        call %abi_encode__Evm_hef0af3106e109414__3af54274b2985741 v22 0.i256;
+        v9.i256 = evm_calldata_load 4.i256;
+        v11.i256 = evm_calldata_load 36.i256;
+        v13.*i8 = evm_malloc 64.i256;
+        v14.i256 = ptr_to_int v13 i256;
+        v15.*@__fe_Point_0 = int_to_ptr v14 *@__fe_Point_0;
+        v16.*i256 = gep v15 0.i256 0.i256;
+        v17.i256 = ptr_to_int v16 i256;
+        mstore v17 v9 i256;
+        v18.*@__fe_Point_0 = int_to_ptr v14 *@__fe_Point_0;
+        v20.*i256 = gep v18 0.i256 1.i256;
+        v21.i256 = ptr_to_int v20 i256;
+        mstore v21 v11 i256;
+        v22.*@__fe_Point_0 = int_to_ptr v14 *@__fe_Point_0;
+        v23.*i256 = gep v22 0.i256 0.i256;
+        v24.i256 = ptr_to_int v23 i256;
+        v25.i256 = mload v24 i256;
+        v26.i256 = add v25 1.i256;
+        v27.*@__fe_Point_0 = int_to_ptr v14 *@__fe_Point_0;
+        v28.*i256 = gep v27 0.i256 0.i256;
+        v29.i256 = ptr_to_int v28 i256;
+        mstore v29 v26 i256;
+        v30.*@__fe_Point_0 = int_to_ptr v14 *@__fe_Point_0;
+        v31.*i256 = gep v30 0.i256 1.i256;
+        v32.i256 = ptr_to_int v31 i256;
+        v33.i256 = mload v32 i256;
+        v35.i256 = add v33 2.i256;
+        v36.*@__fe_Point_0 = int_to_ptr v14 *@__fe_Point_0;
+        v37.*i256 = gep v36 0.i256 1.i256;
+        v38.i256 = ptr_to_int v37 i256;
+        mstore v38 v35 i256;
+        v39.i256 = call %point_hac92469562809d28_area v14;
+        call %abi_encode__Evm_hef0af3106e109414__3af54274b2985741 v39 0.i256;
         evm_invalid;
 
     block2:
-        v25.i256 = eq v3 2066295049.i256;
-        br v25 block3 block4;
+        v42.i1 = eq v3 2066295049.i256;
+        v43.i256 = zext v42 i256;
+        v44.i1 = ne v43 0.i256;
+        br v44 block3 block4;
 
     block3:
-        v26.i256 = evm_calldata_load 4.i256;
-        v28.i256 = add v26 3.i256;
-        v29.i256 = call %square_h97afaa872b6ea17e_area v28;
-        call %abi_encode__Evm_hef0af3106e109414__3af54274b2985741 v29 0.i256;
+        v45.i256 = evm_calldata_load 4.i256;
+        v47.i256 = add v45 3.i256;
+        v48.i256 = call %square_h97afaa872b6ea17e_area v47;
+        call %abi_encode__Evm_hef0af3106e109414__3af54274b2985741 v48 0.i256;
         evm_invalid;
 
     block4:
         evm_return 0.i256 0.i256;
+}
+
+func private %point_hac92469562809d28_area(v0.i256) -> i256 {
+    block0:
+        v2.*@__fe_Point_0 = int_to_ptr v0 *@__fe_Point_0;
+        v3.*i256 = gep v2 0.i256 0.i256;
+        v4.i256 = ptr_to_int v3 i256;
+        v5.i256 = mload v4 i256;
+        v6.*@__fe_Point_0 = int_to_ptr v0 *@__fe_Point_0;
+        v8.*i256 = gep v6 0.i256 1.i256;
+        v9.i256 = ptr_to_int v8 i256;
+        v10.i256 = mload v9 i256;
+        v11.i256 = mul v5 v10;
+        return v11;
+}
+
+func private %square_h97afaa872b6ea17e_area(v0.i256) -> i256 {
+    block0:
+        v2.i256 = mul v0 v0;
+        return v2;
 }
 
 
