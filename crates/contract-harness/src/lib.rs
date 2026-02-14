@@ -639,7 +639,12 @@ impl RuntimeInstance {
     /// Deploys a contract by executing its init bytecode and using the returned runtime code.
     /// This properly runs any initialization logic in the constructor.
     pub fn deploy(init_bytecode_hex: &str) -> Result<Self, HarnessError> {
-        Self::deploy_with_constructor_args(init_bytecode_hex, &[])
+        Self::deploy_tracked(init_bytecode_hex).map(|(instance, _)| instance)
+    }
+
+    /// Deploys a contract and returns the runtime instance plus deployment gas.
+    pub fn deploy_tracked(init_bytecode_hex: &str) -> Result<(Self, u64), HarnessError> {
+        Self::deploy_with_constructor_args_tracked(init_bytecode_hex, &[])
     }
 
     /// Deploys a contract by executing its init bytecode with ABI-encoded constructor args.
@@ -647,6 +652,15 @@ impl RuntimeInstance {
         init_bytecode_hex: &str,
         constructor_args: &[u8],
     ) -> Result<Self, HarnessError> {
+        Self::deploy_with_constructor_args_tracked(init_bytecode_hex, constructor_args)
+            .map(|(instance, _)| instance)
+    }
+
+    /// Deploys a contract with constructor args and returns deployment gas.
+    pub fn deploy_with_constructor_args_tracked(
+        init_bytecode_hex: &str,
+        constructor_args: &[u8],
+    ) -> Result<(Self, u64), HarnessError> {
         let mut init_code = hex_to_bytes(init_bytecode_hex)?;
         init_code.extend_from_slice(constructor_args);
         let caller = Address::ZERO;
@@ -684,17 +698,21 @@ impl RuntimeInstance {
         match result {
             ExecutionResult::Success {
                 output: Output::Create(_, Some(deployed_address)),
+                gas_used,
                 ..
             } => {
                 // The contract was deployed successfully; revm has already inserted the account
                 let mut next_nonce_by_caller = HashMap::new();
                 next_nonce_by_caller.insert(caller, 1);
-                Ok(Self {
-                    evm,
-                    address: deployed_address,
-                    next_nonce_by_caller,
-                    trace_options: None,
-                })
+                Ok((
+                    Self {
+                        evm,
+                        address: deployed_address,
+                        next_nonce_by_caller,
+                        trace_options: None,
+                    },
+                    gas_used,
+                ))
             }
             ExecutionResult::Success { output, .. } => Err(HarnessError::Execution(format!(
                 "deployment returned unexpected output: {output:?}"

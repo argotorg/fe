@@ -46,7 +46,12 @@ pub struct TestResult {
     pub name: String,
     pub passed: bool,
     pub error_message: Option<String>,
+    /// Runtime test-call gas (the empty-calldata call into the deployed test object).
     pub gas_used: Option<u64>,
+    /// Gas used by the deployment transaction that instantiates the test object.
+    pub deploy_gas_used: Option<u64>,
+    /// Combined deployment + runtime-call gas, when both are available.
+    pub total_gas_used: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -69,6 +74,8 @@ struct GasComparisonCase {
 #[derive(Debug, Clone)]
 struct GasMeasurement {
     gas_used: Option<u64>,
+    deploy_gas_used: Option<u64>,
+    total_gas_used: Option<u64>,
     step_count: Option<u64>,
     runtime_metrics: Option<EvmRuntimeMetrics>,
     passed: bool,
@@ -201,6 +208,8 @@ impl GasMeasurement {
     fn from_test_outcome(outcome: &TestOutcome) -> Self {
         Self {
             gas_used: outcome.result.gas_used,
+            deploy_gas_used: outcome.result.deploy_gas_used,
+            total_gas_used: outcome.result.total_gas_used,
             step_count: outcome.step_count,
             runtime_metrics: outcome.runtime_metrics,
             passed: outcome.result.passed,
@@ -373,6 +382,8 @@ fn suite_error_result(suite: &str, kind: &str, message: String) -> Vec<TestResul
         passed: false,
         error_message: Some(message),
         gas_used: None,
+        deploy_gas_used: None,
+        total_gas_used: None,
     }]
 }
 
@@ -1169,6 +1180,8 @@ fn discover_and_run_tests(
                     passed: false,
                     error_message: Some(err),
                     gas_used: None,
+                    deploy_gas_used: None,
+                    total_gas_used: None,
                 });
                 continue;
             }
@@ -1643,6 +1656,8 @@ fn gas_comparison_settings_text(opt_level: OptLevel) -> String {
     out.push_str(&format!("sonatina.opt_level={opt_level}\n"));
     out.push_str("sonatina.codegen.path=emit_test_module_sonatina (default)\n");
     out.push_str("measurement.call=RuntimeInstance::call_raw(empty calldata)\n");
+    out.push_str("measurement.deploy=RuntimeInstance::deploy_tracked(init bytecode)\n");
+    out.push_str("measurement.total=deploy_gas + call_gas (when both are available)\n");
     out
 }
 
@@ -1744,6 +1759,93 @@ fn write_gas_magnitude_csv(path: &Utf8PathBuf, totals: GasMagnitudeTotals) {
     out.push_str("baseline,metric,value\n");
     write_magnitude_totals_rows(&mut out, "yul_unopt", totals.vs_yul_unopt);
     write_magnitude_totals_rows(&mut out, "yul_opt", totals.vs_yul_opt);
+    let _ = std::fs::write(path, out);
+}
+
+fn write_gas_breakdown_magnitude_component_rows(
+    out: &mut String,
+    baseline: &str,
+    component: &str,
+    totals: DeltaMagnitudeTotals,
+) {
+    out.push_str(&format!(
+        "{baseline},{component},compared_with_gas,{}\n",
+        totals.compared_with_gas
+    ));
+    out.push_str(&format!(
+        "{baseline},{component},pct_rows,{}\n",
+        totals.pct_rows
+    ));
+    out.push_str(&format!(
+        "{baseline},{component},baseline_gas_sum,{}\n",
+        totals.baseline_gas_sum
+    ));
+    out.push_str(&format!(
+        "{baseline},{component},sonatina_gas_sum,{}\n",
+        totals.sonatina_gas_sum
+    ));
+    out.push_str(&format!(
+        "{baseline},{component},delta_gas_sum,{}\n",
+        totals.delta_gas_sum
+    ));
+    out.push_str(&format!(
+        "{baseline},{component},abs_delta_gas_sum,{}\n",
+        totals.abs_delta_gas_sum
+    ));
+    out.push_str(&format!(
+        "{baseline},{component},delta_pct_sum,{:.6}\n",
+        totals.delta_pct_sum
+    ));
+    out.push_str(&format!(
+        "{baseline},{component},abs_delta_pct_sum,{:.6}\n",
+        totals.abs_delta_pct_sum
+    ));
+}
+
+fn write_gas_breakdown_magnitude_csv(
+    path: &Utf8PathBuf,
+    call_totals: GasMagnitudeTotals,
+    deploy_totals: GasMagnitudeTotals,
+    total_totals: GasMagnitudeTotals,
+) {
+    let mut out = String::new();
+    out.push_str("baseline,component,metric,value\n");
+    write_gas_breakdown_magnitude_component_rows(
+        &mut out,
+        "yul_unopt",
+        "call",
+        call_totals.vs_yul_unopt,
+    );
+    write_gas_breakdown_magnitude_component_rows(
+        &mut out,
+        "yul_opt",
+        "call",
+        call_totals.vs_yul_opt,
+    );
+    write_gas_breakdown_magnitude_component_rows(
+        &mut out,
+        "yul_unopt",
+        "deploy",
+        deploy_totals.vs_yul_unopt,
+    );
+    write_gas_breakdown_magnitude_component_rows(
+        &mut out,
+        "yul_opt",
+        "deploy",
+        deploy_totals.vs_yul_opt,
+    );
+    write_gas_breakdown_magnitude_component_rows(
+        &mut out,
+        "yul_unopt",
+        "total",
+        total_totals.vs_yul_unopt,
+    );
+    write_gas_breakdown_magnitude_component_rows(
+        &mut out,
+        "yul_opt",
+        "total",
+        total_totals.vs_yul_opt,
+    );
     let _ = std::fs::write(path, out);
 }
 
@@ -1982,6 +2084,66 @@ fn parse_gas_magnitude_csv(contents: &str) -> GasMagnitudeTotals {
     totals
 }
 
+fn parse_gas_breakdown_magnitude_csv(
+    contents: &str,
+) -> (GasMagnitudeTotals, GasMagnitudeTotals, GasMagnitudeTotals) {
+    let mut call_totals = GasMagnitudeTotals::default();
+    let mut deploy_totals = GasMagnitudeTotals::default();
+    let mut total_totals = GasMagnitudeTotals::default();
+    for (idx, line) in contents.lines().enumerate() {
+        if idx == 0 || line.trim().is_empty() {
+            continue;
+        }
+        let mut parts = line.splitn(4, ',');
+        let baseline = parts.next().unwrap_or_default().trim();
+        let component = parts.next().unwrap_or_default().trim();
+        let metric = parts.next().unwrap_or_default().trim();
+        let value = parts.next().unwrap_or_default().trim();
+
+        let component_totals = match component {
+            "call" => &mut call_totals,
+            "deploy" => &mut deploy_totals,
+            "total" => &mut total_totals,
+            _ => continue,
+        };
+
+        let target = match baseline {
+            "yul_unopt" => &mut component_totals.vs_yul_unopt,
+            "yul_opt" => &mut component_totals.vs_yul_opt,
+            _ => continue,
+        };
+
+        match metric {
+            "compared_with_gas" => {
+                target.compared_with_gas = value.parse::<usize>().unwrap_or(0);
+            }
+            "pct_rows" => {
+                target.pct_rows = value.parse::<usize>().unwrap_or(0);
+            }
+            "baseline_gas_sum" => {
+                target.baseline_gas_sum = value.parse::<u128>().unwrap_or(0);
+            }
+            "sonatina_gas_sum" => {
+                target.sonatina_gas_sum = value.parse::<u128>().unwrap_or(0);
+            }
+            "delta_gas_sum" => {
+                target.delta_gas_sum = value.parse::<i128>().unwrap_or(0);
+            }
+            "abs_delta_gas_sum" => {
+                target.abs_delta_gas_sum = value.parse::<u128>().unwrap_or(0);
+            }
+            "delta_pct_sum" => {
+                target.delta_pct_sum = value.parse::<f64>().unwrap_or(0.0);
+            }
+            "abs_delta_pct_sum" => {
+                target.abs_delta_pct_sum = value.parse::<f64>().unwrap_or(0.0);
+            }
+            _ => {}
+        }
+    }
+    (call_totals, deploy_totals, total_totals)
+}
+
 fn parse_gas_opcode_magnitude_csv(contents: &str) -> OpcodeMagnitudeTotals {
     let mut totals = OpcodeMagnitudeTotals::default();
     for (idx, line) in contents.lines().enumerate() {
@@ -2066,6 +2228,16 @@ fn record_delta(
             totals.incomplete += 1;
             ("n/a".to_string(), "n/a".to_string())
         }
+    }
+}
+
+fn delta_cells(baseline_gas: Option<u64>, sonatina_gas: Option<u64>) -> (String, String) {
+    match (baseline_gas, sonatina_gas) {
+        (Some(baseline_gas), Some(sonatina_gas)) => {
+            let diff = sonatina_gas as i128 - baseline_gas as i128;
+            (diff.to_string(), format_delta_percent(diff, baseline_gas))
+        }
+        _ => ("n/a".to_string(), "n/a".to_string()),
     }
 }
 
@@ -2508,6 +2680,10 @@ fn write_gas_comparison_report(
     csv.push_str(
         "test,symbol,yul_unopt_gas,yul_opt_gas,sonatina_gas,delta_vs_yul_unopt,delta_vs_yul_unopt_pct,delta_vs_yul_opt,delta_vs_yul_opt_pct,yul_unopt_status,yul_opt_status,sonatina_status,note\n",
     );
+    let mut breakdown_csv = String::new();
+    breakdown_csv.push_str(
+        "test,symbol,yul_unopt_call_gas,yul_opt_call_gas,sonatina_call_gas,delta_call_vs_yul_unopt,delta_call_vs_yul_unopt_pct,delta_call_vs_yul_opt,delta_call_vs_yul_opt_pct,yul_unopt_deploy_gas,yul_opt_deploy_gas,sonatina_deploy_gas,delta_deploy_vs_yul_unopt,delta_deploy_vs_yul_unopt_pct,delta_deploy_vs_yul_opt,delta_deploy_vs_yul_opt_pct,yul_unopt_total_gas,yul_opt_total_gas,sonatina_total_gas,delta_total_vs_yul_unopt,delta_total_vs_yul_unopt_pct,delta_total_vs_yul_opt,delta_total_vs_yul_opt_pct,note\n",
+    );
     let mut opcode_csv = String::new();
     opcode_csv.push_str(gas_opcode_comparison_header());
     opcode_csv.push('\n');
@@ -2516,7 +2692,9 @@ fn write_gas_comparison_report(
         tests_in_scope: cases.len(),
         ..GasTotals::default()
     };
-    let mut magnitude_totals = GasMagnitudeTotals::default();
+    let mut call_magnitude_totals = GasMagnitudeTotals::default();
+    let mut deploy_magnitude_totals = GasMagnitudeTotals::default();
+    let mut total_magnitude_totals = GasMagnitudeTotals::default();
     let mut opcode_magnitude_totals = OpcodeMagnitudeTotals::default();
 
     for case in cases {
@@ -2558,9 +2736,39 @@ fn write_gas_comparison_report(
         let sonatina_gas = sonatina
             .as_ref()
             .and_then(|measurement| measurement.gas_used);
+        let yul_unopt_deploy_gas = yul_unopt
+            .as_ref()
+            .and_then(|measurement| measurement.deploy_gas_used);
+        let yul_opt_deploy_gas = yul_opt
+            .as_ref()
+            .and_then(|measurement| measurement.deploy_gas_used);
+        let sonatina_deploy_gas = sonatina
+            .as_ref()
+            .and_then(|measurement| measurement.deploy_gas_used);
+        let yul_unopt_total_gas = yul_unopt
+            .as_ref()
+            .and_then(|measurement| measurement.total_gas_used);
+        let yul_opt_total_gas = yul_opt
+            .as_ref()
+            .and_then(|measurement| measurement.total_gas_used);
+        let sonatina_total_gas = sonatina
+            .as_ref()
+            .and_then(|measurement| measurement.total_gas_used);
         let yul_unopt_cell = yul_unopt_gas.map_or_else(|| "n/a".to_string(), |gas| gas.to_string());
         let yul_opt_cell = yul_opt_gas.map_or_else(|| "n/a".to_string(), |gas| gas.to_string());
         let sonatina_cell = sonatina_gas.map_or_else(|| "n/a".to_string(), |gas| gas.to_string());
+        let yul_unopt_deploy_cell =
+            yul_unopt_deploy_gas.map_or_else(|| "n/a".to_string(), |gas| gas.to_string());
+        let yul_opt_deploy_cell =
+            yul_opt_deploy_gas.map_or_else(|| "n/a".to_string(), |gas| gas.to_string());
+        let sonatina_deploy_cell =
+            sonatina_deploy_gas.map_or_else(|| "n/a".to_string(), |gas| gas.to_string());
+        let yul_unopt_total_cell =
+            yul_unopt_total_gas.map_or_else(|| "n/a".to_string(), |gas| gas.to_string());
+        let yul_opt_total_cell =
+            yul_opt_total_gas.map_or_else(|| "n/a".to_string(), |gas| gas.to_string());
+        let sonatina_total_cell =
+            sonatina_total_gas.map_or_else(|| "n/a".to_string(), |gas| gas.to_string());
 
         let mut notes = Vec::new();
         if case.yul.is_none() {
@@ -2596,9 +2804,33 @@ fn write_gas_comparison_report(
         record_delta_magnitude(
             yul_unopt_gas,
             sonatina_gas,
-            &mut magnitude_totals.vs_yul_unopt,
+            &mut call_magnitude_totals.vs_yul_unopt,
         );
-        record_delta_magnitude(yul_opt_gas, sonatina_gas, &mut magnitude_totals.vs_yul_opt);
+        record_delta_magnitude(
+            yul_opt_gas,
+            sonatina_gas,
+            &mut call_magnitude_totals.vs_yul_opt,
+        );
+        record_delta_magnitude(
+            yul_unopt_deploy_gas,
+            sonatina_deploy_gas,
+            &mut deploy_magnitude_totals.vs_yul_unopt,
+        );
+        record_delta_magnitude(
+            yul_opt_deploy_gas,
+            sonatina_deploy_gas,
+            &mut deploy_magnitude_totals.vs_yul_opt,
+        );
+        record_delta_magnitude(
+            yul_unopt_total_gas,
+            sonatina_total_gas,
+            &mut total_magnitude_totals.vs_yul_unopt,
+        );
+        record_delta_magnitude(
+            yul_opt_total_gas,
+            sonatina_total_gas,
+            &mut total_magnitude_totals.vs_yul_opt,
+        );
 
         let note = if notes.is_empty() {
             String::new()
@@ -2633,6 +2865,45 @@ fn write_gas_comparison_report(
             csv_escape(yul_unopt_status),
             csv_escape(yul_opt_status),
             csv_escape(sonatina_status),
+            csv_escape(&note),
+        ));
+
+        let (delta_call_unopt_cell, delta_call_unopt_pct_cell) =
+            delta_cells(yul_unopt_gas, sonatina_gas);
+        let (delta_call_opt_cell, delta_call_opt_pct_cell) = delta_cells(yul_opt_gas, sonatina_gas);
+        let (delta_deploy_unopt_cell, delta_deploy_unopt_pct_cell) =
+            delta_cells(yul_unopt_deploy_gas, sonatina_deploy_gas);
+        let (delta_deploy_opt_cell, delta_deploy_opt_pct_cell) =
+            delta_cells(yul_opt_deploy_gas, sonatina_deploy_gas);
+        let (delta_total_unopt_cell, delta_total_unopt_pct_cell) =
+            delta_cells(yul_unopt_total_gas, sonatina_total_gas);
+        let (delta_total_opt_cell, delta_total_opt_pct_cell) =
+            delta_cells(yul_opt_total_gas, sonatina_total_gas);
+        breakdown_csv.push_str(&format!(
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+            csv_escape(&case.display_name),
+            csv_escape(&case.symbol_name),
+            csv_escape(&yul_unopt_cell),
+            csv_escape(&yul_opt_cell),
+            csv_escape(&sonatina_cell),
+            csv_escape(&delta_call_unopt_cell),
+            csv_escape(&delta_call_unopt_pct_cell),
+            csv_escape(&delta_call_opt_cell),
+            csv_escape(&delta_call_opt_pct_cell),
+            csv_escape(&yul_unopt_deploy_cell),
+            csv_escape(&yul_opt_deploy_cell),
+            csv_escape(&sonatina_deploy_cell),
+            csv_escape(&delta_deploy_unopt_cell),
+            csv_escape(&delta_deploy_unopt_pct_cell),
+            csv_escape(&delta_deploy_opt_cell),
+            csv_escape(&delta_deploy_opt_pct_cell),
+            csv_escape(&yul_unopt_total_cell),
+            csv_escape(&yul_opt_total_cell),
+            csv_escape(&sonatina_total_cell),
+            csv_escape(&delta_total_unopt_cell),
+            csv_escape(&delta_total_unopt_pct_cell),
+            csv_escape(&delta_total_opt_cell),
+            csv_escape(&delta_total_opt_pct_cell),
             csv_escape(&note),
         ));
 
@@ -2820,13 +3091,34 @@ fn write_gas_comparison_report(
     markdown.push_str("\n## Aggregate Delta Metrics\n\n");
     append_magnitude_summary(
         &mut markdown,
-        "vs Yul (unoptimized)",
-        magnitude_totals.vs_yul_unopt,
+        "Runtime Call Gas vs Yul (unoptimized)",
+        call_magnitude_totals.vs_yul_unopt,
     );
     append_magnitude_summary(
         &mut markdown,
-        "vs Yul (optimized)",
-        magnitude_totals.vs_yul_opt,
+        "Runtime Call Gas vs Yul (optimized)",
+        call_magnitude_totals.vs_yul_opt,
+    );
+    markdown.push_str("\n## Deploy/Call/Total Breakdown\n\n");
+    append_magnitude_summary(
+        &mut markdown,
+        "Deployment Gas vs Yul (unoptimized)",
+        deploy_magnitude_totals.vs_yul_unopt,
+    );
+    append_magnitude_summary(
+        &mut markdown,
+        "Deployment Gas vs Yul (optimized)",
+        deploy_magnitude_totals.vs_yul_opt,
+    );
+    append_magnitude_summary(
+        &mut markdown,
+        "Total Gas (deploy+call) vs Yul (unoptimized)",
+        total_magnitude_totals.vs_yul_unopt,
+    );
+    append_magnitude_summary(
+        &mut markdown,
+        "Total Gas (deploy+call) vs Yul (optimized)",
+        total_magnitude_totals.vs_yul_opt,
     );
     append_opcode_magnitude_summary(&mut markdown, opcode_magnitude_totals);
 
@@ -2835,7 +3127,7 @@ fn write_gas_comparison_report(
         markdown.push_str(&format!("- {line}\n"));
     }
     markdown.push_str(
-        "\nMachine-readable aggregates: `artifacts/gas_comparison_totals.csv`, `artifacts/gas_comparison_magnitude.csv`, and `artifacts/gas_opcode_magnitude.csv`.\n",
+        "\nMachine-readable aggregates: `artifacts/gas_comparison_totals.csv`, `artifacts/gas_comparison_magnitude.csv`, `artifacts/gas_breakdown_comparison.csv`, `artifacts/gas_breakdown_magnitude.csv`, and `artifacts/gas_opcode_magnitude.csv`.\n",
     );
     markdown.push_str(
         "\n## Opcode/Trace Profile\n\nSee `artifacts/gas_opcode_comparison.md` and `artifacts/gas_opcode_comparison.csv` for bytecode shape and dynamic step-count diagnostics.\n",
@@ -2844,6 +3136,10 @@ fn write_gas_comparison_report(
     let _ = std::fs::write(artifacts_dir.join("gas_comparison.md"), markdown);
     let _ = std::fs::write(artifacts_dir.join("gas_comparison.csv"), csv);
     let _ = std::fs::write(
+        artifacts_dir.join("gas_breakdown_comparison.csv"),
+        breakdown_csv,
+    );
+    let _ = std::fs::write(
         artifacts_dir.join("gas_opcode_comparison.md"),
         opcode_markdown,
     );
@@ -2851,7 +3147,13 @@ fn write_gas_comparison_report(
     write_gas_totals_csv(&artifacts_dir.join("gas_comparison_totals.csv"), totals);
     write_gas_magnitude_csv(
         &artifacts_dir.join("gas_comparison_magnitude.csv"),
-        magnitude_totals,
+        call_magnitude_totals,
+    );
+    write_gas_breakdown_magnitude_csv(
+        &artifacts_dir.join("gas_breakdown_magnitude.csv"),
+        call_magnitude_totals,
+        deploy_magnitude_totals,
+        total_magnitude_totals,
     );
     write_opcode_magnitude_csv(
         &artifacts_dir.join("gas_opcode_magnitude.csv"),
@@ -2888,14 +3190,19 @@ fn write_run_gas_comparison_summary(root_dir: &Utf8PathBuf, opt_level: OptLevel)
 
     let mut all_rows = String::new();
     all_rows.push_str("suite,test,symbol,yul_unopt_gas,yul_opt_gas,sonatina_gas,delta_vs_yul_unopt,delta_vs_yul_unopt_pct,delta_vs_yul_opt,delta_vs_yul_opt_pct,yul_unopt_status,yul_opt_status,sonatina_status,note\n");
+    let mut all_breakdown_rows = String::new();
+    all_breakdown_rows.push_str("suite,test,symbol,yul_unopt_call_gas,yul_opt_call_gas,sonatina_call_gas,delta_call_vs_yul_unopt,delta_call_vs_yul_unopt_pct,delta_call_vs_yul_opt,delta_call_vs_yul_opt_pct,yul_unopt_deploy_gas,yul_opt_deploy_gas,sonatina_deploy_gas,delta_deploy_vs_yul_unopt,delta_deploy_vs_yul_unopt_pct,delta_deploy_vs_yul_opt,delta_deploy_vs_yul_opt_pct,yul_unopt_total_gas,yul_opt_total_gas,sonatina_total_gas,delta_total_vs_yul_unopt,delta_total_vs_yul_unopt_pct,delta_total_vs_yul_opt,delta_total_vs_yul_opt_pct,note\n");
     let mut all_opcode_rows = String::new();
     all_opcode_rows.push_str("suite,");
     all_opcode_rows.push_str(gas_opcode_comparison_header());
     all_opcode_rows.push('\n');
     let mut wrote_any_rows = false;
+    let mut wrote_any_breakdown_rows = false;
     let mut wrote_any_opcode_rows = false;
     let mut totals = GasTotals::default();
-    let mut magnitude_totals = GasMagnitudeTotals::default();
+    let mut call_magnitude_totals = GasMagnitudeTotals::default();
+    let mut deploy_magnitude_totals = GasMagnitudeTotals::default();
+    let mut total_magnitude_totals = GasMagnitudeTotals::default();
     let mut opcode_magnitude_totals = OpcodeMagnitudeTotals::default();
     let mut hotspots: Vec<GasHotspotRow> = Vec::new();
     let mut suite_rollup: FxHashMap<String, SuiteDeltaTotals> = FxHashMap::default();
@@ -2935,6 +3242,22 @@ fn write_run_gas_comparison_summary(root_dir: &Utf8PathBuf, opt_level: OptLevel)
             }
         }
 
+        let suite_breakdown_rows_path = suite_dir
+            .join("artifacts")
+            .join("gas_breakdown_comparison.csv");
+        if let Ok(contents) = std::fs::read_to_string(&suite_breakdown_rows_path) {
+            for (idx, line) in contents.lines().enumerate() {
+                if idx == 0 || line.trim().is_empty() {
+                    continue;
+                }
+                all_breakdown_rows.push_str(&csv_escape(&suite));
+                all_breakdown_rows.push(',');
+                all_breakdown_rows.push_str(line);
+                all_breakdown_rows.push('\n');
+                wrote_any_breakdown_rows = true;
+            }
+        }
+
         let suite_opcode_rows_path = suite_dir
             .join("artifacts")
             .join("gas_opcode_comparison.csv");
@@ -2961,8 +3284,22 @@ fn write_run_gas_comparison_summary(root_dir: &Utf8PathBuf, opt_level: OptLevel)
         let suite_magnitude_path = suite_dir
             .join("artifacts")
             .join("gas_comparison_magnitude.csv");
+        let mut has_legacy_call_magnitude = false;
         if let Ok(contents) = std::fs::read_to_string(&suite_magnitude_path) {
-            magnitude_totals.add(parse_gas_magnitude_csv(&contents));
+            call_magnitude_totals.add(parse_gas_magnitude_csv(&contents));
+            has_legacy_call_magnitude = true;
+        }
+
+        let suite_breakdown_magnitude_path = suite_dir
+            .join("artifacts")
+            .join("gas_breakdown_magnitude.csv");
+        if let Ok(contents) = std::fs::read_to_string(&suite_breakdown_magnitude_path) {
+            let (call, deploy, total) = parse_gas_breakdown_magnitude_csv(&contents);
+            if !has_legacy_call_magnitude {
+                call_magnitude_totals.add(call);
+            }
+            deploy_magnitude_totals.add(deploy);
+            total_magnitude_totals.add(total);
         }
 
         let suite_opcode_magnitude_path =
@@ -3045,6 +3382,12 @@ fn write_run_gas_comparison_summary(root_dir: &Utf8PathBuf, opt_level: OptLevel)
             &trace_symbol_hotspots,
         );
     }
+    if wrote_any_breakdown_rows {
+        let _ = std::fs::write(
+            artifacts_dir.join("gas_breakdown_comparison_all.csv"),
+            all_breakdown_rows,
+        );
+    }
     if wrote_any_opcode_rows {
         let _ = std::fs::write(
             artifacts_dir.join("gas_opcode_comparison_all.csv"),
@@ -3054,7 +3397,13 @@ fn write_run_gas_comparison_summary(root_dir: &Utf8PathBuf, opt_level: OptLevel)
     write_gas_totals_csv(&artifacts_dir.join("gas_comparison_totals.csv"), totals);
     write_gas_magnitude_csv(
         &artifacts_dir.join("gas_comparison_magnitude.csv"),
-        magnitude_totals,
+        call_magnitude_totals,
+    );
+    write_gas_breakdown_magnitude_csv(
+        &artifacts_dir.join("gas_breakdown_magnitude.csv"),
+        call_magnitude_totals,
+        deploy_magnitude_totals,
+        total_magnitude_totals,
     );
     write_opcode_magnitude_csv(
         &artifacts_dir.join("gas_opcode_magnitude.csv"),
@@ -3081,13 +3430,34 @@ fn write_run_gas_comparison_summary(root_dir: &Utf8PathBuf, opt_level: OptLevel)
     summary.push_str("\n## Aggregate Delta Metrics\n\n");
     append_magnitude_summary(
         &mut summary,
-        "vs Yul (unoptimized)",
-        magnitude_totals.vs_yul_unopt,
+        "Runtime Call Gas vs Yul (unoptimized)",
+        call_magnitude_totals.vs_yul_unopt,
     );
     append_magnitude_summary(
         &mut summary,
-        "vs Yul (optimized)",
-        magnitude_totals.vs_yul_opt,
+        "Runtime Call Gas vs Yul (optimized)",
+        call_magnitude_totals.vs_yul_opt,
+    );
+    summary.push_str("\n## Deploy/Call/Total Breakdown\n\n");
+    append_magnitude_summary(
+        &mut summary,
+        "Deployment Gas vs Yul (unoptimized)",
+        deploy_magnitude_totals.vs_yul_unopt,
+    );
+    append_magnitude_summary(
+        &mut summary,
+        "Deployment Gas vs Yul (optimized)",
+        deploy_magnitude_totals.vs_yul_opt,
+    );
+    append_magnitude_summary(
+        &mut summary,
+        "Total Gas (deploy+call) vs Yul (unoptimized)",
+        total_magnitude_totals.vs_yul_unopt,
+    );
+    append_magnitude_summary(
+        &mut summary,
+        "Total Gas (deploy+call) vs Yul (optimized)",
+        total_magnitude_totals.vs_yul_opt,
     );
     append_opcode_magnitude_summary(&mut summary, opcode_magnitude_totals);
     append_opcode_inflation_attribution(&mut summary, opcode_magnitude_totals);
@@ -3101,7 +3471,7 @@ fn write_run_gas_comparison_summary(root_dir: &Utf8PathBuf, opt_level: OptLevel)
     }
     if wrote_any_rows {
         summary.push_str(
-            "\nSee `artifacts/gas_comparison_all.csv`, `artifacts/gas_comparison_totals.csv`, `artifacts/gas_comparison_magnitude.csv`, `artifacts/gas_opcode_magnitude.csv`, `artifacts/gas_hotspots_vs_yul_opt.csv`, `artifacts/gas_suite_delta_summary.csv`, and `artifacts/gas_tail_trace_symbol_hotspots.csv` for machine-readable totals and rollups.\n",
+            "\nSee `artifacts/gas_comparison_all.csv`, `artifacts/gas_comparison_totals.csv`, `artifacts/gas_comparison_magnitude.csv`, `artifacts/gas_breakdown_comparison_all.csv`, `artifacts/gas_breakdown_magnitude.csv`, `artifacts/gas_opcode_magnitude.csv`, `artifacts/gas_hotspots_vs_yul_opt.csv`, `artifacts/gas_suite_delta_summary.csv`, and `artifacts/gas_tail_trace_symbol_hotspots.csv` for machine-readable totals and rollups.\n",
         );
     }
     if wrote_any_opcode_rows {
@@ -3267,6 +3637,8 @@ fn compile_and_run_test(
                     case.value_param_count
                 )),
                 gas_used: None,
+                deploy_gas_used: None,
+                total_gas_used: None,
             },
             logs: Vec::new(),
             trace: None,
@@ -3285,6 +3657,8 @@ fn compile_and_run_test(
                     case.display_name
                 )),
                 gas_used: None,
+                deploy_gas_used: None,
+                total_gas_used: None,
             },
             logs: Vec::new(),
             trace: None,
@@ -3304,6 +3678,8 @@ fn compile_and_run_test(
                         case.display_name
                     )),
                     gas_used: None,
+                    deploy_gas_used: None,
+                    total_gas_used: None,
                 },
                 logs: Vec::new(),
                 trace: None,
@@ -3345,6 +3721,8 @@ fn compile_and_run_test(
                 passed: false,
                 error_message: Some(format!("missing test Yul for `{}`", case.display_name)),
                 gas_used: None,
+                deploy_gas_used: None,
+                total_gas_used: None,
             },
             logs: Vec::new(),
             trace: None,
@@ -3374,6 +3752,8 @@ fn compile_and_run_test(
                     passed: false,
                     error_message: Some(format!("Failed to compile test: {}", err.0)),
                     gas_used: None,
+                    deploy_gas_used: None,
+                    total_gas_used: None,
                 },
                 logs: Vec::new(),
                 trace: None,
@@ -3495,9 +3875,9 @@ fn write_report_manifest(
     out.push_str(&format!("filter: {}\n", filter.unwrap_or("<none>")));
     out.push_str(&format!("fe_version: {}\n", env!("CARGO_PKG_VERSION")));
     out.push_str("details: see `meta/args.txt` and `meta/git.txt` for exact repro context\n");
-    out.push_str("gas_comparison: see `artifacts/gas_comparison.md`, `artifacts/gas_comparison.csv`, `artifacts/gas_comparison_totals.csv`, `artifacts/gas_comparison_magnitude.csv`, `artifacts/gas_opcode_magnitude.csv`, and `artifacts/gas_comparison_settings.txt` when available\n");
+    out.push_str("gas_comparison: see `artifacts/gas_comparison.md`, `artifacts/gas_comparison.csv`, `artifacts/gas_comparison_totals.csv`, `artifacts/gas_comparison_magnitude.csv`, `artifacts/gas_breakdown_comparison.csv`, `artifacts/gas_breakdown_magnitude.csv`, `artifacts/gas_opcode_magnitude.csv`, and `artifacts/gas_comparison_settings.txt` when available\n");
     out.push_str("gas_comparison_yul_artifacts: in Sonatina comparison runs, Yul baselines are stored under `artifacts/tests/<test>/yul/{source.yul,bytecode.unopt.hex,bytecode.opt.hex,runtime.unopt.hex,runtime.opt.hex}`\n");
-    out.push_str("gas_comparison_aggregate: run-level reports also include `artifacts/gas_comparison_all.csv`, `artifacts/gas_comparison_summary.md`, `artifacts/gas_comparison_magnitude.csv`, `artifacts/gas_opcode_magnitude.csv`, `artifacts/gas_hotspots_vs_yul_opt.csv`, `artifacts/gas_suite_delta_summary.csv`, and `artifacts/gas_tail_trace_symbol_hotspots.csv`\n");
+    out.push_str("gas_comparison_aggregate: run-level reports also include `artifacts/gas_comparison_all.csv`, `artifacts/gas_breakdown_comparison_all.csv`, `artifacts/gas_comparison_summary.md`, `artifacts/gas_comparison_magnitude.csv`, `artifacts/gas_breakdown_magnitude.csv`, `artifacts/gas_opcode_magnitude.csv`, `artifacts/gas_hotspots_vs_yul_opt.csv`, `artifacts/gas_suite_delta_summary.csv`, and `artifacts/gas_tail_trace_symbol_hotspots.csv`\n");
     out.push_str("gas_opcode_profile: see `artifacts/gas_opcode_comparison.md` and `artifacts/gas_opcode_comparison.csv` for opcode and step-count diagnostics when available\n");
     out.push_str("gas_opcode_profile_aggregate: run-level reports also include `artifacts/gas_opcode_comparison_all.csv`\n");
     out.push_str(&format!("tests: {}\n", results.len()));
@@ -3538,15 +3918,18 @@ fn execute_test(
     Option<u64>,
 ) {
     // Deploy the test contract
-    let mut instance = match RuntimeInstance::deploy(bytecode_hex) {
-        Ok(instance) => instance,
+    let (mut instance, deploy_gas_used) = match RuntimeInstance::deploy_tracked(bytecode_hex) {
+        Ok(deployed) => deployed,
         Err(err) => {
+            let deploy_gas_used = harness_error_gas_used(&err);
             return (
                 TestResult {
                     name: name.to_string(),
                     passed: false,
                     error_message: Some(format!("Failed to deploy test: {err}")),
                     gas_used: None,
+                    deploy_gas_used,
+                    total_gas_used: deploy_gas_used,
                 },
                 Vec::new(),
                 None,
@@ -3584,26 +3967,34 @@ fn execute_test(
 
     match (call_result, expected_revert) {
         // Normal test: execution succeeded
-        (Ok((gas_used, logs)), None) => (
-            TestResult {
-                name: name.to_string(),
-                passed: true,
-                error_message: None,
-                gas_used: Some(gas_used),
-            },
-            logs,
-            trace,
-            step_count,
-        ),
+        (Ok((gas_used, logs)), None) => {
+            let total_gas_used = Some(deploy_gas_used.saturating_add(gas_used));
+            (
+                TestResult {
+                    name: name.to_string(),
+                    passed: true,
+                    error_message: None,
+                    gas_used: Some(gas_used),
+                    deploy_gas_used: Some(deploy_gas_used),
+                    total_gas_used,
+                },
+                logs,
+                trace,
+                step_count,
+            )
+        }
         // Normal test: execution reverted (failure)
         (Err(err), None) => {
             let gas_used = harness_error_gas_used(&err);
+            let total_gas_used = gas_used.map(|call_gas| deploy_gas_used.saturating_add(call_gas));
             (
                 TestResult {
                     name: name.to_string(),
                     passed: false,
                     error_message: Some(format_harness_error(err)),
                     gas_used,
+                    deploy_gas_used: Some(deploy_gas_used),
+                    total_gas_used,
                 },
                 Vec::new(),
                 trace,
@@ -3611,17 +4002,22 @@ fn execute_test(
             )
         }
         // Expected revert: execution succeeded (failure - should have reverted)
-        (Ok((gas_used, _)), Some(_)) => (
-            TestResult {
-                name: name.to_string(),
-                passed: false,
-                error_message: Some("Expected test to revert, but it succeeded".to_string()),
-                gas_used: Some(gas_used),
-            },
-            Vec::new(),
-            trace,
-            step_count,
-        ),
+        (Ok((gas_used, _)), Some(_)) => {
+            let total_gas_used = Some(deploy_gas_used.saturating_add(gas_used));
+            (
+                TestResult {
+                    name: name.to_string(),
+                    passed: false,
+                    error_message: Some("Expected test to revert, but it succeeded".to_string()),
+                    gas_used: Some(gas_used),
+                    deploy_gas_used: Some(deploy_gas_used),
+                    total_gas_used,
+                },
+                Vec::new(),
+                trace,
+                step_count,
+            )
+        }
         // Expected revert: execution reverted (success)
         (Err(contract_harness::HarnessError::Revert(_)), Some(ExpectedRevert::Any)) => (
             TestResult {
@@ -3629,6 +4025,8 @@ fn execute_test(
                 passed: true,
                 error_message: None,
                 gas_used: None,
+                deploy_gas_used: Some(deploy_gas_used),
+                total_gas_used: None,
             },
             Vec::new(),
             trace,
@@ -3637,6 +4035,7 @@ fn execute_test(
         // Expected revert: execution failed for a different reason (failure)
         (Err(err), Some(ExpectedRevert::Any)) => {
             let gas_used = harness_error_gas_used(&err);
+            let total_gas_used = gas_used.map(|call_gas| deploy_gas_used.saturating_add(call_gas));
             (
                 TestResult {
                     name: name.to_string(),
@@ -3646,6 +4045,8 @@ fn execute_test(
                         format_harness_error(err)
                     )),
                     gas_used,
+                    deploy_gas_used: Some(deploy_gas_used),
+                    total_gas_used,
                 },
                 Vec::new(),
                 trace,
