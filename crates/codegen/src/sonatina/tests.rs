@@ -65,7 +65,7 @@ pub fn emit_test_module_sonatina(
     // Detect cycles among region embeds early (Sonatina's embed mechanism expands bytes).
     detect_code_region_cycles(&region_deps)?;
 
-    let module = compile_test_objects(
+    let mut module = compile_test_objects(
         db,
         &mir_module,
         &tests,
@@ -77,7 +77,7 @@ pub fn emit_test_module_sonatina(
         &region_deps,
     )?;
     super::ensure_module_sonatina_ir_valid(&module)?;
-    run_default_sonatina_optimization_pipeline(&module);
+    run_default_sonatina_optimization_pipeline(&mut module);
     super::ensure_module_sonatina_ir_valid(&module)?;
 
     let mut output_tests = Vec::with_capacity(tests.len());
@@ -103,9 +103,9 @@ pub fn emit_test_module_sonatina(
     })
 }
 
-fn run_default_sonatina_optimization_pipeline(module: &Module) {
+fn run_default_sonatina_optimization_pipeline(module: &mut Module) {
     let pipeline = sonatina_codegen::optim::Pipeline::default_pipeline();
-    pipeline.run_on_module(module);
+    pipeline.run(module);
 }
 
 #[derive(Debug, Clone)]
