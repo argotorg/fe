@@ -61,6 +61,16 @@ struct GasMeasurement {
     error_message: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+struct GasTotals {
+    tests_in_scope: usize,
+    compared_with_gas: usize,
+    sonatina_lower: usize,
+    sonatina_higher: usize,
+    equal: usize,
+    incomplete: usize,
+}
+
 impl GasMeasurement {
     fn from_test_result(result: &TestResult) -> Self {
         Self {
@@ -78,6 +88,17 @@ impl GasMeasurement {
         } else {
             "failed".to_string()
         }
+    }
+}
+
+impl GasTotals {
+    fn add(&mut self, other: Self) {
+        self.tests_in_scope += other.tests_in_scope;
+        self.compared_with_gas += other.compared_with_gas;
+        self.sonatina_lower += other.sonatina_lower;
+        self.sonatina_higher += other.sonatina_higher;
+        self.equal += other.equal;
+        self.incomplete += other.incomplete;
     }
 }
 
@@ -410,6 +431,7 @@ pub fn run_tests(
         // Clean up tmp dir, if any suites were moved.
         let _ = std::fs::remove_dir_all(staging.root_dir.join("tmp"));
 
+        write_run_gas_comparison_summary(&staging.root_dir);
         write_report_manifest(&staging.root_dir, backend, filter, &test_results);
         if let Err(err) = tar_gz_dir(&staging.root_dir, &out) {
             eprintln!("Error: failed to write report `{out}`: {err}");
@@ -872,6 +894,111 @@ fn measure_case_gas(case: &TestMetadata, backend: &str) -> GasMeasurement {
     GasMeasurement::from_test_result(&outcome.result)
 }
 
+fn normalize_inline_text(value: &str) -> String {
+    value.replace('\r', "\\r").replace('\n', "\\n")
+}
+
+fn csv_escape(value: &str) -> String {
+    let value = normalize_inline_text(value);
+    if value.contains(',') || value.contains('"') {
+        format!("\"{}\"", value.replace('"', "\"\""))
+    } else {
+        value
+    }
+}
+
+fn format_ratio_percent(numerator: usize, denominator: usize) -> String {
+    if denominator == 0 {
+        "n/a".to_string()
+    } else {
+        format!("{:.1}%", (numerator as f64 * 100.0) / (denominator as f64))
+    }
+}
+
+fn format_delta_percent(delta: i128, baseline: u64) -> String {
+    if baseline == 0 {
+        "n/a".to_string()
+    } else {
+        let pct = (delta as f64 * 100.0) / (baseline as f64);
+        format!("{pct:.2}%")
+    }
+}
+
+fn gas_comparison_settings_text() -> String {
+    let mut out = String::new();
+    out.push_str("yul.solc.optimize=false\n");
+    out.push_str("yul.solc.verify_runtime=true\n");
+    out.push_str("sonatina.codegen.path=emit_test_module_sonatina (default)\n");
+    out.push_str("sonatina.optimization_control=not configurable via fe test yet\n");
+    out.push_str("measurement.call=RuntimeInstance::call_raw(empty calldata)\n");
+    out
+}
+
+fn write_gas_totals_csv(path: &Utf8PathBuf, totals: GasTotals) {
+    let mut out = String::new();
+    out.push_str("metric,count,pct_of_compared,pct_of_scope\n");
+    out.push_str(&format!(
+        "tests_in_scope,{},n/a,{}\n",
+        totals.tests_in_scope,
+        format_ratio_percent(totals.tests_in_scope, totals.tests_in_scope)
+    ));
+    out.push_str(&format!(
+        "compared_with_gas,{},100.0%,{}\n",
+        totals.compared_with_gas,
+        format_ratio_percent(totals.compared_with_gas, totals.tests_in_scope)
+    ));
+    out.push_str(&format!(
+        "sonatina_lower,{},{},{}\n",
+        totals.sonatina_lower,
+        format_ratio_percent(totals.sonatina_lower, totals.compared_with_gas),
+        format_ratio_percent(totals.sonatina_lower, totals.tests_in_scope)
+    ));
+    out.push_str(&format!(
+        "sonatina_higher,{},{},{}\n",
+        totals.sonatina_higher,
+        format_ratio_percent(totals.sonatina_higher, totals.compared_with_gas),
+        format_ratio_percent(totals.sonatina_higher, totals.tests_in_scope)
+    ));
+    out.push_str(&format!(
+        "equal,{},{},{}\n",
+        totals.equal,
+        format_ratio_percent(totals.equal, totals.compared_with_gas),
+        format_ratio_percent(totals.equal, totals.tests_in_scope)
+    ));
+    out.push_str(&format!(
+        "incomplete,{},n/a,{}\n",
+        totals.incomplete,
+        format_ratio_percent(totals.incomplete, totals.tests_in_scope)
+    ));
+
+    let _ = std::fs::write(path, out);
+}
+
+fn parse_gas_totals_csv(contents: &str) -> GasTotals {
+    let mut totals = GasTotals::default();
+    for (idx, line) in contents.lines().enumerate() {
+        if idx == 0 || line.trim().is_empty() {
+            continue;
+        }
+        let mut parts = line.splitn(3, ',');
+        let metric = parts.next().unwrap_or_default().trim();
+        let count = parts
+            .next()
+            .and_then(|raw| raw.trim().parse::<usize>().ok())
+            .unwrap_or(0);
+        match metric {
+            "tests_in_scope" => totals.tests_in_scope = count,
+            "compared_with_gas" => totals.compared_with_gas = count,
+            "sonatina_lower" => totals.sonatina_lower = count,
+            "sonatina_higher" => totals.sonatina_higher = count,
+            "equal" => totals.equal = count,
+            "incomplete" => totals.incomplete = count,
+            _ => {}
+        }
+    }
+    totals
+}
+
 fn write_gas_comparison_report(
     report: &ReportContext,
     primary_backend: &str,
@@ -880,19 +1007,27 @@ fn write_gas_comparison_report(
 ) {
     let artifacts_dir = report.root_dir.join("artifacts");
     let _ = create_dir_all_utf8(&artifacts_dir);
+    let _ = std::fs::write(
+        artifacts_dir.join("gas_comparison_settings.txt"),
+        gas_comparison_settings_text(),
+    );
 
-    let mut out = String::new();
-    out.push_str("# Gas Comparison\n\n");
-    out.push_str("Comparison of runtime test-call gas usage (`gas_used`) between Yul and Sonatina backends.\n");
-    out.push_str("`delta` is `sonatina - yul`; negative means Sonatina used less gas.\n\n");
-    out.push_str("| test | yul | sonatina | delta | note |\n");
-    out.push_str("| --- | ---: | ---: | ---: | --- |\n");
+    let mut markdown = String::new();
+    markdown.push_str("# Gas Comparison\n\n");
+    markdown.push_str("Comparison of runtime test-call gas usage (`gas_used`) between Yul and Sonatina backends.\n");
+    markdown.push_str("`delta` is `sonatina - yul`; negative means Sonatina used less gas.\n\n");
+    markdown.push_str("| test | yul | sonatina | delta | delta_pct | note |\n");
+    markdown.push_str("| --- | ---: | ---: | ---: | ---: | --- |\n");
 
-    let mut compared = 0usize;
-    let mut sonatina_lower = 0usize;
-    let mut sonatina_higher = 0usize;
-    let mut equal = 0usize;
-    let mut incomplete = 0usize;
+    let mut csv = String::new();
+    csv.push_str(
+        "test,symbol,yul_gas,sonatina_gas,delta,delta_pct,yul_status,sonatina_status,note\n",
+    );
+
+    let mut totals = GasTotals {
+        tests_in_scope: cases.len(),
+        ..GasTotals::default()
+    };
 
     for case in cases {
         let yul = if primary_backend.eq_ignore_ascii_case("yul") {
@@ -909,16 +1044,12 @@ fn write_gas_comparison_report(
                 .map(|test| measure_case_gas(test, "sonatina"))
         };
 
-        let yul_cell = yul
+        let yul_gas = yul.as_ref().and_then(|measurement| measurement.gas_used);
+        let sonatina_gas = sonatina
             .as_ref()
-            .and_then(|measurement| measurement.gas_used)
-            .map(|gas| gas.to_string())
-            .unwrap_or_else(|| "n/a".to_string());
-        let sonatina_cell = sonatina
-            .as_ref()
-            .and_then(|measurement| measurement.gas_used)
-            .map(|gas| gas.to_string())
-            .unwrap_or_else(|| "n/a".to_string());
+            .and_then(|measurement| measurement.gas_used);
+        let yul_cell = yul_gas.map_or_else(|| "n/a".to_string(), |gas| gas.to_string());
+        let sonatina_cell = sonatina_gas.map_or_else(|| "n/a".to_string(), |gas| gas.to_string());
 
         let mut notes = Vec::new();
         if case.yul.is_none() {
@@ -938,51 +1069,221 @@ fn write_gas_comparison_report(
             notes.push(format!("sonatina {}", measurement.status_label()));
         }
 
-        let delta = match (
-            yul.as_ref().and_then(|measurement| measurement.gas_used),
-            sonatina
-                .as_ref()
-                .and_then(|measurement| measurement.gas_used),
-        ) {
+        let yul_status = if case.yul.is_none() {
+            "missing"
+        } else if let Some(measurement) = &yul {
+            if measurement.passed {
+                if measurement.gas_used.is_some() {
+                    "ok"
+                } else {
+                    "ok_no_gas"
+                }
+            } else {
+                "failed"
+            }
+        } else {
+            "not_run"
+        };
+
+        let sonatina_status = if case.sonatina.is_none() {
+            "missing"
+        } else if let Some(measurement) = &sonatina {
+            if measurement.passed {
+                if measurement.gas_used.is_some() {
+                    "ok"
+                } else {
+                    "ok_no_gas"
+                }
+            } else {
+                "failed"
+            }
+        } else {
+            "not_run"
+        };
+
+        let (delta_cell, delta_pct_cell) = match (yul_gas, sonatina_gas) {
             (Some(yul_gas), Some(sonatina_gas)) => {
-                compared += 1;
+                totals.compared_with_gas += 1;
                 let diff = sonatina_gas as i128 - yul_gas as i128;
                 if diff < 0 {
-                    sonatina_lower += 1;
+                    totals.sonatina_lower += 1;
                 } else if diff > 0 {
-                    sonatina_higher += 1;
+                    totals.sonatina_higher += 1;
                 } else {
-                    equal += 1;
+                    totals.equal += 1;
                 }
-                diff.to_string()
+                (diff.to_string(), format_delta_percent(diff, yul_gas))
             }
             _ => {
-                incomplete += 1;
-                "n/a".to_string()
+                totals.incomplete += 1;
+                ("n/a".to_string(), "n/a".to_string())
             }
         };
 
         let note = if notes.is_empty() {
             String::new()
         } else {
-            notes.join("; ")
+            normalize_inline_text(&notes.join("; "))
         };
 
-        out.push_str(&format!(
-            "| {} | {} | {} | {} | {} |\n",
-            case.display_name, yul_cell, sonatina_cell, delta, note
+        markdown.push_str(&format!(
+            "| {} | {} | {} | {} | {} | {} |\n",
+            case.display_name, yul_cell, sonatina_cell, delta_cell, delta_pct_cell, note
+        ));
+
+        csv.push_str(&format!(
+            "{},{},{},{},{},{},{},{},{}\n",
+            csv_escape(&case.display_name),
+            csv_escape(&case.symbol_name),
+            csv_escape(&yul_cell),
+            csv_escape(&sonatina_cell),
+            csv_escape(&delta_cell),
+            csv_escape(&delta_pct_cell),
+            csv_escape(yul_status),
+            csv_escape(sonatina_status),
+            csv_escape(&note),
         ));
     }
 
-    out.push_str("\n## Summary\n\n");
-    out.push_str(&format!("- tests_in_scope: {}\n", cases.len()));
-    out.push_str(&format!("- compared_with_gas: {compared}\n"));
-    out.push_str(&format!("- sonatina_lower: {sonatina_lower}\n"));
-    out.push_str(&format!("- sonatina_higher: {sonatina_higher}\n"));
-    out.push_str(&format!("- equal: {equal}\n"));
-    out.push_str(&format!("- incomplete: {incomplete}\n"));
+    markdown.push_str("\n## Summary\n\n");
+    markdown.push_str(&format!("- tests_in_scope: {}\n", totals.tests_in_scope));
+    markdown.push_str(&format!(
+        "- compared_with_gas: {} ({})\n",
+        totals.compared_with_gas,
+        format_ratio_percent(totals.compared_with_gas, totals.tests_in_scope)
+    ));
+    markdown.push_str(&format!(
+        "- sonatina_lower: {} ({})\n",
+        totals.sonatina_lower,
+        format_ratio_percent(totals.sonatina_lower, totals.compared_with_gas)
+    ));
+    markdown.push_str(&format!(
+        "- sonatina_higher: {} ({})\n",
+        totals.sonatina_higher,
+        format_ratio_percent(totals.sonatina_higher, totals.compared_with_gas)
+    ));
+    markdown.push_str(&format!(
+        "- equal: {} ({})\n",
+        totals.equal,
+        format_ratio_percent(totals.equal, totals.compared_with_gas)
+    ));
+    markdown.push_str(&format!(
+        "- incomplete: {} ({})\n",
+        totals.incomplete,
+        format_ratio_percent(totals.incomplete, totals.tests_in_scope)
+    ));
 
-    let _ = std::fs::write(artifacts_dir.join("gas_comparison.md"), out);
+    markdown.push_str("\n## Optimization Settings\n\n");
+    for line in gas_comparison_settings_text().lines() {
+        markdown.push_str(&format!("- {line}\n"));
+    }
+
+    let _ = std::fs::write(artifacts_dir.join("gas_comparison.md"), markdown);
+    let _ = std::fs::write(artifacts_dir.join("gas_comparison.csv"), csv);
+    write_gas_totals_csv(&artifacts_dir.join("gas_comparison_totals.csv"), totals);
+}
+
+fn write_run_gas_comparison_summary(root_dir: &Utf8PathBuf) {
+    let artifacts_dir = root_dir.join("artifacts");
+    let _ = create_dir_all_utf8(&artifacts_dir);
+    let _ = std::fs::write(
+        artifacts_dir.join("gas_comparison_settings.txt"),
+        gas_comparison_settings_text(),
+    );
+
+    let mut suite_dirs: Vec<(String, Utf8PathBuf)> = Vec::new();
+    for status_dir in ["passed", "failed"] {
+        let dir = root_dir.join(status_dir);
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let suite = entry.file_name().to_string_lossy().to_string();
+            if let Ok(path) = Utf8PathBuf::from_path_buf(path) {
+                suite_dirs.push((suite, path));
+            }
+        }
+    }
+    suite_dirs.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut all_rows = String::new();
+    all_rows.push_str(
+        "suite,test,symbol,yul_gas,sonatina_gas,delta,delta_pct,yul_status,sonatina_status,note\n",
+    );
+    let mut wrote_any_rows = false;
+    let mut totals = GasTotals::default();
+
+    for (suite, suite_dir) in suite_dirs {
+        let suite_rows_path = suite_dir.join("artifacts").join("gas_comparison.csv");
+        if let Ok(contents) = std::fs::read_to_string(&suite_rows_path) {
+            for (idx, line) in contents.lines().enumerate() {
+                if idx == 0 || line.trim().is_empty() {
+                    continue;
+                }
+                all_rows.push_str(&csv_escape(&suite));
+                all_rows.push(',');
+                all_rows.push_str(line);
+                all_rows.push('\n');
+                wrote_any_rows = true;
+            }
+        }
+
+        let suite_totals_path = suite_dir
+            .join("artifacts")
+            .join("gas_comparison_totals.csv");
+        if let Ok(contents) = std::fs::read_to_string(&suite_totals_path) {
+            totals.add(parse_gas_totals_csv(&contents));
+        }
+    }
+
+    if wrote_any_rows {
+        let _ = std::fs::write(artifacts_dir.join("gas_comparison_all.csv"), all_rows);
+    }
+    write_gas_totals_csv(&artifacts_dir.join("gas_comparison_totals.csv"), totals);
+
+    let mut summary = String::new();
+    summary.push_str("# Gas Comparison Summary\n\n");
+    summary.push_str("Aggregated totals across all suite reports in this archive.\n\n");
+    summary.push_str(&format!("- tests_in_scope: {}\n", totals.tests_in_scope));
+    summary.push_str(&format!(
+        "- compared_with_gas: {} ({})\n",
+        totals.compared_with_gas,
+        format_ratio_percent(totals.compared_with_gas, totals.tests_in_scope)
+    ));
+    summary.push_str(&format!(
+        "- sonatina_lower: {} ({})\n",
+        totals.sonatina_lower,
+        format_ratio_percent(totals.sonatina_lower, totals.compared_with_gas)
+    ));
+    summary.push_str(&format!(
+        "- sonatina_higher: {} ({})\n",
+        totals.sonatina_higher,
+        format_ratio_percent(totals.sonatina_higher, totals.compared_with_gas)
+    ));
+    summary.push_str(&format!(
+        "- equal: {} ({})\n",
+        totals.equal,
+        format_ratio_percent(totals.equal, totals.compared_with_gas)
+    ));
+    summary.push_str(&format!(
+        "- incomplete: {} ({})\n",
+        totals.incomplete,
+        format_ratio_percent(totals.incomplete, totals.tests_in_scope)
+    ));
+    summary.push_str("\n## Optimization Settings\n\n");
+    for line in gas_comparison_settings_text().lines() {
+        summary.push_str(&format!("- {line}\n"));
+    }
+    if wrote_any_rows {
+        summary.push_str(
+            "\nSee `artifacts/gas_comparison_all.csv` for per-test rows and `artifacts/gas_comparison_totals.csv` for machine-readable totals.\n",
+        );
+    }
+    let _ = std::fs::write(artifacts_dir.join("gas_comparison_summary.md"), summary);
 }
 
 fn maybe_write_suite_ir(
@@ -1335,7 +1636,8 @@ fn write_report_manifest(
     out.push_str(&format!("filter: {}\n", filter.unwrap_or("<none>")));
     out.push_str(&format!("fe_version: {}\n", env!("CARGO_PKG_VERSION")));
     out.push_str("details: see `meta/args.txt` and `meta/git.txt` for exact repro context\n");
-    out.push_str("gas_comparison: see `artifacts/gas_comparison.md` when available\n");
+    out.push_str("gas_comparison: see `artifacts/gas_comparison.md`, `artifacts/gas_comparison.csv`, `artifacts/gas_comparison_totals.csv`, and `artifacts/gas_comparison_settings.txt` when available\n");
+    out.push_str("gas_comparison_aggregate: run-level reports also include `artifacts/gas_comparison_all.csv` and `artifacts/gas_comparison_summary.md`\n");
     out.push_str(&format!("tests: {}\n", results.len()));
     let passed = results.iter().filter(|r| r.passed).count();
     out.push_str(&format!("passed: {passed}\n"));
