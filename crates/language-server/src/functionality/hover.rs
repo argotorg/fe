@@ -44,11 +44,11 @@ pub fn hover_helper(
         ReferenceView::Path(pv) => {
             let mut seg_range = None;
             for idx in 0..=pv.path.segment_index(db) {
-                if let Some(resolved) = pv.span.clone().segment(idx).resolve(db) {
-                    if resolved.range.contains(cursor) {
-                        seg_range = to_lsp_range_from_span(resolved, db).ok();
-                        break;
-                    }
+                if let Some(resolved) = pv.span.clone().segment(idx).resolve(db)
+                    && resolved.range.contains(cursor)
+                {
+                    seg_range = to_lsp_range_from_span(resolved, db).ok();
+                    break;
                 }
             }
             seg_range

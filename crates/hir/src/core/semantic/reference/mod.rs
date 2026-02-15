@@ -76,10 +76,10 @@ pub(crate) fn typed_body_for_body<'db>(
     for item in scope_graph.items_dfs(db) {
         if let ItemKind::Contract(contract) = item {
             // Check init body
-            if let Some(init) = contract.init(db) {
-                if init.body(db) == body {
-                    return Some(&check_contract_init_body(db, contract).1);
-                }
+            if let Some(init) = contract.init(db)
+                && init.body(db) == body
+            {
+                return Some(&check_contract_init_body(db, contract).1);
             }
             // Check recv arm bodies
             for (recv_idx, recv) in contract.recvs(db).data(db).iter().enumerate() {

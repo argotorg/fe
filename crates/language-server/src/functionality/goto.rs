@@ -151,9 +151,9 @@ pub async fn handle_goto_definition(
             .map(|location| {
                 let target_range = location.range;
                 async_lsp::lsp_types::LocationLink {
-                    origin_selection_range: origin_range.clone(),
+                    origin_selection_range: origin_range,
                     target_uri: location.uri,
-                    target_range: target_range.clone(),
+                    target_range,
                     target_selection_range: target_range,
                 }
             })
