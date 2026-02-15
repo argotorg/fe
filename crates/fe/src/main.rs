@@ -248,6 +248,7 @@ pub fn run(opts: &Options) {
                 trace_evm_stack_n: *trace_evm_stack_n,
                 sonatina_symtab: *sonatina_symtab,
                 sonatina_evm_debug: false,
+                sonatina_observability: false,
                 debug_dir: debug_dir.clone(),
             };
             let paths = if paths.is_empty() {

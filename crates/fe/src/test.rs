@@ -431,6 +431,7 @@ pub struct TestDebugOptions {
     pub trace_evm_stack_n: usize,
     pub sonatina_symtab: bool,
     pub sonatina_evm_debug: bool,
+    pub sonatina_observability: bool,
     pub debug_dir: Option<Utf8PathBuf>,
 }
 
@@ -480,6 +481,8 @@ impl TestDebugOptions {
             };
             config.evm_debug_output = Some(sink);
         }
+
+        config.emit_observability = self.sonatina_observability;
 
         Ok(config)
     }
@@ -809,6 +812,7 @@ fn run_single_suite(
         suite_debug.trace_evm = true;
         suite_debug.sonatina_symtab = true;
         suite_debug.sonatina_evm_debug = true;
+        suite_debug.sonatina_observability = true;
         suite_debug.debug_dir = report_ctx.as_ref().map(|ctx| ctx.root_dir.join("debug"));
     }
     let sonatina_debug = suite_debug.sonatina_debug_config()?;
@@ -3817,6 +3821,13 @@ fn write_sonatina_case_artifacts(report: &ReportContext, case: &TestMetadata) {
         let _ = std::fs::write(dir.join("runtime.bin"), runtime);
         let _ = std::fs::write(dir.join("runtime.hex"), hex::encode(runtime));
     }
+
+    if let Some(text) = &case.sonatina_observability_text {
+        let _ = std::fs::write(dir.join("observability.txt"), text);
+    }
+    if let Some(json) = &case.sonatina_observability_json {
+        let _ = std::fs::write(dir.join("observability.json"), json);
+    }
 }
 
 fn write_yul_case_artifacts(report: &ReportContext, case: &TestMetadata) {
@@ -3896,6 +3907,7 @@ fn write_report_manifest(
     out.push_str("details: see `meta/args.txt` and `meta/git.txt` for exact repro context\n");
     out.push_str("gas_comparison: see `artifacts/gas_comparison.md`, `artifacts/gas_comparison.csv`, `artifacts/gas_comparison_totals.csv`, `artifacts/gas_comparison_magnitude.csv`, `artifacts/gas_breakdown_comparison.csv`, `artifacts/gas_breakdown_magnitude.csv`, `artifacts/gas_opcode_magnitude.csv`, and `artifacts/gas_comparison_settings.txt` when available\n");
     out.push_str("gas_comparison_yul_artifacts: in Sonatina comparison runs, Yul baselines are stored under `artifacts/tests/<test>/yul/{source.yul,bytecode.unopt.hex,bytecode.opt.hex,runtime.unopt.hex,runtime.opt.hex}`\n");
+    out.push_str("sonatina_observability: when available, Sonatina test artifacts include `artifacts/tests/<test>/sonatina/{observability.txt,observability.json}`\n");
     out.push_str("gas_comparison_aggregate: run-level reports also include `artifacts/gas_comparison_all.csv`, `artifacts/gas_breakdown_comparison_all.csv`, `artifacts/gas_comparison_summary.md`, `artifacts/gas_comparison_magnitude.csv`, `artifacts/gas_breakdown_magnitude.csv`, `artifacts/gas_opcode_magnitude.csv`, `artifacts/gas_hotspots_vs_yul_opt.csv`, `artifacts/gas_suite_delta_summary.csv`, and `artifacts/gas_tail_trace_symbol_hotspots.csv`\n");
     out.push_str("gas_opcode_profile: see `artifacts/gas_opcode_comparison.md` and `artifacts/gas_opcode_comparison.csv` for opcode and step-count diagnostics when available\n");
     out.push_str("gas_opcode_profile_aggregate: run-level reports also include `artifacts/gas_opcode_comparison_all.csv`\n");

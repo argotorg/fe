@@ -38,6 +38,10 @@ pub struct TestMetadata {
     ///
     /// When emitting Yul, this is left empty and the runner compiles `yul` via `solc`.
     pub bytecode: Vec<u8>,
+    /// Optional Sonatina object-level observability text snapshot.
+    pub sonatina_observability_text: Option<String>,
+    /// Optional Sonatina object-level observability JSON snapshot.
+    pub sonatina_observability_json: Option<String>,
     pub value_param_count: usize,
     pub effect_param_count: usize,
     pub expected_revert: Option<ExpectedRevert>,
@@ -347,6 +351,8 @@ pub fn emit_test_module_yul_with_layout(
             object_name: test.object_name,
             yul,
             bytecode: Vec::new(),
+            sonatina_observability_text: None,
+            sonatina_observability_json: None,
             value_param_count: test.value_param_count,
             effect_param_count: test.effect_param_count,
             expected_revert: test.expected_revert,

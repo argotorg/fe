@@ -38,6 +38,7 @@ use super::{LowerError, ModuleLowerer};
 pub struct SonatinaTestDebugConfig {
     pub symtab_output: Option<DebugOutputSink>,
     pub evm_debug_output: Option<DebugOutputSink>,
+    pub emit_observability: bool,
     pub runtime_byte_offsets: Vec<usize>,
     pub stackify_reach_depth: u8,
 }
@@ -47,6 +48,7 @@ impl Default for SonatinaTestDebugConfig {
         Self {
             symtab_output: None,
             evm_debug_output: None,
+            emit_observability: false,
             runtime_byte_offsets: Vec::new(),
             stackify_reach_depth: 16,
         }
@@ -130,7 +132,7 @@ pub fn emit_test_module_sonatina(
     let mut output_tests = Vec::with_capacity(tests.len());
     for test in tests {
         let runtime = compile_runtime_section(&module, &test.object_name, debug)?;
-        let init_bytecode = wrap_as_init_code(&runtime);
+        let init_bytecode = wrap_as_init_code(&runtime.bytes);
 
         output_tests.push(TestMetadata {
             display_name: test.display_name,
@@ -139,6 +141,8 @@ pub fn emit_test_module_sonatina(
             object_name: test.object_name,
             yul: String::new(),
             bytecode: init_bytecode,
+            sonatina_observability_text: runtime.observability_text,
+            sonatina_observability_json: runtime.observability_json,
             value_param_count: test.value_param_count,
             effect_param_count: test.effect_param_count,
             expected_revert: test.expected_revert.clone(),
@@ -714,11 +718,17 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
     }
 }
 
+struct RuntimeCompileOutput {
+    bytes: Vec<u8>,
+    observability_text: Option<String>,
+    observability_json: Option<String>,
+}
+
 fn compile_runtime_section(
     module: &Module,
     object_name: &str,
     debug: &SonatinaTestDebugConfig,
-) -> Result<Vec<u8>, LowerError> {
+) -> Result<RuntimeCompileOutput, LowerError> {
     use sonatina_ir::isa::evm::Evm;
 
     let triple = TargetTriple::new(
@@ -735,6 +745,7 @@ fn compile_runtime_section(
     // Keep full verifier checks enabled while tolerating detached entities until SSA cleanup lands.
     verifier_cfg.allow_detached_entities = true;
     opts.verifier_cfg = verifier_cfg;
+    opts.emit_observability = debug.emit_observability;
     let artifact = compile_object(module, &backend, object_name, &opts).map_err(|errors| {
         let msg = errors
             .iter()
@@ -810,7 +821,14 @@ fn compile_runtime_section(
         }
     }
 
-    Ok(runtime_section.bytes.clone())
+    let observability_text = artifact.observability_text();
+    let observability_json = artifact.observability_json();
+
+    Ok(RuntimeCompileOutput {
+        bytes: runtime_section.bytes.clone(),
+        observability_text,
+        observability_json,
+    })
 }
 
 fn emit_runtime_evm_debug(
