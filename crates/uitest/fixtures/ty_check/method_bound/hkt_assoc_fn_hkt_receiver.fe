@@ -1,0 +1,19 @@
+trait Box
+where Self: * -> *
+{
+    fn wrap<T>(_: own T) -> Self<T>
+}
+
+struct StorPtr<T> {
+    addr: usize
+}
+impl Box for StorPtr {
+    fn wrap<T>(_: own T) -> Self<T> {
+        StorPtr { addr: 0 }
+    }
+}
+
+struct Foo {}
+fn foo<P: * -> * + Box>(x: own Foo) -> P<Foo> {
+    P::wrap(x)
+}

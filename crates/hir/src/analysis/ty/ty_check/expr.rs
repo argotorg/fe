@@ -1689,11 +1689,18 @@ impl<'db> TyChecker<'db> {
                                 self.env
                                     .register_confirmation(inst, path_expr_span.clone().into());
                             }
-                            let method_ty = self.instantiate_trait_method_to_term(
-                                cand.method,
-                                receiver_ty,
-                                inst,
-                            );
+                            let method_ty = if cand.method.is_method(self.db) {
+                                self.instantiate_trait_method_to_term(
+                                    cand.method,
+                                    receiver_ty,
+                                    inst,
+                                )
+                            } else {
+                                self.instantiate_trait_assoc_fn_to_term(
+                                    cand.method.as_callable(self.db).unwrap(),
+                                    inst,
+                                )
+                            };
                             (method_ty, Some(inst))
                         }
                     };

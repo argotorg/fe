@@ -122,6 +122,19 @@ fn receiver_is_ty_param_like<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> 
     )
 }
 
+fn instantiate_to_receiver_kind<'db>(
+    db: &'db dyn HirAnalysisDb,
+    table: &mut UnificationTable<'db>,
+    candidate_self_ty: TyId<'db>,
+    receiver_ty: TyId<'db>,
+) -> TyId<'db> {
+    if receiver_ty.is_star_kind(db) {
+        table.instantiate_to_term(candidate_self_ty)
+    } else {
+        candidate_self_ty
+    }
+}
+
 impl<'db> CandidateAssembler<'db> {
     fn assemble(mut self) -> AssembledCandidates<'db> {
         if self.trait_.is_none() {
@@ -173,8 +186,12 @@ impl<'db> CandidateAssembler<'db> {
 
         for &pred in self.assumptions.list(self.db) {
             let snapshot = table.snapshot();
-            let self_ty = pred.self_ty(self.db);
-            let self_ty = table.instantiate_to_term(self_ty);
+            let self_ty = instantiate_to_receiver_kind(
+                self.db,
+                &mut table,
+                pred.self_ty(self.db),
+                extracted_receiver_ty,
+            );
 
             if table.unify(extracted_receiver_ty, self_ty).is_ok() {
                 self.insert_trait_method_cand(pred);
