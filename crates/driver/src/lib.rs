@@ -106,9 +106,7 @@ pub fn check_library_requirements(db: &DriverDataBase) -> Vec<String> {
 fn init_ingot_graph(db: &mut DriverDataBase, ingot_url: &Url) -> bool {
     tracing::info!(target: "resolver", "Starting ingot resolution for: {}", ingot_url);
     let checkout_root = remote_checkout_root(ingot_url);
-    let mut handler = IngotHandler::new(db)
-        .with_stdout(true)
-        .with_verbose(resolver_verbose());
+    let mut handler = IngotHandler::new(db).with_verbose(resolver_verbose());
     let mut ingot_graph_resolver = GraphResolverImpl::new(ingot_resolver(checkout_root));
 
     // Root ingot resolution should never fail since directory existence is validated earlier.
@@ -121,7 +119,6 @@ fn init_ingot_graph(db: &mut DriverDataBase, ingot_url: &Url) -> bool {
         );
     }
 
-    let (trace_enabled, stdout_enabled) = handler.logging_modes();
     let mut had_diagnostics = handler.had_diagnostics();
 
     // Check for cycles after graph resolution (now that handler is dropped)
@@ -156,12 +153,8 @@ fn init_ingot_graph(db: &mut DriverDataBase, ingot_url: &Url) -> bool {
                 .display();
 
         let diag = IngotInitDiagnostics::IngotDependencyCycle { tree_display };
-        if trace_enabled {
-            tracing::warn!(target: "resolver", "{diag}");
-        }
-        if stdout_enabled {
-            eprintln!("❌ {diag}");
-        }
+        tracing::warn!(target: "resolver", "{diag}");
+        eprintln!("❌ {diag}");
         had_diagnostics = true;
     }
 

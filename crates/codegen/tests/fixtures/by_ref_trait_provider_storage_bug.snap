@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 33
 expression: output
 input_file: tests/fixtures/by_ref_trait_provider_storage_bug.fe
 ---
@@ -46,9 +45,19 @@ object "ByRefTraitProviderStorageBug" {
     }
     function $alloc($size) -> ret {
       let v0 := mload(64)
-      let v1 := eq(v0, 0)
-      if v1 {
-        v0 := 128
+      let v1 := mload(128)
+      let v2 := gt(v1, v0)
+      if v2 {
+        v0 := v1
+      }
+      let v3 := eq(v0, 0)
+      if v3 {
+        let v4 := msize()
+        v0 := v4
+      }
+      let v5 := lt(v0, 8192)
+      if v5 {
+        v0 := 8192
       }
       mstore(64, add(v0, $size))
       ret := v0
@@ -77,7 +86,7 @@ object "ByRefTraitProviderStorageBug" {
       leave
     }
     function $init_field__Evm_hef0af3106e109414_Pair_h956dff41e88ee341__18f2eb617f185785($self, $slot) -> ret {
-      let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Pair_h956dff41e88ee341__acec41afdc898140($self, $slot)
+      let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Pair_h956dff41e88ee341__acec41afdc898140(0, $slot)
       ret := v0
       leave
     }
@@ -138,9 +147,19 @@ object "ByRefTraitProviderStorageBug" {
       }
       function $alloc($size) -> ret {
         let v0 := mload(64)
-        let v1 := eq(v0, 0)
-        if v1 {
-          v0 := 128
+        let v1 := mload(128)
+        let v2 := gt(v1, v0)
+        if v2 {
+          v0 := v1
+        }
+        let v3 := eq(v0, 0)
+        if v3 {
+          let v4 := msize()
+          v0 := v4
+        }
+        let v5 := lt(v0, 8192)
+        if v5 {
+          v0 := 8192
         }
         mstore(64, add(v0, $size))
         ret := v0
@@ -213,20 +232,20 @@ object "ByRefTraitProviderStorageBug" {
         let v2 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish(v0)
         let v3 := mload(v2)
         let v4 := mload(add(v2, 32))
-        $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes($self, v3, v4)
+        $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes(0, v3, v4)
       }
       function $runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2($self) -> ret {
-        let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input($self)
+        let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input(0)
         let v1 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0, 4)
         ret := v1
         leave
       }
       function $runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2($self) -> ret {
-        let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input($self)
+        let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input(0)
         let v1 := $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len(v0)
         let v2 := lt(v1, 4)
         if v2 {
-          $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort($self)
+          $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort(0)
         }
         let v3 := $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at(v0, 0)
         let v4 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_selector_from_prefix(v3)

@@ -1,0 +1,25 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+expression: output
+input_file: crates/codegen/tests/fixtures/block_expr.fe
+---
+target = "evm-ethereum-osaka"
+
+func public %block_expr() -> i256 {
+    block0:
+        v3.i256 = add 1.i256 2.i256;
+        return v3;
+}
+
+func public %__fe_sonatina_entry() {
+    block0:
+        v0.i256 = call %block_expr;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+    }
+}

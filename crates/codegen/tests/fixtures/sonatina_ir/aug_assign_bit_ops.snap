@@ -1,0 +1,30 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+expression: output
+input_file: crates/codegen/tests/fixtures/aug_assign_bit_ops.fe
+---
+target = "evm-ethereum-osaka"
+
+func public %aug_assign_bit_ops(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = evm_exp v0 v1;
+        v5.i256 = shl 3.i256 v3;
+        v7.i256 = shr 1.i256 v5;
+        v9.i256 = and v7 255.i256;
+        v10.i256 = or v9 1.i256;
+        v12.i256 = xor v10 2.i256;
+        return v12;
+}
+
+func public %__fe_sonatina_entry() {
+    block0:
+        v1.i256 = call %aug_assign_bit_ops 0.i256 0.i256;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+    }
+}

@@ -1,0 +1,24 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+expression: output
+input_file: crates/codegen/tests/fixtures/contract_dispatch.fe
+---
+target = "evm-ethereum-osaka"
+
+func private %emit_code() -> i256 {
+    block0:
+        return 1.i256;
+}
+
+func private %dispatch() {
+    block0:
+        v0.i256 = call %emit_code;
+        evm_stop;
+}
+
+
+object @MinimalDispatcher {
+    section runtime {
+        entry %dispatch;
+    }
+}

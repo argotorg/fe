@@ -1,0 +1,51 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+expression: output
+input_file: crates/codegen/tests/fixtures/ret.fe
+---
+target = "evm-ethereum-osaka"
+
+func public %retfoo(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i1 = ne v0 0.i256;
+        br v3 block1 block2;
+
+    block1:
+        return 0.i256;
+
+    block2:
+        v6.i1 = lt v1 5.i256;
+        v7.i256 = zext v6 i256;
+        v8.i1 = ne v7 0.i256;
+        br v8 block3 block4;
+
+    block3:
+        return 1.i256;
+
+    block4:
+        v11.i256 = sub v1 1.i256;
+        v13.i1 = eq v11 42.i256;
+        v14.i256 = zext v13 i256;
+        v15.i1 = ne v14 0.i256;
+        br v15 block5 block6;
+
+    block5:
+        return 2.i256;
+
+    block6:
+        v18.i256 = add v11 1.i256;
+        return v18;
+}
+
+func public %__fe_sonatina_entry() {
+    block0:
+        v1.i256 = call %retfoo 0.i256 0.i256;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+    }
+}
