@@ -3,7 +3,7 @@ source: crates/codegen/tests/sonatina_ir.rs
 expression: output
 input_file: crates/codegen/tests/fixtures/math_ops.fe
 ---
-target = evm-ethereum-osaka
+target = "evm-ethereum-osaka"
 
 func public %math_ops() -> i256 {
     block0:

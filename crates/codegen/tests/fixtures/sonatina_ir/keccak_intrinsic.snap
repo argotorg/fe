@@ -3,7 +3,7 @@ source: crates/codegen/tests/sonatina_ir.rs
 expression: output
 input_file: crates/codegen/tests/fixtures/keccak_intrinsic.fe
 ---
-target = evm-ethereum-osaka
+target = "evm-ethereum-osaka"
 
 func public %hash__Evm_hef0af3106e109414__3af54274b2985741(v0.i256, v1.i256, v2.i256) -> i256 {
     block0:

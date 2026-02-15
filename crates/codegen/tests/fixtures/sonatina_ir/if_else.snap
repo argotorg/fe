@@ -3,7 +3,7 @@ source: crates/codegen/tests/sonatina_ir.rs
 expression: output
 input_file: crates/codegen/tests/fixtures/if_else.fe
 ---
-target = evm-ethereum-osaka
+target = "evm-ethereum-osaka"
 
 func public %if_else(v0.i256) -> i256 {
     block0:

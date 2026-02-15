@@ -3,7 +3,7 @@ source: crates/codegen/tests/sonatina_ir.rs
 expression: output
 input_file: crates/codegen/tests/fixtures/tuple_single_element_peeling.fe
 ---
-target = evm-ethereum-osaka
+target = "evm-ethereum-osaka"
 
 func public %tuple_single_passthrough(v0.i256) -> i256 {
     block0:

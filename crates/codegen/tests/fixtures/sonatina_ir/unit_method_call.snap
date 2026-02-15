@@ -3,7 +3,7 @@ source: crates/codegen/tests/sonatina_ir.rs
 expression: output
 input_file: crates/codegen/tests/fixtures/unit_method_call.fe
 ---
-target = evm-ethereum-osaka
+target = "evm-ethereum-osaka"
 
 func private %call_unit_method(v0.i256) {
     block0:

@@ -3,7 +3,7 @@ source: crates/codegen/tests/sonatina_ir.rs
 expression: output
 input_file: crates/codegen/tests/fixtures/storage_map.fe
 ---
-target = evm-ethereum-osaka
+target = "evm-ethereum-osaka"
 
 func private %get_balance__StorPtr_StorageMap_u256__u256__0____4a2331212cb04e60(v0.i256, v1.i256) -> i256 {
     block0:

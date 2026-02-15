@@ -3,7 +3,7 @@ source: crates/codegen/tests/sonatina_ir.rs
 expression: output
 input_file: crates/codegen/tests/fixtures/while.fe
 ---
-target = evm-ethereum-osaka
+target = "evm-ethereum-osaka"
 
 func public %do_while() -> i256 {
     block0:

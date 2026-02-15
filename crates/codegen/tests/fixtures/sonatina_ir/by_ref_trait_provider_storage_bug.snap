@@ -3,7 +3,7 @@ source: crates/codegen/tests/sonatina_ir.rs
 expression: output
 input_file: crates/codegen/tests/fixtures/by_ref_trait_provider_storage_bug.fe
 ---
-target = evm-ethereum-osaka
+target = "evm-ethereum-osaka"
 
 type @__fe_Pair_0 = {i256, i256};
 type @__fe_MemoryBytes_1 = {i256, i256};

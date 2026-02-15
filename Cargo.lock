@@ -1664,7 +1664,7 @@ dependencies = [
 [[package]]
 name = "egglog"
 version = "1.0.0"
-source = "git+https://github.com/sbillig/egglog?rev=1fec7bbde04e1ac0d503aea0d1e1e9183c1524ef#1fec7bbde04e1ac0d503aea0d1e1e9183c1524ef"
+source = "git+https://github.com/sbillig/egglog?rev=ba6d7081a0a788a3a1c2abc75771cdc6ed0fe0ef#ba6d7081a0a788a3a1c2abc75771cdc6ed0fe0ef"
 dependencies = [
  "chrono",
  "clap",
@@ -1696,7 +1696,7 @@ dependencies = [
 [[package]]
 name = "egglog-add-primitive"
 version = "1.0.0"
-source = "git+https://github.com/sbillig/egglog?rev=1fec7bbde04e1ac0d503aea0d1e1e9183c1524ef#1fec7bbde04e1ac0d503aea0d1e1e9183c1524ef"
+source = "git+https://github.com/sbillig/egglog?rev=ba6d7081a0a788a3a1c2abc75771cdc6ed0fe0ef#ba6d7081a0a788a3a1c2abc75771cdc6ed0fe0ef"
 dependencies = [
  "quote",
  "syn 2.0.111",
@@ -1705,7 +1705,7 @@ dependencies = [
 [[package]]
 name = "egglog-ast"
 version = "1.0.0"
-source = "git+https://github.com/sbillig/egglog?rev=1fec7bbde04e1ac0d503aea0d1e1e9183c1524ef#1fec7bbde04e1ac0d503aea0d1e1e9183c1524ef"
+source = "git+https://github.com/sbillig/egglog?rev=ba6d7081a0a788a3a1c2abc75771cdc6ed0fe0ef#ba6d7081a0a788a3a1c2abc75771cdc6ed0fe0ef"
 dependencies = [
  "ordered-float",
 ]
@@ -1713,7 +1713,7 @@ dependencies = [
 [[package]]
 name = "egglog-bridge"
 version = "1.0.0"
-source = "git+https://github.com/sbillig/egglog?rev=1fec7bbde04e1ac0d503aea0d1e1e9183c1524ef#1fec7bbde04e1ac0d503aea0d1e1e9183c1524ef"
+source = "git+https://github.com/sbillig/egglog?rev=ba6d7081a0a788a3a1c2abc75771cdc6ed0fe0ef#ba6d7081a0a788a3a1c2abc75771cdc6ed0fe0ef"
 dependencies = [
  "anyhow",
  "dyn-clone",
@@ -1737,7 +1737,7 @@ dependencies = [
 [[package]]
 name = "egglog-concurrency"
 version = "1.0.0"
-source = "git+https://github.com/sbillig/egglog?rev=1fec7bbde04e1ac0d503aea0d1e1e9183c1524ef#1fec7bbde04e1ac0d503aea0d1e1e9183c1524ef"
+source = "git+https://github.com/sbillig/egglog?rev=ba6d7081a0a788a3a1c2abc75771cdc6ed0fe0ef#ba6d7081a0a788a3a1c2abc75771cdc6ed0fe0ef"
 dependencies = [
  "arc-swap",
  "egglog-numeric-id",
@@ -1748,7 +1748,7 @@ dependencies = [
 [[package]]
 name = "egglog-core-relations"
 version = "1.0.0"
-source = "git+https://github.com/sbillig/egglog?rev=1fec7bbde04e1ac0d503aea0d1e1e9183c1524ef#1fec7bbde04e1ac0d503aea0d1e1e9183c1524ef"
+source = "git+https://github.com/sbillig/egglog?rev=ba6d7081a0a788a3a1c2abc75771cdc6ed0fe0ef#ba6d7081a0a788a3a1c2abc75771cdc6ed0fe0ef"
 dependencies = [
  "anyhow",
  "bumpalo",
@@ -1778,7 +1778,7 @@ dependencies = [
 [[package]]
 name = "egglog-numeric-id"
 version = "1.0.0"
-source = "git+https://github.com/sbillig/egglog?rev=1fec7bbde04e1ac0d503aea0d1e1e9183c1524ef#1fec7bbde04e1ac0d503aea0d1e1e9183c1524ef"
+source = "git+https://github.com/sbillig/egglog?rev=ba6d7081a0a788a3a1c2abc75771cdc6ed0fe0ef#ba6d7081a0a788a3a1c2abc75771cdc6ed0fe0ef"
 dependencies = [
  "rayon",
 ]
@@ -1786,7 +1786,7 @@ dependencies = [
 [[package]]
 name = "egglog-reports"
 version = "1.0.0"
-source = "git+https://github.com/sbillig/egglog?rev=1fec7bbde04e1ac0d503aea0d1e1e9183c1524ef#1fec7bbde04e1ac0d503aea0d1e1e9183c1524ef"
+source = "git+https://github.com/sbillig/egglog?rev=ba6d7081a0a788a3a1c2abc75771cdc6ed0fe0ef#ba6d7081a0a788a3a1c2abc75771cdc6ed0fe0ef"
 dependencies = [
  "clap",
  "hashbrown 0.16.1",
@@ -1800,7 +1800,7 @@ dependencies = [
 [[package]]
 name = "egglog-union-find"
 version = "1.0.0"
-source = "git+https://github.com/sbillig/egglog?rev=1fec7bbde04e1ac0d503aea0d1e1e9183c1524ef#1fec7bbde04e1ac0d503aea0d1e1e9183c1524ef"
+source = "git+https://github.com/sbillig/egglog?rev=ba6d7081a0a788a3a1c2abc75771cdc6ed0fe0ef#ba6d7081a0a788a3a1c2abc75771cdc6ed0fe0ef"
 dependencies = [
  "crossbeam",
  "egglog-concurrency",

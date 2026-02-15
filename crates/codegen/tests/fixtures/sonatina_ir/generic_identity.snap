@@ -3,7 +3,7 @@ source: crates/codegen/tests/sonatina_ir.rs
 expression: output
 input_file: crates/codegen/tests/fixtures/generic_identity.fe
 ---
-target = evm-ethereum-osaka
+target = "evm-ethereum-osaka"
 
 func private %call_identity_u32() -> i256 {
     block0:

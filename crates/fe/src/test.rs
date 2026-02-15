@@ -430,6 +430,7 @@ pub struct TestDebugOptions {
     pub trace_evm_keep: usize,
     pub trace_evm_stack_n: usize,
     pub sonatina_symtab: bool,
+    pub sonatina_evm_debug: bool,
     pub debug_dir: Option<Utf8PathBuf>,
 }
 
@@ -461,6 +462,23 @@ impl TestDebugOptions {
                 }
             };
             config.symtab_output = Some(sink);
+        }
+
+        if self.sonatina_evm_debug {
+            let sink = if let Some(dir) = &self.debug_dir {
+                let path = dir.join("sonatina_evm_bytecode.txt");
+                truncate_file(&path)?;
+                DebugOutputSink {
+                    path: Some(path.into_std_path_buf()),
+                    write_stderr: false,
+                }
+            } else {
+                DebugOutputSink {
+                    path: None,
+                    write_stderr: true,
+                }
+            };
+            config.evm_debug_output = Some(sink);
         }
 
         Ok(config)
@@ -790,6 +808,7 @@ fn run_single_suite(
     if report_ctx.is_some() {
         suite_debug.trace_evm = true;
         suite_debug.sonatina_symtab = true;
+        suite_debug.sonatina_evm_debug = true;
         suite_debug.debug_dir = report_ctx.as_ref().map(|ctx| ctx.root_dir.join("debug"));
     }
     let sonatina_debug = suite_debug.sonatina_debug_config()?;
@@ -3880,6 +3899,7 @@ fn write_report_manifest(
     out.push_str("gas_comparison_aggregate: run-level reports also include `artifacts/gas_comparison_all.csv`, `artifacts/gas_breakdown_comparison_all.csv`, `artifacts/gas_comparison_summary.md`, `artifacts/gas_comparison_magnitude.csv`, `artifacts/gas_breakdown_magnitude.csv`, `artifacts/gas_opcode_magnitude.csv`, `artifacts/gas_hotspots_vs_yul_opt.csv`, `artifacts/gas_suite_delta_summary.csv`, and `artifacts/gas_tail_trace_symbol_hotspots.csv`\n");
     out.push_str("gas_opcode_profile: see `artifacts/gas_opcode_comparison.md` and `artifacts/gas_opcode_comparison.csv` for opcode and step-count diagnostics when available\n");
     out.push_str("gas_opcode_profile_aggregate: run-level reports also include `artifacts/gas_opcode_comparison_all.csv`\n");
+    out.push_str("sonatina_evm_debug: when available, see `debug/sonatina_evm_bytecode.txt` for stackify traces and lowered EVM vcode output\n");
     out.push_str(&format!("tests: {}\n", results.len()));
     let passed = results.iter().filter(|r| r.passed).count();
     out.push_str(&format!("passed: {passed}\n"));

@@ -50,3 +50,6 @@ sonatina-verifier = { path = "../sonatina/crates/verifier" }
 [profile.dev]
 # Set to 0 to make the build faster and debugging more difficult.
 debug = 0
+
+[profile.test.package.sonatina-codegen]
+opt-level = 3

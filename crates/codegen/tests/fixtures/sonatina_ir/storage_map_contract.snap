@@ -3,7 +3,7 @@ source: crates/codegen/tests/sonatina_ir.rs
 expression: output
 input_file: crates/codegen/tests/fixtures/storage_map_contract.fe
 ---
-target = evm-ethereum-osaka
+target = "evm-ethereum-osaka"
 
 func private %abi_encode__Evm_hef0af3106e109414__3af54274b2985741(v0.i256, v1.i256) {
     block0:

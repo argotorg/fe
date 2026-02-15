@@ -7,26 +7,50 @@ use mir::{
     layout, lower_module,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
+use sonatina_codegen::{
+    domtree::DomTree,
+    isa::evm::EvmBackend,
+    liveness::Liveness,
+    machinst::lower::{LowerBackend, SectionLoweringCtx},
+    object::{CompileOptions, SymbolId, compile_object},
+    stackalloc::StackifyAlloc,
+};
 use sonatina_ir::{
     I256, Module, Signature, Type,
     builder::ModuleBuilder,
+    cfg::ControlFlowGraph,
     func_cursor::InstInserter,
     inst::{control_flow::Call, evm::EvmStop},
+    ir_writer::{FuncWriteCtx, FunctionSignature, IrWrite},
     isa::Isa,
-    module::ModuleCtx,
+    module::{FuncRef, ModuleCtx},
     object::{Directive, Embed, EmbedSymbol, Object, ObjectName, Section, SectionName, SectionRef},
 };
 use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 use sonatina_verifier::{VerificationLevel, VerifierConfig};
+use std::io::Write as _;
 
 use crate::{ExpectedRevert, OptLevel, TestMetadata, TestModuleOutput};
 
 use super::{LowerError, ModuleLowerer};
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct SonatinaTestDebugConfig {
     pub symtab_output: Option<DebugOutputSink>,
+    pub evm_debug_output: Option<DebugOutputSink>,
     pub runtime_byte_offsets: Vec<usize>,
+    pub stackify_reach_depth: u8,
+}
+
+impl Default for SonatinaTestDebugConfig {
+    fn default() -> Self {
+        Self {
+            symtab_output: None,
+            evm_debug_output: None,
+            runtime_byte_offsets: Vec::new(),
+            stackify_reach_depth: 16,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -448,7 +472,7 @@ fn create_code_regions_object(
     funcs_by_symbol: &FxHashMap<&str, &MirFunction<'_>>,
     code_region_roots: &[String],
     code_region_sections: &FxHashMap<String, SectionName>,
-    region_reachable: &FxHashMap<String, FxHashSet<String>>,
+    _region_reachable: &FxHashMap<String, FxHashSet<String>>,
     region_deps: &FxHashMap<String, FxHashSet<String>>,
 ) -> Result<Object, LowerError> {
     let object_name = ObjectName::from("CodeRegions");
@@ -480,20 +504,6 @@ fn create_code_regions_object(
             .ok_or_else(|| LowerError::Internal(format!("missing section name for `{root}`")))?;
 
         let mut directives = vec![Directive::Entry(wrapper_ref), Directive::Include(root_ref)];
-
-        let reachable = region_reachable.get(root).ok_or_else(|| {
-            LowerError::Internal(format!("missing reachability for code region `{root}`"))
-        })?;
-        let mut reachable: Vec<&String> = reachable.iter().collect();
-        reachable.sort();
-        for symbol in reachable {
-            if symbol == root {
-                continue;
-            }
-            if let Some(&func_ref) = lowerer.name_map.get(symbol) {
-                directives.push(Directive::Include(func_ref));
-            }
-        }
 
         let deps = region_deps.get(root).cloned().unwrap_or_default();
         let mut deps: Vec<String> = deps.into_iter().collect();
@@ -557,16 +567,6 @@ fn create_test_object(
     let deps = collect_code_region_deps(&reachable, funcs_by_symbol);
 
     let mut directives = vec![Directive::Entry(wrapper_ref), Directive::Include(test_ref)];
-    let mut reachable: Vec<String> = reachable.into_iter().collect();
-    reachable.sort();
-    for symbol in reachable {
-        if symbol == test.symbol_name {
-            continue;
-        }
-        if let Some(&func_ref) = lowerer.name_map.get(symbol.as_str()) {
-            directives.push(Directive::Include(func_ref));
-        }
-    }
 
     let code_regions_obj = ObjectName::from("CodeRegions");
     let mut deps: Vec<String> = deps.into_iter().collect();
@@ -719,9 +719,6 @@ fn compile_runtime_section(
     object_name: &str,
     debug: &SonatinaTestDebugConfig,
 ) -> Result<Vec<u8>, LowerError> {
-    use sonatina_codegen::isa::evm::EvmBackend;
-    use sonatina_codegen::object::SymbolId;
-    use sonatina_codegen::object::{CompileOptions, compile_object};
     use sonatina_ir::isa::evm::Evm;
 
     let triple = TargetTriple::new(
@@ -754,6 +751,21 @@ fn compile_runtime_section(
         ))
     })?;
 
+    let mut runtime_funcs: Vec<(u32, FuncRef)> = Vec::new();
+    for (sym, def) in &runtime_section.symtab {
+        if let SymbolId::Func(func_ref) = sym {
+            runtime_funcs.push((def.offset, *func_ref));
+        }
+    }
+    runtime_funcs.sort_by_key(|(offset, _)| *offset);
+    let mut ordered_runtime_funcs = Vec::with_capacity(runtime_funcs.len());
+    let mut seen_runtime_funcs: FxHashSet<FuncRef> = FxHashSet::default();
+    for (_, func_ref) in runtime_funcs {
+        if seen_runtime_funcs.insert(func_ref) {
+            ordered_runtime_funcs.push(func_ref);
+        }
+    }
+
     if let Some(sink) = &debug.symtab_output {
         let mut defs: Vec<(u32, u32, String)> = Vec::new();
         for (sym, def) in &runtime_section.symtab {
@@ -779,6 +791,13 @@ fn compile_runtime_section(
         emit_debug_output(sink, &out);
     }
 
+    if let Some(sink) = &debug.evm_debug_output
+        && let Err(err) =
+            emit_runtime_evm_debug(module, object_name, &ordered_runtime_funcs, debug, sink)
+    {
+        tracing::warn!("failed to write Sonatina EVM debug output for `{object_name}`: {err}",);
+    }
+
     for &offset in &debug.runtime_byte_offsets {
         match runtime_section.bytes.get(offset) {
             Some(byte) => tracing::debug!(
@@ -794,9 +813,166 @@ fn compile_runtime_section(
     Ok(runtime_section.bytes.clone())
 }
 
-fn emit_debug_output(sink: &DebugOutputSink, contents: &str) {
-    use std::io::Write;
+fn emit_runtime_evm_debug(
+    module: &Module,
+    object_name: &str,
+    funcs: &[FuncRef],
+    debug: &SonatinaTestDebugConfig,
+    sink: &DebugOutputSink,
+) -> Result<(), LowerError> {
+    use sonatina_ir::isa::evm::Evm;
 
+    let (object_name_ref, section_name, embed_symbols) =
+        runtime_section_lowering_inputs(module, object_name)?;
+    if funcs.is_empty() {
+        return Err(LowerError::Internal(format!(
+            "runtime section for `{object_name}` has no lowered functions in compiled artifact"
+        )));
+    }
+
+    let triple = TargetTriple::new(
+        Architecture::Evm,
+        Vendor::Ethereum,
+        OperatingSystem::Evm(EvmVersion::Osaka),
+    );
+    let isa = Evm::new(triple);
+    let backend = EvmBackend::new(isa);
+
+    let section_ctx = SectionLoweringCtx {
+        object: &object_name_ref,
+        section: &section_name,
+        embed_symbols: &embed_symbols,
+    };
+    backend.prepare_section(module, funcs, &section_ctx);
+
+    let mut out = Vec::new();
+    writeln!(
+        &mut out,
+        "SONATINA EVM DEBUG object={} section={}",
+        object_name_ref.0.as_str(),
+        section_name.0.as_str(),
+    )
+    .unwrap();
+    writeln!(&mut out).unwrap();
+
+    for &func in funcs {
+        let lowered = backend
+            .lower_function(module, func, &section_ctx)
+            .map_err(|err| {
+                let func_name = module.ctx.func_sig(func, |sig| sig.name().to_string());
+                LowerError::Internal(format!(
+                    "failed to lower `{func_name}` for Sonatina EVM debug output: {err}"
+                ))
+            })?;
+
+        let reach_depth = debug.stackify_reach_depth.clamp(1, 16);
+        let (stackify_dump, lowered_dump) =
+            module
+                .func_store
+                .view(func, |function| -> Result<(String, String), LowerError> {
+                    let mut cfg = ControlFlowGraph::new();
+                    cfg.compute(function);
+
+                    let mut liveness = Liveness::new();
+                    liveness.compute(function, &cfg);
+                    let mut dom = DomTree::new();
+                    dom.compute(&cfg);
+
+                    let (_alloc, stackify_trace) = StackifyAlloc::for_function_with_trace(
+                        function,
+                        &cfg,
+                        &dom,
+                        &liveness,
+                        reach_depth,
+                    );
+
+                    let ctx = FuncWriteCtx::new(function, func);
+
+                    let mut stackify_buf = Vec::new();
+                    write!(&mut stackify_buf, "// ").unwrap();
+                    FunctionSignature
+                        .write(&mut stackify_buf, &ctx)
+                        .map_err(|err| {
+                            LowerError::Internal(format!(
+                                "failed to render stackify signature for `{object_name}`: {err}"
+                            ))
+                        })?;
+                    writeln!(&mut stackify_buf).unwrap();
+                    writeln!(&mut stackify_buf, "{stackify_trace}").unwrap();
+
+                    let mut lowered_buf = Vec::new();
+                    lowered.vcode.write(&mut lowered_buf, &ctx).map_err(|err| {
+                        LowerError::Internal(format!(
+                            "failed to render lowered EVM vcode for `{object_name}`: {err}"
+                        ))
+                    })?;
+                    writeln!(&mut lowered_buf).unwrap();
+
+                    let stackify_dump = String::from_utf8(stackify_buf).map_err(|err| {
+                    LowerError::Internal(format!(
+                        "invalid UTF-8 while rendering stackify trace for `{object_name}`: {err}"
+                    ))
+                })?;
+                    let lowered_dump = String::from_utf8(lowered_buf).map_err(|err| {
+                    LowerError::Internal(format!(
+                        "invalid UTF-8 while rendering lowered EVM vcode for `{object_name}`: {err}"
+                    ))
+                })?;
+
+                    Ok((stackify_dump, lowered_dump))
+                })?;
+
+        out.extend_from_slice(stackify_dump.as_bytes());
+        out.extend_from_slice(lowered_dump.as_bytes());
+    }
+
+    let rendered = String::from_utf8(out).map_err(|err| {
+        LowerError::Internal(format!(
+            "invalid UTF-8 while rendering Sonatina EVM debug output for `{object_name}`: {err}"
+        ))
+    })?;
+    emit_debug_output(sink, &rendered);
+
+    Ok(())
+}
+
+fn runtime_section_lowering_inputs(
+    module: &Module,
+    object_name: &str,
+) -> Result<(ObjectName, SectionName, Vec<EmbedSymbol>), LowerError> {
+    let Some(object) = module.objects.get(object_name) else {
+        return Err(LowerError::Internal(format!(
+            "missing Sonatina object `{object_name}` while preparing EVM debug output"
+        )));
+    };
+
+    let Some(runtime_section) = object
+        .sections
+        .iter()
+        .find(|section| section.name.0.as_str() == "runtime")
+    else {
+        return Err(LowerError::Internal(format!(
+            "object `{object_name}` has no runtime section while preparing EVM debug output"
+        )));
+    };
+
+    let mut embed_symbols = Vec::new();
+    for directive in &runtime_section.directives {
+        match directive {
+            Directive::Entry(_) | Directive::Include(_) => {}
+            Directive::Embed(embed) => embed_symbols.push(embed.as_symbol.clone()),
+            Directive::Data(_) => {}
+        }
+    }
+
+    Ok((
+        object.name.clone(),
+        runtime_section.name.clone(),
+        embed_symbols,
+    ))
+}
+
+fn emit_debug_output(sink: &DebugOutputSink, contents: &str) {
     if let Some(path) = &sink.path {
         match std::fs::OpenOptions::new()
             .create(true)

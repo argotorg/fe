@@ -3,7 +3,7 @@ source: crates/codegen/tests/sonatina_ir.rs
 expression: output
 input_file: crates/codegen/tests/fixtures/effect_ptr_calldata_domain.fe
 ---
-target = evm-ethereum-osaka
+target = "evm-ethereum-osaka"
 
 func private %read_x__StorPtr_u256___64779554cfbf0358(v0.i256) -> i256 {
     block0:

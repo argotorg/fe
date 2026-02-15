@@ -3,7 +3,7 @@ source: crates/codegen/tests/sonatina_ir.rs
 expression: output
 input_file: crates/codegen/tests/fixtures/newtype_u8_word_conversion.fe
 ---
-target = evm-ethereum-osaka
+target = "evm-ethereum-osaka"
 
 type @__fe_WrapU8_0 = {i256};
 type @__fe_Container_1 = {@__fe_WrapU8_0, i256};

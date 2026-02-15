@@ -3,7 +3,7 @@ source: crates/codegen/tests/sonatina_ir.rs
 expression: output
 input_file: crates/codegen/tests/fixtures/match_tuple_binding.fe
 ---
-target = evm-ethereum-osaka
+target = "evm-ethereum-osaka"
 
 type @__fe_tuple_0 = {i256, i256};
 type @__fe_tuple_1 = {@__fe_tuple_0, i256};
