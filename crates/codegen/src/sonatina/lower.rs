@@ -1152,12 +1152,11 @@ fn apply_to_word<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     if let TyData::TyBase(TyBase::Prim(prim)) = base_ty.data(db) {
         match prim {
             PrimTy::Bool => {
-                // bool: iszero(iszero(value)) → 0 or 1
-                let is_zero1 = IsZero::new(is, value);
-                let z1 = fb.insert_inst(is_zero1, Type::I1);
-                let is_zero2 = IsZero::new(is, z1);
-                let z2 = fb.insert_inst(is_zero2, Type::I1);
-                let ext = Zext::new(is, z2, Type::I256);
+                // bool: value != 0 → 0 or 1
+                let zero = fb.make_imm_value(I256::zero());
+                let cmp = Ne::new(is, value, zero);
+                let bool_val = fb.insert_inst(cmp, Type::I1);
+                let ext = Zext::new(is, bool_val, Type::I256);
                 fb.insert_inst(ext, Type::I256)
             }
             PrimTy::U8 | PrimTy::U16 | PrimTy::U32 | PrimTy::U64 | PrimTy::U128 => {

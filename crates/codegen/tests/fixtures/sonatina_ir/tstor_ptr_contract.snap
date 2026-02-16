@@ -16,10 +16,9 @@ type @__fe_SolDecoder_7 = {@__fe_Cursor_6, i256};
 
 func private %__GuardContract_init_contract(v0.i256) {
     block0:
-        v2.i1 = is_zero 0.i256;
-        v3.i1 = is_zero v2;
-        v4.i256 = zext v3 i256;
-        evm_tstore v0 v4;
+        v2.i1 = ne 0.i256 0.i256;
+        v3.i256 = zext v2 i256;
+        evm_tstore v0 v3;
         return;
 }
 
@@ -33,10 +32,9 @@ func private %__GuardContract_recv_0_0(v0.i256, v1.i256) -> i256 {
         v8.i256 = zext v7 i256;
         v9.i1 = is_zero v8;
         v10.i256 = zext v9 i256;
-        v11.i1 = is_zero v10;
-        v12.i1 = is_zero v11;
-        v13.i256 = zext v12 i256;
-        evm_tstore v0 v13;
+        v11.i1 = ne v10 0.i256;
+        v12.i256 = zext v11 i256;
+        evm_tstore v0 v12;
         return v8;
 }
 
