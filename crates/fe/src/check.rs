@@ -658,7 +658,14 @@ fn check_single_file(
     report: Option<&ReportContext>,
 ) -> bool {
     // Create a file URL for the single .fe file
-    let file_url = match Url::from_file_path(file_path.canonicalize_utf8().unwrap()) {
+    let canonical = match file_path.canonicalize_utf8() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("❌ Error: Cannot canonicalize {file_path}: {e}");
+            return true;
+        }
+    };
+    let file_url = match Url::from_file_path(&canonical) {
         Ok(url) => url,
         Err(_) => {
             eprintln!("❌ Error: Invalid file path: {file_path}");

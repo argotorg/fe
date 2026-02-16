@@ -26,7 +26,6 @@ use sonatina_ir::{
     module::{FuncRef, ModuleCtx},
     object::{Directive, Embed, EmbedSymbol, Object, ObjectName, Section, SectionName, SectionRef},
 };
-use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 use sonatina_verifier::{VerificationLevel, VerifierConfig};
 use std::io::Write as _;
 
@@ -426,12 +425,7 @@ fn compile_test_objects(
     region_reachable: &FxHashMap<String, FxHashSet<String>>,
     region_deps: &FxHashMap<String, FxHashSet<String>>,
 ) -> Result<Module, LowerError> {
-    let triple = TargetTriple::new(
-        Architecture::Evm,
-        Vendor::Ethereum,
-        OperatingSystem::Evm(EvmVersion::Osaka),
-    );
-    let isa = sonatina_ir::isa::evm::Evm::new(triple);
+    let isa = super::create_evm_isa();
     let ctx = ModuleCtx::new(&isa);
     let builder = ModuleBuilder::new(ctx);
 
@@ -729,14 +723,7 @@ fn compile_runtime_section(
     object_name: &str,
     debug: &SonatinaTestDebugConfig,
 ) -> Result<RuntimeCompileOutput, LowerError> {
-    use sonatina_ir::isa::evm::Evm;
-
-    let triple = TargetTriple::new(
-        Architecture::Evm,
-        Vendor::Ethereum,
-        OperatingSystem::Evm(EvmVersion::Osaka),
-    );
-    let isa = Evm::new(triple);
+    let isa = super::create_evm_isa();
     let backend = EvmBackend::new(isa);
 
     let mut opts: CompileOptions<_> = CompileOptions::default();
@@ -838,8 +825,6 @@ fn emit_runtime_evm_debug(
     debug: &SonatinaTestDebugConfig,
     sink: &DebugOutputSink,
 ) -> Result<(), LowerError> {
-    use sonatina_ir::isa::evm::Evm;
-
     let (object_name_ref, section_name, embed_symbols) =
         runtime_section_lowering_inputs(module, object_name)?;
     if funcs.is_empty() {
@@ -848,12 +833,7 @@ fn emit_runtime_evm_debug(
         )));
     }
 
-    let triple = TargetTriple::new(
-        Architecture::Evm,
-        Vendor::Ethereum,
-        OperatingSystem::Evm(EvmVersion::Osaka),
-    );
-    let isa = Evm::new(triple);
+    let isa = super::create_evm_isa();
     let backend = EvmBackend::new(isa);
 
     let section_ctx = SectionLoweringCtx {

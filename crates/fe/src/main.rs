@@ -34,8 +34,6 @@ pub enum Command {
     Check {
         #[arg(default_value_t = default_project_path())]
         path: Utf8PathBuf,
-        #[arg(short, long)]
-        core: Option<Utf8PathBuf>,
         #[arg(long)]
         dump_mir: bool,
         #[arg(long)]
@@ -87,7 +85,7 @@ pub enum Command {
         #[arg(short, long)]
         filter: Option<String>,
         /// Number of suites to run in parallel (0 = auto).
-        #[arg(long, default_value_t = 32, value_name = "N")]
+        #[arg(long, default_value_t = 8, value_name = "N")]
         jobs: usize,
         /// Show event logs from test execution.
         #[arg(long)]
@@ -173,7 +171,6 @@ pub fn run(opts: &Options) {
         Command::Build => eprintln!("`fe build` doesn't work at the moment"),
         Command::Check {
             path,
-            core: _,
             dump_mir,
             emit_yul_min,
             backend,
@@ -189,7 +186,6 @@ pub fn run(opts: &Options) {
                     std::process::exit(1);
                 }
             };
-            // TODO readd custom core
             match check(
                 path,
                 *dump_mir,

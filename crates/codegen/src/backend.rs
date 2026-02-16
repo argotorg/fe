@@ -268,9 +268,7 @@ impl Backend for SonatinaBackend {
     ) -> Result<BackendOutput, BackendError> {
         use sonatina_codegen::isa::evm::EvmBackend;
         use sonatina_codegen::object::{CompileOptions, compile_object};
-        use sonatina_ir::isa::evm::Evm;
         use sonatina_ir::object::{Directive, SectionRef};
-        use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
 
         // Lower to Sonatina IR
         let mut module = crate::sonatina::compile_module(db, top_mod, layout)?;
@@ -294,12 +292,7 @@ impl Backend for SonatinaBackend {
         }
 
         // Create the EVM backend for codegen
-        let triple = TargetTriple::new(
-            Architecture::Evm,
-            Vendor::Ethereum,
-            OperatingSystem::Evm(EvmVersion::Osaka),
-        );
-        let isa = Evm::new(triple);
+        let isa = crate::sonatina::create_evm_isa();
         let evm_backend = EvmBackend::new(isa);
 
         // Compile the root object.
