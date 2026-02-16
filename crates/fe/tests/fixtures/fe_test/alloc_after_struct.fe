@@ -1,0 +1,31 @@
+use std::evm::{Address, Evm}
+use std::evm::effects::assert
+use std::evm::mem
+
+/// Regression test: allocating a struct whose fields land at 0x80 must not
+/// corrupt subsequent calls to mem::alloc.  Previously, mem::alloc read
+/// mload(0x80) as a sonatina stack-pointer guard, but under the yul backend
+/// 0x80 holds user data, causing wild pointer values.
+struct Pair {
+    a: Address,
+    b: Address,
+}
+
+#[test]
+fn test_alloc_after_struct() uses (evm: Evm) {
+    let p = Pair {
+        a: Address { inner: 0x1111111111111111111111111111111111111111 },
+        b: Address { inner: 0x2222222222222222222222222222222222222222 },
+    }
+
+    // This calls mem::alloc under the hood.  Before the fix it would use the
+    // address value at 0x80 as a heap pointer and crash with OutOfGas.
+    let ptr = mem::alloc(32)
+
+    // Sanity: the allocation should be in a reasonable range, not at 0x1111...
+    assert(ptr < 0x100000)
+
+    // Verify original struct is intact.
+    assert(p.a.inner == 0x1111111111111111111111111111111111111111)
+    assert(p.b.inner == 0x2222222222222222222222222222222222222222)
+}

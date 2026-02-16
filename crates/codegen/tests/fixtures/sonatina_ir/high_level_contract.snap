@@ -152,41 +152,30 @@ func private %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort() {
 func public %alloc(v0.i256) -> i256 {
     block0:
         v3.i256 = mload 64.i256 i256;
-        v5.i256 = mload 128.i256 i256;
-        v6.i1 = gt v5 v3;
-        v7.i256 = zext v6 i256;
-        v8.i1 = ne v7 0.i256;
-        br v8 block1 block2;
+        v4.i1 = eq v3 0.i256;
+        v5.i256 = zext v4 i256;
+        v6.i1 = ne v5 0.i256;
+        br v6 block1 block2;
 
     block1:
+        v7.i256 = evm_msize;
         jump block2;
 
     block2:
-        v10.i256 = phi (v3 block0) (v5 block1);
-        v11.i1 = eq v10 0.i256;
-        v12.i256 = zext v11 i256;
-        v13.i1 = ne v12 0.i256;
-        br v13 block3 block4;
+        v8.i256 = phi (v3 block0) (v7 block1);
+        v10.i1 = lt v8 8192.i256;
+        v11.i256 = zext v10 i256;
+        v12.i1 = ne v11 0.i256;
+        br v12 block3 block4;
 
     block3:
-        v14.i256 = evm_msize;
         jump block4;
 
     block4:
-        v15.i256 = phi (v10 block2) (v14 block3);
-        v17.i1 = lt v15 8192.i256;
-        v18.i256 = zext v17 i256;
-        v19.i1 = ne v18 0.i256;
-        br v19 block5 block6;
-
-    block5:
-        jump block6;
-
-    block6:
-        v20.i256 = phi (v15 block4) (8192.i256 block5);
-        v22.i256 = add v20 v0;
-        mstore 64.i256 v22 i256;
-        return v20;
+        v13.i256 = phi (v8 block2) (8192.i256 block3);
+        v15.i256 = add v13 v0;
+        mstore 64.i256 v15 i256;
+        return v13;
 }
 
 func private %sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v0.i256) -> i256 {
