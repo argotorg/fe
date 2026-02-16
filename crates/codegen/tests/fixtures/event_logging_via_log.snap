@@ -16,7 +16,7 @@ function $emit_transfer($evm, $from, $to, $amount) {
   leave
 }
 function $emit__Evm_hef0af3106e109414_Transfer_h628c212e2bb5f76f__243b05efdcd63652($self, $event) {
-  $transfer_h628c212e2bb5f76f_event_hd33e4481d4a34b05_emit__Evm_hef0af3106e109414__3af54274b2985741($event, $self)
+  $transfer_h628c212e2bb5f76f_event_hd33e4481d4a34b05_emit__Evm_hef0af3106e109414__3af54274b2985741($event, 0)
   leave
 }
 function $transfer_h628c212e2bb5f76f_event_hd33e4481d4a34b05_emit__Evm_hef0af3106e109414__3af54274b2985741($self, $log) {
@@ -35,7 +35,7 @@ function $transfer_h628c212e2bb5f76f_event_hd33e4481d4a34b05_emit__Evm_hef0af310
   let v10 := $address_h257056268eac7027_topicvalue_hc8981c1d4c24e77d_as_topic(v9)
   let v11 := mload(add($self, 32))
   let v12 := $address_h257056268eac7027_topicvalue_hc8981c1d4c24e77d_as_topic(v11)
-  $evm_hef0af3106e109414_log_h22d1a10952034bae_log3($log, v6, v8, 100389287136786176327247604509743168900146139575972864366142685224231313322991, v10, v12)
+  $evm_hef0af3106e109414_log_h22d1a10952034bae_log3(0, v6, v8, 100389287136786176327247604509743168900146139575972864366142685224231313322991, v10, v12)
   leave
 }
 function $solencoder_h1b9228b90dad6928_new() -> ret {
@@ -103,7 +103,12 @@ function $alloc($size) -> ret {
   let v0 := mload(64)
   let v1 := eq(v0, 0)
   if v1 {
-    v0 := 128
+    let v2 := msize()
+    v0 := v2
+  }
+  let v3 := lt(v0, 8192)
+  if v3 {
+    v0 := 8192
   }
   mstore(64, add(v0, $size))
   ret := v0
