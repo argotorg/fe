@@ -25,7 +25,7 @@ check-wasm:
 .PHONY: check-wasi
 check-wasi:
 	@echo "Checking filesystem-dependent crates for wasm32-wasip1..."
-	cargo check -p fe-driver -p fe-resolver -p fe --target wasm32-wasip1
+	cargo check -p fe-driver -p fe-resolver --target wasm32-wasip1
 	@echo "✓ Filesystem crates support wasm32-wasip1"
 
 .PHONY: check-wasm-all

@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use camino::Utf8PathBuf;
-use codegen::emit_module_yul;
+use codegen::{Backend, BackendKind, OptLevel};
 use common::{
     InputDb,
     config::{Config, WorkspaceConfig},
@@ -9,11 +9,22 @@ use common::{
 };
 use driver::DriverDataBase;
 use hir::hir_def::{HirIngot, TopLevelMod};
-use mir::lower_module;
+use mir::{fmt as mir_fmt, layout, lower_module};
 use resolver::ResolutionHandler;
 use resolver::ingot::{FeTomlProbe, infer_config_kind};
 use resolver::{Resolver, files::ancestor_fe_toml_dirs};
 use url::Url;
+
+use crate::report::{
+    copy_input_into_report, create_dir_all_utf8, create_report_staging_dir, enable_panic_report,
+    is_verifier_error_text, normalize_report_out_path, panic_payload_to_string, tar_gz_dir,
+    write_report_meta,
+};
+
+#[derive(Debug, Clone)]
+struct ReportContext {
+    root_dir: Utf8PathBuf,
+}
 
 struct ResolvedMember {
     path: Utf8PathBuf,
@@ -47,32 +58,117 @@ impl ResolutionHandler<resolver::files::FilesResolver> for ConfigProbe {
     }
 }
 
-pub fn check(path: &Utf8PathBuf, dump_mir: bool, emit_yul_min: bool) {
+fn write_report_file(report: &ReportContext, rel: &str, contents: &str) {
+    let path = report.root_dir.join(rel);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(path, contents);
+}
+
+fn write_codegen_report_error(report: &ReportContext, contents: &str) {
+    write_report_file(report, "errors/codegen_error.txt", contents);
+    if is_verifier_error_text(contents) {
+        write_report_file(report, "errors/verifier_error.txt", contents);
+    }
+}
+
+pub fn check(
+    path: &Utf8PathBuf,
+    dump_mir: bool,
+    emit_yul_min: bool,
+    backend_name: &str,
+    opt_level: OptLevel,
+    report_out: Option<&Utf8PathBuf>,
+    report_failed_only: bool,
+) -> Result<bool, String> {
+    let backend_kind: BackendKind = backend_name.parse()?;
+    let backend = backend_kind.create();
     let mut db = DriverDataBase::default();
 
-    let target = match resolve_check_target(&mut db, path) {
-        Ok(target) => target,
-        Err(message) => {
-            eprintln!("❌ Error: {message}");
-            std::process::exit(1);
-        }
-    };
+    let report_root = report_out
+        .map(|out| -> Result<_, String> {
+            let staging = create_report_staging_dir("target/fe-check-report-staging")?;
+            let out = normalize_report_out_path(out)?;
+            Ok((out, staging))
+        })
+        .transpose()?;
+
+    let report_ctx = report_root
+        .as_ref()
+        .map(|(_, staging)| -> Result<_, String> {
+            let inputs_dir = staging.join("inputs");
+            create_dir_all_utf8(&inputs_dir)?;
+            copy_input_into_report(path, &inputs_dir)?;
+            create_dir_all_utf8(&staging.join("artifacts"))?;
+            create_dir_all_utf8(&staging.join("errors"))?;
+            write_report_meta(staging, "fe check report", None);
+            Ok(ReportContext {
+                root_dir: staging.clone(),
+            })
+        })
+        .transpose()?;
+
+    let target = resolve_check_target(&mut db, path)?;
 
     let has_errors = match target {
-        CheckTarget::StandaloneFile(file_path) => {
-            check_single_file(&mut db, &file_path, dump_mir, emit_yul_min)
-        }
-        CheckTarget::WorkspaceMember(dir_path) => {
-            check_ingot(&mut db, &dir_path, dump_mir, emit_yul_min)
-        }
-        CheckTarget::Directory(dir_path) => {
-            check_directory(&mut db, &dir_path, dump_mir, emit_yul_min)
-        }
+        CheckTarget::StandaloneFile(file_path) => check_single_file(
+            &mut db,
+            &file_path,
+            dump_mir,
+            emit_yul_min,
+            backend_kind,
+            backend.as_ref(),
+            opt_level,
+            report_ctx.as_ref(),
+        ),
+        CheckTarget::WorkspaceMember(dir_path) => check_ingot(
+            &mut db,
+            &dir_path,
+            dump_mir,
+            emit_yul_min,
+            backend_kind,
+            backend.as_ref(),
+            opt_level,
+            report_ctx.as_ref(),
+        ),
+        CheckTarget::Directory(dir_path) => check_directory(
+            &mut db,
+            &dir_path,
+            dump_mir,
+            emit_yul_min,
+            backend_kind,
+            backend.as_ref(),
+            opt_level,
+            report_ctx.as_ref(),
+        ),
     };
 
-    if has_errors {
-        std::process::exit(1);
+    if let Some((out, staging)) = report_root {
+        let should_write = !report_failed_only || has_errors;
+        if should_write {
+            write_check_manifest(
+                &staging,
+                path,
+                dump_mir,
+                emit_yul_min,
+                backend_name,
+                opt_level,
+                has_errors,
+            );
+            if let Err(err) = tar_gz_dir(&staging, &out) {
+                eprintln!("Error: failed to write report `{out}`: {err}");
+                eprintln!("Report staging directory left at `{staging}`");
+            } else {
+                let _ = std::fs::remove_dir_all(&staging);
+                println!("wrote report: {out}");
+            }
+        } else {
+            let _ = std::fs::remove_dir_all(&staging);
+        }
     }
+
+    Ok(has_errors)
 }
 
 fn resolve_check_target(
@@ -135,11 +231,16 @@ fn resolve_check_target(
     Err("Path must be either a .fe file or a directory containing fe.toml".into())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn check_directory(
     db: &mut DriverDataBase,
     dir_path: &Utf8PathBuf,
     dump_mir: bool,
     emit_yul_min: bool,
+    backend_kind: BackendKind,
+    backend: &dyn Backend,
+    opt_level: OptLevel,
+    report: Option<&ReportContext>,
 ) -> bool {
     let ingot_url = match dir_url(dir_path) {
         Ok(url) => url,
@@ -151,6 +252,13 @@ fn check_directory(
 
     let had_init_diagnostics = driver::init_ingot(db, &ingot_url);
     if had_init_diagnostics {
+        if let Some(report) = report {
+            write_report_file(
+                report,
+                "errors/diagnostics.txt",
+                "compilation errors while initializing ingot",
+            );
+        }
         return true;
     }
 
@@ -167,10 +275,27 @@ fn check_directory(
     };
 
     match config {
-        Config::Workspace(workspace) => {
-            check_workspace(db, dir_path, *workspace, dump_mir, emit_yul_min)
-        }
-        Config::Ingot(_) => check_ingot_url(db, &ingot_url, dump_mir, emit_yul_min),
+        Config::Workspace(workspace) => check_workspace(
+            db,
+            dir_path,
+            *workspace,
+            dump_mir,
+            emit_yul_min,
+            backend_kind,
+            backend,
+            opt_level,
+            report,
+        ),
+        Config::Ingot(_) => check_ingot_url(
+            db,
+            &ingot_url,
+            dump_mir,
+            emit_yul_min,
+            backend_kind,
+            backend,
+            opt_level,
+            report,
+        ),
     }
 }
 
@@ -309,107 +434,16 @@ fn dir_url(path: &Utf8PathBuf) -> Result<Url, String> {
         .map_err(|_| format!("Error: invalid or non-existent directory path: {path}"))
 }
 
-fn check_single_file(
-    db: &mut DriverDataBase,
-    file_path: &Utf8PathBuf,
-    dump_mir: bool,
-    emit_yul_min: bool,
-) -> bool {
-    let file_url = match Url::from_file_path(file_path.canonicalize_utf8().unwrap()) {
-        Ok(url) => url,
-        Err(_) => {
-            eprintln!("❌ Error: Invalid file path: {file_path}");
-            return true;
-        }
-    };
-
-    struct StandaloneFileLoader<'a> {
-        db: &'a mut DriverDataBase,
-    }
-
-    impl<'a> ResolutionHandler<resolver::files::FilesResolver> for StandaloneFileLoader<'a> {
-        type Item = ();
-
-        fn handle_resolution(
-            &mut self,
-            _description: &Url,
-            resource: resolver::files::FilesResource,
-        ) -> Self::Item {
-            for file in resource.files {
-                let file_url =
-                    Url::from_file_path(file.path.as_std_path()).expect("valid file URL");
-                self.db
-                    .workspace()
-                    .touch(self.db, file_url, Some(file.content));
-            }
-        }
-    }
-
-    let mut resolver = resolver::files::FilesResolver::new();
-    if let Err(err) = resolver.resolve(&mut StandaloneFileLoader { db }, &file_url) {
-        eprintln!("Error reading file {file_path}: {err}");
-        return true;
-    }
-
-    // Try to get the file and check it for errors
-    if let Some(file) = db.workspace().get(db, &file_url) {
-        let top_mod = db.top_mod(file);
-        let diags = db.run_on_top_mod(top_mod);
-        if !diags.is_empty() {
-            eprintln!("errors in {file_url}");
-            eprintln!();
-            diags.emit(db);
-            return true;
-        }
-        if dump_mir {
-            dump_module_mir(db, top_mod);
-        }
-        if emit_yul_min {
-            emit_yul(db, top_mod);
-        }
-    } else {
-        eprintln!("❌ Error: Could not process file {file_path}");
-        return true;
-    }
-
-    false
-}
-
-fn check_ingot(
-    db: &mut DriverDataBase,
-    dir_path: &Utf8PathBuf,
-    dump_mir: bool,
-    emit_yul_min: bool,
-) -> bool {
-    let canonical_path = match dir_path.canonicalize_utf8() {
-        Ok(path) => path,
-        Err(_) => {
-            eprintln!("Error: Invalid or non-existent directory path: {dir_path}");
-            eprintln!("       Make sure the directory exists and is accessible");
-            return true;
-        }
-    };
-
-    let ingot_url = match Url::from_directory_path(canonical_path.as_str()) {
-        Ok(url) => url,
-        Err(_) => {
-            eprintln!("❌ Error: Invalid directory path: {dir_path}");
-            return true;
-        }
-    };
-    let had_init_diagnostics = driver::init_ingot(db, &ingot_url);
-    if had_init_diagnostics {
-        return true;
-    }
-
-    check_ingot_url(db, &ingot_url, dump_mir, emit_yul_min)
-}
-
+#[allow(clippy::too_many_arguments)]
 fn check_ingot_url(
     db: &mut DriverDataBase,
     ingot_url: &Url,
     dump_mir: bool,
     emit_yul_min: bool,
+    backend_kind: BackendKind,
+    backend: &dyn Backend,
+    opt_level: OptLevel,
+    report: Option<&ReportContext>,
 ) -> bool {
     if db
         .workspace()
@@ -438,15 +472,30 @@ fn check_ingot_url(
     }
 
     let mut seen = HashSet::new();
-    check_ingot_and_dependencies(db, ingot_url, dump_mir, emit_yul_min, &mut seen)
+    check_ingot_and_dependencies(
+        db,
+        ingot_url,
+        dump_mir,
+        emit_yul_min,
+        backend_kind,
+        backend,
+        opt_level,
+        report,
+        &mut seen,
+    )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn check_workspace(
     db: &mut DriverDataBase,
     dir_path: &Utf8PathBuf,
     workspace_config: WorkspaceConfig,
     dump_mir: bool,
     emit_yul_min: bool,
+    backend_kind: BackendKind,
+    backend: &dyn Backend,
+    opt_level: OptLevel,
+    report: Option<&ReportContext>,
 ) -> bool {
     let workspace_url = match dir_url(dir_path) {
         Ok(url) => url,
@@ -473,19 +522,33 @@ fn check_workspace(
     let mut has_errors = false;
     for member in members {
         let member_url = member.url;
-        let member_has_errors =
-            check_ingot_and_dependencies(db, &member_url, dump_mir, emit_yul_min, &mut seen);
+        let member_has_errors = check_ingot_and_dependencies(
+            db,
+            &member_url,
+            dump_mir,
+            emit_yul_min,
+            backend_kind,
+            backend,
+            opt_level,
+            report,
+            &mut seen,
+        );
         has_errors |= member_has_errors;
     }
 
     has_errors
 }
 
+#[allow(clippy::too_many_arguments)]
 fn check_ingot_and_dependencies(
     db: &mut DriverDataBase,
     ingot_url: &Url,
     dump_mir: bool,
     emit_yul_min: bool,
+    backend_kind: BackendKind,
+    backend: &dyn Backend,
+    opt_level: OptLevel,
+    report: Option<&ReportContext>,
     seen: &mut HashSet<Url>,
 ) -> bool {
     if !seen.insert(ingot_url.clone()) {
@@ -514,6 +577,10 @@ fn check_ingot_and_dependencies(
 
     if !diags.is_empty() {
         diags.emit(db);
+        if let Some(report) = report {
+            let formatted = diags.format_diags(db);
+            write_report_file(report, "errors/diagnostics.txt", &formatted);
+        }
         has_errors = true;
     } else {
         let root_mod = ingot.root_mod(db);
@@ -521,7 +588,11 @@ fn check_ingot_and_dependencies(
             dump_module_mir(db, root_mod);
         }
         if emit_yul_min {
-            emit_yul(db, root_mod);
+            emit_codegen(db, root_mod, backend, opt_level);
+        }
+        if let Some(report) = report {
+            has_errors |=
+                write_check_artifacts(db, root_mod, backend_kind, backend, opt_level, report);
         }
     }
 
@@ -552,6 +623,16 @@ fn check_ingot_and_dependencies(
             eprintln!("❌ Errors in downstream ingots");
         }
 
+        if let Some(report) = report {
+            let mut out = String::new();
+            for (dependency_url, diags) in &dependency_errors {
+                out.push_str(&format!("dependency: {dependency_url}\n"));
+                out.push_str(&diags.format_diags(db));
+                out.push('\n');
+            }
+            write_report_file(report, "errors/dependency_diagnostics.txt", &out);
+        }
+
         for (dependency_url, diags) in dependency_errors {
             print_dependency_info(db, &dependency_url);
             diags.emit(db);
@@ -566,6 +647,243 @@ fn ingot_has_source_files(db: &DriverDataBase, ingot: hir::Ingot<'_>) -> bool {
         .files(db)
         .iter()
         .any(|(_, file)| matches!(file.kind(db), Some(IngotFileKind::Source)))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn check_single_file(
+    db: &mut DriverDataBase,
+    file_path: &Utf8PathBuf,
+    dump_mir: bool,
+    emit_yul_min: bool,
+    backend_kind: BackendKind,
+    backend: &dyn Backend,
+    opt_level: OptLevel,
+    report: Option<&ReportContext>,
+) -> bool {
+    // Create a file URL for the single .fe file
+    let canonical = match file_path.canonicalize_utf8() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("❌ Error: Cannot canonicalize {file_path}: {e}");
+            return true;
+        }
+    };
+    let file_url = match Url::from_file_path(&canonical) {
+        Ok(url) => url,
+        Err(_) => {
+            eprintln!("❌ Error: Invalid file path: {file_path}");
+            return true;
+        }
+    };
+
+    // Read the file content
+    let content = match std::fs::read_to_string(file_path) {
+        Ok(content) => content,
+        Err(err) => {
+            eprintln!("Error reading file {file_path}: {err}");
+            return true;
+        }
+    };
+
+    // Add the file to the workspace
+    db.workspace().touch(db, file_url.clone(), Some(content));
+
+    // Try to get the file and check it for errors
+    if let Some(file) = db.workspace().get(db, &file_url) {
+        let top_mod = db.top_mod(file);
+        let diags = db.run_on_top_mod(top_mod);
+        if !diags.is_empty() {
+            eprintln!("errors in {file_url}");
+            eprintln!();
+            diags.emit(db);
+            if let Some(report) = report {
+                let formatted = diags.format_diags(db);
+                write_report_file(report, "errors/diagnostics.txt", &formatted);
+            }
+            return true;
+        }
+        if dump_mir {
+            dump_module_mir(db, top_mod);
+        }
+        if emit_yul_min {
+            emit_codegen(db, top_mod, backend, opt_level);
+        }
+        if let Some(report) = report
+            && write_check_artifacts(db, top_mod, backend_kind, backend, opt_level, report)
+        {
+            return true;
+        }
+    } else {
+        eprintln!("❌ Error: Could not process file {file_path}");
+        return true;
+    }
+
+    false
+}
+
+#[allow(clippy::too_many_arguments)]
+fn check_ingot(
+    db: &mut DriverDataBase,
+    dir_path: &Utf8PathBuf,
+    dump_mir: bool,
+    emit_yul_min: bool,
+    backend_kind: BackendKind,
+    backend: &dyn Backend,
+    opt_level: OptLevel,
+    report: Option<&ReportContext>,
+) -> bool {
+    let mut seen = HashSet::new();
+    check_ingot_inner(
+        db,
+        dir_path,
+        dump_mir,
+        emit_yul_min,
+        backend_kind,
+        backend,
+        opt_level,
+        report,
+        &mut seen,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn check_ingot_inner(
+    db: &mut DriverDataBase,
+    dir_path: &Utf8PathBuf,
+    dump_mir: bool,
+    emit_yul_min: bool,
+    backend_kind: BackendKind,
+    backend: &dyn Backend,
+    opt_level: OptLevel,
+    report: Option<&ReportContext>,
+    seen: &mut HashSet<Url>,
+) -> bool {
+    let canonical_path = match dir_path.canonicalize_utf8() {
+        Ok(path) => path,
+        Err(_) => {
+            eprintln!("Error: Invalid or non-existent directory path: {dir_path}");
+            eprintln!("       Make sure the directory exists and is accessible");
+            return true;
+        }
+    };
+
+    let ingot_url = match Url::from_directory_path(canonical_path.as_str()) {
+        Ok(url) => url,
+        Err(_) => {
+            eprintln!("❌ Error: Invalid directory path: {dir_path}");
+            return true;
+        }
+    };
+    if !seen.insert(ingot_url.clone()) {
+        return false;
+    }
+    let had_init_diagnostics = driver::init_ingot(db, &ingot_url);
+    if had_init_diagnostics {
+        if let Some(report) = report {
+            write_report_file(
+                report,
+                "errors/diagnostics.txt",
+                "compilation errors while initializing ingot",
+            );
+        }
+        return true;
+    }
+
+    let Some(ingot) = db.workspace().containing_ingot(db, ingot_url.clone()) else {
+        // Check if the issue is a missing fe.toml file
+        let config_url = match ingot_url.join("fe.toml") {
+            Ok(url) => url,
+            Err(_) => {
+                eprintln!("❌ Error: Invalid ingot directory path");
+                return true;
+            }
+        };
+
+        if db.workspace().get(db, &config_url).is_none() {
+            eprintln!("❌ Error: No fe.toml file found in the root directory");
+            eprintln!("       Expected fe.toml at: {config_url}");
+            eprintln!(
+                "       Make sure you're in an fe project directory or create a fe.toml file"
+            );
+        } else {
+            eprintln!("❌ Error: Could not resolve ingot from directory");
+        }
+        return true;
+    };
+
+    // Check if the ingot has source files before trying to analyze
+    if ingot.root_file(db).is_err() {
+        eprintln!(
+            "source files resolution error: `src` folder does not exist in the ingot directory"
+        );
+        return true;
+    }
+
+    let diags = db.run_on_ingot(ingot);
+    let mut has_errors = false;
+
+    if !diags.is_empty() {
+        diags.emit(db);
+        if let Some(report) = report {
+            let formatted = diags.format_diags(db);
+            write_report_file(report, "errors/diagnostics.txt", &formatted);
+        }
+        has_errors = true;
+    } else {
+        let root_mod = ingot.root_mod(db);
+        if dump_mir {
+            dump_module_mir(db, root_mod);
+        }
+        if emit_yul_min {
+            emit_codegen(db, root_mod, backend, opt_level);
+        }
+        if let Some(report) = report {
+            has_errors |=
+                write_check_artifacts(db, root_mod, backend_kind, backend, opt_level, report);
+        }
+    }
+
+    // Collect all dependencies with errors
+    let mut dependency_errors = Vec::new();
+    for dependency_url in db.dependency_graph().dependency_urls(db, &ingot_url) {
+        if !seen.insert(dependency_url.clone()) {
+            continue;
+        }
+        let Some(ingot) = db.workspace().containing_ingot(db, dependency_url.clone()) else {
+            continue;
+        };
+        let diags = db.run_on_ingot(ingot);
+        if !diags.is_empty() {
+            dependency_errors.push((dependency_url, diags));
+        }
+    }
+
+    // Print dependency errors if any exist
+    if !dependency_errors.is_empty() {
+        has_errors = true;
+        if dependency_errors.len() == 1 {
+            eprintln!("❌ Error in downstream ingot");
+        } else {
+            eprintln!("❌ Errors in downstream ingots");
+        }
+
+        if let Some(report) = report {
+            let mut out = String::new();
+            for (dependency_url, diags) in &dependency_errors {
+                out.push_str(&format!("dependency: {dependency_url}\n"));
+                out.push_str(&diags.format_diags(db));
+                out.push('\n');
+            }
+            write_report_file(report, "errors/dependency_diagnostics.txt", &out);
+        }
+
+        for (dependency_url, diags) in dependency_errors {
+            print_dependency_info(db, &dependency_url);
+            diags.emit(db);
+        }
+    }
+
+    has_errors
 }
 
 fn print_dependency_info(db: &DriverDataBase, dependency_url: &Url) {
@@ -591,13 +909,28 @@ fn print_dependency_info(db: &DriverDataBase, dependency_url: &Url) {
     eprintln!();
 }
 
-fn emit_yul(db: &DriverDataBase, top_mod: TopLevelMod<'_>) {
-    match emit_module_yul(db, top_mod) {
-        Ok(yul) => {
-            println!("=== Yul ===");
-            println!("{yul}");
-        }
-        Err(err) => eprintln!("⚠️  failed to emit Yul: {err}"),
+fn emit_codegen(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+    backend: &dyn Backend,
+    opt_level: OptLevel,
+) {
+    println!("=== {} backend ===", backend.name());
+    match backend.compile(db, top_mod, layout::EVM_LAYOUT, opt_level) {
+        Ok(output) => match output {
+            codegen::BackendOutput::Yul {
+                source,
+                solc_optimize,
+            } => {
+                println!("// solc optimizer enabled: {solc_optimize}");
+                println!("{source}");
+            }
+            codegen::BackendOutput::Bytecode(bytes) => {
+                println!("bytecode ({} bytes):", bytes.len());
+                println!("{}", hex::encode(&bytes));
+            }
+        },
+        Err(err) => eprintln!("⚠️  failed to compile: {err}"),
     }
 }
 
@@ -605,8 +938,134 @@ fn dump_module_mir(db: &DriverDataBase, top_mod: TopLevelMod<'_>) {
     match lower_module(db, top_mod) {
         Ok(mir_module) => {
             println!("=== MIR for module ===");
-            print!("{}", mir::fmt::format_module(db, &mir_module));
+            print!("{}", mir_fmt::format_module(db, &mir_module));
         }
         Err(err) => eprintln!("failed to lower MIR: {err}"),
+    }
+}
+
+fn write_check_manifest(
+    staging: &Utf8PathBuf,
+    path: &Utf8PathBuf,
+    dump_mir: bool,
+    emit_yul_min: bool,
+    backend: &str,
+    opt_level: OptLevel,
+    has_errors: bool,
+) {
+    let mut out = String::new();
+    out.push_str("fe check report\n");
+    out.push_str(&format!("path: {path}\n"));
+    out.push_str(&format!("backend: {backend}\n"));
+    out.push_str(&format!("opt_level: {opt_level}\n"));
+    out.push_str(&format!("dump_mir: {dump_mir}\n"));
+    out.push_str(&format!("emit_yul_min: {emit_yul_min}\n"));
+    out.push_str(&format!(
+        "status: {}\n",
+        if has_errors { "failed" } else { "ok" }
+    ));
+    out.push_str(&format!("fe_version: {}\n", env!("CARGO_PKG_VERSION")));
+    let _ = std::fs::write(staging.join("manifest.txt"), out);
+}
+
+fn write_check_artifacts(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+    backend_kind: BackendKind,
+    backend: &dyn Backend,
+    opt_level: OptLevel,
+    report: &ReportContext,
+) -> bool {
+    match lower_module(db, top_mod) {
+        Ok(mir) => {
+            write_report_file(
+                report,
+                "artifacts/mir.txt",
+                &mir_fmt::format_module(db, &mir),
+            );
+        }
+        Err(err) => {
+            write_report_file(report, "artifacts/mir_error.txt", &format!("{err}"));
+        }
+    }
+
+    match backend_kind {
+        BackendKind::Yul => match codegen::emit_module_yul(db, top_mod) {
+            Ok(yul) => write_report_file(report, "artifacts/yul_module.yul", &yul),
+            Err(err) => {
+                write_report_file(report, "artifacts/yul_module_error.txt", &format!("{err}"))
+            }
+        },
+        BackendKind::Sonatina => {
+            match codegen::emit_module_sonatina_ir(db, top_mod) {
+                Ok(ir) => write_report_file(report, "artifacts/sonatina_ir.txt", &ir),
+                Err(err) => {
+                    write_report_file(report, "artifacts/sonatina_ir_error.txt", &format!("{err}"))
+                }
+            }
+            match codegen::validate_module_sonatina_ir(db, top_mod) {
+                Ok(v) => write_report_file(report, "artifacts/sonatina_validate.txt", &v),
+                Err(err) => write_report_file(
+                    report,
+                    "artifacts/sonatina_validate_error.txt",
+                    &format!("{err}"),
+                ),
+            }
+        }
+    }
+
+    let _hook = enable_panic_report(
+        report
+            .root_dir
+            .join("errors")
+            .join("codegen_panic_full.txt"),
+    );
+
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        backend.compile(db, top_mod, layout::EVM_LAYOUT, opt_level)
+    })) {
+        Ok(Ok(output)) => match output {
+            codegen::BackendOutput::Yul {
+                source,
+                solc_optimize,
+            } => {
+                write_report_file(report, "artifacts/backend_output.yul", &source);
+                write_report_file(
+                    report,
+                    "artifacts/backend_output_yul_solc_optimize.txt",
+                    &format!("{solc_optimize}\n"),
+                );
+                false
+            }
+            codegen::BackendOutput::Bytecode(bytes) => {
+                write_report_file(
+                    report,
+                    "artifacts/backend_bytecode.hex",
+                    &hex::encode(&bytes),
+                );
+                write_report_file(
+                    report,
+                    "artifacts/backend_bytecode_len.txt",
+                    &format!("{}\n", bytes.len()),
+                );
+                false
+            }
+        },
+        Ok(Err(err)) => {
+            let err = format!("{err}");
+            write_codegen_report_error(report, &err);
+            true
+        }
+        Err(payload) => {
+            write_report_file(
+                report,
+                "errors/codegen_panic.txt",
+                &format!(
+                    "backend panicked while compiling: {}",
+                    panic_payload_to_string(payload.as_ref())
+                ),
+            );
+            true
+        }
     }
 }

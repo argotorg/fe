@@ -30,8 +30,6 @@ pub struct IngotHandler<'a> {
     pub db: &'a mut dyn InputDb,
     ingot_urls: HashMap<IngotDescriptor, Url>,
     had_diagnostics: bool,
-    trace_enabled: bool,
-    stdout_enabled: bool,
     verbose_enabled: bool,
     reported_checkouts: HashSet<GitDescription>,
     dependency_contexts: HashMap<IngotDescriptor, Vec<DependencyContext>>,
@@ -66,18 +64,11 @@ impl<'a> IngotHandler<'a> {
             db,
             ingot_urls: HashMap::new(),
             had_diagnostics: false,
-            trace_enabled: true,
-            stdout_enabled: false,
             verbose_enabled: false,
             reported_checkouts: HashSet::new(),
             dependency_contexts: HashMap::new(),
             emitted_diagnostics: HashSet::new(),
         }
-    }
-
-    pub fn with_stdout(mut self, stdout_enabled: bool) -> Self {
-        self.stdout_enabled = stdout_enabled;
-        self
     }
 
     pub fn with_verbose(mut self, verbose_enabled: bool) -> Self {
@@ -87,10 +78,6 @@ impl<'a> IngotHandler<'a> {
 
     pub fn had_diagnostics(&self) -> bool {
         self.had_diagnostics
-    }
-
-    pub fn logging_modes(&self) -> (bool, bool) {
-        (self.trace_enabled, self.stdout_enabled)
     }
 
     fn record_dependency_context(
@@ -120,12 +107,8 @@ impl<'a> IngotHandler<'a> {
             return;
         }
         self.had_diagnostics = true;
-        if self.trace_enabled {
-            tracing::warn!(target: "resolver", "{diagnostic_string}");
-        }
-        if self.stdout_enabled {
-            eprintln!("❌ {diagnostic_string}");
-        }
+        tracing::warn!(target: "resolver", "{diagnostic_string}");
+        eprintln!("❌ {diagnostic_string}");
     }
 
     fn report_error(&mut self, diagnostic: IngotInitDiagnostics) {
@@ -134,12 +117,8 @@ impl<'a> IngotHandler<'a> {
             return;
         }
         self.had_diagnostics = true;
-        if self.trace_enabled {
-            tracing::error!(target: "resolver", "{diagnostic_string}");
-        }
-        if self.stdout_enabled {
-            eprintln!("❌ {diagnostic_string}");
-        }
+        tracing::error!(target: "resolver", "{diagnostic_string}");
+        eprintln!("❌ {diagnostic_string}");
     }
 
     fn record_files(&mut self, files: &[resolver::files::File]) {
@@ -677,12 +656,7 @@ impl<'a> ResolutionHandler<IngotResolverImpl> for IngotHandler<'a> {
                 self.record_files_owned(files);
             }
             IngotResolutionEvent::RemoteCheckoutStart { description } => {
-                if self.trace_enabled {
-                    tracing::info!(target: "resolver", "Checking out {description}");
-                }
-                if self.stdout_enabled {
-                    println!("Checking out {description}");
-                }
+                tracing::info!(target: "resolver", "Checking out {description}");
             }
             IngotResolutionEvent::RemoteCheckoutComplete {
                 ingot_url,
@@ -694,20 +668,10 @@ impl<'a> ResolutionHandler<IngotResolverImpl> for IngotHandler<'a> {
                     if self.reported_checkouts.contains(&description) {
                         return;
                     }
-                    if self.trace_enabled {
-                        tracing::debug!(target: "resolver", "Using cached checkout {}", ingot_url);
-                    }
-                    if self.stdout_enabled && self.verbose_enabled {
-                        println!("Using cached checkout {}", ingot_url);
-                    }
+                    tracing::debug!(target: "resolver", "Using cached checkout {}", ingot_url);
                     return;
                 }
-                if self.trace_enabled {
-                    tracing::info!(target: "resolver", "✅ Checked out {}", ingot_url);
-                }
-                if self.stdout_enabled {
-                    println!("✅ Checked out {}", ingot_url);
-                }
+                tracing::info!(target: "resolver", "Checked out {}", ingot_url);
             }
         }
     }
@@ -721,15 +685,10 @@ impl<'a> ResolutionHandler<IngotResolverImpl> for IngotHandler<'a> {
             description,
             IngotDescriptor::Remote(_) | IngotDescriptor::RemoteByName { .. }
         ) {
-            if self.trace_enabled {
-                tracing::error!(
-                    target: "resolver",
-                    "❌ Failed to check out {description}: {error}"
-                );
-            }
-            if self.stdout_enabled {
-                eprintln!("❌ Failed to check out {description}: {error}");
-            }
+            tracing::error!(
+                target: "resolver",
+                "Failed to check out {description}: {error}"
+            );
         }
 
         if let resolver::ingot::IngotResolutionError::Selection(selection) = &error
@@ -819,17 +778,10 @@ impl<'a> ResolutionHandler<IngotResolverImpl> for IngotHandler<'a> {
                 })
             }
             IngotDescriptor::ByNameVersion { .. } => {
-                if self.trace_enabled {
-                    tracing::error!(
-                        target: "resolver",
-                        "Unhandled ByNameVersion resolution error for {description}: {error}"
-                    );
-                }
-                if self.stdout_enabled {
-                    eprintln!(
-                        "❌ Unhandled name-only dependency resolution error for {description}: {error}"
-                    );
-                }
+                tracing::error!(
+                    target: "resolver",
+                    "Unhandled ByNameVersion resolution error for {description}: {error}"
+                );
             }
             IngotDescriptor::Remote(target) => {
                 self.report_error(IngotInitDiagnostics::UnresolvableRemoteDependency {

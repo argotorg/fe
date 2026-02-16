@@ -1,12 +1,12 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 42
+assertion_line: 33
 expression: output
 input_file: tests/fixtures/match_tuple.fe
 ---
 function $match_bool_tuple($t) -> ret {
   let v0 := 0
-  let v1 := iszero(eq(mload(add($t, 1)), 0))
+  let v1 := iszero(eq(mload(add($t, 32)), 0))
   switch v1
     case 1 {
       let v2 := iszero(eq(mload($t), 0))
@@ -57,7 +57,7 @@ function $match_mixed_tuple($t) -> ret {
   let v1 := iszero(eq(mload($t), 0))
   switch v1
     case 1 {
-      let v2 := and(mload(add($t, 1)), 0xff)
+      let v2 := and(mload(add($t, 32)), 0xff)
       switch v2
         case 0 {
           v0 := 10

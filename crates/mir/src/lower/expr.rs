@@ -249,8 +249,12 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 self.lower_call_expr(expr)
             }
             Partial::Present(Expr::Un(inner, _)) => {
-                let _ = self.lower_expr(*inner);
-                self.ensure_value(expr)
+                if self.needs_op_trait_call(expr) {
+                    self.lower_call_expr_inner(expr, None, None)
+                } else {
+                    let _ = self.lower_expr(*inner);
+                    self.ensure_value(expr)
+                }
             }
             Partial::Present(Expr::Cast(inner, _)) => {
                 let _ = self.lower_expr(*inner);
@@ -264,9 +268,13 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 self.lower_range_expr(expr, *lhs, *rhs)
             }
             Partial::Present(Expr::Bin(lhs, rhs, _)) => {
-                let _ = self.lower_expr(*lhs);
-                let _ = self.lower_expr(*rhs);
-                self.ensure_value(expr)
+                if self.needs_op_trait_call(expr) {
+                    self.lower_call_expr_inner(expr, None, None)
+                } else {
+                    let _ = self.lower_expr(*lhs);
+                    let _ = self.lower_expr(*rhs);
+                    self.ensure_value(expr)
+                }
             }
             Partial::Present(Expr::Field(lhs, field_index)) => {
                 self.lower_field_expr(expr, *lhs, *field_index)
@@ -459,7 +467,14 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         let mut receiver_space = None;
-        if self.is_method_call(expr) && !args.is_empty() {
+        // Operator expressions (Bin/Un) also have a receiver (the first operand)
+        // that may need address-space adjustment, same as method calls.
+        let has_receiver = self.is_method_call(expr)
+            || matches!(
+                expr.data(self.db, self.body),
+                Partial::Present(Expr::Bin(..) | Expr::Un(..))
+            );
+        if has_receiver && !args.is_empty() {
             let needs_space = if let Some(trait_inst) = callable.trait_inst() {
                 trait_inst.args(self.db).first().copied().is_some_and(|ty| {
                     self.value_repr_for_ty(ty, AddressSpaceKind::Memory)
@@ -1183,6 +1198,27 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     fn is_method_call(&self, expr: ExprId) -> bool {
         let exprs = self.body.exprs(self.db);
         matches!(&exprs[expr], Partial::Present(Expr::MethodCall(..)))
+    }
+
+    /// Returns true if an operator expression (binary or unary) must be lowered
+    /// as a trait method call rather than a raw EVM primitive operation.
+    ///
+    /// For primitive types (integers, booleans), the raw EVM instruction (add, mul,
+    /// iszero, etc.) matches the operator semantics. For user-defined types, the
+    /// operator desugars to a trait method call (e.g. `a + b` → `Add::add(a, b)`).
+    fn needs_op_trait_call(&self, expr: ExprId) -> bool {
+        let operand_ty = match expr.data(self.db, self.body) {
+            Partial::Present(Expr::Bin(lhs, _, _)) => self.typed_body.expr_ty(self.db, *lhs),
+            Partial::Present(Expr::Un(inner, _)) => self.typed_body.expr_ty(self.db, *inner),
+            _ => return false,
+        };
+        // Primitive types use raw EVM operations.
+        if operand_ty.is_integral(self.db) || operand_ty.is_bool(self.db) {
+            return false;
+        }
+        // Custom types need the trait method call, but only if the type checker
+        // actually resolved one (avoids errors on invalid code).
+        self.typed_body.callable_expr(expr).is_some()
     }
 
     // NOTE: field expressions are lowered via `lower_field_expr` so scalar loads become
