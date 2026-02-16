@@ -1073,7 +1073,11 @@ fn run_tests_single_file(
     let canonical = match file_path.canonicalize_utf8() {
         Ok(p) => p,
         Err(e) => {
-            return suite_error_result(suite, "setup", format!("Cannot canonicalize {file_path}: {e}"));
+            return suite_error_result(
+                suite,
+                "setup",
+                format!("Cannot canonicalize {file_path}: {e}"),
+            );
         }
     };
     let file_url = match Url::from_file_path(&canonical) {
@@ -1434,7 +1438,6 @@ pub(super) fn test_case_matches_filter(case: &TestMetadata, filter: Option<&str>
         || case.symbol_name.contains(pattern)
         || case.display_name.contains(pattern)
 }
-
 
 fn maybe_write_suite_ir(
     db: &DriverDataBase,

@@ -188,13 +188,15 @@ fn test_fe_test_both_backends(fixture: Fixture<&str>) {
 
     // Check each backend independently first for clearer diagnostics.
     assert_eq!(
-        yul.exit_code, 0,
+        yul.exit_code,
+        0,
         "fe test (yul) failed for {path}:\n{yo}\n\nTo reproduce:\n  cargo run --bin fe -- test --backend yul --report {path}",
         path = fixture.path(),
         yo = yul.combined(),
     );
     assert_eq!(
-        sonatina.exit_code, 0,
+        sonatina.exit_code,
+        0,
         "fe test (sonatina) failed for {path}:\n{so}\n\nTo reproduce:\n  cargo run --bin fe -- test --backend sonatina --report {path}",
         path = fixture.path(),
         so = sonatina.combined(),

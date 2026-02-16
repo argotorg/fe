@@ -14,15 +14,15 @@ use serde_json::Value;
 use crate::report::create_dir_all_utf8;
 
 use super::{
-    compile_and_run_test, emit_with_catch_unwind, test_case_matches_filter, write_report_error,
-    write_yul_case_artifacts, ComparisonTotals, DeploymentGasAttributionRow,
-    DeploymentGasAttributionTotals, DeltaMagnitudeTotals, EvmRuntimeMetrics, GasComparisonCase,
-    GasHotspotRow, GasMagnitudeTotals, GasMeasurement, GasTotals, ObservabilityCoverageRow,
-    ObservabilityCoverageTotals, ObservabilityPcRange, ObservabilityRuntimeSnapshot,
-    OpcodeAggregateTotals, OpcodeMagnitudeTotals, ReportContext, SuiteDeltaTotals, SymtabEntry,
-    TestResult, TraceObservabilityHotspotRow, TraceSymbolHotspotRow,
-    DEPLOYMENT_ATTRIBUTION_CSV_HEADER, DEPLOYMENT_ATTRIBUTION_CSV_HEADER_WITH_SUITE,
-    DEPLOYMENT_ATTRIBUTION_FIELD_COUNT, YUL_VERIFY_RUNTIME,
+    ComparisonTotals, DEPLOYMENT_ATTRIBUTION_CSV_HEADER,
+    DEPLOYMENT_ATTRIBUTION_CSV_HEADER_WITH_SUITE, DEPLOYMENT_ATTRIBUTION_FIELD_COUNT,
+    DeltaMagnitudeTotals, DeploymentGasAttributionRow, DeploymentGasAttributionTotals,
+    EvmRuntimeMetrics, GasComparisonCase, GasHotspotRow, GasMagnitudeTotals, GasMeasurement,
+    GasTotals, ObservabilityCoverageRow, ObservabilityCoverageTotals, ObservabilityPcRange,
+    ObservabilityRuntimeSnapshot, OpcodeAggregateTotals, OpcodeMagnitudeTotals, ReportContext,
+    SuiteDeltaTotals, SymtabEntry, TestResult, TraceObservabilityHotspotRow, TraceSymbolHotspotRow,
+    YUL_VERIFY_RUNTIME, compile_and_run_test, emit_with_catch_unwind, test_case_matches_filter,
+    write_report_error, write_yul_case_artifacts,
 };
 
 pub(super) fn collect_gas_comparison_cases(

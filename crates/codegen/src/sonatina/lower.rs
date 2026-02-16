@@ -8,8 +8,8 @@ use hir::analysis::ty::ty_def::{PrimTy, TyBase, TyData};
 use hir::hir_def::expr::{ArithBinOp, BinOp, CompBinOp, LogicalBinOp, UnOp};
 use hir::projection::{IndexSource, Projection};
 use mir::ir::{AddressSpaceKind, IntrinsicOp, Place, SyntheticValue};
-use mir::layout::TargetDataLayout;
 use mir::layout;
+use mir::layout::TargetDataLayout;
 use num_bigint::BigUint;
 use rustc_hash::FxHashMap;
 use smallvec1::SmallVec;
@@ -460,7 +460,12 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 .ok_or_else(|| LowerError::Internal(format!("unknown function: {callee_name}")))?;
 
             let args = lower_call_args(
-                ctx, callee_name, &call.args, &call.effect_args, *func_ref, "call",
+                ctx,
+                callee_name,
+                &call.args,
+                &call.effect_args,
+                *func_ref,
+                "call",
             )?;
 
             // Emit call instruction with proper return type
@@ -563,9 +568,7 @@ fn lower_call_args<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 .body
                 .values
                 .get(effect_arg.index())
-                .ok_or_else(|| {
-                    LowerError::Internal("unknown call effect argument".to_string())
-                })?
+                .ok_or_else(|| LowerError::Internal("unknown call effect argument".to_string()))?
                 .ty;
             if is_erased_runtime_ty(ctx.db, ctx.target_layout, arg_ty) {
                 continue;
@@ -1329,7 +1332,10 @@ fn lower_place_address<'db, C: sonatina_ir::func_cursor::FuncCursor>(
 
     // Get the base value's type to navigate projections
     let base_value = ctx.body.values.get(place.base.index()).ok_or_else(|| {
-        LowerError::Internal(format!("unknown MIR place base value {}", place.base.index()))
+        LowerError::Internal(format!(
+            "unknown MIR place base value {}",
+            place.base.index()
+        ))
     })?;
     let current_ty = base_value.ty;
     if is_erased_runtime_ty(ctx.db, ctx.target_layout, current_ty) {
@@ -1743,7 +1749,12 @@ pub(super) fn lower_terminator<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 })?;
 
                 let args = lower_call_args(
-                    ctx, callee_name, &call.args, &call.effect_args, *func_ref, "terminating call",
+                    ctx,
+                    callee_name,
+                    &call.args,
+                    &call.effect_args,
+                    *func_ref,
+                    "terminating call",
                 )?;
 
                 ctx.fb

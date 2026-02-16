@@ -3,10 +3,11 @@
 //! This module translates Fe MIR to Sonatina IR, which is then compiled
 //! to EVM bytecode without going through Yul/solc.
 
+mod lower;
 mod tests;
 mod types;
-mod lower;
 
+use crate::BackendError;
 use driver::DriverDataBase;
 use hir::hir_def::TopLevelMod;
 use mir::{MirModule, layout, layout::TargetDataLayout, lower_module};
@@ -15,17 +16,13 @@ use sonatina_ir::{
     BlockId, I256, Module, Signature, Type, ValueId,
     builder::{ModuleBuilder, Variable},
     func_cursor::InstInserter,
-    inst::{
-        control_flow::Call,
-        evm::EvmStop,
-    },
+    inst::{control_flow::Call, evm::EvmStop},
     ir_writer::ModuleWriter,
     isa::{Isa, evm::Evm},
     module::{FuncRef, ModuleCtx},
     object::{Directive, Embed, EmbedSymbol, Object, ObjectName, Section, SectionName, SectionRef},
 };
 use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
-use crate::BackendError;
 pub use tests::{DebugOutputSink, SonatinaTestDebugConfig, emit_test_module_sonatina};
 
 /// Error type for Sonatina lowering failures.
