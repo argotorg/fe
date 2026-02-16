@@ -164,46 +164,13 @@ fn test_tree_output(fixture: Fixture<&str>) {
     snap_test!(output, snapshot_path.to_str().unwrap());
 }
 
+/// Runs both backends on each fixture, asserts each passes, and asserts they produce
+/// identical test results.
 #[dir_test(
     dir: "$CARGO_MANIFEST_DIR/tests/fixtures/fe_test",
     glob: "*.fe",
 )]
-fn test_fe_test_yul(fixture: Fixture<&str>) {
-    let (output, exit_code) =
-        run_fe_command_with_args("test", fixture.path(), &["--backend", "yul"]);
-    assert_eq!(
-        exit_code,
-        0,
-        "fe test (yul) failed for {path}:\n{output}\n\nTo reproduce:\n  cargo run --bin fe -- test --backend yul --report {path}",
-        path = fixture.path(),
-        output = output
-    );
-}
-
-#[dir_test(
-    dir: "$CARGO_MANIFEST_DIR/tests/fixtures/fe_test",
-    glob: "*.fe",
-)]
-fn test_fe_test_sonatina(fixture: Fixture<&str>) {
-    let (output, exit_code) =
-        run_fe_command_with_args("test", fixture.path(), &["--backend", "sonatina"]);
-    assert_eq!(
-        exit_code,
-        0,
-        "fe test (sonatina) failed for {path}:\n{output}\n\nTo reproduce:\n  cargo run --bin fe -- test --backend sonatina --report {path}",
-        path = fixture.path(),
-        output = output
-    );
-}
-
-/// Runs both backends on the same fixture and asserts they produce identical test results.
-/// Catches behavioral divergence: if a test passes on one backend but fails on the other,
-/// or if the backends discover different tests, this will fail.
-#[dir_test(
-    dir: "$CARGO_MANIFEST_DIR/tests/fixtures/fe_test",
-    glob: "*.fe",
-)]
-fn test_fe_test_backends_agree(fixture: Fixture<&str>) {
+fn test_fe_test_both_backends(fixture: Fixture<&str>) {
     let yul = run_fe_main_impl(
         &["test", "--call-trace", "--backend", "yul", fixture.path()],
         None,
@@ -219,14 +186,17 @@ fn test_fe_test_backends_agree(fixture: Fixture<&str>) {
         None,
     );
 
+    // Check each backend independently first for clearer diagnostics.
     assert_eq!(
-        yul.exit_code,
-        sonatina.exit_code,
-        "Exit code mismatch for {path}:\n\n--- yul (exit {ye}) ---\n{yo}\n\n--- sonatina (exit {se}) ---\n{so}",
+        yul.exit_code, 0,
+        "fe test (yul) failed for {path}:\n{yo}\n\nTo reproduce:\n  cargo run --bin fe -- test --backend yul --report {path}",
         path = fixture.path(),
-        ye = yul.exit_code,
         yo = yul.combined(),
-        se = sonatina.exit_code,
+    );
+    assert_eq!(
+        sonatina.exit_code, 0,
+        "fe test (sonatina) failed for {path}:\n{so}\n\nTo reproduce:\n  cargo run --bin fe -- test --backend sonatina --report {path}",
+        path = fixture.path(),
         so = sonatina.combined(),
     );
 
