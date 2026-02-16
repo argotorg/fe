@@ -1,7 +1,7 @@
 use salsa::Update;
 
 use crate::analysis::HirAnalysisDb;
-use crate::core::hir_def::{ExprId, IdentId, Partial, Stmt, StmtId};
+use crate::core::hir_def::{ExprId, IdentId, Partial, Pat, PatId, Stmt, StmtId};
 
 use super::{Callable, TyChecker, instantiate_trait_method};
 use crate::analysis::ty::{
@@ -113,8 +113,51 @@ impl<'db> TyChecker<'db> {
         } else {
             self.check_pat(*pat, ascription);
         }
+        self.check_mutable_pattern_bindings(*pat);
         self.env.flush_pending_bindings();
         TyId::unit(self.db)
+    }
+
+    fn check_mutable_pattern_bindings(&mut self, pat: PatId) {
+        let Partial::Present(pat_data) = pat.data(self.db, self.body()) else {
+            return;
+        };
+
+        match pat_data {
+            Pat::Path(_, is_mut) => {
+                if !*is_mut {
+                    return;
+                }
+
+                let Some(binding) = self.env.pat_binding(pat) else {
+                    return;
+                };
+                let ty = self.env.lookup_binding_ty(&binding);
+                if ty.has_invalid(self.db) || ty.as_capability(self.db).is_none() {
+                    return;
+                }
+
+                self.push_diag(BodyDiag::MutableBindingCannotBeCapability {
+                    primary: pat.span(self.body()).into_path_pat().mut_token().into(),
+                    ty,
+                });
+            }
+            Pat::Tuple(pats) | Pat::PathTuple(_, pats) => {
+                for &pat in pats {
+                    self.check_mutable_pattern_bindings(pat);
+                }
+            }
+            Pat::Record(_, fields) => {
+                for field in fields {
+                    self.check_mutable_pattern_bindings(field.pat);
+                }
+            }
+            Pat::Or(lhs, rhs) => {
+                self.check_mutable_pattern_bindings(*lhs);
+                self.check_mutable_pattern_bindings(*rhs);
+            }
+            Pat::WildCard | Pat::Rest | Pat::Lit(..) => {}
+        }
     }
 
     fn check_for(&mut self, stmt: StmtId, stmt_data: &Stmt<'db>) -> TyId<'db> {

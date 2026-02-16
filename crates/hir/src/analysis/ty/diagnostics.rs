@@ -387,6 +387,12 @@ pub enum BodyDiag<'db> {
         ty: TyId<'db>,
     },
 
+    /// `let mut` local bindings must bind owned values, not capability handles.
+    MutableBindingCannotBeCapability {
+        primary: DynLazySpan<'db>,
+        ty: TyId<'db>,
+    },
+
     /// `own` call arguments must denote a transferable owned value.
     ///
     /// Capability-typed expressions (`mut`/`ref`/`view`) can only satisfy this when the checker
@@ -692,6 +698,7 @@ impl<'db> BodyDiag<'db> {
             Self::ExplicitBorrowRequired { .. } => 69,
             Self::OwnParamCannotBeBorrow { .. } => 70,
             Self::OwnArgMustBeOwnedMove { .. } => 72,
+            Self::MutableBindingCannotBeCapability { .. } => 73,
             Self::ArrayRepeatRequiresCopy { .. } => 71,
             Self::NonAssignableExpr(..) => 17,
             Self::ImmutableAssignment { .. } => 18,

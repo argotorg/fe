@@ -2709,6 +2709,24 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             },
 
+            Self::MutableBindingCannotBeCapability { primary, ty } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "invalid mutable local binding".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "`let mut` local bindings must be owned values (found `{}`)",
+                        ty.pretty_print(db)
+                    ),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![
+                    "remove `mut` from the local binding to keep a handle".to_string(),
+                    "or bind an owned value instead (for non-`Copy` values, use an explicit `.clone()`)".to_string(),
+                ],
+                error_code,
+            },
+
             Self::OwnArgMustBeOwnedMove {
                 primary,
                 kind,

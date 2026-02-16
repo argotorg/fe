@@ -12,7 +12,7 @@ pub fn borrowck_overwrite_handle_kills_old_loan() -> u256 {
 
     w.h = mut b
 
-    let mut ha: mut u256 = mut a
+    let ha: mut u256 = mut a
     ha += 10
 
     w.h += 20

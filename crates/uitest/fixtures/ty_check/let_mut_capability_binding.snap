@@ -1,0 +1,41 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/let_mut_capability_binding.fe
+---
+error[8-0073]: invalid mutable local binding
+   ┌─ let_mut_capability_binding.fe:10:9
+   │
+10 │     let mut h: mut u256 = mut x
+   │         ^^^ `let mut` local bindings must be owned values (found `mut u256`)
+   │
+   = remove `mut` from the local binding to keep a handle
+   = or bind an owned value instead (for non-`Copy` values, use an explicit `.clone()`)
+
+error[8-0073]: invalid mutable local binding
+   ┌─ let_mut_capability_binding.fe:15:9
+   │
+15 │     let mut h = mut x
+   │         ^^^ `let mut` local bindings must be owned values (found `mut u256`)
+   │
+   = remove `mut` from the local binding to keep a handle
+   = or bind an owned value instead (for non-`Copy` values, use an explicit `.clone()`)
+
+error[8-0073]: invalid mutable local binding
+   ┌─ let_mut_capability_binding.fe:20:9
+   │
+20 │     let mut y = x
+   │         ^^^ `let mut` local bindings must be owned values (found `ref Foo`)
+   │
+   = remove `mut` from the local binding to keep a handle
+   = or bind an owned value instead (for non-`Copy` values, use an explicit `.clone()`)
+
+error[8-0073]: invalid mutable local binding
+   ┌─ let_mut_capability_binding.fe:24:10
+   │
+24 │     let (mut h, _): (mut u256, u256) = (mut x, 1)
+   │          ^^^ `let mut` local bindings must be owned values (found `mut u256`)
+   │
+   = remove `mut` from the local binding to keep a handle
+   = or bind an owned value instead (for non-`Copy` values, use an explicit `.clone()`)

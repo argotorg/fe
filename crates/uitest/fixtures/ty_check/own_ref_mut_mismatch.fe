@@ -1,0 +1,15 @@
+struct Foo {}
+
+fn example() {
+    let o = Some(Foo{})
+    view_opt(o)
+    take_opt(o)
+    ()
+}
+
+fn view_opt(o: Option<Foo>) -> Foo {
+    o.unwrap_or(Foo{})
+}
+fn take_opt(o: own Option<Foo>) -> Foo {
+    o.unwrap_or(Foo{})
+}
