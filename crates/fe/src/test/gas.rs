@@ -25,6 +25,7 @@ use super::{
     write_report_error, write_yul_case_artifacts,
 };
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn collect_gas_comparison_cases(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,

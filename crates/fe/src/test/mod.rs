@@ -1574,6 +1574,7 @@ fn create_suite_report_staging(suite: &str) -> Result<ReportStaging, String> {
     create_report_staging_root("target/fe-test-report-staging", &name)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn compile_and_run_test(
     case: &TestMetadata,
     show_logs: bool,

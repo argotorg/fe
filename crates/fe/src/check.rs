@@ -231,6 +231,7 @@ fn resolve_check_target(
     Err("Path must be either a .fe file or a directory containing fe.toml".into())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn check_directory(
     db: &mut DriverDataBase,
     dir_path: &Utf8PathBuf,
@@ -433,6 +434,7 @@ fn dir_url(path: &Utf8PathBuf) -> Result<Url, String> {
         .map_err(|_| format!("Error: invalid or non-existent directory path: {path}"))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn check_ingot_url(
     db: &mut DriverDataBase,
     ingot_url: &Url,
@@ -647,6 +649,7 @@ fn ingot_has_source_files(db: &DriverDataBase, ingot: hir::Ingot<'_>) -> bool {
         .any(|(_, file)| matches!(file.kind(db), Some(IngotFileKind::Source)))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn check_single_file(
     db: &mut DriverDataBase,
     file_path: &Utf8PathBuf,
@@ -718,6 +721,7 @@ fn check_single_file(
     false
 }
 
+#[allow(clippy::too_many_arguments)]
 fn check_ingot(
     db: &mut DriverDataBase,
     dir_path: &Utf8PathBuf,
