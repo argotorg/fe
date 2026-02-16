@@ -8,7 +8,7 @@ use smallvec::smallvec;
 
 use super::{
     const_expr::{ConstExpr, ConstExprId},
-    const_ty::{ConstTyData, ConstTyId},
+    const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
     effects::{EffectKeyKind, effect_key_kind},
     fold::{TyFoldable, TyFolder},
     trait_def::TraitInstId,
@@ -184,7 +184,11 @@ fn lower_const_ty_ty<'db>(
     }
     let ty = lower_path(db, scope, *path, assumptions);
 
-    if ty.has_invalid(db) || ty.is_integral(db) || ty.is_bool(db) {
+    if ty.has_invalid(db)
+        || ty.is_integral(db)
+        || ty.is_bool(db)
+        || ty.is_unit_variant_only_enum(db)
+    {
         ty
     } else {
         TyId::invalid(db, InvalidCause::InvalidConstParamTy)
@@ -366,6 +370,14 @@ pub(crate) fn lower_generic_arg_list<'db>(
                             if let TyData::ConstTy(const_ty) = ty.data(db) {
                                 return TyId::const_ty(db, *const_ty);
                             }
+                        }
+                        PathRes::EnumVariant(variant)
+                            if variant.ty.is_unit_variant_only_enum(db) =>
+                        {
+                            let evaluated = EvaluatedConstTy::EnumVariant(variant.variant);
+                            let const_ty =
+                                ConstTyId::new(db, ConstTyData::Evaluated(evaluated, variant.ty));
+                            return TyId::const_ty(db, const_ty);
                         }
                         _ => {}
                     }

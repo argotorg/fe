@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/def/enum_variant_as_type.fe
+---
+error[2-0006]: expected type item here
+  ┌─ enum_variant_as_type.fe:6:13
+  │
+6 │ type X = E::A
+  │             ^ expected type here, but found enum variant `A`

@@ -1,0 +1,15 @@
+use core::intrinsic
+
+enum Mixed {
+    A(u256),
+    B,
+}
+
+const fn len() -> usize {
+    let bytes: [u8; 32] = intrinsic::__as_bytes(Mixed::B)
+    bytes[31] as usize
+}
+
+type Arr = [u8; len()]
+
+fn takes(_x: Arr) {}

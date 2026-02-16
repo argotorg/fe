@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/const_ty/enum_variant_const_ty_mismatch.fe
+---
+error[3-0011]: given type doesn't match the expected const type
+  ┌─ enum_variant_const_ty_mismatch.fe:9:10
+  │
+9 │ type X = Foo<{ E::A }>
+  │          ^^^^^^^^^^^^^ expected `u32` type here, but `E` is given

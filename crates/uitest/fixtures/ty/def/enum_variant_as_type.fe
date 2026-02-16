@@ -1,0 +1,6 @@
+enum E {
+    A,
+    B,
+}
+
+type X = E::A

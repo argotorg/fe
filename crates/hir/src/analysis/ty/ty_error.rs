@@ -1,13 +1,14 @@
 use crate::{
-    hir_def::{PathId, TypeId, scope_graph::ScopeId},
-    span::{path::LazyPathSpan, types::LazyTySpan},
-    visitor::{Visitor, VisitorCtxt, prelude::DynLazySpan, walk_path, walk_type},
+    hir_def::{GenericArg, PathId, TypeId, TypeKind, scope_graph::ScopeId},
+    span::{params::LazyGenericArgSpan, path::LazyPathSpan, types::LazyTySpan},
+    visitor::{Visitor, VisitorCtxt, prelude::DynLazySpan, walk_generic_arg, walk_path, walk_type},
 };
 
 use crate::analysis::{
     HirAnalysisDb,
     name_resolution::{
-        ExpectedPathKind, PathRes, diagnostics::PathResDiag, resolve_path_with_observer,
+        ExpectedPathKind, PathRes, diagnostics::PathResDiag, resolve_path,
+        resolve_path_with_observer,
     },
     ty::visitor::TyVisitor,
 };
@@ -77,6 +78,91 @@ impl<'db> HirTyErrVisitor<'db> {
 }
 
 impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
+    fn visit_generic_arg(
+        &mut self,
+        ctxt: &mut VisitorCtxt<'db, LazyGenericArgSpan<'db>>,
+        arg: &GenericArg<'db>,
+    ) {
+        // Generic args are syntactically ambiguous: `String<N>` may parse `N` as a type
+        // even when `String` expects a const generic arg. Avoid emitting spurious
+        // type-expected diagnostics for const-like paths in generic-arg position.
+        if let GenericArg::Type(type_arg) = arg
+            && let Some(hir_ty) = type_arg.ty.to_opt()
+            && let TypeKind::Path(path_partial) = hir_ty.data(self.db)
+            && let Some(path) = path_partial.to_opt()
+            && let Ok(resolved) = resolve_path(self.db, path, ctxt.scope(), self.assumptions, true)
+        {
+            let is_const_like = match resolved {
+                PathRes::Const(..) | PathRes::TraitConst(..) => true,
+                PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {
+                    matches!(ty.data(self.db), TyData::ConstTy(_))
+                }
+                PathRes::EnumVariant(v) => v.ty.is_unit_variant_only_enum(self.db),
+                _ => false,
+            };
+
+            if is_const_like {
+                if let Some(span) = ctxt.span() {
+                    let path_span = span.into_type_arg().ty().into_path_type().path();
+
+                    // Preserve path visibility diagnostics even though we suppress
+                    // "expected type" errors for const-like paths in generic-arg
+                    // position.
+                    let scope = ctxt.scope();
+                    let mut invisible = None;
+                    let mut check_visibility = |path: PathId<'db>, reso: &PathRes<'db>| {
+                        if invisible.is_some() {
+                            return;
+                        }
+                        if !reso.is_visible_from(self.db, scope) {
+                            invisible = Some((path, reso.name_span(self.db)));
+                        }
+                    };
+
+                    match resolve_path_with_observer(
+                        self.db,
+                        path,
+                        scope,
+                        self.assumptions,
+                        true,
+                        &mut check_visibility,
+                    ) {
+                        Ok(_) => {
+                            if let Some((path, deriv_span)) = invisible
+                                && let Some(ident) = path.ident(self.db).to_opt()
+                            {
+                                let span = path_span
+                                    .clone()
+                                    .segment(path.segment_index(self.db))
+                                    .ident();
+                                let diag = PathResDiag::Invisible(span.into(), ident, deriv_span);
+                                self.diags.push(diag.into());
+                            }
+                        }
+                        Err(err) => {
+                            if let Some(diag) = err.into_diag(
+                                self.db,
+                                path,
+                                path_span.clone(),
+                                ExpectedPathKind::Value,
+                            ) {
+                                self.diags.push(diag.into());
+                            }
+                        }
+                    }
+
+                    // Walk the underlying path to validate any nested generic arguments,
+                    // but don't validate the path itself as a type.
+                    let mut path_ctxt = VisitorCtxt::new(ctxt.db(), ctxt.scope(), path_span);
+                    walk_path(self, &mut path_ctxt, path);
+                }
+                return;
+            }
+        }
+
+        walk_generic_arg(self, ctxt, arg);
+    }
+
     fn visit_body(
         &mut self,
         _ctxt: &mut VisitorCtxt<'db, crate::core::span::item::LazyBodySpan<'db>>,

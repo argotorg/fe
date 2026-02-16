@@ -1346,8 +1346,7 @@ fn get_variant_selector<'db>(db: &'db dyn HirAnalysisDb, struct_: Struct<'db>) -
     let expected_ty = TyId::new(db, TyData::TyBase(TyBase::Prim(PrimTy::U32)));
     match try_eval_const_body(db, body, expected_ty)? {
         ConstValue::Int(value) => value.to_u32(),
-        ConstValue::Bool(_) => None,
-        ConstValue::Bytes(_) => None,
+        ConstValue::Bool(_) | ConstValue::Bytes(_) | ConstValue::EnumVariant(_) => None,
     }
 }
 

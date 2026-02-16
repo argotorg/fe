@@ -1,16 +1,16 @@
 ---
 source: crates/uitest/tests/ty.rs
 expression: diags
-input_file: crates/uitest/fixtures/ty/def/const_generics_invalid_ty.fe
+input_file: fixtures/ty/def/const_generics_invalid_ty.fe
 ---
 error[3-0009]: invalid const parameter type
   ┌─ const_generics_invalid_ty.fe:2:25
   │
 2 │ pub struct Bar<const T: Foo> {}
-  │                         ^^^ only integer or bool types are allowed as a const parameter type
+  │                         ^^^ only integer, bool, or unit-variant enum types are allowed as a const parameter type
 
 error[3-0009]: invalid const parameter type
   ┌─ const_generics_invalid_ty.fe:4:21
   │
 4 │ pub fn foo<const T: Foo>() {}
-  │                     ^^^ only integer or bool types are allowed as a const parameter type
+  │                     ^^^ only integer, bool, or unit-variant enum types are allowed as a const parameter type
