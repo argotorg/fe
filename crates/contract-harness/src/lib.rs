@@ -15,6 +15,7 @@ use revm::{
     },
     database::InMemoryDB,
     handler::{ExecuteCommitEvm, MainBuilder, MainContext, MainnetContext, MainnetEvm},
+    interpreter::interpreter_types::Jumps,
     primitives::{Address, Bytes as EvmBytes, Log, TxKind},
     state::AccountInfo,
 };
@@ -160,6 +161,29 @@ pub struct CallResult {
 pub struct CallResultWithLogs {
     pub result: CallResult,
     pub logs: Vec<String>,
+}
+
+/// Per-call gas attribution gathered from a full instruction trace replay.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CallGasProfile {
+    /// Number of EVM instructions executed.
+    pub step_count: u64,
+    /// Sum of per-step gas deltas on the root runtime frame.
+    pub total_step_gas: u64,
+    /// Root-frame gas attributed to CREATE opcode steps (`0xF0`).
+    pub create_opcode_gas: u64,
+    /// Root-frame gas attributed to CREATE2 opcode steps (`0xF5`).
+    pub create2_opcode_gas: u64,
+    /// Root-frame gas attributed to all non-CREATE/CREATE2 opcode steps.
+    pub non_create_opcode_gas: u64,
+    /// Number of CREATE opcode steps (`0xF0`).
+    pub create_opcode_steps: u64,
+    /// Number of CREATE2 opcode steps (`0xF5`).
+    pub create2_opcode_steps: u64,
+    /// Gas reported by CREATE frame outcomes (constructor execution envelope).
+    pub constructor_frame_gas: u64,
+    /// Root-frame gas outside constructor execution (`total_step_gas - constructor_frame_gas`).
+    pub non_constructor_frame_gas: u64,
 }
 
 fn prepare_account(
@@ -843,24 +867,198 @@ impl RuntimeInstance {
     /// Uses `&self` because this is a read-only replay that does not mutate the
     /// runtime state used by real executions.
     pub fn call_raw_step_count(&self, calldata: &[u8], options: ExecutionOptions) -> u64 {
-        #[derive(Default)]
-        struct StepCounter {
-            total_steps: u64,
+        self.call_raw_gas_profile(calldata, options).step_count
+    }
+
+    /// Re-executes the call on a cloned EVM context and returns full-step gas attribution.
+    ///
+    /// Uses `&self` because this is a read-only replay that does not mutate the
+    /// runtime state used by real executions.
+    pub fn call_raw_gas_profile(
+        &self,
+        calldata: &[u8],
+        options: ExecutionOptions,
+    ) -> CallGasProfile {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        enum InvocationKind {
+            Call,
+            Create,
         }
 
-        impl<CTX, INTR: revm::interpreter::InterpreterTypes> revm::Inspector<CTX, INTR> for StepCounter {
-            fn step(
+        #[derive(Debug, Clone, Copy)]
+        struct PendingInvocation {
+            kind: InvocationKind,
+            started_interp: bool,
+        }
+
+        #[derive(Debug, Clone, Copy)]
+        struct FrameState {
+            in_constructor: bool,
+            pending_gas_remaining: u64,
+            pending_opcode: u8,
+        }
+
+        impl FrameState {
+            fn new(in_constructor: bool, gas_limit: u64) -> Self {
+                Self {
+                    in_constructor,
+                    pending_gas_remaining: gas_limit,
+                    pending_opcode: 0,
+                }
+            }
+        }
+
+        #[derive(Debug, Default)]
+        struct GasAttributionInspector {
+            frame_stack: Vec<FrameState>,
+            pending_invocations: Vec<PendingInvocation>,
+            profile: CallGasProfile,
+        }
+
+        impl GasAttributionInspector {
+            fn record_root_step_delta(&mut self, opcode: u8, delta: u64) {
+                self.profile.total_step_gas = self.profile.total_step_gas.saturating_add(delta);
+                match opcode {
+                    0xf0 => {
+                        self.profile.create_opcode_steps += 1;
+                        self.profile.create_opcode_gas =
+                            self.profile.create_opcode_gas.saturating_add(delta);
+                    }
+                    0xf5 => {
+                        self.profile.create2_opcode_steps += 1;
+                        self.profile.create2_opcode_gas =
+                            self.profile.create2_opcode_gas.saturating_add(delta);
+                    }
+                    _ => {}
+                }
+            }
+
+            fn complete_invocation(&mut self, kind: InvocationKind) -> Option<PendingInvocation> {
+                self.pending_invocations
+                    .iter()
+                    .rposition(|invocation| invocation.kind == kind)
+                    .map(|index| self.pending_invocations.remove(index))
+            }
+        }
+
+        impl<CTX, INTR: revm::interpreter::InterpreterTypes> revm::Inspector<CTX, INTR>
+            for GasAttributionInspector
+        {
+            fn initialize_interp(
                 &mut self,
-                _interp: &mut revm::interpreter::Interpreter<INTR>,
+                interp: &mut revm::interpreter::Interpreter<INTR>,
                 _context: &mut CTX,
             ) {
-                self.total_steps += 1;
+                let in_constructor = if self.frame_stack.is_empty() {
+                    false
+                } else {
+                    let parent_in_constructor = self
+                        .frame_stack
+                        .last()
+                        .map(|frame| frame.in_constructor)
+                        .unwrap_or(false);
+                    let child_kind = self
+                        .pending_invocations
+                        .iter_mut()
+                        .rev()
+                        .find(|invocation| !invocation.started_interp)
+                        .map(|invocation| {
+                            invocation.started_interp = true;
+                            invocation.kind
+                        });
+                    parent_in_constructor || matches!(child_kind, Some(InvocationKind::Create))
+                };
+                self.frame_stack
+                    .push(FrameState::new(in_constructor, interp.gas.limit()));
+            }
+
+            fn step(
+                &mut self,
+                interp: &mut revm::interpreter::Interpreter<INTR>,
+                _context: &mut CTX,
+            ) {
+                if let Some(frame) = self.frame_stack.last_mut() {
+                    frame.pending_gas_remaining = interp.gas.remaining();
+                    frame.pending_opcode = interp.bytecode.opcode();
+                }
+                self.profile.step_count += 1;
+            }
+
+            fn step_end(
+                &mut self,
+                interp: &mut revm::interpreter::Interpreter<INTR>,
+                _context: &mut CTX,
+            ) {
+                let frame_depth = self.frame_stack.len();
+                let Some(frame) = self.frame_stack.last_mut() else {
+                    return;
+                };
+                let remaining = interp.gas.remaining();
+                let delta = frame.pending_gas_remaining.saturating_sub(remaining);
+                let opcode = frame.pending_opcode;
+                if frame_depth == 1 {
+                    self.record_root_step_delta(opcode, delta);
+                }
+            }
+
+            fn call(
+                &mut self,
+                _context: &mut CTX,
+                _inputs: &mut revm::interpreter::CallInputs,
+            ) -> Option<revm::interpreter::CallOutcome> {
+                self.pending_invocations.push(PendingInvocation {
+                    kind: InvocationKind::Call,
+                    started_interp: false,
+                });
+                None
+            }
+
+            fn call_end(
+                &mut self,
+                _context: &mut CTX,
+                _inputs: &revm::interpreter::CallInputs,
+                _outcome: &mut revm::interpreter::CallOutcome,
+            ) {
+                if let Some(invocation) = self.complete_invocation(InvocationKind::Call)
+                    && invocation.started_interp
+                {
+                    let _ = self.frame_stack.pop();
+                }
+            }
+
+            fn create(
+                &mut self,
+                _context: &mut CTX,
+                _inputs: &mut revm::interpreter::CreateInputs,
+            ) -> Option<revm::interpreter::CreateOutcome> {
+                self.pending_invocations.push(PendingInvocation {
+                    kind: InvocationKind::Create,
+                    started_interp: false,
+                });
+                None
+            }
+
+            fn create_end(
+                &mut self,
+                _context: &mut CTX,
+                _inputs: &revm::interpreter::CreateInputs,
+                outcome: &mut revm::interpreter::CreateOutcome,
+            ) {
+                if let Some(invocation) = self.complete_invocation(InvocationKind::Create)
+                    && invocation.started_interp
+                {
+                    self.profile.constructor_frame_gas = self
+                        .profile
+                        .constructor_frame_gas
+                        .saturating_add(outcome.result.gas.spent());
+                    let _ = self.frame_stack.pop();
+                }
             }
         }
 
         let ctx = self.evm.ctx.clone();
-        let mut counter = StepCounter::default();
-        let mut trace_evm = ctx.build_mainnet_with_inspector(&mut counter);
+        let mut inspector = GasAttributionInspector::default();
+        let mut trace_evm = ctx.build_mainnet_with_inspector(&mut inspector);
 
         // Use nonce 0 for the trace run — this is a replay on a clone.
         let nonce = self
@@ -881,7 +1079,15 @@ impl RuntimeInstance {
             .expect("tx builder is valid");
 
         let _ = trace_evm.inspect_tx_commit(tx);
-        counter.total_steps
+        let mut profile = trace_evm.inspector.profile;
+        let create_total = profile
+            .create_opcode_gas
+            .saturating_add(profile.create2_opcode_gas);
+        profile.non_create_opcode_gas = profile.total_step_gas.saturating_sub(create_total);
+        profile.non_constructor_frame_gas = profile
+            .total_step_gas
+            .saturating_sub(profile.constructor_frame_gas);
+        profile
     }
 
     /// Returns the contract address assigned to this runtime instance.
