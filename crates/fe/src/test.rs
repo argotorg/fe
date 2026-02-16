@@ -21,6 +21,7 @@ use driver::DriverDataBase;
 use hir::hir_def::{HirIngot, TopLevelMod};
 use mir::{fmt as mir_fmt, lower_module};
 use rustc_hash::{FxHashMap, FxHashSet};
+use serde_json::Value;
 use solc_runner::compile_single_contract;
 use std::{
     fmt::Write as _,
@@ -204,6 +205,74 @@ struct TraceSymbolHotspotRow {
     steps_in_symbol: usize,
 }
 
+#[derive(Debug, Clone)]
+struct ObservabilityCoverageRow {
+    suite: String,
+    test: String,
+    section: String,
+    schema_version: String,
+    section_bytes: u64,
+    code_bytes: u64,
+    data_bytes: u64,
+    embed_bytes: u64,
+    mapped_code_bytes: u64,
+    unmapped_code_bytes: u64,
+    unmapped_no_ir_inst: u64,
+    unmapped_label_or_fixup_only: u64,
+    unmapped_synthetic: u64,
+    unmapped_unknown: u64,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct ObservabilityCoverageTotals {
+    section_bytes: u128,
+    code_bytes: u128,
+    data_bytes: u128,
+    embed_bytes: u128,
+    mapped_code_bytes: u128,
+    unmapped_code_bytes: u128,
+    unmapped_no_ir_inst: u128,
+    unmapped_label_or_fixup_only: u128,
+    unmapped_synthetic: u128,
+    unmapped_unknown: u128,
+}
+
+#[derive(Debug, Clone)]
+struct ObservabilityPcRange {
+    start: u32,
+    end: u32,
+    func_name: String,
+    reason: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ObservabilityRuntimeSnapshot {
+    section: String,
+    schema_version: String,
+    section_bytes: u64,
+    code_bytes: u64,
+    data_bytes: u64,
+    embed_bytes: u64,
+    mapped_code_bytes: u64,
+    unmapped_code_bytes: u64,
+    unmapped_no_ir_inst: u64,
+    unmapped_label_or_fixup_only: u64,
+    unmapped_synthetic: u64,
+    unmapped_unknown: u64,
+    pc_ranges: Vec<ObservabilityPcRange>,
+}
+
+#[derive(Debug, Clone)]
+struct TraceObservabilityHotspotRow {
+    suite: String,
+    test: String,
+    function: String,
+    reason: String,
+    tail_steps_total: usize,
+    tail_steps_mapped: usize,
+    steps_in_bucket: usize,
+}
+
 impl GasMeasurement {
     fn from_test_outcome(outcome: &TestOutcome) -> Self {
         Self {
@@ -241,6 +310,21 @@ impl GasTotals {
         self.vs_yul_opt.sonatina_higher += other.vs_yul_opt.sonatina_higher;
         self.vs_yul_opt.equal += other.vs_yul_opt.equal;
         self.vs_yul_opt.incomplete += other.vs_yul_opt.incomplete;
+    }
+}
+
+impl ObservabilityCoverageTotals {
+    fn add_row(&mut self, row: &ObservabilityCoverageRow) {
+        self.section_bytes += row.section_bytes as u128;
+        self.code_bytes += row.code_bytes as u128;
+        self.data_bytes += row.data_bytes as u128;
+        self.embed_bytes += row.embed_bytes as u128;
+        self.mapped_code_bytes += row.mapped_code_bytes as u128;
+        self.unmapped_code_bytes += row.unmapped_code_bytes as u128;
+        self.unmapped_no_ir_inst += row.unmapped_no_ir_inst as u128;
+        self.unmapped_label_or_fixup_only += row.unmapped_label_or_fixup_only as u128;
+        self.unmapped_synthetic += row.unmapped_synthetic as u128;
+        self.unmapped_unknown += row.unmapped_unknown as u128;
     }
 }
 
@@ -1565,6 +1649,151 @@ fn map_pc_to_symbol(pc: u32, symtab: &[SymtabEntry]) -> Option<&str> {
     None
 }
 
+fn json_u64(value: Option<&Value>) -> u64 {
+    value.and_then(Value::as_u64).unwrap_or(0)
+}
+
+fn parse_observability_runtime_snapshot(contents: &str) -> Option<ObservabilityRuntimeSnapshot> {
+    let root: Value = serde_json::from_str(contents).ok()?;
+    let section = root
+        .get("sections")
+        .and_then(Value::as_array)?
+        .iter()
+        .find(|entry| entry.get("section").and_then(Value::as_str) == Some("runtime"))?;
+
+    let unmapped_obj = section
+        .get("unmapped_reason_coverage")
+        .and_then(Value::as_object);
+    let unmapped_reason = |key: &str| -> u64 {
+        unmapped_obj
+            .and_then(|obj| obj.get(key))
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+    };
+
+    let mut pc_ranges = Vec::new();
+    if let Some(entries) = section.get("pc_map").and_then(Value::as_array) {
+        for entry in entries {
+            let start = entry.get("pc_start").and_then(Value::as_u64);
+            let end = entry.get("pc_end").and_then(Value::as_u64);
+            let (Some(start), Some(end)) = (start, end) else {
+                continue;
+            };
+            if end <= start || end > u32::MAX as u64 {
+                continue;
+            }
+            let func_name = entry
+                .get("func_name")
+                .and_then(Value::as_str)
+                .unwrap_or("<unknown>")
+                .to_string();
+            let reason = entry
+                .get("reason")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            pc_ranges.push(ObservabilityPcRange {
+                start: start as u32,
+                end: end as u32,
+                func_name,
+                reason,
+            });
+        }
+    }
+    pc_ranges.sort_by_key(|range| range.start);
+
+    Some(ObservabilityRuntimeSnapshot {
+        section: section
+            .get("section")
+            .and_then(Value::as_str)
+            .unwrap_or("runtime")
+            .to_string(),
+        schema_version: section
+            .get("schema_version")
+            .and_then(Value::as_str)
+            .unwrap_or("-")
+            .to_string(),
+        section_bytes: json_u64(section.get("section_bytes")),
+        code_bytes: json_u64(section.get("code_bytes")),
+        data_bytes: json_u64(section.get("data_bytes")),
+        embed_bytes: json_u64(section.get("embed_bytes")),
+        mapped_code_bytes: json_u64(section.get("mapped_code_bytes")),
+        unmapped_code_bytes: json_u64(section.get("unmapped_code_bytes")),
+        unmapped_no_ir_inst: unmapped_reason("no_ir_inst"),
+        unmapped_label_or_fixup_only: unmapped_reason("label_or_fixup_only"),
+        unmapped_synthetic: unmapped_reason("synthetic"),
+        unmapped_unknown: unmapped_reason("unknown"),
+        pc_ranges,
+    })
+}
+
+fn load_suite_observability_runtime(
+    suite_dir: &Utf8PathBuf,
+    suite: &str,
+) -> (
+    Vec<ObservabilityCoverageRow>,
+    FxHashMap<String, Vec<ObservabilityPcRange>>,
+) {
+    let mut rows = Vec::new();
+    let mut ranges_by_test: FxHashMap<String, Vec<ObservabilityPcRange>> = FxHashMap::default();
+    let tests_dir = suite_dir.join("artifacts").join("tests");
+    let Ok(entries) = std::fs::read_dir(&tests_dir) else {
+        return (rows, ranges_by_test);
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let test = entry.file_name().to_string_lossy().to_string();
+        let obs_path = path.join("sonatina").join("observability.json");
+        let Ok(contents) = std::fs::read_to_string(&obs_path) else {
+            continue;
+        };
+        let Some(snapshot) = parse_observability_runtime_snapshot(&contents) else {
+            continue;
+        };
+        rows.push(ObservabilityCoverageRow {
+            suite: suite.to_string(),
+            test: test.clone(),
+            section: snapshot.section,
+            schema_version: snapshot.schema_version,
+            section_bytes: snapshot.section_bytes,
+            code_bytes: snapshot.code_bytes,
+            data_bytes: snapshot.data_bytes,
+            embed_bytes: snapshot.embed_bytes,
+            mapped_code_bytes: snapshot.mapped_code_bytes,
+            unmapped_code_bytes: snapshot.unmapped_code_bytes,
+            unmapped_no_ir_inst: snapshot.unmapped_no_ir_inst,
+            unmapped_label_or_fixup_only: snapshot.unmapped_label_or_fixup_only,
+            unmapped_synthetic: snapshot.unmapped_synthetic,
+            unmapped_unknown: snapshot.unmapped_unknown,
+        });
+        ranges_by_test.insert(test, snapshot.pc_ranges);
+    }
+    rows.sort_by(|a, b| a.test.cmp(&b.test).then_with(|| a.section.cmp(&b.section)));
+    (rows, ranges_by_test)
+}
+
+fn map_pc_to_observability(
+    pc: u32,
+    ranges: &[ObservabilityPcRange],
+) -> Option<&ObservabilityPcRange> {
+    let mut lo = 0usize;
+    let mut hi = ranges.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        let range = &ranges[mid];
+        if pc < range.start {
+            hi = mid;
+        } else if pc >= range.end {
+            lo = mid + 1;
+        } else {
+            return Some(range);
+        }
+    }
+    None
+}
+
 fn evm_runtime_metrics_from_bytes(bytes: &[u8]) -> EvmRuntimeMetrics {
     let mut metrics = EvmRuntimeMetrics {
         byte_len: bytes.len(),
@@ -2025,6 +2254,97 @@ fn write_trace_symbol_hotspots_csv(path: &Utf8PathBuf, rows: &[TraceSymbolHotspo
             row.tail_steps_mapped,
             row.steps_in_symbol,
             csv_escape(&pct)
+        ));
+    }
+    let _ = std::fs::write(path, out);
+}
+
+fn write_observability_coverage_csv(path: &Utf8PathBuf, rows: &[ObservabilityCoverageRow]) {
+    let mut sorted = rows.to_vec();
+    sorted.sort_by(|a, b| {
+        a.suite
+            .cmp(&b.suite)
+            .then_with(|| a.test.cmp(&b.test))
+            .then_with(|| a.section.cmp(&b.section))
+    });
+
+    let mut out = String::new();
+    out.push_str("suite,test,section,schema_version,section_bytes,code_bytes,data_bytes,embed_bytes,mapped_code_bytes,unmapped_code_bytes,mapped_code_pct,unmapped_code_pct,unmapped_no_ir_inst,unmapped_label_or_fixup_only,unmapped_synthetic,unmapped_unknown\n");
+    for row in sorted {
+        let mapped_pct = if row.code_bytes == 0 {
+            "n/a".to_string()
+        } else {
+            format!(
+                "{:.2}%",
+                (row.mapped_code_bytes as f64 * 100.0) / row.code_bytes as f64
+            )
+        };
+        let unmapped_pct = if row.code_bytes == 0 {
+            "n/a".to_string()
+        } else {
+            format!(
+                "{:.2}%",
+                (row.unmapped_code_bytes as f64 * 100.0) / row.code_bytes as f64
+            )
+        };
+        out.push_str(&format!(
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+            csv_escape(&row.suite),
+            csv_escape(&row.test),
+            csv_escape(&row.section),
+            csv_escape(&row.schema_version),
+            row.section_bytes,
+            row.code_bytes,
+            row.data_bytes,
+            row.embed_bytes,
+            row.mapped_code_bytes,
+            row.unmapped_code_bytes,
+            csv_escape(&mapped_pct),
+            csv_escape(&unmapped_pct),
+            row.unmapped_no_ir_inst,
+            row.unmapped_label_or_fixup_only,
+            row.unmapped_synthetic,
+            row.unmapped_unknown,
+        ));
+    }
+    let _ = std::fs::write(path, out);
+}
+
+fn write_trace_observability_hotspots_csv(
+    path: &Utf8PathBuf,
+    rows: &[TraceObservabilityHotspotRow],
+) {
+    let mut sorted = rows.to_vec();
+    sorted.sort_by(|a, b| {
+        b.steps_in_bucket
+            .cmp(&a.steps_in_bucket)
+            .then_with(|| a.suite.cmp(&b.suite))
+            .then_with(|| a.test.cmp(&b.test))
+            .then_with(|| a.function.cmp(&b.function))
+            .then_with(|| a.reason.cmp(&b.reason))
+    });
+
+    let mut out = String::new();
+    out.push_str("suite,test,function,reason,tail_steps_total,tail_steps_mapped,steps_in_bucket,bucket_share_of_tail_pct\n");
+    for row in sorted {
+        let pct = if row.tail_steps_total == 0 {
+            "n/a".to_string()
+        } else {
+            format!(
+                "{:.2}%",
+                (row.steps_in_bucket as f64 * 100.0) / row.tail_steps_total as f64
+            )
+        };
+        out.push_str(&format!(
+            "{},{},{},{},{},{},{},{}\n",
+            csv_escape(&row.suite),
+            csv_escape(&row.test),
+            csv_escape(&row.function),
+            csv_escape(&row.reason),
+            row.tail_steps_total,
+            row.tail_steps_mapped,
+            row.steps_in_bucket,
+            csv_escape(&pct),
         ));
     }
     let _ = std::fs::write(path, out);
@@ -2665,6 +2985,168 @@ fn append_trace_symbol_hotspots_summary(out: &mut String, rows: &[TraceSymbolHot
     out.push('\n');
 }
 
+fn append_observability_coverage_summary(
+    out: &mut String,
+    rows: &[ObservabilityCoverageRow],
+    totals: ObservabilityCoverageTotals,
+) {
+    if rows.is_empty() {
+        return;
+    }
+
+    let mut test_keys: FxHashSet<(String, String)> = FxHashSet::default();
+    for row in rows {
+        test_keys.insert((row.suite.clone(), row.test.clone()));
+    }
+
+    out.push_str("## Sonatina Observability Coverage\n\n");
+    out.push_str(&format!("- observed_sections: {}\n", rows.len()));
+    out.push_str(&format!("- observed_tests: {}\n", test_keys.len()));
+    out.push_str(&format!("- code_bytes_total: {}\n", totals.code_bytes));
+    out.push_str(&format!(
+        "- mapped_code_bytes_total: {}\n",
+        totals.mapped_code_bytes
+    ));
+    out.push_str(&format!(
+        "- unmapped_code_bytes_total: {}\n",
+        totals.unmapped_code_bytes
+    ));
+    let mapped_pct = if totals.code_bytes == 0 {
+        "n/a".to_string()
+    } else {
+        format!(
+            "{:.2}%",
+            (totals.mapped_code_bytes as f64 * 100.0) / totals.code_bytes as f64
+        )
+    };
+    let unmapped_pct = if totals.code_bytes == 0 {
+        "n/a".to_string()
+    } else {
+        format!(
+            "{:.2}%",
+            (totals.unmapped_code_bytes as f64 * 100.0) / totals.code_bytes as f64
+        )
+    };
+    out.push_str(&format!("- mapped_code_pct: {mapped_pct}\n"));
+    out.push_str(&format!("- unmapped_code_pct: {unmapped_pct}\n"));
+    out.push_str(&format!(
+        "- unmapped_synthetic_bytes: {} ({})\n",
+        totals.unmapped_synthetic,
+        format_percent_cell(ratio_percent_i128(
+            totals.unmapped_synthetic as i128,
+            totals.unmapped_code_bytes as i128
+        ))
+    ));
+    out.push_str(&format!(
+        "- unmapped_label_or_fixup_only_bytes: {} ({})\n",
+        totals.unmapped_label_or_fixup_only,
+        format_percent_cell(ratio_percent_i128(
+            totals.unmapped_label_or_fixup_only as i128,
+            totals.unmapped_code_bytes as i128
+        ))
+    ));
+    out.push_str(&format!(
+        "- unmapped_no_ir_inst_bytes: {} ({})\n",
+        totals.unmapped_no_ir_inst,
+        format_percent_cell(ratio_percent_i128(
+            totals.unmapped_no_ir_inst as i128,
+            totals.unmapped_code_bytes as i128
+        ))
+    ));
+    out.push_str(&format!(
+        "- unmapped_unknown_bytes: {} ({})\n\n",
+        totals.unmapped_unknown,
+        format_percent_cell(ratio_percent_i128(
+            totals.unmapped_unknown as i128,
+            totals.unmapped_code_bytes as i128
+        ))
+    ));
+
+    let mut top_rows = rows.to_vec();
+    top_rows.sort_by(|a, b| {
+        b.unmapped_code_bytes
+            .cmp(&a.unmapped_code_bytes)
+            .then_with(|| a.suite.cmp(&b.suite))
+            .then_with(|| a.test.cmp(&b.test))
+            .then_with(|| a.section.cmp(&b.section))
+    });
+    out.push_str("| rank | suite | test | section | unmapped_code_bytes | unmapped_code_pct | synthetic_share_of_unmapped |\n");
+    out.push_str("| ---: | --- | --- | --- | ---: | ---: | ---: |\n");
+    for (idx, row) in top_rows.iter().take(10).enumerate() {
+        let unmapped_pct = if row.code_bytes == 0 {
+            "n/a".to_string()
+        } else {
+            format!(
+                "{:.2}%",
+                (row.unmapped_code_bytes as f64 * 100.0) / row.code_bytes as f64
+            )
+        };
+        let synthetic_share = format_percent_cell(ratio_percent_i128(
+            row.unmapped_synthetic as i128,
+            row.unmapped_code_bytes as i128,
+        ));
+        out.push_str(&format!(
+            "| {} | {} | {} | {} | {} | {} | {} |\n",
+            idx + 1,
+            row.suite,
+            row.test,
+            row.section,
+            row.unmapped_code_bytes,
+            unmapped_pct,
+            synthetic_share
+        ));
+    }
+    out.push('\n');
+}
+
+fn append_trace_observability_hotspots_summary(
+    out: &mut String,
+    rows: &[TraceObservabilityHotspotRow],
+) {
+    if rows.is_empty() {
+        return;
+    }
+    let mut sorted = rows.to_vec();
+    sorted.sort_by(|a, b| {
+        b.steps_in_bucket
+            .cmp(&a.steps_in_bucket)
+            .then_with(|| a.suite.cmp(&b.suite))
+            .then_with(|| a.test.cmp(&b.test))
+            .then_with(|| a.function.cmp(&b.function))
+            .then_with(|| a.reason.cmp(&b.reason))
+    });
+
+    out.push_str("## Tail Trace Observability Attribution (Sonatina)\n\n");
+    out.push_str(
+        "Mapped from tail trace PCs to observability PC ranges (`debug/*.evm_trace.txt` + `artifacts/tests/<test>/sonatina/observability.json`).\n\n",
+    );
+    out.push_str(
+        "| rank | suite | test | function | reason | steps_in_bucket | bucket_share_of_tail |\n",
+    );
+    out.push_str("| ---: | --- | --- | --- | --- | ---: | ---: |\n");
+    for (idx, row) in sorted.iter().take(12).enumerate() {
+        let pct = if row.tail_steps_total == 0 {
+            "n/a".to_string()
+        } else {
+            format!(
+                "{:.2}%",
+                (row.steps_in_bucket as f64 * 100.0) / row.tail_steps_total as f64
+            )
+        };
+        out.push_str(&format!(
+            "| {} | {} | {} | {} | {} | {} | {} |\n",
+            idx + 1,
+            row.suite,
+            row.test,
+            row.function,
+            row.reason,
+            row.steps_in_bucket,
+            pct
+        ));
+    }
+    out.push('\n');
+}
+
 fn gas_opcode_comparison_header() -> &'static str {
     "test,symbol,yul_unopt_steps,yul_opt_steps,sonatina_steps,steps_ratio_vs_yul_unopt,steps_ratio_vs_yul_opt,yul_unopt_runtime_bytes,yul_opt_runtime_bytes,sonatina_runtime_bytes,bytes_ratio_vs_yul_unopt,bytes_ratio_vs_yul_opt,yul_unopt_runtime_ops,yul_opt_runtime_ops,sonatina_runtime_ops,ops_ratio_vs_yul_unopt,ops_ratio_vs_yul_opt,yul_unopt_stack_ops_pct,yul_opt_stack_ops_pct,sonatina_stack_ops_pct,yul_opt_swap_ops,sonatina_swap_ops,swap_ratio_vs_yul_opt,yul_opt_pop_ops,sonatina_pop_ops,pop_ratio_vs_yul_opt,yul_opt_jump_ops,sonatina_jump_ops,jump_ratio_vs_yul_opt,yul_opt_jumpi_ops,sonatina_jumpi_ops,jumpi_ratio_vs_yul_opt,yul_opt_iszero_ops,sonatina_iszero_ops,iszero_ratio_vs_yul_opt,yul_opt_mem_rw_ops,sonatina_mem_rw_ops,mem_rw_ratio_vs_yul_opt,yul_opt_storage_rw_ops,sonatina_storage_rw_ops,storage_rw_ratio_vs_yul_opt,yul_opt_keccak_ops,sonatina_keccak_ops,keccak_ratio_vs_yul_opt,yul_opt_call_family_ops,sonatina_call_family_ops,call_family_ratio_vs_yul_opt,yul_opt_copy_ops,sonatina_copy_ops,copy_ratio_vs_yul_opt,note"
 }
@@ -3230,8 +3712,18 @@ fn write_run_gas_comparison_summary(root_dir: &Utf8PathBuf, opt_level: OptLevel)
     let mut hotspots: Vec<GasHotspotRow> = Vec::new();
     let mut suite_rollup: FxHashMap<String, SuiteDeltaTotals> = FxHashMap::default();
     let mut trace_symbol_hotspots: Vec<TraceSymbolHotspotRow> = Vec::new();
+    let mut observability_coverage_rows: Vec<ObservabilityCoverageRow> = Vec::new();
+    let mut observability_coverage_totals = ObservabilityCoverageTotals::default();
+    let mut trace_observability_hotspots: Vec<TraceObservabilityHotspotRow> = Vec::new();
 
     for (suite, suite_dir) in suite_dirs {
+        let (suite_observability_rows, suite_observability_ranges) =
+            load_suite_observability_runtime(&suite_dir, &suite);
+        for row in suite_observability_rows {
+            observability_coverage_totals.add_row(&row);
+            observability_coverage_rows.push(row);
+        }
+
         let suite_rows_path = suite_dir.join("artifacts").join("gas_comparison.csv");
         if let Ok(contents) = std::fs::read_to_string(&suite_rows_path) {
             for (idx, line) in contents.lines().enumerate() {
@@ -3336,9 +3828,7 @@ fn write_run_gas_comparison_summary(root_dir: &Utf8PathBuf, opt_level: OptLevel)
             .ok()
             .map(|contents| parse_symtab_entries(&contents))
             .unwrap_or_default();
-        if !symtab_entries.is_empty()
-            && let Ok(entries) = std::fs::read_dir(&debug_dir)
-        {
+        if let Ok(entries) = std::fs::read_dir(&debug_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if !path.is_file() {
@@ -3359,25 +3849,65 @@ fn write_run_gas_comparison_summary(root_dir: &Utf8PathBuf, opt_level: OptLevel)
                 }
                 let mut counts: FxHashMap<String, usize> = FxHashMap::default();
                 let mut mapped = 0usize;
-                for pc in &pcs {
-                    if let Some(symbol) = map_pc_to_symbol(*pc, &symtab_entries) {
-                        *counts.entry(symbol.to_string()).or_default() += 1;
-                        mapped += 1;
+                if !symtab_entries.is_empty() {
+                    for pc in &pcs {
+                        if let Some(symbol) = map_pc_to_symbol(*pc, &symtab_entries) {
+                            *counts.entry(symbol.to_string()).or_default() += 1;
+                            mapped += 1;
+                        }
                     }
                 }
                 let test_name = file_name
                     .strip_suffix(".evm_trace.txt")
                     .unwrap_or(file_name)
                     .to_string();
-                for (symbol, steps_in_symbol) in counts {
-                    trace_symbol_hotspots.push(TraceSymbolHotspotRow {
-                        suite: suite.clone(),
-                        test: test_name.clone(),
-                        symbol,
-                        tail_steps_total: pcs.len(),
-                        tail_steps_mapped: mapped,
-                        steps_in_symbol,
-                    });
+                let short_test_name = test_name
+                    .split_once("__")
+                    .map(|(_, suffix)| suffix)
+                    .unwrap_or(test_name.as_str())
+                    .to_string();
+                if !counts.is_empty() {
+                    for (symbol, steps_in_symbol) in counts {
+                        trace_symbol_hotspots.push(TraceSymbolHotspotRow {
+                            suite: suite.clone(),
+                            test: test_name.clone(),
+                            symbol,
+                            tail_steps_total: pcs.len(),
+                            tail_steps_mapped: mapped,
+                            steps_in_symbol,
+                        });
+                    }
+                }
+
+                if let Some(pc_ranges) = suite_observability_ranges.get(&short_test_name) {
+                    let mut obs_counts: FxHashMap<(String, String), usize> = FxHashMap::default();
+                    let mut obs_mapped = 0usize;
+                    for pc in &pcs {
+                        if let Some(range) = map_pc_to_observability(*pc, pc_ranges) {
+                            obs_mapped += 1;
+                            let reason =
+                                range.reason.clone().unwrap_or_else(|| "mapped".to_string());
+                            *obs_counts
+                                .entry((range.func_name.clone(), reason))
+                                .or_default() += 1;
+                        } else {
+                            *obs_counts
+                                .entry(("<unmapped_pc>".to_string(), "pc_not_in_map".to_string()))
+                                .or_default() += 1;
+                        }
+                    }
+
+                    for ((function, reason), steps_in_bucket) in obs_counts {
+                        trace_observability_hotspots.push(TraceObservabilityHotspotRow {
+                            suite: suite.clone(),
+                            test: test_name.clone(),
+                            function,
+                            reason,
+                            tail_steps_total: pcs.len(),
+                            tail_steps_mapped: obs_mapped,
+                            steps_in_bucket,
+                        });
+                    }
                 }
             }
         }
@@ -3403,6 +3933,18 @@ fn write_run_gas_comparison_summary(root_dir: &Utf8PathBuf, opt_level: OptLevel)
         write_trace_symbol_hotspots_csv(
             &artifacts_dir.join("gas_tail_trace_symbol_hotspots.csv"),
             &trace_symbol_hotspots,
+        );
+        if !trace_observability_hotspots.is_empty() {
+            write_trace_observability_hotspots_csv(
+                &artifacts_dir.join("gas_tail_trace_observability_hotspots.csv"),
+                &trace_observability_hotspots,
+            );
+        }
+    }
+    if !observability_coverage_rows.is_empty() {
+        write_observability_coverage_csv(
+            &artifacts_dir.join("observability_coverage_all.csv"),
+            &observability_coverage_rows,
         );
     }
     if wrote_any_breakdown_rows {
@@ -3487,14 +4029,23 @@ fn write_run_gas_comparison_summary(root_dir: &Utf8PathBuf, opt_level: OptLevel)
     if wrote_any_rows {
         append_hotspot_summary(&mut summary, &hotspots, &suite_rollup_rows);
         append_trace_symbol_hotspots_summary(&mut summary, &trace_symbol_hotspots);
+        append_trace_observability_hotspots_summary(&mut summary, &trace_observability_hotspots);
     }
+    append_observability_coverage_summary(
+        &mut summary,
+        &observability_coverage_rows,
+        observability_coverage_totals,
+    );
     summary.push_str("\n## Optimization Settings\n\n");
     for line in gas_comparison_settings_text(opt_level).lines() {
         summary.push_str(&format!("- {line}\n"));
     }
     if wrote_any_rows {
+        summary.push_str("\nSee `artifacts/gas_comparison_all.csv`, `artifacts/gas_comparison_totals.csv`, `artifacts/gas_comparison_magnitude.csv`, `artifacts/gas_breakdown_comparison_all.csv`, `artifacts/gas_breakdown_magnitude.csv`, `artifacts/gas_opcode_magnitude.csv`, `artifacts/gas_hotspots_vs_yul_opt.csv`, `artifacts/gas_suite_delta_summary.csv`, `artifacts/gas_tail_trace_symbol_hotspots.csv`, and `artifacts/gas_tail_trace_observability_hotspots.csv` for machine-readable totals and rollups.\n");
+    }
+    if !observability_coverage_rows.is_empty() {
         summary.push_str(
-            "\nSee `artifacts/gas_comparison_all.csv`, `artifacts/gas_comparison_totals.csv`, `artifacts/gas_comparison_magnitude.csv`, `artifacts/gas_breakdown_comparison_all.csv`, `artifacts/gas_breakdown_magnitude.csv`, `artifacts/gas_opcode_magnitude.csv`, `artifacts/gas_hotspots_vs_yul_opt.csv`, `artifacts/gas_suite_delta_summary.csv`, and `artifacts/gas_tail_trace_symbol_hotspots.csv` for machine-readable totals and rollups.\n",
+            "See `artifacts/observability_coverage_all.csv` for per-test Sonatina observability coverage totals.\n",
         );
     }
     if wrote_any_opcode_rows {
@@ -3908,7 +4459,8 @@ fn write_report_manifest(
     out.push_str("gas_comparison: see `artifacts/gas_comparison.md`, `artifacts/gas_comparison.csv`, `artifacts/gas_comparison_totals.csv`, `artifacts/gas_comparison_magnitude.csv`, `artifacts/gas_breakdown_comparison.csv`, `artifacts/gas_breakdown_magnitude.csv`, `artifacts/gas_opcode_magnitude.csv`, and `artifacts/gas_comparison_settings.txt` when available\n");
     out.push_str("gas_comparison_yul_artifacts: in Sonatina comparison runs, Yul baselines are stored under `artifacts/tests/<test>/yul/{source.yul,bytecode.unopt.hex,bytecode.opt.hex,runtime.unopt.hex,runtime.opt.hex}`\n");
     out.push_str("sonatina_observability: when available, Sonatina test artifacts include `artifacts/tests/<test>/sonatina/{observability.txt,observability.json}`\n");
-    out.push_str("gas_comparison_aggregate: run-level reports also include `artifacts/gas_comparison_all.csv`, `artifacts/gas_breakdown_comparison_all.csv`, `artifacts/gas_comparison_summary.md`, `artifacts/gas_comparison_magnitude.csv`, `artifacts/gas_breakdown_magnitude.csv`, `artifacts/gas_opcode_magnitude.csv`, `artifacts/gas_hotspots_vs_yul_opt.csv`, `artifacts/gas_suite_delta_summary.csv`, and `artifacts/gas_tail_trace_symbol_hotspots.csv`\n");
+    out.push_str("gas_comparison_aggregate: run-level reports also include `artifacts/gas_comparison_all.csv`, `artifacts/gas_breakdown_comparison_all.csv`, `artifacts/gas_comparison_summary.md`, `artifacts/gas_comparison_magnitude.csv`, `artifacts/gas_breakdown_magnitude.csv`, `artifacts/gas_opcode_magnitude.csv`, `artifacts/gas_hotspots_vs_yul_opt.csv`, `artifacts/gas_suite_delta_summary.csv`, `artifacts/gas_tail_trace_symbol_hotspots.csv`, and `artifacts/gas_tail_trace_observability_hotspots.csv`\n");
+    out.push_str("sonatina_observability_aggregate: run-level reports also include `artifacts/observability_coverage_all.csv` for per-test coverage totals from observability maps\n");
     out.push_str("gas_opcode_profile: see `artifacts/gas_opcode_comparison.md` and `artifacts/gas_opcode_comparison.csv` for opcode and step-count diagnostics when available\n");
     out.push_str("gas_opcode_profile_aggregate: run-level reports also include `artifacts/gas_opcode_comparison_all.csv`\n");
     out.push_str("sonatina_evm_debug: when available, see `debug/sonatina_evm_bytecode.txt` for stackify traces and lowered EVM vcode output\n");

@@ -26,6 +26,7 @@ walkdir = "2"
 similar = "2"
 colored = "2"
 hex = "0.4"
+serde_json = "1"
 toml = "0.8.8"
 glob.workspace = true
 
