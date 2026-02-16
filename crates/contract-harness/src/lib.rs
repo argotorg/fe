@@ -840,12 +840,13 @@ impl RuntimeInstance {
         let mut tracer = CallTracer::new();
         let mut trace_evm = ctx.build_mainnet_with_inspector(&mut tracer);
 
-        // Use nonce 0 for the trace run — this is a replay on a clone.
-        let nonce = self
-            .next_nonce_by_caller
-            .get(&options.caller)
-            .copied()
-            .unwrap_or(0);
+        // Honor explicit nonce when set, otherwise use stored nonce for this caller.
+        let nonce = options.nonce.unwrap_or_else(|| {
+            self.next_nonce_by_caller
+                .get(&options.caller)
+                .copied()
+                .unwrap_or(0)
+        });
 
         let tx = TxEnv::builder()
             .caller(options.caller)
@@ -1060,12 +1061,13 @@ impl RuntimeInstance {
         let mut inspector = GasAttributionInspector::default();
         let mut trace_evm = ctx.build_mainnet_with_inspector(&mut inspector);
 
-        // Use nonce 0 for the trace run — this is a replay on a clone.
-        let nonce = self
-            .next_nonce_by_caller
-            .get(&options.caller)
-            .copied()
-            .unwrap_or(0);
+        // Honor explicit nonce when set, otherwise use stored nonce for this caller.
+        let nonce = options.nonce.unwrap_or_else(|| {
+            self.next_nonce_by_caller
+                .get(&options.caller)
+                .copied()
+                .unwrap_or(0)
+        });
 
         let tx = TxEnv::builder()
             .caller(options.caller)

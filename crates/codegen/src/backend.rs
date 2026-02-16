@@ -295,55 +295,61 @@ impl Backend for SonatinaBackend {
         let isa = crate::sonatina::create_evm_isa();
         let evm_backend = EvmBackend::new(isa);
 
-        // Compile the root object.
-        //
-        // Non-contract modules use a synthetic `Contract` object; contract modules use their
-        // actual contract name as the object name.
-        let object_name = if module.objects.contains_key("Contract") {
-            "Contract".to_string()
-        } else if module.objects.len() == 1 {
-            module.objects.keys().next().expect("len == 1").to_string()
-        } else {
-            let mut referenced_objects = std::collections::BTreeSet::new();
-            for object in module.objects.values() {
-                for section in &object.sections {
-                    for directive in &section.directives {
-                        let Directive::Embed(embed) = directive else {
-                            continue;
-                        };
-                        let SectionRef::External { object, .. } = &embed.source else {
-                            continue;
-                        };
-                        referenced_objects.insert(object.0.as_str().to_string());
-                    }
+        // Find root objects (not referenced by any other object's Embed directives).
+        let mut referenced_objects = std::collections::BTreeSet::new();
+        for object in module.objects.values() {
+            for section in &object.sections {
+                for directive in &section.directives {
+                    let Directive::Embed(embed) = directive else {
+                        continue;
+                    };
+                    let SectionRef::External { object, .. } = &embed.source else {
+                        continue;
+                    };
+                    referenced_objects.insert(object.0.as_str().to_string());
                 }
             }
+        }
 
-            let mut roots: Vec<String> = module
-                .objects
-                .keys()
-                .filter(|name| !referenced_objects.contains(*name))
-                .cloned()
-                .collect();
-            roots.sort();
+        let mut roots: Vec<String> = module
+            .objects
+            .keys()
+            .filter(|name| !referenced_objects.contains(*name))
+            .cloned()
+            .collect();
+        roots.sort();
 
-            roots.into_iter().next().ok_or_else(|| {
-                BackendError::Sonatina(
-                    "failed to select root object (all objects are referenced)".to_string(),
-                )
-            })?
+        if roots.is_empty() {
+            return Err(BackendError::Sonatina(
+                "failed to select root object (all objects are referenced)".to_string(),
+            ));
+        }
+
+        // Pick the primary root for output: prefer "Contract", otherwise first root.
+        let object_name = if roots.iter().any(|n| n == "Contract") {
+            "Contract".to_string()
+        } else {
+            roots[0].clone()
         };
 
+        // Compile all root objects so codegen errors in any root are caught.
         let opts: CompileOptions<_> = CompileOptions::default();
-        let artifact =
-            compile_object(&module, &evm_backend, &object_name, &opts).map_err(|errors| {
-                let msg = errors
-                    .iter()
-                    .map(|e| format!("{:?}", e))
-                    .collect::<Vec<_>>()
-                    .join("; ");
-                BackendError::Sonatina(msg)
-            })?;
+        let mut primary_artifact = None;
+        for root in &roots {
+            let artifact =
+                compile_object(&module, &evm_backend, root, &opts).map_err(|errors| {
+                    let msg = errors
+                        .iter()
+                        .map(|e| format!("{:?}", e))
+                        .collect::<Vec<_>>()
+                        .join("; ");
+                    BackendError::Sonatina(msg)
+                })?;
+            if *root == object_name {
+                primary_artifact = Some(artifact);
+            }
+        }
+        let artifact = primary_artifact.expect("primary root was in roots list");
 
         // Extract bytecode from the runtime section
         let section_name = sonatina_ir::object::SectionName::from("runtime");
