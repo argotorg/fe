@@ -318,6 +318,10 @@ struct DeploymentGasAttributionTotals {
     sonatina_non_constructor_frame_gas: u128,
 }
 
+const DEPLOYMENT_ATTRIBUTION_CSV_HEADER: &str = "test,symbol,yul_unopt_step_total_gas,yul_opt_step_total_gas,sonatina_step_total_gas,yul_unopt_create_opcode_gas,yul_opt_create_opcode_gas,sonatina_create_opcode_gas,yul_unopt_create2_opcode_gas,yul_opt_create2_opcode_gas,sonatina_create2_opcode_gas,yul_unopt_constructor_frame_gas,yul_opt_constructor_frame_gas,sonatina_constructor_frame_gas,yul_unopt_non_constructor_frame_gas,yul_opt_non_constructor_frame_gas,sonatina_non_constructor_frame_gas,yul_unopt_create_opcode_steps,yul_opt_create_opcode_steps,sonatina_create_opcode_steps,yul_unopt_create2_opcode_steps,yul_opt_create2_opcode_steps,sonatina_create2_opcode_steps,note";
+const DEPLOYMENT_ATTRIBUTION_CSV_HEADER_WITH_SUITE: &str = "suite,test,symbol,yul_unopt_step_total_gas,yul_opt_step_total_gas,sonatina_step_total_gas,yul_unopt_create_opcode_gas,yul_opt_create_opcode_gas,sonatina_create_opcode_gas,yul_unopt_create2_opcode_gas,yul_opt_create2_opcode_gas,sonatina_create2_opcode_gas,yul_unopt_constructor_frame_gas,yul_opt_constructor_frame_gas,sonatina_constructor_frame_gas,yul_unopt_non_constructor_frame_gas,yul_opt_non_constructor_frame_gas,sonatina_non_constructor_frame_gas,yul_unopt_create_opcode_steps,yul_opt_create_opcode_steps,sonatina_create_opcode_steps,yul_unopt_create2_opcode_steps,yul_opt_create2_opcode_steps,sonatina_create2_opcode_steps,note";
+const DEPLOYMENT_ATTRIBUTION_FIELD_COUNT: usize = 24;
+
 impl GasMeasurement {
     fn from_test_outcome(outcome: &TestOutcome) -> Self {
         Self {
@@ -1638,6 +1642,110 @@ fn parse_optional_u64_cell(value: &str) -> Option<u64> {
 
 fn parse_optional_i128_cell(value: &str) -> Option<i128> {
     value.trim().parse::<i128>().ok()
+}
+
+fn deployment_attribution_row_to_csv_line(row: &DeploymentGasAttributionRow) -> String {
+    let cells = [
+        row.test.clone(),
+        row.symbol.clone(),
+        u64_cell(row.yul_unopt_step_total_gas),
+        u64_cell(row.yul_opt_step_total_gas),
+        u64_cell(row.sonatina_step_total_gas),
+        u64_cell(row.yul_unopt_create_opcode_gas),
+        u64_cell(row.yul_opt_create_opcode_gas),
+        u64_cell(row.sonatina_create_opcode_gas),
+        u64_cell(row.yul_unopt_create2_opcode_gas),
+        u64_cell(row.yul_opt_create2_opcode_gas),
+        u64_cell(row.sonatina_create2_opcode_gas),
+        u64_cell(row.yul_unopt_constructor_frame_gas),
+        u64_cell(row.yul_opt_constructor_frame_gas),
+        u64_cell(row.sonatina_constructor_frame_gas),
+        u64_cell(row.yul_unopt_non_constructor_frame_gas),
+        u64_cell(row.yul_opt_non_constructor_frame_gas),
+        u64_cell(row.sonatina_non_constructor_frame_gas),
+        u64_cell(row.yul_unopt_create_opcode_steps),
+        u64_cell(row.yul_opt_create_opcode_steps),
+        u64_cell(row.sonatina_create_opcode_steps),
+        u64_cell(row.yul_unopt_create2_opcode_steps),
+        u64_cell(row.yul_opt_create2_opcode_steps),
+        u64_cell(row.sonatina_create2_opcode_steps),
+        row.note.clone(),
+    ];
+    let escaped: Vec<String> = cells.into_iter().map(|cell| csv_escape(&cell)).collect();
+    escaped.join(",")
+}
+
+fn parse_deployment_attribution_row(fields: &[String]) -> Option<DeploymentGasAttributionRow> {
+    if fields.len() != DEPLOYMENT_ATTRIBUTION_FIELD_COUNT {
+        return None;
+    }
+    Some(DeploymentGasAttributionRow {
+        test: fields[0].clone(),
+        symbol: fields[1].clone(),
+        yul_unopt_step_total_gas: parse_optional_u64_cell(&fields[2]),
+        yul_opt_step_total_gas: parse_optional_u64_cell(&fields[3]),
+        sonatina_step_total_gas: parse_optional_u64_cell(&fields[4]),
+        yul_unopt_create_opcode_gas: parse_optional_u64_cell(&fields[5]),
+        yul_opt_create_opcode_gas: parse_optional_u64_cell(&fields[6]),
+        sonatina_create_opcode_gas: parse_optional_u64_cell(&fields[7]),
+        yul_unopt_create2_opcode_gas: parse_optional_u64_cell(&fields[8]),
+        yul_opt_create2_opcode_gas: parse_optional_u64_cell(&fields[9]),
+        sonatina_create2_opcode_gas: parse_optional_u64_cell(&fields[10]),
+        yul_unopt_constructor_frame_gas: parse_optional_u64_cell(&fields[11]),
+        yul_opt_constructor_frame_gas: parse_optional_u64_cell(&fields[12]),
+        sonatina_constructor_frame_gas: parse_optional_u64_cell(&fields[13]),
+        yul_unopt_non_constructor_frame_gas: parse_optional_u64_cell(&fields[14]),
+        yul_opt_non_constructor_frame_gas: parse_optional_u64_cell(&fields[15]),
+        sonatina_non_constructor_frame_gas: parse_optional_u64_cell(&fields[16]),
+        yul_unopt_create_opcode_steps: parse_optional_u64_cell(&fields[17]),
+        yul_opt_create_opcode_steps: parse_optional_u64_cell(&fields[18]),
+        sonatina_create_opcode_steps: parse_optional_u64_cell(&fields[19]),
+        yul_unopt_create2_opcode_steps: parse_optional_u64_cell(&fields[20]),
+        yul_opt_create2_opcode_steps: parse_optional_u64_cell(&fields[21]),
+        sonatina_create2_opcode_steps: parse_optional_u64_cell(&fields[22]),
+        note: fields[23].clone(),
+    })
+}
+
+fn deployment_attribution_row_profiles_for_totals(
+    row: &DeploymentGasAttributionRow,
+) -> Option<(CallGasProfile, CallGasProfile)> {
+    let yul_opt_total_step_gas = row.yul_opt_step_total_gas?;
+    let sonatina_total_step_gas = row.sonatina_step_total_gas?;
+    let yul_opt_profile = CallGasProfile {
+        total_step_gas: yul_opt_total_step_gas,
+        create_opcode_gas: row.yul_opt_create_opcode_gas.unwrap_or(0),
+        create2_opcode_gas: row.yul_opt_create2_opcode_gas.unwrap_or(0),
+        constructor_frame_gas: row.yul_opt_constructor_frame_gas.unwrap_or(0),
+        non_constructor_frame_gas: row.yul_opt_non_constructor_frame_gas.unwrap_or(0),
+        ..CallGasProfile::default()
+    };
+    let sonatina_profile = CallGasProfile {
+        total_step_gas: sonatina_total_step_gas,
+        create_opcode_gas: row.sonatina_create_opcode_gas.unwrap_or(0),
+        create2_opcode_gas: row.sonatina_create2_opcode_gas.unwrap_or(0),
+        constructor_frame_gas: row.sonatina_constructor_frame_gas.unwrap_or(0),
+        non_constructor_frame_gas: row.sonatina_non_constructor_frame_gas.unwrap_or(0),
+        ..CallGasProfile::default()
+    };
+    Some((yul_opt_profile, sonatina_profile))
+}
+
+fn gas_profile_partition_violation(label: &str, profile: CallGasProfile) -> Option<String> {
+    let opcode_partition_delta = profile.create_opcode_gas as i128
+        + profile.create2_opcode_gas as i128
+        + profile.non_create_opcode_gas as i128
+        - profile.total_step_gas as i128;
+    let frame_partition_delta = profile.constructor_frame_gas as i128
+        + profile.non_constructor_frame_gas as i128
+        - profile.total_step_gas as i128;
+    if opcode_partition_delta == 0 && frame_partition_delta == 0 {
+        None
+    } else {
+        Some(format!(
+            "{label} attribution_residual(opcode={opcode_partition_delta}, frame={frame_partition_delta})"
+        ))
+    }
 }
 
 fn parse_symtab_entries(contents: &str) -> Vec<SymtabEntry> {
@@ -3338,9 +3446,8 @@ fn write_gas_comparison_report(
     opcode_csv.push_str(gas_opcode_comparison_header());
     opcode_csv.push('\n');
     let mut deployment_attribution_csv = String::new();
-    deployment_attribution_csv.push_str(
-        "test,symbol,yul_unopt_step_total_gas,yul_opt_step_total_gas,sonatina_step_total_gas,yul_unopt_create_opcode_gas,yul_opt_create_opcode_gas,sonatina_create_opcode_gas,yul_unopt_create2_opcode_gas,yul_opt_create2_opcode_gas,sonatina_create2_opcode_gas,yul_unopt_constructor_frame_gas,yul_opt_constructor_frame_gas,sonatina_constructor_frame_gas,yul_unopt_non_constructor_frame_gas,yul_opt_non_constructor_frame_gas,sonatina_non_constructor_frame_gas,yul_unopt_create_opcode_steps,yul_opt_create_opcode_steps,sonatina_create_opcode_steps,yul_unopt_create2_opcode_steps,yul_opt_create2_opcode_steps,sonatina_create2_opcode_steps,note\n",
-    );
+    deployment_attribution_csv.push_str(DEPLOYMENT_ATTRIBUTION_CSV_HEADER);
+    deployment_attribution_csv.push('\n');
 
     let mut totals = GasTotals {
         tests_in_scope: cases.len(),
@@ -3458,6 +3565,16 @@ fn write_gas_comparison_report(
         }
         if yul_opt_profile.is_none() || sonatina_profile.is_none() {
             notes.push("missing step-attribution profile".to_string());
+        }
+        if let Some(profile) = yul_opt_profile
+            && let Some(violation) = gas_profile_partition_violation("yul_opt", profile)
+        {
+            notes.push(violation);
+        }
+        if let Some(profile) = sonatina_profile
+            && let Some(violation) = gas_profile_partition_violation("sonatina", profile)
+        {
+            notes.push(violation);
         }
 
         let yul_unopt_status = measurement_status(case.yul.is_some(), yul_unopt.as_ref());
@@ -3832,75 +3949,13 @@ fn write_gas_comparison_report(
             sonatina_create2_opcode_steps,
             note: note.clone(),
         };
-        deployment_attribution_csv.push_str(&format!(
-            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
-            csv_escape(&deployment_attribution_row.test),
-            csv_escape(&deployment_attribution_row.symbol),
-            csv_escape(&u64_cell(
-                deployment_attribution_row.yul_unopt_step_total_gas
-            )),
-            csv_escape(&u64_cell(deployment_attribution_row.yul_opt_step_total_gas)),
-            csv_escape(&u64_cell(
-                deployment_attribution_row.sonatina_step_total_gas
-            )),
-            csv_escape(&u64_cell(
-                deployment_attribution_row.yul_unopt_create_opcode_gas
-            )),
-            csv_escape(&u64_cell(
-                deployment_attribution_row.yul_opt_create_opcode_gas
-            )),
-            csv_escape(&u64_cell(
-                deployment_attribution_row.sonatina_create_opcode_gas
-            )),
-            csv_escape(&u64_cell(
-                deployment_attribution_row.yul_unopt_create2_opcode_gas
-            )),
-            csv_escape(&u64_cell(
-                deployment_attribution_row.yul_opt_create2_opcode_gas
-            )),
-            csv_escape(&u64_cell(
-                deployment_attribution_row.sonatina_create2_opcode_gas
-            )),
-            csv_escape(&u64_cell(
-                deployment_attribution_row.yul_unopt_constructor_frame_gas
-            )),
-            csv_escape(&u64_cell(
-                deployment_attribution_row.yul_opt_constructor_frame_gas
-            )),
-            csv_escape(&u64_cell(
-                deployment_attribution_row.sonatina_constructor_frame_gas
-            )),
-            csv_escape(&u64_cell(
-                deployment_attribution_row.yul_unopt_non_constructor_frame_gas
-            )),
-            csv_escape(&u64_cell(
-                deployment_attribution_row.yul_opt_non_constructor_frame_gas
-            )),
-            csv_escape(&u64_cell(
-                deployment_attribution_row.sonatina_non_constructor_frame_gas
-            )),
-            csv_escape(&u64_cell(
-                deployment_attribution_row.yul_unopt_create_opcode_steps
-            )),
-            csv_escape(&u64_cell(
-                deployment_attribution_row.yul_opt_create_opcode_steps
-            )),
-            csv_escape(&u64_cell(
-                deployment_attribution_row.sonatina_create_opcode_steps
-            )),
-            csv_escape(&u64_cell(
-                deployment_attribution_row.yul_unopt_create2_opcode_steps
-            )),
-            csv_escape(&u64_cell(
-                deployment_attribution_row.yul_opt_create2_opcode_steps
-            )),
-            csv_escape(&u64_cell(
-                deployment_attribution_row.sonatina_create2_opcode_steps
-            )),
-            csv_escape(&deployment_attribution_row.note),
+        deployment_attribution_csv.push_str(&deployment_attribution_row_to_csv_line(
+            &deployment_attribution_row,
         ));
+        deployment_attribution_csv.push('\n');
 
-        if let (Some(yul_opt_profile), Some(sonatina_profile)) = (yul_opt_profile, sonatina_profile)
+        if let Some((yul_opt_profile, sonatina_profile)) =
+            deployment_attribution_row_profiles_for_totals(&deployment_attribution_row)
         {
             deployment_attribution_totals.add_observation(yul_opt_profile, sonatina_profile);
         }
@@ -4043,7 +4098,8 @@ fn write_run_gas_comparison_summary(root_dir: &Utf8PathBuf, opt_level: OptLevel)
     all_opcode_rows.push_str(gas_opcode_comparison_header());
     all_opcode_rows.push('\n');
     let mut all_deployment_attr_rows = String::new();
-    all_deployment_attr_rows.push_str("suite,test,symbol,yul_unopt_step_total_gas,yul_opt_step_total_gas,sonatina_step_total_gas,yul_unopt_create_opcode_gas,yul_opt_create_opcode_gas,sonatina_create_opcode_gas,yul_unopt_create2_opcode_gas,yul_opt_create2_opcode_gas,sonatina_create2_opcode_gas,yul_unopt_constructor_frame_gas,yul_opt_constructor_frame_gas,sonatina_constructor_frame_gas,yul_unopt_non_constructor_frame_gas,yul_opt_non_constructor_frame_gas,sonatina_non_constructor_frame_gas,yul_unopt_create_opcode_steps,yul_opt_create_opcode_steps,sonatina_create_opcode_steps,yul_unopt_create2_opcode_steps,yul_opt_create2_opcode_steps,sonatina_create2_opcode_steps,note\n");
+    all_deployment_attr_rows.push_str(DEPLOYMENT_ATTRIBUTION_CSV_HEADER_WITH_SUITE);
+    all_deployment_attr_rows.push('\n');
     let mut wrote_any_rows = false;
     let mut wrote_any_breakdown_rows = false;
     let mut wrote_any_opcode_rows = false;
@@ -4143,35 +4199,12 @@ fn write_run_gas_comparison_summary(root_dir: &Utf8PathBuf, opt_level: OptLevel)
                     continue;
                 }
                 let fields = parse_csv_fields(line);
-                if fields.len() >= 17 {
-                    let yul_opt_profile = Some(CallGasProfile {
-                        total_step_gas: parse_optional_u64_cell(&fields[3]).unwrap_or(0),
-                        create_opcode_gas: parse_optional_u64_cell(&fields[6]).unwrap_or(0),
-                        create2_opcode_gas: parse_optional_u64_cell(&fields[9]).unwrap_or(0),
-                        constructor_frame_gas: parse_optional_u64_cell(&fields[12]).unwrap_or(0),
-                        non_constructor_frame_gas: parse_optional_u64_cell(&fields[15])
-                            .unwrap_or(0),
-                        ..CallGasProfile::default()
-                    });
-                    let sonatina_profile = Some(CallGasProfile {
-                        total_step_gas: parse_optional_u64_cell(&fields[4]).unwrap_or(0),
-                        create_opcode_gas: parse_optional_u64_cell(&fields[7]).unwrap_or(0),
-                        create2_opcode_gas: parse_optional_u64_cell(&fields[10]).unwrap_or(0),
-                        constructor_frame_gas: parse_optional_u64_cell(&fields[13]).unwrap_or(0),
-                        non_constructor_frame_gas: parse_optional_u64_cell(&fields[16])
-                            .unwrap_or(0),
-                        ..CallGasProfile::default()
-                    });
-                    if let (Some(yul_opt_profile), Some(sonatina_profile)) =
-                        (yul_opt_profile, sonatina_profile)
-                    {
-                        if parse_optional_u64_cell(&fields[3]).is_some()
-                            && parse_optional_u64_cell(&fields[4]).is_some()
-                        {
-                            deployment_attribution_totals
-                                .add_observation(yul_opt_profile, sonatina_profile);
-                        }
-                    }
+                if let Some(row) = parse_deployment_attribution_row(&fields)
+                    && let Some((yul_opt_profile, sonatina_profile)) =
+                        deployment_attribution_row_profiles_for_totals(&row)
+                {
+                    deployment_attribution_totals
+                        .add_observation(yul_opt_profile, sonatina_profile);
                 }
                 all_deployment_attr_rows.push_str(&csv_escape(&suite));
                 all_deployment_attr_rows.push(',');
