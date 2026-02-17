@@ -295,4 +295,205 @@ fn foo() -> u256 {
 "#,
         );
     }
+
+    /// Simulate character-by-character typing of `self` → `mut self` as Sean reported.
+    /// Each intermediate state must not panic.
+    #[test]
+    fn diagnostics_survive_self_to_mut_self_keystroke_sequence() {
+        let mut db = setup_db();
+        let template = |param: &str| {
+            format!(
+                "struct Foo {{ x: u256 }}\nimpl Foo {{\n    fn set({param}, val: u256) {{\n        self.x = val\n    }}\n}}"
+            )
+        };
+        // Simulate cursor before "self", typing "mut " one char at a time
+        for intermediate in &[
+            "self",     // original
+            "mself",    // typed 'm' before 'self'
+            "muself",   // typed 'u'
+            "mutself",  // typed 't'
+            "mut self", // typed ' '
+        ] {
+            let _diags = update_and_diagnose(&mut db, &template(intermediate));
+        }
+    }
+
+    /// Simulate typing `struct S<T, const N: usize>` character by character.
+    #[test]
+    fn diagnostics_survive_generic_struct_keystroke_sequence() {
+        let mut db = setup_db();
+        let steps = [
+            "struct S",
+            "struct S<",
+            "struct S<T",
+            "struct S<T,",
+            "struct S<T, ",
+            "struct S<T, c",
+            "struct S<T, co",
+            "struct S<T, con",
+            "struct S<T, cons",
+            "struct S<T, const",
+            "struct S<T, const ",
+            "struct S<T, const N",
+            "struct S<T, const N:",
+            "struct S<T, const N: ",
+            "struct S<T, const N: u",
+            "struct S<T, const N: us",
+            "struct S<T, const N: usi",
+            "struct S<T, const N: usiz",
+            "struct S<T, const N: usize",
+            "struct S<T, const N: usize>",
+        ];
+        for step in &steps {
+            let _diags = update_and_diagnose(&mut db, step);
+        }
+    }
+
+    /// Test rapid successive edits: valid → broken → valid → broken.
+    /// This catches bugs where stale salsa cache state causes panics
+    /// when transitioning between valid and invalid states.
+    #[test]
+    fn diagnostics_survive_valid_invalid_transitions() {
+        let mut db = setup_db();
+        let valid = "struct Foo { x: u256 }\nfn bar() -> u256 { return 1 }";
+        let broken_states = [
+            "",                  // empty
+            "struct",            // keyword only
+            "struct {",          // missing name
+            "fn (",              // broken fn
+            "impl {",            // impl without type
+            "struct Foo { x: }", // missing type
+            "fn bar() -> { }",   // missing return type
+            "use ",              // incomplete use
+            "pub ",              // dangling pub
+            "let x =",           // top-level let
+        ];
+        for broken in &broken_states {
+            let _diags = update_and_diagnose(&mut db, valid);
+            let _diags = update_and_diagnose(&mut db, broken);
+        }
+    }
+
+    /// Test that formatting doesn't panic on malformed inputs.
+    #[test]
+    fn format_survives_malformed_inputs() {
+        let inputs = [
+            "",
+            "}{",
+            "struct",
+            "fn (",
+            "struct Foo { x: u256 }",
+            "impl Foo { fn set(mself) {} }",
+            "struct S<T, const N:",
+        ];
+        for input in &inputs {
+            // format_str should return an error, never panic
+            let _ = fmt::format_str(input, &fmt::Config::default());
+        }
+    }
+
+    /// Fuzz diagnostics with many malformed inputs to find panics.
+    /// Uses catch_unwind to detect rather than crash.
+    #[test]
+    fn fuzz_diagnostics_for_panics() {
+        let mut db = setup_db();
+        let inputs = [
+            // Sean's reported scenarios
+            "impl Foo { fn set(mself, val: u256) { self.x = val } }",
+            "struct S<T, const N: usize>",
+            "struct S<T, const N:",
+            // Edge cases in generics
+            "struct S<>",
+            "struct S<,>",
+            "struct S<T,>",
+            "fn f<>() {}",
+            "fn f<T: >() {}",
+            "fn f() -> <T> {}",
+            // Unclosed delimiters
+            "fn f() {",
+            "fn f() { {",
+            "fn f() { { }",
+            "struct S { x: u256",
+            "impl Foo {",
+            "impl Foo { fn f(",
+            // Invalid positions
+            "return 5",
+            "self.x",
+            "use ",
+            "use foo::",
+            "use foo::bar::",
+            "pub",
+            "pub fn",
+            "pub fn f",
+            "pub fn f(",
+            "pub fn f(x",
+            "pub fn f(x:",
+            "pub fn f(x: u256",
+            "pub fn f(x: u256)",
+            "pub fn f(x: u256) {",
+            "pub fn f(x: u256) { }",
+            // Weird token sequences
+            ":::",
+            "...",
+            "<<<",
+            ">>>",
+            "+++",
+            "***",
+            "@@@",
+            "###",
+            "$$$",
+            "%%%",
+            // Mixed valid/invalid
+            "struct Foo { x: u256 }\nimpl",
+            "struct Foo { x: u256 }\nimpl Foo",
+            "struct Foo { x: u256 }\nimpl Foo {",
+            "struct Foo { x: u256 }\nimpl Foo { fn",
+            "struct Foo { x: u256 }\nimpl Foo { fn f",
+            "struct Foo { x: u256 }\nimpl Foo { fn f(",
+            "struct Foo { x: u256 }\nimpl Foo { fn f(self",
+            "struct Foo { x: u256 }\nimpl Foo { fn f(self)",
+            "struct Foo { x: u256 }\nimpl Foo { fn f(self) {",
+            // Contract-related
+            "pub contract",
+            "pub contract C",
+            "pub contract C {",
+            "pub contract C { pub fn",
+            // Trait-related
+            "trait",
+            "trait T",
+            "trait T {",
+            "trait T { fn f(",
+            "impl trait",
+            // Enum-related
+            "enum",
+            "enum E",
+            "enum E {",
+            "enum E { A(",
+        ];
+
+        let mut panics = Vec::new();
+        for input in &inputs {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                update_and_diagnose(&mut db, input);
+            }));
+            if let Err(e) = result {
+                let msg = e
+                    .downcast_ref::<&str>()
+                    .copied()
+                    .or_else(|| e.downcast_ref::<String>().map(|s| s.as_str()))
+                    .unwrap_or("<non-string panic>");
+                panics.push(format!("PANIC on '{input}': {msg}"));
+                // Reset DB after panic since state may be corrupted
+                db = setup_db();
+            }
+        }
+
+        if !panics.is_empty() {
+            panic!(
+                "Found {} panic(s) in diagnostics:\n{}",
+                panics.len(),
+                panics.join("\n")
+            );
+        }
+    }
 }

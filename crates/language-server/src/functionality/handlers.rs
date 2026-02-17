@@ -428,9 +428,25 @@ pub async fn handle_files_need_diagnostics(
         .collect();
 
     for ingot in ingots_need_diagnostics {
-        // Get diagnostics per file
+        // Wrap diagnostics computation in catch_unwind: analysis passes
+        // (parsing, type checking, etc.) can panic on malformed intermediate
+        // text during editing. Without this, a panic kills the Backend actor
+        // and all subsequent LSP requests fail with SendError.
         use crate::lsp_diagnostics::LspDiagnostics;
-        let diagnostics_map = backend.db.diagnostics_for_ingot(ingot);
+        let diagnostics_map = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            backend.db.diagnostics_for_ingot(ingot)
+        })) {
+            Ok(map) => map,
+            Err(panic_info) => {
+                let msg = panic_info
+                    .downcast_ref::<&str>()
+                    .copied()
+                    .or_else(|| panic_info.downcast_ref::<String>().map(|s| s.as_str()))
+                    .unwrap_or("<non-string panic>");
+                error!("diagnostics_for_ingot panicked (skipping): {msg}");
+                continue;
+            }
+        };
 
         for (internal_uri, diags) in diagnostics_map.iter() {
             let uri = backend.map_internal_uri_to_client(internal_uri.clone());

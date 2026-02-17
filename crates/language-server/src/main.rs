@@ -12,6 +12,9 @@ mod test_utils;
 mod util;
 mod virtual_files;
 
+#[cfg(test)]
+mod mock_client_tests;
+
 use std::net::SocketAddr;
 use std::time::Duration;
 

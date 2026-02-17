@@ -127,7 +127,9 @@ impl super::Parse for GenericParamListScope {
                         parser.parse(TypeGenericParamScope::new(self.disallow_trait_bound))
                     }
                     Some(SyntaxKind::Gt) => Ok(()),
-                    _ => unreachable!(),
+                    // Recovery may land on a list separator or unexpected token;
+                    // treat as empty parameter and let parse_list handle it.
+                    _ => Ok(()),
                 }
             },
         )
