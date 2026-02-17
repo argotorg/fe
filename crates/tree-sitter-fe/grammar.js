@@ -64,6 +64,8 @@ module.exports = grammar({
     [$._expression, $._path],
     // attribute name can be identifier or path (path starts with path_segment which is identifier)
     [$.path_segment, $.attribute],
+    // recv arm pattern name can be identifier or path
+    [$.recv_arm_pattern, $.path_segment],
   ],
 
   rules: {
@@ -167,8 +169,9 @@ module.exports = grammar({
     ),
 
     parameter: $ => choice(
-      // self parameter: [mut|ref|own] self [: Type]
-      seq(optional(choice('mut', 'ref', 'own')), 'self', optional(seq(':', $._type))),
+      // self parameter: [mut] [ref|own] self [: Type]
+      // e.g., `self`, `mut self`, `own self`, `mut own self`, `ref self`
+      seq(optional('mut'), optional(choice('ref', 'own')), 'self', optional(seq(':', $._type))),
       // labeled parameter: [mut|ref|own] label name : Type
       // e.g., `from sender: address`, `_ val: u256`, `mut to recipient: address`
       seq(
@@ -288,7 +291,7 @@ module.exports = grammar({
     ),
 
     recv_arm_pattern: $ => seq(
-      field('name', $.identifier),
+      field('name', choice($.identifier, $.path)),
       optional(seq(
         '{',
         sepTrailing(choice(
@@ -340,7 +343,7 @@ module.exports = grammar({
       ')',
     ),
 
-    uses_param: $ => choice(
+    uses_param: $ => prec.left(choice(
       // labeled: `name: Type` or `mut name: Type` or `name: mut Type`
       // (mode prefix on type handled by mode_type in _type rule)
       seq(
@@ -349,12 +352,13 @@ module.exports = grammar({
         ':',
         field('type', $._type),
       ),
-      // unlabeled: `Type` or `mut Type`
+      // unlabeled: `Type` or `mut Type` or `Storage<T>`
       seq(
         optional(choice('mut', 'ref', 'own')),
         field('type', $.path),
+        optional($.generic_arg_list),
       ),
-    ),
+    )),
 
     // Trait definition
     trait_definition: $ => seq(
@@ -628,13 +632,13 @@ module.exports = grammar({
       $.mode_expression,
     ),
 
-    // Mode expression: (mut expr), (ref expr), (own expr)
-    mode_expression: $ => seq(
-      '(',
+    // Mode expression: mut expr, ref expr, own expr
+    // Creates a borrow/move of the given expression.
+    // e.g., `mut x`, `ref s.v`, `let p = mut foo`
+    mode_expression: $ => prec(PREC.UNARY, seq(
       field('mode', choice('mut', 'ref', 'own')),
       field('value', $._expression),
-      ')',
-    ),
+    )),
 
     // Qualified path in expression context: <T as Trait>::method(args)
     qualified_path_expression: $ => prec.right(seq(
@@ -838,6 +842,7 @@ module.exports = grammar({
       $.augmented_assignment_expression,
       $.range_expression,
       $.qualified_path_expression,
+      $.mode_expression,
     ),
 
     if_expression: $ => prec.right(seq(
@@ -882,8 +887,10 @@ module.exports = grammar({
     ),
 
     with_param: $ => choice(
+      // Key = Value, where Key can be a generic type like Storage<u8>
       seq(
         field('key', $.path),
+        optional($.generic_arg_list),
         '=',
         field('value', $._expression),
       ),
@@ -918,11 +925,6 @@ module.exports = grammar({
       seq(
         field('label', $.identifier),
         ':',
-        field('value', $._expression),
-      ),
-      // Mode-prefixed arg: foo(mut x), foo(own val)
-      seq(
-        field('mode', choice('mut', 'ref', 'own')),
         field('value', $._expression),
       ),
       field('value', $._expression),
@@ -988,6 +990,7 @@ module.exports = grammar({
       $.rest_pattern,
       $.literal_pattern,
       $.identifier_pattern,
+      $.mut_pattern,
       $.tuple_pattern,
       $.path_pattern,
       $.path_tuple_pattern,
@@ -1007,6 +1010,9 @@ module.exports = grammar({
     ),
 
     identifier_pattern: $ => prec(-1, $.identifier),
+
+    // Mutable binding in pattern: `Some(mut t)`, `Foo { mut x }`
+    mut_pattern: $ => prec(1, seq('mut', $._pattern)),
 
     tuple_pattern: $ => seq(
       '(',
@@ -1036,9 +1042,11 @@ module.exports = grammar({
         ':',
         field('pattern', $._pattern),
       ),
-      // Nested record pattern without field name: e.g., `Foo {x, y}` inside a record
+      // Nested patterns: record, path_tuple, or scoped path patterns
       $.record_pattern,
       $.path_tuple_pattern,
+      // Scoped path in field position: e.g., `Bar::Unit` inside `Foo { x, Bar::Unit }`
+      $.scoped_path,
       field('name', $.identifier),
       $.rest_pattern,
     ),
@@ -1086,13 +1094,8 @@ module.exports = grammar({
       field('name', choice(prec(2, $.identifier), $.path)),
       optional(choice(
         $.attribute_arg_list,
-        // Direct key = value form: #[selector = 0x01]
-        seq(choice('=', ':'), field('value', choice(
-          $.identifier,
-          $.integer_literal,
-          $.string_literal,
-          $.boolean_literal,
-        ))),
+        // Direct key = value form: #[selector = 0x01] or #[selector = sol("...")]
+        seq(choice('=', ':'), field('value', $._attribute_value)),
       )),
       ']',
     ),
@@ -1103,18 +1106,37 @@ module.exports = grammar({
       ')',
     ),
 
-    attribute_arg: $ => seq(
-      field('key', $.identifier),
-      optional(seq(
-        choice('=', ':'),
-        field('value', choice(
-          $.identifier,
-          $.integer_literal,
-          $.string_literal,
-          $.boolean_literal,
+    attribute_arg: $ => choice(
+      seq(
+        field('key', $.identifier),
+        optional(seq(
+          choice('=', ':'),
+          field('value', $._attribute_value),
         )),
-      )),
+      ),
+      // Bare literal in attr args: #[selector(0x01)]
+      $.integer_literal,
+      $.string_literal,
+      $.boolean_literal,
     ),
+
+    // Attribute values: literals, identifiers, paths, or call expressions
+    // e.g., `0x01`, `sol("transfer(address,uint256)")`, `std::abi::sol("...")`
+    _attribute_value: $ => choice(
+      $.identifier,
+      $.integer_literal,
+      $.string_literal,
+      $.boolean_literal,
+      // Function call in attribute: sol("...") or std::abi::sol("...")
+      $.attribute_call_expression,
+    ),
+
+    attribute_call_expression: $ => prec(2, seq(
+      field('function', choice(prec(3, $.identifier), $.path)),
+      '(',
+      sepTrailing(choice($.string_literal, $.integer_literal, $.identifier), ','),
+      ')',
+    )),
 
     visibility: $ => 'pub',
 
