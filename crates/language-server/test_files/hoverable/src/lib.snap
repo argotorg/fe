@@ -1,5 +1,6 @@
 ---
 source: crates/language-server/src/functionality/references.rs
+assertion_line: 388
 expression: snapshot
 input_file: test_files/hoverable/src/lib.fe
 ---
@@ -350,6 +351,113 @@ note:
    │
 59 │     Option::None => 0
    │     ^^^^^^^^^^^^ ref: 59:12
+
+note: 
+   ┌─ lib.fe:63:1
+   │  
+63 │ ╭ msg TokenMsg {
+64 │ │   #[selector = 0x01]
+65 │ │   Mint { to: i32, amount: i32 } -> bool,
+66 │ │   #[selector = 0x02]
+67 │ │   Burn { amount: i32 } -> bool,
+68 │ │ }
+   │ ╰─^ def: defined here @ 63:0 (4 refs)
+
+note: 
+   ┌─ lib.fe:65:3
+   │
+65 │   Mint { to: i32, amount: i32 } -> bool,
+   │   ^^^^ ref: 65:2
+
+note: 
+   ┌─ lib.fe:67:3
+   │
+67 │   Burn { amount: i32 } -> bool,
+   │   ^^^^ ref: 67:2
+
+note: 
+   ┌─ lib.fe:70:14
+   │
+70 │ pub contract Token {
+   │              ^^^^^ def: defined here @ 70:13 (1 refs)
+
+note: 
+   ┌─ lib.fe:71:3
+   │
+71 │   supply: i32
+   │   ^^^^^^ def: defined here @ 71:2 (5 refs)
+
+note: 
+   ┌─ lib.fe:73:8
+   │
+73 │   recv TokenMsg {
+   │        ^^^^^^^^ ref: 73:7
+
+note: 
+   ┌─ lib.fe:74:5
+   │
+74 │     Mint { to, amount } -> bool uses (mut supply) {
+   │     ^^^^ ref: 74:4
+
+note: 
+   ┌─ lib.fe:74:12
+   │
+74 │     Mint { to, amount } -> bool uses (mut supply) {
+   │            ^^ def: defined here @ 74:11 (1 refs)
+
+note: 
+   ┌─ lib.fe:74:16
+   │
+74 │     Mint { to, amount } -> bool uses (mut supply) {
+   │                ^^^^^^ def: defined here @ 74:15 (2 refs)
+
+note: 
+   ┌─ lib.fe:74:43
+   │
+74 │     Mint { to, amount } -> bool uses (mut supply) {
+   │                                           ^^^^^^ ref: 74:42
+
+note: 
+   ┌─ lib.fe:75:7
+   │
+75 │       supply += amount
+   │       ^^^^^^ ref: 75:6
+
+note: 
+   ┌─ lib.fe:75:17
+   │
+75 │       supply += amount
+   │                 ^^^^^^ ref: 75:16
+
+note: 
+   ┌─ lib.fe:78:5
+   │
+78 │     Burn { amount } -> bool uses (mut supply) {
+   │     ^^^^ ref: 78:4
+
+note: 
+   ┌─ lib.fe:78:12
+   │
+78 │     Burn { amount } -> bool uses (mut supply) {
+   │            ^^^^^^ def: defined here @ 78:11 (2 refs)
+
+note: 
+   ┌─ lib.fe:78:39
+   │
+78 │     Burn { amount } -> bool uses (mut supply) {
+   │                                       ^^^^^^ ref: 78:38
+
+note: 
+   ┌─ lib.fe:79:7
+   │
+79 │       supply -= amount
+   │       ^^^^^^ ref: 79:6
+
+note: 
+   ┌─ lib.fe:79:17
+   │
+79 │       supply -= amount
+   │                 ^^^^^^ ref: 79:16
 
 note: 
   ┌─ stuff.fe:2:9

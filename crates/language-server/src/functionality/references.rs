@@ -37,8 +37,7 @@ fn find_references_at_cursor<'db>(
                 let mod_ = map_file_to_mod(db, file);
                 for matched in mod_.references_to_target(db, target) {
                     if matched.span.resolve(db).is_some()
-                        && let Ok(location) =
-                            to_lsp_location_from_lazy_span(db, matched.span)
+                        && let Ok(location) = to_lsp_location_from_lazy_span(db, matched.span)
                     {
                         locations.push(location);
                     }
@@ -186,19 +185,19 @@ mod tests {
 
                 let diags = self.properties[top_mod]
                     .iter()
-                    .map(|(prop, span)| {
-                        let resolved_span = span.resolve(db).unwrap();
+                    .filter_map(|(prop, span)| {
+                        let resolved_span = span.resolve(db)?;
                         let file_id = self.top_mod_to_file[top_mod];
                         let diag = Diagnostic::note().with_labels(vec![
                             Label::primary(file_id, resolved_span.range).with_message(prop),
                         ]);
-                        (
+                        Some((
                             (
                                 resolved_span.file,
                                 (resolved_span.range.start(), resolved_span.range.end()),
                             ),
                             diag,
-                        )
+                        ))
                     })
                     .collect::<BTreeMap<_, _>>();
 
@@ -403,5 +402,109 @@ mod tests {
             }
         }
         TextSize::from(text.len() as u32)
+    }
+
+    #[test]
+    fn test_msg_variant_resolution() {
+        let mut db = DriverDataBase::default();
+        let code = r#"msg TokenMsg {
+  #[selector = 0x01]
+  Mint { to: i32, amount: i32 } -> bool,
+  #[selector = 0x02]
+  Burn { amount: i32 } -> bool,
+}
+
+pub contract Token {
+  supply: i32
+
+  recv TokenMsg {
+    Mint { to, amount } -> bool uses (mut supply) {
+      supply += amount
+      true
+    }
+    Burn { amount } -> bool uses (mut supply) {
+      supply -= amount
+      true
+    }
+  }
+}
+"#;
+        let file = db.workspace().touch(
+            &mut db,
+            Url::parse("file:///test.fe").unwrap(),
+            Some(code.to_string()),
+        );
+        let top_mod = map_file_to_mod(&db, file);
+
+        // Helper to get cursor position from line:col (0-indexed)
+        let text = file.text(&db);
+        let offset_at = |line: u32, col: u32| -> TextSize {
+            let mut cur_line = 0u32;
+            let mut cur_col = 0u32;
+            for (i, ch) in text.char_indices() {
+                if cur_line == line && cur_col == col {
+                    return TextSize::from(i as u32);
+                }
+                if ch == '\n' {
+                    cur_line += 1;
+                    cur_col = 0;
+                } else {
+                    cur_col += 1;
+                }
+            }
+            TextSize::from(text.len() as u32)
+        };
+
+        // 1. Cursor on "Mint" in msg block definition → should resolve to the struct
+        let mint_def_cursor = offset_at(2, 2);
+        let mint_def_target = top_mod.target_at(&db, mint_def_cursor);
+        assert!(
+            matches!(mint_def_target.first(), Some(Target::Scope(_))),
+            "target_at on Mint in msg block should resolve to a scope, not local"
+        );
+
+        // 2. definition_at should find the Mint struct definition
+        let mint_def = top_mod.definition_at(&db, mint_def_cursor);
+        assert!(
+            mint_def.is_some(),
+            "definition_at should find Mint in msg block"
+        );
+
+        // 3. Cursor on "Mint" in recv arm → should resolve to the same struct
+        let mint_recv_cursor = offset_at(11, 4);
+        let mint_recv_target = top_mod.target_at(&db, mint_recv_cursor);
+        assert!(
+            matches!(mint_recv_target.first(), Some(Target::Scope(_))),
+            "target_at on Mint in recv arm should resolve to a scope (goto-definition)"
+        );
+
+        // 4. Both should resolve to the same scope (the Mint struct)
+        if let (Some(Target::Scope(def_scope)), Some(Target::Scope(recv_scope))) =
+            (mint_def_target.first(), mint_recv_target.first())
+        {
+            assert_eq!(
+                *def_scope, *recv_scope,
+                "Mint in msg block and recv arm should resolve to the same scope"
+            );
+        }
+
+        // 5. references_to_target should find the recv arm reference
+        let target = Target::Scope(mint_def.unwrap());
+        let refs = top_mod.references_to_target(&db, &target);
+        let ref_snippets: Vec<String> = refs
+            .iter()
+            .filter_map(|m| {
+                let span = m.span.resolve(&db)?;
+                let start: usize = span.range.start().into();
+                let end: usize = span.range.end().into();
+                Some(text.as_str()[start..end].to_string())
+            })
+            .collect();
+        assert!(
+            ref_snippets.iter().filter(|s| *s == "Mint").count() >= 2,
+            "references_to_target for Mint should find at least 2 refs \
+             (msg block + recv arm), got: {:?}",
+            ref_snippets
+        );
     }
 }

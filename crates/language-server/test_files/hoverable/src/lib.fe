@@ -59,3 +59,25 @@ fn test_match(opt: Option) -> i32 {
     Option::None => 0
   }
 }
+
+msg TokenMsg {
+  #[selector = 0x01]
+  Mint { to: i32, amount: i32 } -> bool,
+  #[selector = 0x02]
+  Burn { amount: i32 } -> bool,
+}
+
+pub contract Token {
+  supply: i32
+
+  recv TokenMsg {
+    Mint { to, amount } -> bool uses (mut supply) {
+      supply += amount
+      true
+    }
+    Burn { amount } -> bool uses (mut supply) {
+      supply -= amount
+      true
+    }
+  }
+}

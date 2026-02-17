@@ -1,5 +1,6 @@
 ---
 source: crates/language-server/src/functionality/goto.rs
+assertion_line: 448
 expression: snapshot
 input_file: test_files/goto_contract.fe
 ---
@@ -103,25 +104,25 @@ note:
    ┌─ goto_contract.fe:70:5
    │
 70 │     Mint { to: u256, amount: u256 } -> bool,
-   │     ^^^^ -> local: Mint
+   │     ^^^^ -> goto_contract::TokenMsg::Mint
 
 note: 
    ┌─ goto_contract.fe:71:5
    │
 71 │     GetSupply -> u256,
-   │     ^^^^^^^^^ -> local: GetSupply
+   │     ^^^^^^^^^ -> goto_contract::TokenMsg::GetSupply
 
 note: 
    ┌─ goto_contract.fe:75:5
    │
 75 │     SetOwner { new_owner: u256 } -> bool,
-   │     ^^^^^^^^ -> local: SetOwner
+   │     ^^^^^^^^ -> goto_contract::AdminMsg::SetOwner
 
 note: 
    ┌─ goto_contract.fe:76:5
    │
 76 │     GetOwner -> u256,
-   │     ^^^^^^^^ -> local: GetOwner
+   │     ^^^^^^^^ -> goto_contract::AdminMsg::GetOwner
 
 note: 
    ┌─ goto_contract.fe:81:31
@@ -214,6 +215,12 @@ note:
    │          ^^^^^^^^ -> goto_contract::TokenMsg
 
 note: 
+   ┌─ goto_contract.fe:93:9
+   │
+93 │         Mint { to, amount } -> bool uses (mut store) {
+   │         ^^^^ -> goto_contract::TokenMsg::Mint
+
+note: 
    ┌─ goto_contract.fe:93:16
    │
 93 │         Mint { to, amount } -> bool uses (mut store) {
@@ -302,6 +309,12 @@ note:
     │
 105 │     recv AdminMsg {
     │          ^^^^^^^^ -> goto_contract::AdminMsg
+
+note: 
+    ┌─ goto_contract.fe:106:9
+    │
+106 │         SetOwner { new_owner } -> bool uses (mut auth) {
+    │         ^^^^^^^^ -> goto_contract::AdminMsg::SetOwner
 
 note: 
     ┌─ goto_contract.fe:106:20

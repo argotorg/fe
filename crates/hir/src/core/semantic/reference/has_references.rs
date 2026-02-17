@@ -11,7 +11,7 @@ use crate::{
     span::{DynLazySpan, LazySpan},
 };
 
-use super::resolve_path_to_scopes;
+use super::resolve_path_with_recv_fallback;
 use super::typed_body_for_body;
 use super::{ReferenceView, Target};
 
@@ -235,13 +235,25 @@ impl<'db> TopLevelMod<'db> {
     }
 
     /// Find the innermost function containing the cursor.
+    ///
+    /// Skips desugared functions (e.g., encode/decode from msg blocks) because
+    /// their spans overlap with other items (like the msg variant struct name)
+    /// and would cause false binding matches.
     fn find_enclosing_func(self, db: &'db dyn SpannedHirDb, cursor: TextSize) -> Option<Func<'db>> {
         let items = self.find_enclosing_items(db, cursor);
         for item in items {
             match item {
-                ItemKind::Func(func) => return Some(func),
+                ItemKind::Func(func) => {
+                    if matches!(func.origin(db), crate::span::HirOrigin::Desugared(_)) {
+                        continue;
+                    }
+                    return Some(func);
+                }
                 ItemKind::Body(body) => {
                     if let Some(func) = body.containing_func(db) {
+                        if matches!(func.origin(db), crate::span::HirOrigin::Desugared(_)) {
+                            continue;
+                        }
                         return Some(func);
                     }
                 }
@@ -392,12 +404,13 @@ impl<'db> TopLevelMod<'db> {
                                 // Resolve each segment independently via path
                                 // resolution so that both MyEnum and Variant
                                 // are found as references in MyEnum::Variant.
+                                // Uses recv fallback for bare paths in recv arm
+                                // patterns (e.g., `Mint` → `TokenMsg::Mint`).
                                 let last_idx = pv.path.segment_index(db);
                                 for idx in 0..=last_idx {
                                     if let Some(seg_path) = pv.path.segment(db, idx)
-                                        && resolve_path_to_scopes(db, seg_path, pv.scope)
-                                            .iter()
-                                            .any(|s| *s == *scope)
+                                        && resolve_path_with_recv_fallback(db, seg_path, pv.scope)
+                                            .contains(scope)
                                     {
                                         results.push(MatchedReference {
                                             view: reference,
