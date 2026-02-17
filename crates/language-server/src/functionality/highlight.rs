@@ -139,9 +139,7 @@ mod tests {
     fn run_highlight(code: &str, line: u32, col: u32) -> Vec<DocumentHighlight> {
         let mut db = DriverDataBase::default();
         let url = Url::parse("file:///test.fe").unwrap();
-        let file = db
-            .workspace()
-            .touch(&mut db, url, Some(code.to_string()));
+        let file = db.workspace().touch(&mut db, url, Some(code.to_string()));
         let file_text = file.text(&db);
         let cursor = to_offset_from_position(lsp_pos(line, col), file_text.as_str());
         let top_mod = map_file_to_mod(&db, file);
@@ -153,7 +151,11 @@ mod tests {
         let code = "fn greet() -> i32 {\n    42\n}\n\nfn main() -> i32 {\n    greet()\n}\n";
         let highlights = run_highlight(code, 0, 3);
         // Definition (WRITE) + call site (READ)
-        assert_eq!(highlights.len(), 2, "expected 2 highlights, got {highlights:?}");
+        assert_eq!(
+            highlights.len(),
+            2,
+            "expected 2 highlights, got {highlights:?}"
+        );
         assert_eq!(highlights[0].kind, Some(DocumentHighlightKind::WRITE));
         assert_eq!(highlights[1].kind, Some(DocumentHighlightKind::READ));
     }
@@ -162,7 +164,11 @@ mod tests {
     fn highlight_local_variable() {
         let code = "fn foo() -> i32 {\n    let x = 10\n    x + 1\n}\n";
         let highlights = run_highlight(code, 1, 8);
-        assert_eq!(highlights.len(), 2, "expected def + usage, got {highlights:?}");
+        assert_eq!(
+            highlights.len(),
+            2,
+            "expected def + usage, got {highlights:?}"
+        );
         assert_eq!(highlights[0].kind, Some(DocumentHighlightKind::WRITE));
     }
 

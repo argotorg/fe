@@ -355,11 +355,7 @@ fn get_x(p: Point) -> i32 {
         let code = "fn foo() -> i32 {\n    let count = 10\n    count + 1\n}\n";
         let outcome = run_rename(code, 1, 8, "total");
         let ranges = collect_edit_ranges(&outcome);
-        assert_eq!(
-            ranges.len(),
-            2,
-            "expected def + usage, got {ranges:?}"
-        );
+        assert_eq!(ranges.len(), 2, "expected def + usage, got {ranges:?}");
     }
 
     #[test]
