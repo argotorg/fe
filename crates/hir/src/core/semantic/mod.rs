@@ -555,6 +555,14 @@ impl<'db> FuncParamView<'db> {
             }
         }
 
+        if !self.is_self_param(db)
+            && param.is_mut
+            && !matches!(hir_ty.data(db), TypeKind::Mode(TypeMode::Own, _))
+        {
+            let span = self.span().mut_kw().into();
+            return vec![TyLowerDiag::InvalidMutParamPrefixWithoutOwnType { span }.into()];
+        }
+
         // Surface name-resolution errors for the parameter type first
         let errs =
             collect_hir_ty_diags(db, func.scope(), hir_ty, self.lazy_ty_span(db), assumptions);

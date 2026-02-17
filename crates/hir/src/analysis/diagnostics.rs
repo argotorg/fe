@@ -1697,6 +1697,21 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 error_code,
             },
 
+            Self::InvalidMutParamPrefixWithoutOwnType { span } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "invalid `mut` parameter syntax".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "`mut x: T` is only allowed when `T` is `own ...`".to_string(),
+                    span: span.resolve(db),
+                }],
+                notes: vec![
+                    "use `x: mut T` for mutable borrow parameters".to_string(),
+                    "or use `mut x: own T` for mutable owned parameters".to_string(),
+                ],
+                error_code,
+            },
+
             Self::MixedRefSelfPrefixWithExplicitType { span } => CompleteDiagnostic {
                 severity: Severity::Error,
                 message: "invalid mixed receiver syntax".to_string(),

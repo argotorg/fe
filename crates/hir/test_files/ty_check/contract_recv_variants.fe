@@ -23,7 +23,7 @@ mod TokenMsg {
     }
 
     impl core::abi::Encode<std::abi::Sol> for Transfer {
-        fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(own self, mut _ e: E) {
+        fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(own self, _ e: mut E) {
             let Self { to, amount } = self
             to.encode(e)
             amount.encode(e)
@@ -31,7 +31,7 @@ mod TokenMsg {
     }
 
     impl core::abi::Decode<std::abi::Sol> for Transfer {
-        fn decode<D: core::abi::AbiDecoder<std::abi::Sol>>(mut _ d: D) -> Self {
+        fn decode<D: core::abi::AbiDecoder<std::abi::Sol>>(_ d: mut D) -> Self {
             let to = u64::decode(d)
             let amount = u64::decode(d)
             Self { to, amount }
@@ -48,14 +48,14 @@ mod TokenMsg {
     }
 
     impl core::abi::Encode<std::abi::Sol> for Balance {
-        fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(own self, mut _ e: E) {
+        fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(own self, _ e: mut E) {
             let Self { addr } = self
             addr.encode(e)
         }
     }
 
     impl core::abi::Decode<std::abi::Sol> for Balance {
-        fn decode<D: core::abi::AbiDecoder<std::abi::Sol>>(mut _ d: D) -> Self {
+        fn decode<D: core::abi::AbiDecoder<std::abi::Sol>>(_ d: mut D) -> Self {
             let addr = u64::decode(d)
             Self { addr }
         }
@@ -75,14 +75,14 @@ struct CustomQuery {
 }
 
 impl core::abi::Encode<std::abi::Sol> for CustomQuery {
-    fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(own self, mut _ e: E) {
+    fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(own self, _ e: mut E) {
         let Self { key } = self
         key.encode(e)
     }
 }
 
 impl core::abi::Decode<std::abi::Sol> for CustomQuery {
-    fn decode<D: core::abi::AbiDecoder<std::abi::Sol>>(mut _ d: D) -> Self {
+    fn decode<D: core::abi::AbiDecoder<std::abi::Sol>>(_ d: mut D) -> Self {
         let key = u64::decode(d)
         Self { key }
     }

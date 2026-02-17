@@ -4,7 +4,7 @@ trait Abi {
 }
 
 trait Encode<A: Abi> {
-    fn encode(self, mut _ e: A::Encoder)
+    fn encode(self, _ e: mut A::Encoder)
 }
 
 trait AbiEncoder {

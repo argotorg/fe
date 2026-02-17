@@ -21,7 +21,7 @@ impl std::evm::Event for Swap {
         let mut enc = std::abi::SolEncoder::new()
         let data_len = std::abi::encoded_size<(Int24, u256)>()
         enc.reserve_head(data_len)
-        (self.tick, self.amount).encode(enc)
+        (self.tick, self.amount).encode(mut enc)
         let (data_ptr, data_len) = enc.finish()
         log.log2(data_ptr, data_len, Self::TOPIC0, self.sender.as_topic())
     }

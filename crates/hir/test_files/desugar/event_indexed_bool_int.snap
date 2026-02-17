@@ -19,7 +19,7 @@ impl std::evm::Event for Flags {
         let mut enc = std::abi::SolEncoder::new()
         let data_len = std::abi::encoded_size<u256>()
         enc.reserve_head(data_len)
-        self.value.encode(enc)
+        self.value.encode(mut enc)
         let (data_ptr, data_len) = enc.finish()
         log.log3(data_ptr, data_len, Self::TOPIC0, self.ok.as_topic(), self.delta.as_topic())
     }

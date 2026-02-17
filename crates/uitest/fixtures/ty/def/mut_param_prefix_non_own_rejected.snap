@@ -1,0 +1,41 @@
+---
+source: crates/uitest/tests/ty.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty/def/mut_param_prefix_non_own_rejected.fe
+---
+error[3-0031]: invalid `mut` parameter syntax
+  ┌─ mut_param_prefix_non_own_rejected.fe:3:14
+  │
+3 │ fn bad_plain(mut x: Foo) {}
+  │              ^^^ `mut x: T` is only allowed when `T` is `own ...`
+  │
+  = use `x: mut T` for mutable borrow parameters
+  = or use `mut x: own T` for mutable owned parameters
+
+error[3-0031]: invalid `mut` parameter syntax
+  ┌─ mut_param_prefix_non_own_rejected.fe:5:12
+  │
+5 │ fn bad_ref(mut x: ref Foo) {}
+  │            ^^^ `mut x: T` is only allowed when `T` is `own ...`
+  │
+  = use `x: mut T` for mutable borrow parameters
+  = or use `mut x: own T` for mutable owned parameters
+
+error[3-0031]: invalid `mut` parameter syntax
+  ┌─ mut_param_prefix_non_own_rejected.fe:7:12
+  │
+7 │ fn bad_mut(mut x: mut Foo) {}
+  │            ^^^ `mut x: T` is only allowed when `T` is `own ...`
+  │
+  = use `x: mut T` for mutable borrow parameters
+  = or use `mut x: own T` for mutable owned parameters
+
+error[3-0031]: invalid `mut` parameter syntax
+  ┌─ mut_param_prefix_non_own_rejected.fe:9:19
+  │
+9 │ fn bad_underscore(mut _: Foo) {}
+  │                   ^^^ `mut x: T` is only allowed when `T` is `own ...`
+  │
+  = use `x: mut T` for mutable borrow parameters
+  = or use `mut x: own T` for mutable owned parameters

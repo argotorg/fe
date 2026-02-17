@@ -10,7 +10,7 @@ use crate::{
         FuncParamName, GenericArgListId, GenericParam, GenericParamListId, IdentId, ImplTrait,
         IntegerId, ItemKind, LitKind, Mod, Partial, Pat, PatId, PathId, Stmt, StmtId, Struct,
         TopLevelMod, TrackedItemId, TrackedItemVariant, TraitRefId, TypeBound, TypeGenericParam,
-        TypeId, TypeKind, Visibility, WhereClauseId, expr::CallArg,
+        TypeId, TypeKind, TypeMode, UnOp, Visibility, WhereClauseId, expr::CallArg,
     },
     span::{DesugaredOrigin, HirOrigin},
 };
@@ -196,12 +196,15 @@ where
     ) -> FuncParam<'db> {
         FuncParam {
             mode: FuncParamMode::View,
-            is_mut: true,
+            is_mut: false,
             has_ref_prefix: false,
             has_own_prefix: false,
             is_label_suppressed: true,
             name: Partial::Present(FuncParamName::Ident(name)),
-            ty: Partial::Present(ty),
+            ty: Partial::Present(TypeId::new(
+                self.db(),
+                TypeKind::Mode(TypeMode::Mut, Partial::Present(ty)),
+            )),
             self_ty_fallback: false,
         }
     }
@@ -541,6 +544,10 @@ where
 
     pub(super) fn path_expr(&mut self, path: PathId<'db>) -> ExprId {
         self.push_expr(Expr::Path(Partial::Present(path)))
+    }
+
+    pub(super) fn mut_expr(&mut self, expr: ExprId) -> ExprId {
+        self.push_expr(Expr::Un(expr, UnOp::Mut))
     }
 
     pub(super) fn call_expr(&mut self, callee: ExprId, args: Vec<ExprId>) -> ExprId {

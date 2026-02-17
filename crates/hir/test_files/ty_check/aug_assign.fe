@@ -2,7 +2,7 @@ struct Foo {
     x: i32,
 }
 
-pub fn foo(mut foo: Foo, mut b: bool) -> i32 {
+pub fn foo(mut foo: own Foo, mut b: own bool) -> i32 {
     foo.x *= 2
     b |= false
 

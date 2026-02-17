@@ -128,6 +128,11 @@ pub enum TyLowerDiag<'db> {
         ty: TyId<'db>,
     },
 
+    /// Non-`self` parameters cannot use the `mut x: T` prefix form unless the type is `own`.
+    InvalidMutParamPrefixWithoutOwnType {
+        span: DynLazySpan<'db>,
+    },
+
     MixedRefSelfPrefixWithExplicitType {
         span: DynLazySpan<'db>,
     },
@@ -173,6 +178,7 @@ impl TyLowerDiag<'_> {
             Self::ConstTyExpected { .. } => 12,
             Self::NormalTypeExpected { .. } => 13,
             Self::OwnParamCannotBeBorrow { .. } => 14,
+            Self::InvalidMutParamPrefixWithoutOwnType { .. } => 31,
             Self::InvalidConstTyExpr(_) => 15,
             Self::ConstEvalUnsupported(_) => 23,
             Self::ConstEvalNonConstCall(_) => 24,

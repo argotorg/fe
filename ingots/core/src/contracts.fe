@@ -43,7 +43,7 @@ pub trait ContractHost {
         where T: Encode<A> + AbiSize
     {
         let mut enc = A::encoder_new()
-        (mut enc).reserve_head(T::ENCODED_SIZE)
+        enc.reserve_head(T::ENCODED_SIZE)
         value.encode(mut enc)
         let out: (u256, u256) = enc.finish()
         self.return_bytes(out.0, out.1)

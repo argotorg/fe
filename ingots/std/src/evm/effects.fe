@@ -47,13 +47,13 @@ impl AbiSize for Address {
 }
 
 impl<A: Abi> Decode<A> for Address {
-    fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
+    fn decode<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Address { inner: (mut d).read_word() }
     }
 }
 
 impl<A: Abi> Encode<A> for Address {
-    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) {
+    fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         (mut e).write_word(self.inner)
     }
 }
@@ -390,7 +390,7 @@ fn decode_returndata<R>(ptr: u256, len: u256) -> R
 
     let input = MemoryBytes { base: ptr, len: len }
     let mut d = SolDecoder<MemoryBytes>::new(input)
-    R::decode(d)
+    R::decode(mut d)
 }
 
 impl Call for Evm {

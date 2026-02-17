@@ -20,7 +20,7 @@ impl std::evm::Event for Mixed {
         let mut enc = std::abi::SolEncoder::new()
         let data_len = std::abi::encoded_size<(bool, i128)>()
         enc.reserve_head(data_len)
-        (self.flag, self.value).encode(enc)
+        (self.flag, self.value).encode(mut enc)
         let (data_ptr, data_len) = enc.finish()
         log.log2(data_ptr, data_len, Self::TOPIC0, self.from.as_topic())
     }

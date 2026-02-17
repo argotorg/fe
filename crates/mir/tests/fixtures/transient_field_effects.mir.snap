@@ -119,7 +119,7 @@ fn runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a
     v3: SolDecoder<CallData> = sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v2, 4)
     ret v3
 
-fn enter_h591c597fc9aaddcc_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966(v0: SolDecoder<CallData>) -> Enter:
+fn enter_h591c597fc9aaddcc_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966(v0: mut SolDecoder<CallData>) -> Enter:
   bb0:
     ret
 

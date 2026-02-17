@@ -1,13 +1,14 @@
 ---
-source: crates/hir-analysis/tests/ty_check.rs
+source: crates/hir/tests/ty_check.rs
+assertion_line: 40
 expression: res
 input_file: test_files/ty_check/aug_assign.fe
 ---
 note: 
-   ┌─ aug_assign.fe:5:46
+   ┌─ aug_assign.fe:5:54
    │  
- 5 │   pub fn foo(mut foo: Foo, mut b: bool) -> i32 {
-   │ ╭──────────────────────────────────────────────^
+ 5 │   pub fn foo(mut foo: own Foo, mut b: own bool) -> i32 {
+   │ ╭──────────────────────────────────────────────────────^
  6 │ │     foo.x *= 2
  7 │ │     b |= false
  8 │ │ 

@@ -1,5 +1,6 @@
 ---
 source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/assign.fe
 ---
@@ -32,7 +33,7 @@ error[8-0018]: left-hand side of assignment is immutable
 error[8-0018]: left-hand side of assignment is immutable
    ┌─ assign.fe:26:5
    │
-25 │ fn foo<T>(x: i32, mut y: u32, opt: Option<T>, opt2: Option<i32>) {
+25 │ fn foo<T>(x: i32, mut y: own u32, opt: Option<T>, opt2: Option<i32>) {
    │           - try changing to `mut x`
 26 │     x = 1
    │     ^ immutable assignment

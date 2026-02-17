@@ -7,7 +7,7 @@ struct GenericMsg<T> {
 impl<T> core::abi::Encode<std::abi::Sol> for GenericMsg<T>
     where T: core::abi::Encode<std::abi::Sol>
 {
-    fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(own self, mut _ e: E) {
+    fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(own self, _ e: mut E) {
         let Self { value } = self
         value.encode(e)
     }
@@ -16,7 +16,7 @@ impl<T> core::abi::Encode<std::abi::Sol> for GenericMsg<T>
 impl<T> core::abi::Decode<std::abi::Sol> for GenericMsg<T>
     where T: core::abi::Decode<std::abi::Sol>
 {
-    fn decode<D: core::abi::AbiDecoder<std::abi::Sol>>(mut _ d: D) -> Self {
+    fn decode<D: core::abi::AbiDecoder<std::abi::Sol>>(_ d: mut D) -> Self {
         let value = T::decode(d)
         Self { value }
     }

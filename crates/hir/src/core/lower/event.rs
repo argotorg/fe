@@ -588,7 +588,8 @@ fn lower_emit_method<'db>(
                     }
                     body.push_expr(Expr::Tuple(elems))
                 };
-                let enc_arg = body.ident_expr(enc_ident);
+                let enc_arg_base = body.ident_expr(enc_ident);
+                let enc_arg = body.mut_expr(enc_arg_base);
                 let encode = body.method_call_expr(encode_receiver, encode_ident, vec![enc_arg]);
                 body.emit_expr_stmt(encode);
 
