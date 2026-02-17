@@ -21,10 +21,13 @@ pub fn calculate_line_offsets(text: &str) -> Vec<usize> {
 
 pub fn to_offset_from_position(position: Position, text: &str) -> parser::TextSize {
     let line_offsets: Vec<usize> = calculate_line_offsets(text);
-    let line_offset = line_offsets[position.line as usize];
+    let line_offset = line_offsets
+        .get(position.line as usize)
+        .copied()
+        .unwrap_or_else(|| line_offsets.last().copied().unwrap_or(0));
     let character_offset = position.character as usize;
 
-    parser::TextSize::from((line_offset + character_offset) as u32)
+    parser::TextSize::from((line_offset + character_offset).min(text.len()) as u32)
 }
 
 pub fn to_lsp_range_from_span(

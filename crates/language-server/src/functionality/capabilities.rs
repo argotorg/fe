@@ -56,6 +56,9 @@ pub(crate) fn server_capabilities() -> ServerCapabilities {
         call_hierarchy_provider: Some(async_lsp::lsp_types::CallHierarchyServerCapability::Simple(
             true,
         )),
+        // type hierarchy: handlers are registered but lsp-types 0.95.1 doesn't
+        // expose type_hierarchy_provider on ServerCapabilities; clients that
+        // discover support dynamically (e.g. via request probing) will still work.
         // code lens
         code_lens_provider: Some(async_lsp::lsp_types::CodeLensOptions {
             resolve_provider: Some(false),
