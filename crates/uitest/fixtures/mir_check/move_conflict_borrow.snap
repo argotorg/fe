@@ -3,8 +3,10 @@ source: crates/uitest/tests/mir_check.rs
 expression: res
 input_file: fixtures/mir_check/move_conflict_borrow.fe
 ---
-error[8-0000]: type mismatch
-  ┌─ move_conflict_borrow.fe:6:5
-  │
-6 │     value.value
-  │     ^^^^^^^^^^^ expected `()`, but `u256` is given
+error[11-0002]: move conflict in `fn move_conflict_borrow`
+   ┌─ move_conflict_borrow.fe:10:9
+   │
+10 │     let mut x: Boxed = Boxed { value: 0 }
+   │         ^^^^^ cannot move out of a value while it is borrowed
+11 │     let p: mut Boxed = mut x
+   │                            - `x` is borrowed here

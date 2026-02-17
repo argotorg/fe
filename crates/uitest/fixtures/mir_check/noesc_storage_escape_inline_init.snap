@@ -3,7 +3,7 @@ source: crates/uitest/tests/mir_check.rs
 expression: res
 input_file: fixtures/mir_check/noesc_storage_escape_inline_init.fe
 ---
-error[10-0001]: cannot store `Esc` in `Storage`
+error[11-0001]: cannot store `Esc` in `Storage`
    ┌─ noesc_storage_escape_inline_init.fe:10:5
    │
 10 │     slot = Esc { h: mut x, tag: 0 }

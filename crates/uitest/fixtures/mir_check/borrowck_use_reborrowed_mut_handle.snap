@@ -1,10 +1,9 @@
 ---
 source: crates/uitest/tests/mir_check.rs
-assertion_line: 32
 expression: res
 input_file: fixtures/mir_check/borrowck_use_reborrowed_mut_handle.fe
 ---
-error[10-0002]: borrow conflict in `fn borrowck_use_reborrowed_mut_handle`
+error[11-0002]: borrow conflict in `fn borrowck_use_reborrowed_mut_handle`
   ┌─ borrowck_use_reborrowed_mut_handle.fe:7:5
   │
 5 │     let p: mut u256 = mut x

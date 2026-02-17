@@ -1,10 +1,9 @@
 ---
 source: crates/uitest/tests/mir_check.rs
-assertion_line: 32
 expression: res
 input_file: fixtures/mir_check/borrowck_zst_mut_overlap.fe
 ---
-error[10-0002]: borrow conflict in `fn borrowck_zst_mut_overlap`
+error[11-0002]: borrow conflict in `fn borrowck_zst_mut_overlap`
    ┌─ borrowck_zst_mut_overlap.fe:10:5
    │
  9 │     let m: mut Marker = mut h.marker

@@ -1,10 +1,9 @@
 ---
 source: crates/uitest/tests/mir_check.rs
-assertion_line: 32
 expression: res
 input_file: fixtures/mir_check/return_ref_from_view_param.fe
 ---
-error[10-0003]: invalid return borrow in `fn return_ref_from_view_param`
+error[11-0003]: invalid return borrow in `fn return_ref_from_view_param`
   ┌─ return_ref_from_view_param.fe:2:5
   │
 1 │ pub fn return_ref_from_view_param(x: u256) -> ref u256 {

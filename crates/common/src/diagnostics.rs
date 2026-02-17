@@ -173,7 +173,7 @@ impl DiagnosticPass {
             Self::TraitSatisfaction => 6,
             Self::MethodDefinition => 7,
             Self::TyCheck => 8,
-            Self::Mir => 10,
+            Self::Mir => 11,
 
             Self::ExternalAnalysis(_) => u16::MAX,
         }

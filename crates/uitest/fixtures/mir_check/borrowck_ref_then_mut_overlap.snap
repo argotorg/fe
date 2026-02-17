@@ -1,10 +1,9 @@
 ---
 source: crates/uitest/tests/mir_check.rs
-assertion_line: 32
 expression: res
 input_file: fixtures/mir_check/borrowck_ref_then_mut_overlap.fe
 ---
-error[10-0002]: borrow conflict in `fn borrowck_ref_then_mut_overlap`
+error[11-0002]: borrow conflict in `fn borrowck_ref_then_mut_overlap`
   ┌─ borrowck_ref_then_mut_overlap.fe:6:5
   │
 5 │     let r: ref u256 = ref x

@@ -1,10 +1,9 @@
 ---
 source: crates/uitest/tests/mir_check.rs
-assertion_line: 32
 expression: res
 input_file: fixtures/mir_check/borrowck_write_field_under_ref.fe
 ---
-error[10-0002]: borrow conflict in `fn borrowck_write_field_under_ref`
+error[11-0002]: borrow conflict in `fn borrowck_write_field_under_ref`
    ┌─ borrowck_write_field_under_ref.fe:11:5
    │
 10 │     let r: ref u256 = ref s.a

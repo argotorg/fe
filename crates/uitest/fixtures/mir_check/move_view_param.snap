@@ -1,10 +1,9 @@
 ---
 source: crates/uitest/tests/mir_check.rs
-assertion_line: 32
 expression: res
 input_file: fixtures/mir_check/move_view_param.fe
 ---
-error[10-0002]: move conflict in `fn add`
+error[11-0002]: move conflict in `fn add`
   ┌─ move_view_param.fe:2:31
   │  
 2 │   fn add(a: Foo, b: Foo) -> Foo {

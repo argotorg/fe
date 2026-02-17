@@ -6,7 +6,7 @@ input_file: tests/fixtures/cli_output/single_files/mir_move_error.fe
 === STDERR ===
 errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/mir_move_error.fe
 
-error[10-0002]: move conflict in `fn mir_move_error`
+error[11-0002]: move conflict in `fn mir_move_error`
    ┌─ mir_move_error.fe:9:34
    │  
  9 │   pub fn mir_move_error() -> Boxed {

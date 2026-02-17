@@ -1,10 +1,9 @@
 ---
 source: crates/uitest/tests/mir_check.rs
-assertion_line: 32
 expression: res
 input_file: fixtures/mir_check/borrowck_call_result_aggregate_handle_then_write.fe
 ---
-error[10-0002]: borrow conflict in `fn borrowck_call_result_aggregate_handle_then_write`
+error[11-0002]: borrow conflict in `fn borrowck_call_result_aggregate_handle_then_write`
    ┌─ borrowck_call_result_aggregate_handle_then_write.fe:13:5
    │
 12 │     let mut hp: HandlePair = mk_handle(mut value)

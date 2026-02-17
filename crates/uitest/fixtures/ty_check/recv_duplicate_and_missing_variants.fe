@@ -4,7 +4,7 @@ msg BankMsg {
     #[selector = 0x01]
     Deposit,
     #[selector = 0x02]
-    Withdraw,
+    Withdraw -> bool,
     #[selector = 0x03]
     Transfer { amount: u64 } -> bool,
 }
