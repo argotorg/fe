@@ -158,9 +158,22 @@ bool tree_sitter_fe_external_scanner_scan(void *payload, TSLexer *lexer,
       advance(lexer);  // consume '<'
       int32_t next = lexer->lookahead;
 
-      if (next == '=' || next == '<') {
-        // This is <=, <<, or <<= -- let the internal lexer handle it.
-        // Don't mark_end so the lexer resets to before '<'.
+      if (next == '=') {
+        // This is <= -- let the internal lexer handle it.
+        return false;
+      }
+
+      if (next == '<') {
+        // Could be << (shift), <<= (shift-assign), or nested generics <<T as...
+        // If only GENERIC_OPEN is valid (no COMPARISON_LT), this is a generic
+        // context (e.g., start of qualified path <<T as Trait>::Item as ...>).
+        // Emit just the first '<' as GENERIC_OPEN.
+        if (valid_symbols[GENERIC_OPEN] && !valid_symbols[COMPARISON_LT]) {
+          lexer->mark_end(lexer);  // mark end after first '<'
+          lexer->result_symbol = GENERIC_OPEN;
+          return true;
+        }
+        // Otherwise let the internal lexer handle << / <<=
         return false;
       }
 
@@ -169,29 +182,107 @@ bool tree_sitter_fe_external_scanner_scan(void *payload, TSLexer *lexer,
 
       if (valid_symbols[GENERIC_OPEN]) {
         // Continue scanning ahead to find matching '>' for generic.
-        // We already consumed '<'; scan_generic_open_rest handles the rest.
-        int depth = 1;
+        // We already consumed '<'; now lookahead for balanced '>'.
+        // Track angle depth, plus paren/bracket/brace depth so we don't
+        // mistake a '>' inside nested delimiters for the closing angle.
+        int angle_depth = 1;
+        int paren_depth = 0;
+        int bracket_depth = 0;
+        int brace_depth = 0;
         int chars_scanned = 0;
         const int MAX_LOOKAHEAD = 256;
         bool is_generic = false;
+        // Track last non-whitespace char at top level (all depths 0) to
+        // distinguish `Foo<T, {expr}>` ('{' after ',') from `if x < y {` ('{' after identifier).
+        int32_t last_top_char = '<';  // Starts as '<' since we just consumed it.
 
         while (!lexer->eof(lexer) && chars_scanned < MAX_LOOKAHEAD) {
           int32_t c = lexer->lookahead;
           chars_scanned++;
 
           switch (c) {
-            case '<':
-              depth++;
+            case '(':
+              paren_depth++;
               advance(lexer);
-              if (lexer->lookahead == '<') goto not_generic;
+              continue;
+            case ')':
+              if (paren_depth == 0) goto not_generic;
+              paren_depth--;
+              advance(lexer);
+              continue;
+            case '[':
+              bracket_depth++;
+              advance(lexer);
+              continue;
+            case ']':
+              if (bracket_depth == 0) goto not_generic;
+              bracket_depth--;
+              advance(lexer);
+              continue;
+            case '{':
+              // At top level (brace_depth 0), '{' is only valid in generics
+              // when it starts a const-generic block expression, i.e. after
+              // '<' or ','.  If it follows an identifier/)/] it's a block body
+              // (e.g. `if x < y { ... }`).
+              if (brace_depth == 0 && last_top_char != '<' && last_top_char != ',') {
+                goto not_generic;
+              }
+              brace_depth++;
+              advance(lexer);
+              continue;
+            case '}':
+              if (brace_depth == 0) goto not_generic;
+              brace_depth--;
+              advance(lexer);
+              continue;
+            case ';':
+              // Semicolons are only valid inside brackets (array types)
+              // or braces (const generic blocks)
+              if (bracket_depth == 0 && brace_depth == 0) goto not_generic;
+              advance(lexer);
+              continue;
+            case '|':
+              advance(lexer);
+              // || at top level is a boolean operator -- can't be in generics
+              if (paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 &&
+                  lexer->lookahead == '|') goto not_generic;
+              continue;
+            case '&':
+              advance(lexer);
+              // && at top level is a boolean operator -- can't be in generics
+              if (paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 &&
+                  lexer->lookahead == '&') goto not_generic;
+              continue;
+            case '=':
+              advance(lexer);
+              // => at top level is a match arm separator -- can't be in generics
+              // (= alone IS valid: assoc type args like Item = T)
+              if (paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 &&
+                  lexer->lookahead == '>') goto not_generic;
+              continue;
+            case '.':
+              advance(lexer);
+              // .. at top level is a range operator -- can't be in generics
+              if (paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 &&
+                  lexer->lookahead == '.') goto not_generic;
+              continue;
+            case '<':
+              if (paren_depth == 0 && bracket_depth == 0 && brace_depth == 0) {
+                angle_depth++;
+                last_top_char = '<';
+                advance(lexer);
+                if (lexer->lookahead == '<') goto not_generic;
+              } else {
+                advance(lexer);
+              }
               continue;
             case '>':
-              depth--;
-              if (depth == 0) { is_generic = true; goto done_scanning; }
+              if (paren_depth == 0 && bracket_depth == 0 && brace_depth == 0) {
+                angle_depth--;
+                if (angle_depth == 0) { is_generic = true; goto done_scanning; }
+              }
               advance(lexer);
               continue;
-            case '{': case '}': case ';':
-              goto not_generic;
             case ' ': case '\t': case '\r': case '\n':
               advance(lexer);
               continue;
@@ -211,8 +302,11 @@ bool tree_sitter_fe_external_scanner_scan(void *payload, TSLexer *lexer,
                 }
                 continue;
               }
-              goto not_generic;
+              // '/' alone -- division, still valid inside generics
+              if (paren_depth == 0 && bracket_depth == 0 && brace_depth == 0) last_top_char = '/';
+              continue;
             default:
+              if (paren_depth == 0 && bracket_depth == 0 && brace_depth == 0) last_top_char = c;
               advance(lexer);
               continue;
           }

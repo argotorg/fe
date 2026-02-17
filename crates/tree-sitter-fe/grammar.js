@@ -58,6 +58,10 @@ module.exports = grammar({
     // expression, _path (for further ::), or path_segment (for type paths)
     [$._expression, $.path_segment],
     [$._path, $.path_segment],
+    // When seeing `ident <`, could be expression (instantiation), _path (scoped_path
+    // with generic args), or path_segment. Need three-way conflict.
+    [$._expression, $._path, $.path_segment],
+    [$._expression, $._path],
     // attribute name can be identifier or path (path starts with path_segment which is identifier)
     [$.path_segment, $.attribute],
   ],
@@ -163,10 +167,21 @@ module.exports = grammar({
     ),
 
     parameter: $ => choice(
-      seq(optional('mut'), 'self', optional(seq(':', $._type))),
+      // self parameter: [mut|ref|own] self [: Type]
+      seq(optional(choice('mut', 'ref', 'own')), 'self', optional(seq(':', $._type))),
+      // labeled parameter: [mut|ref|own] label name : Type
+      // e.g., `from sender: address`, `_ val: u256`, `mut to recipient: address`
       seq(
-        optional('mut'),
-        optional('_'),
+        optional(choice('mut', 'ref', 'own')),
+        field('label', choice($.identifier, '_')),
+        field('name', choice($.identifier, '_')),
+        ':',
+        field('type', $._type),
+      ),
+      // unlabeled parameter: [mut|ref|own] name : Type
+      // e.g., `bar: i32`, `mut baz: u256`
+      seq(
+        optional(choice('mut', 'ref', 'own')),
         field('name', choice($.identifier, '_')),
         ':',
         field('type', $._type),
@@ -276,7 +291,12 @@ module.exports = grammar({
       field('name', $.identifier),
       optional(seq(
         '{',
-        sepTrailing(choice($.identifier, $.rest_pattern), ','),
+        sepTrailing(choice(
+          // Labeled binding: `a: x` or `a: (x, y)`
+          seq(field('name', $.identifier), ':', field('binding', $._pattern)),
+          $.identifier,
+          $.rest_pattern,
+        ), ','),
         '}',
       )),
     ),
@@ -322,16 +342,16 @@ module.exports = grammar({
 
     uses_param: $ => choice(
       // labeled: `name: Type` or `mut name: Type` or `name: mut Type`
+      // (mode prefix on type handled by mode_type in _type rule)
       seq(
-        optional('mut'),
+        optional(choice('mut', 'ref', 'own')),
         field('name', choice($.identifier, '_')),
         ':',
-        optional('mut'),
         field('type', $._type),
       ),
       // unlabeled: `Type` or `mut Type`
       seq(
-        optional('mut'),
+        optional(choice('mut', 'ref', 'own')),
         field('type', $.path),
       ),
     ),
@@ -523,9 +543,16 @@ module.exports = grammar({
       $.tuple_type,
       $.array_type,
       $.pointer_type,
+      $.mode_type,
       $.self_type,
       $.never_type,
       $.qualified_path_type,
+    ),
+
+    // Mode-prefixed type: ref Foo, mut Foo, own Foo
+    mode_type: $ => seq(
+      field('mode', choice('ref', 'mut', 'own')),
+      field('type', $._type),
     ),
 
     // Qualified path: <Type as Trait>::AssocType
@@ -598,6 +625,15 @@ module.exports = grammar({
       $.augmented_assignment_expression,
       $.range_expression,
       $.qualified_path_expression,
+      $.mode_expression,
+    ),
+
+    // Mode expression: (mut expr), (ref expr), (own expr)
+    mode_expression: $ => seq(
+      '(',
+      field('mode', choice('mut', 'ref', 'own')),
+      field('value', $._expression),
+      ')',
     ),
 
     // Qualified path in expression context: <T as Trait>::method(args)
@@ -702,15 +738,26 @@ module.exports = grammar({
     )),
 
     // scoped_path: used in both expression and type contexts
-    // Left side uses _path for recursive qualification
-    scoped_path: $ => prec(1, seq(
-      field('path', $._path),
-      '::',
-      field('name', choice($.identifier, 'self', 'Self', 'super', 'ingot')),
-    )),
+    // Left side uses _path for recursive qualification.
+    // Also supports generic args on intermediate segments: Foo<T>::method
+    scoped_path: $ => choice(
+      prec(1, seq(
+        field('path', $._path),
+        '::',
+        field('name', choice($.identifier, 'self', 'Self', 'super', 'ingot')),
+      )),
+      // Generic path segment: Foo<T>::name, Self::Ptr<T>::name
+      prec(1, seq(
+        field('path', $._path),
+        field('type_arguments', $.generic_arg_list),
+        '::',
+        field('name', choice($.identifier, 'self', 'Self', 'super', 'ingot')),
+      )),
+    ),
 
     record_expression: $ => prec.dynamic(-1, seq(
       field('type', $.path),
+      optional(field('type_arguments', $.generic_arg_list)),
       field('body', $.record_field_list),
     )),
 
@@ -873,6 +920,11 @@ module.exports = grammar({
         ':',
         field('value', $._expression),
       ),
+      // Mode-prefixed arg: foo(mut x), foo(own val)
+      seq(
+        field('mode', choice('mut', 'ref', 'own')),
+        field('value', $._expression),
+      ),
       field('value', $._expression),
     ),
 
@@ -984,6 +1036,9 @@ module.exports = grammar({
         ':',
         field('pattern', $._pattern),
       ),
+      // Nested record pattern without field name: e.g., `Foo {x, y}` inside a record
+      $.record_pattern,
+      $.path_tuple_pattern,
       field('name', $.identifier),
       $.rest_pattern,
     ),
