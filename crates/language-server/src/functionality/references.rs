@@ -77,7 +77,12 @@ pub async fn handle_references(
         backend.map_client_uri_to_internal(params.text_document_position.text_document.uri.clone());
 
     // Quick existence check on actor thread
-    if backend.db.workspace().get(&backend.db, &internal_url).is_none() {
+    if backend
+        .db
+        .workspace()
+        .get(&backend.db, &internal_url)
+        .is_none()
+    {
         return Ok(None);
     }
 

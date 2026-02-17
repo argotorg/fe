@@ -41,7 +41,12 @@ pub async fn handle_rename(
     let internal_url = backend.map_client_uri_to_internal(lsp_uri);
 
     // Quick existence check on actor thread
-    if backend.db.workspace().get(&backend.db, &internal_url).is_none() {
+    if backend
+        .db
+        .workspace()
+        .get(&backend.db, &internal_url)
+        .is_none()
+    {
         return Ok(None);
     }
 
@@ -49,9 +54,8 @@ pub async fn handle_rename(
     let new_name = params.new_name.clone();
 
     // Spawn heavy rename computation on the worker pool
-    let rx = backend.spawn_on_workers(move |db| {
-        compute_rename_edits(db, &internal_url, position, &new_name)
-    });
+    let rx = backend
+        .spawn_on_workers(move |db| compute_rename_edits(db, &internal_url, position, &new_name));
 
     let outcome: RenameOutcome = rx.await.map_err(|_| {
         ResponseError::new(

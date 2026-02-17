@@ -27,7 +27,12 @@ pub async fn handle_code_lens(
 ) -> Result<Option<Vec<CodeLens>>, ResponseError> {
     let internal_url = backend.map_client_uri_to_internal(params.text_document.uri.clone());
 
-    if backend.db.workspace().get(&backend.db, &internal_url).is_none() {
+    if backend
+        .db
+        .workspace()
+        .get(&backend.db, &internal_url)
+        .is_none()
+    {
         return Ok(None);
     }
 
@@ -132,10 +137,7 @@ pub async fn handle_code_lens(
 
 /// Heavy computation: iterate items, count references, collect locations.
 /// Runs on the worker thread with a salsa db snapshot.
-fn compute_code_lens_data(
-    db: &driver::DriverDataBase,
-    file_url: &url::Url,
-) -> Vec<RawCodeLens> {
+fn compute_code_lens_data(db: &driver::DriverDataBase, file_url: &url::Url) -> Vec<RawCodeLens> {
     let Some(file) = db.workspace().get(db, file_url) else {
         return vec![];
     };
