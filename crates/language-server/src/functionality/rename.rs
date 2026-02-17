@@ -222,6 +222,11 @@ fn is_module_scope(scope: ScopeId) -> bool {
     matches!(scope.item(), ItemKind::TopMod(_) | ItemKind::Mod(_))
 }
 
+#[cfg(test)]
+fn lsp_pos(line: u32, character: u32) -> async_lsp::lsp_types::Position {
+    async_lsp::lsp_types::Position { line, character }
+}
+
 /// Rename all implementations of a trait method in impl blocks.
 fn rename_trait_method_implementations<'db>(
     db: &'db driver::DriverDataBase,
@@ -256,5 +261,162 @@ fn rename_trait_method_implementations<'db>(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use driver::DriverDataBase;
+    use url::Url;
+
+    /// Helper: run rename at a position and return the outcome.
+    fn run_rename(code: &str, line: u32, col: u32, new_name: &str) -> RenameOutcome {
+        let mut db = DriverDataBase::default();
+        let url = Url::parse("file:///test.fe").unwrap();
+        db.workspace()
+            .touch(&mut db, url.clone(), Some(code.to_string()));
+        compute_rename_edits(&db, &url, lsp_pos(line, col), new_name)
+    }
+
+    /// Collect all renamed ranges as (line, start_col, end_col) tuples.
+    fn collect_edit_ranges(outcome: &RenameOutcome) -> Vec<(u32, u32, u32)> {
+        match outcome {
+            RenameOutcome::Edits(changes) => {
+                let mut ranges: Vec<_> = changes
+                    .values()
+                    .flatten()
+                    .map(|e| {
+                        (
+                            e.range.start.line,
+                            e.range.start.character,
+                            e.range.end.character,
+                        )
+                    })
+                    .collect();
+                ranges.sort();
+                ranges
+            }
+            _ => vec![],
+        }
+    }
+
+    #[test]
+    fn rename_function() {
+        let code = "fn greet() -> i32 {\n    42\n}\n\nfn main() -> i32 {\n    greet()\n}\n";
+        let outcome = run_rename(code, 0, 3, "hello");
+        let ranges = collect_edit_ranges(&outcome);
+        assert_eq!(ranges.len(), 2, "expected def + call site, got {ranges:?}");
+        assert!(ranges.iter().any(|(l, _, _)| *l == 0));
+        assert!(ranges.iter().any(|(l, _, _)| *l == 5));
+    }
+
+    #[test]
+    fn rename_struct() {
+        let code = r#"struct Point {
+    x: i32,
+    y: i32
+}
+
+fn make() -> Point {
+    Point { x: 1, y: 2 }
+}
+"#;
+        let outcome = run_rename(code, 0, 7, "Vec2");
+        let ranges = collect_edit_ranges(&outcome);
+        // Definition + return type + construction = 3
+        assert!(
+            ranges.len() >= 3,
+            "expected at least 3 edits for struct rename, got {ranges:?}"
+        );
+    }
+
+    #[test]
+    fn rename_struct_field() {
+        let code = r#"struct Point {
+    x: i32,
+    y: i32
+}
+
+fn get_x(p: Point) -> i32 {
+    p.x
+}
+"#;
+        let outcome = run_rename(code, 1, 4, "horizontal");
+        let ranges = collect_edit_ranges(&outcome);
+        assert!(
+            ranges.len() >= 2,
+            "expected at least 2 edits for field rename, got {ranges:?}"
+        );
+    }
+
+    #[test]
+    fn rename_local_variable() {
+        let code = "fn foo() -> i32 {\n    let count = 10\n    count + 1\n}\n";
+        let outcome = run_rename(code, 1, 8, "total");
+        let ranges = collect_edit_ranges(&outcome);
+        assert_eq!(
+            ranges.len(),
+            2,
+            "expected def + usage, got {ranges:?}"
+        );
+    }
+
+    #[test]
+    fn rename_enum_type() {
+        let code = r#"enum Status {
+    Active,
+    Inactive
+}
+
+fn check(s: Status) -> bool {
+    match s {
+        Status::Active => true
+        Status::Inactive => false
+    }
+}
+"#;
+        let outcome = run_rename(code, 0, 5, "State");
+        let ranges = collect_edit_ranges(&outcome);
+        assert!(
+            ranges.len() >= 4,
+            "expected def + param type + 2 match paths, got {ranges:?}"
+        );
+    }
+
+    #[test]
+    fn rename_trait_method_renames_impl() {
+        let code = r#"trait Greetable {
+    fn greet(self) -> i32
+}
+
+struct Person {
+    age: i32
+}
+
+impl Greetable for Person {
+    fn greet(self) -> i32 {
+        self.age
+    }
+}
+"#;
+        let outcome = run_rename(code, 1, 7, "hello");
+        let ranges = collect_edit_ranges(&outcome);
+        assert!(
+            ranges.len() >= 2,
+            "expected trait + impl method defs, got {ranges:?}"
+        );
+        assert!(ranges.iter().any(|(l, _, _)| *l == 1), "trait method def");
+        assert!(ranges.iter().any(|(l, _, _)| *l == 9), "impl method def");
+    }
+
+    #[test]
+    fn rename_module_is_rejected() {
+        let code = "mod inner {\n    pub fn foo() -> i32 { 1 }\n}\n";
+        let outcome = run_rename(code, 0, 4, "outer");
+        assert!(
+            matches!(outcome, RenameOutcome::ClientError(..)),
+            "renaming a module should be rejected"
+        );
     }
 }
