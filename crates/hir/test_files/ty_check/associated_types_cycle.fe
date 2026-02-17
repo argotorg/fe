@@ -32,10 +32,10 @@ trait Encode<A: Abi> {
 
 impl Encode<SolAbi> for [u8; 4] {
     fn encode(self, _ e: mut SolAbi::Encoder) {
-        (mut e).write_byte(self[0])
-        (mut e).write_byte(self[1])
-        (mut e).write_byte(self[2])
-        (mut e).write_byte(self[3])
+        e.write_byte(self[0])
+        e.write_byte(self[1])
+        e.write_byte(self[2])
+        e.write_byte(self[3])
     }
 }
 

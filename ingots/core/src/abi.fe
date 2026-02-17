@@ -382,13 +382,13 @@ impl<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11> AbiSize for (T0, T1, T2, 
 
 impl<A: Abi> Decode<A> for u256 {
     fn decode<D: AbiDecoder<A>>(_ d: mut D) -> Self {
-        (mut d).read_word()
+        d.read_word()
     }
 }
 
 impl<A: Abi> Encode<A> for u256 {
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
-        (mut e).write_word(self)
+        e.write_word(self)
     }
 }
 
@@ -400,179 +400,179 @@ impl<A: Abi, const N: usize> Decode<A> for String<N> {
 
 impl<A: Abi, const N: usize> Encode<A> for String<N> {
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
-        (mut e).write_word(super::addr_of(self))
+        e.write_word(super::addr_of(self))
     }
 }
 
 impl<A: Abi> Decode<A> for bool {
     fn decode<D: AbiDecoder<A>>(_ d: mut D) -> Self {
-        (mut d).read_word() != 0
+        d.read_word() != 0
     }
 }
 
 impl<A: Abi> Encode<A> for bool {
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         if self {
-            (mut e).write_word(1)
+            e.write_word(1)
         } else {
-            (mut e).write_word(0)
+            e.write_word(0)
         }
     }
 }
 
 impl<A: Abi> Decode<A> for u8 {
     fn decode<D: AbiDecoder<A>>(_ d: mut D) -> Self {
-        (mut d).read_word().downcast_unchecked()
+        d.read_word().downcast_unchecked()
     }
 }
 
 impl<A: Abi> Encode<A> for u8 {
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
-        (mut e).write_word(self as u256)
+        e.write_word(self as u256)
     }
 }
 
 impl<A: Abi> Decode<A> for u16 {
     fn decode<D: AbiDecoder<A>>(_ d: mut D) -> Self {
-        (mut d).read_word().downcast_unchecked()
+        d.read_word().downcast_unchecked()
     }
 }
 
 impl<A: Abi> Encode<A> for u16 {
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
-        (mut e).write_word(self as u256)
+        e.write_word(self as u256)
     }
 }
 
 impl<A: Abi> Decode<A> for u32 {
     fn decode<D: AbiDecoder<A>>(_ d: mut D) -> Self {
-        (mut d).read_word().downcast_unchecked()
+        d.read_word().downcast_unchecked()
     }
 }
 
 impl<A: Abi> Encode<A> for u32 {
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
-        (mut e).write_word(self as u256)
+        e.write_word(self as u256)
     }
 }
 
 impl<A: Abi> Decode<A> for u64 {
     fn decode<D: AbiDecoder<A>>(_ d: mut D) -> Self {
-        (mut d).read_word().downcast_unchecked()
+        d.read_word().downcast_unchecked()
     }
 }
 
 impl<A: Abi> Encode<A> for u64 {
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
-        (mut e).write_word(self as u256)
+        e.write_word(self as u256)
     }
 }
 
 impl<A: Abi> Decode<A> for u128 {
     fn decode<D: AbiDecoder<A>>(_ d: mut D) -> Self {
-        (mut d).read_word().downcast_unchecked()
+        d.read_word().downcast_unchecked()
     }
 }
 
 impl<A: Abi> Encode<A> for u128 {
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
-        (mut e).write_word(self as u256)
+        e.write_word(self as u256)
     }
 }
 
 impl<A: Abi> Decode<A> for i8 {
     fn decode<D: AbiDecoder<A>>(_ d: mut D) -> Self {
-        (mut d).read_word().downcast_unchecked()
+        d.read_word().downcast_unchecked()
     }
 }
 
 impl<A: Abi> Encode<A> for i8 {
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
-        (mut e).write_word(self.downcast_unchecked())
+        e.write_word(self.downcast_unchecked())
     }
 }
 
 impl<A: Abi> Decode<A> for i16 {
     fn decode<D: AbiDecoder<A>>(_ d: mut D) -> Self {
-        (mut d).read_word().downcast_unchecked()
+        d.read_word().downcast_unchecked()
     }
 }
 
 impl<A: Abi> Encode<A> for i16 {
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
-        (mut e).write_word(self.downcast_unchecked())
+        e.write_word(self.downcast_unchecked())
     }
 }
 
 impl<A: Abi> Decode<A> for i32 {
     fn decode<D: AbiDecoder<A>>(_ d: mut D) -> Self {
-        (mut d).read_word().downcast_unchecked()
+        d.read_word().downcast_unchecked()
     }
 }
 
 impl<A: Abi> Encode<A> for i32 {
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
-        (mut e).write_word(self.downcast_unchecked())
+        e.write_word(self.downcast_unchecked())
     }
 }
 
 impl<A: Abi> Decode<A> for i64 {
     fn decode<D: AbiDecoder<A>>(_ d: mut D) -> Self {
-        (mut d).read_word().downcast_unchecked()
+        d.read_word().downcast_unchecked()
     }
 }
 
 impl<A: Abi> Encode<A> for i64 {
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
-        (mut e).write_word(self.downcast_unchecked())
+        e.write_word(self.downcast_unchecked())
     }
 }
 
 impl<A: Abi> Decode<A> for i128 {
     fn decode<D: AbiDecoder<A>>(_ d: mut D) -> Self {
-        (mut d).read_word().downcast_unchecked()
+        d.read_word().downcast_unchecked()
     }
 }
 
 impl<A: Abi> Encode<A> for i128 {
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
-        (mut e).write_word(self.downcast_unchecked())
+        e.write_word(self.downcast_unchecked())
     }
 }
 
 impl<A: Abi> Decode<A> for i256 {
     fn decode<D: AbiDecoder<A>>(_ d: mut D) -> Self {
-        (mut d).read_word().downcast_unchecked()
+        d.read_word().downcast_unchecked()
     }
 }
 
 impl<A: Abi> Encode<A> for i256 {
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
-        (mut e).write_word(self.downcast_unchecked())
+        e.write_word(self.downcast_unchecked())
     }
 }
 
 impl<A: Abi> Decode<A> for usize {
     fn decode<D: AbiDecoder<A>>(_ d: mut D) -> Self {
-        (mut d).read_word() as usize
+        d.read_word() as usize
     }
 }
 
 impl<A: Abi> Encode<A> for usize {
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
-        (mut e).write_word(self as u256)
+        e.write_word(self as u256)
     }
 }
 
 impl<A: Abi> Decode<A> for isize {
     fn decode<D: AbiDecoder<A>>(_ d: mut D) -> Self {
-        (mut d).read_word().downcast_unchecked()
+        d.read_word().downcast_unchecked()
     }
 }
 
 impl<A: Abi> Encode<A> for isize {
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
-        (mut e).write_word(self.downcast_unchecked())
+        e.write_word(self.downcast_unchecked())
     }
 }
 

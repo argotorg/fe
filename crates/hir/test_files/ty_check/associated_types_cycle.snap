@@ -40,156 +40,132 @@ note:
    │  
 34 │       fn encode(self, _ e: mut SolAbi::Encoder) {
    │ ╭───────────────────────────────────────────────^
-35 │ │         (mut e).write_byte(self[0])
-36 │ │         (mut e).write_byte(self[1])
-37 │ │         (mut e).write_byte(self[2])
-38 │ │         (mut e).write_byte(self[3])
+35 │ │         e.write_byte(self[0])
+36 │ │         e.write_byte(self[1])
+37 │ │         e.write_byte(self[2])
+38 │ │         e.write_byte(self[3])
 39 │ │     }
    │ ╰─────^ ()
 
 note: 
    ┌─ associated_types_cycle.fe:35:9
    │
-35 │         (mut e).write_byte(self[0])
-   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
+35 │         e.write_byte(self[0])
+   │         ^ mut SolEncoder
 
 note: 
-   ┌─ associated_types_cycle.fe:35:10
+   ┌─ associated_types_cycle.fe:35:9
    │
-35 │         (mut e).write_byte(self[0])
-   │          ^^^^^ mut SolEncoder
+35 │         e.write_byte(self[0])
+   │         ^^^^^^^^^^^^^^^^^^^^^ ()
 
 note: 
-   ┌─ associated_types_cycle.fe:35:14
+   ┌─ associated_types_cycle.fe:35:22
    │
-35 │         (mut e).write_byte(self[0])
-   │              ^ mut SolEncoder
+35 │         e.write_byte(self[0])
+   │                      ^^^^ [u8; 4]
 
 note: 
-   ┌─ associated_types_cycle.fe:35:28
+   ┌─ associated_types_cycle.fe:35:22
    │
-35 │         (mut e).write_byte(self[0])
-   │                            ^^^^ [u8; 4]
+35 │         e.write_byte(self[0])
+   │                      ^^^^^^^ u8
 
 note: 
-   ┌─ associated_types_cycle.fe:35:28
+   ┌─ associated_types_cycle.fe:35:27
    │
-35 │         (mut e).write_byte(self[0])
-   │                            ^^^^^^^ u8
-
-note: 
-   ┌─ associated_types_cycle.fe:35:33
-   │
-35 │         (mut e).write_byte(self[0])
-   │                                 ^ usize
+35 │         e.write_byte(self[0])
+   │                           ^ usize
 
 note: 
    ┌─ associated_types_cycle.fe:36:9
    │
-36 │         (mut e).write_byte(self[1])
-   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
+36 │         e.write_byte(self[1])
+   │         ^ mut SolEncoder
 
 note: 
-   ┌─ associated_types_cycle.fe:36:10
+   ┌─ associated_types_cycle.fe:36:9
    │
-36 │         (mut e).write_byte(self[1])
-   │          ^^^^^ mut SolEncoder
+36 │         e.write_byte(self[1])
+   │         ^^^^^^^^^^^^^^^^^^^^^ ()
 
 note: 
-   ┌─ associated_types_cycle.fe:36:14
+   ┌─ associated_types_cycle.fe:36:22
    │
-36 │         (mut e).write_byte(self[1])
-   │              ^ mut SolEncoder
+36 │         e.write_byte(self[1])
+   │                      ^^^^ [u8; 4]
 
 note: 
-   ┌─ associated_types_cycle.fe:36:28
+   ┌─ associated_types_cycle.fe:36:22
    │
-36 │         (mut e).write_byte(self[1])
-   │                            ^^^^ [u8; 4]
+36 │         e.write_byte(self[1])
+   │                      ^^^^^^^ u8
 
 note: 
-   ┌─ associated_types_cycle.fe:36:28
+   ┌─ associated_types_cycle.fe:36:27
    │
-36 │         (mut e).write_byte(self[1])
-   │                            ^^^^^^^ u8
-
-note: 
-   ┌─ associated_types_cycle.fe:36:33
-   │
-36 │         (mut e).write_byte(self[1])
-   │                                 ^ usize
+36 │         e.write_byte(self[1])
+   │                           ^ usize
 
 note: 
    ┌─ associated_types_cycle.fe:37:9
    │
-37 │         (mut e).write_byte(self[2])
-   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
+37 │         e.write_byte(self[2])
+   │         ^ mut SolEncoder
 
 note: 
-   ┌─ associated_types_cycle.fe:37:10
+   ┌─ associated_types_cycle.fe:37:9
    │
-37 │         (mut e).write_byte(self[2])
-   │          ^^^^^ mut SolEncoder
+37 │         e.write_byte(self[2])
+   │         ^^^^^^^^^^^^^^^^^^^^^ ()
 
 note: 
-   ┌─ associated_types_cycle.fe:37:14
+   ┌─ associated_types_cycle.fe:37:22
    │
-37 │         (mut e).write_byte(self[2])
-   │              ^ mut SolEncoder
+37 │         e.write_byte(self[2])
+   │                      ^^^^ [u8; 4]
 
 note: 
-   ┌─ associated_types_cycle.fe:37:28
+   ┌─ associated_types_cycle.fe:37:22
    │
-37 │         (mut e).write_byte(self[2])
-   │                            ^^^^ [u8; 4]
+37 │         e.write_byte(self[2])
+   │                      ^^^^^^^ u8
 
 note: 
-   ┌─ associated_types_cycle.fe:37:28
+   ┌─ associated_types_cycle.fe:37:27
    │
-37 │         (mut e).write_byte(self[2])
-   │                            ^^^^^^^ u8
-
-note: 
-   ┌─ associated_types_cycle.fe:37:33
-   │
-37 │         (mut e).write_byte(self[2])
-   │                                 ^ usize
+37 │         e.write_byte(self[2])
+   │                           ^ usize
 
 note: 
    ┌─ associated_types_cycle.fe:38:9
    │
-38 │         (mut e).write_byte(self[3])
-   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
+38 │         e.write_byte(self[3])
+   │         ^ mut SolEncoder
 
 note: 
-   ┌─ associated_types_cycle.fe:38:10
+   ┌─ associated_types_cycle.fe:38:9
    │
-38 │         (mut e).write_byte(self[3])
-   │          ^^^^^ mut SolEncoder
+38 │         e.write_byte(self[3])
+   │         ^^^^^^^^^^^^^^^^^^^^^ ()
 
 note: 
-   ┌─ associated_types_cycle.fe:38:14
+   ┌─ associated_types_cycle.fe:38:22
    │
-38 │         (mut e).write_byte(self[3])
-   │              ^ mut SolEncoder
+38 │         e.write_byte(self[3])
+   │                      ^^^^ [u8; 4]
 
 note: 
-   ┌─ associated_types_cycle.fe:38:28
+   ┌─ associated_types_cycle.fe:38:22
    │
-38 │         (mut e).write_byte(self[3])
-   │                            ^^^^ [u8; 4]
+38 │         e.write_byte(self[3])
+   │                      ^^^^^^^ u8
 
 note: 
-   ┌─ associated_types_cycle.fe:38:28
+   ┌─ associated_types_cycle.fe:38:27
    │
-38 │         (mut e).write_byte(self[3])
-   │                            ^^^^^^^ u8
-
-note: 
-   ┌─ associated_types_cycle.fe:38:33
-   │
-38 │         (mut e).write_byte(self[3])
-   │                                 ^ usize
+38 │         e.write_byte(self[3])
+   │                           ^ usize
 
 note: 
    ┌─ associated_types_cycle.fe:42:8

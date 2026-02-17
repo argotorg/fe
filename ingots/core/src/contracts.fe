@@ -16,7 +16,7 @@ pub trait ContractHost {
 
     fn field<T>(mut self, slot: u256) -> StorPtr<T>
     fn init_field<T>(mut self, slot: u256) -> StorPtr<T> {
-        (mut self).field(slot)
+        self.field(slot)
     }
 
     fn create_contract<F>(mut self, runtime: F) -> !

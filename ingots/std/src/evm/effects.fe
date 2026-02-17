@@ -48,13 +48,13 @@ impl AbiSize for Address {
 
 impl<A: Abi> Decode<A> for Address {
     fn decode<D: AbiDecoder<A>>(_ d: mut D) -> Self {
-        Address { inner: (mut d).read_word() }
+        Address { inner: d.read_word() }
     }
 }
 
 impl<A: Abi> Encode<A> for Address {
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
-        (mut e).write_word(self.inner)
+        e.write_word(self.inner)
     }
 }
 
@@ -232,7 +232,7 @@ pub trait Create {
         let mut enc = SolEncoder { start: args_ptr, pos: args_ptr, end: args_ptr + args_len }
         args.encode(mut enc)
 
-        let addr = (mut self).create_raw(value, init_ptr, total_len)
+        let addr = self.create_raw(value, init_ptr, total_len)
 
         // Solidity-style behavior: bubble revert data if creation fails.
         if addr.inner == 0 {
@@ -259,7 +259,7 @@ pub trait Create {
         let mut enc = SolEncoder { start: args_ptr, pos: args_ptr, end: args_ptr + args_len }
         args.encode(mut enc)
 
-        let addr = (mut self).create2_raw(value, init_ptr, total_len, salt)
+        let addr = self.create2_raw(value, init_ptr, total_len, salt)
 
         // Solidity-style behavior: bubble revert data if creation fails.
         if addr.inner == 0 {
