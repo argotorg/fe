@@ -1,0 +1,20 @@
+use core::intrinsic
+
+enum AddrSpace {
+    Mem,
+    Stor,
+    Tran,
+}
+
+const fn stor_code() -> usize {
+    let bytes: [u8; 32] = intrinsic::__as_bytes(AddrSpace::Stor)
+    (bytes[0] as usize) * 2 + (bytes[31] as usize)
+}
+
+type StorCode = [u8; stor_code()]
+
+fn takes_one(_x: [u8; 1]) {}
+
+fn ok(x: StorCode) {
+    takes_one(x)
+}

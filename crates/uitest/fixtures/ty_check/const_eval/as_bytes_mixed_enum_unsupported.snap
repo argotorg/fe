@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_eval/as_bytes_mixed_enum_unsupported.fe
+---
+error[3-0023]: the expression cannot be evaluated at compile time
+  ┌─ as_bytes_mixed_enum_unsupported.fe:9:49
+  │
+9 │     let bytes: [u8; 32] = intrinsic::__as_bytes(Mixed::B)
+  │                                                 ^^^^^^^^ unsupported in const evaluation

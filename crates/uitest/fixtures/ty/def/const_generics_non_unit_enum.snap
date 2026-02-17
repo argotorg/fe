@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/def/const_generics_non_unit_enum.fe
+---
+error[3-0009]: invalid const parameter type
+  ┌─ const_generics_non_unit_enum.fe:6:21
+  │
+6 │ struct Foo<const P: Payload> {
+  │                     ^^^^^^^ only integer, bool, or unit-variant enum types are allowed as a const parameter type

@@ -1,0 +1,9 @@
+pub struct Foo<const N: u32> {}
+
+mod private_mod {
+    const CONST: u32 = 1
+}
+
+pub struct Bar {
+    foo: Foo<private_mod::CONST>,
+}

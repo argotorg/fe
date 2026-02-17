@@ -5,7 +5,7 @@ use std::fmt;
 use crate::{
     hir_def::{
         Body, Enum, ExprId, GenericParamOwner, IdentId, IntegerId, ItemKind, PathId,
-        TypeAlias as HirTypeAlias,
+        TypeAlias as HirTypeAlias, VariantKind,
         prim_ty::{IntTy as HirIntTy, PrimTy as HirPrimTy, UintTy as HirUintTy},
         scope_graph::ScopeId,
     },
@@ -432,6 +432,17 @@ impl<'db> TyId<'db> {
 
     pub fn is_prim(self, db: &dyn HirAnalysisDb) -> bool {
         matches!(self.base_ty(db).data(db), TyData::TyBase(TyBase::Prim(_)))
+    }
+
+    pub fn is_unit_variant_only_enum(self, db: &'db dyn HirAnalysisDb) -> bool {
+        if let Some(enum_) = self.as_enum(db) {
+            enum_.len_variants(db) > 0
+                && enum_
+                    .variants(db)
+                    .all(|v| matches!(v.kind(db), VariantKind::Unit))
+        } else {
+            false
+        }
     }
 
     pub fn as_enum(self, db: &'db dyn HirAnalysisDb) -> Option<Enum<'db>> {

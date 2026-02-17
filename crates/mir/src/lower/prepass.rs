@@ -255,6 +255,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 ConstValue::Int(int) => SyntheticValue::Int(int),
                 ConstValue::Bool(flag) => SyntheticValue::Bool(flag),
                 ConstValue::Bytes(bytes) => SyntheticValue::Bytes(bytes),
+                ConstValue::EnumVariant(idx) => SyntheticValue::Int(BigUint::from(idx as u64)),
             };
 
             let value_id = self.alloc_synthetic_value(ty, value);
@@ -298,11 +299,15 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             ConstTyData::Evaluated(EvaluatedConstTy::LitBool(flag), _) => {
                 SyntheticValue::Bool(*flag)
             }
+            ConstTyData::Evaluated(EvaluatedConstTy::EnumVariant(variant), _) => {
+                SyntheticValue::Int(BigUint::from(variant.idx as u64))
+            }
             ConstTyData::UnEvaluated { body, .. } => {
                 match try_eval_const_body(self.db, *body, expected_ty)? {
                     ConstValue::Int(value) => SyntheticValue::Int(value),
                     ConstValue::Bool(flag) => SyntheticValue::Bool(flag),
                     ConstValue::Bytes(bytes) => SyntheticValue::Bytes(bytes),
+                    ConstValue::EnumVariant(idx) => SyntheticValue::Int(BigUint::from(idx as u64)),
                 }
             }
             _ => return None,
