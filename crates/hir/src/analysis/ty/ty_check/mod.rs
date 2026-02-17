@@ -30,7 +30,7 @@ use crate::{
 };
 pub use callable::Callable;
 use env::TyCheckEnv;
-pub use env::{EffectParamSite, ExprProp, LocalBinding, ParamSite};
+pub use env::{EffectParamSite, ExprProp, LocalBinding, ParamSite, PatBindingMode};
 pub(super) use expr::TraitOps;
 pub use owner::BodyOwner;
 pub use owner::EffectParamOwner;
@@ -1201,6 +1201,7 @@ impl<'db> TyChecker<'db> {
                 if !matches!(binding, LocalBinding::Local { .. }) {
                     return;
                 }
+                self.env.set_pat_binding_mode(pat, PatBindingMode::ByBorrow);
                 let inner = self.env.lookup_binding_ty(&binding);
                 if inner.has_invalid(self.db) || inner.as_capability(self.db).is_some() {
                     return;
@@ -1521,6 +1522,8 @@ pub struct TypedBody<'db> {
     param_bindings: Vec<LocalBinding<'db>>,
     /// Bindings for local variables (keyed by the pattern that introduces them)
     pat_bindings: FxHashMap<PatId, LocalBinding<'db>>,
+    /// Binding capture mode for local variables (keyed by the pattern that introduces them)
+    pat_binding_modes: FxHashMap<PatId, PatBindingMode>,
     /// Resolved Seq trait methods for for-loops
     for_loop_seq: FxHashMap<StmtId, ForLoopSeq<'db>>,
 }
@@ -1589,6 +1592,7 @@ impl<'db> TyFoldable<'db> for TypedBody<'db> {
             call_effect_args: self.call_effect_args,
             param_bindings: self.param_bindings,
             pat_bindings: self.pat_bindings,
+            pat_binding_modes: self.pat_binding_modes,
             for_loop_seq,
         }
     }
@@ -1641,6 +1645,11 @@ impl<'db> TypedBody<'db> {
     /// Get the binding for a local variable by its pattern.
     pub fn pat_binding(&self, pat: PatId) -> Option<LocalBinding<'db>> {
         self.pat_bindings.get(&pat).copied()
+    }
+
+    /// Get how this local binding is captured by its source pattern destructuring.
+    pub fn pat_binding_mode(&self, pat: PatId) -> Option<PatBindingMode> {
+        self.pat_binding_modes.get(&pat).copied()
     }
 
     /// Get the resolved Seq methods for a for-loop statement.
@@ -1724,6 +1733,7 @@ impl<'db> TypedBody<'db> {
             call_effect_args: FxHashMap::default(),
             param_bindings: Vec::new(),
             pat_bindings: FxHashMap::default(),
+            pat_binding_modes: FxHashMap::default(),
             for_loop_seq: FxHashMap::default(),
         }
     }

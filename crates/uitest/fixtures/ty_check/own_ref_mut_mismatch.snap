@@ -4,10 +4,4 @@ assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/own_ref_mut_mismatch.fe
 ---
-error[8-0072]: `own` argument requires an owned movable value
-   ┌─ own_ref_mut_mismatch.fe:11:5
-   │
-11 │     o.unwrap_or(Foo{})
-   │     ^ this expression has `view Option<Foo>` capability and cannot be moved as owned here
-   │
-   = pass an owned place value, or change the callee parameter mode to borrow/view
+

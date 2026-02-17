@@ -62,6 +62,8 @@ pub(super) struct TyCheckEnv<'db> {
     param_bindings: Vec<LocalBinding<'db>>,
     /// Pat bindings for transfer to TypedBody
     pat_bindings: FxHashMap<PatId, LocalBinding<'db>>,
+    /// Binding capture mode for local variables (keyed by the pattern that introduces them)
+    pat_binding_modes: FxHashMap<PatId, PatBindingMode>,
 
     /// Resolved effect arguments at call sites, keyed by the call expression.
     call_effect_args: FxHashMap<ExprId, Vec<super::ResolvedEffectArg<'db>>>,
@@ -174,6 +176,7 @@ impl<'db> TyCheckEnv<'db> {
             expr_stack: Vec::new(),
             param_bindings: Vec::new(),
             pat_bindings: FxHashMap::default(),
+            pat_binding_modes: FxHashMap::default(),
             call_effect_args: FxHashMap::default(),
             for_loop_seq: FxHashMap::default(),
         };
@@ -700,6 +703,12 @@ impl<'db> TyCheckEnv<'db> {
         self.pat_bindings.get(&pat).copied()
     }
 
+    pub(super) fn set_pat_binding_mode(&mut self, pat: PatId, mode: PatBindingMode) {
+        if self.pat_bindings.contains_key(&pat) {
+            self.pat_binding_modes.insert(pat, mode);
+        }
+    }
+
     pub(super) fn push_effect_frame(&mut self) {
         self.effect_env.push_frame();
     }
@@ -884,6 +893,9 @@ impl<'db> TyCheckEnv<'db> {
         // Also store in pat_bindings for transfer to TypedBody
         if let LocalBinding::Local { pat, .. } = binding {
             self.pat_bindings.insert(pat, binding);
+            self.pat_binding_modes
+                .entry(pat)
+                .or_insert(PatBindingMode::ByValue);
         }
         self.pending_vars.insert(name, binding)
     }
@@ -974,6 +986,7 @@ impl<'db> TyCheckEnv<'db> {
             call_effect_args: self.call_effect_args,
             param_bindings: self.param_bindings,
             pat_bindings: self.pat_bindings,
+            pat_binding_modes: self.pat_binding_modes,
             for_loop_seq,
         }
     }
@@ -1284,6 +1297,12 @@ pub enum LocalBinding<'db> {
         key_path: PathId<'db>,
         is_mut: bool,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub enum PatBindingMode {
+    ByValue,
+    ByBorrow,
 }
 
 impl<'db> LocalBinding<'db> {

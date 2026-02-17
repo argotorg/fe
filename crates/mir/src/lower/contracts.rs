@@ -21,7 +21,7 @@ use hir::{
     analysis::{
         diagnostics::SpannedHirAnalysisDb,
         ty::{
-            ty_check::{LocalBinding, ParamSite},
+            ty_check::{LocalBinding, ParamSite, PatBindingMode},
             ty_def::{InvalidCause, TyBase, TyData},
         },
     },
@@ -911,8 +911,13 @@ fn lower_recv_arm_handler<'db>(
     builder.move_to_block(entry);
     for binding in arg_bindings {
         let tuple_index = binding.tuple_index as usize;
-        let elem_value =
-            builder.project_tuple_elem_value(args_value, args_ty, tuple_index, binding.ty);
+        let elem_value = builder.project_tuple_elem_value(
+            args_value,
+            args_ty,
+            tuple_index,
+            binding.ty,
+            PatBindingMode::ByValue,
+        );
         builder.bind_pat_value(binding.pat, elem_value);
         if builder.current_block().is_none() {
             break;

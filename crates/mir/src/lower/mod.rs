@@ -14,8 +14,8 @@ use hir::analysis::{
         adt_def::AdtRef,
         effects::EffectKeyKind,
         ty_check::{
-            EffectArg, EffectParamSite, EffectPassMode, LocalBinding, ParamSite, RecordLike,
-            ResolvedEffectArg, TypedBody, check_func_body,
+            EffectArg, EffectParamSite, EffectPassMode, LocalBinding, ParamSite, PatBindingMode,
+            RecordLike, ResolvedEffectArg, TypedBody, check_func_body,
         },
         ty_def::{PrimTy, TyBase, TyData, TyId},
     },
@@ -1201,9 +1201,12 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         tuple_ty: TyId<'db>,
         field_idx: usize,
         field_ty: TyId<'db>,
+        binding_mode: PatBindingMode,
     ) -> ValueId {
+        let is_borrow_binding = matches!(binding_mode, PatBindingMode::ByBorrow);
         // Transparent newtype access: field 0 is a representation-preserving cast.
-        if field_ty.as_capability(self.db).is_none()
+        if !is_borrow_binding
+            && field_ty.as_capability(self.db).is_none()
             && crate::repr::transparent_field0_inner_ty(self.db, tuple_ty, field_idx).is_some()
         {
             let base_repr = self.builder.body.value(tuple_value).repr;
@@ -1224,7 +1227,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             tuple_value,
             MirProjectionPath::from_projection(hir::projection::Projection::Field(field_idx)),
         );
-        if field_ty.as_capability(self.db).is_some() {
+        if is_borrow_binding {
             let field_space = self.value_address_space(tuple_value);
             return self.alloc_value(
                 field_ty,
@@ -1300,8 +1303,14 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         continue;
                     }
                     let field_ty = self.typed_body.pat_ty(self.db, *field_pat);
-                    let field_value = if owner_by_ref {
-                        self.project_tuple_elem_value(value, owner_ty, idx, field_ty)
+                    let binding_mode = self
+                        .typed_body
+                        .pat_binding_mode(*field_pat)
+                        .unwrap_or(PatBindingMode::ByValue);
+                    let field_value = if owner_by_ref
+                        || matches!(binding_mode, PatBindingMode::ByBorrow)
+                    {
+                        self.project_tuple_elem_value(value, owner_ty, idx, field_ty, binding_mode)
                     } else {
                         self.alloc_value(
                             field_ty,
@@ -1332,22 +1341,33 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         continue;
                     }
                     let field_ty = self.typed_body.pat_ty(self.db, field.pat);
-                    let field_value = if owner_by_ref {
-                        if self
-                            .value_repr_for_ty(field_ty, AddressSpaceKind::Memory)
-                            .address_space()
-                            .is_some()
-                        {
-                            self.set_pat_address_space(field.pat, base_space);
-                        }
-                        self.project_tuple_elem_value(value, owner_ty, info.field_idx, field_ty)
-                    } else {
-                        self.alloc_value(
-                            field_ty,
-                            ValueOrigin::TransparentCast { value },
-                            record_repr,
-                        )
-                    };
+                    let binding_mode = self
+                        .typed_body
+                        .pat_binding_mode(field.pat)
+                        .unwrap_or(PatBindingMode::ByValue);
+                    let field_value =
+                        if owner_by_ref || matches!(binding_mode, PatBindingMode::ByBorrow) {
+                            if self
+                                .value_repr_for_ty(field_ty, AddressSpaceKind::Memory)
+                                .address_space()
+                                .is_some()
+                            {
+                                self.set_pat_address_space(field.pat, base_space);
+                            }
+                            self.project_tuple_elem_value(
+                                value,
+                                owner_ty,
+                                info.field_idx,
+                                field_ty,
+                                binding_mode,
+                            )
+                        } else {
+                            self.alloc_value(
+                                field_ty,
+                                ValueOrigin::TransparentCast { value },
+                                record_repr,
+                            )
+                        };
                     self.bind_pat_value(field.pat, field_value);
                     if self.current_block().is_none() {
                         break;

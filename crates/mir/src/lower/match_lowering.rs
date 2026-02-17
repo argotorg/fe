@@ -226,11 +226,16 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         continue;
                     };
                     let binding_ty = self.typed_body.pat_ty(self.db, binding_pat);
+                    let binding_mode = self
+                        .typed_body
+                        .pat_binding_mode(binding_pat)
+                        .unwrap_or(PatBindingMode::ByValue);
                     let (_place, value_id) = self.lower_projection_path_for_binding(
                         path,
                         scrutinee_value,
                         scrutinee_ty,
                         binding_ty,
+                        binding_mode,
                     );
                     self.assign(None, Some(local), crate::ir::Rvalue::Value(value_id));
                 }
@@ -585,6 +590,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         scrutinee_value: ValueId,
         scrutinee_ty: TyId<'db>,
         binding_ty: TyId<'db>,
+        binding_mode: PatBindingMode,
     ) -> (ValueId, ValueId) {
         fn alloc_local_value<'db>(
             builder: &mut MirBuilder<'db, '_>,
@@ -598,7 +604,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         // Empty path means we bind to the scrutinee itself
         if path.is_empty() {
-            if binding_ty.as_capability(self.db).is_some() {
+            if matches!(binding_mode, PatBindingMode::ByBorrow) {
                 let place = Place::new(scrutinee_value, MirProjectionPath::new());
                 let repr = self.value_repr_for_ty(binding_ty, AddressSpaceKind::Memory);
                 let handle = self.alloc_value(binding_ty, ValueOrigin::PlaceRef(place), repr);
@@ -609,7 +615,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         // Compute the final type by walking the projection path
         let projected_ty = self.compute_projection_result_type(scrutinee_ty, path);
-        let is_borrow = binding_ty.as_capability(self.db).is_some();
+        let is_borrow = matches!(binding_mode, PatBindingMode::ByBorrow);
         let is_by_ref = self.is_by_ref_ty(binding_ty);
 
         if !is_borrow

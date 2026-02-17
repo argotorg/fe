@@ -1038,7 +1038,7 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             else {
                 continue;
             };
-            for place in self.canonicalize_base(&state, *value) {
+            for place in self.canonicalize_base_for_return(&state, *value) {
                 let param_index = match place.root {
                     Root::Param(param_index) => param_index,
                     Root::Local(local) => {
@@ -2105,7 +2105,24 @@ impl<'db, 'a> Borrowck<'db, 'a> {
     fn canonicalize_base(
         &self,
         state: &[LocalLoanState<'db>],
+        base: ValueId,
+    ) -> FxHashSet<CanonPlace<'db>> {
+        self.canonicalize_base_inner(state, base, true)
+    }
+
+    fn canonicalize_base_for_return(
+        &self,
+        state: &[LocalLoanState<'db>],
+        base: ValueId,
+    ) -> FxHashSet<CanonPlace<'db>> {
+        self.canonicalize_base_inner(state, base, false)
+    }
+
+    fn canonicalize_base_inner(
+        &self,
+        state: &[LocalLoanState<'db>],
         mut base: ValueId,
+        allow_borrow_local_fallback: bool,
     ) -> FxHashSet<CanonPlace<'db>> {
         loop {
             match &self.func.body.value(base).origin {
@@ -2121,7 +2138,8 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             for loan in self.loans_for_handle_value(state, base) {
                 out.extend(self.loans[loan.0 as usize].targets.iter().cloned());
             }
-            if out.is_empty()
+            if allow_borrow_local_fallback
+                && out.is_empty()
                 && let ValueOrigin::Local(local) = data.origin
             {
                 out.insert(CanonPlace {
