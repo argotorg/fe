@@ -10,6 +10,7 @@
 
 mod collector;
 mod has_references;
+mod resolver;
 
 use parser::TextSize;
 
@@ -40,6 +41,7 @@ use crate::{
 };
 
 pub use has_references::{HasReferences, MatchedReference};
+pub use resolver::{ResolvedScopeTarget, resolved_item_scope_targets};
 
 /// Collect the trait bound assumptions visible at `scope` by walking up the
 /// scope chain to the nearest enclosing generic param owner (function, impl,

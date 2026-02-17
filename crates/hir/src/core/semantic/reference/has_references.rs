@@ -11,7 +11,7 @@ use crate::{
     span::{DynLazySpan, LazySpan},
 };
 
-use super::resolve_path_with_recv_fallback;
+use super::resolver::resolved_item_scope_targets;
 use super::typed_body_for_body;
 use super::{ReferenceView, Target};
 
@@ -375,17 +375,12 @@ impl<'db> TopLevelMod<'db> {
 
     /// Find all references to a target, with segment-level precision for paths.
     ///
-    /// For `Target::Scope`, resolves each segment of every path reference using
-    /// HIR path resolution. This means `MyEnum::Variant` produces a match for
-    /// both `MyEnum` and `Variant` at their respective segment spans. Non-path
-    /// references (field access, method calls, use paths) use direct target
-    /// matching.
+    /// For `Target::Scope`, filters pre-resolved cached results from per-item
+    /// salsa queries. The resolution work (path segment resolution, field/method
+    /// target inference) is done once and cached — subsequent searches for
+    /// different targets reuse the same cached resolution.
     ///
     /// For `Target::Local`, filters body references by binding identity.
-    ///
-    /// Returns `MatchedReference` pairs so callers get both the original
-    /// `ReferenceView` (for rename, self-ty checks) and the precise matched
-    /// span.
     pub fn references_to_target<DB>(
         self,
         db: &'db DB,
@@ -398,41 +393,12 @@ impl<'db> TopLevelMod<'db> {
             Target::Scope(scope) => {
                 let mut results = Vec::new();
                 for item in self.scope_graph(db).items_dfs(db) {
-                    for reference in ScopeId::from_item(item).references(db) {
-                        match reference {
-                            ReferenceView::Path(pv) => {
-                                // Resolve each segment independently via path
-                                // resolution so that both MyEnum and Variant
-                                // are found as references in MyEnum::Variant.
-                                // Uses recv fallback for bare paths in recv arm
-                                // patterns (e.g., `Mint` → `TokenMsg::Mint`).
-                                let last_idx = pv.path.segment_index(db);
-                                for idx in 0..=last_idx {
-                                    if let Some(seg_path) = pv.path.segment(db, idx)
-                                        && resolve_path_with_recv_fallback(db, seg_path, pv.scope)
-                                            .contains(scope)
-                                    {
-                                        results.push(MatchedReference {
-                                            view: reference,
-                                            span: pv.span.clone().segment(idx).ident().into(),
-                                        });
-                                    }
-                                }
-                            }
-                            _ => {
-                                // Non-path references: direct target match
-                                for t in reference.target(db).as_slice() {
-                                    if let Target::Scope(s) = t
-                                        && s == scope
-                                    {
-                                        results.push(MatchedReference {
-                                            view: reference,
-                                            span: reference.span(),
-                                        });
-                                        break;
-                                    }
-                                }
-                            }
+                    for resolved in resolved_item_scope_targets(db, item) {
+                        if resolved.scope == *scope {
+                            results.push(MatchedReference {
+                                span: resolved.span.clone(),
+                                is_self_ty: resolved.is_self_ty,
+                            });
                         }
                     }
                 }
@@ -458,8 +424,8 @@ impl<'db> TopLevelMod<'db> {
                             && expr_ids.contains(&expr_id)
                         {
                             Some(MatchedReference {
-                                view: r,
                                 span: r.span(),
+                                is_self_ty: false,
                             })
                         } else {
                             None
@@ -474,9 +440,9 @@ impl<'db> TopLevelMod<'db> {
 /// A reference matched against a search target, with the precise span
 /// of the matched portion.
 pub struct MatchedReference<'db> {
-    /// The original reference view (for rename, self-ty checks, etc.).
-    pub view: &'db ReferenceView<'db>,
     /// The span of the matched portion — segment-level for path segment
     /// matches, or the full reference span for direct matches.
     pub span: DynLazySpan<'db>,
+    /// Whether this reference is a `Self` type path (rename should skip these).
+    pub is_self_ty: bool,
 }

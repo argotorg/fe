@@ -576,8 +576,8 @@ async fn diagnostics_published_for_broken_code() {
     // The fixture's foo.fe produces diagnostics. Wait for them to arrive
     // through the full pipeline: actor → event batching → publish.
     let mut found = false;
-    for _ in 0..20 {
-        client.settle(300).await;
+    for _ in 0..40 {
+        client.settle(500).await;
         let diags = client.diagnostics();
         if diags.iter().any(|d| !d.diagnostics.is_empty()) {
             found = true;

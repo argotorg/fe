@@ -75,22 +75,40 @@ pub async fn handle_references(
 ) -> Result<Option<Vec<async_lsp::lsp_types::Location>>, ResponseError> {
     let internal_url =
         backend.map_client_uri_to_internal(params.text_document_position.text_document.uri.clone());
-    let Some(file) = backend.db.workspace().get(&backend.db, &internal_url) else {
+
+    // Quick existence check on actor thread
+    if backend.db.workspace().get(&backend.db, &internal_url).is_none() {
         return Ok(None);
-    };
+    }
 
-    let file_text = file.text(&backend.db);
-    let cursor: Cursor =
-        to_offset_from_position(params.text_document_position.position, file_text.as_str());
+    let position = params.text_document_position.position;
 
-    let top_mod = map_file_to_mod(&backend.db, file);
-    let locations = find_references_at_cursor(&backend.db, top_mod, cursor)
+    // Spawn heavy reference resolution on the worker pool with a db snapshot
+    let rx = backend.spawn_on_workers(move |db| {
+        let Some(file) = db.workspace().get(db, &internal_url) else {
+            return vec![];
+        };
+        let file_text = file.text(db);
+        let cursor: Cursor = to_offset_from_position(position, file_text.as_str());
+        let top_mod = map_file_to_mod(db, file);
+        find_references_at_cursor(db, top_mod, cursor)
+    });
+
+    let locations: Vec<async_lsp::lsp_types::Location> = rx.await.map_err(|_| {
+        ResponseError::new(
+            async_lsp::ErrorCode::INTERNAL_ERROR,
+            "Worker task cancelled".to_string(),
+        )
+    })?;
+
+    // Map internal URIs to client URIs (lightweight, on actor thread)
+    let locations: Vec<_> = locations
         .into_iter()
         .map(|mut location| {
             location.uri = backend.map_internal_uri_to_client(location.uri);
             location
         })
-        .collect::<Vec<_>>();
+        .collect();
 
     if locations.is_empty() {
         Ok(None)

@@ -91,18 +91,30 @@ pub async fn handle_document_highlight(
             .clone(),
     );
 
-    let Some(file) = backend.db.workspace().get(&backend.db, &url) else {
+    // Quick existence check on actor thread
+    if backend.db.workspace().get(&backend.db, &url).is_none() {
         return Ok(None);
-    };
+    }
 
-    let file_text = file.text(&backend.db);
-    let cursor: Cursor = to_offset_from_position(
-        params.text_document_position_params.position,
-        file_text.as_str(),
-    );
+    let position = params.text_document_position_params.position;
 
-    let top_mod = map_file_to_mod(&backend.db, file);
-    let highlights = find_highlights_at_cursor(&backend.db, top_mod, cursor);
+    // Spawn heavy highlight resolution on the worker pool
+    let rx = backend.spawn_on_workers(move |db| {
+        let Some(file) = db.workspace().get(db, &url) else {
+            return vec![];
+        };
+        let file_text = file.text(db);
+        let cursor: Cursor = to_offset_from_position(position, file_text.as_str());
+        let top_mod = map_file_to_mod(db, file);
+        find_highlights_at_cursor(db, top_mod, cursor)
+    });
+
+    let highlights: Vec<DocumentHighlight> = rx.await.map_err(|_| {
+        ResponseError::new(
+            async_lsp::ErrorCode::INTERNAL_ERROR,
+            "Worker task cancelled".to_string(),
+        )
+    })?;
 
     if highlights.is_empty() {
         Ok(None)
