@@ -3414,8 +3414,9 @@ checksum = "dc33ff2d4973d518d823d61aa239014831e521c75da58e3df4840d3f47749d09"
 
 [[package]]
 name = "radix_immutable"
-version = "0.0.1"
-source = "git+https://github.com/micahscopes/radix_immutable.git#514098f05404713bd3bf8ed0dbbca12ec8a8590b"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dafbb83194e5cbdc904a1cb110deb10368327536b8129ca0f361f21dbd7a5703"
 dependencies = [
  "once_cell",
 ]

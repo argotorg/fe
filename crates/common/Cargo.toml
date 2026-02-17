@@ -24,4 +24,4 @@ parser.workspace = true
 url.workspace = true
 ordermap = "0.5.5"
 rustc-hash.workspace = true
-radix_immutable = { version = "0.0.1", git = "https://github.com/micahscopes/radix_immutable.git" }
+radix_immutable = "0.1"
