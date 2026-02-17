@@ -39,7 +39,12 @@ object "NewtypeByPlaceEffectArg" {
       let v0 := mload(64)
       let v1 := eq(v0, 0)
       if v1 {
-        v0 := 128
+        let v2 := msize()
+        v0 := v2
+      }
+      let v3 := lt(v0, 8192)
+      if v3 {
+        v0 := 8192
       }
       mstore(64, add(v0, $size))
       ret := v0
@@ -147,7 +152,12 @@ object "NewtypeByPlaceEffectArg" {
         let v0 := mload(64)
         let v1 := eq(v0, 0)
         if v1 {
-          v0 := 128
+          let v2 := msize()
+          v0 := v2
+        }
+        let v3 := lt(v0, 8192)
+        if v3 {
+          v0 := 8192
         }
         mstore(64, add(v0, $size))
         ret := v0

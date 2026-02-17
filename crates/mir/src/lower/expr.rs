@@ -281,6 +281,14 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 self.lower_call_expr(expr)
             }
             Partial::Present(Expr::Un(inner, op)) => {
+                if !matches!(
+                    op,
+                    hir::hir_def::expr::UnOp::Mut | hir::hir_def::expr::UnOp::Ref
+                ) && self.needs_op_trait_call(expr)
+                {
+                    return self.lower_call_expr_inner(expr, None, None);
+                }
+
                 let value_id = self.ensure_value(expr);
                 if self.current_block().is_none() {
                     return value_id;
@@ -325,6 +333,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 self.lower_range_expr(expr, *lhs, *rhs)
             }
             Partial::Present(Expr::Bin(lhs, rhs, _)) => {
+                if self.needs_op_trait_call(expr) {
+                    return self.lower_call_expr_inner(expr, None, None);
+                }
                 let lhs_value = self.lower_expr(*lhs);
                 let rhs_value = self.lower_expr(*rhs);
                 let coerced_lhs = self.coerce_binary_operand_if_copy_capability(*lhs, lhs_value);
@@ -1787,6 +1798,18 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     fn is_method_call(&self, expr: ExprId) -> bool {
         let exprs = self.body.exprs(self.db);
         matches!(&exprs[expr], Partial::Present(Expr::MethodCall(..)))
+    }
+
+    fn needs_op_trait_call(&self, expr: ExprId) -> bool {
+        let operand_ty = match expr.data(self.db, self.body) {
+            Partial::Present(Expr::Bin(lhs, _, _)) => self.typed_body.expr_ty(self.db, *lhs),
+            Partial::Present(Expr::Un(inner, _)) => self.typed_body.expr_ty(self.db, *inner),
+            _ => return false,
+        };
+        if operand_ty.is_integral(self.db) || operand_ty.is_bool(self.db) {
+            return false;
+        }
+        self.typed_body.callable_expr(expr).is_some()
     }
 
     // NOTE: field expressions are lowered via `lower_field_expr` so scalar loads become

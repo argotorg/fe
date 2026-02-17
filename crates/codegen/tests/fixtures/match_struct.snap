@@ -7,7 +7,7 @@ input_file: tests/fixtures/match_struct.fe
 function $match_struct_fields($p) -> ret {
   let v0 := 0
   let v1 := $p
-  let v2 := and(mload(add(v1, 1)), 0xff)
+  let v2 := and(mload(add(v1, 32)), 0xff)
   switch v2
     case 0 {
       let v3 := and(mload(v1), 0xff)
@@ -24,11 +24,11 @@ function $match_struct_fields($p) -> ret {
       let v5 := and(mload(v1), 0xff)
       switch v5
         case 0 {
-          let v6 := and(mload(add(v1, 1)), 0xff)
+          let v6 := and(mload(add(v1, 32)), 0xff)
           v0 := v6
         }
         default {
-          let v7 := and(mload(add(v1, 1)), 0xff)
+          let v7 := and(mload(add(v1, 32)), 0xff)
           let v8 := and(mload(v1), 0xff)
           v0 := add(v8, v7)
         }
@@ -45,7 +45,7 @@ function $match_struct_wildcard($p) -> ret {
       v0 := 1
     }
     default {
-      let v3 := and(mload(add(v1, 1)), 0xff)
+      let v3 := and(mload(add(v1, 32)), 0xff)
       switch v3
         case 0 {
           v0 := 2

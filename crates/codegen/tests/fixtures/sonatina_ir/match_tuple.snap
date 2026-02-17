@@ -1,0 +1,178 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+expression: output
+input_file: crates/codegen/tests/fixtures/match_tuple.fe
+---
+target = "evm-ethereum-osaka"
+
+type @__fe_tuple_0 = {i256, i256};
+type @__fe_tuple_1 = {i256, i256};
+
+func public %match_bool_tuple(v0.i256) -> i256 {
+    block0:
+        jump block6;
+
+    block1:
+        jump block2;
+
+    block2:
+        v3.i256 = phi (3.i256 block1) (2.i256 block3) (1.i256 block4) (0.i256 block5);
+        return v3;
+
+    block3:
+        jump block2;
+
+    block4:
+        jump block2;
+
+    block5:
+        jump block2;
+
+    block6:
+        v7.*@__fe_tuple_0 = int_to_ptr v0 *@__fe_tuple_0;
+        v8.*i256 = gep v7 0.i256 1.i256;
+        v9.i256 = ptr_to_int v8 i256;
+        v10.i256 = mload v9 i256;
+        v11.i1 = ne v10 0.i256;
+        v12.i256 = zext v11 i256;
+        v13.i1 = eq v12 1.i256;
+        br v13 block7 block12;
+
+    block7:
+        v16.*@__fe_tuple_0 = int_to_ptr v0 *@__fe_tuple_0;
+        v17.*i256 = gep v16 0.i256 0.i256;
+        v18.i256 = ptr_to_int v17 i256;
+        v19.i256 = mload v18 i256;
+        v20.i1 = ne v19 0.i256;
+        v21.i256 = zext v20 i256;
+        v22.i1 = eq v21 1.i256;
+        br v22 block1 block13;
+
+    block8:
+        evm_invalid;
+
+    block9:
+        v25.*@__fe_tuple_0 = int_to_ptr v0 *@__fe_tuple_0;
+        v26.*i256 = gep v25 0.i256 0.i256;
+        v27.i256 = ptr_to_int v26 i256;
+        v28.i256 = mload v27 i256;
+        v29.i1 = ne v28 0.i256;
+        v30.i256 = zext v29 i256;
+        v31.i1 = eq v30 1.i256;
+        br v31 block3 block14;
+
+    block10:
+        evm_invalid;
+
+    block11:
+        evm_invalid;
+
+    block12:
+        v14.i1 = eq v12 0.i256;
+        br v14 block9 block11;
+
+    block13:
+        v23.i1 = eq v21 0.i256;
+        br v23 block4 block8;
+
+    block14:
+        v32.i1 = eq v30 0.i256;
+        br v32 block5 block10;
+}
+
+func public %match_tuple_with_wildcard(v0.i256) -> i256 {
+    block0:
+        jump block4;
+
+    block1:
+        jump block2;
+
+    block2:
+        v3.i256 = phi (1.i256 block1) (0.i256 block3);
+        return v3;
+
+    block3:
+        jump block2;
+
+    block4:
+        v5.*@__fe_tuple_0 = int_to_ptr v0 *@__fe_tuple_0;
+        v6.*i256 = gep v5 0.i256 0.i256;
+        v7.i256 = ptr_to_int v6 i256;
+        v8.i256 = mload v7 i256;
+        v9.i1 = ne v8 0.i256;
+        v10.i256 = zext v9 i256;
+        v11.i1 = eq v10 1.i256;
+        br v11 block1 block6;
+
+    block5:
+        evm_invalid;
+
+    block6:
+        v12.i1 = eq v10 0.i256;
+        br v12 block3 block5;
+}
+
+func public %match_mixed_tuple(v0.i256) -> i256 {
+    block0:
+        jump block6;
+
+    block1:
+        jump block2;
+
+    block2:
+        v3.i256 = phi (10.i256 block1) (11.i256 block3) (12.i256 block4) (0.i256 block5);
+        return v3;
+
+    block3:
+        jump block2;
+
+    block4:
+        jump block2;
+
+    block5:
+        jump block2;
+
+    block6:
+        v7.*@__fe_tuple_1 = int_to_ptr v0 *@__fe_tuple_1;
+        v8.*i256 = gep v7 0.i256 0.i256;
+        v9.i256 = ptr_to_int v8 i256;
+        v10.i256 = mload v9 i256;
+        v11.i1 = ne v10 0.i256;
+        v12.i256 = zext v11 i256;
+        v14.i1 = eq v12 1.i256;
+        br v14 block7 block9;
+
+    block7:
+        v17.*@__fe_tuple_1 = int_to_ptr v0 *@__fe_tuple_1;
+        v18.*i256 = gep v17 0.i256 1.i256;
+        v19.i256 = ptr_to_int v18 i256;
+        v20.i256 = mload v19 i256;
+        v21.i8 = trunc v20 i8;
+        v22.i256 = zext v21 i256;
+        v23.i1 = eq v22 0.i256;
+        br v23 block1 block10;
+
+    block8:
+        evm_invalid;
+
+    block9:
+        v15.i1 = eq v12 0.i256;
+        br v15 block5 block8;
+
+    block10:
+        v24.i1 = eq v22 1.i256;
+        br v24 block3 block4;
+}
+
+func public %__fe_sonatina_entry() {
+    block0:
+        v1.i256 = call %match_bool_tuple 0.i256;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+    }
+}

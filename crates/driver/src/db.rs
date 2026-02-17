@@ -6,7 +6,7 @@ use codespan_reporting::term::{
 use common::file::File;
 use common::{define_input_db, diagnostics::CompleteDiagnostic};
 use hir::analysis::{
-    analysis_pass::{AnalysisPassManager, MsgLowerPass, ParsingPass},
+    analysis_pass::{AnalysisPassManager, EventLowerPass, MsgLowerPass, ParsingPass},
     diagnostics::DiagnosticVoucher,
     name_resolution::ImportAnalysisPass,
     ty::{
@@ -144,6 +144,7 @@ fn initialize_analysis_pass() -> AnalysisPassManager {
     let mut pass_manager = AnalysisPassManager::new();
     pass_manager.add_module_pass(Box::new(ParsingPass {}));
     pass_manager.add_module_pass(Box::new(MsgLowerPass {}));
+    pass_manager.add_module_pass(Box::new(EventLowerPass {}));
     pass_manager.add_module_pass(Box::new(MsgSelectorAnalysisPass {}));
     pass_manager.add_module_pass(Box::new(DefConflictAnalysisPass {}));
     pass_manager.add_module_pass(Box::new(ImportAnalysisPass {}));

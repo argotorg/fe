@@ -242,6 +242,7 @@ msg Erc20Extended {
 }
 
 // ERC20 events
+#[event]
 struct TransferEvent {
     #[indexed]
     from: Address,
@@ -250,6 +251,7 @@ struct TransferEvent {
     value: u256,
 }
 
+#[event]
 struct ApprovalEvent {
     #[indexed]
     owner: Address,

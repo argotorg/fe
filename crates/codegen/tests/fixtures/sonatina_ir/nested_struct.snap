@@ -1,0 +1,103 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
+expression: output
+input_file: crates/codegen/tests/fixtures/nested_struct.fe
+---
+target = "evm-ethereum-osaka"
+
+func private %abi_encode__Evm_hef0af3106e109414__3af54274b2985741(v0.i256, v1.i256) {
+    block0:
+        mstore 0.i256 v0 i256;
+        evm_return 0.i256 32.i256;
+}
+
+func private %read_inner__StorPtr_Outer___dab28b9da6c3e28(v0.i256) -> i256 {
+    block0:
+        v2.i256 = evm_sload v0;
+        return v2;
+}
+
+func private %write_inner__StorPtr_Outer___dab28b9da6c3e28(v0.i256, v1.i256) {
+    block0:
+        evm_sstore v1 v0;
+        return;
+}
+
+func private %mem_read(v0.i256) -> i256 {
+    block0:
+        return v0;
+}
+
+func private %init__StorPtr_Evm___207f35a85ac4062e() {
+    block0:
+        v1.i256 = sym_size &runtime__StorPtr_Evm___207f35a85ac4062e;
+        v2.i256 = sym_addr &runtime__StorPtr_Evm___207f35a85ac4062e;
+        evm_code_copy 0.i256 v2 v1;
+        evm_return 0.i256 v1;
+}
+
+func private %runtime__StorPtr_Evm___207f35a85ac4062e() {
+    block0:
+        v1.i256 = call %stor_ptr__Evm_hef0af3106e109414_Outer_hccd04e332bd35653__177c3c9a6f7ae368 0.i256 0.i256;
+        v2.i256 = evm_calldata_load 0.i256;
+        v4.i256 = shr 224.i256 v2;
+        jump block6;
+
+    block1:
+        v6.i256 = evm_calldata_load 4.i256;
+        call %write_inner__StorPtr_Outer___dab28b9da6c3e28 v6 v1;
+        call %abi_encode__Evm_hef0af3106e109414__3af54274b2985741 v6 0.i256;
+        jump block2;
+
+    block2:
+        evm_stop;
+
+    block3:
+        v9.i256 = call %read_inner__StorPtr_Outer___dab28b9da6c3e28 v1;
+        call %abi_encode__Evm_hef0af3106e109414__3af54274b2985741 v9 0.i256;
+        jump block2;
+
+    block4:
+        v10.i256 = evm_calldata_load 4.i256;
+        v11.i256 = call %mem_read v10;
+        call %abi_encode__Evm_hef0af3106e109414__3af54274b2985741 v11 0.i256;
+        jump block2;
+
+    block5:
+        evm_return 0.i256 0.i256;
+
+    block6:
+        v16.i1 = eq v4 3091856072.i256;
+        br v16 block1 block7;
+
+    block7:
+        v17.i1 = eq v4 3513050253.i256;
+        br v17 block3 block8;
+
+    block8:
+        v18.i1 = eq v4 2154770637.i256;
+        br v18 block4 block5;
+}
+
+func private %stor_ptr__Evm_hef0af3106e109414_Outer_hccd04e332bd35653__177c3c9a6f7ae368(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = call %storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Outer_hccd04e332bd35653__f44d0100de7cf929 v1;
+        return v3;
+}
+
+func private %storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Outer_hccd04e332bd35653__f44d0100de7cf929(v0.i256) -> i256 {
+    block0:
+        return v0;
+}
+
+
+object @NestedStruct {
+    section init {
+        entry %init__StorPtr_Evm___207f35a85ac4062e;
+        embed .runtime as &runtime__StorPtr_Evm___207f35a85ac4062e;
+    }
+    section runtime {
+        entry %runtime__StorPtr_Evm___207f35a85ac4062e;
+    }
+}

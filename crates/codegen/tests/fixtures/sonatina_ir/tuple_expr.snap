@@ -1,0 +1,43 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+expression: output
+input_file: crates/codegen/tests/fixtures/tuple_expr.fe
+---
+target = "evm-ethereum-osaka"
+
+type @__fe_tuple_0 = {i256, i256};
+
+func public %tuple_expr() -> i256 {
+    block0:
+        v2.*i8 = evm_malloc 64.i256;
+        v3.i256 = ptr_to_int v2 i256;
+        v6.i256 = add 1.i256 2.i256;
+        v7.i64 = trunc v6 i64;
+        v8.i256 = zext v7 i256;
+        v9.*@__fe_tuple_0 = int_to_ptr v3 *@__fe_tuple_0;
+        v10.*i256 = gep v9 0.i256 0.i256;
+        v11.i256 = ptr_to_int v10 i256;
+        mstore v11 v8 i256;
+        v12.i1 = is_zero 0.i256;
+        v13.i256 = zext v12 i256;
+        v14.i1 = ne v13 0.i256;
+        v15.i256 = zext v14 i256;
+        v16.*@__fe_tuple_0 = int_to_ptr v3 *@__fe_tuple_0;
+        v17.*i256 = gep v16 0.i256 1.i256;
+        v18.i256 = ptr_to_int v17 i256;
+        mstore v18 v15 i256;
+        return v3;
+}
+
+func public %__fe_sonatina_entry() {
+    block0:
+        v0.i256 = call %tuple_expr;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+    }
+}

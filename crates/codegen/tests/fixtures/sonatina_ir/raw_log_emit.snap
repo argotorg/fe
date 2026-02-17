@@ -1,0 +1,32 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
+expression: output
+input_file: crates/codegen/tests/fixtures/raw_log_emit.fe
+---
+target = "evm-ethereum-osaka"
+
+func private %raw_emit(v0.i256) {
+    block0:
+        call %evm_hef0af3106e109414_log_h22d1a10952034bae_log0 v0 1.i256 32.i256;
+        return;
+}
+
+func private %evm_hef0af3106e109414_log_h22d1a10952034bae_log0(v0.i256, v1.i256, v2.i256) {
+    block0:
+        evm_log0 v1 v2;
+        return;
+}
+
+func public %__fe_sonatina_entry() {
+    block0:
+        call %raw_emit 0.i256;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+    }
+}

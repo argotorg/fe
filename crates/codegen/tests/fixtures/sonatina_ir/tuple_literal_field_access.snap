@@ -1,0 +1,104 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+expression: output
+input_file: crates/codegen/tests/fixtures/tuple_literal_field_access.fe
+---
+target = "evm-ethereum-osaka"
+
+type @__fe_tuple_0 = {i256, i256};
+type @__fe_tuple_1 = {i256, @__fe_tuple_0};
+
+func public %tuple_literal_field_access() -> i256 {
+    block0:
+        v4.*i8 = evm_malloc 64.i256;
+        v5.i256 = ptr_to_int v4 i256;
+        v6.*@__fe_tuple_0 = int_to_ptr v5 *@__fe_tuple_0;
+        v7.*i256 = gep v6 0.i256 0.i256;
+        v8.i256 = ptr_to_int v7 i256;
+        mstore v8 1.i256 i256;
+        v9.*@__fe_tuple_0 = int_to_ptr v5 *@__fe_tuple_0;
+        v10.*i256 = gep v9 0.i256 1.i256;
+        v11.i256 = ptr_to_int v10 i256;
+        mstore v11 2.i256 i256;
+        v12.*@__fe_tuple_0 = int_to_ptr v5 *@__fe_tuple_0;
+        v13.*i256 = gep v12 0.i256 1.i256;
+        v14.i256 = ptr_to_int v13 i256;
+        v15.i256 = mload v14 i256;
+        return v15;
+}
+
+func public %tuple_literal_nested_access() -> i256 {
+    block0:
+        v5.*i8 = evm_malloc 64.i256;
+        v6.i256 = ptr_to_int v5 i256;
+        v7.*@__fe_tuple_0 = int_to_ptr v6 *@__fe_tuple_0;
+        v8.*i256 = gep v7 0.i256 0.i256;
+        v9.i256 = ptr_to_int v8 i256;
+        mstore v9 2.i256 i256;
+        v10.*@__fe_tuple_0 = int_to_ptr v6 *@__fe_tuple_0;
+        v11.*i256 = gep v10 0.i256 1.i256;
+        v12.i256 = ptr_to_int v11 i256;
+        mstore v12 3.i256 i256;
+        v14.*i8 = evm_malloc 96.i256;
+        v15.i256 = ptr_to_int v14 i256;
+        v16.*@__fe_tuple_1 = int_to_ptr v15 *@__fe_tuple_1;
+        v17.*i256 = gep v16 0.i256 0.i256;
+        v18.i256 = ptr_to_int v17 i256;
+        mstore v18 1.i256 i256;
+        v19.*@__fe_tuple_0 = int_to_ptr v6 *@__fe_tuple_0;
+        v20.*i256 = gep v19 0.i256 0.i256;
+        v21.i256 = ptr_to_int v20 i256;
+        v22.i256 = mload v21 i256;
+        v23.*@__fe_tuple_1 = int_to_ptr v15 *@__fe_tuple_1;
+        v24.*i256 = gep v23 0.i256 1.i256 0.i256;
+        v25.i256 = ptr_to_int v24 i256;
+        mstore v25 v22 i256;
+        v26.*@__fe_tuple_0 = int_to_ptr v6 *@__fe_tuple_0;
+        v27.*i256 = gep v26 0.i256 1.i256;
+        v28.i256 = ptr_to_int v27 i256;
+        v29.i256 = mload v28 i256;
+        v30.*@__fe_tuple_1 = int_to_ptr v15 *@__fe_tuple_1;
+        v31.*i256 = gep v30 0.i256 1.i256 1.i256;
+        v32.i256 = ptr_to_int v31 i256;
+        mstore v32 v29 i256;
+        v33.*@__fe_tuple_1 = int_to_ptr v15 *@__fe_tuple_1;
+        v34.*@__fe_tuple_0 = gep v33 0.i256 1.i256;
+        v35.i256 = ptr_to_int v34 i256;
+        v36.*@__fe_tuple_0 = int_to_ptr v35 *@__fe_tuple_0;
+        v37.*i256 = gep v36 0.i256 0.i256;
+        v38.i256 = ptr_to_int v37 i256;
+        v39.i256 = mload v38 i256;
+        return v39;
+}
+
+func public %tuple_literal_struct_chain() -> i256 {
+    block0:
+        v4.*i8 = evm_malloc 64.i256;
+        v5.i256 = ptr_to_int v4 i256;
+        v6.*@__fe_tuple_0 = int_to_ptr v5 *@__fe_tuple_0;
+        v7.*i256 = gep v6 0.i256 0.i256;
+        v8.i256 = ptr_to_int v7 i256;
+        mstore v8 1.i256 i256;
+        v9.*@__fe_tuple_0 = int_to_ptr v5 *@__fe_tuple_0;
+        v10.*i256 = gep v9 0.i256 1.i256;
+        v11.i256 = ptr_to_int v10 i256;
+        mstore v11 2.i256 i256;
+        v12.*@__fe_tuple_0 = int_to_ptr v5 *@__fe_tuple_0;
+        v13.*i256 = gep v12 0.i256 1.i256;
+        v14.i256 = ptr_to_int v13 i256;
+        v15.i256 = mload v14 i256;
+        return v15;
+}
+
+func public %__fe_sonatina_entry() {
+    block0:
+        v0.i256 = call %tuple_literal_field_access;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+    }
+}

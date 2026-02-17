@@ -7,12 +7,13 @@ use common::indexmap::{IndexMap, IndexSet};
 use super::{
     trait_def::{ImplementorId, TraitInstId},
     trait_resolution::{PredicateListId, TraitGoalSolution},
-    ty_check::ExprProp,
+    ty_check::{EffectArg, ExprProp, LocalBinding, ResolvedEffectArg},
     ty_def::{TyData, TyId},
     visitor::TyVisitable,
 };
 use crate::analysis::{
     HirAnalysisDb,
+    place::{Place, PlaceBase},
     ty::const_expr::{ConstExpr, ConstExprId},
     ty::const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
 };
@@ -323,13 +324,97 @@ impl<'db> TyFoldable<'db> for TraitGoalSolution<'db> {
     }
 }
 
+impl<'db> TyFoldable<'db> for LocalBinding<'db> {
+    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
+    where
+        F: TyFolder<'db>,
+    {
+        match self {
+            LocalBinding::Local { .. } | LocalBinding::EffectParam { .. } => self,
+            LocalBinding::Param {
+                site,
+                idx,
+                mode,
+                ty,
+                is_mut,
+            } => LocalBinding::Param {
+                site,
+                idx,
+                mode,
+                ty: ty.fold_with(db, folder),
+                is_mut,
+            },
+        }
+    }
+}
+
 impl<'db> TyFoldable<'db> for ExprProp<'db> {
     fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
     where
         F: TyFolder<'db>,
     {
         let ty = self.ty.fold_with(db, folder);
-        Self { ty, ..self }
+        let binding = self.binding.map(|binding| binding.fold_with(db, folder));
+        Self {
+            ty,
+            binding,
+            ..self
+        }
+    }
+}
+
+impl<'db> TyFoldable<'db> for Place<'db> {
+    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
+    where
+        F: TyFolder<'db>,
+    {
+        let base = self.base.fold_with(db, folder);
+        Self {
+            base,
+            projections: self.projections,
+        }
+    }
+}
+
+impl<'db> TyFoldable<'db> for PlaceBase<'db> {
+    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
+    where
+        F: TyFolder<'db>,
+    {
+        match self {
+            PlaceBase::Binding(binding) => PlaceBase::Binding(binding.fold_with(db, folder)),
+        }
+    }
+}
+
+impl<'db> TyFoldable<'db> for EffectArg<'db> {
+    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
+    where
+        F: TyFolder<'db>,
+    {
+        match self {
+            EffectArg::Place(place) => EffectArg::Place(place.fold_with(db, folder)),
+            EffectArg::Binding(binding) => EffectArg::Binding(binding.fold_with(db, folder)),
+            EffectArg::Value(_) | EffectArg::Unknown => self,
+        }
+    }
+}
+
+impl<'db> TyFoldable<'db> for ResolvedEffectArg<'db> {
+    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
+    where
+        F: TyFolder<'db>,
+    {
+        Self {
+            param_idx: self.param_idx,
+            key: self.key,
+            arg: self.arg.fold_with(db, folder),
+            pass_mode: self.pass_mode,
+            key_kind: self.key_kind,
+            instantiated_target_ty: self
+                .instantiated_target_ty
+                .map(|ty| ty.fold_with(db, folder)),
+        }
     }
 }
 

@@ -1,37 +1,15 @@
 ---
 source: crates/fe/tests/cli_output.rs
-assertion_line: 232
 expression: output
 input_file: tests/fixtures/fe_test_runner/fail_revert.fe
 ---
 === STDOUT ===
 test test_revert ... FAILED
+    Test reverted: 0x
 
 test result: FAILED. 0 passed; 1 failed
 
 failures:
     test_revert
-
-=== STDERR ===
-    Test reverted: 0x
-
----- yul output for test test_revert (test_test_revert) ----
-object "test_test_revert" {
-  code {
-    datacopy(0, dataoffset("runtime"), datasize("runtime"))
-    return(0, datasize("runtime"))
-  }
-
-  object "runtime" {
-    code {
-      function $test_revert() {
-        revert(0, 0)
-      }
-      $test_revert()
-      return(0, 0)
-    }
-  }
-}
----- end yul output ----
 
 === EXIT CODE: 1 ===

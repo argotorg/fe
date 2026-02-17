@@ -7,7 +7,7 @@ input_file: tests/fixtures/match_tuple.fe
 function $match_bool_tuple($t) -> ret {
   let v0 := 0
   let v1 := $t
-  let v2 := iszero(eq(mload(add(v1, 1)), 0))
+  let v2 := iszero(eq(mload(add(v1, 32)), 0))
   switch v2
     case 1 {
       let v3 := iszero(eq(mload(v1), 0))
@@ -59,7 +59,7 @@ function $match_mixed_tuple($t) -> ret {
   let v2 := iszero(eq(mload(v1), 0))
   switch v2
     case 1 {
-      let v3 := and(mload(add(v1, 1)), 0xff)
+      let v3 := and(mload(add(v1, 32)), 0xff)
       switch v3
         case 0 {
           v0 := 10

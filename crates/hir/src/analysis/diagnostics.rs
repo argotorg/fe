@@ -492,6 +492,73 @@ impl DiagnosticVoucher for crate::SelectorError {
     }
 }
 
+impl DiagnosticVoucher for crate::EventError {
+    fn to_complete(&self, _db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
+        use crate::EventErrorKind;
+
+        let primary_span = Span::new(self.file, self.primary_range, SpanKind::Original);
+
+        let (code, message, label, notes) = match &self.kind {
+            EventErrorKind::EventAttrOnNonStruct { item_kind } => (
+                1,
+                format!("`#[event]` is only valid on structs (found on {item_kind})"),
+                "`#[event]` must be placed on a `struct` item".to_string(),
+                vec!["move `#[event]` to a struct declaration".to_string()],
+            ),
+            EventErrorKind::InvalidEventAttrForm => (
+                2,
+                "invalid `#[event]` attribute form".to_string(),
+                "expected `#[event]` without arguments".to_string(),
+                vec!["remove arguments and use `#[event]`".to_string()],
+            ),
+            EventErrorKind::GenericEventStruct => (
+                3,
+                "`#[event]` structs must be non-generic".to_string(),
+                "generics are not supported on `#[event]` structs".to_string(),
+                vec!["remove generic parameters from the event struct".to_string()],
+            ),
+            EventErrorKind::IndexedAttrOutsideEventStruct => (
+                4,
+                "`#[indexed]` is only valid within `#[event]` structs".to_string(),
+                "move `#[indexed]` inside a `#[event]` struct".to_string(),
+                vec!["mark the struct with `#[event]` or remove `#[indexed]`".to_string()],
+            ),
+            EventErrorKind::InvalidIndexedAttrForm => (
+                5,
+                "invalid `#[indexed]` attribute form".to_string(),
+                "expected `#[indexed]` without arguments".to_string(),
+                vec!["remove arguments and use `#[indexed]`".to_string()],
+            ),
+            EventErrorKind::TooManyIndexedFields { indexed_count } => (
+                6,
+                "too many indexed fields in event".to_string(),
+                format!("EVM supports at most 3 indexed fields (found {indexed_count})"),
+                vec!["remove `#[indexed]` from fields until there are at most 3".to_string()],
+            ),
+            EventErrorKind::UnsupportedFieldType { ty } => (
+                7,
+                "unsupported event field type".to_string(),
+                format!("`{ty}` is not supported as an event field"),
+                vec!["event field types must be named types (e.g. `u256`, `Address`)".to_string()],
+            ),
+        };
+
+        let error_code = GlobalErrorCode::new(DiagnosticPass::EventLower, code);
+
+        CompleteDiagnostic::new(
+            Severity::Error,
+            message,
+            vec![SubDiagnostic::new(
+                LabelStyle::Primary,
+                label,
+                Some(primary_span),
+            )],
+            notes,
+            error_code,
+        )
+    }
+}
+
 pub trait LazyDiagnostic<'db> {
     fn to_complete(&self, db: &'db dyn SpannedHirAnalysisDb) -> CompleteDiagnostic;
 }

@@ -144,6 +144,7 @@ pub enum Severity {
 pub enum DiagnosticPass {
     Parse,
     MsgLower,
+    EventLower,
 
     NameResolution,
 
@@ -164,6 +165,7 @@ impl DiagnosticPass {
         match self {
             Self::Parse => 1,
             Self::MsgLower => 9,
+            Self::EventLower => 10,
             Self::NameResolution => 2,
             Self::TypeDefinition => 3,
             Self::TraitDefinition => 4,

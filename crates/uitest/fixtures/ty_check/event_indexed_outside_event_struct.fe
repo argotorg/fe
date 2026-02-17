@@ -1,0 +1,7 @@
+use std::evm::Address
+
+struct NotEvent {
+    #[indexed]
+    a: Address,
+}
+

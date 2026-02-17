@@ -26,15 +26,6 @@ fn run_fe_tree(path: &str) -> (String, i32) {
     run_fe_command("tree", path)
 }
 
-/// Helper to run `fe test --debug` on a fixture path.
-///
-/// * `path` - File or directory path passed to the CLI.
-///
-/// Returns the combined CLI output and exit code.
-fn run_fe_test(path: &str) -> (String, i32) {
-    run_fe_command_with_args("test", path, &["--debug"])
-}
-
 // Helper function to run fe binary with specified subcommand
 fn run_fe_command(subcommand: &str, path: &str) -> (String, i32) {
     run_fe_command_with_args(subcommand, path, &[])
@@ -50,55 +41,42 @@ fn run_fe_command_with_args(subcommand: &str, path: &str, extra: &[&str]) -> (St
 
 // Helper function to run fe binary with specified args
 fn run_fe_main(args: &[&str]) -> (String, i32) {
-    let cargo_exe = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
-    let output = Command::new(&cargo_exe)
-        .args(["build", "--bin", "fe"])
-        .output()
-        .expect("Failed to build fe binary");
-
-    if !output.status.success() {
-        panic!(
-            "Failed to build fe binary: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    let fe_binary = std::env::current_exe()
-        .expect("Failed to get current exe")
-        .parent()
-        .expect("Failed to get parent")
-        .parent()
-        .expect("Failed to get parent")
-        .join("fe");
-
-    let output = Command::new(&fe_binary)
-        .args(args)
-        .env("NO_COLOR", "1") // Disable color output for consistent snapshots across environments
-        .output()
-        .unwrap_or_else(|_| panic!("Failed to run fe {:?}", args));
-
-    // Combine stdout and stderr for snapshot
-    let mut full_output = String::new();
-    if !output.stdout.is_empty() {
-        full_output.push_str("=== STDOUT ===\n");
-        full_output.push_str(&String::from_utf8_lossy(&output.stdout));
-    }
-    if !output.stderr.is_empty() {
-        if !full_output.is_empty() {
-            full_output.push('\n');
-        }
-        full_output.push_str("=== STDERR ===\n");
-        full_output.push_str(&String::from_utf8_lossy(&output.stderr));
-    }
-    let exit_code = output.status.code().unwrap_or(-1);
-    full_output.push_str(&format!("\n=== EXIT CODE: {exit_code} ==="));
-
-    // Normalize paths for portability
-    let normalized_output = normalize_output(&full_output);
-    (normalized_output, exit_code)
+    let out = run_fe_main_impl(args, None);
+    (out.combined(), out.exit_code)
 }
 
 fn run_fe_main_in_dir(args: &[&str], cwd: &Path) -> (String, i32) {
+    let out = run_fe_main_impl(args, Some(cwd));
+    (out.combined(), out.exit_code)
+}
+
+struct FeOutput {
+    stdout: String,
+    stderr: String,
+    exit_code: i32,
+}
+
+impl FeOutput {
+    /// Combined display format used by snapshot tests.
+    fn combined(&self) -> String {
+        let mut out = String::new();
+        if !self.stdout.is_empty() {
+            out.push_str("=== STDOUT ===\n");
+            out.push_str(&self.stdout);
+        }
+        if !self.stderr.is_empty() {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str("=== STDERR ===\n");
+            out.push_str(&self.stderr);
+        }
+        out.push_str(&format!("\n=== EXIT CODE: {} ===", self.exit_code));
+        normalize_output(&out)
+    }
+}
+
+fn run_fe_main_impl(args: &[&str], cwd: Option<&Path>) -> FeOutput {
     let cargo_exe = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
     let output = Command::new(&cargo_exe)
         .args(["build", "--bin", "fe"])
@@ -120,30 +98,20 @@ fn run_fe_main_in_dir(args: &[&str], cwd: &Path) -> (String, i32) {
         .expect("Failed to get parent")
         .join("fe");
 
-    let output = Command::new(&fe_binary)
-        .args(args)
-        .env("NO_COLOR", "1") // Disable color output for consistent snapshots across environments
-        .current_dir(cwd)
+    let mut cmd = Command::new(&fe_binary);
+    cmd.args(args).env("NO_COLOR", "1");
+    if let Some(dir) = cwd {
+        cmd.current_dir(dir);
+    }
+    let output = cmd
         .output()
-        .unwrap_or_else(|_| panic!("Failed to run fe {:?} in {:?}", args, cwd));
+        .unwrap_or_else(|_| panic!("Failed to run fe {:?}", args));
 
-    let mut full_output = String::new();
-    if !output.stdout.is_empty() {
-        full_output.push_str("=== STDOUT ===\n");
-        full_output.push_str(&String::from_utf8_lossy(&output.stdout));
+    FeOutput {
+        stdout: normalize_output(&String::from_utf8_lossy(&output.stdout)),
+        stderr: normalize_output(&String::from_utf8_lossy(&output.stderr)),
+        exit_code: output.status.code().unwrap_or(-1),
     }
-    if !output.stderr.is_empty() {
-        if !full_output.is_empty() {
-            full_output.push('\n');
-        }
-        full_output.push_str("=== STDERR ===\n");
-        full_output.push_str(&String::from_utf8_lossy(&output.stderr));
-    }
-    let exit_code = output.status.code().unwrap_or(-1);
-    full_output.push_str(&format!("\n=== EXIT CODE: {exit_code} ==="));
-
-    let normalized_output = normalize_output(&full_output);
-    (normalized_output, exit_code)
 }
 
 #[dir_test(
@@ -196,34 +164,64 @@ fn test_tree_output(fixture: Fixture<&str>) {
     snap_test!(output, snapshot_path.to_str().unwrap());
 }
 
-/// Executes `fe test` against each fixture and asserts a zero exit code.
-///
-/// * `fixture` - Fixture containing the test source path.
-///
-/// Returns nothing; asserts on the CLI exit status.
+/// Runs both backends on each fixture, asserts each passes, and asserts they produce
+/// identical test results.
 #[dir_test(
     dir: "$CARGO_MANIFEST_DIR/tests/fixtures/fe_test",
     glob: "*.fe",
 )]
-fn test_fe_test(fixture: Fixture<&str>) {
-    let (output, exit_code) = run_fe_test(fixture.path());
-    // All fe test fixtures should pass (exit code 0)
-    assert_eq!(exit_code, 0, "fe test failed:\n{}", output);
+fn test_fe_test_both_backends(fixture: Fixture<&str>) {
+    let yul = run_fe_main_impl(
+        &["test", "--call-trace", "--backend", "yul", fixture.path()],
+        None,
+    );
+    let sonatina = run_fe_main_impl(
+        &[
+            "test",
+            "--call-trace",
+            "--backend",
+            "sonatina",
+            fixture.path(),
+        ],
+        None,
+    );
+
+    // Check each backend independently first for clearer diagnostics.
+    assert_eq!(
+        yul.exit_code,
+        0,
+        "fe test (yul) failed for {path}:\n{yo}\n\nTo reproduce:\n  cargo run --bin fe -- test --backend yul --report {path}",
+        path = fixture.path(),
+        yo = yul.combined(),
+    );
+    assert_eq!(
+        sonatina.exit_code,
+        0,
+        "fe test (sonatina) failed for {path}:\n{so}\n\nTo reproduce:\n  cargo run --bin fe -- test --backend sonatina --report {path}",
+        path = fixture.path(),
+        so = sonatina.combined(),
+    );
+
+    // Compare stdout (test names + pass/fail lines). Stderr may contain
+    // backend-specific diagnostics so we only check stdout here.
+    assert_eq!(
+        yul.stdout,
+        sonatina.stdout,
+        "Test output mismatch for {path}:\n\n--- yul ---\n{yo}\n\n--- sonatina ---\n{so}",
+        path = fixture.path(),
+        yo = yul.stdout,
+        so = sonatina.stdout,
+    );
 }
 
-/// Runs `fe test --debug` and snapshots the output to verify behavior of passing/failing tests and logs.
+/// Runs `fe test` and snapshots the output to verify behavior of passing/failing tests and logs.
 #[dir_test(
     dir: "$CARGO_MANIFEST_DIR/tests/fixtures/fe_test_runner",
     glob: "*.fe",
 )]
 fn test_fe_test_runner(fixture: Fixture<&str>) {
-    if fixture.path().ends_with("_debug.fe") {
-        return;
-    }
-
     let mut args = vec!["test"];
-    args.push("--debug");
-    if fixture.path().contains("logs.fe") {
+    if fixture.path().contains("logs") {
         args.push("--show-logs");
     }
     args.push(fixture.path());
@@ -488,16 +486,4 @@ fn test_cli_workspace_exclude_skips_member() {
     let snapshot_path = root.join("exclude_patterns_skip_member.case");
     let (output, _) = run_fe_main_in_dir(&["check"], &root);
     snap_test!(output, snapshot_path.to_str().unwrap());
-}
-
-/// Runs `fe test --debug` and snapshots the output to validate Yul dumping.
-#[dir_test(
-    dir: "$CARGO_MANIFEST_DIR/tests/fixtures/fe_test_runner",
-    glob: "*_debug.fe",
-)]
-#[allow(dead_code)]
-fn test_fe_test_runner_debug(fixture: Fixture<&str>) {
-    let args = ["test", "--debug", fixture.path()];
-    let (output, _) = run_fe_main(&args);
-    snap_test!(output, fixture.path());
 }

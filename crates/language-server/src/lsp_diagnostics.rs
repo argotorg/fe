@@ -8,7 +8,9 @@ use common::{
 };
 use driver::{DriverDataBase, MirDiagnosticsMode};
 use hir::Ingot;
-use hir::analysis::analysis_pass::{AnalysisPassManager, MsgLowerPass, ParsingPass};
+use hir::analysis::analysis_pass::{
+    AnalysisPassManager, EventLowerPass, MsgLowerPass, ParsingPass,
+};
 use hir::analysis::name_resolution::ImportAnalysisPass;
 use hir::analysis::ty::{
     AdtDefAnalysisPass, BodyAnalysisPass, DefConflictAnalysisPass, FuncAnalysisPass,
@@ -153,6 +155,7 @@ fn initialize_analysis_pass() -> AnalysisPassManager {
     let mut pass_manager = AnalysisPassManager::new();
     pass_manager.add_module_pass(Box::new(ParsingPass {}));
     pass_manager.add_module_pass(Box::new(MsgLowerPass {}));
+    pass_manager.add_module_pass(Box::new(EventLowerPass {}));
     pass_manager.add_module_pass(Box::new(MsgSelectorAnalysisPass {}));
     pass_manager.add_module_pass(Box::new(DefConflictAnalysisPass {}));
     pass_manager.add_module_pass(Box::new(ImportAnalysisPass {}));

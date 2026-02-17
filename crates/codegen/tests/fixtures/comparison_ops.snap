@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 33
 expression: output
 input_file: tests/fixtures/comparison_ops.fe
 ---
@@ -11,13 +12,13 @@ function $comparison_ops() -> ret {
   if iszero(v3) {
     v3 := 0x80
   }
-  mstore(0x40, add(v3, 6))
+  mstore(0x40, add(v3, 192))
   mstore(v3, iszero(iszero(eq(v0, v0))))
-  mstore(add(v3, 1), iszero(iszero(iszero(eq(v0, v1)))))
-  mstore(add(v3, 2), iszero(iszero(lt(v0, v1))))
-  mstore(add(v3, 3), iszero(iszero(iszero(gt(v1, v1)))))
-  mstore(add(v3, 4), iszero(iszero(gt(v2, v1))))
-  mstore(add(v3, 5), iszero(iszero(iszero(lt(v2, v2)))))
+  mstore(add(v3, 32), iszero(iszero(iszero(eq(v0, v1)))))
+  mstore(add(v3, 64), iszero(iszero(lt(v0, v1))))
+  mstore(add(v3, 96), iszero(iszero(iszero(gt(v1, v1)))))
+  mstore(add(v3, 128), iszero(iszero(gt(v2, v1))))
+  mstore(add(v3, 160), iszero(iszero(iszero(lt(v2, v2)))))
   ret := v3
   leave
 }

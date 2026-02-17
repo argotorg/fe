@@ -1,8 +1,9 @@
-use core::abi::{Abi, AbiDecoder, AbiEncoder, ByteInput, Cursor}
+use core::abi::{Abi, AbiDecoder, AbiEncoder, ByteInput, Cursor, Encode}
 use core::{AsBytes, keccak}
-use core::num::IntDowncast
 use ingot::evm::mem
 use ingot::evm::ops::{mstore, mstore8, revert}
+use ingot::evm::Address
+use ingot::evm::TopicValue
 
 pub struct Sol {}
 
@@ -193,4 +194,738 @@ impl AbiEncoder<Sol> for SolEncoder {
         let start = self.start
         (start, self.end - start)
     }
+}
+
+// ---------------------------------------------------------------------------
+// SolCompat trait – maps Fe types to Solidity ABI type names
+// ---------------------------------------------------------------------------
+
+/// Maps a Fe type to its Solidity ABI type name.
+///
+/// The compiler uses this trait to build event signatures at compile time.
+/// For example, `u256::SOL_TYPE` is `"uint256"` and `Address::SOL_TYPE` is
+/// `"address"`. The `#[event]` desugaring generates a `TOPIC0` constant
+/// from these values:
+///
+/// ```
+/// const TOPIC0: u256 = keccak((Transfer::SOL_TYPE, "(", Address::SOL_TYPE, ",", u256::SOL_TYPE, ")"))
+/// ```
+///
+/// Implement this trait for custom types to use them as event fields.
+pub trait SolCompat {
+    type S: AsBytes
+    const SOL_TYPE: Self::S
+}
+
+// Primitive unsigned integer implementations
+impl SolCompat for u8 {
+    type S = String<5>
+    const SOL_TYPE: Self::S = "uint8"
+}
+impl SolCompat for u16 {
+    type S = String<6>
+    const SOL_TYPE: Self::S = "uint16"
+}
+impl SolCompat for u32 {
+    type S = String<6>
+    const SOL_TYPE: Self::S = "uint32"
+}
+impl SolCompat for u64 {
+    type S = String<6>
+    const SOL_TYPE: Self::S = "uint64"
+}
+impl SolCompat for u128 {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "uint128"
+}
+impl SolCompat for u256 {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "uint256"
+}
+
+// Primitive signed integer implementations
+impl SolCompat for i8 {
+    type S = String<4>
+    const SOL_TYPE: Self::S = "int8"
+}
+impl SolCompat for i16 {
+    type S = String<5>
+    const SOL_TYPE: Self::S = "int16"
+}
+impl SolCompat for i32 {
+    type S = String<5>
+    const SOL_TYPE: Self::S = "int32"
+}
+impl SolCompat for i64 {
+    type S = String<5>
+    const SOL_TYPE: Self::S = "int64"
+}
+impl SolCompat for i128 {
+    type S = String<6>
+    const SOL_TYPE: Self::S = "int128"
+}
+impl SolCompat for i256 {
+    type S = String<6>
+    const SOL_TYPE: Self::S = "int256"
+}
+
+// Address implementation
+impl SolCompat for Address {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "address"
+}
+
+// Bool implementation
+impl SolCompat for bool {
+    type S = String<4>
+    const SOL_TYPE: Self::S = "bool"
+}
+
+// ---------------------------------------------------------------------------
+// TopicValue – converts indexed event field values to u256 log topics
+// ---------------------------------------------------------------------------
+
+impl TopicValue for u8 {
+    fn as_topic(self) -> u256 { self.downcast_unchecked() }
+}
+impl TopicValue for u16 {
+    fn as_topic(self) -> u256 { self.downcast_unchecked() }
+}
+impl TopicValue for u32 {
+    fn as_topic(self) -> u256 { self.downcast_unchecked() }
+}
+impl TopicValue for u64 {
+    fn as_topic(self) -> u256 { self.downcast_unchecked() }
+}
+impl TopicValue for u128 {
+    fn as_topic(self) -> u256 { self.downcast_unchecked() }
+}
+impl TopicValue for u256 {
+    fn as_topic(self) -> u256 { self }
+}
+impl TopicValue for i8 {
+    fn as_topic(self) -> u256 { self.downcast_unchecked() }
+}
+impl TopicValue for i16 {
+    fn as_topic(self) -> u256 { self.downcast_unchecked() }
+}
+impl TopicValue for i32 {
+    fn as_topic(self) -> u256 { self.downcast_unchecked() }
+}
+impl TopicValue for i64 {
+    fn as_topic(self) -> u256 { self.downcast_unchecked() }
+}
+impl TopicValue for i128 {
+    fn as_topic(self) -> u256 { self.downcast_unchecked() }
+}
+impl TopicValue for i256 {
+    fn as_topic(self) -> u256 { self.downcast_unchecked() }
+}
+impl TopicValue for Address {
+    fn as_topic(self) -> u256 { self.inner }
+}
+impl TopicValue for bool {
+    fn as_topic(self) -> u256 { if self { 1 } else { 0 } }
+}
+
+// ---------------------------------------------------------------------------
+// Newtype wrappers for non-native Solidity integer types
+//
+// Solidity has integer types at every 8-bit width (uint24, int160, etc.)
+// but Fe only has u8/u16/u32/u64/u128/u256 and their signed counterparts.
+// These newtypes bridge the gap so that event signatures use the correct
+// Solidity type names. Each wraps the smallest Fe integer that fits.
+// ---------------------------------------------------------------------------
+
+// Unsigned newtypes wrapping u32
+pub struct Uint24 { pub val: u32 }
+impl SolCompat for Uint24 {
+    type S = String<6>
+    const SOL_TYPE: Self::S = "uint24"
+}
+impl<A: Abi> Encode<A> for Uint24 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val as u256) }
+}
+
+// Unsigned newtypes wrapping u64
+pub struct Uint40 { pub val: u64 }
+impl SolCompat for Uint40 {
+    type S = String<6>
+    const SOL_TYPE: Self::S = "uint40"
+}
+impl<A: Abi> Encode<A> for Uint40 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val as u256) }
+}
+pub struct Uint48 { pub val: u64 }
+impl SolCompat for Uint48 {
+    type S = String<6>
+    const SOL_TYPE: Self::S = "uint48"
+}
+impl<A: Abi> Encode<A> for Uint48 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val as u256) }
+}
+pub struct Uint56 { pub val: u64 }
+impl SolCompat for Uint56 {
+    type S = String<6>
+    const SOL_TYPE: Self::S = "uint56"
+}
+impl<A: Abi> Encode<A> for Uint56 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val as u256) }
+}
+
+// Unsigned newtypes wrapping u128
+pub struct Uint72 { pub val: u128 }
+impl SolCompat for Uint72 {
+    type S = String<6>
+    const SOL_TYPE: Self::S = "uint72"
+}
+impl<A: Abi> Encode<A> for Uint72 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val as u256) }
+}
+pub struct Uint80 { pub val: u128 }
+impl SolCompat for Uint80 {
+    type S = String<6>
+    const SOL_TYPE: Self::S = "uint80"
+}
+impl<A: Abi> Encode<A> for Uint80 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val as u256) }
+}
+pub struct Uint88 { pub val: u128 }
+impl SolCompat for Uint88 {
+    type S = String<6>
+    const SOL_TYPE: Self::S = "uint88"
+}
+impl<A: Abi> Encode<A> for Uint88 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val as u256) }
+}
+pub struct Uint96 { pub val: u128 }
+impl SolCompat for Uint96 {
+    type S = String<6>
+    const SOL_TYPE: Self::S = "uint96"
+}
+impl<A: Abi> Encode<A> for Uint96 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val as u256) }
+}
+pub struct Uint104 { pub val: u128 }
+impl SolCompat for Uint104 {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "uint104"
+}
+impl<A: Abi> Encode<A> for Uint104 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val as u256) }
+}
+pub struct Uint112 { pub val: u128 }
+impl SolCompat for Uint112 {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "uint112"
+}
+impl<A: Abi> Encode<A> for Uint112 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val as u256) }
+}
+pub struct Uint120 { pub val: u128 }
+impl SolCompat for Uint120 {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "uint120"
+}
+impl<A: Abi> Encode<A> for Uint120 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val as u256) }
+}
+
+// Unsigned newtypes wrapping u256
+pub struct Uint136 { pub val: u256 }
+impl SolCompat for Uint136 {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "uint136"
+}
+impl<A: Abi> Encode<A> for Uint136 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val) }
+}
+pub struct Uint144 { pub val: u256 }
+impl SolCompat for Uint144 {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "uint144"
+}
+impl<A: Abi> Encode<A> for Uint144 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val) }
+}
+pub struct Uint152 { pub val: u256 }
+impl SolCompat for Uint152 {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "uint152"
+}
+impl<A: Abi> Encode<A> for Uint152 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val) }
+}
+pub struct Uint160 { pub val: u256 }
+impl SolCompat for Uint160 {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "uint160"
+}
+impl<A: Abi> Encode<A> for Uint160 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val) }
+}
+pub struct Uint168 { pub val: u256 }
+impl SolCompat for Uint168 {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "uint168"
+}
+impl<A: Abi> Encode<A> for Uint168 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val) }
+}
+pub struct Uint176 { pub val: u256 }
+impl SolCompat for Uint176 {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "uint176"
+}
+impl<A: Abi> Encode<A> for Uint176 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val) }
+}
+pub struct Uint184 { pub val: u256 }
+impl SolCompat for Uint184 {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "uint184"
+}
+impl<A: Abi> Encode<A> for Uint184 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val) }
+}
+pub struct Uint192 { pub val: u256 }
+impl SolCompat for Uint192 {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "uint192"
+}
+impl<A: Abi> Encode<A> for Uint192 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val) }
+}
+pub struct Uint200 { pub val: u256 }
+impl SolCompat for Uint200 {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "uint200"
+}
+impl<A: Abi> Encode<A> for Uint200 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val) }
+}
+pub struct Uint208 { pub val: u256 }
+impl SolCompat for Uint208 {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "uint208"
+}
+impl<A: Abi> Encode<A> for Uint208 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val) }
+}
+pub struct Uint216 { pub val: u256 }
+impl SolCompat for Uint216 {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "uint216"
+}
+impl<A: Abi> Encode<A> for Uint216 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val) }
+}
+pub struct Uint224 { pub val: u256 }
+impl SolCompat for Uint224 {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "uint224"
+}
+impl<A: Abi> Encode<A> for Uint224 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val) }
+}
+pub struct Uint232 { pub val: u256 }
+impl SolCompat for Uint232 {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "uint232"
+}
+impl<A: Abi> Encode<A> for Uint232 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val) }
+}
+pub struct Uint240 { pub val: u256 }
+impl SolCompat for Uint240 {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "uint240"
+}
+impl<A: Abi> Encode<A> for Uint240 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val) }
+}
+pub struct Uint248 { pub val: u256 }
+impl SolCompat for Uint248 {
+    type S = String<7>
+    const SOL_TYPE: Self::S = "uint248"
+}
+impl<A: Abi> Encode<A> for Uint248 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val) }
+}
+
+// Signed newtypes wrapping i32
+pub struct Int24 { pub val: i32 }
+impl SolCompat for Int24 {
+    type S = String<5>
+    const SOL_TYPE: Self::S = "int24"
+}
+impl<A: Abi> Encode<A> for Int24 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val.downcast_unchecked()) }
+}
+
+// Signed newtypes wrapping i64
+pub struct Int40 { pub val: i64 }
+impl SolCompat for Int40 {
+    type S = String<5>
+    const SOL_TYPE: Self::S = "int40"
+}
+impl<A: Abi> Encode<A> for Int40 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val.downcast_unchecked()) }
+}
+pub struct Int48 { pub val: i64 }
+impl SolCompat for Int48 {
+    type S = String<5>
+    const SOL_TYPE: Self::S = "int48"
+}
+impl<A: Abi> Encode<A> for Int48 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val.downcast_unchecked()) }
+}
+pub struct Int56 { pub val: i64 }
+impl SolCompat for Int56 {
+    type S = String<5>
+    const SOL_TYPE: Self::S = "int56"
+}
+impl<A: Abi> Encode<A> for Int56 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val.downcast_unchecked()) }
+}
+
+// Signed newtypes wrapping i128
+pub struct Int72 { pub val: i128 }
+impl SolCompat for Int72 {
+    type S = String<5>
+    const SOL_TYPE: Self::S = "int72"
+}
+impl<A: Abi> Encode<A> for Int72 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val.downcast_unchecked()) }
+}
+pub struct Int80 { pub val: i128 }
+impl SolCompat for Int80 {
+    type S = String<5>
+    const SOL_TYPE: Self::S = "int80"
+}
+impl<A: Abi> Encode<A> for Int80 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val.downcast_unchecked()) }
+}
+pub struct Int88 { pub val: i128 }
+impl SolCompat for Int88 {
+    type S = String<5>
+    const SOL_TYPE: Self::S = "int88"
+}
+impl<A: Abi> Encode<A> for Int88 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val.downcast_unchecked()) }
+}
+pub struct Int96 { pub val: i128 }
+impl SolCompat for Int96 {
+    type S = String<5>
+    const SOL_TYPE: Self::S = "int96"
+}
+impl<A: Abi> Encode<A> for Int96 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val.downcast_unchecked()) }
+}
+pub struct Int104 { pub val: i128 }
+impl SolCompat for Int104 {
+    type S = String<6>
+    const SOL_TYPE: Self::S = "int104"
+}
+impl<A: Abi> Encode<A> for Int104 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val.downcast_unchecked()) }
+}
+pub struct Int112 { pub val: i128 }
+impl SolCompat for Int112 {
+    type S = String<6>
+    const SOL_TYPE: Self::S = "int112"
+}
+impl<A: Abi> Encode<A> for Int112 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val.downcast_unchecked()) }
+}
+pub struct Int120 { pub val: i128 }
+impl SolCompat for Int120 {
+    type S = String<6>
+    const SOL_TYPE: Self::S = "int120"
+}
+impl<A: Abi> Encode<A> for Int120 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val.downcast_unchecked()) }
+}
+
+// Signed newtypes wrapping i256
+pub struct Int136 { pub val: i256 }
+impl SolCompat for Int136 {
+    type S = String<6>
+    const SOL_TYPE: Self::S = "int136"
+}
+impl<A: Abi> Encode<A> for Int136 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val.downcast_unchecked()) }
+}
+pub struct Int144 { pub val: i256 }
+impl SolCompat for Int144 {
+    type S = String<6>
+    const SOL_TYPE: Self::S = "int144"
+}
+impl<A: Abi> Encode<A> for Int144 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val.downcast_unchecked()) }
+}
+pub struct Int152 { pub val: i256 }
+impl SolCompat for Int152 {
+    type S = String<6>
+    const SOL_TYPE: Self::S = "int152"
+}
+impl<A: Abi> Encode<A> for Int152 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val.downcast_unchecked()) }
+}
+pub struct Int160 { pub val: i256 }
+impl SolCompat for Int160 {
+    type S = String<6>
+    const SOL_TYPE: Self::S = "int160"
+}
+impl<A: Abi> Encode<A> for Int160 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val.downcast_unchecked()) }
+}
+pub struct Int168 { pub val: i256 }
+impl SolCompat for Int168 {
+    type S = String<6>
+    const SOL_TYPE: Self::S = "int168"
+}
+impl<A: Abi> Encode<A> for Int168 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val.downcast_unchecked()) }
+}
+pub struct Int176 { pub val: i256 }
+impl SolCompat for Int176 {
+    type S = String<6>
+    const SOL_TYPE: Self::S = "int176"
+}
+impl<A: Abi> Encode<A> for Int176 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val.downcast_unchecked()) }
+}
+pub struct Int184 { pub val: i256 }
+impl SolCompat for Int184 {
+    type S = String<6>
+    const SOL_TYPE: Self::S = "int184"
+}
+impl<A: Abi> Encode<A> for Int184 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val.downcast_unchecked()) }
+}
+pub struct Int192 { pub val: i256 }
+impl SolCompat for Int192 {
+    type S = String<6>
+    const SOL_TYPE: Self::S = "int192"
+}
+impl<A: Abi> Encode<A> for Int192 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val.downcast_unchecked()) }
+}
+pub struct Int200 { pub val: i256 }
+impl SolCompat for Int200 {
+    type S = String<6>
+    const SOL_TYPE: Self::S = "int200"
+}
+impl<A: Abi> Encode<A> for Int200 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val.downcast_unchecked()) }
+}
+pub struct Int208 { pub val: i256 }
+impl SolCompat for Int208 {
+    type S = String<6>
+    const SOL_TYPE: Self::S = "int208"
+}
+impl<A: Abi> Encode<A> for Int208 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val.downcast_unchecked()) }
+}
+pub struct Int216 { pub val: i256 }
+impl SolCompat for Int216 {
+    type S = String<6>
+    const SOL_TYPE: Self::S = "int216"
+}
+impl<A: Abi> Encode<A> for Int216 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val.downcast_unchecked()) }
+}
+pub struct Int224 { pub val: i256 }
+impl SolCompat for Int224 {
+    type S = String<6>
+    const SOL_TYPE: Self::S = "int224"
+}
+impl<A: Abi> Encode<A> for Int224 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val.downcast_unchecked()) }
+}
+pub struct Int232 { pub val: i256 }
+impl SolCompat for Int232 {
+    type S = String<6>
+    const SOL_TYPE: Self::S = "int232"
+}
+impl<A: Abi> Encode<A> for Int232 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val.downcast_unchecked()) }
+}
+pub struct Int240 { pub val: i256 }
+impl SolCompat for Int240 {
+    type S = String<6>
+    const SOL_TYPE: Self::S = "int240"
+}
+impl<A: Abi> Encode<A> for Int240 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val.downcast_unchecked()) }
+}
+pub struct Int248 { pub val: i256 }
+impl SolCompat for Int248 {
+    type S = String<6>
+    const SOL_TYPE: Self::S = "int248"
+}
+impl<A: Abi> Encode<A> for Int248 {
+    fn encode<E: AbiEncoder<A>>(own self, mut _ e: E) { (mut e).write_word(self.val.downcast_unchecked()) }
+}
+
+// ---------------------------------------------------------------------------
+// TopicValue implementations for newtype wrappers
+// ---------------------------------------------------------------------------
+
+impl TopicValue for Uint24 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Uint40 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Uint48 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Uint56 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Uint72 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Uint80 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Uint88 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Uint96 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Uint104 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Uint112 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Uint120 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Uint136 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Uint144 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Uint152 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Uint160 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Uint168 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Uint176 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Uint184 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Uint192 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Uint200 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Uint208 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Uint216 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Uint224 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Uint232 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Uint240 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Uint248 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Int24 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Int40 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Int48 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Int56 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Int72 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Int80 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Int88 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Int96 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Int104 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Int112 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Int120 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Int136 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Int144 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Int152 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Int160 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Int168 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Int176 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Int184 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Int192 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Int200 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Int208 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Int216 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Int224 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Int232 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Int240 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
+}
+impl TopicValue for Int248 {
+    fn as_topic(self) -> u256 { self.val.downcast_unchecked() }
 }

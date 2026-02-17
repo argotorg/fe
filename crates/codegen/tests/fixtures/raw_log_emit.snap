@@ -1,0 +1,16 @@
+---
+source: crates/codegen/tests/yul.rs
+assertion_line: 33
+expression: output
+input_file: tests/fixtures/raw_log_emit.fe
+---
+function $raw_emit($evm) {
+  let v0 := 1
+  let v1 := v0
+  $evm_hef0af3106e109414_log_h22d1a10952034bae_log0($evm, v1, 32)
+  leave
+}
+function $evm_hef0af3106e109414_log_h22d1a10952034bae_log0($self, $offset, $len) {
+  log0($offset, $len)
+  leave
+}
