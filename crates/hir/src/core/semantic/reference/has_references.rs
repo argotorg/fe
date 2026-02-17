@@ -375,33 +375,13 @@ impl<'db> TopLevelMod<'db> {
                 let mut results = Vec::new();
                 for item in self.scope_graph(db).items_dfs(db) {
                     for reference in ScopeId::from_item(item).references(db) {
-                        // Check if the full-path target matches
-                        let mut matched = reference.target(db).as_slice().iter().any(
-                            |t| matches!(t, Target::Scope(s) if s == scope),
-                        );
-
-                        // Also check path prefix segments (e.g. for MyEnum::Variant,
-                        // the prefix "MyEnum" should match a search for the enum)
-                        if !matched {
-                            if let ReferenceView::Path(pv) = reference {
-                                let last_idx = pv.path.segment_index(db);
-                                if last_idx > 0 {
-                                    for idx in 0..last_idx {
-                                        if let Some(seg_path) = pv.path.segment(db, idx)
-                                            && resolve_path_to_scopes(db, seg_path, pv.scope)
-                                                .iter()
-                                                .any(|s| *s == *scope)
-                                        {
-                                            matched = true;
-                                            break;
-                                        }
-                                    }
-                                }
+                        for t in reference.target(db).as_slice() {
+                            if let Target::Scope(s) = t
+                                && s == scope
+                            {
+                                results.push(reference);
+                                break;
                             }
-                        }
-
-                        if matched {
-                            results.push(reference);
                         }
                     }
                 }
@@ -434,5 +414,43 @@ impl<'db> TopLevelMod<'db> {
                     .collect()
             }
         }
+    }
+
+    /// Find all path segments in this module that resolve to `scope`.
+    ///
+    /// Uses HIR path resolution on each segment of every multi-segment path
+    /// reference, returning segment-level spans. This catches references like
+    /// `MyEnum::Variant` where the `MyEnum` prefix should count as a reference
+    /// to the enum, and `Variant` should count as a reference to the variant.
+    ///
+    /// Single-segment paths are included too, so this can serve as the
+    /// authoritative segment-level reference finder for scopes.
+    pub fn path_segment_references_to_scope<DB>(
+        self,
+        db: &'db DB,
+        scope: &ScopeId<'db>,
+    ) -> Vec<DynLazySpan<'db>>
+    where
+        DB: HirAnalysisDb + SpannedHirDb,
+    {
+        let mut results = Vec::new();
+        for item in self.scope_graph(db).items_dfs(db) {
+            for reference in ScopeId::from_item(item).references(db) {
+                let ReferenceView::Path(pv) = reference else {
+                    continue;
+                };
+                let last_idx = pv.path.segment_index(db);
+                for idx in 0..=last_idx {
+                    if let Some(seg_path) = pv.path.segment(db, idx)
+                        && resolve_path_to_scopes(db, seg_path, pv.scope)
+                            .iter()
+                            .any(|s| *s == *scope)
+                    {
+                        results.push(pv.span.clone().segment(idx).ident().into());
+                    }
+                }
+            }
+        }
+        results
     }
 }
