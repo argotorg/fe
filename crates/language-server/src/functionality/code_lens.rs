@@ -180,8 +180,8 @@ fn collect_reference_locations<'db>(
             continue;
         }
         let mod_ = map_file_to_mod(db, file);
-        for reference in mod_.references_to_target(db, target) {
-            if let Ok(loc) = to_lsp_location_from_lazy_span(db, reference.span()) {
+        for matched in mod_.references_to_target(db, target) {
+            if let Ok(loc) = to_lsp_location_from_lazy_span(db, matched.span) {
                 locations.push(loc);
             }
         }

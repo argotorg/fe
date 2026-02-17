@@ -37,7 +37,7 @@ use crate::{
     },
 };
 
-pub use has_references::HasReferences;
+pub use has_references::{HasReferences, MatchedReference};
 
 /// Collect the trait bound assumptions visible at `scope` by walking up the
 /// scope chain to the nearest enclosing generic param owner (function, impl,

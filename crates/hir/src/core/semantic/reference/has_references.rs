@@ -361,12 +361,24 @@ impl<'db> TopLevelMod<'db> {
         smallest_items
     }
 
-    /// Find all references to a target, returning ReferenceViews (for rename, etc.).
+    /// Find all references to a target, with segment-level precision for paths.
+    ///
+    /// For `Target::Scope`, resolves each segment of every path reference using
+    /// HIR path resolution. This means `MyEnum::Variant` produces a match for
+    /// both `MyEnum` and `Variant` at their respective segment spans. Non-path
+    /// references (field access, method calls, use paths) use direct target
+    /// matching.
+    ///
+    /// For `Target::Local`, filters body references by binding identity.
+    ///
+    /// Returns `MatchedReference` pairs so callers get both the original
+    /// `ReferenceView` (for rename, self-ty checks) and the precise matched
+    /// span.
     pub fn references_to_target<DB>(
         self,
         db: &'db DB,
         target: &Target<'db>,
-    ) -> Vec<&'db ReferenceView<'db>>
+    ) -> Vec<MatchedReference<'db>>
     where
         DB: HirAnalysisDb + SpannedHirDb,
     {
@@ -375,12 +387,38 @@ impl<'db> TopLevelMod<'db> {
                 let mut results = Vec::new();
                 for item in self.scope_graph(db).items_dfs(db) {
                     for reference in ScopeId::from_item(item).references(db) {
-                        for t in reference.target(db).as_slice() {
-                            if let Target::Scope(s) = t
-                                && s == scope
-                            {
-                                results.push(reference);
-                                break;
+                        match reference {
+                            ReferenceView::Path(pv) => {
+                                // Resolve each segment independently via path
+                                // resolution so that both MyEnum and Variant
+                                // are found as references in MyEnum::Variant.
+                                let last_idx = pv.path.segment_index(db);
+                                for idx in 0..=last_idx {
+                                    if let Some(seg_path) = pv.path.segment(db, idx)
+                                        && resolve_path_to_scopes(db, seg_path, pv.scope)
+                                            .iter()
+                                            .any(|s| *s == *scope)
+                                    {
+                                        results.push(MatchedReference {
+                                            view: reference,
+                                            span: pv.span.clone().segment(idx).ident().into(),
+                                        });
+                                    }
+                                }
+                            }
+                            _ => {
+                                // Non-path references: direct target match
+                                for t in reference.target(db).as_slice() {
+                                    if let Target::Scope(s) = t
+                                        && s == scope
+                                    {
+                                        results.push(MatchedReference {
+                                            view: reference,
+                                            span: reference.span(),
+                                        });
+                                        break;
+                                    }
+                                }
                             }
                         }
                     }
@@ -399,58 +437,33 @@ impl<'db> TopLevelMod<'db> {
                     .collect();
 
                 // Filter body references by their expression ID context
-                // This avoids calling target() which triggers expensive path resolution
                 body.references(db)
                     .iter()
-                    .filter(|r| {
+                    .filter_map(|r| {
                         if let ReferenceView::Path(path_view) = r
                             && let Some(super::BodyPathContext::Expr(expr_id)) = path_view.body_ctx
+                            && expr_ids.contains(&expr_id)
                         {
-                            expr_ids.contains(&expr_id)
+                            Some(MatchedReference {
+                                view: r,
+                                span: r.span(),
+                            })
                         } else {
-                            false
+                            None
                         }
                     })
                     .collect()
             }
         }
     }
+}
 
-    /// Find all path segments in this module that resolve to `scope`.
-    ///
-    /// Uses HIR path resolution on each segment of every multi-segment path
-    /// reference, returning segment-level spans. This catches references like
-    /// `MyEnum::Variant` where the `MyEnum` prefix should count as a reference
-    /// to the enum, and `Variant` should count as a reference to the variant.
-    ///
-    /// Single-segment paths are included too, so this can serve as the
-    /// authoritative segment-level reference finder for scopes.
-    pub fn path_segment_references_to_scope<DB>(
-        self,
-        db: &'db DB,
-        scope: &ScopeId<'db>,
-    ) -> Vec<DynLazySpan<'db>>
-    where
-        DB: HirAnalysisDb + SpannedHirDb,
-    {
-        let mut results = Vec::new();
-        for item in self.scope_graph(db).items_dfs(db) {
-            for reference in ScopeId::from_item(item).references(db) {
-                let ReferenceView::Path(pv) = reference else {
-                    continue;
-                };
-                let last_idx = pv.path.segment_index(db);
-                for idx in 0..=last_idx {
-                    if let Some(seg_path) = pv.path.segment(db, idx)
-                        && resolve_path_to_scopes(db, seg_path, pv.scope)
-                            .iter()
-                            .any(|s| *s == *scope)
-                    {
-                        results.push(pv.span.clone().segment(idx).ident().into());
-                    }
-                }
-            }
-        }
-        results
-    }
+/// A reference matched against a search target, with the precise span
+/// of the matched portion.
+pub struct MatchedReference<'db> {
+    /// The original reference view (for rename, self-ty checks, etc.).
+    pub view: &'db ReferenceView<'db>,
+    /// The span of the matched portion — segment-level for path segment
+    /// matches, or the full reference span for direct matches.
+    pub span: DynLazySpan<'db>,
 }

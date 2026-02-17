@@ -27,9 +27,7 @@ fn find_references_at_cursor<'db>(
 
     match &target {
         Target::Scope(target_scope) => {
-            // For scopes, search all modules in the ingot using segment-level
-            // path resolution. This resolves each segment of multi-segment paths
-            // (e.g. MyEnum in MyEnum::Variant) to find all references precisely.
+            // Search all modules in the ingot
             let ingot = top_mod.ingot(db);
 
             for (url, file) in ingot.files(db).iter() {
@@ -37,23 +35,10 @@ fn find_references_at_cursor<'db>(
                     continue;
                 }
                 let mod_ = map_file_to_mod(db, file);
-
-                // Segment-level path references (handles both single and
-                // multi-segment paths with per-segment resolution)
-                for seg_span in mod_.path_segment_references_to_scope(db, target_scope) {
-                    if seg_span.resolve(db).is_some()
-                        && let Ok(location) = to_lsp_location_from_lazy_span(db, seg_span)
-                    {
-                        locations.push(location);
-                    }
-                }
-
-                // Non-path references (field access, method calls, use paths)
-                for ref_view in mod_.references_to_target(db, target) {
-                    if !matches!(ref_view, hir::core::semantic::reference::ReferenceView::Path(_))
-                        && ref_view.span().resolve(db).is_some()
+                for matched in mod_.references_to_target(db, target) {
+                    if matched.span.resolve(db).is_some()
                         && let Ok(location) =
-                            to_lsp_location_from_lazy_span(db, ref_view.span())
+                            to_lsp_location_from_lazy_span(db, matched.span)
                     {
                         locations.push(location);
                     }
@@ -67,9 +52,9 @@ fn find_references_at_cursor<'db>(
         }
         Target::Local { span, .. } => {
             // For locals, search within the function body
-            for ref_view in top_mod.references_to_target(db, target) {
-                if ref_view.span().resolve(db).is_some()
-                    && let Ok(location) = to_lsp_location_from_lazy_span(db, ref_view.span())
+            for matched in top_mod.references_to_target(db, target) {
+                if matched.span.resolve(db).is_some()
+                    && let Ok(location) = to_lsp_location_from_lazy_span(db, matched.span)
                 {
                     locations.push(location);
                 }
