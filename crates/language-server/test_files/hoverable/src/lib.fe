@@ -1,5 +1,6 @@
 use stuff::calculations::{ return_three, return_four }
 use stuff::calculations::ambiguous
+use stuff::Color
 
 /// ## `return_seven`
 /// ### a function of numbers
@@ -57,6 +58,18 @@ fn test_match(opt: Option) -> i32 {
   match opt {
     Option::Some(val) => val
     Option::None => 0
+  }
+}
+
+fn favorite_color() -> Color {
+  Color::Red
+}
+
+fn describe_color(c: Color) -> i32 {
+  match c {
+    Color::Red => 1
+    Color::Green => 2
+    Color::Blue => 3
   }
 }
 
