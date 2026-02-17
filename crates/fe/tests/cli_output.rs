@@ -221,7 +221,7 @@ fn test_fe_test_both_backends(fixture: Fixture<&str>) {
 )]
 fn test_fe_test_runner(fixture: Fixture<&str>) {
     let mut args = vec!["test"];
-    if fixture.path().contains("logs.fe") {
+    if fixture.path().contains("logs") {
         args.push("--show-logs");
     }
     args.push(fixture.path());
