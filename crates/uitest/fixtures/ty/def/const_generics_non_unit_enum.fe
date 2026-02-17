@@ -1,0 +1,8 @@
+enum Payload {
+    A(u32),
+    B,
+}
+
+struct Foo<const P: Payload> {
+    pub val: u32
+}

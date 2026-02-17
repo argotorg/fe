@@ -52,51 +52,41 @@ fn item_to_workspace_symbol(
     item: ItemKind,
     query: &str,
 ) -> Option<SymbolInformation> {
-    let (kind, name, prefix) = match item {
+    let (kind, name) = match item {
         ItemKind::Func(func) => (
             SymbolKind::FUNCTION,
-            func.name(db).to_opt()?.data(db).to_string(),
-            "fn ",
+            format!("fn {}", func.name(db).to_opt()?.data(db)),
         ),
         ItemKind::Struct(s) => (
             SymbolKind::STRUCT,
-            s.name(db).to_opt()?.data(db).to_string(),
-            "struct ",
+            format!("struct {}", s.name(db).to_opt()?.data(db)),
         ),
         ItemKind::Enum(e) => (
             SymbolKind::ENUM,
-            e.name(db).to_opt()?.data(db).to_string(),
-            "enum ",
+            format!("enum {}", e.name(db).to_opt()?.data(db)),
         ),
         ItemKind::Trait(t) => (
             SymbolKind::INTERFACE,
-            t.name(db).to_opt()?.data(db).to_string(),
-            "trait ",
+            format!("trait {}", t.name(db).to_opt()?.data(db)),
         ),
         ItemKind::TypeAlias(ta) => (
             SymbolKind::CLASS,
-            ta.name(db).to_opt()?.data(db).to_string(),
-            "type ",
+            format!("type {}", ta.name(db).to_opt()?.data(db)),
         ),
         ItemKind::Const(c) => (
             SymbolKind::CONSTANT,
-            c.name(db).to_opt()?.data(db).to_string(),
-            "const ",
+            format!("const {}", c.name(db).to_opt()?.data(db)),
         ),
         ItemKind::Mod(m) => (
             SymbolKind::MODULE,
-            m.name(db).to_opt()?.data(db).to_string(),
-            "mod ",
+            format!("mod {}", m.name(db).to_opt()?.data(db)),
         ),
         ItemKind::Contract(c) => (
             SymbolKind::CLASS,
-            c.name(db).to_opt()?.data(db).to_string(),
-            "contract ",
+            format!("contract {}", c.name(db).to_opt()?.data(db)),
         ),
         _ => return None,
     };
-
-    let label = format!("{}{}", prefix, name);
 
     // Filter by query
     if !query.is_empty() && !name.to_lowercase().contains(query) {
@@ -109,7 +99,7 @@ fn item_to_workspace_symbol(
 
     #[allow(deprecated)]
     Some(SymbolInformation {
-        name: label,
+        name,
         kind,
         tags: None,
         deprecated: None,

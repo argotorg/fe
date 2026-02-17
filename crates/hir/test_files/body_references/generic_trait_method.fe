@@ -1,0 +1,21 @@
+trait Processor {
+    fn process(self) -> i32
+}
+
+struct Widget {
+    id: i32
+}
+
+impl Processor for Widget {
+    fn process(self) -> i32 {
+        self.id
+    }
+}
+
+fn use_concrete(w: Widget) -> i32 {
+    w.process()
+}
+
+fn use_method_call<T: Processor>(t: T) -> i32 {
+    t.process()
+}

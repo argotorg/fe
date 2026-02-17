@@ -1,0 +1,9 @@
+enum E {
+    A,
+}
+
+struct Foo<const N: u32> {
+    x: u32
+}
+
+type X = Foo<{ E::A }>

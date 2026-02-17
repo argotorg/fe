@@ -5,7 +5,7 @@ use std::fmt;
 use crate::{
     hir_def::{
         Body, Enum, ExprId, GenericParamOwner, IdentId, IntegerId, ItemKind, PathId,
-        TypeAlias as HirTypeAlias,
+        TypeAlias as HirTypeAlias, VariantKind,
         prim_ty::{IntTy as HirIntTy, PrimTy as HirPrimTy, UintTy as HirUintTy},
         scope_graph::ScopeId,
     },
@@ -476,6 +476,17 @@ impl<'db> TyId<'db> {
         matches!(self.base_ty(db).data(db), TyData::TyBase(TyBase::Prim(_)))
     }
 
+    pub fn is_unit_variant_only_enum(self, db: &'db dyn HirAnalysisDb) -> bool {
+        if let Some(enum_) = self.as_enum(db) {
+            enum_.len_variants(db) > 0
+                && enum_
+                    .variants(db)
+                    .all(|v| matches!(v.kind(db), VariantKind::Unit))
+        } else {
+            false
+        }
+    }
+
     pub fn as_enum(self, db: &'db dyn HirAnalysisDb) -> Option<Enum<'db>> {
         let base_ty = self.base_ty(db);
         if let Some(adt_ref) = base_ty.adt_ref(db)
@@ -490,7 +501,7 @@ impl<'db> TyId<'db> {
     pub(crate) fn as_scope(self, db: &'db dyn HirAnalysisDb) -> Option<ScopeId<'db>> {
         match self.base_ty(db).data(db) {
             TyData::TyParam(param) => Some(param.scope(db)),
-            TyData::AssocTy(assoc_ty) => Some(assoc_ty.scope(db)),
+            TyData::AssocTy(assoc_ty) => assoc_ty.scope(db),
             TyData::QualifiedTy(trait_inst) => Some(trait_inst.def(db).scope()),
             TyData::TyBase(TyBase::Adt(adt)) => Some(adt.scope(db)),
             TyData::TyBase(TyBase::Contract(c)) => Some(c.scope()),
@@ -514,7 +525,7 @@ impl<'db> TyId<'db> {
         match self.base_ty(db).data(db) {
             TyData::TyVar(_) => None,
             TyData::TyParam(param) => param.scope(db).name_span(db),
-            TyData::AssocTy(assoc_ty) => assoc_ty.scope(db).name_span(db),
+            TyData::AssocTy(assoc_ty) => assoc_ty.scope(db)?.name_span(db),
             TyData::QualifiedTy(trait_inst) => trait_inst.def(db).scope().name_span(db),
 
             TyData::TyBase(TyBase::Adt(adt)) => Some(adt.name_span(db)),
@@ -1107,16 +1118,15 @@ pub struct AssocTy<'db> {
 }
 
 impl<'db> AssocTy<'db> {
-    pub fn scope(&self, db: &'db dyn HirAnalysisDb) -> ScopeId<'db> {
+    pub fn scope(&self, db: &'db dyn HirAnalysisDb) -> Option<ScopeId<'db>> {
         // Find the index of this associated type in the trait's type list
         let trait_def = self.trait_.def(db);
         let idx = trait_def
             .assoc_types(db)
             .enumerate()
             .find(|(_, t)| t.name(db) == Some(self.name))
-            .map(|(i, _)| i)
-            .unwrap();
-        ScopeId::TraitType(trait_def, idx as u16)
+            .map(|(i, _)| i)?;
+        Some(ScopeId::TraitType(trait_def, idx as u16))
     }
 }
 

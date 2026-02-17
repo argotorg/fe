@@ -383,15 +383,30 @@ impl<'db> CtfeInterpreter<'db> {
                     _ => Err(InvalidCause::ConstEvalUnsupported { body, expr }),
                 }
             }
-            Pat::Path(_, is_mut) => {
+            Pat::Path(path_partial, is_mut) => {
                 if *is_mut {
                     return Err(InvalidCause::ConstEvalUnsupported { body, expr });
                 }
-                let Some(binding) = self.typed_body().pat_binding(pat) else {
-                    return Err(InvalidCause::ConstEvalUnsupported { body, expr });
-                };
-                bindings.insert(binding, value);
-                Ok(true)
+                // Try variable binding first
+                if let Some(binding) = self.typed_body().pat_binding(pat) {
+                    bindings.insert(binding, value);
+                    return Ok(true);
+                }
+                // Try enum variant comparison
+                if let Partial::Present(path) = path_partial {
+                    let assumptions = PredicateListId::empty_list(self.db);
+                    if let Ok(PathRes::EnumVariant(resolved)) =
+                        resolve_path(self.db, *path, body.scope(), assumptions, true)
+                        && resolved.ty.is_unit_variant_only_enum(self.db)
+                        && let ConstTyData::Evaluated(
+                            EvaluatedConstTy::EnumVariant(scrutinee_variant),
+                            _,
+                        ) = value.data(self.db)
+                    {
+                        return Ok(resolved.variant == *scrutinee_variant);
+                    }
+                }
+                Err(InvalidCause::ConstEvalUnsupported { body, expr })
             }
             Pat::Tuple(pats) => {
                 let ConstTyData::Evaluated(EvaluatedConstTy::Tuple(elems), _) = value.data(self.db)
@@ -586,22 +601,31 @@ impl<'db> CtfeInterpreter<'db> {
         }
 
         let assumptions = PredicateListId::empty_list(self.db);
-        if let Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty)) =
-            resolve_path(self.db, path, body.scope(), assumptions, true)
-        {
-            if let TyData::ConstTy(const_ty) = ty.data(self.db)
-                && let ConstTyData::TyParam(param, _) = const_ty.data(self.db)
-                && let Some(arg) = self.generic_args().get(param.idx)
-                && let TyData::ConstTy(arg_const) = arg.data(self.db)
-            {
-                return Ok(arg_const.evaluate(self.db, Some(arg_const.ty(self.db))));
-            }
+        match resolve_path(self.db, path, body.scope(), assumptions, true) {
+            Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty)) => {
+                if let TyData::ConstTy(const_ty) = ty.data(self.db)
+                    && let ConstTyData::TyParam(param, _) = const_ty.data(self.db)
+                    && let Some(arg) = self.generic_args().get(param.idx)
+                    && let TyData::ConstTy(arg_const) = arg.data(self.db)
+                {
+                    return Ok(arg_const.evaluate(self.db, Some(arg_const.ty(self.db))));
+                }
 
-            if let TyData::ConstTy(const_ty) = ty.data(self.db)
-                && matches!(const_ty.data(self.db), ConstTyData::TyParam(..))
-            {
-                return Ok(*const_ty);
+                if let TyData::ConstTy(const_ty) = ty.data(self.db)
+                    && matches!(const_ty.data(self.db), ConstTyData::TyParam(..))
+                {
+                    return Ok(*const_ty);
+                }
             }
+            Ok(PathRes::EnumVariant(variant)) if variant.ty.is_unit_variant_only_enum(self.db) => {
+                let ty = self.typed_body().expr_ty(self.db, expr);
+                let evaluated = EvaluatedConstTy::EnumVariant(variant.variant);
+                return Ok(ConstTyId::new(
+                    self.db,
+                    ConstTyData::Evaluated(evaluated, ty),
+                ));
+            }
+            _ => {}
         }
 
         Err(InvalidCause::ConstEvalUnsupported { body, expr }.into())
@@ -1551,6 +1575,23 @@ fn const_as_bytes<'db>(
                     expr,
                 )?);
             }
+            Ok(out)
+        }
+        ConstTyData::Evaluated(EvaluatedConstTy::EnumVariant(variant), _) => {
+            // Enums are represented by a 32-byte discriminant in Fe's EVM layout.
+            // Currently, const-evaluable enum variants are limited to unit-only enums.
+            // Encode the discriminant as a big-endian 256-bit integer.
+            if !value.ty(db).is_unit_variant_only_enum(db) {
+                return Err(InvalidCause::ConstEvalUnsupported { body, expr });
+            }
+            let width = 32;
+            let bytes = BigUint::from(variant.idx as u64).to_bytes_be();
+            if bytes.len() > width {
+                return Err(InvalidCause::ConstEvalUnsupported { body, expr });
+            }
+            let mut out = vec![0u8; width];
+            let offset = width - bytes.len();
+            out[offset..].copy_from_slice(&bytes);
             Ok(out)
         }
         _ => Err(InvalidCause::ConstEvalUnsupported { body, expr }),

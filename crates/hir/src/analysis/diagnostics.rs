@@ -1610,7 +1610,7 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 message: "invalid const parameter type".to_string(),
                 sub_diagnostics: vec![SubDiagnostic {
                     style: LabelStyle::Primary,
-                    message: "only integer or bool types are allowed as a const parameter type"
+                    message: "only integer, bool, or unit-variant enum types are allowed as a const parameter type"
                         .to_string(),
                     span: span.resolve(db),
                 }],

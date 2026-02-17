@@ -19,6 +19,7 @@ pub enum ConstValue {
     Int(BigUint),
     Bool(bool),
     Bytes(Vec<u8>),
+    EnumVariant(u16),
 }
 
 pub fn try_eval_const_body<'db>(
@@ -84,6 +85,9 @@ pub fn eval_const_expr<'db>(
         ConstTyData::Evaluated(EvaluatedConstTy::Bytes(bytes), _) => {
             Some(ConstValue::Bytes(bytes.clone()))
         }
+        ConstTyData::Evaluated(EvaluatedConstTy::EnumVariant(variant), _) => {
+            Some(ConstValue::EnumVariant(variant.idx))
+        }
         _ => None,
     })
 }
@@ -105,6 +109,9 @@ fn eval_const_ty<'db>(
         ConstTyData::Evaluated(EvaluatedConstTy::LitBool(b), _) => Some(ConstValue::Bool(*b)),
         ConstTyData::Evaluated(EvaluatedConstTy::Bytes(bytes), _) => {
             Some(ConstValue::Bytes(bytes.clone()))
+        }
+        ConstTyData::Evaluated(EvaluatedConstTy::EnumVariant(variant), _) => {
+            Some(ConstValue::EnumVariant(variant.idx))
         }
         _ => None,
     })

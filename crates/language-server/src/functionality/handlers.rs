@@ -132,6 +132,14 @@ pub async fn initialize(
 ) -> Result<InitializeResult, ResponseError> {
     info!("initializing language server!");
 
+    backend.definition_link_support = message
+        .capabilities
+        .text_document
+        .as_ref()
+        .and_then(|text| text.definition.as_ref())
+        .and_then(|def| def.link_support)
+        .unwrap_or(false);
+
     let root = message
         .workspace_folders
         .and_then(|folders| folders.first().cloned())
@@ -192,7 +200,10 @@ pub async fn handle_did_change_watched_files(
             FileChangeType::CHANGED => ChangeKind::Edit(None),
             FileChangeType::CREATED => ChangeKind::Create,
             FileChangeType::DELETED => ChangeKind::Delete,
-            _ => unreachable!(),
+            _ => {
+                tracing::warn!("unknown FileChangeType {:?}, skipping", event.typ);
+                continue;
+            }
         };
         let _ = backend.client.clone().emit(FileChange {
             uri: event.uri,
@@ -219,9 +230,23 @@ pub async fn handle_did_change_text_document(
     message: async_lsp::lsp_types::DidChangeTextDocumentParams,
 ) -> Result<(), ResponseError> {
     info!("file changed: {:?}", message.text_document.uri);
+    if message.content_changes.is_empty() {
+        warn!(
+            "didChange with no content changes for {:?}",
+            message.text_document.uri
+        );
+        return Ok(());
+    }
+    let last = message.content_changes.last().expect("checked non-empty");
+    if last.range.is_some() {
+        warn!(
+            "client sent incremental change while server advertises FULL sync; uri={:?}",
+            message.text_document.uri
+        );
+    }
     let _ = backend.client.clone().emit(FileChange {
         uri: message.text_document.uri,
-        kind: ChangeKind::Edit(Some(message.content_changes[0].text.clone())),
+        kind: ChangeKind::Edit(Some(last.text.clone())),
     });
     Ok(())
 }
@@ -238,7 +263,7 @@ pub async fn handle_file_change(
     backend: &mut Backend,
     message: FileChange,
 ) -> Result<(), ResponseError> {
-    if backend.is_builtin_tmp_uri(&message.uri) {
+    if backend.is_virtual_uri(&message.uri) {
         if matches!(message.kind, ChangeKind::Edit(_))
             && backend.readonly_warnings.insert(message.uri.clone())
         {
@@ -387,6 +412,13 @@ pub async fn handle_files_need_diagnostics(
     let FilesNeedDiagnostics(need_diagnostics) = message;
     let mut client = backend.client.clone();
 
+    // Track all requested URIs so we can clear stale diagnostics for any that
+    // don't appear in the computed diagnostics (e.g. deleted files, fixed errors)
+    let mut pending_clear: FxHashSet<url::Url> = need_diagnostics
+        .iter()
+        .map(|NeedsDiagnostics(u)| u.clone())
+        .collect();
+
     let ingots_need_diagnostics: FxHashSet<_> = need_diagnostics
         .iter()
         .filter_map(|NeedsDiagnostics(url)| {
@@ -399,12 +431,29 @@ pub async fn handle_files_need_diagnostics(
         .collect();
 
     for ingot in ingots_need_diagnostics {
-        // Get diagnostics per file
+        // Wrap diagnostics computation in catch_unwind: analysis passes
+        // (parsing, type checking, etc.) can panic on malformed intermediate
+        // text during editing. Without this, a panic kills the Backend actor
+        // and all subsequent LSP requests fail with SendError.
         use crate::lsp_diagnostics::LspDiagnostics;
-        let diagnostics_map = backend.db.diagnostics_for_ingot(ingot);
+        let diagnostics_map = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            backend.db.diagnostics_for_ingot(ingot)
+        })) {
+            Ok(map) => map,
+            Err(panic_info) => {
+                let msg = panic_info
+                    .downcast_ref::<&str>()
+                    .copied()
+                    .or_else(|| panic_info.downcast_ref::<String>().map(|s| s.as_str()))
+                    .unwrap_or("<non-string panic>");
+                error!("diagnostics_for_ingot panicked (skipping): {msg}");
+                continue;
+            }
+        };
 
         for (internal_uri, diags) in diagnostics_map.iter() {
             let uri = backend.map_internal_uri_to_client(internal_uri.clone());
+            pending_clear.remove(&uri);
             let mut diagnostic = diags.clone();
             map_related_info_uris(backend, &mut diagnostic);
             let diagnostics_params = async_lsp::lsp_types::PublishDiagnosticsParams {
@@ -417,6 +466,20 @@ pub async fn handle_files_need_diagnostics(
             }
         }
     }
+
+    // Clear diagnostics for any requested URIs that weren't covered above
+    for uri in pending_clear {
+        let diagnostics_params = async_lsp::lsp_types::PublishDiagnosticsParams {
+            uri: uri.clone(),
+            diagnostics: Vec::new(),
+            version: None,
+        };
+        info!("Clearing stale diagnostics for {:?}", uri);
+        if let Err(e) = client.publish_diagnostics(diagnostics_params) {
+            error!("Failed to clear diagnostics for {}: {:?}", uri, e);
+        }
+    }
+
     Ok(())
 }
 
@@ -465,7 +528,7 @@ pub async fn handle_formatting(
     backend: &Backend,
     params: DocumentFormattingParams,
 ) -> Result<Option<Vec<TextEdit>>, ResponseError> {
-    if backend.is_builtin_tmp_uri(&params.text_document.uri) {
+    if backend.is_virtual_uri(&params.text_document.uri) {
         return Ok(None);
     }
 

@@ -247,6 +247,15 @@ impl<'db> Func<'db> {
         }
     }
 
+    /// Returns the containing inherent `impl` block if this function is a method
+    /// inside an `impl` block (not an `impl Trait` block).
+    pub fn containing_impl(self, db: &'db dyn HirDb) -> Option<Impl<'db>> {
+        match self.scope().parent(db)? {
+            ScopeId::Item(ItemKind::Impl(impl_)) => Some(impl_),
+            _ => None,
+        }
+    }
+
     /// If this function is a method inside an `impl Trait` block, returns the
     /// corresponding trait method definition.
     ///
@@ -262,6 +271,88 @@ impl<'db> Func<'db> {
         trait_
             .methods(db)
             .find(|m| m.name(db).to_opt() == Some(method_name))
+    }
+}
+
+// Call site analysis --------------------------------------------------------
+
+/// A call site found inside a function body.
+#[derive(Clone, Debug)]
+pub struct CallSiteView<'db> {
+    pub body: Body<'db>,
+    pub expr_id: ExprId,
+    pub kind: CallSiteKind<'db>,
+}
+
+/// Discriminant for the shape of a call expression.
+#[derive(Clone, Debug)]
+pub enum CallSiteKind<'db> {
+    FnCall,
+    MethodCall { method_name: Partial<IdentId<'db>> },
+}
+
+impl<'db> CallSiteView<'db> {
+    /// Resolve the callee of this call site via type checking.
+    pub fn target(&self, db: &'db dyn HirAnalysisDb) -> Option<CallableDef<'db>> {
+        use crate::analysis::ty::ty_check::check_func_body;
+        let func = self.body.containing_func(db)?;
+        let (_, typed_body) = check_func_body(db, func);
+        typed_body
+            .callable_expr(self.expr_id)
+            .map(|c| c.callable_def)
+    }
+
+    /// Span of the callee name at the call site (function path or method name).
+    pub fn callee_span(&self) -> crate::span::DynLazySpan<'db> {
+        let expr_span = self.expr_id.span(self.body);
+        match &self.kind {
+            CallSiteKind::FnCall => expr_span.into_call_expr().callee().into(),
+            CallSiteKind::MethodCall { .. } => {
+                expr_span.into_method_call_expr().method_name().into()
+            }
+        }
+    }
+
+    /// Span of the entire call expression.
+    pub fn call_span(&self) -> crate::span::DynLazySpan<'db> {
+        self.expr_id.span(self.body).into()
+    }
+
+    /// The function containing this call site.
+    pub fn containing_func(&self, db: &'db dyn HirDb) -> Option<Func<'db>> {
+        self.body.containing_func(db)
+    }
+}
+
+impl<'db> Body<'db> {
+    /// Enumerate all call sites (function calls and method calls) in this body.
+    pub fn call_sites(self, db: &'db dyn HirDb) -> Vec<CallSiteView<'db>> {
+        let mut sites = Vec::new();
+        for (expr_id, partial_expr) in self.exprs(db).iter() {
+            let Partial::Present(expr) = partial_expr else {
+                continue;
+            };
+            match expr {
+                Expr::Call(_, _) => {
+                    sites.push(CallSiteView {
+                        body: self,
+                        expr_id,
+                        kind: CallSiteKind::FnCall,
+                    });
+                }
+                Expr::MethodCall(_, method_name, _, _) => {
+                    sites.push(CallSiteView {
+                        body: self,
+                        expr_id,
+                        kind: CallSiteKind::MethodCall {
+                            method_name: *method_name,
+                        },
+                    });
+                }
+                _ => {}
+            }
+        }
+        sites
     }
 }
 
@@ -1438,8 +1529,7 @@ fn get_variant_selector<'db>(db: &'db dyn HirAnalysisDb, struct_: Struct<'db>) -
     let expected_ty = TyId::new(db, TyData::TyBase(TyBase::Prim(PrimTy::U32)));
     match try_eval_const_body(db, body, expected_ty)? {
         ConstValue::Int(value) => value.to_u32(),
-        ConstValue::Bool(_) => None,
-        ConstValue::Bytes(_) => None,
+        ConstValue::Bool(_) | ConstValue::Bytes(_) | ConstValue::EnumVariant(_) => None,
     }
 }
 
@@ -2439,6 +2529,12 @@ impl<'db> ImplTrait<'db> {
     /// Trait definition implemented by this `impl trait` block, if well-formed.
     pub fn trait_def(self, db: &'db dyn HirAnalysisDb) -> Option<Trait<'db>> {
         self.trait_inst(db).map(|inst| inst.def(db))
+    }
+
+    /// Returns the ADT (struct or enum) that this `impl Trait` block implements for,
+    /// if the implementor type resolves to a concrete ADT.
+    pub fn implementing_adt(self, db: &'db dyn HirAnalysisDb) -> Option<AdtRef<'db>> {
+        self.ty(db).adt_ref(db)
     }
 
     /// Iterate associated type definitions in this impl-trait block as views.

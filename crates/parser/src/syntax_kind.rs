@@ -670,7 +670,7 @@ impl SyntaxKind {
             SyntaxKind::TypeBound => "type bound",
             SyntaxKind::CallArgList => "function call arguments",
 
-            SyntaxKind::InvalidToken => unimplemented!(),
+            SyntaxKind::InvalidToken => "invalid token",
             SyntaxKind::WhiteSpace => "whitespace",
             SyntaxKind::Comment => "comment",
             SyntaxKind::DocComment => "doc comment",
@@ -787,7 +787,7 @@ impl SyntaxKind {
             SyntaxKind::RecvArmList => "recv arm list",
             SyntaxKind::RecvArm => "recv arm",
             SyntaxKind::Root => "module",
-            SyntaxKind::Error => todo!(),
+            SyntaxKind::Error => "error",
         }
     }
 

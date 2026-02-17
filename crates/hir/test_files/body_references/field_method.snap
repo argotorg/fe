@@ -80,7 +80,7 @@ note:
    ┌─ field_method.fe:17:13
    │
 17 │     let p = Point::new(x: 3, y: 4)
-   │             ^^^^^^^^^^ new -> unresolved
+   │             ^^^^^^^^^^ new -> fn
 
 note: 
    ┌─ field_method.fe:18:9
@@ -128,7 +128,7 @@ note:
    ┌─ field_method.fe:23:13
    │
 23 │     let p = Point::new(x: 5, y: 12)
-   │             ^^^^^^^^^^ new -> unresolved
+   │             ^^^^^^^^^^ new -> fn
 
 note: 
    ┌─ field_method.fe:24:9

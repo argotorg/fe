@@ -204,11 +204,29 @@ pub(crate) fn module_tree_impl<'db>(db: &'db dyn HirDb, ingot: Ingot<'db>) -> Mo
             match first_source {
                 Some(file) => file,
                 None => {
-                    // No source files at all - this is a bug, ingots should have source files
-                    panic!(
-                        "Ingot {:?} has no source files. This indicates a bug in ingot construction.",
+                    tracing::warn!(
+                        "Ingot {:?} has no source files; returning empty module tree",
                         ingot
                     );
+                    let root = module_tree.push(ModuleTreeNode {
+                        top_mod: TopLevelMod::new(
+                            db,
+                            IdentId::new(db, "__empty__".to_string()),
+                            files
+                                .iter()
+                                .next()
+                                .map(|(_, f)| f)
+                                .expect("ingot should have at least one file"),
+                        ),
+                        parent: None,
+                        children: Vec::new(),
+                    });
+                    return ModuleTree {
+                        root,
+                        module_tree: PMap(module_tree),
+                        mod_map: IndexMap::default(),
+                        ingot,
+                    };
                 }
             }
         }

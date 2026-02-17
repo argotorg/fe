@@ -1,4 +1,6 @@
-use crate::core::hir_def::{Body, Const, Expr, IdentId, IntegerId, LitKind, Partial, Stmt};
+use crate::core::hir_def::{
+    Body, Const, EnumVariant, Expr, IdentId, IntegerId, LitKind, Partial, Stmt,
+};
 
 use super::const_expr::{ConstExpr, ConstExprId};
 use super::{
@@ -196,6 +198,12 @@ pub(crate) fn evaluate_const_ty<'db>(
                     if let Some(expected_ty) = expected_ty {
                         return mk_abstract(expected_ty);
                     }
+                }
+                PathRes::EnumVariant(variant) if variant.ty.is_unit_variant_only_enum(db) => {
+                    let evaluated = EvaluatedConstTy::EnumVariant(variant.variant);
+                    let const_ty =
+                        ConstTyId::new(db, ConstTyData::Evaluated(evaluated, variant.ty));
+                    return const_ty.evaluate(db, expected_ty);
                 }
                 _ => {}
             }
@@ -497,6 +505,7 @@ pub enum EvaluatedConstTy<'db> {
     Array(Vec<TyId<'db>>),
     Bytes(Vec<u8>),
     Record(Vec<TyId<'db>>),
+    EnumVariant(EnumVariant<'db>),
     Invalid,
 }
 
@@ -539,6 +548,16 @@ impl EvaluatedConstTy<'_> {
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("{{{fields}}}")
+            }
+            EvaluatedConstTy::EnumVariant(variant) => {
+                let enum_name = variant
+                    .enum_
+                    .name(db)
+                    .to_opt()
+                    .map(|n| n.data(db).to_string())
+                    .unwrap_or_else(|| "<unknown>".to_string());
+                let variant_name = variant.name(db).unwrap_or("<unknown>");
+                format!("{enum_name}::{variant_name}")
             }
             EvaluatedConstTy::Invalid => "<invalid>".to_string(),
         }
