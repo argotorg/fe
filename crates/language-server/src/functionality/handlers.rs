@@ -200,7 +200,10 @@ pub async fn handle_did_change_watched_files(
             FileChangeType::CHANGED => ChangeKind::Edit(None),
             FileChangeType::CREATED => ChangeKind::Create,
             FileChangeType::DELETED => ChangeKind::Delete,
-            _ => unreachable!(),
+            _ => {
+                tracing::warn!("unknown FileChangeType {:?}, skipping", event.typ);
+                continue;
+            }
         };
         let _ = backend.client.clone().emit(FileChange {
             uri: event.uri,

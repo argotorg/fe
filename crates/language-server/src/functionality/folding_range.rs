@@ -29,8 +29,16 @@ pub async fn handle_folding_range(
             continue;
         };
 
+        // If the span ends at column 0, the actual content ends on the
+        // previous line (trailing newline included in the parser span).
+        let end_line = if range.end.character == 0 && range.end.line > 0 {
+            range.end.line - 1
+        } else {
+            range.end.line
+        };
+
         // Only fold multi-line items
-        if range.start.line == range.end.line {
+        if range.start.line == end_line {
             continue;
         }
 
@@ -47,7 +55,7 @@ pub async fn handle_folding_range(
         ranges.push(FoldingRange {
             start_line: range.start.line,
             start_character: Some(range.start.character),
-            end_line: range.end.line,
+            end_line,
             end_character: Some(range.end.character),
             kind,
             collapsed_text: None,
@@ -85,8 +93,13 @@ mod tests {
             let Ok(range) = to_lsp_range_from_span(span, db) else {
                 continue;
             };
-            if range.start.line != range.end.line {
-                ranges.push((range.start.line, range.end.line));
+            let end_line = if range.end.character == 0 && range.end.line > 0 {
+                range.end.line - 1
+            } else {
+                range.end.line
+            };
+            if range.start.line != end_line {
+                ranges.push((range.start.line, end_line));
             }
         }
 
