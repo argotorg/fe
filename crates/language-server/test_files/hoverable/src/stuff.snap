@@ -112,6 +112,18 @@ note:
    │        ^^^^^^^ def: defined here @ 23:7 (4 refs)
 
 note: 
+   ┌─ lib.fe:24:3
+   │
+24 │   x: i32,
+   │   ^ def: defined here @ 24:2 (2 refs)
+
+note: 
+   ┌─ lib.fe:25:3
+   │
+25 │   y: i32
+   │   ^ def: defined here @ 25:2 (2 refs)
+
+note: 
    ┌─ lib.fe:28:4
    │
 28 │ fn add(x: i32, y: i32) -> i32 {
@@ -178,6 +190,12 @@ note:
    │               ^^^^ ref: 34:14
 
 note: 
+   ┌─ lib.fe:34:20
+   │
+34 │       let z = self.x
+   │                    ^ ref: 34:19
+
+note: 
    ┌─ lib.fe:35:11
    │
 35 │       let w = self.y
@@ -188,6 +206,12 @@ note:
    │
 35 │       let w = self.y
    │               ^^^^ ref: 35:14
+
+note: 
+   ┌─ lib.fe:35:20
+   │
+35 │       let w = self.y
+   │                    ^ ref: 35:19
 
 note: 
    ┌─ lib.fe:36:7
@@ -211,7 +235,19 @@ note:
    ┌─ lib.fe:40:6
    │
 40 │ enum Option {
-   │      ^^^^^^ def: defined here @ 40:5 (2 refs)
+   │      ^^^^^^ def: defined here @ 40:5 (4 refs)
+
+note: 
+   ┌─ lib.fe:41:3
+   │
+41 │   Some(i32),
+   │   ^^^^ def: defined here @ 41:2 (2 refs)
+
+note: 
+   ┌─ lib.fe:42:3
+   │
+42 │   None
+   │   ^^^^ def: defined here @ 42:2 (2 refs)
 
 note: 
    ┌─ lib.fe:46:4
@@ -319,7 +355,7 @@ note:
   ┌─ stuff.fe:2:9
   │
 2 │ pub mod calculations {
-  │         ^^^^^^^^^^^^ def: defined here @ 2:8 (4 refs)
+  │         ^^^^^^^^^^^^ def: defined here @ 2:8 (5 refs)
 
 note: 
   ┌─ stuff.fe:4:10

@@ -217,13 +217,13 @@ note:
    ┌─ goto_effects.fe:71:5
    │
 71 │     Add { x: u256 } -> u256,
-   │     ^^^^^^^^^^^^^^^^^^^^^^^ -> local: Add
+   │     ^^^ -> local: Add
 
 note: 
    ┌─ goto_effects.fe:72:5
    │
 72 │     GetState -> u256,
-   │     ^^^^^^^^^^^^^^^^ -> local: GetState
+   │     ^^^^^^^^ -> local: GetState
 
 note: 
    ┌─ goto_effects.fe:75:40

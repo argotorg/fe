@@ -11,6 +11,7 @@ use crate::{
     span::{DynLazySpan, LazySpan},
 };
 
+use super::resolve_path_to_scopes;
 use super::typed_body_for_body;
 use super::{ReferenceView, Target};
 
@@ -280,17 +281,40 @@ impl<'db> TopLevelMod<'db> {
     }
 
     /// Find the item definition at cursor position (cursor on name token).
+    ///
+    /// Checks both item names and non-item children (variants, fields,
+    /// generic params, trait types/consts) so that find-references works
+    /// when the cursor is on e.g. an enum variant definition site.
     pub fn definition_at(
         self,
         db: &'db dyn SpannedHirDb,
         cursor: TextSize,
     ) -> Option<ScopeId<'db>> {
         for item in self.find_enclosing_items(db, cursor) {
+            // Check the item's own name
             if let Some(name_span) = item.name_span()
                 && let Some(resolved) = name_span.resolve(db)
                 && resolved.range.contains(cursor)
             {
                 return Some(ScopeId::from_item(item));
+            }
+
+            // Check variant and field children — these have precise name-only
+            // spans.  Other non-item scopes (generic params, func params, trait
+            // types/consts) have broader spans that may overlap with references
+            // we'd rather resolve through reference_at.
+            let scope_graph = self.scope_graph(db);
+            for child in scope_graph.children(ScopeId::from_item(item)) {
+                match child {
+                    ScopeId::Variant(_) | ScopeId::Field(_, _) => {}
+                    _ => continue,
+                }
+                if let Some(name_span) = child.name_span(db)
+                    && let Some(resolved) = name_span.resolve(db)
+                    && resolved.range.contains(cursor)
+                {
+                    return Some(child);
+                }
             }
         }
         None
@@ -351,13 +375,33 @@ impl<'db> TopLevelMod<'db> {
                 let mut results = Vec::new();
                 for item in self.scope_graph(db).items_dfs(db) {
                     for reference in ScopeId::from_item(item).references(db) {
-                        for t in reference.target(db).as_slice() {
-                            if let Target::Scope(s) = t
-                                && s == scope
-                            {
-                                results.push(reference);
-                                break;
+                        // Check if the full-path target matches
+                        let mut matched = reference.target(db).as_slice().iter().any(
+                            |t| matches!(t, Target::Scope(s) if s == scope),
+                        );
+
+                        // Also check path prefix segments (e.g. for MyEnum::Variant,
+                        // the prefix "MyEnum" should match a search for the enum)
+                        if !matched {
+                            if let ReferenceView::Path(pv) = reference {
+                                let last_idx = pv.path.segment_index(db);
+                                if last_idx > 0 {
+                                    for idx in 0..last_idx {
+                                        if let Some(seg_path) = pv.path.segment(db, idx)
+                                            && resolve_path_to_scopes(db, seg_path, pv.scope)
+                                                .iter()
+                                                .any(|s| *s == *scope)
+                                        {
+                                            matched = true;
+                                            break;
+                                        }
+                                    }
+                                }
                             }
+                        }
+
+                        if matched {
+                            results.push(reference);
                         }
                     }
                 }

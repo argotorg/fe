@@ -238,6 +238,18 @@ mod tests {
                 cursors.push(span.range.start());
             }
 
+            // Collect cursors from non-item children (variants, fields, etc.)
+            for child in scope_graph.children(ScopeId::from_item(item)) {
+                if child.to_item().is_some() {
+                    continue;
+                }
+                if let Some(name_span) = child.name_span(db)
+                    && let Some(span) = name_span.resolve(db)
+                {
+                    cursors.push(span.range.start());
+                }
+            }
+
             // Also collect cursors from function parameter names and local bindings
             if let ItemKind::Func(func) = item {
                 for (idx, _param) in func.params(db).enumerate() {
@@ -347,7 +359,7 @@ mod tests {
                             );
                             match target {
                                 Target::Scope(scope) => {
-                                    if let Some(name_span) = scope.item().name_span() {
+                                    if let Some(name_span) = scope.name_span(&db) {
                                         formatter.push_prop(ref_top_mod, name_span, annotation);
                                     }
                                 }

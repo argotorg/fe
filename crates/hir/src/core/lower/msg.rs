@@ -11,7 +11,7 @@ use crate::{
         TupleTypeId, TypeId, TypeKind, Visibility,
     },
     lower::FileLowerCtxt,
-    span::MsgDesugared,
+    span::{MsgDesugared, MsgDesugaredFocus},
 };
 
 /// Desugars a `msg` block into a module containing structs and trait impls.
@@ -70,7 +70,7 @@ fn lower_msg_variant<'db>(
     let mut builder = builder.with_desugared(MsgDesugared {
         msg: parser::ast::AstPtr::new(msg_ast),
         variant_idx: Some(variant_idx),
-        focus: Default::default(),
+        focus: MsgDesugaredFocus::VariantName,
     });
 
     // Create the struct for this variant
