@@ -73,6 +73,22 @@ fn describe_color(c: Color) -> i32 {
   }
 }
 
+struct Wrapper<T> {
+  inner: T
+}
+
+fn wrap<T>(val: T) -> Wrapper<T> {
+  Wrapper { inner: val }
+}
+
+fn unwrap_numbers(w: Wrapper<Numbers>) -> i32 {
+  w.inner.x
+}
+
+fn do_calc<T: Calculatable>(thing: T) -> i32 {
+  thing.calculate()
+}
+
 msg TokenMsg {
   #[selector = 0x01]
   Mint { to: i32, amount: i32 } -> bool,

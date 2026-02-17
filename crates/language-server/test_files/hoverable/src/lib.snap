@@ -104,13 +104,13 @@ note:
    ┌─ lib.fe:19:11
    │
 19 │ pub trait Calculatable {
-   │           ^^^^^^^^^^^^ def: defined here @ 19:10 (4 refs)
+   │           ^^^^^^^^^^^^ def: defined here @ 19:10 (5 refs)
 
 note: 
    ┌─ lib.fe:20:6
    │
 20 │   fn calculate(self) -> i32
-   │      ^^^^^^^^^ def: defined here @ 20:5 (1 refs)
+   │      ^^^^^^^^^ def: defined here @ 20:5 (2 refs)
 
 note: 
    ┌─ lib.fe:20:16
@@ -122,13 +122,13 @@ note:
    ┌─ lib.fe:24:8
    │
 24 │ struct Numbers {
-   │        ^^^^^^^ def: defined here @ 24:7 (4 refs)
+   │        ^^^^^^^ def: defined here @ 24:7 (5 refs)
 
 note: 
    ┌─ lib.fe:25:3
    │
 25 │   x: i32,
-   │   ^ def: defined here @ 25:2 (2 refs)
+   │   ^ def: defined here @ 25:2 (3 refs)
 
 note: 
    ┌─ lib.fe:26:3
@@ -425,111 +425,249 @@ note:
    │     ^^^^^^^^^^^ ref: 72:11
 
 note: 
-   ┌─ lib.fe:76:1
+   ┌─ lib.fe:76:8
+   │
+76 │ struct Wrapper<T> {
+   │        ^^^^^^^ def: defined here @ 76:7 (4 refs)
+
+note: 
+   ┌─ lib.fe:77:3
+   │
+77 │   inner: T
+   │   ^^^^^ def: defined here @ 77:2 (2 refs)
+
+note: 
+   ┌─ lib.fe:77:10
+   │
+77 │   inner: T
+   │          ^ ref: 77:9
+
+note: 
+   ┌─ lib.fe:80:4
+   │
+80 │ fn wrap<T>(val: T) -> Wrapper<T> {
+   │    ^^^^ def: defined here @ 80:3 (1 refs)
+
+note: 
+   ┌─ lib.fe:80:12
+   │
+80 │ fn wrap<T>(val: T) -> Wrapper<T> {
+   │            ^^^ def: defined here @ 80:11 (2 refs)
+
+note: 
+   ┌─ lib.fe:80:17
+   │
+80 │ fn wrap<T>(val: T) -> Wrapper<T> {
+   │                 ^ ref: 80:16
+
+note: 
+   ┌─ lib.fe:80:23
+   │
+80 │ fn wrap<T>(val: T) -> Wrapper<T> {
+   │                       ^^^^^^^^^^ ref: 80:22
+
+note: 
+   ┌─ lib.fe:80:31
+   │
+80 │ fn wrap<T>(val: T) -> Wrapper<T> {
+   │                               ^ ref: 80:30
+
+note: 
+   ┌─ lib.fe:81:3
+   │
+81 │   Wrapper { inner: val }
+   │   ^^^^^^^ ref: 81:2
+
+note: 
+   ┌─ lib.fe:81:20
+   │
+81 │   Wrapper { inner: val }
+   │                    ^^^ ref: 81:19
+
+note: 
+   ┌─ lib.fe:84:4
+   │
+84 │ fn unwrap_numbers(w: Wrapper<Numbers>) -> i32 {
+   │    ^^^^^^^^^^^^^^ def: defined here @ 84:3 (1 refs)
+
+note: 
+   ┌─ lib.fe:84:19
+   │
+84 │ fn unwrap_numbers(w: Wrapper<Numbers>) -> i32 {
+   │                   ^ def: defined here @ 84:18 (2 refs)
+
+note: 
+   ┌─ lib.fe:84:22
+   │
+84 │ fn unwrap_numbers(w: Wrapper<Numbers>) -> i32 {
+   │                      ^^^^^^^^^^^^^^^^ ref: 84:21
+
+note: 
+   ┌─ lib.fe:84:30
+   │
+84 │ fn unwrap_numbers(w: Wrapper<Numbers>) -> i32 {
+   │                              ^^^^^^^ ref: 84:29
+
+note: 
+   ┌─ lib.fe:85:3
+   │
+85 │   w.inner.x
+   │   ^ ref: 85:2
+
+note: 
+   ┌─ lib.fe:85:5
+   │
+85 │   w.inner.x
+   │     ^^^^^ ref: 85:4
+
+note: 
+   ┌─ lib.fe:85:11
+   │
+85 │   w.inner.x
+   │           ^ ref: 85:10
+
+note: 
+   ┌─ lib.fe:88:4
+   │
+88 │ fn do_calc<T: Calculatable>(thing: T) -> i32 {
+   │    ^^^^^^^ def: defined here @ 88:3 (1 refs)
+
+note: 
+   ┌─ lib.fe:88:15
+   │
+88 │ fn do_calc<T: Calculatable>(thing: T) -> i32 {
+   │               ^^^^^^^^^^^^ ref: 88:14
+
+note: 
+   ┌─ lib.fe:88:29
+   │
+88 │ fn do_calc<T: Calculatable>(thing: T) -> i32 {
+   │                             ^^^^^ def: defined here @ 88:28 (2 refs)
+
+note: 
+   ┌─ lib.fe:88:36
+   │
+88 │ fn do_calc<T: Calculatable>(thing: T) -> i32 {
+   │                                    ^ ref: 88:35
+
+note: 
+   ┌─ lib.fe:89:3
+   │
+89 │   thing.calculate()
+   │   ^^^^^ ref: 89:2
+
+note: 
+   ┌─ lib.fe:89:9
+   │
+89 │   thing.calculate()
+   │         ^^^^^^^^^ ref: 89:8
+
+note: 
+   ┌─ lib.fe:92:1
    │  
-76 │ ╭ msg TokenMsg {
-77 │ │   #[selector = 0x01]
-78 │ │   Mint { to: i32, amount: i32 } -> bool,
-79 │ │   #[selector = 0x02]
-80 │ │   Burn { amount: i32 } -> bool,
-81 │ │ }
-   │ ╰─^ def: defined here @ 76:0 (4 refs)
+92 │ ╭ msg TokenMsg {
+93 │ │   #[selector = 0x01]
+94 │ │   Mint { to: i32, amount: i32 } -> bool,
+95 │ │   #[selector = 0x02]
+96 │ │   Burn { amount: i32 } -> bool,
+97 │ │ }
+   │ ╰─^ def: defined here @ 92:0 (4 refs)
 
 note: 
-   ┌─ lib.fe:78:3
+   ┌─ lib.fe:94:3
    │
-78 │   Mint { to: i32, amount: i32 } -> bool,
-   │   ^^^^ ref: 78:2
+94 │   Mint { to: i32, amount: i32 } -> bool,
+   │   ^^^^ ref: 94:2
 
 note: 
-   ┌─ lib.fe:80:3
+   ┌─ lib.fe:96:3
    │
-80 │   Burn { amount: i32 } -> bool,
-   │   ^^^^ ref: 80:2
+96 │   Burn { amount: i32 } -> bool,
+   │   ^^^^ ref: 96:2
 
 note: 
-   ┌─ lib.fe:83:14
+   ┌─ lib.fe:99:14
    │
-83 │ pub contract Token {
-   │              ^^^^^ def: defined here @ 83:13 (1 refs)
+99 │ pub contract Token {
+   │              ^^^^^ def: defined here @ 99:13 (1 refs)
 
 note: 
-   ┌─ lib.fe:84:3
-   │
-84 │   supply: i32
-   │   ^^^^^^ def: defined here @ 84:2 (5 refs)
+    ┌─ lib.fe:100:3
+    │
+100 │   supply: i32
+    │   ^^^^^^ def: defined here @ 100:2 (5 refs)
 
 note: 
-   ┌─ lib.fe:86:8
-   │
-86 │   recv TokenMsg {
-   │        ^^^^^^^^ ref: 86:7
+    ┌─ lib.fe:102:8
+    │
+102 │   recv TokenMsg {
+    │        ^^^^^^^^ ref: 102:7
 
 note: 
-   ┌─ lib.fe:87:5
-   │
-87 │     Mint { to, amount } -> bool uses (mut supply) {
-   │     ^^^^ ref: 87:4
+    ┌─ lib.fe:103:5
+    │
+103 │     Mint { to, amount } -> bool uses (mut supply) {
+    │     ^^^^ ref: 103:4
 
 note: 
-   ┌─ lib.fe:87:12
-   │
-87 │     Mint { to, amount } -> bool uses (mut supply) {
-   │            ^^ def: defined here @ 87:11 (1 refs)
+    ┌─ lib.fe:103:12
+    │
+103 │     Mint { to, amount } -> bool uses (mut supply) {
+    │            ^^ def: defined here @ 103:11 (1 refs)
 
 note: 
-   ┌─ lib.fe:87:16
-   │
-87 │     Mint { to, amount } -> bool uses (mut supply) {
-   │                ^^^^^^ def: defined here @ 87:15 (2 refs)
+    ┌─ lib.fe:103:16
+    │
+103 │     Mint { to, amount } -> bool uses (mut supply) {
+    │                ^^^^^^ def: defined here @ 103:15 (2 refs)
 
 note: 
-   ┌─ lib.fe:87:43
-   │
-87 │     Mint { to, amount } -> bool uses (mut supply) {
-   │                                           ^^^^^^ ref: 87:42
+    ┌─ lib.fe:103:43
+    │
+103 │     Mint { to, amount } -> bool uses (mut supply) {
+    │                                           ^^^^^^ ref: 103:42
 
 note: 
-   ┌─ lib.fe:88:7
-   │
-88 │       supply += amount
-   │       ^^^^^^ ref: 88:6
+    ┌─ lib.fe:104:7
+    │
+104 │       supply += amount
+    │       ^^^^^^ ref: 104:6
 
 note: 
-   ┌─ lib.fe:88:17
-   │
-88 │       supply += amount
-   │                 ^^^^^^ ref: 88:16
+    ┌─ lib.fe:104:17
+    │
+104 │       supply += amount
+    │                 ^^^^^^ ref: 104:16
 
 note: 
-   ┌─ lib.fe:91:5
-   │
-91 │     Burn { amount } -> bool uses (mut supply) {
-   │     ^^^^ ref: 91:4
+    ┌─ lib.fe:107:5
+    │
+107 │     Burn { amount } -> bool uses (mut supply) {
+    │     ^^^^ ref: 107:4
 
 note: 
-   ┌─ lib.fe:91:12
-   │
-91 │     Burn { amount } -> bool uses (mut supply) {
-   │            ^^^^^^ def: defined here @ 91:11 (2 refs)
+    ┌─ lib.fe:107:12
+    │
+107 │     Burn { amount } -> bool uses (mut supply) {
+    │            ^^^^^^ def: defined here @ 107:11 (2 refs)
 
 note: 
-   ┌─ lib.fe:91:39
-   │
-91 │     Burn { amount } -> bool uses (mut supply) {
-   │                                       ^^^^^^ ref: 91:38
+    ┌─ lib.fe:107:39
+    │
+107 │     Burn { amount } -> bool uses (mut supply) {
+    │                                       ^^^^^^ ref: 107:38
 
 note: 
-   ┌─ lib.fe:92:7
-   │
-92 │       supply -= amount
-   │       ^^^^^^ ref: 92:6
+    ┌─ lib.fe:108:7
+    │
+108 │       supply -= amount
+    │       ^^^^^^ ref: 108:6
 
 note: 
-   ┌─ lib.fe:92:17
-   │
-92 │       supply -= amount
-   │                 ^^^^^^ ref: 92:16
+    ┌─ lib.fe:108:17
+    │
+108 │       supply -= amount
+    │                 ^^^^^^ ref: 108:16
 
 note: 
   ┌─ stuff.fe:2:9
