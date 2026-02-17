@@ -375,11 +375,15 @@ impl<'db> FieldAccessView<'db> {
             return TargetResolution::None;
         };
 
-        // Get the type of the receiver expression
+        // Get the type of the receiver expression.
         let receiver_ty = typed_body.expr_ty(db, *receiver);
         if receiver_ty.has_invalid(db) {
             return TargetResolution::None;
         }
+        let receiver_ty = receiver_ty
+            .as_capability(db)
+            .map(|(_, inner)| inner)
+            .unwrap_or(receiver_ty);
 
         // Resolve the field scope using RecordLike
         let record_like = RecordLike::from_ty(receiver_ty);
