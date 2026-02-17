@@ -1,0 +1,37 @@
+trait Contract {
+    fn init_code_offset() -> u256
+    fn init_code_len() -> u256
+}
+
+fn encoded_size<T>() -> u256 {
+    0
+}
+
+mod ops {
+    extern {
+        pub fn returndatasize() -> u256
+        pub fn revert(_: u256, _: u256)
+        pub fn alloc(_: u256) -> u256
+        pub fn codecopy(_: u256, _: u256, _: u256)
+    }
+}
+
+mod mem {
+    pub fn alloc(_ size: u256) -> u256 {
+        0
+    }
+}
+
+fn create<C: Contract>() {
+    let init_len = C::init_code_len()
+    let init_off = C::init_code_offset()
+    let args_len = encoded_size<C>()
+    let total_len = init_len + init_off
+
+    let init_ptr = mem::alloc(total_len)
+    ops::codecopy(init_ptr, init_off, init_len)
+
+    let ret_len = ops::returndatasize()
+    let ret_ptr = mem::alloc(ret_len)
+    ops::revert(ret_ptr, ret_len)
+}

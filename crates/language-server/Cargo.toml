@@ -30,8 +30,10 @@ tracing-subscriber.workspace = true
 tracing-tree.workspace = true
 url = "2.5.4"
 
+codegen.workspace = true
 common.workspace = true
 driver.workspace = true
+mir.workspace = true
 fmt.workspace = true
 hir.workspace = true
 parser.workspace = true
@@ -41,3 +43,4 @@ tempfile = "3.20.0"
 [dev-dependencies]
 test-utils.workspace = true
 dir-test.workspace = true
+tokio-util = { version = "0.7", features = ["compat"] }

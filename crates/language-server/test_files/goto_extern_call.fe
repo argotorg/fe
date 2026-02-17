@@ -1,0 +1,19 @@
+extern {
+    pub fn returndatasize() -> u256
+    pub fn revert(_: u256, _: u256)
+}
+
+mod ops {
+    extern {
+        pub fn returndatasize() -> u256
+        pub fn revert(_: u256, _: u256)
+        pub fn alloc(_: u256) -> u256
+    }
+}
+
+fn test() {
+    let ret_len = ops::returndatasize()
+    let ret_ptr = ops::alloc(ret_len)
+    ops::revert(ret_ptr, ret_len)
+    returndatasize()
+}

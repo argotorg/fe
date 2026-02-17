@@ -52,10 +52,40 @@ pub(crate) fn server_capabilities() -> ServerCapabilities {
             retrigger_characters: Some(vec![",".to_string()]),
             work_done_progress_options: Default::default(),
         }),
+        // call hierarchy
+        call_hierarchy_provider: Some(async_lsp::lsp_types::CallHierarchyServerCapability::Simple(
+            true,
+        )),
+        // type hierarchy: handlers are registered but lsp-types 0.95.1 doesn't
+        // expose type_hierarchy_provider on ServerCapabilities; clients that
+        // discover support dynamically (e.g. via request probing) will still work.
+        // code lens
+        code_lens_provider: Some(async_lsp::lsp_types::CodeLensOptions {
+            resolve_provider: Some(false),
+        }),
+        // selection range
+        selection_range_provider: Some(
+            async_lsp::lsp_types::SelectionRangeProviderCapability::Simple(true),
+        ),
+        // folding range
+        folding_range_provider: Some(
+            async_lsp::lsp_types::FoldingRangeProviderCapability::Simple(true),
+        ),
+        // go to declaration
+        declaration_provider: Some(async_lsp::lsp_types::DeclarationCapability::Simple(true)),
         // code actions (quick fixes)
         code_action_provider: Some(async_lsp::lsp_types::CodeActionProviderCapability::Simple(
             true,
         )),
+        // execute command (codegen views)
+        execute_command_provider: Some(async_lsp::lsp_types::ExecuteCommandOptions {
+            commands: vec![
+                "fe.viewMir".into(),
+                "fe.viewYul".into(),
+                "fe.viewSonatinaIr".into(),
+            ],
+            ..Default::default()
+        }),
         // support for workspace add/remove changes
         workspace: Some(async_lsp::lsp_types::WorkspaceServerCapabilities {
             workspace_folders: Some(async_lsp::lsp_types::WorkspaceFoldersServerCapabilities {

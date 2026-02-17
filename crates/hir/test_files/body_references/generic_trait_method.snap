@@ -1,0 +1,41 @@
+---
+source: crates/hir/tests/body_references.rs
+assertion_line: 79
+expression: res
+input_file: test_files/body_references/generic_trait_method.fe
+---
+note: 
+   ┌─ generic_trait_method.fe:11:9
+   │
+11 │         self.id
+   │         ^^^^ self -> local
+
+note: 
+   ┌─ generic_trait_method.fe:11:14
+   │
+11 │         self.id
+   │              ^^ field -> field
+
+note: 
+   ┌─ generic_trait_method.fe:16:5
+   │
+16 │     w.process()
+   │     ^ w -> local
+
+note: 
+   ┌─ generic_trait_method.fe:16:7
+   │
+16 │     w.process()
+   │       ^^^^^^^ method -> fn
+
+note: 
+   ┌─ generic_trait_method.fe:20:5
+   │
+20 │     t.process()
+   │     ^ t -> local
+
+note: 
+   ┌─ generic_trait_method.fe:20:7
+   │
+20 │     t.process()
+   │       ^^^^^^^ method -> fn
