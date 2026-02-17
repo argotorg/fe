@@ -155,7 +155,9 @@ pub async fn handle_execute_command(
         })
         .await;
 
-    if show_result.is_ok() {
+    if let Ok(result) = show_result
+        && result.success
+    {
         return Ok(None);
     }
 

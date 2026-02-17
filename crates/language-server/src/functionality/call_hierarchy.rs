@@ -137,6 +137,9 @@ pub async fn handle_incoming_calls(
 }
 
 /// Find all functions that call the given target function, with call site spans.
+///
+/// Note: currently only scans `Func` items. Call sites inside contract `init`
+/// and `recv` bodies are not visited yet.
 fn find_incoming_calls<'db>(
     db: &'db driver::DriverDataBase,
     target_func: Func<'db>,
