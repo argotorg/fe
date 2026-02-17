@@ -65,7 +65,7 @@ impl Workspace {
     }
 
     #[salsa::tracked]
-    pub fn items_at_base(self, db: &dyn InputDb, base: Url) -> StringPrefixView<'_, Url, File> {
+    pub fn items_at_base(self, db: &dyn InputDb, base: Url) -> StringPrefixView<Url, File> {
         self.files(db).view_subtrie(base)
     }
 

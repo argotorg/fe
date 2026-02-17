@@ -95,7 +95,7 @@ impl<'db> Ingot<'db> {
     }
 
     #[salsa::tracked]
-    pub fn files(self, db: &'db dyn InputDb) -> StringPrefixView<'db, Url, File> {
+    pub fn files(self, db: &'db dyn InputDb) -> StringPrefixView<Url, File> {
         if let Some(standalone_file) = self.standalone_file(db) {
             // For standalone ingots, use the standalone file URL as the base
             db.workspace().items_at_base(
