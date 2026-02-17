@@ -23,6 +23,8 @@ tracing.workspace = true
 
 [dev-dependencies]
 dir-test.workspace = true
+tree-sitter = "0.24"
+tree-sitter-fe = { path = "../tree-sitter-fe" }
 wasm-bindgen-test.workspace = true
 test-utils.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

@@ -7,7 +7,7 @@ license = "MIT"
 keywords = ["incremental", "parsing", "tree-sitter", "fe"]
 categories = ["parsing", "text-editors"]
 repository = "https://github.com/fe-lang/tree-sitter-fe"
-edition = "2021"
+edition.workspace = true
 autoexamples = false
 
 build = "bindings/rust/build.rs"
