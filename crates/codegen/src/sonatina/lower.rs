@@ -39,6 +39,80 @@ use sonatina_ir::{
 
 use super::{LowerCtx, LowerError, is_erased_runtime_ty, types};
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct MirPtrEscapeSummary {
+    pub(super) arg_may_escape: Vec<bool>,
+    pub(super) arg_may_be_returned: Vec<bool>,
+}
+
+impl MirPtrEscapeSummary {
+    fn new(arg_count: usize) -> Self {
+        Self {
+            arg_may_escape: vec![false; arg_count],
+            arg_may_be_returned: vec![false; arg_count],
+        }
+    }
+}
+
+pub(super) fn compute_mir_ptr_escape_summaries<'db>(
+    mir: &mir::MirModule<'db>,
+) -> FxHashMap<String, MirPtrEscapeSummary> {
+    let mut summaries: FxHashMap<String, MirPtrEscapeSummary> = FxHashMap::default();
+
+    for func in &mir.functions {
+        if func.symbol_name.is_empty() {
+            continue;
+        }
+        let arg_count = function_arg_locals(&func.body).len();
+        summaries.insert(
+            func.symbol_name.clone(),
+            MirPtrEscapeSummary::new(arg_count),
+        );
+    }
+
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for func in &mir.functions {
+            if func.symbol_name.is_empty() {
+                continue;
+            }
+
+            let name = &func.symbol_name;
+            let next = compute_mir_ptr_escape_summary_for_function(&func.body, &summaries);
+            if summaries.get(name) != Some(&next) {
+                summaries.insert(name.clone(), next);
+                changed = true;
+            }
+        }
+    }
+
+    summaries
+}
+
+fn compute_mir_ptr_escape_summary_for_function<'db>(
+    body: &mir::MirBody<'db>,
+    summaries: &FxHashMap<String, MirPtrEscapeSummary>,
+) -> MirPtrEscapeSummary {
+    let args = function_arg_locals(body);
+    let mut out = MirPtrEscapeSummary::new(args.len());
+
+    for (idx, local) in args.iter().copied().enumerate() {
+        out.arg_may_escape[idx] = alloc_local_may_escape(body, local, summaries);
+        out.arg_may_be_returned[idx] = local_may_be_returned(body, local, summaries);
+    }
+
+    out
+}
+
+fn function_arg_locals<'db>(body: &mir::MirBody<'db>) -> Vec<mir::LocalId> {
+    body.param_locals
+        .iter()
+        .chain(body.effect_param_locals.iter())
+        .copied()
+        .collect()
+}
+
 /// Lower a MIR instruction.
 pub(super) fn lower_instruction<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     ctx: &mut LowerCtx<'_, 'db, C>,
@@ -393,8 +467,9 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                             ));
                         }
                         let size = lower_value(ctx, *size)?;
-                        if dest_local.is_some_and(|local| !alloc_local_may_escape(ctx.body, local))
-                            && let Some(size_bytes) = const_usize_value(ctx.fb, size)
+                        if dest_local.is_some_and(|local| {
+                            !alloc_local_may_escape(ctx.body, local, ctx.ptr_escape_summaries)
+                        }) && let Some(size_bytes) = const_usize_value(ctx.fb, size)
                         {
                             if size_bytes == 0 {
                                 return Ok(Some(ctx.fb.make_imm_value(I256::zero())));
@@ -1874,7 +1949,7 @@ fn lower_alloc<C: sonatina_ir::func_cursor::FuncCursor>(
         return Ok(ctx.fb.make_imm_value(I256::zero()));
     }
 
-    if alloc_local_may_escape(ctx.body, dest) {
+    if alloc_local_may_escape(ctx.body, dest, ctx.ptr_escape_summaries) {
         let size_val = ctx.fb.make_imm_value(I256::from(size_bytes as u64));
         return Ok(emit_evm_malloc_word_addr(ctx.fb, size_val, ctx.is));
     }
@@ -2158,7 +2233,44 @@ fn const_usize_value<C: sonatina_ir::func_cursor::FuncCursor>(
     Some(imm.as_usize())
 }
 
-fn alloc_local_may_escape<'db>(body: &mir::MirBody<'db>, local: mir::LocalId) -> bool {
+fn local_may_be_returned<'db>(
+    body: &mir::MirBody<'db>,
+    local: mir::LocalId,
+    ptr_escape_summaries: &FxHashMap<String, MirPtrEscapeSummary>,
+) -> bool {
+    let mut value_memo: Vec<Option<bool>> = vec![None; body.values.len()];
+    let mut value_visiting = vec![false; body.values.len()];
+    let mut local_memo: Vec<Option<bool>> = vec![None; body.locals.len()];
+    let mut local_visiting = vec![false; body.locals.len()];
+
+    for block in &body.blocks {
+        if let mir::Terminator::Return {
+            value: Some(returned),
+            ..
+        } = &block.terminator
+            && value_depends_on_local(
+                body,
+                *returned,
+                local,
+                ptr_escape_summaries,
+                &mut value_memo,
+                &mut value_visiting,
+                &mut local_memo,
+                &mut local_visiting,
+            )
+        {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn alloc_local_may_escape<'db>(
+    body: &mir::MirBody<'db>,
+    local: mir::LocalId,
+    ptr_escape_summaries: &FxHashMap<String, MirPtrEscapeSummary>,
+) -> bool {
     let mut value_memo: Vec<Option<bool>> = vec![None; body.values.len()];
     let mut value_visiting = vec![false; body.values.len()];
     let mut local_memo: Vec<Option<bool>> = vec![None; body.locals.len()];
@@ -2172,6 +2284,7 @@ fn alloc_local_may_escape<'db>(body: &mir::MirBody<'db>, local: mir::LocalId) ->
                         body,
                         rvalue,
                         local,
+                        ptr_escape_summaries,
                         &mut value_memo,
                         &mut value_visiting,
                         &mut local_memo,
@@ -2185,6 +2298,7 @@ fn alloc_local_may_escape<'db>(body: &mir::MirBody<'db>, local: mir::LocalId) ->
                         body,
                         *value,
                         local,
+                        ptr_escape_summaries,
                         &mut value_memo,
                         &mut value_visiting,
                         &mut local_memo,
@@ -2193,6 +2307,7 @@ fn alloc_local_may_escape<'db>(body: &mir::MirBody<'db>, local: mir::LocalId) ->
                         body,
                         place,
                         local,
+                        ptr_escape_summaries,
                         &mut value_memo,
                         &mut value_visiting,
                         &mut local_memo,
@@ -2207,6 +2322,7 @@ fn alloc_local_may_escape<'db>(body: &mir::MirBody<'db>, local: mir::LocalId) ->
                             body,
                             *value,
                             local,
+                            ptr_escape_summaries,
                             &mut value_memo,
                             &mut value_visiting,
                             &mut local_memo,
@@ -2215,6 +2331,7 @@ fn alloc_local_may_escape<'db>(body: &mir::MirBody<'db>, local: mir::LocalId) ->
                             body,
                             place,
                             local,
+                            ptr_escape_summaries,
                             &mut value_memo,
                             &mut value_visiting,
                             &mut local_memo,
@@ -2232,6 +2349,7 @@ fn alloc_local_may_escape<'db>(body: &mir::MirBody<'db>, local: mir::LocalId) ->
             body,
             &block.terminator,
             local,
+            ptr_escape_summaries,
             &mut value_memo,
             &mut value_visiting,
             &mut local_memo,
@@ -2248,6 +2366,7 @@ fn value_depends_on_local<'db>(
     body: &mir::MirBody<'db>,
     value: mir::ValueId,
     local: mir::LocalId,
+    ptr_escape_summaries: &FxHashMap<String, MirPtrEscapeSummary>,
     value_memo: &mut [Option<bool>],
     value_visiting: &mut [bool],
     local_memo: &mut [Option<bool>],
@@ -2268,6 +2387,7 @@ fn value_depends_on_local<'db>(
                 body,
                 *dep_local,
                 local,
+                ptr_escape_summaries,
                 value_memo,
                 value_visiting,
                 local_memo,
@@ -2278,6 +2398,7 @@ fn value_depends_on_local<'db>(
             body,
             *inner,
             local,
+            ptr_escape_summaries,
             value_memo,
             value_visiting,
             local_memo,
@@ -2288,6 +2409,7 @@ fn value_depends_on_local<'db>(
                 body,
                 *lhs,
                 local,
+                ptr_escape_summaries,
                 value_memo,
                 value_visiting,
                 local_memo,
@@ -2296,6 +2418,7 @@ fn value_depends_on_local<'db>(
                 body,
                 *rhs,
                 local,
+                ptr_escape_summaries,
                 value_memo,
                 value_visiting,
                 local_memo,
@@ -2306,6 +2429,7 @@ fn value_depends_on_local<'db>(
             body,
             field_ptr.base,
             local,
+            ptr_escape_summaries,
             value_memo,
             value_visiting,
             local_memo,
@@ -2316,6 +2440,7 @@ fn value_depends_on_local<'db>(
                 body,
                 place.base,
                 local,
+                ptr_escape_summaries,
                 value_memo,
                 value_visiting,
                 local_memo,
@@ -2328,6 +2453,7 @@ fn value_depends_on_local<'db>(
                             body,
                             *index_val,
                             local,
+                            ptr_escape_summaries,
                             value_memo,
                             value_visiting,
                             local_memo,
@@ -2345,6 +2471,7 @@ fn value_depends_on_local<'db>(
             body,
             *value,
             local,
+            ptr_escape_summaries,
             value_memo,
             value_visiting,
             local_memo,
@@ -2365,6 +2492,7 @@ fn rvalue_may_escape_local<'db>(
     body: &mir::MirBody<'db>,
     rvalue: &mir::Rvalue<'db>,
     local: mir::LocalId,
+    ptr_escape_summaries: &FxHashMap<String, MirPtrEscapeSummary>,
     value_memo: &mut [Option<bool>],
     value_visiting: &mut [bool],
     local_memo: &mut [Option<bool>],
@@ -2376,6 +2504,7 @@ fn rvalue_may_escape_local<'db>(
                 body,
                 &call.args,
                 local,
+                ptr_escape_summaries,
                 value_memo,
                 value_visiting,
                 local_memo,
@@ -2384,6 +2513,7 @@ fn rvalue_may_escape_local<'db>(
                 body,
                 &call.effect_args,
                 local,
+                ptr_escape_summaries,
                 value_memo,
                 value_visiting,
                 local_memo,
@@ -2394,6 +2524,7 @@ fn rvalue_may_escape_local<'db>(
             body,
             args,
             local,
+            ptr_escape_summaries,
             value_memo,
             value_visiting,
             local_memo,
@@ -2410,6 +2541,7 @@ fn terminator_may_escape_local<'db>(
     body: &mir::MirBody<'db>,
     terminator: &mir::Terminator<'db>,
     local: mir::LocalId,
+    ptr_escape_summaries: &FxHashMap<String, MirPtrEscapeSummary>,
     value_memo: &mut [Option<bool>],
     value_visiting: &mut [bool],
     local_memo: &mut [Option<bool>],
@@ -2423,6 +2555,7 @@ fn terminator_may_escape_local<'db>(
             body,
             *returned,
             local,
+            ptr_escape_summaries,
             value_memo,
             value_visiting,
             local_memo,
@@ -2434,6 +2567,7 @@ fn terminator_may_escape_local<'db>(
                     body,
                     &call.args,
                     local,
+                    ptr_escape_summaries,
                     value_memo,
                     value_visiting,
                     local_memo,
@@ -2442,6 +2576,7 @@ fn terminator_may_escape_local<'db>(
                     body,
                     &call.effect_args,
                     local,
+                    ptr_escape_summaries,
                     value_memo,
                     value_visiting,
                     local_memo,
@@ -2452,6 +2587,7 @@ fn terminator_may_escape_local<'db>(
                 body,
                 args,
                 local,
+                ptr_escape_summaries,
                 value_memo,
                 value_visiting,
                 local_memo,
@@ -2470,6 +2606,7 @@ fn store_target_is_non_local<'db>(
     body: &mir::MirBody<'db>,
     place: &Place<'db>,
     local: mir::LocalId,
+    ptr_escape_summaries: &FxHashMap<String, MirPtrEscapeSummary>,
     value_memo: &mut [Option<bool>],
     value_visiting: &mut [bool],
     local_memo: &mut [Option<bool>],
@@ -2482,6 +2619,7 @@ fn store_target_is_non_local<'db>(
         body,
         place.base,
         local,
+        ptr_escape_summaries,
         value_memo,
         value_visiting,
         local_memo,
@@ -2493,6 +2631,7 @@ fn values_depend_on_local<'db>(
     body: &mir::MirBody<'db>,
     values: &[mir::ValueId],
     local: mir::LocalId,
+    ptr_escape_summaries: &FxHashMap<String, MirPtrEscapeSummary>,
     value_memo: &mut [Option<bool>],
     value_visiting: &mut [bool],
     local_memo: &mut [Option<bool>],
@@ -2503,6 +2642,7 @@ fn values_depend_on_local<'db>(
             body,
             value,
             local,
+            ptr_escape_summaries,
             value_memo,
             value_visiting,
             local_memo,
@@ -2515,6 +2655,7 @@ fn local_depends_on_local<'db>(
     body: &mir::MirBody<'db>,
     candidate_local: mir::LocalId,
     source_local: mir::LocalId,
+    ptr_escape_summaries: &FxHashMap<String, MirPtrEscapeSummary>,
     value_memo: &mut [Option<bool>],
     value_visiting: &mut [bool],
     local_memo: &mut [Option<bool>],
@@ -2550,6 +2691,7 @@ fn local_depends_on_local<'db>(
                 body,
                 rvalue,
                 source_local,
+                ptr_escape_summaries,
                 value_memo,
                 value_visiting,
                 local_memo,
@@ -2573,6 +2715,7 @@ fn rvalue_depends_on_local_value<'db>(
     body: &mir::MirBody<'db>,
     rvalue: &mir::Rvalue<'db>,
     local: mir::LocalId,
+    ptr_escape_summaries: &FxHashMap<String, MirPtrEscapeSummary>,
     value_memo: &mut [Option<bool>],
     value_visiting: &mut [bool],
     local_memo: &mut [Option<bool>],
@@ -2584,6 +2727,7 @@ fn rvalue_depends_on_local_value<'db>(
             body,
             *value,
             local,
+            ptr_escape_summaries,
             value_memo,
             value_visiting,
             local_memo,
@@ -2594,6 +2738,7 @@ fn rvalue_depends_on_local_value<'db>(
                 body,
                 &call.args,
                 local,
+                ptr_escape_summaries,
                 value_memo,
                 value_visiting,
                 local_memo,
@@ -2602,6 +2747,7 @@ fn rvalue_depends_on_local_value<'db>(
                 body,
                 &call.effect_args,
                 local,
+                ptr_escape_summaries,
                 value_memo,
                 value_visiting,
                 local_memo,
@@ -2612,6 +2758,7 @@ fn rvalue_depends_on_local_value<'db>(
             body,
             args,
             local,
+            ptr_escape_summaries,
             value_memo,
             value_visiting,
             local_memo,
@@ -2621,6 +2768,7 @@ fn rvalue_depends_on_local_value<'db>(
             body,
             place.base,
             local,
+            ptr_escape_summaries,
             value_memo,
             value_visiting,
             local_memo,
