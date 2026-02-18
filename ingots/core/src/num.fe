@@ -1018,6 +1018,17 @@ impl Ord for usize {
     fn gt(self, _ other: usize) -> bool { __gt_usize(self, other) }
     fn ge(self, _ other: usize) -> bool { __ge_usize(self, other) }
 }
+impl AddAssign for usize { fn add_assign(mut self, _ other: own usize) { self = self + other } }
+impl SubAssign for usize { fn sub_assign(mut self, _ other: own usize) { self = self - other } }
+impl MulAssign for usize { fn mul_assign(mut self, _ other: own usize) { self = self * other } }
+impl DivAssign for usize { fn div_assign(mut self, _ other: own usize) { self = self / other } }
+impl RemAssign for usize { fn rem_assign(mut self, _ other: own usize) { self = self % other } }
+impl PowAssign for usize { fn pow_assign(mut self, _ other: own usize) { self = self ** other } }
+impl ShlAssign for usize { fn shl_assign(mut self, _ other: own usize) { self = self << other } }
+impl ShrAssign for usize { fn shr_assign(mut self, _ other: own usize) { self = self >> other } }
+impl BitAndAssign for usize { fn bitand_assign(mut self, _ other: own usize) { self = self & other } }
+impl BitOrAssign for usize { fn bitor_assign(mut self, _ other: own usize) { self = self | other } }
+impl BitXorAssign for usize { fn bitxor_assign(mut self, _ other: own usize) { self = self ^ other } }
 impl Default for usize { fn default() -> Self { 0 } }
 
 // i256 impls

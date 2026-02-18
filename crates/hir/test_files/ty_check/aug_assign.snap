@@ -13,8 +13,8 @@ note:
  7 │ │     b |= false
  8 │ │ 
    · │
-18 │ │     arr[0]
-19 │ │ }
+22 │ │     arr[0]
+23 │ │ }
    │ ╰─^ i32
 
 note: 
@@ -152,101 +152,137 @@ note:
 note: 
    ┌─ aug_assign.fe:16:9
    │
-16 │     let mut arr = [x, 1, 2]
+16 │     let mut usize_acc: usize = 0
+   │         ^^^^^^^^^^^^^ usize
+
+note: 
+   ┌─ aug_assign.fe:16:32
+   │
+16 │     let mut usize_acc: usize = 0
+   │                                ^ usize
+
+note: 
+   ┌─ aug_assign.fe:17:5
+   │
+17 │     usize_acc += 1
+   │     ^^^^^^^^^ usize
+
+note: 
+   ┌─ aug_assign.fe:17:5
+   │
+17 │     usize_acc += 1
+   │     ^^^^^^^^^^^^^^ ()
+
+note: 
+   ┌─ aug_assign.fe:17:18
+   │
+17 │     usize_acc += 1
+   │                  ^ usize
+
+note: 
+   ┌─ aug_assign.fe:18:5
+   │
+18 │     usize_acc
+   │     ^^^^^^^^^ usize
+
+note: 
+   ┌─ aug_assign.fe:20:9
+   │
+20 │     let mut arr = [x, 1, 2]
    │         ^^^^^^^ [i32; 3]
 
 note: 
-   ┌─ aug_assign.fe:16:19
+   ┌─ aug_assign.fe:20:19
    │
-16 │     let mut arr = [x, 1, 2]
+20 │     let mut arr = [x, 1, 2]
    │                   ^^^^^^^^^ [i32; 3]
 
 note: 
-   ┌─ aug_assign.fe:16:20
+   ┌─ aug_assign.fe:20:20
    │
-16 │     let mut arr = [x, 1, 2]
+20 │     let mut arr = [x, 1, 2]
    │                    ^ i32
 
 note: 
-   ┌─ aug_assign.fe:16:23
+   ┌─ aug_assign.fe:20:23
    │
-16 │     let mut arr = [x, 1, 2]
+20 │     let mut arr = [x, 1, 2]
    │                       ^ i32
 
 note: 
-   ┌─ aug_assign.fe:16:26
+   ┌─ aug_assign.fe:20:26
    │
-16 │     let mut arr = [x, 1, 2]
+20 │     let mut arr = [x, 1, 2]
    │                          ^ i32
 
 note: 
-   ┌─ aug_assign.fe:17:5
+   ┌─ aug_assign.fe:21:5
    │
-17 │     arr[0] -= arr[1] + 1
+21 │     arr[0] -= arr[1] + 1
    │     ^^^ [i32; 3]
 
 note: 
-   ┌─ aug_assign.fe:17:5
+   ┌─ aug_assign.fe:21:5
    │
-17 │     arr[0] -= arr[1] + 1
+21 │     arr[0] -= arr[1] + 1
    │     ^^^^^^ i32
 
 note: 
-   ┌─ aug_assign.fe:17:5
+   ┌─ aug_assign.fe:21:5
    │
-17 │     arr[0] -= arr[1] + 1
+21 │     arr[0] -= arr[1] + 1
    │     ^^^^^^^^^^^^^^^^^^^^ ()
 
 note: 
-   ┌─ aug_assign.fe:17:9
+   ┌─ aug_assign.fe:21:9
    │
-17 │     arr[0] -= arr[1] + 1
+21 │     arr[0] -= arr[1] + 1
    │         ^ usize
 
 note: 
-   ┌─ aug_assign.fe:17:15
+   ┌─ aug_assign.fe:21:15
    │
-17 │     arr[0] -= arr[1] + 1
+21 │     arr[0] -= arr[1] + 1
    │               ^^^ [i32; 3]
 
 note: 
-   ┌─ aug_assign.fe:17:15
+   ┌─ aug_assign.fe:21:15
    │
-17 │     arr[0] -= arr[1] + 1
+21 │     arr[0] -= arr[1] + 1
    │               ^^^^^^ i32
 
 note: 
-   ┌─ aug_assign.fe:17:15
+   ┌─ aug_assign.fe:21:15
    │
-17 │     arr[0] -= arr[1] + 1
+21 │     arr[0] -= arr[1] + 1
    │               ^^^^^^^^^^ i32
 
 note: 
-   ┌─ aug_assign.fe:17:19
+   ┌─ aug_assign.fe:21:19
    │
-17 │     arr[0] -= arr[1] + 1
+21 │     arr[0] -= arr[1] + 1
    │                   ^ usize
 
 note: 
-   ┌─ aug_assign.fe:17:24
+   ┌─ aug_assign.fe:21:24
    │
-17 │     arr[0] -= arr[1] + 1
+21 │     arr[0] -= arr[1] + 1
    │                        ^ i32
 
 note: 
-   ┌─ aug_assign.fe:18:5
+   ┌─ aug_assign.fe:22:5
    │
-18 │     arr[0]
+22 │     arr[0]
    │     ^^^ [i32; 3]
 
 note: 
-   ┌─ aug_assign.fe:18:5
+   ┌─ aug_assign.fe:22:5
    │
-18 │     arr[0]
+22 │     arr[0]
    │     ^^^^^^ i32
 
 note: 
-   ┌─ aug_assign.fe:18:9
+   ┌─ aug_assign.fe:22:9
    │
-18 │     arr[0]
+22 │     arr[0]
    │         ^ usize
