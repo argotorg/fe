@@ -1,0 +1,9 @@
+use std::evm::{Address, StorageMap}
+
+contract C {
+    balances: StorageMap<Address, u256>
+}
+
+fn ok() uses (balances: StorageMap<Address, u256>) {}
+
+fn bad(x: StorageMap<Address, u256>) {}

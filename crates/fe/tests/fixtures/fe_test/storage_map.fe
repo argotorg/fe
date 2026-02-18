@@ -21,8 +21,8 @@ msg MapMsg {
 }
 
 struct BalanceMapStore {
-    balances: StorageMap<u256, u256, 0>,
-    allowances: StorageMap<u256, u256, 1>,
+    balances: StorageMap<u256, u256>,
+    allowances: StorageMap<u256, u256>,
 }
 
 pub contract BalanceMap {

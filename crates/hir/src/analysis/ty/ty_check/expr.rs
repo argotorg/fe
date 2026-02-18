@@ -836,6 +836,10 @@ impl<'db> TyChecker<'db> {
 
         let callee_provider_arg_idx_by_effect =
             place_effect_provider_param_index_map(self.db, func);
+        let mut callee_effect_key_tys = vec![None; func.effects(self.db).data(self.db).len()];
+        for binding in func.effect_bindings(self.db) {
+            callee_effect_key_tys[binding.binding_idx as usize] = binding.key_ty;
+        }
 
         let provided_span = |provided: ProvidedEffect<'db>| match provided.origin {
             EffectOrigin::With { value_expr } => Some(value_expr.span(body).into()),
@@ -988,9 +992,12 @@ impl<'db> TyChecker<'db> {
                 > = SmallVec::new();
 
                 for provided in cands.iter().copied() {
-                    let Some(requirement) =
-                        self.resolve_effect_requirement(&path_res, callable, provided.ty)
-                    else {
+                    let Some(requirement) = self.resolve_effect_requirement(
+                        &path_res,
+                        callable,
+                        callee_effect_key_tys.get(effect.index()).copied().flatten(),
+                        provided.ty,
+                    ) else {
                         continue;
                     };
 
@@ -1087,8 +1094,12 @@ impl<'db> TyChecker<'db> {
                     candidate_frames.iter().flatten().copied().collect();
 
                 if let [provided] = all_candidates.as_slice()
-                    && let Some(requirement) =
-                        self.resolve_effect_requirement(&path_res, callable, provided.ty)
+                    && let Some(requirement) = self.resolve_effect_requirement(
+                        &path_res,
+                        callable,
+                        callee_effect_key_tys.get(effect.index()).copied().flatten(),
+                        provided.ty,
+                    )
                 {
                     match requirement {
                         EffectRequirement::Type(expected) => {
@@ -1369,11 +1380,13 @@ impl<'db> TyChecker<'db> {
         &mut self,
         path_res: &PathRes<'db>,
         callable: &Callable<'db>,
+        expected_type_key: Option<TyId<'db>>,
         provided_ty: TyId<'db>,
     ) -> Option<EffectRequirement<'db>> {
         match path_res {
-            PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {
-                let mut expected = Binder::bind(*ty).instantiate(self.db, callable.generic_args());
+            PathRes::Ty(_) | PathRes::TyAlias(_, _) => {
+                let mut expected =
+                    Binder::bind(expected_type_key?).instantiate(self.db, callable.generic_args());
                 if let Some(inst) = callable.trait_inst() {
                     let mut subst = AssocTySubst::new(inst);
                     expected = expected.fold_with(self.db, &mut subst);

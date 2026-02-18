@@ -64,6 +64,10 @@ impl<'db> TyFoldable<'db> for TyId<'db> {
                         let ty = folder.fold_ty(db, *ty);
                         TyParam(param.clone(), ty)
                     }
+                    Hole(ty) => {
+                        let ty = folder.fold_ty(db, *ty);
+                        Hole(ty)
+                    }
                     Evaluated(val, ty) => {
                         let ty = folder.fold_ty(db, *ty);
                         let val = match val {

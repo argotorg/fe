@@ -31,12 +31,20 @@ pub struct ConstTyId<'db> {
     pub data: ConstTyData<'db>,
 }
 
-#[salsa::tracked]
+#[salsa::tracked(cycle_initial=evaluate_const_ty_cycle_initial, cycle_fn=evaluate_const_ty_cycle_recover)]
 pub(crate) fn evaluate_const_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     const_ty: ConstTyId<'db>,
     expected_ty: Option<TyId<'db>>,
 ) -> ConstTyId<'db> {
+    if let ConstTyData::Hole(ty) = const_ty.data(db) {
+        if let Some(expected_ty) = expected_ty {
+            return const_ty.swap_ty(db, expected_ty);
+        }
+        let _ = ty;
+        return const_ty;
+    }
+
     if let ConstTyData::Abstract(expr, ty) = const_ty.data(db)
         && let ConstExpr::TraitConst { inst, name } = expr.data(db)
         && let Some(resolved) = const_ty_from_trait_const(
@@ -284,6 +292,24 @@ pub(crate) fn evaluate_const_ty<'db>(
     }
 }
 
+fn evaluate_const_ty_cycle_initial<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    const_ty: ConstTyId<'db>,
+    _expected_ty: Option<TyId<'db>>,
+) -> ConstTyId<'db> {
+    const_ty
+}
+
+fn evaluate_const_ty_cycle_recover<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _value: &ConstTyId<'db>,
+    _count: u32,
+    _const_ty: ConstTyId<'db>,
+    _expected_ty: Option<TyId<'db>>,
+) -> salsa::CycleRecoveryAction<ConstTyId<'db>> {
+    salsa::CycleRecoveryAction::Iterate
+}
+
 pub(super) fn const_ty_from_trait_const<'db>(
     db: &'db dyn HirAnalysisDb,
     solve_cx: TraitSolveCx<'db>,
@@ -352,6 +378,7 @@ impl<'db> ConstTyId<'db> {
         match self.data(db) {
             ConstTyData::TyVar(_, ty) => *ty,
             ConstTyData::TyParam(_, ty) => *ty,
+            ConstTyData::Hole(ty) => *ty,
             ConstTyData::Evaluated(_, ty) => *ty,
             ConstTyData::Abstract(_, ty) => *ty,
             ConstTyData::UnEvaluated { ty, .. } => {
@@ -366,6 +393,7 @@ impl<'db> ConstTyId<'db> {
             ConstTyData::TyParam(param, ty) => {
                 format!("const {}: {}", param.pretty_print(db), ty.pretty_print(db))
             }
+            ConstTyData::Hole(_) => "_".to_string(),
             ConstTyData::Evaluated(resolved, _) => resolved.pretty_print(db),
             ConstTyData::Abstract(expr, _) => expr.pretty_print(db),
             ConstTyData::UnEvaluated {
@@ -459,10 +487,19 @@ impl<'db> ConstTyId<'db> {
         Self::new(db, data)
     }
 
+    pub fn hole(db: &'db dyn HirAnalysisDb) -> Self {
+        Self::hole_with_ty(db, TyId::invalid(db, InvalidCause::Other))
+    }
+
+    pub fn hole_with_ty(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Self {
+        Self::new(db, ConstTyData::Hole(ty))
+    }
+
     fn swap_ty(self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Self {
         let data = match self.data(db) {
             ConstTyData::TyVar(var, _) => ConstTyData::TyVar(var.clone(), ty),
             ConstTyData::TyParam(param, _) => ConstTyData::TyParam(param.clone(), ty),
+            ConstTyData::Hole(_) => ConstTyData::Hole(ty),
             ConstTyData::Evaluated(evaluated, _) => ConstTyData::Evaluated(evaluated.clone(), ty),
             ConstTyData::Abstract(expr, _) => ConstTyData::Abstract(*expr, ty),
             ConstTyData::UnEvaluated {
@@ -486,6 +523,7 @@ impl<'db> ConstTyId<'db> {
 pub enum ConstTyData<'db> {
     TyVar(TyVar<'db>, TyId<'db>),
     TyParam(TyParam<'db>, TyId<'db>),
+    Hole(TyId<'db>),
     Evaluated(EvaluatedConstTy<'db>, TyId<'db>),
     Abstract(ConstExprId<'db>, TyId<'db>),
     UnEvaluated {

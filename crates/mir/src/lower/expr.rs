@@ -14,7 +14,7 @@ use hir::analysis::ty::effects::EffectKeyKind;
 
 use crate::{
     ir::{Place, Rvalue, SourceInfoId, try_value_address_space_in},
-    layout::{self, ty_storage_slots},
+    layout,
 };
 
 use super::*;
@@ -119,27 +119,10 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     .is_some_and(|id| id.data(self.db) == contract_name)
             })?;
 
-        let fields = contract.fields(self.db);
-        let field = fields.get_index(field_idx)?.1;
-        let desired_space = if field.is_provider {
-            self.effect_provider_space_for_provider_ty(field.declared_ty)?
-        } else {
-            AddressSpaceKind::Storage
-        };
-
-        let mut offset = 0;
-        for field in fields.values().take(field_idx) {
-            let space = if field.is_provider {
-                self.effect_provider_space_for_provider_ty(field.declared_ty)?
-            } else {
-                AddressSpaceKind::Storage
-            };
-            if space != desired_space {
-                continue;
-            }
-            offset += ty_storage_slots(self.db, field.target_ty)?;
-        }
-        Some(offset)
+        contract
+            .field_layout(self.db)
+            .get_index(field_idx)
+            .map(|(_, field)| field.slot_offset)
     }
 
     /// Lowers the body root expression, starting from the current block.

@@ -1,0 +1,22 @@
+use std::evm::StorageMap
+
+type MyMap<K, V> = StorageMap<K, V, 1>
+
+fn needs_map() uses (m: MyMap<u256, u256>) {
+    ()
+}
+
+msg M {
+    #[selector = 0]
+    Ping -> (),
+}
+
+contract C {
+    balances: StorageMap<u256, u256>
+
+    recv M {
+        Ping -> () uses (balances) {
+            needs_map()
+        }
+    }
+}

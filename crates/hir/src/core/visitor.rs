@@ -7,14 +7,14 @@ use crate::{
         transition::ChainRoot,
     },
     hir_def::{
-        Body, CallArg, Const, Contract, ContractRecv, ContractRecvArm, ContractRecvArmListId,
-        EffectParam, EffectParamListId, Enum, EnumVariant, Expr, ExprId, Field, FieldDef,
-        FieldDefListId, FieldIndex, FieldParent, Func, FuncParam, FuncParamListId, FuncParamName,
-        GenericArg, GenericArgListId, GenericParam, GenericParamListId, IdentId, Impl, ImplTrait,
-        ItemKind, KindBound, LitKind, MatchArm, Mod, Partial, Pat, PatId, PathId, PathKind, Stmt,
-        StmtId, Struct, TopLevelMod, Trait, TraitRefId, TupleTypeId, TypeAlias, TypeBound, TypeId,
-        TypeKind, Use, UseAlias, UsePathId, UsePathSegment, VariantDef, VariantDefListId,
-        VariantKind, WhereClauseId, WherePredicate,
+        Body, CallArg, Const, ConstGenericArgValue, Contract, ContractRecv, ContractRecvArm,
+        ContractRecvArmListId, EffectParam, EffectParamListId, Enum, EnumVariant, Expr, ExprId,
+        Field, FieldDef, FieldDefListId, FieldIndex, FieldParent, Func, FuncParam, FuncParamListId,
+        FuncParamName, GenericArg, GenericArgListId, GenericParam, GenericParamListId, IdentId,
+        Impl, ImplTrait, ItemKind, KindBound, LitKind, MatchArm, Mod, Partial, Pat, PatId, PathId,
+        PathKind, Stmt, StmtId, Struct, TopLevelMod, Trait, TraitRefId, TupleTypeId, TypeAlias,
+        TypeBound, TypeId, TypeKind, Use, UseAlias, UsePathId, UsePathSegment, VariantDef,
+        VariantDefListId, VariantKind, WhereClauseId, WherePredicate,
         attr::{self, AttrArgValue},
         scope_graph::ScopeId,
     },
@@ -1712,7 +1712,9 @@ pub fn walk_generic_arg<'db, V>(
         }
 
         GenericArg::Const(const_arg) => {
-            if let Some(body) = const_arg.body.to_opt() {
+            if let ConstGenericArgValue::Expr(body) = const_arg.value
+                && let Some(body) = body.to_opt()
+            {
                 visitor.visit_body(&mut VisitorCtxt::with_body(ctxt.db, body), body);
             }
         }
@@ -2496,8 +2498,8 @@ macro_rules! visit_node_in_body {
         }
     }
 }
-use common::ingot::Ingot;
 use visit_node_in_body;
+use common::ingot::Ingot;
 
 #[cfg(test)]
 mod tests {

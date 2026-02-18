@@ -2,8 +2,8 @@
 
 use crate::{
     core::hir_def::{
-        AssocTypeGenericArg, HirIngot, IdentId, ImplTrait, ItemKind, Partial, PathId, Trait,
-        TraitRefId, params::GenericArg, scope_graph::ScopeId,
+        AssocTypeGenericArg, ConstGenericArgValue, HirIngot, IdentId, ImplTrait, ItemKind, Partial,
+        PathId, Trait, TraitRefId, params::GenericArg, scope_graph::ScopeId,
     },
     hir_def::Func,
 };
@@ -173,7 +173,10 @@ pub(crate) fn lower_trait_ref_impl<'db>(
         .filter_map(|arg| match arg {
             GenericArg::Type(ty_arg) => Some(lower_opt_hir_ty(db, ty_arg.ty, scope, assumptions)),
             GenericArg::Const(const_arg) => {
-                let const_ty_id = ConstTyId::from_opt_body(db, const_arg.body);
+                let const_ty_id = match const_arg.value {
+                    ConstGenericArgValue::Expr(body) => ConstTyId::from_opt_body(db, body),
+                    ConstGenericArgValue::Hole => ConstTyId::hole(db),
+                };
                 Some(TyId::const_ty(db, const_ty_id))
             }
             _ => None,

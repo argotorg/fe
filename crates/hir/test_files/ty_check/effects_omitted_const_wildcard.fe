@@ -1,0 +1,9 @@
+pub struct Cap<const ROOT: u256 = _> {}
+
+pub fn needs_cap() uses (cap: Cap) {
+    ()
+}
+
+pub fn caller() uses (cap: Cap<7>) {
+    needs_cap()
+}

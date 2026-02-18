@@ -1680,6 +1680,20 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 error_code,
             },
 
+            Self::ConstHoleInValuePosition { span } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "layout hole `_` is not allowed in value position".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "this type contains `_`, which is only allowed in contract fields and `uses (...)` parameter types".to_string(),
+                    span: span.resolve(db),
+                }],
+                notes: vec![
+                    "replace `_` with an explicit const argument in value positions".to_string(),
+                ],
+                error_code,
+            },
+
             Self::OwnParamCannotBeBorrow { span, ty } => CompleteDiagnostic {
                 severity: Severity::Error,
                 message: "invalid `own` parameter".to_string(),

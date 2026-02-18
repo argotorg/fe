@@ -21,8 +21,8 @@ msg VotingMsg {
 
 struct VotingStore {
     num_proposals: u256,
-    votes: StorageMap<u256, u256, 0>,
-    voted: StorageMap<(u256, u256), u256, 1>,
+    votes: StorageMap<u256, u256>,
+    voted: StorageMap<(u256, u256), u256>,
 }
 
 pub contract Voting {

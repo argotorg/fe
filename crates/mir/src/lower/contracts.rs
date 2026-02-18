@@ -15,7 +15,7 @@ use hir::{
         },
     },
     hir_def::{Func, Trait, scope_graph::ScopeId},
-    semantic::{ContractFieldInfo, EffectBinding, EffectSource, RecvArmView},
+    semantic::{EffectBinding, EffectSource, RecvArmView},
 };
 use hir::{
     analysis::{
@@ -31,7 +31,6 @@ use hir::{
     },
 };
 use num_bigint::BigUint;
-use rustc_hash::FxHashMap;
 
 use crate::{
     core_lib::CoreLib,
@@ -59,8 +58,11 @@ pub(super) fn lower_contract_templates<'db>(
 
         let core_lib = CoreLib::new(db, contract.scope());
 
-        let fields = contract.fields(db);
-        let slot_offsets = compute_field_slot_offsets(db, &core_lib, fields)?;
+        let slot_offsets = contract
+            .field_layout(db)
+            .values()
+            .map(|field| BigUint::from(field.slot_offset))
+            .collect::<Vec<_>>();
 
         // User-body handlers first (so entrypoints can call them by symbol).
         if contract.init(db).is_some() {
@@ -678,40 +680,6 @@ fn path_from_segments<'db>(
         path = path.push_ident(db, IdentId::new(db, (*seg).to_string()));
     }
     path
-}
-
-fn compute_field_slot_offsets<'db>(
-    db: &'db dyn HirAnalysisDb,
-    core: &CoreLib<'db>,
-    fields: &IndexMap<IdentId<'db>, ContractFieldInfo<'db>>,
-) -> MirLowerResult<Vec<BigUint>> {
-    let mut next_offset: FxHashMap<AddressSpaceKind, usize> = FxHashMap::default();
-    let mut out = Vec::with_capacity(fields.len());
-
-    for (_, field) in fields {
-        let space = if field.is_provider {
-            repr::effect_provider_space_for_ty(db, core, field.declared_ty)
-                .unwrap_or(AddressSpaceKind::Storage)
-        } else {
-            AddressSpaceKind::Storage
-        };
-
-        let offset = *next_offset.get(&space).unwrap_or(&0);
-        out.push(BigUint::from(offset));
-
-        let slots = crate::layout::ty_storage_slots(db, field.target_ty).ok_or_else(|| {
-            MirLowerError::Unsupported {
-                func_name: "<contract lowering>".into(),
-                message: format!(
-                    "failed to compute storage slots for `{}`",
-                    field.target_ty.pretty_print(db)
-                ),
-            }
-        })?;
-        *next_offset.entry(space).or_insert(0) += slots;
-    }
-
-    Ok(out)
 }
 
 fn lower_init_handler<'db>(

@@ -1,5 +1,6 @@
 use crate::analysis::ty::canonical::Canonicalized;
 use crate::analysis::ty::diagnostics::BodyDiag;
+use crate::analysis::ty::effects::resolve_normalized_type_effect_key;
 use crate::analysis::ty::trait_resolution::{
     GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable,
 };
@@ -15,7 +16,7 @@ use diagnostics::{DefConflictError, TraitLowerDiag, TyLowerDiag};
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec1::SmallVec;
 use trait_resolution::constraint::super_trait_cycle;
-use ty_def::{BorrowKind, InvalidCause, TyData, TyId};
+use ty_def::{BorrowKind, InvalidCause, TyData, TyId, instantiate_adt_field_ty};
 use ty_lower::lower_type_alias;
 
 use crate::analysis::name_resolution::{PathRes, resolve_path};
@@ -137,11 +138,25 @@ pub fn ty_is_noesc<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
                     .any(|field_ty| inner(db, field_ty, visiting)),
                 AdtRef::Enum(_) => {
                     let args = ty.generic_args(db);
-                    adt_def.fields(db).iter().any(|variant| {
-                        variant
-                            .iter_types(db)
-                            .any(|field_ty| inner(db, field_ty.instantiate(db, args), visiting))
-                    })
+                    adt_def
+                        .fields(db)
+                        .iter()
+                        .enumerate()
+                        .any(|(variant_idx, variant)| {
+                            variant.iter_types(db).enumerate().any(|(field_idx, _)| {
+                                inner(
+                                    db,
+                                    instantiate_adt_field_ty(
+                                        db,
+                                        adt_def,
+                                        variant_idx,
+                                        field_idx,
+                                        args,
+                                    ),
+                                    visiting,
+                                )
+                            })
+                        })
                 }
             }
         } else {
@@ -156,6 +171,81 @@ pub fn ty_is_noesc<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
         TyData::TyVar(_) | TyData::Invalid(_) => false,
         _ => inner(db, ty, &mut FxHashSet::default()),
     }
+}
+
+pub fn ty_contains_const_hole<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
+    use crate::analysis::ty::{
+        const_ty::ConstTyData,
+        visitor::{TyVisitable, TyVisitor, walk_ty},
+    };
+
+    struct HoleFinder<'db> {
+        db: &'db dyn HirAnalysisDb,
+        found: bool,
+    }
+
+    impl<'db> TyVisitor<'db> for HoleFinder<'db> {
+        fn db(&self) -> &'db dyn HirAnalysisDb {
+            self.db
+        }
+
+        fn visit_ty(&mut self, ty: TyId<'db>) {
+            if self.found {
+                return;
+            }
+
+            if let TyData::ConstTy(const_ty) = ty.data(self.db)
+                && matches!(const_ty.data(self.db), ConstTyData::Hole(_))
+            {
+                self.found = true;
+                return;
+            }
+
+            walk_ty(self, ty);
+        }
+    }
+
+    let mut finder = HoleFinder { db, found: false };
+    ty.visit_with(&mut finder);
+    finder.found
+}
+
+pub(crate) fn collect_layout_hole_tys_in_order<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+) -> Vec<TyId<'db>> {
+    use crate::analysis::ty::{
+        const_ty::ConstTyData,
+        visitor::{TyVisitable, TyVisitor, walk_ty},
+    };
+
+    struct HoleCollector<'a, 'db> {
+        db: &'db dyn HirAnalysisDb,
+        out: &'a mut Vec<TyId<'db>>,
+    }
+
+    impl<'a, 'db> TyVisitor<'db> for HoleCollector<'a, 'db> {
+        fn db(&self) -> &'db dyn HirAnalysisDb {
+            self.db
+        }
+
+        fn visit_ty(&mut self, ty: TyId<'db>) {
+            if let TyData::ConstTy(const_ty) = ty.data(self.db)
+                && let ConstTyData::Hole(hole_ty) = const_ty.data(self.db)
+            {
+                self.out.push(if hole_ty.has_invalid(self.db) {
+                    TyId::u256(self.db)
+                } else {
+                    *hole_ty
+                });
+            }
+            walk_ty(self, ty);
+        }
+    }
+
+    let mut out = Vec::new();
+    ty.visit_with(&mut HoleCollector { db, out: &mut out });
+    out
 }
 
 /// An analysis pass for type definitions.
@@ -350,7 +440,16 @@ impl ModuleAnalysisPass for ContractAnalysisPass {
                         }
                     }
                     Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty)) => {
-                        let given = normalize::normalize_ty(db, ty, contract.scope(), assumptions);
+                        let given = resolve_normalized_type_effect_key(
+                            db,
+                            key_path,
+                            contract.scope(),
+                            assumptions,
+                        )
+                        .map(|ty| normalize::normalize_ty(db, ty, contract.scope(), assumptions))
+                        .unwrap_or_else(|| {
+                            normalize::normalize_ty(db, ty, contract.scope(), assumptions)
+                        });
                         if !given.is_zero_sized(db) {
                             diags.push(Box::new(BodyDiag::ContractRootEffectTypeNotZeroSized {
                                 owner: EffectParamOwner::Contract(contract),

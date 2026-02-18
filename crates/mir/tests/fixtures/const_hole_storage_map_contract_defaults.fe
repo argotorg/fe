@@ -1,0 +1,32 @@
+use std::evm::StorageMap
+
+msg MapMsg {
+    #[selector = 1]
+    Set { user: u256, value: u256 },
+    #[selector = 2]
+    Get { user: u256 } -> u256,
+}
+
+struct Store {
+    balances: StorageMap<u256, u256>,
+    allowances: StorageMap<u256, u256>,
+}
+
+pub contract BalanceMap {
+    mut store: Store
+
+    init() uses (mut store) {
+        // StorageMaps are empty by default.
+    }
+
+    recv MapMsg {
+        Set { user, value } uses (mut store) {
+            store.balances.set(key: user, value: value)
+            store.allowances.set(key: user, value: value + 1)
+        }
+
+        Get { user } -> u256 uses (store) {
+            store.balances.get(key: user) + store.allowances.get(key: user)
+        }
+    }
+}

@@ -122,6 +122,11 @@ pub enum TyLowerDiag<'db> {
         given: TyId<'db>,
     },
 
+    /// Layout holes (`_`) are only allowed in effect positions.
+    ConstHoleInValuePosition {
+        span: DynLazySpan<'db>,
+    },
+
     /// `own` parameters must have owned types. Borrow-handle types (`mut`/`ref`) are not owned.
     OwnParamCannotBeBorrow {
         span: DynLazySpan<'db>,
@@ -177,6 +182,7 @@ impl TyLowerDiag<'_> {
             Self::ConstTyMismatch { .. } => 11,
             Self::ConstTyExpected { .. } => 12,
             Self::NormalTypeExpected { .. } => 13,
+            Self::ConstHoleInValuePosition { .. } => 32,
             Self::OwnParamCannotBeBorrow { .. } => 14,
             Self::InvalidMutParamPrefixWithoutOwnType { .. } => 31,
             Self::InvalidConstTyExpr(_) => 15,
