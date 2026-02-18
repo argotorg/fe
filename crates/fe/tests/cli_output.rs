@@ -185,34 +185,50 @@ fn test_tree_output(fixture: Fixture<&str>) {
     glob: "*.fe",
 )]
 fn test_fe_test_both_backends(fixture: Fixture<&str>) {
-    let yul = run_fe_main_impl(
-        &["test", "--call-trace", "--backend", "yul", fixture.path()],
-        None,
-    );
-    let sonatina = run_fe_main_impl(
-        &[
-            "test",
-            "--call-trace",
-            "--backend",
-            "sonatina",
-            fixture.path(),
-        ],
-        None,
-    );
+    assert_fe_test_backends_agree(fixture.path(), false);
+}
+
+/// Runs a focused subset of fixtures with call tracing enabled to preserve
+/// call-trace parity coverage without slowing down the full backend matrix.
+#[test]
+fn test_fe_test_both_backends_call_trace() {
+    let fixtures_dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fe_test");
+    for fixture in ["contract_call.fe", "factory.fe", "should_revert.fe"] {
+        let path = fixtures_dir.join(fixture);
+        let path = path
+            .to_str()
+            .unwrap_or_else(|| panic!("fixture path is not utf-8: {}", path.display()));
+        assert_fe_test_backends_agree(path, true);
+    }
+}
+
+fn assert_fe_test_backends_agree(path: &str, call_trace: bool) {
+    let mut yul_args = vec!["test", "--backend", "yul", path];
+    let mut sonatina_args = vec!["test", "--backend", "sonatina", path];
+    if call_trace {
+        yul_args.insert(1, "--call-trace");
+        sonatina_args.insert(1, "--call-trace");
+    }
+    let yul = run_fe_main_impl(&yul_args, None);
+    let sonatina = run_fe_main_impl(&sonatina_args, None);
+    let trace_flag = if call_trace { "--call-trace " } else { "" };
 
     // Check each backend independently first for clearer diagnostics.
     assert_eq!(
         yul.exit_code,
         0,
-        "fe test (yul) failed for {path}:\n{yo}\n\nTo reproduce:\n  cargo run --bin fe -- test --backend yul --report {path}",
-        path = fixture.path(),
+        "fe test (yul) failed for {path}:\n{yo}\n\nTo reproduce:\n  cargo run --bin fe -- test {trace_flag}--backend yul --report {path}",
+        path = path,
+        trace_flag = trace_flag,
         yo = yul.combined(),
     );
     assert_eq!(
         sonatina.exit_code,
         0,
-        "fe test (sonatina) failed for {path}:\n{so}\n\nTo reproduce:\n  cargo run --bin fe -- test --backend sonatina --report {path}",
-        path = fixture.path(),
+        "fe test (sonatina) failed for {path}:\n{so}\n\nTo reproduce:\n  cargo run --bin fe -- test {trace_flag}--backend sonatina --report {path}",
+        path = path,
+        trace_flag = trace_flag,
         so = sonatina.combined(),
     );
 
@@ -222,7 +238,7 @@ fn test_fe_test_both_backends(fixture: Fixture<&str>) {
         yul.stdout,
         sonatina.stdout,
         "Test output mismatch for {path}:\n\n--- yul ---\n{yo}\n\n--- sonatina ---\n{so}",
-        path = fixture.path(),
+        path = path,
         yo = yul.stdout,
         so = sonatina.stdout,
     );
