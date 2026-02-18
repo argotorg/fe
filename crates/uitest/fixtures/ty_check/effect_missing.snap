@@ -1,12 +1,13 @@
 ---
 source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/effect_missing.fe
 ---
 error[8-0036]: missing effect `Storage` required by `needs_storage`
-   ┌─ effect_missing.fe:12:5
+   ┌─ effect_missing.fe:11:5
    │
-12 │     needs_storage()
+11 │     needs_storage()
    │     ^^^^^^^^^^^^^^^ `needs_storage` requires effect `Storage` to be in scope
    │
    = provide it with `with (Storage = value)` or require it via `uses Storage`

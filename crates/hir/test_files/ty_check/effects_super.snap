@@ -1,5 +1,6 @@
 ---
 source: crates/hir/tests/ty_check.rs
+assertion_line: 40
 expression: res
 input_file: test_files/ty_check/effects_super.fe
 ---
@@ -73,8 +74,7 @@ note:
 38 │ │     with (r) {
 39 │ │         do_stuff(10)
 40 │ │     }
-41 │ │     ()
-42 │ │ }
+41 │ │ }
    │ ╰─^ ()
 
 note: 
@@ -131,89 +131,83 @@ note:
    │                  ^^ u256
 
 note: 
-   ┌─ effects_super.fe:41:5
-   │
-41 │     ()
-   │     ^^ ()
-
-note: 
-   ┌─ effects_super.fe:46:1
+   ┌─ effects_super.fe:45:1
    │  
-46 │ ╭ {
-47 │ │     mem.store(offset: x, value: ctx.caller())
-48 │ │     sto.store(slot: x, value: 100)
-49 │ │     sto.load(slot: x)
-50 │ │ }
+45 │ ╭ {
+46 │ │     mem.store(offset: x, value: ctx.caller())
+47 │ │     sto.store(slot: x, value: 100)
+48 │ │     sto.load(slot: x)
+49 │ │ }
    │ ╰─^ u256
 
 note: 
-   ┌─ effects_super.fe:47:5
+   ┌─ effects_super.fe:46:5
    │
-47 │     mem.store(offset: x, value: ctx.caller())
+46 │     mem.store(offset: x, value: ctx.caller())
    │     ^^^ __effprov1
 
 note: 
-   ┌─ effects_super.fe:47:5
+   ┌─ effects_super.fe:46:5
    │
-47 │     mem.store(offset: x, value: ctx.caller())
+46 │     mem.store(offset: x, value: ctx.caller())
    │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
 
 note: 
-   ┌─ effects_super.fe:47:23
+   ┌─ effects_super.fe:46:23
    │
-47 │     mem.store(offset: x, value: ctx.caller())
+46 │     mem.store(offset: x, value: ctx.caller())
    │                       ^ u256
 
 note: 
-   ┌─ effects_super.fe:47:33
+   ┌─ effects_super.fe:46:33
    │
-47 │     mem.store(offset: x, value: ctx.caller())
+46 │     mem.store(offset: x, value: ctx.caller())
    │                                 ^^^ __effprov0
 
 note: 
-   ┌─ effects_super.fe:47:33
+   ┌─ effects_super.fe:46:33
    │
-47 │     mem.store(offset: x, value: ctx.caller())
+46 │     mem.store(offset: x, value: ctx.caller())
    │                                 ^^^^^^^^^^^^ u256
 
 note: 
-   ┌─ effects_super.fe:48:5
+   ┌─ effects_super.fe:47:5
    │
-48 │     sto.store(slot: x, value: 100)
+47 │     sto.store(slot: x, value: 100)
    │     ^^^ __effprov2
 
 note: 
-   ┌─ effects_super.fe:48:5
+   ┌─ effects_super.fe:47:5
    │
-48 │     sto.store(slot: x, value: 100)
+47 │     sto.store(slot: x, value: 100)
    │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ()
 
 note: 
-   ┌─ effects_super.fe:48:21
+   ┌─ effects_super.fe:47:21
    │
-48 │     sto.store(slot: x, value: 100)
+47 │     sto.store(slot: x, value: 100)
    │                     ^ u256
 
 note: 
-   ┌─ effects_super.fe:48:31
+   ┌─ effects_super.fe:47:31
    │
-48 │     sto.store(slot: x, value: 100)
+47 │     sto.store(slot: x, value: 100)
    │                               ^^^ u256
 
 note: 
-   ┌─ effects_super.fe:49:5
+   ┌─ effects_super.fe:48:5
    │
-49 │     sto.load(slot: x)
+48 │     sto.load(slot: x)
    │     ^^^ __effprov2
 
 note: 
-   ┌─ effects_super.fe:49:5
+   ┌─ effects_super.fe:48:5
    │
-49 │     sto.load(slot: x)
+48 │     sto.load(slot: x)
    │     ^^^^^^^^^^^^^^^^^ u256
 
 note: 
-   ┌─ effects_super.fe:49:20
+   ┌─ effects_super.fe:48:20
    │
-49 │     sto.load(slot: x)
+48 │     sto.load(slot: x)
    │                    ^ u256

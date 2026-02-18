@@ -24,5 +24,4 @@ fn use_seq() {
     let second: ref u256 = borrowed.get(1)
     first
     second
-    ()
 }

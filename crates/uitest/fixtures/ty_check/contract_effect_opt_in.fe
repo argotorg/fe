@@ -7,6 +7,5 @@ fn who_called() -> Address uses (ctx: Ctx) {
 contract C uses (ctx: Ctx) {
     init() {
         who_called()
-        ()
     }
 }

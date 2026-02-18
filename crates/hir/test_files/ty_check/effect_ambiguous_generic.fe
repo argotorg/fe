@@ -6,7 +6,6 @@ pub struct Storage<T> {
 pub fn process()
   uses (st: Storage<u8>)
 {
-    ()
 }
 
 pub fn ambiguous_effects() {

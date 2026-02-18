@@ -1,5 +1,4 @@
 fn borrow_from_non_place() {
     let x: u256 = 1
     let r: ref u256 = ref (x + 1)
-    ()
 }

@@ -9,7 +9,6 @@ impl Ctx<u16> for CtxU16 {}
 pub fn needs_ctx<T>()
   uses Ctx<T>
 {
-    ()
 }
 
 pub fn ok() {
