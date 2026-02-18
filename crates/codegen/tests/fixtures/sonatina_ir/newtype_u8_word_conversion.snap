@@ -16,22 +16,16 @@ func public %newtype_u8_roundtrip(v0.i256) -> i256 {
         v6.i256 = zext v5 i256;
         v7.*@__fe_Container_1 = bitcast v3 *@__fe_Container_1;
         v8.*@__fe_WrapU8_0 = gep v7 0.i256 0.i256;
-        v9.i256 = ptr_to_int v8 i256;
-        v10.*i8 = bitcast v8 *i8;
-        mstore v10 v6 i256;
-        v11.*@__fe_Container_1 = bitcast v3 *@__fe_Container_1;
-        v13.*i256 = gep v11 0.i256 1.i256;
-        v14.i256 = ptr_to_int v13 i256;
-        v15.*i8 = bitcast v13 *i8;
-        mstore v15 0.i256 i256;
-        v16.*@__fe_Container_1 = bitcast v3 *@__fe_Container_1;
-        v17.*@__fe_WrapU8_0 = gep v16 0.i256 0.i256;
-        v18.i256 = ptr_to_int v17 i256;
-        v19.*i8 = bitcast v17 *i8;
-        v20.i256 = mload v19 i256;
-        v21.i8 = trunc v20 i8;
-        v22.i256 = zext v21 i256;
-        return v22;
+        mstore v8 v6 i256;
+        v9.*@__fe_Container_1 = bitcast v3 *@__fe_Container_1;
+        v11.*i256 = gep v9 0.i256 1.i256;
+        mstore v11 0.i256 i256;
+        v12.*@__fe_Container_1 = bitcast v3 *@__fe_Container_1;
+        v13.*@__fe_WrapU8_0 = gep v12 0.i256 0.i256;
+        v14.i256 = mload v13 i256;
+        v15.i8 = trunc v14 i8;
+        v16.i256 = zext v15 i256;
+        return v16;
 }
 
 func public %__fe_sonatina_entry() {

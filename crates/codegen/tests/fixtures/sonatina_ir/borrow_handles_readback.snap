@@ -9,10 +9,8 @@ func public %borrow_handles_readback() -> i256 {
     block0:
         v1.*i256 = alloca i256;
         v2.i256 = ptr_to_int v1 i256;
-        v3.*i8 = bitcast v1 *i8;
-        mstore v3 0.i256 i256;
-        v5.*i8 = bitcast v1 *i8;
-        mstore v5 5.i256 i256;
+        mstore v1 0.i256 i256;
+        mstore v1 5.i256 i256;
         return 5.i256;
 }
 

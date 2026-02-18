@@ -16,16 +16,17 @@ func private %f__Evm_hef0af3106e109414__3af54274b2985741(v0.i256, v1.i256) {
         evm_return 0.i256 0.i256;
 
     block3:
-        v4.i256 = mload v0 i256;
-        v6.i1 = eq v4 0.i256;
-        br v6 block1 block5;
+        v4.*i256 = int_to_ptr v0 *i256;
+        v5.i256 = mload v4 i256;
+        v7.i1 = eq v5 0.i256;
+        br v7 block1 block5;
 
     block4:
         evm_invalid;
 
     block5:
-        v7.i1 = eq v4 1.i256;
-        br v7 block2 block4;
+        v8.i1 = eq v5 1.i256;
+        br v8 block2 block4;
 }
 
 func public %__fe_sonatina_entry() {

@@ -35,32 +35,29 @@ func public %match_nested_tuple(v0.i256) -> i256 {
     block7:
         v9.*@__fe_tuple_1 = int_to_ptr v0 *@__fe_tuple_1;
         v10.*i256 = gep v9 0.i256 0.i256 0.i256;
-        v11.i256 = ptr_to_int v10 i256;
-        v12.i256 = mload v11 i256;
-        v13.i1 = ne v12 0.i256;
-        v14.i256 = zext v13 i256;
-        v15.i1 = eq v14 1.i256;
-        br v15 block8 block15;
+        v11.i256 = mload v10 i256;
+        v12.i1 = ne v11 0.i256;
+        v13.i256 = zext v12 i256;
+        v14.i1 = eq v13 1.i256;
+        br v14 block8 block15;
 
     block8:
-        v18.*@__fe_tuple_1 = int_to_ptr v0 *@__fe_tuple_1;
-        v19.*i256 = gep v18 0.i256 0.i256 1.i256;
-        v20.i256 = ptr_to_int v19 i256;
-        v21.i256 = mload v20 i256;
-        v22.i1 = ne v21 0.i256;
-        v23.i256 = zext v22 i256;
-        v24.i1 = eq v23 1.i256;
-        br v24 block9 block16;
+        v17.*@__fe_tuple_1 = int_to_ptr v0 *@__fe_tuple_1;
+        v18.*i256 = gep v17 0.i256 0.i256 1.i256;
+        v19.i256 = mload v18 i256;
+        v20.i1 = ne v19 0.i256;
+        v21.i256 = zext v20 i256;
+        v22.i1 = eq v21 1.i256;
+        br v22 block9 block16;
 
     block9:
-        v27.*@__fe_tuple_1 = int_to_ptr v0 *@__fe_tuple_1;
-        v28.*i256 = gep v27 0.i256 1.i256;
-        v29.i256 = ptr_to_int v28 i256;
-        v30.i256 = mload v29 i256;
-        v31.i1 = ne v30 0.i256;
-        v32.i256 = zext v31 i256;
-        v33.i1 = eq v32 1.i256;
-        br v33 block1 block17;
+        v25.*@__fe_tuple_1 = int_to_ptr v0 *@__fe_tuple_1;
+        v26.*i256 = gep v25 0.i256 1.i256;
+        v27.i256 = mload v26 i256;
+        v28.i1 = ne v27 0.i256;
+        v29.i256 = zext v28 i256;
+        v30.i1 = eq v29 1.i256;
+        br v30 block1 block17;
 
     block10:
         evm_invalid;
@@ -69,14 +66,13 @@ func public %match_nested_tuple(v0.i256) -> i256 {
         evm_invalid;
 
     block12:
-        v36.*@__fe_tuple_1 = int_to_ptr v0 *@__fe_tuple_1;
-        v37.*i256 = gep v36 0.i256 1.i256;
-        v38.i256 = ptr_to_int v37 i256;
-        v39.i256 = mload v38 i256;
-        v40.i1 = ne v39 0.i256;
-        v41.i256 = zext v40 i256;
-        v42.i1 = eq v41 1.i256;
-        br v42 block5 block18;
+        v33.*@__fe_tuple_1 = int_to_ptr v0 *@__fe_tuple_1;
+        v34.*i256 = gep v33 0.i256 1.i256;
+        v35.i256 = mload v34 i256;
+        v36.i1 = ne v35 0.i256;
+        v37.i256 = zext v36 i256;
+        v38.i1 = eq v37 1.i256;
+        br v38 block5 block18;
 
     block13:
         evm_invalid;
@@ -85,20 +81,20 @@ func public %match_nested_tuple(v0.i256) -> i256 {
         evm_invalid;
 
     block15:
-        v16.i1 = eq v14 0.i256;
-        br v16 block12 block14;
+        v15.i1 = eq v13 0.i256;
+        br v15 block12 block14;
 
     block16:
-        v25.i1 = eq v23 0.i256;
-        br v25 block4 block11;
+        v23.i1 = eq v21 0.i256;
+        br v23 block4 block11;
 
     block17:
-        v34.i1 = eq v32 0.i256;
-        br v34 block3 block10;
+        v31.i1 = eq v29 0.i256;
+        br v31 block3 block10;
 
     block18:
-        v43.i1 = eq v41 0.i256;
-        br v43 block6 block13;
+        v39.i1 = eq v37 0.i256;
+        br v39 block6 block13;
 }
 
 func public %match_deeply_nested(v0.i256) -> i256 {
@@ -121,49 +117,45 @@ func public %match_deeply_nested(v0.i256) -> i256 {
     block5:
         v6.*@__fe_tuple_2 = int_to_ptr v0 *@__fe_tuple_2;
         v7.*i256 = gep v6 0.i256 0.i256 0.i256 0.i256;
-        v8.i256 = ptr_to_int v7 i256;
-        v9.i256 = mload v8 i256;
-        v10.i1 = ne v9 0.i256;
-        v11.i256 = zext v10 i256;
-        v13.i1 = eq v11 1.i256;
-        br v13 block6 block10;
+        v8.i256 = mload v7 i256;
+        v9.i1 = ne v8 0.i256;
+        v10.i256 = zext v9 i256;
+        v12.i1 = eq v10 1.i256;
+        br v12 block6 block10;
 
     block6:
-        v16.*@__fe_tuple_2 = int_to_ptr v0 *@__fe_tuple_2;
-        v17.*i256 = gep v16 0.i256 1.i256;
-        v18.i256 = ptr_to_int v17 i256;
-        v19.i256 = mload v18 i256;
-        v20.i1 = ne v19 0.i256;
-        v21.i256 = zext v20 i256;
-        v22.i1 = eq v21 1.i256;
-        br v22 block7 block3;
+        v15.*@__fe_tuple_2 = int_to_ptr v0 *@__fe_tuple_2;
+        v16.*i256 = gep v15 0.i256 1.i256;
+        v17.i256 = mload v16 i256;
+        v18.i1 = ne v17 0.i256;
+        v19.i256 = zext v18 i256;
+        v20.i1 = eq v19 1.i256;
+        br v20 block7 block3;
 
     block7:
-        v24.*@__fe_tuple_2 = int_to_ptr v0 *@__fe_tuple_2;
-        v25.*i256 = gep v24 0.i256 0.i256 1.i256;
-        v26.i256 = ptr_to_int v25 i256;
-        v27.i256 = mload v26 i256;
-        v28.i1 = ne v27 0.i256;
-        v29.i256 = zext v28 i256;
-        v30.i1 = eq v29 1.i256;
-        br v30 block8 block3;
+        v22.*@__fe_tuple_2 = int_to_ptr v0 *@__fe_tuple_2;
+        v23.*i256 = gep v22 0.i256 0.i256 1.i256;
+        v24.i256 = mload v23 i256;
+        v25.i1 = ne v24 0.i256;
+        v26.i256 = zext v25 i256;
+        v27.i1 = eq v26 1.i256;
+        br v27 block8 block3;
 
     block8:
-        v32.*@__fe_tuple_2 = int_to_ptr v0 *@__fe_tuple_2;
-        v33.*i256 = gep v32 0.i256 0.i256 0.i256 1.i256;
-        v34.i256 = ptr_to_int v33 i256;
-        v35.i256 = mload v34 i256;
-        v36.i1 = ne v35 0.i256;
-        v37.i256 = zext v36 i256;
-        v38.i1 = eq v37 1.i256;
-        br v38 block1 block3;
+        v29.*@__fe_tuple_2 = int_to_ptr v0 *@__fe_tuple_2;
+        v30.*i256 = gep v29 0.i256 0.i256 0.i256 1.i256;
+        v31.i256 = mload v30 i256;
+        v32.i1 = ne v31 0.i256;
+        v33.i256 = zext v32 i256;
+        v34.i1 = eq v33 1.i256;
+        br v34 block1 block3;
 
     block9:
         evm_invalid;
 
     block10:
-        v14.i1 = eq v11 0.i256;
-        br v14 block4 block9;
+        v13.i1 = eq v10 0.i256;
+        br v13 block4 block9;
 }
 
 func public %__fe_sonatina_entry() {

@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/match_nested_enum.fe
 ---
@@ -14,33 +13,37 @@ func public %match_nested_enum(v0.i256) -> i256 {
         jump block2;
 
     block2:
-        v3.i256 = phi (0.i256 block1) (v9 block3) (v15 block4);
+        v3.i256 = phi (0.i256 block1) (v10 block3) (v17 block4);
         return v3;
 
     block3:
         v6.i256 = add v0 64.i256;
-        v7.i256 = mload v6 i256;
-        v8.i8 = trunc v7 i8;
-        v9.i256 = zext v8 i256;
+        v7.*i256 = int_to_ptr v6 *i256;
+        v8.i256 = mload v7 i256;
+        v9.i8 = trunc v8 i8;
+        v10.i256 = zext v9 i256;
         jump block2;
 
     block4:
-        v12.i256 = add v0 32.i256;
-        v13.i256 = mload v12 i256;
-        v14.i8 = trunc v13 i8;
-        v15.i256 = zext v14 i256;
+        v13.i256 = add v0 32.i256;
+        v14.*i256 = int_to_ptr v13 *i256;
+        v15.i256 = mload v14 i256;
+        v16.i8 = trunc v15 i8;
+        v17.i256 = zext v16 i256;
         jump block2;
 
     block5:
-        v17.i256 = mload v0 i256;
-        v19.i1 = eq v17 0.i256;
-        br v19 block6 block9;
+        v19.*i256 = int_to_ptr v0 *i256;
+        v20.i256 = mload v19 i256;
+        v22.i1 = eq v20 0.i256;
+        br v22 block6 block9;
 
     block6:
-        v22.i256 = add v0 32.i256;
-        v23.i256 = mload v22 i256;
-        v24.i1 = eq v23 0.i256;
-        br v24 block1 block10;
+        v25.i256 = add v0 32.i256;
+        v26.*i256 = int_to_ptr v25 *i256;
+        v27.i256 = mload v26 i256;
+        v28.i1 = eq v27 0.i256;
+        br v28 block1 block10;
 
     block7:
         evm_invalid;
@@ -49,12 +52,12 @@ func public %match_nested_enum(v0.i256) -> i256 {
         evm_invalid;
 
     block9:
-        v20.i1 = eq v17 1.i256;
-        br v20 block4 block8;
+        v23.i1 = eq v20 1.i256;
+        br v23 block4 block8;
 
     block10:
-        v25.i1 = eq v23 1.i256;
-        br v25 block3 block7;
+        v29.i1 = eq v27 1.i256;
+        br v29 block3 block7;
 }
 
 func public %__fe_sonatina_entry() {
