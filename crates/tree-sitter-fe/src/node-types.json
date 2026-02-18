@@ -6579,6 +6579,10 @@
         {
           "type": "type_bound",
           "named": true
+        },
+        {
+          "type": "type_bound_list",
+          "named": true
         }
       ]
     }
@@ -6751,6 +6755,10 @@
         "types": [
           {
             "type": "!",
+            "named": false
+          },
+          {
+            "type": "+",
             "named": false
           },
           {

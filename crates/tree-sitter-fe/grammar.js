@@ -488,7 +488,10 @@ module.exports = grammar({
       field('type', $._type),
     ),
 
-    type_bound_list: $ => prec.left(sep1($.type_bound, '+')),
+    type_bound_list: $ => choice(
+      $.type_bound,
+      prec.right(PREC.UNARY + 1, seq($.type_bound_list, '+', $.type_bound)),
+    ),
 
     type_bound: $ => choice(
       // Trait bound: Path<Args>
@@ -681,7 +684,7 @@ module.exports = grammar({
     },
 
     unary_expression: $ => prec(PREC.UNARY, seq(
-      field('operator', choice('!', '-', '~')),
+      field('operator', choice('!', '-', '~', '+')),
       field('operand', $._expression),
     )),
 
