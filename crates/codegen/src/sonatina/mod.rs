@@ -393,6 +393,8 @@ struct ModuleLowerer<'db, 'a> {
     gep_type_cache: FxHashMap<String, Option<Type>>,
     /// Counter for generating unique sonatina struct type names.
     gep_name_counter: usize,
+    /// Interprocedural pointer escape summaries keyed by lowered symbol name.
+    ptr_escape_summaries: FxHashMap<String, lower::MirPtrEscapeSummary>,
 }
 
 impl<'db, 'a> ModuleLowerer<'db, 'a> {
@@ -418,6 +420,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             entry_func_idxs: FxHashSet::default(),
             gep_type_cache: FxHashMap::default(),
             gep_name_counter: 0,
+            ptr_escape_summaries: lower::compute_mir_ptr_escape_summaries(mir),
         }
     }
 
@@ -1096,6 +1099,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 is_entry,
                 gep_type_cache: &mut self.gep_type_cache,
                 gep_name_counter: &mut self.gep_name_counter,
+                ptr_escape_summaries: &self.ptr_escape_summaries,
             };
 
             for (idx, block) in ctx.body.blocks.iter().enumerate() {
@@ -1134,4 +1138,6 @@ pub(super) struct LowerCtx<'a, 'db, C: sonatina_ir::func_cursor::FuncCursor> {
     pub(super) gep_type_cache: &'a mut FxHashMap<String, Option<Type>>,
     /// Counter for generating unique sonatina struct type names.
     pub(super) gep_name_counter: &'a mut usize,
+    /// Interprocedural pointer escape summaries keyed by lowered symbol name.
+    pub(super) ptr_escape_summaries: &'a FxHashMap<String, lower::MirPtrEscapeSummary>,
 }
