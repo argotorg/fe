@@ -420,8 +420,14 @@ impl<'db> TyCheckEnv<'db> {
                 };
 
                 let provided_ty = match path_res {
-                    PathRes::Trait(_) => match root_effect_ty {
-                        Some(ty) => ty,
+                    PathRes::Trait(trait_inst) => match root_effect_ty {
+                        Some(ty) => {
+                            self.effect_bounds
+                                .push(super::super::instantiate_trait_self(
+                                    self.db, trait_inst, ty,
+                                ));
+                            ty
+                        }
                         None => continue,
                     },
                     PathRes::Ty(ty) | PathRes::TyAlias(_, ty) if ty.is_star_kind(self.db) => ty,
@@ -502,8 +508,14 @@ impl<'db> TyCheckEnv<'db> {
                     continue;
                 };
                 let provided_ty = match path_res {
-                    PathRes::Trait(_) => match root_effect_ty {
-                        Some(ty) => ty,
+                    PathRes::Trait(trait_inst) => match root_effect_ty {
+                        Some(ty) => {
+                            self.effect_bounds
+                                .push(super::super::instantiate_trait_self(
+                                    self.db, trait_inst, ty,
+                                ));
+                            ty
+                        }
                         None => continue,
                     },
                     PathRes::Ty(ty) | PathRes::TyAlias(_, ty) if ty.is_star_kind(self.db) => ty,
