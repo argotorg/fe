@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/enum_variant_contract.fe
 ---
@@ -33,78 +32,81 @@ func private %runtime__StorPtr_Evm___207f35a85ac4062e() {
         v9.i256 = evm_calldata_load 4.i256;
         v11.*i8 = evm_malloc 64.i256;
         v12.i256 = ptr_to_int v11 i256;
-        mstore v12 1.i256 i256;
+        mstore v11 1.i256 i256;
         v15.i256 = add v12 32.i256;
-        mstore v15 v9 i256;
+        v16.*i8 = int_to_ptr v15 *i8;
+        mstore v16 v9 i256;
         jump block6;
 
     block2:
-        v18.i1 = eq v3 1163776883.i256;
-        v19.i256 = zext v18 i256;
-        v20.i1 = ne v19 0.i256;
-        br v20 block8 block9;
+        v19.i1 = eq v3 1163776883.i256;
+        v20.i256 = zext v19 i256;
+        v21.i1 = ne v20 0.i256;
+        br v21 block8 block9;
 
     block3:
-        v22.i256 = add v12 32.i256;
-        v23.i256 = mload v22 i256;
+        v23.i256 = add v12 32.i256;
+        v24.i256 = mload v23 i256;
         jump block4;
 
     block4:
-        v25.i256 = phi (v23 block3) (0.i256 block5);
-        call %abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741 v25 0.i256;
+        v26.i256 = phi (v24 block3) (0.i256 block5);
+        call %abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741 v26 0.i256;
         evm_invalid;
 
     block5:
         jump block4;
 
     block6:
-        v27.i256 = mload v12 i256;
-        v28.i1 = eq v27 1.i256;
-        br v28 block3 block22;
+        v28.i256 = mload v12 i256;
+        v29.i1 = eq v28 1.i256;
+        br v29 block3 block22;
 
     block7:
         evm_invalid;
 
     block8:
-        v30.*i8 = evm_malloc 64.i256;
-        v31.i256 = ptr_to_int v30 i256;
+        v31.*i8 = evm_malloc 64.i256;
+        v32.i256 = ptr_to_int v31 i256;
         mstore v31 0.i256 i256;
         jump block13;
 
     block9:
-        v34.i1 = eq v3 3572425762.i256;
-        v35.i256 = zext v34 i256;
-        v36.i1 = ne v35 0.i256;
-        br v36 block15 block16;
+        v35.i1 = eq v3 3572425762.i256;
+        v36.i256 = zext v35 i256;
+        v37.i1 = ne v36 0.i256;
+        br v37 block15 block16;
 
     block10:
-        v38.i256 = add v31 32.i256;
-        v39.i256 = mload v38 i256;
+        v39.i256 = add v32 32.i256;
+        v40.i256 = mload v39 i256;
         jump block11;
 
     block11:
-        v41.i256 = phi (v39 block10) (0.i256 block12);
-        call %abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741 v41 0.i256;
+        v42.i256 = phi (v40 block10) (0.i256 block12);
+        call %abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741 v42 0.i256;
         evm_invalid;
 
     block12:
         jump block11;
 
     block13:
-        v43.i256 = mload v31 i256;
-        v44.i1 = eq v43 1.i256;
-        br v44 block10 block23;
+        v44.i256 = mload v32 i256;
+        v45.i1 = eq v44 1.i256;
+        br v45 block10 block23;
 
     block14:
         evm_invalid;
 
     block15:
-        v46.i256 = evm_calldata_load 4.i256;
-        v47.*i8 = evm_malloc 64.i256;
-        v48.i256 = ptr_to_int v47 i256;
-        mstore v48 1.i256 i256;
-        v49.i256 = add v48 32.i256;
-        mstore v49 v46 i256;
+        v47.i256 = evm_calldata_load 4.i256;
+        v48.*[i8; 64] = alloca [i8; 64];
+        v49.i256 = ptr_to_int v48 i256;
+        v50.*i8 = bitcast v48 *i8;
+        mstore v50 1.i256 i256;
+        v51.i256 = add v49 32.i256;
+        v52.*i8 = int_to_ptr v51 *i8;
+        mstore v52 v47 i256;
         jump block20;
 
     block16:
@@ -114,32 +116,32 @@ func private %runtime__StorPtr_Evm___207f35a85ac4062e() {
         jump block18;
 
     block18:
-        v50.i256 = phi (1.i256 block17) (0.i256 block19);
-        call %abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741 v50 0.i256;
+        v53.i256 = phi (1.i256 block17) (0.i256 block19);
+        call %abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741 v53 0.i256;
         evm_invalid;
 
     block19:
         jump block18;
 
     block20:
-        v52.i256 = mload v48 i256;
-        v53.i1 = eq v52 1.i256;
-        br v53 block17 block24;
+        v55.i256 = mload v49 i256;
+        v56.i1 = eq v55 1.i256;
+        br v56 block17 block24;
 
     block21:
         evm_invalid;
 
     block22:
-        v29.i1 = eq v27 0.i256;
-        br v29 block5 block7;
+        v30.i1 = eq v28 0.i256;
+        br v30 block5 block7;
 
     block23:
-        v45.i1 = eq v43 0.i256;
-        br v45 block12 block14;
+        v46.i1 = eq v44 0.i256;
+        br v46 block12 block14;
 
     block24:
-        v54.i1 = eq v52 0.i256;
-        br v54 block19 block21;
+        v57.i1 = eq v55 0.i256;
+        br v57 block19 block21;
 }
 
 

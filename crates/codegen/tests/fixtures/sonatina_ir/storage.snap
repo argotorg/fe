@@ -192,7 +192,7 @@ func private %transfer_from_alice__StorPtr_CoinStore___ba1c0d0726e89ba2(v0.i256,
     block1:
         v8.*i8 = evm_malloc 32.i256;
         v9.i256 = ptr_to_int v8 i256;
-        mstore v9 1.i256 i256;
+        mstore v8 1.i256 i256;
         return v9;
 
     block2:
@@ -206,7 +206,7 @@ func private %transfer_from_alice__StorPtr_CoinStore___ba1c0d0726e89ba2(v0.i256,
         evm_sstore v18 v17;
         v19.*i8 = evm_malloc 32.i256;
         v20.i256 = ptr_to_int v19 i256;
-        mstore v20 0.i256 i256;
+        mstore v19 0.i256 i256;
         return v20;
 }
 
@@ -222,7 +222,7 @@ func private %transfer_from_bob__StorPtr_CoinStore___ba1c0d0726e89ba2(v0.i256, v
     block1:
         v10.*i8 = evm_malloc 32.i256;
         v11.i256 = ptr_to_int v10 i256;
-        mstore v11 1.i256 i256;
+        mstore v10 1.i256 i256;
         return v11;
 
     block2:
@@ -236,7 +236,7 @@ func private %transfer_from_bob__StorPtr_CoinStore___ba1c0d0726e89ba2(v0.i256, v
         evm_sstore v1 v19;
         v20.*i8 = evm_malloc 32.i256;
         v21.i256 = ptr_to_int v20 i256;
-        mstore v21 0.i256 i256;
+        mstore v20 0.i256 i256;
         return v21;
 }
 

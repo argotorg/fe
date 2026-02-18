@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/match_enum_with_data.fe
 ---
@@ -10,11 +9,12 @@ func public %make_some(v0.i256) -> i256 {
     block0:
         v3.*i8 = evm_malloc 64.i256;
         v4.i256 = ptr_to_int v3 i256;
-        mstore v4 1.i256 i256;
+        mstore v3 1.i256 i256;
         v6.i64 = trunc v0 i64;
         v7.i256 = zext v6 i256;
         v9.i256 = add v4 32.i256;
-        mstore v9 v7 i256;
+        v10.*i8 = int_to_ptr v9 *i8;
+        mstore v10 v7 i256;
         return v4;
 }
 

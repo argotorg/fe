@@ -12,15 +12,16 @@ func public %tuple_with_empty() -> i256 {
     block0:
         v3.*i8 = evm_malloc 32.i256;
         v4.i256 = ptr_to_int v3 i256;
-        v5.*@__fe_tuple_0 = int_to_ptr v4 *@__fe_tuple_0;
+        v5.*@__fe_tuple_0 = bitcast v3 *@__fe_tuple_0;
         v7.*i256 = gep v5 0.i256 1.i256;
         v8.i256 = ptr_to_int v7 i256;
-        mstore v8 5.i256 i256;
-        v9.*@__fe_tuple_0 = int_to_ptr v4 *@__fe_tuple_0;
-        v10.*i256 = gep v9 0.i256 1.i256;
-        v11.i256 = ptr_to_int v10 i256;
-        v12.i256 = mload v11 i256;
-        return v12;
+        v9.*i8 = bitcast v7 *i8;
+        mstore v9 5.i256 i256;
+        v10.*@__fe_tuple_0 = bitcast v3 *@__fe_tuple_0;
+        v11.*i256 = gep v10 0.i256 1.i256;
+        v12.i256 = ptr_to_int v11 i256;
+        v13.i256 = mload v12 i256;
+        return v13;
 }
 
 func public %tuple_only_empty() {
@@ -32,25 +33,26 @@ func public %struct_with_empty() -> i256 {
     block0:
         v3.*i8 = evm_malloc 32.i256;
         v4.i256 = ptr_to_int v3 i256;
-        v5.*@__fe_Wrap_1 = int_to_ptr v4 *@__fe_Wrap_1;
+        v5.*@__fe_Wrap_1 = bitcast v3 *@__fe_Wrap_1;
         v7.*i256 = gep v5 0.i256 1.i256;
         v8.i256 = ptr_to_int v7 i256;
-        mstore v8 7.i256 i256;
-        v9.*@__fe_Wrap_1 = int_to_ptr v4 *@__fe_Wrap_1;
-        v10.*i256 = gep v9 0.i256 1.i256;
-        v11.i256 = ptr_to_int v10 i256;
-        v12.i256 = mload v11 i256;
-        return v12;
+        v9.*i8 = bitcast v7 *i8;
+        mstore v9 7.i256 i256;
+        v10.*@__fe_Wrap_1 = bitcast v3 *@__fe_Wrap_1;
+        v11.*i256 = gep v10 0.i256 1.i256;
+        v12.i256 = ptr_to_int v11 i256;
+        v13.i256 = mload v12 i256;
+        return v13;
 }
 
 func public %empty_field_assign() {
     block0:
-        v2.*i8 = evm_malloc 32.i256;
-        v3.i256 = ptr_to_int v2 i256;
-        v5.*@__fe_Wrap_1 = int_to_ptr v3 *@__fe_Wrap_1;
-        v6.*i256 = gep v5 0.i256 1.i256;
-        v7.i256 = ptr_to_int v6 i256;
-        mstore v7 1.i256 i256;
+        v1.*@__fe_Wrap_1 = alloca @__fe_Wrap_1;
+        v2.i256 = ptr_to_int v1 i256;
+        v4.*i256 = gep v1 0.i256 1.i256;
+        v5.i256 = ptr_to_int v4 i256;
+        v6.*i8 = bitcast v4 *i8;
+        mstore v6 1.i256 i256;
         return;
 }
 

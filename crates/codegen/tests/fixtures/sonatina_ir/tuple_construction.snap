@@ -14,14 +14,16 @@ func public %make_tuple() -> i256 {
         v3.i256 = ptr_to_int v2 i256;
         v5.i64 = trunc 42.i256 i64;
         v6.i256 = zext v5 i256;
-        v7.*@__fe_tuple_0 = int_to_ptr v3 *@__fe_tuple_0;
+        v7.*@__fe_tuple_0 = bitcast v2 *@__fe_tuple_0;
         v8.*i256 = gep v7 0.i256 0.i256;
         v9.i256 = ptr_to_int v8 i256;
-        mstore v9 v6 i256;
-        v11.*@__fe_tuple_0 = int_to_ptr v3 *@__fe_tuple_0;
-        v13.*i256 = gep v11 0.i256 1.i256;
-        v14.i256 = ptr_to_int v13 i256;
-        mstore v14 99.i256 i256;
+        v10.*i8 = bitcast v8 *i8;
+        mstore v10 v6 i256;
+        v12.*@__fe_tuple_0 = bitcast v2 *@__fe_tuple_0;
+        v14.*i256 = gep v12 0.i256 1.i256;
+        v15.i256 = ptr_to_int v14 i256;
+        v16.*i8 = bitcast v14 *i8;
+        mstore v16 99.i256 i256;
         return v3;
 }
 
@@ -29,23 +31,26 @@ func public %access_tuple() -> i256 {
     block0:
         v2.*i8 = evm_malloc 96.i256;
         v3.i256 = ptr_to_int v2 i256;
-        v5.*@__fe_tuple_1 = int_to_ptr v3 *@__fe_tuple_1;
+        v5.*@__fe_tuple_1 = bitcast v2 *@__fe_tuple_1;
         v6.*i256 = gep v5 0.i256 0.i256;
         v7.i256 = ptr_to_int v6 i256;
-        mstore v7 1.i256 i256;
-        v9.*@__fe_tuple_1 = int_to_ptr v3 *@__fe_tuple_1;
-        v10.*i256 = gep v9 0.i256 1.i256;
-        v11.i256 = ptr_to_int v10 i256;
-        mstore v11 2.i256 i256;
-        v13.*@__fe_tuple_1 = int_to_ptr v3 *@__fe_tuple_1;
-        v14.*i256 = gep v13 0.i256 2.i256;
-        v15.i256 = ptr_to_int v14 i256;
-        mstore v15 3.i256 i256;
-        v16.*@__fe_tuple_1 = int_to_ptr v3 *@__fe_tuple_1;
-        v17.*i256 = gep v16 0.i256 1.i256;
-        v18.i256 = ptr_to_int v17 i256;
-        v19.i256 = mload v18 i256;
-        return v19;
+        v8.*i8 = bitcast v6 *i8;
+        mstore v8 1.i256 i256;
+        v10.*@__fe_tuple_1 = bitcast v2 *@__fe_tuple_1;
+        v11.*i256 = gep v10 0.i256 1.i256;
+        v12.i256 = ptr_to_int v11 i256;
+        v13.*i8 = bitcast v11 *i8;
+        mstore v13 2.i256 i256;
+        v15.*@__fe_tuple_1 = bitcast v2 *@__fe_tuple_1;
+        v16.*i256 = gep v15 0.i256 2.i256;
+        v17.i256 = ptr_to_int v16 i256;
+        v18.*i8 = bitcast v16 *i8;
+        mstore v18 3.i256 i256;
+        v19.*@__fe_tuple_1 = bitcast v2 *@__fe_tuple_1;
+        v20.*i256 = gep v19 0.i256 1.i256;
+        v21.i256 = ptr_to_int v20 i256;
+        v22.i256 = mload v21 i256;
+        return v22;
 }
 
 func public %__fe_sonatina_entry() {

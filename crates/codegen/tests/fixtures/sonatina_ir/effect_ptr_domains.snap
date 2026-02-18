@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/effect_ptr_domains.fe
 ---
@@ -29,14 +28,16 @@ func private %test_effect_ptr_domains__Evm_hef0af3106e109414_Evm_hef0af3106e1094
         call %bump__StorPtr_Foo___3698cc3c4b2626e3 v5;
         v7.*i8 = evm_malloc 64.i256;
         v8.i256 = ptr_to_int v7 i256;
-        v10.*@__fe_Foo_0 = int_to_ptr v8 *@__fe_Foo_0;
+        v10.*@__fe_Foo_0 = bitcast v7 *@__fe_Foo_0;
         v11.*i256 = gep v10 0.i256 0.i256;
         v12.i256 = ptr_to_int v11 i256;
-        mstore v12 10.i256 i256;
-        v14.*@__fe_Foo_0 = int_to_ptr v8 *@__fe_Foo_0;
-        v16.*i256 = gep v14 0.i256 1.i256;
-        v17.i256 = ptr_to_int v16 i256;
-        mstore v17 20.i256 i256;
+        v13.*i8 = bitcast v11 *i8;
+        mstore v13 10.i256 i256;
+        v15.*@__fe_Foo_0 = bitcast v7 *@__fe_Foo_0;
+        v17.*i256 = gep v15 0.i256 1.i256;
+        v18.i256 = ptr_to_int v17 i256;
+        v19.*i8 = bitcast v17 *i8;
+        mstore v19 20.i256 i256;
         call %bump__MemPtr_Foo___cdd30998d577b6ea v8;
         return;
 }
@@ -57,16 +58,18 @@ func private %bump__MemPtr_Foo___cdd30998d577b6ea(v0.i256) {
         v8.*@__fe_Foo_0 = int_to_ptr v0 *@__fe_Foo_0;
         v9.*i256 = gep v8 0.i256 0.i256;
         v10.i256 = ptr_to_int v9 i256;
-        mstore v10 v7 i256;
-        v11.*@__fe_Foo_0 = int_to_ptr v0 *@__fe_Foo_0;
-        v12.*i256 = gep v11 0.i256 1.i256;
-        v13.i256 = ptr_to_int v12 i256;
-        v14.i256 = mload v13 i256;
-        v16.i256 = add v14 2.i256;
-        v17.*@__fe_Foo_0 = int_to_ptr v0 *@__fe_Foo_0;
-        v18.*i256 = gep v17 0.i256 1.i256;
-        v19.i256 = ptr_to_int v18 i256;
-        mstore v19 v16 i256;
+        v11.*i8 = bitcast v9 *i8;
+        mstore v11 v7 i256;
+        v12.*@__fe_Foo_0 = int_to_ptr v0 *@__fe_Foo_0;
+        v13.*i256 = gep v12 0.i256 1.i256;
+        v14.i256 = ptr_to_int v13 i256;
+        v15.i256 = mload v14 i256;
+        v17.i256 = add v15 2.i256;
+        v18.*@__fe_Foo_0 = int_to_ptr v0 *@__fe_Foo_0;
+        v19.*i256 = gep v18 0.i256 1.i256;
+        v20.i256 = ptr_to_int v19 i256;
+        v21.*i8 = bitcast v19 *i8;
+        mstore v21 v17 i256;
         return;
 }
 
