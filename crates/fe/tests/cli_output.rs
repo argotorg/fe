@@ -1,5 +1,10 @@
 use dir_test::{Fixture, dir_test};
-use std::{io::IsTerminal, path::Path, process::Command};
+use std::{
+    io::IsTerminal,
+    path::{Path, PathBuf},
+    process::Command,
+    sync::OnceLock,
+};
 use test_utils::snap_test;
 
 // Helper function to normalize paths in output for portability
@@ -76,29 +81,38 @@ impl FeOutput {
     }
 }
 
+fn fe_binary() -> &'static PathBuf {
+    static BIN: OnceLock<PathBuf> = OnceLock::new();
+    BIN.get_or_init(|| {
+        if let Some(bin) = std::env::var_os("CARGO_BIN_EXE_fe") {
+            return PathBuf::from(bin);
+        }
+
+        let cargo_exe = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+        let output = Command::new(&cargo_exe)
+            .args(["build", "--bin", "fe"])
+            .output()
+            .expect("Failed to build fe binary");
+
+        if !output.status.success() {
+            panic!(
+                "Failed to build fe binary: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        std::env::current_exe()
+            .expect("Failed to get current exe")
+            .parent()
+            .expect("Failed to get parent")
+            .parent()
+            .expect("Failed to get parent")
+            .join(format!("fe{}", std::env::consts::EXE_SUFFIX))
+    })
+}
+
 fn run_fe_main_impl(args: &[&str], cwd: Option<&Path>) -> FeOutput {
-    let cargo_exe = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
-    let output = Command::new(&cargo_exe)
-        .args(["build", "--bin", "fe"])
-        .output()
-        .expect("Failed to build fe binary");
-
-    if !output.status.success() {
-        panic!(
-            "Failed to build fe binary: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    let fe_binary = std::env::current_exe()
-        .expect("Failed to get current exe")
-        .parent()
-        .expect("Failed to get parent")
-        .parent()
-        .expect("Failed to get parent")
-        .join("fe");
-
-    let mut cmd = Command::new(&fe_binary);
+    let mut cmd = Command::new(fe_binary());
     cmd.args(args).env("NO_COLOR", "1");
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
