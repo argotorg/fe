@@ -2500,20 +2500,26 @@ fn rvalue_may_escape_local<'db>(
 ) -> bool {
     match rvalue {
         mir::Rvalue::Call(call) => {
-            values_depend_on_local(
+            let arg_escape_mask =
+                call_escape_arg_mask(call.resolved_name.as_deref(), ptr_escape_summaries);
+            call_args_depend_on_local_with_mask(
                 body,
                 &call.args,
                 local,
                 ptr_escape_summaries,
+                arg_escape_mask,
+                0,
                 value_memo,
                 value_visiting,
                 local_memo,
                 local_visiting,
-            ) || values_depend_on_local(
+            ) || call_args_depend_on_local_with_mask(
                 body,
                 &call.effect_args,
                 local,
                 ptr_escape_summaries,
+                arg_escape_mask,
+                call.args.len(),
                 value_memo,
                 value_visiting,
                 local_memo,
@@ -2563,20 +2569,26 @@ fn terminator_may_escape_local<'db>(
         ),
         mir::Terminator::TerminatingCall { call, .. } => match call {
             mir::TerminatingCall::Call(call) => {
-                values_depend_on_local(
+                let arg_escape_mask =
+                    call_escape_arg_mask(call.resolved_name.as_deref(), ptr_escape_summaries);
+                call_args_depend_on_local_with_mask(
                     body,
                     &call.args,
                     local,
                     ptr_escape_summaries,
+                    arg_escape_mask,
+                    0,
                     value_memo,
                     value_visiting,
                     local_memo,
                     local_visiting,
-                ) || values_depend_on_local(
+                ) || call_args_depend_on_local_with_mask(
                     body,
                     &call.effect_args,
                     local,
                     ptr_escape_summaries,
+                    arg_escape_mask,
+                    call.args.len(),
                     value_memo,
                     value_visiting,
                     local_memo,
@@ -2734,20 +2746,26 @@ fn rvalue_depends_on_local_value<'db>(
             local_visiting,
         ),
         mir::Rvalue::Call(call) => {
-            values_depend_on_local(
+            let arg_return_mask =
+                call_return_arg_mask(call.resolved_name.as_deref(), ptr_escape_summaries);
+            call_args_depend_on_local_with_mask(
                 body,
                 &call.args,
                 local,
                 ptr_escape_summaries,
+                arg_return_mask,
+                0,
                 value_memo,
                 value_visiting,
                 local_memo,
                 local_visiting,
-            ) || values_depend_on_local(
+            ) || call_args_depend_on_local_with_mask(
                 body,
                 &call.effect_args,
                 local,
                 ptr_escape_summaries,
+                arg_return_mask,
+                call.args.len(),
                 value_memo,
                 value_visiting,
                 local_memo,
@@ -2775,6 +2793,56 @@ fn rvalue_depends_on_local_value<'db>(
             local_visiting,
         ),
     }
+}
+
+fn call_escape_arg_mask<'a>(
+    callee_name: Option<&str>,
+    ptr_escape_summaries: &'a FxHashMap<String, MirPtrEscapeSummary>,
+) -> Option<&'a [bool]> {
+    callee_name
+        .and_then(|name| ptr_escape_summaries.get(name))
+        .map(|summary| summary.arg_may_escape.as_slice())
+}
+
+fn call_return_arg_mask<'a>(
+    callee_name: Option<&str>,
+    ptr_escape_summaries: &'a FxHashMap<String, MirPtrEscapeSummary>,
+) -> Option<&'a [bool]> {
+    callee_name
+        .and_then(|name| ptr_escape_summaries.get(name))
+        .map(|summary| summary.arg_may_be_returned.as_slice())
+}
+
+fn call_args_depend_on_local_with_mask<'db>(
+    body: &mir::MirBody<'db>,
+    values: &[mir::ValueId],
+    local: mir::LocalId,
+    ptr_escape_summaries: &FxHashMap<String, MirPtrEscapeSummary>,
+    arg_mask: Option<&[bool]>,
+    arg_offset: usize,
+    value_memo: &mut [Option<bool>],
+    value_visiting: &mut [bool],
+    local_memo: &mut [Option<bool>],
+    local_visiting: &mut [bool],
+) -> bool {
+    values.iter().copied().enumerate().any(|(index, value)| {
+        if let Some(mask) = arg_mask
+            && !mask.get(arg_offset + index).copied().unwrap_or(true)
+        {
+            return false;
+        }
+
+        value_depends_on_local(
+            body,
+            value,
+            local,
+            ptr_escape_summaries,
+            value_memo,
+            value_visiting,
+            local_memo,
+            local_visiting,
+        )
+    })
 }
 
 fn coerce_word_addr_to_ptr<'db, C: sonatina_ir::func_cursor::FuncCursor>(
