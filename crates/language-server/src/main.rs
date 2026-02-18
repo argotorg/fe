@@ -15,8 +15,11 @@ async fn main() {
 
     match args.command {
         Some(Commands::Tcp(tcp_args)) => {
-            fe_language_server::run_tcp_server(tcp_args.port, Duration::from_secs(tcp_args.timeout))
-                .await;
+            fe_language_server::run_tcp_server(
+                tcp_args.port,
+                Duration::from_secs(tcp_args.timeout),
+            )
+            .await;
         }
         None => {
             fe_language_server::run_stdio_server().await;

@@ -6,6 +6,7 @@ edition.workspace = true
 [features]
 default = ["lsp"]
 lsp = ["dep:language-server", "dep:tokio"]
+vendored-openssl = ["resolver/vendored-openssl"]
 
 [dependencies]
 clap.workspace = true
@@ -36,9 +37,6 @@ glob.workspace = true
 scip = "0.6.1"
 language-server = { workspace = true, optional = true }
 tokio = { version = "1.43.0", features = ["full"], optional = true }
-
-[features]
-vendored-openssl = ["resolver/vendored-openssl"]
 
 [dev-dependencies]
 dir-test.workspace = true

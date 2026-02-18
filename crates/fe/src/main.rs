@@ -397,7 +397,9 @@ pub fn run(opts: &Options) {
                 std::process::exit(1);
             });
             rt.block_on(async {
-                unsafe { std::env::set_var("RUST_BACKTRACE", "full"); }
+                unsafe {
+                    std::env::set_var("RUST_BACKTRACE", "full");
+                }
                 language_server::setup_panic_hook();
                 match mode {
                     Some(LspMode::Tcp { port, timeout }) => {
@@ -535,17 +537,17 @@ fn run_root(path: Option<&Utf8PathBuf>) {
 
     match discover_context(&start_url) {
         Ok(discovery) => {
-            if let Some(workspace_root) = &discovery.workspace_root {
-                if let Ok(path) = workspace_root.to_file_path() {
-                    println!("{}", path.display());
-                    return;
-                }
+            if let Some(workspace_root) = &discovery.workspace_root
+                && let Ok(path) = workspace_root.to_file_path()
+            {
+                println!("{}", path.display());
+                return;
             }
-            if let Some(ingot_root) = discovery.ingot_roots.first() {
-                if let Ok(path) = ingot_root.to_file_path() {
-                    println!("{}", path.display());
-                    return;
-                }
+            if let Some(ingot_root) = discovery.ingot_roots.first()
+                && let Ok(path) = ingot_root.to_file_path()
+            {
+                println!("{}", path.display());
+                return;
             }
             eprintln!("No fe.toml found in {start} or any parent directory");
             std::process::exit(1);
