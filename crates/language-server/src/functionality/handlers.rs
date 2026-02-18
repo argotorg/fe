@@ -405,10 +405,17 @@ async fn load_ingot_files(
     Ok(())
 }
 
+fn diag_timing_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("FE_DIAG_TIMING").is_ok())
+}
+
 pub async fn handle_files_need_diagnostics(
     backend: &Backend,
     message: FilesNeedDiagnostics,
 ) -> Result<(), ResponseError> {
+    let timing = diag_timing_enabled();
+    let t_handler = std::time::Instant::now();
     let FilesNeedDiagnostics(need_diagnostics) = message;
     let mut client = backend.client.clone();
 
@@ -429,6 +436,14 @@ pub async fn handle_files_need_diagnostics(
                 .containing_ingot(&backend.db, url.clone())
         })
         .collect();
+
+    if timing {
+        eprintln!(
+            "[fe:timing] handle_files_need_diagnostics: {} URIs -> {} ingots",
+            need_diagnostics.len(),
+            ingots_need_diagnostics.len()
+        );
+    }
 
     for ingot in ingots_need_diagnostics {
         // Wrap diagnostics computation in catch_unwind: analysis passes
@@ -480,6 +495,12 @@ pub async fn handle_files_need_diagnostics(
         }
     }
 
+    if timing {
+        eprintln!(
+            "[fe:timing] handle_files_need_diagnostics total: {:?}",
+            t_handler.elapsed()
+        );
+    }
     Ok(())
 }
 

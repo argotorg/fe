@@ -5,9 +5,17 @@ expression: diags
 input_file: fixtures/ty_check/effect_missing.fe
 ---
 error[8-0036]: missing effect `Storage` required by `needs_storage`
-   ┌─ effect_missing.fe:11:5
+   ┌─ effect_missing.fe:21:5
    │
-11 │     needs_storage()
+21 │     needs_storage()
    │     ^^^^^^^^^^^^^^^ `needs_storage` requires effect `Storage` to be in scope
+   │
+   = provide it with `with (Storage = value)` or require it via `uses Storage`
+
+error[8-0036]: missing effect `Storage` required by `run`
+   ┌─ effect_missing.fe:25:5
+   │
+25 │     worker.run()
+   │     ^^^^^^^^^^^^ `run` requires effect `Storage` to be in scope
    │
    = provide it with `with (Storage = value)` or require it via `uses Storage`

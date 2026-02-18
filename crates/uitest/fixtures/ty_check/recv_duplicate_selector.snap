@@ -1,5 +1,6 @@
 ---
 source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/recv_duplicate_selector.fe
 ---
@@ -11,5 +12,16 @@ error[8-0047]: duplicate selector across recv blocks
    ·
 13 │     Transfer { to: u64, amount: u64 } -> bool,
    │     ^^^^^^^^ `Transfer` has selector 0x00000001 which conflicts with `Deposit`
+   │
+   = each msg variant in a contract must have a unique selector
+
+error[8-0047]: duplicate selector across recv blocks
+   ┌─ recv_duplicate_selector.fe:56:5
+   │
+51 │     Foo { x: u64 } -> u64,
+   │     --- `Foo` with selector 0x00000001 declared here
+   ·
+56 │     Foo { y: u64 } -> bool,
+   │     ^^^ `Foo` has selector 0x00000001 which conflicts with `Foo`
    │
    = each msg variant in a contract must have a unique selector

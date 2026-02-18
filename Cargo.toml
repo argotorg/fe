@@ -52,6 +52,10 @@ sonatina-verifier = { git = "https://github.com/fe-lang/sonatina", rev = "e6d85a
 # Set to 0 to make the build faster and debugging more difficult.
 debug = 0
 
+[profile.test]
+# Set to 0 to make the build faster and debugging more difficult.
+debug = 0
+
 [profile.dev.package]
 revm = { opt-level = 3 }
 revm-bytecode = { opt-level = 3 }
