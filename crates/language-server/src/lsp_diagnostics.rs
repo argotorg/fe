@@ -33,12 +33,23 @@ pub trait LspDiagnostics {
     fn file_line_starts(&self, file: File) -> Vec<usize>;
 }
 
+fn diag_timing_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("FE_DIAG_TIMING").is_ok())
+}
+
 impl LspDiagnostics for DriverDataBase {
     fn diagnostics_for_ingot(&self, ingot: Ingot) -> FxHashMap<Url, Vec<Diagnostic>> {
+        let timing = diag_timing_enabled();
+        let t_total = std::time::Instant::now();
         let mut result = FxHashMap::<Url, Vec<Diagnostic>>::default();
         let mut pass_manager = initialize_analysis_pass();
         let ingot_files = ingot.files(self);
         let is_standalone = ingot.kind(self) == IngotKind::StandAlone;
+        let file_count = ingot_files
+            .iter()
+            .filter(|(_, f)| matches!(f.kind(self), Some(IngotFileKind::Source)))
+            .count();
 
         for (url, file) in ingot_files.iter() {
             if !matches!(file.kind(self), Some(IngotFileKind::Source)) {
@@ -54,8 +65,12 @@ impl LspDiagnostics for DriverDataBase {
                 file_diags.push(standalone_file_warning());
             }
 
+            let t_file = std::time::Instant::now();
             let top_mod = map_file_to_mod(self, file);
             let diagnostics = pass_manager.run_on_module(self, top_mod);
+            if timing {
+                eprintln!("[fe:timing]  file {url}: {:?}", t_file.elapsed());
+            }
             let mut finalized_diags: Vec<CompleteDiagnostic> = diagnostics
                 .iter()
                 .map(|d| d.to_complete(self).clone())
@@ -73,8 +88,12 @@ impl LspDiagnostics for DriverDataBase {
             }
         }
 
+        let t_mir = std::time::Instant::now();
         let mut mir_diags =
             self.mir_diagnostics_for_ingot(ingot, MirDiagnosticsMode::TemplatesOnly);
+        if timing {
+            eprintln!("[fe:timing]  MIR diagnostics: {:?}", t_mir.elapsed());
+        }
         mir_diags.sort_by(|lhs, rhs| match lhs.error_code.cmp(&rhs.error_code) {
             std::cmp::Ordering::Equal => lhs.primary_span().cmp(&rhs.primary_span()),
             ord => ord,
@@ -87,6 +106,12 @@ impl LspDiagnostics for DriverDataBase {
             }
         }
 
+        if timing {
+            eprintln!(
+                "[fe:timing] diagnostics_for_ingot ({file_count} files): {:?}",
+                t_total.elapsed()
+            );
+        }
         result
     }
 
@@ -153,19 +178,19 @@ impl<'a> cs_files::Files<'a> for LspDb<'a> {
 
 fn initialize_analysis_pass() -> AnalysisPassManager {
     let mut pass_manager = AnalysisPassManager::new();
-    pass_manager.add_module_pass(Box::new(ParsingPass {}));
-    pass_manager.add_module_pass(Box::new(MsgLowerPass {}));
-    pass_manager.add_module_pass(Box::new(EventLowerPass {}));
-    pass_manager.add_module_pass(Box::new(MsgSelectorAnalysisPass {}));
-    pass_manager.add_module_pass(Box::new(DefConflictAnalysisPass {}));
-    pass_manager.add_module_pass(Box::new(ImportAnalysisPass {}));
-    pass_manager.add_module_pass(Box::new(AdtDefAnalysisPass {}));
-    pass_manager.add_module_pass(Box::new(TypeAliasAnalysisPass {}));
-    pass_manager.add_module_pass(Box::new(TraitAnalysisPass {}));
-    pass_manager.add_module_pass(Box::new(ImplAnalysisPass {}));
-    pass_manager.add_module_pass(Box::new(ImplTraitAnalysisPass {}));
-    pass_manager.add_module_pass(Box::new(FuncAnalysisPass {}));
-    pass_manager.add_module_pass(Box::new(BodyAnalysisPass {}));
+    pass_manager.add_module_pass("Parsing", Box::new(ParsingPass {}));
+    pass_manager.add_module_pass("MsgLower", Box::new(MsgLowerPass {}));
+    pass_manager.add_module_pass("EventLower", Box::new(EventLowerPass {}));
+    pass_manager.add_module_pass("MsgSelector", Box::new(MsgSelectorAnalysisPass {}));
+    pass_manager.add_module_pass("DefConflict", Box::new(DefConflictAnalysisPass {}));
+    pass_manager.add_module_pass("Import", Box::new(ImportAnalysisPass {}));
+    pass_manager.add_module_pass("AdtDef", Box::new(AdtDefAnalysisPass {}));
+    pass_manager.add_module_pass("TypeAlias", Box::new(TypeAliasAnalysisPass {}));
+    pass_manager.add_module_pass("Trait", Box::new(TraitAnalysisPass {}));
+    pass_manager.add_module_pass("Impl", Box::new(ImplAnalysisPass {}));
+    pass_manager.add_module_pass("ImplTrait", Box::new(ImplTraitAnalysisPass {}));
+    pass_manager.add_module_pass("Func", Box::new(FuncAnalysisPass {}));
+    pass_manager.add_module_pass("Body", Box::new(BodyAnalysisPass {}));
     pass_manager
 }
 

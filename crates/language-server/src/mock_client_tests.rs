@@ -309,25 +309,43 @@ impl MockLspClient {
 }
 
 // ---------------------------------------------------------------------------
-// Tests
+// Tests — all scenarios share one server to avoid repeated cold salsa costs.
+//
+// Each `diagnostics_for_ingot()` call takes 1-7s on a salsa cache miss (full
+// analysis pipeline). With 7 independent tests each spinning up their own
+// server, the suite took ~160s. Sharing one server lets the first scenario
+// warm the cache; subsequent scenarios hit it in ~5ms.
 // ---------------------------------------------------------------------------
 
-/// The core scenario: send malformed edits via replay_edits_burst,
-/// then verify formatting still works.
 #[tokio::test]
-#[ignore]
-async fn server_survives_malformed_edits_and_formats() {
+async fn mock_lsp_scenarios() {
     let mut client = MockLspClient::start().await;
     client.initialize().await;
 
     let uri = lib_url();
+    client.did_open(&uri, "");
+    client.settle(500).await;
+
+    scenario_survives_malformed_edits_and_formats(&mut client, &uri).await;
+    scenario_self_to_mut_self_keystrokes(&mut client, &uri).await;
+    scenario_features_work_after_malformed_edits(&mut client, &uri).await;
+    scenario_format_during_malformed_intermediate_states(&mut client, &uri).await;
+    scenario_format_concurrent_with_diagnostics(&mut client, &uri).await;
+    scenario_format_during_generic_struct_keystroke_sequence(&mut client, &uri).await;
+    scenario_diagnostics_published_for_broken_code(&mut client).await;
+
+    client.shutdown().await;
+}
+
+/// Send malformed edits via replay_edits_burst, then verify formatting works.
+async fn scenario_survives_malformed_edits_and_formats(client: &mut MockLspClient, uri: &Url) {
     let valid = "struct Foo { x: u256 }";
-    client.did_open(&uri, valid);
+    client.did_change(uri, 100, valid);
     client.settle(500).await;
 
     // Burst of malformed edits — no settling between them
     client.replay_edits_burst(
-        &uri,
+        uri,
         &[
             "struct Foo { x: }",
             "struct",
@@ -343,34 +361,25 @@ async fn server_survives_malformed_edits_and_formats() {
 
     // Restore valid text and verify formatting still works
     client.clear_diagnostics();
-    client.did_change(&uri, 100, valid);
+    client.did_change(uri, 110, valid);
     client.settle(500).await;
 
-    let result = client.format(&uri).await;
+    let result = client.format(uri).await;
     assert!(
         result.is_ok(),
         "formatting should succeed after malformed edits, got: {result:?}",
     );
-
-    client.shutdown().await;
 }
 
-/// Verify the server can handle the `self` → `mut self` keystroke sequence
-/// using replay_edits with a settle between each.
-#[tokio::test]
-#[ignore]
-async fn server_survives_self_to_mut_self_keystrokes() {
-    let mut client = MockLspClient::start().await;
-    client.initialize().await;
-
-    let uri = lib_url();
+/// Verify the server survives the `self` -> `mut self` keystroke sequence.
+async fn scenario_self_to_mut_self_keystrokes(client: &mut MockLspClient, uri: &Url) {
     let template = |param: &str| {
         format!(
             "struct Foo {{ x: u256 }}\nimpl Foo {{\n    fn set({param}, val: u256) {{\n        self.x = val\n    }}\n}}"
         )
     };
 
-    client.did_open(&uri, &template("self"));
+    client.did_change(uri, 200, &template("self"));
     client.settle(500).await;
 
     let edits: Vec<String> = ["mself", "muself", "mutself", "mut self"]
@@ -378,86 +387,69 @@ async fn server_survives_self_to_mut_self_keystrokes() {
         .map(|s| template(s))
         .collect();
     let edit_refs: Vec<&str> = edits.iter().map(|s| s.as_str()).collect();
-    client.replay_edits(&uri, &edit_refs, 100).await;
+    client.replay_edits(uri, &edit_refs, 100).await;
 
     client.settle(1000).await;
 
-    let result = client.format(&uri).await;
+    let result = client.format(uri).await;
     assert!(result.is_ok(), "server should survive keystroke sequence");
-
-    client.shutdown().await;
 }
 
 /// Verify hover, goto, and completion all work after broken edits.
-#[tokio::test]
-#[ignore]
-async fn features_work_after_malformed_edits() {
-    let mut client = MockLspClient::start().await;
-    client.initialize().await;
-
-    let uri = lib_url();
+async fn scenario_features_work_after_malformed_edits(client: &mut MockLspClient, uri: &Url) {
     let code = "struct Foo {\n    x: u256\n}\nfn bar() -> Foo {\n    return Foo(x: 1)\n}";
-    client.did_open(&uri, code);
+    client.did_change(uri, 300, code);
     client.settle(500).await;
 
     // Break it, then fix it
-    client.replay_edits_burst(&uri, &["}{}{", ""]);
+    client.replay_edits_burst(uri, &["}{}{", ""]);
     client.settle(500).await;
-    client.did_change(&uri, 10, code);
+    client.did_change(uri, 310, code);
     client.settle(500).await;
 
     // Hover on "Foo" in the return type (line 3, char 13)
-    let hover_result = client.hover(&uri, 3, 13).await;
+    let hover_result = client.hover(uri, 3, 13).await;
     assert!(hover_result.is_ok(), "hover should work after recovery");
 
     // Goto definition on "Foo" in the return type
-    let goto_result = client.goto_definition(&uri, 3, 13).await;
+    let goto_result = client.goto_definition(uri, 3, 13).await;
     assert!(goto_result.is_ok(), "goto should work after recovery");
 
     // Completion at end of "return Foo(" (line 4)
-    let comp_result = client.completion(&uri, 4, 15).await;
+    let comp_result = client.completion(uri, 4, 15).await;
     assert!(comp_result.is_ok(), "completion should work after recovery");
 
     // Document symbols
-    let syms_result = client.document_symbols(&uri).await;
+    let syms_result = client.document_symbols(uri).await;
     assert!(
         syms_result.is_ok(),
         "document_symbols should work after recovery"
     );
 
     // References on "Foo" (line 0, char 7)
-    let refs_result = client.references(&uri, 0, 7).await;
+    let refs_result = client.references(uri, 0, 7).await;
     assert!(refs_result.is_ok(), "references should work after recovery");
-
-    client.shutdown().await;
 }
 
-/// Reproduce Sean's crash: rapid edits with formatting requests during
-/// intermediate states. The editor triggers format-on-type or format-on-save
-/// while the code is in a broken intermediate state like "mself".
-#[tokio::test]
-#[ignore]
-async fn format_during_malformed_intermediate_states() {
-    let mut client = MockLspClient::start().await;
-    client.initialize().await;
-
-    let uri = lib_url();
+/// Format during malformed intermediate states (reproduces Sean's crash).
+async fn scenario_format_during_malformed_intermediate_states(
+    client: &mut MockLspClient,
+    uri: &Url,
+) {
     let template = |param: &str| {
         format!(
             "struct Foo {{ x: u256 }}\nimpl Foo {{\n    fn set({param}, val: u256) {{\n        self.x = val\n    }}\n}}"
         )
     };
 
-    // Open with valid code
-    client.did_open(&uri, &template("self"));
+    client.did_change(uri, 400, &template("self"));
     client.settle(500).await;
 
     // Simulate typing while formatting is triggered at each step
     let intermediates = ["mself", "muself", "mutself", "mut self"];
     for (i, param) in intermediates.iter().enumerate() {
-        client.did_change(&uri, i as i32 + 2, &template(param));
-        // Editor triggers formatting on the broken intermediate state
-        let fmt_result = client.format(&uri).await;
+        client.did_change(uri, 401 + i as i32, &template(param));
+        let fmt_result = client.format(uri).await;
         assert!(
             fmt_result.is_ok(),
             "formatting should not crash on intermediate state '{param}', got: {fmt_result:?}"
@@ -472,33 +464,23 @@ async fn format_during_malformed_intermediate_states() {
         "struct S<T, const N:",
     ];
     for (i, code) in generic_steps.iter().enumerate() {
-        client.did_change(&uri, 100 + i as i32, code);
-        let fmt_result = client.format(&uri).await;
+        client.did_change(uri, 410 + i as i32, code);
+        let fmt_result = client.format(uri).await;
         assert!(
             fmt_result.is_ok(),
             "formatting should not crash on partial generic '{code}', got: {fmt_result:?}"
         );
     }
-
-    client.shutdown().await;
 }
 
-/// Test concurrent diagnostics and formatting: send malformed edits and
-/// immediately request formatting before diagnostics finish computing.
-/// This simulates format-on-save while the diagnostics pipeline is active.
-#[tokio::test]
-#[ignore]
-async fn format_concurrent_with_diagnostics() {
-    let mut client = MockLspClient::start().await;
-    client.initialize().await;
-
-    let uri = lib_url();
-    client.did_open(&uri, "struct Foo { x: u256 }");
+/// Format races with diagnostics computation (format-on-save scenario).
+async fn scenario_format_concurrent_with_diagnostics(client: &mut MockLspClient, uri: &Url) {
+    client.did_change(uri, 500, "struct Foo { x: u256 }");
     client.settle(500).await;
 
     // Send broken edits and IMMEDIATELY format without settling —
     // diagnostics are still being computed when format arrives
-    for i in 0..5 {
+    for i in 0..5i32 {
         let broken_code = match i % 5 {
             0 => "struct Foo { x: }",
             1 => "}{}{}{",
@@ -506,28 +488,23 @@ async fn format_concurrent_with_diagnostics() {
             3 => "struct S<T, const N:",
             _ => "fn (",
         };
-        client.did_change(&uri, 200 + i, broken_code);
+        client.did_change(uri, 501 + i, broken_code);
         // No settle — format races with diagnostics computation
-        let fmt_result = client.format(&uri).await;
+        let fmt_result = client.format(uri).await;
         assert!(
             fmt_result.is_ok(),
             "formatting should survive concurrent diagnostics, iteration {i}, got: {fmt_result:?}"
         );
     }
-
-    client.shutdown().await;
 }
 
-/// Reproduce Sean's generic struct crash: type `struct S<T, const N: usize>`
-/// character by character with format requests at each step.
-#[tokio::test]
-#[ignore]
-async fn format_during_generic_struct_keystroke_sequence() {
-    let mut client = MockLspClient::start().await;
-    client.initialize().await;
-
-    let uri = lib_url();
-    client.did_open(&uri, "");
+/// Type `struct S<T, const N: usize>` character by character with format
+/// requests at each step (reproduces Sean's generic struct crash).
+async fn scenario_format_during_generic_struct_keystroke_sequence(
+    client: &mut MockLspClient,
+    uri: &Url,
+) {
+    client.did_change(uri, 600, "");
     client.settle(500).await;
 
     let steps = [
@@ -561,27 +538,20 @@ async fn format_during_generic_struct_keystroke_sequence() {
     ];
 
     for (i, code) in steps.iter().enumerate() {
-        client.did_change(&uri, i as i32 + 2, code);
-        // Format at each keystroke — simulates format-on-type
-        let fmt_result = client.format(&uri).await;
+        client.did_change(uri, 601 + i as i32, code);
+        let fmt_result = client.format(uri).await;
         assert!(
             fmt_result.is_ok(),
             "format crashed at step {i} '{code}': {fmt_result:?}"
         );
     }
-
-    client.shutdown().await;
 }
 
 /// Verify diagnostics are published via the async pipeline.
-#[tokio::test]
-#[ignore]
-async fn diagnostics_published_for_broken_code() {
-    let mut client = MockLspClient::start().await;
-    client.initialize().await;
-
+async fn scenario_diagnostics_published_for_broken_code(client: &mut MockLspClient) {
     // The fixture's foo.fe produces diagnostics. Wait for them to arrive
-    // through the full pipeline: actor → event batching → publish.
+    // through the full pipeline: actor -> event batching -> publish.
+    client.clear_diagnostics();
     let mut found = false;
     for _ in 0..40 {
         client.settle(500).await;
@@ -601,6 +571,4 @@ async fn diagnostics_published_for_broken_code() {
     let nonempty = diags.iter().find(|d| !d.diagnostics.is_empty()).unwrap();
     assert!(nonempty.uri.scheme() == "file");
     assert!(!nonempty.diagnostics[0].message.is_empty());
-
-    client.shutdown().await;
 }
