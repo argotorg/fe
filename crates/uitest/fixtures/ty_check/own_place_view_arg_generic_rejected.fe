@@ -1,9 +1,0 @@
-struct Foo {
-    x: u8
-}
-
-fn take_own<T>(_x: own T) {}
-
-fn caller(foo: Foo) {
-    take_own(foo)
-}
