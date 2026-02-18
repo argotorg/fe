@@ -1850,6 +1850,14 @@ pub(super) fn write_yul_case_artifacts(
     if let Ok(contract) = unopt {
         let _ = std::fs::write(dir.join("bytecode.unopt.hex"), &contract.bytecode);
         let _ = std::fs::write(dir.join("runtime.unopt.hex"), &contract.runtime_bytecode);
+        write_evm_mnemonic_artifact(
+            dir.join("bytecode.unopt.evm.txt"),
+            contract.bytecode_opcodes.as_deref(),
+        );
+        write_evm_mnemonic_artifact(
+            dir.join("runtime.unopt.evm.txt"),
+            contract.runtime_bytecode_opcodes.as_deref(),
+        );
     }
 
     let opt = compile_single_contract_with_solc(
@@ -1862,7 +1870,23 @@ pub(super) fn write_yul_case_artifacts(
     if let Ok(contract) = opt {
         let _ = std::fs::write(dir.join("bytecode.opt.hex"), &contract.bytecode);
         let _ = std::fs::write(dir.join("runtime.opt.hex"), &contract.runtime_bytecode);
+        write_evm_mnemonic_artifact(
+            dir.join("bytecode.opt.evm.txt"),
+            contract.bytecode_opcodes.as_deref(),
+        );
+        write_evm_mnemonic_artifact(
+            dir.join("runtime.opt.evm.txt"),
+            contract.runtime_bytecode_opcodes.as_deref(),
+        );
     }
+}
+
+fn write_evm_mnemonic_artifact(path: Utf8PathBuf, opcodes: Option<&str>) {
+    let output = match opcodes.map(str::trim) {
+        Some(opcodes) if !opcodes.is_empty() => format!("{opcodes}\n"),
+        _ => "solc did not emit opcodes for this artifact\n".to_string(),
+    };
+    let _ = std::fs::write(path, output);
 }
 
 fn extract_runtime_from_sonatina_initcode(init: &[u8]) -> Option<&[u8]> {
@@ -1919,7 +1943,7 @@ fn write_report_manifest(
     out.push_str(&format!("fe_version: {}\n", env!("CARGO_PKG_VERSION")));
     out.push_str("details: see `meta/args.txt` and `meta/git.txt` for exact repro context\n");
     out.push_str("gas_comparison: see `artifacts/gas_comparison.md`, `artifacts/gas_comparison.csv`, `artifacts/gas_comparison_totals.csv`, `artifacts/gas_comparison_magnitude.csv`, `artifacts/gas_breakdown_comparison.csv`, `artifacts/gas_breakdown_magnitude.csv`, `artifacts/gas_opcode_magnitude.csv`, `artifacts/gas_deployment_attribution.csv`, and `artifacts/gas_comparison_settings.txt` when available\n");
-    out.push_str("gas_comparison_yul_artifacts: in Sonatina comparison runs, Yul baselines are stored under `artifacts/tests/<test>/yul/{source.yul,bytecode.unopt.hex,bytecode.opt.hex,runtime.unopt.hex,runtime.opt.hex}`\n");
+    out.push_str("gas_comparison_yul_artifacts: in Sonatina comparison runs, Yul baselines are stored under `artifacts/tests/<test>/yul/{source.yul,bytecode.unopt.hex,bytecode.unopt.evm.txt,bytecode.opt.hex,bytecode.opt.evm.txt,runtime.unopt.hex,runtime.unopt.evm.txt,runtime.opt.hex,runtime.opt.evm.txt}`\n");
     out.push_str("sonatina_observability: when available, Sonatina test artifacts include `artifacts/tests/<test>/sonatina/{observability.txt,observability.json}`\n");
     out.push_str("gas_comparison_aggregate: run-level reports also include `artifacts/gas_comparison_all.csv`, `artifacts/gas_breakdown_comparison_all.csv`, `artifacts/gas_comparison_summary.md`, `artifacts/gas_comparison_magnitude.csv`, `artifacts/gas_breakdown_magnitude.csv`, `artifacts/gas_opcode_magnitude.csv`, `artifacts/gas_deployment_attribution_all.csv`, `artifacts/gas_hotspots_vs_yul_opt.csv`, `artifacts/gas_suite_delta_summary.csv`, `artifacts/gas_tail_trace_symbol_hotspots.csv`, and `artifacts/gas_tail_trace_observability_hotspots.csv`\n");
     out.push_str("sonatina_observability_aggregate: run-level reports also include `artifacts/observability_coverage_all.csv` for per-test coverage totals from observability maps\n");

@@ -16,6 +16,8 @@ pub struct YulcError(pub String);
 pub struct ContractBytecode {
     pub bytecode: String,
     pub runtime_bytecode: String,
+    pub bytecode_opcodes: Option<String>,
+    pub runtime_bytecode_opcodes: Option<String>,
 }
 
 /// Compiles an iterator of `(name, yul_source)` pairs using `solc`.
@@ -91,6 +93,8 @@ fn build_standard_json(yul_src: &str, optimize: bool) -> Result<String, YulcErro
                     "*": [
                         "evm.bytecode.object",
                         "evm.deployedBytecode.object",
+                        "evm.bytecode.opcodes",
+                        "evm.deployedBytecode.opcodes",
                         "evm.bytecode.sourceMap",
                         "evm.deployedBytecode.sourceMap"
                     ]
@@ -198,6 +202,11 @@ fn parse_contract_output(
 
     let runtime_bytecode = extract_object(contract, &["evm", "deployedBytecode", "object"])
         .unwrap_or_else(|| "null".into());
+    let bytecode_opcodes = extract_object(contract, &["evm", "bytecode", "opcodes"])
+        .filter(|opcodes| !opcodes.is_empty() && opcodes != "null");
+    let runtime_bytecode_opcodes =
+        extract_object(contract, &["evm", "deployedBytecode", "opcodes"])
+            .filter(|opcodes| !opcodes.is_empty() && opcodes != "null");
 
     if verify_runtime_bytecode && (runtime_bytecode == "null" || runtime_bytecode.is_empty()) {
         return Err(YulcError(
@@ -208,6 +217,8 @@ fn parse_contract_output(
     Ok(ContractBytecode {
         bytecode,
         runtime_bytecode,
+        bytecode_opcodes,
+        runtime_bytecode_opcodes,
     })
 }
 
@@ -252,6 +263,14 @@ mod tests {
         assert_eq!(value["language"], "Yul");
         assert_eq!(value["settings"]["optimizer"]["enabled"], false);
         assert_eq!(value["sources"]["input.yul"]["content"], "{ sstore(0, 0) }");
+        let outputs = value["settings"]["outputSelection"]["*"]["*"]
+            .as_array()
+            .expect("output selection is array")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+        assert!(outputs.contains(&"evm.bytecode.opcodes"));
+        assert!(outputs.contains(&"evm.deployedBytecode.opcodes"));
     }
 
     #[test]
