@@ -29,10 +29,10 @@ fn collect_fe_files_recursive(dir: &Path, files: &mut Vec<PathBuf>) {
         if path.is_dir() {
             collect_fe_files_recursive(&path, files);
         } else if path.extension().is_some_and(|ext| ext == "fe") {
-            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                if EXCLUDED_FILES.contains(&name) {
-                    continue;
-                }
+            if let Some(name) = path.file_name().and_then(|n| n.to_str())
+                && EXCLUDED_FILES.contains(&name)
+            {
+                continue;
             }
             files.push(path);
         }
@@ -186,19 +186,13 @@ fn tree_sitter_parse_coverage() {
             manifest.join("../fe/tests/fixtures/cli_output"),
         ),
         // uitest fixtures (excluding parser/ which has intentional errors)
-        (
-            "uitest_mir",
-            manifest.join("../uitest/fixtures/mir_check"),
-        ),
+        ("uitest_mir", manifest.join("../uitest/fixtures/mir_check")),
         (
             "uitest_names",
             manifest.join("../uitest/fixtures/name_resolution"),
         ),
         ("uitest_ty", manifest.join("../uitest/fixtures/ty")),
-        (
-            "uitest_tyck",
-            manifest.join("../uitest/fixtures/ty_check"),
-        ),
+        ("uitest_tyck", manifest.join("../uitest/fixtures/ty_check")),
     ];
 
     let mut results = Vec::new();

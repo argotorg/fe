@@ -25,10 +25,7 @@ fn main() {
             match status {
                 Ok(s) if s.success() => {}
                 Ok(s) => {
-                    eprintln!(
-                        "cargo:warning=tree-sitter generate failed with {}",
-                        s
-                    );
+                    eprintln!("cargo:warning=tree-sitter generate failed with {}", s);
                 }
                 Err(e) => {
                     eprintln!(
