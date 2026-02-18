@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 33
 expression: output
 input_file: tests/fixtures/create_contract.fe
 ---
@@ -38,7 +39,7 @@ object "Factory" {
         mstore(0x40, add(v4, 64))
         mstore(v4, v1)
         mstore(add(v4, 32), v3)
-        let v5 := $create__Evm_hef0af3106e109414_Child_hdfa2e9d62e9c9ad3__8303e18f50f8d8ed($create, 0, v4)
+        let v5 := $create_stor__Evm_hef0af3106e109414_Child_hdfa2e9d62e9c9ad3__8303e18f50f8d8ed($create, 0, v4)
         ret := v5
         leave
       }
@@ -56,7 +57,7 @@ object "Factory" {
         mstore(0x40, add(v6, 64))
         mstore(v6, v1)
         mstore(add(v6, 32), v3)
-        let v7 := $create2__Evm_hef0af3106e109414_Child_hdfa2e9d62e9c9ad3__8303e18f50f8d8ed($create, 0, v6, v5)
+        let v7 := $create2_stor__Evm_hef0af3106e109414_Child_hdfa2e9d62e9c9ad3__8303e18f50f8d8ed($create, 0, v6, v5)
         ret := v7
         leave
       }
@@ -80,11 +81,9 @@ object "Factory" {
       }
       function $_t0__t1__h61373471174c18a_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_u256_u256_SolEncoder_h1b9228b90dad6928__9e0831f7c11d9f64($self, $e) {
         let v0 := mload($self)
-        let v1 := v0
-        let v2 := mload(add($self, 32))
-        let v3 := v2
+        $u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383(v0, $e)
+        let v1 := mload(add($self, 32))
         $u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383(v1, $e)
-        $u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383(v3, $e)
         leave
       }
       function $address_h257056268eac7027_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383($self, $e) {
@@ -112,11 +111,12 @@ object "Factory" {
         leave
       }
       function $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at($self, $byte_offset) -> ret {
-        let v0 := calldataload(add($self, $byte_offset))
-        ret := v0
+        let v0 := add($self, $byte_offset)
+        let v1 := calldataload(v0)
+        ret := v1
         leave
       }
-      function $create2__Evm_hef0af3106e109414_Child_hdfa2e9d62e9c9ad3__8303e18f50f8d8ed($self, $value, $args, $salt) -> ret {
+      function $create2_stor__Evm_hef0af3106e109414_Child_hdfa2e9d62e9c9ad3__8303e18f50f8d8ed($self, $value, $args, $salt) -> ret {
         let v0 := $__Child_init_code_len()
         let v1 := $__Child_init_code_offset()
         let v2 := 64
@@ -134,7 +134,7 @@ object "Factory" {
         mstore(add(v6, 64), add(v5, v2))
         let v7 := v6
         $_t0__t1__h61373471174c18a_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_u256_u256_SolEncoder_h1b9228b90dad6928__9e0831f7c11d9f64($args, v7)
-        let v8 := $evm_hef0af3106e109414_create_h3f3c4b410ec53b45_create2_raw(0, $value, v4, v3, $salt)
+        let v8 := $evm_hef0af3106e109414_create_h3f3c4b410ec53b45_create2_raw_stor($self, $value, v4, v3, $salt)
         let v9 := eq(v8, 0)
         if v9 {
           let v10 := returndatasize()
@@ -145,7 +145,7 @@ object "Factory" {
         ret := v8
         leave
       }
-      function $create__Evm_hef0af3106e109414_Child_hdfa2e9d62e9c9ad3__8303e18f50f8d8ed($self, $value, $args) -> ret {
+      function $create_stor__Evm_hef0af3106e109414_Child_hdfa2e9d62e9c9ad3__8303e18f50f8d8ed($self, $value, $args) -> ret {
         let v0 := $__Child_init_code_len()
         let v1 := $__Child_init_code_offset()
         let v2 := 64
@@ -163,7 +163,7 @@ object "Factory" {
         mstore(add(v6, 64), add(v5, v2))
         let v7 := v6
         $_t0__t1__h61373471174c18a_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_u256_u256_SolEncoder_h1b9228b90dad6928__9e0831f7c11d9f64($args, v7)
-        let v8 := $evm_hef0af3106e109414_create_h3f3c4b410ec53b45_create_raw(0, $value, v4, v3)
+        let v8 := $evm_hef0af3106e109414_create_h3f3c4b410ec53b45_create_raw_stor($self, $value, v4, v3)
         let v9 := eq(v8, 0)
         if v9 {
           let v10 := returndatasize()
@@ -183,8 +183,7 @@ object "Factory" {
         mstore(0x40, add(v1, 64))
         mstore(v1, v0)
         mstore(add(v1, 32), $pos)
-        let v2 := v1
-        ret := v2
+        ret := v1
         leave
       }
       function $cursor_i__h140a998c67d6d59c_new__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($input) -> ret {
@@ -195,8 +194,7 @@ object "Factory" {
         mstore(0x40, add(v0, 64))
         mstore(v0, $input)
         mstore(add(v0, 32), 0)
-        let v1 := v0
-        ret := v1
+        ret := v0
         leave
       }
       function $deploy2_ha2b981aa2f8bf9fd_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966($d) -> ret {
@@ -237,12 +235,12 @@ object "Factory" {
       function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes($self, $ptr, $len) {
         return($ptr, $len)
       }
-      function $evm_hef0af3106e109414_create_h3f3c4b410ec53b45_create2_raw($self, $value, $offset, $len, $salt) -> ret {
+      function $evm_hef0af3106e109414_create_h3f3c4b410ec53b45_create2_raw_stor($self, $value, $offset, $len, $salt) -> ret {
         let v0 := create2($value, $offset, $len, $salt)
         ret := v0
         leave
       }
-      function $evm_hef0af3106e109414_create_h3f3c4b410ec53b45_create_raw($self, $value, $offset, $len) -> ret {
+      function $evm_hef0af3106e109414_create_h3f3c4b410ec53b45_create_raw_stor($self, $value, $offset, $len) -> ret {
         let v0 := create($value, $offset, $len)
         ret := v0
         leave
@@ -264,11 +262,11 @@ object "Factory" {
         leave
       }
       function $runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2($self) -> ret {
-        let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input(0)
+        let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input($self)
         let v1 := $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len(v0)
         let v2 := lt(v1, 4)
         if v2 {
-          $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort(0)
+          $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort($self)
         }
         let v3 := $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at(v0, 0)
         let v4 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_selector_from_prefix(v3)
@@ -325,8 +323,7 @@ object "Factory" {
         mstore(v2, mload(v3))
         mstore(add(v2, 32), mload(add(v3, 32)))
         mstore(add(v2, 64), $base)
-        let v4 := v2
-        ret := v4
+        ret := v2
         leave
       }
       function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish($self) -> ret {
@@ -343,18 +340,6 @@ object "Factory" {
         leave
       }
       function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head($self, $bytes) -> ret {
-        $solencoder_h1b9228b90dad6928_ensure_init($self, $bytes)
-        let v0 := mload($self)
-        ret := v0
-        leave
-      }
-      function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word($self, $v) {
-        let v0 := mload(add($self, 32))
-        mstore(v0, $v)
-        mstore(add($self, 32), add(v0, 32))
-        leave
-      }
-      function $solencoder_h1b9228b90dad6928_ensure_init($self, $bytes) {
         let v0 := mload($self)
         let v1 := eq(v0, 0)
         if v1 {
@@ -363,6 +348,14 @@ object "Factory" {
           mstore(add($self, 32), v2)
           mstore(add($self, 64), add(v2, $bytes))
         }
+        let v3 := mload($self)
+        ret := v3
+        leave
+      }
+      function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word($self, $v) {
+        let v0 := mload(add($self, 32))
+        mstore(v0, $v)
+        mstore(add($self, 32), add(v0, 32))
         leave
       }
       function $solencoder_h1b9228b90dad6928_new() -> ret {
@@ -374,8 +367,7 @@ object "Factory" {
         mstore(v0, 0)
         mstore(add(v0, 32), 0)
         mstore(add(v0, 64), 0)
-        let v1 := v0
-        ret := v1
+        ret := v0
         leave
       }
       function $u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98($d) -> ret {
@@ -457,8 +449,7 @@ object "Factory" {
           mstore(v0, mload(v1))
           mstore(add(v0, 32), mload(add(v1, 32)))
           mstore(add(v0, 64), 0)
-          let v2 := v0
-          ret := v2
+          ret := v0
           leave
         }
         function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort($self) {
@@ -470,7 +461,7 @@ object "Factory" {
           leave
         }
         function $init_field__Evm_hef0af3106e109414_Pair_h956dff41e88ee341__18f2eb617f185785($self, $slot) -> ret {
-          let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Pair_h956dff41e88ee341__acec41afdc898140(0, $slot)
+          let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Pair_h956dff41e88ee341__acec41afdc898140($self, $slot)
           ret := v0
           leave
         }
@@ -481,8 +472,9 @@ object "Factory" {
         }
         function $memorybytes_h1e381015a9b0111b_byteinput_hc4c2cb44299530ae_word_at($self, $byte_offset) -> ret {
           let v0 := mload($self)
-          let v1 := mload(add(v0, $byte_offset))
-          ret := v1
+          let v1 := add(v0, $byte_offset)
+          let v2 := mload(v1)
+          ret := v2
           leave
         }
         function $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b($input) -> ret {
@@ -517,8 +509,7 @@ object "Factory" {
           mstore(add(v1, 32), mload(add(v2, 32)))
           mstore(add(v1, 64), mload(add(v2, 64)))
           mstore(add(v1, 96), 0)
-          let v3 := v1
-          ret := v3
+          ret := v1
           leave
         }
         function $stor_ptr__Evm_hef0af3106e109414_Pair_h956dff41e88ee341__18f2eb617f185785($self, $slot) -> ret {
@@ -555,8 +546,9 @@ object "Factory" {
             leave
           }
           function $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at($self, $byte_offset) -> ret {
-            let v0 := calldataload(add($self, $byte_offset))
-            ret := v0
+            let v0 := add($self, $byte_offset)
+            let v1 := calldataload(v0)
+            ret := v1
             leave
           }
           function $cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($self, $pos) -> ret {
@@ -568,8 +560,7 @@ object "Factory" {
             mstore(0x40, add(v1, 64))
             mstore(v1, v0)
             mstore(add(v1, 32), $pos)
-            let v2 := v1
-            ret := v2
+            ret := v1
             leave
           }
           function $cursor_i__h140a998c67d6d59c_new__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($input) -> ret {
@@ -580,8 +571,7 @@ object "Factory" {
             mstore(0x40, add(v0, 64))
             mstore(v0, $input)
             mstore(add(v0, 32), 0)
-            let v1 := v0
-            ret := v1
+            ret := v0
             leave
           }
           function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort($self) {
@@ -603,11 +593,11 @@ object "Factory" {
             leave
           }
           function $runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2($self) -> ret {
-            let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input(0)
+            let v0 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input($self)
             let v1 := $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len(v0)
             let v2 := lt(v1, 4)
             if v2 {
-              $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort(0)
+              $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort($self)
             }
             let v3 := $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at(v0, 0)
             let v4 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_selector_from_prefix(v3)
@@ -642,8 +632,7 @@ object "Factory" {
             mstore(v2, mload(v3))
             mstore(add(v2, 32), mload(add(v3, 32)))
             mstore(add(v2, 64), $base)
-            let v4 := v2
-            ret := v4
+            ret := v2
             leave
           }
           function $stor_ptr__Evm_hef0af3106e109414_Pair_h956dff41e88ee341__18f2eb617f185785($self, $slot) -> ret {

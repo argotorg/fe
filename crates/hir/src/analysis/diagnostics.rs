@@ -13,12 +13,12 @@ use crate::analysis::{
         },
         trait_def::TraitInstId,
         ty_check::{EffectParamOwner, RecordLike},
-        ty_def::{TyData, TyVarSort},
+        ty_def::{TyData, TyId, TyVarSort},
     },
 };
 use crate::{
     ParserError, SpannedHirDb,
-    hir_def::{CallableDef, FieldIndex, GenericParamOwner, PathKind, Trait},
+    hir_def::{CallableDef, FieldIndex, GenericParamOwner, PathKind, Trait, params::FuncParamMode},
     span::LazySpan,
 };
 use common::diagnostics::{
@@ -30,6 +30,131 @@ use itertools::Itertools;
 use std::cmp::Ordering;
 
 use common::file::File;
+
+fn pretty_print_ty_for_mismatch<'db>(db: &'db dyn SpannedHirAnalysisDb, ty: TyId<'db>) -> String {
+    match ty.data(db) {
+        TyData::TyVar(_) | TyData::TyParam(_) => ty.pretty_print(db).to_string(),
+        TyData::AssocTy(assoc_ty) => {
+            let self_ty = pretty_print_ty_for_mismatch(db, assoc_ty.trait_.self_ty(db));
+            format!(
+                "<{} as {}>::{}",
+                self_ty,
+                assoc_ty.trait_.pretty_print(db, false),
+                assoc_ty.name.data(db)
+            )
+        }
+        TyData::QualifiedTy(trait_inst) => {
+            let self_ty = pretty_print_ty_for_mismatch(db, trait_inst.self_ty(db));
+            format!("<{} as {}>", self_ty, trait_inst.pretty_print(db, false))
+        }
+        TyData::TyApp(_, _) => pretty_print_ty_app_for_mismatch(db, ty),
+        TyData::TyBase(base) => {
+            use crate::analysis::ty::ty_def::TyBase;
+
+            match base {
+                TyBase::Adt(adt) => adt
+                    .scope(db)
+                    .pretty_path(db)
+                    .unwrap_or_else(|| ty.pretty_print(db).to_string()),
+                TyBase::Contract(contract) => contract
+                    .scope()
+                    .pretty_path(db)
+                    .unwrap_or_else(|| ty.pretty_print(db).to_string()),
+                TyBase::Prim(_) | TyBase::Func(_) => ty.pretty_print(db).to_string(),
+            }
+        }
+        TyData::ConstTy(_) => ty.pretty_print(db).to_string(),
+        TyData::Never => "!".to_string(),
+        TyData::Invalid(cause) => format!("invalid({})", cause.pretty_print(db)),
+    }
+}
+
+fn pretty_print_ty_app_for_mismatch<'db>(
+    db: &'db dyn SpannedHirAnalysisDb,
+    ty: TyId<'db>,
+) -> String {
+    use crate::analysis::ty::ty_def::{PrimTy, TyBase};
+
+    let (base, args) = ty.decompose_ty_app(db);
+    match base.data(db) {
+        TyData::TyBase(TyBase::Prim(PrimTy::BorrowMut)) => {
+            let Some(inner) = args.first().copied() else {
+                return "mut <missing>".to_string();
+            };
+            format!("mut {}", pretty_print_ty_for_mismatch(db, inner))
+        }
+        TyData::TyBase(TyBase::Prim(PrimTy::BorrowRef)) => {
+            let Some(inner) = args.first().copied() else {
+                return "ref <missing>".to_string();
+            };
+            format!("ref {}", pretty_print_ty_for_mismatch(db, inner))
+        }
+        TyData::TyBase(TyBase::Prim(PrimTy::View)) => {
+            let Some(inner) = args.first().copied() else {
+                return "view <missing>".to_string();
+            };
+            format!("view {}", pretty_print_ty_for_mismatch(db, inner))
+        }
+        TyData::TyBase(TyBase::Prim(PrimTy::Array)) => {
+            let Some(elem) = args.first().copied() else {
+                return "[<missing>; <missing>]".to_string();
+            };
+            let Some(len) = args.get(1).copied() else {
+                return format!("[{}; <missing>]", pretty_print_ty_for_mismatch(db, elem));
+            };
+            format!(
+                "[{}; {}]",
+                pretty_print_ty_for_mismatch(db, elem),
+                pretty_print_ty_for_mismatch(db, len)
+            )
+        }
+        TyData::TyBase(TyBase::Prim(PrimTy::Tuple(_))) => {
+            let mut rendered = String::from("(");
+            if let Some((first, rest)) = args.split_first() {
+                rendered.push_str(&pretty_print_ty_for_mismatch(db, *first));
+                for arg in rest {
+                    rendered.push_str(", ");
+                    rendered.push_str(&pretty_print_ty_for_mismatch(db, *arg));
+                }
+            }
+            rendered.push(')');
+            rendered
+        }
+        _ => {
+            let mut rendered = pretty_print_ty_for_mismatch(db, base);
+            if let Some((first, rest)) = args.split_first() {
+                rendered.push('<');
+                rendered.push_str(&pretty_print_ty_for_mismatch(db, *first));
+                for arg in rest {
+                    rendered.push_str(", ");
+                    rendered.push_str(&pretty_print_ty_for_mismatch(db, *arg));
+                }
+                rendered.push('>');
+            }
+            rendered
+        }
+    }
+}
+
+fn format_type_mismatch_message<'db>(
+    db: &'db dyn SpannedHirAnalysisDb,
+    expected: TyId<'db>,
+    given: TyId<'db>,
+) -> String {
+    let expected_plain = expected.pretty_print(db);
+    let given_plain = given.pretty_print(db);
+    if expected_plain != given_plain {
+        return format!("expected `{expected_plain}`, but `{given_plain}` is given");
+    }
+
+    let expected_detailed = pretty_print_ty_for_mismatch(db, expected);
+    let given_detailed = pretty_print_ty_for_mismatch(db, given);
+    if expected_detailed != given_detailed {
+        return format!("expected `{expected_detailed}`, but `{given_detailed}` is given");
+    }
+
+    format!("expected `{expected_plain}`, but `{given_plain}` is given")
+}
 
 fn primary_diag(
     severity: Severity,
@@ -63,6 +188,31 @@ fn cmp_trait_inst_by_name<'db>(
         let b_self = b.self_ty(db).pretty_print(db).to_string();
         a_self.cmp(&b_self)
     })
+}
+
+fn format_method_param_ty<'db>(
+    db: &'db dyn SpannedHirAnalysisDb,
+    callable: CallableDef<'db>,
+    param_idx: usize,
+    ty: TyId<'db>,
+) -> String {
+    let ty = ty.pretty_print(db).to_string();
+    let Some(param) = (match callable {
+        CallableDef::Func(func) => func.params(db).nth(param_idx),
+        CallableDef::VariantCtor(_) => None,
+    }) else {
+        return ty;
+    };
+
+    let mut rendered = String::new();
+    if param.is_mut(db) {
+        rendered.push_str("mut ");
+    }
+    if param.mode(db) == FuncParamMode::Own && !ty.starts_with("own ") {
+        rendered.push_str("own ");
+    }
+    rendered.push_str(&ty);
+    rendered
 }
 
 /// All diagnostics accumulated in salsa-db should implement
@@ -1530,6 +1680,84 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 error_code,
             },
 
+            Self::OwnParamCannotBeBorrow { span, ty } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "invalid `own` parameter".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "`own` parameters must have owned types (found `{}`)",
+                        ty.pretty_print(db)
+                    ),
+                    span: span.resolve(db),
+                }],
+                notes: vec![
+                    "remove `own`, or change the parameter type to an owned type".to_string(),
+                ],
+                error_code,
+            },
+
+            Self::InvalidMutParamPrefixWithoutOwnType { span } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "invalid `mut` parameter syntax".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "`mut x: T` is only allowed when `T` is `own ...`".to_string(),
+                    span: span.resolve(db),
+                }],
+                notes: vec![
+                    "use `x: mut T` for mutable borrow parameters".to_string(),
+                    "or use `mut x: own T` for mutable owned parameters".to_string(),
+                ],
+                error_code,
+            },
+
+            Self::MixedRefSelfPrefixWithExplicitType { span } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "invalid mixed receiver syntax".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "`ref self: ...` cannot be used with an explicit `self` type"
+                        .to_string(),
+                    span: span.resolve(db),
+                }],
+                notes: vec![
+                    "use shorthand receiver syntax instead: `ref self`".to_string(),
+                    "or move the mode into the type and remove the prefix: `self: ref ...`"
+                        .to_string(),
+                ],
+                error_code,
+            },
+
+            Self::MixedOwnSelfPrefixWithExplicitType { span } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "invalid mixed receiver syntax".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "`own self: ...` cannot be used with an explicit `self` type"
+                        .to_string(),
+                    span: span.resolve(db),
+                }],
+                notes: vec![
+                    "use shorthand receiver syntax instead: `own self`".to_string(),
+                    "or move the mode into the type and remove the prefix: `self: own ...`"
+                        .to_string(),
+                ],
+                error_code,
+            },
+
+            Self::InvalidMutSelfPrefixWithExplicitType { span } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "invalid mixed receiver syntax".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "`mut self: ...` is only allowed as `mut self: own X` where `X` is not bare `Self`".to_string(),
+                    span: span.resolve(db),
+                }],
+                notes: vec!["for a mutable owned receiver, use shorthand receiver syntax: `mut own self`".to_string()],
+                error_code,
+            },
+
             Self::InvalidConstTyExpr(span) => primary_diag(
                 Severity::Error,
                 "the expression is not supported in a const type context",
@@ -1650,11 +1878,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 message: "type mismatch".to_string(),
                 sub_diagnostics: vec![SubDiagnostic {
                     style: LabelStyle::Primary,
-                    message: format!(
-                        "expected `{}`, but `{}` is given",
-                        expected.pretty_print(db),
-                        given.pretty_print(db),
-                    ),
+                    message: format_type_mismatch_message(db, *expected, *given),
                     span: span.resolve(db),
                 }],
                 error_code,
@@ -2460,6 +2684,176 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     span: primary.resolve(db),
                 }],
                 notes: vec![],
+                error_code,
+            },
+
+            Self::BorrowFromNonPlace { primary } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "cannot borrow from this expression".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "expected a place expression".to_string(),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![],
+                error_code,
+            },
+
+            Self::CannotBorrowMut { primary, binding } => {
+                let mut sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "cannot borrow as `mut`".to_string(),
+                    span: primary.resolve(db),
+                }];
+
+                if let Some((name, span)) = binding {
+                    sub_diagnostics.push(SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format!("try changing to `let mut {}`", name.data(db)),
+                        span: span.resolve(db),
+                    });
+                }
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "mutable borrow requires a mutable place".to_string(),
+                    sub_diagnostics,
+                    notes: vec![],
+                    error_code,
+                }
+            }
+
+            Self::BorrowArgMustBePlace { primary, kind } => {
+                let kw = match kind {
+                    crate::analysis::ty::ty_def::BorrowKind::Mut => "mut",
+                    crate::analysis::ty::ty_def::BorrowKind::Ref => "ref",
+                };
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: format!("`{kw}` argument must be a place"),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!(
+                            "temporaries and literal values cannot be used where `{kw}` is expected"
+                        ),
+                        span: primary.resolve(db),
+                    }],
+                    notes: vec![format!(
+                        "help: bind the value to a named local first, then pass `{kw} <place>`"
+                    )],
+                    error_code,
+                }
+            }
+
+            Self::ExplicitBorrowRequired {
+                primary,
+                kind,
+                suggestion,
+            } => {
+                let kw = match kind {
+                    crate::analysis::ty::ty_def::BorrowKind::Mut => "mut",
+                    crate::analysis::ty::ty_def::BorrowKind::Ref => "ref",
+                };
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "explicit borrow required".to_string(),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!("this argument must be explicitly borrowed as `{kw}`"),
+                        span: primary.resolve(db),
+                    }],
+                    notes: vec![
+                        suggestion
+                            .as_ref()
+                            .map(|s| format!("help: try `{s}`"))
+                            .unwrap_or_else(|| format!("help: try `{kw} <place>`")),
+                    ],
+                    error_code,
+                }
+            }
+
+            Self::OwnParamCannotBeBorrow { primary, ty } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "invalid `own` parameter".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "`own` parameters must have owned types (found `{}`)",
+                        ty.pretty_print(db)
+                    ),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![
+                    "remove `own`, or change the parameter type to an owned type".to_string(),
+                ],
+                error_code,
+            },
+
+            Self::MutableBindingCannotBeCapability { primary, ty } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "invalid mutable local binding".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "`let mut` local bindings must be owned values (found `{}`)",
+                        ty.pretty_print(db)
+                    ),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![
+                    "remove `mut` from the local binding to keep a handle".to_string(),
+                    "or bind an owned value instead (for non-`Copy` values, use an explicit `.clone()`)".to_string(),
+                ],
+                error_code,
+            },
+
+            Self::OwnArgMustBeOwnedMove {
+                primary,
+                kind,
+                given,
+            } => {
+                let kind = match kind {
+                    crate::analysis::ty::ty_def::CapabilityKind::Mut => "mut",
+                    crate::analysis::ty::ty_def::CapabilityKind::Ref => "ref",
+                    crate::analysis::ty::ty_def::CapabilityKind::View => "view",
+                };
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "`own` argument requires an owned movable value".to_string(),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!(
+                            "this expression has `{kind} {}` capability and cannot be moved as owned here",
+                            given.pretty_print(db)
+                        ),
+                        span: primary.resolve(db),
+                    }],
+                    notes: vec![
+                        "pass an owned place value, or change the callee parameter mode to borrow/view"
+                            .to_string(),
+                    ],
+                    error_code,
+                }
+            }
+
+            Self::ArrayRepeatRequiresCopy { primary, ty } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "array repetition requires `Copy`".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "the element type `{}` does not implement `Copy`",
+                        ty.pretty_print(db)
+                    ),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![
+                    "build the array with an explicit literal, or use a `Copy` element type"
+                        .to_string(),
+                ],
                 error_code,
             },
 
@@ -3682,6 +4076,8 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                 param_idx,
             } => {
                 let method_name = impl_m.name(db).expect("methods have names").data(db);
+                let expected = format_method_param_ty(db, *trait_m, *param_idx, *trait_m_ty);
+                let found = format_method_param_ty(db, *impl_m, *param_idx, *impl_m_ty);
 
                 CompleteDiagnostic {
                     severity,
@@ -3689,11 +4085,7 @@ impl DiagnosticVoucher for ImplDiag<'_> {
                     sub_diagnostics: vec![
                         SubDiagnostic {
                             style: LabelStyle::Primary,
-                            message: format!(
-                                "expected `{}`, found `{}`",
-                                trait_m_ty.pretty_print(db),
-                                impl_m_ty.pretty_print(db)
-                            ),
+                            message: format!("expected `{expected}`, found `{found}`"),
                             span: impl_m.param_span(*param_idx).resolve(db),
                         },
                         SubDiagnostic {

@@ -1,0 +1,11 @@
+struct Foo {
+    x: u8,
+}
+
+pub fn match_pattern_ref_view_param(foo: Foo) {
+    let y = match ref foo {
+        Foo { x } => x
+    }
+    let _w: ref u8 = y
+    let _z: u8 = foo.x
+}

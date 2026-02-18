@@ -4,7 +4,7 @@ struct Data {
     a: u256,
 }
 
-fn raw_emit(mut evm: Evm) {
+fn raw_emit(evm: mut Evm) {
     let data = Data { a: 1 };
     evm.log0(offset: core::addr_of(data), len: core::size_of<Data>())
 }

@@ -1,0 +1,6 @@
+pub fn move_reinit() -> u256 {
+    let x: u256 = 0
+    let y: u256 = x
+    let x: u256 = 1
+    x
+}

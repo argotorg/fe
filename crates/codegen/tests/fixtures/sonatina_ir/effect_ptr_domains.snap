@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/effect_ptr_domains.fe
 ---
@@ -22,9 +23,9 @@ func private %bump__StorPtr_Foo___3698cc3c4b2626e3(v0.i256) {
 
 func private %test_effect_ptr_domains__Evm_hef0af3106e109414_Evm_hef0af3106e109414__7ab75559784fbc59(v0.i256, v1.i256) {
     block0:
-        v4.i256 = call %mem_ptr__Evm_hef0af3106e109414_Foo_h6dbce71a6ea992b8__c09e6c6fc5a7b23d 256.i256;
+        v4.i256 = call %mem_ptr_stor__Evm_hef0af3106e109414_Foo_h6dbce71a6ea992b8__c09e6c6fc5a7b23d v1 256.i256;
         call %bump__MemPtr_Foo___cdd30998d577b6ea v4;
-        v5.i256 = call %stor_ptr__Evm_hef0af3106e109414_Foo_h6dbce71a6ea992b8__c09e6c6fc5a7b23d 0.i256;
+        v5.i256 = call %stor_ptr_stor__Evm_hef0af3106e109414_Foo_h6dbce71a6ea992b8__c09e6c6fc5a7b23d v0 0.i256;
         call %bump__StorPtr_Foo___3698cc3c4b2626e3 v5;
         v7.*i8 = evm_malloc 64.i256;
         v8.i256 = ptr_to_int v7 i256;
@@ -40,10 +41,10 @@ func private %test_effect_ptr_domains__Evm_hef0af3106e109414_Evm_hef0af3106e1094
         return;
 }
 
-func private %mem_ptr__Evm_hef0af3106e109414_Foo_h6dbce71a6ea992b8__c09e6c6fc5a7b23d(v0.i256) -> i256 {
+func private %mem_ptr_stor__Evm_hef0af3106e109414_Foo_h6dbce71a6ea992b8__c09e6c6fc5a7b23d(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.i256 = call %memptr_t__hf71ec14ffe47fb3f_effecthandle_hfc52f915596f993a_from_raw__Foo_h6dbce71a6ea992b8__21493237fe9c2c26 v0;
-        return v2;
+        v3.i256 = call %memptr_t__hf71ec14ffe47fb3f_effecthandle_hfc52f915596f993a_from_raw__Foo_h6dbce71a6ea992b8__21493237fe9c2c26 v1;
+        return v3;
 }
 
 func private %bump__MemPtr_Foo___cdd30998d577b6ea(v0.i256) {
@@ -69,10 +70,10 @@ func private %bump__MemPtr_Foo___cdd30998d577b6ea(v0.i256) {
         return;
 }
 
-func private %stor_ptr__Evm_hef0af3106e109414_Foo_h6dbce71a6ea992b8__c09e6c6fc5a7b23d(v0.i256) -> i256 {
+func private %stor_ptr_stor__Evm_hef0af3106e109414_Foo_h6dbce71a6ea992b8__c09e6c6fc5a7b23d(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.i256 = call %storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Foo_h6dbce71a6ea992b8__21493237fe9c2c26 v0;
-        return v2;
+        v3.i256 = call %storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Foo_h6dbce71a6ea992b8__21493237fe9c2c26 v1;
+        return v3;
 }
 
 func private %memptr_t__hf71ec14ffe47fb3f_effecthandle_hfc52f915596f993a_from_raw__Foo_h6dbce71a6ea992b8__21493237fe9c2c26(v0.i256) -> i256 {

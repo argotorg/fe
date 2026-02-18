@@ -1,12 +1,10 @@
 ---
 source: crates/uitest/tests/ty_check.rs
 expression: diags
-input_file: crates/uitest/fixtures/ty_check/match_.fe
+input_file: fixtures/ty_check/match_.fe
 ---
 error[8-0000]: type mismatch
    ┌─ match_.fe:22:17
    │
 22 │                 x
-   │                 ^ expected `i32`, but `E` is given
-
-
+   │                 ^ expected `i32`, but `ref E` is given

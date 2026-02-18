@@ -1,0 +1,12 @@
+struct Marker {}
+
+struct Holder {
+    marker: Marker,
+}
+
+pub fn borrowck_zst_mut_overlap() {
+    let mut h: Holder = Holder { marker: Marker {} }
+    let m: mut Marker = mut h.marker
+    h.marker = Marker {}
+    m = Marker {}
+}

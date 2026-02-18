@@ -12,13 +12,13 @@ pub struct Storage {
 }
 
 pub fn log_once()
-  uses (mut logger: Logger)
+  uses (logger: mut Logger)
 {
     logger.log()
 }
 
 pub fn mint(_ amount: u64)
-  uses (mut st: Storage)
+  uses (st: mut Storage)
 {
     st.value += amount
 }

@@ -1,0 +1,51 @@
+struct Pair {
+    a: u256,
+    b: u256,
+}
+
+fn bump(x: mut u256) {
+    x += 1
+}
+
+fn bump_pair(p: mut Pair) {
+    bump(mut p.a)
+    bump(mut p.b)
+}
+
+fn take_u256(x: own u256) -> u256 {
+    x
+}
+
+fn full() {
+    let mut x: u256 = 0
+    let r: ref u256 = ref x
+    r
+    bump(mut x)
+
+    let a: u256 = 1
+    let a2 = take_u256(a)
+    a2
+
+    let mut s = Pair {a: 1, b: 2}
+    bump_pair(mut s)
+    if true {
+        let ma: mut u256 = mut s.a
+        let mb: mut u256 = mut s.b
+        ma += 1
+        mb += 1
+    }
+    let moved_a = s.a
+    s.a = moved_a
+
+    let mut arr: [u256; 2] = [10, 20]
+    if true {
+        let p0: mut u256 = mut arr[0]
+        let p1: mut u256 = mut arr[1]
+        p0 += 1
+        p1 += 1
+    }
+
+    let mut z: u256 = 5
+    let w = z
+    z = w
+}

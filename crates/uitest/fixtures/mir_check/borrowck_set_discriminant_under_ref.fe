@@ -1,0 +1,13 @@
+// Writing an enum value while a `ref` loan is live should be rejected.
+
+enum Flag {
+    Off,
+    On,
+}
+
+pub fn borrowck_set_discriminant_under_ref() {
+    let mut flag: Flag = Flag::Off
+    let r: ref Flag = ref flag
+    flag = Flag::On
+    let keep: ref Flag = r
+}

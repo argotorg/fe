@@ -3,12 +3,6 @@ source: crates/uitest/tests/ty_check.rs
 expression: diags
 input_file: fixtures/ty_check/contract_effect_opt_in.fe
 ---
-error[8-0000]: type mismatch
-  ┌─ contract_effect_opt_in.fe:9:9
-  │
-9 │         who_called()
-  │         ^^^^^^^^^^^^ expected `()`, but `Address` is given
-
 error[8-0036]: missing effect `Ctx` required by `who_called`
   ┌─ contract_effect_opt_in.fe:9:9
   │

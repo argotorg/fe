@@ -1,5 +1,5 @@
 ---
-source: crates/hir-analysis/tests/ty_check.rs
+source: crates/hir/tests/ty_check.rs
 expression: res
 input_file: test_files/ty_check/pat/match_stmt.fe
 ---
@@ -47,7 +47,7 @@ note:
    │ ╭───────────────────────^
 13 │ │             return 1
 14 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ u8
 
 note: 
    ┌─ match_stmt.fe:13:20
@@ -68,7 +68,7 @@ note:
    │ ╭─────────────────────────^
 16 │ │             return 2
 17 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ u8
 
 note: 
    ┌─ match_stmt.fe:16:20
@@ -89,7 +89,7 @@ note:
    │ ╭────────────────────────^
 19 │ │             return 3
 20 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ u8
 
 note: 
    ┌─ match_stmt.fe:19:20
@@ -107,19 +107,19 @@ note:
    ┌─ match_stmt.fe:21:20
    │
 21 │         Color::Rgb(r, g, b) => { 
-   │                    ^ u8
+   │                    ^ ref u8
 
 note: 
    ┌─ match_stmt.fe:21:23
    │
 21 │         Color::Rgb(r, g, b) => { 
-   │                       ^ u8
+   │                       ^ ref u8
 
 note: 
    ┌─ match_stmt.fe:21:26
    │
 21 │         Color::Rgb(r, g, b) => { 
-   │                          ^ u8
+   │                          ^ ref u8
 
 note: 
    ┌─ match_stmt.fe:21:32
@@ -128,7 +128,7 @@ note:
    │ ╭────────────────────────────────^
 22 │ │             return 4
 23 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ u8
 
 note: 
    ┌─ match_stmt.fe:22:20
@@ -177,19 +177,19 @@ note:
    ┌─ match_stmt.fe:29:20
    │
 29 │         Color::Rgb(r, g, b) => {
-   │                    ^ u8
+   │                    ^ ref u8
 
 note: 
    ┌─ match_stmt.fe:29:23
    │
 29 │         Color::Rgb(r, g, b) => {
-   │                       ^ u8
+   │                       ^ ref u8
 
 note: 
    ┌─ match_stmt.fe:29:26
    │
 29 │         Color::Rgb(r, g, b) => {
-   │                          ^ u8
+   │                          ^ ref u8
 
 note: 
    ┌─ match_stmt.fe:29:32
@@ -198,7 +198,7 @@ note:
    │ ╭────────────────────────────────^
 30 │ │             return r + g + b
 31 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ u8
 
 note: 
    ┌─ match_stmt.fe:30:20
@@ -240,7 +240,7 @@ note:
    ┌─ match_stmt.fe:32:23
    │
 32 │         Color::Red => { return 0 }
-   │                       ^^^^^^^^^^^^ !
+   │                       ^^^^^^^^^^^^ u8
 
 note: 
    ┌─ match_stmt.fe:32:32
@@ -258,7 +258,7 @@ note:
    ┌─ match_stmt.fe:33:25
    │
 33 │         Color::Green => { return 0 }
-   │                         ^^^^^^^^^^^^ !
+   │                         ^^^^^^^^^^^^ u8
 
 note: 
    ┌─ match_stmt.fe:33:34
@@ -276,7 +276,7 @@ note:
    ┌─ match_stmt.fe:34:24
    │
 34 │         Color::Blue => { return 0 }
-   │                        ^^^^^^^^^^^^ !
+   │                        ^^^^^^^^^^^^ u8
 
 note: 
    ┌─ match_stmt.fe:34:33
@@ -346,7 +346,7 @@ note:
    │ ╭────────────────────────────────^
 41 │ │             return 1
 42 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ u8
 
 note: 
    ┌─ match_stmt.fe:41:20
@@ -367,7 +367,7 @@ note:
    │ ╭──────────────^
 44 │ │             return 0
 45 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ u8
 
 note: 
    ┌─ match_stmt.fe:44:20
@@ -416,7 +416,7 @@ note:
    ┌─ match_stmt.fe:51:20
    │
 51 │         Color::Rgb(r, ..) => { // Rest pattern
-   │                    ^ u8
+   │                    ^ ref u8
 
 note: 
    ┌─ match_stmt.fe:51:23
@@ -431,13 +431,13 @@ note:
    │ ╭──────────────────────────────^
 52 │ │             return r
 53 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ u8
 
 note: 
    ┌─ match_stmt.fe:52:20
    │
 52 │             return r
-   │                    ^ u8
+   │                    ^ ref u8
 
 note: 
    ┌─ match_stmt.fe:54:9
@@ -452,7 +452,7 @@ note:
    │ ╭──────────────^
 55 │ │             return 0
 56 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ u8
 
 note: 
    ┌─ match_stmt.fe:55:20
@@ -516,7 +516,7 @@ note:
    │ ╭─────────────────────────────────────^
 63 │ │             return true
 64 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ bool
 
 note: 
    ┌─ match_stmt.fe:63:20
@@ -537,7 +537,7 @@ note:
    │ ╭──────────────^
 66 │ │             return false
 67 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ bool
 
 note: 
    ┌─ match_stmt.fe:66:20
@@ -582,7 +582,7 @@ note:
    ┌─ match_stmt.fe:73:17
    │
 73 │         true => { return 1 }
-   │                 ^^^^^^^^^^^^ !
+   │                 ^^^^^^^^^^^^ u8
 
 note: 
    ┌─ match_stmt.fe:73:26
@@ -600,7 +600,7 @@ note:
    ┌─ match_stmt.fe:74:18
    │
 74 │         false => { return 0 }
-   │                  ^^^^^^^^^^^^ !
+   │                  ^^^^^^^^^^^^ u8
 
 note: 
    ┌─ match_stmt.fe:74:27

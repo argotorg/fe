@@ -4,16 +4,10 @@ expression: snapshot
 input_file: test_files/goto_func_sig.fe
 ---
 note: 
-  ┌─ goto_func_sig.fe:5:22
+  ┌─ goto_func_sig.fe:5:37
   │
-5 │ fn takes_mytype(arg: MyType) -> MyType {
-  │                      ^^^^^^ -> goto_func_sig::MyType
-
-note: 
-  ┌─ goto_func_sig.fe:5:33
-  │
-5 │ fn takes_mytype(arg: MyType) -> MyType {
-  │                                 ^^^^^^ -> goto_func_sig::MyType
+5 │ fn takes_mytype(arg: own MyType) -> MyType {
+  │                                     ^^^^^^ -> goto_func_sig::MyType
 
 note: 
   ┌─ goto_func_sig.fe:6:5

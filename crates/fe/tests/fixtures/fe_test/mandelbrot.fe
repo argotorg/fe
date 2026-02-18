@@ -40,13 +40,13 @@ impl SFixed {
 }
 
 impl Neg for SFixed {
-    fn neg(self) -> SFixed {
+    fn neg(own self) -> SFixed {
         SFixed { mag: self.mag, neg: !self.neg }
     }
 }
 
 impl Add for SFixed {
-    fn add(self, _ other: SFixed) -> SFixed {
+    fn add(own self, _ other: own SFixed) -> SFixed {
         if self.neg == other.neg {
             // Same sign: magnitudes add, sign preserved
             SFixed { mag: self.mag + other.mag, neg: self.neg }
@@ -61,13 +61,13 @@ impl Add for SFixed {
 }
 
 impl Sub for SFixed {
-    fn sub(self, _ other: SFixed) -> SFixed {
+    fn sub(own self, _ other: own SFixed) -> SFixed {
         self + (-other)
     }
 }
 
 impl Mul for SFixed {
-    fn mul(self, _ other: SFixed) -> SFixed {
+    fn mul(own self, _ other: own SFixed) -> SFixed {
         let product = self.mag * other.mag
         let result_neg = self.neg != other.neg
         SFixed { mag: product >> 64, neg: result_neg }
@@ -153,11 +153,19 @@ fn compute_row_sum(
     max_iter: u256,
 ) -> u256 {
     let mut sum: u256 = 0
-    let mut re = re_start
+    let mut re_mag = re_start.mag
+    let mut re_neg = re_start.neg
     for _px in 0..width {
-        let c = Complex { re: re, im: row_im }
+        let c = Complex {
+            re: SFixed { mag: re_mag, neg: re_neg },
+            im: SFixed { mag: row_im.mag, neg: row_im.neg },
+        }
         sum += classify(c, max_iter)
-        re = re + re_step
+        let left = SFixed { mag: re_mag, neg: re_neg }
+        let right = SFixed { mag: re_step.mag, neg: re_step.neg }
+        let next_re = left + right
+        re_mag = next_re.mag
+        re_neg = next_re.neg
     }
     sum
 }
@@ -210,7 +218,7 @@ pub contract Mandelbrot {
 // ---------- Tests ----------
 
 #[test]
-fn test_mandelbrot_known_points() uses (mut evm: Evm) {
+fn test_mandelbrot_known_points() uses (evm: mut Evm) {
     let addr = evm.create2<Mandelbrot>(value: 0, args: (), salt: 0)
     assert(addr.inner != 0)
 
@@ -298,7 +306,7 @@ fn test_mandelbrot_known_points() uses (mut evm: Evm) {
 }
 
 #[test]
-fn test_mandelbrot_row() uses (mut evm: Evm) {
+fn test_mandelbrot_row() uses (evm: mut Evm) {
     let addr = evm.create2<Mandelbrot>(value: 0, args: (), salt: 1)
     assert(addr.inner != 0)
 

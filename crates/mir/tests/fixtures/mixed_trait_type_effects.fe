@@ -16,7 +16,7 @@ impl Ctx for MockCtx {
     }
 }
 
-fn bump() -> u256 uses (ctx: Ctx, mut x: u256) {
+fn bump() -> u256 uses (ctx: Ctx, x: mut u256) {
     x += ctx.inc()
     x
 }

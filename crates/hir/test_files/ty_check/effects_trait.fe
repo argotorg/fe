@@ -8,7 +8,7 @@ impl Logger for Console {
 }
 
 pub fn log_once()
-  uses (mut logger: Logger)
+  uses (logger: mut Logger)
 {
     logger.log()
 }

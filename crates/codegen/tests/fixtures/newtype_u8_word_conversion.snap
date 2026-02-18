@@ -14,6 +14,7 @@ function $newtype_u8_roundtrip($x) -> ret {
   mstore(add(v0, 32), 0)
   let v1 := v0
   let v2 := and(mload(v1), 0xff)
-  ret := v2
+  let v3 := v2
+  ret := v3
   leave
 }

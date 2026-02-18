@@ -583,6 +583,8 @@ pub struct TestDebugOptions {
     pub sonatina_symtab: bool,
     pub sonatina_evm_debug: bool,
     pub sonatina_observability: bool,
+    pub dump_yul_on_failure: bool,
+    pub dump_yul_for_all: bool,
     pub debug_dir: Option<Utf8PathBuf>,
 }
 
@@ -1392,6 +1394,12 @@ fn discover_and_run_tests(
             }
         }
 
+        let should_dump_yul = backend == "yul"
+            && (debug.dump_yul_for_all || (debug.dump_yul_on_failure && !outcome.result.passed));
+        if should_dump_yul {
+            write_test_yul(output, case);
+        }
+
         if let Some(trace) = &outcome.trace {
             let _ = writeln!(output, "--- call trace ---");
             let _ = write!(output, "{trace}");
@@ -1428,6 +1436,17 @@ fn discover_and_run_tests(
     }
 
     results
+}
+
+fn write_test_yul(output: &mut String, case: &TestMetadata) {
+    let _ = writeln!(output);
+    let _ = writeln!(
+        output,
+        "---- yul output for test {} ({}) ----",
+        case.display_name, case.object_name
+    );
+    let _ = writeln!(output, "{}", case.yul);
+    let _ = writeln!(output, "---- end yul output ----");
 }
 
 pub(super) fn test_case_matches_filter(case: &TestMetadata, filter: Option<&str>) -> bool {

@@ -1,0 +1,25 @@
+---
+source: crates/fmt/tests/format_snapshots.rs
+assertion_line: 16
+expression: output
+input_file: tests/fixtures/mode_types.fe
+---
+struct Foo {}
+
+struct Wrap { a: ref Foo, b: mut Foo, c: own Foo, d: ref Foo }
+
+fn takes_ref(x: ref Foo) -> ref Foo {
+    x
+}
+
+fn takes_mut(x: mut Foo) -> mut Foo {
+    x
+}
+
+fn takes_own(x: own Foo) -> own Foo {
+    x
+}
+
+type AliasRef = ref Foo
+type AliasMut = mut Foo
+type AliasOwn = own Foo

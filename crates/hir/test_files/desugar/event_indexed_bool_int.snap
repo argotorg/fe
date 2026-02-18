@@ -1,5 +1,6 @@
 ---
 source: crates/hir/tests/desugar.rs
+assertion_line: 28
 expression: output
 input_file: test_files/desugar/event_indexed_bool_int.fe
 ---
@@ -14,11 +15,11 @@ struct Flags {
 impl std::evm::Event for Flags {
     const TOPIC0: u256 = core::keccak(("Flags", "(", bool::SOL_TYPE, ",", i8::SOL_TYPE, ",", u256::SOL_TYPE, ")"))
 
-    fn emit<L: std::evm::Log>(self, mut log: L) {
+    fn emit<L: std::evm::Log>(self, log: mut L) {
         let mut enc = std::abi::SolEncoder::new()
         let data_len = std::abi::encoded_size<u256>()
         enc.reserve_head(data_len)
-        self.value.encode(enc)
+        self.value.encode(mut enc)
         let (data_ptr, data_len) = enc.finish()
         log.log3(data_ptr, data_len, Self::TOPIC0, self.ok.as_topic(), self.delta.as_topic())
     }

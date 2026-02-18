@@ -1,0 +1,9 @@
+struct Foo {
+    x: u8,
+}
+
+pub fn let_pattern_owned_local_use_after_move() -> u8 {
+    let foo: Foo = Foo { x: 1 }
+    let Foo { x } = foo
+    foo.x + x
+}

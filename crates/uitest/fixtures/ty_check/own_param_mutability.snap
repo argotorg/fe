@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/own_param_mutability.fe
+---
+error[8-0018]: left-hand side of assignment is immutable
+  ┌─ own_param_mutability.fe:6:5
+  │
+5 │ fn mutate_own_immutable(x: own Boxed) {
+  │                         - try changing to `mut x`
+6 │     x.value = 1
+  │     ^^^^^^^ immutable assignment

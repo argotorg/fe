@@ -1,0 +1,9 @@
+struct Foo {
+    x: u8,
+}
+
+pub fn match_pattern_owned_view_param(foo: Foo) -> u8 {
+    match foo {
+        Foo { x } => x
+    }
+}

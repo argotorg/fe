@@ -1,7 +1,7 @@
 // Test tuple pattern matching WITH variable bindings
 // This exercises decision tree leaf.bindings for tuple elements
 
-pub fn match_tuple_extract(t: (u8, u8)) -> u8 {
+pub fn match_tuple_extract(t: own (u8, u8)) -> u8 {
     match t {
         (0, y) => y,
         (x, 0) => x,
@@ -9,7 +9,7 @@ pub fn match_tuple_extract(t: (u8, u8)) -> u8 {
     }
 }
 
-pub fn match_nested_extract(t: ((u8, u8), u8)) -> u8 {
+pub fn match_nested_extract(t: own ((u8, u8), u8)) -> u8 {
     match t {
         ((0, 0), z) => z,
         ((x, y), 0) => x + y,

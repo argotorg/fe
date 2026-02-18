@@ -789,11 +789,46 @@ impl ToDoc for ast::SuperTraitList {
 impl ToDoc for ast::Type {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
         match self.kind() {
+            TypeKind::Mode(mode) => mode.to_doc(ctx),
             TypeKind::Ptr(ptr) => ptr.to_doc(ctx),
             TypeKind::Path(path) => path.to_doc(ctx),
             TypeKind::Tuple(tuple) => tuple.to_doc(ctx),
             TypeKind::Array(array) => array.to_doc(ctx),
             TypeKind::Never(never) => never.to_doc(ctx),
+        }
+    }
+}
+
+impl ToDoc for ast::ModeType {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
+        if has_comment_tokens(self.syntax()) {
+            let indent = ctx.config.indent_width as isize;
+            return token_doc(
+                ctx,
+                self.syntax(),
+                indent,
+                |node| ast::Type::cast(node).map(|ty| TokenPiece::new(ty.to_doc(ctx))),
+                |token| match token.kind() {
+                    SyntaxKind::MutKw | SyntaxKind::RefKw | SyntaxKind::OwnKw => {
+                        Some(TokenPiece::new(alloc.text(ctx.token(&token))).space_after())
+                    }
+                    _ => None,
+                },
+            );
+        }
+
+        let Some(mode) = self.mode_token() else {
+            return self
+                .inner()
+                .map_or_else(|| alloc.nil(), |inner| inner.to_doc(ctx));
+        };
+        let mode = alloc.text(ctx.token(&mode));
+        if let Some(inner) = self.inner() {
+            mode.append(alloc.text(" ")).append(inner.to_doc(ctx))
+        } else {
+            mode
         }
     }
 }

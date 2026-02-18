@@ -62,7 +62,7 @@ msg ProxyMsg {
     TryIncrement { target: Address } -> u256,
 }
 
-pub contract NonOwnerCaller uses (mut call: Call) {
+pub contract NonOwnerCaller uses (call: mut Call) {
     recv ProxyMsg {
         TryIncrement { target } -> u256 uses (mut call) {
             call.call(
@@ -76,7 +76,7 @@ pub contract NonOwnerCaller uses (mut call: Call) {
 }
 
 #[test]
-fn test_ownable() uses (mut evm: Evm) {
+fn test_ownable() uses (evm: mut Evm) {
     // Deploy — test runner becomes owner via ctx.caller() in init
     let ownable = evm.create2<Ownable>(value: 0, args: (), salt: 0)
     assert(ownable.inner != 0)

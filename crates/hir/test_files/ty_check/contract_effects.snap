@@ -1,5 +1,6 @@
 ---
 source: crates/hir/tests/ty_check.rs
+assertion_line: 40
 expression: res
 input_file: test_files/ty_check/contract_effects.fe
 ---
@@ -130,307 +131,307 @@ note:
    │ ╰───────────────────^ Balance
 
 note: 
-   ┌─ contract_effects.fe:48:40
+   ┌─ contract_effects.fe:50:40
    │  
-48 │       fn eq(self, _ other: Self) -> bool {
+50 │       fn eq(self, _ other: Self) -> bool {
    │ ╭────────────────────────────────────────^
-49 │ │         self.inner == other.inner
-50 │ │     }
+51 │ │         self.inner == other.inner
+52 │ │     }
    │ ╰─────^ bool
 
 note: 
-   ┌─ contract_effects.fe:49:9
+   ┌─ contract_effects.fe:51:9
    │
-49 │         self.inner == other.inner
+51 │         self.inner == other.inner
    │         ^^^^ Address
 
 note: 
-   ┌─ contract_effects.fe:49:9
+   ┌─ contract_effects.fe:51:9
    │
-49 │         self.inner == other.inner
+51 │         self.inner == other.inner
    │         ^^^^^^^^^^ u256
 
 note: 
-   ┌─ contract_effects.fe:49:9
+   ┌─ contract_effects.fe:51:9
    │
-49 │         self.inner == other.inner
+51 │         self.inner == other.inner
    │         ^^^^^^^^^^^^^^^^^^^^^^^^^ bool
 
 note: 
-   ┌─ contract_effects.fe:49:23
+   ┌─ contract_effects.fe:51:23
    │
-49 │         self.inner == other.inner
+51 │         self.inner == other.inner
    │                       ^^^^^ Address
 
 note: 
-   ┌─ contract_effects.fe:49:23
+   ┌─ contract_effects.fe:51:23
    │
-49 │         self.inner == other.inner
+51 │         self.inner == other.inner
    │                       ^^^^^^^^^^^ u256
 
 note: 
-   ┌─ contract_effects.fe:55:1
+   ┌─ contract_effects.fe:57:1
    │  
-55 │ ╭ {
-56 │ │     if ctx.caller() == owner && amount >= balance {
-57 │ │         balance -= amount
-58 │ │         true
+57 │ ╭ {
+58 │ │     if ctx.caller() == owner && amount >= balance {
+59 │ │         balance -= amount
+60 │ │         true
    · │
-61 │ │     }
-62 │ │ }
+63 │ │     }
+64 │ │ }
    │ ╰─^ bool
 
 note: 
-   ┌─ contract_effects.fe:56:5
+   ┌─ contract_effects.fe:58:5
    │  
-56 │ ╭     if ctx.caller() == owner && amount >= balance {
-57 │ │         balance -= amount
-58 │ │         true
-59 │ │     } else {
-60 │ │         false
-61 │ │     }
+58 │ ╭     if ctx.caller() == owner && amount >= balance {
+59 │ │         balance -= amount
+60 │ │         true
+61 │ │     } else {
+62 │ │         false
+63 │ │     }
    │ ╰─────^ bool
 
 note: 
-   ┌─ contract_effects.fe:56:8
+   ┌─ contract_effects.fe:58:8
    │
-56 │     if ctx.caller() == owner && amount >= balance {
+58 │     if ctx.caller() == owner && amount >= balance {
    │        ^^^ __effprov0
 
 note: 
-   ┌─ contract_effects.fe:56:8
+   ┌─ contract_effects.fe:58:8
    │
-56 │     if ctx.caller() == owner && amount >= balance {
+58 │     if ctx.caller() == owner && amount >= balance {
    │        ^^^^^^^^^^^^ Address
 
 note: 
-   ┌─ contract_effects.fe:56:8
+   ┌─ contract_effects.fe:58:8
    │
-56 │     if ctx.caller() == owner && amount >= balance {
+58 │     if ctx.caller() == owner && amount >= balance {
    │        ^^^^^^^^^^^^^^^^^^^^^ bool
 
 note: 
-   ┌─ contract_effects.fe:56:8
+   ┌─ contract_effects.fe:58:8
    │
-56 │     if ctx.caller() == owner && amount >= balance {
+58 │     if ctx.caller() == owner && amount >= balance {
    │        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ bool
 
 note: 
-   ┌─ contract_effects.fe:56:24
+   ┌─ contract_effects.fe:58:24
    │
-56 │     if ctx.caller() == owner && amount >= balance {
+58 │     if ctx.caller() == owner && amount >= balance {
    │                        ^^^^^ Address
 
 note: 
-   ┌─ contract_effects.fe:56:33
+   ┌─ contract_effects.fe:58:33
    │
-56 │     if ctx.caller() == owner && amount >= balance {
+58 │     if ctx.caller() == owner && amount >= balance {
    │                                 ^^^^^^ u256
 
 note: 
-   ┌─ contract_effects.fe:56:33
+   ┌─ contract_effects.fe:58:33
    │
-56 │     if ctx.caller() == owner && amount >= balance {
+58 │     if ctx.caller() == owner && amount >= balance {
    │                                 ^^^^^^^^^^^^^^^^^ bool
 
 note: 
-   ┌─ contract_effects.fe:56:43
+   ┌─ contract_effects.fe:58:43
    │
-56 │     if ctx.caller() == owner && amount >= balance {
+58 │     if ctx.caller() == owner && amount >= balance {
    │                                           ^^^^^^^ u256
 
 note: 
-   ┌─ contract_effects.fe:56:51
+   ┌─ contract_effects.fe:58:51
    │  
-56 │       if ctx.caller() == owner && amount >= balance {
+58 │       if ctx.caller() == owner && amount >= balance {
    │ ╭───────────────────────────────────────────────────^
-57 │ │         balance -= amount
-58 │ │         true
-59 │ │     } else {
+59 │ │         balance -= amount
+60 │ │         true
+61 │ │     } else {
    │ ╰─────^ bool
 
 note: 
-   ┌─ contract_effects.fe:57:9
+   ┌─ contract_effects.fe:59:9
    │
-57 │         balance -= amount
+59 │         balance -= amount
    │         ^^^^^^^ u256
 
 note: 
-   ┌─ contract_effects.fe:57:9
+   ┌─ contract_effects.fe:59:9
    │
-57 │         balance -= amount
+59 │         balance -= amount
    │         ^^^^^^^^^^^^^^^^^ ()
 
 note: 
-   ┌─ contract_effects.fe:57:20
+   ┌─ contract_effects.fe:59:20
    │
-57 │         balance -= amount
+59 │         balance -= amount
    │                    ^^^^^^ u256
-
-note: 
-   ┌─ contract_effects.fe:58:9
-   │
-58 │         true
-   │         ^^^^ bool
-
-note: 
-   ┌─ contract_effects.fe:59:12
-   │  
-59 │       } else {
-   │ ╭────────────^
-60 │ │         false
-61 │ │     }
-   │ ╰─────^ bool
 
 note: 
    ┌─ contract_effects.fe:60:9
    │
-60 │         false
+60 │         true
+   │         ^^^^ bool
+
+note: 
+   ┌─ contract_effects.fe:61:12
+   │  
+61 │       } else {
+   │ ╭────────────^
+62 │ │         false
+63 │ │     }
+   │ ╰─────^ bool
+
+note: 
+   ┌─ contract_effects.fe:62:9
+   │
+62 │         false
    │         ^^^^^ bool
 
 note: 
-   ┌─ contract_effects.fe:68:32
+   ┌─ contract_effects.fe:70:32
    │  
-68 │       fn caller(self) -> Address {
+70 │       fn caller(self) -> Address {
    │ ╭────────────────────────────────^
-69 │ │         self.caller
-70 │ │     }
+71 │ │         self.caller
+72 │ │     }
    │ ╰─────^ Address
 
 note: 
-   ┌─ contract_effects.fe:69:9
+   ┌─ contract_effects.fe:71:9
    │
-69 │         self.caller
+71 │         self.caller
    │         ^^^^ MockCtx
 
 note: 
-   ┌─ contract_effects.fe:69:9
+   ┌─ contract_effects.fe:71:9
    │
-69 │         self.caller
+71 │         self.caller
    │         ^^^^^^^^^^^ Address
 
 note: 
-   ┌─ contract_effects.fe:73:20
+   ┌─ contract_effects.fe:75:20
    │  
-73 │   fn test_withdraw() {
+75 │   fn test_withdraw() {
    │ ╭────────────────────^
-74 │ │     let ctx = MockCtx { caller: Address { inner: 0xbeef } }
-75 │ │     let owner = Address { inner: 0xfe }
-76 │ │     let mut balance = 100
+76 │ │     let ctx = MockCtx { caller: Address { inner: 0xbeef } }
+77 │ │     let owner = Address { inner: 0xfe }
+78 │ │     let mut balance = 100
    · │
-79 │ │     }
-80 │ │ }
+81 │ │     }
+82 │ │ }
    │ ╰─^ ()
-
-note: 
-   ┌─ contract_effects.fe:74:9
-   │
-74 │     let ctx = MockCtx { caller: Address { inner: 0xbeef } }
-   │         ^^^ MockCtx
-
-note: 
-   ┌─ contract_effects.fe:74:15
-   │
-74 │     let ctx = MockCtx { caller: Address { inner: 0xbeef } }
-   │               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ MockCtx
-
-note: 
-   ┌─ contract_effects.fe:74:33
-   │
-74 │     let ctx = MockCtx { caller: Address { inner: 0xbeef } }
-   │                                 ^^^^^^^^^^^^^^^^^^^^^^^^^ Address
-
-note: 
-   ┌─ contract_effects.fe:74:50
-   │
-74 │     let ctx = MockCtx { caller: Address { inner: 0xbeef } }
-   │                                                  ^^^^^^ u256
-
-note: 
-   ┌─ contract_effects.fe:75:9
-   │
-75 │     let owner = Address { inner: 0xfe }
-   │         ^^^^^ Address
-
-note: 
-   ┌─ contract_effects.fe:75:17
-   │
-75 │     let owner = Address { inner: 0xfe }
-   │                 ^^^^^^^^^^^^^^^^^^^^^^^ Address
-
-note: 
-   ┌─ contract_effects.fe:75:34
-   │
-75 │     let owner = Address { inner: 0xfe }
-   │                                  ^^^^ u256
 
 note: 
    ┌─ contract_effects.fe:76:9
    │
-76 │     let mut balance = 100
+76 │     let ctx = MockCtx { caller: Address { inner: 0xbeef } }
+   │         ^^^ MockCtx
+
+note: 
+   ┌─ contract_effects.fe:76:15
+   │
+76 │     let ctx = MockCtx { caller: Address { inner: 0xbeef } }
+   │               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ MockCtx
+
+note: 
+   ┌─ contract_effects.fe:76:33
+   │
+76 │     let ctx = MockCtx { caller: Address { inner: 0xbeef } }
+   │                                 ^^^^^^^^^^^^^^^^^^^^^^^^^ Address
+
+note: 
+   ┌─ contract_effects.fe:76:50
+   │
+76 │     let ctx = MockCtx { caller: Address { inner: 0xbeef } }
+   │                                                  ^^^^^^ u256
+
+note: 
+   ┌─ contract_effects.fe:77:9
+   │
+77 │     let owner = Address { inner: 0xfe }
+   │         ^^^^^ Address
+
+note: 
+   ┌─ contract_effects.fe:77:17
+   │
+77 │     let owner = Address { inner: 0xfe }
+   │                 ^^^^^^^^^^^^^^^^^^^^^^^ Address
+
+note: 
+   ┌─ contract_effects.fe:77:34
+   │
+77 │     let owner = Address { inner: 0xfe }
+   │                                  ^^^^ u256
+
+note: 
+   ┌─ contract_effects.fe:78:9
+   │
+78 │     let mut balance = 100
    │         ^^^^^^^^^^^ u256
 
 note: 
-   ┌─ contract_effects.fe:76:23
+   ┌─ contract_effects.fe:78:23
    │
-76 │     let mut balance = 100
+78 │     let mut balance = 100
    │                       ^^^ u256
 
 note: 
-   ┌─ contract_effects.fe:77:5
+   ┌─ contract_effects.fe:79:5
    │  
-77 │ ╭     with (ctx, owner, balance) {
-78 │ │         let ok = withdraw(amount: 100)
-79 │ │     }
+79 │ ╭     with (ctx, owner, balance) {
+80 │ │         let ok = withdraw(amount: 100)
+81 │ │     }
    │ ╰─────^ ()
 
 note: 
-   ┌─ contract_effects.fe:77:11
+   ┌─ contract_effects.fe:79:11
    │
-77 │     with (ctx, owner, balance) {
+79 │     with (ctx, owner, balance) {
    │           ^^^ MockCtx
 
 note: 
-   ┌─ contract_effects.fe:77:16
+   ┌─ contract_effects.fe:79:16
    │
-77 │     with (ctx, owner, balance) {
+79 │     with (ctx, owner, balance) {
    │                ^^^^^ Address
 
 note: 
-   ┌─ contract_effects.fe:77:23
+   ┌─ contract_effects.fe:79:23
    │
-77 │     with (ctx, owner, balance) {
+79 │     with (ctx, owner, balance) {
    │                       ^^^^^^^ u256
 
 note: 
-   ┌─ contract_effects.fe:77:32
+   ┌─ contract_effects.fe:79:32
    │  
-77 │       with (ctx, owner, balance) {
+79 │       with (ctx, owner, balance) {
    │ ╭────────────────────────────────^
-78 │ │         let ok = withdraw(amount: 100)
-79 │ │     }
+80 │ │         let ok = withdraw(amount: 100)
+81 │ │     }
    │ ╰─────^ ()
 
 note: 
-   ┌─ contract_effects.fe:78:13
+   ┌─ contract_effects.fe:80:13
    │
-78 │         let ok = withdraw(amount: 100)
+80 │         let ok = withdraw(amount: 100)
    │             ^^ bool
 
 note: 
-   ┌─ contract_effects.fe:78:18
+   ┌─ contract_effects.fe:80:18
    │
-78 │         let ok = withdraw(amount: 100)
+80 │         let ok = withdraw(amount: 100)
    │                  ^^^^^^^^ fn withdraw
 
 note: 
-   ┌─ contract_effects.fe:78:18
+   ┌─ contract_effects.fe:80:18
    │
-78 │         let ok = withdraw(amount: 100)
+80 │         let ok = withdraw(amount: 100)
    │                  ^^^^^^^^^^^^^^^^^^^^^ bool
 
 note: 
-   ┌─ contract_effects.fe:78:35
+   ┌─ contract_effects.fe:80:35
    │
-78 │         let ok = withdraw(amount: 100)
+80 │         let ok = withdraw(amount: 100)
    │                                   ^^^ u256

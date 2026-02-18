@@ -2,7 +2,7 @@ use super::{
     adt_def::AdtCycleMember,
     trait_def::TraitInstId,
     ty_check::{RecordLike, TraitOps},
-    ty_def::{Kind, TyId},
+    ty_def::{BorrowKind, CapabilityKind, Kind, TyId},
 };
 use crate::visitor::prelude::*;
 use crate::{analysis::HirAnalysisDb, hir_def::Trait};
@@ -122,6 +122,27 @@ pub enum TyLowerDiag<'db> {
         given: TyId<'db>,
     },
 
+    /// `own` parameters must have owned types. Borrow-handle types (`mut`/`ref`) are not owned.
+    OwnParamCannotBeBorrow {
+        span: DynLazySpan<'db>,
+        ty: TyId<'db>,
+    },
+
+    /// Non-`self` parameters cannot use the `mut x: T` prefix form unless the type is `own`.
+    InvalidMutParamPrefixWithoutOwnType {
+        span: DynLazySpan<'db>,
+    },
+
+    MixedRefSelfPrefixWithExplicitType {
+        span: DynLazySpan<'db>,
+    },
+    MixedOwnSelfPrefixWithExplicitType {
+        span: DynLazySpan<'db>,
+    },
+    InvalidMutSelfPrefixWithExplicitType {
+        span: DynLazySpan<'db>,
+    },
+
     InvalidConstTyExpr(DynLazySpan<'db>),
 
     ConstEvalUnsupported(DynLazySpan<'db>),
@@ -156,12 +177,17 @@ impl TyLowerDiag<'_> {
             Self::ConstTyMismatch { .. } => 11,
             Self::ConstTyExpected { .. } => 12,
             Self::NormalTypeExpected { .. } => 13,
+            Self::OwnParamCannotBeBorrow { .. } => 14,
+            Self::InvalidMutParamPrefixWithoutOwnType { .. } => 31,
             Self::InvalidConstTyExpr(_) => 15,
             Self::ConstEvalUnsupported(_) => 23,
             Self::ConstEvalNonConstCall(_) => 24,
             Self::ConstEvalDivisionByZero(_) => 25,
             Self::ConstEvalStepLimitExceeded(_) => 26,
             Self::ConstEvalRecursionLimitExceeded(_) => 27,
+            Self::MixedRefSelfPrefixWithExplicitType { .. } => 28,
+            Self::MixedOwnSelfPrefixWithExplicitType { .. } => 29,
+            Self::InvalidMutSelfPrefixWithExplicitType { .. } => 30,
             Self::TooManyGenericArgs { .. } => 16,
             Self::DuplicateFieldName(..) => 17,
             Self::DuplicateVariantName(..) => 18,
@@ -338,6 +364,58 @@ pub enum BodyDiag<'db> {
         trait_path: PathId<'db>,
     },
     UnsupportedUnaryPlus(DynLazySpan<'db>),
+
+    BorrowFromNonPlace {
+        primary: DynLazySpan<'db>,
+    },
+
+    CannotBorrowMut {
+        primary: DynLazySpan<'db>,
+        binding: Option<(IdentId<'db>, DynLazySpan<'db>)>,
+    },
+
+    /// A call argument is not a place, but the callee requires a borrow handle (`mut`/`ref`).
+    BorrowArgMustBePlace {
+        primary: DynLazySpan<'db>,
+        kind: BorrowKind,
+    },
+
+    /// A call argument is a place, but the callee requires an explicit borrow handle (`mut`/`ref`).
+    ExplicitBorrowRequired {
+        primary: DynLazySpan<'db>,
+        kind: BorrowKind,
+        suggestion: Option<String>,
+    },
+
+    /// `own` parameters must have owned types. Borrow-handle types (`mut`/`ref`) are not owned.
+    OwnParamCannotBeBorrow {
+        primary: DynLazySpan<'db>,
+        ty: TyId<'db>,
+    },
+
+    /// `let mut` local bindings must bind owned values, not capability handles.
+    MutableBindingCannotBeCapability {
+        primary: DynLazySpan<'db>,
+        ty: TyId<'db>,
+    },
+
+    /// `own` call arguments must denote a transferable owned value.
+    ///
+    /// Capability-typed expressions (`mut`/`ref`/`view`) can only satisfy this when the checker
+    /// can safely unwrap them to an owned inner value.
+    OwnArgMustBeOwnedMove {
+        primary: DynLazySpan<'db>,
+        kind: CapabilityKind,
+        given: TyId<'db>,
+    },
+
+    /// Array repetition literals (`[x; N]`) duplicate the element value.
+    ///
+    /// Duplicating a value requires that the element type implement `core::marker::Copy`.
+    ArrayRepeatRequiresCopy {
+        primary: DynLazySpan<'db>,
+        ty: TyId<'db>,
+    },
 
     NonAssignableExpr(DynLazySpan<'db>),
 
@@ -620,6 +698,14 @@ impl<'db> BodyDiag<'db> {
             Self::AccessedFieldNotFound { .. } => 15,
             Self::OpsTraitNotImplemented { .. } => 16,
             Self::UnsupportedUnaryPlus(..) => 52,
+            Self::BorrowFromNonPlace { .. } => 65,
+            Self::CannotBorrowMut { .. } => 66,
+            Self::BorrowArgMustBePlace { .. } => 68,
+            Self::ExplicitBorrowRequired { .. } => 69,
+            Self::OwnParamCannotBeBorrow { .. } => 70,
+            Self::OwnArgMustBeOwnedMove { .. } => 72,
+            Self::MutableBindingCannotBeCapability { .. } => 73,
+            Self::ArrayRepeatRequiresCopy { .. } => 71,
             Self::NonAssignableExpr(..) => 17,
             Self::ImmutableAssignment { .. } => 18,
             Self::LoopControlOutsideOfLoop { .. } => 19,

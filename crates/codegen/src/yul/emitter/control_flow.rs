@@ -102,19 +102,21 @@ impl<'db> FunctionEmitter<'db> {
         ctx: &mut BlockEmitCtx<'_, '_, '_>,
     ) -> Result<(), YulError> {
         match terminator {
-            Terminator::Return(Some(val)) => {
+            Terminator::Return {
+                value: Some(val), ..
+            } => {
                 self.emit_return_with_value(*val, ctx.docs, ctx.state)?;
                 ctx.docs.push(YulDoc::line("leave"));
                 Ok(())
             }
-            Terminator::Return(None) => {
+            Terminator::Return { value: None, .. } => {
                 if self.returns_value() {
                     ctx.docs.push(YulDoc::line("ret := 0"));
                 }
                 ctx.docs.push(YulDoc::line("leave"));
                 Ok(())
             }
-            Terminator::TerminatingCall(call) => match call {
+            Terminator::TerminatingCall { call, .. } => match call {
                 mir::TerminatingCall::Call(call) => {
                     let call_expr = self.lower_call_value(call, ctx.state)?;
                     ctx.docs.push(YulDoc::line(call_expr));
@@ -139,14 +141,16 @@ impl<'db> FunctionEmitter<'db> {
                 cond,
                 then_bb,
                 else_bb,
+                ..
             } => self.emit_branch_terminator(*cond, *then_bb, *else_bb, ctx),
             Terminator::Switch {
                 discr,
                 targets,
                 default,
+                ..
             } => self.emit_switch_terminator(block_id, *discr, targets, *default, ctx),
-            Terminator::Goto { target } => self.emit_goto_terminator(block_id, *target, ctx),
-            Terminator::Unreachable => Ok(()),
+            Terminator::Goto { target, .. } => self.emit_goto_terminator(block_id, *target, ctx),
+            Terminator::Unreachable { .. } => Ok(()),
         }
     }
 
@@ -205,11 +209,11 @@ impl<'db> FunctionEmitter<'db> {
             .terminator;
 
         let then_target = match then_term {
-            Terminator::Goto { target } => Some(*target),
+            Terminator::Goto { target, .. } => Some(*target),
             _ => None,
         };
         let else_target = match else_term {
-            Terminator::Goto { target } => Some(*target),
+            Terminator::Goto { target, .. } => Some(*target),
             _ => None,
         };
 
@@ -228,9 +232,9 @@ impl<'db> FunctionEmitter<'db> {
         let emit_false_branch = !(join == Some(else_bb) && then_target == Some(else_bb));
 
         let then_exits =
-            join != Some(then_bb) && matches!(then_term, Terminator::TerminatingCall(_));
+            join != Some(then_bb) && matches!(then_term, Terminator::TerminatingCall { .. });
         let else_exits =
-            join != Some(else_bb) && matches!(else_term, Terminator::TerminatingCall(_));
+            join != Some(else_bb) && matches!(else_term, Terminator::TerminatingCall { .. });
 
         let mut then_state = ctx.cloned_state();
         let mut else_state = ctx.cloned_state();
@@ -359,7 +363,7 @@ impl<'db> FunctionEmitter<'db> {
             };
 
             match &block.terminator {
-                Terminator::Goto { target } => {
+                Terminator::Goto { target, .. } => {
                     if stop_blocks.contains(target)
                         || self.mir_func.body.loop_headers.contains_key(target)
                     {
@@ -379,9 +383,9 @@ impl<'db> FunctionEmitter<'db> {
                     stack.extend(targets.iter().map(|target| target.block));
                     stack.push(*default);
                 }
-                Terminator::Return(..)
-                | Terminator::TerminatingCall(_)
-                | Terminator::Unreachable => {}
+                Terminator::Return { .. }
+                | Terminator::TerminatingCall { .. }
+                | Terminator::Unreachable { .. } => {}
             }
         }
 
@@ -507,6 +511,7 @@ impl<'db> FunctionEmitter<'db> {
             cond,
             then_bb,
             else_bb,
+            ..
         } = block.terminator
         else {
             return Err(YulError::Unsupported(

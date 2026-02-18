@@ -12,13 +12,21 @@ use std::fs;
 
 use camino::Utf8PathBuf;
 use check::check;
-use clap::{CommandFactory, Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use colored::Colorize;
 use fmt as fe_fmt;
 use similar::{ChangeTag, TextDiff};
 use walkdir::WalkDir;
 
 use crate::test::TestDebugOptions;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum TestDebug {
+    /// Print Yul output for any failing test.
+    Failures,
+    /// Print Yul output for all executed tests.
+    All,
+}
 
 #[derive(Debug, Clone, Parser)]
 #[command(version, about, long_about = None)]
@@ -92,6 +100,15 @@ pub enum Command {
         /// Show event logs from test execution.
         #[arg(long)]
         show_logs: bool,
+        /// Print Yul output (`failures` or `all`) when using the Yul backend.
+        #[arg(
+            long,
+            value_enum,
+            num_args = 0..=1,
+            default_missing_value = "failures",
+            require_equals = true
+        )]
+        debug: Option<TestDebug>,
         /// Backend to use for codegen (yul or sonatina).
         #[arg(long, default_value = "yul")]
         backend: String,
@@ -238,6 +255,7 @@ pub fn run(opts: &Options) {
             filter,
             jobs,
             show_logs,
+            debug: test_debug,
             backend,
             opt_level,
             trace_evm,
@@ -265,6 +283,8 @@ pub fn run(opts: &Options) {
                 sonatina_symtab: *sonatina_symtab,
                 sonatina_evm_debug: false,
                 sonatina_observability: false,
+                dump_yul_on_failure: matches!(test_debug, Some(TestDebug::Failures)),
+                dump_yul_for_all: matches!(test_debug, Some(TestDebug::All)),
                 debug_dir: debug_dir.clone(),
             };
             let paths = if paths.is_empty() {

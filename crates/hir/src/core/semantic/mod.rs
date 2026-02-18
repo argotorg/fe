@@ -177,11 +177,19 @@ impl<'db> Func<'db> {
             Some(params) => params
                 .data(db)
                 .iter()
-                .map(|p| match p.ty.to_opt() {
-                    Some(hir_ty) => {
-                        Binder::bind(lower_hir_ty(db, hir_ty, self.scope(), assumptions))
-                    }
-                    None => Binder::bind(TyId::invalid(db, InvalidCause::ParseError)),
+                .map(|p| {
+                    let ty = match p.ty.to_opt() {
+                        Some(hir_ty) => lower_hir_ty(db, hir_ty, self.scope(), assumptions),
+                        None => TyId::invalid(db, InvalidCause::ParseError),
+                    };
+                    let ty = if p.mode == crate::hir_def::params::FuncParamMode::View
+                        && ty.as_capability(db).is_none()
+                    {
+                        TyId::view_of(db, ty)
+                    } else {
+                        ty
+                    };
+                    Binder::bind(ty)
                 })
                 .collect(),
             None => Vec::new(),
@@ -533,6 +541,14 @@ impl<'db> FuncParamView<'db> {
         }
     }
 
+    pub fn mode(self, db: &'db dyn HirDb) -> crate::hir_def::params::FuncParamMode {
+        let list = self.func.params_list(db).to_opt();
+        match list.and_then(|l| l.data(db).get(self.idx)) {
+            Some(p) => p.mode,
+            None => crate::hir_def::params::FuncParamMode::View,
+        }
+    }
+
     pub fn span(self) -> crate::span::params::LazyFuncParamSpan<'db> {
         self.func.span().params().param(self.idx)
     }
@@ -593,15 +609,50 @@ impl<'db> FuncParamView<'db> {
         let func = self.func;
         let assumptions = func.assumptions(db);
 
-        let Some(hir_ty) = self
+        let Some(param) = self
             .func
             .params_list(db)
             .to_opt()
             .and_then(|l| l.data(db).get(self.idx))
-            .and_then(|p| p.ty.to_opt())
         else {
             return Vec::new();
         };
+        let Some(hir_ty) = param.ty.to_opt() else {
+            return Vec::new();
+        };
+
+        if self.is_self_param(db) && !param.self_ty_fallback {
+            if param.has_ref_prefix {
+                return vec![
+                    TyLowerDiag::MixedRefSelfPrefixWithExplicitType {
+                        span: self.span().ref_kw().into(),
+                    }
+                    .into(),
+                ];
+            }
+
+            if param.has_own_prefix {
+                return vec![
+                    TyLowerDiag::MixedOwnSelfPrefixWithExplicitType {
+                        span: self.span().own_kw().into(),
+                    }
+                    .into(),
+                ];
+            }
+
+            if param.is_mut && !allows_mut_self_prefix_with_explicit_ty(db, hir_ty) {
+                let span = self.span().mut_kw().into();
+                return vec![TyLowerDiag::InvalidMutSelfPrefixWithExplicitType { span }.into()];
+            }
+        }
+
+        if !self.is_self_param(db)
+            && param.is_mut
+            && !matches!(hir_ty.data(db), TypeKind::Mode(TypeMode::Own, _))
+        {
+            let span = self.span().mut_kw().into();
+            return vec![TyLowerDiag::InvalidMutParamPrefixWithoutOwnType { span }.into()];
+        }
 
         // Surface name-resolution errors for the parameter type first
         let errs =
@@ -632,6 +683,17 @@ impl<'db> FuncParamView<'db> {
             return out;
         }
 
+        if self.mode(db) == crate::hir_def::params::FuncParamMode::Own && ty.as_borrow(db).is_some()
+        {
+            out.push(
+                TyLowerDiag::OwnParamCannotBeBorrow {
+                    span: ty_span.clone(),
+                    ty,
+                }
+                .into(),
+            );
+        }
+
         // Well-formedness / trait-bound satisfaction for parameter type
         if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(
             db,
@@ -654,12 +716,22 @@ impl<'db> FuncParamView<'db> {
             && !ty.has_invalid(db)
             && !expected.has_invalid(db)
         {
-            let (exp_base, exp_args) = expected.decompose_ty_app(db);
             let ty_norm = normalize_ty(db, ty, func.scope(), assumptions);
-            let (ty_base, ty_args) = ty_norm.decompose_ty_app(db);
-            let same_base = ty_base == exp_base;
-            let same_args = exp_args.iter().zip(ty_args.iter()).all(|(a, b)| a == b);
-            if !(same_base && same_args) {
+
+            let matches_expected = |candidate: TyId<'db>| {
+                let (exp_base, exp_args) = expected.decompose_ty_app(db);
+                let (cand_base, cand_args) = candidate.decompose_ty_app(db);
+                cand_base == exp_base
+                    && cand_args.len() >= exp_args.len()
+                    && exp_args.iter().zip(cand_args.iter()).all(|(a, b)| a == b)
+            };
+
+            let is_allowed_self_ty = matches_expected(ty_norm)
+                || ty_norm
+                    .as_borrow(db)
+                    .is_some_and(|(_, inner)| matches_expected(inner));
+
+            if !is_allowed_self_ty {
                 out.push(
                     ImplDiag::InvalidSelfType {
                         span: ty_span,
@@ -672,6 +744,26 @@ impl<'db> FuncParamView<'db> {
         }
 
         out
+    }
+}
+
+fn allows_mut_self_prefix_with_explicit_ty<'db>(db: &'db dyn HirDb, hir_ty: TypeId<'db>) -> bool {
+    if let TypeKind::Mode(TypeMode::Own, inner) = hir_ty.data(db)
+        && let Some(inner) = inner.to_opt()
+    {
+        !is_bare_self_ty(db, inner)
+    } else {
+        false
+    }
+}
+
+fn is_bare_self_ty<'db>(db: &'db dyn HirDb, hir_ty: TypeId<'db>) -> bool {
+    if let TypeKind::Path(path) = hir_ty.data(db)
+        && let Some(path) = path.to_opt()
+    {
+        path.is_self_ty(db) && path.generic_args(db).is_empty(db)
+    } else {
+        false
     }
 }
 

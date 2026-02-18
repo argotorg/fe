@@ -1,0 +1,21 @@
+// Overwriting a borrow-handle field should kill the old embedded loan.
+
+struct Wrap {
+    h: mut u256,
+    tag: u256,
+}
+
+pub fn borrowck_overwrite_handle_kills_old_loan() -> u256 {
+    let mut a: u256 = 1
+    let mut b: u256 = 2
+    let mut w: Wrap = Wrap { h: mut a, tag: 0 }
+
+    w.h = mut b
+
+    let ha: mut u256 = mut a
+    ha += 10
+
+    w.h += 20
+
+    a + b
+}

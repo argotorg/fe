@@ -1,0 +1,17 @@
+pub enum Wrapper<T> {
+    Value(T),
+}
+
+impl Wrapper {
+    fn bad_ref<T>(ref self: Self<T>) {}
+
+    fn bad_own<T>(own self: Self<T>) {}
+
+    fn bad_mut_plain<T>(mut self: Self<T>) {}
+
+    fn bad_mut_own_bare(mut self: own Self) {}
+
+    fn ok_mut_own_self_generic<T>(mut self: own Self<T>) {}
+
+    fn ok_mut_own_named<T>(mut self: own Wrapper<T>) {}
+}

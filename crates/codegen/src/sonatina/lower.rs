@@ -84,10 +84,10 @@ pub(super) fn lower_instruction<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 ctx.fb.def_var(dest_var, converted);
             }
         }
-        MirInst::Store { place, value } => {
+        MirInst::Store { place, value, .. } => {
             lower_store_inst(ctx, place, *value)?;
         }
-        MirInst::InitAggregate { place, inits } => {
+        MirInst::InitAggregate { place, inits, .. } => {
             for (path, value) in inits {
                 let mut target = place.clone();
                 for proj in path.iter() {
@@ -96,11 +96,11 @@ pub(super) fn lower_instruction<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 lower_store_inst(ctx, &target, *value)?;
             }
         }
-        MirInst::SetDiscriminant { place, variant } => {
+        MirInst::SetDiscriminant { place, variant, .. } => {
             let val = ctx.fb.make_imm_value(I256::from(variant.idx as u64));
             store_word_to_place(ctx, place, val)?;
         }
-        MirInst::BindValue { value } => {
+        MirInst::BindValue { value, .. } => {
             // Ensure the value is lowered and cached
             let _ = lower_value(ctx, *value)?;
         }
@@ -612,15 +612,16 @@ fn lower_value<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     //
     // This can be revisited once we have a robust notion of which MIR values are stable across
     // blocks after SSA sealing.
-    lower_value_origin(ctx, &value_data.origin)
+    lower_value_origin(ctx, value_data)
 }
 
 /// Lower a MIR value origin to a Sonatina value.
 fn lower_value_origin<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     ctx: &mut LowerCtx<'_, 'db, C>,
-    origin: &mir::ValueOrigin<'db>,
+    value_data: &mir::ValueData<'db>,
 ) -> Result<ValueId, LowerError> {
     use mir::ValueOrigin;
+    let origin = &value_data.origin;
 
     match origin {
         ValueOrigin::Synthetic(syn) => match syn {
@@ -638,7 +639,7 @@ fn lower_value_origin<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 Ok(ctx.fb.make_imm_value(i256_val))
             }
         },
-        ValueOrigin::Local(local_id) => {
+        ValueOrigin::Local(local_id) | ValueOrigin::PlaceRoot(local_id) => {
             let var = ctx.local_vars.get(local_id).copied().ok_or_else(|| {
                 LowerError::Internal(format!("SSA variable not found for local {local_id:?}"))
             })?;
@@ -669,8 +670,19 @@ fn lower_value_origin<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             )))
         }
         ValueOrigin::PlaceRef(place) => {
-            // Compute the full address including projections
+            if value_data.repr.address_space().is_none()
+                && let Some((_, inner_ty)) = value_data.ty.as_capability(ctx.db)
+            {
+                return load_place_typed(ctx, place, inner_ty);
+            }
             lower_place_address(ctx, place)
+        }
+        ValueOrigin::MoveOut { place } => {
+            if value_data.repr.address_space().is_some() {
+                lower_place_address(ctx, place)
+            } else {
+                load_place_typed(ctx, place, value_data.ty)
+            }
         }
         ValueOrigin::FieldPtr(field_ptr) => {
             let base = lower_value(ctx, field_ptr.base)?;
@@ -733,6 +745,7 @@ fn lower_unary_op<C: sonatina_ir::func_cursor::FuncCursor>(
             // Unary plus is a no-op
             Ok(inner)
         }
+        UnOp::Mut | UnOp::Ref => Ok(inner),
     }
 }
 
@@ -1064,7 +1077,13 @@ fn prim_to_sonatina_type(prim: PrimTy) -> Option<Type> {
         PrimTy::U64 | PrimTy::I64 => Some(Type::I64),
         PrimTy::U128 | PrimTy::I128 => Some(Type::I128),
         // Full-width types don't need conversion
-        PrimTy::U256 | PrimTy::I256 | PrimTy::Usize | PrimTy::Isize => None,
+        PrimTy::U256
+        | PrimTy::I256
+        | PrimTy::Usize
+        | PrimTy::Isize
+        | PrimTy::View
+        | PrimTy::BorrowMut
+        | PrimTy::BorrowRef => None,
         // Non-scalar types
         PrimTy::String | PrimTy::Array | PrimTy::Tuple(_) | PrimTy::Ptr => None,
     }
@@ -1239,7 +1258,10 @@ fn fe_ty_to_sonatina_inner<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             | PrimTy::I256
             | PrimTy::Usize
             | PrimTy::Isize
-            | PrimTy::Ptr => Some(Type::I256),
+            | PrimTy::Ptr
+            | PrimTy::View
+            | PrimTy::BorrowMut
+            | PrimTy::BorrowRef => Some(Type::I256),
             PrimTy::String => None,
             PrimTy::Tuple(_) => {
                 let field_tys = ty.field_types(db);
@@ -1629,7 +1651,7 @@ pub(super) fn lower_terminator<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     use mir::Terminator;
 
     match term {
-        Terminator::Return(ret_val) => {
+        Terminator::Return { value: ret_val, .. } => {
             if ctx.is_entry {
                 // Entry function: emit evm_stop to halt EVM execution.
                 // Any return value is ignored since the entry function should have
@@ -1646,7 +1668,7 @@ pub(super) fn lower_terminator<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                     .insert_inst_no_result(Return::new(ctx.is, ret_sonatina));
             }
         }
-        Terminator::Goto { target } => {
+        Terminator::Goto { target, .. } => {
             let target_block = ctx.block_map[target];
             ctx.fb
                 .insert_inst_no_result(Jump::new(ctx.is, target_block));
@@ -1655,6 +1677,7 @@ pub(super) fn lower_terminator<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             cond,
             then_bb,
             else_bb,
+            ..
         } => {
             let cond_val = lower_value(ctx, *cond)?;
             let cond_i1 = condition_to_i1(ctx.fb, cond_val, ctx.is);
@@ -1668,6 +1691,7 @@ pub(super) fn lower_terminator<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             discr,
             targets,
             default,
+            ..
         } => {
             let discr_val = lower_value(ctx, *discr)?;
             let default_block = ctx.block_map[default];
@@ -1712,7 +1736,7 @@ pub(super) fn lower_terminator<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                     .insert_inst_no_result(Br::new(ctx.is, cond, case_dest, else_dest));
             }
         }
-        Terminator::TerminatingCall(call) => match call {
+        Terminator::TerminatingCall { call, .. } => match call {
             mir::TerminatingCall::Call(call) => {
                 let callee_name = call.resolved_name.as_ref().ok_or_else(|| {
                     LowerError::Unsupported("terminating call without resolved name".to_string())
@@ -1794,7 +1818,7 @@ pub(super) fn lower_terminator<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 }
             }
         },
-        Terminator::Unreachable => {
+        Terminator::Unreachable { .. } => {
             // Emit INVALID opcode (0xFE) - this consumes all gas and reverts
             ctx.fb.insert_inst_no_result(EvmInvalid::new(ctx.is));
         }

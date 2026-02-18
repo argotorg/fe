@@ -1,0 +1,13 @@
+use ingot::Copy
+
+pub trait Clone {
+    fn clone(self) -> Self
+}
+
+impl<T> Clone for T
+where T: Copy
+{
+    fn clone(self) -> Self {
+        self
+    }
+}

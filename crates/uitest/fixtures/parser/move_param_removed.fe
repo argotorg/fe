@@ -1,0 +1,6 @@
+fn bad(move x: u256) {}
+
+fn good() -> u256 {
+    let move: u256 = 1
+    move
+}

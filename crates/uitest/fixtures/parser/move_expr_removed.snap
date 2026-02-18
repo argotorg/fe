@@ -1,0 +1,11 @@
+---
+source: crates/uitest/tests/parser.rs
+assertion_line: 26
+expression: diags
+input_file: fixtures/parser/move_expr_removed.fe
+---
+error[1-0001]: unexpected syntax while parsing block
+  ┌─ move_expr_removed.fe:3:24
+  │
+3 │     let y: u256 = move x
+  │                        ^ unexpected

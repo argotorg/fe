@@ -61,7 +61,7 @@ struct FactoryStore {
     child_count: u256,
 }
 
-pub contract Factory uses (mut create: Create) {
+pub contract Factory uses (create: mut Create) {
     mut store: FactoryStore
 
     init() uses (mut store) {
@@ -86,7 +86,7 @@ pub contract Factory uses (mut create: Create) {
 }
 
 #[test]
-fn test_factory() uses (mut evm: Evm) {
+fn test_factory() uses (evm: mut Evm) {
     let factory = evm.create2<Factory>(value: 0, args: (), salt: 0)
     assert(factory.inner != 0)
 

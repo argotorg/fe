@@ -127,6 +127,8 @@ impl<'db> FunctionEmitter<'db> {
                     UnOp::Not => Ok(format!("iszero({value})")),
                     UnOp::Plus => Ok(value),
                     UnOp::BitNot => Ok(format!("not({value})")),
+                    UnOp::Mut => todo!(),
+                    UnOp::Ref => todo!(),
                 }
             }
             ValueOrigin::Binary { op, lhs, rhs } => {
@@ -147,7 +149,9 @@ impl<'db> FunctionEmitter<'db> {
                         ArithBinOp::BitXor => Ok(format!("xor({left}, {right})")),
                         // Range should be lowered to Range type construction before codegen
                         ArithBinOp::Range => {
-                            todo!("Range operator should be handled during type checking/MIR lowering")
+                            todo!(
+                                "Range operator should be handled during type checking/MIR lowering"
+                            )
                         }
                     },
                     BinOp::Comp(op) => {
@@ -173,20 +177,31 @@ impl<'db> FunctionEmitter<'db> {
                     )),
                 }
             }
-            ValueOrigin::Local(local) => state
-                .resolve_local(*local)
-                .ok_or_else(|| {
-                    let local_data = self.mir_func.body.local(*local);
-                    let is_param = self.mir_func.body.param_locals.contains(local);
-                    let is_effect = self.mir_func.body.effect_param_locals.contains(local);
-                    YulError::Unsupported(format!(
-                        "unbound MIR local reached codegen (func={}, local=l{} `{}`, ty={}, param={is_param}, effect={is_effect})",
-                        self.mir_func.symbol_name,
-                        local.index(),
-                        local_data.name,
-                        local_data.ty.pretty_print(self.db),
-                    ))
-                }),
+            ValueOrigin::Local(local) => {
+                if let Some(name) = state.resolve_local(*local) {
+                    return Ok(name);
+                }
+
+                let local_data = self.mir_func.body.local(*local);
+                let is_param = self.mir_func.body.param_locals.contains(local);
+                let is_effect = self.mir_func.body.effect_param_locals.contains(local);
+                if is_effect && self.mir_func.contract_function.is_some() {
+                    // Contract entrypoints lower host/effect handles as compile-time symbols
+                    // rather than runtime parameters.
+                    return Ok("0".into());
+                }
+
+                Err(YulError::Unsupported(format!(
+                    "unbound MIR local reached codegen (func={}, local=l{} `{}`, ty={}, param={is_param}, effect={is_effect})",
+                    self.mir_func.symbol_name,
+                    local.index(),
+                    local_data.name,
+                    local_data.ty.pretty_print(self.db),
+                )))
+            }
+            ValueOrigin::PlaceRoot(_) => Err(YulError::Unsupported(
+                "capability-stage place root reached codegen".into(),
+            )),
             ValueOrigin::FuncItem(_) => {
                 debug_assert!(
                     layout::is_zero_sized_ty_in(self.db, &self.layout, value.ty),
@@ -197,7 +212,21 @@ impl<'db> FunctionEmitter<'db> {
             }
             ValueOrigin::Synthetic(synth) => self.lower_synthetic_value(synth),
             ValueOrigin::FieldPtr(field_ptr) => self.lower_field_ptr(field_ptr, state),
-            ValueOrigin::PlaceRef(place) => self.lower_place_ref(place, state),
+            ValueOrigin::PlaceRef(place) => {
+                if value.repr.address_space().is_none()
+                    && let Some((_, inner_ty)) = value.ty.as_capability(self.db)
+                {
+                    return self.lower_place_load(place, inner_ty, state);
+                }
+                self.lower_place_ref(place, state)
+            }
+            ValueOrigin::MoveOut { place } => {
+                if value.repr.address_space().is_some() {
+                    self.lower_place_ref(place, state)
+                } else {
+                    self.lower_place_load(place, value.ty, state)
+                }
+            }
             ValueOrigin::TransparentCast { value } => self.lower_value(*value, state),
         }
     }
@@ -337,6 +366,7 @@ impl<'db> FunctionEmitter<'db> {
         {
             return Ok("0".into());
         }
+
         let addr = self.lower_place_address(place, state)?;
         let raw_load = match self.mir_func.body.place_address_space(place) {
             mir::ir::AddressSpaceKind::Memory => format!("mload({addr})"),
@@ -402,10 +432,14 @@ impl<'db> FunctionEmitter<'db> {
                     // Full-width signed doesn't need masking, sign is already there
                     raw_load.to_string()
                 }
-                // String, Array, Tuple, Ptr are aggregate/pointer types - no conversion
-                PrimTy::String | PrimTy::Array | PrimTy::Tuple(_) | PrimTy::Ptr => {
-                    raw_load.to_string()
-                }
+                // Aggregate/pointer-like types - no conversion
+                PrimTy::String
+                | PrimTy::Array
+                | PrimTy::Tuple(_)
+                | PrimTy::Ptr
+                | PrimTy::View
+                | PrimTy::BorrowMut
+                | PrimTy::BorrowRef => raw_load.to_string(),
             }
         } else {
             // Non-primitive types (aggregates, etc.) - no conversion
@@ -435,9 +469,13 @@ impl<'db> FunctionEmitter<'db> {
                 | PrimTy::I128
                 | PrimTy::I256
                 | PrimTy::Isize => raw_value.to_string(),
-                PrimTy::String | PrimTy::Array | PrimTy::Tuple(_) | PrimTy::Ptr => {
-                    raw_value.to_string()
-                }
+                PrimTy::String
+                | PrimTy::Array
+                | PrimTy::Tuple(_)
+                | PrimTy::Ptr
+                | PrimTy::View
+                | PrimTy::BorrowMut
+                | PrimTy::BorrowRef => raw_value.to_string(),
             }
         } else {
             raw_value.to_string()
@@ -465,14 +503,30 @@ impl<'db> FunctionEmitter<'db> {
         place: &Place<'db>,
         state: &BlockState,
     ) -> Result<String, YulError> {
-        let mut base_expr = self.lower_value(place.base, state)?;
+        let base_value = self.mir_func.body.value(place.base);
+        let mut base_expr = if let ValueOrigin::Local(local) = &base_value.origin
+            && base_value.repr.is_ref()
+            && let Some(spill) = self.mir_func.body.spill_slots.get(local)
+        {
+            state.resolve_local(*spill).ok_or_else(|| {
+                let local_data = self.mir_func.body.local(*spill);
+                YulError::Unsupported(format!(
+                    "unbound MIR spill slot local reached codegen (func={}, local=l{} `{}`, ty={})",
+                    self.mir_func.symbol_name,
+                    spill.index(),
+                    local_data.name,
+                    local_data.ty.pretty_print(self.db),
+                ))
+            })?
+        } else {
+            self.lower_value(place.base, state)?
+        };
 
         if place.projection.is_empty() {
             return Ok(base_expr);
         }
 
         // Get the base value's type to navigate projections
-        let base_value = self.mir_func.body.value(place.base);
         let mut current_ty = base_value.ty;
         let mut total_offset: usize = 0;
         let is_slot_addressed = matches!(

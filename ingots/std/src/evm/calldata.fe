@@ -1,10 +1,13 @@
 use core::abi::ByteInput
+use core::Copy
 use core::num::IntDowncast
 use ingot::evm::ops::{calldataload, calldatasize}
 
 pub struct CallData {
     pub base: u256,
 }
+
+impl Copy for CallData {}
 
 impl ByteInput for CallData {
     fn len(self) -> u256 {

@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/mir_check.rs
+expression: res
+input_file: fixtures/mir_check/borrowck_call_same_handle_overlap.fe
+---
+error[11-0002]: borrow conflict in `fn call_same_handle`
+  ┌─ borrowck_call_same_handle_overlap.fe:6:21
+  │
+6 │ fn call_same_handle(h: mut u256) {
+  │                     ^^^^^^^^^^^ cannot pass overlapping mutable borrows as call arguments

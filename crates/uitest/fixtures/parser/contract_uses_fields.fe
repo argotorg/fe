@@ -1,5 +1,4 @@
-contract Coin uses (mut ctx: Ctx) {
+contract Coin uses (ctx: mut Ctx) {
     mut store: CoinStore,
     creator: Address
 }
-

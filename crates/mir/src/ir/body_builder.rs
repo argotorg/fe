@@ -4,8 +4,8 @@ use num_bigint::BigUint;
 
 use super::{
     AddressSpaceKind, BasicBlock, BasicBlockId, CodeRegionRoot, LocalData, LocalId, MirBody,
-    MirInst, MirProjectionPath, Place, Rvalue, SwitchTarget, SyntheticValue, Terminator, ValueData,
-    ValueId, ValueOrigin, ValueRepr,
+    MirInst, MirProjectionPath, Place, Rvalue, SourceInfoId, SwitchTarget, SyntheticValue,
+    Terminator, ValueData, ValueId, ValueOrigin, ValueRepr,
 };
 
 /// Convenience result for `BodyBuilder` helpers that materialize a value in a fresh local.
@@ -85,6 +85,7 @@ impl<'db> BodyBuilder<'db> {
             name: name.into(),
             ty,
             is_mut,
+            source: SourceInfoId::SYNTHETIC,
             address_space,
         })
     }
@@ -95,7 +96,12 @@ impl<'db> BodyBuilder<'db> {
         origin: ValueOrigin<'db>,
         repr: ValueRepr,
     ) -> ValueId {
-        self.body.alloc_value(ValueData { ty, origin, repr })
+        self.body.alloc_value(ValueData {
+            ty,
+            origin,
+            source: SourceInfoId::SYNTHETIC,
+            repr,
+        })
     }
 
     pub fn unit_value(&mut self, ty: TyId<'db>) -> ValueId {
@@ -128,7 +134,7 @@ impl<'db> BodyBuilder<'db> {
 
     pub fn assign(&mut self, dest: Option<LocalId>, rvalue: Rvalue<'db>) {
         self.push_inst(MirInst::Assign {
-            stmt: None,
+            source: SourceInfoId::SYNTHETIC,
             dest,
             rvalue,
         });
@@ -138,7 +144,7 @@ impl<'db> BodyBuilder<'db> {
         self.push_inst_in(
             block,
             MirInst::Assign {
-                stmt: None,
+                source: SourceInfoId::SYNTHETIC,
                 dest,
                 rvalue,
             },
@@ -146,11 +152,22 @@ impl<'db> BodyBuilder<'db> {
     }
 
     pub fn store(&mut self, place: Place<'db>, value: ValueId) {
-        self.push_inst(MirInst::Store { place, value });
+        self.push_inst(MirInst::Store {
+            source: SourceInfoId::SYNTHETIC,
+            place,
+            value,
+        });
     }
 
     pub fn store_in(&mut self, block: BasicBlockId, place: Place<'db>, value: ValueId) {
-        self.push_inst_in(block, MirInst::Store { place, value });
+        self.push_inst_in(
+            block,
+            MirInst::Store {
+                source: SourceInfoId::SYNTHETIC,
+                place,
+                value,
+            },
+        );
     }
 
     pub fn place_field(&self, base: ValueId, field_idx: usize) -> Place<'db> {
@@ -177,11 +194,15 @@ impl<'db> BodyBuilder<'db> {
     }
 
     pub fn goto(&mut self, target: BasicBlockId) {
-        self.terminate_current(Terminator::Goto { target });
+        self.terminate_current(Terminator::Goto {
+            source: SourceInfoId::SYNTHETIC,
+            target,
+        });
     }
 
     pub fn branch(&mut self, cond: ValueId, then_bb: BasicBlockId, else_bb: BasicBlockId) {
         self.terminate_current(Terminator::Branch {
+            source: SourceInfoId::SYNTHETIC,
             cond,
             then_bb,
             else_bb,
@@ -190,6 +211,7 @@ impl<'db> BodyBuilder<'db> {
 
     pub fn switch(&mut self, discr: ValueId, targets: Vec<SwitchTarget>, default: BasicBlockId) {
         self.terminate_current(Terminator::Switch {
+            source: SourceInfoId::SYNTHETIC,
             discr,
             targets,
             default,
@@ -197,11 +219,17 @@ impl<'db> BodyBuilder<'db> {
     }
 
     pub fn return_value(&mut self, value: ValueId) {
-        self.terminate_current(Terminator::Return(Some(value)));
+        self.terminate_current(Terminator::Return {
+            source: SourceInfoId::SYNTHETIC,
+            value: Some(value),
+        });
     }
 
     pub fn return_unit(&mut self) {
-        self.terminate_current(Terminator::Return(None));
+        self.terminate_current(Terminator::Return {
+            source: SourceInfoId::SYNTHETIC,
+            value: None,
+        });
     }
 
     pub fn assign_to_new_local(

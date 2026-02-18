@@ -97,7 +97,7 @@ msg VaultProxyMsg {
     ProxyGetMyShares { vault: Address } -> u256,
 }
 
-pub contract VaultUser uses (mut call: Call) {
+pub contract VaultUser uses (call: mut Call) {
     recv VaultProxyMsg {
         ProxyDeposit { vault, amount } -> u256 uses (mut call) {
             call.call(addr: vault, gas: 100000, value: 0, message: VaultMsg::Deposit { amount })
@@ -112,7 +112,7 @@ pub contract VaultUser uses (mut call: Call) {
 }
 
 #[test]
-fn test_vault_multiuser() uses (mut evm: Evm) {
+fn test_vault_multiuser() uses (evm: mut Evm) {
     let vault = evm.create2<Vault>(value: 0, args: (), salt: 0)
     assert(vault.inner != 0)
 

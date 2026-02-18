@@ -334,11 +334,13 @@ impl<'db> TyFoldable<'db> for LocalBinding<'db> {
             LocalBinding::Param {
                 site,
                 idx,
+                mode,
                 ty,
                 is_mut,
             } => LocalBinding::Param {
                 site,
                 idx,
+                mode,
                 ty: ty.fold_with(db, folder),
                 is_mut,
             },

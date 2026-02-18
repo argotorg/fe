@@ -154,7 +154,7 @@ fn lower_msg_variant_encode_impl<'db>(
 
         let encoder_ident = builder.ident("e");
         let params = builder.params([
-            builder.param_self(),
+            builder.param_own_self(),
             builder.param_mut_underscore_named(encoder_ident, e_ty),
         ]);
 
@@ -165,7 +165,6 @@ fn lower_msg_variant_encode_impl<'db>(
             None,
             FuncModifiers::new(Visibility::Private, false, false, false),
             |body| {
-                body.let_self_record(&field_names);
                 body.encode_fields(&field_names, encoder_ident);
             },
         );

@@ -1,0 +1,11 @@
+fn for_loop_capability_fallback() -> u256 {
+    let mut values: [u256; 3] = [1, 2, 3]
+    let h: mut [u256; 3] = mut values
+    let mut sum: u256 = 0
+
+    for x in h {
+        sum += x
+    }
+
+    sum
+}

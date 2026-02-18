@@ -10,7 +10,7 @@ struct SFixed {
 }
 
 impl Sub for SFixed {
-    fn sub(self, _ other: SFixed) -> SFixed {
+    fn sub(own self, _ other: own SFixed) -> SFixed {
         self
     }
 }
@@ -32,7 +32,7 @@ pub contract TestSub {
 }
 
 #[test]
-fn test_sub() uses (mut evm: Evm) {
+fn test_sub() uses (evm: mut Evm) {
     let addr = evm.create2<TestSub>(value: 0, args: (), salt: 0)
     assert(addr.inner != 0)
 

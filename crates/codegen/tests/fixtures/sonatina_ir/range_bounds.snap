@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/range_bounds.fe
 ---
@@ -7,7 +8,7 @@ target = "evm-ethereum-osaka"
 
 func public %sum_const() -> i256 {
     block0:
-        v1.i256 = call %range_known_const_s__usize___known_const_e__usize___hc7c7abc3858dd85e_seq_ha637d2df505bccf2_len__0_4__f9605efabd18106c;
+        v1.i256 = call %range_known_const_s__usize___known_const_e__usize___hc7c7abc3858dd85e_seq_ha637d2df505bccf2_len__0_4__f9605efabd18106c 0.i256;
         jump block1;
 
     block1:
@@ -19,7 +20,7 @@ func public %sum_const() -> i256 {
         br v6 block2 block4;
 
     block2:
-        v8.i256 = call %range_known_const_s__usize___known_const_e__usize___hc7c7abc3858dd85e_seq_ha637d2df505bccf2_get__0_4__f9605efabd18106c v2;
+        v8.i256 = call %range_known_const_s__usize___known_const_e__usize___hc7c7abc3858dd85e_seq_ha637d2df505bccf2_get__0_4__f9605efabd18106c 0.i256 v2;
         v10.i256 = add v16 v8;
         jump block3;
 
@@ -40,24 +41,24 @@ func public %sum_dynamic_end(v0.i256) -> i256 {
         jump block1;
 
     block1:
-        v20.i256 = phi (0.i256 block0) (v14 block3);
-        v6.i256 = phi (0.i256 block0) (v17 block3);
+        v23.i256 = phi (0.i256 block0) (v15 block3);
+        v6.i256 = phi (0.i256 block0) (v18 block3);
         v8.i1 = lt v6 v5;
         v9.i256 = zext v8 i256;
         v10.i1 = ne v9 0.i256;
         br v10 block2 block4;
 
     block2:
-        v12.i256 = call %range_known_const_s__usize___known_const_e__usize___hc7c7abc3858dd85e_seq_ha637d2df505bccf2_get__0_4__f9605efabd18106c v6;
-        v14.i256 = add v20 v12;
+        v13.i256 = call %range_known_const_s__usize___known_const_e__usize___hc7c7abc3858dd85e_seq_ha637d2df505bccf2_get__0_4__f9605efabd18106c v4 v6;
+        v15.i256 = add v23 v13;
         jump block3;
 
     block3:
-        v17.i256 = add v6 1.i256;
+        v18.i256 = add v6 1.i256;
         jump block1;
 
     block4:
-        return v20;
+        return v23;
 }
 
 func public %sum_dynamic_start(v0.i256) -> i256 {
@@ -120,33 +121,33 @@ func public %sum_dynamic(v0.i256, v1.i256) -> i256 {
         return v26;
 }
 
-func private %range_known_const_s__usize___known_const_e__usize___hc7c7abc3858dd85e_seq_ha637d2df505bccf2_len__0_4__f9605efabd18106c() -> i256 {
+func private %range_known_const_s__usize___known_const_e__usize___hc7c7abc3858dd85e_seq_ha637d2df505bccf2_len__0_4__f9605efabd18106c(v0.i256) -> i256 {
     block0:
-        v2.i1 = lt 4.i256 0.i256;
-        v3.i256 = zext v2 i256;
-        v5.i1 = eq v3 1.i256;
-        br v5 block1 block4;
+        v3.i1 = lt 4.i256 0.i256;
+        v4.i256 = zext v3 i256;
+        v6.i1 = eq v4 1.i256;
+        br v6 block1 block4;
 
     block1:
         jump block3;
 
     block2:
-        v7.i256 = sub 4.i256 0.i256;
+        v8.i256 = sub 4.i256 0.i256;
         jump block3;
 
     block3:
-        v8.i256 = phi (0.i256 block1) (v7 block2);
-        return v8;
+        v9.i256 = phi (0.i256 block1) (v8 block2);
+        return v9;
 
     block4:
-        v6.i1 = eq v3 0.i256;
-        br v6 block2 block2;
+        v7.i1 = eq v4 0.i256;
+        br v7 block2 block2;
 }
 
-func private %range_known_const_s__usize___known_const_e__usize___hc7c7abc3858dd85e_seq_ha637d2df505bccf2_get__0_4__f9605efabd18106c(v0.i256) -> i256 {
+func private %range_known_const_s__usize___known_const_e__usize___hc7c7abc3858dd85e_seq_ha637d2df505bccf2_get__0_4__f9605efabd18106c(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.i256 = add 0.i256 v0;
-        return v2;
+        v3.i256 = add 0.i256 v1;
+        return v3;
 }
 
 func private %range_known_const_s__usize___unknown__h4e84f6b6b8307914_seq_ha637d2df505bccf2_len__0__fc6647014fb554e5(v0.i256) -> i256 {

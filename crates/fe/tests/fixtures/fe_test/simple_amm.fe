@@ -86,7 +86,7 @@ pub contract SimpleAmm {
 }
 
 #[test]
-fn test_amm_basic() uses (mut evm: Evm) {
+fn test_amm_basic() uses (evm: mut Evm) {
     let pool = evm.create2<SimpleAmm>(value: 0, args: (), salt: 0)
     assert(pool.inner != 0)
 
@@ -119,7 +119,7 @@ fn test_amm_basic() uses (mut evm: Evm) {
 }
 
 #[test]
-fn test_amm_edge_cases() uses (mut evm: Evm) {
+fn test_amm_edge_cases() uses (evm: mut Evm) {
     let pool = evm.create2<SimpleAmm>(value: 0, args: (), salt: 1)
     assert(pool.inner != 0)
 

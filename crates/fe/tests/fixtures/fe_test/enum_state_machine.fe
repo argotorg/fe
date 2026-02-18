@@ -110,7 +110,7 @@ pub contract Order {
 
 // This test only exercises the initial state (variant 0), which works.
 #[test]
-fn test_order_initial_state() uses (mut evm: Evm) {
+fn test_order_initial_state() uses (evm: mut Evm) {
     let order = evm.create2<Order>(value: 0, args: (), salt: 0)
     assert(order.inner != 0)
 
@@ -126,7 +126,7 @@ fn test_order_initial_state() uses (mut evm: Evm) {
 // TODO: Uncomment once enum storage roundtrip bug is fixed.
 //
 // #[test]
-// fn test_order_lifecycle() uses (mut evm: Evm) {
+// fn test_order_lifecycle() uses (evm: mut Evm) {
 //     let order = evm.create2<Order>(value: 0, args: (), salt: 0)
 //     assert(order.inner != 0)
 //
@@ -157,7 +157,7 @@ fn test_order_initial_state() uses (mut evm: Evm) {
 // }
 //
 // #[test]
-// fn test_order_cancellation() uses (mut evm: Evm) {
+// fn test_order_cancellation() uses (evm: mut Evm) {
 //     let order = evm.create2<Order>(value: 0, args: (), salt: 1)
 //     assert(order.inner != 0)
 //

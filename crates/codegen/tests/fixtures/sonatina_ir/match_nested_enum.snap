@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/match_nested_enum.fe
 ---
@@ -13,33 +14,33 @@ func public %match_nested_enum(v0.i256) -> i256 {
         jump block2;
 
     block2:
-        v2.i256 = phi (0.i256 block1) (v8 block3) (v14 block4);
-        return v2;
+        v3.i256 = phi (0.i256 block1) (v9 block3) (v15 block4);
+        return v3;
 
     block3:
-        v5.i256 = add v0 64.i256;
-        v6.i256 = mload v5 i256;
-        v7.i8 = trunc v6 i8;
-        v8.i256 = zext v7 i256;
+        v6.i256 = add v0 64.i256;
+        v7.i256 = mload v6 i256;
+        v8.i8 = trunc v7 i8;
+        v9.i256 = zext v8 i256;
         jump block2;
 
     block4:
-        v11.i256 = add v0 32.i256;
-        v12.i256 = mload v11 i256;
-        v13.i8 = trunc v12 i8;
-        v14.i256 = zext v13 i256;
+        v12.i256 = add v0 32.i256;
+        v13.i256 = mload v12 i256;
+        v14.i8 = trunc v13 i8;
+        v15.i256 = zext v14 i256;
         jump block2;
 
     block5:
-        v16.i256 = mload v0 i256;
-        v18.i1 = eq v16 0.i256;
-        br v18 block6 block9;
+        v17.i256 = mload v0 i256;
+        v19.i1 = eq v17 0.i256;
+        br v19 block6 block9;
 
     block6:
-        v21.i256 = add v0 32.i256;
-        v22.i256 = mload v21 i256;
-        v23.i1 = eq v22 0.i256;
-        br v23 block1 block10;
+        v22.i256 = add v0 32.i256;
+        v23.i256 = mload v22 i256;
+        v24.i1 = eq v23 0.i256;
+        br v24 block1 block10;
 
     block7:
         evm_invalid;
@@ -48,12 +49,12 @@ func public %match_nested_enum(v0.i256) -> i256 {
         evm_invalid;
 
     block9:
-        v19.i1 = eq v16 1.i256;
-        br v19 block4 block8;
+        v20.i1 = eq v17 1.i256;
+        br v20 block4 block8;
 
     block10:
-        v24.i1 = eq v22 1.i256;
-        br v24 block3 block7;
+        v25.i1 = eq v23 1.i256;
+        br v25 block3 block7;
 }
 
 func public %__fe_sonatina_entry() {

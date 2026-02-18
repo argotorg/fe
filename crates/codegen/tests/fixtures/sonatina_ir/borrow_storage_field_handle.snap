@@ -1,0 +1,29 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
+expression: output
+input_file: crates/codegen/tests/fixtures/borrow_storage_field_handle.fe
+---
+target = "evm-ethereum-osaka"
+
+func private %borrow_storage_field_handle__StorPtr_CoinStore___ba1c0d0726e89ba2(v0.i256) -> i256 {
+    block0:
+        v2.i256 = evm_sload v0;
+        v4.i256 = add v2 1.i256;
+        evm_sstore v0 v4;
+        v5.i256 = evm_sload v0;
+        return v5;
+}
+
+func public %__fe_sonatina_entry() {
+    block0:
+        v1.i256 = call %borrow_storage_field_handle__StorPtr_CoinStore___ba1c0d0726e89ba2 0.i256;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+    }
+}

@@ -9,8 +9,7 @@ struct Transfer {
     amount: u256,
 }
 
-fn emit_transfer(mut evm: Evm, from: Address, to: Address, amount: u256) {
+fn emit_transfer(evm: mut Evm, from: Address, to: Address, amount: u256) {
     let e = Transfer { from, to, amount }
     e.emit(evm)
 }
-

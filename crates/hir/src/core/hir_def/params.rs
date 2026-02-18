@@ -181,9 +181,20 @@ pub struct AssocTypeGenericArg<'db> {
     pub ty: Partial<TypeId<'db>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+pub enum FuncParamMode {
+    /// Default `x: T`: readable but cannot be moved-out.
+    View,
+    /// `x: own T`: callee takes ownership of the argument.
+    Own,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FuncParam<'db> {
+    pub mode: FuncParamMode,
     pub is_mut: bool,
+    pub has_ref_prefix: bool,
+    pub has_own_prefix: bool,
     pub is_label_suppressed: bool,
     pub name: Partial<FuncParamName<'db>>,
     pub ty: Partial<TypeId<'db>>,

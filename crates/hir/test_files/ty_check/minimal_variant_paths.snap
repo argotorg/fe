@@ -1,5 +1,6 @@
 ---
-source: crates/hir-analysis/tests/ty_check.rs
+source: crates/hir/tests/ty_check.rs
+assertion_line: 40
 expression: res
 input_file: test_files/ty_check/minimal_variant_paths.fe
 ---
@@ -47,7 +48,7 @@ note:
    │ ╭─────────────────────^
 11 │ │             return 1
 12 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ u8
 
 note: 
    ┌─ minimal_variant_paths.fe:11:20
@@ -68,7 +69,7 @@ note:
    │ ╭─────────────────────^
 14 │ │             return 2
 15 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ u8
 
 note: 
    ┌─ minimal_variant_paths.fe:14:20
@@ -89,7 +90,7 @@ note:
    │ ╭─────────────────────^
 17 │ │             return 3
 18 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ u8
 
 note: 
    ┌─ minimal_variant_paths.fe:17:20
@@ -141,7 +142,7 @@ note:
    │ ╭──────────────^
 28 │ │             return 1
 29 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ u8
 
 note: 
    ┌─ minimal_variant_paths.fe:28:20
@@ -162,7 +163,7 @@ note:
    │ ╭──────────────^
 31 │ │             return 2
 32 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ u8
 
 note: 
    ┌─ minimal_variant_paths.fe:31:20
@@ -183,7 +184,7 @@ note:
    │ ╭──────────────^
 34 │ │             return 3
 35 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ u8
 
 note: 
    ┌─ minimal_variant_paths.fe:34:20
@@ -235,7 +236,7 @@ note:
    │ ╭─────────────────────^
 45 │ │             return 10
 46 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ u8
 
 note: 
    ┌─ minimal_variant_paths.fe:45:20
@@ -256,7 +257,7 @@ note:
    │ ╭──────────────^
 48 │ │             return 20
 49 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ u8
 
 note: 
    ┌─ minimal_variant_paths.fe:48:20
@@ -277,7 +278,7 @@ note:
    │ ╭──────────────^
 51 │ │             return 30
 52 │ │         }
-   │ ╰─────────^ !
+   │ ╰─────────^ u8
 
 note: 
    ┌─ minimal_variant_paths.fe:51:20

@@ -1,7 +1,7 @@
 ---
-source: crates/hir-analysis/tests/ty_check.rs
+source: crates/hir/tests/ty_check.rs
 expression: res
-input_file: crates/hir-analysis/test_files/ty_check/field_access.fe
+input_file: test_files/ty_check/field_access.fe
 ---
 note: 
   ┌─ field_access.fe:1:31

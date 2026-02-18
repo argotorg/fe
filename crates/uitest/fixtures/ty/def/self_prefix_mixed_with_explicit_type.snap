@@ -1,0 +1,39 @@
+---
+source: crates/uitest/tests/ty.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty/def/self_prefix_mixed_with_explicit_type.fe
+---
+error[3-0028]: invalid mixed receiver syntax
+  ┌─ self_prefix_mixed_with_explicit_type.fe:6:19
+  │
+6 │     fn bad_ref<T>(ref self: Self<T>) {}
+  │                   ^^^ `ref self: ...` cannot be used with an explicit `self` type
+  │
+  = use shorthand receiver syntax instead: `ref self`
+  = or move the mode into the type and remove the prefix: `self: ref ...`
+
+error[3-0029]: invalid mixed receiver syntax
+  ┌─ self_prefix_mixed_with_explicit_type.fe:8:19
+  │
+8 │     fn bad_own<T>(own self: Self<T>) {}
+  │                   ^^^ `own self: ...` cannot be used with an explicit `self` type
+  │
+  = use shorthand receiver syntax instead: `own self`
+  = or move the mode into the type and remove the prefix: `self: own ...`
+
+error[3-0030]: invalid mixed receiver syntax
+   ┌─ self_prefix_mixed_with_explicit_type.fe:10:25
+   │
+10 │     fn bad_mut_plain<T>(mut self: Self<T>) {}
+   │                         ^^^ `mut self: ...` is only allowed as `mut self: own X` where `X` is not bare `Self`
+   │
+   = for a mutable owned receiver, use shorthand receiver syntax: `mut own self`
+
+error[3-0030]: invalid mixed receiver syntax
+   ┌─ self_prefix_mixed_with_explicit_type.fe:12:25
+   │
+12 │     fn bad_mut_own_bare(mut self: own Self) {}
+   │                         ^^^ `mut self: ...` is only allowed as `mut self: own X` where `X` is not bare `Self`
+   │
+   = for a mutable owned receiver, use shorthand receiver syntax: `mut own self`

@@ -71,7 +71,7 @@ pub contract Voting {
 }
 
 #[test]
-fn test_voting() uses (mut evm: Evm) {
+fn test_voting() uses (evm: mut Evm) {
     let voting = evm.create2<Voting>(value: 0, args: (), salt: 0)
     assert(voting.inner != 0)
 

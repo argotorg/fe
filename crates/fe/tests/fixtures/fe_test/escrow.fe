@@ -108,7 +108,7 @@ msg ArbiterProxyMsg {
     DoRefund { escrow: Address } -> u256,
 }
 
-pub contract ArbiterProxy uses (mut call: Call) {
+pub contract ArbiterProxy uses (call: mut Call) {
     recv ArbiterProxyMsg {
         DoRelease { escrow } -> u256 uses (mut call) {
             call.call(addr: escrow, gas: 100000, value: 0, message: EscrowMsg::Release {})
@@ -120,7 +120,7 @@ pub contract ArbiterProxy uses (mut call: Call) {
 }
 
 #[test]
-fn test_escrow_release() uses (mut evm: Evm) {
+fn test_escrow_release() uses (evm: mut Evm) {
     // Deploy arbiter proxy first
     let arbiter = evm.create2<ArbiterProxy>(value: 0, args: (), salt: 0)
     assert(arbiter.inner != 0)
@@ -166,7 +166,7 @@ fn test_escrow_release() uses (mut evm: Evm) {
 }
 
 #[test]
-fn test_escrow_refund() uses (mut evm: Evm) {
+fn test_escrow_refund() uses (evm: mut Evm) {
     let arbiter = evm.create2<ArbiterProxy>(value: 0, args: (), salt: 2)
     assert(arbiter.inner != 0)
 

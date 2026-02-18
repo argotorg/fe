@@ -1,5 +1,6 @@
 ---
 source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/event_unsupported_field_type.fe
 ---
@@ -11,3 +12,12 @@ error[2-0010]: no method named `encode` found for struct `StorageMap`
 5 │ │     value: StorageMap<Address, u256, 0>,
 6 │ │ }
   │ ╰─^ method not found in `StorageMap`
+
+error[3-0011]: given type doesn't match the expected const type
+  ┌─ event_unsupported_field_type.fe:3:1
+  │  
+3 │ ╭ #[event]
+4 │ │ struct Bad {
+5 │ │     value: StorageMap<Address, u256, 0>,
+6 │ │ }
+  │ ╰─^ expected `_` type here, but `(String<3>, String<1>, invalid(Other), String<1>)` is given

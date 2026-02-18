@@ -1,0 +1,9 @@
+// Creating a `ref` loan while a `mut` loan is live should be rejected.
+
+pub fn borrowck_mut_then_ref_overlap() {
+    let mut x: u256 = 0
+    let p: mut u256 = mut x
+    let r: ref u256 = ref x
+    p = 1
+    let keep: ref u256 = r
+}

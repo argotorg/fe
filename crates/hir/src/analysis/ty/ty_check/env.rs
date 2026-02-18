@@ -8,9 +8,10 @@ use crate::{
 };
 
 use crate::hir_def::CallableDef;
+use crate::hir_def::params::FuncParamMode;
 use common::indexmap::IndexMap;
 use num_bigint::BigUint;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::Update;
 use smallvec1::SmallVec;
 use thin_vec::ThinVec;
@@ -43,6 +44,7 @@ pub(super) struct TyCheckEnv<'db> {
 
     pat_ty: FxHashMap<PatId, TyId<'db>>,
     expr_ty: FxHashMap<ExprId, ExprProp<'db>>,
+    implicit_moves: FxHashSet<ExprId>,
     const_refs: FxHashMap<ExprId, ConstRef<'db>>,
     callables: FxHashMap<ExprId, Callable<'db>>,
 
@@ -60,6 +62,8 @@ pub(super) struct TyCheckEnv<'db> {
     param_bindings: Vec<LocalBinding<'db>>,
     /// Pat bindings for transfer to TypedBody
     pat_bindings: FxHashMap<PatId, LocalBinding<'db>>,
+    /// Binding capture mode for local variables (keyed by the pattern that introduces them)
+    pat_binding_modes: FxHashMap<PatId, PatBindingMode>,
 
     /// Resolved effect arguments at call sites, keyed by the call expression.
     call_effect_args: FxHashMap<ExprId, Vec<super::ResolvedEffectArg<'db>>>,
@@ -159,6 +163,7 @@ impl<'db> TyCheckEnv<'db> {
             body,
             pat_ty: FxHashMap::default(),
             expr_ty: FxHashMap::default(),
+            implicit_moves: FxHashSet::default(),
             const_refs: FxHashMap::default(),
             callables: FxHashMap::default(),
             deferred: Vec::new(),
@@ -171,6 +176,7 @@ impl<'db> TyCheckEnv<'db> {
             expr_stack: Vec::new(),
             param_bindings: Vec::new(),
             pat_bindings: FxHashMap::default(),
+            pat_binding_modes: FxHashMap::default(),
             call_effect_args: FxHashMap::default(),
             for_loop_seq: FxHashMap::default(),
         };
@@ -192,6 +198,7 @@ impl<'db> TyCheckEnv<'db> {
                     let var = LocalBinding::Param {
                         site: ParamSite::Func(func),
                         idx,
+                        mode: view.mode(db),
                         ty,
                         is_mut: view.is_mut(db),
                     };
@@ -213,6 +220,9 @@ impl<'db> TyCheckEnv<'db> {
                         Some(hir_ty) => lower_hir_ty(db, hir_ty, owner_scope, assumptions),
                         None => TyId::invalid(db, InvalidCause::ParseError),
                     };
+                    if param.mode == FuncParamMode::View && ty.as_capability(db).is_none() {
+                        ty = TyId::view_of(db, ty);
+                    }
 
                     if !ty.is_star_kind(db) {
                         ty = TyId::invalid(db, InvalidCause::Other);
@@ -221,6 +231,7 @@ impl<'db> TyCheckEnv<'db> {
                     let var = LocalBinding::Param {
                         site: ParamSite::ContractInit(contract),
                         idx,
+                        mode: param.mode,
                         ty,
                         is_mut: param.is_mut,
                     };
@@ -409,8 +420,14 @@ impl<'db> TyCheckEnv<'db> {
                 };
 
                 let provided_ty = match path_res {
-                    PathRes::Trait(_) => match root_effect_ty {
-                        Some(ty) => ty,
+                    PathRes::Trait(trait_inst) => match root_effect_ty {
+                        Some(ty) => {
+                            self.effect_bounds
+                                .push(super::super::instantiate_trait_self(
+                                    self.db, trait_inst, ty,
+                                ));
+                            ty
+                        }
                         None => continue,
                     },
                     PathRes::Ty(ty) | PathRes::TyAlias(_, ty) if ty.is_star_kind(self.db) => ty,
@@ -460,6 +477,7 @@ impl<'db> TyCheckEnv<'db> {
                 let binding = LocalBinding::Param {
                     site: ParamSite::EffectField(list_site),
                     idx: idx_in_body,
+                    mode: FuncParamMode::View,
                     ty: field_ty,
                     is_mut: effect.is_mut,
                 };
@@ -490,8 +508,14 @@ impl<'db> TyCheckEnv<'db> {
                     continue;
                 };
                 let provided_ty = match path_res {
-                    PathRes::Trait(_) => match root_effect_ty {
-                        Some(ty) => ty,
+                    PathRes::Trait(trait_inst) => match root_effect_ty {
+                        Some(ty) => {
+                            self.effect_bounds
+                                .push(super::super::instantiate_trait_self(
+                                    self.db, trait_inst, ty,
+                                ));
+                            ty
+                        }
                         None => continue,
                     },
                     PathRes::Ty(ty) | PathRes::TyAlias(_, ty) if ty.is_star_kind(self.db) => ty,
@@ -687,6 +711,16 @@ impl<'db> TyCheckEnv<'db> {
         }
     }
 
+    pub(super) fn pat_binding(&self, pat: PatId) -> Option<LocalBinding<'db>> {
+        self.pat_bindings.get(&pat).copied()
+    }
+
+    pub(super) fn set_pat_binding_mode(&mut self, pat: PatId, mode: PatBindingMode) {
+        if self.pat_bindings.contains_key(&pat) {
+            self.pat_binding_modes.insert(pat, mode);
+        }
+    }
+
     pub(super) fn push_effect_frame(&mut self) {
         self.effect_env.push_frame();
     }
@@ -871,6 +905,9 @@ impl<'db> TyCheckEnv<'db> {
         // Also store in pat_bindings for transfer to TypedBody
         if let LocalBinding::Local { pat, .. } = binding {
             self.pat_bindings.insert(pat, binding);
+            self.pat_binding_modes
+                .entry(pat)
+                .or_insert(PatBindingMode::ByValue);
         }
         self.pending_vars.insert(name, binding)
     }
@@ -894,6 +931,10 @@ impl<'db> TyCheckEnv<'db> {
 
     pub(super) fn register_pending_method(&mut self, pending: PendingMethod<'db>) {
         self.deferred.push(DeferredTask::Method(pending))
+    }
+
+    pub(super) fn record_implicit_move(&mut self, expr: ExprId) {
+        self.implicit_moves.insert(expr);
     }
 
     /// Completes the type checking environment by finalizing pending trait
@@ -951,11 +992,13 @@ impl<'db> TyCheckEnv<'db> {
             body: Some(self.body),
             pat_ty: self.pat_ty,
             expr_ty: self.expr_ty,
+            implicit_moves: self.implicit_moves,
             const_refs: self.const_refs,
             callables,
             call_effect_args: self.call_effect_args,
             param_bindings: self.param_bindings,
             pat_bindings: self.pat_bindings,
+            pat_binding_modes: self.pat_binding_modes,
             for_loop_seq,
         }
     }
@@ -1256,6 +1299,7 @@ pub enum LocalBinding<'db> {
     Param {
         site: ParamSite<'db>,
         idx: usize,
+        mode: FuncParamMode,
         ty: TyId<'db>,
         is_mut: bool,
     },
@@ -1265,6 +1309,12 @@ pub enum LocalBinding<'db> {
         key_path: PathId<'db>,
         is_mut: bool,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub enum PatBindingMode {
+    ByValue,
+    ByBorrow,
 }
 
 impl<'db> LocalBinding<'db> {

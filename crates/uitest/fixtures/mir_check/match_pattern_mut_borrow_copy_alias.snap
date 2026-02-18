@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/mir_check.rs
+expression: res
+input_file: fixtures/mir_check/match_pattern_mut_borrow_copy_alias.fe
+---
+error[11-0002]: borrow conflict in `fn match_pattern_mut_borrow_copy_alias`
+   ┌─ match_pattern_mut_borrow_copy_alias.fe:10:5
+   │
+10 │     let y: u8 = foo.x
+   │     ^^^^^^^^^^^^^^^^^ access overlaps an active `mut` borrow

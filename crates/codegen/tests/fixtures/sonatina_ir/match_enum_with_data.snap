@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/match_enum_with_data.fe
 ---
@@ -29,23 +30,23 @@ func public %match_option(v0.i256) -> i256 {
         jump block2;
 
     block2:
-        v8.i256 = phi (v7 block1) (0.i256 block3);
-        return v8;
+        v9.i256 = phi (v7 block1) (0.i256 block3);
+        return v9;
 
     block3:
         jump block2;
 
     block4:
-        v10.i256 = mload v0 i256;
-        v12.i1 = eq v10 1.i256;
-        br v12 block1 block6;
+        v11.i256 = mload v0 i256;
+        v13.i1 = eq v11 1.i256;
+        br v13 block1 block6;
 
     block5:
         evm_invalid;
 
     block6:
-        v13.i1 = eq v10 0.i256;
-        br v13 block3 block5;
+        v14.i1 = eq v11 0.i256;
+        br v14 block3 block5;
 }
 
 func public %__fe_sonatina_entry() {

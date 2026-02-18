@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/mir_check.rs
+expression: res
+input_file: fixtures/mir_check/move_reinit_call.fe
+---
+error[11-0002]: move conflict in `fn move_reinit_call`
+   ┌─ move_reinit_call.fe:12:5
+   │
+11 │     consume(x)
+   │             - `x` is moved here
+12 │     x = Boxed { value: 1 }
+   │     ^^^^^^^^^^^^^^^^^^^^^^ cannot assign to a value after it was moved

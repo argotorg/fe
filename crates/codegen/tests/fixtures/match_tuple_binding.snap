@@ -29,6 +29,7 @@ function $match_tuple_extract($t) -> ret {
           v0 := add(v8, v10)
         }
     }
+  let v11 := $t
   ret := v0
   leave
 }
@@ -81,6 +82,7 @@ function $match_nested_extract($t) -> ret {
           v0 := add(v20, v22)
         }
     }
+  let v23 := $t
   ret := v0
   leave
 }

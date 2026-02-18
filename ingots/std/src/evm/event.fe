@@ -13,7 +13,7 @@ pub trait Event {
     const TOPIC0: u256
 
     /// Emit this event using the given EVM effect provider.
-    fn emit<L: Log>(self, mut log: L)
+    fn emit<L: Log>(self, log: mut L)
 }
 
 /// Converts an indexed event field value to a `u256` log topic.

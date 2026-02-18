@@ -25,6 +25,8 @@ struct Address {
     inner: u256
 }
 
+impl Copy for Address {}
+
 impl core::ops::Eq for Address {
     fn eq(self, _ other: Self) -> bool {
         self.inner == other.inner

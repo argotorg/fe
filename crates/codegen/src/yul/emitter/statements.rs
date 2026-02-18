@@ -47,14 +47,16 @@ impl<'db> FunctionEmitter<'db> {
             mir::MirInst::Assign { dest, rvalue, .. } => {
                 self.emit_assign_inst(docs, *dest, rvalue, state)?
             }
-            mir::MirInst::BindValue { value } => self.emit_bind_value_inst(docs, *value, state)?,
-            mir::MirInst::Store { place, value } => {
+            mir::MirInst::BindValue { value, .. } => {
+                self.emit_bind_value_inst(docs, *value, state)?
+            }
+            mir::MirInst::Store { place, value, .. } => {
                 self.emit_store_inst(docs, place, *value, state)?
             }
-            mir::MirInst::InitAggregate { place, inits } => {
+            mir::MirInst::InitAggregate { place, inits, .. } => {
                 self.emit_init_aggregate_inst(docs, place, inits, state)?
             }
-            mir::MirInst::SetDiscriminant { place, variant } => {
+            mir::MirInst::SetDiscriminant { place, variant, .. } => {
                 self.emit_set_discriminant_inst(docs, place, *variant, state)?
             }
         }
@@ -265,6 +267,9 @@ impl<'db> FunctionEmitter<'db> {
     ) -> Result<(), YulError> {
         let value_data = self.mir_func.body.value(value);
         let value_ty = value_data.ty;
+        if layout::ty_size_bytes_in(self.db, &self.layout, value_ty).is_some_and(|size| size == 0) {
+            return Ok(());
+        }
         if value_data.repr.is_ref() {
             if state.value_temp(value.index()).is_none() {
                 let rhs = self.lower_value(value, state)?;
@@ -552,7 +557,12 @@ impl<'db> FunctionEmitter<'db> {
             1,
             "code region intrinsic expects 1 argument"
         );
-        let arg = intr.args[0];
+        let mut arg = intr.args[0];
+        while let mir::ValueOrigin::TransparentCast { value } =
+            &self.mir_func.body.value(arg).origin
+        {
+            arg = *value;
+        }
         let symbol = match &self.mir_func.body.value(arg).origin {
             mir::ValueOrigin::FuncItem(root) => root.symbol.as_deref().ok_or_else(|| {
                 YulError::Unsupported(

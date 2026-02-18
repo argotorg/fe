@@ -2361,6 +2361,7 @@ dependencies = [
  "fe-common",
  "fe-driver",
  "fe-hir",
+ "fe-mir",
  "fe-test-utils",
  "url",
  "wasm-bindgen-test",

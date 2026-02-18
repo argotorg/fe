@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/mir_check.rs
+expression: res
+input_file: fixtures/mir_check/borrowck_write_under_ref.fe
+---
+error[11-0002]: borrow conflict in `fn borrowck_write_under_ref`
+  ┌─ borrowck_write_under_ref.fe:6:5
+  │
+5 │     let r: ref u256 = ref x
+  │                           - `x` is borrowed here
+6 │     x = 1
+  │     ^^^^^ cannot write through an active `ref` borrow

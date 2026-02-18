@@ -103,19 +103,23 @@ function $main() -> ret {
   leave
 }
 function $widget_h8588afca9d68e578_process($self) -> ret {
-  ret := mul($self, 2)
+  let v0 := $self
+  ret := mul(v0, 2)
   leave
 }
 function $widget_h6847c0e3e0e4aa1e_process($self) -> ret {
-  ret := mul($self, 3)
+  let v0 := $self
+  ret := mul(v0, 3)
   leave
 }
 function $multitraitimpl_h60cc862fc809464_trait_h79853acec5b2b3ad_same_method($self) -> ret {
-  ret := add($self, 1)
+  let v0 := $self
+  ret := add(v0, 1)
   leave
 }
 function $multitraitimpl_h60cc862fc809464_trait_ha6da5e54b37dd39c_same_method($self) -> ret {
-  ret := add($self, 2)
+  let v0 := $self
+  ret := add(v0, 2)
   leave
 }
 function $generic_fn__S_h730d9dc564aaaf27__8d32801e7ec9d42b($val) -> ret {

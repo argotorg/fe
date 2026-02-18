@@ -5,9 +5,9 @@ use super::{FileLowerCtxt, hir_builder::HirBuilder};
 use crate::{
     hir_def::{
         AssocConstDef, Attr, AttrListId, Body, BodyKind, Expr, FieldDef, FieldDefListId,
-        FieldIndex, FuncModifiers, FuncParam, FuncParamName, GenericArgListId, GenericParamListId,
-        IdentId, IntegerId, LitKind, Partial, Pat, PathId, Stmt, Struct, TrackedItemVariant,
-        TraitRefId, TupleTypeId, TypeId, TypeKind, Visibility,
+        FieldIndex, FuncModifiers, FuncParam, FuncParamMode, FuncParamName, GenericArgListId,
+        GenericParamListId, IdentId, IntegerId, LitKind, Partial, Pat, PathId, Stmt, Struct,
+        TrackedItemVariant, TraitRefId, TupleTypeId, TypeId, TypeKind, TypeMode, Visibility,
     },
     span::{EventDesugared, HirOrigin},
 };
@@ -496,16 +496,31 @@ fn lower_emit_method<'db>(
         ),
     );
     let (generic_params, log_ty) = builder.type_param_with_trait_bound("L", log_trait_ref);
+    let log_param_ty = TypeId::new(db, TypeKind::Mode(TypeMode::Mut, Partial::Present(log_ty)));
+
+    let self_param = FuncParam {
+        mode: FuncParamMode::View,
+        is_mut: false,
+        has_ref_prefix: false,
+        has_own_prefix: false,
+        is_label_suppressed: false,
+        name: Partial::Present(FuncParamName::Ident(IdentId::make_self(db))),
+        ty: Partial::Present(builder.self_ty()),
+        self_ty_fallback: true,
+    };
 
     let log_param = FuncParam {
-        is_mut: true,
+        mode: FuncParamMode::View,
+        is_mut: false,
+        has_ref_prefix: false,
+        has_own_prefix: false,
         is_label_suppressed: false,
         name: Partial::Present(FuncParamName::Ident(log_provider_ident)),
-        ty: Partial::Present(log_ty),
+        ty: Partial::Present(log_param_ty),
         self_ty_fallback: false,
     };
 
-    let params = builder.params([builder.param_self(), log_param]);
+    let params = builder.params([self_param, log_param]);
     let modifiers = FuncModifiers::new(Visibility::Private, false, false, false);
 
     builder.func_with_body(
@@ -573,7 +588,8 @@ fn lower_emit_method<'db>(
                     }
                     body.push_expr(Expr::Tuple(elems))
                 };
-                let enc_arg = body.ident_expr(enc_ident);
+                let enc_arg_base = body.ident_expr(enc_ident);
+                let enc_arg = body.mut_expr(enc_arg_base);
                 let encode = body.method_call_expr(encode_receiver, encode_ident, vec![enc_arg]);
                 body.emit_expr_stmt(encode);
 

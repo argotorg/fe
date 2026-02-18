@@ -1,0 +1,6 @@
+fn bump(_x: mut u256) {}
+
+pub fn mut_arg_non_place_expr_rejected() {
+    let x: u256 = 0
+    bump(x + 1)
+}

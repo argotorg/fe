@@ -29,6 +29,7 @@ function $match_option($opt) -> ret {
     }
     default {
     }
+  let v4 := $opt
   ret := v0
   leave
 }

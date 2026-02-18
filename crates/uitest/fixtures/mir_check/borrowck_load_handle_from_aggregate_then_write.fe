@@ -1,0 +1,11 @@
+struct HandleBox {
+    h: mut u256,
+}
+
+pub fn borrowck_load_handle_from_aggregate_then_write() {
+    let mut value: u256 = 0
+    let boxed: HandleBox = HandleBox { h: mut value }
+    let handle: mut u256 = boxed.h
+    value = 1
+    handle = 2
+}

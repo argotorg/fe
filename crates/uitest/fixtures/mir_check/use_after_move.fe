@@ -1,0 +1,13 @@
+struct Boxed {
+    value: u256,
+}
+
+fn consume(value: own Boxed) -> u256 {
+    value.value
+}
+
+pub fn use_after_move() -> Boxed {
+    let x: Boxed = Boxed { value: 0 }
+    consume(x)
+    x
+}

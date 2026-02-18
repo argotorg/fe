@@ -40,18 +40,20 @@ impl core::ops::Eq for Address {
     }
 }
 
+impl Copy for Address {}
+
 impl AbiSize for Address {
     const ENCODED_SIZE: u256 = 32
 }
 
 impl<A: Abi> Decode<A> for Address {
-    fn decode<D: AbiDecoder<A>>(mut _ d: D) -> Self {
+    fn decode<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         Address { inner: d.read_word() }
     }
 }
 
 impl<A: Abi> Encode<A> for Address {
-    fn encode<E: AbiEncoder<A>>(self, mut _ e: E) {
+    fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
         e.write_word(self.inner)
     }
 }
@@ -217,7 +219,7 @@ pub trait Create {
     }
 
     /// Deploy a high-level contract using `CREATE`, bubbling revert data on failure.
-    fn create<C: Contract>(mut self, value: u256, args: C::InitArgs) -> Address {
+    fn create<C: Contract>(mut self, value: u256, args: own C::InitArgs) -> Address {
         let init_len = C::init_code_len()
         let init_off = C::init_code_offset()
         let args_len = encoded_size<C::InitArgs>()
@@ -227,8 +229,8 @@ pub trait Create {
         let init_ptr = mem::alloc(total_len)
         ops::codecopy(dest: init_ptr, offset: init_off, len: init_len)
         let args_ptr = init_ptr + init_len
-        let enc = SolEncoder { start: args_ptr, pos: args_ptr, end: args_ptr + args_len }
-        args.encode(enc)
+        let mut enc = SolEncoder { start: args_ptr, pos: args_ptr, end: args_ptr + args_len }
+        args.encode(mut enc)
 
         let addr = self.create_raw(value, init_ptr, total_len)
 
@@ -244,7 +246,7 @@ pub trait Create {
     }
 
     /// Deploy a high-level contract using `CREATE2`, bubbling revert data on failure.
-    fn create2<C: Contract>(mut self, value: u256, args: C::InitArgs, salt: u256) -> Address {
+    fn create2<C: Contract>(mut self, value: u256, args: own C::InitArgs, salt: u256) -> Address {
         let init_len = C::init_code_len()
         let init_off = C::init_code_offset()
         let args_len = encoded_size<C::InitArgs>()
@@ -254,8 +256,8 @@ pub trait Create {
         let init_ptr = mem::alloc(total_len)
         ops::codecopy(dest: init_ptr, offset: init_off, len: init_len)
         let args_ptr = init_ptr + init_len
-        let enc = SolEncoder { start: args_ptr, pos: args_ptr, end: args_ptr + args_len }
-        args.encode(enc)
+        let mut enc = SolEncoder { start: args_ptr, pos: args_ptr, end: args_ptr + args_len }
+        args.encode(mut enc)
 
         let addr = self.create2_raw(value, init_ptr, total_len, salt)
 
@@ -273,15 +275,15 @@ pub trait Create {
 
 /// High-level contract calls with ABI encoding/decoding.
 pub trait Call {
-    fn call<M>(mut self, addr: Address, gas: u256, value: u256, message: M) -> M::Return
+    fn call<M>(mut self, addr: own Address, gas: u256, value: u256, message: own M) -> M::Return
         where M: MsgVariant<Sol> + Encode<Sol>,
               M::Return: Decode<Sol>
 
-    fn static<M>(mut self, addr: Address, gas: u256, message: M) -> M::Return
+    fn static<M>(mut self, addr: own Address, gas: u256, message: own M) -> M::Return
         where M: MsgVariant<Sol> + Encode<Sol>,
               M::Return: Decode<Sol>
 
-    fn delegate<M>(mut self, addr: Address, gas: u256, message: M) -> M::Return
+    fn delegate<M>(mut self, addr: own Address, gas: u256, message: own M) -> M::Return
         where M: MsgVariant<Sol> + Encode<Sol>,
               M::Return: Decode<Sol>
 }
@@ -360,7 +362,7 @@ impl Create for Evm {
     }
 }
 
-fn encode_calldata<M>(selector: u32, message: M) -> (u256, u256)
+fn encode_calldata<M>(selector: u32, message: own M) -> (u256, u256)
     where M: Encode<Sol>
 {
     let selector_size = size_of<Sol::Selector>()
@@ -375,7 +377,7 @@ fn encode_calldata<M>(selector: u32, message: M) -> (u256, u256)
     ops::mstore(base, selector_word)
 
     enc.set_pos(base + selector_size)
-    message.encode(enc)
+    message.encode(mut enc)
     enc.finish()
 }
 
@@ -388,11 +390,11 @@ fn decode_returndata<R>(ptr: u256, len: u256) -> R
 
     let input = MemoryBytes { base: ptr, len: len }
     let mut d = SolDecoder<MemoryBytes>::new(input)
-    R::decode(d)
+    R::decode(mut d)
 }
 
 impl Call for Evm {
-    fn call<M>(mut self, addr: Address, gas: u256, value: u256, message: M) -> M::Return
+    fn call<M>(mut self, addr: own Address, gas: u256, value: u256, message: own M) -> M::Return
         where M: MsgVariant<Sol> + Encode<Sol>,
               M::Return: Decode<Sol>
     {
@@ -418,7 +420,7 @@ impl Call for Evm {
         decode_returndata<M::Return>(ret_ptr, ret_len)
     }
 
-    fn static<M>(mut self, addr: Address, gas: u256, message: M) -> M::Return
+    fn static<M>(mut self, addr: own Address, gas: u256, message: own M) -> M::Return
         where M: MsgVariant<Sol> + Encode<Sol>,
               M::Return: Decode<Sol>
     {
@@ -443,7 +445,7 @@ impl Call for Evm {
         decode_returndata<M::Return>(ret_ptr, ret_len)
     }
 
-    fn delegate<M>(mut self, addr: Address, gas: u256, message: M) -> M::Return
+    fn delegate<M>(mut self, addr: own Address, gas: u256, message: own M) -> M::Return
         where M: MsgVariant<Sol> + Encode<Sol>,
               M::Return: Decode<Sol>
     {
@@ -469,7 +471,7 @@ impl Call for Evm {
     }
 }
 
-pub fn assert(_ b: bool) {
+pub fn assert(_ b: own bool) {
     if !b {
         ops::revert(0, 0)
     }

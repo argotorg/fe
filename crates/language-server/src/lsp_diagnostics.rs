@@ -6,7 +6,7 @@ use common::{
     file::{File, IngotFileKind},
     ingot::IngotKind,
 };
-use driver::DriverDataBase;
+use driver::{DriverDataBase, MirDiagnosticsMode};
 use hir::Ingot;
 use hir::analysis::analysis_pass::{
     AnalysisPassManager, EventLowerPass, MsgLowerPass, ParsingPass,
@@ -70,6 +70,20 @@ impl LspDiagnostics for DriverDataBase {
                     let diags = result.entry(uri.clone()).or_insert_with(Vec::new);
                     diags.extend(more_diags);
                 }
+            }
+        }
+
+        let mut mir_diags =
+            self.mir_diagnostics_for_ingot(ingot, MirDiagnosticsMode::TemplatesOnly);
+        mir_diags.sort_by(|lhs, rhs| match lhs.error_code.cmp(&rhs.error_code) {
+            std::cmp::Ordering::Equal => lhs.primary_span().cmp(&rhs.primary_span()),
+            ord => ord,
+        });
+        for diag in mir_diags {
+            let lsp_diags = diag_to_lsp(self, diag).clone();
+            for (uri, more_diags) in lsp_diags {
+                let diags = result.entry(uri.clone()).or_insert_with(Vec::new);
+                diags.extend(more_diags);
             }
         }
 

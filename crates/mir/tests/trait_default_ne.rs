@@ -35,7 +35,8 @@ fn main(a: Address, b: Address) -> bool {
         .expect("`ne` should have a receiver param");
 
     let self_ty = ne_fn.body.local(self_local).ty;
-    let self_size = layout::ty_size_bytes(&db, self_ty).expect("receiver layout known");
+    let self_size =
+        layout::ty_size_bytes_or_word_aligned(&db, self_ty).expect("receiver layout known");
     assert_ne!(
         self_size, 0,
         "`ne` receiver should not be zero-sized after monomorphization"
