@@ -571,7 +571,7 @@ note:
 95 │ │   #[selector = 0x02]
 96 │ │   Burn { amount: i32 } -> bool,
 97 │ │ }
-   │ ╰─^ def: defined here @ 92:0 (4 refs)
+   │ ╰─^ def: defined here @ 92:0 (5 refs)
 
 note: 
    ┌─ lib.fe:94:3
