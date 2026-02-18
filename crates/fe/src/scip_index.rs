@@ -327,8 +327,8 @@ pub fn generate_scip(
                     continue;
                 };
 
-                for reference in refs {
-                    if let Some(resolved) = reference.span().resolve(db)
+                for matched in refs {
+                    if let Some(resolved) = matched.span.resolve(db)
                         && let Some(range) = span_to_scip_range(&resolved, db)
                     {
                         push_occurrence(ref_doc, range, symbol.clone(), 0);

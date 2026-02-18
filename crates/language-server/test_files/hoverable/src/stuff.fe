@@ -17,3 +17,17 @@ pub mod calculations {
   /// is it this one?
   pub fn ambiguous() {}
 }
+
+pub enum Color {
+  Red,
+  Green,
+  Blue
+}
+
+pub fn is_red(c: Color) -> bool {
+  match c {
+    Color::Red => true
+    Color::Green => false
+    Color::Blue => false
+  }
+}

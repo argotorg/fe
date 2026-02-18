@@ -398,9 +398,8 @@ pub fn generate_lsif(
                 };
 
                 let mut ref_range_ids = Vec::new();
-                for reference in refs {
-                    let ref_span = reference.span();
-                    if let Some(resolved) = ref_span.resolve(db)
+                for matched in refs {
+                    if let Some(resolved) = matched.span.resolve(db)
                         && let Some(r) = span_to_range(&resolved, db)
                     {
                         let ref_range_id = emitter.emit_range(r)?;

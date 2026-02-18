@@ -8,7 +8,6 @@ use crate::virtual_files::{VirtualFiles, materialize_builtins};
 pub struct Backend {
     pub(super) client: ClientSocket,
     pub(super) db: DriverDataBase,
-    #[allow(dead_code)] // TODO: salsa3-compatible parallelism
     pub(super) workers: tokio::runtime::Runtime,
     pub(super) virtual_files: Option<VirtualFiles>,
     pub(super) readonly_warnings: FxHashSet<Url>,
@@ -67,5 +66,25 @@ impl Backend {
 
     pub fn supports_definition_link(&self) -> bool {
         self.definition_link_support
+    }
+
+    /// Spawn CPU-bound work on the worker pool with a cloned database (salsa snapshot).
+    ///
+    /// The closure receives a `DriverDataBase` snapshot that shares cached query
+    /// results with the main database but can safely run on a separate thread.
+    /// Returns a future that resolves when the work completes.
+    pub fn spawn_on_workers<F, T>(&self, f: F) -> futures::channel::oneshot::Receiver<T>
+    where
+        F: FnOnce(&DriverDataBase) -> T + Send + 'static,
+        T: Send + 'static,
+    {
+        let (tx, rx) = futures::channel::oneshot::channel();
+        let db = self.db.clone();
+        self.workers.handle().spawn_blocking(move || {
+            let result = f(&db);
+            drop(db); // Release salsa snapshot before sending result
+            let _ = tx.send(result);
+        });
+        rx
     }
 }

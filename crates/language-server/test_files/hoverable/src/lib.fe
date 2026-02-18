@@ -1,5 +1,6 @@
 use stuff::calculations::{ return_three, return_four }
 use stuff::calculations::ambiguous
+use stuff::Color
 
 /// ## `return_seven`
 /// ### a function of numbers
@@ -57,5 +58,55 @@ fn test_match(opt: Option) -> i32 {
   match opt {
     Option::Some(val) => val
     Option::None => 0
+  }
+}
+
+fn favorite_color() -> Color {
+  Color::Red
+}
+
+fn describe_color(c: Color) -> i32 {
+  match c {
+    Color::Red => 1
+    Color::Green => 2
+    Color::Blue => 3
+  }
+}
+
+struct Wrapper<T> {
+  inner: T
+}
+
+fn wrap<T>(val: T) -> Wrapper<T> {
+  Wrapper { inner: val }
+}
+
+fn unwrap_numbers(w: Wrapper<Numbers>) -> i32 {
+  w.inner.x
+}
+
+fn do_calc<T: Calculatable>(thing: T) -> i32 {
+  thing.calculate()
+}
+
+msg TokenMsg {
+  #[selector = 0x01]
+  Mint { to: i32, amount: i32 } -> bool,
+  #[selector = 0x02]
+  Burn { amount: i32 } -> bool,
+}
+
+pub contract Token {
+  supply: i32
+
+  recv TokenMsg {
+    Mint { to, amount } -> bool uses (mut supply) {
+      supply += amount
+      true
+    }
+    Burn { amount } -> bool uses (mut supply) {
+      supply -= amount
+      true
+    }
   }
 }

@@ -1,6 +1,6 @@
 ---
 source: crates/hir/tests/ty_check.rs
-assertion_line: 48
+assertion_line: 40
 expression: res
 input_file: test_files/ty_check/contract_happy.fe
 ---
@@ -154,15 +154,13 @@ note:
    │             ^^^^^ u64
 
 note: 
-   ┌─ contract_happy.fe:27:5
-   │  
-27 │ ╭     #[selector = 0x01]
-28 │ │     Withdraw { amount: u64 } -> bool,
-   │ ╰────────────────────────────────────^ u64
+   ┌─ contract_happy.fe:28:5
+   │
+28 │     Withdraw { amount: u64 } -> bool,
+   │     ^^^^^^^^ u64
 
 note: 
-   ┌─ contract_happy.fe:29:5
-   │  
-29 │ ╭     #[selector = 0x02]
-30 │ │     Deposit { amount: u64 } -> u64,
-   │ ╰──────────────────────────────────^ u64
+   ┌─ contract_happy.fe:30:5
+   │
+30 │     Deposit { amount: u64 } -> u64,
+   │     ^^^^^^^ u64

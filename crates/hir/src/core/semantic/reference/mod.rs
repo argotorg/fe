@@ -10,6 +10,7 @@
 
 mod collector;
 mod has_references;
+mod resolver;
 
 use parser::TextSize;
 
@@ -29,7 +30,9 @@ use crate::{
         ty_def::TyId,
     },
     hir_def::scope_graph::ScopeId,
-    hir_def::{Body, Expr, ExprId, FieldIndex, ItemKind, Partial, PathId, Use, UsePathSegment},
+    hir_def::{
+        Body, Contract, Expr, ExprId, FieldIndex, ItemKind, Partial, PathId, Use, UsePathSegment,
+    },
     hir_def::{GenericParamOwner, HirIngot},
     span::{
         DynLazySpan, LazySpan,
@@ -37,7 +40,8 @@ use crate::{
     },
 };
 
-pub use has_references::HasReferences;
+pub use has_references::{HasReferences, MatchedReference};
+pub use resolver::{ResolvedScopeTarget, resolved_item_scope_targets};
 
 /// Collect the trait bound assumptions visible at `scope` by walking up the
 /// scope chain to the nearest enclosing generic param owner (function, impl,
@@ -142,6 +146,72 @@ pub fn resolve_path_to_scopes<'db>(
     let assumptions = enclosing_assumptions(db, scope);
     let result = resolve_path(db, path, scope, assumptions, true);
     scopes_from_resolution(db, &result)
+}
+
+/// Resolve a path from a scope, with a fallback through the msg module
+/// if the scope belongs to a recv arm body.
+///
+/// In `recv TokenMsg { Mint { to, amount } -> bool { ... } }`, the pattern
+/// path `Mint` is stored as a bare identifier resolved from the body scope.
+/// Standard resolution fails because `Mint` lives inside the desugared
+/// `TokenMsg` module. This helper retries resolution from the msg module
+/// scope when the body belongs to a recv arm.
+pub(super) fn resolve_path_with_recv_fallback<'db>(
+    db: &'db dyn HirAnalysisDb,
+    path: PathId<'db>,
+    scope: ScopeId<'db>,
+) -> Vec<ScopeId<'db>> {
+    let scopes = resolve_path_to_scopes(db, path, scope);
+    if !scopes.is_empty() {
+        return scopes;
+    }
+
+    // Fallback: if the scope is a recv arm body, resolve from the msg module
+    if let Some(body) = scope.body()
+        && let Some(msg_scope) = recv_arm_msg_scope(db, body)
+    {
+        return resolve_path_to_scopes(db, path, msg_scope);
+    }
+
+    vec![]
+}
+
+/// For a body that belongs to a recv arm with a named msg type, return the
+/// msg module's scope for path resolution fallback.
+fn recv_arm_msg_scope<'db>(db: &'db dyn HirAnalysisDb, body: Body<'db>) -> Option<ScopeId<'db>> {
+    let contract = recv_arm_contract(db, body)?;
+    for recv in contract.recvs(db).data(db) {
+        for arm in recv.arms.data(db) {
+            if arm.body == body {
+                let msg_path = recv.msg_path?;
+                let assumptions = PredicateListId::empty_list(db);
+                if let Ok(PathRes::Mod(scope)) =
+                    resolve_path(db, msg_path, contract.scope(), assumptions, false)
+                {
+                    return Some(scope);
+                }
+                return None;
+            }
+        }
+    }
+    None
+}
+
+/// Find the contract that owns a recv arm body.
+fn recv_arm_contract<'db>(db: &'db dyn HirAnalysisDb, body: Body<'db>) -> Option<Contract<'db>> {
+    let scope_graph = body.scope().scope_graph(db);
+    for item in scope_graph.items_dfs(db) {
+        if let ItemKind::Contract(contract) = item {
+            for recv in contract.recvs(db).data(db) {
+                for arm in recv.arms.data(db) {
+                    if arm.body == body {
+                        return Some(contract);
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 /// The resolved target of a reference.
@@ -254,7 +324,7 @@ impl<'db> PathView<'db> {
         if let Some(local) = self.local_target(db) {
             return TargetResolution::Single(local);
         }
-        TargetResolution::from_scopes(resolve_path_to_scopes(db, self.path, self.scope))
+        TargetResolution::from_scopes(resolve_path_with_recv_fallback(db, self.path, self.scope))
     }
 
     /// Resolve at a specific cursor position (segment-aware: `foo` in `foo::Bar` → foo).
@@ -277,7 +347,7 @@ impl<'db> PathView<'db> {
                 }
 
                 if let Some(seg_path) = self.path.segment(db, idx) {
-                    return TargetResolution::from_scopes(resolve_path_to_scopes(
+                    return TargetResolution::from_scopes(resolve_path_with_recv_fallback(
                         db, seg_path, self.scope,
                     ));
                 }

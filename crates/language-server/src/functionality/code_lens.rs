@@ -8,108 +8,99 @@ use crate::{
     util::{to_lsp_location_from_lazy_span, to_lsp_location_from_scope},
 };
 
+/// Raw code lens data computed on the worker thread (internal URIs, no JSON).
+enum RawCodeLens {
+    References {
+        def_location: async_lsp::lsp_types::Location,
+        ref_locations: Vec<async_lsp::lsp_types::Location>,
+    },
+    Implementations {
+        def_location: async_lsp::lsp_types::Location,
+        impl_locations: Vec<async_lsp::lsp_types::Location>,
+    },
+}
+
 /// Handle textDocument/codeLens.
 pub async fn handle_code_lens(
     backend: &Backend,
     params: CodeLensParams,
 ) -> Result<Option<Vec<CodeLens>>, ResponseError> {
     let internal_url = backend.map_client_uri_to_internal(params.text_document.uri.clone());
-    let Some(file) = backend.db.workspace().get(&backend.db, &internal_url) else {
+
+    if backend
+        .db
+        .workspace()
+        .get(&backend.db, &internal_url)
+        .is_none()
+    {
         return Ok(None);
-    };
+    }
 
-    let top_mod = map_file_to_mod(&backend.db, file);
-    let scope_graph = top_mod.scope_graph(&backend.db);
-    let ingot = top_mod.ingot(&backend.db);
+    // Spawn heavy reference counting on the worker pool
+    let rx = backend.spawn_on_workers(move |db| compute_code_lens_data(db, &internal_url));
 
+    let raw_lenses: Vec<RawCodeLens> = rx.await.map_err(|_| {
+        ResponseError::new(
+            async_lsp::ErrorCode::INTERNAL_ERROR,
+            "Worker task cancelled".to_string(),
+        )
+    })?;
+
+    // Build CodeLens objects on actor thread (lightweight URI mapping)
     let mut lenses = Vec::new();
 
-    for item in scope_graph.items_dfs(&backend.db) {
-        match item {
-            ItemKind::Func(func) => {
-                let target = Target::Scope(func.scope());
-                if let Ok(location) = to_lsp_location_from_scope(&backend.db, func.scope()) {
-                    let mut location = location;
-                    location.uri = backend.map_internal_uri_to_client(location.uri);
-                    let refs = collect_reference_locations(&backend.db, ingot, &target)
-                        .into_iter()
-                        .map(|mut loc| {
-                            loc.uri = backend.map_internal_uri_to_client(loc.uri);
-                            loc
-                        })
-                        .collect::<Vec<_>>();
-                    lenses.push(make_references_lens(&location, &refs));
-                }
+    for raw in raw_lenses {
+        match raw {
+            RawCodeLens::References {
+                mut def_location,
+                ref_locations,
+            } => {
+                def_location.uri = backend.map_internal_uri_to_client(def_location.uri);
+                let refs: Vec<_> = ref_locations
+                    .into_iter()
+                    .map(|mut loc| {
+                        loc.uri = backend.map_internal_uri_to_client(loc.uri);
+                        loc
+                    })
+                    .collect();
+                lenses.push(make_references_lens(&def_location, &refs));
             }
-            ItemKind::Trait(trait_) => {
-                if let Ok(location) = to_lsp_location_from_scope(&backend.db, trait_.scope()) {
-                    let mut location = location;
-                    location.uri = backend.map_internal_uri_to_client(location.uri);
-                    let impls: Vec<async_lsp::lsp_types::Location> = trait_
-                        .all_impl_traits(&backend.db)
-                        .iter()
-                        .filter_map(|imp| to_lsp_location_from_scope(&backend.db, imp.scope()).ok())
-                        .map(|mut loc| {
-                            loc.uri = backend.map_internal_uri_to_client(loc.uri);
-                            loc
-                        })
-                        .collect();
-                    let count = impls.len();
-                    let title = if count == 1 {
-                        "1 implementation".to_string()
-                    } else {
-                        format!("{count} implementations")
-                    };
-                    lenses.push(CodeLens {
-                        range: location.range,
-                        command: Some(Command {
-                            title,
-                            command: "fe.showReferences".to_string(),
-                            arguments: Some(vec![
-                                serde_json::json!(location.uri),
-                                serde_json::json!(location.range.start),
-                                serde_json::json!(impls),
-                            ]),
-                        }),
-                        data: None,
-                    });
-                }
+            RawCodeLens::Implementations {
+                mut def_location,
+                impl_locations,
+            } => {
+                def_location.uri = backend.map_internal_uri_to_client(def_location.uri);
+                let impls: Vec<_> = impl_locations
+                    .into_iter()
+                    .map(|mut loc| {
+                        loc.uri = backend.map_internal_uri_to_client(loc.uri);
+                        loc
+                    })
+                    .collect();
+                let count = impls.len();
+                let title = if count == 1 {
+                    "1 implementation".to_string()
+                } else {
+                    format!("{count} implementations")
+                };
+                lenses.push(CodeLens {
+                    range: def_location.range,
+                    command: Some(Command {
+                        title,
+                        command: "fe.showReferences".to_string(),
+                        arguments: Some(vec![
+                            serde_json::json!(def_location.uri),
+                            serde_json::json!(def_location.range.start),
+                            serde_json::json!(impls),
+                        ]),
+                    }),
+                    data: None,
+                });
             }
-            ItemKind::Struct(s) => {
-                let target = Target::Scope(s.scope());
-                if let Ok(location) = to_lsp_location_from_scope(&backend.db, s.scope()) {
-                    let mut location = location;
-                    location.uri = backend.map_internal_uri_to_client(location.uri);
-                    let refs = collect_reference_locations(&backend.db, ingot, &target)
-                        .into_iter()
-                        .map(|mut loc| {
-                            loc.uri = backend.map_internal_uri_to_client(loc.uri);
-                            loc
-                        })
-                        .collect::<Vec<_>>();
-                    lenses.push(make_references_lens(&location, &refs));
-                }
-            }
-            ItemKind::Enum(e) => {
-                let target = Target::Scope(e.scope());
-                if let Ok(location) = to_lsp_location_from_scope(&backend.db, e.scope()) {
-                    let mut location = location;
-                    location.uri = backend.map_internal_uri_to_client(location.uri);
-                    let refs = collect_reference_locations(&backend.db, ingot, &target)
-                        .into_iter()
-                        .map(|mut loc| {
-                            loc.uri = backend.map_internal_uri_to_client(loc.uri);
-                            loc
-                        })
-                        .collect::<Vec<_>>();
-                    lenses.push(make_references_lens(&location, &refs));
-                }
-            }
-            _ => {}
         }
     }
 
-    // Add codegen view lenses (once per file, at line 0)
+    // Add codegen view lenses (static, no computation needed)
     let codegen_range = async_lsp::lsp_types::Range {
         start: async_lsp::lsp_types::Position {
             line: 0,
@@ -142,6 +133,71 @@ pub async fn handle_code_lens(
     } else {
         Ok(Some(lenses))
     }
+}
+
+/// Heavy computation: iterate items, count references, collect locations.
+/// Runs on the worker thread with a salsa db snapshot.
+fn compute_code_lens_data(db: &driver::DriverDataBase, file_url: &url::Url) -> Vec<RawCodeLens> {
+    let Some(file) = db.workspace().get(db, file_url) else {
+        return vec![];
+    };
+
+    let top_mod = map_file_to_mod(db, file);
+    let scope_graph = top_mod.scope_graph(db);
+    let ingot = top_mod.ingot(db);
+
+    let mut lenses = Vec::new();
+
+    for item in scope_graph.items_dfs(db) {
+        match item {
+            ItemKind::Func(func) => {
+                let target = Target::Scope(func.scope());
+                if let Ok(location) = to_lsp_location_from_scope(db, func.scope()) {
+                    let refs = collect_reference_locations(db, ingot, &target);
+                    lenses.push(RawCodeLens::References {
+                        def_location: location,
+                        ref_locations: refs,
+                    });
+                }
+            }
+            ItemKind::Trait(trait_) => {
+                if let Ok(location) = to_lsp_location_from_scope(db, trait_.scope()) {
+                    let impls = trait_
+                        .all_impl_traits(db)
+                        .iter()
+                        .filter_map(|imp| to_lsp_location_from_scope(db, imp.scope()).ok())
+                        .collect();
+                    lenses.push(RawCodeLens::Implementations {
+                        def_location: location,
+                        impl_locations: impls,
+                    });
+                }
+            }
+            ItemKind::Struct(s) => {
+                let target = Target::Scope(s.scope());
+                if let Ok(location) = to_lsp_location_from_scope(db, s.scope()) {
+                    let refs = collect_reference_locations(db, ingot, &target);
+                    lenses.push(RawCodeLens::References {
+                        def_location: location,
+                        ref_locations: refs,
+                    });
+                }
+            }
+            ItemKind::Enum(e) => {
+                let target = Target::Scope(e.scope());
+                if let Ok(location) = to_lsp_location_from_scope(db, e.scope()) {
+                    let refs = collect_reference_locations(db, ingot, &target);
+                    lenses.push(RawCodeLens::References {
+                        def_location: location,
+                        ref_locations: refs,
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    lenses
 }
 
 fn make_references_lens(
@@ -180,8 +236,8 @@ fn collect_reference_locations<'db>(
             continue;
         }
         let mod_ = map_file_to_mod(db, file);
-        for reference in mod_.references_to_target(db, target) {
-            if let Ok(loc) = to_lsp_location_from_lazy_span(db, reference.span()) {
+        for matched in mod_.references_to_target(db, target) {
+            if let Ok(loc) = to_lsp_location_from_lazy_span(db, matched.span) {
                 locations.push(loc);
             }
         }

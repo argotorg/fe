@@ -5,18 +5,16 @@ expression: res
 input_file: test_files/ty_check/contract_recv_variants.fe
 ---
 note: 
-   ┌─ contract_recv_variants.fe:10:5
-   │  
-10 │ ╭     #[selector = 0x01]
-11 │ │     Deposit { amount: u64 } -> u64,
-   │ ╰──────────────────────────────────^ u64
+   ┌─ contract_recv_variants.fe:11:5
+   │
+11 │     Deposit { amount: u64 } -> u64,
+   │     ^^^^^^^ u64
 
 note: 
-   ┌─ contract_recv_variants.fe:12:5
-   │  
-12 │ ╭     #[selector = 0x02]
-13 │ │     Withdraw { amount: u64 } -> bool,
-   │ ╰────────────────────────────────────^ u64
+   ┌─ contract_recv_variants.fe:13:5
+   │
+13 │     Withdraw { amount: u64 } -> bool,
+   │     ^^^^^^^^ u64
 
 note: 
    ┌─ contract_recv_variants.fe:26:82
