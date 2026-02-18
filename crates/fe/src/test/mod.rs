@@ -1925,7 +1925,7 @@ fn write_report_manifest(
     out.push_str("sonatina_observability_aggregate: run-level reports also include `artifacts/observability_coverage_all.csv` for per-test coverage totals from observability maps\n");
     out.push_str("gas_opcode_profile: see `artifacts/gas_opcode_comparison.md` and `artifacts/gas_opcode_comparison.csv` for opcode and step-count diagnostics when available\n");
     out.push_str("gas_opcode_profile_aggregate: run-level reports also include `artifacts/gas_opcode_comparison_all.csv`\n");
-    out.push_str("sonatina_evm_debug: when available, see `debug/sonatina_evm_bytecode.txt` for stackify traces and lowered EVM vcode output\n");
+    out.push_str("sonatina_evm_debug: when available, see `debug/sonatina_evm_bytecode.txt` for memory-plan details, stackify traces, and lowered EVM vcode output\n");
     out.push_str(&format!("tests: {}\n", results.len()));
     let passed = results.iter().filter(|r| r.passed).count();
     out.push_str(&format!("passed: {passed}\n"));

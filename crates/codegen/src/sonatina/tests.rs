@@ -860,6 +860,12 @@ fn emit_runtime_evm_debug(
     .unwrap();
     writeln!(&mut out).unwrap();
 
+    let mem_plan = backend.snapshot_mem_plan_detail(module, funcs);
+    if !mem_plan.trim().is_empty() {
+        writeln!(&mut out, "SONATINA MEMORY PLAN").unwrap();
+        writeln!(&mut out, "{mem_plan}").unwrap();
+    }
+
     for &func in funcs {
         let lowered = backend
             .lower_function(module, func, &section_ctx)
