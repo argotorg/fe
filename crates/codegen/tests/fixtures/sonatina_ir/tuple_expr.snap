@@ -16,18 +16,14 @@ func public %tuple_expr() -> i256 {
         v8.i256 = zext v7 i256;
         v9.*@__fe_tuple_0 = bitcast v2 *@__fe_tuple_0;
         v10.*i256 = gep v9 0.i256 0.i256;
-        v11.i256 = ptr_to_int v10 i256;
-        v12.*i8 = bitcast v10 *i8;
-        mstore v12 v8 i256;
-        v13.i1 = is_zero 0.i256;
+        mstore v10 v8 i256;
+        v11.i1 = is_zero 0.i256;
+        v12.i256 = zext v11 i256;
+        v13.i1 = ne v12 0.i256;
         v14.i256 = zext v13 i256;
-        v15.i1 = ne v14 0.i256;
-        v16.i256 = zext v15 i256;
-        v17.*@__fe_tuple_0 = bitcast v2 *@__fe_tuple_0;
-        v18.*i256 = gep v17 0.i256 1.i256;
-        v19.i256 = ptr_to_int v18 i256;
-        v20.*i8 = bitcast v18 *i8;
-        mstore v20 v16 i256;
+        v15.*@__fe_tuple_0 = bitcast v2 *@__fe_tuple_0;
+        v16.*i256 = gep v15 0.i256 1.i256;
+        mstore v16 v14 i256;
         return v3;
 }
 

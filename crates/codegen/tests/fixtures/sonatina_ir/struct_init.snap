@@ -15,14 +15,10 @@ func public %make_dummy() -> i256 {
         v6.i256 = zext v5 i256;
         v7.*@__fe_Dummy_0 = bitcast v2 *@__fe_Dummy_0;
         v8.*i256 = gep v7 0.i256 0.i256;
-        v9.i256 = ptr_to_int v8 i256;
-        v10.*i8 = bitcast v8 *i8;
-        mstore v10 v6 i256;
-        v12.*@__fe_Dummy_0 = bitcast v2 *@__fe_Dummy_0;
-        v14.*i256 = gep v12 0.i256 1.i256;
-        v15.i256 = ptr_to_int v14 i256;
-        v16.*i8 = bitcast v14 *i8;
-        mstore v16 99.i256 i256;
+        mstore v8 v6 i256;
+        v10.*@__fe_Dummy_0 = bitcast v2 *@__fe_Dummy_0;
+        v12.*i256 = gep v10 0.i256 1.i256;
+        mstore v12 99.i256 i256;
         return v3;
 }
 

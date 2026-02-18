@@ -37,49 +37,39 @@ func private %dispatch__StorPtr_Evm___207f35a85ac4062e() {
         v14.i256 = ptr_to_int v13 i256;
         v15.*@__fe_Point_0 = bitcast v13 *@__fe_Point_0;
         v16.*i256 = gep v15 0.i256 0.i256;
-        v17.i256 = ptr_to_int v16 i256;
-        v18.*i8 = bitcast v16 *i8;
-        mstore v18 v9 i256;
-        v19.*@__fe_Point_0 = bitcast v13 *@__fe_Point_0;
-        v21.*i256 = gep v19 0.i256 1.i256;
-        v22.i256 = ptr_to_int v21 i256;
-        v23.*i8 = bitcast v21 *i8;
-        mstore v23 v11 i256;
+        mstore v16 v9 i256;
+        v17.*@__fe_Point_0 = bitcast v13 *@__fe_Point_0;
+        v19.*i256 = gep v17 0.i256 1.i256;
+        mstore v19 v11 i256;
+        v20.*@__fe_Point_0 = bitcast v13 *@__fe_Point_0;
+        v21.*i256 = gep v20 0.i256 0.i256;
+        v22.i256 = mload v21 i256;
+        v23.i256 = add v22 1.i256;
         v24.*@__fe_Point_0 = bitcast v13 *@__fe_Point_0;
         v25.*i256 = gep v24 0.i256 0.i256;
-        v26.i256 = ptr_to_int v25 i256;
-        v27.i256 = mload v26 i256;
-        v28.i256 = add v27 1.i256;
-        v29.*@__fe_Point_0 = bitcast v13 *@__fe_Point_0;
-        v30.*i256 = gep v29 0.i256 0.i256;
-        v31.i256 = ptr_to_int v30 i256;
-        v32.*i8 = bitcast v30 *i8;
-        mstore v32 v28 i256;
-        v33.*@__fe_Point_0 = bitcast v13 *@__fe_Point_0;
-        v34.*i256 = gep v33 0.i256 1.i256;
-        v35.i256 = ptr_to_int v34 i256;
-        v36.i256 = mload v35 i256;
-        v38.i256 = add v36 2.i256;
-        v39.*@__fe_Point_0 = bitcast v13 *@__fe_Point_0;
-        v40.*i256 = gep v39 0.i256 1.i256;
-        v41.i256 = ptr_to_int v40 i256;
-        v42.*i8 = bitcast v40 *i8;
-        mstore v42 v38 i256;
-        v43.i256 = call %point_hac92469562809d28_area v14;
-        call %abi_encode__Evm_hef0af3106e109414__3af54274b2985741 v43 0.i256;
+        mstore v25 v23 i256;
+        v26.*@__fe_Point_0 = bitcast v13 *@__fe_Point_0;
+        v27.*i256 = gep v26 0.i256 1.i256;
+        v28.i256 = mload v27 i256;
+        v30.i256 = add v28 2.i256;
+        v31.*@__fe_Point_0 = bitcast v13 *@__fe_Point_0;
+        v32.*i256 = gep v31 0.i256 1.i256;
+        mstore v32 v30 i256;
+        v33.i256 = call %point_hac92469562809d28_area v14;
+        call %abi_encode__Evm_hef0af3106e109414__3af54274b2985741 v33 0.i256;
         evm_invalid;
 
     block2:
-        v46.i1 = eq v3 2066295049.i256;
-        v47.i256 = zext v46 i256;
-        v48.i1 = ne v47 0.i256;
-        br v48 block3 block4;
+        v36.i1 = eq v3 2066295049.i256;
+        v37.i256 = zext v36 i256;
+        v38.i1 = ne v37 0.i256;
+        br v38 block3 block4;
 
     block3:
-        v49.i256 = evm_calldata_load 4.i256;
-        v51.i256 = add v49 3.i256;
-        v52.i256 = call %square_h97afaa872b6ea17e_area v51;
-        call %abi_encode__Evm_hef0af3106e109414__3af54274b2985741 v52 0.i256;
+        v39.i256 = evm_calldata_load 4.i256;
+        v41.i256 = add v39 3.i256;
+        v42.i256 = call %square_h97afaa872b6ea17e_area v41;
+        call %abi_encode__Evm_hef0af3106e109414__3af54274b2985741 v42 0.i256;
         evm_invalid;
 
     block4:
@@ -90,14 +80,12 @@ func private %point_hac92469562809d28_area(v0.i256) -> i256 {
     block0:
         v2.*@__fe_Point_0 = int_to_ptr v0 *@__fe_Point_0;
         v3.*i256 = gep v2 0.i256 0.i256;
-        v4.i256 = ptr_to_int v3 i256;
-        v5.i256 = mload v4 i256;
-        v6.*@__fe_Point_0 = int_to_ptr v0 *@__fe_Point_0;
-        v8.*i256 = gep v6 0.i256 1.i256;
-        v9.i256 = ptr_to_int v8 i256;
-        v10.i256 = mload v9 i256;
-        v11.i256 = mul v5 v10;
-        return v11;
+        v4.i256 = mload v3 i256;
+        v5.*@__fe_Point_0 = int_to_ptr v0 *@__fe_Point_0;
+        v7.*i256 = gep v5 0.i256 1.i256;
+        v8.i256 = mload v7 i256;
+        v9.i256 = mul v4 v8;
+        return v9;
 }
 
 func private %square_h97afaa872b6ea17e_area(v0.i256) -> i256 {

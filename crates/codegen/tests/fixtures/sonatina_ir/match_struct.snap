@@ -15,76 +15,65 @@ func public %match_struct_fields(v0.i256) -> i256 {
         jump block2;
 
     block2:
-        v2.i256 = phi (0.i256 block1) (v11 block3) (v19 block4) (v35 block5);
+        v2.i256 = phi (0.i256 block1) (v9 block3) (v15 block4) (v27 block5);
         return v2;
 
     block3:
         v4.*@__fe_Point_0 = int_to_ptr v0 *@__fe_Point_0;
         v6.*i256 = gep v4 0.i256 1.i256;
-        v7.i256 = ptr_to_int v6 i256;
-        v8.*i8 = bitcast v6 *i8;
-        v9.i256 = mload v8 i256;
-        v10.i8 = trunc v9 i8;
-        v11.i256 = zext v10 i256;
+        v7.i256 = mload v6 i256;
+        v8.i8 = trunc v7 i8;
+        v9.i256 = zext v8 i256;
         jump block2;
 
     block4:
-        v13.*@__fe_Point_0 = int_to_ptr v0 *@__fe_Point_0;
-        v14.*i256 = gep v13 0.i256 0.i256;
-        v15.i256 = ptr_to_int v14 i256;
-        v16.*i8 = bitcast v14 *i8;
-        v17.i256 = mload v16 i256;
-        v18.i8 = trunc v17 i8;
-        v19.i256 = zext v18 i256;
+        v11.*@__fe_Point_0 = int_to_ptr v0 *@__fe_Point_0;
+        v12.*i256 = gep v11 0.i256 0.i256;
+        v13.i256 = mload v12 i256;
+        v14.i8 = trunc v13 i8;
+        v15.i256 = zext v14 i256;
         jump block2;
 
     block5:
-        v21.*@__fe_Point_0 = int_to_ptr v0 *@__fe_Point_0;
-        v22.*i256 = gep v21 0.i256 1.i256;
-        v23.i256 = ptr_to_int v22 i256;
-        v24.*i8 = bitcast v22 *i8;
-        v25.i256 = mload v24 i256;
-        v26.i8 = trunc v25 i8;
-        v27.i256 = zext v26 i256;
-        v28.*@__fe_Point_0 = int_to_ptr v0 *@__fe_Point_0;
-        v29.*i256 = gep v28 0.i256 0.i256;
-        v30.i256 = ptr_to_int v29 i256;
-        v31.*i8 = bitcast v29 *i8;
-        v32.i256 = mload v31 i256;
-        v33.i8 = trunc v32 i8;
-        v34.i256 = zext v33 i256;
-        v35.i256 = add v34 v27;
+        v17.*@__fe_Point_0 = int_to_ptr v0 *@__fe_Point_0;
+        v18.*i256 = gep v17 0.i256 1.i256;
+        v19.i256 = mload v18 i256;
+        v20.i8 = trunc v19 i8;
+        v21.i256 = zext v20 i256;
+        v22.*@__fe_Point_0 = int_to_ptr v0 *@__fe_Point_0;
+        v23.*i256 = gep v22 0.i256 0.i256;
+        v24.i256 = mload v23 i256;
+        v25.i8 = trunc v24 i8;
+        v26.i256 = zext v25 i256;
+        v27.i256 = add v26 v21;
         jump block2;
 
     block6:
-        v37.*@__fe_Point_0 = int_to_ptr v0 *@__fe_Point_0;
-        v38.*i256 = gep v37 0.i256 1.i256;
-        v39.i256 = ptr_to_int v38 i256;
-        v40.i256 = mload v39 i256;
-        v41.i8 = trunc v40 i8;
-        v42.i256 = zext v41 i256;
-        v43.i1 = eq v42 0.i256;
-        br v43 block7 block8;
+        v29.*@__fe_Point_0 = int_to_ptr v0 *@__fe_Point_0;
+        v30.*i256 = gep v29 0.i256 1.i256;
+        v31.i256 = mload v30 i256;
+        v32.i8 = trunc v31 i8;
+        v33.i256 = zext v32 i256;
+        v34.i1 = eq v33 0.i256;
+        br v34 block7 block8;
 
     block7:
-        v45.*@__fe_Point_0 = int_to_ptr v0 *@__fe_Point_0;
-        v46.*i256 = gep v45 0.i256 0.i256;
-        v47.i256 = ptr_to_int v46 i256;
-        v48.i256 = mload v47 i256;
-        v49.i8 = trunc v48 i8;
-        v50.i256 = zext v49 i256;
-        v51.i1 = eq v50 0.i256;
-        br v51 block1 block4;
+        v36.*@__fe_Point_0 = int_to_ptr v0 *@__fe_Point_0;
+        v37.*i256 = gep v36 0.i256 0.i256;
+        v38.i256 = mload v37 i256;
+        v39.i8 = trunc v38 i8;
+        v40.i256 = zext v39 i256;
+        v41.i1 = eq v40 0.i256;
+        br v41 block1 block4;
 
     block8:
-        v53.*@__fe_Point_0 = int_to_ptr v0 *@__fe_Point_0;
-        v54.*i256 = gep v53 0.i256 0.i256;
-        v55.i256 = ptr_to_int v54 i256;
-        v56.i256 = mload v55 i256;
-        v57.i8 = trunc v56 i8;
-        v58.i256 = zext v57 i256;
-        v59.i1 = eq v58 0.i256;
-        br v59 block3 block5;
+        v43.*@__fe_Point_0 = int_to_ptr v0 *@__fe_Point_0;
+        v44.*i256 = gep v43 0.i256 0.i256;
+        v45.i256 = mload v44 i256;
+        v46.i8 = trunc v45 i8;
+        v47.i256 = zext v46 i256;
+        v48.i1 = eq v47 0.i256;
+        br v48 block3 block5;
 }
 
 func public %match_struct_wildcard(v0.i256) -> i256 {
@@ -107,22 +96,20 @@ func public %match_struct_wildcard(v0.i256) -> i256 {
     block5:
         v7.*@__fe_Point_0 = int_to_ptr v0 *@__fe_Point_0;
         v8.*i256 = gep v7 0.i256 0.i256;
-        v9.i256 = ptr_to_int v8 i256;
-        v10.i256 = mload v9 i256;
-        v11.i8 = trunc v10 i8;
-        v12.i256 = zext v11 i256;
-        v13.i1 = eq v12 0.i256;
-        br v13 block1 block6;
+        v9.i256 = mload v8 i256;
+        v10.i8 = trunc v9 i8;
+        v11.i256 = zext v10 i256;
+        v12.i1 = eq v11 0.i256;
+        br v12 block1 block6;
 
     block6:
-        v15.*@__fe_Point_0 = int_to_ptr v0 *@__fe_Point_0;
-        v16.*i256 = gep v15 0.i256 1.i256;
-        v17.i256 = ptr_to_int v16 i256;
-        v18.i256 = mload v17 i256;
-        v19.i8 = trunc v18 i8;
-        v20.i256 = zext v19 i256;
-        v21.i1 = eq v20 0.i256;
-        br v21 block3 block4;
+        v14.*@__fe_Point_0 = int_to_ptr v0 *@__fe_Point_0;
+        v15.*i256 = gep v14 0.i256 1.i256;
+        v16.i256 = mload v15 i256;
+        v17.i8 = trunc v16 i8;
+        v18.i256 = zext v17 i256;
+        v19.i1 = eq v18 0.i256;
+        br v19 block3 block4;
 }
 
 func public %__fe_sonatina_entry() {

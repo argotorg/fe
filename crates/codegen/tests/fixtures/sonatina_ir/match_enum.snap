@@ -26,17 +26,18 @@ func public %match_enum(v0.i256) -> i256 {
         jump block2;
 
     block6:
-        v8.i256 = mload v0 i256;
-        v9.i1 = eq v8 0.i256;
-        br v9 block1 block7;
+        v8.*i256 = int_to_ptr v0 *i256;
+        v9.i256 = mload v8 i256;
+        v10.i1 = eq v9 0.i256;
+        br v10 block1 block7;
 
     block7:
-        v10.i1 = eq v8 1.i256;
-        br v10 block3 block8;
+        v11.i1 = eq v9 1.i256;
+        br v11 block3 block8;
 
     block8:
-        v11.i1 = eq v8 2.i256;
-        br v11 block4 block5;
+        v12.i1 = eq v9 2.i256;
+        br v12 block4 block5;
 }
 
 func public %__fe_sonatina_entry() {

@@ -575,23 +575,26 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         }
         Rvalue::Intrinsic { op, args } => lower_intrinsic(ctx, *op, args),
         Rvalue::Load { place } => {
-            let addr = lower_place_address(ctx, place)?;
             let addr_space = ctx.body.place_address_space(place);
 
             let result = match addr_space {
                 AddressSpaceKind::Memory => {
-                    let load = Mload::new(ctx.is, addr, Type::I256);
+                    let ptr_addr = lower_place_memory_ptr(ctx, place)?;
+                    let load = Mload::new(ctx.is, ptr_addr, Type::I256);
                     ctx.fb.insert_inst(load, Type::I256)
                 }
                 AddressSpaceKind::Storage => {
+                    let addr = lower_place_address(ctx, place)?;
                     let load = EvmSload::new(ctx.is, addr);
                     ctx.fb.insert_inst(load, Type::I256)
                 }
                 AddressSpaceKind::TransientStorage => {
+                    let addr = lower_place_address(ctx, place)?;
                     let load = EvmTload::new(ctx.is, addr);
                     ctx.fb.insert_inst(load, Type::I256)
                 }
                 AddressSpaceKind::Calldata => {
+                    let addr = lower_place_address(ctx, place)?;
                     let load = EvmCalldataLoad::new(ctx.is, addr);
                     ctx.fb.insert_inst(load, Type::I256)
                 }
@@ -1474,7 +1477,10 @@ fn lower_place_address<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             ctx.gep_name_counter,
         )
     {
-        return lower_place_address_gep(ctx, place, base_val, current_ty, sonatina_ty);
+        let gep_ptr = lower_place_address_gep(ctx, place, base_val, current_ty, sonatina_ty)?;
+        return Ok(ctx
+            .fb
+            .insert_inst(PtrToInt::new(ctx.is, gep_ptr, Type::I256), Type::I256));
     }
 
     // Fall back to manual offset arithmetic
@@ -1547,12 +1553,47 @@ fn lower_place_address_gep<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         .fb
         .insert_inst(Gep::new(ctx.is, gep_values), result_ptr_ty);
 
-    // PtrToInt: cast back to I256 for mload/mstore
-    let result = ctx
-        .fb
-        .insert_inst(PtrToInt::new(ctx.is, gep_result, Type::I256), Type::I256);
+    Ok(gep_result)
+}
 
-    Ok(result)
+fn lower_place_memory_ptr<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, 'db, C>,
+    place: &Place<'db>,
+) -> Result<ValueId, LowerError> {
+    let base_val = lower_value(ctx, place.base)?;
+    if place.projection.is_empty() {
+        let word_ptr_ty = ctx.fb.ptr_type(Type::I256);
+        return Ok(coerce_word_addr_to_ptr(ctx, base_val, word_ptr_ty));
+    }
+
+    let base_value = ctx.body.values.get(place.base.index()).ok_or_else(|| {
+        LowerError::Internal(format!(
+            "unknown MIR place base value {}",
+            place.base.index()
+        ))
+    })?;
+    let current_ty = base_value.ty;
+    if is_erased_runtime_ty(ctx.db, ctx.target_layout, current_ty) {
+        let word_ptr_ty = ctx.fb.ptr_type(Type::I256);
+        return Ok(coerce_word_addr_to_ptr(ctx, base_val, word_ptr_ty));
+    }
+
+    if projections_eligible_for_gep(place)
+        && let Some(sonatina_ty) = fe_ty_to_sonatina(
+            ctx.fb,
+            ctx.db,
+            ctx.target_layout,
+            current_ty,
+            ctx.gep_type_cache,
+            ctx.gep_name_counter,
+        )
+    {
+        return lower_place_address_gep(ctx, place, base_val, current_ty, sonatina_ty);
+    }
+
+    let addr = lower_place_address_arithmetic(ctx, place, base_val, current_ty, false)?;
+    let word_ptr_ty = ctx.fb.ptr_type(Type::I256);
+    Ok(coerce_word_addr_to_ptr(ctx, addr, word_ptr_ty))
 }
 
 /// Resolves the sonatina type of a struct field by index.
@@ -1998,19 +2039,19 @@ fn store_word_to_place<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     place: &Place<'db>,
     val: ValueId,
 ) -> Result<(), LowerError> {
-    let addr = lower_place_address(ctx, place)?;
     match ctx.body.place_address_space(place) {
         AddressSpaceKind::Memory => {
-            let byte_ptr_ty = ctx.fb.ptr_type(Type::I8);
-            let ptr_addr = coerce_word_addr_to_ptr(ctx, addr, byte_ptr_ty);
+            let ptr_addr = lower_place_memory_ptr(ctx, place)?;
             ctx.fb
                 .insert_inst_no_result(Mstore::new(ctx.is, ptr_addr, val, Type::I256));
         }
         AddressSpaceKind::Storage => {
+            let addr = lower_place_address(ctx, place)?;
             ctx.fb
                 .insert_inst_no_result(EvmSstore::new(ctx.is, addr, val));
         }
         AddressSpaceKind::TransientStorage => {
+            let addr = lower_place_address(ctx, place)?;
             ctx.fb
                 .insert_inst_no_result(EvmTstore::new(ctx.is, addr, val));
         }
@@ -2030,21 +2071,25 @@ fn load_place_typed<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         return Ok(ctx.fb.make_imm_value(I256::zero()));
     }
 
-    let addr = lower_place_address(ctx, place)?;
     let raw = match ctx.body.place_address_space(place) {
         AddressSpaceKind::Memory => {
-            let byte_ptr_ty = ctx.fb.ptr_type(Type::I8);
-            let ptr_addr = coerce_word_addr_to_ptr(ctx, addr, byte_ptr_ty);
+            let ptr_addr = lower_place_memory_ptr(ctx, place)?;
             ctx.fb
                 .insert_inst(Mload::new(ctx.is, ptr_addr, Type::I256), Type::I256)
         }
-        AddressSpaceKind::Storage => ctx.fb.insert_inst(EvmSload::new(ctx.is, addr), Type::I256),
+        AddressSpaceKind::Storage => {
+            let addr = lower_place_address(ctx, place)?;
+            ctx.fb.insert_inst(EvmSload::new(ctx.is, addr), Type::I256)
+        }
         AddressSpaceKind::TransientStorage => {
+            let addr = lower_place_address(ctx, place)?;
             ctx.fb.insert_inst(EvmTload::new(ctx.is, addr), Type::I256)
         }
-        AddressSpaceKind::Calldata => ctx
-            .fb
-            .insert_inst(EvmCalldataLoad::new(ctx.is, addr), Type::I256),
+        AddressSpaceKind::Calldata => {
+            let addr = lower_place_address(ctx, place)?;
+            ctx.fb
+                .insert_inst(EvmCalldataLoad::new(ctx.is, addr), Type::I256)
+        }
     };
     Ok(apply_from_word(ctx.fb, ctx.db, raw, loaded_ty, ctx.is))
 }
