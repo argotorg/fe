@@ -26,19 +26,17 @@ func private %test_effect_ptr_domains__Evm_hef0af3106e109414_Evm_hef0af3106e1094
         call %bump__MemPtr_Foo___cdd30998d577b6ea v4;
         v5.i256 = call %stor_ptr_stor__Evm_hef0af3106e109414_Foo_h6dbce71a6ea992b8__c09e6c6fc5a7b23d v0 0.i256;
         call %bump__StorPtr_Foo___3698cc3c4b2626e3 v5;
-        v7.*i8 = evm_malloc 64.i256;
-        v8.i256 = ptr_to_int v7 i256;
-        v10.*@__fe_Foo_0 = bitcast v7 *@__fe_Foo_0;
-        v11.*i256 = gep v10 0.i256 0.i256;
-        v12.i256 = ptr_to_int v11 i256;
-        v13.*i8 = bitcast v11 *i8;
-        mstore v13 10.i256 i256;
-        v15.*@__fe_Foo_0 = bitcast v7 *@__fe_Foo_0;
-        v17.*i256 = gep v15 0.i256 1.i256;
-        v18.i256 = ptr_to_int v17 i256;
-        v19.*i8 = bitcast v17 *i8;
-        mstore v19 20.i256 i256;
-        call %bump__MemPtr_Foo___cdd30998d577b6ea v8;
+        v6.*@__fe_Foo_0 = alloca @__fe_Foo_0;
+        v7.i256 = ptr_to_int v6 i256;
+        v9.*i256 = gep v6 0.i256 0.i256;
+        v10.i256 = ptr_to_int v9 i256;
+        v11.*i8 = bitcast v9 *i8;
+        mstore v11 10.i256 i256;
+        v14.*i256 = gep v6 0.i256 1.i256;
+        v15.i256 = ptr_to_int v14 i256;
+        v16.*i8 = bitcast v14 *i8;
+        mstore v16 20.i256 i256;
+        call %bump__MemPtr_Foo___cdd30998d577b6ea v7;
         return;
 }
 
