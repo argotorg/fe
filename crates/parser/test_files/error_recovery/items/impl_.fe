@@ -1,6 +1,0 @@
-impl Foo<T, 
-    where T: Integer
-{ }
-
-impl Foo<T, >
-{ }
