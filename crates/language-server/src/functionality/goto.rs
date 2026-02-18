@@ -543,8 +543,6 @@ fn create<C: Contract>() -> i32 {
             !items.is_empty(),
             "find_enclosing_items should find items at cursor"
         );
-        let item_kinds: Vec<_> = items.iter().map(|i| format!("{:?}", i)).collect();
-        eprintln!("Step 1 - enclosing items: {:?}", item_kinds);
 
         // Step 2: Does reference_at find a reference?
         let reference = top_mod.reference_at(&db, cursor_on_init);
@@ -552,15 +550,10 @@ fn create<C: Contract>() -> i32 {
             reference.is_some(),
             "reference_at should find a reference at cursor on init_code_offset"
         );
-        let ref_view = reference.unwrap();
-        eprintln!(
-            "Step 2 - reference kind: {:?}",
-            std::mem::discriminant(ref_view)
-        );
+        let _ref_view = reference.unwrap();
 
         // Step 3: Does target_at resolve?
         let resolution = top_mod.target_at(&db, cursor_on_init);
-        eprintln!("Step 3 - resolution: {:?}", resolution);
         assert!(
             resolution.first().is_some(),
             "target_at should resolve C::init_code_offset to a target"
