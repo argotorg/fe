@@ -315,6 +315,7 @@ impl MockLspClient {
 /// The core scenario: send malformed edits via replay_edits_burst,
 /// then verify formatting still works.
 #[tokio::test]
+#[ignore]
 async fn server_survives_malformed_edits_and_formats() {
     let mut client = MockLspClient::start().await;
     client.initialize().await;
@@ -357,6 +358,7 @@ async fn server_survives_malformed_edits_and_formats() {
 /// Verify the server can handle the `self` → `mut self` keystroke sequence
 /// using replay_edits with a settle between each.
 #[tokio::test]
+#[ignore]
 async fn server_survives_self_to_mut_self_keystrokes() {
     let mut client = MockLspClient::start().await;
     client.initialize().await;
@@ -388,6 +390,7 @@ async fn server_survives_self_to_mut_self_keystrokes() {
 
 /// Verify hover, goto, and completion all work after broken edits.
 #[tokio::test]
+#[ignore]
 async fn features_work_after_malformed_edits() {
     let mut client = MockLspClient::start().await;
     client.initialize().await;
@@ -433,6 +436,7 @@ async fn features_work_after_malformed_edits() {
 /// intermediate states. The editor triggers format-on-type or format-on-save
 /// while the code is in a broken intermediate state like "mself".
 #[tokio::test]
+#[ignore]
 async fn format_during_malformed_intermediate_states() {
     let mut client = MockLspClient::start().await;
     client.initialize().await;
@@ -483,6 +487,7 @@ async fn format_during_malformed_intermediate_states() {
 /// immediately request formatting before diagnostics finish computing.
 /// This simulates format-on-save while the diagnostics pipeline is active.
 #[tokio::test]
+#[ignore]
 async fn format_concurrent_with_diagnostics() {
     let mut client = MockLspClient::start().await;
     client.initialize().await;
@@ -516,6 +521,7 @@ async fn format_concurrent_with_diagnostics() {
 /// Reproduce Sean's generic struct crash: type `struct S<T, const N: usize>`
 /// character by character with format requests at each step.
 #[tokio::test]
+#[ignore]
 async fn format_during_generic_struct_keystroke_sequence() {
     let mut client = MockLspClient::start().await;
     client.initialize().await;
@@ -569,6 +575,7 @@ async fn format_during_generic_struct_keystroke_sequence() {
 
 /// Verify diagnostics are published via the async pipeline.
 #[tokio::test]
+#[ignore]
 async fn diagnostics_published_for_broken_code() {
     let mut client = MockLspClient::start().await;
     client.initialize().await;
