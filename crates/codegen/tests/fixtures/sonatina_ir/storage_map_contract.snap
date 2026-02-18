@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/storage_map_contract.fe
 ---
@@ -70,67 +69,64 @@ func private %runtime__StorPtr_Evm___207f35a85ac4062e() {
         call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_new__u256_u256_1__3c02c0f2b86be0bb;
         v1.i256 = evm_calldata_load 0.i256;
         v3.i256 = shr 224.i256 v1;
-        jump block8;
+        jump block7;
 
     block1:
         v5.i256 = evm_calldata_load 4.i256;
         v6.i256 = call %get_balance__MemPtr_StorageMap_u256__u256__0____3cd7ace0c4584833 v5 0.i256;
         call %abi_encode__Evm_hef0af3106e109414__3af54274b2985741 v6 0.i256;
-        jump block2;
+        evm_invalid;
 
     block2:
-        evm_stop;
-
-    block3:
         v7.i256 = evm_calldata_load 4.i256;
         v9.i256 = evm_calldata_load 36.i256;
         call %set_balance__MemPtr_StorageMap_u256__u256__0____3cd7ace0c4584833 v7 v9 0.i256;
         call %abi_encode__Evm_hef0af3106e109414__3af54274b2985741 0.i256 0.i256;
-        jump block2;
+        evm_invalid;
 
-    block4:
+    block3:
         v10.i256 = evm_calldata_load 4.i256;
         v11.i256 = evm_calldata_load 36.i256;
         v13.i256 = evm_calldata_load 68.i256;
         v14.i256 = call %transfer__MemPtr_StorageMap_u256__u256__0____3cd7ace0c4584833 v10 v11 v13 0.i256;
         call %abi_encode__Evm_hef0af3106e109414__3af54274b2985741 v14 0.i256;
-        jump block2;
+        evm_invalid;
 
-    block5:
+    block4:
         v15.i256 = evm_calldata_load 4.i256;
         v16.i256 = call %get_allowance__MemPtr_StorageMap_u256__u256__1____e8f0bd5888eece94 v15 0.i256;
         call %abi_encode__Evm_hef0af3106e109414__3af54274b2985741 v16 0.i256;
-        jump block2;
+        evm_invalid;
 
-    block6:
+    block5:
         v17.i256 = evm_calldata_load 4.i256;
         v18.i256 = evm_calldata_load 36.i256;
         call %set_allowance__MemPtr_StorageMap_u256__u256__1____e8f0bd5888eece94 v17 v18 0.i256;
         call %abi_encode__Evm_hef0af3106e109414__3af54274b2985741 0.i256 0.i256;
-        jump block2;
+        evm_invalid;
 
-    block7:
+    block6:
         evm_return 0.i256 0.i256;
 
-    block8:
+    block7:
         v25.i1 = eq v3 2630350600.i256;
-        br v25 block1 block9;
+        br v25 block1 block8;
+
+    block8:
+        v26.i1 = eq v3 1246470123.i256;
+        br v26 block2 block9;
 
     block9:
-        v26.i1 = eq v3 1246470123.i256;
-        br v26 block3 block10;
+        v27.i1 = eq v3 2430412327.i256;
+        br v27 block3 block10;
 
     block10:
-        v27.i1 = eq v3 2430412327.i256;
-        br v27 block4 block11;
+        v28.i1 = eq v3 3378517838.i256;
+        br v28 block4 block11;
 
     block11:
-        v28.i1 = eq v3 3378517838.i256;
-        br v28 block5 block12;
-
-    block12:
         v29.i1 = eq v3 197806145.i256;
-        br v29 block6 block7;
+        br v29 block5 block6;
 }
 
 func public %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor__u256_u256_0__6a346ad3c930d971(v0.i256, v1.i256) -> i256 {

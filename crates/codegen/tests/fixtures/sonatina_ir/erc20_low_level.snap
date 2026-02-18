@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/erc20_low_level.fe
 ---
@@ -94,103 +93,100 @@ func private %runtime__StorPtr_Evm___207f35a85ac4062e() {
         v1.i256 = call %stor_ptr__Evm_hef0af3106e109414_Erc20_h7a8a7a2800ba6809__828ea75549970aee 0.i256 0.i256;
         v2.i256 = evm_calldata_load 0.i256;
         v4.i256 = shr 224.i256 v2;
-        jump block12;
+        jump block11;
 
     block1:
         v6.i256 = evm_calldata_load 4.i256;
         v8.i256 = call %balance_of__StorPtr_Erc20___2745299687a147d4 v6 v1;
         call %abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741 v8 0.i256;
-        jump block2;
+        evm_invalid;
 
     block2:
-        evm_stop;
-
-    block3:
         v9.i256 = evm_calldata_load 4.i256;
         v11.i256 = evm_calldata_load 36.i256;
         v13.i256 = call %allowance__StorPtr_Erc20___2745299687a147d4 v9 v11 v1;
         call %abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741 v13 0.i256;
-        jump block2;
+        evm_invalid;
+
+    block3:
+        call %abi_encode_string__Evm_hef0af3106e109414__3af54274b2985741 31840933704928615426292613906591192052886564858731089189578963311002547912704.i256 7.i256 0.i256;
+        evm_invalid;
 
     block4:
-        call %abi_encode_string__Evm_hef0af3106e109414__3af54274b2985741 31840933704928615426292613906591192052886564858731089189578963311002547912704.i256 7.i256 0.i256;
-        jump block2;
+        call %abi_encode_string__Evm_hef0af3106e109414__3af54274b2985741 31784391594991486112232083260356792451358613714049171750120207607087736291328.i256 3.i256 0.i256;
+        evm_invalid;
 
     block5:
-        call %abi_encode_string__Evm_hef0af3106e109414__3af54274b2985741 31784391594991486112232083260356792451358613714049171750120207607087736291328.i256 3.i256 0.i256;
-        jump block2;
+        call %abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741 18.i256 0.i256;
+        evm_invalid;
 
     block6:
-        call %abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741 18.i256 0.i256;
-        jump block2;
-
-    block7:
         v19.i256 = evm_calldata_load 4.i256;
         v20.i256 = evm_calldata_load 36.i256;
         v22.i256 = call %transfer__StorPtr_Erc20__Evm_hef0af3106e109414_Evm_hef0af3106e109414__a43599a61c4c3ec5 v19 v20 v1 0.i256 0.i256;
         call %abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741 v22 0.i256;
-        jump block2;
+        evm_invalid;
 
-    block8:
+    block7:
         v23.i256 = evm_calldata_load 4.i256;
         v24.i256 = evm_calldata_load 36.i256;
         v26.i256 = call %approve__StorPtr_Erc20__Evm_hef0af3106e109414__cb64805ecdbd6d6e v23 v24 v1 0.i256;
         call %abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741 v26 0.i256;
-        jump block2;
+        evm_invalid;
 
-    block9:
+    block8:
         v27.i256 = evm_calldata_load 4.i256;
         v28.i256 = evm_calldata_load 36.i256;
         v30.i256 = evm_calldata_load 68.i256;
         v32.i256 = call %transfer_from__StorPtr_Erc20__Evm_hef0af3106e109414_Evm_hef0af3106e109414__a43599a61c4c3ec5 v27 v28 v30 v1 0.i256 0.i256;
         call %abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741 v32 0.i256;
-        jump block2;
+        evm_invalid;
 
-    block10:
+    block9:
         v33.i256 = evm_calldata_load 4.i256;
         v34.i256 = evm_calldata_load 36.i256;
         v36.i256 = call %mint__StorPtr_Erc20__Evm_hef0af3106e109414_Evm_hef0af3106e109414__a43599a61c4c3ec5 v33 v34 v1 0.i256 0.i256;
         call %abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741 v36 0.i256;
-        jump block2;
+        evm_invalid;
 
-    block11:
+    block10:
         evm_revert 0.i256 0.i256;
 
-    block12:
+    block11:
         v47.i1 = eq v4 1889567281.i256;
-        br v47 block1 block13;
+        br v47 block1 block12;
+
+    block12:
+        v48.i1 = eq v4 3714247998.i256;
+        br v48 block2 block13;
 
     block13:
-        v48.i1 = eq v4 3714247998.i256;
-        br v48 block3 block14;
+        v49.i1 = eq v4 117300739.i256;
+        br v49 block3 block14;
 
     block14:
-        v49.i1 = eq v4 117300739.i256;
-        br v49 block4 block15;
+        v50.i1 = eq v4 2514000705.i256;
+        br v50 block4 block15;
 
     block15:
-        v50.i1 = eq v4 2514000705.i256;
-        br v50 block5 block16;
+        v51.i1 = eq v4 826074471.i256;
+        br v51 block5 block16;
 
     block16:
-        v51.i1 = eq v4 826074471.i256;
-        br v51 block6 block17;
+        v52.i1 = eq v4 2835717307.i256;
+        br v52 block6 block17;
 
     block17:
-        v52.i1 = eq v4 2835717307.i256;
-        br v52 block7 block18;
+        v53.i1 = eq v4 157198259.i256;
+        br v53 block7 block18;
 
     block18:
-        v53.i1 = eq v4 157198259.i256;
-        br v53 block8 block19;
+        v54.i1 = eq v4 599290589.i256;
+        br v54 block8 block19;
 
     block19:
-        v54.i1 = eq v4 599290589.i256;
-        br v54 block9 block20;
-
-    block20:
         v55.i1 = eq v4 1086394137.i256;
-        br v55 block10 block11;
+        br v55 block9 block10;
 }
 
 func private %erc20_h7a8a7a2800ba6809_balance_of(v0.i256, v1.i256) -> i256 {
