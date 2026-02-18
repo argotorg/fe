@@ -5,7 +5,6 @@ pub struct Storage {
 pub fn needs_storage()
   uses Storage
 {
-    ()
 }
 
 pub fn missing_effect() {

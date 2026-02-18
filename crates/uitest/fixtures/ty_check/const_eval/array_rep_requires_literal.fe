@@ -4,5 +4,4 @@ extern {
 
 fn foo() {
     let x: [u8; n()] = [0; n()]
-    ()
 }

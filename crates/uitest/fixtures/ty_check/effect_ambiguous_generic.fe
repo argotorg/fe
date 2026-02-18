@@ -5,7 +5,6 @@ pub struct Storage<T> {
 pub fn needs_storage<T>()
   uses Storage<T>
 {
-    ()
 }
 
 pub fn ambig() {
@@ -15,4 +14,3 @@ pub fn ambig() {
         needs_storage()
     }
 }
-

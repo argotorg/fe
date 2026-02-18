@@ -1,5 +1,6 @@
 ---
-source: crates/hir-analysis/tests/ty_check.rs
+source: crates/hir/tests/ty_check.rs
+assertion_line: 40
 expression: res
 input_file: test_files/ty_check/effects_generic_type_nested.fe
 ---
@@ -268,9 +269,9 @@ note:
 39 │ │     let mut storage = Storage<u8> { value: 10 }
 40 │ │     with (Storage<u8> = storage) {
 41 │ │         write_u8(val: 20)
-   · │
-44 │ │     }
-45 │ │ }
+42 │ │         let _ = read_u8()
+43 │ │     }
+44 │ │ }
    │ ╰─^ ()
 
 note: 
@@ -297,8 +298,7 @@ note:
 40 │ ╭     with (Storage<u8> = storage) {
 41 │ │         write_u8(val: 20)
 42 │ │         let _ = read_u8()
-43 │ │         ()
-44 │ │     }
+43 │ │     }
    │ ╰─────^ ()
 
 note: 
@@ -314,8 +314,7 @@ note:
    │ ╭──────────────────────────────────^
 41 │ │         write_u8(val: 20)
 42 │ │         let _ = read_u8()
-43 │ │         ()
-44 │ │     }
+43 │ │     }
    │ ╰─────^ ()
 
 note: 
@@ -353,9 +352,3 @@ note:
    │
 42 │         let _ = read_u8()
    │                 ^^^^^^^^^ u8
-
-note: 
-   ┌─ effects_generic_type_nested.fe:43:9
-   │
-43 │         ()
-   │         ^^ ()

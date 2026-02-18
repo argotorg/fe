@@ -9,7 +9,6 @@ pub struct Other {
 pub fn needs_storage()
   uses Storage
 {
-    ()
 }
 
 pub fn wrong_capability() {

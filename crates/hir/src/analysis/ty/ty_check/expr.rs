@@ -228,7 +228,13 @@ impl<'db> TyChecker<'db> {
             }
 
             let last_stmt = stmts[stmts.len() - 1];
-            let res = self.check_stmt(last_stmt, expected);
+            let res = if expected == TyId::unit(self.db) {
+                let ty = self.fresh_ty();
+                self.check_stmt(last_stmt, ty);
+                TyId::unit(self.db)
+            } else {
+                self.check_stmt(last_stmt, expected)
+            };
             self.env.leave_scope();
             ExprProp::new(res, true)
         }

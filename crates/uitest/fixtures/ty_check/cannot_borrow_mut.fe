@@ -1,5 +1,4 @@
 fn cannot_borrow_mut() {
     let x: u256 = 0
     let p: mut u256 = mut x
-    ()
 }

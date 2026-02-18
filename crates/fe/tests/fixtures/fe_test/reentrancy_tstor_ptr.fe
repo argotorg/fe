@@ -39,7 +39,6 @@ pub contract A uses (ctx: Ctx, call: mut Call) {
                 value: 0,
                 message: BMsg::Protected {},
             )
-            ()
         }
     }
 }
