@@ -1,7 +1,4 @@
 push-remote = "upstream"
-disable-publish = true
-no-dev-version = true
+publish = false
 consolidate-commits = true
-# We can't get the version into the commit message atm
-# https://github.com/sunng87/cargo-release/issues/222
-pre-release-commit-message="Cutting new release"
+pre-release-commit-message = "Cutting new release"
