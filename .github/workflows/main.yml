@@ -21,10 +21,6 @@ jobs:
       RUSTFLAGS: "-D warnings"
     steps:
       - uses: actions/checkout@v5
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libboost-all-dev
       - name: Install rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -111,8 +107,16 @@ jobs:
         include:
           - os: ubuntu-latest
             BIN_FILE: fe_amd64
+            EXT: ""
           - os: macOS-latest
-            BIN_FILE: fe_mac
+            BIN_FILE: fe_mac_arm64
+            EXT: ""
+          - os: macOS-13
+            BIN_FILE: fe_mac_amd64
+            EXT: ""
+          - os: windows-latest
+            BIN_FILE: fe_windows_amd64.exe
+            EXT: ".exe"
 
     steps:
       - uses: actions/checkout@v5
@@ -121,11 +125,15 @@ jobs:
         with:
           toolchain: stable
       - name: Build
-        run: cargo build --all-features --release && strip target/release/fe && mv target/release/fe target/release/${{ matrix.BIN_FILE }}
+        run: cargo build --all-features --release
+      - name: Strip binary (Unix)
+        if: runner.os != 'Windows'
+        run: strip target/release/fe
+      - name: Rename binary
+        shell: bash
+        run: mv target/release/fe${{ matrix.EXT }} target/release/${{ matrix.BIN_FILE }}
       - name: Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: target/release/${{ matrix.BIN_FILE }}
           prerelease: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
