@@ -2071,7 +2071,7 @@ dependencies = [
 
 [[package]]
 name = "fe"
-version = "0.26.0"
+version = "26.0.0-alpha.5"
 dependencies = [
  "camino",
  "clap",
@@ -2106,7 +2106,7 @@ dependencies = [
 
 [[package]]
 name = "fe-bench"
-version = "0.1.0"
+version = "26.0.0-alpha.5"
 dependencies = [
  "camino",
  "criterion",
@@ -2120,7 +2120,7 @@ dependencies = [
 
 [[package]]
 name = "fe-codegen"
-version = "0.1.0"
+version = "26.0.0-alpha.5"
 dependencies = [
  "dir-test",
  "fe-common",
@@ -2142,7 +2142,7 @@ dependencies = [
 
 [[package]]
 name = "fe-common"
-version = "0.26.0"
+version = "26.0.0-alpha.5"
 dependencies = [
  "camino",
  "fe-parser",
@@ -2162,7 +2162,7 @@ dependencies = [
 
 [[package]]
 name = "fe-contract-harness"
-version = "0.1.0"
+version = "26.0.0-alpha.5"
 dependencies = [
  "ethers-core",
  "fe-codegen",
@@ -2180,7 +2180,7 @@ dependencies = [
 
 [[package]]
 name = "fe-driver"
-version = "0.26.0"
+version = "26.0.0-alpha.5"
 dependencies = [
  "camino",
  "codespan-reporting",
@@ -2199,7 +2199,7 @@ dependencies = [
 
 [[package]]
 name = "fe-fmt"
-version = "0.1.0"
+version = "26.0.0-alpha.5"
 dependencies = [
  "dir-test",
  "fe-parser",
@@ -2209,7 +2209,7 @@ dependencies = [
 
 [[package]]
 name = "fe-hir"
-version = "0.26.0"
+version = "26.0.0-alpha.5"
 dependencies = [
  "ascii_tree",
  "bitflags 2.11.0",
@@ -2242,7 +2242,7 @@ dependencies = [
 
 [[package]]
 name = "fe-language-server"
-version = "0.26.0"
+version = "26.0.0-alpha.5"
 dependencies = [
  "act-locally",
  "anyhow",
@@ -2280,7 +2280,7 @@ dependencies = [
 
 [[package]]
 name = "fe-mir"
-version = "0.1.0"
+version = "26.0.0-alpha.5"
 dependencies = [
  "cranelift-entity 0.115.1",
  "dir-test",
@@ -2296,7 +2296,7 @@ dependencies = [
 
 [[package]]
 name = "fe-parser"
-version = "0.26.0"
+version = "26.0.0-alpha.5"
 dependencies = [
  "derive_more 1.0.0",
  "dir-test",
@@ -2315,7 +2315,7 @@ dependencies = [
 
 [[package]]
 name = "fe-resolver"
-version = "0.26.0"
+version = "26.0.0-alpha.5"
 dependencies = [
  "camino",
  "dir-test",
@@ -2335,7 +2335,7 @@ dependencies = [
 
 [[package]]
 name = "fe-solc-runner"
-version = "0.1.0"
+version = "26.0.0-alpha.5"
 dependencies = [
  "fe-contract-harness",
  "indexmap 2.13.0",
@@ -2344,7 +2344,7 @@ dependencies = [
 
 [[package]]
 name = "fe-test-utils"
-version = "0.1.0"
+version = "26.0.0-alpha.5"
 dependencies = [
  "insta",
  "tracing",
@@ -2355,7 +2355,7 @@ dependencies = [
 
 [[package]]
 name = "fe-uitest"
-version = "0.26.0"
+version = "26.0.0-alpha.5"
 dependencies = [
  "dir-test",
  "fe-common",
