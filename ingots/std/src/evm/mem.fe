@@ -1,24 +1,11 @@
-use ingot::evm::ops::{mload, mstore, msize}
-
-const FREE_MEMORY_PTR: u256 = 0x40
-// Keep the heap well above any backend-reserved memory (e.g. Sonatina's static spill area).
-const MIN_FREE_MEMORY: u256 = 0x2000
-
-/// Allocates `size` bytes from the linear memory buffer and returns the start pointer.
+/// Dynamic memory allocation in EVM linear memory.
 ///
-/// Uses the standard "free memory pointer" slot at `0x40`.
-///
-/// Note: the sonatina backend intercepts calls to this function and lowers them
-/// directly to `evm_malloc`, so this body only executes under the yul backend.
-pub fn alloc(size: u256) -> u256 {
-    let mut ptr = mload(FREE_MEMORY_PTR)
-    if ptr == 0 {
-        ptr = msize()
-    }
-    if ptr < MIN_FREE_MEMORY {
-        ptr = MIN_FREE_MEMORY
-    }
-
-    mstore(FREE_MEMORY_PTR, ptr + size)
-    ptr
+/// This is a compiler intrinsic: backend-specific lowering is handled in codegen.
+extern {
+    /// Allocates `size` bytes and returns the start pointer (byte offset).
+    ///
+    /// - Yul backend: uses the free-memory pointer at `0x40` and clamps it to `>= 0x2000`
+    ///   (to stay above backend-reserved memory regions).
+    /// - Sonatina backend: lowered to `evm_malloc`.
+    pub fn alloc(size: u256) -> u256
 }

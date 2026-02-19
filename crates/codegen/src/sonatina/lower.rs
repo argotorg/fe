@@ -918,6 +918,14 @@ fn lower_intrinsic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             };
             Ok(Some(arg))
         }
+        IntrinsicOp::Alloc => {
+            let [size] = lowered_args.as_slice() else {
+                return Err(LowerError::Internal(
+                    "alloc requires 1 argument (size)".to_string(),
+                ));
+            };
+            Ok(Some(emit_evm_malloc_word_addr(ctx.fb, *size, ctx.is)))
+        }
         IntrinsicOp::Mload => {
             let Some(&addr) = lowered_args.first() else {
                 return Err(LowerError::Internal(

@@ -84,21 +84,6 @@ object "Erc20Contract" {
         ret := v0
         leave
       }
-      function $alloc($size) -> ret {
-        let v0 := mload(64)
-        let v1 := eq(v0, 0)
-        if v1 {
-          let v2 := msize()
-          v0 := v2
-        }
-        let v3 := lt(v0, 8192)
-        if v3 {
-          v0 := 8192
-        }
-        mstore(64, add(v0, $size))
-        ret := v0
-        leave
-      }
       function $allowance__StorPtr_Erc20___2745299687a147d4($owner, $spender, $erc20) -> ret {
         pop($erc20)
         let v0 := mload(0x40)
@@ -327,7 +312,14 @@ object "Erc20Contract" {
         leave
       }
       function $storagemap_storage_slot_with_salt__Address_h257056268eac7027__5ab99f7153cdba29($key, $salt) -> ret {
-        let v0 := $alloc(0)
+        let v0 := mload(64)
+        if iszero(v0) {
+          v0 := msize()
+        }
+        if lt(v0, 8192) {
+          v0 := 8192
+        }
+        mstore(64, add(v0, 0))
         let v1 := $address_h257056268eac7027_storagekey_hf9e3d38a13ff4409_write_key(v0, $key)
         mstore(add(v0, v1), $salt)
         let v2 := v0
@@ -337,7 +329,14 @@ object "Erc20Contract" {
         leave
       }
       function $storagemap_storage_slot_with_salt___Address__Address___c32d499da259c78e($key, $salt) -> ret {
-        let v0 := $alloc(0)
+        let v0 := mload(64)
+        if iszero(v0) {
+          v0 := msize()
+        }
+        if lt(v0, 8192) {
+          v0 := 8192
+        }
+        mstore(64, add(v0, 0))
         let v1 := $_a__b__h47f120de72304a2d_storagekey_hf9e3d38a13ff4409_write_key__Address_h257056268eac7027_Address_h257056268eac7027__af929e62fa4c68f2(v0, $key)
         mstore(add(v0, v1), $salt)
         let v2 := v0

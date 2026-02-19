@@ -1,6 +1,5 @@
 ---
 source: crates/mir/tests/lowering_snapshots.rs
-assertion_line: 26
 expression: mir_output
 ---
 fn __EchoContract_init_contract(v0: u256, v1: u256, v2: u256) -> ():
@@ -87,23 +86,6 @@ fn init_field__Evm_hef0af3106e109414_Foo_h6dbce71a6ea992b8__c09e6c6fc5a7b23d(v0:
 fn evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort(v0: Evm) -> !:
   bb0:
     terminate revert(0, 0)
-
-fn alloc(v0: u256) -> u256:
-  bb0:
-    v1: u256 = mload(64)
-    br (v1 == 0) bb1 bb2
-  bb1:
-    v2: u256 = msize()
-    v1 = v2
-    jmp bb2
-  bb2:
-    br (v1 < 8192) bb3 bb4
-  bb3:
-    v1 = 8192
-    jmp bb4
-  bb4:
-    eval mstore(64, (v1 + v0))
-    ret v1
 
 fn sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v0: MemoryBytes) -> SolDecoder<MemoryBytes>:
   bb0:

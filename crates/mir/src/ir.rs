@@ -721,6 +721,8 @@ pub enum IntrinsicOp {
     Revert,
     /// `caller()`
     Caller,
+    /// `alloc(size)` - allocate `size` bytes in EVM linear memory and return the start pointer.
+    Alloc,
 }
 
 impl IntrinsicOp {
@@ -739,6 +741,7 @@ impl IntrinsicOp {
                 | IntrinsicOp::CodeRegionLen
                 | IntrinsicOp::Keccak
                 | IntrinsicOp::Caller
+                | IntrinsicOp::Alloc
         )
     }
 }

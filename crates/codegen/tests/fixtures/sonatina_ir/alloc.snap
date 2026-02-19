@@ -19,35 +19,6 @@ func public %bump_const() -> i256 {
         return v3;
 }
 
-func public %alloc(v0.i256) -> i256 {
-    block0:
-        v3.i256 = mload 64.i256 i256;
-        v4.i1 = eq v3 0.i256;
-        v5.i256 = zext v4 i256;
-        v6.i1 = ne v5 0.i256;
-        br v6 block1 block2;
-
-    block1:
-        v7.i256 = evm_msize;
-        jump block2;
-
-    block2:
-        v8.i256 = phi (v3 block0) (v7 block1);
-        v10.i1 = lt v8 8192.i256;
-        v11.i256 = zext v10 i256;
-        v12.i1 = ne v11 0.i256;
-        br v12 block3 block4;
-
-    block3:
-        jump block4;
-
-    block4:
-        v13.i256 = phi (v8 block2) (8192.i256 block3);
-        v15.i256 = add v13 v0;
-        mstore 64.i256 v15 i256;
-        return v13;
-}
-
 func public %__fe_sonatina_entry() {
     block0:
         v1.i256 = call %bump 0.i256;

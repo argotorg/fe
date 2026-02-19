@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/event_logging_via_log.fe
 ---
@@ -164,35 +163,6 @@ func private %evm_hef0af3106e109414_log_h22d1a10952034bae_log3(v0.i256, v1.i256,
     block0:
         evm_log3 v1 v2 v3 v4 v5;
         return;
-}
-
-func public %alloc(v0.i256) -> i256 {
-    block0:
-        v3.i256 = mload 64.i256 i256;
-        v4.i1 = eq v3 0.i256;
-        v5.i256 = zext v4 i256;
-        v6.i1 = ne v5 0.i256;
-        br v6 block1 block2;
-
-    block1:
-        v7.i256 = evm_msize;
-        jump block2;
-
-    block2:
-        v8.i256 = phi (v3 block0) (v7 block1);
-        v10.i1 = lt v8 8192.i256;
-        v11.i256 = zext v10 i256;
-        v12.i1 = ne v11 0.i256;
-        br v12 block3 block4;
-
-    block3:
-        jump block4;
-
-    block4:
-        v13.i256 = phi (v8 block2) (8192.i256 block3);
-        v15.i256 = add v13 v0;
-        mstore 64.i256 v15 i256;
-        return v13;
 }
 
 func private %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word(v0.i256, v1.i256) {

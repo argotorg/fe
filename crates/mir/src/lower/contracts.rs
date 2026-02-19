@@ -22,7 +22,7 @@ use hir::{
         diagnostics::SpannedHirAnalysisDb,
         ty::{
             ty_check::{LocalBinding, ParamSite, PatBindingMode},
-            ty_def::{InvalidCause, TyBase, TyData},
+            ty_def::InvalidCause,
         },
     },
     hir_def::{
@@ -147,7 +147,6 @@ struct TargetHostContext<'db> {
     contract_host_inst: TraitInstId<'db>,
     init_input_ty: TyId<'db>,
     input_ty: TyId<'db>,
-    alloc_fn: Func<'db>,
     effect_handle_trait: Trait<'db>,
     effect_handle_from_raw_fn: Func<'db>,
     field_fn: Func<'db>,
@@ -171,18 +170,15 @@ struct AbiContext<'db> {
 }
 
 const EVM_TARGET_TY_PATH: &[&str] = &["std", "evm", "EvmTarget"];
-const EVM_ALLOC_FUNC_PATH: &[&str] = &["std", "evm", "mem", "alloc"];
 
 #[derive(Clone, Copy)]
 struct TargetSpec {
     target_ty_path: &'static [&'static str],
-    alloc_func_path: &'static [&'static str],
 }
 
 impl TargetSpec {
     const EVM: Self = Self {
         target_ty_path: EVM_TARGET_TY_PATH,
-        alloc_func_path: EVM_ALLOC_FUNC_PATH,
     };
 }
 
@@ -226,8 +222,6 @@ impl<'db> TargetHostContext<'db> {
             .expect("missing required core trait `core::effect_ref::EffectHandle`");
         let effect_handle_from_raw = require_trait_method(db, effect_handle_trait, "from_raw")?;
 
-        let alloc_func = resolve_value_func_path(db, top_mod, scope, spec.alloc_func_path)?;
-
         let host_field = require_trait_method(db, contract_host_trait, "field")?;
         let host_init_field = require_trait_method(db, contract_host_trait, "init_field")?;
         let host_runtime_selector =
@@ -243,7 +237,6 @@ impl<'db> TargetHostContext<'db> {
             contract_host_inst,
             init_input_ty,
             input_ty,
-            alloc_fn: alloc_func,
             effect_handle_trait,
             effect_handle_from_raw_fn: effect_handle_from_raw,
             field_fn: host_field,
@@ -443,15 +436,6 @@ impl<'db, 'a> ContractMirCx<'db, 'a> {
             generic_args,
             Some(self.host.contract_host_inst),
             vec![root_value],
-        )
-    }
-
-    fn alloc(&self, len: ValueId) -> CallOrigin<'db> {
-        self.call_hir(
-            CallableDef::Func(self.host.alloc_fn),
-            Vec::new(),
-            None,
-            vec![len],
         )
     }
 
@@ -666,44 +650,6 @@ fn resolve_ty_path<'db>(
             func_name: "<contract lowering>".into(),
             message: format!(
                 "failed to resolve type path `{}`: {err:?}",
-                path.pretty_print(db)
-            ),
-        }),
-    }
-}
-
-fn resolve_value_func_path<'db>(
-    db: &'db dyn HirAnalysisDb,
-    top_mod: TopLevelMod<'db>,
-    scope: ScopeId<'db>,
-    segments: &[&str],
-) -> MirLowerResult<Func<'db>> {
-    let path = path_from_segments(db, top_mod, segments);
-    let assumptions = PredicateListId::empty_list(db);
-    match resolve_path(db, path, scope, assumptions, true) {
-        Ok(PathRes::Func(ty)) => match ty.base_ty(db).data(db) {
-            TyData::TyBase(TyBase::Func(CallableDef::Func(func))) => Ok(*func),
-            _ => Err(MirLowerError::Unsupported {
-                func_name: "<contract lowering>".into(),
-                message: format!(
-                    "expected function at path `{}` but got `{}`",
-                    path.pretty_print(db),
-                    ty.pretty_print(db)
-                ),
-            }),
-        },
-        Ok(other) => Err(MirLowerError::Unsupported {
-            func_name: "<contract lowering>".into(),
-            message: format!(
-                "expected function at path `{}` but resolved to `{}`",
-                path.pretty_print(db),
-                other.kind_name()
-            ),
-        }),
-        Err(err) => Err(MirLowerError::Unsupported {
-            func_name: "<contract lowering>".into(),
-            message: format!(
-                "failed to resolve function path `{}`: {err:?}",
                 path.pretty_print(db)
             ),
         }),
@@ -1150,7 +1096,10 @@ fn lower_init_entrypoint<'db>(
                 TyId::u256(db),
                 false,
                 AddressSpaceKind::Memory,
-                Rvalue::Call(cx.alloc(args_len_value)),
+                Rvalue::Intrinsic {
+                    op: IntrinsicOp::Alloc,
+                    args: vec![args_len_value],
+                },
             )
             .value;
         builder.assign(
