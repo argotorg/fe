@@ -189,16 +189,13 @@ bool tree_sitter_fe_external_scanner_scan(void *payload, TSLexer *lexer,
         int paren_depth = 0;
         int bracket_depth = 0;
         int brace_depth = 0;
-        int chars_scanned = 0;
-        const int MAX_LOOKAHEAD = 256;
         bool is_generic = false;
         // Track last non-whitespace char at top level (all depths 0) to
         // distinguish `Foo<T, {expr}>` ('{' after ',') from `if x < y {` ('{' after identifier).
         int32_t last_top_char = '<';  // Starts as '<' since we just consumed it.
 
-        while (!lexer->eof(lexer) && chars_scanned < MAX_LOOKAHEAD) {
+        while (!lexer->eof(lexer)) {
           int32_t c = lexer->lookahead;
-          chars_scanned++;
 
           switch (c) {
             case '(':
