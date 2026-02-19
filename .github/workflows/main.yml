@@ -111,18 +111,22 @@ jobs:
             target: x86_64-unknown-linux-gnu
             BIN_FILE: fe_amd64
             EXT: ""
+            EXTRA_FEATURES: ""
           - os: macOS-latest
             target: aarch64-apple-darwin
             BIN_FILE: fe_mac_arm64
             EXT: ""
+            EXTRA_FEATURES: ""
           - os: macOS-latest
             target: x86_64-apple-darwin
             BIN_FILE: fe_mac_amd64
             EXT: ""
+            EXTRA_FEATURES: "--features vendored-openssl"
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             BIN_FILE: fe_windows_amd64.exe
             EXT: ".exe"
+            EXTRA_FEATURES: ""
 
     steps:
       - uses: actions/checkout@v5
@@ -132,7 +136,7 @@ jobs:
           toolchain: stable
           targets: ${{ matrix.target }}
       - name: Build
-        run: cargo build --all-features --release --target ${{ matrix.target }}
+        run: cargo build --all-features --release --target ${{ matrix.target }} ${{ matrix.EXTRA_FEATURES }}
       - name: Strip binary (Unix)
         if: runner.os != 'Windows'
         run: strip target/${{ matrix.target }}/release/fe
