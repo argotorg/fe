@@ -1,3 +1,5 @@
+#![allow(clippy::print_stdout, clippy::print_stderr)]
+
 fn main() {
     let src_dir = std::path::Path::new("src");
     let grammar_path = std::path::Path::new("grammar.js");

@@ -5,11 +5,6 @@ use crate::{
     lower::{parse_file_impl, scope_graph_impl},
 };
 
-fn diag_timing_enabled() -> bool {
-    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var("FE_DIAG_TIMING").is_ok())
-}
-
 /// All analysis passes that run analysis on the HIR top level module
 /// granularity should implement this trait.
 pub trait ModuleAnalysisPass {
@@ -39,16 +34,13 @@ impl AnalysisPassManager {
         db: &'db dyn HirAnalysisDb,
         top_mod: TopLevelMod<'db>,
     ) -> Vec<Box<dyn DiagnosticVoucher + 'db>> {
-        let timing = diag_timing_enabled();
         let mut diags = vec![];
         for (name, pass) in self.module_passes.iter_mut() {
             let t0 = std::time::Instant::now();
             diags.extend(pass.run_on_module(db, top_mod));
-            if timing {
-                let elapsed = t0.elapsed();
-                if elapsed.as_micros() > 100 {
-                    eprintln!("[fe:timing]   pass {name}: {elapsed:?}");
-                }
+            let elapsed = t0.elapsed();
+            if elapsed.as_micros() > 100 {
+                tracing::debug!("[fe:timing]   pass {name}: {elapsed:?}");
             }
         }
         diags
@@ -59,17 +51,14 @@ impl AnalysisPassManager {
         db: &'db dyn HirAnalysisDb,
         tree: &'db ModuleTree<'db>,
     ) -> Vec<Box<dyn DiagnosticVoucher + 'db>> {
-        let timing = diag_timing_enabled();
         let mut diags = vec![];
         for module in tree.all_modules() {
             for (name, pass) in self.module_passes.iter_mut() {
                 let t0 = std::time::Instant::now();
                 diags.extend(pass.run_on_module(db, module));
-                if timing {
-                    let elapsed = t0.elapsed();
-                    if elapsed.as_micros() > 100 {
-                        eprintln!("[fe:timing]   pass {name}: {elapsed:?}");
-                    }
+                let elapsed = t0.elapsed();
+                if elapsed.as_micros() > 100 {
+                    tracing::debug!("[fe:timing]   pass {name}: {elapsed:?}");
                 }
             }
         }

@@ -1,4 +1,4 @@
-#![allow(clippy::print_stderr)]
+#![allow(clippy::print_stdout, clippy::print_stderr)]
 
 use std::path::{Path, PathBuf};
 use tree_sitter::Parser;

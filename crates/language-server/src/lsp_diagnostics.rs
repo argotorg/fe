@@ -33,14 +33,8 @@ pub trait LspDiagnostics {
     fn file_line_starts(&self, file: File) -> Vec<usize>;
 }
 
-fn diag_timing_enabled() -> bool {
-    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var("FE_DIAG_TIMING").is_ok())
-}
-
 impl LspDiagnostics for DriverDataBase {
     fn diagnostics_for_ingot(&self, ingot: Ingot) -> FxHashMap<Url, Vec<Diagnostic>> {
-        let timing = diag_timing_enabled();
         let t_total = std::time::Instant::now();
         let mut result = FxHashMap::<Url, Vec<Diagnostic>>::default();
         let mut pass_manager = initialize_analysis_pass();
@@ -68,9 +62,7 @@ impl LspDiagnostics for DriverDataBase {
             let t_file = std::time::Instant::now();
             let top_mod = map_file_to_mod(self, file);
             let diagnostics = pass_manager.run_on_module(self, top_mod);
-            if timing {
-                eprintln!("[fe:timing]  file {url}: {:?}", t_file.elapsed());
-            }
+            tracing::debug!("[fe:timing]  file {url}: {:?}", t_file.elapsed());
             let mut finalized_diags: Vec<CompleteDiagnostic> = diagnostics
                 .iter()
                 .map(|d| d.to_complete(self).clone())
@@ -91,9 +83,7 @@ impl LspDiagnostics for DriverDataBase {
         let t_mir = std::time::Instant::now();
         let mut mir_diags =
             self.mir_diagnostics_for_ingot(ingot, MirDiagnosticsMode::TemplatesOnly);
-        if timing {
-            eprintln!("[fe:timing]  MIR diagnostics: {:?}", t_mir.elapsed());
-        }
+        tracing::debug!("[fe:timing]  MIR diagnostics: {:?}", t_mir.elapsed());
         mir_diags.sort_by(|lhs, rhs| match lhs.error_code.cmp(&rhs.error_code) {
             std::cmp::Ordering::Equal => lhs.primary_span().cmp(&rhs.primary_span()),
             ord => ord,
@@ -106,12 +96,10 @@ impl LspDiagnostics for DriverDataBase {
             }
         }
 
-        if timing {
-            eprintln!(
-                "[fe:timing] diagnostics_for_ingot ({file_count} files): {:?}",
-                t_total.elapsed()
-            );
-        }
+        tracing::debug!(
+            "[fe:timing] diagnostics_for_ingot ({file_count} files): {:?}",
+            t_total.elapsed()
+        );
         result
     }
 
