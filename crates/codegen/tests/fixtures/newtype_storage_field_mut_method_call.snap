@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 33
 expression: output
 input_file: tests/fixtures/newtype_storage_field_mut_method_call.fe
 ---
@@ -19,10 +20,7 @@ object "NewtypeStorageFieldMutMethodCall" {
       let v7 := sub(v4, v5)
       let v8 := mload(64)
       if iszero(v8) {
-        v8 := msize()
-      }
-      if lt(v8, 8192) {
-        v8 := 8192
+        v8 := 0x80
       }
       mstore(64, add(v8, v7))
       codecopy(v8, v5, v7)
@@ -279,10 +277,7 @@ object "NewtypeStorageFieldMutMethodCall" {
         if v1 {
           let v2 := mload(64)
           if iszero(v2) {
-            v2 := msize()
-          }
-          if lt(v2, 8192) {
-            v2 := 8192
+            v2 := 0x80
           }
           mstore(64, add(v2, $bytes))
           mstore($self, v2)

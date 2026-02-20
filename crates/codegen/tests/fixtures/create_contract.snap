@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 33
 expression: output
 input_file: tests/fixtures/create_contract.fe
 ---
@@ -108,10 +109,7 @@ object "Factory" {
         let v4 := v3
         let v5 := mload(64)
         if iszero(v5) {
-          v5 := msize()
-        }
-        if lt(v5, 8192) {
-          v5 := 8192
+          v5 := 0x80
         }
         mstore(64, add(v5, v4))
         codecopy(v5, v1, v0)
@@ -133,10 +131,7 @@ object "Factory" {
           let v12 := v11
           let v13 := mload(64)
           if iszero(v13) {
-            v13 := msize()
-          }
-          if lt(v13, 8192) {
-            v13 := 8192
+            v13 := 0x80
           }
           mstore(64, add(v13, v12))
           returndatacopy(v13, 0, v11)
@@ -153,10 +148,7 @@ object "Factory" {
         let v4 := v3
         let v5 := mload(64)
         if iszero(v5) {
-          v5 := msize()
-        }
-        if lt(v5, 8192) {
-          v5 := 8192
+          v5 := 0x80
         }
         mstore(64, add(v5, v4))
         codecopy(v5, v1, v0)
@@ -178,10 +170,7 @@ object "Factory" {
           let v12 := v11
           let v13 := mload(64)
           if iszero(v13) {
-            v13 := msize()
-          }
-          if lt(v13, 8192) {
-            v13 := 8192
+            v13 := 0x80
           }
           mstore(64, add(v13, v12))
           returndatacopy(v13, 0, v11)
@@ -361,10 +350,7 @@ object "Factory" {
         if v1 {
           let v2 := mload(64)
           if iszero(v2) {
-            v2 := msize()
-          }
-          if lt(v2, 8192) {
-            v2 := 8192
+            v2 := 0x80
           }
           mstore(64, add(v2, $bytes))
           mstore($self, v2)
@@ -428,10 +414,7 @@ object "Factory" {
           let v6 := sub(v3, v4)
           let v7 := mload(64)
           if iszero(v7) {
-            v7 := msize()
-          }
-          if lt(v7, 8192) {
-            v7 := 8192
+            v7 := 0x80
           }
           mstore(64, add(v7, v6))
           codecopy(v7, v4, v6)

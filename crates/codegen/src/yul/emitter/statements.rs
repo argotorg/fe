@@ -550,11 +550,7 @@ impl<'db> FunctionEmitter<'db> {
         }
         docs.push(YulDoc::block(
             format!("if iszero({ptr}) "),
-            vec![YulDoc::line(format!("{ptr} := msize()"))],
-        ));
-        docs.push(YulDoc::block(
-            format!("if lt({ptr}, 8192) "),
-            vec![YulDoc::line(format!("{ptr} := 8192"))],
+            vec![YulDoc::line(format!("{ptr} := 0x80"))],
         ));
         docs.push(YulDoc::line(format!("mstore(64, add({ptr}, {size}))")));
         Ok(())
