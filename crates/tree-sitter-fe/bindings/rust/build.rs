@@ -25,10 +25,10 @@ fn main() {
             match status {
                 Ok(s) if s.success() => {}
                 Ok(s) => {
-                    eprintln!("cargo:warning=tree-sitter generate failed with {}", s);
+                    println!("cargo:warning=tree-sitter generate failed with {}", s);
                 }
                 Err(e) => {
-                    eprintln!(
+                    println!(
                         "cargo:warning=tree-sitter generate skipped (not installed: {})",
                         e
                     );
