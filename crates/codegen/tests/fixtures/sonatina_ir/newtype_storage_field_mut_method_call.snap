@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/newtype_storage_field_mut_method_call.fe
 ---
@@ -136,35 +135,6 @@ func private %init_field__Evm_hef0af3106e109414_Wrap_haf9e70905fcbd513__fd5231d5
 func private %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort(v0.i256) {
     block0:
         evm_revert 0.i256 0.i256;
-}
-
-func public %alloc(v0.i256) -> i256 {
-    block0:
-        v3.i256 = mload 64.i256 i256;
-        v4.i1 = eq v3 0.i256;
-        v5.i256 = zext v4 i256;
-        v6.i1 = ne v5 0.i256;
-        br v6 block1 block2;
-
-    block1:
-        v7.i256 = evm_msize;
-        jump block2;
-
-    block2:
-        v8.i256 = phi (v3 block0) (v7 block1);
-        v10.i1 = lt v8 8192.i256;
-        v11.i256 = zext v10 i256;
-        v12.i1 = ne v11 0.i256;
-        br v12 block3 block4;
-
-    block3:
-        jump block4;
-
-    block4:
-        v13.i256 = phi (v8 block2) (8192.i256 block3);
-        v15.i256 = add v13 v0;
-        mstore 64.i256 v15 i256;
-        return v13;
 }
 
 func private %sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v0.i256) -> i256 {

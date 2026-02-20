@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 33
 expression: output
 input_file: tests/fixtures/erc20_low_level.fe
 ---
@@ -81,21 +82,6 @@ object "Erc20Contract" {
       }
       function $address_h257056268eac7027_storagekey_hf9e3d38a13ff4409_write_key($ptr, $self) -> ret {
         let v0 := $u256_h3271ca15373d4483_storagekey_hf9e3d38a13ff4409_write_key($ptr, $self)
-        ret := v0
-        leave
-      }
-      function $alloc($size) -> ret {
-        let v0 := mload(64)
-        let v1 := eq(v0, 0)
-        if v1 {
-          let v2 := msize()
-          v0 := v2
-        }
-        let v3 := lt(v0, 8192)
-        if v3 {
-          v0 := 8192
-        }
-        mstore(64, add(v0, $size))
         ret := v0
         leave
       }
@@ -327,7 +313,11 @@ object "Erc20Contract" {
         leave
       }
       function $storagemap_storage_slot_with_salt__Address_h257056268eac7027__5ab99f7153cdba29($key, $salt) -> ret {
-        let v0 := $alloc(0)
+        let v0 := mload(64)
+        if iszero(v0) {
+          v0 := 0x80
+        }
+        mstore(64, add(v0, 0))
         let v1 := $address_h257056268eac7027_storagekey_hf9e3d38a13ff4409_write_key(v0, $key)
         mstore(add(v0, v1), $salt)
         let v2 := v0
@@ -337,7 +327,11 @@ object "Erc20Contract" {
         leave
       }
       function $storagemap_storage_slot_with_salt___Address__Address___c32d499da259c78e($key, $salt) -> ret {
-        let v0 := $alloc(0)
+        let v0 := mload(64)
+        if iszero(v0) {
+          v0 := 0x80
+        }
+        mstore(64, add(v0, 0))
         let v1 := $_a__b__h47f120de72304a2d_storagekey_hf9e3d38a13ff4409_write_key__Address_h257056268eac7027_Address_h257056268eac7027__af929e62fa4c68f2(v0, $key)
         mstore(add(v0, v1), $salt)
         let v2 := v0

@@ -404,6 +404,7 @@ fn format_intrinsic(op: IntrinsicOp) -> &'static str {
         IntrinsicOp::AddrOf => "addr_of",
         IntrinsicOp::Mstore => "mstore",
         IntrinsicOp::Mstore8 => "mstore8",
+        IntrinsicOp::Alloc => "alloc",
         IntrinsicOp::Sload => "sload",
         IntrinsicOp::Sstore => "sstore",
         IntrinsicOp::ReturnData => "return_data",

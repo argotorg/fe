@@ -488,6 +488,10 @@ impl<'db> FunctionEmitter<'db> {
         args: &[ValueId],
         state: &mut BlockState,
     ) -> Result<(), YulError> {
+        if matches!(op, IntrinsicOp::Alloc) {
+            return self.emit_evm_alloc_intrinsic(docs, dest, args, state);
+        }
+
         let intr = IntrinsicValue {
             op,
             args: args.to_vec(),
@@ -515,6 +519,43 @@ impl<'db> FunctionEmitter<'db> {
         Ok(())
     }
 
+    fn emit_evm_alloc_intrinsic(
+        &mut self,
+        docs: &mut Vec<YulDoc>,
+        dest: Option<LocalId>,
+        args: &[ValueId],
+        state: &mut BlockState,
+    ) -> Result<(), YulError> {
+        debug_assert_eq!(args.len(), 1, "alloc intrinsic expects 1 argument");
+        let (ptr, declared) = match dest {
+            Some(dest) => self.resolve_local_for_write(dest, state)?,
+            None => (state.alloc_local(), true),
+        };
+
+        let size = self.lower_value(args[0], state)?;
+        // If we're assigning back into an existing local, avoid clobbering the size expression
+        // (e.g. `x = alloc(x)`).
+        let size = if !declared {
+            let size_tmp = state.alloc_local();
+            docs.push(YulDoc::line(format!("let {size_tmp} := {size}")));
+            size_tmp
+        } else {
+            size
+        };
+
+        if declared {
+            docs.push(YulDoc::line(format!("let {ptr} := mload(64)")));
+        } else {
+            docs.push(YulDoc::line(format!("{ptr} := mload(64)")));
+        }
+        docs.push(YulDoc::block(
+            format!("if iszero({ptr}) "),
+            vec![YulDoc::line(format!("{ptr} := 0x80"))],
+        ));
+        docs.push(YulDoc::line(format!("mstore(64, add({ptr}, {size}))")));
+        Ok(())
+    }
+
     /// Converts intrinsic value-producing operations (`mload`/`sload`) into Yul.
     ///
     /// * `intr` - Intrinsic call metadata containing opcode and arguments.
@@ -529,6 +570,11 @@ impl<'db> FunctionEmitter<'db> {
         if !intr.op.returns_value() {
             return Err(YulError::Unsupported(
                 "intrinsic does not yield a value".into(),
+            ));
+        }
+        if matches!(intr.op, IntrinsicOp::Alloc) {
+            return Err(YulError::Unsupported(
+                "alloc intrinsic must be emitted as a statement".into(),
             ));
         }
         if matches!(intr.op, IntrinsicOp::AddrOf) {
@@ -655,6 +701,7 @@ impl<'db> FunctionEmitter<'db> {
     /// Returns the canonical Yul mnemonic corresponding to the opcode.
     fn intrinsic_name(&self, op: IntrinsicOp) -> &'static str {
         match op {
+            IntrinsicOp::Alloc => "alloc",
             IntrinsicOp::Mload => "mload",
             IntrinsicOp::Calldataload => "calldataload",
             IntrinsicOp::Calldatacopy => "calldatacopy",

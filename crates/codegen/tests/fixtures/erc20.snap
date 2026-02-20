@@ -18,7 +18,11 @@ object "CoolCoin" {
         $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort(0)
       }
       let v7 := sub(v4, v5)
-      let v8 := $alloc(v7)
+      let v8 := mload(64)
+      if iszero(v8) {
+        v8 := 0x80
+      }
+      mstore(64, add(v8, v7))
       codecopy(v8, v5, v7)
       let v9 := mload(0x40)
       if iszero(v9) {
@@ -82,21 +86,6 @@ object "CoolCoin" {
     }
     function $address_h257056268eac7027_zero() -> ret {
       ret := 0
-      leave
-    }
-    function $alloc($size) -> ret {
-      let v0 := mload(64)
-      let v1 := eq(v0, 0)
-      if v1 {
-        let v2 := msize()
-        v0 := v2
-      }
-      let v3 := lt(v0, 8192)
-      if v3 {
-        v0 := 8192
-      }
-      mstore(64, add(v0, $size))
-      ret := v0
       leave
     }
     function $assert($b) {
@@ -256,7 +245,11 @@ object "CoolCoin" {
       let v0 := mload($self)
       let v1 := eq(v0, 0)
       if v1 {
-        let v2 := $alloc($bytes)
+        let v2 := mload(64)
+        if iszero(v2) {
+          v2 := 0x80
+        }
+        mstore(64, add(v2, $bytes))
         mstore($self, v2)
         mstore(add($self, 32), v2)
         mstore(add($self, 64), add(v2, $bytes))
@@ -327,7 +320,11 @@ object "CoolCoin" {
       leave
     }
     function $storagemap_storage_slot_with_salt__Address_h257056268eac7027__5ab99f7153cdba29($key, $salt) -> ret {
-      let v0 := $alloc(0)
+      let v0 := mload(64)
+      if iszero(v0) {
+        v0 := 0x80
+      }
+      mstore(64, add(v0, 0))
       let v1 := $address_h257056268eac7027_storagekey_hf9e3d38a13ff4409_write_key(v0, $key)
       mstore(add(v0, v1), $salt)
       let v2 := v0
@@ -337,7 +334,11 @@ object "CoolCoin" {
       leave
     }
     function $storagemap_storage_slot_with_salt___u256__Address___c7c570db20cdd393($key, $salt) -> ret {
-      let v0 := $alloc(0)
+      let v0 := mload(64)
+      if iszero(v0) {
+        v0 := 0x80
+      }
+      mstore(64, add(v0, 0))
       let v1 := $_a__b__h47f120de72304a2d_storagekey_hf9e3d38a13ff4409_write_key__u256_Address_h257056268eac7027__802280feae02d9df(v0, $key)
       mstore(add(v0, v1), $salt)
       let v2 := v0
@@ -666,21 +667,6 @@ object "CoolCoin" {
       }
       function $address_h257056268eac7027_zero() -> ret {
         ret := 0
-        leave
-      }
-      function $alloc($size) -> ret {
-        let v0 := mload(64)
-        let v1 := eq(v0, 0)
-        if v1 {
-          let v2 := msize()
-          v0 := v2
-        }
-        let v3 := lt(v0, 8192)
-        if v3 {
-          v0 := 8192
-        }
-        mstore(64, add(v0, $size))
-        ret := v0
         leave
       }
       function $allowance_h4bb1267f662bd2a8_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966($d) -> ret {
@@ -1098,7 +1084,11 @@ object "CoolCoin" {
         let v0 := mload($self)
         let v1 := eq(v0, 0)
         if v1 {
-          let v2 := $alloc($bytes)
+          let v2 := mload(64)
+          if iszero(v2) {
+            v2 := 0x80
+          }
+          mstore(64, add(v2, $bytes))
           mstore($self, v2)
           mstore(add($self, 32), v2)
           mstore(add($self, 64), add(v2, $bytes))
@@ -1217,7 +1207,11 @@ object "CoolCoin" {
         leave
       }
       function $storagemap_storage_slot_with_salt__Address_h257056268eac7027__5ab99f7153cdba29($key, $salt) -> ret {
-        let v0 := $alloc(0)
+        let v0 := mload(64)
+        if iszero(v0) {
+          v0 := 0x80
+        }
+        mstore(64, add(v0, 0))
         let v1 := $address_h257056268eac7027_storagekey_hf9e3d38a13ff4409_write_key(v0, $key)
         mstore(add(v0, v1), $salt)
         let v2 := v0
@@ -1227,7 +1221,11 @@ object "CoolCoin" {
         leave
       }
       function $storagemap_storage_slot_with_salt___Address__Address___c32d499da259c78e($key, $salt) -> ret {
-        let v0 := $alloc(0)
+        let v0 := mload(64)
+        if iszero(v0) {
+          v0 := 0x80
+        }
+        mstore(64, add(v0, 0))
         let v1 := $_a__b__h47f120de72304a2d_storagekey_hf9e3d38a13ff4409_write_key__Address_h257056268eac7027_Address_h257056268eac7027__af929e62fa4c68f2(v0, $key)
         mstore(add(v0, v1), $salt)
         let v2 := v0
@@ -1237,7 +1235,11 @@ object "CoolCoin" {
         leave
       }
       function $storagemap_storage_slot_with_salt___u256__Address___c7c570db20cdd393($key, $salt) -> ret {
-        let v0 := $alloc(0)
+        let v0 := mload(64)
+        if iszero(v0) {
+          v0 := 0x80
+        }
+        mstore(64, add(v0, 0))
         let v1 := $_a__b__h47f120de72304a2d_storagekey_hf9e3d38a13ff4409_write_key__u256_Address_h257056268eac7027__802280feae02d9df(v0, $key)
         mstore(add(v0, v1), $salt)
         let v2 := v0

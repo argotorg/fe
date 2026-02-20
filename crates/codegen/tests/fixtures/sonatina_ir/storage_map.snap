@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/storage_map.fe
 ---
@@ -67,35 +66,6 @@ func private %storagemap_storage_slot_with_salt__u256__3271ca15373d4483(v0.i256,
         v9.i256 = add v5 32.i256;
         v10.i256 = evm_keccak256 v4 v9;
         return v10;
-}
-
-func public %alloc(v0.i256) -> i256 {
-    block0:
-        v3.i256 = mload 64.i256 i256;
-        v4.i1 = eq v3 0.i256;
-        v5.i256 = zext v4 i256;
-        v6.i1 = ne v5 0.i256;
-        br v6 block1 block2;
-
-    block1:
-        v7.i256 = evm_msize;
-        jump block2;
-
-    block2:
-        v8.i256 = phi (v3 block0) (v7 block1);
-        v10.i1 = lt v8 8192.i256;
-        v11.i256 = zext v10 i256;
-        v12.i1 = ne v11 0.i256;
-        br v12 block3 block4;
-
-    block3:
-        jump block4;
-
-    block4:
-        v13.i256 = phi (v8 block2) (8192.i256 block3);
-        v15.i256 = add v13 v0;
-        mstore 64.i256 v15 i256;
-        return v13;
 }
 
 func private %u256_h3271ca15373d4483_storagekey_hf9e3d38a13ff4409_write_key(v0.i256, v1.i256) -> i256 {
