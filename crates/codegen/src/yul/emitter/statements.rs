@@ -527,11 +527,20 @@ impl<'db> FunctionEmitter<'db> {
         state: &mut BlockState,
     ) -> Result<(), YulError> {
         debug_assert_eq!(args.len(), 1, "alloc intrinsic expects 1 argument");
-        let size = self.lower_value(args[0], state)?;
-
         let (ptr, declared) = match dest {
             Some(dest) => self.resolve_local_for_write(dest, state)?,
             None => (state.alloc_local(), true),
+        };
+
+        let size = self.lower_value(args[0], state)?;
+        // If we're assigning back into an existing local, avoid clobbering the size expression
+        // (e.g. `x = alloc(x)`).
+        let size = if !declared {
+            let size_tmp = state.alloc_local();
+            docs.push(YulDoc::line(format!("let {size_tmp} := {size}")));
+            size_tmp
+        } else {
+            size
         };
 
         if declared {
