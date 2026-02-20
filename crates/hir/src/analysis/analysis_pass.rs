@@ -4,6 +4,7 @@ use crate::{
     hir_def::{ModuleTree, TopLevelMod},
     lower::{parse_file_impl, scope_graph_impl},
 };
+use tracing::info;
 
 fn diag_timing_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -47,7 +48,7 @@ impl AnalysisPassManager {
             if timing {
                 let elapsed = t0.elapsed();
                 if elapsed.as_micros() > 100 {
-                    eprintln!("[fe:timing]   pass {name}: {elapsed:?}");
+                    info!("[fe:timing]   pass {name}: {elapsed:?}");
                 }
             }
         }
@@ -68,7 +69,7 @@ impl AnalysisPassManager {
                 if timing {
                     let elapsed = t0.elapsed();
                     if elapsed.as_micros() > 100 {
-                        eprintln!("[fe:timing]   pass {name}: {elapsed:?}");
+                        info!("[fe:timing]   pass {name}: {elapsed:?}");
                     }
                 }
             }

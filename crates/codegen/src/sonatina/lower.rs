@@ -2278,31 +2278,37 @@ fn const_usize_value<C: sonatina_ir::func_cursor::FuncCursor>(
     Some(imm.as_usize())
 }
 
+struct LocalDependencyState {
+    value_memo: Vec<Option<bool>>,
+    value_visiting: Vec<bool>,
+    local_memo: Vec<Option<bool>>,
+    local_visiting: Vec<bool>,
+}
+
+impl LocalDependencyState {
+    fn new<'db>(body: &mir::MirBody<'db>) -> Self {
+        Self {
+            value_memo: vec![None; body.values.len()],
+            value_visiting: vec![false; body.values.len()],
+            local_memo: vec![None; body.locals.len()],
+            local_visiting: vec![false; body.locals.len()],
+        }
+    }
+}
+
 fn local_may_be_returned<'db>(
     body: &mir::MirBody<'db>,
     local: mir::LocalId,
     ptr_escape_summaries: &FxHashMap<String, MirPtrEscapeSummary>,
 ) -> bool {
-    let mut value_memo: Vec<Option<bool>> = vec![None; body.values.len()];
-    let mut value_visiting = vec![false; body.values.len()];
-    let mut local_memo: Vec<Option<bool>> = vec![None; body.locals.len()];
-    let mut local_visiting = vec![false; body.locals.len()];
+    let mut state = LocalDependencyState::new(body);
 
     for block in &body.blocks {
         if let mir::Terminator::Return {
             value: Some(returned),
             ..
         } = &block.terminator
-            && value_depends_on_local(
-                body,
-                *returned,
-                local,
-                ptr_escape_summaries,
-                &mut value_memo,
-                &mut value_visiting,
-                &mut local_memo,
-                &mut local_visiting,
-            )
+            && value_depends_on_local(body, *returned, local, ptr_escape_summaries, &mut state)
         {
             return true;
         }
@@ -2316,10 +2322,7 @@ fn alloc_local_may_escape<'db>(
     local: mir::LocalId,
     ptr_escape_summaries: &FxHashMap<String, MirPtrEscapeSummary>,
 ) -> bool {
-    let mut value_memo: Vec<Option<bool>> = vec![None; body.values.len()];
-    let mut value_visiting = vec![false; body.values.len()];
-    let mut local_memo: Vec<Option<bool>> = vec![None; body.locals.len()];
-    let mut local_visiting = vec![false; body.locals.len()];
+    let mut state = LocalDependencyState::new(body);
 
     for block in &body.blocks {
         for inst in &block.insts {
@@ -2330,34 +2333,21 @@ fn alloc_local_may_escape<'db>(
                         rvalue,
                         local,
                         ptr_escape_summaries,
-                        &mut value_memo,
-                        &mut value_visiting,
-                        &mut local_memo,
-                        &mut local_visiting,
+                        &mut state,
                     ) {
                         return true;
                     }
                 }
                 mir::MirInst::Store { place, value, .. } => {
-                    if value_depends_on_local(
-                        body,
-                        *value,
-                        local,
-                        ptr_escape_summaries,
-                        &mut value_memo,
-                        &mut value_visiting,
-                        &mut local_memo,
-                        &mut local_visiting,
-                    ) && store_target_is_non_local(
-                        body,
-                        place,
-                        local,
-                        ptr_escape_summaries,
-                        &mut value_memo,
-                        &mut value_visiting,
-                        &mut local_memo,
-                        &mut local_visiting,
-                    ) {
+                    if value_depends_on_local(body, *value, local, ptr_escape_summaries, &mut state)
+                        && store_target_is_non_local(
+                            body,
+                            place,
+                            local,
+                            ptr_escape_summaries,
+                            &mut state,
+                        )
+                    {
                         return true;
                     }
                 }
@@ -2368,19 +2358,13 @@ fn alloc_local_may_escape<'db>(
                             *value,
                             local,
                             ptr_escape_summaries,
-                            &mut value_memo,
-                            &mut value_visiting,
-                            &mut local_memo,
-                            &mut local_visiting,
+                            &mut state,
                         ) && store_target_is_non_local(
                             body,
                             place,
                             local,
                             ptr_escape_summaries,
-                            &mut value_memo,
-                            &mut value_visiting,
-                            &mut local_memo,
-                            &mut local_visiting,
+                            &mut state,
                         ) {
                             return true;
                         }
@@ -2395,10 +2379,7 @@ fn alloc_local_may_escape<'db>(
             &block.terminator,
             local,
             ptr_escape_summaries,
-            &mut value_memo,
-            &mut value_visiting,
-            &mut local_memo,
-            &mut local_visiting,
+            &mut state,
         ) {
             return true;
         }
@@ -2412,85 +2393,34 @@ fn value_depends_on_local<'db>(
     value: mir::ValueId,
     local: mir::LocalId,
     ptr_escape_summaries: &FxHashMap<String, MirPtrEscapeSummary>,
-    value_memo: &mut [Option<bool>],
-    value_visiting: &mut [bool],
-    local_memo: &mut [Option<bool>],
-    local_visiting: &mut [bool],
+    state: &mut LocalDependencyState,
 ) -> bool {
-    if let Some(cached) = value_memo[value.index()] {
+    if let Some(cached) = state.value_memo[value.index()] {
         return cached;
     }
-    if value_visiting[value.index()] {
+    if state.value_visiting[value.index()] {
         // Conservatively treat recursive value dependency as escaping.
         return true;
     }
 
-    value_visiting[value.index()] = true;
+    state.value_visiting[value.index()] = true;
     let depends = match &body.value(value).origin {
         mir::ValueOrigin::Local(dep_local) | mir::ValueOrigin::PlaceRoot(dep_local) => {
-            local_depends_on_local(
-                body,
-                *dep_local,
-                local,
-                ptr_escape_summaries,
-                value_memo,
-                value_visiting,
-                local_memo,
-                local_visiting,
-            )
+            local_depends_on_local(body, *dep_local, local, ptr_escape_summaries, state)
         }
-        mir::ValueOrigin::Unary { inner, .. } => value_depends_on_local(
-            body,
-            *inner,
-            local,
-            ptr_escape_summaries,
-            value_memo,
-            value_visiting,
-            local_memo,
-            local_visiting,
-        ),
+        mir::ValueOrigin::Unary { inner, .. } => {
+            value_depends_on_local(body, *inner, local, ptr_escape_summaries, state)
+        }
         mir::ValueOrigin::Binary { lhs, rhs, .. } => {
-            value_depends_on_local(
-                body,
-                *lhs,
-                local,
-                ptr_escape_summaries,
-                value_memo,
-                value_visiting,
-                local_memo,
-                local_visiting,
-            ) || value_depends_on_local(
-                body,
-                *rhs,
-                local,
-                ptr_escape_summaries,
-                value_memo,
-                value_visiting,
-                local_memo,
-                local_visiting,
-            )
+            value_depends_on_local(body, *lhs, local, ptr_escape_summaries, state)
+                || value_depends_on_local(body, *rhs, local, ptr_escape_summaries, state)
         }
-        mir::ValueOrigin::FieldPtr(field_ptr) => value_depends_on_local(
-            body,
-            field_ptr.base,
-            local,
-            ptr_escape_summaries,
-            value_memo,
-            value_visiting,
-            local_memo,
-            local_visiting,
-        ),
+        mir::ValueOrigin::FieldPtr(field_ptr) => {
+            value_depends_on_local(body, field_ptr.base, local, ptr_escape_summaries, state)
+        }
         mir::ValueOrigin::PlaceRef(place) | mir::ValueOrigin::MoveOut { place } => {
-            let mut depends = value_depends_on_local(
-                body,
-                place.base,
-                local,
-                ptr_escape_summaries,
-                value_memo,
-                value_visiting,
-                local_memo,
-                local_visiting,
-            );
+            let mut depends =
+                value_depends_on_local(body, place.base, local, ptr_escape_summaries, state);
             if !depends {
                 for projection in place.projection.iter() {
                     if let Projection::Index(IndexSource::Dynamic(index_val)) = projection
@@ -2499,10 +2429,7 @@ fn value_depends_on_local<'db>(
                             *index_val,
                             local,
                             ptr_escape_summaries,
-                            value_memo,
-                            value_visiting,
-                            local_memo,
-                            local_visiting,
+                            state,
                         )
                     {
                         depends = true;
@@ -2512,24 +2439,17 @@ fn value_depends_on_local<'db>(
             }
             depends
         }
-        mir::ValueOrigin::TransparentCast { value } => value_depends_on_local(
-            body,
-            *value,
-            local,
-            ptr_escape_summaries,
-            value_memo,
-            value_visiting,
-            local_memo,
-            local_visiting,
-        ),
+        mir::ValueOrigin::TransparentCast { value } => {
+            value_depends_on_local(body, *value, local, ptr_escape_summaries, state)
+        }
         mir::ValueOrigin::Expr(_)
         | mir::ValueOrigin::ControlFlowResult { .. }
         | mir::ValueOrigin::Unit
         | mir::ValueOrigin::Synthetic(_)
         | mir::ValueOrigin::FuncItem(_) => false,
     };
-    value_visiting[value.index()] = false;
-    value_memo[value.index()] = Some(depends);
+    state.value_visiting[value.index()] = false;
+    state.value_memo[value.index()] = Some(depends);
     depends
 }
 
@@ -2538,10 +2458,7 @@ fn rvalue_may_escape_local<'db>(
     rvalue: &mir::Rvalue<'db>,
     local: mir::LocalId,
     ptr_escape_summaries: &FxHashMap<String, MirPtrEscapeSummary>,
-    value_memo: &mut [Option<bool>],
-    value_visiting: &mut [bool],
-    local_memo: &mut [Option<bool>],
-    local_visiting: &mut [bool],
+    state: &mut LocalDependencyState,
 ) -> bool {
     match rvalue {
         mir::Rvalue::Call(call) => {
@@ -2554,10 +2471,7 @@ fn rvalue_may_escape_local<'db>(
                 ptr_escape_summaries,
                 arg_escape_mask,
                 0,
-                value_memo,
-                value_visiting,
-                local_memo,
-                local_visiting,
+                state,
             ) || call_args_depend_on_local_with_mask(
                 body,
                 &call.effect_args,
@@ -2565,22 +2479,12 @@ fn rvalue_may_escape_local<'db>(
                 ptr_escape_summaries,
                 arg_escape_mask,
                 call.args.len(),
-                value_memo,
-                value_visiting,
-                local_memo,
-                local_visiting,
+                state,
             )
         }
-        mir::Rvalue::Intrinsic { args, .. } => values_depend_on_local(
-            body,
-            args,
-            local,
-            ptr_escape_summaries,
-            value_memo,
-            value_visiting,
-            local_memo,
-            local_visiting,
-        ),
+        mir::Rvalue::Intrinsic { args, .. } => {
+            values_depend_on_local(body, args, local, ptr_escape_summaries, state)
+        }
         mir::Rvalue::ZeroInit
         | mir::Rvalue::Value(_)
         | mir::Rvalue::Load { .. }
@@ -2593,25 +2497,13 @@ fn terminator_may_escape_local<'db>(
     terminator: &mir::Terminator<'db>,
     local: mir::LocalId,
     ptr_escape_summaries: &FxHashMap<String, MirPtrEscapeSummary>,
-    value_memo: &mut [Option<bool>],
-    value_visiting: &mut [bool],
-    local_memo: &mut [Option<bool>],
-    local_visiting: &mut [bool],
+    state: &mut LocalDependencyState,
 ) -> bool {
     match terminator {
         mir::Terminator::Return {
             value: Some(returned),
             ..
-        } => value_depends_on_local(
-            body,
-            *returned,
-            local,
-            ptr_escape_summaries,
-            value_memo,
-            value_visiting,
-            local_memo,
-            local_visiting,
-        ),
+        } => value_depends_on_local(body, *returned, local, ptr_escape_summaries, state),
         mir::Terminator::TerminatingCall { call, .. } => match call {
             mir::TerminatingCall::Call(call) => {
                 let arg_escape_mask =
@@ -2623,10 +2515,7 @@ fn terminator_may_escape_local<'db>(
                     ptr_escape_summaries,
                     arg_escape_mask,
                     0,
-                    value_memo,
-                    value_visiting,
-                    local_memo,
-                    local_visiting,
+                    state,
                 ) || call_args_depend_on_local_with_mask(
                     body,
                     &call.effect_args,
@@ -2634,22 +2523,12 @@ fn terminator_may_escape_local<'db>(
                     ptr_escape_summaries,
                     arg_escape_mask,
                     call.args.len(),
-                    value_memo,
-                    value_visiting,
-                    local_memo,
-                    local_visiting,
+                    state,
                 )
             }
-            mir::TerminatingCall::Intrinsic { args, .. } => values_depend_on_local(
-                body,
-                args,
-                local,
-                ptr_escape_summaries,
-                value_memo,
-                value_visiting,
-                local_memo,
-                local_visiting,
-            ),
+            mir::TerminatingCall::Intrinsic { args, .. } => {
+                values_depend_on_local(body, args, local, ptr_escape_summaries, state)
+            }
         },
         mir::Terminator::Return { .. }
         | mir::Terminator::Goto { .. }
@@ -2664,24 +2543,12 @@ fn store_target_is_non_local<'db>(
     place: &Place<'db>,
     local: mir::LocalId,
     ptr_escape_summaries: &FxHashMap<String, MirPtrEscapeSummary>,
-    value_memo: &mut [Option<bool>],
-    value_visiting: &mut [bool],
-    local_memo: &mut [Option<bool>],
-    local_visiting: &mut [bool],
+    state: &mut LocalDependencyState,
 ) -> bool {
     if !matches!(body.place_address_space(place), AddressSpaceKind::Memory) {
         return true;
     }
-    !value_depends_on_local(
-        body,
-        place.base,
-        local,
-        ptr_escape_summaries,
-        value_memo,
-        value_visiting,
-        local_memo,
-        local_visiting,
-    )
+    !value_depends_on_local(body, place.base, local, ptr_escape_summaries, state)
 }
 
 fn values_depend_on_local<'db>(
@@ -2689,23 +2556,12 @@ fn values_depend_on_local<'db>(
     values: &[mir::ValueId],
     local: mir::LocalId,
     ptr_escape_summaries: &FxHashMap<String, MirPtrEscapeSummary>,
-    value_memo: &mut [Option<bool>],
-    value_visiting: &mut [bool],
-    local_memo: &mut [Option<bool>],
-    local_visiting: &mut [bool],
+    state: &mut LocalDependencyState,
 ) -> bool {
-    values.iter().copied().any(|value| {
-        value_depends_on_local(
-            body,
-            value,
-            local,
-            ptr_escape_summaries,
-            value_memo,
-            value_visiting,
-            local_memo,
-            local_visiting,
-        )
-    })
+    values
+        .iter()
+        .copied()
+        .any(|value| value_depends_on_local(body, value, local, ptr_escape_summaries, state))
 }
 
 fn local_depends_on_local<'db>(
@@ -2713,23 +2569,20 @@ fn local_depends_on_local<'db>(
     candidate_local: mir::LocalId,
     source_local: mir::LocalId,
     ptr_escape_summaries: &FxHashMap<String, MirPtrEscapeSummary>,
-    value_memo: &mut [Option<bool>],
-    value_visiting: &mut [bool],
-    local_memo: &mut [Option<bool>],
-    local_visiting: &mut [bool],
+    state: &mut LocalDependencyState,
 ) -> bool {
     if candidate_local == source_local {
         return true;
     }
-    if let Some(cached) = local_memo[candidate_local.index()] {
+    if let Some(cached) = state.local_memo[candidate_local.index()] {
         return cached;
     }
-    if local_visiting[candidate_local.index()] {
+    if state.local_visiting[candidate_local.index()] {
         // Conservatively treat recursive local dependency as escaping.
         return true;
     }
 
-    local_visiting[candidate_local.index()] = true;
+    state.local_visiting[candidate_local.index()] = true;
     let mut depends = false;
     for block in &body.blocks {
         for inst in &block.insts {
@@ -2749,10 +2602,7 @@ fn local_depends_on_local<'db>(
                 rvalue,
                 source_local,
                 ptr_escape_summaries,
-                value_memo,
-                value_visiting,
-                local_memo,
-                local_visiting,
+                state,
             ) {
                 depends = true;
                 break;
@@ -2763,8 +2613,8 @@ fn local_depends_on_local<'db>(
         }
     }
 
-    local_visiting[candidate_local.index()] = false;
-    local_memo[candidate_local.index()] = Some(depends);
+    state.local_visiting[candidate_local.index()] = false;
+    state.local_memo[candidate_local.index()] = Some(depends);
     depends
 }
 
@@ -2773,23 +2623,13 @@ fn rvalue_depends_on_local_value<'db>(
     rvalue: &mir::Rvalue<'db>,
     local: mir::LocalId,
     ptr_escape_summaries: &FxHashMap<String, MirPtrEscapeSummary>,
-    value_memo: &mut [Option<bool>],
-    value_visiting: &mut [bool],
-    local_memo: &mut [Option<bool>],
-    local_visiting: &mut [bool],
+    state: &mut LocalDependencyState,
 ) -> bool {
     match rvalue {
         mir::Rvalue::ZeroInit | mir::Rvalue::Alloc { .. } => false,
-        mir::Rvalue::Value(value) => value_depends_on_local(
-            body,
-            *value,
-            local,
-            ptr_escape_summaries,
-            value_memo,
-            value_visiting,
-            local_memo,
-            local_visiting,
-        ),
+        mir::Rvalue::Value(value) => {
+            value_depends_on_local(body, *value, local, ptr_escape_summaries, state)
+        }
         mir::Rvalue::Call(call) => {
             let arg_return_mask =
                 call_return_arg_mask(call.resolved_name.as_deref(), ptr_escape_summaries);
@@ -2800,10 +2640,7 @@ fn rvalue_depends_on_local_value<'db>(
                 ptr_escape_summaries,
                 arg_return_mask,
                 0,
-                value_memo,
-                value_visiting,
-                local_memo,
-                local_visiting,
+                state,
             ) || call_args_depend_on_local_with_mask(
                 body,
                 &call.effect_args,
@@ -2811,32 +2648,15 @@ fn rvalue_depends_on_local_value<'db>(
                 ptr_escape_summaries,
                 arg_return_mask,
                 call.args.len(),
-                value_memo,
-                value_visiting,
-                local_memo,
-                local_visiting,
+                state,
             )
         }
-        mir::Rvalue::Intrinsic { args, .. } => values_depend_on_local(
-            body,
-            args,
-            local,
-            ptr_escape_summaries,
-            value_memo,
-            value_visiting,
-            local_memo,
-            local_visiting,
-        ),
-        mir::Rvalue::Load { place } => value_depends_on_local(
-            body,
-            place.base,
-            local,
-            ptr_escape_summaries,
-            value_memo,
-            value_visiting,
-            local_memo,
-            local_visiting,
-        ),
+        mir::Rvalue::Intrinsic { args, .. } => {
+            values_depend_on_local(body, args, local, ptr_escape_summaries, state)
+        }
+        mir::Rvalue::Load { place } => {
+            value_depends_on_local(body, place.base, local, ptr_escape_summaries, state)
+        }
     }
 }
 
@@ -2865,10 +2685,7 @@ fn call_args_depend_on_local_with_mask<'db>(
     ptr_escape_summaries: &FxHashMap<String, MirPtrEscapeSummary>,
     arg_mask: Option<&[bool]>,
     arg_offset: usize,
-    value_memo: &mut [Option<bool>],
-    value_visiting: &mut [bool],
-    local_memo: &mut [Option<bool>],
-    local_visiting: &mut [bool],
+    state: &mut LocalDependencyState,
 ) -> bool {
     values.iter().copied().enumerate().any(|(index, value)| {
         if let Some(mask) = arg_mask
@@ -2877,16 +2694,7 @@ fn call_args_depend_on_local_with_mask<'db>(
             return false;
         }
 
-        value_depends_on_local(
-            body,
-            value,
-            local,
-            ptr_escape_summaries,
-            value_memo,
-            value_visiting,
-            local_memo,
-            local_visiting,
-        )
+        value_depends_on_local(body, value, local, ptr_escape_summaries, state)
     })
 }
 

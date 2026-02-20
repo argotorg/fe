@@ -19,6 +19,7 @@ use hir::analysis::ty::{
 };
 use hir::lower::map_file_to_mod;
 use rustc_hash::FxHashMap;
+use tracing::info;
 
 use crate::util::diag_to_lsp;
 
@@ -69,7 +70,7 @@ impl LspDiagnostics for DriverDataBase {
             let top_mod = map_file_to_mod(self, file);
             let diagnostics = pass_manager.run_on_module(self, top_mod);
             if timing {
-                eprintln!("[fe:timing]  file {url}: {:?}", t_file.elapsed());
+                info!("[fe:timing]  file {url}: {:?}", t_file.elapsed());
             }
             let mut finalized_diags: Vec<CompleteDiagnostic> = diagnostics
                 .iter()
@@ -92,7 +93,7 @@ impl LspDiagnostics for DriverDataBase {
         let mut mir_diags =
             self.mir_diagnostics_for_ingot(ingot, MirDiagnosticsMode::TemplatesOnly);
         if timing {
-            eprintln!("[fe:timing]  MIR diagnostics: {:?}", t_mir.elapsed());
+            info!("[fe:timing]  MIR diagnostics: {:?}", t_mir.elapsed());
         }
         mir_diags.sort_by(|lhs, rhs| match lhs.error_code.cmp(&rhs.error_code) {
             std::cmp::Ordering::Equal => lhs.primary_span().cmp(&rhs.primary_span()),
@@ -107,7 +108,7 @@ impl LspDiagnostics for DriverDataBase {
         }
 
         if timing {
-            eprintln!(
+            info!(
                 "[fe:timing] diagnostics_for_ingot ({file_count} files): {:?}",
                 t_total.elapsed()
             );

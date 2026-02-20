@@ -438,7 +438,7 @@ pub async fn handle_files_need_diagnostics(
         .collect();
 
     if timing {
-        eprintln!(
+        info!(
             "[fe:timing] handle_files_need_diagnostics: {} URIs -> {} ingots",
             need_diagnostics.len(),
             ingots_need_diagnostics.len()
@@ -496,7 +496,7 @@ pub async fn handle_files_need_diagnostics(
     }
 
     if timing {
-        eprintln!(
+        info!(
             "[fe:timing] handle_files_need_diagnostics total: {:?}",
             t_handler.elapsed()
         );
