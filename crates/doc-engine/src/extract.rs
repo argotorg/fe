@@ -6,8 +6,9 @@
 use common::ingot::Ingot;
 use hir::{
     SpannedHirDb,
+    core::semantic::SymbolView,
     hir_def::{
-        Attr, Contract, Enum, FieldParent, HirIngot, Impl, ImplTrait, ItemKind, Struct,
+        Contract, Enum, FieldParent, HirIngot, Impl, ImplTrait, ItemKind, Struct,
         TopLevelMod, Trait, VariantKind, Visibility, scope_graph::ScopeId,
     },
     semantic::FieldView,
@@ -338,20 +339,10 @@ impl<'db> DocExtractor<'db> {
         }
     }
 
-    /// Extract doc comments from a scope's attributes
+    /// Extract doc comments from a scope's attributes.
+    /// Delegates to SymbolView::docs().
     fn get_docstring(&self, scope: ScopeId<'db>) -> Option<String> {
-        scope
-            .attrs(self.db)?
-            .data(self.db)
-            .iter()
-            .filter_map(|attr| {
-                if let Attr::DocComment(doc) = attr {
-                    Some(doc.text.data(self.db).clone())
-                } else {
-                    None
-                }
-            })
-            .reduce(|a, b| a + "\n" + &b)
+        SymbolView::new(scope).docs(self.db)
     }
 
     /// Get first sentence of documentation as a summary
@@ -373,63 +364,12 @@ impl<'db> DocExtractor<'db> {
         }
     }
 
-    /// Get the item's signature (definition without body)
+    /// Get the item's signature (definition without body).
+    /// Delegates to SymbolView::signature().
     fn get_signature(&self, item: ItemKind<'db>) -> String {
-        let span = match item.span().resolve(self.db) {
-            Some(s) => s,
-            None => return String::new(),
-        };
-
-        let mut start: usize = span.range.start().into();
-        let mut end: usize = span.range.end().into();
-
-        // Trim body for items that have one
-        let body_start = match item {
-            ItemKind::Func(func) => func
-                .body(self.db)
-                .and_then(|b| b.span().resolve(self.db))
-                .map(|s| s.range.start()),
-            ItemKind::Mod(module) => module
-                .scope()
-                .name_span(self.db)
-                .and_then(|s| s.resolve(self.db))
-                .map(|s| s.range.end()),
-            _ => None,
-        };
-
-        if let Some(body_start) = body_start {
-            end = body_start.into();
-        }
-
-        // Start at beginning of the line where name is defined
-        if let Some(name_span) = item.name_span().and_then(|s| s.resolve(self.db)) {
-            let mut name_line_start: usize = name_span.range.start().into();
-            let file_text = span.file.text(self.db).as_str();
-            while name_line_start > 0 && file_text.chars().nth(name_line_start - 1) != Some('\n') {
-                name_line_start -= 1;
-            }
-            start = name_line_start;
-        }
-
-        let file_text = span.file.text(self.db).as_str();
-        if end > file_text.len() {
-            end = file_text.len();
-        }
-        if start > end {
-            start = end;
-        }
-
-        let mut sig = file_text[start..end].trim().to_string();
-
-        // For impl blocks, truncate at opening brace (don't show method bodies)
-        if matches!(item, ItemKind::Impl(_) | ItemKind::ImplTrait(_))
-            && let Some(brace_pos) = sig.find('{')
-        {
-            sig.truncate(brace_pos);
-            sig = sig.trim_end().to_string();
-        }
-
-        sig
+        SymbolView::from_item(item)
+            .signature(self.db)
+            .unwrap_or_default()
     }
 
     /// Extract the type text from a field's type span
