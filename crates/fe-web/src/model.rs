@@ -768,3 +768,173 @@ impl DocModuleItem {
         format!("{}/{}", self.path, self.kind.as_str())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_index() -> DocIndex {
+        let mut index = DocIndex::new();
+        index.add_item(DocItem {
+            path: "mylib::Point".into(),
+            name: "Point".into(),
+            kind: DocItemKind::Struct,
+            visibility: DocVisibility::Public,
+            docs: Some(DocContent::from_raw("A 2D point.\n\nUsed for coordinates.")),
+            signature: "pub struct Point".into(),
+            rich_signature: vec![],
+            generics: vec![DocGenericParam {
+                name: "T".into(),
+                bounds: vec![],
+                default: None,
+            }],
+            where_bounds: vec![],
+            children: vec![DocChild {
+                kind: DocChildKind::Field,
+                name: "x".into(),
+                docs: Some("The x coordinate".into()),
+                signature: "x: u256".into(),
+                rich_signature: vec![],
+                visibility: DocVisibility::Public,
+            }],
+            source: Some(DocSourceLoc {
+                file: "/src/lib.fe".into(),
+                display_file: "lib.fe".into(),
+                line: 1,
+                column: 0,
+            }),
+            trait_impls: vec![],
+            implementors: vec![],
+        });
+        index.add_item(DocItem {
+            path: "mylib::Color".into(),
+            name: "Color".into(),
+            kind: DocItemKind::Enum,
+            visibility: DocVisibility::Public,
+            docs: None,
+            signature: "pub enum Color".into(),
+            rich_signature: vec![],
+            generics: vec![],
+            where_bounds: vec![],
+            children: vec![
+                DocChild {
+                    kind: DocChildKind::Variant,
+                    name: "Red".into(),
+                    docs: None,
+                    signature: "Red".into(),
+                    rich_signature: vec![],
+                    visibility: DocVisibility::Public,
+                },
+                DocChild {
+                    kind: DocChildKind::Variant,
+                    name: "Green".into(),
+                    docs: None,
+                    signature: "Green".into(),
+                    rich_signature: vec![],
+                    visibility: DocVisibility::Public,
+                },
+            ],
+            source: None,
+            trait_impls: vec![],
+            implementors: vec![],
+        });
+        index.add_item(DocItem {
+            path: "mylib::add".into(),
+            name: "add".into(),
+            kind: DocItemKind::Function,
+            visibility: DocVisibility::Public,
+            docs: Some(DocContent::from_raw("Add two numbers.")),
+            signature: "pub fn add(a: u256, b: u256) -> u256".into(),
+            rich_signature: vec![],
+            generics: vec![],
+            where_bounds: vec![],
+            children: vec![],
+            source: None,
+            trait_impls: vec![],
+            implementors: vec![],
+        });
+        index
+    }
+
+    #[test]
+    fn json_round_trip() {
+        let index = sample_index();
+        let json = serde_json::to_string_pretty(&index).expect("serialize");
+        let deserialized: DocIndex = serde_json::from_str(&json).expect("deserialize");
+
+        assert_eq!(index.items.len(), deserialized.items.len());
+        for (a, b) in index.items.iter().zip(deserialized.items.iter()) {
+            assert_eq!(a.path, b.path);
+            assert_eq!(a.name, b.name);
+            assert_eq!(a.kind, b.kind);
+            assert_eq!(a.visibility, b.visibility);
+            assert_eq!(a.docs, b.docs);
+            assert_eq!(a.signature, b.signature);
+            assert_eq!(a.generics, b.generics);
+            assert_eq!(a.children, b.children);
+            assert_eq!(a.source, b.source);
+        }
+    }
+
+    #[test]
+    fn find_by_url_with_kind() {
+        let index = sample_index();
+        let item = index.find_by_url("mylib::Point/struct");
+        assert!(item.is_some());
+        assert_eq!(item.unwrap().name, "Point");
+    }
+
+    #[test]
+    fn find_by_url_without_kind() {
+        let index = sample_index();
+        let item = index.find_by_url("mylib::Color");
+        assert!(item.is_some());
+        assert_eq!(item.unwrap().name, "Color");
+    }
+
+    #[test]
+    fn find_by_url_not_found() {
+        let index = sample_index();
+        assert!(index.find_by_url("mylib::Missing/struct").is_none());
+    }
+
+    #[test]
+    fn search_by_name() {
+        let index = sample_index();
+        let results = index.search("Point");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "Point");
+    }
+
+    #[test]
+    fn search_case_insensitive() {
+        let index = sample_index();
+        let results = index.search("color");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "Color");
+    }
+
+    #[test]
+    fn search_by_path() {
+        let index = sample_index();
+        let results = index.search("mylib");
+        assert_eq!(results.len(), 3);
+    }
+
+    #[test]
+    fn doc_content_parsing() {
+        let content = DocContent::from_raw("Summary line.\n\nDetailed body here.\n\n# Examples\nSome example code.");
+        assert_eq!(content.summary, "Summary line.");
+        assert!(content.body.contains("Detailed body here."));
+        assert_eq!(content.sections.len(), 1);
+        assert_eq!(content.sections[0].name, "Examples");
+        assert_eq!(content.sections[0].content, "Some example code.");
+    }
+
+    #[test]
+    fn doc_item_url_path() {
+        let index = sample_index();
+        let item = index.find_by_path("mylib::Point").unwrap();
+        assert_eq!(item.url_path(), "mylib::Point/struct");
+    }
+}
