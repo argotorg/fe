@@ -1,0 +1,93 @@
+---
+source: crates/doc-engine/tests/extract.rs
+expression: output
+input_file: tests/fixtures/enum_with_variants.fe
+---
+{
+  "items": [
+    {
+      "path": "enum_with_variants",
+      "name": "enum_with_variants",
+      "kind": "module",
+      "visibility": "public",
+      "docs": null,
+      "signature": "/// Represents a color.\npub enum Color {\n    /// Red color\n    Red\n    /// Green color\n    Green\n    /// Blue color\n    Blue\n    /// Custom RGB value\n    Custom(u256)\n}",
+      "generics": [],
+      "where_bounds": [],
+      "children": [],
+      "source": {
+        "file": "<fixtures>/enum_with_variants.fe",
+        "display_file": "enum_with_variants.fe",
+        "line": 1,
+        "column": 0
+      },
+      "trait_impls": []
+    },
+    {
+      "path": "enum_with_variants::Color",
+      "name": "Color",
+      "kind": "enum",
+      "visibility": "public",
+      "docs": {
+        "summary": "Represents a color.",
+        "body": "Represents a color.",
+        "sections": []
+      },
+      "signature": "pub enum Color {\n    /// Red color\n    Red\n    /// Green color\n    Green\n    /// Blue color\n    Blue\n    /// Custom RGB value\n    Custom(u256)\n}",
+      "generics": [],
+      "where_bounds": [],
+      "children": [
+        {
+          "kind": "variant",
+          "name": "Red",
+          "docs": " Red color",
+          "signature": "Red",
+          "visibility": "public"
+        },
+        {
+          "kind": "variant",
+          "name": "Green",
+          "docs": " Green color",
+          "signature": "Green",
+          "visibility": "public"
+        },
+        {
+          "kind": "variant",
+          "name": "Blue",
+          "docs": " Blue color",
+          "signature": "Blue",
+          "visibility": "public"
+        },
+        {
+          "kind": "variant",
+          "name": "Custom",
+          "docs": " Custom RGB value",
+          "signature": "Custom(u256)",
+          "visibility": "public"
+        }
+      ],
+      "source": {
+        "file": "<fixtures>/enum_with_variants.fe",
+        "display_file": "enum_with_variants.fe",
+        "line": 1,
+        "column": 0
+      },
+      "trait_impls": []
+    }
+  ],
+  "modules": [
+    {
+      "name": "enum_with_variants",
+      "path": "enum_with_variants",
+      "children": [],
+      "items": [
+        {
+          "name": "Color",
+          "path": "enum_with_variants::Color",
+          "kind": "enum",
+          "summary": "Represents a color."
+        }
+      ]
+    }
+  ]
+}

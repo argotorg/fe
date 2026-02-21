@@ -1,0 +1,79 @@
+---
+source: crates/doc-engine/tests/extract.rs
+expression: output
+input_file: tests/fixtures/simple_struct.fe
+---
+{
+  "items": [
+    {
+      "path": "simple_struct",
+      "name": "simple_struct",
+      "kind": "module",
+      "visibility": "public",
+      "docs": null,
+      "signature": "/// A point in 2D space.\n///\n/// Used to represent coordinates in the plane.\npub struct Point {\n    /// The x coordinate\n    pub x: u256\n    /// The y coordinate\n    pub y: u256\n}",
+      "generics": [],
+      "where_bounds": [],
+      "children": [],
+      "source": {
+        "file": "<fixtures>/simple_struct.fe",
+        "display_file": "simple_struct.fe",
+        "line": 1,
+        "column": 0
+      },
+      "trait_impls": []
+    },
+    {
+      "path": "simple_struct::Point",
+      "name": "Point",
+      "kind": "struct",
+      "visibility": "public",
+      "docs": {
+        "summary": "A point in 2D space.",
+        "body": "A point in 2D space.\n\n Used to represent coordinates in the plane.",
+        "sections": []
+      },
+      "signature": "pub struct Point {\n    /// The x coordinate\n    pub x: u256\n    /// The y coordinate\n    pub y: u256\n}",
+      "generics": [],
+      "where_bounds": [],
+      "children": [
+        {
+          "kind": "field",
+          "name": "x",
+          "docs": " The x coordinate",
+          "signature": "x: u256",
+          "visibility": "public"
+        },
+        {
+          "kind": "field",
+          "name": "y",
+          "docs": " The y coordinate",
+          "signature": "y: u256",
+          "visibility": "public"
+        }
+      ],
+      "source": {
+        "file": "<fixtures>/simple_struct.fe",
+        "display_file": "simple_struct.fe",
+        "line": 1,
+        "column": 0
+      },
+      "trait_impls": []
+    }
+  ],
+  "modules": [
+    {
+      "name": "simple_struct",
+      "path": "simple_struct",
+      "children": [],
+      "items": [
+        {
+          "name": "Point",
+          "path": "simple_struct::Point",
+          "kind": "struct",
+          "summary": "A point in 2D space."
+        }
+      ]
+    }
+  ]
+}
