@@ -562,8 +562,8 @@ impl<'db> FunctionEmitter<'db> {
         // Unrolled code has no Yul `for` loop, so `break` can't exit early.
         // (`continue` is fine — it targets post_block which is a stop block,
         // so emission stops at the right point for each unrolled iteration.)
-        let unroll_count = unroll_count
-            .filter(|_| !self.loop_body_has_break(info.body, info.exit, &info));
+        let unroll_count =
+            unroll_count.filter(|_| !self.loop_body_has_break(info.body, info.exit, &info));
 
         if let Some(unroll_count) = unroll_count {
             // Find the index local from the post block (it's the one being assigned)
