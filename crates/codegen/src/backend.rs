@@ -182,9 +182,9 @@ pub trait Backend {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BackendKind {
     /// Yul backend (emits Yul text for solc).
-    #[default]
     Yul,
     /// Sonatina backend (direct EVM bytecode generation).
+    #[default]
     Sonatina,
 }
 

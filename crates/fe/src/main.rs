@@ -48,8 +48,8 @@ pub enum Command {
         dump_mir: bool,
         #[arg(long)]
         emit_yul_min: bool,
-        /// Code generation backend to use (yul or sonatina).
-        #[arg(long, default_value = "yul")]
+        /// Code generation backend to use (sonatina or yul).
+        #[arg(long, default_value = "sonatina")]
         backend: String,
         /// Optimization level (0 = none, 1 = balanced, 2 = aggressive).
         #[arg(long, default_value = "1", value_name = "LEVEL")]
@@ -109,8 +109,8 @@ pub enum Command {
             require_equals = true
         )]
         debug: Option<TestDebug>,
-        /// Backend to use for codegen (yul or sonatina).
-        #[arg(long, default_value = "yul")]
+        /// Backend to use for codegen (sonatina or yul).
+        #[arg(long, default_value = "sonatina")]
         backend: String,
         /// Optimization level (0 = none, 1 = balanced, 2 = aggressive).
         #[arg(long, default_value = "1", value_name = "LEVEL")]

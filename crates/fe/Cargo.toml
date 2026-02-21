@@ -1,6 +1,6 @@
 [package]
 name = "fe"
-version = "0.26.0"
+version = "26.0.0-alpha.5"
 edition.workspace = true
 
 [dependencies]
@@ -30,6 +30,9 @@ hex = "0.4"
 toml = "0.8.8"
 glob.workspace = true
 scip = "0.6.1"
+
+[features]
+vendored-openssl = ["resolver/vendored-openssl"]
 
 [dev-dependencies]
 dir-test.workspace = true
