@@ -1,6 +1,7 @@
 pub mod borrowck;
 pub mod call_graph;
 pub mod contract_graph;
+pub mod escape;
 pub mod noesc;
 
 pub use call_graph::{CallGraph, build_call_graph, reachable_functions};

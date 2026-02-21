@@ -106,7 +106,7 @@ func private %runtime__StorPtr_Evm___207f35a85ac4062e() {
 
     block15:
         v53.i256 = evm_calldata_load 4.i256;
-        v54.*[i8; 64] = alloca [i8; 64];
+        v54.*i8 = evm_malloc 64.i256;
         v55.i256 = ptr_to_int v54 i256;
         v56.*i256 = bitcast v54 *i256;
         mstore v56 1.i256 i256;

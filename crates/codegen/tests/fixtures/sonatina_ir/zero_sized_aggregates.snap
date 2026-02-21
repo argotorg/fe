@@ -10,15 +10,13 @@ type @__fe_Wrap_1 = {unit, i256};
 
 func public %tuple_with_empty() -> i256 {
     block0:
-        v3.*i8 = evm_malloc 32.i256;
-        v4.i256 = ptr_to_int v3 i256;
-        v5.*@__fe_tuple_0 = bitcast v3 *@__fe_tuple_0;
-        v7.*i256 = gep v5 0.i256 1.i256;
-        mstore v7 5.i256 i256;
-        v8.*@__fe_tuple_0 = bitcast v3 *@__fe_tuple_0;
-        v9.*i256 = gep v8 0.i256 1.i256;
-        v10.i256 = mload v9 i256;
-        return v10;
+        v2.*@__fe_tuple_0 = alloca @__fe_tuple_0;
+        v3.i256 = ptr_to_int v2 i256;
+        v5.*i256 = gep v2 0.i256 1.i256;
+        mstore v5 5.i256 i256;
+        v6.*i256 = gep v2 0.i256 1.i256;
+        v7.i256 = mload v6 i256;
+        return v7;
 }
 
 func public %tuple_only_empty() {
@@ -28,15 +26,13 @@ func public %tuple_only_empty() {
 
 func public %struct_with_empty() -> i256 {
     block0:
-        v3.*i8 = evm_malloc 32.i256;
-        v4.i256 = ptr_to_int v3 i256;
-        v5.*@__fe_Wrap_1 = bitcast v3 *@__fe_Wrap_1;
-        v7.*i256 = gep v5 0.i256 1.i256;
-        mstore v7 7.i256 i256;
-        v8.*@__fe_Wrap_1 = bitcast v3 *@__fe_Wrap_1;
-        v9.*i256 = gep v8 0.i256 1.i256;
-        v10.i256 = mload v9 i256;
-        return v10;
+        v2.*@__fe_Wrap_1 = alloca @__fe_Wrap_1;
+        v3.i256 = ptr_to_int v2 i256;
+        v5.*i256 = gep v2 0.i256 1.i256;
+        mstore v5 7.i256 i256;
+        v6.*i256 = gep v2 0.i256 1.i256;
+        v7.i256 = mload v6 i256;
+        return v7;
 }
 
 func public %empty_field_assign() {
