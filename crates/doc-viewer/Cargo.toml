@@ -15,15 +15,15 @@ default = []
 ssr = ["leptos/ssr", "dep:axum", "dep:tower", "dep:tower-http", "dep:tokio", "dep:tracing"]
 
 [dependencies]
+# Model + markdown (shared with WASM)
+fe-web = { path = "../fe-web" }
+
 # Leptos for reactive UI (SSR only)
 leptos = { version = "0.7" }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-
-# Markdown processing
-pulldown-cmark = { version = "0.12", default-features = false, features = ["html"] }
 
 # Server support (optional, for ssr feature)
 axum = { version = "0.8", features = ["ws"], optional = true }

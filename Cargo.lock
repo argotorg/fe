@@ -2362,11 +2362,11 @@ dependencies = [
  "camino",
  "dir-test",
  "fe-common",
- "fe-doc-viewer",
  "fe-driver",
  "fe-hir",
  "fe-parser",
  "fe-test-utils",
+ "fe-web",
  "rustc-hash 2.1.1",
  "salsa",
  "serde_json",
@@ -2378,8 +2378,8 @@ name = "fe-doc-viewer"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "fe-web",
  "leptos",
- "pulldown-cmark",
  "serde",
  "serde_json",
  "tokio",
@@ -2582,6 +2582,18 @@ dependencies = [
  "fe-mir",
  "fe-test-utils",
  "url",
+ "wasm-bindgen-test",
+]
+
+[[package]]
+name = "fe-web"
+version = "0.1.0"
+dependencies = [
+ "js-sys",
+ "pulldown-cmark",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
  "wasm-bindgen-test",
 ]
 

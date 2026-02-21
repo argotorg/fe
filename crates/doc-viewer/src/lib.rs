@@ -4,8 +4,10 @@
 //! Uses server-side rendering with live updates via JavaScript.
 
 pub mod components;
-pub mod markdown;
-pub mod model;
+
+// Re-export model and markdown from fe-web
+pub use fe_web::markdown;
+pub use fe_web::model;
 
 #[cfg(feature = "ssr")]
 pub mod ssr_components;
