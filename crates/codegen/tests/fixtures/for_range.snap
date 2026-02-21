@@ -1,0 +1,53 @@
+---
+source: crates/codegen/tests/yul.rs
+assertion_line: 33
+expression: output
+input_file: tests/fixtures/for_range.fe
+---
+function $for_range_sum() -> ret {
+  let v0 := 0
+  let v1 := 0
+  let v2 := 10
+  let v3 := mload(0x40)
+  if iszero(v3) {
+    v3 := 0x80
+  }
+  mstore(0x40, add(v3, 64))
+  mstore(v3, v1)
+  mstore(add(v3, 32), v2)
+  let v4 := 0
+  let v5 := $range_unknown__unknown__seq_len(v3)
+  for { } lt(v4, v5) { v4 := add(v4, 1) } {
+    let v6 := $range_unknown__unknown__seq_get(v3, v4)
+    let v7 := v6
+    v0 := add(v0, v7)
+  }
+  ret := v0
+  leave
+}
+function $range_unknown__unknown__seq_len($self) -> ret {
+  let v0 := mload(add($self, 32))
+  let v1 := mload($self)
+  let v2 := 0
+  switch lt(v0, v1)
+    case 1 {
+      v2 := 0
+    }
+    case 0 {
+      let v3 := mload(add($self, 32))
+      let v4 := mload($self)
+      v2 := sub(v3, v4)
+    }
+    default {
+      let v5 := mload(add($self, 32))
+      let v6 := mload($self)
+      v2 := sub(v5, v6)
+    }
+  ret := v2
+  leave
+}
+function $range_unknown__unknown__seq_get($self, $i) -> ret {
+  let v0 := mload($self)
+  ret := add(v0, $i)
+  leave
+}

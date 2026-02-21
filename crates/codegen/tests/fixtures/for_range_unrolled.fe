@@ -1,0 +1,13 @@
+// For loop over a range with #[unroll] attribute
+// Note: Range unrolling requires compile-time known bounds.
+// Currently falls back to normal loop if bounds can't be determined.
+pub fn for_range_unrolled_sum() -> usize {
+    let mut sum: usize = 0
+    let start: usize = 0
+    let end: usize = 5
+    #[unroll]
+    for i in start..end {
+        sum = sum + i
+    }
+    sum
+}

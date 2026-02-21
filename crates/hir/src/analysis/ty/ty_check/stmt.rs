@@ -161,7 +161,7 @@ impl<'db> TyChecker<'db> {
     }
 
     fn check_for(&mut self, stmt: StmtId, stmt_data: &Stmt<'db>) -> TyId<'db> {
-        let Stmt::For(pat, expr, body) = stmt_data else {
+        let Stmt::For(pat, expr, body, _unroll) = stmt_data else {
             unreachable!()
         };
 

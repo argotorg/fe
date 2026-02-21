@@ -3,6 +3,7 @@
 use super::*;
 use hir::{
     analysis::ty::const_eval::{ConstValue, try_eval_const_body},
+    hir_def::{Expr, LitKind, Partial},
     projection::{IndexSource, Projection},
 };
 use num_bigint::BigUint;
@@ -178,6 +179,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     }
 
     /// Lowers an array literal into an allocation plus element stores.
+    ///
+    /// For const arrays with all compile-time constant elements:
+    /// - Uses `CopyDataRegion` to efficiently copy pre-computed bytes from bytecode
+    ///
+    /// For arrays with non-const elements: Use alloc + InitAggregate.
     pub(super) fn try_lower_array(&mut self, expr: ExprId, elems: &[ExprId]) -> ValueId {
         let fallback = self.ensure_value(expr);
         let array_ty = self.typed_body.expr_ty(self.db, expr);
@@ -185,6 +191,35 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return fallback;
         }
 
+        // Try to get the element type and determine if elements are compile-time constants
+        let elem_ty = crate::layout::array_elem_ty(self.db, array_ty);
+        let elem_size = elem_ty.and_then(|ty| crate::layout::ty_size_bytes(self.db, ty));
+
+        // Try to extract constant byte values from all elements
+        if let (Some(elem_ty), Some(elem_size)) = (elem_ty, elem_size)
+            && let Some(const_bytes) = self.try_extract_const_array_bytes(elems, elem_ty, elem_size)
+            && self.current_block().is_some()
+        {
+            // Use DataRegion for const arrays (both small and large)
+            let label = self.builder.body.register_data_region(const_bytes.clone());
+            let size = const_bytes.len();
+
+            let dest = self.alloc_temp_local(array_ty, false, "array_data");
+            self.builder.body.locals[dest.index()].address_space = AddressSpaceKind::Memory;
+
+            self.push_inst_here(MirInst::Assign {
+                source: crate::ir::SourceInfoId::SYNTHETIC,
+                dest: Some(dest),
+                rvalue: Rvalue::CopyDataRegion { label, size },
+            });
+
+            self.builder.body.values[fallback.index()].origin = ValueOrigin::Local(dest);
+            self.builder.body.values[fallback.index()].repr =
+                ValueRepr::Ref(AddressSpaceKind::Memory);
+            return fallback;
+        }
+
+        // Fall back to alloc + InitAggregate for non-const arrays
         let mut lowered_elems = Vec::with_capacity(elems.len());
         for &elem_expr in elems {
             lowered_elems.push(self.lower_expr(elem_expr));
@@ -337,5 +372,68 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             source: crate::ir::SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Word,
         })
+    }
+
+    /// Attempts to extract constant byte values from all array elements.
+    ///
+    /// Returns `None` if any element is non-constant or non-integer.
+    fn try_extract_const_array_bytes(
+        &self,
+        elems: &[ExprId],
+        elem_ty: TyId<'db>,
+        elem_size: usize,
+    ) -> Option<Vec<u8>> {
+        // Only support primitive integer types for now
+        let prim_ty = match elem_ty.base_ty(self.db).data(self.db) {
+            TyData::TyBase(TyBase::Prim(prim)) => prim,
+            _ => return None,
+        };
+
+        let mut bytes = Vec::with_capacity(elems.len() * elem_size);
+
+        for &elem_expr in elems {
+            // Try to get the literal value
+            let int_value = match elem_expr.data(self.db, self.body) {
+                Partial::Present(Expr::Lit(LitKind::Int(int_id))) => int_id.data(self.db).clone(),
+                _ => return None, // Non-constant or non-integer element
+            };
+
+            // Convert to bytes based on element size (big-endian, padded to EVM word)
+            let int_bytes = int_value.to_bytes_be();
+            let padded = self.pad_int_to_size(&int_bytes, elem_size, *prim_ty)?;
+            bytes.extend(padded);
+        }
+
+        Some(bytes)
+    }
+
+    /// Pads integer bytes to the specified size for the given primitive type.
+    ///
+    /// Returns `None` if the value doesn't fit in the specified size.
+    fn pad_int_to_size(&self, int_bytes: &[u8], size: usize, prim_ty: PrimTy) -> Option<Vec<u8>> {
+        if int_bytes.len() > size {
+            return None; // Value too large
+        }
+
+        let mut padded = vec![0u8; size];
+        // For signed types, we'd need sign extension, but for simplicity
+        // we just zero-extend (works for unsigned types)
+        let offset = size - int_bytes.len();
+        padded[offset..].copy_from_slice(int_bytes);
+
+        // For signed types, check if we need sign extension
+        if matches!(
+            prim_ty,
+            PrimTy::I8 | PrimTy::I16 | PrimTy::I32 | PrimTy::I64 | PrimTy::I128 | PrimTy::I256
+        ) {
+            // If the high bit of the original value is set, fill with 0xFF
+            if !int_bytes.is_empty() && int_bytes[0] & 0x80 != 0 {
+                for b in padded.iter_mut().take(offset) {
+                    *b = 0xFF;
+                }
+            }
+        }
+
+        Some(padded)
     }
 }
