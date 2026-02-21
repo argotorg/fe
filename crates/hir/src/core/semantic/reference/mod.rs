@@ -10,7 +10,7 @@
 
 mod collector;
 mod has_references;
-mod resolver;
+pub(crate) mod resolver;
 
 use parser::TextSize;
 
