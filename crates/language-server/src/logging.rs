@@ -3,24 +3,23 @@ use async_lsp::{
     lsp_types::{LogMessageParams, MessageType},
 };
 use tracing::{Level, Metadata, subscriber::set_default};
-use tracing_subscriber::{fmt::MakeWriter, layer::SubscriberExt};
+use tracing_subscriber::{EnvFilter, fmt::MakeWriter, layer::SubscriberExt};
 use tracing_tree::HierarchicalLayer;
 
 use std::{backtrace::Backtrace, sync::Arc};
 
 pub fn setup_default_subscriber(client: ClientSocket) -> Option<tracing::subscriber::DefaultGuard> {
     let client_socket_writer = ClientSocketWriterMaker::new(client);
-    let subscriber = tracing_subscriber::registry()
-        .with(tracing_subscriber::filter::LevelFilter::WARN)
-        .with(
-            HierarchicalLayer::new(2)
-                .with_thread_ids(true)
-                .with_thread_names(true)
-                .with_indent_lines(true)
-                .with_bracketed_fields(true)
-                .with_ansi(false)
-                .with_writer(client_socket_writer),
-        );
+    let filter = EnvFilter::try_from_env("FE_LOG").unwrap_or_else(|_| EnvFilter::new("warn"));
+    let subscriber = tracing_subscriber::registry().with(filter).with(
+        HierarchicalLayer::new(2)
+            .with_thread_ids(true)
+            .with_thread_names(true)
+            .with_indent_lines(true)
+            .with_bracketed_fields(true)
+            .with_ansi(false)
+            .with_writer(client_socket_writer),
+    );
     Some(set_default(subscriber))
 }
 
