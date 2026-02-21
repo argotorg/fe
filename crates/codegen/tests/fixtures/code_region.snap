@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 33
 expression: output
 input_file: tests/fixtures/code_region.fe
 ---
@@ -38,6 +37,28 @@ object "Foo" {
     }
     $init__StorPtr_Evm___207f35a85ac4062e()
   }
+  object "Child" {
+    code {
+      function $child_init__StorPtr_Evm___207f35a85ac4062e() {
+        let v0 := datasize("Child_deployed")
+        let v1 := dataoffset("Child_deployed")
+        codecopy(0, v1, v0)
+        return(0, v0)
+      }
+      $child_init__StorPtr_Evm___207f35a85ac4062e()
+    }
+
+    object "Child_deployed" {
+      code {
+        function $child_runtime__StorPtr_Evm___207f35a85ac4062e() {
+          calldatacopy(0, 0, 4)
+          return(0, 4)
+        }
+        $child_runtime__StorPtr_Evm___207f35a85ac4062e()
+        return(0, 0)
+      }
+    }
+  }
 
   object "Foo_deployed" {
     code {
@@ -67,28 +88,6 @@ object "Foo" {
       }
       $runtime__StorPtr_Evm___207f35a85ac4062e()
       return(0, 0)
-    }
-  }
-  object "Child" {
-    code {
-      function $child_init__StorPtr_Evm___207f35a85ac4062e() {
-        let v0 := datasize("Child_deployed")
-        let v1 := dataoffset("Child_deployed")
-        codecopy(0, v1, v0)
-        return(0, v0)
-      }
-      $child_init__StorPtr_Evm___207f35a85ac4062e()
-    }
-
-    object "Child_deployed" {
-      code {
-        function $child_runtime__StorPtr_Evm___207f35a85ac4062e() {
-          calldatacopy(0, 0, 4)
-          return(0, 4)
-        }
-        $child_runtime__StorPtr_Evm___207f35a85ac4062e()
-        return(0, 0)
-      }
     }
   }
 }

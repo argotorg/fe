@@ -683,8 +683,19 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         deps.sort();
         deps.dedup();
 
+        // Keep self runtime trailing in init sections so constructor-arg slicing via
+        // `sym_addr(runtime) + sym_size(runtime)` points at the true initcode tail.
+        let mut runtime_tail_dep = None;
+        if current_kind == ContractRegionKind::Init
+            && let Some(pos) = deps.iter().position(|dep| {
+                dep.contract_name == current_contract && dep.kind == ContractRegionKind::Deployed
+            })
+        {
+            runtime_tail_dep = Some(deps.remove(pos));
+        }
+
         let mut directives = Vec::new();
-        for dep in deps {
+        for dep in deps.into_iter().chain(runtime_tail_dep) {
             if dep.contract_name == current_contract && dep.kind == current_kind {
                 continue;
             }

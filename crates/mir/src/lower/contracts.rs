@@ -1037,6 +1037,8 @@ fn lower_init_entrypoint<'db>(
     {
         let init_args_ty = contract.init_args_ty(db);
         // Inline `ContractHost::init_input` semantics (avoids needing a synthetic HIR function-item type).
+        // This relies on backend codegen emitting the runtime code region as the final initcode
+        // region so `runtime_offset + runtime_len` equals the actual initcode end.
         let args_offset_value = builder.alloc_value(
             TyId::u256(db),
             ValueOrigin::Binary {
