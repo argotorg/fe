@@ -12,7 +12,7 @@ mod transform;
 mod ty;
 
 pub use ir::{
-    BasicBlockId, CallOrigin, DataRegionDef, LocalData, LocalId, LoopInfo, MirBackend, MirBody,
+    BasicBlockId, CallOrigin, LocalData, LocalId, LoopInfo, MirBackend, MirBody,
     MirFunction, MirInst, MirModule, MirProjection, MirProjectionPath, MirStage, Rvalue,
     SwitchTarget, SwitchValue, TerminatingCall, Terminator, ValueData, ValueId, ValueOrigin,
     ValueRepr,

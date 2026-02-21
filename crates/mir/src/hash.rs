@@ -185,12 +185,6 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
                 self.write_usize(bytes.len());
                 self.hasher.write(bytes);
             }
-            ValueOrigin::Synthetic(SyntheticValue::DataRegion { label, bytes }) => {
-                self.write_u8(0x12);
-                self.write_str(label);
-                self.write_usize(bytes.len());
-                self.hasher.write(bytes);
-            }
             ValueOrigin::Local(local) => {
                 self.write_u8(0x08);
                 self.write_u32(local.0);
@@ -381,10 +375,10 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
                             AddressSpaceKind::TransientStorage => 4,
                         });
                     }
-                    Rvalue::CopyDataRegion { label, size } => {
+                    Rvalue::ConstAggregate { data, .. } => {
                         self.write_u8(6);
-                        self.write_str(label);
-                        self.write_usize(*size);
+                        self.write_usize(data.len());
+                        self.hasher.write(data);
                     }
                 }
             }

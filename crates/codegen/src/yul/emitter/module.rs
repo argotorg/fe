@@ -23,7 +23,7 @@ use crate::yul::errors::YulError;
 
 use super::{
     EmitModuleError,
-    function::FunctionEmitter,
+    function::{FunctionEmitter, YulDataRegion},
     util::{function_name, prefix_yul_name},
 };
 
@@ -130,7 +130,7 @@ fn emit_lowered_module_yul_with_layout(
     let code_regions = Arc::new(code_regions);
 
     // Emit Yul docs for each function
-    let mut function_docs: Vec<Vec<YulDoc>> = Vec::with_capacity(module.functions.len());
+    let mut function_docs: Vec<(Vec<YulDoc>, Vec<YulDataRegion>)> = Vec::with_capacity(module.functions.len());
     for func in module.functions.iter() {
         let emitter =
             FunctionEmitter::new(db, func, &code_regions, layout).map_err(EmitModuleError::Yul)?;
@@ -143,18 +143,19 @@ fn emit_lowered_module_yul_with_layout(
         if is_test {
             validate_test_function(db, func, emitter.returns_value())?;
         }
-        let docs = emitter.emit_doc().map_err(EmitModuleError::Yul)?;
-        function_docs.push(docs);
+        let (docs, data_regions) = emitter.emit_doc().map_err(EmitModuleError::Yul)?;
+        function_docs.push((docs, data_regions));
     }
 
     // Index function docs by symbol for region assembly.
     let mut docs_by_symbol = FxHashMap::default();
     for (idx, func) in module.functions.iter().enumerate() {
+        let (docs, data_regions) = &function_docs[idx];
         docs_by_symbol.insert(
             func.symbol_name.clone(),
             FunctionDocInfo {
-                docs: function_docs[idx].clone(),
-                data_regions: func.body.data_regions.clone(),
+                docs: docs.clone(),
+                data_regions: data_regions.clone(),
             },
         );
     }
@@ -258,14 +259,14 @@ fn emit_lowered_module_yul_with_layout(
         // Collect all data regions from all functions
         let mut all_data_regions = Vec::new();
         let mut seen_labels = FxHashSet::default();
-        for func in &module.functions {
-            for dr in &func.body.data_regions {
+        for info in docs_by_symbol.values() {
+            for dr in &info.data_regions {
                 if seen_labels.insert(dr.label.clone()) {
                     all_data_regions.push(dr.clone());
                 }
             }
         }
-        for func_docs in function_docs {
+        for (func_docs, _) in function_docs {
             docs.extend(func_docs);
         }
         // If there are data regions but no contract objects, we need to wrap in an object
@@ -324,7 +325,7 @@ pub fn emit_test_module_yul_with_layout(
     let code_regions = Arc::new(code_regions);
 
     // Emit Yul docs for each function
-    let mut function_docs: Vec<Vec<YulDoc>> = Vec::with_capacity(module.functions.len());
+    let mut function_docs: Vec<(Vec<YulDoc>, Vec<YulDataRegion>)> = Vec::with_capacity(module.functions.len());
     for func in module.functions.iter() {
         let emitter =
             FunctionEmitter::new(db, func, &code_regions, layout).map_err(EmitModuleError::Yul)?;
@@ -337,18 +338,19 @@ pub fn emit_test_module_yul_with_layout(
         if is_test {
             validate_test_function(db, func, emitter.returns_value())?;
         }
-        let docs = emitter.emit_doc().map_err(EmitModuleError::Yul)?;
-        function_docs.push(docs);
+        let (docs, data_regions) = emitter.emit_doc().map_err(EmitModuleError::Yul)?;
+        function_docs.push((docs, data_regions));
     }
 
     // Index function docs by symbol for region assembly.
     let mut docs_by_symbol = FxHashMap::default();
     for (idx, func) in module.functions.iter().enumerate() {
+        let (docs, data_regions) = &function_docs[idx];
         docs_by_symbol.insert(
             func.symbol_name.clone(),
             FunctionDocInfo {
-                docs: function_docs[idx].clone(),
-                data_regions: func.body.data_regions.clone(),
+                docs: docs.clone(),
+                data_regions: data_regions.clone(),
             },
         );
     }
@@ -487,8 +489,8 @@ fn sanitize_symbol(component: &str) -> String {
 
 struct FunctionDocInfo {
     docs: Vec<YulDoc>,
-    /// Data regions from this function that need to be emitted as Yul data sections.
-    data_regions: Vec<mir::ir::DataRegionDef>,
+    /// Data regions collected during emission for Yul data sections.
+    data_regions: Vec<YulDataRegion>,
 }
 
 struct TestInfo {
@@ -1240,7 +1242,7 @@ fn reachable_data_regions_for_region(
     graph: &mir::analysis::ContractGraph,
     region: &ContractRegion,
     docs_by_symbol: &FxHashMap<String, FunctionDocInfo>,
-) -> Vec<mir::ir::DataRegionDef> {
+) -> Vec<YulDataRegion> {
     let mut data_regions = Vec::new();
     let mut seen_labels = FxHashSet::default();
     let Some(reachable) = graph.region_reachable.get(region) else {
@@ -1265,7 +1267,7 @@ fn reachable_data_regions_for_region(
 /// * `data_regions` - Data regions to emit.
 ///
 /// Returns Yul docs for each data section.
-fn emit_data_sections(data_regions: &[mir::ir::DataRegionDef]) -> Vec<YulDoc> {
+fn emit_data_sections(data_regions: &[YulDataRegion]) -> Vec<YulDoc> {
     data_regions
         .iter()
         .map(|dr| {

@@ -516,8 +516,8 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         Rvalue::Alloc { .. } => Err(LowerError::Internal(
             "Alloc rvalue should be handled directly in Assign lowering".to_string(),
         )),
-        Rvalue::CopyDataRegion { .. } => Err(LowerError::Unsupported(
-            "CopyDataRegion not yet supported in Sonatina backend".to_string(),
+        Rvalue::ConstAggregate { .. } => Err(LowerError::Unsupported(
+            "ConstAggregate not yet supported in Sonatina backend".to_string(),
         )),
     }
 }
@@ -641,9 +641,6 @@ fn lower_value_origin<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 let i256_val = bytes_to_i256(bytes);
                 Ok(ctx.fb.make_imm_value(i256_val))
             }
-            SyntheticValue::DataRegion { .. } => Err(LowerError::Unsupported(
-                "DataRegion synthetic values not yet supported in Sonatina backend".to_string(),
-            )),
         },
         ValueOrigin::Local(local_id) | ValueOrigin::PlaceRoot(local_id) => {
             let var = ctx.local_vars.get(local_id).copied().ok_or_else(|| {
