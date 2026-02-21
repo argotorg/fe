@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 33
 expression: output
 input_file: tests/fixtures/for_array_unrolled.fe
 ---
@@ -11,8 +10,8 @@ object "main" {
       if iszero(v0) {
         v0 := 0x80
       }
-      mstore(0x40, add(v0, 40))
-      datacopy(v0, dataoffset("data_0"), datasize("data_0"))
+      mstore(0x40, add(v0, 160))
+      datacopy(v0, dataoffset("data_for_array_unrolled_sum_0"), datasize("data_for_array_unrolled_sum_0"))
       let v1 := v0
       let v2 := 0
       let v3 := 0
@@ -62,5 +61,5 @@ object "main" {
       leave
     }
   }
-  data "data_0" hex"00000000000000010000000000000002000000000000000300000000000000040000000000000005"
+  data "data_for_array_unrolled_sum_0" hex"00000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000300000000000000000000000000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000000005"
 }

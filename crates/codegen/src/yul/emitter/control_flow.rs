@@ -557,6 +557,14 @@ impl<'db> FunctionEmitter<'db> {
             Some(true) => info.trip_count.filter(|&n| n <= 256),
             None => info.trip_count.filter(|&n| n < 10),
         };
+
+        // Don't unroll if the body contains a `break` goto (targets exit_block).
+        // Unrolled code has no Yul `for` loop, so `break` can't exit early.
+        // (`continue` is fine — it targets post_block which is a stop block,
+        // so emission stops at the right point for each unrolled iteration.)
+        let unroll_count = unroll_count
+            .filter(|_| !self.loop_body_has_break(info.body, info.exit, &info));
+
         if let Some(unroll_count) = unroll_count {
             // Find the index local from the post block (it's the one being assigned)
             let index_local = info.post_block.and_then(|post_bb| {
@@ -645,6 +653,69 @@ impl<'db> FunctionEmitter<'db> {
             body_docs,
         );
         Ok((loop_doc, info.exit))
+    }
+
+    /// Returns true if the loop body contains a `break` goto (targeting exit_block).
+    ///
+    /// Walks blocks reachable from `body`, stopping at structural boundaries
+    /// (init/post/backedge blocks). Any goto/branch/switch edge to `exit_block`
+    /// from within the body indicates a `break` statement.
+    fn loop_body_has_break(
+        &self,
+        body: BasicBlockId,
+        exit_block: BasicBlockId,
+        info: &LoopInfo,
+    ) -> bool {
+        // Boundary blocks: don't traverse into structural loop blocks.
+        let mut boundaries: FxHashSet<BasicBlockId> = FxHashSet::default();
+        boundaries.insert(exit_block);
+        if let Some(init) = info.init_block {
+            boundaries.insert(init);
+        }
+        if let Some(post) = info.post_block {
+            boundaries.insert(post);
+        }
+        if let Some(back) = info.backedge {
+            boundaries.insert(back);
+        }
+
+        let mut visited = FxHashSet::default();
+        let mut stack = vec![body];
+        while let Some(bb) = stack.pop() {
+            if !visited.insert(bb) || (boundaries.contains(&bb) && bb != body) {
+                continue;
+            }
+            let Some(block) = self.mir_func.body.blocks.get(bb.index()) else {
+                continue;
+            };
+            // Collect successor blocks from the terminator.
+            let mut succs = Vec::new();
+            match &block.terminator {
+                Terminator::Goto { target, .. } => succs.push(*target),
+                Terminator::Branch {
+                    then_bb, else_bb, ..
+                } => {
+                    succs.push(*then_bb);
+                    succs.push(*else_bb);
+                }
+                Terminator::Switch {
+                    targets, default, ..
+                } => {
+                    for t in targets {
+                        succs.push(t.block);
+                    }
+                    succs.push(*default);
+                }
+                _ => {}
+            }
+            for succ in succs {
+                if succ == exit_block {
+                    return true;
+                }
+                stack.push(succ);
+            }
+        }
+        false
     }
 }
 

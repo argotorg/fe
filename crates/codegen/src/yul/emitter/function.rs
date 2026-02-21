@@ -66,8 +66,14 @@ impl<'db> FunctionEmitter<'db> {
     }
 
     /// Registers constant aggregate data and returns a unique label for the data section.
+    ///
+    /// Labels include the function's symbol name to ensure global uniqueness
+    /// across functions within the same Yul object.
     pub(super) fn register_data_region(&mut self, bytes: Vec<u8>) -> String {
-        let label = format!("data_{}", self.data_region_counter);
+        let label = format!(
+            "data_{}_{}",
+            self.mir_func.symbol_name, self.data_region_counter
+        );
         self.data_region_counter += 1;
         self.data_regions.push(YulDataRegion {
             label: label.clone(),

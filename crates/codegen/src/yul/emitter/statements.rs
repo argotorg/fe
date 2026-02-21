@@ -248,10 +248,6 @@ impl<'db> FunctionEmitter<'db> {
         Ok(())
     }
 
-    /// Emits code to copy a data region from bytecode into memory.
-    ///
-    /// * `docs` - Accumulator for generated Yul statements.
-    /// * `dest` - MIR local to store the allocated memory pointer.
     /// Emits a constant aggregate by registering data for a Yul data section
     /// and copying it into allocated memory.
     fn emit_const_aggregate_inst(

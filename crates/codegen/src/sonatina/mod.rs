@@ -432,11 +432,14 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         // First pass: declare runtime-relevant functions.
         self.declare_functions()?;
 
-        // Second pass: create objects for codegen (select entry + section layout).
-        self.create_objects()?;
+        // Identify entry functions so lowering can emit evm_stop for entries.
+        self.identify_entry_functions()?;
 
-        // Third pass: lower function bodies that are actually declared/included.
+        // Second pass: lower function bodies (populates data_globals).
         self.lower_functions()?;
+
+        // Third pass: create objects with data directives (needs data_globals).
+        self.create_objects()?;
 
         Ok(())
     }
@@ -570,6 +573,39 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         Ok(())
     }
 
+    /// Identify which functions are contract entry points so their Return
+    /// terminators can be lowered as `evm_stop`. Must run before `lower_functions`.
+    fn identify_entry_functions(&mut self) -> Result<(), LowerError> {
+        use mir::analysis::build_contract_graph;
+
+        let contract_graph = build_contract_graph(&self.mir.functions);
+        if contract_graph.contracts.is_empty() {
+            return Ok(());
+        }
+
+        let mut func_idx_by_symbol: FxHashMap<&str, usize> = FxHashMap::default();
+        for (idx, func) in self.mir.functions.iter().enumerate() {
+            if self.func_map.contains_key(&idx) {
+                func_idx_by_symbol.insert(func.symbol_name.as_str(), idx);
+            }
+        }
+
+        for info in contract_graph.contracts.values() {
+            if let Some(symbol) = info.deployed_symbol.as_deref() {
+                if let Some(&idx) = func_idx_by_symbol.get(symbol) {
+                    self.entry_func_idxs.insert(idx);
+                }
+            }
+            if let Some(symbol) = info.init_symbol.as_deref() {
+                if let Some(&idx) = func_idx_by_symbol.get(symbol) {
+                    self.entry_func_idxs.insert(idx);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Create Sonatina objects for the module.
     ///
     /// Objects define how code is organized for compilation. Each object
@@ -629,14 +665,6 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
     ) -> Result<(), LowerError> {
         use mir::analysis::{ContractRegion, ContractRegionKind};
         use std::collections::VecDeque;
-
-        let mut func_idx_by_symbol: FxHashMap<&str, usize> = FxHashMap::default();
-        for (idx, func) in self.mir.functions.iter().enumerate() {
-            if !self.func_map.contains_key(&idx) {
-                continue;
-            }
-            func_idx_by_symbol.insert(func.symbol_name.as_str(), idx);
-        }
 
         let select_primary_contract = || -> Result<String, LowerError> {
             // Pick a primary contract to compile:
@@ -754,13 +782,6 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                         "unknown contract runtime entrypoint symbol: `{runtime_symbol}`"
                     ))
                 })?;
-                let runtime_idx = *func_idx_by_symbol.get(runtime_symbol).ok_or_else(|| {
-                    LowerError::Internal(format!(
-                        "unknown contract runtime entrypoint index: `{runtime_symbol}`"
-                    ))
-                })?;
-                self.entry_func_idxs.insert(runtime_idx);
-
                 let region = ContractRegion {
                     contract_name: contract_name.clone(),
                     kind: ContractRegionKind::Deployed,
@@ -796,13 +817,6 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                         "unknown contract init entrypoint symbol: `{init_symbol}`"
                     ))
                 })?;
-                let init_idx = *func_idx_by_symbol.get(init_symbol).ok_or_else(|| {
-                    LowerError::Internal(format!(
-                        "unknown contract init entrypoint index: `{init_symbol}`"
-                    ))
-                })?;
-                self.entry_func_idxs.insert(init_idx);
-
                 let region = ContractRegion {
                     contract_name: contract_name.clone(),
                     kind: ContractRegionKind::Init,
