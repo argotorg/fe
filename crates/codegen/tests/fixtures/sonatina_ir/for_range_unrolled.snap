@@ -1,0 +1,87 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
+expression: output
+input_file: crates/codegen/tests/fixtures/for_range_unrolled.fe
+---
+target = "evm-ethereum-osaka"
+
+func public %for_range_unrolled_sum() -> i256 {
+    block0:
+        v3.*i8 = evm_malloc 64.i256;
+        v4.i256 = ptr_to_int v3 i256;
+        mstore v4 0.i256 i256;
+        v6.i256 = add v4 32.i256;
+        mstore v6 5.i256 i256;
+        v7.i256 = call %range_unknown__unknown__h1dfb0ca64ed7bf96_seq_ha637d2df505bccf2_len v4;
+        jump block1;
+
+    block1:
+        v25.i256 = phi (0.i256 block0) (v17 block3);
+        v8.i256 = phi (0.i256 block0) (v20 block3);
+        v10.i1 = lt v8 v7;
+        v11.i256 = zext v10 i256;
+        v12.i1 = ne v11 0.i256;
+        br v12 block2 block4;
+
+    block2:
+        v15.i256 = call %range_unknown__unknown__h1dfb0ca64ed7bf96_seq_ha637d2df505bccf2_get v4 v8;
+        v17.i256 = add v25 v15;
+        jump block3;
+
+    block3:
+        v20.i256 = add v8 1.i256;
+        jump block1;
+
+    block4:
+        return v25;
+}
+
+func private %range_unknown__unknown__h1dfb0ca64ed7bf96_seq_ha637d2df505bccf2_len(v0.i256) -> i256 {
+    block0:
+        v3.i256 = add v0 32.i256;
+        v4.i256 = mload v3 i256;
+        v5.i256 = mload v0 i256;
+        v6.i1 = lt v4 v5;
+        v7.i256 = zext v6 i256;
+        v9.i1 = eq v7 1.i256;
+        br v9 block1 block4;
+
+    block1:
+        jump block3;
+
+    block2:
+        v12.i256 = add v0 32.i256;
+        v13.i256 = mload v12 i256;
+        v14.i256 = mload v0 i256;
+        v15.i256 = sub v13 v14;
+        jump block3;
+
+    block3:
+        v16.i256 = phi (0.i256 block1) (v15 block2);
+        return v16;
+
+    block4:
+        v10.i1 = eq v7 0.i256;
+        br v10 block2 block2;
+}
+
+func private %range_unknown__unknown__h1dfb0ca64ed7bf96_seq_ha637d2df505bccf2_get(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = mload v0 i256;
+        v4.i256 = add v3 v1;
+        return v4;
+}
+
+func public %__fe_sonatina_entry() {
+    block0:
+        v0.i256 = call %for_range_unrolled_sum;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+    }
+}

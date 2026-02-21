@@ -16,16 +16,16 @@ function $for_range_unrolled_sum() -> ret {
   mstore(v3, v1)
   mstore(add(v3, 32), v2)
   let v4 := 0
-  let v5 := $range_unknown__unknown__seq_len(v3)
+  let v5 := $range_unknown__unknown__h1dfb0ca64ed7bf96_seq_ha637d2df505bccf2_len(v3)
   for { } lt(v4, v5) { v4 := add(v4, 1) } {
-    let v6 := $range_unknown__unknown__seq_get(v3, v4)
+    let v6 := $range_unknown__unknown__h1dfb0ca64ed7bf96_seq_ha637d2df505bccf2_get(v3, v4)
     let v7 := v6
     v0 := add(v0, v7)
   }
   ret := v0
   leave
 }
-function $range_unknown__unknown__seq_len($self) -> ret {
+function $range_unknown__unknown__h1dfb0ca64ed7bf96_seq_ha637d2df505bccf2_len($self) -> ret {
   let v0 := mload(add($self, 32))
   let v1 := mload($self)
   let v2 := 0
@@ -46,7 +46,7 @@ function $range_unknown__unknown__seq_len($self) -> ret {
   ret := v2
   leave
 }
-function $range_unknown__unknown__seq_get($self, $i) -> ret {
+function $range_unknown__unknown__h1dfb0ca64ed7bf96_seq_ha637d2df505bccf2_get($self, $i) -> ret {
   let v0 := mload($self)
   ret := add(v0, $i)
   leave

@@ -22,9 +22,9 @@ use crate::analysis::ty::{
 pub struct ForLoopSeq<'db> {
     /// The type being iterated over
     pub iterable_ty: TyId<'db>,
-    /// The element type (T in Seq<T>)
+    /// The element type (Seq::Item for the iterable)
     pub elem_ty: TyId<'db>,
-    /// The trait instance (Seq<T> for the iterable type)
+    /// The trait instance (Seq for the iterable type)
     pub trait_inst: TraitInstId<'db>,
     /// Resolved callable for Seq::len(self) -> usize
     pub len_callable: Callable<'db>,
@@ -242,9 +242,9 @@ impl<'db> TyChecker<'db> {
                         continue;
                     }
 
-                    // Instantiate the impl's trait instance with fresh type variables
-                    // and unify to get the concrete types
-                    let raw_trait_inst = impl_id.trait_(self.db);
+                    // Instantiate the impl's trait instance (with associated type
+                    // bindings) using fresh type variables, then unify to get concrete types
+                    let raw_trait_inst = impl_id.trait_inst(self.db);
                     let trait_inst = self.table.instantiate_with_fresh_vars(
                         crate::analysis::ty::binder::Binder::bind(raw_trait_inst),
                     );
@@ -260,13 +260,15 @@ impl<'db> TyChecker<'db> {
                     use crate::analysis::ty::fold::TyFoldable;
                     let trait_inst = trait_inst.fold_with(self.db, &mut self.table);
 
-                    // For Seq<T>, the trait args are [Self, T]
-                    let trait_args = trait_inst.args(self.db);
-                    if trait_args.len() < 2 {
+                    // Resolve the element type from Seq's associated type `Item`
+                    let item_ident = IdentId::new(self.db, "Item".to_string());
+                    let Some(&elem_ty) =
+                        trait_inst.assoc_type_bindings(self.db).get(&item_ident)
+                    else {
                         self.table.rollback_to(snapshot);
                         continue;
-                    }
-                    let elem_ty = trait_args[1].fold_with(self.db, &mut self.table);
+                    };
+                    let elem_ty = elem_ty.fold_with(self.db, &mut self.table);
 
                     // Resolve len and get methods from the trait
                     let len_ident = IdentId::new(self.db, "len".to_string());
