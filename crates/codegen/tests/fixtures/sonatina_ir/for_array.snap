@@ -1,0 +1,77 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+expression: output
+input_file: crates/codegen/tests/fixtures/for_array.fe
+---
+target = "evm-ethereum-osaka"
+
+func public %for_array_sum() -> i256 {
+    block0:
+        v2.*i8 = evm_malloc 200.i256;
+        v3.i256 = ptr_to_int v2 i256;
+        v5.i256 = add v3 0.i256;
+        mstore v5 6277101735386680764516354157049543343084444891548699590660.i256 i256;
+        v8.i256 = add v3 32.i256;
+        mstore v8 31385508676933403821220641317563962861421152075426748694536.i256 i256;
+        v11.i256 = add v3 64.i256;
+        mstore v11 56493915618480126877924928478078382379757859259304797798412.i256 i256;
+        v14.i256 = add v3 96.i256;
+        mstore v14 81602322560026849934629215638592801898094566443182846902288.i256 i256;
+        v17.i256 = add v3 128.i256;
+        mstore v17 106710729501573572991333502799107221416431273627060896006164.i256 i256;
+        v20.i256 = add v3 160.i256;
+        mstore v20 131819136443120296048037789959621640934767980810938945110040.i256 i256;
+        v23.i256 = add v3 192.i256;
+        mstore v23 25.i256 i256;
+        v24.i256 = call %_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_len__u64_25__540b817a073b29f5 v3;
+        jump block1;
+
+    block1:
+        v42.i256 = phi (0.i256 block0) (v34 block3);
+        v25.i256 = phi (0.i256 block0) (v37 block3);
+        v27.i1 = lt v25 v24;
+        v28.i256 = zext v27 i256;
+        v29.i1 = ne v28 0.i256;
+        br v29 block2 block4;
+
+    block2:
+        v32.i256 = call %_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_get__u64_25__540b817a073b29f5 v3 v25;
+        v34.i256 = add v42 v32;
+        jump block3;
+
+    block3:
+        v37.i256 = add v25 1.i256;
+        jump block1;
+
+    block4:
+        return v42;
+}
+
+func private %_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_len__u64_25__540b817a073b29f5(v0.i256) -> i256 {
+    block0:
+        return 25.i256;
+}
+
+func private %_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_get__u64_25__540b817a073b29f5(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.*[i256; 25] = int_to_ptr v0 *[i256; 25];
+        v4.*i256 = gep v3 0.i256 v1;
+        v5.i256 = ptr_to_int v4 i256;
+        v6.i256 = mload v5 i256;
+        v7.i64 = trunc v6 i64;
+        v8.i256 = zext v7 i256;
+        return v8;
+}
+
+func public %__fe_sonatina_entry() {
+    block0:
+        v0.i256 = call %for_array_sum;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+    }
+}

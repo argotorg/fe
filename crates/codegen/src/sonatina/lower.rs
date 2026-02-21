@@ -62,6 +62,20 @@ pub(super) fn lower_instruction<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 return Ok(());
             }
 
+            if let mir::Rvalue::ConstAggregate { data, .. } = rvalue {
+                let Some(dest_local) = dest else {
+                    return Err(LowerError::Internal(
+                        "ConstAggregate without destination local".to_string(),
+                    ));
+                };
+                let value = lower_const_aggregate(ctx, data)?;
+                let dest_var = ctx.local_vars.get(dest_local).copied().ok_or_else(|| {
+                    LowerError::Internal(format!("missing SSA variable for local {dest_local:?}"))
+                })?;
+                ctx.fb.def_var(dest_var, value);
+                return Ok(());
+            }
+
             let result = lower_rvalue(ctx, rvalue)?;
             if let (Some(dest_local), Some(result_val)) = (dest, result) {
                 let dest_var = ctx.local_vars.get(dest_local).copied().ok_or_else(|| {
@@ -2114,4 +2128,28 @@ fn emit_evm_malloc_word_addr<C: sonatina_ir::func_cursor::FuncCursor>(
     let ptr_ty = fb.ptr_type(Type::I8);
     let ptr = fb.insert_inst(EvmMalloc::new(is, size), ptr_ty);
     fb.insert_inst(PtrToInt::new(is, ptr, Type::I256), Type::I256)
+}
+
+/// Lower a `ConstAggregate` by allocating memory and storing constant words.
+///
+/// The data bytes are already in big-endian EVM word format (32-byte aligned chunks).
+fn lower_const_aggregate<C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, '_, C>,
+    data: &[u8],
+) -> Result<ValueId, LowerError> {
+    let size_val = ctx.fb.make_imm_value(I256::from(data.len() as u64));
+    let ptr = emit_evm_malloc_word_addr(ctx.fb, size_val, ctx.is);
+
+    // Store each 32-byte word
+    for (i, chunk) in data.chunks(32).enumerate() {
+        let mut word = [0u8; 32];
+        word[32 - chunk.len()..].copy_from_slice(chunk);
+        let val = ctx.fb.make_imm_value(I256::from_be_bytes(&word));
+        let offset = ctx.fb.make_imm_value(I256::from((i * 32) as u64));
+        let addr = ctx.fb.insert_inst(Add::new(ctx.is, ptr, offset), Type::I256);
+        ctx.fb
+            .insert_inst_no_result(Mstore::new(ctx.is, addr, val, Type::I256));
+    }
+
+    Ok(ptr)
 }

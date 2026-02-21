@@ -1,0 +1,67 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+expression: output
+input_file: crates/codegen/tests/fixtures/for_array_unrolled.fe
+---
+target = "evm-ethereum-osaka"
+
+func public %for_array_unrolled_sum() -> i256 {
+    block0:
+        v2.*i8 = evm_malloc 40.i256;
+        v3.i256 = ptr_to_int v2 i256;
+        v5.i256 = add v3 0.i256;
+        mstore v5 6277101735386680764516354157049543343084444891548699590660.i256 i256;
+        v8.i256 = add v3 32.i256;
+        mstore v8 5.i256 i256;
+        v9.i256 = call %_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_len__u64_5__a25e52d088515cc7 v3;
+        jump block1;
+
+    block1:
+        v27.i256 = phi (0.i256 block0) (v19 block3);
+        v10.i256 = phi (0.i256 block0) (v22 block3);
+        v12.i1 = lt v10 v9;
+        v13.i256 = zext v12 i256;
+        v14.i1 = ne v13 0.i256;
+        br v14 block2 block4;
+
+    block2:
+        v17.i256 = call %_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_get__u64_5__a25e52d088515cc7 v3 v10;
+        v19.i256 = add v27 v17;
+        jump block3;
+
+    block3:
+        v22.i256 = add v10 1.i256;
+        jump block1;
+
+    block4:
+        return v27;
+}
+
+func private %_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_len__u64_5__a25e52d088515cc7(v0.i256) -> i256 {
+    block0:
+        return 5.i256;
+}
+
+func private %_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_get__u64_5__a25e52d088515cc7(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.*[i256; 5] = int_to_ptr v0 *[i256; 5];
+        v4.*i256 = gep v3 0.i256 v1;
+        v5.i256 = ptr_to_int v4 i256;
+        v6.i256 = mload v5 i256;
+        v7.i64 = trunc v6 i64;
+        v8.i256 = zext v7 i256;
+        return v8;
+}
+
+func public %__fe_sonatina_entry() {
+    block0:
+        v0.i256 = call %for_array_unrolled_sum;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+    }
+}
