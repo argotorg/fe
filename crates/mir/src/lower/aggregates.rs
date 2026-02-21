@@ -200,17 +200,17 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             && let Some(const_bytes) = self.try_extract_const_array_bytes(elems, elem_ty, elem_size)
             && self.current_block().is_some()
         {
-            // Use DataRegion for const arrays (both small and large)
-            let label = self.builder.body.register_data_region(const_bytes.clone());
-            let size = const_bytes.len();
-
+            // Use ConstAggregate for const arrays (backend decides materialization)
             let dest = self.alloc_temp_local(array_ty, false, "array_data");
             self.builder.body.locals[dest.index()].address_space = AddressSpaceKind::Memory;
 
             self.push_inst_here(MirInst::Assign {
                 source: crate::ir::SourceInfoId::SYNTHETIC,
                 dest: Some(dest),
-                rvalue: Rvalue::CopyDataRegion { label, size },
+                rvalue: Rvalue::ConstAggregate {
+                    data: const_bytes,
+                    ty: array_ty,
+                },
             });
 
             self.builder.body.values[fallback.index()].origin = ValueOrigin::Local(dest);

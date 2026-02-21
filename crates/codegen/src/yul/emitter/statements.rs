@@ -113,13 +113,13 @@ impl<'db> FunctionEmitter<'db> {
                 };
                 self.emit_alloc_inst(docs, dest, *address_space, state)?
             }
-            mir::ir::Rvalue::CopyDataRegion { label, size } => {
+            mir::ir::Rvalue::ConstAggregate { data, .. } => {
                 let Some(dest) = dest else {
                     return Err(YulError::Unsupported(
-                        "copy_data_region without destination".into(),
+                        "const_aggregate without destination".into(),
                     ));
                 };
-                self.emit_copy_data_region_inst(docs, dest, label, *size, state)?
+                self.emit_const_aggregate_inst(docs, dest, data, state)?
             }
         }
         Ok(())
@@ -252,17 +252,17 @@ impl<'db> FunctionEmitter<'db> {
     ///
     /// * `docs` - Accumulator for generated Yul statements.
     /// * `dest` - MIR local to store the allocated memory pointer.
-    /// * `label` - Label of the data region in the Yul data section.
-    /// * `size` - Size in bytes of the data region.
-    /// * `state` - Block state containing active bindings.
-    fn emit_copy_data_region_inst(
+    /// Emits a constant aggregate by registering data for a Yul data section
+    /// and copying it into allocated memory.
+    fn emit_const_aggregate_inst(
         &mut self,
         docs: &mut Vec<YulDoc>,
         dest: LocalId,
-        label: &str,
-        size: usize,
+        data: &[u8],
         state: &mut BlockState,
     ) -> Result<(), YulError> {
+        let label = self.register_data_region(data.to_vec());
+        let size = data.len();
         let (yul_name, declared) = self.resolve_local_for_write(dest, state)?;
         // Allocate memory for the data
         self.emit_alloc_value(docs, &yul_name, size, declared);
