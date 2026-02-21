@@ -13,8 +13,8 @@ driver.workspace = true
 hir.workspace = true
 parser.workspace = true
 
-# Doc viewer (for model types)
-doc-viewer = { path = "../doc-viewer", package = "fe-doc-viewer" }
+# Model types (shared with WASM)
+fe-web = { path = "../fe-web" }
 
 # Core dependencies
 salsa.workspace = true
