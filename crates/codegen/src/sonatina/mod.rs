@@ -591,15 +591,15 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         }
 
         for info in contract_graph.contracts.values() {
-            if let Some(symbol) = info.deployed_symbol.as_deref() {
-                if let Some(&idx) = func_idx_by_symbol.get(symbol) {
-                    self.entry_func_idxs.insert(idx);
-                }
+            if let Some(symbol) = info.deployed_symbol.as_deref()
+                && let Some(&idx) = func_idx_by_symbol.get(symbol)
+            {
+                self.entry_func_idxs.insert(idx);
             }
-            if let Some(symbol) = info.init_symbol.as_deref() {
-                if let Some(&idx) = func_idx_by_symbol.get(symbol) {
-                    self.entry_func_idxs.insert(idx);
-                }
+            if let Some(symbol) = info.init_symbol.as_deref()
+                && let Some(&idx) = func_idx_by_symbol.get(symbol)
+            {
+                self.entry_func_idxs.insert(idx);
             }
         }
 
