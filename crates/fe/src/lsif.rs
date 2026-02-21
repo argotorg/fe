@@ -4,8 +4,8 @@ use std::io::{self, Write};
 use common::InputDb;
 use common::diagnostics::Span;
 use hir::{
-    HirDb, SpannedHirDb,
-    hir_def::{Attr, HirIngot, ItemKind, scope_graph::ScopeId},
+    core::semantic::{ReferenceIndex, SymbolView},
+    hir_def::{HirIngot, ItemKind, scope_graph::ScopeId},
     span::LazySpan,
 };
 
@@ -215,63 +215,16 @@ impl<W: Write> LsifEmitter<W> {
     }
 }
 
-/// Get the docstring for a scope.
-fn get_docstring(db: &dyn HirDb, scope: ScopeId) -> Option<String> {
-    scope
-        .attrs(db)?
-        .data(db)
-        .iter()
-        .filter_map(|attr| {
-            if let Attr::DocComment(doc) = attr {
-                Some(doc.text.data(db).clone())
-            } else {
-                None
-            }
-        })
-        .reduce(|a, b| a + "\n" + &b)
-}
-
-/// Get a simple definition string for an item (used for hover).
-fn get_item_definition(db: &dyn SpannedHirDb, item: ItemKind) -> Option<String> {
-    let span = item.span().resolve(db)?;
-
-    let mut start: usize = span.range.start().into();
-    let mut end: usize = span.range.end().into();
-
-    // Trim body for functions, modules
-    let body_start = match item {
-        ItemKind::Func(func) => Some(func.body(db)?.span().resolve(db)?.range.start()),
-        ItemKind::Mod(module) => Some(module.scope().name_span(db)?.resolve(db)?.range.end()),
-        _ => None,
-    };
-    if let Some(body_start) = body_start {
-        end = body_start.into();
-    }
-
-    // Start at the beginning of the name line
-    let name_span = item.name_span()?.resolve(db);
-    if let Some(name_span) = name_span {
-        let file_text = span.file.text(db).as_str();
-        let mut name_line_start: usize = name_span.range.start().into();
-        while name_line_start > 0 && file_text.as_bytes().get(name_line_start - 1) != Some(&b'\n') {
-            name_line_start -= 1;
-        }
-        start = name_line_start;
-    }
-
-    let item_definition = span.file.text(db).as_str()[start..end].to_string();
-    Some(item_definition.trim().to_string())
-}
-
-/// Build hover content for an item (definition + docstring).
+/// Build hover content for an item (definition + docstring) using SymbolView.
 fn build_hover_content(db: &driver::DriverDataBase, item: ItemKind) -> Option<String> {
-    let definition = get_item_definition(db, item)?;
-    let docstring = get_docstring(db, item.scope());
+    let sym = SymbolView::from_item(item);
+    let signature = sym.signature(db)?;
+    let docstring = sym.docs(db);
 
     if let Some(doc) = docstring {
-        Some(format!("{definition}\n\n{doc}"))
+        Some(format!("{signature}\n\n{doc}"))
     } else {
-        Some(definition)
+        Some(signature)
     }
 }
 
@@ -304,6 +257,9 @@ pub fn generate_lsif(
         .version(db)
         .map(|v| v.to_string())
         .unwrap_or_else(|| "0.0.0".to_string());
+
+    // Build reference index once for the whole ingot
+    let ref_index = ReferenceIndex::build(db, ingot);
 
     // Track documents: url -> (vertex_id, range_ids)
     let mut documents: HashMap<String, (u64, Vec<u64>)> = HashMap::new();
@@ -373,52 +329,44 @@ pub fn generate_lsif(
                 emitter.emit_edge("textDocument/hover", result_set_id, hover_id)?;
             }
 
-            // Reference result
-            let target = hir::core::semantic::reference::Target::Scope(scope);
+            // Reference result using ReferenceIndex
             let ref_result_id = emitter.emit_reference_result()?;
             emitter.emit_edge("textDocument/references", result_set_id, ref_result_id)?;
 
             // Definition is also a reference
             emitter.emit_edge_many("item", ref_result_id, &[range_id], Some(doc_id))?;
 
-            // Collect references from all modules
-            for ref_mod in ingot.all_modules(db) {
-                let refs = ref_mod.references_to_target(db, &target);
-                if refs.is_empty() {
-                    continue;
-                }
-
-                let ref_doc_span = ref_mod.span().resolve(db);
-                let ref_doc_url = match &ref_doc_span {
-                    Some(span) => match span.file.url(db) {
+            // Collect references from the pre-built index
+            // Group by document URL so we can emit per-document item edges
+            let mut refs_by_doc: HashMap<String, Vec<u64>> = HashMap::new();
+            for indexed_ref in ref_index.references_to(&scope) {
+                if let Some(resolved) = indexed_ref.span.resolve(db)
+                    && let Some(r) = span_to_range(&resolved, db)
+                {
+                    let ref_doc_url = match resolved.file.url(db) {
                         Some(url) => url.to_string(),
                         None => continue,
-                    },
-                    None => continue,
-                };
-
-                let mut ref_range_ids = Vec::new();
-                for matched in refs {
-                    if let Some(resolved) = matched.span.resolve(db)
-                        && let Some(r) = span_to_range(&resolved, db)
-                    {
-                        let ref_range_id = emitter.emit_range(r)?;
-                        ref_range_ids.push(ref_range_id);
-                    }
+                    };
+                    let ref_range_id = emitter.emit_range(r)?;
+                    refs_by_doc
+                        .entry(ref_doc_url)
+                        .or_default()
+                        .push(ref_range_id);
                 }
+            }
 
+            for (ref_doc_url, ref_range_ids) in &refs_by_doc {
                 if !ref_range_ids.is_empty() {
-                    // Look up existing document (guaranteed to exist from pre-emission)
-                    let ref_doc_id = documents[&ref_doc_url].0;
+                    let ref_doc_id = documents[ref_doc_url].0;
                     documents
-                        .get_mut(&ref_doc_url)
+                        .get_mut(ref_doc_url)
                         .unwrap()
                         .1
-                        .extend_from_slice(&ref_range_ids);
+                        .extend_from_slice(ref_range_ids);
                     emitter.emit_edge_many(
                         "item",
                         ref_result_id,
-                        &ref_range_ids,
+                        ref_range_ids,
                         Some(ref_doc_id),
                     )?;
                 }

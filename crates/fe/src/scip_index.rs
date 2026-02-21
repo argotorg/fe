@@ -5,9 +5,8 @@ use camino::{Utf8Path, Utf8PathBuf};
 use common::InputDb;
 use common::diagnostics::Span;
 use hir::{
-    HirDb, SpannedHirDb,
-    core::semantic::reference::Target,
-    hir_def::{Attr, HirIngot, ItemKind, scope_graph::ScopeId},
+    core::semantic::{ReferenceIndex, SymbolView},
+    hir_def::{HirIngot, ItemKind, scope_graph::ScopeId},
     span::LazySpan,
 };
 use scip::{
@@ -97,56 +96,13 @@ fn relative_path(project_root: &Utf8Path, doc_url: &url::Url) -> Option<String> 
     Some(relative.to_string())
 }
 
-fn get_docstring(db: &dyn HirDb, scope: ScopeId) -> Option<String> {
-    scope
-        .attrs(db)?
-        .data(db)
-        .iter()
-        .filter_map(|attr| {
-            if let Attr::DocComment(doc) = attr {
-                Some(doc.text.data(db).clone())
-            } else {
-                None
-            }
-        })
-        .reduce(|a, b| a + "\n" + &b)
-}
-
-fn get_item_definition(db: &dyn SpannedHirDb, item: ItemKind) -> Option<String> {
-    let span = item.span().resolve(db)?;
-
-    let mut start: usize = span.range.start().into();
-    let mut end: usize = span.range.end().into();
-
-    let body_start = match item {
-        ItemKind::Func(func) => Some(func.body(db)?.span().resolve(db)?.range.start()),
-        ItemKind::Mod(module) => Some(module.scope().name_span(db)?.resolve(db)?.range.end()),
-        _ => None,
-    };
-    if let Some(body_start) = body_start {
-        end = body_start.into();
-    }
-
-    let name_span = item.name_span()?.resolve(db);
-    if let Some(name_span) = name_span {
-        let file_text = span.file.text(db).as_str();
-        let mut name_line_start: usize = name_span.range.start().into();
-        while name_line_start > 0 && file_text.as_bytes().get(name_line_start - 1) != Some(&b'\n') {
-            name_line_start -= 1;
-        }
-        start = name_line_start;
-    }
-
-    let item_definition = span.file.text(db).as_str()[start..end].to_string();
-    Some(item_definition.trim().to_string())
-}
-
 fn build_symbol_documentation(db: &driver::DriverDataBase, item: ItemKind) -> Vec<String> {
+    let sym = SymbolView::from_item(item);
     let mut parts = Vec::new();
-    if let Some(definition) = get_item_definition(db, item) {
-        parts.push(format!("```fe\n{definition}\n```"));
+    if let Some(signature) = sym.signature(db) {
+        parts.push(format!("```fe\n{signature}\n```"));
     }
-    if let Some(doc) = get_docstring(db, item.scope()) {
+    if let Some(doc) = sym.docs(db) {
         parts.push(doc);
     }
     if parts.is_empty() {
@@ -262,6 +218,9 @@ pub fn generate_scip(
         .map(|v| v.to_string())
         .unwrap_or_else(|| "0.0.0".to_string());
 
+    // Build reference index once for the whole ingot
+    let ref_index = ReferenceIndex::build(db, ingot);
+
     let mut documents: HashMap<String, ScipDocumentBuilder> = HashMap::new();
 
     for top_mod in ingot.all_modules(db) {
@@ -314,21 +273,15 @@ pub fn generate_scip(
                 }
             }
 
-            let target = Target::Scope(ScopeId::from_item(item));
-            for ref_mod in ingot.all_modules(db) {
-                let refs = ref_mod.references_to_target(db, &target);
-                if refs.is_empty() {
-                    continue;
-                }
-                let Some(ref_doc_url) = top_mod_url(db, ref_mod).map(|u| u.to_string()) else {
-                    continue;
-                };
-                let Some(ref_doc) = documents.get_mut(&ref_doc_url) else {
-                    continue;
-                };
-
-                for matched in refs {
-                    if let Some(resolved) = matched.span.resolve(db)
+            // Use ReferenceIndex instead of scanning all modules
+            let scope = ScopeId::from_item(item);
+            for indexed_ref in ref_index.references_to(&scope) {
+                if let Some(resolved) = indexed_ref.span.resolve(db) {
+                    let ref_doc_url = match resolved.file.url(db) {
+                        Some(url) => url.to_string(),
+                        None => continue,
+                    };
+                    if let Some(ref_doc) = documents.get_mut(&ref_doc_url)
                         && let Some(range) = span_to_scip_range(&resolved, db)
                     {
                         push_occurrence(ref_doc, range, symbol.clone(), 0);
