@@ -497,9 +497,11 @@ pub struct LoopInfo {
     /// Optional block containing the post-iteration code (e.g., increment for for-loops).
     /// If present, this block's instructions are rendered as the Yul for-loop post section.
     pub post_block: Option<BasicBlockId>,
-    /// If Some(n), the loop should be unrolled n times instead of emitted as a loop.
-    /// The Yul emitter will emit the loop body n times sequentially.
-    pub unroll_count: Option<usize>,
+    /// Unroll hint from source attributes: `Some(true)` = `#[unroll]`, `Some(false)` = `#[no_unroll]`, `None` = auto.
+    pub unroll_hint: Option<bool>,
+    /// Statically-known trip count, if the iterator length is a compile-time constant.
+    /// Backends use this together with `unroll_hint` to decide whether to unroll.
+    pub trip_count: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
