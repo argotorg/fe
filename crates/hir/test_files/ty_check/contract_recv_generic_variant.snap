@@ -5,10 +5,10 @@ expression: res
 input_file: test_files/ty_check/contract_recv_generic_variant.fe
 ---
 note: 
-   ┌─ contract_recv_generic_variant.fe:10:74
+   ┌─ contract_recv_generic_variant.fe:10:78
    │  
-10 │       fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(self, mut _ e: E) {
-   │ ╭──────────────────────────────────────────────────────────────────────────^
+10 │       fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(own self, _ e: mut E) {
+   │ ╭──────────────────────────────────────────────────────────────────────────────^
 11 │ │         let Self { value } = self
 12 │ │         value.encode(e)
 13 │ │     }
@@ -48,12 +48,12 @@ note:
    ┌─ contract_recv_generic_variant.fe:12:22
    │
 12 │         value.encode(e)
-   │                      ^ E
+   │                      ^ mut E
 
 note: 
    ┌─ contract_recv_generic_variant.fe:19:76
    │  
-19 │       fn decode<D: core::abi::AbiDecoder<std::abi::Sol>>(mut _ d: D) -> Self {
+19 │       fn decode<D: core::abi::AbiDecoder<std::abi::Sol>>(_ d: mut D) -> Self {
    │ ╭────────────────────────────────────────────────────────────────────────────^
 20 │ │         let value = T::decode(d)
 21 │ │         Self { value }
@@ -82,7 +82,7 @@ note:
    ┌─ contract_recv_generic_variant.fe:20:31
    │
 20 │         let value = T::decode(d)
-   │                               ^ D
+   │                               ^ mut D
 
 note: 
    ┌─ contract_recv_generic_variant.fe:21:9

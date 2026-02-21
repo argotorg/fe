@@ -14,29 +14,46 @@ ast_node! {
 ast_node! {
     /// A single parameter.
     /// `self`
-    /// `label a: u256`
+    /// `a: u256`
+    /// `_ a: u256`
     pub struct FuncParam,
     SK::FnParam,
 }
 impl FuncParam {
+    /// Returns the `ref` keyword for shorthand borrowed receivers (`ref self`).
+    pub fn ref_token(&self) -> Option<SyntaxToken> {
+        support::token(self.syntax(), SK::RefKw)
+    }
+
+    /// Returns the `own` keyword for shorthand owned receivers (`own self`).
+    pub fn own_token(&self) -> Option<SyntaxToken> {
+        support::token(self.syntax(), SK::OwnKw)
+    }
+
     /// Returns the `mut` keyword if the parameter is mutable.
     pub fn mut_token(&self) -> Option<SyntaxToken> {
         support::token(self.syntax(), SK::MutKw)
     }
 
-    /// Returns the `label` if the parameter is labeled.
-    /// `label` in `label a: u256`.
-    pub fn label(&self) -> Option<FuncParamLabel> {
-        self.syntax()
-            .children_with_tokens()
-            .find_map(|child| match child {
-                rowan::NodeOrToken::Token(token) => FuncParamLabel::from_token(token),
-                _ => None,
-            })
+    /// Returns `true` if the parameter uses `_` as an argument label (e.g.
+    /// `_ x: u256`), meaning it doesn't have an argument label at the call site.
+    pub fn is_label_suppressed(&self) -> bool {
+        let mut param_names = self.syntax().children_with_tokens().filter_map(|child| {
+            if let rowan::NodeOrToken::Token(token) = child {
+                FuncParamName::from_token(token)
+            } else {
+                None
+            }
+        });
+
+        matches!(
+            (param_names.next(), param_names.next()),
+            (Some(FuncParamName::Underscore(_)), Some(_))
+        )
     }
 
     /// Returns the name of the parameter.
-    /// `a` in `label a: u256`.
+    /// `a` in `_ a: u256`.
     pub fn name(&self) -> Option<FuncParamName> {
         let mut param_names = self.syntax().children_with_tokens().filter_map(|child| {
             if let rowan::NodeOrToken::Token(token) = child {
@@ -46,10 +63,14 @@ impl FuncParam {
             }
         });
 
-        let first = param_names.next();
-        match param_names.next() {
-            Some(second) => Some(second),
-            None => first,
+        let first = param_names.next()?;
+        let second = param_names.next();
+
+        // If the label is `_`, the following name token is the parameter name.
+        // Otherwise, the first token is both the label and the name.
+        match (first, second) {
+            (FuncParamName::Underscore(_), Some(second)) => Some(second),
+            (first, _) => Some(first),
         }
     }
 
@@ -177,6 +198,10 @@ impl ConstGenericParam {
     pub fn ty(&self) -> Option<super::Type> {
         support::child(self.syntax())
     }
+
+    pub fn default_expr(&self) -> Option<super::Expr> {
+        support::child(self.syntax())
+    }
 }
 
 ast_node! {
@@ -281,7 +306,7 @@ impl WherePredicate {
 // ===== Uses clause AST nodes =====
 
 ast_node! {
-    /// `uses Ctx` or `uses (Ctx, mut Storage, c: Ctx)`
+    /// `uses Ctx` or `uses (Ctx, mut Storage, c: Ctx, f: mut Foo)`
     pub struct UsesClause,
     SK::UsesClause,
 }
@@ -311,7 +336,7 @@ ast_node! {
 
 ast_node! {
     /// A single `uses` parameter.
-    /// Supports: `Type`, `mut Type`, `name: Type`, `mut name: Type`.
+    /// Supports: `Type`, `mut Type`, `name: Type`, `name: mut Type`.
     pub struct UsesParam,
     SK::UsesParam,
 }
@@ -497,32 +522,8 @@ pub trait WhereClauseOwner: AstNode<Language = FeLang> {
     }
 }
 
-pub enum FuncParamLabel {
-    /// `label` in `label a: u256`
-    Ident(SyntaxToken),
-    /// `_` in `_ a: u256`.
-    Underscore(SyntaxToken),
-}
-impl FuncParamLabel {
-    pub fn syntax(&self) -> SyntaxToken {
-        match self {
-            FuncParamLabel::Ident(token) => token,
-            FuncParamLabel::Underscore(token) => token,
-        }
-        .clone()
-    }
-
-    fn from_token(token: SyntaxToken) -> Option<Self> {
-        match token.kind() {
-            SK::Ident => Some(FuncParamLabel::Ident(token)),
-            SK::Underscore => Some(FuncParamLabel::Underscore(token)),
-            _ => None,
-        }
-    }
-}
-
 pub enum FuncParamName {
-    /// `a` in `label a: u256`
+    /// `a` in `a: u256`
     Ident(SyntaxToken),
     /// `self` parameter.
     SelfParam(SyntaxToken),
@@ -756,6 +757,13 @@ mod tests {
         crate::ast::Func::cast(parser.finish_to_node().0).unwrap()
     }
 
+    fn parse_func_with_errors(source: &str) -> Vec<crate::ParseError> {
+        let lexer = Lexer::new(source);
+        let mut parser = Parser::new(lexer);
+        parser.parse(FuncScope::default()).unwrap();
+        parser.finish_to_node().1
+    }
+
     #[test]
     #[wasm_bindgen_test]
     fn uses_clause_single_type() {
@@ -784,7 +792,7 @@ mod tests {
     #[test]
     #[wasm_bindgen_test]
     fn uses_clause_param_list_variants() {
-        let f = parse_func("fn f() uses (Ctx, mut Storage, c: Ctx, mut f: Foo) {}");
+        let f = parse_func("fn f() uses (Ctx, mut Storage, c: Ctx, f: mut Foo) {}");
         let uc = f.sig().uses_clause().expect("missing uses clause");
         let list = uc.param_list().expect("expected param list");
         let params: Vec<_> = list.iter().collect();
@@ -809,12 +817,38 @@ mod tests {
         let seg2 = path2.segments().next().unwrap();
         assert_eq!(seg2.ident().unwrap().text(), "Ctx");
 
-        // 3: mut f: Foo
+        // 3: f: mut Foo
         assert!(params[3].mut_token().is_some());
         let n = params[3].name().expect("missing name");
         assert_eq!(n.syntax().text(), "f");
         let path3 = params[3].path().expect("missing path");
         let seg3 = path3.segments().next().unwrap();
         assert_eq!(seg3.ident().unwrap().text(), "Foo");
+    }
+
+    #[test]
+    #[wasm_bindgen_test]
+    fn uses_clause_rejects_legacy_typed_mut_prefix() {
+        let errors = parse_func_with_errors("fn f() uses (mut x: Foo) {}");
+        assert!(!errors.is_empty(), "expected parser error");
+        assert!(errors.iter().any(|err| {
+            err.msg()
+                .contains("`uses` typed parameters use `name: mut Type`, not `mut name: Type`")
+        }));
+    }
+
+    #[test]
+    #[wasm_bindgen_test]
+    fn uses_clause_rejects_ref_and_own_modes_for_typed_params() {
+        let errors = parse_func_with_errors("fn f() uses (x: ref Foo, y: own Foo) {}");
+        assert!(!errors.is_empty(), "expected parser errors");
+        assert!(errors.iter().any(|err| {
+            err.msg()
+                .contains("typed `uses` parameters only support `mut`; remove `ref`")
+        }));
+        assert!(errors.iter().any(|err| {
+            err.msg()
+                .contains("typed `uses` parameters only support `mut`; remove `own`")
+        }));
     }
 }

@@ -1,0 +1,13 @@
+use core::intrinsic
+
+// Real-world use case: computing a Solidity-style mapping slot hash at compile time.
+// Equivalent to `keccak256(abi.encode(key, slot))`.
+const BALANCES_SLOT: u256 = {
+    let words: [u256; 2] = [0x1111111111111111111111111111111111111111, 7]
+    let bytes: [u8; 64] = intrinsic::__as_bytes(words)
+    intrinsic::__keccak256(bytes)
+}
+
+fn main() -> u256 {
+    BALANCES_SLOT
+}

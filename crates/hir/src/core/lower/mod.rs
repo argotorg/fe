@@ -20,6 +20,7 @@ use crate::{
     },
     span::HirOrigin,
 };
+pub use event::{EventError, EventErrorKind};
 pub use item::{SelectorError, SelectorErrorKind};
 pub use parse::parse_file_impl;
 
@@ -28,6 +29,7 @@ pub(crate) mod parse;
 mod attr;
 mod body;
 mod contract;
+mod event;
 mod expr;
 mod hir_builder;
 mod item;
@@ -39,6 +41,18 @@ mod scope_builder;
 mod stmt;
 mod types;
 mod use_tree;
+
+pub(super) fn lower_visibility(owner: &impl ItemModifierOwner) -> Visibility {
+    if owner.pub_kw().is_some() {
+        Visibility::Public
+    } else {
+        Visibility::Private
+    }
+}
+
+pub(super) fn lower_is_unsafe(owner: &impl ItemModifierOwner) -> bool {
+    owner.unsafe_kw().is_some()
+}
 
 /// Maps the given file to a top-level module.
 /// This function just maps the file to a top-level module, and doesn't perform
@@ -104,12 +118,16 @@ pub(crate) fn top_mod_ast(db: &dyn HirDb, top_mod: TopLevelMod) -> ast::Root {
 
 pub(super) struct FileLowerCtxt<'db> {
     builder: ScopeGraphBuilder<'db>,
+    next_impl_idx: u32,
+    next_impl_trait_idx: u32,
 }
 
 impl<'db> FileLowerCtxt<'db> {
     pub(super) fn enter_top_mod(db: &'db dyn HirDb, top_mod: TopLevelMod<'db>) -> Self {
         Self {
             builder: ScopeGraphBuilder::enter_top_mod(db, top_mod),
+            next_impl_idx: 0,
+            next_impl_trait_idx: 0,
         }
     }
 
@@ -135,31 +153,7 @@ impl<'db> FileLowerCtxt<'db> {
 
         let core = IdentId::new(db, "core".to_string());
         let prelude = IdentId::new(db, "prelude".to_string());
-
-        let segs = vec![
-            Partial::Present(UsePathSegment::Ident(core)),
-            Partial::Present(UsePathSegment::Ident(prelude)),
-            Partial::Present(UsePathSegment::Glob),
-        ];
-        let path = Partial::Present(UsePathId::new(db, segs));
-
-        let id = self.joined_id(TrackedItemVariant::Use(path));
-        self.enter_item_scope(id, false);
-
-        let top_mod = self.top_mod();
-        let origin = HirOrigin::synthetic();
-        let attrs = AttrListId::new(db, vec![]);
-        let use_ = Use::new(
-            db,
-            id,
-            attrs,
-            path,
-            None,
-            Visibility::Private,
-            top_mod,
-            origin,
-        );
-        self.leave_item_scope(use_);
+        self.insert_synthetic_use(vec![core, prelude]);
     }
 
     /// Inserts `use super::*` to re-export parent module items into current scope.
@@ -193,6 +187,34 @@ impl<'db> FileLowerCtxt<'db> {
         self.leave_item_scope(use_);
     }
 
+    fn insert_synthetic_use(&mut self, segments: Vec<IdentId<'db>>) {
+        let db = self.db();
+        let segs: Vec<Partial<UsePathSegment<'db>>> = segments
+            .into_iter()
+            .map(|ident| Partial::Present(UsePathSegment::Ident(ident)))
+            .chain(std::iter::once(Partial::Present(UsePathSegment::Glob)))
+            .collect();
+        let path = Partial::Present(UsePathId::new(db, segs));
+
+        let id = self.joined_id(TrackedItemVariant::Use(path));
+        self.enter_item_scope(id, false);
+
+        let top_mod = self.top_mod();
+        let origin = HirOrigin::synthetic();
+        let attrs = AttrListId::new(db, vec![]);
+        let use_ = Use::new(
+            db,
+            id,
+            attrs,
+            path,
+            None,
+            Visibility::Private,
+            top_mod,
+            origin,
+        );
+        self.leave_item_scope(use_);
+    }
+
     pub(super) fn enter_block_scope(&mut self) {
         self.builder.enter_block_scope();
     }
@@ -205,12 +227,16 @@ impl<'db> FileLowerCtxt<'db> {
         self.builder.joined_id(id)
     }
 
-    pub(super) fn current_id(&self) -> TrackedItemId<'db> {
-        self.builder.current_id()
+    pub(super) fn next_impl_idx(&mut self) -> u32 {
+        let idx = self.next_impl_idx;
+        self.next_impl_idx += 1;
+        idx
     }
 
-    pub(super) fn set_current_id(&mut self, id: TrackedItemId<'db>) {
-        self.builder.set_current_id(id);
+    pub(super) fn next_impl_trait_idx(&mut self) -> u32 {
+        let idx = self.next_impl_trait_idx;
+        self.next_impl_trait_idx += 1;
+        idx
     }
 
     /// Creates a new scope for an item.

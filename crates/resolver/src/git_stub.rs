@@ -89,6 +89,25 @@ impl GitResolver {
     pub fn has_valid_cached_checkout(&self, _description: &GitDescription) -> bool {
         false
     }
+
+    pub fn ensure_checkout_resource(
+        &self,
+        _description: &GitDescription,
+    ) -> Result<GitResource, GitResolutionError> {
+        Err(GitResolutionError::UnsupportedTarget)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum GitResolutionEvent {
+    CheckoutStart {
+        description: GitDescription,
+    },
+    CheckoutComplete {
+        description: GitDescription,
+        checkout_path: Utf8PathBuf,
+        reused_checkout: bool,
+    },
 }
 
 impl Resolver for GitResolver {
@@ -96,6 +115,7 @@ impl Resolver for GitResolver {
     type Resource = GitResource;
     type Error = GitResolutionError;
     type Diagnostic = GitResolutionDiagnostic;
+    type Event = GitResolutionEvent;
 
     fn resolve<H>(
         &mut self,
@@ -105,11 +125,18 @@ impl Resolver for GitResolver {
     where
         H: ResolutionHandler<Self>,
     {
-        handler.on_resolution_start(description);
+        handler.on_resolution_event(GitResolutionEvent::CheckoutStart {
+            description: description.clone(),
+        });
         let resource = GitResource {
             reused_checkout: false,
             checkout_path: Utf8PathBuf::from("unsupported-wasm"),
         };
+        handler.on_resolution_event(GitResolutionEvent::CheckoutComplete {
+            description: description.clone(),
+            checkout_path: resource.checkout_path.clone(),
+            reused_checkout: resource.reused_checkout,
+        });
         // Return an error so graph resolution will record an unresolvable node.
         let _ = resource;
         Err(GitResolutionError::UnsupportedTarget)

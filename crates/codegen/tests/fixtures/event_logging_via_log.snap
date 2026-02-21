@@ -1,0 +1,101 @@
+---
+source: crates/codegen/tests/yul.rs
+assertion_line: 33
+expression: output
+input_file: tests/fixtures/event_logging_via_log.fe
+---
+function $emit_transfer($evm, $from, $to, $amount) {
+  let v0 := mload(0x40)
+  if iszero(v0) {
+    v0 := 0x80
+  }
+  mstore(0x40, add(v0, 96))
+  mstore(v0, $from)
+  mstore(add(v0, 32), $to)
+  mstore(add(v0, 64), $amount)
+  $emit__Evm_hef0af3106e109414_Transfer_h628c212e2bb5f76f__243b05efdcd63652($evm, v0)
+  leave
+}
+function $emit__Evm_hef0af3106e109414_Transfer_h628c212e2bb5f76f__243b05efdcd63652($self, $event) {
+  $transfer_h628c212e2bb5f76f_event_hd33e4481d4a34b05_emit__Evm_hef0af3106e109414__3af54274b2985741($event, $self)
+  leave
+}
+function $transfer_h628c212e2bb5f76f_event_hd33e4481d4a34b05_emit__Evm_hef0af3106e109414__3af54274b2985741($self, $log) {
+  let v0 := $solencoder_h1b9228b90dad6928_new()
+  let v1 := 32
+  let v2 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head(v0, v1)
+  pop(v2)
+  let v3 := mload(add($self, 64))
+  $u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383(v3, v0)
+  let v4 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish(v0)
+  let v5 := mload(v4)
+  let v6 := v5
+  let v7 := mload(add(v4, 32))
+  let v8 := v7
+  let v9 := mload($self)
+  let v10 := $address_h257056268eac7027_topicvalue_hc8981c1d4c24e77d_as_topic(v9)
+  let v11 := mload(add($self, 32))
+  let v12 := $address_h257056268eac7027_topicvalue_hc8981c1d4c24e77d_as_topic(v11)
+  $evm_hef0af3106e109414_log_h22d1a10952034bae_log3($log, v6, v8, 100389287136786176327247604509743168900146139575972864366142685224231313322991, v10, v12)
+  leave
+}
+function $solencoder_h1b9228b90dad6928_new() -> ret {
+  let v0 := mload(0x40)
+  if iszero(v0) {
+    v0 := 0x80
+  }
+  mstore(0x40, add(v0, 96))
+  mstore(v0, 0)
+  mstore(add(v0, 32), 0)
+  mstore(add(v0, 64), 0)
+  ret := v0
+  leave
+}
+function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head($self, $bytes) -> ret {
+  let v0 := mload($self)
+  let v1 := eq(v0, 0)
+  if v1 {
+    let v2 := mload(64)
+    if iszero(v2) {
+      v2 := 0x80
+    }
+    mstore(64, add(v2, $bytes))
+    mstore($self, v2)
+    mstore(add($self, 32), v2)
+    mstore(add($self, 64), add(v2, $bytes))
+  }
+  let v3 := mload($self)
+  ret := v3
+  leave
+}
+function $u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383($self, $e) {
+  $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word($e, $self)
+  leave
+}
+function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish($self) -> ret {
+  let v0 := mload($self)
+  let v1 := mload(add($self, 64))
+  let v2 := mload(0x40)
+  if iszero(v2) {
+    v2 := 0x80
+  }
+  mstore(0x40, add(v2, 64))
+  mstore(v2, v0)
+  mstore(add(v2, 32), sub(v1, v0))
+  ret := v2
+  leave
+}
+function $address_h257056268eac7027_topicvalue_hc8981c1d4c24e77d_as_topic($self) -> ret {
+  ret := $self
+  leave
+}
+function $evm_hef0af3106e109414_log_h22d1a10952034bae_log3($self, $offset, $len, $topic0, $topic1, $topic2) {
+  log3($offset, $len, $topic0, $topic1, $topic2)
+  leave
+}
+function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word($self, $v) {
+  let v0 := mload(add($self, 32))
+  mstore(v0, $v)
+  mstore(add($self, 32), add(v0, 32))
+  leave
+}

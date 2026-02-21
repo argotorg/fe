@@ -1,0 +1,8 @@
+[workspace]
+name = "duplicate_member_name"
+version = "0.1.0"
+members = [
+  { path = "ingots/lib_v1", name = "lib" },
+  { path = "ingots/lib_v2", name = "lib" },
+]
+

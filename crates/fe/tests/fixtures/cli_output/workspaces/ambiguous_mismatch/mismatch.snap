@@ -1,0 +1,9 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/cli_output/workspaces/ambiguous_mismatch/mismatch.case
+---
+=== STDERR ===
+❌ Error: Argument "app" matches a workspace member name but does not match the provided path
+
+=== EXIT CODE: 1 ===

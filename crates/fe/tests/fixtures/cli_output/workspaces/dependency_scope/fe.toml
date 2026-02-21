@@ -1,0 +1,8 @@
+[workspace]
+name = "dependency_scope"
+version = "0.1.0"
+members = [
+  { path = "ingots/app", name = "app" },
+  { path = "ingots/lib", name = "lib" },
+]
+

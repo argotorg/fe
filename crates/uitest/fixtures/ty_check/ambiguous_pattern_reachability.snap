@@ -15,4 +15,4 @@ error[2-0004]: `Some` is ambiguous
    ┌─ src/option.fe:9:5
    │
  9 │     Some(T),
-   │     ---- candidate 1 (from prelude)
+   │     ---- candidate 1 (from implicit import)

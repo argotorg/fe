@@ -1,0 +1,12 @@
+---
+source: crates/fmt/tests/format_snapshots.rs
+assertion_line: 16
+expression: output
+input_file: tests/fixtures/comments_in_leaf_nodes.fe
+---
+// Comments inside smaller leaf-ish nodes (not list separators).
+
+fn leaf_comment_positions() {
+    let arr = [0; 10 // mid
+    ]
+}

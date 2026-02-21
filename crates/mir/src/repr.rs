@@ -19,9 +19,11 @@ use hir::analysis::ty::{
     canonical::Canonicalized,
     corelib::resolve_core_trait,
     trait_def::TraitInstId,
-    trait_resolution::{GoalSatisfiability, PredicateListId, is_goal_satisfiable},
+    trait_resolution::{GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable},
+    ty_def::CapabilityKind,
 };
-use hir::hir_def::IdentId;
+use hir::hir_def::{EnumVariant, IdentId};
+use hir::projection::{Projection, ProjectionPath};
 
 use crate::core_lib::CoreLib;
 use crate::ir::AddressSpaceKind;
@@ -69,6 +71,41 @@ pub fn transparent_newtype_field_ty<'db>(
     (field_tys.len() == 1).then(|| field_tys[0])
 }
 
+/// Returns the field type for a transparent field-0 projection step.
+pub fn transparent_field0_inner_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner_ty: TyId<'db>,
+    field_idx: usize,
+) -> Option<TyId<'db>> {
+    (field_idx == 0)
+        .then(|| transparent_newtype_field_ty(db, owner_ty))
+        .flatten()
+}
+
+/// Returns the next type for a transparent field-0 projection step.
+pub fn transparent_field0_projection_step_ty<'db, Idx>(
+    db: &'db dyn HirAnalysisDb,
+    owner_ty: TyId<'db>,
+    proj: &Projection<TyId<'db>, EnumVariant<'db>, Idx>,
+) -> Option<TyId<'db>> {
+    let Projection::Field(field_idx) = proj else {
+        return None;
+    };
+    transparent_field0_inner_ty(db, owner_ty, *field_idx)
+}
+
+/// Peels a projection path that must consist entirely of transparent field-0 steps.
+pub fn peel_transparent_field0_projection_path<'db, Idx>(
+    db: &'db dyn HirAnalysisDb,
+    mut base_ty: TyId<'db>,
+    path: &ProjectionPath<TyId<'db>, EnumVariant<'db>, Idx>,
+) -> Option<TyId<'db>> {
+    for proj in path.iter() {
+        base_ty = transparent_field0_projection_step_ty(db, base_ty, proj)?;
+    }
+    Some(base_ty)
+}
+
 /// Peel all transparent newtype layers from `ty`, returning the first non-newtype type.
 pub fn peel_transparent_newtypes<'db>(db: &'db dyn HirAnalysisDb, mut ty: TyId<'db>) -> TyId<'db> {
     while let Some(inner) = transparent_newtype_field_ty(db, ty) {
@@ -83,6 +120,10 @@ pub fn effect_provider_space_for_ty<'db>(
     core: &CoreLib<'db>,
     ty: TyId<'db>,
 ) -> Option<AddressSpaceKind> {
+    if let Some((_, inner)) = ty.as_capability(db) {
+        return effect_provider_space_for_ty(db, core, inner);
+    }
+
     if let Some(space) = effect_provider_space_via_domain_trait(db, core, ty) {
         return Some(space);
     }
@@ -96,16 +137,20 @@ fn effect_provider_space_via_domain_trait<'db>(
     core: &CoreLib<'db>,
     ty: TyId<'db>,
 ) -> Option<AddressSpaceKind> {
-    let effect_ref = resolve_core_trait(db, core.scope, &["effect_ref", "EffectRef"]);
-    let ingot = core.scope.top_mod(db).ingot(db);
+    let effect_handle = resolve_core_trait(db, core.scope, &["effect_ref", "EffectHandle"])
+        .expect("missing required core trait `core::effect_ref::EffectHandle`");
     let assumptions = PredicateListId::empty_list(db);
 
     let address_space_ident = IdentId::new(db, "AddressSpace".to_string());
 
     // First, determine whether `ty` is an effect provider at all.
-    let inst = TraitInstId::new(db, effect_ref, vec![ty], IndexMap::new());
+    let inst = TraitInstId::new(db, effect_handle, vec![ty], IndexMap::new());
     let goal = Canonicalized::new(db, inst).value;
-    match is_goal_satisfiable(db, ingot, goal, assumptions) {
+    match is_goal_satisfiable(
+        db,
+        TraitSolveCx::new(db, core.scope).with_assumptions(assumptions),
+        goal,
+    ) {
         GoalSatisfiability::Satisfied(_) => {}
         GoalSatisfiability::NeedsConfirmation(_) => return None,
         GoalSatisfiability::ContainsInvalid | GoalSatisfiability::UnSat(_) => return None,
@@ -122,9 +167,13 @@ fn effect_provider_space_via_domain_trait<'db>(
     ] {
         let mut assoc = IndexMap::new();
         assoc.insert(address_space_ident, space_ty);
-        let inst = TraitInstId::new(db, effect_ref, vec![ty], assoc);
+        let inst = TraitInstId::new(db, effect_handle, vec![ty], assoc);
         let goal = Canonicalized::new(db, inst).value;
-        match is_goal_satisfiable(db, ingot, goal, assumptions) {
+        match is_goal_satisfiable(
+            db,
+            TraitSolveCx::new(db, core.scope).with_assumptions(assumptions),
+            goal,
+        ) {
             GoalSatisfiability::Satisfied(_) => return Some(space_kind),
             GoalSatisfiability::NeedsConfirmation(_) => return None,
             GoalSatisfiability::ContainsInvalid | GoalSatisfiability::UnSat(_) => {}
@@ -132,7 +181,7 @@ fn effect_provider_space_via_domain_trait<'db>(
     }
 
     panic!(
-        "`{}` implements `EffectRef` but `AddressSpace` is not one of: core::effect_ref::Memory | Calldata | Storage | TransientStorage",
+        "`{}` implements `EffectHandle` but `AddressSpace` is not one of: core::effect_ref::Memory | Calldata | Storage | TransientStorage",
         ty.pretty_print(db)
     )
 }
@@ -149,6 +198,14 @@ pub fn repr_kind_for_ty<'db>(
 ) -> ReprKind {
     if layout::is_zero_sized_ty(db, ty) {
         return ReprKind::Zst;
+    }
+
+    if let Some((capability, inner)) = ty.as_capability(db) {
+        return match capability {
+            CapabilityKind::Mut => ReprKind::Ptr(AddressSpaceKind::Memory),
+            CapabilityKind::Ref => repr_kind_for_ref_inner(db, core, inner),
+            CapabilityKind::View => repr_kind_for_ty(db, core, inner),
+        };
     }
 
     if let Some(space) = effect_provider_space_for_ty(db, core, ty) {
@@ -171,6 +228,17 @@ pub fn repr_kind_for_ty<'db>(
     }
 
     ReprKind::Word
+}
+
+fn repr_kind_for_ref_inner<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    inner: TyId<'db>,
+) -> ReprKind {
+    match repr_kind_for_ty(db, core, inner) {
+        ReprKind::Word | ReprKind::Zst | ReprKind::Ptr(_) => ReprKind::Word,
+        ReprKind::Ref => ReprKind::Ptr(AddressSpaceKind::Memory),
+    }
 }
 
 /// Returns the leaf type that should drive word conversion (`WordRepr::{from_word,to_word}`).

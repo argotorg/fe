@@ -11,7 +11,7 @@ use crate::analysis::{
 /// Returns all items visible in the given scope for the specified domain(s).
 ///
 /// This includes:
-/// - Items from imports (named, glob, and unnamed/prelude)
+/// - Items from imports (named, glob, and unnamed/implicit)
 /// - Direct child items in the scope
 /// - Items from parent scopes (recursively)
 pub fn items_in_scope<'db>(
@@ -85,7 +85,7 @@ fn items_in_scope_impl<'db>(
         }
     }
 
-    // Collect unnamed/prelude imports
+    // Collect unnamed/implicit imports
     if let Some(unnamed) = imports.unnamed_resolved.get(&scope) {
         for bucket in unnamed {
             for name_res in bucket.iter_ok() {

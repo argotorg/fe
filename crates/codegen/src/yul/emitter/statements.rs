@@ -47,14 +47,16 @@ impl<'db> FunctionEmitter<'db> {
             mir::MirInst::Assign { dest, rvalue, .. } => {
                 self.emit_assign_inst(docs, *dest, rvalue, state)?
             }
-            mir::MirInst::BindValue { value } => self.emit_bind_value_inst(docs, *value, state)?,
-            mir::MirInst::Store { place, value } => {
+            mir::MirInst::BindValue { value, .. } => {
+                self.emit_bind_value_inst(docs, *value, state)?
+            }
+            mir::MirInst::Store { place, value, .. } => {
                 self.emit_store_inst(docs, place, *value, state)?
             }
-            mir::MirInst::InitAggregate { place, inits } => {
+            mir::MirInst::InitAggregate { place, inits, .. } => {
                 self.emit_init_aggregate_inst(docs, place, inits, state)?
             }
-            mir::MirInst::SetDiscriminant { place, variant } => {
+            mir::MirInst::SetDiscriminant { place, variant, .. } => {
                 self.emit_set_discriminant_inst(docs, place, *variant, state)?
             }
         }
@@ -227,7 +229,12 @@ impl<'db> FunctionEmitter<'db> {
             ));
         }
         let ty = self.mir_func.body.local(dest).ty;
-        let size_bytes = layout::ty_size_bytes_or_word_aligned_in(self.db, &self.layout, ty);
+        let Some(size_bytes) = layout::ty_memory_size_or_word_in(self.db, &self.layout, ty) else {
+            return Err(YulError::Unsupported(format!(
+                "cannot determine allocation size for `{}`",
+                ty.pretty_print(self.db)
+            )));
+        };
         let (yul_name, declared) = self.resolve_local_for_write(dest, state)?;
         self.emit_alloc_value(docs, &yul_name, size_bytes, declared);
         Ok(())
@@ -260,6 +267,9 @@ impl<'db> FunctionEmitter<'db> {
     ) -> Result<(), YulError> {
         let value_data = self.mir_func.body.value(value);
         let value_ty = value_data.ty;
+        if layout::ty_size_bytes_in(self.db, &self.layout, value_ty).is_some_and(|size| size == 0) {
+            return Ok(());
+        }
         if value_data.repr.is_ref() {
             if state.value_temp(value.index()).is_none() {
                 let rhs = self.lower_value(value, state)?;
@@ -478,6 +488,10 @@ impl<'db> FunctionEmitter<'db> {
         args: &[ValueId],
         state: &mut BlockState,
     ) -> Result<(), YulError> {
+        if matches!(op, IntrinsicOp::Alloc) {
+            return self.emit_evm_alloc_intrinsic(docs, dest, args, state);
+        }
+
         let intr = IntrinsicValue {
             op,
             args: args.to_vec(),
@@ -505,6 +519,43 @@ impl<'db> FunctionEmitter<'db> {
         Ok(())
     }
 
+    fn emit_evm_alloc_intrinsic(
+        &mut self,
+        docs: &mut Vec<YulDoc>,
+        dest: Option<LocalId>,
+        args: &[ValueId],
+        state: &mut BlockState,
+    ) -> Result<(), YulError> {
+        debug_assert_eq!(args.len(), 1, "alloc intrinsic expects 1 argument");
+        let (ptr, declared) = match dest {
+            Some(dest) => self.resolve_local_for_write(dest, state)?,
+            None => (state.alloc_local(), true),
+        };
+
+        let size = self.lower_value(args[0], state)?;
+        // If we're assigning back into an existing local, avoid clobbering the size expression
+        // (e.g. `x = alloc(x)`).
+        let size = if !declared {
+            let size_tmp = state.alloc_local();
+            docs.push(YulDoc::line(format!("let {size_tmp} := {size}")));
+            size_tmp
+        } else {
+            size
+        };
+
+        if declared {
+            docs.push(YulDoc::line(format!("let {ptr} := mload(64)")));
+        } else {
+            docs.push(YulDoc::line(format!("{ptr} := mload(64)")));
+        }
+        docs.push(YulDoc::block(
+            format!("if iszero({ptr}) "),
+            vec![YulDoc::line(format!("{ptr} := 0x80"))],
+        ));
+        docs.push(YulDoc::line(format!("mstore(64, add({ptr}, {size}))")));
+        Ok(())
+    }
+
     /// Converts intrinsic value-producing operations (`mload`/`sload`) into Yul.
     ///
     /// * `intr` - Intrinsic call metadata containing opcode and arguments.
@@ -519,6 +570,11 @@ impl<'db> FunctionEmitter<'db> {
         if !intr.op.returns_value() {
             return Err(YulError::Unsupported(
                 "intrinsic does not yield a value".into(),
+            ));
+        }
+        if matches!(intr.op, IntrinsicOp::Alloc) {
+            return Err(YulError::Unsupported(
+                "alloc intrinsic must be emitted as a statement".into(),
             ));
         }
         if matches!(intr.op, IntrinsicOp::AddrOf) {
@@ -547,7 +603,12 @@ impl<'db> FunctionEmitter<'db> {
             1,
             "code region intrinsic expects 1 argument"
         );
-        let arg = intr.args[0];
+        let mut arg = intr.args[0];
+        while let mir::ValueOrigin::TransparentCast { value } =
+            &self.mir_func.body.value(arg).origin
+        {
+            arg = *value;
+        }
         let symbol = match &self.mir_func.body.value(arg).origin {
             mir::ValueOrigin::FuncItem(root) => root.symbol.as_deref().ok_or_else(|| {
                 YulError::Unsupported(
@@ -640,6 +701,7 @@ impl<'db> FunctionEmitter<'db> {
     /// Returns the canonical Yul mnemonic corresponding to the opcode.
     fn intrinsic_name(&self, op: IntrinsicOp) -> &'static str {
         match op {
+            IntrinsicOp::Alloc => "alloc",
             IntrinsicOp::Mload => "mload",
             IntrinsicOp::Calldataload => "calldataload",
             IntrinsicOp::Calldatacopy => "calldatacopy",

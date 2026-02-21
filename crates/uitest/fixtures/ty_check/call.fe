@@ -9,7 +9,7 @@ pub fn use_add() -> i32 {
     add(x: false, y: 2)
 }
 
-pub fn make_tuple<T, U>(_ t: T, _ u: U) -> (T, U) {
+pub fn make_tuple<T, U>(_ t: own T, _ u: own U) -> (T, U) {
     (t, u)
 }
 

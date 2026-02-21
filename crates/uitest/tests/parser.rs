@@ -28,7 +28,7 @@ fn run_parser(fixture: Fixture<&str>) {
 
 fn init_parser_pass() -> AnalysisPassManager {
     let mut pass_manager = AnalysisPassManager::new();
-    pass_manager.add_module_pass(Box::new(ParsingPass {}));
+    pass_manager.add_module_pass("Parsing", Box::new(ParsingPass {}));
     pass_manager
 }
 

@@ -5,24 +5,22 @@ expression: res
 input_file: test_files/ty_check/contract_recv_variants.fe
 ---
 note: 
-   ┌─ contract_recv_variants.fe:10:5
-   │  
-10 │ ╭     #[selector = 0x01]
-11 │ │     Deposit { amount: u64 } -> u64,
-   │ ╰──────────────────────────────────^ u64
+   ┌─ contract_recv_variants.fe:11:5
+   │
+11 │     Deposit { amount: u64 } -> u64,
+   │     ^^^^^^^ u64
 
 note: 
-   ┌─ contract_recv_variants.fe:12:5
-   │  
-12 │ ╭     #[selector = 0x02]
-13 │ │     Withdraw { amount: u64 } -> bool,
-   │ ╰────────────────────────────────────^ u64
+   ┌─ contract_recv_variants.fe:13:5
+   │
+13 │     Withdraw { amount: u64 } -> bool,
+   │     ^^^^^^^^ u64
 
 note: 
-   ┌─ contract_recv_variants.fe:26:78
+   ┌─ contract_recv_variants.fe:26:82
    │  
-26 │           fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(self, mut _ e: E) {
-   │ ╭──────────────────────────────────────────────────────────────────────────────^
+26 │           fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(own self, _ e: mut E) {
+   │ ╭──────────────────────────────────────────────────────────────────────────────────^
 27 │ │             let Self { to, amount } = self
 28 │ │             to.encode(e)
 29 │ │             amount.encode(e)
@@ -69,7 +67,7 @@ note:
    ┌─ contract_recv_variants.fe:28:23
    │
 28 │             to.encode(e)
-   │                       ^ E
+   │                       ^ mut E
 
 note: 
    ┌─ contract_recv_variants.fe:29:13
@@ -87,12 +85,12 @@ note:
    ┌─ contract_recv_variants.fe:29:27
    │
 29 │             amount.encode(e)
-   │                           ^ E
+   │                           ^ mut E
 
 note: 
    ┌─ contract_recv_variants.fe:34:80
    │  
-34 │           fn decode<D: core::abi::AbiDecoder<std::abi::Sol>>(mut _ d: D) -> Self {
+34 │           fn decode<D: core::abi::AbiDecoder<std::abi::Sol>>(_ d: mut D) -> Self {
    │ ╭────────────────────────────────────────────────────────────────────────────────^
 35 │ │             let to = u64::decode(d)
 36 │ │             let amount = u64::decode(d)
@@ -122,7 +120,7 @@ note:
    ┌─ contract_recv_variants.fe:35:34
    │
 35 │             let to = u64::decode(d)
-   │                                  ^ D
+   │                                  ^ mut D
 
 note: 
    ┌─ contract_recv_variants.fe:36:17
@@ -146,7 +144,7 @@ note:
    ┌─ contract_recv_variants.fe:36:38
    │
 36 │             let amount = u64::decode(d)
-   │                                      ^ D
+   │                                      ^ mut D
 
 note: 
    ┌─ contract_recv_variants.fe:37:13
@@ -167,10 +165,10 @@ note:
    │                        ^^^^^^ u64
 
 note: 
-   ┌─ contract_recv_variants.fe:51:78
+   ┌─ contract_recv_variants.fe:51:82
    │  
-51 │           fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(self, mut _ e: E) {
-   │ ╭──────────────────────────────────────────────────────────────────────────────^
+51 │           fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(own self, _ e: mut E) {
+   │ ╭──────────────────────────────────────────────────────────────────────────────────^
 52 │ │             let Self { addr } = self
 53 │ │             addr.encode(e)
 54 │ │         }
@@ -210,12 +208,12 @@ note:
    ┌─ contract_recv_variants.fe:53:25
    │
 53 │             addr.encode(e)
-   │                         ^ E
+   │                         ^ mut E
 
 note: 
    ┌─ contract_recv_variants.fe:58:80
    │  
-58 │           fn decode<D: core::abi::AbiDecoder<std::abi::Sol>>(mut _ d: D) -> Self {
+58 │           fn decode<D: core::abi::AbiDecoder<std::abi::Sol>>(_ d: mut D) -> Self {
    │ ╭────────────────────────────────────────────────────────────────────────────────^
 59 │ │             let addr = u64::decode(d)
 60 │ │             Self { addr }
@@ -244,7 +242,7 @@ note:
    ┌─ contract_recv_variants.fe:59:36
    │
 59 │             let addr = u64::decode(d)
-   │                                    ^ D
+   │                                    ^ mut D
 
 note: 
    ┌─ contract_recv_variants.fe:60:13
@@ -259,10 +257,10 @@ note:
    │                    ^^^^ u64
 
 note: 
-   ┌─ contract_recv_variants.fe:78:74
+   ┌─ contract_recv_variants.fe:78:78
    │  
-78 │       fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(self, mut _ e: E) {
-   │ ╭──────────────────────────────────────────────────────────────────────────^
+78 │       fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(own self, _ e: mut E) {
+   │ ╭──────────────────────────────────────────────────────────────────────────────^
 79 │ │         let Self { key } = self
 80 │ │         key.encode(e)
 81 │ │     }
@@ -302,12 +300,12 @@ note:
    ┌─ contract_recv_variants.fe:80:20
    │
 80 │         key.encode(e)
-   │                    ^ E
+   │                    ^ mut E
 
 note: 
    ┌─ contract_recv_variants.fe:85:76
    │  
-85 │       fn decode<D: core::abi::AbiDecoder<std::abi::Sol>>(mut _ d: D) -> Self {
+85 │       fn decode<D: core::abi::AbiDecoder<std::abi::Sol>>(_ d: mut D) -> Self {
    │ ╭────────────────────────────────────────────────────────────────────────────^
 86 │ │         let key = u64::decode(d)
 87 │ │         Self { key }
@@ -336,7 +334,7 @@ note:
    ┌─ contract_recv_variants.fe:86:31
    │
 86 │         let key = u64::decode(d)
-   │                               ^ D
+   │                               ^ mut D
 
 note: 
    ┌─ contract_recv_variants.fe:87:9

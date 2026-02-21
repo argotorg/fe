@@ -1,6 +1,15 @@
+mod backend;
+mod sonatina;
 mod yul;
 
+pub use backend::{
+    Backend, BackendError, BackendKind, BackendOutput, OptLevel, SonatinaBackend, YulBackend,
+};
+pub use sonatina::{
+    DebugOutputSink, LowerError, SonatinaTestDebugConfig, emit_module_sonatina_ir,
+    emit_test_module_sonatina, validate_module_sonatina_ir,
+};
 pub use yul::{
-    EmitModuleError, TestMetadata, TestModuleOutput, YulError, emit_module_yul,
+    EmitModuleError, ExpectedRevert, TestMetadata, TestModuleOutput, YulError, emit_module_yul,
     emit_module_yul_with_layout, emit_test_module_yul, emit_test_module_yul_with_layout,
 };

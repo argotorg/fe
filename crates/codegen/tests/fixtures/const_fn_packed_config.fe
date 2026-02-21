@@ -1,0 +1,34 @@
+// Real-world use case: packing configuration data into a single word at compile
+// time, which can then be stored in a single storage slot for cheaper runtime
+// reads.
+//
+// This exercises CTFE support for:
+// - `match` in `const fn`
+// - tuple destructuring in `let` bindings
+const fn token_params(kind: u8) -> (u8, u16) {
+    match kind {
+        0 => (18, 30),
+        1 => (6, 5),
+        _ => (18, 0),
+    }
+}
+
+const fn pack_config(decimals: u8, paused: bool, fee_bps: u16) -> u256 {
+    let paused_bit: u256 = if paused { 1 } else { 0 }
+    let decimals: u256 = decimals as u256
+    let fee_bps: u256 = fee_bps as u256
+
+    // [paused:1][decimals:8][fee_bps:16]
+    (paused_bit << 24) | (decimals << 16) | fee_bps
+}
+
+const fn packed_token_config(kind: u8, paused: bool) -> u256 {
+    let (decimals, fee_bps) = token_params(kind)
+    pack_config(decimals, paused, fee_bps)
+}
+
+const CONFIG: u256 = packed_token_config(0, false)
+
+fn main() -> u256 {
+    CONFIG
+}

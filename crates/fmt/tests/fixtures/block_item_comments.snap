@@ -1,0 +1,42 @@
+---
+source: crates/fmt/tests/format_snapshots.rs
+expression: output
+input_file: tests/fixtures/block_item_comments.fe
+---
+struct Bar {}
+
+trait Foo {
+    fn a(self) -> u8
+
+    // note about b
+    fn b(self) -> u8
+}
+
+impl Foo for Bar {
+    fn a(self) -> u8 {
+        1
+    }
+
+    // note about b
+    fn b(self) -> u8 {
+        2
+    }
+}
+
+msg M {
+    Foo -> u8,
+    Bar -> u8,
+}
+
+pub contract C uses () {
+    recv M {
+        Foo {} -> u8 uses () {
+            1
+        }
+
+        // note about Bar
+        Bar {} -> u8 uses () {
+            2
+        }
+    }
+}

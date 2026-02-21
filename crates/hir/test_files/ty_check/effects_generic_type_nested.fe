@@ -16,7 +16,7 @@ pub fn read_u16() -> u16
 }
 
 pub fn write_u8(val: u8)
-  uses (mut st: Storage<u8>)
+  uses (st: mut Storage<u8>)
 {
     st.value = val
 }
@@ -40,6 +40,5 @@ pub fn mutable_storage() {
     with (Storage<u8> = storage) {
         write_u8(val: 20)
         let _ = read_u8()
-        ()
     }
 }

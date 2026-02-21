@@ -1,0 +1,12 @@
+// Stack-only values must not be written into storage.
+
+struct Esc {
+    h: ref u256,
+    tag: u256,
+}
+
+pub fn noesc_storage_escape_ref_handle() uses (slot: mut Esc) {
+    let mut x: u256 = 0
+    let e: Esc = Esc { h: ref x, tag: 0 }
+    slot = e
+}

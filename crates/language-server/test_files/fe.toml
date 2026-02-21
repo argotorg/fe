@@ -1,0 +1,8 @@
+# Sentinel workspace config to prevent discover_context from walking up
+# to the repo root and loading ingots/core + ingots/std as workspace
+# members, which makes mock LSP tests analyze 5000+ lines of stdlib
+# on every diagnostics pass.
+[workspace]
+name = "lsp_test_fixtures"
+version = "0.0.1"
+members = []

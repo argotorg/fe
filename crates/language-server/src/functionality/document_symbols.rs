@@ -12,13 +12,7 @@ pub async fn handle_document_symbols(
     backend: &Backend,
     params: async_lsp::lsp_types::DocumentSymbolParams,
 ) -> Result<Option<DocumentSymbolResponse>, ResponseError> {
-    let file_path_str = params.text_document.uri.path();
-    let url = url::Url::from_file_path(file_path_str).map_err(|()| {
-        ResponseError::new(
-            async_lsp::ErrorCode::INTERNAL_ERROR,
-            format!("Invalid file path: {file_path_str}"),
-        )
-    })?;
+    let url = backend.map_client_uri_to_internal(params.text_document.uri.clone());
 
     let file = backend
         .db
@@ -54,41 +48,41 @@ fn collect_symbols(
 }
 
 fn item_to_symbol(db: &dyn hir::SpannedHirDb, item: ItemKind) -> Option<DocumentSymbol> {
-    let (kind, label) = match item {
-        ItemKind::Func(func) => {
-            let name = func.name(db).to_opt()?.data(db).to_string();
-            (SymbolKind::FUNCTION, format!("fn {}", name))
-        }
-        ItemKind::Struct(s) => {
-            let name = s.name(db).to_opt()?.data(db).to_string();
-            (SymbolKind::STRUCT, format!("struct {}", name))
-        }
-        ItemKind::Enum(e) => {
-            let name = e.name(db).to_opt()?.data(db).to_string();
-            (SymbolKind::ENUM, format!("enum {}", name))
-        }
-        ItemKind::Trait(t) => {
-            let name = t.name(db).to_opt()?.data(db).to_string();
-            (SymbolKind::INTERFACE, format!("trait {}", name))
-        }
-        ItemKind::TypeAlias(ta) => {
-            let name = ta.name(db).to_opt()?.data(db).to_string();
-            (SymbolKind::CLASS, format!("type {}", name))
-        }
-        ItemKind::Const(c) => {
-            let name = c.name(db).to_opt()?.data(db).to_string();
-            (SymbolKind::CONSTANT, format!("const {}", name))
-        }
-        ItemKind::Mod(m) => {
-            let name = m.name(db).to_opt()?.data(db).to_string();
-            (SymbolKind::MODULE, format!("mod {}", name))
-        }
+    let (kind, name) = match item {
+        ItemKind::Func(func) => (
+            SymbolKind::FUNCTION,
+            format!("fn {}", func.name(db).to_opt()?.data(db)),
+        ),
+        ItemKind::Struct(s) => (
+            SymbolKind::STRUCT,
+            format!("struct {}", s.name(db).to_opt()?.data(db)),
+        ),
+        ItemKind::Enum(e) => (
+            SymbolKind::ENUM,
+            format!("enum {}", e.name(db).to_opt()?.data(db)),
+        ),
+        ItemKind::Trait(t) => (
+            SymbolKind::INTERFACE,
+            format!("trait {}", t.name(db).to_opt()?.data(db)),
+        ),
+        ItemKind::TypeAlias(ta) => (
+            SymbolKind::CLASS,
+            format!("type {}", ta.name(db).to_opt()?.data(db)),
+        ),
+        ItemKind::Const(c) => (
+            SymbolKind::CONSTANT,
+            format!("const {}", c.name(db).to_opt()?.data(db)),
+        ),
+        ItemKind::Mod(m) => (
+            SymbolKind::MODULE,
+            format!("mod {}", m.name(db).to_opt()?.data(db)),
+        ),
         ItemKind::Impl(_) => (SymbolKind::CLASS, "impl".to_string()),
         ItemKind::ImplTrait(_) => (SymbolKind::CLASS, "impl trait".to_string()),
-        ItemKind::Contract(c) => {
-            let name = c.name(db).to_opt()?.data(db).to_string();
-            (SymbolKind::CLASS, format!("contract {}", name))
-        }
+        ItemKind::Contract(c) => (
+            SymbolKind::CLASS,
+            format!("contract {}", c.name(db).to_opt()?.data(db)),
+        ),
         _ => return None,
     };
 
@@ -97,7 +91,7 @@ fn item_to_symbol(db: &dyn hir::SpannedHirDb, item: ItemKind) -> Option<Document
 
     #[allow(deprecated)]
     Some(DocumentSymbol {
-        name: label,
+        name,
         detail: None,
         kind,
         tags: None,

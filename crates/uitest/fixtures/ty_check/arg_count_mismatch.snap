@@ -1,5 +1,6 @@
 ---
 source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/arg_count_mismatch.fe
 ---
@@ -22,12 +23,12 @@ error[8-0023]: argument number mismatch
   │        ^^^^^^^^^ expected 2 arguments, but 3 given
 
 error[8-0033]: `add` is not a method
-   ┌─ arg_count_mismatch.fe:24:5
+   ┌─ arg_count_mismatch.fe:23:5
    │
-17 │     fn add(_ a: usize, _ b: usize) -> usize {
+16 │     fn add(_ a: usize, _ b: usize) -> usize {
    │        --- function defined here
    ·
-24 │     a.add(1)
+23 │     a.add(1)
    │     ^^^^^^^^
    │     │ │
    │     │ `add` is an associated function, not a method
@@ -36,12 +37,12 @@ error[8-0033]: `add` is not a method
    = note: to be used as a method, a function must have a `self` parameter
 
 error[8-0033]: `add` is not a method
-   ┌─ arg_count_mismatch.fe:25:5
+   ┌─ arg_count_mismatch.fe:24:5
    │
-17 │     fn add(_ a: usize, _ b: usize) -> usize {
+16 │     fn add(_ a: usize, _ b: usize) -> usize {
    │        --- function defined here
    ·
-25 │     a.add(1, 2)
+24 │     a.add(1, 2)
    │     ^^^^^^^^^^^
    │     │ │
    │     │ `add` is an associated function, not a method

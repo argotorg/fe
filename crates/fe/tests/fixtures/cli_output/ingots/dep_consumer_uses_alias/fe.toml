@@ -1,0 +1,7 @@
+[ingot]
+name = "dep_consumer_uses_alias"
+version = "0.1.0"
+
+[dependencies]
+dep_alias = "../dep_provider"
+

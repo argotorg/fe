@@ -10,21 +10,24 @@ use rustc_hash::FxHashMap;
 use tracing::error;
 
 pub fn calculate_line_offsets(text: &str) -> Vec<usize> {
-    text.lines()
-        .scan(0, |state, line| {
-            let offset = *state;
-            *state += line.len() + 1;
-            Some(offset)
-        })
-        .collect()
+    let mut offsets = vec![0];
+    for (i, b) in text.bytes().enumerate() {
+        if b == b'\n' {
+            offsets.push(i + 1);
+        }
+    }
+    offsets
 }
 
 pub fn to_offset_from_position(position: Position, text: &str) -> parser::TextSize {
     let line_offsets: Vec<usize> = calculate_line_offsets(text);
-    let line_offset = line_offsets[position.line as usize];
+    let line_offset = line_offsets
+        .get(position.line as usize)
+        .copied()
+        .unwrap_or_else(|| line_offsets.last().copied().unwrap_or(0));
     let character_offset = position.character as usize;
 
-    parser::TextSize::from((line_offset + character_offset) as u32)
+    parser::TextSize::from((line_offset + character_offset).min(text.len()) as u32)
 }
 
 pub fn to_lsp_range_from_span(
@@ -177,7 +180,7 @@ fn to_lsp_location_from_span(
     db: &dyn InputDb,
     span: Span,
 ) -> Result<async_lsp::lsp_types::Location, Box<dyn std::error::Error>> {
-    let url = span.file.url(db).expect("Failed to get file URL");
+    let url = span.file.url(db).ok_or("file has no URL")?;
     let range = to_lsp_range_from_span(span, db)?;
     Ok(async_lsp::lsp_types::Location { uri: url, range })
 }

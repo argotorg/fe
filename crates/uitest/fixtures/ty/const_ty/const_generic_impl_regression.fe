@@ -6,7 +6,7 @@ pub trait Sized<const N: usize> {
 }
 
 pub trait Convert<T> {
-    fn convert(self) -> T
+    fn convert(own self) -> T
 }
 
 pub struct Fixed<const N: usize> {}
@@ -24,14 +24,15 @@ impl<const N: usize> Sized<N> for Fixed<N> {
 
 // Case 2: Type param in impl target
 impl<T> Convert<T> for Wrapper<T> {
-    fn convert(self) -> T {
-        self.inner
+    fn convert(own self) -> T {
+        let Self { inner } = self
+        inner
     }
 }
 
 // Case 3: Const generic in array inside trait ref (not target)
 impl<const N: usize> Convert<[u8; N]> for u8 {
-    fn convert(self) -> [u8; N] {
+    fn convert(own self) -> [u8; N] {
         [self; N]
     }
 }

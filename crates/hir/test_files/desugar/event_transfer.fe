@@ -1,0 +1,11 @@
+use std::evm::Address
+
+#[event]
+pub struct Transfer {
+    #[indexed]
+    pub from: Address,
+    #[indexed]
+    pub to: Address,
+    pub amount: u256,
+}
+

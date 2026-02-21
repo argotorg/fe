@@ -2,13 +2,15 @@ use common::indexmap::IndexSet;
 
 use super::{
     adt_def::AdtDef,
-    const_ty::{ConstTyData, ConstTyId},
+    const_expr::ConstExpr,
+    const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
     trait_def::{ImplementorId, TraitInstId},
-    trait_resolution::PredicateListId,
-    ty_check::ExprProp,
+    trait_resolution::{PredicateListId, TraitGoalSolution},
+    ty_check::{EffectArg, ExprProp, LocalBinding, ResolvedEffectArg},
     ty_def::{AssocTy, InvalidCause, PrimTy, TyBase, TyData, TyFlags, TyId, TyParam, TyVar},
 };
 use crate::analysis::HirAnalysisDb;
+use crate::analysis::place::{Place, PlaceBase};
 use crate::hir_def::CallableDef;
 
 pub trait TyVisitable<'db> {
@@ -110,7 +112,44 @@ where
     match &const_ty.data(db) {
         ConstTyData::TyVar(var, _) => visitor.visit_var(var),
         ConstTyData::TyParam(param, ty) => visitor.visit_const_param(param, *ty),
-        ConstTyData::Evaluated(..) | ConstTyData::UnEvaluated { .. } => {}
+        ConstTyData::Evaluated(val, _) => match val {
+            EvaluatedConstTy::Tuple(elems)
+            | EvaluatedConstTy::Array(elems)
+            | EvaluatedConstTy::Record(elems) => {
+                elems.visit_with(visitor);
+            }
+            _ => {}
+        },
+        ConstTyData::Abstract(expr, _) => match expr.data(db) {
+            ConstExpr::ExternConstFnCall {
+                generic_args, args, ..
+            } => {
+                generic_args.visit_with(visitor);
+                args.visit_with(visitor);
+            }
+            ConstExpr::UserConstFnCall {
+                generic_args, args, ..
+            } => {
+                generic_args.visit_with(visitor);
+                args.visit_with(visitor);
+            }
+            ConstExpr::ArithBinOp { lhs, rhs, .. } => {
+                lhs.visit_with(visitor);
+                rhs.visit_with(visitor);
+            }
+            ConstExpr::UnOp { expr, .. } => {
+                expr.visit_with(visitor);
+            }
+            ConstExpr::Cast { expr, to } => {
+                expr.visit_with(visitor);
+                to.visit_with(visitor);
+            }
+            ConstExpr::TraitConst { inst, .. } => {
+                inst.visit_with(visitor);
+            }
+            ConstExpr::LocalBinding(_) => {}
+        },
+        ConstTyData::UnEvaluated { .. } => {}
     }
 }
 
@@ -198,12 +237,79 @@ impl<'db> TyVisitable<'db> for PredicateListId<'db> {
     }
 }
 
+impl<'db> TyVisitable<'db> for TraitGoalSolution<'db> {
+    fn visit_with<V>(&self, visitor: &mut V)
+    where
+        V: TyVisitor<'db> + ?Sized,
+    {
+        self.inst.visit_with(visitor);
+        self.implementor.visit_with(visitor);
+    }
+}
+
 impl<'db> TyVisitable<'db> for ExprProp<'db> {
     fn visit_with<V>(&self, visitor: &mut V)
     where
         V: TyVisitor<'db> + ?Sized,
     {
         self.ty.visit_with(visitor)
+    }
+}
+
+impl<'db> TyVisitable<'db> for LocalBinding<'db> {
+    fn visit_with<V>(&self, visitor: &mut V)
+    where
+        V: TyVisitor<'db> + ?Sized,
+    {
+        match self {
+            LocalBinding::Param { ty, .. } => ty.visit_with(visitor),
+            LocalBinding::Local { .. } | LocalBinding::EffectParam { .. } => {}
+        }
+    }
+}
+
+impl<'db> TyVisitable<'db> for PlaceBase<'db> {
+    fn visit_with<V>(&self, visitor: &mut V)
+    where
+        V: TyVisitor<'db> + ?Sized,
+    {
+        match self {
+            PlaceBase::Binding(binding) => binding.visit_with(visitor),
+        }
+    }
+}
+
+impl<'db> TyVisitable<'db> for Place<'db> {
+    fn visit_with<V>(&self, visitor: &mut V)
+    where
+        V: TyVisitor<'db> + ?Sized,
+    {
+        self.base.visit_with(visitor);
+    }
+}
+
+impl<'db> TyVisitable<'db> for EffectArg<'db> {
+    fn visit_with<V>(&self, visitor: &mut V)
+    where
+        V: TyVisitor<'db> + ?Sized,
+    {
+        match self {
+            EffectArg::Place(place) => place.visit_with(visitor),
+            EffectArg::Binding(binding) => binding.visit_with(visitor),
+            EffectArg::Value(_) | EffectArg::Unknown => {}
+        }
+    }
+}
+
+impl<'db> TyVisitable<'db> for ResolvedEffectArg<'db> {
+    fn visit_with<V>(&self, visitor: &mut V)
+    where
+        V: TyVisitor<'db> + ?Sized,
+    {
+        self.arg.visit_with(visitor);
+        if let Some(ty) = self.instantiated_target_ty {
+            ty.visit_with(visitor);
+        }
     }
 }
 

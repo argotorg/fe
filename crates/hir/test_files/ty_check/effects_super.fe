@@ -38,11 +38,10 @@ fn example() {
     with (r) {
         do_stuff(10)
     }
-    ()
 }
 
 fn do_stuff(x: u256) -> u256
-  uses (ctx: Ctx, mut mem: Mem, mut sto: Storage)
+  uses (ctx: Ctx, mem: mut Mem, sto: mut Storage)
 {
     mem.store(offset: x, value: ctx.caller())
     sto.store(slot: x, value: 100)

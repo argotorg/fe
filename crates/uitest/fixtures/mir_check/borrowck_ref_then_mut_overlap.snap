@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/mir_check.rs
+expression: res
+input_file: fixtures/mir_check/borrowck_ref_then_mut_overlap.fe
+---
+error[11-0002]: borrow conflict in `fn borrowck_ref_then_mut_overlap`
+  ┌─ borrowck_ref_then_mut_overlap.fe:6:5
+  │
+5 │     let r: ref u256 = ref x
+  │                           - `x` is borrowed here
+6 │     let p: mut u256 = mut x
+  │     ^^^^^^^^^^^^^^^^^^^^^^^ cannot mutably borrow `x` while an immutable borrow is active

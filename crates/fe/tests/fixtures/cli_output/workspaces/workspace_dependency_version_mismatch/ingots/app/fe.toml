@@ -1,0 +1,6 @@
+[ingot]
+name = "app"
+version = "0.1.0"
+
+[dependencies]
+utils = "9.9.9"

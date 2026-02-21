@@ -1,0 +1,13 @@
+struct Blob {
+    x: u8,
+}
+
+struct Wrap {
+    b: Blob,
+}
+
+pub fn match_pattern_ref_noncopy_no_coerce(p: Wrap) -> Blob {
+    match ref p {
+        Wrap { b } => b,
+    }
+}

@@ -1,12 +1,19 @@
 [package]
 name = "fe-language-server"
-version = "0.26.0"
+version = "26.0.0-alpha.5"
 edition.workspace = true
 license = "Apache-2.0"
 repository = "https://github.com/ethereum/fe"
 description = "An LSP language server for Fe lang"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "fe_language_server"
+
+[[bin]]
+name = "fe-language-server"
+path = "src/main.rs"
 
 [dependencies]
 act-locally = "0.1.1"
@@ -19,28 +26,32 @@ clap.workspace = true
 codespan-reporting = "0.11"
 futures = "0.3.31"
 futures-batch = "0.6.1"
-glob.workspace = true
 rustc-hash.workspace = true
 salsa.workspace = true
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.135"
+smol_str.workspace = true
 tokio = { version = "1.43.0", features = ["full", "io-std", "tracing", "net"] }
 tower = "0.5.2"
 tracing.workspace = true
 tracing-subscriber.workspace = true
+tracing-tree.workspace = true
 url = "2.5.4"
 
+codegen.workspace = true
 common.workspace = true
 driver.workspace = true
+mir.workspace = true
 fmt.workspace = true
 hir.workspace = true
 parser.workspace = true
+resolver.workspace = true
 tempfile = "3.20.0"
 # doc-engine for extraction only
 doc-engine = { path = "../doc-engine", package = "fe-doc-engine" }
 # doc-viewer for server-side rendering (disable default hydrate feature)
 doc-viewer = { path = "../doc-viewer", package = "fe-doc-viewer", default-features = false, features = ["ssr"] }
-axum = { version = "0.8", features = ["http2"] }
+axum = { version = "0.8", features = ["http2", "ws"] }
 tower-http = { version = "0.6", features = ["fs", "cors"] }
 open = "5"
 
@@ -50,3 +61,4 @@ default = []
 [dev-dependencies]
 test-utils.workspace = true
 dir-test.workspace = true
+tokio-util = { version = "0.7", features = ["compat"] }

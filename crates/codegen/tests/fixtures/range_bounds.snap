@@ -1,14 +1,15 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 33
 expression: output
 input_file: tests/fixtures/range_bounds.fe
 ---
 function $sum_const() -> ret {
   let v0 := 0
   let v1 := 0
-  let v2 := $range_known_const_s__usize___known_const_e__usize___seq_len__0_4__f9605efabd18106c(0)
+  let v2 := $range_known_const_s__usize___known_const_e__usize___hc7c7abc3858dd85e_seq_ha637d2df505bccf2_len__0_4__f9605efabd18106c(0)
   for { } lt(v1, v2) { } {
-    let v3 := $range_known_const_s__usize___known_const_e__usize___seq_get__0_4__f9605efabd18106c(0, v1)
+    let v3 := $range_known_const_s__usize___known_const_e__usize___hc7c7abc3858dd85e_seq_ha637d2df505bccf2_get__0_4__f9605efabd18106c(0, v1)
     let v4 := v3
     v0 := add(v0, v4)
     v1 := add(v1, 1)
@@ -25,9 +26,9 @@ function $sum_dynamic_end($end) -> ret {
   mstore(0x40, add(v1, 32))
   mstore(v1, $end)
   let v2 := 0
-  let v3 := $range_known_const_s__usize___unknown__seq_len__0__fc6647014fb554e5(v1)
+  let v3 := $range_known_const_s__usize___unknown__h4e84f6b6b8307914_seq_ha637d2df505bccf2_len__0__fc6647014fb554e5(v1)
   for { } lt(v2, v3) { } {
-    let v4 := $range_known_const_s__usize___known_const_e__usize___seq_get__0_4__f9605efabd18106c(v1, v2)
+    let v4 := $range_known_const_s__usize___known_const_e__usize___hc7c7abc3858dd85e_seq_ha637d2df505bccf2_get__0_4__f9605efabd18106c(v1, v2)
     let v5 := v4
     v0 := add(v0, v5)
     v2 := add(v2, 1)
@@ -44,9 +45,9 @@ function $sum_dynamic_start($start) -> ret {
   mstore(0x40, add(v1, 32))
   mstore(v1, $start)
   let v2 := 0
-  let v3 := $range_unknown__known_const_e__usize___seq_len__4__f248ae0e02044d7e(v1)
+  let v3 := $range_unknown__known_const_e__usize___h7984c64777ae465_seq_ha637d2df505bccf2_len__4__f248ae0e02044d7e(v1)
   for { } lt(v2, v3) { } {
-    let v4 := $range_unknown__known_const_e__usize___seq_get__4__f248ae0e02044d7e(v1, v2)
+    let v4 := $range_unknown__known_const_e__usize___h7984c64777ae465_seq_ha637d2df505bccf2_get__4__f248ae0e02044d7e(v1, v2)
     let v5 := v4
     v0 := add(v0, v5)
     v2 := add(v2, 1)
@@ -64,9 +65,9 @@ function $sum_dynamic($start, $end) -> ret {
   mstore(v1, $start)
   mstore(add(v1, 32), $end)
   let v2 := 0
-  let v3 := $range_unknown__unknown__seq_len(v1)
+  let v3 := $range_unknown__unknown__h1dfb0ca64ed7bf96_seq_ha637d2df505bccf2_len(v1)
   for { } lt(v2, v3) { } {
-    let v4 := $range_unknown__known_const_e__usize___seq_get__4__f248ae0e02044d7e(v1, v2)
+    let v4 := $range_unknown__known_const_e__usize___h7984c64777ae465_seq_ha637d2df505bccf2_get__4__f248ae0e02044d7e(v1, v2)
     let v5 := v4
     v0 := add(v0, v5)
     v2 := add(v2, 1)
@@ -74,7 +75,7 @@ function $sum_dynamic($start, $end) -> ret {
   ret := v0
   leave
 }
-function $range_known_const_s__usize___known_const_e__usize___seq_len__0_4__f9605efabd18106c($self) -> ret {
+function $range_known_const_s__usize___known_const_e__usize___hc7c7abc3858dd85e_seq_ha637d2df505bccf2_len__0_4__f9605efabd18106c($self) -> ret {
   let v0 := 0
   switch lt(4, 0)
     case 1 {
@@ -89,11 +90,11 @@ function $range_known_const_s__usize___known_const_e__usize___seq_len__0_4__f960
   ret := v0
   leave
 }
-function $range_known_const_s__usize___known_const_e__usize___seq_get__0_4__f9605efabd18106c($self, $i) -> ret {
+function $range_known_const_s__usize___known_const_e__usize___hc7c7abc3858dd85e_seq_ha637d2df505bccf2_get__0_4__f9605efabd18106c($self, $i) -> ret {
   ret := add(0, $i)
   leave
 }
-function $range_known_const_s__usize___unknown__seq_len__0__fc6647014fb554e5($self) -> ret {
+function $range_known_const_s__usize___unknown__h4e84f6b6b8307914_seq_ha637d2df505bccf2_len__0__fc6647014fb554e5($self) -> ret {
   let v0 := mload($self)
   let v1 := 0
   switch lt(v0, 0)
@@ -111,7 +112,7 @@ function $range_known_const_s__usize___unknown__seq_len__0__fc6647014fb554e5($se
   ret := v1
   leave
 }
-function $range_unknown__known_const_e__usize___seq_len__4__f248ae0e02044d7e($self) -> ret {
+function $range_unknown__known_const_e__usize___h7984c64777ae465_seq_ha637d2df505bccf2_len__4__f248ae0e02044d7e($self) -> ret {
   let v0 := mload($self)
   let v1 := 0
   switch lt(4, v0)
@@ -129,12 +130,12 @@ function $range_unknown__known_const_e__usize___seq_len__4__f248ae0e02044d7e($se
   ret := v1
   leave
 }
-function $range_unknown__known_const_e__usize___seq_get__4__f248ae0e02044d7e($self, $i) -> ret {
+function $range_unknown__known_const_e__usize___h7984c64777ae465_seq_ha637d2df505bccf2_get__4__f248ae0e02044d7e($self, $i) -> ret {
   let v0 := mload($self)
   ret := add(v0, $i)
   leave
 }
-function $range_unknown__unknown__seq_len($self) -> ret {
+function $range_unknown__unknown__h1dfb0ca64ed7bf96_seq_ha637d2df505bccf2_len($self) -> ret {
   let v0 := mload(add($self, 32))
   let v1 := mload($self)
   let v2 := 0

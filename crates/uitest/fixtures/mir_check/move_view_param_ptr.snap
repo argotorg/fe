@@ -1,0 +1,16 @@
+---
+source: crates/uitest/tests/mir_check.rs
+expression: res
+input_file: fixtures/mir_check/move_view_param_ptr.fe
+---
+error[11-0002]: move conflict in `fn example`
+  ┌─ move_view_param_ptr.fe:1:65
+  │  
+1 │   fn example(p: std::evm::MemPtr<u256>) -> std::evm::MemPtr<u256> {
+  │ ╭─────────────────────────────────────────────────────────────────^
+2 │ │     p
+3 │ │ }
+  │ ╰─^ cannot move out of a view parameter
+  │  
+  = help: consider changing `p: MemPtr<u256>` to `p: own MemPtr<u256>`
+  = help: if you only need to destructure/inspect `p`, use explicit borrowing (`match ref p { ... }` or `let ... = ref p`)

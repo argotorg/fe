@@ -1,0 +1,23 @@
+---
+source: crates/uitest/tests/parser.rs
+assertion_line: 26
+expression: diags
+input_file: fixtures/parser/uses_typed_modes.fe
+---
+error[1-0001]: `uses` typed parameters use `name: mut Type`, not `mut name: Type`
+  ┌─ uses_typed_modes.fe:3:23
+  │
+3 │ fn bad_legacy() uses (mut x: Foo) {}
+  │                       ^ `uses` typed parameters use `name: mut Type`, not `mut name: Type`
+
+error[1-0001]: typed `uses` parameters only support `mut`; remove `ref` or use `mut`
+  ┌─ uses_typed_modes.fe:5:22
+  │
+5 │ fn bad_ref() uses (x: ref Foo) {}
+  │                      ^ typed `uses` parameters only support `mut`; remove `ref` or use `mut`
+
+error[1-0001]: typed `uses` parameters only support `mut`; remove `own` or use `mut`
+  ┌─ uses_typed_modes.fe:7:22
+  │
+7 │ fn bad_own() uses (x: own Foo) {}
+  │                      ^ typed `uses` parameters only support `mut`; remove `own` or use `mut`

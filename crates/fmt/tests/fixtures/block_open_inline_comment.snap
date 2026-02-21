@@ -1,0 +1,10 @@
+---
+source: crates/fmt/tests/format_snapshots.rs
+expression: output
+input_file: tests/fixtures/block_open_inline_comment.fe
+---
+fn f() {
+    // comment right after brace
+    let x = 1
+    x
+}

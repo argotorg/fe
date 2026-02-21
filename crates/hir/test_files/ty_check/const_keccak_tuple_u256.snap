@@ -1,0 +1,20 @@
+---
+source: crates/hir/tests/ty_check.rs
+assertion_line: 40
+expression: res
+input_file: test_files/ty_check/const_keccak_tuple_u256.fe
+---
+note: 
+  ┌─ const_keccak_tuple_u256.fe:3:8
+  │  
+3 │   fn f() {
+  │ ╭────────^
+4 │ │     let a: Hash<{ core::keccak((1 as u256, 2 as u256)) }>
+5 │ │ }
+  │ ╰─^ ()
+
+note: 
+  ┌─ const_keccak_tuple_u256.fe:4:9
+  │
+4 │     let a: Hash<{ core::keccak((1 as u256, 2 as u256)) }>
+  │         ^ Hash<105409183525425523237923285454331214386340807945685310246717412709691342439136>

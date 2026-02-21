@@ -1,0 +1,29 @@
+trait Ctx {
+    fn inc(self) -> u256
+}
+
+struct Address {
+    value: u256,
+}
+
+struct MockCtx {
+    addr: Address,
+}
+
+impl Ctx for MockCtx {
+    fn inc(self) -> u256 {
+        self.addr.value + 1
+    }
+}
+
+fn bump() -> u256 uses (ctx: Ctx, x: mut u256) {
+    x += ctx.inc()
+    x
+}
+
+pub fn entry() -> u256 {
+    let mut x = 10
+    with (MockCtx { addr: Address { value: 31 } }, x) {
+        bump()
+    }
+}

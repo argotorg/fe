@@ -14,3 +14,7 @@ AGENTS.md
 CLAUDE.md
 .claude/
 .gemini/
+
+# Local debug artifacts
+stackify_*.txt
+trace_*.txt

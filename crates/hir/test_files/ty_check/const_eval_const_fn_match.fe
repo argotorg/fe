@@ -1,0 +1,16 @@
+const fn choose(x: usize) -> usize {
+    match x {
+        0 => 10
+        1 | 2 => 20
+        y => y + 1
+    }
+}
+
+struct Foo<const N: usize> {}
+
+fn f() {
+    let a: Foo<choose(0)>
+    let b: Foo<choose(2)>
+    let c: Foo<choose(5)>
+    let d: Foo<{ choose(1) }>
+}

@@ -1,7 +1,8 @@
 ---
 source: crates/parser/tests/syntax_node.rs
+assertion_line: 15
 expression: node
-input_file: crates/parser/test_files/syntax_node/items/use.fe
+input_file: test_files/syntax_node/items/use.fe
 ---
 Root@0..308
   ItemList@0..307
@@ -19,8 +20,7 @@ Root@0..308
     Newline@12..13 "\n"
     Item@13..29
       Use@13..29
-        ItemModifier@13..16
-          PubKw@13..16 "pub"
+        PubKw@13..16 "pub"
         WhiteSpace@16..17 " "
         UseKw@17..20 "use"
         WhiteSpace@20..21 " "

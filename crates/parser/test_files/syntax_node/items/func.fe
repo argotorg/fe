@@ -6,7 +6,7 @@ fn bar(bar: i32, mut baz: u256) -> i32 {
     1
 }
 
-fn baz(from sender: address, mut to recipient: address, _ val: u256, _ _: u256) -> i32 {
+fn baz(from: address, mut to: address, _ val: u256, _ _: u256) -> i32 {
     1
 }
 

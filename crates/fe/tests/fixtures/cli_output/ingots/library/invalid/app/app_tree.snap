@@ -1,0 +1,8 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+---
+=== STDOUT ===
+library_app_invalid v0.1.0
+
+=== EXIT CODE: 0 ===

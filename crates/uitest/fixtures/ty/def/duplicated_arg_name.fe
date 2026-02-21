@@ -1,11 +1,9 @@
-pub fn foo(x: i32, y x: u64) {}
+pub fn foo(x: i32, x: u64) {}
 
 trait Foo {
-    fn foo(x y: i32, z y: i32) {}
+    fn foo(y: i32, y: i32) {}
 }
 
 impl Foo for i32 {
-    fn foo(x y: i32, z y: i32) {}
+    fn foo(y: i32, y: i32) {}
 }
-
-fn bar(a x: i32, a y: i32) {}

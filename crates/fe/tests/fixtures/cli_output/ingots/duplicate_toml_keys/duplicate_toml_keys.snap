@@ -3,7 +3,7 @@ source: crates/fe/tests/cli_output.rs
 expression: output
 ---
 === STDERR ===
-❌ Invalid fe.toml file in ingot file://<project>/crates/fe/tests/fixtures/cli_output/ingots/duplicate_toml_keys/: TOML parse error at line 3, column 1
+❌ Invalid fe.toml file in ingot file://<project>/crates/fe/tests/fixtures/cli_output/ingots/duplicate_toml_keys/: Failed to parse file://<project>/crates/fe/tests/fixtures/cli_output/ingots/duplicate_toml_keys/fe.toml: TOML parse error at line 3, column 1
   |
 3 | name = "duplicate"
   | ^

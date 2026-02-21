@@ -1,0 +1,9 @@
+use lib_alias::add
+
+pub fn main() {
+    let a: u256 = 1
+    let b: u256 = 2
+    let x: u256 = add(a, b)
+    let _y: u256 = x
+}
+

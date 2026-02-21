@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/mir_check.rs
+expression: res
+input_file: fixtures/mir_check/overlapping_mut_borrows.fe
+---
+error[11-0002]: borrow conflict in `fn overlapping_mut_borrows`
+  ┌─ overlapping_mut_borrows.fe:4:5
+  │
+3 │     let p: mut u256 = mut x
+  │                           - `x` is borrowed here
+4 │     let q: mut u256 = mut x
+  │     ^^^^^^^^^^^^^^^^^^^^^^^ cannot mutably borrow `x` while a mut borrow is active

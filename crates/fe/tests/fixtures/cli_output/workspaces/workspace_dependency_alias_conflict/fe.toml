@@ -1,0 +1,7 @@
+[workspace]
+name = "workspace_dependency_alias_conflict"
+version = "0.1.0"
+members = ["ingots/*"]
+
+[dependencies]
+lib = { path = "vendor/lib" }

@@ -3,8 +3,8 @@ use parser::ast::{self, prelude::*};
 use super::FileLowerCtxt;
 use crate::{
     hir_def::{
-        AttrListId, Body, EffectParamListId, FuncParamListId, GenericParamListId, IdentId, Partial,
-        PathId, TraitRefId, TupleTypeId, TypeBound, TypeId, WhereClauseId, item::*,
+        AttrListId, Body, EffectParamListId, FuncParamListId, GenericParamListId, IdentId, PathId,
+        TraitRefId, TupleTypeId, TypeBound, TypeId, WhereClauseId, item::*,
     },
     lower::msg::lower_msg_as_mod,
     span::HirOrigin,
@@ -54,45 +54,86 @@ impl<'db> ItemKind<'db> {
 
         match kind {
             ast::ItemKind::Mod(mod_) => {
+                super::event::report_event_attr_on_non_struct_item(ctxt, mod_.attr_list(), "mod");
                 Mod::lower_ast(ctxt, mod_);
             }
             ast::ItemKind::Func(fn_) => {
+                super::event::report_event_attr_on_non_struct_item(ctxt, fn_.attr_list(), "fn");
                 Func::lower_ast(ctxt, fn_);
             }
             ast::ItemKind::Struct(struct_) => {
                 Struct::lower_ast(ctxt, struct_);
             }
             ast::ItemKind::Contract(contract) => {
+                super::event::report_event_attr_on_non_struct_item(
+                    ctxt,
+                    contract.attr_list(),
+                    "contract",
+                );
                 Contract::lower_ast(ctxt, contract);
             }
             ast::ItemKind::Enum(enum_) => {
+                super::event::report_event_attr_on_non_struct_item(ctxt, enum_.attr_list(), "enum");
                 Enum::lower_ast(ctxt, enum_);
             }
             ast::ItemKind::Msg(msg) => {
+                super::event::report_event_attr_on_non_struct_item(ctxt, msg.attr_list(), "msg");
                 lower_msg_as_mod(ctxt, msg);
             }
             ast::ItemKind::TypeAlias(alias) => {
+                super::event::report_event_attr_on_non_struct_item(
+                    ctxt,
+                    alias.attr_list(),
+                    "type alias",
+                );
                 TypeAlias::lower_ast(ctxt, alias);
             }
             ast::ItemKind::Impl(impl_) => {
+                super::event::report_event_attr_on_non_struct_item(ctxt, impl_.attr_list(), "impl");
                 Impl::lower_ast(ctxt, impl_);
             }
             ast::ItemKind::Trait(trait_) => {
+                super::event::report_event_attr_on_non_struct_item(
+                    ctxt,
+                    trait_.attr_list(),
+                    "trait",
+                );
                 Trait::lower_ast(ctxt, trait_);
             }
             ast::ItemKind::ImplTrait(impl_trait) => {
+                super::event::report_event_attr_on_non_struct_item(
+                    ctxt,
+                    impl_trait.attr_list(),
+                    "impl trait",
+                );
                 ImplTrait::lower_ast(ctxt, impl_trait);
             }
             ast::ItemKind::Const(const_) => {
+                super::event::report_event_attr_on_non_struct_item(
+                    ctxt,
+                    const_.attr_list(),
+                    "const",
+                );
                 Const::lower_ast(ctxt, const_);
             }
             ast::ItemKind::Use(use_) => {
+                super::event::report_event_attr_on_non_struct_item(ctxt, use_.attr_list(), "use");
                 Use::lower_ast(ctxt, use_);
             }
             ast::ItemKind::Extern(extern_) => {
+                super::event::report_event_attr_on_non_struct_item(
+                    ctxt,
+                    extern_.attr_list(),
+                    "extern",
+                );
                 if let Some(extern_block) = extern_.extern_block() {
                     for fn_ in extern_block {
-                        Func::lower_ast(ctxt, fn_);
+                        super::event::report_event_attr_on_non_struct_item(
+                            ctxt,
+                            fn_.attr_list(),
+                            "extern fn",
+                        );
+                        Func::lower_ast_extern(ctxt, fn_);
                     }
                 }
             }
@@ -109,7 +150,7 @@ impl<'db> Mod<'db> {
         ctxt.insert_synthetic_prelude_use();
 
         let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
-        let vis = ItemModifier::lower_ast(ast.modifier()).to_visibility();
+        let vis = super::lower_visibility(&ast);
         if let Some(items) = ast.items() {
             lower_module_items(ctxt, items);
         }
@@ -122,6 +163,14 @@ impl<'db> Mod<'db> {
 
 impl<'db> Func<'db> {
     pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::Func) -> Self {
+        Self::lower_ast_impl(ctxt, ast, false)
+    }
+
+    pub(super) fn lower_ast_extern(ctxt: &mut FileLowerCtxt<'db>, ast: ast::Func) -> Self {
+        Self::lower_ast_impl(ctxt, ast, true)
+    }
+
+    fn lower_ast_impl(ctxt: &mut FileLowerCtxt<'db>, ast: ast::Func, is_extern: bool) -> Self {
         let sig = ast.sig();
         let name = IdentId::lower_token_partial(ctxt, sig.name());
         let id = ctxt.joined_id(TrackedItemVariant::Func(name));
@@ -136,11 +185,15 @@ impl<'db> Func<'db> {
             .into();
         let ret_ty = sig.ret_ty().map(|ty| TypeId::lower_ast(ctxt, ty));
         let effects = lower_uses_clause_opt(ctxt, ast.sig().uses_clause());
-        let modifier = ItemModifier::lower_ast(ast.modifier());
+        let vis = super::lower_visibility(&ast);
+        let is_unsafe = super::lower_is_unsafe(&ast);
+        let is_const = ast.const_kw().is_some();
+        let modifiers = FuncModifiers::new(vis, is_unsafe, is_const, is_extern);
         let body = ast
             .body()
             .map(|body| Body::lower_ast(ctxt, ast::Expr::cast(body.syntax().clone()).unwrap()));
         let origin = HirOrigin::raw(&ast);
+        let top_mod = ctxt.top_mod();
 
         let fn_ = Self::new(
             ctxt.db(),
@@ -152,9 +205,9 @@ impl<'db> Func<'db> {
             params,
             effects,
             ret_ty,
-            modifier,
+            modifiers,
             body,
-            ctxt.top_mod(),
+            top_mod,
             origin,
         );
         ctxt.leave_item_scope(fn_)
@@ -163,12 +216,18 @@ impl<'db> Func<'db> {
 
 impl<'db> Struct<'db> {
     pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::Struct) -> Self {
+        if super::event::is_event_struct(&ast) {
+            return super::event::lower_event_struct(ctxt, ast);
+        }
+
+        super::event::report_indexed_attrs_outside_event_struct(ctxt, &ast);
+
         let name = IdentId::lower_token_partial(ctxt, ast.name());
         let id = ctxt.joined_id(TrackedItemVariant::Struct(name));
         ctxt.enter_item_scope(id, false);
 
         let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
-        let vis = ItemModifier::lower_ast(ast.modifier()).to_visibility();
+        let vis = super::lower_visibility(&ast);
         let generic_params = GenericParamListId::lower_ast_opt(ctxt, ast.generic_params());
         let where_clause = WhereClauseId::lower_ast_opt(ctxt, ast.where_clause());
         let fields = FieldDefListId::lower_ast_opt(ctxt, ast.fields());
@@ -232,7 +291,7 @@ impl<'db> Enum<'db> {
         ctxt.enter_item_scope(id, false);
 
         let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
-        let vis = ItemModifier::lower_ast(ast.modifier()).to_visibility();
+        let vis = super::lower_visibility(&ast);
         let generic_params = GenericParamListId::lower_ast_opt(ctxt, ast.generic_params());
         let where_clause = WhereClauseId::lower_ast_opt(ctxt, ast.where_clause());
         let variants = VariantDefListId::lower_ast_opt(ctxt, ast.variants());
@@ -261,7 +320,7 @@ impl<'db> TypeAlias<'db> {
         ctxt.enter_item_scope(id, false);
 
         let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
-        let vis = ItemModifier::lower_ast(ast.modifier()).to_visibility();
+        let vis = super::lower_visibility(&ast);
         let generic_params = GenericParamListId::lower_ast_opt(ctxt, ast.generic_params());
         let ty = TypeId::lower_ast_partial(ctxt, ast.ty());
         let origin = HirOrigin::raw(&ast);
@@ -283,32 +342,15 @@ impl<'db> TypeAlias<'db> {
 
 impl<'db> Impl<'db> {
     pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::Impl) -> Self {
-        // Enter scope FIRST with a preliminary ID so that generic params are
-        // available when lowering the target type. This is needed for const
-        // generics in array types like `impl<const N: usize> Foo for [T; N]`.
-        //
-        // Note: the final impl id depends on the lowered `ty`, so we enter
-        // scope with a temporary id and then swap in the real id once `ty` is
-        // available. This keeps the final impl id stable (i.e. avoids
-        // `... -> Impl(Absent) -> Impl(ty)`), while still ensuring that bodies
-        // created during type lowering are nested under the impl scope.
-        let parent_id = ctxt.current_id();
-        let prelim_id = parent_id.join(ctxt.db(), TrackedItemVariant::Impl(Partial::Absent));
-        ctxt.enter_item_scope(prelim_id, false);
+        let idx = ctxt.next_impl_idx();
+        let id = ctxt.joined_id(TrackedItemVariant::Impl(idx));
+        ctxt.enter_item_scope(id, false);
 
-        // Lower generic params first (now they're in scope for type lowering)
+        // Lower generic params first so they are in scope for type and where-clause lowering.
         let generic_params = GenericParamListId::lower_ast_opt(ctxt, ast.generic_params());
-
-        // Now lower the target type (const expressions can resolve generic params)
-        let ty = TypeId::lower_ast_partial(ctxt, ast.ty());
-
-        // Switch to the final id so nested items (e.g. methods) are keyed under
-        // the real impl identity.
-        let id = parent_id.join(ctxt.db(), TrackedItemVariant::Impl(ty));
-        ctxt.set_current_id(id);
-
         let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
         let where_clause = WhereClauseId::lower_ast_opt(ctxt, ast.where_clause());
+        let ty = TypeId::lower_ast_partial(ctxt, ast.ty());
         let origin = HirOrigin::raw(&ast);
 
         if let Some(item_list) = ast.item_list() {
@@ -338,7 +380,7 @@ impl<'db> Trait<'db> {
         ctxt.enter_item_scope(id, false);
 
         let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
-        let vis = ItemModifier::lower_ast(ast.modifier()).to_visibility();
+        let vis = super::lower_visibility(&ast);
         let generic_params = GenericParamListId::lower_ast_opt(ctxt, ast.generic_params());
         let where_clause = WhereClauseId::lower_ast_opt(ctxt, ast.where_clause());
         let super_traits = if let Some(super_traits) = ast.super_trait_list() {
@@ -414,36 +456,16 @@ impl<'db> AssocTyDecl<'db> {
 
 impl<'db> ImplTrait<'db> {
     pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::ImplTrait) -> Self {
-        // Enter scope FIRST with a preliminary ID so that generic params are
-        // available when lowering the trait ref and target type. This is
-        // needed for const generics in array types like:
-        // `impl<T, const N: usize> Seq<T> for [T; N]`.
-        //
-        // Like inherent impls, the final impl-trait id depends on the lowered
-        // `trait_ref` and `ty`. Enter with a temporary id, then swap in the
-        // final id once both are available to avoid
-        // `... -> ImplTrait(Absent, Absent) -> ImplTrait(trait_ref, ty)`.
-        let parent_id = ctxt.current_id();
-        let prelim_id = parent_id.join(
-            ctxt.db(),
-            TrackedItemVariant::ImplTrait(Partial::Absent, Partial::Absent),
-        );
-        ctxt.enter_item_scope(prelim_id, false);
-
-        // Lower generic params first (now they're in scope for type lowering)
-        let generic_params = GenericParamListId::lower_ast_opt(ctxt, ast.generic_params());
-
-        // Now lower trait ref and target type (const expressions can resolve generic params)
-        let trait_ref = TraitRefId::lower_ast_partial(ctxt, ast.trait_ref());
-        let ty = TypeId::lower_ast_partial(ctxt, ast.ty());
-
-        // Switch to the final id so nested items (e.g. methods) are keyed under
-        // the real impl-trait identity.
-        let id = parent_id.join(ctxt.db(), TrackedItemVariant::ImplTrait(trait_ref, ty));
-        ctxt.set_current_id(id);
+        let idx = ctxt.next_impl_trait_idx();
+        let id = ctxt.joined_id(TrackedItemVariant::ImplTrait(idx));
+        ctxt.enter_item_scope(id, false);
 
         let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
+        // Lower generic params first so they are in scope for trait-ref/type and where-clause lowering.
+        let generic_params = GenericParamListId::lower_ast_opt(ctxt, ast.generic_params());
         let where_clause = WhereClauseId::lower_ast_opt(ctxt, ast.where_clause());
+        let trait_ref = TraitRefId::lower_ast_partial(ctxt, ast.trait_ref());
+        let ty = TypeId::lower_ast_partial(ctxt, ast.ty());
         let origin = HirOrigin::raw(&ast);
 
         let mut types = vec![];
@@ -530,7 +552,7 @@ impl<'db> Const<'db> {
         let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
         let ty = TypeId::lower_ast_partial(ctxt, ast.ty());
         let body = ast.value().map(|ast| Body::lower_ast(ctxt, ast)).into();
-        let vis = ItemModifier::lower_ast(ast.modifier()).to_visibility();
+        let vis = super::lower_visibility(&ast);
         let origin = HirOrigin::raw(&ast);
 
         let const_ = Self::new(
@@ -545,21 +567,6 @@ impl<'db> Const<'db> {
             origin,
         );
         ctxt.leave_item_scope(const_)
-    }
-}
-
-impl ItemModifier {
-    pub(super) fn lower_ast(ast: Option<ast::ItemModifier>) -> Self {
-        let Some(ast) = ast else {
-            return Self::None;
-        };
-
-        match (ast.pub_kw().is_some(), ast.unsafe_kw().is_some()) {
-            (true, true) => Self::PubAndUnsafe,
-            (true, false) => Self::Pub,
-            (false, true) => Self::Unsafe,
-            (false, false) => Self::None,
-        }
     }
 }
 

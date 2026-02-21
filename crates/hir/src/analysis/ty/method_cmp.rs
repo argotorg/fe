@@ -2,17 +2,20 @@ use thin_vec::ThinVec;
 
 use super::{
     canonical::Canonical,
+    const_expr::ConstExpr,
+    const_ty::const_ty_from_trait_const,
     diagnostics::{ImplDiag, TyDiagCollection},
-    fold::{AssocTySubst, TyFoldable},
+    fold::{AssocTySubst, TyFoldable, TyFolder},
     normalize::normalize_ty,
     trait_def::TraitInstId,
     trait_resolution::{
-        GoalSatisfiability, constraint::collect_func_def_constraints, is_goal_satisfiable,
+        GoalSatisfiability, TraitSolveCx, constraint::collect_func_def_constraints,
+        is_goal_satisfiable,
     },
-    ty_def::TyId,
+    ty_def::{InvalidCause, TyData, TyId},
 };
 use crate::analysis::HirAnalysisDb;
-use crate::hir_def::CallableDef;
+use crate::hir_def::{CallableDef, Expr, Partial, PathKind};
 
 /// Compares the implementation method with the trait method to ensure they
 /// match.
@@ -201,6 +204,7 @@ fn compare_ty<'db>(
 
     let mut substituter = AssocTySubst::new(trait_inst);
     let assumptions = collect_func_def_constraints(db, impl_m, true).instantiate_identity();
+    let solve_cx = TraitSolveCx::new(db, impl_m.scope()).with_assumptions(assumptions);
 
     for (idx, (trait_m_ty, impl_m_ty)) in trait_m_arg_tys
         .iter()
@@ -221,6 +225,10 @@ fn compare_ty<'db>(
         let trait_m_ty_normalized =
             normalize_ty(db, trait_m_ty_substituted, impl_m.scope(), assumptions);
         let impl_m_ty_normalized = normalize_ty(db, impl_m_ty, impl_m.scope(), assumptions);
+        let trait_m_ty_normalized =
+            normalize_const_tys(db, trait_m_ty_normalized, solve_cx, trait_inst);
+        let impl_m_ty_normalized =
+            normalize_const_tys(db, impl_m_ty_normalized, solve_cx, trait_inst);
 
         // 4) Compare for equality
         if !impl_m_ty.has_invalid(db) && trait_m_ty_normalized != impl_m_ty_normalized {
@@ -246,6 +254,10 @@ fn compare_ty<'db>(
     let trait_m_ret_ty_normalized =
         normalize_ty(db, trait_m_ret_ty_substituted, impl_m.scope(), assumptions);
     let impl_m_ret_ty_normalized = normalize_ty(db, impl_m_ret_ty, impl_m.scope(), assumptions);
+    let trait_m_ret_ty_normalized =
+        normalize_const_tys(db, trait_m_ret_ty_normalized, solve_cx, trait_inst);
+    let impl_m_ret_ty_normalized =
+        normalize_const_tys(db, impl_m_ret_ty_normalized, solve_cx, trait_inst);
 
     if !impl_m_ret_ty.has_invalid(db)
         && !trait_m_ret_ty.has_invalid(db)
@@ -267,6 +279,95 @@ fn compare_ty<'db>(
     !err
 }
 
+fn normalize_const_tys<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    solve_cx: TraitSolveCx<'db>,
+    trait_inst: TraitInstId<'db>,
+) -> TyId<'db> {
+    struct ConstFolder<'db> {
+        solve_cx: TraitSolveCx<'db>,
+        trait_inst: TraitInstId<'db>,
+    }
+
+    impl<'db> TyFolder<'db> for ConstFolder<'db> {
+        fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+            let TyData::ConstTy(const_ty) = ty.data(db) else {
+                return ty.super_fold_with(db, self);
+            };
+
+            match const_ty.data(db) {
+                super::const_ty::ConstTyData::Abstract(expr, expected_ty) => {
+                    let ConstExpr::TraitConst { inst, name } = expr.data(db) else {
+                        return ty.super_fold_with(db, self);
+                    };
+
+                    let Some(const_ty) = const_ty_from_trait_const(db, self.solve_cx, *inst, *name)
+                    else {
+                        return ty.super_fold_with(db, self);
+                    };
+
+                    let evaluated = const_ty.evaluate(db, Some(*expected_ty));
+                    if matches!(
+                        evaluated.ty(db).invalid_cause(db),
+                        Some(InvalidCause::ConstEvalUnsupported { .. })
+                    ) {
+                        return ty.super_fold_with(db, self);
+                    }
+
+                    TyId::new(db, TyData::ConstTy(evaluated))
+                }
+                super::const_ty::ConstTyData::UnEvaluated {
+                    body,
+                    ty: expected_ty,
+                    ..
+                } => {
+                    let Some(expected_ty) = *expected_ty else {
+                        return ty.super_fold_with(db, self);
+                    };
+                    let expr = body.expr(db);
+                    let Partial::Present(expr) = expr.data(db, *body) else {
+                        return ty.super_fold_with(db, self);
+                    };
+                    let Expr::Path(path) = expr else {
+                        return ty.super_fold_with(db, self);
+                    };
+                    let Some(path) = path.to_opt() else {
+                        return ty.super_fold_with(db, self);
+                    };
+
+                    let mut const_ty = *const_ty;
+                    if let Some(parent) = path.parent(db)
+                        && parent.is_self_ty(db)
+                        && let PathKind::Ident {
+                            ident,
+                            generic_args,
+                        } = path.kind(db)
+                        && generic_args.is_empty(db)
+                        && let Some(name) = ident.to_opt()
+                        && let Some(repl) =
+                            const_ty_from_trait_const(db, self.solve_cx, self.trait_inst, name)
+                    {
+                        const_ty = repl;
+                    }
+
+                    TyId::new(
+                        db,
+                        TyData::ConstTy(const_ty.evaluate(db, Some(expected_ty))),
+                    )
+                }
+                _ => ty.super_fold_with(db, self),
+            }
+        }
+    }
+
+    let mut folder = ConstFolder {
+        solve_cx,
+        trait_inst,
+    };
+    ty.fold_with(db, &mut folder)
+}
+
 /// Checks if the method constraints are stricter than the trait constraints.
 /// This check is performed by checking if the `impl_method` constraints are
 /// satisfied under the assumptions that is obtained from the `expected_method`
@@ -285,8 +386,11 @@ fn compare_constraints<'db>(
     let mut unsatisfied_goals = ThinVec::new();
     for &goal in impl_m_constraints.list(db) {
         let canonical_goal = Canonical::new(db, goal);
-        let ingot = trait_m.ingot(db);
-        match is_goal_satisfiable(db, ingot, canonical_goal, trait_m_constraints) {
+        match is_goal_satisfiable(
+            db,
+            TraitSolveCx::new(db, trait_m.scope()).with_assumptions(trait_m_constraints),
+            canonical_goal,
+        ) {
             GoalSatisfiability::Satisfied(_) | GoalSatisfiability::ContainsInvalid => {}
             GoalSatisfiability::NeedsConfirmation(_) => unreachable!(),
             GoalSatisfiability::UnSat(_) => {

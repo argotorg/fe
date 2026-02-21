@@ -14,6 +14,15 @@ pub trait Compact {
     fn bar(self)
 }
 
+// Mixed item kinds + selective blank lines
+pub trait Mixed {
+    type X
+    const N: usize
+
+    fn foo(self)
+    fn bar(self)
+}
+
 // Multiple blank lines get collapsed to one
 pub trait Spaced {
     type Output

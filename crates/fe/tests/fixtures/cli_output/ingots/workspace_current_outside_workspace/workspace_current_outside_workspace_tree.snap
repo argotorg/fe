@@ -1,0 +1,11 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+---
+=== STDOUT ===
+workspace_current_outside_workspace v0.1.0
+
+=== STDERR ===
+❌ Dependency 'lib' in file://<project>/crates/fe/tests/fixtures/cli_output/ingots/workspace_current_outside_workspace/ uses name-only lookup outside a workspace
+
+=== EXIT CODE: 0 ===

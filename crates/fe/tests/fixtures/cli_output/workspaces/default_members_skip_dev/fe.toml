@@ -1,0 +1,5 @@
+[workspace]
+name = "default_members_skip_dev"
+version = "0.1.0"
+members = { main = ["ingots/app", "ingots/lib"], dev = ["dev/bad"] }
+default-members = ["ingots/app"]

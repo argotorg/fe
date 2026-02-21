@@ -5,7 +5,6 @@ pub struct Storage {
 pub fn needs_mut_storage()
   uses mut Storage
 {
-    ()
 }
 
 pub fn mut_mismatch() {

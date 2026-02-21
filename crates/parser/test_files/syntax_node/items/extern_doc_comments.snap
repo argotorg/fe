@@ -1,5 +1,6 @@
 ---
 source: crates/parser/tests/syntax_node.rs
+assertion_line: 15
 expression: node
 input_file: test_files/syntax_node/items/extern_doc_comments.fe
 ---
@@ -19,8 +20,7 @@ Root@0..146
                 DocComment@13..41 "/// Load a word from  ..."
               Newline@41..42 "\n"
             WhiteSpace@42..46 "    "
-            ItemModifier@46..49
-              PubKw@46..49 "pub"
+            PubKw@46..49 "pub"
             WhiteSpace@49..50 " "
             FnKw@50..52 "fn"
             WhiteSpace@52..53 " "
@@ -52,8 +52,7 @@ Root@0..146
                 DocComment@80..107 "/// Store a word to m ..."
               Newline@107..108 "\n"
             WhiteSpace@108..112 "    "
-            ItemModifier@112..115
-              PubKw@112..115 "pub"
+            PubKw@112..115 "pub"
             WhiteSpace@115..116 " "
             FnKw@116..118 "fn"
             WhiteSpace@118..119 " "

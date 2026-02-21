@@ -84,7 +84,12 @@ impl<'db> SimplifiedPattern<'db> {
                 if let Some((ctor, ctor_ty)) =
                     Self::resolve_constructor(path_partial, db, scope, Some(expected_ty))
                 {
-                    SimplifiedPattern::constructor(ctor, vec![], ctor_ty)
+                    let fields = ctor
+                        .field_types(db)
+                        .into_iter()
+                        .map(|field_ty| SimplifiedPattern::wildcard(None, field_ty))
+                        .collect();
+                    SimplifiedPattern::constructor(ctor, fields, ctor_ty)
                 } else if let Some(lit) =
                     Self::resolve_literal_pat_from_path(path_partial, db, scope, expected_ty)
                 {
@@ -293,6 +298,7 @@ impl<'db> SimplifiedPattern<'db> {
                 match try_eval_const_ref(db, cref, expected_ty)? {
                     ConstValue::Int(int) => Some(LitKind::Int(IntegerId::new(db, int))),
                     ConstValue::Bool(flag) => Some(LitKind::Bool(flag)),
+                    ConstValue::Bytes(_) | ConstValue::EnumVariant(_) => None,
                 }
             }
             PathRes::TraitConst(_recv_ty, inst, name) => {
@@ -300,6 +306,7 @@ impl<'db> SimplifiedPattern<'db> {
                 match try_eval_const_ref(db, cref, expected_ty)? {
                     ConstValue::Int(int) => Some(LitKind::Int(IntegerId::new(db, int))),
                     ConstValue::Bool(flag) => Some(LitKind::Bool(flag)),
+                    ConstValue::Bytes(_) | ConstValue::EnumVariant(_) => None,
                 }
             }
             _ => None,

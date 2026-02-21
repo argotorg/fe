@@ -13,12 +13,14 @@ hir = { path = "crates/hir", package = "fe-hir" }
 parser = { path = "crates/parser", package = "fe-parser" }
 test-utils = { path = "crates/test-utils", package = "fe-test-utils" }
 resolver = { path = "crates/resolver", package = "fe-resolver" }
+codegen = { path = "crates/codegen", package = "fe-codegen" }
+language-server = { path = "crates/language-server", package = "fe-language-server" }
 mir = { path = "crates/mir", package = "fe-mir" }
 cranelift-entity = "0.115"
-
 url = "2.5.4"
 camino = "1.1.9"
 clap = { version = "4.5.26", features = ["derive"] }
+clap_complete = "4.5.65"
 codespan-reporting = "0.11"
 derive_more = { version = "1.0", default-features = false, features = [
     "from",
@@ -42,7 +44,49 @@ tracing-tree = "0.4.0"
 wasm-bindgen-test = "0.3"
 semver = "1.0.26"
 petgraph = "0.8"
+sonatina-ir = { git = "https://github.com/fe-lang/sonatina", rev = "1b6be0b" }
+sonatina-triple = { git = "https://github.com/fe-lang/sonatina", rev = "1b6be0b" }
+sonatina-codegen = { git = "https://github.com/fe-lang/sonatina", rev = "1b6be0b" }
+sonatina-verifier = { git = "https://github.com/fe-lang/sonatina", rev = "1b6be0b" }
 
 [profile.dev]
 # Set to 0 to make the build faster and debugging more difficult.
 debug = 0
+
+[profile.test]
+# Set to 0 to make the build faster and debugging more difficult.
+debug = 0
+
+[profile.dev.package]
+revm = { opt-level = 3 }
+revm-bytecode = { opt-level = 3 }
+revm-context = { opt-level = 3 }
+revm-context-interface = { opt-level = 3 }
+revm-database = { opt-level = 3 }
+revm-database-interface = { opt-level = 3 }
+revm-handler = { opt-level = 3 }
+revm-inspector = { opt-level = 3 }
+revm-interpreter = { opt-level = 3 }
+revm-precompile = { opt-level = 3 }
+revm-primitives = { opt-level = 3 }
+revm-state = { opt-level = 3 }
+sonatina-ir = { opt-level = 3 }
+sonatina-codegen = { opt-level = 3 }
+sonatina-verifier = { opt-level = 3 }
+
+[profile.test.package]
+revm = { opt-level = 3 }
+revm-bytecode = { opt-level = 3 }
+revm-context = { opt-level = 3 }
+revm-context-interface = { opt-level = 3 }
+revm-database = { opt-level = 3 }
+revm-database-interface = { opt-level = 3 }
+revm-handler = { opt-level = 3 }
+revm-inspector = { opt-level = 3 }
+revm-interpreter = { opt-level = 3 }
+revm-precompile = { opt-level = 3 }
+revm-primitives = { opt-level = 3 }
+revm-state = { opt-level = 3 }
+sonatina-ir = { opt-level = 3 }
+sonatina-codegen = { opt-level = 3 }
+sonatina-verifier = { opt-level = 3 }

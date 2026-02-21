@@ -244,8 +244,10 @@ fn call_edge_targets<'db>(
             }
         }
 
-        if let crate::Terminator::TerminatingCall(crate::ir::TerminatingCall::Call(call)) =
-            &block.terminator
+        if let crate::Terminator::TerminatingCall {
+            call: crate::ir::TerminatingCall::Call(call),
+            ..
+        } = &block.terminator
             && let Some(name) = &call.resolved_name
             && let Some(&idx) = symbol_to_idx.get(name)
         {
@@ -273,8 +275,10 @@ fn rewrite_call_targets<'db>(
                 }
             }
 
-            if let crate::Terminator::TerminatingCall(crate::ir::TerminatingCall::Call(call)) =
-                &mut block.terminator
+            if let crate::Terminator::TerminatingCall {
+                call: crate::ir::TerminatingCall::Call(call),
+                ..
+            } = &mut block.terminator
                 && let Some(alias) = canonical_call_name(&call.resolved_name, aliases)
             {
                 call.resolved_name = Some(alias);

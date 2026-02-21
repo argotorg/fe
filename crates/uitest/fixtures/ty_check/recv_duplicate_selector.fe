@@ -45,3 +45,27 @@ pub contract MultiRecv {
         }
     }
 }
+
+msg MsgA {
+    #[selector = 0x01]
+    Foo { x: u64 } -> u64,
+}
+
+msg MsgB {
+    #[selector = 0x01]
+    Foo { y: u64 } -> bool,
+}
+
+pub contract SameNameConflict {
+    recv MsgA {
+        Foo { x } -> u64 uses () {
+            x
+        }
+    }
+
+    recv MsgB {
+        Foo { y } -> bool uses () {
+            true
+        }
+    }
+}

@@ -3,14 +3,17 @@ use crate::core::hir_def::{
     scope_graph::ScopeId, types::TypeId as HirTypeId,
 };
 use crate::hir_def::CallableDef;
-use common::indexmap::IndexSet;
+use common::indexmap::{IndexMap, IndexSet};
 use either::Either;
 
 use crate::analysis::{
     HirAnalysisDb,
+    name_resolution::{PathRes, resolve_path},
     ty::{
         adt_def::AdtDef,
         binder::Binder,
+        corelib::resolve_core_trait,
+        effects::{EffectKeyKind, effect_key_kind, place_effect_provider_param_index_map},
         trait_def::TraitInstId,
         trait_lower::{lower_impl_trait, lower_trait_ref},
         trait_resolution::PredicateListId,
@@ -19,6 +22,92 @@ use crate::analysis::{
         unify::InferenceKey,
     },
 };
+
+fn collect_effect_constraints_for_func<'db>(
+    db: &'db dyn HirAnalysisDb,
+    func: crate::hir_def::Func<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Vec<TraitInstId<'db>> {
+    let provider_map = place_effect_provider_param_index_map(db, func);
+    let provider_params = CallableDef::Func(func).params(db);
+
+    let effect_ref_trait = resolve_core_trait(db, func.scope(), &["effect_ref", "EffectRef"])
+        .expect("missing required core trait `core::effect_ref::EffectRef`");
+    let effect_ref_mut_trait =
+        resolve_core_trait(db, func.scope(), &["effect_ref", "EffectRefMut"])
+            .expect("missing required core trait `core::effect_ref::EffectRefMut`");
+
+    let mut out = Vec::new();
+    for effect in func.effect_params(db) {
+        let Some(key_path) = effect.key_path(db) else {
+            continue;
+        };
+
+        let key_kind = effect_key_kind(db, key_path, func.scope());
+        if !matches!(key_kind, EffectKeyKind::Type | EffectKeyKind::Trait) {
+            continue;
+        }
+
+        let Some(provider_idx) = provider_map.get(effect.index()).copied().flatten() else {
+            continue;
+        };
+        let Some(&provider_ty) = provider_params.get(provider_idx) else {
+            continue;
+        };
+
+        match key_kind {
+            EffectKeyKind::Trait => {
+                let Ok(PathRes::Trait(inst)) =
+                    resolve_path(db, key_path, func.scope(), assumptions, false)
+                else {
+                    continue;
+                };
+
+                let mut args = inst.args(db).to_vec();
+                if args.is_empty() {
+                    args.push(provider_ty);
+                } else {
+                    args[0] = provider_ty;
+                }
+                out.push(TraitInstId::new(
+                    db,
+                    inst.def(db),
+                    args,
+                    inst.assoc_type_bindings(db).clone(),
+                ));
+            }
+            EffectKeyKind::Type => {
+                let Ok(PathRes::Ty(target_ty) | PathRes::TyAlias(_, target_ty)) =
+                    resolve_path(db, key_path, func.scope(), assumptions, false)
+                else {
+                    continue;
+                };
+                if !target_ty.is_star_kind(db) {
+                    continue;
+                }
+
+                out.push(TraitInstId::new(
+                    db,
+                    effect_ref_trait,
+                    vec![provider_ty, target_ty],
+                    IndexMap::new(),
+                ));
+
+                if effect.is_mut(db) {
+                    out.push(TraitInstId::new(
+                        db,
+                        effect_ref_mut_trait,
+                        vec![provider_ty, target_ty],
+                        IndexMap::new(),
+                    ));
+                }
+            }
+            EffectKeyKind::Other => {}
+        }
+    }
+
+    out
+}
 
 /// Returns a constraints list which is derived from the given type.
 #[salsa::tracked]
@@ -216,7 +305,16 @@ pub fn collect_constraints<'db>(
             None => true,
         });
         if deferred.len() == before {
-            return Binder::bind(assumptions);
+            break;
+        }
+    }
+
+    // Collect implicit effect constraints on provider generic parameters.
+    if let GenericParamOwner::Func(func) = owner {
+        let assumptions =
+            PredicateListId::new(db, all_predicates.iter().copied().collect::<Vec<_>>());
+        for inst in collect_effect_constraints_for_func(db, func, assumptions) {
+            all_predicates.insert(inst);
         }
     }
 

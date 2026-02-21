@@ -1,0 +1,6 @@
+struct NotBytes {}
+
+fn f() -> u256 {
+    let x: NotBytes = NotBytes {}
+    core::keccak(x)
+}

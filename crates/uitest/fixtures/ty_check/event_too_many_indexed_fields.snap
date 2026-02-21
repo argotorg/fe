@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/event_too_many_indexed_fields.fe
+---
+error[10-0006]: too many indexed fields in event
+   ┌─ event_too_many_indexed_fields.fe:11:5
+   │
+11 │     #[indexed]
+   │     ^^^^^^^^^^ EVM supports at most 3 indexed fields (found 4)
+   │
+   = remove `#[indexed]` from fields until there are at most 3

@@ -1,0 +1,7 @@
+[ingot]
+name = "app"
+version = "0.1.0"
+
+[dependencies]
+lib_b = { path = "../../../workspace_b" }
+

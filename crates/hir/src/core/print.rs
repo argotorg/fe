@@ -121,18 +121,6 @@ impl Visibility {
     }
 }
 
-impl ItemModifier {
-    /// Returns the modifier keywords.
-    pub fn pretty_print(self) -> &'static str {
-        match self {
-            ItemModifier::Pub => "pub ",
-            ItemModifier::Unsafe => "unsafe ",
-            ItemModifier::PubAndUnsafe => "pub unsafe ",
-            ItemModifier::None => "",
-        }
-    }
-}
-
 // ============================================================================
 // Literals
 // ============================================================================
@@ -279,7 +267,12 @@ impl<'db> ConstGenericParam<'db> {
             .data(db)
             .to_string();
         let ty = unwrap_partial(self.ty, "ConstGenericParam::ty").pretty_print(db);
-        format!("const {}: {}", name, ty)
+        let mut out = format!("const {name}: {ty}");
+        if let Some(default) = self.default {
+            out.push_str(" = ");
+            out.push_str(&default.pretty_print(db));
+        }
+        out
     }
 }
 
@@ -361,19 +354,22 @@ impl<'db> FuncParam<'db> {
     pub fn pretty_print(&self, db: &'db dyn HirDb) -> String {
         let mut result = String::new();
         let name = unwrap_partial(self.name, "FuncParam::name");
+        let mode_prefix = match self.mode {
+            FuncParamMode::View => "",
+            FuncParamMode::Own => "own ",
+        };
 
-        // Mutability comes first
+        // Mutability comes next
         if self.is_mut {
             result.push_str("mut ");
         }
 
-        // Handle label if different from name
-        if let Some(label) = &self.label {
-            // Only print label separately if different from name
-            if *label != name {
-                result.push_str(&label.pretty_print(db));
-                result.push(' ');
-            }
+        if self.self_ty_fallback {
+            result.push_str(mode_prefix);
+        }
+
+        if self.is_label_suppressed {
+            result.push_str("_ ");
         }
 
         // Name
@@ -420,11 +416,11 @@ impl<'db> EffectParam<'db> {
 
         // If we have a name binding, print it first
         if let Some(name) = self.name {
+            result.push_str(name.data(db));
+            result.push_str(": ");
             if self.is_mut {
                 result.push_str("mut ");
             }
-            result.push_str(name.data(db));
-            result.push_str(": ");
             let path = unwrap_partial(self.key_path, "EffectParam::key_path").pretty_print(db);
             result.push_str(&path);
         } else {
@@ -578,11 +574,12 @@ impl<'db> Expr<'db> {
 
             Expr::Un(expr, op) => {
                 let expr = unwrap_partial_ref(expr.data(db, body), "Un::expr");
-                format!(
-                    "{}{}",
-                    op.pretty_print(),
-                    expr.pretty_print(db, body, indent)
-                )
+                let op_str = op.pretty_print();
+                if matches!(op, UnOp::Mut | UnOp::Ref) {
+                    format!("{op_str} {}", expr.pretty_print(db, body, indent))
+                } else {
+                    format!("{op_str}{}", expr.pretty_print(db, body, indent))
+                }
             }
 
             Expr::Cast(expr, ty) => {
@@ -905,6 +902,8 @@ impl UnOp {
             UnOp::Minus => "-",
             UnOp::Not => "!",
             UnOp::BitNot => "~",
+            UnOp::Mut => "mut",
+            UnOp::Ref => "ref",
         }
     }
 }
@@ -1035,8 +1034,15 @@ impl<'db> Func<'db> {
         // Attributes
         result.push_str(&self.attributes(db).pretty_print_with_newline(db));
 
-        // Modifiers (pub, unsafe)
-        result.push_str(self.modifier(db).pretty_print());
+        // Modifiers (pub, unsafe, const)
+        let modifiers = self.modifiers(db);
+        result.push_str(modifiers.vis.pretty_print());
+        if modifiers.is_unsafe {
+            result.push_str("unsafe ");
+        }
+        if modifiers.is_const {
+            result.push_str("const ");
+        }
 
         // fn keyword
         result.push_str("fn ");
@@ -1644,8 +1650,9 @@ fn print_items_with_extern_blocks<'db>(
     };
 
     for item in items {
-        // Check if this is an extern function (function without body at module level)
+        // Check if this is an extern function (function declared within an `extern { ... }` block)
         if let ItemKind::Func(func) = item
+            && func.is_extern(db)
             && func.body(db).is_none()
         {
             extern_funcs.push(*func);

@@ -1,0 +1,14 @@
+---
+source: crates/uitest/tests/mir_check.rs
+expression: res
+input_file: fixtures/mir_check/return_ref_from_view_param.fe
+---
+error[11-0003]: invalid return borrow in `fn return_ref_from_view_param`
+  ┌─ return_ref_from_view_param.fe:2:5
+  │
+1 │ pub fn return_ref_from_view_param(x: u256) -> ref u256 {
+  │                                   ------- `x` is a `view` parameter
+2 │     ref x
+  │     ^^^ return borrows must be derived from explicit borrow parameters
+  │
+  = help: consider changing `x: u256` to `x: ref u256`

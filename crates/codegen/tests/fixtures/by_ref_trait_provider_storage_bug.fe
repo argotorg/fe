@@ -1,0 +1,42 @@
+// Demonstrates a known miscompile: passing a storage-backed by-ref provider as a trait effect
+// causes the callee to treat it as a memory pointer (defaulting by-ref providers to `mem`).
+
+trait Ctx {
+    fn sum(self) -> u256
+}
+
+struct Pair {
+    a: u256,
+    b: u256,
+}
+
+impl Ctx for Pair {
+    fn sum(self) -> u256 {
+        self.a + self.b
+    }
+}
+
+fn use_ctx() -> u256 uses (ctx: Ctx) {
+    ctx.sum()
+}
+
+msg Msg {
+    #[selector = 1]
+    Go -> u256
+}
+
+pub contract ByRefTraitProviderStorageBug {
+    ctx: Pair
+
+    init() uses (mut ctx) {
+        ctx = Pair { a: 40, b: 2 }
+    }
+
+    recv Msg {
+        Go -> u256 uses (ctx) {
+            with (ctx) {
+                use_ctx()
+            }
+        }
+    }
+}

@@ -1,0 +1,48 @@
+// Comments in item header token positions
+
+const X: u8 = // mid
+1
+
+fn header_fn() // mid
+{
+    1
+}
+
+pub struct HeaderStruct // mid
+{
+    x: u8,
+}
+
+enum HeaderEnum // mid
+{
+    A,
+    B,
+}
+
+trait HeaderTrait // mid
+{
+    fn f(self) -> u8
+}
+
+msg M {
+    Foo -> u8,
+}
+
+pub contract HeaderContract // mid
+uses () // mid
+{
+    init() // mid
+    uses ()
+    {
+    }
+
+    recv M // mid
+    {
+        Foo {} // mid
+        -> u8 // mid
+        uses ()
+        {
+            1
+        }
+    }
+}

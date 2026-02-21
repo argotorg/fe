@@ -1,0 +1,5 @@
+use dep_alias::foo
+
+pub fn main() {
+    foo()
+}

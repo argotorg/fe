@@ -1,6 +1,6 @@
 [package]
 name = "fe-codegen"
-version = "0.1.0"
+version = "26.0.0-alpha.5"
 edition.workspace = true
 
 [dependencies]
@@ -9,7 +9,14 @@ mir = { path = "../mir", package = "fe-mir" }
 hir.workspace = true
 common.workspace = true
 hex = "0.4"
+num-bigint.workspace = true
 rustc-hash.workspace = true
+sonatina-ir.workspace = true
+sonatina-triple.workspace = true
+sonatina-codegen.workspace = true
+sonatina-verifier.workspace = true
+smallvec1.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 dir-test.workspace = true

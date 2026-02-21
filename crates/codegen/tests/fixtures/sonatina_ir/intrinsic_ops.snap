@@ -1,0 +1,60 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+expression: output
+input_file: crates/codegen/tests/fixtures/intrinsic_ops.fe
+---
+target = "evm-ethereum-osaka"
+
+func public %load_word__Evm_hef0af3106e109414__3af54274b2985741(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = mload v0 i256;
+        return v3;
+}
+
+func public %store_word__Evm_hef0af3106e109414__3af54274b2985741(v0.i256, v1.i256, v2.i256) {
+    block0:
+        mstore v0 v1 i256;
+        return;
+}
+
+func public %store_byte__Evm_hef0af3106e109414__3af54274b2985741(v0.i256, v1.i256, v2.i256) {
+    block0:
+        evm_mstore8 v0 v1;
+        return;
+}
+
+func public %load_slot__Evm_hef0af3106e109414__3af54274b2985741(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = evm_sload v0;
+        return v3;
+}
+
+func public %store_slot__Evm_hef0af3106e109414__3af54274b2985741(v0.i256, v1.i256, v2.i256) {
+    block0:
+        evm_sstore v0 v1;
+        return;
+}
+
+func public %load_calldata__Evm_hef0af3106e109414__3af54274b2985741(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = evm_calldata_load v0;
+        return v3;
+}
+
+func public %finish__Evm_hef0af3106e109414__3af54274b2985741(v0.i256, v1.i256, v2.i256) {
+    block0:
+        evm_return v0 v1;
+}
+
+func public %__fe_sonatina_entry() {
+    block0:
+        v1.i256 = call %load_word__Evm_hef0af3106e109414__3af54274b2985741 0.i256 0.i256;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+    }
+}

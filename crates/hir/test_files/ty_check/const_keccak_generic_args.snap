@@ -1,0 +1,20 @@
+---
+source: crates/hir/tests/ty_check.rs
+assertion_line: 40
+expression: res
+input_file: test_files/ty_check/const_keccak_generic_args.fe
+---
+note: 
+  ┌─ const_keccak_generic_args.fe:3:8
+  │  
+3 │   fn f() {
+  │ ╭────────^
+4 │ │     let a: Hash<{ core::keccak("hello") }>
+5 │ │ }
+  │ ╰─^ ()
+
+note: 
+  ┌─ const_keccak_generic_args.fe:4:9
+  │
+4 │     let a: Hash<{ core::keccak("hello") }>
+  │         ^ Hash<12910348618308260923200348219926901280687058984330794534952861439530514639560>

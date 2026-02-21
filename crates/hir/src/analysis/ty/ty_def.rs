@@ -4,8 +4,8 @@ use std::fmt;
 
 use crate::{
     hir_def::{
-        Body, Enum, GenericParamOwner, IdentId, IntegerId, ItemKind, PathId,
-        TypeAlias as HirTypeAlias,
+        Body, Enum, ExprId, GenericParamOwner, IdentId, IntegerId, ItemKind, PathId,
+        TypeAlias as HirTypeAlias, VariantKind,
         prim_ty::{IntTy as HirIntTy, PrimTy as HirPrimTy, UintTy as HirUintTy},
         scope_graph::ScopeId,
     },
@@ -34,7 +34,11 @@ use super::{
 use crate::analysis::{
     HirAnalysisDb,
     name_resolution::PathRes,
-    ty::{adt_def::AdtRef, trait_resolution::check_ty_wf, ty_error::emit_invalid_ty_error},
+    ty::{
+        adt_def::AdtRef,
+        trait_resolution::{TraitSolveCx, check_ty_wf},
+        ty_error::emit_invalid_ty_error,
+    },
 };
 use crate::hir_def::CallableDef;
 
@@ -235,6 +239,48 @@ impl<'db> TyId<'db> {
         Self::new(db, TyData::TyBase(TyBase::Prim(PrimTy::Ptr)))
     }
 
+    pub fn borrow_mut_of(db: &'db dyn HirAnalysisDb, inner: TyId<'db>) -> TyId<'db> {
+        let ctor = Self::new(db, TyData::TyBase(TyBase::Prim(PrimTy::BorrowMut)));
+        Self::app(db, ctor, inner)
+    }
+
+    pub fn borrow_ref_of(db: &'db dyn HirAnalysisDb, inner: TyId<'db>) -> TyId<'db> {
+        let ctor = Self::new(db, TyData::TyBase(TyBase::Prim(PrimTy::BorrowRef)));
+        Self::app(db, ctor, inner)
+    }
+
+    pub fn view_of(db: &'db dyn HirAnalysisDb, inner: TyId<'db>) -> TyId<'db> {
+        let ctor = Self::new(db, TyData::TyBase(TyBase::Prim(PrimTy::View)));
+        Self::app(db, ctor, inner)
+    }
+
+    pub fn as_view(self, db: &'db dyn HirAnalysisDb) -> Option<TyId<'db>> {
+        let (base, args) = self.decompose_ty_app(db);
+        let inner = args.first().copied()?;
+        matches!(base.data(db), TyData::TyBase(TyBase::Prim(PrimTy::View))).then_some(inner)
+    }
+
+    pub fn as_capability(self, db: &'db dyn HirAnalysisDb) -> Option<(CapabilityKind, TyId<'db>)> {
+        let (base, args) = self.decompose_ty_app(db);
+        let inner = args.first().copied()?;
+        match base.data(db) {
+            TyData::TyBase(TyBase::Prim(PrimTy::BorrowMut)) => Some((CapabilityKind::Mut, inner)),
+            TyData::TyBase(TyBase::Prim(PrimTy::BorrowRef)) => Some((CapabilityKind::Ref, inner)),
+            TyData::TyBase(TyBase::Prim(PrimTy::View)) => Some((CapabilityKind::View, inner)),
+            _ => None,
+        }
+    }
+
+    pub fn as_borrow(self, db: &'db dyn HirAnalysisDb) -> Option<(BorrowKind, TyId<'db>)> {
+        let (base, args) = self.decompose_ty_app(db);
+        let inner = args.first().copied()?;
+        match base.data(db) {
+            TyData::TyBase(TyBase::Prim(PrimTy::BorrowMut)) => Some((BorrowKind::Mut, inner)),
+            TyData::TyBase(TyBase::Prim(PrimTy::BorrowRef)) => Some((BorrowKind::Ref, inner)),
+            _ => None,
+        }
+    }
+
     pub(super) fn tuple(db: &'db dyn HirAnalysisDb, n: usize) -> Self {
         Self::new(db, TyData::TyBase(TyBase::tuple(n)))
     }
@@ -430,6 +476,17 @@ impl<'db> TyId<'db> {
         matches!(self.base_ty(db).data(db), TyData::TyBase(TyBase::Prim(_)))
     }
 
+    pub fn is_unit_variant_only_enum(self, db: &'db dyn HirAnalysisDb) -> bool {
+        if let Some(enum_) = self.as_enum(db) {
+            enum_.len_variants(db) > 0
+                && enum_
+                    .variants(db)
+                    .all(|v| matches!(v.kind(db), VariantKind::Unit))
+        } else {
+            false
+        }
+    }
+
     pub fn as_enum(self, db: &'db dyn HirAnalysisDb) -> Option<Enum<'db>> {
         let base_ty = self.base_ty(db);
         if let Some(adt_ref) = base_ty.adt_ref(db)
@@ -444,7 +501,7 @@ impl<'db> TyId<'db> {
     pub(crate) fn as_scope(self, db: &'db dyn HirAnalysisDb) -> Option<ScopeId<'db>> {
         match self.base_ty(db).data(db) {
             TyData::TyParam(param) => Some(param.scope(db)),
-            TyData::AssocTy(assoc_ty) => Some(assoc_ty.scope(db)),
+            TyData::AssocTy(assoc_ty) => assoc_ty.scope(db),
             TyData::QualifiedTy(trait_inst) => Some(trait_inst.def(db).scope()),
             TyData::TyBase(TyBase::Adt(adt)) => Some(adt.scope(db)),
             TyData::TyBase(TyBase::Contract(c)) => Some(c.scope()),
@@ -454,6 +511,7 @@ impl<'db> TyId<'db> {
                 ConstTyData::TyVar(..) => None,
                 ConstTyData::TyParam(ty_param, _) => Some(ty_param.scope(db)),
                 ConstTyData::Evaluated(..) => None,
+                ConstTyData::Abstract(..) => None,
                 ConstTyData::UnEvaluated { body, .. } => Some(body.scope()),
             },
 
@@ -467,7 +525,7 @@ impl<'db> TyId<'db> {
         match self.base_ty(db).data(db) {
             TyData::TyVar(_) => None,
             TyData::TyParam(param) => param.scope(db).name_span(db),
-            TyData::AssocTy(assoc_ty) => assoc_ty.scope(db).name_span(db),
+            TyData::AssocTy(assoc_ty) => assoc_ty.scope(db)?.name_span(db),
             TyData::QualifiedTy(trait_inst) => trait_inst.def(db).scope().name_span(db),
 
             TyData::TyBase(TyBase::Adt(adt)) => Some(adt.name_span(db)),
@@ -497,12 +555,12 @@ impl<'db> TyId<'db> {
     pub(super) fn emit_wf_diag(
         self,
         db: &'db dyn HirAnalysisDb,
-        ingot: Ingot<'db>,
+        solve_cx: TraitSolveCx<'db>,
         assumptions: PredicateListId<'db>,
         span: DynLazySpan<'db>,
     ) -> Option<TyDiagCollection<'db>> {
         if let WellFormedness::IllFormed { goal, subgoal } =
-            check_ty_wf(db, ingot, self, assumptions)
+            check_ty_wf(db, solve_cx.with_assumptions(assumptions), self)
         {
             Some(
                 TraitConstraintDiag::TraitBoundNotSat {
@@ -668,12 +726,9 @@ impl<'db> TyId<'db> {
                 }
             }
 
-            (None, TyData::ConstTy(const_ty)) => {
-                let evaluated_const_ty = const_ty.evaluate(db, None);
-                Err(InvalidCause::NormalTypeExpected {
-                    given: TyId::const_ty(db, evaluated_const_ty),
-                })
-            }
+            (None, TyData::ConstTy(const_ty)) => Err(InvalidCause::NormalTypeExpected {
+                given: TyId::const_ty(db, *const_ty),
+            }),
 
             (None, _) => Ok(self),
         }
@@ -861,6 +916,31 @@ pub enum InvalidCause<'db> {
         body: Body<'db>,
     },
 
+    ConstEvalUnsupported {
+        body: Body<'db>,
+        expr: ExprId,
+    },
+
+    ConstEvalNonConstCall {
+        body: Body<'db>,
+        expr: ExprId,
+    },
+
+    ConstEvalDivisionByZero {
+        body: Body<'db>,
+        expr: ExprId,
+    },
+
+    ConstEvalStepLimitExceeded {
+        body: Body<'db>,
+        expr: ExprId,
+    },
+
+    ConstEvalRecursionLimitExceeded {
+        body: Body<'db>,
+        expr: ExprId,
+    },
+
     // TraitConstraintNotSat(PredicateId),
     ParseError,
 
@@ -921,6 +1001,13 @@ impl InvalidCause<'_> {
             | InvalidCause::Other => format!("{self:?}"),
 
             InvalidCause::InvalidConstTyExpr { body: _ } => "InvalidConstTyExpr".into(),
+            InvalidCause::ConstEvalUnsupported { .. } => "ConstEvalUnsupported".into(),
+            InvalidCause::ConstEvalNonConstCall { .. } => "ConstEvalNonConstCall".into(),
+            InvalidCause::ConstEvalDivisionByZero { .. } => "ConstEvalDivisionByZero".into(),
+            InvalidCause::ConstEvalStepLimitExceeded { .. } => "ConstEvalStepLimitExceeded".into(),
+            InvalidCause::ConstEvalRecursionLimitExceeded { .. } => {
+                "ConstEvalRecursionLimitExceeded".into()
+            }
         }
     }
 }
@@ -1031,16 +1118,15 @@ pub struct AssocTy<'db> {
 }
 
 impl<'db> AssocTy<'db> {
-    pub fn scope(&self, db: &'db dyn HirAnalysisDb) -> ScopeId<'db> {
+    pub fn scope(&self, db: &'db dyn HirAnalysisDb) -> Option<ScopeId<'db>> {
         // Find the index of this associated type in the trait's type list
         let trait_def = self.trait_.def(db);
         let idx = trait_def
             .assoc_types(db)
             .enumerate()
             .find(|(_, t)| t.name(db) == Some(self.name))
-            .map(|(i, _)| i)
-            .unwrap();
-        ScopeId::TraitType(trait_def, idx as u16)
+            .map(|(i, _)| i)?;
+        Some(ScopeId::TraitType(trait_def, idx as u16))
     }
 }
 
@@ -1215,10 +1301,6 @@ impl<'db> TyBase<'db> {
         Self::Prim(PrimTy::Tuple(n))
     }
 
-    pub(super) fn bool() -> Self {
-        Self::Prim(PrimTy::Bool)
-    }
-
     fn pretty_print(&self, db: &dyn HirAnalysisDb) -> String {
         match self {
             Self::Prim(prim) => match prim {
@@ -1241,6 +1323,9 @@ impl<'db> TyBase<'db> {
                 PrimTy::Array => "[]",
                 PrimTy::Tuple(_) => "()",
                 PrimTy::Ptr => "*",
+                PrimTy::View => "View",
+                PrimTy::BorrowMut => "BorrowMut",
+                PrimTy::BorrowRef => "BorrowRef",
             }
             .to_string(),
 
@@ -1330,6 +1415,32 @@ pub enum PrimTy {
     Array,
     Tuple(usize),
     Ptr,
+    View,
+    BorrowMut,
+    BorrowRef,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BorrowKind {
+    Mut,
+    Ref,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CapabilityKind {
+    Mut,
+    Ref,
+    View,
+}
+
+impl CapabilityKind {
+    pub fn rank(self) -> u8 {
+        match self {
+            Self::Mut => 3,
+            Self::Ref => 2,
+            Self::View => 1,
+        }
+    }
 }
 
 impl PrimTy {
@@ -1429,6 +1540,7 @@ impl HasKind for PrimTy {
             Self::Tuple(n) => (0..*n).fold(Kind::Star, |acc, _| Kind::abs(Kind::Star, acc)),
             Self::Ptr => Kind::abs(Kind::Star, Kind::Star),
             Self::String => Kind::abs(Kind::Star, Kind::Star),
+            Self::View | Self::BorrowMut | Self::BorrowRef => Kind::abs(Kind::Star, Kind::Star),
             _ => Kind::Star,
         }
     }
@@ -1524,6 +1636,27 @@ fn pretty_print_ty_app<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> String
 
     let (base, args) = decompose_ty_app(db, ty);
     match base.data(db) {
+        TyData::TyBase(Prim(BorrowMut)) => {
+            let Some(inner) = args.first() else {
+                return "mut <missing>".to_string();
+            };
+            format!("mut {}", inner.pretty_print(db))
+        }
+
+        TyData::TyBase(Prim(BorrowRef)) => {
+            let Some(inner) = args.first() else {
+                return "ref <missing>".to_string();
+            };
+            format!("ref {}", inner.pretty_print(db))
+        }
+
+        TyData::TyBase(Prim(View)) => {
+            let Some(inner) = args.first() else {
+                return "<missing>".to_string();
+            };
+            inner.pretty_print(db).to_string()
+        }
+
         TyData::TyBase(Prim(Array)) => {
             let elem_ty = args[0].pretty_print(db);
             let len = args[1].pretty_print(db);
@@ -1646,6 +1779,10 @@ pub(crate) fn ty_flags<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyFlag
         }
 
         fn visit_param(&mut self, _: &TyParam) {
+            self.flags.insert(TyFlags::HAS_PARAM)
+        }
+
+        fn visit_const_param(&mut self, _: &TyParam<'db>, _: TyId<'db>) {
             self.flags.insert(TyFlags::HAS_PARAM)
         }
 

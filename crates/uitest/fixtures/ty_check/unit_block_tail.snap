@@ -1,0 +1,27 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/unit_block_tail.fe
+---
+error[8-0000]: type mismatch
+   ┌─ unit_block_tail.fe:23:9
+   │
+23 │         1
+   │         ^ expected `bool`, but `{integer}` is given
+
+error[8-0013]: returned type mismatch
+   ┌─ unit_block_tail.fe:28:5
+   │
+27 │ fn explicit_return_stays_strict() {
+   │    ---------------------------- try adding `-> bool`
+28 │     return true
+   │     ^^^^^^^^^^^ expected `()`, but `bool` is returned
+
+error[8-0036]: missing effect `Ctx` required by `address`
+   ┌─ unit_block_tail.fe:18:5
+   │
+18 │     address()
+   │     ^^^^^^^^^ `address` requires effect `Ctx` to be in scope
+   │
+   = provide it with `with (Ctx = value)` or require it via `uses Ctx`

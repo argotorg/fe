@@ -1,0 +1,21 @@
+fn foo<T>(x: own T) -> T
+  uses (balance: u256)
+{
+    x
+}
+
+struct Bar {
+    inner: u256
+}
+
+impl Bar {
+    fn id<T>(self, x: own T) -> T {
+        x
+    }
+}
+
+fn test() {
+    let f = foo<u256>
+    let m = Bar::id<u256>
+    let _ = (f, m)
+}

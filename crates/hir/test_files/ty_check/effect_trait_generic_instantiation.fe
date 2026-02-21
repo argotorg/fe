@@ -1,0 +1,18 @@
+pub trait Ctx<T> {}
+
+pub struct CtxU8 {}
+pub struct CtxU16 {}
+
+impl Ctx<u8> for CtxU8 {}
+impl Ctx<u16> for CtxU16 {}
+
+pub fn needs_ctx<T>()
+  uses Ctx<T>
+{
+}
+
+pub fn ok() {
+    with (Ctx<u8> = CtxU8 {}, Ctx<u16> = CtxU16 {}) {
+        needs_ctx<u16>()
+    }
+}

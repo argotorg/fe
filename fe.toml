@@ -1,0 +1,7 @@
+[workspace]
+name = "Fe"
+version = "0.1.0"
+members = [
+  { path = "ingots/core", name = "core" },
+  { path = "ingots/std", name = "std" },
+]

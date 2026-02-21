@@ -2,7 +2,7 @@ struct Foo {
     x: i32,
 }
 
-pub fn foo(mut foo: Foo, mut b: bool) -> i32 {
+pub fn foo(mut foo: own Foo, mut b: own bool) -> i32 {
     foo.x *= 2
     b |= false
 
@@ -12,6 +12,10 @@ pub fn foo(mut foo: Foo, mut b: bool) -> i32 {
     x <<= 1
     x **= 2
     x
+
+    let mut usize_acc: usize = 0
+    usize_acc += 1
+    usize_acc
     
     let mut arr = [x, 1, 2]
     arr[0] -= arr[1] + 1

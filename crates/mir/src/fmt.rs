@@ -85,15 +85,15 @@ pub fn format_inst(_db: &dyn HirAnalysisDb, body: &MirBody<'_>, inst: &MirInst<'
                 format!("eval {rendered}")
             }
         }
-        MirInst::BindValue { value } => format!("bind {}", format_value(body, *value)),
-        MirInst::Store { place, value } => {
+        MirInst::BindValue { value, .. } => format!("bind {}", format_value(body, *value)),
+        MirInst::Store { place, value, .. } => {
             format!(
                 "store {} = {}",
                 format_place(body, place),
                 format_value(body, *value)
             )
         }
-        MirInst::InitAggregate { place, inits } => {
+        MirInst::InitAggregate { place, inits, .. } => {
             let inits: Vec<String> = inits
                 .iter()
                 .map(|(path, value)| {
@@ -107,7 +107,7 @@ pub fn format_inst(_db: &dyn HirAnalysisDb, body: &MirBody<'_>, inst: &MirInst<'
                 inits.join(", ")
             )
         }
-        MirInst::SetDiscriminant { place, variant } => {
+        MirInst::SetDiscriminant { place, variant, .. } => {
             format!("set_discr {} = {}", format_place(body, place), variant.idx)
         }
     }
@@ -116,9 +116,11 @@ pub fn format_inst(_db: &dyn HirAnalysisDb, body: &MirBody<'_>, inst: &MirInst<'
 /// Format a MIR terminator.
 pub fn format_terminator(body: &MirBody<'_>, term: &Terminator<'_>) -> String {
     match term {
-        Terminator::Return(Some(val)) => format!("ret {}", format_value(body, *val)),
-        Terminator::Return(None) => "ret".into(),
-        Terminator::TerminatingCall(call) => match call {
+        Terminator::Return {
+            value: Some(val), ..
+        } => format!("ret {}", format_value(body, *val)),
+        Terminator::Return { value: None, .. } => "ret".into(),
+        Terminator::TerminatingCall { call, .. } => match call {
             TerminatingCall::Call(call) => {
                 let rendered = format_call(body, call);
                 format!("terminate {rendered}")
@@ -128,11 +130,12 @@ pub fn format_terminator(body: &MirBody<'_>, term: &Terminator<'_>) -> String {
                 format!("terminate {}({})", format_intrinsic(*op), args.join(", "))
             }
         },
-        Terminator::Goto { target } => format!("jmp bb{}", target.index()),
+        Terminator::Goto { target, .. } => format!("jmp bb{}", target.index()),
         Terminator::Branch {
             cond,
             then_bb,
             else_bb,
+            ..
         } => format!(
             "br {} bb{} bb{}",
             format_value(body, *cond),
@@ -143,6 +146,7 @@ pub fn format_terminator(body: &MirBody<'_>, term: &Terminator<'_>) -> String {
             discr,
             targets,
             default,
+            ..
         } => {
             let arms: Vec<String> = targets
                 .iter()
@@ -155,7 +159,7 @@ pub fn format_terminator(body: &MirBody<'_>, term: &Terminator<'_>) -> String {
                 default.index()
             )
         }
-        Terminator::Unreachable => "unreachable".into(),
+        Terminator::Unreachable { .. } => "unreachable".into(),
     }
 }
 
@@ -226,6 +230,8 @@ fn format_value_inner(
                 UnOp::Minus => format!("(-{inner})"),
                 UnOp::Not => format!("(!{inner})"),
                 UnOp::BitNot => format!("(~{inner})"),
+                UnOp::Mut => format!("(mut {inner})"),
+                UnOp::Ref => format!("(ref {inner})"),
             }
         }
         ValueOrigin::Binary { op, lhs, rhs } => {
@@ -248,6 +254,7 @@ fn format_value_inner(
             crate::ir::SyntheticValue::Bytes(bytes) => format_bytes(bytes),
         },
         ValueOrigin::Local(local) => format_local(*local),
+        ValueOrigin::PlaceRoot(local) => format!("place_root({})", format_local(*local)),
         ValueOrigin::FuncItem(root) => format!(
             "func_item({})",
             root.symbol.as_deref().unwrap_or("<unresolved>")
@@ -261,6 +268,7 @@ fn format_value_inner(
             }
         }
         ValueOrigin::PlaceRef(place) => format!("&{}", format_place(body, place)),
+        ValueOrigin::MoveOut { place } => format!("move_out({})", format_place(body, place)),
         ValueOrigin::TransparentCast { value } => {
             format_value_inner(body, *value, stack, depth + 1)
         }
@@ -396,6 +404,7 @@ fn format_intrinsic(op: IntrinsicOp) -> &'static str {
         IntrinsicOp::AddrOf => "addr_of",
         IntrinsicOp::Mstore => "mstore",
         IntrinsicOp::Mstore8 => "mstore8",
+        IntrinsicOp::Alloc => "alloc",
         IntrinsicOp::Sload => "sload",
         IntrinsicOp::Sstore => "sstore",
         IntrinsicOp::ReturnData => "return_data",

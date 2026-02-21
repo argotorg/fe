@@ -1,0 +1,9 @@
+struct Foo {
+    x: u8,
+}
+
+pub fn let_pattern_ref_view_param(foo: Foo) {
+    let Foo { x } = ref foo
+    let _z: ref u8 = x
+    let _y: u8 = foo.x
+}

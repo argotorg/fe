@@ -1,0 +1,14 @@
+trait Event {
+    const SIG: u256
+}
+
+struct Transfer {}
+
+struct Foo<const N: u256> {}
+type Foo2 = Foo<{ Transfer::SIG }>
+
+impl Event for Transfer {
+    const SIG: u256 = {
+        let x: u256 = 0
+    }
+}

@@ -1,0 +1,16 @@
+trait Add {
+    fn add(own self) -> Self
+    fn add_mut(mut own self) -> Self
+}
+
+struct Foo {}
+
+impl Add for Foo {
+    fn add(mut own self) -> Self {
+        self
+    }
+
+    fn add_mut(own self) -> Self {
+        self
+    }
+}

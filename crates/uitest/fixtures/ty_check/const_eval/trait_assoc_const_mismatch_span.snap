@@ -1,0 +1,14 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/const_eval/trait_assoc_const_mismatch_span.fe
+---
+error[3-0011]: given type doesn't match the expected const type
+   ┌─ trait_assoc_const_mismatch_span.fe:11:23
+   │  
+11 │       const SIG: u256 = {
+   │ ╭───────────────────────^
+12 │ │         let x: u256 = 0
+13 │ │     }
+   │ ╰─────^ expected `u256` type here, but `()` is given

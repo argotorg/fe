@@ -1,7 +1,7 @@
 use parser::ast::{self};
 
 use super::FileLowerCtxt;
-use crate::core::hir_def::{Body, IdentId, Partial, TypeId, params::*};
+use crate::core::hir_def::{Body, IdentId, Partial, TypeId, TypeKind, TypeMode, params::*};
 
 impl<'db> GenericArgListId<'db> {
     pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::GenericArgList) -> Self {
@@ -93,7 +93,10 @@ impl<'db> ConstGenericParam<'db> {
     fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::ConstGenericParam) -> Self {
         let name = IdentId::lower_token_partial(ctxt, ast.name());
         let ty = TypeId::lower_ast_partial(ctxt, ast.ty());
-        Self { name, ty }
+        let default = ast
+            .default_expr()
+            .map(|expr| Body::lower_ast_nameless(ctxt, expr));
+        Self { name, ty, default }
     }
 }
 
@@ -154,22 +157,74 @@ impl<'db> GenericParam<'db> {
 
 impl<'db> FuncParam<'db> {
     fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::FuncParam) -> Self {
-        let is_mut = ast.mut_token().is_some();
-        let label = ast.label().map(|ast| FuncParamName::lower_label(ctxt, ast));
+        let has_mut_token = ast.mut_token().is_some();
+        let mut is_mut = has_mut_token;
+        let is_ref = ast.ref_token().is_some();
+        let is_own = ast.own_token().is_some();
+        let is_label_suppressed = ast.is_label_suppressed();
         let name = ast.name().map(|ast| FuncParamName::lower_ast(ctxt, ast));
 
-        let self_ty_fallback =
-            name.is_some_and(|name| name.is_self(ctxt.db())) && ast.ty().is_none();
+        let name_is_self = name.is_some_and(|name| name.is_self(ctxt.db()));
+        let self_ty_fallback = name_is_self && ast.ty().is_none();
+        let receiver_prefixed_mode = if is_ref {
+            Some(TypeMode::Ref)
+        } else if is_own {
+            Some(TypeMode::Own)
+        } else {
+            None
+        };
 
         let ty = if self_ty_fallback {
-            Partial::Present(TypeId::fallback_self_ty(ctxt.db()))
+            let fallback_self = TypeId::fallback_self_ty(ctxt.db());
+            if is_ref {
+                Partial::Present(TypeId::new(
+                    ctxt.db(),
+                    TypeKind::Mode(TypeMode::Ref, Partial::Present(fallback_self)),
+                ))
+            } else if is_own {
+                Partial::Present(TypeId::new(
+                    ctxt.db(),
+                    TypeKind::Mode(TypeMode::Own, Partial::Present(fallback_self)),
+                ))
+            } else if has_mut_token {
+                is_mut = false;
+                Partial::Present(TypeId::new(
+                    ctxt.db(),
+                    TypeKind::Mode(TypeMode::Mut, Partial::Present(fallback_self)),
+                ))
+            } else {
+                is_mut = false;
+                Partial::Present(fallback_self)
+            }
         } else {
-            TypeId::lower_ast_partial(ctxt, ast.ty())
+            let base_ty = TypeId::lower_ast_partial(ctxt, ast.ty());
+            if name_is_self && let Some(mode) = receiver_prefixed_mode {
+                base_ty
+                    .to_opt()
+                    .map(|inner| {
+                        TypeId::new(ctxt.db(), TypeKind::Mode(mode, Partial::Present(inner)))
+                    })
+                    .into()
+            } else {
+                base_ty
+            }
+        };
+
+        let mode = if ty
+            .to_opt()
+            .is_some_and(|ty| matches!(ty.data(ctxt.db()), TypeKind::Mode(TypeMode::Own, _)))
+        {
+            FuncParamMode::Own
+        } else {
+            FuncParamMode::View
         };
 
         Self {
+            mode,
             is_mut,
-            label,
+            has_ref_prefix: is_ref,
+            has_own_prefix: is_own,
+            is_label_suppressed,
             name: name.into(),
             ty,
             self_ty_fallback,
@@ -237,13 +292,6 @@ impl<'db> FuncParamName<'db> {
             }
             ast::FuncParamName::SelfParam(_) => FuncParamName::Ident(IdentId::make_self(ctxt.db())),
             ast::FuncParamName::Underscore(_) => FuncParamName::Underscore,
-        }
-    }
-
-    fn lower_label(ctxt: &mut FileLowerCtxt<'db>, ast: ast::FuncParamLabel) -> FuncParamName<'db> {
-        match ast {
-            ast::FuncParamLabel::Ident(name) => Self::Ident(IdentId::lower_token(ctxt, name)),
-            ast::FuncParamLabel::Underscore(_) => Self::Underscore,
         }
     }
 }

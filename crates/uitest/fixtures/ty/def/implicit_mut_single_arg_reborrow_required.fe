@@ -1,0 +1,6 @@
+fn take_mut(_x: mut u256) {}
+
+pub fn implicit_mut_single_arg_reborrow_required() {
+    let mut x: u256 = 0
+    take_mut(x)
+}

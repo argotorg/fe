@@ -1,0 +1,4 @@
+fn f() { // comment right after brace
+    let x = 1
+    x
+}

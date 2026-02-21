@@ -1,0 +1,35 @@
+---
+source: crates/language-server/src/functionality/goto.rs
+assertion_line: 316
+expression: snapshot
+input_file: test_files/goto_static_trait_method.fe
+---
+note: 
+  ┌─ goto_static_trait_method.fe:6:14
+  │
+6 │ fn create<C: Contract>() -> i32 {
+  │              ^^^^^^^^ -> goto_static_trait_method::Contract
+
+note: 
+  ┌─ goto_static_trait_method.fe:7:9
+  │
+7 │     let off = C::init_code_offset()
+  │         ^^^ -> local: i32
+
+note: 
+  ┌─ goto_static_trait_method.fe:7:15
+  │
+7 │     let off = C::init_code_offset()
+  │               ^ -> goto_static_trait_method::create::C
+
+note: 
+  ┌─ goto_static_trait_method.fe:7:18
+  │
+7 │     let off = C::init_code_offset()
+  │                  ^^^^^^^^^^^^^^^^ -> goto_static_trait_method::Contract::init_code_offset
+
+note: 
+  ┌─ goto_static_trait_method.fe:8:5
+  │
+8 │     off
+  │     ^^^ -> local: i32

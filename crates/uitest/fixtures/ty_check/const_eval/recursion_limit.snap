@@ -1,0 +1,11 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/const_eval/recursion_limit.fe
+---
+error[3-0027]: const evaluation exceeded the recursion limit
+  ┌─ recursion_limit.fe:2:5
+  │
+2 │     recurse()
+  │     ^^^^^^^^^ const evaluation recurses too deeply

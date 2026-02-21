@@ -1,5 +1,6 @@
 ---
-source: crates/hir-analysis/tests/ty_check.rs
+source: crates/hir/tests/ty_check.rs
+assertion_line: 40
 expression: res
 input_file: test_files/ty_check/associated_types_cycle.fe
 ---
@@ -37,7 +38,7 @@ note:
 note: 
    ┌─ associated_types_cycle.fe:34:47
    │  
-34 │       fn encode(self, mut _ e: SolAbi::Encoder) {
+34 │       fn encode(self, _ e: mut SolAbi::Encoder) {
    │ ╭───────────────────────────────────────────────^
 35 │ │         e.write_byte(self[0])
 36 │ │         e.write_byte(self[1])
@@ -50,7 +51,7 @@ note:
    ┌─ associated_types_cycle.fe:35:9
    │
 35 │         e.write_byte(self[0])
-   │         ^ SolEncoder
+   │         ^ mut SolEncoder
 
 note: 
    ┌─ associated_types_cycle.fe:35:9
@@ -80,7 +81,7 @@ note:
    ┌─ associated_types_cycle.fe:36:9
    │
 36 │         e.write_byte(self[1])
-   │         ^ SolEncoder
+   │         ^ mut SolEncoder
 
 note: 
    ┌─ associated_types_cycle.fe:36:9
@@ -110,7 +111,7 @@ note:
    ┌─ associated_types_cycle.fe:37:9
    │
 37 │         e.write_byte(self[2])
-   │         ^ SolEncoder
+   │         ^ mut SolEncoder
 
 note: 
    ┌─ associated_types_cycle.fe:37:9
@@ -140,7 +141,7 @@ note:
    ┌─ associated_types_cycle.fe:38:9
    │
 38 │         e.write_byte(self[3])
-   │         ^ SolEncoder
+   │         ^ mut SolEncoder
 
 note: 
    ┌─ associated_types_cycle.fe:38:9
@@ -171,37 +172,37 @@ note:
    │  
 42 │   fn f() {
    │ ╭────────^
-43 │ │     let enc1 = SolAbi::Encoder::with_encoded_size(1024)
+43 │ │     let mut enc1 = SolAbi::Encoder::with_encoded_size(1024)
 44 │ │     let enc2 = SolEncoder::with_encoded_size(256)
 45 │ │     let enc3: SolEncoder = AbiEncoder::with_encoded_size(128)
 46 │ │     let selector = [0, 1, 2, 3]
-47 │ │     selector.encode(enc1)
+47 │ │     selector.encode(mut enc1)
 48 │ │ }
    │ ╰─^ ()
 
 note: 
    ┌─ associated_types_cycle.fe:43:9
    │
-43 │     let enc1 = SolAbi::Encoder::with_encoded_size(1024)
-   │         ^^^^ SolEncoder
+43 │     let mut enc1 = SolAbi::Encoder::with_encoded_size(1024)
+   │         ^^^^^^^^ SolEncoder
 
 note: 
-   ┌─ associated_types_cycle.fe:43:16
+   ┌─ associated_types_cycle.fe:43:20
    │
-43 │     let enc1 = SolAbi::Encoder::with_encoded_size(1024)
-   │                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ fn with_encoded_size<SolEncoder>
+43 │     let mut enc1 = SolAbi::Encoder::with_encoded_size(1024)
+   │                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ fn with_encoded_size<SolEncoder>
 
 note: 
-   ┌─ associated_types_cycle.fe:43:16
+   ┌─ associated_types_cycle.fe:43:20
    │
-43 │     let enc1 = SolAbi::Encoder::with_encoded_size(1024)
-   │                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ SolEncoder
+43 │     let mut enc1 = SolAbi::Encoder::with_encoded_size(1024)
+   │                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ SolEncoder
 
 note: 
-   ┌─ associated_types_cycle.fe:43:51
+   ┌─ associated_types_cycle.fe:43:55
    │
-43 │     let enc1 = SolAbi::Encoder::with_encoded_size(1024)
-   │                                                   ^^^^ usize
+43 │     let mut enc1 = SolAbi::Encoder::with_encoded_size(1024)
+   │                                                       ^^^^ usize
 
 note: 
    ┌─ associated_types_cycle.fe:44:9
@@ -290,17 +291,23 @@ note:
 note: 
    ┌─ associated_types_cycle.fe:47:5
    │
-47 │     selector.encode(enc1)
+47 │     selector.encode(mut enc1)
    │     ^^^^^^^^ [u8; 4]
 
 note: 
    ┌─ associated_types_cycle.fe:47:5
    │
-47 │     selector.encode(enc1)
-   │     ^^^^^^^^^^^^^^^^^^^^^ ()
+47 │     selector.encode(mut enc1)
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^ ()
 
 note: 
    ┌─ associated_types_cycle.fe:47:21
    │
-47 │     selector.encode(enc1)
-   │                     ^^^^ SolEncoder
+47 │     selector.encode(mut enc1)
+   │                     ^^^^^^^^ mut SolEncoder
+
+note: 
+   ┌─ associated_types_cycle.fe:47:25
+   │
+47 │     selector.encode(mut enc1)
+   │                         ^^^^ SolEncoder

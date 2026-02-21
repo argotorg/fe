@@ -1,0 +1,26 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/msg_duplicate_selector_const_expr.fe
+---
+error[9-0004]: duplicate selector in msg block
+   ┌─ msg_duplicate_selector_const_expr.fe:10:5
+   │
+ 7 │     #[selector = sol("transfer(address,uint256)")]
+   │     ---------------------------------------------- `Transfer` with selector 0xa9059cbb declared here
+   ·
+10 │     #[selector = sol("many_msg_babbage(bytes1)")]
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Approve` has selector 0xa9059cbb which conflicts with `Transfer`
+   │
+   = each variant in a msg block must have a unique selector
+
+error[9-0004]: duplicate selector in msg block
+   ┌─ msg_duplicate_selector_const_expr.fe:13:5
+   │
+ 7 │     #[selector = sol("transfer(address,uint256)")]
+   │     ---------------------------------------------- `Transfer` with selector 0xa9059cbb declared here
+   ·
+13 │     #[selector = 0xa9059cbb]
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^ `Foo` has selector 0xa9059cbb which conflicts with `Transfer`
+   │
+   = each variant in a msg block must have a unique selector

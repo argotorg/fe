@@ -1,0 +1,16 @@
+---
+source: crates/mir/tests/lowering_snapshots.rs
+expression: mir_output
+---
+fn borrow_a(v0: mut Pair) -> mut u256:
+  bb0:
+    ret &mem[v0].0
+
+fn return_borrow_direct() -> ():
+  bb0:
+    v1: Pair = alloc mem
+    init mem[v1] { .0 = 0, .1 = 0 }
+    v0: Pair = v1
+    v2: mut u256 = borrow_a(&mem[v0])
+    store mem[v2] = 1
+    ret

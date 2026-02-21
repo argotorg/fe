@@ -1,0 +1,9 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+---
+=== STDOUT ===
+dep_consumer_uses_alias v0.1.0
+└── actual_dep as dep_alias v0.1.0
+
+=== EXIT CODE: 0 ===

@@ -1,0 +1,13 @@
+struct Foo {
+    x: u8,
+}
+
+pub fn match_pattern_mut_borrow_copy_alias() -> u8 {
+    let mut foo: Foo = Foo { x: 1 }
+    let x = match mut foo {
+        Foo { x } => x
+    }
+    let y: u8 = foo.x
+    x = y
+    foo.x
+}

@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/mir_check.rs
+expression: res
+input_file: fixtures/mir_check/borrowck_local_copy_alias_overlap.fe
+---
+error[11-0002]: borrow conflict in `fn borrowck_local_copy_alias_overlap`
+   ┌─ borrowck_local_copy_alias_overlap.fe:12:5
+   │
+11 │     let pa: mut u256 = mut p.a
+   │                            --- borrow created here
+12 │     let qa: mut u256 = mut q.a
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^ cannot mutably borrow this place while a mut borrow is active

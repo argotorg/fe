@@ -1,0 +1,10 @@
+[workspace]
+name = "workspace_dependency_import"
+version = "0.1.0"
+members = [
+  { path = "ingots/app", name = "app" },
+  { path = "ingots/lib", name = "lib" },
+]
+
+[dependencies]
+utils = { path = "vendor/utils" }

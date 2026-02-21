@@ -1,0 +1,13 @@
+enum AddrSpace {
+    Mem,
+    Stor,
+    Tran,
+}
+
+struct Ptr<T, const S: AddrSpace> {
+    pub addr: u256
+}
+
+fn make_ptr() -> Ptr<u8, AddrSpace::Mem> {
+    Ptr { addr: 0 }
+}

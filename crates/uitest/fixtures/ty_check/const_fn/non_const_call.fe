@@ -1,0 +1,7 @@
+fn runtime() -> usize {
+    1
+}
+
+const fn bad() -> usize {
+    runtime()
+}

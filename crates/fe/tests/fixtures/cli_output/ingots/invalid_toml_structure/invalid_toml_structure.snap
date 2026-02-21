@@ -3,7 +3,7 @@ source: crates/fe/tests/cli_output.rs
 expression: output
 ---
 === STDERR ===
-❌ Invalid fe.toml file in ingot file://<project>/crates/fe/tests/fixtures/cli_output/ingots/invalid_toml_structure/: TOML parse error at line 1, column 7
+❌ Invalid fe.toml file in ingot file://<project>/crates/fe/tests/fixtures/cli_output/ingots/invalid_toml_structure/: Failed to parse file://<project>/crates/fe/tests/fixtures/cli_output/ingots/invalid_toml_structure/fe.toml: TOML parse error at line 1, column 7
   |
 1 | [ingot
   |       ^

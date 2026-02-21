@@ -27,7 +27,7 @@ fn find_references_at_cursor<'db>(
 
     match &target {
         Target::Scope(target_scope) => {
-            // For scopes, search all modules in the ingot
+            // Search all modules in the ingot
             let ingot = top_mod.ingot(db);
 
             for (url, file) in ingot.files(db).iter() {
@@ -35,9 +35,9 @@ fn find_references_at_cursor<'db>(
                     continue;
                 }
                 let mod_ = map_file_to_mod(db, file);
-                for ref_view in mod_.references_to_target(db, target) {
-                    if ref_view.span().resolve(db).is_some()
-                        && let Ok(location) = to_lsp_location_from_lazy_span(db, ref_view.span())
+                for matched in mod_.references_to_target(db, target) {
+                    if matched.span.resolve(db).is_some()
+                        && let Ok(location) = to_lsp_location_from_lazy_span(db, matched.span)
                     {
                         locations.push(location);
                     }
@@ -51,9 +51,9 @@ fn find_references_at_cursor<'db>(
         }
         Target::Local { span, .. } => {
             // For locals, search within the function body
-            for ref_view in top_mod.references_to_target(db, target) {
-                if ref_view.span().resolve(db).is_some()
-                    && let Ok(location) = to_lsp_location_from_lazy_span(db, ref_view.span())
+            for matched in top_mod.references_to_target(db, target) {
+                if matched.span.resolve(db).is_some()
+                    && let Ok(location) = to_lsp_location_from_lazy_span(db, matched.span)
                 {
                     locations.push(location);
                 }
@@ -73,22 +73,47 @@ pub async fn handle_references(
     backend: &Backend,
     params: async_lsp::lsp_types::ReferenceParams,
 ) -> Result<Option<Vec<async_lsp::lsp_types::Location>>, ResponseError> {
-    let path_str = params.text_document_position.text_document.uri.path();
+    let internal_url =
+        backend.map_client_uri_to_internal(params.text_document_position.text_document.uri.clone());
 
-    let Ok(url) = url::Url::from_file_path(path_str) else {
+    // Quick existence check on actor thread
+    if backend
+        .db
+        .workspace()
+        .get(&backend.db, &internal_url)
+        .is_none()
+    {
         return Ok(None);
-    };
+    }
 
-    let Some(file) = backend.db.workspace().get(&backend.db, &url) else {
-        return Ok(None);
-    };
+    let position = params.text_document_position.position;
 
-    let file_text = file.text(&backend.db);
-    let cursor: Cursor =
-        to_offset_from_position(params.text_document_position.position, file_text.as_str());
+    // Spawn heavy reference resolution on the worker pool with a db snapshot
+    let rx = backend.spawn_on_workers(move |db| {
+        let Some(file) = db.workspace().get(db, &internal_url) else {
+            return vec![];
+        };
+        let file_text = file.text(db);
+        let cursor: Cursor = to_offset_from_position(position, file_text.as_str());
+        let top_mod = map_file_to_mod(db, file);
+        find_references_at_cursor(db, top_mod, cursor)
+    });
 
-    let top_mod = map_file_to_mod(&backend.db, file);
-    let locations = find_references_at_cursor(&backend.db, top_mod, cursor);
+    let locations: Vec<async_lsp::lsp_types::Location> = rx.await.map_err(|_| {
+        ResponseError::new(
+            async_lsp::ErrorCode::INTERNAL_ERROR,
+            "Worker task cancelled".to_string(),
+        )
+    })?;
+
+    // Map internal URIs to client URIs (lightweight, on actor thread)
+    let locations: Vec<_> = locations
+        .into_iter()
+        .map(|mut location| {
+            location.uri = backend.map_internal_uri_to_client(location.uri);
+            location
+        })
+        .collect();
 
     if locations.is_empty() {
         Ok(None)
@@ -183,19 +208,19 @@ mod tests {
 
                 let diags = self.properties[top_mod]
                     .iter()
-                    .map(|(prop, span)| {
-                        let resolved_span = span.resolve(db).unwrap();
+                    .filter_map(|(prop, span)| {
+                        let resolved_span = span.resolve(db)?;
                         let file_id = self.top_mod_to_file[top_mod];
                         let diag = Diagnostic::note().with_labels(vec![
                             Label::primary(file_id, resolved_span.range).with_message(prop),
                         ]);
-                        (
+                        Some((
                             (
                                 resolved_span.file,
                                 (resolved_span.range.start(), resolved_span.range.end()),
                             ),
                             diag,
-                        )
+                        ))
                     })
                     .collect::<BTreeMap<_, _>>();
 
@@ -234,6 +259,18 @@ mod tests {
                 && let Some(span) = name_span.resolve(db)
             {
                 cursors.push(span.range.start());
+            }
+
+            // Collect cursors from non-item children (variants, fields, etc.)
+            for child in scope_graph.children(ScopeId::from_item(item)) {
+                if child.to_item().is_some() {
+                    continue;
+                }
+                if let Some(name_span) = child.name_span(db)
+                    && let Some(span) = name_span.resolve(db)
+                {
+                    cursors.push(span.range.start());
+                }
             }
 
             // Also collect cursors from function parameter names and local bindings
@@ -345,7 +382,7 @@ mod tests {
                             );
                             match target {
                                 Target::Scope(scope) => {
-                                    if let Some(name_span) = scope.item().name_span() {
+                                    if let Some(name_span) = scope.name_span(&db) {
                                         formatter.push_prop(ref_top_mod, name_span, annotation);
                                     }
                                 }
@@ -388,5 +425,109 @@ mod tests {
             }
         }
         TextSize::from(text.len() as u32)
+    }
+
+    #[test]
+    fn test_msg_variant_resolution() {
+        let mut db = DriverDataBase::default();
+        let code = r#"msg TokenMsg {
+  #[selector = 0x01]
+  Mint { to: i32, amount: i32 } -> bool,
+  #[selector = 0x02]
+  Burn { amount: i32 } -> bool,
+}
+
+pub contract Token {
+  supply: i32
+
+  recv TokenMsg {
+    Mint { to, amount } -> bool uses (mut supply) {
+      supply += amount
+      true
+    }
+    Burn { amount } -> bool uses (mut supply) {
+      supply -= amount
+      true
+    }
+  }
+}
+"#;
+        let file = db.workspace().touch(
+            &mut db,
+            Url::parse("file:///test.fe").unwrap(),
+            Some(code.to_string()),
+        );
+        let top_mod = map_file_to_mod(&db, file);
+
+        // Helper to get cursor position from line:col (0-indexed)
+        let text = file.text(&db);
+        let offset_at = |line: u32, col: u32| -> TextSize {
+            let mut cur_line = 0u32;
+            let mut cur_col = 0u32;
+            for (i, ch) in text.char_indices() {
+                if cur_line == line && cur_col == col {
+                    return TextSize::from(i as u32);
+                }
+                if ch == '\n' {
+                    cur_line += 1;
+                    cur_col = 0;
+                } else {
+                    cur_col += 1;
+                }
+            }
+            TextSize::from(text.len() as u32)
+        };
+
+        // 1. Cursor on "Mint" in msg block definition → should resolve to the struct
+        let mint_def_cursor = offset_at(2, 2);
+        let mint_def_target = top_mod.target_at(&db, mint_def_cursor);
+        assert!(
+            matches!(mint_def_target.first(), Some(Target::Scope(_))),
+            "target_at on Mint in msg block should resolve to a scope, not local"
+        );
+
+        // 2. definition_at should find the Mint struct definition
+        let mint_def = top_mod.definition_at(&db, mint_def_cursor);
+        assert!(
+            mint_def.is_some(),
+            "definition_at should find Mint in msg block"
+        );
+
+        // 3. Cursor on "Mint" in recv arm → should resolve to the same struct
+        let mint_recv_cursor = offset_at(11, 4);
+        let mint_recv_target = top_mod.target_at(&db, mint_recv_cursor);
+        assert!(
+            matches!(mint_recv_target.first(), Some(Target::Scope(_))),
+            "target_at on Mint in recv arm should resolve to a scope (goto-definition)"
+        );
+
+        // 4. Both should resolve to the same scope (the Mint struct)
+        if let (Some(Target::Scope(def_scope)), Some(Target::Scope(recv_scope))) =
+            (mint_def_target.first(), mint_recv_target.first())
+        {
+            assert_eq!(
+                *def_scope, *recv_scope,
+                "Mint in msg block and recv arm should resolve to the same scope"
+            );
+        }
+
+        // 5. references_to_target should find the recv arm reference
+        let target = Target::Scope(mint_def.unwrap());
+        let refs = top_mod.references_to_target(&db, &target);
+        let ref_snippets: Vec<String> = refs
+            .iter()
+            .filter_map(|m| {
+                let span = m.span.resolve(&db)?;
+                let start: usize = span.range.start().into();
+                let end: usize = span.range.end().into();
+                Some(text.as_str()[start..end].to_string())
+            })
+            .collect();
+        assert!(
+            ref_snippets.iter().filter(|s| *s == "Mint").count() >= 2,
+            "references_to_target for Mint should find at least 2 refs \
+             (msg block + recv arm), got: {:?}",
+            ref_snippets
+        );
     }
 }

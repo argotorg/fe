@@ -7,7 +7,7 @@ use super::{
     token_stream::TokenStream,
     type_::parse_type,
 };
-use crate::{ExpectedKind, SyntaxKind};
+use crate::{ExpectedKind, ParseError, SyntaxKind, TextRange};
 
 define_scope! {
     pub(crate) FuncScope {
@@ -37,6 +37,7 @@ impl super::Parse for FuncScope {
     type Error = Recovery<ErrProof>;
 
     fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        parser.bump_if(SyntaxKind::ConstKw);
         parser.bump_expected(SyntaxKind::FnKw);
 
         match self.fn_def_scope {
@@ -62,6 +63,7 @@ impl super::Parse for FuncSignatureScope {
             SyntaxKind::UsesKw,
             SyntaxKind::WhereKw,
             SyntaxKind::FnKw,
+            SyntaxKind::ConstKw,
             SyntaxKind::PubKw,
             SyntaxKind::UnsafeKw,
             SyntaxKind::DocComment,
@@ -138,7 +140,7 @@ fn parse_extern_fn_def_impl<S: TokenStream>(
 /// Optionally parse a `uses` clause after the function parameter list and optional return type.
 ///
 /// Supports two forms:
-/// - `uses (ctx: Ctx, mut st: Storage)`
+/// - `uses (ctx: Ctx, st: mut Storage)`
 /// - `uses TypePath`
 fn parse_uses_clause_opt<S: TokenStream>(parser: &mut Parser<S>) -> Result<(), Recovery<ErrProof>> {
     // Allow `uses` to appear on a new line after the signature
@@ -195,11 +197,21 @@ impl super::Parse for UsesParamScope {
         // - `Ctx`
         // - `mut Storage`
         // - `c: Ctx`
-        // - `mut f: Foo`
+        // - `f: mut Foo`
+        //
+        // Legacy typed form `mut f: Foo` is rejected with a targeted parse error.
+        let is_legacy_labeled = parser.dry_run(|p| {
+            p.bump_if(SyntaxKind::MutKw)
+                && (p.current_kind() == Some(SyntaxKind::Ident)
+                    || p.current_kind() == Some(SyntaxKind::Underscore))
+                && {
+                    p.bump();
+                    p.current_kind() == Some(SyntaxKind::Colon)
+                }
+        });
 
-        // Detect labeled form (optional leading `mut`, then ident/underscore, then `:`)
+        // Detect labeled form (ident/underscore, then `:`)
         let is_labeled = parser.dry_run(|p| {
-            p.bump_if(SyntaxKind::MutKw);
             (p.current_kind() == Some(SyntaxKind::Ident)
                 || p.current_kind() == Some(SyntaxKind::Underscore))
                 && {
@@ -208,16 +220,30 @@ impl super::Parse for UsesParamScope {
                 }
         });
 
+        if is_legacy_labeled {
+            let pos = parser.current_pos;
+            parser.bump_expected(SyntaxKind::MutKw);
+            parser.expect(&[SyntaxKind::Ident, SyntaxKind::Underscore], None)?;
+            if !parser.bump_if(SyntaxKind::Ident) {
+                parser.bump_expected(SyntaxKind::Underscore);
+            }
+            parser.bump_expected(SyntaxKind::Colon);
+            parse_typed_uses_key(parser)?;
+            parser.add_error(ParseError::Msg(
+                "`uses` typed parameters use `name: mut Type`, not `mut name: Type`".to_string(),
+                TextRange::empty(pos),
+            ));
+            return Ok(());
+        }
+
         if is_labeled {
-            // optional `mut`
-            parser.bump_if(SyntaxKind::MutKw);
             // name
             parser.expect(&[SyntaxKind::Ident, SyntaxKind::Underscore], None)?;
             if !parser.bump_if(SyntaxKind::Ident) {
                 parser.bump_expected(SyntaxKind::Underscore);
             }
             parser.bump_expected(SyntaxKind::Colon);
-            parser.or_recover(|p| p.parse(PathScope::default()))?;
+            parse_typed_uses_key(parser)?;
             return Ok(());
         }
 
@@ -226,4 +252,30 @@ impl super::Parse for UsesParamScope {
         parser.or_recover(|p| p.parse(PathScope::default()))?;
         Ok(())
     }
+}
+
+fn parse_typed_uses_key<S: TokenStream>(parser: &mut Parser<S>) -> Result<(), Recovery<ErrProof>> {
+    if parser.bump_if(SyntaxKind::MutKw) {
+        parser.or_recover(|p| p.parse(PathScope::default()))?;
+        return Ok(());
+    }
+
+    if let Some(kind @ (SyntaxKind::RefKw | SyntaxKind::OwnKw)) = parser.current_kind() {
+        let pos = parser.current_pos;
+        parser.bump();
+        parser.or_recover(|p| p.parse(PathScope::default()))?;
+        let mode = match kind {
+            SyntaxKind::RefKw => "ref",
+            SyntaxKind::OwnKw => "own",
+            _ => unreachable!(),
+        };
+        parser.add_error(ParseError::Msg(
+            format!("typed `uses` parameters only support `mut`; remove `{mode}` or use `mut`"),
+            TextRange::empty(pos),
+        ));
+        return Ok(());
+    }
+
+    parser.or_recover(|p| p.parse(PathScope::default()))?;
+    Ok(())
 }

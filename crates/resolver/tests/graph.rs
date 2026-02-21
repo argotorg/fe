@@ -19,6 +19,7 @@ impl<K: Eq + Hash, V: Clone> Resolver for FixtureEntryResolver<K, V> {
     type Resource = V;
     type Error = EntryDoesNotExist;
     type Diagnostic = ();
+    type Event = ();
 
     fn resolve<H>(
         &mut self,
@@ -43,8 +44,6 @@ pub struct MockNodeHandler {
 
 impl ResolutionHandler<FixtureEntryResolver<String, Vec<String>>> for MockNodeHandler {
     type Item = Vec<UnresolvedNode<usize, String, ()>>;
-
-    fn on_resolution_start(&mut self, _description: &String) {}
 
     fn on_resolution_diagnostic(&mut self, _diagnostic: ()) {}
 

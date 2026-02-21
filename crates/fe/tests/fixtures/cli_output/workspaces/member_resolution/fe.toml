@@ -1,0 +1,4 @@
+[workspace]
+name = "member_resolution"
+version = "0.1.0"
+members = ["ingots/*"]

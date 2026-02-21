@@ -146,12 +146,12 @@ impl<'db> PathResDiag<'db> {
             .into_iter()
             .filter_map(|name| {
                 let span = name.kind.name_span(db)?;
-                let from_prelude = name
+                let from_implicit = name
                     .derivation
                     .use_stmt()
-                    .map(|use_| use_.is_prelude_use(db))
+                    .map(|use_| use_.is_synthetic_use(db))
                     .unwrap_or(false);
-                Some((span, from_prelude))
+                Some((span, from_implicit))
             })
             .collect();
         Self::Ambiguous(span, ident, cands)

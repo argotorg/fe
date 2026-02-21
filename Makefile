@@ -25,7 +25,7 @@ check-wasm:
 .PHONY: check-wasi
 check-wasi:
 	@echo "Checking filesystem-dependent crates for wasm32-wasip1..."
-	cargo check -p fe-driver -p fe-resolver -p fe --target wasm32-wasip1
+	cargo check -p fe-driver -p fe-resolver --target wasm32-wasip1
 	@echo "✓ Filesystem crates support wasm32-wasip1"
 
 .PHONY: check-wasm-all
@@ -61,12 +61,12 @@ notes:
 release:
 	# Ensure release notes where generated before running the release command
 	./newsfragments/validate_files.py is-empty
-	cargo release $(version) --execute --all --skip-tag --skip-push
+	cargo release $(version) --execute --all --no-tag --no-push
 	# Run the tests again because we may have to adjust some based on the update version
-	cargo test --workspace --features solc-backend
+	cargo test --workspace
 
 push-tag:
-	# Run `make release <version>` first
+	# Run `make release version=<version>` first
 	./newsfragments/validate_files.py is-empty
 	# Tag the release with the current version number
 	git tag "v$$(cargo pkgid fe | cut -d# -f2 | cut -d: -f2)"

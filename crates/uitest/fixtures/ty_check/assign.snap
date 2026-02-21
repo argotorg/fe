@@ -1,7 +1,8 @@
 ---
 source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
 expression: diags
-input_file: crates/uitest/fixtures/ty_check/assign.fe
+input_file: fixtures/ty_check/assign.fe
 ---
 error[8-0000]: type mismatch
    ┌─ assign.fe:29:11
@@ -32,10 +33,18 @@ error[8-0018]: left-hand side of assignment is immutable
 error[8-0018]: left-hand side of assignment is immutable
    ┌─ assign.fe:26:5
    │
-25 │ fn foo<T>(x: i32, mut y: u32, opt: Option<T>, opt2: Option<i32>) {
+25 │ fn foo<T>(x: i32, mut y: own u32, opt: Option<T>, opt2: Option<i32>) {
    │           - try changing to `mut x`
 26 │     x = 1
    │     ^ immutable assignment
+
+error[8-0018]: left-hand side of assignment is immutable
+   ┌─ assign.fe:36:13
+   │
+35 │         Some(mut t) => {
+   │              ----- try changing to `mut t`
+36 │             t = 1
+   │             ^ immutable assignment
 
 error[8-0018]: left-hand side of assignment is immutable
    ┌─ assign.fe:43:13
@@ -53,5 +62,3 @@ error[8-0031]: type annotation is needed
    │     │
    │     type annotation is needed
    │     no default type is provided for an integer type. consider giving integer type
-
-

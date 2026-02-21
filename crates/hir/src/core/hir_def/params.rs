@@ -155,6 +155,7 @@ pub struct TypeGenericParam<'db> {
 pub struct ConstGenericParam<'db> {
     pub name: Partial<IdentId<'db>>,
     pub ty: Partial<TypeId<'db>>,
+    pub default: Option<Body<'db>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, derive_more::From)]
@@ -180,10 +181,21 @@ pub struct AssocTypeGenericArg<'db> {
     pub ty: Partial<TypeId<'db>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+pub enum FuncParamMode {
+    /// Default `x: T`: readable but cannot be moved-out.
+    View,
+    /// `x: own T`: callee takes ownership of the argument.
+    Own,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FuncParam<'db> {
+    pub mode: FuncParamMode,
     pub is_mut: bool,
-    pub label: Option<FuncParamName<'db>>,
+    pub has_ref_prefix: bool,
+    pub has_own_prefix: bool,
+    pub is_label_suppressed: bool,
     pub name: Partial<FuncParamName<'db>>,
     pub ty: Partial<TypeId<'db>>,
 
@@ -194,17 +206,13 @@ pub struct FuncParam<'db> {
 
 impl<'db> FuncParam<'db> {
     pub fn label_eagerly(&self) -> Option<IdentId<'db>> {
-        match self.label {
-            Some(FuncParamName::Ident(ident)) => return Some(ident),
-            Some(FuncParamName::Underscore) => return None,
-            _ => {}
-        }
-
-        if let FuncParamName::Ident(ident) = self.name.to_opt()? {
-            Some(ident)
-        } else {
-            None
-        }
+        (!self.is_label_suppressed)
+            .then(|| self.name.to_opt())
+            .flatten()
+            .and_then(|name| match name {
+                FuncParamName::Ident(ident) => Some(ident),
+                FuncParamName::Underscore => None,
+            })
     }
 
     pub fn name(&self) -> Option<IdentId<'db>> {

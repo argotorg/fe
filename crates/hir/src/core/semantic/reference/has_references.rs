@@ -5,18 +5,21 @@ use parser::TextSize;
 use crate::{
     HirDb, SpannedHirDb,
     analysis::HirAnalysisDb,
-    analysis::ty::ty_check::{LocalBinding, check_func_body},
+    analysis::ty::ty_check::LocalBinding,
     hir_def::scope_graph::ScopeId,
     hir_def::{Body, Func, ItemKind, TopLevelMod},
     span::{DynLazySpan, LazySpan},
 };
 
-use super::collector::{
-    body_references, enum_references, func_signature_references, impl_references,
-    impl_trait_references, struct_references, trait_references, type_alias_references,
-    use_references,
-};
+use super::resolver::resolved_item_scope_targets;
+use super::typed_body_for_body;
 use super::{ReferenceView, Target};
+
+use super::collector::{
+    body_references, contract_references, enum_references, func_signature_references,
+    impl_references, impl_trait_references, struct_references, trait_references,
+    type_alias_references, use_references,
+};
 
 /// Empty reference slice for types that don't contain references.
 static EMPTY_REFS: &[ReferenceView<'static>] = &[];
@@ -52,17 +55,29 @@ impl<'db> HasReferences<'db> for ScopeId<'db> {
 }
 
 impl<'db> ScopeId<'db> {
-    /// Find the reference at a cursor position within this scope.
+    /// Find the most specific reference at a cursor position within this scope.
+    ///
+    /// When references are nested (e.g. `C::InitArgs` inside
+    /// `encoded_size<C::InitArgs>()`), selects the narrowest span containing
+    /// the cursor so that goto-definition resolves the inner type argument
+    /// rather than the outer function call.
     pub fn reference_at(
         self,
         db: &'db dyn SpannedHirDb,
         cursor: TextSize,
     ) -> Option<&'db ReferenceView<'db>> {
-        self.references(db).iter().find(|r| {
-            r.span()
-                .resolve(db)
-                .is_some_and(|s| s.range.contains(cursor))
-        })
+        self.references(db)
+            .iter()
+            .filter_map(|r| {
+                let span = r.span().resolve(db)?;
+                if span.range.contains(cursor) {
+                    Some((r, span.range.len()))
+                } else {
+                    None
+                }
+            })
+            .min_by_key(|(_, len)| *len)
+            .map(|(r, _)| r)
     }
 }
 
@@ -81,8 +96,7 @@ impl<'db> HasReferences<'db> for ItemKind<'db> {
             ItemKind::Const(c) => c.body(db).to_opt().map_or(EMPTY_REFS, |b| b.references(db)),
             // Modules don't contain references themselves
             ItemKind::TopMod(_) | ItemKind::Mod(_) => EMPTY_REFS,
-            // Contract references could be added in the future
-            ItemKind::Contract(_) => EMPTY_REFS,
+            ItemKind::Contract(contract) => contract_references(db, *contract),
         }
     }
 }
@@ -131,16 +145,20 @@ impl<'db> TopLevelMod<'db> {
         DB: HirAnalysisDb + SpannedHirDb,
     {
         // Find the enclosing function
-        let func = self.find_enclosing_func(db, cursor)?;
+        if let Some(func) = self.find_enclosing_func(db, cursor) {
+            return self.func_param_binding_at(db, func, cursor);
+        }
 
-        // Check if cursor is on a param name
-        // (must be checked before references because `self` params have a fallback
-        // `Self` type that overlaps with the param name position)
-        self.param_binding_at(db, func, cursor)
+        // Try contract init params
+        if let Some(contract) = self.find_enclosing_contract(db, cursor) {
+            return self.contract_init_param_binding_at(db, contract, cursor);
+        }
+
+        None
     }
 
     /// Check if cursor is on a function parameter name.
-    fn param_binding_at<DB>(
+    fn func_param_binding_at<DB>(
         self,
         db: &'db DB,
         func: Func<'db>,
@@ -149,7 +167,8 @@ impl<'db> TopLevelMod<'db> {
     where
         DB: HirAnalysisDb + SpannedHirDb,
     {
-        let (_, typed_body) = check_func_body(db, func);
+        let body = func.body(db)?;
+        let typed_body = typed_body_for_body(db, body)?;
 
         // Check each param's name span
         for (idx, param_view) in func.params(db).enumerate() {
@@ -168,7 +187,45 @@ impl<'db> TopLevelMod<'db> {
                 return Some(Target::Local {
                     span: name_span.into(),
                     ty,
-                    func,
+                    body,
+                    binding,
+                });
+            }
+        }
+
+        None
+    }
+
+    /// Check if cursor is on a contract init parameter name.
+    fn contract_init_param_binding_at<DB>(
+        self,
+        db: &'db DB,
+        contract: crate::hir_def::Contract<'db>,
+        cursor: TextSize,
+    ) -> Option<Target<'db>>
+    where
+        DB: HirAnalysisDb + SpannedHirDb,
+    {
+        let init = contract.init(db)?;
+        let body = init.body(db);
+        let typed_body = typed_body_for_body(db, body)?;
+
+        // Check each init param's name span
+        for (idx, _param) in init.params(db).data(db).iter().enumerate() {
+            let name_span = contract.span().init_block().params().param(idx).name();
+
+            if let Some(resolved) = name_span.resolve(db)
+                && resolved.range.contains(cursor)
+            {
+                let binding = typed_body.param_binding(idx)?;
+                let LocalBinding::Param { ty, .. } = binding else {
+                    return None;
+                };
+
+                return Some(Target::Local {
+                    span: name_span.into(),
+                    ty,
+                    body,
                     binding,
                 });
             }
@@ -178,18 +235,44 @@ impl<'db> TopLevelMod<'db> {
     }
 
     /// Find the innermost function containing the cursor.
+    ///
+    /// Skips desugared functions (e.g., encode/decode from msg blocks) because
+    /// their spans overlap with other items (like the msg variant struct name)
+    /// and would cause false binding matches.
     fn find_enclosing_func(self, db: &'db dyn SpannedHirDb, cursor: TextSize) -> Option<Func<'db>> {
         let items = self.find_enclosing_items(db, cursor);
         for item in items {
             match item {
-                ItemKind::Func(func) => return Some(func),
+                ItemKind::Func(func) => {
+                    if matches!(func.origin(db), crate::span::HirOrigin::Desugared(_)) {
+                        continue;
+                    }
+                    return Some(func);
+                }
                 ItemKind::Body(body) => {
-                    // Body is inside a function - get the parent func
                     if let Some(func) = body.containing_func(db) {
+                        if matches!(func.origin(db), crate::span::HirOrigin::Desugared(_)) {
+                            continue;
+                        }
                         return Some(func);
                     }
                 }
                 _ => {}
+            }
+        }
+        None
+    }
+
+    /// Find the innermost contract containing the cursor.
+    fn find_enclosing_contract(
+        self,
+        db: &'db dyn SpannedHirDb,
+        cursor: TextSize,
+    ) -> Option<crate::hir_def::Contract<'db>> {
+        let items = self.find_enclosing_items(db, cursor);
+        for item in items {
+            if let ItemKind::Contract(contract) = item {
+                return Some(contract);
             }
         }
         None
@@ -210,17 +293,40 @@ impl<'db> TopLevelMod<'db> {
     }
 
     /// Find the item definition at cursor position (cursor on name token).
+    ///
+    /// Checks both item names and non-item children (variants, fields,
+    /// generic params, trait types/consts) so that find-references works
+    /// when the cursor is on e.g. an enum variant definition site.
     pub fn definition_at(
         self,
         db: &'db dyn SpannedHirDb,
         cursor: TextSize,
     ) -> Option<ScopeId<'db>> {
         for item in self.find_enclosing_items(db, cursor) {
+            // Check the item's own name
             if let Some(name_span) = item.name_span()
                 && let Some(resolved) = name_span.resolve(db)
                 && resolved.range.contains(cursor)
             {
                 return Some(ScopeId::from_item(item));
+            }
+
+            // Check variant and field children — these have precise name-only
+            // spans.  Other non-item scopes (generic params, func params, trait
+            // types/consts) have broader spans that may overlap with references
+            // we'd rather resolve through reference_at.
+            let scope_graph = self.scope_graph(db);
+            for child in scope_graph.children(ScopeId::from_item(item)) {
+                match child {
+                    ScopeId::Variant(_) | ScopeId::Field(_, _) => {}
+                    _ => continue,
+                }
+                if let Some(name_span) = child.name_span(db)
+                    && let Some(resolved) = name_span.resolve(db)
+                    && resolved.range.contains(cursor)
+                {
+                    return Some(child);
+                }
             }
         }
         None
@@ -267,12 +373,19 @@ impl<'db> TopLevelMod<'db> {
         smallest_items
     }
 
-    /// Find all references to a target, returning ReferenceViews (for rename, etc.).
+    /// Find all references to a target, with segment-level precision for paths.
+    ///
+    /// For `Target::Scope`, filters pre-resolved cached results from per-item
+    /// salsa queries. The resolution work (path segment resolution, field/method
+    /// target inference) is done once and cached — subsequent searches for
+    /// different targets reuse the same cached resolution.
+    ///
+    /// For `Target::Local`, filters body references by binding identity.
     pub fn references_to_target<DB>(
         self,
         db: &'db DB,
         target: &Target<'db>,
-    ) -> Vec<&'db ReferenceView<'db>>
+    ) -> Vec<MatchedReference<'db>>
     where
         DB: HirAnalysisDb + SpannedHirDb,
     {
@@ -280,22 +393,19 @@ impl<'db> TopLevelMod<'db> {
             Target::Scope(scope) => {
                 let mut results = Vec::new();
                 for item in self.scope_graph(db).items_dfs(db) {
-                    for reference in ScopeId::from_item(item).references(db) {
-                        for t in reference.target(db).as_slice() {
-                            if let Target::Scope(s) = t
-                                && s == scope
-                            {
-                                results.push(reference);
-                                break;
-                            }
+                    for resolved in resolved_item_scope_targets(db, item) {
+                        if resolved.scope == *scope {
+                            results.push(MatchedReference {
+                                span: resolved.span.clone(),
+                                is_self_ty: resolved.is_self_ty,
+                            });
                         }
                     }
                 }
                 results
             }
-            Target::Local { func, binding, .. } => {
-                let (_, typed_body) = check_func_body(db, *func);
-                let Some(body) = typed_body.body() else {
+            Target::Local { body, binding, .. } => {
+                let Some(typed_body) = typed_body_for_body(db, *body) else {
                     return vec![];
                 };
 
@@ -306,20 +416,33 @@ impl<'db> TopLevelMod<'db> {
                     .collect();
 
                 // Filter body references by their expression ID context
-                // This avoids calling target() which triggers expensive path resolution
                 body.references(db)
                     .iter()
-                    .filter(|r| {
+                    .filter_map(|r| {
                         if let ReferenceView::Path(path_view) = r
                             && let Some(super::BodyPathContext::Expr(expr_id)) = path_view.body_ctx
+                            && expr_ids.contains(&expr_id)
                         {
-                            expr_ids.contains(&expr_id)
+                            Some(MatchedReference {
+                                span: r.span(),
+                                is_self_ty: false,
+                            })
                         } else {
-                            false
+                            None
                         }
                     })
                     .collect()
             }
         }
     }
+}
+
+/// A reference matched against a search target, with the precise span
+/// of the matched portion.
+pub struct MatchedReference<'db> {
+    /// The span of the matched portion — segment-level for path segment
+    /// matches, or the full reference span for direct matches.
+    pub span: DynLazySpan<'db>,
+    /// Whether this reference is a `Self` type path (rename should skip these).
+    pub is_self_ty: bool,
 }

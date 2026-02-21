@@ -1,0 +1,14 @@
+---
+source: crates/fe/tests/cli_output.rs
+assertion_line: 300
+expression: output
+---
+=== STDOUT ===
+== file://<project>/crates/fe/tests/fixtures/cli_output/workspaces/member_resolution/ingots/app/ ==
+app v0.1.0
+└── lib v0.1.0
+
+== file://<project>/crates/fe/tests/fixtures/cli_output/workspaces/member_resolution/ingots/lib/ ==
+lib v0.1.0
+
+=== EXIT CODE: 0 ===

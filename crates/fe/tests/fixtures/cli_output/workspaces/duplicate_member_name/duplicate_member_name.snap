@@ -1,0 +1,10 @@
+---
+source: crates/fe/tests/cli_output.rs
+assertion_line: 395
+expression: output
+input_file: tests/fixtures/cli_output/workspaces/duplicate_member_name/duplicate_member_name.case
+---
+=== STDERR ===
+❌ Workspace member lib is duplicated in file://<project>/crates/fe/tests/fixtures/cli_output/workspaces/duplicate_member_name/
+
+=== EXIT CODE: 1 ===

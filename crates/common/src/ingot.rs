@@ -7,7 +7,7 @@ use url::Url;
 
 use crate::{
     InputDb,
-    config::Config,
+    config::{Config, IngotConfig},
     dependencies::DependencyLocation,
     file::{File, Workspace},
     stdlib::{BUILTIN_CORE_BASE_URL, BUILTIN_STD_BASE_URL},
@@ -95,7 +95,7 @@ impl<'db> Ingot<'db> {
     }
 
     #[salsa::tracked]
-    pub fn files(self, db: &'db dyn InputDb) -> StringPrefixView<'db, Url, File> {
+    pub fn files(self, db: &'db dyn InputDb) -> StringPrefixView<Url, File> {
         if let Some(standalone_file) = self.standalone_file(db) {
             // For standalone ingots, use the standalone file URL as the base
             db.workspace().items_at_base(
@@ -116,13 +116,21 @@ impl<'db> Ingot<'db> {
     }
 
     #[salsa::tracked]
-    fn parse_config(self, db: &'db dyn InputDb) -> Option<Result<Config, String>> {
+    fn parse_config(self, db: &'db dyn InputDb) -> Option<Result<IngotConfig, String>> {
         self.config_file(db)
             .map(|config_file| Config::parse(config_file.text(db)))
+            .map(|result| {
+                result.and_then(|config_file| match config_file {
+                    Config::Ingot(config) => Ok(config),
+                    Config::Workspace(_) => {
+                        Err("Expected an ingot config but found a workspace config".to_string())
+                    }
+                })
+            })
     }
 
     #[salsa::tracked]
-    pub fn config(self, db: &'db dyn InputDb) -> Option<Config> {
+    pub fn config(self, db: &'db dyn InputDb) -> Option<IngotConfig> {
         self.parse_config(db).and_then(|result| result.ok())
     }
 
@@ -138,42 +146,90 @@ impl<'db> Ingot<'db> {
 
     #[salsa::tracked]
     pub fn dependencies(self, db: &'db dyn InputDb) -> Vec<(SmolStr, Url)> {
+        let kind = self.kind(db);
         let base_url = self.base(db);
-        let mut deps = match self.config(db) {
-            Some(config) => config
-                .dependencies(&base_url)
+        let skip_config = matches!((kind, base_url.scheme()), (IngotKind::Std, "builtin-std"));
+
+        let mut deps = if skip_config {
+            Vec::new()
+        } else {
+            let graph_deps = db
+                .dependency_graph()
+                .direct_dependencies(db, &base_url)
                 .into_iter()
-                .map(|dependency| {
-                    let url = match &dependency.location {
-                        DependencyLocation::Remote(remote) => db
-                            .dependency_graph()
-                            .local_for_remote_git(db, remote)
-                            .unwrap_or_else(|| remote.source.clone()),
-                        DependencyLocation::Local(local) => local.url.clone(),
-                    };
-                    (dependency.alias.clone(), url)
-                })
-                .collect(),
-            None => vec![],
+                .collect::<Vec<_>>();
+
+            if !graph_deps.is_empty() {
+                graph_deps
+            } else {
+                match self.config(db) {
+                    Some(config) => config
+                        .dependencies(&base_url)
+                        .into_iter()
+                        .filter_map(|dependency| {
+                            let url = match &dependency.location {
+                                DependencyLocation::Remote(remote) => db
+                                    .dependency_graph()
+                                    .local_for_remote_git(db, remote)
+                                    .unwrap_or_else(|| remote.source.clone()),
+                                DependencyLocation::Local(local) => local.url.clone(),
+                                DependencyLocation::WorkspaceCurrent => {
+                                    let name = dependency.arguments.name.clone()?;
+                                    let workspace_root = db
+                                        .dependency_graph()
+                                        .workspace_root_for_member(db, &base_url)?;
+                                    let candidates = db
+                                        .dependency_graph()
+                                        .workspace_members_by_name(db, &workspace_root, &name);
+                                    let selected =
+                                        if let Some(version) = &dependency.arguments.version {
+                                            candidates.iter().find(|member| {
+                                                member.version.as_ref() == Some(version)
+                                            })
+                                        } else if candidates.len() == 1 {
+                                            candidates.first()
+                                        } else {
+                                            None
+                                        };
+                                    let member = selected?;
+                                    member.url.clone()
+                                }
+                            };
+                            Some((dependency.alias.clone(), url))
+                        })
+                        .collect(),
+                    None => vec![],
+                }
+            }
         };
 
-        let kind = self.kind(db);
+        let workspace_member_url = |name: &str| -> Option<Url> {
+            let workspace_root = db
+                .dependency_graph()
+                .workspace_root_for_member(db, &base_url)?;
+            let name = SmolStr::new(name);
+            db.dependency_graph()
+                .workspace_members_by_name(db, &workspace_root, &name)
+                .first()
+                .map(|member| member.url.clone())
+        };
 
-        // every ingot has access to `core`
-        if kind != IngotKind::Core {
-            deps.push((
-                "core".into(),
-                Url::parse(BUILTIN_CORE_BASE_URL).expect("couldn't parse core ingot URL"),
-            ))
+        let core_url = workspace_member_url("core").unwrap_or_else(|| {
+            Url::parse(BUILTIN_CORE_BASE_URL).expect("couldn't parse core ingot URL")
+        });
+        let std_url = workspace_member_url("std").unwrap_or_else(|| {
+            Url::parse(BUILTIN_STD_BASE_URL).expect("couldn't parse std ingot URL")
+        });
+
+        if kind != IngotKind::Core && !deps.iter().any(|(alias, _)| alias == "core") {
+            deps.push(("core".into(), core_url));
+        }
+        if !matches!(kind, IngotKind::Core | IngotKind::Std)
+            && !deps.iter().any(|(alias, _)| alias == "std")
+        {
+            deps.push(("std".into(), std_url));
         }
 
-        // every ingot except `core` has access to `std` (until we have a no_std option)
-        if !matches!(kind, IngotKind::Core | IngotKind::Std) {
-            deps.push((
-                "std".into(),
-                Url::parse(BUILTIN_STD_BASE_URL).expect("couldn't parse std ingot URL"),
-            ));
-        }
         deps
     }
 }
@@ -230,28 +286,56 @@ impl Workspace {
                 .directory()
                 .expect("Config URL should have a directory");
 
-            let kind = match base_url.scheme() {
+            let mut kind = match base_url.scheme() {
                 "builtin-core" => IngotKind::Core,
                 "builtin-std" => IngotKind::Std,
                 _ => IngotKind::Local,
             };
+            if kind == IngotKind::Local
+                && let Ok(Config::Ingot(config)) = Config::parse(config_file.text(db))
+            {
+                match config.metadata.name.as_deref() {
+                    Some("core") => kind = IngotKind::Core,
+                    Some("std") => kind = IngotKind::Std,
+                    _ => {}
+                }
+            }
 
-            Some(Ingot::new(db, base_url.clone(), None, kind))
-        } else {
-            // Make a standalone ingot if no config is found
-            let base = location.directory().unwrap_or_else(|| location.clone());
-            let specific_root_file = if location.path().ends_with(".fe") {
-                db.workspace().get(db, &location)
-            } else {
-                None
-            };
-            Some(Ingot::new(
-                db,
-                base,
-                specific_root_file,
-                IngotKind::StandAlone,
-            ))
+            // Check that the file is actually under the ingot's source tree.
+            // A file like `crates/language-server/test_files/goto.fe` shouldn't
+            // be claimed by a `fe.toml` at the repo root if it's not under `src/`.
+            let src_prefix = base_url
+                .join("src/")
+                .expect("failed to join src/ to base URL");
+            let is_under_src = location.as_str().starts_with(src_prefix.as_str());
+            let is_at_root = location
+                .directory()
+                .is_some_and(|dir| dir.as_str() == base_url.as_str());
+
+            if is_under_src || is_at_root {
+                return Some(Ingot::new(db, base_url.clone(), None, kind));
+            }
+
+            tracing::debug!(
+                "File {} is not under ingot src/ at {}; treating as standalone",
+                location,
+                base_url,
+            );
         }
+
+        // Make a standalone ingot if no config is found (or config's ingot has no root)
+        let base = location.directory().unwrap_or_else(|| location.clone());
+        let specific_root_file = if location.path().ends_with(".fe") {
+            db.workspace().get(db, &location)
+        } else {
+            None
+        };
+        Some(Ingot::new(
+            db,
+            base,
+            specific_root_file,
+            IngotKind::StandAlone,
+        ))
     }
 
     pub fn touch_ingot<'db>(

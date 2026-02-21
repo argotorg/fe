@@ -1,5 +1,6 @@
 use either::Either;
 use num_bigint::BigUint;
+use num_traits::ToPrimitive;
 use smallvec1::SmallVec;
 
 use crate::core::hir_def::{
@@ -20,15 +21,16 @@ use crate::analysis::ty::{
     canonical::Canonicalized,
     corelib::{resolve_core_range_types, resolve_core_trait, resolve_lib_type_path},
     diagnostics::{BodyDiag, FuncBodyDiag},
+    effects::EffectKeyKind,
     effects::place_effect_provider_param_index_map,
     fold::{AssocTySubst, TyFoldable as _, TyFolder},
     trait_def::TraitInstId,
     trait_resolution::{
-        GoalSatisfiability, PredicateListId, constraint::collect_func_def_constraints,
-        is_goal_satisfiable,
+        GoalSatisfiability, PredicateListId, TraitSolveCx,
+        constraint::collect_func_def_constraints, is_goal_satisfiable,
     },
     ty_check::callable::Callable,
-    ty_def::{PrimTy, TyBase, TyData, prim_int_bits},
+    ty_def::{CapabilityKind, PrimTy, TyBase, TyData, prim_int_bits},
 };
 use crate::analysis::{
     HirAnalysisDb, Spanned,
@@ -183,7 +185,7 @@ impl<'db> TyChecker<'db> {
             Expr::Array(..) => self.check_array(expr, expr_data, expected),
             Expr::ArrayRep(..) => self.check_array_rep(expr, expr_data, expected),
             Expr::If(..) => self.check_if(expr, expr_data),
-            Expr::Match(..) => self.check_match(expr, expr_data),
+            Expr::Match(..) => self.check_match(expr, expr_data, expected),
             Expr::Assign(..) => self.check_assign(expr, expr_data),
             Expr::AugAssign(..) => self.check_aug_assign(expr, expr_data),
             Expr::With(bindings, body) => self.check_with(bindings, *body, expected),
@@ -191,6 +193,11 @@ impl<'db> TyChecker<'db> {
         self.env.leave_expr();
 
         actual.ty = normalize_ty(self.db, actual.ty, self.env.scope(), self.env.assumptions());
+        if let Some(coerced) =
+            self.try_coerce_capability_for_expr_to_expected(expr, actual.ty, expected)
+        {
+            actual.ty = coerced;
+        }
         let typeable = Typeable::Expr(expr, actual.clone());
         actual.ty = self.unify_ty(typeable, actual.ty, expected);
         actual
@@ -221,7 +228,13 @@ impl<'db> TyChecker<'db> {
             }
 
             let last_stmt = stmts[stmts.len() - 1];
-            let res = self.check_stmt(last_stmt, expected);
+            let res = if expected == TyId::unit(self.db) {
+                let ty = self.fresh_ty();
+                self.check_stmt(last_stmt, ty);
+                TyId::unit(self.db)
+            } else {
+                self.check_stmt(last_stmt, expected)
+            };
             self.env.leave_scope();
             ExprProp::new(res, true)
         }
@@ -232,10 +245,6 @@ impl<'db> TyChecker<'db> {
             unreachable!()
         };
         let prop = self.check_expr_unknown(*lhs);
-        if *op == UnOp::Plus {
-            // TODO: remove support for unary plus? what should it do?
-            return prop;
-        }
         if prop.ty.has_invalid(self.db) {
             return ExprProp::invalid(self.db);
         }
@@ -245,6 +254,39 @@ impl<'db> TyChecker<'db> {
             return prop;
         }
 
+        if matches!(op, UnOp::Mut | UnOp::Ref) {
+            if self.env.expr_place(*lhs).is_none() {
+                self.push_diag(BodyDiag::BorrowFromNonPlace {
+                    primary: expr.span(self.body()).into(),
+                });
+                return ExprProp::invalid(self.db);
+            }
+
+            let place_ty = prop
+                .ty
+                .as_capability(self.db)
+                .map(|(_, inner)| inner)
+                .unwrap_or(prop.ty);
+
+            return match op {
+                UnOp::Ref => ExprProp::new(TyId::borrow_ref_of(self.db, place_ty), false),
+                UnOp::Mut => {
+                    if !prop.is_mut {
+                        let binding = self.find_base_binding(*lhs).map(|binding| {
+                            (binding.binding_name(&self.env), binding.def_span(&self.env))
+                        });
+                        self.push_diag(BodyDiag::CannotBorrowMut {
+                            primary: expr.span(self.body()).into(),
+                            binding,
+                        });
+                        return ExprProp::invalid(self.db);
+                    }
+                    ExprProp::new(TyId::borrow_mut_of(self.db, place_ty), true)
+                }
+                _ => unreachable!(),
+            };
+        }
+
         let base_ty = prop.ty.base_ty(self.db);
         if base_ty.is_ty_var(self.db) {
             let diag = BodyDiag::TypeMustBeKnown(lhs.span(self.body()).into());
@@ -252,7 +294,21 @@ impl<'db> TyChecker<'db> {
             return ExprProp::invalid(self.db);
         }
 
-        self.check_ops_trait(expr, prop.ty, op, None)
+        if *op == UnOp::Plus {
+            if prop.ty.is_integral(self.db) {
+                return prop;
+            }
+            let diag = BodyDiag::UnsupportedUnaryPlus(expr.span(self.body()).into());
+            self.push_diag(diag);
+            return ExprProp::invalid(self.db);
+        }
+
+        let lhs_ty = self.copy_inner_from_borrow(prop.ty).unwrap_or(prop.ty);
+        if lhs_ty != prop.ty {
+            self.unify_ty(Typeable::Expr(*lhs, prop.clone()), lhs_ty, lhs_ty);
+        }
+
+        self.check_ops_trait(expr, lhs_ty, op, None)
     }
 
     fn check_cast(
@@ -276,13 +332,22 @@ impl<'db> TyChecker<'db> {
             return ExprProp::invalid(self.db);
         }
 
-        let from = normalize_ty(
+        let mut from = normalize_ty(
             self.db,
             inner_prop.ty,
             self.env.scope(),
             self.env.assumptions(),
         );
         let to = normalize_ty(self.db, target_ty, self.env.scope(), self.env.assumptions());
+
+        // Casts operate on values, so for Copy capabilities treat the source as
+        // the inner value type. This allows widening/narrowing checks such as
+        // `(selector as u256)` when `selector` comes from a view parameter.
+        if let Some((_, inner)) = from.as_capability(self.db)
+            && self.ty_is_copy(inner)
+        {
+            from = inner;
+        }
 
         if from == to {
             return ExprProp::new(to, true);
@@ -324,7 +389,9 @@ impl<'db> TyChecker<'db> {
             return ExprProp::invalid(self.db);
         }
 
-        if self.is_lossless_cast(from, to) {
+        if self.is_lossless_cast(from, to)
+            || self.is_provably_lossless_cast_expr(inner_expr, from, to)
+        {
             return ExprProp::new(to, true);
         }
 
@@ -345,6 +412,24 @@ impl<'db> TyChecker<'db> {
         };
         self.push_diag(diag);
         ExprProp::invalid(self.db)
+    }
+
+    // Allow eg `(some_u256 >> 224) as u32`
+    fn is_provably_lossless_cast_expr(&self, expr: ExprId, from: TyId<'db>, to: TyId<'db>) -> bool {
+        let body = self.body();
+        if let Some((false, from_bits)) =
+            self.prim_int_signed_bits(self.peel_transparent_newtypes(from))
+            && let Some((false, to_bits)) =
+                self.prim_int_signed_bits(self.peel_transparent_newtypes(to))
+            && let Partial::Present(Expr::Bin(_, rhs, BinOp::Arith(ArithBinOp::RShift))) =
+                expr.data(self.db, body)
+            && let Partial::Present(Expr::Lit(LitKind::Int(shift_int))) = rhs.data(self.db, body)
+            && let Some(shift) = shift_int.data(self.db).to_usize()
+        {
+            to_bits >= from_bits.saturating_sub(shift)
+        } else {
+            false
+        }
     }
 
     fn is_lossless_cast(&self, from: TyId<'db>, to: TyId<'db>) -> bool {
@@ -501,9 +586,15 @@ impl<'db> TyChecker<'db> {
             return ExprProp::invalid(self.db);
         }
 
-        if matches!(op, BinOp::Index) && lhs.ty.is_array(self.db) {
+        let lhs_place_ty = lhs
+            .ty
+            .as_capability(self.db)
+            .map(|(_, inner)| inner)
+            .unwrap_or(lhs.ty);
+
+        if matches!(op, BinOp::Index) && lhs_place_ty.is_array(self.db) {
             // Built-in array indexing (TODO: move to trait impl)
-            let args = lhs.ty.generic_args(self.db);
+            let args = lhs_place_ty.generic_args(self.db);
             let elem_ty = args[0];
             let index_ty = args[1].const_ty_ty(self.db).unwrap();
             self.check_expr(rhs_expr, index_ty);
@@ -530,7 +621,12 @@ impl<'db> TyChecker<'db> {
             return ExprProp::invalid(self.db);
         }
 
-        self.check_ops_trait(expr, lhs.ty, &op, Some(rhs_expr))
+        let lhs_ty = self.copy_inner_from_borrow(lhs.ty).unwrap_or(lhs.ty);
+        if lhs_ty != lhs.ty {
+            self.unify_ty(Typeable::Expr(lhs_expr, lhs.clone()), lhs_ty, lhs_ty);
+        }
+
+        self.check_ops_trait(expr, lhs_ty, &op, Some(rhs_expr))
     }
 
     /// Check a range expression `start..end` and return the Range type.
@@ -664,7 +760,11 @@ impl<'db> TyChecker<'db> {
             return ExprProp::invalid(self.db);
         }
 
-        let mut callable = if let Some(existing) = self.env.callable_expr(*callee) {
+        let callable = if matches!(
+            callee.data(self.db, self.body()),
+            Partial::Present(Expr::Path(..))
+        ) && let Some(existing) = self.env.callable_expr(*callee)
+        {
             existing.clone()
         } else {
             match Callable::new(
@@ -682,24 +782,6 @@ impl<'db> TyChecker<'db> {
         };
 
         let call_span = expr.span(self.body()).into_call_expr();
-
-        if let Partial::Present(Expr::Path(Partial::Present(path))) =
-            callee.data(self.db, self.body())
-        {
-            let idx = path.segment_index(self.db);
-
-            if !callable.unify_generic_args(
-                self,
-                path.generic_args(self.db),
-                expr.span(self.body())
-                    .into_path_expr()
-                    .path()
-                    .segment(idx)
-                    .generic_args(),
-            ) {
-                return ExprProp::invalid(self.db);
-            }
-        };
 
         callable.check_args(self, args, call_span.args(), None, false);
 
@@ -741,11 +823,15 @@ impl<'db> TyChecker<'db> {
             .instantiate_identity()
             .extend_all_bounds(self.db);
 
-        let ingot = self.env.body().top_mod(self.db).ingot(self.db);
         let effect_ref_trait =
-            resolve_core_trait(self.db, self.env.scope(), &["effect_ref", "EffectRef"]);
+            resolve_core_trait(self.db, self.env.scope(), &["effect_ref", "EffectRef"])
+                .expect("missing required core trait `core::effect_ref::EffectRef`");
         let effect_ref_mut_trait =
-            resolve_core_trait(self.db, self.env.scope(), &["effect_ref", "EffectRefMut"]);
+            resolve_core_trait(self.db, self.env.scope(), &["effect_ref", "EffectRefMut"])
+                .expect("missing required core trait `core::effect_ref::EffectRefMut`");
+        let effect_handle_trait =
+            resolve_core_trait(self.db, self.env.scope(), &["effect_ref", "EffectHandle"])
+                .expect("missing required core trait `core::effect_ref::EffectHandle`");
         let target_ident = IdentId::new(self.db, "Target".to_string());
 
         let callee_provider_arg_idx_by_effect =
@@ -784,15 +870,39 @@ impl<'db> TyChecker<'db> {
                                   provided_ty: TyId<'db>,
                                   required_mut: bool|
          -> Option<TyId<'db>> {
-            let effect_ref_inst = TraitInstId::new(
+            let solve_cx = TraitSolveCx::new(this.db, this.env.scope())
+                .with_assumptions(this.env.assumptions());
+            let effect_handle_inst = TraitInstId::new(
                 this.db,
-                effect_ref_trait,
+                effect_handle_trait,
                 vec![provided_ty],
                 IndexMap::new(),
             );
+            let canonical_handle = Canonicalized::new(this.db, effect_handle_inst);
+            let handle_sat = is_goal_satisfiable(this.db, solve_cx, canonical_handle.value);
+
+            let target_ty = match handle_sat {
+                GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid => provided_ty,
+                _ => {
+                    let target_assoc = effect_handle_inst.assoc_ty(this.db, target_ident)?;
+                    normalize_ty(
+                        this.db,
+                        target_assoc,
+                        this.env.scope(),
+                        this.env.assumptions(),
+                    )
+                    .fold_with(this.db, &mut this.table)
+                }
+            };
+
+            let effect_ref_inst = TraitInstId::new(
+                this.db,
+                effect_ref_trait,
+                vec![provided_ty, target_ty],
+                IndexMap::new(),
+            );
             let canonical_ref = Canonicalized::new(this.db, effect_ref_inst);
-            let ref_sat =
-                is_goal_satisfiable(this.db, ingot, canonical_ref.value, this.env.assumptions());
+            let ref_sat = is_goal_satisfiable(this.db, solve_cx, canonical_ref.value);
             if matches!(
                 ref_sat,
                 GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
@@ -804,16 +914,11 @@ impl<'db> TyChecker<'db> {
                 let effect_ref_mut_inst = TraitInstId::new(
                     this.db,
                     effect_ref_mut_trait,
-                    vec![provided_ty],
+                    vec![provided_ty, target_ty],
                     IndexMap::new(),
                 );
                 let canonical_mut = Canonicalized::new(this.db, effect_ref_mut_inst);
-                let mut_sat = is_goal_satisfiable(
-                    this.db,
-                    ingot,
-                    canonical_mut.value,
-                    this.env.assumptions(),
-                );
+                let mut_sat = is_goal_satisfiable(this.db, solve_cx, canonical_mut.value);
                 if matches!(
                     mut_sat,
                     GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
@@ -822,14 +927,6 @@ impl<'db> TyChecker<'db> {
                 }
             }
 
-            let target_assoc = effect_ref_inst.assoc_ty(this.db, target_ident)?;
-            let target_ty = normalize_ty(
-                this.db,
-                target_assoc,
-                this.env.scope(),
-                this.env.assumptions(),
-            )
-            .fold_with(this.db, &mut this.table);
             Some(target_ty)
         };
 
@@ -852,15 +949,10 @@ impl<'db> TyChecker<'db> {
                 continue;
             }
 
-            let provider_arg_idx_for_param = match path_res {
-                PathRes::Ty(ty) | PathRes::TyAlias(_, ty) if ty.is_star_kind(self.db) => {
-                    callee_provider_arg_idx_by_effect
-                        .get(effect.index())
-                        .copied()
-                        .flatten()
-                }
-                _ => None,
-            };
+            let provider_arg_idx_for_param = callee_provider_arg_idx_by_effect
+                .get(effect.index())
+                .copied()
+                .flatten();
 
             let candidate_frames = self.env.effect_candidate_frames_in_scope(
                 key_path,
@@ -920,6 +1012,13 @@ impl<'db> TyChecker<'db> {
                                 provider_target_ty(self, provided.ty, required_mut)
                                 && can_unify(self, expected, target_ty)
                             {
+                                if required_mut
+                                    && self.table.fold_ty(self.db, target_ty)
+                                        == self.table.fold_ty(self.db, provided.ty)
+                                    && !provided.is_mut
+                                {
+                                    continue;
+                                }
                                 viable.push((
                                     provided,
                                     EffectRequirement::Type(expected),
@@ -932,9 +1031,9 @@ impl<'db> TyChecker<'db> {
                             if !matches!(
                                 is_goal_satisfiable(
                                     self.db,
-                                    ingot,
-                                    canonical.value,
-                                    self.env.assumptions(),
+                                    TraitSolveCx::new(self.db, self.env.scope())
+                                        .with_assumptions(self.env.assumptions()),
+                                    canonical.value
                                 ),
                                 GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
                             ) {
@@ -1015,9 +1114,9 @@ impl<'db> TyChecker<'db> {
                             let canonical = Canonicalized::new(self.db, trait_req);
                             let sat = is_goal_satisfiable(
                                 self.db,
-                                ingot,
+                                TraitSolveCx::new(self.db, self.env.scope())
+                                    .with_assumptions(self.env.assumptions()),
                                 canonical.value,
-                                self.env.assumptions(),
                             );
 
                             if matches!(
@@ -1152,11 +1251,14 @@ impl<'db> TyChecker<'db> {
                 continue;
             }
 
-            // If the caller supplies a concrete provider value (e.g. `MemPtr<T>`), unify it with
-            // the callee's hidden provider generic argument now so later stages don't have to
-            // re-infer it from expression types.
+            // If the caller supplies a concrete provider value, unify it with the callee's hidden
+            // provider generic argument now so later stages don't have to re-infer it from
+            // expression types.
             if let Some(provider_arg_idx) = provider_arg_idx_for_param
-                && matches!(satisfaction, EffectSatisfaction::Provider { .. })
+                && matches!(
+                    satisfaction,
+                    EffectSatisfaction::Provider { .. } | EffectSatisfaction::TraitByValue
+                )
                 && let Some(provider_var) = callable.generic_args().get(provider_arg_idx).copied()
             {
                 let existing_provider = self.table.fold_ty(self.db, provider_var);
@@ -1175,11 +1277,29 @@ impl<'db> TyChecker<'db> {
                 }
             }
 
+            let (key_kind, instantiated_target_ty) = match requirement {
+                EffectRequirement::Type(expected) => (
+                    EffectKeyKind::Type,
+                    Some(normalize_ty(
+                        self.db,
+                        expected.fold_with(self.db, &mut self.table),
+                        func.scope(),
+                        callee_assumptions,
+                    )),
+                ),
+                EffectRequirement::Trait(_) => (EffectKeyKind::Trait, None),
+            };
+
+            // Provider generic argument selection for direct place-effects is deferred to MIR
+            // lowering (Option B). The type checker records the effect argument form, pass mode,
+            // and (for type effects) the instantiated target type.
             resolved_args.push(super::ResolvedEffectArg {
                 param_idx,
                 key: key_path,
                 arg,
                 pass_mode,
+                key_kind,
+                instantiated_target_ty,
             });
 
             if let EffectRequirement::Type(expected) = requirement {
@@ -1220,16 +1340,13 @@ impl<'db> TyChecker<'db> {
                 Some(EffectRequirement::Type(expected))
             }
             PathRes::Trait(trait_inst) => {
-                let mut instantiation_args = Vec::with_capacity(1 + callable.generic_args().len());
-                instantiation_args.push(provided_ty);
-                instantiation_args.extend_from_slice(callable.generic_args());
-
-                let mut trait_req =
-                    Binder::bind(*trait_inst).instantiate(self.db, &instantiation_args);
-                if let Some(inst) = callable.trait_inst() {
-                    let mut subst = AssocTySubst::new(inst);
-                    trait_req = trait_req.fold_with(self.db, &mut subst);
-                }
+                let trait_req = crate::analysis::ty::effects::instantiate_trait_effect_requirement(
+                    self.db,
+                    *trait_inst,
+                    callable.generic_args(),
+                    provided_ty,
+                    callable.trait_inst(),
+                );
                 Some(EffectRequirement::Trait(trait_req))
             }
             _ => None,
@@ -1250,15 +1367,39 @@ impl<'db> TyChecker<'db> {
             return ExprProp::invalid(self.db);
         }
 
-        let canonical_r_ty = Canonicalized::new(self.db, receiver_prop.ty);
-        let candidate = match select_method_candidate(
+        let receiver_tys = self.capability_fallback_candidates(receiver_prop.ty);
+
+        let mut canonical_r_ty = Canonicalized::new(self.db, receiver_tys[0]);
+        let mut candidate = select_method_candidate(
             self.db,
             canonical_r_ty.value,
             method_name,
             self.env.scope(),
             self.env.assumptions(),
             None,
-        ) {
+        );
+        if matches!(candidate, Err(MethodSelectionError::NotFound)) {
+            for &receiver_ty in receiver_tys.iter().skip(1) {
+                let fallback_canonical = Canonicalized::new(self.db, receiver_ty);
+                let fallback = select_method_candidate(
+                    self.db,
+                    fallback_canonical.value,
+                    method_name,
+                    self.env.scope(),
+                    self.env.assumptions(),
+                    None,
+                );
+
+                if fallback.is_ok() || !matches!(fallback, Err(MethodSelectionError::NotFound)) {
+                    canonical_r_ty = fallback_canonical;
+                    candidate = fallback;
+                    break;
+                }
+            }
+        }
+
+        let selected_receiver_ty = canonical_r_ty.value.value;
+        let candidate = match candidate {
             Ok(candidate) => candidate,
             Err(err) => {
                 match err {
@@ -1285,7 +1426,7 @@ impl<'db> TyChecker<'db> {
 
                         self.env.register_pending_method(super::env::PendingMethod {
                             expr,
-                            recv_ty: receiver_prop.ty,
+                            recv_ty: selected_receiver_ty,
                             method_name,
                             candidates: cands,
                             span: call_span.method_name().into(),
@@ -1318,7 +1459,7 @@ impl<'db> TyChecker<'db> {
             MethodCandidate::TraitMethod(cand) => {
                 let inst = canonical_r_ty.extract_solution(&mut self.table, cand.inst);
                 let func_ty =
-                    self.instantiate_trait_method_to_term(cand.method, receiver_prop.ty, inst);
+                    self.instantiate_trait_method_to_term(cand.method, selected_receiver_ty, inst);
                 (func_ty, Some(inst))
             }
 
@@ -1327,7 +1468,7 @@ impl<'db> TyChecker<'db> {
                 self.env
                     .register_confirmation(inst, call_span.clone().into());
                 let func_ty =
-                    self.instantiate_trait_method_to_term(cand.method, receiver_prop.ty, inst);
+                    self.instantiate_trait_method_to_term(cand.method, selected_receiver_ty, inst);
                 (func_ty, Some(inst))
             }
         };
@@ -1390,25 +1531,40 @@ impl<'db> TyChecker<'db> {
         let Partial::Present(path) = path else {
             return ExprProp::invalid(self.db);
         };
+        let path = *path;
 
         let path_expr_span = expr.span(self.body()).into_path_expr();
         let path_span = path_expr_span.clone().path();
 
+        let is_call_callee = self.env.parent_expr().is_some_and(|parent| {
+            matches!(
+                self.body().exprs(self.db)[parent],
+                Partial::Present(Expr::Call(callee, _)) if callee == expr
+            )
+        });
+
+        let idx = path.segment_index(self.db);
+        let generic_args = path.generic_args(self.db);
+        let generic_args_span = path_span.clone().segment(idx).generic_args();
+        let unify_generic_args = |tc: &mut Self, callable: &mut Callable<'db>| {
+            callable.unify_generic_args(tc, generic_args, generic_args_span.clone())
+        };
+
         let res = if path.is_bare_ident(self.db) {
             let ident_span: DynLazySpan<'db> = path_expr_span.clone().into();
-            resolve_ident_expr(self.db, &self.env, *path, ident_span)
+            resolve_ident_expr(self.db, &self.env, path, ident_span)
         } else {
-            match self.resolve_path(*path, true, path_span.clone()) {
+            match self.resolve_path(path, true, path_span.clone()) {
                 Ok(r) => ResolvedPathInBody::Reso(r),
                 Err(err) => {
-                    let expected_kind = if matches!(self.parent_expr(), Some(Expr::Call(..))) {
+                    let expected_kind = if is_call_callee {
                         ExpectedPathKind::Function
                     } else {
                         ExpectedPathKind::Value
                     };
 
                     if let Some(diag) =
-                        err.into_diag(self.db, *path, path_span.clone(), expected_kind)
+                        err.into_diag(self.db, path, path_span.clone(), expected_kind)
                     {
                         self.push_diag(diag)
                     }
@@ -1420,7 +1576,14 @@ impl<'db> TyChecker<'db> {
         match res {
             ResolvedPathInBody::Binding(binding) => {
                 let ty = self.env.lookup_binding_ty(&binding);
-                let is_mut = binding.is_mut();
+                let mut is_mut = binding.is_mut();
+                if let Some((cap, _)) = ty.as_capability(self.db) {
+                    is_mut = match cap {
+                        CapabilityKind::Mut => true,
+                        CapabilityKind::Ref => false,
+                        CapabilityKind::View => binding.is_mut(),
+                    };
+                }
                 ExprProp::new_binding_ref(ty, is_mut, binding)
             }
             ResolvedPathInBody::NewBinding(ident) => {
@@ -1459,7 +1622,17 @@ impl<'db> TyChecker<'db> {
                     }
                 }
                 PathRes::Func(ty) => {
-                    ExprProp::new(self.instantiate_contract_func_item_ty(ty), true)
+                    let mut callable =
+                        Callable::new(self.db, ty, expr.span(self.body()).into(), None)
+                            .expect("function item path should resolve to callable");
+                    if !unify_generic_args(self, &mut callable) {
+                        return ExprProp::invalid(self.db);
+                    }
+
+                    ExprProp::new(
+                        self.instantiate_contract_func_item_ty(callable.ty(self.db)),
+                        true,
+                    )
                 }
                 PathRes::Trait(trait_) => {
                     let diag = BodyDiag::NotValue {
@@ -1522,26 +1695,36 @@ impl<'db> TyChecker<'db> {
                                 self.env
                                     .register_confirmation(inst, path_expr_span.clone().into());
                             }
-                            let method_ty = self.instantiate_trait_method_to_term(
-                                cand.method,
-                                receiver_ty,
-                                inst,
-                            );
+                            let method_ty = if cand.method.is_method(self.db) {
+                                self.instantiate_trait_method_to_term(
+                                    cand.method,
+                                    receiver_ty,
+                                    inst,
+                                )
+                            } else {
+                                self.instantiate_trait_assoc_fn_to_term(
+                                    cand.method.as_callable(self.db).unwrap(),
+                                    inst,
+                                )
+                            };
                             (method_ty, Some(inst))
                         }
                     };
 
-                    if self.env.callable_expr(expr).is_none() {
-                        let callable = Callable::new(
-                            self.db,
-                            method_ty,
-                            expr.span(self.body()).into(),
-                            trait_inst,
-                        )
-                        .expect("method path should resolve to callable");
-                        self.env.register_callable(expr, callable);
+                    let mut callable = Callable::new(
+                        self.db,
+                        method_ty,
+                        expr.span(self.body()).into(),
+                        trait_inst,
+                    )
+                    .expect("method path should resolve to callable");
+
+                    if !unify_generic_args(self, &mut callable) {
+                        return ExprProp::invalid(self.db);
                     }
 
+                    let method_ty = callable.ty(self.db);
+                    self.env.register_callable(expr, callable);
                     ExprProp::new(method_ty, true)
                 }
                 PathRes::TraitMethod(trait_inst, method) => {
@@ -1609,13 +1792,30 @@ impl<'db> TyChecker<'db> {
                         inst,
                     );
 
-                    let callable =
+                    let mut callable =
                         Callable::new(self.db, func_ty, expr.span(self.body()).into(), Some(inst))
                             .expect("trait method path should resolve to callable");
+
+                    if !unify_generic_args(self, &mut callable) {
+                        return ExprProp::invalid(self.db);
+                    }
+
+                    let func_ty = callable.ty(self.db);
                     self.env.register_callable(expr, callable);
                     ExprProp::new(func_ty, true)
                 }
-                PathRes::TraitConst(_recv_ty, inst, name) => {
+                PathRes::TraitConst(recv_ty, inst, name) => {
+                    let mut args = inst.args(self.db).clone();
+                    if let Some(self_arg) = args.first_mut() {
+                        *self_arg = recv_ty;
+                    }
+                    let inst = TraitInstId::new(
+                        self.db,
+                        inst.def(self.db),
+                        args,
+                        inst.assoc_type_bindings(self.db).clone(),
+                    );
+
                     self.env
                         .register_const_ref(expr, ConstRef::TraitConst { inst, name });
                     // Look up the associated const's declared type in the trait and
@@ -1627,6 +1827,7 @@ impl<'db> TyChecker<'db> {
                         // Instantiate with the concrete args of the trait instance
                         let instantiated = ty_binder.instantiate(self.db, inst.args(self.db));
                         let ty = self.table.instantiate_to_term(instantiated);
+
                         ExprProp::new(ty, true)
                     } else {
                         // Fallback to invalid type if the declaration isn't found
@@ -1641,13 +1842,8 @@ impl<'db> TyChecker<'db> {
                     self.push_diag(diag);
                     ExprProp::invalid(self.db)
                 }
-                PathRes::FuncParam(item, _) => {
-                    let diag = BodyDiag::NotValue {
-                        primary: path_expr_span.clone().into(),
-                        given: Either::Left(item),
-                    };
-                    self.push_diag(diag);
-                    ExprProp::invalid(self.db)
+                PathRes::FuncParam(..) => {
+                    unreachable!("func params should be resolved as bindings")
                 }
             },
         }
@@ -1774,7 +1970,10 @@ impl<'db> TyChecker<'db> {
                 }
             };
 
-            rec_checker.tc.check_expr(field.expr, expected);
+            let prop = rec_checker.tc.check_expr(field.expr, expected);
+            rec_checker
+                .tc
+                .record_implicit_move_for_owned_expr(field.expr, prop.ty);
         }
 
         if let Err(diag) = rec_checker.finalize(span.into(), false) {
@@ -1793,14 +1992,18 @@ impl<'db> TyChecker<'db> {
         let lhs_ty = self.fresh_ty();
         let typed_lhs = self.check_expr(*lhs, lhs_ty);
         let lhs_ty = typed_lhs.ty;
+        let lhs_place_ty = lhs_ty
+            .as_capability(self.db)
+            .map(|(_, inner)| inner)
+            .unwrap_or(lhs_ty);
         // let lhs_ty = normalize_ty(self.db, lhs_ty, self.env.scope(), self.env.assumptions());
 
-        let (ty_base, ty_args) = lhs_ty.decompose_ty_app(self.db);
+        let (ty_base, ty_args) = lhs_place_ty.decompose_ty_app(self.db);
 
         if ty_base.has_invalid(self.db) {
             return ExprProp::invalid(self.db);
         }
-        let ty_base = lhs_ty;
+        let ty_base = lhs_place_ty;
 
         if ty_base.is_ty_var(self.db) {
             let diag = BodyDiag::TypeMustBeKnown(lhs.span(self.body()).into());
@@ -1810,7 +2013,7 @@ impl<'db> TyChecker<'db> {
 
         match field {
             FieldIndex::Ident(label) => {
-                let record_like = RecordLike::from_ty(lhs_ty);
+                let record_like = RecordLike::from_ty(lhs_place_ty);
                 if let Some(field_ty) = record_like.record_field_ty(self.db, *label) {
                     if let Some(scope) = record_like.record_field_scope(self.db, *label)
                         && !is_scope_visible_from(self.db, scope, self.env.scope())
@@ -1841,7 +2044,7 @@ impl<'db> TyChecker<'db> {
 
         let diag = BodyDiag::AccessedFieldNotFound {
             primary: expr.span(self.body()).into(),
-            given_ty: lhs_ty,
+            given_ty: lhs_place_ty,
             index: *field,
         };
         self.push_diag(diag);
@@ -1865,7 +2068,8 @@ impl<'db> TyChecker<'db> {
         };
 
         for (elem, elem_ty) in elems.iter().zip(elem_tys.iter()) {
-            self.check_expr(*elem, *elem_ty);
+            let prop = self.check_expr(*elem, *elem_ty);
+            self.record_implicit_move_for_owned_expr(*elem, prop.ty);
         }
 
         let ty = TyId::tuple_with_elems(self.db, &elem_tys);
@@ -1888,7 +2092,9 @@ impl<'db> TyChecker<'db> {
         };
 
         for elem in elems {
-            expected_elem_ty = self.check_expr(*elem, expected_elem_ty).ty;
+            let prop = self.check_expr(*elem, expected_elem_ty);
+            expected_elem_ty = prop.ty;
+            self.record_implicit_move_for_owned_expr(*elem, expected_elem_ty);
         }
 
         let ty = TyId::array_with_len(self.db, expected_elem_ty, elems.len());
@@ -1910,7 +2116,14 @@ impl<'db> TyChecker<'db> {
             _ => self.fresh_ty(),
         };
 
-        expected_elem_ty = self.check_expr(*elem, expected_elem_ty).ty;
+        let prop = self.check_expr(*elem, expected_elem_ty);
+        expected_elem_ty = prop.ty;
+        if !expected_elem_ty.has_invalid(self.db) && !self.ty_is_copy(expected_elem_ty) {
+            self.push_diag(BodyDiag::ArrayRepeatRequiresCopy {
+                primary: elem.span(self.body()).into(),
+                ty: expected_elem_ty,
+            });
+        }
 
         let array = TyId::array(self.db, expected_elem_ty);
         let ty = if let Some(len_body) = len.to_opt() {
@@ -1924,6 +2137,18 @@ impl<'db> TyChecker<'db> {
 
             if let Some(diag) = array_ty.emit_diag(self.db, len_body.span().into()) {
                 self.push_diag(diag);
+            }
+
+            if !array_ty.has_invalid(self.db)
+                && let (_, args) = array_ty.decompose_ty_app(self.db)
+                && let Some(len_ty) = args.get(1)
+                && let TyData::ConstTy(const_ty) = len_ty.data(self.db)
+                && !matches!(
+                    const_ty.data(self.db),
+                    ConstTyData::Evaluated(EvaluatedConstTy::LitInt(_), _)
+                )
+            {
+                self.push_diag(BodyDiag::ConstValueMustBeKnown(len_body.span().into()));
             }
 
             array_ty
@@ -1960,25 +2185,34 @@ impl<'db> TyChecker<'db> {
         ExprProp::new(ty, true)
     }
 
-    fn check_match(&mut self, expr: ExprId, expr_data: &Expr<'db>) -> ExprProp<'db> {
+    fn check_match(
+        &mut self,
+        expr: ExprId,
+        expr_data: &Expr<'db>,
+        expected: TyId<'db>,
+    ) -> ExprProp<'db> {
         let Expr::Match(scrutinee, arms) = expr_data else {
             unreachable!()
         };
 
         let scrutinee_ty = self.fresh_ty();
         let scrutinee_ty = self.check_expr(*scrutinee, scrutinee_ty).ty;
+        let (scrutinee_pat_ty, mode) = self.destructure_source_mode(scrutinee_ty);
 
         let Partial::Present(arms) = arms else {
             return ExprProp::invalid(self.db);
         };
 
-        let mut match_ty = self.fresh_ty();
+        let mut match_ty = expected;
         // Store cloned HirPat data and the original PatId for diagnostics.
         let mut hir_pats_with_ids: Vec<(&Pat<'db>, PatId)> = Vec::with_capacity(arms.len());
 
         // First loop: Type check patterns, collect HIR patterns for analysis, and type check arm bodies.
         for arm in arms.iter() {
-            self.check_pat(arm.pat, scrutinee_ty);
+            self.check_pat(arm.pat, scrutinee_pat_ty);
+            if let super::DestructureSourceMode::Borrow(kind) = mode {
+                self.retype_pattern_bindings_for_borrow(arm.pat, kind);
+            }
 
             let pat_data_partial = arm.pat.data(self.db, self.body());
             if let Partial::Present(actual_pat_data) = pat_data_partial {
@@ -2006,7 +2240,7 @@ impl<'db> TyChecker<'db> {
             &collected_hir_pats,
             self.body(),
             self.env.scope(),
-            scrutinee_ty,
+            scrutinee_pat_ty,
         );
 
         for (i, is_reachable) in reachability.iter().enumerate() {
@@ -2025,11 +2259,11 @@ impl<'db> TyChecker<'db> {
             &collected_hir_pats,
             self.body(),
             self.env.scope(),
-            scrutinee_ty,
+            scrutinee_pat_ty,
         ) {
             let diag = BodyDiag::NonExhaustiveMatch {
                 primary: expr.span(self.body()).into(),
-                scrutinee_ty,
+                scrutinee_ty: scrutinee_pat_ty,
                 missing_patterns,
             };
             self.push_diag(diag);
@@ -2043,11 +2277,16 @@ impl<'db> TyChecker<'db> {
             unreachable!()
         };
 
-        let lhs_ty = self.fresh_ty();
-        let typed_lhs = self.check_expr(*lhs, lhs_ty);
-        self.check_expr(*rhs, lhs_ty);
+        let typed_lhs = self.check_expr_unknown(*lhs);
+        let lhs_ty = typed_lhs
+            .ty
+            .as_capability(self.db)
+            .map(|(_, inner)| inner)
+            .unwrap_or(typed_lhs.ty);
+        let rhs_prop = self.check_expr(*rhs, lhs_ty);
 
         self.check_assign_lhs(*lhs, &typed_lhs);
+        self.record_implicit_move_for_owned_expr(*rhs, rhs_prop.ty);
 
         ExprProp::new(TyId::unit(self.db), true)
     }
@@ -2061,25 +2300,29 @@ impl<'db> TyChecker<'db> {
 
         let typed_lhs = self.check_expr_unknown(*lhs);
         let lhs_ty = typed_lhs.ty;
+        let lhs_place_ty = lhs_ty
+            .as_capability(self.db)
+            .map(|(_, inner)| inner)
+            .unwrap_or(lhs_ty);
         if lhs_ty.has_invalid(self.db) {
             return unit;
         }
         self.check_assign_lhs(*lhs, &typed_lhs);
 
         // Avoid 'type must be known' diagnostics for unknown integer ty
-        if lhs_ty.is_integral_var(self.db) {
-            self.check_expr(*rhs, lhs_ty);
+        if lhs_place_ty.is_integral_var(self.db) {
+            self.check_expr(*rhs, lhs_place_ty);
             return unit;
         }
 
-        let lhs_base_ty = lhs_ty.base_ty(self.db);
+        let lhs_base_ty = lhs_place_ty.base_ty(self.db);
         if lhs_base_ty.is_ty_var(self.db) {
             let diag = BodyDiag::TypeMustBeKnown(lhs.span(self.body()).into());
             self.push_diag(diag);
             return unit;
         }
 
-        self.check_ops_trait(expr, lhs_ty, &AugAssignOp(*op), Some(*rhs));
+        self.check_ops_trait(expr, lhs_place_ty, &AugAssignOp(*op), Some(*rhs));
 
         // Return unit ty even if trait resolution fails
         unit
@@ -2095,18 +2338,45 @@ impl<'db> TyChecker<'db> {
         op: &dyn TraitOps,
         rhs_expr: Option<ExprId>,
     ) -> ExprProp<'db> {
-        let trait_def = resolve_core_trait(self.db, self.env.scope(), &op.trait_path_segments());
+        let Some(trait_def) =
+            resolve_core_trait(self.db, self.env.scope(), &op.trait_path_segments())
+        else {
+            return ExprProp::invalid(self.db);
+        };
 
-        let c_lhs_ty = Canonicalized::new(self.db, lhs_ty);
+        let lhs_candidates = self.capability_fallback_candidates(lhs_ty);
 
-        let (method, inst) = match select_method_candidate(
+        let mut selected_lhs_ty = lhs_candidates[0];
+        let mut c_lhs_ty = Canonicalized::new(self.db, selected_lhs_ty);
+        let mut method_candidate = select_method_candidate(
             self.db,
             c_lhs_ty.value,
             op.trait_method(self.db),
             self.env.scope(),
             self.env.assumptions(),
             Some(trait_def),
-        ) {
+        );
+        if matches!(method_candidate, Err(MethodSelectionError::NotFound)) {
+            for &candidate_ty in lhs_candidates.iter().skip(1) {
+                let c_candidate_ty = Canonicalized::new(self.db, candidate_ty);
+                let fallback = select_method_candidate(
+                    self.db,
+                    c_candidate_ty.value,
+                    op.trait_method(self.db),
+                    self.env.scope(),
+                    self.env.assumptions(),
+                    Some(trait_def),
+                );
+                if fallback.is_ok() || !matches!(fallback, Err(MethodSelectionError::NotFound)) {
+                    selected_lhs_ty = candidate_ty;
+                    c_lhs_ty = c_candidate_ty;
+                    method_candidate = fallback;
+                    break;
+                }
+            }
+        }
+
+        let (method, inst) = match method_candidate {
             Ok(MethodCandidate::InherentMethod(_)) => unreachable!(),
             Ok(
                 res @ (MethodCandidate::TraitMethod(cand)
@@ -2118,7 +2388,8 @@ impl<'db> TyChecker<'db> {
                         .register_confirmation(inst, expr.span(self.body()).into());
                 }
 
-                let func_ty = self.instantiate_trait_method_to_term(cand.method, lhs_ty, inst);
+                let func_ty =
+                    self.instantiate_trait_method_to_term(cand.method, selected_lhs_ty, inst);
 
                 if let Some(rhs_expr) = rhs_expr {
                     // Derive expected RHS type from the instantiated function type
@@ -2155,7 +2426,7 @@ impl<'db> TyChecker<'db> {
                         self.db,
                         trait_method,
                         &mut self.table,
-                        lhs_ty,
+                        selected_lhs_ty,
                         inst,
                     );
                     let candidate_func_ty = self.table.instantiate_to_term(candidate_func_ty);
@@ -2168,7 +2439,10 @@ impl<'db> TyChecker<'db> {
                         } else {
                             unreachable!("candidate func ty should be a func");
                         };
-                    let unifies = self.table.unify(rhs.ty, expected_rhs).is_ok();
+                    let rhs_ty = self
+                        .try_coerce_capability_for_expr_to_expected(rhs_expr, rhs.ty, expected_rhs)
+                        .unwrap_or(rhs.ty);
+                    let unifies = self.table.unify(rhs_ty, expected_rhs).is_ok();
                     self.table.rollback_to(snapshot);
                     if unifies {
                         viable.push((candidate_func_ty, inst, expected_rhs));
@@ -2190,7 +2464,14 @@ impl<'db> TyChecker<'db> {
                         let (func_ty, inst, expected_rhs) = viable.pop().unwrap();
                         self.env
                             .register_confirmation(inst, expr.span(self.body()).into());
-                        self.unify_ty(Typeable::Expr(rhs_expr, rhs.clone()), rhs.ty, expected_rhs);
+                        let rhs_ty = self
+                            .try_coerce_capability_for_expr_to_expected(
+                                rhs_expr,
+                                rhs.ty,
+                                expected_rhs,
+                            )
+                            .unwrap_or(rhs.ty);
+                        self.unify_ty(Typeable::Expr(rhs_expr, rhs.clone()), rhs_ty, expected_rhs);
                         (func_ty, inst)
                     }
                     _ => {
@@ -2372,12 +2653,12 @@ fn resolve_ident_expr<'db>(
                     let mut cand_spans = Vec::new();
                     for name in cands.iter() {
                         if let Some(span) = name.kind.name_span(db) {
-                            let from_prelude = name
+                            let from_implicit = name
                                 .derivation
                                 .use_stmt()
-                                .map(|use_| use_.is_prelude_use(db))
+                                .map(|use_| use_.is_synthetic_use(db))
                                 .unwrap_or(false);
-                            cand_spans.push((span, from_prelude));
+                            cand_spans.push((span, from_implicit));
                         }
                     }
 
@@ -2474,6 +2755,8 @@ impl TraitOps for UnOp {
             UnOp::Minus => ["Neg", "neg", "-"],
             UnOp::Not => ["Not", "not", "!"],
             UnOp::BitNot => ["BitNot", "bit_not", "~"],
+            UnOp::Mut => ["MutBorrow", "mut_borrow", "mut"],
+            UnOp::Ref => ["RefBorrow", "ref_borrow", "ref"],
         }
     }
 }

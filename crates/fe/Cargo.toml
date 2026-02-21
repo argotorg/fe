@@ -1,14 +1,17 @@
 [package]
 name = "fe"
-version = "0.26.0"
+version = "26.0.0-alpha.5"
 edition.workspace = true
 
 [features]
-default = ["doc-server"]
+default = ["doc-server", "lsp"]
 doc-server = ["dep:tokio", "doc-viewer/ssr"]
+lsp = ["dep:language-server", "dep:tokio"]
+vendored-openssl = ["resolver/vendored-openssl"]
 
 [dependencies]
 clap.workspace = true
+clap_complete.workspace = true
 driver.workspace = true
 tracing.workspace = true
 common.workspace = true
@@ -20,6 +23,7 @@ smol_str.workspace = true
 hir.workspace = true
 mir.workspace = true
 cranelift-entity.workspace = true
+rustc-hash.workspace = true
 codegen = { path = "../codegen", package = "fe-codegen" }
 contract-harness = { path = "../contract-harness", package = "fe-contract-harness" }
 solc-runner = { path = "../solc-runner", package = "fe-solc-runner" }
@@ -28,13 +32,19 @@ doc-engine = { path = "../doc-engine", package = "fe-doc-engine" }
 # doc-viewer for server and model
 doc-viewer = { path = "../doc-viewer", package = "fe-doc-viewer" }
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-tokio = { version = "1.43", features = ["full"], optional = true }
+serde_json = "1"
 fmt.workspace = true
 walkdir = "2"
 similar = "2"
 colored = "2"
+hex = "0.4"
+toml = "0.8.8"
+glob.workspace = true
+scip = "0.6.1"
+language-server = { workspace = true, optional = true }
+tokio = { version = "1.43.0", features = ["full"], optional = true }
 
 [dev-dependencies]
 dir-test.workspace = true
 test-utils.workspace = true
+tempfile = "3.23"

@@ -2,8 +2,13 @@
 
 use super::*;
 use hir::analysis::name_resolution::{PathRes, resolve_path};
-use hir::analysis::ty::const_eval::{ConstValue, try_eval_const_body, try_eval_const_ref};
+use hir::analysis::ty::const_eval::{
+    ConstValue, eval_const_expr, try_eval_const_body, try_eval_const_ref,
+};
 use hir::analysis::ty::const_ty::{ConstTyData, EvaluatedConstTy};
+use hir::analysis::ty::fold::TyFoldable;
+use hir::analysis::ty::normalize::normalize_ty;
+use hir::analysis::ty::trait_resolution::PredicateListId;
 
 impl<'db, 'a> MirBuilder<'db, 'a> {
     /// Helper to iterate expressions and conditionally force value lowering.
@@ -39,11 +44,16 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             |expr| matches!(expr, Expr::Path(..)),
             |this, expr_id| {
                 if let Some(value_id) = this.try_const_expr(expr_id) {
-                    this.builder
-                        .body
-                        .expr_values
-                        .entry(expr_id)
-                        .or_insert(value_id);
+                    if let Some(&existing) = this.builder.body.expr_values.get(&expr_id) {
+                        if matches!(
+                            this.builder.body.values[existing.index()].origin,
+                            ValueOrigin::Expr(_)
+                        ) {
+                            this.builder.body.expr_values.insert(expr_id, value_id);
+                        }
+                    } else {
+                        this.builder.body.expr_values.insert(expr_id, value_id);
+                    }
                 }
             },
         );
@@ -96,6 +106,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     /// The allocated `ValueId` (lowered call/field/const where applicable).
     pub(super) fn alloc_expr_value(&mut self, expr: ExprId) -> ValueId {
         if let Some(value) = self.try_const_expr(expr) {
+            self.builder.body.values[value.index()].source = self.source_for_expr(expr);
             return value;
         }
 
@@ -117,7 +128,14 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     if self
                         .hir_func
                         .is_some_and(|func| extract_contract_function(self.db, func).is_some())
-                        && matches!(binding, LocalBinding::EffectParam { .. })
+                        && matches!(
+                            binding,
+                            LocalBinding::EffectParam { .. }
+                                | LocalBinding::Param {
+                                    site: ParamSite::EffectField(_),
+                                    ..
+                                }
+                        )
                     {
                         // TODO: document/enforce this rule:
                         //   effect params on contract_init/contract_runtime must be zero-sized concrete types
@@ -130,14 +148,14 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     } else if let Some(target) = self.code_region_target_from_ty(ty) {
                         ValueOrigin::FuncItem(target)
                     } else if let Some(local) = self.local_for_binding(binding) {
-                        if matches!(binding, LocalBinding::EffectParam { .. })
+                        if self.effect_param_key_is_type(binding)
                             && matches!(repr, ValueRepr::Word)
                             && !crate::layout::is_zero_sized_ty(self.db, ty)
                         {
-                            // Effect params are addressable providers; even when their runtime
-                            // representation is a single word, treat them as `Ref` roots so
-                            // lowering can emit `Place`-based loads/stores (including transparent
-                            // newtype peeling over field-0 projections).
+                            // Type-effect params are addressable providers; even when their runtime
+                            // representation is a single word, treat them as `Ref` roots so lowering
+                            // can emit `Place`-based loads/stores (including transparent newtype
+                            // peeling over field-0 projections).
                             repr = ValueRepr::Ref(self.address_space_for_binding(&binding));
                         }
                         ValueOrigin::Local(local)
@@ -172,9 +190,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             _ => ValueOrigin::Expr(expr),
         };
 
-        self.builder
-            .body
-            .alloc_value(ValueData { ty, origin, repr })
+        let value_id = self.alloc_value(ty, origin, repr);
+        self.builder.body.values[value_id.index()].source = self.source_for_expr(expr);
+        value_id
     }
 
     /// Collect all argument expressions and their lowered values for a call or method call.
@@ -213,6 +231,18 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 }
                 Some((args, arg_exprs))
             }
+            // Operator expressions desugared to trait method calls:
+            // binary `a + b` → Add::add(a, b), unary `-a` → Neg::neg(a), etc.
+            Expr::Bin(lhs, rhs, _) => {
+                let args = vec![self.lower_expr(*lhs), self.lower_expr(*rhs)];
+                let arg_exprs = vec![*lhs, *rhs];
+                Some((args, arg_exprs))
+            }
+            Expr::Un(inner, _) => {
+                let args = vec![self.lower_expr(*inner)];
+                let arg_exprs = vec![*inner];
+                Some((args, arg_exprs))
+            }
             _ => None,
         }
     }
@@ -230,24 +260,96 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         };
         let path = path.to_opt()?;
 
-        if let Some(cref) = self.typed_body.expr_const_ref(expr) {
+        if let Some(mut cref) = self.typed_body.expr_const_ref(expr) {
             if let hir::analysis::ty::ty_check::ConstRef::Const(const_def) = cref
                 && let Some(&cached) = self.const_cache.get(&const_def)
             {
                 return Some(cached);
             }
 
-            let ty = self.typed_body.expr_ty(self.db, expr);
-            let value = match try_eval_const_ref(self.db, cref, ty)? {
-                ConstValue::Int(int) => SyntheticValue::Int(int),
-                ConstValue::Bool(flag) => SyntheticValue::Bool(flag),
-            };
-
-            let value_id = self.alloc_synthetic_value(ty, value);
-            if let hir::analysis::ty::ty_check::ConstRef::Const(const_def) = cref {
-                self.const_cache.insert(const_def, value_id);
+            struct GenericSubst<'a, 'db> {
+                generic_args: &'a [TyId<'db>],
             }
-            return Some(value_id);
+            impl<'db> hir::analysis::ty::fold::TyFolder<'db> for GenericSubst<'_, 'db> {
+                fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+                    match ty.data(db) {
+                        hir::analysis::ty::ty_def::TyData::TyParam(param) => {
+                            self.generic_args.get(param.idx).copied().unwrap_or(ty)
+                        }
+                        hir::analysis::ty::ty_def::TyData::ConstTy(const_ty) => {
+                            if let ConstTyData::TyParam(param, _) = const_ty.data(db)
+                                && let Some(rep) = self.generic_args.get(param.idx).copied()
+                            {
+                                return rep;
+                            }
+                            ty.super_fold_with(db, self)
+                        }
+                        _ => ty.super_fold_with(db, self),
+                    }
+                }
+            }
+
+            let mut subst = GenericSubst {
+                generic_args: self.generic_args,
+            };
+            cref = cref.fold_with(self.db, &mut subst);
+            if let hir::analysis::ty::ty_check::ConstRef::TraitConst { inst, name } = cref
+                && matches!(
+                    inst.self_ty(self.db).data(self.db),
+                    hir::analysis::ty::ty_def::TyData::TyParam(_)
+                        | hir::analysis::ty::ty_def::TyData::TyVar(_)
+                )
+                && let Some(&self_arg) = self.generic_args.first()
+            {
+                let mut args = inst.args(self.db).to_vec();
+                if let Some(arg) = args.first_mut() {
+                    *arg = self_arg;
+                }
+                cref = hir::analysis::ty::ty_check::ConstRef::TraitConst {
+                    inst: hir::analysis::ty::trait_def::TraitInstId::new(
+                        self.db,
+                        inst.def(self.db),
+                        args,
+                        inst.assoc_type_bindings(self.db).clone(),
+                    ),
+                    name,
+                };
+            }
+
+            let ty = self.typed_body.expr_ty(self.db, expr);
+            let assumptions = PredicateListId::empty_list(self.db);
+            let expected_ty = normalize_ty(self.db, ty, self.body.scope(), assumptions);
+            let capability_expected_ty = expected_ty.as_capability(self.db).map(|(_, ty)| ty);
+            let base_expected_ty = expected_ty.base_ty(self.db);
+            if let Some(value) = try_eval_const_ref(self.db, cref, expected_ty)
+                .or_else(|| {
+                    capability_expected_ty.and_then(|inner_expected_ty| {
+                        try_eval_const_ref(self.db, cref, inner_expected_ty)
+                    })
+                })
+                .or_else(|| {
+                    (base_expected_ty != expected_ty)
+                        .then(|| try_eval_const_ref(self.db, cref, base_expected_ty))
+                        .flatten()
+                })
+                .or_else(|| {
+                    eval_const_expr(self.db, self.body, self.typed_body, self.generic_args, expr)
+                        .ok()
+                        .flatten()
+                })
+            {
+                let value = match value {
+                    ConstValue::Int(int) => SyntheticValue::Int(int),
+                    ConstValue::Bool(flag) => SyntheticValue::Bool(flag),
+                    ConstValue::Bytes(bytes) => SyntheticValue::Bytes(bytes),
+                    ConstValue::EnumVariant(idx) => SyntheticValue::Int(BigUint::from(idx as u64)),
+                };
+                let value_id = self.alloc_synthetic_value(ty, value);
+                if let hir::analysis::ty::ty_check::ConstRef::Const(const_def) = cref {
+                    self.const_cache.insert(const_def, value_id);
+                }
+                return Some(value_id);
+            }
         }
 
         // Const generic parameter (e.g. `const SALT: u256`).
@@ -277,6 +379,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         };
 
         let expected_ty = self.typed_body.expr_ty(self.db, expr);
+        let expected_ty = normalize_ty(self.db, expected_ty, self.body.scope(), assumptions);
+        let capability_expected_ty = expected_ty.as_capability(self.db).map(|(_, ty)| ty);
+        let base_expected_ty = expected_ty.base_ty(self.db);
         let value = match const_arg.data(self.db) {
             ConstTyData::Evaluated(EvaluatedConstTy::LitInt(value), _) => {
                 SyntheticValue::Int(value.data(self.db).clone())
@@ -284,10 +389,32 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             ConstTyData::Evaluated(EvaluatedConstTy::LitBool(flag), _) => {
                 SyntheticValue::Bool(*flag)
             }
-            ConstTyData::UnEvaluated { body, .. } => match try_eval_const_body(self.db, *body)? {
-                ConstValue::Int(value) => SyntheticValue::Int(value),
-                ConstValue::Bool(flag) => SyntheticValue::Bool(flag),
-            },
+            ConstTyData::Evaluated(EvaluatedConstTy::EnumVariant(variant), _) => {
+                SyntheticValue::Int(BigUint::from(variant.idx as u64))
+            }
+            ConstTyData::UnEvaluated { body, .. } => {
+                match try_eval_const_body(self.db, *body, expected_ty)
+                    .or_else(|| {
+                        capability_expected_ty.and_then(|inner_expected_ty| {
+                            try_eval_const_body(self.db, *body, inner_expected_ty)
+                        })
+                    })
+                    .or_else(|| {
+                        (base_expected_ty != expected_ty)
+                            .then(|| try_eval_const_body(self.db, *body, base_expected_ty))
+                            .flatten()
+                    }) {
+                    Some(value) => match value {
+                        ConstValue::Int(value) => SyntheticValue::Int(value),
+                        ConstValue::Bool(flag) => SyntheticValue::Bool(flag),
+                        ConstValue::Bytes(bytes) => SyntheticValue::Bytes(bytes),
+                        ConstValue::EnumVariant(idx) => {
+                            SyntheticValue::Int(BigUint::from(idx as u64))
+                        }
+                    },
+                    None => return None,
+                }
+            }
             _ => return None,
         };
 
@@ -307,10 +434,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         ty: TyId<'db>,
         value: SyntheticValue,
     ) -> ValueId {
-        self.builder.body.alloc_value(ValueData {
-            ty,
-            origin: ValueOrigin::Synthetic(value),
-            repr: ValueRepr::Word,
-        })
+        self.alloc_value(ty, ValueOrigin::Synthetic(value), ValueRepr::Word)
     }
 }

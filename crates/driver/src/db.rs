@@ -6,20 +6,21 @@ use codespan_reporting::term::{
 use common::file::File;
 use common::{define_input_db, diagnostics::CompleteDiagnostic};
 use hir::analysis::{
-    analysis_pass::{AnalysisPassManager, MsgLowerPass, ParsingPass},
+    analysis_pass::{AnalysisPassManager, EventLowerPass, MsgLowerPass, ParsingPass},
     diagnostics::DiagnosticVoucher,
     name_resolution::ImportAnalysisPass,
     ty::{
         AdtDefAnalysisPass, BodyAnalysisPass, ContractAnalysisPass, DefConflictAnalysisPass,
-        FuncAnalysisPass, ImplAnalysisPass, ImplTraitAnalysisPass, TraitAnalysisPass,
-        TypeAliasAnalysisPass,
+        FuncAnalysisPass, ImplAnalysisPass, ImplTraitAnalysisPass, MsgSelectorAnalysisPass,
+        TraitAnalysisPass, TypeAliasAnalysisPass,
     },
 };
 use hir::{
     Ingot,
-    hir_def::TopLevelMod,
+    hir_def::{HirIngot, TopLevelMod},
     lower::{map_file_to_mod, module_tree},
 };
+use mir::{MirDiagnosticsMode, collect_mir_diagnostics};
 
 use crate::diagnostics::ToCsDiag;
 
@@ -54,6 +55,36 @@ impl DriverDataBase {
 
     pub fn top_mod(&self, input: File) -> TopLevelMod<'_> {
         map_file_to_mod(self, input)
+    }
+
+    pub fn mir_diagnostics_for_ingot<'db>(
+        &'db self,
+        ingot: Ingot<'db>,
+        mode: MirDiagnosticsMode,
+    ) -> Vec<CompleteDiagnostic> {
+        let top_mod = ingot.root_mod(self);
+        let mut output = collect_mir_diagnostics(self, top_mod, mode);
+        for err in output.internal_errors {
+            tracing::debug!(target: "lsp", "MIR diagnostics internal error: {err}");
+        }
+        sort_and_dedup_complete_diagnostics(&mut output.diagnostics);
+        output.diagnostics
+    }
+
+    pub fn emit_complete_diagnostics(&self, diagnostics: &[CompleteDiagnostic]) {
+        let writer = BufferWriter::stderr(ColorChoice::Auto);
+        let mut buffer = writer.buffer();
+        let config = term::Config::default();
+        let mut diagnostics = diagnostics.to_vec();
+        sort_and_dedup_complete_diagnostics(&mut diagnostics);
+
+        for diag in diagnostics {
+            term::emit(&mut buffer, &config, &CsDbWrapper(self), &diag.to_cs(self)).unwrap();
+        }
+
+        writer
+            .print(&buffer)
+            .expect("Failed to write diagnostics to stderr");
     }
 }
 
@@ -92,27 +123,38 @@ impl DiagnosticsCollection<'_> {
 
     fn finalize(&self, db: &DriverDataBase) -> Vec<CompleteDiagnostic> {
         let mut diags: Vec<_> = self.0.iter().map(|d| d.as_ref().to_complete(db)).collect();
-        diags.sort_by(|lhs, rhs| match lhs.error_code.cmp(&rhs.error_code) {
-            std::cmp::Ordering::Equal => lhs.primary_span().cmp(&rhs.primary_span()),
-            ord => ord,
-        });
+        sort_complete_diagnostics(&mut diags);
         diags
     }
 }
 
+fn sort_complete_diagnostics(diags: &mut [CompleteDiagnostic]) {
+    diags.sort_by(|lhs, rhs| match lhs.error_code.cmp(&rhs.error_code) {
+        std::cmp::Ordering::Equal => lhs.primary_span().cmp(&rhs.primary_span()),
+        ord => ord,
+    });
+}
+
+fn sort_and_dedup_complete_diagnostics(diags: &mut Vec<CompleteDiagnostic>) {
+    sort_complete_diagnostics(diags);
+    diags.dedup();
+}
+
 fn initialize_analysis_pass() -> AnalysisPassManager {
     let mut pass_manager = AnalysisPassManager::new();
-    pass_manager.add_module_pass(Box::new(ParsingPass {}));
-    pass_manager.add_module_pass(Box::new(MsgLowerPass {}));
-    pass_manager.add_module_pass(Box::new(DefConflictAnalysisPass {}));
-    pass_manager.add_module_pass(Box::new(ImportAnalysisPass {}));
-    pass_manager.add_module_pass(Box::new(AdtDefAnalysisPass {}));
-    pass_manager.add_module_pass(Box::new(TypeAliasAnalysisPass {}));
-    pass_manager.add_module_pass(Box::new(TraitAnalysisPass {}));
-    pass_manager.add_module_pass(Box::new(ImplAnalysisPass {}));
-    pass_manager.add_module_pass(Box::new(ImplTraitAnalysisPass {}));
-    pass_manager.add_module_pass(Box::new(FuncAnalysisPass {}));
-    pass_manager.add_module_pass(Box::new(BodyAnalysisPass {}));
-    pass_manager.add_module_pass(Box::new(ContractAnalysisPass {}));
+    pass_manager.add_module_pass("Parsing", Box::new(ParsingPass {}));
+    pass_manager.add_module_pass("MsgLower", Box::new(MsgLowerPass {}));
+    pass_manager.add_module_pass("EventLower", Box::new(EventLowerPass {}));
+    pass_manager.add_module_pass("MsgSelector", Box::new(MsgSelectorAnalysisPass {}));
+    pass_manager.add_module_pass("DefConflict", Box::new(DefConflictAnalysisPass {}));
+    pass_manager.add_module_pass("Import", Box::new(ImportAnalysisPass {}));
+    pass_manager.add_module_pass("AdtDef", Box::new(AdtDefAnalysisPass {}));
+    pass_manager.add_module_pass("TypeAlias", Box::new(TypeAliasAnalysisPass {}));
+    pass_manager.add_module_pass("Trait", Box::new(TraitAnalysisPass {}));
+    pass_manager.add_module_pass("Impl", Box::new(ImplAnalysisPass {}));
+    pass_manager.add_module_pass("ImplTrait", Box::new(ImplTraitAnalysisPass {}));
+    pass_manager.add_module_pass("Func", Box::new(FuncAnalysisPass {}));
+    pass_manager.add_module_pass("Body", Box::new(BodyAnalysisPass {}));
+    pass_manager.add_module_pass("Contract", Box::new(ContractAnalysisPass {}));
     pass_manager
 }

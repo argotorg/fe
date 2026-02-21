@@ -1,0 +1,18 @@
+---
+source: crates/codegen/tests/yul.rs
+assertion_line: 33
+expression: output
+input_file: tests/fixtures/alloc_self_assign.fe
+---
+function $bump_self_assign($size) -> ret {
+  let v0 := $size
+  let v1 := v0
+  let v2 := mload(64)
+  if iszero(v2) {
+    v2 := 0x80
+  }
+  mstore(64, add(v2, v1))
+  v0 := v2
+  ret := v0
+  leave
+}

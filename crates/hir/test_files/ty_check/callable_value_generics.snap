@@ -1,0 +1,92 @@
+---
+source: crates/hir/tests/ty_check.rs
+expression: res
+input_file: test_files/ty_check/callable_value_generics.fe
+---
+note: 
+  ┌─ callable_value_generics.fe:3:1
+  │  
+3 │ ╭ {
+4 │ │     x
+5 │ │ }
+  │ ╰─^ T
+
+note: 
+  ┌─ callable_value_generics.fe:4:5
+  │
+4 │     x
+  │     ^ T
+
+note: 
+   ┌─ callable_value_generics.fe:12:35
+   │  
+12 │       fn id<T>(self, x: own T) -> T {
+   │ ╭───────────────────────────────────^
+13 │ │         x
+14 │ │     }
+   │ ╰─────^ T
+
+note: 
+   ┌─ callable_value_generics.fe:13:9
+   │
+13 │         x
+   │         ^ T
+
+note: 
+   ┌─ callable_value_generics.fe:17:11
+   │  
+17 │   fn test() {
+   │ ╭───────────^
+18 │ │     let f = foo<u256>
+19 │ │     let m = Bar::id<u256>
+20 │ │     let _ = (f, m)
+21 │ │ }
+   │ ╰─^ ()
+
+note: 
+   ┌─ callable_value_generics.fe:18:9
+   │
+18 │     let f = foo<u256>
+   │         ^ fn foo<u256>
+
+note: 
+   ┌─ callable_value_generics.fe:18:13
+   │
+18 │     let f = foo<u256>
+   │             ^^^^^^^^^ fn foo<u256>
+
+note: 
+   ┌─ callable_value_generics.fe:19:9
+   │
+19 │     let m = Bar::id<u256>
+   │         ^ fn id<u256>
+
+note: 
+   ┌─ callable_value_generics.fe:19:13
+   │
+19 │     let m = Bar::id<u256>
+   │             ^^^^^^^^^^^^^ fn id<u256>
+
+note: 
+   ┌─ callable_value_generics.fe:20:9
+   │
+20 │     let _ = (f, m)
+   │         ^ (fn foo<u256>, fn id<u256>)
+
+note: 
+   ┌─ callable_value_generics.fe:20:13
+   │
+20 │     let _ = (f, m)
+   │             ^^^^^^ (fn foo<u256>, fn id<u256>)
+
+note: 
+   ┌─ callable_value_generics.fe:20:14
+   │
+20 │     let _ = (f, m)
+   │              ^ fn foo<u256>
+
+note: 
+   ┌─ callable_value_generics.fe:20:17
+   │
+20 │     let _ = (f, m)
+   │                 ^ fn id<u256>

@@ -3,9 +3,12 @@
 use pretty::DocAllocator;
 
 use crate::RewriteContext;
-use parser::ast::{self, PatKind};
+use parser::ast::{self, PatKind, prelude::AstNode};
+use parser::syntax_kind::SyntaxKind;
 
-use super::types::{Doc, ToDoc, block_list, block_list_spaced};
+use super::types::{
+    Doc, ToDoc, TokenPiece, block_list_auto, block_list_spaced_auto, has_comment_tokens, token_doc,
+};
 
 impl ToDoc for ast::Pat {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
@@ -45,15 +48,16 @@ impl ToDoc for ast::LitPat {
 
 impl ToDoc for ast::TuplePat {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
-        let elems: Vec<_> = self
-            .elems()
-            .into_iter()
-            .flatten()
-            .map(|e| e.to_doc(ctx))
-            .collect();
+        self.elems()
+            .map(|elems| elems.to_doc(ctx))
+            .unwrap_or_else(|| ctx.alloc.text("()"))
+    }
+}
 
+impl ToDoc for ast::TuplePatElemList {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
         let indent = ctx.config.indent_width as isize;
-        block_list(ctx, "(", ")", elems, indent, true)
+        block_list_auto(ctx, self.syntax(), "(", ")", ast::Pat::cast, indent, true)
     }
 }
 
@@ -83,15 +87,12 @@ impl ToDoc for ast::PathTuplePat {
             None => return alloc.nil(),
         };
 
-        let elems: Vec<_> = self
+        let elems_doc = self
             .elems()
-            .into_iter()
-            .flatten()
-            .map(|e| e.to_doc(ctx))
-            .collect();
+            .map(|elems| elems.to_doc(ctx))
+            .unwrap_or_else(|| alloc.text("()"));
 
-        let indent = ctx.config.indent_width as isize;
-        path.append(block_list(ctx, "(", ")", elems, indent, true))
+        path.append(elems_doc)
     }
 }
 
@@ -104,37 +105,43 @@ impl ToDoc for ast::RecordPat {
             None => return alloc.nil(),
         };
 
-        let fields: Vec<_> = self
+        let fields_doc = self
             .fields()
-            .map(|fields| {
-                fields
-                    .into_iter()
-                    .filter_map(|field| {
-                        // Check for explicit name label (e.g., `name: pat`)
-                        if let Some(name) = field.name() {
-                            let name_text = ctx.token(&name).to_string();
-                            if let Some(pat) = field.pat() {
-                                let pat_doc = pat.to_doc(ctx);
-                                Some(
-                                    alloc
-                                        .text(name_text)
-                                        .append(alloc.text(": "))
-                                        .append(pat_doc),
-                                )
-                            } else {
-                                Some(alloc.text(name_text))
-                            }
-                        } else {
-                            field.pat().map(|pat| pat.to_doc(ctx))
-                        }
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+            .map(|fields| fields.to_doc(ctx))
+            .unwrap_or_else(|| alloc.text("{}"));
 
+        path.append(alloc.text(" ")).append(fields_doc)
+    }
+}
+
+impl ToDoc for ast::RecordPatFieldList {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
         let indent = ctx.config.indent_width as isize;
-        path.append(alloc.text(" "))
-            .append(block_list_spaced(ctx, "{", "}", fields, indent, true))
+        block_list_spaced_auto(
+            ctx,
+            self.syntax(),
+            "{",
+            "}",
+            ast::RecordPatField::cast,
+            indent,
+            true,
+        )
+    }
+}
+
+impl ToDoc for ast::RecordPatField {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
+        match (self.name(), self.pat()) {
+            (Some(name), Some(pat)) => alloc
+                .text(ctx.token(&name))
+                .append(alloc.text(": "))
+                .append(pat.to_doc(ctx)),
+            (Some(name), None) => alloc.text(ctx.token(&name)),
+            (None, Some(pat)) => pat.to_doc(ctx),
+            (None, None) => alloc.nil(),
+        }
     }
 }
 
@@ -142,15 +149,29 @@ impl ToDoc for ast::OrPat {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
         let alloc = &ctx.alloc;
 
-        let lhs = match self.lhs() {
-            Some(l) => l.to_doc(ctx),
-            None => return alloc.nil(),
-        };
-        let rhs = match self.rhs() {
-            Some(r) => r.to_doc(ctx),
-            None => return lhs,
-        };
+        if !has_comment_tokens(self.syntax()) {
+            let lhs = match self.lhs() {
+                Some(l) => l.to_doc(ctx),
+                None => return alloc.nil(),
+            };
+            let rhs = match self.rhs() {
+                Some(r) => r.to_doc(ctx),
+                None => return lhs,
+            };
 
-        lhs.append(alloc.text(" | ")).append(rhs)
+            return lhs.append(alloc.text(" | ")).append(rhs);
+        }
+
+        let indent = ctx.config.indent_width as isize;
+        token_doc(
+            ctx,
+            self.syntax(),
+            indent,
+            |node| ast::Pat::cast(node).map(|pat| TokenPiece::new(pat.to_doc(ctx))),
+            |token| match token.kind() {
+                SyntaxKind::Pipe => Some(TokenPiece::new(alloc.text("|")).spaces()),
+                _ => None,
+            },
+        )
     }
 }

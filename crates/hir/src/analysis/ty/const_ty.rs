@@ -1,16 +1,28 @@
-use crate::core::hir_def::{Body, Const, Expr, IdentId, IntegerId, LitKind, Partial};
+use crate::core::hir_def::{
+    Body, Const, EnumVariant, Expr, IdentId, IntegerId, LitKind, Partial, Stmt,
+};
 
+use super::const_expr::{ConstExpr, ConstExprId};
 use super::{
+    ctfe::{CtfeConfig, CtfeInterpreter, instantiate_typed_body},
+    diagnostics::{BodyDiag, FuncBodyDiag},
     trait_def::TraitInstId,
+    trait_resolution::{
+        TraitSolveCx,
+        constraint::{collect_constraints, collect_func_def_constraints},
+    },
+    ty_check::{check_anon_const_body, check_const_body},
     ty_def::{InvalidCause, TyId, TyParam, TyVar},
     unify::UnificationTable,
 };
 use crate::analysis::{
     HirAnalysisDb,
     name_resolution::{PathRes, resolve_path},
-    ty::ty_def::{Kind, TyBase, TyData, TyVarSort},
-    ty::{trait_def::assoc_const_body_for_trait_inst, trait_resolution::PredicateListId},
+    ty::trait_resolution::PredicateListId,
+    ty::ty_def::TyData,
 };
+use crate::hir_def::ItemKind;
+use common::indexmap::IndexMap;
 
 #[salsa::interned]
 #[derive(Debug)]
@@ -25,12 +37,33 @@ pub(crate) fn evaluate_const_ty<'db>(
     const_ty: ConstTyId<'db>,
     expected_ty: Option<TyId<'db>>,
 ) -> ConstTyId<'db> {
-    let (body, const_ty_ty, _const_def) = match const_ty.data(db) {
+    if let ConstTyData::Abstract(expr, ty) = const_ty.data(db)
+        && let ConstExpr::TraitConst { inst, name } = expr.data(db)
+        && let Some(resolved) = const_ty_from_trait_const(
+            db,
+            TraitSolveCx::new(db, inst.def(db).top_mod(db).scope()),
+            *inst,
+            *name,
+        )
+    {
+        let evaluated = resolved.evaluate(db, expected_ty.or(Some(*ty)));
+        if matches!(
+            evaluated.ty(db).invalid_cause(db),
+            Some(InvalidCause::ConstEvalUnsupported { .. })
+        ) && expected_ty.is_some()
+        {
+            return const_ty;
+        }
+        return evaluated;
+    }
+
+    let (body, const_ty_ty, const_def, generic_args) = match const_ty.data(db) {
         ConstTyData::UnEvaluated {
             body,
             ty,
             const_def,
-        } => (*body, *ty, *const_def),
+            generic_args,
+        } => (*body, *ty, *const_def, generic_args.clone()),
         _ => {
             let const_ty_ty = const_ty.ty(db);
             return match check_const_ty(
@@ -49,6 +82,11 @@ pub(crate) fn evaluate_const_ty<'db>(
     };
 
     let expected_ty = expected_ty.or(const_ty_ty);
+    let check_ty = if generic_args.is_empty() {
+        expected_ty
+    } else {
+        const_ty_ty.or(expected_ty)
+    };
 
     let Partial::Present(expr) = body.expr(db).data(db, body) else {
         let data = ConstTyData::Evaluated(
@@ -71,7 +109,47 @@ pub(crate) fn evaluate_const_ty<'db>(
             );
         };
 
-        let assumptions = PredicateListId::empty_list(db);
+        let containing_func = match body.scope().parent_item(db) {
+            Some(ItemKind::Func(func)) => Some(func),
+            Some(ItemKind::Body(parent)) => parent.containing_func(db),
+            _ => None,
+        };
+        let assumptions = if let Some(func) = containing_func {
+            let mut preds =
+                collect_func_def_constraints(db, func.into(), true).instantiate_identity();
+            // Methods inside a trait implicitly assume `Self: Trait` in their bodies.
+            if let Some(ItemKind::Trait(trait_)) = func.scope().parent_item(db) {
+                let self_pred =
+                    TraitInstId::new(db, trait_, trait_.params(db).to_vec(), IndexMap::new());
+                let mut merged = preds.list(db).to_vec();
+                merged.push(self_pred);
+                preds = PredicateListId::new(db, merged);
+            }
+            preds.extend_all_bounds(db)
+        } else {
+            // Walk up through nested body scopes to find an enclosing item (trait/impl).
+            let mut enclosing = body.scope();
+            let mut parent_item = enclosing.parent_item(db);
+            while let Some(ItemKind::Body(parent)) = parent_item {
+                enclosing = parent.scope();
+                parent_item = enclosing.parent_item(db);
+            }
+
+            match parent_item {
+                Some(ItemKind::Trait(trait_)) => {
+                    let self_pred =
+                        TraitInstId::new(db, trait_, trait_.params(db).to_vec(), IndexMap::new());
+                    PredicateListId::new(db, vec![self_pred]).extend_all_bounds(db)
+                }
+                Some(ItemKind::ImplTrait(impl_trait)) => collect_constraints(db, impl_trait.into())
+                    .instantiate_identity()
+                    .extend_all_bounds(db),
+                Some(ItemKind::Impl(impl_)) => collect_constraints(db, impl_.into())
+                    .instantiate_identity()
+                    .extend_all_bounds(db),
+                _ => PredicateListId::empty_list(db),
+            }
+        };
         if let Ok(resolved_path) = resolve_path(db, path, body.scope(), assumptions, true) {
             match resolved_path {
                 PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {
@@ -86,10 +164,46 @@ pub(crate) fn evaluate_const_ty<'db>(
                         return const_ty.evaluate(db, expected);
                     }
                 }
-                PathRes::TraitConst(_recv_ty, inst, name) => {
-                    if let Some(const_ty) = const_ty_from_trait_const(db, inst, name) {
-                        return const_ty.evaluate(db, expected_ty);
+                PathRes::TraitConst(recv_ty, inst, name) => {
+                    let mut args = inst.args(db).clone();
+                    if let Some(self_arg) = args.first_mut() {
+                        *self_arg = recv_ty;
                     }
+                    let inst = TraitInstId::new(
+                        db,
+                        inst.def(db),
+                        args,
+                        inst.assoc_type_bindings(db).clone(),
+                    );
+
+                    let mk_abstract = |expected_ty: TyId<'db>| {
+                        let expr = ConstExprId::new(db, ConstExpr::TraitConst { inst, name });
+                        ConstTyId::new(db, ConstTyData::Abstract(expr, expected_ty))
+                    };
+
+                    let solve_cx =
+                        TraitSolveCx::new(db, body.scope()).with_assumptions(assumptions);
+                    if let Some(const_ty) = const_ty_from_trait_const(db, solve_cx, inst, name) {
+                        let evaluated = const_ty.evaluate(db, expected_ty);
+                        if matches!(
+                            evaluated.ty(db).invalid_cause(db),
+                            Some(InvalidCause::ConstEvalUnsupported { .. })
+                        ) && let Some(expected_ty) = expected_ty
+                        {
+                            return mk_abstract(expected_ty);
+                        }
+                        return evaluated;
+                    }
+
+                    if let Some(expected_ty) = expected_ty {
+                        return mk_abstract(expected_ty);
+                    }
+                }
+                PathRes::EnumVariant(variant) if variant.ty.is_unit_variant_only_enum(db) => {
+                    let evaluated = EvaluatedConstTy::EnumVariant(variant.variant);
+                    let const_ty =
+                        ConstTyId::new(db, ConstTyData::Evaluated(evaluated, variant.ty));
+                    return const_ty.evaluate(db, expected_ty);
                 }
                 _ => {}
             }
@@ -112,54 +226,94 @@ pub(crate) fn evaluate_const_ty<'db>(
         );
     }
 
-    let mut table = UnificationTable::new(db);
-    let (resolved, ty) = match expr {
-        Expr::Lit(LitKind::Bool(b)) => (
-            EvaluatedConstTy::LitBool(b),
-            TyId::new(db, TyData::TyBase(TyBase::bool())),
-        ),
+    let Some(check_ty) = check_ty else {
+        return ConstTyId::invalid(db, InvalidCause::InvalidConstTyExpr { body });
+    };
+    let expected_ty = expected_ty.expect("check_ty implies expected_ty is present");
 
-        Expr::Lit(LitKind::Int(i)) => (
-            EvaluatedConstTy::LitInt(i),
-            table.new_var(TyVarSort::Integral, &Kind::Star),
-        ),
-
-        _ => {
-            return ConstTyId::new(
-                db,
-                ConstTyData::Evaluated(
-                    EvaluatedConstTy::Invalid,
-                    TyId::invalid(db, InvalidCause::InvalidConstTyExpr { body }),
-                ),
-            );
+    let (diags, typed_body) = match const_def {
+        Some(const_def) => {
+            let result = check_const_body(db, const_def);
+            (result.0.clone(), result.1.clone())
+        }
+        None => {
+            let result = check_anon_const_body(db, body, check_ty);
+            (result.0.clone(), result.1.clone())
         }
     };
 
-    let data = match check_const_ty(db, ty, expected_ty, &mut table) {
-        Ok(ty) => ConstTyData::Evaluated(resolved, ty),
-        Err(err) => ConstTyData::Evaluated(resolved, TyId::invalid(db, err)),
-    };
+    if let Some((expected, given)) = diags.iter().find_map(|diag| match diag {
+        FuncBodyDiag::Body(BodyDiag::TypeMismatch {
+            expected, given, ..
+        }) => Some((*expected, *given)),
+        _ => None,
+    }) {
+        // If this const body belongs to a trait impl associated const, prefer
+        // reporting the mismatch at the const definition during impl checks.
+        if matches!(body.scope().parent_item(db), Some(ItemKind::ImplTrait(_))) {
+            return ConstTyId::invalid(db, InvalidCause::Other);
+        }
 
-    ConstTyId::new(db, data)
+        return ConstTyId::invalid(db, InvalidCause::ConstTyMismatch { expected, given });
+    }
+
+    if !diags.is_empty() {
+        return ConstTyId::invalid(
+            db,
+            InvalidCause::ConstEvalUnsupported {
+                body,
+                expr: body.expr(db),
+            },
+        );
+    }
+
+    let mut interp = CtfeInterpreter::new(db, CtfeConfig::default());
+    let typed_body = if generic_args.is_empty() {
+        typed_body
+    } else {
+        instantiate_typed_body(db, typed_body.clone(), &generic_args)
+    };
+    let evaluated = interp
+        .eval_expr_in_body(body, typed_body, generic_args, body.expr(db))
+        .unwrap_or_else(|cause| ConstTyId::invalid(db, cause));
+
+    let mut table = UnificationTable::new(db);
+    match check_const_ty(db, evaluated.ty(db), Some(expected_ty), &mut table) {
+        Ok(ty) => evaluated.swap_ty(db, ty),
+        Err(cause) => evaluated.swap_ty(db, TyId::invalid(db, cause)),
+    }
 }
 
 pub(super) fn const_ty_from_trait_const<'db>(
     db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
     inst: TraitInstId<'db>,
     name: IdentId<'db>,
 ) -> Option<ConstTyId<'db>> {
-    let body = assoc_const_body_for_trait_inst(db, inst, name).or_else(|| {
-        let trait_ = inst.def(db);
-        trait_.const_(db, name).and_then(|c| c.default_body(db))
-    })?;
+    let trait_ = inst.def(db);
+    let (body, generic_args) =
+        crate::analysis::ty::trait_def::assoc_const_body_and_impl_args_for_trait_inst(
+            db, solve_cx, inst, name,
+        )
+        .or_else(|| {
+            trait_
+                .const_(db, name)
+                .and_then(|c| c.default_body(db))
+                .map(|body| (body, inst.args(db).clone()))
+        })?;
 
-    let declared_ty = inst
-        .def(db)
+    let declared_ty = trait_
         .const_(db, name)
         .and_then(|v| v.ty_binder(db))
         .map(|b| b.instantiate(db, inst.args(db)));
 
-    Some(ConstTyId::from_body(db, body, declared_ty, None))
+    Some(ConstTyId::from_body_with_generic_args(
+        db,
+        body,
+        declared_ty,
+        None,
+        generic_args,
+    ))
 }
 
 // FIXME: When we add type inference, we need to use the inference engine to
@@ -170,6 +324,10 @@ fn check_const_ty<'db>(
     expected_ty: Option<TyId<'db>>,
     table: &mut UnificationTable<'db>,
 ) -> Result<TyId<'db>, InvalidCause<'db>> {
+    if let Some(cause) = const_ty_ty.invalid_cause(db) {
+        return Err(cause);
+    }
+
     if const_ty_ty.has_invalid(db) {
         return Err(InvalidCause::Other);
     }
@@ -195,6 +353,7 @@ impl<'db> ConstTyId<'db> {
             ConstTyData::TyVar(_, ty) => *ty,
             ConstTyData::TyParam(_, ty) => *ty,
             ConstTyData::Evaluated(_, ty) => *ty,
+            ConstTyData::Abstract(_, ty) => *ty,
             ConstTyData::UnEvaluated { ty, .. } => {
                 ty.unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other))
             }
@@ -208,6 +367,7 @@ impl<'db> ConstTyId<'db> {
                 format!("const {}: {}", param.pretty_print(db), ty.pretty_print(db))
             }
             ConstTyData::Evaluated(resolved, _) => resolved.pretty_print(db),
+            ConstTyData::Abstract(expr, _) => expr.pretty_print(db),
             ConstTyData::UnEvaluated {
                 body, const_def, ..
             } => {
@@ -223,11 +383,28 @@ impl<'db> ConstTyId<'db> {
                 };
 
                 match expr {
-                    Expr::Lit(LitKind::Bool(value)) => format!("const {}", value),
-                    Expr::Lit(LitKind::Int(int)) => format!("const {}", int.data(db)),
-                    Expr::Lit(LitKind::String(string)) => format!("const \"{}\"", string.data(db)),
-                    Expr::Path(path) if path.is_present() => {
-                        format!("const {}", path.unwrap().pretty_print(db))
+                    Expr::Lit(LitKind::Bool(value)) => format!("{value}"),
+                    Expr::Lit(LitKind::Int(int)) => format!("{}", int.data(db)),
+                    Expr::Lit(LitKind::String(string)) => format!("\"{}\"", string.data(db)),
+                    Expr::Path(path) if path.is_present() => path.unwrap().pretty_print(db),
+                    Expr::Block(stmts) if stmts.len() == 1 => {
+                        let Partial::Present(Stmt::Expr(tail_expr)) = stmts[0].data(db, *body)
+                        else {
+                            return "const value".into();
+                        };
+                        let Partial::Present(expr) = tail_expr.data(db, *body) else {
+                            return "const value".into();
+                        };
+
+                        match expr {
+                            Expr::Lit(LitKind::Bool(value)) => format!("{value}"),
+                            Expr::Lit(LitKind::Int(int)) => format!("{}", int.data(db)),
+                            Expr::Lit(LitKind::String(string)) => {
+                                format!("\"{}\"", string.data(db))
+                            }
+                            Expr::Path(path) if path.is_present() => path.unwrap().pretty_print(db),
+                            _ => "const value".into(),
+                        }
                     }
                     _ => "const value".into(),
                 }
@@ -249,10 +426,21 @@ impl<'db> ConstTyId<'db> {
         ty: Option<TyId<'db>>,
         const_def: Option<Const<'db>>,
     ) -> Self {
+        Self::from_body_with_generic_args(db, body, ty, const_def, Vec::new())
+    }
+
+    pub(super) fn from_body_with_generic_args(
+        db: &'db dyn HirAnalysisDb,
+        body: Body<'db>,
+        ty: Option<TyId<'db>>,
+        const_def: Option<Const<'db>>,
+        generic_args: Vec<TyId<'db>>,
+    ) -> Self {
         let data = ConstTyData::UnEvaluated {
             body,
             ty,
             const_def,
+            generic_args,
         };
         Self::new(db, data)
     }
@@ -276,12 +464,17 @@ impl<'db> ConstTyId<'db> {
             ConstTyData::TyVar(var, _) => ConstTyData::TyVar(var.clone(), ty),
             ConstTyData::TyParam(param, _) => ConstTyData::TyParam(param.clone(), ty),
             ConstTyData::Evaluated(evaluated, _) => ConstTyData::Evaluated(evaluated.clone(), ty),
+            ConstTyData::Abstract(expr, _) => ConstTyData::Abstract(*expr, ty),
             ConstTyData::UnEvaluated {
-                body, const_def, ..
+                body,
+                const_def,
+                generic_args,
+                ..
             } => ConstTyData::UnEvaluated {
                 body: *body,
                 ty: Some(ty),
                 const_def: *const_def,
+                generic_args: generic_args.clone(),
             },
         };
 
@@ -294,10 +487,12 @@ pub enum ConstTyData<'db> {
     TyVar(TyVar<'db>, TyId<'db>),
     TyParam(TyParam<'db>, TyId<'db>),
     Evaluated(EvaluatedConstTy<'db>, TyId<'db>),
+    Abstract(ConstExprId<'db>, TyId<'db>),
     UnEvaluated {
         body: Body<'db>,
         ty: Option<TyId<'db>>,
         const_def: Option<Const<'db>>,
+        generic_args: Vec<TyId<'db>>,
     },
 }
 
@@ -305,6 +500,12 @@ pub enum ConstTyData<'db> {
 pub enum EvaluatedConstTy<'db> {
     LitInt(IntegerId<'db>),
     LitBool(bool),
+    Unit,
+    Tuple(Vec<TyId<'db>>),
+    Array(Vec<TyId<'db>>),
+    Bytes(Vec<u8>),
+    Record(Vec<TyId<'db>>),
+    EnumVariant(EnumVariant<'db>),
     Invalid,
 }
 
@@ -315,6 +516,49 @@ impl EvaluatedConstTy<'_> {
                 format!("{}", val.data(db))
             }
             EvaluatedConstTy::LitBool(val) => format!("{val}"),
+            EvaluatedConstTy::Unit => "()".to_string(),
+            EvaluatedConstTy::Tuple(elems) => {
+                let elems = elems
+                    .iter()
+                    .map(|elem| elem.pretty_print(db).as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("({elems})")
+            }
+            EvaluatedConstTy::Array(elems) => {
+                let elems = elems
+                    .iter()
+                    .map(|elem| elem.pretty_print(db).as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("[{elems}]")
+            }
+            EvaluatedConstTy::Bytes(bytes) => {
+                let bytes = bytes
+                    .iter()
+                    .map(|b| b.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("[{bytes}]")
+            }
+            EvaluatedConstTy::Record(fields) => {
+                let fields = fields
+                    .iter()
+                    .map(|field| field.pretty_print(db).as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{{{fields}}}")
+            }
+            EvaluatedConstTy::EnumVariant(variant) => {
+                let enum_name = variant
+                    .enum_
+                    .name(db)
+                    .to_opt()
+                    .map(|n| n.data(db).to_string())
+                    .unwrap_or_else(|| "<unknown>".to_string());
+                let variant_name = variant.name(db).unwrap_or("<unknown>");
+                format!("{enum_name}::{variant_name}")
+            }
             EvaluatedConstTy::Invalid => "<invalid>".to_string(),
         }
     }

@@ -1,0 +1,13 @@
+struct Boxed {
+    value: u256,
+}
+
+fn consume(value: own Boxed) {
+    let _ = value.value
+}
+
+pub fn mir_move_error() -> Boxed {
+    let x = Boxed { value: 0 }
+    consume(x)
+    x
+}

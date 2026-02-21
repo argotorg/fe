@@ -85,6 +85,19 @@ impl GitResolver {
         self.checkout_root.join(encoded)
     }
 
+    pub fn ensure_checkout_resource(
+        &self,
+        description: &GitDescription,
+    ) -> Result<GitResource, GitResolutionError> {
+        self.ensure_checkout_root()?;
+        let checkout_path = self.checkout_path(description);
+        let status = self.ensure_checkout(description, &checkout_path)?;
+        Ok(GitResource {
+            reused_checkout: matches!(status, CheckoutStatus::Existing),
+            checkout_path,
+        })
+    }
+
     fn ensure_checkout_root(&self) -> Result<(), GitResolutionError> {
         if !self.checkout_root.exists() {
             fs::create_dir_all(self.checkout_root.as_std_path()).map_err(|source| {
@@ -215,11 +228,24 @@ enum CheckoutStatus {
     Existing,
 }
 
+#[derive(Debug, Clone)]
+pub enum GitResolutionEvent {
+    CheckoutStart {
+        description: GitDescription,
+    },
+    CheckoutComplete {
+        description: GitDescription,
+        checkout_path: Utf8PathBuf,
+        reused_checkout: bool,
+    },
+}
+
 impl Resolver for GitResolver {
     type Description = GitDescription;
     type Resource = GitResource;
     type Error = GitResolutionError;
     type Diagnostic = GitResolutionDiagnostic;
+    type Event = GitResolutionEvent;
 
     fn resolve<H>(
         &mut self,
@@ -229,15 +255,15 @@ impl Resolver for GitResolver {
     where
         H: ResolutionHandler<Self>,
     {
-        handler.on_resolution_start(description);
-        self.ensure_checkout_root()?;
-        let checkout_path = self.checkout_path(description);
-        let status = self.ensure_checkout(description, &checkout_path)?;
-
-        let resource = GitResource {
-            reused_checkout: matches!(status, CheckoutStatus::Existing),
-            checkout_path,
-        };
+        handler.on_resolution_event(GitResolutionEvent::CheckoutStart {
+            description: description.clone(),
+        });
+        let resource = self.ensure_checkout_resource(description)?;
+        handler.on_resolution_event(GitResolutionEvent::CheckoutComplete {
+            description: description.clone(),
+            checkout_path: resource.checkout_path.clone(),
+            reused_checkout: resource.reused_checkout,
+        });
         Ok(handler.handle_resolution(description, resource))
     }
 }

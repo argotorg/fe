@@ -1,13 +1,14 @@
 ---
-source: crates/hir-analysis/tests/ty_check.rs
+source: crates/hir/tests/ty_check.rs
+assertion_line: 40
 expression: res
-input_file: crates/hir-analysis/test_files/ty_check/while_.fe
+input_file: test_files/ty_check/while_.fe
 ---
 note: 
-  ┌─ while_.fe:1:39
+  ┌─ while_.fe:1:43
   │  
-1 │   pub fn factorial(mut num: u32) -> u32 {
-  │ ╭───────────────────────────────────────^
+1 │   pub fn factorial(mut num: own u32) -> u32 {
+  │ ╭───────────────────────────────────────────^
 2 │ │     let mut res = 1
 3 │ │     while num > 0 {
 4 │ │         res *= num
@@ -99,10 +100,10 @@ note:
   │     ^^^ u32
 
 note: 
-   ┌─ while_.fe:11:40
+   ┌─ while_.fe:11:44
    │  
-11 │   pub fn factorial2(mut num: u32) -> u32 {
-   │ ╭────────────────────────────────────────^
+11 │   pub fn factorial2(mut num: own u32) -> u32 {
+   │ ╭────────────────────────────────────────────^
 12 │ │     let mut res = 1
 13 │ │     while true {
 14 │ │         if num > 1 {
@@ -239,10 +240,10 @@ note:
    │            ^^^ u32
 
 note: 
-   ┌─ while_.fe:26:40
+   ┌─ while_.fe:26:44
    │  
-26 │   pub fn factorial3(mut num: u32) -> u32 {
-   │ ╭────────────────────────────────────────^
+26 │   pub fn factorial3(mut num: own u32) -> u32 {
+   │ ╭────────────────────────────────────────────^
 27 │ │     let mut res = 1
 28 │ │     while true {
 29 │ │         num = if num > 1 {

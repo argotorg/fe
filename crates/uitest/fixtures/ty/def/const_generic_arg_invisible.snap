@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/def/const_generic_arg_invisible.fe
+---
+error[2-0003]: `CONST` is not visible
+  ┌─ const_generic_arg_invisible.fe:8:27
+  │
+4 │     const CONST: u32 = 1
+  │           ----- `CONST` is defined here
+  ·
+8 │     foo: Foo<private_mod::CONST>,
+  │                           ^^^^^ `CONST` is not visible

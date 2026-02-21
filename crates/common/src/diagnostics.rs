@@ -144,6 +144,7 @@ pub enum Severity {
 pub enum DiagnosticPass {
     Parse,
     MsgLower,
+    EventLower,
 
     NameResolution,
 
@@ -154,6 +155,8 @@ pub enum DiagnosticPass {
     MethodDefinition,
     TyCheck,
 
+    Mir,
+
     ExternalAnalysis(ExternalAnalysisKey),
 }
 
@@ -162,6 +165,7 @@ impl DiagnosticPass {
         match self {
             Self::Parse => 1,
             Self::MsgLower => 9,
+            Self::EventLower => 10,
             Self::NameResolution => 2,
             Self::TypeDefinition => 3,
             Self::TraitDefinition => 4,
@@ -169,6 +173,7 @@ impl DiagnosticPass {
             Self::TraitSatisfaction => 6,
             Self::MethodDefinition => 7,
             Self::TyCheck => 8,
+            Self::Mir => 11,
 
             Self::ExternalAnalysis(_) => u16::MAX,
         }

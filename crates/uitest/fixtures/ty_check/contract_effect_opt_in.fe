@@ -1,0 +1,11 @@
+use std::evm::{Address, Ctx}
+
+fn who_called() -> Address uses (ctx: Ctx) {
+    ctx.caller()
+}
+
+contract C uses (ctx: Ctx) {
+    init() {
+        who_called()
+    }
+}

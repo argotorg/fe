@@ -1,0 +1,11 @@
+---
+source: crates/uitest/tests/mir_check.rs
+assertion_line: 32
+expression: res
+input_file: fixtures/mir_check/match_pattern_ref_noncopy_no_coerce.fe
+---
+error[8-0000]: type mismatch
+   ┌─ match_pattern_ref_noncopy_no_coerce.fe:11:23
+   │
+11 │         Wrap { b } => b,
+   │                       ^ expected `Blob`, but `ref Blob` is given

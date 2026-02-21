@@ -1,11 +1,5 @@
-pub struct Foo<T> {
-    t: T
-}
-
-impl<T> Foo<T> {
-    fn new() -> Self {
-        todo()
-    }
+pub struct Foo {
+    t: u32
 }
 
 trait Trait1 {
@@ -13,27 +7,22 @@ trait Trait1 {
 }
 
 trait Trait2 {
-    fn foo(self) -> i32
+    fn foo(self) -> u32
 }
 
-
-impl Trait1 for Foo<u32> {
+impl Trait1 for Foo {
     fn foo(self) -> u32 {
         self.t
     }
 }
 
-impl Trait2 for Foo<i32> {
-    fn foo(self) -> i32 {
-        self.t
+impl Trait2 for Foo {
+    fn foo(self) -> u32 {
+        self.t + 1
     }
 }
 
-extern {
-    fn todo() -> !
-}
-
-fn run() {
-    let f = Foo::new()
-    let y = f.foo()
+fn run() -> u32 {
+    let f = Foo { t: 1 }
+    f.foo()
 }

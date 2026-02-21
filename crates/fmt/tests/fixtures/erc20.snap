@@ -3,14 +3,18 @@ source: crates/fmt/tests/format_snapshots.rs
 expression: output
 input_file: tests/fixtures/erc20.fe
 ---
+use std::evm::effects::Address
+
 // roles
 const MINTER: u256 = 1
 const BURNER: u256 = 2
 
 pub contract CoolCoin uses (mut ctx: Ctx, mut log: Log) {
-    store: TokenStore,
-    auth: AccessControl,
+    // Storage fields. These act as effects within the contract.
+    mut store: TokenStore,
+    mut auth: AccessControl,
 
+    // Initialize the token with name, symbol, decimals, and initial supply
     init(initial_supply: u256, owner: Address)
     uses (mut store, mut auth, mut ctx, mut log)
     {
@@ -64,16 +68,21 @@ pub contract CoolCoin uses (mut ctx: Ctx, mut log: Log) {
         }
     }
 
+    // Extended functionality (minting and burning)
     recv Erc20Extended {
         Mint { to, amount } -> bool uses (ctx, mut store, mut log, auth) {
             auth.require(role: MINTER)
             mint(to, amount)
             true
         }
+
+        // Burns tokens from caller's balance
         Burn { amount } -> bool uses (ctx, mut store, mut log) {
             burn(from: ctx.caller(), amount)
             true
         }
+
+        // Burns tokens from an account using allowance (requires BURNER or allowance)
         BurnFrom { from, amount } -> bool uses (ctx, mut store, mut log) {
             spend_allowance(owner: from, spender: ctx.caller(), amount)
             burn(from, amount)
@@ -116,11 +125,7 @@ uses (mut store: TokenStore, mut log: Log)
     store.balances[from] = from_balance - amount
     store.balances[to] += amount
 
-    log.emit(TransferEvent {
-            from,
-            to,
-            value: amount,
-        })
+    log.emit(TransferEvent { from, to, value: amount })
 }
 
 fn mint(to: Address, amount: u256) uses (mut store: TokenStore, mut log: Log) {
@@ -129,11 +134,7 @@ fn mint(to: Address, amount: u256) uses (mut store: TokenStore, mut log: Log) {
     store.total_supply += amount
     store.balances[to] += amount
 
-    log.emit(TransferEvent {
-            from: Address::zero(),
-            to,
-            value: amount,
-        })
+    log.emit(TransferEvent { from: Address::zero(), to, value: amount })
 }
 
 fn burn(from: Address, amount: u256)
@@ -147,11 +148,7 @@ uses (mut store: TokenStore, mut log: Log)
     store.balances[from] = from_balance - amount
     store.total_supply -= amount
 
-    log.emit(TransferEvent {
-            from,
-            to: Address::zero(),
-            value: amount,
-        })
+    log.emit(TransferEvent { from, to: Address::zero(), value: amount })
 }
 
 fn approve(owner: Address, spender: Address, amount: u256)
@@ -162,11 +159,7 @@ uses (mut store: TokenStore, mut log: Log)
 
     store.allowances[(owner, spender)] = amount
 
-    log.emit(ApprovalEvent {
-            owner,
-            spender,
-            value: amount,
-        })
+    log.emit(ApprovalEvent { owner, spender, value: amount })
 }
 
 // Internal function to spend allowance
@@ -190,26 +183,20 @@ pub struct AccessControl { roles: Map<(u256, Address), bool> }
 
 impl AccessControl {
     pub fn new() -> Self {
-        AccessControl {
-            roles: Map::new(),
-        }
+        AccessControl { roles: Map::new() }
     }
-
     pub fn has_role(self, role: u256, account: Address) -> bool {
         self.roles[(role, account)]
     }
-
     pub fn require(self, role: u256) uses (ctx: Ctx) {
         assert(
             self.roles[(role, ctx.caller())],
             "access denied: missing role",
         )
     }
-
     pub fn grant(mut self, role: u256, to: Address) {
         self.roles[(role, to)] = true
     }
-
     pub fn revoke(mut self, role: u256, from: Address) {
         self.roles[(role, from)] = false
     }
@@ -283,18 +270,6 @@ struct ApprovalEvent {
 // stubs for missing std lib stuff
 extern {
     fn assert(_: bool, _: String<64>)
-}
-
-pub struct Address { inner: u256 }
-impl Address {
-    pub fn zero() -> Self {
-        Address { inner: 0 }
-    }
-}
-impl core::ops::Eq for Address {
-    fn eq(self, _ other: Address) -> bool {
-        self.inner == other.inner
-    }
 }
 
 pub struct Map<K, V> {}

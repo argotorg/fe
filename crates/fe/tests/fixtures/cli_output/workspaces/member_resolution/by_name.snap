@@ -1,0 +1,7 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/cli_output/workspaces/member_resolution/by_name.case
+---
+
+=== EXIT CODE: 0 ===

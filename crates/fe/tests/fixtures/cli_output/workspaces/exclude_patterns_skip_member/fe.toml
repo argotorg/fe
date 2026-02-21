@@ -1,0 +1,5 @@
+[workspace]
+name = "exclude_patterns_skip_member"
+version = "0.1.0"
+members = ["ingots/*"]
+exclude = ["ingots/bad"]

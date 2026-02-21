@@ -1,0 +1,144 @@
+/// Simple constant-product AMM (Automated Market Maker).
+/// Inspired by Uniswap V2's core swap logic (x * y = k).
+///
+/// Tests: multiplication, division, if-expressions, math-heavy business logic,
+/// invariant maintenance (K only increases due to integer rounding).
+
+use std::evm::Evm
+use std::evm::effects::assert
+
+msg AmmMsg {
+    #[selector = 0x01]
+    AddLiquidity { amount_a: u256, amount_b: u256 },
+    #[selector = 0x02]
+    SwapAForB { amount_in: u256 } -> u256,
+    #[selector = 0x03]
+    SwapBForA { amount_in: u256 } -> u256,
+    #[selector = 0x04]
+    GetReserveA -> u256,
+    #[selector = 0x05]
+    GetReserveB -> u256,
+    #[selector = 0x06]
+    GetK -> u256,
+}
+
+struct AmmStore {
+    reserve_a: u256,
+    reserve_b: u256,
+}
+
+pub contract SimpleAmm {
+    mut store: AmmStore
+
+    init() uses (mut store) {
+        store.reserve_a = 0
+        store.reserve_b = 0
+    }
+
+    recv AmmMsg {
+        AddLiquidity { amount_a, amount_b } uses (mut store) {
+            store.reserve_a += amount_a
+            store.reserve_b += amount_b
+        }
+
+        SwapAForB { amount_in } -> u256 uses (mut store) {
+            // Constant product: (ra + dx) * (rb - dy) = ra * rb
+            // Solving: dy = rb * dx / (ra + dx)
+            let amount_out = if amount_in == 0 {
+                0
+            } else if store.reserve_a == 0 {
+                0
+            } else if store.reserve_b == 0 {
+                0
+            } else {
+                store.reserve_b * amount_in / (store.reserve_a + amount_in)
+            }
+            if amount_out == 0 {
+                return 0
+            }
+            store.reserve_a += amount_in
+            store.reserve_b -= amount_out
+            amount_out
+        }
+
+        SwapBForA { amount_in } -> u256 uses (mut store) {
+            let amount_out = if amount_in == 0 {
+                0
+            } else if store.reserve_a == 0 {
+                0
+            } else if store.reserve_b == 0 {
+                0
+            } else {
+                store.reserve_a * amount_in / (store.reserve_b + amount_in)
+            }
+            if amount_out == 0 {
+                return 0
+            }
+            store.reserve_b += amount_in
+            store.reserve_a -= amount_out
+            amount_out
+        }
+
+        GetReserveA -> u256 uses (store) { store.reserve_a }
+        GetReserveB -> u256 uses (store) { store.reserve_b }
+        GetK -> u256 uses (store) { store.reserve_a * store.reserve_b }
+    }
+}
+
+#[test]
+fn test_amm_basic() uses (evm: mut Evm) {
+    let pool = evm.create2<SimpleAmm>(value: 0, args: (), salt: 0)
+    assert(pool.inner != 0)
+
+    // Add initial liquidity: 1000 A, 2000 B
+    evm.call(addr: pool, gas: 100000, value: 0, message: AmmMsg::AddLiquidity { amount_a: 1000, amount_b: 2000 })
+
+    let k: u256 = evm.call(addr: pool, gas: 100000, value: 0, message: AmmMsg::GetK {})
+    assert(k == 2000000)
+
+    // Swap 100 A for B: dy = 2000 * 100 / (1000 + 100) = 200000 / 1100 = 181
+    let out: u256 = evm.call(addr: pool, gas: 100000, value: 0, message: AmmMsg::SwapAForB { amount_in: 100 })
+    assert(out == 181)
+
+    // Reserves: A=1100, B=1819. K=2000900 (increased from rounding)
+    let ra: u256 = evm.call(addr: pool, gas: 100000, value: 0, message: AmmMsg::GetReserveA {})
+    assert(ra == 1100)
+    let rb: u256 = evm.call(addr: pool, gas: 100000, value: 0, message: AmmMsg::GetReserveB {})
+    assert(rb == 1819)
+    let k2: u256 = evm.call(addr: pool, gas: 100000, value: 0, message: AmmMsg::GetK {})
+    assert(k2 == 2000900)
+
+    // Swap 200 B for A: dx = 1100 * 200 / (1819 + 200) = 220000 / 2019 = 108
+    let out2: u256 = evm.call(addr: pool, gas: 100000, value: 0, message: AmmMsg::SwapBForA { amount_in: 200 })
+    assert(out2 == 108)
+
+    let ra: u256 = evm.call(addr: pool, gas: 100000, value: 0, message: AmmMsg::GetReserveA {})
+    assert(ra == 992)
+    let rb: u256 = evm.call(addr: pool, gas: 100000, value: 0, message: AmmMsg::GetReserveB {})
+    assert(rb == 2019)
+}
+
+#[test]
+fn test_amm_edge_cases() uses (evm: mut Evm) {
+    let pool = evm.create2<SimpleAmm>(value: 0, args: (), salt: 1)
+    assert(pool.inner != 0)
+
+    // Swap with no liquidity
+    let out: u256 = evm.call(addr: pool, gas: 100000, value: 0, message: AmmMsg::SwapAForB { amount_in: 100 })
+    assert(out == 0)
+
+    // Swap zero
+    evm.call(addr: pool, gas: 100000, value: 0, message: AmmMsg::AddLiquidity { amount_a: 1000, amount_b: 1000 })
+    let out: u256 = evm.call(addr: pool, gas: 100000, value: 0, message: AmmMsg::SwapAForB { amount_in: 0 })
+    assert(out == 0)
+
+    // Large swap: 9x the reserve
+    // dy = 1000 * 9000 / (1000 + 9000) = 9000000 / 10000 = 900
+    let out: u256 = evm.call(addr: pool, gas: 100000, value: 0, message: AmmMsg::SwapAForB { amount_in: 9000 })
+    assert(out == 900)
+
+    let ra: u256 = evm.call(addr: pool, gas: 100000, value: 0, message: AmmMsg::GetReserveA {})
+    assert(ra == 10000)
+    let rb: u256 = evm.call(addr: pool, gas: 100000, value: 0, message: AmmMsg::GetReserveB {})
+    assert(rb == 100)
+}

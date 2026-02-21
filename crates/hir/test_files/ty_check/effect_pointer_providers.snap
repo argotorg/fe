@@ -1,5 +1,6 @@
 ---
 source: crates/hir/tests/ty_check.rs
+assertion_line: 40
 expression: res
 input_file: test_files/ty_check/effect_pointer_providers.fe
 ---
@@ -21,7 +22,7 @@ note:
 note: 
   ┌─ effect_pointer_providers.fe:5:32
   │  
-5 │   fn bump_x() uses (mut x: u256) {
+5 │   fn bump_x() uses (x: mut u256) {
   │ ╭────────────────────────────────^
 6 │ │     x += 1
 7 │ │ }
@@ -68,7 +69,7 @@ note:
    ┌─ effect_pointer_providers.fe:10:37
    │
 10 │     let p: std::evm::MemPtr<u256> = mem.mem_ptr(0)
-   │                                     ^^^ mem: RawMem
+   │                                     ^^^ __effprov0
 
 note: 
    ┌─ effect_pointer_providers.fe:10:37

@@ -40,9 +40,9 @@ pub mod lazy_spans {
         item::{
             LazyBodySpan, LazyConstSpan, LazyContractRecvSpan, LazyContractSpan, LazyEnumSpan,
             LazyFieldDefListSpan, LazyFieldDefSpan, LazyFuncSignatureSpan, LazyFuncSpan,
-            LazyImplSpan, LazyImplTraitSpan, LazyItemModifierSpan, LazyItemSpan, LazyModSpan,
-            LazyRecvArmListSpan, LazyRecvArmSpan, LazyStructSpan, LazyTopModSpan, LazyTraitSpan,
-            LazyTypeAliasSpan, LazyUseSpan, LazyVariantDefListSpan, LazyVariantDefSpan,
+            LazyImplSpan, LazyImplTraitSpan, LazyItemSpan, LazyModSpan, LazyRecvArmListSpan,
+            LazyRecvArmSpan, LazyStructSpan, LazyTopModSpan, LazyTraitSpan, LazyTypeAliasSpan,
+            LazyUseSpan, LazyVariantDefListSpan, LazyVariantDefSpan,
         },
         params::{
             LazyConstGenericParamSpan, LazyFuncParamListSpan, LazyFuncParamSpan,
@@ -229,6 +229,8 @@ pub enum DesugaredOrigin {
     /// The HIR node is the result of desugaring a `msg` block.
     /// `msg` blocks are desugared into modules containing structs and trait impls.
     Msg(MsgDesugared),
+    /// The HIR node is the result of desugaring a `#[event]` struct.
+    Event(EventDesugared),
 }
 
 /// Tracks the origin of HIR nodes desugared from a `msg` block.
@@ -252,6 +254,13 @@ pub enum MsgDesugaredFocus {
     VariantName,
     /// Point to the selector attribute value (if any).
     Selector,
+}
+
+/// Tracks the origin of HIR nodes desugared from an `#[event]` struct.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct EventDesugared {
+    /// The original `struct` AST node annotated with `#[event]`.
+    pub event_struct: AstPtr<ast::Struct>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

@@ -1,0 +1,7 @@
+use std::evm::alloc
+
+pub fn bump_self_assign(size: u256) -> u256 {
+    let mut x: u256 = size
+    x = alloc(x)
+    x
+}

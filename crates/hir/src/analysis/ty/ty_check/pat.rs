@@ -1,19 +1,26 @@
 use std::ops::Range;
 
-use crate::core::hir_def::{Partial, Pat, PatId, VariantKind};
+use crate::core::hir_def::{Partial, Pat, PatId, PathId, TupleTypeId, VariantKind};
 use either::Either;
 
 use super::{RecordLike, TyChecker, env::LocalBinding, path::RecordInitChecker};
 use crate::analysis::{
-    name_resolution::PathRes,
+    name_resolution::{PathRes, ResolvedVariant},
     ty::adt_def::AdtRef,
     ty::{
         binder::Binder,
         diagnostics::BodyDiag,
+        trait_def::TraitInstId,
         ty_def::{InvalidCause, Kind, TyId, TyVarSort},
         ty_lower::lower_hir_ty,
     },
 };
+
+enum TupleVariantResolution<'db> {
+    Resolved(ResolvedVariant<'db>, TupleTypeId<'db>),
+    Invalid,
+    UnresolvedPath,
+}
 
 impl<'db> TyChecker<'db> {
     pub(super) fn check_pat(&mut self, pat: PatId, expected: TyId<'db>) -> TyId<'db> {
@@ -82,24 +89,8 @@ impl<'db> TyChecker<'db> {
             return unified;
         }
 
-        let mut pat_idx = 0;
-        for (i, &pat_ty) in unified.decompose_ty_app(self.db).1.iter().enumerate() {
-            if pat_idx >= pat_tup.len() {
-                break;
-            };
-
-            if pat_tup[pat_idx].is_rest(self.db, self.body()) {
-                pat_idx += 1;
-                continue;
-            }
-
-            if rest_range.contains(&i) {
-                continue;
-            }
-
-            self.check_pat(pat_tup[pat_idx], pat_ty);
-            pat_idx += 1;
-        }
+        let elem_tys = unified.decompose_ty_app(self.db).1.to_vec();
+        self.check_tuple_like_pattern_elems(pat_tup, &elem_tys, rest_range, None);
 
         unified
     }
@@ -160,7 +151,18 @@ impl<'db> TyChecker<'db> {
                 }
             }
 
-            Ok(PathRes::TraitConst(_recv_ty, inst, name)) => {
+            Ok(PathRes::TraitConst(recv_ty, inst, name)) => {
+                let mut args = inst.args(self.db).clone();
+                if let Some(self_arg) = args.first_mut() {
+                    *self_arg = recv_ty;
+                }
+                let inst = TraitInstId::new(
+                    self.db,
+                    inst.def(self.db),
+                    args,
+                    inst.assoc_type_bindings(self.db).clone(),
+                );
+
                 let trait_ = inst.def(self.db);
                 if let Some(const_view) = trait_.const_(self.db, name)
                     && let Some(ty_binder) = const_view.ty_binder(self.db)
@@ -222,64 +224,10 @@ impl<'db> TyChecker<'db> {
             return TyId::invalid(self.db, InvalidCause::ParseError);
         };
 
-        let span = pat.span(self.body()).into_path_tuple_pat();
-
-        let (variant, expected_elems) = match self.resolve_path(*path, true, span.clone().path()) {
-            Ok(res) => match res {
-                PathRes::Ty(ty)
-                | PathRes::TyAlias(_, ty)
-                | PathRes::Func(ty)
-                | PathRes::Const(_, ty)
-                | PathRes::TraitConst(ty, ..) => {
-                    let diag = BodyDiag::tuple_variant_expected(
-                        self.db,
-                        pat.span(self.body()).into(),
-                        Some(RecordLike::Type(ty)),
-                    );
-                    self.push_diag(diag);
-                    return TyId::invalid(self.db, InvalidCause::Other);
-                }
-
-                PathRes::Trait(trait_) => {
-                    let diag = BodyDiag::NotValue {
-                        primary: span.into(),
-                        given: Either::Left(trait_.def(self.db).into()),
-                    };
-                    self.push_diag(diag);
-                    return TyId::invalid(self.db, InvalidCause::Other);
-                }
-                PathRes::EnumVariant(variant) => match variant.kind(self.db) {
-                    VariantKind::Tuple(elems) => (variant, elems),
-                    _ => {
-                        let diag = BodyDiag::tuple_variant_expected(
-                            self.db,
-                            pat.span(self.body()).into(),
-                            Some(RecordLike::from_variant(variant)),
-                        );
-                        self.push_diag(diag);
-                        return TyId::invalid(self.db, InvalidCause::Other);
-                    }
-                },
-                PathRes::Mod(scope) => {
-                    let diag = BodyDiag::NotValue {
-                        primary: span.into(),
-                        given: Either::Left(scope.item()),
-                    };
-                    self.push_diag(diag);
-                    return TyId::invalid(self.db, InvalidCause::Other);
-                }
-
-                PathRes::TraitMethod(..) | PathRes::Method(..) | PathRes::FuncParam(..) => {
-                    let diag = BodyDiag::tuple_variant_expected(self.db, span.into(), None);
-                    self.push_diag(diag);
-                    return TyId::invalid(self.db, InvalidCause::Other);
-                }
-            },
-            Err(_) => {
-                // Even when constructor resolution fails (including ambiguity),
-                // still walk element patterns so that variable bindings inside
-                // the tuple pattern are registered. This mirrors the recovery
-                // strategy used for tuple patterns in `check_tuple_pat`.
+        let (variant, expected_elems) = match self.resolve_tuple_variant_pat(pat, *path) {
+            TupleVariantResolution::Resolved(variant, expected_elems) => (variant, expected_elems),
+            TupleVariantResolution::Invalid => return TyId::invalid(self.db, InvalidCause::Other),
+            TupleVariantResolution::UnresolvedPath => {
                 for &elem_pat in elems {
                     self.check_pat(elem_pat, TyId::invalid(self.db, InvalidCause::Other));
                 }
@@ -288,7 +236,6 @@ impl<'db> TyChecker<'db> {
         };
 
         let expected_len = expected_elems.len(self.db);
-
         let (actual_elems, rest_range) = self.unpack_rest_pat(elems, Some(expected_len));
         if actual_elems.len() != expected_len {
             let diag = BodyDiag::MismatchedFieldCount {
@@ -301,14 +248,75 @@ impl<'db> TyChecker<'db> {
             return variant.ty;
         };
 
-        let mut arg_idx = 0;
-        for (i, &hir_ty) in expected_elems.data(self.db).iter().enumerate() {
-            if arg_idx >= elems.len() {
-                break;
-            }
+        let elem_tys = self.instantiate_tuple_variant_elem_tys(variant, expected_elems);
+        self.check_tuple_like_pattern_elems(elems, &elem_tys, rest_range, Some(variant.ty));
 
-            let current_pat_id = elems[arg_idx];
-            let elem_ty = match hir_ty.to_opt() {
+        variant.ty
+    }
+
+    fn resolve_tuple_variant_pat(
+        &mut self,
+        pat: PatId,
+        path: PathId<'db>,
+    ) -> TupleVariantResolution<'db> {
+        let span = pat.span(self.body()).into_path_tuple_pat();
+        match self.resolve_path(path, true, span.clone().path()) {
+            Ok(res) => match res {
+                PathRes::Ty(ty)
+                | PathRes::TyAlias(_, ty)
+                | PathRes::Func(ty)
+                | PathRes::Const(_, ty)
+                | PathRes::TraitConst(ty, ..) => {
+                    self.push_diag(BodyDiag::tuple_variant_expected(
+                        self.db,
+                        pat.span(self.body()).into(),
+                        Some(RecordLike::Type(ty)),
+                    ));
+                    TupleVariantResolution::Invalid
+                }
+                PathRes::Trait(trait_) => {
+                    self.push_diag(BodyDiag::NotValue {
+                        primary: span.into(),
+                        given: Either::Left(trait_.def(self.db).into()),
+                    });
+                    TupleVariantResolution::Invalid
+                }
+                PathRes::EnumVariant(variant) => match variant.kind(self.db) {
+                    VariantKind::Tuple(elems) => TupleVariantResolution::Resolved(variant, elems),
+                    _ => {
+                        self.push_diag(BodyDiag::tuple_variant_expected(
+                            self.db,
+                            pat.span(self.body()).into(),
+                            Some(RecordLike::from_variant(variant)),
+                        ));
+                        TupleVariantResolution::Invalid
+                    }
+                },
+                PathRes::Mod(scope) => {
+                    self.push_diag(BodyDiag::NotValue {
+                        primary: span.into(),
+                        given: Either::Left(scope.item()),
+                    });
+                    TupleVariantResolution::Invalid
+                }
+                PathRes::TraitMethod(..) | PathRes::Method(..) | PathRes::FuncParam(..) => {
+                    self.push_diag(BodyDiag::tuple_variant_expected(self.db, span.into(), None));
+                    TupleVariantResolution::Invalid
+                }
+            },
+            Err(_) => TupleVariantResolution::UnresolvedPath,
+        }
+    }
+
+    fn instantiate_tuple_variant_elem_tys(
+        &mut self,
+        variant: ResolvedVariant<'db>,
+        elems: TupleTypeId<'db>,
+    ) -> Vec<TyId<'db>> {
+        elems
+            .data(self.db)
+            .iter()
+            .map(|hir_ty| match hir_ty.to_opt() {
                 Some(ty) => {
                     let ty = lower_hir_ty(
                         self.db,
@@ -318,36 +326,44 @@ impl<'db> TyChecker<'db> {
                     );
                     let instantiated =
                         Binder::bind(ty).instantiate(self.db, variant.ty.generic_args(self.db));
-                    // Normalize the type to resolve associated types
                     self.normalize_ty(instantiated)
                 }
-                _ => TyId::invalid(self.db, InvalidCause::ParseError),
-            };
+                None => TyId::invalid(self.db, InvalidCause::ParseError),
+            })
+            .collect()
+    }
 
-            // Call check_pat for the current source pattern element (current_pat_id).
-            // If current_pat_id is Pat::Rest, its type will be unified with elem_ty (the type of the variant field it starts covering).
-            // If the current variant field 'i' is covered by rest_range (meaning '..' covers it),
-            // but current_pat_id is *not* Pat::Rest, it means this current_pat_id is for a field *after* the '..'.
-            // In that case, we only proceed to check_pat if 'i' is NOT in rest_range.
-            if current_pat_id.is_rest(self.db, self.body()) {
-                // For rest patterns, use the variant's type
-                self.check_pat(current_pat_id, variant.ty);
-                // The '..' pattern from the source is consumed.
-                // Subsequent iterations of the outer loop will skip variant fields covered by `rest_range`.
-                arg_idx += 1;
-            } else if !rest_range.contains(&i) {
-                // This is an explicit pattern from the source (not '..'),
-                // and it corresponds to a variant field not covered by any '..'.
-                self.check_pat(current_pat_id, elem_ty);
-                arg_idx += 1;
+    fn check_tuple_like_pattern_elems(
+        &mut self,
+        source_pats: &[PatId],
+        elem_tys: &[TyId<'db>],
+        rest_range: Range<usize>,
+        rest_expected: Option<TyId<'db>>,
+    ) {
+        let mut pat_idx = 0;
+        for (i, &elem_ty) in elem_tys.iter().enumerate() {
+            if pat_idx >= source_pats.len() {
+                break;
             }
-            // If rest_range.contains(&i) and current_pat_id is not Pat::Rest,
-            // it means this variant field `i` is covered by a `..` that has already been processed (or will be).
-            // We do nothing for this `elem_ty` and `current_pat_id` pair, and `arg_idx` is not incremented,
-            // allowing `current_pat_id` to be matched against a subsequent variant field.
-        }
+            let pat = source_pats[pat_idx];
+            if pat.is_rest(self.db, self.body()) {
+                if let Some(rest_expected) = rest_expected {
+                    self.check_pat(pat, rest_expected);
+                }
+                pat_idx += 1;
+                continue;
+            }
+            if rest_range.contains(&i) {
+                continue;
+            }
 
-        variant.ty
+            let (pat_expected, mode) = self.destructure_source_mode(elem_ty);
+            self.check_pat(pat, pat_expected);
+            if let super::DestructureSourceMode::Borrow(kind) = mode {
+                self.retype_pattern_bindings_for_borrow(pat, kind);
+            }
+            pat_idx += 1;
+        }
     }
 
     fn check_record_pat(
@@ -477,7 +493,13 @@ impl<'db> TyChecker<'db> {
                     }
                 };
 
-            rec_checker.tc.check_pat(field_pat.pat, expected);
+            let (pat_expected, mode) = rec_checker.tc.destructure_source_mode(expected);
+            rec_checker.tc.check_pat(field_pat.pat, pat_expected);
+            if let super::DestructureSourceMode::Borrow(kind) = mode {
+                rec_checker
+                    .tc
+                    .retype_pattern_bindings_for_borrow(field_pat.pat, kind);
+            }
         }
 
         if let Err(diag) = rec_checker.finalize(pat_span.fields().into(), contains_rest) {

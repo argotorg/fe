@@ -21,7 +21,7 @@ note:
    ┌─ with_shorthand_mixed.fe:17:5
    │
 17 │     logger.log()
-   │     ^^^^^^ logger: Logger
+   │     ^^^^^^ __effprov0
 
 note: 
    ┌─ with_shorthand_mixed.fe:17:5

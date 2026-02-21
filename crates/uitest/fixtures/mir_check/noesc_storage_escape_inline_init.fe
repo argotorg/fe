@@ -1,0 +1,11 @@
+// NoEsc escapes should be diagnosed even if the value is constructed inline.
+
+struct Esc {
+    h: mut u256,
+    tag: u256,
+}
+
+pub fn noesc_storage_escape_inline_init() uses (slot: mut Esc) {
+    let mut x: u256 = 0
+    slot = Esc { h: mut x, tag: 0 }
+}

@@ -1,6 +1,6 @@
 [package]
 name = "fe-parser"
-version = "0.26.0"
+version = "26.0.0-alpha.5"
 edition.workspace = true
 license = "Apache-2.0"
 repository = "https://github.com/ethereum/fe"
@@ -23,6 +23,8 @@ tracing.workspace = true
 
 [dev-dependencies]
 dir-test.workspace = true
+tree-sitter = "0.24"
+tree-sitter-fe = { path = "../tree-sitter-fe" }
 wasm-bindgen-test.workspace = true
 test-utils.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

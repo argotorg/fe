@@ -6,7 +6,7 @@ use crate::{ExpectedKind, ParseError, SyntaxKind};
 
 use super::{
     ErrProof, Parser, Recovery, define_scope,
-    expr::parse_expr,
+    expr::{parse_const_generic_expr, parse_expr},
     expr_atom::{BlockExprScope, LitExprScope},
     parse_list,
     path::PathScope,
@@ -39,6 +39,18 @@ impl super::Parse for FnParamScope {
 
     fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
         parser.bump_if(SyntaxKind::MutKw);
+        let allow_ref_self_shorthand = parser.dry_run(|p| {
+            p.bump_if(SyntaxKind::RefKw) && p.current_kind() == Some(SyntaxKind::SelfKw)
+        });
+        let allow_own_self_shorthand = parser.dry_run(|p| {
+            p.bump_if(SyntaxKind::OwnKw) && p.current_kind() == Some(SyntaxKind::SelfKw)
+        });
+        if allow_ref_self_shorthand {
+            parser.bump_expected(SyntaxKind::RefKw);
+        }
+        if allow_own_self_shorthand {
+            parser.bump_expected(SyntaxKind::OwnKw);
+        }
         parser.expect(
             &[
                 SyntaxKind::SelfKw,
@@ -58,7 +70,27 @@ impl super::Parse for FnParamScope {
                     parse_type(parser, None)?;
                 }
             }
-            Some(SyntaxKind::Ident | SyntaxKind::Underscore) => {
+            Some(SyntaxKind::Ident) => {
+                parser.bump();
+
+                if matches!(
+                    parser.current_kind(),
+                    Some(SyntaxKind::Ident | SyntaxKind::Underscore)
+                ) {
+                    parser.error_msg_on_current_token(
+                        "parameter label renaming is not supported; use the parameter name as the label",
+                    );
+                    parser.bump();
+                }
+                if parser.find(
+                    SyntaxKind::Colon,
+                    ExpectedKind::TypeSpecifier(SyntaxKind::FnParam),
+                )? {
+                    parser.bump();
+                    parse_type(parser, None)?;
+                }
+            }
+            Some(SyntaxKind::Underscore) => {
                 parser.bump();
 
                 parser.expect(
@@ -107,7 +139,9 @@ impl super::Parse for GenericParamListScope {
                         parser.parse(TypeGenericParamScope::new(self.disallow_trait_bound))
                     }
                     Some(SyntaxKind::Gt) => Ok(()),
-                    _ => unreachable!(),
+                    // Recovery may land on a list separator or unexpected token;
+                    // treat as empty parameter and let parse_list handle it.
+                    _ => Ok(()),
                 }
             },
         )
@@ -140,6 +174,10 @@ impl super::Parse for ConstGenericParamScope {
         // parse trait bound even though it's not allowed (checked in hir)
         if parser.current_kind() == Some(SyntaxKind::Colon) {
             parser.parse(TypeBoundListScope::new(true))?;
+        }
+
+        if parser.bump_if(SyntaxKind::Eq) {
+            parse_const_generic_expr(parser)?;
         }
         Ok(())
     }
@@ -351,6 +389,18 @@ impl super::Parse for GenericArgScope {
             // Parse the type
             parse_type(parser, None)?;
         } else {
+            let is_const_call = parser.dry_run(|parser| {
+                parser
+                    .parse(PathScope::default())
+                    .is_ok_and(|()| parser.current_kind() == Some(SyntaxKind::LParen))
+            });
+
+            if is_const_call {
+                self.set_kind(SyntaxKind::ConstGenericArg);
+                parse_const_generic_expr(parser)?;
+                return Ok(());
+            }
+
             match parser.current_kind() {
                 Some(SyntaxKind::LBrace) => {
                     self.set_kind(SyntaxKind::ConstGenericArg);

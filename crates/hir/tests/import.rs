@@ -85,7 +85,7 @@ fn format_imports<'db>(
     }
     for (use_, mut values) in use_res_map.into_iter() {
         // Skip uses whose spans cannot be resolved (for example,
-        // implicit/prelude imports that do not originate from this file).
+        // implicit imports that do not originate from this file).
         let span = use_.span();
         if span.resolve(db).is_none() {
             continue;

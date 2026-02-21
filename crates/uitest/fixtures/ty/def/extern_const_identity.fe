@@ -1,0 +1,8 @@
+extern {
+    const fn default_size() -> usize
+}
+
+type Arr = [u8; default_size()]
+
+fn f(_a: Arr) {}
+fn g(_a: [u8; default_size()]) {}

@@ -617,6 +617,14 @@ impl<'db> Mod<'db> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+pub struct FuncModifiers {
+    pub vis: Visibility,
+    pub is_unsafe: bool,
+    pub is_const: bool,
+    pub is_extern: bool,
+}
+
 #[salsa::tracked]
 #[derive(Debug)]
 pub struct Func<'db> {
@@ -630,13 +638,14 @@ pub struct Func<'db> {
     pub(in crate::core) params_list: Partial<FuncParamListId<'db>>,
     pub(crate) effects: EffectParamListId<'db>,
     pub(in crate::core) ret_type_ref: Option<TypeId<'db>>,
-    pub modifier: ItemModifier,
+    pub(in crate::core) modifiers: FuncModifiers,
     pub body: Option<Body<'db>>,
     pub top_mod: TopLevelMod<'db>,
 
     #[return_ref]
     pub origin: HirOrigin<ast::Func>,
 }
+
 impl<'db> Func<'db> {
     pub fn span(self) -> LazyFuncSpan<'db> {
         LazyFuncSpan::new(self)
@@ -647,7 +656,19 @@ impl<'db> Func<'db> {
     }
 
     pub fn vis(self, db: &dyn HirDb) -> Visibility {
-        self.modifier(db).to_visibility()
+        self.modifiers(db).vis
+    }
+
+    pub fn is_unsafe(self, db: &dyn HirDb) -> bool {
+        self.modifiers(db).is_unsafe
+    }
+
+    pub fn is_const(self, db: &dyn HirDb) -> bool {
+        self.modifiers(db).is_const
+    }
+
+    pub fn is_extern(self, db: &dyn HirDb) -> bool {
+        self.modifiers(db).is_extern
     }
 
     pub fn is_method(self, db: &dyn HirDb) -> bool {
@@ -685,7 +706,11 @@ impl<'db> Func<'db> {
 
     pub fn param_label_or_name(self, db: &'db dyn HirDb, idx: usize) -> Option<FuncParamName<'db>> {
         let param = self.params_list(db).to_opt()?.data(db).get(idx)?;
-        param.label.or(param.name.to_opt())
+        if param.is_label_suppressed {
+            Some(FuncParamName::Underscore)
+        } else {
+            param.name.to_opt()
+        }
     }
 
     /// View as a callable definition (if named).
@@ -714,6 +739,7 @@ pub struct Struct<'db> {
     #[return_ref]
     pub(crate) origin: HirOrigin<ast::Struct>,
 }
+
 impl<'db> Struct<'db> {
     pub fn span(self) -> LazyStructSpan<'db> {
         LazyStructSpan::new(self)
@@ -763,6 +789,7 @@ pub struct Contract<'db> {
     #[return_ref]
     pub(crate) origin: HirOrigin<ast::Contract>,
 }
+
 impl<'db> Contract<'db> {
     pub fn span(self) -> LazyContractSpan<'db> {
         LazyContractSpan::new(self)
@@ -868,6 +895,7 @@ pub struct Enum<'db> {
     #[return_ref]
     pub(crate) origin: HirOrigin<ast::Enum>,
 }
+
 impl<'db> Enum<'db> {
     pub fn span(self) -> LazyEnumSpan<'db> {
         LazyEnumSpan::new(self)
@@ -942,6 +970,7 @@ pub struct TypeAlias<'db> {
     #[return_ref]
     pub(crate) origin: HirOrigin<ast::TypeAlias>,
 }
+
 impl<'db> TypeAlias<'db> {
     pub fn span(self) -> LazyTypeAliasSpan<'db> {
         LazyTypeAliasSpan::new(self)
@@ -969,6 +998,7 @@ pub struct Impl<'db> {
     #[return_ref]
     pub(crate) origin: HirOrigin<ast::Impl>,
 }
+
 impl<'db> Impl<'db> {
     pub fn span(self) -> LazyImplSpan<'db> {
         LazyImplSpan::new(self)
@@ -1025,6 +1055,7 @@ pub struct Trait<'db> {
     #[return_ref]
     pub(crate) origin: HirOrigin<ast::Trait>,
 }
+
 impl<'db> Trait<'db> {
     pub fn span(self) -> LazyTraitSpan<'db> {
         LazyTraitSpan::new(self)
@@ -1100,6 +1131,7 @@ pub struct ImplTrait<'db> {
     #[return_ref]
     pub(crate) origin: HirOrigin<ast::ImplTrait>,
 }
+
 impl<'db> ImplTrait<'db> {
     pub fn span(self) -> LazyImplTraitSpan<'db> {
         LazyImplTraitSpan::new(self)
@@ -1182,6 +1214,7 @@ pub struct Const<'db> {
     #[return_ref]
     pub(crate) origin: HirOrigin<ast::Const>,
 }
+
 impl<'db> Const<'db> {
     pub fn span(self) -> LazyConstSpan<'db> {
         LazyConstSpan::new(self)
@@ -1211,6 +1244,7 @@ pub struct Use<'db> {
     #[return_ref]
     pub(crate) origin: HirOrigin<ast::Use>,
 }
+
 impl<'db> Use<'db> {
     pub fn span(self) -> LazyUseSpan<'db> {
         LazyUseSpan::new(self)
@@ -1220,7 +1254,7 @@ impl<'db> Use<'db> {
         ScopeId::from_item(self.into())
     }
 
-    pub fn is_prelude_use(self, db: &'db dyn HirDb) -> bool {
+    pub fn is_synthetic_use(self, db: &'db dyn HirDb) -> bool {
         matches!(self.origin(db), &HirOrigin::Synthetic)
     }
 
@@ -1281,19 +1315,13 @@ impl<'db> Use<'db> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ItemModifier {
-    Pub,
-    Unsafe,
-    PubAndUnsafe,
-    None,
-}
-
-impl ItemModifier {
-    pub fn to_visibility(self) -> Visibility {
-        match self {
-            ItemModifier::Pub | ItemModifier::PubAndUnsafe => Visibility::Public,
-            ItemModifier::Unsafe | ItemModifier::None => Visibility::Private,
+impl FuncModifiers {
+    pub fn new(vis: Visibility, is_unsafe: bool, is_const: bool, is_extern: bool) -> Self {
+        Self {
+            vis,
+            is_unsafe,
+            is_const,
+            is_extern,
         }
     }
 }
@@ -1508,9 +1536,9 @@ pub enum TrackedItemVariant<'db> {
     Contract(Partial<IdentId<'db>>),
     Enum(Partial<IdentId<'db>>),
     TypeAlias(Partial<IdentId<'db>>),
-    Impl(Partial<TypeId<'db>>),
+    Impl(u32),
     Trait(Partial<IdentId<'db>>),
-    ImplTrait(Partial<TraitRefId<'db>>, Partial<TypeId<'db>>),
+    ImplTrait(u32),
     Const(Partial<IdentId<'db>>),
     ContractInit,
     ContractRecvArm { recv_idx: u32, arm_idx: u32 },

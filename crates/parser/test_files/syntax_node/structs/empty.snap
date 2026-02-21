@@ -1,14 +1,14 @@
 ---
 source: crates/parser/tests/syntax_node.rs
+assertion_line: 25
 expression: node
-input_file: crates/parser/test_files/syntax_node/structs/empty.fe
+input_file: test_files/syntax_node/structs/empty.fe
 ---
 Root@0..26
   ItemList@0..26
     Item@0..26
       Struct@0..26
-        ItemModifier@0..3
-          PubKw@0..3 "pub"
+        PubKw@0..3 "pub"
         WhiteSpace@3..4 " "
         StructKw@4..10 "struct"
         WhiteSpace@10..11 " "

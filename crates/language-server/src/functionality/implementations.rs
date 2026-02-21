@@ -16,17 +16,15 @@ pub async fn handle_goto_implementation(
     backend: &Backend,
     params: GotoDefinitionParams,
 ) -> Result<Option<GotoDefinitionResponse>, ResponseError> {
-    let path_str = params
-        .text_document_position_params
-        .text_document
-        .uri
-        .path();
+    let internal_url = backend.map_client_uri_to_internal(
+        params
+            .text_document_position_params
+            .text_document
+            .uri
+            .clone(),
+    );
 
-    let Ok(url) = url::Url::from_file_path(path_str) else {
-        return Ok(None);
-    };
-
-    let Some(file) = backend.db.workspace().get(&backend.db, &url) else {
+    let Some(file) = backend.db.workspace().get(&backend.db, &internal_url) else {
         return Ok(None);
     };
 
@@ -50,7 +48,13 @@ pub async fn handle_goto_implementation(
             // Local variables don't have implementations
             vec![]
         }
-    };
+    }
+    .into_iter()
+    .map(|mut location| {
+        location.uri = backend.map_internal_uri_to_client(location.uri);
+        location
+    })
+    .collect::<Vec<_>>();
 
     match locations.len() {
         0 => Ok(None),

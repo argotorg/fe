@@ -8,6 +8,13 @@ For the older version of the compiler, see the [legacy branch](https://github.co
 
 Fe is a statically typed language for the Ethereum Virtual Machine (EVM). The syntax and type system is similar to rust's, with the addition of higher-kinded types. We're exploring additional type system, syntax, and semantic changes.
 
+## Debugging tests
+
+`fe test` has a few flags that are useful when debugging runtime/codegen issues:
+
+- EVM trace (last 400 steps): `RUSTC_WRAPPER= cargo run -q -p fe -- test --backend sonatina --trace-evm --trace-evm-keep 400 --trace-evm-stack-n 18 <path/to/test.fe>`
+- Sonatina symtab + stackify traces written to files: `RUSTC_WRAPPER= cargo run -q -p fe -- test --backend sonatina --sonatina-symtab --sonatina-stackify-trace --sonatina-stackify-filter solencoder --debug-dir target/fe-debug <path/to/test.fe>`
+
 ## Community
 
 - Twitter: [@official_fe](https://twitter.com/official_fe)

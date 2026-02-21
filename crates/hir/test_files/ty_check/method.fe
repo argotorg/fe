@@ -14,26 +14,26 @@ pub enum Option<T> {
 }
 
 impl<T> Option<T> {
-    pub fn and<U>(self, rhs: Option<U>) -> Option<U> {
+    pub fn and<U>(self: own Self, rhs: own Option<U>) -> Option<U> {
         match self {
             Self::Some(t) => rhs
             Self::None => Option::None
         }
     }
 
-    pub fn get_or_insert(mut self, inner t: T) -> T {
+    pub fn get_or_insert(mut own self, inner: own T) -> T {
         match self {
             Self::Some(t) => t
             Self::None => {
-                self = Self::Some(t)
-                t
+                self = Self::Some(inner)
+                inner
             }
         }
     }
 }
 
 impl Option {
-    pub fn unwrap<T>(self: Self<T>) -> T {
+    pub fn unwrap<T>(self: own Self<T>) -> T {
         match self {
             Self::None => evm::abort()
             Self::Some(t) => t
@@ -47,8 +47,9 @@ fn get_t<T>() -> T {
 
 fn foo() -> Option<bool> {
     let mut x: Option<i32> = Option::Some(1)
+    let y: Option<i32> = Option::Some(2)
     let func_obj = get_t
-    x.get_or_insert(inner: func_obj())
+    y.get_or_insert(inner: func_obj())
 
     x.and(rhs: Option::Some(false))
 }

@@ -1,0 +1,59 @@
+use std::evm::effects::assert
+
+struct Position {
+    collateral: u256,
+    debt: u256,
+    ver: u8,
+}
+
+impl Position {
+    fn health(ref self) -> u256 {
+        if self.debt == 0 {
+            return 9999
+        }
+        self.collateral / self.debt
+    }
+
+    fn accrue(mut self, fee: u256) {
+        self.debt += fee
+        self.ver += 1
+    }
+
+    fn settle(mut own self, payment: u256) -> Position {
+        if payment >= self.debt {
+            self.collateral += payment - self.debt
+            self.debt = 0
+        } else {
+            self.debt -= payment
+        }
+        self.ver += 1
+        self
+    }
+}
+
+#[test]
+fn test_receiver_chains() {
+    let mut p = Position {
+        collateral: 900,
+        debt: 300,
+        ver: 0,
+    }
+
+    assert(p.health() == 3)
+
+    p.accrue(60)
+    assert(p.debt == 360)
+    assert(p.ver == 1)
+    assert(p.health() == 2)
+
+    let p = p.settle(100)
+    assert(p.debt == 260)
+    assert(p.ver == 2)
+    assert(p.health() == 3)
+
+    let p = p.settle(300)
+    assert(p.collateral == 940)
+    assert(p.debt == 0)
+    assert(p.ver == 3)
+    assert(p.health() == 9999)
+}

@@ -1,0 +1,16 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/recv_duplicate_selector_const_expr.fe
+---
+error[8-0047]: duplicate selector across recv blocks
+   ┌─ recv_duplicate_selector_const_expr.fe:11:5
+   │
+ 6 │     Deposit { amount: u64 } -> u64,
+   │     ------- `Deposit` with selector 0xa9059cbb declared here
+   ·
+11 │     Transfer { to: u64, amount: u64 } -> bool,
+   │     ^^^^^^^^ `Transfer` has selector 0xa9059cbb which conflicts with `Deposit`
+   │
+   = each msg variant in a contract must have a unique selector

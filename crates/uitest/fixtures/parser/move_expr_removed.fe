@@ -1,0 +1,4 @@
+fn move_expr_removed() {
+    let x: u256 = 1
+    let y: u256 = move x
+}

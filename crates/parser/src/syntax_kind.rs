@@ -218,6 +218,12 @@ pub enum SyntaxKind {
     /// `mut`
     #[token("mut")]
     MutKw,
+    /// `ref`
+    #[token("ref")]
+    RefKw,
+    /// `own`
+    #[token("own")]
+    OwnKw,
     /// `use`
     #[token("use")]
     UseKw,
@@ -416,12 +422,11 @@ pub enum SyntaxKind {
     ExternItemList,
     ItemList,
 
-    /// `pub unsafe `
-    ItemModifier,
-
     // Types. These are non-leaf nodes.
     /// `*i32`
     PtrType,
+    /// `ref T`, `mut T`, `own T`
+    ModeType,
     /// `foo::Type<T, U + 2>`
     PathType,
     /// `Self`
@@ -640,6 +645,8 @@ impl SyntaxKind {
             SyntaxKind::TypeKw => "`type`",
             SyntaxKind::LetKw => "`let`",
             SyntaxKind::MutKw => "`mut`",
+            SyntaxKind::RefKw => "`ref`",
+            SyntaxKind::OwnKw => "`own`",
             SyntaxKind::UseKw => "`use`",
             SyntaxKind::ExternKw => "`extern`",
             SyntaxKind::UnsafeKw => "`unsafe`",
@@ -663,7 +670,7 @@ impl SyntaxKind {
             SyntaxKind::TypeBound => "type bound",
             SyntaxKind::CallArgList => "function call arguments",
 
-            SyntaxKind::InvalidToken => unimplemented!(),
+            SyntaxKind::InvalidToken => "invalid token",
             SyntaxKind::WhiteSpace => "whitespace",
             SyntaxKind::Comment => "comment",
             SyntaxKind::DocComment => "doc comment",
@@ -746,8 +753,8 @@ impl SyntaxKind {
             SyntaxKind::Extern => "`extern` block",
             SyntaxKind::ExternItemList => "`extern` body",
             SyntaxKind::ItemList => "item list",
-            SyntaxKind::ItemModifier => "item modifier",
             SyntaxKind::PtrType => "pointer type",
+            SyntaxKind::ModeType => "mode type",
             SyntaxKind::SelfType => "`Self` type",
             SyntaxKind::TupleType => "tuple type definition",
             SyntaxKind::NeverType => "never type",
@@ -780,7 +787,7 @@ impl SyntaxKind {
             SyntaxKind::RecvArmList => "recv arm list",
             SyntaxKind::RecvArm => "recv arm",
             SyntaxKind::Root => "module",
-            SyntaxKind::Error => todo!(),
+            SyntaxKind::Error => "error",
         }
     }
 
@@ -853,6 +860,8 @@ impl SyntaxKind {
                 | SyntaxKind::TypeKw
                 | SyntaxKind::LetKw
                 | SyntaxKind::MutKw
+                | SyntaxKind::RefKw
+                | SyntaxKind::OwnKw
                 | SyntaxKind::UseKw
                 | SyntaxKind::ExternKw
                 | SyntaxKind::UnsafeKw

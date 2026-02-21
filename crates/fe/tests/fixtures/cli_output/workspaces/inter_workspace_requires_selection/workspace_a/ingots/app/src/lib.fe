@@ -1,0 +1,5 @@
+pub fn main() {
+    let x: u256 = 1
+    let _y: u256 = x
+}
+

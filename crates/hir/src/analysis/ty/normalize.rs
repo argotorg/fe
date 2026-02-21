@@ -15,7 +15,7 @@ use super::{
     canonical::Canonicalized,
     fold::{TyFoldable, TyFolder},
     trait_def::impls_for_ty_with_constraints,
-    trait_resolution::PredicateListId,
+    trait_resolution::{PredicateListId, TraitSolveCx},
     ty_def::{AssocTy, TyData, TyId, TyParam},
     unify::UnificationTable,
 };
@@ -173,33 +173,25 @@ impl<'db> TypeNormalizer<'db> {
     }
 
     fn try_resolve_assoc_ty_from_impls(&mut self, assoc: &AssocTy<'db>) -> Option<TyId<'db>> {
-        let trait_def = assoc.trait_.def(self.db);
-        let trait_ingot = trait_def.ingot(self.db);
-
-        let self_ty = self.fold_ty(self.db, assoc.trait_.self_ty(self.db));
-        let self_ingot = self_ty.ingot(self.db);
-
-        let canonical_self_ty = Canonical::new(self.db, self_ty);
+        let trait_inst = assoc.trait_.fold_with(self.db, self);
+        let trait_def = trait_inst.def(self.db);
+        let canonical_self_ty = Canonical::new(self.db, trait_inst.self_ty(self.db));
 
         let mut dedup: IndexMap<TyId<'db>, ()> = IndexMap::new();
 
-        let mut search_ingots = Vec::with_capacity(2);
-        if let Some(ingot) = self_ingot {
-            search_ingots.push(ingot);
-        }
-        if self_ingot != Some(trait_ingot) {
-            search_ingots.push(trait_ingot);
-        }
+        let solve_cx = TraitSolveCx::new(self.db, self.scope).with_assumptions(self.assumptions);
+        let (primary, secondary) = solve_cx.search_ingots_for_trait_inst(self.db, trait_inst);
+        let search_ingots = [Some(primary), secondary];
 
         // Canonicalize the target trait instance so we can unify against it in a
         // fresh table without mixing inference keys from other tables.
-        let canonical_target = Canonicalized::new(self.db, assoc.trait_);
+        let canonical_target = Canonicalized::new(self.db, trait_inst);
         let canonical_inst = canonical_target.value;
 
         let mut table = UnificationTable::new(self.db);
         let target_inst = canonical_inst.extract_identity(&mut table);
 
-        for ingot in search_ingots {
+        for ingot in search_ingots.into_iter().flatten() {
             for implementor in
                 impls_for_ty_with_constraints(self.db, ingot, canonical_self_ty, self.assumptions)
             {

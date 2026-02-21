@@ -4,13 +4,14 @@
 //! pipeline: HIR remains purely syntactic, while typed contract elaboration drives MIR generation.
 
 use common::{indexmap::IndexMap, ingot::IngotKind};
+use hir::hir_def::params::FuncParamMode;
 use hir::{
     analysis::{
         HirAnalysisDb,
         name_resolution::{PathRes, resolve_path},
         ty::{
-            corelib::resolve_core_trait, effects::EffectKeyKind, normalize::normalize_ty,
-            trait_def::TraitInstId, trait_resolution::PredicateListId, ty_def::TyId,
+            corelib::resolve_core_trait, normalize::normalize_ty, trait_def::TraitInstId,
+            trait_resolution::PredicateListId, ty_def::TyId,
         },
     },
     hir_def::{Func, Trait, scope_graph::ScopeId},
@@ -20,13 +21,12 @@ use hir::{
     analysis::{
         diagnostics::SpannedHirAnalysisDb,
         ty::{
-            fold::{TyFoldable, TyFolder},
-            ty_check::{BodyOwner, LocalBinding, ParamSite, TypedBody},
-            ty_def::{InvalidCause, TyBase, TyData},
+            ty_check::{LocalBinding, ParamSite, PatBindingMode},
+            ty_def::InvalidCause,
         },
     },
     hir_def::{
-        CallableDef, Contract, EffectParamListId, IdentId, PathId, TopLevelMod,
+        CallableDef, Contract, IdentId, PathId, TopLevelMod,
         expr::{ArithBinOp, BinOp, CompBinOp},
     },
 };
@@ -38,8 +38,8 @@ use crate::{
     ir::{
         AddressSpaceKind, BodyBuilder, CallOrigin, CodeRegionRoot, ContractFunction,
         ContractFunctionKind, HirCallTarget, IntrinsicOp, MirFunction, MirFunctionOrigin, Rvalue,
-        SwitchTarget, SwitchValue, SyntheticId, TerminatingCall, Terminator, ValueId, ValueOrigin,
-        ValueRepr,
+        SourceInfoId, SwitchTarget, SwitchValue, SyntheticId, TerminatingCall, Terminator, ValueId,
+        ValueOrigin, ValueRepr,
     },
     layout, repr,
 };
@@ -64,13 +64,7 @@ pub(super) fn lower_contract_templates<'db>(
 
         // User-body handlers first (so entrypoints can call them by symbol).
         if contract.init(db).is_some() {
-            out.push(lower_init_handler(
-                db,
-                contract,
-                &symbols,
-                &core_lib,
-                target.host.root_effect_ty,
-            )?);
+            out.push(lower_init_handler(db, contract, &symbols, &core_lib)?);
         }
         for recv in contract.recv_views(db) {
             for arm in recv.arms(db) {
@@ -81,7 +75,6 @@ pub(super) fn lower_contract_templates<'db>(
                     target.abi.abi_ty,
                     &symbols,
                     &core_lib,
-                    target.host.root_effect_ty,
                 )?);
             }
         }
@@ -154,9 +147,8 @@ struct TargetHostContext<'db> {
     contract_host_inst: TraitInstId<'db>,
     init_input_ty: TyId<'db>,
     input_ty: TyId<'db>,
-    alloc_fn: Func<'db>,
-    effect_ref_trait: Trait<'db>,
-    effect_ref_from_raw_fn: Func<'db>,
+    effect_handle_trait: Trait<'db>,
+    effect_handle_from_raw_fn: Func<'db>,
     field_fn: Func<'db>,
     init_field_fn: Func<'db>,
     runtime_selector_fn: Func<'db>,
@@ -178,18 +170,15 @@ struct AbiContext<'db> {
 }
 
 const EVM_TARGET_TY_PATH: &[&str] = &["std", "evm", "EvmTarget"];
-const EVM_ALLOC_FUNC_PATH: &[&str] = &["std", "evm", "mem", "alloc"];
 
 #[derive(Clone, Copy)]
 struct TargetSpec {
     target_ty_path: &'static [&'static str],
-    alloc_func_path: &'static [&'static str],
 }
 
 impl TargetSpec {
     const EVM: Self = Self {
         target_ty_path: EVM_TARGET_TY_PATH,
-        alloc_func_path: EVM_ALLOC_FUNC_PATH,
     };
 }
 
@@ -202,12 +191,22 @@ impl<'db> TargetHostContext<'db> {
         spec: TargetSpec,
     ) -> MirLowerResult<(Self, TyId<'db>)> {
         let target_ty = resolve_ty_path(db, top_mod, scope, spec.target_ty_path)?;
-        let target_trait = resolve_core_trait(db, scope, &["contracts", "Target"]);
+        let target_trait =
+            resolve_core_trait(db, scope, &["contracts", "Target"]).ok_or_else(|| {
+                MirLowerError::Unsupported {
+                    func_name: "<contract lowering>".into(),
+                    message: "missing core trait `contracts::Target`".into(),
+                }
+            })?;
         let inst_target = TraitInstId::new(db, target_trait, vec![target_ty], IndexMap::new());
         let root_effect_ty = resolve_assoc_ty(db, inst_target, scope, assumptions, "RootEffect");
         let default_abi_ty = resolve_assoc_ty(db, inst_target, scope, assumptions, "DefaultAbi");
 
-        let contract_host_trait = resolve_core_trait(db, scope, &["contracts", "ContractHost"]);
+        let contract_host_trait = resolve_core_trait(db, scope, &["contracts", "ContractHost"])
+            .ok_or_else(|| MirLowerError::Unsupported {
+                func_name: "<contract lowering>".into(),
+                message: "missing core trait `contracts::ContractHost`".into(),
+            })?;
         let contract_host_inst = TraitInstId::new(
             db,
             contract_host_trait,
@@ -219,10 +218,9 @@ impl<'db> TargetHostContext<'db> {
             resolve_assoc_ty(db, contract_host_inst, scope, assumptions, "InitInput");
         let input_ty = resolve_assoc_ty(db, contract_host_inst, scope, assumptions, "Input");
 
-        let effect_ref_trait = resolve_core_trait(db, scope, &["effect_ref", "EffectRef"]);
-        let effect_ref_from_raw = require_trait_method(db, effect_ref_trait, "from_raw")?;
-
-        let alloc_func = resolve_value_func_path(db, top_mod, scope, spec.alloc_func_path)?;
+        let effect_handle_trait = resolve_core_trait(db, scope, &["effect_ref", "EffectHandle"])
+            .expect("missing required core trait `core::effect_ref::EffectHandle`");
+        let effect_handle_from_raw = require_trait_method(db, effect_handle_trait, "from_raw")?;
 
         let host_field = require_trait_method(db, contract_host_trait, "field")?;
         let host_init_field = require_trait_method(db, contract_host_trait, "init_field")?;
@@ -239,9 +237,8 @@ impl<'db> TargetHostContext<'db> {
             contract_host_inst,
             init_input_ty,
             input_ty,
-            alloc_fn: alloc_func,
-            effect_ref_trait,
-            effect_ref_from_raw_fn: effect_ref_from_raw,
+            effect_handle_trait,
+            effect_handle_from_raw_fn: effect_handle_from_raw,
             field_fn: host_field,
             init_field_fn: host_init_field,
             runtime_selector_fn: host_runtime_selector,
@@ -284,7 +281,12 @@ impl<'db> AbiContext<'db> {
         abi_ty: TyId<'db>,
         host: &TargetHostContext<'db>,
     ) -> MirLowerResult<Self> {
-        let abi_trait = resolve_core_trait(db, scope, &["abi", "Abi"]);
+        let abi_trait = resolve_core_trait(db, scope, &["abi", "Abi"]).ok_or_else(|| {
+            MirLowerError::Unsupported {
+                func_name: "<contract lowering>".into(),
+                message: "missing core trait `abi::Abi`".into(),
+            }
+        })?;
         let abi_inst = TraitInstId::new(db, abi_trait, vec![abi_ty], IndexMap::new());
         let selector_ty = resolve_assoc_ty(db, abi_inst, scope, assumptions, "Selector");
 
@@ -303,7 +305,12 @@ impl<'db> AbiContext<'db> {
         );
 
         let abi_decoder_new = require_trait_method(db, abi_trait, "decoder_new")?;
-        let decode_trait = resolve_core_trait(db, scope, &["abi", "Decode"]);
+        let decode_trait = resolve_core_trait(db, scope, &["abi", "Decode"]).ok_or_else(|| {
+            MirLowerError::Unsupported {
+                func_name: "<contract lowering>".into(),
+                message: "missing core trait `abi::Decode`".into(),
+            }
+        })?;
         let decode_decode = require_trait_method(db, decode_trait, "decode")?;
 
         Ok(Self {
@@ -432,15 +439,6 @@ impl<'db, 'a> ContractMirCx<'db, 'a> {
         )
     }
 
-    fn alloc(&self, len: ValueId) -> CallOrigin<'db> {
-        self.call_hir(
-            CallableDef::Func(self.host.alloc_fn),
-            Vec::new(),
-            None,
-            vec![len],
-        )
-    }
-
     fn abi_decoder_new(&self, input_value: ValueId, input_ty: TyId<'db>) -> CallOrigin<'db> {
         let mut generic_args = self.abi.abi_inst.args(self.db).to_vec();
         generic_args.push(input_ty);
@@ -485,12 +483,12 @@ impl<'db, 'a> ContractMirCx<'db, 'a> {
         if is_provider {
             let inst = TraitInstId::new(
                 self.db,
-                self.host.effect_ref_trait,
+                self.host.effect_handle_trait,
                 vec![declared_ty],
                 IndexMap::new(),
             );
             return self.call_hir(
-                CallableDef::Func(self.host.effect_ref_from_raw_fn),
+                CallableDef::Func(self.host.effect_handle_from_raw_fn),
                 inst.args(self.db).to_vec(),
                 Some(inst),
                 vec![slot_value],
@@ -658,44 +656,6 @@ fn resolve_ty_path<'db>(
     }
 }
 
-fn resolve_value_func_path<'db>(
-    db: &'db dyn HirAnalysisDb,
-    top_mod: TopLevelMod<'db>,
-    scope: ScopeId<'db>,
-    segments: &[&str],
-) -> MirLowerResult<Func<'db>> {
-    let path = path_from_segments(db, top_mod, segments);
-    let assumptions = PredicateListId::empty_list(db);
-    match resolve_path(db, path, scope, assumptions, true) {
-        Ok(PathRes::Func(ty)) => match ty.base_ty(db).data(db) {
-            TyData::TyBase(TyBase::Func(CallableDef::Func(func))) => Ok(*func),
-            _ => Err(MirLowerError::Unsupported {
-                func_name: "<contract lowering>".into(),
-                message: format!(
-                    "expected function at path `{}` but got `{}`",
-                    path.pretty_print(db),
-                    ty.pretty_print(db)
-                ),
-            }),
-        },
-        Ok(other) => Err(MirLowerError::Unsupported {
-            func_name: "<contract lowering>".into(),
-            message: format!(
-                "expected function at path `{}` but resolved to `{}`",
-                path.pretty_print(db),
-                other.kind_name()
-            ),
-        }),
-        Err(err) => Err(MirLowerError::Unsupported {
-            func_name: "<contract lowering>".into(),
-            message: format!(
-                "failed to resolve function path `{}`: {err:?}",
-                path.pretty_print(db)
-            ),
-        }),
-    }
-}
-
 fn path_from_segments<'db>(
     db: &'db dyn HirAnalysisDb,
     top_mod: TopLevelMod<'db>,
@@ -754,69 +714,11 @@ fn compute_field_slot_offsets<'db>(
     Ok(out)
 }
 
-fn concretize_contract_root_effects<'db>(
-    db: &'db dyn HirAnalysisDb,
-    typed_body: &TypedBody<'db>,
-    root_effect_ty: TyId<'db>,
-    effect_kinds: Vec<EffectKeyKind>,
-) -> TypedBody<'db> {
-    let mut folder = RootEffectFolder {
-        root_effect_ty,
-        effect_kinds,
-    };
-    typed_body.clone().fold_with(db, &mut folder)
-}
-
-fn contract_effect_param_key_kinds<'db>(
-    db: &'db dyn HirAnalysisDb,
-    contract: Contract<'db>,
-    handler_effects: EffectParamListId<'db>,
-) -> Vec<EffectKeyKind> {
-    let assumptions = PredicateListId::empty_list(db);
-    let scope = contract.scope();
-    contract
-        .effects(db)
-        .data(db)
-        .iter()
-        .chain(handler_effects.data(db).iter())
-        .filter_map(|effect| effect.key_path.to_opt())
-        .map(|key_path| {
-            let key_path = key_path.strip_generic_args(db);
-            match resolve_path(db, key_path, scope, assumptions, false) {
-                Ok(PathRes::Trait(_) | PathRes::TraitMethod(..)) => EffectKeyKind::Trait,
-                Ok(PathRes::Ty(_) | PathRes::TyAlias(_, _)) => EffectKeyKind::Type,
-                _ => EffectKeyKind::Other,
-            }
-        })
-        .collect()
-}
-
-struct RootEffectFolder<'db> {
-    root_effect_ty: TyId<'db>,
-    effect_kinds: Vec<EffectKeyKind>,
-}
-
-impl<'db> TyFolder<'db> for RootEffectFolder<'db> {
-    fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
-        match ty.data(db) {
-            TyData::TyParam(param) if param.is_effect() => {
-                if matches!(self.effect_kinds.get(param.idx), Some(EffectKeyKind::Trait)) {
-                    self.root_effect_ty
-                } else {
-                    ty
-                }
-            }
-            _ => ty.super_fold_with(db, self),
-        }
-    }
-}
-
 fn lower_init_handler<'db>(
     db: &'db dyn SpannedHirAnalysisDb,
     contract: Contract<'db>,
     symbols: &ContractSymbols,
     core: &CoreLib<'db>,
-    root_effect_ty: TyId<'db>,
 ) -> MirLowerResult<MirFunction<'db>> {
     let init = contract
         .init(db)
@@ -831,17 +733,7 @@ fn lower_init_handler<'db>(
         });
     }
 
-    let effect_kinds = contract_effect_param_key_kinds(db, contract, init.effects(db));
-    let concretized_typed_body =
-        concretize_contract_root_effects(db, typed_body, root_effect_ty, effect_kinds);
-    let mut builder = MirBuilder::new_for_body_owner(
-        db,
-        BodyOwner::ContractInit { contract },
-        body,
-        &concretized_typed_body,
-        &[],
-        TyId::unit(db),
-    )?;
+    let mut builder = MirBuilder::new_for_body_owner(db, body, typed_body, &[], TyId::unit(db))?;
 
     // Seed explicit value params.
     for (idx, param) in init.params(db).data(db).iter().enumerate() {
@@ -851,6 +743,7 @@ fn lower_init_handler<'db>(
             .unwrap_or(LocalBinding::Param {
                 site: ParamSite::ContractInit(contract),
                 idx,
+                mode: param.mode,
                 ty: TyId::invalid(db, InvalidCause::Other),
                 is_mut: param.is_mut,
             });
@@ -875,7 +768,13 @@ fn lower_init_handler<'db>(
     builder.lower_root(body.expr(db));
     builder.ensure_const_expr_values();
     if let Some(block) = builder.current_block() {
-        builder.set_terminator(block, Terminator::Return(None));
+        builder.set_terminator(
+            block,
+            Terminator::Return {
+                source: crate::ir::SourceInfoId::SYNTHETIC,
+                value: None,
+            },
+        );
     }
     let mir_body = builder.finish();
 
@@ -890,7 +789,7 @@ fn lower_init_handler<'db>(
     Ok(MirFunction {
         origin: MirFunctionOrigin::Synthetic(SyntheticId::ContractInitHandler(contract)),
         body: mir_body,
-        typed_body: Some(concretized_typed_body),
+        typed_body: Some(typed_body.to_owned()),
         generic_args: Vec::new(),
         ret_ty: TyId::unit(db),
         returns_value: false,
@@ -908,7 +807,6 @@ fn lower_recv_arm_handler<'db>(
     abi: TyId<'db>,
     symbols: &ContractSymbols,
     core: &CoreLib<'db>,
-    root_effect_ty: TyId<'db>,
 ) -> MirLowerResult<MirFunction<'db>> {
     let recv_idx = arm.recv(db).index(db);
     let arm_idx = arm.index(db);
@@ -941,21 +839,7 @@ fn lower_recv_arm_handler<'db>(
     let args_ty = abi_info.args_ty;
     let ret_ty = abi_info.ret_ty.unwrap_or_else(|| TyId::unit(db));
 
-    let effect_kinds = contract_effect_param_key_kinds(db, contract, hir_arm.effects);
-    let concretized_typed_body =
-        concretize_contract_root_effects(db, typed_body, root_effect_ty, effect_kinds);
-    let mut builder = MirBuilder::new_for_body_owner(
-        db,
-        BodyOwner::ContractRecvArm {
-            contract,
-            recv_idx,
-            arm_idx,
-        },
-        body,
-        &concretized_typed_body,
-        &[],
-        ret_ty,
-    )?;
+    let mut builder = MirBuilder::new_for_body_owner(db, body, typed_body, &[], ret_ty)?;
 
     let args_local = builder.seed_synthetic_param_local("args".to_string(), args_ty, false, None);
 
@@ -973,8 +857,13 @@ fn lower_recv_arm_handler<'db>(
     builder.move_to_block(entry);
     for binding in arg_bindings {
         let tuple_index = binding.tuple_index as usize;
-        let elem_value =
-            builder.project_tuple_elem_value(args_value, args_ty, tuple_index, binding.ty);
+        let elem_value = builder.project_tuple_elem_value(
+            args_value,
+            args_ty,
+            tuple_index,
+            binding.ty,
+            PatBindingMode::ByValue,
+        );
         builder.bind_pat_value(binding.pat, elem_value);
         if builder.current_block().is_none() {
             break;
@@ -989,9 +878,21 @@ fn lower_recv_arm_handler<'db>(
             && !layout::is_zero_sized_ty(db, ret_ty);
         if returns_value {
             let ret_val = builder.ensure_value(body.expr(db));
-            builder.set_terminator(block, Terminator::Return(Some(ret_val)));
+            builder.set_terminator(
+                block,
+                Terminator::Return {
+                    source: crate::ir::SourceInfoId::SYNTHETIC,
+                    value: Some(ret_val),
+                },
+            );
         } else {
-            builder.set_terminator(block, Terminator::Return(None));
+            builder.set_terminator(
+                block,
+                Terminator::Return {
+                    source: crate::ir::SourceInfoId::SYNTHETIC,
+                    value: None,
+                },
+            );
         }
     }
     let mir_body = builder.finish();
@@ -1011,7 +912,7 @@ fn lower_recv_arm_handler<'db>(
             arm_idx,
         }),
         body: mir_body,
-        typed_body: Some(concretized_typed_body),
+        typed_body: Some(typed_body.to_owned()),
         generic_args: Vec::new(),
         ret_ty,
         returns_value: !layout::is_zero_sized_ty(db, ret_ty),
@@ -1035,7 +936,7 @@ fn seed_effect_param_locals<'db>(
             EffectSource::Root => LocalBinding::EffectParam {
                 site: effect.binding_site,
                 idx: effect.binding_idx as usize,
-                key_path: effect.binding_key_path,
+                key_path: effect.binding_path,
                 is_mut: effect.is_mut,
             },
             EffectSource::Field(field_idx) => {
@@ -1046,6 +947,7 @@ fn seed_effect_param_locals<'db>(
                 LocalBinding::Param {
                     site: ParamSite::EffectField(effect.binding_site),
                     idx: effect.binding_idx as usize,
+                    mode: FuncParamMode::View,
                     ty,
                     is_mut: effect.is_mut,
                 }
@@ -1172,9 +1074,10 @@ fn lower_init_entrypoint<'db>(
 
         // abort: `root.abort()`
         builder.move_to_block(abort_block);
-        builder.terminate_current(Terminator::TerminatingCall(TerminatingCall::Call(
-            cx.host_abort(root_value),
-        )));
+        builder.terminate_current(Terminator::TerminatingCall {
+            source: crate::ir::SourceInfoId::SYNTHETIC,
+            call: TerminatingCall::Call(cx.host_abort(root_value)),
+        });
 
         // continue block builds the init-input decoder, calls init handler, then returns the runtime region.
         builder.move_to_block(cont_block);
@@ -1193,7 +1096,10 @@ fn lower_init_entrypoint<'db>(
                 TyId::u256(db),
                 false,
                 AddressSpaceKind::Memory,
-                Rvalue::Call(cx.alloc(args_len_value)),
+                Rvalue::Intrinsic {
+                    op: IntrinsicOp::Alloc,
+                    args: vec![args_len_value],
+                },
             )
             .value;
         builder.assign(
@@ -1258,10 +1164,13 @@ fn lower_init_entrypoint<'db>(
                 args: vec![zero_u256, runtime_offset, runtime_len],
             },
         );
-        builder.terminate_current(Terminator::TerminatingCall(TerminatingCall::Intrinsic {
-            op: IntrinsicOp::ReturnData,
-            args: vec![zero_u256, runtime_len],
-        }));
+        builder.terminate_current(Terminator::TerminatingCall {
+            source: crate::ir::SourceInfoId::SYNTHETIC,
+            call: TerminatingCall::Intrinsic {
+                op: IntrinsicOp::ReturnData,
+                args: vec![zero_u256, runtime_len],
+            },
+        });
     } else {
         // No init block: just return the runtime region.
         builder.assign(
@@ -1271,10 +1180,13 @@ fn lower_init_entrypoint<'db>(
                 args: vec![zero_u256, runtime_offset, runtime_len],
             },
         );
-        builder.terminate_current(Terminator::TerminatingCall(TerminatingCall::Intrinsic {
-            op: IntrinsicOp::ReturnData,
-            args: vec![zero_u256, runtime_len],
-        }));
+        builder.terminate_current(Terminator::TerminatingCall {
+            source: crate::ir::SourceInfoId::SYNTHETIC,
+            call: TerminatingCall::Intrinsic {
+                op: IntrinsicOp::ReturnData,
+                args: vec![zero_u256, runtime_len],
+            },
+        });
     }
 
     Ok(MirFunction {
@@ -1378,25 +1290,32 @@ fn lower_runtime_entrypoint<'db>(
                         Rvalue::Call(cx.call_symbol(handler_symbol, vec![args_value], effect_args)),
                     )
                     .value;
-                builder.terminate_current(Terminator::TerminatingCall(TerminatingCall::Call(
-                    cx.host_return_value(root_value, result_value, ret_ty),
-                )));
+                builder.terminate_current(Terminator::TerminatingCall {
+                    source: SourceInfoId::SYNTHETIC,
+                    call: TerminatingCall::Call(cx.host_return_value(
+                        root_value,
+                        result_value,
+                        ret_ty,
+                    )),
+                });
             } else {
                 builder.assign(
                     None,
                     Rvalue::Call(cx.call_symbol(handler_symbol, vec![args_value], effect_args)),
                 );
-                builder.terminate_current(Terminator::TerminatingCall(TerminatingCall::Call(
-                    cx.host_return_unit(root_value),
-                )));
+                builder.terminate_current(Terminator::TerminatingCall {
+                    source: SourceInfoId::SYNTHETIC,
+                    call: TerminatingCall::Call(cx.host_return_unit(root_value)),
+                });
             }
         }
     }
 
     builder.move_to_block(default_block);
-    builder.terminate_current(Terminator::TerminatingCall(TerminatingCall::Call(
-        cx.host_abort(root_value),
-    )));
+    builder.terminate_current(Terminator::TerminatingCall {
+        source: SourceInfoId::SYNTHETIC,
+        call: TerminatingCall::Call(cx.host_abort(root_value)),
+    });
 
     builder.move_to_block(entry);
     builder.switch(selector_value, targets, default_block);

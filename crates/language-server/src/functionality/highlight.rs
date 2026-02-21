@@ -27,8 +27,8 @@ fn find_highlights_at_cursor<'db>(
     let mut highlights = vec![];
 
     // Search within this module using the unified API
-    for ref_view in top_mod.references_to_target(db, target) {
-        if let Some(span) = ref_view.span().resolve(db)
+    for matched in top_mod.references_to_target(db, target) {
+        if let Some(span) = matched.span.resolve(db)
             && let Ok(range) = to_lsp_range_from_span(span, db)
         {
             highlights.push(DocumentHighlight {
@@ -79,36 +79,149 @@ fn find_highlights_at_cursor<'db>(
     highlights
 }
 
+#[cfg(test)]
+fn lsp_pos(line: u32, character: u32) -> async_lsp::lsp_types::Position {
+    async_lsp::lsp_types::Position { line, character }
+}
+
 pub async fn handle_document_highlight(
     backend: &Backend,
     params: async_lsp::lsp_types::DocumentHighlightParams,
 ) -> Result<Option<Vec<DocumentHighlight>>, ResponseError> {
-    let path_str = params
-        .text_document_position_params
-        .text_document
-        .uri
-        .path();
-
-    let Ok(url) = url::Url::from_file_path(path_str) else {
-        return Ok(None);
-    };
-
-    let Some(file) = backend.db.workspace().get(&backend.db, &url) else {
-        return Ok(None);
-    };
-
-    let file_text = file.text(&backend.db);
-    let cursor: Cursor = to_offset_from_position(
-        params.text_document_position_params.position,
-        file_text.as_str(),
+    let url = backend.map_client_uri_to_internal(
+        params
+            .text_document_position_params
+            .text_document
+            .uri
+            .clone(),
     );
 
-    let top_mod = map_file_to_mod(&backend.db, file);
-    let highlights = find_highlights_at_cursor(&backend.db, top_mod, cursor);
+    // Quick existence check on actor thread
+    if backend.db.workspace().get(&backend.db, &url).is_none() {
+        return Ok(None);
+    }
+
+    let position = params.text_document_position_params.position;
+
+    // Spawn heavy highlight resolution on the worker pool
+    let rx = backend.spawn_on_workers(move |db| {
+        let Some(file) = db.workspace().get(db, &url) else {
+            return vec![];
+        };
+        let file_text = file.text(db);
+        let cursor: Cursor = to_offset_from_position(position, file_text.as_str());
+        let top_mod = map_file_to_mod(db, file);
+        find_highlights_at_cursor(db, top_mod, cursor)
+    });
+
+    let highlights: Vec<DocumentHighlight> = rx.await.map_err(|_| {
+        ResponseError::new(
+            async_lsp::ErrorCode::INTERNAL_ERROR,
+            "Worker task cancelled".to_string(),
+        )
+    })?;
 
     if highlights.is_empty() {
         Ok(None)
     } else {
         Ok(Some(highlights))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use common::InputDb;
+    use driver::DriverDataBase;
+    use hir::lower::map_file_to_mod;
+    use url::Url;
+
+    fn run_highlight(code: &str, line: u32, col: u32) -> Vec<DocumentHighlight> {
+        let mut db = DriverDataBase::default();
+        let url = Url::parse("file:///test.fe").unwrap();
+        let file = db.workspace().touch(&mut db, url, Some(code.to_string()));
+        let file_text = file.text(&db);
+        let cursor = to_offset_from_position(lsp_pos(line, col), file_text.as_str());
+        let top_mod = map_file_to_mod(&db, file);
+        find_highlights_at_cursor(&db, top_mod, cursor)
+    }
+
+    #[test]
+    fn highlight_function() {
+        let code = "fn greet() -> i32 {\n    42\n}\n\nfn main() -> i32 {\n    greet()\n}\n";
+        let highlights = run_highlight(code, 0, 3);
+        // Definition (WRITE) + call site (READ)
+        assert_eq!(
+            highlights.len(),
+            2,
+            "expected 2 highlights, got {highlights:?}"
+        );
+        assert_eq!(highlights[0].kind, Some(DocumentHighlightKind::WRITE));
+        assert_eq!(highlights[1].kind, Some(DocumentHighlightKind::READ));
+    }
+
+    #[test]
+    fn highlight_local_variable() {
+        let code = "fn foo() -> i32 {\n    let x = 10\n    x + 1\n}\n";
+        let highlights = run_highlight(code, 1, 8);
+        assert_eq!(
+            highlights.len(),
+            2,
+            "expected def + usage, got {highlights:?}"
+        );
+        assert_eq!(highlights[0].kind, Some(DocumentHighlightKind::WRITE));
+    }
+
+    #[test]
+    fn highlight_struct_type() {
+        let code = r#"struct Point {
+    x: i32
+}
+
+fn make() -> Point {
+    Point { x: 1 }
+}
+"#;
+        let highlights = run_highlight(code, 0, 7);
+        // Definition + return type + construction = 3
+        assert!(
+            highlights.len() >= 3,
+            "expected at least 3 highlights for struct, got {highlights:?}"
+        );
+        assert_eq!(highlights[0].kind, Some(DocumentHighlightKind::WRITE));
+    }
+
+    #[test]
+    fn highlight_enum_variant() {
+        let code = r#"enum Color {
+    Red,
+    Green
+}
+
+fn check(c: Color) -> bool {
+    match c {
+        Color::Red => true
+        Color::Green => false
+    }
+}
+"#;
+        // Highlight on "Red" variant definition (line 1, col 4)
+        let highlights = run_highlight(code, 1, 4);
+        // Definition + match arm usage
+        assert!(
+            highlights.len() >= 2,
+            "expected at least 2 highlights for variant, got {highlights:?}"
+        );
+    }
+
+    #[test]
+    fn highlight_no_target() {
+        let code = "fn foo() -> i32 {\n    42\n}\n";
+        // Cursor on whitespace
+        let highlights = run_highlight(code, 1, 0);
+        assert!(
+            highlights.is_empty(),
+            "expected no highlights on whitespace"
+        );
     }
 }

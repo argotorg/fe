@@ -4,12 +4,21 @@
 //! offsets. Both MIR lowering and codegen should use these functions to ensure
 //! consistent layout computation across the compiler.
 //!
-//! # Memory Model
+//! # Layout Models
 //!
-//! Fe uses a packed byte layout (not Solidity's 32-byte slot per field):
-//! - Primitives use their natural byte size (u8 = 1 byte, u256 = 32 bytes)
+//! **Packed byte layout** (`ty_size_bytes_in`, `field_offset_bytes_in`):
+//! - Primitives use their natural byte size (bool = 1, u8 = 1, u256 = 32)
 //! - Structs/tuples pack fields contiguously
-//! - Enums have a 32-byte discriminant followed by payload fields
+//! - Preserved for future packed storage and ABI-level size decisions
+//!
+//! **Word-padded memory layout** (`ty_memory_size_in`, `field_offset_memory_in`):
+//! - Each primitive occupies at least one word (32 bytes on EVM)
+//! - Required because EVM `mload`/`mstore` always read/write 32 bytes
+//! - Without padding, adjacent sub-word fields corrupt each other in memory
+//!
+//! **Storage slot layout** (`ty_size_slots`, `field_offset_slots`):
+//! - Each primitive occupies one 256-bit slot regardless of byte size
+//! - Enums have a 1-slot discriminant followed by payload
 
 use hir::{
     analysis::{
@@ -78,7 +87,7 @@ fn first_assoc_scope<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<S
                 return;
             }
             if let TyData::AssocTy(assoc) = ty.data(self.db) {
-                self.scope = Some(assoc.scope(self.db));
+                self.scope = assoc.scope(self.db);
                 return;
             }
             walk_ty(self, ty);
@@ -131,6 +140,14 @@ pub fn ty_size_bytes_in(
         return ty_size_bytes_in(db, layout, normalized);
     }
 
+    // Effect-related and trait-self type parameters are compile-time only and have no runtime
+    // representation.
+    if let TyData::TyParam(param) = ty.data(db)
+        && (param.is_effect() || param.is_effect_provider() || param.is_trait_self())
+    {
+        return Some(0);
+    }
+
     // Handle tuples first (check base type for TyApp cases)
     if ty.is_tuple(db) {
         let mut size = 0;
@@ -142,6 +159,11 @@ pub fn ty_size_bytes_in(
 
     // Function items are compile-time only and have no runtime representation.
     if let TyData::TyBase(TyBase::Func(_)) = ty.base_ty(db).data(db) {
+        return Some(0);
+    }
+
+    // Contract types are compile-time only and have no runtime representation.
+    if let TyData::TyBase(TyBase::Contract(_)) = ty.base_ty(db).data(db) {
         return Some(0);
     }
 
@@ -201,7 +223,10 @@ pub fn ty_size_bytes_in(
 /// This is useful when the compiler needs a conservative allocation size even when precise
 /// layout information is unavailable (e.g. generic type parameters). Unknown leaf types are
 /// treated as occupying a single 32-byte word.
-pub fn ty_size_bytes_or_word_aligned(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> usize {
+///
+/// Returns `None` for types that require a concrete size but cannot be computed yet (for example,
+/// arrays with non-literal lengths).
+pub fn ty_size_bytes_or_word_aligned(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> Option<usize> {
     ty_size_bytes_or_word_aligned_in(db, &EVM_LAYOUT, ty)
 }
 
@@ -209,34 +234,30 @@ pub fn ty_size_bytes_or_word_aligned_in(
     db: &dyn HirAnalysisDb,
     layout: &TargetDataLayout,
     ty: TyId<'_>,
-) -> usize {
+) -> Option<usize> {
     ty_size_bytes_in(db, layout, ty)
-        .unwrap_or_else(|| ty_size_bytes_word_aligned_fallback_in(db, layout, ty))
+        .or_else(|| ty_size_bytes_word_aligned_fallback_in(db, layout, ty))
 }
 
 fn ty_size_bytes_word_aligned_fallback_in(
     db: &dyn HirAnalysisDb,
     layout: &TargetDataLayout,
     ty: TyId<'_>,
-) -> usize {
+) -> Option<usize> {
     if ty.is_tuple(db) {
         return ty
             .field_types(db)
             .iter()
             .copied()
-            .map(|field_ty| ty_size_bytes_or_word_aligned_in(db, layout, field_ty))
-            .sum();
+            .try_fold(0usize, |acc, field_ty| {
+                Some(acc + ty_size_bytes_or_word_aligned_in(db, layout, field_ty)?)
+            });
     }
 
     if ty.is_array(db) {
-        let len = array_len(db, ty).unwrap_or_else(|| {
-            panic!(
-                "array length must be known to compute fallback layout size (ty={})",
-                ty.pretty_print(db)
-            )
-        });
+        let len = array_len(db, ty)?;
         let stride = array_elem_stride_bytes_in(db, layout, ty).unwrap_or(layout.word_size_bytes);
-        return len * stride;
+        return Some(len * stride);
     }
 
     if let Some(adt_def) = ty.adt_def(db)
@@ -246,8 +267,9 @@ fn ty_size_bytes_word_aligned_fallback_in(
             .field_types(db)
             .iter()
             .copied()
-            .map(|field_ty| ty_size_bytes_or_word_aligned_in(db, layout, field_ty))
-            .sum();
+            .try_fold(0usize, |acc, field_ty| {
+                Some(acc + ty_size_bytes_or_word_aligned_in(db, layout, field_ty)?)
+            });
     }
 
     if let Some(adt_def) = ty.adt_def(db)
@@ -259,14 +281,14 @@ fn ty_size_bytes_word_aligned_fallback_in(
             let ctor = ConstructorKind::Variant(ev, ty);
             let mut payload = 0;
             for field_ty in ctor.field_types(db) {
-                payload += ty_size_bytes_or_word_aligned_in(db, layout, field_ty);
+                payload += ty_size_bytes_or_word_aligned_in(db, layout, field_ty)?;
             }
             max_payload = max_payload.max(payload);
         }
-        return layout.discriminant_size_bytes + max_payload;
+        return Some(layout.discriminant_size_bytes + max_payload);
     }
 
-    layout.word_size_bytes
+    Some(layout.word_size_bytes)
 }
 
 /// Returns the element type for a fixed-size array.
@@ -329,8 +351,20 @@ pub fn ty_storage_slots<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Optio
         return Some(size);
     }
 
+    // Effect-related and trait-self type parameters are compile-time only.
+    if let TyData::TyParam(param) = ty.data(db)
+        && (param.is_effect() || param.is_effect_provider() || param.is_trait_self())
+    {
+        return Some(0);
+    }
+
     // Function items are compile-time only and do not occupy storage.
     if let TyData::TyBase(TyBase::Func(_)) = ty.base_ty(db).data(db) {
+        return Some(0);
+    }
+
+    // Contract types are compile-time only and do not occupy storage.
+    if let TyData::TyBase(TyBase::Contract(_)) = ty.base_ty(db).data(db) {
         return Some(0);
     }
 
@@ -531,12 +565,211 @@ pub fn variant_payload_size_bytes_in(
 }
 
 // ============================================================================
+// Word-Padded Memory Layout
+// ============================================================================
+//
+// EVM `mload`/`mstore` always operate on 32-byte words. When a struct field is
+// smaller than a word (e.g. bool = 1 byte), a packed byte layout causes adjacent
+// memory allocations to corrupt each other: `mstore(offset, val)` writes 32 bytes
+// starting at `offset`, overwriting data beyond the field's logical size.
+//
+// These functions compute word-padded sizes and offsets where each field occupies
+// at least one full word. The raw `ty_size_bytes_in` functions are preserved for
+// contexts that need packed sizes (e.g. future packed storage, ABI decisions).
+
+/// Rounds `size` up to the nearest multiple of `word_size`. Returns 0 for zero-sized types.
+fn round_up_to_word(size: usize, word_size: usize) -> usize {
+    if size == 0 {
+        return 0;
+    }
+    size.div_ceil(word_size) * word_size
+}
+
+/// Computes the word-padded allocation size for a type in memory.
+///
+/// Each primitive field occupies at least one full word. Struct sizes are the
+/// sum of word-padded field sizes. This prevents `mload`/`mstore` overlap.
+pub fn ty_memory_size(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> Option<usize> {
+    ty_memory_size_in(db, &EVM_LAYOUT, ty)
+}
+
+pub fn ty_memory_size_in(
+    db: &dyn HirAnalysisDb,
+    layout: &TargetDataLayout,
+    ty: TyId<'_>,
+) -> Option<usize> {
+    if let Some(normalized) = normalize_ty_for_layout(db, ty) {
+        return ty_memory_size_in(db, layout, normalized);
+    }
+
+    // Zero-sized compile-time-only types.
+    if let TyData::TyParam(param) = ty.data(db)
+        && (param.is_effect() || param.is_effect_provider() || param.is_trait_self())
+    {
+        return Some(0);
+    }
+
+    // Tuples: sum of word-padded field sizes.
+    if ty.is_tuple(db) {
+        let mut size = 0;
+        for field_ty in ty.field_types(db) {
+            size += ty_memory_size_in(db, layout, field_ty)?;
+        }
+        return Some(size);
+    }
+
+    if let TyData::TyBase(TyBase::Func(_)) = ty.base_ty(db).data(db) {
+        return Some(0);
+    }
+    if let TyData::TyBase(TyBase::Contract(_)) = ty.base_ty(db).data(db) {
+        return Some(0);
+    }
+
+    // Primitives: round up to word size.
+    if let TyData::TyBase(TyBase::Prim(prim)) = ty.base_ty(db).data(db) {
+        if *prim == PrimTy::Bool {
+            return Some(layout.word_size_bytes);
+        }
+        if let Some(bits) = prim_int_bits(*prim) {
+            return Some(round_up_to_word(bits / 8, layout.word_size_bytes));
+        }
+        if matches!(prim, PrimTy::String | PrimTy::Ptr) {
+            return Some(layout.word_size_bytes);
+        }
+    }
+
+    // Arrays: element stride is word-padded.
+    if ty.is_array(db) {
+        let len = array_len(db, ty)?;
+        let stride = array_elem_stride_memory_in(db, layout, ty)?;
+        return Some(len * stride);
+    }
+
+    // Structs: sum of word-padded field sizes.
+    if let Some(adt_def) = ty.adt_def(db)
+        && matches!(adt_def.adt_ref(db), AdtRef::Struct(_))
+    {
+        let mut size = 0;
+        for field_ty in ty.field_types(db) {
+            size += ty_memory_size_in(db, layout, field_ty)?;
+        }
+        return Some(size);
+    }
+
+    // Enums: word-padded discriminant + max word-padded variant payload.
+    if let Some(adt_def) = ty.adt_def(db)
+        && let AdtRef::Enum(enm) = adt_def.adt_ref(db)
+    {
+        let mut max_payload = 0;
+        for variant in enm.variants(db) {
+            let ev = EnumVariant::new(enm, variant.idx);
+            let ctor = ConstructorKind::Variant(ev, ty);
+            let mut payload = 0;
+            for field_ty in ctor.field_types(db) {
+                payload += ty_memory_size_in(db, layout, field_ty)?;
+            }
+            max_payload = max_payload.max(payload);
+        }
+        return Some(layout.discriminant_size_bytes + max_payload);
+    }
+
+    None
+}
+
+/// Like [`ty_memory_size`], but falls back to word size for unknown layouts.
+pub fn ty_memory_size_or_word(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> Option<usize> {
+    ty_memory_size_or_word_in(db, &EVM_LAYOUT, ty)
+}
+
+pub fn ty_memory_size_or_word_in(
+    db: &dyn HirAnalysisDb,
+    layout: &TargetDataLayout,
+    ty: TyId<'_>,
+) -> Option<usize> {
+    ty_memory_size_in(db, layout, ty)
+        .or_else(|| ty_size_bytes_word_aligned_fallback_in(db, layout, ty))
+}
+
+/// Computes the word-padded byte offset to a field for memory access.
+///
+/// Each preceding field contributes its word-padded size to the offset.
+pub fn field_offset_memory(db: &dyn HirAnalysisDb, ty: TyId<'_>, field_idx: usize) -> usize {
+    field_offset_memory_in(db, &EVM_LAYOUT, ty, field_idx)
+}
+
+pub fn field_offset_memory_in(
+    db: &dyn HirAnalysisDb,
+    layout: &TargetDataLayout,
+    ty: TyId<'_>,
+    field_idx: usize,
+) -> usize {
+    let field_types = ty.field_types(db);
+    if field_idx >= field_types.len() {
+        // Fallback: assume each field is one word.
+        return layout.word_size_bytes * field_idx;
+    }
+
+    let mut offset = 0;
+    for field_ty in field_types.iter().take(field_idx) {
+        offset += ty_memory_size_in(db, layout, *field_ty).unwrap_or(layout.word_size_bytes);
+    }
+    offset
+}
+
+/// Computes the word-padded byte offset to a field within an enum variant's
+/// payload for memory access.
+///
+/// Offset is relative to the payload start (after the discriminant).
+pub fn variant_field_offset_memory(
+    db: &dyn HirAnalysisDb,
+    enum_ty: TyId<'_>,
+    variant: EnumVariant<'_>,
+    field_idx: usize,
+) -> usize {
+    variant_field_offset_memory_in(db, &EVM_LAYOUT, enum_ty, variant, field_idx)
+}
+
+pub fn variant_field_offset_memory_in(
+    db: &dyn HirAnalysisDb,
+    layout: &TargetDataLayout,
+    enum_ty: TyId<'_>,
+    variant: EnumVariant<'_>,
+    field_idx: usize,
+) -> usize {
+    let ctor = ConstructorKind::Variant(variant, enum_ty);
+    let field_types = ctor.field_types(db);
+
+    if field_idx >= field_types.len() {
+        return layout.word_size_bytes * field_idx;
+    }
+
+    let mut offset = 0;
+    for field_ty in field_types.iter().take(field_idx) {
+        offset += ty_memory_size_in(db, layout, *field_ty).unwrap_or(layout.word_size_bytes);
+    }
+    offset
+}
+
+/// Returns the word-padded stride for an array element in memory.
+pub fn array_elem_stride_memory(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> Option<usize> {
+    array_elem_stride_memory_in(db, &EVM_LAYOUT, ty)
+}
+
+pub fn array_elem_stride_memory_in(
+    db: &dyn HirAnalysisDb,
+    layout: &TargetDataLayout,
+    ty: TyId<'_>,
+) -> Option<usize> {
+    let elem_ty = array_elem_ty(db, ty)?;
+    Some(ty_memory_size_in(db, layout, elem_ty).unwrap_or(layout.word_size_bytes))
+}
+
+// ============================================================================
 // Storage Layout (Slot-Based)
 // ============================================================================
 //
 // EVM storage uses 256-bit slots. Fe's storage model allocates one slot per
-// primitive field, regardless of the primitive's byte size. This differs from
-// memory layout which packs bytes contiguously.
+// primitive field, regardless of the primitive's byte size.
 
 /// Computes the slot offset to a field within a struct or tuple for storage.
 ///
@@ -593,6 +826,13 @@ pub fn ty_size_slots(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> usize {
         return ty_size_slots(db, normalized);
     }
 
+    // Effect-related and trait-self type parameters are compile-time only.
+    if let TyData::TyParam(param) = ty.data(db)
+        && (param.is_effect() || param.is_effect_provider() || param.is_trait_self())
+    {
+        return 0;
+    }
+
     // Handle tuples
     if ty.is_tuple(db) {
         let mut size = 0;
@@ -604,6 +844,11 @@ pub fn ty_size_slots(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> usize {
 
     // Function items are compile-time only and do not occupy storage.
     if let TyData::TyBase(TyBase::Func(_)) = ty.base_ty(db).data(db) {
+        return 0;
+    }
+
+    // Contract types are compile-time only and do not occupy storage.
+    if let TyData::TyBase(TyBase::Contract(_)) = ty.base_ty(db).data(db) {
         return 0;
     }
 

@@ -3,7 +3,7 @@ use std::collections::hash_map::Entry;
 use rustc_hash::FxHashMap;
 
 use super::{
-    const_ty::ConstTyData,
+    const_ty::{ConstTyData, ConstTyId},
     fold::{TyFoldable, TyFolder},
     trait_def::TraitInstId,
     ty_def::{AssocTy, TyData, TyId},
@@ -121,6 +121,30 @@ impl<'db> TyFolder<'db> for InstantiateFolder<'db, '_> {
                 if let ConstTyData::TyParam(param, _) = const_ty.data(db) {
                     return self.args[param.idx];
                 }
+
+                let folded = ty.super_fold_with(db, self);
+                if let TyData::ConstTy(const_ty) = folded.data(db)
+                    && let ConstTyData::UnEvaluated {
+                        body,
+                        ty,
+                        const_def,
+                        generic_args,
+                    } = const_ty.data(db)
+                    && generic_args.is_empty()
+                    && !self.args.is_empty()
+                {
+                    let const_ty = ConstTyId::new(
+                        db,
+                        ConstTyData::UnEvaluated {
+                            body: *body,
+                            ty: *ty,
+                            const_def: *const_def,
+                            generic_args: self.args.to_vec(),
+                        },
+                    );
+                    return TyId::const_ty(db, const_ty);
+                }
+                return folded;
             }
 
             TyData::AssocTy(assoc_ty) => {

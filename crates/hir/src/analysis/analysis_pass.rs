@@ -1,6 +1,6 @@
 use crate::analysis::{HirAnalysisDb, diagnostics::DiagnosticVoucher};
 use crate::{
-    ParserError, SelectorError,
+    EventError, ParserError, SelectorError,
     hir_def::{ModuleTree, TopLevelMod},
     lower::{parse_file_impl, scope_graph_impl},
 };
@@ -17,7 +17,7 @@ pub trait ModuleAnalysisPass {
 
 #[derive(Default)]
 pub struct AnalysisPassManager {
-    module_passes: Vec<Box<dyn ModuleAnalysisPass>>,
+    module_passes: Vec<(&'static str, Box<dyn ModuleAnalysisPass>)>,
 }
 
 impl AnalysisPassManager {
@@ -25,8 +25,8 @@ impl AnalysisPassManager {
         Self::default()
     }
 
-    pub fn add_module_pass(&mut self, pass: Box<dyn ModuleAnalysisPass>) {
-        self.module_passes.push(pass);
+    pub fn add_module_pass(&mut self, name: &'static str, pass: Box<dyn ModuleAnalysisPass>) {
+        self.module_passes.push((name, pass));
     }
 
     pub fn run_on_module<'db>(
@@ -35,8 +35,13 @@ impl AnalysisPassManager {
         top_mod: TopLevelMod<'db>,
     ) -> Vec<Box<dyn DiagnosticVoucher + 'db>> {
         let mut diags = vec![];
-        for pass in self.module_passes.iter_mut() {
+        for (name, pass) in self.module_passes.iter_mut() {
+            let t0 = std::time::Instant::now();
             diags.extend(pass.run_on_module(db, top_mod));
+            let elapsed = t0.elapsed();
+            if elapsed.as_micros() > 100 {
+                tracing::debug!("[fe:timing]   pass {name}: {elapsed:?}");
+            }
         }
         diags
     }
@@ -48,8 +53,13 @@ impl AnalysisPassManager {
     ) -> Vec<Box<dyn DiagnosticVoucher + 'db>> {
         let mut diags = vec![];
         for module in tree.all_modules() {
-            for pass in self.module_passes.iter_mut() {
+            for (name, pass) in self.module_passes.iter_mut() {
+                let t0 = std::time::Instant::now();
                 diags.extend(pass.run_on_module(db, module));
+                let elapsed = t0.elapsed();
+                if elapsed.as_micros() > 100 {
+                    tracing::debug!("[fe:timing]   pass {name}: {elapsed:?}");
+                }
             }
         }
         diags
@@ -82,6 +92,22 @@ impl ModuleAnalysisPass for MsgLowerPass {
         top_mod: TopLevelMod<'db>,
     ) -> Vec<Box<dyn DiagnosticVoucher>> {
         scope_graph_impl::accumulated::<SelectorError>(db, top_mod)
+            .into_iter()
+            .map(|d| Box::new(d.clone()) as _)
+            .collect::<Vec<_>>()
+    }
+}
+
+/// Analysis pass that collects event lowering errors from `#[event]` struct desugaring.
+pub struct EventLowerPass {}
+
+impl ModuleAnalysisPass for EventLowerPass {
+    fn run_on_module<'db>(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+        top_mod: TopLevelMod<'db>,
+    ) -> Vec<Box<dyn DiagnosticVoucher>> {
+        scope_graph_impl::accumulated::<EventError>(db, top_mod)
             .into_iter()
             .map(|d| Box::new(d.clone()) as _)
             .collect::<Vec<_>>()

@@ -1,0 +1,5 @@
+const HASH: u256 = core::keccak("hello")
+
+fn main() -> u256 {
+    HASH
+}

@@ -1,11 +1,13 @@
 //! Test harness utilities for compiling Fe contracts and exercising their runtimes with `revm`.
-use codegen::emit_module_yul;
+use codegen::{Backend, SonatinaBackend, emit_module_yul};
 use common::InputDb;
 use driver::DriverDataBase;
 use ethers_core::abi::{AbiParser, ParseError as AbiParseError, Token};
 use hex::FromHex;
+use mir::layout;
 pub use revm::primitives::U256;
 use revm::{
+    InspectCommitEvm,
     bytecode::Bytecode,
     context::{
         Context, TxEnv,
@@ -13,11 +15,17 @@ use revm::{
     },
     database::InMemoryDB,
     handler::{ExecuteCommitEvm, MainBuilder, MainContext, MainnetContext, MainnetEvm},
+    interpreter::interpreter_types::Jumps,
     primitives::{Address, Bytes as EvmBytes, Log, TxKind},
     state::AccountInfo,
 };
 use solc_runner::{ContractBytecode, YulcError, compile_single_contract};
-use std::{collections::HashMap, fmt, path::Path};
+use std::{
+    collections::{HashMap, VecDeque},
+    fmt,
+    io::Write,
+    path::{Path, PathBuf},
+};
 use thiserror::Error;
 use url::Url;
 
@@ -31,6 +39,8 @@ pub enum HarnessError {
     CompilerDiagnostics(String),
     #[error("failed to emit Yul: {0}")]
     EmitYul(#[from] codegen::EmitModuleError),
+    #[error("failed to emit Sonatina bytecode: {0}")]
+    EmitSonatina(String),
     #[error("solc error: {0}")]
     Solc(String),
     #[error("abi encoding failed: {0}")]
@@ -103,11 +113,35 @@ pub struct ExecutionOptions {
     pub nonce: Option<u64>,
 }
 
+/// Optional tracing settings for a runtime call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EvmTraceOptions {
+    /// Number of trailing EVM steps to keep in the ring buffer.
+    pub keep_steps: usize,
+    /// Number of stack values to render for each traced step.
+    pub stack_n: usize,
+    /// Optional output file for trace text. When absent, tracing only goes to stderr.
+    pub out_path: Option<PathBuf>,
+    /// Whether to mirror trace output to stderr.
+    pub write_stderr: bool,
+}
+
+impl Default for EvmTraceOptions {
+    fn default() -> Self {
+        Self {
+            keep_steps: 200,
+            stack_n: 0,
+            out_path: None,
+            write_stderr: true,
+        }
+    }
+}
+
 impl Default for ExecutionOptions {
     fn default() -> Self {
         Self {
             caller: Address::ZERO,
-            gas_limit: 1_000_000,
+            gas_limit: 10_000_000,
             gas_price: 0,
             value: U256::ZERO,
             nonce: None,
@@ -129,6 +163,29 @@ pub struct CallResultWithLogs {
     pub logs: Vec<String>,
 }
 
+/// Per-call gas attribution gathered from a full instruction trace replay.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CallGasProfile {
+    /// Number of EVM instructions executed.
+    pub step_count: u64,
+    /// Sum of per-step gas deltas on the root runtime frame.
+    pub total_step_gas: u64,
+    /// Root-frame gas attributed to CREATE opcode steps (`0xF0`).
+    pub create_opcode_gas: u64,
+    /// Root-frame gas attributed to CREATE2 opcode steps (`0xF5`).
+    pub create2_opcode_gas: u64,
+    /// Root-frame gas attributed to all non-CREATE/CREATE2 opcode steps.
+    pub non_create_opcode_gas: u64,
+    /// Number of CREATE opcode steps (`0xF0`).
+    pub create_opcode_steps: u64,
+    /// Number of CREATE2 opcode steps (`0xF5`).
+    pub create2_opcode_steps: u64,
+    /// Gas reported by CREATE frame outcomes (constructor execution envelope).
+    pub constructor_frame_gas: u64,
+    /// Root-frame gas outside constructor execution (`total_step_gas - constructor_frame_gas`).
+    pub non_constructor_frame_gas: u64,
+}
+
 fn prepare_account(
     runtime_bytecode_hex: &str,
 ) -> Result<(Bytecode, Address, InMemoryDB), HarnessError> {
@@ -144,8 +201,9 @@ fn transact(
     calldata: &[u8],
     options: ExecutionOptions,
     nonce: u64,
+    trace_options: Option<&EvmTraceOptions>,
 ) -> Result<CallResult, HarnessError> {
-    let outcome = transact_with_logs(evm, address, calldata, options, nonce)?;
+    let outcome = transact_with_logs(evm, address, calldata, options, nonce, trace_options)?;
     Ok(outcome.result)
 }
 
@@ -164,17 +222,25 @@ fn transact_with_logs(
     calldata: &[u8],
     options: ExecutionOptions,
     nonce: u64,
+    trace_options: Option<&EvmTraceOptions>,
 ) -> Result<CallResultWithLogs, HarnessError> {
-    let tx = TxEnv::builder()
-        .caller(options.caller)
-        .gas_limit(options.gas_limit)
-        .gas_price(options.gas_price)
-        .to(address)
-        .value(options.value)
-        .data(EvmBytes::copy_from_slice(calldata))
-        .nonce(nonce)
-        .build()
-        .map_err(|err| HarnessError::Execution(format!("{err:?}")))?;
+    let build_tx = || {
+        TxEnv::builder()
+            .caller(options.caller)
+            .gas_limit(options.gas_limit)
+            .gas_price(options.gas_price)
+            .to(address)
+            .value(options.value)
+            .data(EvmBytes::copy_from_slice(calldata))
+            .nonce(nonce)
+            .build()
+    };
+
+    if let Some(trace_options) = trace_options {
+        trace_tx(evm, build_tx().expect("tx builder is valid"), trace_options);
+    }
+
+    let tx = build_tx().map_err(|err| HarnessError::Execution(format!("{err:?}")))?;
 
     let result = evm
         .transact_commit(tx)
@@ -205,6 +271,359 @@ fn transact_with_logs(
     }
 }
 
+fn trace_tx(evm: &MainnetEvm<MainnetContext<InMemoryDB>>, tx: TxEnv, options: &EvmTraceOptions) {
+    #[derive(Clone, Debug)]
+    struct Step {
+        pc: usize,
+        opcode: u8,
+        stack_len: usize,
+        gas_remaining: u64,
+        stack_top: Vec<String>,
+    }
+
+    #[derive(Clone, Debug)]
+    struct RingTrace {
+        keep: usize,
+        stack_n: usize,
+        steps: VecDeque<Step>,
+        total_steps: u64,
+    }
+
+    impl RingTrace {
+        fn new(keep: usize, stack_n: usize) -> Self {
+            Self {
+                keep,
+                stack_n,
+                steps: VecDeque::with_capacity(keep),
+                total_steps: 0,
+            }
+        }
+
+        fn push(&mut self, step: Step) {
+            self.total_steps += 1;
+            if self.steps.len() == self.keep {
+                self.steps.pop_front();
+            }
+            self.steps.push_back(step);
+        }
+
+        fn format(&self) -> String {
+            let mut out = String::new();
+            out.push_str(&format!(
+                "TRACE (last {} of {} steps)\n",
+                self.steps.len(),
+                self.total_steps
+            ));
+            for s in &self.steps {
+                if self.stack_n > 0 {
+                    out.push_str(&format!(
+                        "pc={:04} op=0x{:02x} stack={} gas_rem={} top={}\n",
+                        s.pc,
+                        s.opcode,
+                        s.stack_len,
+                        s.gas_remaining,
+                        s.stack_top.join(",")
+                    ));
+                } else {
+                    out.push_str(&format!(
+                        "pc={:04} op=0x{:02x} stack={} gas_rem={}\n",
+                        s.pc, s.opcode, s.stack_len, s.gas_remaining
+                    ));
+                }
+            }
+            out
+        }
+    }
+
+    impl<CTX, INTR: revm::interpreter::InterpreterTypes> revm::Inspector<CTX, INTR> for RingTrace {
+        fn step(&mut self, interp: &mut revm::interpreter::Interpreter<INTR>, _context: &mut CTX) {
+            let stack_top = if self.stack_n == 0 {
+                Vec::new()
+            } else {
+                interp
+                    .stack
+                    .data()
+                    .iter()
+                    .rev()
+                    .take(self.stack_n)
+                    .rev()
+                    .map(|v| format!("{v:#x}"))
+                    .collect()
+            };
+            self.push(Step {
+                pc: interp.bytecode.pc(),
+                opcode: interp.bytecode.opcode(),
+                stack_len: interp.stack.len(),
+                gas_remaining: interp.gas.remaining(),
+                stack_top,
+            });
+        }
+    }
+
+    use revm::interpreter::interpreter_types::{Jumps, StackTr};
+
+    // Clone the EVM (including DB state) for tracing so we don't disturb the caller's state.
+    let ctx = evm.ctx.clone();
+    let mut trace_evm =
+        ctx.build_mainnet_with_inspector(RingTrace::new(options.keep_steps, options.stack_n));
+
+    let result = trace_evm.inspect_tx_commit(tx);
+    let formatted = format!(
+        "{}\ntrace result: {result:?}\n",
+        trace_evm.inspector.format()
+    );
+    if let Some(path) = &options.out_path {
+        match std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .and_then(|mut f| f.write_all(formatted.as_bytes()))
+        {
+            Ok(()) => {
+                if options.write_stderr {
+                    tracing::debug!("{formatted}");
+                }
+            }
+            Err(err) => {
+                tracing::error!(
+                    "EVM trace output: failed to write `{}`: {err}",
+                    path.display()
+                );
+                tracing::debug!("{formatted}");
+            }
+        }
+    } else if options.write_stderr {
+        tracing::debug!("{formatted}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Call-trace inspector: captures CALL/CREATE events at contract boundaries
+// ---------------------------------------------------------------------------
+
+/// Normalized address in a call trace (sequential ID, not raw address).
+type AddrId = usize;
+
+/// A single event in a call trace.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CallTraceEvent {
+    Call {
+        target: AddrId,
+        calldata: Vec<u8>,
+        output: Vec<u8>,
+        success: bool,
+    },
+    Create {
+        scheme: &'static str,
+        address: AddrId,
+        success: bool,
+    },
+}
+
+/// Address-normalized call trace from a single test execution.
+#[derive(Debug, Clone, Default)]
+pub struct CallTrace {
+    pub events: Vec<CallTraceEvent>,
+    addr_map: HashMap<Address, AddrId>,
+}
+
+impl CallTrace {
+    /// Replaces known addresses in a hex-encoded byte string with their `$N` IDs.
+    ///
+    /// EVM addresses are 20 bytes. In ABI-encoded return data, they appear as
+    /// 32-byte words with 12 zero bytes followed by the 20-byte address.
+    /// We scan for both raw 20-byte occurrences and zero-padded 32-byte words.
+    fn normalize_hex(hex_str: &str, addr_map: &HashMap<Address, AddrId>) -> String {
+        if addr_map.is_empty() || hex_str.is_empty() {
+            return hex_str.to_string();
+        }
+
+        let mut result = hex_str.to_string();
+        // Sort by longest hex representation first to avoid partial replacements
+        let mut entries: Vec<_> = addr_map.iter().collect();
+        entries.sort_by(|a, b| b.0.to_string().len().cmp(&a.0.to_string().len()));
+
+        for (addr, id) in entries {
+            let addr_hex = hex::encode(addr.as_slice()); // 40 hex chars
+            // Replace zero-padded 32-byte ABI word (24 zeros + 40 hex chars)
+            let padded = format!("000000000000000000000000{addr_hex}");
+            result = result.replace(&padded, &format!("${id}"));
+            // Also replace bare 20-byte address
+            result = result.replace(&addr_hex, &format!("${id}"));
+        }
+        result
+    }
+}
+
+impl fmt::Display for CallTrace {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for event in &self.events {
+            match event {
+                CallTraceEvent::Call {
+                    target,
+                    calldata,
+                    output,
+                    success,
+                } => {
+                    let status = if *success { "ok" } else { "revert" };
+                    let ret_hex = CallTrace::normalize_hex(&hex::encode(output), &self.addr_map);
+                    let data_hex = CallTrace::normalize_hex(&hex::encode(calldata), &self.addr_map);
+                    writeln!(
+                        f,
+                        "CALL ${target} data={data_hex} -> {status} ret={ret_hex}",
+                    )?;
+                }
+                CallTraceEvent::Create {
+                    scheme,
+                    address,
+                    success,
+                } => {
+                    let status = if *success { "ok" } else { "fail" };
+                    writeln!(f, "{scheme} {status} -> ${address}")?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Tracks whether we are inside a CALL or CREATE frame.
+#[derive(Debug, Clone)]
+enum PendingFrame {
+    Call { target: AddrId, calldata: Vec<u8> },
+    Create { scheme: &'static str },
+}
+
+/// Inspector that records every CALL/CREATE at contract boundaries.
+///
+/// Addresses are normalized to sequential IDs so that traces from different
+/// backends (which produce different bytecode and therefore different
+/// CREATE-derived addresses) can be compared directly.
+#[derive(Debug)]
+pub struct CallTracer {
+    addr_map: HashMap<Address, AddrId>,
+    next_id: AddrId,
+    stack: Vec<PendingFrame>,
+    events: Vec<CallTraceEvent>,
+}
+
+impl Default for CallTracer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CallTracer {
+    pub fn new() -> Self {
+        Self {
+            addr_map: HashMap::new(),
+            next_id: 0,
+            stack: Vec::new(),
+            events: Vec::new(),
+        }
+    }
+
+    fn resolve_addr(&mut self, addr: Address) -> AddrId {
+        let next = self.next_id;
+        *self.addr_map.entry(addr).or_insert_with(|| {
+            self.next_id = next + 1;
+            next
+        })
+    }
+
+    fn assign_new_addr(&mut self, addr: Address) -> AddrId {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.addr_map.insert(addr, id);
+        id
+    }
+
+    pub fn into_trace(self) -> CallTrace {
+        CallTrace {
+            events: self.events,
+            addr_map: self.addr_map,
+        }
+    }
+}
+
+impl<CTX: revm::context_interface::ContextTr, INTR: revm::interpreter::InterpreterTypes>
+    revm::Inspector<CTX, INTR> for CallTracer
+{
+    fn call(
+        &mut self,
+        context: &mut CTX,
+        inputs: &mut revm::interpreter::CallInputs,
+    ) -> Option<revm::interpreter::CallOutcome> {
+        let target_id = self.resolve_addr(inputs.target_address);
+        let calldata = inputs.input.bytes(context).to_vec();
+        self.stack.push(PendingFrame::Call {
+            target: target_id,
+            calldata,
+        });
+        None
+    }
+
+    fn call_end(
+        &mut self,
+        _context: &mut CTX,
+        _inputs: &revm::interpreter::CallInputs,
+        outcome: &mut revm::interpreter::CallOutcome,
+    ) {
+        let Some(frame) = self.stack.pop() else {
+            return;
+        };
+        if let PendingFrame::Call { target, calldata } = frame {
+            self.events.push(CallTraceEvent::Call {
+                target,
+                calldata,
+                output: outcome.result.output.to_vec(),
+                success: outcome.result.result.is_ok(),
+            });
+        }
+    }
+
+    fn create(
+        &mut self,
+        _context: &mut CTX,
+        inputs: &mut revm::interpreter::CreateInputs,
+    ) -> Option<revm::interpreter::CreateOutcome> {
+        let scheme = match inputs.scheme {
+            revm::context_interface::CreateScheme::Create => "CREATE",
+            revm::context_interface::CreateScheme::Create2 { .. } => "CREATE2",
+            revm::context_interface::CreateScheme::Custom { .. } => "CREATE_CUSTOM",
+        };
+        self.stack.push(PendingFrame::Create { scheme });
+        None
+    }
+
+    fn create_end(
+        &mut self,
+        _context: &mut CTX,
+        _inputs: &revm::interpreter::CreateInputs,
+        outcome: &mut revm::interpreter::CreateOutcome,
+    ) {
+        let Some(frame) = self.stack.pop() else {
+            return;
+        };
+        if let PendingFrame::Create { scheme } = frame {
+            let success = outcome.result.result.is_ok();
+            let addr_id = if let Some(addr) = outcome.address {
+                self.assign_new_addr(addr)
+            } else {
+                // Failed create — assign a placeholder ID
+                let id = self.next_id;
+                self.next_id += 1;
+                id
+            };
+            self.events.push(CallTraceEvent::Create {
+                scheme,
+                address: addr_id,
+                success,
+            });
+        }
+    }
+}
+
 /// Formats raw EVM logs into debug strings for display.
 ///
 /// * `logs` - Logs emitted by the EVM execution.
@@ -219,6 +638,7 @@ pub struct RuntimeInstance {
     evm: MainnetEvm<MainnetContext<InMemoryDB>>,
     address: Address,
     next_nonce_by_caller: HashMap<Address, u64>,
+    trace_options: Option<EvmTraceOptions>,
 }
 
 impl RuntimeInstance {
@@ -236,13 +656,19 @@ impl RuntimeInstance {
             evm,
             address,
             next_nonce_by_caller: HashMap::new(),
+            trace_options: None,
         })
     }
 
     /// Deploys a contract by executing its init bytecode and using the returned runtime code.
     /// This properly runs any initialization logic in the constructor.
     pub fn deploy(init_bytecode_hex: &str) -> Result<Self, HarnessError> {
-        Self::deploy_with_constructor_args(init_bytecode_hex, &[])
+        Self::deploy_tracked(init_bytecode_hex).map(|(instance, _)| instance)
+    }
+
+    /// Deploys a contract and returns the runtime instance plus deployment gas.
+    pub fn deploy_tracked(init_bytecode_hex: &str) -> Result<(Self, u64), HarnessError> {
+        Self::deploy_with_constructor_args_tracked(init_bytecode_hex, &[])
     }
 
     /// Deploys a contract by executing its init bytecode with ABI-encoded constructor args.
@@ -250,6 +676,15 @@ impl RuntimeInstance {
         init_bytecode_hex: &str,
         constructor_args: &[u8],
     ) -> Result<Self, HarnessError> {
+        Self::deploy_with_constructor_args_tracked(init_bytecode_hex, constructor_args)
+            .map(|(instance, _)| instance)
+    }
+
+    /// Deploys a contract with constructor args and returns deployment gas.
+    pub fn deploy_with_constructor_args_tracked(
+        init_bytecode_hex: &str,
+        constructor_args: &[u8],
+    ) -> Result<(Self, u64), HarnessError> {
         let mut init_code = hex_to_bytes(init_bytecode_hex)?;
         init_code.extend_from_slice(constructor_args);
         let caller = Address::ZERO;
@@ -287,16 +722,21 @@ impl RuntimeInstance {
         match result {
             ExecutionResult::Success {
                 output: Output::Create(_, Some(deployed_address)),
+                gas_used,
                 ..
             } => {
                 // The contract was deployed successfully; revm has already inserted the account
                 let mut next_nonce_by_caller = HashMap::new();
                 next_nonce_by_caller.insert(caller, 1);
-                Ok(Self {
-                    evm,
-                    address: deployed_address,
-                    next_nonce_by_caller,
-                })
+                Ok((
+                    Self {
+                        evm,
+                        address: deployed_address,
+                        next_nonce_by_caller,
+                        trace_options: None,
+                    },
+                    gas_used,
+                ))
             }
             ExecutionResult::Success { output, .. } => Err(HarnessError::Execution(format!(
                 "deployment returned unexpected output: {output:?}"
@@ -330,7 +770,14 @@ impl RuntimeInstance {
         options: ExecutionOptions,
     ) -> Result<CallResult, HarnessError> {
         let nonce = self.effective_nonce(options);
-        transact(&mut self.evm, self.address, calldata, options, nonce)
+        transact(
+            &mut self.evm,
+            self.address,
+            calldata,
+            options,
+            nonce,
+            self.trace_options.as_ref(),
+        )
     }
 
     /// Executes the runtime with arbitrary calldata, returning execution logs.
@@ -340,7 +787,14 @@ impl RuntimeInstance {
         options: ExecutionOptions,
     ) -> Result<CallResultWithLogs, HarnessError> {
         let nonce = self.effective_nonce(options);
-        transact_with_logs(&mut self.evm, self.address, calldata, options, nonce)
+        transact_with_logs(
+            &mut self.evm,
+            self.address,
+            calldata,
+            options,
+            nonce,
+            self.trace_options.as_ref(),
+        )
     }
 
     /// Executes the runtime at an arbitrary address using the same underlying EVM state.
@@ -351,7 +805,19 @@ impl RuntimeInstance {
         options: ExecutionOptions,
     ) -> Result<CallResult, HarnessError> {
         let nonce = self.effective_nonce(options);
-        transact(&mut self.evm, address, calldata, options, nonce)
+        transact(
+            &mut self.evm,
+            address,
+            calldata,
+            options,
+            nonce,
+            self.trace_options.as_ref(),
+        )
+    }
+
+    /// Configures optional step-by-step EVM tracing for subsequent calls.
+    pub fn set_trace_options(&mut self, trace_options: Option<EvmTraceOptions>) {
+        self.trace_options = trace_options;
     }
 
     /// Executes a strongly-typed function call using ABI encoding.
@@ -363,6 +829,267 @@ impl RuntimeInstance {
     ) -> Result<CallResult, HarnessError> {
         let calldata = encode_function_call(signature, args)?;
         self.call_raw(&calldata, options)
+    }
+
+    /// Re-executes the last transaction on a **cloned** EVM context with the
+    /// `CallTracer` inspector attached, producing a normalized call trace.
+    ///
+    /// Uses `&self` because it clones the context — does not mutate real state.
+    pub fn call_raw_traced(&self, calldata: &[u8], options: ExecutionOptions) -> CallTrace {
+        let ctx = self.evm.ctx.clone();
+        let mut tracer = CallTracer::new();
+        let mut trace_evm = ctx.build_mainnet_with_inspector(&mut tracer);
+
+        // Honor explicit nonce when set, otherwise use stored nonce for this caller.
+        let nonce = options.nonce.unwrap_or_else(|| {
+            self.next_nonce_by_caller
+                .get(&options.caller)
+                .copied()
+                .unwrap_or(0)
+        });
+
+        let tx = TxEnv::builder()
+            .caller(options.caller)
+            .gas_limit(options.gas_limit)
+            .gas_price(options.gas_price)
+            .to(self.address)
+            .value(options.value)
+            .data(EvmBytes::copy_from_slice(calldata))
+            .nonce(nonce)
+            .build()
+            .expect("tx builder is valid");
+
+        let _ = trace_evm.inspect_tx_commit(tx);
+        tracer.into_trace()
+    }
+
+    /// Re-executes the call on a cloned EVM context and returns total EVM steps.
+    ///
+    /// Uses `&self` because this is a read-only replay that does not mutate the
+    /// runtime state used by real executions.
+    pub fn call_raw_step_count(&self, calldata: &[u8], options: ExecutionOptions) -> u64 {
+        self.call_raw_gas_profile(calldata, options).step_count
+    }
+
+    /// Re-executes the call on a cloned EVM context and returns full-step gas attribution.
+    ///
+    /// Uses `&self` because this is a read-only replay that does not mutate the
+    /// runtime state used by real executions.
+    pub fn call_raw_gas_profile(
+        &self,
+        calldata: &[u8],
+        options: ExecutionOptions,
+    ) -> CallGasProfile {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        enum InvocationKind {
+            Call,
+            Create,
+        }
+
+        #[derive(Debug, Clone, Copy)]
+        struct PendingInvocation {
+            kind: InvocationKind,
+            started_interp: bool,
+        }
+
+        #[derive(Debug, Clone, Copy)]
+        struct FrameState {
+            in_constructor: bool,
+            pending_gas_remaining: u64,
+            pending_opcode: u8,
+        }
+
+        impl FrameState {
+            fn new(in_constructor: bool, gas_limit: u64) -> Self {
+                Self {
+                    in_constructor,
+                    pending_gas_remaining: gas_limit,
+                    pending_opcode: 0,
+                }
+            }
+        }
+
+        #[derive(Debug, Default)]
+        struct GasAttributionInspector {
+            frame_stack: Vec<FrameState>,
+            pending_invocations: Vec<PendingInvocation>,
+            profile: CallGasProfile,
+        }
+
+        impl GasAttributionInspector {
+            fn record_root_step_delta(&mut self, opcode: u8, delta: u64) {
+                self.profile.total_step_gas = self.profile.total_step_gas.saturating_add(delta);
+                match opcode {
+                    0xf0 => {
+                        self.profile.create_opcode_steps += 1;
+                        self.profile.create_opcode_gas =
+                            self.profile.create_opcode_gas.saturating_add(delta);
+                    }
+                    0xf5 => {
+                        self.profile.create2_opcode_steps += 1;
+                        self.profile.create2_opcode_gas =
+                            self.profile.create2_opcode_gas.saturating_add(delta);
+                    }
+                    _ => {}
+                }
+            }
+
+            fn complete_invocation(&mut self, kind: InvocationKind) -> Option<PendingInvocation> {
+                self.pending_invocations
+                    .iter()
+                    .rposition(|invocation| invocation.kind == kind)
+                    .map(|index| self.pending_invocations.remove(index))
+            }
+        }
+
+        impl<CTX, INTR: revm::interpreter::InterpreterTypes> revm::Inspector<CTX, INTR>
+            for GasAttributionInspector
+        {
+            fn initialize_interp(
+                &mut self,
+                interp: &mut revm::interpreter::Interpreter<INTR>,
+                _context: &mut CTX,
+            ) {
+                let in_constructor = if self.frame_stack.is_empty() {
+                    false
+                } else {
+                    let parent_in_constructor = self
+                        .frame_stack
+                        .last()
+                        .map(|frame| frame.in_constructor)
+                        .unwrap_or(false);
+                    let child_kind = self
+                        .pending_invocations
+                        .iter_mut()
+                        .rev()
+                        .find(|invocation| !invocation.started_interp)
+                        .map(|invocation| {
+                            invocation.started_interp = true;
+                            invocation.kind
+                        });
+                    parent_in_constructor || matches!(child_kind, Some(InvocationKind::Create))
+                };
+                self.frame_stack
+                    .push(FrameState::new(in_constructor, interp.gas.limit()));
+            }
+
+            fn step(
+                &mut self,
+                interp: &mut revm::interpreter::Interpreter<INTR>,
+                _context: &mut CTX,
+            ) {
+                if let Some(frame) = self.frame_stack.last_mut() {
+                    frame.pending_gas_remaining = interp.gas.remaining();
+                    frame.pending_opcode = interp.bytecode.opcode();
+                }
+                self.profile.step_count += 1;
+            }
+
+            fn step_end(
+                &mut self,
+                interp: &mut revm::interpreter::Interpreter<INTR>,
+                _context: &mut CTX,
+            ) {
+                let frame_depth = self.frame_stack.len();
+                let Some(frame) = self.frame_stack.last_mut() else {
+                    return;
+                };
+                let remaining = interp.gas.remaining();
+                let delta = frame.pending_gas_remaining.saturating_sub(remaining);
+                let opcode = frame.pending_opcode;
+                if frame_depth == 1 {
+                    self.record_root_step_delta(opcode, delta);
+                }
+            }
+
+            fn call(
+                &mut self,
+                _context: &mut CTX,
+                _inputs: &mut revm::interpreter::CallInputs,
+            ) -> Option<revm::interpreter::CallOutcome> {
+                self.pending_invocations.push(PendingInvocation {
+                    kind: InvocationKind::Call,
+                    started_interp: false,
+                });
+                None
+            }
+
+            fn call_end(
+                &mut self,
+                _context: &mut CTX,
+                _inputs: &revm::interpreter::CallInputs,
+                _outcome: &mut revm::interpreter::CallOutcome,
+            ) {
+                if let Some(invocation) = self.complete_invocation(InvocationKind::Call)
+                    && invocation.started_interp
+                {
+                    let _ = self.frame_stack.pop();
+                }
+            }
+
+            fn create(
+                &mut self,
+                _context: &mut CTX,
+                _inputs: &mut revm::interpreter::CreateInputs,
+            ) -> Option<revm::interpreter::CreateOutcome> {
+                self.pending_invocations.push(PendingInvocation {
+                    kind: InvocationKind::Create,
+                    started_interp: false,
+                });
+                None
+            }
+
+            fn create_end(
+                &mut self,
+                _context: &mut CTX,
+                _inputs: &revm::interpreter::CreateInputs,
+                outcome: &mut revm::interpreter::CreateOutcome,
+            ) {
+                if let Some(invocation) = self.complete_invocation(InvocationKind::Create)
+                    && invocation.started_interp
+                {
+                    self.profile.constructor_frame_gas = self
+                        .profile
+                        .constructor_frame_gas
+                        .saturating_add(outcome.result.gas.spent());
+                    let _ = self.frame_stack.pop();
+                }
+            }
+        }
+
+        let ctx = self.evm.ctx.clone();
+        let mut inspector = GasAttributionInspector::default();
+        let mut trace_evm = ctx.build_mainnet_with_inspector(&mut inspector);
+
+        // Honor explicit nonce when set, otherwise use stored nonce for this caller.
+        let nonce = options.nonce.unwrap_or_else(|| {
+            self.next_nonce_by_caller
+                .get(&options.caller)
+                .copied()
+                .unwrap_or(0)
+        });
+
+        let tx = TxEnv::builder()
+            .caller(options.caller)
+            .gas_limit(options.gas_limit)
+            .gas_price(options.gas_price)
+            .to(self.address)
+            .value(options.value)
+            .data(EvmBytes::copy_from_slice(calldata))
+            .nonce(nonce)
+            .build()
+            .expect("tx builder is valid");
+
+        let _ = trace_evm.inspect_tx_commit(tx);
+        let mut profile = trace_evm.inspector.profile;
+        let create_total = profile
+            .create_opcode_gas
+            .saturating_add(profile.create2_opcode_gas);
+        profile.non_create_opcode_gas = profile.total_step_gas.saturating_sub(create_total);
+        profile.non_constructor_frame_gas = profile
+            .total_step_gas
+            .saturating_sub(profile.constructor_frame_gas);
+        profile
     }
 
     /// Returns the contract address assigned to this runtime instance.
@@ -472,6 +1199,36 @@ impl FeContractHarness {
     }
 }
 
+/// Compiles the provided Fe source to Sonatina-generated runtime bytecode (hex-encoded).
+pub fn compile_runtime_sonatina_from_source(source: &str) -> Result<String, HarnessError> {
+    let mut db = DriverDataBase::default();
+    let url = Url::parse(MEMORY_SOURCE_URL).expect("static URL is valid");
+    db.workspace()
+        .touch(&mut db, url.clone(), Some(source.to_string()));
+    let file = db
+        .workspace()
+        .get(&db, &url)
+        .expect("file should exist in workspace");
+    let top_mod = db.top_mod(file);
+    let diags = db.run_on_top_mod(top_mod);
+    if !diags.is_empty() {
+        return Err(HarnessError::CompilerDiagnostics(diags.format_diags(&db)));
+    }
+
+    let output = SonatinaBackend
+        .compile(
+            &db,
+            top_mod,
+            layout::EVM_LAYOUT,
+            codegen::OptLevel::default(),
+        )
+        .map_err(|err| HarnessError::EmitSonatina(err.to_string()))?;
+    let bytes = output
+        .as_bytecode()
+        .ok_or_else(|| HarnessError::EmitSonatina("backend returned non-bytecode output".into()))?;
+    Ok(hex::encode(bytes))
+}
+
 /// ABI-encodes a function call according to the provided signature.
 pub fn encode_function_call(signature: &str, args: &[Token]) -> Result<Vec<u8>, HarnessError> {
     let function = AbiParser::default().parse_function(signature)?;
@@ -568,402 +1325,6 @@ object "Counter" {
             .call_raw(&[0u8; 0], options)
             .expect("second call succeeds");
         assert_eq!(bytes_to_u256(&second.return_data).unwrap(), U256::from(2));
-    }
-
-    #[test]
-    fn full_contract_test() {
-        if !solc_available() {
-            eprintln!("skipping full_contract_test because solc is missing");
-            return;
-        }
-        let source_path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../codegen/tests/fixtures/full_contract.fe"
-        );
-        let harness = FeContractHarness::compile_from_file(
-            "ShapeDispatcher",
-            source_path,
-            CompileOptions::default(),
-        )
-        .expect("compilation should succeed");
-        let mut instance = harness.deploy_instance().expect("deployment succeeds");
-        let options = ExecutionOptions::default();
-        let point_call = encode_function_call(
-            "point(uint256,uint256)",
-            &[
-                Token::Uint(AbiU256::from(3u64)),
-                Token::Uint(AbiU256::from(4u64)),
-            ],
-        )
-        .unwrap();
-        let point_result = instance
-            .call_raw(&point_call, options)
-            .expect("point selector should succeed");
-        assert_eq!(
-            bytes_to_u256(&point_result.return_data).unwrap(),
-            U256::from(24u64)
-        );
-
-        let square_call =
-            encode_function_call("square(uint256)", &[Token::Uint(AbiU256::from(5u64))]).unwrap();
-        let square_result = instance
-            .call_raw(&square_call, options)
-            .expect("square selector should succeed");
-        assert_eq!(
-            bytes_to_u256(&square_result.return_data).unwrap(),
-            U256::from(64u64)
-        );
-    }
-
-    #[test]
-    fn storage_contract_test() {
-        if !solc_available() {
-            eprintln!("skipping storage_contract_test because solc is missing");
-            return;
-        }
-        let source_path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../codegen/tests/fixtures/storage.fe"
-        );
-        let harness =
-            FeContractHarness::compile_from_file("Coin", source_path, CompileOptions::default())
-                .expect("compilation should succeed");
-
-        let mut instance = harness.deploy_instance().expect("deployment succeeds");
-        let options = ExecutionOptions::default();
-
-        // Helper discriminants: 0 = Alice, 1 = Bob
-        let alice = Token::Uint(AbiU256::from(0u64));
-        let bob = Token::Uint(AbiU256::from(1u64));
-
-        // credit Alice with 10
-        let credit_alice = encode_function_call(
-            "credit(uint256,uint256)",
-            &[alice.clone(), Token::Uint(AbiU256::from(10u64))],
-        )
-        .unwrap();
-        let credit_alice_res = instance
-            .call_raw(&credit_alice, options)
-            .expect("credit alice should succeed");
-        assert_eq!(
-            bytes_to_u256(&credit_alice_res.return_data).unwrap(),
-            U256::from(10u64)
-        );
-
-        // credit Bob with 5
-        let credit_bob = encode_function_call(
-            "credit(uint256,uint256)",
-            &[bob.clone(), Token::Uint(AbiU256::from(5u64))],
-        )
-        .unwrap();
-        let credit_bob_res = instance
-            .call_raw(&credit_bob, options)
-            .expect("credit bob should succeed");
-        assert_eq!(
-            bytes_to_u256(&credit_bob_res.return_data).unwrap(),
-            U256::from(5u64)
-        );
-
-        // transfer 3 from Alice -> Bob (should succeed, return code 0)
-        let transfer_alice = encode_function_call(
-            "transfer(uint256,uint256)",
-            &[alice.clone(), Token::Uint(AbiU256::from(3u64))],
-        )
-        .unwrap();
-        let transfer_alice_res = instance
-            .call_raw(&transfer_alice, options)
-            .expect("transfer from alice should succeed");
-        assert_eq!(
-            bytes_to_u256(&transfer_alice_res.return_data).unwrap(),
-            U256::from(0u64),
-            "successful transfer returns code 0"
-        );
-
-        // balances after transfer
-        let bal_alice_call =
-            encode_function_call("balance_of(uint256)", std::slice::from_ref(&alice)).unwrap();
-        let bal_alice = instance
-            .call_raw(&bal_alice_call, options)
-            .expect("balance_of alice should succeed");
-        assert_eq!(
-            bytes_to_u256(&bal_alice.return_data).unwrap(),
-            U256::from(7u64)
-        );
-
-        let bal_bob_call =
-            encode_function_call("balance_of(uint256)", std::slice::from_ref(&bob)).unwrap();
-        let bal_bob = instance
-            .call_raw(&bal_bob_call, options)
-            .expect("balance_of bob should succeed");
-        assert_eq!(
-            bytes_to_u256(&bal_bob.return_data).unwrap(),
-            U256::from(8u64)
-        );
-
-        // transfer too much from Bob -> Alice should fail with code 1
-        let transfer_bob = encode_function_call(
-            "transfer(uint256,uint256)",
-            &[bob, Token::Uint(AbiU256::from(20u64))],
-        )
-        .unwrap();
-        let transfer_bob_res = instance
-            .call_raw(&transfer_bob, options)
-            .expect("transfer from bob should run");
-        assert_eq!(
-            bytes_to_u256(&transfer_bob_res.return_data).unwrap(),
-            U256::from(1u64),
-            "insufficient funds should return code 1"
-        );
-
-        // total_supply should equal alice + bob (10 + 5 = 15)
-        let total_supply_call = encode_function_call("total_supply()", &[]).unwrap();
-        let total_supply_res = instance
-            .call_raw(&total_supply_call, options)
-            .expect("total_supply should succeed");
-        let total_supply = bytes_to_u256(&total_supply_res.return_data)
-            .expect("total_supply should return a u256");
-        assert_eq!(total_supply, U256::from(15u64));
-    }
-
-    #[test]
-    fn enum_variant_construction_test() {
-        if !solc_available() {
-            eprintln!("skipping enum_variant_construction_test because solc is missing");
-            return;
-        }
-        let source_path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../codegen/tests/fixtures/enum_variant_contract.fe"
-        );
-        let harness = FeContractHarness::compile_from_file(
-            "EnumContract",
-            source_path,
-            CompileOptions::default(),
-        )
-        .expect("compilation should succeed");
-        let mut instance = harness.deploy_instance().expect("deployment succeeds");
-        let options = ExecutionOptions::default();
-
-        // Test make_some(42) - should return 42 (unwrapped value)
-        let make_some_call =
-            encode_function_call("make_some(uint256)", &[Token::Uint(AbiU256::from(42u64))])
-                .unwrap();
-        let make_some_result = instance
-            .call_raw(&make_some_call, options)
-            .expect("make_some selector should succeed");
-        assert_eq!(
-            bytes_to_u256(&make_some_result.return_data).unwrap(),
-            U256::from(42u64),
-            "make_some(42) should return 42"
-        );
-
-        // Test is_some_check(99) - should return 1 (true)
-        let is_some_call = encode_function_call(
-            "is_some_check(uint256)",
-            &[Token::Uint(AbiU256::from(99u64))],
-        )
-        .unwrap();
-        let is_some_result = instance
-            .call_raw(&is_some_call, options)
-            .expect("is_some_check selector should succeed");
-        assert_eq!(
-            bytes_to_u256(&is_some_result.return_data).unwrap(),
-            U256::from(1u64),
-            "is_some_check should return 1 for Some variant"
-        );
-
-        // Test make_none() - should return 0 (is_some returns 0 for None)
-        let make_none_call = encode_function_call("make_none()", &[]).unwrap();
-        let make_none_result = instance
-            .call_raw(&make_none_call, options)
-            .expect("make_none selector should succeed");
-        assert_eq!(
-            bytes_to_u256(&make_none_result.return_data).unwrap(),
-            U256::from(0u64),
-            "make_none() should return 0 (is_some of None)"
-        );
-    }
-
-    #[test]
-    fn storage_map_contract_test() {
-        if !solc_available() {
-            eprintln!("skipping storage_map_contract_test because solc is missing");
-            return;
-        }
-        let source_path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../codegen/tests/fixtures/storage_map_contract.fe"
-        );
-        let harness = FeContractHarness::compile_from_file(
-            "BalanceMap",
-            source_path,
-            CompileOptions::default(),
-        )
-        .expect("compilation should succeed");
-
-        // Use deploy_with_init to properly run init code that initializes storage
-        let mut instance = harness.deploy_with_init().expect("deployment succeeds");
-        let options = ExecutionOptions::default();
-
-        // Use address-like values for accounts
-        let alice = Token::Uint(AbiU256::from(0x1111u64));
-        let bob = Token::Uint(AbiU256::from(0x2222u64));
-
-        // Initially, balances should be zero
-        let bal_alice_call =
-            encode_function_call("balanceOf(uint256)", std::slice::from_ref(&alice)).unwrap();
-        let bal_alice = instance
-            .call_raw(&bal_alice_call, options)
-            .expect("balanceOf alice should succeed");
-        assert_eq!(
-            bytes_to_u256(&bal_alice.return_data).unwrap(),
-            U256::from(0u64),
-            "initial alice balance should be 0"
-        );
-
-        // Set Alice's balance to 100
-        let set_alice = encode_function_call(
-            "setBalance(uint256,uint256)",
-            &[alice.clone(), Token::Uint(AbiU256::from(100u64))],
-        )
-        .unwrap();
-        instance
-            .call_raw(&set_alice, options)
-            .expect("setBalance alice should succeed");
-
-        // Verify Alice's balance is now 100
-        let bal_alice = instance
-            .call_raw(&bal_alice_call, options)
-            .expect("balanceOf alice should succeed");
-        assert_eq!(
-            bytes_to_u256(&bal_alice.return_data).unwrap(),
-            U256::from(100u64),
-            "alice balance should be 100 after set"
-        );
-
-        // Set Bob's balance to 50
-        let set_bob = encode_function_call(
-            "setBalance(uint256,uint256)",
-            &[bob.clone(), Token::Uint(AbiU256::from(50u64))],
-        )
-        .unwrap();
-        instance
-            .call_raw(&set_bob, options)
-            .expect("setBalance bob should succeed");
-
-        // Transfer 30 from Alice to Bob (should succeed, return 0)
-        let transfer_call = encode_function_call(
-            "transfer(uint256,uint256,uint256)",
-            &[
-                alice.clone(),
-                bob.clone(),
-                Token::Uint(AbiU256::from(30u64)),
-            ],
-        )
-        .unwrap();
-        let transfer_result = instance
-            .call_raw(&transfer_call, options)
-            .expect("transfer should succeed");
-        assert_eq!(
-            bytes_to_u256(&transfer_result.return_data).unwrap(),
-            U256::from(0u64),
-            "transfer should return 0 (success)"
-        );
-
-        // Verify balances after transfer: Alice = 70, Bob = 80
-        let bal_alice = instance
-            .call_raw(&bal_alice_call, options)
-            .expect("balanceOf alice should succeed");
-        assert_eq!(
-            bytes_to_u256(&bal_alice.return_data).unwrap(),
-            U256::from(70u64),
-            "alice balance should be 70 after transfer"
-        );
-
-        let bal_bob_call =
-            encode_function_call("balanceOf(uint256)", std::slice::from_ref(&bob)).unwrap();
-        let bal_bob = instance
-            .call_raw(&bal_bob_call, options)
-            .expect("balanceOf bob should succeed");
-        assert_eq!(
-            bytes_to_u256(&bal_bob.return_data).unwrap(),
-            U256::from(80u64),
-            "bob balance should be 80 after transfer"
-        );
-
-        // Try to transfer more than Alice has (should fail, return 1)
-        let transfer_fail = encode_function_call(
-            "transfer(uint256,uint256,uint256)",
-            &[
-                alice.clone(),
-                bob.clone(),
-                Token::Uint(AbiU256::from(1000u64)),
-            ],
-        )
-        .unwrap();
-        let transfer_fail_result = instance
-            .call_raw(&transfer_fail, options)
-            .expect("transfer should execute");
-        assert_eq!(
-            bytes_to_u256(&transfer_fail_result.return_data).unwrap(),
-            U256::from(1u64),
-            "transfer should return 1 (insufficient funds)"
-        );
-
-        // Verify balances unchanged after failed transfer
-        let bal_alice = instance
-            .call_raw(&bal_alice_call, options)
-            .expect("balanceOf alice should succeed");
-        assert_eq!(
-            bytes_to_u256(&bal_alice.return_data).unwrap(),
-            U256::from(70u64),
-            "alice balance should still be 70 after failed transfer"
-        );
-
-        // ========== Test that allowances map is separate from balances ==========
-        // Set Alice's allowance to 999
-        let set_allowance_alice = encode_function_call(
-            "setAllowance(uint256,uint256)",
-            &[alice.clone(), Token::Uint(AbiU256::from(999u64))],
-        )
-        .unwrap();
-        instance
-            .call_raw(&set_allowance_alice, options)
-            .expect("setAllowance alice should succeed");
-
-        // Verify Alice's allowance is 999
-        let get_allowance_alice =
-            encode_function_call("getAllowance(uint256)", std::slice::from_ref(&alice)).unwrap();
-        let allowance_alice = instance
-            .call_raw(&get_allowance_alice, options)
-            .expect("getAllowance alice should succeed");
-        assert_eq!(
-            bytes_to_u256(&allowance_alice.return_data).unwrap(),
-            U256::from(999u64),
-            "alice allowance should be 999"
-        );
-
-        // CRITICAL: Verify Alice's balance is STILL 70 (not affected by allowance)
-        let bal_alice = instance
-            .call_raw(&bal_alice_call, options)
-            .expect("balanceOf alice should succeed");
-        assert_eq!(
-            bytes_to_u256(&bal_alice.return_data).unwrap(),
-            U256::from(70u64),
-            "alice balance should still be 70 after setting allowance - maps must be independent!"
-        );
-
-        // And verify Bob's allowance is 0 (default, never set)
-        let get_allowance_bob =
-            encode_function_call("getAllowance(uint256)", std::slice::from_ref(&bob)).unwrap();
-        let allowance_bob = instance
-            .call_raw(&get_allowance_bob, options)
-            .expect("getAllowance bob should succeed");
-        assert_eq!(
-            bytes_to_u256(&allowance_bob.return_data).unwrap(),
-            U256::from(0u64),
-            "bob allowance should be 0 (never set)"
-        );
     }
 
     #[test]

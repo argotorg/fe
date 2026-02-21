@@ -9,10 +9,7 @@ fn expression_examples(x: i32) {
     let not_flag = !true
 
     let p = Point { x: 10, y: 20 }
-    let updated = Point {
-        x: p.x + 1,
-        y: p.y,
-    }
+    let updated = Point { x: p.x + 1, y: p.y }
 
     let sum = add(mul(2, 3), sub(10, 4))
 

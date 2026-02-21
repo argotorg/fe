@@ -1,0 +1,80 @@
+use std::evm::effects::assert
+use core::Seq
+
+struct Reverse<I, T: Seq<I>> {
+    base: ref T,
+}
+
+struct Take<I, T: Seq<I>> {
+    n: usize,
+    base: ref T,
+}
+
+fn reverse<I, T: Seq<I>>(seq: ref T) -> Reverse<I, T> {
+    Reverse { base: seq }
+}
+
+fn take<I, T: Seq<I>>(n: usize, seq: ref T) -> Take<I, T> {
+    Take { n, base: seq }
+}
+
+fn reverse_u256<T: Seq<u256>>(seq: ref T) -> Reverse<u256, T> {
+    reverse(seq)
+}
+
+fn take_u256<T: Seq<u256>>(n: usize, seq: ref T) -> Take<u256, T> {
+    take(n, seq)
+}
+
+impl<I, T: Seq<I>> Seq<I> for Reverse<I, T> {
+    fn len(self) -> usize {
+        self.base.len()
+    }
+
+    fn get(self, i: usize) -> I {
+        let n = self.base.len()
+        self.base.get(n - 1 - i)
+    }
+}
+
+impl<I, T: Seq<I>> Seq<I> for Take<I, T> {
+    fn len(self) -> usize {
+        let base = self.base
+        let total = base.len()
+        if self.n < total {
+            self.n
+        } else {
+            total
+        }
+    }
+
+    fn get(self, i: usize) -> I {
+        self.base.get(i)
+    }
+}
+
+fn sum_last4(arr: [u256; 8]) -> u256 {
+    let mut total = 0
+    let rev = reverse_u256(ref arr)
+    let tail = take_u256(4, ref rev)
+    for x in tail {
+        total += x
+    }
+    total
+}
+
+fn sum_first4(arr: [u256; 8]) -> u256 {
+    let mut total = 0
+    let head = take_u256(4, ref arr)
+    for x in head {
+        total += x
+    }
+    total
+}
+
+#[test]
+fn test_view_param_local_ref_take_reverse() {
+    let arr: [u256; 8] = [1, 2, 3, 4, 5, 6, 7, 8]
+    assert(sum_last4(arr) == 26)
+    assert(sum_first4(arr) == 10)
+}

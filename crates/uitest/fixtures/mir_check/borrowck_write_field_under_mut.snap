@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/mir_check.rs
+expression: res
+input_file: fixtures/mir_check/borrowck_write_field_under_mut.fe
+---
+error[11-0002]: borrow conflict in `fn borrowck_write_field_under_mut`
+   ┌─ borrowck_write_field_under_mut.fe:11:5
+   │
+10 │     let p: mut u256 = mut s.a
+   │                           --- borrow created here
+11 │     s.a = 2
+   │     ^^^^^^^ access overlaps an active `mut` borrow

@@ -1,0 +1,14 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/const_fn/non_const_call.fe
+---
+error[8-0062]: non-const call in `const fn`
+  ┌─ non_const_call.fe:6:5
+  │
+1 │ fn runtime() -> usize {
+  │    ------- callee defined here
+  ·
+6 │     runtime()
+  │     ^^^^^^^^^ `runtime` is not a `const fn`

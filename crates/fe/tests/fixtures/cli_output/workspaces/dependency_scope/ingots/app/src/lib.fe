@@ -1,0 +1,5 @@
+use lib::foo
+
+pub fn main() {
+    foo()
+}

@@ -1,36 +1,29 @@
 ---
 source: crates/uitest/tests/ty.rs
+assertion_line: 27
 expression: diags
 input_file: fixtures/ty/def/duplicated_arg_name.fe
 ---
 error[3-0008]: duplicate argument name in function `foo`
   ┌─ duplicated_arg_name.fe:1:12
   │
-1 │ pub fn foo(x: i32, y x: u64) {}
-  │            ^         - `x` is redefined here
-  │            │          
+1 │ pub fn foo(x: i32, x: u64) {}
+  │            ^       - `x` is redefined here
+  │            │        
   │            `x` is defined here
 
 error[3-0008]: duplicate argument name in function `foo`
-  ┌─ duplicated_arg_name.fe:4:14
+  ┌─ duplicated_arg_name.fe:4:12
   │
-4 │     fn foo(x y: i32, z y: i32) {}
-  │              ^         - `y` is redefined here
-  │              │          
-  │              `y` is defined here
+4 │     fn foo(y: i32, y: i32) {}
+  │            ^       - `y` is redefined here
+  │            │        
+  │            `y` is defined here
 
 error[3-0008]: duplicate argument name in function `foo`
-  ┌─ duplicated_arg_name.fe:8:14
+  ┌─ duplicated_arg_name.fe:8:12
   │
-8 │     fn foo(x y: i32, z y: i32) {}
-  │              ^         - `y` is redefined here
-  │              │          
-  │              `y` is defined here
-
-error[3-0020]: duplicate argument label in function `bar`
-   ┌─ duplicated_arg_name.fe:11:8
-   │
-11 │ fn bar(a x: i32, a y: i32) {}
-   │        ^         - `a` is redefined here
-   │        │          
-   │        `a` is defined here
+8 │     fn foo(y: i32, y: i32) {}
+  │            ^       - `y` is redefined here
+  │            │        
+  │            `y` is defined here

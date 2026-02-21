@@ -3,24 +3,20 @@
 use pretty::DocAllocator;
 
 use crate::RewriteContext;
-use parser::ast::{self, AttrArgValueKind, AttrKind};
+use parser::ast::{self, AttrArgValueKind, AttrKind, prelude::AstNode};
 
-use super::types::{Doc, ToDoc, block_list};
+use super::types::{Doc, ToDoc, block_list_auto, intersperse};
 
 impl ToDoc for ast::AttrList {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
         let alloc = &ctx.alloc;
 
-        let attrs: Vec<_> = self.iter().collect();
+        let attrs: Vec<_> = self.iter().map(|attr| attr.to_doc(ctx)).collect();
         if attrs.is_empty() {
-            return alloc.nil();
+            alloc.nil()
+        } else {
+            intersperse(alloc, attrs, alloc.hardline()).append(alloc.hardline())
         }
-
-        let mut doc = alloc.nil();
-        for attr in attrs {
-            doc = doc.append(attr.to_doc(ctx)).append(alloc.hardline());
-        }
-        doc
     }
 }
 
@@ -51,6 +47,7 @@ impl ToDoc for ast::NormalAttr {
             let val_doc = match val {
                 AttrArgValueKind::Ident(tok) => alloc.text(tok.text().to_string()),
                 AttrArgValueKind::Lit(lit) => lit.to_doc(ctx),
+                AttrArgValueKind::Expr(expr) => expr.to_doc(ctx),
             };
             alloc.text(" = ").append(val_doc)
         } else {
@@ -78,10 +75,16 @@ impl ToDoc for ast::DocCommentAttr {
 
 impl ToDoc for ast::AttrArgList {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
-        let args: Vec<_> = self.iter().map(|arg| arg.to_doc(ctx)).collect();
-
         let indent = ctx.config.indent_width as isize;
-        block_list(ctx, "(", ")", args, indent, true)
+        block_list_auto(
+            ctx,
+            self.syntax(),
+            "(",
+            ")",
+            ast::AttrArg::cast,
+            indent,
+            true,
+        )
     }
 }
 
@@ -99,6 +102,7 @@ impl ToDoc for ast::AttrArg {
                 let val_doc = match val {
                     AttrArgValueKind::Ident(tok) => alloc.text(tok.text().to_string()),
                     AttrArgValueKind::Lit(lit) => lit.to_doc(ctx),
+                    AttrArgValueKind::Expr(expr) => expr.to_doc(ctx),
                 };
                 key.append(alloc.text(" = ")).append(val_doc)
             }

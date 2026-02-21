@@ -1,0 +1,17 @@
+---
+source: crates/mir/tests/lowering_snapshots.rs
+assertion_line: 26
+expression: mir_output
+---
+fn read_a(v0: Position) -> u256:
+  bb0:
+    v1: u256 = load mem[v0].0
+    ret v1
+
+fn mut_handle_to_view_byref() -> u256:
+  bb0:
+    v1: Position = alloc mem
+    init mem[v1] { .0 = 7, .1 = 9 }
+    v0: Position = v1
+    v2: u256 = read_a(&mem[v0])
+    ret v2

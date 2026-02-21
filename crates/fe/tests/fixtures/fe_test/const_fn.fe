@@ -1,0 +1,18 @@
+use std::evm::Address
+use std::evm::effects::assert
+
+#[event]
+struct Transfer {
+    #[indexed]
+    from: Address,
+    #[indexed]
+    to: Address,
+    val: u256,
+}
+
+#[test]
+fn transfer_sig() {
+    assert(
+        Transfer::TOPIC0 == 0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef,
+    )
+}

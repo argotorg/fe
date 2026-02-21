@@ -1,0 +1,77 @@
+---
+source: crates/language-server/src/functionality/goto.rs
+assertion_line: 316
+expression: snapshot
+input_file: test_files/goto_assoc_type.fe
+---
+note: 
+  ┌─ goto_assoc_type.fe:3:12
+  │
+3 │     fn get(self) -> Self::Item
+  │            ^^^^ -> goto_assoc_type::Container
+
+note: 
+  ┌─ goto_assoc_type.fe:3:21
+  │
+3 │     fn get(self) -> Self::Item
+  │                     ^^^^ -> goto_assoc_type::Container
+
+note: 
+  ┌─ goto_assoc_type.fe:3:27
+  │
+3 │     fn get(self) -> Self::Item
+  │                           ^^^^ -> goto_assoc_type::Container::Item
+
+note: 
+   ┌─ goto_assoc_type.fe:10:6
+   │
+10 │ impl Container for IntBox {
+   │      ^^^^^^^^^ -> goto_assoc_type::Container
+
+note: 
+   ┌─ goto_assoc_type.fe:10:20
+   │
+10 │ impl Container for IntBox {
+   │                    ^^^^^^ -> goto_assoc_type::IntBox
+
+note: 
+   ┌─ goto_assoc_type.fe:12:12
+   │
+12 │     fn get(self) -> i32 {
+   │            ^^^^ -> local: IntBox
+
+note: 
+   ┌─ goto_assoc_type.fe:13:9
+   │
+13 │         self.val
+   │         ^^^^ -> local: IntBox
+
+note: 
+   ┌─ goto_assoc_type.fe:17:15
+   │
+17 │ fn extract<C: Container>(c: C) -> C::Item {
+   │               ^^^^^^^^^ -> goto_assoc_type::Container
+
+note: 
+   ┌─ goto_assoc_type.fe:17:29
+   │
+17 │ fn extract<C: Container>(c: C) -> C::Item {
+   │                             ^ -> goto_assoc_type::extract::C
+
+note: 
+   ┌─ goto_assoc_type.fe:17:35
+   │
+17 │ fn extract<C: Container>(c: C) -> C::Item {
+   │                                   ^ -> goto_assoc_type::extract::C
+
+note: 
+   ┌─ goto_assoc_type.fe:17:38
+   │
+17 │ fn extract<C: Container>(c: C) -> C::Item {
+   │                                      ^^^^ -> goto_assoc_type::Container::Item
+
+note: 
+   ┌─ goto_assoc_type.fe:18:5
+   │
+18 │     c.get()
+   │     ^ -> local: C

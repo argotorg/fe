@@ -1,0 +1,29 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/event_shadowed_address_type.fe
+---
+error[2-0010]: no method named `as_topic` found for struct `Address`
+   ┌─ event_shadowed_address_type.fe:5:1
+   │  
+ 5 │ ╭ #[event]
+ 6 │ │ struct BadEvent {
+ 7 │ │     #[indexed]
+ 8 │ │     from: Address,
+ 9 │ │     #[indexed]
+10 │ │     to: std::evm::Address,
+11 │ │ }
+   │ ╰─^ method not found in `Address`
+
+error[3-0011]: given type doesn't match the expected const type
+   ┌─ event_shadowed_address_type.fe:5:1
+   │  
+ 5 │ ╭ #[event]
+ 6 │ │ struct BadEvent {
+ 7 │ │     #[indexed]
+ 8 │ │     from: Address,
+ 9 │ │     #[indexed]
+10 │ │     to: std::evm::Address,
+11 │ │ }
+   │ ╰─^ expected `_` type here, but `(String<8>, String<1>, invalid(Other), String<1>, String<7>, String<1>)` is given

@@ -1,0 +1,7 @@
+# Workspace config
+name = "library"
+version = "0.1.0"
+members = [
+  { path = "ingots/core", name = "core", version = "0.1.0" },
+  { path = "ingots/std", name = "std", version = "0.1.0" },
+]

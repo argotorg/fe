@@ -1,0 +1,9 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/cli_output/workspaces/workspace_dependency_alias_conflict/workspace_dependency_alias_conflict.case
+---
+=== STDERR ===
+❌ Workspace dependency alias 'lib' conflicts with a workspace member name in file://<project>/crates/fe/tests/fixtures/cli_output/workspaces/workspace_dependency_alias_conflict/
+
+=== EXIT CODE: 1 ===

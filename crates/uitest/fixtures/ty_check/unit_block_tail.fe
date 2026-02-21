@@ -1,0 +1,29 @@
+use std::evm::{Address, Ctx}
+
+fn address() -> Address uses (ctx: Ctx) {
+    ctx.caller()
+}
+
+fn unit_tail_relaxed() {
+    true
+}
+
+fn nested_unit_tail_relaxed() {
+    {
+        true
+    }
+}
+
+fn unit_tail_preserves_effect_error() {
+    address()
+}
+
+fn non_unit_tail_stays_strict() -> bool {
+    {
+        1
+    }
+}
+
+fn explicit_return_stays_strict() {
+    return true
+}

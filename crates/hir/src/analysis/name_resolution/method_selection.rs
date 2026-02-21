@@ -11,7 +11,9 @@ use crate::analysis::{
         canonical::{Canonical, Canonicalized, Solution},
         method_table::probe_method,
         trait_def::{TraitInstId, impls_for_ty},
-        trait_resolution::{GoalSatisfiability, PredicateListId, is_goal_satisfiable},
+        trait_resolution::{
+            GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable,
+        },
         ty_def::{TyData, TyId},
         unify::UnificationTable,
     },
@@ -112,6 +114,27 @@ struct CandidateAssembler<'db> {
     candidates: AssembledCandidates<'db>,
 }
 
+fn receiver_is_ty_param_like<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
+    let receiver_ty = ty.as_capability(db).map(|(_, inner)| inner).unwrap_or(ty);
+    matches!(
+        receiver_ty.base_ty(db).data(db),
+        TyData::TyParam(_) | TyData::AssocTy(_) | TyData::QualifiedTy(_)
+    )
+}
+
+fn instantiate_to_receiver_kind<'db>(
+    db: &'db dyn HirAnalysisDb,
+    table: &mut UnificationTable<'db>,
+    candidate_self_ty: TyId<'db>,
+    receiver_ty: TyId<'db>,
+) -> TyId<'db> {
+    if receiver_ty.is_star_kind(db) {
+        table.instantiate_to_term(candidate_self_ty)
+    } else {
+        candidate_self_ty
+    }
+}
+
 impl<'db> CandidateAssembler<'db> {
     fn assemble(mut self) -> AssembledCandidates<'db> {
         if self.trait_.is_none() {
@@ -133,7 +156,7 @@ impl<'db> CandidateAssembler<'db> {
     }
 
     fn assemble_trait_method_candidates(&mut self) {
-        let ingot = self.scope.ingot(self.db);
+        let scope_ingot = self.scope.ingot(self.db);
 
         // When the receiver is a type parameter (e.g. `D` in `fn f<D: Trait>(d: D)`),
         // we don't know its concrete type yet, so probing impls would pull in many
@@ -141,14 +164,20 @@ impl<'db> CandidateAssembler<'db> {
         //
         // In that case, rely on in-scope bounds (`assumptions`) to provide method
         // candidates.
-        let receiver_is_ty_param = matches!(
-            self.receiver_ty.value.base_ty(self.db).data(self.db),
-            TyData::TyParam(_) | TyData::AssocTy(_) | TyData::QualifiedTy(_)
-        );
+        let receiver_is_ty_param = receiver_is_ty_param_like(self.db, self.receiver_ty.value);
 
         if !receiver_is_ty_param {
-            for &imp in impls_for_ty(self.db, ingot, self.receiver_ty) {
-                self.insert_trait_method_cand(imp.skip_binder().trait_(self.db));
+            let search_ingots = [
+                Some(scope_ingot),
+                self.receiver_ty
+                    .value
+                    .ingot(self.db)
+                    .filter(|&ingot| ingot != scope_ingot),
+            ];
+            for ingot in search_ingots.into_iter().flatten() {
+                for &imp in impls_for_ty(self.db, ingot, self.receiver_ty) {
+                    self.insert_trait_method_cand(imp.skip_binder().trait_(self.db));
+                }
             }
         }
 
@@ -157,8 +186,12 @@ impl<'db> CandidateAssembler<'db> {
 
         for &pred in self.assumptions.list(self.db) {
             let snapshot = table.snapshot();
-            let self_ty = pred.self_ty(self.db);
-            let self_ty = table.instantiate_to_term(self_ty);
+            let self_ty = instantiate_to_receiver_kind(
+                self.db,
+                &mut table,
+                pred.self_ty(self.db),
+                extracted_receiver_ty,
+            );
 
             if table.unify(extracted_receiver_ty, self_ty).is_ok() {
                 self.insert_trait_method_cand(pred);
@@ -280,9 +313,23 @@ impl<'db> MethodSelector<'db> {
                 Ok(self.check_inst(def, method))
             }
 
-            _ => Err(MethodSelectionError::AmbiguousTraitMethod(
-                visible_traits.into_iter().map(|cand| cand.0).collect(),
-            )),
+            _ => {
+                // Some candidates are equivalent after trait solving (e.g., an explicit
+                // bound and an implied/blanket-derived bound for the same method).
+                // Collapse by the selected method candidate before reporting ambiguity.
+                let mut selected = IndexSet::default();
+                for (inst, method) in visible_traits.iter().copied() {
+                    selected.insert(self.check_inst(inst, method));
+                }
+
+                if selected.len() == 1 {
+                    return Ok(*selected.iter().next().unwrap());
+                }
+
+                Err(MethodSelectionError::AmbiguousTraitMethod(
+                    visible_traits.into_iter().map(|cand| cand.0).collect(),
+                ))
+            }
         }
     }
 
@@ -305,10 +352,7 @@ impl<'db> MethodSelector<'db> {
         // introducing fresh inference vars. Otherwise, unconstrained trait args
         // can trigger spurious "type annotation needed" diagnostics on method calls
         // whose signatures don't mention those args (e.g. `AbiDecoder<A>::read_word`).
-        let receiver_is_ty_param = matches!(
-            self.receiver.value.base_ty(self.db).data(self.db),
-            TyData::TyParam(_) | TyData::AssocTy(_) | TyData::QualifiedTy(_)
-        );
+        let receiver_is_ty_param = receiver_is_ty_param_like(self.db, self.receiver.value);
 
         let canonical_cand = Canonicalized::new(self.db, inst);
         let inst = if receiver_is_ty_param {
@@ -319,13 +363,12 @@ impl<'db> MethodSelector<'db> {
 
         match is_goal_satisfiable(
             self.db,
-            self.scope.ingot(self.db),
+            TraitSolveCx::new(self.db, self.scope).with_assumptions(self.assumptions),
             canonical_cand.value,
-            self.assumptions,
         ) {
             GoalSatisfiability::Satisfied(solution) => {
                 // Map back the solution to the current context.
-                let solution = canonical_cand.extract_solution(&mut table, *solution);
+                let solution = canonical_cand.extract_solution(&mut table, *solution).inst;
                 // Replace TyParams in the solved instance with fresh inference vars so
                 // downstream unification can bind them (e.g., T = u32). For receiver type
                 // parameters, keep the bound's args intact.

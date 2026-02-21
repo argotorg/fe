@@ -1,0 +1,4 @@
+[workspace]
+name = "ambiguous_same"
+version = "0.1.0"
+members = ["app"]

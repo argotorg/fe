@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/cannot_borrow_mut.fe
+---
+error[8-0066]: mutable borrow requires a mutable place
+  ┌─ cannot_borrow_mut.fe:3:23
+  │
+2 │     let x: u256 = 0
+  │         - try changing to `let mut x`
+3 │     let p: mut u256 = mut x
+  │                       ^^^^^ cannot borrow as `mut`

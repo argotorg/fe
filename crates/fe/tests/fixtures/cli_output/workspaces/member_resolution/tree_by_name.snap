@@ -1,0 +1,10 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/cli_output/workspaces/member_resolution/tree_by_name.case
+---
+=== STDOUT ===
+app v0.1.0
+└── lib v0.1.0
+
+=== EXIT CODE: 0 ===

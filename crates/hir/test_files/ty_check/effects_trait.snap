@@ -21,7 +21,7 @@ note:
    ┌─ effects_trait.fe:13:5
    │
 13 │     logger.log()
-   │     ^^^^^^ logger: Logger
+   │     ^^^^^^ __effprov0
 
 note: 
    ┌─ effects_trait.fe:13:5

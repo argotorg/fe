@@ -6,11 +6,11 @@ use crate::{
     HirDb,
     hir_def::{
         AssocConstDef, AssocTyDef, AttrListId, Body, BodyKind, EffectParamListId, Expr, ExprId,
-        FieldDefListId, Func, FuncParam, FuncParamListId, FuncParamName, GenericArgListId,
-        GenericParam, GenericParamListId, IdentId, ImplTrait, IntegerId, ItemKind, ItemModifier,
-        LitKind, Mod, Partial, Pat, PatId, PathId, RecordPatField, Stmt, StmtId, Struct,
+        FieldDefListId, FieldIndex, Func, FuncModifiers, FuncParam, FuncParamListId, FuncParamMode,
+        FuncParamName, GenericArgListId, GenericParam, GenericParamListId, IdentId, ImplTrait,
+        IntegerId, ItemKind, LitKind, Mod, Partial, Pat, PatId, PathId, Stmt, StmtId, Struct,
         TopLevelMod, TrackedItemId, TrackedItemVariant, TraitRefId, TypeBound, TypeGenericParam,
-        TypeId, TypeKind, Visibility, WhereClauseId, expr::CallArg,
+        TypeId, TypeKind, TypeMode, UnOp, Visibility, WhereClauseId, expr::CallArg,
     },
     span::{DesugaredOrigin, HirOrigin},
 };
@@ -175,11 +175,14 @@ where
         (params, self.ty_ident(ident))
     }
 
-    pub(super) fn param_self(&self) -> FuncParam<'db> {
+    pub(super) fn param_own_self(&self) -> FuncParam<'db> {
         let db = self.db();
         FuncParam {
+            mode: FuncParamMode::Own,
             is_mut: false,
-            label: None,
+            has_ref_prefix: false,
+            has_own_prefix: false,
+            is_label_suppressed: false,
             name: Partial::Present(FuncParamName::Ident(IdentId::make_self(db))),
             ty: Partial::Present(self.self_ty()),
             self_ty_fallback: true,
@@ -192,10 +195,16 @@ where
         ty: TypeId<'db>,
     ) -> FuncParam<'db> {
         FuncParam {
-            is_mut: true,
-            label: Some(FuncParamName::Underscore),
+            mode: FuncParamMode::View,
+            is_mut: false,
+            has_ref_prefix: false,
+            has_own_prefix: false,
+            is_label_suppressed: true,
             name: Partial::Present(FuncParamName::Ident(name)),
-            ty: Partial::Present(ty),
+            ty: Partial::Present(TypeId::new(
+                self.db(),
+                TypeKind::Mode(TypeMode::Mut, Partial::Present(ty)),
+            )),
             self_ty_fallback: false,
         }
     }
@@ -364,7 +373,8 @@ where
         let trait_ref = Partial::Present(trait_ref);
         let ty = Partial::Present(ty);
 
-        self.with_item_scope(TrackedItemVariant::ImplTrait(trait_ref, ty), |this, id| {
+        let idx = self.ctxt.next_impl_trait_idx();
+        self.with_item_scope(TrackedItemVariant::ImplTrait(idx), |this, id| {
             let (types, consts) = build_assocs(this);
             this.new_impl_trait(id, trait_ref, ty, types, consts, this.origin())
         })
@@ -381,7 +391,8 @@ where
         let trait_ref = Partial::Present(trait_ref);
         let ty = Partial::Present(ty);
 
-        self.with_item_scope(TrackedItemVariant::ImplTrait(trait_ref, ty), |this, id| {
+        let idx = self.ctxt.next_impl_trait_idx();
+        self.with_item_scope(TrackedItemVariant::ImplTrait(idx), |this, id| {
             let impl_trait = this.new_impl_trait(id, trait_ref, ty, types, consts, this.origin());
             build_children(this);
             impl_trait
@@ -394,7 +405,7 @@ where
         generic_params: GenericParamListId<'db>,
         params: FuncParamListId<'db>,
         ret_ty: Option<TypeId<'db>>,
-        modifier: ItemModifier,
+        modifiers: FuncModifiers,
         build_body: impl FnOnce(&mut BodyBuilder<'_, 'db, O>),
     ) -> Func<'db> {
         let attrs = self.empty_attrs();
@@ -422,7 +433,7 @@ where
                     Partial::Present(params),
                     effects,
                     ret_ty,
-                    modifier,
+                    modifiers,
                     Some(body),
                     this.top_mod(),
                     this.origin(),
@@ -437,7 +448,7 @@ where
         generic_params: GenericParamListId<'db>,
         params: FuncParamListId<'db>,
         ret_ty: Option<TypeId<'db>>,
-        modifier: ItemModifier,
+        modifiers: FuncModifiers,
         build_body: impl FnOnce(&mut BodyBuilder<'_, 'db, O>),
     ) -> Func<'db> {
         self.func_with_body(
@@ -445,7 +456,7 @@ where
             generic_params,
             params,
             ret_ty,
-            modifier,
+            modifiers,
             build_body,
         )
     }
@@ -535,6 +546,10 @@ where
         self.push_expr(Expr::Path(Partial::Present(path)))
     }
 
+    pub(super) fn mut_expr(&mut self, expr: ExprId) -> ExprId {
+        self.push_expr(Expr::Un(expr, UnOp::Mut))
+    }
+
     pub(super) fn call_expr(&mut self, callee: ExprId, args: Vec<ExprId>) -> ExprId {
         let args = args
             .into_iter()
@@ -561,44 +576,20 @@ where
         ))
     }
 
-    pub(super) fn let_self_record(&mut self, fields: &[IdentId<'db>]) {
-        if fields.is_empty() {
-            return;
-        }
-
-        let db = self.db();
-        let self_expr = self.path_expr(PathId::from_ident(db, IdentId::make_self(db)));
-
-        let record_fields = fields
-            .iter()
-            .copied()
-            .map(|field_name| {
-                let pat = self.push_pat(Pat::Path(
-                    Partial::Present(PathId::from_ident(db, field_name)),
-                    false,
-                ));
-                RecordPatField {
-                    label: Partial::Present(field_name),
-                    pat,
-                }
-            })
-            .collect();
-
-        let bind_pat = self.push_pat(Pat::Record(
-            Partial::Present(PathId::from_ident(db, IdentId::make_self_ty(db))),
-            record_fields,
-        ));
-        self.emit_stmt(Stmt::Let(bind_pat, None, Some(self_expr)));
-    }
-
     pub(super) fn encode_fields(&mut self, fields: &[IdentId<'db>], encoder_ident: IdentId<'db>) {
         if fields.is_empty() {
             return;
         }
 
+        // Encode fields directly from `self` in declaration order.
+        let db = self.db();
+        let self_expr = self.path_expr(PathId::from_ident(db, IdentId::make_self(db)));
         let encode_ident = IdentId::new(self.db(), "encode".to_string());
         for field in fields.iter().copied() {
-            let receiver = self.ident_expr(field);
+            let receiver = self.push_expr(Expr::Field(
+                self_expr,
+                Partial::Present(FieldIndex::Ident(field)),
+            ));
             let encoder_expr = self.ident_expr(encoder_ident);
             let call = self.method_call_expr(receiver, encode_ident, vec![encoder_expr]);
             self.emit_expr_stmt(call);

@@ -1,0 +1,16 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/not_value_mod_and_func_param.fe
+---
+error[2-0011]: incorrect number of generic arguments for `x`; expected 0, given 1
+  ┌─ not_value_mod_and_func_param.fe:5:5
+  │
+5 │     x<i32>
+  │     ^ expected 0 arguments, but 1 were given
+
+error[8-0030]: value is expected
+  ┌─ not_value_mod_and_func_param.fe:4:5
+  │
+4 │     m
+  │     ^ `mod` cannot be used as a value

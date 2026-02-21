@@ -1,0 +1,153 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+expression: output
+input_file: crates/codegen/tests/fixtures/name_collisions.fe
+---
+target = "evm-ethereum-osaka"
+
+func public %a_b_h12fd23afeb13a092_flattened_fn() -> i256 {
+    block0:
+        return 1.i256;
+}
+
+func public %a_b_h948d5ab23860c017_flattened_fn() -> i256 {
+    block0:
+        return 2.i256;
+}
+
+func private %test_module_qualifier_flatten_collision() -> i256 {
+    block0:
+        v1.i256 = call %a_b_h12fd23afeb13a092_flattened_fn;
+        v2.i256 = call %a_b_h948d5ab23860c017_flattened_fn;
+        v3.i256 = add v1 v2;
+        return v3;
+}
+
+func private %test_generic_type_collision() -> i256 {
+    block0:
+        v3.i256 = call %generic_fn__S_h730d9dc564aaaf27__8d32801e7ec9d42b 1.i256;
+        v4.i256 = call %generic_fn__S_h2db58d011b97b333__42a13489a1ec39e8 2.i256;
+        return 42.i256;
+}
+
+func private %test_impl_method_collision() -> i256 {
+    block0:
+        v3.i256 = call %widget_h8588afca9d68e578_process 10.i256;
+        v4.i256 = call %widget_h6847c0e3e0e4aa1e_process 20.i256;
+        return v3;
+}
+
+func private %test_trait_method_collision() -> i256 {
+    block0:
+        v2.i256 = call %multitraitimpl_h60cc862fc809464_trait_h79853acec5b2b3ad_same_method 100.i256;
+        v3.i256 = call %multitraitimpl_h60cc862fc809464_trait_ha6da5e54b37dd39c_same_method 100.i256;
+        v4.i256 = add v2 v3;
+        return v4;
+}
+
+func private %param_local_collision(v0.i256) -> i256 {
+    block0:
+        v3.i256 = add v0 1.i256;
+        v5.i256 = add v3 2.i256;
+        return v5;
+}
+
+func private %test_param_local_collision() -> i256 {
+    block0:
+        v2.i256 = call %param_local_collision 10.i256;
+        return v2;
+}
+
+func private %__u32_as_u256(v0.i256) -> i256 {
+    block0:
+        return 999.i256;
+}
+
+func private %test_cast_shim_collision() -> i256 {
+    block0:
+        v2.i256 = call %__u32_as_u256 42.i256;
+        return v2;
+}
+
+func private %ret_param_collision(v0.i256) -> i256 {
+    block0:
+        v3.i256 = add v0 1.i256;
+        return v3;
+}
+
+func private %test_ret_param_collision() -> i256 {
+    block0:
+        v2.i256 = call %ret_param_collision 10.i256;
+        return v2;
+}
+
+func private %add() -> i256 {
+    block0:
+        return 123.i256;
+}
+
+func private %test_yul_reserved_fn_collision() -> i256 {
+    block0:
+        v1.i256 = call %add;
+        return v1;
+}
+
+func public %main() -> i256 {
+    block0:
+        v1.i256 = call %test_module_qualifier_flatten_collision;
+        v2.i256 = call %test_generic_type_collision;
+        v3.i256 = call %test_impl_method_collision;
+        v4.i256 = call %test_trait_method_collision;
+        v5.i256 = call %test_param_local_collision;
+        v6.i256 = call %test_cast_shim_collision;
+        v7.i256 = call %test_ret_param_collision;
+        v8.i256 = call %test_yul_reserved_fn_collision;
+        return 0.i256;
+}
+
+func public %widget_h8588afca9d68e578_process(v0.i256) -> i256 {
+    block0:
+        v3.i256 = mul v0 2.i256;
+        return v3;
+}
+
+func public %widget_h6847c0e3e0e4aa1e_process(v0.i256) -> i256 {
+    block0:
+        v3.i256 = mul v0 3.i256;
+        return v3;
+}
+
+func private %multitraitimpl_h60cc862fc809464_trait_h79853acec5b2b3ad_same_method(v0.i256) -> i256 {
+    block0:
+        v3.i256 = add v0 1.i256;
+        return v3;
+}
+
+func private %multitraitimpl_h60cc862fc809464_trait_ha6da5e54b37dd39c_same_method(v0.i256) -> i256 {
+    block0:
+        v3.i256 = add v0 2.i256;
+        return v3;
+}
+
+func private %generic_fn__S_h730d9dc564aaaf27__8d32801e7ec9d42b(v0.i256) -> i256 {
+    block0:
+        return v0;
+}
+
+func private %generic_fn__S_h2db58d011b97b333__42a13489a1ec39e8(v0.i256) -> i256 {
+    block0:
+        return v0;
+}
+
+func public %__fe_sonatina_entry() {
+    block0:
+        v0.i256 = call %a_b_h12fd23afeb13a092_flattened_fn;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+    }
+}

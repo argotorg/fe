@@ -1,0 +1,9 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/cli_output/explicit_paths/fe_toml_path.case
+---
+=== STDERR ===
+❌ Error: Path must be either a .fe file or a directory containing fe.toml
+
+=== EXIT CODE: 1 ===

@@ -1,0 +1,13 @@
+// Loans should respect projections: writing an aliased field under `ref` loan is rejected.
+
+struct S {
+    a: u256,
+    b: u256,
+}
+
+pub fn borrowck_write_field_under_ref() {
+    let mut s: S = S { a: 0, b: 1 }
+    let r: ref u256 = ref s.a
+    s.a = 2
+    let keep: ref u256 = r
+}

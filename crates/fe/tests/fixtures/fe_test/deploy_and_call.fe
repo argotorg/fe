@@ -37,7 +37,7 @@ pub contract Counter {
 }
 
 #[test]
-fn test_deploy_and_call_counter() uses (mut evm: Evm) {
+fn test_deploy_and_call_counter() uses (evm: mut Evm) {
     // Deploy the counter contract using the high-level create2 API
     let contract_addr = evm.create2<Counter>(value: 0, args: (), salt: 0)
 

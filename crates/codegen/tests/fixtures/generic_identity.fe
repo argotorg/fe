@@ -1,4 +1,4 @@
-fn identity<T>(value: T) -> T {
+fn identity<T>(value: own T) -> T {
     value
 }
 

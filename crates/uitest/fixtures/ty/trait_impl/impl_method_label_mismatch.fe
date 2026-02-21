@@ -1,7 +1,7 @@
 pub trait Foo {
-    fn foo(self, x y: i32, _: u32, z: u32) 
+    fn foo(self, x: i32, _ y: u32, z: u32)
 }
 
 impl Foo for i32 {
-    fn foo(self, y: i32, x: u32, _: u32) {}
+    fn foo(self, y: i32, x: u32, _ z: u32) {}
 }

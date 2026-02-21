@@ -1,0 +1,9 @@
+---
+source: crates/fe/tests/cli_output.rs
+assertion_line: 173
+expression: output
+---
+=== STDERR ===
+❌ Erroneous workspace fe.toml in file://<project>/crates/fe/tests/fixtures/cli_output/ingots/library/invalid/: Workspace config is missing a [workspace] section
+
+=== EXIT CODE: 1 ===

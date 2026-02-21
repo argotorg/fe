@@ -1,0 +1,82 @@
+---
+source: crates/fmt/tests/format_snapshots.rs
+expression: output
+input_file: tests/fixtures/comments_in_lists.fe
+---
+use foo::{
+    bar,
+    // use tree comment
+    baz,
+}
+
+struct S {
+    x: i32,
+    // field comment
+    y: i32,
+}
+
+enum E {
+    A,
+    // variant comment
+    B,
+}
+
+msg M {
+    A -> u8,
+    // msg variant comment
+    B -> u8,
+}
+
+fn takes_array(
+    arr: Array<
+        i32,
+        // generic arg comment
+        10,
+    >,
+) {}
+
+fn gen<
+    T,
+    // generic param comment
+    U,
+>(
+    a: T,
+    // param comment
+    b: U,
+)
+uses (
+    ctx: Ctx,
+    // uses comment
+    store: Store,
+)
+{
+    foo(
+        1,
+        // call arg comment
+        2,
+    )
+
+    let t = (
+        1,
+        // tuple expr comment
+        2,
+    )
+
+    let arr = [
+        1,
+        // array expr comment
+        2,
+    ]
+
+    let s = S {
+        x: 1,
+        // record init comment
+        y: 2,
+    }
+
+    match 0 {
+        0 => 1,
+        // arm comment
+        _ => 2,
+    }
+}

@@ -1,0 +1,20 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/cli_output/workspaces/inter_workspace_select_alias_mismatch/alias_mismatch.case
+---
+=== STDERR ===
+error[2-0002]: `lib_b` is not found
+  ┌─ src/lib.fe:1:5
+  │
+1 │ use lib_b::add
+  │     ^^^^^ `lib_b` is not found
+
+error[8-0012]: undefined variable
+  ┌─ src/lib.fe:6:19
+  │
+6 │     let x: u256 = add(a, b)
+  │                   ^^^ undefined variable `add`
+
+
+=== EXIT CODE: 1 ===

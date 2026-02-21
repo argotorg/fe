@@ -1,6 +1,10 @@
 #![allow(clippy::print_stderr, clippy::print_stdout)]
 mod check;
+mod cli;
 mod doc;
+mod lsif;
+mod report;
+mod scip_index;
 mod test;
 #[cfg(not(target_arch = "wasm32"))]
 mod tree;
@@ -9,15 +13,28 @@ use std::fs;
 
 use camino::Utf8PathBuf;
 use check::check;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use colored::Colorize;
 use fmt as fe_fmt;
 use similar::{ChangeTag, TextDiff};
 use walkdir::WalkDir;
 
+use crate::test::TestDebugOptions;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum TestDebug {
+    /// Print Yul output for any failing test.
+    Failures,
+    /// Print Yul output for all executed tests.
+    All,
+}
+
 #[derive(Debug, Clone, Parser)]
 #[command(version, about, long_about = None)]
 pub struct Options {
+    /// Show verbose resolver output.
+    #[arg(short, long, global = true)]
+    pub verbose: bool,
     #[command(subcommand)]
     pub command: Command,
 }
@@ -28,12 +45,30 @@ pub enum Command {
     Check {
         #[arg(default_value_t = default_project_path())]
         path: Utf8PathBuf,
-        #[arg(short, long)]
-        core: Option<Utf8PathBuf>,
         #[arg(long)]
         dump_mir: bool,
         #[arg(long)]
         emit_yul_min: bool,
+        /// Code generation backend to use (sonatina or yul).
+        #[arg(long, default_value = "sonatina")]
+        backend: String,
+        /// Optimization level (0 = none, 1 = balanced, 2 = aggressive).
+        #[arg(long, default_value = "1", value_name = "LEVEL")]
+        opt_level: String,
+        /// Write a debugging report as a `.tar.gz` file (includes sources, IR, backend output).
+        #[arg(long)]
+        report: bool,
+        /// Output path for `--report` (must end with `.tar.gz`).
+        #[arg(
+            long,
+            value_name = "OUT",
+            default_value = "fe-check-report.tar.gz",
+            requires = "report"
+        )]
+        report_out: Utf8PathBuf,
+        /// Only write the report if `fe check` fails.
+        #[arg(long, requires = "report")]
+        report_failed_only: bool,
     },
     /// Generate documentation for a Fe project
     Doc {
@@ -58,6 +93,7 @@ pub enum Command {
     },
     #[cfg(not(target_arch = "wasm32"))]
     Tree {
+        #[arg(default_value_t = default_project_path())]
         path: Utf8PathBuf,
     },
     /// Format Fe source code.
@@ -70,21 +106,155 @@ pub enum Command {
     },
     /// Run Fe tests in a file or directory.
     Test {
-        /// Path to a .fe file or directory containing an ingot with tests.
-        #[arg(default_value_t = default_project_path())]
-        path: Utf8PathBuf,
+        /// Path(s) to .fe files or directories containing ingots with tests.
+        ///
+        /// Supports glob patterns (e.g. `crates/fe/tests/fixtures/fe_test/*.fe`).
+        ///
+        /// When omitted, defaults to the current project root (like `cargo test`).
+        #[arg(value_name = "PATH", num_args = 0..)]
+        paths: Vec<Utf8PathBuf>,
         /// Optional filter pattern for test names.
         #[arg(short, long)]
         filter: Option<String>,
+        /// Number of suites to run in parallel (0 = auto).
+        #[arg(long, default_value_t = 8, value_name = "N")]
+        jobs: usize,
         /// Show event logs from test execution.
         #[arg(long)]
         show_logs: bool,
+        /// Print Yul output (`failures` or `all`) when using the Yul backend.
+        #[arg(
+            long,
+            value_enum,
+            num_args = 0..=1,
+            default_missing_value = "failures",
+            require_equals = true
+        )]
+        debug: Option<TestDebug>,
+        /// Backend to use for codegen (sonatina or yul).
+        #[arg(long, default_value = "sonatina")]
+        backend: String,
+        /// Optimization level (0 = none, 1 = balanced, 2 = aggressive).
+        #[arg(long, default_value = "1", value_name = "LEVEL")]
+        opt_level: String,
+        /// Trace executed EVM opcodes while running tests.
+        #[arg(long)]
+        trace_evm: bool,
+        /// How many EVM steps to keep in the trace ring buffer.
+        #[arg(long, default_value_t = 200)]
+        trace_evm_keep: usize,
+        /// How many stack items to print per EVM step in traces.
+        #[arg(long, default_value_t = 16)]
+        trace_evm_stack_n: usize,
+        /// Dump the Sonatina runtime symbol table (function offsets/sizes).
+        #[arg(long)]
+        sonatina_symtab: bool,
+        /// Directory to write debug outputs (traces, symtabs) into.
+        #[arg(long)]
+        debug_dir: Option<Utf8PathBuf>,
+        /// Write a debugging report as a `.tar.gz` file (includes sources, IR, bytecode, traces).
+        #[arg(long)]
+        report: bool,
+        /// Output path for `--report` (must end with `.tar.gz`).
+        #[arg(
+            long,
+            value_name = "OUT",
+            default_value = "fe-test-report.tar.gz",
+            requires = "report"
+        )]
+        report_out: Utf8PathBuf,
+        /// Write one `.tar.gz` report per input suite into this directory.
+        ///
+        /// Useful when running a glob over many fixtures: each failing suite can be shared as a
+        /// standalone artifact.
+        #[arg(long, value_name = "DIR", conflicts_with = "report")]
+        report_dir: Option<Utf8PathBuf>,
+        /// When used with `--report-dir`, only write reports for suites that failed.
+        #[arg(long, requires = "report_dir")]
+        report_failed_only: bool,
+        /// Print a normalized call trace for each test (for backend comparison).
+        #[arg(long)]
+        call_trace: bool,
     },
-    New,
+    /// Create a new ingot or workspace.
+    New {
+        /// Path to create the ingot or workspace in.
+        path: Utf8PathBuf,
+        /// Create a workspace instead of a single ingot.
+        #[arg(long)]
+        workspace: bool,
+        /// Override the default inferred name.
+        #[arg(long)]
+        name: Option<String>,
+        /// Override the default version (default: 0.1.0).
+        #[arg(long)]
+        version: Option<String>,
+    },
+    /// Generate shell completion scripts.
+    Completion {
+        /// Shell to generate completions for
+        #[arg(value_name = "shell")]
+        shell: clap_complete::Shell,
+    },
+    /// Generate LSIF index for code navigation.
+    Lsif {
+        /// Path to the ingot directory.
+        #[arg(default_value_t = default_project_path())]
+        path: Utf8PathBuf,
+        /// Output file (defaults to stdout).
+        #[arg(short, long)]
+        output: Option<Utf8PathBuf>,
+    },
+    /// Find the workspace or ingot root for a given path.
+    ///
+    /// Walks up from the given path (or cwd) looking for fe.toml files.
+    /// Prints the workspace root if found, otherwise the nearest ingot root.
+    /// Useful for editor integrations that need to determine the project root.
+    Root {
+        /// Path to start searching from (default: current directory).
+        path: Option<Utf8PathBuf>,
+    },
+    /// Start the Fe language server (LSP).
+    #[cfg(feature = "lsp")]
+    Lsp {
+        /// Set the workspace root directory.
+        ///
+        /// Used as the server's working directory. When the LSP client doesn't
+        /// send workspace folders, this directory is used as the fallback root
+        /// for ingot/workspace discovery.
+        #[arg(long)]
+        root: Option<Utf8PathBuf>,
+        /// Communication mode (default: stdio).
+        #[command(subcommand)]
+        mode: Option<LspMode>,
+    },
+    /// Generate SCIP index for code navigation.
+    Scip {
+        /// Path to the ingot directory.
+        #[arg(default_value_t = default_project_path())]
+        path: Utf8PathBuf,
+        /// Output file (defaults to index.scip).
+        #[arg(short, long, default_value = "index.scip")]
+        output: Utf8PathBuf,
+    },
+}
+
+#[cfg(feature = "lsp")]
+#[derive(Debug, Clone, Subcommand)]
+pub enum LspMode {
+    /// Start with TCP transport instead of stdio.
+    Tcp {
+        /// Port to listen on.
+        #[arg(short, long, default_value_t = 4242)]
+        port: u16,
+        /// Timeout in seconds to shut down if no clients are connected.
+        #[arg(short, long, default_value_t = 10)]
+        timeout: u64,
+    },
 }
 
 fn default_project_path() -> Utf8PathBuf {
-    driver::files::find_project_root().unwrap_or(Utf8PathBuf::from("."))
+    Utf8PathBuf::from(".")
 }
 
 fn main() {
@@ -92,16 +262,45 @@ fn main() {
     run(&opts);
 }
 pub fn run(opts: &Options) {
+    driver::set_resolver_verbose(opts.verbose);
     match &opts.command {
         Command::Build => eprintln!("`fe build` doesn't work at the moment"),
         Command::Check {
             path,
-            core: _,
             dump_mir,
             emit_yul_min,
+            backend,
+            opt_level,
+            report,
+            report_out,
+            report_failed_only,
         } => {
-            //: TODO readd custom core
-            check(path, *dump_mir, *emit_yul_min);
+            let opt_level: codegen::OptLevel = match opt_level.parse() {
+                Ok(level) => level,
+                Err(err) => {
+                    eprintln!("❌ Error: {err}");
+                    std::process::exit(1);
+                }
+            };
+            match check(
+                path,
+                *dump_mir,
+                *emit_yul_min,
+                backend,
+                opt_level,
+                (*report).then_some(report_out),
+                *report_failed_only,
+            ) {
+                Ok(has_errors) => {
+                    if has_errors {
+                        std::process::exit(1);
+                    }
+                }
+                Err(err) => {
+                    eprintln!("❌ Error: {err}");
+                    std::process::exit(1);
+                }
+            }
         }
         Command::Doc {
             path,
@@ -121,13 +320,274 @@ pub fn run(opts: &Options) {
             run_fmt(path.as_ref(), *check);
         }
         Command::Test {
-            path,
+            paths,
             filter,
+            jobs,
             show_logs,
+            debug: test_debug,
+            backend,
+            opt_level,
+            trace_evm,
+            trace_evm_keep,
+            trace_evm_stack_n,
+            sonatina_symtab,
+            debug_dir,
+            report,
+            report_out,
+            report_dir,
+            report_failed_only,
+            call_trace,
         } => {
-            test::run_tests(path, filter.as_deref(), *show_logs);
+            let opt_level: codegen::OptLevel = match opt_level.parse() {
+                Ok(level) => level,
+                Err(err) => {
+                    eprintln!("❌ Error: {err}");
+                    std::process::exit(1);
+                }
+            };
+            let debug = TestDebugOptions {
+                trace_evm: *trace_evm,
+                trace_evm_keep: *trace_evm_keep,
+                trace_evm_stack_n: *trace_evm_stack_n,
+                sonatina_symtab: *sonatina_symtab,
+                sonatina_evm_debug: false,
+                sonatina_observability: false,
+                dump_yul_on_failure: matches!(test_debug, Some(TestDebug::Failures)),
+                dump_yul_for_all: matches!(test_debug, Some(TestDebug::All)),
+                debug_dir: debug_dir.clone(),
+            };
+            let paths = if paths.is_empty() {
+                vec![default_project_path()]
+            } else {
+                paths.clone()
+            };
+            match test::run_tests(
+                &paths,
+                filter.as_deref(),
+                *jobs,
+                *show_logs,
+                backend,
+                opt_level,
+                &debug,
+                (*report).then_some(report_out),
+                report_dir.as_ref(),
+                *report_failed_only,
+                *call_trace,
+            ) {
+                Ok(has_failures) => {
+                    if has_failures {
+                        std::process::exit(1);
+                    }
+                }
+                Err(err) => {
+                    eprintln!("❌ Error: {err}");
+                    std::process::exit(1);
+                }
+            }
         }
-        Command::New => eprintln!("`fe new` doesn't work at the moment"),
+        Command::New {
+            path,
+            workspace,
+            name,
+            version,
+        } => {
+            if let Err(err) = cli::new::run(path, *workspace, name.as_deref(), version.as_deref()) {
+                eprintln!("❌ {err}");
+                std::process::exit(1);
+            }
+        }
+        Command::Completion { shell } => {
+            clap_complete::generate(
+                *shell,
+                &mut Options::command(),
+                "fe",
+                &mut std::io::stdout(),
+            );
+        }
+        Command::Root { path } => {
+            run_root(path.as_ref());
+        }
+        #[cfg(feature = "lsp")]
+        Command::Lsp { root, mode } => {
+            // If --root is explicit, use it. Otherwise, auto-discover from cwd.
+            let resolved_root = match root {
+                Some(r) => Some(r.canonicalize_utf8().unwrap_or_else(|e| {
+                    eprintln!("Error: invalid --root path {r}: {e}");
+                    std::process::exit(1);
+                })),
+                None => driver::files::find_project_root(),
+            };
+            if let Some(root) = resolved_root {
+                std::env::set_current_dir(root.as_std_path()).unwrap_or_else(|e| {
+                    eprintln!("Error: cannot chdir to {root}: {e}");
+                    std::process::exit(1);
+                });
+            }
+
+            let rt = tokio::runtime::Runtime::new().unwrap_or_else(|e| {
+                eprintln!("Error creating async runtime: {e}");
+                std::process::exit(1);
+            });
+            rt.block_on(async {
+                unsafe {
+                    std::env::set_var("RUST_BACKTRACE", "full");
+                }
+                language_server::setup_panic_hook();
+                match mode {
+                    Some(LspMode::Tcp { port, timeout }) => {
+                        language_server::run_tcp_server(
+                            *port,
+                            std::time::Duration::from_secs(*timeout),
+                        )
+                        .await;
+                    }
+                    None => {
+                        language_server::run_stdio_server().await;
+                    }
+                }
+            });
+        }
+        Command::Lsif { path, output } => {
+            run_lsif(path, output.as_ref());
+        }
+        Command::Scip { path, output } => {
+            run_scip(path, output);
+        }
+    }
+}
+
+fn run_lsif(path: &Utf8PathBuf, output: Option<&Utf8PathBuf>) {
+    use driver::DriverDataBase;
+
+    let mut db = DriverDataBase::default();
+
+    let canonical_path = match path.canonicalize_utf8() {
+        Ok(p) => p,
+        Err(_) => {
+            eprintln!("Error: Invalid or non-existent directory path: {path}");
+            std::process::exit(1);
+        }
+    };
+
+    let ingot_url = match url::Url::from_directory_path(canonical_path.as_str()) {
+        Ok(url) => url,
+        Err(_) => {
+            eprintln!("Error: Invalid directory path: {path}");
+            std::process::exit(1);
+        }
+    };
+
+    let had_init_diagnostics = driver::init_ingot(&mut db, &ingot_url);
+    if had_init_diagnostics {
+        eprintln!("Warning: ingot had initialization diagnostics");
+    }
+
+    let result = if let Some(output_path) = output {
+        let file = match std::fs::File::create(output_path.as_std_path()) {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!("Error creating output file: {e}");
+                std::process::exit(1);
+            }
+        };
+        let writer = std::io::BufWriter::new(file);
+        lsif::generate_lsif(&mut db, &ingot_url, writer)
+    } else {
+        let stdout = std::io::stdout().lock();
+        let writer = std::io::BufWriter::new(stdout);
+        lsif::generate_lsif(&mut db, &ingot_url, writer)
+    };
+
+    if let Err(e) = result {
+        eprintln!("Error generating LSIF: {e}");
+        std::process::exit(1);
+    }
+}
+
+fn run_scip(path: &Utf8PathBuf, output: &Utf8PathBuf) {
+    use driver::DriverDataBase;
+
+    let mut db = DriverDataBase::default();
+
+    let canonical_path = match path.canonicalize_utf8() {
+        Ok(p) => p,
+        Err(_) => {
+            eprintln!("Error: Invalid or non-existent directory path: {path}");
+            std::process::exit(1);
+        }
+    };
+
+    let ingot_url = match url::Url::from_directory_path(canonical_path.as_str()) {
+        Ok(url) => url,
+        Err(_) => {
+            eprintln!("Error: Invalid directory path: {path}");
+            std::process::exit(1);
+        }
+    };
+
+    let had_init_diagnostics = driver::init_ingot(&mut db, &ingot_url);
+    if had_init_diagnostics {
+        eprintln!("Warning: ingot had initialization diagnostics");
+    }
+
+    let index = match scip_index::generate_scip(&mut db, &ingot_url) {
+        Ok(index) => index,
+        Err(e) => {
+            eprintln!("Error generating SCIP: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    if let Err(e) = scip::write_message_to_file(output.as_std_path(), index) {
+        eprintln!("Error writing SCIP file: {e}");
+        std::process::exit(1);
+    }
+}
+
+fn run_root(path: Option<&Utf8PathBuf>) {
+    use resolver::workspace::discover_context;
+
+    let start = match path {
+        Some(p) => p.canonicalize_utf8().unwrap_or_else(|e| {
+            eprintln!("Error: invalid path {p}: {e}");
+            std::process::exit(1);
+        }),
+        None => Utf8PathBuf::from_path_buf(
+            std::env::current_dir().expect("Unable to get current directory"),
+        )
+        .expect("Expected utf8 path"),
+    };
+
+    let start_url = url::Url::from_directory_path(start.as_str()).unwrap_or_else(|_| {
+        // Maybe it's a file, try the parent directory
+        let parent = start.parent().unwrap_or(&start);
+        url::Url::from_directory_path(parent.as_str()).unwrap_or_else(|_| {
+            eprintln!("Error: invalid directory path: {start}");
+            std::process::exit(1);
+        })
+    });
+
+    match discover_context(&start_url) {
+        Ok(discovery) => {
+            if let Some(workspace_root) = &discovery.workspace_root
+                && let Ok(path) = workspace_root.to_file_path()
+            {
+                println!("{}", path.display());
+                return;
+            }
+            if let Some(ingot_root) = discovery.ingot_roots.first()
+                && let Ok(path) = ingot_root.to_file_path()
+            {
+                println!("{}", path.display());
+                return;
+            }
+            eprintln!("No fe.toml found in {start} or any parent directory");
+            std::process::exit(1);
+        }
+        Err(e) => {
+            eprintln!("Error discovering project root: {e}");
+            std::process::exit(1);
+        }
     }
 }
 

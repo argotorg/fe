@@ -1,0 +1,16 @@
+---
+source: crates/uitest/tests/mir_check.rs
+expression: res
+input_file: fixtures/mir_check/move_view_param_generic.fe
+---
+error[11-0002]: move conflict in `fn make_pair`
+  ┌─ move_view_param_generic.fe:2:6
+  │
+2 │     (a, b)
+  │      ^  ^ cannot move out of a view parameter
+  │      │   
+  │      cannot move out of a view parameter
+  │
+  = help: consider changing `a: A` to `a: own A`
+  = help: consider changing `b: B` to `b: own B`
+  = help: if you only need to destructure/inspect `a`, use explicit borrowing (`match ref a { ... }` or `let ... = ref a`)

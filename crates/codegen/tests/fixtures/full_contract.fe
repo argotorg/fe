@@ -16,14 +16,14 @@ impl Square {
     }
 }
 
-fn abi_encode(value: u256) -> ! uses (mut ops: RawOps) {
+fn abi_encode(value: u256) -> ! uses (ops: mut RawOps) {
     let ptr: u256 = 0
     ops.mstore(ptr, value)
     ops.return_data(ptr, 32)
 }
 
 #[contract_init(ShapeDispatcher)]
-fn init() uses (mut evm: Evm) {
+fn init() uses (evm: mut Evm) {
     let len = evm.code_region_len(dispatch)
     let offset = evm.code_region_offset(dispatch)
     evm.codecopy(dest: 0, offset, len)
@@ -31,7 +31,7 @@ fn init() uses (mut evm: Evm) {
 }
 
 #[contract_runtime(ShapeDispatcher)]
-fn dispatch() uses (mut evm: Evm) {
+fn dispatch() uses (evm: mut Evm) {
     let selector = evm.calldataload(0) >> 224
     if selector == 0x090251bf {
         let x = evm.calldataload(4)

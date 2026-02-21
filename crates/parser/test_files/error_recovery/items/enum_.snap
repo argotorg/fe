@@ -1,14 +1,14 @@
 ---
 source: crates/parser/tests/error_recovery.rs
+assertion_line: 15
 expression: node
-input_file: crates/parser/test_files/error_recovery/items/enum_.fe
+input_file: test_files/error_recovery/items/enum_.fe
 ---
 Root@0..150
   ItemList@0..149
     Item@0..63
       Enum@0..63
-        ItemModifier@0..3
-          PubKw@0..3 "pub"
+        PubKw@0..3 "pub"
         WhiteSpace@3..4 " "
         EnumKw@4..8 "enum"
         WhiteSpace@8..9 " "
@@ -70,8 +70,7 @@ Root@0..150
     Newline@63..65 "\n\n"
     Item@65..149
       Enum@65..149
-        ItemModifier@65..68
-          PubKw@65..68 "pub"
+        PubKw@65..68 "pub"
         WhiteSpace@68..69 " "
         EnumKw@69..73 "enum"
         WhiteSpace@73..74 " "

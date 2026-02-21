@@ -1,0 +1,6 @@
+// Comments inside smaller leaf-ish nodes (not list separators).
+
+fn leaf_comment_positions() {
+    let arr = [0; 10 // mid
+    ]
+}

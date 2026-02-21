@@ -9,12 +9,13 @@ use std::collections::BTreeMap;
 use std::ops::Range;
 
 use crate::analysis::{
-    analysis_pass::{AnalysisPassManager, MsgLowerPass, ParsingPass},
+    analysis_pass::{AnalysisPassManager, EventLowerPass, MsgLowerPass, ParsingPass},
     diagnostics::{DiagnosticVoucher, SpannedHirAnalysisDb},
     name_resolution::ImportAnalysisPass,
     ty::{
         AdtDefAnalysisPass, BodyAnalysisPass, DefConflictAnalysisPass, FuncAnalysisPass,
-        ImplAnalysisPass, ImplTraitAnalysisPass, TraitAnalysisPass, TypeAliasAnalysisPass,
+        ImplAnalysisPass, ImplTraitAnalysisPass, MsgSelectorAnalysisPass, TraitAnalysisPass,
+        TypeAliasAnalysisPass,
     },
 };
 use crate::{
@@ -361,17 +362,19 @@ impl Default for HirPropertyFormatter<'_> {
 
 pub fn initialize_analysis_pass() -> AnalysisPassManager {
     let mut pass_manager = AnalysisPassManager::new();
-    pass_manager.add_module_pass(Box::new(ParsingPass {}));
-    pass_manager.add_module_pass(Box::new(MsgLowerPass {}));
-    pass_manager.add_module_pass(Box::new(DefConflictAnalysisPass {}));
-    pass_manager.add_module_pass(Box::new(ImportAnalysisPass {}));
-    pass_manager.add_module_pass(Box::new(AdtDefAnalysisPass {}));
-    pass_manager.add_module_pass(Box::new(TypeAliasAnalysisPass {}));
-    pass_manager.add_module_pass(Box::new(TraitAnalysisPass {}));
-    pass_manager.add_module_pass(Box::new(ImplAnalysisPass {}));
-    pass_manager.add_module_pass(Box::new(ImplTraitAnalysisPass {}));
-    pass_manager.add_module_pass(Box::new(FuncAnalysisPass {}));
-    pass_manager.add_module_pass(Box::new(BodyAnalysisPass {}));
+    pass_manager.add_module_pass("Parsing", Box::new(ParsingPass {}));
+    pass_manager.add_module_pass("MsgLower", Box::new(MsgLowerPass {}));
+    pass_manager.add_module_pass("EventLower", Box::new(EventLowerPass {}));
+    pass_manager.add_module_pass("MsgSelector", Box::new(MsgSelectorAnalysisPass {}));
+    pass_manager.add_module_pass("DefConflict", Box::new(DefConflictAnalysisPass {}));
+    pass_manager.add_module_pass("Import", Box::new(ImportAnalysisPass {}));
+    pass_manager.add_module_pass("AdtDef", Box::new(AdtDefAnalysisPass {}));
+    pass_manager.add_module_pass("TypeAlias", Box::new(TypeAliasAnalysisPass {}));
+    pass_manager.add_module_pass("Trait", Box::new(TraitAnalysisPass {}));
+    pass_manager.add_module_pass("Impl", Box::new(ImplAnalysisPass {}));
+    pass_manager.add_module_pass("ImplTrait", Box::new(ImplTraitAnalysisPass {}));
+    pass_manager.add_module_pass("Func", Box::new(FuncAnalysisPass {}));
+    pass_manager.add_module_pass("Body", Box::new(BodyAnalysisPass {}));
     pass_manager
 }
 

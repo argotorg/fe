@@ -1,0 +1,176 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
+expression: output
+input_file: crates/codegen/tests/fixtures/match_tuple_binding.fe
+---
+target = "evm-ethereum-osaka"
+
+type @__fe_tuple_0 = {i256, i256};
+type @__fe_tuple_1 = {@__fe_tuple_0, i256};
+
+func public %match_tuple_extract(v0.i256) -> i256 {
+    block0:
+        jump block5;
+
+    block1:
+        v3.*@__fe_tuple_0 = int_to_ptr v0 *@__fe_tuple_0;
+        v5.*i256 = gep v3 0.i256 1.i256;
+        v6.i256 = ptr_to_int v5 i256;
+        v7.i256 = mload v6 i256;
+        v8.i8 = trunc v7 i8;
+        v9.i256 = zext v8 i256;
+        jump block2;
+
+    block2:
+        v11.i256 = phi (v9 block1) (v18 block3) (v32 block4);
+        return v11;
+
+    block3:
+        v13.*@__fe_tuple_0 = int_to_ptr v0 *@__fe_tuple_0;
+        v14.*i256 = gep v13 0.i256 0.i256;
+        v15.i256 = ptr_to_int v14 i256;
+        v16.i256 = mload v15 i256;
+        v17.i8 = trunc v16 i8;
+        v18.i256 = zext v17 i256;
+        jump block2;
+
+    block4:
+        v20.*@__fe_tuple_0 = int_to_ptr v0 *@__fe_tuple_0;
+        v21.*i256 = gep v20 0.i256 0.i256;
+        v22.i256 = ptr_to_int v21 i256;
+        v23.i256 = mload v22 i256;
+        v24.i8 = trunc v23 i8;
+        v25.i256 = zext v24 i256;
+        v26.*@__fe_tuple_0 = int_to_ptr v0 *@__fe_tuple_0;
+        v27.*i256 = gep v26 0.i256 1.i256;
+        v28.i256 = ptr_to_int v27 i256;
+        v29.i256 = mload v28 i256;
+        v30.i8 = trunc v29 i8;
+        v31.i256 = zext v30 i256;
+        v32.i256 = add v25 v31;
+        jump block2;
+
+    block5:
+        v34.*@__fe_tuple_0 = int_to_ptr v0 *@__fe_tuple_0;
+        v35.*i256 = gep v34 0.i256 0.i256;
+        v36.i256 = ptr_to_int v35 i256;
+        v37.i256 = mload v36 i256;
+        v38.i8 = trunc v37 i8;
+        v39.i256 = zext v38 i256;
+        v40.i1 = eq v39 0.i256;
+        br v40 block1 block6;
+
+    block6:
+        v42.*@__fe_tuple_0 = int_to_ptr v0 *@__fe_tuple_0;
+        v43.*i256 = gep v42 0.i256 1.i256;
+        v44.i256 = ptr_to_int v43 i256;
+        v45.i256 = mload v44 i256;
+        v46.i8 = trunc v45 i8;
+        v47.i256 = zext v46 i256;
+        v48.i1 = eq v47 0.i256;
+        br v48 block3 block4;
+}
+
+func public %match_nested_extract(v0.i256) -> i256 {
+    block0:
+        jump block5;
+
+    block1:
+        v3.*@__fe_tuple_1 = int_to_ptr v0 *@__fe_tuple_1;
+        v5.*i256 = gep v3 0.i256 1.i256;
+        v6.i256 = ptr_to_int v5 i256;
+        v7.i256 = mload v6 i256;
+        v8.i8 = trunc v7 i8;
+        v9.i256 = zext v8 i256;
+        jump block2;
+
+    block2:
+        v11.i256 = phi (v9 block1) (v25 block3) (v39 block4);
+        return v11;
+
+    block3:
+        v13.*@__fe_tuple_1 = int_to_ptr v0 *@__fe_tuple_1;
+        v14.*i256 = gep v13 0.i256 0.i256 1.i256;
+        v15.i256 = ptr_to_int v14 i256;
+        v16.i256 = mload v15 i256;
+        v17.i8 = trunc v16 i8;
+        v18.i256 = zext v17 i256;
+        v19.*@__fe_tuple_1 = int_to_ptr v0 *@__fe_tuple_1;
+        v20.*i256 = gep v19 0.i256 0.i256 0.i256;
+        v21.i256 = ptr_to_int v20 i256;
+        v22.i256 = mload v21 i256;
+        v23.i8 = trunc v22 i8;
+        v24.i256 = zext v23 i256;
+        v25.i256 = add v24 v18;
+        jump block2;
+
+    block4:
+        v27.*@__fe_tuple_1 = int_to_ptr v0 *@__fe_tuple_1;
+        v28.*i256 = gep v27 0.i256 0.i256 0.i256;
+        v29.i256 = ptr_to_int v28 i256;
+        v30.i256 = mload v29 i256;
+        v31.i8 = trunc v30 i8;
+        v32.i256 = zext v31 i256;
+        v33.*@__fe_tuple_1 = int_to_ptr v0 *@__fe_tuple_1;
+        v34.*i256 = gep v33 0.i256 1.i256;
+        v35.i256 = ptr_to_int v34 i256;
+        v36.i256 = mload v35 i256;
+        v37.i8 = trunc v36 i8;
+        v38.i256 = zext v37 i256;
+        v39.i256 = add v32 v38;
+        jump block2;
+
+    block5:
+        v41.*@__fe_tuple_1 = int_to_ptr v0 *@__fe_tuple_1;
+        v42.*i256 = gep v41 0.i256 0.i256 1.i256;
+        v43.i256 = ptr_to_int v42 i256;
+        v44.i256 = mload v43 i256;
+        v45.i8 = trunc v44 i8;
+        v46.i256 = zext v45 i256;
+        v47.i1 = eq v46 0.i256;
+        br v47 block6 block8;
+
+    block6:
+        v49.*@__fe_tuple_1 = int_to_ptr v0 *@__fe_tuple_1;
+        v50.*i256 = gep v49 0.i256 0.i256 0.i256;
+        v51.i256 = ptr_to_int v50 i256;
+        v52.i256 = mload v51 i256;
+        v53.i8 = trunc v52 i8;
+        v54.i256 = zext v53 i256;
+        v55.i1 = eq v54 0.i256;
+        br v55 block1 block7;
+
+    block7:
+        v57.*@__fe_tuple_1 = int_to_ptr v0 *@__fe_tuple_1;
+        v58.*i256 = gep v57 0.i256 1.i256;
+        v59.i256 = ptr_to_int v58 i256;
+        v60.i256 = mload v59 i256;
+        v61.i8 = trunc v60 i8;
+        v62.i256 = zext v61 i256;
+        v63.i1 = eq v62 0.i256;
+        br v63 block3 block4;
+
+    block8:
+        v65.*@__fe_tuple_1 = int_to_ptr v0 *@__fe_tuple_1;
+        v66.*i256 = gep v65 0.i256 1.i256;
+        v67.i256 = ptr_to_int v66 i256;
+        v68.i256 = mload v67 i256;
+        v69.i8 = trunc v68 i8;
+        v70.i256 = zext v69 i256;
+        v71.i1 = eq v70 0.i256;
+        br v71 block3 block4;
+}
+
+func public %__fe_sonatina_entry() {
+    block0:
+        v1.i256 = call %match_tuple_extract 0.i256;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+    }
+}

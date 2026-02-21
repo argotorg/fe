@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/mir_check.rs
+expression: res
+input_file: fixtures/mir_check/let_pattern_owned_local_use_after_move.fe
+---
+error[11-0002]: move conflict in `fn let_pattern_owned_local_use_after_move`
+  ┌─ let_pattern_owned_local_use_after_move.fe:8:5
+  │
+7 │     let Foo { x } = foo
+  │                     --- `foo` is moved here
+8 │     foo.x + x
+  │     ^^^^^^^^^ cannot use a value after it was moved

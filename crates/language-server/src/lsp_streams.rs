@@ -89,8 +89,19 @@ impl<State> RouterStreams for Router<State> {
             let tx = tx.clone();
             async move {
                 let (response_tx, response_rx) = oneshot::channel();
-                tx.send((params, response_tx)).await.unwrap();
-                response_rx.await.unwrap()
+                if let Err(e) = tx.send((params, response_tx)).await {
+                    tracing::error!("failed to forward request to stream: {e}");
+                    return Err(ResponseError::new(
+                        async_lsp::ErrorCode::INTERNAL_ERROR,
+                        "request stream closed",
+                    ));
+                }
+                response_rx.await.unwrap_or_else(|_| {
+                    Err(ResponseError::new(
+                        async_lsp::ErrorCode::INTERNAL_ERROR,
+                        "request handler dropped without responding",
+                    ))
+                })
             }
         });
         RequestStream { receiver: rx }
@@ -104,7 +115,9 @@ impl<State> RouterStreams for Router<State> {
         self.notification::<N>(move |_, params| {
             let tx = tx.clone();
             tokio::spawn(async move {
-                tx.send(params).await.unwrap();
+                if let Err(e) = tx.send(params).await {
+                    tracing::error!("failed to forward notification to stream: {e}");
+                }
             });
             std::ops::ControlFlow::Continue(())
         });

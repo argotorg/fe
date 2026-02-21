@@ -5,6 +5,7 @@ use common::file::File;
 use hir::{
     core::semantic::reference::{ReferenceView, Target},
     lower::map_file_to_mod,
+    span::LazySpan,
 };
 use tracing::info;
 
@@ -12,20 +13,14 @@ use super::{
     goto::Cursor,
     item_info::{get_docstring, get_item_definition_markdown, get_item_path_markdown},
 };
-use crate::util::to_offset_from_position;
+use crate::util::{to_lsp_range_from_span, to_offset_from_position};
 use driver::DriverDataBase;
-
-/// Result of hover, including optional doc path for auto-follow
-pub struct HoverResult {
-    pub hover: Option<Hover>,
-    pub doc_path: Option<String>,
-}
 
 pub fn hover_helper(
     db: &DriverDataBase,
     file: File,
     params: async_lsp::lsp_types::HoverParams,
-) -> Result<HoverResult, Error> {
+) -> Result<Option<Hover>, Error> {
     info!("handling hover");
     let file_text = file.text(db);
 
@@ -36,104 +31,112 @@ pub fn hover_helper(
 
     let top_mod = map_file_to_mod(db, file);
 
-    // Track doc path for auto-follow
-    let mut doc_path: Option<String> = None;
-
     // Get the reference at cursor and resolve it
-    let info = top_mod
-        .reference_at(db, cursor)
-        .and_then(|r| {
-            let resolution = r.target_at(db, cursor);
+    let Some(r) = top_mod.reference_at(db, cursor) else {
+        return Ok(None);
+    };
 
-            // If ambiguous, show all candidates using MarkupContent with markdown
-            if resolution.is_ambiguous() {
-                let mut sections = vec!["**Multiple definitions**\n\n".to_string()];
+    let resolution = r.target_at(db, cursor);
 
-                for (i, target) in resolution.as_slice().iter().enumerate() {
-                    match target {
-                        Target::Scope(scope) => {
-                            let item = scope.item();
-                            let path = get_item_path_markdown(db, item);
-                            let def = get_item_definition_markdown(db, item);
-                            let docs = get_docstring(db, *scope);
-
-                            // Show path, definition, and docs just like single-definition hover
-                            for info in [path, def, docs].iter().filter_map(|x| x.as_ref()) {
-                                sections.push(format!("{}\n\n", info));
-                            }
-                        }
-                        Target::Local { ty, .. } => {
-                            let name = match r {
-                                ReferenceView::Path(pv) => {
-                                    pv.path.ident(db).to_opt()?.data(db).to_string()
-                                }
-                                _ => continue,
-                            };
-                            let ty_str = ty.pretty_print(db);
-                            sections.push(format!("```fe\nlet {name}: {ty_str}\n```\n\n"));
-                        }
-                    }
-
-                    if i < resolution.as_slice().len() - 1 {
-                        sections.push("---\n\n".to_string());
-                    }
-                }
-
-                Some(sections.join(""))
-            } else {
-                // Single unambiguous target
-                let target = resolution.first()?;
-                match target {
-                    Target::Scope(scope) => {
-                        let item = scope.item();
-                        let pretty_path = get_item_path_markdown(db, item);
-                        let definition_source = get_item_definition_markdown(db, item);
-                        let docs = get_docstring(db, *scope);
-
-                        // Capture doc path for auto-follow (uses ingot-qualified path)
-                        doc_path = doc_engine::scope_to_doc_path(db, *scope);
-
-                        Some(
-                            [pretty_path, definition_source, docs]
-                                .iter()
-                                .filter_map(|info| info.clone().map(|info| format!("{info}\n")))
-                                .collect::<Vec<String>>()
-                                .join("\n"),
-                        )
-                    }
-                    Target::Local { ty, .. } => {
-                        let name = match r {
-                            ReferenceView::Path(pv) => {
-                                pv.path.ident(db).to_opt()?.data(db).to_string()
-                            }
-                            _ => return None,
-                        };
-                        let ty_str = ty.pretty_print(db);
-                        Some(format!("```fe\nlet {name}: {ty_str}\n```"))
-                    }
+    // Compute the hover range from the reference span at the cursor position.
+    // For paths, use the specific segment span containing the cursor.
+    let hover_range = match &r {
+        ReferenceView::Path(pv) => {
+            let mut seg_range = None;
+            for idx in 0..=pv.path.segment_index(db) {
+                if let Some(resolved) = pv.span.clone().segment(idx).resolve(db)
+                    && resolved.range.contains(cursor)
+                {
+                    seg_range = to_lsp_range_from_span(resolved, db).ok();
+                    break;
                 }
             }
-        })
-        .unwrap_or_default();
-
-    // If doc_path wasn't captured (e.g., hovering on definition, not reference),
-    // try target_at directly which works for both definitions and references
-    if doc_path.is_none() {
-        let resolution = top_mod.target_at(db, cursor);
-        if let Some(Target::Scope(scope)) = resolution.first() {
-            doc_path = doc_engine::scope_to_doc_path(db, *scope);
+            seg_range
         }
-    }
+        _ => r
+            .span()
+            .resolve(db)
+            .and_then(|s| to_lsp_range_from_span(s, db).ok()),
+    };
 
-    let hover = Some(async_lsp::lsp_types::Hover {
+    // Build hover content
+    let info = if resolution.is_ambiguous() {
+        let mut sections = vec!["**Multiple definitions**\n\n".to_string()];
+
+        for (i, target) in resolution.as_slice().iter().enumerate() {
+            match target {
+                Target::Scope(scope) => {
+                    let item = scope.item();
+                    let path = get_item_path_markdown(db, item);
+                    let def = get_item_definition_markdown(db, item);
+                    let docs = get_docstring(db, *scope);
+
+                    for info in [path, def, docs].iter().filter_map(|x| x.as_ref()) {
+                        sections.push(format!("{}\n\n", info));
+                    }
+                }
+                Target::Local { ty, .. } => {
+                    let name = match &r {
+                        ReferenceView::Path(pv) => {
+                            let Some(ident) = pv.path.ident(db).to_opt() else {
+                                continue;
+                            };
+                            ident.data(db).to_string()
+                        }
+                        _ => continue,
+                    };
+                    let ty_str = ty.pretty_print(db);
+                    sections.push(format!("```fe\nlet {name}: {ty_str}\n```\n\n"));
+                }
+            }
+
+            if i < resolution.as_slice().len() - 1 {
+                sections.push("---\n\n".to_string());
+            }
+        }
+
+        sections.join("")
+    } else {
+        let Some(target) = resolution.first() else {
+            return Ok(None);
+        };
+        match target {
+            Target::Scope(scope) => {
+                let item = scope.item();
+                let pretty_path = get_item_path_markdown(db, item);
+                let definition_source = get_item_definition_markdown(db, item);
+                let docs = get_docstring(db, *scope);
+
+                [pretty_path, definition_source, docs]
+                    .iter()
+                    .filter_map(|info| info.clone().map(|info| format!("{info}\n")))
+                    .collect::<Vec<String>>()
+                    .join("\n")
+            }
+            Target::Local { ty, .. } => {
+                let name = match &r {
+                    ReferenceView::Path(pv) => {
+                        let Some(ident) = pv.path.ident(db).to_opt() else {
+                            return Ok(None);
+                        };
+                        ident.data(db).to_string()
+                    }
+                    _ => return Ok(None),
+                };
+                let ty_str = ty.pretty_print(db);
+                format!("```fe\nlet {name}: {ty_str}\n```")
+            }
+        }
+    };
+
+    let result = async_lsp::lsp_types::Hover {
         contents: async_lsp::lsp_types::HoverContents::Markup(
             async_lsp::lsp_types::MarkupContent {
                 kind: async_lsp::lsp_types::MarkupKind::Markdown,
                 value: info,
             },
         ),
-        range: None,
-    });
-
-    Ok(HoverResult { hover, doc_path })
+        range: hover_range,
+    };
+    Ok(Some(result))
 }

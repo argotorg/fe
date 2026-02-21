@@ -1,0 +1,11 @@
+---
+source: crates/uitest/tests/parser.rs
+assertion_line: 26
+expression: diags
+input_file: fixtures/parser/own_self_sugar_invalid_context.fe
+---
+error[1-0001]: `self` is not allowed here
+  ┌─ own_self_sugar_invalid_context.fe:1:12
+  │
+1 │ fn bad(own self) {}
+  │            ^^^^ `self` is not allowed here

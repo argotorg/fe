@@ -1,0 +1,6 @@
+mod m {}
+
+fn test(x: i32) {
+    m
+    x<i32>
+}

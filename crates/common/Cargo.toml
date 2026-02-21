@@ -1,6 +1,6 @@
 [package]
 name = "fe-common"
-version = "0.26.0"
+version = "26.0.0-alpha.5"
 edition.workspace = true
 license = "Apache-2.0"
 repository = "https://github.com/ethereum/fe"
@@ -24,4 +24,4 @@ parser.workspace = true
 url.workspace = true
 ordermap = "0.5.5"
 rustc-hash.workspace = true
-radix_immutable = { version = "0.0.1", git = "https://github.com/micahscopes/radix_immutable.git" }
+radix_immutable = "0.1"

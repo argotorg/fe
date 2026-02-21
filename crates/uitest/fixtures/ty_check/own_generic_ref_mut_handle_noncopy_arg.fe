@@ -1,0 +1,17 @@
+struct NoCopy {
+    x: u8
+}
+
+fn consume<T>(_value: own T) {}
+
+fn pass_ref() {
+    let x = NoCopy { x: 1 }
+    let r: ref NoCopy = ref x
+    consume(r)
+}
+
+fn pass_mut() {
+    let mut x = NoCopy { x: 2 }
+    let m: mut NoCopy = mut x
+    consume(m)
+}

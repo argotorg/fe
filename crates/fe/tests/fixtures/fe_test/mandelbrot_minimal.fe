@@ -1,0 +1,44 @@
+use std::evm::{Evm, Call}
+use std::evm::effects::assert
+use core::abi::{Abi, AbiEncoder, AbiSize, Encode}
+use std::abi::Sol
+use core::ops::Sub
+
+struct SFixed {
+    mag: u256,
+    neg: bool,
+}
+
+impl Sub for SFixed {
+    fn sub(own self, _ other: own SFixed) -> SFixed {
+        self
+    }
+}
+
+msg TestMsg {
+    #[selector = 0x01]
+    SubTest { a_mag: u256, a_neg: bool, b_mag: u256, b_neg: bool } -> u256,
+}
+
+pub contract TestSub {
+    recv TestMsg {
+        SubTest { a_mag, a_neg, b_mag, b_neg } -> u256 {
+            let a = SFixed { mag: a_mag, neg: a_neg }
+            let b = SFixed { mag: b_mag, neg: b_neg }
+            let c = a - b
+            c.mag
+        }
+    }
+}
+
+#[test]
+fn test_sub() uses (evm: mut Evm) {
+    let addr = evm.create2<TestSub>(value: 0, args: (), salt: 0)
+    assert(addr.inner != 0)
+
+    let res: u256 = evm.call(
+        addr: addr, gas: 1000000, value: 0,
+        message: TestMsg::SubTest { a_mag: 42, a_neg: false, b_mag: 0, b_neg: false }
+    )
+    assert(res == 42)
+}

@@ -1,0 +1,11 @@
+/// Dynamic memory allocation in EVM linear memory.
+///
+/// This is a compiler intrinsic: backend-specific lowering is handled in codegen.
+extern {
+    /// Allocates `size` bytes and returns the start pointer (byte offset).
+    ///
+    /// - Yul backend: uses the free-memory pointer at `0x40` and clamps it to `>= 0x2000`
+    ///   (to stay above backend-reserved memory regions).
+    /// - Sonatina backend: lowered to `evm_malloc`.
+    pub fn alloc(size: u256) -> u256
+}

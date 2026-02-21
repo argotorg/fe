@@ -73,7 +73,8 @@ use crate::analysis::ty::visitor::{TyVisitor, walk_ty};
 use crate::analysis::ty::{
     diagnostics::{TraitConstraintDiag, TyDiagCollection},
     trait_resolution::{
-        GoalSatisfiability, PredicateListId, WellFormedness, check_ty_wf, is_goal_satisfiable,
+        GoalSatisfiability, PredicateListId, TraitSolveCx, WellFormedness, check_ty_wf,
+        is_goal_satisfiable,
     },
     ty_check::EffectParamSite,
     ty_def::{InvalidCause, PrimTy, TyId},
@@ -113,7 +114,16 @@ pub fn constraints_for<'db>(
             collect_func_def_constraints(db, f.into(), true).instantiate_identity()
         }
         ItemKind::Impl(i) => collect_constraints(db, i.into()).instantiate_identity(),
-        ItemKind::Trait(t) => collect_constraints(db, t.into()).instantiate_identity(),
+        ItemKind::Trait(t) => {
+            let mut preds = collect_constraints(db, t.into()).instantiate_identity();
+            let self_pred = TraitInstId::new(db, t, t.params(db).to_vec(), IndexMap::new());
+            if !preds.list(db).contains(&self_pred) {
+                let mut merged = preds.list(db).to_vec();
+                merged.push(self_pred);
+                preds = PredicateListId::new(db, merged);
+            }
+            preds
+        }
         ItemKind::ImplTrait(i) => collect_constraints(db, i.into()).instantiate_identity(),
         _ => PredicateListId::empty_list(db),
     }
@@ -167,11 +177,19 @@ impl<'db> Func<'db> {
             Some(params) => params
                 .data(db)
                 .iter()
-                .map(|p| match p.ty.to_opt() {
-                    Some(hir_ty) => {
-                        Binder::bind(lower_hir_ty(db, hir_ty, self.scope(), assumptions))
-                    }
-                    None => Binder::bind(TyId::invalid(db, InvalidCause::ParseError)),
+                .map(|p| {
+                    let ty = match p.ty.to_opt() {
+                        Some(hir_ty) => lower_hir_ty(db, hir_ty, self.scope(), assumptions),
+                        None => TyId::invalid(db, InvalidCause::ParseError),
+                    };
+                    let ty = if p.mode == crate::hir_def::params::FuncParamMode::View
+                        && ty.as_capability(db).is_none()
+                    {
+                        TyId::view_of(db, ty)
+                    } else {
+                        ty
+                    };
+                    Binder::bind(ty)
                 })
                 .collect(),
             None => Vec::new(),
@@ -229,6 +247,15 @@ impl<'db> Func<'db> {
         }
     }
 
+    /// Returns the containing inherent `impl` block if this function is a method
+    /// inside an `impl` block (not an `impl Trait` block).
+    pub fn containing_impl(self, db: &'db dyn HirDb) -> Option<Impl<'db>> {
+        match self.scope().parent(db)? {
+            ScopeId::Item(ItemKind::Impl(impl_)) => Some(impl_),
+            _ => None,
+        }
+    }
+
     /// If this function is a method inside an `impl Trait` block, returns the
     /// corresponding trait method definition.
     ///
@@ -244,6 +271,88 @@ impl<'db> Func<'db> {
         trait_
             .methods(db)
             .find(|m| m.name(db).to_opt() == Some(method_name))
+    }
+}
+
+// Call site analysis --------------------------------------------------------
+
+/// A call site found inside a function body.
+#[derive(Clone, Debug)]
+pub struct CallSiteView<'db> {
+    pub body: Body<'db>,
+    pub expr_id: ExprId,
+    pub kind: CallSiteKind<'db>,
+}
+
+/// Discriminant for the shape of a call expression.
+#[derive(Clone, Debug)]
+pub enum CallSiteKind<'db> {
+    FnCall,
+    MethodCall { method_name: Partial<IdentId<'db>> },
+}
+
+impl<'db> CallSiteView<'db> {
+    /// Resolve the callee of this call site via type checking.
+    pub fn target(&self, db: &'db dyn HirAnalysisDb) -> Option<CallableDef<'db>> {
+        use crate::analysis::ty::ty_check::check_func_body;
+        let func = self.body.containing_func(db)?;
+        let (_, typed_body) = check_func_body(db, func);
+        typed_body
+            .callable_expr(self.expr_id)
+            .map(|c| c.callable_def)
+    }
+
+    /// Span of the callee name at the call site (function path or method name).
+    pub fn callee_span(&self) -> crate::span::DynLazySpan<'db> {
+        let expr_span = self.expr_id.span(self.body);
+        match &self.kind {
+            CallSiteKind::FnCall => expr_span.into_call_expr().callee().into(),
+            CallSiteKind::MethodCall { .. } => {
+                expr_span.into_method_call_expr().method_name().into()
+            }
+        }
+    }
+
+    /// Span of the entire call expression.
+    pub fn call_span(&self) -> crate::span::DynLazySpan<'db> {
+        self.expr_id.span(self.body).into()
+    }
+
+    /// The function containing this call site.
+    pub fn containing_func(&self, db: &'db dyn HirDb) -> Option<Func<'db>> {
+        self.body.containing_func(db)
+    }
+}
+
+impl<'db> Body<'db> {
+    /// Enumerate all call sites (function calls and method calls) in this body.
+    pub fn call_sites(self, db: &'db dyn HirDb) -> Vec<CallSiteView<'db>> {
+        let mut sites = Vec::new();
+        for (expr_id, partial_expr) in self.exprs(db).iter() {
+            let Partial::Present(expr) = partial_expr else {
+                continue;
+            };
+            match expr {
+                Expr::Call(_, _) => {
+                    sites.push(CallSiteView {
+                        body: self,
+                        expr_id,
+                        kind: CallSiteKind::FnCall,
+                    });
+                }
+                Expr::MethodCall(_, method_name, _, _) => {
+                    sites.push(CallSiteView {
+                        body: self,
+                        expr_id,
+                        kind: CallSiteKind::MethodCall {
+                            method_name: *method_name,
+                        },
+                    });
+                }
+                _ => {}
+            }
+        }
+        sites
     }
 }
 
@@ -397,9 +506,17 @@ impl<'db> FuncParamView<'db> {
 
     pub fn label(self, db: &'db dyn HirDb) -> Option<IdentId<'db>> {
         let list = self.func.params_list(db).to_opt()?;
-        match list.data(db).get(self.idx)?.label {
-            Some(FuncParamName::Ident(id)) => Some(id),
-            _ => None,
+        let param = list.data(db).get(self.idx)?;
+        (!param.is_label_suppressed && !param.is_self_param(db))
+            .then(|| param.name())
+            .flatten()
+    }
+
+    pub fn is_label_suppressed(self, db: &'db dyn HirDb) -> bool {
+        let list = self.func.params_list(db).to_opt();
+        match list.and_then(|l| l.data(db).get(self.idx)) {
+            Some(p) => p.is_label_suppressed,
+            None => false,
         }
     }
 
@@ -421,6 +538,14 @@ impl<'db> FuncParamView<'db> {
         match list.and_then(|l| l.data(db).get(self.idx)) {
             Some(p) => p.is_mut,
             None => false,
+        }
+    }
+
+    pub fn mode(self, db: &'db dyn HirDb) -> crate::hir_def::params::FuncParamMode {
+        let list = self.func.params_list(db).to_opt();
+        match list.and_then(|l| l.data(db).get(self.idx)) {
+            Some(p) => p.mode,
+            None => crate::hir_def::params::FuncParamMode::View,
         }
     }
 
@@ -484,15 +609,50 @@ impl<'db> FuncParamView<'db> {
         let func = self.func;
         let assumptions = func.assumptions(db);
 
-        let Some(hir_ty) = self
+        let Some(param) = self
             .func
             .params_list(db)
             .to_opt()
             .and_then(|l| l.data(db).get(self.idx))
-            .and_then(|p| p.ty.to_opt())
         else {
             return Vec::new();
         };
+        let Some(hir_ty) = param.ty.to_opt() else {
+            return Vec::new();
+        };
+
+        if self.is_self_param(db) && !param.self_ty_fallback {
+            if param.has_ref_prefix {
+                return vec![
+                    TyLowerDiag::MixedRefSelfPrefixWithExplicitType {
+                        span: self.span().ref_kw().into(),
+                    }
+                    .into(),
+                ];
+            }
+
+            if param.has_own_prefix {
+                return vec![
+                    TyLowerDiag::MixedOwnSelfPrefixWithExplicitType {
+                        span: self.span().own_kw().into(),
+                    }
+                    .into(),
+                ];
+            }
+
+            if param.is_mut && !allows_mut_self_prefix_with_explicit_ty(db, hir_ty) {
+                let span = self.span().mut_kw().into();
+                return vec![TyLowerDiag::InvalidMutSelfPrefixWithExplicitType { span }.into()];
+            }
+        }
+
+        if !self.is_self_param(db)
+            && param.is_mut
+            && !matches!(hir_ty.data(db), TypeKind::Mode(TypeMode::Own, _))
+        {
+            let span = self.span().mut_kw().into();
+            return vec![TyLowerDiag::InvalidMutParamPrefixWithoutOwnType { span }.into()];
+        }
 
         // Surface name-resolution errors for the parameter type first
         let errs =
@@ -523,10 +683,23 @@ impl<'db> FuncParamView<'db> {
             return out;
         }
 
-        // Well-formedness / trait-bound satisfaction for parameter type
-        if let WellFormedness::IllFormed { goal, subgoal } =
-            check_ty_wf(db, func.top_mod(db).ingot(db), ty, assumptions)
+        if self.mode(db) == crate::hir_def::params::FuncParamMode::Own && ty.as_borrow(db).is_some()
         {
+            out.push(
+                TyLowerDiag::OwnParamCannotBeBorrow {
+                    span: ty_span.clone(),
+                    ty,
+                }
+                .into(),
+            );
+        }
+
+        // Well-formedness / trait-bound satisfaction for parameter type
+        if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(
+            db,
+            TraitSolveCx::new(db, func.scope()).with_assumptions(assumptions),
+            ty,
+        ) {
             out.push(
                 TraitConstraintDiag::TraitBoundNotSat {
                     span: ty_span.clone(),
@@ -543,12 +716,22 @@ impl<'db> FuncParamView<'db> {
             && !ty.has_invalid(db)
             && !expected.has_invalid(db)
         {
-            let (exp_base, exp_args) = expected.decompose_ty_app(db);
             let ty_norm = normalize_ty(db, ty, func.scope(), assumptions);
-            let (ty_base, ty_args) = ty_norm.decompose_ty_app(db);
-            let same_base = ty_base == exp_base;
-            let same_args = exp_args.iter().zip(ty_args.iter()).all(|(a, b)| a == b);
-            if !(same_base && same_args) {
+
+            let matches_expected = |candidate: TyId<'db>| {
+                let (exp_base, exp_args) = expected.decompose_ty_app(db);
+                let (cand_base, cand_args) = candidate.decompose_ty_app(db);
+                cand_base == exp_base
+                    && cand_args.len() >= exp_args.len()
+                    && exp_args.iter().zip(cand_args.iter()).all(|(a, b)| a == b)
+            };
+
+            let is_allowed_self_ty = matches_expected(ty_norm)
+                || ty_norm
+                    .as_borrow(db)
+                    .is_some_and(|(_, inner)| matches_expected(inner));
+
+            if !is_allowed_self_ty {
                 out.push(
                     ImplDiag::InvalidSelfType {
                         span: ty_span,
@@ -561,6 +744,26 @@ impl<'db> FuncParamView<'db> {
         }
 
         out
+    }
+}
+
+fn allows_mut_self_prefix_with_explicit_ty<'db>(db: &'db dyn HirDb, hir_ty: TypeId<'db>) -> bool {
+    if let TypeKind::Mode(TypeMode::Own, inner) = hir_ty.data(db)
+        && let Some(inner) = inner.to_opt()
+    {
+        !is_bare_self_ty(db, inner)
+    } else {
+        false
+    }
+}
+
+fn is_bare_self_ty<'db>(db: &'db dyn HirDb, hir_ty: TypeId<'db>) -> bool {
+    if let TypeKind::Path(path) = hir_ty.data(db)
+        && let Some(path) = path.to_opt()
+    {
+        path.is_self_ty(db) && path.generic_args(db).is_empty(db)
+    } else {
+        false
     }
 }
 
@@ -680,8 +883,15 @@ impl<'db> RecvArmView<'db> {
             .and_then(|s| get_variant_selector(db, s))
             .unwrap_or_default();
 
-        let msg_variant_trait =
-            resolve_core_trait(db, contract.scope(), &["message", "MsgVariant"]);
+        let Some(msg_variant_trait) =
+            resolve_core_trait(db, contract.scope(), &["message", "MsgVariant"])
+        else {
+            return RecvArmAbiInfo {
+                selector_value,
+                args_ty: variant_ty,
+                ret_ty: None,
+            };
+        };
         let return_ident = IdentId::new(db, "Return".to_string());
 
         let variant_ret_ty = if !variant_ty.has_invalid(db) && !abi.has_invalid(db) {
@@ -787,7 +997,12 @@ pub struct EffectBinding<'db> {
     pub source: EffectSource,
     pub binding_site: EffectParamSite<'db>,
     pub binding_idx: u32,
-    pub binding_key_path: PathId<'db>,
+    /// The path written at the binding site (e.g. `uses (ctx)` or `uses (mut store)`).
+    ///
+    /// Note: this is not necessarily the semantic "key path" that resolves to a type/trait; for
+    /// contract-scoped named imports, this is the import name, while the resolved key is captured
+    /// by `key_kind`/`key_ty`/`key_trait`.
+    pub binding_path: PathId<'db>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
@@ -873,9 +1088,9 @@ impl<'db> Contract<'db> {
     ) -> IndexMap<IdentId<'db>, ContractFieldInfo<'db>> {
         let scope = self.top_mod(db).scope();
         let assumptions = PredicateListId::empty_list(db);
-        let ingot = self.top_mod(db).ingot(db);
 
-        let effect_ref = resolve_core_trait(db, scope, &["effect_ref", "EffectRef"]);
+        let effect_handle = resolve_core_trait(db, scope, &["effect_ref", "EffectHandle"])
+            .expect("missing required core trait `core::effect_ref::EffectHandle`");
         let target_ident = IdentId::new(db, "Target".to_string());
 
         let hir_fields = self.hir_fields(db).data(db);
@@ -887,10 +1102,10 @@ impl<'db> Contract<'db> {
             .map(|(idx, field)| {
                 let declared_ty = lower_opt_hir_ty(db, field.type_ref(), scope, assumptions);
 
-                let inst = TraitInstId::new(db, effect_ref, vec![declared_ty], IndexMap::new());
+                let inst = TraitInstId::new(db, effect_handle, vec![declared_ty], IndexMap::new());
                 let goal = Canonicalized::new(db, inst).value;
                 let (is_provider, target_ty) =
-                    match is_goal_satisfiable(db, ingot, goal, assumptions) {
+                    match is_goal_satisfiable(db, TraitSolveCx::new(db, scope), goal) {
                         GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid => {
                             (false, None)
                         }
@@ -970,7 +1185,7 @@ impl<'db> Contract<'db> {
                     source: EffectSource::Root,
                     binding_site: contract_site,
                     binding_idx: idx as u32,
-                    binding_key_path: key_path,
+                    binding_path: key_path,
                 })
             })
             .collect()
@@ -1016,7 +1231,7 @@ impl<'db> Func<'db> {
                     source: EffectSource::Root,
                     binding_site: EffectParamSite::Func(self),
                     binding_idx: idx as u32,
-                    binding_key_path: key_path,
+                    binding_path: key_path,
                 })
             })
             .collect()
@@ -1066,7 +1281,7 @@ fn contract_scoped_effect_bindings<'db>(
                 source: EffectSource::Root,
                 binding_site: list_site,
                 binding_idx: idx as u32,
-                binding_key_path: key_path,
+                binding_path: key_path,
             });
             continue;
         }
@@ -1087,14 +1302,14 @@ fn contract_scoped_effect_bindings<'db>(
                 source: EffectSource::Field(field_idx),
                 binding_site: list_site,
                 binding_idx: idx as u32,
-                binding_key_path: key_path,
+                binding_path: key_path,
             });
             continue;
         }
 
         if key_path.len(db) == 1
             && let Some(name) = key_path.ident(db).to_opt()
-            && let Some((binding_idx, referenced_key, is_mut)) =
+            && let Some((_decl_idx, referenced_key, is_mut)) =
                 contract_named_effects.get(&name).copied()
         {
             let (key_kind, key_ty, key_trait) =
@@ -1107,9 +1322,9 @@ fn contract_scoped_effect_bindings<'db>(
                 key_trait,
                 is_mut,
                 source: EffectSource::Root,
-                binding_site: EffectParamSite::Contract(contract),
-                binding_idx,
-                binding_key_path: referenced_key,
+                binding_site: list_site,
+                binding_idx: idx as u32,
+                binding_path: key_path,
             });
             continue;
         }
@@ -1130,7 +1345,7 @@ fn contract_scoped_effect_bindings<'db>(
             source: EffectSource::Root,
             binding_site: list_site,
             binding_idx: idx as u32,
-            binding_key_path: key_path,
+            binding_path: key_path,
         });
     }
 
@@ -1285,10 +1500,13 @@ fn resolve_sol_abi_ty<'db>(
 }
 
 fn get_variant_selector<'db>(db: &'db dyn HirAnalysisDb, struct_: Struct<'db>) -> Option<u32> {
-    use crate::hir_def::{Expr, LitKind};
+    use crate::analysis::ty::{
+        const_eval::{ConstValue, try_eval_const_body},
+        ty_def::{PrimTy, TyBase, TyData},
+    };
     use num_traits::ToPrimitive;
 
-    let msg_variant_trait = resolve_core_trait(db, struct_.scope(), &["message", "MsgVariant"]);
+    let msg_variant_trait = resolve_core_trait(db, struct_.scope(), &["message", "MsgVariant"])?;
 
     let adt_def = crate::analysis::ty::adt_def::AdtRef::from(struct_).as_adt(db);
     let ty = TyId::adt(db, adt_def);
@@ -1308,12 +1526,10 @@ fn get_variant_selector<'db>(db: &'db dyn HirAnalysisDb, struct_: Struct<'db>) -
         .find(|c| c.name.to_opt() == Some(selector_name))?;
 
     let body = selector_const.value.to_opt()?;
-    let root_expr = body.expr(db);
-    let expr = body.exprs(db).get(root_expr)?.clone().to_opt()?;
-
-    match expr {
-        Expr::Lit(LitKind::Int(int_id)) => int_id.data(db).to_u32(),
-        _ => None,
+    let expected_ty = TyId::new(db, TyData::TyBase(TyBase::Prim(PrimTy::U32)));
+    match try_eval_const_body(db, body, expected_ty)? {
+        ConstValue::Int(value) => value.to_u32(),
+        ConstValue::Bool(_) | ConstValue::Bytes(_) | ConstValue::EnumVariant(_) => None,
     }
 }
 
@@ -1739,9 +1955,11 @@ impl<'db> TypeAlias<'db> {
         };
         let assumptions = constraints_for(db, self.into());
         let ty = lower_hir_ty(db, hir_ty, self.scope(), assumptions);
-        if let WellFormedness::IllFormed { goal, subgoal } =
-            check_ty_wf(db, self.top_mod(db).ingot(db), ty, assumptions)
-        {
+        if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(
+            db,
+            TraitSolveCx::new(db, self.scope()).with_assumptions(assumptions),
+            ty,
+        ) {
             vec![
                 TraitConstraintDiag::TraitBoundNotSat {
                     span: self.span().ty().into(),
@@ -2320,6 +2538,12 @@ impl<'db> ImplTrait<'db> {
         self.trait_inst(db).map(|inst| inst.def(db))
     }
 
+    /// Returns the ADT (struct or enum) that this `impl Trait` block implements for,
+    /// if the implementor type resolves to a concrete ADT.
+    pub fn implementing_adt(self, db: &'db dyn HirAnalysisDb) -> Option<AdtRef<'db>> {
+        self.ty(db).adt_ref(db)
+    }
+
     /// Iterate associated type definitions in this impl-trait block as views.
     pub fn assoc_types(
         self,
@@ -2483,9 +2707,11 @@ impl<'db> ImplAssocTypeView<'db> {
         }
 
         let ty = lower_hir_ty(db, hir, self.owner.scope(), assumptions);
-        let ingot = self.owner.top_mod(db).ingot(db);
-        if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(db, ingot, ty, assumptions)
-        {
+        if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(
+            db,
+            TraitSolveCx::new(db, self.owner.scope()).with_assumptions(assumptions),
+            ty,
+        ) {
             return vec![
                 TraitConstraintDiag::TraitBoundNotSat {
                     span: ty_span.into(),
@@ -2847,6 +3073,10 @@ impl<'db> ImplAssocConstView<'db> {
         self.def(db).value.to_opt().is_some()
     }
 
+    pub fn value_body(self, db: &'db dyn HirDb) -> Option<crate::core::hir_def::Body<'db>> {
+        self.def(db).value.to_opt()
+    }
+
     /// Semantic type of this associated const implementation.
     pub fn ty(self, db: &'db dyn HirAnalysisDb) -> Option<TyId<'db>> {
         let hir = self.def(db).ty.to_opt()?;
@@ -3037,9 +3267,11 @@ impl<'db> FieldView<'db> {
         // Trait-bound well-formedness for field type.
         let owner_item = self.owner_item();
         let assumptions = constraints_for(db, owner_item);
-        if let WellFormedness::IllFormed { goal, subgoal } =
-            check_ty_wf(db, owner_item.top_mod(db).ingot(db), ty, assumptions)
-        {
+        if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(
+            db,
+            TraitSolveCx::new(db, owner_item.scope()).with_assumptions(assumptions),
+            ty,
+        ) {
             out.push(
                 TraitConstraintDiag::TraitBoundNotSat {
                     span: span.clone(),

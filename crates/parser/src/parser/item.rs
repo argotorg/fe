@@ -1,9 +1,5 @@
-use std::{cell::Cell, convert::Infallible, rc::Rc};
-
-use unwrap_infallible::UnwrapInfallible;
-
 use super::{
-    ErrProof, Parser, Recovery,
+    Checkpoint, ErrProof, Parser, Recovery,
     attr::{self, parse_attr_list},
     define_scope,
     expr::parse_expr,
@@ -113,19 +109,11 @@ impl super::Parse for ItemScope {
         use crate::SyntaxKind::*;
 
         let mut checkpoint = attr::parse_attr_list(parser)?;
-        let modifier_scope = ItemModifierScope::default();
-        let modifier = match parser.current_kind() {
-            Some(kind) if kind.is_modifier_head() => {
-                let modifier_checkpoint = parser.parse_cp(modifier_scope.clone(), None).unwrap();
-                checkpoint.get_or_insert(modifier_checkpoint);
-                modifier_scope.kind.get()
-            }
-            _ => ModifierKind::None,
-        };
+        let modifiers = parse_item_modifiers(parser, &mut checkpoint);
 
-        if modifier.is_unsafe() && parser.current_kind() != Some(FnKw) {
+        if modifiers.is_unsafe && !is_fn_item_head(parser) {
             parser.error("expected `fn` after `unsafe` keyword");
-        } else if modifier.is_pub() && matches!(parser.current_kind(), Some(ImplKw | ExternKw)) {
+        } else if modifiers.is_pub && matches!(parser.current_kind(), Some(ImplKw | ExternKw)) {
             let error_msg = format!(
                 "`pub` can't be used for `{}`",
                 parser.current_token().unwrap().text()
@@ -151,7 +139,13 @@ impl super::Parse for ItemScope {
             Some(TraitKw) => parser.parse_cp(TraitScope::default(), checkpoint),
             Some(ImplKw) => parser.parse_cp(ImplScope::default(), checkpoint),
             Some(UseKw) => parser.parse_cp(UseScope::default(), checkpoint),
-            Some(ConstKw) => parser.parse_cp(ConstScope::default(), checkpoint),
+            Some(ConstKw) => {
+                if is_fn_item_head(parser) {
+                    parser.parse_cp(FuncScope::default(), checkpoint)
+                } else {
+                    parser.parse_cp(ConstScope::default(), checkpoint)
+                }
+            }
             Some(ExternKw) => parser.parse_cp(ExternScope::default(), checkpoint),
             Some(TypeKw) => parser.parse_cp(TypeAliasScope::default(), checkpoint),
             _ => unreachable!(),
@@ -161,77 +155,66 @@ impl super::Parse for ItemScope {
     }
 }
 
-define_scope! {
-    ItemModifierScope {kind: Rc<Cell<ModifierKind>>},
-    ItemModifier
+fn is_fn_item_head<S: TokenStream>(parser: &mut Parser<S>) -> bool {
+    parser.dry_run(|p| {
+        p.bump_if(SyntaxKind::ConstKw);
+        p.current_kind() == Some(SyntaxKind::FnKw)
+    })
 }
-impl super::Parse for ItemModifierScope {
-    type Error = Infallible;
 
-    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
-        let mut modifier_kind = ModifierKind::None;
+#[derive(Debug, Clone, Copy, Default)]
+struct ItemModifiers {
+    is_pub: bool,
+    is_unsafe: bool,
+}
 
-        loop {
-            match parser.current_kind() {
-                Some(kind) if kind.is_modifier_head() => {
-                    let new_kind = modifier_kind.union(kind);
-                    if new_kind == modifier_kind {
-                        parser.unexpected_token_error(format!(
-                            "duplicate {} modifier",
-                            kind.describe(),
-                        ));
-                    } else if kind == SyntaxKind::PubKw && modifier_kind.is_unsafe() {
-                        parser.unexpected_token_error(
-                            "`pub` modifier must come before `unsafe`".into(),
-                        );
-                    } else {
-                        parser.bump();
-                    }
-                    modifier_kind = new_kind;
+fn parse_item_modifiers<S: TokenStream>(
+    parser: &mut Parser<S>,
+    checkpoint: &mut Option<Checkpoint>,
+) -> ItemModifiers {
+    let mut modifiers = ItemModifiers::default();
+
+    loop {
+        match parser.current_kind() {
+            Some(SyntaxKind::PubKw) => {
+                if checkpoint.is_none() {
+                    *checkpoint = Some(parser.checkpoint());
                 }
-                _ => break,
-            }
-        }
-        Ok(())
-    }
-}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-enum ModifierKind {
-    #[default]
-    None,
-    Pub,
-    Unsafe,
-    PubAndUnsafe,
-}
-impl ModifierKind {
-    fn union(&self, kind: SyntaxKind) -> ModifierKind {
-        match kind {
-            SyntaxKind::PubKw => {
-                if self.is_unsafe() {
-                    Self::PubAndUnsafe
+                if modifiers.is_pub {
+                    parser.unexpected_token_error(format!(
+                        "duplicate {} modifier",
+                        SyntaxKind::PubKw.describe(),
+                    ));
+                } else if modifiers.is_unsafe {
+                    parser
+                        .unexpected_token_error("`pub` modifier must come before `unsafe`".into());
+                    modifiers.is_pub = true;
                 } else {
-                    Self::Pub
+                    parser.bump();
+                    modifiers.is_pub = true;
                 }
             }
-            SyntaxKind::UnsafeKw => {
-                if self.is_pub() {
-                    Self::PubAndUnsafe
+            Some(SyntaxKind::UnsafeKw) => {
+                if checkpoint.is_none() {
+                    *checkpoint = Some(parser.checkpoint());
+                }
+
+                if modifiers.is_unsafe {
+                    parser.unexpected_token_error(format!(
+                        "duplicate {} modifier",
+                        SyntaxKind::UnsafeKw.describe(),
+                    ));
                 } else {
-                    Self::Unsafe
+                    parser.bump();
+                    modifiers.is_unsafe = true;
                 }
             }
-            _ => unreachable!(),
+            _ => break,
         }
     }
 
-    fn is_pub(&self) -> bool {
-        matches!(self, Self::Pub | Self::PubAndUnsafe)
-    }
-
-    fn is_unsafe(&self) -> bool {
-        matches!(self, Self::Unsafe | Self::PubAndUnsafe)
-    }
+    modifiers
 }
 
 define_scope! { ModScope, Mod }
@@ -754,7 +737,7 @@ impl super::Parse for ImplTraitItemListScope {
     }
 }
 
-define_scope! { ImplItemListScope, ImplItemList, (RBrace, FnKw) }
+define_scope! { ImplItemListScope, ImplItemList, (RBrace, ConstKw, FnKw) }
 impl super::Parse for ImplItemListScope {
     type Error = Recovery<ErrProof>;
 
@@ -819,7 +802,7 @@ impl super::Parse for ExternScope {
     }
 }
 
-define_scope! { ExternItemListScope, ExternItemList, (PubKw, UnsafeKw, FnKw) }
+define_scope! { ExternItemListScope, ExternItemList, (PubKw, UnsafeKw, ConstKw, FnKw) }
 impl super::Parse for ExternItemListScope {
     type Error = Recovery<ErrProof>;
 
@@ -866,35 +849,30 @@ fn parse_fn_item_block<S: TokenStream>(
         }
 
         let mut checkpoint = attr::parse_attr_list(parser)?;
+        let modifiers = parse_item_modifiers(parser, &mut checkpoint);
 
-        let is_modifier = |kind: Option<SyntaxKind>| kind.is_some_and(|k| k.is_modifier_head());
+        let is_fn_head = is_fn_item_head(parser);
 
-        if is_modifier(parser.current_kind()) {
-            let modifier_checkpoint = parser
-                .parse_cp(ItemModifierScope::default(), None)
-                .unwrap_infallible();
-            checkpoint.get_or_insert(modifier_checkpoint);
+        if modifiers.is_unsafe && !is_fn_head {
+            parser.error("expected `fn` after `unsafe` keyword");
         }
 
-        match parser.current_kind() {
-            Some(SyntaxKind::FnKw) => {
-                parser.parse_cp(FuncScope::new(fn_def_scope), checkpoint)?;
+        if is_fn_head {
+            parser.parse_cp(FuncScope::new(fn_def_scope), checkpoint)?;
 
-                parser.set_newline_as_trivia(false);
-                parser.expect(
-                    &[
-                        SyntaxKind::Newline,
-                        SyntaxKind::RBrace,
-                        SyntaxKind::DocComment,
-                        SyntaxKind::DocCommentAttr,
-                    ],
-                    None,
-                )?;
-            }
-            _ => {
-                let proof = parser.error_msg_on_current_token("only `fn` is allowed in this block");
-                parser.try_recover().map_err(|r| r.add_err_proof(proof))?;
-            }
+            parser.set_newline_as_trivia(false);
+            parser.expect(
+                &[
+                    SyntaxKind::Newline,
+                    SyntaxKind::RBrace,
+                    SyntaxKind::DocComment,
+                    SyntaxKind::DocCommentAttr,
+                ],
+                None,
+            )?;
+        } else {
+            let proof = parser.error_msg_on_current_token("only `fn` is allowed in this block");
+            parser.try_recover().map_err(|r| r.add_err_proof(proof))?;
         }
     }
 
@@ -942,6 +920,20 @@ fn parse_trait_item_block<S: TokenStream>(
 
                 parser.set_newline_as_trivia(false);
                 parser.expect(&[SyntaxKind::Newline, SyntaxKind::RBrace], None)?;
+            }
+            Some(SyntaxKind::ConstKw) if is_fn_item_head(parser) => {
+                parser.parse_cp(FuncScope::new(fn_def_scope), checkpoint)?;
+
+                parser.set_newline_as_trivia(false);
+                parser.expect(
+                    &[
+                        SyntaxKind::Newline,
+                        SyntaxKind::RBrace,
+                        SyntaxKind::DocComment,
+                        SyntaxKind::DocCommentAttr,
+                    ],
+                    None,
+                )?;
             }
             Some(SyntaxKind::ConstKw) => {
                 parser.parse_cp(TraitConstItemScope::default(), checkpoint)?;

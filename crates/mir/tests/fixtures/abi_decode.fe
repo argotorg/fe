@@ -3,6 +3,6 @@ use std::abi::sol::SolDecoder
 use std::evm::calldata::CallData
 
 pub fn decode_u256() -> u256 {
-    let d = SolDecoder::new(CallData { base: 0 })
-    u256::decode(d)
+    let mut d = SolDecoder::new(CallData { base: 0 })
+    u256::decode(mut d)
 }

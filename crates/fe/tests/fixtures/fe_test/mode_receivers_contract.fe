@@ -1,0 +1,109 @@
+use std::evm::{Evm, Call}
+use std::evm::effects::assert
+use core::abi::{Abi, AbiEncoder, AbiSize, Encode}
+use std::abi::Sol
+
+msg ModeMsg {
+    #[selector = 0x2df7f321]
+    Touch { by: u256 } -> u256,
+
+    #[selector = 0x911f6dd2]
+    SnapshotValue {} -> u256,
+
+    #[selector = 0x54ca4d9b]
+    SnapshotVer {} -> u8,
+}
+
+struct Store {
+    value: u256,
+    ver: u8,
+}
+
+impl Store {
+    fn touch(mut self, by: u256) {
+        self.value += by
+        self.bump()
+    }
+
+    fn bump(mut self) {
+        self.ver += 1
+    }
+
+    fn close(mut own self) -> (u256, u8) {
+        self.ver += 1
+        (self.value, self.ver)
+    }
+}
+
+fn close_copy(s: own Store) -> (u256, u8) {
+    s.close()
+}
+
+pub contract ModeContract {
+    mut store: Store
+
+    init() uses (mut store) {
+        store.value = 0
+        store.ver = 0
+    }
+
+    recv ModeMsg {
+        Touch { by } -> u256 uses (mut store) {
+            store.touch(by)
+            store.value
+        }
+
+        SnapshotValue {} -> u256 uses (store) {
+            store.value
+        }
+
+        SnapshotVer {} -> u8 uses (store) {
+            store.ver
+        }
+    }
+}
+
+#[test]
+fn test_mode_receivers_contract() uses (evm: mut Evm) {
+    let contract_addr = evm.create2<ModeContract>(value: 0, args: (), salt: 0)
+    assert(contract_addr.inner != 0)
+
+    let v: u256 = evm.call(
+        addr: contract_addr,
+        gas: 100000,
+        value: 0,
+        message: ModeMsg::Touch { by: 5 }
+    )
+    assert(v == 5)
+
+    let v: u256 = evm.call(
+        addr: contract_addr,
+        gas: 100000,
+        value: 0,
+        message: ModeMsg::Touch { by: 7 }
+    )
+    assert(v == 12)
+
+    let snap_value: u256 = evm.call(
+        addr: contract_addr,
+        gas: 100000,
+        value: 0,
+        message: ModeMsg::SnapshotValue {}
+    )
+    assert(snap_value == 12)
+
+    let snap_ver: u8 = evm.call(
+        addr: contract_addr,
+        gas: 100000,
+        value: 0,
+        message: ModeMsg::SnapshotVer {}
+    )
+    assert(snap_ver == 2)
+
+    let closed = close_copy(Store {
+        value: snap_value,
+        ver: snap_ver,
+    })
+    assert(closed.0 == 12)
+    assert(closed.1 == 3)
+}

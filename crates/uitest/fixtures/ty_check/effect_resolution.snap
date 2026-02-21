@@ -1,13 +1,20 @@
 ---
 source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/effect_resolution.fe
 ---
-error[2-0010]: no method named `caller` found for foo `foo`
-  ┌─ effect_resolution.fe:5:21
+error[8-0000]: type mismatch
+  ┌─ effect_resolution.fe:5:17
   │
 5 │         owner = foo.caller()
-  │                     ^^^^^^ method not found in `foo`
+  │                 ^^^^^^^^^^^^ expected `effect_resolution::Address`, but `lib::evm::effects::Address` is given
+
+error[8-0012]: undefined variable
+   ┌─ effect_resolution.fe:39:5
+   │
+39 │     foo.caller() == owner
+   │     ^^^ undefined variable `foo`
 
 error[8-0051]: unresolved effect
   ┌─ effect_resolution.fe:1:34
@@ -28,9 +35,9 @@ error[8-0051]: unresolved effect
   = or bind the effect value with `uses (name: Type)`
 
 error[8-0051]: unresolved effect
-   ┌─ effect_resolution.fe:35:9
+   ┌─ effect_resolution.fe:37:9
    │
-35 │   uses (foo, owner: Address)
+37 │   uses (foo, owner: Address)
    │         ^^^ cannot resolve `foo` as a type or trait
    │
    = consider defining a type or trait named `foo`

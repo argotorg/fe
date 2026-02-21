@@ -1,0 +1,19 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+---
+=== STDERR ===
+error[2-0002]: `actual_dep` is not found
+  ┌─ src/lib.fe:1:5
+  │
+1 │ use actual_dep::foo
+  │     ^^^^^^^^^^ `actual_dep` is not found
+
+error[8-0012]: undefined variable
+  ┌─ src/lib.fe:4:5
+  │
+4 │     foo()
+  │     ^^^ undefined variable `foo`
+
+
+=== EXIT CODE: 1 ===

@@ -1,16 +1,18 @@
 use crate::core::hir_def::{
-    GenericArg, GenericArgListId, GenericParam, GenericParamOwner, GenericParamView, IdentId,
+    Body, GenericArg, GenericArgListId, GenericParam, GenericParamOwner, GenericParamView, IdentId,
     KindBound as HirKindBound, Partial, PathId, TypeAlias as HirTypeAlias, TypeBound,
-    TypeId as HirTyId, TypeKind as HirTyKind, scope_graph::ScopeId,
+    TypeId as HirTyId, TypeKind as HirTyKind, TypeMode, scope_graph::ScopeId,
 };
 use salsa::Update;
 use smallvec::smallvec;
 
 use super::{
-    const_ty::{ConstTyData, ConstTyId},
+    const_expr::{ConstExpr, ConstExprId},
+    const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
     effects::{EffectKeyKind, effect_key_kind},
     fold::{TyFoldable, TyFolder},
-    trait_resolution::{PredicateListId, constraint::collect_constraints},
+    trait_def::TraitInstId,
+    trait_resolution::{PredicateListId, TraitSolveCx, constraint::collect_constraints},
     ty_def::{InvalidCause, Kind, TyData, TyId, TyParam},
 };
 use crate::analysis::name_resolution::{PathRes, PathResErrorKind, resolve_path};
@@ -29,6 +31,15 @@ pub fn lower_hir_ty<'db>(
             let pointee = lower_opt_hir_ty(db, *pointee, scope, assumptions);
             let ptr = TyId::ptr(db);
             TyId::app(db, ptr, pointee)
+        }
+
+        HirTyKind::Mode(mode, inner) => {
+            let inner = lower_opt_hir_ty(db, *inner, scope, assumptions);
+            match mode {
+                TypeMode::Mut => TyId::borrow_mut_of(db, inner),
+                TypeMode::Ref => TyId::borrow_ref_of(db, inner),
+                TypeMode::Own => inner,
+            }
         }
 
         HirTyKind::Path(path) => lower_path(db, scope, *path, assumptions),
@@ -98,6 +109,37 @@ fn lower_path<'db>(
                             TyId::invalid(db, InvalidCause::ParseError)
                         }
                     }
+                    PathRes::TraitConst(recv_ty, inst, name) => {
+                        let mut args = inst.args(db).clone();
+                        if let Some(self_arg) = args.first_mut() {
+                            *self_arg = recv_ty;
+                        }
+                        let inst = TraitInstId::new(
+                            db,
+                            inst.def(db),
+                            args,
+                            inst.assoc_type_bindings(db).clone(),
+                        );
+
+                        let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
+                        if let Some(const_ty) =
+                            super::const_ty::const_ty_from_trait_const(db, solve_cx, inst, name)
+                        {
+                            TyId::const_ty(db, const_ty)
+                        } else if let Some(expected_ty) = inst
+                            .def(db)
+                            .const_(db, name)
+                            .and_then(|v| v.ty_binder(db))
+                            .map(|b| b.instantiate(db, inst.args(db)))
+                        {
+                            let expr = ConstExprId::new(db, ConstExpr::TraitConst { inst, name });
+                            let const_ty =
+                                ConstTyId::new(db, ConstTyData::Abstract(expr, expected_ty));
+                            TyId::const_ty(db, const_ty)
+                        } else {
+                            TyId::invalid(db, InvalidCause::Other)
+                        }
+                    }
                     other => TyId::invalid(db, InvalidCause::NotAType(other)),
                 };
             }
@@ -151,7 +193,11 @@ fn lower_const_ty_ty<'db>(
     }
     let ty = lower_path(db, scope, *path, assumptions);
 
-    if ty.has_invalid(db) || ty.is_integral(db) || ty.is_bool(db) {
+    if ty.has_invalid(db)
+        || ty.is_integral(db)
+        || ty.is_bool(db)
+        || ty.is_unit_variant_only_enum(db)
+    {
         ty
     } else {
         TyId::invalid(db, InvalidCause::InvalidConstParamTy)
@@ -278,7 +324,75 @@ pub(crate) fn lower_generic_arg_list<'db>(
     args.data(db)
         .iter()
         .map(|arg| match arg {
-            GenericArg::Type(ty_arg) => lower_opt_hir_ty(db, ty_arg.ty, scope, assumptions),
+            GenericArg::Type(ty_arg) => {
+                // Generic args are syntactically ambiguous: `String<N>` may parse `N` as a type
+                // even when `String` expects a const generic arg. When a type-arg is a path that
+                // resolves as a value const/trait-const, lower it as a const-ty argument so
+                // downstream `TyId::app` sees a const generic.
+                if let Some(hir_ty) = ty_arg.ty.to_opt()
+                    && let HirTyKind::Path(path) = hir_ty.data(db)
+                    && let Some(path) = path.to_opt()
+                    && let Ok(resolved) = resolve_path(db, path, scope, assumptions, true)
+                {
+                    match resolved {
+                        PathRes::Const(const_def, ty) => {
+                            if let Some(body) = const_def.body(db).to_opt() {
+                                let const_ty =
+                                    ConstTyId::from_body(db, body, Some(ty), Some(const_def));
+                                return TyId::const_ty(db, const_ty);
+                            }
+                            return TyId::invalid(db, InvalidCause::ParseError);
+                        }
+                        PathRes::TraitConst(recv_ty, inst, name) => {
+                            let mut args = inst.args(db).clone();
+                            if let Some(self_arg) = args.first_mut() {
+                                *self_arg = recv_ty;
+                            }
+                            let inst = TraitInstId::new(
+                                db,
+                                inst.def(db),
+                                args,
+                                inst.assoc_type_bindings(db).clone(),
+                            );
+
+                            let solve_cx =
+                                TraitSolveCx::new(db, scope).with_assumptions(assumptions);
+                            if let Some(const_ty) =
+                                super::const_ty::const_ty_from_trait_const(db, solve_cx, inst, name)
+                            {
+                                return TyId::const_ty(db, const_ty);
+                            }
+                            if let Some(expected_ty) = inst
+                                .def(db)
+                                .const_(db, name)
+                                .and_then(|v| v.ty_binder(db))
+                                .map(|b| b.instantiate(db, inst.args(db)))
+                            {
+                                let expr =
+                                    ConstExprId::new(db, ConstExpr::TraitConst { inst, name });
+                                let const_ty =
+                                    ConstTyId::new(db, ConstTyData::Abstract(expr, expected_ty));
+                                return TyId::const_ty(db, const_ty);
+                            }
+                        }
+                        PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {
+                            if let TyData::ConstTy(const_ty) = ty.data(db) {
+                                return TyId::const_ty(db, *const_ty);
+                            }
+                        }
+                        PathRes::EnumVariant(variant)
+                            if variant.ty.is_unit_variant_only_enum(db) =>
+                        {
+                            let evaluated = EvaluatedConstTy::EnumVariant(variant.variant);
+                            let const_ty =
+                                ConstTyId::new(db, ConstTyData::Evaluated(evaluated, variant.ty));
+                            return TyId::const_ty(db, const_ty);
+                        }
+                        _ => {}
+                    }
+                }
+                lower_opt_hir_ty(db, ty_arg.ty, scope, assumptions)
+            }
             GenericArg::Const(const_arg) => {
                 let const_ty = ConstTyId::from_opt_body(db, const_arg.body);
                 TyId::const_ty(db, const_ty)
@@ -400,21 +514,43 @@ impl<'db> GenericParamTypeSet<'db> {
         let scope = self.scope(db);
         for i in (offset + provided_explicit.len())..total {
             let prec = &self.params_precursor(db)[i];
-            match prec.default_hir_ty {
-                Some(hir_ty) => {
-                    let lowered = lower_hir_ty(db, hir_ty, scope, assumptions);
-                    let lowered = {
-                        let mut subst = ParamSubst {
-                            db,
-                            mapping: &mapping,
-                        };
-                        lowered.fold_with(db, &mut subst)
+
+            if let Some(hir_ty) = prec.default_hir_ty {
+                let lowered = lower_hir_ty(db, hir_ty, scope, assumptions);
+                let lowered = {
+                    let mut subst = ParamSubst {
+                        db,
+                        mapping: &mapping,
                     };
-                    mapping[i] = Some(lowered);
-                    result.push(lowered);
-                }
-                None => break, // Missing non-default; stop filling further params
+                    lowered.fold_with(db, &mut subst)
+                };
+                mapping[i] = Some(lowered);
+                result.push(lowered);
+                continue;
             }
+
+            if let Some(default) = prec.default_hir_const {
+                let expected = prec.evaluate(db, scope, i).const_ty_ty(db);
+                let const_ty = ConstTyId::from_body(db, default, expected, None);
+                let lowered = TyId::const_ty(db, const_ty);
+                let lowered = lowered
+                    .evaluate_const_ty(db, expected)
+                    .unwrap_or_else(|cause| TyId::invalid(db, cause));
+
+                let lowered = {
+                    let mut subst = ParamSubst {
+                        db,
+                        mapping: &mapping,
+                    };
+                    lowered.fold_with(db, &mut subst)
+                };
+
+                mapping[i] = Some(lowered);
+                result.push(lowered);
+                continue;
+            }
+
+            break; // Missing non-default; stop filling further params
         }
 
         result
@@ -445,9 +581,9 @@ impl<'db> GenericParamCollector<'db> {
             _ => vec![],
         };
 
-        // For each type effect parameter `uses (T)` / `uses (mut T)`, insert an implicit generic
-        // parameter that carries the "provider type" (e.g. `MemPtr<T>` / `StorPtr<T>`). This
-        // allows monomorphization to treat type-effect domains as normal generic arguments.
+        // For each effect parameter, insert an implicit generic parameter that carries the
+        // concrete "provider type". This allows monomorphization to treat effects as ordinary
+        // implicit generics and substitute a concrete provider at call sites.
         if let GenericParamOwner::Func(func) = owner {
             let mut provider_idx = 0usize;
             for effect in func.effect_params(db) {
@@ -456,7 +592,7 @@ impl<'db> GenericParamCollector<'db> {
                 };
                 if !matches!(
                     effect_key_kind(db, key_path, func.scope()),
-                    EffectKeyKind::Type
+                    EffectKeyKind::Type | EffectKeyKind::Trait
                 ) {
                     continue;
                 }
@@ -502,9 +638,10 @@ impl<'db> GenericParamCollector<'db> {
                 GenericParam::Const(param) => {
                     let name = param.name;
                     let hir_ty = param.ty.to_opt();
+                    let default = param.default;
 
                     self.params
-                        .push(TyParamPrecursor::const_ty_param(name, idx, hir_ty))
+                        .push(TyParamPrecursor::const_ty_param(name, idx, hir_ty, default))
                 }
             }
         }
@@ -571,6 +708,7 @@ pub struct TyParamPrecursor<'db> {
     kind: Option<Kind>,
     variant: Variant<'db>,
     default_hir_ty: Option<HirTyId<'db>>, // Only used for type params
+    default_hir_const: Option<Body<'db>>, // Only used for const params
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -629,16 +767,23 @@ impl<'db> TyParamPrecursor<'db> {
             kind,
             variant: Variant::Normal,
             default_hir_ty,
+            default_hir_const: None,
         }
     }
 
-    fn const_ty_param(name: Partial<IdentId<'db>>, idx: usize, ty: Option<HirTyId<'db>>) -> Self {
+    fn const_ty_param(
+        name: Partial<IdentId<'db>>,
+        idx: usize,
+        ty: Option<HirTyId<'db>>,
+        default: Option<Body<'db>>,
+    ) -> Self {
         Self {
             name,
             original_idx: idx.into(),
             kind: None,
             variant: Variant::Const(ty),
             default_hir_ty: None,
+            default_hir_const: default,
         }
     }
 
@@ -649,6 +794,7 @@ impl<'db> TyParamPrecursor<'db> {
             kind: Some(Kind::Star),
             variant: Variant::EffectProvider,
             default_hir_ty: None,
+            default_hir_const: None,
         }
     }
 
@@ -660,6 +806,7 @@ impl<'db> TyParamPrecursor<'db> {
             kind,
             variant: Variant::TraitSelf,
             default_hir_ty: None,
+            default_hir_const: None,
         }
     }
 

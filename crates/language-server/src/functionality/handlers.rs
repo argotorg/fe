@@ -1,20 +1,22 @@
 use crate::backend::Backend;
-use crate::doc_server::{DocServerHandle, GotoSourceRequest};
 
 use async_lsp::lsp_types::FileChangeType;
 use async_lsp::{
     ErrorCode, LanguageClient, ResponseError,
     lsp_types::{
-        DocumentFormattingParams, ExecuteCommandParams, Hover, HoverParams, InitializeParams,
-        InitializeResult, InitializedParams, LogMessageParams, Position, Range, ShowDocumentParams,
+        DocumentFormattingParams, Hover, HoverParams, InitializeParams, InitializeResult,
+        InitializedParams, LogMessageParams, MessageType, Position, Range, ShowMessageParams,
         TextEdit,
     },
 };
 
 use common::InputDb;
-use doc_engine::DocExtractor;
 use driver::init_ingot;
-use hir::hir_def::HirIngot;
+use resolver::workspace::discover_context;
+use resolver::{
+    ResolutionHandler, Resolver,
+    files::{FilesResolver, FilesResource},
+};
 use rustc_hash::FxHashSet;
 use url::Url;
 
@@ -54,95 +56,41 @@ pub enum ChangeKind {
     Delete,
 }
 
-/// Event to navigate the doc browser to a specific path.
-/// Used for: renames, go-to-definition, newly created items, etc.
-#[derive(Debug, Clone)]
-pub struct DocNavigate {
-    /// Target path to navigate to (e.g., "mymod::MyStruct")
-    pub path: String,
-    /// Optional: if set, only redirect if browser is currently on this path
-    pub if_on_path: Option<String>,
-}
-
-/// Custom LSP notification for cursor position updates.
-/// The extension sends this when the text cursor moves in an Fe file.
-/// Method: "fe/cursorPosition"
-pub enum CursorPositionNotification {}
-
-impl async_lsp::lsp_types::notification::Notification for CursorPositionNotification {
-    type Params = async_lsp::lsp_types::TextDocumentPositionParams;
-    const METHOD: &'static str = "fe/cursorPosition";
-}
-
-impl DocNavigate {
-    /// Navigate unconditionally to a path
-    pub fn to(path: impl Into<String>) -> Self {
-        Self {
-            path: path.into(),
-            if_on_path: None,
-        }
-    }
-
-    /// Navigate only if the browser is currently viewing old_path (for renames)
-    pub fn redirect(old_path: impl Into<String>, new_path: impl Into<String>) -> Self {
-        Self {
-            path: new_path.into(),
-            if_on_path: Some(old_path.into()),
-        }
-    }
-}
-
-impl std::fmt::Display for DocNavigate {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if let Some(ref from) = self.if_on_path {
-            write!(f, "DocNavigate({} -> {})", from, self.path)
-        } else {
-            write!(f, "DocNavigate({})", self.path)
-        }
-    }
-}
-
 // Implementation moved to backend/mod.rs
 
 async fn discover_and_load_ingots(
     backend: &mut Backend,
     root_path: &std::path::Path,
 ) -> Result<(), ResponseError> {
-    // Find all fe.toml files in the workspace
-    let pattern = format!("{}/**/fe.toml", root_path.to_string_lossy());
-    let config_paths = glob::glob(&pattern)
-        .map_err(|e| ResponseError::new(ErrorCode::INTERNAL_ERROR, format!("Glob error: {e}")))?
-        .filter_map(Result::ok)
-        .collect::<Vec<_>>();
+    let root_url = Url::from_directory_path(root_path).map_err(|_| {
+        ResponseError::new(
+            ErrorCode::INTERNAL_ERROR,
+            format!("Invalid workspace root path: {root_path:?}"),
+        )
+    })?;
 
-    // Initialize each ingot using the driver's init_ingot function
-    for config_path in &config_paths {
-        let ingot_dir = config_path.parent().unwrap();
-        let ingot_url = Url::from_directory_path(ingot_dir).map_err(|_| {
-            ResponseError::new(
-                ErrorCode::INTERNAL_ERROR,
-                format!("Invalid ingot path: {ingot_dir:?}"),
-            )
-        })?;
+    let discovery = discover_context(&root_url).map_err(|e| {
+        ResponseError::new(ErrorCode::INTERNAL_ERROR, format!("Discovery error: {e}"))
+    })?;
 
-        let had_diagnostics = init_ingot(&mut backend.db, &ingot_url);
+    if let Some(workspace_root) = discovery.workspace_root.as_ref() {
+        let had_diagnostics = init_ingot(&mut backend.db, workspace_root);
+        if had_diagnostics {
+            warn!("Ingot initialization produced diagnostics for workspace root");
+        }
+    }
+
+    for ingot_url in &discovery.ingot_roots {
+        let had_diagnostics = init_ingot(&mut backend.db, ingot_url);
         if had_diagnostics {
             warn!(
                 "Ingot initialization produced diagnostics for {:?}",
-                ingot_dir
+                ingot_url
             );
         }
     }
 
-    // Also check if the root itself is an ingot (no fe.toml in subdirectories)
-    if config_paths.is_empty() {
-        let root_url = Url::from_directory_path(root_path).map_err(|_| {
-            ResponseError::new(
-                ErrorCode::INTERNAL_ERROR,
-                format!("Invalid workspace root path: {root_path:?}"),
-            )
-        })?;
-
+    if discovery.workspace_root.is_none() && discovery.ingot_roots.is_empty() {
         let had_diagnostics = init_ingot(&mut backend.db, &root_url);
         if had_diagnostics {
             warn!("Ingot initialization produced diagnostics for workspace root");
@@ -152,11 +100,45 @@ async fn discover_and_load_ingots(
     Ok(())
 }
 
+async fn read_file_text_optional(path: std::path::PathBuf) -> Option<String> {
+    tokio::task::spawn_blocking(move || {
+        struct FileContent;
+
+        impl ResolutionHandler<FilesResolver> for FileContent {
+            type Item = Option<String>;
+
+            fn handle_resolution(
+                &mut self,
+                _description: &Url,
+                resource: FilesResource,
+            ) -> Self::Item {
+                resource.files.into_iter().next().map(|file| file.content)
+            }
+        }
+
+        let file_url = Url::from_file_path(path).ok()?;
+        let mut resolver = FilesResolver::new();
+        let mut handler = FileContent;
+        resolver.resolve(&mut handler, &file_url).ok().flatten()
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
 pub async fn initialize(
     backend: &mut Backend,
     message: InitializeParams,
 ) -> Result<InitializeResult, ResponseError> {
     info!("initializing language server!");
+
+    backend.definition_link_support = message
+        .capabilities
+        .text_document
+        .as_ref()
+        .and_then(|text| text.definition.as_ref())
+        .and_then(|def| def.link_support)
+        .unwrap_or(false);
 
     let root = message
         .workspace_folders
@@ -164,28 +146,8 @@ pub async fn initialize(
         .and_then(|folder| folder.uri.to_file_path().ok())
         .unwrap_or_else(|| std::env::current_dir().unwrap());
 
-    // Store workspace root
-    backend.workspace_root = Some(root.clone());
-
-    // Check if client supports window/showDocument
-    backend.supports_show_document = message
-        .capabilities
-        .window
-        .as_ref()
-        .and_then(|w| w.show_document.as_ref())
-        .map(|sd| sd.support)
-        .unwrap_or(false);
-    info!(
-        "Client supports window/showDocument: {}",
-        backend.supports_show_document
-    );
-
     // Discover and load all ingots in the workspace
     discover_and_load_ingots(backend, &root).await?;
-
-    // Note: Doc server is started lazily on first file change to avoid blocking init
-    // Store workspace root for later use
-    backend.server_info.workspace_root = Some(root.to_string_lossy().to_string());
 
     let capabilities = server_capabilities();
     let initialize_result = InitializeResult {
@@ -199,18 +161,10 @@ pub async fn initialize(
 }
 
 pub async fn initialized(
-    backend: &mut Backend,
+    backend: &Backend,
     _message: InitializedParams,
 ) -> Result<(), ResponseError> {
     info!("language server initialized! recieved notification!");
-    info!("workspace_root: {:?}", backend.workspace_root);
-
-    // Start doc server immediately
-    update_docs(backend).await;
-    info!(
-        "update_docs completed, doc_server running: {}",
-        backend.doc_server.is_some()
-    );
 
     // Get all files from the workspace
     let all_files: Vec<_> = backend
@@ -246,7 +200,10 @@ pub async fn handle_did_change_watched_files(
             FileChangeType::CHANGED => ChangeKind::Edit(None),
             FileChangeType::CREATED => ChangeKind::Create,
             FileChangeType::DELETED => ChangeKind::Delete,
-            _ => unreachable!(),
+            _ => {
+                tracing::warn!("unknown FileChangeType {:?}, skipping", event.typ);
+                continue;
+            }
         };
         let _ = backend.client.clone().emit(FileChange {
             uri: event.uri,
@@ -273,9 +230,23 @@ pub async fn handle_did_change_text_document(
     message: async_lsp::lsp_types::DidChangeTextDocumentParams,
 ) -> Result<(), ResponseError> {
     info!("file changed: {:?}", message.text_document.uri);
+    if message.content_changes.is_empty() {
+        warn!(
+            "didChange with no content changes for {:?}",
+            message.text_document.uri
+        );
+        return Ok(());
+    }
+    let last = message.content_changes.last().expect("checked non-empty");
+    if last.range.is_some() {
+        warn!(
+            "client sent incremental change while server advertises FULL sync; uri={:?}",
+            message.text_document.uri
+        );
+    }
     let _ = backend.client.clone().emit(FileChange {
         uri: message.text_document.uri,
-        kind: ChangeKind::Edit(Some(message.content_changes[0].text.clone())),
+        kind: ChangeKind::Edit(Some(last.text.clone())),
     });
     Ok(())
 }
@@ -292,6 +263,19 @@ pub async fn handle_file_change(
     backend: &mut Backend,
     message: FileChange,
 ) -> Result<(), ResponseError> {
+    if backend.is_virtual_uri(&message.uri) {
+        if matches!(message.kind, ChangeKind::Edit(_))
+            && backend.readonly_warnings.insert(message.uri.clone())
+        {
+            let _ = backend.client.clone().show_message(ShowMessageParams {
+                typ: MessageType::ERROR,
+                message: "Built-in library files are read-only in the editor; edits are ignored."
+                    .to_string(),
+            });
+        }
+        return Ok(());
+    }
+
     let path = match message.uri.to_file_path() {
         Ok(p) => p,
         Err(_) => {
@@ -333,12 +317,9 @@ pub async fn handle_file_change(
         }
         ChangeKind::Create => {
             info!("file created: {:?}", &path_str);
-            let contents = match tokio::fs::read_to_string(&path).await {
-                Ok(c) => c,
-                Err(e) => {
-                    error!("Failed to read file {}: {}", path_str, e);
-                    return Ok(());
-                }
+            let Some(contents) = read_file_text_optional(path.clone()).await else {
+                error!("Failed to read file {}", path_str);
+                return Ok(());
             };
             if let Ok(url) = url::Url::from_file_path(&path) {
                 backend
@@ -357,13 +338,11 @@ pub async fn handle_file_change(
             let contents = if let Some(text) = contents {
                 text
             } else {
-                match tokio::fs::read_to_string(&path).await {
-                    Ok(c) => c,
-                    Err(e) => {
-                        error!("Failed to read file {}: {}", path_str, e);
-                        return Ok(());
-                    }
-                }
+                let Some(contents) = read_file_text_optional(path.clone()).await else {
+                    error!("Failed to read file {}", path_str);
+                    return Ok(());
+                };
+                contents
             };
             if let Ok(url) = url::Url::from_file_path(&path) {
                 backend
@@ -384,9 +363,6 @@ pub async fn handle_file_change(
             }
         }
     }
-
-    // Update documentation (starts server on first change if needed)
-    update_docs(backend).await;
 
     let _ = backend.client.emit(NeedsDiagnostics(message.uri));
     Ok(())
@@ -433,12 +409,21 @@ pub async fn handle_files_need_diagnostics(
     backend: &Backend,
     message: FilesNeedDiagnostics,
 ) -> Result<(), ResponseError> {
+    let t_handler = std::time::Instant::now();
     let FilesNeedDiagnostics(need_diagnostics) = message;
     let mut client = backend.client.clone();
+
+    // Track all requested URIs so we can clear stale diagnostics for any that
+    // don't appear in the computed diagnostics (e.g. deleted files, fixed errors)
+    let mut pending_clear: FxHashSet<url::Url> = need_diagnostics
+        .iter()
+        .map(|NeedsDiagnostics(u)| u.clone())
+        .collect();
 
     let ingots_need_diagnostics: FxHashSet<_> = need_diagnostics
         .iter()
         .filter_map(|NeedsDiagnostics(url)| {
+            let url = backend.map_client_uri_to_internal(url.clone());
             backend
                 .db
                 .workspace()
@@ -446,13 +431,38 @@ pub async fn handle_files_need_diagnostics(
         })
         .collect();
 
-    for ingot in ingots_need_diagnostics {
-        // Get diagnostics per file
-        use crate::lsp_diagnostics::LspDiagnostics;
-        let diagnostics_map = backend.db.diagnostics_for_ingot(ingot);
+    tracing::debug!(
+        "[fe:timing] handle_files_need_diagnostics: {} URIs -> {} ingots",
+        need_diagnostics.len(),
+        ingots_need_diagnostics.len()
+    );
 
-        for uri in diagnostics_map.keys() {
-            let diagnostic = diagnostics_map.get(uri).cloned().unwrap_or_default();
+    for ingot in ingots_need_diagnostics {
+        // Wrap diagnostics computation in catch_unwind: analysis passes
+        // (parsing, type checking, etc.) can panic on malformed intermediate
+        // text during editing. Without this, a panic kills the Backend actor
+        // and all subsequent LSP requests fail with SendError.
+        use crate::lsp_diagnostics::LspDiagnostics;
+        let diagnostics_map = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            backend.db.diagnostics_for_ingot(ingot)
+        })) {
+            Ok(map) => map,
+            Err(panic_info) => {
+                let msg = panic_info
+                    .downcast_ref::<&str>()
+                    .copied()
+                    .or_else(|| panic_info.downcast_ref::<String>().map(|s| s.as_str()))
+                    .unwrap_or("<non-string panic>");
+                error!("diagnostics_for_ingot panicked (skipping): {msg}");
+                continue;
+            }
+        };
+
+        for (internal_uri, diags) in diagnostics_map.iter() {
+            let uri = backend.map_internal_uri_to_client(internal_uri.clone());
+            pending_clear.remove(&uri);
+            let mut diagnostic = diags.clone();
+            map_related_info_uris(backend, &mut diagnostic);
             let diagnostics_params = async_lsp::lsp_types::PublishDiagnosticsParams {
                 uri: uri.clone(),
                 diagnostics: diagnostic,
@@ -463,290 +473,65 @@ pub async fn handle_files_need_diagnostics(
             }
         }
     }
-    Ok(())
-}
 
-/// Start the doc server if not running, and update the documentation index.
-/// This is called after file changes to keep docs in sync.
-async fn update_docs(backend: &mut Backend) {
-    info!(
-        "update_docs called, doc_server exists: {}",
-        backend.doc_server.is_some()
-    );
-
-    // Start doc server if not already running
-    if backend.doc_server.is_none() {
-        info!("Starting doc server...");
-        // Use the workers runtime since act_locally runs on a separate thread without tokio
-        let client = backend.client.clone();
-        let supports_goto_source = backend.supports_show_document;
-        let handle_result = backend
-            .workers
-            .block_on(DocServerHandle::start(client, supports_goto_source));
-        match handle_result {
-            Ok(handle) => {
-                info!("Started documentation server at {}", handle.url);
-
-                // Log to client so user can see the URL
-                let _ = backend.client.clone().log_message(LogMessageParams {
-                    typ: async_lsp::lsp_types::MessageType::INFO,
-                    message: format!("Fe docs available at {}", handle.url),
-                });
-
-                // Update server info
-                backend.server_info.docs_url = Some(handle.url.clone());
-
-                // Write server info file if we have a workspace root
-                if let Some(ref root) = backend.workspace_root {
-                    info!("Writing .fe-lsp.json to {:?}", root);
-                    match backend.server_info.write_to_workspace(root) {
-                        Ok(()) => info!("Successfully wrote .fe-lsp.json"),
-                        Err(e) => warn!("Failed to write server info: {}", e),
-                    }
-                } else {
-                    warn!("No workspace root set, cannot write .fe-lsp.json");
-                }
-
-                backend.doc_server = Some(handle);
-            }
-            Err(e) => {
-                error!("Failed to start doc server: {}", e);
-                return;
-            }
-        }
-    }
-
-    // Extract docs from all ingots
-    let extractor = if let Some(ref root) = backend.workspace_root {
-        DocExtractor::new(&backend.db).with_root_path(root)
-    } else {
-        DocExtractor::new(&backend.db)
-    };
-    let mut combined_index = doc_engine::DocIndex::default();
-
-    // Get all unique ingots from workspace files
-    let ingots: FxHashSet<_> = backend
-        .db
-        .workspace()
-        .all_files(&backend.db)
-        .iter()
-        .filter_map(|(url, _)| {
-            backend
-                .db
-                .workspace()
-                .containing_ingot(&backend.db, url.clone())
-        })
-        .collect();
-
-    // Collect trait impl links from all ingots
-    let mut all_trait_impl_links = Vec::new();
-
-    for ingot in ingots {
-        // Skip ingots without valid config (no fe.toml or missing name)
-        let has_valid_config = ingot
-            .config(&backend.db)
-            .and_then(|c| c.metadata.name)
-            .is_some();
-        if !has_valid_config {
-            continue;
-        }
-
-        // Extract items from ALL modules in the ingot (not just root)
-        for top_mod in ingot.all_modules(&backend.db) {
-            for item in top_mod.children_nested(&backend.db) {
-                if let Some(doc_item) = extractor.extract_item_for_ingot(item, ingot) {
-                    combined_index.items.push(doc_item);
-                }
-            }
-        }
-        // Build module tree from root (it handles file-based children)
-        let root_mod = ingot.root_mod(&backend.db);
-        let module_tree = extractor.build_module_tree_for_ingot(ingot, root_mod);
-        combined_index.modules.extend(module_tree);
-
-        // Extract trait implementation links
-        all_trait_impl_links.extend(extractor.extract_trait_impl_links(ingot));
-    }
-
-    // Link trait implementations to their target types
-    combined_index.link_trait_impls(all_trait_impl_links);
-
-    // Link types in signatures to their documentation pages
-    combined_index.link_signature_types();
-
-    // Sort for consistent ordering
-    combined_index.items.sort_by(|a, b| a.path.cmp(&b.path));
-    combined_index.modules.sort_by(|a, b| a.path.cmp(&b.path));
-
-    // Update the doc server (use workers runtime for tokio async)
-    if let Some(ref doc_server) = backend.doc_server {
-        backend
-            .workers
-            .block_on(doc_server.update_index(combined_index));
-    }
-}
-
-/// Handle doc navigation events - notify the browser to navigate
-pub async fn handle_doc_navigate(
-    backend: &mut Backend,
-    event: DocNavigate,
-) -> Result<(), ResponseError> {
-    info!("Doc navigate: {}", event);
-
-    // Notify the doc server to send navigation message to browser
-    if let Some(ref doc_server) = backend.doc_server {
-        doc_server.notify_navigate(&event.path, event.if_on_path.as_deref());
-    }
-
-    // If this was a rename (conditional redirect), also update the doc index
-    if event.if_on_path.is_some() {
-        update_docs(backend).await;
-    }
-
-    Ok(())
-}
-
-/// Handle goto source requests from the doc viewer.
-/// This tells the editor to navigate to the source location.
-pub async fn handle_goto_source(
-    backend: &Backend,
-    request: GotoSourceRequest,
-) -> Result<(), ResponseError> {
-    info!("Goto source: {}", request);
-
-    // Convert the file path to a URL
-    let file_url = Url::from_file_path(&request.file).map_err(|_| {
-        ResponseError::new(
-            ErrorCode::INVALID_PARAMS,
-            format!("Invalid file path: {}", request.file),
-        )
-    })?;
-
-    // LSP uses 0-based line/column, but source locations are typically 1-based
-    let line = request.line.saturating_sub(1);
-    let column = request.column.saturating_sub(1);
-    let position = Position::new(line, column);
-
-    if backend.supports_show_document {
-        // Use LSP window/showDocument (LSP 3.16+)
-        let params = ShowDocumentParams {
-            uri: file_url,
-            external: None,
-            take_focus: Some(true),
-            selection: Some(Range::new(position, position)),
+    // Clear diagnostics for any requested URIs that weren't covered above
+    for uri in pending_clear {
+        let diagnostics_params = async_lsp::lsp_types::PublishDiagnosticsParams {
+            uri: uri.clone(),
+            diagnostics: Vec::new(),
+            version: None,
         };
-
-        let mut client = backend.client.clone();
-        match client.show_document(params).await {
-            Ok(result) => {
-                if result.success {
-                    info!("Successfully opened document in editor");
-                } else {
-                    warn!("Editor reported failure opening document");
-                }
-            }
-            Err(e) => {
-                error!("Failed to open document: {:?}", e);
-            }
-        }
-    } else {
-        // Fallback: try opening the file directly
-        // Many editors support file:///path#L<line> format
-        let url_with_line = format!("{}:{}", request.file, request.line);
-        info!(
-            "window/showDocument not supported, trying fallback: {}",
-            url_with_line
-        );
-
-        if let Err(e) = open::that(&url_with_line) {
-            // If that fails, try just opening the file
-            warn!("Failed to open with line number ({}), trying plain file", e);
-            if let Err(e) = open::that(&request.file) {
-                error!("Failed to open file: {}", e);
-            }
+        info!("Clearing stale diagnostics for {:?}", uri);
+        if let Err(e) = client.publish_diagnostics(diagnostics_params) {
+            error!("Failed to clear diagnostics for {}: {:?}", uri, e);
         }
     }
 
+    tracing::debug!(
+        "[fe:timing] handle_files_need_diagnostics total: {:?}",
+        t_handler.elapsed()
+    );
     Ok(())
+}
+
+fn map_related_info_uris(backend: &Backend, diagnostics: &mut [async_lsp::lsp_types::Diagnostic]) {
+    for diagnostic in diagnostics.iter_mut() {
+        let Some(related) = diagnostic.related_information.as_mut() else {
+            continue;
+        };
+        for info in related.iter_mut() {
+            info.location.uri = backend.map_internal_uri_to_client(info.location.uri.clone());
+        }
+    }
 }
 
 pub async fn handle_hover_request(
     backend: &Backend,
     message: HoverParams,
 ) -> Result<Option<Hover>, ResponseError> {
-    let path_str = message // Renamed to path_str to avoid confusion with Url
-        .text_document_position_params
-        .text_document
-        .uri
-        .path();
-
-    let Ok(url) = url::Url::from_file_path(path_str) else {
-        warn!("handle_hover_request failed to convert path to URL: `{path_str}`");
-        return Ok(None);
-    };
+    let url = backend.map_client_uri_to_internal(
+        message
+            .text_document_position_params
+            .text_document
+            .uri
+            .clone(),
+    );
     let Some(file) = backend.db.workspace().get(&backend.db, &url) else {
-        warn!(
-            "handle_hover_request failed to get file for url: `{url}` (original path: `{path_str}`)"
-        );
+        warn!("handle_hover_request failed to get file for url: `{url}`");
         return Ok(None);
     };
 
     info!("handling hover request in file: {:?}", file);
-    let result = hover_helper(&backend.db, file, message).unwrap_or_else(|e| {
+    let response = hover_helper(&backend.db, file, message).unwrap_or_else(|e| {
         error!("Error handling hover: {:?}", e);
-        super::hover::HoverResult {
-            hover: None,
-            doc_path: None,
-        }
+        None
     });
-
-    // Emit navigation event for auto-follow mode (browser will ignore if disabled)
-    if let Some(doc_path) = result.doc_path {
-        let _ = backend.client.clone().emit(DocNavigate::to(doc_path));
-    }
-
-    info!("sending hover response: {:?}", result.hover);
-    Ok(result.hover)
+    info!("sending hover response: {:?}", response);
+    Ok(response)
 }
 
-/// Handle cursor position notifications from the extension.
-/// This enables text cursor following for the documentation viewer.
-pub async fn handle_cursor_position(
-    backend: &Backend,
-    message: async_lsp::lsp_types::TextDocumentPositionParams,
-) -> Result<(), ResponseError> {
-    use crate::util::to_offset_from_position;
-    use hir::{core::semantic::reference::Target, lower::map_file_to_mod};
-
-    let path_str = message.text_document.uri.path();
-
-    let Ok(url) = url::Url::from_file_path(path_str) else {
-        return Ok(());
-    };
-    let Some(file) = backend.db.workspace().get(&backend.db, &url) else {
-        return Ok(());
-    };
-
-    let file_text = file.text(&backend.db);
-    let cursor = to_offset_from_position(message.position, file_text.as_str());
-    let top_mod = map_file_to_mod(&backend.db, file);
-
-    // Look up the symbol at cursor position
-    let resolution = top_mod.target_at(&backend.db, cursor);
-
-    // Skip navigation if ambiguous (don't auto-follow to an arbitrary choice)
-    if resolution.is_ambiguous() {
-        return Ok(());
-    }
-
-    if let Some(Target::Scope(scope)) = resolution.first() {
-        // Use shared doc-engine function for qualified path
-        if let Some(doc_path) = doc_engine::scope_to_doc_path(&backend.db, *scope) {
-            // Emit navigation event (browser will ignore if auto-follow is disabled)
-            let _ = backend.client.clone().emit(DocNavigate::to(doc_path));
-        }
-    }
-
+pub async fn handle_shutdown(_backend: &Backend, _message: ()) -> Result<(), ResponseError> {
+    info!("received shutdown request");
     Ok(())
 }
 
@@ -754,12 +539,11 @@ pub async fn handle_formatting(
     backend: &Backend,
     params: DocumentFormattingParams,
 ) -> Result<Option<Vec<TextEdit>>, ResponseError> {
-    let path_str = params.text_document.uri.path();
-
-    let Ok(url) = url::Url::from_file_path(path_str) else {
-        warn!("handle_formatting: invalid path `{path_str}`");
+    if backend.is_virtual_uri(&params.text_document.uri) {
         return Ok(None);
-    };
+    }
+
+    let url = backend.map_client_uri_to_internal(params.text_document.uri.clone());
 
     let Some(file) = backend.db.workspace().get(&backend.db, &url) else {
         warn!("handle_formatting: file not found `{url}`");
@@ -792,67 +576,5 @@ pub async fn handle_formatting(
             Ok(None)
         }
         Err(fmt::FormatError::Io(_)) => Ok(None),
-    }
-}
-
-pub async fn handle_shutdown(backend: &Backend, _message: ()) -> Result<(), ResponseError> {
-    info!("received shutdown request");
-
-    // Clean up server info file
-    if let Some(ref root) = backend.workspace_root {
-        crate::doc_server::LspServerInfo::remove_from_workspace(root);
-    }
-
-    Ok(())
-}
-
-pub async fn handle_execute_command(
-    backend: &mut Backend,
-    params: ExecuteCommandParams,
-) -> Result<Option<serde_json::Value>, ResponseError> {
-    info!("execute command: {:?}", params.command);
-
-    match params.command.as_str() {
-        "fe.openDocs" => {
-            // Start doc server if not running
-            if backend.doc_server.is_none() {
-                info!("Doc server not running, starting it...");
-                update_docs(backend).await;
-            }
-
-            if let Some(ref doc_server) = backend.doc_server {
-                // Extract optional item path from arguments
-                let item_path = params.arguments.first().and_then(|arg| arg.as_str());
-
-                // Build the full URL
-                let full_url = if let Some(path) = item_path {
-                    format!("{}/doc/{}", doc_server.url.trim_end_matches('/'), path)
-                } else {
-                    doc_server.url.clone()
-                };
-
-                info!("Opening docs at {}", full_url);
-
-                // Use open crate to open in default browser
-                if let Err(e) = open::that(&full_url) {
-                    error!("Failed to open browser: {}", e);
-                    return Err(ResponseError::new(
-                        ErrorCode::INTERNAL_ERROR,
-                        format!("Failed to open browser: {}", e),
-                    ));
-                }
-
-                Ok(Some(serde_json::json!({ "opened": full_url })))
-            } else {
-                Err(ResponseError::new(
-                    ErrorCode::INTERNAL_ERROR,
-                    "Failed to start documentation server".to_string(),
-                ))
-            }
-        }
-        _ => Err(ResponseError::new(
-            ErrorCode::INVALID_PARAMS,
-            format!("Unknown command: {}", params.command),
-        )),
     }
 }

@@ -9,7 +9,7 @@ fn get_balance(addr: u256) -> u256
 }
 
 fn set_balance(addr: u256, value: u256)
-    uses (mut balances: StorageMap<u256, u256, BALANCES_SALT>)
+    uses (balances: mut StorageMap<u256, u256, BALANCES_SALT>)
 {
     balances.set(key: addr, value)
 }

@@ -1,0 +1,64 @@
+---
+source: crates/hir/tests/ty_check.rs
+assertion_line: 40
+expression: res
+input_file: test_files/ty_check/effect_trait_generic_instantiation.fe
+---
+note: 
+   ┌─ effect_trait_generic_instantiation.fe:11:1
+   │  
+11 │ ╭ {
+12 │ │ }
+   │ ╰─^ ()
+
+note: 
+   ┌─ effect_trait_generic_instantiation.fe:14:13
+   │  
+14 │   pub fn ok() {
+   │ ╭─────────────^
+15 │ │     with (Ctx<u8> = CtxU8 {}, Ctx<u16> = CtxU16 {}) {
+16 │ │         needs_ctx<u16>()
+17 │ │     }
+18 │ │ }
+   │ ╰─^ ()
+
+note: 
+   ┌─ effect_trait_generic_instantiation.fe:15:5
+   │  
+15 │ ╭     with (Ctx<u8> = CtxU8 {}, Ctx<u16> = CtxU16 {}) {
+16 │ │         needs_ctx<u16>()
+17 │ │     }
+   │ ╰─────^ ()
+
+note: 
+   ┌─ effect_trait_generic_instantiation.fe:15:21
+   │
+15 │     with (Ctx<u8> = CtxU8 {}, Ctx<u16> = CtxU16 {}) {
+   │                     ^^^^^^^^ CtxU8
+
+note: 
+   ┌─ effect_trait_generic_instantiation.fe:15:42
+   │
+15 │     with (Ctx<u8> = CtxU8 {}, Ctx<u16> = CtxU16 {}) {
+   │                                          ^^^^^^^^^ CtxU16
+
+note: 
+   ┌─ effect_trait_generic_instantiation.fe:15:53
+   │  
+15 │       with (Ctx<u8> = CtxU8 {}, Ctx<u16> = CtxU16 {}) {
+   │ ╭─────────────────────────────────────────────────────^
+16 │ │         needs_ctx<u16>()
+17 │ │     }
+   │ ╰─────^ ()
+
+note: 
+   ┌─ effect_trait_generic_instantiation.fe:16:9
+   │
+16 │         needs_ctx<u16>()
+   │         ^^^^^^^^^^^^^^ fn needs_ctx<u16>
+
+note: 
+   ┌─ effect_trait_generic_instantiation.fe:16:9
+   │
+16 │         needs_ctx<u16>()
+   │         ^^^^^^^^^^^^^^^^ ()

@@ -1,0 +1,15 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/cli_output/workspaces/workspace_dependency_import/workspace_dependency_import.case
+---
+=== STDOUT ===
+== app ==
+app v0.1.0
+├── utils v0.1.0
+└── lib v0.1.0
+
+== lib ==
+lib v0.1.0
+
+=== EXIT CODE: 0 ===

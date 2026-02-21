@@ -1,7 +1,7 @@
 ---
-source: crates/hir-analysis/tests/ty_check.rs
+source: crates/hir/tests/ty_check.rs
 expression: res
-input_file: crates/hir-analysis/test_files/ty_check/call.fe
+input_file: test_files/ty_check/call.fe
 ---
 note: 
   ┌─ call.fe:1:35
@@ -64,10 +64,10 @@ note:
   │                  ^ i32
 
 note: 
-   ┌─ call.fe:9:55
+   ┌─ call.fe:9:63
    │  
- 9 │   pub fn make_pair<T, U>(first: T, second: U) -> (T, U) {
-   │ ╭───────────────────────────────────────────────────────^
+ 9 │   pub fn make_pair<T, U>(first: own T, second: own U) -> (T, U) {
+   │ ╭───────────────────────────────────────────────────────────────^
 10 │ │     (first, second)
 11 │ │ }
    │ ╰─^ (T, U)
@@ -124,10 +124,10 @@ note:
    │                                 ^^^^^ bool
 
 note: 
-   ┌─ call.fe:17:62
+   ┌─ call.fe:17:66
    │  
-17 │   pub fn make_pair_i32_U<U>(first: i32, second: U) -> (i32, U) {
-   │ ╭──────────────────────────────────────────────────────────────^
+17 │   pub fn make_pair_i32_U<U>(first: i32, second: own U) -> (i32, U) {
+   │ ╭──────────────────────────────────────────────────────────────────^
 18 │ │     make_pair(first, second)
 19 │ │ }
    │ ╰─^ (i32, U)

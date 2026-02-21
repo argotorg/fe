@@ -1,0 +1,25 @@
+trait Ctx {
+    fn sum(self) -> u256
+}
+
+struct Pair {
+    a: u256,
+    b: u256,
+}
+
+impl Ctx for Pair {
+    fn sum(self) -> u256 {
+        self.a + self.b
+    }
+}
+
+fn use_ctx() -> u256 uses (ctx: Ctx) {
+    ctx.sum()
+}
+
+pub fn entry() -> u256 {
+    let ctx = Pair { a: 40, b: 2 }
+    with (ctx) {
+        use_ctx()
+    }
+}
