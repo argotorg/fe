@@ -21,9 +21,11 @@
 //!   method(s) here.
 
 pub mod reference;
+pub mod symbol;
 pub use reference::{
     FieldAccessView, HasReferences, MethodCallView, PathView, ReferenceView, Target, UsePathView,
 };
+pub use symbol::{SourceLocation, SymbolKind, SymbolView};
 
 use crate::HirDb;
 use crate::analysis::HirAnalysisDb;
