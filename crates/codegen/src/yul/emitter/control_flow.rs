@@ -2,7 +2,7 @@
 
 use mir::{
     BasicBlockId, LoopInfo, Terminator, ValueId,
-    ir::{IntrinsicValue, SwitchTarget, SwitchValue},
+    ir::{IntrinsicValue, MirInst, SwitchTarget, SwitchValue},
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -455,6 +455,7 @@ impl<'db> FunctionEmitter<'db> {
     }
 
     /// Emits a Yul `for` loop for the given header block and returns the exit block.
+    /// If the loop has an `unroll_count`, emits the body that many times instead of a loop.
     ///
     /// * `header` - Loop header block chosen by MIR.
     /// * `info` - Loop metadata describing body/backedge/exit blocks.
@@ -477,28 +478,6 @@ impl<'db> FunctionEmitter<'db> {
                 .filter(|line| !line.is_empty())
                 .collect::<Vec<_>>()
                 .join(" ")
-        }
-
-        fn rewrite_lets_to_assignments(doc: &YulDoc) -> YulDoc {
-            match doc {
-                YulDoc::Line(text) => {
-                    if let Some(rest) = text.strip_prefix("let ")
-                        && rest.contains(":=")
-                    {
-                        YulDoc::line(rest.to_string())
-                    } else {
-                        YulDoc::line(text.clone())
-                    }
-                }
-                YulDoc::Block { caption, body } => YulDoc::block(
-                    caption.clone(),
-                    body.iter().map(rewrite_lets_to_assignments).collect(),
-                ),
-                YulDoc::WideBlock { caption, body } => YulDoc::wide_block(
-                    caption.clone(),
-                    body.iter().map(rewrite_lets_to_assignments).collect(),
-                ),
-            }
         }
 
         let block = self
@@ -524,30 +503,137 @@ impl<'db> FunctionEmitter<'db> {
             ));
         }
 
-        let init_docs = self.render_statements(&block.insts, state)?;
-        let post_docs: Vec<_> = init_docs.iter().map(rewrite_lets_to_assignments).collect();
-        let init_inline = docs_inline(&init_docs);
-        let init_block = if init_inline.is_empty() {
-            "{ }".to_string()
+        // Init block: use dedicated init_block if present, otherwise header (for while-style loops)
+        let init_block_str = if let Some(init_bb) = info.init_block {
+            let init_block_data = self
+                .mir_func
+                .body
+                .blocks
+                .get(init_bb.index())
+                .ok_or_else(|| YulError::Unsupported("invalid init block".into()))?;
+            let init_docs = self.render_statements(&init_block_data.insts, state)?;
+            let init_inline = docs_inline(&init_docs);
+            if init_inline.is_empty() {
+                "{ }".to_string()
+            } else {
+                format!("{{ {init_inline} }}")
+            }
         } else {
-            format!("{{ {init_inline} }}")
-        };
-        let post_inline = docs_inline(&post_docs);
-        let post_block = if post_inline.is_empty() {
-            "{ }".to_string()
-        } else {
-            format!("{{ {post_inline} }}")
+            // Fallback for while-style loops: use header statements
+            let init_docs = self.render_statements(&block.insts, state)?;
+            let init_inline = docs_inline(&init_docs);
+            if init_inline.is_empty() {
+                "{ }".to_string()
+            } else {
+                format!("{{ {init_inline} }}")
+            }
         };
 
+        // Post block: render from the dedicated post_block if present
+        let post_block_str = if let Some(post_bb) = info.post_block {
+            let post_block_data = self
+                .mir_func
+                .body
+                .blocks
+                .get(post_bb.index())
+                .ok_or_else(|| YulError::Unsupported("invalid post block".into()))?;
+            let post_docs = self.render_statements(&post_block_data.insts, state)?;
+            let post_inline = docs_inline(&post_docs);
+            if post_inline.is_empty() {
+                "{ }".to_string()
+            } else {
+                format!("{{ {post_inline} }}")
+            }
+        } else {
+            "{ }".to_string()
+        };
+
+        // Check for unrolling
+        if let Some(unroll_count) = info.unroll_count {
+            // Find the index local from the post block (it's the one being assigned)
+            let index_local = info.post_block.and_then(|post_bb| {
+                let post_block_data = self.mir_func.body.blocks.get(post_bb.index())?;
+                for inst in &post_block_data.insts {
+                    if let MirInst::Assign {
+                        dest: Some(local), ..
+                    } = inst
+                    {
+                        return Some(*local);
+                    }
+                }
+                None
+            });
+
+            // Get the Yul name for the index local
+            let index_name = index_local.and_then(|local| state.local(local));
+
+            // Stop at init and post blocks when emitting body
+            let mut body_stops = stop_blocks.to_vec();
+            if let Some(init_bb) = info.init_block {
+                body_stops.push(init_bb);
+            }
+            if let Some(post_bb) = info.post_block {
+                body_stops.push(post_bb);
+            }
+
+            // Emit unrolled iterations
+            let mut unrolled_docs = Vec::new();
+            for i in 0..unroll_count {
+                let mut iteration_docs = Vec::new();
+
+                // If we have an index local, assign it to the current iteration
+                if let Some(ref idx_name) = index_name {
+                    iteration_docs.push(YulDoc::line(format!("{idx_name} := {i}")));
+                }
+
+                // Emit the body for this iteration
+                // We need a fresh state for value temps so that `let` declarations
+                // in the body don't conflict between iterations
+                let mut iter_state = state.clone();
+                let body_docs =
+                    self.emit_block_internal(info.body, None, &mut iter_state, &body_stops)?;
+                iteration_docs.extend(body_docs);
+
+                // Wrap iteration in a block to scope the `let` declarations
+                unrolled_docs.push(YulDoc::block("", iteration_docs));
+            }
+
+            // Combine all iterations into a single doc sequence
+            let combined_doc = if unrolled_docs.len() == 1 {
+                unrolled_docs.remove(0)
+            } else {
+                // Multiple iterations: emit as sequential blocks
+                YulDoc::Block {
+                    caption: "".to_string(),
+                    body: unrolled_docs,
+                }
+            };
+
+            return Ok((combined_doc, info.exit));
+        }
+
         let cond_expr = self.lower_value(cond, state)?;
+
+        // Continue target is the post block if present, otherwise the header
+        let continue_target = info.post_block.unwrap_or(header);
         let loop_ctx = LoopEmitCtx {
-            continue_target: header,
+            continue_target,
             break_target: info.exit,
             implicit_continue: info.backedge,
         };
-        let body_docs = self.emit_block_internal(info.body, Some(loop_ctx), state, stop_blocks)?;
+
+        // Stop at init and post blocks when emitting body (they're handled separately)
+        let mut body_stops = stop_blocks.to_vec();
+        if let Some(init_bb) = info.init_block {
+            body_stops.push(init_bb);
+        }
+        if let Some(post_bb) = info.post_block {
+            body_stops.push(post_bb);
+        }
+        let body_docs = self.emit_block_internal(info.body, Some(loop_ctx), state, &body_stops)?;
+
         let loop_doc = YulDoc::block(
-            format!("for {init_block} {cond_expr} {post_block} "),
+            format!("for {init_block_str} {cond_expr} {post_block_str} "),
             body_docs,
         );
         Ok((loop_doc, info.exit))

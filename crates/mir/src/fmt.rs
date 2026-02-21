@@ -193,6 +193,9 @@ fn format_rvalue(body: &MirBody<'_>, rvalue: &Rvalue<'_>) -> String {
             };
             format!("alloc {space}")
         }
+        Rvalue::CopyDataRegion { label, size } => {
+            format!("copy_data_region \"{label}\" ({size} bytes)")
+        }
     }
 }
 
@@ -252,6 +255,9 @@ fn format_value_inner(
                 }
             }
             crate::ir::SyntheticValue::Bytes(bytes) => format_bytes(bytes),
+            crate::ir::SyntheticValue::DataRegion { label, bytes } => {
+                format!("data_region(\"{}\", {} bytes)", label, bytes.len())
+            }
         },
         ValueOrigin::Local(local) => format_local(*local),
         ValueOrigin::PlaceRoot(local) => format!("place_root({})", format_local(*local)),

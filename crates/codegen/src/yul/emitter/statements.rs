@@ -113,6 +113,14 @@ impl<'db> FunctionEmitter<'db> {
                 };
                 self.emit_alloc_inst(docs, dest, *address_space, state)?
             }
+            mir::ir::Rvalue::CopyDataRegion { label, size } => {
+                let Some(dest) = dest else {
+                    return Err(YulError::Unsupported(
+                        "copy_data_region without destination".into(),
+                    ));
+                };
+                self.emit_copy_data_region_inst(docs, dest, label, *size, state)?
+            }
         }
         Ok(())
     }
@@ -237,6 +245,31 @@ impl<'db> FunctionEmitter<'db> {
         };
         let (yul_name, declared) = self.resolve_local_for_write(dest, state)?;
         self.emit_alloc_value(docs, &yul_name, size_bytes, declared);
+        Ok(())
+    }
+
+    /// Emits code to copy a data region from bytecode into memory.
+    ///
+    /// * `docs` - Accumulator for generated Yul statements.
+    /// * `dest` - MIR local to store the allocated memory pointer.
+    /// * `label` - Label of the data region in the Yul data section.
+    /// * `size` - Size in bytes of the data region.
+    /// * `state` - Block state containing active bindings.
+    fn emit_copy_data_region_inst(
+        &mut self,
+        docs: &mut Vec<YulDoc>,
+        dest: LocalId,
+        label: &str,
+        size: usize,
+        state: &mut BlockState,
+    ) -> Result<(), YulError> {
+        let (yul_name, declared) = self.resolve_local_for_write(dest, state)?;
+        // Allocate memory for the data
+        self.emit_alloc_value(docs, &yul_name, size, declared);
+        // Copy data from bytecode to memory
+        docs.push(YulDoc::line(format!(
+            "datacopy({yul_name}, dataoffset(\"{label}\"), datasize(\"{label}\"))"
+        )));
         Ok(())
     }
 

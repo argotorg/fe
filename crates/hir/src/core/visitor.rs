@@ -1161,7 +1161,7 @@ pub fn walk_stmt<'db, V>(
             }
         }
 
-        Stmt::For(pat_id, cond_id, for_body_id) => {
+        Stmt::For(pat_id, cond_id, for_body_id, _unroll) => {
             visit_node_in_body!(visitor, ctxt, pat_id, pat);
             visit_node_in_body!(visitor, ctxt, cond_id, expr);
             visit_node_in_body!(visitor, ctxt, for_body_id, expr);

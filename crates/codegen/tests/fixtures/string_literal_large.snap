@@ -1,0 +1,10 @@
+---
+source: crates/codegen/tests/yul.rs
+assertion_line: 33
+expression: output
+input_file: tests/fixtures/string_literal_large.fe
+---
+function $large_string() -> ret {
+  ret := 0x546869732069732061206c6f6e6720737472696e6720746861742065786365656473207468697274792d74776f20627974657320696e206c656e6774682121
+  leave
+}

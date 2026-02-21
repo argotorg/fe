@@ -1,4 +1,4 @@
-use parser::ast::{self, prelude::*};
+use parser::ast::{self, AttrListOwner, prelude::*};
 
 use super::body::BodyCtxt;
 use crate::{
@@ -26,7 +26,25 @@ impl<'db> Stmt<'db> {
                         .and_then(|body| ast::Expr::cast(body.syntax().clone())),
                 );
 
-                (Stmt::For(bind, iter, body), HirOrigin::raw(&ast))
+                // Check for #[unroll] or #[no_unroll] attribute
+                let unroll_hint = for_.attr_list().and_then(|attrs| {
+                    for attr in attrs.normal_attrs() {
+                        if let Some(path) = attr.path() {
+                            let name = path.text();
+                            if name == "unroll" {
+                                return Some(true); // Force unroll
+                            } else if name == "no_unroll" {
+                                return Some(false); // Prevent unroll
+                            }
+                        }
+                    }
+                    None // No unroll-related attribute, use auto heuristics
+                });
+
+                (
+                    Stmt::For(bind, iter, body, unroll_hint),
+                    HirOrigin::raw(&ast),
+                )
             }
 
             ast::StmtKind::While(while_) => {
