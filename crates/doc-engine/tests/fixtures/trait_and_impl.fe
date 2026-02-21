@@ -1,0 +1,16 @@
+/// A trait for things that can be displayed.
+pub trait Displayable {
+    /// Returns a string representation.
+    fn display(self) -> u256
+}
+
+/// A simple counter.
+pub struct Counter {
+    pub value: u256
+}
+
+impl Displayable for Counter {
+    fn display(self) -> u256 {
+        return self.value
+    }
+}

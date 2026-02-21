@@ -2383,6 +2383,7 @@ name = "fe-doc-engine"
 version = "0.1.0"
 dependencies = [
  "camino",
+ "dir-test",
  "fe-common",
  "fe-doc-viewer",
  "fe-driver",
@@ -2391,6 +2392,8 @@ dependencies = [
  "fe-test-utils",
  "rustc-hash 2.1.1",
  "salsa",
+ "serde_json",
+ "url",
 ]
 
 [[package]]

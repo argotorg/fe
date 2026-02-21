@@ -1,0 +1,17 @@
+/// The root module.
+
+/// An inner module for math operations.
+pub mod math {
+    /// Add two numbers.
+    pub fn add(a: u256, b: u256) -> u256 {
+        return a + b
+    }
+
+    /// Multiply two numbers.
+    pub fn mul(a: u256, b: u256) -> u256 {
+        return a * b
+    }
+}
+
+/// A top-level constant.
+pub const MAX_VALUE: u256 = 1000

@@ -1,0 +1,9 @@
+/// A point in 2D space.
+///
+/// Used to represent coordinates in the plane.
+pub struct Point {
+    /// The x coordinate
+    pub x: u256
+    /// The y coordinate
+    pub y: u256
+}

@@ -1,0 +1,130 @@
+---
+source: crates/doc-engine/tests/extract.rs
+expression: output
+input_file: tests/fixtures/trait_and_impl.fe
+---
+{
+  "items": [
+    {
+      "path": "trait_and_impl",
+      "name": "trait_and_impl",
+      "kind": "module",
+      "visibility": "public",
+      "docs": null,
+      "signature": "/// A trait for things that can be displayed.\npub trait Displayable {\n    /// Returns a string representation.\n    fn display(self) -> u256\n}\n\n/// A simple counter.\npub struct Counter {\n    pub value: u256\n}\n\nimpl Displayable for Counter {\n    fn display(self) -> u256 {\n        return self.value\n    }\n}",
+      "generics": [],
+      "where_bounds": [],
+      "children": [],
+      "source": {
+        "file": "<fixtures>/trait_and_impl.fe",
+        "display_file": "trait_and_impl.fe",
+        "line": 1,
+        "column": 0
+      },
+      "trait_impls": []
+    },
+    {
+      "path": "trait_and_impl::Displayable",
+      "name": "Displayable",
+      "kind": "trait",
+      "visibility": "public",
+      "docs": {
+        "summary": "A trait for things that can be displayed.",
+        "body": "A trait for things that can be displayed.",
+        "sections": []
+      },
+      "signature": "pub trait Displayable {\n    /// Returns a string representation.\n    fn display(self) -> u256\n}",
+      "generics": [],
+      "where_bounds": [],
+      "children": [
+        {
+          "kind": "method",
+          "name": "display",
+          "docs": " Returns a string representation.",
+          "signature": "fn display(self) -> u256",
+          "visibility": "public"
+        }
+      ],
+      "source": {
+        "file": "<fixtures>/trait_and_impl.fe",
+        "display_file": "trait_and_impl.fe",
+        "line": 1,
+        "column": 0
+      },
+      "trait_impls": []
+    },
+    {
+      "path": "trait_and_impl::Displayable::display",
+      "name": "display",
+      "kind": "function",
+      "visibility": "private",
+      "docs": {
+        "summary": "Returns a string representation.",
+        "body": "Returns a string representation.",
+        "sections": []
+      },
+      "signature": "fn display(self) -> u256",
+      "generics": [],
+      "where_bounds": [],
+      "children": [],
+      "source": {
+        "file": "<fixtures>/trait_and_impl.fe",
+        "display_file": "trait_and_impl.fe",
+        "line": 3,
+        "column": 4
+      },
+      "trait_impls": []
+    },
+    {
+      "path": "trait_and_impl::Counter",
+      "name": "Counter",
+      "kind": "struct",
+      "visibility": "public",
+      "docs": {
+        "summary": "A simple counter.",
+        "body": "A simple counter.",
+        "sections": []
+      },
+      "signature": "pub struct Counter {\n    pub value: u256\n}",
+      "generics": [],
+      "where_bounds": [],
+      "children": [
+        {
+          "kind": "field",
+          "name": "value",
+          "docs": null,
+          "signature": "value: u256",
+          "visibility": "public"
+        }
+      ],
+      "source": {
+        "file": "<fixtures>/trait_and_impl.fe",
+        "display_file": "trait_and_impl.fe",
+        "line": 7,
+        "column": 0
+      },
+      "trait_impls": []
+    }
+  ],
+  "modules": [
+    {
+      "name": "trait_and_impl",
+      "path": "trait_and_impl",
+      "children": [],
+      "items": [
+        {
+          "name": "Counter",
+          "path": "trait_and_impl::Counter",
+          "kind": "struct",
+          "summary": "A simple counter."
+        },
+        {
+          "name": "Displayable",
+          "path": "trait_and_impl::Displayable",
+          "kind": "trait",
+          "summary": "A trait for things that can be displayed."
+        }
+      ]
+    }
+  ]
+}
