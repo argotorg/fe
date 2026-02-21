@@ -193,7 +193,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         // Try to get the element type and determine if elements are compile-time constants
         let elem_ty = crate::layout::array_elem_ty(self.db, array_ty);
-        let elem_size = elem_ty.and_then(|ty| crate::layout::ty_size_bytes(self.db, ty));
+        // Use word-padded memory size so the serialized data matches the runtime
+        // access stride (EVM mload/mstore operate on 32-byte words).
+        let elem_size = elem_ty.and_then(|ty| crate::layout::ty_memory_size(self.db, ty));
 
         // Try to extract constant byte values from all elements
         if let (Some(elem_ty), Some(elem_size)) = (elem_ty, elem_size)
