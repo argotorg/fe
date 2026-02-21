@@ -7,10 +7,12 @@
 
 use crate::HirDb;
 use crate::SpannedHirDb;
+use crate::analysis::HirAnalysisDb;
+use crate::hir_def::{Attr, EnumVariant, FieldParent, HirIngot, ItemKind, TopLevelMod, Visibility};
 use crate::hir_def::scope_graph::ScopeId;
-use crate::hir_def::{Attr, EnumVariant, FieldParent, ItemKind, Visibility};
-use crate::span::LazySpan;
+use crate::span::{DynLazySpan, LazySpan};
 use common::diagnostics::Span;
+use rustc_hash::FxHashMap;
 
 /// Kind of symbol, derived from `ItemKind` but also covering sub-item scopes
 /// like fields, variants, and parameters.
@@ -375,4 +377,84 @@ fn byte_offset_to_line_col(text: &str, offset: usize) -> (usize, usize) {
         }
     }
     (line, col)
+}
+
+// ---------------------------------------------------------------------------
+// Reference Index — inverted index: target scope → reference spans
+// ---------------------------------------------------------------------------
+
+/// A single reference to a symbol, with its span and metadata.
+#[derive(Debug, Clone)]
+pub struct IndexedReference<'db> {
+    /// The span of the reference occurrence.
+    pub span: DynLazySpan<'db>,
+    /// Whether this is a `Self` type reference (rename should skip these).
+    pub is_self_ty: bool,
+    /// The module containing this reference.
+    pub module: TopLevelMod<'db>,
+}
+
+/// Inverted reference index for an ingot: maps each target scope to all
+/// reference spans across the entire ingot.
+///
+/// Built once per ingot, eliminates the O(items × modules) scan that SCIP
+/// and LSIF currently perform.
+pub struct ReferenceIndex<'db> {
+    /// Target scope → list of references pointing at it.
+    index: FxHashMap<ScopeId<'db>, Vec<IndexedReference<'db>>>,
+}
+
+impl<'db> ReferenceIndex<'db> {
+    /// Build the inverted reference index for an entire ingot.
+    ///
+    /// Walks every item in every module once, resolving all scope-level
+    /// references and inverting them into a target → refs map.
+    pub fn build<DB>(db: &'db DB, ingot: impl HirIngot<'db>) -> Self
+    where
+        DB: HirAnalysisDb + SpannedHirDb,
+    {
+        use super::reference::resolver::resolved_item_scope_targets;
+
+        let mut index: FxHashMap<ScopeId<'db>, Vec<IndexedReference<'db>>> = FxHashMap::default();
+
+        for top_mod in ingot.all_modules(db) {
+            let scope_graph = top_mod.scope_graph(db);
+            for item in scope_graph.items_dfs(db) {
+                for resolved in resolved_item_scope_targets(db, item) {
+                    index
+                        .entry(resolved.scope)
+                        .or_default()
+                        .push(IndexedReference {
+                            span: resolved.span.clone(),
+                            is_self_ty: resolved.is_self_ty,
+                            module: *top_mod,
+                        });
+                }
+            }
+        }
+
+        Self { index }
+    }
+
+    /// Look up all references to a given scope.
+    pub fn references_to(&self, scope: &ScopeId<'db>) -> &[IndexedReference<'db>] {
+        self.index.get(scope).map(|v| v.as_slice()).unwrap_or(&[])
+    }
+
+    /// Iterate all (target, references) pairs in the index.
+    pub fn iter(
+        &self,
+    ) -> impl Iterator<Item = (&ScopeId<'db>, &[IndexedReference<'db>])> {
+        self.index.iter().map(|(k, v)| (k, v.as_slice()))
+    }
+
+    /// Number of distinct targets in the index.
+    pub fn len(&self) -> usize {
+        self.index.len()
+    }
+
+    /// Whether the index is empty.
+    pub fn is_empty(&self) -> bool {
+        self.index.is_empty()
+    }
 }

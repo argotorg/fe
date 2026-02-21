@@ -25,7 +25,7 @@ pub mod symbol;
 pub use reference::{
     FieldAccessView, HasReferences, MethodCallView, PathView, ReferenceView, Target, UsePathView,
 };
-pub use symbol::{SourceLocation, SymbolKind, SymbolView};
+pub use symbol::{IndexedReference, ReferenceIndex, SourceLocation, SymbolKind, SymbolView};
 
 use crate::HirDb;
 use crate::analysis::HirAnalysisDb;
