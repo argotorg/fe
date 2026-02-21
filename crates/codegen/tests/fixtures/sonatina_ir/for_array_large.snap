@@ -5,38 +5,37 @@ input_file: crates/codegen/tests/fixtures/for_array_large.fe
 ---
 target = "evm-ethereum-osaka"
 
+global private const [i8; 80] $__fe_const_data_0 = [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 9, 0, 0, 0, 0, 0, 0, 0, 10];
+
 func public %for_array_large_sum() -> i256 {
     block0:
         v2.*i8 = evm_malloc 80.i256;
         v3.i256 = ptr_to_int v2 i256;
-        v5.i256 = add v3 0.i256;
-        mstore v5 6277101735386680764516354157049543343084444891548699590660.i256 i256;
-        v8.i256 = add v3 32.i256;
-        mstore v8 31385508676933403821220641317563962861421152075426748694536.i256 i256;
-        v11.i256 = add v3 64.i256;
-        mstore v11 166020696663385964554.i256 i256;
-        v12.i256 = call %_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_len__u64_10__2b47acd750beacf4 v3;
+        v4.i256 = sym_addr $__fe_const_data_0;
+        v5.i256 = sym_size $__fe_const_data_0;
+        evm_code_copy v3 v4 v5;
+        v6.i256 = call %_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_len__u64_10__2b47acd750beacf4 v3;
         jump block1;
 
     block1:
-        v30.i256 = phi (0.i256 block0) (v22 block3);
-        v13.i256 = phi (0.i256 block0) (v25 block3);
-        v15.i1 = lt v13 v12;
-        v16.i256 = zext v15 i256;
-        v17.i1 = ne v16 0.i256;
-        br v17 block2 block4;
+        v24.i256 = phi (0.i256 block0) (v16 block3);
+        v7.i256 = phi (0.i256 block0) (v19 block3);
+        v9.i1 = lt v7 v6;
+        v10.i256 = zext v9 i256;
+        v11.i1 = ne v10 0.i256;
+        br v11 block2 block4;
 
     block2:
-        v20.i256 = call %_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_get__u64_10__2b47acd750beacf4 v3 v13;
-        v22.i256 = add v30 v20;
+        v14.i256 = call %_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_get__u64_10__2b47acd750beacf4 v3 v7;
+        v16.i256 = add v24 v14;
         jump block3;
 
     block3:
-        v25.i256 = add v13 1.i256;
+        v19.i256 = add v7 1.i256;
         jump block1;
 
     block4:
-        return v30;
+        return v24;
 }
 
 func private %_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_len__u64_10__2b47acd750beacf4(v0.i256) -> i256 {

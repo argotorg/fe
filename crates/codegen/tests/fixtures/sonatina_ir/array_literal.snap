@@ -5,14 +5,15 @@ input_file: crates/codegen/tests/fixtures/array_literal.fe
 ---
 target = "evm-ethereum-osaka"
 
+global private const [i8; 64] $__fe_const_data_0 = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64];
+
 func public %large_array_literal() -> i256 {
     block0:
         v2.*i8 = evm_malloc 64.i256;
         v3.i256 = ptr_to_int v2 i256;
-        v5.i256 = add v3 0.i256;
-        mstore v5 455867356320691211509944977504407603390036387149619137164185182714736811808.i256 i256;
-        v8.i256 = add v3 32.i256;
-        mstore v8 14986639339042723578389441135457399961447446227543729134272587881746972688192.i256 i256;
+        v4.i256 = sym_addr $__fe_const_data_0;
+        v5.i256 = sym_size $__fe_const_data_0;
+        evm_code_copy v3 v4 v5;
         return v3;
 }
 
