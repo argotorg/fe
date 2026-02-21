@@ -548,8 +548,16 @@ impl<'db> FunctionEmitter<'db> {
             "{ }".to_string()
         };
 
-        // Check for unrolling
-        if let Some(unroll_count) = info.unroll_count {
+        // Decide whether to unroll based on trip_count and unroll_hint:
+        // - #[no_unroll] (Some(false)): never unroll
+        // - #[unroll] (Some(true)): unroll if trip_count known and <= 256
+        // - auto (None): unroll if trip_count known and < 10
+        let unroll_count = match info.unroll_hint {
+            Some(false) => None,
+            Some(true) => info.trip_count.filter(|&n| n <= 256),
+            None => info.trip_count.filter(|&n| n < 10),
+        };
+        if let Some(unroll_count) = unroll_count {
             // Find the index local from the post block (it's the one being assigned)
             let index_local = info.post_block.and_then(|post_bb| {
                 let post_block_data = self.mir_func.body.blocks.get(post_bb.index())?;

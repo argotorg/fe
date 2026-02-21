@@ -2363,7 +2363,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 backedge,
                 init_block: None,
                 post_block: None,
-                unroll_count: None,
+                unroll_hint: None,
+                trip_count: None,
             },
         );
 
@@ -2528,18 +2529,10 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         self.move_to_block(cond_header);
         self.branch(cond_value, body_block, exit_block);
 
-        // Determine unroll count based on unroll_hint:
-        // - None: auto-unroll if < 10 iterations
-        // - Some(true): #[unroll] forces unrolling (up to 256)
-        // - Some(false): #[no_unroll] prevents unrolling
-        let unroll_count = {
+        // Compute static trip count from the iterator type
+        let trip_count = {
             let iter_ty = self.typed_body.expr_ty(self.db, params.iter_expr);
-            let len = crate::layout::array_len(self.db, iter_ty);
-            match params.unroll_hint {
-                Some(false) => None,                     // #[no_unroll] - never unroll
-                Some(true) => len.filter(|&n| n <= 256), // #[unroll] - force unroll up to 256
-                None => len.filter(|&n| n < 10),         // auto-unroll if < 10 iterations
-            }
+            crate::layout::array_len(self.db, iter_ty)
         };
 
         // Register loop info with post_block for proper Yul for-loop emission
@@ -2551,7 +2544,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 backedge: Some(inc_end),
                 init_block: None,
                 post_block: Some(inc_block),
-                unroll_count,
+                unroll_hint: params.unroll_hint,
+                trip_count,
             },
         );
 
@@ -2823,7 +2817,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 backedge: Some(inc_end),
                 init_block: None,
                 post_block: Some(inc_block),
-                unroll_count: None,
+                unroll_hint: None,
+                trip_count: Some(array_len),
             },
         );
 
