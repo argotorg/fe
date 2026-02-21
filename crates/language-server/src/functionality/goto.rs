@@ -507,6 +507,7 @@ mod tests {
     /// Diagnostic test: traces the full semantic API chain for `C::static_method()`
     /// where C is a type param bound to a trait.
     #[test]
+    #[allow(clippy::print_stderr)]
     fn test_goto_generic_static_method_trace() {
         let mut db = DriverDataBase::default();
         let code = r#"trait Contract {

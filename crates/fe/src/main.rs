@@ -183,6 +183,29 @@ pub enum Command {
         #[arg(short, long)]
         output: Option<Utf8PathBuf>,
     },
+    /// Find the workspace or ingot root for a given path.
+    ///
+    /// Walks up from the given path (or cwd) looking for fe.toml files.
+    /// Prints the workspace root if found, otherwise the nearest ingot root.
+    /// Useful for editor integrations that need to determine the project root.
+    Root {
+        /// Path to start searching from (default: current directory).
+        path: Option<Utf8PathBuf>,
+    },
+    /// Start the Fe language server (LSP).
+    #[cfg(feature = "lsp")]
+    Lsp {
+        /// Set the workspace root directory.
+        ///
+        /// Used as the server's working directory. When the LSP client doesn't
+        /// send workspace folders, this directory is used as the fallback root
+        /// for ingot/workspace discovery.
+        #[arg(long)]
+        root: Option<Utf8PathBuf>,
+        /// Communication mode (default: stdio).
+        #[command(subcommand)]
+        mode: Option<LspMode>,
+    },
     /// Generate SCIP index for code navigation.
     Scip {
         /// Path to the ingot directory.
@@ -191,6 +214,20 @@ pub enum Command {
         /// Output file (defaults to index.scip).
         #[arg(short, long, default_value = "index.scip")]
         output: Utf8PathBuf,
+    },
+}
+
+#[cfg(feature = "lsp")]
+#[derive(Debug, Clone, Subcommand)]
+pub enum LspMode {
+    /// Start with TCP transport instead of stdio.
+    Tcp {
+        /// Port to listen on.
+        #[arg(short, long, default_value_t = 4242)]
+        port: u16,
+        /// Timeout in seconds to shut down if no clients are connected.
+        #[arg(short, long, default_value_t = 10)]
+        timeout: u64,
     },
 }
 
@@ -335,6 +372,49 @@ pub fn run(opts: &Options) {
                 &mut std::io::stdout(),
             );
         }
+        Command::Root { path } => {
+            run_root(path.as_ref());
+        }
+        #[cfg(feature = "lsp")]
+        Command::Lsp { root, mode } => {
+            // If --root is explicit, use it. Otherwise, auto-discover from cwd.
+            let resolved_root = match root {
+                Some(r) => Some(r.canonicalize_utf8().unwrap_or_else(|e| {
+                    eprintln!("Error: invalid --root path {r}: {e}");
+                    std::process::exit(1);
+                })),
+                None => driver::files::find_project_root(),
+            };
+            if let Some(root) = resolved_root {
+                std::env::set_current_dir(root.as_std_path()).unwrap_or_else(|e| {
+                    eprintln!("Error: cannot chdir to {root}: {e}");
+                    std::process::exit(1);
+                });
+            }
+
+            let rt = tokio::runtime::Runtime::new().unwrap_or_else(|e| {
+                eprintln!("Error creating async runtime: {e}");
+                std::process::exit(1);
+            });
+            rt.block_on(async {
+                unsafe {
+                    std::env::set_var("RUST_BACKTRACE", "full");
+                }
+                language_server::setup_panic_hook();
+                match mode {
+                    Some(LspMode::Tcp { port, timeout }) => {
+                        language_server::run_tcp_server(
+                            *port,
+                            std::time::Duration::from_secs(*timeout),
+                        )
+                        .await;
+                    }
+                    None => {
+                        language_server::run_stdio_server().await;
+                    }
+                }
+            });
+        }
         Command::Lsif { path, output } => {
             run_lsif(path, output.as_ref());
         }
@@ -429,6 +509,53 @@ fn run_scip(path: &Utf8PathBuf, output: &Utf8PathBuf) {
     if let Err(e) = scip::write_message_to_file(output.as_std_path(), index) {
         eprintln!("Error writing SCIP file: {e}");
         std::process::exit(1);
+    }
+}
+
+fn run_root(path: Option<&Utf8PathBuf>) {
+    use resolver::workspace::discover_context;
+
+    let start = match path {
+        Some(p) => p.canonicalize_utf8().unwrap_or_else(|e| {
+            eprintln!("Error: invalid path {p}: {e}");
+            std::process::exit(1);
+        }),
+        None => Utf8PathBuf::from_path_buf(
+            std::env::current_dir().expect("Unable to get current directory"),
+        )
+        .expect("Expected utf8 path"),
+    };
+
+    let start_url = url::Url::from_directory_path(start.as_str()).unwrap_or_else(|_| {
+        // Maybe it's a file, try the parent directory
+        let parent = start.parent().unwrap_or(&start);
+        url::Url::from_directory_path(parent.as_str()).unwrap_or_else(|_| {
+            eprintln!("Error: invalid directory path: {start}");
+            std::process::exit(1);
+        })
+    });
+
+    match discover_context(&start_url) {
+        Ok(discovery) => {
+            if let Some(workspace_root) = &discovery.workspace_root
+                && let Ok(path) = workspace_root.to_file_path()
+            {
+                println!("{}", path.display());
+                return;
+            }
+            if let Some(ingot_root) = discovery.ingot_roots.first()
+                && let Ok(path) = ingot_root.to_file_path()
+            {
+                println!("{}", path.display());
+                return;
+            }
+            eprintln!("No fe.toml found in {start} or any parent directory");
+            std::process::exit(1);
+        }
+        Err(e) => {
+            eprintln!("Error discovering project root: {e}");
+            std::process::exit(1);
+        }
     }
 }
 

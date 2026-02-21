@@ -27,7 +27,7 @@ pub fn init_fn(client: ClientSocket) -> impl FnOnce() -> Option<tracing::subscri
     move || setup_default_subscriber(client)
 }
 
-pub(crate) fn setup_panic_hook() {
+pub fn setup_panic_hook() {
     // Set up a panic hook
     std::panic::set_hook(Box::new(|panic_info| {
         // Extract the panic message

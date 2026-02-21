@@ -3,6 +3,11 @@ name = "fe"
 version = "26.0.0-alpha.5"
 edition.workspace = true
 
+[features]
+default = ["lsp"]
+lsp = ["dep:language-server", "dep:tokio"]
+vendored-openssl = ["resolver/vendored-openssl"]
+
 [dependencies]
 clap.workspace = true
 clap_complete.workspace = true
@@ -30,9 +35,8 @@ hex = "0.4"
 toml = "0.8.8"
 glob.workspace = true
 scip = "0.6.1"
-
-[features]
-vendored-openssl = ["resolver/vendored-openssl"]
+language-server = { workspace = true, optional = true }
+tokio = { version = "1.43.0", features = ["full"], optional = true }
 
 [dev-dependencies]
 dir-test.workspace = true
