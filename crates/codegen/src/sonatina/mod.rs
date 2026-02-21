@@ -14,7 +14,7 @@ use hir::hir_def::TopLevelMod;
 use mir::{MirModule, layout, layout::TargetDataLayout, lower_ingot, lower_module};
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
-    BlockId, I256, Module, Signature, Type, ValueId,
+    BlockId, GlobalVariableRef, I256, Module, Signature, Type, ValueId,
     builder::{ModuleBuilder, Variable},
     func_cursor::InstInserter,
     inst::{control_flow::Call, evm::EvmStop},
@@ -393,6 +393,10 @@ struct ModuleLowerer<'db, 'a> {
     gep_type_cache: FxHashMap<String, Option<Type>>,
     /// Counter for generating unique sonatina struct type names.
     gep_name_counter: usize,
+    /// Global variables registered for constant aggregate data sections.
+    data_globals: Vec<GlobalVariableRef>,
+    /// Counter for generating unique data global names.
+    data_global_counter: usize,
 }
 
 impl<'db, 'a> ModuleLowerer<'db, 'a> {
@@ -418,6 +422,8 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             entry_func_idxs: FxHashSet::default(),
             gep_type_cache: FxHashMap::default(),
             gep_name_counter: 0,
+            data_globals: Vec::new(),
+            data_global_counter: 0,
         }
     }
 
@@ -597,7 +603,10 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
 
         let entry_ref = self.func_map[&entry_idx];
         let wrapper_ref = self.create_entry_wrapper(entry_ref, entry_mir_func)?;
-        let directives = vec![Directive::Entry(wrapper_ref)];
+        let mut directives = vec![Directive::Entry(wrapper_ref)];
+        for &gv in &self.data_globals {
+            directives.push(Directive::Data(gv));
+        }
 
         let object = Object {
             name: ObjectName::from("Contract"),
@@ -762,6 +771,9 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                     .cloned()
                     .unwrap_or_default();
                 let mut directives = vec![Directive::Entry(runtime_ref)];
+                for &gv in &self.data_globals {
+                    directives.push(Directive::Data(gv));
+                }
                 directives.extend(Self::build_embed_directives(
                     &contract_name,
                     ContractRegionKind::Deployed,
@@ -811,6 +823,9 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 }
 
                 let mut directives = vec![Directive::Entry(init_ref)];
+                for &gv in &self.data_globals {
+                    directives.push(Directive::Data(gv));
+                }
                 directives.extend(Self::build_embed_directives(
                     &contract_name,
                     ContractRegionKind::Init,
@@ -1096,6 +1111,8 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 is_entry,
                 gep_type_cache: &mut self.gep_type_cache,
                 gep_name_counter: &mut self.gep_name_counter,
+                data_globals: &mut self.data_globals,
+                data_global_counter: &mut self.data_global_counter,
             };
 
             for (idx, block) in ctx.body.blocks.iter().enumerate() {
@@ -1134,4 +1151,8 @@ pub(super) struct LowerCtx<'a, 'db, C: sonatina_ir::func_cursor::FuncCursor> {
     pub(super) gep_type_cache: &'a mut FxHashMap<String, Option<Type>>,
     /// Counter for generating unique sonatina struct type names.
     pub(super) gep_name_counter: &'a mut usize,
+    /// Collected global variable refs for constant aggregate data sections.
+    pub(super) data_globals: &'a mut Vec<GlobalVariableRef>,
+    /// Counter for generating unique data global names.
+    pub(super) data_global_counter: &'a mut usize,
 }

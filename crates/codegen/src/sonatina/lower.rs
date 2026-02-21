@@ -14,7 +14,8 @@ use num_bigint::BigUint;
 use rustc_hash::FxHashMap;
 use smallvec1::SmallVec;
 use sonatina_ir::{
-    BlockId, I256, Type, ValueId,
+    BlockId, GlobalVariableData, I256, Immediate, Linkage, Type, ValueId,
+    global_variable::GvInitializer,
     inst::{
         arith::{Add, Mul, Neg, Shl, Shr, Sub},
         cast::{IntToPtr, PtrToInt, Sext, Trunc, Zext},
@@ -2130,26 +2131,43 @@ fn emit_evm_malloc_word_addr<C: sonatina_ir::func_cursor::FuncCursor>(
     fb.insert_inst(PtrToInt::new(is, ptr, Type::I256), Type::I256)
 }
 
-/// Lower a `ConstAggregate` by allocating memory and storing constant words.
+/// Lower a `ConstAggregate` by registering a global data section and using CODECOPY.
 ///
-/// The data bytes are already in big-endian EVM word format (32-byte aligned chunks).
+/// Registers the constant bytes as a Sonatina global variable (data section),
+/// then emits: malloc → symaddr → symsize → codecopy. This is the Sonatina
+/// equivalent of Yul's datacopy/dataoffset/datasize pattern.
 fn lower_const_aggregate<C: sonatina_ir::func_cursor::FuncCursor>(
     ctx: &mut LowerCtx<'_, '_, C>,
     data: &[u8],
 ) -> Result<ValueId, LowerError> {
+    // Build array initializer from raw bytes (each element is one byte)
+    let elems: Vec<GvInitializer> = data
+        .iter()
+        .map(|&b| GvInitializer::make_imm(Immediate::I8(b as i8)))
+        .collect();
+    let array_init = GvInitializer::make_array(elems);
+
+    // Register as a const global variable
+    let label = format!("__fe_const_data_{}", *ctx.data_global_counter);
+    *ctx.data_global_counter += 1;
+    let array_ty = ctx
+        .fb
+        .module_builder
+        .declare_array_type(Type::I8, data.len());
+    let gv_data = GlobalVariableData::constant(label, array_ty, Linkage::Private, array_init);
+    let gv_ref = ctx.fb.module_builder.declare_gv(gv_data);
+    ctx.data_globals.push(gv_ref);
+
+    // Emit: malloc + codecopy
     let size_val = ctx.fb.make_imm_value(I256::from(data.len() as u64));
     let ptr = emit_evm_malloc_word_addr(ctx.fb, size_val, ctx.is);
-
-    // Store each 32-byte word
-    for (i, chunk) in data.chunks(32).enumerate() {
-        let mut word = [0u8; 32];
-        word[32 - chunk.len()..].copy_from_slice(chunk);
-        let val = ctx.fb.make_imm_value(I256::from_be_bytes(&word));
-        let offset = ctx.fb.make_imm_value(I256::from((i * 32) as u64));
-        let addr = ctx.fb.insert_inst(Add::new(ctx.is, ptr, offset), Type::I256);
-        ctx.fb
-            .insert_inst_no_result(Mstore::new(ctx.is, addr, val, Type::I256));
-    }
+    let sym = SymbolRef::Global(gv_ref);
+    let code_offset = ctx
+        .fb
+        .insert_inst(SymAddr::new(ctx.is, sym.clone()), Type::I256);
+    let code_size = ctx.fb.insert_inst(SymSize::new(ctx.is, sym), Type::I256);
+    ctx.fb
+        .insert_inst_no_result(EvmCodeCopy::new(ctx.is, ptr, code_offset, code_size));
 
     Ok(ptr)
 }
