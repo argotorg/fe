@@ -16,21 +16,21 @@ object "main" {
       let v1 := v0
       let v2 := 0
       let v3 := 0
-      let v4 := $_t__const_n__usize__seq_len__u64_10__2b47acd750beacf4(v1)
+      let v4 := $_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_len__u64_10__2b47acd750beacf4(v1)
       for { } lt(v3, v4) { v3 := add(v3, 1) } {
-        let v5 := $_t__const_n__usize__seq_get__u64_10__2b47acd750beacf4(v1, v3)
+        let v5 := $_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_get__u64_10__2b47acd750beacf4(v1, v3)
         let v6 := v5
         v2 := add(v2, v6)
       }
       ret := v2
       leave
     }
-    function $_t__const_n__usize__seq_len__u64_10__2b47acd750beacf4($self) -> ret {
+    function $_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_len__u64_10__2b47acd750beacf4($self) -> ret {
       ret := 10
       leave
     }
-    function $_t__const_n__usize__seq_get__u64_10__2b47acd750beacf4($self, $i) -> ret {
-      let v0 := and(mload(add($self, mul($i, 8))), 0xffffffffffffffff)
+    function $_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_get__u64_10__2b47acd750beacf4($self, $i) -> ret {
+      let v0 := and(mload(add($self, mul($i, 32))), 0xffffffffffffffff)
       ret := v0
       leave
     }

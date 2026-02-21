@@ -1,0 +1,25 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
+expression: output
+input_file: crates/codegen/tests/fixtures/string_literal_large.fe
+---
+target = "evm-ethereum-osaka"
+
+func public %large_string() -> i256 {
+    block0:
+        return 45861076989195096321303246625756685126263456619655637997107188103266074894625.i256;
+}
+
+func public %__fe_sonatina_entry() {
+    block0:
+        v0.i256 = call %large_string;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+    }
+}
