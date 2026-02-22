@@ -16,7 +16,6 @@ input_file: tests/fixtures/simple_struct.fe
       "where_bounds": [],
       "children": [],
       "source": {
-        "file": "<fixtures>/simple_struct.fe",
         "display_file": "simple_struct.fe",
         "line": 1,
         "column": 0
@@ -53,7 +52,6 @@ input_file: tests/fixtures/simple_struct.fe
         }
       ],
       "source": {
-        "file": "<fixtures>/simple_struct.fe",
         "display_file": "simple_struct.fe",
         "line": 1,
         "column": 0

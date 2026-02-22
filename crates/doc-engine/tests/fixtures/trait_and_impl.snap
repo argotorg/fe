@@ -16,7 +16,6 @@ input_file: tests/fixtures/trait_and_impl.fe
       "where_bounds": [],
       "children": [],
       "source": {
-        "file": "<fixtures>/trait_and_impl.fe",
         "display_file": "trait_and_impl.fe",
         "line": 1,
         "column": 0
@@ -46,7 +45,6 @@ input_file: tests/fixtures/trait_and_impl.fe
         }
       ],
       "source": {
-        "file": "<fixtures>/trait_and_impl.fe",
         "display_file": "trait_and_impl.fe",
         "line": 1,
         "column": 0
@@ -68,7 +66,6 @@ input_file: tests/fixtures/trait_and_impl.fe
       "where_bounds": [],
       "children": [],
       "source": {
-        "file": "<fixtures>/trait_and_impl.fe",
         "display_file": "trait_and_impl.fe",
         "line": 3,
         "column": 4
@@ -98,7 +95,6 @@ input_file: tests/fixtures/trait_and_impl.fe
         }
       ],
       "source": {
-        "file": "<fixtures>/trait_and_impl.fe",
         "display_file": "trait_and_impl.fe",
         "line": 7,
         "column": 0

@@ -16,7 +16,6 @@ input_file: tests/fixtures/module_tree.fe
       "where_bounds": [],
       "children": [],
       "source": {
-        "file": "<fixtures>/module_tree.fe",
         "display_file": "module_tree.fe",
         "line": 1,
         "column": 0
@@ -38,7 +37,6 @@ input_file: tests/fixtures/module_tree.fe
       "where_bounds": [],
       "children": [],
       "source": {
-        "file": "<fixtures>/module_tree.fe",
         "display_file": "module_tree.fe",
         "line": 1,
         "column": 0
@@ -60,7 +58,6 @@ input_file: tests/fixtures/module_tree.fe
       "where_bounds": [],
       "children": [],
       "source": {
-        "file": "<fixtures>/module_tree.fe",
         "display_file": "module_tree.fe",
         "line": 5,
         "column": 4
@@ -82,7 +79,6 @@ input_file: tests/fixtures/module_tree.fe
       "where_bounds": [],
       "children": [],
       "source": {
-        "file": "<fixtures>/module_tree.fe",
         "display_file": "module_tree.fe",
         "line": 10,
         "column": 4
@@ -104,7 +100,6 @@ input_file: tests/fixtures/module_tree.fe
       "where_bounds": [],
       "children": [],
       "source": {
-        "file": "<fixtures>/module_tree.fe",
         "display_file": "module_tree.fe",
         "line": 16,
         "column": 0

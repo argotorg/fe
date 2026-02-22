@@ -16,7 +16,6 @@ input_file: tests/fixtures/enum_with_variants.fe
       "where_bounds": [],
       "children": [],
       "source": {
-        "file": "<fixtures>/enum_with_variants.fe",
         "display_file": "enum_with_variants.fe",
         "line": 1,
         "column": 0
@@ -67,7 +66,6 @@ input_file: tests/fixtures/enum_with_variants.fe
         }
       ],
       "source": {
-        "file": "<fixtures>/enum_with_variants.fe",
         "display_file": "enum_with_variants.fe",
         "line": 1,
         "column": 0
