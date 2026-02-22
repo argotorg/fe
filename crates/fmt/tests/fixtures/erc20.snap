@@ -1,5 +1,6 @@
 ---
 source: crates/fmt/tests/format_snapshots.rs
+assertion_line: 16
 expression: output
 input_file: tests/fixtures/erc20.fe
 ---
@@ -9,7 +10,7 @@ use std::evm::effects::Address
 const MINTER: u256 = 1
 const BURNER: u256 = 2
 
-pub contract CoolCoin uses (mut ctx: Ctx, mut log: Log) {
+pub contract CoolCoin uses (ctx: mut Ctx, log: mut Log) {
     // Storage fields. These act as effects within the contract.
     mut store: TokenStore,
     mut auth: AccessControl,
@@ -114,7 +115,7 @@ pub contract CoolCoin uses (mut ctx: Ctx, mut log: Log) {
 }
 
 fn transfer(from: Address, to: Address, amount: u256)
-uses (mut store: TokenStore, mut log: Log)
+uses (store: mut TokenStore, log: mut Log)
 {
     assert(from != Address::zero(), "transfer from zero address")
     assert(to != Address::zero(), "transfer to zero address")
@@ -128,7 +129,7 @@ uses (mut store: TokenStore, mut log: Log)
     log.emit(TransferEvent { from, to, value: amount })
 }
 
-fn mint(to: Address, amount: u256) uses (mut store: TokenStore, mut log: Log) {
+fn mint(to: Address, amount: u256) uses (store: mut TokenStore, log: mut Log) {
     assert(to != Address::zero(), "mint to zero address")
 
     store.total_supply += amount
@@ -138,7 +139,7 @@ fn mint(to: Address, amount: u256) uses (mut store: TokenStore, mut log: Log) {
 }
 
 fn burn(from: Address, amount: u256)
-uses (mut store: TokenStore, mut log: Log)
+uses (store: mut TokenStore, log: mut Log)
 {
     assert(from != Address::zero(), "burn from zero address")
 
@@ -152,7 +153,7 @@ uses (mut store: TokenStore, mut log: Log)
 }
 
 fn approve(owner: Address, spender: Address, amount: u256)
-uses (mut store: TokenStore, mut log: Log)
+uses (store: mut TokenStore, log: mut Log)
 {
     assert(owner != Address::zero(), "approve from zero address")
     assert(spender != Address::zero(), "approve to zero address")
@@ -164,7 +165,7 @@ uses (mut store: TokenStore, mut log: Log)
 
 // Internal function to spend allowance
 fn spend_allowance(owner: Address, spender: Address, amount: u256)
-uses (mut store: TokenStore)
+uses (store: mut TokenStore)
 {
     let current = store.allowances[(owner, spender)]
     // if current != u256::MAX { // TODO: define ::MAX constants
