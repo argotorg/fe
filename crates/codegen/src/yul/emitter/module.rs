@@ -130,7 +130,8 @@ fn emit_lowered_module_yul_with_layout(
     let code_regions = Arc::new(code_regions);
 
     // Emit Yul docs for each function
-    let mut function_docs: Vec<(Vec<YulDoc>, Vec<YulDataRegion>)> = Vec::with_capacity(module.functions.len());
+    let mut function_docs: Vec<(Vec<YulDoc>, Vec<YulDataRegion>)> =
+        Vec::with_capacity(module.functions.len());
     for func in module.functions.iter() {
         let emitter =
             FunctionEmitter::new(db, func, &code_regions, layout).map_err(EmitModuleError::Yul)?;
@@ -325,7 +326,8 @@ pub fn emit_test_module_yul_with_layout(
     let code_regions = Arc::new(code_regions);
 
     // Emit Yul docs for each function
-    let mut function_docs: Vec<(Vec<YulDoc>, Vec<YulDataRegion>)> = Vec::with_capacity(module.functions.len());
+    let mut function_docs: Vec<(Vec<YulDoc>, Vec<YulDataRegion>)> =
+        Vec::with_capacity(module.functions.len());
     for func in module.functions.iter() {
         let emitter =
             FunctionEmitter::new(db, func, &code_regions, layout).map_err(EmitModuleError::Yul)?;

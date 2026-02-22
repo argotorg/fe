@@ -262,8 +262,7 @@ impl<'db> TyChecker<'db> {
 
                     // Resolve the element type from Seq's associated type `Item`
                     let item_ident = IdentId::new(self.db, "Item".to_string());
-                    let Some(&elem_ty) =
-                        trait_inst.assoc_type_bindings(self.db).get(&item_ident)
+                    let Some(&elem_ty) = trait_inst.assoc_type_bindings(self.db).get(&item_ident)
                     else {
                         self.table.rollback_to(snapshot);
                         continue;

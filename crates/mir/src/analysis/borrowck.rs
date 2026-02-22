@@ -3048,7 +3048,10 @@ fn value_operands_in_inst(inst: &MirInst<'_>) -> Vec<ValueId> {
                 out
             }
             Rvalue::Intrinsic { args, .. } => args.clone(),
-            Rvalue::Load { .. } | Rvalue::ZeroInit | Rvalue::Alloc { .. } | Rvalue::ConstAggregate { .. } => Vec::new(),
+            Rvalue::Load { .. }
+            | Rvalue::ZeroInit
+            | Rvalue::Alloc { .. }
+            | Rvalue::ConstAggregate { .. } => Vec::new(),
         },
         MirInst::Store { value, .. } => vec![*value],
         MirInst::InitAggregate { inits, .. } => inits.iter().map(|(_, v)| *v).collect(),
