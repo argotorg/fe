@@ -929,17 +929,23 @@ fn emit_code_region_docs(
         };
         let reachable = reachable_functions(call_graph, root);
         let mut region_docs = Vec::new();
+        let mut seen_labels = FxHashSet::default();
+        let mut data_regions = Vec::new();
         let mut symbols: Vec<_> = reachable.into_iter().collect();
         symbols.sort();
         for symbol in symbols {
             if let Some(info) = docs_by_symbol.get(&symbol) {
                 region_docs.extend(info.docs.clone());
+                for dr in &info.data_regions {
+                    if seen_labels.insert(dr.label.clone()) {
+                        data_regions.push(dr.clone());
+                    }
+                }
             }
         }
-        docs.push(YulDoc::block(
-            format!("object \"{label}\" "),
-            vec![YulDoc::block("code ", region_docs)],
-        ));
+        let mut components = vec![YulDoc::block("code ", region_docs)];
+        components.extend(emit_data_sections(&data_regions));
+        docs.push(YulDoc::block(format!("object \"{label}\" "), components));
     }
     docs
 }
