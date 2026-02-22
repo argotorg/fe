@@ -32,6 +32,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         self.builder.body.locals[dest.index()].address_space = AddressSpaceKind::Memory;
+        self.builder.body.locals[dest.index()]
+            .capability_spaces
+            .clear();
         let source = self.source_for_expr(expr);
         self.push_inst_here(MirInst::Assign {
             source,
@@ -53,12 +56,33 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         if inits.is_empty() {
             return;
         }
+        let metadata_inits = inits.clone();
         let place = Place::new(base_value, MirProjectionPath::new());
         self.push_inst_here(MirInst::InitAggregate {
             source: self.builder.body.value(base_value).source,
             place,
             inits,
         });
+
+        // Preserve capability pointee-space metadata for aggregate fields so
+        // later loads can recover the original non-memory provider space.
+        let Some((local, base_projection)) =
+            crate::ir::resolve_local_projection_root(&self.builder.body.values, base_value)
+        else {
+            return;
+        };
+        let mut merged = self.builder.body.locals[local.index()]
+            .capability_spaces
+            .clone();
+        for (init_path, init_value) in metadata_inits {
+            let update_prefix = base_projection.concat(&init_path);
+            merged.retain(|(path, _)| !update_prefix.is_prefix_of(path));
+            for (suffix, space) in self.capability_spaces_for_value(init_value) {
+                merged.push((update_prefix.concat(&suffix), space));
+            }
+        }
+        self.builder.body.locals[local.index()].capability_spaces =
+            self.normalize_capability_spaces(merged);
     }
 
     /// Lowers a record literal into an allocation plus `store_field` calls.

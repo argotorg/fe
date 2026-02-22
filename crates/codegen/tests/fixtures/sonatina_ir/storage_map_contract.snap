@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/storage_map_contract.fe
 ---
@@ -13,31 +14,31 @@ func private %abi_encode__Evm_hef0af3106e109414__3af54274b2985741(v0.i256, v1.i2
 
 func private %get_balance__StorPtr_StorageMap_u256__u256__0____4a2331212cb04e60(v0.i256, v1.i256) -> i256 {
     block0:
-        v3.i256 = call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor__u256_u256_0__6a346ad3c930d971 v1 v0;
+        v3.i256 = call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor_arg0_root_stor__u256_u256_0__6a346ad3c930d971 v1 v0;
         return v3;
 }
 
 func private %set_balance__StorPtr_StorageMap_u256__u256__0____4a2331212cb04e60(v0.i256, v1.i256, v2.i256) {
     block0:
-        call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor__u256_u256_0__6a346ad3c930d971 v2 v0 v1;
+        call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor_arg0_root_stor__u256_u256_0__6a346ad3c930d971 v2 v0 v1;
         return;
 }
 
 func private %get_allowance__StorPtr_StorageMap_u256__u256__1____61bfe7f974fa0c6e(v0.i256, v1.i256) -> i256 {
     block0:
-        v3.i256 = call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor__u256_u256_1__3c02c0f2b86be0bb v1 v0;
+        v3.i256 = call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor_arg0_root_stor__u256_u256_1__3c02c0f2b86be0bb v1 v0;
         return v3;
 }
 
 func private %set_allowance__StorPtr_StorageMap_u256__u256__1____61bfe7f974fa0c6e(v0.i256, v1.i256, v2.i256) {
     block0:
-        call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor__u256_u256_1__3c02c0f2b86be0bb v2 v0 v1;
+        call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor_arg0_root_stor__u256_u256_1__3c02c0f2b86be0bb v2 v0 v1;
         return;
 }
 
 func private %transfer__StorPtr_StorageMap_u256__u256__0____4a2331212cb04e60(v0.i256, v1.i256, v2.i256, v3.i256) -> i256 {
     block0:
-        v5.i256 = call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor__u256_u256_0__6a346ad3c930d971 v3 v0;
+        v5.i256 = call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor_arg0_root_stor__u256_u256_0__6a346ad3c930d971 v3 v0;
         v6.i1 = lt v5 v2;
         v7.i256 = zext v6 i256;
         v8.i1 = ne v7 0.i256;
@@ -47,11 +48,11 @@ func private %transfer__StorPtr_StorageMap_u256__u256__0____4a2331212cb04e60(v0.
         return 1.i256;
 
     block2:
-        v12.i256 = call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor__u256_u256_0__6a346ad3c930d971 v3 v1;
+        v12.i256 = call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor_arg0_root_stor__u256_u256_0__6a346ad3c930d971 v3 v1;
         v16.i256 = sub v5 v2;
-        call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor__u256_u256_0__6a346ad3c930d971 v3 v0 v16;
+        call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor_arg0_root_stor__u256_u256_0__6a346ad3c930d971 v3 v0 v16;
         v17.i256 = add v12 v2;
-        call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor__u256_u256_0__6a346ad3c930d971 v3 v1 v17;
+        call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor_arg0_root_stor__u256_u256_0__6a346ad3c930d971 v3 v1 v17;
         return 0.i256;
 }
 
@@ -129,28 +130,28 @@ func private %runtime__StorPtr_Evm___207f35a85ac4062e() {
         br v29 block5 block6;
 }
 
-func public %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor__u256_u256_0__6a346ad3c930d971(v0.i256, v1.i256) -> i256 {
+func public %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor_arg0_root_stor__u256_u256_0__6a346ad3c930d971(v0.i256, v1.i256) -> i256 {
     block0:
         v3.i256 = call %storagemap_get_word_with_salt__u256__3271ca15373d4483 v1 0.i256;
         v4.i256 = call %u256_h3271ca15373d4483_wordrepr_h7483d41ac8178d88_from_word v3;
         return v4;
 }
 
-func public %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor__u256_u256_0__6a346ad3c930d971(v0.i256, v1.i256, v2.i256) {
+func public %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor_arg0_root_stor__u256_u256_0__6a346ad3c930d971(v0.i256, v1.i256, v2.i256) {
     block0:
         v4.i256 = call %u256_h3271ca15373d4483_wordrepr_h7483d41ac8178d88_to_word v2;
         call %storagemap_set_word_with_salt__u256__3271ca15373d4483 v1 0.i256 v4;
         return;
 }
 
-func public %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor__u256_u256_1__3c02c0f2b86be0bb(v0.i256, v1.i256) -> i256 {
+func public %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor_arg0_root_stor__u256_u256_1__3c02c0f2b86be0bb(v0.i256, v1.i256) -> i256 {
     block0:
         v4.i256 = call %storagemap_get_word_with_salt__u256__3271ca15373d4483 v1 1.i256;
         v5.i256 = call %u256_h3271ca15373d4483_wordrepr_h7483d41ac8178d88_from_word v4;
         return v5;
 }
 
-func public %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor__u256_u256_1__3c02c0f2b86be0bb(v0.i256, v1.i256, v2.i256) {
+func public %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor_arg0_root_stor__u256_u256_1__3c02c0f2b86be0bb(v0.i256, v1.i256, v2.i256) {
     block0:
         v4.i256 = call %u256_h3271ca15373d4483_wordrepr_h7483d41ac8178d88_to_word v2;
         call %storagemap_set_word_with_salt__u256__3271ca15373d4483 v1 1.i256 v4;

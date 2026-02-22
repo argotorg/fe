@@ -256,6 +256,7 @@ mod tests {
             is_mut: false,
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Calldata,
+            capability_spaces: Vec::new(),
         });
         let base_value = func.body.alloc_value(ValueData {
             ty: u256_ty,

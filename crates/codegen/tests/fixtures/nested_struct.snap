@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 33
 expression: output
 input_file: tests/fixtures/nested_struct.fe
 ---
@@ -32,7 +33,7 @@ object "NestedStruct" {
         leave
       }
       function $runtime__StorPtr_Evm___207f35a85ac4062e() {
-        let v0 := $stor_ptr__Evm_hef0af3106e109414_Outer_hccd04e332bd35653__177c3c9a6f7ae368(0, 0)
+        let v0 := $stor_ptr_stor__Evm_hef0af3106e109414_Outer_hccd04e332bd35653__177c3c9a6f7ae368(0, 0)
         let v1 := v0
         let v2 := calldataload(0)
         let v3 := shr(224, v2)
@@ -55,7 +56,7 @@ object "NestedStruct" {
             return(0, 0)
           }
       }
-      function $stor_ptr__Evm_hef0af3106e109414_Outer_hccd04e332bd35653__177c3c9a6f7ae368($self, $slot) -> ret {
+      function $stor_ptr_stor__Evm_hef0af3106e109414_Outer_hccd04e332bd35653__177c3c9a6f7ae368($self, $slot) -> ret {
         let v0 := $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Outer_hccd04e332bd35653__f44d0100de7cf929($slot)
         ret := v0
         leave

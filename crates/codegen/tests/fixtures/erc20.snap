@@ -39,8 +39,8 @@ object "CoolCoin" {
       return(0, v3)
     }
     function $__CoolCoin_init_contract($initial_supply, $owner, $store, $auth, $ctx, $log) {
-      $accesscontrol_habee575e9e30e01d_grant_stor($auth, 1, $owner)
-      $accesscontrol_habee575e9e30e01d_grant_stor($auth, 2, $owner)
+      $accesscontrol_habee575e9e30e01d_grant_stor_arg0_root_stor($auth, 1, $owner)
+      $accesscontrol_habee575e9e30e01d_grant_stor_arg0_root_stor($auth, 2, $owner)
       let v0 := gt($initial_supply, 0)
       if v0 {
         $mint__StorPtr_TokenStore__Evm_hef0af3106e109414__5a8a4ed6775a82f7($owner, $initial_supply, $store, $log)
@@ -55,7 +55,7 @@ object "CoolCoin" {
       ret := add(v1, v3)
       leave
     }
-    function $accesscontrol_habee575e9e30e01d_grant_stor($self, $role, $to) {
+    function $accesscontrol_habee575e9e30e01d_grant_stor_arg0_root_stor($self, $role, $to) {
       let v0 := mload(0x40)
       if iszero(v0) {
         v0 := 0x80
@@ -63,7 +63,7 @@ object "CoolCoin" {
       mstore(0x40, add(v0, 64))
       mstore(v0, $role)
       mstore(add(v0, 32), $to)
-      $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor___u256__Address__bool_2__74418d210da55cc0(0, v0, 1)
+      $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor_arg0_root_stor___u256__Address__bool_2__74418d210da55cc0(0, v0, 1)
       leave
     }
     function $address_h257056268eac7027_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_MemoryBytes___a53dbc6192a658d6($d) -> ret {
@@ -123,8 +123,8 @@ object "CoolCoin" {
       ret := v0
       leave
     }
-    function $emit_stor__Evm_hef0af3106e109414_TransferEvent_h1c9ba82714a4a1f0__6ee531292f5eff63($self, $event) {
-      $transferevent_h1c9ba82714a4a1f0_event_hd33e4481d4a34b05_emit__Evm_hef0af3106e109414__3af54274b2985741($event, $self)
+    function $emit_stor_arg0_root_stor__Evm_hef0af3106e109414_TransferEvent_h1c9ba82714a4a1f0__6ee531292f5eff63($self, $event) {
+      $transferevent_h1c9ba82714a4a1f0_event_hd33e4481d4a34b05_emit_arg1_root_stor__Evm_hef0af3106e109414__3af54274b2985741($event, $self)
       leave
     }
     function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort($self) {
@@ -140,7 +140,7 @@ object "CoolCoin" {
       ret := v0
       leave
     }
-    function $evm_hef0af3106e109414_log_h22d1a10952034bae_log3($self, $offset, $len, $topic0, $topic1, $topic2) {
+    function $evm_hef0af3106e109414_log_h22d1a10952034bae_log3_arg0_root_stor($self, $offset, $len, $topic0, $topic1, $topic2) {
       log3($offset, $len, $topic0, $topic1, $topic2)
       leave
     }
@@ -174,8 +174,8 @@ object "CoolCoin" {
       sstore($store, add(v2, $amount))
       pop($store)
       pop($store)
-      let v3 := $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(0, $to)
-      $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(0, $to, add(v3, $amount))
+      let v3 := $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor_arg0_root_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(0, $to)
+      $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor_arg0_root_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(0, $to, add(v3, $amount))
       let v4 := $address_h257056268eac7027_zero()
       let v5 := mload(0x40)
       if iszero(v5) {
@@ -185,7 +185,7 @@ object "CoolCoin" {
       mstore(v5, v4)
       mstore(add(v5, 32), $to)
       mstore(add(v5, 64), $amount)
-      $emit_stor__Evm_hef0af3106e109414_TransferEvent_h1c9ba82714a4a1f0__6ee531292f5eff63($log, v5)
+      $emit_stor_arg0_root_stor__Evm_hef0af3106e109414_TransferEvent_h1c9ba82714a4a1f0__6ee531292f5eff63($log, v5)
       leave
     }
     function $ne__Address_h257056268eac7027_Address_h257056268eac7027__af929e62fa4c68f2($self, $other) -> ret {
@@ -293,18 +293,18 @@ object "CoolCoin" {
       ret := v2
       leave
     }
-    function $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3($self, $key) -> ret {
+    function $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor_arg0_root_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3($self, $key) -> ret {
       let v0 := $storagemap_get_word_with_salt__Address_h257056268eac7027__5ab99f7153cdba29($key, 0)
       let v1 := $u256_h3271ca15373d4483_wordrepr_h7483d41ac8178d88_from_word(v0)
       ret := v1
       leave
     }
-    function $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3($self, $key, $value) {
+    function $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor_arg0_root_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3($self, $key, $value) {
       let v0 := $u256_h3271ca15373d4483_wordrepr_h7483d41ac8178d88_to_word($value)
       $storagemap_set_word_with_salt__Address_h257056268eac7027__5ab99f7153cdba29($key, 0, v0)
       leave
     }
-    function $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor___u256__Address__bool_2__74418d210da55cc0($self, $key, $value) {
+    function $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor_arg0_root_stor___u256__Address__bool_2__74418d210da55cc0($self, $key, $value) {
       let v0 := $bool_h947c0c03c59c6f07_wordrepr_h7483d41ac8178d88_to_word($value)
       $storagemap_set_word_with_salt___u256__Address___c7c570db20cdd393($key, 2, v0)
       leave
@@ -351,7 +351,7 @@ object "CoolCoin" {
       ret := $raw
       leave
     }
-    function $transferevent_h1c9ba82714a4a1f0_event_hd33e4481d4a34b05_emit__Evm_hef0af3106e109414__3af54274b2985741($self, $log) {
+    function $transferevent_h1c9ba82714a4a1f0_event_hd33e4481d4a34b05_emit_arg1_root_stor__Evm_hef0af3106e109414__3af54274b2985741($self, $log) {
       let v0 := $solencoder_h1b9228b90dad6928_new()
       let v1 := 32
       let v2 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head(v0, v1)
@@ -367,7 +367,7 @@ object "CoolCoin" {
       let v10 := $address_h257056268eac7027_topicvalue_hc8981c1d4c24e77d_as_topic(v9)
       let v11 := mload(add($self, 32))
       let v12 := $address_h257056268eac7027_topicvalue_hc8981c1d4c24e77d_as_topic(v11)
-      $evm_hef0af3106e109414_log_h22d1a10952034bae_log3($log, v6, v8, 106268374300910980166318620624040158066582587003704178075307865084173350203760, v10, v12)
+      $evm_hef0af3106e109414_log_h22d1a10952034bae_log3_arg0_root_stor($log, v6, v8, 106268374300910980166318620624040158066582587003704178075307865084173350203760, v10, v12)
       leave
     }
     function $u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_MemoryBytes___a53dbc6192a658d6($d) -> ret {
@@ -433,7 +433,7 @@ object "CoolCoin" {
       function $__CoolCoin_recv_0_3($args, $store) -> ret {
         let v0 := $args
         pop($store)
-        let v1 := $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(0, v0)
+        let v1 := $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor_arg0_root_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(0, v0)
         ret := v1
         leave
       }
@@ -450,7 +450,7 @@ object "CoolCoin" {
         mstore(0x40, add(v4, 64))
         mstore(v4, v1)
         mstore(add(v4, 32), v3)
-        let v5 := $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor___Address__Address__u256_1__12414c27d5bfff1f(0, v4)
+        let v5 := $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor_arg0_root_stor___Address__Address__u256_1__12414c27d5bfff1f(0, v4)
         ret := v5
         leave
       }
@@ -476,7 +476,7 @@ object "CoolCoin" {
         let v1 := v0
         let v2 := mload(add($args, 32))
         let v3 := v2
-        $accesscontrol_habee575e9e30e01d_require_stor__Evm_hef0af3106e109414__3af54274b2985741($auth, 1, $ctx)
+        $accesscontrol_habee575e9e30e01d_require_stor_arg0_root_stor__Evm_hef0af3106e109414__3af54274b2985741($auth, 1, $ctx)
         $mint__StorPtr_TokenStore__Evm_hef0af3106e109414__5a8a4ed6775a82f7(v1, v3, $store, $log)
         ret := 1
         leave
@@ -513,7 +513,7 @@ object "CoolCoin" {
         mstore(0x40, add(v5, 64))
         mstore(v5, v4)
         mstore(add(v5, 32), v1)
-        let v6 := $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor___Address__Address__u256_1__12414c27d5bfff1f(0, v5)
+        let v6 := $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor_arg0_root_stor___Address__Address__u256_1__12414c27d5bfff1f(0, v5)
         $approve__StorPtr_TokenStore__Evm_hef0af3106e109414__5a8a4ed6775a82f7(v4, v1, add(v6, v3), $store, $log)
         ret := 1
         leave
@@ -532,7 +532,7 @@ object "CoolCoin" {
         mstore(0x40, add(v5, 64))
         mstore(v5, v4)
         mstore(add(v5, 32), v1)
-        let v6 := $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor___Address__Address__u256_1__12414c27d5bfff1f(0, v5)
+        let v6 := $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor_arg0_root_stor___Address__Address__u256_1__12414c27d5bfff1f(0, v5)
         $assert(iszero(lt(v6, v3)))
         $approve__StorPtr_TokenStore__Evm_hef0af3106e109414__5a8a4ed6775a82f7(v4, v1, sub(v6, v3), $store, $log)
         ret := 1
@@ -634,7 +634,7 @@ object "CoolCoin" {
         ret := add(v1, v3)
         leave
       }
-      function $accesscontrol_habee575e9e30e01d_require_stor__Evm_hef0af3106e109414__3af54274b2985741($self, $role, $ctx) {
+      function $accesscontrol_habee575e9e30e01d_require_stor_arg0_root_stor__Evm_hef0af3106e109414__3af54274b2985741($self, $role, $ctx) {
         let v0 := caller()
         let v1 := mload(0x40)
         if iszero(v1) {
@@ -643,7 +643,7 @@ object "CoolCoin" {
         mstore(0x40, add(v1, 64))
         mstore(v1, $role)
         mstore(add(v1, 32), v0)
-        let v2 := $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor___u256__Address__bool_2__74418d210da55cc0(0, v1)
+        let v2 := $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor_arg0_root_stor___u256__Address__bool_2__74418d210da55cc0(0, v1)
         $assert(eq(v2, 1))
         leave
       }
@@ -682,7 +682,7 @@ object "CoolCoin" {
         ret := v2
         leave
       }
-      function $approvalevent_h313d94630b6580e5_event_hd33e4481d4a34b05_emit__Evm_hef0af3106e109414__3af54274b2985741($self, $log) {
+      function $approvalevent_h313d94630b6580e5_event_hd33e4481d4a34b05_emit_arg1_root_stor__Evm_hef0af3106e109414__3af54274b2985741($self, $log) {
         let v0 := $solencoder_h1b9228b90dad6928_new()
         let v1 := 32
         let v2 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head(v0, v1)
@@ -698,7 +698,7 @@ object "CoolCoin" {
         let v10 := $address_h257056268eac7027_topicvalue_hc8981c1d4c24e77d_as_topic(v9)
         let v11 := mload(add($self, 32))
         let v12 := $address_h257056268eac7027_topicvalue_hc8981c1d4c24e77d_as_topic(v11)
-        $evm_hef0af3106e109414_log_h22d1a10952034bae_log3($log, v6, v8, 3682740849240848158437977969522068712009226744993583420104789809440898259342, v10, v12)
+        $evm_hef0af3106e109414_log_h22d1a10952034bae_log3_arg0_root_stor($log, v6, v8, 3682740849240848158437977969522068712009226744993583420104789809440898259342, v10, v12)
         leave
       }
       function $approve__StorPtr_TokenStore__Evm_hef0af3106e109414__5a8a4ed6775a82f7($owner, $spender, $amount, $store, $log) {
@@ -716,7 +716,7 @@ object "CoolCoin" {
         mstore(0x40, add(v4, 64))
         mstore(v4, $owner)
         mstore(add(v4, 32), $spender)
-        $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor___Address__Address__u256_1__12414c27d5bfff1f(0, v4, $amount)
+        $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor_arg0_root_stor___Address__Address__u256_1__12414c27d5bfff1f(0, v4, $amount)
         let v5 := mload(0x40)
         if iszero(v5) {
           v5 := 0x80
@@ -725,7 +725,7 @@ object "CoolCoin" {
         mstore(v5, $owner)
         mstore(add(v5, 32), $spender)
         mstore(add(v5, 64), $amount)
-        $emit_stor__Evm_hef0af3106e109414_ApprovalEvent_h313d94630b6580e5__2946163026d92694($log, v5)
+        $emit_stor_arg0_root_stor__Evm_hef0af3106e109414_ApprovalEvent_h313d94630b6580e5__2946163026d92694($log, v5)
         leave
       }
       function $approve_h90175fc19dafde67_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966($d) -> ret {
@@ -772,10 +772,10 @@ object "CoolCoin" {
         let v1 := $ne__Address_h257056268eac7027_Address_h257056268eac7027__af929e62fa4c68f2($from, v0)
         $assert(v1)
         pop($store)
-        let v2 := $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(0, $from)
+        let v2 := $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor_arg0_root_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(0, $from)
         $assert(iszero(lt(v2, $amount)))
         pop($store)
-        $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(0, $from, sub(v2, $amount))
+        $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor_arg0_root_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(0, $from, sub(v2, $amount))
         let v3 := sload($store)
         sstore($store, sub(v3, $amount))
         let v4 := $address_h257056268eac7027_zero()
@@ -787,7 +787,7 @@ object "CoolCoin" {
         mstore(v5, $from)
         mstore(add(v5, 32), v4)
         mstore(add(v5, 64), $amount)
-        $emit_stor__Evm_hef0af3106e109414_TransferEvent_h1c9ba82714a4a1f0__6ee531292f5eff63($log, v5)
+        $emit_stor_arg0_root_stor__Evm_hef0af3106e109414_TransferEvent_h1c9ba82714a4a1f0__6ee531292f5eff63($log, v5)
         leave
       }
       function $burn_h25a61f4466d20eed_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966($d) -> ret {
@@ -858,12 +858,12 @@ object "CoolCoin" {
         ret := v2
         leave
       }
-      function $emit_stor__Evm_hef0af3106e109414_ApprovalEvent_h313d94630b6580e5__2946163026d92694($self, $event) {
-        $approvalevent_h313d94630b6580e5_event_hd33e4481d4a34b05_emit__Evm_hef0af3106e109414__3af54274b2985741($event, $self)
+      function $emit_stor_arg0_root_stor__Evm_hef0af3106e109414_ApprovalEvent_h313d94630b6580e5__2946163026d92694($self, $event) {
+        $approvalevent_h313d94630b6580e5_event_hd33e4481d4a34b05_emit_arg1_root_stor__Evm_hef0af3106e109414__3af54274b2985741($event, $self)
         leave
       }
-      function $emit_stor__Evm_hef0af3106e109414_TransferEvent_h1c9ba82714a4a1f0__6ee531292f5eff63($self, $event) {
-        $transferevent_h1c9ba82714a4a1f0_event_hd33e4481d4a34b05_emit__Evm_hef0af3106e109414__3af54274b2985741($event, $self)
+      function $emit_stor_arg0_root_stor__Evm_hef0af3106e109414_TransferEvent_h1c9ba82714a4a1f0__6ee531292f5eff63($self, $event) {
+        $transferevent_h1c9ba82714a4a1f0_event_hd33e4481d4a34b05_emit_arg1_root_stor__Evm_hef0af3106e109414__3af54274b2985741($event, $self)
         leave
       }
       function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort($self) {
@@ -886,7 +886,7 @@ object "CoolCoin" {
       function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes($self, $ptr, $len) {
         return($ptr, $len)
       }
-      function $evm_hef0af3106e109414_log_h22d1a10952034bae_log3($self, $offset, $len, $topic0, $topic1, $topic2) {
+      function $evm_hef0af3106e109414_log_h22d1a10952034bae_log3_arg0_root_stor($self, $offset, $len, $topic0, $topic1, $topic2) {
         log3($offset, $len, $topic0, $topic1, $topic2)
         leave
       }
@@ -911,8 +911,8 @@ object "CoolCoin" {
         sstore($store, add(v2, $amount))
         pop($store)
         pop($store)
-        let v3 := $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(0, $to)
-        $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(0, $to, add(v3, $amount))
+        let v3 := $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor_arg0_root_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(0, $to)
+        $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor_arg0_root_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(0, $to, add(v3, $amount))
         let v4 := $address_h257056268eac7027_zero()
         let v5 := mload(0x40)
         if iszero(v5) {
@@ -922,7 +922,7 @@ object "CoolCoin" {
         mstore(v5, v4)
         mstore(add(v5, 32), $to)
         mstore(add(v5, 64), $amount)
-        $emit_stor__Evm_hef0af3106e109414_TransferEvent_h1c9ba82714a4a1f0__6ee531292f5eff63($log, v5)
+        $emit_stor_arg0_root_stor__Evm_hef0af3106e109414_TransferEvent_h1c9ba82714a4a1f0__6ee531292f5eff63($log, v5)
         leave
       }
       function $mint_ha2f94817be433a2e_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966($d) -> ret {
@@ -1124,7 +1124,7 @@ object "CoolCoin" {
         mstore(0x40, add(v0, 64))
         mstore(v0, $owner)
         mstore(add(v0, 32), $spender)
-        let v1 := $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor___Address__Address__u256_1__12414c27d5bfff1f(0, v0)
+        let v1 := $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor_arg0_root_stor___Address__Address__u256_1__12414c27d5bfff1f(0, v0)
         $assert(iszero(lt(v1, $amount)))
         pop($store)
         let v2 := mload(0x40)
@@ -1134,7 +1134,7 @@ object "CoolCoin" {
         mstore(0x40, add(v2, 64))
         mstore(v2, $owner)
         mstore(add(v2, 32), $spender)
-        $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor___Address__Address__u256_1__12414c27d5bfff1f(0, v2, sub(v1, $amount))
+        $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor_arg0_root_stor___Address__Address__u256_1__12414c27d5bfff1f(0, v2, sub(v1, $amount))
         leave
       }
       function $stor_ptr__Evm_hef0af3106e109414_AccessControl_habee575e9e30e01d__7a393cee43403dd7($self, $slot) -> ret {
@@ -1168,30 +1168,30 @@ object "CoolCoin" {
         ret := v2
         leave
       }
-      function $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3($self, $key) -> ret {
+      function $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor_arg0_root_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3($self, $key) -> ret {
         let v0 := $storagemap_get_word_with_salt__Address_h257056268eac7027__5ab99f7153cdba29($key, 0)
         let v1 := $u256_h3271ca15373d4483_wordrepr_h7483d41ac8178d88_from_word(v0)
         ret := v1
         leave
       }
-      function $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor___Address__Address__u256_1__12414c27d5bfff1f($self, $key) -> ret {
+      function $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor_arg0_root_stor___Address__Address__u256_1__12414c27d5bfff1f($self, $key) -> ret {
         let v0 := $storagemap_get_word_with_salt___Address__Address___c32d499da259c78e($key, 1)
         let v1 := $u256_h3271ca15373d4483_wordrepr_h7483d41ac8178d88_from_word(v0)
         ret := v1
         leave
       }
-      function $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor___u256__Address__bool_2__74418d210da55cc0($self, $key) -> ret {
+      function $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor_arg0_root_stor___u256__Address__bool_2__74418d210da55cc0($self, $key) -> ret {
         let v0 := $storagemap_get_word_with_salt___u256__Address___c7c570db20cdd393($key, 2)
         let v1 := $bool_h947c0c03c59c6f07_wordrepr_h7483d41ac8178d88_from_word(v0)
         ret := v1
         leave
       }
-      function $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3($self, $key, $value) {
+      function $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor_arg0_root_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3($self, $key, $value) {
         let v0 := $u256_h3271ca15373d4483_wordrepr_h7483d41ac8178d88_to_word($value)
         $storagemap_set_word_with_salt__Address_h257056268eac7027__5ab99f7153cdba29($key, 0, v0)
         leave
       }
-      function $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor___Address__Address__u256_1__12414c27d5bfff1f($self, $key, $value) {
+      function $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor_arg0_root_stor___Address__Address__u256_1__12414c27d5bfff1f($self, $key, $value) {
         let v0 := $u256_h3271ca15373d4483_wordrepr_h7483d41ac8178d88_to_word($value)
         $storagemap_set_word_with_salt___Address__Address___c32d499da259c78e($key, 1, v0)
         leave
@@ -1271,14 +1271,14 @@ object "CoolCoin" {
         let v3 := $ne__Address_h257056268eac7027_Address_h257056268eac7027__af929e62fa4c68f2($to, v2)
         $assert(v3)
         pop($store)
-        let v4 := $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(0, $from)
+        let v4 := $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor_arg0_root_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(0, $from)
         $assert(iszero(lt(v4, $amount)))
         pop($store)
-        $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(0, $from, sub(v4, $amount))
+        $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor_arg0_root_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(0, $from, sub(v4, $amount))
         pop($store)
         pop($store)
-        let v5 := $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(0, $to)
-        $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(0, $to, add(v5, $amount))
+        let v5 := $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor_arg0_root_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(0, $to)
+        $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor_arg0_root_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(0, $to, add(v5, $amount))
         let v6 := mload(0x40)
         if iszero(v6) {
           v6 := 0x80
@@ -1287,7 +1287,7 @@ object "CoolCoin" {
         mstore(v6, $from)
         mstore(add(v6, 32), $to)
         mstore(add(v6, 64), $amount)
-        $emit_stor__Evm_hef0af3106e109414_TransferEvent_h1c9ba82714a4a1f0__6ee531292f5eff63($log, v6)
+        $emit_stor_arg0_root_stor__Evm_hef0af3106e109414_TransferEvent_h1c9ba82714a4a1f0__6ee531292f5eff63($log, v6)
         leave
       }
       function $transfer_h13f5ec5985ebba60_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966($d) -> ret {
@@ -1303,7 +1303,7 @@ object "CoolCoin" {
         ret := v2
         leave
       }
-      function $transferevent_h1c9ba82714a4a1f0_event_hd33e4481d4a34b05_emit__Evm_hef0af3106e109414__3af54274b2985741($self, $log) {
+      function $transferevent_h1c9ba82714a4a1f0_event_hd33e4481d4a34b05_emit_arg1_root_stor__Evm_hef0af3106e109414__3af54274b2985741($self, $log) {
         let v0 := $solencoder_h1b9228b90dad6928_new()
         let v1 := 32
         let v2 := $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_head(v0, v1)
@@ -1319,7 +1319,7 @@ object "CoolCoin" {
         let v10 := $address_h257056268eac7027_topicvalue_hc8981c1d4c24e77d_as_topic(v9)
         let v11 := mload(add($self, 32))
         let v12 := $address_h257056268eac7027_topicvalue_hc8981c1d4c24e77d_as_topic(v11)
-        $evm_hef0af3106e109414_log_h22d1a10952034bae_log3($log, v6, v8, 106268374300910980166318620624040158066582587003704178075307865084173350203760, v10, v12)
+        $evm_hef0af3106e109414_log_h22d1a10952034bae_log3_arg0_root_stor($log, v6, v8, 106268374300910980166318620624040158066582587003704178075307865084173350203760, v10, v12)
         leave
       }
       function $transferfrom_h939549e4bad999e8_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966($d) -> ret {

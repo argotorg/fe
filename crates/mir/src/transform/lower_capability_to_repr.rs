@@ -844,6 +844,41 @@ pub(crate) fn lower_capability_to_repr<'db>(
             }
         }
 
+        fn capability_space_from_origin<'db>(
+            values: &[ValueData<'db>],
+            locals: &[LocalData<'db>],
+            origin: &ValueOrigin<'db>,
+        ) -> Option<AddressSpaceKind> {
+            match origin {
+                ValueOrigin::TransparentCast { value } => {
+                    capability_space_from_origin(values, locals, &values.get(value.index())?.origin)
+                }
+                ValueOrigin::Local(local) | ValueOrigin::PlaceRoot(local) => {
+                    crate::ir::lookup_local_capability_space(
+                        locals,
+                        *local,
+                        &MirProjectionPath::new(),
+                    )
+                    .or_else(|| locals.get(local.index()).map(|l| l.address_space))
+                }
+                ValueOrigin::PlaceRef(place) | ValueOrigin::MoveOut { place } => {
+                    if let Some((local, prefix)) =
+                        crate::ir::resolve_local_projection_root(values, place.base)
+                    {
+                        let projection = prefix.concat(&place.projection);
+                        if let Some(space) =
+                            crate::ir::lookup_local_capability_space(locals, local, &projection)
+                        {
+                            return Some(space);
+                        }
+                    }
+                    crate::ir::try_value_address_space_in(values, locals, place.base)
+                }
+                ValueOrigin::FieldPtr(field_ptr) => Some(field_ptr.addr_space),
+                _ => origin_address_space(values, locals, origin),
+            }
+        }
+
         fn compute<'db>(
             db: &'db dyn HirAnalysisDb,
             core: &CoreLib<'db>,
@@ -867,7 +902,7 @@ pub(crate) fn lower_capability_to_repr<'db>(
                         repr::ReprKind::Ptr(space_kind) => {
                             if matches!(space_kind, AddressSpaceKind::Memory)
                                 && let Some(space) =
-                                    origin_address_space(values, locals, &data.origin)
+                                    capability_space_from_origin(values, locals, &data.origin)
                             {
                                 ValueRepr::Ptr(space)
                             } else {
@@ -875,7 +910,7 @@ pub(crate) fn lower_capability_to_repr<'db>(
                             }
                         }
                         repr::ReprKind::Ref => {
-                            let space = origin_address_space(values, locals, &data.origin)
+                            let space = capability_space_from_origin(values, locals, &data.origin)
                                 .unwrap_or(AddressSpaceKind::Memory);
                             ValueRepr::Ref(space)
                         }
@@ -968,6 +1003,7 @@ pub(crate) fn lower_capability_to_repr<'db>(
                     is_mut: false,
                     source: SourceInfoId::SYNTHETIC,
                     address_space: AddressSpaceKind::Memory,
+                    capability_spaces: Vec::new(),
                 },
             );
             body.spill_slots.insert(owner, spill);
@@ -1165,6 +1201,7 @@ mod tests {
             is_mut: true,
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
+            capability_spaces: Vec::new(),
         });
         let base = body.alloc_value(ValueData {
             ty: local_ty,
@@ -1212,6 +1249,7 @@ pub fn field_ptr_origin_preserves_address_space(x: mut u256) {}
             is_mut: false,
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Storage,
+            capability_spaces: Vec::new(),
         });
         let base = body.alloc_value(ValueData {
             ty: capability_ty,

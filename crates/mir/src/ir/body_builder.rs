@@ -87,6 +87,7 @@ impl<'db> BodyBuilder<'db> {
             is_mut,
             source: SourceInfoId::SYNTHETIC,
             address_space,
+            capability_spaces: Vec::new(),
         })
     }
 
