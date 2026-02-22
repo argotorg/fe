@@ -364,7 +364,9 @@ impl DocChildKind {
 /// Source location for linking to source code
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DocSourceLoc {
-    /// Absolute file path (used for navigation)
+    /// Absolute file path — used only in-memory by LSP for "goto source".
+    /// Never serialized to JSON (avoids leaking machine paths into static output).
+    #[serde(skip)]
     pub file: String,
     /// Relative display path (shown in UI)
     pub display_file: String,
@@ -872,7 +874,15 @@ mod tests {
             assert_eq!(a.signature, b.signature);
             assert_eq!(a.generics, b.generics);
             assert_eq!(a.children, b.children);
-            assert_eq!(a.source, b.source);
+            // source.file is #[serde(skip)] — verify it's dropped on round-trip
+            if let (Some(sa), Some(sb)) = (&a.source, &b.source) {
+                assert!(sb.file.is_empty(), "source.file should not survive serialization");
+                assert_eq!(sa.display_file, sb.display_file);
+                assert_eq!(sa.line, sb.line);
+                assert_eq!(sa.column, sb.column);
+            } else {
+                assert_eq!(a.source.is_some(), b.source.is_some());
+            }
         }
     }
 

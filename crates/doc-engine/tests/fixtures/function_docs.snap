@@ -16,7 +16,6 @@ input_file: tests/fixtures/function_docs.fe
       "where_bounds": [],
       "children": [],
       "source": {
-        "file": "<fixtures>/function_docs.fe",
         "display_file": "function_docs.fe",
         "line": 1,
         "column": 0
@@ -38,7 +37,6 @@ input_file: tests/fixtures/function_docs.fe
       "where_bounds": [],
       "children": [],
       "source": {
-        "file": "<fixtures>/function_docs.fe",
         "display_file": "function_docs.fe",
         "line": 1,
         "column": 0
@@ -60,7 +58,6 @@ input_file: tests/fixtures/function_docs.fe
       "where_bounds": [],
       "children": [],
       "source": {
-        "file": "<fixtures>/function_docs.fe",
         "display_file": "function_docs.fe",
         "line": 11,
         "column": 0
