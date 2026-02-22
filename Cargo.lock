@@ -2102,6 +2102,7 @@ dependencies = [
  "tokio",
  "toml",
  "tracing",
+ "tracing-subscriber 0.3.20",
  "url",
  "walkdir",
 ]
