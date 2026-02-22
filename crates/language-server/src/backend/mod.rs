@@ -1,6 +1,7 @@
 use async_lsp::ClientSocket;
 use driver::DriverDataBase;
 use rustc_hash::FxHashSet;
+use std::path::PathBuf;
 use url::Url;
 
 use crate::virtual_files::{VirtualFiles, materialize_builtins};
@@ -12,6 +13,7 @@ pub struct Backend {
     pub(super) virtual_files: Option<VirtualFiles>,
     pub(super) readonly_warnings: FxHashSet<Url>,
     pub(super) definition_link_support: bool,
+    pub(super) workspace_root: Option<PathBuf>,
 }
 
 impl Backend {
@@ -37,6 +39,7 @@ impl Backend {
             virtual_files,
             readonly_warnings: FxHashSet::default(),
             definition_link_support: false,
+            workspace_root: None,
         }
     }
 

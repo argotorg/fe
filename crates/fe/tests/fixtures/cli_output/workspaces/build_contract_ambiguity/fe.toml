@@ -1,0 +1,8 @@
+[workspace]
+name = "build_contract_ambiguity"
+version = "0.1.0"
+members = [
+  { path = "ingots/a", name = "a" },
+  { path = "ingots/b", name = "b" },
+]
+

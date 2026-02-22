@@ -4,6 +4,6 @@ expression: output
 input_file: tests/fixtures/cli_output/explicit_paths/fe_toml_path.case
 ---
 === STDERR ===
-❌ Error: Path must be either a .fe file or a directory containing fe.toml
+Error: fe.toml file paths are not accepted: <project>/crates/fe/tests/fixtures/cli_output/explicit_paths/ingot_only/fe.toml. Pass the containing directory instead
 
 === EXIT CODE: 1 ===

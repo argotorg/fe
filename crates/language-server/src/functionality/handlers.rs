@@ -146,6 +146,8 @@ pub async fn initialize(
         .and_then(|folder| folder.uri.to_file_path().ok())
         .unwrap_or_else(|| std::env::current_dir().unwrap());
 
+    backend.workspace_root = Some(root.clone());
+
     // Discover and load all ingots in the workspace
     discover_and_load_ingots(backend, &root).await?;
 
@@ -166,17 +168,45 @@ pub async fn initialized(
 ) -> Result<(), ResponseError> {
     info!("language server initialized! recieved notification!");
 
-    // Get all files from the workspace
-    let all_files: Vec<_> = backend
-        .db
-        .workspace()
-        .all_files(&backend.db)
-        .iter()
-        .map(|(url, _file)| url)
-        .collect();
+    // Get all files from the workspace and emit diagnostics requests for one
+    // representative `.fe` file per ingot in the opened workspace root.
+    //
+    // This avoids scheduling work for built-in core/std files on startup (which
+    // can be large and delay workspace diagnostics).
+    let mut seen_ingots = FxHashSet::default();
+    let mut emitted_any = false;
+    for (url, _file) in backend.db.workspace().all_files(&backend.db).iter() {
+        if url.scheme() != "file" || !url.path().ends_with(".fe") {
+            continue;
+        }
 
-    for url in all_files {
-        let _ = backend.client.emit(NeedsDiagnostics(url));
+        if let Some(root) = backend.workspace_root.as_ref() {
+            let Ok(path) = url.to_file_path() else {
+                continue;
+            };
+            if !path.starts_with(root) {
+                continue;
+            }
+        }
+
+        let Some(ingot) = backend
+            .db
+            .workspace()
+            .containing_ingot(&backend.db, url.clone())
+        else {
+            continue;
+        };
+
+        if seen_ingots.insert(ingot) {
+            emitted_any = true;
+            let _ = backend.client.emit(NeedsDiagnostics(url.clone()));
+        }
+    }
+
+    if !emitted_any {
+        for (url, _file) in backend.db.workspace().all_files(&backend.db).iter() {
+            let _ = backend.client.emit(NeedsDiagnostics(url.clone()));
+        }
     }
 
     let _ = backend.client.clone().log_message(LogMessageParams {

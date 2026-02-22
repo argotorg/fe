@@ -8,6 +8,7 @@ use url::Url;
 use super::{DependencyAlias, DependencyArguments};
 use crate::{
     InputDb,
+    color::{ColorTarget, should_colorize},
     config::{Config, IngotConfig},
     ingot::Version,
 };
@@ -45,7 +46,17 @@ impl DependencyTree {
     }
 
     pub fn display(&self) -> String {
-        display_tree(&self.graph, &self.root, &self.configs, &self.remote_edges)
+        self.display_to(ColorTarget::Stdout)
+    }
+
+    pub fn display_to(&self, target: ColorTarget) -> String {
+        display_tree(
+            &self.graph,
+            &self.root,
+            &self.configs,
+            &self.remote_edges,
+            should_colorize(target),
+        )
     }
 }
 
@@ -132,6 +143,7 @@ fn display_tree(
     root_url: &Url,
     configs: &HashMap<Url, IngotConfig>,
     remote_edges: &HashSet<(Url, Url)>,
+    colorize: bool,
 ) -> String {
     let mut output = String::new();
 
@@ -143,6 +155,7 @@ fn display_tree(
             configs,
             cycle_nodes: &cycle_nodes,
             remote_edges,
+            colorize,
         };
         let mut seen = HashSet::new();
         print_node_with_alias(
@@ -166,6 +179,7 @@ struct TreeContext<'a> {
     configs: &'a HashMap<Url, IngotConfig>,
     cycle_nodes: &'a HashSet<NodeIndex>,
     remote_edges: &'a HashSet<(Url, Url)>,
+    colorize: bool,
 }
 
 fn print_node_with_alias(
@@ -214,15 +228,15 @@ fn print_node_with_alias(
     let mut label = base_label;
 
     if will_close_cycle {
-        label = format!("{label} 🔄 [cycle]");
+        label = format!("{label} [cycle]");
     }
 
     if is_remote_edge {
-        label = format!("{label} 🌐 [remote]");
+        label = format!("{label} [remote]");
     }
 
-    if is_in_cycle {
-        output.push_str(&format!("{}{}\n", prefix.new_prefix(), red(&label)));
+    if is_in_cycle && context.colorize {
+        output.push_str(&format!("{}{}\n", prefix.new_prefix(), red(label)));
     } else {
         output.push_str(&format!("{}{}\n", prefix.new_prefix(), label));
     }
@@ -260,7 +274,7 @@ fn print_node_with_alias(
     seen.remove(&node);
 }
 
-fn red(s: &str) -> String {
+fn red(s: String) -> String {
     format!("\x1b[31m{s}\x1b[0m")
 }
 

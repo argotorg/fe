@@ -1,0 +1,16 @@
+use core::abi::{Abi, AbiEncoder, AbiSize, Encode}
+use std::abi::Sol
+
+msg fooMsg {
+    #[selector = 0x87654321]
+    Pong -> u256,
+}
+
+pub contract foo {
+    recv fooMsg {
+        Pong -> u256 {
+            return 2
+        }
+    }
+}
+

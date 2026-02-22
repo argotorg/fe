@@ -1,0 +1,9 @@
+[workspace]
+name = "build_workspace_root_skips_library_member"
+version = "0.1.0"
+members = [
+  { path = "ingots/a", name = "a" },
+  { path = "ingots/b", name = "b" },
+  { path = "ingots/crypto", name = "crypto" },
+]
+

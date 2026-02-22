@@ -1,0 +1,13 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: snapshot
+---
+=== STDOUT ===
+Wrote <out>/Foo.bin
+Wrote <out>/Foo.runtime.bin
+
+=== EXIT CODE: 0 ===
+
+=== ARTIFACTS ===
+Foo.bin: 6000
+Foo.runtime.bin: 6000

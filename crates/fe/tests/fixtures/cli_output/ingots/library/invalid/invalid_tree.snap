@@ -1,5 +1,6 @@
 ---
 source: crates/fe/tests/cli_output.rs
+assertion_line: 528
 expression: output
 ---
 === STDOUT ===
@@ -11,6 +12,6 @@ std v0.1.0
 └── core v0.1.0
 
 === STDERR ===
-❌ Erroneous workspace fe.toml in file://<project>/crates/fe/tests/fixtures/cli_output/ingots/library/invalid/: Workspace config is missing a [workspace] section
+Error: Invalid workspace fe.toml in file://<project>/crates/fe/tests/fixtures/cli_output/ingots/library/invalid/: Workspace config is missing a [workspace] section
 
-=== EXIT CODE: 0 ===
+=== EXIT CODE: 1 ===

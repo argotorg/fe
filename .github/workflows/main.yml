@@ -69,6 +69,10 @@ jobs:
           fi
           curl -Ls "$url" -o "$RUNNER_TEMP/solc-${SOLC_VERSION}"
           chmod +x "$RUNNER_TEMP/solc-${SOLC_VERSION}"
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@v2
       - name: Build

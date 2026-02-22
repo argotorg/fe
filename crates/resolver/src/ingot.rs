@@ -21,11 +21,13 @@ pub fn minimal_files_resolver() -> FilesResolver {
     FilesResolver::new().with_required_file("fe.toml")
 }
 
-/// Files resolver used for project ingots. Requires a `src/lib.fe` entrypoint.
+/// Files resolver used for project ingots.
+///
+/// Requires `src/` to exist and gathers all `src/**/*.fe` sources. `src/lib.fe` is intentionally
+/// *not* required; downstream tooling may treat a missing `src/lib.fe` as an empty root module.
 pub fn project_files_resolver() -> FilesResolver {
     FilesResolver::new()
         .with_required_directory("src")
-        .with_required_file("src/lib.fe")
         .with_pattern("src/**/*.fe")
 }
 

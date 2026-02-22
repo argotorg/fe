@@ -1,0 +1,11 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+---
+=== STDERR ===
+Error: Contract "DoesNotExist" not found
+Available contracts:
+  - Bar
+  - Foo
+
+=== EXIT CODE: 1 ===

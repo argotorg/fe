@@ -1,4 +1,5 @@
 #![allow(clippy::print_stderr, clippy::print_stdout)]
+mod build;
 mod check;
 mod cli;
 mod lsif;
@@ -10,6 +11,7 @@ mod tree;
 
 use std::fs;
 
+use build::build;
 use camino::Utf8PathBuf;
 use check::check;
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
@@ -19,6 +21,13 @@ use similar::{ChangeTag, TextDiff};
 use walkdir::WalkDir;
 
 use crate::test::TestDebugOptions;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ColorChoice {
+    Auto,
+    Always,
+    Never,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum TestDebug {
@@ -31,30 +40,78 @@ pub enum TestDebug {
 #[derive(Debug, Clone, Parser)]
 #[command(version, about, long_about = None)]
 pub struct Options {
-    /// Show verbose resolver output.
-    #[arg(short, long, global = true)]
-    pub verbose: bool,
+    /// Control colored output (auto, always, never).
+    #[arg(long, global = true, value_enum, default_value = "auto")]
+    pub color: ColorChoice,
     #[command(subcommand)]
     pub command: Command,
 }
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum Command {
-    Build,
-    Check {
+    /// Compile Fe code to EVM bytecode.
+    Build {
+        /// Path to an ingot/workspace directory (containing fe.toml), a workspace member name, or a .fe file.
         #[arg(default_value_t = default_project_path())]
         path: Utf8PathBuf,
+        /// Treat a `.fe` file target as standalone, even if it is inside an ingot.
         #[arg(long)]
-        dump_mir: bool,
+        standalone: bool,
+        /// Build a specific contract by name (defaults to all contracts in the target).
         #[arg(long)]
-        emit_yul_min: bool,
-        /// Code generation backend to use (sonatina or yul).
+        contract: Option<String>,
+        /// Code generation backend to use (yul or sonatina).
         #[arg(long, default_value = "sonatina")]
         backend: String,
         /// Optimization level (0 = none, 1 = balanced, 2 = aggressive).
+        ///
+        /// Defaults to `1`.
+        ///
+        /// Note: with `--backend yul`, opt levels `1` and `2` are currently equivalent.
+        ///
+        /// - Sonatina backend: controls the optimization pipeline.
+        /// - Yul backend: controls whether solc optimization is enabled (0 = disabled, 1/2 = enabled).
         #[arg(long, default_value = "1", value_name = "LEVEL")]
         opt_level: String,
-        /// Write a debugging report as a `.tar.gz` file (includes sources, IR, backend output).
+        /// Enable optimization.
+        ///
+        /// Shorthand for `--opt-level 1`.
+        ///
+        /// It is an error to pass `--optimize` with `--opt-level 0`.
+        #[arg(long)]
+        optimize: bool,
+        /// solc binary to use (overrides FE_SOLC_PATH).
+        ///
+        /// Only used with `--backend yul` (ignored with a warning otherwise).
+        #[arg(long)]
+        solc: Option<String>,
+        /// Output directory for artifacts.
+        #[arg(long)]
+        out_dir: Option<Utf8PathBuf>,
+        /// Write a debugging report as a `.tar.gz` file (includes sources, IR, backend output, and bytecode artifacts).
+        #[arg(long)]
+        report: bool,
+        /// Output path for `--report` (must end with `.tar.gz`).
+        #[arg(
+            long,
+            value_name = "OUT",
+            default_value = "fe-build-report.tar.gz",
+            requires = "report"
+        )]
+        report_out: Utf8PathBuf,
+        /// Only write the report if `fe build` fails.
+        #[arg(long, requires = "report")]
+        report_failed_only: bool,
+    },
+    Check {
+        #[arg(default_value_t = default_project_path())]
+        path: Utf8PathBuf,
+        /// Treat a `.fe` file target as standalone, even if it is inside an ingot.
+        #[arg(long)]
+        standalone: bool,
+        #[arg(long)]
+        dump_mir: bool,
+        /// Write a debugging report as a `.tar.gz` file (includes sources and diagnostics).
         #[arg(long)]
         report: bool,
         /// Output path for `--report` (must end with `.tar.gz`).
@@ -109,12 +166,31 @@ pub enum Command {
             require_equals = true
         )]
         debug: Option<TestDebug>,
-        /// Backend to use for codegen (sonatina or yul).
+        /// Backend to use for codegen (yul or sonatina).
         #[arg(long, default_value = "sonatina")]
         backend: String,
+        /// solc binary to use (overrides FE_SOLC_PATH).
+        ///
+        /// Only used with `--backend yul` (ignored with a warning otherwise).
+        #[arg(long)]
+        solc: Option<String>,
         /// Optimization level (0 = none, 1 = balanced, 2 = aggressive).
+        ///
+        /// Defaults to `1`.
+        ///
+        /// Note: with `--backend yul`, opt levels `1` and `2` are currently equivalent.
+        ///
+        /// - Sonatina backend: controls the optimization pipeline.
+        /// - Yul backend: controls whether solc optimization is enabled (0 = disabled, 1/2 = enabled).
         #[arg(long, default_value = "1", value_name = "LEVEL")]
         opt_level: String,
+        /// Enable optimization.
+        ///
+        /// Shorthand for `--opt-level 1`.
+        ///
+        /// It is an error to pass `--optimize` with `--opt-level 0`.
+        #[arg(long)]
+        optimize: bool,
         /// Trace executed EVM opcodes while running tests.
         #[arg(long)]
         trace_evm: bool,
@@ -240,32 +316,73 @@ fn main() {
     run(&opts);
 }
 pub fn run(opts: &Options) {
-    driver::set_resolver_verbose(opts.verbose);
+    let preference = match opts.color {
+        ColorChoice::Auto => common::color::ColorPreference::Auto,
+        ColorChoice::Always => common::color::ColorPreference::Always,
+        ColorChoice::Never => common::color::ColorPreference::Never,
+    };
+    common::color::set_color_preference(preference);
+    match preference {
+        common::color::ColorPreference::Auto => colored::control::unset_override(),
+        common::color::ColorPreference::Always => colored::control::set_override(true),
+        common::color::ColorPreference::Never => colored::control::set_override(false),
+    }
+
     match &opts.command {
-        Command::Build => eprintln!("`fe build` doesn't work at the moment"),
-        Command::Check {
+        Command::Build {
             path,
-            dump_mir,
-            emit_yul_min,
+            standalone,
+            contract,
             backend,
             opt_level,
+            optimize,
+            solc,
+            out_dir,
             report,
             report_out,
             report_failed_only,
         } => {
-            let opt_level: codegen::OptLevel = match opt_level.parse() {
-                Ok(level) => level,
+            let backend_kind: codegen::BackendKind = match backend.parse() {
+                Ok(kind) => kind,
                 Err(err) => {
-                    eprintln!("❌ Error: {err}");
+                    eprintln!("Error: {err}");
                     std::process::exit(1);
                 }
             };
+            let opt_level = match effective_opt_level(backend_kind, opt_level, *optimize) {
+                Ok(level) => level,
+                Err(err) => {
+                    eprintln!("Error: {err}");
+                    std::process::exit(1);
+                }
+            };
+            if backend_kind != codegen::BackendKind::Yul && solc.is_some() {
+                eprintln!("Warning: --solc is only used with --backend yul; ignoring --solc");
+            }
+            build(
+                path,
+                *standalone,
+                contract.as_deref(),
+                backend_kind,
+                opt_level,
+                out_dir.as_ref(),
+                solc.as_deref(),
+                (*report).then_some(report_out),
+                *report_failed_only,
+            )
+        }
+        Command::Check {
+            path,
+            standalone,
+            dump_mir,
+            report,
+            report_out,
+            report_failed_only,
+        } => {
             match check(
                 path,
+                *standalone,
                 *dump_mir,
-                *emit_yul_min,
-                backend,
-                opt_level,
                 (*report).then_some(report_out),
                 *report_failed_only,
             ) {
@@ -275,14 +392,16 @@ pub fn run(opts: &Options) {
                     }
                 }
                 Err(err) => {
-                    eprintln!("❌ Error: {err}");
+                    eprintln!("Error: {err}");
                     std::process::exit(1);
                 }
             }
         }
         #[cfg(not(target_arch = "wasm32"))]
         Command::Tree { path } => {
-            tree::print_tree(path);
+            if tree::print_tree(path) {
+                std::process::exit(1);
+            }
         }
         Command::Fmt { path, check } => {
             run_fmt(path.as_ref(), *check);
@@ -294,7 +413,9 @@ pub fn run(opts: &Options) {
             show_logs,
             debug: test_debug,
             backend,
+            solc,
             opt_level,
+            optimize,
             trace_evm,
             trace_evm_keep,
             trace_evm_stack_n,
@@ -306,13 +427,23 @@ pub fn run(opts: &Options) {
             report_failed_only,
             call_trace,
         } => {
-            let opt_level: codegen::OptLevel = match opt_level.parse() {
-                Ok(level) => level,
+            let backend_kind: codegen::BackendKind = match backend.parse() {
+                Ok(kind) => kind,
                 Err(err) => {
-                    eprintln!("❌ Error: {err}");
+                    eprintln!("Error: {err}");
                     std::process::exit(1);
                 }
             };
+            let opt_level = match effective_opt_level(backend_kind, opt_level, *optimize) {
+                Ok(level) => level,
+                Err(err) => {
+                    eprintln!("Error: {err}");
+                    std::process::exit(1);
+                }
+            };
+            if backend_kind != codegen::BackendKind::Yul && solc.is_some() {
+                eprintln!("Warning: --solc is only used with --backend yul; ignoring --solc");
+            }
             let debug = TestDebugOptions {
                 trace_evm: *trace_evm,
                 trace_evm_keep: *trace_evm_keep,
@@ -329,12 +460,21 @@ pub fn run(opts: &Options) {
             } else {
                 paths.clone()
             };
+            let solc = if backend_kind == codegen::BackendKind::Yul {
+                solc.as_deref()
+            } else {
+                None
+            };
+            let yul_optimize =
+                backend_kind == codegen::BackendKind::Yul && opt_level.yul_optimize();
             match test::run_tests(
                 &paths,
                 filter.as_deref(),
                 *jobs,
                 *show_logs,
                 backend,
+                yul_optimize,
+                solc,
                 opt_level,
                 &debug,
                 (*report).then_some(report_out),
@@ -348,7 +488,7 @@ pub fn run(opts: &Options) {
                     }
                 }
                 Err(err) => {
-                    eprintln!("❌ Error: {err}");
+                    eprintln!("Error: {err}");
                     std::process::exit(1);
                 }
             }
@@ -360,7 +500,7 @@ pub fn run(opts: &Options) {
             version,
         } => {
             if let Err(err) = cli::new::run(path, *workspace, name.as_deref(), version.as_deref()) {
-                eprintln!("❌ {err}");
+                eprintln!("Error: {err}");
                 std::process::exit(1);
             }
         }
@@ -422,6 +562,27 @@ pub fn run(opts: &Options) {
             run_scip(path, output);
         }
     }
+}
+
+fn effective_opt_level(
+    backend_kind: codegen::BackendKind,
+    opt_level: &str,
+    optimize: bool,
+) -> Result<codegen::OptLevel, String> {
+    let level: codegen::OptLevel = opt_level.parse()?;
+
+    if optimize && level == codegen::OptLevel::O0 {
+        return Err(
+            "--optimize is shorthand for `--opt-level 1` and cannot be used with `--opt-level 0`"
+                .to_string(),
+        );
+    }
+
+    if backend_kind == codegen::BackendKind::Yul && level == codegen::OptLevel::O2 {
+        eprintln!("Warning: --opt-level 2 has no additional effect for --backend yul (same as 1)");
+    }
+
+    Ok(level)
 }
 
 fn run_lsif(path: &Utf8PathBuf, output: Option<&Utf8PathBuf>) {
@@ -567,7 +728,7 @@ fn run_fmt(path: Option<&Utf8PathBuf>, check: bool) {
         Some(p) if p.is_file() => vec![p.clone()],
         Some(p) if p.is_dir() => collect_fe_files(p),
         Some(p) => {
-            eprintln!("Path does not exist: {}", p);
+            eprintln!("Error: Path does not exist: {p}");
             std::process::exit(1);
         }
         None => {
@@ -576,7 +737,7 @@ fn run_fmt(path: Option<&Utf8PathBuf>, check: bool) {
                 Some(root) => collect_fe_files(&root.join("src")),
                 None => {
                     eprintln!(
-                        "No fe.toml found. Run from a Fe project directory or specify a path."
+                        "Error: No fe.toml found. Run from a Fe project directory or specify a path."
                     );
                     std::process::exit(1);
                 }
@@ -585,7 +746,7 @@ fn run_fmt(path: Option<&Utf8PathBuf>, check: bool) {
     };
 
     if files.is_empty() {
-        eprintln!("No .fe files found");
+        eprintln!("Error: No .fe files found");
         std::process::exit(1);
     }
 
@@ -605,13 +766,13 @@ fn run_fmt(path: Option<&Utf8PathBuf>, check: bool) {
                 }
             }
             FormatResult::ParseError(errs) => {
-                eprintln!("Skipping {} (parse errors):", file);
+                eprintln!("Warning: Skipping {file} (parse errors):");
                 for err in errs {
                     eprintln!("  {}", err.msg());
                 }
             }
             FormatResult::IoError(err) => {
-                eprintln!("Error processing {}: {}", file, err);
+                eprintln!("Error: Failed to process {file}: {err}");
                 error_count += 1;
             }
         }

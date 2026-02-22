@@ -1,7 +1,7 @@
 ---
 source: crates/fe/tests/cli_output.rs
-assertion_line: 292
 expression: output
+input_file: tests/fixtures/cli_output/workspaces/member_resolution/tree_default_path.case
 ---
 === STDOUT ===
 app v0.1.0

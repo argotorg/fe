@@ -1,5 +1,6 @@
 //! Module-level Yul emission helpers (functions + code regions).
 
+use common::ingot::Ingot;
 use driver::DriverDataBase;
 use hir::HirDb;
 use hir::analysis::HirAnalysisDb;
@@ -9,10 +10,10 @@ use mir::analysis::{
     reachable_functions,
 };
 use mir::{
-    MirFunction, MirInst, Rvalue, ValueOrigin,
+    MirFunction, MirInst, MirModule, Rvalue, ValueOrigin,
     ir::{IntrinsicOp, MirFunctionOrigin},
     layout::{self, TargetDataLayout},
-    lower_module,
+    lower_ingot, lower_module,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::{collections::VecDeque, sync::Arc};
@@ -84,7 +85,28 @@ pub fn emit_module_yul_with_layout(
     layout: TargetDataLayout,
 ) -> Result<String, EmitModuleError> {
     let module = lower_module(db, top_mod).map_err(EmitModuleError::MirLower)?;
+    emit_lowered_module_yul_with_layout(db, &module, layout)
+}
 
+/// Emits Yul for every function in an ingot (across all source files).
+pub fn emit_ingot_yul(db: &DriverDataBase, ingot: Ingot<'_>) -> Result<String, EmitModuleError> {
+    emit_ingot_yul_with_layout(db, ingot, layout::EVM_LAYOUT)
+}
+
+pub fn emit_ingot_yul_with_layout(
+    db: &DriverDataBase,
+    ingot: Ingot<'_>,
+    layout: TargetDataLayout,
+) -> Result<String, EmitModuleError> {
+    let module = lower_ingot(db, ingot).map_err(EmitModuleError::MirLower)?;
+    emit_lowered_module_yul_with_layout(db, &module, layout)
+}
+
+fn emit_lowered_module_yul_with_layout(
+    db: &DriverDataBase,
+    module: &MirModule<'_>,
+    layout: TargetDataLayout,
+) -> Result<String, EmitModuleError> {
     let contract_graph = build_contract_graph(&module.functions);
 
     let mut code_regions = FxHashMap::default();

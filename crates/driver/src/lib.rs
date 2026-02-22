@@ -1,5 +1,6 @@
 #![allow(clippy::print_stderr)]
 
+pub mod cli_target;
 pub mod db;
 pub mod diagnostics;
 pub mod files;
@@ -8,7 +9,6 @@ mod ingot_handler;
 pub use common::dependencies::DependencyTree;
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use camino::Utf8PathBuf;
 use common::{
@@ -34,16 +34,6 @@ use resolver::{
 };
 use url::Url;
 
-static RESOLVER_VERBOSE: AtomicBool = AtomicBool::new(false);
-
-pub fn set_resolver_verbose(enabled: bool) {
-    RESOLVER_VERBOSE.store(enabled, Ordering::Relaxed);
-}
-
-fn resolver_verbose() -> bool {
-    RESOLVER_VERBOSE.load(Ordering::Relaxed)
-}
-
 struct LoggingProgress;
 
 impl RemoteProgress for LoggingProgress {
@@ -52,13 +42,13 @@ impl RemoteProgress for LoggingProgress {
     }
 
     fn success(&mut self, _description: &GitDescription, ingot_url: &Url) {
-        tracing::info!(target: "resolver", "✅ Resolved {}", ingot_url);
+        tracing::info!(target: "resolver", "Resolved {}", ingot_url);
     }
 
     fn error(&mut self, description: &GitDescription, error: &IngotResolutionError) {
         tracing::warn!(
             target: "resolver",
-            "❌ Failed to resolve {}: {}",
+            "Failed to resolve {}: {}",
             description,
             error
         );
@@ -107,7 +97,7 @@ pub fn check_library_requirements(db: &DriverDataBase) -> Vec<String> {
 fn init_ingot_graph(db: &mut DriverDataBase, ingot_url: &Url) -> bool {
     tracing::info!(target: "resolver", "Starting ingot resolution for: {}", ingot_url);
     let checkout_root = remote_checkout_root(ingot_url);
-    let mut handler = IngotHandler::new(db).with_verbose(resolver_verbose());
+    let mut handler = IngotHandler::new(db);
     let mut ingot_graph_resolver = GraphResolverImpl::new(ingot_resolver(checkout_root));
 
     // Root ingot resolution should never fail since directory existence is validated earlier.
@@ -151,11 +141,11 @@ fn init_ingot_graph(db: &mut DriverDataBase, ingot_url: &Url) -> bool {
         // Generate the tree display string
         let tree_display =
             DependencyTree::from_parts(cyclic_subgraph, ingot_url.clone(), configs, HashSet::new())
-                .display();
+                .display_to(common::color::ColorTarget::Stderr);
 
         let diag = IngotInitDiagnostics::IngotDependencyCycle { tree_display };
         tracing::warn!(target: "resolver", "{diag}");
-        eprintln!("❌ {diag}");
+        eprintln!("Error: {diag}");
         had_diagnostics = true;
     }
 
@@ -352,10 +342,10 @@ impl std::fmt::Display for IngotInitDiagnostics {
                 )
             }
             IngotInitDiagnostics::FileError { diagnostic } => {
-                write!(f, "File resolution error: {diagnostic}")
+                write!(f, "File resolution failed: {diagnostic}")
             }
             IngotInitDiagnostics::ConfigParseError { ingot_url, error } => {
-                write!(f, "Invalid fe.toml file in ingot {ingot_url}: {error}")
+                write!(f, "Invalid fe.toml in ingot {ingot_url}: {error}")
             }
             IngotInitDiagnostics::ConfigDiagnostics {
                 ingot_url,
@@ -364,11 +354,11 @@ impl std::fmt::Display for IngotInitDiagnostics {
                 if diagnostics.len() == 1 {
                     write!(
                         f,
-                        "Erroneous fe.toml file in {ingot_url}: {}",
+                        "Invalid fe.toml in ingot {ingot_url}: {}",
                         diagnostics[0]
                     )
                 } else {
-                    writeln!(f, "Erroneous fe.toml file in {ingot_url}:")?;
+                    writeln!(f, "Invalid fe.toml in ingot {ingot_url}:")?;
                     for diagnostic in diagnostics {
                         writeln!(f, "  • {diagnostic}")?;
                     }
@@ -388,11 +378,11 @@ impl std::fmt::Display for IngotInitDiagnostics {
                 if diagnostics.len() == 1 {
                     write!(
                         f,
-                        "Erroneous workspace fe.toml in {workspace_url}: {}",
+                        "Invalid workspace fe.toml in {workspace_url}: {}",
                         diagnostics[0]
                     )
                 } else {
-                    writeln!(f, "Erroneous workspace fe.toml in {workspace_url}:")?;
+                    writeln!(f, "Invalid workspace fe.toml in {workspace_url}:")?;
                     for diagnostic in diagnostics {
                         writeln!(f, "  • {diagnostic}")?;
                     }
@@ -403,7 +393,10 @@ impl std::fmt::Display for IngotInitDiagnostics {
                 workspace_url,
                 error,
             } => {
-                write!(f, "Workspace members error in {workspace_url}: {error}")
+                write!(
+                    f,
+                    "Failed to resolve workspace members in {workspace_url}: {error}"
+                )
             }
             IngotInitDiagnostics::WorkspaceMemberDuplicate {
                 workspace_url,
@@ -502,10 +495,10 @@ impl std::fmt::Display for IngotInitDiagnostics {
                 )
             }
             IngotInitDiagnostics::RemoteFileError { ingot_url, error } => {
-                write!(f, "Remote file error at {ingot_url}: {error}")
+                write!(f, "Remote file operation failed at {ingot_url}: {error}")
             }
             IngotInitDiagnostics::RemoteConfigParseError { ingot_url, error } => {
-                write!(f, "Invalid remote fe.toml file in {ingot_url}: {error}")
+                write!(f, "Invalid remote fe.toml in {ingot_url}: {error}")
             }
             IngotInitDiagnostics::RemoteConfigDiagnostics {
                 ingot_url,
@@ -514,11 +507,11 @@ impl std::fmt::Display for IngotInitDiagnostics {
                 if diagnostics.len() == 1 {
                     write!(
                         f,
-                        "Erroneous remote fe.toml file in {ingot_url}: {}",
+                        "Invalid remote fe.toml in {ingot_url}: {}",
                         diagnostics[0]
                     )
                 } else {
-                    writeln!(f, "Erroneous remote fe.toml file in {ingot_url}:")?;
+                    writeln!(f, "Invalid remote fe.toml in {ingot_url}:")?;
                     for diagnostic in diagnostics {
                         writeln!(f, "  • {diagnostic}")?;
                     }
