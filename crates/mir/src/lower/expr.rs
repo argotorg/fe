@@ -958,7 +958,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return_contains_capability,
         );
         let provider_space = self.effect_provider_space_for_provider_ty(ty);
-        let result_space = provider_space.unwrap_or_else(|| self.expr_address_space(expr));
+        let result_space = provider_space
+            .or(receiver_space.filter(|_| ty.as_capability(self.db).is_some()))
+            .unwrap_or_else(|| self.expr_address_space(expr));
 
         if matches!(
             callable_def.ingot(self.db).kind(self.db),
@@ -1134,7 +1136,17 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             None
         };
         if let Some(dest) = dest {
-            self.builder.body.locals[dest.index()].address_space = result_space;
+            let mut dest_space = result_space;
+            if dest_space == AddressSpaceKind::Memory
+                && let Some(space) = receiver_space
+                && space != AddressSpaceKind::Memory
+                && self.ty_contains_capability(ty)
+            {
+                // Preserve capability payload space for aggregate returns like
+                // `Option<mut T>`, while keeping the aggregate value repr itself unchanged.
+                dest_space = space;
+            }
+            self.builder.body.locals[dest.index()].address_space = dest_space;
         }
         let hir_target = crate::ir::HirCallTarget {
             callable_def: callable.callable_def,

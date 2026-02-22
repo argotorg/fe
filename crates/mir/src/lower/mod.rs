@@ -2523,6 +2523,45 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         self.value_address_space_or_memory_fallback(container)
     }
 
+    pub(super) fn ty_contains_capability(&self, ty: TyId<'db>) -> bool {
+        fn visit<'db>(
+            builder: &MirBuilder<'db, '_>,
+            ty: TyId<'db>,
+            seen: &mut FxHashSet<TyId<'db>>,
+        ) -> bool {
+            if !seen.insert(ty) {
+                return false;
+            }
+
+            if ty.as_capability(builder.db).is_some() {
+                return true;
+            }
+
+            if let Some(inner) = crate::repr::transparent_newtype_field_ty(builder.db, ty)
+                && visit(builder, inner, seen)
+            {
+                return true;
+            }
+
+            for arg in ty.generic_args(builder.db) {
+                if visit(builder, *arg, seen) {
+                    return true;
+                }
+            }
+
+            for field_ty in ty.field_types(builder.db) {
+                if visit(builder, field_ty, seen) {
+                    return true;
+                }
+            }
+
+            false
+        }
+
+        let mut seen = FxHashSet::default();
+        visit(self, ty, &mut seen)
+    }
+
     /// Associates a pattern with an address space.
     ///
     /// # Parameters
