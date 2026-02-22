@@ -1,0 +1,25 @@
+use std::evm::Create
+
+pub struct Pair {
+    x: u256,
+    y: u256,
+}
+
+pub contract Child {
+    state: Pair
+
+    init(x: u256, y: u256) uses (mut state) {
+        state.x = x
+        state.y = y
+    }
+}
+
+pub contract Parent uses (create: mut Create) {
+    state: Pair
+
+    init(x: u256, y: u256) uses (mut state, mut create) {
+        state.x = x
+        state.y = y
+        create.create<Child>(value: 0, args: (x, y))
+    }
+}

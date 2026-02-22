@@ -1021,17 +1021,6 @@ fn emit_contract_init_object(
     }
     components.push(YulDoc::block("code ", init_docs));
 
-    // Always emit the deployed object (if present) for the contract itself.
-    if entry.deployed_symbol.is_some() {
-        components.push(YulDoc::line(String::new()));
-        components.push(emit_contract_deployed_object(
-            name,
-            graph,
-            docs_by_symbol,
-            stack,
-        )?);
-    }
-
     // Emit direct region dependencies as children of the init object. These must be direct
     // children to satisfy Yul `dataoffset/datasize` scoping rules.
     let deps = graph.region_deps.get(&region).cloned().unwrap_or_default();
@@ -1044,6 +1033,18 @@ fn emit_contract_init_object(
     deps.sort();
     for dep in deps {
         components.push(emit_region_object(&dep, graph, docs_by_symbol, stack)?);
+    }
+
+    // Keep the runtime object last in initcode so `dataoffset(runtime) + datasize(runtime)`
+    // matches the true end of initcode and constructor args start immediately afterwards.
+    if entry.deployed_symbol.is_some() {
+        components.push(YulDoc::line(String::new()));
+        components.push(emit_contract_deployed_object(
+            name,
+            graph,
+            docs_by_symbol,
+            stack,
+        )?);
     }
 
     pop_region(stack, &region);
