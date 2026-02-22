@@ -58,6 +58,7 @@ ast_node! {
     pub struct ForStmt,
     SK::ForStmt
 }
+impl super::AttrListOwner for ForStmt {}
 impl ForStmt {
     /// Returns the pattern of the binding in the for loop.
     pub fn pat(&self) -> Option<super::Pat> {

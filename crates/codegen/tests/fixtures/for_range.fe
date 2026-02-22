@@ -1,0 +1,10 @@
+// For loop over a range
+pub fn for_range_sum() -> usize {
+    let mut sum: usize = 0
+    let start: usize = 0
+    let end: usize = 10
+    for i in start..end {
+        sum = sum + i
+    }
+    sum
+}

@@ -14,7 +14,7 @@ use hir::hir_def::TopLevelMod;
 use mir::{MirModule, layout, layout::TargetDataLayout, lower_ingot, lower_module};
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
-    BlockId, I256, Module, Signature, Type, ValueId,
+    BlockId, GlobalVariableRef, I256, Module, Signature, Type, ValueId,
     builder::{ModuleBuilder, Variable},
     func_cursor::InstInserter,
     inst::{control_flow::Call, evm::EvmStop},
@@ -393,6 +393,10 @@ struct ModuleLowerer<'db, 'a> {
     gep_type_cache: FxHashMap<String, Option<Type>>,
     /// Counter for generating unique sonatina struct type names.
     gep_name_counter: usize,
+    /// Global variables registered for constant aggregate data sections.
+    data_globals: Vec<GlobalVariableRef>,
+    /// Counter for generating unique data global names.
+    data_global_counter: usize,
 }
 
 impl<'db, 'a> ModuleLowerer<'db, 'a> {
@@ -418,6 +422,8 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             entry_func_idxs: FxHashSet::default(),
             gep_type_cache: FxHashMap::default(),
             gep_name_counter: 0,
+            data_globals: Vec::new(),
+            data_global_counter: 0,
         }
     }
 
@@ -426,11 +432,14 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         // First pass: declare runtime-relevant functions.
         self.declare_functions()?;
 
-        // Second pass: create objects for codegen (select entry + section layout).
-        self.create_objects()?;
+        // Identify entry functions so lowering can emit evm_stop for entries.
+        self.identify_entry_functions()?;
 
-        // Third pass: lower function bodies that are actually declared/included.
+        // Second pass: lower function bodies (populates data_globals).
         self.lower_functions()?;
+
+        // Third pass: create objects with data directives (needs data_globals).
+        self.create_objects()?;
 
         Ok(())
     }
@@ -564,6 +573,39 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         Ok(())
     }
 
+    /// Identify which functions are contract entry points so their Return
+    /// terminators can be lowered as `evm_stop`. Must run before `lower_functions`.
+    fn identify_entry_functions(&mut self) -> Result<(), LowerError> {
+        use mir::analysis::build_contract_graph;
+
+        let contract_graph = build_contract_graph(&self.mir.functions);
+        if contract_graph.contracts.is_empty() {
+            return Ok(());
+        }
+
+        let mut func_idx_by_symbol: FxHashMap<&str, usize> = FxHashMap::default();
+        for (idx, func) in self.mir.functions.iter().enumerate() {
+            if self.func_map.contains_key(&idx) {
+                func_idx_by_symbol.insert(func.symbol_name.as_str(), idx);
+            }
+        }
+
+        for info in contract_graph.contracts.values() {
+            if let Some(symbol) = info.deployed_symbol.as_deref()
+                && let Some(&idx) = func_idx_by_symbol.get(symbol)
+            {
+                self.entry_func_idxs.insert(idx);
+            }
+            if let Some(symbol) = info.init_symbol.as_deref()
+                && let Some(&idx) = func_idx_by_symbol.get(symbol)
+            {
+                self.entry_func_idxs.insert(idx);
+            }
+        }
+
+        Ok(())
+    }
+
     /// Create Sonatina objects for the module.
     ///
     /// Objects define how code is organized for compilation. Each object
@@ -597,7 +639,10 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
 
         let entry_ref = self.func_map[&entry_idx];
         let wrapper_ref = self.create_entry_wrapper(entry_ref, entry_mir_func)?;
-        let directives = vec![Directive::Entry(wrapper_ref)];
+        let mut directives = vec![Directive::Entry(wrapper_ref)];
+        for &gv in &self.data_globals {
+            directives.push(Directive::Data(gv));
+        }
 
         let object = Object {
             name: ObjectName::from("Contract"),
@@ -620,14 +665,6 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
     ) -> Result<(), LowerError> {
         use mir::analysis::{ContractRegion, ContractRegionKind};
         use std::collections::VecDeque;
-
-        let mut func_idx_by_symbol: FxHashMap<&str, usize> = FxHashMap::default();
-        for (idx, func) in self.mir.functions.iter().enumerate() {
-            if !self.func_map.contains_key(&idx) {
-                continue;
-            }
-            func_idx_by_symbol.insert(func.symbol_name.as_str(), idx);
-        }
 
         let select_primary_contract = || -> Result<String, LowerError> {
             // Pick a primary contract to compile:
@@ -745,13 +782,6 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                         "unknown contract runtime entrypoint symbol: `{runtime_symbol}`"
                     ))
                 })?;
-                let runtime_idx = *func_idx_by_symbol.get(runtime_symbol).ok_or_else(|| {
-                    LowerError::Internal(format!(
-                        "unknown contract runtime entrypoint index: `{runtime_symbol}`"
-                    ))
-                })?;
-                self.entry_func_idxs.insert(runtime_idx);
-
                 let region = ContractRegion {
                     contract_name: contract_name.clone(),
                     kind: ContractRegionKind::Deployed,
@@ -762,6 +792,9 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                     .cloned()
                     .unwrap_or_default();
                 let mut directives = vec![Directive::Entry(runtime_ref)];
+                for &gv in &self.data_globals {
+                    directives.push(Directive::Data(gv));
+                }
                 directives.extend(Self::build_embed_directives(
                     &contract_name,
                     ContractRegionKind::Deployed,
@@ -784,13 +817,6 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                         "unknown contract init entrypoint symbol: `{init_symbol}`"
                     ))
                 })?;
-                let init_idx = *func_idx_by_symbol.get(init_symbol).ok_or_else(|| {
-                    LowerError::Internal(format!(
-                        "unknown contract init entrypoint index: `{init_symbol}`"
-                    ))
-                })?;
-                self.entry_func_idxs.insert(init_idx);
-
                 let region = ContractRegion {
                     contract_name: contract_name.clone(),
                     kind: ContractRegionKind::Init,
@@ -811,6 +837,9 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 }
 
                 let mut directives = vec![Directive::Entry(init_ref)];
+                for &gv in &self.data_globals {
+                    directives.push(Directive::Data(gv));
+                }
                 directives.extend(Self::build_embed_directives(
                     &contract_name,
                     ContractRegionKind::Init,
@@ -1096,6 +1125,8 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 is_entry,
                 gep_type_cache: &mut self.gep_type_cache,
                 gep_name_counter: &mut self.gep_name_counter,
+                data_globals: &mut self.data_globals,
+                data_global_counter: &mut self.data_global_counter,
             };
 
             for (idx, block) in ctx.body.blocks.iter().enumerate() {
@@ -1134,4 +1165,8 @@ pub(super) struct LowerCtx<'a, 'db, C: sonatina_ir::func_cursor::FuncCursor> {
     pub(super) gep_type_cache: &'a mut FxHashMap<String, Option<Type>>,
     /// Counter for generating unique sonatina struct type names.
     pub(super) gep_name_counter: &'a mut usize,
+    /// Collected global variable refs for constant aggregate data sections.
+    pub(super) data_globals: &'a mut Vec<GlobalVariableRef>,
+    /// Counter for generating unique data global names.
+    pub(super) data_global_counter: &'a mut usize,
 }

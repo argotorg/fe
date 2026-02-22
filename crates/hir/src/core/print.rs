@@ -934,13 +934,19 @@ impl<'db> Stmt<'db> {
                 result
             }
 
-            Stmt::For(pat, iter, body_expr) => {
+            Stmt::For(pat, iter, body_expr, unroll) => {
                 let pat = unwrap_partial_ref(pat.data(db, body), "For::pat");
                 let iter_expr = unwrap_partial_ref(iter.data(db, body), "For::iter");
                 let body_block = unwrap_partial_ref(body_expr.data(db, body), "For::body");
 
+                let prefix = match unroll {
+                    Some(true) => "#[unroll]\n",
+                    Some(false) => "#[no_unroll]\n",
+                    None => "",
+                };
                 format!(
-                    "for {} in {} {}",
+                    "{}for {} in {} {}",
+                    prefix,
                     pat.pretty_print(db, body),
                     iter_expr.pretty_print(db, body, indent),
                     body_block.pretty_print(db, body, indent)

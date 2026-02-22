@@ -9,13 +9,20 @@ pub enum Stmt<'db> {
     /// second `Option<TypeId>` is the type annotation, and the third
     /// `Option<ExprId>` is the expression for initialization.
     Let(PatId, Option<TypeId<'db>>, Option<ExprId>),
+    /// For loop statement.
+    ///
     /// The first `PatId` is the pattern for binding which can be used in the
     /// for-loop body.
     ///
     /// The second `ExprId` is the iterable expression.
     ///
     /// The third `ExprId` is the for-loop body.
-    For(PatId, ExprId, ExprId),
+    ///
+    /// The fourth field is the unroll hint:
+    /// - `None`: no attribute, use auto-unroll heuristics (unroll if < 10 iterations)
+    /// - `Some(true)`: #[unroll] attribute forces unrolling
+    /// - `Some(false)`: #[no_unroll] attribute prevents unrolling
+    For(PatId, ExprId, ExprId, Option<bool>),
 
     /// The first `ExprId` is the condition of the while-loop.
     /// The second `ExprId` is the body of the while-loop.

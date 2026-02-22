@@ -1880,7 +1880,8 @@ impl<'db, 'a> Borrowck<'db, 'a> {
             Rvalue::ZeroInit
             | Rvalue::Call(_)
             | Rvalue::Intrinsic { .. }
-            | Rvalue::Alloc { .. } => LocalLoanState::default(),
+            | Rvalue::Alloc { .. }
+            | Rvalue::ConstAggregate { .. } => LocalLoanState::default(),
         }
     }
 
@@ -2865,7 +2866,7 @@ fn locals_used_by_inst<'db>(body: &MirBody<'db>, inst: &MirInst<'db>) -> FxHashS
     let mut out = FxHashSet::default();
     match inst {
         MirInst::Assign { rvalue, .. } => match rvalue {
-            Rvalue::ZeroInit | Rvalue::Alloc { .. } => {}
+            Rvalue::ZeroInit | Rvalue::Alloc { .. } | Rvalue::ConstAggregate { .. } => {}
             Rvalue::Value(value) => collect_locals_in_value(body, *value, &mut out),
             Rvalue::Call(call) => {
                 for_each_call_arg(call, |arg| collect_locals_in_value(body, arg, &mut out));
@@ -3047,7 +3048,10 @@ fn value_operands_in_inst(inst: &MirInst<'_>) -> Vec<ValueId> {
                 out
             }
             Rvalue::Intrinsic { args, .. } => args.clone(),
-            Rvalue::Load { .. } | Rvalue::ZeroInit | Rvalue::Alloc { .. } => Vec::new(),
+            Rvalue::Load { .. }
+            | Rvalue::ZeroInit
+            | Rvalue::Alloc { .. }
+            | Rvalue::ConstAggregate { .. } => Vec::new(),
         },
         MirInst::Store { value, .. } => vec![*value],
         MirInst::InitAggregate { inits, .. } => inits.iter().map(|(_, v)| *v).collect(),
@@ -3105,7 +3109,7 @@ fn borrow_values_in_inst<'db>(body: &MirBody<'db>, inst: &MirInst<'db>) -> FxHas
                     collect_borrow_values(body, *arg, &mut out);
                 }
             }
-            Rvalue::ZeroInit | Rvalue::Alloc { .. } => {}
+            Rvalue::ZeroInit | Rvalue::Alloc { .. } | Rvalue::ConstAggregate { .. } => {}
         },
         MirInst::Store { place, value, .. } => {
             collect_borrow_values(body, place.base, &mut out);
@@ -3171,7 +3175,7 @@ fn move_places_in_inst<'db>(
                     collect_move_places(body, *arg, &mut out);
                 }
             }
-            Rvalue::ZeroInit | Rvalue::Alloc { .. } => {}
+            Rvalue::ZeroInit | Rvalue::Alloc { .. } | Rvalue::ConstAggregate { .. } => {}
         },
         MirInst::Store { place, value, .. } => {
             collect_move_places(body, place.base, &mut out);

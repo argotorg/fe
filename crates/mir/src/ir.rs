@@ -390,6 +390,18 @@ pub enum Rvalue<'db> {
     Load { place: Place<'db> },
     /// Allocate an address in the given address space.
     Alloc { address_space: AddressSpaceKind },
+    /// Backend-neutral constant aggregate data.
+    ///
+    /// Pre-computed constant bytes (e.g., constant array literals) that backends
+    /// materialize however they choose:
+    /// - Yul: emit as data sections + datacopy
+    /// - Sonatina: inline mstore sequence or memcpy
+    ConstAggregate {
+        /// Raw constant bytes in big-endian EVM word format.
+        data: Vec<u8>,
+        /// The aggregate type being initialized.
+        ty: TyId<'db>,
+    },
 }
 
 /// Control-flow terminating instruction.
@@ -479,6 +491,17 @@ pub struct LoopInfo {
     pub body: BasicBlockId,
     pub exit: BasicBlockId,
     pub backedge: Option<BasicBlockId>,
+    /// Optional block containing the loop initialization (e.g., iterator variable init for for-loops).
+    /// If present, this block's instructions are rendered as the Yul for-loop init section.
+    pub init_block: Option<BasicBlockId>,
+    /// Optional block containing the post-iteration code (e.g., increment for for-loops).
+    /// If present, this block's instructions are rendered as the Yul for-loop post section.
+    pub post_block: Option<BasicBlockId>,
+    /// Unroll hint from source attributes: `Some(true)` = `#[unroll]`, `Some(false)` = `#[no_unroll]`, `None` = auto.
+    pub unroll_hint: Option<bool>,
+    /// Statically-known trip count, if the iterator length is a compile-time constant.
+    /// Backends use this together with `unroll_hint` to decide whether to unroll.
+    pub trip_count: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -559,6 +582,7 @@ pub enum SyntheticValue {
     /// Byte string literal encoded as a `0x...` word.
     ///
     /// This is a stopgap representation: the literal is emitted inline as a numeric constant.
+    /// Only suitable for data that fits in a single EVM word (≤32 bytes).
     Bytes(Vec<u8>),
 }
 

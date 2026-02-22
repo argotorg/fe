@@ -193,6 +193,9 @@ fn format_rvalue(body: &MirBody<'_>, rvalue: &Rvalue<'_>) -> String {
             };
             format!("alloc {space}")
         }
+        Rvalue::ConstAggregate { data, .. } => {
+            format!("const_aggregate ({} bytes)", data.len())
+        }
     }
 }
 
