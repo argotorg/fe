@@ -395,6 +395,10 @@ struct ModuleLowerer<'db, 'a> {
     gep_name_counter: usize,
     /// Global variables registered for constant aggregate data sections.
     data_globals: Vec<GlobalVariableRef>,
+    /// Data globals keyed by function symbol that introduced them.
+    ///
+    /// Used to scope section directives to region-reachable functions only.
+    data_globals_by_symbol: FxHashMap<String, Vec<GlobalVariableRef>>,
     /// Counter for generating unique data global names.
     data_global_counter: usize,
 }
@@ -423,6 +427,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             gep_type_cache: FxHashMap::default(),
             gep_name_counter: 0,
             data_globals: Vec::new(),
+            data_globals_by_symbol: FxHashMap::default(),
             data_global_counter: 0,
         }
     }
@@ -602,8 +607,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 .into_iter()
                 .next()
                 .or_else(|| {
-                    let mut names: Vec<String> =
-                        contract_graph.contracts.keys().cloned().collect();
+                    let mut names: Vec<String> = contract_graph.contracts.keys().cloned().collect();
                     names.sort();
                     names.into_iter().next()
                 })
@@ -803,7 +807,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                     .cloned()
                     .unwrap_or_default();
                 let mut directives = vec![Directive::Entry(runtime_ref)];
-                for &gv in &self.data_globals {
+                for gv in self.reachable_data_globals_for_region(contract_graph, &region) {
                     directives.push(Directive::Data(gv));
                 }
                 directives.extend(Self::build_embed_directives(
@@ -848,7 +852,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 }
 
                 let mut directives = vec![Directive::Entry(init_ref)];
-                for &gv in &self.data_globals {
+                for gv in self.reachable_data_globals_for_region(contract_graph, &region) {
                     directives.push(Directive::Data(gv));
                 }
                 directives.extend(Self::build_embed_directives(
@@ -879,6 +883,33 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         }
 
         Ok(())
+    }
+
+    /// Collects constant-data globals used by functions reachable from `region`.
+    fn reachable_data_globals_for_region(
+        &self,
+        contract_graph: &mir::analysis::ContractGraph,
+        region: &mir::analysis::ContractRegion,
+    ) -> Vec<GlobalVariableRef> {
+        let Some(reachable_symbols) = contract_graph.region_reachable.get(region) else {
+            return Vec::new();
+        };
+
+        let mut symbols: Vec<_> = reachable_symbols.iter().cloned().collect();
+        symbols.sort();
+
+        let mut globals = Vec::new();
+        let mut seen = FxHashSet::default();
+        for symbol in symbols {
+            if let Some(symbol_globals) = self.data_globals_by_symbol.get(&symbol) {
+                for &gv in symbol_globals {
+                    if seen.insert(gv) {
+                        globals.push(gv);
+                    }
+                }
+            }
+        }
+        globals
     }
 
     fn build_embed_directives(
@@ -1041,6 +1072,8 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         func: &mir::MirFunction<'db>,
         is_entry: bool,
     ) -> Result<(), LowerError> {
+        let data_globals_before = self.data_globals.len();
+
         let mut fb = self.builder.func_builder::<InstInserter>(func_ref);
         let is = self.isa.inst_set();
 
@@ -1155,6 +1188,13 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             ctx.fb.seal_all();
         }
         fb.finish();
+
+        if self.data_globals.len() > data_globals_before {
+            self.data_globals_by_symbol.insert(
+                func.symbol_name.clone(),
+                self.data_globals[data_globals_before..].to_vec(),
+            );
+        }
 
         Ok(())
     }
