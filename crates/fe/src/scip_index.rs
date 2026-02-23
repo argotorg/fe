@@ -80,22 +80,6 @@ fn relative_path(project_root: &Utf8Path, doc_url: &url::Url) -> Option<String> 
     Some(relative.to_string())
 }
 
-fn build_symbol_documentation(db: &driver::DriverDataBase, item: ItemKind) -> Vec<String> {
-    let docs = index_util::item_docs(db, item);
-    let mut parts = Vec::new();
-    if let Some(signature) = docs.signature {
-        parts.push(format!("```fe\n{signature}\n```"));
-    }
-    if let Some(doc) = docs.docstring {
-        parts.push(doc);
-    }
-    if parts.is_empty() {
-        Vec::new()
-    } else {
-        vec![parts.join("\n\n")]
-    }
-}
-
 fn item_descriptor_suffix(item: ItemKind<'_>) -> descriptor::Suffix {
     match item {
         ItemKind::Struct(_) | ItemKind::Enum(_) | ItemKind::Trait(_) => descriptor::Suffix::Type,
@@ -217,7 +201,7 @@ pub fn generate_scip(
                 if doc.seen_symbols.insert(symbol.clone()) {
                     doc.symbols.push(types::SymbolInformation {
                         symbol: symbol.clone(),
-                        documentation: build_symbol_documentation(db, item),
+                        documentation: index_util::hover_parts(db, item).to_scip_documentation(),
                         relationships: Vec::new(),
                         kind: item_symbol_kind(item).into(),
                         display_name,

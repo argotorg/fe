@@ -97,3 +97,46 @@ pub(crate) fn item_docs(db: &driver::DriverDataBase, item: ItemKind) -> SymbolDo
         docstring: sym.docs(db),
     }
 }
+
+/// Structured hover documentation, ready for format-specific rendering.
+pub(crate) struct HoverParts {
+    pub signature: Option<String>,
+    pub docstring: Option<String>,
+}
+
+/// Build hover documentation parts for an item.
+pub(crate) fn hover_parts(db: &driver::DriverDataBase, item: ItemKind) -> HoverParts {
+    let docs = item_docs(db, item);
+    HoverParts {
+        signature: docs.signature,
+        docstring: docs.docstring,
+    }
+}
+
+impl HoverParts {
+    /// Format for SCIP: signature in ` ```fe ` fence, joined with docstring.
+    pub fn to_scip_documentation(&self) -> Vec<String> {
+        let mut parts = Vec::new();
+        if let Some(sig) = &self.signature {
+            parts.push(format!("```fe\n{sig}\n```"));
+        }
+        if let Some(doc) = &self.docstring {
+            parts.push(doc.clone());
+        }
+        if parts.is_empty() {
+            Vec::new()
+        } else {
+            vec![parts.join("\n\n")]
+        }
+    }
+
+    /// Format for LSIF: raw signature + docstring.
+    pub fn to_lsif_hover(&self) -> Option<String> {
+        let sig = self.signature.as_ref()?;
+        if let Some(doc) = &self.docstring {
+            Some(format!("{sig}\n\n{doc}"))
+        } else {
+            Some(sig.clone())
+        }
+    }
+}

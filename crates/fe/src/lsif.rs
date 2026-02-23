@@ -198,18 +198,6 @@ impl<W: Write> LsifEmitter<W> {
     }
 }
 
-/// Build hover content for an item (definition + docstring) using SymbolView.
-fn build_hover_content(db: &driver::DriverDataBase, item: ItemKind) -> Option<String> {
-    let docs = index_util::item_docs(db, item);
-    let signature = docs.signature?;
-
-    if let Some(doc) = docs.docstring {
-        Some(format!("{signature}\n\n{doc}"))
-    } else {
-        Some(signature)
-    }
-}
-
 /// Run LSIF generation on a project.
 pub fn generate_lsif(
     db: &mut driver::DriverDataBase,
@@ -287,7 +275,7 @@ pub fn generate_lsif(
             emitter.emit_edge_many("item", def_result_id, &[range_id], Some(doc_id))?;
 
             // Hover result
-            if let Some(hover_content) = build_hover_content(db, item) {
+            if let Some(hover_content) = index_util::hover_parts(db, item).to_lsif_hover() {
                 let hover_id = emitter.emit_hover_result(&hover_content)?;
                 emitter.emit_edge("textDocument/hover", result_set_id, hover_id)?;
             }
