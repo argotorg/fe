@@ -142,6 +142,19 @@ pub fn emit_module_sonatina_ir(
     Ok(writer.dump_string())
 }
 
+/// Compiles a Fe module to optimized Sonatina IR and returns the human-readable text representation.
+///
+/// Optimization level and contract selection match [`emit_module_sonatina_bytecode`].
+pub fn emit_module_sonatina_ir_optimized(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+    opt_level: OptLevel,
+    contract: Option<&str>,
+) -> Result<String, LowerError> {
+    let mir_module = lower_module(db, top_mod)?;
+    emit_mir_module_sonatina_ir_optimized(db, &mir_module, opt_level, contract)
+}
+
 /// Compiles a Fe module to Sonatina IR and returns a validation report.
 ///
 /// This is intended for debugging malformed IR: it checks that every `ValueId` used as an operand
@@ -189,44 +202,11 @@ fn emit_mir_module_sonatina_bytecode<'db>(
     opt_level: OptLevel,
     contract: Option<&str>,
 ) -> Result<BTreeMap<String, SonatinaContractBytecode>, LowerError> {
-    use mir::analysis::build_contract_graph;
     use sonatina_codegen::isa::evm::EvmBackend;
     use sonatina_codegen::object::{CompileOptions, compile_object};
 
-    let contract_graph = build_contract_graph(&mir_module.functions);
-    let mut contract_names: Vec<String> = contract_graph.contracts.keys().cloned().collect();
-    contract_names.sort();
-
-    if let Some(contract) = contract
-        && !contract_graph.contracts.contains_key(contract)
-    {
-        return Err(LowerError::Internal(format!(
-            "contract `{contract}` not found"
-        )));
-    }
-
-    let target_contracts: Vec<String> = match contract {
-        Some(name) => vec![name.to_string()],
-        None => contract_names,
-    };
-
-    let selection = match contract {
-        Some(name) => ContractObjectSelection::RootAndDeps(name.to_string()),
-        None => ContractObjectSelection::All,
-    };
-
-    let mut module = compile_mir_module(db, mir_module, layout::EVM_LAYOUT, selection)?;
-    ensure_module_sonatina_ir_valid(&module)?;
-
-    // Run the optimization pipeline based on opt_level.
-    match opt_level {
-        OptLevel::O0 => { /* no optimization */ }
-        OptLevel::O1 => sonatina_codegen::optim::Pipeline::balanced().run(&mut module),
-        OptLevel::O2 => sonatina_codegen::optim::Pipeline::aggressive().run(&mut module),
-    }
-    if opt_level != OptLevel::O0 {
-        ensure_module_sonatina_ir_valid(&module)?;
-    }
+    let (module, target_contracts) =
+        compile_mir_module_for_sonatina_output(db, mir_module, opt_level, contract)?;
 
     let isa = create_evm_isa();
     let backend = EvmBackend::new(isa);
@@ -273,6 +253,63 @@ fn emit_mir_module_sonatina_bytecode<'db>(
     }
 
     Ok(out)
+}
+
+/// Compiles a lowered MIR module to optimized Sonatina IR.
+pub fn emit_mir_module_sonatina_ir_optimized<'db>(
+    db: &'db DriverDataBase,
+    mir_module: &MirModule<'db>,
+    opt_level: OptLevel,
+    contract: Option<&str>,
+) -> Result<String, LowerError> {
+    let (module, _) = compile_mir_module_for_sonatina_output(db, mir_module, opt_level, contract)?;
+    let mut writer = ModuleWriter::new(&module);
+    Ok(writer.dump_string())
+}
+
+fn compile_mir_module_for_sonatina_output<'db>(
+    db: &'db DriverDataBase,
+    mir_module: &MirModule<'db>,
+    opt_level: OptLevel,
+    contract: Option<&str>,
+) -> Result<(Module, Vec<String>), LowerError> {
+    use mir::analysis::build_contract_graph;
+
+    let contract_graph = build_contract_graph(&mir_module.functions);
+    let mut contract_names: Vec<String> = contract_graph.contracts.keys().cloned().collect();
+    contract_names.sort();
+
+    if let Some(contract) = contract
+        && !contract_graph.contracts.contains_key(contract)
+    {
+        return Err(LowerError::Internal(format!(
+            "contract `{contract}` not found"
+        )));
+    }
+
+    let target_contracts: Vec<String> = match contract {
+        Some(name) => vec![name.to_string()],
+        None => contract_names,
+    };
+
+    let selection = match contract {
+        Some(name) => ContractObjectSelection::RootAndDeps(name.to_string()),
+        None => ContractObjectSelection::All,
+    };
+
+    let mut module = compile_mir_module(db, mir_module, layout::EVM_LAYOUT, selection)?;
+    ensure_module_sonatina_ir_valid(&module)?;
+
+    match opt_level {
+        OptLevel::O0 => {}
+        OptLevel::O1 => sonatina_codegen::optim::Pipeline::balanced().run(&mut module),
+        OptLevel::O2 => sonatina_codegen::optim::Pipeline::aggressive().run(&mut module),
+    }
+    if opt_level != OptLevel::O0 {
+        ensure_module_sonatina_ir_valid(&module)?;
+    }
+
+    Ok((module, target_contracts))
 }
 
 pub(crate) fn ensure_module_sonatina_ir_valid(module: &Module) -> Result<(), LowerError> {
