@@ -12,6 +12,7 @@ pub mod escape;
 pub mod highlight;
 pub mod markdown;
 pub mod model;
+pub mod starlight;
 pub mod static_site;
 
 #[cfg(feature = "wasm")]
