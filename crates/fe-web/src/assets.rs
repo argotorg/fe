@@ -17,6 +17,10 @@ pub const FE_SIGNATURE_JS: &str = include_str!("../assets/fe-signature.js");
 /// `<fe-search>` custom element.
 pub const FE_SEARCH_JS: &str = include_str!("../assets/fe-search.js");
 
+/// Standalone syntax highlighting CSS (hardcoded colors, no CSS variables).
+/// For embedding in Starlight/Astro or any external site.
+pub const FE_HIGHLIGHT_CSS: &str = include_str!("../assets/fe-highlight.css");
+
 /// Generate the complete HTML shell for a static documentation site.
 ///
 /// The `doc_index_json` is inlined into a `<script>` tag so the page works
