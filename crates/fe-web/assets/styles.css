@@ -236,7 +236,7 @@ body {
     color: var(--text);
 }
 
-/* Type links in signatures */
+/* Type links in signatures and code blocks */
 .type-link {
     color: var(--accent);
     text-decoration: none;
@@ -244,6 +244,16 @@ body {
 
 .type-link:hover {
     color: var(--accent-hover);
+    text-decoration: underline;
+}
+
+a.hl-type.type-link {
+    color: var(--accent);
+    text-decoration: none;
+    cursor: pointer;
+}
+
+a.hl-type.type-link:hover {
     text-decoration: underline;
 }
 

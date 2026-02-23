@@ -2,12 +2,13 @@
 //!
 //! Produces a single `index.html` that works with `file://` — no server needed.
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use crate::assets;
 use crate::highlight::highlight_fe;
 use crate::markdown::render_markdown;
-use crate::model::DocIndex;
+use crate::model::{DocIndex, DocItemKind};
 
 pub struct StaticSiteGenerator;
 
@@ -37,9 +38,11 @@ impl StaticSiteGenerator {
         let mut value = serde_json::to_value(index)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
 
-        // Pre-render markdown bodies and syntax-highlight signatures
+        // Pre-render markdown bodies, syntax-highlight signatures, and link types
+        let type_links = build_type_links(index);
         inject_html_bodies(&mut value);
         inject_highlighted_signatures(&mut value);
+        inject_type_links(&mut value, &type_links);
 
         let json = serde_json::to_string(&value)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
@@ -109,6 +112,105 @@ pub fn inject_highlighted_signatures(value: &mut serde_json::Value) {
         }
         _ => {}
     }
+}
+
+/// Build a map of type names to their doc URL paths from the index.
+///
+/// Only includes linkable types (structs, enums, traits, contracts, type aliases).
+pub fn build_type_links(index: &DocIndex) -> HashMap<String, String> {
+    let mut links = HashMap::new();
+    for item in &index.items {
+        match item.kind {
+            DocItemKind::Struct
+            | DocItemKind::Enum
+            | DocItemKind::Trait
+            | DocItemKind::Contract
+            | DocItemKind::TypeAlias => {
+                links.insert(item.name.clone(), item.url_path());
+            }
+            _ => {}
+        }
+    }
+    links
+}
+
+/// Walk the JSON and replace `<span class="hl-type">Name</span>` with
+/// `<a href="#url" class="hl-type type-link">Name</a>` for known types.
+///
+/// Processes `highlighted_signature` and `html_body` fields.
+pub fn inject_type_links(value: &mut serde_json::Value, type_links: &HashMap<String, String>) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for key in ["highlighted_signature", "html_body"] {
+                if let Some(html) = map.get(key).and_then(|v| v.as_str()) {
+                    let linked = link_types_in_html(html, type_links);
+                    if linked != html {
+                        map.insert(key.to_string(), serde_json::Value::String(linked));
+                    }
+                }
+            }
+            for v in map.values_mut() {
+                inject_type_links(v, type_links);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr {
+                inject_type_links(v, type_links);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Replace type-highlighted spans with anchor links for known types.
+fn link_types_in_html(html: &str, type_links: &HashMap<String, String>) -> String {
+    // tree-sitter HtmlRenderer emits a double space: `<span  class=`
+    const PREFIX: &str = "<span  class=\"hl-type\">";
+    const SUFFIX: &str = "</span>";
+
+    let mut result = String::with_capacity(html.len());
+    let mut pos = 0;
+    let bytes = html.as_bytes();
+
+    while pos < html.len() {
+        if let Some(start) = html[pos..].find(PREFIX) {
+            let abs_start = pos + start;
+            let text_start = abs_start + PREFIX.len();
+
+            if let Some(end_offset) = html[text_start..].find(SUFFIX) {
+                let text = &html[text_start..text_start + end_offset];
+                let span_end = text_start + end_offset + SUFFIX.len();
+
+                // Only link plain identifiers (no nested HTML)
+                if !text.contains('<') {
+                    if let Some(url) = type_links.get(text) {
+                        result.push_str(&html[pos..abs_start]);
+                        result.push_str("<a href=\"#");
+                        result.push_str(url);
+                        result.push_str("\" class=\"hl-type type-link\">");
+                        result.push_str(text);
+                        result.push_str("</a>");
+                        pos = span_end;
+                        continue;
+                    }
+                }
+
+                // Not a known type — keep original span
+                result.push_str(&html[pos..span_end]);
+                pos = span_end;
+            } else {
+                // Unclosed span, copy rest
+                result.push_str(&html[pos..]);
+                return result;
+            }
+        } else {
+            result.push_str(&html[pos..]);
+            return result;
+        }
+    }
+
+    let _ = bytes; // suppress unused warning
+    result
 }
 
 /// Derive a title from the index (use the root module name if available).
@@ -205,6 +307,59 @@ mod tests {
         assert!(json.contains("highlighted_signature"), "should inject highlighted_signature");
         // "pub struct Greeter" should produce a keyword span for "struct"
         assert!(json.contains("hl-keyword"), "should have keyword highlight: {json}");
+    }
+
+    #[test]
+    fn link_types_in_html_replaces_known_types() {
+        let mut links = HashMap::new();
+        links.insert("Greeter".to_string(), "mylib::Greeter/struct".to_string());
+
+        // tree-sitter HtmlRenderer uses double space between <span and class
+        let html = "<span  class=\"hl-keyword\">pub</span> <span  class=\"hl-keyword\">struct</span> <span  class=\"hl-type\">Greeter</span>";
+        let result = link_types_in_html(html, &links);
+
+        assert!(result.contains("type-link"), "should have type-link class: {result}");
+        assert!(result.contains("<a href="), "should have anchor tag: {result}");
+        assert!(result.contains("Greeter</a>"), "should wrap Greeter in link: {result}");
+        assert!(result.contains("hl-keyword"), "should preserve non-type spans: {result}");
+    }
+
+    #[test]
+    fn link_types_skips_unknown_types() {
+        let links = HashMap::new();
+        let html = "<span  class=\"hl-type\">Unknown</span>";
+        let result = link_types_in_html(html, &links);
+        assert_eq!(result, html, "should not modify unknown types");
+    }
+
+    #[test]
+    fn inject_type_links_processes_highlighted_signature() {
+        let mut index = sample_index();
+        // Add a second item so the first can reference it
+        index.add_item(DocItem {
+            path: "mylib::Name".into(),
+            name: "Name".into(),
+            kind: DocItemKind::Struct,
+            visibility: DocVisibility::Public,
+            docs: None,
+            signature: "pub struct Name".into(),
+            rich_signature: vec![],
+            generics: vec![],
+            where_bounds: vec![],
+            children: vec![],
+            source: None,
+            trait_impls: vec![],
+            implementors: vec![],
+        });
+
+        let type_links = build_type_links(&index);
+        let mut value = serde_json::to_value(&index).unwrap();
+        inject_highlighted_signatures(&mut value);
+        inject_type_links(&mut value, &type_links);
+
+        let json = serde_json::to_string(&value).unwrap();
+        // "Greeter" appears as hl-type in "pub struct Greeter" → should be linked
+        assert!(json.contains("type-link"), "should have type links in highlighted signatures: {json}");
     }
 
     #[test]
