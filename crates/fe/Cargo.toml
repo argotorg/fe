@@ -5,7 +5,7 @@ edition.workspace = true
 
 [features]
 default = ["doc-server", "lsp"]
-doc-server = ["dep:tokio", "doc-viewer/ssr"]
+doc-server = ["dep:tokio", "dep:axum"]
 lsp = ["dep:language-server", "dep:tokio"]
 vendored-openssl = ["resolver/vendored-openssl"]
 
@@ -29,8 +29,8 @@ contract-harness = { path = "../contract-harness", package = "fe-contract-harnes
 solc-runner = { path = "../solc-runner", package = "fe-solc-runner" }
 # doc-engine for extraction only
 doc-engine = { path = "../doc-engine", package = "fe-doc-engine" }
-# doc-viewer for server and model
-doc-viewer = { path = "../doc-viewer", package = "fe-doc-viewer" }
+# fe-web for model, assets, and static site generation
+fe-web = { path = "../fe-web" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1"
 fmt.workspace = true
@@ -43,6 +43,7 @@ glob.workspace = true
 scip = "0.6.1"
 language-server = { workspace = true, optional = true }
 tokio = { version = "1.43.0", features = ["full"], optional = true }
+axum = { version = "0.8", optional = true }
 
 [dev-dependencies]
 dir-test.workspace = true

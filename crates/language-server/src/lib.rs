@@ -1,6 +1,5 @@
 mod backend;
 pub mod cli;
-mod doc_server;
 mod fallback;
 mod functionality;
 pub mod logging;

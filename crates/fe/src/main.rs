@@ -2,6 +2,8 @@
 mod check;
 mod cli;
 mod doc;
+#[cfg(feature = "doc-server")]
+mod doc_serve;
 mod lsif;
 mod report;
 mod scip_index;
@@ -87,9 +89,9 @@ pub enum Command {
         /// Port for HTTP server (default: 8080)
         #[arg(long, default_value = "8080")]
         port: u16,
-        /// Use client-side rendering with WASM (experimental)
-        #[arg(long)]
-        csr: bool,
+        /// Generate a static HTML documentation site
+        #[arg(long = "static")]
+        static_site: bool,
     },
     #[cfg(not(target_arch = "wasm32"))]
     Tree {
@@ -308,9 +310,9 @@ pub fn run(opts: &Options) {
             json,
             serve,
             port,
-            csr,
+            static_site,
         } => {
-            doc::generate_docs(path, output.as_ref(), *json, *serve, *port, *csr);
+            doc::generate_docs(path, output.as_ref(), *json, *serve, *port, *static_site);
         }
         #[cfg(not(target_arch = "wasm32"))]
         Command::Tree { path } => {
