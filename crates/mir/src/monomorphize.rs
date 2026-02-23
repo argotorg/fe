@@ -1,4 +1,5 @@
 use std::{
+    cell::RefCell,
     collections::VecDeque,
     hash::{Hash, Hasher},
 };
@@ -29,7 +30,11 @@ use hir::hir_def::{
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
-    CallOrigin, MirFunction, dedup::deduplicate_mir, ir::AddressSpaceKind, lower::lower_function,
+    CallOrigin, MirFunction,
+    capability_space::normalize_capability_space_entries,
+    dedup::deduplicate_mir,
+    ir::AddressSpaceKind,
+    lower::{MirLowerError, MirLowerResult, lower_function},
 };
 
 /// Walks generic MIR templates, cloning them per concrete substitution so
@@ -45,11 +50,11 @@ use crate::{
 pub(crate) fn monomorphize_functions<'db>(
     db: &'db dyn SpannedHirAnalysisDb,
     templates: Vec<MirFunction<'db>>,
-) -> Vec<MirFunction<'db>> {
+) -> MirLowerResult<Vec<MirFunction<'db>>> {
     let mut monomorphizer = Monomorphizer::new(db, templates);
     monomorphizer.seed_roots();
-    monomorphizer.process_worklist();
-    deduplicate_mir(db, monomorphizer.into_instances())
+    monomorphizer.process_worklist()?;
+    Ok(deduplicate_mir(db, monomorphizer.into_instances()))
 }
 
 /// Worklist-driven builder that instantiates concrete MIR bodies on demand.
@@ -63,6 +68,7 @@ struct Monomorphizer<'db> {
     worklist: VecDeque<usize>,
     current_symbol: Option<String>,
     ambiguous_bases: FxHashSet<String>,
+    deferred_error: RefCell<Option<MirLowerError>>,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -165,6 +171,7 @@ impl<'db> Monomorphizer<'db> {
             worklist: VecDeque::new(),
             current_symbol: None,
             ambiguous_bases: FxHashSet::default(),
+            deferred_error: RefCell::new(None),
         };
         monomorphizer.ambiguous_bases = monomorphizer.compute_ambiguous_bases();
         monomorphizer
@@ -189,6 +196,17 @@ impl<'db> Monomorphizer<'db> {
             .into_iter()
             .filter_map(|(base, qualifiers)| (qualifiers.len() > 1).then_some(base))
             .collect()
+    }
+
+    fn defer_error(&self, err: MirLowerError) {
+        let mut deferred_error = self.deferred_error.borrow_mut();
+        if deferred_error.is_none() {
+            *deferred_error = Some(err);
+        }
+    }
+
+    fn take_deferred_error(&self) -> Option<MirLowerError> {
+        self.deferred_error.borrow_mut().take()
     }
 
     /// Instantiate all non-generic templates up front so they are always emitted
@@ -298,7 +316,7 @@ impl<'db> Monomorphizer<'db> {
     }
 
     /// Drain the worklist by resolving calls in each newly-created instance.
-    fn process_worklist(&mut self) {
+    fn process_worklist(&mut self) -> MirLowerResult<()> {
         let mut iterations: usize = 0;
         while let Some(func_idx) = self.worklist.pop_front() {
             self.current_symbol = Some(self.instances[func_idx].symbol_name.clone());
@@ -307,7 +325,11 @@ impl<'db> Monomorphizer<'db> {
                 panic!("monomorphization worklist exceeded 100k iterations; possible cycle");
             }
             self.resolve_calls(func_idx);
+            if let Some(err) = self.take_deferred_error() {
+                return Err(err);
+            }
         }
+        Ok(())
     }
 
     /// Inspect every call inside the function at `func_idx` and enqueue its targets.
@@ -1573,25 +1595,24 @@ impl<'db> Monomorphizer<'db> {
             vec![Vec::new(); param_count];
         let len = std::cmp::min(param_count, overrides.len());
         for (idx, entries) in overrides.iter().take(len).enumerate() {
-            let mut merged: FxHashMap<crate::MirProjectionPath<'db>, AddressSpaceKind> =
-                FxHashMap::default();
-            let mut conflicts: FxHashSet<crate::MirProjectionPath<'db>> = FxHashSet::default();
-            for (path, space) in entries {
-                if matches!(space, AddressSpaceKind::Memory) || conflicts.contains(path) {
-                    continue;
-                }
-                if let Some(existing) = merged.get(path).copied() {
-                    if existing != *space {
-                        merged.remove(path);
-                        conflicts.insert(path.clone());
-                    }
-                    continue;
-                }
-                merged.insert(path.clone(), *space);
-            }
-            let mut out: Vec<_> = merged.into_iter().collect();
-            out.sort_by_cached_key(|(path, _)| format!("{path:?}"));
-            normalized[idx] = out;
+            normalized[idx] = normalize_capability_space_entries(
+                entries
+                    .iter()
+                    .filter_map(|(path, space)| {
+                        (!matches!(space, AddressSpaceKind::Memory)).then_some((path.clone(), *space))
+                    }),
+            )
+            .unwrap_or_else(|conflict| {
+                let current = self.current_symbol.as_deref().unwrap_or("<unknown function>");
+                self.defer_error(MirLowerError::Unsupported {
+                    func_name: current.to_owned(),
+                    message: format!(
+                        "conflicting non-memory capability-space override for param {idx} path `{:?}`: `{:?}` vs `{:?}`",
+                        conflict.path, conflict.existing, conflict.incoming
+                    ),
+                });
+                Vec::new()
+            });
         }
 
         if normalized.iter().all(|entries| entries.is_empty()) {
@@ -1717,4 +1738,34 @@ fn param_capability_space_suffix(
         })
         .collect::<Vec<_>>()
         .join("_")
+}
+
+#[cfg(test)]
+mod tests {
+    use driver::DriverDataBase;
+
+    use super::*;
+
+    #[test]
+    fn conflicting_non_memory_param_overrides_report_error() {
+        let db = DriverDataBase::default();
+        let mut monomorphizer = Monomorphizer::new(&db, Vec::new());
+        monomorphizer.current_symbol = Some("test_symbol".to_owned());
+
+        let root = crate::MirProjectionPath::new();
+        let overrides = vec![vec![
+            (root.clone(), AddressSpaceKind::Storage),
+            (root, AddressSpaceKind::Calldata),
+        ]];
+
+        let _ = monomorphizer.normalize_param_capability_space_overrides_for_len(1, &overrides);
+        let err = monomorphizer
+            .take_deferred_error()
+            .expect("conflict should defer an error");
+        let MirLowerError::Unsupported { func_name, message } = err else {
+            panic!("unexpected error kind");
+        };
+        assert_eq!(func_name, "test_symbol");
+        assert!(message.contains("conflicting non-memory capability-space override"));
+    }
 }
