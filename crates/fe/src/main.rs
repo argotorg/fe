@@ -5,6 +5,7 @@ mod doc;
 #[cfg(feature = "doc-server")]
 mod doc_serve;
 pub(crate) mod extract;
+mod index_util;
 mod lsif;
 mod report;
 mod scip_index;
