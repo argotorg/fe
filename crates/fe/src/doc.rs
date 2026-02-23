@@ -1,10 +1,8 @@
 use camino::Utf8PathBuf;
 use common::InputDb;
 use doc_engine::DocExtractor;
-use doc_viewer::model::DocIndex;
-#[cfg(feature = "doc-server")]
-use doc_viewer::server::{DocServerConfig, serve};
 use driver::DriverDataBase;
+use fe_web::model::DocIndex;
 use hir::hir_def::HirIngot;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -39,7 +37,7 @@ pub fn generate_docs(
     json: bool,
     serve_docs: bool,
     port: u16,
-    csr_mode: bool,
+    static_site: bool,
 ) {
     // First, check if there's a running LSP with docs server
     if serve_docs {
@@ -81,20 +79,28 @@ pub fn generate_docs(
         std::process::exit(1);
     };
 
+    if static_site {
+        let output_dir = output
+            .map(|p| p.as_std_path().to_path_buf())
+            .unwrap_or_else(|| std::path::PathBuf::from("docs"));
+        if let Err(e) = fe_web::static_site::StaticSiteGenerator::generate(&index, &output_dir) {
+            eprintln!("Error generating static docs: {e}");
+            std::process::exit(1);
+        }
+        println!("Static docs written to {}", output_dir.display());
+        return;
+    }
+
     #[cfg(feature = "doc-server")]
     if serve_docs {
-        // Start HTTP server
-        let config = DocServerConfig {
+        use crate::doc_serve::{DocServeConfig, serve_docs as serve};
+
+        let config = DocServeConfig {
             port,
             host: "127.0.0.1".to_string(),
-            assets_path: None,
         };
 
-        if csr_mode {
-            println!("Starting documentation server (CSR mode)...");
-        } else {
-            println!("Starting documentation server...");
-        }
+        println!("Starting documentation server...");
         println!("Open http://127.0.0.1:{port} in your browser");
         println!("Press Ctrl+C to stop");
 
