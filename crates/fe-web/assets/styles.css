@@ -842,3 +842,75 @@ h2:hover .anchor {
 .hl-attribute { color: #d19a66; }
 .hl-constant { color: #d19a66; font-weight: bold; }
 .hl-punctuation-bracket, .hl-punctuation-delimiter, .hl-punctuation-special { color: #abb2bf; }
+
+/* <fe-code-block> custom element */
+fe-code-block {
+    display: block;
+    margin: 1rem 0;
+}
+
+.fe-code-block-wrapper {
+    display: flex;
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow-x: auto;
+}
+
+.fe-line-numbers {
+    display: flex;
+    flex-direction: column;
+    padding: 0.875rem 0.5rem;
+    border-right: 1px solid var(--border);
+    text-align: right;
+    user-select: none;
+    color: var(--text-muted);
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: 0.8rem;
+    line-height: 1.6;
+}
+
+.fe-code-pre {
+    flex: 1;
+    margin: 0;
+    padding: 0.875rem 1rem;
+    background: transparent;
+    overflow-x: auto;
+}
+
+.fe-code-pre code {
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: 0.875rem;
+    line-height: 1.6;
+    color: var(--text);
+}
+
+/* <fe-search> custom element */
+.fe-search-container {
+    position: relative;
+}
+
+.fe-search-input {
+    width: 100%;
+    padding: 0.5rem;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
+    font-size: 0.875rem;
+}
+
+.fe-search-results {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-top: 0.25rem;
+}
+
+/* <fe-signature> custom element */
+.fe-sig {
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: 0.875rem;
+    white-space: pre;
+    color: var(--text);
+}

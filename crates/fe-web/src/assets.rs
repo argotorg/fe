@@ -6,6 +6,15 @@ pub const STYLES_CSS: &str = include_str!("../assets/styles.css");
 /// The vanilla JS renderer (ports Leptos SSR components to client-side rendering).
 pub const FE_WEB_JS: &str = include_str!("../assets/fe-web.js");
 
+/// `<fe-code-block>` custom element.
+pub const FE_CODE_BLOCK_JS: &str = include_str!("../assets/fe-code-block.js");
+
+/// `<fe-signature>` custom element.
+pub const FE_SIGNATURE_JS: &str = include_str!("../assets/fe-signature.js");
+
+/// `<fe-search>` custom element.
+pub const FE_SEARCH_JS: &str = include_str!("../assets/fe-search.js");
+
 /// Generate the complete HTML shell for a static documentation site.
 ///
 /// The `doc_index_json` is inlined into a `<script>` tag so the page works
@@ -22,6 +31,9 @@ pub fn html_shell(title: &str, doc_index_json: &str) -> String {
 </head>
 <body>
   <script>window.FE_DOC_INDEX = {json};</script>
+  <script>{code_block_js}</script>
+  <script>{signature_js}</script>
+  <script>{search_js}</script>
   <div class="doc-layout">
     <div id="sidebar"></div>
     <main id="content" class="doc-content"></main>
@@ -32,6 +44,9 @@ pub fn html_shell(title: &str, doc_index_json: &str) -> String {
         title = title,
         css = STYLES_CSS,
         json = doc_index_json,
+        code_block_js = FE_CODE_BLOCK_JS,
+        signature_js = FE_SIGNATURE_JS,
+        search_js = FE_SEARCH_JS,
         js = FE_WEB_JS,
     )
 }
@@ -53,6 +68,13 @@ mod tests {
     }
 
     #[test]
+    fn custom_element_js_nonempty() {
+        assert!(FE_CODE_BLOCK_JS.contains("fe-code-block"));
+        assert!(FE_SIGNATURE_JS.contains("fe-signature"));
+        assert!(FE_SEARCH_JS.contains("fe-search"));
+    }
+
+    #[test]
     fn html_shell_produces_valid_output() {
         let json = r#"{"items":[],"modules":[]}"#;
         let html = html_shell("Test Docs", json);
@@ -64,5 +86,9 @@ mod tests {
         assert!(html.contains(r#"window.FE_DOC_INDEX = {"items":[],"modules":[]}"#));
         assert!(html.contains(r#"<div id="sidebar">"#));
         assert!(html.contains(r#"<main id="content""#));
+        // Custom elements are loaded before the main app JS
+        assert!(html.contains("fe-code-block"));
+        assert!(html.contains("fe-signature"));
+        assert!(html.contains("fe-search"));
     }
 }
