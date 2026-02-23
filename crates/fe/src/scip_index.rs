@@ -5,10 +5,11 @@ use camino::{Utf8Path, Utf8PathBuf};
 use common::InputDb;
 use common::diagnostics::Span;
 use hir::{
-    core::semantic::{ReferenceIndex, SymbolView},
     hir_def::{HirIngot, ItemKind, scope_graph::ScopeId},
     span::LazySpan,
 };
+
+use crate::index_util::{self, LineIndex};
 use scip::{
     symbol::format_symbol,
     types::{self, descriptor, symbol_information},
@@ -43,40 +44,23 @@ impl ScipDocumentBuilder {
     }
 }
 
-fn calculate_line_offsets(text: &str) -> Vec<usize> {
-    let mut offsets = vec![0];
-    for (i, b) in text.bytes().enumerate() {
-        if b == b'\n' {
-            offsets.push(i + 1);
-        }
-    }
-    offsets
-}
-
 fn span_to_scip_range(span: &Span, db: &dyn InputDb) -> Option<Vec<i32>> {
     let text = span.file.text(db);
-    let line_offsets = calculate_line_offsets(text);
+    let line_index = LineIndex::new(text);
 
-    let start: usize = span.range.start().into();
-    let end: usize = span.range.end().into();
+    let start = line_index.position(span.range.start().into());
+    let end = line_index.position(span.range.end().into());
 
-    let start_line = line_offsets
-        .partition_point(|&line_start| line_start <= start)
-        .saturating_sub(1);
-    let end_line = line_offsets
-        .partition_point(|&line_start| line_start <= end)
-        .saturating_sub(1);
+    let start_col = start.byte_offset.checked_sub(start.line_start_offset)?;
+    let end_col = end.byte_offset.checked_sub(end.line_start_offset)?;
 
-    let start_col = start.checked_sub(line_offsets[start_line])?;
-    let end_col = end.checked_sub(line_offsets[end_line])?;
-
-    Some(if start_line == end_line {
-        vec![start_line as i32, start_col as i32, end_col as i32]
+    Some(if start.line == end.line {
+        vec![start.line as i32, start_col as i32, end_col as i32]
     } else {
         vec![
-            start_line as i32,
+            start.line as i32,
             start_col as i32,
-            end_line as i32,
+            end.line as i32,
             end_col as i32,
         ]
     })
@@ -97,12 +81,12 @@ fn relative_path(project_root: &Utf8Path, doc_url: &url::Url) -> Option<String> 
 }
 
 fn build_symbol_documentation(db: &driver::DriverDataBase, item: ItemKind) -> Vec<String> {
-    let sym = SymbolView::from_item(item);
+    let docs = index_util::item_docs(db, item);
     let mut parts = Vec::new();
-    if let Some(signature) = sym.signature(db) {
+    if let Some(signature) = docs.signature {
         parts.push(format!("```fe\n{signature}\n```"));
     }
-    if let Some(doc) = sym.docs(db) {
+    if let Some(doc) = docs.docstring {
         parts.push(doc);
     }
     if parts.is_empty() {
@@ -195,12 +179,7 @@ pub fn generate_scip(
     db: &mut driver::DriverDataBase,
     ingot_url: &url::Url,
 ) -> io::Result<types::Index> {
-    let Some(ingot) = db.workspace().containing_ingot(db, ingot_url.clone()) else {
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            "Could not resolve ingot",
-        ));
-    };
+    let ctx = index_util::IngotContext::resolve(db, ingot_url)?;
 
     let project_root_path = ingot_url
         .to_file_path()
@@ -208,22 +187,9 @@ pub fn generate_scip(
         .and_then(|p| Utf8PathBuf::from_path_buf(p).ok())
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "ingot URL must be file://"))?;
 
-    let ingot_name = ingot
-        .config(db)
-        .and_then(|c| c.metadata.name)
-        .map(|n| n.to_string())
-        .unwrap_or_else(|| "unknown".to_string());
-    let ingot_version = ingot
-        .version(db)
-        .map(|v| v.to_string())
-        .unwrap_or_else(|| "0.0.0".to_string());
-
-    // Build reference index once for the whole ingot
-    let ref_index = ReferenceIndex::build(db, ingot);
-
     let mut documents: HashMap<String, ScipDocumentBuilder> = HashMap::new();
 
-    for top_mod in ingot.all_modules(db) {
+    for top_mod in ctx.ingot.all_modules(db) {
         let Some(doc_url) = top_mod_url(db, top_mod) else {
             continue;
         };
@@ -235,14 +201,14 @@ pub fn generate_scip(
             .or_insert_with(|| ScipDocumentBuilder::new(relative));
     }
 
-    for top_mod in ingot.all_modules(db) {
+    for top_mod in ctx.ingot.all_modules(db) {
         let scope_graph = top_mod.scope_graph(db);
         let Some(doc_url) = top_mod_url(db, top_mod).map(|u| u.to_string()) else {
             continue;
         };
 
         for item in scope_graph.items_dfs(db) {
-            let Some((symbol, display_name)) = item_symbol(db, item, &ingot_name, &ingot_version)
+            let Some((symbol, display_name)) = item_symbol(db, item, &ctx.name, &ctx.version)
             else {
                 continue;
             };
@@ -275,7 +241,7 @@ pub fn generate_scip(
 
             // Use ReferenceIndex instead of scanning all modules
             let scope = ScopeId::from_item(item);
-            for indexed_ref in ref_index.references_to(&scope) {
+            for indexed_ref in ctx.ref_index.references_to(&scope) {
                 if let Some(resolved) = indexed_ref.span.resolve(db) {
                     let ref_doc_url = match resolved.file.url(db) {
                         Some(url) => url.to_string(),
