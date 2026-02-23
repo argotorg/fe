@@ -27,8 +27,6 @@ rustc-hash.workspace = true
 codegen = { path = "../codegen", package = "fe-codegen" }
 contract-harness = { path = "../contract-harness", package = "fe-contract-harness" }
 solc-runner = { path = "../solc-runner", package = "fe-solc-runner" }
-# doc-engine for extraction only
-doc-engine = { path = "../doc-engine", package = "fe-doc-engine" }
 # fe-web for model, assets, and static site generation
 fe-web = { path = "../fe-web" }
 serde = { version = "1.0", features = ["derive"] }

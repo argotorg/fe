@@ -2,7 +2,7 @@
 //!
 //! `SymbolView` provides a single entry point for extracting documentation,
 //! signature text, canonical paths, visibility, and other metadata from any
-//! HIR item. It exists so that consumers (SCIP, LSIF, doc-engine, LSP hover)
+//! HIR item. It exists so that consumers (SCIP, LSIF, doc extraction, LSP hover)
 //! can call one shared API instead of each reimplementing the same HIR walk.
 
 use crate::HirDb;

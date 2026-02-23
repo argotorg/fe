@@ -840,3 +840,118 @@ fn extract_simple_name(s: &str) -> String {
         .trim()
         .to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use common::InputDb;
+    use dir_test::{Fixture, dir_test};
+    use driver::DriverDataBase;
+    use fe_web::model::DocIndex;
+    use test_utils::snap_test;
+
+    fn normalize_paths(output: &str) -> String {
+        let fixtures_dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/doc_fixtures");
+        output.replace(&fixtures_dir.to_string_lossy().to_string(), "<fixtures>")
+    }
+
+    #[dir_test(
+        dir: "$CARGO_MANIFEST_DIR/tests/doc_fixtures",
+        glob: "*.fe",
+    )]
+    fn doc_extract(fixture: Fixture<&str>) {
+        let mut db = DriverDataBase::default();
+        let url = url::Url::from_file_path(fixture.path()).expect("path should be absolute");
+        let file = db.workspace().touch(&mut db, url, Some(fixture.content().to_string()));
+        let top_mod = db.top_mod(file);
+
+        let extractor = DocExtractor::new(&db);
+        let index = extractor.extract_module(top_mod);
+
+        let json = serde_json::to_string_pretty(&index).expect("serialize DocIndex");
+        let output = normalize_paths(&json);
+        snap_test!(output, fixture.path());
+    }
+
+    /// Integration test: extract → static site generation
+    #[dir_test(
+        dir: "$CARGO_MANIFEST_DIR/tests/doc_fixtures",
+        glob: "*.fe",
+    )]
+    fn doc_static_site(fixture: Fixture<&str>) {
+        let mut db = DriverDataBase::default();
+        let url = url::Url::from_file_path(fixture.path()).expect("path should be absolute");
+        let file = db.workspace().touch(&mut db, url, Some(fixture.content().to_string()));
+        let top_mod = db.top_mod(file);
+
+        let extractor = DocExtractor::new(&db);
+        let index = extractor.extract_module(top_mod);
+
+        let test_name = std::path::Path::new(fixture.path())
+            .file_stem()
+            .unwrap()
+            .to_string_lossy();
+        let dir = std::env::temp_dir().join(format!("fe_doc_static_{}", test_name));
+        let _ = std::fs::remove_dir_all(&dir);
+
+        fe_web::static_site::StaticSiteGenerator::generate(&index, &dir)
+            .expect("static site generation failed");
+
+        let html_path = dir.join("index.html");
+        assert!(html_path.exists(), "index.html should exist");
+
+        let html = std::fs::read_to_string(&html_path).unwrap();
+        assert!(html.contains("<!DOCTYPE html>"));
+        assert!(html.contains("FE_DOC_INDEX"));
+        assert!(html.contains("renderDocItem"));
+
+        for item in &index.items {
+            assert!(
+                html.contains(&item.path),
+                "HTML should contain item path: {}",
+                item.path
+            );
+        }
+
+        if index.items.iter().any(|i| i.docs.is_some()) {
+            assert!(html.contains("html_body"), "should contain pre-rendered html_body");
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Integration test: extract → JSON → deserialize round-trip
+    #[dir_test(
+        dir: "$CARGO_MANIFEST_DIR/tests/doc_fixtures",
+        glob: "*.fe",
+    )]
+    fn doc_round_trip(fixture: Fixture<&str>) {
+        let mut db = DriverDataBase::default();
+        let url = url::Url::from_file_path(fixture.path()).expect("path should be absolute");
+        let file = db.workspace().touch(&mut db, url, Some(fixture.content().to_string()));
+        let top_mod = db.top_mod(file);
+
+        let extractor = DocExtractor::new(&db);
+        let original = extractor.extract_module(top_mod);
+
+        let json = serde_json::to_string(&original).expect("serialize DocIndex");
+        let restored: DocIndex = serde_json::from_str(&json).expect("deserialize DocIndex");
+
+        assert_eq!(
+            original.items.len(),
+            restored.items.len(),
+            "item count mismatch for {}",
+            fixture.path()
+        );
+
+        for (a, b) in original.items.iter().zip(restored.items.iter()) {
+            assert_eq!(a.path, b.path, "path mismatch");
+            assert_eq!(a.name, b.name, "name mismatch");
+            assert_eq!(a.kind, b.kind, "kind mismatch");
+            assert_eq!(a.children.len(), b.children.len(), "children count mismatch for {}", a.path);
+        }
+
+        assert_eq!(original.modules.len(), restored.modules.len(), "module tree mismatch");
+    }
+}
