@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use url::Url;
 
 use crate::virtual_files::{VirtualFiles, materialize_builtins};
+use crate::ws_notify::{WsBroadcast, WsServerMsg};
 
 use crate::doc_server::{DocServerHandle, LspServerInfo};
 
@@ -21,7 +22,7 @@ pub struct Backend {
 }
 
 impl Backend {
-    pub fn new(client: ClientSocket) -> Self {
+    pub fn new(client: ClientSocket, ws_broadcast: Option<WsBroadcast>) -> Self {
         let db = DriverDataBase::default();
         let mut virtual_files = VirtualFiles::new("fe-language-server-").ok();
         if let Some(vfs) = virtual_files.as_mut()

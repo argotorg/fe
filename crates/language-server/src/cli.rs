@@ -7,6 +7,10 @@ use clap::{Parser, Subcommand};
 #[command(version = "1.0")]
 #[command(about = "LSP server for the Fe language", long_about = None)]
 pub struct CliArgs {
+    /// Start a WebSocket notification server on this port.
+    #[arg(long)]
+    pub ws_port: Option<u16>,
+
     /// Choose the communication method
     #[command(subcommand)]
     pub command: Option<Commands>,

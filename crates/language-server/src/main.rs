@@ -18,11 +18,12 @@ async fn main() {
             fe_language_server::run_tcp_server(
                 tcp_args.port,
                 Duration::from_secs(tcp_args.timeout),
+                args.ws_port,
             )
             .await;
         }
         None => {
-            fe_language_server::run_stdio_server().await;
+            fe_language_server::run_stdio_server(args.ws_port).await;
         }
     }
 }
