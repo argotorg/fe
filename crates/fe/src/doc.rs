@@ -68,6 +68,7 @@ pub fn generate_docs(
     }
 
     let mut db = DriverDataBase::default();
+    let mut is_workspace = false;
 
     let index = if path.is_file() && path.extension() == Some("fe") {
         extract_single_file(&mut db, path)
@@ -79,6 +80,7 @@ pub fn generate_docs(
                 if let Ok(common::config::Config::Workspace(ws_config)) =
                     common::config::Config::parse(&content)
                 {
+                    is_workspace = true;
                     extract_workspace(&mut db, path, &ws_config)
                 } else {
                     extract_ingot(&mut db, path)
@@ -140,7 +142,13 @@ pub fn generate_docs(
 
     // Generate SCIP for interactive navigation (best-effort).
     // This enriches rich_signature fields and produces JSON for embedding.
-    let scip_json = generate_scip_json_for_doc(&mut db, path, &mut index);
+    // Skipped for workspaces: each member uses its own db during extraction,
+    // so the main db has no ingot files and SCIP resolution would fail.
+    let scip_json = if is_workspace {
+        None
+    } else {
+        generate_scip_json_for_doc(&mut db, path, &mut index)
+    };
 
     if static_site {
         let output_dir = output
@@ -366,10 +374,7 @@ fn generate_scip_json_for_doc(
 
     match crate::scip_index::generate_scip(db, &ingot_url) {
         Ok(scip_index) => {
-            // Enrich signatures before serializing
             crate::scip_index::enrich_signatures(doc_index, &scip_index);
-
-            // Convert to JSON and inject doc URLs
             let json = crate::scip_index::scip_to_json_data(&scip_index);
             Some(crate::scip_index::inject_doc_urls(&json, doc_index))
         }
