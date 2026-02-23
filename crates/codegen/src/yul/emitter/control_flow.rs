@@ -480,6 +480,28 @@ impl<'db> FunctionEmitter<'db> {
                 .join(" ")
         }
 
+        fn rewrite_lets_to_assignments(doc: &YulDoc) -> YulDoc {
+            match doc {
+                YulDoc::Line(text) => {
+                    if let Some(rest) = text.strip_prefix("let ")
+                        && rest.contains(":=")
+                    {
+                        YulDoc::line(rest.to_string())
+                    } else {
+                        YulDoc::line(text.clone())
+                    }
+                }
+                YulDoc::Block { caption, body } => YulDoc::block(
+                    caption.clone(),
+                    body.iter().map(rewrite_lets_to_assignments).collect(),
+                ),
+                YulDoc::WideBlock { caption, body } => YulDoc::wide_block(
+                    caption.clone(),
+                    body.iter().map(rewrite_lets_to_assignments).collect(),
+                ),
+            }
+        }
+
         let block = self
             .mir_func
             .body
@@ -503,7 +525,8 @@ impl<'db> FunctionEmitter<'db> {
             ));
         }
 
-        // Init block: use dedicated init_block if present, otherwise header (for while-style loops)
+        // Init block: use dedicated init_block if present, otherwise header statements.
+        let header_docs = self.render_statements(&block.insts, state)?;
         let init_block_str = if let Some(init_bb) = info.init_block {
             let init_block_data = self
                 .mir_func
@@ -519,9 +542,7 @@ impl<'db> FunctionEmitter<'db> {
                 format!("{{ {init_inline} }}")
             }
         } else {
-            // Fallback for while-style loops: use header statements
-            let init_docs = self.render_statements(&block.insts, state)?;
-            let init_inline = docs_inline(&init_docs);
+            let init_inline = docs_inline(&header_docs);
             if init_inline.is_empty() {
                 "{ }".to_string()
             } else {
@@ -529,7 +550,9 @@ impl<'db> FunctionEmitter<'db> {
             }
         };
 
-        // Post block: render from the dedicated post_block if present
+        // Post block: use dedicated post_block if present; otherwise duplicate
+        // header statements with `let` → assignment rewriting so while-loop
+        // condition temporaries are re-evaluated each iteration.
         let post_block_str = if let Some(post_bb) = info.post_block {
             let post_block_data = self
                 .mir_func
@@ -545,7 +568,16 @@ impl<'db> FunctionEmitter<'db> {
                 format!("{{ {post_inline} }}")
             }
         } else {
-            "{ }".to_string()
+            let post_docs: Vec<_> = header_docs
+                .iter()
+                .map(rewrite_lets_to_assignments)
+                .collect();
+            let post_inline = docs_inline(&post_docs);
+            if post_inline.is_empty() {
+                "{ }".to_string()
+            } else {
+                format!("{{ {post_inline} }}")
+            }
         };
 
         // Decide whether to unroll based on trip_count and unroll_hint:
