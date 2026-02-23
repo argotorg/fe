@@ -96,11 +96,7 @@ pub fn highlight_fe_block(code: &str) -> String {
 }
 
 fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#x27;")
+    crate::escape::escape_html(s)
 }
 
 #[cfg(test)]

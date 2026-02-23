@@ -1,5 +1,7 @@
 //! Embedded assets for static documentation sites
 
+use crate::escape::{escape_html_text, escape_script_content};
+
 /// The documentation site stylesheet.
 pub const STYLES_CSS: &str = include_str!("../assets/styles.css");
 
@@ -55,21 +57,6 @@ pub fn html_shell(title: &str, doc_index_json: &str) -> String {
         search_js = FE_SEARCH_JS,
         js = FE_WEB_JS,
     )
-}
-
-/// Escape text for embedding in HTML element content (e.g. `<title>`).
-fn escape_html_text(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-}
-
-/// Escape content for safe embedding inside a `<script>` tag.
-///
-/// The only dangerous sequence is `</` which can close the script element.
-/// We replace `</` with `<\/` which is valid in JS string literals and JSON.
-fn escape_script_content(s: &str) -> String {
-    s.replace("</", r"<\/")
 }
 
 #[cfg(test)]

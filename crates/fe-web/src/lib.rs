@@ -8,6 +8,7 @@
 //! - `wasm` (feature-gated): WASM query module for browser-side doc lookup
 
 pub mod assets;
+pub mod escape;
 pub mod highlight;
 pub mod markdown;
 pub mod model;
