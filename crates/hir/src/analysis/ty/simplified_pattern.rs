@@ -298,7 +298,9 @@ impl<'db> SimplifiedPattern<'db> {
                 match try_eval_const_ref(db, cref, expected_ty)? {
                     ConstValue::Int(int) => Some(LitKind::Int(IntegerId::new(db, int))),
                     ConstValue::Bool(flag) => Some(LitKind::Bool(flag)),
-                    ConstValue::Bytes(_) | ConstValue::EnumVariant(_) => None,
+                    ConstValue::Bytes(_)
+                    | ConstValue::EnumVariant(_)
+                    | ConstValue::ConstArray(_) => None,
                 }
             }
             PathRes::TraitConst(_recv_ty, inst, name) => {
@@ -306,7 +308,9 @@ impl<'db> SimplifiedPattern<'db> {
                 match try_eval_const_ref(db, cref, expected_ty)? {
                     ConstValue::Int(int) => Some(LitKind::Int(IntegerId::new(db, int))),
                     ConstValue::Bool(flag) => Some(LitKind::Bool(flag)),
-                    ConstValue::Bytes(_) | ConstValue::EnumVariant(_) => None,
+                    ConstValue::Bytes(_)
+                    | ConstValue::EnumVariant(_)
+                    | ConstValue::ConstArray(_) => None,
                 }
             }
             _ => None,

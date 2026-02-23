@@ -23,14 +23,14 @@ use sonatina_ir::{
         control_flow::{Br, Call, Jump, Return},
         data::{Gep, Mload, Mstore, SymAddr, SymSize, SymbolRef},
         evm::{
-            EvmAddress, EvmBaseFee, EvmBlockHash, EvmCall, EvmCallValue, EvmCalldataCopy,
-            EvmCalldataLoad, EvmCalldataSize, EvmCaller, EvmChainId, EvmCodeCopy, EvmCodeSize,
-            EvmCoinBase, EvmCreate, EvmCreate2, EvmDelegateCall, EvmExp, EvmGas, EvmGasLimit,
-            EvmInvalid, EvmKeccak256, EvmLog0, EvmLog1, EvmLog2, EvmLog3, EvmLog4, EvmMalloc,
-            EvmMsize, EvmMstore8, EvmNumber, EvmOrigin, EvmPrevRandao, EvmReturn,
-            EvmReturnDataCopy, EvmReturnDataSize, EvmRevert, EvmSelfBalance, EvmSelfDestruct,
-            EvmSload, EvmSstore, EvmStaticCall, EvmStop, EvmTimestamp, EvmTload, EvmTstore,
-            EvmUdiv, EvmUmod,
+            EvmAddMod, EvmAddress, EvmBaseFee, EvmBlockHash, EvmCall, EvmCallValue,
+            EvmCalldataCopy, EvmCalldataLoad, EvmCalldataSize, EvmCaller, EvmChainId, EvmCodeCopy,
+            EvmCodeSize, EvmCoinBase, EvmCreate, EvmCreate2, EvmDelegateCall, EvmExp, EvmGas,
+            EvmGasLimit, EvmInvalid, EvmKeccak256, EvmLog0, EvmLog1, EvmLog2, EvmLog3, EvmLog4,
+            EvmMalloc, EvmMsize, EvmMstore8, EvmMulMod, EvmNumber, EvmOrigin, EvmPrevRandao,
+            EvmReturn, EvmReturnDataCopy, EvmReturnDataSize, EvmRevert, EvmSelfBalance,
+            EvmSelfDestruct, EvmSload, EvmSstore, EvmStaticCall, EvmStop, EvmTimestamp, EvmTload,
+            EvmTstore, EvmUdiv, EvmUmod,
         },
         logic::{And, Not, Or, Xor},
     },
@@ -1057,6 +1057,28 @@ fn lower_intrinsic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             };
             Ok(Some(ctx.fb.insert_inst(
                 EvmKeccak256::new(ctx.is, *addr, *len),
+                Type::I256,
+            )))
+        }
+        IntrinsicOp::Addmod => {
+            let [a, b, m] = lowered_args.as_slice() else {
+                return Err(LowerError::Internal(
+                    "addmod requires 3 arguments".to_string(),
+                ));
+            };
+            Ok(Some(ctx.fb.insert_inst(
+                EvmAddMod::new(ctx.is, *a, *b, *m),
+                Type::I256,
+            )))
+        }
+        IntrinsicOp::Mulmod => {
+            let [a, b, m] = lowered_args.as_slice() else {
+                return Err(LowerError::Internal(
+                    "mulmod requires 3 arguments".to_string(),
+                ));
+            };
+            Ok(Some(ctx.fb.insert_inst(
+                EvmMulMod::new(ctx.is, *a, *b, *m),
                 Type::I256,
             )))
         }

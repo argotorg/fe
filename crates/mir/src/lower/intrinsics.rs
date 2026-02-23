@@ -107,6 +107,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             "code_region_offset" => Some(IntrinsicOp::CodeRegionOffset),
             "code_region_len" => Some(IntrinsicOp::CodeRegionLen),
             "keccak" | "keccak256" => Some(IntrinsicOp::Keccak),
+            "addmod" => Some(IntrinsicOp::Addmod),
+            "mulmod" => Some(IntrinsicOp::Mulmod),
             "caller" => Some(IntrinsicOp::Caller),
             _ => None,
         }

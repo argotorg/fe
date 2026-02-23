@@ -1,0 +1,23 @@
+---
+source: crates/codegen/tests/yul.rs
+assertion_line: 33
+expression: output
+input_file: tests/fixtures/const_array.fe
+---
+object "main" {
+  code {
+    function $sum_two($i, $j) -> ret {
+      let v0 := mload(0x40)
+      if iszero(v0) {
+        v0 := 0x80
+      }
+      mstore(0x40, add(v0, 96))
+      datacopy(v0, dataoffset("data_sum_two_0"), datasize("data_sum_two_0"))
+      let v1 := mload(add(v0, mul($i, 32)))
+      let v2 := mload(add(v0, mul($j, 32)))
+      ret := add(v1, v2)
+      leave
+    }
+  }
+  data "data_sum_two_0" hex"000000000000000000000000000000000000000000000000000000000000000a0000000000000000000000000000000000000000000000000000000000000014000000000000000000000000000000000000000000000000000000000000001e"
+}

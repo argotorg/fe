@@ -838,6 +838,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let Some((mut args, arg_exprs)) = self.collect_call_args(expr) else {
             return value_id;
         };
+        // Save raw args before call-coercion; intrinsics need pre-coercion values
+        // to avoid double-loading capability-wrapped operands.
+        let raw_args = args.clone();
         self.coerce_call_args_to_expected(&callable, &arg_exprs, &mut args);
         let provider_space = self.effect_provider_space_for_provider_ty(ty);
         let result_space = provider_space.unwrap_or_else(|| self.expr_address_space(expr));
@@ -882,7 +885,10 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         if let Some(op) = self.intrinsic_kind(callable_def) {
-            let mut intrinsic_args = args.clone();
+            // Use pre-coercion args: `coerce_call_args_to_expected` wraps values in
+            // capability TransparentCasts which causes `coerce_binary_operand_if_copy_capability`
+            // to emit spurious loads. Intrinsics operate on raw word values.
+            let mut intrinsic_args = raw_args;
             let mut intrinsic_arg_exprs = arg_exprs.clone();
             if self.is_method_call(expr) && !intrinsic_args.is_empty() {
                 intrinsic_args.remove(0);

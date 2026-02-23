@@ -416,6 +416,8 @@ fn format_intrinsic(op: IntrinsicOp) -> &'static str {
         IntrinsicOp::CodeRegionOffset => "code_region_offset",
         IntrinsicOp::CodeRegionLen => "code_region_len",
         IntrinsicOp::Keccak => "keccak256",
+        IntrinsicOp::Addmod => "addmod",
+        IntrinsicOp::Mulmod => "mulmod",
         IntrinsicOp::Revert => "revert",
         IntrinsicOp::Caller => "caller",
     }

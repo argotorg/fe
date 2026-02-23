@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 33
 expression: output
 input_file: tests/fixtures/erc20_low_level.fe
 ---
@@ -268,16 +267,14 @@ object "Erc20Contract" {
       }
       function $storagemap_get_word_with_salt__Address_h257056268eac7027__5ab99f7153cdba29($key, $salt) -> ret {
         let v0 := $storagemap_storage_slot_with_salt__Address_h257056268eac7027__5ab99f7153cdba29($key, $salt)
-        let v1 := v0
-        let v2 := sload(v1)
-        ret := v2
+        let v1 := sload(v0)
+        ret := v1
         leave
       }
       function $storagemap_get_word_with_salt___Address__Address___c32d499da259c78e($key, $salt) -> ret {
         let v0 := $storagemap_storage_slot_with_salt___Address__Address___c32d499da259c78e($key, $salt)
-        let v1 := v0
-        let v2 := sload(v1)
-        ret := v2
+        let v1 := sload(v0)
+        ret := v1
         leave
       }
       function $storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3($self, $key) -> ret {
@@ -320,10 +317,9 @@ object "Erc20Contract" {
         mstore(64, add(v0, 0))
         let v1 := $address_h257056268eac7027_storagekey_hf9e3d38a13ff4409_write_key(v0, $key)
         mstore(add(v0, v1), $salt)
-        let v2 := v0
-        let v3 := add(v1, 32)
-        let v4 := keccak256(v2, v3)
-        ret := v4
+        let v2 := add(v1, 32)
+        let v3 := keccak256(v0, v2)
+        ret := v3
         leave
       }
       function $storagemap_storage_slot_with_salt___Address__Address___c32d499da259c78e($key, $salt) -> ret {
@@ -334,10 +330,9 @@ object "Erc20Contract" {
         mstore(64, add(v0, 0))
         let v1 := $_a__b__h47f120de72304a2d_storagekey_hf9e3d38a13ff4409_write_key__Address_h257056268eac7027_Address_h257056268eac7027__af929e62fa4c68f2(v0, $key)
         mstore(add(v0, v1), $salt)
-        let v2 := v0
-        let v3 := add(v1, 32)
-        let v4 := keccak256(v2, v3)
-        ret := v4
+        let v2 := add(v1, 32)
+        let v3 := keccak256(v0, v2)
+        ret := v3
         leave
       }
       function $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Erc20_h7a8a7a2800ba6809__f6f4aaca4c5af1b3($raw) -> ret {

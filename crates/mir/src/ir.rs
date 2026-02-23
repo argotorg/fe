@@ -741,6 +741,10 @@ pub enum IntrinsicOp {
     CodeRegionLen,
     /// `keccak256(ptr, len)`
     Keccak,
+    /// `addmod(a, b, m)` — (a + b) % m without overflow
+    Addmod,
+    /// `mulmod(a, b, m)` — (a * b) % m without overflow
+    Mulmod,
     /// `revert(offset, size)`
     Revert,
     /// `caller()`
@@ -764,6 +768,8 @@ impl IntrinsicOp {
                 | IntrinsicOp::CodeRegionOffset
                 | IntrinsicOp::CodeRegionLen
                 | IntrinsicOp::Keccak
+                | IntrinsicOp::Addmod
+                | IntrinsicOp::Mulmod
                 | IntrinsicOp::Caller
                 | IntrinsicOp::Alloc
         )

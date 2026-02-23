@@ -32,6 +32,8 @@ extern {
     pub fn codecopy(dest: u256, offset: u256, len: u256)
     pub fn codesize() -> u256
     pub fn keccak256(_: u256, _: u256) -> u256
+    pub fn addmod(a: u256, b: u256, m: u256) -> u256
+    pub fn mulmod(a: u256, b: u256, m: u256) -> u256
 
     // -------------------------------------------------------------------------
     // Environment

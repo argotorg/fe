@@ -573,58 +573,62 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         Ok(())
     }
 
-    /// Identify which functions are contract entry points so their Return
-    /// terminators can be lowered as `evm_stop`. Must run before `lower_functions`.
-    ///
-    /// Only marks entries for contracts that will actually be included in the
-    /// compilation (the transitive set from the primary contract), matching the
-    /// scoping that `create_objects` applies when building Sonatina objects.
-    fn identify_entry_functions(&mut self) -> Result<(), LowerError> {
-        use mir::analysis::{ContractRegion, ContractRegionKind, build_contract_graph};
+    /// Compute which contracts are needed for compilation: the primary contract
+    /// and its transitive dependencies. Returns `(primary_name, needed_set)`.
+    fn needed_contracts(
+        &self,
+        contract_graph: &mir::analysis::ContractGraph,
+    ) -> Result<(String, FxHashSet<String>), LowerError> {
+        use mir::analysis::{ContractRegion, ContractRegionKind};
         use std::collections::VecDeque;
 
-        let contract_graph = build_contract_graph(&self.mir.functions);
-        if contract_graph.contracts.is_empty() {
-            return Ok(());
-        }
-
-        // Compute needed contracts using the same logic as create_contract_objects.
-        let needed_contracts: FxHashSet<String> = match &self.contract_selection {
-            ContractObjectSelection::All => contract_graph.contracts.keys().cloned().collect(),
-            _ => {
-                // Find the primary contract (root not referenced by others).
-                let mut referenced: FxHashSet<String> = FxHashSet::default();
-                for (from_region, deps) in &contract_graph.region_deps {
-                    for dep in deps {
-                        if dep.contract_name != from_region.contract_name {
-                            referenced.insert(dep.contract_name.clone());
-                        }
+        let select_primary = || -> Result<String, LowerError> {
+            let mut referenced: FxHashSet<String> = FxHashSet::default();
+            for (from_region, deps) in &contract_graph.region_deps {
+                for dep in deps {
+                    if dep.contract_name != from_region.contract_name {
+                        referenced.insert(dep.contract_name.clone());
                     }
                 }
-                let primary = if let ContractObjectSelection::RootAndDeps(root) =
-                    &self.contract_selection
-                {
-                    root.clone()
-                } else {
-                    let mut roots: Vec<String> = contract_graph
-                        .contracts
-                        .keys()
-                        .filter(|n| !referenced.contains(*n))
-                        .cloned()
-                        .collect();
-                    roots.sort();
-                    roots.into_iter().next().unwrap_or_else(|| {
-                        let mut names: Vec<String> =
-                            contract_graph.contracts.keys().cloned().collect();
-                        names.sort();
-                        names.into_iter().next().unwrap_or_default()
-                    })
-                };
+            }
+            let mut roots: Vec<String> = contract_graph
+                .contracts
+                .keys()
+                .filter(|n| !referenced.contains(*n))
+                .cloned()
+                .collect();
+            roots.sort();
+            roots
+                .into_iter()
+                .next()
+                .or_else(|| {
+                    let mut names: Vec<String> =
+                        contract_graph.contracts.keys().cloned().collect();
+                    names.sort();
+                    names.into_iter().next()
+                })
+                .ok_or_else(|| {
+                    LowerError::Internal("contract graph is unexpectedly empty".to_string())
+                })
+        };
 
-                // Transitive closure from the primary contract.
+        let primary = match &self.contract_selection {
+            ContractObjectSelection::PrimaryRootAndDeps => select_primary()?,
+            ContractObjectSelection::RootAndDeps(root) => {
+                if !contract_graph.contracts.contains_key(root.as_str()) {
+                    return Err(LowerError::Internal(format!("unknown contract `{root}`")));
+                }
+                root.clone()
+            }
+            ContractObjectSelection::All => select_primary()?,
+        };
+
+        let needed: FxHashSet<String> = match &self.contract_selection {
+            ContractObjectSelection::All => contract_graph.contracts.keys().cloned().collect(),
+            _ => {
                 let mut needed = FxHashSet::default();
                 let mut queue = VecDeque::new();
-                queue.push_back(primary);
+                queue.push_back(primary.clone());
                 while let Some(name) = queue.pop_front() {
                     if !needed.insert(name.clone()) {
                         continue;
@@ -646,6 +650,21 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 needed
             }
         };
+
+        Ok((primary, needed))
+    }
+
+    /// Identify which functions are contract entry points so their Return
+    /// terminators can be lowered as `evm_stop`. Must run before `lower_functions`.
+    fn identify_entry_functions(&mut self) -> Result<(), LowerError> {
+        use mir::analysis::build_contract_graph;
+
+        let contract_graph = build_contract_graph(&self.mir.functions);
+        if contract_graph.contracts.is_empty() {
+            return Ok(());
+        }
+
+        let (_primary, needed_contracts) = self.needed_contracts(&contract_graph)?;
 
         let mut func_idx_by_symbol: FxHashMap<&str, usize> = FxHashMap::default();
         for (idx, func) in self.mir.functions.iter().enumerate() {
@@ -731,84 +750,9 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         contract_graph: &mir::analysis::ContractGraph,
     ) -> Result<(), LowerError> {
         use mir::analysis::{ContractRegion, ContractRegionKind};
-        use std::collections::VecDeque;
 
-        let select_primary_contract = || -> Result<String, LowerError> {
-            // Pick a primary contract to compile:
-            // - prefer a root contract (not referenced by others)
-            // - otherwise fall back to the first contract name (deterministic sort)
-            let mut referenced_contracts: FxHashSet<String> = FxHashSet::default();
-            for (from_region, deps) in &contract_graph.region_deps {
-                for dep in deps {
-                    if dep.contract_name != from_region.contract_name {
-                        referenced_contracts.insert(dep.contract_name.clone());
-                    }
-                }
-            }
-
-            let mut root_contracts: Vec<String> = contract_graph
-                .contracts
-                .keys()
-                .filter(|name| !referenced_contracts.contains(*name))
-                .cloned()
-                .collect();
-            root_contracts.sort();
-
-            root_contracts
-                .into_iter()
-                .next()
-                .or_else(|| {
-                    let mut names: Vec<String> = contract_graph.contracts.keys().cloned().collect();
-                    names.sort();
-                    names.into_iter().next()
-                })
-                .ok_or_else(|| {
-                    LowerError::Internal("contract graph is unexpectedly empty".to_string())
-                })
-        };
-
-        let primary_contract = match &self.contract_selection {
-            ContractObjectSelection::PrimaryRootAndDeps => select_primary_contract()?,
-            ContractObjectSelection::RootAndDeps(root) => {
-                if !contract_graph.contracts.contains_key(root.as_str()) {
-                    return Err(LowerError::Internal(format!("unknown contract `{root}`")));
-                }
-                root.clone()
-            }
-            ContractObjectSelection::All => select_primary_contract()?,
-        };
-
-        let mut needed_contracts: FxHashSet<String> = match &self.contract_selection {
-            ContractObjectSelection::All => contract_graph.contracts.keys().cloned().collect(),
-            ContractObjectSelection::PrimaryRootAndDeps
-            | ContractObjectSelection::RootAndDeps(_) => {
-                // Collect the transitive set of contracts needed by the primary contract.
-                let mut needed = FxHashSet::default();
-                let mut queue = VecDeque::new();
-                queue.push_back(primary_contract.clone());
-                while let Some(contract_name) = queue.pop_front() {
-                    if !needed.insert(contract_name.clone()) {
-                        continue;
-                    }
-
-                    for kind in [ContractRegionKind::Init, ContractRegionKind::Deployed] {
-                        let region = ContractRegion {
-                            contract_name: contract_name.clone(),
-                            kind,
-                        };
-                        let Some(deps) = contract_graph.region_deps.get(&region) else {
-                            continue;
-                        };
-                        for dep in deps {
-                            if dep.contract_name != contract_name {
-                                queue.push_back(dep.contract_name.clone());
-                            }
-                        }
-                    }
-                }
-                needed
-            }
-        };
+        let (primary_contract, needed_contracts) = self.needed_contracts(contract_graph)?;
+        let mut needed_contracts = needed_contracts;
 
         // Assign stable object names for each needed contract.
         let mut contract_object_names: FxHashMap<String, ObjectName> = FxHashMap::default();
