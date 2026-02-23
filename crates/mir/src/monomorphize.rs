@@ -199,7 +199,7 @@ impl<'db> Monomorphizer<'db> {
             let receiver_space = canonicalize_receiver_space(self.templates[idx].receiver_space);
 
             if let crate::ir::MirFunctionOrigin::Synthetic(_) = origin {
-                let _ = self.ensure_synthetic_instance(origin, receiver_space);
+                let _ = self.ensure_synthetic_instance(origin, receiver_space, &[], &[]);
                 continue;
             }
 
@@ -348,11 +348,13 @@ impl<'db> Monomorphizer<'db> {
                     } = inst
                         && let Some((target_func, args)) = self.resolve_call_target(solve_cx, call)
                     {
+                        let receiver_space = canonicalize_receiver_space(call.receiver_space);
                         let effect_param_space_overrides = self.call_effect_param_space_overrides(
                             function,
                             call,
                             target_func,
                             &args,
+                            receiver_space,
                         );
                         let param_capability_space_overrides = self
                             .call_param_capability_space_overrides(
@@ -360,13 +362,14 @@ impl<'db> Monomorphizer<'db> {
                                 call,
                                 target_func,
                                 &args,
+                                receiver_space,
                             );
                         sites.push((
                             bb_idx,
                             Some(inst_idx),
                             target_func,
                             args,
-                            canonicalize_receiver_space(call.receiver_space),
+                            receiver_space,
                             effect_param_space_overrides,
                             param_capability_space_overrides,
                         ));
@@ -379,16 +382,28 @@ impl<'db> Monomorphizer<'db> {
                 } = &block.terminator
                     && let Some((target_func, args)) = self.resolve_call_target(solve_cx, call)
                 {
-                    let effect_param_space_overrides =
-                        self.call_effect_param_space_overrides(function, call, target_func, &args);
+                    let receiver_space = canonicalize_receiver_space(call.receiver_space);
+                    let effect_param_space_overrides = self.call_effect_param_space_overrides(
+                        function,
+                        call,
+                        target_func,
+                        &args,
+                        receiver_space,
+                    );
                     let param_capability_space_overrides = self
-                        .call_param_capability_space_overrides(function, call, target_func, &args);
+                        .call_param_capability_space_overrides(
+                            function,
+                            call,
+                            target_func,
+                            &args,
+                            receiver_space,
+                        );
                     sites.push((
                         bb_idx,
                         None,
                         target_func,
                         args,
-                        canonicalize_receiver_space(call.receiver_space),
+                        receiver_space,
                         effect_param_space_overrides,
                         param_capability_space_overrides,
                     ));
@@ -440,16 +455,30 @@ impl<'db> Monomorphizer<'db> {
                         });
                     Some(symbol)
                 }
-                CallTarget::Decl(func) => Some(self.mangled_name(
-                    func,
-                    &args,
-                    receiver_space,
-                    &effect_param_space_overrides,
-                    &[],
-                )),
+                CallTarget::Decl(func) => {
+                    let (normalized_args, normalized_effect_param_space_overrides, _) = self
+                        .normalize_call_instance_inputs(
+                            func,
+                            &args,
+                            &effect_param_space_overrides,
+                            &param_capability_space_overrides,
+                        );
+                    Some(self.mangled_name(
+                        func,
+                        &normalized_args,
+                        receiver_space,
+                        &normalized_effect_param_space_overrides,
+                        &[],
+                    ))
+                }
                 CallTarget::Synthetic(origin) => {
                     let (_, symbol) = self
-                        .ensure_synthetic_instance(origin, receiver_space)
+                        .ensure_synthetic_instance(
+                            origin,
+                            receiver_space,
+                            &effect_param_space_overrides,
+                            &param_capability_space_overrides,
+                        )
                         .unwrap_or_else(|| {
                             panic!("failed to instantiate synthetic MIR for `{origin:?}`")
                         });
@@ -493,7 +522,7 @@ impl<'db> Monomorphizer<'db> {
                         panic!("failed to instantiate MIR for `{name}`");
                     }),
                 crate::ir::MirFunctionOrigin::Synthetic(_) => self
-                    .ensure_synthetic_instance(target.origin, None)
+                    .ensure_synthetic_instance(target.origin, None, &[], &[])
                     .unwrap_or_else(|| {
                         panic!("failed to instantiate synthetic MIR for `{target:?}`")
                     }),
@@ -510,6 +539,11 @@ impl<'db> Monomorphizer<'db> {
         &mut self,
         origin: crate::ir::MirFunctionOrigin<'db>,
         receiver_space: Option<AddressSpaceKind>,
+        effect_param_space_overrides: &[Option<AddressSpaceKind>],
+        param_capability_space_overrides: &[Vec<(
+            crate::MirProjectionPath<'db>,
+            AddressSpaceKind,
+        )>],
     ) -> Option<(usize, String)> {
         let receiver_space = canonicalize_receiver_space(receiver_space);
         debug_assert!(
@@ -517,18 +551,54 @@ impl<'db> Monomorphizer<'db> {
             "ensure_synthetic_instance called with non-synthetic origin"
         );
 
-        let key = InstanceKey::new(origin, &[], receiver_space, &[], &[]);
+        let template_idx = *self.func_index.get(&TemplateKey {
+            origin,
+            receiver_space,
+        })?;
+        let template = &self.templates[template_idx];
+        let normalized_effect_param_space_overrides = self
+            .normalize_effect_param_space_overrides_for_len(
+                template.body.effect_param_locals.len(),
+                effect_param_space_overrides,
+            );
+        let normalized_param_capability_space_overrides = self
+            .normalize_param_capability_space_overrides_for_len(
+                template.body.param_locals.len(),
+                param_capability_space_overrides,
+            );
+
+        let key = InstanceKey::new(
+            origin,
+            &[],
+            receiver_space,
+            &normalized_effect_param_space_overrides,
+            &normalized_param_capability_space_overrides,
+        );
         if let Some(&idx) = self.instance_map.get(&key) {
             let symbol = self.instances[idx].symbol_name.clone();
             return Some((idx, symbol));
         }
 
-        let template_idx = *self.func_index.get(&TemplateKey {
-            origin,
-            receiver_space,
-        })?;
-        let instance = self.templates[template_idx].clone();
-        let symbol = instance.symbol_name.clone();
+        let mut instance = template.clone();
+        self.apply_synthetic_param_capability_space_overrides(
+            &mut instance,
+            &normalized_param_capability_space_overrides,
+        );
+        self.apply_synthetic_effect_param_space_overrides(
+            &mut instance,
+            &normalized_effect_param_space_overrides,
+        );
+        let mut symbol = instance.symbol_name.clone();
+        let effect_suffix = effect_param_space_suffix(&normalized_effect_param_space_overrides);
+        if !effect_suffix.is_empty() {
+            symbol = format!("{symbol}_{effect_suffix}");
+        }
+        let param_cap_suffix =
+            param_capability_space_suffix(&normalized_param_capability_space_overrides);
+        if !param_cap_suffix.is_empty() {
+            symbol = format!("{symbol}_{param_cap_suffix}");
+        }
+        instance.symbol_name = symbol.clone();
 
         let idx = self.instances.len();
         self.instances.push(instance);
@@ -550,18 +620,18 @@ impl<'db> Monomorphizer<'db> {
         )>],
     ) -> Option<(usize, String)> {
         let receiver_space = canonicalize_receiver_space(receiver_space);
-        let norm_scope = crate::ty::normalization_scope_for_args(self.db, func, args);
+        let (
+            normalized_args,
+            normalized_effect_param_space_overrides,
+            normalized_param_capability_space_overrides,
+        ) = self.normalize_call_instance_inputs(
+            func,
+            args,
+            effect_param_space_overrides,
+            param_capability_space_overrides,
+        );
+        let norm_scope = crate::ty::normalization_scope_for_args(self.db, func, &normalized_args);
         let assumptions = PredicateListId::empty_list(self.db);
-        let normalized_args: Vec<_> = args
-            .iter()
-            .copied()
-            .map(|ty| normalize_ty(self.db, ty, norm_scope, assumptions))
-            .collect();
-
-        let normalized_effect_param_space_overrides =
-            self.normalize_effect_param_space_overrides(func, effect_param_space_overrides);
-        let normalized_param_capability_space_overrides =
-            self.normalize_param_capability_space_overrides(func, param_capability_space_overrides);
 
         let key = InstanceKey::new(
             crate::ir::MirFunctionOrigin::Hir(func),
@@ -643,6 +713,91 @@ impl<'db> Monomorphizer<'db> {
         self.instance_map.insert(key, idx);
         self.worklist.push_back(idx);
         Some((idx, symbol))
+    }
+
+    fn normalize_call_instance_inputs(
+        &self,
+        func: Func<'db>,
+        args: &[TyId<'db>],
+        effect_param_space_overrides: &[Option<AddressSpaceKind>],
+        param_capability_space_overrides: &[Vec<(
+            crate::MirProjectionPath<'db>,
+            AddressSpaceKind,
+        )>],
+    ) -> (
+        Vec<TyId<'db>>,
+        Vec<Option<AddressSpaceKind>>,
+        Vec<Vec<(crate::MirProjectionPath<'db>, AddressSpaceKind)>>,
+    ) {
+        let norm_scope = crate::ty::normalization_scope_for_args(self.db, func, args);
+        let assumptions = PredicateListId::empty_list(self.db);
+        let normalized_args: Vec<_> = args
+            .iter()
+            .copied()
+            .map(|ty| normalize_ty(self.db, ty, norm_scope, assumptions))
+            .collect();
+        let normalized_effect_param_space_overrides =
+            self.normalize_effect_param_space_overrides(func, effect_param_space_overrides);
+        let normalized_param_capability_space_overrides =
+            self.normalize_param_capability_space_overrides(func, param_capability_space_overrides);
+        (
+            normalized_args,
+            normalized_effect_param_space_overrides,
+            normalized_param_capability_space_overrides,
+        )
+    }
+
+    fn capability_spaces_for_ty_with_default(
+        &self,
+        ty: TyId<'db>,
+        default_space: AddressSpaceKind,
+    ) -> Vec<(crate::MirProjectionPath<'db>, AddressSpaceKind)> {
+        self.capability_leaf_paths_for_ty(ty)
+            .into_iter()
+            .map(|path| (path, default_space))
+            .collect()
+    }
+
+    fn apply_synthetic_param_capability_space_overrides(
+        &self,
+        instance: &mut MirFunction<'db>,
+        param_capability_space_overrides: &[Vec<(
+            crate::MirProjectionPath<'db>,
+            AddressSpaceKind,
+        )>],
+    ) {
+        for (idx, entries) in param_capability_space_overrides.iter().enumerate() {
+            let Some(&param_local) = instance.body.param_locals.get(idx) else {
+                break;
+            };
+            let local = &mut instance.body.locals[param_local.index()];
+            let mut capability_spaces =
+                self.capability_spaces_for_ty_with_default(local.ty, local.address_space);
+            for (path, space) in entries {
+                capability_spaces.retain(|(existing, _)| existing != path);
+                capability_spaces.push((path.clone(), *space));
+                if path.is_empty() {
+                    local.address_space = *space;
+                }
+            }
+            local.capability_spaces = capability_spaces;
+        }
+    }
+
+    fn apply_synthetic_effect_param_space_overrides(
+        &self,
+        instance: &mut MirFunction<'db>,
+        effect_param_space_overrides: &[Option<AddressSpaceKind>],
+    ) {
+        for (idx, space) in effect_param_space_overrides.iter().enumerate() {
+            let Some(space) = *space else {
+                continue;
+            };
+            let Some(&effect_local) = instance.body.effect_param_locals.get(idx) else {
+                break;
+            };
+            instance.body.locals[effect_local.index()].address_space = space;
+        }
     }
 
     /// Returns the concrete HIR function targeted by the given call, accounting for trait impls.
@@ -1177,10 +1332,18 @@ impl<'db> Monomorphizer<'db> {
         call: &CallOrigin<'db>,
         target: CallTarget<'db>,
         args: &[TyId<'db>],
+        receiver_space: Option<AddressSpaceKind>,
     ) -> Vec<Vec<(crate::MirProjectionPath<'db>, AddressSpaceKind)>> {
         let func = match target {
             CallTarget::Template(func) | CallTarget::Decl(func) => func,
-            CallTarget::Synthetic(_) => return Vec::new(),
+            CallTarget::Synthetic(origin) => {
+                return self.call_synthetic_param_capability_space_overrides(
+                    caller,
+                    call,
+                    origin,
+                    receiver_space,
+                );
+            }
         };
 
         let param_count = func.params(self.db).count();
@@ -1212,10 +1375,18 @@ impl<'db> Monomorphizer<'db> {
         call: &CallOrigin<'db>,
         target: CallTarget<'db>,
         args: &[TyId<'db>],
+        receiver_space: Option<AddressSpaceKind>,
     ) -> Vec<Option<AddressSpaceKind>> {
         let func = match target {
             CallTarget::Template(func) | CallTarget::Decl(func) => func,
-            CallTarget::Synthetic(_) => return Vec::new(),
+            CallTarget::Synthetic(origin) => {
+                return self.call_synthetic_effect_param_space_overrides(
+                    caller,
+                    call,
+                    origin,
+                    receiver_space,
+                );
+            }
         };
 
         if call.effect_args.is_empty() {
@@ -1275,16 +1446,103 @@ impl<'db> Monomorphizer<'db> {
         overrides
     }
 
+    fn call_synthetic_param_capability_space_overrides(
+        &self,
+        caller: &MirFunction<'db>,
+        call: &CallOrigin<'db>,
+        origin: crate::ir::MirFunctionOrigin<'db>,
+        receiver_space: Option<AddressSpaceKind>,
+    ) -> Vec<Vec<(crate::MirProjectionPath<'db>, AddressSpaceKind)>> {
+        let Some(template_idx) = self.func_index.get(&TemplateKey {
+            origin,
+            receiver_space,
+        }) else {
+            return Vec::new();
+        };
+        let Some(template) = self.templates.get(*template_idx) else {
+            return Vec::new();
+        };
+
+        let param_count = template.body.param_locals.len();
+        let mut overrides: Vec<Vec<(crate::MirProjectionPath<'db>, AddressSpaceKind)>> =
+            vec![Vec::new(); param_count];
+
+        for (param_idx, param_local) in template.body.param_locals.iter().enumerate() {
+            let Some(&arg_value) = call.args.get(param_idx) else {
+                continue;
+            };
+            let param_ty = template.body.local(*param_local).ty;
+            for path in self.capability_leaf_paths_for_ty(param_ty) {
+                if let Some(space) = self.arg_capability_space_at_path(caller, arg_value, &path)
+                    && !matches!(space, AddressSpaceKind::Memory)
+                {
+                    overrides[param_idx].push((path, space));
+                }
+            }
+        }
+
+        self.normalize_param_capability_space_overrides_for_len(param_count, &overrides)
+    }
+
+    fn call_synthetic_effect_param_space_overrides(
+        &self,
+        caller: &MirFunction<'db>,
+        call: &CallOrigin<'db>,
+        origin: crate::ir::MirFunctionOrigin<'db>,
+        receiver_space: Option<AddressSpaceKind>,
+    ) -> Vec<Option<AddressSpaceKind>> {
+        let Some(template_idx) = self.func_index.get(&TemplateKey {
+            origin,
+            receiver_space,
+        }) else {
+            return Vec::new();
+        };
+        let Some(template) = self.templates.get(*template_idx) else {
+            return Vec::new();
+        };
+
+        let effect_count = template.body.effect_param_locals.len();
+        if effect_count == 0 || call.effect_args.is_empty() {
+            return Vec::new();
+        }
+
+        let mut overrides = vec![None; effect_count];
+        for (idx, &effect_arg_value) in call.effect_args.iter().take(effect_count).enumerate() {
+            let Some(space) = crate::ir::try_value_address_space_in(
+                &caller.body.values,
+                &caller.body.locals,
+                effect_arg_value,
+            ) else {
+                continue;
+            };
+            if !matches!(space, AddressSpaceKind::Memory) {
+                overrides[idx] = Some(space);
+            }
+        }
+
+        self.normalize_effect_param_space_overrides_for_len(effect_count, &overrides)
+    }
+
     fn normalize_effect_param_space_overrides(
         &self,
         func: Func<'db>,
+        overrides: &[Option<AddressSpaceKind>],
+    ) -> Vec<Option<AddressSpaceKind>> {
+        self.normalize_effect_param_space_overrides_for_len(
+            func.effect_params(self.db).count(),
+            overrides,
+        )
+    }
+
+    fn normalize_effect_param_space_overrides_for_len(
+        &self,
+        effect_count: usize,
         overrides: &[Option<AddressSpaceKind>],
     ) -> Vec<Option<AddressSpaceKind>> {
         if overrides.is_empty() || overrides.iter().all(Option::is_none) {
             return Vec::new();
         }
 
-        let effect_count = func.effect_params(self.db).count();
         let mut normalized = vec![None; effect_count];
         let len = std::cmp::min(effect_count, overrides.len());
         normalized[..len].copy_from_slice(&overrides[..len]);
@@ -1296,11 +1554,21 @@ impl<'db> Monomorphizer<'db> {
         func: Func<'db>,
         overrides: &[Vec<(crate::MirProjectionPath<'db>, AddressSpaceKind)>],
     ) -> Vec<Vec<(crate::MirProjectionPath<'db>, AddressSpaceKind)>> {
+        self.normalize_param_capability_space_overrides_for_len(
+            func.params(self.db).count(),
+            overrides,
+        )
+    }
+
+    fn normalize_param_capability_space_overrides_for_len(
+        &self,
+        param_count: usize,
+        overrides: &[Vec<(crate::MirProjectionPath<'db>, AddressSpaceKind)>],
+    ) -> Vec<Vec<(crate::MirProjectionPath<'db>, AddressSpaceKind)>> {
         if overrides.is_empty() || overrides.iter().all(|entries| entries.is_empty()) {
             return Vec::new();
         }
 
-        let param_count = func.params(self.db).count();
         let mut normalized: Vec<Vec<(crate::MirProjectionPath<'db>, AddressSpaceKind)>> =
             vec![Vec::new(); param_count];
         let len = std::cmp::min(param_count, overrides.len());
