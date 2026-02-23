@@ -24,15 +24,14 @@ pub fn render_markdown(markdown: &str) -> String {
 }
 
 /// Iterator adapter that highlights code blocks
-struct CodeBlockHighlighter<'a, I> {
+struct CodeBlockHighlighter<I> {
     inner: I,
     in_code_block: bool,
     code_lang: Option<String>,
     code_buffer: String,
-    pending_events: Vec<Event<'a>>,
 }
 
-impl<'a, I> CodeBlockHighlighter<'a, I>
+impl<'a, I> CodeBlockHighlighter<I>
 where
     I: Iterator<Item = Event<'a>>,
 {
@@ -42,7 +41,6 @@ where
             in_code_block: false,
             code_lang: None,
             code_buffer: String::new(),
-            pending_events: Vec::new(),
         }
     }
 
@@ -56,7 +54,7 @@ where
 
         // Fallback for other languages: html-escaped <pre><code>
         let lang_class = lang
-            .map(|l| format!(" class=\"language-{}\"", l))
+            .map(|l| format!(" class=\"language-{}\"", html_escape(l)))
             .unwrap_or_default();
 
         format!(
@@ -67,18 +65,13 @@ where
     }
 }
 
-impl<'a, I> Iterator for CodeBlockHighlighter<'a, I>
+impl<'a, I> Iterator for CodeBlockHighlighter<I>
 where
     I: Iterator<Item = Event<'a>>,
 {
     type Item = Event<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        // Return pending events first
-        if let Some(event) = self.pending_events.pop() {
-            return Some(event);
-        }
-
         loop {
             let event = self.inner.next()?;
 

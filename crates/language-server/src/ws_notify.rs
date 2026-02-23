@@ -137,6 +137,68 @@ async fn handle_ws_client(
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn server_msg_update_serialization() {
+        let msg = WsServerMsg::Update {
+            uri: "file:///foo.fe".into(),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains(r#""type":"Update""#));
+        assert!(json.contains(r#""uri":"file:///foo.fe""#));
+
+        let decoded: WsServerMsg = serde_json::from_str(&json).unwrap();
+        match decoded {
+            WsServerMsg::Update { uri } => assert_eq!(uri, "file:///foo.fe"),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn server_msg_navigate_serialization() {
+        let msg = WsServerMsg::Navigate {
+            path: "mylib::Foo/struct".into(),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains(r#""type":"Navigate""#));
+        let decoded: WsServerMsg = serde_json::from_str(&json).unwrap();
+        match decoded {
+            WsServerMsg::Navigate { path } => assert_eq!(path, "mylib::Foo/struct"),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn client_msg_goto_source_serialization() {
+        let msg = WsClientMsg::GotoSource {
+            path: "src/lib.fe:42".into(),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        let decoded: WsClientMsg = serde_json::from_str(&json).unwrap();
+        match decoded {
+            WsClientMsg::GotoSource { path } => assert_eq!(path, "src/lib.fe:42"),
+        }
+    }
+
+    #[test]
+    fn broadcast_channel_works() {
+        let (tx, _rx) = new_broadcast();
+        let mut rx2 = tx.subscribe();
+        tx.send(WsServerMsg::Update {
+            uri: "test".into(),
+        })
+        .unwrap();
+        let msg = rx2.try_recv().unwrap();
+        match msg {
+            WsServerMsg::Update { uri } => assert_eq!(uri, "test"),
+            _ => panic!("wrong variant"),
+        }
+    }
+}
+
 async fn send_json(
     ws_tx: &mut SplitSink<WebSocketStream<TcpStream>, Message>,
     msg: &WsServerMsg,

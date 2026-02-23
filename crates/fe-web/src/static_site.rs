@@ -134,7 +134,8 @@ mod tests {
         assert!(html.contains("mylib::Greeter"), "should contain item path");
         // Contains pre-rendered markdown (html_body with <strong>)
         assert!(html.contains("html_body"), "should contain html_body key");
-        assert!(html.contains("<strong>friendly</strong>"), "markdown should be pre-rendered");
+        // In the <script> tag, </ is escaped to <\/ for XSS safety
+        assert!(html.contains(r"<strong>friendly<\/strong>"), "markdown should be pre-rendered");
 
         // Cleanup
         let _ = std::fs::remove_dir_all(&dir);

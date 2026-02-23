@@ -246,7 +246,7 @@ pub enum Command {
         #[arg(long)]
         component: bool,
         /// Batch mode: read newline-delimited JSON from stdin, output JSON per line.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "file")]
         batch: bool,
     },
     /// Generate SCIP index for code navigation.
