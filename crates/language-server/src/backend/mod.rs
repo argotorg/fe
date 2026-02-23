@@ -4,6 +4,7 @@ use rustc_hash::FxHashSet;
 use url::Url;
 
 use crate::virtual_files::{VirtualFiles, materialize_builtins};
+use crate::ws_notify::{WsBroadcast, WsServerMsg};
 
 pub struct Backend {
     pub(super) client: ClientSocket,
@@ -12,10 +13,11 @@ pub struct Backend {
     pub(super) virtual_files: Option<VirtualFiles>,
     pub(super) readonly_warnings: FxHashSet<Url>,
     pub(super) definition_link_support: bool,
+    pub(super) ws_broadcast: Option<WsBroadcast>,
 }
 
 impl Backend {
-    pub fn new(client: ClientSocket) -> Self {
+    pub fn new(client: ClientSocket, ws_broadcast: Option<WsBroadcast>) -> Self {
         let db = DriverDataBase::default();
         let mut virtual_files = VirtualFiles::new("fe-language-server-").ok();
         if let Some(vfs) = virtual_files.as_mut()
@@ -37,6 +39,15 @@ impl Backend {
             virtual_files,
             readonly_warnings: FxHashSet::default(),
             definition_link_support: false,
+            ws_broadcast,
+        }
+    }
+
+    /// Send a notification to all connected WebSocket clients.
+    pub fn notify_ws(&self, msg: WsServerMsg) {
+        if let Some(tx) = &self.ws_broadcast {
+            // Ignore send errors — just means no one is listening
+            let _ = tx.send(msg);
         }
     }
 

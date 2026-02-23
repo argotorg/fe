@@ -36,9 +36,16 @@ use tracing::{error, info};
 
 pub use logging::setup_panic_hook;
 
-pub async fn run_stdio_server() {
+pub async fn run_stdio_server(ws_port: Option<u16>) {
+    // Optionally start the WebSocket notification server
+    let ws_broadcast = ws_port.map(|port| {
+        let (tx, _rx) = ws_notify::new_broadcast();
+        ws_notify::start_ws_server(port, tx.clone());
+        tx
+    });
+
     let (server, client) = async_lsp::MainLoop::new_server(|client| {
-        let lsp_service = setup(client.clone(), "LSP actor".to_string());
+        let lsp_service = setup(client.clone(), "LSP actor".to_string(), ws_broadcast.clone());
         ServiceBuilder::new()
             .layer(LifecycleLayer::default())
             .layer(CatchUnwindLayer::default())
@@ -58,7 +65,14 @@ pub async fn run_stdio_server() {
     drop(logging);
 }
 
-pub async fn run_tcp_server(port: u16, timeout: Duration) {
+pub async fn run_tcp_server(port: u16, timeout: Duration, ws_port: Option<u16>) {
+    // Optionally start the WebSocket notification server
+    let ws_broadcast = ws_port.map(|port| {
+        let (tx, _rx) = ws_notify::new_broadcast();
+        ws_notify::start_ws_server(port, tx.clone());
+        tx
+    });
+
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = TcpListener::bind(&addr)
         .await
@@ -71,9 +85,14 @@ pub async fn run_tcp_server(port: u16, timeout: Duration) {
     while let Some(Ok(stream)) = incoming.next().with_current_subscriber().await {
         let client_address = stream.peer_addr().unwrap();
         let connections_count = Arc::clone(&connections_count);
+        let ws_broadcast = ws_broadcast.clone();
         let task = async move {
             let (server, client) = async_lsp::MainLoop::new_server(|client| {
-                let router = setup(client.clone(), format!("LSP actor for {client_address}"));
+                let router = setup(
+                    client.clone(),
+                    format!("LSP actor for {client_address}"),
+                    ws_broadcast.clone(),
+                );
                 ServiceBuilder::new()
                     .layer(LifecycleLayer::default())
                     .layer(CatchUnwindLayer::default())

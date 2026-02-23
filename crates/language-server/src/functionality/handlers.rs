@@ -244,6 +244,9 @@ pub async fn handle_did_change_text_document(
             message.text_document.uri
         );
     }
+    backend.notify_ws(crate::ws_notify::WsServerMsg::Update {
+        uri: message.text_document.uri.to_string(),
+    });
     let _ = backend.client.clone().emit(FileChange {
         uri: message.text_document.uri,
         kind: ChangeKind::Edit(Some(last.text.clone())),
@@ -252,10 +255,13 @@ pub async fn handle_did_change_text_document(
 }
 
 pub async fn handle_did_save_text_document(
-    _backend: &Backend,
+    backend: &Backend,
     message: async_lsp::lsp_types::DidSaveTextDocumentParams,
 ) -> Result<(), ResponseError> {
     info!("file saved: {:?}", message.text_document.uri);
+    backend.notify_ws(crate::ws_notify::WsServerMsg::Update {
+        uri: message.text_document.uri.to_string(),
+    });
     Ok(())
 }
 

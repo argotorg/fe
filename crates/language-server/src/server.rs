@@ -33,19 +33,21 @@ use crate::functionality::{
     references, rename, selection_range, semantic_tokens, signature_help, type_definition,
     type_hierarchy, workspace_symbols,
 };
+use crate::ws_notify::WsBroadcast;
 use async_lsp::lsp_types::request::Initialize;
 use async_lsp::router::Router;
 
 pub(crate) fn setup(
     client: ClientSocket,
     name: String,
+    ws_broadcast: Option<WsBroadcast>,
 ) -> WithFallbackService<LspActorService<Backend>, Router<()>> {
     info!("Setting up server");
     let client_for_actor = client.clone();
     let client_for_logging = client.clone();
     let backend_actor = ActorBuilder::new()
         .with_name(name)
-        .with_state_init(move || Ok(Backend::new(client_for_actor)))
+        .with_state_init(move || Ok(Backend::new(client_for_actor, ws_broadcast)))
         .with_subscriber_init(logging::init_fn(client_for_logging))
         .spawn()
         .expect("Failed to spawn backend actor");

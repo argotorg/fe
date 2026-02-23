@@ -229,6 +229,11 @@ pub enum Command {
         /// for ingot/workspace discovery.
         #[arg(long)]
         root: Option<Utf8PathBuf>,
+        /// Start a WebSocket notification server on this port.
+        ///
+        /// Browser-based doc viewers can connect to receive file-change events.
+        #[arg(long)]
+        ws_port: Option<u16>,
         /// Communication mode (default: stdio).
         #[command(subcommand)]
         mode: Option<LspMode>,
@@ -424,7 +429,7 @@ pub fn run(opts: &Options) {
             run_root(path.as_ref());
         }
         #[cfg(feature = "lsp")]
-        Command::Lsp { root, mode } => {
+        Command::Lsp { root, ws_port, mode } => {
             // If --root is explicit, use it. Otherwise, auto-discover from cwd.
             let resolved_root = match root {
                 Some(r) => Some(r.canonicalize_utf8().unwrap_or_else(|e| {
@@ -454,11 +459,12 @@ pub fn run(opts: &Options) {
                         language_server::run_tcp_server(
                             *port,
                             std::time::Duration::from_secs(*timeout),
+                            *ws_port,
                         )
                         .await;
                     }
                     None => {
-                        language_server::run_stdio_server().await;
+                        language_server::run_stdio_server(*ws_port).await;
                     }
                 }
             });
