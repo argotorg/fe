@@ -1,0 +1,828 @@
+:root {
+    --bg: #1a1a2e;
+    --bg-secondary: #16213e;
+    --text: #e4e4e4;
+    --text-muted: #9ba3af;
+    --accent: #4ade80;
+    --accent-hover: #22c55e;
+    --border: #2d3748;
+    --code-bg: #0d1117;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+}
+
+.doc-layout {
+    display: grid;
+    grid-template-columns: 280px 1fr;
+    min-height: 100vh;
+}
+
+.doc-sidebar {
+    background: var(--bg-secondary);
+    border-right: 1px solid var(--border);
+    padding: 1rem;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow-y: auto;
+}
+
+.sidebar-header h1 {
+    font-size: 1.25rem;
+    margin-bottom: 1rem;
+}
+
+.sidebar-header h1 a {
+    color: var(--accent);
+    text-decoration: none;
+}
+
+.auto-follow-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+    cursor: pointer;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+.auto-follow-toggle input {
+    display: none;
+}
+
+.toggle-slider {
+    position: relative;
+    width: 36px;
+    height: 20px;
+    background: var(--border);
+    border-radius: 10px;
+    transition: background 0.2s;
+}
+
+.toggle-slider::after {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 16px;
+    height: 16px;
+    background: var(--text-muted);
+    border-radius: 50%;
+    transition: transform 0.2s, background 0.2s;
+}
+
+.auto-follow-toggle input:checked + .toggle-slider {
+    background: var(--accent);
+}
+
+.auto-follow-toggle input:checked + .toggle-slider::after {
+    transform: translateX(16px);
+    background: white;
+}
+
+.toggle-label {
+    user-select: none;
+}
+
+#search {
+    width: 100%;
+    padding: 0.5rem;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
+    margin-bottom: 0.5rem;
+}
+
+#search-results {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.search-result {
+    display: flex;
+    gap: 0.5rem;
+    padding: 0.25rem 0.5rem;
+    background: var(--bg);
+    border-radius: 4px;
+    text-decoration: none;
+    color: var(--text);
+    font-size: 0.875rem;
+}
+
+.search-result:hover {
+    background: var(--border);
+}
+
+.sidebar-nav {
+    margin-top: 1rem;
+}
+
+.nav-item {
+    margin-bottom: 0.5rem;
+}
+
+.nav-module {
+    color: var(--text);
+    text-decoration: none;
+    font-weight: 600;
+}
+
+.nav-module:hover {
+    color: var(--accent);
+}
+
+.nav-items {
+    list-style: none;
+    margin-left: 1rem;
+    margin-top: 0.25rem;
+}
+
+.nav-items li {
+    margin: 0.25rem 0;
+}
+
+.nav-items a {
+    color: var(--text-muted);
+    text-decoration: none;
+    font-size: 0.875rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.nav-items a:hover, .nav-items li.current a {
+    color: var(--text);
+}
+
+/* Grouped navigation by kind */
+.nav-groups {
+    margin-left: 0.5rem;
+    margin-top: 0.5rem;
+}
+
+.nav-kind-group {
+    margin-bottom: 0.75rem;
+}
+
+.nav-kind-header {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 0.25rem;
+    padding-left: 0.5rem;
+}
+
+.nav-kind-group .nav-items {
+    margin-left: 0.5rem;
+}
+
+.doc-content {
+    padding: 2rem 3rem;
+    max-width: 900px;
+}
+
+/* Breadcrumb navigation */
+.breadcrumb {
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: 0.875rem;
+    color: var(--text-muted);
+    margin-bottom: 0.75rem;
+}
+
+.breadcrumb-link {
+    color: var(--accent);
+    text-decoration: none;
+}
+
+.breadcrumb-link:hover {
+    text-decoration: underline;
+}
+
+.breadcrumb-sep {
+    color: var(--text-muted);
+    margin: 0 0.125rem;
+}
+
+.breadcrumb-current {
+    color: var(--text);
+}
+
+.item-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 1rem;
+}
+
+.item-title {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.item-header h1 {
+    font-size: 1.75rem;
+    margin: 0;
+}
+
+.src-link {
+    font-size: 0.875rem;
+    color: var(--text-muted);
+    text-decoration: none;
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+}
+
+.src-link:hover {
+    color: var(--accent);
+}
+
+.kind-badge {
+    font-size: 0.7rem;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    background: var(--border);
+    color: var(--text-muted);
+    text-transform: lowercase;
+}
+
+.kind-badge.struct { background: #2d4a3e; color: #7ee787; }
+.kind-badge.enum { background: #3d3a2d; color: #e7c77e; }
+.kind-badge.function, .kind-badge.fn { background: #2d3a4a; color: #7eb8e7; }
+.kind-badge.trait { background: #4a2d4a; color: #e77ee7; }
+.kind-badge.module, .kind-badge.mod { background: #2d2d4a; color: #9d7ee7; }
+.kind-badge.contract { background: #4a3d2d; color: #e7b87e; }
+.kind-badge.type { background: #2d4a4a; color: #7ee7e7; }
+.kind-badge.const { background: #3a2d4a; color: #b87ee7; }
+
+.signature {
+    background: var(--code-bg);
+    padding: 0.875rem 1rem;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    overflow-x: auto;
+    margin-bottom: 1.5rem;
+}
+
+.signature code {
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: 0.875rem;
+    white-space: pre;
+    color: var(--text);
+}
+
+/* Type links in signatures */
+.type-link {
+    color: var(--accent);
+    text-decoration: none;
+}
+
+.type-link:hover {
+    color: var(--accent-hover);
+    text-decoration: underline;
+}
+
+.docs {
+    margin-bottom: 2rem;
+}
+
+.docs p {
+    margin-bottom: 1rem;
+}
+
+.docs code {
+    background: var(--code-bg);
+    padding: 0.125rem 0.375rem;
+    border-radius: 4px;
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: 0.875em;
+}
+
+h2 {
+    font-size: 1.25rem;
+    margin: 1.5rem 0 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border);
+}
+
+.members {
+    display: grid;
+    gap: 0.75rem;
+}
+
+.members dt {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.members dd {
+    margin-left: 2rem;
+    color: var(--text-muted);
+    margin-bottom: 0.5rem;
+}
+
+/* Children sections (Fields, Variants, Methods) */
+.children-sections {
+    margin-top: 2rem;
+}
+
+.children-section {
+    margin-bottom: 2rem;
+}
+
+.children-section:last-child {
+    margin-bottom: 0;
+}
+
+.item-list {
+    list-style: none;
+}
+
+.item-list li {
+    margin: 0.5rem 0;
+}
+
+.item-list a {
+    color: var(--accent);
+    text-decoration: none;
+}
+
+.item-list a:hover {
+    text-decoration: underline;
+}
+
+.not-found {
+    text-align: center;
+    padding: 4rem 2rem;
+}
+
+.not-found h1 {
+    font-size: 2rem;
+    margin-bottom: 1rem;
+    color: var(--text);
+}
+
+.not-found p {
+    color: var(--text-muted);
+    margin-bottom: 0.5rem;
+}
+
+.not-found code {
+    background: var(--code-bg);
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+}
+
+.not-found-hint {
+    font-size: 0.875rem;
+    font-style: italic;
+}
+
+/* Implementations sections */
+.implementations {
+    margin-top: 2rem;
+}
+
+.inherent-impls,
+.trait-impls {
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--border);
+    margin-bottom: 1.5rem;
+}
+
+.inherent-impls h2,
+.trait-impls h2 {
+    font-size: 1.25rem;
+    margin-bottom: 1rem;
+    color: var(--text);
+}
+
+.impl-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.impl-block {
+    padding: 1rem;
+    background: var(--bg-secondary);
+    border-radius: 6px;
+    border: 1px solid var(--border);
+}
+
+.impl-block h3 {
+    margin: 0 0 0.75rem 0;
+    font-size: 1rem;
+}
+
+.impl-block h3 a {
+    color: var(--accent);
+    text-decoration: none;
+}
+
+.impl-block h3 a:hover {
+    text-decoration: underline;
+}
+
+.impl-block .signature {
+    margin: 0;
+    font-size: 0.85rem;
+}
+
+/* Rustdoc-inspired toggle/collapsible sections */
+.toggle {
+    margin-bottom: 0.75rem;
+}
+
+.toggle > summary {
+    cursor: pointer;
+    list-style: none;
+    display: flex;
+    align-items: center;
+}
+
+.toggle > summary::-webkit-details-marker {
+    display: none;
+}
+
+.toggle > summary::before {
+    content: '▶';
+    flex-shrink: 0;
+    width: 1rem;
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    transition: transform 0.15s ease;
+}
+
+.toggle[open] > summary::before {
+    transform: rotate(90deg);
+}
+
+/* Anchor links (§) */
+.anchor {
+    color: var(--text-muted);
+    text-decoration: none;
+    font-size: 0.8rem;
+    margin-right: 0.5rem;
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+
+.impl-block:hover .anchor,
+.method-item:hover > summary .anchor,
+h2:hover .anchor {
+    opacity: 1;
+}
+
+.anchor:hover {
+    color: var(--accent);
+}
+
+/* Impl block styling */
+.impl-block {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0;
+    margin-bottom: 1rem;
+}
+
+.impl-block > summary {
+    padding: 0.75rem 1rem;
+    background: var(--bg-secondary);
+    border-radius: 6px 6px 0 0;
+}
+
+.impl-block[open] > summary {
+    border-bottom: 1px solid var(--border);
+}
+
+.impl-header {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.impl-header h3 {
+    margin: 0;
+    font-size: 0.95rem;
+    font-weight: 600;
+}
+
+.impl-header code {
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    color: var(--accent);
+}
+
+.impl-content {
+    padding: 0.75rem 1rem;
+}
+
+.impl-signature {
+    background: var(--code-bg);
+    padding: 0.5rem 0.75rem;
+    border-radius: 4px;
+    margin: 0 0 0.75rem 0;
+    font-size: 0.85rem;
+    overflow-x: auto;
+}
+
+.impl-signature code {
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    white-space: pre;
+}
+
+/* Method items within impl blocks */
+.impl-items {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.method-item {
+    border-left: 3px solid var(--border);
+    margin-left: 0.5rem;
+}
+
+.method-item > summary {
+    padding: 0.5rem 0.75rem;
+}
+
+.method-item[open] > summary {
+    border-bottom: 1px dashed var(--border);
+}
+
+/* Method items without toggle (no docs to collapse) */
+.method-item.no-toggle {
+    padding: 0.5rem 0.75rem;
+}
+
+.method-header {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.method-header h4 {
+    margin: 0;
+    font-size: 0.875rem;
+    font-weight: 500;
+}
+
+.code-header code {
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    color: var(--text);
+}
+
+.method-docblock {
+    padding: 0.5rem 0.75rem;
+    color: var(--text-muted);
+    font-size: 0.875rem;
+    line-height: 1.5;
+}
+
+/* Module items - rustdoc-style table layout */
+.module-items {
+    margin-top: 1.5rem;
+}
+
+.item-table {
+    margin-bottom: 2rem;
+}
+
+.item-table h2 {
+    font-size: 1.125rem;
+    margin-bottom: 0.75rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border);
+}
+
+.item-list {
+    display: flex;
+    flex-direction: column;
+}
+
+.item-row {
+    display: grid;
+    grid-template-columns: minmax(150px, max-content) 1fr;
+    align-items: baseline;
+    gap: 1rem;
+    padding: 0.375rem 0;
+    border-bottom: 1px solid var(--border);
+}
+
+.item-row:last-child {
+    border-bottom: none;
+}
+
+.item-name a {
+    color: var(--accent);
+    text-decoration: none;
+}
+
+.item-name a:hover {
+    text-decoration: underline;
+}
+
+.item-name code {
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: 0.875rem;
+}
+
+.item-summary {
+    color: var(--text-muted);
+    font-size: 0.875rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Implementors section for traits */
+.implementors {
+    margin-top: 2rem;
+}
+
+.implementors h2 {
+    font-size: 1.25rem;
+    margin-bottom: 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border);
+}
+
+.implementor-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.implementor-item {
+    padding: 0.5rem;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+}
+
+.implementor-sig {
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: 0.875rem;
+    color: var(--text);
+}
+
+/* Recursive sidebar module tree */
+.nav-module-tree {
+    margin-bottom: 0.25rem;
+}
+
+.nav-module-tree > summary {
+    cursor: pointer;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.25rem 0;
+}
+
+.nav-module-tree > summary::-webkit-details-marker {
+    display: none;
+}
+
+.nav-module-tree > summary::before {
+    content: '▶';
+    font-size: 0.6rem;
+    color: var(--text-muted);
+    transition: transform 0.15s ease;
+    width: 0.75rem;
+    flex-shrink: 0;
+}
+
+.nav-module-tree[open] > summary::before {
+    transform: rotate(90deg);
+}
+
+.nav-module-tree > summary a {
+    color: var(--text);
+    text-decoration: none;
+    font-weight: 600;
+}
+
+.nav-module-tree > summary a:hover {
+    color: var(--accent);
+}
+
+.nav-module-tree > summary.current a {
+    color: var(--accent);
+}
+
+.nav-module-content {
+    margin-left: 0.75rem;
+    padding-left: 0.5rem;
+    border-left: 1px solid var(--border);
+}
+
+.nav-submodules {
+    margin-top: 0.25rem;
+}
+
+/* Member items (fields, variants, methods) with anchors */
+.member-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.member-item {
+    padding: 0.5rem 0.75rem;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    border-left: 3px solid var(--border);
+}
+
+.member-item:hover {
+    border-left-color: var(--accent);
+}
+
+.member-item:target {
+    border-left-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 10%, var(--bg-secondary));
+}
+
+.member-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.member-signature {
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: 0.875rem;
+    color: var(--text);
+}
+
+.member-docs {
+    margin-top: 0.5rem;
+    padding-top: 0.5rem;
+    border-top: 1px dashed var(--border);
+    color: var(--text-muted);
+    font-size: 0.875rem;
+    line-height: 1.5;
+}
+
+/* Type links in signatures */
+.type-link {
+    color: var(--accent);
+    text-decoration: none;
+}
+
+.type-link:hover {
+    text-decoration: underline;
+}
+
+/* Implementor items with anchors */
+.implementor-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+}
+
+.implementor-item:target {
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 10%, var(--bg-secondary));
+}
+
+/* Link to implementation on type's page */
+.impl-link {
+    margin-left: auto;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    text-decoration: none;
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+
+.implementor-item:hover .impl-link {
+    opacity: 1;
+}
+
+.impl-link:hover {
+    color: var(--accent);
+}
