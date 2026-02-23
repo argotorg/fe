@@ -5,6 +5,7 @@
 use std::path::Path;
 
 use crate::assets;
+use crate::highlight::highlight_fe;
 use crate::markdown::render_markdown;
 use crate::model::DocIndex;
 
@@ -22,14 +23,13 @@ impl StaticSiteGenerator {
 
     /// Generate a static documentation site with optional embedded SCIP data.
     ///
-    /// When `scip_bytes` is provided, the SCIP protobuf is base64-encoded and
-    /// embedded in the HTML. The browser can decode it and create a `ScipStore`
-    /// for interactive symbol resolution (progressive enhancement over the
-    /// pre-rendered DocIndex).
+    /// When `scip_json` is provided, the pre-processed SCIP JSON is embedded
+    /// inline so the browser can build a ScipStore for interactive symbol
+    /// resolution (progressive enhancement over the pre-rendered DocIndex).
     pub fn generate_with_scip(
         index: &DocIndex,
         output_dir: &Path,
-        scip_bytes: Option<&[u8]>,
+        scip_json: Option<&str>,
     ) -> std::io::Result<()> {
         std::fs::create_dir_all(output_dir)?;
 
@@ -37,14 +37,15 @@ impl StaticSiteGenerator {
         let mut value = serde_json::to_value(index)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
 
-        // Pre-render markdown bodies
+        // Pre-render markdown bodies and syntax-highlight signatures
         inject_html_bodies(&mut value);
+        inject_highlighted_signatures(&mut value);
 
         let json = serde_json::to_string(&value)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
 
         let title = index_title(index);
-        let html = assets::html_shell_with_scip(&title, &json, scip_bytes);
+        let html = assets::html_shell_with_scip(&title, &json, scip_json);
 
         std::fs::write(output_dir.join("index.html"), html)?;
 
@@ -76,6 +77,34 @@ pub fn inject_html_bodies(value: &mut serde_json::Value) {
         serde_json::Value::Array(arr) => {
             for v in arr {
                 inject_html_bodies(v);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Walk the JSON and inject `highlighted_signature` next to every `signature`
+/// field by running the tree-sitter Fe highlighter.
+pub fn inject_highlighted_signatures(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            // If this object has a "signature" string, highlight it
+            if let Some(sig) = map.get("signature").and_then(|s| s.as_str()) {
+                if !sig.is_empty() {
+                    let html = highlight_fe(sig);
+                    map.insert(
+                        "highlighted_signature".to_string(),
+                        serde_json::Value::String(html),
+                    );
+                }
+            }
+            for v in map.values_mut() {
+                inject_highlighted_signatures(v);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr {
+                inject_highlighted_signatures(v);
             }
         }
         _ => {}
@@ -164,6 +193,18 @@ mod tests {
         let json = serde_json::to_string_pretty(&value).unwrap();
         assert!(json.contains("html_body"));
         assert!(json.contains("<strong>friendly</strong>"));
+    }
+
+    #[test]
+    fn inject_highlighted_signatures_works() {
+        let index = sample_index();
+        let mut value = serde_json::to_value(&index).unwrap();
+        inject_highlighted_signatures(&mut value);
+
+        let json = serde_json::to_string_pretty(&value).unwrap();
+        assert!(json.contains("highlighted_signature"), "should inject highlighted_signature");
+        // "pub struct Greeter" should produce a keyword span for "struct"
+        assert!(json.contains("hl-keyword"), "should have keyword highlight: {json}");
     }
 
     #[test]

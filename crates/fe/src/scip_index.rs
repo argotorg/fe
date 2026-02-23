@@ -10,6 +10,7 @@ use hir::{
 };
 
 use crate::index_util::{self, LineIndex};
+use fe_web::model::DocIndex;
 use scip::{
     symbol::format_symbol,
     types::{self, descriptor, symbol_information},
@@ -265,6 +266,255 @@ pub fn generate_scip(
     index.documents = docs;
 
     Ok(index)
+}
+
+/// Convert a SCIP Index into a compact JSON string for browser embedding.
+///
+/// The JSON has two top-level keys:
+/// - `symbols`: map from SCIP symbol string to metadata
+/// - `files`: map from relative file path to sorted occurrence arrays
+pub fn scip_to_json_data(index: &types::Index) -> String {
+    use serde_json::{Map, Value, json};
+
+    let mut symbols = Map::new();
+    let mut files: HashMap<String, Vec<Value>> = HashMap::new();
+
+    for doc in &index.documents {
+        // Collect symbol info from this document
+        for si in &doc.symbols {
+            if symbols.contains_key(&si.symbol) {
+                continue;
+            }
+            let kind = si.kind.value();
+            let docs: Vec<Value> = si
+                .documentation
+                .iter()
+                .map(|d| Value::String(d.clone()))
+                .collect();
+            let mut entry = Map::new();
+            entry.insert("name".into(), Value::String(si.display_name.clone()));
+            entry.insert("kind".into(), Value::Number(kind.into()));
+            if !docs.is_empty() {
+                entry.insert("docs".into(), Value::Array(docs));
+            }
+            if !si.enclosing_symbol.is_empty() {
+                entry.insert(
+                    "enclosing".into(),
+                    Value::String(si.enclosing_symbol.clone()),
+                );
+            }
+            symbols.insert(si.symbol.clone(), Value::Object(entry));
+        }
+
+        // Collect occurrences
+        let file_occs = files.entry(doc.relative_path.clone()).or_default();
+        for occ in &doc.occurrences {
+            if occ.range.is_empty() || occ.symbol.is_empty() {
+                continue;
+            }
+            let line = occ.range[0];
+            let cs = occ.range[1];
+            let ce = if occ.range.len() == 3 {
+                occ.range[2]
+            } else if occ.range.len() >= 4 {
+                occ.range[3]
+            } else {
+                continue;
+            };
+            let is_def = (occ.symbol_roles & (types::SymbolRole::Definition as i32)) != 0;
+            let mut obj = json!({
+                "line": line,
+                "cs": cs,
+                "ce": ce,
+                "sym": occ.symbol,
+            });
+            if is_def {
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert("def".into(), Value::Bool(true));
+            }
+            file_occs.push(obj);
+        }
+    }
+
+    // Sort occurrences by line, then column
+    for occs in files.values_mut() {
+        occs.sort_by(|a, b| {
+            let al = a["line"].as_i64().unwrap_or(0);
+            let bl = b["line"].as_i64().unwrap_or(0);
+            al.cmp(&bl)
+                .then(a["cs"].as_i64().unwrap_or(0).cmp(&b["cs"].as_i64().unwrap_or(0)))
+        });
+    }
+
+    let mut root = Map::new();
+    root.insert("symbols".into(), Value::Object(symbols));
+    root.insert(
+        "files".into(),
+        serde_json::to_value(files).unwrap_or(Value::Object(Map::new())),
+    );
+    Value::Object(root).to_string()
+}
+
+/// Inject `doc_url` fields into a SCIP JSON string by matching SCIP display names
+/// against items in the DocIndex.
+pub fn inject_doc_urls(scip_json: &str, doc_index: &DocIndex) -> String {
+    let mut root: serde_json::Value = match serde_json::from_str(scip_json) {
+        Ok(v) => v,
+        Err(_) => return scip_json.to_string(),
+    };
+
+    // Build name → url_path lookup from DocIndex items
+    let mut name_to_url: HashMap<&str, String> = HashMap::new();
+    for item in &doc_index.items {
+        name_to_url.insert(&item.name, item.url_path());
+    }
+
+    if let Some(symbols) = root.get_mut("symbols").and_then(|s| s.as_object_mut()) {
+        for (_sym_str, entry) in symbols.iter_mut() {
+            if let Some(obj) = entry.as_object_mut() {
+                if let Some(name) = obj.get("name").and_then(|n| n.as_str()) {
+                    if let Some(url) = name_to_url.get(name) {
+                        obj.insert(
+                            "doc_url".to_string(),
+                            serde_json::Value::String(url.clone()),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    root.to_string()
+}
+
+/// Enrich `rich_signature` fields in a DocIndex using the SCIP symbol table.
+///
+/// Tokenizes each item's `signature` string and links type-like identifiers
+/// to their doc page URLs when they appear in the SCIP index.
+pub fn enrich_signatures(index: &mut DocIndex, scip_index: &types::Index) {
+    use fe_web::model::SignaturePart;
+
+    // Build display_name → doc_url map from SCIP symbols
+    let mut type_urls: HashMap<String, String> = HashMap::new();
+    for doc in &scip_index.documents {
+        for si in &doc.symbols {
+            let kind = si.kind.value();
+            // Only link types: Struct(49), Enum(11), Trait(53), TypeAlias(54/55), Contract(7/Class)
+            if matches!(kind, 49 | 11 | 53 | 54 | 55 | 7) {
+                if !si.display_name.is_empty() && !type_urls.contains_key(&si.display_name) {
+                    type_urls.insert(si.display_name.clone(), si.symbol.clone());
+                }
+            }
+        }
+    }
+
+    // Build SCIP symbol → DocIndex url_path map
+    let mut name_to_url: HashMap<&str, String> = HashMap::new();
+    for item in &index.items {
+        name_to_url.insert(&item.name, item.url_path());
+    }
+
+    // Resolve type_urls to actual doc URLs
+    let mut type_doc_urls: HashMap<String, String> = HashMap::new();
+    for (display_name, _scip_symbol) in &type_urls {
+        if let Some(url) = name_to_url.get(display_name.as_str()) {
+            type_doc_urls.insert(display_name.clone(), url.clone());
+        }
+    }
+
+    if type_doc_urls.is_empty() {
+        return;
+    }
+
+    fn tokenize_signature(sig: &str, type_urls: &HashMap<String, String>) -> Vec<SignaturePart> {
+        let mut parts = Vec::new();
+        let mut text_buf = String::new();
+        let mut ident_buf = String::new();
+        let chars: Vec<char> = sig.chars().collect();
+        let mut i = 0;
+
+        while i < chars.len() {
+            let ch = chars[i];
+            if ch.is_alphanumeric() || ch == '_' {
+                // Start or continue identifier
+                if ident_buf.is_empty() && !text_buf.is_empty() {
+                    // Flush text buffer before starting ident
+                }
+                ident_buf.push(ch);
+            } else {
+                // End of identifier
+                if !ident_buf.is_empty() {
+                    if let Some(url) = type_urls.get(&ident_buf) {
+                        if !text_buf.is_empty() {
+                            parts.push(SignaturePart::text(&text_buf));
+                            text_buf.clear();
+                        }
+                        parts.push(SignaturePart::link(&ident_buf, url));
+                    } else {
+                        text_buf.push_str(&ident_buf);
+                    }
+                    ident_buf.clear();
+                }
+                text_buf.push(ch);
+            }
+            i += 1;
+        }
+        // Flush remaining
+        if !ident_buf.is_empty() {
+            if let Some(url) = type_urls.get(&ident_buf) {
+                if !text_buf.is_empty() {
+                    parts.push(SignaturePart::text(&text_buf));
+                    text_buf.clear();
+                }
+                parts.push(SignaturePart::link(&ident_buf, url));
+            } else {
+                text_buf.push_str(&ident_buf);
+            }
+        }
+        if !text_buf.is_empty() {
+            parts.push(SignaturePart::text(&text_buf));
+        }
+        parts
+    }
+
+    // Check if a rich signature actually has any links
+    fn has_links(parts: &[SignaturePart]) -> bool {
+        parts.iter().any(|p| p.link.is_some())
+    }
+
+    // Enrich top-level item signatures
+    for item in &mut index.items {
+        if !item.signature.is_empty() && item.rich_signature.is_empty() {
+            let parts = tokenize_signature(&item.signature, &type_doc_urls);
+            if has_links(&parts) {
+                item.rich_signature = parts;
+            }
+        }
+
+        // Enrich children (fields, variants, methods)
+        for child in &mut item.children {
+            if !child.signature.is_empty() && child.rich_signature.is_empty() {
+                let parts = tokenize_signature(&child.signature, &type_doc_urls);
+                if has_links(&parts) {
+                    child.rich_signature = parts;
+                }
+            }
+        }
+
+        // Enrich trait impl signatures
+        for trait_impl in &mut item.trait_impls {
+            // Enrich impl methods
+            for method in &mut trait_impl.methods {
+                if !method.signature.is_empty() && method.rich_signature.is_empty() {
+                    let parts = tokenize_signature(&method.signature, &type_doc_urls);
+                    if has_links(&parts) {
+                        method.rich_signature = parts;
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]

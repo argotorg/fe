@@ -40,6 +40,7 @@ pub fn generate_docs(
     port: u16,
     static_site: bool,
     markdown_pages: bool,
+    builtins: bool,
 ) {
     // First, check if there's a running LSP with docs server
     if serve_docs {
@@ -71,15 +72,71 @@ pub fn generate_docs(
     let index = if path.is_file() && path.extension() == Some("fe") {
         extract_single_file(&mut db, path)
     } else if path.is_dir() {
-        extract_ingot(&mut db, path)
+        // Check if this is a workspace (fe.toml with [workspace] section)
+        let fe_toml = path.join("fe.toml");
+        if fe_toml.is_file() {
+            if let Ok(content) = std::fs::read_to_string(&fe_toml) {
+                if let Ok(common::config::Config::Workspace(ws_config)) =
+                    common::config::Config::parse(&content)
+                {
+                    extract_workspace(&mut db, path, &ws_config)
+                } else {
+                    extract_ingot(&mut db, path)
+                }
+            } else {
+                extract_ingot(&mut db, path)
+            }
+        } else {
+            extract_ingot(&mut db, path)
+        }
     } else {
         eprintln!("Error: Path must be either a .fe file or a directory containing fe.toml");
         std::process::exit(1);
     };
 
-    let Some(index) = index else {
+    let Some(mut index) = index else {
         std::process::exit(1);
     };
+
+    // Append builtin ingot docs when --builtins is set
+    if builtins {
+        use common::stdlib::{HasBuiltinCore, HasBuiltinStd};
+
+        // Skip builtins that are already present (e.g. workspace that includes core/std)
+        let existing_roots: std::collections::HashSet<String> =
+            index.modules.iter().map(|m| m.name.clone()).collect();
+
+        for (label, builtin_ingot) in [
+            ("core", db.builtin_core()),
+            ("std", db.builtin_std()),
+        ] {
+            if existing_roots.contains(label) {
+                continue;
+            }
+
+            let extractor = DocExtractor::new(&db);
+            for top_mod in builtin_ingot.all_modules(&db) {
+                for item in top_mod.children_nested(&db) {
+                    if let Some(doc_item) =
+                        extractor.extract_item_for_ingot(item, builtin_ingot)
+                    {
+                        index.items.push(doc_item);
+                    }
+                }
+            }
+            let root_mod = builtin_ingot.root_mod(&db);
+            index
+                .modules
+                .extend(extractor.build_module_tree_for_ingot(builtin_ingot, root_mod));
+
+            let trait_impl_links = extractor.extract_trait_impl_links(builtin_ingot);
+            index.link_trait_impls(trait_impl_links);
+
+            let mod_count = builtin_ingot.all_modules(&db).len();
+            println!("  Included builtin '{label}' ({mod_count} modules)");
+        }
+
+    }
 
     if static_site {
         let output_dir = output
@@ -87,17 +144,17 @@ pub fn generate_docs(
             .unwrap_or_else(|| std::path::PathBuf::from("docs"));
 
         // Generate SCIP for interactive navigation (best-effort)
-        let scip_bytes = generate_scip_for_doc(&mut db, path);
+        let scip_json = generate_scip_json_for_doc(&mut db, path, &mut index);
 
         if let Err(e) = fe_web::static_site::StaticSiteGenerator::generate_with_scip(
             &index,
             &output_dir,
-            scip_bytes.as_deref(),
+            scip_json.as_deref(),
         ) {
             eprintln!("Error generating static docs: {e}");
             std::process::exit(1);
         }
-        if scip_bytes.is_some() {
+        if scip_json.is_some() {
             println!("Static docs written to {} (with SCIP)", output_dir.display());
         } else {
             println!("Static docs written to {}", output_dir.display());
@@ -184,6 +241,67 @@ fn extract_single_file(db: &mut DriverDataBase, file_path: &Utf8PathBuf) -> Opti
     Some(extractor.extract_module(top_mod))
 }
 
+fn extract_workspace(
+    db: &mut DriverDataBase,
+    workspace_root: &Utf8PathBuf,
+    ws_config: &common::config::WorkspaceConfig,
+) -> Option<DocIndex> {
+    use common::config::WorkspaceMemberSelection;
+
+    let members = ws_config
+        .workspace
+        .members_for_selection(WorkspaceMemberSelection::PrimaryOnly);
+
+    if members.is_empty() {
+        eprintln!("Error: Workspace has no members");
+        return None;
+    }
+
+    println!(
+        "Workspace with {} member(s): {}",
+        members.len(),
+        members
+            .iter()
+            .map(|m| m.name.as_deref().unwrap_or(m.path.as_str()))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+
+    let mut combined = DocIndex::new();
+
+    for member in &members {
+        let member_path = Utf8PathBuf::from(workspace_root.join(member.path.as_str()));
+        if !member_path.is_dir() {
+            eprintln!(
+                "Warning: Workspace member '{}' at {} not found, skipping",
+                member.name.as_deref().unwrap_or(member.path.as_str()),
+                member_path,
+            );
+            continue;
+        }
+
+        let member_name = member.name.as_deref().unwrap_or(member.path.as_str());
+        println!("  Extracting docs for '{member_name}'...");
+
+        // Each member gets its own fresh database to avoid cross-contamination
+        let mut member_db = DriverDataBase::default();
+        if let Some(member_index) = extract_ingot(&mut member_db, &member_path) {
+            combined.items.extend(member_index.items);
+            combined.modules.extend(member_index.modules);
+        } else {
+            eprintln!("  Warning: Failed to extract docs for '{member_name}'");
+        }
+    }
+
+    if combined.items.is_empty() && combined.modules.is_empty() {
+        eprintln!("Error: No documentation extracted from workspace members");
+        return None;
+    }
+
+
+    Some(combined)
+}
+
 fn extract_ingot(db: &mut DriverDataBase, dir_path: &Utf8PathBuf) -> Option<DocIndex> {
     let canonical_path = dir_path.canonicalize_utf8().ok()?;
     let ingot_url = Url::from_directory_path(canonical_path.as_str()).ok()?;
@@ -222,38 +340,38 @@ fn extract_ingot(db: &mut DriverDataBase, dir_path: &Utf8PathBuf) -> Option<DocI
     let trait_impl_links = extractor.extract_trait_impl_links(ingot);
     index.link_trait_impls(trait_impl_links);
 
-    // Link types in signatures to their documentation pages
-    index.link_signature_types();
-
     Some(index)
 }
 
-/// Generate SCIP bytes for embedding in static docs (best-effort).
+/// Generate SCIP JSON for embedding in static docs (best-effort).
 ///
-/// For ingot directories, runs the full SCIP generator. For single files,
-/// constructs a synthetic ingot URL from the file's parent directory.
+/// Also enriches the DocIndex's `rich_signature` fields using the SCIP
+/// symbol table before returning the JSON string.
+///
 /// Returns `None` if generation fails (SCIP is optional progressive enhancement).
-fn generate_scip_for_doc(db: &mut DriverDataBase, path: &Utf8PathBuf) -> Option<Vec<u8>> {
-    use protobuf::Message;
-
+fn generate_scip_json_for_doc(
+    db: &mut DriverDataBase,
+    path: &Utf8PathBuf,
+    doc_index: &mut fe_web::model::DocIndex,
+) -> Option<String> {
     let ingot_url = if path.is_dir() {
         let canonical = path.canonicalize_utf8().ok()?;
         Url::from_directory_path(canonical.as_str()).ok()?
     } else {
-        // Single file: use parent directory as ingot root
         let canonical = path.canonicalize_utf8().ok()?;
         let parent = canonical.parent()?;
         Url::from_directory_path(parent.as_str()).ok()?
     };
 
     match crate::scip_index::generate_scip(db, &ingot_url) {
-        Ok(index) => match index.write_to_bytes() {
-            Ok(bytes) => Some(bytes),
-            Err(e) => {
-                eprintln!("Warning: SCIP serialization failed: {e}");
-                None
-            }
-        },
+        Ok(scip_index) => {
+            // Enrich signatures before serializing
+            crate::scip_index::enrich_signatures(doc_index, &scip_index);
+
+            // Convert to JSON and inject doc URLs
+            let json = crate::scip_index::scip_to_json_data(&scip_index);
+            Some(crate::scip_index::inject_doc_urls(&json, doc_index))
+        }
         Err(e) => {
             eprintln!("Warning: SCIP generation failed: {e}");
             None
