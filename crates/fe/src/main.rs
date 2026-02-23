@@ -95,6 +95,9 @@ pub enum Command {
         /// Generate a static HTML documentation site
         #[arg(long = "static")]
         static_site: bool,
+        /// Generate Starlight-compatible markdown pages for Astro integration
+        #[arg(long)]
+        markdown_pages: bool,
     },
     #[cfg(not(target_arch = "wasm32"))]
     Tree {
@@ -330,8 +333,17 @@ pub fn run(opts: &Options) {
             serve,
             port,
             static_site,
+            markdown_pages,
         } => {
-            doc::generate_docs(path, output.as_ref(), *json, *serve, *port, *static_site);
+            doc::generate_docs(
+                path,
+                output.as_ref(),
+                *json,
+                *serve,
+                *port,
+                *static_site,
+                *markdown_pages,
+            );
         }
         #[cfg(not(target_arch = "wasm32"))]
         Command::Tree { path } => {
