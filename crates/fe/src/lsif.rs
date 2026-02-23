@@ -4,10 +4,11 @@ use std::io::{self, Write};
 use common::InputDb;
 use common::diagnostics::Span;
 use hir::{
-    core::semantic::{ReferenceIndex, SymbolView},
     hir_def::{HirIngot, ItemKind, scope_graph::ScopeId},
     span::LazySpan,
 };
+
+use crate::index_util::{self, LineIndex};
 
 /// Position in LSIF (0-based line and character).
 #[derive(Clone, Copy)]
@@ -23,17 +24,6 @@ struct LsifRange {
     end: LsifPos,
 }
 
-/// Compute line offsets for a text string.
-fn calculate_line_offsets(text: &str) -> Vec<usize> {
-    let mut offsets = vec![0];
-    for (i, b) in text.bytes().enumerate() {
-        if b == b'\n' {
-            offsets.push(i + 1);
-        }
-    }
-    offsets
-}
-
 fn utf16_column(text: &str, line_start: usize, offset: usize) -> Option<u32> {
     if line_start > offset || offset > text.len() {
         return None;
@@ -45,28 +35,21 @@ fn utf16_column(text: &str, line_start: usize, offset: usize) -> Option<u32> {
 /// Convert a Span to an LsifRange.
 fn span_to_range(span: &Span, db: &dyn InputDb) -> Option<LsifRange> {
     let text = span.file.text(db);
-    let line_offsets = calculate_line_offsets(text);
+    let line_index = LineIndex::new(text);
 
-    let start: usize = span.range.start().into();
-    let end: usize = span.range.end().into();
+    let start = line_index.position(span.range.start().into());
+    let end = line_index.position(span.range.end().into());
 
-    let start_line = line_offsets
-        .partition_point(|&line_start| line_start <= start)
-        .saturating_sub(1);
-    let end_line = line_offsets
-        .partition_point(|&line_start| line_start <= end)
-        .saturating_sub(1);
-
-    let start_character = utf16_column(text, line_offsets[start_line], start)?;
-    let end_character = utf16_column(text, line_offsets[end_line], end)?;
+    let start_character = utf16_column(text, start.line_start_offset, start.byte_offset)?;
+    let end_character = utf16_column(text, end.line_start_offset, end.byte_offset)?;
 
     Some(LsifRange {
         start: LsifPos {
-            line: start_line as u32,
+            line: start.line as u32,
             character: start_character,
         },
         end: LsifPos {
-            line: end_line as u32,
+            line: end.line as u32,
             character: end_character,
         },
     })
@@ -217,11 +200,10 @@ impl<W: Write> LsifEmitter<W> {
 
 /// Build hover content for an item (definition + docstring) using SymbolView.
 fn build_hover_content(db: &driver::DriverDataBase, item: ItemKind) -> Option<String> {
-    let sym = SymbolView::from_item(item);
-    let signature = sym.signature(db)?;
-    let docstring = sym.docs(db);
+    let docs = index_util::item_docs(db, item);
+    let signature = docs.signature?;
 
-    if let Some(doc) = docstring {
+    if let Some(doc) = docs.docstring {
         Some(format!("{signature}\n\n{doc}"))
     } else {
         Some(signature)
@@ -240,32 +222,13 @@ pub fn generate_lsif(
     emitter.emit_metadata()?;
     let project_id = emitter.emit_project()?;
 
-    let Some(ingot) = db.workspace().containing_ingot(db, ingot_url.clone()) else {
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            "Could not resolve ingot",
-        ));
-    };
-
-    // Get ingot name and version for monikers
-    let ingot_name = ingot
-        .config(db)
-        .and_then(|c| c.metadata.name)
-        .map(|n| n.to_string())
-        .unwrap_or_else(|| "unknown".to_string());
-    let ingot_version = ingot
-        .version(db)
-        .map(|v| v.to_string())
-        .unwrap_or_else(|| "0.0.0".to_string());
-
-    // Build reference index once for the whole ingot
-    let ref_index = ReferenceIndex::build(db, ingot);
+    let ctx = index_util::IngotContext::resolve(db, ingot_url)?;
 
     // Track documents: url -> (vertex_id, range_ids)
     let mut documents: HashMap<String, (u64, Vec<u64>)> = HashMap::new();
 
     // Pre-emit document vertices for each module
-    for top_mod in ingot.all_modules(db) {
+    for top_mod in ctx.ingot.all_modules(db) {
         let doc_span = top_mod.span().resolve(db);
         let doc_url = match &doc_span {
             Some(span) => match span.file.url(db) {
@@ -281,7 +244,7 @@ pub fn generate_lsif(
     }
 
     // Process each module's items
-    for top_mod in ingot.all_modules(db) {
+    for top_mod in ctx.ingot.all_modules(db) {
         let scope_graph = top_mod.scope_graph(db);
 
         let doc_span = top_mod.span().resolve(db);
@@ -339,7 +302,7 @@ pub fn generate_lsif(
             // Collect references from the pre-built index
             // Group by document URL so we can emit per-document item edges
             let mut refs_by_doc: HashMap<String, Vec<u64>> = HashMap::new();
-            for indexed_ref in ref_index.references_to(&scope) {
+            for indexed_ref in ctx.ref_index.references_to(&scope) {
                 if let Some(resolved) = indexed_ref.span.resolve(db)
                     && let Some(r) = span_to_range(&resolved, db)
                 {
@@ -374,7 +337,7 @@ pub fn generate_lsif(
 
             // Moniker
             if let Some(pretty_path) = scope.pretty_path(db) {
-                let identifier = format!("{ingot_name}:{ingot_version}:{pretty_path}");
+                let identifier = format!("{}:{}:{pretty_path}", ctx.name, ctx.version);
                 let moniker_id = emitter.emit_moniker("fe", &identifier)?;
                 emitter.emit_edge("moniker/attach", result_set_id, moniker_id)?;
             }
@@ -736,12 +699,9 @@ fn make_point() -> Point {
     #[test]
     fn test_utf16_column_counts_surrogate_pairs() {
         let text = "a😀b";
-        let line_offsets = calculate_line_offsets(text);
-        assert_eq!(line_offsets, vec![0]);
-
         // byte offsets: a=0..1, 😀=1..5, b=5..6
-        assert_eq!(utf16_column(text, line_offsets[0], 1), Some(1));
-        assert_eq!(utf16_column(text, line_offsets[0], 5), Some(3));
-        assert_eq!(utf16_column(text, line_offsets[0], 6), Some(4));
+        assert_eq!(utf16_column(text, 0, 1), Some(1));
+        assert_eq!(utf16_column(text, 0, 5), Some(3));
+        assert_eq!(utf16_column(text, 0, 6), Some(4));
     }
 }
