@@ -142,11 +142,7 @@ fn preserve_line_breaks(text: &str) -> String {
 
 /// Escape HTML special characters
 fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#x27;")
+    crate::escape::escape_html(s)
 }
 
 #[cfg(test)]
