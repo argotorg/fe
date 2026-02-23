@@ -89,10 +89,13 @@ pub fn highlight_fe(code: &str) -> String {
     String::from_utf8_lossy(&renderer.html).into_owned()
 }
 
-/// Highlight Fe code and wrap in a `<pre><code>` block.
+/// Highlight Fe code and wrap in a `<fe-code-block>` custom element.
+///
+/// The `highlighted` attribute tells the client-side element to use the
+/// innerHTML as-is (already tree-sitter highlighted server-side).
 pub fn highlight_fe_block(code: &str) -> String {
     let inner = highlight_fe(code);
-    format!("<pre><code class=\"language-fe\">{inner}</code></pre>")
+    format!("<fe-code-block lang=\"fe\" highlighted>{inner}</fe-code-block>")
 }
 
 fn html_escape(s: &str) -> String {
@@ -142,8 +145,8 @@ mod tests {
     #[test]
     fn block_wrapper() {
         let html = highlight_fe_block("fn f() {}");
-        assert!(html.starts_with("<pre><code class=\"language-fe\">"));
-        assert!(html.ends_with("</code></pre>"));
+        assert!(html.starts_with("<fe-code-block lang=\"fe\" highlighted>"));
+        assert!(html.ends_with("</fe-code-block>"));
     }
 
     #[test]

@@ -161,7 +161,7 @@ mod tests {
     fn test_code_block() {
         let md = "```fe\nfn main() {}\n```";
         let html = render_markdown(md);
-        assert!(html.contains("language-fe"));
+        assert!(html.contains("fe-code-block"), "should wrap in <fe-code-block>: {html}");
         // With tree-sitter highlighting, `fn` is wrapped in a keyword span
         assert!(html.contains("hl-keyword"), "should have keyword highlight: {html}");
         assert!(html.contains("main"), "should contain function name: {html}");
