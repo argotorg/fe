@@ -1,0 +1,15 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/effect_typed_mut_ref_mismatch.fe
+---
+error[8-0037]: effect `Counter` must be mutable when calling `needs_mut_counter`
+   ┌─ effect_typed_mut_ref_mismatch.fe:19:9
+   │
+18 │     with (Counter = ref c) {
+   │                     ----- effect `Counter` is provided here
+19 │         needs_mut_counter()
+   │         ^^^^^^^^^^^^^^^^^^^ `needs_mut_counter` requires `mut Counter`
+   │
+   = use a mutable binding or pass a mutable reference in the `with` block
