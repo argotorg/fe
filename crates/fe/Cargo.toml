@@ -36,6 +36,7 @@ toml = "0.8.8"
 glob.workspace = true
 crossbeam-channel.workspace = true
 scip = "0.6.1"
+protobuf = "=3.7.2"
 language-server = { workspace = true, optional = true }
 tokio = { version = "1.43.0", default-features = false, features = ["rt-multi-thread"], optional = true }
 

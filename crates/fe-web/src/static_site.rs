@@ -17,6 +17,20 @@ impl StaticSiteGenerator {
     /// Markdown doc bodies are pre-rendered to HTML and injected as `html_body`
     /// fields in the JSON (the Rust types are never modified).
     pub fn generate(index: &DocIndex, output_dir: &Path) -> std::io::Result<()> {
+        Self::generate_with_scip(index, output_dir, None)
+    }
+
+    /// Generate a static documentation site with optional embedded SCIP data.
+    ///
+    /// When `scip_bytes` is provided, the SCIP protobuf is base64-encoded and
+    /// embedded in the HTML. The browser can decode it and create a `ScipStore`
+    /// for interactive symbol resolution (progressive enhancement over the
+    /// pre-rendered DocIndex).
+    pub fn generate_with_scip(
+        index: &DocIndex,
+        output_dir: &Path,
+        scip_bytes: Option<&[u8]>,
+    ) -> std::io::Result<()> {
         std::fs::create_dir_all(output_dir)?;
 
         // Serialize to a JSON Value so we can inject html_body fields
@@ -30,7 +44,7 @@ impl StaticSiteGenerator {
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
 
         let title = index_title(index);
-        let html = assets::html_shell(&title, &json);
+        let html = assets::html_shell_with_scip(&title, &json, scip_bytes);
 
         std::fs::write(output_dir.join("index.html"), html)?;
 

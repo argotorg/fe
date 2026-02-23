@@ -11,6 +11,7 @@ mod server;
 mod test_utils;
 mod util;
 mod virtual_files;
+pub mod ws_lsp;
 pub mod ws_notify;
 
 #[cfg(test)]

@@ -41,6 +41,36 @@ class FeSearch extends HTMLElement {
     resultsEl.innerHTML = "";
     if (!query || query.length < 2) return;
 
+    // Try SCIP-powered search first
+    var scip = window.FE_SCIP;
+    if (scip) {
+      try {
+        var results = JSON.parse(scip.search(query));
+        for (var k = 0; k < results.length; k++) {
+          var r = results[k];
+          var a = document.createElement("a");
+          a.className = "search-result";
+          a.href = "#" + (r.symbol || "");
+          a.setAttribute("role", "option");
+
+          var badge = document.createElement("span");
+          badge.className = "kind-badge";
+          badge.textContent = this._scipKindName(r.kind);
+
+          var nameEl = document.createElement("span");
+          nameEl.textContent = r.display_name || "";
+
+          a.appendChild(badge);
+          a.appendChild(nameEl);
+          resultsEl.appendChild(a);
+        }
+        return;
+      } catch (_) {
+        // Fall through to DocIndex search
+      }
+    }
+
+    // Fallback: DocIndex search
     var index = window.FE_DOC_INDEX;
     if (!index || !index.items) return;
 
@@ -75,6 +105,14 @@ class FeSearch extends HTMLElement {
       a.appendChild(name);
       resultsEl.appendChild(a);
     }
+  }
+
+  _scipKindName(kind) {
+    var names = {
+      7: "class", 11: "enum", 12: "member", 15: "field",
+      17: "fn", 26: "method", 49: "struct", 53: "trait", 54: "type",
+    };
+    return names[kind] || "sym";
   }
 }
 

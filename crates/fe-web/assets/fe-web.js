@@ -13,6 +13,11 @@
     return window.FE_DOC_INDEX || { items: [], modules: [] };
   }
 
+  /** @returns {object|null} The ScipStore WASM instance, if available */
+  function getScipStore() {
+    return window.FE_SCIP || null;
+  }
+
   // ============================================================================
   // Routing (hash-based for file:// support)
   // ============================================================================
@@ -528,24 +533,55 @@
     }
 
     searchTimeout = setTimeout(function () {
-      var index = getIndex();
-      var q = query.toLowerCase();
-      var results = index.items.filter(function (item) {
-        return item.name.toLowerCase().indexOf(q) !== -1 ||
-               item.path.toLowerCase().indexOf(q) !== -1;
-      }).slice(0, 20);
-
+      var scip = getScipStore();
       var html = "";
-      results.forEach(function (item) {
-        var url = item.path + "/" + kindStr(item.kind);
-        html += '<a href="' + itemHref(url) + '" class="search-result">';
-        html += kindBadge(kindStr(item.kind));
-        html += "<span>" + esc(item.path) + "</span>";
-        html += "</a>";
-      });
+
+      if (scip) {
+        // SCIP-powered search: search by symbol name
+        try {
+          var scipResults = JSON.parse(scip.search(query));
+          scipResults.forEach(function (r) {
+            html += '<a href="' + itemHref(r.symbol) + '" class="search-result">';
+            html += '<span class="kind-badge">' + esc(scipKindName(r.kind)) + "</span>";
+            html += "<span>" + esc(r.display_name) + "</span>";
+            html += "</a>";
+          });
+        } catch (_) {
+          // Fall through to DocIndex search
+          scip = null;
+        }
+      }
+
+      if (!scip) {
+        // Fallback: DocIndex search
+        var index = getIndex();
+        var q = query.toLowerCase();
+        var results = index.items.filter(function (item) {
+          return item.name.toLowerCase().indexOf(q) !== -1 ||
+                 item.path.toLowerCase().indexOf(q) !== -1;
+        }).slice(0, 20);
+
+        results.forEach(function (item) {
+          var url = item.path + "/" + kindStr(item.kind);
+          html += '<a href="' + itemHref(url) + '" class="search-result">';
+          html += kindBadge(kindStr(item.kind));
+          html += "<span>" + esc(item.path) + "</span>";
+          html += "</a>";
+        });
+      }
 
       resultsEl.innerHTML = html;
     }, 150);
+  }
+
+  /** Map SCIP symbol_information::Kind values to display names */
+  function scipKindName(kind) {
+    var names = {
+      7: "class", 9: "ctor", 11: "enum", 12: "member", 15: "field",
+      17: "fn", 21: "iface", 26: "method", 30: "ns", 35: "pkg",
+      41: "prop", 49: "struct", 53: "trait", 54: "type", 55: "alias",
+    };
+    return names[kind] || "sym";
   }
 
   // ============================================================================
@@ -622,6 +658,104 @@
     }
     return null;
   }
+
+  // ============================================================================
+  // LSP WebSocket Client (live mode)
+  // ============================================================================
+
+  /**
+   * Connect to an LSP server over WebSocket for live features.
+   *
+   * Usage: window.FE_LSP = connectLsp("ws://127.0.0.1:9000");
+   *
+   * @param {string} wsUrl - WebSocket URL of the LSP server
+   * @returns {object} LSP client handle with send/request methods
+   */
+  function connectLsp(wsUrl) {
+    var ws = new WebSocket(wsUrl);
+    var nextId = 1;
+    var pending = {};  // id → {resolve, reject}
+    var diagnostics = {};  // uri → Diagnostic[]
+    var ready = false;
+
+    ws.onopen = function () {
+      // Send LSP initialize request
+      sendRequest("initialize", {
+        processId: null,
+        capabilities: {
+          textDocument: {
+            publishDiagnostics: { relatedInformation: true }
+          }
+        },
+        rootUri: null,
+      }).then(function (result) {
+        // Send initialized notification
+        sendNotification("initialized", {});
+        ready = true;
+        console.log("[fe-lsp] Connected to LSP server:", result.serverInfo || {});
+      });
+    };
+
+    ws.onmessage = function (event) {
+      var msg;
+      try { msg = JSON.parse(event.data); } catch (_) { return; }
+
+      if (msg.id != null && pending[msg.id]) {
+        // Response to a request
+        if (msg.error) {
+          pending[msg.id].reject(msg.error);
+        } else {
+          pending[msg.id].resolve(msg.result);
+        }
+        delete pending[msg.id];
+      } else if (msg.method === "textDocument/publishDiagnostics") {
+        // Notification: diagnostics update
+        var params = msg.params || {};
+        diagnostics[params.uri] = params.diagnostics || [];
+        // Dispatch event for any listening components
+        document.dispatchEvent(new CustomEvent("fe-diagnostics", {
+          detail: { uri: params.uri, diagnostics: params.diagnostics || [] }
+        }));
+      }
+    };
+
+    ws.onerror = function (err) {
+      console.warn("[fe-lsp] WebSocket error:", err);
+    };
+
+    ws.onclose = function () {
+      ready = false;
+      console.log("[fe-lsp] Disconnected from LSP server");
+    };
+
+    function sendRequest(method, params) {
+      return new Promise(function (resolve, reject) {
+        var id = nextId++;
+        pending[id] = { resolve: resolve, reject: reject };
+        ws.send(JSON.stringify({ jsonrpc: "2.0", id: id, method: method, params: params }));
+      });
+    }
+
+    function sendNotification(method, params) {
+      ws.send(JSON.stringify({ jsonrpc: "2.0", method: method, params: params }));
+    }
+
+    return {
+      /** Send an LSP request and return a Promise for the result. */
+      request: sendRequest,
+      /** Send an LSP notification (no response expected). */
+      notify: sendNotification,
+      /** Get cached diagnostics for a URI. */
+      getDiagnostics: function (uri) { return diagnostics[uri] || []; },
+      /** Whether the LSP connection is ready (initialized). */
+      isReady: function () { return ready; },
+      /** Close the connection. */
+      close: function () { ws.close(); },
+    };
+  }
+
+  // Expose connectLsp globally for browser use
+  window.connectLsp = connectLsp;
 
   // ============================================================================
   // Initialization
