@@ -1,7 +1,7 @@
 ---
-source: crates/doc-engine/tests/extract.rs
+source: crates/fe/src/extract.rs
 expression: output
-input_file: tests/fixtures/enum_with_variants.fe
+input_file: tests/doc_fixtures/enum_with_variants.fe
 ---
 {
   "items": [
