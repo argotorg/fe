@@ -2135,7 +2135,6 @@ dependencies = [
  "fe-codegen",
  "fe-common",
  "fe-contract-harness",
- "fe-doc-engine",
  "fe-driver",
  "fe-fmt",
  "fe-hir",
@@ -2237,24 +2236,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fe-doc-engine"
-version = "0.1.0"
-dependencies = [
- "camino",
- "dir-test",
- "fe-common",
- "fe-driver",
- "fe-hir",
- "fe-parser",
- "fe-test-utils",
- "fe-web",
- "rustc-hash 2.1.1",
- "salsa",
- "serde_json",
- "url",
-]
-
-[[package]]
 name = "fe-driver"
 version = "26.0.0-alpha.5"
 dependencies = [
@@ -2331,7 +2312,6 @@ dependencies = [
  "dir-test",
  "fe-codegen",
  "fe-common",
- "fe-doc-engine",
  "fe-driver",
  "fe-fmt",
  "fe-hir",
@@ -2455,6 +2435,9 @@ dependencies = [
  "pulldown-cmark",
  "serde",
  "serde_json",
+ "tree-sitter",
+ "tree-sitter-fe",
+ "tree-sitter-highlight",
  "wasm-bindgen",
  "wasm-bindgen-test",
 ]
@@ -5847,6 +5830,19 @@ dependencies = [
  "cc",
  "tree-sitter",
  "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-highlight"
+version = "0.24.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6411813e4a9ebc87d391b98b0f3ce65d5361cd80c54de8651d8b85b555ea5d95"
+dependencies = [
+ "lazy_static",
+ "regex",
+ "streaming-iterator",
+ "thiserror 1.0.69",
+ "tree-sitter",
 ]
 
 [[package]]
