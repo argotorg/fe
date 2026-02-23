@@ -96,8 +96,10 @@ class FeCodeBlock extends HTMLElement {
       var col = parseInt(colAttr, 10);
       var symbol = scip.resolveSymbol(file, line, col);
       if (symbol) {
-        // Navigate to the symbol's doc page
-        location.hash = "#" + symbol;
+        var docPath = scip.docUrl(symbol);
+        if (docPath) {
+          location.hash = "#" + docPath;
+        }
       }
     });
 
