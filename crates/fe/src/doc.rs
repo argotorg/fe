@@ -1,11 +1,12 @@
 use camino::Utf8PathBuf;
 use common::InputDb;
-use doc_engine::DocExtractor;
 use driver::DriverDataBase;
 use fe_web::model::DocIndex;
 use hir::hir_def::HirIngot;
 use serde::{Deserialize, Serialize};
 use url::Url;
+
+use crate::extract::DocExtractor;
 
 /// Server info written by LSP for discovery
 #[derive(Debug, Clone, Serialize, Deserialize)]
