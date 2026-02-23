@@ -7,10 +7,6 @@
 //   collapsed    — start collapsed with <details>/<summary>
 
 class FeCodeBlock extends HTMLElement {
-  static get observedAttributes() {
-    return ["highlighted", "lang", "line-numbers", "collapsed"];
-  }
-
   connectedCallback() {
     this.render();
   }
@@ -42,7 +38,11 @@ class FeCodeBlock extends HTMLElement {
     this.innerHTML = "";
 
     if (showLineNumbers) {
-      const lines = code.innerHTML.split("\n");
+      var lines = code.innerHTML.split("\n");
+      // Trim trailing empty line from trailing newline in source
+      if (lines.length > 1 && lines[lines.length - 1] === "") {
+        lines = lines.slice(0, -1);
+      }
       const gutter = document.createElement("div");
       gutter.className = "fe-line-numbers";
       gutter.setAttribute("aria-hidden", "true");

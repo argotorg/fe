@@ -51,7 +51,13 @@ fn run_batch(component: bool) -> Result<(), Box<dyn std::error::Error>> {
             continue;
         }
 
-        let entry: serde_json::Value = serde_json::from_str(&line)?;
+        let entry: serde_json::Value = match serde_json::from_str(&line) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("warning: skipping malformed JSON line: {e}");
+                continue;
+            }
+        };
         let id = entry["id"].as_str().unwrap_or("");
         let code = entry["code"].as_str().unwrap_or("");
 

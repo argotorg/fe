@@ -1,5 +1,7 @@
 //! Tree-sitter syntax highlighting for Fe code.
 
+use std::sync::OnceLock;
+
 use tree_sitter_highlight::{HighlightConfiguration, Highlighter, HtmlRenderer};
 
 /// Capture names from highlights.scm, in the order we assign CSS classes.
@@ -40,29 +42,39 @@ fn build_attrs() -> Vec<Vec<u8>> {
         .collect()
 }
 
-fn make_config() -> HighlightConfiguration {
-    let language = tree_sitter_fe::LANGUAGE.into();
-    let mut config = HighlightConfiguration::new(
-        language,
-        "fe",
-        tree_sitter_fe::HIGHLIGHTS_QUERY,
-        "", // no injections
-        "", // no locals
-    )
-    .expect("highlights.scm should parse");
-    config.configure(HIGHLIGHT_NAMES);
-    config
+/// Cached highlight configuration — built once, reused for every call.
+fn cached_config() -> &'static HighlightConfiguration {
+    static CONFIG: OnceLock<HighlightConfiguration> = OnceLock::new();
+    CONFIG.get_or_init(|| {
+        let language = tree_sitter_fe::LANGUAGE.into();
+        let mut config = HighlightConfiguration::new(
+            language,
+            "fe",
+            tree_sitter_fe::HIGHLIGHTS_QUERY,
+            "", // no injections
+            "", // no locals
+        )
+        .expect("highlights.scm should parse");
+        config.configure(HIGHLIGHT_NAMES);
+        config
+    })
+}
+
+/// Cached HTML attributes — built once alongside the config.
+fn cached_attrs() -> &'static [Vec<u8>] {
+    static ATTRS: OnceLock<Vec<Vec<u8>>> = OnceLock::new();
+    ATTRS.get_or_init(build_attrs)
 }
 
 /// Highlight Fe source code, returning inner HTML with `<span class="hl-*">` spans.
 ///
 /// Falls back to html-escaped plain text if highlighting fails.
 pub fn highlight_fe(code: &str) -> String {
-    let config = make_config();
-    let attrs = build_attrs();
+    let config = cached_config();
+    let attrs = cached_attrs();
 
     let mut highlighter = Highlighter::new();
-    let highlights = match highlighter.highlight(&config, code.as_bytes(), None, |_| None) {
+    let highlights = match highlighter.highlight(config, code.as_bytes(), None, |_| None) {
         Ok(h) => h,
         Err(_) => return html_escape(code),
     };

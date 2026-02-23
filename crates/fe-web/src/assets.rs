@@ -20,6 +20,12 @@ pub const FE_SEARCH_JS: &str = include_str!("../assets/fe-search.js");
 /// The `doc_index_json` is inlined into a `<script>` tag so the page works
 /// with `file://` — no server required.
 pub fn html_shell(title: &str, doc_index_json: &str) -> String {
+    // Escape for safe embedding inside HTML/script contexts:
+    // - Title: escape HTML special chars to prevent </title> breakout
+    // - JSON: escape </ sequences to prevent </script> breakout
+    let safe_title = escape_html_text(title);
+    let safe_json = escape_script_content(doc_index_json);
+
     format!(
         r#"<!DOCTYPE html>
 <html lang="en">
@@ -41,14 +47,29 @@ pub fn html_shell(title: &str, doc_index_json: &str) -> String {
   <script>{js}</script>
 </body>
 </html>"#,
-        title = title,
+        title = safe_title,
         css = STYLES_CSS,
-        json = doc_index_json,
+        json = safe_json,
         code_block_js = FE_CODE_BLOCK_JS,
         signature_js = FE_SIGNATURE_JS,
         search_js = FE_SEARCH_JS,
         js = FE_WEB_JS,
     )
+}
+
+/// Escape text for embedding in HTML element content (e.g. `<title>`).
+fn escape_html_text(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// Escape content for safe embedding inside a `<script>` tag.
+///
+/// The only dangerous sequence is `</` which can close the script element.
+/// We replace `</` with `<\/` which is valid in JS string literals and JSON.
+fn escape_script_content(s: &str) -> String {
+    s.replace("</", r"<\/")
 }
 
 #[cfg(test)]
@@ -90,5 +111,29 @@ mod tests {
         assert!(html.contains("fe-code-block"));
         assert!(html.contains("fe-signature"));
         assert!(html.contains("fe-search"));
+    }
+
+    #[test]
+    fn html_shell_escapes_script_injection_in_json() {
+        let malicious_json = r#"{"x":"</script><script>alert(1)</script>"}"#;
+        let html = html_shell("Docs", malicious_json);
+        // The raw </script> must not appear — it would break out of the script tag
+        assert!(!html.contains("</script><script>alert"));
+        assert!(html.contains(r"<\/script>"));
+    }
+
+    #[test]
+    fn html_shell_escapes_title_html() {
+        let html = html_shell("<script>alert(1)</script>", "{}");
+        assert!(!html.contains("<title><script>"));
+        assert!(html.contains("<title>&lt;script&gt;"));
+    }
+
+    #[test]
+    fn escape_helpers() {
+        assert_eq!(escape_html_text("a<b>c&d"), "a&lt;b&gt;c&amp;d");
+        assert_eq!(escape_script_content("</script>"), r"<\/script>");
+        // No escaping needed for safe content
+        assert_eq!(escape_script_content("hello world"), "hello world");
     }
 }
