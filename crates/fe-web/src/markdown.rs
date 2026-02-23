@@ -47,8 +47,14 @@ where
     }
 
     fn highlight_code(&self, code: &str, lang: Option<&str>) -> String {
-        // For now, just wrap in <pre><code> with language class
-        // TODO: integrate syntect for proper highlighting
+        // Use tree-sitter highlighting for Fe code blocks
+        if let Some(l) = lang {
+            if l == "fe" || l.starts_with("fe,") || l.starts_with("fe ") {
+                return crate::highlight::highlight_fe_block(code);
+            }
+        }
+
+        // Fallback for other languages: html-escaped <pre><code>
         let lang_class = lang
             .map(|l| format!(" class=\"language-{}\"", l))
             .unwrap_or_default();
@@ -167,7 +173,9 @@ mod tests {
         let md = "```fe\nfn main() {}\n```";
         let html = render_markdown(md);
         assert!(html.contains("language-fe"));
-        assert!(html.contains("fn main()"));
+        // With tree-sitter highlighting, `fn` is wrapped in a keyword span
+        assert!(html.contains("hl-keyword"), "should have keyword highlight: {html}");
+        assert!(html.contains("main"), "should contain function name: {html}");
     }
 
     #[test]
