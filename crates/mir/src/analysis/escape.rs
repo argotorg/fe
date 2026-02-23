@@ -173,19 +173,33 @@ fn local_has_memory_alloc(body: &MirBody<'_>, local: LocalId) -> bool {
         for inst in &block.insts {
             if let MirInst::Assign {
                 dest: Some(dest),
-                rvalue:
-                    Rvalue::Alloc {
-                        address_space: AddressSpaceKind::Memory,
-                    },
+                rvalue,
                 ..
             } = inst
                 && *dest == local
+                && rvalue_has_memory_alloc_source(rvalue)
             {
                 return true;
             }
         }
     }
     false
+}
+
+fn rvalue_has_memory_alloc_source(rvalue: &Rvalue<'_>) -> bool {
+    match rvalue {
+        Rvalue::Alloc {
+            address_space: AddressSpaceKind::Memory,
+        } => true,
+        Rvalue::Intrinsic {
+            op: IntrinsicOp::Alloc,
+            ..
+        } => true,
+        Rvalue::Call(call) => {
+            call.effect_args.is_empty() && call.resolved_name.as_deref() == Some("alloc")
+        }
+        _ => false,
+    }
 }
 
 struct LocalDependencyState {
@@ -717,6 +731,7 @@ mod tests {
     use common::InputDb;
     use driver::DriverDataBase;
     use hir::analysis::ty::ty_def::{PrimTy, TyBase, TyData, TyId};
+    use num_bigint::BigUint;
     use url::Url;
 
     use crate::{
@@ -844,6 +859,58 @@ mod tests {
             terminator: Terminator::Return {
                 source: SourceInfoId::SYNTHETIC,
                 value: None,
+            },
+        });
+    }
+
+    fn mutate_alloc_call_function<'db>(
+        func: &mut MirFunction<'db>,
+        ret_alloc: bool,
+        db: &'db DriverDataBase,
+    ) {
+        let u256_ty = TyId::new(db, TyData::TyBase(TyBase::Prim(PrimTy::U256)));
+        func.body.locals.clear();
+        func.body.values.clear();
+        func.body.blocks.clear();
+        func.body.param_locals.clear();
+        func.body.effect_param_locals.clear();
+
+        let local = func.body.alloc_local(LocalData {
+            name: "tmp_alloc".to_string(),
+            ty: u256_ty,
+            is_mut: true,
+            source: SourceInfoId::SYNTHETIC,
+            address_space: AddressSpaceKind::Memory,
+        });
+        let local_value = func.body.alloc_value(ValueData {
+            ty: u256_ty,
+            origin: ValueOrigin::Local(local),
+            source: SourceInfoId::SYNTHETIC,
+            repr: ValueRepr::Ptr(AddressSpaceKind::Memory),
+        });
+        let size_value = func.body.alloc_value(ValueData {
+            ty: u256_ty,
+            origin: ValueOrigin::Synthetic(crate::ir::SyntheticValue::Int(BigUint::from(32u64))),
+            source: SourceInfoId::SYNTHETIC,
+            repr: ValueRepr::Word,
+        });
+
+        func.body.push_block(BasicBlock {
+            insts: vec![MirInst::Assign {
+                source: SourceInfoId::SYNTHETIC,
+                dest: Some(local),
+                rvalue: Rvalue::Call(CallOrigin {
+                    expr: None,
+                    hir_target: None,
+                    args: vec![size_value],
+                    effect_args: vec![],
+                    resolved_name: Some("alloc".to_string()),
+                    receiver_space: None,
+                }),
+            }],
+            terminator: Terminator::Return {
+                source: SourceInfoId::SYNTHETIC,
+                value: ret_alloc.then_some(local_value),
             },
         });
     }
@@ -1039,6 +1106,54 @@ mod tests {
         assert!(
             !summary.local_alloc_may_escape[0],
             "scalar return should not mark local alloc as escaping"
+        );
+    }
+
+    #[test]
+    fn returned_alloc_call_is_marked_as_escaping() {
+        let mut db = DriverDataBase::default();
+        let url = Url::parse("file:///escape_returned_alloc_call.fe").unwrap();
+        let src = "pub fn escape_returned_alloc_call() {}";
+        let file = db.workspace().touch(&mut db, url, Some(src.to_string()));
+        let top_mod = db.top_mod(file);
+        let mut module = crate::lower_module(&db, top_mod).expect("module should lower");
+        let func = module
+            .functions
+            .iter_mut()
+            .find(|func| func.symbol_name == "escape_returned_alloc_call")
+            .expect("function should exist");
+        mutate_alloc_call_function(func, true, &db);
+
+        let summary = compute_ptr_escape_summaries(&db, &module)
+            .remove("escape_returned_alloc_call")
+            .expect("summary should exist");
+        assert!(
+            summary.local_alloc_may_escape[0],
+            "returned alloc call local should be marked escaping"
+        );
+    }
+
+    #[test]
+    fn unused_alloc_call_is_not_marked_as_escaping() {
+        let mut db = DriverDataBase::default();
+        let url = Url::parse("file:///escape_unused_alloc_call.fe").unwrap();
+        let src = "pub fn escape_unused_alloc_call() {}";
+        let file = db.workspace().touch(&mut db, url, Some(src.to_string()));
+        let top_mod = db.top_mod(file);
+        let mut module = crate::lower_module(&db, top_mod).expect("module should lower");
+        let func = module
+            .functions
+            .iter_mut()
+            .find(|func| func.symbol_name == "escape_unused_alloc_call")
+            .expect("function should exist");
+        mutate_alloc_call_function(func, false, &db);
+
+        let summary = compute_ptr_escape_summaries(&db, &module)
+            .remove("escape_unused_alloc_call")
+            .expect("summary should exist");
+        assert!(
+            !summary.local_alloc_may_escape[0],
+            "unused alloc call local should stay non-escaping"
         );
     }
 }
