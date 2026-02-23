@@ -21,6 +21,9 @@ pub const FE_SEARCH_JS: &str = include_str!("../assets/fe-search.js");
 /// For embedding in Starlight/Astro or any external site.
 pub const FE_HIGHLIGHT_CSS: &str = include_str!("../assets/fe-highlight.css");
 
+/// Pure-JS ScipStore class that reads pre-processed SCIP JSON.
+pub const FE_SCIP_STORE_JS: &str = include_str!("../assets/fe-scip-store.js");
+
 /// Generate the complete HTML shell for a static documentation site.
 ///
 /// The `doc_index_json` is inlined into a `<script>` tag so the page works
@@ -31,13 +34,13 @@ pub fn html_shell(title: &str, doc_index_json: &str) -> String {
 
 /// Generate the HTML shell with optional embedded SCIP data.
 ///
-/// When `scip_bytes` is provided, the SCIP protobuf is base64-encoded and
-/// embedded in a `<script>` tag. A WASM initialization snippet decodes
-/// it and creates a `ScipStore` for interactive symbol resolution.
+/// When `scip_json` is provided, the pre-processed SCIP JSON is inlined
+/// into a `<script>` tag and a pure-JS `ScipStore` class is loaded to
+/// provide interactive symbol resolution (no WASM required).
 pub fn html_shell_with_scip(
     title: &str,
     doc_index_json: &str,
-    scip_bytes: Option<&[u8]>,
+    scip_json: Option<&str>,
 ) -> String {
     // Escape for safe embedding inside HTML/script contexts:
     // - Title: escape HTML special chars to prevent </title> breakout
@@ -45,27 +48,12 @@ pub fn html_shell_with_scip(
     let safe_title = escape_html_text(title);
     let safe_json = escape_script_content(doc_index_json);
 
-    let scip_section = if let Some(bytes) = scip_bytes {
-        use crate::escape::base64_encode;
-        let b64 = base64_encode(bytes);
+    let scip_section = if let Some(json) = scip_json {
+        let safe_scip = escape_script_content(json);
         format!(
-            r#"
-  <script id="scip-data" type="application/octet-stream">{b64}</script>
-  <script type="module">
-    // Progressive enhancement: decode SCIP data and create ScipStore
-    // when the WASM module is available.
-    (function() {{
-      var el = document.getElementById('scip-data');
-      if (!el) return;
-      var b64 = el.textContent;
-      var raw = atob(b64);
-      var bytes = new Uint8Array(raw.length);
-      for (var i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
-      window.FE_SCIP_BYTES = bytes;
-      // If WASM is loaded alongside (via separate script), it will pick up FE_SCIP_BYTES
-      // and set window.FE_SCIP = new ScipStore(bytes)
-    }})();
-  </script>"#
+            "\n  <script>{scip_store_js}</script>\n  <script>window.FE_SCIP_DATA = {scip_data};\nif (window.FE_SCIP_DATA) window.FE_SCIP = new ScipStore(window.FE_SCIP_DATA);</script>",
+            scip_store_js = FE_SCIP_STORE_JS,
+            scip_data = safe_scip,
         )
     } else {
         String::new()
@@ -171,17 +159,15 @@ mod tests {
     #[test]
     fn html_shell_with_scip_embeds_data() {
         let json = r#"{"items":[],"modules":[]}"#;
-        let scip_bytes = b"fake scip data for testing";
-        let html = html_shell_with_scip("Test", json, Some(scip_bytes));
+        let scip_json = r#"{"symbols":{},"files":{}}"#;
+        let html = html_shell_with_scip("Test", json, Some(scip_json));
 
-        // Contains the SCIP data element
-        assert!(html.contains("id=\"scip-data\""), "should have scip-data element");
-        assert!(
-            html.contains("type=\"application/octet-stream\""),
-            "should have octet-stream type"
-        );
-        // Contains base64-encoded data
-        assert!(html.contains("FE_SCIP_BYTES"), "should have WASM init snippet");
+        // Contains the ScipStore class
+        assert!(html.contains("ScipStore"), "should have ScipStore class");
+        // Contains the SCIP data assignment
+        assert!(html.contains("FE_SCIP_DATA"), "should have SCIP data inline");
+        // Contains the FE_SCIP initialization
+        assert!(html.contains("window.FE_SCIP"), "should initialize FE_SCIP");
         // Still contains the base DocIndex
         assert!(html.contains("FE_DOC_INDEX"), "should still have DocIndex");
     }
