@@ -104,7 +104,7 @@ fn get_item_path_at_cursor<'db>(
     let target = resolution.first()?;
 
     match target {
-        Target::Scope(scope) => doc_engine::scope_to_doc_path(db, *scope),
+        Target::Scope(scope) => hir::semantic::scope_to_doc_path(db, *scope),
         Target::Local { .. } => None, // Local variables don't have docs
     }
 }

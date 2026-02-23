@@ -12,6 +12,7 @@ use crate::hir_def::{Attr, EnumVariant, FieldParent, HirIngot, ItemKind, TopLeve
 use crate::hir_def::scope_graph::ScopeId;
 use crate::span::{DynLazySpan, LazySpan};
 use common::diagnostics::Span;
+use common::ingot::Ingot;
 use rustc_hash::FxHashMap;
 
 /// Kind of symbol, derived from `ItemKind` but also covering sub-item scopes
@@ -377,6 +378,73 @@ fn byte_offset_to_line_col(text: &str, offset: usize) -> (usize, usize) {
         }
     }
     (line, col)
+}
+
+// ---------------------------------------------------------------------------
+// Doc-path utilities — map HIR scopes to documentation URL paths
+// ---------------------------------------------------------------------------
+
+/// Convert a ScopeId to its documentation URL path.
+///
+/// This is the single source of truth for mapping HIR scopes to doc URLs.
+/// It qualifies paths with the ingot name (replacing "lib" prefix) and
+/// includes the item kind suffix for disambiguation.
+///
+/// Returns the qualified URL path, e.g.:
+/// - "ingot_name::Struct/struct" for a struct
+/// - "ingot_name::module/mod" for a module
+/// - "ingot_name::module::function/fn" for a function
+pub fn scope_to_doc_path(db: &dyn SpannedHirDb, scope: ScopeId) -> Option<String> {
+    let item = scope.item();
+    let path = item.scope().pretty_path(db)?;
+    let ingot = scope.top_mod(db).ingot(db);
+    let qualified_path = qualify_path_with_ingot_name(db, &path, ingot);
+
+    let kind_suffix = item_kind_to_url_suffix(item)?;
+
+    Some(format!("{}/{}", qualified_path, kind_suffix))
+}
+
+/// Map HIR ItemKind to URL suffix string.
+pub fn item_kind_to_url_suffix(item: ItemKind) -> Option<&'static str> {
+    match item {
+        ItemKind::TopMod(_) | ItemKind::Mod(_) => Some("mod"),
+        ItemKind::Func(_) => Some("fn"),
+        ItemKind::Struct(_) => Some("struct"),
+        ItemKind::Enum(_) => Some("enum"),
+        ItemKind::Trait(_) => Some("trait"),
+        ItemKind::Contract(_) => Some("contract"),
+        ItemKind::TypeAlias(_) => Some("type"),
+        ItemKind::Const(_) => Some("const"),
+        ItemKind::Impl(_) => Some("impl"),
+        ItemKind::ImplTrait(_) => Some("impl"),
+        ItemKind::Use(_) | ItemKind::Body(_) => None,
+    }
+}
+
+/// Qualify a module path with the ingot's configured name.
+///
+/// Replaces "lib" prefix with the ingot's name from fe.toml.
+/// - "lib" -> "ingot_name"
+/// - "lib::Foo" -> "ingot_name::Foo"
+/// - Other paths pass through unchanged
+pub fn qualify_path_with_ingot_name(db: &dyn SpannedHirDb, path: &str, ingot: Ingot) -> String {
+    let ingot_name = ingot
+        .config(db)
+        .and_then(|c| c.metadata.name)
+        .map(|s| s.to_string());
+
+    if let Some(name) = ingot_name {
+        if path == "lib" {
+            name
+        } else if let Some(rest) = path.strip_prefix("lib::") {
+            format!("{}::{}", name, rest)
+        } else {
+            path.to_string()
+        }
+    } else {
+        path.to_string()
+    }
 }
 
 // ---------------------------------------------------------------------------
