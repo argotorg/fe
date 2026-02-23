@@ -504,15 +504,13 @@ fn serialize_const_array_to_bytes(elems: &[ConstValue], elem_size: usize) -> Opt
     let mut bytes = Vec::with_capacity(elems.len() * elem_size);
     for elem in elems {
         match elem {
-            ConstValue::Int(int) => {
-                let int_bytes = int.to_bytes_be();
-                if int_bytes.len() > elem_size {
-                    return None;
-                }
-                let mut padded = vec![0u8; elem_size];
-                let offset = elem_size - int_bytes.len();
-                padded[offset..].copy_from_slice(&int_bytes);
-                bytes.extend(padded);
+            ConstValue::Int(int) => bytes.extend(pad_be_bytes(&int.to_bytes_be(), elem_size)?),
+            ConstValue::Bool(flag) => {
+                let raw = if *flag { [1u8] } else { [0u8] };
+                bytes.extend(pad_be_bytes(&raw, elem_size)?);
+            }
+            ConstValue::EnumVariant(idx) => {
+                bytes.extend(pad_be_bytes(&(*idx).to_be_bytes(), elem_size)?);
             }
             ConstValue::ConstArray(nested) => {
                 // For nested arrays (e.g. [[u256; 3]; 3]), each inner array
@@ -522,6 +520,9 @@ fn serialize_const_array_to_bytes(elems: &[ConstValue], elem_size: usize) -> Opt
                     // Zero-length inner array: just pad
                     bytes.extend(vec![0u8; elem_size]);
                 } else {
+                    if !elem_size.is_multiple_of(nested.len()) {
+                        return None;
+                    }
                     let inner_elem_size = elem_size / nested.len();
                     let inner_bytes = serialize_const_array_to_bytes(nested, inner_elem_size)?;
                     if inner_bytes.len() != elem_size {
@@ -534,4 +535,47 @@ fn serialize_const_array_to_bytes(elems: &[ConstValue], elem_size: usize) -> Opt
         }
     }
     Some(bytes)
+}
+
+fn pad_be_bytes(raw: &[u8], size: usize) -> Option<Vec<u8>> {
+    if raw.len() > size {
+        return None;
+    }
+    let mut padded = vec![0u8; size];
+    let offset = size - raw.len();
+    padded[offset..].copy_from_slice(raw);
+    Some(padded)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ConstValue, serialize_const_array_to_bytes};
+    use num_bigint::BigUint;
+
+    #[test]
+    fn serialize_bool_const_array_words() {
+        let data =
+            serialize_const_array_to_bytes(&[ConstValue::Bool(true), ConstValue::Bool(false)], 32)
+                .expect("bool array should serialize");
+        assert_eq!(data.len(), 64);
+        assert_eq!(data[31], 1);
+        assert_eq!(data[63], 0);
+    }
+
+    #[test]
+    fn serialize_mixed_scalar_const_array_words() {
+        let data = serialize_const_array_to_bytes(
+            &[
+                ConstValue::Int(BigUint::from(0x11u64)),
+                ConstValue::EnumVariant(2),
+                ConstValue::Bool(true),
+            ],
+            32,
+        )
+        .expect("scalars should serialize");
+        assert_eq!(data.len(), 96);
+        assert_eq!(data[31], 0x11);
+        assert_eq!(data[63], 0x02);
+        assert_eq!(data[95], 0x01);
+    }
 }
