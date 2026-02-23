@@ -313,31 +313,9 @@ pub enum Command {
         /// for ingot/workspace discovery.
         #[arg(long)]
         root: Option<Utf8PathBuf>,
-        /// Start a WebSocket notification server on this port.
-        ///
-        /// Browser-based doc viewers can connect to receive file-change events.
-        #[arg(long)]
-        ws_port: Option<u16>,
-        /// Start a full LSP-over-WebSocket server on this port.
-        ///
-        /// Browser clients can connect and use standard LSP protocol
-        /// (initialize, textDocument/*, etc.) over WebSocket transport.
-        #[arg(long)]
-        lsp_ws_port: Option<u16>,
         /// Communication mode (default: stdio).
         #[command(subcommand)]
         mode: Option<LspMode>,
-    },
-    /// Syntax-highlight Fe code to HTML.
-    Highlight {
-        /// Path to a .fe file (reads stdin if omitted).
-        file: Option<Utf8PathBuf>,
-        /// Wrap output in <fe-code-block highlighted> custom element.
-        #[arg(long)]
-        component: bool,
-        /// Batch mode: read newline-delimited JSON from stdin, output JSON per line.
-        #[arg(long, conflicts_with = "file")]
-        batch: bool,
     },
     /// Generate SCIP index for code navigation.
     Scip {
@@ -583,12 +561,7 @@ pub fn run(opts: &Options) {
             run_root(path.as_ref());
         }
         #[cfg(feature = "lsp")]
-        Command::Lsp {
-            root,
-            ws_port,
-            lsp_ws_port,
-            mode,
-        } => {
+        Command::Lsp { root, mode } => {
             // If --root is explicit, use it. Otherwise, auto-discover from cwd.
             let resolved_root = match root {
                 Some(r) => Some(r.canonicalize_utf8().unwrap_or_else(|e| {
@@ -613,38 +586,20 @@ pub fn run(opts: &Options) {
                     std::env::set_var("RUST_BACKTRACE", "full");
                 }
                 language_server::setup_panic_hook();
-
-                // Optionally start the LSP-over-WebSocket server in background
-                if let Some(port) = lsp_ws_port {
-                    tokio::spawn(language_server::ws_lsp::run_ws_lsp_server(
-                        *port, *ws_port,
-                    ));
-                }
-
                 match mode {
                     Some(LspMode::Tcp { port, timeout }) => {
                         language_server::run_tcp_server(
                             *port,
                             std::time::Duration::from_secs(*timeout),
-                            *ws_port,
+                            None,
                         )
                         .await;
                     }
                     None => {
-                        language_server::run_stdio_server(*ws_port).await;
+                        language_server::run_stdio_server(None).await;
                     }
                 }
             });
-        }
-        Command::Highlight {
-            file,
-            component,
-            batch,
-        } => {
-            if let Err(e) = highlight_cmd::run_highlight(file.as_ref(), *component, *batch) {
-                eprintln!("Error: {e}");
-                std::process::exit(1);
-            }
         }
         Command::Lsif { path, output } => {
             run_lsif(path, output.as_ref());
