@@ -32,6 +32,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.135"
 smol_str.workspace = true
 tokio = { version = "1.43.0", features = ["full", "io-std", "tracing", "net"] }
+tokio-tungstenite = "0.26"
 tower = "0.5.2"
 tracing.workspace = true
 tracing-subscriber.workspace = true
