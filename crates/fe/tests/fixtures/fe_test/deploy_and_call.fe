@@ -1,9 +1,6 @@
 /// Test deploying a high-level contract and calling methods on it.
 /// Uses the high-level create2 and Call traits for contract interactions.
 
-use std::evm::{Address, Evm, Call}
-use std::evm::effects::assert
-
 // Message types for the Counter contract
 msg CounterMsg {
     #[selector = 0xd09de08a]

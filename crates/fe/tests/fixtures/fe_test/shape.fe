@@ -1,7 +1,3 @@
-use std::evm::{Evm, Call}
-use std::evm::effects::assert
-use core::abi::{Abi, AbiEncoder, AbiSize, Encode}
-use std::abi::Sol
 
 struct Point {
     x: u256,

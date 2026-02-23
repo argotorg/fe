@@ -1,0 +1,17 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/trait_const_hole_arg.fe
+---
+error[2-0019]: layout hole `_` is not allowed in trait generic arguments for `Trait`
+  ┌─ trait_const_hole_arg.fe:3:6
+  │
+3 │ impl Trait<_> for i32 {}
+  │      ^^^^^^^^ replace `_` with an explicit const argument
+
+error[2-0019]: layout hole `_` is not allowed in trait generic arguments for `Trait`
+  ┌─ trait_const_hole_arg.fe:7:8
+  │
+7 │     T: Trait<_>,
+  │        ^^^^^^^^ replace `_` with an explicit const argument

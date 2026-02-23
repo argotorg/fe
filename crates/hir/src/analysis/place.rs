@@ -3,7 +3,7 @@ use crate::{
         HirAnalysisDb,
         ty::ty_check::{LocalBinding, TypedBody},
     },
-    hir_def::{BinOp, Body, Expr, ExprId, FieldIndex, Partial},
+    hir_def::{BinOp, Body, Expr, ExprId, FieldIndex, Partial, UnOp},
 };
 use salsa::Update;
 
@@ -75,6 +75,9 @@ impl<'db> Place<'db> {
             Expr::Path(..) => {
                 let binding = expr_binding(expr)?;
                 Some(Place::new(PlaceBase::Binding(binding)))
+            }
+            Expr::Un(base, UnOp::Mut | UnOp::Ref) => {
+                Place::from_expr_in_body(db, body, *base, expr_binding)
             }
             Expr::Field(base, field) => {
                 let field = field.to_opt()?;

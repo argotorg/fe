@@ -1,0 +1,16 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/effect_key_non_path_type.fe
+---
+error[1-0001]: expected path segment
+  ┌─ effect_key_non_path_type.fe:1:35
+  │
+1 │ fn bad_effect() -> u256 uses (arr: [u256; 3]) {
+  │                                   ^ expected path segment
+
+error[1-0001]: unexpected syntax while parsing `uses` parameter
+  ┌─ effect_key_non_path_type.fe:1:36
+  │
+1 │ fn bad_effect() -> u256 uses (arr: [u256; 3]) {
+  │                                    ^^^^^^^^^ unexpected

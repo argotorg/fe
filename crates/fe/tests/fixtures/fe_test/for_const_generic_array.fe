@@ -1,0 +1,15 @@
+use std::evm::effects::assert
+
+fn sum<const N: usize>(arr: [u256; N]) -> u256 {
+    let mut total: u256 = 0
+    for x in arr {
+        total += x
+    }
+    return total
+}
+
+#[test]
+fn test_for_const_generic_array() {
+    let arr: [u256; 3] = [2, 3, 4]
+    assert(sum(arr) == 9)
+}

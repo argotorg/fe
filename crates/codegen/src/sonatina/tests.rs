@@ -13,7 +13,7 @@ use sonatina_codegen::{
     liveness::Liveness,
     machinst::lower::{LowerBackend, SectionLoweringCtx},
     object::{CompileOptions, SymbolId, compile_object},
-    stackalloc::StackifyAlloc,
+    stackalloc::StackifyBuilder,
 };
 use sonatina_ir::{
     I256, Module, Signature, Type,
@@ -31,7 +31,7 @@ use std::io::Write as _;
 
 use crate::{ExpectedRevert, OptLevel, TestMetadata, TestModuleOutput};
 
-use super::{LowerError, ModuleLowerer};
+use super::{ContractObjectSelection, LowerError, ModuleLowerer};
 
 #[derive(Debug, Clone)]
 pub struct SonatinaTestDebugConfig {
@@ -429,7 +429,14 @@ fn compile_test_objects(
     let ctx = ModuleCtx::new(&isa);
     let builder = ModuleBuilder::new(ctx);
 
-    let mut lowerer = ModuleLowerer::new(db, builder, mir_module, &isa, layout::EVM_LAYOUT);
+    let mut lowerer = ModuleLowerer::new(
+        db,
+        builder,
+        mir_module,
+        &isa,
+        layout::EVM_LAYOUT,
+        ContractObjectSelection::All,
+    );
     lowerer.declare_all_functions_for_tests()?;
 
     let code_regions_object = create_code_regions_object(
@@ -876,13 +883,9 @@ fn emit_runtime_evm_debug(
                     let mut dom = DomTree::new();
                     dom.compute(&cfg);
 
-                    let (_alloc, stackify_trace) = StackifyAlloc::for_function_with_trace(
-                        function,
-                        &cfg,
-                        &dom,
-                        &liveness,
-                        reach_depth,
-                    );
+                    let (_alloc, stackify_trace) =
+                        StackifyBuilder::new(function, &cfg, &dom, &liveness, reach_depth)
+                            .compute_with_trace();
 
                     let ctx = FuncWriteCtx::new(function, func);
 

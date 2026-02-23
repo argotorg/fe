@@ -1,0 +1,41 @@
+---
+source: crates/hir/tests/ty_check.rs
+assertion_line: 40
+expression: res
+input_file: test_files/ty_check/effects_omitted_const_wildcard.fe
+---
+note: 
+  ┌─ effects_omitted_const_wildcard.fe:3:36
+  │  
+3 │   pub fn needs_cap() uses (cap: Cap) {
+  │ ╭────────────────────────────────────^
+4 │ │     ()
+5 │ │ }
+  │ ╰─^ ()
+
+note: 
+  ┌─ effects_omitted_const_wildcard.fe:4:5
+  │
+4 │     ()
+  │     ^^ ()
+
+note: 
+  ┌─ effects_omitted_const_wildcard.fe:7:36
+  │  
+7 │   pub fn caller() uses (cap: Cap<7>) {
+  │ ╭────────────────────────────────────^
+8 │ │     needs_cap()
+9 │ │ }
+  │ ╰─^ ()
+
+note: 
+  ┌─ effects_omitted_const_wildcard.fe:8:5
+  │
+8 │     needs_cap()
+  │     ^^^^^^^^^ fn needs_cap<7>
+
+note: 
+  ┌─ effects_omitted_const_wildcard.fe:8:5
+  │
+8 │     needs_cap()
+  │     ^^^^^^^^^^^ ()

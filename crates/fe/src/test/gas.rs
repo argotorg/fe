@@ -182,6 +182,7 @@ fn measure_case_gas(
         yul_optimize,
         None,
         None,
+        None,
         false,
         collect_step_count,
     );
@@ -696,12 +697,21 @@ fn format_delta_percent(delta: i128, baseline: u64) -> String {
     }
 }
 
-fn gas_comparison_settings_text(opt_level: OptLevel) -> String {
+fn gas_comparison_settings_text(
+    primary_backend: &str,
+    yul_primary_optimize: bool,
+    opt_level: OptLevel,
+) -> String {
     let mut out = String::new();
     out.push_str(&format!(
-        "yul.primary.optimize={}\n",
-        opt_level.yul_optimize()
+        "primary.backend={}\n",
+        primary_backend.to_lowercase()
     ));
+    if primary_backend.eq_ignore_ascii_case("yul") {
+        out.push_str(&format!("yul.primary.optimize={yul_primary_optimize}\n"));
+    } else {
+        out.push_str("yul.primary.optimize=n/a\n");
+    }
     out.push_str("yul.compare.unoptimized.optimize=false\n");
     out.push_str("yul.compare.optimized.optimize=true\n");
     out.push_str(&format!("yul.solc.verify_runtime={YUL_VERIFY_RUNTIME}\n"));
@@ -1997,6 +2007,7 @@ fn gas_opcode_comparison_header() -> &'static str {
 pub(super) fn write_gas_comparison_report(
     report: &ReportContext,
     primary_backend: &str,
+    yul_primary_optimize: bool,
     opt_level: OptLevel,
     cases: &[GasComparisonCase],
     primary_measurements: &FxHashMap<String, GasMeasurement>,
@@ -2005,7 +2016,7 @@ pub(super) fn write_gas_comparison_report(
     let _ = create_dir_all_utf8(&artifacts_dir);
     let _ = std::fs::write(
         artifacts_dir.join("gas_comparison_settings.txt"),
-        gas_comparison_settings_text(opt_level),
+        gas_comparison_settings_text(primary_backend, yul_primary_optimize, opt_level),
     );
 
     let mut markdown = String::new();
@@ -2063,28 +2074,36 @@ pub(super) fn write_gas_comparison_report(
         if primary_backend.eq_ignore_ascii_case("sonatina")
             && let Some(yul_case) = case.yul.as_ref()
         {
-            write_yul_case_artifacts(report, yul_case);
+            write_yul_case_artifacts(report, yul_case, None);
         }
 
-        let yul_opt = if primary_backend.eq_ignore_ascii_case("yul") {
-            primary_measurements.get(&case.symbol_name).cloned()
-        } else {
+        let measure_yul = |optimize| {
             case.yul
                 .as_ref()
-                .map(|test| measure_case_gas(test, "yul", true, true))
+                .map(|test| measure_case_gas(test, "yul", optimize, true))
         };
 
-        let yul_unopt = case
-            .yul
-            .as_ref()
-            .map(|test| measure_case_gas(test, "yul", false, true));
+        let primary_is_yul = primary_backend.eq_ignore_ascii_case("yul");
+        let primary_yul = primary_measurements.get(&case.symbol_name).cloned();
+
+        let yul_opt = if primary_is_yul && yul_primary_optimize {
+            primary_yul.clone().or_else(|| measure_yul(true))
+        } else {
+            measure_yul(true)
+        };
+
+        let yul_unopt = if primary_is_yul && !yul_primary_optimize {
+            primary_yul.or_else(|| measure_yul(false))
+        } else {
+            measure_yul(false)
+        };
 
         let sonatina = if primary_backend.eq_ignore_ascii_case("sonatina") {
             primary_measurements.get(&case.symbol_name).cloned()
         } else {
             case.sonatina
                 .as_ref()
-                .map(|test| measure_case_gas(test, "sonatina", opt_level.yul_optimize(), true))
+                .map(|test| measure_case_gas(test, "sonatina", false, true))
         };
 
         let yul_unopt_gas = yul_unopt
@@ -2614,7 +2633,9 @@ pub(super) fn write_gas_comparison_report(
     append_opcode_magnitude_summary(&mut markdown, opcode_magnitude_totals);
 
     markdown.push_str("\n## Optimization Settings\n\n");
-    for line in gas_comparison_settings_text(opt_level).lines() {
+    for line in
+        gas_comparison_settings_text(primary_backend, yul_primary_optimize, opt_level).lines()
+    {
         markdown.push_str(&format!("- {line}\n"));
     }
     markdown.push_str(
@@ -2660,12 +2681,17 @@ pub(super) fn write_gas_comparison_report(
     );
 }
 
-pub(super) fn write_run_gas_comparison_summary(root_dir: &Utf8PathBuf, opt_level: OptLevel) {
+pub(super) fn write_run_gas_comparison_summary(
+    root_dir: &Utf8PathBuf,
+    primary_backend: &str,
+    yul_primary_optimize: bool,
+    opt_level: OptLevel,
+) {
     let artifacts_dir = root_dir.join("artifacts");
     let _ = create_dir_all_utf8(&artifacts_dir);
     let _ = std::fs::write(
         artifacts_dir.join("gas_comparison_settings.txt"),
-        gas_comparison_settings_text(opt_level),
+        gas_comparison_settings_text(primary_backend, yul_primary_optimize, opt_level),
     );
 
     let mut suite_dirs: Vec<(String, Utf8PathBuf)> = Vec::new();
@@ -3080,7 +3106,9 @@ pub(super) fn write_run_gas_comparison_summary(root_dir: &Utf8PathBuf, opt_level
         observability_coverage_totals,
     );
     summary.push_str("\n## Optimization Settings\n\n");
-    for line in gas_comparison_settings_text(opt_level).lines() {
+    for line in
+        gas_comparison_settings_text(primary_backend, yul_primary_optimize, opt_level).lines()
+    {
         summary.push_str(&format!("- {line}\n"));
     }
     if wrote_any_rows {

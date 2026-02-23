@@ -1,5 +1,15 @@
 use lib::foo
 
-pub fn main() {
-    foo()
+msg FooMsg {
+    #[selector = 0x12345678]
+    Ping -> u256,
+}
+
+pub contract Foo {
+    recv FooMsg {
+        Ping -> u256 {
+            foo()
+            return 1
+        }
+    }
 }

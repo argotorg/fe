@@ -30,12 +30,22 @@ fn collect_effect_constraints_for_func<'db>(
 ) -> Vec<TraitInstId<'db>> {
     let provider_map = place_effect_provider_param_index_map(db, func);
     let provider_params = CallableDef::Func(func).params(db);
+    let mut effect_key_tys = vec![None; func.effects(db).data(db).len()];
+    for binding in func.effect_bindings(db) {
+        effect_key_tys[binding.binding_idx as usize] = binding.key_ty;
+    }
 
-    let effect_ref_trait = resolve_core_trait(db, func.scope(), &["effect_ref", "EffectRef"])
-        .expect("missing required core trait `core::effect_ref::EffectRef`");
-    let effect_ref_mut_trait =
+    let Some(effect_ref_trait) = resolve_core_trait(db, func.scope(), &["effect_ref", "EffectRef"])
+    else {
+        debug_assert!(false, "missing required core trait EffectRef");
+        return vec![];
+    };
+    let Some(effect_ref_mut_trait) =
         resolve_core_trait(db, func.scope(), &["effect_ref", "EffectRefMut"])
-            .expect("missing required core trait `core::effect_ref::EffectRefMut`");
+    else {
+        debug_assert!(false, "missing required core trait EffectRefMut");
+        return vec![];
+    };
 
     let mut out = Vec::new();
     for effect in func.effect_params(db) {
@@ -77,9 +87,7 @@ fn collect_effect_constraints_for_func<'db>(
                 ));
             }
             EffectKeyKind::Type => {
-                let Ok(PathRes::Ty(target_ty) | PathRes::TyAlias(_, target_ty)) =
-                    resolve_path(db, key_path, func.scope(), assumptions, false)
-                else {
+                let Some(target_ty) = effect_key_tys.get(effect.index()).copied().flatten() else {
                     continue;
                 };
                 if !target_ty.is_star_kind(db) {
@@ -184,7 +192,10 @@ pub(crate) fn collect_adt_constraints<'db>(
     collect_constraints(db, owner)
 }
 
-#[salsa::tracked]
+#[salsa::tracked(
+    cycle_fn=collect_func_def_constraints_cycle_recover,
+    cycle_initial=collect_func_def_constraints_cycle_initial
+)]
 pub(crate) fn collect_func_def_constraints<'db>(
     db: &'db dyn HirAnalysisDb,
     func: CallableDef<'db>,
@@ -228,6 +239,24 @@ pub(crate) fn collect_func_def_constraints<'db>(
             .instantiate_identity()
             .merge(db, parent_constraints.instantiate_identity()),
     )
+}
+
+fn collect_func_def_constraints_cycle_initial<'db>(
+    db: &'db dyn HirAnalysisDb,
+    _func: CallableDef<'db>,
+    _include_parent: bool,
+) -> Binder<PredicateListId<'db>> {
+    Binder::bind(PredicateListId::empty_list(db))
+}
+
+fn collect_func_def_constraints_cycle_recover<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _value: &Binder<PredicateListId<'db>>,
+    _count: u32,
+    _func: CallableDef<'db>,
+    _include_parent: bool,
+) -> salsa::CycleRecoveryAction<Binder<PredicateListId<'db>>> {
+    salsa::CycleRecoveryAction::Iterate
 }
 
 #[salsa::tracked]

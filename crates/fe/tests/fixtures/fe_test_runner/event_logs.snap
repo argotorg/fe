@@ -1,6 +1,5 @@
 ---
 source: crates/fe/tests/cli_output.rs
-assertion_line: 227
 expression: output
 input_file: tests/fixtures/fe_test_runner/event_logs.fe
 ---

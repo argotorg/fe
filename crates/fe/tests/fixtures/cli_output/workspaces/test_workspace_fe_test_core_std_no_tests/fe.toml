@@ -1,0 +1,4 @@
+[workspace]
+name = "test_workspace_fe_test_core_std_no_tests"
+version = "0.1.0"
+members = ["ingots/*"]

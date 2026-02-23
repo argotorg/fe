@@ -1,0 +1,27 @@
+---
+source: crates/codegen/tests/yul.rs
+expression: output
+input_file: tests/fixtures/const_nested_u8_array.fe
+---
+object "main" {
+  code {
+    function $const_nested_u8_array() -> ret {
+      let v0 := mload(0x40)
+      if iszero(v0) {
+        v0 := 0x80
+      }
+      mstore(0x40, add(v0, 128))
+      datacopy(v0, dataoffset("data_const_nested_u8_array_0"), datasize("data_const_nested_u8_array_0"))
+      let v1 := and(mload(add(v0, 64)), 0xff)
+      let v2 := mload(0x40)
+      if iszero(v2) {
+        v2 := 0x80
+      }
+      mstore(0x40, add(v2, 128))
+      datacopy(v2, dataoffset("data_const_nested_u8_array_0"), datasize("data_const_nested_u8_array_0"))
+      ret := v1
+      leave
+    }
+  }
+  data "data_const_nested_u8_array_0" hex"0000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000030000000000000000000000000000000000000000000000000000000000000004"
+}

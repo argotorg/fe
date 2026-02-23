@@ -1,32 +1,33 @@
 ---
 source: crates/fe/tests/cli_output.rs
+assertion_line: 528
 expression: output
 ---
 === STDOUT ===
 cycle_a v0.1.0
-├── [31mcycle_d v0.1.0[0m
-│   └── [31mcycle_e v0.1.0[0m
-│       └── [31mcycle_d v0.1.0 🔄 [cycle][0m
-└── [31mcycle_b v0.1.0[0m
-    ├── [31mcycle_e v0.1.0[0m
-    │   └── [31mcycle_d v0.1.0[0m
-    │       └── [31mcycle_e v0.1.0 🔄 [cycle][0m
-    └── [31mcycle_c v0.1.0[0m
-        └── [31mcycle_b v0.1.0 🔄 [cycle][0m
+├── cycle_d v0.1.0
+│   └── cycle_e v0.1.0
+│       └── cycle_d v0.1.0 [cycle]
+└── cycle_b v0.1.0
+    ├── cycle_e v0.1.0
+    │   └── cycle_d v0.1.0
+    │       └── cycle_e v0.1.0 [cycle]
+    └── cycle_c v0.1.0
+        └── cycle_b v0.1.0 [cycle]
 
 === STDERR ===
-❌ Detected cycle(s) in ingot dependencies:
+Error: Detected cycle(s) in ingot dependencies:
 
 cycle_a v0.1.0
-├── [31mcycle_d v0.1.0[0m
-│   └── [31mcycle_e v0.1.0[0m
-│       └── [31mcycle_d v0.1.0 🔄 [cycle][0m
-└── [31mcycle_b v0.1.0[0m
-    ├── [31mcycle_e v0.1.0[0m
-    │   └── [31mcycle_d v0.1.0[0m
-    │       └── [31mcycle_e v0.1.0 🔄 [cycle][0m
-    └── [31mcycle_c v0.1.0[0m
-        └── [31mcycle_b v0.1.0 🔄 [cycle][0m
+├── cycle_d v0.1.0
+│   └── cycle_e v0.1.0
+│       └── cycle_d v0.1.0 [cycle]
+└── cycle_b v0.1.0
+    ├── cycle_e v0.1.0
+    │   └── cycle_d v0.1.0
+    │       └── cycle_e v0.1.0 [cycle]
+    └── cycle_c v0.1.0
+        └── cycle_b v0.1.0 [cycle]
 
 
-=== EXIT CODE: 0 ===
+=== EXIT CODE: 1 ===

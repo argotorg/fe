@@ -1,32 +1,33 @@
-use std::evm::effects::assert
 use core::Seq
 
-struct Reverse<I, T: Seq<I>> {
+struct Reverse<I, T: Seq<Item = I>> {
     base: ref T,
 }
 
-struct Take<I, T: Seq<I>> {
+struct Take<I, T: Seq<Item = I>> {
     n: usize,
     base: ref T,
 }
 
-fn reverse<I, T: Seq<I>>(seq: ref T) -> Reverse<I, T> {
+fn reverse<I, T: Seq<Item = I>>(seq: ref T) -> Reverse<I, T> {
     Reverse { base: seq }
 }
 
-fn take<I, T: Seq<I>>(n: usize, seq: ref T) -> Take<I, T> {
+fn take<I, T: Seq<Item = I>>(n: usize, seq: ref T) -> Take<I, T> {
     Take { n, base: seq }
 }
 
-fn reverse_u256<T: Seq<u256>>(seq: ref T) -> Reverse<u256, T> {
+fn reverse_u256<T: Seq<Item = u256>>(seq: ref T) -> Reverse<u256, T> {
     reverse(seq)
 }
 
-fn take_u256<T: Seq<u256>>(n: usize, seq: ref T) -> Take<u256, T> {
+fn take_u256<T: Seq<Item = u256>>(n: usize, seq: ref T) -> Take<u256, T> {
     take(n, seq)
 }
 
-impl<I, T: Seq<I>> Seq<I> for Reverse<I, T> {
+impl<I, T: Seq<Item = I>> Seq for Reverse<I, T> {
+    type Item = I
+
     fn len(self) -> usize {
         self.base.len()
     }
@@ -37,7 +38,9 @@ impl<I, T: Seq<I>> Seq<I> for Reverse<I, T> {
     }
 }
 
-impl<I, T: Seq<I>> Seq<I> for Take<I, T> {
+impl<I, T: Seq<Item = I>> Seq for Take<I, T> {
+    type Item = I
+
     fn len(self) -> usize {
         let base = self.base
         let total = base.len()

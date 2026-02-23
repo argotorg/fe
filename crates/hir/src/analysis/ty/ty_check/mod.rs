@@ -44,9 +44,10 @@ use crate::analysis::place::Place;
 use super::{
     canonical::{Canonical, Canonicalized},
     diagnostics::{BodyDiag, FuncBodyDiag, TraitConstraintDiag, TyDiagCollection, TyLowerDiag},
-    effects::EffectKeyKind,
+    effects::{EffectKeyKind, resolve_normalized_type_effect_key},
     trait_def::TraitInstId,
     trait_resolution::{GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable},
+    ty_contains_const_hole,
     ty_def::{BorrowKind, CapabilityKind, InvalidCause, Kind, TyId, TyVarSort},
     ty_lower::lower_hir_ty,
     unify::{InferenceKey, UnificationError, UnificationTable},
@@ -203,13 +204,24 @@ impl<'db> TyChecker<'db> {
                 let scope = self.env.scope();
                 let assumptions = self.env.assumptions();
                 for (idx, param) in init.params(self.db).data(self.db).iter().enumerate() {
-                    if param.mode != crate::hir_def::params::FuncParamMode::Own {
-                        continue;
-                    }
                     let Some(hir_ty) = param.ty.to_opt() else {
                         continue;
                     };
                     let ty = lower_hir_ty(self.db, hir_ty, scope, assumptions);
+
+                    if ty_contains_const_hole(self.db, ty) {
+                        self.push_diag(TyDiagCollection::from(
+                            TyLowerDiag::ConstHoleInValuePosition {
+                                span: contract.span().init_block().params().param(idx).ty().into(),
+                            },
+                        ));
+                        continue;
+                    }
+
+                    if param.mode != crate::hir_def::params::FuncParamMode::Own {
+                        continue;
+                    }
+
                     if ty.as_borrow(self.db).is_some() {
                         self.push_diag(BodyDiag::OwnParamCannotBeBorrow {
                             primary: contract.span().init_block().params().param(idx).ty().into(),
@@ -251,7 +263,11 @@ impl<'db> TyChecker<'db> {
         effects: crate::hir_def::EffectParamListId<'db>,
     ) {
         for (idx, effect) in effects.data(self.db).iter().enumerate() {
-            let Some(key_path) = effect.key_path.to_opt() else {
+            let Some(key_path) = effect
+                .key_path
+                .to_opt()
+                .filter(|path| path.ident(self.db).is_present())
+            else {
                 continue;
             };
 
@@ -309,7 +325,11 @@ impl<'db> TyChecker<'db> {
             super::resolve_default_root_effect_ty(self.db, contract.scope(), assumptions);
 
         for (idx, effect) in effects.data(self.db).iter().enumerate() {
-            let Some(key_path) = effect.key_path.to_opt() else {
+            let Some(key_path) = effect
+                .key_path
+                .to_opt()
+                .filter(|path| path.ident(self.db).is_present())
+            else {
                 continue;
             };
 
@@ -347,7 +367,16 @@ impl<'db> TyChecker<'db> {
                         }
                     }
                     Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty)) => {
-                        let given = normalize_ty(self.db, ty, contract.scope(), assumptions);
+                        let given = resolve_normalized_type_effect_key(
+                            self.db,
+                            key_path,
+                            contract.scope(),
+                            assumptions,
+                        )
+                        .map(|ty| normalize_ty(self.db, ty, contract.scope(), assumptions))
+                        .unwrap_or_else(|| {
+                            normalize_ty(self.db, ty, contract.scope(), assumptions)
+                        });
                         if !given.is_zero_sized(self.db) {
                             self.push_diag(BodyDiag::ContractRootEffectTypeNotZeroSized {
                                 owner,
@@ -1121,6 +1150,15 @@ impl<'db> TyChecker<'db> {
 
         if let Some(diag) = ty.emit_diag(self.db, span.clone().into()) {
             self.push_diag(diag)
+        }
+
+        if ty_contains_const_hole(self.db, ty) {
+            self.push_diag(TyDiagCollection::from(
+                TyLowerDiag::ConstHoleInValuePosition {
+                    span: span.clone().into(),
+                },
+            ));
+            return TyId::invalid(self.db, InvalidCause::Other);
         }
 
         if star_kind_required && ty.is_star_kind(self.db) {

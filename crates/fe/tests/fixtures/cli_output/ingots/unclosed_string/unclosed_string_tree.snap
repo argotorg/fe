@@ -1,16 +1,23 @@
 ---
 source: crates/fe/tests/cli_output.rs
+assertion_line: 528
 expression: output
 ---
 === STDOUT ===
 [invalid fe.toml]
 
 === STDERR ===
-❌ Invalid fe.toml file in ingot file://<project>/crates/fe/tests/fixtures/cli_output/ingots/unclosed_string/: Failed to parse file://<project>/crates/fe/tests/fixtures/cli_output/ingots/unclosed_string/fe.toml: TOML parse error at line 2, column 17
+Error: Invalid fe.toml in ingot file://<project>/crates/fe/tests/fixtures/cli_output/ingots/unclosed_string/: Failed to parse file://<project>/crates/fe/tests/fixtures/cli_output/ingots/unclosed_string/fe.toml: TOML parse error at line 2, column 17
+  |
+2 | name = "unclosed
+  |                 ^
+invalid basic string
+
+Error: Failed to parse file://<project>/crates/fe/tests/fixtures/cli_output/ingots/unclosed_string/fe.toml: TOML parse error at line 2, column 17
   |
 2 | name = "unclosed
   |                 ^
 invalid basic string
 
 
-=== EXIT CODE: 0 ===
+=== EXIT CODE: 1 ===

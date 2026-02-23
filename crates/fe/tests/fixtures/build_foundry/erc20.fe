@@ -1,0 +1,126 @@
+use std::evm::{Ctx, Log, StorageMap}
+use std::abi::sol
+
+msg Erc20 {
+    #[selector = sol("name()")]
+    Name -> u256,
+    #[selector = sol("symbol()")]
+    Symbol -> u256,
+    #[selector = sol("decimals()")]
+    Decimals -> u8,
+    #[selector = sol("totalSupply()")]
+    TotalSupply -> u256,
+    #[selector = sol("balanceOf(address)")]
+    BalanceOf { account: Address } -> u256,
+    #[selector = sol("allowance(address,address)")]
+    Allowance { owner: Address, spender: Address } -> u256,
+    #[selector = sol("transfer(address,uint256)")]
+    Transfer { to: Address, amount: u256 } -> bool,
+    #[selector = sol("approve(address,uint256)")]
+    Approve { spender: Address, amount: u256 } -> bool,
+    #[selector = sol("transferFrom(address,address,uint256)")]
+    TransferFrom { from: Address, to: Address, amount: u256 } -> bool,
+}
+
+msg Erc20Extended {
+    #[selector = sol("mint(address,uint256)")]
+    Mint { to: Address, amount: u256 } -> bool,
+}
+
+struct TokenStore {
+    total_supply: u256,
+    balances: StorageMap<Address, u256>,
+    allowances: StorageMap<(Address, Address), u256>,
+}
+
+pub contract CoolCoin uses (ctx: Ctx, log: mut Log) {
+    mut store: TokenStore
+
+    init(initial_supply: u256, owner: Address) uses (mut store, mut log) {
+        if initial_supply > 0 {
+            store.total_supply = initial_supply
+            store.balances.set(key: owner, value: initial_supply)
+            emit_transfer(from: Address::zero(), to: owner, value: initial_supply)
+        }
+    }
+
+    recv Erc20 {
+        Name -> u256 { 0x436f6f6c436f696e }
+        Symbol -> u256 { 0x434f4f4c }
+        Decimals -> u8 { 18 }
+        TotalSupply -> u256 uses store { store.total_supply }
+        BalanceOf { account } -> u256 uses store { store.balances.get(key: account) }
+        Allowance { owner, spender } -> u256 uses store { store.allowances.get(key: (owner, spender)) }
+
+        Transfer { to, amount } -> bool uses (mut store, ctx, mut log) {
+            let sender = ctx.caller()
+            let sender_bal = store.balances.get(key: sender)
+            if sender_bal < amount {
+                return false
+            }
+            store.balances.set(key: sender, value: sender_bal - amount)
+            store.balances.set(key: to, value: store.balances.get(key: to) + amount)
+            emit_transfer(from: sender, to: to, value: amount)
+            return true
+        }
+
+        Approve { spender, amount } -> bool uses (mut store, ctx, mut log) {
+            let sender = ctx.caller()
+            store.allowances.set(key: (sender, spender), value: amount)
+            emit_approval(owner: sender, spender: spender, value: amount)
+            return true
+        }
+
+        TransferFrom { from, to, amount } -> bool uses (mut store, ctx, mut log) {
+            let spender = ctx.caller()
+            let allowed = store.allowances.get(key: (from, spender))
+            if allowed < amount {
+                return false
+            }
+            let from_bal = store.balances.get(key: from)
+            if from_bal < amount {
+                return false
+            }
+            store.allowances.set(key: (from, spender), value: allowed - amount)
+            store.balances.set(key: from, value: from_bal - amount)
+            store.balances.set(key: to, value: store.balances.get(key: to) + amount)
+            emit_transfer(from: from, to: to, value: amount)
+            return true
+        }
+    }
+
+    recv Erc20Extended {
+        Mint { to, amount } -> bool uses (mut store, mut log) {
+            store.total_supply += amount
+            store.balances.set(key: to, value: store.balances.get(key: to) + amount)
+            emit_transfer(from: Address::zero(), to: to, value: amount)
+            return true
+        }
+    }
+}
+
+fn emit_transfer(from: Address, to: Address, value: u256) uses (log: mut Log) {
+    log.emit(Transfer { from, to, value })
+}
+
+fn emit_approval(owner: Address, spender: Address, value: u256) uses (log: mut Log) {
+    log.emit(Approval { owner, spender, value })
+}
+
+#[event]
+struct Transfer {
+    #[indexed]
+    from: Address,
+    #[indexed]
+    to: Address,
+    value: u256,
+}
+
+#[event]
+struct Approval {
+    #[indexed]
+    owner: Address,
+    #[indexed]
+    spender: Address,
+    value: u256,
+}

@@ -28,7 +28,7 @@ impl StorageKey for Address {
 /// `SALT` is the mapping's slot seed (the `slot` component in
 /// `keccak256(key ++ slot)`), chosen explicitly for each mapping instance to
 /// prevent collisions.
-pub struct StorageMap<K, V, const SALT: u256> {}
+pub struct StorageMap<K, V, const SALT: u256 = _> {}
 
 fn storagemap_storage_slot_with_salt<K>(key: K, salt: u256) -> u256
     where K: StorageKey

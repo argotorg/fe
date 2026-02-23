@@ -335,6 +335,8 @@ impl<'db> Func<'db> {
                 diags.push(TyLowerDiag::ExpectedStarKind(span).into());
             } else if ret.is_const_ty(db) {
                 diags.push(TyLowerDiag::NormalTypeExpected { span, given: ret }.into());
+            } else if ty::ty_contains_const_hole(db, ret) {
+                diags.push(TyLowerDiag::ConstHoleInValuePosition { span }.into());
             }
         }
         diags

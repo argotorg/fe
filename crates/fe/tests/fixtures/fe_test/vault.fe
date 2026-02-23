@@ -5,9 +5,6 @@
 /// Tests: if-expressions, proportional math, per-user StorageMap with Address
 /// keys, ctx.caller() identity, multi-user via proxy contract.
 
-use std::evm::{Address, Evm, Call, Ctx, StorageMap}
-use std::evm::effects::assert
-
 msg VaultMsg {
     #[selector = 0x01]
     Deposit { amount: u256 } -> u256,
@@ -26,7 +23,7 @@ msg VaultMsg {
 struct VaultStore {
     total_assets: u256,
     total_shares: u256,
-    user_shares: StorageMap<Address, u256, 0>,
+    user_shares: StorageMap<Address, u256>,
 }
 
 pub contract Vault uses (ctx: Ctx) {

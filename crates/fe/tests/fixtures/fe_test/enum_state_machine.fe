@@ -8,9 +8,6 @@
 /// The contract and commented-out tests below document the intended pattern.
 /// Once the enum storage roundtrip bug is fixed, uncomment the lifecycle tests.
 
-use std::evm::Evm
-use std::evm::effects::assert
-
 enum OrderStatus {
     Created,
     Confirmed,

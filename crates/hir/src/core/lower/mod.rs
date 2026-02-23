@@ -147,13 +147,28 @@ impl<'db> FileLowerCtxt<'db> {
         let db = self.db();
         let top_mod = self.top_mod();
         let ingot = top_mod.ingot(db);
-        if ingot.kind(db) == IngotKind::Core {
+        let kind = ingot.kind(db);
+
+        if kind == IngotKind::Core {
             return;
         }
 
+        // Always inject core::prelude::* as the baseline — this is guaranteed
+        // to exist and provides Option, Result, Clone, Copy, etc.
         let core = IdentId::new(db, "core".to_string());
         let prelude = IdentId::new(db, "prelude".to_string());
         self.insert_synthetic_use(vec![core, prelude]);
+
+        // For non-std ingots, additionally inject std::prelude::* which adds
+        // EVM/ABI items (Evm, Address, Call, Sol, assert, etc.) on top of
+        // core::prelude. If std lacks a prelude module (e.g. a user-defined
+        // package aliased as "std"), the synthetic import fails silently and
+        // we still have core::prelude as fallback.
+        if kind != IngotKind::Std {
+            let std = IdentId::new(db, "std".to_string());
+            let prelude = IdentId::new(db, "prelude".to_string());
+            self.insert_synthetic_use(vec![std, prelude]);
+        }
     }
 
     /// Inserts `use super::*` to re-export parent module items into current scope.

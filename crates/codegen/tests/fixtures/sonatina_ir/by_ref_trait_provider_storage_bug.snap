@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/by_ref_trait_provider_storage_bug.fe
 ---
@@ -141,7 +142,7 @@ func private %__ByRefTraitProviderStorageBug_init_code_len() -> i256 {
 
 func private %use_ctx_eff0_stor__Pair_h956dff41e88ee341__acec41afdc898140(v0.i256) -> i256 {
     block0:
-        v2.i256 = call %pair_h956dff41e88ee341_ctx_h4952b3c1f066f039_sum_stor v0;
+        v2.i256 = call %pair_h956dff41e88ee341_ctx_h4952b3c1f066f039_sum_stor_arg0_root_stor v0;
         return v2;
 }
 
@@ -217,7 +218,7 @@ func private %return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4
         evm_invalid;
 }
 
-func private %pair_h956dff41e88ee341_ctx_h4952b3c1f066f039_sum_stor(v0.i256) -> i256 {
+func private %pair_h956dff41e88ee341_ctx_h4952b3c1f066f039_sum_stor_arg0_root_stor(v0.i256) -> i256 {
     block0:
         v2.i256 = evm_sload v0;
         v4.i256 = add v0 1.i256;

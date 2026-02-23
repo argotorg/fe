@@ -177,7 +177,11 @@ impl super::Parse for ConstGenericParamScope {
         }
 
         if parser.bump_if(SyntaxKind::Eq) {
-            parse_const_generic_expr(parser)?;
+            if parser.current_kind() == Some(SyntaxKind::Underscore) {
+                parser.bump_expected(SyntaxKind::Underscore);
+            } else {
+                parse_const_generic_expr(parser)?;
+            }
         }
         Ok(())
     }
@@ -402,6 +406,10 @@ impl super::Parse for GenericArgScope {
             }
 
             match parser.current_kind() {
+                Some(SyntaxKind::Underscore) => {
+                    self.set_kind(SyntaxKind::ConstGenericArg);
+                    parser.bump_expected(SyntaxKind::Underscore);
+                }
                 Some(SyntaxKind::LBrace) => {
                     self.set_kind(SyntaxKind::ConstGenericArg);
                     parser.parse(BlockExprScope::default())?;

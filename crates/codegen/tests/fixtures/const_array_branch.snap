@@ -1,0 +1,58 @@
+---
+source: crates/codegen/tests/yul.rs
+expression: output
+input_file: tests/fixtures/const_array_branch.fe
+---
+object "main" {
+  code {
+    function $const_array_branch($flag) -> ret {
+      let v0 := 0
+      switch $flag
+        case 1 {
+          let v1 := mload(0x40)
+          if iszero(v1) {
+            v1 := 0x80
+          }
+          mstore(0x40, add(v1, 32))
+          datacopy(v1, dataoffset("data_const_array_branch_0"), datasize("data_const_array_branch_0"))
+          let v2 := mload(v1)
+          v0 := v2
+        }
+        case 0 {
+          let v3 := mload(0x40)
+          if iszero(v3) {
+            v3 := 0x80
+          }
+          mstore(0x40, add(v3, 32))
+          datacopy(v3, dataoffset("data_const_array_branch_0"), datasize("data_const_array_branch_0"))
+          let v4 := mload(v3)
+          v0 := v4
+        }
+        default {
+          let v5 := mload(0x40)
+          if iszero(v5) {
+            v5 := 0x80
+          }
+          mstore(0x40, add(v5, 32))
+          datacopy(v5, dataoffset("data_const_array_branch_0"), datasize("data_const_array_branch_0"))
+          let v6 := mload(v5)
+          v0 := v6
+        }
+      let v7 := mload(0x40)
+      if iszero(v7) {
+        v7 := 0x80
+      }
+      mstore(0x40, add(v7, 32))
+      datacopy(v7, dataoffset("data_const_array_branch_0"), datasize("data_const_array_branch_0"))
+      let v8 := mload(0x40)
+      if iszero(v8) {
+        v8 := 0x80
+      }
+      mstore(0x40, add(v8, 32))
+      datacopy(v8, dataoffset("data_const_array_branch_0"), datasize("data_const_array_branch_0"))
+      ret := v0
+      leave
+    }
+  }
+  data "data_const_array_branch_0" hex"0000000000000000000000000000000000000000000000000000000000000001"
+}

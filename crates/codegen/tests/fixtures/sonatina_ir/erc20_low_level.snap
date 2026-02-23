@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/erc20_low_level.fe
 ---
@@ -7,7 +8,6 @@ target = "evm-ethereum-osaka"
 
 type @__fe_Address_0 = {i256};
 type @__fe_tuple_1 = {@__fe_Address_0, @__fe_Address_0};
-type @__fe_Erc20_2 = {unit, unit, i256, @__fe_Address_0};
 
 func private %abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741(v0.i256, v1.i256) {
     block0:
@@ -23,65 +23,10 @@ func private %abi_encode_string__Evm_hef0af3106e109414__3af54274b2985741(v0.i256
         evm_return 0.i256 96.i256;
 }
 
-func private %do_init__StorPtr_Erc20__Evm_hef0af3106e109414_Evm_hef0af3106e109414__a43599a61c4c3ec5(v0.i256, v1.i256, v2.i256) {
-    block0:
-        v4.i256 = evm_caller;
-        call %erc20_h7a8a7a2800ba6809_set_owner_once_stor__Evm_hef0af3106e109414__3af54274b2985741 v0 v4 v2;
-        return;
-}
-
-func private %balance_of__StorPtr_Erc20___2745299687a147d4(v0.i256, v1.i256) -> i256 {
-    block0:
-        v3.i256 = call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3 0.i256 v0;
-        return v3;
-}
-
-func private %allowance__StorPtr_Erc20___2745299687a147d4(v0.i256, v1.i256, v2.i256) -> i256 {
-    block0:
-        v5.*i8 = evm_malloc 64.i256;
-        v6.i256 = ptr_to_int v5 i256;
-        v7.*@__fe_tuple_1 = int_to_ptr v6 *@__fe_tuple_1;
-        v8.*@__fe_Address_0 = gep v7 0.i256 0.i256;
-        v9.i256 = ptr_to_int v8 i256;
-        mstore v9 v0 i256;
-        v10.*@__fe_tuple_1 = int_to_ptr v6 *@__fe_tuple_1;
-        v12.*@__fe_Address_0 = gep v10 0.i256 1.i256;
-        v13.i256 = ptr_to_int v12 i256;
-        mstore v13 v1 i256;
-        v14.i256 = call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v6;
-        return v14;
-}
-
-func private %transfer__StorPtr_Erc20__Evm_hef0af3106e109414_Evm_hef0af3106e109414__a43599a61c4c3ec5(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256) -> i256 {
-    block0:
-        v6.i256 = evm_caller;
-        call %erc20_h7a8a7a2800ba6809_transfer_stor__Evm_hef0af3106e109414__3af54274b2985741 v2 v6 v0 v1 v4;
-        return 1.i256;
-}
-
-func private %approve__StorPtr_Erc20__Evm_hef0af3106e109414__cb64805ecdbd6d6e(v0.i256, v1.i256, v2.i256, v3.i256) -> i256 {
-    block0:
-        v5.i256 = evm_caller;
-        call %erc20_h7a8a7a2800ba6809_approve_stor v2 v5 v0 v1;
-        return 1.i256;
-}
-
-func private %transfer_from__StorPtr_Erc20__Evm_hef0af3106e109414_Evm_hef0af3106e109414__a43599a61c4c3ec5(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256, v5.i256) -> i256 {
-    block0:
-        call %erc20_h7a8a7a2800ba6809_transfer_from_stor__Evm_hef0af3106e109414_Evm_hef0af3106e109414__7ab75559784fbc59 v3 v0 v1 v2 v4 v5;
-        return 1.i256;
-}
-
-func private %mint__StorPtr_Erc20__Evm_hef0af3106e109414_Evm_hef0af3106e109414__a43599a61c4c3ec5(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256) -> i256 {
-    block0:
-        call %erc20_h7a8a7a2800ba6809_mint_stor__Evm_hef0af3106e109414_Evm_hef0af3106e109414__7ab75559784fbc59 v2 v0 v1 v3 v4;
-        return 1.i256;
-}
-
 func private %init__StorPtr_Evm___207f35a85ac4062e() {
     block0:
-        v1.i256 = call %stor_ptr__Evm_hef0af3106e109414_Erc20_h7a8a7a2800ba6809__828ea75549970aee 0.i256 0.i256;
-        call %do_init__StorPtr_Erc20__Evm_hef0af3106e109414_Evm_hef0af3106e109414__a43599a61c4c3ec5 v1 0.i256 0.i256;
+        v1.i256 = call %stor_ptr_stor__Evm_hef0af3106e109414_Erc20_0__1___536307fd4fe270cd 0.i256 0.i256;
+        call %do_init__0_1_StorPtr_Erc20_0__1___Evm_hef0af3106e109414_Evm_hef0af3106e109414__d36080519ce8fddb v1 0.i256 0.i256;
         v2.i256 = sym_size &runtime__StorPtr_Evm___207f35a85ac4062e;
         v3.i256 = sym_addr &runtime__StorPtr_Evm___207f35a85ac4062e;
         evm_code_copy 0.i256 v3 v2;
@@ -90,21 +35,21 @@ func private %init__StorPtr_Evm___207f35a85ac4062e() {
 
 func private %runtime__StorPtr_Evm___207f35a85ac4062e() {
     block0:
-        v1.i256 = call %stor_ptr__Evm_hef0af3106e109414_Erc20_h7a8a7a2800ba6809__828ea75549970aee 0.i256 0.i256;
+        v1.i256 = call %stor_ptr_stor__Evm_hef0af3106e109414_Erc20_0__1___536307fd4fe270cd 0.i256 0.i256;
         v2.i256 = evm_calldata_load 0.i256;
         v4.i256 = shr 224.i256 v2;
         jump block11;
 
     block1:
         v6.i256 = evm_calldata_load 4.i256;
-        v8.i256 = call %balance_of__StorPtr_Erc20___2745299687a147d4 v6 v1;
+        v8.i256 = call %balance_of__0_1_StorPtr_Erc20_0__1____896784bc09903ba1 v6 v1;
         call %abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741 v8 0.i256;
         evm_invalid;
 
     block2:
         v9.i256 = evm_calldata_load 4.i256;
         v11.i256 = evm_calldata_load 36.i256;
-        v13.i256 = call %allowance__StorPtr_Erc20___2745299687a147d4 v9 v11 v1;
+        v13.i256 = call %allowance__0_1_StorPtr_Erc20_0__1____896784bc09903ba1 v9 v11 v1;
         call %abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741 v13 0.i256;
         evm_invalid;
 
@@ -123,14 +68,14 @@ func private %runtime__StorPtr_Evm___207f35a85ac4062e() {
     block6:
         v19.i256 = evm_calldata_load 4.i256;
         v20.i256 = evm_calldata_load 36.i256;
-        v22.i256 = call %transfer__StorPtr_Erc20__Evm_hef0af3106e109414_Evm_hef0af3106e109414__a43599a61c4c3ec5 v19 v20 v1 0.i256 0.i256;
+        v22.i256 = call %transfer__0_1_StorPtr_Erc20_0__1___Evm_hef0af3106e109414_Evm_hef0af3106e109414__d36080519ce8fddb v19 v20 v1 0.i256 0.i256;
         call %abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741 v22 0.i256;
         evm_invalid;
 
     block7:
         v23.i256 = evm_calldata_load 4.i256;
         v24.i256 = evm_calldata_load 36.i256;
-        v26.i256 = call %approve__StorPtr_Erc20__Evm_hef0af3106e109414__cb64805ecdbd6d6e v23 v24 v1 0.i256;
+        v26.i256 = call %approve__0_1_StorPtr_Erc20_0__1___Evm_hef0af3106e109414__68ea22e02fe2444b v23 v24 v1 0.i256;
         call %abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741 v26 0.i256;
         evm_invalid;
 
@@ -138,14 +83,14 @@ func private %runtime__StorPtr_Evm___207f35a85ac4062e() {
         v27.i256 = evm_calldata_load 4.i256;
         v28.i256 = evm_calldata_load 36.i256;
         v30.i256 = evm_calldata_load 68.i256;
-        v32.i256 = call %transfer_from__StorPtr_Erc20__Evm_hef0af3106e109414_Evm_hef0af3106e109414__a43599a61c4c3ec5 v27 v28 v30 v1 0.i256 0.i256;
+        v32.i256 = call %transfer_from__0_1_StorPtr_Erc20_0__1___Evm_hef0af3106e109414_Evm_hef0af3106e109414__d36080519ce8fddb v27 v28 v30 v1 0.i256 0.i256;
         call %abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741 v32 0.i256;
         evm_invalid;
 
     block9:
         v33.i256 = evm_calldata_load 4.i256;
         v34.i256 = evm_calldata_load 36.i256;
-        v36.i256 = call %mint__StorPtr_Erc20__Evm_hef0af3106e109414_Evm_hef0af3106e109414__a43599a61c4c3ec5 v33 v34 v1 0.i256 0.i256;
+        v36.i256 = call %mint__0_1_StorPtr_Erc20_0__1___Evm_hef0af3106e109414_Evm_hef0af3106e109414__d36080519ce8fddb v33 v34 v1 0.i256 0.i256;
         call %abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741 v36 0.i256;
         evm_invalid;
 
@@ -189,160 +134,78 @@ func private %runtime__StorPtr_Evm___207f35a85ac4062e() {
         br v55 block9 block10;
 }
 
-func private %erc20_h7a8a7a2800ba6809_balance_of(v0.i256, v1.i256) -> i256 {
+func private %stor_ptr_stor__Evm_hef0af3106e109414_Erc20_0__1___536307fd4fe270cd(v0.i256, v1.i256) -> i256 {
     block0:
-        v3.i256 = call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3 0.i256 v1;
+        v3.i256 = call %storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Erc20_0__1___b48e7ab92637d703 v1;
         return v3;
 }
 
-func private %erc20_h7a8a7a2800ba6809_allowance(v0.i256, v1.i256, v2.i256) -> i256 {
+func private %do_init__0_1_StorPtr_Erc20_0__1___Evm_hef0af3106e109414_Evm_hef0af3106e109414__d36080519ce8fddb(v0.i256, v1.i256, v2.i256) {
+    block0:
+        v4.i256 = evm_caller;
+        call %erc20_______h94f6fe6e679122ca_set_owner_once_stor_arg0_root_stor__0_1_Evm_hef0af3106e109414__2bfe0780cafbc4d2 v0 v4 v2;
+        return;
+}
+
+func private %balance_of__0_1_StorPtr_Erc20_0__1____896784bc09903ba1(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor_arg0_root_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3 0.i256 v0;
+        return v3;
+}
+
+func private %allowance__0_1_StorPtr_Erc20_0__1____896784bc09903ba1(v0.i256, v1.i256, v2.i256) -> i256 {
     block0:
         v5.*i8 = evm_malloc 64.i256;
         v6.i256 = ptr_to_int v5 i256;
         v7.*@__fe_tuple_1 = int_to_ptr v6 *@__fe_tuple_1;
         v8.*@__fe_Address_0 = gep v7 0.i256 0.i256;
         v9.i256 = ptr_to_int v8 i256;
-        mstore v9 v1 i256;
+        mstore v9 v0 i256;
         v10.*@__fe_tuple_1 = int_to_ptr v6 *@__fe_tuple_1;
         v12.*@__fe_Address_0 = gep v10 0.i256 1.i256;
         v13.i256 = ptr_to_int v12 i256;
-        mstore v13 v2 i256;
-        v14.i256 = call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v6;
+        mstore v13 v1 i256;
+        v14.i256 = call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor_arg0_root_stor___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v6;
         return v14;
 }
 
-func private %erc20_h7a8a7a2800ba6809_approve(v0.i256, v1.i256, v2.i256, v3.i256) {
-    block0:
-        v6.*i8 = evm_malloc 64.i256;
-        v7.i256 = ptr_to_int v6 i256;
-        v8.*@__fe_tuple_1 = int_to_ptr v7 *@__fe_tuple_1;
-        v9.*@__fe_Address_0 = gep v8 0.i256 0.i256;
-        v10.i256 = ptr_to_int v9 i256;
-        mstore v10 v1 i256;
-        v11.*@__fe_tuple_1 = int_to_ptr v7 *@__fe_tuple_1;
-        v13.*@__fe_Address_0 = gep v11 0.i256 1.i256;
-        v14.i256 = ptr_to_int v13 i256;
-        mstore v14 v2 i256;
-        call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v7 v3;
-        return;
-}
-
-func private %erc20_h7a8a7a2800ba6809_total_supply(v0.i256) -> i256 {
-    block0:
-        v2.*@__fe_Erc20_2 = int_to_ptr v0 *@__fe_Erc20_2;
-        v4.*i256 = gep v2 0.i256 2.i256;
-        v5.i256 = ptr_to_int v4 i256;
-        v6.i256 = mload v5 i256;
-        return v6;
-}
-
-func private %erc20_h7a8a7a2800ba6809_set_owner_once__Evm_hef0af3106e109414__3af54274b2985741(v0.i256, v1.i256, v2.i256) {
-    block0:
-        v4.*@__fe_Erc20_2 = int_to_ptr v0 *@__fe_Erc20_2;
-        v6.*@__fe_Address_0 = gep v4 0.i256 3.i256;
-        v7.i256 = ptr_to_int v6 i256;
-        v8.i256 = mload v7 i256;
-        v9.i256 = call %address_h257056268eac7027_zero;
-        v10.i256 = call %ne__Address_h257056268eac7027_Address_h257056268eac7027__af929e62fa4c68f2 v8 v9;
-        v11.i1 = ne v10 0.i256;
-        br v11 block1 block2;
-
-    block1:
-        evm_revert 0.i256 0.i256;
-
-    block2:
-        v14.*@__fe_Erc20_2 = int_to_ptr v0 *@__fe_Erc20_2;
-        v15.*@__fe_Address_0 = gep v14 0.i256 3.i256;
-        v16.i256 = ptr_to_int v15 i256;
-        mstore v16 v1 i256;
-        return;
-}
-
-func private %erc20_h7a8a7a2800ba6809_transfer__Evm_hef0af3106e109414__3af54274b2985741(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256) {
-    block0:
-        v6.i256 = call %erc20_h7a8a7a2800ba6809_balance_of v0 v1;
-        v7.i1 = lt v6 v3;
-        v8.i256 = zext v7 i256;
-        v9.i1 = ne v8 0.i256;
-        br v9 block1 block2;
-
-    block1:
-        evm_revert 0.i256 0.i256;
-
-    block2:
-        v12.i256 = call %erc20_h7a8a7a2800ba6809_balance_of v0 v2;
-        v16.i256 = sub v6 v3;
-        call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3 0.i256 v1 v16;
-        v17.i256 = add v12 v3;
-        call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3 0.i256 v2 v17;
-        return;
-}
-
-func private %erc20_h7a8a7a2800ba6809_transfer_from__Evm_hef0af3106e109414_Evm_hef0af3106e109414__7ab75559784fbc59(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256, v5.i256) {
-    block0:
-        v7.i256 = evm_caller;
-        v8.i256 = call %erc20_h7a8a7a2800ba6809_allowance v0 v1 v7;
-        v9.i1 = lt v8 v3;
-        v10.i256 = zext v9 i256;
-        v11.i1 = ne v10 0.i256;
-        br v11 block1 block2;
-
-    block1:
-        evm_revert 0.i256 0.i256;
-
-    block2:
-        call %erc20_h7a8a7a2800ba6809_transfer__Evm_hef0af3106e109414__3af54274b2985741 v0 v1 v2 v3 v5;
-        v18.*i8 = evm_malloc 64.i256;
-        v19.i256 = ptr_to_int v18 i256;
-        v20.*@__fe_tuple_1 = int_to_ptr v19 *@__fe_tuple_1;
-        v21.*@__fe_Address_0 = gep v20 0.i256 0.i256;
-        v22.i256 = ptr_to_int v21 i256;
-        mstore v22 v1 i256;
-        v24.*@__fe_tuple_1 = int_to_ptr v19 *@__fe_tuple_1;
-        v26.*@__fe_Address_0 = gep v24 0.i256 1.i256;
-        v27.i256 = ptr_to_int v26 i256;
-        mstore v27 v7 i256;
-        v29.i256 = sub v8 v3;
-        call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v19 v29;
-        return;
-}
-
-func private %erc20_h7a8a7a2800ba6809_mint__Evm_hef0af3106e109414_Evm_hef0af3106e109414__7ab75559784fbc59(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256) {
+func private %transfer__0_1_StorPtr_Erc20_0__1___Evm_hef0af3106e109414_Evm_hef0af3106e109414__d36080519ce8fddb(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256) -> i256 {
     block0:
         v6.i256 = evm_caller;
-        v7.*@__fe_Erc20_2 = int_to_ptr v0 *@__fe_Erc20_2;
-        v9.*@__fe_Address_0 = gep v7 0.i256 3.i256;
-        v10.i256 = ptr_to_int v9 i256;
-        v11.i256 = mload v10 i256;
-        v12.i256 = call %ne__Address_h257056268eac7027_Address_h257056268eac7027__af929e62fa4c68f2 v6 v11;
-        v13.i1 = ne v12 0.i256;
-        br v13 block1 block2;
-
-    block1:
-        evm_revert 0.i256 0.i256;
-
-    block2:
-        v16.i256 = call %erc20_h7a8a7a2800ba6809_balance_of v0 v1;
-        v18.i256 = add v16 v2;
-        call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3 0.i256 v1 v18;
-        v19.*@__fe_Erc20_2 = int_to_ptr v0 *@__fe_Erc20_2;
-        v21.*i256 = gep v19 0.i256 2.i256;
-        v22.i256 = ptr_to_int v21 i256;
-        v23.i256 = mload v22 i256;
-        v24.i256 = add v23 v2;
-        v25.*@__fe_Erc20_2 = int_to_ptr v0 *@__fe_Erc20_2;
-        v26.*i256 = gep v25 0.i256 2.i256;
-        v27.i256 = ptr_to_int v26 i256;
-        mstore v27 v24 i256;
-        return;
+        call %erc20_______h94f6fe6e679122ca_transfer_stor_arg0_root_stor__0_1_Evm_hef0af3106e109414__2bfe0780cafbc4d2 v2 v6 v0 v1 v4;
+        return 1.i256;
 }
 
-func private %erc20_h7a8a7a2800ba6809_set_owner_once_stor__Evm_hef0af3106e109414__3af54274b2985741(v0.i256, v1.i256, v2.i256) {
+func private %approve__0_1_StorPtr_Erc20_0__1___Evm_hef0af3106e109414__68ea22e02fe2444b(v0.i256, v1.i256, v2.i256, v3.i256) -> i256 {
+    block0:
+        v5.i256 = evm_caller;
+        call %erc20_______h94f6fe6e679122ca_approve_stor_arg0_root_stor__0_1__e4c8be10cab939c2 v2 v5 v0 v1;
+        return 1.i256;
+}
+
+func private %transfer_from__0_1_StorPtr_Erc20_0__1___Evm_hef0af3106e109414_Evm_hef0af3106e109414__d36080519ce8fddb(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256, v5.i256) -> i256 {
+    block0:
+        call %erc20_______h94f6fe6e679122ca_transfer_from_stor_arg0_root_stor__0_1_Evm_hef0af3106e109414_Evm_hef0af3106e109414__ca7def21e0c734ee v3 v0 v1 v2 v4 v5;
+        return 1.i256;
+}
+
+func private %mint__0_1_StorPtr_Erc20_0__1___Evm_hef0af3106e109414_Evm_hef0af3106e109414__d36080519ce8fddb(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256) -> i256 {
+    block0:
+        call %erc20_______h94f6fe6e679122ca_mint_stor_arg0_root_stor__0_1_Evm_hef0af3106e109414_Evm_hef0af3106e109414__ca7def21e0c734ee v2 v0 v1 v3 v4;
+        return 1.i256;
+}
+
+func private %storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Erc20_0__1___b48e7ab92637d703(v0.i256) -> i256 {
+    block0:
+        return v0;
+}
+
+func private %erc20_______h94f6fe6e679122ca_set_owner_once_stor_arg0_root_stor__0_1_Evm_hef0af3106e109414__2bfe0780cafbc4d2(v0.i256, v1.i256, v2.i256) {
     block0:
         v5.i256 = add v0 1.i256;
         v6.i256 = evm_sload v5;
         v7.i256 = call %address_h257056268eac7027_zero;
-        v8.i256 = call %ne__Address_h257056268eac7027_Address_h257056268eac7027__af929e62fa4c68f2 v6 v7;
+        v8.i256 = call %ne_stor_arg0_root_stor__Address_h257056268eac7027_Address_h257056268eac7027__af929e62fa4c68f2 v6 v7;
         v9.i1 = ne v8 0.i256;
         br v9 block1 block2;
 
@@ -355,23 +218,23 @@ func private %erc20_h7a8a7a2800ba6809_set_owner_once_stor__Evm_hef0af3106e109414
         return;
 }
 
-func public %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(v0.i256, v1.i256) -> i256 {
+func public %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor_arg0_root_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(v0.i256, v1.i256) -> i256 {
     block0:
         v3.i256 = call %storagemap_get_word_with_salt__Address_h257056268eac7027__5ab99f7153cdba29 v1 0.i256;
         v4.i256 = call %u256_h3271ca15373d4483_wordrepr_h7483d41ac8178d88_from_word v3;
         return v4;
 }
 
-func public %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor___Address__Address__u256_1__12414c27d5bfff1f(v0.i256, v1.i256) -> i256 {
+func public %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor_arg0_root_stor___Address__Address__u256_1__12414c27d5bfff1f(v0.i256, v1.i256) -> i256 {
     block0:
         v4.i256 = call %storagemap_get_word_with_salt___Address__Address___c32d499da259c78e v1 1.i256;
         v5.i256 = call %u256_h3271ca15373d4483_wordrepr_h7483d41ac8178d88_from_word v4;
         return v5;
 }
 
-func private %erc20_h7a8a7a2800ba6809_transfer_stor__Evm_hef0af3106e109414__3af54274b2985741(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256) {
+func private %erc20_______h94f6fe6e679122ca_transfer_stor_arg0_root_stor__0_1_Evm_hef0af3106e109414__2bfe0780cafbc4d2(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256) {
     block0:
-        v6.i256 = call %erc20_h7a8a7a2800ba6809_balance_of_stor v0 v1;
+        v6.i256 = call %erc20_______h94f6fe6e679122ca_balance_of_stor_arg0_root_stor__0_1__e4c8be10cab939c2 v0 v1;
         v7.i1 = lt v6 v3;
         v8.i256 = zext v7 i256;
         v9.i1 = ne v8 0.i256;
@@ -381,15 +244,15 @@ func private %erc20_h7a8a7a2800ba6809_transfer_stor__Evm_hef0af3106e109414__3af5
         evm_revert 0.i256 0.i256;
 
     block2:
-        v12.i256 = call %erc20_h7a8a7a2800ba6809_balance_of_stor v0 v2;
+        v12.i256 = call %erc20_______h94f6fe6e679122ca_balance_of_stor_arg0_root_stor__0_1__e4c8be10cab939c2 v0 v2;
         v16.i256 = sub v6 v3;
-        call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3 0.i256 v1 v16;
+        call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor_arg0_root_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3 0.i256 v1 v16;
         v17.i256 = add v12 v3;
-        call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3 0.i256 v2 v17;
+        call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor_arg0_root_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3 0.i256 v2 v17;
         return;
 }
 
-func private %erc20_h7a8a7a2800ba6809_approve_stor(v0.i256, v1.i256, v2.i256, v3.i256) {
+func private %erc20_______h94f6fe6e679122ca_approve_stor_arg0_root_stor__0_1__e4c8be10cab939c2(v0.i256, v1.i256, v2.i256, v3.i256) {
     block0:
         v6.*i8 = evm_malloc 64.i256;
         v7.i256 = ptr_to_int v6 i256;
@@ -401,14 +264,14 @@ func private %erc20_h7a8a7a2800ba6809_approve_stor(v0.i256, v1.i256, v2.i256, v3
         v13.*@__fe_Address_0 = gep v11 0.i256 1.i256;
         v14.i256 = ptr_to_int v13 i256;
         mstore v14 v2 i256;
-        call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v7 v3;
+        call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor_arg0_root_stor___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v7 v3;
         return;
 }
 
-func private %erc20_h7a8a7a2800ba6809_transfer_from_stor__Evm_hef0af3106e109414_Evm_hef0af3106e109414__7ab75559784fbc59(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256, v5.i256) {
+func private %erc20_______h94f6fe6e679122ca_transfer_from_stor_arg0_root_stor__0_1_Evm_hef0af3106e109414_Evm_hef0af3106e109414__ca7def21e0c734ee(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256, v5.i256) {
     block0:
         v7.i256 = evm_caller;
-        v8.i256 = call %erc20_h7a8a7a2800ba6809_allowance_stor v0 v1 v7;
+        v8.i256 = call %erc20_______h94f6fe6e679122ca_allowance_stor_arg0_root_stor__0_1__e4c8be10cab939c2 v0 v1 v7;
         v9.i1 = lt v8 v3;
         v10.i256 = zext v9 i256;
         v11.i1 = ne v10 0.i256;
@@ -418,7 +281,7 @@ func private %erc20_h7a8a7a2800ba6809_transfer_from_stor__Evm_hef0af3106e109414_
         evm_revert 0.i256 0.i256;
 
     block2:
-        call %erc20_h7a8a7a2800ba6809_transfer_stor__Evm_hef0af3106e109414__3af54274b2985741 v0 v1 v2 v3 v5;
+        call %erc20_______h94f6fe6e679122ca_transfer_stor_arg0_root_stor__0_1_Evm_hef0af3106e109414__2bfe0780cafbc4d2 v0 v1 v2 v3 v5;
         v18.*i8 = evm_malloc 64.i256;
         v19.i256 = ptr_to_int v18 i256;
         v20.*@__fe_tuple_1 = int_to_ptr v19 *@__fe_tuple_1;
@@ -430,16 +293,16 @@ func private %erc20_h7a8a7a2800ba6809_transfer_from_stor__Evm_hef0af3106e109414_
         v27.i256 = ptr_to_int v26 i256;
         mstore v27 v7 i256;
         v29.i256 = sub v8 v3;
-        call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v19 v29;
+        call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor_arg0_root_stor___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v19 v29;
         return;
 }
 
-func private %erc20_h7a8a7a2800ba6809_mint_stor__Evm_hef0af3106e109414_Evm_hef0af3106e109414__7ab75559784fbc59(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256) {
+func private %erc20_______h94f6fe6e679122ca_mint_stor_arg0_root_stor__0_1_Evm_hef0af3106e109414_Evm_hef0af3106e109414__ca7def21e0c734ee(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256) {
     block0:
         v6.i256 = evm_caller;
         v8.i256 = add v0 1.i256;
         v9.i256 = evm_sload v8;
-        v10.i256 = call %ne__Address_h257056268eac7027_Address_h257056268eac7027__af929e62fa4c68f2 v6 v9;
+        v10.i256 = call %ne_arg1_root_stor__Address_h257056268eac7027_Address_h257056268eac7027__af929e62fa4c68f2 v6 v9;
         v11.i1 = ne v10 0.i256;
         br v11 block1 block2;
 
@@ -447,39 +310,12 @@ func private %erc20_h7a8a7a2800ba6809_mint_stor__Evm_hef0af3106e109414_Evm_hef0a
         evm_revert 0.i256 0.i256;
 
     block2:
-        v14.i256 = call %erc20_h7a8a7a2800ba6809_balance_of_stor v0 v1;
+        v14.i256 = call %erc20_______h94f6fe6e679122ca_balance_of_stor_arg0_root_stor__0_1__e4c8be10cab939c2 v0 v1;
         v16.i256 = add v14 v2;
-        call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3 0.i256 v1 v16;
+        call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor_arg0_root_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3 0.i256 v1 v16;
         v17.i256 = evm_sload v0;
         v18.i256 = add v17 v2;
         evm_sstore v0 v18;
-        return;
-}
-
-func private %stor_ptr__Evm_hef0af3106e109414_Erc20_h7a8a7a2800ba6809__828ea75549970aee(v0.i256, v1.i256) -> i256 {
-    block0:
-        v3.i256 = call %storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Erc20_h7a8a7a2800ba6809__f6f4aaca4c5af1b3 v1;
-        return v3;
-}
-
-func public %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(v0.i256, v1.i256) -> i256 {
-    block0:
-        v3.i256 = call %storagemap_get_word_with_salt__Address_h257056268eac7027__5ab99f7153cdba29 v1 0.i256;
-        v4.i256 = call %u256_h3271ca15373d4483_wordrepr_h7483d41ac8178d88_from_word v3;
-        return v4;
-}
-
-func public %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get___Address__Address__u256_1__12414c27d5bfff1f(v0.i256, v1.i256) -> i256 {
-    block0:
-        v4.i256 = call %storagemap_get_word_with_salt___Address__Address___c32d499da259c78e v1 1.i256;
-        v5.i256 = call %u256_h3271ca15373d4483_wordrepr_h7483d41ac8178d88_from_word v4;
-        return v5;
-}
-
-func public %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set___Address__Address__u256_1__12414c27d5bfff1f(v0.i256, v1.i256, v2.i256) {
-    block0:
-        v4.i256 = call %u256_h3271ca15373d4483_wordrepr_h7483d41ac8178d88_to_word v2;
-        call %storagemap_set_word_with_salt___Address__Address___c32d499da259c78e v1 1.i256 v4;
         return;
 }
 
@@ -488,19 +324,12 @@ func public %address_h257056268eac7027_zero() -> i256 {
         return 0.i256;
 }
 
-func private %ne__Address_h257056268eac7027_Address_h257056268eac7027__af929e62fa4c68f2(v0.i256, v1.i256) -> i256 {
+func private %ne_stor_arg0_root_stor__Address_h257056268eac7027_Address_h257056268eac7027__af929e62fa4c68f2(v0.i256, v1.i256) -> i256 {
     block0:
-        v3.i256 = call %address_h257056268eac7027_eq_h14b330e44530c410_eq v0 v1;
+        v3.i256 = call %address_h257056268eac7027_eq_h14b330e44530c410_eq_stor_arg0_root_stor v0 v1;
         v4.i1 = is_zero v3;
         v5.i256 = zext v4 i256;
         return v5;
-}
-
-func public %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(v0.i256, v1.i256, v2.i256) {
-    block0:
-        v4.i256 = call %u256_h3271ca15373d4483_wordrepr_h7483d41ac8178d88_to_word v2;
-        call %storagemap_set_word_with_salt__Address_h257056268eac7027__5ab99f7153cdba29 v1 0.i256 v4;
-        return;
 }
 
 func private %storagemap_get_word_with_salt__Address_h257056268eac7027__5ab99f7153cdba29(v0.i256, v1.i256) -> i256 {
@@ -522,27 +351,27 @@ func private %storagemap_get_word_with_salt___Address__Address___c32d499da259c78
         return v4;
 }
 
-func private %erc20_h7a8a7a2800ba6809_balance_of_stor(v0.i256, v1.i256) -> i256 {
+func private %erc20_______h94f6fe6e679122ca_balance_of_stor_arg0_root_stor__0_1__e4c8be10cab939c2(v0.i256, v1.i256) -> i256 {
     block0:
-        v3.i256 = call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3 0.i256 v1;
+        v3.i256 = call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor_arg0_root_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3 0.i256 v1;
         return v3;
 }
 
-func public %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(v0.i256, v1.i256, v2.i256) {
+func public %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor_arg0_root_stor__Address_h257056268eac7027_u256_0__6e989e4cb63e64c3(v0.i256, v1.i256, v2.i256) {
     block0:
         v4.i256 = call %u256_h3271ca15373d4483_wordrepr_h7483d41ac8178d88_to_word v2;
         call %storagemap_set_word_with_salt__Address_h257056268eac7027__5ab99f7153cdba29 v1 0.i256 v4;
         return;
 }
 
-func public %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor___Address__Address__u256_1__12414c27d5bfff1f(v0.i256, v1.i256, v2.i256) {
+func public %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor_arg0_root_stor___Address__Address__u256_1__12414c27d5bfff1f(v0.i256, v1.i256, v2.i256) {
     block0:
         v4.i256 = call %u256_h3271ca15373d4483_wordrepr_h7483d41ac8178d88_to_word v2;
         call %storagemap_set_word_with_salt___Address__Address___c32d499da259c78e v1 1.i256 v4;
         return;
 }
 
-func private %erc20_h7a8a7a2800ba6809_allowance_stor(v0.i256, v1.i256, v2.i256) -> i256 {
+func private %erc20_______h94f6fe6e679122ca_allowance_stor_arg0_root_stor__0_1__e4c8be10cab939c2(v0.i256, v1.i256, v2.i256) -> i256 {
     block0:
         v5.*i8 = evm_malloc 64.i256;
         v6.i256 = ptr_to_int v5 i256;
@@ -554,39 +383,23 @@ func private %erc20_h7a8a7a2800ba6809_allowance_stor(v0.i256, v1.i256, v2.i256) 
         v12.*@__fe_Address_0 = gep v10 0.i256 1.i256;
         v13.i256 = ptr_to_int v12 i256;
         mstore v13 v2 i256;
-        v14.i256 = call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v6;
+        v14.i256 = call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor_arg0_root_stor___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v6;
         return v14;
 }
 
-func private %storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Erc20_h7a8a7a2800ba6809__f6f4aaca4c5af1b3(v0.i256) -> i256 {
+func private %ne_arg1_root_stor__Address_h257056268eac7027_Address_h257056268eac7027__af929e62fa4c68f2(v0.i256, v1.i256) -> i256 {
     block0:
-        return v0;
+        v3.i256 = call %address_h257056268eac7027_eq_h14b330e44530c410_eq_arg1_root_stor v0 v1;
+        v4.i1 = is_zero v3;
+        v5.i256 = zext v4 i256;
+        return v5;
 }
 
-func private %u256_h3271ca15373d4483_wordrepr_h7483d41ac8178d88_to_word(v0.i256) -> i256 {
-    block0:
-        return v0;
-}
-
-func private %storagemap_set_word_with_salt___Address__Address___c32d499da259c78e(v0.i256, v1.i256, v2.i256) {
-    block0:
-        v4.i256 = call %storagemap_storage_slot_with_salt___Address__Address___c32d499da259c78e v0 v1;
-        evm_sstore v4 v2;
-        return;
-}
-
-func private %address_h257056268eac7027_eq_h14b330e44530c410_eq(v0.i256, v1.i256) -> i256 {
+func private %address_h257056268eac7027_eq_h14b330e44530c410_eq_stor_arg0_root_stor(v0.i256, v1.i256) -> i256 {
     block0:
         v3.i1 = eq v0 v1;
         v4.i256 = zext v3 i256;
         return v4;
-}
-
-func private %storagemap_set_word_with_salt__Address_h257056268eac7027__5ab99f7153cdba29(v0.i256, v1.i256, v2.i256) {
-    block0:
-        v4.i256 = call %storagemap_storage_slot_with_salt__Address_h257056268eac7027__5ab99f7153cdba29 v0 v1;
-        evm_sstore v4 v2;
-        return;
 }
 
 func private %storagemap_storage_slot_with_salt__Address_h257056268eac7027__5ab99f7153cdba29(v0.i256, v1.i256) -> i256 {
@@ -613,6 +426,32 @@ func private %storagemap_storage_slot_with_salt___Address__Address___c32d499da25
         v9.i256 = add v5 32.i256;
         v10.i256 = evm_keccak256 v4 v9;
         return v10;
+}
+
+func private %u256_h3271ca15373d4483_wordrepr_h7483d41ac8178d88_to_word(v0.i256) -> i256 {
+    block0:
+        return v0;
+}
+
+func private %storagemap_set_word_with_salt__Address_h257056268eac7027__5ab99f7153cdba29(v0.i256, v1.i256, v2.i256) {
+    block0:
+        v4.i256 = call %storagemap_storage_slot_with_salt__Address_h257056268eac7027__5ab99f7153cdba29 v0 v1;
+        evm_sstore v4 v2;
+        return;
+}
+
+func private %storagemap_set_word_with_salt___Address__Address___c32d499da259c78e(v0.i256, v1.i256, v2.i256) {
+    block0:
+        v4.i256 = call %storagemap_storage_slot_with_salt___Address__Address___c32d499da259c78e v0 v1;
+        evm_sstore v4 v2;
+        return;
+}
+
+func private %address_h257056268eac7027_eq_h14b330e44530c410_eq_arg1_root_stor(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i1 = eq v0 v1;
+        v4.i256 = zext v3 i256;
+        return v4;
 }
 
 func private %address_h257056268eac7027_storagekey_hf9e3d38a13ff4409_write_key(v0.i256, v1.i256) -> i256 {

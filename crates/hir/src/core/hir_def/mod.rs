@@ -64,7 +64,10 @@ impl<'db> HirIngot<'db> for Ingot<'db> {
     }
 
     fn root_mod(self, db: &'db dyn HirDb) -> TopLevelMod<'db> {
-        self.module_tree(db).root_data().top_mod
+        self.module_tree(db)
+            .root_data()
+            .expect("root_mod called on empty ingot (deleted or no files?)")
+            .top_mod
     }
 
     /// Returns the root modules and names of external ingots that the given `ingot`
@@ -80,6 +83,10 @@ impl<'db> HirIngot<'db> for Ingot<'db> {
             .filter_map(|(name, url)| {
                 db.workspace()
                     .containing_ingot(db, url.clone())
+                    // Skip ingots with no files (e.g. deleted during incremental
+                    // workspace change). Name resolution will naturally report
+                    // "unresolved import" for the missing dependency.
+                    .filter(|ingot| ingot.module_tree(db).root_data().is_some())
                     .map(|ingot_description| (IdentId::new(db, name.as_str()), ingot_description))
             })
             .collect()

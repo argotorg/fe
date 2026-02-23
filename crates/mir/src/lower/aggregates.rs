@@ -3,11 +3,33 @@
 use super::*;
 use hir::{
     analysis::ty::const_eval::{ConstValue, try_eval_const_body},
+    hir_def::{Expr, LitKind, Partial},
     projection::{IndexSource, Projection},
 };
 use num_bigint::BigUint;
 
 impl<'db, 'a> MirBuilder<'db, 'a> {
+    fn try_lower_transparent_newtype_aggregate_cast(
+        &mut self,
+        expr: ExprId,
+        aggregate_ty: TyId<'db>,
+        fallback: ValueId,
+        field_count: usize,
+        inner_value: Option<ValueId>,
+    ) -> Option<ValueId> {
+        if crate::repr::transparent_newtype_field_ty(self.db, aggregate_ty).is_none()
+            || field_count != 1
+        {
+            return None;
+        }
+        let inner_value = inner_value?;
+        self.builder.body.values[fallback.index()].origin =
+            ValueOrigin::TransparentCast { value: inner_value };
+        self.builder.body.values[fallback.index()].repr =
+            self.value_repr_for_expr(expr, aggregate_ty);
+        Some(fallback)
+    }
+
     /// Emits an allocation for the given type and binds it to the expression.
     ///
     /// # Parameters
@@ -32,6 +54,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         self.builder.body.locals[dest.index()].address_space = AddressSpaceKind::Memory;
+        self.builder.body.locals[dest.index()]
+            .capability_spaces
+            .clear();
         let source = self.source_for_expr(expr);
         self.push_inst_here(MirInst::Assign {
             source,
@@ -53,12 +78,33 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         if inits.is_empty() {
             return;
         }
+        let metadata_inits = inits.clone();
         let place = Place::new(base_value, MirProjectionPath::new());
         self.push_inst_here(MirInst::InitAggregate {
             source: self.builder.body.value(base_value).source,
             place,
             inits,
         });
+
+        // Preserve capability pointee-space metadata for aggregate fields so
+        // later loads can recover the original non-memory provider space.
+        let Some((local, base_projection)) =
+            crate::ir::resolve_local_projection_root(&self.builder.body.values, base_value)
+        else {
+            return;
+        };
+        let mut merged = self.builder.body.locals[local.index()]
+            .capability_spaces
+            .clone();
+        for (init_path, init_value) in metadata_inits {
+            let update_prefix = base_projection.concat(&init_path);
+            merged.retain(|(path, _)| !update_prefix.is_prefix_of(path));
+            for (suffix, space) in self.capability_spaces_for_value(init_value) {
+                merged.push((update_prefix.concat(&suffix), space));
+            }
+        }
+        self.builder.body.locals[local.index()].capability_spaces =
+            self.normalize_capability_spaces(merged);
     }
 
     /// Lowers a record literal into an allocation plus `store_field` calls.
@@ -88,17 +134,14 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         let record_ty = self.typed_body.expr_ty(self.db, expr);
 
-        // Transparent newtypes (single-field structs) are represented identically to their single
-        // field, so record literals lower to a representation-preserving cast.
-        if crate::repr::transparent_newtype_field_ty(self.db, record_ty).is_some()
-            && lowered_fields.len() == 1
-        {
-            let field_value = lowered_fields[0].1;
-            self.builder.body.values[fallback.index()].origin =
-                ValueOrigin::TransparentCast { value: field_value };
-            self.builder.body.values[fallback.index()].repr =
-                self.value_repr_for_expr(expr, record_ty);
-            return fallback;
+        if let Some(value) = self.try_lower_transparent_newtype_aggregate_cast(
+            expr,
+            record_ty,
+            fallback,
+            lowered_fields.len(),
+            lowered_fields.first().map(|(_, value)| *value),
+        ) {
+            return value;
         }
 
         let value_id = self.emit_alloc(expr, record_ty);
@@ -151,15 +194,14 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             }
         }
 
-        if crate::repr::transparent_newtype_field_ty(self.db, tuple_ty).is_some()
-            && lowered_elems.len() == 1
-        {
-            let elem_value = lowered_elems[0];
-            self.builder.body.values[fallback.index()].origin =
-                ValueOrigin::TransparentCast { value: elem_value };
-            self.builder.body.values[fallback.index()].repr =
-                self.value_repr_for_expr(expr, tuple_ty);
-            return fallback;
+        if let Some(value) = self.try_lower_transparent_newtype_aggregate_cast(
+            expr,
+            tuple_ty,
+            fallback,
+            lowered_elems.len(),
+            lowered_elems.first().copied(),
+        ) {
+            return value;
         }
 
         let value_id = self.emit_alloc(expr, tuple_ty);
@@ -178,6 +220,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     }
 
     /// Lowers an array literal into an allocation plus element stores.
+    ///
+    /// For const arrays with all compile-time constant elements:
+    /// - Uses `CopyDataRegion` to efficiently copy pre-computed bytes from bytecode
+    ///
+    /// For arrays with non-const elements: Use alloc + InitAggregate.
     pub(super) fn try_lower_array(&mut self, expr: ExprId, elems: &[ExprId]) -> ValueId {
         let fallback = self.ensure_value(expr);
         let array_ty = self.typed_body.expr_ty(self.db, expr);
@@ -185,6 +232,37 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return fallback;
         }
 
+        // Try to get the element type and determine if elements are compile-time constants
+        let elem_ty = crate::layout::array_elem_ty(self.db, array_ty);
+        // Use word-padded memory size so the serialized data matches the runtime
+        // access stride (EVM mload/mstore operate on 32-byte words).
+        let elem_size = elem_ty.and_then(|ty| crate::layout::ty_memory_size(self.db, ty));
+
+        // Try to extract constant byte values from all elements
+        if let (Some(elem_ty), Some(elem_size)) = (elem_ty, elem_size)
+            && let Some(const_bytes) = self.try_extract_const_array_bytes(elems, elem_ty, elem_size)
+            && self.current_block().is_some()
+        {
+            // Use ConstAggregate for const arrays (backend decides materialization)
+            let dest = self.alloc_temp_local(array_ty, false, "array_data");
+            self.builder.body.locals[dest.index()].address_space = AddressSpaceKind::Memory;
+
+            self.push_inst_here(MirInst::Assign {
+                source: crate::ir::SourceInfoId::SYNTHETIC,
+                dest: Some(dest),
+                rvalue: Rvalue::ConstAggregate {
+                    data: const_bytes,
+                    ty: array_ty,
+                },
+            });
+
+            self.builder.body.values[fallback.index()].origin = ValueOrigin::Local(dest);
+            self.builder.body.values[fallback.index()].repr =
+                ValueRepr::Ref(AddressSpaceKind::Memory);
+            return fallback;
+        }
+
+        // Fall back to alloc + InitAggregate for non-const arrays
         let mut lowered_elems = Vec::with_capacity(elems.len());
         for &elem_expr in elems {
             lowered_elems.push(self.lower_expr(elem_expr));
@@ -337,5 +415,68 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             source: crate::ir::SourceInfoId::SYNTHETIC,
             repr: ValueRepr::Word,
         })
+    }
+
+    /// Attempts to extract constant byte values from all array elements.
+    ///
+    /// Returns `None` if any element is non-constant or non-integer.
+    fn try_extract_const_array_bytes(
+        &self,
+        elems: &[ExprId],
+        elem_ty: TyId<'db>,
+        elem_size: usize,
+    ) -> Option<Vec<u8>> {
+        // Only support primitive integer types for now
+        let prim_ty = match elem_ty.base_ty(self.db).data(self.db) {
+            TyData::TyBase(TyBase::Prim(prim)) => prim,
+            _ => return None,
+        };
+
+        let mut bytes = Vec::with_capacity(elems.len() * elem_size);
+
+        for &elem_expr in elems {
+            // Try to get the literal value
+            let int_value = match elem_expr.data(self.db, self.body) {
+                Partial::Present(Expr::Lit(LitKind::Int(int_id))) => int_id.data(self.db).clone(),
+                _ => return None, // Non-constant or non-integer element
+            };
+
+            // Convert to bytes based on element size (big-endian, padded to EVM word)
+            let int_bytes = int_value.to_bytes_be();
+            let padded = self.pad_int_to_size(&int_bytes, elem_size, *prim_ty)?;
+            bytes.extend(padded);
+        }
+
+        Some(bytes)
+    }
+
+    /// Pads integer bytes to the specified size for the given primitive type.
+    ///
+    /// Returns `None` if the value doesn't fit in the specified size.
+    fn pad_int_to_size(&self, int_bytes: &[u8], size: usize, prim_ty: PrimTy) -> Option<Vec<u8>> {
+        if int_bytes.len() > size {
+            return None; // Value too large
+        }
+
+        let mut padded = vec![0u8; size];
+        // For signed types, we'd need sign extension, but for simplicity
+        // we just zero-extend (works for unsigned types)
+        let offset = size - int_bytes.len();
+        padded[offset..].copy_from_slice(int_bytes);
+
+        // For signed types, check if we need sign extension
+        if matches!(
+            prim_ty,
+            PrimTy::I8 | PrimTy::I16 | PrimTy::I32 | PrimTy::I64 | PrimTy::I128 | PrimTy::I256
+        ) {
+            // If the high bit of the original value is set, fill with 0xFF
+            if !int_bytes.is_empty() && int_bytes[0] & 0x80 != 0 {
+                for b in padded.iter_mut().take(offset) {
+                    *b = 0xFF;
+                }
+            }
+        }
+
+        Some(padded)
     }
 }

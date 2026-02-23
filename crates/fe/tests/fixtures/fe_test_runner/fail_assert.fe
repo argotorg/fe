@@ -1,4 +1,3 @@
-use std::evm::effects::assert
 
 #[test]
 fn test_assert() {

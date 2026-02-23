@@ -1,10 +1,10 @@
 ---
 source: crates/hir/tests/desugar.rs
-assertion_line: 28
 expression: output
 input_file: test_files/desugar/event_mixed_data.fe
 ---
 use core::prelude::*
+use std::prelude::*
 use std::evm::Address
 
 struct Mixed {

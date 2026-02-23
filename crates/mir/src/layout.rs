@@ -302,16 +302,41 @@ pub fn array_elem_ty<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<T
 
 /// Returns the constant length for a fixed-size array, if available.
 pub fn array_len(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> Option<usize> {
+    array_len_with_generic_args(db, ty, &[])
+}
+
+/// Returns the constant length for a fixed-size array, using generic arguments
+/// to resolve const parameters when needed.
+pub fn array_len_with_generic_args<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    generic_args: &[TyId<'db>],
+) -> Option<usize> {
     let (base, args) = ty.decompose_ty_app(db);
     if !base.is_array(db) || args.len() < 2 {
         return None;
     }
     let len_ty = args[1];
-    let TyData::ConstTy(const_ty) = len_ty.data(db) else {
+    const_ty_to_usize_with_generic_args(db, len_ty, generic_args)
+}
+
+fn const_ty_to_usize_with_generic_args<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    generic_args: &[TyId<'db>],
+) -> Option<usize> {
+    let TyData::ConstTy(const_ty) = ty.data(db) else {
         return None;
     };
     match const_ty.data(db) {
         ConstTyData::Evaluated(EvaluatedConstTy::LitInt(value), _) => value.data(db).to_usize(),
+        ConstTyData::TyParam(param, _) => {
+            let arg = *generic_args.get(param.idx)?;
+            if arg == ty {
+                return None;
+            }
+            const_ty_to_usize_with_generic_args(db, arg, generic_args)
+        }
         _ => None,
     }
 }
@@ -390,6 +415,13 @@ pub fn ty_storage_slots<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Optio
         )
     {
         return Some(1);
+    }
+
+    // Handle fixed-size arrays.
+    if ty.is_array(db) {
+        let len = array_len(db, ty)?;
+        let elem_ty = array_elem_ty(db, ty)?;
+        return Some(len * ty_storage_slots(db, elem_ty)?);
     }
 
     // Handle ADT types (structs) - use adt_def() which handles TyApp
@@ -819,57 +851,10 @@ pub fn variant_field_offset_slots(
 /// Computes the number of storage slots a type occupies.
 ///
 /// - Primitives: 1 slot each (regardless of byte size)
+/// - Fixed-size arrays: `len * element_slots`
 /// - Structs/tuples: sum of field slot counts
+/// - Enums: 1-slot discriminant + max variant payload
 /// - Unknown types: 1 slot (conservative fallback)
 pub fn ty_size_slots(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> usize {
-    if let Some(normalized) = normalize_ty_for_layout(db, ty) {
-        return ty_size_slots(db, normalized);
-    }
-
-    // Effect-related and trait-self type parameters are compile-time only.
-    if let TyData::TyParam(param) = ty.data(db)
-        && (param.is_effect() || param.is_effect_provider() || param.is_trait_self())
-    {
-        return 0;
-    }
-
-    // Handle tuples
-    if ty.is_tuple(db) {
-        let mut size = 0;
-        for field_ty in ty.field_types(db) {
-            size += ty_size_slots(db, field_ty);
-        }
-        return size;
-    }
-
-    // Function items are compile-time only and do not occupy storage.
-    if let TyData::TyBase(TyBase::Func(_)) = ty.base_ty(db).data(db) {
-        return 0;
-    }
-
-    // Contract types are compile-time only and do not occupy storage.
-    if let TyData::TyBase(TyBase::Contract(_)) = ty.base_ty(db).data(db) {
-        return 0;
-    }
-
-    // Handle primitives - each primitive takes 1 slot
-    if let TyData::TyBase(TyBase::Prim(prim)) = ty.base_ty(db).data(db)
-        && (*prim == PrimTy::Bool || prim_int_bits(*prim).is_some())
-    {
-        return 1;
-    }
-
-    // Handle ADT types (structs)
-    if let Some(adt_def) = ty.adt_def(db)
-        && matches!(adt_def.adt_ref(db), AdtRef::Struct(_))
-    {
-        let mut size = 0;
-        for field_ty in ty.field_types(db) {
-            size += ty_size_slots(db, field_ty);
-        }
-        return size;
-    }
-
-    // Unknown types default to 1 slot
-    1
+    ty_storage_slots(db, ty).unwrap_or(1)
 }

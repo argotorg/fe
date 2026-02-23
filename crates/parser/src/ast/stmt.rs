@@ -58,6 +58,7 @@ ast_node! {
     pub struct ForStmt,
     SK::ForStmt
 }
+impl super::AttrListOwner for ForStmt {}
 impl ForStmt {
     /// Returns the pattern of the binding in the for loop.
     pub fn pat(&self) -> Option<super::Pat> {
@@ -160,7 +161,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        ast::{PatKind, TypeKind},
+        ParseError,
+        ast::{AttrListOwner, PatKind, TypeKind},
         lexer::Lexer,
         parser::Parser,
     };
@@ -177,6 +179,18 @@ mod tests {
             .kind()
             .try_into()
             .unwrap()
+    }
+
+    fn parse_stmt_with_errors<T>(source: &str) -> (T, Vec<ParseError>)
+    where
+        T: TryFrom<StmtKind, Error = TryIntoError<StmtKind>>,
+    {
+        let lexer = Lexer::new(source);
+        let mut parser = Parser::new(lexer);
+        crate::parser::stmt::parse_stmt(&mut parser).unwrap();
+        let (node, errors) = parser.finish_to_node();
+        let stmt = Stmt::cast(node).unwrap().kind().try_into().unwrap();
+        (stmt, errors)
     }
 
     #[test]
@@ -210,6 +224,40 @@ mod tests {
         assert!(matches!(for_stmt.pat().unwrap().kind(), PatKind::Path(_)));
         assert!(for_stmt.iterable().is_some());
         assert!(for_stmt.body().is_some());
+    }
+
+    #[test]
+    #[wasm_bindgen_test]
+    fn for_with_attrs() {
+        let source = r#"
+            #[unroll]
+            for x in foo {
+                bar
+            }
+        "#;
+
+        let (for_stmt, errors): (ForStmt, Vec<ParseError>) = parse_stmt_with_errors(source);
+        assert!(errors.is_empty());
+        assert!(for_stmt.attr_list().is_some());
+    }
+
+    #[test]
+    #[wasm_bindgen_test]
+    fn unsupported_stmt_attrs_report_error() {
+        let source = r#"
+            #[unroll]
+            while { x } {
+                bar
+            }
+        "#;
+
+        let (_while_stmt, errors): (WhileStmt, Vec<ParseError>) = parse_stmt_with_errors(source);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.msg().contains("only supported on `for`")),
+            "expected unsupported statement-attribute diagnostic, got: {errors:?}"
+        );
     }
 
     #[test]

@@ -1,10 +1,10 @@
 ---
 source: crates/hir/tests/pretty_print.rs
-assertion_line: 19
 expression: output
 input_file: test_files/pretty_print/mode_place_syntax.fe
 ---
 use core::prelude::*
+use std::prelude::*
 
 struct Foo {}
 

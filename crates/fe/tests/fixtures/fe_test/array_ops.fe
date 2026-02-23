@@ -1,0 +1,44 @@
+use std::evm::effects::assert
+
+/// Test array creation, indexing, iteration, and mutation
+#[test]
+fn test_array_literal_sum() {
+    let arr: [u256; 5] = [10, 20, 30, 40, 50]
+    let mut sum: u256 = 0
+    for x in arr {
+        sum += x
+    }
+    assert(sum == 150)
+}
+
+#[test]
+fn test_array_index() {
+    let arr: [u256; 4] = [100, 200, 300, 400]
+    assert(arr[0] == 100)
+    assert(arr[1] == 200)
+    assert(arr[2] == 300)
+    assert(arr[3] == 400)
+}
+
+#[test]
+fn test_array_mut() {
+    let mut arr: [u256; 3] = [1, 2, 3]
+    arr[1] = 99
+    assert(arr[0] == 1)
+    assert(arr[1] == 99)
+    assert(arr[2] == 3)
+}
+
+#[test]
+fn test_multiple_arrays() {
+    let a: [u256; 3] = [1, 2, 3]
+    let b: [u256; 3] = [10, 20, 30]
+    let mut sum: u256 = 0
+    for x in a {
+        sum += x
+    }
+    for x in b {
+        sum += x
+    }
+    assert(sum == 66)
+}

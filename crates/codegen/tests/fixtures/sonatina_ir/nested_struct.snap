@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/nested_struct.fe
 ---
@@ -38,7 +39,7 @@ func private %init__StorPtr_Evm___207f35a85ac4062e() {
 
 func private %runtime__StorPtr_Evm___207f35a85ac4062e() {
     block0:
-        v1.i256 = call %stor_ptr__Evm_hef0af3106e109414_Outer_hccd04e332bd35653__177c3c9a6f7ae368 0.i256 0.i256;
+        v1.i256 = call %stor_ptr_stor__Evm_hef0af3106e109414_Outer_hccd04e332bd35653__177c3c9a6f7ae368 0.i256 0.i256;
         v2.i256 = evm_calldata_load 0.i256;
         v4.i256 = shr 224.i256 v2;
         jump block5;
@@ -76,7 +77,7 @@ func private %runtime__StorPtr_Evm___207f35a85ac4062e() {
         br v18 block3 block4;
 }
 
-func private %stor_ptr__Evm_hef0af3106e109414_Outer_hccd04e332bd35653__177c3c9a6f7ae368(v0.i256, v1.i256) -> i256 {
+func private %stor_ptr_stor__Evm_hef0af3106e109414_Outer_hccd04e332bd35653__177c3c9a6f7ae368(v0.i256, v1.i256) -> i256 {
     block0:
         v3.i256 = call %storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Outer_hccd04e332bd35653__f44d0100de7cf929 v1;
         return v3;

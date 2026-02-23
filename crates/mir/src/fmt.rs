@@ -193,6 +193,9 @@ fn format_rvalue(body: &MirBody<'_>, rvalue: &Rvalue<'_>) -> String {
             };
             format!("alloc {space}")
         }
+        Rvalue::ConstAggregate { data, .. } => {
+            format!("const_aggregate ({} bytes)", data.len())
+        }
     }
 }
 
@@ -413,6 +416,8 @@ fn format_intrinsic(op: IntrinsicOp) -> &'static str {
         IntrinsicOp::CodeRegionOffset => "code_region_offset",
         IntrinsicOp::CodeRegionLen => "code_region_len",
         IntrinsicOp::Keccak => "keccak256",
+        IntrinsicOp::Addmod => "addmod",
+        IntrinsicOp::Mulmod => "mulmod",
         IntrinsicOp::Revert => "revert",
         IntrinsicOp::Caller => "caller",
     }

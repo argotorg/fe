@@ -572,3 +572,81 @@ async fn scenario_diagnostics_published_for_broken_code(client: &mut MockLspClie
     assert!(nonempty.uri.scheme() == "file");
     assert!(!nonempty.diagnostics[0].message.is_empty());
 }
+
+fn hover_text(hover: &Hover) -> String {
+    match &hover.contents {
+        HoverContents::Markup(content) => content.value.clone(),
+        HoverContents::Scalar(marked) => match marked {
+            MarkedString::String(text) => text.clone(),
+            MarkedString::LanguageString(lang) => lang.value.clone(),
+        },
+        HoverContents::Array(items) => items
+            .iter()
+            .map(|item| match item {
+                MarkedString::String(text) => text.clone(),
+                MarkedString::LanguageString(lang) => lang.value.clone(),
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+    }
+}
+
+async fn hover_eventually(
+    client: &mut MockLspClient,
+    uri: &Url,
+    line: u32,
+    character: u32,
+) -> Hover {
+    for _ in 0..20 {
+        if let Ok(Some(hover)) = client.hover(uri, line, character).await {
+            return hover;
+        }
+        client.settle(200).await;
+    }
+    panic!("expected hover result at {line}:{character}");
+}
+
+#[tokio::test]
+async fn mock_lsp_hover_shows_contract_field_layout_info() {
+    let mut client = MockLspClient::start().await;
+    client.initialize().await;
+
+    let uri = lib_url();
+    client.did_open(&uri, "");
+    client.settle(500).await;
+
+    let code = r#"msg M {
+  #[selector = 0x01]
+  Ping { amount: i32 } -> bool,
+}
+
+pub contract C {
+  supply: i32
+
+  recv M {
+    Ping { amount } -> bool uses (mut supply) {
+      supply += amount
+      true
+    }
+  }
+}
+"#;
+    client.did_change(&uri, 700, code);
+    client.settle(1000).await;
+
+    let field_hover = hover_eventually(&mut client, &uri, 9, 39).await;
+    let field_text = hover_text(&field_hover);
+    assert!(
+        field_text.contains("slot:") && field_text.contains("space:"),
+        "expected field hover to include layout info, got:\n{field_text}"
+    );
+
+    let alias_hover = hover_eventually(&mut client, &uri, 10, 7).await;
+    let alias_text = hover_text(&alias_hover);
+    assert!(
+        alias_text.contains("slot:") && alias_text.contains("space:"),
+        "expected alias hover to include layout info, got:\n{alias_text}"
+    );
+
+    client.shutdown().await;
+}

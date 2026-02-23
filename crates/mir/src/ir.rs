@@ -227,6 +227,65 @@ pub(crate) fn try_value_address_space_in<'db>(
     }
 }
 
+pub(crate) fn lookup_local_capability_space<'db>(
+    locals: &[LocalData<'db>],
+    local: LocalId,
+    projection: &MirProjectionPath<'db>,
+) -> Option<AddressSpaceKind> {
+    let local = locals.get(local.index())?;
+    let mut best: Option<(usize, AddressSpaceKind)> = None;
+    for (path, space) in &local.capability_spaces {
+        if !path.is_prefix_of(projection) {
+            continue;
+        }
+        let path_len = path.len();
+        if best
+            .map(|(best_len, _)| path_len > best_len)
+            .unwrap_or(true)
+        {
+            best = Some((path_len, *space));
+        }
+    }
+    best.map(|(_, space)| space)
+}
+
+pub(crate) fn projection_strip_prefix<'db>(
+    path: &MirProjectionPath<'db>,
+    prefix: &MirProjectionPath<'db>,
+) -> Option<MirProjectionPath<'db>> {
+    if !prefix.is_prefix_of(path) {
+        return None;
+    }
+
+    let mut suffix = MirProjectionPath::new();
+    for proj in path.iter().skip(prefix.len()) {
+        suffix.push(proj.clone());
+    }
+    Some(suffix)
+}
+
+pub(crate) fn resolve_local_projection_root<'db>(
+    values: &[ValueData<'db>],
+    value: ValueId,
+) -> Option<(LocalId, MirProjectionPath<'db>)> {
+    let mut current = value;
+    let mut projection = MirProjectionPath::new();
+
+    loop {
+        match &values.get(current.index())?.origin {
+            ValueOrigin::TransparentCast { value } => current = *value,
+            ValueOrigin::Local(local) | ValueOrigin::PlaceRoot(local) => {
+                return Some((*local, projection));
+            }
+            ValueOrigin::PlaceRef(place) | ValueOrigin::MoveOut { place } => {
+                projection = place.projection.concat(&projection);
+                current = place.base;
+            }
+            _ => return None,
+        }
+    }
+}
+
 impl<'db> Default for MirBody<'db> {
     fn default() -> Self {
         Self::new()
@@ -289,6 +348,11 @@ pub struct LocalData<'db> {
     /// For non-pointer scalars this is ignored, but storing it here lets codegen
     /// interpret locals that represent aggregate pointers (memory vs storage).
     pub address_space: AddressSpaceKind,
+    /// Capability pointee-space metadata for values stored in this local.
+    ///
+    /// Entries map projection paths (from the local root) to the address space
+    /// of capability leaves at that path.
+    pub capability_spaces: Vec<(MirProjectionPath<'db>, AddressSpaceKind)>,
 }
 
 /// MIR projection using MIR value IDs for dynamic indices.
@@ -390,6 +454,18 @@ pub enum Rvalue<'db> {
     Load { place: Place<'db> },
     /// Allocate an address in the given address space.
     Alloc { address_space: AddressSpaceKind },
+    /// Backend-neutral constant aggregate data.
+    ///
+    /// Pre-computed constant bytes (e.g., constant array literals) that backends
+    /// materialize however they choose:
+    /// - Yul: emit as data sections + datacopy
+    /// - Sonatina: inline mstore sequence or memcpy
+    ConstAggregate {
+        /// Raw constant bytes in big-endian EVM word format.
+        data: Vec<u8>,
+        /// The aggregate type being initialized.
+        ty: TyId<'db>,
+    },
 }
 
 /// Control-flow terminating instruction.
@@ -479,6 +555,17 @@ pub struct LoopInfo {
     pub body: BasicBlockId,
     pub exit: BasicBlockId,
     pub backedge: Option<BasicBlockId>,
+    /// Optional block containing the loop initialization (e.g., iterator variable init for for-loops).
+    /// If present, this block's instructions are rendered as the Yul for-loop init section.
+    pub init_block: Option<BasicBlockId>,
+    /// Optional block containing the post-iteration code (e.g., increment for for-loops).
+    /// If present, this block's instructions are rendered as the Yul for-loop post section.
+    pub post_block: Option<BasicBlockId>,
+    /// Unroll hint from source attributes: `Some(true)` = `#[unroll]`, `Some(false)` = `#[no_unroll]`, `None` = auto.
+    pub unroll_hint: Option<bool>,
+    /// Statically-known trip count, if the iterator length is a compile-time constant.
+    /// Backends use this together with `unroll_hint` to decide whether to unroll.
+    pub trip_count: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -559,6 +646,7 @@ pub enum SyntheticValue {
     /// Byte string literal encoded as a `0x...` word.
     ///
     /// This is a stopgap representation: the literal is emitted inline as a numeric constant.
+    /// Only suitable for data that fits in a single EVM word (≤32 bytes).
     Bytes(Vec<u8>),
 }
 
@@ -717,6 +805,10 @@ pub enum IntrinsicOp {
     CodeRegionLen,
     /// `keccak256(ptr, len)`
     Keccak,
+    /// `addmod(a, b, m)` — (a + b) % m without overflow
+    Addmod,
+    /// `mulmod(a, b, m)` — (a * b) % m without overflow
+    Mulmod,
     /// `revert(offset, size)`
     Revert,
     /// `caller()`
@@ -740,6 +832,8 @@ impl IntrinsicOp {
                 | IntrinsicOp::CodeRegionOffset
                 | IntrinsicOp::CodeRegionLen
                 | IntrinsicOp::Keccak
+                | IntrinsicOp::Addmod
+                | IntrinsicOp::Mulmod
                 | IntrinsicOp::Caller
                 | IntrinsicOp::Alloc
         )

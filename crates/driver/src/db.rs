@@ -62,7 +62,12 @@ impl DriverDataBase {
         ingot: Ingot<'db>,
         mode: MirDiagnosticsMode,
     ) -> Vec<CompleteDiagnostic> {
-        let top_mod = ingot.root_mod(self);
+        // Empty ingots (e.g. deleted during incremental workspace changes)
+        // have no root module to analyze.
+        let Some(root_data) = ingot.module_tree(self).root_data() else {
+            return Vec::new();
+        };
+        let top_mod = root_data.top_mod;
         let mut output = collect_mir_diagnostics(self, top_mod, mode);
         for err in output.internal_errors {
             tracing::debug!(target: "lsp", "MIR diagnostics internal error: {err}");

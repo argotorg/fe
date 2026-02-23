@@ -1,4 +1,5 @@
 pub mod analysis;
+mod capability_space;
 mod core_lib;
 mod dedup;
 pub mod fmt;
@@ -18,5 +19,5 @@ pub use ir::{
 };
 pub use lower::{
     MirDiagnosticsMode, MirDiagnosticsOutput, MirLowerError, MirLowerResult,
-    collect_mir_diagnostics, lower_module,
+    collect_mir_diagnostics, lower_ingot, lower_module,
 };

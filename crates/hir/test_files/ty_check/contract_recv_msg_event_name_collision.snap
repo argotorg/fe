@@ -1,0 +1,82 @@
+---
+source: crates/hir/tests/ty_check.rs
+assertion_line: 40
+expression: res
+input_file: test_files/ty_check/contract_recv_msg_event_name_collision.fe
+---
+note: 
+  ┌─ contract_recv_msg_event_name_collision.fe:3:5
+  │
+3 │     Transfer { to: u256, amount: u256 } -> bool,
+  │     ^^^^^^^^ u256
+
+note: 
+   ┌─ contract_recv_msg_event_name_collision.fe:6:1
+   │  
+ 6 │ ╭ #[event]
+ 7 │ │ struct Transfer {
+ 8 │ │     #[indexed]
+ 9 │ │     from: u256,
+   · │
+12 │ │     value: u256,
+13 │ │ }
+   │ ╰─^ (u256, u256)
+
+note: 
+   ┌─ contract_recv_msg_event_name_collision.fe:17:9
+   │
+17 │         Transfer { to, amount } -> bool {
+   │         ^^^^^^^^^^^^^^^^^^^^^^^ Transfer
+
+note: 
+   ┌─ contract_recv_msg_event_name_collision.fe:17:20
+   │
+17 │         Transfer { to, amount } -> bool {
+   │                    ^^ u256
+
+note: 
+   ┌─ contract_recv_msg_event_name_collision.fe:17:24
+   │
+17 │         Transfer { to, amount } -> bool {
+   │                        ^^^^^^ u256
+
+note: 
+   ┌─ contract_recv_msg_event_name_collision.fe:17:41
+   │  
+17 │           Transfer { to, amount } -> bool {
+   │ ╭─────────────────────────────────────────^
+18 │ │             let _ = to
+19 │ │             let _ = amount
+20 │ │             true
+21 │ │         }
+   │ ╰─────────^ bool
+
+note: 
+   ┌─ contract_recv_msg_event_name_collision.fe:18:17
+   │
+18 │             let _ = to
+   │                 ^ u256
+
+note: 
+   ┌─ contract_recv_msg_event_name_collision.fe:18:21
+   │
+18 │             let _ = to
+   │                     ^^ u256
+
+note: 
+   ┌─ contract_recv_msg_event_name_collision.fe:19:17
+   │
+19 │             let _ = amount
+   │                 ^ u256
+
+note: 
+   ┌─ contract_recv_msg_event_name_collision.fe:19:21
+   │
+19 │             let _ = amount
+   │                     ^^^^^^ u256
+
+note: 
+   ┌─ contract_recv_msg_event_name_collision.fe:20:13
+   │
+20 │             true
+   │             ^^^^ bool

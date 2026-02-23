@@ -836,6 +836,10 @@ impl<'db> TyChecker<'db> {
 
         let callee_provider_arg_idx_by_effect =
             place_effect_provider_param_index_map(self.db, func);
+        let mut callee_effect_key_tys = vec![None; func.effects(self.db).data(self.db).len()];
+        for binding in func.effect_bindings(self.db) {
+            callee_effect_key_tys[binding.binding_idx as usize] = binding.key_ty;
+        }
 
         let provided_span = |provided: ProvidedEffect<'db>| match provided.origin {
             EffectOrigin::With { value_expr } => Some(value_expr.span(body).into()),
@@ -870,6 +874,13 @@ impl<'db> TyChecker<'db> {
                                   provided_ty: TyId<'db>,
                                   required_mut: bool|
          -> Option<TyId<'db>> {
+            if let Some((kind, inner_ty)) = provided_ty.as_capability(this.db) {
+                if required_mut && !matches!(kind, CapabilityKind::Mut) {
+                    return None;
+                }
+                return Some(inner_ty);
+            }
+
             let solve_cx = TraitSolveCx::new(this.db, this.env.scope())
                 .with_assumptions(this.env.assumptions());
             let effect_handle_inst = TraitInstId::new(
@@ -981,9 +992,12 @@ impl<'db> TyChecker<'db> {
                 > = SmallVec::new();
 
                 for provided in cands.iter().copied() {
-                    let Some(requirement) =
-                        self.resolve_effect_requirement(&path_res, callable, provided.ty)
-                    else {
+                    let Some(requirement) = self.resolve_effect_requirement(
+                        &path_res,
+                        callable,
+                        callee_effect_key_tys.get(effect.index()).copied().flatten(),
+                        provided.ty,
+                    ) else {
                         continue;
                     };
 
@@ -995,10 +1009,20 @@ impl<'db> TyChecker<'db> {
                                 || direct_pass_mode == super::EffectPassMode::ByTempPlace
                                 || (direct_pass_mode == super::EffectPassMode::ByPlace
                                     && provided.is_mut);
+                            let direct_ty =
+                                if let Some((kind, inner)) = provided.ty.as_capability(self.db) {
+                                    if required_mut && !matches!(kind, CapabilityKind::Mut) {
+                                        None
+                                    } else {
+                                        Some(inner)
+                                    }
+                                } else {
+                                    Some(provided.ty)
+                                };
 
                             if direct_pass_mode != super::EffectPassMode::Unknown
                                 && direct_mut_ok
-                                && can_unify(self, expected, provided.ty)
+                                && direct_ty.is_some_and(|ty| can_unify(self, expected, ty))
                             {
                                 viable.push((
                                     provided,
@@ -1070,13 +1094,28 @@ impl<'db> TyChecker<'db> {
                     candidate_frames.iter().flatten().copied().collect();
 
                 if let [provided] = all_candidates.as_slice()
-                    && let Some(requirement) =
-                        self.resolve_effect_requirement(&path_res, callable, provided.ty)
+                    && let Some(requirement) = self.resolve_effect_requirement(
+                        &path_res,
+                        callable,
+                        callee_effect_key_tys.get(effect.index()).copied().flatten(),
+                        provided.ty,
+                    )
                 {
                     match requirement {
                         EffectRequirement::Type(expected) => {
                             let place = place_for(self, *provided);
                             let direct_pass_mode = direct_pass_mode_for(*provided, place.as_ref());
+                            let provider_target_nonmut =
+                                provider_target_ty(self, provided.ty, false);
+                            let provider_target_required = if required_mut {
+                                provider_target_ty(self, provided.ty, true)
+                            } else {
+                                None
+                            };
+                            let mutability_blocked = required_mut
+                                && provider_target_nonmut
+                                    .is_some_and(|target| can_unify(self, expected, target))
+                                && provider_target_required.is_none();
 
                             if can_unify(self, expected, provided.ty) {
                                 if required_mut
@@ -1098,6 +1137,14 @@ impl<'db> TyChecker<'db> {
                                     };
                                     self.push_diag(diag);
                                 }
+                            } else if mutability_blocked {
+                                let diag = BodyDiag::EffectMutabilityMismatch {
+                                    primary: call_span.clone(),
+                                    func,
+                                    key: key_path,
+                                    provided_span: provided_span(*provided),
+                                };
+                                self.push_diag(diag);
                             } else {
                                 let diag = BodyDiag::EffectTypeMismatch {
                                     primary: call_span.clone(),
@@ -1305,7 +1352,12 @@ impl<'db> TyChecker<'db> {
             if let EffectRequirement::Type(expected) = requirement {
                 let given = match satisfaction {
                     EffectSatisfaction::Provider { target_ty } => target_ty,
-                    _ => provided.ty,
+                    EffectSatisfaction::Direct => provided
+                        .ty
+                        .as_capability(self.db)
+                        .map(|(_, inner)| inner)
+                        .unwrap_or(provided.ty),
+                    EffectSatisfaction::TraitByValue => provided.ty,
                 };
                 if self.table.unify(expected, given).is_err() {
                     let diag = BodyDiag::EffectTypeMismatch {
@@ -1328,11 +1380,13 @@ impl<'db> TyChecker<'db> {
         &mut self,
         path_res: &PathRes<'db>,
         callable: &Callable<'db>,
+        expected_type_key: Option<TyId<'db>>,
         provided_ty: TyId<'db>,
     ) -> Option<EffectRequirement<'db>> {
         match path_res {
-            PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {
-                let mut expected = Binder::bind(*ty).instantiate(self.db, callable.generic_args());
+            PathRes::Ty(_) | PathRes::TyAlias(_, _) => {
+                let mut expected =
+                    Binder::bind(expected_type_key?).instantiate(self.db, callable.generic_args());
                 if let Some(inst) = callable.trait_inst() {
                     let mut subst = AssocTySubst::new(inst);
                     expected = expected.fold_with(self.db, &mut subst);

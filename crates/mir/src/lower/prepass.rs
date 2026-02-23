@@ -3,7 +3,7 @@
 use super::*;
 use hir::analysis::name_resolution::{PathRes, resolve_path};
 use hir::analysis::ty::const_eval::{
-    ConstValue, eval_const_expr, try_eval_const_body, try_eval_const_ref,
+    ConstValue, eval_const_expr, evaluated_const_to_value, try_eval_const_body, try_eval_const_ref,
 };
 use hir::analysis::ty::const_ty::{ConstTyData, EvaluatedConstTy};
 use hir::analysis::ty::fold::TyFoldable;
@@ -263,6 +263,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         if let Some(mut cref) = self.typed_body.expr_const_ref(expr) {
             if let hir::analysis::ty::ty_check::ConstRef::Const(const_def) = cref
                 && let Some(&cached) = self.const_cache.get(&const_def)
+                && self.is_const_cache_value_reusable(cached)
             {
                 return Some(cached);
             }
@@ -338,11 +339,21 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         .flatten()
                 })
             {
+                // Const arrays lower to a block-local `ConstAggregate` assignment.
+                // Reusing that ValueId across control-flow paths is unsound, so we
+                // materialize arrays at each use site and do not cache their ValueId.
+                if let ConstValue::ConstArray(ref elems) = value
+                    && let Some(data) = self.const_array_data_for_ref(&cref, ty, elems)
+                    && let Some(value_id) = self.try_emit_const_array(ty, data)
+                {
+                    return Some(value_id);
+                }
                 let value = match value {
                     ConstValue::Int(int) => SyntheticValue::Int(int),
                     ConstValue::Bool(flag) => SyntheticValue::Bool(flag),
                     ConstValue::Bytes(bytes) => SyntheticValue::Bytes(bytes),
                     ConstValue::EnumVariant(idx) => SyntheticValue::Int(BigUint::from(idx as u64)),
+                    ConstValue::ConstArray(_) => return None,
                 };
                 let value_id = self.alloc_synthetic_value(ty, value);
                 if let hir::analysis::ty::ty_check::ConstRef::Const(const_def) = cref {
@@ -392,6 +403,24 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             ConstTyData::Evaluated(EvaluatedConstTy::EnumVariant(variant), _) => {
                 SyntheticValue::Int(BigUint::from(variant.idx as u64))
             }
+            ConstTyData::Evaluated(EvaluatedConstTy::Array(elems), _) => {
+                let values: Option<Vec<_>> = elems
+                    .iter()
+                    .map(|elem_ty| {
+                        let TyData::ConstTy(elem_const) = elem_ty.data(self.db) else {
+                            return None;
+                        };
+                        evaluated_const_to_value(self.db, *elem_const)
+                    })
+                    .collect();
+                if let Some(elems) = values
+                    && let Some(data) = self.serialize_const_array_data(expected_ty, &elems)
+                    && let Some(value_id) = self.try_emit_const_array(expected_ty, data)
+                {
+                    return Some(value_id);
+                }
+                return None;
+            }
             ConstTyData::UnEvaluated { body, .. } => {
                 match try_eval_const_body(self.db, *body, expected_ty)
                     .or_else(|| {
@@ -404,6 +433,13 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                             .then(|| try_eval_const_body(self.db, *body, base_expected_ty))
                             .flatten()
                     }) {
+                    Some(ConstValue::ConstArray(ref elems)) => {
+                        let data = self.serialize_const_array_data(expected_ty, elems)?;
+                        if let Some(value_id) = self.try_emit_const_array(expected_ty, data) {
+                            return Some(value_id);
+                        }
+                        return None;
+                    }
                     Some(value) => match value {
                         ConstValue::Int(value) => SyntheticValue::Int(value),
                         ConstValue::Bool(flag) => SyntheticValue::Bool(flag),
@@ -411,6 +447,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         ConstValue::EnumVariant(idx) => {
                             SyntheticValue::Int(BigUint::from(idx as u64))
                         }
+                        ConstValue::ConstArray(_) => unreachable!(),
                     },
                     None => return None,
                 }
@@ -435,5 +472,179 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         value: SyntheticValue,
     ) -> ValueId {
         self.alloc_value(ty, ValueOrigin::Synthetic(value), ValueRepr::Word)
+    }
+
+    fn is_const_cache_value_reusable(&self, value_id: ValueId) -> bool {
+        matches!(
+            self.builder.body.value(value_id).origin,
+            ValueOrigin::Synthetic(_)
+        )
+    }
+
+    /// Serializes a `ConstValue::ConstArray` into bytes and emits a `ConstAggregate` instruction.
+    fn const_array_data_for_ref(
+        &mut self,
+        cref: &hir::analysis::ty::ty_check::ConstRef<'db>,
+        array_ty: TyId<'db>,
+        elems: &[ConstValue],
+    ) -> Option<Vec<u8>> {
+        let hir::analysis::ty::ty_check::ConstRef::Const(const_def) = cref else {
+            return self.serialize_const_array_data(array_ty, elems);
+        };
+
+        if let Some((cached_ty, data)) = self.const_array_data_cache.get(const_def)
+            && *cached_ty == array_ty
+        {
+            return Some(data.clone());
+        }
+
+        let data = self.serialize_const_array_data(array_ty, elems)?;
+        self.const_array_data_cache
+            .insert(*const_def, (array_ty, data.clone()));
+        Some(data)
+    }
+
+    fn serialize_const_array_data(
+        &self,
+        array_ty: TyId<'db>,
+        elems: &[ConstValue],
+    ) -> Option<Vec<u8>> {
+        let elem_ty = crate::layout::array_elem_ty(self.db, array_ty)?;
+        let elem_size = crate::layout::ty_memory_size(self.db, elem_ty)?;
+        serialize_const_array_to_bytes(elems, elem_size)
+    }
+
+    /// Emits a `ConstAggregate` into a fresh local at the current insertion point.
+    fn try_emit_const_array(&mut self, array_ty: TyId<'db>, data: Vec<u8>) -> Option<ValueId> {
+        self.current_block()?;
+
+        let dest = self.alloc_temp_local(array_ty, false, "const_array");
+        self.builder.body.locals[dest.index()].address_space = AddressSpaceKind::Memory;
+
+        self.push_inst_here(MirInst::Assign {
+            source: crate::ir::SourceInfoId::SYNTHETIC,
+            dest: Some(dest),
+            rvalue: Rvalue::ConstAggregate { data, ty: array_ty },
+        });
+
+        let value_id = self.alloc_value(
+            array_ty,
+            ValueOrigin::Local(dest),
+            ValueRepr::Ref(AddressSpaceKind::Memory),
+        );
+        Some(value_id)
+    }
+}
+
+/// Recursively serializes `ConstValue` elements into a byte buffer.
+fn serialize_const_array_to_bytes(elems: &[ConstValue], elem_size: usize) -> Option<Vec<u8>> {
+    let mut bytes = Vec::with_capacity(elems.len() * elem_size);
+    for elem in elems {
+        match elem {
+            ConstValue::Int(int) => bytes.extend(pad_be_bytes(&int.to_bytes_be(), elem_size)?),
+            ConstValue::Bool(flag) => {
+                let raw = if *flag { [1u8] } else { [0u8] };
+                bytes.extend(pad_be_bytes(&raw, elem_size)?);
+            }
+            ConstValue::EnumVariant(idx) => {
+                bytes.extend(pad_be_bytes(&(*idx).to_be_bytes(), elem_size)?);
+            }
+            ConstValue::ConstArray(nested) => {
+                // For nested arrays (e.g. [[u256; 3]; 3]), each inner array
+                // occupies elem_size bytes total, with its own element stride.
+                // For now, compute inner element size from total / count.
+                if nested.is_empty() {
+                    // Zero-length inner array: just pad
+                    bytes.extend(vec![0u8; elem_size]);
+                } else {
+                    if !elem_size.is_multiple_of(nested.len()) {
+                        return None;
+                    }
+                    let inner_elem_size = elem_size / nested.len();
+                    let inner_bytes = serialize_const_array_to_bytes(nested, inner_elem_size)?;
+                    if inner_bytes.len() != elem_size {
+                        return None;
+                    }
+                    bytes.extend(inner_bytes);
+                }
+            }
+            ConstValue::Bytes(raw) => {
+                // CTFE represents `[u8; N]` as `Bytes`; when used as an element in
+                // nested arrays (e.g. `[[u8; 2]; 2]`), expand each byte into its
+                // EVM memory stride.
+                if raw.is_empty() {
+                    if elem_size == 0 {
+                        continue;
+                    }
+                    bytes.extend(vec![0u8; elem_size]);
+                    continue;
+                }
+                if !elem_size.is_multiple_of(raw.len()) {
+                    return None;
+                }
+                let inner_elem_size = elem_size / raw.len();
+                for &byte in raw {
+                    bytes.extend(pad_be_bytes(&[byte], inner_elem_size)?);
+                }
+            }
+        }
+    }
+    Some(bytes)
+}
+
+fn pad_be_bytes(raw: &[u8], size: usize) -> Option<Vec<u8>> {
+    if raw.len() > size {
+        return None;
+    }
+    let mut padded = vec![0u8; size];
+    let offset = size - raw.len();
+    padded[offset..].copy_from_slice(raw);
+    Some(padded)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ConstValue, serialize_const_array_to_bytes};
+    use num_bigint::BigUint;
+
+    #[test]
+    fn serialize_bool_const_array_words() {
+        let data =
+            serialize_const_array_to_bytes(&[ConstValue::Bool(true), ConstValue::Bool(false)], 32)
+                .expect("bool array should serialize");
+        assert_eq!(data.len(), 64);
+        assert_eq!(data[31], 1);
+        assert_eq!(data[63], 0);
+    }
+
+    #[test]
+    fn serialize_mixed_scalar_const_array_words() {
+        let data = serialize_const_array_to_bytes(
+            &[
+                ConstValue::Int(BigUint::from(0x11u64)),
+                ConstValue::EnumVariant(2),
+                ConstValue::Bool(true),
+            ],
+            32,
+        )
+        .expect("scalars should serialize");
+        assert_eq!(data.len(), 96);
+        assert_eq!(data[31], 0x11);
+        assert_eq!(data[63], 0x02);
+        assert_eq!(data[95], 0x01);
+    }
+
+    #[test]
+    fn serialize_nested_u8_array_words() {
+        let data = serialize_const_array_to_bytes(
+            &[ConstValue::Bytes(vec![1, 2]), ConstValue::Bytes(vec![3, 4])],
+            64,
+        )
+        .expect("nested u8 arrays should serialize");
+        assert_eq!(data.len(), 128);
+        assert_eq!(data[31], 0x01);
+        assert_eq!(data[63], 0x02);
+        assert_eq!(data[95], 0x03);
+        assert_eq!(data[127], 0x04);
     }
 }

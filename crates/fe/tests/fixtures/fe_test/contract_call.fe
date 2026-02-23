@@ -1,6 +1,5 @@
 /// Simple test to verify the basic test infrastructure works.
 
-use std::evm::effects::assert
 use std::evm::ops::{mstore, mload}
 
 #[test]

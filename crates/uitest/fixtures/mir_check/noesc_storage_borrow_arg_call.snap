@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/mir_check.rs
+assertion_line: 32
+expression: res
+input_file: fixtures/mir_check/noesc_storage_borrow_arg_call.fe
+---
+error[11-0001]: cannot pass `mut u256` from `Storage` as function argument
+  ┌─ noesc_storage_borrow_arg_call.fe:7:40
+  │
+7 │ pub fn noesc_storage_borrow_arg_call() uses (slot: mut u256) {
+  │                                        ^^^^^^^^^^^^^^^^^^^^^ argument 1 is a `Storage` borrow handle
+  │
+  = note: non-memory borrow handles (`mut`/`ref`) cannot be passed as regular function arguments

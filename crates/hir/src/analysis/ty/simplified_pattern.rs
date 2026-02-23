@@ -8,7 +8,7 @@ use crate::analysis::name_resolution::{PathRes, ResolvedVariant, resolve_path};
 use crate::analysis::ty::const_eval::{ConstValue, try_eval_const_ref};
 use crate::analysis::ty::trait_resolution::PredicateListId;
 use crate::analysis::ty::ty_check::ConstRef;
-use crate::analysis::ty::ty_def::{InvalidCause, TyId};
+use crate::analysis::ty::ty_def::{InvalidCause, TyId, instantiate_adt_field_ty};
 use crate::core::hir_def::{
     Body as HirBody, IntegerId, LitKind, Partial, Pat as HirPat, PathId, VariantKind,
     scope_graph::ScopeId,
@@ -298,7 +298,9 @@ impl<'db> SimplifiedPattern<'db> {
                 match try_eval_const_ref(db, cref, expected_ty)? {
                     ConstValue::Int(int) => Some(LitKind::Int(IntegerId::new(db, int))),
                     ConstValue::Bool(flag) => Some(LitKind::Bool(flag)),
-                    ConstValue::Bytes(_) | ConstValue::EnumVariant(_) => None,
+                    ConstValue::Bytes(_)
+                    | ConstValue::EnumVariant(_)
+                    | ConstValue::ConstArray(_) => None,
                 }
             }
             PathRes::TraitConst(_recv_ty, inst, name) => {
@@ -306,7 +308,9 @@ impl<'db> SimplifiedPattern<'db> {
                 match try_eval_const_ref(db, cref, expected_ty)? {
                     ConstValue::Int(int) => Some(LitKind::Int(IntegerId::new(db, int))),
                     ConstValue::Bool(flag) => Some(LitKind::Bool(flag)),
-                    ConstValue::Bytes(_) | ConstValue::EnumVariant(_) => None,
+                    ConstValue::Bytes(_)
+                    | ConstValue::EnumVariant(_)
+                    | ConstValue::ConstArray(_) => None,
                 }
             }
             _ => None,
@@ -423,7 +427,16 @@ impl<'db> ConstructorKind<'db> {
                         .map(|field_list| {
                             field_list
                                 .iter_types(db)
-                                .map(|binder| binder.instantiate(db, args))
+                                .enumerate()
+                                .map(|(field_idx, _)| {
+                                    instantiate_adt_field_ty(
+                                        db,
+                                        adt_def,
+                                        variant.idx as usize,
+                                        field_idx,
+                                        args,
+                                    )
+                                })
                                 .collect()
                         })
                         .unwrap_or_default()

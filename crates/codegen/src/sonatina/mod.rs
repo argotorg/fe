@@ -7,13 +7,14 @@ mod lower;
 mod tests;
 mod types;
 
-use crate::BackendError;
+use crate::{BackendError, OptLevel};
+use common::ingot::Ingot;
 use driver::DriverDataBase;
 use hir::hir_def::TopLevelMod;
-use mir::{MirModule, layout, layout::TargetDataLayout, lower_module};
+use mir::{MirModule, layout, layout::TargetDataLayout, lower_ingot, lower_module};
 use rustc_hash::{FxHashMap, FxHashSet};
 use sonatina_ir::{
-    BlockId, I256, Module, Signature, Type, ValueId,
+    BlockId, GlobalVariableRef, I256, Module, Signature, Type, ValueId,
     builder::{ModuleBuilder, Variable},
     func_cursor::InstInserter,
     inst::{control_flow::Call, evm::EvmStop},
@@ -23,6 +24,7 @@ use sonatina_ir::{
     object::{Directive, Embed, EmbedSymbol, Object, ObjectName, Section, SectionName, SectionRef},
 };
 use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
+use std::collections::BTreeMap;
 pub use tests::{DebugOutputSink, SonatinaTestDebugConfig, emit_test_module_sonatina};
 
 /// Error type for Sonatina lowering failures.
@@ -70,12 +72,26 @@ pub(crate) fn create_evm_isa() -> Evm {
     Evm::new(triple)
 }
 
+/// Contract bytecode output produced by the Sonatina backend.
+#[derive(Debug, Clone)]
+pub struct SonatinaContractBytecode {
+    pub deploy: Vec<u8>,
+    pub runtime: Vec<u8>,
+}
+
 pub(super) fn is_erased_runtime_ty(
     db: &DriverDataBase,
     target_layout: &TargetDataLayout,
     ty: hir::analysis::ty::ty_def::TyId<'_>,
 ) -> bool {
     layout::ty_size_bytes_in(db, target_layout, ty).is_some_and(|s| s == 0)
+}
+
+#[derive(Debug, Clone)]
+enum ContractObjectSelection {
+    PrimaryRootAndDeps,
+    RootAndDeps(String),
+    All,
 }
 
 /// Compiles a Fe module to Sonatina IR.
@@ -87,13 +103,27 @@ pub fn compile_module(
     // Lower HIR to MIR
     let mir_module = lower_module(db, top_mod)?;
 
+    compile_mir_module(
+        db,
+        &mir_module,
+        layout,
+        ContractObjectSelection::PrimaryRootAndDeps,
+    )
+}
+
+fn compile_mir_module<'db>(
+    db: &'db DriverDataBase,
+    mir_module: &MirModule<'db>,
+    layout: TargetDataLayout,
+    selection: ContractObjectSelection,
+) -> Result<Module, LowerError> {
     // Create Sonatina module
     let isa = create_evm_isa();
     let ctx = ModuleCtx::new(&isa);
     let module_builder = ModuleBuilder::new(ctx);
 
     // Create lowerer and process module
-    let mut lowerer = ModuleLowerer::new(db, module_builder, &mir_module, &isa, layout);
+    let mut lowerer = ModuleLowerer::new(db, module_builder, mir_module, &isa, layout, selection);
     lowerer.lower()?;
 
     Ok(lowerer.finish())
@@ -112,6 +142,19 @@ pub fn emit_module_sonatina_ir(
     Ok(writer.dump_string())
 }
 
+/// Compiles a Fe module to optimized Sonatina IR and returns the human-readable text representation.
+///
+/// Optimization level and contract selection match [`emit_module_sonatina_bytecode`].
+pub fn emit_module_sonatina_ir_optimized(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+    opt_level: OptLevel,
+    contract: Option<&str>,
+) -> Result<String, LowerError> {
+    let mir_module = lower_module(db, top_mod)?;
+    emit_mir_module_sonatina_ir_optimized(db, &mir_module, opt_level, contract)
+}
+
 /// Compiles a Fe module to Sonatina IR and returns a validation report.
 ///
 /// This is intended for debugging malformed IR: it checks that every `ValueId` used as an operand
@@ -123,6 +166,150 @@ pub fn validate_module_sonatina_ir(
     let layout = layout::EVM_LAYOUT;
     let module = compile_module(db, top_mod, layout)?;
     Ok(validate_sonatina_module_layout(&module))
+}
+
+/// Compiles a Fe module to EVM bytecode using the Sonatina backend.
+///
+/// When `contract` is `Some`, only that contract is compiled (along with any transitive contract
+/// dependencies needed to resolve `code_region_offset/len`). When `None`, all contracts are
+/// compiled.
+pub fn emit_module_sonatina_bytecode(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+    opt_level: OptLevel,
+    contract: Option<&str>,
+) -> Result<BTreeMap<String, SonatinaContractBytecode>, LowerError> {
+    let mir_module = lower_module(db, top_mod)?;
+    emit_mir_module_sonatina_bytecode(db, &mir_module, opt_level, contract)
+}
+
+/// Compiles an entire ingot (all source files) to EVM bytecode using the Sonatina backend.
+///
+/// See [`emit_module_sonatina_bytecode`] for contract selection semantics.
+pub fn emit_ingot_sonatina_bytecode(
+    db: &DriverDataBase,
+    ingot: Ingot<'_>,
+    opt_level: OptLevel,
+    contract: Option<&str>,
+) -> Result<BTreeMap<String, SonatinaContractBytecode>, LowerError> {
+    let mir_module = lower_ingot(db, ingot)?;
+    emit_mir_module_sonatina_bytecode(db, &mir_module, opt_level, contract)
+}
+
+fn emit_mir_module_sonatina_bytecode<'db>(
+    db: &'db DriverDataBase,
+    mir_module: &MirModule<'db>,
+    opt_level: OptLevel,
+    contract: Option<&str>,
+) -> Result<BTreeMap<String, SonatinaContractBytecode>, LowerError> {
+    use sonatina_codegen::isa::evm::EvmBackend;
+    use sonatina_codegen::object::{CompileOptions, compile_object};
+
+    let (module, target_contracts) =
+        compile_mir_module_for_sonatina_output(db, mir_module, opt_level, contract)?;
+
+    let isa = create_evm_isa();
+    let backend = EvmBackend::new(isa);
+    let opts: CompileOptions<_> = CompileOptions::default();
+
+    let init_section_name = SectionName::from("init");
+    let runtime_section_name = SectionName::from("runtime");
+
+    let mut out = BTreeMap::new();
+    for contract_name in target_contracts {
+        let artifact =
+            compile_object(&module, &backend, &contract_name, &opts).map_err(|errors| {
+                let msg = errors
+                    .iter()
+                    .map(|e| format!("{:?}", e))
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                LowerError::Internal(msg)
+            })?;
+
+        let deploy = artifact
+            .sections
+            .get(&init_section_name)
+            .ok_or_else(|| {
+                LowerError::Internal(format!(
+                    "compiled object `{contract_name}` has no init section"
+                ))
+            })?
+            .bytes
+            .clone();
+
+        let runtime = artifact
+            .sections
+            .get(&runtime_section_name)
+            .ok_or_else(|| {
+                LowerError::Internal(format!(
+                    "compiled object `{contract_name}` has no runtime section"
+                ))
+            })?
+            .bytes
+            .clone();
+
+        out.insert(contract_name, SonatinaContractBytecode { deploy, runtime });
+    }
+
+    Ok(out)
+}
+
+/// Compiles a lowered MIR module to optimized Sonatina IR.
+pub fn emit_mir_module_sonatina_ir_optimized<'db>(
+    db: &'db DriverDataBase,
+    mir_module: &MirModule<'db>,
+    opt_level: OptLevel,
+    contract: Option<&str>,
+) -> Result<String, LowerError> {
+    let (module, _) = compile_mir_module_for_sonatina_output(db, mir_module, opt_level, contract)?;
+    let mut writer = ModuleWriter::new(&module);
+    Ok(writer.dump_string())
+}
+
+fn compile_mir_module_for_sonatina_output<'db>(
+    db: &'db DriverDataBase,
+    mir_module: &MirModule<'db>,
+    opt_level: OptLevel,
+    contract: Option<&str>,
+) -> Result<(Module, Vec<String>), LowerError> {
+    use mir::analysis::build_contract_graph;
+
+    let contract_graph = build_contract_graph(&mir_module.functions);
+    let mut contract_names: Vec<String> = contract_graph.contracts.keys().cloned().collect();
+    contract_names.sort();
+
+    if let Some(contract) = contract
+        && !contract_graph.contracts.contains_key(contract)
+    {
+        return Err(LowerError::Internal(format!(
+            "contract `{contract}` not found"
+        )));
+    }
+
+    let target_contracts: Vec<String> = match contract {
+        Some(name) => vec![name.to_string()],
+        None => contract_names,
+    };
+
+    let selection = match contract {
+        Some(name) => ContractObjectSelection::RootAndDeps(name.to_string()),
+        None => ContractObjectSelection::All,
+    };
+
+    let mut module = compile_mir_module(db, mir_module, layout::EVM_LAYOUT, selection)?;
+    ensure_module_sonatina_ir_valid(&module)?;
+
+    match opt_level {
+        OptLevel::O0 => {}
+        OptLevel::O1 => sonatina_codegen::optim::Pipeline::balanced().run(&mut module),
+        OptLevel::O2 => sonatina_codegen::optim::Pipeline::aggressive().run(&mut module),
+    }
+    if opt_level != OptLevel::O0 {
+        ensure_module_sonatina_ir_valid(&module)?;
+    }
+
+    Ok((module, target_contracts))
 }
 
 pub(crate) fn ensure_module_sonatina_ir_valid(module: &Module) -> Result<(), LowerError> {
@@ -223,6 +410,7 @@ struct ModuleLowerer<'db, 'a> {
     mir: &'a MirModule<'db>,
     isa: &'a Evm,
     target_layout: TargetDataLayout,
+    contract_selection: ContractObjectSelection,
     /// Maps function indices to Sonatina function references.
     func_map: FxHashMap<usize, FuncRef>,
     /// Maps function symbol names to Sonatina function references.
@@ -242,6 +430,14 @@ struct ModuleLowerer<'db, 'a> {
     gep_type_cache: FxHashMap<String, Option<Type>>,
     /// Counter for generating unique sonatina struct type names.
     gep_name_counter: usize,
+    /// Global variables registered for constant aggregate data sections.
+    data_globals: Vec<GlobalVariableRef>,
+    /// Data globals keyed by function symbol that introduced them.
+    ///
+    /// Used to scope section directives to region-reachable functions only.
+    data_globals_by_symbol: FxHashMap<String, Vec<GlobalVariableRef>>,
+    /// Counter for generating unique data global names.
+    data_global_counter: usize,
 }
 
 impl<'db, 'a> ModuleLowerer<'db, 'a> {
@@ -251,6 +447,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         mir: &'a MirModule<'db>,
         isa: &'a Evm,
         target_layout: TargetDataLayout,
+        contract_selection: ContractObjectSelection,
     ) -> Self {
         Self {
             db,
@@ -258,6 +455,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             mir,
             isa,
             target_layout,
+            contract_selection,
             func_map: FxHashMap::default(),
             name_map: FxHashMap::default(),
             returns_value_map: FxHashMap::default(),
@@ -265,6 +463,9 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             entry_func_idxs: FxHashSet::default(),
             gep_type_cache: FxHashMap::default(),
             gep_name_counter: 0,
+            data_globals: Vec::new(),
+            data_globals_by_symbol: FxHashMap::default(),
+            data_global_counter: 0,
         }
     }
 
@@ -273,11 +474,14 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         // First pass: declare runtime-relevant functions.
         self.declare_functions()?;
 
-        // Second pass: create objects for codegen (select entry + section layout).
-        self.create_objects()?;
+        // Identify entry functions so lowering can emit evm_stop for entries.
+        self.identify_entry_functions()?;
 
-        // Third pass: lower function bodies that are actually declared/included.
+        // Second pass: lower function bodies (populates data_globals).
         self.lower_functions()?;
+
+        // Third pass: create objects with data directives (needs data_globals).
+        self.create_objects()?;
 
         Ok(())
     }
@@ -411,6 +615,124 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         Ok(())
     }
 
+    /// Compute which contracts are needed for compilation: the primary contract
+    /// and its transitive dependencies. Returns `(primary_name, needed_set)`.
+    fn needed_contracts(
+        &self,
+        contract_graph: &mir::analysis::ContractGraph,
+    ) -> Result<(String, FxHashSet<String>), LowerError> {
+        use mir::analysis::{ContractRegion, ContractRegionKind};
+        use std::collections::VecDeque;
+
+        let select_primary = || -> Result<String, LowerError> {
+            let mut referenced: FxHashSet<String> = FxHashSet::default();
+            for (from_region, deps) in &contract_graph.region_deps {
+                for dep in deps {
+                    if dep.contract_name != from_region.contract_name {
+                        referenced.insert(dep.contract_name.clone());
+                    }
+                }
+            }
+            let mut roots: Vec<String> = contract_graph
+                .contracts
+                .keys()
+                .filter(|n| !referenced.contains(*n))
+                .cloned()
+                .collect();
+            roots.sort();
+            roots
+                .into_iter()
+                .next()
+                .or_else(|| {
+                    let mut names: Vec<String> = contract_graph.contracts.keys().cloned().collect();
+                    names.sort();
+                    names.into_iter().next()
+                })
+                .ok_or_else(|| {
+                    LowerError::Internal("contract graph is unexpectedly empty".to_string())
+                })
+        };
+
+        let primary = match &self.contract_selection {
+            ContractObjectSelection::PrimaryRootAndDeps => select_primary()?,
+            ContractObjectSelection::RootAndDeps(root) => {
+                if !contract_graph.contracts.contains_key(root.as_str()) {
+                    return Err(LowerError::Internal(format!("unknown contract `{root}`")));
+                }
+                root.clone()
+            }
+            ContractObjectSelection::All => select_primary()?,
+        };
+
+        let needed: FxHashSet<String> = match &self.contract_selection {
+            ContractObjectSelection::All => contract_graph.contracts.keys().cloned().collect(),
+            _ => {
+                let mut needed = FxHashSet::default();
+                let mut queue = VecDeque::new();
+                queue.push_back(primary.clone());
+                while let Some(name) = queue.pop_front() {
+                    if !needed.insert(name.clone()) {
+                        continue;
+                    }
+                    for kind in [ContractRegionKind::Init, ContractRegionKind::Deployed] {
+                        let region = ContractRegion {
+                            contract_name: name.clone(),
+                            kind,
+                        };
+                        if let Some(deps) = contract_graph.region_deps.get(&region) {
+                            for dep in deps {
+                                if dep.contract_name != name {
+                                    queue.push_back(dep.contract_name.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+                needed
+            }
+        };
+
+        Ok((primary, needed))
+    }
+
+    /// Identify which functions are contract entry points so their Return
+    /// terminators can be lowered as `evm_stop`. Must run before `lower_functions`.
+    fn identify_entry_functions(&mut self) -> Result<(), LowerError> {
+        use mir::analysis::build_contract_graph;
+
+        let contract_graph = build_contract_graph(&self.mir.functions);
+        if contract_graph.contracts.is_empty() {
+            return Ok(());
+        }
+
+        let (_primary, needed_contracts) = self.needed_contracts(&contract_graph)?;
+
+        let mut func_idx_by_symbol: FxHashMap<&str, usize> = FxHashMap::default();
+        for (idx, func) in self.mir.functions.iter().enumerate() {
+            if self.func_map.contains_key(&idx) {
+                func_idx_by_symbol.insert(func.symbol_name.as_str(), idx);
+            }
+        }
+
+        for (contract_name, info) in &contract_graph.contracts {
+            if !needed_contracts.contains(contract_name) {
+                continue;
+            }
+            if let Some(symbol) = info.deployed_symbol.as_deref()
+                && let Some(&idx) = func_idx_by_symbol.get(symbol)
+            {
+                self.entry_func_idxs.insert(idx);
+            }
+            if let Some(symbol) = info.init_symbol.as_deref()
+                && let Some(&idx) = func_idx_by_symbol.get(symbol)
+            {
+                self.entry_func_idxs.insert(idx);
+            }
+        }
+
+        Ok(())
+    }
+
     /// Create Sonatina objects for the module.
     ///
     /// Objects define how code is organized for compilation. Each object
@@ -444,7 +766,10 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
 
         let entry_ref = self.func_map[&entry_idx];
         let wrapper_ref = self.create_entry_wrapper(entry_ref, entry_mir_func)?;
-        let directives = vec![Directive::Entry(wrapper_ref)];
+        let mut directives = vec![Directive::Entry(wrapper_ref)];
+        for &gv in &self.data_globals {
+            directives.push(Directive::Data(gv));
+        }
 
         let object = Object {
             name: ObjectName::from("Contract"),
@@ -466,76 +791,13 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         contract_graph: &mir::analysis::ContractGraph,
     ) -> Result<(), LowerError> {
         use mir::analysis::{ContractRegion, ContractRegionKind};
-        use std::collections::VecDeque;
 
-        let mut func_idx_by_symbol: FxHashMap<&str, usize> = FxHashMap::default();
-        for (idx, func) in self.mir.functions.iter().enumerate() {
-            if !self.func_map.contains_key(&idx) {
-                continue;
-            }
-            func_idx_by_symbol.insert(func.symbol_name.as_str(), idx);
-        }
-
-        // Pick a primary contract to compile:
-        // - prefer a root contract (not referenced by others)
-        // - otherwise fall back to the first contract name (deterministic sort)
-        let mut referenced_contracts: FxHashSet<String> = FxHashSet::default();
-        for (from_region, deps) in &contract_graph.region_deps {
-            for dep in deps {
-                if dep.contract_name != from_region.contract_name {
-                    referenced_contracts.insert(dep.contract_name.clone());
-                }
-            }
-        }
-
-        let mut root_contracts: Vec<String> = contract_graph
-            .contracts
-            .keys()
-            .filter(|name| !referenced_contracts.contains(*name))
-            .cloned()
-            .collect();
-        root_contracts.sort();
-
-        let primary_contract = root_contracts
-            .into_iter()
-            .next()
-            .or_else(|| {
-                let mut names: Vec<String> = contract_graph.contracts.keys().cloned().collect();
-                names.sort();
-                names.into_iter().next()
-            })
-            .ok_or_else(|| {
-                LowerError::Internal("contract graph is unexpectedly empty".to_string())
-            })?;
-
-        // Collect the transitive set of contracts needed by the primary contract.
-        let mut needed_contracts: FxHashSet<String> = FxHashSet::default();
-        let mut queue = VecDeque::new();
-        queue.push_back(primary_contract.clone());
-        while let Some(contract_name) = queue.pop_front() {
-            if !needed_contracts.insert(contract_name.clone()) {
-                continue;
-            }
-
-            for kind in [ContractRegionKind::Init, ContractRegionKind::Deployed] {
-                let region = ContractRegion {
-                    contract_name: contract_name.clone(),
-                    kind,
-                };
-                let Some(deps) = contract_graph.region_deps.get(&region) else {
-                    continue;
-                };
-                for dep in deps {
-                    if dep.contract_name != contract_name {
-                        queue.push_back(dep.contract_name.clone());
-                    }
-                }
-            }
-        }
+        let (primary_contract, needed_contracts) = self.needed_contracts(contract_graph)?;
+        let mut needed_contracts = needed_contracts;
 
         // Assign stable object names for each needed contract.
         let mut contract_object_names: FxHashMap<String, ObjectName> = FxHashMap::default();
-        let mut ordered_contracts: Vec<String> = needed_contracts.into_iter().collect();
+        let mut ordered_contracts: Vec<String> = needed_contracts.drain().collect();
         ordered_contracts.sort();
         for contract in &ordered_contracts {
             let object_name = ObjectName::from(contract.clone());
@@ -572,13 +834,6 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                         "unknown contract runtime entrypoint symbol: `{runtime_symbol}`"
                     ))
                 })?;
-                let runtime_idx = *func_idx_by_symbol.get(runtime_symbol).ok_or_else(|| {
-                    LowerError::Internal(format!(
-                        "unknown contract runtime entrypoint index: `{runtime_symbol}`"
-                    ))
-                })?;
-                self.entry_func_idxs.insert(runtime_idx);
-
                 let region = ContractRegion {
                     contract_name: contract_name.clone(),
                     kind: ContractRegionKind::Deployed,
@@ -589,6 +844,9 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                     .cloned()
                     .unwrap_or_default();
                 let mut directives = vec![Directive::Entry(runtime_ref)];
+                for gv in self.reachable_data_globals_for_region(contract_graph, &region) {
+                    directives.push(Directive::Data(gv));
+                }
                 directives.extend(Self::build_embed_directives(
                     &contract_name,
                     ContractRegionKind::Deployed,
@@ -611,13 +869,6 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                         "unknown contract init entrypoint symbol: `{init_symbol}`"
                     ))
                 })?;
-                let init_idx = *func_idx_by_symbol.get(init_symbol).ok_or_else(|| {
-                    LowerError::Internal(format!(
-                        "unknown contract init entrypoint index: `{init_symbol}`"
-                    ))
-                })?;
-                self.entry_func_idxs.insert(init_idx);
-
                 let region = ContractRegion {
                     contract_name: contract_name.clone(),
                     kind: ContractRegionKind::Init,
@@ -638,6 +889,9 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 }
 
                 let mut directives = vec![Directive::Entry(init_ref)];
+                for gv in self.reachable_data_globals_for_region(contract_graph, &region) {
+                    directives.push(Directive::Data(gv));
+                }
                 directives.extend(Self::build_embed_directives(
                     &contract_name,
                     ContractRegionKind::Init,
@@ -666,6 +920,33 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         }
 
         Ok(())
+    }
+
+    /// Collects constant-data globals used by functions reachable from `region`.
+    fn reachable_data_globals_for_region(
+        &self,
+        contract_graph: &mir::analysis::ContractGraph,
+        region: &mir::analysis::ContractRegion,
+    ) -> Vec<GlobalVariableRef> {
+        let Some(reachable_symbols) = contract_graph.region_reachable.get(region) else {
+            return Vec::new();
+        };
+
+        let mut symbols: Vec<_> = reachable_symbols.iter().cloned().collect();
+        symbols.sort();
+
+        let mut globals = Vec::new();
+        let mut seen = FxHashSet::default();
+        for symbol in symbols {
+            if let Some(symbol_globals) = self.data_globals_by_symbol.get(&symbol) {
+                for &gv in symbol_globals {
+                    if seen.insert(gv) {
+                        globals.push(gv);
+                    }
+                }
+            }
+        }
+        globals
     }
 
     fn build_embed_directives(
@@ -828,6 +1109,8 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         func: &mir::MirFunction<'db>,
         is_entry: bool,
     ) -> Result<(), LowerError> {
+        let data_globals_before = self.data_globals.len();
+
         let mut fb = self.builder.func_builder::<InstInserter>(func_ref);
         let is = self.isa.inst_set();
 
@@ -909,6 +1192,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         }
 
         {
+            let mut const_data_globals = FxHashMap::default();
             let mut ctx = LowerCtx {
                 fb: &mut fb,
                 db: self.db,
@@ -923,6 +1207,9 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 is_entry,
                 gep_type_cache: &mut self.gep_type_cache,
                 gep_name_counter: &mut self.gep_name_counter,
+                data_globals: &mut self.data_globals,
+                data_global_counter: &mut self.data_global_counter,
+                const_data_globals: &mut const_data_globals,
             };
 
             for (idx, block) in ctx.body.blocks.iter().enumerate() {
@@ -940,6 +1227,13 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             ctx.fb.seal_all();
         }
         fb.finish();
+
+        if self.data_globals.len() > data_globals_before {
+            self.data_globals_by_symbol.insert(
+                func.symbol_name.clone(),
+                self.data_globals[data_globals_before..].to_vec(),
+            );
+        }
 
         Ok(())
     }
@@ -961,4 +1255,10 @@ pub(super) struct LowerCtx<'a, 'db, C: sonatina_ir::func_cursor::FuncCursor> {
     pub(super) gep_type_cache: &'a mut FxHashMap<String, Option<Type>>,
     /// Counter for generating unique sonatina struct type names.
     pub(super) gep_name_counter: &'a mut usize,
+    /// Collected global variable refs for constant aggregate data sections.
+    pub(super) data_globals: &'a mut Vec<GlobalVariableRef>,
+    /// Counter for generating unique data global names.
+    pub(super) data_global_counter: &'a mut usize,
+    /// Per-function dedupe for constant aggregate payloads.
+    pub(super) const_data_globals: &'a mut FxHashMap<Vec<u8>, GlobalVariableRef>,
 }

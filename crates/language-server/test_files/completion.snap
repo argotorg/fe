@@ -11,15 +11,25 @@ note:
    │         ^ cursor 1
 
 completions:
+  - Abi (Interface)
+  - AbiEncoder (Interface)
+  - AbiSize (Interface)
+  - Address (Struct)
+  - Call (Interface)
   - Clone (Interface)
   - Copy (Interface)
+  - Create (Interface)
+  - Ctx (Interface)
   - Default (Interface)
   - Drawable (Interface)
+  - Encode (Interface)
   - Err (EnumMember)
+  - Evm (Struct)
   - Helpable (Interface) [use utils::Helpable [Helpable]] {+0:use utils::Helpable}
   - Helper (Struct) [use utils::Helper [Helper]] {+0:use utils::Helper}
   - Helper (Struct) [use shadow_test::Helper [Helper]] {+0:use shadow_test::Helper}
   - IntDowncast (Interface)
+  - Log (Interface)
   - MsgVariant (Interface)
   - None (EnumMember)
   - Ok (EnumMember)
@@ -27,8 +37,11 @@ completions:
   - OtherThing (Struct) [use other_stuff::OtherThing [OtherThing]] {+0:use other_stuff::OtherThing}
   - Point (Struct)
   - Result (Enum)
+  - Sol (Struct)
   - Some (EnumMember)
+  - StorageMap (Struct)
   - another_func_with_args (Function) -> "another_func_with_args(${1:x}, ${2:y})$0" [fn another_func_with_args(x: i32, y: i32) -> i32]
+  - assert (Function) -> "assert(${1:b})$0" [fn assert(b: bool)]
   - func_with_args (Function) -> "func_with_args(${1:x}, ${2:y})$0" [use utils::func_with_args [fn func_with_args(x: i32, y: i32) -> i32]] {+0:use utils::func_with_args}
   - helper_func (Function) -> "helper_func()$0" [use utils::helper_func [fn helper_func() -> i32]] {+0:use utils::helper_func}
   - import_test (Module) -> "import_test::"
@@ -67,6 +80,8 @@ note:
    │            ^ cursor 3
 
 completions:
+  - Address (Struct)
+  - Evm (Struct)
   - Helpable (Interface) [use utils::Helpable [Helpable]] {+0:use utils::Helpable}
   - Helper (Struct) [use utils::Helper [Helper]] {+0:use utils::Helper}
   - Helper (Struct) [use shadow_test::Helper [Helper]] {+0:use shadow_test::Helper}
@@ -74,6 +89,8 @@ completions:
   - OtherThing (Struct) [use other_stuff::OtherThing [OtherThing]] {+0:use other_stuff::OtherThing}
   - Point (Struct)
   - Result (Enum)
+  - Sol (Struct)
+  - StorageMap (Struct)
 
 note: 
    ┌─ completion.fe:63:18
@@ -87,6 +104,7 @@ completions:
   - Ok (EnumMember)
   - Some (EnumMember)
   - another_func_with_args (Function) -> "another_func_with_args(${1:x}, ${2:y})$0" [fn another_func_with_args(x: i32, y: i32) -> i32]
+  - assert (Function) -> "assert(${1:b})$0" [fn assert(b: bool)]
   - func_with_args (Function) -> "func_with_args(${1:x}, ${2:y})$0" [use utils::func_with_args [fn func_with_args(x: i32, y: i32) -> i32]] {+0:use utils::func_with_args}
   - helper_func (Function) -> "helper_func()$0" [use utils::helper_func [fn helper_func() -> i32]] {+0:use utils::helper_func}
   - needs_import (Function) -> "needs_import()$0" [use import_test::needs_import [fn needs_import()]] {+0:use import_test::needs_import}
@@ -120,6 +138,8 @@ note:
    │                          ^ cursor 6
 
 completions:
+  - Address (Struct)
+  - Evm (Struct)
   - Helpable (Interface) [use utils::Helpable [Helpable]] {+0:use utils::Helpable}
   - Helper (Struct) [use utils::Helper [Helper]] {+0:use utils::Helper}
   - Helper (Struct) [use shadow_test::Helper [Helper]] {+0:use shadow_test::Helper}
@@ -127,6 +147,8 @@ completions:
   - OtherThing (Struct) [use other_stuff::OtherThing [OtherThing]] {+0:use other_stuff::OtherThing}
   - Point (Struct)
   - Result (Enum)
+  - Sol (Struct)
+  - StorageMap (Struct)
 
 note: 
    ┌─ completion.fe:78:13
@@ -140,6 +162,7 @@ completions:
   - Ok (EnumMember)
   - Some (EnumMember)
   - another_func_with_args (Function) -> "another_func_with_args(${1:x}, ${2:y})$0" [fn another_func_with_args(x: i32, y: i32) -> i32]
+  - assert (Function) -> "assert(${1:b})$0" [fn assert(b: bool)]
   - func_with_args (Function) -> "func_with_args(${1:x}, ${2:y})$0" [use utils::func_with_args [fn func_with_args(x: i32, y: i32) -> i32]] {+0:use utils::func_with_args}
   - helper_func (Function) -> "helper_func()$0" [use utils::helper_func [fn helper_func() -> i32]] {+0:use utils::helper_func}
   - local_var (Variable) [local_var: {integer}]
@@ -163,11 +186,15 @@ note:
    │                ^ cursor 8
 
 completions:
+  - Address (Struct)
+  - Evm (Struct)
   - Helper (Struct)
   - Option (Enum)
   - OtherThing (Struct) [use other_stuff::OtherThing [OtherThing]] {+82:use other_stuff::OtherThing}
   - Point (Struct)
   - Result (Enum)
+  - Sol (Struct)
+  - StorageMap (Struct)
 
 note: 
     ┌─ completion.fe:107:16
@@ -176,6 +203,8 @@ note:
     │                ^ cursor 9
 
 completions:
+  - Address (Struct)
+  - Evm (Struct)
   - Helpable (Interface) [use utils::Helpable [Helpable]] {+104:use utils::Helpable}
   - Helper (Struct) [use utils::Helper [Helper]] {+104:use utils::Helper}
   - Helper (Struct) [use shadow_test::Helper [Helper]] {+104:use shadow_test::Helper}
@@ -183,3 +212,5 @@ completions:
   - OtherThing (Struct) [use other_stuff::OtherThing [OtherThing]] {+104:use other_stuff::OtherThing}
   - Point (Struct)
   - Result (Enum)
+  - Sol (Struct)
+  - StorageMap (Struct)

@@ -8,8 +8,8 @@ struct Wrap {
 }
 
 impl Wrap {
-    fn bump(self) -> Self {
-        Wrap { inner: self.inner + 1 }
+    fn bump(mut self) {
+        self.inner += 1
     }
 }
 
@@ -21,7 +21,7 @@ pub contract NewtypeStorageFieldMutMethodCall {
 
     recv Msg {
         Bump -> u256 uses (mut w) {
-            w = w.bump()
+            w.bump()
             w.inner
         }
     }

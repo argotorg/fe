@@ -42,7 +42,7 @@ pub fn run(
         match workspace_member_suggestion(&root, &target) {
             Ok(Some(message)) => println!("{message}"),
             Ok(None) => {}
-            Err(err) => eprintln!("⚠️  failed to check workspace members: {err}"),
+            Err(err) => eprintln!("Warning: failed to check workspace members: {err}"),
         }
     }
 
@@ -263,7 +263,7 @@ fn absolute_target(path: &Utf8PathBuf) -> Result<Utf8PathBuf, String> {
 fn find_workspace_root(start: &Utf8Path) -> Result<Option<Utf8PathBuf>, String> {
     let start_url = Url::from_directory_path(start.as_std_path())
         .map_err(|_| "Invalid directory path".to_string())?;
-    let discovery = discover_context(&start_url).map_err(|err| err.to_string())?;
+    let discovery = discover_context(&start_url, false).map_err(|err| err.to_string())?;
     let Some(workspace_url) = discovery.workspace_root else {
         return Ok(None);
     };

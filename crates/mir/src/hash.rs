@@ -375,6 +375,11 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
                             AddressSpaceKind::TransientStorage => 4,
                         });
                     }
+                    Rvalue::ConstAggregate { data, .. } => {
+                        self.write_u8(6);
+                        self.write_usize(data.len());
+                        self.hasher.write(data);
+                    }
                 }
             }
             MirInst::BindValue { value, .. } => {

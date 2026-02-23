@@ -8,6 +8,7 @@ use salsa::Update;
 
 use super::{
     binder::Binder,
+    collect_layout_hole_tys_in_order,
     trait_resolution::constraint::collect_constraints,
     ty_def::{InvalidCause, TyId},
     ty_lower::{GenericParamTypeSet, lower_hir_ty},
@@ -210,4 +211,37 @@ pub struct AdtCycleMember<'db> {
     pub adt: AdtDef<'db>,
     pub field_idx: u16,
     pub ty_idx: u16,
+}
+
+#[salsa::tracked(return_ref, cycle_initial=adt_layout_hole_tys_cycle_initial, cycle_fn=adt_layout_hole_tys_cycle_recover)]
+pub(crate) fn adt_layout_hole_tys<'db>(
+    db: &'db dyn HirAnalysisDb,
+    adt: AdtDef<'db>,
+) -> Vec<TyId<'db>> {
+    let mut hole_tys = Vec::new();
+
+    for variant in adt.fields(db) {
+        for field_ty in variant.iter_types(db) {
+            let field_ty = field_ty.instantiate_identity();
+            hole_tys.extend(collect_layout_hole_tys_in_order(db, field_ty));
+        }
+    }
+
+    hole_tys
+}
+
+fn adt_layout_hole_tys_cycle_initial<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _adt: AdtDef<'db>,
+) -> Vec<TyId<'db>> {
+    Vec::new()
+}
+
+fn adt_layout_hole_tys_cycle_recover<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _value: &Vec<TyId<'db>>,
+    _count: u32,
+    _adt: AdtDef<'db>,
+) -> salsa::CycleRecoveryAction<Vec<TyId<'db>>> {
+    salsa::CycleRecoveryAction::Iterate
 }

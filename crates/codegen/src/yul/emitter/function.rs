@@ -7,6 +7,13 @@ use crate::yul::{doc::YulDoc, errors::YulError, state::BlockState};
 
 use super::util::{function_name, prefix_yul_name};
 
+/// A data region collected during Yul emission (for data sections).
+#[derive(Debug, Clone)]
+pub(super) struct YulDataRegion {
+    pub label: String,
+    pub bytes: Vec<u8>,
+}
+
 /// Emits Yul for a single MIR function.
 pub(super) struct FunctionEmitter<'db> {
     pub(super) db: &'db DriverDataBase,
@@ -15,6 +22,11 @@ pub(super) struct FunctionEmitter<'db> {
     pub(super) code_regions: &'db FxHashMap<String, String>,
     pub(super) layout: TargetDataLayout,
     ipdom: Vec<Option<BasicBlockId>>,
+    /// Data regions collected during emission.
+    data_region_counter: u32,
+    /// Reuse labels for identical payloads so we don't emit duplicate data sections.
+    data_region_labels: FxHashMap<Vec<u8>, String>,
+    pub(super) data_regions: Vec<YulDataRegion>,
 }
 
 impl<'db> FunctionEmitter<'db> {
@@ -46,6 +58,9 @@ impl<'db> FunctionEmitter<'db> {
             code_regions,
             layout,
             ipdom,
+            data_region_counter: 0,
+            data_region_labels: FxHashMap::default(),
+            data_regions: Vec::new(),
         })
     }
 
@@ -53,8 +68,29 @@ impl<'db> FunctionEmitter<'db> {
         self.ipdom.get(block.index()).copied().flatten()
     }
 
+    /// Registers constant aggregate data and returns a unique label for the data section.
+    ///
+    /// Labels include the function's symbol name to ensure global uniqueness
+    /// across functions within the same Yul object.
+    pub(super) fn register_data_region(&mut self, bytes: Vec<u8>) -> String {
+        if let Some(label) = self.data_region_labels.get(bytes.as_slice()) {
+            return label.clone();
+        }
+        let label = format!(
+            "data_{}_{}",
+            self.mir_func.symbol_name, self.data_region_counter
+        );
+        self.data_region_counter += 1;
+        self.data_region_labels.insert(bytes.clone(), label.clone());
+        self.data_regions.push(YulDataRegion {
+            label: label.clone(),
+            bytes,
+        });
+        label
+    }
+
     /// Produces the final Yul docs for the current MIR function.
-    pub(super) fn emit_doc(mut self) -> Result<Vec<YulDoc>, YulError> {
+    pub(super) fn emit_doc(mut self) -> Result<(Vec<YulDoc>, Vec<YulDataRegion>), YulError> {
         let func_name = prefix_yul_name(&self.mir_func.symbol_name);
         let (param_names, mut state) = self.init_entry_state();
         let body_docs = self.emit_block(self.mir_func.body.entry, &mut state)?;
@@ -65,7 +101,7 @@ impl<'db> FunctionEmitter<'db> {
             ),
             body_docs,
         );
-        Ok(vec![function_doc])
+        Ok((vec![function_doc], self.data_regions))
     }
 
     /// Initializes the `BlockState` with parameter bindings.

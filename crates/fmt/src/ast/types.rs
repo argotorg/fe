@@ -558,8 +558,15 @@ impl ToDoc for ast::ConstGenericParam {
             .ty()
             .map(|ty| alloc.text(": ").append(ty.to_doc(ctx)))
             .unwrap_or_else(|| alloc.nil());
+        let default = if let Some(hole) = self.default_hole() {
+            alloc.text(" = ").append(alloc.text(ctx.token(&hole)))
+        } else if let Some(expr) = self.default_expr() {
+            alloc.text(" = ").append(expr.to_doc(ctx))
+        } else {
+            alloc.nil()
+        };
 
-        alloc.text("const ").append(name).append(ty)
+        alloc.text("const ").append(name).append(ty).append(default)
     }
 }
 
@@ -1024,10 +1031,12 @@ impl ToDoc for ast::TypeGenericArg {
 
 impl ToDoc for ast::ConstGenericArg {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
-        match self.expr() {
-            Some(e) => e.to_doc(ctx),
-            None => ctx.alloc.nil(),
+        if let Some(hole) = self.hole_token() {
+            return ctx.alloc.text(ctx.token(&hole));
         }
+
+        self.expr()
+            .map_or_else(|| ctx.alloc.nil(), |e| e.to_doc(ctx))
     }
 }
 

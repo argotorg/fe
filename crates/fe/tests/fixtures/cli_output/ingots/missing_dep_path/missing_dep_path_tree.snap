@@ -1,11 +1,12 @@
 ---
 source: crates/fe/tests/cli_output.rs
+assertion_line: 528
 expression: output
 ---
 === STDOUT ===
 test v0.1.0
 
 === STDERR ===
-❌ Dependency 'foo' in file://<project>/crates/fe/tests/fixtures/cli_output/ingots/missing_dep_path/ uses name-only lookup outside a workspace
+Error: Dependency 'foo' in file://<project>/crates/fe/tests/fixtures/cli_output/ingots/missing_dep_path/ uses name-only lookup outside a workspace
 
-=== EXIT CODE: 0 ===
+=== EXIT CODE: 1 ===

@@ -30,6 +30,7 @@ use crate::analysis::{
             PredicateListId,
             constraint::{collect_constraints, collect_func_def_constraints},
         },
+        ty_contains_const_hole,
         ty_def::{InvalidCause, TyData, TyId, TyVarSort},
         ty_lower::lower_hir_ty,
         unify::UnificationTable,
@@ -195,6 +196,9 @@ impl<'db> TyCheckEnv<'db> {
                     if !ty.is_star_kind(db) {
                         ty = TyId::invalid(db, InvalidCause::Other);
                     }
+                    if !view.is_self_param(db) && ty_contains_const_hole(db, ty) {
+                        ty = TyId::invalid(db, InvalidCause::Other);
+                    }
                     let var = LocalBinding::Param {
                         site: ParamSite::Func(func),
                         idx,
@@ -225,6 +229,9 @@ impl<'db> TyCheckEnv<'db> {
                     }
 
                     if !ty.is_star_kind(db) {
+                        ty = TyId::invalid(db, InvalidCause::Other);
+                    }
+                    if ty_contains_const_hole(db, ty) {
                         ty = TyId::invalid(db, InvalidCause::Other);
                     }
 
@@ -272,6 +279,11 @@ impl<'db> TyCheckEnv<'db> {
     fn seed_func_effects(&mut self, func: Func<'db>, base_assumptions: PredicateListId<'db>) {
         let provider_map = place_effect_provider_param_index_map(self.db, func);
         let provider_params = CallableDef::Func(func).params(self.db);
+        let resolved_effect_key_tys: FxHashMap<usize, TyId<'db>> = func
+            .effect_bindings(self.db)
+            .iter()
+            .filter_map(|binding| binding.key_ty.map(|ty| (binding.binding_idx as usize, ty)))
+            .collect();
 
         for effect in func.effect_params(self.db) {
             let idx = effect.index();
@@ -284,27 +296,26 @@ impl<'db> TyCheckEnv<'db> {
                 continue;
             }
 
-            let provider_param_idx = provider_map
-                .get(idx)
-                .copied()
-                .flatten()
-                .expect("missing provider param for effect");
-            let provider_ty = *provider_params
-                .get(provider_param_idx)
-                .expect("provider param index out of range");
+            let Some(provider_param_idx) = provider_map.get(idx).copied().flatten() else {
+                debug_assert!(false, "missing provider param for effect at index {idx}");
+                tracing::warn!("missing provider param for effect at index {idx}");
+                continue;
+            };
+            let Some(&provider_ty) = provider_params.get(provider_param_idx) else {
+                debug_assert!(
+                    false,
+                    "provider param index {provider_param_idx} out of range"
+                );
+                tracing::warn!("provider param index {provider_param_idx} out of range");
+                continue;
+            };
 
             let provided_ty = match kind {
                 EffectKeyKind::Trait => provider_ty,
-                EffectKeyKind::Type => {
-                    match resolve_path(self.db, key_path, func.scope(), base_assumptions, false) {
-                        Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty))
-                            if ty.is_star_kind(self.db) =>
-                        {
-                            ty
-                        }
-                        _ => TyId::invalid(self.db, InvalidCause::Other),
-                    }
-                }
+                EffectKeyKind::Type => resolved_effect_key_tys
+                    .get(&idx)
+                    .copied()
+                    .unwrap_or_else(|| TyId::invalid(self.db, InvalidCause::Other)),
                 EffectKeyKind::Other => unreachable!(),
             };
 
@@ -650,7 +661,7 @@ impl<'db> TyCheckEnv<'db> {
             BodyOwner::Func(func) => {
                 let rt = func.return_ty(self.db);
                 if func.has_explicit_return_ty(self.db) {
-                    if rt.is_star_kind(self.db) {
+                    if rt.is_star_kind(self.db) && !ty_contains_const_hole(self.db, rt) {
                         rt
                     } else {
                         TyId::invalid(self.db, InvalidCause::Other)
@@ -684,7 +695,7 @@ impl<'db> TyCheckEnv<'db> {
                 };
 
                 let ty = lower_hir_ty(self.db, ret_ty, self.owner_scope, self.assumptions());
-                if ty.is_star_kind(self.db) {
+                if ty.is_star_kind(self.db) && !ty_contains_const_hole(self.db, ty) {
                     ty
                 } else {
                     TyId::invalid(self.db, InvalidCause::Other)
@@ -1343,7 +1354,10 @@ impl<'db> LocalBinding<'db> {
             }
 
             Self::Param { site, idx, .. } => param_name(env.db, *site, *idx).unwrap(),
-            Self::EffectParam { key_path, .. } => key_path.ident(env.db).unwrap(),
+            Self::EffectParam { key_path, .. } => key_path
+                .ident(env.db)
+                .to_opt()
+                .unwrap_or_else(|| IdentId::new(env.db, "_".to_string())),
         }
     }
 

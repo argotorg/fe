@@ -1,6 +1,6 @@
 [package]
 name = "fe"
-version = "26.0.0-alpha.5"
+version = "26.0.0-alpha.7"
 edition.workspace = true
 
 [features]

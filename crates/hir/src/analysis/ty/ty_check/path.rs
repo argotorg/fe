@@ -13,7 +13,7 @@ use crate::analysis::{
     ty::{
         adt_def::{AdtDef, AdtRef},
         diagnostics::{BodyDiag, FuncBodyDiag},
-        ty_def::{InvalidCause, TyData, TyId},
+        ty_def::{InvalidCause, TyData, TyId, instantiate_adt_field_ty},
     },
 };
 
@@ -186,9 +186,8 @@ impl<'db> RecordLike<'db> {
                         .position(|v| v.name(db) == Some(name))?,
                     _ => return None,
                 };
-                let adt_field_list_ref = &adt_def.fields(db)[0];
                 let args = ty.generic_args(db);
-                let field_ty = adt_field_list_ref.ty(db, field_idx).instantiate(db, args);
+                let field_ty = instantiate_adt_field_ty(db, adt_def, 0, field_idx, args);
 
                 if field_ty.is_star_kind(db) {
                     Some(field_ty)
@@ -204,9 +203,14 @@ impl<'db> RecordLike<'db> {
                         .position(|v| v.name(db) == Some(name))?,
                     _ => return None,
                 };
-                let adt_field_list_ref = &adt_def.fields(db)[variant.variant.idx as usize];
                 let args = variant.ty.generic_args(db);
-                let field_ty = adt_field_list_ref.ty(db, field_idx).instantiate(db, args);
+                let field_ty = instantiate_adt_field_ty(
+                    db,
+                    adt_def,
+                    variant.variant.idx as usize,
+                    field_idx,
+                    args,
+                );
 
                 if field_ty.is_star_kind(db) {
                     Some(field_ty)

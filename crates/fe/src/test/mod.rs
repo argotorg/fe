@@ -9,19 +9,25 @@ use crate::report::{
     normalize_report_out_path, panic_payload_to_string, sanitize_filename, tar_gz_dir,
     write_report_meta,
 };
+use crate::workspace_ingot::{
+    INGOT_REQUIRES_WORKSPACE_ROOT, WorkspaceMemberRef, select_workspace_member_paths,
+};
 use camino::Utf8PathBuf;
 use codegen::{
     DebugOutputSink, ExpectedRevert, OptLevel, SonatinaTestDebugConfig, TestMetadata,
     TestModuleOutput, emit_test_module_sonatina, emit_test_module_yul,
 };
 use colored::Colorize;
-use common::InputDb;
+use common::{
+    InputDb,
+    config::{Config, WorkspaceMemberSelection},
+};
 use contract_harness::{CallGasProfile, EvmTraceOptions, ExecutionOptions, RuntimeInstance};
 use driver::DriverDataBase;
-use hir::hir_def::{HirIngot, TopLevelMod};
+use hir::hir_def::{HirIngot, TopLevelMod, item::ItemKind};
 use mir::{fmt as mir_fmt, lower_module};
 use rustc_hash::{FxHashMap, FxHashSet};
-use solc_runner::compile_single_contract;
+use solc_runner::compile_single_contract_with_solc;
 use std::{
     fmt::Write as _,
     sync::{
@@ -771,10 +777,13 @@ fn effective_jobs(requested: usize, suite_count: usize) -> usize {
 #[allow(clippy::too_many_arguments)]
 pub fn run_tests(
     paths: &[Utf8PathBuf],
+    ingot: Option<&str>,
     filter: Option<&str>,
     jobs: usize,
     show_logs: bool,
     backend: &str,
+    yul_optimize: bool,
+    solc: Option<&str>,
     opt_level: OptLevel,
     debug: &TestDebugOptions,
     report_out: Option<&Utf8PathBuf>,
@@ -782,7 +791,11 @@ pub fn run_tests(
     report_failed_only: bool,
     call_trace: bool,
 ) -> Result<bool, String> {
-    let input_paths = expand_test_paths(paths)?;
+    let expanded_paths = expand_test_paths(paths)?;
+    if ingot.is_some() && expanded_paths.len() != 1 {
+        return Err(INGOT_REQUIRES_WORKSPACE_ROOT.to_string());
+    }
+    let input_paths = expand_workspace_test_paths(expanded_paths, ingot)?;
     let suite_plans = build_suite_plans(input_paths, report_dir)?;
     let worker_count = effective_jobs(jobs, suite_plans.len());
     let multi = suite_plans.len() > 1;
@@ -821,6 +834,8 @@ pub fn run_tests(
                 filter,
                 show_logs,
                 backend,
+                yul_optimize,
+                solc,
                 opt_level,
                 debug,
                 report_failed_only,
@@ -847,6 +862,8 @@ pub fn run_tests(
                             filter,
                             show_logs,
                             backend,
+                            yul_optimize,
+                            solc,
                             opt_level,
                             debug,
                             report_failed_only,
@@ -889,7 +906,7 @@ pub fn run_tests(
 
         let suite_failed = results.iter().any(|r| !r.passed);
         if results.is_empty() {
-            eprintln!("No tests found in {path}");
+            eprintln!("Warning: No tests found in {path}");
         } else {
             test_results.extend(results);
         }
@@ -913,8 +930,15 @@ pub fn run_tests(
     }
 
     if let Some((out, staging)) = report_root {
-        gas::write_run_gas_comparison_summary(&staging.root_dir, opt_level);
-        write_report_manifest(&staging.root_dir, backend, opt_level, filter, &test_results);
+        gas::write_run_gas_comparison_summary(&staging.root_dir, backend, yul_optimize, opt_level);
+        write_report_manifest(
+            &staging.root_dir,
+            backend,
+            yul_optimize,
+            opt_level,
+            filter,
+            &test_results,
+        );
         if let Err(err) = tar_gz_dir(&staging.root_dir, &out) {
             eprintln!("Error: failed to write report `{out}`: {err}");
             eprintln!("Report staging directory left at `{}`", staging.temp_dir);
@@ -935,6 +959,8 @@ fn run_single_suite(
     filter: Option<&str>,
     show_logs: bool,
     backend: &str,
+    yul_optimize: bool,
+    solc: Option<&str>,
     opt_level: OptLevel,
     debug: &TestDebugOptions,
     report_failed_only: bool,
@@ -980,6 +1006,8 @@ fn run_single_suite(
             filter,
             show_logs,
             backend,
+            yul_optimize,
+            solc,
             opt_level,
             &suite_debug,
             &sonatina_debug,
@@ -995,6 +1023,8 @@ fn run_single_suite(
             filter,
             show_logs,
             backend,
+            yul_optimize,
+            solc,
             opt_level,
             &suite_debug,
             &sonatina_debug,
@@ -1015,6 +1045,7 @@ fn run_single_suite(
             write_report_manifest(
                 &staging.root_dir,
                 backend,
+                yul_optimize,
                 opt_level,
                 filter,
                 &suite_results,
@@ -1064,6 +1095,8 @@ fn run_tests_single_file(
     filter: Option<&str>,
     show_logs: bool,
     backend: &str,
+    yul_optimize: bool,
+    solc: Option<&str>,
     opt_level: OptLevel,
     debug: &TestDebugOptions,
     sonatina_debug: &SonatinaTestDebugConfig,
@@ -1132,6 +1165,10 @@ fn run_tests_single_file(
         );
     }
 
+    if !has_test_functions(db, top_mod) {
+        return Vec::new();
+    }
+
     // Discover and run tests
     maybe_write_suite_ir(db, top_mod, backend, report);
     discover_and_run_tests(
@@ -1141,6 +1178,8 @@ fn run_tests_single_file(
         filter,
         show_logs,
         backend,
+        solc,
+        yul_optimize,
         opt_level,
         debug,
         sonatina_debug,
@@ -1166,6 +1205,8 @@ fn run_tests_ingot(
     filter: Option<&str>,
     show_logs: bool,
     backend: &str,
+    yul_optimize: bool,
+    solc: Option<&str>,
     opt_level: OptLevel,
     debug: &TestDebugOptions,
     sonatina_debug: &SonatinaTestDebugConfig,
@@ -1225,6 +1266,10 @@ fn run_tests_ingot(
     }
 
     let root_mod = ingot.root_mod(db);
+    if !has_test_functions(db, root_mod) {
+        return Vec::new();
+    }
+
     maybe_write_suite_ir(db, root_mod, backend, report);
     discover_and_run_tests(
         db,
@@ -1233,6 +1278,8 @@ fn run_tests_ingot(
         filter,
         show_logs,
         backend,
+        solc,
+        yul_optimize,
         opt_level,
         debug,
         sonatina_debug,
@@ -1295,6 +1342,8 @@ fn discover_and_run_tests(
     filter: Option<&str>,
     show_logs: bool,
     backend: &str,
+    solc: Option<&str>,
+    yul_optimize: bool,
     opt_level: OptLevel,
     debug: &TestDebugOptions,
     sonatina_debug: &SonatinaTestDebugConfig,
@@ -1378,7 +1427,8 @@ fn discover_and_run_tests(
             case,
             show_logs,
             backend.as_str(),
-            opt_level.yul_optimize(),
+            yul_optimize,
+            solc,
             evm_trace.as_ref(),
             report,
             call_trace,
@@ -1429,6 +1479,7 @@ fn discover_and_run_tests(
         gas::write_gas_comparison_report(
             report,
             backend.as_str(),
+            yul_optimize,
             opt_level,
             cases,
             &primary_measurements,
@@ -1584,6 +1635,119 @@ fn looks_like_glob(pattern: &str) -> bool {
     pattern.contains('*') || pattern.contains('?') || pattern.contains('[')
 }
 
+fn expand_workspace_test_paths(
+    inputs: Vec<Utf8PathBuf>,
+    ingot: Option<&str>,
+) -> Result<Vec<Utf8PathBuf>, String> {
+    let mut expanded = Vec::new();
+    let mut seen: FxHashSet<String> = FxHashSet::default();
+    let mut push_unique = |path: Utf8PathBuf| {
+        let key = path.as_str().to_string();
+        if seen.insert(key) {
+            expanded.push(path);
+        }
+    };
+
+    for input in inputs {
+        if !input.is_dir() {
+            if ingot.is_some() {
+                return Err(INGOT_REQUIRES_WORKSPACE_ROOT.to_string());
+            }
+            push_unique(input);
+            continue;
+        }
+
+        let config_path = input.join("fe.toml");
+        if !config_path.is_file() {
+            if ingot.is_some() {
+                return Err(INGOT_REQUIRES_WORKSPACE_ROOT.to_string());
+            }
+            push_unique(input);
+            continue;
+        }
+
+        let content = match std::fs::read_to_string(config_path.as_std_path()) {
+            Ok(content) => content,
+            Err(_) => {
+                if ingot.is_some() {
+                    return Err(format!(
+                        "`--ingot` requires a readable workspace config at `{config_path}`"
+                    ));
+                }
+                push_unique(input);
+                continue;
+            }
+        };
+        let config = match Config::parse(&content) {
+            Ok(config) => config,
+            Err(_) => {
+                if ingot.is_some() {
+                    return Err(format!(
+                        "`--ingot` requires a valid workspace config at `{config_path}`"
+                    ));
+                }
+                push_unique(input);
+                continue;
+            }
+        };
+        let Config::Workspace(workspace_config) = config else {
+            if ingot.is_some() {
+                return Err(INGOT_REQUIRES_WORKSPACE_ROOT.to_string());
+            }
+            push_unique(input);
+            continue;
+        };
+
+        let canonical = input
+            .canonicalize_utf8()
+            .map_err(|err| format!("failed to canonicalize workspace path `{input}`: {err}"))?;
+        let workspace_url = Url::from_directory_path(canonical.as_str())
+            .map_err(|_| format!("invalid workspace directory path `{input}`"))?;
+        let selection = if workspace_config.workspace.default_members.is_some() {
+            WorkspaceMemberSelection::DefaultOnly
+        } else {
+            WorkspaceMemberSelection::All
+        };
+        let members = driver::expand_workspace_members(
+            &workspace_config.workspace,
+            &workspace_url,
+            selection,
+        )
+        .map_err(|err| format!("failed to resolve workspace members in `{input}`: {err}"))?;
+
+        let member_paths = select_workspace_member_paths(
+            &canonical,
+            &input,
+            members
+                .iter()
+                .filter(|member| member.url != workspace_url)
+                .map(|member| {
+                    WorkspaceMemberRef::new(member.path.as_path(), member.name.as_deref())
+                }),
+            ingot,
+        )?;
+
+        if member_paths.is_empty() {
+            push_unique(input);
+            continue;
+        }
+
+        for member_path in member_paths {
+            push_unique(member_path);
+        }
+    }
+
+    Ok(expanded)
+}
+
+fn has_test_functions(db: &DriverDataBase, top_mod: TopLevelMod<'_>) -> bool {
+    top_mod.all_funcs(db).iter().any(|func| {
+        ItemKind::from(*func)
+            .attrs(db)
+            .is_some_and(|attrs| attrs.has_attr(db, "test"))
+    })
+}
+
 fn create_run_report_staging() -> Result<ReportStaging, String> {
     create_report_staging_root("target/fe-test-report-staging", "fe-test-report")
 }
@@ -1599,6 +1763,7 @@ pub(super) fn compile_and_run_test(
     show_logs: bool,
     backend: &str,
     yul_optimize: bool,
+    solc: Option<&str>,
     evm_trace: Option<&EvmTraceOptions>,
     report: Option<&ReportContext>,
     call_trace: bool,
@@ -1714,14 +1879,15 @@ pub(super) fn compile_and_run_test(
     }
 
     if let Some(report) = report {
-        write_yul_case_artifacts(report, case);
+        write_yul_case_artifacts(report, case, solc);
     }
 
-    let (bytecode, runtime_metrics) = match compile_single_contract(
+    let (bytecode, runtime_metrics) = match compile_single_contract_with_solc(
         &case.object_name,
         &case.yul,
         yul_optimize,
         YUL_VERIFY_RUNTIME,
+        solc,
     ) {
         Ok(contract) => (
             contract.bytecode,
@@ -1791,7 +1957,11 @@ fn write_sonatina_case_artifacts(report: &ReportContext, case: &TestMetadata) {
     }
 }
 
-pub(super) fn write_yul_case_artifacts(report: &ReportContext, case: &TestMetadata) {
+pub(super) fn write_yul_case_artifacts(
+    report: &ReportContext,
+    case: &TestMetadata,
+    solc: Option<&str>,
+) {
     let dir = report
         .root_dir
         .join("artifacts")
@@ -1802,13 +1972,25 @@ pub(super) fn write_yul_case_artifacts(report: &ReportContext, case: &TestMetada
 
     let _ = std::fs::write(dir.join("source.yul"), &case.yul);
 
-    let unopt = compile_single_contract(&case.object_name, &case.yul, false, YUL_VERIFY_RUNTIME);
+    let unopt = compile_single_contract_with_solc(
+        &case.object_name,
+        &case.yul,
+        false,
+        YUL_VERIFY_RUNTIME,
+        solc,
+    );
     if let Ok(contract) = unopt {
         let _ = std::fs::write(dir.join("bytecode.unopt.hex"), &contract.bytecode);
         let _ = std::fs::write(dir.join("runtime.unopt.hex"), &contract.runtime_bytecode);
     }
 
-    let opt = compile_single_contract(&case.object_name, &case.yul, true, YUL_VERIFY_RUNTIME);
+    let opt = compile_single_contract_with_solc(
+        &case.object_name,
+        &case.yul,
+        true,
+        YUL_VERIFY_RUNTIME,
+        solc,
+    );
     if let Ok(contract) = opt {
         let _ = std::fs::write(dir.join("bytecode.opt.hex"), &contract.bytecode);
         let _ = std::fs::write(dir.join("runtime.opt.hex"), &contract.runtime_bytecode);
@@ -1855,6 +2037,7 @@ fn extract_runtime_from_sonatina_initcode(init: &[u8]) -> Option<&[u8]> {
 fn write_report_manifest(
     staging: &Utf8PathBuf,
     backend: &str,
+    yul_optimize: bool,
     opt_level: OptLevel,
     filter: Option<&str>,
     results: &[TestResult],
@@ -1862,6 +2045,7 @@ fn write_report_manifest(
     let mut out = String::new();
     out.push_str("fe test report\n");
     out.push_str(&format!("backend: {backend}\n"));
+    out.push_str(&format!("yul_optimize: {yul_optimize}\n"));
     out.push_str(&format!("opt_level: {opt_level}\n"));
     out.push_str(&format!("filter: {}\n", filter.unwrap_or("<none>")));
     out.push_str(&format!("fe_version: {}\n", env!("CARGO_PKG_VERSION")));

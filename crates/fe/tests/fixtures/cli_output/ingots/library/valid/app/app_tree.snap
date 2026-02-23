@@ -1,0 +1,9 @@
+---
+source: crates/fe/tests/cli_output.rs
+assertion_line: 427
+expression: output
+---
+=== STDOUT ===
+library_app v0.1.0
+
+=== EXIT CODE: 0 ===

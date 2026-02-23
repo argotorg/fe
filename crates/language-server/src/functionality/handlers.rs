@@ -69,7 +69,7 @@ async fn discover_and_load_ingots(
         )
     })?;
 
-    let discovery = discover_context(&root_url).map_err(|e| {
+    let discovery = discover_context(&root_url, true).map_err(|e| {
         ResponseError::new(ErrorCode::INTERNAL_ERROR, format!("Discovery error: {e}"))
     })?;
 
@@ -81,6 +81,10 @@ async fn discover_and_load_ingots(
     }
 
     for ingot_url in &discovery.ingot_roots {
+        // Skip if already initialized as workspace root above
+        if discovery.workspace_root.as_ref() == Some(ingot_url) {
+            continue;
+        }
         let had_diagnostics = init_ingot(&mut backend.db, ingot_url);
         if had_diagnostics {
             warn!(
@@ -100,30 +104,24 @@ async fn discover_and_load_ingots(
     Ok(())
 }
 
-async fn read_file_text_optional(path: std::path::PathBuf) -> Option<String> {
-    tokio::task::spawn_blocking(move || {
-        struct FileContent;
+fn read_file_text_optional(path: &std::path::Path) -> Option<String> {
+    // Synchronous I/O is fine here: this runs on the dedicated actor thread
+    // (act_locally), NOT inside a Tokio runtime. Using tokio::spawn_blocking
+    // would panic with "no reactor running".
+    struct FileContent;
 
-        impl ResolutionHandler<FilesResolver> for FileContent {
-            type Item = Option<String>;
+    impl ResolutionHandler<FilesResolver> for FileContent {
+        type Item = Option<String>;
 
-            fn handle_resolution(
-                &mut self,
-                _description: &Url,
-                resource: FilesResource,
-            ) -> Self::Item {
-                resource.files.into_iter().next().map(|file| file.content)
-            }
+        fn handle_resolution(&mut self, _description: &Url, resource: FilesResource) -> Self::Item {
+            resource.files.into_iter().next().map(|file| file.content)
         }
+    }
 
-        let file_url = Url::from_file_path(path).ok()?;
-        let mut resolver = FilesResolver::new();
-        let mut handler = FileContent;
-        resolver.resolve(&mut handler, &file_url).ok().flatten()
-    })
-    .await
-    .ok()
-    .flatten()
+    let file_url = Url::from_file_path(path).ok()?;
+    let mut resolver = FilesResolver::new();
+    let mut handler = FileContent;
+    resolver.resolve(&mut handler, &file_url).ok().flatten()
 }
 
 pub async fn initialize(
@@ -146,6 +144,8 @@ pub async fn initialize(
         .and_then(|folder| folder.uri.to_file_path().ok())
         .unwrap_or_else(|| std::env::current_dir().unwrap());
 
+    backend.workspace_root = Some(root.clone());
+
     // Discover and load all ingots in the workspace
     discover_and_load_ingots(backend, &root).await?;
 
@@ -166,17 +166,86 @@ pub async fn initialized(
 ) -> Result<(), ResponseError> {
     info!("language server initialized! recieved notification!");
 
-    // Get all files from the workspace
-    let all_files: Vec<_> = backend
-        .db
-        .workspace()
-        .all_files(&backend.db)
-        .iter()
-        .map(|(url, _file)| url)
-        .collect();
+    // Register file watchers so the client notifies us when .fe or fe.toml
+    // files are created, changed, or deleted on disk (e.g. `fe new counter`).
+    {
+        use async_lsp::lsp_types::{
+            DidChangeWatchedFilesRegistrationOptions, FileSystemWatcher, GlobPattern, Registration,
+            RegistrationParams,
+        };
 
-    for url in all_files {
-        let _ = backend.client.emit(NeedsDiagnostics(url));
+        let watchers = vec![
+            FileSystemWatcher {
+                glob_pattern: GlobPattern::String("**/*.fe".to_string()),
+                kind: None, // Create | Change | Delete
+            },
+            FileSystemWatcher {
+                glob_pattern: GlobPattern::String("**/fe.toml".to_string()),
+                kind: None,
+            },
+        ];
+
+        let registration = Registration {
+            id: "fe-file-watchers".to_string(),
+            method: "workspace/didChangeWatchedFiles".to_string(),
+            register_options: Some(
+                serde_json::to_value(DidChangeWatchedFilesRegistrationOptions { watchers })
+                    .expect("serialization should not fail"),
+            ),
+        };
+
+        let mut client = backend.client.clone();
+        if let Err(e) = client
+            .register_capability(RegistrationParams {
+                registrations: vec![registration],
+            })
+            .await
+        {
+            warn!("Failed to register file watchers: {:?}", e);
+        } else {
+            info!("Registered file watchers for *.fe and fe.toml");
+        }
+    }
+
+    // Get all files from the workspace and emit diagnostics requests for one
+    // representative `.fe` file per ingot in the opened workspace root.
+    //
+    // This avoids scheduling work for built-in core/std files on startup (which
+    // can be large and delay workspace diagnostics).
+    let mut seen_ingots = FxHashSet::default();
+    let mut emitted_any = false;
+    for (url, _file) in backend.db.workspace().all_files(&backend.db).iter() {
+        if url.scheme() != "file" || !url.path().ends_with(".fe") {
+            continue;
+        }
+
+        if let Some(root) = backend.workspace_root.as_ref() {
+            let Ok(path) = url.to_file_path() else {
+                continue;
+            };
+            if !path.starts_with(root) {
+                continue;
+            }
+        }
+
+        let Some(ingot) = backend
+            .db
+            .workspace()
+            .containing_ingot(&backend.db, url.clone())
+        else {
+            continue;
+        };
+
+        if seen_ingots.insert(ingot) {
+            emitted_any = true;
+            let _ = backend.client.emit(NeedsDiagnostics(url.clone()));
+        }
+    }
+
+    if !emitted_any {
+        for (url, _file) in backend.db.workspace().all_files(&backend.db).iter() {
+            let _ = backend.client.emit(NeedsDiagnostics(url.clone()));
+        }
     }
 
     let _ = backend.client.clone().log_message(LogMessageParams {
@@ -323,7 +392,7 @@ pub async fn handle_file_change(
         }
         ChangeKind::Create => {
             info!("file created: {:?}", &path_str);
-            let Some(contents) = read_file_text_optional(path.clone()).await else {
+            let Some(contents) = read_file_text_optional(&path) else {
                 error!("Failed to read file {}", path_str);
                 return Ok(());
             };
@@ -335,7 +404,7 @@ pub async fn handle_file_change(
 
                 // If a fe.toml was created, discover and load all files in the new ingot
                 if is_fe_toml && let Some(ingot_dir) = path.parent() {
-                    load_ingot_files(backend, ingot_dir).await?;
+                    load_ingot_files(backend, ingot_dir)?;
                 }
             }
         }
@@ -344,7 +413,7 @@ pub async fn handle_file_change(
             let contents = if let Some(text) = contents {
                 text
             } else {
-                let Some(contents) = read_file_text_optional(path.clone()).await else {
+                let Some(contents) = read_file_text_optional(&path) else {
                     error!("Failed to read file {}", path_str);
                     return Ok(());
                 };
@@ -358,14 +427,52 @@ pub async fn handle_file_change(
 
                 // If fe.toml was modified, re-scan the ingot for any new files
                 if is_fe_toml && let Some(ingot_dir) = path.parent() {
-                    load_ingot_files(backend, ingot_dir).await?;
+                    load_ingot_files(backend, ingot_dir)?;
                 }
             }
         }
         ChangeKind::Delete => {
             info!("file deleted: {:?}", path_str);
-            if let Ok(url) = url::Url::from_file_path(path) {
+            if let Ok(url) = url::Url::from_file_path(&path) {
                 backend.db.workspace().remove(&mut backend.db, &url);
+            }
+
+            // When a fe.toml is deleted, re-init the parent workspace so that
+            // dependents get their diagnostics recomputed (the removed ingot's
+            // imports will now fail in other members).
+            if is_fe_toml {
+                if let Ok(ingot_url) = Url::from_directory_path(path.parent().unwrap_or(&path)) {
+                    let workspace_root = backend
+                        .db
+                        .dependency_graph()
+                        .workspace_roots(&backend.db)
+                        .into_iter()
+                        .filter(|root| {
+                            ingot_url.as_str().starts_with(root.as_str()) && *root != ingot_url
+                        })
+                        .max_by_key(|root| root.as_str().len());
+
+                    if let Some(ref workspace_root) = workspace_root {
+                        info!(
+                            "Re-initializing workspace {:?} after ingot deletion",
+                            workspace_root
+                        );
+                        let _ = init_ingot(&mut backend.db, workspace_root);
+                    }
+                }
+
+                // Emit diagnostics for all workspace files
+                let all_files: Vec<_> = backend
+                    .db
+                    .workspace()
+                    .all_files(&backend.db)
+                    .iter()
+                    .map(|(url, _file)| url)
+                    .collect();
+                for url in all_files {
+                    let _ = backend.client.emit(NeedsDiagnostics(url));
+                }
+                return Ok(());
             }
         }
     }
@@ -374,7 +481,7 @@ pub async fn handle_file_change(
     Ok(())
 }
 
-async fn load_ingot_files(
+fn load_ingot_files(
     backend: &mut Backend,
     ingot_dir: &std::path::Path,
 ) -> Result<(), ResponseError> {
@@ -386,6 +493,31 @@ async fn load_ingot_files(
             format!("Invalid ingot path: {ingot_dir:?}"),
         )
     })?;
+
+    // If this ingot is under a known workspace root, re-init the workspace so
+    // that the new member gets registered and dependency edges from other
+    // members (e.g. counter_test → counter) are established.
+    let workspace_root = backend
+        .db
+        .dependency_graph()
+        .workspace_roots(&backend.db)
+        .into_iter()
+        .filter(|root| ingot_url.as_str().starts_with(root.as_str()) && *root != ingot_url)
+        .max_by_key(|root| root.as_str().len());
+
+    if let Some(ref workspace_root) = workspace_root {
+        info!(
+            "Re-initializing workspace {:?} after new member ingot {:?}",
+            workspace_root, ingot_dir
+        );
+        let had_diagnostics = init_ingot(&mut backend.db, workspace_root);
+        if had_diagnostics {
+            warn!(
+                "Workspace re-initialization produced diagnostics for {:?}",
+                workspace_root
+            );
+        }
+    }
 
     let had_diagnostics = init_ingot(&mut backend.db, &ingot_url);
     if had_diagnostics {

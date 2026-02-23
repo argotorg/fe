@@ -1,0 +1,9 @@
+pub trait Trait<const N: u32> {}
+
+impl Trait<_> for i32 {}
+
+fn needs<T>()
+where
+    T: Trait<_>,
+{
+}

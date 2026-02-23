@@ -25,9 +25,10 @@ use crate::analysis::{
     HirAnalysisDb,
     name_resolution::QueryDirective,
     ty::{
-        adt_def::AdtRef,
+        adt_def::{AdtRef, adt_layout_hole_tys},
         binder::Binder,
         canonical::{Canonical, Canonicalized},
+        const_ty::ConstTyId,
         fold::TyFoldable,
         normalize::normalize_ty,
         trait_def::{TraitInstId, impls_for_ty_with_constraints},
@@ -98,6 +99,9 @@ pub enum PathResErrorKind<'db> {
     ArgTypeMismatch {
         expected: Option<TyId<'db>>,
         given: Option<TyId<'db>>,
+    },
+    TraitConstHoleArg {
+        arg_idx: usize,
     },
 
     /// Trait path generic argument expected a type; wrong domain was found.
@@ -182,6 +186,9 @@ impl<'db> PathResError<'db> {
             }
             PathResErrorKind::ArgTypeMismatch { .. } => {
                 "Generic const argument type mismatch".to_string()
+            }
+            PathResErrorKind::TraitConstHoleArg { .. } => {
+                "Layout hole is not allowed in trait generic arguments".to_string()
             }
             PathResErrorKind::TraitGenericArgType { .. } => {
                 "Trait generic argument expects a type".to_string()
@@ -282,6 +289,14 @@ impl<'db> PathResError<'db> {
                 expected,
                 given,
             },
+
+            PathResErrorKind::TraitConstHoleArg { arg_idx: _ } => {
+                let hole_span = seg_span.clone().into_atom();
+                PathResDiag::TraitConstHoleArg {
+                    span: hole_span.into(),
+                    ident,
+                }
+            }
 
             PathResErrorKind::InvalidPathSegment(res) => PathResDiag::InvalidPathSegment {
                 span,
@@ -436,7 +451,10 @@ fn make_query<'db>(
         directive = directive.disallow_lex();
     }
 
-    let name = path.ident(db).unwrap();
+    let name = path
+        .ident(db)
+        .to_opt()
+        .unwrap_or_else(|| IdentId::new(db, "_".to_string()));
     EarlyNameQueryId::new(db, name, scope, directive)
 }
 
@@ -1390,6 +1408,9 @@ pub fn resolve_name_res<'db>(
                                     TraitArgError::ArgTypeMismatch { expected, given } => {
                                         PathResErrorKind::ArgTypeMismatch { expected, given }
                                     }
+                                    TraitArgError::ConstHoleNotAllowed { arg_idx } => {
+                                        PathResErrorKind::TraitConstHoleArg { arg_idx }
+                                    }
                                     TraitArgError::Ignored => PathResErrorKind::ParseError,
                                 };
                                 return Err(PathResError {
@@ -1406,7 +1427,9 @@ pub fn resolve_name_res<'db>(
             ScopeId::GenericParam(parent, idx) => {
                 let owner = GenericParamOwner::from_item_opt(parent).unwrap();
                 let param_set = collect_generic_params(db, owner);
-                let ty = param_set.param_by_original_idx(db, idx as usize).unwrap();
+                let ty = param_set
+                    .param_by_original_idx(db, idx as usize)
+                    .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other));
                 let ty = TyId::foldl(db, ty, args);
                 PathRes::Ty(ty)
             }
@@ -1484,10 +1507,36 @@ fn ty_from_adtref<'db>(
 ) -> PathResolutionResult<'db, TyId<'db>> {
     let adt = adt_ref.as_adt(db);
     let ty = TyId::adt(db, adt);
+    let explicit_param_len = adt.param_set(db).params(db).len();
+    let explicit_provided_len = args.len().min(explicit_param_len);
+    let explicit_args = &args[..explicit_provided_len];
+    let layout_provided = &args[explicit_provided_len..];
+
     // Fill trailing defaults (if any)
-    let completed_args =
-        adt.param_set(db)
-            .complete_explicit_args_with_defaults(db, None, args, assumptions);
+    let mut completed_args = adt.param_set(db).complete_explicit_args_with_defaults(
+        db,
+        None,
+        explicit_args,
+        assumptions,
+    );
+    completed_args.extend(layout_provided.iter().copied());
+
+    let layout_hole_tys = adt_layout_hole_tys(db, adt);
+    let provided_layout_len = layout_provided.len();
+    for hole_ty in layout_hole_tys.iter().copied().skip(provided_layout_len) {
+        completed_args.push(TyId::new(
+            db,
+            TyData::ConstTy(ConstTyId::hole_with_ty(
+                db,
+                if hole_ty.has_invalid(db) {
+                    TyId::u256(db)
+                } else {
+                    hole_ty
+                },
+            )),
+        ));
+    }
+
     let applied = TyId::foldl(db, ty, &completed_args);
     if let TyData::Invalid(InvalidCause::TooManyGenericArgs { expected, given }) = applied.data(db)
     {

@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/storage_map_wrong_provider.fe
+---
+error[8-0036]: missing effect `StorageMap<u256, u256, BALANCES_ROOT>` required by `needs_balances`
+   ┌─ storage_map_wrong_provider.fe:21:17
+   │
+21 │                 needs_balances()
+   │                 ^^^^^^^^^^^^^^^^ `needs_balances` requires effect `StorageMap<u256, u256, BALANCES_ROOT>` to be in scope
+   │
+   = provide it with `with (StorageMap<u256, u256, BALANCES_ROOT> = value)` or require it via `uses StorageMap<u256, u256, BALANCES_ROOT>`

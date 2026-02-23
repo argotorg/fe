@@ -2,11 +2,12 @@ use crate::analysis::HirAnalysisDb;
 use crate::analysis::name_resolution::{
     NameDomain, PathRes, resolve_ident_to_bucket, resolve_path,
 };
-use crate::analysis::ty::const_ty::ConstTyData;
+use crate::analysis::ty::const_ty::{ConstTyData, ConstTyId};
 use crate::analysis::ty::fold::{AssocTySubst, TyFoldable, TyFolder};
 use crate::analysis::ty::trait_def::TraitInstId;
 use crate::analysis::ty::trait_resolution::PredicateListId;
-use crate::analysis::ty::ty_def::{TyData, TyId};
+use crate::analysis::ty::ty_def::{TyBase, TyData, TyId};
+use crate::analysis::ty::ty_lower::collect_generic_params;
 use crate::hir_def::scope_graph::ScopeId;
 use crate::hir_def::{CallableDef, Func, PathId};
 use salsa::Update;
@@ -36,30 +37,43 @@ pub(crate) fn effect_key_kind<'db>(
         Ok(PathRes::Trait(_) | PathRes::TraitMethod(..)) => EffectKeyKind::Trait,
         _ => EffectKeyKind::Other,
     };
+    let classify_bucket = |lookup_scope, ident| {
+        let path = PathId::from_ident(db, ident);
+        if let Ok(res) = resolve_ident_to_bucket(db, path, lookup_scope).pick(NameDomain::TYPE) {
+            if res.is_trait() {
+                return EffectKeyKind::Trait;
+            }
+            if res.is_type() {
+                return EffectKeyKind::Type;
+            }
+        }
+        EffectKeyKind::Other
+    };
 
     // Prefer classifying the key without lowering generic args to avoid recursive generic-arg
-    // lowering cycles. If that fails (e.g., generic traits/types that require args), fall back to
-    // resolving the full key path.
+    // lowering cycles.
     let kind = classify(resolve_path(db, stripped_path, scope, assumptions, false));
     if kind != EffectKeyKind::Other {
         return kind;
     }
 
-    // `resolve_path` rejects generic trait paths when the generic args are stripped, which can
-    // create a cycle when this classification runs during generic-param collection. For bare
-    // identifiers, consult the name-resolution bucket to classify without lowering args.
-    if stripped_path.parent(db).is_none()
-        && let Ok(res) = resolve_ident_to_bucket(db, stripped_path, scope).pick(NameDomain::TYPE)
-    {
-        if res.is_trait() {
-            return EffectKeyKind::Trait;
+    let Some(ident) = stripped_path.ident(db).to_opt() else {
+        return EffectKeyKind::Other;
+    };
+
+    // `resolve_path` rejects generic paths after stripping args (e.g. `Storage<T>` -> `Storage`).
+    // Resolve the parent path, then classify the leaf identifier in that scope without touching
+    // generic args.
+    if let Some(parent_path) = stripped_path.parent(db) {
+        if let Ok(parent_res) = resolve_path(db, parent_path, scope, assumptions, false)
+            && let Some(parent_scope) = parent_res.as_scope(db)
+        {
+            return classify_bucket(parent_scope, ident);
         }
-        if res.is_type() {
-            return EffectKeyKind::Type;
-        }
+        return EffectKeyKind::Other;
     }
 
-    classify(resolve_path(db, key_path, scope, assumptions, false))
+    classify_bucket(scope, ident)
 }
 
 fn effect_key_kind_cycle_initial<'db>(
@@ -120,6 +134,104 @@ pub fn place_effect_provider_param_index_map<'db>(
     }
 
     out
+}
+
+/// Resolves a type effect key path and applies effect-key normalization.
+///
+/// Normalization currently means existentializing omitted trailing const args only
+/// when the omitted const parameter defaults to a layout hole (`_`).
+pub(crate) fn resolve_normalized_type_effect_key<'db>(
+    db: &'db dyn HirAnalysisDb,
+    key_path: PathId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Option<TyId<'db>> {
+    match resolve_path(db, key_path, scope, assumptions, false) {
+        Ok(PathRes::Ty(ty)) if ty.is_star_kind(db) => Some(
+            existentialize_omitted_const_args_in_effect_key(db, key_path, ty),
+        ),
+        Ok(PathRes::TyAlias(_, ty)) if ty.is_star_kind(db) => Some(ty),
+        _ => None,
+    }
+}
+
+/// Replaces omitted trailing const generic arguments in a type effect key with typed holes.
+///
+/// Example: for `uses (map: StorageMap<K, V>)`, where `StorageMap` has
+/// `const SALT: u256 = ...`, this returns `StorageMap<K, V, _>` so later lowering can
+/// bind that const as an effect-specific inference variable.
+pub(crate) fn existentialize_omitted_const_args_in_effect_key<'db>(
+    db: &'db dyn HirAnalysisDb,
+    key_path: PathId<'db>,
+    ty: TyId<'db>,
+) -> TyId<'db> {
+    let (base, args) = ty.decompose_ty_app(db);
+    let TyData::TyBase(base_ty) = base.data(db) else {
+        return ty;
+    };
+
+    let (param_set, params, offset) = match base_ty {
+        TyBase::Adt(adt) => {
+            let set = *adt.param_set(db);
+            (
+                set,
+                set.explicit_params(db),
+                set.offset_to_explicit_params_position(db),
+            )
+        }
+        TyBase::Func(func) => match *func {
+            CallableDef::Func(def) => {
+                let set = collect_generic_params(db, def.into());
+                (
+                    set,
+                    set.explicit_params(db),
+                    set.offset_to_explicit_params_position(db),
+                )
+            }
+            CallableDef::VariantCtor(_) => return ty,
+        },
+        _ => return ty,
+    };
+    if params.is_empty() {
+        return ty;
+    }
+
+    let provided_explicit_len = key_path.generic_args(db).data(db).len().min(params.len());
+    if provided_explicit_len >= params.len() {
+        return ty;
+    }
+
+    let mut completed_args = args.to_vec();
+    let mut changed = false;
+    for (explicit_idx, param) in params.iter().enumerate().skip(provided_explicit_len) {
+        if !param_set.explicit_const_param_default_is_hole(db, explicit_idx) {
+            continue;
+        }
+        let Some(const_ty_ty) = param.const_ty_ty(db) else {
+            continue;
+        };
+
+        let arg_idx = offset + explicit_idx;
+        if arg_idx >= completed_args.len() {
+            continue;
+        }
+        let hole_ty = if const_ty_ty.has_invalid(db) {
+            TyId::u256(db)
+        } else {
+            const_ty_ty
+        };
+        let hole = TyId::const_ty(db, ConstTyId::hole_with_ty(db, hole_ty));
+        if completed_args[arg_idx] != hole {
+            completed_args[arg_idx] = hole;
+            changed = true;
+        }
+    }
+
+    if !changed {
+        return ty;
+    }
+
+    TyId::foldl(db, base, &completed_args)
 }
 
 pub(crate) fn instantiate_trait_effect_requirement<'db>(

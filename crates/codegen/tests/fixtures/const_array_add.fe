@@ -1,0 +1,5 @@
+const C: [u256; 3] = [10, 20, 30]
+
+pub fn get_sum() -> u256 {
+    return 1 + C[0]
+}

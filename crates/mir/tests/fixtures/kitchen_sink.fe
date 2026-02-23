@@ -52,13 +52,13 @@ fn test_effects_and_aggregates() uses (sto: mut RawStorage, mem: mut RawMem) {
 }
 
 fn get_balance(key: u256) -> u256
-    uses (balances: StorageMap<u256, u256, BALANCES_SALT>)
+    uses (balances: StorageMap<u256, u256>)
 {
     balances.get(key: key)
 }
 
 fn set_balance(key: u256, value: u256)
-    uses (balances: mut StorageMap<u256, u256, BALANCES_SALT>)
+    uses (balances: mut StorageMap<u256, u256>)
 {
     balances.set(key: key, value: value)
 }

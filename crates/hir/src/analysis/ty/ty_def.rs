@@ -22,14 +22,15 @@ use salsa::Update;
 use smallvec::SmallVec;
 
 use super::{
-    adt_def::AdtDef,
+    adt_def::{AdtDef, adt_layout_hole_tys},
     const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
     diagnostics::{TraitConstraintDiag, TyDiagCollection},
+    fold::{TyFoldable, TyFolder},
     trait_def::TraitInstId,
     trait_resolution::{PredicateListId, WellFormedness},
     ty_lower::collect_generic_params,
     unify::InferenceKey,
-    visitor::{TyVisitable, TyVisitor},
+    visitor::{TyVisitable, TyVisitor, walk_ty},
 };
 use crate::analysis::{
     HirAnalysisDb,
@@ -510,6 +511,7 @@ impl<'db> TyId<'db> {
             TyData::ConstTy(const_ty) => match const_ty.data(db) {
                 ConstTyData::TyVar(..) => None,
                 ConstTyData::TyParam(ty_param, _) => Some(ty_param.scope(db)),
+                ConstTyData::Hole(..) => None,
                 ConstTyData::Evaluated(..) => None,
                 ConstTyData::Abstract(..) => None,
                 ConstTyData::UnEvaluated { body, .. } => Some(body.scope()),
@@ -736,13 +738,34 @@ impl<'db> TyId<'db> {
 
     /// Returns the property of the type that can be applied to the `self`.
     pub fn applicable_ty(self, db: &'db dyn HirAnalysisDb) -> Option<ApplicableTyProp<'db>> {
+        let (base, args) = self.decompose_ty_app(db);
+        if let TyData::TyBase(TyBase::Adt(adt_def)) = base.data(db) {
+            let params = adt_def.params(db);
+            if let Some(expected) = params.get(args.len()).copied() {
+                return Some(ApplicableTyProp {
+                    kind: expected.kind(db).clone(),
+                    const_ty: expected.const_ty_ty(db),
+                });
+            }
+
+            let layout_holes = adt_layout_hole_tys(db, *adt_def);
+            let layout_idx = args.len().saturating_sub(params.len());
+            if let Some(expected_const_ty) = layout_holes.get(layout_idx).copied() {
+                return Some(ApplicableTyProp {
+                    kind: expected_const_ty.kind(db).clone(),
+                    const_ty: Some(expected_const_ty),
+                });
+            }
+
+            return None;
+        }
+
         let applicable_kind = match self.kind(db) {
             Kind::Star => return None,
             Kind::Abs(inner) => inner.0.clone(),
             Kind::Any => Kind::Any,
         };
 
-        let (base, args) = self.decompose_ty_app(db);
         let TyData::TyBase(base) = base.data(db) else {
             return Some(ApplicableTyProp {
                 kind: applicable_kind.clone(),
@@ -751,12 +774,6 @@ impl<'db> TyId<'db> {
         };
 
         let const_ty = match base {
-            TyBase::Adt(adt_def) => {
-                let params = adt_def.params(db);
-                let param = params.get(args.len()).copied();
-                param.and_then(|ty| ty.const_ty_ty(db))
-            }
-
             TyBase::Func(func_def) => {
                 let params = func_def.params(db);
                 let param = params.get(args.len()).copied();
@@ -813,7 +830,7 @@ impl<'db> TyId<'db> {
                 AdtRef::Struct(_) => {
                     let args = self.generic_args(db);
                     (0..adt_def.fields(db)[0].num_types())
-                        .map(|idx| adt_def.fields(db)[0].ty(db, idx).instantiate(db, args))
+                        .map(|idx| instantiate_adt_field_ty(db, adt_def, 0, idx, args))
                         .collect()
                 }
                 _ => vec![],
@@ -822,6 +839,123 @@ impl<'db> TyId<'db> {
             vec![]
         }
     }
+}
+
+pub(crate) fn instantiate_adt_field_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    adt_def: AdtDef<'db>,
+    variant_idx: usize,
+    field_idx: usize,
+    args: &[TyId<'db>],
+) -> TyId<'db> {
+    let explicit_len = adt_def.params(db).len();
+    let (explicit_args, layout_args) = args.split_at(explicit_len.min(args.len()));
+    let field_ty = adt_def
+        .fields(db)
+        .get(variant_idx)
+        .and_then(|field_list| {
+            (field_idx < field_list.num_types()).then(|| field_list.ty(db, field_idx))
+        })
+        .map(|field_ty| field_ty.instantiate(db, explicit_args))
+        .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other));
+    let layout_offset =
+        adt_field_layout_hole_offset(db, adt_def, variant_idx, field_idx, explicit_args);
+    substitute_layout_holes(
+        db,
+        field_ty,
+        &layout_args[layout_offset.min(layout_args.len())..],
+    )
+}
+
+pub(crate) fn substitute_layout_holes<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    layout_args: &[TyId<'db>],
+) -> TyId<'db> {
+    if layout_args.is_empty() {
+        return ty;
+    }
+
+    struct LayoutHoleSubst<'a, 'db> {
+        db: &'db dyn HirAnalysisDb,
+        args: &'a [TyId<'db>],
+        next: usize,
+    }
+
+    impl<'a, 'db> TyFolder<'db> for LayoutHoleSubst<'a, 'db> {
+        fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+            if let TyData::ConstTy(const_ty) = ty.data(self.db)
+                && matches!(const_ty.data(self.db), ConstTyData::Hole(_))
+                && let Some(arg) = self.args.get(self.next).copied()
+            {
+                self.next += 1;
+                return arg;
+            }
+
+            ty.super_fold_with(db, self)
+        }
+    }
+
+    let mut folder = LayoutHoleSubst {
+        db,
+        args: layout_args,
+        next: 0,
+    };
+    ty.fold_with(db, &mut folder)
+}
+
+fn adt_field_layout_hole_offset<'db>(
+    db: &'db dyn HirAnalysisDb,
+    adt_def: AdtDef<'db>,
+    variant_idx: usize,
+    field_idx: usize,
+    explicit_args: &[TyId<'db>],
+) -> usize {
+    adt_def
+        .fields(db)
+        .iter()
+        .enumerate()
+        .map(|(idx, field_list)| {
+            let end = if idx < variant_idx {
+                field_list.num_types()
+            } else if idx == variant_idx {
+                field_idx
+            } else {
+                0
+            };
+            (0..end)
+                .map(|field| {
+                    count_const_holes(db, field_list.ty(db, field).instantiate(db, explicit_args))
+                })
+                .sum::<usize>()
+        })
+        .sum()
+}
+
+fn count_const_holes<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> usize {
+    struct Counter<'db> {
+        db: &'db dyn HirAnalysisDb,
+        count: usize,
+    }
+
+    impl<'db> TyVisitor<'db> for Counter<'db> {
+        fn db(&self) -> &'db dyn HirAnalysisDb {
+            self.db
+        }
+
+        fn visit_ty(&mut self, ty: TyId<'db>) {
+            if let TyData::ConstTy(const_ty) = ty.data(self.db)
+                && matches!(const_ty.data(self.db), ConstTyData::Hole(_))
+            {
+                self.count += 1;
+            }
+            walk_ty(self, ty);
+        }
+    }
+
+    let mut counter = Counter { db, count: 0 };
+    ty.visit_with(&mut counter);
+    counter.count
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1187,6 +1321,10 @@ impl<'db> TyParam<'db> {
         matches!(self.variant, Variant::EffectProvider)
     }
 
+    pub fn is_implicit(&self) -> bool {
+        matches!(self.variant, Variant::Implicit)
+    }
+
     pub(super) fn normal_param(
         name: IdentId<'db>,
         idx: usize,
@@ -1234,6 +1372,16 @@ impl<'db> TyParam<'db> {
         }
     }
 
+    pub fn implicit_param(name: IdentId<'db>, idx: usize, kind: Kind, scope: ScopeId<'db>) -> Self {
+        Self {
+            name,
+            idx,
+            kind,
+            variant: Variant::Implicit,
+            owner: scope,
+        }
+    }
+
     pub fn original_idx(&self, db: &'db dyn HirAnalysisDb) -> usize {
         match self.variant {
             Variant::Normal | Variant::TraitSelf => {
@@ -1246,6 +1394,7 @@ impl<'db> TyParam<'db> {
             }
             Variant::Effect => self.idx,
             Variant::EffectProvider => self.idx,
+            Variant::Implicit => self.idx,
         }
     }
 
@@ -1257,6 +1406,7 @@ impl<'db> TyParam<'db> {
             }
             Variant::Effect => ScopeId::FuncParam(self.owner.item(), self.idx as u16),
             Variant::EffectProvider => self.owner,
+            Variant::Implicit => self.owner,
         }
     }
 }
@@ -1272,6 +1422,8 @@ enum Variant {
     /// These are inserted by type lowering for functions that have type effects so that
     /// monomorphization can treat effect domains as ordinary generic arguments.
     EffectProvider,
+    /// Synthetic generic parameter that does not map to a source-level generic parameter.
+    Implicit,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, derive_more::From, Update)]

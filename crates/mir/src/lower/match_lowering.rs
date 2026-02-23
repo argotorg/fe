@@ -237,6 +237,20 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         binding_ty,
                         binding_mode,
                     );
+                    let carries_space = self
+                        .value_repr_for_ty(binding_ty, AddressSpaceKind::Memory)
+                        .address_space()
+                        .is_some()
+                        || binding_ty.as_capability(self.db).is_some();
+                    if carries_space
+                        && let Some(space) = crate::ir::try_value_address_space_in(
+                            &self.builder.body.values,
+                            &self.builder.body.locals,
+                            value_id,
+                        )
+                    {
+                        self.set_pat_address_space(binding_pat, space);
+                    }
                     self.assign(None, Some(local), crate::ir::Rvalue::Value(value_id));
                 }
             }
@@ -606,7 +620,12 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         if path.is_empty() {
             if matches!(binding_mode, PatBindingMode::ByBorrow) {
                 let place = Place::new(scrutinee_value, MirProjectionPath::new());
-                let repr = self.value_repr_for_ty(binding_ty, AddressSpaceKind::Memory);
+                let space = if binding_ty.as_capability(self.db).is_some() {
+                    self.capability_binding_space_from_container(scrutinee_value)
+                } else {
+                    self.value_address_space_or_memory_fallback(scrutinee_value)
+                };
+                let repr = self.value_repr_for_ty(binding_ty, space);
                 let handle = self.alloc_value(binding_ty, ValueOrigin::PlaceRef(place), repr);
                 return (handle, handle);
             }
@@ -629,7 +648,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         {
             return (cast, cast);
         }
-        let addr_space = self.value_address_space(scrutinee_value);
+        let addr_space = if binding_ty.as_capability(self.db).is_some() {
+            self.capability_binding_space_from_container(scrutinee_value)
+        } else {
+            self.value_address_space(scrutinee_value)
+        };
 
         // Create the Place
         let place = Place::new(
@@ -653,6 +676,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             place_ref_id
         } else {
             let dest = self.alloc_temp_local(binding_ty, false, "load");
+            if binding_ty.as_capability(self.db).is_some() {
+                self.builder.body.locals[dest.index()].address_space = addr_space;
+            }
             self.assign(None, Some(dest), crate::ir::Rvalue::Load { place });
             alloc_local_value(self, binding_ty, dest)
         };

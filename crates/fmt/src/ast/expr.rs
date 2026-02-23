@@ -403,17 +403,20 @@ impl ToDoc for ast::UnExpr {
         let alloc = &ctx.alloc;
 
         if !has_comment_tokens(self.syntax()) {
-            let Some(op) = self
-                .op()
-                .map(|o| ctx.snippet(o.syntax().text_range()).trim())
-            else {
+            let Some(op) = self.op() else {
                 return alloc.nil();
             };
+            let op_text = ctx.snippet(op.syntax().text_range()).trim();
             let Some(expr) = self.expr() else {
-                return alloc.text(op);
+                return alloc.text(op_text);
             };
 
-            return alloc.text(op).append(expr.to_doc(ctx));
+            let op_doc = alloc.text(op_text);
+            return if matches!(op, ast::UnOp::Mut(_) | ast::UnOp::Ref(_)) {
+                op_doc.append(alloc.text(" ")).append(expr.to_doc(ctx))
+            } else {
+                op_doc.append(expr.to_doc(ctx))
+            };
         }
 
         let indent = ctx.config.indent_width as isize;
@@ -1010,15 +1013,17 @@ impl ToDoc for ast::UsesParam {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
         let alloc = &ctx.alloc;
         let mut doc = alloc.nil();
-
-        if self.mut_token().is_some() {
-            doc = doc.append(alloc.text("mut "));
-        }
+        let is_mut = self.mut_token().is_some();
 
         if let Some(name) = self.name() {
             doc = doc
                 .append(alloc.text(ctx.snippet(name.syntax().text_range()).trim()))
                 .append(alloc.text(": "));
+            if is_mut {
+                doc = doc.append(alloc.text("mut "));
+            }
+        } else if is_mut {
+            doc = doc.append(alloc.text("mut "));
         }
 
         if let Some(path) = self.path() {
