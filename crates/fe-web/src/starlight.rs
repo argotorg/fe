@@ -8,6 +8,7 @@ use std::fmt::Write as _;
 use std::io;
 use std::path::Path;
 
+use crate::escape::escape_html;
 use crate::model::*;
 
 /// Generate Starlight-compatible markdown pages from a [`DocIndex`].
@@ -38,6 +39,9 @@ pub fn generate(index: &DocIndex, output_dir: &Path, base_url: &str) -> io::Resu
         }
         write_item_page(item, index, output_dir, base_url, &collisions)?;
     }
+
+    // Write web component assets for Starlight to import
+    write_component_assets(output_dir)?;
 
     Ok(())
 }
@@ -133,6 +137,38 @@ fn kind_badge(kind: DocItemKind) -> (&'static str, &'static str) {
 // ---------------------------------------------------------------------------
 // Page writers
 // ---------------------------------------------------------------------------
+
+/// Render a signature as an HTML web component.
+///
+/// If `rich_signature` is non-empty, emits `<fe-signature data='...'>` with the
+/// rich signature serialized as JSON. Otherwise falls back to `<fe-code-block>`.
+fn render_signature_html(signature: &str, rich_signature: &[SignaturePart]) -> String {
+    if !rich_signature.is_empty() {
+        let json = serde_json::to_string(rich_signature).unwrap_or_default();
+        format!(
+            "<fe-signature data='{}'>{}</fe-signature>",
+            escape_html(&json),
+            escape_html(signature),
+        )
+    } else {
+        format!(
+            "<fe-code-block lang=\"fe\">{}</fe-code-block>",
+            escape_html(signature),
+        )
+    }
+}
+
+/// Write web component JS/CSS assets alongside the generated markdown.
+fn write_component_assets(output_dir: &Path) -> io::Result<()> {
+    use crate::assets::{FE_CODE_BLOCK_JS, FE_HIGHLIGHT_CSS, FE_SIGNATURE_JS};
+
+    let dir = output_dir.join("_components");
+    std::fs::create_dir_all(&dir)?;
+    std::fs::write(dir.join("fe-code-block.js"), FE_CODE_BLOCK_JS)?;
+    std::fs::write(dir.join("fe-signature.js"), FE_SIGNATURE_JS)?;
+    std::fs::write(dir.join("fe-highlight.css"), FE_HIGHLIGHT_CSS)?;
+    Ok(())
+}
 
 fn write_root_index(index: &DocIndex, output_dir: &Path, base_url: &str) -> io::Result<()> {
     let mut md = String::new();
@@ -259,10 +295,7 @@ fn write_item_page(
 
     // Signature
     if !item.signature.is_empty() {
-        writeln!(md, "```fe").unwrap();
-        writeln!(md, "{}", item.signature).unwrap();
-        writeln!(md, "```").unwrap();
-        writeln!(md).unwrap();
+        writeln!(md, "{}\n", render_signature_html(&item.signature, &item.rich_signature)).unwrap();
     }
 
     // Documentation body
@@ -306,7 +339,7 @@ fn render_children(md: &mut String, children: &[DocChild]) {
         for child in items {
             writeln!(md, "### `{}`\n", child.name).unwrap();
             if !child.signature.is_empty() {
-                writeln!(md, "```fe\n{}\n```\n", child.signature).unwrap();
+                writeln!(md, "{}\n", render_signature_html(&child.signature, &child.rich_signature)).unwrap();
             }
             if let Some(docs) = &child.docs {
                 writeln!(md, "{docs}\n").unwrap();
@@ -336,13 +369,13 @@ fn render_trait_impls(
         writeln!(md, "### {heading}\n").unwrap();
 
         if !ti.signature.is_empty() {
-            writeln!(md, "```fe\n{}\n```\n", ti.signature).unwrap();
+            writeln!(md, "{}\n", render_signature_html(&ti.signature, &ti.rich_signature)).unwrap();
         }
 
         for method in &ti.methods {
             writeln!(md, "#### `{}`\n", method.name).unwrap();
             if !method.signature.is_empty() {
-                writeln!(md, "```fe\n{}\n```\n", method.signature).unwrap();
+                writeln!(md, "{}\n", render_signature_html(&method.signature, &method.rich_signature)).unwrap();
             }
             if let Some(docs) = &method.docs {
                 writeln!(md, "{docs}\n").unwrap();
@@ -366,7 +399,17 @@ fn render_implementors(
     writeln!(md, "|------|-----------|").unwrap();
     for imp in implementors {
         let url = item_url(&imp.type_url, DocItemKind::Struct, base_url, collisions);
-        writeln!(md, "| [{}]({url}) | `{}` |", imp.type_name, imp.signature).unwrap();
+        let sig_cell = if !imp.rich_signature.is_empty() {
+            let json = serde_json::to_string(&imp.rich_signature).unwrap_or_default();
+            format!(
+                "<fe-signature data='{}'>{}</fe-signature>",
+                escape_html(&json),
+                escape_html(&imp.signature),
+            )
+        } else {
+            format!("<code>{}</code>", escape_html(&imp.signature))
+        };
+        writeln!(md, "| [{}]({url}) | {sig_cell} |", imp.type_name).unwrap();
     }
     writeln!(md).unwrap();
 }
@@ -497,7 +540,12 @@ mod tests {
 
         let content = std::fs::read_to_string(dir.join("mylib/greeter.md")).unwrap();
         assert!(content.contains("text: struct"), "should have struct badge");
-        assert!(content.contains("pub struct Greeter"), "should have signature");
+        assert!(
+            content.contains("<fe-code-block") || content.contains("<fe-signature"),
+            "should use web component for signature, got:\n{content}"
+        );
+        assert!(content.contains("pub struct Greeter"), "should have signature text");
+        assert!(!content.contains("```fe"), "should not have fenced code blocks");
         assert!(content.contains("## Fields"), "should group fields");
         assert!(content.contains("### `name`"), "should have field heading");
         assert!(content.contains("## Methods"), "should group methods");
@@ -520,6 +568,30 @@ mod tests {
         assert!(content.contains("## Functions"), "should have Functions section");
         assert!(content.contains("[Greeter]"), "should link to Greeter");
         assert!(content.contains("[hello]"), "should link to hello");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn writes_component_assets() {
+        let index = sample_index();
+        let dir = std::env::temp_dir().join("fe_starlight_assets");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        generate(&index, &dir, "/api").unwrap();
+
+        let comp = dir.join("_components");
+        assert!(comp.join("fe-code-block.js").exists(), "fe-code-block.js");
+        assert!(comp.join("fe-signature.js").exists(), "fe-signature.js");
+        assert!(comp.join("fe-highlight.css").exists(), "fe-highlight.css");
+
+        // Verify content is non-empty
+        let cb = std::fs::read_to_string(comp.join("fe-code-block.js")).unwrap();
+        assert!(cb.contains("fe-code-block"), "should contain element name");
+        let sig = std::fs::read_to_string(comp.join("fe-signature.js")).unwrap();
+        assert!(sig.contains("fe-signature"), "should contain element name");
+        let css = std::fs::read_to_string(comp.join("fe-highlight.css")).unwrap();
+        assert!(!css.is_empty(), "CSS should be non-empty");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -118,17 +118,15 @@
   // Rich Signature Rendering
   // ============================================================================
 
-  function renderRichSignature(rich, fallback) {
-    if (!rich || rich.length === 0) {
-      return "<code>" + esc(fallback || "") + "</code>";
+  function renderRichSignature(rich, fallback, highlightedFallback) {
+    if (rich && rich.length > 0) {
+      var jsonAttr = esc(JSON.stringify(rich));
+      return "<fe-signature data='" + jsonAttr + "'>" + esc(fallback || "") + "</fe-signature>";
     }
-    var parts = rich.map(function (part) {
-      if (part.link) {
-        return '<a href="' + itemHref(part.link) + '" class="type-link">' + esc(part.text) + "</a>";
-      }
-      return "<span>" + esc(part.text) + "</span>";
-    });
-    return "<code>" + parts.join("") + "</code>";
+    if (highlightedFallback) {
+      return '<fe-code-block lang="fe" highlighted>' + highlightedFallback + "</fe-code-block>";
+    }
+    return '<fe-code-block lang="fe">' + esc(fallback || "") + "</fe-code-block>";
   }
 
   // ============================================================================
@@ -139,8 +137,7 @@
     var html = '<nav class="doc-sidebar">';
     html += '<div class="sidebar-header">';
     html += '<h1><a href="#" onclick="return false;">Fe Docs</a></h1>';
-    html += '<input type="search" id="search" placeholder="Search..." />';
-    html += '<div id="search-results"></div>';
+    html += "<fe-search></fe-search>";
     html += "</div>";
     html += '<div class="sidebar-nav">';
     modules.forEach(function (mod) {
@@ -225,7 +222,7 @@
     // Signature (non-modules only)
     if (!isModule && item.signature) {
       html += '<pre class="signature">';
-      html += renderRichSignature(item.rich_signature, item.signature);
+      html += renderRichSignature(item.rich_signature, item.signature, item.highlighted_signature);
       html += "</pre>";
     }
 
@@ -313,7 +310,7 @@
         html += '<div class="member-header">';
         html += '<a href="#' + esc(anchorId) + '" class="anchor">\u00a7</a>';
         var sig = child.signature || child.name;
-        html += renderRichSignature(child.rich_signature, sig);
+        html += renderRichSignature(child.rich_signature, sig, child.highlighted_signature);
         html += "</div>";
         if (child.docs) {
           html += '<div class="member-docs">' + esc(child.docs) + "</div>";
@@ -383,7 +380,7 @@
     // Signature for trait impls
     if (isTraitImpl) {
       html += '<pre class="rust impl-signature">';
-      html += renderRichSignature(impl_.rich_signature, impl_.signature);
+      html += renderRichSignature(impl_.rich_signature, impl_.signature, impl_.highlighted_signature);
       html += "</pre>";
     }
 
@@ -405,7 +402,7 @@
     var headerHtml =
       '<div class="method-header">' +
       '<a href="#' + esc(anchorId) + '" class="anchor">\u00a7</a>' +
-      '<h4 class="code-header">' + renderRichSignature(method.rich_signature, method.signature) + "</h4>" +
+      '<h4 class="code-header">' + renderRichSignature(method.rich_signature, method.signature, method.highlighted_signature) + "</h4>" +
       "</div>";
 
     if (method.docs) {
@@ -486,7 +483,7 @@
       html += '<div class="implementor-item" id="' + esc(anchorId) + '">';
       html += '<a href="#' + esc(anchorId) + '" class="anchor">\u00a7</a>';
       html += '<code class="implementor-sig">';
-      html += renderRichSignature(imp.rich_signature, imp.signature);
+      html += renderRichSignature(imp.rich_signature, imp.signature, imp.highlighted_signature);
       html += "</code>";
       html += '<a href="' + implLink + '" class="impl-link" title="Go to implementation">\u2192</a>';
       html += "</div>";
@@ -517,74 +514,6 @@
   }
 
   // ============================================================================
-  // Search
-  // ============================================================================
-
-  var searchTimeout = null;
-
-  function doSearch(query) {
-    clearTimeout(searchTimeout);
-    var resultsEl = document.getElementById("search-results");
-    if (!resultsEl) return;
-
-    if (!query || query.length === 0) {
-      resultsEl.innerHTML = "";
-      return;
-    }
-
-    searchTimeout = setTimeout(function () {
-      var scip = getScipStore();
-      var html = "";
-
-      if (scip) {
-        // SCIP-powered search: search by symbol name
-        try {
-          var scipResults = JSON.parse(scip.search(query));
-          scipResults.forEach(function (r) {
-            html += '<a href="' + itemHref(r.symbol) + '" class="search-result">';
-            html += '<span class="kind-badge">' + esc(scipKindName(r.kind)) + "</span>";
-            html += "<span>" + esc(r.display_name) + "</span>";
-            html += "</a>";
-          });
-        } catch (_) {
-          // Fall through to DocIndex search
-          scip = null;
-        }
-      }
-
-      if (!scip) {
-        // Fallback: DocIndex search
-        var index = getIndex();
-        var q = query.toLowerCase();
-        var results = index.items.filter(function (item) {
-          return item.name.toLowerCase().indexOf(q) !== -1 ||
-                 item.path.toLowerCase().indexOf(q) !== -1;
-        }).slice(0, 20);
-
-        results.forEach(function (item) {
-          var url = item.path + "/" + kindStr(item.kind);
-          html += '<a href="' + itemHref(url) + '" class="search-result">';
-          html += kindBadge(kindStr(item.kind));
-          html += "<span>" + esc(item.path) + "</span>";
-          html += "</a>";
-        });
-      }
-
-      resultsEl.innerHTML = html;
-    }, 150);
-  }
-
-  /** Map SCIP symbol_information::Kind values to display names */
-  function scipKindName(kind) {
-    var names = {
-      7: "class", 9: "ctor", 11: "enum", 12: "member", 15: "field",
-      17: "fn", 21: "iface", 26: "method", 30: "ns", 35: "pkg",
-      41: "prop", 49: "struct", 53: "trait", 54: "type", 55: "alias",
-    };
-    return names[kind] || "sym";
-  }
-
-  // ============================================================================
   // Main render / router
   // ============================================================================
 
@@ -598,14 +527,6 @@
 
     // Render sidebar
     sidebarEl.innerHTML = renderSidebar(index.modules || [], path);
-
-    // Bind search
-    var searchInput = document.getElementById("search");
-    if (searchInput) {
-      searchInput.addEventListener("input", function () {
-        doSearch(this.value);
-      });
-    }
 
     // Find and render the requested item
     var item = findByUrl(index, path);
