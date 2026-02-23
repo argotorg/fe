@@ -126,115 +126,98 @@ func private %approve__StorPtr_TokenStore__Evm_hef0af3106e109414__5a8a4ed6775a82
         v8.i256 = call %address_h257056268eac7027_zero;
         v9.i256 = call %ne__Address_h257056268eac7027_Address_h257056268eac7027__af929e62fa4c68f2 v1 v8;
         call %assert v9;
-        v11.*i8 = evm_malloc 64.i256;
-        v12.i256 = ptr_to_int v11 i256;
-        v13.*@__fe_tuple_2 = bitcast v11 *@__fe_tuple_2;
-        v14.*@__fe_Address_0 = gep v13 0.i256 0.i256;
-        mstore v14 v0 i256;
-        v15.*@__fe_tuple_2 = bitcast v11 *@__fe_tuple_2;
-        v17.*@__fe_Address_0 = gep v15 0.i256 1.i256;
-        mstore v17 v1 i256;
-        call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v12 v2;
-        v19.*i8 = evm_malloc 96.i256;
-        v20.i256 = ptr_to_int v19 i256;
-        v21.*@__fe_ApprovalEvent_3 = bitcast v19 *@__fe_ApprovalEvent_3;
-        v22.*@__fe_Address_0 = gep v21 0.i256 0.i256;
-        mstore v22 v0 i256;
-        v23.*@__fe_ApprovalEvent_3 = bitcast v19 *@__fe_ApprovalEvent_3;
-        v24.*@__fe_Address_0 = gep v23 0.i256 1.i256;
-        mstore v24 v1 i256;
-        v25.*@__fe_ApprovalEvent_3 = bitcast v19 *@__fe_ApprovalEvent_3;
-        v27.*i256 = gep v25 0.i256 2.i256;
-        mstore v27 v2 i256;
-        call %emit_stor__Evm_hef0af3106e109414_ApprovalEvent_h313d94630b6580e5__2946163026d92694 v4 v20;
+        v10.*@__fe_tuple_2 = alloca @__fe_tuple_2;
+        v11.i256 = ptr_to_int v10 i256;
+        v12.*@__fe_Address_0 = gep v10 0.i256 0.i256;
+        mstore v12 v0 i256;
+        v14.*@__fe_Address_0 = gep v10 0.i256 1.i256;
+        mstore v14 v1 i256;
+        call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v11 v2;
+        v15.*@__fe_ApprovalEvent_3 = alloca @__fe_ApprovalEvent_3;
+        v16.i256 = ptr_to_int v15 i256;
+        v17.*@__fe_Address_0 = gep v15 0.i256 0.i256;
+        mstore v17 v0 i256;
+        v18.*@__fe_Address_0 = gep v15 0.i256 1.i256;
+        mstore v18 v1 i256;
+        v20.*i256 = gep v15 0.i256 2.i256;
+        mstore v20 v2 i256;
+        call %emit_stor__Evm_hef0af3106e109414_ApprovalEvent_h313d94630b6580e5__2946163026d92694 v4 v16;
         return;
 }
 
 func private %spend_allowance__StorPtr_TokenStore___6cde5b1e4cc29186(v0.i256, v1.i256, v2.i256, v3.i256) {
     block0:
-        v6.*i8 = evm_malloc 64.i256;
-        v7.i256 = ptr_to_int v6 i256;
-        v8.*@__fe_tuple_2 = bitcast v6 *@__fe_tuple_2;
-        v9.*@__fe_Address_0 = gep v8 0.i256 0.i256;
-        mstore v9 v0 i256;
-        v10.*@__fe_tuple_2 = bitcast v6 *@__fe_tuple_2;
-        v12.*@__fe_Address_0 = gep v10 0.i256 1.i256;
-        mstore v12 v1 i256;
-        v13.i256 = call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v7;
-        v14.i1 = lt v13 v2;
-        v15.i1 = is_zero v14;
-        v16.i256 = zext v15 i256;
-        call %assert v16;
-        v17.*i8 = evm_malloc 64.i256;
-        v18.i256 = ptr_to_int v17 i256;
-        v19.*@__fe_tuple_2 = bitcast v17 *@__fe_tuple_2;
-        v20.*@__fe_Address_0 = gep v19 0.i256 0.i256;
-        mstore v20 v0 i256;
-        v21.*@__fe_tuple_2 = bitcast v17 *@__fe_tuple_2;
-        v22.*@__fe_Address_0 = gep v21 0.i256 1.i256;
-        mstore v22 v1 i256;
-        v23.i256 = sub v13 v2;
-        call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v18 v23;
+        v5.*@__fe_tuple_2 = alloca @__fe_tuple_2;
+        v6.i256 = ptr_to_int v5 i256;
+        v7.*@__fe_Address_0 = gep v5 0.i256 0.i256;
+        mstore v7 v0 i256;
+        v9.*@__fe_Address_0 = gep v5 0.i256 1.i256;
+        mstore v9 v1 i256;
+        v10.i256 = call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v6;
+        v11.i1 = lt v10 v2;
+        v12.i1 = is_zero v11;
+        v13.i256 = zext v12 i256;
+        call %assert v13;
+        v14.*@__fe_tuple_2 = alloca @__fe_tuple_2;
+        v15.i256 = ptr_to_int v14 i256;
+        v16.*@__fe_Address_0 = gep v14 0.i256 0.i256;
+        mstore v16 v0 i256;
+        v17.*@__fe_Address_0 = gep v14 0.i256 1.i256;
+        mstore v17 v1 i256;
+        v18.i256 = sub v10 v2;
+        call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v15 v18;
         return;
 }
 
 func public %accesscontrol_habee575e9e30e01d_has_role(v0.i256, v1.i256, v2.i256) -> i256 {
     block0:
-        v5.*i8 = evm_malloc 64.i256;
-        v6.i256 = ptr_to_int v5 i256;
-        v7.*@__fe_tuple_4 = bitcast v5 *@__fe_tuple_4;
-        v8.*i256 = gep v7 0.i256 0.i256;
-        mstore v8 v1 i256;
-        v9.*@__fe_tuple_4 = bitcast v5 *@__fe_tuple_4;
-        v11.*@__fe_Address_0 = gep v9 0.i256 1.i256;
-        mstore v11 v2 i256;
-        v12.i256 = call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get___u256__Address__bool_2__74418d210da55cc0 0.i256 v6;
-        return v12;
+        v4.*@__fe_tuple_4 = alloca @__fe_tuple_4;
+        v5.i256 = ptr_to_int v4 i256;
+        v6.*i256 = gep v4 0.i256 0.i256;
+        mstore v6 v1 i256;
+        v8.*@__fe_Address_0 = gep v4 0.i256 1.i256;
+        mstore v8 v2 i256;
+        v9.i256 = call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get___u256__Address__bool_2__74418d210da55cc0 0.i256 v5;
+        return v9;
 }
 
 func public %accesscontrol_habee575e9e30e01d_require__Evm_hef0af3106e109414__3af54274b2985741(v0.i256, v1.i256, v2.i256) {
     block0:
         v4.i256 = evm_caller;
-        v6.*i8 = evm_malloc 64.i256;
-        v7.i256 = ptr_to_int v6 i256;
-        v8.*@__fe_tuple_4 = bitcast v6 *@__fe_tuple_4;
-        v9.*i256 = gep v8 0.i256 0.i256;
-        mstore v9 v1 i256;
-        v10.*@__fe_tuple_4 = bitcast v6 *@__fe_tuple_4;
-        v12.*@__fe_Address_0 = gep v10 0.i256 1.i256;
-        mstore v12 v4 i256;
-        v13.i256 = call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get___u256__Address__bool_2__74418d210da55cc0 0.i256 v7;
-        v14.i1 = eq v13 1.i256;
-        v15.i256 = zext v14 i256;
-        call %assert v15;
+        v5.*@__fe_tuple_4 = alloca @__fe_tuple_4;
+        v6.i256 = ptr_to_int v5 i256;
+        v7.*i256 = gep v5 0.i256 0.i256;
+        mstore v7 v1 i256;
+        v9.*@__fe_Address_0 = gep v5 0.i256 1.i256;
+        mstore v9 v4 i256;
+        v10.i256 = call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get___u256__Address__bool_2__74418d210da55cc0 0.i256 v6;
+        v11.i1 = eq v10 1.i256;
+        v12.i256 = zext v11 i256;
+        call %assert v12;
         return;
 }
 
 func public %accesscontrol_habee575e9e30e01d_grant(v0.i256, v1.i256, v2.i256) {
     block0:
-        v5.*i8 = evm_malloc 64.i256;
-        v6.i256 = ptr_to_int v5 i256;
-        v7.*@__fe_tuple_4 = bitcast v5 *@__fe_tuple_4;
-        v8.*i256 = gep v7 0.i256 0.i256;
-        mstore v8 v1 i256;
-        v9.*@__fe_tuple_4 = bitcast v5 *@__fe_tuple_4;
-        v11.*@__fe_Address_0 = gep v9 0.i256 1.i256;
-        mstore v11 v2 i256;
-        call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set___u256__Address__bool_2__74418d210da55cc0 0.i256 v6 1.i256;
+        v4.*@__fe_tuple_4 = alloca @__fe_tuple_4;
+        v5.i256 = ptr_to_int v4 i256;
+        v6.*i256 = gep v4 0.i256 0.i256;
+        mstore v6 v1 i256;
+        v8.*@__fe_Address_0 = gep v4 0.i256 1.i256;
+        mstore v8 v2 i256;
+        call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set___u256__Address__bool_2__74418d210da55cc0 0.i256 v5 1.i256;
         return;
 }
 
 func public %accesscontrol_habee575e9e30e01d_revoke(v0.i256, v1.i256, v2.i256) {
     block0:
-        v5.*i8 = evm_malloc 64.i256;
-        v6.i256 = ptr_to_int v5 i256;
-        v7.*@__fe_tuple_4 = bitcast v5 *@__fe_tuple_4;
-        v8.*i256 = gep v7 0.i256 0.i256;
-        mstore v8 v1 i256;
-        v9.*@__fe_tuple_4 = bitcast v5 *@__fe_tuple_4;
-        v11.*@__fe_Address_0 = gep v9 0.i256 1.i256;
-        mstore v11 v2 i256;
-        call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set___u256__Address__bool_2__74418d210da55cc0 0.i256 v6 0.i256;
+        v4.*@__fe_tuple_4 = alloca @__fe_tuple_4;
+        v5.i256 = ptr_to_int v4 i256;
+        v6.*i256 = gep v4 0.i256 0.i256;
+        mstore v6 v1 i256;
+        v8.*@__fe_Address_0 = gep v4 0.i256 1.i256;
+        mstore v8 v2 i256;
+        call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set___u256__Address__bool_2__74418d210da55cc0 0.i256 v5 0.i256;
         return;
 }
 
@@ -312,16 +295,14 @@ func private %__CoolCoin_recv_0_4(v0.i256, v1.i256) -> i256 {
         v6.*@__fe_Allowance_8 = int_to_ptr v0 *@__fe_Allowance_8;
         v8.*@__fe_Address_0 = gep v6 0.i256 1.i256;
         v9.i256 = mload v8 i256;
-        v11.*i8 = evm_malloc 64.i256;
-        v12.i256 = ptr_to_int v11 i256;
-        v13.*@__fe_tuple_2 = bitcast v11 *@__fe_tuple_2;
-        v14.*@__fe_Address_0 = gep v13 0.i256 0.i256;
-        mstore v14 v5 i256;
-        v15.*@__fe_tuple_2 = bitcast v11 *@__fe_tuple_2;
-        v16.*@__fe_Address_0 = gep v15 0.i256 1.i256;
-        mstore v16 v9 i256;
-        v17.i256 = call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v12;
-        return v17;
+        v10.*@__fe_tuple_2 = alloca @__fe_tuple_2;
+        v11.i256 = ptr_to_int v10 i256;
+        v12.*@__fe_Address_0 = gep v10 0.i256 0.i256;
+        mstore v12 v5 i256;
+        v13.*@__fe_Address_0 = gep v10 0.i256 1.i256;
+        mstore v13 v9 i256;
+        v14.i256 = call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v11;
+        return v14;
 }
 
 func private %__CoolCoin_recv_0_5(v0.i256) -> i256 {
@@ -388,17 +369,15 @@ func private %__CoolCoin_recv_1_3(v0.i256, v1.i256, v2.i256, v3.i256) -> i256 {
         v10.*i256 = gep v8 0.i256 1.i256;
         v11.i256 = mload v10 i256;
         v12.i256 = evm_caller;
-        v14.*i8 = evm_malloc 64.i256;
-        v15.i256 = ptr_to_int v14 i256;
-        v16.*@__fe_tuple_2 = bitcast v14 *@__fe_tuple_2;
-        v17.*@__fe_Address_0 = gep v16 0.i256 0.i256;
-        mstore v17 v12 i256;
-        v18.*@__fe_tuple_2 = bitcast v14 *@__fe_tuple_2;
-        v19.*@__fe_Address_0 = gep v18 0.i256 1.i256;
-        mstore v19 v7 i256;
-        v20.i256 = call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v15;
-        v21.i256 = add v20 v11;
-        call %approve__StorPtr_TokenStore__Evm_hef0af3106e109414__5a8a4ed6775a82f7 v12 v7 v21 v2 v3;
+        v13.*@__fe_tuple_2 = alloca @__fe_tuple_2;
+        v14.i256 = ptr_to_int v13 i256;
+        v15.*@__fe_Address_0 = gep v13 0.i256 0.i256;
+        mstore v15 v12 i256;
+        v16.*@__fe_Address_0 = gep v13 0.i256 1.i256;
+        mstore v16 v7 i256;
+        v17.i256 = call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v14;
+        v18.i256 = add v17 v11;
+        call %approve__StorPtr_TokenStore__Evm_hef0af3106e109414__5a8a4ed6775a82f7 v12 v7 v18 v2 v3;
         return 1.i256;
 }
 
@@ -411,21 +390,19 @@ func private %__CoolCoin_recv_1_4(v0.i256, v1.i256, v2.i256, v3.i256) -> i256 {
         v10.*i256 = gep v8 0.i256 1.i256;
         v11.i256 = mload v10 i256;
         v12.i256 = evm_caller;
-        v14.*i8 = evm_malloc 64.i256;
-        v15.i256 = ptr_to_int v14 i256;
-        v16.*@__fe_tuple_2 = bitcast v14 *@__fe_tuple_2;
-        v17.*@__fe_Address_0 = gep v16 0.i256 0.i256;
-        mstore v17 v12 i256;
-        v18.*@__fe_tuple_2 = bitcast v14 *@__fe_tuple_2;
-        v19.*@__fe_Address_0 = gep v18 0.i256 1.i256;
-        mstore v19 v7 i256;
-        v20.i256 = call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v15;
-        v21.i1 = lt v20 v11;
-        v22.i1 = is_zero v21;
-        v23.i256 = zext v22 i256;
-        call %assert v23;
-        v24.i256 = sub v20 v11;
-        call %approve__StorPtr_TokenStore__Evm_hef0af3106e109414__5a8a4ed6775a82f7 v12 v7 v24 v2 v3;
+        v13.*@__fe_tuple_2 = alloca @__fe_tuple_2;
+        v14.i256 = ptr_to_int v13 i256;
+        v15.*@__fe_Address_0 = gep v13 0.i256 0.i256;
+        mstore v15 v12 i256;
+        v16.*@__fe_Address_0 = gep v13 0.i256 1.i256;
+        mstore v16 v7 i256;
+        v17.i256 = call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor___Address__Address__u256_1__12414c27d5bfff1f 0.i256 v14;
+        v18.i1 = lt v17 v11;
+        v19.i1 = is_zero v18;
+        v20.i256 = zext v19 i256;
+        call %assert v20;
+        v21.i256 = sub v17 v11;
+        call %approve__StorPtr_TokenStore__Evm_hef0af3106e109414__5a8a4ed6775a82f7 v12 v7 v21 v2 v3;
         return 1.i256;
 }
 
@@ -722,33 +699,29 @@ func public %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set___u256__Ad
 
 func public %accesscontrol_habee575e9e30e01d_grant_stor(v0.i256, v1.i256, v2.i256) {
     block0:
-        v5.*i8 = evm_malloc 64.i256;
-        v6.i256 = ptr_to_int v5 i256;
-        v7.*@__fe_tuple_4 = bitcast v5 *@__fe_tuple_4;
-        v8.*i256 = gep v7 0.i256 0.i256;
-        mstore v8 v1 i256;
-        v9.*@__fe_tuple_4 = bitcast v5 *@__fe_tuple_4;
-        v11.*@__fe_Address_0 = gep v9 0.i256 1.i256;
-        mstore v11 v2 i256;
-        call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor___u256__Address__bool_2__74418d210da55cc0 0.i256 v6 1.i256;
+        v4.*@__fe_tuple_4 = alloca @__fe_tuple_4;
+        v5.i256 = ptr_to_int v4 i256;
+        v6.*i256 = gep v4 0.i256 0.i256;
+        mstore v6 v1 i256;
+        v8.*@__fe_Address_0 = gep v4 0.i256 1.i256;
+        mstore v8 v2 i256;
+        call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor___u256__Address__bool_2__74418d210da55cc0 0.i256 v5 1.i256;
         return;
 }
 
 func public %accesscontrol_habee575e9e30e01d_require_stor__Evm_hef0af3106e109414__3af54274b2985741(v0.i256, v1.i256, v2.i256) {
     block0:
         v4.i256 = evm_caller;
-        v6.*i8 = evm_malloc 64.i256;
-        v7.i256 = ptr_to_int v6 i256;
-        v8.*@__fe_tuple_4 = bitcast v6 *@__fe_tuple_4;
-        v9.*i256 = gep v8 0.i256 0.i256;
-        mstore v9 v1 i256;
-        v10.*@__fe_tuple_4 = bitcast v6 *@__fe_tuple_4;
-        v12.*@__fe_Address_0 = gep v10 0.i256 1.i256;
-        mstore v12 v4 i256;
-        v13.i256 = call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor___u256__Address__bool_2__74418d210da55cc0 0.i256 v7;
-        v14.i1 = eq v13 1.i256;
-        v15.i256 = zext v14 i256;
-        call %assert v15;
+        v5.*@__fe_tuple_4 = alloca @__fe_tuple_4;
+        v6.i256 = ptr_to_int v5 i256;
+        v7.*i256 = gep v5 0.i256 0.i256;
+        mstore v7 v1 i256;
+        v9.*@__fe_Address_0 = gep v5 0.i256 1.i256;
+        mstore v9 v4 i256;
+        v10.i256 = call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get_stor___u256__Address__bool_2__74418d210da55cc0 0.i256 v6;
+        v11.i1 = eq v10 1.i256;
+        v12.i256 = zext v11 i256;
+        call %assert v12;
         return;
 }
 
