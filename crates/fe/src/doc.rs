@@ -39,6 +39,7 @@ pub fn generate_docs(
     serve_docs: bool,
     port: u16,
     static_site: bool,
+    markdown_pages: bool,
 ) {
     // First, check if there's a running LSP with docs server
     if serve_docs {
@@ -89,6 +90,18 @@ pub fn generate_docs(
             std::process::exit(1);
         }
         println!("Static docs written to {}", output_dir.display());
+        return;
+    }
+
+    if markdown_pages {
+        let output_dir = output
+            .map(|p| p.as_std_path().to_path_buf())
+            .unwrap_or_else(|| std::path::PathBuf::from("docs"));
+        if let Err(e) = fe_web::starlight::generate(&index, &output_dir, "/api") {
+            eprintln!("Error generating markdown pages: {e}");
+            std::process::exit(1);
+        }
+        println!("Markdown pages written to {}", output_dir.display());
         return;
     }
 
