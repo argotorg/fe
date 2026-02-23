@@ -307,13 +307,13 @@ fn item_children<'db>(db: &'db dyn HirDb, item: ItemKind<'db>) -> Vec<SymbolView
         ItemKind::Struct(s) => {
             let parent = FieldParent::Struct(s);
             for field_view in parent.fields(db) {
-                children.push(SymbolView::new(field_view.scope()));
+                children.push(SymbolView::new(ScopeId::Field(parent, field_view.idx as u16)));
             }
         }
         ItemKind::Contract(c) => {
             let parent = FieldParent::Contract(c);
             for field_view in parent.fields(db) {
-                children.push(SymbolView::new(field_view.scope()));
+                children.push(SymbolView::new(ScopeId::Field(parent, field_view.idx as u16)));
             }
         }
         ItemKind::Enum(e) => {

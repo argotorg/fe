@@ -5,6 +5,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use common::InputDb;
 use common::diagnostics::Span;
 use hir::{
+    core::semantic::SymbolView,
     hir_def::{HirIngot, ItemKind, scope_graph::ScopeId},
     span::LazySpan,
 };
@@ -142,6 +143,44 @@ fn item_symbol<'db>(
     Some((format_symbol(symbol), display_name))
 }
 
+fn child_symbol_kind(scope: ScopeId<'_>) -> symbol_information::Kind {
+    use hir::core::semantic::SymbolKind;
+    match SymbolKind::from(scope) {
+        SymbolKind::Field => symbol_information::Kind::Field,
+        SymbolKind::Variant => symbol_information::Kind::EnumMember,
+        SymbolKind::Func => symbol_information::Kind::Method,
+        SymbolKind::TraitType => symbol_information::Kind::TypeAlias,
+        SymbolKind::TraitConst => symbol_information::Kind::Constant,
+        _ => symbol_information::Kind::UnspecifiedKind,
+    }
+}
+
+fn child_descriptor_suffix(scope: ScopeId<'_>) -> descriptor::Suffix {
+    use hir::core::semantic::SymbolKind;
+    match SymbolKind::from(scope) {
+        SymbolKind::Field | SymbolKind::Variant | SymbolKind::Func => descriptor::Suffix::Term,
+        SymbolKind::TraitType => descriptor::Suffix::Type,
+        _ => descriptor::Suffix::Meta,
+    }
+}
+
+/// Build a SCIP symbol string for a child (field, variant, method, etc.)
+/// by appending a descriptor to the parent's symbol.
+fn child_scip_symbol(
+    parent_symbol: &str,
+    child_name: &str,
+    scope: ScopeId<'_>,
+) -> String {
+    let suffix = child_descriptor_suffix(scope);
+    let suffix_char = match suffix {
+        descriptor::Suffix::Type => "#",
+        descriptor::Suffix::Term => ".",
+        descriptor::Suffix::Meta => ":",
+        _ => ".",
+    };
+    format!("{parent_symbol}{child_name}{suffix_char}")
+}
+
 fn push_occurrence(
     doc: &mut ScipDocumentBuilder,
     range: Vec<i32>,
@@ -236,6 +275,66 @@ pub fn generate_scip(
                         && let Some(range) = span_to_scip_range(&resolved, db)
                     {
                         push_occurrence(ref_doc, range, symbol.clone(), 0);
+                    }
+                }
+            }
+
+            // Index sub-items (fields, variants, methods, associated types)
+            let sym_view = SymbolView::from_item(item);
+            for child in sym_view.children(db) {
+                let child_scope = child.scope();
+                let Some(child_name) = child.name(db) else {
+                    continue;
+                };
+
+                let child_symbol = child_scip_symbol(&symbol, &child_name, child_scope);
+                let child_kind = child_symbol_kind(child_scope);
+
+                if let Some(doc) = documents.get_mut(&doc_url) {
+                    if doc.seen_symbols.insert(child_symbol.clone()) {
+                        // Build documentation for the child
+                        let child_docs = child
+                            .docs(db)
+                            .map(|d| vec![d])
+                            .unwrap_or_default();
+
+                        doc.symbols.push(types::SymbolInformation {
+                            symbol: child_symbol.clone(),
+                            documentation: child_docs,
+                            relationships: Vec::new(),
+                            kind: child_kind.into(),
+                            display_name: child_name.clone(),
+                            signature_documentation: None.into(),
+                            enclosing_symbol: symbol.clone(),
+                            special_fields: Default::default(),
+                        });
+                    }
+
+                    // Definition occurrence from name span
+                    if let Some(name_span) = child.name_span(db)
+                        && let Some(range) = span_to_scip_range(&name_span, db)
+                    {
+                        push_occurrence(
+                            doc,
+                            range,
+                            child_symbol.clone(),
+                            types::SymbolRole::Definition as i32,
+                        );
+                    }
+                }
+
+                // Reference occurrences for the child
+                for indexed_ref in ctx.ref_index.references_to(&child_scope) {
+                    if let Some(resolved) = indexed_ref.span.resolve(db) {
+                        let ref_doc_url = match resolved.file.url(db) {
+                            Some(url) => url.to_string(),
+                            None => continue,
+                        };
+                        if let Some(ref_doc) = documents.get_mut(&ref_doc_url)
+                            && let Some(range) = span_to_scip_range(&resolved, db)
+                        {
+                            push_occurrence(ref_doc, range, child_symbol.clone(), 0);
+                        }
                     }
                 }
             }
@@ -356,9 +455,11 @@ pub fn scip_to_json_data(index: &types::Index) -> String {
     Value::Object(root).to_string()
 }
 
-/// Inject `doc_url` fields into a SCIP JSON string by matching SCIP display names
-/// against items in the DocIndex.
+/// Inject `doc_url` fields into a SCIP JSON string by matching SCIP symbols
+/// against items in the DocIndex. Sub-items get parent page + anchor URLs.
 pub fn inject_doc_urls(scip_json: &str, doc_index: &DocIndex) -> String {
+    use fe_web::model::DocChildKind;
+
     let mut root: serde_json::Value = match serde_json::from_str(scip_json) {
         Ok(v) => v,
         Err(_) => return scip_json.to_string(),
@@ -370,11 +471,46 @@ pub fn inject_doc_urls(scip_json: &str, doc_index: &DocIndex) -> String {
         name_to_url.insert(&item.name, item.url_path());
     }
 
+    // Build child name → (parent_url, anchor) lookup
+    let mut child_to_url: HashMap<String, String> = HashMap::new();
+    for item in &doc_index.items {
+        let parent_url = item.url_path();
+        for child in &item.children {
+            let anchor = match child.kind {
+                DocChildKind::Field => format!("field.{}", child.name),
+                DocChildKind::Variant => format!("variant.{}", child.name),
+                DocChildKind::Method => format!("tymethod.{}", child.name),
+                DocChildKind::AssocType => format!("associatedtype.{}", child.name),
+                DocChildKind::AssocConst => format!("associatedconstant.{}", child.name),
+            };
+            child_to_url.insert(child.name.clone(), format!("{}#{}", parent_url, anchor));
+        }
+    }
+
     if let Some(symbols) = root.get_mut("symbols").and_then(|s| s.as_object_mut()) {
         for (_sym_str, entry) in symbols.iter_mut() {
             if let Some(obj) = entry.as_object_mut() {
-                if let Some(name) = obj.get("name").and_then(|n| n.as_str()) {
-                    if let Some(url) = name_to_url.get(name) {
+                let name = obj
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let has_enclosing = obj
+                    .get("enclosing")
+                    .and_then(|e| e.as_str())
+                    .is_some_and(|e| !e.is_empty());
+
+                if has_enclosing {
+                    // Sub-item: look up child URL
+                    if let Some(url) = child_to_url.get(&name) {
+                        obj.insert(
+                            "doc_url".to_string(),
+                            serde_json::Value::String(url.clone()),
+                        );
+                    }
+                } else {
+                    // Top-level item
+                    if let Some(url) = name_to_url.get(name.as_str()) {
                         obj.insert(
                             "doc_url".to_string(),
                             serde_json::Value::String(url.clone()),
@@ -574,5 +710,80 @@ fn make_point() -> Point {
                 .any(|o| (o.symbol_roles & (types::SymbolRole::Definition as i32)) != 0),
             "expected at least one definition occurrence"
         );
+    }
+
+    #[test]
+    fn test_scip_indexes_sub_items() {
+        let code = r#"struct Point {
+    pub x: i32
+    pub y: i32
+}
+
+fn make_point() -> Point {
+    Point { x: 1, y: 2 }
+}
+"#;
+        let index = generate_test_scip(code);
+        let doc = index
+            .documents
+            .iter()
+            .find(|d| d.relative_path == "test.fe")
+            .expect("document");
+
+        // Fields should be indexed as sub-items
+        let field_names: Vec<&str> = doc
+            .symbols
+            .iter()
+            .filter(|s| !s.enclosing_symbol.is_empty())
+            .map(|s| s.display_name.as_str())
+            .collect();
+        assert!(
+            field_names.contains(&"x"),
+            "expected field 'x' in symbols, found: {field_names:?}"
+        );
+        assert!(
+            field_names.contains(&"y"),
+            "expected field 'y' in symbols, found: {field_names:?}"
+        );
+
+        // Field symbols should have enclosing_symbol pointing to Point
+        for si in &doc.symbols {
+            if si.display_name == "x" || si.display_name == "y" {
+                assert!(
+                    si.enclosing_symbol.contains("Point"),
+                    "field '{}' should have Point as enclosing: {}",
+                    si.display_name,
+                    si.enclosing_symbol
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_scip_to_json_data() {
+        let code = r#"struct Point {
+    pub x: i32
+}
+
+fn make_point() -> Point {
+    Point { x: 1 }
+}
+"#;
+        let index = generate_test_scip(code);
+        let json = scip_to_json_data(&index);
+
+        // Parse and check structure
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+        assert!(parsed.get("symbols").is_some(), "should have symbols key");
+        assert!(parsed.get("files").is_some(), "should have files key");
+
+        let symbols = parsed["symbols"].as_object().unwrap();
+        // Should have Point, x, and make_point
+        let names: Vec<&str> = symbols
+            .values()
+            .filter_map(|v| v.get("name").and_then(|n| n.as_str()))
+            .collect();
+        assert!(names.contains(&"Point"), "should contain Point: {names:?}");
+        assert!(names.contains(&"make_point"), "should contain make_point: {names:?}");
     }
 }
