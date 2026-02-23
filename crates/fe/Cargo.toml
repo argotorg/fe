@@ -39,6 +39,7 @@ hex = "0.4"
 toml = "0.8.8"
 glob.workspace = true
 scip = "0.6.1"
+protobuf = "=3.7.2"
 language-server = { workspace = true, optional = true }
 tokio = { version = "1.43.0", features = ["full"], optional = true }
 axum = { version = "0.8", optional = true }

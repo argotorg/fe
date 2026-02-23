@@ -85,11 +85,23 @@ pub fn generate_docs(
         let output_dir = output
             .map(|p| p.as_std_path().to_path_buf())
             .unwrap_or_else(|| std::path::PathBuf::from("docs"));
-        if let Err(e) = fe_web::static_site::StaticSiteGenerator::generate(&index, &output_dir) {
+
+        // Generate SCIP for interactive navigation (best-effort)
+        let scip_bytes = generate_scip_for_doc(&mut db, path);
+
+        if let Err(e) = fe_web::static_site::StaticSiteGenerator::generate_with_scip(
+            &index,
+            &output_dir,
+            scip_bytes.as_deref(),
+        ) {
             eprintln!("Error generating static docs: {e}");
             std::process::exit(1);
         }
-        println!("Static docs written to {}", output_dir.display());
+        if scip_bytes.is_some() {
+            println!("Static docs written to {} (with SCIP)", output_dir.display());
+        } else {
+            println!("Static docs written to {}", output_dir.display());
+        }
         return;
     }
 
@@ -214,6 +226,39 @@ fn extract_ingot(db: &mut DriverDataBase, dir_path: &Utf8PathBuf) -> Option<DocI
     index.link_signature_types();
 
     Some(index)
+}
+
+/// Generate SCIP bytes for embedding in static docs (best-effort).
+///
+/// For ingot directories, runs the full SCIP generator. For single files,
+/// constructs a synthetic ingot URL from the file's parent directory.
+/// Returns `None` if generation fails (SCIP is optional progressive enhancement).
+fn generate_scip_for_doc(db: &mut DriverDataBase, path: &Utf8PathBuf) -> Option<Vec<u8>> {
+    use protobuf::Message;
+
+    let ingot_url = if path.is_dir() {
+        let canonical = path.canonicalize_utf8().ok()?;
+        Url::from_directory_path(canonical.as_str()).ok()?
+    } else {
+        // Single file: use parent directory as ingot root
+        let canonical = path.canonicalize_utf8().ok()?;
+        let parent = canonical.parent()?;
+        Url::from_directory_path(parent.as_str()).ok()?
+    };
+
+    match crate::scip_index::generate_scip(db, &ingot_url) {
+        Ok(index) => match index.write_to_bytes() {
+            Ok(bytes) => Some(bytes),
+            Err(e) => {
+                eprintln!("Warning: SCIP serialization failed: {e}");
+                None
+            }
+        },
+        Err(e) => {
+            eprintln!("Warning: SCIP generation failed: {e}");
+            None
+        }
+    }
 }
 
 fn print_doc_summary(index: &DocIndex) {

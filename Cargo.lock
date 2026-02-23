@@ -2153,6 +2153,7 @@ dependencies = [
  "glob",
  "hex",
  "petgraph",
+ "protobuf",
  "rustc-hash 2.1.1",
  "scip",
  "serde",
@@ -2439,7 +2440,9 @@ name = "fe-web"
 version = "0.1.0"
 dependencies = [
  "js-sys",
+ "protobuf",
  "pulldown-cmark",
+ "scip",
  "serde",
  "serde_json",
  "tree-sitter",

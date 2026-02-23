@@ -67,6 +67,104 @@ class FeCodeBlock extends HTMLElement {
     } else {
       this.appendChild(wrapper);
     }
+
+    // If SCIP is available, make highlighted spans interactive
+    this._setupScipInteraction(code);
+
+    // Listen for live diagnostics from LSP
+    this._setupLspDiagnostics(code);
+  }
+
+  /** Add click-to-navigate on highlighted spans when ScipStore is loaded. */
+  _setupScipInteraction(codeEl) {
+    var scip = window.FE_SCIP;
+    if (!scip) return;
+
+    var file = this.getAttribute("data-file");
+    if (!file) return;
+
+    // Click handler: resolve symbol at the clicked position
+    codeEl.addEventListener("click", function (e) {
+      var target = e.target;
+      if (target.tagName !== "SPAN" && target.tagName !== "A") return;
+
+      var lineAttr = target.getAttribute("data-line");
+      var colAttr = target.getAttribute("data-col");
+      if (!lineAttr || !colAttr) return;
+
+      var line = parseInt(lineAttr, 10);
+      var col = parseInt(colAttr, 10);
+      var symbol = scip.resolveSymbol(file, line, col);
+      if (symbol) {
+        // Navigate to the symbol's doc page
+        location.hash = "#" + symbol;
+      }
+    });
+
+    // Hover handler: show symbol info tooltip
+    codeEl.addEventListener("mouseover", function (e) {
+      var target = e.target;
+      if (target.tagName !== "SPAN") return;
+
+      var lineAttr = target.getAttribute("data-line");
+      var colAttr = target.getAttribute("data-col");
+      if (!lineAttr || !colAttr) return;
+
+      var line = parseInt(lineAttr, 10);
+      var col = parseInt(colAttr, 10);
+      var symbol = scip.resolveSymbol(file, line, col);
+      if (symbol) {
+        var info = scip.symbolInfo(symbol);
+        if (info) {
+          try {
+            var parsed = JSON.parse(info);
+            target.title = parsed.display_name || symbol;
+          } catch (_) {}
+        }
+        target.style.cursor = "pointer";
+        target.style.textDecoration = "underline";
+      }
+    });
+
+    codeEl.addEventListener("mouseout", function (e) {
+      if (e.target.tagName === "SPAN") {
+        e.target.style.textDecoration = "";
+        e.target.style.cursor = "";
+      }
+    });
+  }
+
+  /** Listen for LSP diagnostics and underline affected lines. */
+  _setupLspDiagnostics(codeEl) {
+    var file = this.getAttribute("data-file");
+    if (!file) return;
+
+    var self = this;
+    document.addEventListener("fe-diagnostics", function (e) {
+      var detail = e.detail;
+      // Match by file path suffix (LSP uses full URIs)
+      if (!detail.uri || !detail.uri.endsWith(file)) return;
+
+      // Remove previous diagnostic markers
+      var old = self.querySelectorAll(".fe-diagnostic-marker");
+      for (var i = 0; i < old.length; i++) old[i].remove();
+
+      // Add new markers
+      var diags = detail.diagnostics || [];
+      for (var j = 0; j < diags.length; j++) {
+        var diag = diags[j];
+        var line = diag.range && diag.range.start ? diag.range.start.line : -1;
+        if (line < 0) continue;
+
+        var marker = document.createElement("div");
+        marker.className = "fe-diagnostic-marker";
+        marker.setAttribute("data-severity", diag.severity || 1);
+        marker.textContent = diag.message || "";
+        marker.title = diag.message || "";
+        marker.style.cssText = "color: var(--diag-color, #e55); font-size: 0.85em; padding-left: 2ch;";
+        codeEl.parentNode.appendChild(marker);
+      }
+    });
   }
 }
 
