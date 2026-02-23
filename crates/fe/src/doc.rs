@@ -138,13 +138,14 @@ pub fn generate_docs(
 
     }
 
+    // Generate SCIP for interactive navigation (best-effort).
+    // This enriches rich_signature fields and produces JSON for embedding.
+    let scip_json = generate_scip_json_for_doc(&mut db, path, &mut index);
+
     if static_site {
         let output_dir = output
             .map(|p| p.as_std_path().to_path_buf())
             .unwrap_or_else(|| std::path::PathBuf::from("docs"));
-
-        // Generate SCIP for interactive navigation (best-effort)
-        let scip_json = generate_scip_json_for_doc(&mut db, path, &mut index);
 
         if let Err(e) = fe_web::static_site::StaticSiteGenerator::generate_with_scip(
             &index,
@@ -189,7 +190,7 @@ pub fn generate_docs(
 
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            if let Err(e) = serve(index, config).await {
+            if let Err(e) = serve(index, config, scip_json).await {
                 eprintln!("Server error: {e}");
                 std::process::exit(1);
             }

@@ -8,8 +8,12 @@ pub struct DocServeConfig {
     pub host: String,
 }
 
-pub async fn serve_docs(index: DocIndex, config: DocServeConfig) -> std::io::Result<()> {
-    let html = Arc::new(generate_html(&index));
+pub async fn serve_docs(
+    index: DocIndex,
+    config: DocServeConfig,
+    scip_json: Option<String>,
+) -> std::io::Result<()> {
+    let html = Arc::new(generate_html(&index, scip_json.as_deref()));
 
     let app = Router::new().fallback(get(move || {
         let html = Arc::clone(&html);
@@ -25,16 +29,17 @@ pub async fn serve_docs(index: DocIndex, config: DocServeConfig) -> std::io::Res
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
 }
 
-fn generate_html(index: &DocIndex) -> String {
+fn generate_html(index: &DocIndex, scip_json: Option<&str>) -> String {
     let mut value = serde_json::to_value(index).expect("serialize DocIndex");
     fe_web::static_site::inject_html_bodies(&mut value);
+    fe_web::static_site::inject_highlighted_signatures(&mut value);
     let json = serde_json::to_string(&value).expect("serialize JSON");
     let title = if let Some(root) = index.modules.first() {
         format!("{} — Fe Documentation", root.name)
     } else {
         "Fe Documentation".to_string()
     };
-    fe_web::assets::html_shell(&title, &json)
+    fe_web::assets::html_shell_with_scip(&title, &json, scip_json)
 }
 
 #[cfg(test)]
@@ -52,7 +57,7 @@ mod tests {
             items: vec![],
         }];
 
-        let html = generate_html(&index);
+        let html = generate_html(&index, None);
         assert!(html.contains("<!DOCTYPE html>"));
         assert!(html.contains("mylib"));
         assert!(html.contains("Fe Documentation"));
@@ -62,7 +67,7 @@ mod tests {
     #[test]
     fn generate_html_empty_index() {
         let index = DocIndex::new();
-        let html = generate_html(&index);
+        let html = generate_html(&index, None);
         assert!(html.contains("<!DOCTYPE html>"));
         assert!(html.contains("Fe Documentation"));
     }
