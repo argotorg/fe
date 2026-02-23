@@ -50,7 +50,7 @@ class FeSearch extends HTMLElement {
           var r = results[k];
           var a = document.createElement("a");
           a.className = "search-result";
-          a.href = "#" + (r.symbol || "");
+          a.href = "#" + (r.doc_url || "");
           a.setAttribute("role", "option");
 
           var badge = document.createElement("span");
