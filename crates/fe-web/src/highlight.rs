@@ -1,6 +1,6 @@
 //! Tree-sitter syntax highlighting for Fe code.
 
-use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter, HtmlRenderer};
+use tree_sitter_highlight::{HighlightConfiguration, Highlighter, HtmlRenderer};
 
 /// Capture names from highlights.scm, in the order we assign CSS classes.
 /// The index into this array becomes the `Highlight` id.

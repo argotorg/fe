@@ -317,6 +317,17 @@ pub enum Command {
         #[command(subcommand)]
         mode: Option<LspMode>,
     },
+    /// Syntax-highlight Fe code to HTML.
+    Highlight {
+        /// Path to a .fe file (reads stdin if omitted).
+        file: Option<Utf8PathBuf>,
+        /// Wrap output in <fe-code-block highlighted> custom element.
+        #[arg(long)]
+        component: bool,
+        /// Batch mode: read newline-delimited JSON from stdin, output JSON per line.
+        #[arg(long)]
+        batch: bool,
+    },
     /// Generate SCIP index for code navigation.
     Scip {
         /// Path to the ingot directory.
@@ -599,6 +610,16 @@ pub fn run(opts: &Options) {
                     }
                 }
             });
+        }
+        Command::Highlight {
+            file,
+            component,
+            batch,
+        } => {
+            if let Err(e) = highlight_cmd::run_highlight(file.as_ref(), *component, *batch) {
+                eprintln!("Error: {e}");
+                std::process::exit(1);
+            }
         }
         Command::Lsif { path, output } => {
             run_lsif(path, output.as_ref());
