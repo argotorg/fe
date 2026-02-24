@@ -3,6 +3,7 @@ source: crates/hir/tests/desugar.rs
 expression: output
 input_file: test_files/desugar/event_newtype_fields.fe
 ---
+use core::prelude::*
 use std::prelude::*
 use std::abi::sol::Uint160
 use std::abi::sol::Int24

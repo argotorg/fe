@@ -153,16 +153,20 @@ impl<'db> FileLowerCtxt<'db> {
             return;
         }
 
+        // Always inject core::prelude::* as the baseline — this is guaranteed
+        // to exist and provides Option, Result, Clone, Copy, etc.
+        let core = IdentId::new(db, "core".to_string());
         let prelude = IdentId::new(db, "prelude".to_string());
+        self.insert_synthetic_use(vec![core, prelude]);
 
-        if kind == IngotKind::Std {
-            // The std ingot itself gets core::prelude::* (can't self-import).
-            let core = IdentId::new(db, "core".to_string());
-            self.insert_synthetic_use(vec![core, prelude]);
-        } else {
-            // All other ingots get std::prelude::*, which re-exports
-            // core::prelude plus common EVM types and ABI traits.
+        // For non-std ingots, additionally inject std::prelude::* which adds
+        // EVM/ABI items (Evm, Address, Call, Sol, assert, etc.) on top of
+        // core::prelude. If std lacks a prelude module (e.g. a user-defined
+        // package aliased as "std"), the synthetic import fails silently and
+        // we still have core::prelude as fallback.
+        if kind != IngotKind::Std {
             let std = IdentId::new(db, "std".to_string());
+            let prelude = IdentId::new(db, "prelude".to_string());
             self.insert_synthetic_use(vec![std, prelude]);
         }
     }

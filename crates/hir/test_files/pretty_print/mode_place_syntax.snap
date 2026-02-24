@@ -3,6 +3,7 @@ source: crates/hir/tests/pretty_print.rs
 expression: output
 input_file: test_files/pretty_print/mode_place_syntax.fe
 ---
+use core::prelude::*
 use std::prelude::*
 
 struct Foo {}

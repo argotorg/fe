@@ -3,6 +3,7 @@ source: crates/hir/tests/desugar.rs
 expression: output
 input_file: test_files/desugar/event_field_name_collisions.fe
 ---
+use core::prelude::*
 use std::prelude::*
 
 struct Collision {

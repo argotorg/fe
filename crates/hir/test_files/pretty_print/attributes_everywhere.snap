@@ -3,10 +3,12 @@ source: crates/hir/tests/pretty_print.rs
 expression: output
 input_file: test_files/pretty_print/attributes_everywhere.fe
 ---
+use core::prelude::*
 use std::prelude::*
 
 #[mod_attr]
 mod inner {
+    use core::prelude::*
     use std::prelude::*
     #[use_attr]
     use core::ops::Eq

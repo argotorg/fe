@@ -3,9 +3,11 @@ source: crates/hir/tests/desugar.rs
 expression: output
 input_file: test_files/desugar/msg.fe
 ---
+use core::prelude::*
 use std::prelude::*
 
 mod CounterMsg {
+    use core::prelude::*
     use std::prelude::*
     use super::*
 
