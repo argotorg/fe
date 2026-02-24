@@ -7,7 +7,8 @@
 //   lang         — language name (default "fe")
 //   line-numbers — show line number gutter
 //   collapsed    — start collapsed with <details>/<summary>
-//   data-file    — SCIP file path for positional symbol resolution
+//   data-file    — SCIP source file path for positional symbol resolution
+//   data-scope   — SCIP scope path for signature code blocks (set by server)
 
 class FeCodeBlock extends HTMLElement {
   connectedCallback() {
@@ -107,7 +108,7 @@ class FeCodeBlock extends HTMLElement {
     var scip = window.FE_SCIP;
     if (!scip) return;
 
-    var file = this.getAttribute("data-file");
+    var file = this.getAttribute("data-file") || this.getAttribute("data-scope");
     if (!file) return;
 
     var self = this;

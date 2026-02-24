@@ -86,6 +86,9 @@ pub struct DocItem {
     /// Source span of the signature (for SCIP occurrence overlay, not serialized)
     #[serde(skip)]
     pub signature_span: Option<SignatureSpanData>,
+    /// SCIP scope path for this signature (set during enrich_signatures)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sig_scope: Option<String>,
     /// Generic parameters, if any
     pub generics: Vec<DocGenericParam>,
     /// Where clause bounds, if any
@@ -116,6 +119,13 @@ pub struct DocImplementor {
     /// Rich signature with embedded links
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rich_signature: RichSignature,
+    /// Source span for the full impl signature (for SCIP positional linking).
+    /// In-memory only; not serialized to JSON.
+    #[serde(skip)]
+    pub signature_span: Option<SignatureSpanData>,
+    /// SCIP scope path for this implementor signature
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sig_scope: Option<String>,
 }
 
 impl DocItem {
@@ -323,6 +333,9 @@ pub struct DocChild {
     /// Source span of the signature (for SCIP occurrence overlay, not serialized)
     #[serde(skip)]
     pub signature_span: Option<SignatureSpanData>,
+    /// SCIP scope path for this signature
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sig_scope: Option<String>,
     pub visibility: DocVisibility,
 }
 
@@ -410,6 +423,9 @@ pub struct DocTraitImpl {
     /// Source span of the signature (for SCIP occurrence overlay, not serialized)
     #[serde(skip)]
     pub signature_span: Option<SignatureSpanData>,
+    /// SCIP scope path for this impl signature
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sig_scope: Option<String>,
     /// Methods defined in this impl block (displayed inline on type pages)
     #[serde(default)]
     pub methods: Vec<DocImplMethod>,
@@ -428,6 +444,9 @@ pub struct DocImplMethod {
     /// Source span of the signature (for SCIP occurrence overlay, not serialized)
     #[serde(skip)]
     pub signature_span: Option<SignatureSpanData>,
+    /// SCIP scope path for this method signature
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sig_scope: Option<String>,
     /// Documentation (first paragraph only for summary)
     pub docs: Option<String>,
 }
@@ -571,6 +590,8 @@ impl DocIndex {
                 trait_name: trait_simple_name.clone(),
                 signature: trait_impl.signature.clone(),
                 rich_signature,
+                signature_span: trait_impl.signature_span.clone(),
+                sig_scope: None,
             };
 
             trait_implementors
@@ -707,6 +728,7 @@ mod tests {
             signature: "pub struct Point".into(),
             rich_signature: vec![],
             signature_span: None,
+            sig_scope: None,
             generics: vec![DocGenericParam {
                 name: "T".into(),
                 bounds: vec![],
@@ -720,6 +742,7 @@ mod tests {
                 signature: "x: u256".into(),
                 rich_signature: vec![],
                 signature_span: None,
+                sig_scope: None,
                 visibility: DocVisibility::Public,
             }],
             source: Some(DocSourceLoc {
@@ -740,6 +763,7 @@ mod tests {
             signature: "pub enum Color".into(),
             rich_signature: vec![],
             signature_span: None,
+            sig_scope: None,
             generics: vec![],
             where_bounds: vec![],
             children: vec![
@@ -750,6 +774,7 @@ mod tests {
                     signature: "Red".into(),
                     rich_signature: vec![],
                     signature_span: None,
+                    sig_scope: None,
                     visibility: DocVisibility::Public,
                 },
                 DocChild {
@@ -759,6 +784,7 @@ mod tests {
                     signature: "Green".into(),
                     rich_signature: vec![],
                     signature_span: None,
+                    sig_scope: None,
                     visibility: DocVisibility::Public,
                 },
             ],
@@ -775,6 +801,7 @@ mod tests {
             signature: "pub fn add(a: u256, b: u256) -> u256".into(),
             rich_signature: vec![],
             signature_span: None,
+            sig_scope: None,
             generics: vec![],
             where_bounds: vec![],
             children: vec![],

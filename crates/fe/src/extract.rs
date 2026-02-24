@@ -119,6 +119,7 @@ impl<'db> DocExtractor<'db> {
                     signature,
                     rich_signature: vec![],
                     signature_span,
+                    sig_scope: None,
                     methods,
                 },
             ));
@@ -168,6 +169,7 @@ impl<'db> DocExtractor<'db> {
                     signature,
                     rich_signature: vec![],
                     signature_span,
+                    sig_scope: None,
                     methods,
                 },
             ));
@@ -189,6 +191,7 @@ impl<'db> DocExtractor<'db> {
                     signature,
                     rich_signature: vec![],
                     signature_span,
+                    sig_scope: None,
                     docs,
                 })
             })
@@ -208,6 +211,7 @@ impl<'db> DocExtractor<'db> {
                     signature,
                     rich_signature: vec![],
                     signature_span,
+                    sig_scope: None,
                     docs,
                 })
             })
@@ -243,6 +247,7 @@ impl<'db> DocExtractor<'db> {
             signature,
             rich_signature: vec![],
             signature_span,
+            sig_scope: None,
             generics,
             where_bounds,
             children,
@@ -399,6 +404,7 @@ impl<'db> DocExtractor<'db> {
                     signature,
                     rich_signature: vec![],
                     signature_span: None,
+                    sig_scope: None,
                     visibility: self.convert_visibility(visibility),
                 })
             })
@@ -426,6 +432,7 @@ impl<'db> DocExtractor<'db> {
                     signature,
                     rich_signature: vec![],
                     signature_span: None,
+                    sig_scope: None,
                     visibility: self.convert_visibility(visibility),
                 })
             })
@@ -463,6 +470,7 @@ impl<'db> DocExtractor<'db> {
                     signature,
                     rich_signature: vec![],
                     signature_span: None,
+                    sig_scope: None,
                     visibility: DocVisibility::Public,
                 })
             })
@@ -508,6 +516,7 @@ impl<'db> DocExtractor<'db> {
                     signature,
                     rich_signature: vec![],
                     signature_span,
+                    sig_scope: None,
                     visibility: DocVisibility::Public,
                 });
             }
@@ -527,6 +536,7 @@ impl<'db> DocExtractor<'db> {
                     signature: format!("type {}", name_str),
                     rich_signature: vec![],
                     signature_span: None,
+                    sig_scope: None,
                     visibility: DocVisibility::Public,
                 });
             }
@@ -552,6 +562,7 @@ impl<'db> DocExtractor<'db> {
                     signature,
                     rich_signature: vec![],
                     signature_span,
+                    sig_scope: None,
                     visibility,
                 });
             }
@@ -577,6 +588,7 @@ impl<'db> DocExtractor<'db> {
                     signature,
                     rich_signature: vec![],
                     signature_span,
+                    sig_scope: None,
                     visibility,
                 });
             }

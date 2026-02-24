@@ -37,6 +37,42 @@ fe-code-block {
     overflow-x: auto;
 }
 
+/* When fe-code-block is nested inside a signature container,
+   the parent already provides background/border/padding. */
+.signature fe-code-block,
+.impl-signature fe-code-block {
+    margin: 0;
+}
+.signature .fe-code-block-wrapper,
+.impl-signature .fe-code-block-wrapper {
+    background: transparent;
+    border: none;
+    border-radius: 0;
+}
+.signature .fe-code-pre,
+.impl-signature .fe-code-pre {
+    padding: 0;
+}
+
+/* Tighter margins in member/method/implementor contexts */
+.member-header fe-code-block,
+.code-header fe-code-block,
+.implementor-sig fe-code-block {
+    margin: 0;
+}
+.member-header .fe-code-block-wrapper,
+.code-header .fe-code-block-wrapper,
+.implementor-sig .fe-code-block-wrapper {
+    border: none;
+    background: transparent;
+    border-radius: 0;
+}
+.member-header .fe-code-pre,
+.code-header .fe-code-pre,
+.implementor-sig .fe-code-pre {
+    padding: 0;
+}
+
 .fe-line-numbers {
     display: flex;
     flex-direction: column;
