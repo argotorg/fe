@@ -895,6 +895,15 @@
     initMobileMenu();
     render();
     window.addEventListener("hashchange", render);
+
+    // Re-apply default highlight after tree-sitter WASM loads and code blocks
+    // get SCIP-annotated (sym-HASH classes added). On initial load, render()
+    // runs before the highlighter is ready, so the querySelectorAll in
+    // _setHighlightStyles finds no matching elements.
+    document.addEventListener("fe-highlighter-ready", function () {
+      // Small delay to let code blocks re-render and run SCIP annotation
+      setTimeout(function () { applyDefaultHighlight(currentPath()); }, 50);
+    });
   }
 
   if (document.readyState === "loading") {
