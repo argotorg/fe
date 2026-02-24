@@ -1,0 +1,135 @@
+/// Mock Poseidon-like hash exercising array lowering features:
+/// top-level constant arrays, 2D constant arrays, range-for loops,
+/// array indexing with computed offsets, mutable array manipulation,
+/// addmod/mulmod intrinsics, and arrays passed to/returned from functions.
+///
+/// Uses the real BN254 scalar field prime since addmod/mulmod handle overflow.
+/// NOT cryptographically meaningful — just structurally faithful.
+
+use std::evm::effects::assert
+use std::evm::ops::{addmod, mulmod}
+
+// BN254 scalar field prime (the real one, since we have addmod/mulmod)
+const P: u256 = 21888242871839275222246405745257275088548364400416034343698204186575808495617
+const N_FULL: usize = 4
+
+const C: [u256; 24] = [
+    1804289383, 846930886, 1681692777,
+    1714636915, 1957747793, 424238335,
+    719885386, 1649760492, 596516649,
+    1189641421, 1025202362, 1350490027,
+    783368690, 1102520059, 2044897763,
+    1967513926, 1365180540, 1540383426,
+    304089172, 1303455736, 35005211,
+    521595368, 294702567, 1726956429,
+]
+
+const M: [[u256; 3]; 3] = [
+    [2, 1, 1],
+    [1, 2, 1],
+    [1, 1, 2],
+]
+
+fn ark(state: [u256; 3], offset: usize) -> [u256; 3] {
+    return [
+        addmod(state[0], C[offset], P),
+        addmod(state[1], C[offset + 1], P),
+        addmod(state[2], C[offset + 2], P),
+    ]
+}
+
+fn sigma(x: u256) -> u256 {
+    let x2: u256 = mulmod(x, x, P)
+    let x4: u256 = mulmod(x2, x2, P)
+    return mulmod(x4, x, P)
+}
+
+fn sigma_full(state: [u256; 3]) -> [u256; 3] {
+    return [sigma(state[0]), sigma(state[1]), sigma(state[2])]
+}
+
+fn mix(state: [u256; 3]) -> [u256; 3] {
+    let mut out: [u256; 3] = [0, 0, 0]
+    for i in 0..3 {
+        for j in 0..3 {
+            out[i] = addmod(out[i], mulmod(M[i][j], state[j], P), P)
+        }
+    }
+    return out
+}
+
+pub fn poseidon_mock(inp0: u256, inp1: u256) -> u256 {
+    let mut state: [u256; 3] = [inp0 % P, inp1 % P, 0]
+    let mut round_cst: usize = 0
+
+    // Full rounds (N_FULL total, split into two halves for Poseidon structure)
+    for _ in 0..N_FULL / 2 {
+        state = ark(state, round_cst)
+        state = sigma_full(state)
+        state = mix(state)
+        round_cst += 3
+    }
+
+    for _ in 0..N_FULL / 2 {
+        state = ark(state, round_cst)
+        state = sigma_full(state)
+        state = mix(state)
+        round_cst += 3
+    }
+
+    return state[0]
+}
+
+#[test]
+fn test_poseidon_zero_inputs() {
+    // Both inputs zero: deterministic result from round constants alone
+    let result: u256 = poseidon_mock(0, 0)
+    // Just verify it produces a value in range [0, P)
+    assert(result < P)
+}
+
+#[test]
+fn test_poseidon_deterministic() {
+    // Same inputs must produce the same output
+    let a: u256 = poseidon_mock(42, 17)
+    let b: u256 = poseidon_mock(42, 17)
+    assert(a == b)
+    assert(a < P)
+}
+
+#[test]
+fn test_poseidon_different_inputs() {
+    // Different inputs should (almost certainly) produce different outputs
+    let a: u256 = poseidon_mock(1, 2)
+    let b: u256 = poseidon_mock(3, 4)
+    assert(a != b)
+}
+
+#[test]
+fn test_sigma_identity() {
+    // sigma(0) = 0^5 mod P = 0
+    assert(sigma(0) == 0)
+    // sigma(1) = 1^5 mod P = 1
+    assert(sigma(1) == 1)
+}
+
+#[test]
+fn test_mix_structure() {
+    // mix([1, 0, 0]) with our M = [[2,1,1],[1,2,1],[1,1,2]]
+    // should give [2, 1, 1]
+    let input: [u256; 3] = [1, 0, 0]
+    let output: [u256; 3] = mix(input)
+    assert(output[0] == 2)
+    assert(output[1] == 1)
+    assert(output[2] == 1)
+}
+
+#[test]
+fn test_ark_applies_constants() {
+    let state: [u256; 3] = [0, 0, 0]
+    let result: [u256; 3] = ark(state, 0)
+    // ark(0, offset=0) should give [C[0]%P, C[1]%P, C[2]%P]
+    assert(result[0] == 1804289383 % P)
+    assert(result[1] == 846930886 % P)
+    assert(result[2] == 1681692777 % P)
+}

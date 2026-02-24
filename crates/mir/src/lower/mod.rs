@@ -603,6 +603,7 @@ pub(super) struct MirBuilder<'db, 'a> {
     pub(super) core: CoreLib<'db>,
     pub(super) loop_stack: Vec<LoopScope>,
     pub(super) const_cache: FxHashMap<Const<'db>, ValueId>,
+    pub(super) const_array_data_cache: FxHashMap<Const<'db>, (TyId<'db>, Vec<u8>)>,
     pub(super) source_info_cache: FxHashMap<Span, crate::ir::SourceInfoId>,
     pub(super) pat_address_space: FxHashMap<PatId, AddressSpaceKind>,
     pub(super) binding_locals: FxHashMap<LocalBinding<'db>, LocalId>,
@@ -688,6 +689,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             core,
             loop_stack: Vec::new(),
             const_cache: FxHashMap::default(),
+            const_array_data_cache: FxHashMap::default(),
             source_info_cache: FxHashMap::default(),
             pat_address_space: FxHashMap::default(),
             binding_locals: FxHashMap::default(),
@@ -1346,7 +1348,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 out,
                 saw_non_param,
             ),
-            Stmt::For(_, iter, loop_body) => {
+            Stmt::For(_, iter, loop_body, _) => {
                 self.collect_explicit_return_param_sources_in_expr(
                     body,
                     typed_body,
@@ -1850,7 +1852,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     Vec::new()
                 }
             }
-            Rvalue::ZeroInit | Rvalue::Alloc { .. } => Vec::new(),
+            Rvalue::ZeroInit | Rvalue::Alloc { .. } | Rvalue::ConstAggregate { .. } => Vec::new(),
         }
     }
 
@@ -2624,6 +2626,7 @@ fn first_unlowered_expr_used_by_mir<'db>(body: &MirBody<'db>) -> Option<ExprId> 
                         used_values.extend(dynamic_indices(&place.projection));
                     }
                     crate::ir::Rvalue::Alloc { .. } => {}
+                    crate::ir::Rvalue::ConstAggregate { .. } => {}
                 },
                 MirInst::BindValue { value, .. } => {
                     used_values.insert(*value);

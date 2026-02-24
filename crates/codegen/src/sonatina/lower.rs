@@ -14,7 +14,8 @@ use num_bigint::BigUint;
 use rustc_hash::FxHashMap;
 use smallvec1::SmallVec;
 use sonatina_ir::{
-    BlockId, I256, Type, ValueId,
+    BlockId, GlobalVariableData, I256, Immediate, Linkage, Type, ValueId,
+    global_variable::GvInitializer,
     inst::{
         arith::{Add, Mul, Neg, Shl, Shr, Sub},
         cast::{IntToPtr, PtrToInt, Sext, Trunc, Zext},
@@ -22,14 +23,14 @@ use sonatina_ir::{
         control_flow::{Br, Call, Jump, Return},
         data::{Gep, Mload, Mstore, SymAddr, SymSize, SymbolRef},
         evm::{
-            EvmAddress, EvmBaseFee, EvmBlockHash, EvmCall, EvmCallValue, EvmCalldataCopy,
-            EvmCalldataLoad, EvmCalldataSize, EvmCaller, EvmChainId, EvmCodeCopy, EvmCodeSize,
-            EvmCoinBase, EvmCreate, EvmCreate2, EvmDelegateCall, EvmExp, EvmGas, EvmGasLimit,
-            EvmInvalid, EvmKeccak256, EvmLog0, EvmLog1, EvmLog2, EvmLog3, EvmLog4, EvmMalloc,
-            EvmMsize, EvmMstore8, EvmNumber, EvmOrigin, EvmPrevRandao, EvmReturn,
-            EvmReturnDataCopy, EvmReturnDataSize, EvmRevert, EvmSelfBalance, EvmSelfDestruct,
-            EvmSload, EvmSstore, EvmStaticCall, EvmStop, EvmTimestamp, EvmTload, EvmTstore,
-            EvmUdiv, EvmUmod,
+            EvmAddMod, EvmAddress, EvmBaseFee, EvmBlockHash, EvmCall, EvmCallValue,
+            EvmCalldataCopy, EvmCalldataLoad, EvmCalldataSize, EvmCaller, EvmChainId, EvmCodeCopy,
+            EvmCodeSize, EvmCoinBase, EvmCreate, EvmCreate2, EvmDelegateCall, EvmExp, EvmGas,
+            EvmGasLimit, EvmInvalid, EvmKeccak256, EvmLog0, EvmLog1, EvmLog2, EvmLog3, EvmLog4,
+            EvmMalloc, EvmMsize, EvmMstore8, EvmMulMod, EvmNumber, EvmOrigin, EvmPrevRandao,
+            EvmReturn, EvmReturnDataCopy, EvmReturnDataSize, EvmRevert, EvmSelfBalance,
+            EvmSelfDestruct, EvmSload, EvmSstore, EvmStaticCall, EvmStop, EvmTimestamp, EvmTload,
+            EvmTstore, EvmUdiv, EvmUmod,
         },
         logic::{And, Not, Or, Xor},
     },
@@ -55,6 +56,20 @@ pub(super) fn lower_instruction<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                     ));
                 };
                 let value = lower_alloc(ctx, *dest_local, *address_space)?;
+                let dest_var = ctx.local_vars.get(dest_local).copied().ok_or_else(|| {
+                    LowerError::Internal(format!("missing SSA variable for local {dest_local:?}"))
+                })?;
+                ctx.fb.def_var(dest_var, value);
+                return Ok(());
+            }
+
+            if let mir::Rvalue::ConstAggregate { data, .. } = rvalue {
+                let Some(dest_local) = dest else {
+                    return Err(LowerError::Internal(
+                        "ConstAggregate without destination local".to_string(),
+                    ));
+                };
+                let value = lower_const_aggregate(ctx, data)?;
                 let dest_var = ctx.local_vars.get(dest_local).copied().ok_or_else(|| {
                     LowerError::Internal(format!("missing SSA variable for local {dest_local:?}"))
                 })?;
@@ -515,6 +530,9 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         }
         Rvalue::Alloc { .. } => Err(LowerError::Internal(
             "Alloc rvalue should be handled directly in Assign lowering".to_string(),
+        )),
+        Rvalue::ConstAggregate { .. } => Err(LowerError::Unsupported(
+            "ConstAggregate not yet supported in Sonatina backend".to_string(),
         )),
     }
 }
@@ -1039,6 +1057,28 @@ fn lower_intrinsic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             };
             Ok(Some(ctx.fb.insert_inst(
                 EvmKeccak256::new(ctx.is, *addr, *len),
+                Type::I256,
+            )))
+        }
+        IntrinsicOp::Addmod => {
+            let [a, b, m] = lowered_args.as_slice() else {
+                return Err(LowerError::Internal(
+                    "addmod requires 3 arguments".to_string(),
+                ));
+            };
+            Ok(Some(ctx.fb.insert_inst(
+                EvmAddMod::new(ctx.is, *a, *b, *m),
+                Type::I256,
+            )))
+        }
+        IntrinsicOp::Mulmod => {
+            let [a, b, m] = lowered_args.as_slice() else {
+                return Err(LowerError::Internal(
+                    "mulmod requires 3 arguments".to_string(),
+                ));
+            };
+            Ok(Some(ctx.fb.insert_inst(
+                EvmMulMod::new(ctx.is, *a, *b, *m),
                 Type::I256,
             )))
         }
@@ -2111,4 +2151,51 @@ fn emit_evm_malloc_word_addr<C: sonatina_ir::func_cursor::FuncCursor>(
     let ptr_ty = fb.ptr_type(Type::I8);
     let ptr = fb.insert_inst(EvmMalloc::new(is, size), ptr_ty);
     fb.insert_inst(PtrToInt::new(is, ptr, Type::I256), Type::I256)
+}
+
+/// Lower a `ConstAggregate` by registering a global data section and using CODECOPY.
+///
+/// Registers the constant bytes as a Sonatina global variable (data section),
+/// then emits: malloc → symaddr → symsize → codecopy. This is the Sonatina
+/// equivalent of Yul's datacopy/dataoffset/datasize pattern.
+fn lower_const_aggregate<C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, '_, C>,
+    data: &[u8],
+) -> Result<ValueId, LowerError> {
+    let gv_ref = if let Some(&existing) = ctx.const_data_globals.get(data) {
+        existing
+    } else {
+        // Build array initializer from raw bytes (each element is one byte)
+        let elems: Vec<GvInitializer> = data
+            .iter()
+            .map(|&b| GvInitializer::make_imm(Immediate::I8(b as i8)))
+            .collect();
+        let array_init = GvInitializer::make_array(elems);
+
+        // Register as a const global variable
+        let label = format!("__fe_const_data_{}", *ctx.data_global_counter);
+        *ctx.data_global_counter += 1;
+        let array_ty = ctx
+            .fb
+            .module_builder
+            .declare_array_type(Type::I8, data.len());
+        let gv_data = GlobalVariableData::constant(label, array_ty, Linkage::Private, array_init);
+        let gv_ref = ctx.fb.module_builder.declare_gv(gv_data);
+        ctx.const_data_globals.insert(data.to_vec(), gv_ref);
+        ctx.data_globals.push(gv_ref);
+        gv_ref
+    };
+
+    // Emit: malloc + codecopy
+    let size_val = ctx.fb.make_imm_value(I256::from(data.len() as u64));
+    let ptr = emit_evm_malloc_word_addr(ctx.fb, size_val, ctx.is);
+    let sym = SymbolRef::Global(gv_ref);
+    let code_offset = ctx
+        .fb
+        .insert_inst(SymAddr::new(ctx.is, sym.clone()), Type::I256);
+    let code_size = ctx.fb.insert_inst(SymSize::new(ctx.is, sym), Type::I256);
+    ctx.fb
+        .insert_inst_no_result(EvmCodeCopy::new(ctx.is, ptr, code_offset, code_size));
+
+    Ok(ptr)
 }

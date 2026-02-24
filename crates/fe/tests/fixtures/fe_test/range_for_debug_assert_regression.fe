@@ -1,0 +1,16 @@
+use std::evm::effects::assert
+
+fn triangular(n: usize) -> usize {
+    let mut total: usize = 0
+    for i in 0..n {
+        total += i
+    }
+    return total
+}
+
+#[test]
+fn test_range_for_debug_assert_regression() {
+    assert(triangular(0) == 0)
+    assert(triangular(1) == 0)
+    assert(triangular(6) == 15)
+}

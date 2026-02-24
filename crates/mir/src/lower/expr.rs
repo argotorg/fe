@@ -29,6 +29,19 @@ enum RootLvalue<'db> {
     Local(LocalId),
 }
 
+/// Parameters for lowering a for-loop statement.
+struct ForLoopParams {
+    stmt: StmtId,
+    pat: PatId,
+    iter_expr: ExprId,
+    body_expr: ExprId,
+    /// Unroll hint from attributes:
+    /// - `None`: auto-unroll if < 10 iterations
+    /// - `Some(true)`: #[unroll] forces unrolling
+    /// - `Some(false)`: #[no_unroll] prevents unrolling
+    unroll_hint: Option<bool>,
+}
+
 impl<'db, 'a> MirBuilder<'db, 'a> {
     /// Try to lower a `size_of<T>()` or `encoded_size<T>()` call to a constant.
     fn try_lower_size_intrinsic_call(&mut self, expr: ExprId) -> Option<ValueId> {
@@ -951,6 +964,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let Some((mut args, arg_exprs)) = self.collect_call_args(expr) else {
             return value_id;
         };
+        // Save raw args before call-coercion; intrinsics need pre-coercion values
+        // to avoid double-loading capability-wrapped operands.
+        let raw_args = args.clone();
         let return_contains_capability = self.callable_return_contains_capability(&callable);
         let receiver_space = self.coerce_call_args_to_expected(
             &callable,
@@ -1001,7 +1017,10 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         if let Some(op) = self.intrinsic_kind(callable_def) {
-            let mut intrinsic_args = args.clone();
+            // Use pre-coercion args: `coerce_call_args_to_expected` wraps values in
+            // capability TransparentCasts which causes `coerce_binary_operand_if_copy_capability`
+            // to emit spurious loads. Intrinsics operate on raw word values.
+            let mut intrinsic_args = raw_args;
             let mut intrinsic_arg_exprs = arg_exprs.clone();
             if self.is_method_call(expr) && !intrinsic_args.is_empty() {
                 intrinsic_args.remove(0);
@@ -2360,8 +2379,14 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     }
                 }
             }
-            Stmt::For(pat, iter_expr, body) => {
-                self.lower_for(stmt_id, *pat, *iter_expr, *body);
+            Stmt::For(pat, iter_expr, body, unroll) => {
+                self.lower_for(ForLoopParams {
+                    stmt: stmt_id,
+                    pat: *pat,
+                    iter_expr: *iter_expr,
+                    body_expr: *body,
+                    unroll_hint: *unroll,
+                });
             }
             Stmt::While(cond, body_expr) => self.lower_while(*cond, *body_expr),
             Stmt::Continue => {
@@ -2456,6 +2481,10 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 body: body_block,
                 exit: exit_block,
                 backedge,
+                init_block: None,
+                post_block: None,
+                unroll_hint: None,
+                trip_count: None,
             },
         );
 
@@ -2464,31 +2493,30 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
     /// Lowers a `for` loop by desugaring into a while loop.
     ///
-    /// For Range (`for i in start..end`):
-    ///   - The loop variable `i` is initialized to `start`
-    ///   - Loop continues while `i < end`
-    ///   - Each iteration increments `i` by 1
-    ///
-    /// Lower a for-loop using the generic Seq trait approach when available.
-    ///
     /// If the type checker resolved Seq::len and Seq::get methods for this loop,
     /// uses those to implement iteration. Otherwise falls back to special-cased
     /// array lowering (legacy path for ill-typed code).
-    fn lower_for(&mut self, stmt: StmtId, pat: PatId, iter_expr: ExprId, body_expr: ExprId) {
+    fn lower_for(&mut self, params: ForLoopParams) {
         let Some(block) = self.current_block() else {
             return;
         };
 
         // Try to use resolved Seq methods from type checker
-        if let Some(seq_info) = self.typed_body.for_loop_seq(stmt).cloned() {
-            self.lower_for_seq(stmt, pat, iter_expr, body_expr, block, &seq_info);
+        if let Some(seq_info) = self.typed_body.for_loop_seq(params.stmt).cloned() {
+            self.lower_for_seq(params, block, &seq_info);
             return;
         }
 
         // Fallback to special-cased lowering for arrays.
-        let iter_ty = self.typed_body.expr_ty(self.db, iter_expr);
+        let iter_ty = self.typed_body.expr_ty(self.db, params.iter_expr);
         if iter_ty.is_array(self.db) {
-            self.lower_for_array(stmt, pat, iter_expr, body_expr, block);
+            self.lower_for_array(
+                params.stmt,
+                params.pat,
+                params.iter_expr,
+                params.body_expr,
+                block,
+            );
         }
     }
 
@@ -2506,10 +2534,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     /// ```
     fn lower_for_seq(
         &mut self,
-        stmt: StmtId,
-        pat: PatId,
-        iter_expr: ExprId,
-        body_expr: ExprId,
+        params: ForLoopParams,
         block: BasicBlockId,
         seq_info: &ForLoopSeq<'db>,
     ) {
@@ -2518,7 +2543,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         // Lower the iterable expression
         self.move_to_block(block);
-        let iterable_value = self.lower_expr(iter_expr);
+        let iterable_value = self.lower_expr(params.iter_expr);
         let Some(after_iter_block) = self.current_block() else {
             return;
         };
@@ -2529,7 +2554,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         // Initialize index to 0
         self.move_to_block(after_iter_block);
         let zero = self.synthetic_u256(BigUint::from(0u64));
-        self.assign(Some(stmt), Some(idx_local), Rvalue::Value(zero));
+        self.assign(Some(params.stmt), Some(idx_local), Rvalue::Value(zero));
 
         // Call Seq::len to get the length
         let len_value = self.emit_seq_len_call(
@@ -2584,10 +2609,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             &seq_info.get_callable,
             &seq_info.get_effect_args,
         );
-        self.bind_pat_value(pat, elem_value);
+
+        self.bind_pat_value(params.pat, elem_value);
 
         // Execute the body
-        let _ = self.lower_expr(body_expr);
+        let _ = self.lower_expr(params.body_expr);
         let body_end = self.current_block();
 
         self.loop_stack.pop();
@@ -2623,13 +2649,23 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         self.move_to_block(cond_header);
         self.branch(cond_value, body_block, exit_block);
 
-        // Register loop info
+        // Compute static trip count from the iterator type
+        let trip_count = {
+            let iter_ty = self.typed_body.expr_ty(self.db, params.iter_expr);
+            crate::layout::array_len_with_generic_args(self.db, iter_ty, self.generic_args)
+        };
+
+        // Register loop info with post_block for proper Yul for-loop emission
         self.builder.body.loop_headers.insert(
             cond_entry,
             LoopInfo {
                 body: body_block,
                 exit: exit_block,
                 backedge: Some(inc_end),
+                init_block: None,
+                post_block: Some(inc_block),
+                unroll_hint: params.unroll_hint,
+                trip_count,
             },
         );
 
@@ -2783,7 +2819,24 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let elem_ty = args.first().copied().unwrap_or(usize_ty);
 
         // Get array length from type
-        let array_len = layout::array_len(self.db, array_ty).unwrap_or(0);
+        let Some(array_len) =
+            layout::array_len_with_generic_args(self.db, array_ty, self.generic_args)
+        else {
+            if self.deferred_error.is_none() {
+                let func_name = self
+                    .hir_func
+                    .map(|func| func.pretty_print_signature(self.db))
+                    .unwrap_or_else(|| "<body owner>".to_string());
+                self.deferred_error = Some(MirLowerError::Unsupported {
+                    func_name,
+                    message: format!(
+                        "failed to resolve array length for `{}` in for-loop lowering",
+                        array_ty.pretty_print(self.db)
+                    ),
+                });
+            }
+            return;
+        };
         let len_value = self.synthetic_u256(BigUint::from(array_len));
 
         // Create hidden index local
@@ -2892,13 +2945,17 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         self.move_to_block(cond_header);
         self.branch(cond_value, body_block, exit_block);
 
-        // Register loop info
+        // Register loop info with post_block for proper Yul for-loop emission
         self.builder.body.loop_headers.insert(
             cond_entry,
             LoopInfo {
                 body: body_block,
                 exit: exit_block,
                 backedge: Some(inc_end),
+                init_block: None,
+                post_block: Some(inc_block),
+                unroll_hint: None,
+                trip_count: Some(array_len),
             },
         );
 

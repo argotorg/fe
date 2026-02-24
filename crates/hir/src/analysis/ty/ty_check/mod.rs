@@ -251,7 +251,11 @@ impl<'db> TyChecker<'db> {
         effects: crate::hir_def::EffectParamListId<'db>,
     ) {
         for (idx, effect) in effects.data(self.db).iter().enumerate() {
-            let Some(key_path) = effect.key_path.to_opt() else {
+            let Some(key_path) = effect
+                .key_path
+                .to_opt()
+                .filter(|path| path.ident(self.db).is_present())
+            else {
                 continue;
             };
 
@@ -309,7 +313,11 @@ impl<'db> TyChecker<'db> {
             super::resolve_default_root_effect_ty(self.db, contract.scope(), assumptions);
 
         for (idx, effect) in effects.data(self.db).iter().enumerate() {
-            let Some(key_path) = effect.key_path.to_opt() else {
+            let Some(key_path) = effect
+                .key_path
+                .to_opt()
+                .filter(|path| path.ident(self.db).is_present())
+            else {
                 continue;
             };
 

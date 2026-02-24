@@ -36,30 +36,43 @@ pub(crate) fn effect_key_kind<'db>(
         Ok(PathRes::Trait(_) | PathRes::TraitMethod(..)) => EffectKeyKind::Trait,
         _ => EffectKeyKind::Other,
     };
+    let classify_bucket = |lookup_scope, ident| {
+        let path = PathId::from_ident(db, ident);
+        if let Ok(res) = resolve_ident_to_bucket(db, path, lookup_scope).pick(NameDomain::TYPE) {
+            if res.is_trait() {
+                return EffectKeyKind::Trait;
+            }
+            if res.is_type() {
+                return EffectKeyKind::Type;
+            }
+        }
+        EffectKeyKind::Other
+    };
 
     // Prefer classifying the key without lowering generic args to avoid recursive generic-arg
-    // lowering cycles. If that fails (e.g., generic traits/types that require args), fall back to
-    // resolving the full key path.
+    // lowering cycles.
     let kind = classify(resolve_path(db, stripped_path, scope, assumptions, false));
     if kind != EffectKeyKind::Other {
         return kind;
     }
 
-    // `resolve_path` rejects generic trait paths when the generic args are stripped, which can
-    // create a cycle when this classification runs during generic-param collection. For bare
-    // identifiers, consult the name-resolution bucket to classify without lowering args.
-    if stripped_path.parent(db).is_none()
-        && let Ok(res) = resolve_ident_to_bucket(db, stripped_path, scope).pick(NameDomain::TYPE)
-    {
-        if res.is_trait() {
-            return EffectKeyKind::Trait;
+    let Some(ident) = stripped_path.ident(db).to_opt() else {
+        return EffectKeyKind::Other;
+    };
+
+    // `resolve_path` rejects generic paths after stripping args (e.g. `Storage<T>` -> `Storage`).
+    // Resolve the parent path, then classify the leaf identifier in that scope without touching
+    // generic args.
+    if let Some(parent_path) = stripped_path.parent(db) {
+        if let Ok(parent_res) = resolve_path(db, parent_path, scope, assumptions, false)
+            && let Some(parent_scope) = parent_res.as_scope(db)
+        {
+            return classify_bucket(parent_scope, ident);
         }
-        if res.is_type() {
-            return EffectKeyKind::Type;
-        }
+        return EffectKeyKind::Other;
     }
 
-    classify(resolve_path(db, key_path, scope, assumptions, false))
+    classify_bucket(scope, ident)
 }
 
 fn effect_key_kind_cycle_initial<'db>(

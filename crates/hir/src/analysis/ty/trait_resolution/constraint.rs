@@ -184,7 +184,10 @@ pub(crate) fn collect_adt_constraints<'db>(
     collect_constraints(db, owner)
 }
 
-#[salsa::tracked]
+#[salsa::tracked(
+    cycle_fn=collect_func_def_constraints_cycle_recover,
+    cycle_initial=collect_func_def_constraints_cycle_initial
+)]
 pub(crate) fn collect_func_def_constraints<'db>(
     db: &'db dyn HirAnalysisDb,
     func: CallableDef<'db>,
@@ -228,6 +231,24 @@ pub(crate) fn collect_func_def_constraints<'db>(
             .instantiate_identity()
             .merge(db, parent_constraints.instantiate_identity()),
     )
+}
+
+fn collect_func_def_constraints_cycle_initial<'db>(
+    db: &'db dyn HirAnalysisDb,
+    _func: CallableDef<'db>,
+    _include_parent: bool,
+) -> Binder<PredicateListId<'db>> {
+    Binder::bind(PredicateListId::empty_list(db))
+}
+
+fn collect_func_def_constraints_cycle_recover<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _value: &Binder<PredicateListId<'db>>,
+    _count: u32,
+    _func: CallableDef<'db>,
+    _include_parent: bool,
+) -> salsa::CycleRecoveryAction<Binder<PredicateListId<'db>>> {
+    salsa::CycleRecoveryAction::Iterate
 }
 
 #[salsa::tracked]

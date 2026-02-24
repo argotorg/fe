@@ -1,0 +1,38 @@
+---
+source: crates/codegen/tests/yul.rs
+expression: output
+input_file: tests/fixtures/for_array_large.fe
+---
+object "main" {
+  code {
+    function $for_array_large_sum() -> ret {
+      let v0 := mload(0x40)
+      if iszero(v0) {
+        v0 := 0x80
+      }
+      mstore(0x40, add(v0, 320))
+      datacopy(v0, dataoffset("data_for_array_large_sum_0"), datasize("data_for_array_large_sum_0"))
+      let v1 := v0
+      let v2 := 0
+      let v3 := 0
+      let v4 := $_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_len__u64_10__2b47acd750beacf4(v1)
+      for { } lt(v3, v4) { v3 := add(v3, 1) } {
+        let v5 := $_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_get__u64_10__2b47acd750beacf4(v1, v3)
+        let v6 := v5
+        v2 := add(v2, v6)
+      }
+      ret := v2
+      leave
+    }
+    function $_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_len__u64_10__2b47acd750beacf4($self) -> ret {
+      ret := 10
+      leave
+    }
+    function $_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_get__u64_10__2b47acd750beacf4($self, $i) -> ret {
+      let v0 := and(mload(add($self, mul($i, 32))), 0xffffffffffffffff)
+      ret := v0
+      leave
+    }
+  }
+  data "data_for_array_large_sum_0" hex"000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000003000000000000000000000000000000000000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000050000000000000000000000000000000000000000000000000000000000000006000000000000000000000000000000000000000000000000000000000000000700000000000000000000000000000000000000000000000000000000000000080000000000000000000000000000000000000000000000000000000000000009000000000000000000000000000000000000000000000000000000000000000a"
+}

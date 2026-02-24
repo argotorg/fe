@@ -1,0 +1,41 @@
+use std::evm::{Call, Evm}
+use std::evm::effects::assert
+use core::abi::{Abi, AbiEncoder, AbiSize, Encode}
+use std::abi::Sol
+
+msg StrideMsg {
+    #[selector = 0x3bde36f4]
+    WriteAndRead { first: u256, second: u256 } -> u256,
+}
+
+pub contract NestedStorageArrayStride {
+    data: [[u256; 2]; 2]
+
+    init() uses (mut data) {
+        data[0][0] = 1
+    }
+
+    recv StrideMsg {
+        WriteAndRead { first, second } -> u256 uses (mut data) {
+            data[0][1] = first
+            data[1][0] = second
+            assert(data[0][1] == first)
+            assert(data[1][0] == second)
+            return data[0][1] + data[1][0]
+        }
+    }
+}
+
+#[test]
+fn test_storage_nested_array_stride() uses (evm: mut Evm) {
+    let contract_addr = evm.create2<NestedStorageArrayStride>(value: 0, args: (), salt: 0)
+    assert(contract_addr.inner != 0)
+
+    let out: u256 = evm.call(
+        addr: contract_addr,
+        gas: 100000,
+        value: 0,
+        message: StrideMsg::WriteAndRead { first: 11, second: 22 },
+    )
+    assert(out == 33)
+}

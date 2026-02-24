@@ -1,0 +1,46 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+expression: output
+input_file: crates/codegen/tests/fixtures/const_nested_u8_array.fe
+---
+target = "evm-ethereum-osaka"
+
+global private const [i8; 128] $__fe_const_data_0 = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4];
+
+func public %const_nested_u8_array() -> i256 {
+    block0:
+        v2.*i8 = evm_malloc 128.i256;
+        v3.i256 = ptr_to_int v2 i256;
+        v4.i256 = sym_addr $__fe_const_data_0;
+        v5.i256 = sym_size $__fe_const_data_0;
+        evm_code_copy v3 v4 v5;
+        v6.*[[i256; 2]; 2] = int_to_ptr v3 *[[i256; 2]; 2];
+        v8.*[i256; 2] = gep v6 0.i256 1.i256;
+        v9.i256 = ptr_to_int v8 i256;
+        v10.*[i256; 2] = int_to_ptr v9 *[i256; 2];
+        v11.*i256 = gep v10 0.i256 0.i256;
+        v12.i256 = ptr_to_int v11 i256;
+        v13.i256 = mload v12 i256;
+        v14.i8 = trunc v13 i8;
+        v15.i256 = zext v14 i256;
+        v16.*i8 = evm_malloc 128.i256;
+        v17.i256 = ptr_to_int v16 i256;
+        v18.i256 = sym_addr $__fe_const_data_0;
+        v19.i256 = sym_size $__fe_const_data_0;
+        evm_code_copy v17 v18 v19;
+        return v15;
+}
+
+func public %__fe_sonatina_entry() {
+    block0:
+        v0.i256 = call %const_nested_u8_array;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+        data $__fe_const_data_0;
+    }
+}

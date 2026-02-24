@@ -113,6 +113,14 @@ impl<'db> FunctionEmitter<'db> {
                 };
                 self.emit_alloc_inst(docs, dest, *address_space, state)?
             }
+            mir::ir::Rvalue::ConstAggregate { data, .. } => {
+                let Some(dest) = dest else {
+                    return Err(YulError::Unsupported(
+                        "const_aggregate without destination".into(),
+                    ));
+                };
+                self.emit_const_aggregate_inst(docs, dest, data, state)?
+            }
         }
         Ok(())
     }
@@ -237,6 +245,27 @@ impl<'db> FunctionEmitter<'db> {
         };
         let (yul_name, declared) = self.resolve_local_for_write(dest, state)?;
         self.emit_alloc_value(docs, &yul_name, size_bytes, declared);
+        Ok(())
+    }
+
+    /// Emits a constant aggregate by registering data for a Yul data section
+    /// and copying it into allocated memory.
+    fn emit_const_aggregate_inst(
+        &mut self,
+        docs: &mut Vec<YulDoc>,
+        dest: LocalId,
+        data: &[u8],
+        state: &mut BlockState,
+    ) -> Result<(), YulError> {
+        let label = self.register_data_region(data.to_vec());
+        let size = data.len();
+        let (yul_name, declared) = self.resolve_local_for_write(dest, state)?;
+        // Allocate memory for the data
+        self.emit_alloc_value(docs, &yul_name, size, declared);
+        // Copy data from bytecode to memory
+        docs.push(YulDoc::line(format!(
+            "datacopy({yul_name}, dataoffset(\"{label}\"), datasize(\"{label}\"))"
+        )));
         Ok(())
     }
 
@@ -720,6 +749,8 @@ impl<'db> FunctionEmitter<'db> {
             IntrinsicOp::CodeRegionOffset => "code_region_offset",
             IntrinsicOp::CodeRegionLen => "code_region_len",
             IntrinsicOp::Keccak => "keccak256",
+            IntrinsicOp::Addmod => "addmod",
+            IntrinsicOp::Mulmod => "mulmod",
             IntrinsicOp::Caller => "caller",
         }
     }
