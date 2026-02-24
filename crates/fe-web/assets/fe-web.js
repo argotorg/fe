@@ -150,15 +150,8 @@
   // ============================================================================
 
   function renderRichSignature(rich, fallback, highlightedFallback) {
-    // Prefer highlighted HTML (has both syntax colors and type links)
-    if (highlightedFallback) {
-      return '<fe-code-block lang="fe" highlighted>' + highlightedFallback + "</fe-code-block>";
-    }
-    // Fall back to fe-signature for rich_signature-only data (e.g. dynamic rendering)
-    if (rich && rich.length > 0) {
-      var jsonAttr = esc(JSON.stringify(rich));
-      return "<fe-signature data='" + jsonAttr + "'>" + esc(fallback || "") + "</fe-signature>";
-    }
+    // Always emit raw text — client-side FeHighlighter handles
+    // syntax highlighting and type linking via tree-sitter WASM + ScipStore.
     return '<fe-code-block lang="fe">' + esc(fallback || "") + "</fe-code-block>";
   }
 
