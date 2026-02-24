@@ -36,6 +36,13 @@ impl<'db> DocExtractor<'db> {
         }
     }
 
+    /// Set the root path for computing relative display paths.
+    /// Source links use display_file relative to this root.
+    pub fn with_root_path(mut self, root: std::path::PathBuf) -> Self {
+        self.root_path = Some(root);
+        self
+    }
+
     /// Rewrite a path to use the ingot's config name instead of "lib".
     /// Delegates to the shared `qualify_path_with_ingot_name` function.
     fn qualify_path_with_ingot(&self, path: &str, ingot: Ingot<'db>) -> String {
