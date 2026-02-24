@@ -276,7 +276,7 @@
     if (isModule) {
       var modContent = findModuleContent(index.modules, item.path);
       if (modContent) {
-        html += renderModuleMembers(modContent.items, modContent.submodules);
+        html += renderModuleMembers(modContent.items, modContent.submodules, index);
       }
     }
 
@@ -478,7 +478,20 @@
   // Module Members
   // ============================================================================
 
-  function renderModuleMembers(items, submodules) {
+  /** Look up a module's doc summary from the index items list. */
+  function getModuleSummary(index, modulePath) {
+    var items = index.items || [];
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].path === modulePath && items[i].kind === "module") {
+        var docs = items[i].docs;
+        if (docs && docs.summary) return docs.summary;
+        break;
+      }
+    }
+    return "";
+  }
+
+  function renderModuleMembers(items, submodules, index) {
     if ((!submodules || submodules.length === 0) && (!items || items.length === 0)) {
       return "";
     }
@@ -491,9 +504,10 @@
       html += "<h2>Modules</h2>";
       html += '<div class="item-list">';
       submodules.forEach(function (sub) {
+        var summary = index ? getModuleSummary(index, sub.path) : "";
         html += '<div class="item-row">';
-        html += '<div class="item-name"><a href="' + moduleHref(sub.path) + '"><code>' + esc(sub.name) + "</code></a></div>";
-        html += '<div class="item-summary"></div>';
+        html += '<div class="item-name">' + kindBadge("mod") + '<a href="' + moduleHref(sub.path) + '"><code>' + esc(sub.name) + "</code></a></div>";
+        html += '<div class="item-summary">' + esc(summary) + "</div>";
         html += "</div>";
       });
       html += "</div></section>";
@@ -517,7 +531,7 @@
         group.items.forEach(function (item) {
           var url = item.path + "/" + kindStr(item.kind);
           html += '<div class="item-row">';
-          html += '<div class="item-name"><a href="' + itemHref(url) + '"><code>' + esc(item.name) + "</code></a></div>";
+          html += '<div class="item-name">' + kindBadge(kindStr(item.kind)) + '<a href="' + itemHref(url) + '"><code>' + esc(item.name) + "</code></a></div>";
           html += '<div class="item-summary">' + esc(item.summary || "") + "</div>";
           html += "</div>";
         });
@@ -882,7 +896,7 @@
     // Insert after sidebar-nav
     var nav = sidebarEl.querySelector(".sidebar-nav");
     if (nav) {
-      nav.parentNode.insertBefore(outline, nav.nextSibling);
+      nav.parentNode.insertBefore(outline, nav);
     } else {
       sidebarEl.appendChild(outline);
     }
