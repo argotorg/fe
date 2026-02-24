@@ -831,9 +831,23 @@
     for (var i = 0; i < targets.length; i++) {
       var el = targets[i];
       var id = el.id;
-      var text = el.tagName === "H2"
-        ? el.textContent.replace("\u00a7", "").trim()
-        : (el.querySelector("summary") || el).textContent.replace("\u00a7", "").replace(/\u25b6/g, "").trim();
+      var text = "";
+      if (el.tagName === "H2") {
+        text = el.textContent.replace("\u00a7", "").trim();
+      } else if (id.indexOf("method.") === 0) {
+        // method.map → "map()"
+        text = id.substring(7) + "()";
+      } else if (id.indexOf("impl-") === 0) {
+        // impl-Display → "impl Display"
+        text = "impl " + id.substring(5).replace(/-/g, " ");
+      } else {
+        // Fallback: use heading text, truncated
+        var heading = el.querySelector("summary h3, summary h4");
+        text = heading ? heading.textContent.trim()
+          : (el.querySelector("summary") || el).textContent
+              .replace("\u00a7", "").replace(/\u25b6/g, "").trim();
+        if (text.length > 50) text = text.substring(0, 47) + "\u2026";
+      }
       if (id && text) {
         entries.push({ id: id, text: text });
       }
