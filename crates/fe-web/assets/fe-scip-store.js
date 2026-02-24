@@ -13,25 +13,42 @@
 // applies them to every element carrying the symbol's classes.
 var _highlightSheet = null;
 var _defaultHighlightHash = null;
+var _activeHighlightHash = null;
 
-// Role-aware highlight: injects rules for closure (all occurrences),
-// definition sites, and reference sites with different visual treatments.
+// Role-aware highlight using inline styles on matched elements.
+// Setting style.background directly means the CSS transition on
+// [class*="sym-"] can interpolate between transparent ↔ colored.
 function feHighlight(symHash) {
-  if (!_highlightSheet) {
-    _highlightSheet = document.createElement("style");
-    _highlightSheet.id = "fe-sym-highlight";
-    document.head.appendChild(_highlightSheet);
+  // Clear previous highlight (fade out via transition)
+  if (_activeHighlightHash && _activeHighlightHash !== symHash) {
+    _setHighlightStyles(_activeHighlightHash, false);
   }
-  _highlightSheet.textContent =
-    ".sym-" + symHash + " { background: rgba(74,222,128,0.12); border-radius: 2px; }" +
-    ".sym-d-" + symHash + " { background: rgba(74,222,128,0.22); text-decoration: underline;" +
-    " text-decoration-color: rgba(74,222,128,0.5); text-underline-offset: 2px; }";
+  _activeHighlightHash = symHash;
+  if (symHash) _setHighlightStyles(symHash, true);
 }
+
+function _setHighlightStyles(symHash, on) {
+  var all = document.querySelectorAll(".sym-" + symHash);
+  var defs = document.querySelectorAll(".sym-d-" + symHash);
+  for (var i = 0; i < all.length; i++) {
+    all[i].style.background = on ? "rgba(74,222,128,0.12)" : "";
+    all[i].style.borderRadius = on ? "2px" : "";
+  }
+  for (var j = 0; j < defs.length; j++) {
+    defs[j].style.background = on ? "rgba(74,222,128,0.22)" : "";
+    defs[j].style.textDecoration = on ? "underline" : "";
+    defs[j].style.textDecorationColor = on ? "rgba(74,222,128,0.5)" : "";
+    defs[j].style.textUnderlineOffset = on ? "2px" : "";
+  }
+}
+
 function feUnhighlight() {
+  if (_activeHighlightHash) {
+    _setHighlightStyles(_activeHighlightHash, false);
+    _activeHighlightHash = null;
+  }
   if (_defaultHighlightHash) {
     feHighlight(_defaultHighlightHash);
-  } else if (_highlightSheet) {
-    _highlightSheet.textContent = "";
   }
 }
 // Set the ambient/default symbol highlight for the current page.
@@ -42,7 +59,7 @@ function feSetDefaultHighlight(symHash) {
 }
 function feClearDefaultHighlight() {
   _defaultHighlightHash = null;
-  if (_highlightSheet) _highlightSheet.textContent = "";
+  feUnhighlight();
 }
 
 function ScipStore(data) {
