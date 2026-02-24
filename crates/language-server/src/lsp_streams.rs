@@ -145,6 +145,7 @@ impl<State> RouterStreams for Router<State> {
 /// Extension trait for piping streams to sinks (handles spawn+while boilerplate)
 pub trait StreamPipeExt: Stream + Sized {
     /// Pipe stream items back into the LSP event system via `client.emit()`
+    #[allow(dead_code)]
     fn pipe_emit(self, client: ClientSocket)
     where
         Self: Send + 'static,

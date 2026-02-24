@@ -135,8 +135,7 @@ impl<S> WsToLspReader<S> {
 
 impl<S> AsyncRead for WsToLspReader<S>
 where
-    S: futures::Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>>
-        + Unpin,
+    S: futures::Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
 {
     fn poll_read(
         self: Pin<&mut Self>,
@@ -218,7 +217,10 @@ impl<Sink> LspToWsWriter<Sink> {
 
 impl<Sink> AsyncWrite for LspToWsWriter<Sink>
 where
-    Sink: futures::Sink<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin + Send + 'static,
+    Sink: futures::Sink<Message, Error = tokio_tungstenite::tungstenite::Error>
+        + Unpin
+        + Send
+        + 'static,
 {
     fn poll_write(
         self: Pin<&mut Self>,
@@ -229,29 +231,20 @@ where
         this.buf.extend_from_slice(data);
 
         // Try to extract complete Content-Length framed messages
-        loop {
-            // Look for the header delimiter
-            let header_end = match find_subsequence(&this.buf, b"\r\n\r\n") {
-                Some(pos) => pos,
-                None => break,
-            };
-
+        while let Some(header_end) = find_subsequence(&this.buf, b"\r\n\r\n") {
             // Parse Content-Length from header
-            let header = match std::str::from_utf8(&this.buf[..header_end]) {
-                Ok(h) => h,
-                Err(_) => break,
+            let Ok(header) = std::str::from_utf8(&this.buf[..header_end]) else {
+                break;
             };
 
-            let content_length = header
-                .lines()
-                .find_map(|line| {
-                    let (key, val) = line.split_once(':')?;
-                    if key.trim().eq_ignore_ascii_case("Content-Length") {
-                        val.trim().parse::<usize>().ok()
-                    } else {
-                        None
-                    }
-                });
+            let content_length = header.lines().find_map(|line| {
+                let (key, val) = line.split_once(':')?;
+                if key.trim().eq_ignore_ascii_case("Content-Length") {
+                    val.trim().parse::<usize>().ok()
+                } else {
+                    None
+                }
+            });
 
             let Some(content_length) = content_length else {
                 break;
@@ -294,9 +287,7 @@ where
 
 /// Find the first occurrence of `needle` in `haystack`.
 fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack
-        .windows(needle.len())
-        .position(|w| w == needle)
+    haystack.windows(needle.len()).position(|w| w == needle)
 }
 
 #[cfg(test)]
@@ -305,7 +296,10 @@ mod tests {
 
     #[test]
     fn find_subsequence_basic() {
-        assert_eq!(find_subsequence(b"hello\r\n\r\nworld", b"\r\n\r\n"), Some(5));
+        assert_eq!(
+            find_subsequence(b"hello\r\n\r\nworld", b"\r\n\r\n"),
+            Some(5)
+        );
         assert_eq!(find_subsequence(b"no delimiter", b"\r\n\r\n"), None);
     }
 }

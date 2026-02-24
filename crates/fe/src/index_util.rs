@@ -47,7 +47,10 @@ impl LineIndex {
     /// Column is a byte offset from the start of the line (matching SCIP's
     /// UTF-8 position encoding).
     pub fn byte_offset_from_line_col(&self, line: usize, col: usize) -> usize {
-        self.offsets.get(line).map(|&start| start + col).unwrap_or(0)
+        self.offsets
+            .get(line)
+            .map(|&start| start + col)
+            .unwrap_or(0)
     }
 }
 
@@ -60,10 +63,7 @@ pub(crate) struct IngotContext<'db> {
 }
 
 impl<'db> IngotContext<'db> {
-    pub fn resolve(
-        db: &'db driver::DriverDataBase,
-        ingot_url: &url::Url,
-    ) -> io::Result<Self> {
+    pub fn resolve(db: &'db driver::DriverDataBase, ingot_url: &url::Url) -> io::Result<Self> {
         let Some(ingot) = db.workspace().containing_ingot(db, ingot_url.clone()) else {
             return Err(io::Error::new(
                 io::ErrorKind::NotFound,

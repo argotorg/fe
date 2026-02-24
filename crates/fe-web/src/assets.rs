@@ -42,9 +42,21 @@ const HIGHLIGHTS_SCM: &str = include_str!("../../tree-sitter-fe/queries/highligh
 /// Build the highlighter JS with embedded WASM binaries and query source.
 fn build_highlighter_js() -> String {
     FE_HIGHLIGHTER_TEMPLATE
-        .replacen("\"%%TS_WASM_B64%%\"", &format!("\"{}\"", base64_encode(TS_WASM)), 1)
-        .replacen("\"%%FE_WASM_B64%%\"", &format!("\"{}\"", base64_encode(FE_WASM)), 1)
-        .replacen("\"%%HIGHLIGHTS_SCM%%\"", &format!("\"{}\"", js_escape_string(HIGHLIGHTS_SCM)), 1)
+        .replacen(
+            "\"%%TS_WASM_B64%%\"",
+            &format!("\"{}\"", base64_encode(TS_WASM)),
+            1,
+        )
+        .replacen(
+            "\"%%FE_WASM_B64%%\"",
+            &format!("\"{}\"", base64_encode(FE_WASM)),
+            1,
+        )
+        .replacen(
+            "\"%%HIGHLIGHTS_SCM%%\"",
+            &format!("\"{}\"", js_escape_string(HIGHLIGHTS_SCM)),
+            1,
+        )
 }
 
 /// Escape a string for embedding in a JS string literal (double-quoted).
@@ -79,11 +91,7 @@ pub fn html_shell(title: &str, doc_index_json: &str) -> String {
 ///
 /// When `source_link_base` is provided (e.g. "https://github.com/org/repo/blob/abc123"),
 /// source links in item headers become clickable GitHub links.
-pub fn html_shell_with_scip(
-    title: &str,
-    doc_index_json: &str,
-    scip_json: Option<&str>,
-) -> String {
+pub fn html_shell_with_scip(title: &str, doc_index_json: &str, scip_json: Option<&str>) -> String {
     html_shell_full(title, doc_index_json, scip_json, None)
 }
 
@@ -189,11 +197,24 @@ mod tests {
     fn highlighter_js_has_embedded_data() {
         let js = build_highlighter_js();
         // Should not contain unresolved placeholders
-        assert!(!js.contains("%%TS_WASM_B64%%"), "TS_WASM placeholder should be replaced");
-        assert!(!js.contains("%%FE_WASM_B64%%"), "FE_WASM placeholder should be replaced");
-        assert!(!js.contains("%%HIGHLIGHTS_SCM%%"), "HIGHLIGHTS_SCM placeholder should be replaced");
+        assert!(
+            !js.contains("%%TS_WASM_B64%%"),
+            "TS_WASM placeholder should be replaced"
+        );
+        assert!(
+            !js.contains("%%FE_WASM_B64%%"),
+            "FE_WASM placeholder should be replaced"
+        );
+        assert!(
+            !js.contains("%%HIGHLIGHTS_SCM%%"),
+            "HIGHLIGHTS_SCM placeholder should be replaced"
+        );
         // Should contain base64-encoded data (long strings starting with typical WASM b64)
-        assert!(js.len() > 100_000, "should be large with embedded WASMs: {} bytes", js.len());
+        assert!(
+            js.len() > 100_000,
+            "should be large with embedded WASMs: {} bytes",
+            js.len()
+        );
     }
 
     #[test]
@@ -213,7 +234,10 @@ mod tests {
         assert!(html.contains("fe-signature"));
         assert!(html.contains("fe-search"));
         // Tree-sitter and highlighter are loaded
-        assert!(html.contains("TreeSitter"), "should contain tree-sitter runtime");
+        assert!(
+            html.contains("TreeSitter"),
+            "should contain tree-sitter runtime"
+        );
         assert!(html.contains("FeHighlighter"), "should contain highlighter");
     }
 
@@ -250,7 +274,10 @@ mod tests {
         // Contains the ScipStore class
         assert!(html.contains("ScipStore"), "should have ScipStore class");
         // Contains the SCIP data assignment
-        assert!(html.contains("FE_SCIP_DATA"), "should have SCIP data inline");
+        assert!(
+            html.contains("FE_SCIP_DATA"),
+            "should have SCIP data inline"
+        );
         // Contains the FE_SCIP initialization
         assert!(html.contains("window.FE_SCIP"), "should initialize FE_SCIP");
         // Still contains the base DocIndex

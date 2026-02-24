@@ -8,8 +8,8 @@ use hir::{
     SpannedHirDb,
     core::semantic::SymbolView,
     hir_def::{
-        Contract, Enum, FieldParent, HirIngot, Impl, ImplTrait, ItemKind, Struct,
-        TopLevelMod, Trait, VariantKind, Visibility, scope_graph::ScopeId,
+        Contract, Enum, FieldParent, HirIngot, Impl, ImplTrait, ItemKind, Struct, TopLevelMod,
+        Trait, VariantKind, Visibility, scope_graph::ScopeId,
     },
     semantic::{FieldView, qualify_path_with_ingot_name},
     span::LazySpan,
@@ -191,7 +191,9 @@ impl<'db> DocExtractor<'db> {
             .filter_map(|func| {
                 let name = func.name(self.db).to_opt()?.data(self.db).to_string();
                 let (signature, signature_span) = self.get_signature_with_span(func.into());
-                let docs = self.get_docstring(func.scope()).map(|s| DocContent::from_raw(&s));
+                let docs = self
+                    .get_docstring(func.scope())
+                    .map(|s| DocContent::from_raw(&s));
 
                 Some(DocImplMethod {
                     name,
@@ -211,7 +213,9 @@ impl<'db> DocExtractor<'db> {
             .filter_map(|func| {
                 let name = func.name(self.db).to_opt()?.data(self.db).to_string();
                 let (signature, signature_span) = self.get_signature_with_span(func.into());
-                let docs = self.get_docstring(func.scope()).map(|s| DocContent::from_raw(&s));
+                let docs = self
+                    .get_docstring(func.scope())
+                    .map(|s| DocContent::from_raw(&s));
 
                 Some(DocImplMethod {
                     name,
@@ -313,21 +317,15 @@ impl<'db> DocExtractor<'db> {
     }
 
     /// Get the item's signature and its source span data for SCIP overlay.
-    fn get_signature_with_span(
-        &self,
-        item: ItemKind<'db>,
-    ) -> (String, Option<SignatureSpanData>) {
+    fn get_signature_with_span(&self, item: ItemKind<'db>) -> (String, Option<SignatureSpanData>) {
         let sym = SymbolView::from_item(item);
         match sym.signature_with_span(self.db) {
             Some(sig_span) => {
-                let span_data = sig_span
-                    .file
-                    .url(self.db)
-                    .map(|u| SignatureSpanData {
-                        file_url: u.to_string(),
-                        byte_start: sig_span.byte_start,
-                        byte_end: sig_span.byte_end,
-                    });
+                let span_data = sig_span.file.url(self.db).map(|u| SignatureSpanData {
+                    file_url: u.to_string(),
+                    byte_start: sig_span.byte_start,
+                    byte_end: sig_span.byte_end,
+                });
                 (sig_span.text, span_data)
             }
             None => (sym.signature(self.db).unwrap_or_default(), None),
@@ -476,7 +474,9 @@ impl<'db> DocExtractor<'db> {
             .filter_map(|variant_view| {
                 let name = variant_view.name(self.db)?.data(self.db).to_string();
                 let enum_variant = hir::hir_def::EnumVariant::new(e, variant_view.idx);
-                let docs = self.get_docstring(enum_variant.scope()).map(|s| DocContent::from_raw(&s));
+                let docs = self
+                    .get_docstring(enum_variant.scope())
+                    .map(|s| DocContent::from_raw(&s));
 
                 let signature = match variant_view.kind(self.db) {
                     VariantKind::Unit => name.clone(),
@@ -542,7 +542,9 @@ impl<'db> DocExtractor<'db> {
         for func in t.methods(self.db) {
             if let Some(name) = func.name(self.db).to_opt() {
                 let name_str = name.data(self.db).to_string();
-                let docs = self.get_docstring(func.scope()).map(|s| DocContent::from_raw(&s));
+                let docs = self
+                    .get_docstring(func.scope())
+                    .map(|s| DocContent::from_raw(&s));
                 let (signature, signature_span) = self.get_signature_with_span(func.into());
 
                 children.push(DocChild {
@@ -587,7 +589,9 @@ impl<'db> DocExtractor<'db> {
         for func in i.funcs(self.db) {
             if let Some(name) = func.name(self.db).to_opt() {
                 let name_str = name.data(self.db).to_string();
-                let docs = self.get_docstring(func.scope()).map(|s| DocContent::from_raw(&s));
+                let docs = self
+                    .get_docstring(func.scope())
+                    .map(|s| DocContent::from_raw(&s));
                 let (signature, signature_span) = self.get_signature_with_span(func.into());
                 let visibility = self.convert_visibility(func.vis(self.db));
 
@@ -613,7 +617,9 @@ impl<'db> DocExtractor<'db> {
         for func in it.methods(self.db) {
             if let Some(name) = func.name(self.db).to_opt() {
                 let name_str = name.data(self.db).to_string();
-                let docs = self.get_docstring(func.scope()).map(|s| DocContent::from_raw(&s));
+                let docs = self
+                    .get_docstring(func.scope())
+                    .map(|s| DocContent::from_raw(&s));
                 let (signature, signature_span) = self.get_signature_with_span(func.into());
                 let visibility = self.convert_visibility(func.vis(self.db));
 
@@ -932,7 +938,9 @@ mod tests {
     fn doc_extract(fixture: Fixture<&str>) {
         let mut db = DriverDataBase::default();
         let url = url::Url::from_file_path(fixture.path()).expect("path should be absolute");
-        let file = db.workspace().touch(&mut db, url, Some(fixture.content().to_string()));
+        let file = db
+            .workspace()
+            .touch(&mut db, url, Some(fixture.content().to_string()));
         let top_mod = db.top_mod(file);
 
         let extractor = DocExtractor::new(&db);
@@ -951,7 +959,9 @@ mod tests {
     fn doc_static_site(fixture: Fixture<&str>) {
         let mut db = DriverDataBase::default();
         let url = url::Url::from_file_path(fixture.path()).expect("path should be absolute");
-        let file = db.workspace().touch(&mut db, url, Some(fixture.content().to_string()));
+        let file = db
+            .workspace()
+            .touch(&mut db, url, Some(fixture.content().to_string()));
         let top_mod = db.top_mod(file);
 
         let extractor = DocExtractor::new(&db);
@@ -984,7 +994,10 @@ mod tests {
         }
 
         if index.items.iter().any(|i| i.docs.is_some()) {
-            assert!(html.contains("html_body"), "should contain pre-rendered html_body");
+            assert!(
+                html.contains("html_body"),
+                "should contain pre-rendered html_body"
+            );
         }
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -998,7 +1011,9 @@ mod tests {
     fn doc_round_trip(fixture: Fixture<&str>) {
         let mut db = DriverDataBase::default();
         let url = url::Url::from_file_path(fixture.path()).expect("path should be absolute");
-        let file = db.workspace().touch(&mut db, url, Some(fixture.content().to_string()));
+        let file = db
+            .workspace()
+            .touch(&mut db, url, Some(fixture.content().to_string()));
         let top_mod = db.top_mod(file);
 
         let extractor = DocExtractor::new(&db);
@@ -1018,9 +1033,18 @@ mod tests {
             assert_eq!(a.path, b.path, "path mismatch");
             assert_eq!(a.name, b.name, "name mismatch");
             assert_eq!(a.kind, b.kind, "kind mismatch");
-            assert_eq!(a.children.len(), b.children.len(), "children count mismatch for {}", a.path);
+            assert_eq!(
+                a.children.len(),
+                b.children.len(),
+                "children count mismatch for {}",
+                a.path
+            );
         }
 
-        assert_eq!(original.modules.len(), restored.modules.len(), "module tree mismatch");
+        assert_eq!(
+            original.modules.len(),
+            restored.modules.len(),
+            "module tree mismatch"
+        );
     }
 }

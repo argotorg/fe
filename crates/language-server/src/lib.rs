@@ -46,7 +46,11 @@ pub async fn run_stdio_server(ws_port: Option<u16>) {
     });
 
     let (server, client) = async_lsp::MainLoop::new_server(|client| {
-        let lsp_service = setup(client.clone(), "LSP actor".to_string(), ws_broadcast.clone());
+        let lsp_service = setup(
+            client.clone(),
+            "LSP actor".to_string(),
+            ws_broadcast.clone(),
+        );
         ServiceBuilder::new()
             .layer(LifecycleLayer::default())
             .layer(CatchUnwindLayer::default())

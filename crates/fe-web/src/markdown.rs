@@ -47,13 +47,13 @@ where
     fn highlight_code(&self, code: &str, lang: Option<&str>) -> String {
         // Fe code blocks are emitted as raw <fe-code-block> — client-side
         // FeHighlighter handles syntax highlighting and type linking.
-        if let Some(l) = lang {
-            if l == "fe" || l.starts_with("fe,") || l.starts_with("fe ") {
-                return format!(
-                    "<fe-code-block lang=\"fe\">{}</fe-code-block>",
-                    html_escape(code)
-                );
-            }
+        if let Some(l) = lang
+            && (l == "fe" || l.starts_with("fe,") || l.starts_with("fe "))
+        {
+            return format!(
+                "<fe-code-block lang=\"fe\">{}</fe-code-block>",
+                html_escape(code)
+            );
         }
 
         // Fallback for other languages: html-escaped <pre><code>
@@ -165,9 +165,15 @@ mod tests {
     fn test_code_block() {
         let md = "```fe\nfn main() {}\n```";
         let html = render_markdown(md);
-        assert!(html.contains("fe-code-block"), "should wrap in <fe-code-block>: {html}");
+        assert!(
+            html.contains("fe-code-block"),
+            "should wrap in <fe-code-block>: {html}"
+        );
         // Raw text content (client-side highlighting handles syntax colors)
-        assert!(html.contains("fn main()"), "should contain raw code text: {html}");
+        assert!(
+            html.contains("fn main()"),
+            "should contain raw code text: {html}"
+        );
     }
 
     #[test]
