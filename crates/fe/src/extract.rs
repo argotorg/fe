@@ -327,6 +327,16 @@ impl<'db> DocExtractor<'db> {
         }
     }
 
+    /// Build `SignatureSpanData` from a resolved `Span`.
+    fn span_to_sig_data(&self, span: &common::diagnostics::Span) -> Option<SignatureSpanData> {
+        let file_url = span.file.url(self.db)?;
+        Some(SignatureSpanData {
+            file_url: file_url.to_string(),
+            byte_start: span.range.start().into(),
+            byte_end: span.range.end().into(),
+        })
+    }
+
     /// Extract the type text from a field's type span
     fn get_field_type_text(&self, field_view: FieldView<'db>) -> Option<String> {
         let ty_span = field_view.ty_span().resolve(self.db)?;
@@ -397,13 +407,20 @@ impl<'db> DocExtractor<'db> {
                 // Get visibility from the scope's data
                 let visibility = scope.data(self.db).vis;
 
+                let signature_span = s
+                    .span()
+                    .fields()
+                    .field(field_view.idx)
+                    .resolve(self.db)
+                    .and_then(|s| self.span_to_sig_data(&s));
+
                 Some(DocChild {
                     kind: DocChildKind::Field,
                     name,
                     docs,
                     signature,
                     rich_signature: vec![],
-                    signature_span: None,
+                    signature_span,
                     sig_scope: None,
                     visibility: self.convert_visibility(visibility),
                 })
@@ -425,13 +442,20 @@ impl<'db> DocExtractor<'db> {
                 let signature = format!("{}: {}", name, type_text);
                 let visibility = scope.data(self.db).vis;
 
+                let signature_span = c
+                    .span()
+                    .fields()
+                    .field(field_view.idx)
+                    .resolve(self.db)
+                    .and_then(|s| self.span_to_sig_data(&s));
+
                 Some(DocChild {
                     kind: DocChildKind::Field,
                     name,
                     docs,
                     signature,
                     rich_signature: vec![],
-                    signature_span: None,
+                    signature_span,
                     sig_scope: None,
                     visibility: self.convert_visibility(visibility),
                 })
@@ -463,13 +487,18 @@ impl<'db> DocExtractor<'db> {
                     VariantKind::Record(_) => format!("{} {{ ... }}", name),
                 };
 
+                let signature_span = enum_variant
+                    .span()
+                    .resolve(self.db)
+                    .and_then(|s| self.span_to_sig_data(&s));
+
                 Some(DocChild {
                     kind: DocChildKind::Variant,
                     name,
                     docs,
                     signature,
                     rich_signature: vec![],
-                    signature_span: None,
+                    signature_span,
                     sig_scope: None,
                     visibility: DocVisibility::Public,
                 })
