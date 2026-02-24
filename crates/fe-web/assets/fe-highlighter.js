@@ -88,31 +88,40 @@
     var padded = padForParse(source);
     var tree = parser.parse(padded.source);
     var captures = query.captures(tree.rootNode);
-    tree.delete();
 
     var offset = padded.offset;
+
+    // Eagerly read startIndex/endIndex from each capture node BEFORE deleting
+    // the tree. In web-tree-sitter, endIndex is a lazy getter that reads WASM
+    // memory — it returns garbage after tree.delete().
+    var capData = new Array(captures.length);
+    for (var ci = 0; ci < captures.length; ci++) {
+      var cap = captures[ci];
+      capData[ci] = {
+        si: cap.node.startIndex - offset,
+        ei: cap.node.endIndex - offset,
+        name: cap.name
+      };
+    }
+    tree.delete();
 
     // Sort captures by startIndex, then by length descending (outermost first).
     // For overlapping captures, innermost (shortest) wins — we process outermost
     // first but let innermost overwrite.
-    captures.sort(function (a, b) {
-      var d = a.node.startIndex - b.node.startIndex;
+    capData.sort(function (a, b) {
+      var d = a.si - b.si;
       if (d !== 0) return d;
-      return (b.node.endIndex - b.node.startIndex) - (a.node.endIndex - a.node.startIndex);
+      return (b.ei - b.si) - (a.ei - a.si);
     });
 
     // Build an array of character-level capture assignments.
     // Only covers original source length — padding captures are ignored.
-    // Captures are shifted by -offset to account for any prefix padding.
     var len = source.length;
     var charCapture = new Array(len);
-    for (var ci = 0; ci < captures.length; ci++) {
-      var cap = captures[ci];
-      var si = cap.node.startIndex - offset;
-      var ei = cap.node.endIndex - offset;
-      var name = cap.name;
-      for (var k = Math.max(0, si); k < ei && k < len; k++) {
-        charCapture[k] = name;
+    for (var ci = 0; ci < capData.length; ci++) {
+      var cd = capData[ci];
+      for (var k = Math.max(0, cd.si); k < cd.ei && k < len; k++) {
+        charCapture[k] = cd.name;
       }
     }
 
