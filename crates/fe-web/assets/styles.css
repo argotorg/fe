@@ -10,9 +10,9 @@
     --code-bg: #0d1117;
 
     /* SCIP symbol highlighting (used by feHighlight() in JS) */
-    --hl-ref-bg: rgba(99, 102, 241, 0.10);
-    --hl-def-bg: rgba(99, 102, 241, 0.18);
-    --hl-def-underline: rgba(99, 102, 241, 0.5);
+    --hl-ref-bg: rgba(99, 102, 241, 0.18);
+    --hl-def-bg: rgba(99, 102, 241, 0.30);
+    --hl-def-underline: rgba(99, 102, 241, 0.6);
 
     /* Navigated-to item highlight (used by .is-target / :target) */
     --target-bg: color-mix(in srgb, var(--accent) 10%, var(--bg-secondary));

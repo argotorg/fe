@@ -543,10 +543,15 @@ fn detect_git_root(working_dir: &std::path::Path) -> Option<std::path::PathBuf> 
         .map(|o| std::path::PathBuf::from(String::from_utf8_lossy(&o.stdout).trim().to_string()))
 }
 
-/// Auto-detect a GitHub source link base from the git repository.
+/// The canonical GitHub repository for source links.
+const CANONICAL_REPO: &str = "https://github.com/ethereum/fe";
+
+/// Build a GitHub source link base using the canonical repo URL and the
+/// current git commit hash.
 ///
-/// Returns something like "https://github.com/ethereum/fe/blob/abc123def"
-/// by running `git remote get-url origin` and `git rev-parse HEAD`.
+/// Returns something like "https://github.com/ethereum/fe/blob/abc123def".
+/// The repo URL is hardcoded so that builds from forks don't leak arbitrary
+/// remote URLs into the generated docs.
 fn detect_source_link_base(working_dir: &std::path::Path) -> Option<String> {
     let dir = if working_dir.is_file() {
         working_dir.parent()?
@@ -563,42 +568,9 @@ fn detect_source_link_base(working_dir: &std::path::Path) -> Option<String> {
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())?;
 
-    // Get the remote URL
-    let remote = std::process::Command::new("git")
-        .args(["remote", "get-url", "origin"])
-        .current_dir(dir)
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())?;
-
-    // Normalize git remote URL to HTTPS browse URL
-    let https_base = normalize_git_url(&remote)?;
-
-    Some(format!("{}/blob/{}", https_base, commit))
+    Some(format!("{}/blob/{}", CANONICAL_REPO, commit))
 }
 
-/// Normalize a git remote URL to a browsable HTTPS base.
-/// "git@github.com:org/repo.git" → "https://github.com/org/repo"
-/// "https://github.com/org/repo.git" → "https://github.com/org/repo"
-fn normalize_git_url(url: &str) -> Option<String> {
-    let url = url.trim();
-
-    // SSH format: git@github.com:org/repo.git
-    if let Some(rest) = url.strip_prefix("git@") {
-        let rest = rest.replace(':', "/");
-        let rest = rest.strip_suffix(".git").unwrap_or(&rest);
-        return Some(format!("https://{}", rest));
-    }
-
-    // HTTPS format: https://github.com/org/repo.git
-    if url.starts_with("https://") || url.starts_with("http://") {
-        let trimmed = url.strip_suffix(".git").unwrap_or(url);
-        return Some(trimmed.to_string());
-    }
-
-    None
-}
 
 fn print_doc_summary(index: &DocIndex) {
     println!("Fe Documentation Index");
