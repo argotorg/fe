@@ -570,7 +570,25 @@ fn serialize_const_array_to_bytes(elems: &[ConstValue], elem_size: usize) -> Opt
                     bytes.extend(inner_bytes);
                 }
             }
-            _ => return None,
+            ConstValue::Bytes(raw) => {
+                // CTFE represents `[u8; N]` as `Bytes`; when used as an element in
+                // nested arrays (e.g. `[[u8; 2]; 2]`), expand each byte into its
+                // EVM memory stride.
+                if raw.is_empty() {
+                    if elem_size == 0 {
+                        continue;
+                    }
+                    bytes.extend(vec![0u8; elem_size]);
+                    continue;
+                }
+                if !elem_size.is_multiple_of(raw.len()) {
+                    return None;
+                }
+                let inner_elem_size = elem_size / raw.len();
+                for &byte in raw {
+                    bytes.extend(pad_be_bytes(&[byte], inner_elem_size)?);
+                }
+            }
         }
     }
     Some(bytes)
@@ -616,5 +634,19 @@ mod tests {
         assert_eq!(data[31], 0x11);
         assert_eq!(data[63], 0x02);
         assert_eq!(data[95], 0x01);
+    }
+
+    #[test]
+    fn serialize_nested_u8_array_words() {
+        let data = serialize_const_array_to_bytes(
+            &[ConstValue::Bytes(vec![1, 2]), ConstValue::Bytes(vec![3, 4])],
+            64,
+        )
+        .expect("nested u8 arrays should serialize");
+        assert_eq!(data.len(), 128);
+        assert_eq!(data[31], 0x01);
+        assert_eq!(data[63], 0x02);
+        assert_eq!(data[95], 0x03);
+        assert_eq!(data[127], 0x04);
     }
 }
