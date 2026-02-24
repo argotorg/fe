@@ -766,7 +766,7 @@ fn run_scip(path: &Utf8PathBuf, output: &Utf8PathBuf) {
         eprintln!("Warning: ingot had initialization diagnostics");
     }
 
-    let index = match scip_index::generate_scip(&mut db, &ingot_url) {
+    let index = match scip_index::generate_scip(&db, &ingot_url) {
         Ok(index) => index,
         Err(e) => {
             eprintln!("Error generating SCIP: {e}");

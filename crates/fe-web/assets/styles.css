@@ -236,25 +236,18 @@ body {
     color: var(--text);
 }
 
-/* Type links in signatures and code blocks */
+/* Type links in signatures and code blocks — underline indicates clickable,
+   color is inherited from the syntax highlight class (hl-type, hl-type-builtin, etc.) */
 .type-link {
-    color: var(--accent);
-    text-decoration: none;
-}
-
-.type-link:hover {
-    color: var(--accent-hover);
+    color: inherit;
     text-decoration: underline;
-}
-
-a.hl-type.type-link {
-    color: var(--accent);
-    text-decoration: none;
+    text-underline-offset: 2px;
+    text-decoration-color: currentColor;
     cursor: pointer;
 }
 
-a.hl-type.type-link:hover {
-    text-decoration: underline;
+.type-link:hover {
+    text-decoration-style: dashed;
 }
 
 .docs {

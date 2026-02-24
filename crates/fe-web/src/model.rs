@@ -46,6 +46,21 @@ pub fn plain_signature(s: impl Into<String>) -> RichSignature {
     vec![SignaturePart::text(s)]
 }
 
+/// Source location of a signature in its file, used to overlay SCIP occurrences.
+///
+/// Byte offsets are exact: `file_text[byte_start..byte_end] == signature_text`.
+/// Skipped during serialization — only used in-memory during doc generation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SignatureSpanData {
+    /// Absolute file URL (file:// scheme), used to compute relative path for
+    /// matching against SCIP document `relative_path` fields.
+    pub file_url: String,
+    /// Start byte offset in the file text.
+    pub byte_start: usize,
+    /// End byte offset in the file text.
+    pub byte_end: usize,
+}
+
 // ============================================================================
 // Core Documentation Types
 // ============================================================================
@@ -68,6 +83,9 @@ pub struct DocItem {
     /// Rich signature with embedded links (for rendering)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rich_signature: RichSignature,
+    /// Source span of the signature (for SCIP occurrence overlay, not serialized)
+    #[serde(skip)]
+    pub signature_span: Option<SignatureSpanData>,
     /// Generic parameters, if any
     pub generics: Vec<DocGenericParam>,
     /// Where clause bounds, if any
@@ -302,6 +320,9 @@ pub struct DocChild {
     /// Rich signature with embedded links
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rich_signature: RichSignature,
+    /// Source span of the signature (for SCIP occurrence overlay, not serialized)
+    #[serde(skip)]
+    pub signature_span: Option<SignatureSpanData>,
     pub visibility: DocVisibility,
 }
 
@@ -386,6 +407,9 @@ pub struct DocTraitImpl {
     /// Rich signature with embedded links
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rich_signature: RichSignature,
+    /// Source span of the signature (for SCIP occurrence overlay, not serialized)
+    #[serde(skip)]
+    pub signature_span: Option<SignatureSpanData>,
     /// Methods defined in this impl block (displayed inline on type pages)
     #[serde(default)]
     pub methods: Vec<DocImplMethod>,
@@ -401,6 +425,9 @@ pub struct DocImplMethod {
     /// Rich signature with embedded links
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rich_signature: RichSignature,
+    /// Source span of the signature (for SCIP occurrence overlay, not serialized)
+    #[serde(skip)]
+    pub signature_span: Option<SignatureSpanData>,
     /// Documentation (first paragraph only for summary)
     pub docs: Option<String>,
 }
@@ -679,6 +706,7 @@ mod tests {
             docs: Some(DocContent::from_raw("A 2D point.\n\nUsed for coordinates.")),
             signature: "pub struct Point".into(),
             rich_signature: vec![],
+            signature_span: None,
             generics: vec![DocGenericParam {
                 name: "T".into(),
                 bounds: vec![],
@@ -691,6 +719,7 @@ mod tests {
                 docs: Some("The x coordinate".into()),
                 signature: "x: u256".into(),
                 rich_signature: vec![],
+                signature_span: None,
                 visibility: DocVisibility::Public,
             }],
             source: Some(DocSourceLoc {
@@ -710,6 +739,7 @@ mod tests {
             docs: None,
             signature: "pub enum Color".into(),
             rich_signature: vec![],
+            signature_span: None,
             generics: vec![],
             where_bounds: vec![],
             children: vec![
@@ -719,6 +749,7 @@ mod tests {
                     docs: None,
                     signature: "Red".into(),
                     rich_signature: vec![],
+                    signature_span: None,
                     visibility: DocVisibility::Public,
                 },
                 DocChild {
@@ -727,6 +758,7 @@ mod tests {
                     docs: None,
                     signature: "Green".into(),
                     rich_signature: vec![],
+                    signature_span: None,
                     visibility: DocVisibility::Public,
                 },
             ],
@@ -742,6 +774,7 @@ mod tests {
             docs: Some(DocContent::from_raw("Add two numbers.")),
             signature: "pub fn add(a: u256, b: u256) -> u256".into(),
             rich_signature: vec![],
+            signature_span: None,
             generics: vec![],
             where_bounds: vec![],
             children: vec![],

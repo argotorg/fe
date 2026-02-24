@@ -4,7 +4,7 @@ use std::io::{self, Write};
 use common::InputDb;
 use common::diagnostics::Span;
 use hir::{
-    hir_def::{HirIngot, ItemKind, scope_graph::ScopeId},
+    hir_def::{HirIngot, scope_graph::ScopeId},
     span::LazySpan,
 };
 

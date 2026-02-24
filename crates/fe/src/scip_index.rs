@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::io;
 
+use rayon::prelude::*;
+
 use camino::{Utf8Path, Utf8PathBuf};
 use common::InputDb;
 use common::diagnostics::Span;
@@ -30,6 +32,16 @@ impl ScipDocumentBuilder {
         Self {
             relative_path,
             ..Default::default()
+        }
+    }
+
+    /// Merge another builder's contents into this one (for combining parallel results).
+    fn merge(&mut self, other: ScipDocumentBuilder) {
+        self.occurrences.extend(other.occurrences);
+        for si in other.symbols {
+            if self.seen_symbols.insert(si.symbol.clone()) {
+                self.symbols.push(si);
+            }
         }
     }
 
@@ -200,7 +212,7 @@ fn push_occurrence(
 }
 
 pub fn generate_scip(
-    db: &mut driver::DriverDataBase,
+    db: &driver::DriverDataBase,
     ingot_url: &url::Url,
 ) -> io::Result<types::Index> {
     let ctx = index_util::IngotContext::resolve(db, ingot_url)?;
@@ -211,130 +223,53 @@ pub fn generate_scip(
         .and_then(|p| Utf8PathBuf::from_path_buf(p).ok())
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "ingot URL must be file://"))?;
 
+    // Pre-compute relative paths for all module files
+    let file_relative_paths: HashMap<String, String> = ctx
+        .ingot
+        .all_modules(db)
+        .iter()
+        .filter_map(|top_mod| {
+            let doc_url = top_mod_url(db, top_mod)?;
+            let relative = relative_path(&project_root_path, &doc_url)?;
+            Some((doc_url.to_string(), relative))
+        })
+        .collect();
+
+    // Process modules in parallel using rayon with Salsa DB forks.
+    // Each clone shares cached query results via Arc, making
+    // IngotContext::resolve (incl. ReferenceIndex::build) cheap.
+    // We create one fork per rayon thread (not per module) so each
+    // fork builds the IngotContext once for its chunk of modules.
+    let module_count = ctx.ingot.all_modules(db).len();
+    let fork_count = rayon::current_num_threads().max(1).min(module_count);
+    let db_forks: Vec<driver::DriverDataBase> =
+        (0..fork_count).map(|_| db.clone()).collect();
+
+    let parallel_results: Vec<Vec<HashMap<String, ScipDocumentBuilder>>> = db_forks
+        .into_par_iter()
+        .enumerate()
+        .map(|(thread_idx, fork)| {
+            let ctx = index_util::IngotContext::resolve(&fork, ingot_url)
+                .expect("IngotContext::resolve should succeed in forked db");
+            let modules = ctx.ingot.all_modules(&fork);
+            let start = thread_idx * module_count / fork_count;
+            let end = ((thread_idx + 1) * module_count / fork_count).min(module_count);
+            (start..end)
+                .filter_map(|idx| process_module(&fork, modules[idx], &ctx, &file_relative_paths))
+                .collect()
+        })
+        .collect();
+
     let mut documents: HashMap<String, ScipDocumentBuilder> = HashMap::new();
-
-    for top_mod in ctx.ingot.all_modules(db) {
-        let Some(doc_url) = top_mod_url(db, top_mod) else {
-            continue;
-        };
-        let Some(relative) = relative_path(&project_root_path, &doc_url) else {
-            continue;
-        };
-        documents
-            .entry(doc_url.to_string())
-            .or_insert_with(|| ScipDocumentBuilder::new(relative));
-    }
-
-    for top_mod in ctx.ingot.all_modules(db) {
-        let scope_graph = top_mod.scope_graph(db);
-        let Some(doc_url) = top_mod_url(db, top_mod).map(|u| u.to_string()) else {
-            continue;
-        };
-
-        for item in scope_graph.items_dfs(db) {
-            let Some((symbol, display_name)) = item_symbol(db, item, &ctx.name, &ctx.version)
-            else {
-                continue;
-            };
-
-            if let Some(doc) = documents.get_mut(&doc_url) {
-                if doc.seen_symbols.insert(symbol.clone()) {
-                    doc.symbols.push(types::SymbolInformation {
-                        symbol: symbol.clone(),
-                        documentation: index_util::hover_parts(db, item).to_scip_documentation(),
-                        relationships: Vec::new(),
-                        kind: item_symbol_kind(item).into(),
-                        display_name,
-                        signature_documentation: None.into(),
-                        enclosing_symbol: String::new(),
-                        special_fields: Default::default(),
-                    });
-                }
-
-                if let Some(name_span) = item.name_span().and_then(|span| span.resolve(db))
-                    && let Some(range) = span_to_scip_range(&name_span, db)
-                {
-                    push_occurrence(
-                        doc,
-                        range,
-                        symbol.clone(),
-                        types::SymbolRole::Definition as i32,
-                    );
-                }
-            }
-
-            // Use ReferenceIndex instead of scanning all modules
-            let scope = ScopeId::from_item(item);
-            for indexed_ref in ctx.ref_index.references_to(&scope) {
-                if let Some(resolved) = indexed_ref.span.resolve(db) {
-                    let ref_doc_url = match resolved.file.url(db) {
-                        Some(url) => url.to_string(),
-                        None => continue,
-                    };
-                    if let Some(ref_doc) = documents.get_mut(&ref_doc_url)
-                        && let Some(range) = span_to_scip_range(&resolved, db)
-                    {
-                        push_occurrence(ref_doc, range, symbol.clone(), 0);
+    for chunk in parallel_results {
+        for result in chunk {
+            for (url, builder) in result {
+                match documents.entry(url) {
+                    std::collections::hash_map::Entry::Occupied(mut e) => {
+                        e.get_mut().merge(builder);
                     }
-                }
-            }
-
-            // Index sub-items (fields, variants, methods, associated types)
-            let sym_view = SymbolView::from_item(item);
-            for child in sym_view.children(db) {
-                let child_scope = child.scope();
-                let Some(child_name) = child.name(db) else {
-                    continue;
-                };
-
-                let child_symbol = child_scip_symbol(&symbol, &child_name, child_scope);
-                let child_kind = child_symbol_kind(child_scope);
-
-                if let Some(doc) = documents.get_mut(&doc_url) {
-                    if doc.seen_symbols.insert(child_symbol.clone()) {
-                        // Build documentation for the child
-                        let child_docs = child
-                            .docs(db)
-                            .map(|d| vec![d])
-                            .unwrap_or_default();
-
-                        doc.symbols.push(types::SymbolInformation {
-                            symbol: child_symbol.clone(),
-                            documentation: child_docs,
-                            relationships: Vec::new(),
-                            kind: child_kind.into(),
-                            display_name: child_name.clone(),
-                            signature_documentation: None.into(),
-                            enclosing_symbol: symbol.clone(),
-                            special_fields: Default::default(),
-                        });
-                    }
-
-                    // Definition occurrence from name span
-                    if let Some(name_span) = child.name_span(db)
-                        && let Some(range) = span_to_scip_range(&name_span, db)
-                    {
-                        push_occurrence(
-                            doc,
-                            range,
-                            child_symbol.clone(),
-                            types::SymbolRole::Definition as i32,
-                        );
-                    }
-                }
-
-                // Reference occurrences for the child
-                for indexed_ref in ctx.ref_index.references_to(&child_scope) {
-                    if let Some(resolved) = indexed_ref.span.resolve(db) {
-                        let ref_doc_url = match resolved.file.url(db) {
-                            Some(url) => url.to_string(),
-                            None => continue,
-                        };
-                        if let Some(ref_doc) = documents.get_mut(&ref_doc_url)
-                            && let Some(range) = span_to_scip_range(&resolved, db)
-                        {
-                            push_occurrence(ref_doc, range, child_symbol.clone(), 0);
-                        }
+                    std::collections::hash_map::Entry::Vacant(e) => {
+                        e.insert(builder);
                     }
                 }
             }
@@ -365,6 +300,144 @@ pub fn generate_scip(
     index.documents = docs;
 
     Ok(index)
+}
+
+/// Process a single module and return document fragments for all files it touches.
+///
+/// Each module produces definitions for its own file and reference occurrences
+/// potentially spanning other files. Returns a map of file URL → document builder.
+fn process_module<'db>(
+    db: &'db driver::DriverDataBase,
+    top_mod: hir::hir_def::TopLevelMod<'db>,
+    ctx: &index_util::IngotContext<'db>,
+    file_relative_paths: &HashMap<String, String>,
+) -> Option<HashMap<String, ScipDocumentBuilder>> {
+    let scope_graph = top_mod.scope_graph(db);
+    let doc_url = top_mod_url(db, &top_mod)?.to_string();
+
+    let mut documents: HashMap<String, ScipDocumentBuilder> = HashMap::new();
+
+    // Ensure this module's file has a builder
+    if let Some(relative) = file_relative_paths.get(&doc_url) {
+        documents
+            .entry(doc_url.clone())
+            .or_insert_with(|| ScipDocumentBuilder::new(relative.clone()));
+    }
+
+    for item in scope_graph.items_dfs(db) {
+        let Some((symbol, display_name)) = item_symbol(db, item, &ctx.name, &ctx.version) else {
+            continue;
+        };
+
+        if let Some(doc) = documents.get_mut(&doc_url) {
+            if doc.seen_symbols.insert(symbol.clone()) {
+                doc.symbols.push(types::SymbolInformation {
+                    symbol: symbol.clone(),
+                    documentation: index_util::hover_parts(db, item).to_scip_documentation(),
+                    relationships: Vec::new(),
+                    kind: item_symbol_kind(item).into(),
+                    display_name,
+                    signature_documentation: None.into(),
+                    enclosing_symbol: String::new(),
+                    special_fields: Default::default(),
+                });
+            }
+
+            if let Some(name_span) = item.name_span().and_then(|span| span.resolve(db))
+                && let Some(range) = span_to_scip_range(&name_span, db)
+            {
+                push_occurrence(
+                    doc,
+                    range,
+                    symbol.clone(),
+                    types::SymbolRole::Definition as i32,
+                );
+            }
+        }
+
+        // Reference occurrences (may span other files)
+        let scope = ScopeId::from_item(item);
+        for indexed_ref in ctx.ref_index.references_to(&scope) {
+            if let Some(resolved) = indexed_ref.span.resolve(db) {
+                let ref_url = match resolved.file.url(db) {
+                    Some(url) => url.to_string(),
+                    None => continue,
+                };
+                let ref_doc = documents.entry(ref_url.clone()).or_insert_with(|| {
+                    let relative = file_relative_paths
+                        .get(&ref_url)
+                        .cloned()
+                        .unwrap_or_default();
+                    ScipDocumentBuilder::new(relative)
+                });
+                if let Some(range) = span_to_scip_range(&resolved, db) {
+                    push_occurrence(ref_doc, range, symbol.clone(), 0);
+                }
+            }
+        }
+
+        // Index sub-items (fields, variants, methods, associated types)
+        let sym_view = SymbolView::from_item(item);
+        for child in sym_view.children(db) {
+            let child_scope = child.scope();
+            let Some(child_name) = child.name(db) else {
+                continue;
+            };
+
+            let child_symbol = child_scip_symbol(&symbol, &child_name, child_scope);
+            let child_kind = child_symbol_kind(child_scope);
+
+            if let Some(doc) = documents.get_mut(&doc_url) {
+                if doc.seen_symbols.insert(child_symbol.clone()) {
+                    let child_docs = child.docs(db).map(|d| vec![d]).unwrap_or_default();
+
+                    doc.symbols.push(types::SymbolInformation {
+                        symbol: child_symbol.clone(),
+                        documentation: child_docs,
+                        relationships: Vec::new(),
+                        kind: child_kind.into(),
+                        display_name: child_name.clone(),
+                        signature_documentation: None.into(),
+                        enclosing_symbol: symbol.clone(),
+                        special_fields: Default::default(),
+                    });
+                }
+
+                if let Some(name_span) = child.name_span(db)
+                    && let Some(range) = span_to_scip_range(&name_span, db)
+                {
+                    push_occurrence(
+                        doc,
+                        range,
+                        child_symbol.clone(),
+                        types::SymbolRole::Definition as i32,
+                    );
+                }
+            }
+
+            // Reference occurrences for the child
+            for indexed_ref in ctx.ref_index.references_to(&child_scope) {
+                if let Some(resolved) = indexed_ref.span.resolve(db) {
+                    let ref_url = match resolved.file.url(db) {
+                        Some(url) => url.to_string(),
+                        None => continue,
+                    };
+                    let ref_doc = documents.entry(ref_url.clone()).or_insert_with(|| {
+                        let relative = file_relative_paths
+                            .get(&ref_url)
+                            .cloned()
+                            .unwrap_or_default();
+                        ScipDocumentBuilder::new(relative)
+                    });
+                    if let Some(range) = span_to_scip_range(&resolved, db) {
+                        push_occurrence(ref_doc, range, child_symbol.clone(), 0);
+                    }
+                }
+            }
+        }
+    }
+
+    Some(documents)
 }
 
 /// Convert a SCIP Index into a compact JSON string for browser embedding.
@@ -458,7 +531,6 @@ pub fn scip_to_json_data(index: &types::Index) -> String {
 /// Inject `doc_url` fields into a SCIP JSON string by matching SCIP symbols
 /// against items in the DocIndex. Sub-items get parent page + anchor URLs.
 pub fn inject_doc_urls(scip_json: &str, doc_index: &DocIndex) -> String {
-    use fe_web::model::DocChildKind;
 
     let mut root: serde_json::Value = match serde_json::from_str(scip_json) {
         Ok(v) => v,
@@ -471,19 +543,14 @@ pub fn inject_doc_urls(scip_json: &str, doc_index: &DocIndex) -> String {
         name_to_url.insert(&item.name, item.url_path());
     }
 
-    // Build child name → (parent_url, anchor) lookup
+    // Build child name → (parent_url~anchor) lookup.
+    // Uses `~` separator because the SPA hash router parses `#path/kind~anchor`.
     let mut child_to_url: HashMap<String, String> = HashMap::new();
     for item in &doc_index.items {
         let parent_url = item.url_path();
         for child in &item.children {
-            let anchor = match child.kind {
-                DocChildKind::Field => format!("field.{}", child.name),
-                DocChildKind::Variant => format!("variant.{}", child.name),
-                DocChildKind::Method => format!("tymethod.{}", child.name),
-                DocChildKind::AssocType => format!("associatedtype.{}", child.name),
-                DocChildKind::AssocConst => format!("associatedconstant.{}", child.name),
-            };
-            child_to_url.insert(child.name.clone(), format!("{}#{}", parent_url, anchor));
+            let anchor = format!("{}.{}", child.kind.anchor_prefix(), child.name);
+            child_to_url.insert(child.name.clone(), format!("{}~{}", parent_url, anchor));
         }
     }
 
@@ -524,133 +591,256 @@ pub fn inject_doc_urls(scip_json: &str, doc_index: &DocIndex) -> String {
     root.to_string()
 }
 
-/// Enrich `rich_signature` fields in a DocIndex using the SCIP symbol table.
+/// Enrich `rich_signature` fields in a DocIndex using SCIP occurrence positions.
 ///
-/// Tokenizes each item's `signature` string and links type-like identifiers
-/// to their doc page URLs when they appear in the SCIP index.
-pub fn enrich_signatures(index: &mut DocIndex, scip_index: &types::Index) {
-    use fe_web::model::SignaturePart;
-
-    // Build display_name → doc_url map from SCIP symbols
-    let mut type_urls: HashMap<String, String> = HashMap::new();
+/// For each item/child/method that has a `signature_span`, finds SCIP occurrences
+/// within that byte range, skips definitions, and builds linked signature parts.
+/// This replaces the old name-matching tokenizer with compiler-resolved references.
+pub fn enrich_signatures(
+    db: &driver::DriverDataBase,
+    project_root: &Utf8Path,
+    index: &mut DocIndex,
+    scip_index: &types::Index,
+) {
+    // Step 1: Build SCIP symbol → doc_url map.
+    // Build a name→url map with ambiguity tracking (same logic as build_type_links):
+    // if the same display name maps to different URLs, mark it ambiguous and exclude.
+    let mut symbol_to_url: HashMap<String, String> = HashMap::new();
+    let mut name_seen: HashMap<String, Option<String>> = HashMap::new();
+    for item in &index.items {
+        let url = item.url_path();
+        name_seen
+            .entry(item.name.clone())
+            .and_modify(|existing| {
+                if existing.as_deref() != Some(url.as_str()) {
+                    *existing = None;
+                }
+            })
+            .or_insert(Some(url));
+    }
+    for item in &index.items {
+        let parent_url = item.url_path();
+        for child in &item.children {
+            let anchor = format!("{}.{}", child.kind.anchor_prefix(), child.name);
+            let url = format!("{}~{}", parent_url, anchor);
+            name_seen
+                .entry(child.name.clone())
+                .and_modify(|existing| {
+                    if existing.as_deref() != Some(url.as_str()) {
+                        *existing = None;
+                    }
+                })
+                .or_insert(Some(url));
+        }
+    }
     for doc in &scip_index.documents {
         for si in &doc.symbols {
-            let kind = si.kind.value();
-            // Only link types: Struct(49), Enum(11), Trait(53), TypeAlias(54/55), Contract(7/Class)
-            if matches!(kind, 49 | 11 | 53 | 54 | 55 | 7) {
-                if !si.display_name.is_empty() && !type_urls.contains_key(&si.display_name) {
-                    type_urls.insert(si.display_name.clone(), si.symbol.clone());
-                }
+            if si.symbol.is_empty() {
+                continue;
+            }
+            if let Some(Some(url)) = name_seen.get(&si.display_name) {
+                symbol_to_url.insert(si.symbol.clone(), url.clone());
             }
         }
     }
 
-    // Build SCIP symbol → DocIndex url_path map
-    let mut name_to_url: HashMap<&str, String> = HashMap::new();
-    for item in &index.items {
-        name_to_url.insert(&item.name, item.url_path());
-    }
-
-    // Resolve type_urls to actual doc URLs
-    let mut type_doc_urls: HashMap<String, String> = HashMap::new();
-    for (display_name, _scip_symbol) in &type_urls {
-        if let Some(url) = name_to_url.get(display_name.as_str()) {
-            type_doc_urls.insert(display_name.clone(), url.clone());
-        }
-    }
-
-    if type_doc_urls.is_empty() {
+    if symbol_to_url.is_empty() {
         return;
     }
 
-    fn tokenize_signature(sig: &str, type_urls: &HashMap<String, String>) -> Vec<SignaturePart> {
-        let mut parts = Vec::new();
-        let mut text_buf = String::new();
-        let mut ident_buf = String::new();
-        let chars: Vec<char> = sig.chars().collect();
-        let mut i = 0;
+    // Step 2: Build per-file byte-indexed occurrence lists from SCIP documents.
+    // We need file text to convert SCIP line/col → byte offsets.
+    let mut file_occurrences: HashMap<String, Vec<ByteOccurrence>> = HashMap::new();
+    for doc in &scip_index.documents {
+        let abs_path = project_root.join(&doc.relative_path);
+        let file_url = match url::Url::from_file_path(abs_path.as_std_path()) {
+            Ok(u) => u,
+            Err(_) => continue,
+        };
+        let Some(file) = db.workspace().get(db, &file_url) else {
+            continue;
+        };
+        let text = file.text(db);
+        let line_index = LineIndex::new(text);
 
-        while i < chars.len() {
-            let ch = chars[i];
-            if ch.is_alphanumeric() || ch == '_' {
-                // Start or continue identifier
-                if ident_buf.is_empty() && !text_buf.is_empty() {
-                    // Flush text buffer before starting ident
-                }
-                ident_buf.push(ch);
-            } else {
-                // End of identifier
-                if !ident_buf.is_empty() {
-                    if let Some(url) = type_urls.get(&ident_buf) {
-                        if !text_buf.is_empty() {
-                            parts.push(SignaturePart::text(&text_buf));
-                            text_buf.clear();
-                        }
-                        parts.push(SignaturePart::link(&ident_buf, url));
-                    } else {
-                        text_buf.push_str(&ident_buf);
-                    }
-                    ident_buf.clear();
-                }
-                text_buf.push(ch);
+        let occs = file_occurrences
+            .entry(doc.relative_path.clone())
+            .or_default();
+
+        for occ in &doc.occurrences {
+            if occ.symbol.is_empty() || occ.range.is_empty() {
+                continue;
             }
-            i += 1;
+            let is_def = (occ.symbol_roles & (types::SymbolRole::Definition as i32)) != 0;
+            let (byte_start, byte_end) = scip_range_to_byte_range(&line_index, &occ.range);
+            occs.push(ByteOccurrence {
+                byte_start,
+                byte_end,
+                symbol: occ.symbol.clone(),
+                is_definition: is_def,
+            });
         }
-        // Flush remaining
-        if !ident_buf.is_empty() {
-            if let Some(url) = type_urls.get(&ident_buf) {
-                if !text_buf.is_empty() {
-                    parts.push(SignaturePart::text(&text_buf));
-                    text_buf.clear();
-                }
-                parts.push(SignaturePart::link(&ident_buf, url));
-            } else {
-                text_buf.push_str(&ident_buf);
-            }
-        }
-        if !text_buf.is_empty() {
-            parts.push(SignaturePart::text(&text_buf));
-        }
-        parts
+    }
+    // Sort each file's occurrences by position
+    for occs in file_occurrences.values_mut() {
+        occs.sort_by_key(|o| (o.byte_start, o.byte_end));
     }
 
-    // Check if a rich signature actually has any links
-    fn has_links(parts: &[SignaturePart]) -> bool {
-        parts.iter().any(|p| p.link.is_some())
-    }
-
-    // Enrich top-level item signatures
+    // Step 3: For each item with a signature_span, overlay occurrences.
     for item in &mut index.items {
-        if !item.signature.is_empty() && item.rich_signature.is_empty() {
-            let parts = tokenize_signature(&item.signature, &type_doc_urls);
-            if has_links(&parts) {
+        if let Some(ref span) = item.signature_span {
+            let parts = overlay_occurrences(
+                span, &item.signature, project_root, &file_occurrences, &symbol_to_url,
+            );
+            if parts.iter().any(|p| p.link.is_some()) {
                 item.rich_signature = parts;
             }
         }
 
-        // Enrich children (fields, variants, methods)
+        // Children (methods have spans; fields/variants don't)
         for child in &mut item.children {
-            if !child.signature.is_empty() && child.rich_signature.is_empty() {
-                let parts = tokenize_signature(&child.signature, &type_doc_urls);
-                if has_links(&parts) {
+            if let Some(ref span) = child.signature_span {
+                let parts = overlay_occurrences(
+                    span, &child.signature, project_root, &file_occurrences, &symbol_to_url,
+                );
+                if parts.iter().any(|p| p.link.is_some()) {
                     child.rich_signature = parts;
                 }
             }
         }
 
-        // Enrich trait impl signatures
+        // Trait impl signatures and methods
         for trait_impl in &mut item.trait_impls {
-            // Enrich impl methods
+            if let Some(ref span) = trait_impl.signature_span {
+                let parts = overlay_occurrences(
+                    span, &trait_impl.signature, project_root, &file_occurrences, &symbol_to_url,
+                );
+                if parts.iter().any(|p| p.link.is_some()) {
+                    trait_impl.rich_signature = parts;
+                }
+            }
             for method in &mut trait_impl.methods {
-                if !method.signature.is_empty() && method.rich_signature.is_empty() {
-                    let parts = tokenize_signature(&method.signature, &type_doc_urls);
-                    if has_links(&parts) {
+                if let Some(ref span) = method.signature_span {
+                    let parts = overlay_occurrences(
+                        span, &method.signature, project_root, &file_occurrences, &symbol_to_url,
+                    );
+                    if parts.iter().any(|p| p.link.is_some()) {
                         method.rich_signature = parts;
                     }
                 }
             }
         }
     }
+}
+
+/// A single SCIP occurrence with byte offsets (converted from line/col).
+struct ByteOccurrence {
+    byte_start: usize,
+    byte_end: usize,
+    symbol: String,
+    is_definition: bool,
+}
+
+/// Convert a SCIP range `[line, col_start, col_end]` or `[start_line, start_col,
+/// end_line, end_col]` to a `(byte_start, byte_end)` pair using a `LineIndex`.
+fn scip_range_to_byte_range(line_index: &LineIndex, range: &[i32]) -> (usize, usize) {
+    if range.len() == 3 {
+        // Same-line: [line, col_start, col_end]
+        let line = range[0] as usize;
+        let cs = range[1] as usize;
+        let ce = range[2] as usize;
+        (
+            line_index.byte_offset_from_line_col(line, cs),
+            line_index.byte_offset_from_line_col(line, ce),
+        )
+    } else if range.len() >= 4 {
+        // Multi-line: [start_line, start_col, end_line, end_col]
+        let sl = range[0] as usize;
+        let sc = range[1] as usize;
+        let el = range[2] as usize;
+        let ec = range[3] as usize;
+        (
+            line_index.byte_offset_from_line_col(sl, sc),
+            line_index.byte_offset_from_line_col(el, ec),
+        )
+    } else {
+        (0, 0)
+    }
+}
+
+/// Build `rich_signature` parts by overlaying SCIP occurrences on a signature span.
+///
+/// Finds non-definition occurrences within the signature's byte range, maps their
+/// SCIP symbols to doc URLs, and splits the signature text into alternating
+/// plain-text and linked parts.
+fn overlay_occurrences(
+    span: &fe_web::model::SignatureSpanData,
+    sig_text: &str,
+    project_root: &Utf8Path,
+    file_occurrences: &HashMap<String, Vec<ByteOccurrence>>,
+    symbol_urls: &HashMap<String, String>,
+) -> Vec<fe_web::model::SignaturePart> {
+    use fe_web::model::SignaturePart;
+
+    // Convert the span's file URL to a relative path for lookup
+    let rel_path = match url::Url::parse(&span.file_url) {
+        Ok(u) => relative_path(project_root, &u),
+        Err(_) => None,
+    };
+    let Some(rel_path) = rel_path else {
+        return vec![];
+    };
+    let Some(occs) = file_occurrences.get(&rel_path) else {
+        return vec![];
+    };
+
+    // Filter to non-definition occurrences within the signature's byte range
+    // that have known doc URLs.
+    let mut sig_occs: Vec<&ByteOccurrence> = occs
+        .iter()
+        .filter(|o| {
+            o.byte_start >= span.byte_start
+                && o.byte_end <= span.byte_end
+                && !o.is_definition
+                && symbol_urls.contains_key(&o.symbol)
+        })
+        .collect();
+    sig_occs.sort_by_key(|o| o.byte_start);
+
+    if sig_occs.is_empty() {
+        return vec![];
+    }
+
+    let mut parts = Vec::new();
+    let mut pos = 0usize; // position within sig_text
+
+    for occ in &sig_occs {
+        let occ_start = occ.byte_start.saturating_sub(span.byte_start);
+        let occ_end = occ.byte_end.saturating_sub(span.byte_start);
+
+        if occ_start > sig_text.len() || occ_end > sig_text.len() || occ_start < pos {
+            continue;
+        }
+
+        // Plain text before this occurrence
+        if occ_start > pos {
+            parts.push(SignaturePart::text(&sig_text[pos..occ_start]));
+        }
+
+        // Linked occurrence
+        let occ_text = &sig_text[occ_start..occ_end];
+        let url = &symbol_urls[&occ.symbol];
+        parts.push(SignaturePart::link(occ_text, url));
+
+        pos = occ_end;
+    }
+
+    // Remaining text
+    if pos < sig_text.len() {
+        parts.push(SignaturePart::text(&sig_text[pos..]));
+    }
+
+    parts
 }
 
 #[cfg(test)]
@@ -663,7 +853,7 @@ mod tests {
         db.workspace()
             .touch(&mut db, url.clone(), Some(code.to_string()));
         let ingot_url = url::Url::parse("file:///").unwrap();
-        generate_scip(&mut db, &ingot_url).expect("generate scip index")
+        generate_scip(&db, &ingot_url).expect("generate scip index")
     }
 
     #[test]

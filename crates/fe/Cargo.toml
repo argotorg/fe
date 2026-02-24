@@ -21,6 +21,7 @@ petgraph.workspace = true
 url.workspace = true
 smol_str.workspace = true
 hir.workspace = true
+rayon = "1"
 mir.workspace = true
 cranelift-entity.workspace = true
 rustc-hash.workspace = true

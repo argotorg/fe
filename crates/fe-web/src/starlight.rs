@@ -437,6 +437,7 @@ mod tests {
             docs: Some(DocContent::from_raw("A **friendly** greeter.")),
             signature: "pub struct Greeter".into(),
             rich_signature: vec![],
+            signature_span: None,
             generics: vec![],
             where_bounds: vec![],
             children: vec![
@@ -446,6 +447,7 @@ mod tests {
                     docs: Some("The greeter's name.".into()),
                     signature: "name: String".into(),
                     rich_signature: vec![],
+                    signature_span: None,
                     visibility: DocVisibility::Public,
                 },
                 DocChild {
@@ -454,6 +456,7 @@ mod tests {
                     docs: Some("Say hello.".into()),
                     signature: "pub fn greet(self)".into(),
                     rich_signature: vec![],
+                    signature_span: None,
                     visibility: DocVisibility::Public,
                 },
             ],
@@ -469,6 +472,7 @@ mod tests {
             docs: Some(DocContent::from_raw("A hello function.")),
             signature: "pub fn hello()".into(),
             rich_signature: vec![],
+            signature_span: None,
             generics: vec![],
             where_bounds: vec![],
             children: vec![],

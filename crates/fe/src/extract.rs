@@ -18,6 +18,7 @@ use hir::{
 use fe_web::model::{
     DocChild, DocChildKind, DocContent, DocGenericParam, DocImplMethod, DocIndex, DocItem,
     DocItemKind, DocModuleItem, DocModuleTree, DocSourceLoc, DocTraitImpl, DocVisibility,
+    SignatureSpanData,
 };
 
 /// Extracts documentation from a Fe HIR database
@@ -33,12 +34,6 @@ impl<'db> DocExtractor<'db> {
             db,
             root_path: None,
         }
-    }
-
-    /// Set the root path for computing relative display paths
-    pub fn with_root_path(mut self, root: impl Into<std::path::PathBuf>) -> Self {
-        self.root_path = Some(root.into());
-        self
     }
 
     /// Rewrite a path to use the ingot's config name instead of "lib".
@@ -113,7 +108,7 @@ impl<'db> DocExtractor<'db> {
                 format!("{}::{}::impl_{}", parent_path, simple_type, simple_trait)
             };
 
-            let signature = self.get_signature(impl_trait.into());
+            let (signature, signature_span) = self.get_signature_with_span(impl_trait.into());
             let methods = self.extract_impl_trait_methods(impl_trait);
 
             links.push((
@@ -123,6 +118,7 @@ impl<'db> DocExtractor<'db> {
                     impl_url: format!("{}/impl", impl_path),
                     signature,
                     rich_signature: vec![],
+                    signature_span,
                     methods,
                 },
             ));
@@ -161,7 +157,7 @@ impl<'db> DocExtractor<'db> {
                 format!("{}::{}::{}", parent_path, simple_type, impl_suffix)
             };
 
-            let signature = self.get_signature(impl_.into());
+            let (signature, signature_span) = self.get_signature_with_span(impl_.into());
             let methods = self.extract_impl_methods_for_type(impl_);
 
             links.push((
@@ -171,6 +167,7 @@ impl<'db> DocExtractor<'db> {
                     impl_url: format!("{}/impl", impl_path),
                     signature,
                     rich_signature: vec![],
+                    signature_span,
                     methods,
                 },
             ));
@@ -184,13 +181,14 @@ impl<'db> DocExtractor<'db> {
         it.methods(self.db)
             .filter_map(|func| {
                 let name = func.name(self.db).to_opt()?.data(self.db).to_string();
-                let signature = self.get_signature(func.into());
+                let (signature, signature_span) = self.get_signature_with_span(func.into());
                 let docs = self.get_docstring(func.scope());
 
                 Some(DocImplMethod {
                     name,
                     signature,
                     rich_signature: vec![],
+                    signature_span,
                     docs,
                 })
             })
@@ -202,13 +200,14 @@ impl<'db> DocExtractor<'db> {
         i.funcs(self.db)
             .filter_map(|func| {
                 let name = func.name(self.db).to_opt()?.data(self.db).to_string();
-                let signature = self.get_signature(func.into());
+                let (signature, signature_span) = self.get_signature_with_span(func.into());
                 let docs = self.get_docstring(func.scope());
 
                 Some(DocImplMethod {
                     name,
                     signature,
                     rich_signature: vec![],
+                    signature_span,
                     docs,
                 })
             })
@@ -229,7 +228,7 @@ impl<'db> DocExtractor<'db> {
         let kind = self.item_kind_to_doc_kind(item)?;
         let visibility = self.convert_visibility(item.vis(self.db));
         let docs = self.get_docstring(scope).map(|s| DocContent::from_raw(&s));
-        let signature = self.get_signature(item);
+        let (signature, signature_span) = self.get_signature_with_span(item);
         let generics = self.extract_generics(item);
         let where_bounds = self.extract_where_bounds(item);
         let children = self.extract_children(item);
@@ -243,6 +242,7 @@ impl<'db> DocExtractor<'db> {
             docs,
             signature,
             rich_signature: vec![],
+            signature_span,
             generics,
             where_bounds,
             children,
@@ -300,12 +300,26 @@ impl<'db> DocExtractor<'db> {
         }
     }
 
-    /// Get the item's signature (definition without body).
-    /// Delegates to SymbolView::signature().
-    fn get_signature(&self, item: ItemKind<'db>) -> String {
-        SymbolView::from_item(item)
-            .signature(self.db)
-            .unwrap_or_default()
+    /// Get the item's signature and its source span data for SCIP overlay.
+    fn get_signature_with_span(
+        &self,
+        item: ItemKind<'db>,
+    ) -> (String, Option<SignatureSpanData>) {
+        let sym = SymbolView::from_item(item);
+        match sym.signature_with_span(self.db) {
+            Some(sig_span) => {
+                let span_data = sig_span
+                    .file
+                    .url(self.db)
+                    .map(|u| SignatureSpanData {
+                        file_url: u.to_string(),
+                        byte_start: sig_span.byte_start,
+                        byte_end: sig_span.byte_end,
+                    });
+                (sig_span.text, span_data)
+            }
+            None => (sym.signature(self.db).unwrap_or_default(), None),
+        }
     }
 
     /// Extract the type text from a field's type span
@@ -384,6 +398,7 @@ impl<'db> DocExtractor<'db> {
                     docs,
                     signature,
                     rich_signature: vec![],
+                    signature_span: None,
                     visibility: self.convert_visibility(visibility),
                 })
             })
@@ -410,6 +425,7 @@ impl<'db> DocExtractor<'db> {
                     docs,
                     signature,
                     rich_signature: vec![],
+                    signature_span: None,
                     visibility: self.convert_visibility(visibility),
                 })
             })
@@ -446,6 +462,7 @@ impl<'db> DocExtractor<'db> {
                     docs,
                     signature,
                     rich_signature: vec![],
+                    signature_span: None,
                     visibility: DocVisibility::Public,
                 })
             })
@@ -482,7 +499,7 @@ impl<'db> DocExtractor<'db> {
             if let Some(name) = func.name(self.db).to_opt() {
                 let name_str = name.data(self.db).to_string();
                 let docs = self.get_docstring(func.scope());
-                let signature = self.get_signature(func.into());
+                let (signature, signature_span) = self.get_signature_with_span(func.into());
 
                 children.push(DocChild {
                     kind: DocChildKind::Method,
@@ -490,6 +507,7 @@ impl<'db> DocExtractor<'db> {
                     docs,
                     signature,
                     rich_signature: vec![],
+                    signature_span,
                     visibility: DocVisibility::Public,
                 });
             }
@@ -508,6 +526,7 @@ impl<'db> DocExtractor<'db> {
                     docs,
                     signature: format!("type {}", name_str),
                     rich_signature: vec![],
+                    signature_span: None,
                     visibility: DocVisibility::Public,
                 });
             }
@@ -523,7 +542,7 @@ impl<'db> DocExtractor<'db> {
             if let Some(name) = func.name(self.db).to_opt() {
                 let name_str = name.data(self.db).to_string();
                 let docs = self.get_docstring(func.scope());
-                let signature = self.get_signature(func.into());
+                let (signature, signature_span) = self.get_signature_with_span(func.into());
                 let visibility = self.convert_visibility(func.vis(self.db));
 
                 children.push(DocChild {
@@ -532,6 +551,7 @@ impl<'db> DocExtractor<'db> {
                     docs,
                     signature,
                     rich_signature: vec![],
+                    signature_span,
                     visibility,
                 });
             }
@@ -547,7 +567,7 @@ impl<'db> DocExtractor<'db> {
             if let Some(name) = func.name(self.db).to_opt() {
                 let name_str = name.data(self.db).to_string();
                 let docs = self.get_docstring(func.scope());
-                let signature = self.get_signature(func.into());
+                let (signature, signature_span) = self.get_signature_with_span(func.into());
                 let visibility = self.convert_visibility(func.vis(self.db));
 
                 children.push(DocChild {
@@ -556,6 +576,7 @@ impl<'db> DocExtractor<'db> {
                     docs,
                     signature,
                     rich_signature: vec![],
+                    signature_span,
                     visibility,
                 });
             }

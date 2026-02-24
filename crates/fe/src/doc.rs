@@ -251,7 +251,7 @@ fn extract_single_file(db: &mut DriverDataBase, file_path: &Utf8PathBuf) -> Opti
 }
 
 fn extract_workspace(
-    db: &mut DriverDataBase,
+    _db: &mut DriverDataBase,
     workspace_root: &Utf8PathBuf,
     ws_config: &common::config::WorkspaceConfig,
 ) -> Option<DocIndex> {
@@ -372,9 +372,14 @@ fn generate_scip_json_for_doc(
         Url::from_directory_path(parent.as_str()).ok()?
     };
 
+    let project_root = ingot_url
+        .to_file_path()
+        .ok()
+        .and_then(|p| camino::Utf8PathBuf::from_path_buf(p).ok())?;
+
     match crate::scip_index::generate_scip(db, &ingot_url) {
         Ok(scip_index) => {
-            crate::scip_index::enrich_signatures(doc_index, &scip_index);
+            crate::scip_index::enrich_signatures(db, &project_root, doc_index, &scip_index);
             let json = crate::scip_index::scip_to_json_data(&scip_index);
             Some(crate::scip_index::inject_doc_urls(&json, doc_index))
         }
