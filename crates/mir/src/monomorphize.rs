@@ -104,6 +104,16 @@ type NormalizedCallInstanceInputs<'db> = (
     ParamCapabilitySpaceOverrides<'db>,
 );
 
+struct CallSite<'db> {
+    bb_idx: usize,
+    inst_idx: Option<usize>,
+    target: CallTarget<'db>,
+    args: Vec<TyId<'db>>,
+    receiver_space: Option<AddressSpaceKind>,
+    effect_param_space_overrides: Vec<Option<AddressSpaceKind>>,
+    param_capability_space_overrides: ParamCapabilitySpaceOverrides<'db>,
+}
+
 fn resolve_default_root_effect_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
@@ -342,16 +352,7 @@ impl<'db> Monomorphizer<'db> {
 
     /// Inspect every call inside the function at `func_idx` and enqueue its targets.
     fn resolve_calls(&mut self, func_idx: usize) {
-        #[allow(clippy::type_complexity)] // TODO: refactor
-        let call_sites: Vec<(
-            usize,
-            Option<usize>,
-            CallTarget<'db>,
-            Vec<TyId<'db>>,
-            Option<AddressSpaceKind>,
-            Vec<Option<AddressSpaceKind>>,
-            Vec<Vec<(crate::MirProjectionPath<'db>, AddressSpaceKind)>>,
-        )> = {
+        let call_sites: Vec<CallSite<'db>> = {
             let function = &self.instances[func_idx];
             let solve_cx = TraitSolveCx::new(
                 self.db,
@@ -394,15 +395,15 @@ impl<'db> Monomorphizer<'db> {
                                 &args,
                                 receiver_space,
                             );
-                        sites.push((
+                        sites.push(CallSite {
                             bb_idx,
-                            Some(inst_idx),
-                            target_func,
+                            inst_idx: Some(inst_idx),
+                            target: target_func,
                             args,
                             receiver_space,
                             effect_param_space_overrides,
                             param_capability_space_overrides,
-                        ));
+                        });
                     }
                 }
 
@@ -428,15 +429,15 @@ impl<'db> Monomorphizer<'db> {
                             &args,
                             receiver_space,
                         );
-                    sites.push((
+                    sites.push(CallSite {
                         bb_idx,
-                        None,
-                        target_func,
+                        inst_idx: None,
+                        target: target_func,
                         args,
                         receiver_space,
                         effect_param_space_overrides,
                         param_capability_space_overrides,
-                    ));
+                    });
                 }
             }
             sites
@@ -459,7 +460,7 @@ impl<'db> Monomorphizer<'db> {
                 .collect::<Vec<_>>()
         };
 
-        for (
+        for CallSite {
             bb_idx,
             inst_idx,
             target,
@@ -467,7 +468,7 @@ impl<'db> Monomorphizer<'db> {
             receiver_space,
             effect_param_space_overrides,
             param_capability_space_overrides,
-        ) in call_sites
+        } in call_sites
         {
             let resolved_name = match target {
                 CallTarget::Template(func) => {
