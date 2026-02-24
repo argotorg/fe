@@ -1,0 +1,7 @@
+[workspace]
+name = "build_ir_member_case_collision"
+version = "0.1.0"
+members = [
+  { path = "ingots/a", name = "a" },
+  { path = "ingots/a_upper", name = "A" },
+]

@@ -37,6 +37,13 @@ pub enum TestDebug {
     All,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum BuildEmit {
+    Bytecode,
+    RuntimeBytecode,
+    Ir,
+}
+
 #[derive(Debug, Clone, Parser)]
 #[command(version, about, long_about = None)]
 pub struct Options {
@@ -88,6 +95,15 @@ pub enum Command {
         /// Output directory for artifacts.
         #[arg(long)]
         out_dir: Option<Utf8PathBuf>,
+        /// Comma-delimited artifacts to emit.
+        #[arg(
+            long,
+            short = 'e',
+            value_enum,
+            value_delimiter = ',',
+            default_value = "bytecode,runtime-bytecode"
+        )]
+        emit: Vec<BuildEmit>,
         /// Write a debugging report as a `.tar.gz` file (includes sources, IR, backend output, and bytecode artifacts).
         #[arg(long)]
         report: bool,
@@ -338,6 +354,7 @@ pub fn run(opts: &Options) {
             optimize,
             solc,
             out_dir,
+            emit,
             report,
             report_out,
             report_failed_only,
@@ -365,6 +382,7 @@ pub fn run(opts: &Options) {
                 contract.as_deref(),
                 backend_kind,
                 opt_level,
+                emit,
                 out_dir.as_ref(),
                 solc.as_deref(),
                 (*report).then_some(report_out),

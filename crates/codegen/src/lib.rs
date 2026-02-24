@@ -7,7 +7,8 @@ pub use backend::{
 };
 pub use sonatina::{
     DebugOutputSink, LowerError, SonatinaContractBytecode, SonatinaTestDebugConfig,
-    emit_ingot_sonatina_bytecode, emit_module_sonatina_bytecode, emit_module_sonatina_ir,
+    emit_ingot_sonatina_bytecode, emit_mir_module_sonatina_ir_optimized,
+    emit_module_sonatina_bytecode, emit_module_sonatina_ir, emit_module_sonatina_ir_optimized,
     emit_test_module_sonatina, validate_module_sonatina_ir,
 };
 pub use yul::{
