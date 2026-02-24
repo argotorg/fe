@@ -544,7 +544,7 @@ fn detect_git_root(working_dir: &std::path::Path) -> Option<std::path::PathBuf> 
 }
 
 /// The canonical GitHub repository for source links.
-const CANONICAL_REPO: &str = "https://github.com/ethereum/fe";
+const CANONICAL_REPO: &str = "https://github.com/argotorg/fe";
 
 /// Build a GitHub source link base using the canonical repo URL and the
 /// current git commit hash.
