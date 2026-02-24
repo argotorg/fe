@@ -1,0 +1,51 @@
+use std::evm::Evm
+use std::evm::effects::assert
+
+msg Msg {
+    #[selector = 1]
+    BumpViaReceiverReturn -> u256,
+    #[selector = 2]
+    Value -> u256,
+}
+
+struct Counter {
+    value: u256,
+}
+
+impl Counter {
+    fn choose_self(mut self, fallback: mut u256) -> mut u256 {
+        mut self.value
+    }
+}
+
+pub contract C {
+    mut counter: Counter,
+
+    recv Msg {
+        BumpViaReceiverReturn -> u256 uses (mut counter) {
+            let mut local = 100
+            let target = counter.choose_self(mut local)
+            target += 1
+            counter.value * 1000 + local
+        }
+
+        Value -> u256 uses (counter) {
+            counter.value
+        }
+    }
+}
+
+#[test]
+fn test_receiver_return_ignores_same_typed_memory_arg() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: 0, args: (), salt: 44)
+    assert(c.inner != 0)
+
+    let a = evm.call(addr: c, gas: 100000, value: 0, message: Msg::BumpViaReceiverReturn {})
+    assert(a == 1100)
+
+    let b = evm.call(addr: c, gas: 100000, value: 0, message: Msg::BumpViaReceiverReturn {})
+    assert(b == 2100)
+
+    let value = evm.call(addr: c, gas: 100000, value: 0, message: Msg::Value {})
+    assert(value == 2)
+}

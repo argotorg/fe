@@ -1378,11 +1378,450 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         self.value_address_space_or_memory_fallback(value)
     }
 
-    fn call_return_space_hint_from_args(
+    fn collect_explicit_return_param_sources_in_stmt(
         &self,
+        body: Body<'db>,
+        typed_body: &TypedBody<'db>,
+        stmt: StmtId,
+        out: &mut FxHashSet<usize>,
+        saw_non_param: &mut bool,
+    ) {
+        let Partial::Present(stmt_data) = stmt.data(self.db, body) else {
+            return;
+        };
+
+        match stmt_data {
+            Stmt::Let(_, _, Some(init)) => self.collect_explicit_return_param_sources_in_expr(
+                body,
+                typed_body,
+                *init,
+                out,
+                saw_non_param,
+            ),
+            Stmt::For(_, iter, loop_body) => {
+                self.collect_explicit_return_param_sources_in_expr(
+                    body,
+                    typed_body,
+                    *iter,
+                    out,
+                    saw_non_param,
+                );
+                self.collect_explicit_return_param_sources_in_expr(
+                    body,
+                    typed_body,
+                    *loop_body,
+                    out,
+                    saw_non_param,
+                );
+            }
+            Stmt::While(cond, loop_body) => {
+                self.collect_explicit_return_param_sources_in_expr(
+                    body,
+                    typed_body,
+                    *cond,
+                    out,
+                    saw_non_param,
+                );
+                self.collect_explicit_return_param_sources_in_expr(
+                    body,
+                    typed_body,
+                    *loop_body,
+                    out,
+                    saw_non_param,
+                );
+            }
+            Stmt::Return(Some(expr)) => {
+                self.collect_explicit_return_param_sources_in_expr(
+                    body,
+                    typed_body,
+                    *expr,
+                    out,
+                    saw_non_param,
+                );
+                self.collect_implicit_return_param_sources_from_expr(
+                    body,
+                    typed_body,
+                    *expr,
+                    out,
+                    saw_non_param,
+                );
+            }
+            Stmt::Expr(expr) => self.collect_explicit_return_param_sources_in_expr(
+                body,
+                typed_body,
+                *expr,
+                out,
+                saw_non_param,
+            ),
+            Stmt::Let(_, _, None) | Stmt::Return(None) | Stmt::Continue | Stmt::Break => {}
+        }
+    }
+
+    fn collect_explicit_return_param_sources_in_expr(
+        &self,
+        body: Body<'db>,
+        typed_body: &TypedBody<'db>,
+        expr: ExprId,
+        out: &mut FxHashSet<usize>,
+        saw_non_param: &mut bool,
+    ) {
+        let Partial::Present(expr_data) = expr.data(self.db, body) else {
+            return;
+        };
+
+        match expr_data {
+            Expr::Block(stmts) => {
+                for stmt in stmts {
+                    self.collect_explicit_return_param_sources_in_stmt(
+                        body,
+                        typed_body,
+                        *stmt,
+                        out,
+                        saw_non_param,
+                    );
+                }
+            }
+            Expr::Bin(lhs, rhs, _) | Expr::Assign(lhs, rhs) | Expr::AugAssign(lhs, rhs, _) => {
+                self.collect_explicit_return_param_sources_in_expr(
+                    body,
+                    typed_body,
+                    *lhs,
+                    out,
+                    saw_non_param,
+                );
+                self.collect_explicit_return_param_sources_in_expr(
+                    body,
+                    typed_body,
+                    *rhs,
+                    out,
+                    saw_non_param,
+                );
+            }
+            Expr::Un(inner, _) | Expr::Cast(inner, _) | Expr::Field(inner, _) => {
+                self.collect_explicit_return_param_sources_in_expr(
+                    body,
+                    typed_body,
+                    *inner,
+                    out,
+                    saw_non_param,
+                );
+            }
+            Expr::Call(callee, args) => {
+                self.collect_explicit_return_param_sources_in_expr(
+                    body,
+                    typed_body,
+                    *callee,
+                    out,
+                    saw_non_param,
+                );
+                for arg in args {
+                    self.collect_explicit_return_param_sources_in_expr(
+                        body,
+                        typed_body,
+                        arg.expr,
+                        out,
+                        saw_non_param,
+                    );
+                }
+            }
+            Expr::MethodCall(receiver, _, _, args) => {
+                self.collect_explicit_return_param_sources_in_expr(
+                    body,
+                    typed_body,
+                    *receiver,
+                    out,
+                    saw_non_param,
+                );
+                for arg in args {
+                    self.collect_explicit_return_param_sources_in_expr(
+                        body,
+                        typed_body,
+                        arg.expr,
+                        out,
+                        saw_non_param,
+                    );
+                }
+            }
+            Expr::RecordInit(_, fields) => {
+                for field in fields {
+                    self.collect_explicit_return_param_sources_in_expr(
+                        body,
+                        typed_body,
+                        field.expr,
+                        out,
+                        saw_non_param,
+                    );
+                }
+            }
+            Expr::Tuple(items) | Expr::Array(items) => {
+                for item in items {
+                    self.collect_explicit_return_param_sources_in_expr(
+                        body,
+                        typed_body,
+                        *item,
+                        out,
+                        saw_non_param,
+                    );
+                }
+            }
+            Expr::ArrayRep(value, _) => self.collect_explicit_return_param_sources_in_expr(
+                body,
+                typed_body,
+                *value,
+                out,
+                saw_non_param,
+            ),
+            Expr::If(cond, then_expr, else_expr) => {
+                self.collect_explicit_return_param_sources_in_expr(
+                    body,
+                    typed_body,
+                    *cond,
+                    out,
+                    saw_non_param,
+                );
+                self.collect_explicit_return_param_sources_in_expr(
+                    body,
+                    typed_body,
+                    *then_expr,
+                    out,
+                    saw_non_param,
+                );
+                if let Some(else_expr) = else_expr {
+                    self.collect_explicit_return_param_sources_in_expr(
+                        body,
+                        typed_body,
+                        *else_expr,
+                        out,
+                        saw_non_param,
+                    );
+                }
+            }
+            Expr::Match(scrutinee, arms) => {
+                self.collect_explicit_return_param_sources_in_expr(
+                    body,
+                    typed_body,
+                    *scrutinee,
+                    out,
+                    saw_non_param,
+                );
+                if let Partial::Present(arms) = arms {
+                    for arm in arms {
+                        self.collect_explicit_return_param_sources_in_expr(
+                            body,
+                            typed_body,
+                            arm.body,
+                            out,
+                            saw_non_param,
+                        );
+                    }
+                }
+            }
+            Expr::With(bindings, with_body) => {
+                for binding in bindings {
+                    self.collect_explicit_return_param_sources_in_expr(
+                        body,
+                        typed_body,
+                        binding.value,
+                        out,
+                        saw_non_param,
+                    );
+                }
+                self.collect_explicit_return_param_sources_in_expr(
+                    body,
+                    typed_body,
+                    *with_body,
+                    out,
+                    saw_non_param,
+                );
+            }
+            Expr::Lit(_) | Expr::Path(_) => {}
+        }
+    }
+
+    fn collect_implicit_return_param_sources_from_expr(
+        &self,
+        body: Body<'db>,
+        typed_body: &TypedBody<'db>,
+        expr: ExprId,
+        out: &mut FxHashSet<usize>,
+        saw_non_param: &mut bool,
+    ) {
+        let Partial::Present(expr_data) = expr.data(self.db, body) else {
+            return;
+        };
+
+        match expr_data {
+            Expr::Block(stmts) => {
+                if let Some(last_stmt) = stmts.last()
+                    && let Partial::Present(Stmt::Expr(tail_expr)) = last_stmt.data(self.db, body)
+                {
+                    self.collect_implicit_return_param_sources_from_expr(
+                        body,
+                        typed_body,
+                        *tail_expr,
+                        out,
+                        saw_non_param,
+                    );
+                }
+            }
+            Expr::If(_, then_expr, else_expr) => {
+                self.collect_implicit_return_param_sources_from_expr(
+                    body,
+                    typed_body,
+                    *then_expr,
+                    out,
+                    saw_non_param,
+                );
+                if let Some(else_expr) = else_expr {
+                    self.collect_implicit_return_param_sources_from_expr(
+                        body,
+                        typed_body,
+                        *else_expr,
+                        out,
+                        saw_non_param,
+                    );
+                }
+            }
+            Expr::Match(_, arms) => {
+                if let Partial::Present(arms) = arms {
+                    for arm in arms {
+                        self.collect_implicit_return_param_sources_from_expr(
+                            body,
+                            typed_body,
+                            arm.body,
+                            out,
+                            saw_non_param,
+                        );
+                    }
+                }
+            }
+            Expr::With(_, with_body) => self.collect_implicit_return_param_sources_from_expr(
+                body,
+                typed_body,
+                *with_body,
+                out,
+                saw_non_param,
+            ),
+            _ => {
+                let Some(place) = typed_body.expr_place(self.db, expr) else {
+                    *saw_non_param = true;
+                    return;
+                };
+                match place.base {
+                    PlaceBase::Binding(LocalBinding::Param { idx, .. }) => {
+                        out.insert(idx);
+                    }
+                    PlaceBase::Binding(_) => *saw_non_param = true,
+                }
+            }
+        }
+    }
+
+    fn call_return_param_sources(&self, call: &CallOrigin<'db>) -> Option<Vec<usize>> {
+        let hir_target = call.hir_target.as_ref()?;
+        let CallableDef::Func(func) = hir_target.callable_def else {
+            return None;
+        };
+        let (diags, typed_body) = check_func_body(self.db, func);
+        if !diags.is_empty() {
+            return None;
+        }
+        let body = typed_body.body()?;
+        let func_body = func.body(self.db)?;
+        let mut out = FxHashSet::default();
+        let mut saw_non_param = false;
+        let root_expr = func_body.expr(self.db);
+        self.collect_explicit_return_param_sources_in_expr(
+            body,
+            &typed_body,
+            root_expr,
+            &mut out,
+            &mut saw_non_param,
+        );
+        self.collect_implicit_return_param_sources_from_expr(
+            body,
+            &typed_body,
+            root_expr,
+            &mut out,
+            &mut saw_non_param,
+        );
+        if saw_non_param || out.is_empty() {
+            return None;
+        }
+
+        let mut indices = out.into_iter().collect::<Vec<_>>();
+        indices.sort_unstable();
+        Some(indices)
+    }
+
+    fn defer_call_return_space_conflict(
+        &mut self,
+        call: &CallOrigin<'db>,
+        existing: AddressSpaceKind,
+        incoming: AddressSpaceKind,
+    ) {
+        if self.deferred_error.is_some() {
+            return;
+        }
+        let func_name = self
+            .hir_func
+            .map(|func| func.pretty_print_signature(self.db))
+            .unwrap_or_else(|| "<body owner>".to_owned());
+        let callee = call
+            .hir_target
+            .as_ref()
+            .and_then(|target| {
+                if let CallableDef::Func(func) = target.callable_def {
+                    return Some(func.pretty_print_signature(self.db));
+                }
+                None
+            })
+            .unwrap_or_else(|| "<call target>".to_owned());
+        self.deferred_error = Some(MirLowerError::Unsupported {
+            func_name,
+            message: format!(
+                "call to `{callee}` can return a capability from conflicting address spaces (`{existing:?}` vs `{incoming:?}`)"
+            ),
+        });
+    }
+
+    fn call_return_space_hint_from_args(
+        &mut self,
         call: &CallOrigin<'db>,
         dest_ty: TyId<'db>,
     ) -> Option<AddressSpaceKind> {
+        let has_receiver = call
+            .hir_target
+            .as_ref()
+            .and_then(|target| target.callable_def.receiver_ty(self.db))
+            .is_some();
+
+        if let Some(return_param_indices) = self.call_return_param_sources(call) {
+            let mut space_hint = None;
+            for idx in return_param_indices {
+                let Some(arg_value) = call.args.get(idx).copied() else {
+                    continue;
+                };
+                let space = if has_receiver && idx == 0 {
+                    call.receiver_space
+                        .unwrap_or_else(|| self.value_root_capability_space_hint(arg_value))
+                } else {
+                    self.value_root_capability_space_hint(arg_value)
+                };
+                match space_hint {
+                    None => space_hint = Some(space),
+                    Some(prev) if prev == space => {}
+                    Some(prev) => {
+                        self.defer_call_return_space_conflict(call, prev, space);
+                        return None;
+                    }
+                }
+            }
+            if space_hint.is_some() {
+                return space_hint;
+            }
+        }
+
         let hir_target = call.hir_target.as_ref()?;
         let expected_arg_tys = hir_target
             .callable_def
@@ -1390,7 +1829,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             .into_iter()
             .map(|ty| ty.instantiate(self.db, &hir_target.generic_args))
             .collect::<Vec<_>>();
-        let has_receiver = hir_target.callable_def.receiver_ty(self.db).is_some();
 
         let mut space_hint = None;
         for (idx, arg_value) in call.args.iter().copied().enumerate() {

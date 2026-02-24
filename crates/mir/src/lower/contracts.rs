@@ -776,7 +776,11 @@ fn lower_init_handler<'db>(
             },
         );
     }
+    let deferred_error = builder.deferred_error.take();
     let mir_body = builder.finish();
+    if let Some(err) = deferred_error {
+        return Err(err);
+    }
 
     if let Some(expr) = super::first_unlowered_expr_used_by_mir(&mir_body) {
         let expr_context = super::format_hir_expr_context(db, body, expr);
@@ -895,7 +899,11 @@ fn lower_recv_arm_handler<'db>(
             );
         }
     }
+    let deferred_error = builder.deferred_error.take();
     let mir_body = builder.finish();
+    if let Some(err) = deferred_error {
+        return Err(err);
+    }
 
     if let Some(expr) = super::first_unlowered_expr_used_by_mir(&mir_body) {
         let expr_context = super::format_hir_expr_context(db, body, expr);
