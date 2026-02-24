@@ -2445,9 +2445,6 @@ dependencies = [
  "scip",
  "serde",
  "serde_json",
- "tree-sitter",
- "tree-sitter-fe",
- "tree-sitter-highlight",
  "wasm-bindgen",
  "wasm-bindgen-test",
 ]
@@ -5863,19 +5860,6 @@ dependencies = [
  "cc",
  "tree-sitter",
  "tree-sitter-language",
-]
-
-[[package]]
-name = "tree-sitter-highlight"
-version = "0.24.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6411813e4a9ebc87d391b98b0f3ce65d5361cd80c54de8651d8b85b555ea5d95"
-dependencies = [
- "lazy_static",
- "regex",
- "streaming-iterator",
- "thiserror 1.0.69",
- "tree-sitter",
 ]
 
 [[package]]

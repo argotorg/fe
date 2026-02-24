@@ -6,7 +6,6 @@ mod doc;
 #[cfg(feature = "doc-server")]
 mod doc_serve;
 pub(crate) mod extract;
-mod highlight_cmd;
 mod index_util;
 mod lsif;
 mod report;
@@ -185,17 +184,6 @@ pub enum Command {
         /// Include builtin ingots (core, std) in generated docs
         #[arg(long)]
         builtins: bool,
-    },
-    /// Syntax-highlight Fe source code as HTML
-    Highlight {
-        /// Path to a .fe file (reads stdin if omitted)
-        path: Option<Utf8PathBuf>,
-        /// Output standalone HTML with embedded CSS
-        #[arg(long)]
-        standalone: bool,
-        /// Highlight multiple files and write .html alongside each
-        #[arg(long)]
-        batch: bool,
     },
     #[cfg(not(target_arch = "wasm32"))]
     Tree {
@@ -490,16 +478,6 @@ pub fn run(opts: &Options) {
             builtins,
         } => {
             doc::generate_docs(path, output.as_ref(), *json, *serve, *port, *static_site, *markdown_pages, *builtins);
-        }
-        Command::Highlight {
-            path,
-            standalone,
-            batch,
-        } => {
-            if let Err(e) = highlight_cmd::run_highlight(path.as_ref(), *standalone, *batch) {
-                eprintln!("Error: {e}");
-                std::process::exit(1);
-            }
         }
         #[cfg(not(target_arch = "wasm32"))]
         Command::Tree { path } => {
