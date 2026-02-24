@@ -589,6 +589,12 @@ h2:hover .anchor {
     border-bottom: none;
 }
 
+.item-name {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
 .item-name a {
     color: var(--accent);
     text-decoration: none;
@@ -913,9 +919,9 @@ fe-code-block {
 
 /* In-page section outline */
 .page-outline {
-    margin-top: 1.5rem;
-    padding-top: 0.75rem;
-    border-top: 1px solid var(--border);
+    margin-bottom: 1.5rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid var(--border);
 }
 
 .outline-header {
