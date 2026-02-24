@@ -149,11 +149,11 @@
   // Rich Signature Rendering
   // ============================================================================
 
-  function renderRichSignature(rich, fallback, highlightedFallback, sigFile) {
+  function renderRichSignature(rich, fallback, highlightedFallback, sigScope) {
     // Always emit raw text — client-side FeHighlighter handles
     // syntax highlighting and type linking via tree-sitter WASM + ScipStore.
     var attrs = 'lang="fe"';
-    if (sigFile) attrs += ' data-file="' + esc(sigFile) + '"';
+    if (sigScope) attrs += ' data-scope="' + esc(sigScope) + '"';
     return "<fe-code-block " + attrs + ">" + esc(fallback || "") + "</fe-code-block>";
   }
 
@@ -252,7 +252,7 @@
     if (!isModule && item.signature) {
       html += '<pre class="signature">';
       html += renderRichSignature(item.rich_signature, item.signature, item.highlighted_signature,
-        "__sig__/" + parentUrl);
+        item.sig_scope);
       html += "</pre>";
     }
 
@@ -340,8 +340,7 @@
         html += '<div class="member-header">';
         html += '<a href="#' + esc(parentUrl) + "~" + esc(anchorId) + '" class="anchor">\u00a7</a>';
         var sig = child.signature || child.name;
-        var childSigFile = "__sig__/" + parentUrl + "/" + anchorId;
-        html += renderRichSignature(child.rich_signature, sig, child.highlighted_signature, childSigFile);
+        html += renderRichSignature(child.rich_signature, sig, child.highlighted_signature, child.sig_scope);
         html += "</div>";
         if (child.docs) {
           html += '<div class="member-docs">' + esc(child.docs) + "</div>";
@@ -411,8 +410,7 @@
     // Signature for trait impls
     if (isTraitImpl) {
       html += '<pre class="rust impl-signature">';
-      var implSigFile = "__sig__/" + parentUrl + "/" + anchorId;
-      html += renderRichSignature(impl_.rich_signature, impl_.signature, impl_.highlighted_signature, implSigFile);
+      html += renderRichSignature(impl_.rich_signature, impl_.signature, impl_.highlighted_signature, impl_.sig_scope);
       html += "</pre>";
     }
 
@@ -432,11 +430,10 @@
 
   function renderMethodItem(method, anchorId, parentUrl, implAnchor) {
     var anchorHref = parentUrl ? "#" + esc(parentUrl) + "~" + esc(anchorId) : "#" + esc(anchorId);
-    var methodSigFile = implAnchor ? "__sig__/" + parentUrl + "/" + implAnchor + "/" + anchorId : null;
     var headerHtml =
       '<div class="method-header">' +
       '<a href="' + anchorHref + '" class="anchor">\u00a7</a>' +
-      '<h4 class="code-header">' + renderRichSignature(method.rich_signature, method.signature, method.highlighted_signature, methodSigFile) + "</h4>" +
+      '<h4 class="code-header">' + renderRichSignature(method.rich_signature, method.signature, method.highlighted_signature, method.sig_scope) + "</h4>" +
       "</div>";
 
     if (method.docs) {
@@ -517,7 +514,7 @@
       html += '<div class="implementor-item" id="' + esc(anchorId) + '">';
       html += '<a href="#' + esc(parentUrl) + "~" + esc(anchorId) + '" class="anchor">\u00a7</a>';
       html += '<code class="implementor-sig">';
-      html += renderRichSignature(imp.rich_signature, imp.signature, imp.highlighted_signature);
+      html += renderRichSignature(imp.rich_signature, imp.signature, imp.highlighted_signature, imp.sig_scope);
       html += "</code>";
       html += '<a href="' + implLink + '" class="impl-link" title="Go to implementation">\u2192</a>';
       html += "</div>";

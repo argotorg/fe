@@ -109,6 +109,7 @@ mod tests {
             signature: "pub struct Greeter".into(),
             rich_signature: vec![],
             signature_span: None,
+            sig_scope: None,
             generics: vec![],
             where_bounds: vec![],
             children: vec![],

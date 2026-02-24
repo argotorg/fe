@@ -438,6 +438,7 @@ mod tests {
             signature: "pub struct Greeter".into(),
             rich_signature: vec![],
             signature_span: None,
+            sig_scope: None,
             generics: vec![],
             where_bounds: vec![],
             children: vec![
@@ -448,6 +449,7 @@ mod tests {
                     signature: "name: String".into(),
                     rich_signature: vec![],
                     signature_span: None,
+                    sig_scope: None,
                     visibility: DocVisibility::Public,
                 },
                 DocChild {
@@ -457,6 +459,7 @@ mod tests {
                     signature: "pub fn greet(self)".into(),
                     rich_signature: vec![],
                     signature_span: None,
+                    sig_scope: None,
                     visibility: DocVisibility::Public,
                 },
             ],
@@ -473,6 +476,7 @@ mod tests {
             signature: "pub fn hello()".into(),
             rich_signature: vec![],
             signature_span: None,
+            sig_scope: None,
             generics: vec![],
             where_bounds: vec![],
             children: vec![],
