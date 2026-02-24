@@ -382,6 +382,17 @@ h2 {
     border-radius: 6px;
     padding: 0;
     margin-bottom: 0.75rem;
+    border-left: 3px solid transparent;
+}
+
+.impl-block:hover {
+    border-left-color: var(--accent);
+}
+
+.impl-block:target,
+.impl-block.is-target {
+    border-left-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 10%, var(--bg-secondary));
 }
 
 .impl-block h3 {
@@ -507,6 +518,16 @@ h2:hover .anchor {
 .method-item {
     border-left: 3px solid var(--border);
     margin-left: 0.5rem;
+}
+
+.method-item:hover {
+    border-left-color: var(--accent);
+}
+
+.method-item:target,
+.method-item.is-target {
+    border-left-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 10%, var(--bg-secondary));
 }
 
 .method-item > summary {
@@ -714,7 +735,8 @@ h2:hover .anchor {
     border-left-color: var(--accent);
 }
 
-.member-item:target {
+.member-item:target,
+.member-item.is-target {
     border-left-color: var(--accent);
     background: color-mix(in srgb, var(--accent) 10%, var(--bg-secondary));
 }

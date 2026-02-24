@@ -68,9 +68,10 @@ pub fn generate_docs(
     }
 
     let mut db = DriverDataBase::default();
+    let git_root = detect_git_root(path.as_std_path());
 
     let index = if path.is_file() && path.extension() == Some("fe") {
-        extract_single_file(&mut db, path)
+        extract_single_file(&mut db, path, git_root.as_deref())
     } else if path.is_dir() {
         // Check if this is a workspace (fe.toml with [workspace] section)
         let fe_toml = path.join("fe.toml");
@@ -79,15 +80,15 @@ pub fn generate_docs(
                 if let Ok(common::config::Config::Workspace(ws_config)) =
                     common::config::Config::parse(&content)
                 {
-                    extract_workspace(&mut db, path, &ws_config)
+                    extract_workspace(&mut db, path, &ws_config, git_root.as_deref())
                 } else {
-                    extract_ingot(&mut db, path)
+                    extract_ingot(&mut db, path, git_root.as_deref())
                 }
             } else {
-                extract_ingot(&mut db, path)
+                extract_ingot(&mut db, path, git_root.as_deref())
             }
         } else {
-            extract_ingot(&mut db, path)
+            extract_ingot(&mut db, path, git_root.as_deref())
         }
     } else {
         eprintln!("Error: Path must be either a .fe file or a directory containing fe.toml");
@@ -114,7 +115,7 @@ pub fn generate_docs(
                 continue;
             }
 
-            let extractor = DocExtractor::new(&db);
+            let extractor = make_extractor(&db, git_root.as_deref());
             for top_mod in builtin_ingot.all_modules(&db) {
                 for item in top_mod.children_nested(&db) {
                     if let Some(doc_item) =
@@ -226,7 +227,24 @@ pub fn generate_docs(
     }
 }
 
-fn extract_single_file(db: &mut DriverDataBase, file_path: &Utf8PathBuf) -> Option<DocIndex> {
+/// Create a DocExtractor with optional git-root-relative source paths.
+fn make_extractor<'db>(
+    db: &'db dyn hir::SpannedHirDb,
+    git_root: Option<&std::path::Path>,
+) -> DocExtractor<'db> {
+    let extractor = DocExtractor::new(db);
+    if let Some(root) = git_root {
+        extractor.with_root_path(root.to_path_buf())
+    } else {
+        extractor
+    }
+}
+
+fn extract_single_file(
+    db: &mut DriverDataBase,
+    file_path: &Utf8PathBuf,
+    git_root: Option<&std::path::Path>,
+) -> Option<DocIndex> {
     let file_url = Url::from_file_path(file_path.canonicalize_utf8().unwrap()).ok()?;
 
     let content = std::fs::read_to_string(file_path).ok()?;
@@ -242,7 +260,7 @@ fn extract_single_file(db: &mut DriverDataBase, file_path: &Utf8PathBuf) -> Opti
         diags.emit(db);
     }
 
-    let extractor = DocExtractor::new(db);
+    let extractor = make_extractor(db, git_root);
     Some(extractor.extract_module(top_mod))
 }
 
@@ -250,6 +268,7 @@ fn extract_workspace(
     db: &mut DriverDataBase,
     workspace_root: &Utf8PathBuf,
     ws_config: &common::config::WorkspaceConfig,
+    git_root: Option<&std::path::Path>,
 ) -> Option<DocIndex> {
     use common::config::WorkspaceMemberSelection;
 
@@ -336,7 +355,7 @@ fn extract_workspace(
             diags.emit(db);
         }
 
-        let extractor = DocExtractor::new(db);
+        let extractor = make_extractor(db, git_root);
         for top_mod in ingot.all_modules(db) {
             for item in top_mod.children_nested(db) {
                 if let Some(doc_item) = extractor.extract_item_for_ingot(item, ingot) {
@@ -362,7 +381,11 @@ fn extract_workspace(
     Some(combined)
 }
 
-fn extract_ingot(db: &mut DriverDataBase, dir_path: &Utf8PathBuf) -> Option<DocIndex> {
+fn extract_ingot(
+    db: &mut DriverDataBase,
+    dir_path: &Utf8PathBuf,
+    git_root: Option<&std::path::Path>,
+) -> Option<DocIndex> {
     let canonical_path = dir_path.canonicalize_utf8().ok()?;
     let ingot_url = Url::from_directory_path(canonical_path.as_str()).ok()?;
 
@@ -380,7 +403,7 @@ fn extract_ingot(db: &mut DriverDataBase, dir_path: &Utf8PathBuf) -> Option<DocI
         diags.emit(db);
     }
 
-    let extractor = DocExtractor::new(db);
+    let extractor = make_extractor(db, git_root);
     let mut index = DocIndex::new();
 
     // Extract items from all modules with ingot-qualified paths (like LSP does)
@@ -504,6 +527,22 @@ fn path_to_ingot_url(path: &Utf8PathBuf) -> Option<Url> {
         let parent = canonical.parent()?;
         Url::from_directory_path(parent.as_str()).ok()
     }
+}
+
+/// Detect the git repository root directory.
+fn detect_git_root(working_dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    let dir = if working_dir.is_file() {
+        working_dir.parent()?
+    } else {
+        working_dir
+    };
+    std::process::Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(dir)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| std::path::PathBuf::from(String::from_utf8_lossy(&o.stdout).trim().to_string()))
 }
 
 /// Auto-detect a GitHub source link base from the git repository.

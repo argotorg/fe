@@ -577,13 +577,25 @@
   // Main render / router
   // ============================================================================
 
-  /** Activate ambient SCIP highlighting for the current doc item. */
-  function applyDefaultHighlight(path) {
+  /** Activate ambient SCIP highlighting for the current doc item or anchor. */
+  function applyDefaultHighlight(path, anchor) {
     var scip = getScipStore();
     if (!scip || !path) {
       if (typeof feClearDefaultHighlight === "function") feClearDefaultHighlight();
       return;
     }
+
+    // If we have an anchor, try to find a symbol for the full URL with anchor
+    if (anchor) {
+      var fullUrl = path + "~" + anchor;
+      var anchorSym = scip.symbolForDocUrl(fullUrl);
+      if (anchorSym) {
+        feSetDefaultHighlight(scip.symbolHash(anchorSym));
+        return;
+      }
+    }
+
+    // Fall back to the base item's symbol
     var sym = scip.symbolForDocUrl(path);
     if (sym) {
       feSetDefaultHighlight(scip.symbolHash(sym));
@@ -592,13 +604,40 @@
     }
   }
 
+  /** Highlight the navigated-to anchor element with a CSS class (since :target
+   *  doesn't work with our SPA hash routing). */
+  function highlightAnchorTarget(contentEl, anchor) {
+    // Clear any previous target highlight
+    var prev = contentEl.querySelectorAll(".is-target");
+    for (var i = 0; i < prev.length; i++) prev[i].classList.remove("is-target");
+
+    if (anchor) {
+      var el = document.getElementById(anchor);
+      if (el) el.classList.add("is-target");
+    }
+  }
+
+  var _lastRenderedPath = null;
+
   function render() {
     var index = getIndex();
     var path = currentPath();
+    var anchor = currentAnchor();
 
     var sidebarEl = document.getElementById("sidebar");
     var contentEl = document.getElementById("content");
     if (!sidebarEl || !contentEl) return;
+
+    // If only the anchor changed (same base path), skip full re-render —
+    // just scroll to the anchor and update highlighting.
+    if (path === _lastRenderedPath && anchor) {
+      applyDefaultHighlight(path, anchor);
+      highlightAnchorTarget(contentEl, anchor);
+      var el = document.getElementById(anchor);
+      if (el) el.scrollIntoView({ behavior: "smooth" });
+      return;
+    }
+    _lastRenderedPath = path;
 
     // Render sidebar
     sidebarEl.innerHTML = renderSidebar(index.modules || [], path);
@@ -626,11 +665,11 @@
 
     // Default SCIP highlight: when viewing a specific item, highlight all
     // occurrences of that item's symbol across code blocks on the page.
-    applyDefaultHighlight(path);
+    applyDefaultHighlight(path, anchor);
 
     // Scroll to in-page anchor (e.g. ~impl-Bound), or top for new pages
-    var anchor = currentAnchor();
     if (anchor) {
+      highlightAnchorTarget(contentEl, anchor);
       var el = document.getElementById(anchor);
       if (el) el.scrollIntoView({ behavior: "smooth" });
     } else {
@@ -902,7 +941,7 @@
     // _setHighlightStyles finds no matching elements.
     document.addEventListener("fe-highlighter-ready", function () {
       // Small delay to let code blocks re-render and run SCIP annotation
-      setTimeout(function () { applyDefaultHighlight(currentPath()); }, 50);
+      setTimeout(function () { applyDefaultHighlight(currentPath(), currentAnchor()); }, 50);
     });
   }
 
