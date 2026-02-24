@@ -325,7 +325,7 @@ pub struct DocGenericParam {
 pub struct DocChild {
     pub kind: DocChildKind,
     pub name: String,
-    pub docs: Option<String>,
+    pub docs: Option<DocContent>,
     pub signature: String,
     /// Rich signature with embedded links
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -447,8 +447,8 @@ pub struct DocImplMethod {
     /// SCIP scope path for this method signature
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sig_scope: Option<String>,
-    /// Documentation (first paragraph only for summary)
-    pub docs: Option<String>,
+    /// Parsed documentation content
+    pub docs: Option<DocContent>,
 }
 
 /// A collection of documented items forming a documentation index
@@ -738,7 +738,7 @@ mod tests {
             children: vec![DocChild {
                 kind: DocChildKind::Field,
                 name: "x".into(),
-                docs: Some("The x coordinate".into()),
+                docs: Some(DocContent::from_raw("The x coordinate")),
                 signature: "x: u256".into(),
                 rich_signature: vec![],
                 signature_span: None,

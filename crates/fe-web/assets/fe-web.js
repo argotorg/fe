@@ -242,11 +242,22 @@
     // Breadcrumbs
     html += renderBreadcrumbs(item);
 
-    // Header with kind badge and name
+    // Header with kind badge, name, and source link
     html += '<div class="item-header"><div class="item-title">';
     html += '<span class="kind-badge ' + esc(kindStr(item.kind)) + '">' + esc(kindDisplayName(item.kind)) + "</span>";
     html += "<h1>" + esc(item.name) + "</h1>";
-    html += "</div></div>";
+    html += "</div>";
+    if (item.source && item.source.display_file) {
+      var srcBase = window.FE_SOURCE_BASE;
+      var srcHref = srcBase
+        ? srcBase + "/" + item.source.display_file + (item.source.line ? "#L" + item.source.line : "")
+        : "#";
+      var srcTarget = srcBase ? ' target="_blank" rel="noopener"' : "";
+      html += '<a class="src-link" href="' + esc(srcHref) + '"' + srcTarget + ">" + esc(item.source.display_file);
+      if (item.source.line) html += ":" + item.source.line;
+      html += "</a>";
+    }
+    html += "</div>";
 
     // Signature (non-modules only)
     if (!isModule && item.signature) {
@@ -310,9 +321,25 @@
   }
 
   function renderDocContent(docs) {
+    var html = '<div class="docs">';
     // Use pre-rendered html_body if available, otherwise use raw body
     var bodyHtml = docs.html_body || esc(docs.body || "");
-    return '<div class="docs">' + bodyHtml + "</div>";
+    html += bodyHtml;
+
+    // Render doc sections as distinct visual blocks
+    if (docs.sections && docs.sections.length > 0) {
+      docs.sections.forEach(function (section) {
+        var sectionId = "section-" + section.name.toLowerCase().replace(/\s+/g, "-");
+        html += '<div class="doc-section" id="' + esc(sectionId) + '">';
+        html += '<div class="doc-section-badge">' + esc(section.name) + "</div>";
+        var sectionHtml = section.html_content || esc(section.content || "");
+        html += '<div class="doc-section-content">' + sectionHtml + "</div>";
+        html += "</div>";
+      });
+    }
+
+    html += "</div>";
+    return html;
   }
 
   // ============================================================================
@@ -343,7 +370,8 @@
         html += renderRichSignature(child.rich_signature, sig, child.highlighted_signature, child.sig_scope);
         html += "</div>";
         if (child.docs) {
-          html += '<div class="member-docs">' + esc(child.docs) + "</div>";
+          var childDocsHtml = child.docs.html_body || esc(child.docs.body || child.docs.summary || "");
+          html += '<div class="member-docs">' + childDocsHtml + "</div>";
         }
         html += "</div>";
       });
@@ -437,9 +465,10 @@
       "</div>";
 
     if (method.docs) {
+      var methodDocsHtml = method.docs.html_body || esc(method.docs.body || method.docs.summary || "");
       return '<details class="method-item toggle" open id="' + esc(anchorId) + '">' +
         "<summary>" + headerHtml + "</summary>" +
-        '<div class="method-docblock">' + esc(method.docs) + "</div>" +
+        '<div class="method-docblock">' + methodDocsHtml + "</div>" +
         "</details>";
     }
     return '<div class="method-item no-toggle" id="' + esc(anchorId) + '">' + headerHtml + "</div>";
@@ -548,6 +577,21 @@
   // Main render / router
   // ============================================================================
 
+  /** Activate ambient SCIP highlighting for the current doc item. */
+  function applyDefaultHighlight(path) {
+    var scip = getScipStore();
+    if (!scip || !path) {
+      if (typeof feClearDefaultHighlight === "function") feClearDefaultHighlight();
+      return;
+    }
+    var sym = scip.symbolForDocUrl(path);
+    if (sym) {
+      feSetDefaultHighlight(scip.symbolHash(sym));
+    } else {
+      if (typeof feClearDefaultHighlight === "function") feClearDefaultHighlight();
+    }
+  }
+
   function render() {
     var index = getIndex();
     var path = currentPath();
@@ -576,6 +620,13 @@
         "<p>The documentation item <code>" + esc(path) + "</code> could not be found.</p>" +
         '<p class="not-found-hint">It may have been renamed or removed.</p></div>';
     }
+
+    // Build in-page section outline in sidebar
+    buildPageOutline(contentEl, sidebarEl);
+
+    // Default SCIP highlight: when viewing a specific item, highlight all
+    // occurrences of that item's symbol across code blocks on the page.
+    applyDefaultHighlight(path);
 
     // Scroll to in-page anchor (e.g. ~impl-Bound), or top for new pages
     var anchor = currentAnchor();
@@ -722,10 +773,126 @@
   window.connectLsp = connectLsp;
 
   // ============================================================================
+  // In-Page Section Outline
+  // ============================================================================
+
+  var _outlineObserver = null;
+
+  function buildPageOutline(contentEl, sidebarEl) {
+    // Remove previous outline
+    var prev = sidebarEl.querySelector(".page-outline");
+    if (prev) prev.remove();
+    if (_outlineObserver) { _outlineObserver.disconnect(); _outlineObserver = null; }
+
+    // Collect section headings and anchored details from rendered content
+    var targets = contentEl.querySelectorAll("h2[id], section[id], details[id]");
+    if (targets.length === 0) return;
+
+    var entries = [];
+    for (var i = 0; i < targets.length; i++) {
+      var el = targets[i];
+      var id = el.id;
+      var text = el.tagName === "H2"
+        ? el.textContent.replace("\u00a7", "").trim()
+        : (el.querySelector("summary") || el).textContent.replace("\u00a7", "").replace(/\u25b6/g, "").trim();
+      if (id && text) {
+        entries.push({ id: id, text: text });
+      }
+    }
+    if (entries.length === 0) return;
+
+    var outline = document.createElement("div");
+    outline.className = "page-outline";
+
+    var header = document.createElement("h4");
+    header.className = "outline-header";
+    header.textContent = "On this page";
+    outline.appendChild(header);
+
+    var list = document.createElement("ul");
+    list.className = "outline-list";
+
+    var path = currentPath();
+    entries.forEach(function (entry) {
+      var li = document.createElement("li");
+      var a = document.createElement("a");
+      a.href = "#" + path + "~" + entry.id;
+      a.textContent = entry.text;
+      a.dataset.outlineId = entry.id;
+      li.appendChild(a);
+      list.appendChild(li);
+    });
+
+    outline.appendChild(list);
+
+    // Insert after sidebar-nav
+    var nav = sidebarEl.querySelector(".sidebar-nav");
+    if (nav) {
+      nav.parentNode.insertBefore(outline, nav.nextSibling);
+    } else {
+      sidebarEl.appendChild(outline);
+    }
+
+    // Highlight current section via IntersectionObserver
+    if (typeof IntersectionObserver !== "undefined") {
+      var links = list.querySelectorAll("a");
+      _outlineObserver = new IntersectionObserver(function (obs) {
+        obs.forEach(function (entry) {
+          if (entry.isIntersecting) {
+            for (var j = 0; j < links.length; j++) {
+              links[j].classList.toggle("active", links[j].dataset.outlineId === entry.target.id);
+            }
+          }
+        });
+      }, { rootMargin: "-80px 0px -70% 0px" });
+
+      for (var k = 0; k < targets.length; k++) {
+        _outlineObserver.observe(targets[k]);
+      }
+    }
+  }
+
+  // ============================================================================
+  // Mobile Hamburger Menu
+  // ============================================================================
+
+  function initMobileMenu() {
+    var btn = document.createElement("button");
+    btn.className = "mobile-menu-btn";
+    btn.textContent = "\u2630";
+    btn.setAttribute("aria-label", "Toggle navigation");
+    document.body.appendChild(btn);
+
+    var backdrop = document.createElement("div");
+    backdrop.className = "sidebar-backdrop";
+    document.body.appendChild(backdrop);
+
+    function closeSidebar() {
+      var sidebar = document.querySelector(".doc-sidebar");
+      if (sidebar) sidebar.classList.remove("open");
+      backdrop.classList.remove("open");
+    }
+
+    btn.addEventListener("click", function () {
+      var sidebar = document.querySelector(".doc-sidebar");
+      if (sidebar) {
+        var isOpen = sidebar.classList.toggle("open");
+        backdrop.classList.toggle("open", isOpen);
+      }
+    });
+
+    backdrop.addEventListener("click", closeSidebar);
+
+    // Close sidebar on navigation
+    window.addEventListener("hashchange", closeSidebar);
+  }
+
+  // ============================================================================
   // Initialization
   // ============================================================================
 
   function init() {
+    initMobileMenu();
     render();
     window.addEventListener("hashchange", render);
   }

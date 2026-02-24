@@ -342,7 +342,7 @@ fn render_children(md: &mut String, children: &[DocChild]) {
                 writeln!(md, "{}\n", render_signature_html(&child.signature, &child.rich_signature)).unwrap();
             }
             if let Some(docs) = &child.docs {
-                writeln!(md, "{docs}\n").unwrap();
+                writeln!(md, "{}\n", docs.body).unwrap();
             }
         }
     }
@@ -378,7 +378,7 @@ fn render_trait_impls(
                 writeln!(md, "{}\n", render_signature_html(&method.signature, &method.rich_signature)).unwrap();
             }
             if let Some(docs) = &method.docs {
-                writeln!(md, "{docs}\n").unwrap();
+                writeln!(md, "{}\n", docs.body).unwrap();
             }
         }
     }
@@ -445,7 +445,7 @@ mod tests {
                 DocChild {
                     kind: DocChildKind::Field,
                     name: "name".into(),
-                    docs: Some("The greeter's name.".into()),
+                    docs: Some(DocContent::from_raw("The greeter's name.")),
                     signature: "name: String".into(),
                     rich_signature: vec![],
                     signature_span: None,
@@ -455,7 +455,7 @@ mod tests {
                 DocChild {
                     kind: DocChildKind::Method,
                     name: "greet".into(),
-                    docs: Some("Say hello.".into()),
+                    docs: Some(DocContent::from_raw("Say hello.")),
                     signature: "pub fn greet(self)".into(),
                     rich_signature: vec![],
                     signature_span: None,

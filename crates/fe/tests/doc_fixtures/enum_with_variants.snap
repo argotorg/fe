@@ -1,5 +1,6 @@
 ---
 source: crates/fe/src/extract.rs
+assertion_line: 907
 expression: output
 input_file: tests/doc_fixtures/enum_with_variants.fe
 ---
@@ -39,28 +40,44 @@ input_file: tests/doc_fixtures/enum_with_variants.fe
         {
           "kind": "variant",
           "name": "Red",
-          "docs": " Red color",
+          "docs": {
+            "summary": "Red color",
+            "body": "Red color",
+            "sections": []
+          },
           "signature": "Red",
           "visibility": "public"
         },
         {
           "kind": "variant",
           "name": "Green",
-          "docs": " Green color",
+          "docs": {
+            "summary": "Green color",
+            "body": "Green color",
+            "sections": []
+          },
           "signature": "Green",
           "visibility": "public"
         },
         {
           "kind": "variant",
           "name": "Blue",
-          "docs": " Blue color",
+          "docs": {
+            "summary": "Blue color",
+            "body": "Blue color",
+            "sections": []
+          },
           "signature": "Blue",
           "visibility": "public"
         },
         {
           "kind": "variant",
           "name": "Custom",
-          "docs": " Custom RGB value",
+          "docs": {
+            "summary": "Custom RGB value",
+            "body": "Custom RGB value",
+            "sections": []
+          },
           "signature": "Custom(u256)",
           "visibility": "public"
         }

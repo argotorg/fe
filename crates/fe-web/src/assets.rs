@@ -71,15 +71,28 @@ pub fn html_shell(title: &str, doc_index_json: &str) -> String {
     html_shell_with_scip(title, doc_index_json, None)
 }
 
-/// Generate the HTML shell with optional embedded SCIP data.
+/// Generate the HTML shell with optional embedded SCIP data and source link base.
 ///
 /// When `scip_json` is provided, the pre-processed SCIP JSON is inlined
 /// into a `<script>` tag and a pure-JS `ScipStore` class is loaded to
 /// provide interactive symbol resolution (no WASM required).
+///
+/// When `source_link_base` is provided (e.g. "https://github.com/org/repo/blob/abc123"),
+/// source links in item headers become clickable GitHub links.
 pub fn html_shell_with_scip(
     title: &str,
     doc_index_json: &str,
     scip_json: Option<&str>,
+) -> String {
+    html_shell_full(title, doc_index_json, scip_json, None)
+}
+
+/// Full HTML shell with all optional features.
+pub fn html_shell_full(
+    title: &str,
+    doc_index_json: &str,
+    scip_json: Option<&str>,
+    source_link_base: Option<&str>,
 ) -> String {
     // Escape for safe embedding inside HTML/script contexts:
     // - Title: escape HTML special chars to prevent </title> breakout
@@ -100,6 +113,16 @@ pub fn html_shell_with_scip(
 
     let highlighter_js = build_highlighter_js();
 
+    let source_section = if let Some(base) = source_link_base {
+        let safe_base = escape_script_content(base);
+        format!(
+            "\n  <script>window.FE_SOURCE_BASE = \"{}\";</script>",
+            safe_base
+        )
+    } else {
+        String::new()
+    };
+
     format!(
         r#"<!DOCTYPE html>
 <html lang="en">
@@ -108,9 +131,10 @@ pub fn html_shell_with_scip(
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{title}</title>
   <style>{css}</style>
+  <style>{highlight_css}</style>
 </head>
 <body>
-  <script>window.FE_DOC_INDEX = {json};</script>{scip_section}
+  <script>window.FE_DOC_INDEX = {json};</script>{scip_section}{source_section}
   <script>{tree_sitter_js}</script>
   <script>{highlighter_js}</script>
   <script>{code_block_js}</script>
@@ -125,8 +149,10 @@ pub fn html_shell_with_scip(
 </html>"#,
         title = safe_title,
         css = STYLES_CSS,
+        highlight_css = FE_HIGHLIGHT_CSS,
         json = safe_json,
         scip_section = scip_section,
+        source_section = source_section,
         tree_sitter_js = TREE_SITTER_JS,
         highlighter_js = highlighter_js,
         code_block_js = FE_CODE_BLOCK_JS,
