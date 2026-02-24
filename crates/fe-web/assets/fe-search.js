@@ -1,7 +1,30 @@
-// <fe-search> — Client-side doc search with debounced substring matching.
+// <fe-search> — Client-side doc search with fuzzy matching.
 //
 // Queries window.FE_DOC_INDEX (set by the static doc site shell).
 // Renders an input field and a dropdown of matching results.
+
+/** Fuzzy match: checks if all chars of `query` appear in order in `candidate`.
+ *  Returns a score (higher = tighter match) or -1 if no match. */
+function _fuzzyScore(query, candidate) {
+  var qi = 0;
+  var score = 0;
+  var lastMatch = -1;
+
+  for (var ci = 0; ci < candidate.length && qi < query.length; ci++) {
+    if (candidate.charAt(ci) === query.charAt(qi)) {
+      // Bonus for consecutive matches
+      score += (lastMatch === ci - 1) ? 3 : 1;
+      // Bonus for matching at start or after separator
+      if (ci === 0 || candidate.charAt(ci - 1) === ":" || candidate.charAt(ci - 1) === "_") {
+        score += 2;
+      }
+      lastMatch = ci;
+      qi++;
+    }
+  }
+
+  return qi < query.length ? -1 : score;
+}
 
 class FeSearch extends HTMLElement {
   connectedCallback() {
@@ -46,35 +69,37 @@ class FeSearch extends HTMLElement {
     if (scip) {
       try {
         var results = JSON.parse(scip.search(query));
-        for (var k = 0; k < results.length; k++) {
-          var r = results[k];
-          var a = document.createElement("a");
-          a.className = "search-result";
-          a.href = "#" + (r.doc_url || "");
-          a.setAttribute("role", "option");
+        if (results.length > 0) {
+          for (var k = 0; k < results.length; k++) {
+            var r = results[k];
+            var a = document.createElement("a");
+            a.className = "search-result";
+            a.href = "#" + (r.doc_url || "");
+            a.setAttribute("role", "option");
 
-          var badge = document.createElement("span");
-          badge.className = "kind-badge";
-          badge.textContent = this._scipKindName(r.kind);
+            var badge = document.createElement("span");
+            badge.className = "kind-badge";
+            badge.textContent = this._scipKindName(r.kind);
 
-          var nameEl = document.createElement("span");
-          nameEl.textContent = r.display_name || "";
+            var nameEl = document.createElement("span");
+            nameEl.textContent = r.display_name || "";
 
-          a.appendChild(badge);
-          a.appendChild(nameEl);
-          resultsEl.appendChild(a);
+            a.appendChild(badge);
+            a.appendChild(nameEl);
+            resultsEl.appendChild(a);
+          }
+          return;
         }
-        return;
       } catch (_) {
         // Fall through to DocIndex search
       }
     }
 
-    // Fallback: DocIndex search
+    // Fallback: DocIndex search with fuzzy matching
     var index = window.FE_DOC_INDEX;
     if (!index || !index.items) return;
 
-    // kind → URL suffix (mirrors fe-web.js ITEM_KIND_INFO)
+    // kind -> URL suffix (mirrors fe-web.js ITEM_KIND_INFO)
     var KIND_SUFFIX = {
       module: "mod", function: "fn", struct: "struct", enum: "enum",
       trait: "trait", contract: "contract", type_alias: "type",
@@ -82,20 +107,34 @@ class FeSearch extends HTMLElement {
     };
 
     var q = query.toLowerCase();
-    var matches = [];
+    var scored = [];
     var items = index.items;
 
-    for (var i = 0; i < items.length && matches.length < 15; i++) {
+    for (var i = 0; i < items.length; i++) {
       var item = items[i];
       var name = (item.name || "").toLowerCase();
       var path = (item.path || "").toLowerCase();
-      if (name.indexOf(q) !== -1 || path.indexOf(q) !== -1) {
-        matches.push(item);
+
+      // Try exact substring first (highest priority)
+      if (name.indexOf(q) !== -1) {
+        scored.push({ item: item, score: 1000 + (name === q ? 500 : 0) });
+      } else if (path.indexOf(q) !== -1) {
+        scored.push({ item: item, score: 500 });
+      } else {
+        // Fuzzy match on name
+        var fs = _fuzzyScore(q, name);
+        if (fs > 0) {
+          scored.push({ item: item, score: fs });
+        }
       }
     }
 
+    // Sort by score descending, take top 15
+    scored.sort(function (a, b) { return b.score - a.score; });
+    var matches = scored.slice(0, 15);
+
     for (var j = 0; j < matches.length; j++) {
-      var m = matches[j];
+      var m = matches[j].item;
       var suffix = KIND_SUFFIX[m.kind] || m.kind;
       var a = document.createElement("a");
       a.className = "search-result";
@@ -106,11 +145,11 @@ class FeSearch extends HTMLElement {
       badge.className = "kind-badge " + (m.kind || "").toLowerCase();
       badge.textContent = m.kind || "";
 
-      var name = document.createElement("span");
-      name.textContent = m.name || "";
+      var nameSpan = document.createElement("span");
+      nameSpan.textContent = m.name || "";
 
       a.appendChild(badge);
-      a.appendChild(name);
+      a.appendChild(nameSpan);
       resultsEl.appendChild(a);
     }
   }

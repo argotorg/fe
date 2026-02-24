@@ -33,6 +33,18 @@ impl StaticSiteGenerator {
         output_dir: &Path,
         scip_json: Option<&str>,
     ) -> std::io::Result<()> {
+        Self::generate_full(index, output_dir, scip_json, None)
+    }
+
+    /// Generate a static documentation site with all optional features.
+    ///
+    /// `source_link_base`: e.g. "https://github.com/org/repo/blob/abc123"
+    pub fn generate_full(
+        index: &DocIndex,
+        output_dir: &Path,
+        scip_json: Option<&str>,
+        source_link_base: Option<&str>,
+    ) -> std::io::Result<()> {
         std::fs::create_dir_all(output_dir)?;
 
         // Serialize to a JSON Value so we can inject html_body fields
@@ -46,7 +58,7 @@ impl StaticSiteGenerator {
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
 
         let title = index_title(index);
-        let html = assets::html_shell_with_scip(&title, &json, scip_json);
+        let html = assets::html_shell_full(&title, &json, scip_json, source_link_base);
 
         std::fs::write(output_dir.join("index.html"), html)?;
 
@@ -55,6 +67,7 @@ impl StaticSiteGenerator {
 }
 
 /// Walk the JSON and inject `html_body` next to every `docs.body` field.
+/// Also injects `html_content` into each doc section for distinct rendering.
 pub fn inject_html_bodies(value: &mut serde_json::Value) {
     match value {
         serde_json::Value::Object(map) => {
@@ -67,6 +80,24 @@ pub fn inject_html_bodies(value: &mut serde_json::Value) {
                             "html_body".to_string(),
                             serde_json::Value::String(html),
                         );
+                    }
+                    // Render each section's content to HTML
+                    if let Some(sections) = docs_obj.get_mut("sections") {
+                        if let Some(sections_arr) = sections.as_array_mut() {
+                            for section in sections_arr {
+                                if let Some(section_obj) = section.as_object_mut() {
+                                    if let Some(content) =
+                                        section_obj.get("content").and_then(|c| c.as_str())
+                                    {
+                                        let html = render_markdown(content);
+                                        section_obj.insert(
+                                            "html_content".to_string(),
+                                            serde_json::Value::String(html),
+                                        );
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }

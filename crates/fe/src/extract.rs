@@ -184,7 +184,7 @@ impl<'db> DocExtractor<'db> {
             .filter_map(|func| {
                 let name = func.name(self.db).to_opt()?.data(self.db).to_string();
                 let (signature, signature_span) = self.get_signature_with_span(func.into());
-                let docs = self.get_docstring(func.scope());
+                let docs = self.get_docstring(func.scope()).map(|s| DocContent::from_raw(&s));
 
                 Some(DocImplMethod {
                     name,
@@ -204,7 +204,7 @@ impl<'db> DocExtractor<'db> {
             .filter_map(|func| {
                 let name = func.name(self.db).to_opt()?.data(self.db).to_string();
                 let (signature, signature_span) = self.get_signature_with_span(func.into());
-                let docs = self.get_docstring(func.scope());
+                let docs = self.get_docstring(func.scope()).map(|s| DocContent::from_raw(&s));
 
                 Some(DocImplMethod {
                     name,
@@ -389,7 +389,7 @@ impl<'db> DocExtractor<'db> {
             .filter_map(|field_view| {
                 let name = field_view.name(self.db)?.data(self.db).to_string();
                 let scope = ScopeId::Field(parent, field_view.idx as u16);
-                let docs = self.get_docstring(scope);
+                let docs = self.get_docstring(scope).map(|s| DocContent::from_raw(&s));
                 let type_text = self
                     .get_field_type_text(field_view)
                     .unwrap_or_else(|| "?".to_string());
@@ -418,7 +418,7 @@ impl<'db> DocExtractor<'db> {
             .filter_map(|field_view| {
                 let name = field_view.name(self.db)?.data(self.db).to_string();
                 let scope = ScopeId::Field(parent, field_view.idx as u16);
-                let docs = self.get_docstring(scope);
+                let docs = self.get_docstring(scope).map(|s| DocContent::from_raw(&s));
                 let type_text = self
                     .get_field_type_text(field_view)
                     .unwrap_or_else(|| "?".to_string());
@@ -445,7 +445,7 @@ impl<'db> DocExtractor<'db> {
             .filter_map(|variant_view| {
                 let name = variant_view.name(self.db)?.data(self.db).to_string();
                 let enum_variant = hir::hir_def::EnumVariant::new(e, variant_view.idx);
-                let docs = self.get_docstring(enum_variant.scope());
+                let docs = self.get_docstring(enum_variant.scope()).map(|s| DocContent::from_raw(&s));
 
                 let signature = match variant_view.kind(self.db) {
                     VariantKind::Unit => name.clone(),
@@ -506,7 +506,7 @@ impl<'db> DocExtractor<'db> {
         for func in t.methods(self.db) {
             if let Some(name) = func.name(self.db).to_opt() {
                 let name_str = name.data(self.db).to_string();
-                let docs = self.get_docstring(func.scope());
+                let docs = self.get_docstring(func.scope()).map(|s| DocContent::from_raw(&s));
                 let (signature, signature_span) = self.get_signature_with_span(func.into());
 
                 children.push(DocChild {
@@ -527,7 +527,7 @@ impl<'db> DocExtractor<'db> {
             if let Some(name) = assoc_ty.name(self.db) {
                 let name_str = name.data(self.db).to_string();
                 let scope = ScopeId::TraitType(t, idx as u16);
-                let docs = self.get_docstring(scope);
+                let docs = self.get_docstring(scope).map(|s| DocContent::from_raw(&s));
 
                 children.push(DocChild {
                     kind: DocChildKind::AssocType,
@@ -551,7 +551,7 @@ impl<'db> DocExtractor<'db> {
         for func in i.funcs(self.db) {
             if let Some(name) = func.name(self.db).to_opt() {
                 let name_str = name.data(self.db).to_string();
-                let docs = self.get_docstring(func.scope());
+                let docs = self.get_docstring(func.scope()).map(|s| DocContent::from_raw(&s));
                 let (signature, signature_span) = self.get_signature_with_span(func.into());
                 let visibility = self.convert_visibility(func.vis(self.db));
 
@@ -577,7 +577,7 @@ impl<'db> DocExtractor<'db> {
         for func in it.methods(self.db) {
             if let Some(name) = func.name(self.db).to_opt() {
                 let name_str = name.data(self.db).to_string();
-                let docs = self.get_docstring(func.scope());
+                let docs = self.get_docstring(func.scope()).map(|s| DocContent::from_raw(&s));
                 let (signature, signature_span) = self.get_signature_with_span(func.into());
                 let visibility = self.convert_visibility(func.vis(self.db));
 

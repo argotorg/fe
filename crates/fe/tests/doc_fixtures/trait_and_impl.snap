@@ -1,5 +1,6 @@
 ---
 source: crates/fe/src/extract.rs
+assertion_line: 907
 expression: output
 input_file: tests/doc_fixtures/trait_and_impl.fe
 ---
@@ -39,7 +40,11 @@ input_file: tests/doc_fixtures/trait_and_impl.fe
         {
           "kind": "method",
           "name": "display",
-          "docs": " Returns a string representation.",
+          "docs": {
+            "summary": "Returns a string representation.",
+            "body": "Returns a string representation.",
+            "sections": []
+          },
           "signature": "fn display(self) -> u256",
           "visibility": "public"
         }

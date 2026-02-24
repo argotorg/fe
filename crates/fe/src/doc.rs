@@ -147,10 +147,14 @@ pub fn generate_docs(
             .map(|p| p.as_std_path().to_path_buf())
             .unwrap_or_else(|| std::path::PathBuf::from("docs"));
 
-        if let Err(e) = fe_web::static_site::StaticSiteGenerator::generate_with_scip(
+        // Auto-detect git source link base for GitHub links
+        let source_link_base = detect_source_link_base(path.as_std_path());
+
+        if let Err(e) = fe_web::static_site::StaticSiteGenerator::generate_full(
             &index,
             &output_dir,
             scip_json.as_deref(),
+            source_link_base.as_deref(),
         ) {
             eprintln!("Error generating static docs: {e}");
             std::process::exit(1);
@@ -500,6 +504,63 @@ fn path_to_ingot_url(path: &Utf8PathBuf) -> Option<Url> {
         let parent = canonical.parent()?;
         Url::from_directory_path(parent.as_str()).ok()
     }
+}
+
+/// Auto-detect a GitHub source link base from the git repository.
+///
+/// Returns something like "https://github.com/ethereum/fe/blob/abc123def"
+/// by running `git remote get-url origin` and `git rev-parse HEAD`.
+fn detect_source_link_base(working_dir: &std::path::Path) -> Option<String> {
+    let dir = if working_dir.is_file() {
+        working_dir.parent()?
+    } else {
+        working_dir
+    };
+
+    // Get the commit hash
+    let commit = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(dir)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())?;
+
+    // Get the remote URL
+    let remote = std::process::Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .current_dir(dir)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())?;
+
+    // Normalize git remote URL to HTTPS browse URL
+    let https_base = normalize_git_url(&remote)?;
+
+    Some(format!("{}/blob/{}", https_base, commit))
+}
+
+/// Normalize a git remote URL to a browsable HTTPS base.
+/// "git@github.com:org/repo.git" → "https://github.com/org/repo"
+/// "https://github.com/org/repo.git" → "https://github.com/org/repo"
+fn normalize_git_url(url: &str) -> Option<String> {
+    let url = url.trim();
+
+    // SSH format: git@github.com:org/repo.git
+    if let Some(rest) = url.strip_prefix("git@") {
+        let rest = rest.replace(':', "/");
+        let rest = rest.strip_suffix(".git").unwrap_or(&rest);
+        return Some(format!("https://{}", rest));
+    }
+
+    // HTTPS format: https://github.com/org/repo.git
+    if url.starts_with("https://") || url.starts_with("http://") {
+        let trimmed = url.strip_suffix(".git").unwrap_or(url);
+        return Some(trimmed.to_string());
+    }
+
+    None
 }
 
 fn print_doc_summary(index: &DocIndex) {

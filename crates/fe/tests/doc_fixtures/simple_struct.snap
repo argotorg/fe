@@ -1,5 +1,6 @@
 ---
 source: crates/fe/src/extract.rs
+assertion_line: 907
 expression: output
 input_file: tests/doc_fixtures/simple_struct.fe
 ---
@@ -39,14 +40,22 @@ input_file: tests/doc_fixtures/simple_struct.fe
         {
           "kind": "field",
           "name": "x",
-          "docs": " The x coordinate",
+          "docs": {
+            "summary": "The x coordinate",
+            "body": "The x coordinate",
+            "sections": []
+          },
           "signature": "x: u256",
           "visibility": "public"
         },
         {
           "kind": "field",
           "name": "y",
-          "docs": " The y coordinate",
+          "docs": {
+            "summary": "The y coordinate",
+            "body": "The y coordinate",
+            "sections": []
+          },
           "signature": "y: u256",
           "visibility": "public"
         }

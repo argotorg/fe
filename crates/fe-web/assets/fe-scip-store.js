@@ -12,6 +12,7 @@
 // Inserting/removing CSS rules is all that's needed — the browser
 // applies them to every element carrying the symbol's classes.
 var _highlightSheet = null;
+var _defaultHighlightHash = null;
 
 // Role-aware highlight: injects rules for closure (all occurrences),
 // definition sites, and reference sites with different visual treatments.
@@ -27,6 +28,20 @@ function feHighlight(symHash) {
     " text-decoration-color: rgba(74,222,128,0.5); text-underline-offset: 2px; }";
 }
 function feUnhighlight() {
+  if (_defaultHighlightHash) {
+    feHighlight(_defaultHighlightHash);
+  } else if (_highlightSheet) {
+    _highlightSheet.textContent = "";
+  }
+}
+// Set the ambient/default symbol highlight for the current page.
+// feUnhighlight() restores this instead of fully clearing.
+function feSetDefaultHighlight(symHash) {
+  _defaultHighlightHash = symHash;
+  if (symHash) feHighlight(symHash);
+}
+function feClearDefaultHighlight() {
+  _defaultHighlightHash = null;
   if (_highlightSheet) _highlightSheet.textContent = "";
 }
 
@@ -107,25 +122,49 @@ ScipStore.prototype.symbolInfo = function (symbol) {
   });
 };
 
-// Substring search on display names. Returns JSON array.
+// Fuzzy match helper: returns score or -1.
+ScipStore.prototype._fuzzyScore = function (query, candidate) {
+  var qi = 0, score = 0, lastMatch = -1;
+  for (var ci = 0; ci < candidate.length && qi < query.length; ci++) {
+    if (candidate.charAt(ci) === query.charAt(qi)) {
+      score += (lastMatch === ci - 1) ? 3 : 1;
+      if (ci === 0 || candidate.charAt(ci - 1) === "." || candidate.charAt(ci - 1) === "_") score += 2;
+      lastMatch = ci;
+      qi++;
+    }
+  }
+  return qi < query.length ? -1 : score;
+};
+
+// Search on display names with fuzzy fallback. Returns JSON array.
 ScipStore.prototype.search = function (query) {
   if (!query || query.length < 1) return "[]";
   var q = query.toLowerCase();
-  var results = [];
+  var scored = [];
   var syms = this._symbols;
   for (var sym in syms) {
     if (!syms.hasOwnProperty(sym)) continue;
     var entry = syms[sym];
     var name = (entry.name || "").toLowerCase();
+    // Exact substring match (high priority)
     if (name.indexOf(q) !== -1) {
-      results.push({
-        symbol: sym,
-        display_name: entry.name,
-        kind: entry.kind,
-        doc_url: entry.doc_url || null,
-      });
-      if (results.length >= 20) break;
+      scored.push({ s: 1000 + (name === q ? 500 : 0), sym: sym, entry: entry });
+    } else {
+      // Fuzzy match fallback
+      var fs = this._fuzzyScore(q, name);
+      if (fs > 0) scored.push({ s: fs, sym: sym, entry: entry });
     }
+  }
+  scored.sort(function (a, b) { return b.s - a.s; });
+  var results = [];
+  for (var i = 0; i < scored.length && results.length < 20; i++) {
+    var e = scored[i];
+    results.push({
+      symbol: e.sym,
+      display_name: e.entry.name,
+      kind: e.entry.kind,
+      doc_url: e.entry.doc_url || null,
+    });
   }
   return JSON.stringify(results);
 };
