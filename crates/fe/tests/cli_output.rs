@@ -454,6 +454,16 @@ fn assert_hex_artifact(path: &std::path::Path) {
     );
 }
 
+fn assert_non_empty_text_artifact(path: &std::path::Path) {
+    let contents = fs::read_to_string(path).unwrap_or_else(|err| {
+        panic!("read artifact {path:?}: {err}");
+    });
+    assert!(
+        !contents.trim().is_empty(),
+        "expected non-empty text artifact: {path:?}"
+    );
+}
+
 #[test]
 fn test_cli_build_defaults_to_sonatina_and_writes_hex_artifacts() {
     let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -476,6 +486,173 @@ fn test_cli_build_defaults_to_sonatina_and_writes_hex_artifacts() {
 
     assert_hex_artifact(&out_dir.join("Foo.bin"));
     assert_hex_artifact(&out_dir.join("Foo.runtime.bin"));
+}
+
+#[test]
+fn test_cli_build_emit_ir_only_writes_sonatina_ir() {
+    let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/cli_output/build/simple_contract.fe");
+    let fixture_path_str = fixture_path.to_str().expect("fixture path utf8");
+
+    let temp = tempdir().expect("tempdir");
+    let out_dir = temp.path().join("out");
+    let out_dir_str = out_dir.to_string_lossy().to_string();
+
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--contract",
+        "Foo",
+        "--emit",
+        "ir",
+        "--out-dir",
+        out_dir_str.as_str(),
+        fixture_path_str,
+    ]);
+    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
+
+    assert_non_empty_text_artifact(&out_dir.join("simple_contract.sona"));
+    assert!(
+        !out_dir.join("Foo.bin").exists(),
+        "did not expect deploy bytecode with --emit ir"
+    );
+    assert!(
+        !out_dir.join("Foo.runtime.bin").exists(),
+        "did not expect runtime bytecode with --emit ir"
+    );
+}
+
+#[test]
+fn test_cli_build_emit_bytecode_only_writes_deploy_hex() {
+    let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/cli_output/build/simple_contract.fe");
+    let fixture_path_str = fixture_path.to_str().expect("fixture path utf8");
+
+    let temp = tempdir().expect("tempdir");
+    let out_dir = temp.path().join("out");
+    let out_dir_str = out_dir.to_string_lossy().to_string();
+
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--contract",
+        "Foo",
+        "--emit",
+        "bytecode",
+        "--out-dir",
+        out_dir_str.as_str(),
+        fixture_path_str,
+    ]);
+    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
+
+    assert_hex_artifact(&out_dir.join("Foo.bin"));
+    assert!(
+        !out_dir.join("Foo.runtime.bin").exists(),
+        "did not expect runtime bytecode with --emit bytecode"
+    );
+}
+
+#[test]
+fn test_cli_build_emit_runtime_bytecode_only_writes_runtime_hex() {
+    let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/cli_output/build/simple_contract.fe");
+    let fixture_path_str = fixture_path.to_str().expect("fixture path utf8");
+
+    let temp = tempdir().expect("tempdir");
+    let out_dir = temp.path().join("out");
+    let out_dir_str = out_dir.to_string_lossy().to_string();
+
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--contract",
+        "Foo",
+        "--emit",
+        "runtime-bytecode",
+        "--out-dir",
+        out_dir_str.as_str(),
+        fixture_path_str,
+    ]);
+    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
+
+    assert_hex_artifact(&out_dir.join("Foo.runtime.bin"));
+    assert!(
+        !out_dir.join("Foo.bin").exists(),
+        "did not expect deploy bytecode with --emit runtime-bytecode"
+    );
+}
+
+#[test]
+fn test_cli_build_emit_ir_yul_does_not_require_solc() {
+    let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/cli_output/build/simple_contract.fe");
+    let fixture_path_str = fixture_path.to_str().expect("fixture path utf8");
+
+    let temp = tempdir().expect("tempdir");
+    let out_dir = temp.path().join("out");
+    let out_dir_str = out_dir.to_string_lossy().to_string();
+
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--backend",
+        "yul",
+        "--emit",
+        "ir",
+        "--solc",
+        "/definitely/missing/solc",
+        "--out-dir",
+        out_dir_str.as_str(),
+        fixture_path_str,
+    ]);
+    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
+
+    assert_non_empty_text_artifact(&out_dir.join("simple_contract.yul"));
+    assert!(
+        !out_dir.join("Foo.bin").exists(),
+        "did not expect deploy bytecode with --emit ir"
+    );
+    assert!(
+        !out_dir.join("Foo.runtime.bin").exists(),
+        "did not expect runtime bytecode with --emit ir"
+    );
+}
+
+#[test]
+fn test_cli_build_emit_ir_workspace_writes_per_member_ir_subdirs() {
+    let root = workspace_fixture("build_workspace_root");
+
+    let temp = tempdir().expect("tempdir");
+    let out_dir = temp.path().join("out");
+    let out_dir_str = out_dir.to_string_lossy().to_string();
+
+    let (output, exit_code) = run_fe_main_in_dir(
+        &["build", "--emit", "ir", "--out-dir", out_dir_str.as_str()],
+        &root,
+    );
+    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
+
+    assert_non_empty_text_artifact(&out_dir.join("a/a.sona"));
+    assert_non_empty_text_artifact(&out_dir.join("b/b.sona"));
+    assert!(
+        !out_dir.join("Foo.bin").exists(),
+        "did not expect flat bytecode artifacts with --emit ir"
+    );
+    assert!(
+        !out_dir.join("Bar.runtime.bin").exists(),
+        "did not expect flat bytecode artifacts with --emit ir"
+    );
+}
+
+#[test]
+fn test_cli_build_emit_runtime_bytecode_snake_case_rejected() {
+    let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/cli_output/build/simple_contract.fe");
+    let fixture_path_str = fixture_path.to_str().expect("fixture path utf8");
+
+    let (output, exit_code) =
+        run_fe_main(&["build", "--emit", "runtime_bytecode", fixture_path_str]);
+    assert_ne!(exit_code, 0, "expected non-zero exit code:\n{output}");
+    assert!(
+        output.contains("runtime_bytecode"),
+        "expected clap error to mention invalid value:\n{output}"
+    );
 }
 
 #[dir_test(
@@ -793,6 +970,15 @@ fn test_cli_build_workspace_case_insensitive_collisions_are_rejected() {
     let root = workspace_fixture("build_contract_case_collision");
     let snapshot_path = root.join("build_contract_case_collision.case");
     let (output, exit_code) = run_fe_main_in_dir(&["build"], &root);
+    assert_ne!(exit_code, 0, "expected non-zero exit code:\n{output}");
+    snap_test!(output, snapshot_path.to_str().unwrap());
+}
+
+#[test]
+fn test_cli_build_emit_ir_workspace_member_case_collisions_are_rejected() {
+    let root = workspace_fixture("build_ir_member_case_collision");
+    let snapshot_path = root.join("build_ir_member_case_collision.case");
+    let (output, exit_code) = run_fe_main_in_dir(&["build", "--emit", "ir"], &root);
     assert_ne!(exit_code, 0, "expected non-zero exit code:\n{output}");
     snap_test!(output, snapshot_path.to_str().unwrap());
 }

@@ -1,0 +1,148 @@
+use std::evm::Evm
+use std::evm::effects::assert
+
+msg Msg {
+    #[selector = 1]
+    MutateA { by: u256 } -> u256,
+    #[selector = 2]
+    MutateBForward { by: u256 } -> u256,
+    #[selector = 3]
+    SelectAndMutate { pick_c: bool, base: u256, mul: u256 } -> u256,
+    #[selector = 4]
+    DoubleMutate -> u256,
+    #[selector = 5]
+    Snapshot -> u256,
+}
+
+struct Ledger {
+    a: u256,
+    b: u256,
+    c: u256,
+}
+
+impl Ledger {
+    fn a_mut(mut self) -> mut u256 {
+        mut self.a
+    }
+
+    fn b_mut(mut self) -> mut u256 {
+        mut self.b
+    }
+
+    fn pick_ac_mut(mut self, pick_c: bool) -> mut u256 {
+        if pick_c {
+            mut self.c
+        } else {
+            mut self.a
+        }
+    }
+}
+
+fn add(mut value: own u256, by: u256) -> u256 {
+    value += by
+    value
+}
+
+fn add_forward(mut value: own u256, by: u256) -> u256 {
+    add(value, by: by)
+}
+
+fn set_scaled(mut value: own u256, base: u256, mul: u256) -> u256 {
+    value = base * mul
+    value
+}
+
+fn bump_twice(mut value: own u256) -> u256 {
+    value = add_forward(value, by: 1)
+    add_forward(value, by: 1)
+}
+
+pub contract C {
+    mut ledger: Ledger,
+
+    init(a: u256, b: u256, c: u256) uses (mut ledger) {
+        ledger.a = a
+        ledger.b = b
+        ledger.c = c
+    }
+
+    recv Msg {
+        MutateA { by } -> u256 uses (mut ledger) {
+            let target = ledger.a_mut()
+            target = add(target, by: by)
+            ledger.a
+        }
+
+        MutateBForward { by } -> u256 uses (mut ledger) {
+            let target = ledger.b_mut()
+            target = add_forward(target, by: by)
+            ledger.b
+        }
+
+        SelectAndMutate { pick_c, base, mul } -> u256 uses (mut ledger) {
+            let target = ledger.pick_ac_mut(pick_c: pick_c)
+            target = set_scaled(target, base: base, mul: mul)
+            if pick_c {
+                ledger.c
+            } else {
+                ledger.a
+            }
+        }
+
+        DoubleMutate -> u256 uses (mut ledger) {
+            let target_a = ledger.a_mut()
+            target_a = bump_twice(target_a)
+
+            let target_b = ledger.b_mut()
+            target_b = add(target_b, by: 3)
+
+            ledger.a + ledger.b + ledger.c
+        }
+
+        Snapshot -> u256 uses (ledger) {
+            ledger.a * 1000000 + ledger.b * 1000 + ledger.c
+        }
+    }
+}
+
+#[test]
+fn test_contract_field_mut_borrow_matrix() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: 0, args: (10, 20, 30), salt: 3)
+    assert(c.inner != 0)
+
+    let a = evm.call(addr: c, gas: 100000, value: 0, message: Msg::MutateA { by: 5 })
+    assert(a == 15)
+
+    let b = evm.call(addr: c, gas: 100000, value: 0, message: Msg::MutateBForward { by: 4 })
+    assert(b == 24)
+
+    let c0 = evm.call(
+        addr: c,
+        gas: 100000,
+        value: 0,
+        message: Msg::SelectAndMutate {
+            pick_c: false,
+            base: 7,
+            mul: 6,
+        },
+    )
+    assert(c0 == 42)
+
+    let c1 = evm.call(
+        addr: c,
+        gas: 100000,
+        value: 0,
+        message: Msg::SelectAndMutate {
+            pick_c: true,
+            base: 9,
+            mul: 5,
+        },
+    )
+    assert(c1 == 45)
+
+    let d = evm.call(addr: c, gas: 100000, value: 0, message: Msg::DoubleMutate {})
+    assert(d == 116)
+
+    let snap = evm.call(addr: c, gas: 100000, value: 0, message: Msg::Snapshot {})
+    assert(snap == 44027045)
+}

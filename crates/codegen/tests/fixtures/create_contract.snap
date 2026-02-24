@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 33
 expression: output
 input_file: tests/fixtures/create_contract.fe
 ---
@@ -38,7 +39,7 @@ object "Factory" {
         mstore(0x40, add(v4, 64))
         mstore(v4, v1)
         mstore(add(v4, 32), v3)
-        let v5 := $create_stor__Evm_hef0af3106e109414_Child_hdfa2e9d62e9c9ad3__8303e18f50f8d8ed($create, 0, v4)
+        let v5 := $create_stor_arg0_root_stor__Evm_hef0af3106e109414_Child_hdfa2e9d62e9c9ad3__8303e18f50f8d8ed($create, 0, v4)
         ret := v5
         leave
       }
@@ -56,7 +57,7 @@ object "Factory" {
         mstore(0x40, add(v6, 64))
         mstore(v6, v1)
         mstore(add(v6, 32), v3)
-        let v7 := $create2_stor__Evm_hef0af3106e109414_Child_hdfa2e9d62e9c9ad3__8303e18f50f8d8ed($create, 0, v6, v5)
+        let v7 := $create2_stor_arg0_root_stor__Evm_hef0af3106e109414_Child_hdfa2e9d62e9c9ad3__8303e18f50f8d8ed($create, 0, v6, v5)
         ret := v7
         leave
       }
@@ -100,7 +101,7 @@ object "Factory" {
         ret := v1
         leave
       }
-      function $create2_stor__Evm_hef0af3106e109414_Child_hdfa2e9d62e9c9ad3__8303e18f50f8d8ed($self, $value, $args, $salt) -> ret {
+      function $create2_stor_arg0_root_stor__Evm_hef0af3106e109414_Child_hdfa2e9d62e9c9ad3__8303e18f50f8d8ed($self, $value, $args, $salt) -> ret {
         let v0 := $__Child_init_code_len()
         let v1 := $__Child_init_code_offset()
         let v2 := 64
@@ -122,7 +123,7 @@ object "Factory" {
         mstore(add(v6, 64), add(v5, v2))
         let v7 := v6
         $_t0__t1__h61373471174c18a_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_u256_u256_SolEncoder_h1b9228b90dad6928__9e0831f7c11d9f64($args, v7)
-        let v8 := $evm_hef0af3106e109414_create_h3f3c4b410ec53b45_create2_raw_stor($self, $value, v4, v3, $salt)
+        let v8 := $evm_hef0af3106e109414_create_h3f3c4b410ec53b45_create2_raw_stor_arg0_root_stor($self, $value, v4, v3, $salt)
         let v9 := eq(v8, 0)
         if v9 {
           let v10 := returndatasize()
@@ -137,7 +138,7 @@ object "Factory" {
         ret := v8
         leave
       }
-      function $create_stor__Evm_hef0af3106e109414_Child_hdfa2e9d62e9c9ad3__8303e18f50f8d8ed($self, $value, $args) -> ret {
+      function $create_stor_arg0_root_stor__Evm_hef0af3106e109414_Child_hdfa2e9d62e9c9ad3__8303e18f50f8d8ed($self, $value, $args) -> ret {
         let v0 := $__Child_init_code_len()
         let v1 := $__Child_init_code_offset()
         let v2 := 64
@@ -159,7 +160,7 @@ object "Factory" {
         mstore(add(v6, 64), add(v5, v2))
         let v7 := v6
         $_t0__t1__h61373471174c18a_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_u256_u256_SolEncoder_h1b9228b90dad6928__9e0831f7c11d9f64($args, v7)
-        let v8 := $evm_hef0af3106e109414_create_h3f3c4b410ec53b45_create_raw_stor($self, $value, v4, v3)
+        let v8 := $evm_hef0af3106e109414_create_h3f3c4b410ec53b45_create_raw_stor_arg0_root_stor($self, $value, v4, v3)
         let v9 := eq(v8, 0)
         if v9 {
           let v10 := returndatasize()
@@ -235,12 +236,12 @@ object "Factory" {
       function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes($self, $ptr, $len) {
         return($ptr, $len)
       }
-      function $evm_hef0af3106e109414_create_h3f3c4b410ec53b45_create2_raw_stor($self, $value, $offset, $len, $salt) -> ret {
+      function $evm_hef0af3106e109414_create_h3f3c4b410ec53b45_create2_raw_stor_arg0_root_stor($self, $value, $offset, $len, $salt) -> ret {
         let v0 := create2($value, $offset, $len, $salt)
         ret := v0
         leave
       }
-      function $evm_hef0af3106e109414_create_h3f3c4b410ec53b45_create_raw_stor($self, $value, $offset, $len) -> ret {
+      function $evm_hef0af3106e109414_create_h3f3c4b410ec53b45_create_raw_stor_arg0_root_stor($self, $value, $offset, $len) -> ret {
         let v0 := create($value, $offset, $len)
         ret := v0
         leave

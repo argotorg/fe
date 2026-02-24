@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/newtype_storage_field_mut_method_call.fe
 ---
@@ -14,10 +15,12 @@ type @__fe_CallData_5 = {i256};
 type @__fe_Cursor_6 = {@__fe_CallData_5, i256};
 type @__fe_SolDecoder_7 = {@__fe_Cursor_6, i256};
 
-func private %wrap_haf9e70905fcbd513_bump(v0.i256) -> i256 {
+func private %wrap_haf9e70905fcbd513_bump(v0.i256) {
     block0:
-        v3.i256 = add v0 1.i256;
-        return v3;
+        v2.i256 = mload v0 i256;
+        v4.i256 = add v2 1.i256;
+        mstore v0 v4 i256;
+        return;
 }
 
 func private %__NewtypeStorageFieldMutMethodCall_init_contract() {
@@ -28,10 +31,9 @@ func private %__NewtypeStorageFieldMutMethodCall_init_contract() {
 func private %__NewtypeStorageFieldMutMethodCall_recv_0_0(v0.i256) -> i256 {
     block0:
         v2.i256 = evm_sload v0;
-        v3.i256 = call %wrap_haf9e70905fcbd513_bump_stor v2;
-        evm_sstore v0 v3;
-        v4.i256 = evm_sload v0;
-        return v4;
+        call %wrap_haf9e70905fcbd513_bump_stor_arg0_root_stor v0;
+        v3.i256 = evm_sload v0;
+        return v3;
 }
 
 func private %__NewtypeStorageFieldMutMethodCall_init() {
@@ -114,10 +116,12 @@ func private %__NewtypeStorageFieldMutMethodCall_init_code_len() -> i256 {
         return v1;
 }
 
-func private %wrap_haf9e70905fcbd513_bump_stor(v0.i256) -> i256 {
+func private %wrap_haf9e70905fcbd513_bump_stor_arg0_root_stor(v0.i256) {
     block0:
-        v3.i256 = add v0 1.i256;
-        return v3;
+        v2.i256 = evm_sload v0;
+        v4.i256 = add v2 1.i256;
+        evm_sstore v0 v4;
+        return;
 }
 
 func private %init_field__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9(v0.i256, v1.i256) -> i256 {

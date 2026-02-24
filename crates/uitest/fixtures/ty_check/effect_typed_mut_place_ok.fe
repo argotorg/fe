@@ -1,0 +1,17 @@
+struct Bar {
+    value: u256,
+}
+
+struct Foo {
+    bar: Bar,
+}
+
+fn bump() uses (bar: mut Bar) {
+    bar.value += 1
+}
+
+fn call() uses (foo: mut Foo) {
+    with (mut foo.bar) {
+        bump()
+    }
+}

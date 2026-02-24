@@ -1,0 +1,9 @@
+// Non-memory borrow handles must not be passed as regular function arguments.
+
+fn bump(handle: mut u256) {
+    handle += 1
+}
+
+pub fn noesc_storage_borrow_arg_call() uses (slot: mut u256) {
+    bump(mut slot)
+}

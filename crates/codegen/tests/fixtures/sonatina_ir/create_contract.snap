@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/create_contract.fe
 ---
@@ -117,7 +118,7 @@ func private %__Factory_recv_0_0(v0.i256, v1.i256) -> i256 {
         v19.*i256 = gep v18 0.i256 1.i256;
         v20.i256 = ptr_to_int v19 i256;
         mstore v20 v11 i256;
-        v21.i256 = call %create_stor__Evm_hef0af3106e109414_Child_hdfa2e9d62e9c9ad3__8303e18f50f8d8ed v1 0.i256 v14;
+        v21.i256 = call %create_stor_arg0_root_stor__Evm_hef0af3106e109414_Child_hdfa2e9d62e9c9ad3__8303e18f50f8d8ed v1 0.i256 v14;
         return v21;
 }
 
@@ -145,7 +146,7 @@ func private %__Factory_recv_0_1(v0.i256, v1.i256) -> i256 {
         v24.*i256 = gep v23 0.i256 1.i256;
         v25.i256 = ptr_to_int v24 i256;
         mstore v25 v11 i256;
-        v26.i256 = call %create2_stor__Evm_hef0af3106e109414_Child_hdfa2e9d62e9c9ad3__8303e18f50f8d8ed v1 0.i256 v19 v16;
+        v26.i256 = call %create2_stor_arg0_root_stor__Evm_hef0af3106e109414_Child_hdfa2e9d62e9c9ad3__8303e18f50f8d8ed v1 0.i256 v19 v16;
         return v26;
 }
 
@@ -252,7 +253,7 @@ func private %runtime_decoder__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3
         return v4;
 }
 
-func private %create_stor__Evm_hef0af3106e109414_Child_hdfa2e9d62e9c9ad3__8303e18f50f8d8ed(v0.i256, v1.i256, v2.i256) -> i256 {
+func private %create_stor_arg0_root_stor__Evm_hef0af3106e109414_Child_hdfa2e9d62e9c9ad3__8303e18f50f8d8ed(v0.i256, v1.i256, v2.i256) -> i256 {
     block0:
         v4.i256 = call %__Child_init_code_len;
         v5.i256 = call %__Child_init_code_offset;
@@ -277,7 +278,7 @@ func private %create_stor__Evm_hef0af3106e109414_Child_hdfa2e9d62e9c9ad3__8303e1
         v25.i256 = ptr_to_int v24 i256;
         mstore v25 v21 i256;
         call %_t0__t1__h61373471174c18a_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_u256_u256_SolEncoder_h1b9228b90dad6928__9e0831f7c11d9f64 v2 v13;
-        v26.i256 = call %evm_hef0af3106e109414_create_h3f3c4b410ec53b45_create_raw_stor v0 v1 v9 v7;
+        v26.i256 = call %evm_hef0af3106e109414_create_h3f3c4b410ec53b45_create_raw_stor_arg0_root_stor v0 v1 v9 v7;
         v27.i1 = eq v26 0.i256;
         v28.i256 = zext v27 i256;
         v29.i1 = ne v28 0.i256;
@@ -294,7 +295,7 @@ func private %create_stor__Evm_hef0af3106e109414_Child_hdfa2e9d62e9c9ad3__8303e1
         return v26;
 }
 
-func private %create2_stor__Evm_hef0af3106e109414_Child_hdfa2e9d62e9c9ad3__8303e18f50f8d8ed(v0.i256, v1.i256, v2.i256, v3.i256) -> i256 {
+func private %create2_stor_arg0_root_stor__Evm_hef0af3106e109414_Child_hdfa2e9d62e9c9ad3__8303e18f50f8d8ed(v0.i256, v1.i256, v2.i256, v3.i256) -> i256 {
     block0:
         v5.i256 = call %__Child_init_code_len;
         v6.i256 = call %__Child_init_code_offset;
@@ -319,7 +320,7 @@ func private %create2_stor__Evm_hef0af3106e109414_Child_hdfa2e9d62e9c9ad3__8303e
         v26.i256 = ptr_to_int v25 i256;
         mstore v26 v22 i256;
         call %_t0__t1__h61373471174c18a_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_u256_u256_SolEncoder_h1b9228b90dad6928__9e0831f7c11d9f64 v2 v14;
-        v27.i256 = call %evm_hef0af3106e109414_create_h3f3c4b410ec53b45_create2_raw_stor v0 v1 v10 v8 v3;
+        v27.i256 = call %evm_hef0af3106e109414_create_h3f3c4b410ec53b45_create2_raw_stor_arg0_root_stor v0 v1 v10 v8 v3;
         v28.i1 = eq v27 0.i256;
         v29.i256 = zext v28 i256;
         v30.i1 = ne v29 0.i256;
@@ -543,13 +544,13 @@ func private %_t0__t1__h61373471174c18a_encode_hab7243eccf2714fb_encode__Sol_hfd
         return;
 }
 
-func private %evm_hef0af3106e109414_create_h3f3c4b410ec53b45_create_raw_stor(v0.i256, v1.i256, v2.i256, v3.i256) -> i256 {
+func private %evm_hef0af3106e109414_create_h3f3c4b410ec53b45_create_raw_stor_arg0_root_stor(v0.i256, v1.i256, v2.i256, v3.i256) -> i256 {
     block0:
         v5.i256 = evm_create v1 v2 v3;
         return v5;
 }
 
-func private %evm_hef0af3106e109414_create_h3f3c4b410ec53b45_create2_raw_stor(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256) -> i256 {
+func private %evm_hef0af3106e109414_create_h3f3c4b410ec53b45_create2_raw_stor_arg0_root_stor(v0.i256, v1.i256, v2.i256, v3.i256, v4.i256) -> i256 {
     block0:
         v6.i256 = evm_create2 v1 v2 v3 v4;
         return v6;

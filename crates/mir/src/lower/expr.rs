@@ -699,13 +699,112 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         arg_value
     }
 
+    fn normalize_method_receiver_call_arg(
+        &mut self,
+        receiver_expr: ExprId,
+        receiver_value: ValueId,
+        expected_receiver_ty: TyId<'db>,
+        return_contains_capability: bool,
+    ) -> (ValueId, Option<AddressSpaceKind>) {
+        let Some(receiver_place) = self.place_for_borrow_expr(receiver_expr) else {
+            let space = self.value_address_space_or_memory(receiver_value);
+            return (
+                receiver_value,
+                (space != AddressSpaceKind::Memory).then_some(space),
+            );
+        };
+
+        let receiver_space = self.value_address_space(receiver_place.base);
+        if receiver_space == AddressSpaceKind::Memory {
+            return (receiver_value, None);
+        }
+
+        if self
+            .builder
+            .body
+            .value(receiver_value)
+            .repr
+            .address_space()
+            .is_some()
+        {
+            return (receiver_value, Some(receiver_space));
+        }
+
+        let normalize_receiver = expected_receiver_ty
+            .as_capability(self.db)
+            .is_some_and(|(kind, _)| !matches!(kind, CapabilityKind::View))
+            || return_contains_capability;
+        if !normalize_receiver {
+            return (receiver_value, Some(receiver_space));
+        }
+        let receiver_repr = self.value_repr_for_ty(expected_receiver_ty, receiver_space);
+        (
+            self.alloc_value(
+                expected_receiver_ty,
+                ValueOrigin::PlaceRef(receiver_place),
+                receiver_repr,
+            ),
+            Some(receiver_space),
+        )
+    }
+
+    fn callable_return_contains_capability(&self, callable: &Callable<'db>) -> bool {
+        fn visit<'db>(
+            builder: &MirBuilder<'db, '_>,
+            ty: TyId<'db>,
+            seen: &mut FxHashSet<TyId<'db>>,
+        ) -> bool {
+            if !seen.insert(ty) {
+                return false;
+            }
+
+            if ty.as_capability(builder.db).is_some() {
+                return true;
+            }
+
+            if let Some(inner) = crate::repr::transparent_newtype_field_ty(builder.db, ty)
+                && visit(builder, inner, seen)
+            {
+                return true;
+            }
+
+            for arg in ty.generic_args(builder.db) {
+                if visit(builder, *arg, seen) {
+                    return true;
+                }
+            }
+
+            for field_ty in ty.field_types(builder.db) {
+                if visit(builder, field_ty, seen) {
+                    return true;
+                }
+            }
+
+            false
+        }
+
+        let return_ty = callable
+            .callable_def
+            .ret_ty(self.db)
+            .instantiate(self.db, callable.generic_args());
+        let mut seen = FxHashSet::default();
+        visit(self, return_ty, &mut seen)
+    }
+
     fn coerce_call_args_to_expected(
         &mut self,
         callable: &Callable<'db>,
         arg_exprs: &[ExprId],
         args: &mut [ValueId],
-    ) {
+        return_contains_capability: bool,
+    ) -> Option<AddressSpaceKind> {
         let expected_arg_tys = self.call_expected_arg_tys(callable);
+        let expected_receiver_ty = callable
+            .callable_def
+            .receiver_ty(self.db)
+            .map(|ty| ty.instantiate(self.db, callable.generic_args()));
+        let mut receiver_space = None;
+
         for (idx, arg) in args.iter_mut().enumerate() {
             let Some(&arg_expr) = arg_exprs.get(idx) else {
                 continue;
@@ -714,8 +813,35 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 continue;
             };
             let coerced = self.coerce_call_arg_value(arg_expr, *arg, expected_ty);
-            *arg = self.materialize_capability_call_arg(arg_expr, coerced, expected_ty);
+            let mut coerced = self.materialize_capability_call_arg(arg_expr, coerced, expected_ty);
+            if idx == 0
+                && let Some(receiver_ty) = expected_receiver_ty
+            {
+                let (normalized, space) = self.normalize_method_receiver_call_arg(
+                    arg_expr,
+                    coerced,
+                    receiver_ty,
+                    return_contains_capability,
+                );
+                coerced = normalized;
+                if space.is_some() {
+                    receiver_space = space;
+                }
+            }
+            *arg = coerced;
         }
+
+        if receiver_space.is_none()
+            && expected_receiver_ty.is_some()
+            && let Some(&receiver) = args.first()
+        {
+            let space = self.value_address_space_or_memory(receiver);
+            if space != AddressSpaceKind::Memory {
+                receiver_space = Some(space);
+            }
+        }
+
+        receiver_space
     }
 
     fn materialize_capability_call_arg(
@@ -841,7 +967,13 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         // Save raw args before call-coercion; intrinsics need pre-coercion values
         // to avoid double-loading capability-wrapped operands.
         let raw_args = args.clone();
-        self.coerce_call_args_to_expected(&callable, &arg_exprs, &mut args);
+        let return_contains_capability = self.callable_return_contains_capability(&callable);
+        let receiver_space = self.coerce_call_args_to_expected(
+            &callable,
+            &arg_exprs,
+            &mut args,
+            return_contains_capability,
+        );
         let provider_space = self.effect_provider_space_for_provider_ty(ty);
         let result_space = provider_space.unwrap_or_else(|| self.expr_address_space(expr));
 
@@ -997,14 +1129,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             // Statement-only intrinsics are handled via `try_lower_intrinsic_stmt` above.
             self.builder.body.values[value_id.index()].origin = ValueOrigin::Unit;
             return value_id;
-        }
-
-        let mut receiver_space = None;
-        if self.is_method_call(expr) && !args.is_empty() {
-            let space = self.value_address_space_or_memory(args[0]);
-            if space != AddressSpaceKind::Memory {
-                receiver_space = Some(space);
-            }
         }
 
         let mut effect_args = Vec::new();
@@ -1492,12 +1616,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             && let Some(place) = self.place_for_borrow_expr(expr)
         {
             let dest = self.alloc_temp_local(ty, false, "spill");
-            let source = self.source_for_expr(expr);
-            self.push_inst_here(MirInst::Assign {
-                source,
-                dest: Some(dest),
-                rvalue: Rvalue::Load { place },
-            });
+            self.assign(None, Some(dest), Rvalue::Load { place });
             self.builder.body.values[value_id.index()].origin = ValueOrigin::Local(dest);
             self.builder.body.values[value_id.index()].repr = self.value_repr_for_expr(expr, ty);
             return value_id;
@@ -1526,12 +1645,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         return value_id;
                     };
                     let dest = self.alloc_temp_local(ty, false, "load");
-                    let source = self.source_for_expr(expr);
-                    self.push_inst_here(MirInst::Assign {
-                        source,
-                        dest: Some(dest),
-                        rvalue: Rvalue::Load { place },
-                    });
+                    self.assign(None, Some(dest), Rvalue::Load { place });
                     self.builder.body.values[value_id.index()].origin = ValueOrigin::Local(dest);
                     self.builder.body.values[value_id.index()].repr = target_repr;
                 } else {
