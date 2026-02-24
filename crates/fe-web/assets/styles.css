@@ -769,6 +769,7 @@ h2:hover .anchor {
 .hl-comment, .hl-comment-doc { color: #5c6370; font-style: italic; }
 .hl-operator { color: #abb2bf; }
 .hl-property, .hl-variable-parameter { color: #e06c75; }
+.hl-variable { color: #e06c75; }
 .hl-attribute { color: #d19a66; }
 .hl-constant { color: #d19a66; font-weight: bold; }
 .hl-punctuation-bracket, .hl-punctuation-delimiter, .hl-punctuation-special { color: #abb2bf; }
