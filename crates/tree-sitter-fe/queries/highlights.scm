@@ -82,6 +82,7 @@
   "mod"
   "msg"
   "mut"
+  "own"
   "recv"
   "self"
   "struct"

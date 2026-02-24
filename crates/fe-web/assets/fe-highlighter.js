@@ -54,13 +54,26 @@
    * Pad a code fragment with stub syntax so tree-sitter can produce a proper
    * AST instead of ERROR nodes. The caller only uses captures within the
    * original source length, so the padding is invisible in the output.
+   *
+   * Returns { source: paddedString, offset: charsAddedBefore }.
    */
   function padForParse(source) {
     var s = source.trimEnd();
-    if (/\b(trait|struct|enum|contract|impl|fn)\b/.test(s) && s.indexOf("{") === -1) {
-      return s + " {}";
+    if (s.indexOf("{") !== -1) return { source: source, offset: 0 };
+
+    // fn signatures containing Self need an impl wrapper so tree-sitter
+    // recognizes Self as self_type rather than a plain identifier.
+    if (/\bfn\b/.test(s) && /\bSelf\b/.test(s)) {
+      var prefix = "impl X { ";
+      return { source: prefix + s + " {} }", offset: prefix.length };
     }
-    return source;
+
+    // Other signatures (trait, struct, enum, impl, fn) just need a body
+    if (/\b(trait|struct|enum|contract|impl|fn)\b/.test(s)) {
+      return { source: s + " {}", offset: 0 };
+    }
+
+    return { source: source, offset: 0 };
   }
 
   /**
@@ -72,10 +85,12 @@
   function highlightFe(source) {
     if (!ready) return escHtml(source);
 
-    var parseSource = padForParse(source);
-    var tree = parser.parse(parseSource);
+    var padded = padForParse(source);
+    var tree = parser.parse(padded.source);
     var captures = query.captures(tree.rootNode);
     tree.delete();
+
+    var offset = padded.offset;
 
     // Sort captures by startIndex, then by length descending (outermost first).
     // For overlapping captures, innermost (shortest) wins — we process outermost
@@ -88,14 +103,15 @@
 
     // Build an array of character-level capture assignments.
     // Only covers original source length — padding captures are ignored.
+    // Captures are shifted by -offset to account for any prefix padding.
     var len = source.length;
     var charCapture = new Array(len);
     for (var ci = 0; ci < captures.length; ci++) {
       var cap = captures[ci];
-      var si = cap.node.startIndex;
-      var ei = cap.node.endIndex;
+      var si = cap.node.startIndex - offset;
+      var ei = cap.node.endIndex - offset;
       var name = cap.name;
-      for (var k = si; k < ei && k < len; k++) {
+      for (var k = Math.max(0, si); k < ei && k < len; k++) {
         charCapture[k] = name;
       }
     }
