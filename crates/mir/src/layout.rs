@@ -302,16 +302,41 @@ pub fn array_elem_ty<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<T
 
 /// Returns the constant length for a fixed-size array, if available.
 pub fn array_len(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> Option<usize> {
+    array_len_with_generic_args(db, ty, &[])
+}
+
+/// Returns the constant length for a fixed-size array, using generic arguments
+/// to resolve const parameters when needed.
+pub fn array_len_with_generic_args<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    generic_args: &[TyId<'db>],
+) -> Option<usize> {
     let (base, args) = ty.decompose_ty_app(db);
     if !base.is_array(db) || args.len() < 2 {
         return None;
     }
     let len_ty = args[1];
-    let TyData::ConstTy(const_ty) = len_ty.data(db) else {
+    const_ty_to_usize_with_generic_args(db, len_ty, generic_args)
+}
+
+fn const_ty_to_usize_with_generic_args<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    generic_args: &[TyId<'db>],
+) -> Option<usize> {
+    let TyData::ConstTy(const_ty) = ty.data(db) else {
         return None;
     };
     match const_ty.data(db) {
         ConstTyData::Evaluated(EvaluatedConstTy::LitInt(value), _) => value.data(db).to_usize(),
+        ConstTyData::TyParam(param, _) => {
+            let arg = *generic_args.get(param.idx)?;
+            if arg == ty {
+                return None;
+            }
+            const_ty_to_usize_with_generic_args(db, arg, generic_args)
+        }
         _ => None,
     }
 }

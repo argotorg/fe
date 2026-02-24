@@ -2538,7 +2538,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         // Compute static trip count from the iterator type
         let trip_count = {
             let iter_ty = self.typed_body.expr_ty(self.db, params.iter_expr);
-            crate::layout::array_len(self.db, iter_ty)
+            crate::layout::array_len_with_generic_args(self.db, iter_ty, self.generic_args)
         };
 
         // Register loop info with post_block for proper Yul for-loop emission
@@ -2705,7 +2705,24 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let elem_ty = args.first().copied().unwrap_or(usize_ty);
 
         // Get array length from type
-        let array_len = layout::array_len(self.db, array_ty).unwrap_or(0);
+        let Some(array_len) =
+            layout::array_len_with_generic_args(self.db, array_ty, self.generic_args)
+        else {
+            if self.deferred_error.is_none() {
+                let func_name = self
+                    .hir_func
+                    .map(|func| func.pretty_print_signature(self.db))
+                    .unwrap_or_else(|| "<body owner>".to_string());
+                self.deferred_error = Some(MirLowerError::Unsupported {
+                    func_name,
+                    message: format!(
+                        "failed to resolve array length for `{}` in for-loop lowering",
+                        array_ty.pretty_print(self.db)
+                    ),
+                });
+            }
+            return;
+        };
         let len_value = self.synthetic_u256(BigUint::from(array_len));
 
         // Create hidden index local
