@@ -1,6 +1,6 @@
 //! Embedded assets for static documentation sites
 
-use crate::escape::{escape_html_text, escape_script_content};
+use crate::escape::{base64_encode, escape_html_text, escape_script_content};
 
 /// The documentation site stylesheet.
 pub const STYLES_CSS: &str = include_str!("../assets/styles.css");
@@ -23,6 +23,45 @@ pub const FE_HIGHLIGHT_CSS: &str = include_str!("../assets/fe-highlight.css");
 
 /// Pure-JS ScipStore class that reads pre-processed SCIP JSON.
 pub const FE_SCIP_STORE_JS: &str = include_str!("../assets/fe-scip-store.js");
+
+/// web-tree-sitter Emscripten runtime JS.
+const TREE_SITTER_JS: &str = include_str!("../vendor/tree-sitter.js");
+
+/// Client-side highlighter template (placeholders replaced at build time).
+const FE_HIGHLIGHTER_TEMPLATE: &str = include_str!("../assets/fe-highlighter.js");
+
+/// tree-sitter core WASM binary.
+const TS_WASM: &[u8] = include_bytes!("../vendor/tree-sitter.wasm");
+
+/// Fe language grammar WASM binary.
+const FE_WASM: &[u8] = include_bytes!("../vendor/tree-sitter-fe.wasm");
+
+/// tree-sitter-fe highlights.scm query source.
+const HIGHLIGHTS_SCM: &str = include_str!("../../tree-sitter-fe/queries/highlights.scm");
+
+/// Build the highlighter JS with embedded WASM binaries and query source.
+fn build_highlighter_js() -> String {
+    FE_HIGHLIGHTER_TEMPLATE
+        .replacen("\"%%TS_WASM_B64%%\"", &format!("\"{}\"", base64_encode(TS_WASM)), 1)
+        .replacen("\"%%FE_WASM_B64%%\"", &format!("\"{}\"", base64_encode(FE_WASM)), 1)
+        .replacen("\"%%HIGHLIGHTS_SCM%%\"", &format!("\"{}\"", js_escape_string(HIGHLIGHTS_SCM)), 1)
+}
+
+/// Escape a string for embedding in a JS string literal (double-quoted).
+fn js_escape_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 32);
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
 
 /// Generate the complete HTML shell for a static documentation site.
 ///
@@ -59,6 +98,8 @@ pub fn html_shell_with_scip(
         String::new()
     };
 
+    let highlighter_js = build_highlighter_js();
+
     format!(
         r#"<!DOCTYPE html>
 <html lang="en">
@@ -70,6 +111,8 @@ pub fn html_shell_with_scip(
 </head>
 <body>
   <script>window.FE_DOC_INDEX = {json};</script>{scip_section}
+  <script>{tree_sitter_js}</script>
+  <script>{highlighter_js}</script>
   <script>{code_block_js}</script>
   <script>{signature_js}</script>
   <script>{search_js}</script>
@@ -84,6 +127,8 @@ pub fn html_shell_with_scip(
         css = STYLES_CSS,
         json = safe_json,
         scip_section = scip_section,
+        tree_sitter_js = escape_script_content(TREE_SITTER_JS),
+        highlighter_js = escape_script_content(&highlighter_js),
         code_block_js = FE_CODE_BLOCK_JS,
         signature_js = FE_SIGNATURE_JS,
         search_js = FE_SEARCH_JS,
@@ -115,6 +160,17 @@ mod tests {
     }
 
     #[test]
+    fn highlighter_js_has_embedded_data() {
+        let js = build_highlighter_js();
+        // Should not contain unresolved placeholders
+        assert!(!js.contains("%%TS_WASM_B64%%"), "TS_WASM placeholder should be replaced");
+        assert!(!js.contains("%%FE_WASM_B64%%"), "FE_WASM placeholder should be replaced");
+        assert!(!js.contains("%%HIGHLIGHTS_SCM%%"), "HIGHLIGHTS_SCM placeholder should be replaced");
+        // Should contain base64-encoded data (long strings starting with typical WASM b64)
+        assert!(js.len() > 100_000, "should be large with embedded WASMs: {} bytes", js.len());
+    }
+
+    #[test]
     fn html_shell_produces_valid_output() {
         let json = r#"{"items":[],"modules":[]}"#;
         let html = html_shell("Test Docs", json);
@@ -130,6 +186,9 @@ mod tests {
         assert!(html.contains("fe-code-block"));
         assert!(html.contains("fe-signature"));
         assert!(html.contains("fe-search"));
+        // Tree-sitter and highlighter are loaded
+        assert!(html.contains("TreeSitter"), "should contain tree-sitter runtime");
+        assert!(html.contains("FeHighlighter"), "should contain highlighter");
     }
 
     #[test]
@@ -178,5 +237,12 @@ mod tests {
         let without = html_shell("Test", json);
         let with_none = html_shell_with_scip("Test", json, None);
         assert_eq!(without, with_none);
+    }
+
+    #[test]
+    fn js_escape_handles_special_chars() {
+        assert_eq!(js_escape_string("hello\nworld"), "hello\\nworld");
+        assert_eq!(js_escape_string(r#"a"b"#), r#"a\"b"#);
+        assert_eq!(js_escape_string("a\\b"), "a\\\\b");
     }
 }
