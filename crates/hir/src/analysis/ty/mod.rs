@@ -314,7 +314,11 @@ impl ModuleAnalysisPass for ContractAnalysisPass {
             let assumptions = PredicateListId::empty_list(db);
             let root_effect_ty = resolve_default_root_effect_ty(db, contract.scope(), assumptions);
             for (idx, effect) in contract.effects(db).data(db).iter().enumerate() {
-                let Some(key_path) = effect.key_path.to_opt() else {
+                let Some(key_path) = effect
+                    .key_path
+                    .to_opt()
+                    .filter(|path| path.ident(db).is_present())
+                else {
                     continue;
                 };
 

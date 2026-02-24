@@ -434,9 +434,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                             .flatten()
                     }) {
                     Some(ConstValue::ConstArray(ref elems)) => {
-                        let Some(data) = self.serialize_const_array_data(expected_ty, elems) else {
-                            return None;
-                        };
+                        let data = self.serialize_const_array_data(expected_ty, elems)?;
                         if let Some(value_id) = self.try_emit_const_array(expected_ty, data) {
                             return Some(value_id);
                         }

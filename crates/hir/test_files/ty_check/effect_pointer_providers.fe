@@ -20,3 +20,14 @@ fn test_calldata_ptr_readonly() {
         let _v = read_x()
     }
 }
+
+fn read_calldata_triplet_ptr_offset() -> u256 uses (arr: std::evm::CalldataPtr<[u256; 3]>) {
+    arr.offset
+}
+
+fn test_calldata_ptr_array_provider() {
+    let c = std::evm::CalldataPtr<[u256; 3]> { offset: 0 }
+    with (c) {
+        let _v = read_calldata_triplet_ptr_offset()
+    }
+}

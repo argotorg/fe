@@ -1,0 +1,3 @@
+fn bad_effect() -> u256 uses (arr: [u256; 3]) {
+    0
+}

@@ -436,7 +436,10 @@ fn make_query<'db>(
         directive = directive.disallow_lex();
     }
 
-    let name = path.ident(db).unwrap();
+    let name = path
+        .ident(db)
+        .to_opt()
+        .unwrap_or_else(|| IdentId::new(db, "_".to_string()));
     EarlyNameQueryId::new(db, name, scope, directive)
 }
 

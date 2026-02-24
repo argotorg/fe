@@ -1574,7 +1574,10 @@ impl<'db> EffectParamView<'db> {
 
     /// The path identifying the effect key (trait or type).
     pub fn key_path(self, db: &'db dyn HirDb) -> Option<PathId<'db>> {
-        self.effect(db).key_path.to_opt()
+        self.effect(db)
+            .key_path
+            .to_opt()
+            .filter(|path| path.ident(db).is_present())
     }
 
     /// Whether this effect requires mutation.

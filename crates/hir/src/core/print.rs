@@ -421,14 +421,22 @@ impl<'db> EffectParam<'db> {
             if self.is_mut {
                 result.push_str("mut ");
             }
-            let path = unwrap_partial(self.key_path, "EffectParam::key_path").pretty_print(db);
+            let path = self
+                .key_path
+                .to_opt()
+                .map(|path| path.pretty_print(db))
+                .unwrap_or_else(|| "_".to_string());
             result.push_str(&path);
         } else {
             // No name binding - shorthand form
             if self.is_mut {
                 result.push_str("mut ");
             }
-            let path = unwrap_partial(self.key_path, "EffectParam::key_path").pretty_print(db);
+            let path = self
+                .key_path
+                .to_opt()
+                .map(|path| path.pretty_print(db))
+                .unwrap_or_else(|| "_".to_string());
             result.push_str(&path);
         }
 
