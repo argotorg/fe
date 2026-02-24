@@ -1229,41 +1229,41 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         ty: TyId<'db>,
         prefix: &MirProjectionPath<'db>,
         out: &mut Vec<MirProjectionPath<'db>>,
-        seen: &mut FxHashSet<TyId<'db>>,
+        active: &mut FxHashSet<TyId<'db>>,
     ) {
-        if !seen.insert(ty) {
+        // Track only the active recursion chain so sibling branches that reuse the same field
+        // type are still traversed.
+        if !active.insert(ty) {
             return;
         }
 
         if let Some((_, inner)) = ty.as_capability(self.db) {
             let before = out.len();
-            self.collect_capability_leaf_paths_inner(inner, prefix, out, seen);
+            self.collect_capability_leaf_paths_inner(inner, prefix, out, active);
             if out.len() == before {
                 out.push(prefix.clone());
             }
-            return;
+        } else if let Some(inner) = crate::repr::transparent_newtype_field_ty(self.db, ty) {
+            self.collect_capability_leaf_paths_inner(inner, prefix, out, active);
+        } else {
+            for (idx, field_ty) in ty.field_types(self.db).iter().copied().enumerate() {
+                let mut field_prefix = prefix.clone();
+                field_prefix.push(MirProjection::Field(idx));
+                self.collect_capability_leaf_paths_inner(field_ty, &field_prefix, out, active);
+            }
         }
 
-        if let Some(inner) = crate::repr::transparent_newtype_field_ty(self.db, ty) {
-            self.collect_capability_leaf_paths_inner(inner, prefix, out, seen);
-            return;
-        }
-
-        for (idx, field_ty) in ty.field_types(self.db).iter().copied().enumerate() {
-            let mut field_prefix = prefix.clone();
-            field_prefix.push(MirProjection::Field(idx));
-            self.collect_capability_leaf_paths_inner(field_ty, &field_prefix, out, seen);
-        }
+        active.remove(&ty);
     }
 
     fn capability_leaf_paths_for_ty(&self, ty: TyId<'db>) -> Vec<MirProjectionPath<'db>> {
         let mut out = Vec::new();
-        let mut seen = FxHashSet::default();
+        let mut active = FxHashSet::default();
         self.collect_capability_leaf_paths_inner(
             ty,
             &MirProjectionPath::new(),
             &mut out,
-            &mut seen,
+            &mut active,
         );
         out
     }

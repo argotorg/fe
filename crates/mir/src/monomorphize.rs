@@ -1285,41 +1285,41 @@ impl<'db> Monomorphizer<'db> {
         ty: TyId<'db>,
         prefix: &crate::MirProjectionPath<'db>,
         out: &mut Vec<crate::MirProjectionPath<'db>>,
-        seen: &mut FxHashSet<TyId<'db>>,
+        active: &mut FxHashSet<TyId<'db>>,
     ) {
-        if !seen.insert(ty) {
+        // Track only the active recursion chain so sibling branches that reuse the same field
+        // type are still traversed.
+        if !active.insert(ty) {
             return;
         }
 
         if let Some((_, inner)) = ty.as_capability(self.db) {
             let before = out.len();
-            self.collect_capability_leaf_paths_inner(inner, prefix, out, seen);
+            self.collect_capability_leaf_paths_inner(inner, prefix, out, active);
             if out.len() == before {
                 out.push(prefix.clone());
             }
-            return;
+        } else if let Some(inner) = crate::repr::transparent_newtype_field_ty(self.db, ty) {
+            self.collect_capability_leaf_paths_inner(inner, prefix, out, active);
+        } else {
+            for (idx, field_ty) in ty.field_types(self.db).iter().copied().enumerate() {
+                let mut field_prefix = prefix.clone();
+                field_prefix.push(hir::projection::Projection::Field(idx));
+                self.collect_capability_leaf_paths_inner(field_ty, &field_prefix, out, active);
+            }
         }
 
-        if let Some(inner) = crate::repr::transparent_newtype_field_ty(self.db, ty) {
-            self.collect_capability_leaf_paths_inner(inner, prefix, out, seen);
-            return;
-        }
-
-        for (idx, field_ty) in ty.field_types(self.db).iter().copied().enumerate() {
-            let mut field_prefix = prefix.clone();
-            field_prefix.push(hir::projection::Projection::Field(idx));
-            self.collect_capability_leaf_paths_inner(field_ty, &field_prefix, out, seen);
-        }
+        active.remove(&ty);
     }
 
     fn capability_leaf_paths_for_ty(&self, ty: TyId<'db>) -> Vec<crate::MirProjectionPath<'db>> {
         let mut out = Vec::new();
-        let mut seen = FxHashSet::default();
+        let mut active = FxHashSet::default();
         self.collect_capability_leaf_paths_inner(
             ty,
             &crate::MirProjectionPath::new(),
             &mut out,
-            &mut seen,
+            &mut active,
         );
         out
     }
@@ -1746,6 +1746,7 @@ fn param_capability_space_suffix(
 
 #[cfg(test)]
 mod tests {
+    use common::InputDb;
     use driver::DriverDataBase;
 
     use super::*;
@@ -1771,5 +1772,70 @@ mod tests {
         };
         assert_eq!(func_name, "test_symbol");
         assert!(message.contains("conflicting non-memory capability-space override"));
+    }
+
+    #[test]
+    fn repeated_field_types_collect_all_capability_paths() {
+        let mut db = DriverDataBase::default();
+        let url = url::Url::parse("file:///repeated_cap_paths.fe").unwrap();
+        let src = r#"
+msg Msg {
+    #[selector = 1]
+    Run -> u256
+}
+
+struct Wrapper {
+    value: mut u256
+}
+
+struct Pair {
+    left: Wrapper,
+    right: Wrapper
+}
+
+fn bump(mut pair: Pair) -> u256 {
+    pair.left.value += 1
+    pair.right.value += 10
+    pair.left.value * 100 + pair.right.value
+}
+
+pub contract C {
+    mut a: u256,
+    mut b: u256,
+
+    init() uses (mut a, mut b) {
+        a = 1
+        b = 2
+    }
+
+    recv Msg {
+        Run -> u256 uses (mut a, mut b) {
+            let pair = Pair {
+                left: Wrapper { value: mut a },
+                right: Wrapper { value: mut b }
+            }
+            bump(pair)
+        }
+    }
+}
+"#;
+
+        let file = db.workspace().touch(&mut db, url, Some(src.to_owned()));
+        let top_mod = db.top_mod(file);
+        let module = crate::lower::lower_module(&db, top_mod).expect("lowered MIR");
+
+        let bump_symbols = module
+            .functions
+            .iter()
+            .map(|func| func.symbol_name.as_str())
+            .filter(|name| name.starts_with("bump"))
+            .collect::<Vec<_>>();
+
+        assert!(
+            bump_symbols
+                .iter()
+                .any(|name| { name.contains("arg0_f0_stor") && name.contains("arg0_f1_stor") }),
+            "expected bump specialization to carry both repeated-field paths, got: {bump_symbols:?}",
+        );
     }
 }
