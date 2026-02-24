@@ -20,9 +20,6 @@ wasm = ["dep:wasm-bindgen", "dep:js-sys", "dep:scip", "dep:protobuf"]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 pulldown-cmark = { version = "0.12", default-features = false, features = ["html"] }
-tree-sitter = "0.24"
-tree-sitter-highlight = "0.24"
-tree-sitter-fe = { path = "../tree-sitter-fe" }
 
 # WASM support (optional)
 wasm-bindgen = { version = "0.2", optional = true }

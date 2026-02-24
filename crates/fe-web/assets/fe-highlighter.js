@@ -1,12 +1,15 @@
 // fe-highlighter.js — Client-side tree-sitter syntax highlighting for Fe code.
 //
 // Provides window.FeHighlighter singleton:
-//   init()                — async, loads WASM + compiles query
-//   isReady()             — synchronous readiness check
-//   highlightFe(src, scip) — returns highlighted HTML string
+//   init()              — async, loads WASM + compiles query
+//   isReady()           — synchronous readiness check
+//   highlightFe(source) — returns highlighted HTML string (pure syntax coloring)
 //
 // WASM binaries and highlights.scm are injected as template placeholders
 // by the Rust build (base64-encoded). No network fetches needed.
+//
+// Type linking and hover interactivity are handled separately by
+// fe-code-block.js using ScipStore — the highlighter only does coloring.
 
 (function () {
   "use strict";
@@ -14,15 +17,6 @@
   var TS_WASM_B64 = "%%TS_WASM_B64%%";
   var FE_WASM_B64 = "%%FE_WASM_B64%%";
   var HIGHLIGHTS_SCM = "%%HIGHLIGHTS_SCM%%";
-
-  // Capture names that should produce type links when ScipStore is available.
-  var LINKABLE_CAPTURES = {
-    "type": true,
-    "type.builtin": true,
-    "type.interface": true,
-    "type.enum.variant": true,
-    "function": true,
-  };
 
   var parser = null;
   var query = null;
@@ -37,20 +31,6 @@
 
   function escHtml(s) {
     return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  }
-
-  /** Look up a name in ScipStore. Returns {doc_url, symbol} or null. */
-  function scipLookup(scip, text) {
-    if (!scip || !scip.search) return null;
-    try {
-      var results = JSON.parse(scip.search(text));
-      for (var i = 0; i < results.length; i++) {
-        if (results[i].display_name === text && results[i].doc_url) {
-          return results[i];
-        }
-      }
-    } catch (_) {}
-    return null;
   }
 
   async function init() {
@@ -77,7 +57,6 @@
    */
   function padForParse(source) {
     var s = source.trimEnd();
-    // Signatures for types/traits/impls/fns lack a body — append one
     if (/\b(trait|struct|enum|contract|impl|fn)\b/.test(s) && s.indexOf("{") === -1) {
       return s + " {}";
     }
@@ -85,13 +64,12 @@
   }
 
   /**
-   * Parse and highlight Fe source code.
+   * Parse and highlight Fe source code (pure syntax coloring).
    *
    * @param {string} source — raw Fe code
-   * @param {object|null} scip — ScipStore instance (for type linking)
-   * @returns {string} HTML with <span class="hl-*"> and <a class="type-link">
+   * @returns {string} HTML with <span class="hl-*"> elements
    */
-  function highlightFe(source, scip) {
+  function highlightFe(source) {
     if (!ready) return escHtml(source);
 
     var parseSource = padForParse(source);
@@ -105,12 +83,10 @@
     captures.sort(function (a, b) {
       var d = a.node.startIndex - b.node.startIndex;
       if (d !== 0) return d;
-      // Longer (outermost) first so inner captures overwrite
       return (b.node.endIndex - b.node.startIndex) - (a.node.endIndex - a.node.startIndex);
     });
 
     // Build an array of character-level capture assignments.
-    // Each position gets the capture name of the innermost (last-written) capture.
     // Only covers original source length — padding captures are ignored.
     var len = source.length;
     var charCapture = new Array(len);
@@ -129,38 +105,14 @@
     var pos = 0;
     while (pos < len) {
       var capName = charCapture[pos];
-      // Find the end of this run
       var runEnd = pos + 1;
       while (runEnd < len && charCapture[runEnd] === capName) runEnd++;
       var text = source.slice(pos, runEnd);
 
       if (!capName) {
-        // No capture — plain text
         html += escHtml(text);
       } else {
         var cssClass = "hl-" + capName.replace(/\./g, "-");
-
-        // Check if this capture should be type-linked.
-        // When tree-sitter merges a type name with its generic params into one
-        // capture run (e.g. "AbiDecoder<A"), strip the generic suffix for lookup.
-        if (LINKABLE_CAPTURES[capName] && scip) {
-          var lookupText = text;
-          var ltIdx = text.indexOf("<");
-          if (ltIdx > 0) lookupText = text.slice(0, ltIdx);
-          var match = scipLookup(scip, lookupText);
-          if (match) {
-            if (ltIdx > 0) {
-              // Link only the identifier part, leave generic params as plain highlighted span
-              html += '<a href="#' + escHtml(match.doc_url) + '" class="' + cssClass + ' type-link">' + escHtml(lookupText) + "</a>";
-              html += '<span class="' + cssClass + '">' + escHtml(text.slice(ltIdx)) + "</span>";
-            } else {
-              html += '<a href="#' + escHtml(match.doc_url) + '" class="' + cssClass + ' type-link">' + escHtml(text) + "</a>";
-            }
-            pos = runEnd;
-            continue;
-          }
-        }
-
         html += '<span class="' + cssClass + '">' + escHtml(text) + "</span>";
       }
       pos = runEnd;

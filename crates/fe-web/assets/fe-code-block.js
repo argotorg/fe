@@ -30,9 +30,9 @@ class FeCodeBlock extends HTMLElement {
     var code = document.createElement("code");
     code.className = "language-" + lang;
 
-    // Client-side highlighting via tree-sitter WASM
+    // Client-side highlighting via tree-sitter WASM (pure syntax coloring)
     if (lang === "fe" && window.FeHighlighter && window.FeHighlighter.isReady()) {
-      code.innerHTML = window.FeHighlighter.highlightFe(source, window.FE_SCIP || null);
+      code.innerHTML = window.FeHighlighter.highlightFe(source);
       this._highlighted = true;
     } else {
       code.textContent = source;
@@ -89,8 +89,8 @@ class FeCodeBlock extends HTMLElement {
     // If SCIP is available, make highlighted spans interactive
     this._setupScipInteraction(code);
 
-    // Enrich type links with SCIP symbol data for hover highlighting
-    this._setupTypeLinkHighlighting(code);
+    // Walk highlighted spans and add type links via ScipStore name lookup
+    this._setupNameBasedLinking(code);
 
     // Listen for live diagnostics from LSP
     this._setupLspDiagnostics(code);
@@ -169,39 +169,92 @@ class FeCodeBlock extends HTMLElement {
     });
   }
 
-  /** Enrich type links (<a class="type-link">) with SCIP symbol classes + hover tooltip. */
-  _setupTypeLinkHighlighting(codeEl) {
+  /** CSS classes on highlighted spans that represent linkable names. */
+  static LINKABLE_CLASSES = [
+    "hl-type", "hl-type-builtin", "hl-type-interface", "hl-type-enum-variant", "hl-function"
+  ];
+
+  /**
+   * Walk highlighted spans, look up type/function names in ScipStore,
+   * and wrap matches in <a> links with hover highlighting.
+   */
+  _setupNameBasedLinking(codeEl) {
     var scip = window.FE_SCIP;
     if (!scip) return;
 
-    var links = codeEl.querySelectorAll("a.type-link");
-    for (var i = 0; i < links.length; i++) {
-      (function (a) {
-        var href = a.getAttribute("href") || "";
-        var docUrl = href.replace(/^#\/?/, "");
-        if (!docUrl) return;
-
-        var symbol = scip.symbolForDocUrl(docUrl);
-        if (!symbol) return;
-
-        var cls = scip.symbolClass(symbol);
-        a.classList.add(cls);
-
-        // Set hover tooltip from SCIP docs
-        var info = scip.symbolInfo(symbol);
-        if (info) {
-          try {
-            var parsed = JSON.parse(info);
-            if (parsed.documentation && parsed.documentation.length > 0) {
-              a.title = parsed.documentation[0].replace(/```[\s\S]*?```/g, "").trim();
-            }
-          } catch (_) {}
-        }
-
-        a.addEventListener("mouseenter", function () { feHighlight(cls); });
-        a.addEventListener("mouseleave", feUnhighlight);
-      })(links[i]);
+    var linkableSet = {};
+    for (var i = 0; i < FeCodeBlock.LINKABLE_CLASSES.length; i++) {
+      linkableSet[FeCodeBlock.LINKABLE_CLASSES[i]] = true;
     }
+
+    var spans = codeEl.querySelectorAll("span");
+    for (var si = 0; si < spans.length; si++) {
+      var span = spans[si];
+      // Check if this span has a linkable highlight class
+      var isLinkable = false;
+      for (var ci = 0; ci < span.classList.length; ci++) {
+        if (linkableSet[span.classList[ci]]) { isLinkable = true; break; }
+      }
+      if (!isLinkable) continue;
+
+      var text = span.textContent;
+      // Strip generic params if present (e.g. "AbiDecoder<A" → "AbiDecoder")
+      var ltIdx = text.indexOf("<");
+      var lookupName = ltIdx > 0 ? text.slice(0, ltIdx) : text;
+      if (!lookupName) continue;
+
+      var match = this._scipLookupName(scip, lookupName);
+      if (!match) continue;
+
+      // Create an anchor wrapping the identifier text
+      var a = document.createElement("a");
+      a.href = "#" + match.doc_url;
+      a.className = span.className + " type-link";
+
+      var symClass = scip.symbolClass(match.symbol);
+      a.classList.add(symClass);
+
+      if (ltIdx > 0) {
+        // Only link the identifier part, keep generic params in the span
+        a.textContent = lookupName;
+        // Replace span content: <a>Name</a><genericSuffix>
+        span.textContent = text.slice(ltIdx);
+        span.parentNode.insertBefore(a, span);
+      } else {
+        a.textContent = text;
+        span.parentNode.replaceChild(a, span);
+      }
+
+      // Hover: highlight all same-symbol occurrences
+      a.addEventListener("mouseenter", (function (cls) {
+        return function () { feHighlight(cls); };
+      })(symClass));
+      a.addEventListener("mouseleave", feUnhighlight);
+
+      // Tooltip from SCIP docs
+      var info = scip.symbolInfo(match.symbol);
+      if (info) {
+        try {
+          var parsed = JSON.parse(info);
+          if (parsed.documentation && parsed.documentation.length > 0) {
+            a.title = parsed.documentation[0].replace(/```[\s\S]*?```/g, "").trim();
+          }
+        } catch (_) {}
+      }
+    }
+  }
+
+  /** Look up a name in ScipStore. Returns {doc_url, symbol} or null. */
+  _scipLookupName(scip, name) {
+    try {
+      var results = JSON.parse(scip.search(name));
+      for (var i = 0; i < results.length; i++) {
+        if (results[i].display_name === name && results[i].doc_url) {
+          return results[i];
+        }
+      }
+    } catch (_) {}
+    return null;
   }
 
   /** Listen for LSP diagnostics and underline affected lines. */
