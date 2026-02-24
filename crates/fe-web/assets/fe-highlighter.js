@@ -71,6 +71,20 @@
   }
 
   /**
+   * Pad a code fragment with stub syntax so tree-sitter can produce a proper
+   * AST instead of ERROR nodes. The caller only uses captures within the
+   * original source length, so the padding is invisible in the output.
+   */
+  function padForParse(source) {
+    var s = source.trimEnd();
+    // Signatures for types/traits/impls/fns lack a body — append one
+    if (/\b(trait|struct|enum|contract|impl|fn)\b/.test(s) && s.indexOf("{") === -1) {
+      return s + " {}";
+    }
+    return source;
+  }
+
+  /**
    * Parse and highlight Fe source code.
    *
    * @param {string} source — raw Fe code
@@ -80,7 +94,8 @@
   function highlightFe(source, scip) {
     if (!ready) return escHtml(source);
 
-    var tree = parser.parse(source);
+    var parseSource = padForParse(source);
+    var tree = parser.parse(parseSource);
     var captures = query.captures(tree.rootNode);
     tree.delete();
 
@@ -96,6 +111,7 @@
 
     // Build an array of character-level capture assignments.
     // Each position gets the capture name of the innermost (last-written) capture.
+    // Only covers original source length — padding captures are ignored.
     var len = source.length;
     var charCapture = new Array(len);
     for (var ci = 0; ci < captures.length; ci++) {
