@@ -100,6 +100,9 @@ pub enum PathResErrorKind<'db> {
         expected: Option<TyId<'db>>,
         given: Option<TyId<'db>>,
     },
+    TraitConstHoleArg {
+        arg_idx: usize,
+    },
 
     /// Trait path generic argument expected a type; wrong domain was found.
     /// Carries the argument index and offending ident/kind for precise diagnostics.
@@ -183,6 +186,9 @@ impl<'db> PathResError<'db> {
             }
             PathResErrorKind::ArgTypeMismatch { .. } => {
                 "Generic const argument type mismatch".to_string()
+            }
+            PathResErrorKind::TraitConstHoleArg { .. } => {
+                "Layout hole is not allowed in trait generic arguments".to_string()
             }
             PathResErrorKind::TraitGenericArgType { .. } => {
                 "Trait generic argument expects a type".to_string()
@@ -283,6 +289,14 @@ impl<'db> PathResError<'db> {
                 expected,
                 given,
             },
+
+            PathResErrorKind::TraitConstHoleArg { arg_idx: _ } => {
+                let hole_span = seg_span.clone().into_atom();
+                PathResDiag::TraitConstHoleArg {
+                    span: hole_span.into(),
+                    ident,
+                }
+            }
 
             PathResErrorKind::InvalidPathSegment(res) => PathResDiag::InvalidPathSegment {
                 span,
@@ -1393,6 +1407,9 @@ pub fn resolve_name_res<'db>(
                                     }
                                     TraitArgError::ArgTypeMismatch { expected, given } => {
                                         PathResErrorKind::ArgTypeMismatch { expected, given }
+                                    }
+                                    TraitArgError::ConstHoleNotAllowed { arg_idx } => {
+                                        PathResErrorKind::TraitConstHoleArg { arg_idx }
                                     }
                                     TraitArgError::Ignored => PathResErrorKind::ParseError,
                                 };

@@ -88,6 +88,10 @@ pub enum PathResDiag<'db> {
         expected: Option<TyId<'db>>,
         given: Option<TyId<'db>>,
     },
+    TraitConstHoleArg {
+        span: DynLazySpan<'db>,
+        ident: IdentId<'db>,
+    },
 
     // Method selection related diagnostics
     TypeMustBeKnown(DynLazySpan<'db>),
@@ -128,6 +132,7 @@ impl<'db> PathResDiag<'db> {
             Self::ArgNumMismatch { span, .. } => span.top_mod(db).unwrap(),
             Self::ArgKindMismatch { span, .. } => span.top_mod(db).unwrap(),
             Self::ArgTypeMismatch { span, .. } => span.top_mod(db).unwrap(),
+            Self::TraitConstHoleArg { span, .. } => span.top_mod(db).unwrap(),
             Self::TypeMustBeKnown(span) => span.top_mod(db).unwrap(),
             Self::AmbiguousInherentMethod { primary, .. } => primary.top_mod(db).unwrap(),
             Self::AmbiguousTrait { primary, .. } => primary.top_mod(db).unwrap(),
@@ -173,6 +178,7 @@ impl<'db> PathResDiag<'db> {
             Self::ArgNumMismatch { .. } => 11,
             Self::ArgKindMismatch { .. } => 12,
             Self::ArgTypeMismatch { .. } => 13,
+            Self::TraitConstHoleArg { .. } => 19,
             Self::TypeMustBeKnown(..) => 14,
             Self::AmbiguousInherentMethod { .. } => 15,
             Self::AmbiguousTrait { .. } => 16,
