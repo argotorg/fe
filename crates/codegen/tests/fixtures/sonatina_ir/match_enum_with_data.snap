@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/match_enum_with_data.fe
 ---
@@ -10,11 +9,13 @@ func public %make_some(v0.i256) -> i256 {
     block0:
         v3.*i8 = evm_malloc 64.i256;
         v4.i256 = ptr_to_int v3 i256;
-        mstore v4 1.i256 i256;
-        v6.i64 = trunc v0 i64;
-        v7.i256 = zext v6 i256;
-        v9.i256 = add v4 32.i256;
-        mstore v9 v7 i256;
+        v6.*i256 = bitcast v3 *i256;
+        mstore v6 1.i256 i256;
+        v7.i64 = trunc v0 i64;
+        v8.i256 = zext v7 i256;
+        v10.i256 = add v4 32.i256;
+        v11.*i256 = int_to_ptr v10 *i256;
+        mstore v11 v8 i256;
         return v4;
 }
 
@@ -24,29 +25,31 @@ func public %match_option(v0.i256) -> i256 {
 
     block1:
         v4.i256 = add v0 32.i256;
-        v5.i256 = mload v4 i256;
-        v6.i64 = trunc v5 i64;
-        v7.i256 = zext v6 i256;
+        v5.*i256 = int_to_ptr v4 *i256;
+        v6.i256 = mload v5 i256;
+        v7.i64 = trunc v6 i64;
+        v8.i256 = zext v7 i256;
         jump block2;
 
     block2:
-        v9.i256 = phi (v7 block1) (0.i256 block3);
-        return v9;
+        v10.i256 = phi (v8 block1) (0.i256 block3);
+        return v10;
 
     block3:
         jump block2;
 
     block4:
-        v11.i256 = mload v0 i256;
-        v13.i1 = eq v11 1.i256;
-        br v13 block1 block6;
+        v12.*i256 = int_to_ptr v0 *i256;
+        v13.i256 = mload v12 i256;
+        v15.i1 = eq v13 1.i256;
+        br v15 block1 block6;
 
     block5:
         evm_invalid;
 
     block6:
-        v14.i1 = eq v11 0.i256;
-        br v14 block3 block5;
+        v16.i1 = eq v13 0.i256;
+        br v16 block3 block5;
 }
 
 func public %__fe_sonatina_entry() {

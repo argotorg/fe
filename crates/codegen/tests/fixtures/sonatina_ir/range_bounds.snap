@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/range_bounds.fe
 ---
@@ -34,10 +33,11 @@ func public %sum_const() -> i256 {
 
 func public %sum_dynamic_end(v0.i256) -> i256 {
     block0:
-        v3.*i8 = evm_malloc 32.i256;
-        v4.i256 = ptr_to_int v3 i256;
+        v2.*[i8; 32] = alloca [i8; 32];
+        v3.i256 = ptr_to_int v2 i256;
+        v4.*i256 = bitcast v2 *i256;
         mstore v4 v0 i256;
-        v5.i256 = call %range_known_const_s__usize___unknown__h4e84f6b6b8307914_seq_ha637d2df505bccf2_len__0__fc6647014fb554e5 v4;
+        v5.i256 = call %range_known_const_s__usize___unknown__h4e84f6b6b8307914_seq_ha637d2df505bccf2_len__0__fc6647014fb554e5 v3;
         jump block1;
 
     block1:
@@ -49,7 +49,7 @@ func public %sum_dynamic_end(v0.i256) -> i256 {
         br v10 block2 block4;
 
     block2:
-        v13.i256 = call %range_known_const_s__usize___known_const_e__usize___hc7c7abc3858dd85e_seq_ha637d2df505bccf2_get__0_4__f9605efabd18106c v4 v6;
+        v13.i256 = call %range_known_const_s__usize___known_const_e__usize___hc7c7abc3858dd85e_seq_ha637d2df505bccf2_get__0_4__f9605efabd18106c v3 v6;
         v15.i256 = add v23 v13;
         jump block3;
 
@@ -63,10 +63,11 @@ func public %sum_dynamic_end(v0.i256) -> i256 {
 
 func public %sum_dynamic_start(v0.i256) -> i256 {
     block0:
-        v3.*i8 = evm_malloc 32.i256;
-        v4.i256 = ptr_to_int v3 i256;
+        v2.*[i8; 32] = alloca [i8; 32];
+        v3.i256 = ptr_to_int v2 i256;
+        v4.*i256 = bitcast v2 *i256;
         mstore v4 v0 i256;
-        v5.i256 = call %range_unknown__known_const_e__usize___h7984c64777ae465_seq_ha637d2df505bccf2_len__4__f248ae0e02044d7e v4;
+        v5.i256 = call %range_unknown__known_const_e__usize___h7984c64777ae465_seq_ha637d2df505bccf2_len__4__f248ae0e02044d7e v3;
         jump block1;
 
     block1:
@@ -78,7 +79,7 @@ func public %sum_dynamic_start(v0.i256) -> i256 {
         br v10 block2 block4;
 
     block2:
-        v13.i256 = call %range_unknown__known_const_e__usize___h7984c64777ae465_seq_ha637d2df505bccf2_get__4__f248ae0e02044d7e v4 v6;
+        v13.i256 = call %range_unknown__known_const_e__usize___h7984c64777ae465_seq_ha637d2df505bccf2_get__4__f248ae0e02044d7e v3 v6;
         v15.i256 = add v23 v13;
         jump block3;
 
@@ -92,33 +93,35 @@ func public %sum_dynamic_start(v0.i256) -> i256 {
 
 func public %sum_dynamic(v0.i256, v1.i256) -> i256 {
     block0:
-        v4.*i8 = evm_malloc 64.i256;
-        v5.i256 = ptr_to_int v4 i256;
+        v3.*[i8; 64] = alloca [i8; 64];
+        v4.i256 = ptr_to_int v3 i256;
+        v5.*i256 = bitcast v3 *i256;
         mstore v5 v0 i256;
-        v7.i256 = add v5 32.i256;
-        mstore v7 v1 i256;
-        v8.i256 = call %range_unknown__unknown__h1dfb0ca64ed7bf96_seq_ha637d2df505bccf2_len v5;
+        v7.i256 = add v4 32.i256;
+        v8.*i256 = int_to_ptr v7 *i256;
+        mstore v8 v1 i256;
+        v9.i256 = call %range_unknown__unknown__h1dfb0ca64ed7bf96_seq_ha637d2df505bccf2_len v4;
         jump block1;
 
     block1:
-        v26.i256 = phi (0.i256 block0) (v18 block3);
-        v9.i256 = phi (0.i256 block0) (v21 block3);
-        v11.i1 = lt v9 v8;
-        v12.i256 = zext v11 i256;
-        v13.i1 = ne v12 0.i256;
-        br v13 block2 block4;
+        v27.i256 = phi (0.i256 block0) (v19 block3);
+        v10.i256 = phi (0.i256 block0) (v22 block3);
+        v12.i1 = lt v10 v9;
+        v13.i256 = zext v12 i256;
+        v14.i1 = ne v13 0.i256;
+        br v14 block2 block4;
 
     block2:
-        v16.i256 = call %range_unknown__known_const_e__usize___h7984c64777ae465_seq_ha637d2df505bccf2_get__4__f248ae0e02044d7e v5 v9;
-        v18.i256 = add v26 v16;
+        v17.i256 = call %range_unknown__known_const_e__usize___h7984c64777ae465_seq_ha637d2df505bccf2_get__4__f248ae0e02044d7e v4 v10;
+        v19.i256 = add v27 v17;
         jump block3;
 
     block3:
-        v21.i256 = add v9 1.i256;
+        v22.i256 = add v10 1.i256;
         jump block1;
 
     block4:
-        return v26;
+        return v27;
 }
 
 func private %range_known_const_s__usize___known_const_e__usize___hc7c7abc3858dd85e_seq_ha637d2df505bccf2_len__0_4__f9605efabd18106c(v0.i256) -> i256 {
@@ -152,33 +155,9 @@ func private %range_known_const_s__usize___known_const_e__usize___hc7c7abc3858dd
 
 func private %range_known_const_s__usize___unknown__h4e84f6b6b8307914_seq_ha637d2df505bccf2_len__0__fc6647014fb554e5(v0.i256) -> i256 {
     block0:
-        v2.i256 = mload v0 i256;
-        v3.i1 = lt v2 0.i256;
-        v4.i256 = zext v3 i256;
-        v6.i1 = eq v4 1.i256;
-        br v6 block1 block4;
-
-    block1:
-        jump block3;
-
-    block2:
-        v9.i256 = mload v0 i256;
-        v10.i256 = sub v9 0.i256;
-        jump block3;
-
-    block3:
-        v11.i256 = phi (0.i256 block1) (v10 block2);
-        return v11;
-
-    block4:
-        v7.i1 = eq v4 0.i256;
-        br v7 block2 block2;
-}
-
-func private %range_unknown__known_const_e__usize___h7984c64777ae465_seq_ha637d2df505bccf2_len__4__f248ae0e02044d7e(v0.i256) -> i256 {
-    block0:
-        v2.i256 = mload v0 i256;
-        v4.i1 = lt 4.i256 v2;
+        v2.*i256 = int_to_ptr v0 *i256;
+        v3.i256 = mload v2 i256;
+        v4.i1 = lt v3 0.i256;
         v5.i256 = zext v4 i256;
         v7.i1 = eq v5 1.i256;
         br v7 block1 block4;
@@ -187,53 +166,86 @@ func private %range_unknown__known_const_e__usize___h7984c64777ae465_seq_ha637d2
         jump block3;
 
     block2:
-        v10.i256 = mload v0 i256;
-        v11.i256 = sub 4.i256 v10;
+        v10.*i256 = int_to_ptr v0 *i256;
+        v11.i256 = mload v10 i256;
+        v12.i256 = sub v11 0.i256;
         jump block3;
 
     block3:
-        v12.i256 = phi (0.i256 block1) (v11 block2);
-        return v12;
+        v13.i256 = phi (0.i256 block1) (v12 block2);
+        return v13;
 
     block4:
         v8.i1 = eq v5 0.i256;
         br v8 block2 block2;
 }
 
-func private %range_unknown__known_const_e__usize___h7984c64777ae465_seq_ha637d2df505bccf2_get__4__f248ae0e02044d7e(v0.i256, v1.i256) -> i256 {
+func private %range_unknown__known_const_e__usize___h7984c64777ae465_seq_ha637d2df505bccf2_len__4__f248ae0e02044d7e(v0.i256) -> i256 {
     block0:
-        v3.i256 = mload v0 i256;
-        v4.i256 = add v3 v1;
-        return v4;
-}
-
-func private %range_unknown__unknown__h1dfb0ca64ed7bf96_seq_ha637d2df505bccf2_len(v0.i256) -> i256 {
-    block0:
-        v3.i256 = add v0 32.i256;
-        v4.i256 = mload v3 i256;
-        v5.i256 = mload v0 i256;
-        v6.i1 = lt v4 v5;
-        v7.i256 = zext v6 i256;
-        v9.i1 = eq v7 1.i256;
-        br v9 block1 block4;
+        v2.*i256 = int_to_ptr v0 *i256;
+        v3.i256 = mload v2 i256;
+        v5.i1 = lt 4.i256 v3;
+        v6.i256 = zext v5 i256;
+        v8.i1 = eq v6 1.i256;
+        br v8 block1 block4;
 
     block1:
         jump block3;
 
     block2:
-        v12.i256 = add v0 32.i256;
-        v13.i256 = mload v12 i256;
-        v14.i256 = mload v0 i256;
-        v15.i256 = sub v13 v14;
+        v11.*i256 = int_to_ptr v0 *i256;
+        v12.i256 = mload v11 i256;
+        v13.i256 = sub 4.i256 v12;
         jump block3;
 
     block3:
-        v16.i256 = phi (0.i256 block1) (v15 block2);
-        return v16;
+        v14.i256 = phi (0.i256 block1) (v13 block2);
+        return v14;
 
     block4:
-        v10.i1 = eq v7 0.i256;
-        br v10 block2 block2;
+        v9.i1 = eq v6 0.i256;
+        br v9 block2 block2;
+}
+
+func private %range_unknown__known_const_e__usize___h7984c64777ae465_seq_ha637d2df505bccf2_get__4__f248ae0e02044d7e(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.*i256 = int_to_ptr v0 *i256;
+        v4.i256 = mload v3 i256;
+        v5.i256 = add v4 v1;
+        return v5;
+}
+
+func private %range_unknown__unknown__h1dfb0ca64ed7bf96_seq_ha637d2df505bccf2_len(v0.i256) -> i256 {
+    block0:
+        v3.i256 = add v0 32.i256;
+        v4.*i256 = int_to_ptr v3 *i256;
+        v5.i256 = mload v4 i256;
+        v6.*i256 = int_to_ptr v0 *i256;
+        v7.i256 = mload v6 i256;
+        v8.i1 = lt v5 v7;
+        v9.i256 = zext v8 i256;
+        v11.i1 = eq v9 1.i256;
+        br v11 block1 block4;
+
+    block1:
+        jump block3;
+
+    block2:
+        v14.i256 = add v0 32.i256;
+        v15.*i256 = int_to_ptr v14 *i256;
+        v16.i256 = mload v15 i256;
+        v17.*i256 = int_to_ptr v0 *i256;
+        v18.i256 = mload v17 i256;
+        v19.i256 = sub v16 v18;
+        jump block3;
+
+    block3:
+        v20.i256 = phi (0.i256 block1) (v19 block2);
+        return v20;
+
+    block4:
+        v12.i1 = eq v9 0.i256;
+        br v12 block2 block2;
 }
 
 func public %__fe_sonatina_entry() {

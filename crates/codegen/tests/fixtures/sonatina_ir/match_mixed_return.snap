@@ -20,16 +20,17 @@ func private %f(v0.i256) -> i256 {
         return v4;
 
     block4:
-        v6.i256 = mload v0 i256;
-        v7.i1 = eq v6 0.i256;
-        br v7 block1 block6;
+        v6.*i256 = int_to_ptr v0 *i256;
+        v7.i256 = mload v6 i256;
+        v8.i1 = eq v7 0.i256;
+        br v8 block1 block6;
 
     block5:
         evm_invalid;
 
     block6:
-        v8.i1 = eq v6 1.i256;
-        br v8 block2 block5;
+        v9.i1 = eq v7 1.i256;
+        br v9 block2 block5;
 }
 
 func public %__fe_sonatina_entry() {
