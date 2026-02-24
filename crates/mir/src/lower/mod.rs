@@ -1681,14 +1681,14 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let root_expr = func_body.expr(self.db);
         self.collect_explicit_return_param_sources_in_expr(
             body,
-            &typed_body,
+            typed_body,
             root_expr,
             &mut out,
             &mut saw_non_param,
         );
         self.collect_implicit_return_param_sources_from_expr(
             body,
-            &typed_body,
+            typed_body,
             root_expr,
             &mut out,
             &mut saw_non_param,

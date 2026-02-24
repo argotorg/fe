@@ -8,6 +8,27 @@ use hir::{
 use num_bigint::BigUint;
 
 impl<'db, 'a> MirBuilder<'db, 'a> {
+    fn try_lower_transparent_newtype_aggregate_cast(
+        &mut self,
+        expr: ExprId,
+        aggregate_ty: TyId<'db>,
+        fallback: ValueId,
+        field_count: usize,
+        inner_value: Option<ValueId>,
+    ) -> Option<ValueId> {
+        if crate::repr::transparent_newtype_field_ty(self.db, aggregate_ty).is_none()
+            || field_count != 1
+        {
+            return None;
+        }
+        let inner_value = inner_value?;
+        self.builder.body.values[fallback.index()].origin =
+            ValueOrigin::TransparentCast { value: inner_value };
+        self.builder.body.values[fallback.index()].repr =
+            self.value_repr_for_expr(expr, aggregate_ty);
+        Some(fallback)
+    }
+
     /// Emits an allocation for the given type and binds it to the expression.
     ///
     /// # Parameters
@@ -112,17 +133,14 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         let record_ty = self.typed_body.expr_ty(self.db, expr);
 
-        // Transparent newtypes (single-field structs) are represented identically to their single
-        // field, so record literals lower to a representation-preserving cast.
-        if crate::repr::transparent_newtype_field_ty(self.db, record_ty).is_some()
-            && lowered_fields.len() == 1
-        {
-            let field_value = lowered_fields[0].1;
-            self.builder.body.values[fallback.index()].origin =
-                ValueOrigin::TransparentCast { value: field_value };
-            self.builder.body.values[fallback.index()].repr =
-                self.value_repr_for_expr(expr, record_ty);
-            return fallback;
+        if let Some(value) = self.try_lower_transparent_newtype_aggregate_cast(
+            expr,
+            record_ty,
+            fallback,
+            lowered_fields.len(),
+            lowered_fields.first().map(|(_, value)| *value),
+        ) {
+            return value;
         }
 
         let value_id = self.emit_alloc(expr, record_ty);
@@ -175,15 +193,14 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             }
         }
 
-        if crate::repr::transparent_newtype_field_ty(self.db, tuple_ty).is_some()
-            && lowered_elems.len() == 1
-        {
-            let elem_value = lowered_elems[0];
-            self.builder.body.values[fallback.index()].origin =
-                ValueOrigin::TransparentCast { value: elem_value };
-            self.builder.body.values[fallback.index()].repr =
-                self.value_repr_for_expr(expr, tuple_ty);
-            return fallback;
+        if let Some(value) = self.try_lower_transparent_newtype_aggregate_cast(
+            expr,
+            tuple_ty,
+            fallback,
+            lowered_elems.len(),
+            lowered_elems.first().copied(),
+        ) {
+            return value;
         }
 
         let value_id = self.emit_alloc(expr, tuple_ty);
