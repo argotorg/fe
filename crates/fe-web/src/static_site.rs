@@ -39,7 +39,7 @@ impl StaticSiteGenerator {
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
 
         // Pre-render markdown bodies, syntax-highlight signatures, and link types
-        let type_links = build_type_links(index);
+        let type_links = build_type_links(index, scip_json);
         inject_html_bodies(&mut value);
         inject_highlighted_signatures(&mut value);
         inject_type_links(&mut value, &type_links);
@@ -114,11 +114,45 @@ pub fn inject_highlighted_signatures(value: &mut serde_json::Value) {
     }
 }
 
-/// Build a map of type names to their doc URL paths from the index.
+/// Build a map of symbol names to their doc URL paths.
 ///
-/// Only includes linkable types (structs, enums, traits, contracts, type aliases).
-pub fn build_type_links(index: &DocIndex) -> HashMap<String, String> {
-    let mut links = HashMap::new();
+/// Includes all linkable items from the DocIndex (structs, enums, traits,
+/// contracts, type aliases, functions). When SCIP JSON is available, also
+/// extracts sub-item mappings (fields, variants, methods).
+///
+/// Names that appear more than once (ambiguous, like `Target`) are excluded
+/// to avoid incorrect cross-links.
+pub fn build_type_links(index: &DocIndex, scip_json: Option<&str>) -> HashMap<String, String> {
+    // First pass: collect all name→url pairs, tracking duplicates
+    let mut seen: HashMap<String, Option<String>> = HashMap::new();
+
+    let mut insert = |name: String, url: String| {
+        seen.entry(name)
+            .and_modify(|existing| {
+                // If same URL, keep it; different URL means ambiguous
+                if existing.as_deref() != Some(url.as_str()) {
+                    *existing = None; // mark ambiguous
+                }
+            })
+            .or_insert(Some(url));
+    };
+
+    // Extract from SCIP JSON (comprehensive — includes sub-items)
+    if let Some(json) = scip_json {
+        if let Ok(data) = serde_json::from_str::<serde_json::Value>(json) {
+            if let Some(symbols) = data.get("symbols").and_then(|s| s.as_object()) {
+                for (_sym, info) in symbols {
+                    let name = info.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                    let url = info.get("doc_url").and_then(|u| u.as_str()).unwrap_or("");
+                    if !name.is_empty() && !url.is_empty() {
+                        insert(name.to_string(), url.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    // Fill in from DocIndex (top-level items)
     for item in &index.items {
         match item.kind {
             DocItemKind::Struct
@@ -126,22 +160,50 @@ pub fn build_type_links(index: &DocIndex) -> HashMap<String, String> {
             | DocItemKind::Trait
             | DocItemKind::Contract
             | DocItemKind::TypeAlias => {
-                links.insert(item.name.clone(), item.url_path());
+                insert(item.name.clone(), item.url_path());
             }
             _ => {}
         }
+
+        // Also check children — if a child shares a name with a top-level
+        // item but has a different URL, the name becomes ambiguous.
+        // Uses `~` separator (not `#`) because the SPA hash router parses
+        // `#path/kind~anchor` where `~` delimits the in-page anchor.
+        let parent_url = item.url_path();
+        for child in &item.children {
+            let anchor = format!("{}.{}", child.kind.anchor_prefix(), child.name);
+            insert(child.name.clone(), format!("{}~{}", parent_url, anchor));
+        }
     }
-    links
+
+    // Only keep unambiguous names
+    seen.into_iter()
+        .filter_map(|(name, url)| url.map(|u| (name, u)))
+        .collect()
 }
 
 /// Walk the JSON and replace `<span class="hl-type">Name</span>` with
 /// `<a href="#url" class="hl-type type-link">Name</a>` for known types.
 ///
 /// Processes `highlighted_signature` and `html_body` fields.
+///
+/// For `highlighted_signature`, name-matching is skipped when the same object
+/// has a non-empty `rich_signature` array — the frontend prefers the
+/// compiler-resolved links in `rich_signature` over the heuristic HTML links.
 pub fn inject_type_links(value: &mut serde_json::Value, type_links: &HashMap<String, String>) {
     match value {
         serde_json::Value::Object(map) => {
+            // Skip highlighted_signature linking when rich_signature is present —
+            // those links are compiler-resolved via SCIP and more accurate.
+            let has_rich_sig = map
+                .get("rich_signature")
+                .and_then(|v| v.as_array())
+                .is_some_and(|a| !a.is_empty());
+
             for key in ["highlighted_signature", "html_body"] {
+                if key == "highlighted_signature" && has_rich_sig {
+                    continue;
+                }
                 if let Some(html) = map.get(key).and_then(|v| v.as_str()) {
                     let linked = link_types_in_html(html, type_links);
                     if linked != html {
@@ -162,54 +224,71 @@ pub fn inject_type_links(value: &mut serde_json::Value, type_links: &HashMap<Str
     }
 }
 
+/// Span class prefixes that should be checked for type linking.
+/// tree-sitter HtmlRenderer emits a double space: `<span  class=`
+/// Each entry is (html_prefix, css_class) so we preserve the original class.
+const LINKABLE_PREFIXES: &[(&str, &str)] = &[
+    ("<span  class=\"hl-type\">", "hl-type"),
+    ("<span  class=\"hl-type-enum-variant\">", "hl-type-enum-variant"),
+    ("<span  class=\"hl-type-interface\">", "hl-type-interface"),
+    ("<span  class=\"hl-type-builtin\">", "hl-type-builtin"),
+];
+
 /// Replace type-highlighted spans with anchor links for known types.
 fn link_types_in_html(html: &str, type_links: &HashMap<String, String>) -> String {
-    // tree-sitter HtmlRenderer emits a double space: `<span  class=`
-    const PREFIX: &str = "<span  class=\"hl-type\">";
     const SUFFIX: &str = "</span>";
 
     let mut result = String::with_capacity(html.len());
     let mut pos = 0;
-    let bytes = html.as_bytes();
 
     while pos < html.len() {
-        if let Some(start) = html[pos..].find(PREFIX) {
-            let abs_start = pos + start;
-            let text_start = abs_start + PREFIX.len();
-
-            if let Some(end_offset) = html[text_start..].find(SUFFIX) {
-                let text = &html[text_start..text_start + end_offset];
-                let span_end = text_start + end_offset + SUFFIX.len();
-
-                // Only link plain identifiers (no nested HTML)
-                if !text.contains('<') {
-                    if let Some(url) = type_links.get(text) {
-                        result.push_str(&html[pos..abs_start]);
-                        result.push_str("<a href=\"#");
-                        result.push_str(url);
-                        result.push_str("\" class=\"hl-type type-link\">");
-                        result.push_str(text);
-                        result.push_str("</a>");
-                        pos = span_end;
-                        continue;
-                    }
+        // Find the earliest linkable span prefix
+        let mut best: Option<(usize, &str, &str)> = None;
+        for &(prefix, class) in LINKABLE_PREFIXES {
+            if let Some(offset) = html[pos..].find(prefix) {
+                if best.is_none() || offset < best.unwrap().0 {
+                    best = Some((offset, prefix, class));
                 }
-
-                // Not a known type — keep original span
-                result.push_str(&html[pos..span_end]);
-                pos = span_end;
-            } else {
-                // Unclosed span, copy rest
-                result.push_str(&html[pos..]);
-                return result;
             }
-        } else {
+        }
+
+        let Some((offset, prefix, class)) = best else {
             result.push_str(&html[pos..]);
             return result;
+        };
+
+        let abs_start = pos + offset;
+        let text_start = abs_start + prefix.len();
+
+        let Some(end_offset) = html[text_start..].find(SUFFIX) else {
+            result.push_str(&html[pos..]);
+            return result;
+        };
+
+        let text = &html[text_start..text_start + end_offset];
+        let span_end = text_start + end_offset + SUFFIX.len();
+
+        // Only link plain identifiers (no nested HTML)
+        if !text.contains('<') {
+            if let Some(url) = type_links.get(text) {
+                result.push_str(&html[pos..abs_start]);
+                result.push_str("<a href=\"#");
+                result.push_str(url);
+                result.push_str("\" class=\"");
+                result.push_str(class);
+                result.push_str(" type-link\">");
+                result.push_str(text);
+                result.push_str("</a>");
+                pos = span_end;
+                continue;
+            }
         }
+
+        // Not a known type — keep original span
+        result.push_str(&html[pos..span_end]);
+        pos = span_end;
     }
 
-    let _ = bytes; // suppress unused warning
     result
 }
 
@@ -237,6 +316,7 @@ mod tests {
             docs: Some(DocContent::from_raw("A **friendly** greeter.")),
             signature: "pub struct Greeter".into(),
             rich_signature: vec![],
+            signature_span: None,
             generics: vec![],
             where_bounds: vec![],
             children: vec![],
@@ -344,6 +424,7 @@ mod tests {
             docs: None,
             signature: "pub struct Name".into(),
             rich_signature: vec![],
+            signature_span: None,
             generics: vec![],
             where_bounds: vec![],
             children: vec![],
@@ -352,7 +433,7 @@ mod tests {
             implementors: vec![],
         });
 
-        let type_links = build_type_links(&index);
+        let type_links = build_type_links(&index, None);
         let mut value = serde_json::to_value(&index).unwrap();
         inject_highlighted_signatures(&mut value);
         inject_type_links(&mut value, &type_links);

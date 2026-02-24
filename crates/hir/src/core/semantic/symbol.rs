@@ -12,6 +12,7 @@ use crate::hir_def::{Attr, EnumVariant, FieldParent, HirIngot, ItemKind, TopLeve
 use crate::hir_def::scope_graph::ScopeId;
 use crate::span::{DynLazySpan, LazySpan};
 use common::diagnostics::Span;
+use common::file::File;
 use common::ingot::Ingot;
 use rustc_hash::FxHashMap;
 
@@ -194,7 +195,19 @@ impl<'db> SymbolView<'db> {
             ScopeId::Item(item) => item,
             _ => return self.name(db),
         };
-        get_item_signature(db, item)
+        get_item_signature_with_span(db, item).map(|s| s.text)
+    }
+
+    /// Extract signature text together with its exact source byte range.
+    ///
+    /// Returns `None` for non-item scopes (fields, variants, params).
+    /// The byte range satisfies: `file.text(db)[byte_start..byte_end] == text`.
+    pub fn signature_with_span(&self, db: &'db dyn SpannedHirDb) -> Option<SignatureWithSpan> {
+        let item = match self.scope {
+            ScopeId::Item(item) => item,
+            _ => return None,
+        };
+        get_item_signature_with_span(db, item)
     }
 
     /// Resolve the name span to a concrete `Span`.
@@ -234,6 +247,20 @@ impl<'db> SymbolView<'db> {
     }
 }
 
+/// Signature text paired with its exact byte range in the source file.
+///
+/// Guarantees: `file.text(db)[byte_start..byte_end] == text`.
+#[derive(Debug, Clone)]
+pub struct SignatureWithSpan {
+    pub text: String,
+    /// The source file containing this signature.
+    pub file: File,
+    /// Start byte offset in the file text (after trimming).
+    pub byte_start: usize,
+    /// End byte offset in the file text (after trimming).
+    pub byte_end: usize,
+}
+
 /// Source location in a file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceLocation {
@@ -245,7 +272,13 @@ pub struct SourceLocation {
 // --- Internal helpers ---
 
 /// Extract signature text for an item, trimming the body.
-fn get_item_signature<'db>(db: &'db dyn SpannedHirDb, item: ItemKind<'db>) -> Option<String> {
+///
+/// Returns the text together with its exact byte range in the source file so
+/// that callers can overlay SCIP occurrences for positional linking.
+fn get_item_signature_with_span<'db>(
+    db: &'db dyn SpannedHirDb,
+    item: ItemKind<'db>,
+) -> Option<SignatureWithSpan> {
     let span = item.span().resolve(db)?;
     let file_text = span.file.text(db);
     let text = file_text.as_str();
@@ -287,17 +320,36 @@ fn get_item_signature<'db>(db: &'db dyn SpannedHirDb, item: ItemKind<'db>) -> Op
         start = end;
     }
 
-    let mut sig = text[start..end].trim().to_string();
+    // Trim leading whitespace — advance start to keep byte range aligned
+    while start < end && text.as_bytes()[start].is_ascii_whitespace() {
+        start += 1;
+    }
+    // Trim trailing whitespace — retreat end
+    while end > start && text.as_bytes()[end - 1].is_ascii_whitespace() {
+        end -= 1;
+    }
+
+    let mut sig = text[start..end].to_string();
+    let mut sig_end = end;
 
     // For impl blocks, truncate at opening brace
     if matches!(item, ItemKind::Impl(_) | ItemKind::ImplTrait(_)) {
         if let Some(brace_pos) = sig.find('{') {
-            sig.truncate(brace_pos);
-            sig = sig.trim_end().to_string();
+            sig_end = start + brace_pos;
+            // Trim trailing whitespace before the brace
+            while sig_end > start && text.as_bytes()[sig_end - 1].is_ascii_whitespace() {
+                sig_end -= 1;
+            }
+            sig = text[start..sig_end].to_string();
         }
     }
 
-    Some(sig)
+    Some(SignatureWithSpan {
+        text: sig,
+        file: span.file,
+        byte_start: start,
+        byte_end: sig_end,
+    })
 }
 
 /// Collect direct children of an item as SymbolViews.

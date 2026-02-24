@@ -24,7 +24,18 @@
 
   function currentPath() {
     var h = location.hash.replace(/^#\/?/, "");
+    // Strip in-page anchor (separated by ~)
+    var tilde = h.indexOf("~");
+    if (tilde !== -1) h = h.substring(0, tilde);
     return decodeURIComponent(h);
+  }
+
+  /** Extract the in-page anchor from the hash (after ~), or null. */
+  function currentAnchor() {
+    var h = location.hash.replace(/^#\/?/, "");
+    var tilde = h.indexOf("~");
+    if (tilde === -1) return null;
+    return decodeURIComponent(h.substring(tilde + 1));
   }
 
   function navigate(path) {
@@ -479,7 +490,7 @@
     html += '<div class="implementor-list">';
     implementors.forEach(function (imp) {
       var anchorId = "impl-" + imp.type_name.replace(/[<> ,]/g, "_");
-      var implLink = itemHref(imp.type_url + "#impl-" + imp.trait_name);
+      var implLink = itemHref(imp.type_url + "~impl-" + imp.trait_name);
       html += '<div class="implementor-item" id="' + esc(anchorId) + '">';
       html += '<a href="#' + esc(anchorId) + '" class="anchor">\u00a7</a>';
       html += '<code class="implementor-sig">';
@@ -542,6 +553,13 @@
         '<div class="not-found"><h1>Item Not Found</h1>' +
         "<p>The documentation item <code>" + esc(path) + "</code> could not be found.</p>" +
         '<p class="not-found-hint">It may have been renamed or removed.</p></div>';
+    }
+
+    // Scroll to in-page anchor (e.g. ~impl-Bound)
+    var anchor = currentAnchor();
+    if (anchor) {
+      var el = document.getElementById(anchor);
+      if (el) el.scrollIntoView({ behavior: "smooth" });
     }
   }
 

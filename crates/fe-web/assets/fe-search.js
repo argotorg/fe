@@ -74,6 +74,13 @@ class FeSearch extends HTMLElement {
     var index = window.FE_DOC_INDEX;
     if (!index || !index.items) return;
 
+    // kind → URL suffix (mirrors fe-web.js ITEM_KIND_INFO)
+    var KIND_SUFFIX = {
+      module: "mod", function: "fn", struct: "struct", enum: "enum",
+      trait: "trait", contract: "contract", type_alias: "type",
+      const: "const", impl: "impl", impl_trait: "impl",
+    };
+
     var q = query.toLowerCase();
     var matches = [];
     var items = index.items;
@@ -81,7 +88,7 @@ class FeSearch extends HTMLElement {
     for (var i = 0; i < items.length && matches.length < 15; i++) {
       var item = items[i];
       var name = (item.name || "").toLowerCase();
-      var path = (item.url_path || "").toLowerCase();
+      var path = (item.path || "").toLowerCase();
       if (name.indexOf(q) !== -1 || path.indexOf(q) !== -1) {
         matches.push(item);
       }
@@ -89,9 +96,10 @@ class FeSearch extends HTMLElement {
 
     for (var j = 0; j < matches.length; j++) {
       var m = matches[j];
+      var suffix = KIND_SUFFIX[m.kind] || m.kind;
       var a = document.createElement("a");
       a.className = "search-result";
-      a.href = "#" + (m.url_path || "");
+      a.href = "#" + m.path + "/" + suffix;
       a.setAttribute("role", "option");
 
       var badge = document.createElement("span");

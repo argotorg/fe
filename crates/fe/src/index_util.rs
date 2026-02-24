@@ -41,6 +41,14 @@ impl LineIndex {
             byte_offset,
         }
     }
+
+    /// Convert a 0-indexed (line, column) to a byte offset.
+    ///
+    /// Column is a byte offset from the start of the line (matching SCIP's
+    /// UTF-8 position encoding).
+    pub fn byte_offset_from_line_col(&self, line: usize, col: usize) -> usize {
+        self.offsets.get(line).map(|&start| start + col).unwrap_or(0)
+    }
 }
 
 /// Shared ingot resolution context used by both SCIP and LSIF generators.
