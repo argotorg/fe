@@ -1233,8 +1233,6 @@ fn contract_field_base_slot_count<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>
                     1usize.saturating_add(max_payload)
                 }
             }
-        } else if matches!(ty.base_ty(db).data(db), TyData::TyBase(TyBase::Prim(_))) {
-            1
         } else {
             1
         };

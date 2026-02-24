@@ -203,11 +203,11 @@ pub(crate) fn existentialize_omitted_const_args_in_effect_key<'db>(
 
     let mut completed_args = args.to_vec();
     let mut changed = false;
-    for explicit_idx in provided_explicit_len..params.len() {
+    for (explicit_idx, param) in params.iter().enumerate().skip(provided_explicit_len) {
         if !param_set.explicit_const_param_default_is_hole(db, explicit_idx) {
             continue;
         }
-        let Some(const_ty_ty) = params[explicit_idx].const_ty_ty(db) else {
+        let Some(const_ty_ty) = param.const_ty_ty(db) else {
             continue;
         };
 
