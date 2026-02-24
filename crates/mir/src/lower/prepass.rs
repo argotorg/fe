@@ -343,7 +343,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 // Reusing that ValueId across control-flow paths is unsound, so we
                 // materialize arrays at each use site and do not cache their ValueId.
                 if let ConstValue::ConstArray(ref elems) = value
-                    && let Some(value_id) = self.try_emit_const_array(ty, elems)
+                    && let Some(data) = self.const_array_data_for_ref(&cref, ty, elems)
+                    && let Some(value_id) = self.try_emit_const_array(ty, data)
                 {
                     return Some(value_id);
                 }
@@ -413,7 +414,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     })
                     .collect();
                 if let Some(elems) = values
-                    && let Some(value_id) = self.try_emit_const_array(expected_ty, &elems)
+                    && let Some(data) = self.serialize_const_array_data(expected_ty, &elems)
+                    && let Some(value_id) = self.try_emit_const_array(expected_ty, data)
                 {
                     return Some(value_id);
                 }
@@ -432,7 +434,10 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                             .flatten()
                     }) {
                     Some(ConstValue::ConstArray(ref elems)) => {
-                        if let Some(value_id) = self.try_emit_const_array(expected_ty, elems) {
+                        let Some(data) = self.serialize_const_array_data(expected_ty, elems) else {
+                            return None;
+                        };
+                        if let Some(value_id) = self.try_emit_const_array(expected_ty, data) {
                             return Some(value_id);
                         }
                         return None;
@@ -479,15 +484,41 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     }
 
     /// Serializes a `ConstValue::ConstArray` into bytes and emits a `ConstAggregate` instruction.
-    fn try_emit_const_array(
+    fn const_array_data_for_ref(
         &mut self,
+        cref: &hir::analysis::ty::ty_check::ConstRef<'db>,
         array_ty: TyId<'db>,
         elems: &[ConstValue],
-    ) -> Option<ValueId> {
-        self.current_block()?;
+    ) -> Option<Vec<u8>> {
+        let hir::analysis::ty::ty_check::ConstRef::Const(const_def) = cref else {
+            return self.serialize_const_array_data(array_ty, elems);
+        };
+
+        if let Some((cached_ty, data)) = self.const_array_data_cache.get(const_def)
+            && *cached_ty == array_ty
+        {
+            return Some(data.clone());
+        }
+
+        let data = self.serialize_const_array_data(array_ty, elems)?;
+        self.const_array_data_cache
+            .insert(*const_def, (array_ty, data.clone()));
+        Some(data)
+    }
+
+    fn serialize_const_array_data(
+        &self,
+        array_ty: TyId<'db>,
+        elems: &[ConstValue],
+    ) -> Option<Vec<u8>> {
         let elem_ty = crate::layout::array_elem_ty(self.db, array_ty)?;
         let elem_size = crate::layout::ty_memory_size(self.db, elem_ty)?;
-        let data = serialize_const_array_to_bytes(elems, elem_size)?;
+        serialize_const_array_to_bytes(elems, elem_size)
+    }
+
+    /// Emits a `ConstAggregate` into a fresh local at the current insertion point.
+    fn try_emit_const_array(&mut self, array_ty: TyId<'db>, data: Vec<u8>) -> Option<ValueId> {
+        self.current_block()?;
 
         let dest = self.alloc_temp_local(array_ty, false, "const_array");
         self.builder.body.locals[dest.index()].address_space = AddressSpaceKind::Memory;

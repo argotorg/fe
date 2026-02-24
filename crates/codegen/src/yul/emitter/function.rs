@@ -24,6 +24,8 @@ pub(super) struct FunctionEmitter<'db> {
     ipdom: Vec<Option<BasicBlockId>>,
     /// Data regions collected during emission.
     data_region_counter: u32,
+    /// Reuse labels for identical payloads so we don't emit duplicate data sections.
+    data_region_labels: FxHashMap<Vec<u8>, String>,
     pub(super) data_regions: Vec<YulDataRegion>,
 }
 
@@ -57,6 +59,7 @@ impl<'db> FunctionEmitter<'db> {
             layout,
             ipdom,
             data_region_counter: 0,
+            data_region_labels: FxHashMap::default(),
             data_regions: Vec::new(),
         })
     }
@@ -70,11 +73,15 @@ impl<'db> FunctionEmitter<'db> {
     /// Labels include the function's symbol name to ensure global uniqueness
     /// across functions within the same Yul object.
     pub(super) fn register_data_region(&mut self, bytes: Vec<u8>) -> String {
+        if let Some(label) = self.data_region_labels.get(bytes.as_slice()) {
+            return label.clone();
+        }
         let label = format!(
             "data_{}_{}",
             self.mir_func.symbol_name, self.data_region_counter
         );
         self.data_region_counter += 1;
+        self.data_region_labels.insert(bytes.clone(), label.clone());
         self.data_regions.push(YulDataRegion {
             label: label.clone(),
             bytes,

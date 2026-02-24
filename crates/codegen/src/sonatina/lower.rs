@@ -2162,23 +2162,29 @@ fn lower_const_aggregate<C: sonatina_ir::func_cursor::FuncCursor>(
     ctx: &mut LowerCtx<'_, '_, C>,
     data: &[u8],
 ) -> Result<ValueId, LowerError> {
-    // Build array initializer from raw bytes (each element is one byte)
-    let elems: Vec<GvInitializer> = data
-        .iter()
-        .map(|&b| GvInitializer::make_imm(Immediate::I8(b as i8)))
-        .collect();
-    let array_init = GvInitializer::make_array(elems);
+    let gv_ref = if let Some(&existing) = ctx.const_data_globals.get(data) {
+        existing
+    } else {
+        // Build array initializer from raw bytes (each element is one byte)
+        let elems: Vec<GvInitializer> = data
+            .iter()
+            .map(|&b| GvInitializer::make_imm(Immediate::I8(b as i8)))
+            .collect();
+        let array_init = GvInitializer::make_array(elems);
 
-    // Register as a const global variable
-    let label = format!("__fe_const_data_{}", *ctx.data_global_counter);
-    *ctx.data_global_counter += 1;
-    let array_ty = ctx
-        .fb
-        .module_builder
-        .declare_array_type(Type::I8, data.len());
-    let gv_data = GlobalVariableData::constant(label, array_ty, Linkage::Private, array_init);
-    let gv_ref = ctx.fb.module_builder.declare_gv(gv_data);
-    ctx.data_globals.push(gv_ref);
+        // Register as a const global variable
+        let label = format!("__fe_const_data_{}", *ctx.data_global_counter);
+        *ctx.data_global_counter += 1;
+        let array_ty = ctx
+            .fb
+            .module_builder
+            .declare_array_type(Type::I8, data.len());
+        let gv_data = GlobalVariableData::constant(label, array_ty, Linkage::Private, array_init);
+        let gv_ref = ctx.fb.module_builder.declare_gv(gv_data);
+        ctx.const_data_globals.insert(data.to_vec(), gv_ref);
+        ctx.data_globals.push(gv_ref);
+        gv_ref
+    };
 
     // Emit: malloc + codecopy
     let size_val = ctx.fb.make_imm_value(I256::from(data.len() as u64));

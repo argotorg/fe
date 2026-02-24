@@ -6,9 +6,6 @@ input_file: crates/codegen/tests/fixtures/const_array_branch.fe
 target = "evm-ethereum-osaka"
 
 global private const [i8; 32] $__fe_const_data_0 = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
-global private const [i8; 32] $__fe_const_data_1 = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
-global private const [i8; 32] $__fe_const_data_2 = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
-global private const [i8; 32] $__fe_const_data_3 = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
 
 func public %const_array_branch(v0.i256) -> i256 {
     block0:
@@ -30,8 +27,8 @@ func public %const_array_branch(v0.i256) -> i256 {
     block2:
         v14.*i8 = evm_malloc 32.i256;
         v15.i256 = ptr_to_int v14 i256;
-        v16.i256 = sym_addr $__fe_const_data_1;
-        v17.i256 = sym_size $__fe_const_data_1;
+        v16.i256 = sym_addr $__fe_const_data_0;
+        v17.i256 = sym_size $__fe_const_data_0;
         evm_code_copy v15 v16 v17;
         v18.*[i256; 1] = int_to_ptr v15 *[i256; 1];
         v19.*i256 = gep v18 0.i256 0.i256;
@@ -43,13 +40,13 @@ func public %const_array_branch(v0.i256) -> i256 {
         v30.i256 = phi (v13 block1) (v21 block2);
         v22.*i8 = evm_malloc 32.i256;
         v23.i256 = ptr_to_int v22 i256;
-        v24.i256 = sym_addr $__fe_const_data_2;
-        v25.i256 = sym_size $__fe_const_data_2;
+        v24.i256 = sym_addr $__fe_const_data_0;
+        v25.i256 = sym_size $__fe_const_data_0;
         evm_code_copy v23 v24 v25;
         v26.*i8 = evm_malloc 32.i256;
         v27.i256 = ptr_to_int v26 i256;
-        v28.i256 = sym_addr $__fe_const_data_3;
-        v29.i256 = sym_size $__fe_const_data_3;
+        v28.i256 = sym_addr $__fe_const_data_0;
+        v29.i256 = sym_size $__fe_const_data_0;
         evm_code_copy v27 v28 v29;
         return v30;
 
@@ -69,8 +66,5 @@ object @Contract {
     section runtime {
         entry %__fe_sonatina_entry;
         data $__fe_const_data_0;
-        data $__fe_const_data_1;
-        data $__fe_const_data_2;
-        data $__fe_const_data_3;
     }
 }

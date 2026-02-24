@@ -1155,6 +1155,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         }
 
         {
+            let mut const_data_globals = FxHashMap::default();
             let mut ctx = LowerCtx {
                 fb: &mut fb,
                 db: self.db,
@@ -1171,6 +1172,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 gep_name_counter: &mut self.gep_name_counter,
                 data_globals: &mut self.data_globals,
                 data_global_counter: &mut self.data_global_counter,
+                const_data_globals: &mut const_data_globals,
             };
 
             for (idx, block) in ctx.body.blocks.iter().enumerate() {
@@ -1220,4 +1222,6 @@ pub(super) struct LowerCtx<'a, 'db, C: sonatina_ir::func_cursor::FuncCursor> {
     pub(super) data_globals: &'a mut Vec<GlobalVariableRef>,
     /// Counter for generating unique data global names.
     pub(super) data_global_counter: &'a mut usize,
+    /// Per-function dedupe for constant aggregate payloads.
+    pub(super) const_data_globals: &'a mut FxHashMap<Vec<u8>, GlobalVariableRef>,
 }
