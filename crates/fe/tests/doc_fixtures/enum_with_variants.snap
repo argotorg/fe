@@ -32,7 +32,7 @@ input_file: tests/doc_fixtures/enum_with_variants.fe
         "body": "Represents a color.",
         "sections": []
       },
-      "signature": "pub enum Color {\n    /// Red color\n    Red\n    /// Green color\n    Green\n    /// Blue color\n    Blue\n    /// Custom RGB value\n    Custom(u256)\n}",
+      "signature": "pub enum Color",
       "generics": [],
       "where_bounds": [],
       "children": [

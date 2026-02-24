@@ -425,14 +425,14 @@ fn generate_scip_json_for_doc(
 
     for ingot_url in &ingot_urls {
         match crate::scip_index::generate_scip(db, ingot_url) {
-            Ok(scip_index) => {
+            Ok(mut scip_index) => {
                 let project_root = ingot_url
                     .to_file_path()
                     .ok()
                     .and_then(|p| camino::Utf8PathBuf::from_path_buf(p).ok());
 
                 if let Some(ref root) = project_root {
-                    crate::scip_index::enrich_signatures(db, root, doc_index, &scip_index);
+                    crate::scip_index::enrich_signatures(db, root, doc_index, &mut scip_index);
                 }
 
                 combined_index.documents.extend(scip_index.documents);

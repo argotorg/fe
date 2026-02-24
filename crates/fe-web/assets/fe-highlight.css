@@ -17,6 +17,12 @@
 .hl-constant { color: #d19a66; font-weight: bold; }
 .hl-punctuation-bracket, .hl-punctuation-delimiter, .hl-punctuation-special { color: #abb2bf; }
 
+/* Smooth transition for SCIP symbol hover highlights.
+   feHighlight() injects/removes background rules; the browser tweens them. */
+[class*="sym-"] {
+    transition: background 0.15s ease, text-decoration-color 0.15s ease;
+}
+
 /* <fe-code-block> custom element */
 fe-code-block {
     display: block;
