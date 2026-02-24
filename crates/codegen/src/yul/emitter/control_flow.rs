@@ -2,7 +2,7 @@
 
 use mir::{
     BasicBlockId, LoopInfo, Terminator, ValueId,
-    ir::{IntrinsicValue, MirInst, SwitchTarget, SwitchValue},
+    ir::{IntrinsicValue, SwitchTarget, SwitchValue},
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -455,7 +455,6 @@ impl<'db> FunctionEmitter<'db> {
     }
 
     /// Emits a Yul `for` loop for the given header block and returns the exit block.
-    /// If the loop has an `unroll_count`, emits the body that many times instead of a loop.
     ///
     /// * `header` - Loop header block chosen by MIR.
     /// * `info` - Loop metadata describing body/backedge/exit blocks.
@@ -580,86 +579,6 @@ impl<'db> FunctionEmitter<'db> {
             }
         };
 
-        // Decide whether to unroll based on trip_count and unroll_hint:
-        // - #[no_unroll] (Some(false)): never unroll
-        // - #[unroll] (Some(true)): unroll if trip_count known and <= 256
-        // - auto (None): unroll if trip_count known and < 10
-        let unroll_count = match info.unroll_hint {
-            Some(false) => None,
-            Some(true) => info.trip_count.filter(|&n| n <= 256),
-            None => info.trip_count.filter(|&n| n < 10),
-        };
-
-        // Don't unroll if the body contains a `break` goto (targets exit_block).
-        // Unrolled code has no Yul `for` loop, so `break` can't exit early.
-        // (`continue` is fine — it targets post_block which is a stop block,
-        // so emission stops at the right point for each unrolled iteration.)
-        let unroll_count =
-            unroll_count.filter(|_| !self.loop_body_has_break(info.body, info.exit, &info));
-
-        if let Some(unroll_count) = unroll_count {
-            // Find the index local from the post block (it's the one being assigned)
-            let index_local = info.post_block.and_then(|post_bb| {
-                let post_block_data = self.mir_func.body.blocks.get(post_bb.index())?;
-                for inst in &post_block_data.insts {
-                    if let MirInst::Assign {
-                        dest: Some(local), ..
-                    } = inst
-                    {
-                        return Some(*local);
-                    }
-                }
-                None
-            });
-
-            // Get the Yul name for the index local
-            let index_name = index_local.and_then(|local| state.local(local));
-
-            // Stop at init and post blocks when emitting body
-            let mut body_stops = stop_blocks.to_vec();
-            if let Some(init_bb) = info.init_block {
-                body_stops.push(init_bb);
-            }
-            if let Some(post_bb) = info.post_block {
-                body_stops.push(post_bb);
-            }
-
-            // Emit unrolled iterations
-            let mut unrolled_docs = Vec::new();
-            for i in 0..unroll_count {
-                let mut iteration_docs = Vec::new();
-
-                // If we have an index local, assign it to the current iteration
-                if let Some(ref idx_name) = index_name {
-                    iteration_docs.push(YulDoc::line(format!("{idx_name} := {i}")));
-                }
-
-                // Emit the body for this iteration
-                // We need a fresh state for value temps so that `let` declarations
-                // in the body don't conflict between iterations
-                let mut iter_state = state.clone();
-                let body_docs =
-                    self.emit_block_internal(info.body, None, &mut iter_state, &body_stops)?;
-                iteration_docs.extend(body_docs);
-
-                // Wrap iteration in a block to scope the `let` declarations
-                unrolled_docs.push(YulDoc::block("", iteration_docs));
-            }
-
-            // Combine all iterations into a single doc sequence
-            let combined_doc = if unrolled_docs.len() == 1 {
-                unrolled_docs.remove(0)
-            } else {
-                // Multiple iterations: emit as sequential blocks
-                YulDoc::Block {
-                    caption: "".to_string(),
-                    body: unrolled_docs,
-                }
-            };
-
-            return Ok((combined_doc, info.exit));
-        }
-
         let cond_expr = self.lower_value(cond, state)?;
 
         // Continue target is the post block if present, otherwise the header
@@ -685,69 +604,6 @@ impl<'db> FunctionEmitter<'db> {
             body_docs,
         );
         Ok((loop_doc, info.exit))
-    }
-
-    /// Returns true if the loop body contains a `break` goto (targeting exit_block).
-    ///
-    /// Walks blocks reachable from `body`, stopping at structural boundaries
-    /// (init/post/backedge blocks). Any goto/branch/switch edge to `exit_block`
-    /// from within the body indicates a `break` statement.
-    fn loop_body_has_break(
-        &self,
-        body: BasicBlockId,
-        exit_block: BasicBlockId,
-        info: &LoopInfo,
-    ) -> bool {
-        // Boundary blocks: don't traverse into structural loop blocks.
-        let mut boundaries: FxHashSet<BasicBlockId> = FxHashSet::default();
-        boundaries.insert(exit_block);
-        if let Some(init) = info.init_block {
-            boundaries.insert(init);
-        }
-        if let Some(post) = info.post_block {
-            boundaries.insert(post);
-        }
-        if let Some(back) = info.backedge {
-            boundaries.insert(back);
-        }
-
-        let mut visited = FxHashSet::default();
-        let mut stack = vec![body];
-        while let Some(bb) = stack.pop() {
-            if !visited.insert(bb) || (boundaries.contains(&bb) && bb != body) {
-                continue;
-            }
-            let Some(block) = self.mir_func.body.blocks.get(bb.index()) else {
-                continue;
-            };
-            // Collect successor blocks from the terminator.
-            let mut succs = Vec::new();
-            match &block.terminator {
-                Terminator::Goto { target, .. } => succs.push(*target),
-                Terminator::Branch {
-                    then_bb, else_bb, ..
-                } => {
-                    succs.push(*then_bb);
-                    succs.push(*else_bb);
-                }
-                Terminator::Switch {
-                    targets, default, ..
-                } => {
-                    for t in targets {
-                        succs.push(t.block);
-                    }
-                    succs.push(*default);
-                }
-                _ => {}
-            }
-            for succ in succs {
-                if succ == exit_block {
-                    return true;
-                }
-                stack.push(succ);
-            }
-        }
-        false
     }
 }
 

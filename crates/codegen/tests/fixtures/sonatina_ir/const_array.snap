@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/const_array.fe
 ---
@@ -19,12 +18,27 @@ func public %sum_two(v0.i256, v1.i256) -> i256 {
         v9.*i256 = gep v8 0.i256 v0;
         v10.i256 = ptr_to_int v9 i256;
         v11.i256 = mload v10 i256;
-        v12.*[i256; 3] = int_to_ptr v5 *[i256; 3];
-        v13.*i256 = gep v12 0.i256 v1;
-        v14.i256 = ptr_to_int v13 i256;
-        v15.i256 = mload v14 i256;
-        v16.i256 = add v11 v15;
-        return v16;
+        v12.*i8 = evm_malloc 96.i256;
+        v13.i256 = ptr_to_int v12 i256;
+        v14.i256 = sym_addr $__fe_const_data_0;
+        v15.i256 = sym_size $__fe_const_data_0;
+        evm_code_copy v13 v14 v15;
+        v16.*[i256; 3] = int_to_ptr v13 *[i256; 3];
+        v17.*i256 = gep v16 0.i256 v1;
+        v18.i256 = ptr_to_int v17 i256;
+        v19.i256 = mload v18 i256;
+        v20.*i8 = evm_malloc 96.i256;
+        v21.i256 = ptr_to_int v20 i256;
+        v22.i256 = sym_addr $__fe_const_data_0;
+        v23.i256 = sym_size $__fe_const_data_0;
+        evm_code_copy v21 v22 v23;
+        v24.*i8 = evm_malloc 96.i256;
+        v25.i256 = ptr_to_int v24 i256;
+        v26.i256 = sym_addr $__fe_const_data_0;
+        v27.i256 = sym_size $__fe_const_data_0;
+        evm_code_copy v25 v26 v27;
+        v28.i256 = add v11 v19;
+        return v28;
 }
 
 func public %__fe_sonatina_entry() {

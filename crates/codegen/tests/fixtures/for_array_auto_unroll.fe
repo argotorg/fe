@@ -1,9 +1,0 @@
-// For loop over a small array (< 10 elements) should auto-unroll
-pub fn for_array_auto_sum() -> u64 {
-    let arr: [u64; 3] = [1, 2, 3]
-    let mut sum: u64 = 0
-    for elem in arr {
-        sum = sum + elem
-    }
-    sum
-}
