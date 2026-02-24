@@ -1,5 +1,7 @@
-/* Fe syntax highlighting (tree-sitter) — One Dark inspired */
-/* Standalone version with hardcoded colors for embedding in Starlight/Astro */
+/* Fe syntax highlighting (tree-sitter) — One Dark inspired
+   Standalone version with hardcoded colors for embedding in Starlight/Astro.
+   When loaded in the generated doc site, styles.css overrides layout rules
+   (fe-code-block, fe-code-pre, etc.) with CSS-variable versions. */
 
 .hl-keyword { color: #c678dd; }
 .hl-type, .hl-type-builtin { color: #e5c07b; }

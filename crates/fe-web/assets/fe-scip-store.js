@@ -8,18 +8,21 @@
 // Usage:
 //   window.FE_SCIP = new ScipStore(window.FE_SCIP_DATA);
 
-// Shared <style> element for symbol hover highlighting.
-// Inserting/removing CSS rules is all that's needed — the browser
-// applies them to every element carrying the symbol's classes.
-var _highlightSheet = null;
+// SCIP symbol hover highlighting.
+// Colors come from CSS custom properties (--hl-ref-bg, --hl-def-bg,
+// --hl-def-underline) defined in :root so they stay in sync with the theme.
+// Setting element.style.* directly lets the CSS transition on [class*="sym-"]
+// interpolate between transparent ↔ colored.
 var _defaultHighlightHash = null;
 var _activeHighlightHash = null;
 
-// Role-aware highlight using inline styles on matched elements.
-// Setting style.background directly means the CSS transition on
-// [class*="sym-"] can interpolate between transparent ↔ colored.
+// Read highlight colors from CSS custom properties, with fallbacks.
+function _hlColor(prop, fallback) {
+  var v = getComputedStyle(document.documentElement).getPropertyValue(prop);
+  return v && v.trim() ? v.trim() : fallback;
+}
+
 function feHighlight(symHash) {
-  // Clear previous highlight (fade out via transition)
   if (_activeHighlightHash && _activeHighlightHash !== symHash) {
     _setHighlightStyles(_activeHighlightHash, false);
   }
@@ -28,16 +31,19 @@ function feHighlight(symHash) {
 }
 
 function _setHighlightStyles(symHash, on) {
+  var refBg  = on ? _hlColor("--hl-ref-bg",       "rgba(99,102,241,0.10)") : "";
+  var defBg  = on ? _hlColor("--hl-def-bg",        "rgba(99,102,241,0.18)") : "";
+  var defUl  = on ? _hlColor("--hl-def-underline",  "rgba(99,102,241,0.5)") : "";
   var all = document.querySelectorAll(".sym-" + symHash);
   var defs = document.querySelectorAll(".sym-d-" + symHash);
   for (var i = 0; i < all.length; i++) {
-    all[i].style.background = on ? "rgba(74,222,128,0.12)" : "";
+    all[i].style.background = refBg;
     all[i].style.borderRadius = on ? "2px" : "";
   }
   for (var j = 0; j < defs.length; j++) {
-    defs[j].style.background = on ? "rgba(74,222,128,0.22)" : "";
+    defs[j].style.background = defBg;
     defs[j].style.textDecoration = on ? "underline" : "";
-    defs[j].style.textDecorationColor = on ? "rgba(74,222,128,0.5)" : "";
+    defs[j].style.textDecorationColor = defUl;
     defs[j].style.textUnderlineOffset = on ? "2px" : "";
   }
 }
