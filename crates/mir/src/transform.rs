@@ -813,6 +813,7 @@ pub fn transparent_newtype_projection_keeps_non_memory_space(w: mut Wrap) {}
             is_mut: true,
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Storage,
+            capability_spaces: Vec::new(),
         });
         let base = body.alloc_value(ValueData {
             ty: wrap_inner_ty,

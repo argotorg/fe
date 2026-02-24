@@ -1,0 +1,50 @@
+use std::evm::Evm
+use std::evm::effects::assert
+
+msg Msg {
+    #[selector = 1]
+    Inc -> u256,
+    #[selector = 2]
+    Get -> u256,
+}
+
+struct Counter {
+    value: u256,
+}
+
+impl Counter {
+    fn value_mut(mut self) -> mut u256 {
+        mut self.value
+    }
+}
+
+pub contract C {
+    mut counter: Counter,
+
+    recv Msg {
+        Inc -> u256 uses (mut counter) {
+            let value = counter.value_mut()
+            value += 1
+            counter.value
+        }
+
+        Get -> u256 uses (counter) {
+            counter.value
+        }
+    }
+}
+
+#[test]
+fn test_mut_self_storage_receiver() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: 0, args: (), salt: 1)
+    assert(c.inner != 0)
+
+    let a = evm.call(addr: c, gas: 100000, value: 0, message: Msg::Inc {})
+    assert(a == 1)
+
+    let b = evm.call(addr: c, gas: 100000, value: 0, message: Msg::Inc {})
+    assert(b == 2)
+
+    let final_value = evm.call(addr: c, gas: 100000, value: 0, message: Msg::Get {})
+    assert(final_value == 2)
+}

@@ -225,6 +225,23 @@ impl<'db, 'a> LowerReprCtx<'db, 'a> {
         })
     }
 
+    fn emit_assign_with_spill_sync(
+        &mut self,
+        source: SourceInfoId,
+        dest: LocalId,
+        rvalue: Rvalue<'db>,
+        out: &mut Vec<MirInst<'db>>,
+    ) {
+        out.push(MirInst::Assign {
+            source,
+            dest: Some(dest),
+            rvalue,
+        });
+        if let Some(spill_sync) = self.emit_spill_sync_for_local(dest) {
+            out.push(spill_sync);
+        }
+    }
+
     fn emit_local_reload_from_spill(&self, local: LocalId) -> Option<MirInst<'db>> {
         let spill_base = self.spill_base_for_owner(local)?;
         let update_place = Place::new(spill_base, MirProjectionPath::new());
@@ -383,15 +400,14 @@ impl<'db, 'a> LowerReprCtx<'db, 'a> {
             return;
         }
 
-        out.push(MirInst::Assign {
-            source,
-            dest,
-            rvalue: Rvalue::Load { place },
-        });
-        if let Some(dest) = dest
-            && let Some(spill_sync) = self.emit_spill_sync_for_local(dest)
-        {
-            out.push(spill_sync);
+        if let Some(dest) = dest {
+            self.emit_assign_with_spill_sync(source, dest, Rvalue::Load { place }, out);
+        } else {
+            out.push(MirInst::Assign {
+                source,
+                dest,
+                rvalue: Rvalue::Load { place },
+            });
         }
     }
 
@@ -402,14 +418,7 @@ impl<'db, 'a> LowerReprCtx<'db, 'a> {
         rvalue: Rvalue<'db>,
         out: &mut Vec<MirInst<'db>>,
     ) {
-        out.push(MirInst::Assign {
-            source,
-            dest: Some(dest),
-            rvalue: rvalue.clone(),
-        });
-        if let Some(spill_sync) = self.emit_spill_sync_for_local(dest) {
-            out.push(spill_sync);
-        }
+        self.emit_assign_with_spill_sync(source, dest, rvalue, out);
     }
 
     fn rewrite_assign_generic(
@@ -477,14 +486,7 @@ impl<'db, 'a> LowerReprCtx<'db, 'a> {
                 .unwrap_or(local_ty);
 
             if place.projection.is_empty() {
-                out.push(MirInst::Assign {
-                    source,
-                    dest: Some(local),
-                    rvalue: Rvalue::Value(value),
-                });
-                if let Some(spill_sync) = self.emit_spill_sync_for_local(local) {
-                    out.push(spill_sync);
-                }
+                self.emit_assign_with_spill_sync(source, local, Rvalue::Value(value), out);
                 return;
             }
 
@@ -528,14 +530,12 @@ impl<'db, 'a> LowerReprCtx<'db, 'a> {
                             },
                         )
                     };
-                    out.push(MirInst::Assign {
+                    self.emit_assign_with_spill_sync(
                         source,
-                        dest: Some(local),
-                        rvalue: Rvalue::Value(assign_value),
-                    });
-                    if let Some(spill_sync) = self.emit_spill_sync_for_local(local) {
-                        out.push(spill_sync);
-                    }
+                        local,
+                        Rvalue::Value(assign_value),
+                        out,
+                    );
                     return;
                 }
             }
@@ -844,6 +844,41 @@ pub(crate) fn lower_capability_to_repr<'db>(
             }
         }
 
+        fn capability_space_from_origin<'db>(
+            values: &[ValueData<'db>],
+            locals: &[LocalData<'db>],
+            origin: &ValueOrigin<'db>,
+        ) -> Option<AddressSpaceKind> {
+            match origin {
+                ValueOrigin::TransparentCast { value } => {
+                    capability_space_from_origin(values, locals, &values.get(value.index())?.origin)
+                }
+                ValueOrigin::Local(local) | ValueOrigin::PlaceRoot(local) => {
+                    crate::ir::lookup_local_capability_space(
+                        locals,
+                        *local,
+                        &MirProjectionPath::new(),
+                    )
+                    .or_else(|| locals.get(local.index()).map(|l| l.address_space))
+                }
+                ValueOrigin::PlaceRef(place) | ValueOrigin::MoveOut { place } => {
+                    if let Some((local, prefix)) =
+                        crate::ir::resolve_local_projection_root(values, place.base)
+                    {
+                        let projection = prefix.concat(&place.projection);
+                        if let Some(space) =
+                            crate::ir::lookup_local_capability_space(locals, local, &projection)
+                        {
+                            return Some(space);
+                        }
+                    }
+                    crate::ir::try_value_address_space_in(values, locals, place.base)
+                }
+                ValueOrigin::FieldPtr(field_ptr) => Some(field_ptr.addr_space),
+                _ => origin_address_space(values, locals, origin),
+            }
+        }
+
         fn compute<'db>(
             db: &'db dyn HirAnalysisDb,
             core: &CoreLib<'db>,
@@ -867,7 +902,7 @@ pub(crate) fn lower_capability_to_repr<'db>(
                         repr::ReprKind::Ptr(space_kind) => {
                             if matches!(space_kind, AddressSpaceKind::Memory)
                                 && let Some(space) =
-                                    origin_address_space(values, locals, &data.origin)
+                                    capability_space_from_origin(values, locals, &data.origin)
                             {
                                 ValueRepr::Ptr(space)
                             } else {
@@ -875,7 +910,7 @@ pub(crate) fn lower_capability_to_repr<'db>(
                             }
                         }
                         repr::ReprKind::Ref => {
-                            let space = origin_address_space(values, locals, &data.origin)
+                            let space = capability_space_from_origin(values, locals, &data.origin)
                                 .unwrap_or(AddressSpaceKind::Memory);
                             ValueRepr::Ref(space)
                         }
@@ -968,6 +1003,7 @@ pub(crate) fn lower_capability_to_repr<'db>(
                     is_mut: false,
                     source: SourceInfoId::SYNTHETIC,
                     address_space: AddressSpaceKind::Memory,
+                    capability_spaces: Vec::new(),
                 },
             );
             body.spill_slots.insert(owner, spill);
@@ -1165,6 +1201,7 @@ mod tests {
             is_mut: true,
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Memory,
+            capability_spaces: Vec::new(),
         });
         let base = body.alloc_value(ValueData {
             ty: local_ty,
@@ -1212,6 +1249,7 @@ pub fn field_ptr_origin_preserves_address_space(x: mut u256) {}
             is_mut: false,
             source: SourceInfoId::SYNTHETIC,
             address_space: AddressSpaceKind::Storage,
+            capability_spaces: Vec::new(),
         });
         let base = body.alloc_value(ValueData {
             ty: capability_ty,

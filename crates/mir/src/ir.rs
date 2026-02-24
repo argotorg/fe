@@ -227,6 +227,65 @@ pub(crate) fn try_value_address_space_in<'db>(
     }
 }
 
+pub(crate) fn lookup_local_capability_space<'db>(
+    locals: &[LocalData<'db>],
+    local: LocalId,
+    projection: &MirProjectionPath<'db>,
+) -> Option<AddressSpaceKind> {
+    let local = locals.get(local.index())?;
+    let mut best: Option<(usize, AddressSpaceKind)> = None;
+    for (path, space) in &local.capability_spaces {
+        if !path.is_prefix_of(projection) {
+            continue;
+        }
+        let path_len = path.len();
+        if best
+            .map(|(best_len, _)| path_len > best_len)
+            .unwrap_or(true)
+        {
+            best = Some((path_len, *space));
+        }
+    }
+    best.map(|(_, space)| space)
+}
+
+pub(crate) fn projection_strip_prefix<'db>(
+    path: &MirProjectionPath<'db>,
+    prefix: &MirProjectionPath<'db>,
+) -> Option<MirProjectionPath<'db>> {
+    if !prefix.is_prefix_of(path) {
+        return None;
+    }
+
+    let mut suffix = MirProjectionPath::new();
+    for proj in path.iter().skip(prefix.len()) {
+        suffix.push(proj.clone());
+    }
+    Some(suffix)
+}
+
+pub(crate) fn resolve_local_projection_root<'db>(
+    values: &[ValueData<'db>],
+    value: ValueId,
+) -> Option<(LocalId, MirProjectionPath<'db>)> {
+    let mut current = value;
+    let mut projection = MirProjectionPath::new();
+
+    loop {
+        match &values.get(current.index())?.origin {
+            ValueOrigin::TransparentCast { value } => current = *value,
+            ValueOrigin::Local(local) | ValueOrigin::PlaceRoot(local) => {
+                return Some((*local, projection));
+            }
+            ValueOrigin::PlaceRef(place) | ValueOrigin::MoveOut { place } => {
+                projection = place.projection.concat(&projection);
+                current = place.base;
+            }
+            _ => return None,
+        }
+    }
+}
+
 impl<'db> Default for MirBody<'db> {
     fn default() -> Self {
         Self::new()
@@ -289,6 +348,11 @@ pub struct LocalData<'db> {
     /// For non-pointer scalars this is ignored, but storing it here lets codegen
     /// interpret locals that represent aggregate pointers (memory vs storage).
     pub address_space: AddressSpaceKind,
+    /// Capability pointee-space metadata for values stored in this local.
+    ///
+    /// Entries map projection paths (from the local root) to the address space
+    /// of capability leaves at that path.
+    pub capability_spaces: Vec<(MirProjectionPath<'db>, AddressSpaceKind)>,
 }
 
 /// MIR projection using MIR value IDs for dynamic indices.

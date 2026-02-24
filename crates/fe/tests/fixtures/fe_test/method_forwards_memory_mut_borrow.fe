@@ -1,0 +1,48 @@
+use std::evm::Evm
+use std::evm::effects::assert
+
+msg Msg {
+    #[selector = 1]
+    ForwardLocal -> u256,
+    #[selector = 2]
+    Tag -> u256,
+}
+
+struct Holder {
+    tag: u256,
+}
+
+impl Holder {
+    fn forward(mut self, value: mut u256) -> mut u256 {
+        value
+    }
+}
+
+pub contract C {
+    mut holder: Holder,
+
+    recv Msg {
+        ForwardLocal -> u256 uses (mut holder) {
+            let mut local = 7
+            let value = holder.forward(mut local)
+            value += 5
+            value
+        }
+
+        Tag -> u256 uses (holder) {
+            holder.tag
+        }
+    }
+}
+
+#[test]
+fn test_method_forwards_memory_mut_borrow() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: 0, args: (), salt: 77)
+    assert(c.inner != 0)
+
+    let v = evm.call(addr: c, gas: 100000, value: 0, message: Msg::ForwardLocal {})
+    assert(v == 12)
+
+    let tag = evm.call(addr: c, gas: 100000, value: 0, message: Msg::Tag {})
+    assert(tag == 0)
+}

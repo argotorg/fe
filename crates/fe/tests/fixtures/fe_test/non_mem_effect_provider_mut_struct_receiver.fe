@@ -1,0 +1,67 @@
+use std::evm::Evm
+use std::evm::effects::assert
+
+msg Msg {
+    #[selector = 1]
+    MoveP1 { by: u256 } -> u256,
+    #[selector = 2]
+    Snapshot -> u256,
+}
+
+struct Point {
+    x: u256,
+    y: u256,
+}
+
+struct Line {
+    p1: Point,
+    p2: Point,
+}
+
+struct PointMover {
+    p: mut Point,
+}
+
+impl PointMover {
+    fn move_right(mut self, x: u256) {
+        self.p.x += x
+    }
+}
+
+pub contract C {
+    mut line: Line,
+
+    init() uses (mut line) {
+        line.p1.x = 1
+        line.p1.y = 2
+        line.p2.x = 10
+        line.p2.y = 20
+    }
+
+    recv Msg {
+        // BUG: This currently fails to persist the write through `self.p`.
+        // Expected: line.p1.x increases by `by`.
+        MoveP1 { by } -> u256 uses (mut line) {
+            let p1 = mut line.p1
+            let mut mover = PointMover { p: p1 }
+            mover.move_right(by)
+            line.p1.x
+        }
+
+        Snapshot -> u256 uses (line) {
+            line.p1.x * 1000000 + line.p1.y * 10000 + line.p2.x * 100 + line.p2.y
+        }
+    }
+}
+
+#[test]
+fn test_non_mem_effect_provider_mut_struct_receiver() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: 0, args: (), salt: 33)
+    assert(c.inner != 0)
+
+    let moved = evm.call(addr: c, gas: 100000, value: 0, message: Msg::MoveP1 { by: 10 })
+    assert(moved == 11)
+
+    let snap = evm.call(addr: c, gas: 100000, value: 0, message: Msg::Snapshot {})
+    assert(snap == 11021020)
+}

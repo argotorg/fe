@@ -180,7 +180,7 @@ object "ByRefTraitProviderStorageBug" {
       function $go_h50739b8917c22b82_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966($d) {
         leave
       }
-      function $pair_h956dff41e88ee341_ctx_h4952b3c1f066f039_sum_stor($self) -> ret {
+      function $pair_h956dff41e88ee341_ctx_h4952b3c1f066f039_sum_stor_arg0_root_stor($self) -> ret {
         let v0 := sload($self)
         let v1 := sload(add($self, 1))
         ret := add(v0, v1)
@@ -320,7 +320,7 @@ object "ByRefTraitProviderStorageBug" {
         leave
       }
       function $use_ctx_eff0_stor__Pair_h956dff41e88ee341__acec41afdc898140($ctx) -> ret {
-        let v0 := $pair_h956dff41e88ee341_ctx_h4952b3c1f066f039_sum_stor($ctx)
+        let v0 := $pair_h956dff41e88ee341_ctx_h4952b3c1f066f039_sum_stor_arg0_root_stor($ctx)
         ret := v0
         leave
       }

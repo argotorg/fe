@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/storage.fe
 ---
@@ -250,8 +251,8 @@ func private %init__StorPtr_Evm___207f35a85ac4062e() {
 
 func private %runtime__StorPtr_Evm___207f35a85ac4062e() {
     block0:
-        v1.i256 = call %stor_ptr__Evm_hef0af3106e109414_CoinStore_hd26a92ca525e0e79__b6feb5585dda62f1 0.i256 0.i256;
-        v3.i256 = call %stor_ptr__Evm_hef0af3106e109414_TotalSupply_hddb16bb19b5b088e__f5679b0709de743a 0.i256 2.i256;
+        v1.i256 = call %stor_ptr_stor__Evm_hef0af3106e109414_CoinStore_hd26a92ca525e0e79__b6feb5585dda62f1 0.i256 0.i256;
+        v3.i256 = call %stor_ptr_stor__Evm_hef0af3106e109414_TotalSupply_hddb16bb19b5b088e__f5679b0709de743a 0.i256 2.i256;
         v4.i256 = evm_calldata_load 0.i256;
         v6.i256 = shr 224.i256 v4;
         jump block14;
@@ -332,13 +333,13 @@ func private %runtime__StorPtr_Evm___207f35a85ac4062e() {
         br v47 block12 block13;
 }
 
-func private %stor_ptr__Evm_hef0af3106e109414_CoinStore_hd26a92ca525e0e79__b6feb5585dda62f1(v0.i256, v1.i256) -> i256 {
+func private %stor_ptr_stor__Evm_hef0af3106e109414_CoinStore_hd26a92ca525e0e79__b6feb5585dda62f1(v0.i256, v1.i256) -> i256 {
     block0:
         v3.i256 = call %storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__CoinStore_hd26a92ca525e0e79__a9c0a742c4f0cede v1;
         return v3;
 }
 
-func private %stor_ptr__Evm_hef0af3106e109414_TotalSupply_hddb16bb19b5b088e__f5679b0709de743a(v0.i256, v1.i256) -> i256 {
+func private %stor_ptr_stor__Evm_hef0af3106e109414_TotalSupply_hddb16bb19b5b088e__f5679b0709de743a(v0.i256, v1.i256) -> i256 {
     block0:
         v3.i256 = call %storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__CoinStore_hd26a92ca525e0e79__a9c0a742c4f0cede v1;
         return v3;

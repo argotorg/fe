@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 33
 expression: output
 input_file: tests/fixtures/storage.fe
 ---
@@ -54,8 +55,8 @@ object "Coin" {
         leave
       }
       function $runtime__StorPtr_Evm___207f35a85ac4062e() {
-        let v0 := $stor_ptr__Evm_hef0af3106e109414_CoinStore_hd26a92ca525e0e79__b6feb5585dda62f1(0, 0)
-        let v1 := $stor_ptr__Evm_hef0af3106e109414_TotalSupply_hddb16bb19b5b088e__f5679b0709de743a(0, 2)
+        let v0 := $stor_ptr_stor__Evm_hef0af3106e109414_CoinStore_hd26a92ca525e0e79__b6feb5585dda62f1(0, 0)
+        let v1 := $stor_ptr_stor__Evm_hef0af3106e109414_TotalSupply_hddb16bb19b5b088e__f5679b0709de743a(0, 2)
         let v2 := v0
         let v3 := v1
         let v4 := calldataload(0)
@@ -107,12 +108,12 @@ object "Coin" {
             return(0, 0)
           }
       }
-      function $stor_ptr__Evm_hef0af3106e109414_CoinStore_hd26a92ca525e0e79__b6feb5585dda62f1($self, $slot) -> ret {
+      function $stor_ptr_stor__Evm_hef0af3106e109414_CoinStore_hd26a92ca525e0e79__b6feb5585dda62f1($self, $slot) -> ret {
         let v0 := $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__CoinStore_hd26a92ca525e0e79__a9c0a742c4f0cede($slot)
         ret := v0
         leave
       }
-      function $stor_ptr__Evm_hef0af3106e109414_TotalSupply_hddb16bb19b5b088e__f5679b0709de743a($self, $slot) -> ret {
+      function $stor_ptr_stor__Evm_hef0af3106e109414_TotalSupply_hddb16bb19b5b088e__f5679b0709de743a($self, $slot) -> ret {
         let v0 := $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__CoinStore_hd26a92ca525e0e79__a9c0a742c4f0cede($slot)
         ret := v0
         leave

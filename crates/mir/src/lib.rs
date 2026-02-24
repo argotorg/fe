@@ -1,4 +1,5 @@
 pub mod analysis;
+mod capability_space;
 mod core_lib;
 mod dedup;
 pub mod fmt;
