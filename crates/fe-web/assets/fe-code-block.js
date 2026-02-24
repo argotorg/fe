@@ -1,37 +1,55 @@
 // <fe-code-block> — Custom element for syntax-highlighted Fe code blocks.
 //
+// Content is always raw text. If FeHighlighter is available, it will be
+// syntax-highlighted and type-linked client-side via tree-sitter WASM.
+//
 // Attributes:
-//   highlighted  — content is pre-highlighted HTML (from Rust SSR)
 //   lang         — language name (default "fe")
 //   line-numbers — show line number gutter
 //   collapsed    — start collapsed with <details>/<summary>
 
 class FeCodeBlock extends HTMLElement {
   connectedCallback() {
+    // Grab raw text before any rendering clears it
+    this._rawSource = this.textContent;
     this.render();
   }
 
   render() {
-    const highlighted = this.hasAttribute("highlighted");
-    const lang = this.getAttribute("lang") || "fe";
-    const showLineNumbers = this.hasAttribute("line-numbers");
-    const collapsed = this.hasAttribute("collapsed");
+    var lang = this.getAttribute("lang") || "fe";
+    var showLineNumbers = this.hasAttribute("line-numbers");
+    var collapsed = this.hasAttribute("collapsed");
+    var source = this._rawSource || "";
 
-    const wrapper = document.createElement("div");
+    var wrapper = document.createElement("div");
     wrapper.className = "fe-code-block-wrapper";
 
-    const pre = document.createElement("pre");
+    var pre = document.createElement("pre");
     pre.className = "fe-code-pre";
 
-    const code = document.createElement("code");
+    var code = document.createElement("code");
     code.className = "language-" + lang;
 
-    if (highlighted) {
-      // Content is pre-rendered HTML from the Rust highlighter
-      code.innerHTML = this.innerHTML;
+    // Client-side highlighting via tree-sitter WASM
+    if (lang === "fe" && window.FeHighlighter && window.FeHighlighter.isReady()) {
+      code.innerHTML = window.FeHighlighter.highlightFe(source, window.FE_SCIP || null);
+      this._highlighted = true;
     } else {
-      // Runtime fallback: html-escape raw text content
-      code.textContent = this.textContent;
+      code.textContent = source;
+      this._highlighted = false;
+
+      // If highlighter not ready yet, listen for it and re-render once
+      if (lang === "fe" && !this._waitingForHighlighter) {
+        this._waitingForHighlighter = true;
+        var self = this;
+        document.addEventListener("fe-highlighter-ready", function onReady() {
+          document.removeEventListener("fe-highlighter-ready", onReady);
+          self._waitingForHighlighter = false;
+          // Re-render now that highlighter is available
+          self.innerHTML = "";
+          self.render();
+        });
+      }
     }
 
     // Clear original content before appending rendered version
@@ -43,11 +61,11 @@ class FeCodeBlock extends HTMLElement {
       if (lines.length > 1 && lines[lines.length - 1] === "") {
         lines = lines.slice(0, -1);
       }
-      const gutter = document.createElement("div");
+      var gutter = document.createElement("div");
       gutter.className = "fe-line-numbers";
       gutter.setAttribute("aria-hidden", "true");
       for (var i = 1; i <= lines.length; i++) {
-        const span = document.createElement("span");
+        var span = document.createElement("span");
         span.textContent = i;
         gutter.appendChild(span);
       }
@@ -58,8 +76,8 @@ class FeCodeBlock extends HTMLElement {
     wrapper.appendChild(pre);
 
     if (collapsed) {
-      const details = document.createElement("details");
-      const summary = document.createElement("summary");
+      var details = document.createElement("details");
+      var summary = document.createElement("summary");
       summary.textContent = lang + " code";
       details.appendChild(summary);
       details.appendChild(wrapper);
