@@ -140,11 +140,22 @@
       } else {
         var cssClass = "hl-" + capName.replace(/\./g, "-");
 
-        // Check if this capture should be type-linked
+        // Check if this capture should be type-linked.
+        // When tree-sitter merges a type name with its generic params into one
+        // capture run (e.g. "AbiDecoder<A"), strip the generic suffix for lookup.
         if (LINKABLE_CAPTURES[capName] && scip) {
-          var match = scipLookup(scip, text);
+          var lookupText = text;
+          var ltIdx = text.indexOf("<");
+          if (ltIdx > 0) lookupText = text.slice(0, ltIdx);
+          var match = scipLookup(scip, lookupText);
           if (match) {
-            html += '<a href="#' + escHtml(match.doc_url) + '" class="' + cssClass + ' type-link">' + escHtml(text) + "</a>";
+            if (ltIdx > 0) {
+              // Link only the identifier part, leave generic params as plain highlighted span
+              html += '<a href="#' + escHtml(match.doc_url) + '" class="' + cssClass + ' type-link">' + escHtml(lookupText) + "</a>";
+              html += '<span class="' + cssClass + '">' + escHtml(text.slice(ltIdx)) + "</span>";
+            } else {
+              html += '<a href="#' + escHtml(match.doc_url) + '" class="' + cssClass + ' type-link">' + escHtml(text) + "</a>";
+            }
             pos = runEnd;
             continue;
           }
