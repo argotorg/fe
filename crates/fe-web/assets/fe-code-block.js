@@ -7,6 +7,7 @@
 //   lang         — language name (default "fe")
 //   line-numbers — show line number gutter
 //   collapsed    — start collapsed with <details>/<summary>
+//   data-file    — SCIP file path for positional symbol resolution
 
 class FeCodeBlock extends HTMLElement {
   connectedCallback() {
@@ -87,16 +88,21 @@ class FeCodeBlock extends HTMLElement {
     }
 
     // If SCIP is available, make highlighted spans interactive
+    this._scipAnnotated = false;
     this._setupScipInteraction(code);
 
     // Walk highlighted spans and add type links via ScipStore name lookup
-    this._setupNameBasedLinking(code);
+    // (fallback for code blocks without data-file or where positional resolution
+    // didn't annotate anything)
+    if (!this._scipAnnotated) {
+      this._setupNameBasedLinking(code);
+    }
 
     // Listen for live diagnostics from LSP
     this._setupLspDiagnostics(code);
   }
 
-  /** Add click-to-navigate on highlighted spans when ScipStore is loaded. */
+  /** Add click-to-navigate and hover highlighting on spans using ScipStore. */
   _setupScipInteraction(codeEl) {
     var scip = window.FE_SCIP;
     if (!scip) return;
@@ -104,65 +110,126 @@ class FeCodeBlock extends HTMLElement {
     var file = this.getAttribute("data-file");
     if (!file) return;
 
-    // Pre-assign symbol CSS classes to all positional spans
-    var spans = codeEl.querySelectorAll("span[data-line]");
-    for (var i = 0; i < spans.length; i++) {
-      var span = spans[i];
-      var l = parseInt(span.getAttribute("data-line"), 10);
-      var c = parseInt(span.getAttribute("data-col"), 10);
-      var sym = scip.resolveSymbol(file, l, c);
-      if (sym) span.classList.add(scip.symbolClass(sym));
+    var self = this;
+
+    // Path 1: Source file blocks with positional span attributes (data-line/data-col)
+    var lineSpans = codeEl.querySelectorAll("span[data-line]");
+    if (lineSpans.length > 0) {
+      // Pre-assign role-aware CSS classes to all positional spans
+      for (var i = 0; i < lineSpans.length; i++) {
+        var span = lineSpans[i];
+        var l = parseInt(span.getAttribute("data-line"), 10);
+        var c = parseInt(span.getAttribute("data-col"), 10);
+        var occ = scip.resolveOccurrence(file, l, c);
+        if (occ) {
+          var hash = scip.symbolHash(occ.sym);
+          span.classList.add("sym-" + hash);
+          if (occ.def) span.classList.add("sym-d-" + hash);
+          else span.classList.add("sym-r-" + hash);
+          span.setAttribute("data-sym", occ.sym);
+        }
+      }
+    } else if (this._highlighted) {
+      // Path 2: Signature blocks — resolve tree-sitter spans via character offset
+      var source = this._rawSource || "";
+      if (!source) return;
+
+      // Build line-start index for offset→(line,col) conversion
+      var lineStarts = [0];
+      for (var si = 0; si < source.length; si++) {
+        if (source.charCodeAt(si) === 10) lineStarts.push(si + 1);
+      }
+
+      function charToLineCol(pos) {
+        var lo = 0, hi = lineStarts.length - 1;
+        while (lo < hi) {
+          var mid = (lo + hi + 1) >>> 1;
+          if (lineStarts[mid] <= pos) lo = mid;
+          else hi = mid - 1;
+        }
+        return [lo, pos - lineStarts[lo]];
+      }
+
+      // Walk DOM tree tracking character offset, resolve each span
+      var offset = 0;
+      var annotated = false;
+      function walk(node) {
+        var children = node.childNodes;
+        for (var ci = 0; ci < children.length; ci++) {
+          var child = children[ci];
+          if (child.nodeType === 3) { // TEXT_NODE
+            offset += child.textContent.length;
+          } else if (child.nodeType === 1) { // ELEMENT_NODE
+            var startOff = offset;
+            if (child.tagName === "SPAN") {
+              var lc = charToLineCol(startOff);
+              var occ = scip.resolveOccurrence(file, lc[0], lc[1]);
+              if (occ) {
+                var hash = scip.symbolHash(occ.sym);
+                child.classList.add("sym-" + hash);
+                if (occ.def) child.classList.add("sym-d-" + hash);
+                else child.classList.add("sym-r-" + hash);
+                child.setAttribute("data-sym", occ.sym);
+                annotated = true;
+              }
+            }
+            walk(child);
+          }
+        }
+      }
+      walk(codeEl);
+
+      if (annotated) self._scipAnnotated = true;
     }
 
-    // Click handler: resolve symbol at the clicked position
+    // Universal event handlers for any span with data-sym
     codeEl.addEventListener("click", function (e) {
       var target = e.target;
       if (target.tagName !== "SPAN" && target.tagName !== "A") return;
-
-      var lineAttr = target.getAttribute("data-line");
-      var colAttr = target.getAttribute("data-col");
-      if (!lineAttr || !colAttr) return;
-
-      var line = parseInt(lineAttr, 10);
-      var col = parseInt(colAttr, 10);
-      var symbol = scip.resolveSymbol(file, line, col);
-      if (symbol) {
-        var docPath = scip.docUrl(symbol);
-        if (docPath) {
-          location.hash = "#" + docPath;
+      var sym = target.getAttribute("data-sym");
+      if (!sym) {
+        // Fallback: try data-line/data-col for legacy spans
+        var lineAttr = target.getAttribute("data-line");
+        var colAttr = target.getAttribute("data-col");
+        if (lineAttr && colAttr) {
+          sym = scip.resolveSymbol(file, parseInt(lineAttr, 10), parseInt(colAttr, 10));
         }
+      }
+      if (sym) {
+        var docPath = scip.docUrl(sym);
+        if (docPath) location.hash = "#" + docPath;
       }
     });
 
-    // Hover handler: show symbol info tooltip + highlight all occurrences via CSS class
     codeEl.addEventListener("mouseover", function (e) {
       var target = e.target;
-      if (target.tagName !== "SPAN") return;
+      if (target.tagName !== "SPAN" && target.tagName !== "A") return;
 
-      var lineAttr = target.getAttribute("data-line");
-      var colAttr = target.getAttribute("data-col");
-      if (!lineAttr || !colAttr) return;
-
-      var line = parseInt(lineAttr, 10);
-      var col = parseInt(colAttr, 10);
-      var symbol = scip.resolveSymbol(file, line, col);
-      if (symbol) {
-        var info = scip.symbolInfo(symbol);
-        if (info) {
-          try {
-            var parsed = JSON.parse(info);
-            target.title = parsed.display_name || symbol;
-          } catch (_) {}
+      var sym = target.getAttribute("data-sym");
+      if (!sym) {
+        var lineAttr = target.getAttribute("data-line");
+        var colAttr = target.getAttribute("data-col");
+        if (lineAttr && colAttr) {
+          sym = scip.resolveSymbol(file, parseInt(lineAttr, 10), parseInt(colAttr, 10));
         }
-        target.style.cursor = "pointer";
-        target.style.textDecoration = "underline";
-        feHighlight(scip.symbolClass(symbol));
       }
+      if (!sym) return;
+
+      // Tooltip from SCIP metadata
+      var info = scip.symbolInfo(sym);
+      if (info) {
+        try {
+          var parsed = JSON.parse(info);
+          target.title = parsed.display_name || sym;
+        } catch (_) {}
+      }
+
+      target.style.cursor = scip.docUrl(sym) ? "pointer" : "default";
+      feHighlight(scip.symbolHash(sym));
     });
 
     codeEl.addEventListener("mouseout", function (e) {
-      if (e.target.tagName === "SPAN") {
-        e.target.style.textDecoration = "";
+      if (e.target.tagName === "SPAN" || e.target.tagName === "A") {
         e.target.style.cursor = "";
         feUnhighlight();
       }
@@ -226,9 +293,10 @@ class FeCodeBlock extends HTMLElement {
       }
 
       // Hover: highlight all same-symbol occurrences
-      a.addEventListener("mouseenter", (function (cls) {
-        return function () { feHighlight(cls); };
-      })(symClass));
+      var symHash = scip.symbolHash(match.symbol);
+      a.addEventListener("mouseenter", (function (h) {
+        return function () { feHighlight(h); };
+      })(symHash));
       a.addEventListener("mouseleave", feUnhighlight);
 
       // Tooltip from SCIP docs

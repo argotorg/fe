@@ -32,7 +32,7 @@ input_file: tests/doc_fixtures/simple_struct.fe
         "body": "A point in 2D space.\n\n Used to represent coordinates in the plane.",
         "sections": []
       },
-      "signature": "pub struct Point {\n    /// The x coordinate\n    pub x: u256\n    /// The y coordinate\n    pub y: u256\n}",
+      "signature": "pub struct Point",
       "generics": [],
       "where_bounds": [],
       "children": [

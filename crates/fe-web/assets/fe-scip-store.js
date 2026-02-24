@@ -9,18 +9,22 @@
 //   window.FE_SCIP = new ScipStore(window.FE_SCIP_DATA);
 
 // Shared <style> element for symbol hover highlighting.
-// Inserting/removing a single CSS rule is all that's needed — the browser
-// applies it to every element carrying the symbol's class.
+// Inserting/removing CSS rules is all that's needed — the browser
+// applies them to every element carrying the symbol's classes.
 var _highlightSheet = null;
-function feHighlight(symClass) {
+
+// Role-aware highlight: injects rules for closure (all occurrences),
+// definition sites, and reference sites with different visual treatments.
+function feHighlight(symHash) {
   if (!_highlightSheet) {
     _highlightSheet = document.createElement("style");
     _highlightSheet.id = "fe-sym-highlight";
     document.head.appendChild(_highlightSheet);
   }
-  _highlightSheet.textContent = "." + symClass +
-    " { background: rgba(74,222,128,0.35); border-radius: 2px;" +
-    " outline: 1px solid rgba(74,222,128,0.5); transition: background 0.15s ease; }";
+  _highlightSheet.textContent =
+    ".sym-" + symHash + " { background: rgba(74,222,128,0.12); border-radius: 2px; }" +
+    ".sym-d-" + symHash + " { background: rgba(74,222,128,0.22); text-decoration: underline;" +
+    " text-decoration-color: rgba(74,222,128,0.5); text-underline-offset: 2px; }";
 }
 function feUnhighlight() {
   if (_highlightSheet) _highlightSheet.textContent = "";
@@ -61,6 +65,31 @@ ScipStore.prototype.resolveSymbol = function (file, line, col) {
   // Also scan backwards in case lo overshot
   for (var j = lo - 1; j >= 0 && occs[j].line === line; j--) {
     if (col >= occs[j].cs && col < occs[j].ce) return occs[j].sym;
+  }
+  return null;
+};
+
+// Resolve an occurrence at (file, line, col). Returns {sym, def} or null.
+// Like resolveSymbol but also exposes the definition flag for role-aware styling.
+ScipStore.prototype.resolveOccurrence = function (file, line, col) {
+  var occs = this._files[file];
+  if (!occs) return null;
+  var lo = 0, hi = occs.length - 1;
+  while (lo <= hi) {
+    var mid = (lo + hi) >>> 1;
+    if (occs[mid].line < line) lo = mid + 1;
+    else if (occs[mid].line > line) hi = mid - 1;
+    else { lo = mid; break; }
+  }
+  for (var i = lo; i < occs.length && occs[i].line === line; i++) {
+    if (col >= occs[i].cs && col < occs[i].ce) {
+      return { sym: occs[i].sym, def: !!occs[i].def };
+    }
+  }
+  for (var j = lo - 1; j >= 0 && occs[j].line === line; j--) {
+    if (col >= occs[j].cs && col < occs[j].ce) {
+      return { sym: occs[j].sym, def: !!occs[j].def };
+    }
   }
   return null;
 };
@@ -141,6 +170,12 @@ ScipStore.prototype.symbolClass = function (symbol) {
   var cls = "sym-" + ("000000" + h.toString(16)).slice(-6);
   this._classCache[symbol] = cls;
   return cls;
+};
+
+// Return just the 6-char hex hash for a symbol (without the "sym-" prefix).
+// Used by feHighlight() which generates rules for sym-, sym-d-, sym-r- variants.
+ScipStore.prototype.symbolHash = function (symbol) {
+  return this.symbolClass(symbol).substring(4);
 };
 
 // Reverse lookup: find SCIP symbol string for a doc URL. Returns symbol or null.

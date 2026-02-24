@@ -32,7 +32,7 @@ input_file: tests/doc_fixtures/trait_and_impl.fe
         "body": "A trait for things that can be displayed.",
         "sections": []
       },
-      "signature": "pub trait Displayable {\n    /// Returns a string representation.\n    fn display(self) -> u256\n}",
+      "signature": "pub trait Displayable",
       "generics": [],
       "where_bounds": [],
       "children": [
@@ -82,7 +82,7 @@ input_file: tests/doc_fixtures/trait_and_impl.fe
         "body": "A simple counter.",
         "sections": []
       },
-      "signature": "pub struct Counter {\n    pub value: u256\n}",
+      "signature": "pub struct Counter",
       "generics": [],
       "where_bounds": [],
       "children": [

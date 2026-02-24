@@ -354,7 +354,7 @@ impl<'db> ScopeId<'db> {
         }
     }
 
-    pub fn name_span(self, _db: &'db dyn HirDb) -> Option<DynLazySpan<'db>> {
+    pub fn name_span(self, db: &'db dyn HirDb) -> Option<DynLazySpan<'db>> {
         match self {
             ScopeId::Item(item) => item.name_span(),
 
@@ -369,16 +369,20 @@ impl<'db> ScopeId<'db> {
             }
 
             ScopeId::GenericParam(parent, idx) => {
-                let parent = GenericParamOwner::from_item_opt(parent).unwrap();
-
-                Some(parent.params_span().param(idx as usize).into())
+                let parent_owner = GenericParamOwner::from_item_opt(parent)?;
+                let param_span = parent_owner.params_span().param(idx as usize);
+                let param = parent_owner.param_view(db, idx as usize);
+                match param.param {
+                    GenericParam::Type(_) => Some(param_span.into_type_param().name().into()),
+                    GenericParam::Const(_) => Some(param_span.into_const_param().name().into()),
+                }
             }
 
             ScopeId::TraitType(t, idx) => {
-                Some(t.span().item_list().assoc_type(idx as usize).into())
+                Some(t.span().item_list().assoc_type(idx as usize).name().into())
             }
             ScopeId::TraitConst(t, idx) => {
-                Some(t.span().item_list().assoc_const(idx as usize).into())
+                Some(t.span().item_list().assoc_const(idx as usize).name().into())
             }
 
             ScopeId::Block(..) => None,

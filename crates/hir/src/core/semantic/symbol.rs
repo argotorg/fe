@@ -332,8 +332,18 @@ fn get_item_signature_with_span<'db>(
     let mut sig = text[start..end].to_string();
     let mut sig_end = end;
 
-    // For impl blocks, truncate at opening brace
-    if matches!(item, ItemKind::Impl(_) | ItemKind::ImplTrait(_)) {
+    // For items with bodies (impl, trait, struct, enum, contract),
+    // truncate at opening brace so the signature doesn't include
+    // body contents (methods, fields, doc comments, etc.)
+    if matches!(
+        item,
+        ItemKind::Impl(_)
+            | ItemKind::ImplTrait(_)
+            | ItemKind::Trait(_)
+            | ItemKind::Struct(_)
+            | ItemKind::Enum(_)
+            | ItemKind::Contract(_)
+    ) {
         if let Some(brace_pos) = sig.find('{') {
             sig_end = start + brace_pos;
             // Trim trailing whitespace before the brace
