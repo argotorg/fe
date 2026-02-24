@@ -1,6 +1,5 @@
 ---
 source: crates/mir/tests/lowering_snapshots.rs
-assertion_line: 26
 expression: mir_output
 ---
 fn __LayoutHoles_recv_0_0(v0: Set, v1: u256, v2: u256) -> ():
@@ -188,9 +187,8 @@ fn storagemap_set_word_with_salt__u256__3271ca15373d4483(v0: u256, v1: u256, v2:
 fn storagemap_get_word_with_salt__u256__3271ca15373d4483(v0: u256, v1: u256) -> u256:
   bb0:
     v2: u256 = storagemap_storage_slot_with_salt__u256__3271ca15373d4483(v0, v1)
-    v3: u256 = v2
-    v4: u256 = sload(v3)
-    ret v4
+    v3: u256 = sload(v2)
+    ret v3
 
 fn u256_h3271ca15373d4483_wordrepr_h7483d41ac8178d88_from_word(v0: u256) -> u256:
   bb0:
@@ -287,10 +285,9 @@ fn storagemap_storage_slot_with_salt__u256__3271ca15373d4483(v0: u256, v1: u256)
     v2: u256 = alloc(0)
     v3: u256 = u256_h3271ca15373d4483_storagekey_hf9e3d38a13ff4409_write_key(v2, v0)
     eval mstore((v2 + v3), v1)
-    v4: u256 = v2
     bind (v3 + 32)
-    v5: u256 = keccak256(v4, (v3 + 32))
-    ret v5
+    v4: u256 = keccak256(v2, (v3 + 32))
+    ret v4
 
 fn storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw___u256__u256___f8fb67624e92e2b2(v0: u256) -> StorPtr<(u256, u256)>:
   bb0:

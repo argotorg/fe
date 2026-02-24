@@ -2498,8 +2498,8 @@ macro_rules! visit_node_in_body {
         }
     }
 }
-use visit_node_in_body;
 use common::ingot::Ingot;
+use visit_node_in_body;
 
 #[cfg(test)]
 mod tests {
