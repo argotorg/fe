@@ -8,6 +8,14 @@
     --text-accent: #a5b4fc;
     --border: #2d3748;
     --code-bg: #0d1117;
+
+    /* SCIP symbol highlighting (used by feHighlight() in JS) */
+    --hl-ref-bg: rgba(99, 102, 241, 0.10);
+    --hl-def-bg: rgba(99, 102, 241, 0.18);
+    --hl-def-underline: rgba(99, 102, 241, 0.5);
+
+    /* Navigated-to item highlight (used by .is-target / :target) */
+    --target-bg: color-mix(in srgb, var(--accent) 10%, var(--bg-secondary));
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -385,16 +393,6 @@ h2 {
     border-left: 3px solid transparent;
 }
 
-.impl-block:hover {
-    border-left-color: var(--accent);
-}
-
-.impl-block:target,
-.impl-block.is-target {
-    border-left-color: var(--accent);
-    background: color-mix(in srgb, var(--accent) 10%, var(--bg-secondary));
-}
-
 .impl-block h3 {
     margin: 0 0 0.5rem 0;
     font-size: 1rem;
@@ -520,16 +518,6 @@ h2:hover .anchor {
     margin-left: 0.5rem;
 }
 
-.method-item:hover {
-    border-left-color: var(--accent);
-}
-
-.method-item:target,
-.method-item.is-target {
-    border-left-color: var(--accent);
-    background: color-mix(in srgb, var(--accent) 10%, var(--bg-secondary));
-}
-
 .method-item > summary {
     padding: 0.375rem 0.625rem;
 }
@@ -651,9 +639,10 @@ h2:hover .anchor {
     border-radius: 4px;
 }
 
-.implementor-item:target {
+.implementor-item:target,
+.implementor-item.is-target {
     border-color: var(--accent);
-    background: color-mix(in srgb, var(--accent) 10%, var(--bg-secondary));
+    background: var(--target-bg);
 }
 
 .implementor-sig {
@@ -731,16 +720,6 @@ h2:hover .anchor {
     border-left: 3px solid var(--border);
 }
 
-.member-item:hover {
-    border-left-color: var(--accent);
-}
-
-.member-item:target,
-.member-item.is-target {
-    border-left-color: var(--accent);
-    background: color-mix(in srgb, var(--accent) 10%, var(--bg-secondary));
-}
-
 .member-header {
     display: flex;
     align-items: center;
@@ -778,6 +757,24 @@ h2:hover .anchor {
 
 .impl-link:hover {
     color: var(--accent);
+}
+
+/* ============================================================================
+   Navigable items: consolidated hover / target / is-target highlighting.
+   All items with a left border indicator share these rules. Individual
+   base styles (border-left color, background) live with each component above.
+   ============================================================================ */
+.member-item:hover,
+.method-item:hover,
+.impl-block:hover {
+    border-left-color: var(--accent);
+}
+
+.member-item:target,  .member-item.is-target,
+.method-item:target,  .method-item.is-target,
+.impl-block:target,   .impl-block.is-target {
+    border-left-color: var(--accent);
+    background: var(--target-bg);
 }
 
 /* Syntax highlighting rules live in fe-highlight.css (single source of truth).
