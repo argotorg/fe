@@ -263,6 +263,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         if let Some(mut cref) = self.typed_body.expr_const_ref(expr) {
             if let hir::analysis::ty::ty_check::ConstRef::Const(const_def) = cref
                 && let Some(&cached) = self.const_cache.get(&const_def)
+                && self.is_const_cache_value_reusable(cached)
             {
                 return Some(cached);
             }
@@ -338,12 +339,12 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         .flatten()
                 })
             {
+                // Const arrays lower to a block-local `ConstAggregate` assignment.
+                // Reusing that ValueId across control-flow paths is unsound, so we
+                // materialize arrays at each use site and do not cache their ValueId.
                 if let ConstValue::ConstArray(ref elems) = value
                     && let Some(value_id) = self.try_emit_const_array(ty, elems)
                 {
-                    if let hir::analysis::ty::ty_check::ConstRef::Const(const_def) = cref {
-                        self.const_cache.insert(const_def, value_id);
-                    }
                     return Some(value_id);
                 }
                 let value = match value {
@@ -468,6 +469,13 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         value: SyntheticValue,
     ) -> ValueId {
         self.alloc_value(ty, ValueOrigin::Synthetic(value), ValueRepr::Word)
+    }
+
+    fn is_const_cache_value_reusable(&self, value_id: ValueId) -> bool {
+        matches!(
+            self.builder.body.value(value_id).origin,
+            ValueOrigin::Synthetic(_)
+        )
     }
 
     /// Serializes a `ConstValue::ConstArray` into bytes and emits a `ConstAggregate` instruction.

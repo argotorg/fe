@@ -1,0 +1,76 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+expression: output
+input_file: crates/codegen/tests/fixtures/const_array_branch.fe
+---
+target = "evm-ethereum-osaka"
+
+global private const [i8; 32] $__fe_const_data_0 = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+global private const [i8; 32] $__fe_const_data_1 = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+global private const [i8; 32] $__fe_const_data_2 = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+global private const [i8; 32] $__fe_const_data_3 = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+
+func public %const_array_branch(v0.i256) -> i256 {
+    block0:
+        v3.i1 = eq v0 1.i256;
+        br v3 block1 block4;
+
+    block1:
+        v6.*i8 = evm_malloc 32.i256;
+        v7.i256 = ptr_to_int v6 i256;
+        v8.i256 = sym_addr $__fe_const_data_0;
+        v9.i256 = sym_size $__fe_const_data_0;
+        evm_code_copy v7 v8 v9;
+        v10.*[i256; 1] = int_to_ptr v7 *[i256; 1];
+        v11.*i256 = gep v10 0.i256 0.i256;
+        v12.i256 = ptr_to_int v11 i256;
+        v13.i256 = mload v12 i256;
+        jump block3;
+
+    block2:
+        v14.*i8 = evm_malloc 32.i256;
+        v15.i256 = ptr_to_int v14 i256;
+        v16.i256 = sym_addr $__fe_const_data_1;
+        v17.i256 = sym_size $__fe_const_data_1;
+        evm_code_copy v15 v16 v17;
+        v18.*[i256; 1] = int_to_ptr v15 *[i256; 1];
+        v19.*i256 = gep v18 0.i256 0.i256;
+        v20.i256 = ptr_to_int v19 i256;
+        v21.i256 = mload v20 i256;
+        jump block3;
+
+    block3:
+        v30.i256 = phi (v13 block1) (v21 block2);
+        v22.*i8 = evm_malloc 32.i256;
+        v23.i256 = ptr_to_int v22 i256;
+        v24.i256 = sym_addr $__fe_const_data_2;
+        v25.i256 = sym_size $__fe_const_data_2;
+        evm_code_copy v23 v24 v25;
+        v26.*i8 = evm_malloc 32.i256;
+        v27.i256 = ptr_to_int v26 i256;
+        v28.i256 = sym_addr $__fe_const_data_3;
+        v29.i256 = sym_size $__fe_const_data_3;
+        evm_code_copy v27 v28 v29;
+        return v30;
+
+    block4:
+        v4.i1 = eq v0 0.i256;
+        br v4 block2 block2;
+}
+
+func public %__fe_sonatina_entry() {
+    block0:
+        v1.i256 = call %const_array_branch 0.i256;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+        data $__fe_const_data_0;
+        data $__fe_const_data_1;
+        data $__fe_const_data_2;
+        data $__fe_const_data_3;
+    }
+}

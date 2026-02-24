@@ -1,0 +1,9 @@
+const C: [u256; 1] = [1]
+
+pub fn const_array_branch(flag: bool) -> u256 {
+    if flag {
+        C[0]
+    } else {
+        C[0]
+    }
+}
