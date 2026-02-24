@@ -45,10 +45,14 @@ where
     }
 
     fn highlight_code(&self, code: &str, lang: Option<&str>) -> String {
-        // Use tree-sitter highlighting for Fe code blocks
+        // Fe code blocks are emitted as raw <fe-code-block> — client-side
+        // FeHighlighter handles syntax highlighting and type linking.
         if let Some(l) = lang {
             if l == "fe" || l.starts_with("fe,") || l.starts_with("fe ") {
-                return crate::highlight::highlight_fe_block(code);
+                return format!(
+                    "<fe-code-block lang=\"fe\">{}</fe-code-block>",
+                    html_escape(code)
+                );
             }
         }
 
@@ -162,9 +166,8 @@ mod tests {
         let md = "```fe\nfn main() {}\n```";
         let html = render_markdown(md);
         assert!(html.contains("fe-code-block"), "should wrap in <fe-code-block>: {html}");
-        // With tree-sitter highlighting, `fn` is wrapped in a keyword span
-        assert!(html.contains("hl-keyword"), "should have keyword highlight: {html}");
-        assert!(html.contains("main"), "should contain function name: {html}");
+        // Raw text content (client-side highlighting handles syntax colors)
+        assert!(html.contains("fn main()"), "should contain raw code text: {html}");
     }
 
     #[test]

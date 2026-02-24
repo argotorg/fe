@@ -30,11 +30,8 @@ pub async fn serve_docs(
 }
 
 fn generate_html(index: &DocIndex, scip_json: Option<&str>) -> String {
-    let type_links = fe_web::static_site::build_type_links(index, scip_json);
     let mut value = serde_json::to_value(index).expect("serialize DocIndex");
     fe_web::static_site::inject_html_bodies(&mut value);
-    fe_web::static_site::inject_highlighted_signatures(&mut value);
-    fe_web::static_site::inject_type_links(&mut value, &type_links);
     let json = serde_json::to_string(&value).expect("serialize JSON");
     let title = if let Some(root) = index.modules.first() {
         format!("{} — Fe Documentation", root.name)
