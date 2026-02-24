@@ -76,7 +76,7 @@ impl<'db> Place<'db> {
                 let binding = expr_binding(expr)?;
                 Some(Place::new(PlaceBase::Binding(binding)))
             }
-            Expr::Un(base, op) if matches!(op, UnOp::Mut | UnOp::Ref) => {
+            Expr::Un(base, UnOp::Mut | UnOp::Ref) => {
                 Place::from_expr_in_body(db, body, *base, expr_binding)
             }
             Expr::Field(base, field) => {

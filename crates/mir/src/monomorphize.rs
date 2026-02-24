@@ -96,6 +96,14 @@ enum CallTarget<'db> {
     Synthetic(crate::ir::MirFunctionOrigin<'db>),
 }
 
+type ParamCapabilitySpaceOverrides<'db> =
+    Vec<Vec<(crate::MirProjectionPath<'db>, AddressSpaceKind)>>;
+type NormalizedCallInstanceInputs<'db> = (
+    Vec<TyId<'db>>,
+    Vec<Option<AddressSpaceKind>>,
+    ParamCapabilitySpaceOverrides<'db>,
+);
+
 fn resolve_default_root_effect_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
@@ -746,11 +754,7 @@ impl<'db> Monomorphizer<'db> {
             crate::MirProjectionPath<'db>,
             AddressSpaceKind,
         )>],
-    ) -> (
-        Vec<TyId<'db>>,
-        Vec<Option<AddressSpaceKind>>,
-        Vec<Vec<(crate::MirProjectionPath<'db>, AddressSpaceKind)>>,
-    ) {
+    ) -> NormalizedCallInstanceInputs<'db> {
         let norm_scope = crate::ty::normalization_scope_for_args(self.db, func, args);
         let assumptions = PredicateListId::empty_list(self.db);
         let normalized_args: Vec<_> = args

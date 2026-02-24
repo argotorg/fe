@@ -959,9 +959,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return_contains_capability,
         );
         let provider_space = self.effect_provider_space_for_provider_ty(ty);
-        let result_space = provider_space
-            .or_else(|| receiver_space.filter(|_| return_contains_capability))
-            .unwrap_or_else(|| self.expr_address_space(expr));
+        let result_space = provider_space.unwrap_or_else(|| self.expr_address_space(expr));
 
         if matches!(
             callable_def.ingot(self.db).kind(self.db),

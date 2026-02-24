@@ -173,13 +173,8 @@ fn check_call_arg<'db>(
     arg: ValueId,
 ) -> Option<CompleteDiagnostic> {
     let ty = func.body.value(arg).ty;
-    if ty.as_borrow(db).is_none() {
-        return None;
-    }
-
-    let Some(space) = non_memory_borrow_origin_space(func, arg) else {
-        return None;
-    };
+    ty.as_borrow(db)?;
+    let space = non_memory_borrow_origin_space(func, arg)?;
 
     let span = diagnostic_span(func, source);
     Some(CompleteDiagnostic::new(

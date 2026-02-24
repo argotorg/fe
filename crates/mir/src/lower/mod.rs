@@ -515,9 +515,11 @@ pub(crate) fn lower_function<'db>(
         body,
         &typed_body,
         &generic_args,
-        receiver_space,
-        &effect_param_space_overrides,
-        &param_capability_space_overrides,
+        LoweringOverrides {
+            receiver_space,
+            effect_param_space_overrides: &effect_param_space_overrides,
+            param_capability_space_overrides: &param_capability_space_overrides,
+        },
     )?;
     let entry = builder.builder.entry_block();
     builder.move_to_block(entry);
@@ -641,6 +643,13 @@ pub(super) struct InferredEffectProvider<'db> {
     pub(super) rationale: EffectProviderInferenceRationale,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct LoweringOverrides<'a, 'db> {
+    receiver_space: Option<AddressSpaceKind>,
+    effect_param_space_overrides: &'a [Option<AddressSpaceKind>],
+    param_capability_space_overrides: &'a [Vec<(MirProjectionPath<'db>, AddressSpaceKind)>],
+}
+
 impl<'db, 'a> MirBuilder<'db, 'a> {
     /// Constructs a new builder for the given HIR body and typed information.
     ///
@@ -737,9 +746,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         body: Body<'db>,
         typed_body: &'a TypedBody<'db>,
         generic_args: &'a [TyId<'db>],
-        receiver_space: Option<AddressSpaceKind>,
-        effect_param_space_overrides: &[Option<AddressSpaceKind>],
-        param_capability_space_overrides: &[Vec<(MirProjectionPath<'db>, AddressSpaceKind)>],
+        overrides: LoweringOverrides<'a, 'db>,
     ) -> Result<Self, MirLowerError> {
         let return_ty = func.return_ty(db);
         Self::new(
@@ -749,9 +756,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             typed_body,
             generic_args,
             return_ty,
-            receiver_space,
-            effect_param_space_overrides,
-            param_capability_space_overrides,
+            overrides.receiver_space,
+            overrides.effect_param_space_overrides,
+            overrides.param_capability_space_overrides,
         )
     }
 
@@ -1357,6 +1364,57 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
     }
 
+    fn value_root_capability_space_hint(&self, value: ValueId) -> AddressSpaceKind {
+        if let Some((local, projection)) =
+            crate::ir::resolve_local_projection_root(&self.builder.body.values, value)
+            && let Some(space) = crate::ir::lookup_local_capability_space(
+                &self.builder.body.locals,
+                local,
+                &projection,
+            )
+        {
+            return space;
+        }
+        self.value_address_space_or_memory_fallback(value)
+    }
+
+    fn call_return_space_hint_from_args(
+        &self,
+        call: &CallOrigin<'db>,
+        dest_ty: TyId<'db>,
+    ) -> Option<AddressSpaceKind> {
+        let hir_target = call.hir_target.as_ref()?;
+        let expected_arg_tys = hir_target
+            .callable_def
+            .arg_tys(self.db)
+            .into_iter()
+            .map(|ty| ty.instantiate(self.db, &hir_target.generic_args))
+            .collect::<Vec<_>>();
+        let has_receiver = hir_target.callable_def.receiver_ty(self.db).is_some();
+
+        let mut space_hint = None;
+        for (idx, arg_value) in call.args.iter().copied().enumerate() {
+            if has_receiver && idx == 0 {
+                continue;
+            }
+            let Some(expected_ty) = expected_arg_tys.get(idx).copied() else {
+                continue;
+            };
+            if expected_ty != dest_ty {
+                continue;
+            }
+
+            let space = self.value_root_capability_space_hint(arg_value);
+            match space_hint {
+                None => space_hint = Some(space),
+                Some(prev) if prev == space => {}
+                Some(_) => return Some(AddressSpaceKind::Memory),
+            }
+        }
+
+        space_hint
+    }
+
     fn capability_spaces_for_rvalue(
         &mut self,
         dest: LocalId,
@@ -1375,7 +1433,13 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 if spaces.is_empty() && hir::analysis::ty::ty_is_noesc(self.db, dest_ty) {
                     spaces.push((MirProjectionPath::new(), AddressSpaceKind::Memory));
                 }
-                if let Some(space) = call.receiver_space
+                let call_space_hint = self
+                    .call_return_space_hint_from_args(call, dest_ty)
+                    .or_else(|| {
+                        call.receiver_space
+                            .filter(|space| !matches!(space, AddressSpaceKind::Memory))
+                    });
+                if let Some(space) = call_space_hint
                     && !matches!(space, AddressSpaceKind::Memory)
                 {
                     if spaces.is_empty() && hir::analysis::ty::ty_is_noesc(self.db, dest_ty) {
@@ -1386,10 +1450,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     }
                 }
                 if spaces.is_empty() && dest_ty.as_capability(self.db).is_some() {
-                    vec![(MirProjectionPath::new(), dest_address_space)]
-                } else {
-                    spaces
+                    return vec![(MirProjectionPath::new(), dest_address_space)];
                 }
+                spaces
             }
             Rvalue::Intrinsic { .. } => {
                 if dest_ty.as_capability(self.db).is_some() {
