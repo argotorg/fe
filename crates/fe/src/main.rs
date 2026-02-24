@@ -477,7 +477,16 @@ pub fn run(opts: &Options) {
             markdown_pages,
             builtins,
         } => {
-            doc::generate_docs(path, output.as_ref(), *json, *serve, *port, *static_site, *markdown_pages, *builtins);
+            doc::generate_docs(
+                path,
+                output.as_ref(),
+                *json,
+                *serve,
+                *port,
+                *static_site,
+                *markdown_pages,
+                *builtins,
+            );
         }
         #[cfg(not(target_arch = "wasm32"))]
         Command::Tree { path } => {

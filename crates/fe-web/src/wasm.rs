@@ -82,34 +82,9 @@ impl ScipStore {
         // Process external symbols
         for si in &index.external_symbols {
             if !si.symbol.is_empty() {
-                sym_info.entry(si.symbol.clone()).or_insert_with(|| SymInfo {
-                    symbol: si.symbol.clone(),
-                    display_name: si.display_name.clone(),
-                    kind: si.kind.value(),
-                    documentation: si.documentation.clone(),
-                    enclosing_symbol: si.enclosing_symbol.clone(),
-                    relationships: si
-                        .relationships
-                        .iter()
-                        .map(|r| SymRelationship {
-                            symbol: r.symbol.clone(),
-                            is_implementation: r.is_implementation,
-                            is_reference: r.is_reference,
-                            is_type_definition: r.is_type_definition,
-                        })
-                        .collect(),
-                });
-            }
-        }
-
-        // Process each document
-        for (file_idx, doc) in index.documents.iter().enumerate() {
-            let file_idx = file_idx as u32;
-
-            // Index symbol information from this document
-            for si in &doc.symbols {
-                if !si.symbol.is_empty() {
-                    sym_info.entry(si.symbol.clone()).or_insert_with(|| SymInfo {
+                sym_info
+                    .entry(si.symbol.clone())
+                    .or_insert_with(|| SymInfo {
                         symbol: si.symbol.clone(),
                         display_name: si.display_name.clone(),
                         kind: si.kind.value(),
@@ -126,6 +101,35 @@ impl ScipStore {
                             })
                             .collect(),
                     });
+            }
+        }
+
+        // Process each document
+        for (file_idx, doc) in index.documents.iter().enumerate() {
+            let file_idx = file_idx as u32;
+
+            // Index symbol information from this document
+            for si in &doc.symbols {
+                if !si.symbol.is_empty() {
+                    sym_info
+                        .entry(si.symbol.clone())
+                        .or_insert_with(|| SymInfo {
+                            symbol: si.symbol.clone(),
+                            display_name: si.display_name.clone(),
+                            kind: si.kind.value(),
+                            documentation: si.documentation.clone(),
+                            enclosing_symbol: si.enclosing_symbol.clone(),
+                            relationships: si
+                                .relationships
+                                .iter()
+                                .map(|r| SymRelationship {
+                                    symbol: r.symbol.clone(),
+                                    is_implementation: r.is_implementation,
+                                    is_reference: r.is_reference,
+                                    is_type_definition: r.is_type_definition,
+                                })
+                                .collect(),
+                        });
                 }
             }
 
@@ -184,18 +188,18 @@ impl ScipStore {
     pub fn resolve_symbol(&self, file: &str, line: u32, col: u32) -> Option<String> {
         let fi = self.file_index.get(file)?;
         // Binary search for the line, then scan for column overlap
-        let start = fi
-            .occurrences
-            .partition_point(|o| o.line < line);
+        let start = fi.occurrences.partition_point(|o| o.line < line);
 
         for occ in &fi.occurrences[start..] {
             if occ.line > line {
                 break;
             }
-            if occ.line == line && col >= occ.col_start && col < occ.col_end {
-                if !occ.symbol.is_empty() {
-                    return Some(occ.symbol.clone());
-                }
+            if occ.line == line
+                && col >= occ.col_start
+                && col < occ.col_end
+                && !occ.symbol.is_empty()
+            {
+                return Some(occ.symbol.clone());
             }
         }
         None
@@ -221,22 +225,18 @@ impl ScipStore {
                 .map(|(k, _)| k.as_str())
                 .unwrap_or("");
 
-            if let Some(fi) = self.file_index.get(file_path) {
-                if let Some(occ) = fi
-                    .occurrences
-                    .iter()
-                    .find(|o| o.symbol == symbol)
-                {
-                    let is_def = (occ.roles & (scip::types::SymbolRole::Definition as i32)) != 0;
-                    results.push(format!(
-                        r#"{{"file":"{}","line":{},"col_start":{},"col_end":{},"is_def":{}}}"#,
-                        escape_json_string(file_path),
-                        occ.line,
-                        occ.col_start,
-                        occ.col_end,
-                        is_def
-                    ));
-                }
+            if let Some(fi) = self.file_index.get(file_path)
+                && let Some(occ) = fi.occurrences.iter().find(|o| o.symbol == symbol)
+            {
+                let is_def = (occ.roles & (scip::types::SymbolRole::Definition as i32)) != 0;
+                results.push(format!(
+                    r#"{{"file":"{}","line":{},"col_start":{},"col_end":{},"is_def":{}}}"#,
+                    escape_json_string(file_path),
+                    occ.line,
+                    occ.col_start,
+                    occ.col_end,
+                    is_def
+                ));
             }
         }
         // Deduplicate since we may find the same occurrence multiple times
@@ -278,17 +278,16 @@ impl ScipStore {
             if results.len() >= 30 {
                 break;
             }
-            if let Some(info) = self.sym_info.get(sym_str) {
-                if info.display_name.to_lowercase().contains(&query_lower)
-                    || sym_str.to_lowercase().contains(&query_lower)
-                {
-                    results.push(format!(
-                        r#"{{"symbol":"{}","display_name":"{}","kind":{}}}"#,
-                        escape_json_string(sym_str),
-                        escape_json_string(&info.display_name),
-                        info.kind,
-                    ));
-                }
+            if let Some(info) = self.sym_info.get(sym_str)
+                && (info.display_name.to_lowercase().contains(&query_lower)
+                    || sym_str.to_lowercase().contains(&query_lower))
+            {
+                results.push(format!(
+                    r#"{{"symbol":"{}","display_name":"{}","kind":{}}}"#,
+                    escape_json_string(sym_str),
+                    escape_json_string(&info.display_name),
+                    info.kind,
+                ));
             }
         }
 
@@ -374,10 +373,10 @@ impl ScipStore {
                 );
                 // Use SCIP symbol_information::Kind values
                 match info.kind {
-                    15 => fields.push(entry),         // Field
-                    12 => variants.push(entry),       // EnumMember
-                    26 | 17 => methods.push(entry),   // Method | Function
-                    54 | 55 => types.push(entry),     // Type | TypeAlias
+                    15 => fields.push(entry),       // Field
+                    12 => variants.push(entry),     // EnumMember
+                    26 | 17 => methods.push(entry), // Method | Function
+                    54 | 55 => types.push(entry),   // Type | TypeAlias
                     _ => other.push(entry),
                 }
             }

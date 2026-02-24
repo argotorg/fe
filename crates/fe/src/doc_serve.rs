@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use axum::{response::Html, routing::get, Router};
+use axum::{Router, response::Html, routing::get};
 use fe_web::model::DocIndex;
 
 pub struct DocServeConfig {
@@ -12,8 +12,13 @@ pub async fn serve_docs(
     index: DocIndex,
     config: DocServeConfig,
     scip_json: Option<String>,
+    source_link_base: Option<String>,
 ) -> std::io::Result<()> {
-    let html = Arc::new(generate_html(&index, scip_json.as_deref()));
+    let html = Arc::new(generate_html(
+        &index,
+        scip_json.as_deref(),
+        source_link_base.as_deref(),
+    ));
 
     let app = Router::new().fallback(get(move || {
         let html = Arc::clone(&html);
@@ -26,10 +31,14 @@ pub async fn serve_docs(
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::AddrInUse, e))?;
     axum::serve(listener, app)
         .await
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+        .map_err(std::io::Error::other)
 }
 
-fn generate_html(index: &DocIndex, scip_json: Option<&str>) -> String {
+fn generate_html(
+    index: &DocIndex,
+    scip_json: Option<&str>,
+    source_link_base: Option<&str>,
+) -> String {
     let mut value = serde_json::to_value(index).expect("serialize DocIndex");
     fe_web::static_site::inject_html_bodies(&mut value);
     let json = serde_json::to_string(&value).expect("serialize JSON");
@@ -38,7 +47,7 @@ fn generate_html(index: &DocIndex, scip_json: Option<&str>) -> String {
     } else {
         "Fe Documentation".to_string()
     };
-    fe_web::assets::html_shell_with_scip(&title, &json, scip_json)
+    fe_web::assets::html_shell_full(&title, &json, scip_json, source_link_base)
 }
 
 #[cfg(test)]
@@ -56,7 +65,7 @@ mod tests {
             items: vec![],
         }];
 
-        let html = generate_html(&index, None);
+        let html = generate_html(&index, None, None);
         assert!(html.contains("<!DOCTYPE html>"));
         assert!(html.contains("mylib"));
         assert!(html.contains("Fe Documentation"));
@@ -66,7 +75,7 @@ mod tests {
     #[test]
     fn generate_html_empty_index() {
         let index = DocIndex::new();
-        let html = generate_html(&index, None);
+        let html = generate_html(&index, None, None);
         assert!(html.contains("<!DOCTYPE html>"));
         assert!(html.contains("Fe Documentation"));
     }

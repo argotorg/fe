@@ -31,7 +31,7 @@ impl LspServerInfo {
     }
 }
 
-#[allow(unused_variables)]
+#[allow(unused_variables, clippy::too_many_arguments)]
 pub fn generate_docs(
     path: &Utf8PathBuf,
     output: Option<&Utf8PathBuf>,
@@ -107,10 +107,7 @@ pub fn generate_docs(
         let existing_roots: std::collections::HashSet<String> =
             index.modules.iter().map(|m| m.name.clone()).collect();
 
-        for (label, builtin_ingot) in [
-            ("core", db.builtin_core()),
-            ("std", db.builtin_std()),
-        ] {
+        for (label, builtin_ingot) in [("core", db.builtin_core()), ("std", db.builtin_std())] {
             if existing_roots.contains(label) {
                 continue;
             }
@@ -118,9 +115,7 @@ pub fn generate_docs(
             let extractor = make_extractor(&db, git_root.as_deref());
             for top_mod in builtin_ingot.all_modules(&db) {
                 for item in top_mod.children_nested(&db) {
-                    if let Some(doc_item) =
-                        extractor.extract_item_for_ingot(item, builtin_ingot)
-                    {
+                    if let Some(doc_item) = extractor.extract_item_for_ingot(item, builtin_ingot) {
                         index.items.push(doc_item);
                     }
                 }
@@ -136,7 +131,6 @@ pub fn generate_docs(
             let mod_count = builtin_ingot.all_modules(&db).len();
             println!("  Included builtin '{label}' ({mod_count} modules)");
         }
-
     }
 
     // Generate SCIP for interactive navigation (best-effort).
@@ -161,7 +155,10 @@ pub fn generate_docs(
             std::process::exit(1);
         }
         if scip_json.is_some() {
-            println!("Static docs written to {} (with SCIP)", output_dir.display());
+            println!(
+                "Static docs written to {} (with SCIP)",
+                output_dir.display()
+            );
         } else {
             println!("Static docs written to {}", output_dir.display());
         }
@@ -195,7 +192,8 @@ pub fn generate_docs(
 
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            if let Err(e) = serve(index, config, scip_json).await {
+            let source_link_base = detect_source_link_base(path.as_std_path());
+            if let Err(e) = serve(index, config, scip_json, source_link_base).await {
                 eprintln!("Server error: {e}");
                 std::process::exit(1);
             }
@@ -295,7 +293,7 @@ fn extract_workspace(
     // references resolve correctly (e.g. ingot A imports ingot B).
     let mut member_paths: Vec<(String, Utf8PathBuf)> = Vec::new();
     for member in &members {
-        let member_path = Utf8PathBuf::from(workspace_root.join(member.path.as_str()));
+        let member_path = workspace_root.join(member.path.as_str());
         if !member_path.is_dir() {
             eprintln!(
                 "Warning: Workspace member '{}' at {} not found, skipping",
@@ -485,10 +483,10 @@ fn generate_scip_json_for_doc(
 /// For a workspace, reads fe.toml to find member paths.
 fn collect_ingot_urls(db: &DriverDataBase, path: &Utf8PathBuf) -> Vec<Url> {
     // Try the path itself as a single ingot first
-    if let Some(url) = path_to_ingot_url(path) {
-        if db.workspace().containing_ingot(db, url.clone()).is_some() {
-            return vec![url];
-        }
+    if let Some(url) = path_to_ingot_url(path)
+        && db.workspace().containing_ingot(db, url.clone()).is_some()
+    {
+        return vec![url];
     }
 
     // Workspace mode: read fe.toml to discover member ingot paths
@@ -508,11 +506,11 @@ fn collect_ingot_urls(db: &DriverDataBase, path: &Utf8PathBuf) -> Vec<Url> {
 
     let mut urls = Vec::new();
     for member in &members {
-        let member_path = Utf8PathBuf::from(path.join(member.path.as_str()));
-        if let Some(url) = path_to_ingot_url(&member_path) {
-            if db.workspace().containing_ingot(db, url.clone()).is_some() {
-                urls.push(url);
-            }
+        let member_path = path.join(member.path.as_str());
+        if let Some(url) = path_to_ingot_url(&member_path)
+            && db.workspace().containing_ingot(db, url.clone()).is_some()
+        {
+            urls.push(url);
         }
     }
     urls

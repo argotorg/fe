@@ -180,11 +180,7 @@ fn child_descriptor_suffix(scope: ScopeId<'_>) -> descriptor::Suffix {
 
 /// Build a SCIP symbol string for a child (field, variant, method, etc.)
 /// by appending a descriptor to the parent's symbol.
-fn child_scip_symbol(
-    parent_symbol: &str,
-    child_name: &str,
-    scope: ScopeId<'_>,
-) -> String {
+fn child_scip_symbol(parent_symbol: &str, child_name: &str, scope: ScopeId<'_>) -> String {
     let suffix = child_descriptor_suffix(scope);
     let suffix_char = match suffix {
         descriptor::Suffix::Type => "#",
@@ -248,8 +244,7 @@ pub fn generate_scip(
     // fork builds the IngotContext once for its chunk of modules.
     let module_count = ctx.ingot.all_modules(db).len();
     let fork_count = rayon::current_num_threads().max(1).min(module_count);
-    let db_forks: Vec<driver::DriverDataBase> =
-        (0..fork_count).map(|_| db.clone()).collect();
+    let db_forks: Vec<driver::DriverDataBase> = (0..fork_count).map(|_| db.clone()).collect();
 
     let parallel_results: Vec<Vec<HashMap<String, ScipDocumentBuilder>>> = db_forks
         .into_par_iter()
@@ -340,7 +335,7 @@ fn process_module<'db>(
             index_unnamed_item_generic_params(
                 db,
                 item,
-                &scope_graph,
+                scope_graph,
                 ctx,
                 &doc_url,
                 file_relative_paths,
@@ -401,64 +396,64 @@ fn process_module<'db>(
         // handled by items_dfs, and indexing them here would create duplicate
         // symbols with different descriptor suffixes.
         if !matches!(item, ItemKind::Mod(_) | ItemKind::TopMod(_)) {
-        let sym_view = SymbolView::from_item(item);
-        for child in sym_view.children(db) {
-            let child_scope = child.scope();
-            let Some(child_name) = child.name(db) else {
-                continue;
-            };
+            let sym_view = SymbolView::from_item(item);
+            for child in sym_view.children(db) {
+                let child_scope = child.scope();
+                let Some(child_name) = child.name(db) else {
+                    continue;
+                };
 
-            let child_symbol = child_scip_symbol(&symbol, &child_name, child_scope);
-            let child_kind = child_symbol_kind(child_scope);
+                let child_symbol = child_scip_symbol(symbol, &child_name, child_scope);
+                let child_kind = child_symbol_kind(child_scope);
 
-            if let Some(doc) = documents.get_mut(&doc_url) {
-                if doc.seen_symbols.insert(child_symbol.clone()) {
-                    let child_docs = child.docs(db).map(|d| vec![d]).unwrap_or_default();
+                if let Some(doc) = documents.get_mut(&doc_url) {
+                    if doc.seen_symbols.insert(child_symbol.clone()) {
+                        let child_docs = child.docs(db).map(|d| vec![d]).unwrap_or_default();
 
-                    doc.symbols.push(types::SymbolInformation {
-                        symbol: child_symbol.clone(),
-                        documentation: child_docs,
-                        relationships: Vec::new(),
-                        kind: child_kind.into(),
-                        display_name: child_name.clone(),
-                        signature_documentation: None.into(),
-                        enclosing_symbol: symbol.clone(),
-                        special_fields: Default::default(),
-                    });
+                        doc.symbols.push(types::SymbolInformation {
+                            symbol: child_symbol.clone(),
+                            documentation: child_docs,
+                            relationships: Vec::new(),
+                            kind: child_kind.into(),
+                            display_name: child_name.clone(),
+                            signature_documentation: None.into(),
+                            enclosing_symbol: symbol.clone(),
+                            special_fields: Default::default(),
+                        });
+                    }
+
+                    if let Some(name_span) = child.name_span(db)
+                        && let Some(range) = span_to_scip_range(&name_span, db)
+                    {
+                        push_occurrence(
+                            doc,
+                            range,
+                            child_symbol.clone(),
+                            types::SymbolRole::Definition as i32,
+                        );
+                    }
                 }
 
-                if let Some(name_span) = child.name_span(db)
-                    && let Some(range) = span_to_scip_range(&name_span, db)
-                {
-                    push_occurrence(
-                        doc,
-                        range,
-                        child_symbol.clone(),
-                        types::SymbolRole::Definition as i32,
-                    );
-                }
-            }
-
-            // Reference occurrences for the child
-            for indexed_ref in ctx.ref_index.references_to(&child_scope) {
-                if let Some(resolved) = indexed_ref.span.resolve(db) {
-                    let ref_url = match resolved.file.url(db) {
-                        Some(url) => url.to_string(),
-                        None => continue,
-                    };
-                    let ref_doc = documents.entry(ref_url.clone()).or_insert_with(|| {
-                        let relative = file_relative_paths
-                            .get(&ref_url)
-                            .cloned()
-                            .unwrap_or_default();
-                        ScipDocumentBuilder::new(relative)
-                    });
-                    if let Some(range) = span_to_scip_range(&resolved, db) {
-                        push_occurrence(ref_doc, range, child_symbol.clone(), 0);
+                // Reference occurrences for the child
+                for indexed_ref in ctx.ref_index.references_to(&child_scope) {
+                    if let Some(resolved) = indexed_ref.span.resolve(db) {
+                        let ref_url = match resolved.file.url(db) {
+                            Some(url) => url.to_string(),
+                            None => continue,
+                        };
+                        let ref_doc = documents.entry(ref_url.clone()).or_insert_with(|| {
+                            let relative = file_relative_paths
+                                .get(&ref_url)
+                                .cloned()
+                                .unwrap_or_default();
+                            ScipDocumentBuilder::new(relative)
+                        });
+                        if let Some(range) = span_to_scip_range(&resolved, db) {
+                            push_occurrence(ref_doc, range, child_symbol.clone(), 0);
+                        }
                     }
                 }
             }
-        }
         } // end if !Mod/TopMod
 
         // Index generic parameters (type params like T, A, etc.)
@@ -550,10 +545,7 @@ fn index_unnamed_item_generic_params<'db>(
         .resolve(db)
         .map(|s| u32::from(s.range.start()))
         .unwrap_or(0);
-    let parent_symbol = format!(
-        "fe fe {} {} __impl_{} ",
-        ctx.name, ctx.version, impl_offset
-    );
+    let parent_symbol = format!("fe fe {} {} __impl_{} ", ctx.name, ctx.version, impl_offset);
 
     for child_scope in scope_graph.children(item_scope) {
         let ScopeId::GenericParam(_, _) = child_scope else {
@@ -688,8 +680,12 @@ pub fn scip_to_json_data(index: &types::Index) -> String {
         occs.sort_by(|a, b| {
             let al = a["line"].as_i64().unwrap_or(0);
             let bl = b["line"].as_i64().unwrap_or(0);
-            al.cmp(&bl)
-                .then(a["cs"].as_i64().unwrap_or(0).cmp(&b["cs"].as_i64().unwrap_or(0)))
+            al.cmp(&bl).then(
+                a["cs"]
+                    .as_i64()
+                    .unwrap_or(0)
+                    .cmp(&b["cs"].as_i64().unwrap_or(0)),
+            )
         });
     }
 
@@ -705,7 +701,6 @@ pub fn scip_to_json_data(index: &types::Index) -> String {
 /// Inject `doc_url` fields into a SCIP JSON string by matching SCIP symbols
 /// against items in the DocIndex. Sub-items get parent page + anchor URLs.
 pub fn inject_doc_urls(scip_json: &str, doc_index: &DocIndex) -> String {
-
     let mut root: serde_json::Value = match serde_json::from_str(scip_json) {
         Ok(v) => v,
         Err(_) => return scip_json.to_string(),
@@ -892,7 +887,11 @@ pub fn enrich_signatures(
     for item in &mut index.items {
         if let Some(ref span) = item.signature_span {
             let parts = overlay_occurrences(
-                span, &item.signature, project_root, &file_occurrences, &symbol_to_url,
+                span,
+                &item.signature,
+                project_root,
+                &file_occurrences,
+                &symbol_to_url,
             );
             if parts.iter().any(|p| p.link.is_some()) {
                 item.rich_signature = parts;
@@ -903,7 +902,11 @@ pub fn enrich_signatures(
         for child in &mut item.children {
             if let Some(ref span) = child.signature_span {
                 let parts = overlay_occurrences(
-                    span, &child.signature, project_root, &file_occurrences, &symbol_to_url,
+                    span,
+                    &child.signature,
+                    project_root,
+                    &file_occurrences,
+                    &symbol_to_url,
                 );
                 if parts.iter().any(|p| p.link.is_some()) {
                     child.rich_signature = parts;
@@ -915,7 +918,11 @@ pub fn enrich_signatures(
         for trait_impl in &mut item.trait_impls {
             if let Some(ref span) = trait_impl.signature_span {
                 let parts = overlay_occurrences(
-                    span, &trait_impl.signature, project_root, &file_occurrences, &symbol_to_url,
+                    span,
+                    &trait_impl.signature,
+                    project_root,
+                    &file_occurrences,
+                    &symbol_to_url,
                 );
                 if parts.iter().any(|p| p.link.is_some()) {
                     trait_impl.rich_signature = parts;
@@ -924,7 +931,11 @@ pub fn enrich_signatures(
             for method in &mut trait_impl.methods {
                 if let Some(ref span) = method.signature_span {
                     let parts = overlay_occurrences(
-                        span, &method.signature, project_root, &file_occurrences, &symbol_to_url,
+                        span,
+                        &method.signature,
+                        project_root,
+                        &file_occurrences,
+                        &symbol_to_url,
                     );
                     if parts.iter().any(|p| p.link.is_some()) {
                         method.rich_signature = parts;
@@ -953,8 +964,8 @@ pub fn enrich_signatures(
                     language: "fe".to_string(),
                     relative_path: scope,
                     occurrences: occs,
-                    position_encoding:
-                        types::PositionEncoding::UTF8CodeUnitOffsetFromLineStart.into(),
+                    position_encoding: types::PositionEncoding::UTF8CodeUnitOffsetFromLineStart
+                        .into(),
                     ..Default::default()
                 });
             }
@@ -970,16 +981,15 @@ pub fn enrich_signatures(
                 } else {
                     &child.signature
                 };
-                let occs =
-                    build_virtual_occurrences(span, sig, project_root, &file_occurrences);
+                let occs = build_virtual_occurrences(span, sig, project_root, &file_occurrences);
                 if !occs.is_empty() {
                     child.sig_scope = Some(scope.clone());
                     virtual_docs.push(types::Document {
                         language: "fe".to_string(),
                         relative_path: scope,
                         occurrences: occs,
-                        position_encoding:
-                            types::PositionEncoding::UTF8CodeUnitOffsetFromLineStart.into(),
+                        position_encoding: types::PositionEncoding::UTF8CodeUnitOffsetFromLineStart
+                            .into(),
                         ..Default::default()
                     });
                 }
@@ -1011,8 +1021,8 @@ pub fn enrich_signatures(
                         language: "fe".to_string(),
                         relative_path: scope,
                         occurrences: occs,
-                        position_encoding:
-                            types::PositionEncoding::UTF8CodeUnitOffsetFromLineStart.into(),
+                        position_encoding: types::PositionEncoding::UTF8CodeUnitOffsetFromLineStart
+                            .into(),
                         ..Default::default()
                     });
                 }
@@ -1062,8 +1072,8 @@ pub fn enrich_signatures(
                         language: "fe".to_string(),
                         relative_path: scope,
                         occurrences: occs,
-                        position_encoding:
-                            types::PositionEncoding::UTF8CodeUnitOffsetFromLineStart.into(),
+                        position_encoding: types::PositionEncoding::UTF8CodeUnitOffsetFromLineStart
+                            .into(),
                         ..Default::default()
                     });
                 }
@@ -1313,7 +1323,9 @@ fn build_virtual_occurrences(
                     && text.len() <= 20
                     && text.chars().all(|c| c.is_alphanumeric() || c == '_')
                 {
-                    name_to_symbol.entry(text.to_string()).or_insert_with(|| occ.symbol.clone());
+                    name_to_symbol
+                        .entry(text.to_string())
+                        .or_insert_with(|| occ.symbol.clone());
                 }
             }
         }
@@ -1331,8 +1343,7 @@ fn build_virtual_occurrences(
                     || !sig_bytes[abs_pos - 1].is_ascii_alphanumeric()
                         && sig_bytes[abs_pos - 1] != b'_';
                 let next_ok = end_pos >= sig_bytes.len()
-                    || !sig_bytes[end_pos].is_ascii_alphanumeric()
-                        && sig_bytes[end_pos] != b'_';
+                    || !sig_bytes[end_pos].is_ascii_alphanumeric() && sig_bytes[end_pos] != b'_';
                 if prev_ok && next_ok && !seen_positions.contains_key(&(abs_pos, end_pos)) {
                     let (sl, sc) = byte_offset_to_sig_line_col(sig_text, abs_pos);
                     let (el, ec) = byte_offset_to_sig_line_col(sig_text, end_pos);
@@ -1505,6 +1516,9 @@ fn make_point() -> Point {
             .filter_map(|v| v.get("name").and_then(|n| n.as_str()))
             .collect();
         assert!(names.contains(&"Point"), "should contain Point: {names:?}");
-        assert!(names.contains(&"make_point"), "should contain make_point: {names:?}");
+        assert!(
+            names.contains(&"make_point"),
+            "should contain make_point: {names:?}"
+        );
     }
 }

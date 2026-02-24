@@ -28,10 +28,10 @@ fn main() {
 
     match result {
         Ok(output) if output.status.success() => {
-            if output_wasm.exists() {
-                if let Err(e) = std::fs::copy(&output_wasm, &vendor_wasm) {
-                    println!("cargo:warning=Failed to copy tree-sitter-fe.wasm to vendor: {e}");
-                }
+            if output_wasm.exists()
+                && let Err(e) = std::fs::copy(&output_wasm, &vendor_wasm)
+            {
+                println!("cargo:warning=Failed to copy tree-sitter-fe.wasm to vendor: {e}");
             }
         }
         Ok(output) => {
@@ -41,9 +41,7 @@ fn main() {
             );
         }
         Err(_) => {
-            println!(
-                "cargo:warning=tree-sitter CLI not found, using vendored tree-sitter-fe.wasm"
-            );
+            println!("cargo:warning=tree-sitter CLI not found, using vendored tree-sitter-fe.wasm");
         }
     }
 }

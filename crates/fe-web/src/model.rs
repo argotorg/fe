@@ -662,7 +662,6 @@ impl DocIndex {
             }
         }
     }
-
 }
 
 /// Extract the simple type name from a potentially qualified/generic path.
@@ -830,7 +829,10 @@ mod tests {
             assert_eq!(a.children, b.children);
             // source.file is #[serde(skip)] — verify it's dropped on round-trip
             if let (Some(sa), Some(sb)) = (&a.source, &b.source) {
-                assert!(sb.file.is_empty(), "source.file should not survive serialization");
+                assert!(
+                    sb.file.is_empty(),
+                    "source.file should not survive serialization"
+                );
                 assert_eq!(sa.display_file, sb.display_file);
                 assert_eq!(sa.line, sb.line);
                 assert_eq!(sa.column, sb.column);
@@ -887,7 +889,9 @@ mod tests {
 
     #[test]
     fn doc_content_parsing() {
-        let content = DocContent::from_raw("Summary line.\n\nDetailed body here.\n\n# Examples\nSome example code.");
+        let content = DocContent::from_raw(
+            "Summary line.\n\nDetailed body here.\n\n# Examples\nSome example code.",
+        );
         assert_eq!(content.summary, "Summary line.");
         assert!(content.body.contains("Detailed body here."));
         assert_eq!(content.sections.len(), 1);

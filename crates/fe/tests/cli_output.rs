@@ -730,6 +730,7 @@ fn test_fe_test_both_backends_call_trace() {
     }
 }
 
+#[allow(clippy::print_stderr)]
 fn assert_fe_test_backends_agree(path: &str, call_trace: bool) {
     let mut yul_args = vec!["test", "--backend", "yul", path];
     let mut sonatina_args = vec!["test", "--backend", "sonatina", path];

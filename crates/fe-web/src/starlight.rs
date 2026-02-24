@@ -96,10 +96,7 @@ fn item_url(
     collisions: &HashMap<String, Vec<DocItemKind>>,
 ) -> String {
     let fs = item_fs_path(path, kind, collisions);
-    let route = fs
-        .with_extension("")
-        .to_string_lossy()
-        .replace('\\', "/");
+    let route = fs.with_extension("").to_string_lossy().replace('\\', "/");
     format!("{base_url}/{route}/")
 }
 
@@ -217,12 +214,13 @@ fn write_module_tree(
     writeln!(md).unwrap();
 
     // Module docs (if the module has a DocItem)
-    if let Some(item) = index.items.iter().find(|i| {
-        i.path == module.path && i.kind == DocItemKind::Module
-    }) {
-        if let Some(docs) = &item.docs {
-            writeln!(md, "{}\n", docs.body).unwrap();
-        }
+    if let Some(item) = index
+        .items
+        .iter()
+        .find(|i| i.path == module.path && i.kind == DocItemKind::Module)
+        && let Some(docs) = &item.docs
+    {
+        writeln!(md, "{}\n", docs.body).unwrap();
     }
 
     // Group items by kind, sorted by display order
@@ -295,7 +293,12 @@ fn write_item_page(
 
     // Signature
     if !item.signature.is_empty() {
-        writeln!(md, "{}\n", render_signature_html(&item.signature, &item.rich_signature)).unwrap();
+        writeln!(
+            md,
+            "{}\n",
+            render_signature_html(&item.signature, &item.rich_signature)
+        )
+        .unwrap();
     }
 
     // Documentation body
@@ -339,7 +342,12 @@ fn render_children(md: &mut String, children: &[DocChild]) {
         for child in items {
             writeln!(md, "### `{}`\n", child.name).unwrap();
             if !child.signature.is_empty() {
-                writeln!(md, "{}\n", render_signature_html(&child.signature, &child.rich_signature)).unwrap();
+                writeln!(
+                    md,
+                    "{}\n",
+                    render_signature_html(&child.signature, &child.rich_signature)
+                )
+                .unwrap();
             }
             if let Some(docs) = &child.docs {
                 writeln!(md, "{}\n", docs.body).unwrap();
@@ -369,13 +377,23 @@ fn render_trait_impls(
         writeln!(md, "### {heading}\n").unwrap();
 
         if !ti.signature.is_empty() {
-            writeln!(md, "{}\n", render_signature_html(&ti.signature, &ti.rich_signature)).unwrap();
+            writeln!(
+                md,
+                "{}\n",
+                render_signature_html(&ti.signature, &ti.rich_signature)
+            )
+            .unwrap();
         }
 
         for method in &ti.methods {
             writeln!(md, "#### `{}`\n", method.name).unwrap();
             if !method.signature.is_empty() {
-                writeln!(md, "{}\n", render_signature_html(&method.signature, &method.rich_signature)).unwrap();
+                writeln!(
+                    md,
+                    "{}\n",
+                    render_signature_html(&method.signature, &method.rich_signature)
+                )
+                .unwrap();
             }
             if let Some(docs) = &method.docs {
                 writeln!(md, "{}\n", docs.body).unwrap();
@@ -552,12 +570,21 @@ mod tests {
             content.contains("<fe-code-block") || content.contains("<fe-signature"),
             "should use web component for signature, got:\n{content}"
         );
-        assert!(content.contains("pub struct Greeter"), "should have signature text");
-        assert!(!content.contains("```fe"), "should not have fenced code blocks");
+        assert!(
+            content.contains("pub struct Greeter"),
+            "should have signature text"
+        );
+        assert!(
+            !content.contains("```fe"),
+            "should not have fenced code blocks"
+        );
         assert!(content.contains("## Fields"), "should group fields");
         assert!(content.contains("### `name`"), "should have field heading");
         assert!(content.contains("## Methods"), "should group methods");
-        assert!(content.contains("### `greet`"), "should have method heading");
+        assert!(
+            content.contains("### `greet`"),
+            "should have method heading"
+        );
         assert!(content.contains("**friendly**"), "should have docs body");
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -572,8 +599,14 @@ mod tests {
         generate(&index, &dir, "/api").unwrap();
 
         let content = std::fs::read_to_string(dir.join("mylib/index.md")).unwrap();
-        assert!(content.contains("## Structs"), "should have Structs section");
-        assert!(content.contains("## Functions"), "should have Functions section");
+        assert!(
+            content.contains("## Structs"),
+            "should have Structs section"
+        );
+        assert!(
+            content.contains("## Functions"),
+            "should have Functions section"
+        );
         assert!(content.contains("[Greeter]"), "should link to Greeter");
         assert!(content.contains("[hello]"), "should link to hello");
 

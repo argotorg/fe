@@ -370,6 +370,7 @@ contract FeErc20ArtifactsTest {{
 
 #[cfg(unix)]
 #[test]
+#[allow(clippy::print_stderr)]
 fn test_fe_build_artifacts_with_foundry() {
     let Some(forge) = find_executable_in_path("forge") else {
         #[allow(clippy::print_stdout)]

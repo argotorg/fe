@@ -8,8 +8,8 @@
 use crate::HirDb;
 use crate::SpannedHirDb;
 use crate::analysis::HirAnalysisDb;
-use crate::hir_def::{Attr, EnumVariant, FieldParent, HirIngot, ItemKind, TopLevelMod, Visibility};
 use crate::hir_def::scope_graph::ScopeId;
+use crate::hir_def::{Attr, EnumVariant, FieldParent, HirIngot, ItemKind, TopLevelMod, Visibility};
 use crate::span::{DynLazySpan, LazySpan};
 use common::diagnostics::Span;
 use common::file::File;
@@ -343,15 +343,14 @@ fn get_item_signature_with_span<'db>(
             | ItemKind::Struct(_)
             | ItemKind::Enum(_)
             | ItemKind::Contract(_)
-    ) {
-        if let Some(brace_pos) = sig.find('{') {
-            sig_end = start + brace_pos;
-            // Trim trailing whitespace before the brace
-            while sig_end > start && text.as_bytes()[sig_end - 1].is_ascii_whitespace() {
-                sig_end -= 1;
-            }
-            sig = text[start..sig_end].to_string();
+    ) && let Some(brace_pos) = sig.find('{')
+    {
+        sig_end = start + brace_pos;
+        // Trim trailing whitespace before the brace
+        while sig_end > start && text.as_bytes()[sig_end - 1].is_ascii_whitespace() {
+            sig_end -= 1;
         }
+        sig = text[start..sig_end].to_string();
     }
 
     Some(SignatureWithSpan {
@@ -369,13 +368,19 @@ fn item_children<'db>(db: &'db dyn HirDb, item: ItemKind<'db>) -> Vec<SymbolView
         ItemKind::Struct(s) => {
             let parent = FieldParent::Struct(s);
             for field_view in parent.fields(db) {
-                children.push(SymbolView::new(ScopeId::Field(parent, field_view.idx as u16)));
+                children.push(SymbolView::new(ScopeId::Field(
+                    parent,
+                    field_view.idx as u16,
+                )));
             }
         }
         ItemKind::Contract(c) => {
             let parent = FieldParent::Contract(c);
             for field_view in parent.fields(db) {
-                children.push(SymbolView::new(ScopeId::Field(parent, field_view.idx as u16)));
+                children.push(SymbolView::new(ScopeId::Field(
+                    parent,
+                    field_view.idx as u16,
+                )));
             }
         }
         ItemKind::Enum(e) => {
@@ -389,10 +394,16 @@ fn item_children<'db>(db: &'db dyn HirDb, item: ItemKind<'db>) -> Vec<SymbolView
                 children.push(SymbolView::from_item(ItemKind::Func(method)));
             }
             for assoc_type in t.assoc_types(db) {
-                children.push(SymbolView::new(ScopeId::TraitType(t, assoc_type.idx as u16)));
+                children.push(SymbolView::new(ScopeId::TraitType(
+                    t,
+                    assoc_type.idx as u16,
+                )));
             }
             for assoc_const in t.assoc_consts(db) {
-                children.push(SymbolView::new(ScopeId::TraitConst(t, assoc_const.idx as u16)));
+                children.push(SymbolView::new(ScopeId::TraitConst(
+                    t,
+                    assoc_const.idx as u16,
+                )));
             }
         }
         ItemKind::Impl(i) => {
@@ -572,9 +583,7 @@ impl<'db> ReferenceIndex<'db> {
     }
 
     /// Iterate all (target, references) pairs in the index.
-    pub fn iter(
-        &self,
-    ) -> impl Iterator<Item = (&ScopeId<'db>, &[IndexedReference<'db>])> {
+    pub fn iter(&self) -> impl Iterator<Item = (&ScopeId<'db>, &[IndexedReference<'db>])> {
         self.index.iter().map(|(k, v)| (k, v.as_slice()))
     }
 

@@ -48,14 +48,12 @@ impl StaticSiteGenerator {
         std::fs::create_dir_all(output_dir)?;
 
         // Serialize to a JSON Value so we can inject html_body fields
-        let mut value = serde_json::to_value(index)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        let mut value = serde_json::to_value(index).map_err(std::io::Error::other)?;
 
         // Pre-render markdown bodies to HTML
         inject_html_bodies(&mut value);
 
-        let json = serde_json::to_string(&value)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        let json = serde_json::to_string(&value).map_err(std::io::Error::other)?;
 
         let title = index_title(index);
         let html = assets::html_shell_full(&title, &json, scip_json, source_link_base);
@@ -72,31 +70,27 @@ pub fn inject_html_bodies(value: &mut serde_json::Value) {
     match value {
         serde_json::Value::Object(map) => {
             // If this object has a "docs" field with a "body", inject "html_body"
-            if let Some(docs) = map.get_mut("docs") {
-                if let Some(docs_obj) = docs.as_object_mut() {
-                    if let Some(body) = docs_obj.get("body").and_then(|b| b.as_str()) {
-                        let html = render_markdown(body);
-                        docs_obj.insert(
-                            "html_body".to_string(),
-                            serde_json::Value::String(html),
-                        );
-                    }
-                    // Render each section's content to HTML
-                    if let Some(sections) = docs_obj.get_mut("sections") {
-                        if let Some(sections_arr) = sections.as_array_mut() {
-                            for section in sections_arr {
-                                if let Some(section_obj) = section.as_object_mut() {
-                                    if let Some(content) =
-                                        section_obj.get("content").and_then(|c| c.as_str())
-                                    {
-                                        let html = render_markdown(content);
-                                        section_obj.insert(
-                                            "html_content".to_string(),
-                                            serde_json::Value::String(html),
-                                        );
-                                    }
-                                }
-                            }
+            if let Some(docs) = map.get_mut("docs")
+                && let Some(docs_obj) = docs.as_object_mut()
+            {
+                if let Some(body) = docs_obj.get("body").and_then(|b| b.as_str()) {
+                    let html = render_markdown(body);
+                    docs_obj.insert("html_body".to_string(), serde_json::Value::String(html));
+                }
+                // Render each section's content to HTML
+                if let Some(sections) = docs_obj.get_mut("sections")
+                    && let Some(sections_arr) = sections.as_array_mut()
+                {
+                    for section in sections_arr {
+                        if let Some(section_obj) = section.as_object_mut()
+                            && let Some(content) =
+                                section_obj.get("content").and_then(|c| c.as_str())
+                        {
+                            let html = render_markdown(content);
+                            section_obj.insert(
+                                "html_content".to_string(),
+                                serde_json::Value::String(html),
+                            );
                         }
                     }
                 }
@@ -184,7 +178,10 @@ mod tests {
         // Contains pre-rendered markdown (html_body with <strong>)
         assert!(html.contains("html_body"), "should contain html_body key");
         // In the <script> tag, </ is escaped to <\/ for XSS safety
-        assert!(html.contains(r"<strong>friendly<\/strong>"), "markdown should be pre-rendered");
+        assert!(
+            html.contains(r"<strong>friendly<\/strong>"),
+            "markdown should be pre-rendered"
+        );
 
         // Cleanup
         let _ = std::fs::remove_dir_all(&dir);

@@ -42,10 +42,7 @@ pub fn new_broadcast() -> (WsBroadcast, broadcast::Receiver<WsServerMsg>) {
 /// Start the WebSocket notification server on the given port.
 ///
 /// Returns a `JoinHandle` that runs until dropped.
-pub fn start_ws_server(
-    port: u16,
-    broadcast_tx: WsBroadcast,
-) -> tokio::task::JoinHandle<()> {
+pub fn start_ws_server(port: u16, broadcast_tx: WsBroadcast) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let addr = SocketAddr::from(([127, 0, 0, 1], port));
         let listener = match TcpListener::bind(&addr).await {
@@ -73,10 +70,7 @@ pub fn start_ws_server(
     })
 }
 
-async fn handle_ws_client(
-    stream: TcpStream,
-    mut broadcast_rx: broadcast::Receiver<WsServerMsg>,
-) {
+async fn handle_ws_client(stream: TcpStream, mut broadcast_rx: broadcast::Receiver<WsServerMsg>) {
     let ws_stream = match tokio_tungstenite::accept_async(stream).await {
         Ok(ws) => ws,
         Err(e) => {
@@ -137,6 +131,14 @@ async fn handle_ws_client(
     }
 }
 
+async fn send_json(
+    ws_tx: &mut SplitSink<WebSocketStream<TcpStream>, Message>,
+    msg: &WsServerMsg,
+) -> Result<(), tokio_tungstenite::tungstenite::Error> {
+    let json = serde_json::to_string(msg).unwrap_or_default();
+    ws_tx.send(Message::Text(json.into())).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,22 +189,11 @@ mod tests {
     fn broadcast_channel_works() {
         let (tx, _rx) = new_broadcast();
         let mut rx2 = tx.subscribe();
-        tx.send(WsServerMsg::Update {
-            uri: "test".into(),
-        })
-        .unwrap();
+        tx.send(WsServerMsg::Update { uri: "test".into() }).unwrap();
         let msg = rx2.try_recv().unwrap();
         match msg {
             WsServerMsg::Update { uri } => assert_eq!(uri, "test"),
             _ => panic!("wrong variant"),
         }
     }
-}
-
-async fn send_json(
-    ws_tx: &mut SplitSink<WebSocketStream<TcpStream>, Message>,
-    msg: &WsServerMsg,
-) -> Result<(), tokio_tungstenite::tungstenite::Error> {
-    let json = serde_json::to_string(msg).unwrap_or_default();
-    ws_tx.send(Message::Text(json.into())).await
 }
