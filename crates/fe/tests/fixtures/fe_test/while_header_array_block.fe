@@ -1,0 +1,23 @@
+use std::evm::effects::assert
+
+fn count_until(limit: u256) -> u256 {
+    let mut value: u256 = 0
+    let mut steps: u256 = 0
+
+    while {
+        let pair: [u256; 2] = [value, value + 1]
+        pair[0] < limit
+    } {
+        value += 1
+        steps += 1
+    }
+
+    return steps
+}
+
+#[test]
+fn test_while_header_array_block() {
+    assert(count_until(0) == 0)
+    assert(count_until(5) == 5)
+    assert(count_until(9) == 9)
+}
