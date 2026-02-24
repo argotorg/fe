@@ -13,7 +13,7 @@ use sonatina_codegen::{
     liveness::Liveness,
     machinst::lower::{LowerBackend, SectionLoweringCtx},
     object::{CompileOptions, SymbolId, compile_object},
-    stackalloc::StackifyAlloc,
+    stackalloc::StackifyBuilder,
 };
 use sonatina_ir::{
     I256, Module, Signature, Type,
@@ -883,13 +883,9 @@ fn emit_runtime_evm_debug(
                     let mut dom = DomTree::new();
                     dom.compute(&cfg);
 
-                    let (_alloc, stackify_trace) = StackifyAlloc::for_function_with_trace(
-                        function,
-                        &cfg,
-                        &dom,
-                        &liveness,
-                        reach_depth,
-                    );
+                    let (_alloc, stackify_trace) =
+                        StackifyBuilder::new(function, &cfg, &dom, &liveness, reach_depth)
+                            .compute_with_trace();
 
                     let ctx = FuncWriteCtx::new(function, func);
 
