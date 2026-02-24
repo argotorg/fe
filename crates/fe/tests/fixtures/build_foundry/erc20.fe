@@ -1,44 +1,37 @@
-use std::evm::{Address, Ctx, Log, StorageMap, mem}
+use std::evm::{Address, Ctx, Log, StorageMap}
 use core::abi::{Abi, AbiEncoder, AbiSize, Encode}
-use std::abi::Sol
-use std::evm::ops::mstore
-
-// Standard ERC20 event signature hashes.
-const TRANSFER_EVENT_TOPIC0: u256 =
-    0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef
-const APPROVAL_EVENT_TOPIC0: u256 =
-    0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925
+use std::abi::sol
 
 msg Erc20 {
-    #[selector = 0x06fdde03]
+    #[selector = sol("name()")]
     Name -> u256,
-    #[selector = 0x95d89b41]
+    #[selector = sol("symbol()")]
     Symbol -> u256,
-    #[selector = 0x313ce567]
+    #[selector = sol("decimals()")]
     Decimals -> u8,
-    #[selector = 0x18160ddd]
+    #[selector = sol("totalSupply()")]
     TotalSupply -> u256,
-    #[selector = 0x70a08231]
+    #[selector = sol("balanceOf(address)")]
     BalanceOf { account: Address } -> u256,
-    #[selector = 0xdd62ed3e]
+    #[selector = sol("allowance(address,address)")]
     Allowance { owner: Address, spender: Address } -> u256,
-    #[selector = 0xa9059cbb]
+    #[selector = sol("transfer(address,uint256)")]
     Transfer { to: Address, amount: u256 } -> bool,
-    #[selector = 0x095ea7b3]
+    #[selector = sol("approve(address,uint256)")]
     Approve { spender: Address, amount: u256 } -> bool,
-    #[selector = 0x23b872dd]
+    #[selector = sol("transferFrom(address,address,uint256)")]
     TransferFrom { from: Address, to: Address, amount: u256 } -> bool,
 }
 
 msg Erc20Extended {
-    #[selector = 0x40c10f19]
+    #[selector = sol("mint(address,uint256)")]
     Mint { to: Address, amount: u256 } -> bool,
 }
 
 struct TokenStore {
     total_supply: u256,
-    balances: StorageMap<Address, u256, 0>,
-    allowances: StorageMap<(Address, Address), u256, 1>,
+    balances: StorageMap<Address, u256>,
+    allowances: StorageMap<(Address, Address), u256>,
 }
 
 pub contract CoolCoin uses (ctx: Ctx, log: mut Log) {
@@ -108,25 +101,27 @@ pub contract CoolCoin uses (ctx: Ctx, log: mut Log) {
 }
 
 fn emit_transfer(from: Address, to: Address, value: u256) uses (log: mut Log) {
-    emit_event(
-        topic0: TRANSFER_EVENT_TOPIC0,
-        topic1: from.inner,
-        topic2: to.inner,
-        data0: value,
-    )
+    log.emit(Transfer { from, to, value })
 }
 
 fn emit_approval(owner: Address, spender: Address, value: u256) uses (log: mut Log) {
-    emit_event(
-        topic0: APPROVAL_EVENT_TOPIC0,
-        topic1: owner.inner,
-        topic2: spender.inner,
-        data0: value,
-    )
+    log.emit(Approval { owner, spender, value })
 }
 
-fn emit_event(topic0: u256, topic1: u256, topic2: u256, data0: u256) uses (log: mut Log) {
-    let ptr = mem::alloc(32)
-    mstore(ptr, data0)
-    log.log3(offset: ptr, len: 32, topic0: topic0, topic1: topic1, topic2: topic2)
+#[event]
+struct Transfer {
+    #[indexed]
+    from: Address,
+    #[indexed]
+    to: Address,
+    value: u256,
+}
+
+#[event]
+struct Approval {
+    #[indexed]
+    owner: Address,
+    #[indexed]
+    spender: Address,
+    value: u256,
 }
