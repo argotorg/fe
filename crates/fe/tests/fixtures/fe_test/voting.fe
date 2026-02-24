@@ -3,8 +3,7 @@
 ///
 /// Tests: StorageMap with tuple keys, sequential ID generation, duplicate prevention.
 
-use std::evm::{Evm, StorageMap}
-use std::evm::effects::assert
+use std::evm::StorageMap
 
 msg VotingMsg {
     #[selector = 0x01]

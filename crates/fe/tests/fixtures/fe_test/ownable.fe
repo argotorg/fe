@@ -4,8 +4,7 @@
 /// Tests: ctx.caller() in init, address-based authorization, cross-contract
 /// calls via proxy, ownership transfer.
 
-use std::evm::{Address, Evm, Call, Ctx}
-use std::evm::effects::assert
+use std::evm::Ctx
 
 msg OwnableMsg {
     #[selector = 0x01]

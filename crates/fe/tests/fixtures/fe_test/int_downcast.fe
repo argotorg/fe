@@ -1,7 +1,5 @@
 use core::num::IntDowncast
 use core::option::Option
-use std::evm::effects::assert
-use std::evm::Evm
 
 #[test]
 fn test_int_downcast() uses (evm: mut Evm) {

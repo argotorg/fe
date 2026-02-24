@@ -1,7 +1,4 @@
-use std::evm::{Evm, Call, StorageMap}
-use std::evm::effects::assert
-use core::abi::{Abi, AbiEncoder, AbiSize, Encode}
-use std::abi::Sol
+use std::evm::StorageMap
 
 msg MapMsg {
     #[selector = 0x9cc7f708]

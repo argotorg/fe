@@ -1,7 +1,3 @@
-use std::evm::{Address, Evm, Call}
-use std::evm::effects::assert
-use core::abi::{Abi, AbiEncoder, AbiSize, Encode}
-use std::abi::Sol
 
 msg CoinMsg {
     #[selector = 0xab7ccc1c]

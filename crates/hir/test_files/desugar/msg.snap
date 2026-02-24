@@ -1,13 +1,12 @@
 ---
 source: crates/hir/tests/desugar.rs
-assertion_line: 28
 expression: output
 input_file: test_files/desugar/msg.fe
 ---
-use core::prelude::*
+use std::prelude::*
 
 mod CounterMsg {
-    use core::prelude::*
+    use std::prelude::*
     use super::*
 
     pub struct Increment {}

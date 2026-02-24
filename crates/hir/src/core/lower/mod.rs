@@ -147,13 +147,24 @@ impl<'db> FileLowerCtxt<'db> {
         let db = self.db();
         let top_mod = self.top_mod();
         let ingot = top_mod.ingot(db);
-        if ingot.kind(db) == IngotKind::Core {
+        let kind = ingot.kind(db);
+
+        if kind == IngotKind::Core {
             return;
         }
 
-        let core = IdentId::new(db, "core".to_string());
         let prelude = IdentId::new(db, "prelude".to_string());
-        self.insert_synthetic_use(vec![core, prelude]);
+
+        if kind == IngotKind::Std {
+            // The std ingot itself gets core::prelude::* (can't self-import).
+            let core = IdentId::new(db, "core".to_string());
+            self.insert_synthetic_use(vec![core, prelude]);
+        } else {
+            // All other ingots get std::prelude::*, which re-exports
+            // core::prelude plus common EVM types and ABI traits.
+            let std = IdentId::new(db, "std".to_string());
+            self.insert_synthetic_use(vec![std, prelude]);
+        }
     }
 
     /// Inserts `use super::*` to re-export parent module items into current scope.

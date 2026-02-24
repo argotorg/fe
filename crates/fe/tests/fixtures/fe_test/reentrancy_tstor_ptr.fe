@@ -1,5 +1,5 @@
-use std::evm::{Address, Call, Create, Ctx, Evm}
-use std::evm::effects::{TStorPtr, assert}
+use std::evm::{Create, Ctx}
+use std::evm::effects::TStorPtr
 
 msg AMsg {
     #[selector = 1]

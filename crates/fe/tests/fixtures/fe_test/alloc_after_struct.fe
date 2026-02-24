@@ -1,5 +1,3 @@
-use std::evm::{Address, Evm}
-use std::evm::effects::assert
 use std::evm::mem
 
 /// Regression test: allocating a struct whose fields land at 0x80 must not

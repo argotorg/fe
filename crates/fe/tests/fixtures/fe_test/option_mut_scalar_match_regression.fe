@@ -1,5 +1,3 @@
-use std::evm::Evm
-use std::evm::effects::assert
 
 msg Msg {
     #[selector = 1]

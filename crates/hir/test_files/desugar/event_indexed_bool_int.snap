@@ -1,10 +1,9 @@
 ---
 source: crates/hir/tests/desugar.rs
-assertion_line: 28
 expression: output
 input_file: test_files/desugar/event_indexed_bool_int.fe
 ---
-use core::prelude::*
+use std::prelude::*
 
 struct Flags {
     ok: bool,
