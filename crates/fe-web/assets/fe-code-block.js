@@ -71,6 +71,9 @@ class FeCodeBlock extends HTMLElement {
     // If SCIP is available, make highlighted spans interactive
     this._setupScipInteraction(code);
 
+    // Enrich type links with SCIP symbol data for hover highlighting
+    this._setupTypeLinkHighlighting(code);
+
     // Listen for live diagnostics from LSP
     this._setupLspDiagnostics(code);
   }
@@ -82,6 +85,16 @@ class FeCodeBlock extends HTMLElement {
 
     var file = this.getAttribute("data-file");
     if (!file) return;
+
+    // Pre-assign symbol CSS classes to all positional spans
+    var spans = codeEl.querySelectorAll("span[data-line]");
+    for (var i = 0; i < spans.length; i++) {
+      var span = spans[i];
+      var l = parseInt(span.getAttribute("data-line"), 10);
+      var c = parseInt(span.getAttribute("data-col"), 10);
+      var sym = scip.resolveSymbol(file, l, c);
+      if (sym) span.classList.add(scip.symbolClass(sym));
+    }
 
     // Click handler: resolve symbol at the clicked position
     codeEl.addEventListener("click", function (e) {
@@ -103,7 +116,7 @@ class FeCodeBlock extends HTMLElement {
       }
     });
 
-    // Hover handler: show symbol info tooltip
+    // Hover handler: show symbol info tooltip + highlight all occurrences via CSS class
     codeEl.addEventListener("mouseover", function (e) {
       var target = e.target;
       if (target.tagName !== "SPAN") return;
@@ -125,6 +138,7 @@ class FeCodeBlock extends HTMLElement {
         }
         target.style.cursor = "pointer";
         target.style.textDecoration = "underline";
+        feHighlight(scip.symbolClass(symbol));
       }
     });
 
@@ -132,8 +146,44 @@ class FeCodeBlock extends HTMLElement {
       if (e.target.tagName === "SPAN") {
         e.target.style.textDecoration = "";
         e.target.style.cursor = "";
+        feUnhighlight();
       }
     });
+  }
+
+  /** Enrich type links (<a class="type-link">) with SCIP symbol classes + hover tooltip. */
+  _setupTypeLinkHighlighting(codeEl) {
+    var scip = window.FE_SCIP;
+    if (!scip) return;
+
+    var links = codeEl.querySelectorAll("a.type-link");
+    for (var i = 0; i < links.length; i++) {
+      (function (a) {
+        var href = a.getAttribute("href") || "";
+        var docUrl = href.replace(/^#\/?/, "");
+        if (!docUrl) return;
+
+        var symbol = scip.symbolForDocUrl(docUrl);
+        if (!symbol) return;
+
+        var cls = scip.symbolClass(symbol);
+        a.classList.add(cls);
+
+        // Set hover tooltip from SCIP docs
+        var info = scip.symbolInfo(symbol);
+        if (info) {
+          try {
+            var parsed = JSON.parse(info);
+            if (parsed.documentation && parsed.documentation.length > 0) {
+              a.title = parsed.documentation[0].replace(/```[\s\S]*?```/g, "").trim();
+            }
+          } catch (_) {}
+        }
+
+        a.addEventListener("mouseenter", function () { feHighlight(cls); });
+        a.addEventListener("mouseleave", feUnhighlight);
+      })(links[i]);
+    }
   }
 
   /** Listen for LSP diagnostics and underline affected lines. */

@@ -68,7 +68,6 @@ pub fn generate_docs(
     }
 
     let mut db = DriverDataBase::default();
-    let mut is_workspace = false;
 
     let index = if path.is_file() && path.extension() == Some("fe") {
         extract_single_file(&mut db, path)
@@ -80,7 +79,6 @@ pub fn generate_docs(
                 if let Ok(common::config::Config::Workspace(ws_config)) =
                     common::config::Config::parse(&content)
                 {
-                    is_workspace = true;
                     extract_workspace(&mut db, path, &ws_config)
                 } else {
                     extract_ingot(&mut db, path)
@@ -142,13 +140,7 @@ pub fn generate_docs(
 
     // Generate SCIP for interactive navigation (best-effort).
     // This enriches rich_signature fields and produces JSON for embedding.
-    // Skipped for workspaces: each member uses its own db during extraction,
-    // so the main db has no ingot files and SCIP resolution would fail.
-    let scip_json = if is_workspace {
-        None
-    } else {
-        generate_scip_json_for_doc(&mut db, path, &mut index)
-    };
+    let scip_json = generate_scip_json_for_doc(&mut db, path, &mut index);
 
     if static_site {
         let output_dir = output
@@ -251,7 +243,7 @@ fn extract_single_file(db: &mut DriverDataBase, file_path: &Utf8PathBuf) -> Opti
 }
 
 fn extract_workspace(
-    _db: &mut DriverDataBase,
+    db: &mut DriverDataBase,
     workspace_root: &Utf8PathBuf,
     ws_config: &common::config::WorkspaceConfig,
 ) -> Option<DocIndex> {
@@ -276,8 +268,9 @@ fn extract_workspace(
             .join(", ")
     );
 
-    let mut combined = DocIndex::new();
-
+    // Initialize all members in the shared db first so cross-ingot
+    // references resolve correctly (e.g. ingot A imports ingot B).
+    let mut member_paths: Vec<(String, Utf8PathBuf)> = Vec::new();
     for member in &members {
         let member_path = Utf8PathBuf::from(workspace_root.join(member.path.as_str()));
         if !member_path.is_dir() {
@@ -288,25 +281,79 @@ fn extract_workspace(
             );
             continue;
         }
+        let member_name = member
+            .name
+            .as_deref()
+            .unwrap_or(member.path.as_str())
+            .to_string();
 
-        let member_name = member.name.as_deref().unwrap_or(member.path.as_str());
+        let canonical = match member_path.canonicalize_utf8() {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("  Warning: Failed to canonicalize '{member_name}': {e}");
+                continue;
+            }
+        };
+        let ingot_url = match Url::from_directory_path(canonical.as_str()) {
+            Ok(u) => u,
+            Err(_) => {
+                eprintln!("  Warning: Failed to build URL for '{member_name}'");
+                continue;
+            }
+        };
+
+        println!("  Initializing '{member_name}'...");
+        driver::init_ingot(db, &ingot_url);
+        member_paths.push((member_name, member_path));
+    }
+
+    // Extract docs from each member using the shared db
+    let mut combined = DocIndex::new();
+    for (member_name, member_path) in &member_paths {
         println!("  Extracting docs for '{member_name}'...");
 
-        // Each member gets its own fresh database to avoid cross-contamination
-        let mut member_db = DriverDataBase::default();
-        if let Some(member_index) = extract_ingot(&mut member_db, &member_path) {
-            combined.items.extend(member_index.items);
-            combined.modules.extend(member_index.modules);
-        } else {
-            eprintln!("  Warning: Failed to extract docs for '{member_name}'");
+        let canonical = match member_path.canonicalize_utf8() {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let ingot_url = match Url::from_directory_path(canonical.as_str()) {
+            Ok(u) => u,
+            Err(_) => continue,
+        };
+
+        let Some(ingot) = db.workspace().containing_ingot(db, ingot_url) else {
+            eprintln!("  Warning: Could not find ingot for '{member_name}'");
+            continue;
+        };
+
+        let diags = db.run_on_ingot(ingot);
+        if !diags.is_empty() {
+            eprintln!("  Warning: '{member_name}' has errors, documentation may be incomplete");
+            diags.emit(db);
         }
+
+        let extractor = DocExtractor::new(db);
+        for top_mod in ingot.all_modules(db) {
+            for item in top_mod.children_nested(db) {
+                if let Some(doc_item) = extractor.extract_item_for_ingot(item, ingot) {
+                    combined.items.push(doc_item);
+                }
+            }
+        }
+
+        let root_mod = ingot.root_mod(db);
+        combined
+            .modules
+            .extend(extractor.build_module_tree_for_ingot(ingot, root_mod));
+
+        let trait_impl_links = extractor.extract_trait_impl_links(ingot);
+        combined.link_trait_impls(trait_impl_links);
     }
 
     if combined.items.is_empty() && combined.modules.is_empty() {
         eprintln!("Error: No documentation extracted from workspace members");
         return None;
     }
-
 
     Some(combined)
 }
@@ -357,36 +404,101 @@ fn extract_ingot(db: &mut DriverDataBase, dir_path: &Utf8PathBuf) -> Option<DocI
 /// Also enriches the DocIndex's `rich_signature` fields using the SCIP
 /// symbol table before returning the JSON string.
 ///
+/// For workspaces, generates SCIP for each member ingot and merges results.
 /// Returns `None` if generation fails (SCIP is optional progressive enhancement).
 fn generate_scip_json_for_doc(
     db: &mut DriverDataBase,
     path: &Utf8PathBuf,
     doc_index: &mut fe_web::model::DocIndex,
 ) -> Option<String> {
-    let ingot_url = if path.is_dir() {
+    // Collect ingot URLs to generate SCIP for.
+    // For a single ingot, this is just the path itself.
+    // For a workspace, we find all user ingots loaded in the db.
+    let ingot_urls = collect_ingot_urls(db, path);
+    if ingot_urls.is_empty() {
+        return None;
+    }
+
+    // Generate SCIP for each ingot and merge into one index
+    let mut combined_index = scip::types::Index::default();
+    let mut any_succeeded = false;
+
+    for ingot_url in &ingot_urls {
+        match crate::scip_index::generate_scip(db, ingot_url) {
+            Ok(scip_index) => {
+                let project_root = ingot_url
+                    .to_file_path()
+                    .ok()
+                    .and_then(|p| camino::Utf8PathBuf::from_path_buf(p).ok());
+
+                if let Some(ref root) = project_root {
+                    crate::scip_index::enrich_signatures(db, root, doc_index, &scip_index);
+                }
+
+                combined_index.documents.extend(scip_index.documents);
+                any_succeeded = true;
+            }
+            Err(e) => {
+                eprintln!("Warning: SCIP generation failed for {}: {e}", ingot_url);
+            }
+        }
+    }
+
+    if !any_succeeded {
+        return None;
+    }
+
+    let json = crate::scip_index::scip_to_json_data(&combined_index);
+    Some(crate::scip_index::inject_doc_urls(&json, doc_index))
+}
+
+/// Collect ingot URLs to generate SCIP for.
+///
+/// For a single ingot path, returns that path's URL.
+/// For a workspace, reads fe.toml to find member paths.
+fn collect_ingot_urls(db: &DriverDataBase, path: &Utf8PathBuf) -> Vec<Url> {
+    // Try the path itself as a single ingot first
+    if let Some(url) = path_to_ingot_url(path) {
+        if db.workspace().containing_ingot(db, url.clone()).is_some() {
+            return vec![url];
+        }
+    }
+
+    // Workspace mode: read fe.toml to discover member ingot paths
+    let fe_toml = path.join("fe.toml");
+    let content = match std::fs::read_to_string(&fe_toml) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+    let ws_config = match common::config::Config::parse(&content) {
+        Ok(common::config::Config::Workspace(ws)) => ws,
+        _ => return Vec::new(),
+    };
+
+    let members = ws_config
+        .workspace
+        .members_for_selection(common::config::WorkspaceMemberSelection::PrimaryOnly);
+
+    let mut urls = Vec::new();
+    for member in &members {
+        let member_path = Utf8PathBuf::from(path.join(member.path.as_str()));
+        if let Some(url) = path_to_ingot_url(&member_path) {
+            if db.workspace().containing_ingot(db, url.clone()).is_some() {
+                urls.push(url);
+            }
+        }
+    }
+    urls
+}
+
+fn path_to_ingot_url(path: &Utf8PathBuf) -> Option<Url> {
+    if path.is_dir() {
         let canonical = path.canonicalize_utf8().ok()?;
-        Url::from_directory_path(canonical.as_str()).ok()?
+        Url::from_directory_path(canonical.as_str()).ok()
     } else {
         let canonical = path.canonicalize_utf8().ok()?;
         let parent = canonical.parent()?;
-        Url::from_directory_path(parent.as_str()).ok()?
-    };
-
-    let project_root = ingot_url
-        .to_file_path()
-        .ok()
-        .and_then(|p| camino::Utf8PathBuf::from_path_buf(p).ok())?;
-
-    match crate::scip_index::generate_scip(db, &ingot_url) {
-        Ok(scip_index) => {
-            crate::scip_index::enrich_signatures(db, &project_root, doc_index, &scip_index);
-            let json = crate::scip_index::scip_to_json_data(&scip_index);
-            Some(crate::scip_index::inject_doc_urls(&json, doc_index))
-        }
-        Err(e) => {
-            eprintln!("Warning: SCIP generation failed: {e}");
-            None
-        }
+        Url::from_directory_path(parent.as_str()).ok()
     }
 }
 

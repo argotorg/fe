@@ -552,6 +552,13 @@ pub fn inject_doc_urls(scip_json: &str, doc_index: &DocIndex) -> String {
             let anchor = format!("{}.{}", child.kind.anchor_prefix(), child.name);
             child_to_url.insert(child.name.clone(), format!("{}~{}", parent_url, anchor));
         }
+        // Also include methods from trait impl blocks
+        for trait_impl in &item.trait_impls {
+            for method in &trait_impl.methods {
+                let anchor = format!("method.{}", method.name);
+                child_to_url.insert(method.name.clone(), format!("{}~{}", parent_url, anchor));
+            }
+        }
     }
 
     if let Some(symbols) = root.get_mut("symbols").and_then(|s| s.as_object_mut()) {
@@ -631,6 +638,21 @@ pub fn enrich_signatures(
                     }
                 })
                 .or_insert(Some(url));
+        }
+        // Also include methods from trait impl blocks
+        for trait_impl in &item.trait_impls {
+            for method in &trait_impl.methods {
+                let anchor = format!("method.{}", method.name);
+                let url = format!("{}~{}", parent_url, anchor);
+                name_seen
+                    .entry(method.name.clone())
+                    .and_modify(|existing| {
+                        if existing.as_deref() != Some(url.as_str()) {
+                            *existing = None;
+                        }
+                    })
+                    .or_insert(Some(url));
+            }
         }
     }
     for doc in &scip_index.documents {

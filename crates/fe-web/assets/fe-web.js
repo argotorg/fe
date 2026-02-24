@@ -117,6 +117,26 @@
     return names[kind] || kind;
   }
 
+  /** Detect compiler-generated types (tuples, etc.) that have no doc page. */
+  function isGeneratedType(urlPath) {
+    var slashIdx = urlPath.lastIndexOf("/");
+    var path = slashIdx !== -1 ? urlPath.substring(0, slashIdx) : urlPath;
+    // Tuple types: (T0, T1, ...) or (T0, T1, ...)/struct
+    if (path.charAt(0) === "(") return true;
+    return false;
+  }
+
+  function renderGeneratedType(urlPath) {
+    var slashIdx = urlPath.lastIndexOf("/");
+    var path = slashIdx !== -1 ? urlPath.substring(0, slashIdx) : urlPath;
+    var html = '<div class="generated-type"><h1>Compiler-Generated Type</h1>';
+    html += '<pre class="signature"><fe-code-block lang="fe">' + esc(path) + "</fe-code-block></pre>";
+    html += "<p>This is a compiler-generated type. Tuple types like <code>" + esc(path) + "</code> ";
+    html += "are created automatically by the compiler and do not have dedicated documentation pages.</p>";
+    html += "</div>";
+    return html;
+  }
+
   var CHILD_KIND_INFO = {
     field: { plural: "Fields", anchor: "field", order: 1 },
     variant: { plural: "Variants", anchor: "variant", order: 0 },
@@ -130,12 +150,14 @@
   // ============================================================================
 
   function renderRichSignature(rich, fallback, highlightedFallback) {
+    // Prefer highlighted HTML (has both syntax colors and type links)
+    if (highlightedFallback) {
+      return '<fe-code-block lang="fe" highlighted>' + highlightedFallback + "</fe-code-block>";
+    }
+    // Fall back to fe-signature for rich_signature-only data (e.g. dynamic rendering)
     if (rich && rich.length > 0) {
       var jsonAttr = esc(JSON.stringify(rich));
       return "<fe-signature data='" + jsonAttr + "'>" + esc(fallback || "") + "</fe-signature>";
-    }
-    if (highlightedFallback) {
-      return '<fe-code-block lang="fe" highlighted>' + highlightedFallback + "</fe-code-block>";
     }
     return '<fe-code-block lang="fe">' + esc(fallback || "") + "</fe-code-block>";
   }
@@ -219,6 +241,7 @@
 
   function renderDocItem(item, index) {
     var isModule = item.kind === "module";
+    var parentUrl = item.path + "/" + kindStr(item.kind);
     var html = '<article class="doc-item">';
 
     // Breadcrumbs
@@ -252,17 +275,17 @@
 
     // Children (fields, variants, methods)
     if (item.children && item.children.length > 0) {
-      html += renderChildren(item.children);
+      html += renderChildren(item.children, parentUrl);
     }
 
     // Trait implementations
     if (item.trait_impls && item.trait_impls.length > 0) {
-      html += renderTraitImpls(item.trait_impls);
+      html += renderTraitImpls(item.trait_impls, parentUrl);
     }
 
     // Implementors (for trait pages)
     if (item.implementors && item.implementors.length > 0) {
-      html += renderImplementors(item.implementors);
+      html += renderImplementors(item.implementors, parentUrl);
     }
 
     html += "</article>";
@@ -300,7 +323,7 @@
   // Children (Fields, Variants, Methods)
   // ============================================================================
 
-  function renderChildren(children) {
+  function renderChildren(children, parentUrl) {
     var grouped = groupByKind(children, function (child) {
       var info = CHILD_KIND_INFO[child.kind] || { plural: child.kind, anchor: child.kind, order: 99 };
       return { key: child.kind, kind: child.kind, plural: info.plural, order: info.order };
@@ -312,14 +335,14 @@
       var sectionId = info.anchor + "s";
       html += '<section class="children-section" id="' + esc(sectionId) + '">';
       html += "<h2>" + esc(group.plural);
-      html += '<a href="#' + esc(sectionId) + '" class="anchor">\u00a7</a>';
+      html += '<a href="#' + esc(parentUrl) + "~" + esc(sectionId) + '" class="anchor">\u00a7</a>';
       html += "</h2>";
       html += '<div class="member-list">';
       group.items.forEach(function (child) {
         var anchorId = info.anchor + "." + child.name;
         html += '<div class="member-item" id="' + esc(anchorId) + '">';
         html += '<div class="member-header">';
-        html += '<a href="#' + esc(anchorId) + '" class="anchor">\u00a7</a>';
+        html += '<a href="#' + esc(parentUrl) + "~" + esc(anchorId) + '" class="anchor">\u00a7</a>';
         var sig = child.signature || child.name;
         html += renderRichSignature(child.rich_signature, sig, child.highlighted_signature);
         html += "</div>";
@@ -338,7 +361,7 @@
   // Trait Implementations
   // ============================================================================
 
-  function renderTraitImpls(impls) {
+  function renderTraitImpls(impls, parentUrl) {
     var traitImpls = [];
     var inherentImpls = [];
     impls.forEach(function (impl) {
@@ -353,21 +376,21 @@
 
     if (inherentImpls.length > 0) {
       html += '<section class="inherent-impls" id="implementations">';
-      html += '<h2>Implementations<a href="#implementations" class="anchor">\u00a7</a></h2>';
+      html += '<h2>Implementations<a href="#' + esc(parentUrl) + '~implementations" class="anchor">\u00a7</a></h2>';
       html += '<div class="impl-list">';
       inherentImpls.forEach(function (impl, idx) {
-        html += renderImplBlock(impl, "impl-" + idx);
+        html += renderImplBlock(impl, "impl-" + idx, parentUrl);
       });
       html += "</div></section>";
     }
 
     if (traitImpls.length > 0) {
       html += '<section class="trait-impls" id="trait-implementations">';
-      html += '<h2>Trait Implementations<a href="#trait-implementations" class="anchor">\u00a7</a></h2>';
+      html += '<h2>Trait Implementations<a href="#' + esc(parentUrl) + '~trait-implementations" class="anchor">\u00a7</a></h2>';
       html += '<div class="impl-list">';
       traitImpls.forEach(function (impl) {
         var anchorId = "impl-" + impl.trait_name.replace(/[<> ,]/g, "_");
-        html += renderImplBlock(impl, anchorId);
+        html += renderImplBlock(impl, anchorId, parentUrl);
       });
       html += "</div></section>";
     }
@@ -376,14 +399,14 @@
     return html;
   }
 
-  function renderImplBlock(impl_, anchorId) {
+  function renderImplBlock(impl_, anchorId, parentUrl) {
     var isTraitImpl = !!impl_.trait_name;
     var headerDisplay = isTraitImpl ? "impl " + impl_.trait_name : impl_.signature;
 
     var html = '<details class="impl-block toggle" open id="' + esc(anchorId) + '">';
     html += "<summary>";
     html += '<span class="impl-header">';
-    html += '<a href="#' + esc(anchorId) + '" class="anchor">\u00a7</a>';
+    html += '<a href="#' + esc(parentUrl) + "~" + esc(anchorId) + '" class="anchor">\u00a7</a>';
     html += "<h3><code>" + esc(headerDisplay) + "</code></h3>";
     html += "</span></summary>";
     html += '<div class="impl-content">';
@@ -400,7 +423,7 @@
       html += '<div class="impl-items">';
       impl_.methods.forEach(function (method) {
         var methodAnchor = "method." + method.name;
-        html += renderMethodItem(method, methodAnchor);
+        html += renderMethodItem(method, methodAnchor, parentUrl);
       });
       html += "</div>";
     }
@@ -409,10 +432,11 @@
     return html;
   }
 
-  function renderMethodItem(method, anchorId) {
+  function renderMethodItem(method, anchorId, parentUrl) {
+    var anchorHref = parentUrl ? "#" + esc(parentUrl) + "~" + esc(anchorId) : "#" + esc(anchorId);
     var headerHtml =
       '<div class="method-header">' +
-      '<a href="#' + esc(anchorId) + '" class="anchor">\u00a7</a>' +
+      '<a href="' + anchorHref + '" class="anchor">\u00a7</a>' +
       '<h4 class="code-header">' + renderRichSignature(method.rich_signature, method.signature, method.highlighted_signature) + "</h4>" +
       "</div>";
 
@@ -484,15 +508,15 @@
   // Implementors (for trait pages)
   // ============================================================================
 
-  function renderImplementors(implementors) {
+  function renderImplementors(implementors, parentUrl) {
     var html = '<section class="implementors" id="implementors">';
-    html += '<h2>Implementors<a href="#implementors" class="anchor">\u00a7</a></h2>';
+    html += '<h2>Implementors<a href="#' + esc(parentUrl) + '~implementors" class="anchor">\u00a7</a></h2>';
     html += '<div class="implementor-list">';
     implementors.forEach(function (imp) {
       var anchorId = "impl-" + imp.type_name.replace(/[<> ,]/g, "_");
       var implLink = itemHref(imp.type_url + "~impl-" + imp.trait_name);
       html += '<div class="implementor-item" id="' + esc(anchorId) + '">';
-      html += '<a href="#' + esc(anchorId) + '" class="anchor">\u00a7</a>';
+      html += '<a href="#' + esc(parentUrl) + "~" + esc(anchorId) + '" class="anchor">\u00a7</a>';
       html += '<code class="implementor-sig">';
       html += renderRichSignature(imp.rich_signature, imp.signature, imp.highlighted_signature);
       html += "</code>";
@@ -548,6 +572,8 @@
       contentEl.innerHTML =
         '<div class="not-found"><h1>Fe Documentation</h1>' +
         "<p>Select an item from the sidebar to view its documentation.</p></div>";
+    } else if (isGeneratedType(path)) {
+      contentEl.innerHTML = renderGeneratedType(path);
     } else {
       contentEl.innerHTML =
         '<div class="not-found"><h1>Item Not Found</h1>' +

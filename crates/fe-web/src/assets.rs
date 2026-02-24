@@ -51,7 +51,7 @@ pub fn html_shell_with_scip(
     let scip_section = if let Some(json) = scip_json {
         let safe_scip = escape_script_content(json);
         format!(
-            "\n  <script>{scip_store_js}</script>\n  <script>window.FE_SCIP_DATA = {scip_data};\nif (window.FE_SCIP_DATA) window.FE_SCIP = new ScipStore(window.FE_SCIP_DATA);</script>",
+            "\n  <script>{scip_store_js}</script>\n  <script>try {{ window.FE_SCIP_DATA = {scip_data};\nwindow.FE_SCIP = new ScipStore(window.FE_SCIP_DATA); }} catch(e) {{ console.error('[fe-scip] init failed:', e); }}</script>",
             scip_store_js = FE_SCIP_STORE_JS,
             scip_data = safe_scip,
         )
