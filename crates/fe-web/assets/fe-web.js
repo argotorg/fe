@@ -577,11 +577,14 @@
         '<p class="not-found-hint">It may have been renamed or removed.</p></div>';
     }
 
-    // Scroll to in-page anchor (e.g. ~impl-Bound)
+    // Scroll to in-page anchor (e.g. ~impl-Bound), or top for new pages
     var anchor = currentAnchor();
     if (anchor) {
       var el = document.getElementById(anchor);
       if (el) el.scrollIntoView({ behavior: "smooth" });
+    } else {
+      contentEl.scrollTop = 0;
+      window.scrollTo(0, 0);
     }
   }
 
