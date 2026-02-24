@@ -573,7 +573,6 @@ fn detect_source_link_base(working_dir: &std::path::Path) -> Option<String> {
     Some(format!("{}/blob/{}", CANONICAL_REPO, commit))
 }
 
-
 fn print_doc_summary(index: &DocIndex) {
     println!("Fe Documentation Index");
     println!("======================");
