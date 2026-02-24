@@ -225,6 +225,23 @@ impl<'db, 'a> LowerReprCtx<'db, 'a> {
         })
     }
 
+    fn emit_assign_with_spill_sync(
+        &mut self,
+        source: SourceInfoId,
+        dest: LocalId,
+        rvalue: Rvalue<'db>,
+        out: &mut Vec<MirInst<'db>>,
+    ) {
+        out.push(MirInst::Assign {
+            source,
+            dest: Some(dest),
+            rvalue,
+        });
+        if let Some(spill_sync) = self.emit_spill_sync_for_local(dest) {
+            out.push(spill_sync);
+        }
+    }
+
     fn emit_local_reload_from_spill(&self, local: LocalId) -> Option<MirInst<'db>> {
         let spill_base = self.spill_base_for_owner(local)?;
         let update_place = Place::new(spill_base, MirProjectionPath::new());
@@ -383,15 +400,14 @@ impl<'db, 'a> LowerReprCtx<'db, 'a> {
             return;
         }
 
-        out.push(MirInst::Assign {
-            source,
-            dest,
-            rvalue: Rvalue::Load { place },
-        });
-        if let Some(dest) = dest
-            && let Some(spill_sync) = self.emit_spill_sync_for_local(dest)
-        {
-            out.push(spill_sync);
+        if let Some(dest) = dest {
+            self.emit_assign_with_spill_sync(source, dest, Rvalue::Load { place }, out);
+        } else {
+            out.push(MirInst::Assign {
+                source,
+                dest,
+                rvalue: Rvalue::Load { place },
+            });
         }
     }
 
@@ -402,14 +418,7 @@ impl<'db, 'a> LowerReprCtx<'db, 'a> {
         rvalue: Rvalue<'db>,
         out: &mut Vec<MirInst<'db>>,
     ) {
-        out.push(MirInst::Assign {
-            source,
-            dest: Some(dest),
-            rvalue: rvalue.clone(),
-        });
-        if let Some(spill_sync) = self.emit_spill_sync_for_local(dest) {
-            out.push(spill_sync);
-        }
+        self.emit_assign_with_spill_sync(source, dest, rvalue, out);
     }
 
     fn rewrite_assign_generic(
@@ -477,14 +486,7 @@ impl<'db, 'a> LowerReprCtx<'db, 'a> {
                 .unwrap_or(local_ty);
 
             if place.projection.is_empty() {
-                out.push(MirInst::Assign {
-                    source,
-                    dest: Some(local),
-                    rvalue: Rvalue::Value(value),
-                });
-                if let Some(spill_sync) = self.emit_spill_sync_for_local(local) {
-                    out.push(spill_sync);
-                }
+                self.emit_assign_with_spill_sync(source, local, Rvalue::Value(value), out);
                 return;
             }
 
@@ -528,14 +530,12 @@ impl<'db, 'a> LowerReprCtx<'db, 'a> {
                             },
                         )
                     };
-                    out.push(MirInst::Assign {
+                    self.emit_assign_with_spill_sync(
                         source,
-                        dest: Some(local),
-                        rvalue: Rvalue::Value(assign_value),
-                    });
-                    if let Some(spill_sync) = self.emit_spill_sync_for_local(local) {
-                        out.push(spill_sync);
-                    }
+                        local,
+                        Rvalue::Value(assign_value),
+                        out,
+                    );
                     return;
                 }
             }
