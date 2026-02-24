@@ -8,6 +8,24 @@
 // Usage:
 //   window.FE_SCIP = new ScipStore(window.FE_SCIP_DATA);
 
+// Shared <style> element for symbol hover highlighting.
+// Inserting/removing a single CSS rule is all that's needed — the browser
+// applies it to every element carrying the symbol's class.
+var _highlightSheet = null;
+function feHighlight(symClass) {
+  if (!_highlightSheet) {
+    _highlightSheet = document.createElement("style");
+    _highlightSheet.id = "fe-sym-highlight";
+    document.head.appendChild(_highlightSheet);
+  }
+  _highlightSheet.textContent = "." + symClass +
+    " { background: rgba(74,222,128,0.35); border-radius: 2px;" +
+    " outline: 1px solid rgba(74,222,128,0.5); transition: background 0.15s ease; }";
+}
+function feUnhighlight() {
+  if (_highlightSheet) _highlightSheet.textContent = "";
+}
+
 function ScipStore(data) {
   this._symbols = data.symbols || {};
   this._files = data.files || {};
@@ -109,4 +127,33 @@ ScipStore.prototype.findReferences = function (symbol) {
 ScipStore.prototype.docUrl = function (symbol) {
   var info = this._symbols[symbol];
   return info ? (info.doc_url || null) : null;
+};
+
+// Return a CSS-safe class name for a SCIP symbol (e.g. "sym-a3f1b2").
+ScipStore.prototype.symbolClass = function (symbol) {
+  if (!this._classCache) this._classCache = {};
+  if (this._classCache[symbol]) return this._classCache[symbol];
+  // djb2 hash → 6-char hex
+  var h = 5381;
+  for (var i = 0; i < symbol.length; i++) {
+    h = ((h << 5) + h + symbol.charCodeAt(i)) >>> 0;
+  }
+  var cls = "sym-" + ("000000" + h.toString(16)).slice(-6);
+  this._classCache[symbol] = cls;
+  return cls;
+};
+
+// Reverse lookup: find SCIP symbol string for a doc URL. Returns symbol or null.
+ScipStore.prototype.symbolForDocUrl = function (docUrl) {
+  // Lazily build reverse index on first call
+  if (!this._byDocUrl) {
+    this._byDocUrl = {};
+    var syms = this._symbols;
+    for (var sym in syms) {
+      if (!syms.hasOwnProperty(sym)) continue;
+      var url = syms[sym].doc_url;
+      if (url) this._byDocUrl[url] = sym;
+    }
+  }
+  return this._byDocUrl[docUrl] || null;
 };

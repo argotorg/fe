@@ -174,6 +174,13 @@ pub fn build_type_links(index: &DocIndex, scip_json: Option<&str>) -> HashMap<St
             let anchor = format!("{}.{}", child.kind.anchor_prefix(), child.name);
             insert(child.name.clone(), format!("{}~{}", parent_url, anchor));
         }
+        // Also include methods from trait impl blocks
+        for trait_impl in &item.trait_impls {
+            for method in &trait_impl.methods {
+                let anchor = format!("method.{}", method.name);
+                insert(method.name.clone(), format!("{}~{}", parent_url, anchor));
+            }
+        }
     }
 
     // Only keep unambiguous names
@@ -193,17 +200,7 @@ pub fn build_type_links(index: &DocIndex, scip_json: Option<&str>) -> HashMap<St
 pub fn inject_type_links(value: &mut serde_json::Value, type_links: &HashMap<String, String>) {
     match value {
         serde_json::Value::Object(map) => {
-            // Skip highlighted_signature linking when rich_signature is present —
-            // those links are compiler-resolved via SCIP and more accurate.
-            let has_rich_sig = map
-                .get("rich_signature")
-                .and_then(|v| v.as_array())
-                .is_some_and(|a| !a.is_empty());
-
             for key in ["highlighted_signature", "html_body"] {
-                if key == "highlighted_signature" && has_rich_sig {
-                    continue;
-                }
                 if let Some(html) = map.get(key).and_then(|v| v.as_str()) {
                     let linked = link_types_in_html(html, type_links);
                     if linked != html {
@@ -232,6 +229,9 @@ const LINKABLE_PREFIXES: &[(&str, &str)] = &[
     ("<span  class=\"hl-type-enum-variant\">", "hl-type-enum-variant"),
     ("<span  class=\"hl-type-interface\">", "hl-type-interface"),
     ("<span  class=\"hl-type-builtin\">", "hl-type-builtin"),
+    // tree-sitter classifies enum variants with payloads (e.g. Some(T)) as
+    // functions; include them so they still get linked when unambiguous.
+    ("<span  class=\"hl-function\">", "hl-function"),
 ];
 
 /// Replace type-highlighted spans with anchor links for known types.
