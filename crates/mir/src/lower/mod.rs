@@ -27,7 +27,10 @@ use hir::hir_def::{
 };
 
 use crate::{
-    capability_space::{CapabilitySpaceConflict, normalize_capability_space_entries},
+    capability_space::{
+        CapabilitySpaceConflict, capability_spaces_for_ty_with_default,
+        normalize_capability_space_entries,
+    },
     core_lib::CoreLib,
     ir::{
         AddressSpaceKind, BasicBlockId, BodyBuilder, CallOrigin, CodeRegionRoot, ContractFunction,
@@ -790,7 +793,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         binding: Option<LocalBinding<'db>>,
     ) -> LocalId {
         let capability_spaces =
-            self.capability_spaces_for_ty_with_default(ty, AddressSpaceKind::Memory);
+            capability_spaces_for_ty_with_default(self.db, ty, AddressSpaceKind::Memory);
         let local = self.builder.body.alloc_local(LocalData {
             name,
             ty,
@@ -813,7 +816,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         address_space: AddressSpaceKind,
     ) -> LocalId {
         let ty = self.u256_ty();
-        let capability_spaces = self.capability_spaces_for_ty_with_default(ty, address_space);
+        let capability_spaces = capability_spaces_for_ty_with_default(self.db, ty, address_space);
         let local = self.builder.body.alloc_local(LocalData {
             name,
             ty,
@@ -1168,7 +1171,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let idx = self.builder.body.locals.len();
         let name = format!("tmp_{hint}{idx}");
         let capability_spaces =
-            self.capability_spaces_for_ty_with_default(ty, AddressSpaceKind::Memory);
+            capability_spaces_for_ty_with_default(self.db, ty, AddressSpaceKind::Memory);
         self.builder.body.alloc_local(LocalData {
             name,
             ty,
@@ -1222,61 +1225,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 conflict.path, conflict.existing, conflict.incoming
             ),
         });
-    }
-
-    fn collect_capability_leaf_paths_inner(
-        &self,
-        ty: TyId<'db>,
-        prefix: &MirProjectionPath<'db>,
-        out: &mut Vec<MirProjectionPath<'db>>,
-        active: &mut FxHashSet<TyId<'db>>,
-    ) {
-        // Track only the active recursion chain so sibling branches that reuse the same field
-        // type are still traversed.
-        if !active.insert(ty) {
-            return;
-        }
-
-        if let Some((_, inner)) = ty.as_capability(self.db) {
-            let before = out.len();
-            self.collect_capability_leaf_paths_inner(inner, prefix, out, active);
-            if out.len() == before {
-                out.push(prefix.clone());
-            }
-        } else if let Some(inner) = crate::repr::transparent_newtype_field_ty(self.db, ty) {
-            self.collect_capability_leaf_paths_inner(inner, prefix, out, active);
-        } else {
-            for (idx, field_ty) in ty.field_types(self.db).iter().copied().enumerate() {
-                let mut field_prefix = prefix.clone();
-                field_prefix.push(MirProjection::Field(idx));
-                self.collect_capability_leaf_paths_inner(field_ty, &field_prefix, out, active);
-            }
-        }
-
-        active.remove(&ty);
-    }
-
-    fn capability_leaf_paths_for_ty(&self, ty: TyId<'db>) -> Vec<MirProjectionPath<'db>> {
-        let mut out = Vec::new();
-        let mut active = FxHashSet::default();
-        self.collect_capability_leaf_paths_inner(
-            ty,
-            &MirProjectionPath::new(),
-            &mut out,
-            &mut active,
-        );
-        out
-    }
-
-    fn capability_spaces_for_ty_with_default(
-        &self,
-        ty: TyId<'db>,
-        default_space: AddressSpaceKind,
-    ) -> Vec<(MirProjectionPath<'db>, AddressSpaceKind)> {
-        self.capability_leaf_paths_for_ty(ty)
-            .into_iter()
-            .map(|path| (path, default_space))
-            .collect()
     }
 
     fn capability_spaces_for_projection_from_local(
@@ -1866,8 +1814,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             Rvalue::Value(value) => self.capability_spaces_for_value(*value),
             Rvalue::Load { place } => self.capability_spaces_for_place(place, dest_ty),
             Rvalue::Call(call) => {
-                let mut spaces =
-                    self.capability_spaces_for_ty_with_default(dest_ty, AddressSpaceKind::Memory);
+                let mut spaces = capability_spaces_for_ty_with_default(
+                    self.db,
+                    dest_ty,
+                    AddressSpaceKind::Memory,
+                );
                 if spaces.is_empty() && hir::analysis::ty::ty_is_noesc(self.db, dest_ty) {
                     spaces.push((MirProjectionPath::new(), AddressSpaceKind::Memory));
                 }
@@ -2290,7 +2241,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             };
             let address_space = self.address_space_for_binding(&binding);
             let mut capability_spaces =
-                self.capability_spaces_for_ty_with_default(ty, address_space);
+                capability_spaces_for_ty_with_default(self.db, ty, address_space);
             if let Some(overrides) = self.param_capability_space_overrides.get(idx) {
                 for (path, space) in overrides {
                     capability_spaces.retain(|(existing, _)| existing != path);
@@ -2391,7 +2342,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             is_mut,
             source,
             address_space: self.address_space_for_binding(&binding),
-            capability_spaces: self.capability_spaces_for_ty_with_default(
+            capability_spaces: capability_spaces_for_ty_with_default(
+                self.db,
                 ty,
                 self.address_space_for_binding(&binding),
             ),

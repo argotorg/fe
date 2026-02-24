@@ -31,7 +31,10 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
     CallOrigin, MirFunction,
-    capability_space::normalize_capability_space_entries,
+    capability_space::{
+        capability_leaf_paths_for_ty, capability_spaces_for_ty_with_default,
+        normalize_capability_space_entries,
+    },
     dedup::deduplicate_mir,
     ir::AddressSpaceKind,
     lower::{MirLowerError, MirLowerResult, lower_function},
@@ -774,17 +777,6 @@ impl<'db> Monomorphizer<'db> {
         )
     }
 
-    fn capability_spaces_for_ty_with_default(
-        &self,
-        ty: TyId<'db>,
-        default_space: AddressSpaceKind,
-    ) -> Vec<(crate::MirProjectionPath<'db>, AddressSpaceKind)> {
-        self.capability_leaf_paths_for_ty(ty)
-            .into_iter()
-            .map(|path| (path, default_space))
-            .collect()
-    }
-
     fn apply_synthetic_param_capability_space_overrides(
         &self,
         instance: &mut MirFunction<'db>,
@@ -799,7 +791,7 @@ impl<'db> Monomorphizer<'db> {
             };
             let local = &mut instance.body.locals[param_local.index()];
             let mut capability_spaces =
-                self.capability_spaces_for_ty_with_default(local.ty, local.address_space);
+                capability_spaces_for_ty_with_default(self.db, local.ty, local.address_space);
             for (path, space) in entries {
                 capability_spaces.retain(|(existing, _)| existing != path);
                 capability_spaces.push((path.clone(), *space));
@@ -1281,50 +1273,6 @@ impl<'db> Monomorphizer<'db> {
         Some(idx)
     }
 
-    fn collect_capability_leaf_paths_inner(
-        &self,
-        ty: TyId<'db>,
-        prefix: &crate::MirProjectionPath<'db>,
-        out: &mut Vec<crate::MirProjectionPath<'db>>,
-        active: &mut FxHashSet<TyId<'db>>,
-    ) {
-        // Track only the active recursion chain so sibling branches that reuse the same field
-        // type are still traversed.
-        if !active.insert(ty) {
-            return;
-        }
-
-        if let Some((_, inner)) = ty.as_capability(self.db) {
-            let before = out.len();
-            self.collect_capability_leaf_paths_inner(inner, prefix, out, active);
-            if out.len() == before {
-                out.push(prefix.clone());
-            }
-        } else if let Some(inner) = crate::repr::transparent_newtype_field_ty(self.db, ty) {
-            self.collect_capability_leaf_paths_inner(inner, prefix, out, active);
-        } else {
-            for (idx, field_ty) in ty.field_types(self.db).iter().copied().enumerate() {
-                let mut field_prefix = prefix.clone();
-                field_prefix.push(hir::projection::Projection::Field(idx));
-                self.collect_capability_leaf_paths_inner(field_ty, &field_prefix, out, active);
-            }
-        }
-
-        active.remove(&ty);
-    }
-
-    fn capability_leaf_paths_for_ty(&self, ty: TyId<'db>) -> Vec<crate::MirProjectionPath<'db>> {
-        let mut out = Vec::new();
-        let mut active = FxHashSet::default();
-        self.collect_capability_leaf_paths_inner(
-            ty,
-            &crate::MirProjectionPath::new(),
-            &mut out,
-            &mut active,
-        );
-        out
-    }
-
     fn arg_capability_space_at_path(
         &self,
         caller: &MirFunction<'db>,
@@ -1384,7 +1332,7 @@ impl<'db> Monomorphizer<'db> {
 
             let mut folder = ParamSubstFolder { args };
             let param_ty = param.ty(self.db).fold_with(self.db, &mut folder);
-            for path in self.capability_leaf_paths_for_ty(param_ty) {
+            for path in capability_leaf_paths_for_ty(self.db, param_ty) {
                 if let Some(space) = self.arg_capability_space_at_path(caller, arg_value, &path)
                     && !matches!(space, AddressSpaceKind::Memory)
                 {
@@ -1499,7 +1447,7 @@ impl<'db> Monomorphizer<'db> {
                 continue;
             };
             let param_ty = template.body.local(*param_local).ty;
-            for path in self.capability_leaf_paths_for_ty(param_ty) {
+            for path in capability_leaf_paths_for_ty(self.db, param_ty) {
                 if let Some(space) = self.arg_capability_space_at_path(caller, arg_value, &path)
                     && !matches!(space, AddressSpaceKind::Memory)
                 {

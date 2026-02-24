@@ -1,6 +1,7 @@
-use rustc_hash::FxHashMap;
+use hir::analysis::{HirAnalysisDb, ty::ty_def::TyId};
+use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::ir::AddressSpaceKind;
+use crate::{MirProjection, MirProjectionPath, ir::AddressSpaceKind};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CapabilitySpaceConflict<'db> {
@@ -35,6 +36,59 @@ pub(crate) fn normalize_capability_space_entries<'db>(
     let mut out: Vec<_> = merged.into_iter().collect();
     out.sort_by_cached_key(|(path, _)| format!("{path:?}"));
     Ok(out)
+}
+
+fn collect_capability_leaf_paths_inner<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    prefix: &MirProjectionPath<'db>,
+    out: &mut Vec<MirProjectionPath<'db>>,
+    active: &mut FxHashSet<TyId<'db>>,
+) {
+    // Track only the active recursion chain so sibling branches that reuse the same field type
+    // are still traversed.
+    if !active.insert(ty) {
+        return;
+    }
+
+    if let Some((_, inner)) = ty.as_capability(db) {
+        let before = out.len();
+        collect_capability_leaf_paths_inner(db, inner, prefix, out, active);
+        if out.len() == before {
+            out.push(prefix.clone());
+        }
+    } else if let Some(inner) = crate::repr::transparent_newtype_field_ty(db, ty) {
+        collect_capability_leaf_paths_inner(db, inner, prefix, out, active);
+    } else {
+        for (idx, field_ty) in ty.field_types(db).iter().copied().enumerate() {
+            let mut field_prefix = prefix.clone();
+            field_prefix.push(MirProjection::Field(idx));
+            collect_capability_leaf_paths_inner(db, field_ty, &field_prefix, out, active);
+        }
+    }
+
+    active.remove(&ty);
+}
+
+pub(crate) fn capability_leaf_paths_for_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+) -> Vec<MirProjectionPath<'db>> {
+    let mut out = Vec::new();
+    let mut active = FxHashSet::default();
+    collect_capability_leaf_paths_inner(db, ty, &MirProjectionPath::new(), &mut out, &mut active);
+    out
+}
+
+pub(crate) fn capability_spaces_for_ty_with_default<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    default_space: AddressSpaceKind,
+) -> Vec<(MirProjectionPath<'db>, AddressSpaceKind)> {
+    capability_leaf_paths_for_ty(db, ty)
+        .into_iter()
+        .map(|path| (path, default_space))
+        .collect()
 }
 
 #[cfg(test)]
