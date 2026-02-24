@@ -164,7 +164,7 @@
   function renderSidebar(modules, curPath) {
     var html = '<nav class="doc-sidebar">';
     html += '<div class="sidebar-header">';
-    html += '<h1><a href="#" onclick="return false;">Fe Docs</a></h1>';
+    html += '<h1><a href="#">Fe Docs</a></h1>';
     html += "<fe-search></fe-search>";
     html += "</div>";
     html += '<div class="sidebar-nav">';
@@ -356,8 +356,8 @@
     grouped.forEach(function (group) {
       var info = CHILD_KIND_INFO[group.kind] || { anchor: group.kind };
       var sectionId = info.anchor + "s";
-      html += '<section class="children-section" id="' + esc(sectionId) + '">';
-      html += "<h2>" + esc(group.plural);
+      html += '<section class="children-section">';
+      html += '<h2 id="' + esc(sectionId) + '">' + esc(group.plural);
       html += '<a href="#' + esc(parentUrl) + "~" + esc(sectionId) + '" class="anchor">\u00a7</a>';
       html += "</h2>";
       html += '<div class="member-list">';
@@ -399,8 +399,8 @@
     var html = '<div class="implementations">';
 
     if (inherentImpls.length > 0) {
-      html += '<section class="inherent-impls" id="implementations">';
-      html += '<h2>Implementations<a href="#' + esc(parentUrl) + '~implementations" class="anchor">\u00a7</a></h2>';
+      html += '<section class="inherent-impls">';
+      html += '<h2 id="implementations">Implementations<a href="#' + esc(parentUrl) + '~implementations" class="anchor">\u00a7</a></h2>';
       html += '<div class="impl-list">';
       inherentImpls.forEach(function (impl, idx) {
         html += renderImplBlock(impl, "impl-" + idx, parentUrl);
@@ -409,8 +409,8 @@
     }
 
     if (traitImpls.length > 0) {
-      html += '<section class="trait-impls" id="trait-implementations">';
-      html += '<h2>Trait Implementations<a href="#' + esc(parentUrl) + '~trait-implementations" class="anchor">\u00a7</a></h2>';
+      html += '<section class="trait-impls">';
+      html += '<h2 id="trait-implementations">Trait Implementations<a href="#' + esc(parentUrl) + '~trait-implementations" class="anchor">\u00a7</a></h2>';
       html += '<div class="impl-list">';
       traitImpls.forEach(function (impl) {
         var anchorId = "impl-" + impl.trait_name.replace(/[<> ,]/g, "_");
@@ -534,8 +534,8 @@
   // ============================================================================
 
   function renderImplementors(implementors, parentUrl) {
-    var html = '<section class="implementors" id="implementors">';
-    html += '<h2>Implementors<a href="#' + esc(parentUrl) + '~implementors" class="anchor">\u00a7</a></h2>';
+    var html = '<section class="implementors">';
+    html += '<h2 id="implementors">Implementors<a href="#' + esc(parentUrl) + '~implementors" class="anchor">\u00a7</a></h2>';
     html += '<div class="implementor-list">';
     implementors.forEach(function (imp) {
       var anchorId = "impl-" + imp.type_name.replace(/[<> ,]/g, "_");
@@ -823,8 +823,9 @@
     if (prev) prev.remove();
     if (_outlineObserver) { _outlineObserver.disconnect(); _outlineObserver = null; }
 
-    // Collect section headings and anchored details from rendered content
-    var targets = contentEl.querySelectorAll("h2[id], section[id], details[id]");
+    // Collect section headings (h2), impl blocks, and method items.
+    // Skip section[id] — its h2 child already represents it.
+    var targets = contentEl.querySelectorAll("h2[id], details.impl-block[id], details.method-item[id], div.method-item[id]");
     if (targets.length === 0) return;
 
     var entries = [];
@@ -835,13 +836,13 @@
       if (el.tagName === "H2") {
         text = el.textContent.replace("\u00a7", "").trim();
       } else if (id.indexOf("method.") === 0) {
-        // method.map → "map()"
         text = id.substring(7) + "()";
-      } else if (id.indexOf("impl-") === 0) {
-        // impl-Display → "impl Display"
-        text = "impl " + id.substring(5).replace(/-/g, " ");
+      } else if (el.classList.contains("impl-block")) {
+        // Use the h3 text from the impl summary (e.g. "impl Display")
+        var h3 = el.querySelector("summary h3");
+        text = h3 ? h3.textContent.trim() : id;
+        if (text.length > 50) text = text.substring(0, 47) + "\u2026";
       } else {
-        // Fallback: use heading text, truncated
         var heading = el.querySelector("summary h3, summary h4");
         text = heading ? heading.textContent.trim()
           : (el.querySelector("summary") || el).textContent
