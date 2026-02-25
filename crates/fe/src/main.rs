@@ -663,6 +663,7 @@ pub fn run(opts: &Options) {
 
 #[cfg(feature = "lsp")]
 async fn run_lsp_with_combined_server(resolved_root: Option<Utf8PathBuf>, port: Option<u16>) {
+    use std::sync::Arc;
     use tokio::net::TcpListener;
 
     // Bind the combined server listener
@@ -697,10 +698,22 @@ async fn run_lsp_with_combined_server(resolved_root: Option<Utf8PathBuf>, port: 
         eprintln!("Warning: could not write .fe-lsp.json: {e}");
     }
 
+    // Create the doc regeneration closure for live reload.
+    // Creates a fresh db each time — salsa snapshots can't be mutated
+    // while the original Backend db exists.
+    let root_for_regen = resolved_root
+        .clone()
+        .unwrap_or_else(|| Utf8PathBuf::from("."));
+    let doc_regenerate_fn: language_server::DocRegenerateFn = Arc::new(move || {
+        let mut db = driver::DriverDataBase::default();
+        regenerate_doc_data(&mut db, &root_for_regen)
+    });
+
     let config = language_server::CombinedServerConfig {
         listener,
         doc_html,
         docs_url: Some(format!("http://127.0.0.1:{actual_port}")),
+        doc_regenerate_fn: Some(doc_regenerate_fn),
     };
 
     language_server::run_stdio_server(None, Some(config)).await;
@@ -709,51 +722,46 @@ async fn run_lsp_with_combined_server(resolved_root: Option<Utf8PathBuf>, port: 
     doc::LspServerInfo::remove_from_workspace(&workspace_root_path);
 }
 
-/// Generate the doc HTML for the combined server.
+/// Regenerate doc index JSON and SCIP JSON from a mutable database.
 ///
-/// Uses `discover_context` (same discovery the LS uses) to find all ingots
-/// under the workspace root, so it works for:
-/// - Single ingots (directory with fe.toml)
-/// - Workspaces (fe.toml with [workspace] members)
-/// - Directories containing multiple ingots without a root fe.toml
-/// - Sentinel workspaces with members=[] (discovers child ingots)
+/// This is the core logic shared by initial doc generation and live reload.
+/// Takes `&mut` because `discover_and_init` needs to mutate the db.
+/// Returns `(doc_index_json, scip_json)`.
 #[cfg(feature = "lsp")]
-fn generate_lsp_doc_html(resolved_root: Option<&Utf8PathBuf>, port: u16) -> String {
+pub fn regenerate_doc_data(
+    db: &mut driver::DriverDataBase,
+    workspace_root: &camino::Utf8Path,
+) -> (String, Option<String>) {
     use crate::extract::DocExtractor;
     use common::InputDb;
     use common::stdlib::{HasBuiltinCore, HasBuiltinStd};
     use hir::hir_def::HirIngot;
 
-    let root_path = resolved_root
-        .cloned()
-        .unwrap_or_else(|| Utf8PathBuf::from("."));
-
-    let mut db = driver::DriverDataBase::default();
     let mut index = fe_web::model::DocIndex::new();
     let mut scip_json: Option<String> = None;
 
-    if let Ok(root_url) = url::Url::from_directory_path(
-        root_path
-            .canonicalize_utf8()
-            .unwrap_or_else(|_| root_path.clone()),
-    ) {
-        let discovered = driver::discover_and_init(&mut db, &root_url);
+    let root_path = workspace_root
+        .canonicalize_utf8()
+        .unwrap_or_else(|_| workspace_root.to_owned());
 
-        let extractor = DocExtractor::new(&db);
+    if let Ok(root_url) = url::Url::from_directory_path(&root_path) {
+        let discovered = driver::discover_and_init(db, &root_url);
+
+        let extractor = DocExtractor::new(db);
 
         // Extract docs from each discovered ingot
         for ingot_url in &discovered.ingot_urls {
-            let Some(ingot) = db.workspace().containing_ingot(&db, ingot_url.clone()) else {
+            let Some(ingot) = db.workspace().containing_ingot(db, ingot_url.clone()) else {
                 continue;
             };
-            for top_mod in ingot.all_modules(&db) {
-                for item in top_mod.children_nested(&db) {
+            for top_mod in ingot.all_modules(db) {
+                for item in top_mod.children_nested(db) {
                     if let Some(doc_item) = extractor.extract_item_for_ingot(item, ingot) {
                         index.items.push(doc_item);
                     }
                 }
             }
-            let root_mod = ingot.root_mod(&db);
+            let root_mod = ingot.root_mod(db);
             index
                 .modules
                 .extend(extractor.build_module_tree_for_ingot(ingot, root_mod));
@@ -763,32 +771,34 @@ fn generate_lsp_doc_html(resolved_root: Option<&Utf8PathBuf>, port: u16) -> Stri
 
         // Extract docs from standalone .fe files
         for file_url in &discovered.standalone_files {
-            if let Some(file) = db.workspace().get(&db, file_url) {
+            if let Some(file) = db.workspace().get(db, file_url) {
                 let top_mod = db.top_mod(file);
-                for item in top_mod.children_nested(&db) {
+                for item in top_mod.children_nested(db) {
                     if let Some(doc_item) = extractor.extract_item(item) {
                         index.items.push(doc_item);
                     }
                 }
-                index.modules.push(extractor.build_standalone_module_tree(top_mod));
+                index
+                    .modules
+                    .push(extractor.build_standalone_module_tree(top_mod));
             }
         }
 
-        // Include builtin libraries (core, std) in a separate section
+        // Include builtin libraries (core, std)
         let existing: std::collections::HashSet<_> =
             index.modules.iter().map(|m| m.name.clone()).collect();
         for (label, builtin) in [("core", db.builtin_core()), ("std", db.builtin_std())] {
             if existing.contains(label) {
                 continue;
             }
-            for top_mod in builtin.all_modules(&db) {
-                for item in top_mod.children_nested(&db) {
+            for top_mod in builtin.all_modules(db) {
+                for item in top_mod.children_nested(db) {
                     if let Some(doc_item) = extractor.extract_item_for_ingot(item, builtin) {
                         index.items.push(doc_item);
                     }
                 }
             }
-            let root_mod = builtin.root_mod(&db);
+            let root_mod = builtin.root_mod(db);
             index
                 .builtin_modules
                 .extend(extractor.build_module_tree_for_ingot(builtin, root_mod));
@@ -796,12 +806,10 @@ fn generate_lsp_doc_html(resolved_root: Option<&Utf8PathBuf>, port: u16) -> Stri
             index.link_trait_impls(trait_impl_links);
         }
 
-        // Generate SCIP data for interactive highlighting and type linking.
-        // Includes user ingots and builtins (core, std).
+        // Generate SCIP data
         let mut combined_scip = scip::types::Index::default();
         let mut any_scip = false;
 
-        // Collect all ingot URLs: user ingots + builtins
         let builtin_urls = [
             url::Url::parse(common::stdlib::BUILTIN_CORE_BASE_URL).unwrap(),
             url::Url::parse(common::stdlib::BUILTIN_STD_BASE_URL).unwrap(),
@@ -813,12 +821,8 @@ fn generate_lsp_doc_html(resolved_root: Option<&Utf8PathBuf>, port: u16) -> Stri
             .collect();
 
         for ingot_url in &all_scip_urls {
-            match crate::scip_index::generate_scip(&db, ingot_url) {
+            match crate::scip_index::generate_scip(db, ingot_url) {
                 Ok(mut scip_index) => {
-                    // For file:// URLs, use filesystem path as project root.
-                    // For non-file URLs (builtins), use the URL base for
-                    // workspace file lookups (to_file_path() misleadingly
-                    // returns Ok("/") for custom schemes like builtin-core:///).
                     if ingot_url.scheme() == "file" {
                         if let Some(project_root) = ingot_url
                             .to_file_path()
@@ -826,16 +830,15 @@ fn generate_lsp_doc_html(resolved_root: Option<&Utf8PathBuf>, port: u16) -> Stri
                             .and_then(|p| camino::Utf8PathBuf::from_path_buf(p).ok())
                         {
                             crate::scip_index::enrich_signatures(
-                                &db,
+                                db,
                                 &project_root,
                                 &mut index,
                                 &mut scip_index,
                             );
                         }
                     } else {
-                        // Non-file URL (e.g. builtin-core:///): use virtual root
                         crate::scip_index::enrich_signatures_with_base(
-                            &db,
+                            db,
                             camino::Utf8Path::new("/"),
                             Some(ingot_url),
                             &mut index,
@@ -844,7 +847,6 @@ fn generate_lsp_doc_html(resolved_root: Option<&Utf8PathBuf>, port: u16) -> Stri
                     }
                     combined_scip.documents.extend(scip_index.documents);
                     any_scip = true;
-                    eprintln!("  SCIP ok: {ingot_url}");
                 }
                 Err(e) => {
                     eprintln!("Warning: SCIP generation failed for {ingot_url}: {e}");
@@ -857,10 +859,34 @@ fn generate_lsp_doc_html(resolved_root: Option<&Utf8PathBuf>, port: u16) -> Stri
         }
     }
 
-    // Generate HTML with auto-connect script
+    // Serialize DocIndex with HTML bodies injected
     let mut value = serde_json::to_value(&index).expect("serialize DocIndex");
     fe_web::static_site::inject_html_bodies(&mut value);
     let json = serde_json::to_string(&value).expect("serialize JSON");
+
+    (json, scip_json)
+}
+
+/// Generate the doc HTML for the combined server.
+///
+/// Uses `discover_context` (same discovery the LS uses) to find all ingots
+/// under the workspace root, so it works for:
+/// - Single ingots (directory with fe.toml)
+/// - Workspaces (fe.toml with [workspace] members)
+/// - Directories containing multiple ingots without a root fe.toml
+/// - Sentinel workspaces with members=[] (discovers child ingots)
+#[cfg(feature = "lsp")]
+fn generate_lsp_doc_html(resolved_root: Option<&Utf8PathBuf>, port: u16) -> String {
+    let root_path = resolved_root
+        .cloned()
+        .unwrap_or_else(|| Utf8PathBuf::from("."));
+
+    let mut db = driver::DriverDataBase::default();
+    let (json, scip_json) = regenerate_doc_data(&mut db, &root_path);
+
+    // Parse back the index to get the title
+    let index: fe_web::model::DocIndex =
+        serde_json::from_str(&json).unwrap_or_else(|_| fe_web::model::DocIndex::new());
     let title = if let Some(root) = index.modules.first() {
         format!("{} — Fe Documentation", root.name)
     } else {
@@ -869,9 +895,8 @@ fn generate_lsp_doc_html(resolved_root: Option<&Utf8PathBuf>, port: u16) -> Stri
     let mut html = fe_web::assets::html_shell_full(&title, &json, scip_json.as_deref(), None);
 
     // Append auto-connect script
-    let connect_script = format!(
-        r#"<script>window.FE_LSP = connectLsp("ws://127.0.0.1:{port}/lsp");</script>"#,
-    );
+    let connect_script =
+        format!(r#"<script>window.FE_LSP = connectLsp("ws://127.0.0.1:{port}/lsp");</script>"#,);
     if let Some(pos) = html.rfind("</body>") {
         html.insert_str(pos, &connect_script);
     }

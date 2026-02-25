@@ -803,6 +803,21 @@
         document.dispatchEvent(new CustomEvent("fe-diagnostics", {
           detail: { uri: params.uri, diagnostics: params.diagnostics || [] }
         }));
+      } else if (msg.method === "fe/docReload") {
+        // Live doc reload: hot-swap data and re-render
+        var reloadParams = msg.params || {};
+        if (reloadParams.docIndex) {
+          window.FE_DOC_INDEX = reloadParams.docIndex;
+        }
+        if (reloadParams.scipData) {
+          window.FE_SCIP_DATA = reloadParams.scipData;
+          if (typeof ScipStore !== "undefined") {
+            window.FE_SCIP = new ScipStore(reloadParams.scipData);
+          }
+        }
+        _lastRenderedPath = null;  // force full re-render
+        render();
+        console.log("[fe-lsp] Doc data reloaded");
       } else if (msg.method === "fe/navigate") {
         // Editor hover/goto → navigate doc browser to the target item
         var p = (msg.params || {}).path;

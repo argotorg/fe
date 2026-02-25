@@ -1,5 +1,8 @@
+use crate::backend::{Backend, DocRegenerateFn};
 use crate::fallback::WithFallbackService;
-use crate::functionality::handlers::{FileChange, FilesNeedDiagnostics, NeedsDiagnostics};
+use crate::functionality::handlers::{
+    DocReloadExecute, DocReloadRequest, FileChange, FilesNeedDiagnostics, NeedsDiagnostics,
+};
 use crate::logging;
 use crate::lsp_actor::LspActor;
 use crate::lsp_actor::service::{LspActorKey, LspActorService};
@@ -27,7 +30,6 @@ use tokio::sync::broadcast;
 use tracing::instrument::WithSubscriber;
 use tracing::{info, warn};
 
-use crate::backend::Backend;
 use crate::functionality::{
     call_hierarchy, code_actions, code_lens, codegen_view, completion, declaration,
     document_symbols, folding_range, goto, handlers, highlight, implementations, inlay_hints,
@@ -44,6 +46,8 @@ pub(crate) fn spawn_backend(
     name: String,
     ws_broadcast: Option<WsBroadcast>,
     doc_nav_tx: Option<broadcast::Sender<String>>,
+    doc_regenerate_fn: Option<DocRegenerateFn>,
+    doc_reload_tx: Option<broadcast::Sender<String>>,
     docs_url: Option<String>,
 ) -> ActorRef<Backend, LspActorKey> {
     info!("Spawning backend actor");
@@ -56,6 +60,8 @@ pub(crate) fn spawn_backend(
                 client_for_actor,
                 ws_broadcast,
                 doc_nav_tx,
+                doc_regenerate_fn,
+                doc_reload_tx,
                 docs_url,
             ))
         })
@@ -78,6 +84,7 @@ pub(crate) fn setup_service(
         .handle_request::<GotoDefinition>(goto::handle_goto_definition)
         .handle_event_mut::<FileChange>(handlers::handle_file_change)
         .handle_event::<FilesNeedDiagnostics>(handlers::handle_files_need_diagnostics)
+        .handle_event::<DocReloadExecute>(handlers::handle_doc_reload)
         // non-mutating handlers
         .handle_notification::<Initialized>(handlers::initialized)
         .handle_request::<HoverRequest>(handlers::handle_hover_request)
@@ -141,6 +148,7 @@ pub(crate) fn setup_ws_service(
         .handle_request::<Initialize>(handlers::initialize_readonly)
         .handle_request::<GotoDefinition>(goto::handle_goto_definition)
         .handle_event::<FilesNeedDiagnostics>(handlers::handle_files_need_diagnostics)
+        .handle_event::<DocReloadExecute>(handlers::handle_doc_reload)
         // non-mutating handlers
         .handle_notification::<Initialized>(handlers::initialized)
         .handle_request::<HoverRequest>(handlers::handle_hover_request)
@@ -196,7 +204,7 @@ pub(crate) fn setup(
     name: String,
     ws_broadcast: Option<WsBroadcast>,
 ) -> WithFallbackService<LspActorService<Backend>, Router<()>> {
-    let actor_ref = spawn_backend(client.clone(), name, ws_broadcast, None, None);
+    let actor_ref = spawn_backend(client.clone(), name, ws_broadcast, None, None, None, None);
     setup_service(actor_ref, client)
 }
 
@@ -209,10 +217,27 @@ fn setup_streams(client: ClientSocket, router: &mut Router<()>) {
         .map(FilesNeedDiagnostics)
         .fuse();
 
+    let client_for_diag = client.clone();
     tokio::spawn(
         async move {
             while let Some(files_need_diagnostics) = diagnostics_stream.next().await {
-                let _ = client.emit(files_need_diagnostics);
+                let _ = client_for_diag.emit(files_need_diagnostics);
+            }
+        }
+        .with_current_subscriber(),
+    );
+
+    // Debounced doc reload: coalesce rapid file changes into a single reload
+    let mut doc_reload_stream = router
+        .event_stream::<DocReloadRequest>()
+        .chunks_timeout(100, std::time::Duration::from_millis(500))
+        .map(|_batch| DocReloadExecute)
+        .fuse();
+
+    tokio::spawn(
+        async move {
+            while let Some(reload) = doc_reload_stream.next().await {
+                let _ = client.emit(reload);
             }
         }
         .with_current_subscriber(),

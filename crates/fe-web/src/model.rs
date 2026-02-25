@@ -535,7 +535,7 @@ impl DocIndex {
                     DocItemKind::Struct | DocItemKind::Enum | DocItemKind::Contract
                 )
             })
-            .map(|item| (item.path.clone(), (item.path.clone(), item.kind.clone())))
+            .map(|item| (item.path.clone(), (item.path.clone(), item.kind)))
             .collect();
 
         let trait_items: std::collections::HashMap<String, String> = self

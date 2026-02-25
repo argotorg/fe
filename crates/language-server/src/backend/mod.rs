@@ -2,11 +2,19 @@ use async_lsp::ClientSocket;
 use driver::DriverDataBase;
 use rustc_hash::FxHashSet;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::sync::broadcast;
 use url::Url;
 
 use crate::virtual_files::{VirtualFiles, materialize_builtins};
 use crate::ws_notify::{WsBroadcast, WsServerMsg};
+
+/// Closure type for regenerating doc+SCIP data.
+///
+/// Creates a fresh `DriverDataBase` internally (salsa snapshots can't be
+/// mutated while the original exists, and `discover_and_init` needs `&mut`).
+/// Captures the workspace root path.
+pub type DocRegenerateFn = Arc<dyn Fn() -> (String, Option<String>) + Send + Sync>;
 
 pub struct Backend {
     pub(super) client: ClientSocket,
@@ -17,6 +25,8 @@ pub struct Backend {
     pub(super) definition_link_support: bool,
     pub(super) ws_broadcast: Option<WsBroadcast>,
     pub(super) doc_nav_tx: Option<broadcast::Sender<String>>,
+    pub(super) doc_regenerate_fn: Option<DocRegenerateFn>,
+    pub(super) doc_reload_tx: Option<broadcast::Sender<String>>,
     pub(super) docs_url: Option<String>,
     pub(super) workspace_root: Option<PathBuf>,
 }
@@ -26,6 +36,8 @@ impl Backend {
         client: ClientSocket,
         ws_broadcast: Option<WsBroadcast>,
         doc_nav_tx: Option<broadcast::Sender<String>>,
+        doc_regenerate_fn: Option<DocRegenerateFn>,
+        doc_reload_tx: Option<broadcast::Sender<String>>,
         docs_url: Option<String>,
     ) -> Self {
         let db = DriverDataBase::default();
@@ -51,6 +63,8 @@ impl Backend {
             definition_link_support: false,
             ws_broadcast,
             doc_nav_tx,
+            doc_regenerate_fn,
+            doc_reload_tx,
             docs_url,
             workspace_root: None,
         }
@@ -68,6 +82,18 @@ impl Backend {
     pub fn notify_doc_navigate(&self, path: String) {
         if let Some(tx) = &self.doc_nav_tx {
             let _ = tx.send(path);
+        }
+    }
+
+    /// Broadcast a doc reload with fresh doc_index_json and scip_json.
+    pub fn notify_doc_reload(&self, doc_index_json: String, scip_json: Option<String>) {
+        if let Some(tx) = &self.doc_reload_tx {
+            let payload = serde_json::json!({
+                "docIndex": serde_json::from_str::<serde_json::Value>(&doc_index_json)
+                    .unwrap_or(serde_json::Value::Null),
+                "scipData": scip_json,
+            });
+            let _ = tx.send(payload.to_string());
         }
     }
 
@@ -118,4 +144,5 @@ impl Backend {
         });
         rx
     }
+
 }

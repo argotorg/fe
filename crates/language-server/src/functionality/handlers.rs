@@ -55,6 +55,26 @@ pub enum ChangeKind {
     Delete,
 }
 
+/// Emitted after a file change to request doc regeneration (debounced).
+#[derive(Debug)]
+pub struct DocReloadRequest;
+
+impl std::fmt::Display for DocReloadRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "DocReloadRequest")
+    }
+}
+
+/// Emitted after the debounce window to trigger actual doc regeneration.
+#[derive(Debug)]
+pub struct DocReloadExecute;
+
+impl std::fmt::Display for DocReloadExecute {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "DocReloadExecute")
+    }
+}
+
 // Implementation moved to backend/mod.rs
 
 async fn discover_and_load_ingots(
@@ -463,6 +483,12 @@ pub async fn handle_file_change(
     }
 
     let _ = backend.client.emit(NeedsDiagnostics(message.uri));
+
+    // Request doc reload (debounced by the stream in setup_streams)
+    if backend.doc_regenerate_fn.is_some() {
+        let _ = backend.client.emit(DocReloadRequest);
+    }
+
     Ok(())
 }
 
@@ -626,6 +652,34 @@ fn map_related_info_uris(backend: &Backend, diagnostics: &mut [async_lsp::lsp_ty
             info.location.uri = backend.map_internal_uri_to_client(info.location.uri.clone());
         }
     }
+}
+
+pub async fn handle_doc_reload(
+    backend: &Backend,
+    _message: DocReloadExecute,
+) -> Result<(), ResponseError> {
+    let Some(regen_fn) = backend.doc_regenerate_fn.as_ref().cloned() else {
+        return Ok(());
+    };
+
+    info!("regenerating doc data for live reload");
+    let t_start = std::time::Instant::now();
+
+    // Run on a blocking thread — regen_fn creates its own fresh db internally
+    // (we can't use a salsa snapshot because discover_and_init needs &mut).
+    match tokio::task::spawn_blocking(move || regen_fn()).await {
+        Ok((doc_json, scip_json)) => {
+            tracing::debug!(
+                "[fe:timing] doc reload regeneration: {:?}",
+                t_start.elapsed()
+            );
+            backend.notify_doc_reload(doc_json, scip_json);
+        }
+        Err(e) => {
+            warn!("doc reload: worker task panicked: {e}");
+        }
+    }
+    Ok(())
 }
 
 pub async fn handle_hover_request(
