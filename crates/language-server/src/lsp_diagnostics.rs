@@ -17,6 +17,7 @@ use hir::analysis::ty::{
     ImplAnalysisPass, ImplTraitAnalysisPass, MsgSelectorAnalysisPass, TraitAnalysisPass,
     TypeAliasAnalysisPass,
 };
+use hir::hir_def::HirIngot;
 use hir::lower::map_file_to_mod;
 use rustc_hash::FxHashMap;
 
@@ -81,8 +82,13 @@ impl LspDiagnostics for DriverDataBase {
         }
 
         let t_mir = std::time::Instant::now();
-        let mut mir_diags =
-            self.mir_diagnostics_for_ingot(ingot, MirDiagnosticsMode::TemplatesOnly);
+        // Skip MIR diagnostics for ingots with no modules (e.g. deleted ingots
+        // that are still referenced in the dependency graph).
+        let mut mir_diags = if ingot.module_tree(self).root_data().is_some() {
+            self.mir_diagnostics_for_ingot(ingot, MirDiagnosticsMode::TemplatesOnly)
+        } else {
+            Vec::new()
+        };
         tracing::debug!("[fe:timing]  MIR diagnostics: {:?}", t_mir.elapsed());
         mir_diags.sort_by(|lhs, rhs| match lhs.error_code.cmp(&rhs.error_code) {
             std::cmp::Ordering::Equal => lhs.primary_span().cmp(&rhs.primary_span()),
@@ -114,10 +120,10 @@ impl<'a> cs_files::Files<'a> for LspDb<'a> {
     type Source = &'a str;
 
     fn name(&'a self, file_id: Self::FileId) -> Result<Self::Name, cs_files::Error> {
-        Ok(file_id
+        file_id
             .path(self.0)
-            .as_ref()
-            .expect("File path should be valid"))
+            .as_deref()
+            .ok_or(cs_files::Error::FileMissing)
     }
 
     fn source(&'a self, file_id: Self::FileId) -> Result<Self::Source, cs_files::Error> {

@@ -372,7 +372,10 @@ contract FeErc20ArtifactsTest {{
 #[test]
 fn test_fe_build_artifacts_with_foundry() {
     let Some(forge) = find_executable_in_path("forge") else {
-        eprintln!("skipping foundry integration test because `forge` is missing");
+        #[allow(clippy::print_stdout)]
+        {
+            println!("skipping foundry integration test because `forge` is missing");
+        }
         return;
     };
     let solc = std::env::var_os("FE_SOLC_PATH")
@@ -380,7 +383,10 @@ fn test_fe_build_artifacts_with_foundry() {
         .filter(|path| path.is_file())
         .or_else(|| find_executable_in_path("solc"));
     let Some(solc) = solc else {
-        eprintln!("skipping foundry integration test because `solc` is missing");
+        #[allow(clippy::print_stdout)]
+        {
+            println!("skipping foundry integration test because `solc` is missing");
+        }
         return;
     };
 

@@ -507,7 +507,9 @@ fn build_workspace(
     members.sort_by(|a, b| a.path.cmp(&b.path));
 
     if members.is_empty() {
-        eprintln!("Warning: No workspace members found");
+        eprintln!(
+            "Warning: No workspace members found. Check that member paths in fe.toml exist on disk."
+        );
         return false;
     }
 

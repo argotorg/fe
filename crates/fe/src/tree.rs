@@ -104,8 +104,8 @@ fn print_workspace_member_tree_by_name(
         .map_err(|_| "Current directory is not valid UTF-8".to_string())?;
     let cwd_url = Url::from_directory_path(cwd.as_std_path())
         .map_err(|_| "Failed to convert current directory to URL".to_string())?;
-    let discovery =
-        discover_context(&cwd_url).map_err(|err| format!("Failed to discover context: {err}"))?;
+    let discovery = discover_context(&cwd_url, false)
+        .map_err(|err| format!("Failed to discover context: {err}"))?;
     let workspace_url = discovery
         .workspace_root
         .ok_or_else(|| "No workspace config found in current directory hierarchy".to_string())?;
@@ -137,7 +137,20 @@ fn print_workspace_trees(
 ) -> Result<(), String> {
     let members = workspace_members(&workspace_config.workspace, workspace_url)?;
     if members.is_empty() {
-        eprintln!("Warning: No workspace members found");
+        let paths: Vec<&str> = workspace_config
+            .workspace
+            .members
+            .iter()
+            .map(|m| m.path.as_str())
+            .collect();
+        if paths.is_empty() {
+            eprintln!("Warning: No workspace members configured in fe.toml");
+        } else {
+            eprintln!(
+                "Warning: No workspace members found. The configured member paths do not exist:\n  {}",
+                paths.join("\n  ")
+            );
+        }
         return Ok(());
     }
 

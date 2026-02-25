@@ -1,5 +1,6 @@
 ---
 source: crates/language-server/src/functionality/completion.rs
+assertion_line: 1722
 expression: snapshot
 input_file: test_files/completion.fe
 ---
