@@ -1141,6 +1141,46 @@ fn test_cli_check_ingot_requires_workspace_root() {
     );
 }
 
+#[test]
+fn test_cli_check_workspace_ingot_does_not_match_directory_name() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path();
+
+    fs::write(
+        root.join("fe.toml"),
+        r#"[workspace]
+name = "ingot_member_identity"
+version = "0.1.0"
+members = [
+  { path = "ingots/target", name = "a" },
+  "libs/*",
+]
+"#,
+    )
+    .expect("write workspace fe.toml");
+
+    let target_src = root.join("ingots/target/src");
+    fs::create_dir_all(&target_src).expect("create target src dir");
+    fs::write(
+        root.join("ingots/target/fe.toml"),
+        "[ingot]\nname = \"a\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("write target fe.toml");
+    fs::write(target_src.join("lib.fe"), "pub fn main() {}\n").expect("write target source");
+
+    let non_target_src = root.join("libs/a/src");
+    fs::create_dir_all(&non_target_src).expect("create non-target src dir");
+    fs::write(
+        root.join("libs/a/fe.toml"),
+        "[ingot]\nname = \"not_a\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("write non-target fe.toml");
+    fs::write(non_target_src.join("lib.fe"), "pub fn broken(\n").expect("write non-target source");
+
+    let (output, exit_code) = run_fe_main_in_dir(&["check", "--ingot", "a"], root);
+    assert_eq!(exit_code, 0, "fe check --ingot a failed:\n{output}");
+}
+
 #[cfg(unix)]
 #[test]
 fn test_cli_build_workspace_root_fake_solc_artifacts() {
