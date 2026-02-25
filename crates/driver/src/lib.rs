@@ -103,8 +103,10 @@ pub fn discover_and_init(db: &mut DriverDataBase, root_url: &Url) -> DiscoveredP
         result.ingot_urls.push(url.clone());
     }
 
-    // If discover_context found something, we're done
-    if !result.ingot_urls.is_empty() {
+    // If discover_context found actual ingot roots (not just a workspace root
+    // with no members), we're done.  A workspace with `members = []` should
+    // still fall through to the downward scan.
+    if !discovery.ingot_roots.is_empty() {
         return result;
     }
 
@@ -141,6 +143,10 @@ pub fn discover_and_init(db: &mut DriverDataBase, root_url: &Url) -> DiscoveredP
             if path.is_dir() {
                 // Skip hidden dirs like .solutions
                 if path.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.')) {
+                    continue;
+                }
+                // Skip symlinks to avoid infinite recursion on cyclic links
+                if path.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink()) {
                     continue;
                 }
                 if path.join("fe.toml").is_file() {
@@ -758,6 +764,68 @@ mod tests {
         let mut db = DriverDataBase::default();
         let result = discover_and_init(&mut db, &url);
         assert_eq!(result.ingot_urls.len(), 2, "should find both child ingots");
+    }
+
+    /// discover_and_init should still scan downward when a workspace root
+    /// is found but has no member ingots (e.g. `members = []`).
+    #[test]
+    fn discover_and_init_empty_workspace_scans_children() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+
+        // Create a workspace with empty members
+        std::fs::write(
+            root.join("fe.toml"),
+            "[workspace]\nmembers = []\n",
+        )
+        .unwrap();
+
+        // Create a child ingot that should be discovered by downward scan
+        let child = root.join("packages").join("child");
+        std::fs::create_dir_all(child.join("src")).unwrap();
+        std::fs::write(
+            child.join("fe.toml"),
+            "[ingot]\nname = \"child\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        std::fs::write(child.join("src").join("lib.fe"), "pub fn f() {}").unwrap();
+
+        let url = Url::from_directory_path(root).unwrap();
+        let mut db = DriverDataBase::default();
+        let result = discover_and_init(&mut db, &url);
+        // Workspace root + the child ingot discovered by downward scan
+        assert!(
+            result.ingot_urls.len() >= 2,
+            "should find workspace root and child ingot, got {}",
+            result.ingot_urls.len()
+        );
+    }
+
+    /// discover_and_init should not follow directory symlinks (cyclic links
+    /// would cause infinite recursion).
+    #[cfg(unix)]
+    #[test]
+    fn discover_and_init_skips_symlinks() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+
+        // Create a directory with a cyclic symlink
+        let subdir = root.join("lessons");
+        std::fs::create_dir_all(&subdir).unwrap();
+        std::os::unix::fs::symlink(&root, subdir.join("loop")).unwrap();
+
+        // Create a standalone .fe file to prove we still scan non-symlink entries
+        std::fs::write(root.join("hello.fe"), "pub fn hello() {}").unwrap();
+
+        let url = Url::from_directory_path(root).unwrap();
+        let mut db = DriverDataBase::default();
+        // This would hang/overflow before the symlink fix
+        let result = discover_and_init(&mut db, &url);
+        assert_eq!(
+            result.standalone_files.len(),
+            1,
+            "should find the standalone file without infinite recursion"
+        );
     }
 
     /// discover_and_init should find standalone .fe files not under any ingot.

@@ -618,9 +618,13 @@ impl DocIndex {
                     DocItemKind::Struct | DocItemKind::Enum | DocItemKind::Contract
                 );
                 if is_type {
+                    // Prefer exact canonical path match; only fall back to
+                    // simple-name matching when the caller didn't provide a
+                    // fully qualified path (e.g. from older extractors).
                     let matches = item.path == target_type
-                        || item.name == target_simple_name
-                        || item.path.ends_with(&format!("::{}", target_simple_name));
+                        || (!target_type.contains("::")
+                            && (item.name == target_simple_name
+                                || item.path.ends_with(&format!("::{}", target_simple_name))));
 
                     if matches {
                         // Build rich signature for this trait impl if it's a trait impl (not inherent)
@@ -913,5 +917,128 @@ mod tests {
         let index = sample_index();
         let item = index.find_by_path("mylib::Point").unwrap();
         assert_eq!(item.url_path(), "mylib::Point/struct");
+    }
+
+    fn make_struct_item(path: &str, name: &str) -> DocItem {
+        DocItem {
+            path: path.into(),
+            name: name.into(),
+            kind: DocItemKind::Struct,
+            visibility: DocVisibility::Public,
+            docs: None,
+            signature: format!("pub struct {name}"),
+            rich_signature: vec![],
+            signature_span: None,
+            sig_scope: None,
+            generics: vec![],
+            where_bounds: vec![],
+            children: vec![],
+            source: None,
+            source_text: None,
+            trait_impls: vec![],
+            implementors: vec![],
+        }
+    }
+
+    fn make_trait_item(path: &str, name: &str) -> DocItem {
+        DocItem {
+            path: path.into(),
+            name: name.into(),
+            kind: DocItemKind::Trait,
+            visibility: DocVisibility::Public,
+            docs: None,
+            signature: format!("pub trait {name}"),
+            rich_signature: vec![],
+            signature_span: None,
+            sig_scope: None,
+            generics: vec![],
+            where_bounds: vec![],
+            children: vec![],
+            source: None,
+            source_text: None,
+            trait_impls: vec![],
+            implementors: vec![],
+        }
+    }
+
+    fn make_trait_impl(trait_name: &str) -> DocTraitImpl {
+        DocTraitImpl {
+            trait_name: trait_name.into(),
+            impl_url: String::new(),
+            signature: format!("impl {trait_name} for ..."),
+            rich_signature: vec![],
+            signature_span: None,
+            sig_scope: None,
+            methods: vec![],
+        }
+    }
+
+    #[test]
+    fn link_trait_impls_exact_path_match() {
+        let mut index = DocIndex::new();
+        index.add_item(make_struct_item("mylib::Point", "Point"));
+        index.add_item(make_trait_item("mylib::Clone", "Clone"));
+
+        let links = vec![("mylib::Point".into(), make_trait_impl("mylib::Clone"))];
+        index.link_trait_impls(links);
+
+        let point = index.find_by_path("mylib::Point").unwrap();
+        assert_eq!(point.trait_impls.len(), 1, "exact path should match");
+    }
+
+    #[test]
+    fn link_trait_impls_no_false_match_across_modules() {
+        let mut index = DocIndex::new();
+        // Two structs with the same simple name in different modules
+        index.add_item(make_struct_item("mod_a::Point", "Point"));
+        index.add_item(make_struct_item("mod_b::Point", "Point"));
+
+        // Impl targets mod_a::Point specifically
+        let links = vec![("mod_a::Point".into(), make_trait_impl("Clone"))];
+        index.link_trait_impls(links);
+
+        let point_a = index.find_by_path("mod_a::Point").unwrap();
+        let point_b = index.find_by_path("mod_b::Point").unwrap();
+        assert_eq!(point_a.trait_impls.len(), 1, "exact path match on mod_a");
+        assert_eq!(
+            point_b.trait_impls.len(),
+            0,
+            "mod_b::Point should NOT match mod_a::Point"
+        );
+    }
+
+    #[test]
+    fn link_trait_impls_simple_name_fallback() {
+        let mut index = DocIndex::new();
+        index.add_item(make_struct_item("mylib::Point", "Point"));
+
+        // When target is a simple name (no "::"), fall back to name matching
+        let links = vec![("Point".into(), make_trait_impl("Clone"))];
+        index.link_trait_impls(links);
+
+        let point = index.find_by_path("mylib::Point").unwrap();
+        assert_eq!(
+            point.trait_impls.len(),
+            1,
+            "simple name should fall back to name matching"
+        );
+    }
+
+    #[test]
+    fn link_trait_impls_populates_implementors() {
+        let mut index = DocIndex::new();
+        index.add_item(make_struct_item("mylib::Point", "Point"));
+        index.add_item(make_trait_item("mylib::Display", "Display"));
+
+        let links = vec![("mylib::Point".into(), make_trait_impl("Display"))];
+        index.link_trait_impls(links);
+
+        let display = index.find_by_path("mylib::Display").unwrap();
+        assert_eq!(
+            display.implementors.len(),
+            1,
+            "trait should get implementor entry"
+        );
+        assert_eq!(display.implementors[0].type_name, "Point");
     }
 }

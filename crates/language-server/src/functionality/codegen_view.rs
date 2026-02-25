@@ -267,16 +267,31 @@ async fn handle_open_docs(
 
 fn open_in_browser(url: &str) {
     #[cfg(target_os = "linux")]
-    let cmd = "xdg-open";
+    {
+        let _ = std::process::Command::new("xdg-open")
+            .arg(url)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+    }
     #[cfg(target_os = "macos")]
-    let cmd = "open";
+    {
+        let _ = std::process::Command::new("open")
+            .arg(url)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+    }
     #[cfg(target_os = "windows")]
-    let cmd = "start";
-
-    let _ = std::process::Command::new(cmd)
-        .arg(url)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn();
+    {
+        // `start` is a cmd.exe builtin, not a standalone executable
+        let _ = std::process::Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+    }
 }
