@@ -156,10 +156,14 @@ impl super::Parse for ItemScope {
 }
 
 fn is_fn_item_head<S: TokenStream>(parser: &mut Parser<S>) -> bool {
-    parser.dry_run(|p| {
-        p.bump_if(SyntaxKind::ConstKw);
-        p.current_kind() == Some(SyntaxKind::FnKw)
-    })
+    match parser.current_kind() {
+        Some(SyntaxKind::FnKw) => true,
+        Some(SyntaxKind::ConstKw) => parser.dry_run(|p| {
+            p.bump_expected(SyntaxKind::ConstKw);
+            p.current_kind() == Some(SyntaxKind::FnKw)
+        }),
+        _ => false,
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -871,7 +875,7 @@ fn parse_fn_item_block<S: TokenStream>(
                 None,
             )?;
         } else {
-            let proof = parser.error_msg_on_current_token("only `fn` is allowed in this block");
+            let proof = parser.error("only `fn` is allowed in this block");
             parser.try_recover().map_err(|r| r.add_err_proof(proof))?;
         }
     }
