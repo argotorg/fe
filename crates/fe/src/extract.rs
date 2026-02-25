@@ -344,6 +344,34 @@ impl<'db> DocExtractor<'db> {
         })
     }
 
+    /// Build a signature span covering name..type for a field.
+    ///
+    /// The full field AST node includes visibility keywords (`pub`), but the
+    /// signature text is `"name: type"`. Using the full node span would shift
+    /// SCIP occurrence positions in virtual documents, causing wrong symbols
+    /// to be resolved. Instead we span from the name token start to the type
+    /// node end, which exactly matches the signature text layout.
+    fn field_sig_span(&self, field_view: FieldView<'db>) -> Option<SignatureSpanData> {
+        let name_span = match field_view.parent {
+            hir::hir_def::FieldParent::Struct(s) => {
+                s.span().fields().field(field_view.idx).name().resolve(self.db)
+            }
+            hir::hir_def::FieldParent::Contract(c) => {
+                c.span().fields().field(field_view.idx).name().resolve(self.db)
+            }
+            hir::hir_def::FieldParent::Variant(v) => {
+                v.span().fields().field(field_view.idx).name().resolve(self.db)
+            }
+        }?;
+        let ty_span = field_view.ty_span().resolve(self.db)?;
+        let file_url = name_span.file.url(self.db)?;
+        Some(SignatureSpanData {
+            file_url: file_url.to_string(),
+            byte_start: name_span.range.start().into(),
+            byte_end: ty_span.range.end().into(),
+        })
+    }
+
     /// Extract the type text from a field's type span
     fn get_field_type_text(&self, field_view: FieldView<'db>) -> Option<String> {
         let ty_span = field_view.ty_span().resolve(self.db)?;
@@ -414,12 +442,7 @@ impl<'db> DocExtractor<'db> {
                 // Get visibility from the scope's data
                 let visibility = scope.data(self.db).vis;
 
-                let signature_span = s
-                    .span()
-                    .fields()
-                    .field(field_view.idx)
-                    .resolve(self.db)
-                    .and_then(|s| self.span_to_sig_data(&s));
+                let signature_span = self.field_sig_span(field_view);
 
                 Some(DocChild {
                     kind: DocChildKind::Field,
@@ -449,12 +472,7 @@ impl<'db> DocExtractor<'db> {
                 let signature = format!("{}: {}", name, type_text);
                 let visibility = scope.data(self.db).vis;
 
-                let signature_span = c
-                    .span()
-                    .fields()
-                    .field(field_view.idx)
-                    .resolve(self.db)
-                    .and_then(|s| self.span_to_sig_data(&s));
+                let signature_span = self.field_sig_span(field_view);
 
                 Some(DocChild {
                     kind: DocChildKind::Field,
