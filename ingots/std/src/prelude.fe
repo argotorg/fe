@@ -6,4 +6,4 @@ pub use core::abi::{Abi, AbiEncoder, AbiSize, Encode}
 pub use super::abi::Sol
 
 // Common EVM types.
-pub use super::evm::{Evm, Address, Call, assert}
+pub use super::evm::{Evm, Address, Call, Ctx, StorageMap, Create, Log, assert}

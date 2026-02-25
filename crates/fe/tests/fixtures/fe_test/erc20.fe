@@ -1,4 +1,3 @@
-use std::evm::{StorageMap, Ctx}
 use std::abi::sol
 
 msg Erc20 {

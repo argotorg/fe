@@ -7,8 +7,6 @@
 /// Tests: ctx.caller() in init, multi-arg constructor, address-based roles,
 /// cross-contract arbiter proxy, state machine transitions.
 
-use std::evm::Ctx
-
 msg EscrowMsg {
     #[selector = 0x01]
     Deposit { amount: u256 } -> u256,

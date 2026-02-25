@@ -5,8 +5,6 @@
 /// Tests: if-expressions, proportional math, per-user StorageMap with Address
 /// keys, ctx.caller() identity, multi-user via proxy contract.
 
-use std::evm::{Ctx, StorageMap}
-
 msg VaultMsg {
     #[selector = 0x01]
     Deposit { amount: u256 } -> u256,

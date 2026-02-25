@@ -1,5 +1,3 @@
-use std::evm::StorageMap
-
 msg MapMsg {
     #[selector = 0x9cc7f708]
     BalanceOf { user: u256 } -> u256,

@@ -4,8 +4,6 @@
 /// Tests: Create effect in contracts, single-arg constructors, contract-to-
 /// contract deployment, StorageMap for registry, cross-contract reads.
 
-use std::evm::Create
-
 // ---- Child contract ----
 
 msg ChildMsg {

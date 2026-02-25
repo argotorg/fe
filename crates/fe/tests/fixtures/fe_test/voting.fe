@@ -3,8 +3,6 @@
 ///
 /// Tests: StorageMap with tuple keys, sequential ID generation, duplicate prevention.
 
-use std::evm::StorageMap
-
 msg VotingMsg {
     #[selector = 0x01]
     CreateProposal -> u256,
