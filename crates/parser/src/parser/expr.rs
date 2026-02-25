@@ -5,9 +5,10 @@ use super::{
     Checkpoint, ErrProof, Parser, Recovery, define_scope,
     expr_atom::{self, is_expr_atom_head},
     param::{CallArgListScope, GenericArgListScope},
+    path::is_qualified_type,
     token_stream::TokenStream,
 };
-use crate::{ExpectedKind, SyntaxKind};
+use crate::{ExpectedKind, ParseError, SyntaxKind, TextRange};
 
 /// Parses expression.
 pub fn parse_expr<S: TokenStream>(parser: &mut Parser<S>) -> Result<(), Recovery<ErrProof>> {
@@ -54,6 +55,19 @@ fn parse_expr_with_min_bp<S: TokenStream>(
             break;
         };
         parser.set_newline_as_trivia(is_trivia);
+
+        if min_bp == 0
+            && kind == SyntaxKind::Minus
+            && has_line_break_before(parser)
+            && !is_aug_assign(parser)
+        {
+            parser.add_error(ParseError::Msg(
+                "line-start `-` after an expression is ambiguous; move `-` to the previous line for subtraction or parenthesize explicitly"
+                    .to_string(),
+                TextRange::empty(parser.end_of_prev_token),
+            ));
+            break;
+        }
 
         // Parse postfix operators.
         match postfix_binding_power(parser) {
@@ -171,7 +185,6 @@ fn infix_binding_power<S: TokenStream>(parser: &mut Parser<S>) -> Option<(u8, u8
         return Some((151, 150));
     }
 
-    parser.set_newline_as_trivia(false);
     if is_aug_assign(parser) {
         parser.set_newline_as_trivia(is_trivia);
         return Some((11, 10));
@@ -188,6 +201,10 @@ fn infix_binding_power<S: TokenStream>(parser: &mut Parser<S>) -> Option<(u8, u8
         Amp2 => (60, 61),
         NotEq | Eq2 => (70, 71),
         Lt => {
+            if has_line_break_before(parser) && is_qualified_type(parser) {
+                parser.set_newline_as_trivia(is_trivia);
+                return None;
+            }
             if is_lshift(parser) {
                 (110, 111)
             } else {
@@ -207,7 +224,14 @@ fn infix_binding_power<S: TokenStream>(parser: &mut Parser<S>) -> Option<(u8, u8
         Hat => (90, 91),
         Amp => (100, 101),
         LShift | RShift => (110, 111),
-        Plus | Minus => (120, 121),
+        Plus => (120, 121),
+        Minus => {
+            if has_line_break_before(parser) {
+                parser.set_newline_as_trivia(is_trivia);
+                return None;
+            }
+            (120, 121)
+        }
         Star | Slash | Percent => (130, 131),
         Star2 => (141, 140),
         Eq => {
@@ -256,10 +280,13 @@ impl super::Parse for BinExprScope {
     type Error = Recovery<ErrProof>;
 
     fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
-        parser.set_newline_as_trivia(false);
+        let nt = parser.set_newline_as_trivia(true);
         let (_, rbp) = infix_binding_power(parser).unwrap();
         bump_bin_op(parser);
-        parse_expr_with_min_bp(parser, rbp, false)
+        parser.set_newline_as_trivia(false);
+        let r = parse_expr_with_min_bp(parser, rbp, false);
+        parser.set_newline_as_trivia(nt);
+        r
     }
 }
 
@@ -268,10 +295,13 @@ impl super::Parse for AugAssignExprScope {
     type Error = Recovery<ErrProof>;
 
     fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
-        parser.set_newline_as_trivia(false);
+        let nt = parser.set_newline_as_trivia(true);
         let (_, rbp) = infix_binding_power(parser).unwrap();
         bump_aug_assign_op(parser);
-        parse_expr_with_min_bp(parser, rbp, false)
+        parser.set_newline_as_trivia(false);
+        let r = parse_expr_with_min_bp(parser, rbp, false);
+        parser.set_newline_as_trivia(nt);
+        r
     }
 }
 
@@ -280,10 +310,13 @@ impl super::Parse for AssignExprScope {
     type Error = Recovery<ErrProof>;
 
     fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
-        parser.set_newline_as_trivia(false);
+        let nt = parser.set_newline_as_trivia(true);
         let (_, rbp) = infix_binding_power(parser).unwrap();
         parser.bump_expected(SyntaxKind::Eq);
-        parse_expr_with_min_bp(parser, rbp, true)
+        parser.set_newline_as_trivia(false);
+        let r = parse_expr_with_min_bp(parser, rbp, true);
+        parser.set_newline_as_trivia(nt);
+        r
     }
 }
 
@@ -449,10 +482,17 @@ fn is_aug_assign<S: TokenStream>(parser: &mut Parser<S>) -> bool {
 }
 
 fn is_assign<S: TokenStream>(parser: &mut Parser<S>) -> bool {
-    let nt = parser.set_newline_as_trivia(false);
+    let nt = parser.set_newline_as_trivia(true);
     let is_asn = parser.current_kind() == Some(SyntaxKind::Eq);
     parser.set_newline_as_trivia(nt);
     is_asn
+}
+
+fn has_line_break_before<S: TokenStream>(parser: &mut Parser<S>) -> bool {
+    let nt = parser.set_newline_as_trivia(false);
+    let has_line_break = parser.current_kind() == Some(SyntaxKind::Newline);
+    parser.set_newline_as_trivia(nt);
+    has_line_break
 }
 
 fn bump_bin_op<S: TokenStream>(parser: &mut Parser<S>) {

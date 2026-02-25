@@ -1,9 +1,9 @@
 ---
 source: crates/parser/tests/syntax_node.rs
 expression: node
-input_file: crates/parser/test_files/syntax_node/exprs/if.fe
+input_file: test_files/syntax_node/exprs/if.fe
 ---
-Root@0..279
+Root@0..398
   IfExpr@0..15
     IfKw@0..2 "if"
     WhiteSpace@2..3 " "
@@ -273,3 +273,51 @@ Root@0..279
             Int@276..277 "1"
       Newline@277..278 "\n"
       RBrace@278..279 "}"
+  Newline@279..281 "\n\n"
+  IfExpr@281..397
+    IfKw@281..283 "if"
+    WhiteSpace@283..284 " "
+    BinExpr@284..394
+      BinExpr@284..320
+        PathExpr@284..289
+          Path@284..289
+            PathSegment@284..289
+              Ident@284..289 "round"
+        WhiteSpace@289..290 " "
+        Lt@290..291 "<"
+        WhiteSpace@291..292 " "
+        PathExpr@292..320
+          Path@292..320
+            PathSegment@292..320
+              Ident@292..320 "POSEIDON_T6_HALF_FULL ..."
+      Newline@320..321 "\n"
+      WhiteSpace@321..325 "    "
+      Pipe2@325..327 "||"
+      WhiteSpace@327..328 " "
+      BinExpr@328..394
+        PathExpr@328..333
+          Path@328..333
+            PathSegment@328..333
+              Ident@328..333 "round"
+        WhiteSpace@333..334 " "
+        GtEq@334..336
+          Gt@334..335 ">"
+          Eq@335..336 "="
+        WhiteSpace@336..337 " "
+        BinExpr@337..394
+          PathExpr@337..365
+            Path@337..365
+              PathSegment@337..365
+                Ident@337..365 "POSEIDON_T6_HALF_FULL ..."
+          WhiteSpace@365..366 " "
+          Plus@366..367 "+"
+          WhiteSpace@367..368 " "
+          PathExpr@368..394
+            Path@368..394
+              PathSegment@368..394
+                Ident@368..394 "POSEIDON_T6_PARTIAL_R ..."
+    WhiteSpace@394..395 " "
+    BlockExpr@395..397
+      LBrace@395..396 "{"
+      RBrace@396..397 "}"
+  Newline@397..398 "\n"
