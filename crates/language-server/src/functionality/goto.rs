@@ -55,6 +55,14 @@ pub async fn handle_goto_definition(
     let resolution = goto_target_at_cursor(&backend.db, top_mod, cursor);
     info!("got resolution: {:?}", resolution.as_slice().len());
 
+    // Broadcast doc-navigate for the first scope target
+    if let Some(doc_path) = resolution.as_slice().iter().find_map(|t| match t {
+        Target::Scope(scope) => hir::semantic::scope_to_doc_path(&backend.db, *scope),
+        Target::Local { .. } => None,
+    }) {
+        backend.notify_doc_navigate(doc_path);
+    }
+
     // Compute origin_selection_range: the span of the identifier being clicked.
     // For paths like `ops::returndatasize`, this is the specific segment at the cursor.
     // This range is critical for Zed's hover link caching — without it, every pixel

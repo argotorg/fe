@@ -4,6 +4,7 @@ use async_lsp::ClientSocket;
 use driver::DriverDataBase;
 use rustc_hash::FxHashSet;
 use std::path::PathBuf;
+use tokio::sync::broadcast;
 use url::Url;
 
 use crate::virtual_files::{VirtualFiles, materialize_builtins};
@@ -22,7 +23,12 @@ pub struct Backend {
 }
 
 impl Backend {
-    pub fn new(client: ClientSocket, ws_broadcast: Option<WsBroadcast>) -> Self {
+    pub fn new(
+        client: ClientSocket,
+        ws_broadcast: Option<WsBroadcast>,
+        doc_nav_tx: Option<broadcast::Sender<String>>,
+        docs_url: Option<String>,
+    ) -> Self {
         let db = DriverDataBase::default();
         let mut virtual_files = VirtualFiles::new("fe-language-server-").ok();
         if let Some(vfs) = virtual_files.as_mut()

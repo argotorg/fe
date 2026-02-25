@@ -61,6 +61,11 @@ pub async fn handle_execute_command(
     backend: &mut Backend,
     params: ExecuteCommandParams,
 ) -> Result<Option<Value>, ResponseError> {
+    // Handle fe.openDocs separately — it opens a URL, not codegen
+    if params.command == "fe.openDocs" {
+        return handle_open_docs(backend, &params.arguments).await;
+    }
+
     let kind = match params.command.as_str() {
         "fe.viewMir" => CodegenKind::Mir,
         "fe.viewYul" => CodegenKind::Yul,
@@ -196,6 +201,54 @@ pub async fn handle_execute_command(
         .apply_edit(ApplyWorkspaceEditParams {
             label: Some(format!("View {}", kind.label())),
             edit,
+        })
+        .await;
+
+    Ok(None)
+}
+
+/// Handle `fe.openDocs` — open the documentation page for an item.
+///
+/// Arguments: `[path]` where `path` is a doc URL path like `"mylib::Foo/struct"`,
+/// or no arguments to open the docs root.
+async fn handle_open_docs(
+    backend: &mut Backend,
+    arguments: &[Value],
+) -> Result<Option<Value>, ResponseError> {
+    let base = match &backend.docs_url {
+        Some(url) => url.clone(),
+        None => {
+            let _ = backend.client.clone().show_message(ShowMessageParams {
+                typ: MessageType::INFO,
+                message: "Documentation server is not running. Start with `fe lsp` to enable."
+                    .to_string(),
+            });
+            return Ok(None);
+        }
+    };
+
+    let doc_path = arguments
+        .first()
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    let url_str = if doc_path.is_empty() {
+        base
+    } else {
+        format!("{base}#{doc_path}")
+    };
+
+    let uri = Url::parse(&url_str).map_err(|e| {
+        ResponseError::new(ErrorCode::INTERNAL_ERROR, format!("invalid docs URL: {e}"))
+    })?;
+
+    let _ = backend
+        .client
+        .show_document(ShowDocumentParams {
+            uri,
+            external: Some(true),
+            take_focus: Some(true),
+            selection: None,
         })
         .await;
 

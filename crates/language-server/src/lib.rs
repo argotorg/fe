@@ -1,5 +1,6 @@
 mod backend;
 pub mod cli;
+pub mod combined_server;
 mod fallback;
 mod functionality;
 pub mod logging;
@@ -30,14 +31,24 @@ use async_lsp::server::LifecycleLayer;
 use async_std::net::TcpListener;
 use futures::StreamExt;
 use futures::io::AsyncReadExt;
-use server::setup;
+use server::{setup, setup_service, spawn_backend};
+use tokio::sync::{broadcast, watch};
 use tower::ServiceBuilder;
 use tracing::instrument::WithSubscriber;
 use tracing::{error, info};
 
 pub use logging::setup_panic_hook;
 
-pub async fn run_stdio_server(ws_port: Option<u16>) {
+/// Configuration for the combined HTTP+WS doc/LSP server.
+pub struct CombinedServerConfig {
+    pub listener: tokio::net::TcpListener,
+    pub doc_html: String,
+    /// Base URL for the documentation server (e.g. "http://127.0.0.1:9000").
+    /// Passed to Backend so `fe.openDocs` can construct full URLs.
+    pub docs_url: Option<String>,
+}
+
+pub async fn run_stdio_server(ws_port: Option<u16>, combined: Option<CombinedServerConfig>) {
     // Optionally start the WebSocket notification server
     let ws_broadcast = ws_port.map(|port| {
         let (tx, _rx) = ws_notify::new_broadcast();
@@ -45,12 +56,42 @@ pub async fn run_stdio_server(ws_port: Option<u16>) {
         tx
     });
 
+    // Channels for sharing the Backend actor with the combined server
+    let (actor_tx, actor_rx) = watch::channel(None);
+    let (doc_nav_tx, _doc_nav_rx) = broadcast::channel::<String>(64);
+
+    // Extract docs_url before moving combined config
+    let docs_url = combined.as_ref().and_then(|c| c.docs_url.clone());
+
+    // Start the combined server if configured
+    if let Some(config) = combined {
+        let combined_actor_rx = actor_rx.clone();
+        let combined_nav_tx = doc_nav_tx.clone();
+        tokio::spawn(async move {
+            combined_server::run(
+                config.listener,
+                config.doc_html,
+                combined_actor_rx,
+                combined_nav_tx,
+            )
+            .await;
+        });
+    }
+
+    let doc_nav_tx_for_backend = doc_nav_tx.clone();
+
     let (server, client) = async_lsp::MainLoop::new_server(|client| {
-        let lsp_service = setup(
+        let actor_ref = spawn_backend(
             client.clone(),
             "LSP actor".to_string(),
             ws_broadcast.clone(),
+            Some(doc_nav_tx_for_backend.clone()),
+            docs_url.clone(),
         );
+        // Publish the actor ref so the combined server can use it
+        let _ = actor_tx.send(Some(actor_ref.clone()));
+
+        let lsp_service = setup_service(actor_ref, client.clone());
         ServiceBuilder::new()
             .layer(LifecycleLayer::default())
             .layer(CatchUnwindLayer::default())

@@ -7,7 +7,7 @@ use std::net::SocketAddr;
 
 use futures::stream::SplitSink;
 use futures::{SinkExt, StreamExt};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast;
 use tokio_tungstenite::WebSocketStream;
@@ -15,21 +15,11 @@ use tokio_tungstenite::tungstenite::Message;
 use tracing::{error, info, warn};
 
 /// Server → client messages.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type")]
 pub enum WsServerMsg {
     /// A file was changed (saved/edited).
     Update { uri: String },
-    /// Navigate the doc viewer to a specific path.
-    Navigate { path: String },
-}
-
-/// Client → server messages.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
-pub enum WsClientMsg {
-    /// Request the editor to navigate to a source location.
-    GotoSource { path: String },
 }
 
 pub type WsBroadcast = broadcast::Sender<WsServerMsg>;
@@ -105,16 +95,7 @@ async fn handle_ws_client(stream: TcpStream, mut broadcast_rx: broadcast::Receiv
             frame = ws_rx.next() => {
                 match frame {
                     Some(Ok(Message::Text(text))) => {
-                        match serde_json::from_str::<WsClientMsg>(text.as_ref()) {
-                            Ok(client_msg) => {
-                                info!("WebSocket client message: {client_msg:?}");
-                                // Client messages can be handled here in the future
-                                // (e.g., GotoSource -> trigger editor navigation)
-                            }
-                            Err(e) => {
-                                warn!("Invalid WebSocket message: {e}");
-                            }
-                        }
+                        info!("WebSocket client text: {text}");
                     }
                     Some(Ok(Message::Close(_))) | None => {
                         info!("WebSocket client disconnected");
@@ -151,38 +132,6 @@ mod tests {
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains(r#""type":"Update""#));
         assert!(json.contains(r#""uri":"file:///foo.fe""#));
-
-        let decoded: WsServerMsg = serde_json::from_str(&json).unwrap();
-        match decoded {
-            WsServerMsg::Update { uri } => assert_eq!(uri, "file:///foo.fe"),
-            _ => panic!("wrong variant"),
-        }
-    }
-
-    #[test]
-    fn server_msg_navigate_serialization() {
-        let msg = WsServerMsg::Navigate {
-            path: "mylib::Foo/struct".into(),
-        };
-        let json = serde_json::to_string(&msg).unwrap();
-        assert!(json.contains(r#""type":"Navigate""#));
-        let decoded: WsServerMsg = serde_json::from_str(&json).unwrap();
-        match decoded {
-            WsServerMsg::Navigate { path } => assert_eq!(path, "mylib::Foo/struct"),
-            _ => panic!("wrong variant"),
-        }
-    }
-
-    #[test]
-    fn client_msg_goto_source_serialization() {
-        let msg = WsClientMsg::GotoSource {
-            path: "src/lib.fe:42".into(),
-        };
-        let json = serde_json::to_string(&msg).unwrap();
-        let decoded: WsClientMsg = serde_json::from_str(&json).unwrap();
-        match decoded {
-            WsClientMsg::GotoSource { path } => assert_eq!(path, "src/lib.fe:42"),
-        }
     }
 
     #[test]
@@ -191,9 +140,7 @@ mod tests {
         let mut rx2 = tx.subscribe();
         tx.send(WsServerMsg::Update { uri: "test".into() }).unwrap();
         let msg = rx2.try_recv().unwrap();
-        match msg {
-            WsServerMsg::Update { uri } => assert_eq!(uri, "test"),
-            _ => panic!("wrong variant"),
-        }
+        let WsServerMsg::Update { uri } = msg;
+        assert_eq!(uri, "test");
     }
 }
