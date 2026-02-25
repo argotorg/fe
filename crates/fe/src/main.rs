@@ -730,6 +730,7 @@ fn generate_lsp_doc_html(resolved_root: Option<&Utf8PathBuf>, port: u16) -> Stri
 
     let mut db = driver::DriverDataBase::default();
     let mut index = fe_web::model::DocIndex::new();
+    let mut scip_json: Option<String> = None;
 
     if let Ok(root_url) = url::Url::from_directory_path(
         root_path
@@ -794,6 +795,62 @@ fn generate_lsp_doc_html(resolved_root: Option<&Utf8PathBuf>, port: u16) -> Stri
             let trait_impl_links = extractor.extract_trait_impl_links(builtin);
             index.link_trait_impls(trait_impl_links);
         }
+
+        // Generate SCIP data for interactive highlighting and type linking.
+        // Includes user ingots and builtins (core, std).
+        let mut combined_scip = scip::types::Index::default();
+        let mut any_scip = false;
+
+        // Collect all ingot URLs: user ingots + builtins
+        let builtin_urls = [
+            url::Url::parse(common::stdlib::BUILTIN_CORE_BASE_URL).unwrap(),
+            url::Url::parse(common::stdlib::BUILTIN_STD_BASE_URL).unwrap(),
+        ];
+        let all_scip_urls: Vec<_> = discovered
+            .ingot_urls
+            .iter()
+            .chain(builtin_urls.iter())
+            .collect();
+
+        for ingot_url in &all_scip_urls {
+            match crate::scip_index::generate_scip(&db, ingot_url) {
+                Ok(mut scip_index) => {
+                    // For file:// URLs, use filesystem path as project root.
+                    // For non-file URLs (builtins), use "/" with the URL base.
+                    if let Some(project_root) = ingot_url
+                        .to_file_path()
+                        .ok()
+                        .and_then(|p| camino::Utf8PathBuf::from_path_buf(p).ok())
+                    {
+                        crate::scip_index::enrich_signatures(
+                            &db,
+                            &project_root,
+                            &mut index,
+                            &mut scip_index,
+                        );
+                    } else {
+                        // Non-file URL (e.g. builtin-core:///): use virtual root
+                        crate::scip_index::enrich_signatures_with_base(
+                            &db,
+                            camino::Utf8Path::new("/"),
+                            Some(ingot_url),
+                            &mut index,
+                            &mut scip_index,
+                        );
+                    }
+                    combined_scip.documents.extend(scip_index.documents);
+                    any_scip = true;
+                    eprintln!("  SCIP ok: {ingot_url}");
+                }
+                Err(e) => {
+                    eprintln!("Warning: SCIP generation failed for {ingot_url}: {e}");
+                }
+            }
+        }
+        if any_scip {
+            let json_data = crate::scip_index::scip_to_json_data(&combined_scip);
+            scip_json = Some(crate::scip_index::inject_doc_urls(&json_data, &index));
+        }
     }
 
     // Generate HTML with auto-connect script
@@ -805,7 +862,7 @@ fn generate_lsp_doc_html(resolved_root: Option<&Utf8PathBuf>, port: u16) -> Stri
     } else {
         "Fe Documentation".to_string()
     };
-    let mut html = fe_web::assets::html_shell_full(&title, &json, None, None);
+    let mut html = fe_web::assets::html_shell_full(&title, &json, scip_json.as_deref(), None);
 
     // Append auto-connect script
     let connect_script = format!(
