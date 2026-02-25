@@ -876,6 +876,7 @@ fn parse_fn_item_block<S: TokenStream>(
             )?;
         } else {
             let proof = parser.error("only `fn` is allowed in this block");
+            parser.bump();
             parser.try_recover().map_err(|r| r.add_err_proof(proof))?;
         }
     }

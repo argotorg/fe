@@ -46,6 +46,7 @@ pub struct Parser<S: TokenStream> {
     /// The dry run states which holds the each state of the parser when it
     /// enters dry run mode.
     dry_run_states: Vec<DryRunState<S>>,
+    dry_run_next_trivias_pool: Vec<VecDeque<S::Token>>,
 }
 
 impl<S: TokenStream> Parser<S> {
@@ -61,6 +62,7 @@ impl<S: TokenStream> Parser<S> {
             is_newline_trivia: true,
             next_trivias: VecDeque::new(),
             dry_run_states: Vec::new(),
+            dry_run_next_trivias_pool: Vec::new(),
         }
     }
 
@@ -344,11 +346,13 @@ impl<S: TokenStream> Parser<S> {
     {
         // Enters the dry run mode.
         self.stream.set_bt_point();
+        let mut next_trivias = self.dry_run_next_trivias_pool.pop().unwrap_or_default();
+        next_trivias.clone_from(&self.next_trivias);
         self.dry_run_states.push(DryRunState {
             pos: self.current_pos,
             end_of_prev_token: self.end_of_prev_token,
             err_num: self.errors.len(),
-            next_trivias: self.next_trivias.clone(),
+            next_trivias,
             err: false,
         });
 
@@ -360,9 +364,23 @@ impl<S: TokenStream> Parser<S> {
         self.errors.truncate(state.err_num);
         self.current_pos = state.pos;
         self.end_of_prev_token = state.end_of_prev_token;
-        self.next_trivias = state.next_trivias;
+        let next_trivias = std::mem::replace(&mut self.next_trivias, state.next_trivias);
+        self.recycle_dry_run_next_trivias(next_trivias);
 
         r
+    }
+
+    fn recycle_dry_run_next_trivias(&mut self, mut next_trivias: VecDeque<S::Token>) {
+        // Keep a small pool to amortize dry-run allocations without retaining
+        // unbounded buffer memory from pathological inputs.
+        if self.dry_run_next_trivias_pool.len() >= 8 {
+            return;
+        }
+
+        if next_trivias.capacity() <= 256 {
+            next_trivias.clear();
+            self.dry_run_next_trivias_pool.push(next_trivias);
+        }
     }
 
     /// Bumps the current token and its leading trivias.
