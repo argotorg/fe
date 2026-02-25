@@ -133,7 +133,7 @@ pub async fn initialize(
         .and_then(|folder| folder.uri.to_file_path().ok())
         .unwrap_or_else(|| std::env::current_dir().unwrap());
 
-    backend.workspace_root = Some(root.clone());
+    backend.lsp_workspace_root = Some(root.clone());
 
     // Discover and load all ingots in the workspace
     discover_and_load_ingots(backend, &root).await?;
@@ -224,7 +224,7 @@ pub async fn initialized(
             continue;
         }
 
-        if let Some(root) = backend.workspace_root.as_ref() {
+        if let Some(root) = backend.lsp_workspace_root.as_ref() {
             let Ok(path) = url.to_file_path() else {
                 continue;
             };

@@ -29,7 +29,7 @@ pub struct Backend {
     pub(super) doc_reload_tx: Option<broadcast::Sender<String>>,
     pub(super) doc_reload_generation: Arc<AtomicU64>,
     pub(super) docs_url: Option<String>,
-    pub(super) workspace_root: Option<PathBuf>,
+    pub(super) lsp_workspace_root: Option<PathBuf>,
 }
 
 impl Backend {
@@ -66,7 +66,7 @@ impl Backend {
             doc_reload_tx,
             doc_reload_generation: Arc::new(AtomicU64::new(0)),
             docs_url,
-            workspace_root: None,
+            lsp_workspace_root: None,
         }
     }
 
