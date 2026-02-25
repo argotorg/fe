@@ -28,6 +28,7 @@ derive_more = { version = "1.0", default-features = false, features = [
 ] }
 dir-test = "0.4"
 glob = "0.3.2"
+crossbeam-channel = "0.5.15"
 rustc-hash = "2.1.0"
 num-bigint = "0.4"
 num-traits = "0.2"

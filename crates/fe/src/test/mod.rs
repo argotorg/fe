@@ -24,6 +24,7 @@ use common::{
     ingot::Ingot,
 };
 use contract_harness::{CallGasProfile, EvmTraceOptions, ExecutionOptions, RuntimeInstance};
+use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use driver::DriverDataBase;
 use hir::hir_def::{HirIngot, TopLevelMod, item::ItemKind};
 use mir::{fmt as mir_fmt, lower_module};
@@ -31,16 +32,17 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use solc_runner::compile_single_contract_with_solc;
 use std::{
     fmt::Write as _,
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        mpsc,
-    },
+    sync::Arc,
+    time::{Duration, Instant},
 };
 use url::Url;
 
 mod gas;
 
 pub(super) const YUL_VERIFY_RUNTIME: bool = true;
+const MAX_STREAMED_SUITE_LABEL_CHARS: usize = 20;
+const STREAMED_SUITE_LABEL_ELLIPSIS: &str = "..";
+const STREAMED_STATUS_COLUMN_WIDTH: usize = 16;
 
 fn install_report_panic_hook(report: &ReportContext, filename: &str) -> PanicReportGuard {
     let dir = report.root_dir.join("errors");
@@ -71,6 +73,7 @@ pub(super) struct TestOutcome {
     step_count: Option<u64>,
     runtime_metrics: Option<EvmRuntimeMetrics>,
     gas_profile: Option<CallGasProfile>,
+    elapsed: Duration,
 }
 
 #[derive(Debug, Clone)]
@@ -577,9 +580,360 @@ struct SuiteRunResult {
     index: usize,
     path: Utf8PathBuf,
     suite_key: String,
-    output: String,
     results: Vec<TestResult>,
     aggregate_suite_staging: Option<ReportStaging>,
+}
+
+#[derive(Debug, Clone)]
+struct SingleTestJob {
+    suite_key: String,
+    case: TestMetadata,
+    evm_trace: Option<EvmTraceOptions>,
+    report_root: Option<Utf8PathBuf>,
+}
+
+#[derive(Debug)]
+enum JobOutcome {
+    Text {
+        suite_key: String,
+        text: String,
+    },
+    Status {
+        suite_key: String,
+        kind: StreamStatusKind,
+        elapsed: Option<Duration>,
+        message: String,
+    },
+    SuitePrepared(PreparedSuite),
+    SingleFinished(Box<SingleRunResult>),
+    SuiteFinished(SuiteRunResult),
+}
+
+#[derive(Debug, Clone, Copy)]
+enum StreamStatusKind {
+    Compiling,
+    Ready,
+    Pass,
+    Fail,
+    Error,
+}
+
+#[derive(Debug)]
+struct PreparedSuite {
+    plan: SuitePlan,
+    results: Vec<TestResult>,
+    single_jobs: Vec<SingleTestJob>,
+    gas_comparison_cases: Option<Vec<GasComparisonCase>>,
+    aggregate_suite_staging: Option<ReportStaging>,
+    build_elapsed: Duration,
+}
+
+#[derive(Debug)]
+struct SingleRunResult {
+    suite_key: String,
+    symbol_name: String,
+    result: TestResult,
+    measurement: Option<GasMeasurement>,
+    elapsed: Duration,
+}
+
+#[derive(Debug)]
+struct SuiteState {
+    plan: SuitePlan,
+    results: Vec<TestResult>,
+    primary_measurements: FxHashMap<String, GasMeasurement>,
+    gas_comparison_cases: Option<Vec<GasComparisonCase>>,
+    expected_singles: usize,
+    completed_singles: usize,
+    aggregate_suite_staging: Option<ReportStaging>,
+}
+
+#[derive(Debug)]
+struct DiscoverResult {
+    tests: Vec<TestMetadata>,
+    gas_comparison_cases: Option<Vec<GasComparisonCase>>,
+}
+
+#[derive(Debug)]
+struct SuitePreparation {
+    results: Vec<TestResult>,
+    single_jobs: Vec<SingleTestJob>,
+    gas_comparison_cases: Option<Vec<GasComparisonCase>>,
+}
+
+#[derive(Debug)]
+struct WorkerSharedConfig {
+    show_logs: bool,
+    backend: String,
+    yul_optimize: bool,
+    solc: Option<String>,
+    opt_level: OptLevel,
+    debug: TestDebugOptions,
+    report_failed_only: bool,
+    aggregate_report: bool,
+    call_trace: bool,
+    multi: bool,
+}
+
+#[derive(Clone, Debug)]
+struct SuiteWorkerConfig {
+    shared: Arc<WorkerSharedConfig>,
+    filter: Option<String>,
+    allow_single_steal: bool,
+    prefer_single_when_idle: bool,
+}
+
+#[derive(Clone, Debug)]
+struct SingleWorkerConfig {
+    shared: Arc<WorkerSharedConfig>,
+}
+
+#[derive(Debug)]
+struct SuiteWorkerChannels {
+    suite_rx: Receiver<SuitePlan>,
+    single_rx: Receiver<SingleTestJob>,
+    outcome_tx: Sender<JobOutcome>,
+}
+
+#[derive(Debug)]
+struct SingleWorkerChannels {
+    single_rx: Receiver<SingleTestJob>,
+    outcome_tx: Sender<JobOutcome>,
+}
+
+#[derive(Debug)]
+struct OutcomeCollectorState {
+    suite_runs: Vec<SuiteRunResult>,
+    pending_suites: FxHashMap<String, SuiteState>,
+    next_suite_idx: usize,
+    in_flight_suites: usize,
+    max_in_flight_suites: usize,
+    suite_index_by_key: FxHashMap<String, usize>,
+    buffer_grouped_output: bool,
+    grouped_lines: Vec<Vec<String>>,
+}
+
+struct OutcomeContext<'a> {
+    suite_plans: &'a [SuitePlan],
+    suite_tx: &'a Sender<SuitePlan>,
+    single_tx: &'a Sender<SingleTestJob>,
+    shared: &'a WorkerSharedConfig,
+    filter: Option<&'a str>,
+    multi: bool,
+    suite_label_width: usize,
+}
+
+impl OutcomeCollectorState {
+    fn new(
+        suite_plans: &[SuitePlan],
+        grouped: bool,
+        multi: bool,
+        max_in_flight_suites: usize,
+    ) -> Self {
+        Self {
+            suite_runs: Vec::with_capacity(suite_plans.len()),
+            pending_suites: FxHashMap::default(),
+            next_suite_idx: 0,
+            in_flight_suites: 0,
+            max_in_flight_suites: max_in_flight_suites.max(1),
+            suite_index_by_key: suite_plans
+                .iter()
+                .map(|plan| (plan.suite_key.clone(), plan.index))
+                .collect(),
+            buffer_grouped_output: grouped && multi,
+            grouped_lines: vec![Vec::new(); suite_plans.len()],
+        }
+    }
+
+    fn queue_next_suite(&mut self, ctx: &OutcomeContext<'_>) -> Result<(), String> {
+        if self.next_suite_idx >= ctx.suite_plans.len()
+            || self.in_flight_suites >= self.max_in_flight_suites
+        {
+            return Ok(());
+        }
+        ctx.suite_tx
+            .send(ctx.suite_plans[self.next_suite_idx].clone())
+            .map_err(|err| format!("failed to queue suite job: {err}"))?;
+        self.next_suite_idx += 1;
+        self.in_flight_suites += 1;
+        Ok(())
+    }
+
+    fn queue_initial_suites(
+        &mut self,
+        ctx: &OutcomeContext<'_>,
+        worker_count: usize,
+    ) -> Result<(), String> {
+        for _ in 0..worker_count
+            .min(self.max_in_flight_suites)
+            .min(ctx.suite_plans.len())
+        {
+            self.queue_next_suite(ctx)?;
+        }
+        Ok(())
+    }
+
+    fn handle_outcome(
+        &mut self,
+        outcome: JobOutcome,
+        ctx: &OutcomeContext<'_>,
+    ) -> Result<(), String> {
+        match outcome {
+            JobOutcome::Text { suite_key, text } => {
+                if self.buffer_grouped_output {
+                    let suite_idx = *self.suite_index_by_key.get(&suite_key).ok_or_else(|| {
+                        format!("received text outcome for unknown suite `{suite_key}`")
+                    })?;
+                    append_streamed_multi_output_lines(
+                        &mut self.grouped_lines[suite_idx],
+                        ctx.suite_label_width,
+                        &suite_key,
+                        &text,
+                    );
+                } else {
+                    print_streamed_output(ctx.multi, ctx.suite_label_width, &suite_key, &text);
+                }
+            }
+            JobOutcome::Status {
+                suite_key,
+                kind,
+                elapsed,
+                message,
+            } => {
+                if self.buffer_grouped_output {
+                    let suite_idx = *self.suite_index_by_key.get(&suite_key).ok_or_else(|| {
+                        format!("received status outcome for unknown suite `{suite_key}`")
+                    })?;
+                    self.grouped_lines[suite_idx].push(format_streamed_status_line(
+                        true,
+                        ctx.suite_label_width,
+                        &suite_key,
+                        kind,
+                        elapsed,
+                        &message,
+                    ));
+                } else {
+                    print_streamed_status(
+                        ctx.multi,
+                        ctx.suite_label_width,
+                        &suite_key,
+                        kind,
+                        elapsed,
+                        &message,
+                    );
+                }
+            }
+            JobOutcome::SuiteFinished(suite_run) => {
+                let suite_idx = suite_run.index;
+                if self.in_flight_suites == 0 {
+                    return Err(format!(
+                        "received suite completion for `{}` with no in-flight suites",
+                        suite_run.suite_key
+                    ));
+                }
+                self.in_flight_suites -= 1;
+                self.suite_runs.push(suite_run);
+                if self.buffer_grouped_output {
+                    self.flush_grouped_suite_lines(suite_idx)?;
+                }
+                self.queue_next_suite(ctx)?;
+            }
+            JobOutcome::SuitePrepared(prepared) => {
+                let suite_key = prepared.plan.suite_key.clone();
+                let expected_singles = prepared.single_jobs.len();
+                let (kind, message) = suite_preparation_status(expected_singles, &prepared.results);
+                self.pending_suites.insert(
+                    suite_key.clone(),
+                    SuiteState {
+                        plan: prepared.plan,
+                        results: prepared.results,
+                        primary_measurements: FxHashMap::default(),
+                        gas_comparison_cases: prepared.gas_comparison_cases,
+                        expected_singles,
+                        completed_singles: 0,
+                        aggregate_suite_staging: prepared.aggregate_suite_staging,
+                    },
+                );
+
+                for single_job in prepared.single_jobs {
+                    ctx.single_tx
+                        .send(single_job)
+                        .map_err(|err| format!("failed to queue single test job: {err}"))?;
+                }
+
+                if ctx.multi || matches!(kind, StreamStatusKind::Error) {
+                    print_streamed_status(
+                        ctx.multi,
+                        ctx.suite_label_width,
+                        &suite_key,
+                        kind,
+                        Some(prepared.build_elapsed),
+                        &message,
+                    );
+                }
+                self.queue_next_suite(ctx)?;
+
+                if expected_singles == 0 {
+                    self.finalize_pending_suite(&suite_key, ctx)?;
+                }
+            }
+            JobOutcome::SingleFinished(single) => {
+                let single = *single;
+                let suite_key = single.suite_key.clone();
+                let suite_is_complete = {
+                    let state = self.pending_suites.get_mut(&suite_key).ok_or_else(|| {
+                        format!("received single test outcome for unknown suite `{suite_key}`")
+                    })?;
+                    state.completed_singles += 1;
+                    state.results.push(single.result);
+                    if let Some(measurement) = single.measurement {
+                        state
+                            .primary_measurements
+                            .insert(single.symbol_name, measurement);
+                    }
+                    state.completed_singles == state.expected_singles
+                };
+                if suite_is_complete {
+                    self.finalize_pending_suite(&suite_key, ctx)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn flush_grouped_suite_lines(&mut self, suite_idx: usize) -> Result<(), String> {
+        let lines = self
+            .grouped_lines
+            .get_mut(suite_idx)
+            .ok_or_else(|| format!("received suite index out of range: {suite_idx}"))?;
+        for line in lines.drain(..) {
+            println!("{line}");
+        }
+        Ok(())
+    }
+
+    fn finalize_pending_suite(
+        &mut self,
+        suite_key: &str,
+        ctx: &OutcomeContext<'_>,
+    ) -> Result<(), String> {
+        if self.in_flight_suites == 0 {
+            return Err(format!(
+                "finalized suite `{suite_key}` with no in-flight suites"
+            ));
+        }
+        self.in_flight_suites -= 1;
+        finalize_pending_suite(
+            &mut self.pending_suites,
+            &mut self.suite_runs,
+            suite_key,
+            ctx.multi,
+            ctx.suite_label_width,
+            ctx.shared,
+            ctx.filter,
+        );
+        self.queue_next_suite(ctx)
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -750,10 +1104,7 @@ fn build_suite_plans(
     Ok(plans)
 }
 
-fn effective_jobs(requested: usize, suite_count: usize) -> usize {
-    if suite_count == 0 {
-        return 1;
-    }
+fn effective_jobs(requested: usize, suite_count: usize, grouped: bool) -> usize {
     let requested = if requested == 0 {
         std::thread::available_parallelism()
             .map(|n| n.get())
@@ -761,7 +1112,34 @@ fn effective_jobs(requested: usize, suite_count: usize) -> usize {
     } else {
         requested
     };
-    requested.clamp(1, suite_count)
+    if grouped {
+        requested.clamp(1, suite_count.max(1))
+    } else {
+        requested.max(1)
+    }
+}
+
+fn max_in_flight_suites(
+    grouped: bool,
+    suite_worker_count: usize,
+    single_worker_count: usize,
+) -> usize {
+    if grouped || single_worker_count == 0 {
+        suite_worker_count.max(1)
+    } else {
+        suite_worker_count.saturating_add(1)
+    }
+}
+
+fn displayed_suite_label(suite_key: &str) -> String {
+    if suite_key.chars().count() <= MAX_STREAMED_SUITE_LABEL_CHARS {
+        return suite_key.to_string();
+    }
+
+    let keep = MAX_STREAMED_SUITE_LABEL_CHARS.saturating_sub(STREAMED_SUITE_LABEL_ELLIPSIS.len());
+    let mut shortened: String = suite_key.chars().take(keep).collect();
+    shortened.push_str(STREAMED_SUITE_LABEL_ELLIPSIS);
+    shortened
 }
 
 /// Run tests in the given path.
@@ -781,6 +1159,7 @@ pub fn run_tests(
     ingot: Option<&str>,
     filter: Option<&str>,
     jobs: usize,
+    grouped: bool,
     show_logs: bool,
     backend: &str,
     yul_optimize: bool,
@@ -798,8 +1177,16 @@ pub fn run_tests(
     }
     let input_paths = expand_workspace_test_paths(expanded_paths, ingot)?;
     let suite_plans = build_suite_plans(input_paths, report_dir)?;
-    let worker_count = effective_jobs(jobs, suite_plans.len());
+    if suite_plans.is_empty() {
+        return Ok(false);
+    }
+    let worker_count = effective_jobs(jobs, suite_plans.len(), grouped);
     let multi = suite_plans.len() > 1;
+    let suite_label_width = suite_plans
+        .iter()
+        .map(|plan| displayed_suite_label(&plan.suite_key).chars().count())
+        .max()
+        .unwrap_or(0);
     if multi {
         println!(
             "running `fe test` for {} inputs (jobs={worker_count})\n",
@@ -826,65 +1213,89 @@ pub fn run_tests(
         write_report_meta(root, "fe test report", None);
     }
 
-    let aggregate_report = report_root.is_some();
-    let mut suite_runs = Vec::with_capacity(suite_plans.len());
-    if worker_count == 1 || suite_plans.len() <= 1 {
-        for plan in &suite_plans {
-            suite_runs.push(run_single_suite(
-                plan,
-                filter,
-                show_logs,
-                backend,
-                yul_optimize,
-                solc,
-                opt_level,
-                debug,
-                report_failed_only,
-                aggregate_report,
-                call_trace,
-            )?);
-        }
-    } else {
-        let (tx, rx) = mpsc::channel::<Result<SuiteRunResult, String>>();
-        let next = AtomicUsize::new(0);
-        std::thread::scope(|scope| {
-            for _ in 0..worker_count {
-                let tx = tx.clone();
-                let plans = &suite_plans;
-                let next = &next;
-                scope.spawn(move || {
-                    loop {
-                        let idx = next.fetch_add(1, Ordering::Relaxed);
-                        if idx >= plans.len() {
-                            break;
-                        }
-                        let result = run_single_suite(
-                            &plans[idx],
-                            filter,
-                            show_logs,
-                            backend,
-                            yul_optimize,
-                            solc,
-                            opt_level,
-                            debug,
-                            report_failed_only,
-                            aggregate_report,
-                            call_trace,
-                        );
-                        let _ = tx.send(result);
-                    }
-                });
-            }
-        });
-        drop(tx);
+    let filter = filter.map(str::to_owned);
+    let shared = Arc::new(WorkerSharedConfig {
+        show_logs,
+        backend: backend.to_string(),
+        yul_optimize,
+        solc: solc.map(str::to_owned),
+        opt_level,
+        debug: debug.clone(),
+        report_failed_only,
+        aggregate_report: report_root.is_some(),
+        call_trace,
+        multi,
+    });
+    let mut suite_runs = std::thread::scope(|scope| -> Result<Vec<SuiteRunResult>, String> {
+        let (suite_tx, suite_rx) = crossbeam_channel::unbounded::<SuitePlan>();
+        let (single_tx, single_rx) = crossbeam_channel::unbounded::<SingleTestJob>();
+        let (outcome_tx, outcome_rx) = crossbeam_channel::unbounded::<JobOutcome>();
+        let suite_worker_count = if grouped { worker_count } else { 1 };
+        let single_worker_count = if grouped {
+            0
+        } else {
+            worker_count.saturating_sub(suite_worker_count)
+        };
+        let suite_in_flight_limit =
+            max_in_flight_suites(grouped, suite_worker_count, single_worker_count);
+        let suite_worker_cfg = SuiteWorkerConfig {
+            shared: Arc::clone(&shared),
+            filter: filter.clone(),
+            allow_single_steal: !grouped,
+            prefer_single_when_idle: single_worker_count == 0,
+        };
 
-        for _ in 0..suite_plans.len() {
-            let result = rx
+        for _ in 0..suite_worker_count {
+            let cfg = suite_worker_cfg.clone();
+            let channels = SuiteWorkerChannels {
+                suite_rx: suite_rx.clone(),
+                single_rx: single_rx.clone(),
+                outcome_tx: outcome_tx.clone(),
+            };
+            if grouped {
+                scope.spawn(move || suite_worker_loop_grouped(channels, cfg));
+            } else {
+                scope.spawn(move || suite_worker_loop_parallel(channels, cfg));
+            }
+        }
+
+        let single_worker_cfg = SingleWorkerConfig {
+            shared: Arc::clone(&shared),
+        };
+        for _ in 0..single_worker_count {
+            let cfg = single_worker_cfg.clone();
+            let channels = SingleWorkerChannels {
+                single_rx: single_rx.clone(),
+                outcome_tx: outcome_tx.clone(),
+            };
+            scope.spawn(move || single_worker_loop(channels, cfg));
+        }
+        drop(outcome_tx);
+
+        let ctx = OutcomeContext {
+            suite_plans: &suite_plans,
+            suite_tx: &suite_tx,
+            single_tx: &single_tx,
+            shared: shared.as_ref(),
+            filter: filter.as_deref(),
+            multi,
+            suite_label_width,
+        };
+        let mut collector =
+            OutcomeCollectorState::new(&suite_plans, grouped, multi, suite_in_flight_limit);
+        collector.queue_initial_suites(&ctx, suite_worker_count)?;
+
+        while collector.suite_runs.len() < suite_plans.len() {
+            let outcome = outcome_rx
                 .recv()
                 .map_err(|err| format!("suite worker failed: {err}"))?;
-            suite_runs.push(result?);
+            collector.handle_outcome(outcome, &ctx)?;
         }
-    }
+
+        drop(single_tx);
+        drop(suite_tx);
+        Ok(collector.suite_runs)
+    })?;
 
     suite_runs.sort_unstable_by_key(|run| run.index);
 
@@ -893,17 +1304,10 @@ pub fn run_tests(
         let SuiteRunResult {
             path,
             suite_key,
-            output,
             results,
             aggregate_suite_staging,
             ..
         } = suite_run;
-        if multi {
-            println!("==> {path}");
-        }
-        if !output.is_empty() {
-            print!("{output}");
-        }
 
         let suite_failed = results.iter().any(|r| !r.passed);
         if results.is_empty() {
@@ -937,7 +1341,7 @@ pub fn run_tests(
             backend,
             yul_optimize,
             opt_level,
-            filter,
+            filter.as_deref(),
             &test_results,
         );
         if let Err(err) = tar_gz_dir(&staging.root_dir, &out) {
@@ -954,22 +1358,413 @@ pub fn run_tests(
     Ok(test_results.iter().any(|r| !r.passed))
 }
 
-#[allow(clippy::too_many_arguments)]
-fn run_single_suite(
+fn print_streamed_output(multi: bool, suite_label_width: usize, suite_key: &str, text: &str) {
+    if text.is_empty() {
+        return;
+    }
+    if !multi {
+        print!("{text}");
+        return;
+    }
+
+    let mut lines = Vec::new();
+    append_streamed_multi_output_lines(&mut lines, suite_label_width, suite_key, text);
+    for line in lines {
+        println!("{line}");
+    }
+}
+
+fn print_streamed_status(
+    multi: bool,
+    suite_label_width: usize,
+    suite_key: &str,
+    kind: StreamStatusKind,
+    elapsed: Option<Duration>,
+    message: &str,
+) {
+    println!(
+        "{}",
+        format_streamed_status_line(multi, suite_label_width, suite_key, kind, elapsed, message)
+    );
+}
+
+fn append_streamed_multi_output_lines(
+    lines: &mut Vec<String>,
+    suite_label_width: usize,
+    suite_key: &str,
+    text: &str,
+) {
+    if text.is_empty() {
+        return;
+    }
+
+    let suite = format!("{:<suite_label_width$}", displayed_suite_label(suite_key)).magenta();
+    for line in text.lines() {
+        lines.push(if line.is_empty() {
+            format!(
+                "{: <width$} {suite}",
+                "",
+                width = STREAMED_STATUS_COLUMN_WIDTH
+            )
+        } else {
+            format!(
+                "{: <width$} {suite} {line}",
+                "",
+                width = STREAMED_STATUS_COLUMN_WIDTH
+            )
+        });
+    }
+}
+
+fn format_streamed_status_line(
+    multi: bool,
+    suite_label_width: usize,
+    suite_key: &str,
+    kind: StreamStatusKind,
+    elapsed: Option<Duration>,
+    message: &str,
+) -> String {
+    let status = format_streamed_status(kind, elapsed);
+    if !multi {
+        let status = colorize_streamed_status(kind, &status);
+        return if message.is_empty() {
+            status
+        } else {
+            format!("{status} {message}")
+        };
+    }
+
+    let status =
+        colorize_streamed_status(kind, &format!("{status:<STREAMED_STATUS_COLUMN_WIDTH$}"));
+    let suite = format!("{:<suite_label_width$}", displayed_suite_label(suite_key)).magenta();
+    if message.is_empty() {
+        format!("{status} {suite}")
+    } else {
+        format!("{status} {suite} {message}")
+    }
+}
+
+fn format_streamed_status(kind: StreamStatusKind, elapsed: Option<Duration>) -> String {
+    let label = match kind {
+        StreamStatusKind::Compiling => return "COMPILING".to_string(),
+        StreamStatusKind::Ready => "READY",
+        StreamStatusKind::Pass => "PASS ",
+        StreamStatusKind::Fail => "FAIL ",
+        StreamStatusKind::Error => "ERROR",
+    };
+    format!(
+        "{label} [{}s]",
+        format_elapsed_seconds_cell(elapsed.unwrap_or_default())
+    )
+}
+
+fn suite_preparation_status(
+    expected_singles: usize,
+    results: &[TestResult],
+) -> (StreamStatusKind, String) {
+    if results.iter().any(|result| !result.passed) {
+        let message = results
+            .iter()
+            .find(|result| !result.passed)
+            .and_then(|result| result.error_message.as_deref())
+            .and_then(|message| message.lines().next())
+            .map(str::trim)
+            .filter(|message| !message.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| "suite preparation failed".to_string());
+        return (StreamStatusKind::Error, message);
+    }
+
+    let label = if expected_singles == 1 {
+        "test"
+    } else {
+        "tests"
+    };
+    (
+        StreamStatusKind::Ready,
+        format!("running {expected_singles} {label}"),
+    )
+}
+
+fn colorize_streamed_status(kind: StreamStatusKind, status: &str) -> String {
+    let colorize = |s: &str| match kind {
+        StreamStatusKind::Pass => format!("{}", s.green()),
+        StreamStatusKind::Fail | StreamStatusKind::Error => format!("{}", s.red()),
+        StreamStatusKind::Ready | StreamStatusKind::Compiling => format!("{}", s.blue()),
+    };
+    if let Some(open) = status.find('[')
+        && let Some(close_rel) = status[open..].find(']')
+    {
+        let close = open + close_rel;
+        let left = &status[..open];
+        let time = &status[open..=close];
+        let right = &status[close + 1..];
+        let left = colorize(left);
+        return format!("{left}{}{}", time.white(), right);
+    }
+    colorize(status)
+}
+
+fn emit_single_outcome(
+    job: SingleTestJob,
+    outcome_tx: &Sender<JobOutcome>,
+    shared: &WorkerSharedConfig,
+) {
+    let (output, single) = run_single_test_job(job, shared);
+    let _ = outcome_tx.send(JobOutcome::Status {
+        suite_key: single.suite_key.clone(),
+        kind: if single.result.passed {
+            StreamStatusKind::Pass
+        } else {
+            StreamStatusKind::Fail
+        },
+        elapsed: Some(single.elapsed),
+        message: single.result.name.clone(),
+    });
+    if !output.is_empty() {
+        let _ = outcome_tx.send(JobOutcome::Text {
+            suite_key: single.suite_key.clone(),
+            text: output,
+        });
+    }
+    let _ = outcome_tx.send(JobOutcome::SingleFinished(Box::new(single)));
+}
+
+fn emit_parallel_suite_outcome(
+    plan: SuitePlan,
+    outcome_tx: &Sender<JobOutcome>,
+    cfg: &SuiteWorkerConfig,
+) {
+    if cfg.shared.multi {
+        let _ = outcome_tx.send(JobOutcome::Status {
+            suite_key: plan.suite_key.clone(),
+            kind: StreamStatusKind::Compiling,
+            elapsed: None,
+            message: plan.path.to_string(),
+        });
+    }
+    let (prepared, output) = prepare_suite_job(&plan, cfg.filter.as_deref(), cfg.shared.as_ref());
+    if !output.is_empty() {
+        let _ = outcome_tx.send(JobOutcome::Text {
+            suite_key: plan.suite_key.clone(),
+            text: output,
+        });
+    }
+    let _ = outcome_tx.send(JobOutcome::SuitePrepared(prepared));
+}
+
+fn emit_grouped_suite_outcome(
+    plan: SuitePlan,
+    outcome_tx: &Sender<JobOutcome>,
+    cfg: &SuiteWorkerConfig,
+) {
+    if cfg.shared.multi {
+        let _ = outcome_tx.send(JobOutcome::Status {
+            suite_key: plan.suite_key.clone(),
+            kind: StreamStatusKind::Compiling,
+            elapsed: None,
+            message: plan.path.to_string(),
+        });
+    }
+    let (prepared, output) = prepare_suite_job(&plan, cfg.filter.as_deref(), cfg.shared.as_ref());
+    if !output.is_empty() {
+        let _ = outcome_tx.send(JobOutcome::Text {
+            suite_key: plan.suite_key.clone(),
+            text: output,
+        });
+    }
+    if cfg.shared.multi {
+        let (kind, message) =
+            suite_preparation_status(prepared.single_jobs.len(), &prepared.results);
+        let _ = outcome_tx.send(JobOutcome::Status {
+            suite_key: plan.suite_key.clone(),
+            kind,
+            elapsed: Some(prepared.build_elapsed),
+            message,
+        });
+    }
+
+    let mut state = SuiteState {
+        plan: prepared.plan,
+        results: prepared.results,
+        primary_measurements: FxHashMap::default(),
+        gas_comparison_cases: prepared.gas_comparison_cases,
+        expected_singles: prepared.single_jobs.len(),
+        completed_singles: 0,
+        aggregate_suite_staging: prepared.aggregate_suite_staging,
+    };
+    for single_job in prepared.single_jobs {
+        let (output, single) = run_single_test_job(single_job, cfg.shared.as_ref());
+        let _ = outcome_tx.send(JobOutcome::Status {
+            suite_key: single.suite_key.clone(),
+            kind: if single.result.passed {
+                StreamStatusKind::Pass
+            } else {
+                StreamStatusKind::Fail
+            },
+            elapsed: Some(single.elapsed),
+            message: single.result.name.clone(),
+        });
+        if !output.is_empty() {
+            let _ = outcome_tx.send(JobOutcome::Text {
+                suite_key: single.suite_key.clone(),
+                text: output,
+            });
+        }
+        state.completed_singles += 1;
+        state.results.push(single.result);
+        if let Some(measurement) = single.measurement {
+            state
+                .primary_measurements
+                .insert(single.symbol_name, measurement);
+        }
+    }
+    let (suite_run, output) =
+        finalize_suite_state(state, cfg.shared.as_ref(), cfg.filter.as_deref());
+    if !output.is_empty() {
+        let _ = outcome_tx.send(JobOutcome::Text {
+            suite_key: plan.suite_key.clone(),
+            text: output,
+        });
+    }
+    let _ = outcome_tx.send(JobOutcome::SuiteFinished(suite_run));
+}
+
+fn single_worker_loop(channels: SingleWorkerChannels, cfg: SingleWorkerConfig) {
+    while let Ok(job) = channels.single_rx.recv() {
+        emit_single_outcome(job, &channels.outcome_tx, cfg.shared.as_ref());
+    }
+}
+
+fn drain_pending_single_jobs(
+    single_rx: &Receiver<SingleTestJob>,
+    outcome_tx: &Sender<JobOutcome>,
+    shared: &WorkerSharedConfig,
+) {
+    while let Ok(job) = single_rx.recv() {
+        emit_single_outcome(job, outcome_tx, shared);
+    }
+}
+
+fn suite_worker_loop_grouped(channels: SuiteWorkerChannels, cfg: SuiteWorkerConfig) {
+    while let Ok(plan) = channels.suite_rx.recv() {
+        emit_grouped_suite_outcome(plan, &channels.outcome_tx, &cfg);
+    }
+}
+
+fn suite_worker_loop_parallel(channels: SuiteWorkerChannels, cfg: SuiteWorkerConfig) {
+    let SuiteWorkerChannels {
+        suite_rx,
+        single_rx,
+        outcome_tx,
+    } = channels;
+    loop {
+        if cfg.allow_single_steal
+            && cfg.prefer_single_when_idle
+            && let Ok(job) = single_rx.try_recv()
+        {
+            emit_single_outcome(job, &outcome_tx, cfg.shared.as_ref());
+            continue;
+        }
+
+        match suite_rx.try_recv() {
+            Ok(plan) => {
+                emit_parallel_suite_outcome(plan, &outcome_tx, &cfg);
+                continue;
+            }
+            Err(TryRecvError::Disconnected) => {
+                if cfg.allow_single_steal {
+                    drain_pending_single_jobs(&single_rx, &outcome_tx, cfg.shared.as_ref());
+                }
+                break;
+            }
+            Err(TryRecvError::Empty) => {}
+        }
+
+        if cfg.allow_single_steal
+            && !cfg.prefer_single_when_idle
+            && let Ok(job) = single_rx.try_recv()
+        {
+            emit_single_outcome(job, &outcome_tx, cfg.shared.as_ref());
+            continue;
+        }
+
+        if !cfg.allow_single_steal {
+            match suite_rx.recv() {
+                Ok(plan) => emit_parallel_suite_outcome(plan, &outcome_tx, &cfg),
+                Err(_) => break,
+            }
+            continue;
+        }
+
+        if cfg.prefer_single_when_idle {
+            crossbeam_channel::select_biased! {
+                recv(single_rx) -> single => {
+                    match single {
+                        Ok(job) => emit_single_outcome(job, &outcome_tx, cfg.shared.as_ref()),
+                        Err(_) => {
+                            match suite_rx.recv() {
+                                Ok(plan) => emit_parallel_suite_outcome(plan, &outcome_tx, &cfg),
+                                Err(_) => break,
+                            }
+                        }
+                    }
+                }
+                recv(suite_rx) -> suite => {
+                    match suite {
+                        Ok(plan) => emit_parallel_suite_outcome(plan, &outcome_tx, &cfg),
+                        Err(_) => {
+                            drain_pending_single_jobs(&single_rx, &outcome_tx, cfg.shared.as_ref());
+                            break;
+                        }
+                    }
+                }
+            }
+        } else {
+            crossbeam_channel::select_biased! {
+                recv(suite_rx) -> suite => {
+                    match suite {
+                        Ok(plan) => emit_parallel_suite_outcome(plan, &outcome_tx, &cfg),
+                        Err(_) => {
+                            drain_pending_single_jobs(&single_rx, &outcome_tx, cfg.shared.as_ref());
+                            break;
+                        }
+                    }
+                }
+                recv(single_rx) -> single => {
+                    if let Ok(job) = single {
+                        emit_single_outcome(job, &outcome_tx, cfg.shared.as_ref());
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn prepare_suite_job(
     plan: &SuitePlan,
     filter: Option<&str>,
-    show_logs: bool,
-    backend: &str,
-    yul_optimize: bool,
-    solc: Option<&str>,
-    opt_level: OptLevel,
-    debug: &TestDebugOptions,
-    report_failed_only: bool,
-    aggregate_report: bool,
-    call_trace: bool,
-) -> Result<SuiteRunResult, String> {
-    let suite_report_staging = if plan.suite_report_out.is_some() || aggregate_report {
-        Some(create_suite_report_staging(&plan.suite_key)?)
+    shared: &WorkerSharedConfig,
+) -> (PreparedSuite, String) {
+    let mut output = String::new();
+
+    let suite_report_staging = if plan.suite_report_out.is_some() || shared.aggregate_report {
+        match create_suite_report_staging(&plan.suite_key) {
+            Ok(staging) => Some(staging),
+            Err(err) => {
+                return (
+                    PreparedSuite {
+                        plan: plan.clone(),
+                        results: suite_error_result(&plan.suite, "setup", err),
+                        single_jobs: Vec::new(),
+                        gas_comparison_cases: None,
+                        aggregate_suite_staging: None,
+                        build_elapsed: Duration::default(),
+                    },
+                    output,
+                );
+            }
+        }
     } else {
         None
     };
@@ -978,8 +1773,22 @@ fn run_single_suite(
         let suite_dir = staging.root_dir.clone();
         write_report_meta(&suite_dir, "fe test report (suite)", Some(&plan.suite));
         let inputs_dir = suite_dir.join("inputs");
-        create_dir_all_utf8(&inputs_dir)?;
-        copy_input_into_report(&plan.path, &inputs_dir)?;
+        if let Err(err) = create_dir_all_utf8(&inputs_dir).and_then(|_| {
+            copy_input_into_report(&plan.path, &inputs_dir)?;
+            Ok(())
+        }) {
+            return (
+                PreparedSuite {
+                    plan: plan.clone(),
+                    results: suite_error_result(&plan.suite, "setup", err),
+                    single_jobs: Vec::new(),
+                    gas_comparison_cases: None,
+                    aggregate_suite_staging: None,
+                    build_elapsed: Duration::default(),
+                },
+                output,
+            );
+        }
         Some(ReportContext {
             root_dir: suite_dir,
         })
@@ -987,7 +1796,7 @@ fn run_single_suite(
         None
     };
 
-    let mut suite_debug = debug.clone();
+    let mut suite_debug = shared.debug.clone();
     if report_ctx.is_some() {
         suite_debug.trace_evm = true;
         suite_debug.sonatina_symtab = true;
@@ -995,61 +1804,172 @@ fn run_single_suite(
         suite_debug.sonatina_observability = true;
         suite_debug.debug_dir = report_ctx.as_ref().map(|ctx| ctx.root_dir.join("debug"));
     }
-    let sonatina_debug = suite_debug.sonatina_debug_config()?;
+    let sonatina_debug = match suite_debug.sonatina_debug_config() {
+        Ok(config) => config,
+        Err(err) => {
+            return (
+                PreparedSuite {
+                    plan: plan.clone(),
+                    results: suite_error_result(&plan.suite, "setup", err),
+                    single_jobs: Vec::new(),
+                    gas_comparison_cases: None,
+                    aggregate_suite_staging: None,
+                    build_elapsed: Duration::default(),
+                },
+                output,
+            );
+        }
+    };
 
-    let mut output = String::new();
+    let build_started = Instant::now();
     let mut db = DriverDataBase::default();
-    let suite_results = if plan.path.is_file() && plan.path.extension() == Some("fe") {
-        run_tests_single_file(
+    let prep = if plan.path.is_file() && plan.path.extension() == Some("fe") {
+        prepare_tests_single_file(
             &mut db,
             &plan.path,
             &plan.suite,
+            &plan.suite_key,
             filter,
-            show_logs,
-            backend,
-            yul_optimize,
-            solc,
-            opt_level,
+            shared.backend.as_str(),
+            shared.opt_level,
             &suite_debug,
             &sonatina_debug,
             report_ctx.as_ref(),
-            call_trace,
             &mut output,
         )
     } else if plan.path.is_dir() {
-        run_tests_ingot(
+        prepare_tests_ingot(
             &mut db,
             &plan.path,
             &plan.suite,
+            &plan.suite_key,
             filter,
-            show_logs,
-            backend,
-            yul_optimize,
-            solc,
-            opt_level,
+            shared.backend.as_str(),
+            shared.opt_level,
             &suite_debug,
             &sonatina_debug,
             report_ctx.as_ref(),
-            call_trace,
             &mut output,
         )
     } else {
-        return Err("Path must be either a .fe file or a directory containing fe.toml".to_string());
+        SuitePreparation {
+            results: suite_error_result(
+                &plan.suite,
+                "setup",
+                "Path must be either a .fe file or a directory containing fe.toml".to_string(),
+            ),
+            single_jobs: Vec::new(),
+            gas_comparison_cases: None,
+        }
     };
 
-    let mut aggregate_suite_staging = suite_report_staging;
-    if let Some(out) = &plan.suite_report_out
+    (
+        PreparedSuite {
+            plan: plan.clone(),
+            results: prep.results,
+            single_jobs: prep.single_jobs,
+            gas_comparison_cases: prep.gas_comparison_cases,
+            aggregate_suite_staging: suite_report_staging,
+            build_elapsed: build_started.elapsed(),
+        },
+        output,
+    )
+}
+
+fn run_single_test_job(
+    job: SingleTestJob,
+    shared: &WorkerSharedConfig,
+) -> (String, SingleRunResult) {
+    let report_ctx = job.report_root.as_ref().map(|root| ReportContext {
+        root_dir: root.clone(),
+    });
+    let case = job.case;
+    let outcome = compile_and_run_test(
+        &case,
+        shared.show_logs,
+        &shared.backend,
+        shared.yul_optimize,
+        shared.solc.as_deref(),
+        job.evm_trace.as_ref(),
+        report_ctx.as_ref(),
+        shared.call_trace,
+        report_ctx.is_some(),
+    );
+    let measurement = GasMeasurement::from_test_outcome(&outcome);
+    let elapsed = outcome.elapsed;
+    let mut output = String::new();
+    write_case_output(
+        &mut output,
+        &case,
+        &outcome,
+        shared.show_logs,
+        &shared.backend,
+        &shared.debug,
+    );
+    let result = SingleRunResult {
+        suite_key: job.suite_key,
+        symbol_name: case.symbol_name,
+        result: outcome.result,
+        measurement: Some(measurement),
+        elapsed,
+    };
+    (output, result)
+}
+
+fn finalize_pending_suite(
+    pending_suites: &mut FxHashMap<String, SuiteState>,
+    suite_runs: &mut Vec<SuiteRunResult>,
+    suite_key: &str,
+    multi: bool,
+    suite_label_width: usize,
+    shared: &WorkerSharedConfig,
+    filter: Option<&str>,
+) {
+    let state = pending_suites
+        .remove(suite_key)
+        .expect("suite state should be present");
+    let (suite_run, output) = finalize_suite_state(state, shared, filter);
+    if !output.is_empty() {
+        print_streamed_output(multi, suite_label_width, suite_key, &output);
+    }
+    suite_runs.push(suite_run);
+}
+
+fn finalize_suite_state(
+    state: SuiteState,
+    shared: &WorkerSharedConfig,
+    filter: Option<&str>,
+) -> (SuiteRunResult, String) {
+    let mut output = String::new();
+    let mut aggregate_suite_staging = state.aggregate_suite_staging;
+    if let Some(staging) = aggregate_suite_staging.as_ref()
+        && let Some(cases) = state.gas_comparison_cases.as_ref()
+    {
+        let report = ReportContext {
+            root_dir: staging.root_dir.clone(),
+        };
+        gas::write_gas_comparison_report(
+            &report,
+            &shared.backend,
+            shared.yul_optimize,
+            shared.opt_level,
+            cases,
+            &state.primary_measurements,
+        );
+    }
+
+    if let Some(out) = &state.plan.suite_report_out
         && let Some(staging) = aggregate_suite_staging.take()
     {
-        let should_write = !report_failed_only || suite_results.iter().any(|r| !r.passed);
+        let should_write = !shared.report_failed_only || state.results.iter().any(|r| !r.passed);
         if should_write {
             write_report_manifest(
                 &staging.root_dir,
-                backend,
-                yul_optimize,
-                opt_level,
+                &shared.backend,
+                shared.yul_optimize,
+                shared.opt_level,
                 filter,
-                &suite_results,
+                &state.results,
             );
             match tar_gz_dir(&staging.root_dir, out) {
                 Ok(()) => {
@@ -1070,86 +1990,90 @@ fn run_single_suite(
         }
     }
 
-    Ok(SuiteRunResult {
-        index: plan.index,
-        path: plan.path.clone(),
-        suite_key: plan.suite_key.clone(),
+    (
+        SuiteRunResult {
+            index: state.plan.index,
+            path: state.plan.path,
+            suite_key: state.plan.suite_key,
+            results: state.results,
+            aggregate_suite_staging,
+        },
         output,
-        results: suite_results,
-        aggregate_suite_staging,
-    })
+    )
 }
 
-/// Runs tests defined in a single `.fe` source file.
-///
-/// * `db` - Driver database used for compilation.
-/// * `file_path` - Path to the `.fe` file.
-/// * `filter` - Optional substring filter for test names.
-/// * `show_logs` - Whether to show event logs from test execution.
-///
-/// Returns the collected test results.
 #[allow(clippy::too_many_arguments)]
-fn run_tests_single_file(
+fn prepare_tests_single_file(
     db: &mut DriverDataBase,
     file_path: &Utf8PathBuf,
     suite: &str,
+    suite_key: &str,
     filter: Option<&str>,
-    show_logs: bool,
     backend: &str,
-    yul_optimize: bool,
-    solc: Option<&str>,
     opt_level: OptLevel,
     debug: &TestDebugOptions,
     sonatina_debug: &SonatinaTestDebugConfig,
     report: Option<&ReportContext>,
-    call_trace: bool,
     output: &mut String,
-) -> Vec<TestResult> {
-    // Create a file URL for the single .fe file
+) -> SuitePreparation {
     let canonical = match file_path.canonicalize_utf8() {
         Ok(p) => p,
         Err(e) => {
-            return suite_error_result(
-                suite,
-                "setup",
-                format!("Cannot canonicalize {file_path}: {e}"),
-            );
+            return SuitePreparation {
+                results: suite_error_result(
+                    suite,
+                    "setup",
+                    format!("Cannot canonicalize {file_path}: {e}"),
+                ),
+                single_jobs: Vec::new(),
+                gas_comparison_cases: None,
+            };
         }
     };
     let file_url = match Url::from_file_path(&canonical) {
         Ok(url) => url,
         Err(_) => {
-            return suite_error_result(suite, "setup", format!("Invalid file path: {file_path}"));
+            return SuitePreparation {
+                results: suite_error_result(
+                    suite,
+                    "setup",
+                    format!("Invalid file path: {file_path}"),
+                ),
+                single_jobs: Vec::new(),
+                gas_comparison_cases: None,
+            };
         }
     };
 
-    // Read the file content
     let content = match std::fs::read_to_string(file_path) {
         Ok(content) => content,
         Err(err) => {
-            return suite_error_result(
-                suite,
-                "setup",
-                format!("Error reading file {file_path}: {err}"),
-            );
+            return SuitePreparation {
+                results: suite_error_result(
+                    suite,
+                    "setup",
+                    format!("Error reading file {file_path}: {err}"),
+                ),
+                single_jobs: Vec::new(),
+                gas_comparison_cases: None,
+            };
         }
     };
 
-    // Add the file to the workspace
     db.workspace().touch(db, file_url.clone(), Some(content));
-
-    // Get the top-level module
     let Some(file) = db.workspace().get(db, &file_url) else {
-        return suite_error_result(
-            suite,
-            "setup",
-            format!("Could not process file {file_path}"),
-        );
+        return SuitePreparation {
+            results: suite_error_result(
+                suite,
+                "setup",
+                format!("Could not process file {file_path}"),
+            ),
+            single_jobs: Vec::new(),
+            gas_comparison_cases: None,
+        };
     };
-
     let top_mod = db.top_mod(file);
 
-    // Check for compilation errors first
     let diags = db.run_on_top_mod(top_mod);
     if !diags.is_empty() {
         let formatted = diags.format_diags(db);
@@ -1159,81 +2083,82 @@ fn run_tests_single_file(
         if let Some(report) = report {
             write_report_error(report, "compilation_errors.txt", &formatted);
         }
-        return suite_error_result(
-            suite,
-            "compile",
-            format!("Compilation errors in {file_url}"),
-        );
+        return SuitePreparation {
+            results: suite_error_result(
+                suite,
+                "compile",
+                format!("Compilation errors in {file_url}"),
+            ),
+            single_jobs: Vec::new(),
+            gas_comparison_cases: None,
+        };
     }
 
     if !has_test_functions(db, top_mod) {
-        return Vec::new();
+        return SuitePreparation {
+            results: Vec::new(),
+            single_jobs: Vec::new(),
+            gas_comparison_cases: None,
+        };
     }
 
-    // Discover and run tests
     maybe_write_suite_ir(db, top_mod, backend, report);
-    discover_and_run_tests(
+    prepare_discovered_tests(
         db,
         top_mod,
         suite,
+        suite_key,
         filter,
-        show_logs,
         backend,
-        solc,
-        yul_optimize,
         opt_level,
         debug,
         sonatina_debug,
         report,
-        call_trace,
         output,
     )
 }
 
-/// Runs tests in an ingot directory (containing `fe.toml`).
-///
-/// * `db` - Driver database used for compilation.
-/// * `dir_path` - Path to the ingot directory.
-/// * `filter` - Optional substring filter for test names.
-/// * `show_logs` - Whether to show event logs from test execution.
-///
-/// Returns the collected test results.
 #[allow(clippy::too_many_arguments)]
-fn run_tests_ingot(
+fn prepare_tests_ingot(
     db: &mut DriverDataBase,
     dir_path: &Utf8PathBuf,
     suite: &str,
+    suite_key: &str,
     filter: Option<&str>,
-    show_logs: bool,
     backend: &str,
-    yul_optimize: bool,
-    solc: Option<&str>,
     opt_level: OptLevel,
     debug: &TestDebugOptions,
     sonatina_debug: &SonatinaTestDebugConfig,
     report: Option<&ReportContext>,
-    call_trace: bool,
     output: &mut String,
-) -> Vec<TestResult> {
+) -> SuitePreparation {
     let canonical_path = match dir_path.canonicalize_utf8() {
         Ok(path) => path,
         Err(_) => {
-            return suite_error_result(
-                suite,
-                "setup",
-                format!("Invalid or non-existent directory path: {dir_path}"),
-            );
+            return SuitePreparation {
+                results: suite_error_result(
+                    suite,
+                    "setup",
+                    format!("Invalid or non-existent directory path: {dir_path}"),
+                ),
+                single_jobs: Vec::new(),
+                gas_comparison_cases: None,
+            };
         }
     };
 
     let ingot_url = match Url::from_directory_path(canonical_path.as_str()) {
         Ok(url) => url,
         Err(_) => {
-            return suite_error_result(
-                suite,
-                "setup",
-                format!("Invalid directory path: {dir_path}"),
-            );
+            return SuitePreparation {
+                results: suite_error_result(
+                    suite,
+                    "setup",
+                    format!("Invalid directory path: {dir_path}"),
+                ),
+                single_jobs: Vec::new(),
+                gas_comparison_cases: None,
+            };
         }
     };
 
@@ -1244,18 +2169,25 @@ fn run_tests_ingot(
         if let Some(report) = report {
             write_report_error(report, "compilation_errors.txt", &msg);
         }
-        return suite_error_result(suite, "compile", msg);
+        return SuitePreparation {
+            results: suite_error_result(suite, "compile", msg),
+            single_jobs: Vec::new(),
+            gas_comparison_cases: None,
+        };
     }
 
     let Some(ingot) = db.workspace().containing_ingot(db, ingot_url.clone()) else {
-        return suite_error_result(
-            suite,
-            "setup",
-            "Could not resolve ingot from directory".to_string(),
-        );
+        return SuitePreparation {
+            results: suite_error_result(
+                suite,
+                "setup",
+                "Could not resolve ingot from directory".to_string(),
+            ),
+            single_jobs: Vec::new(),
+            gas_comparison_cases: None,
+        };
     };
 
-    // Check for compilation errors
     let diags = db.run_on_ingot(ingot);
     if !diags.is_empty() {
         let formatted = diags.format_diags(db);
@@ -1263,31 +2195,111 @@ fn run_tests_ingot(
         if let Some(report) = report {
             write_report_error(report, "compilation_errors.txt", &formatted);
         }
-        return suite_error_result(suite, "compile", "Compilation errors".to_string());
+        return SuitePreparation {
+            results: suite_error_result(suite, "compile", "Compilation errors".to_string()),
+            single_jobs: Vec::new(),
+            gas_comparison_cases: None,
+        };
     }
 
     let root_mod = ingot.root_mod(db);
     if !ingot_has_test_functions(db, ingot) {
-        return Vec::new();
+        return SuitePreparation {
+            results: Vec::new(),
+            single_jobs: Vec::new(),
+            gas_comparison_cases: None,
+        };
     }
 
     maybe_write_suite_ir(db, root_mod, backend, report);
-    discover_and_run_tests(
+    prepare_discovered_tests(
         db,
         root_mod,
         suite,
+        suite_key,
         filter,
-        show_logs,
         backend,
-        solc,
-        yul_optimize,
         opt_level,
         debug,
         sonatina_debug,
         report,
-        call_trace,
         output,
     )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_discovered_tests(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+    suite: &str,
+    suite_key: &str,
+    filter: Option<&str>,
+    backend: &str,
+    opt_level: OptLevel,
+    debug: &TestDebugOptions,
+    sonatina_debug: &SonatinaTestDebugConfig,
+    report: Option<&ReportContext>,
+    output: &mut String,
+) -> SuitePreparation {
+    let discovered = match discover_tests(
+        db,
+        top_mod,
+        suite,
+        filter,
+        backend,
+        opt_level,
+        sonatina_debug,
+        report,
+        output,
+    ) {
+        Ok(discovered) => discovered,
+        Err(results) => {
+            return SuitePreparation {
+                results,
+                single_jobs: Vec::new(),
+                gas_comparison_cases: None,
+            };
+        }
+    };
+
+    let mut results = Vec::new();
+    let report_root = report.map(|ctx| ctx.root_dir.clone());
+    let mut single_jobs = Vec::new();
+    for case in discovered.tests {
+        if !test_case_matches_filter(&case, filter) {
+            continue;
+        }
+
+        let evm_trace = match debug.evm_trace_options_for_test(Some(suite), &case.display_name) {
+            Ok(value) => value,
+            Err(err) => {
+                write_case_status_line(output, false, Duration::ZERO, &case.display_name);
+                let _ = writeln!(output, "    {err}");
+                results.push(TestResult {
+                    name: case.display_name.clone(),
+                    passed: false,
+                    error_message: Some(err),
+                    gas_used: None,
+                    deploy_gas_used: None,
+                    total_gas_used: None,
+                });
+                continue;
+            }
+        };
+
+        single_jobs.push(SingleTestJob {
+            suite_key: suite_key.to_string(),
+            case,
+            evm_trace,
+            report_root: report_root.clone(),
+        });
+    }
+
+    SuitePreparation {
+        results,
+        single_jobs,
+        gas_comparison_cases: discovered.gas_comparison_cases,
+    }
 }
 
 /// Emit a test module with panic recovery and report integration.
@@ -1336,22 +2348,17 @@ pub(super) fn emit_with_catch_unwind<E: std::fmt::Display>(
 ///
 /// Returns the collected test results.
 #[allow(clippy::too_many_arguments)]
-fn discover_and_run_tests(
+fn discover_tests(
     db: &DriverDataBase,
     top_mod: TopLevelMod<'_>,
     suite: &str,
     filter: Option<&str>,
-    show_logs: bool,
     backend: &str,
-    solc: Option<&str>,
-    yul_optimize: bool,
     opt_level: OptLevel,
-    debug: &TestDebugOptions,
     sonatina_debug: &SonatinaTestDebugConfig,
     report: Option<&ReportContext>,
-    call_trace: bool,
     output: &mut String,
-) -> Vec<TestResult> {
+) -> Result<DiscoverResult, Vec<TestResult>> {
     let backend = backend.to_lowercase();
     let emit_result = match backend.as_str() {
         "yul" => emit_with_catch_unwind(
@@ -1369,20 +2376,20 @@ fn discover_and_run_tests(
             output,
         ),
         other => {
-            return suite_error_result(
+            return Err(suite_error_result(
                 suite,
                 "setup",
                 format!("unknown backend `{other}` (expected 'yul' or 'sonatina')"),
-            );
+            ));
         }
     };
-    let module_output = match emit_result {
-        Ok(output) => output,
-        Err(results) => return results,
-    };
+    let module_output = emit_result?;
 
     if module_output.tests.is_empty() {
-        return Vec::new();
+        return Ok(DiscoverResult {
+            tests: Vec::new(),
+            gas_comparison_cases: None,
+        });
     }
 
     let gas_comparison_cases = report.map(|ctx| {
@@ -1398,96 +2405,76 @@ fn discover_and_run_tests(
         )
     });
 
-    let mut results = Vec::new();
-    let mut primary_measurements = FxHashMap::default();
+    Ok(DiscoverResult {
+        tests: module_output.tests,
+        gas_comparison_cases,
+    })
+}
 
-    for case in &module_output.tests {
-        if !test_case_matches_filter(case, filter) {
-            continue;
-        }
+fn write_case_output(
+    output: &mut String,
+    case: &TestMetadata,
+    outcome: &TestOutcome,
+    show_logs: bool,
+    backend: &str,
+    debug: &TestDebugOptions,
+) {
+    if !outcome.result.passed
+        && let Some(ref msg) = outcome.result.error_message
+    {
+        let _ = writeln!(output, "    {msg}");
+    }
 
-        let evm_trace = match debug.evm_trace_options_for_test(Some(suite), &case.display_name) {
-            Ok(v) => v,
-            Err(err) => {
-                let _ = writeln!(output, "test {} ... {}", case.display_name, "FAILED".red());
-                let _ = writeln!(output, "    {err}");
-                results.push(TestResult {
-                    name: case.display_name.clone(),
-                    passed: false,
-                    error_message: Some(err),
-                    gas_used: None,
-                    deploy_gas_used: None,
-                    total_gas_used: None,
-                });
-                continue;
+    let should_dump_yul = backend == "yul"
+        && (debug.dump_yul_for_all || (debug.dump_yul_on_failure && !outcome.result.passed));
+    if should_dump_yul {
+        write_test_yul(output, case);
+    }
+
+    if let Some(trace) = &outcome.trace {
+        let _ = writeln!(output, "--- call trace ---");
+        let _ = write!(output, "{trace}");
+        let _ = writeln!(output, "--- end trace ---");
+    }
+
+    if show_logs {
+        if !outcome.logs.is_empty() {
+            for log in &outcome.logs {
+                let _ = writeln!(output, "    log {log}");
             }
-        };
-
-        // Compile and run the test
-        let outcome = compile_and_run_test(
-            case,
-            show_logs,
-            backend.as_str(),
-            yul_optimize,
-            solc,
-            evm_trace.as_ref(),
-            report,
-            call_trace,
-            report.is_some(),
-        );
-
-        if outcome.result.passed {
-            let _ = writeln!(output, "test {} ... {}", case.display_name, "ok".green());
+        } else if outcome.result.passed {
+            let _ = writeln!(output, "    log (none)");
         } else {
-            let _ = writeln!(output, "test {} ... {}", case.display_name, "FAILED".red());
-            if let Some(ref msg) = outcome.result.error_message {
-                let _ = writeln!(output, "    {msg}");
-            }
+            let _ = writeln!(output, "    log (unavailable for failed tests)");
         }
-
-        let should_dump_yul = backend == "yul"
-            && (debug.dump_yul_for_all || (debug.dump_yul_on_failure && !outcome.result.passed));
-        if should_dump_yul {
-            write_test_yul(output, case);
-        }
-
-        if let Some(trace) = &outcome.trace {
-            let _ = writeln!(output, "--- call trace ---");
-            let _ = write!(output, "{trace}");
-            let _ = writeln!(output, "--- end trace ---");
-        }
-
-        if show_logs {
-            if !outcome.logs.is_empty() {
-                for log in &outcome.logs {
-                    let _ = writeln!(output, "    log {log}");
-                }
-            } else if outcome.result.passed {
-                let _ = writeln!(output, "    log (none)");
-            } else {
-                let _ = writeln!(output, "    log (unavailable for failed tests)");
-            }
-        }
-
-        primary_measurements.insert(
-            case.symbol_name.clone(),
-            GasMeasurement::from_test_outcome(&outcome),
-        );
-        results.push(outcome.result);
     }
+}
 
-    if let (Some(report), Some(cases)) = (report, gas_comparison_cases.as_ref()) {
-        gas::write_gas_comparison_report(
-            report,
-            backend.as_str(),
-            yul_optimize,
-            opt_level,
-            cases,
-            &primary_measurements,
-        );
-    }
+fn format_elapsed_seconds_cell(elapsed: Duration) -> String {
+    const WIDTH: usize = 6;
+    let seconds = elapsed.as_secs_f64();
+    let whole_digits = if seconds >= 1.0 {
+        seconds.log10().floor() as usize + 1
+    } else {
+        1
+    };
+    let fractional_digits = WIDTH.saturating_sub(whole_digits + 1).min(4);
+    let rendered = if fractional_digits == 0 {
+        format!("{seconds:.0}")
+    } else {
+        format!("{seconds:.fractional_digits$}")
+    };
+    format!("{rendered:>WIDTH$}")
+}
 
-    results
+fn write_case_status_line(output: &mut String, passed: bool, elapsed: Duration, name: &str) {
+    let kind = if passed {
+        StreamStatusKind::Pass
+    } else {
+        StreamStatusKind::Fail
+    };
+    let status = colorize_streamed_status(kind, &format_streamed_status(kind, Some(elapsed)));
+    let _ = writeln!(output, "{status} {name}");
 }
 
 fn write_test_yul(output: &mut String, case: &TestMetadata) {
@@ -1779,68 +2766,41 @@ pub(super) fn compile_and_run_test(
     call_trace: bool,
     collect_step_count: bool,
 ) -> TestOutcome {
+    let started = Instant::now();
+    let failure = |message: String| TestOutcome {
+        result: TestResult {
+            name: case.display_name.clone(),
+            passed: false,
+            error_message: Some(message),
+            gas_used: None,
+            deploy_gas_used: None,
+            total_gas_used: None,
+        },
+        logs: Vec::new(),
+        trace: None,
+        step_count: None,
+        runtime_metrics: None,
+        gas_profile: None,
+        elapsed: started.elapsed(),
+    };
+
     if case.value_param_count > 0 {
-        return TestOutcome {
-            result: TestResult {
-                name: case.display_name.clone(),
-                passed: false,
-                error_message: Some(format!(
-                    "tests with value parameters are not supported (found {})",
-                    case.value_param_count
-                )),
-                gas_used: None,
-                deploy_gas_used: None,
-                total_gas_used: None,
-            },
-            logs: Vec::new(),
-            trace: None,
-            step_count: None,
-            runtime_metrics: None,
-            gas_profile: None,
-        };
+        return failure(format!(
+            "tests with value parameters are not supported (found {})",
+            case.value_param_count
+        ));
     }
 
     if case.object_name.trim().is_empty() {
-        return TestOutcome {
-            result: TestResult {
-                name: case.display_name.clone(),
-                passed: false,
-                error_message: Some(format!(
-                    "missing test object name for `{}`",
-                    case.display_name
-                )),
-                gas_used: None,
-                deploy_gas_used: None,
-                total_gas_used: None,
-            },
-            logs: Vec::new(),
-            trace: None,
-            step_count: None,
-            runtime_metrics: None,
-            gas_profile: None,
-        };
+        return failure(format!(
+            "missing test object name for `{}`",
+            case.display_name
+        ));
     }
 
     if backend == "sonatina" {
         if case.bytecode.is_empty() {
-            return TestOutcome {
-                result: TestResult {
-                    name: case.display_name.clone(),
-                    passed: false,
-                    error_message: Some(format!(
-                        "missing test bytecode for `{}`",
-                        case.display_name
-                    )),
-                    gas_used: None,
-                    deploy_gas_used: None,
-                    total_gas_used: None,
-                },
-                logs: Vec::new(),
-                trace: None,
-                step_count: None,
-                runtime_metrics: None,
-                gas_profile: None,
-            };
+            return failure(format!("missing test bytecode for `{}`", case.display_name));
         }
 
         if let Some(report) = report {
@@ -1866,26 +2826,13 @@ pub(super) fn compile_and_run_test(
             step_count,
             runtime_metrics,
             gas_profile,
+            elapsed: started.elapsed(),
         };
     }
 
     // Default backend: compile Yul to bytecode using solc.
     if case.yul.trim().is_empty() {
-        return TestOutcome {
-            result: TestResult {
-                name: case.display_name.clone(),
-                passed: false,
-                error_message: Some(format!("missing test Yul for `{}`", case.display_name)),
-                gas_used: None,
-                deploy_gas_used: None,
-                total_gas_used: None,
-            },
-            logs: Vec::new(),
-            trace: None,
-            step_count: None,
-            runtime_metrics: None,
-            gas_profile: None,
-        };
+        return failure(format!("missing test Yul for `{}`", case.display_name));
     }
 
     if let Some(report) = report {
@@ -1903,23 +2850,7 @@ pub(super) fn compile_and_run_test(
             contract.bytecode,
             gas::evm_runtime_metrics_from_hex(&contract.runtime_bytecode),
         ),
-        Err(err) => {
-            return TestOutcome {
-                result: TestResult {
-                    name: case.display_name.clone(),
-                    passed: false,
-                    error_message: Some(format!("Failed to compile test: {}", err.0)),
-                    gas_used: None,
-                    deploy_gas_used: None,
-                    total_gas_used: None,
-                },
-                logs: Vec::new(),
-                trace: None,
-                step_count: None,
-                runtime_metrics: None,
-                gas_profile: None,
-            };
-        }
+        Err(err) => return failure(format!("Failed to compile test: {}", err.0)),
     };
 
     // Execute the test bytecode in revm
@@ -1939,6 +2870,7 @@ pub(super) fn compile_and_run_test(
         step_count,
         runtime_metrics,
         gas_profile,
+        elapsed: started.elapsed(),
     }
 }
 
