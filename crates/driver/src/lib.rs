@@ -64,6 +64,113 @@ pub fn init_ingot(db: &mut DriverDataBase, ingot_url: &Url) -> bool {
     init_ingot_graph(db, ingot_url)
 }
 
+/// Discover ingots/workspaces from `root_url` and init them into `db`.
+///
+/// 1. Runs `discover_context` (walks up looking for fe.toml).
+/// 2. If nothing found AND root has no fe.toml, scans downward for child
+///    ingots/workspaces (e.g. a workbook directory with scattered lessons).
+///
+/// Returns the list of ingot URLs that were initialized.
+pub fn discover_and_init(db: &mut DriverDataBase, root_url: &Url) -> Vec<Url> {
+    use resolver::workspace::discover_context;
+    use std::collections::BTreeSet;
+
+    let mut ingot_urls = Vec::new();
+
+    let Ok(discovery) = discover_context(root_url) else {
+        return ingot_urls;
+    };
+
+    // Init workspace root if present
+    if let Some(ws_root) = &discovery.workspace_root {
+        init_ingot(db, ws_root);
+        ingot_urls.push(ws_root.clone());
+    }
+
+    // Init all discovered ingots (workspace members or standalone)
+    for url in &discovery.ingot_roots {
+        init_ingot(db, url);
+        ingot_urls.push(url.clone());
+    }
+
+    // If discover_context found something, we're done
+    if !ingot_urls.is_empty() {
+        return ingot_urls;
+    }
+
+    // Fallback: if root itself has fe.toml, init it directly
+    let root_has_config = root_url
+        .to_file_path()
+        .map(|p| p.join("fe.toml").is_file())
+        .unwrap_or(false);
+    if root_has_config {
+        init_ingot(db, root_url);
+        return vec![root_url.clone()];
+    }
+
+    // Nothing discovered upward and no root config — scan downward for
+    // child ingots/workspaces (e.g. a workbook with scattered lessons).
+    let Ok(root_path) = root_url.to_file_path() else {
+        return ingot_urls;
+    };
+
+    // Collect fe.toml locations via recursive directory scan
+    let mut config_dirs = BTreeSet::new();
+    fn scan_for_configs(dir: &std::path::Path, out: &mut BTreeSet<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if path.join("fe.toml").is_file() {
+                    out.insert(path.clone());
+                }
+                scan_for_configs(&path, out);
+            }
+        }
+    }
+    scan_for_configs(&root_path, &mut config_dirs);
+
+    // Filter out dirs that are inside another discovered dir (workspace members
+    // will be expanded by discover_context, so we only want top-level configs).
+    let top_level_dirs: Vec<_> = config_dirs
+        .iter()
+        .filter(|dir| {
+            !config_dirs
+                .iter()
+                .any(|other| other != *dir && dir.starts_with(other))
+        })
+        .cloned()
+        .collect();
+
+    for dir in top_level_dirs {
+        let Ok(dir_url) = Url::from_directory_path(&dir) else {
+            continue;
+        };
+        // Run discover_context on each top-level config dir to properly
+        // handle workspaces (expands members) vs plain ingots.
+        if let Ok(sub_discovery) = discover_context(&dir_url) {
+            if let Some(ws_root) = &sub_discovery.workspace_root {
+                init_ingot(db, ws_root);
+                ingot_urls.push(ws_root.clone());
+            }
+            for url in &sub_discovery.ingot_roots {
+                if !ingot_urls.contains(url) {
+                    init_ingot(db, url);
+                    ingot_urls.push(url.clone());
+                }
+            }
+            if sub_discovery.workspace_root.is_none() && sub_discovery.ingot_roots.is_empty() {
+                init_ingot(db, &dir_url);
+                ingot_urls.push(dir_url);
+            }
+        }
+    }
+
+    ingot_urls
+}
+
 pub fn check_library_requirements(db: &DriverDataBase) -> Vec<String> {
     let mut missing = Vec::new();
 
