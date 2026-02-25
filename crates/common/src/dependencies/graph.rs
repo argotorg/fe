@@ -192,7 +192,16 @@ impl DependencyGraph {
         let mut node_map = self.node_map(db);
         let source_idx = Self::allocate_node(&mut graph, &mut node_map, source);
         let target_idx = Self::allocate_node(&mut graph, &mut node_map, target);
-        graph.add_edge(source_idx, target_idx, (alias, arguments));
+
+        // Avoid duplicate edges when re-resolving (e.g. workspace re-init after
+        // a new member ingot appears).
+        let already_exists = graph
+            .edges(source_idx)
+            .any(|e| e.target() == target_idx && e.weight().0 == alias);
+        if !already_exists {
+            graph.add_edge(source_idx, target_idx, (alias, arguments));
+        }
+
         self.set_graph(db).to(graph);
         self.set_node_map(db).to(node_map);
     }

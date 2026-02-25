@@ -890,3 +890,106 @@ version = "0.1.0"
     let had_diagnostics = init_ingot(&mut db, &ingot_a_url);
     assert!(had_diagnostics, "expected diagnostics");
 }
+
+/// Regression test: when a workspace member is added after initial workspace
+/// resolution, re-initializing the workspace root should register the new
+/// member so that other members can resolve dependencies on it.
+#[test]
+fn reinit_workspace_discovers_new_member() {
+    let temp = TempDir::new().unwrap();
+    let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
+    let workspace_root = root.join("workspace");
+    let counter_test = workspace_root.join("counter_test");
+    let counter = workspace_root.join("counter");
+
+    // Workspace declares both members, but only counter_test exists initially
+    write_file(
+        &workspace_root.join("fe.toml"),
+        r#"
+[workspace]
+name = "getting-started"
+version = "0.1.0"
+members = ["counter_test", "counter"]
+"#,
+    );
+
+    write_file(
+        &counter_test.join("fe.toml"),
+        r#"
+[ingot]
+name = "counter_test"
+version = "0.1.0"
+
+[dependencies]
+counter = true
+"#,
+    );
+    write_file(&counter_test.join("src/lib.fe"), "use counter::Counter\n");
+
+    // counter directory does NOT exist yet
+
+    let workspace_url =
+        Url::from_directory_path(workspace_root.as_std_path()).expect("workspace url");
+    let counter_test_url =
+        Url::from_directory_path(counter_test.as_std_path()).expect("counter_test url");
+    let counter_url = Url::from_directory_path(counter.as_std_path()).expect("counter url");
+
+    // --- Phase 1: initial workspace resolution (counter missing) ---
+    let mut db = DriverDataBase::default();
+    let _had_diagnostics = init_workspace(&mut db, &workspace_url);
+
+    // counter_test should be registered as workspace member
+    let members = db
+        .dependency_graph()
+        .workspace_member_records(&db, &workspace_url);
+    assert!(
+        members.iter().any(|m| m.url == counter_test_url),
+        "counter_test should be a workspace member"
+    );
+    // counter should NOT be a workspace member (directory didn't exist)
+    assert!(
+        !members.iter().any(|m| m.url == counter_url),
+        "counter should not be a workspace member yet"
+    );
+
+    // counter_test's dependency graph should NOT contain counter
+    let deps = db
+        .dependency_graph()
+        .dependency_urls(&db, &counter_test_url);
+    assert!(
+        !deps.contains(&counter_url),
+        "counter_test should not depend on counter yet"
+    );
+
+    // --- Phase 2: create counter ingot on disk ---
+    write_file(
+        &counter.join("fe.toml"),
+        r#"
+[ingot]
+name = "counter"
+version = "0.1.0"
+"#,
+    );
+    write_file(&counter.join("src/lib.fe"), "pub contract Counter {}\n");
+
+    // --- Phase 3: re-init workspace (the fix) ---
+    let _had_diagnostics = init_workspace(&mut db, &workspace_url);
+
+    // counter should now be registered as workspace member
+    let members = db
+        .dependency_graph()
+        .workspace_member_records(&db, &workspace_url);
+    assert!(
+        members.iter().any(|m| m.url == counter_url),
+        "counter should now be a workspace member after re-init"
+    );
+
+    // counter_test should now have counter in its dependency graph
+    let deps = db
+        .dependency_graph()
+        .dependency_urls(&db, &counter_test_url);
+    assert!(
+        deps.contains(&counter_url),
+        "counter_test should now depend on counter after workspace re-init"
+    );
+}

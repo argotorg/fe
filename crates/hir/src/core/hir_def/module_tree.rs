@@ -136,8 +136,13 @@ impl ModuleTree<'_> {
         self.root
     }
 
-    pub fn root_data(&self) -> &ModuleTreeNode<'_> {
-        self.node_data(self.root)
+    /// Returns the root node data, or `None` if the tree is empty
+    /// (e.g. the ingot was deleted during an incremental workspace change).
+    pub fn root_data(&self) -> Option<&ModuleTreeNode<'_>> {
+        if self.module_tree.0.is_empty() {
+            return None;
+        }
+        Some(self.node_data(self.root))
     }
 
     /// Returns an iterator of all top level modules in this ingot.
@@ -178,6 +183,23 @@ pub(crate) fn module_tree_impl<'db>(db: &'db dyn HirDb, ingot: Ingot<'db>) -> Mo
 
     // Collect source modules
     let files = ingot.files(db);
+
+    // If the ingot has no files at all (e.g. it was deleted during an
+    // incremental workspace change), return a degenerate empty tree.
+    // Callers should check root_data().is_some() before accessing the root.
+    if files.iter().next().is_none() {
+        tracing::warn!(
+            "Ingot {:?} has zero files; returning empty module tree",
+            ingot
+        );
+        return ModuleTree {
+            root: ModuleTreeNodeId::from_u32(0), // sentinel — PrimaryMap is empty
+            module_tree: PMap(module_tree),
+            mod_map: IndexMap::default(),
+            ingot,
+        };
+    }
+
     for (_, file) in files.iter() {
         if let Some(IngotFileKind::Source) = file.kind(db) {
             let top_mod = map_file_to_mod_impl(db, file);
@@ -414,7 +436,7 @@ mod tests {
                 .containing_ingot(&db, ingot_base)
                 .expect("Failed to construct ingot"),
         );
-        let root_node = local_tree.root_data();
+        let root_node = local_tree.root_data().expect("tree should have root");
         assert_eq!(root_node.top_mod, local_root_mod);
         assert_eq!(root_node.children.len(), 2);
 
