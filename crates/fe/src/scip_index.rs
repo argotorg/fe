@@ -715,32 +715,44 @@ pub fn inject_doc_urls(scip_json: &str, doc_index: &DocIndex) -> String {
         Err(_) => return scip_json.to_string(),
     };
 
-    // Build name → url_path lookup from DocIndex items
+    // Build name → url_path lookups from DocIndex items.
+    // Key by both full path and simple name; full path takes priority in lookups
+    // to avoid collisions between same-named items (e.g. a::Foo vs b::Foo).
+    let mut path_to_url: HashMap<&str, String> = HashMap::new();
     let mut name_to_url: HashMap<&str, String> = HashMap::new();
     for item in &doc_index.items {
-        name_to_url.insert(&item.name, item.url_path());
+        let url = item.url_path();
+        path_to_url.insert(&item.path, url.clone());
+        name_to_url.insert(&item.name, url);
     }
 
-    // Build child name → (parent_url~anchor) lookup.
-    // Uses `~` separator because the SPA hash router parses `#path/kind~anchor`.
+    // Build child lookups keyed by "parent_path::child_name" (qualified) and
+    // simple child name (fallback). Uses `~` separator for SPA hash anchors.
+    let mut qualified_child_to_url: HashMap<String, String> = HashMap::new();
     let mut child_to_url: HashMap<String, String> = HashMap::new();
     for item in &doc_index.items {
         let parent_url = item.url_path();
         for child in &item.children {
             let anchor = format!("{}.{}", child.kind.anchor_prefix(), child.name);
-            child_to_url.insert(child.name.clone(), format!("{}~{}", parent_url, anchor));
+            let url = format!("{}~{}", parent_url, anchor);
+            qualified_child_to_url
+                .insert(format!("{}::{}", item.path, child.name), url.clone());
+            child_to_url.insert(child.name.clone(), url);
         }
         // Also include methods from trait impl blocks
         for trait_impl in &item.trait_impls {
             for method in &trait_impl.methods {
                 let anchor = format!("method.{}", method.name);
-                child_to_url.insert(method.name.clone(), format!("{}~{}", parent_url, anchor));
+                let url = format!("{}~{}", parent_url, anchor);
+                qualified_child_to_url
+                    .insert(format!("{}::{}", item.path, method.name), url.clone());
+                child_to_url.insert(method.name.clone(), url);
             }
         }
     }
 
     if let Some(symbols) = root.get_mut("symbols").and_then(|s| s.as_object_mut()) {
-        for (_sym_str, entry) in symbols.iter_mut() {
+        for (sym_str, entry) in symbols.iter_mut() {
             if let Some(obj) = entry.as_object_mut() {
                 let name = obj
                     .get("name")
@@ -752,28 +764,82 @@ pub fn inject_doc_urls(scip_json: &str, doc_index: &DocIndex) -> String {
                     .and_then(|e| e.as_str())
                     .is_some_and(|e| !e.is_empty());
 
-                if has_enclosing {
-                    // Sub-item: look up child URL
-                    if let Some(url) = child_to_url.get(&name) {
-                        obj.insert(
-                            "doc_url".to_string(),
-                            serde_json::Value::String(url.clone()),
-                        );
-                    }
+                // Extract qualified path from SCIP symbol for precise lookup.
+                // SCIP symbols look like "fe fe <pkg> <ver> Mod/Foo#" — extract
+                // the descriptor chain and join with "::" for doc path matching.
+                let qualified = scip_symbol_to_qualified_path(sym_str);
+
+                let doc_url = if has_enclosing {
+                    // Sub-item: try qualified lookup first, fall back to simple name
+                    qualified
+                        .as_deref()
+                        .and_then(|q| qualified_child_to_url.get(q))
+                        .or_else(|| child_to_url.get(&name))
+                        .cloned()
                 } else {
-                    // Top-level item
-                    if let Some(url) = name_to_url.get(name.as_str()) {
-                        obj.insert(
-                            "doc_url".to_string(),
-                            serde_json::Value::String(url.clone()),
-                        );
-                    }
+                    // Top-level item: try qualified path first, fall back to name
+                    qualified
+                        .as_deref()
+                        .and_then(|q| path_to_url.get(q))
+                        .or_else(|| name_to_url.get(name.as_str()))
+                        .cloned()
+                };
+                if let Some(url) = doc_url {
+                    obj.insert(
+                        "doc_url".to_string(),
+                        serde_json::Value::String(url),
+                    );
                 }
             }
         }
     }
 
     root.to_string()
+}
+
+/// Extract a qualified path (e.g. "mylib::Foo::bar") from a SCIP symbol string.
+///
+/// SCIP symbols look like: `fe fe <package> <version> Mod/Struct#method.`
+/// Descriptor suffixes: `/` = namespace, `#` = type, `.` = term/method, `()` = macro
+/// We strip the suffix char and join parts with `::`.
+fn scip_symbol_to_qualified_path(sym: &str) -> Option<String> {
+    // Skip the "fe fe <package> <version> " prefix — 4 space-separated tokens
+    let mut parts_iter = sym.splitn(5, ' ');
+    let _scheme = parts_iter.next()?;
+    let _manager = parts_iter.next()?;
+    let _package = parts_iter.next()?;
+    let _version = parts_iter.next()?;
+    let descriptor_part = parts_iter.next()?.trim();
+
+    if descriptor_part.is_empty() {
+        return None;
+    }
+
+    // Split on SCIP descriptor suffixes and collect the names
+    let mut path_parts = Vec::new();
+    let mut current = descriptor_part;
+    while !current.is_empty() {
+        // Find the next descriptor suffix: / # . ( [
+        let end = current
+            .find(|c: char| matches!(c, '/' | '#' | '.' | '(' | '['))
+            .unwrap_or(current.len());
+        if end > 0 {
+            path_parts.push(&current[..end]);
+        }
+        // Skip the suffix character(s)
+        current = &current[end..];
+        if current.starts_with("().") {
+            current = &current[3..];
+        } else if !current.is_empty() {
+            current = &current[1..];
+        }
+    }
+
+    if path_parts.is_empty() {
+        None
+    } else {
+        Some(path_parts.join("::"))
+    }
 }
 
 /// Enrich `rich_signature` fields in a DocIndex using SCIP occurrence positions,
@@ -1545,6 +1611,35 @@ fn make_point() -> Point {
         assert!(
             names.contains(&"make_point"),
             "should contain make_point: {names:?}"
+        );
+    }
+
+    #[test]
+    fn test_scip_symbol_to_qualified_path() {
+        // Type descriptor: Mod/Struct#
+        assert_eq!(
+            scip_symbol_to_qualified_path("fe fe mylib 0.1.0 Mod/Struct#"),
+            Some("Mod::Struct".into())
+        );
+        // Method descriptor: Mod/Struct#method.
+        assert_eq!(
+            scip_symbol_to_qualified_path("fe fe mylib 0.1.0 Mod/Struct#method."),
+            Some("Mod::Struct::method".into())
+        );
+        // Deeply nested: a/b/Foo#
+        assert_eq!(
+            scip_symbol_to_qualified_path("fe fe pkg 1.0 a/b/Foo#"),
+            Some("a::b::Foo".into())
+        );
+        // Single item
+        assert_eq!(
+            scip_symbol_to_qualified_path("fe fe pkg 1.0 Foo#"),
+            Some("Foo".into())
+        );
+        // Empty descriptor part
+        assert_eq!(
+            scip_symbol_to_qualified_path("fe fe pkg 1.0 "),
+            None
         );
     }
 }
