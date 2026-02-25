@@ -524,6 +524,12 @@ pub async fn handle_file_change(
     update_docs(backend).await;
 
     let _ = backend.client.emit(NeedsDiagnostics(message.uri));
+
+    // Request doc reload (debounced by the stream in setup_streams)
+    if backend.doc_regenerate_fn.is_some() {
+        let _ = backend.client.emit(DocReloadRequest);
+    }
+
     Ok(())
 }
 

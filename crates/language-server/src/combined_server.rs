@@ -13,11 +13,11 @@ use async_lsp::client_monitor::ClientProcessMonitorLayer;
 use async_lsp::concurrency::ConcurrencyLayer;
 use async_lsp::panic::CatchUnwindLayer;
 use async_lsp::server::LifecycleLayer;
-use axum::extract::ws::{Message as AxumMessage, WebSocket};
+use axum::Router;
 use axum::extract::WebSocketUpgrade;
+use axum::extract::ws::{Message as AxumMessage, WebSocket};
 use axum::response::Html;
 use axum::routing::get;
-use axum::Router;
 use futures::io::{AsyncRead, AsyncWrite};
 use futures::{SinkExt, StreamExt};
 use tokio::sync::{Mutex, broadcast, watch};
@@ -36,11 +36,13 @@ pub type SharedActor = ActorRef<Backend, LspActorKey>;
 /// - All HTTP requests serve `doc_html` (the static doc SPA).
 /// - `/lsp` upgrades to WebSocket and bridges to the shared Backend.
 /// - `fe/navigate` notifications are forwarded to WS clients from `doc_nav_tx`.
+/// - `fe/docReload` notifications are forwarded from `doc_reload_tx`.
 pub async fn run(
     listener: tokio::net::TcpListener,
     doc_html: String,
     actor_rx: watch::Receiver<Option<SharedActor>>,
     doc_nav_tx: broadcast::Sender<String>,
+    doc_reload_tx: broadcast::Sender<String>,
 ) {
     let html = Arc::new(doc_html);
 
@@ -51,10 +53,16 @@ pub async fn run(
             get({
                 let actor_rx = actor_rx.clone();
                 let doc_nav_tx = doc_nav_tx.clone();
+                let doc_reload_tx = doc_reload_tx.clone();
                 move |ws: WebSocketUpgrade| {
                     let actor_rx = actor_rx.clone();
                     let doc_nav_tx = doc_nav_tx.clone();
-                    async move { ws.on_upgrade(|socket| handle_ws_lsp(socket, actor_rx, doc_nav_tx)) }
+                    let doc_reload_tx = doc_reload_tx.clone();
+                    async move {
+                        ws.on_upgrade(|socket| {
+                            handle_ws_lsp(socket, actor_rx, doc_nav_tx, doc_reload_tx)
+                        })
+                    }
                 }
             }),
         )
@@ -78,6 +86,7 @@ async fn handle_ws_lsp(
     socket: WebSocket,
     mut actor_rx: watch::Receiver<Option<SharedActor>>,
     doc_nav_tx: broadcast::Sender<String>,
+    doc_reload_tx: broadcast::Sender<String>,
 ) {
     // Wait for the shared Backend actor to be ready (with timeout)
     let ready = {
@@ -132,6 +141,29 @@ async fn handle_ws_lsp(
         }
     });
 
+    // Spawn a task to forward doc-reload events as fe/docReload notifications
+    let reload_sink = Arc::clone(&ws_sink);
+    let mut reload_rx = doc_reload_tx.subscribe();
+    let reload_task = tokio::spawn(async move {
+        while let Ok(payload) = reload_rx.recv().await {
+            // payload is a JSON string with {docIndex, scipData}
+            let params: serde_json::Value =
+                serde_json::from_str(&payload).unwrap_or(serde_json::Value::Null);
+            let notification = serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "fe/docReload",
+                "params": params,
+            });
+            let text = serde_json::to_string(&notification)
+                .expect("fe/docReload notification should always serialize");
+            let mut sink = reload_sink.lock().await;
+            if sink.send(AxumMessage::Text(text.into())).await.is_err() {
+                warn!("fe/docReload: WS sink closed, stopping reload forwarding");
+                break;
+            }
+        }
+    });
+
     // Run the LSP server over the WS bridge
     match server.run_buffered(reader, writer).await {
         Ok(_) => info!("Combined WS LSP connection finished"),
@@ -139,6 +171,7 @@ async fn handle_ws_lsp(
     }
 
     nav_task.abort();
+    reload_task.abort();
 }
 
 // ============================================================================
@@ -204,9 +237,7 @@ where
                 }
                 Poll::Ready(Ok(n))
             }
-            Poll::Ready(Some(Ok(AxumMessage::Close(_)))) | Poll::Ready(None) => {
-                Poll::Ready(Ok(0))
-            }
+            Poll::Ready(Some(Ok(AxumMessage::Close(_)))) | Poll::Ready(None) => Poll::Ready(Ok(0)),
             Poll::Ready(Some(Ok(_))) => {
                 cx.waker().wake_by_ref();
                 Poll::Pending

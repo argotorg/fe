@@ -4,6 +4,7 @@ use async_lsp::ClientSocket;
 use driver::DriverDataBase;
 use rustc_hash::FxHashSet;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::sync::broadcast;
 use url::Url;
 
@@ -27,6 +28,8 @@ impl Backend {
         client: ClientSocket,
         ws_broadcast: Option<WsBroadcast>,
         doc_nav_tx: Option<broadcast::Sender<String>>,
+        doc_regenerate_fn: Option<DocRegenerateFn>,
+        doc_reload_tx: Option<broadcast::Sender<String>>,
         docs_url: Option<String>,
     ) -> Self {
         let db = DriverDataBase::default();
@@ -101,4 +104,5 @@ impl Backend {
         });
         rx
     }
+
 }

@@ -27,7 +27,6 @@ use futures::StreamExt;
 use futures_batch::ChunksTimeoutStreamExt;
 use tracing::{info, warn};
 
-use crate::backend::Backend;
 use crate::functionality::{
     call_hierarchy, code_actions, code_lens, codegen_view, completion, declaration,
     document_symbols, folding_range, goto, handlers, highlight, implementations, inlay_hints,
@@ -44,6 +43,8 @@ pub(crate) fn spawn_backend(
     name: String,
     ws_broadcast: Option<WsBroadcast>,
     doc_nav_tx: Option<broadcast::Sender<String>>,
+    doc_regenerate_fn: Option<DocRegenerateFn>,
+    doc_reload_tx: Option<broadcast::Sender<String>>,
     docs_url: Option<String>,
 ) -> ActorRef<Backend, LspActorKey> {
     info!("Spawning backend actor");
@@ -56,6 +57,8 @@ pub(crate) fn spawn_backend(
                 client_for_actor,
                 ws_broadcast,
                 doc_nav_tx,
+                doc_regenerate_fn,
+                doc_reload_tx,
                 docs_url,
             ))
         })
@@ -145,6 +148,7 @@ pub(crate) fn setup_ws_service(
         .handle_request::<Initialize>(handlers::initialize_readonly)
         .handle_request::<GotoDefinition>(goto::handle_goto_definition)
         .handle_event::<FilesNeedDiagnostics>(handlers::handle_files_need_diagnostics)
+        .handle_event::<DocReloadExecute>(handlers::handle_doc_reload)
         // non-mutating handlers
         .handle_notification::<Initialized>(handlers::initialized)
         .handle_request::<HoverRequest>(handlers::handle_hover_request)
@@ -200,7 +204,7 @@ pub(crate) fn setup(
     name: String,
     ws_broadcast: Option<WsBroadcast>,
 ) -> WithFallbackService<LspActorService<Backend>, Router<()>> {
-    let actor_ref = spawn_backend(client.clone(), name, ws_broadcast, None, None);
+    let actor_ref = spawn_backend(client.clone(), name, ws_broadcast, None, None, None, None);
     setup_service(actor_ref, client)
 }
 
