@@ -318,9 +318,6 @@ pub async fn handle_did_change_text_document(
             message.text_document.uri
         );
     }
-    backend.notify_ws(crate::ws_notify::WsServerMsg::Update {
-        uri: message.text_document.uri.to_string(),
-    });
     let _ = backend.client.clone().emit(FileChange {
         uri: message.text_document.uri,
         kind: ChangeKind::Edit(Some(last.text.clone())),
@@ -333,9 +330,6 @@ pub async fn handle_did_save_text_document(
     message: async_lsp::lsp_types::DidSaveTextDocumentParams,
 ) -> Result<(), ResponseError> {
     info!("file saved: {:?}", message.text_document.uri);
-    backend.notify_ws(crate::ws_notify::WsServerMsg::Update {
-        uri: message.text_document.uri.to_string(),
-    });
     // Request doc reload on save (debounced by the stream in setup_streams)
     if backend.doc_regenerate_fn.is_some() {
         let _ = backend.client.clone().emit(DocReloadRequest);

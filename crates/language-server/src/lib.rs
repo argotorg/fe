@@ -13,7 +13,6 @@ mod test_utils;
 mod util;
 mod virtual_files;
 pub mod ws_lsp;
-pub mod ws_notify;
 
 #[cfg(test)]
 mod mock_client_tests;
@@ -51,14 +50,7 @@ pub struct CombinedServerConfig {
     pub doc_regenerate_fn: Option<DocRegenerateFn>,
 }
 
-pub async fn run_stdio_server(ws_port: Option<u16>, combined: Option<CombinedServerConfig>) {
-    // Optionally start the WebSocket notification server
-    let ws_broadcast = ws_port.map(|port| {
-        let (tx, _rx) = ws_notify::new_broadcast();
-        ws_notify::start_ws_server(port, tx.clone());
-        tx
-    });
-
+pub async fn run_stdio_server(combined: Option<CombinedServerConfig>) {
     // Channels for sharing the Backend actor with the combined server
     let (actor_tx, actor_rx) = watch::channel(None);
     let (doc_nav_tx, _doc_nav_rx) = broadcast::channel::<String>(64);
@@ -94,7 +86,6 @@ pub async fn run_stdio_server(ws_port: Option<u16>, combined: Option<CombinedSer
         let actor_ref = spawn_backend(
             client.clone(),
             "LSP actor".to_string(),
-            ws_broadcast.clone(),
             Some(doc_nav_tx_for_backend.clone()),
             doc_regenerate_fn.clone(),
             Some(doc_reload_tx_for_backend.clone()),
@@ -123,14 +114,7 @@ pub async fn run_stdio_server(ws_port: Option<u16>, combined: Option<CombinedSer
     drop(logging);
 }
 
-pub async fn run_tcp_server(port: u16, timeout: Duration, ws_port: Option<u16>) {
-    // Optionally start the WebSocket notification server
-    let ws_broadcast = ws_port.map(|port| {
-        let (tx, _rx) = ws_notify::new_broadcast();
-        ws_notify::start_ws_server(port, tx.clone());
-        tx
-    });
-
+pub async fn run_tcp_server(port: u16, timeout: Duration) {
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = TcpListener::bind(&addr)
         .await
@@ -143,13 +127,11 @@ pub async fn run_tcp_server(port: u16, timeout: Duration, ws_port: Option<u16>) 
     while let Some(Ok(stream)) = incoming.next().with_current_subscriber().await {
         let client_address = stream.peer_addr().unwrap();
         let connections_count = Arc::clone(&connections_count);
-        let ws_broadcast = ws_broadcast.clone();
         let task = async move {
             let (server, client) = async_lsp::MainLoop::new_server(|client| {
                 let router = setup(
                     client.clone(),
                     format!("LSP actor for {client_address}"),
-                    ws_broadcast.clone(),
                 );
                 ServiceBuilder::new()
                     .layer(LifecycleLayer::default())

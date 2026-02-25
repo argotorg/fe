@@ -36,7 +36,6 @@ use crate::functionality::{
     references, rename, selection_range, semantic_tokens, signature_help, type_definition,
     type_hierarchy, workspace_symbols,
 };
-use crate::ws_notify::WsBroadcast;
 use async_lsp::lsp_types::request::Initialize;
 use async_lsp::router::Router;
 
@@ -44,7 +43,6 @@ use async_lsp::router::Router;
 pub(crate) fn spawn_backend(
     client: ClientSocket,
     name: String,
-    ws_broadcast: Option<WsBroadcast>,
     doc_nav_tx: Option<broadcast::Sender<String>>,
     doc_regenerate_fn: Option<DocRegenerateFn>,
     doc_reload_tx: Option<broadcast::Sender<String>>,
@@ -58,7 +56,6 @@ pub(crate) fn spawn_backend(
         .with_state_init(move || {
             Ok(Backend::new(
                 client_for_actor,
-                ws_broadcast,
                 doc_nav_tx,
                 doc_regenerate_fn,
                 doc_reload_tx,
@@ -202,9 +199,8 @@ pub(crate) fn setup_ws_service(
 pub(crate) fn setup(
     client: ClientSocket,
     name: String,
-    ws_broadcast: Option<WsBroadcast>,
 ) -> WithFallbackService<LspActorService<Backend>, Router<()>> {
-    let actor_ref = spawn_backend(client.clone(), name, ws_broadcast, None, None, None, None);
+    let actor_ref = spawn_backend(client.clone(), name, None, None, None, None);
     setup_service(actor_ref, client)
 }
 

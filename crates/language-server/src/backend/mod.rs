@@ -8,7 +8,6 @@ use tokio::sync::broadcast;
 use url::Url;
 
 use crate::virtual_files::{VirtualFiles, materialize_builtins};
-use crate::ws_notify::{WsBroadcast, WsServerMsg};
 
 /// Closure type for regenerating doc+SCIP data from a read-only db snapshot.
 ///
@@ -25,7 +24,6 @@ pub struct Backend {
     pub(super) virtual_files: Option<VirtualFiles>,
     pub(super) readonly_warnings: FxHashSet<Url>,
     pub(super) definition_link_support: bool,
-    pub(super) ws_broadcast: Option<WsBroadcast>,
     pub(super) doc_nav_tx: Option<broadcast::Sender<String>>,
     pub(super) doc_regenerate_fn: Option<DocRegenerateFn>,
     pub(super) doc_reload_tx: Option<broadcast::Sender<String>>,
@@ -37,7 +35,6 @@ pub struct Backend {
 impl Backend {
     pub fn new(
         client: ClientSocket,
-        ws_broadcast: Option<WsBroadcast>,
         doc_nav_tx: Option<broadcast::Sender<String>>,
         doc_regenerate_fn: Option<DocRegenerateFn>,
         doc_reload_tx: Option<broadcast::Sender<String>>,
@@ -64,21 +61,12 @@ impl Backend {
             virtual_files,
             readonly_warnings: FxHashSet::default(),
             definition_link_support: false,
-            ws_broadcast,
             doc_nav_tx,
             doc_regenerate_fn,
             doc_reload_tx,
             doc_reload_generation: Arc::new(AtomicU64::new(0)),
             docs_url,
             workspace_root: None,
-        }
-    }
-
-    /// Send a notification to all connected WebSocket clients.
-    pub fn notify_ws(&self, msg: WsServerMsg) {
-        if let Some(tx) = &self.ws_broadcast {
-            // Ignore send errors — just means no one is listening
-            let _ = tx.send(msg);
         }
     }
 

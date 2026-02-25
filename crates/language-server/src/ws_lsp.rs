@@ -26,13 +26,7 @@ use crate::server::setup;
 /// Each WebSocket connection gets a full LSP server instance (same as TCP).
 /// The WS messages carry raw JSON-RPC (no Content-Length framing) —
 /// the bridge adds/strips framing for async_lsp compatibility.
-pub async fn run_ws_lsp_server(port: u16, ws_notify_port: Option<u16>) {
-    let ws_broadcast = ws_notify_port.map(|port| {
-        let (tx, _rx) = crate::ws_notify::new_broadcast();
-        crate::ws_notify::start_ws_server(port, tx.clone());
-        tx
-    });
-
+pub async fn run_ws_lsp_server(port: u16) {
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let listener = match TcpListener::bind(&addr).await {
         Ok(l) => l,
@@ -48,9 +42,8 @@ pub async fn run_ws_lsp_server(port: u16, ws_notify_port: Option<u16>) {
         match listener.accept().await {
             Ok((stream, peer)) => {
                 info!("LSP WebSocket client connected: {peer}");
-                let ws_broadcast = ws_broadcast.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = handle_ws_lsp_client(stream, peer, ws_broadcast).await {
+                    if let Err(e) = handle_ws_lsp_client(stream, peer).await {
                         warn!("LSP WebSocket client {peer} error: {e}");
                     }
                     info!("LSP WebSocket client {peer} disconnected");
@@ -66,7 +59,6 @@ pub async fn run_ws_lsp_server(port: u16, ws_notify_port: Option<u16>) {
 async fn handle_ws_lsp_client(
     stream: tokio::net::TcpStream,
     peer: SocketAddr,
-    ws_broadcast: Option<crate::ws_notify::WsBroadcast>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use async_lsp::client_monitor::ClientProcessMonitorLayer;
     use async_lsp::concurrency::ConcurrencyLayer;
@@ -88,7 +80,6 @@ async fn handle_ws_lsp_client(
         let lsp_service = setup(
             client.clone(),
             format!("LSP WS actor for {peer}"),
-            ws_broadcast.clone(),
         );
         ServiceBuilder::new()
             .layer(LifecycleLayer::default())

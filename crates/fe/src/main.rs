@@ -642,7 +642,6 @@ pub fn run(opts: &Options) {
                         language_server::run_tcp_server(
                             *port,
                             std::time::Duration::from_secs(*timeout),
-                            None,
                         )
                         .await;
                     }
@@ -672,7 +671,7 @@ async fn run_lsp_with_combined_server(resolved_root: Option<Utf8PathBuf>, port: 
         Ok(l) => l,
         Err(e) => {
             eprintln!("Warning: could not bind combined server: {e}");
-            language_server::run_stdio_server(None, None).await;
+            language_server::run_stdio_server(None).await;
             return;
         }
     };
@@ -712,7 +711,7 @@ async fn run_lsp_with_combined_server(resolved_root: Option<Utf8PathBuf>, port: 
         doc_regenerate_fn: Some(doc_regenerate_fn),
     };
 
-    language_server::run_stdio_server(None, Some(config)).await;
+    language_server::run_stdio_server(Some(config)).await;
 
     // Cleanup on exit
     doc::LspServerInfo::remove_from_workspace(&workspace_root_path);
