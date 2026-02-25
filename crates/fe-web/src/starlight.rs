@@ -482,6 +482,7 @@ mod tests {
                 },
             ],
             source: None,
+            source_text: None,
             trait_impls: vec![],
             implementors: vec![],
         });
@@ -499,6 +500,7 @@ mod tests {
             where_bounds: vec![],
             children: vec![],
             source: None,
+            source_text: None,
             trait_impls: vec![],
             implementors: vec![],
         });

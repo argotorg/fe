@@ -248,6 +248,7 @@ impl<'db> DocExtractor<'db> {
         let where_bounds = self.extract_where_bounds(item);
         let children = self.extract_children(item);
         let source = self.get_source_location(item);
+        let source_text = self.get_source_text(item);
 
         Some(DocItem {
             path,
@@ -263,6 +264,7 @@ impl<'db> DocExtractor<'db> {
             where_bounds,
             children,
             source,
+            source_text,
             trait_impls: Vec::new(),  // Populated later by link_trait_impls
             implementors: Vec::new(), // Populated later by link_trait_impls (for traits)
         })
@@ -683,6 +685,15 @@ impl<'db> DocExtractor<'db> {
             line,
             column,
         })
+    }
+
+    /// Get the full source text of an item definition.
+    fn get_source_text(&self, item: ItemKind<'db>) -> Option<String> {
+        let span = item.span().resolve(self.db)?;
+        let start: usize = span.range.start().into();
+        let end: usize = span.range.end().into();
+        let text = span.file.text(self.db);
+        Some(text.get(start..end)?.to_string())
     }
 
     /// Build module tree for navigation sidebar (single module, no file-based children)

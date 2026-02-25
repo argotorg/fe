@@ -20,6 +20,7 @@ input_file: tests/doc_fixtures/function_docs.fe
         "line": 1,
         "column": 0
       },
+      "source_text": "/// Compute the sum of two values.\n///\n/// # Examples\n/// ```\n/// let result: u256 = add(1, 2)\n/// ```\npub fn add(a: u256, b: u256) -> u256 {\n    return a + b\n}\n\n/// Check if a value is zero.\npub fn is_zero(val: u256) -> bool {\n    return val == 0\n}\n",
       "trait_impls": []
     },
     {
@@ -41,6 +42,7 @@ input_file: tests/doc_fixtures/function_docs.fe
         "line": 1,
         "column": 0
       },
+      "source_text": "/// Compute the sum of two values.\n///\n/// # Examples\n/// ```\n/// let result: u256 = add(1, 2)\n/// ```\npub fn add(a: u256, b: u256) -> u256 {\n    return a + b\n}",
       "trait_impls": []
     },
     {
@@ -62,6 +64,7 @@ input_file: tests/doc_fixtures/function_docs.fe
         "line": 11,
         "column": 0
       },
+      "source_text": "/// Check if a value is zero.\npub fn is_zero(val: u256) -> bool {\n    return val == 0\n}",
       "trait_impls": []
     }
   ],
