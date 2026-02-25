@@ -816,18 +816,22 @@ fn generate_lsp_doc_html(resolved_root: Option<&Utf8PathBuf>, port: u16) -> Stri
             match crate::scip_index::generate_scip(&db, ingot_url) {
                 Ok(mut scip_index) => {
                     // For file:// URLs, use filesystem path as project root.
-                    // For non-file URLs (builtins), use "/" with the URL base.
-                    if let Some(project_root) = ingot_url
-                        .to_file_path()
-                        .ok()
-                        .and_then(|p| camino::Utf8PathBuf::from_path_buf(p).ok())
-                    {
-                        crate::scip_index::enrich_signatures(
-                            &db,
-                            &project_root,
-                            &mut index,
-                            &mut scip_index,
-                        );
+                    // For non-file URLs (builtins), use the URL base for
+                    // workspace file lookups (to_file_path() misleadingly
+                    // returns Ok("/") for custom schemes like builtin-core:///).
+                    if ingot_url.scheme() == "file" {
+                        if let Some(project_root) = ingot_url
+                            .to_file_path()
+                            .ok()
+                            .and_then(|p| camino::Utf8PathBuf::from_path_buf(p).ok())
+                        {
+                            crate::scip_index::enrich_signatures(
+                                &db,
+                                &project_root,
+                                &mut index,
+                                &mut scip_index,
+                            );
+                        }
                     } else {
                         // Non-file URL (e.g. builtin-core:///): use virtual root
                         crate::scip_index::enrich_signatures_with_base(
