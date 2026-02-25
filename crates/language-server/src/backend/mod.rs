@@ -10,7 +10,6 @@ use tokio::sync::broadcast;
 use url::Url;
 
 use crate::virtual_files::{VirtualFiles, materialize_builtins};
-use crate::ws_notify::{WsBroadcast, WsServerMsg};
 
 use crate::doc_server::{DocServerHandle, LspServerInfo};
 
@@ -27,7 +26,6 @@ pub struct Backend {
 impl Backend {
     pub fn new(
         client: ClientSocket,
-        ws_broadcast: Option<WsBroadcast>,
         doc_nav_tx: Option<broadcast::Sender<String>>,
         doc_regenerate_fn: Option<DocRegenerateFn>,
         doc_reload_tx: Option<broadcast::Sender<String>>,
