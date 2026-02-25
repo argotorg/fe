@@ -4,7 +4,8 @@ use std::io::{self, Write};
 use common::InputDb;
 use common::diagnostics::Span;
 use hir::{
-    hir_def::{HirIngot, scope_graph::ScopeId},
+    core::semantic::SymbolView,
+    hir_def::{HirIngot, ItemKind, scope_graph::ScopeId},
     span::LazySpan,
 };
 
@@ -198,6 +199,92 @@ impl<W: Write> LsifEmitter<W> {
     }
 }
 
+/// Emit LSIF vertices/edges for a single scope (field, variant, generic param, etc.).
+fn emit_scope_lsif<W: Write>(
+    db: &driver::DriverDataBase,
+    ctx: &index_util::IngotContext,
+    emitter: &mut LsifEmitter<W>,
+    documents: &mut HashMap<String, (u64, Vec<u64>)>,
+    doc_url: &str,
+    doc_id: u64,
+    scope: ScopeId,
+) -> io::Result<()> {
+    let view = SymbolView::new(scope);
+    let name_span = match scope.name_span(db) {
+        Some(ns) => ns,
+        None => return Ok(()),
+    };
+    let resolved = match name_span.resolve(db) {
+        Some(s) => s,
+        None => return Ok(()),
+    };
+    let name_range = match span_to_range(&resolved, db) {
+        Some(r) => r,
+        None => return Ok(()),
+    };
+
+    let range_id = emitter.emit_range(name_range)?;
+    documents.get_mut(doc_url).unwrap().1.push(range_id);
+
+    let result_set_id = emitter.emit_result_set()?;
+    emitter.emit_edge("next", range_id, result_set_id)?;
+
+    // Definition result
+    let def_result_id = emitter.emit_definition_result()?;
+    emitter.emit_edge("textDocument/definition", result_set_id, def_result_id)?;
+    emitter.emit_edge_many("item", def_result_id, &[range_id], Some(doc_id))?;
+
+    // Hover result
+    let hover = index_util::hover_parts_for_scope(db, &view);
+    if let Some(hover_content) = hover.to_lsif_hover() {
+        let hover_id = emitter.emit_hover_result(&hover_content)?;
+        emitter.emit_edge("textDocument/hover", result_set_id, hover_id)?;
+    }
+
+    // Reference result
+    let ref_result_id = emitter.emit_reference_result()?;
+    emitter.emit_edge("textDocument/references", result_set_id, ref_result_id)?;
+    emitter.emit_edge_many("item", ref_result_id, &[range_id], Some(doc_id))?;
+
+    // Collect references from the pre-built index
+    let mut refs_by_doc: HashMap<String, Vec<u64>> = HashMap::new();
+    for indexed_ref in ctx.ref_index.references_to(&scope) {
+        if let Some(resolved) = indexed_ref.span.resolve(db)
+            && let Some(r) = span_to_range(&resolved, db)
+        {
+            let ref_doc_url = match resolved.file.url(db) {
+                Some(url) => url.to_string(),
+                None => continue,
+            };
+            let ref_range_id = emitter.emit_range(r)?;
+            refs_by_doc
+                .entry(ref_doc_url)
+                .or_default()
+                .push(ref_range_id);
+        }
+    }
+    for (ref_doc_url, ref_range_ids) in &refs_by_doc {
+        if !ref_range_ids.is_empty() {
+            let ref_doc_id = documents[ref_doc_url].0;
+            documents
+                .get_mut(ref_doc_url)
+                .unwrap()
+                .1
+                .extend_from_slice(ref_range_ids);
+            emitter.emit_edge_many("item", ref_result_id, ref_range_ids, Some(ref_doc_id))?;
+        }
+    }
+
+    // Moniker
+    if let Some(pretty_path) = scope.pretty_path(db) {
+        let identifier = format!("{}:{}:{pretty_path}", ctx.name, ctx.version);
+        let moniker_id = emitter.emit_moniker("fe", &identifier)?;
+        emitter.emit_edge("moniker/attach", result_set_id, moniker_id)?;
+    }
+
+    Ok(())
+}
+
 /// Run LSIF generation on a project.
 pub fn generate_lsif(
     db: &mut driver::DriverDataBase,
@@ -328,6 +415,49 @@ pub fn generate_lsif(
                 let identifier = format!("{}:{}:{pretty_path}", ctx.name, ctx.version);
                 let moniker_id = emitter.emit_moniker("fe", &identifier)?;
                 emitter.emit_edge("moniker/attach", result_set_id, moniker_id)?;
+            }
+
+            // Sub-items: fields, variants, associated types/consts.
+            // Skip modules — their children are top-level items already in items_dfs.
+            if !matches!(item, ItemKind::Mod(_) | ItemKind::TopMod(_)) {
+                let sym_view = SymbolView::from_item(item);
+                for child in sym_view.children(db) {
+                    // Methods are ItemKind::Func and already yielded by items_dfs
+                    if matches!(
+                        child.scope(),
+                        ScopeId::Item(ItemKind::Func(_))
+                            | ScopeId::Item(ItemKind::TopMod(_))
+                            | ScopeId::Item(ItemKind::Mod(_))
+                    ) {
+                        continue;
+                    }
+
+                    emit_scope_lsif(
+                        db,
+                        &ctx,
+                        &mut emitter,
+                        &mut documents,
+                        &doc_url,
+                        doc_id,
+                        child.scope(),
+                    )?;
+                }
+            }
+
+            // Generic parameters (T, A, etc.)
+            let item_scope = ScopeId::from_item(item);
+            for child_scope in scope_graph.children(item_scope) {
+                if matches!(child_scope, ScopeId::GenericParam(..)) {
+                    emit_scope_lsif(
+                        db,
+                        &ctx,
+                        &mut emitter,
+                        &mut documents,
+                        &doc_url,
+                        doc_id,
+                        child_scope,
+                    )?;
+                }
             }
         }
     }
