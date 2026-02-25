@@ -474,15 +474,23 @@ impl<'db> Monomorphizer<'db> {
         } in call_sites
         {
             let resolved_name = match target {
-                CallTarget::Template(func) => self
-                    .ensure_instance(
+                CallTarget::Template(func) => {
+                    let Some((_, symbol)) = self.ensure_instance(
                         func,
                         &args,
                         receiver_space,
                         &effect_param_space_overrides,
                         &param_capability_space_overrides,
-                    )
-                    .map(|(_, symbol)| symbol),
+                    ) else {
+                        if self.deferred_error.borrow().is_some() {
+                            return;
+                        }
+
+                        let name = func.pretty_print_signature(self.db);
+                        panic!("failed to instantiate MIR for `{name}`");
+                    };
+                    Some(symbol)
+                }
                 CallTarget::Decl(func) => {
                     let (normalized_args, normalized_effect_param_space_overrides, _) = self
                         .normalize_call_instance_inputs(
@@ -542,20 +550,27 @@ impl<'db> Monomorphizer<'db> {
         }
 
         for (value_idx, target) in func_item_sites {
-            let (_, symbol) = match target.origin {
+            let symbol = match target.origin {
                 crate::ir::MirFunctionOrigin::Hir(func) => {
-                    let Some(instance) =
+                    let Some((_, symbol)) =
                         self.ensure_instance(func, &target.generic_args, None, &[], &[])
                     else {
-                        continue;
+                        if self.deferred_error.borrow().is_some() {
+                            return;
+                        }
+
+                        let name = func.pretty_print(self.db);
+                        panic!("failed to instantiate MIR for `{name}`");
                     };
-                    instance
+                    symbol
                 }
-                crate::ir::MirFunctionOrigin::Synthetic(_) => self
-                    .ensure_synthetic_instance(target.origin, None, &[], &[])
-                    .unwrap_or_else(|| {
-                        panic!("failed to instantiate synthetic MIR for `{target:?}`")
-                    }),
+                crate::ir::MirFunctionOrigin::Synthetic(_) => {
+                    self.ensure_synthetic_instance(target.origin, None, &[], &[])
+                        .unwrap_or_else(|| {
+                            panic!("failed to instantiate synthetic MIR for `{target:?}`")
+                        })
+                        .1
+                }
             };
             if let crate::ValueOrigin::FuncItem(target) =
                 &mut self.instances[func_idx].body.values[value_idx].origin
