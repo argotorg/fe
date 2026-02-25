@@ -523,8 +523,10 @@ impl DocIndex {
     /// `links` is a list of (target_type_path, DocTraitImpl) pairs extracted
     /// from the HIR using semantic helpers.
     pub fn link_trait_impls(&mut self, links: Vec<(String, DocTraitImpl)>) {
-        // Build a lookup map of type items by simple name for URL resolution
-        let type_items: std::collections::HashMap<String, (&str, &DocItemKind)> = self
+        // Build lookup maps keyed by full path to avoid collisions between
+        // same-named types in different modules (e.g. a::Foo vs b::Foo).
+        // Maps own their strings so we can mutably borrow self.items later.
+        let type_items: std::collections::HashMap<String, (String, DocItemKind)> = self
             .items
             .iter()
             .filter(|item| {
@@ -533,24 +535,57 @@ impl DocIndex {
                     DocItemKind::Struct | DocItemKind::Enum | DocItemKind::Contract
                 )
             })
-            .map(|item| {
-                let simple_name = extract_simple_type_name(&item.name);
-                (simple_name, (item.path.as_str(), &item.kind))
-            })
+            .map(|item| (item.path.clone(), (item.path.clone(), item.kind.clone())))
             .collect();
 
-        // Build a lookup map of trait items by simple name for URL resolution
         let trait_items: std::collections::HashMap<String, String> = self
             .items
             .iter()
             .filter(|item| item.kind == DocItemKind::Trait)
-            .map(|item| {
-                let simple_name = extract_simple_type_name(&item.name);
-                (simple_name, item.path.clone())
-            })
+            .map(|item| (item.path.clone(), item.path.clone()))
             .collect();
 
-        // First pass: collect implementors for each trait
+        /// Look up a type by path: try exact path first, then fall back to
+        /// simple-name scan (for unqualified paths from older extractors).
+        fn lookup_type(
+            map: &std::collections::HashMap<String, (String, DocItemKind)>,
+            target: &str,
+        ) -> Option<(String, String)> {
+            if let Some((path, kind)) = map.get(target) {
+                return Some((path.clone(), kind.as_str().to_string()));
+            }
+            // Simple-name fallback when target has no `::`
+            if !target.contains("::") {
+                for (path, kind) in map.values() {
+                    let simple = extract_simple_type_name(path);
+                    if simple == target {
+                        return Some((path.clone(), kind.as_str().to_string()));
+                    }
+                }
+            }
+            None
+        }
+
+        /// Look up a trait by path: try exact path first, then simple-name scan.
+        fn lookup_trait(
+            map: &std::collections::HashMap<String, String>,
+            target: &str,
+        ) -> Option<String> {
+            if let Some(path) = map.get(target) {
+                return Some(path.clone());
+            }
+            if !target.contains("::") {
+                for path in map.values() {
+                    let simple = extract_simple_type_name(path);
+                    if simple == target {
+                        return Some(path.clone());
+                    }
+                }
+            }
+            None
+        }
+
+        // First pass: collect implementors for each trait (keyed by trait path)
         let mut trait_implementors: std::collections::HashMap<String, Vec<DocImplementor>> =
             std::collections::HashMap::new();
 
@@ -565,17 +600,15 @@ impl DocIndex {
 
             // Look up the actual type item to get the correct path and kind
             let (type_path, type_kind_suffix) =
-                if let Some(&(path, kind)) = type_items.get(&type_simple_name) {
-                    (path, kind.as_str())
+                if let Some((path, kind)) = lookup_type(&type_items, target_type) {
+                    (path, kind)
                 } else {
                     // Fallback to the target_type path with struct suffix
-                    (target_type.as_str(), "struct")
+                    (target_type.clone(), "struct".to_string())
                 };
 
             // Look up the actual trait to get the correct path
-            let trait_path = trait_items
-                .get(&trait_simple_name)
-                .cloned()
+            let trait_path = lookup_trait(&trait_items, &trait_impl.trait_name)
                 .unwrap_or_else(|| trait_impl.trait_name.clone());
 
             // Build rich signature: "impl Trait for Type"
@@ -600,8 +633,10 @@ impl DocIndex {
                 sig_scope: None,
             };
 
+            // Key by trait path (not simple name) to avoid cross-module collisions
+            let trait_key = trait_path.to_string();
             trait_implementors
-                .entry(trait_simple_name)
+                .entry(trait_key)
                 .or_default()
                 .push(implementor);
         }
@@ -631,8 +666,7 @@ impl DocIndex {
                         if !trait_impl.trait_name.is_empty() && trait_impl.rich_signature.is_empty()
                         {
                             // Look up the trait URL
-                            let trait_url = trait_items
-                                .get(&trait_simple_name)
+                            let trait_url = lookup_trait(&trait_items, &trait_impl.trait_name)
                                 .map(|p| format!("{}/trait", p))
                                 .unwrap_or_else(|| format!("{}/trait", &trait_impl.trait_name));
 
@@ -652,17 +686,22 @@ impl DocIndex {
 
                 // Link implementors to traits
                 if item.kind == DocItemKind::Trait && !trait_impl.trait_name.is_empty() {
-                    let trait_matches = item.name == trait_simple_name
+                    let trait_matches = item.path == trait_impl.trait_name
+                        || item.name == trait_simple_name
                         || item.path.ends_with(&format!("::{}", trait_simple_name));
 
-                    if trait_matches && let Some(impls) = trait_implementors.get(&trait_simple_name)
-                    {
-                        // Only add if not already present
+                    // Look up by item's full path first, then by simple name
+                    let impls = trait_implementors
+                        .get(item.path.as_str())
+                        .or_else(|| trait_implementors.get(&trait_simple_name));
+
+                    if trait_matches && let Some(impls) = impls {
+                        // Only add if not already present (dedup by type_url, not name)
                         for imp in impls {
                             if !item
                                 .implementors
                                 .iter()
-                                .any(|i| i.type_name == imp.type_name)
+                                .any(|i| i.type_url == imp.type_url)
                             {
                                 item.implementors.push(imp.clone());
                             }
@@ -1040,5 +1079,61 @@ mod tests {
             "trait should get implementor entry"
         );
         assert_eq!(display.implementors[0].type_name, "Point");
+    }
+
+    #[test]
+    fn link_trait_impls_type_lookup_no_collision() {
+        // Two structs with the same simple name — the lookup map must
+        // resolve each to the correct full path without collisions.
+        let mut index = DocIndex::new();
+        index.add_item(make_struct_item("a::Foo", "Foo"));
+        index.add_item(make_struct_item("b::Foo", "Foo"));
+        index.add_item(make_trait_item("mylib::Display", "Display"));
+
+        let links = vec![
+            ("a::Foo".into(), make_trait_impl("Display")),
+            ("b::Foo".into(), make_trait_impl("Display")),
+        ];
+        index.link_trait_impls(links);
+
+        // Both should get the impl
+        let foo_a = index.find_by_path("a::Foo").unwrap();
+        let foo_b = index.find_by_path("b::Foo").unwrap();
+        assert_eq!(foo_a.trait_impls.len(), 1);
+        assert_eq!(foo_b.trait_impls.len(), 1);
+
+        // The trait should have BOTH as implementors (dedup by type_url)
+        let display = index.find_by_path("mylib::Display").unwrap();
+        assert_eq!(
+            display.implementors.len(),
+            2,
+            "both a::Foo and b::Foo should appear as implementors"
+        );
+        let urls: Vec<&str> = display.implementors.iter().map(|i| i.type_url.as_str()).collect();
+        assert!(urls.contains(&"a::Foo/struct"));
+        assert!(urls.contains(&"b::Foo/struct"));
+    }
+
+    #[test]
+    fn link_trait_impls_dedup_by_url_not_name() {
+        // Two types with the same simple name implementing the same trait
+        // should not be deduplicated — dedup should use type_url, not type_name.
+        let mut index = DocIndex::new();
+        index.add_item(make_struct_item("x::Result", "Result"));
+        index.add_item(make_struct_item("y::Result", "Result"));
+        index.add_item(make_trait_item("mylib::Debug", "Debug"));
+
+        let links = vec![
+            ("x::Result".into(), make_trait_impl("Debug")),
+            ("y::Result".into(), make_trait_impl("Debug")),
+        ];
+        index.link_trait_impls(links);
+
+        let debug_trait = index.find_by_path("mylib::Debug").unwrap();
+        assert_eq!(
+            debug_trait.implementors.len(),
+            2,
+            "both x::Result and y::Result should be separate implementors"
+        );
     }
 }
