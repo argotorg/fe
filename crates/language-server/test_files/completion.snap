@@ -1,5 +1,6 @@
 ---
 source: crates/language-server/src/functionality/completion.rs
+assertion_line: 1722
 expression: snapshot
 input_file: test_files/completion.fe
 ---
@@ -17,6 +18,8 @@ completions:
   - Call (Interface)
   - Clone (Interface)
   - Copy (Interface)
+  - Create (Interface)
+  - Ctx (Interface)
   - Default (Interface)
   - Drawable (Interface)
   - Encode (Interface)
@@ -26,6 +29,7 @@ completions:
   - Helper (Struct) [use utils::Helper [Helper]] {+0:use utils::Helper}
   - Helper (Struct) [use shadow_test::Helper [Helper]] {+0:use shadow_test::Helper}
   - IntDowncast (Interface)
+  - Log (Interface)
   - MsgVariant (Interface)
   - None (EnumMember)
   - Ok (EnumMember)
@@ -35,6 +39,7 @@ completions:
   - Result (Enum)
   - Sol (Struct)
   - Some (EnumMember)
+  - StorageMap (Struct)
   - another_func_with_args (Function) -> "another_func_with_args(${1:x}, ${2:y})$0" [fn another_func_with_args(x: i32, y: i32) -> i32]
   - assert (Function) -> "assert(${1:b})$0" [fn assert(b: bool)]
   - func_with_args (Function) -> "func_with_args(${1:x}, ${2:y})$0" [use utils::func_with_args [fn func_with_args(x: i32, y: i32) -> i32]] {+0:use utils::func_with_args}
@@ -85,6 +90,7 @@ completions:
   - Point (Struct)
   - Result (Enum)
   - Sol (Struct)
+  - StorageMap (Struct)
 
 note: 
    ┌─ completion.fe:63:18
@@ -142,6 +148,7 @@ completions:
   - Point (Struct)
   - Result (Enum)
   - Sol (Struct)
+  - StorageMap (Struct)
 
 note: 
    ┌─ completion.fe:78:13
@@ -187,6 +194,7 @@ completions:
   - Point (Struct)
   - Result (Enum)
   - Sol (Struct)
+  - StorageMap (Struct)
 
 note: 
     ┌─ completion.fe:107:16
@@ -205,3 +213,4 @@ completions:
   - Point (Struct)
   - Result (Enum)
   - Sol (Struct)
+  - StorageMap (Struct)
