@@ -95,9 +95,17 @@ async fn discover_and_load_ingots(
     }
 
     if discovery.workspace_root.is_none() && discovery.ingot_roots.is_empty() {
-        let had_diagnostics = init_ingot(&mut backend.db, &root_url);
-        if had_diagnostics {
-            warn!("Ingot initialization produced diagnostics for workspace root");
+        // Only try init if the root actually has a fe.toml (avoid panic on
+        // directories that aren't ingots, e.g. a workbook with scattered child ingots).
+        let has_config = root_url
+            .to_file_path()
+            .map(|p| p.join("fe.toml").is_file())
+            .unwrap_or(false);
+        if has_config {
+            let had_diagnostics = init_ingot(&mut backend.db, &root_url);
+            if had_diagnostics {
+                warn!("Ingot initialization produced diagnostics for workspace root");
+            }
         }
     }
 

@@ -750,8 +750,11 @@ fn generate_lsp_doc_html(resolved_root: Option<&Utf8PathBuf>, port: u16) -> Stri
             ingot_urls.push(ingot_url.clone());
         }
         if discovery.workspace_root.is_none() && discovery.ingot_roots.is_empty() {
-            driver::init_ingot(&mut db, &root_url);
-            ingot_urls.push(root_url.clone());
+            // Only try init if the root actually has a fe.toml (avoid panic)
+            if root_path.join("fe.toml").is_file() {
+                driver::init_ingot(&mut db, &root_url);
+                ingot_urls.push(root_url.clone());
+            }
         }
 
         // Extract docs from each discovered ingot
