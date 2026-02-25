@@ -17,7 +17,7 @@ use async_lsp::lsp_types::notification::{
 
 use async_lsp::lsp_types::request::{
     CallHierarchyIncomingCalls, CallHierarchyOutgoingCalls, CallHierarchyPrepare,
-    CodeActionRequest, CodeLensRequest, Completion, DocumentHighlightRequest,
+    CodeActionRequest, CodeLensRequest, Completion, DocumentHighlightRequest, DocumentLinkRequest,
     DocumentSymbolRequest, ExecuteCommand, FoldingRangeRequest, Formatting, GotoDeclaration,
     GotoDefinition, GotoImplementation, GotoTypeDefinition, HoverRequest, InlayHintRequest,
     References, Rename, SelectionRangeRequest, SemanticTokensFullRequest, Shutdown,
@@ -31,7 +31,7 @@ use tracing::instrument::WithSubscriber;
 use tracing::{info, warn};
 
 use crate::functionality::{
-    call_hierarchy, code_actions, code_lens, codegen_view, completion, declaration,
+    call_hierarchy, code_actions, code_lens, codegen_view, completion, declaration, document_links,
     document_symbols, folding_range, goto, handlers, highlight, implementations, inlay_hints,
     references, rename, selection_range, semantic_tokens, signature_help, type_definition,
     type_hierarchy, workspace_symbols,
@@ -116,6 +116,8 @@ pub(crate) fn setup_service(
         .handle_request::<FoldingRangeRequest>(folding_range::handle_folding_range)
         // go to declaration
         .handle_request::<GotoDeclaration>(declaration::handle_goto_declaration)
+        // document links (clickable type references → docs)
+        .handle_request::<DocumentLinkRequest>(document_links::handle_document_links)
         .handle_notification::<DidOpenTextDocument>(handlers::handle_did_open_text_document)
         .handle_notification::<DidChangeTextDocument>(handlers::handle_did_change_text_document)
         .handle_notification::<DidChangeWatchedFiles>(handlers::handle_did_change_watched_files)
@@ -180,6 +182,8 @@ pub(crate) fn setup_ws_service(
         .handle_request::<FoldingRangeRequest>(folding_range::handle_folding_range)
         // go to declaration
         .handle_request::<GotoDeclaration>(declaration::handle_goto_declaration)
+        // document links (clickable type references → docs)
+        .handle_request::<DocumentLinkRequest>(document_links::handle_document_links)
         .handle_notification::<DidOpenTextDocument>(handlers::handle_did_open_text_document)
         .handle_notification::<DidChangeTextDocument>(handlers::handle_did_change_text_document)
         .handle_notification::<DidChangeWatchedFiles>(handlers::handle_did_change_watched_files)

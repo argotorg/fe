@@ -715,11 +715,22 @@ pub async fn handle_hover_request(
     };
 
     info!("handling hover request in file: {:?}", file);
-    let (response, doc_path) = hover_helper(&backend.db, file, message).unwrap_or_else(|e| {
+    let (mut response, doc_path) = hover_helper(&backend.db, file, message).unwrap_or_else(|e| {
         error!("Error handling hover: {:?}", e);
         (None, None)
     });
+
     if let Some(path) = doc_path {
+        // Append an "Open docs" link when the doc server is running
+        if backend.docs_url.is_some() {
+            if let Some(hover) = response.as_mut() {
+                use async_lsp::lsp_types::HoverContents;
+                if let HoverContents::Markup(mc) = &mut hover.contents {
+                    let uri = crate::util::doc_command_uri(&path);
+                    mc.value.push_str(&format!("\n\n[Open docs →]({uri})"));
+                }
+            }
+        }
         backend.notify_doc_navigate(path);
     }
     info!("sending hover response: {:?}", response);
