@@ -867,6 +867,77 @@ fn test_tree_workspace_root_default_path() {
 }
 
 #[test]
+fn test_cli_test_workspace_root_is_workspace_aware() {
+    let root = workspace_fixture("test_workspace_fe_test_core_std_no_tests");
+    let (output, exit_code) = run_fe_main_in_dir(&["test"], &root);
+    assert_eq!(exit_code, 0, "fe test failed:\n{output}");
+    assert!(
+        output.contains("running `fe test` for 2 inputs"),
+        "expected workspace member expansion, got:\n{output}"
+    );
+    assert!(
+        output.contains("No tests found in"),
+        "expected no-tests warning, got:\n{output}"
+    );
+    assert!(
+        !output.contains("Failed to emit test"),
+        "unexpected codegen failure:\n{output}"
+    );
+    assert!(
+        !output.contains("std::evm::EvmTarget"),
+        "unexpected EvmTarget resolution error:\n{output}"
+    );
+}
+
+#[test]
+fn test_cli_test_workspace_ingot_selects_single_ingot() {
+    let root = workspace_fixture("test_workspace_fe_test_core_std_no_tests");
+    let (output, exit_code) = run_fe_main_in_dir(&["test", "--ingot", "app"], &root);
+    assert_eq!(exit_code, 0, "fe test failed:\n{output}");
+    assert!(
+        output.contains("ingots/core"),
+        "expected selected ingot path in output, got:\n{output}"
+    );
+    assert!(
+        !output.contains("ingots/std"),
+        "did not expect non-selected ingot path in output, got:\n{output}"
+    );
+}
+
+#[test]
+fn test_cli_test_workspace_ingot_missing_member_is_error() {
+    let root = workspace_fixture("test_workspace_fe_test_core_std_no_tests");
+    let (output, exit_code) = run_fe_main_in_dir(&["test", "--ingot", "missing"], &root);
+    assert_ne!(exit_code, 0, "expected non-zero exit code:\n{output}");
+    assert!(
+        output.contains("No workspace member named \"missing\""),
+        "expected missing-member error, got:\n{output}"
+    );
+}
+
+#[test]
+fn test_cli_test_repo_core_ingot_without_tests_is_ok() {
+    let project_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("fe crate parent")
+        .parent()
+        .expect("workspace root");
+    let core_ingot = project_root.join("ingots/core");
+    let core_ingot = core_ingot.to_str().expect("core ingot path utf8");
+
+    let (output, exit_code) = run_fe_main(&["test", core_ingot]);
+    assert_eq!(exit_code, 0, "fe test failed:\n{output}");
+    assert!(
+        output.contains("No tests found in"),
+        "expected no-tests warning, got:\n{output}"
+    );
+    assert!(
+        !output.contains("std::evm::EvmTarget"),
+        "unexpected EvmTarget resolution error:\n{output}"
+    );
+}
+
+#[test]
 fn test_tree_workspace_default_member_version() {
     let root = workspace_fixture("tree_default_member_version");
     let snapshot_path = root.join("tree_default_member_version.case");
@@ -1008,6 +1079,66 @@ fn test_cli_build_workspace_root_defaults_to_sonatina_and_writes_hex_artifacts()
     assert_hex_artifact(&out_dir.join("Foo.runtime.bin"));
     assert_hex_artifact(&out_dir.join("Bar.bin"));
     assert_hex_artifact(&out_dir.join("Bar.runtime.bin"));
+}
+
+#[test]
+fn test_cli_build_workspace_root_ingot_selects_single_member() {
+    let root = workspace_fixture("build_workspace_root");
+
+    let temp = tempdir().expect("tempdir");
+    let out_dir = temp.path().join("out");
+    let out_dir_str = out_dir.to_string_lossy().to_string();
+
+    let (output, exit_code) = run_fe_main_in_dir(
+        &["build", "--out-dir", out_dir_str.as_str(), "--ingot", "a"],
+        &root,
+    );
+    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
+
+    assert_hex_artifact(&out_dir.join("Foo.bin"));
+    assert_hex_artifact(&out_dir.join("Foo.runtime.bin"));
+    assert!(
+        !out_dir.join("Bar.bin").exists(),
+        "did not expect artifacts for non-selected member"
+    );
+    assert!(
+        !out_dir.join("Bar.runtime.bin").exists(),
+        "did not expect artifacts for non-selected member"
+    );
+}
+
+#[test]
+fn test_cli_build_workspace_root_ingot_missing_member_is_error() {
+    let root = workspace_fixture("build_workspace_root");
+    let (output, exit_code) = run_fe_main_in_dir(&["build", "--ingot", "missing"], &root);
+    assert_ne!(exit_code, 0, "expected non-zero exit code:\n{output}");
+    assert!(
+        output.contains("No workspace member named \"missing\""),
+        "expected missing-member error, got:\n{output}"
+    );
+}
+
+#[test]
+fn test_cli_check_workspace_ingot_missing_member_is_error() {
+    let root = workspace_fixture("build_workspace_root");
+    let (output, exit_code) = run_fe_main_in_dir(&["check", "--ingot", "missing"], &root);
+    assert_ne!(exit_code, 0, "expected non-zero exit code:\n{output}");
+    assert!(
+        output.contains("No workspace member named \"missing\""),
+        "expected missing-member error, got:\n{output}"
+    );
+}
+
+#[test]
+fn test_cli_check_ingot_requires_workspace_root() {
+    let root = workspace_fixture("build_workspace_root");
+    let member = root.join("ingots/a");
+    let (output, exit_code) = run_fe_main_in_dir(&["check", "--ingot", "a"], &member);
+    assert_ne!(exit_code, 0, "expected non-zero exit code:\n{output}");
+    assert!(
+        output.contains("`--ingot` requires an input path that resolves to a workspace root"),
+        "expected workspace-root error, got:\n{output}"
+    );
 }
 
 #[cfg(unix)]

@@ -9,16 +9,22 @@ use crate::report::{
     normalize_report_out_path, panic_payload_to_string, sanitize_filename, tar_gz_dir,
     write_report_meta,
 };
+use crate::workspace_ingot::{
+    INGOT_REQUIRES_WORKSPACE_ROOT, WorkspaceMemberRef, select_workspace_member_paths,
+};
 use camino::Utf8PathBuf;
 use codegen::{
     DebugOutputSink, ExpectedRevert, OptLevel, SonatinaTestDebugConfig, TestMetadata,
     TestModuleOutput, emit_test_module_sonatina, emit_test_module_yul,
 };
 use colored::Colorize;
-use common::InputDb;
+use common::{
+    InputDb,
+    config::{Config, WorkspaceMemberSelection},
+};
 use contract_harness::{CallGasProfile, EvmTraceOptions, ExecutionOptions, RuntimeInstance};
 use driver::DriverDataBase;
-use hir::hir_def::{HirIngot, TopLevelMod};
+use hir::hir_def::{HirIngot, TopLevelMod, item::ItemKind};
 use mir::{fmt as mir_fmt, lower_module};
 use rustc_hash::{FxHashMap, FxHashSet};
 use solc_runner::compile_single_contract_with_solc;
@@ -771,6 +777,7 @@ fn effective_jobs(requested: usize, suite_count: usize) -> usize {
 #[allow(clippy::too_many_arguments)]
 pub fn run_tests(
     paths: &[Utf8PathBuf],
+    ingot: Option<&str>,
     filter: Option<&str>,
     jobs: usize,
     show_logs: bool,
@@ -784,7 +791,11 @@ pub fn run_tests(
     report_failed_only: bool,
     call_trace: bool,
 ) -> Result<bool, String> {
-    let input_paths = expand_test_paths(paths)?;
+    let expanded_paths = expand_test_paths(paths)?;
+    if ingot.is_some() && expanded_paths.len() != 1 {
+        return Err(INGOT_REQUIRES_WORKSPACE_ROOT.to_string());
+    }
+    let input_paths = expand_workspace_test_paths(expanded_paths, ingot)?;
     let suite_plans = build_suite_plans(input_paths, report_dir)?;
     let worker_count = effective_jobs(jobs, suite_plans.len());
     let multi = suite_plans.len() > 1;
@@ -1154,6 +1165,10 @@ fn run_tests_single_file(
         );
     }
 
+    if !has_test_functions(db, top_mod) {
+        return Vec::new();
+    }
+
     // Discover and run tests
     maybe_write_suite_ir(db, top_mod, backend, report);
     discover_and_run_tests(
@@ -1251,6 +1266,10 @@ fn run_tests_ingot(
     }
 
     let root_mod = ingot.root_mod(db);
+    if !has_test_functions(db, root_mod) {
+        return Vec::new();
+    }
+
     maybe_write_suite_ir(db, root_mod, backend, report);
     discover_and_run_tests(
         db,
@@ -1614,6 +1633,119 @@ fn expand_test_paths(inputs: &[Utf8PathBuf]) -> Result<Vec<Utf8PathBuf>, String>
 
 fn looks_like_glob(pattern: &str) -> bool {
     pattern.contains('*') || pattern.contains('?') || pattern.contains('[')
+}
+
+fn expand_workspace_test_paths(
+    inputs: Vec<Utf8PathBuf>,
+    ingot: Option<&str>,
+) -> Result<Vec<Utf8PathBuf>, String> {
+    let mut expanded = Vec::new();
+    let mut seen: FxHashSet<String> = FxHashSet::default();
+    let mut push_unique = |path: Utf8PathBuf| {
+        let key = path.as_str().to_string();
+        if seen.insert(key) {
+            expanded.push(path);
+        }
+    };
+
+    for input in inputs {
+        if !input.is_dir() {
+            if ingot.is_some() {
+                return Err(INGOT_REQUIRES_WORKSPACE_ROOT.to_string());
+            }
+            push_unique(input);
+            continue;
+        }
+
+        let config_path = input.join("fe.toml");
+        if !config_path.is_file() {
+            if ingot.is_some() {
+                return Err(INGOT_REQUIRES_WORKSPACE_ROOT.to_string());
+            }
+            push_unique(input);
+            continue;
+        }
+
+        let content = match std::fs::read_to_string(config_path.as_std_path()) {
+            Ok(content) => content,
+            Err(_) => {
+                if ingot.is_some() {
+                    return Err(format!(
+                        "`--ingot` requires a readable workspace config at `{config_path}`"
+                    ));
+                }
+                push_unique(input);
+                continue;
+            }
+        };
+        let config = match Config::parse(&content) {
+            Ok(config) => config,
+            Err(_) => {
+                if ingot.is_some() {
+                    return Err(format!(
+                        "`--ingot` requires a valid workspace config at `{config_path}`"
+                    ));
+                }
+                push_unique(input);
+                continue;
+            }
+        };
+        let Config::Workspace(workspace_config) = config else {
+            if ingot.is_some() {
+                return Err(INGOT_REQUIRES_WORKSPACE_ROOT.to_string());
+            }
+            push_unique(input);
+            continue;
+        };
+
+        let canonical = input
+            .canonicalize_utf8()
+            .map_err(|err| format!("failed to canonicalize workspace path `{input}`: {err}"))?;
+        let workspace_url = Url::from_directory_path(canonical.as_str())
+            .map_err(|_| format!("invalid workspace directory path `{input}`"))?;
+        let selection = if workspace_config.workspace.default_members.is_some() {
+            WorkspaceMemberSelection::DefaultOnly
+        } else {
+            WorkspaceMemberSelection::All
+        };
+        let members = driver::expand_workspace_members(
+            &workspace_config.workspace,
+            &workspace_url,
+            selection,
+        )
+        .map_err(|err| format!("failed to resolve workspace members in `{input}`: {err}"))?;
+
+        let member_paths = select_workspace_member_paths(
+            &canonical,
+            &input,
+            members
+                .iter()
+                .filter(|member| member.url != workspace_url)
+                .map(|member| {
+                    WorkspaceMemberRef::new(member.path.as_path(), member.name.as_deref())
+                }),
+            ingot,
+        )?;
+
+        if member_paths.is_empty() {
+            push_unique(input);
+            continue;
+        }
+
+        for member_path in member_paths {
+            push_unique(member_path);
+        }
+    }
+
+    Ok(expanded)
+}
+
+fn has_test_functions(db: &DriverDataBase, top_mod: TopLevelMod<'_>) -> bool {
+    top_mod.all_funcs(db).iter().any(|func| {
+        ItemKind::from(*func)
+            .attrs(db)
+            .is_some_and(|attrs| attrs.has_attr(db, "test"))
+    })
 }
 
 fn create_run_report_staging() -> Result<ReportStaging, String> {
