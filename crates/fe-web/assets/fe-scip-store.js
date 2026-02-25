@@ -30,12 +30,9 @@ function feHighlight(symHash) {
   if (symHash) _setHighlightStyles(symHash, true);
 }
 
-function _setHighlightStyles(symHash, on) {
-  var refBg  = on ? _hlColor("--hl-ref-bg",       "rgba(99,102,241,0.10)") : "";
-  var defBg  = on ? _hlColor("--hl-def-bg",        "rgba(99,102,241,0.18)") : "";
-  var defUl  = on ? _hlColor("--hl-def-underline",  "rgba(99,102,241,0.5)") : "";
-  var all = document.querySelectorAll(".sym-" + symHash);
-  var defs = document.querySelectorAll(".sym-d-" + symHash);
+function _applyHighlightTo(root, symHash, refBg, defBg, defUl, on) {
+  var all = root.querySelectorAll(".sym-" + symHash);
+  var defs = root.querySelectorAll(".sym-d-" + symHash);
   for (var i = 0; i < all.length; i++) {
     all[i].style.background = refBg;
     all[i].style.borderRadius = on ? "2px" : "";
@@ -45,6 +42,21 @@ function _setHighlightStyles(symHash, on) {
     defs[j].style.textDecoration = on ? "underline" : "";
     defs[j].style.textDecorationColor = defUl;
     defs[j].style.textUnderlineOffset = on ? "2px" : "";
+  }
+}
+
+function _setHighlightStyles(symHash, on) {
+  var refBg  = on ? _hlColor("--hl-ref-bg",       "rgba(99,102,241,0.10)") : "";
+  var defBg  = on ? _hlColor("--hl-def-bg",        "rgba(99,102,241,0.18)") : "";
+  var defUl  = on ? _hlColor("--hl-def-underline",  "rgba(99,102,241,0.5)") : "";
+  // Search light DOM
+  _applyHighlightTo(document, symHash, refBg, defBg, defUl, on);
+  // Search shadow roots of code blocks
+  var blocks = document.querySelectorAll("fe-code-block");
+  for (var i = 0; i < blocks.length; i++) {
+    if (blocks[i].shadowRoot) {
+      _applyHighlightTo(blocks[i].shadowRoot, symHash, refBg, defBg, defUl, on);
+    }
   }
 }
 

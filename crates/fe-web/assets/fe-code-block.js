@@ -1,7 +1,10 @@
 // <fe-code-block> — Custom element for syntax-highlighted Fe code blocks.
 //
-// Content is always raw text. If FeHighlighter is available, it will be
-// syntax-highlighted and type-linked client-side via tree-sitter WASM.
+// Raw source text lives in the light DOM and is never destroyed. The
+// rendered (highlighted + SCIP-annotated) version lives in an open
+// shadow root, so `element.textContent` always returns the original code.
+//
+// Call `element.refresh()` to re-render with fresh ScipStore data.
 //
 // Attributes:
 //   lang         — language name (default "fe")
@@ -10,14 +13,69 @@
 //   data-file    — SCIP source file path for positional symbol resolution
 //   data-scope   — SCIP scope path for signature code blocks (set by server)
 
+// Shared stylesheet adopted by all <fe-code-block> shadow roots.
+var _codeBlockSheet = null;
+
+function _getCodeBlockSheet() {
+  if (_codeBlockSheet) return _codeBlockSheet;
+  try {
+    _codeBlockSheet = new CSSStyleSheet();
+    var css = "";
+    var styles = document.querySelectorAll("style");
+    for (var i = 0; i < styles.length; i++) {
+      css += styles[i].textContent + "\n";
+    }
+    _codeBlockSheet.replaceSync(css);
+  } catch (e) {
+    _codeBlockSheet = null;
+  }
+  return _codeBlockSheet;
+}
+
+// Invalidate cached sheet (e.g. after live reload rebuilds styles).
+function _invalidateCodeBlockSheet() {
+  _codeBlockSheet = null;
+}
+
 class FeCodeBlock extends HTMLElement {
   connectedCallback() {
-    // Grab raw text before any rendering clears it
-    this._rawSource = this.textContent;
-    this.render();
+    // Preserve raw source from light DOM (only on first connect)
+    if (this._rawSource == null) {
+      this._rawSource = this.textContent;
+    }
+
+    // Create shadow root once
+    if (!this.shadowRoot) {
+      this.attachShadow({ mode: "open" });
+      var sheet = _getCodeBlockSheet();
+      if (sheet) {
+        this.shadowRoot.adoptedStyleSheets = [sheet];
+      } else {
+        // Fallback: clone page styles into shadow root
+        var pageStyles = document.querySelectorAll("style");
+        for (var i = 0; i < pageStyles.length; i++) {
+          this.shadowRoot.appendChild(pageStyles[i].cloneNode(true));
+        }
+      }
+    }
+
+    this._render();
   }
 
-  render() {
+  /** Re-render with current ScipStore (e.g. after live reload). */
+  refresh() {
+    // Re-adopt styles in case they changed
+    var sheet = _getCodeBlockSheet();
+    if (sheet && this.shadowRoot) {
+      this.shadowRoot.adoptedStyleSheets = [sheet];
+    }
+    this._render();
+  }
+
+  _render() {
+    var shadow = this.shadowRoot;
+    if (!shadow) return;
+
     var lang = this.getAttribute("lang") || "fe";
     var showLineNumbers = this.hasAttribute("line-numbers");
     var collapsed = this.hasAttribute("collapsed");
@@ -47,15 +105,18 @@ class FeCodeBlock extends HTMLElement {
         document.addEventListener("fe-highlighter-ready", function onReady() {
           document.removeEventListener("fe-highlighter-ready", onReady);
           self._waitingForHighlighter = false;
-          // Re-render now that highlighter is available
-          self.innerHTML = "";
-          self.render();
+          self._render();
         });
       }
     }
 
-    // Clear original content before appending rendered version
-    this.innerHTML = "";
+    // Clear shadow root (preserves light DOM / raw source)
+    // Keep style elements if we used the fallback clone approach
+    var existingStyles = shadow.querySelectorAll("style");
+    shadow.innerHTML = "";
+    for (var si = 0; si < existingStyles.length; si++) {
+      shadow.appendChild(existingStyles[si]);
+    }
 
     if (showLineNumbers) {
       var lines = code.innerHTML.split("\n");
@@ -83,9 +144,9 @@ class FeCodeBlock extends HTMLElement {
       summary.textContent = lang + " code";
       details.appendChild(summary);
       details.appendChild(wrapper);
-      this.appendChild(details);
+      shadow.appendChild(details);
     } else {
-      this.appendChild(wrapper);
+      shadow.appendChild(wrapper);
     }
 
     // If SCIP is available, make highlighted spans interactive
@@ -331,14 +392,14 @@ class FeCodeBlock extends HTMLElement {
     var file = this.getAttribute("data-file");
     if (!file) return;
 
-    var self = this;
+    var shadow = this.shadowRoot;
     document.addEventListener("fe-diagnostics", function (e) {
       var detail = e.detail;
       // Match by file path suffix (LSP uses full URIs)
       if (!detail.uri || !detail.uri.endsWith(file)) return;
 
-      // Remove previous diagnostic markers
-      var old = self.querySelectorAll(".fe-diagnostic-marker");
+      // Remove previous diagnostic markers from shadow root
+      var old = shadow.querySelectorAll(".fe-diagnostic-marker");
       for (var i = 0; i < old.length; i++) old[i].remove();
 
       // Add new markers
