@@ -121,6 +121,15 @@ pub(crate) fn hover_parts(db: &driver::DriverDataBase, item: ItemKind) -> HoverP
     }
 }
 
+/// Build hover documentation parts for any scope (items + sub-items like
+/// fields, variants, associated types).
+pub(crate) fn hover_parts_for_scope(db: &driver::DriverDataBase, view: &SymbolView) -> HoverParts {
+    HoverParts {
+        signature: view.signature(db),
+        docstring: view.docs(db),
+    }
+}
+
 impl HoverParts {
     /// Format for SCIP: signature in ` ```fe ` fence, joined with docstring.
     pub fn to_scip_documentation(&self) -> Vec<String> {
