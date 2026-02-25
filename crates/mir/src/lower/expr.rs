@@ -379,11 +379,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         let root_value = self.builder.body.value(root);
-        if root_value.ty.as_capability(self.db).is_some() {
-            match crate::repr::repr_kind_for_ty(self.db, &self.core, root_value.ty) {
-                crate::repr::ReprKind::Zst | crate::repr::ReprKind::Word => return false,
-                crate::repr::ReprKind::Ptr(_) | crate::repr::ReprKind::Ref => {}
-            }
+        match crate::repr::repr_kind_for_ty(self.db, &self.core, root_value.ty) {
+            crate::repr::ReprKind::Zst | crate::repr::ReprKind::Word => return false,
+            crate::repr::ReprKind::Ptr(_) | crate::repr::ReprKind::Ref => {}
         }
         matches!(
             root_value.origin,

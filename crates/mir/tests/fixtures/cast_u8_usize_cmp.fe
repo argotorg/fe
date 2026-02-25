@@ -1,0 +1,13 @@
+pub fn cast_u8_usize_cmp(indices: [u8; 8], i: usize, j: usize) -> u8 {
+    let path = indices[i]
+    if j < path as usize {
+        return 1
+    }
+    if j == path as usize {
+        return 2
+    }
+    if j > path as usize {
+        return 3
+    }
+    0
+}
