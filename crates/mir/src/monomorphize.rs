@@ -474,21 +474,15 @@ impl<'db> Monomorphizer<'db> {
         } in call_sites
         {
             let resolved_name = match target {
-                CallTarget::Template(func) => {
-                    let (_, symbol) = self
-                        .ensure_instance(
-                            func,
-                            &args,
-                            receiver_space,
-                            &effect_param_space_overrides,
-                            &param_capability_space_overrides,
-                        )
-                        .unwrap_or_else(|| {
-                            let name = func.pretty_print_signature(self.db);
-                            panic!("failed to instantiate MIR for `{name}`");
-                        });
-                    Some(symbol)
-                }
+                CallTarget::Template(func) => self
+                    .ensure_instance(
+                        func,
+                        &args,
+                        receiver_space,
+                        &effect_param_space_overrides,
+                        &param_capability_space_overrides,
+                    )
+                    .map(|(_, symbol)| symbol),
                 CallTarget::Decl(func) => {
                     let (normalized_args, normalized_effect_param_space_overrides, _) = self
                         .normalize_call_instance_inputs(
@@ -549,12 +543,14 @@ impl<'db> Monomorphizer<'db> {
 
         for (value_idx, target) in func_item_sites {
             let (_, symbol) = match target.origin {
-                crate::ir::MirFunctionOrigin::Hir(func) => self
-                    .ensure_instance(func, &target.generic_args, None, &[], &[])
-                    .unwrap_or_else(|| {
-                        let name = func.pretty_print(self.db);
-                        panic!("failed to instantiate MIR for `{name}`");
-                    }),
+                crate::ir::MirFunctionOrigin::Hir(func) => {
+                    let Some(instance) =
+                        self.ensure_instance(func, &target.generic_args, None, &[], &[])
+                    else {
+                        continue;
+                    };
+                    instance
+                }
                 crate::ir::MirFunctionOrigin::Synthetic(_) => self
                     .ensure_synthetic_instance(target.origin, None, &[], &[])
                     .unwrap_or_else(|| {
@@ -700,9 +696,13 @@ impl<'db> Monomorphizer<'db> {
         } else {
             let (diags, typed_body) = check_func_body(self.db, func);
             if !diags.is_empty() {
-                let name = func.pretty_print_signature(self.db);
-                let rendered = format_diags(self.db, diags);
-                panic!("analysis errors while lowering `{name}`:\n{rendered}");
+                let func_name = func.pretty_print_signature(self.db);
+                let diagnostics = format_diags(self.db, diags);
+                self.defer_error(MirLowerError::AnalysisDiagnostics {
+                    func_name,
+                    diagnostics,
+                });
+                return None;
             }
             let mut folder = ParamSubstFolder {
                 args: &normalized_args,
@@ -1250,9 +1250,13 @@ impl<'db> Monomorphizer<'db> {
 
         let (diags, typed_body) = check_func_body(self.db, func);
         if !diags.is_empty() {
-            let name = func.pretty_print_signature(self.db);
-            let rendered = format_diags(self.db, diags);
-            panic!("analysis errors while lowering `{name}`:\n{rendered}");
+            let func_name = func.pretty_print_signature(self.db);
+            let diagnostics = format_diags(self.db, diags);
+            self.defer_error(MirLowerError::AnalysisDiagnostics {
+                func_name,
+                diagnostics,
+            });
+            return None;
         }
         let lowered = lower_function(
             self.db,
