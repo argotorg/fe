@@ -736,7 +736,7 @@ fn run_root(path: Option<&Utf8PathBuf>) {
         })
     });
 
-    match discover_context(&start_url) {
+    match discover_context(&start_url, false) {
         Ok(discovery) => {
             if let Some(workspace_root) = &discovery.workspace_root
                 && let Ok(path) = workspace_root.to_file_path()

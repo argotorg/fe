@@ -488,6 +488,10 @@ impl<'a> IngotHandler<'a> {
                 }
             };
 
+        self.db
+            .dependency_graph()
+            .ensure_workspace_root(self.db, &resource.ingot_url);
+
         for member in &mut members {
             let explicit_name = member.name.clone();
             let explicit_version = member.version.clone();

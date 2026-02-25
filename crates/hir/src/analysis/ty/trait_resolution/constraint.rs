@@ -37,11 +37,13 @@ fn collect_effect_constraints_for_func<'db>(
 
     let Some(effect_ref_trait) = resolve_core_trait(db, func.scope(), &["effect_ref", "EffectRef"])
     else {
+        debug_assert!(false, "missing required core trait EffectRef");
         return vec![];
     };
     let Some(effect_ref_mut_trait) =
         resolve_core_trait(db, func.scope(), &["effect_ref", "EffectRefMut"])
     else {
+        debug_assert!(false, "missing required core trait EffectRefMut");
         return vec![];
     };
 

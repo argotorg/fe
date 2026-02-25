@@ -134,6 +134,19 @@ impl DependencyGraph {
         self.workspace_members(db).keys().cloned().collect()
     }
 
+    /// Ensure the workspace root has an entry in the members map even when
+    /// it has zero named members (e.g. a workspace with only glob patterns
+    /// that match nothing yet).  Without this the root would be invisible to
+    /// `workspace_roots()`.
+    pub fn ensure_workspace_root(&self, db: &mut dyn InputDb, workspace_root: &Url) {
+        let mut members = self.workspace_members(db);
+        if members.contains_key(workspace_root) {
+            return;
+        }
+        members.entry(workspace_root.clone()).or_default();
+        self.set_workspace_members(db).to(members);
+    }
+
     pub fn workspace_members_by_name(
         &self,
         db: &dyn InputDb,
@@ -194,11 +207,17 @@ impl DependencyGraph {
         let target_idx = Self::allocate_node(&mut graph, &mut node_map, target);
 
         // Avoid duplicate edges when re-resolving (e.g. workspace re-init after
-        // a new member ingot appears).
-        let already_exists = graph
+        // a new member ingot appears).  If an edge with the same alias already
+        // exists, update its arguments in case they changed.
+        let existing = graph
             .edges(source_idx)
-            .any(|e| e.target() == target_idx && e.weight().0 == alias);
-        if !already_exists {
+            .find(|e| e.target() == target_idx && e.weight().0 == alias)
+            .map(|e| e.id());
+        if let Some(edge_id) = existing {
+            if graph[edge_id].1 != arguments {
+                graph[edge_id] = (alias, arguments);
+            }
+        } else {
             graph.add_edge(source_idx, target_idx, (alias, arguments));
         }
 

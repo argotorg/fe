@@ -382,6 +382,7 @@ impl<'db> Callable<'db> {
                     None => match params.get(i).copied() {
                         Some(p) => p.mode(db),
                         None => {
+                            debug_assert!(false, "missing func param at index {i}");
                             tracing::error!("missing func param at index {i}");
                             continue;
                         }

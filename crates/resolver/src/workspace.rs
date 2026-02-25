@@ -196,7 +196,10 @@ pub fn expand_workspace_members(
     Ok(members)
 }
 
-pub fn discover_context(url: &Url) -> Result<ContextDiscovery, FilesResolutionError> {
+pub fn discover_context(
+    url: &Url,
+    scan_down: bool,
+) -> Result<ContextDiscovery, FilesResolutionError> {
     let path = url
         .to_file_path()
         .map_err(|_| FilesResolutionError::DirectoryDoesNotExist(url.clone()))?;
@@ -285,7 +288,9 @@ pub fn discover_context(url: &Url) -> Result<ContextDiscovery, FilesResolutionEr
     // Upward walk found nothing and this is a directory without fe.toml.
     // Scan downward for fe.toml files to discover nested workspaces/ingots
     // (e.g. editor opened at a parent directory like a monorepo or workbook).
-    discover_nested_configs(&start_dir, &mut resolver, &mut discovery)?;
+    if scan_down {
+        discover_nested_configs(&start_dir, &mut resolver, &mut discovery)?;
+    }
 
     Ok(discovery)
 }
@@ -442,7 +447,7 @@ version = "0.1.0"
         fs::create_dir_all(root.join("ingots/app/src")).expect("create src dir");
 
         let member_url = Url::from_directory_path(root.join("ingots/app")).expect("member url");
-        let discovery = discover_context(&member_url).expect("discover context");
+        let discovery = discover_context(&member_url, false).expect("discover context");
 
         let root_url = Url::from_directory_path(root).expect("root url");
         assert_eq!(discovery.workspace_root, Some(root_url));
@@ -465,7 +470,7 @@ members = ["ingots/*"]
         fs::create_dir_all(root.join("ingots/bad/src")).expect("create src dir");
 
         let bad_url = Url::from_directory_path(root.join("ingots/bad")).expect("bad url");
-        let discovery = discover_context(&bad_url).expect("discover context");
+        let discovery = discover_context(&bad_url, false).expect("discover context");
 
         let root_url = Url::from_directory_path(root).expect("root url");
         assert_eq!(discovery.workspace_root, Some(root_url));
@@ -641,7 +646,7 @@ version = "0.1.0"
 
         // Discover from the parent root (no fe.toml here)
         let root_url = Url::from_directory_path(root).expect("root url");
-        let discovery = discover_context(&root_url).expect("discover context");
+        let discovery = discover_context(&root_url, true).expect("discover context");
 
         let ws_url = Url::from_directory_path(root.join("lessons/lesson1")).expect("workspace url");
         assert_eq!(discovery.workspace_root, Some(ws_url.clone()));
@@ -681,7 +686,7 @@ version = "0.1.0"
         );
 
         let root_url = Url::from_directory_path(root).expect("root url");
-        let discovery = discover_context(&root_url).expect("discover context");
+        let discovery = discover_context(&root_url, true).expect("discover context");
 
         let mylib_url = Url::from_directory_path(root.join("projects/mylib")).expect("mylib url");
         assert!(
@@ -721,7 +726,7 @@ version = "0.1.0"
         );
 
         let root_url = Url::from_directory_path(root).expect("root url");
-        let discovery = discover_context(&root_url).expect("discover context");
+        let discovery = discover_context(&root_url, true).expect("discover context");
 
         assert_eq!(discovery.ingot_roots.len(), 1, "only mylib should be found");
         let mylib_url = Url::from_directory_path(root.join("mylib")).expect("mylib url");
@@ -746,7 +751,7 @@ version = "0.1.0"
         fs::create_dir_all(root.join("ws_b/lib")).expect("create ws_b/lib");
 
         let root_url = Url::from_directory_path(root).expect("root url");
-        let discovery = discover_context(&root_url).expect("discover context");
+        let discovery = discover_context(&root_url, true).expect("discover context");
 
         // First workspace alphabetically should be primary
         let ws_a_url = Url::from_directory_path(root.join("ws_a")).expect("ws_a url");
@@ -783,7 +788,7 @@ version = "0.1.0"
         fs::create_dir_all(root.join("nested/other")).expect("create nested/other");
 
         let root_url = Url::from_directory_path(root).expect("root url");
-        let discovery = discover_context(&root_url).expect("discover context");
+        let discovery = discover_context(&root_url, true).expect("discover context");
 
         // Upward walk finds workspace at root — downward scan should NOT run
         assert_eq!(discovery.workspace_root, Some(root_url));

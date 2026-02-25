@@ -69,7 +69,7 @@ async fn discover_and_load_ingots(
         )
     })?;
 
-    let discovery = discover_context(&root_url).map_err(|e| {
+    let discovery = discover_context(&root_url, true).map_err(|e| {
         ResponseError::new(ErrorCode::INTERNAL_ERROR, format!("Discovery error: {e}"))
     })?;
 
@@ -441,9 +441,10 @@ pub async fn handle_file_change(
                         .dependency_graph()
                         .workspace_roots(&backend.db)
                         .into_iter()
-                        .find(|root| {
+                        .filter(|root| {
                             ingot_url.as_str().starts_with(root.as_str()) && *root != ingot_url
-                        });
+                        })
+                        .max_by_key(|root| root.as_str().len());
 
                     if let Some(ref workspace_root) = workspace_root {
                         info!(
@@ -495,7 +496,8 @@ fn load_ingot_files(
         .dependency_graph()
         .workspace_roots(&backend.db)
         .into_iter()
-        .find(|root| ingot_url.as_str().starts_with(root.as_str()) && *root != ingot_url);
+        .filter(|root| ingot_url.as_str().starts_with(root.as_str()) && *root != ingot_url)
+        .max_by_key(|root| root.as_str().len());
 
     if let Some(ref workspace_root) = workspace_root {
         info!(
