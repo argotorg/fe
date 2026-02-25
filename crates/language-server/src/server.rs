@@ -133,7 +133,7 @@ pub(crate) fn setup_service(
 /// Create an LspService for a secondary (WS) connection sharing an existing Backend.
 ///
 /// Uses a read-only initialize handler so that browser clients don't overwrite
-/// the editor's workspace_root or definition_link_support on the shared Backend.
+/// the editor's lsp_workspace_root or definition_link_support on the shared Backend.
 pub(crate) fn setup_ws_service(
     actor_ref: ActorRef<Backend, LspActorKey>,
     client: ClientSocket,
