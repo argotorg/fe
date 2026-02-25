@@ -5,6 +5,7 @@ use driver::DriverDataBase;
 use rustc_hash::FxHashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 use tokio::sync::broadcast;
 use url::Url;
 

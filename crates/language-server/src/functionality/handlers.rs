@@ -374,6 +374,10 @@ pub async fn handle_did_save_text_document(
     backend.notify_ws(crate::ws_notify::WsServerMsg::Update {
         uri: message.text_document.uri.to_string(),
     });
+    // Request doc reload on save (debounced by the stream in setup_streams)
+    if backend.doc_regenerate_fn.is_some() {
+        let _ = backend.client.clone().emit(DocReloadRequest);
+    }
     Ok(())
 }
 
@@ -525,7 +529,9 @@ pub async fn handle_file_change(
 
     let _ = backend.client.emit(NeedsDiagnostics(message.uri));
 
-    // Request doc reload (debounced by the stream in setup_streams)
+    // Request doc reload (debounced by the stream in setup_streams).
+    // Now that regen uses a read-only salsa snapshot of the backend's db,
+    // the snapshot reflects the in-memory changes from didChange above.
     if backend.doc_regenerate_fn.is_some() {
         let _ = backend.client.emit(DocReloadRequest);
     }
