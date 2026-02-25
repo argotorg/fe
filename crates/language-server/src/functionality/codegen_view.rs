@@ -230,7 +230,18 @@ async fn handle_open_docs(
     let doc_path = arguments
         .first()
         .and_then(|v| v.as_str())
-        .unwrap_or("");
+        .unwrap_or("")
+        .to_string();
+
+    // If a browser doc client is connected, navigate there instead of opening a new window
+    if backend
+        .doc_nav_tx
+        .as_ref()
+        .is_some_and(|tx| tx.receiver_count() > 0)
+    {
+        backend.notify_doc_navigate(doc_path);
+        return Ok(None);
+    }
 
     let url_str = if doc_path.is_empty() {
         base
