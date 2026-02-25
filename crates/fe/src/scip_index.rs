@@ -286,6 +286,21 @@ pub fn generate_scip(
         }
     }
 
+    // Emit cross-ingot references.
+    //
+    // The ReferenceIndex tracks all scope references originating from this
+    // ingot's code, including references to items in other ingots (e.g.
+    // `Option` from `core`).  process_module() above only queries for
+    // targets that appear in this ingot's scope graphs.  Here we iterate
+    // remaining targets in foreign ingots and emit reference occurrences
+    // so that cross-ingot type usages are visible in the SCIP data.
+    emit_cross_ingot_references(
+        db,
+        &ctx,
+        &file_relative_paths,
+        &mut documents,
+    );
+
     let mut index = types::Index::new();
     index.metadata = Some(types::Metadata {
         version: types::ProtocolVersion::UnspecifiedProtocolVersion.into(),
@@ -609,6 +624,125 @@ fn index_unnamed_item_generic_params<'db>(
                 });
                 if let Some(range) = span_to_scip_range(&resolved, db) {
                     push_occurrence(ref_doc, range, param_symbol.clone(), 0);
+                }
+            }
+        }
+    }
+}
+
+/// Construct a SCIP symbol string for a cross-ingot scope target.
+///
+/// For `Item` scopes, delegates to `item_symbol`.  For child scopes (Field,
+/// Variant, GenericParam, TraitType, TraitConst), constructs the parent item
+/// symbol first, then appends the child descriptor.
+fn scope_to_scip_symbol<'db>(
+    db: &'db driver::DriverDataBase,
+    scope: &ScopeId<'db>,
+    ingot_name: &str,
+    ingot_version: &str,
+) -> Option<String> {
+    match scope {
+        ScopeId::Item(item) => item_symbol(db, *item, ingot_name, ingot_version).map(|(s, _)| s),
+        ScopeId::GenericParam(item, _) => {
+            let (parent_sym, _) = item_symbol(db, *item, ingot_name, ingot_version)?;
+            let param_name = scope.name(db)?;
+            Some(format!("{}[{}]", parent_sym, param_name.data(db)))
+        }
+        ScopeId::Field(_, _) | ScopeId::Variant(_) | ScopeId::TraitType(_, _) | ScopeId::TraitConst(_, _) => {
+            let parent_item = scope.item();
+            let (parent_sym, _) = item_symbol(db, parent_item, ingot_name, ingot_version)?;
+            let child_name = scope.name(db)?;
+            Some(child_scip_symbol(&parent_sym, child_name.data(db), *scope))
+        }
+        _ => None,
+    }
+}
+
+/// Emit reference occurrences for cross-ingot targets.
+///
+/// The `ReferenceIndex` contains references to ALL scopes reachable from this
+/// ingot's code — including types from other ingots like `core::option::Option`.
+/// `process_module()` only emits occurrences for targets within the current
+/// ingot.  This function handles the remaining cross-ingot targets.
+fn emit_cross_ingot_references<'db>(
+    db: &'db driver::DriverDataBase,
+    ctx: &index_util::IngotContext<'db>,
+    file_relative_paths: &HashMap<String, String>,
+    documents: &mut HashMap<String, ScipDocumentBuilder>,
+) {
+    // Cache target ingot metadata to avoid repeated lookups
+    let mut ingot_meta: HashMap<common::ingot::Ingot<'db>, (String, String)> = HashMap::new();
+
+    for (target_scope, refs) in ctx.ref_index.iter() {
+        // Skip targets within the current ingot (already handled by process_module)
+        let target_ingot = target_scope.ingot(db);
+        if target_ingot == ctx.ingot {
+            continue;
+        }
+
+        let (target_name, target_version) = ingot_meta
+            .entry(target_ingot)
+            .or_insert_with(|| {
+                let name = target_ingot
+                    .config(db)
+                    .and_then(|c| c.metadata.name)
+                    .map(|n| n.to_string())
+                    .unwrap_or_else(|| "unknown".to_string());
+                let version = target_ingot
+                    .version(db)
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "0.0.0".to_string());
+                (name, version)
+            });
+
+        let Some(symbol) =
+            scope_to_scip_symbol(db, target_scope, target_name, target_version)
+        else {
+            continue;
+        };
+
+        // Get the display name for SymbolInformation
+        let display_name = target_scope
+            .name(db)
+            .map(|n| n.data(db).to_string())
+            .unwrap_or_default();
+        let kind = match target_scope {
+            ScopeId::Item(item) => item_symbol_kind(*item),
+            _ => child_symbol_kind(*target_scope),
+        };
+
+        // Emit reference occurrences into the appropriate source file documents
+        for indexed_ref in refs {
+            if let Some(resolved) = indexed_ref.span.resolve(db) {
+                let ref_url = match resolved.file.url(db) {
+                    Some(url) => url.to_string(),
+                    None => continue,
+                };
+                let ref_doc = documents.entry(ref_url.clone()).or_insert_with(|| {
+                    let relative = file_relative_paths
+                        .get(&ref_url)
+                        .cloned()
+                        .unwrap_or_default();
+                    ScipDocumentBuilder::new(relative)
+                });
+                if let Some(range) = span_to_scip_range(&resolved, db) {
+                    push_occurrence(ref_doc, range, symbol.clone(), 0);
+                }
+
+                // Add SymbolInformation entry so the symbol appears in the JSON
+                // `symbols` map (needed for inject_doc_urls and browser lookups).
+                // Only needs to be added once per symbol.
+                if ref_doc.seen_symbols.insert(symbol.clone()) {
+                    ref_doc.symbols.push(types::SymbolInformation {
+                        symbol: symbol.clone(),
+                        documentation: Vec::new(),
+                        relationships: Vec::new(),
+                        kind: kind.into(),
+                        display_name: display_name.clone(),
+                        signature_documentation: None.into(),
+                        enclosing_symbol: String::new(),
+                        special_fields: Default::default(),
+                    });
                 }
             }
         }
