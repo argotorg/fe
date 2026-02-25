@@ -186,14 +186,13 @@ pub async fn initialize(
     backend.server_info.workspace_root = Some(root.to_string_lossy().to_string());
 
     let capabilities = server_capabilities();
-    let initialize_result = InitializeResult {
+    InitializeResult {
         capabilities,
         server_info: Some(async_lsp::lsp_types::ServerInfo {
             name: String::from("fe-language-server"),
             version: Some(String::from(env!("CARGO_PKG_VERSION"))),
         }),
-    };
-    Ok(initialize_result)
+    }
 }
 
 pub async fn initialized(

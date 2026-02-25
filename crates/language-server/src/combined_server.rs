@@ -26,7 +26,7 @@ use tracing::{info, warn};
 
 use crate::backend::Backend;
 use crate::lsp_actor::service::LspActorKey;
-use crate::server::setup_service;
+use crate::server::setup_ws_service;
 
 /// Shared actor reference, set once the stdio MainLoop creates the Backend.
 pub type SharedActor = ActorRef<Backend, LspActorKey>;
@@ -97,7 +97,7 @@ async fn handle_ws_lsp(
 
     // Create a fresh LSP server + client for this WS connection
     let (server, client) = async_lsp::MainLoop::new_server(|client| {
-        let lsp_service = setup_service(actor_ref, client.clone());
+        let lsp_service = setup_ws_service(actor_ref, client.clone());
         ServiceBuilder::new()
             .layer(LifecycleLayer::default())
             .layer(CatchUnwindLayer::default())
