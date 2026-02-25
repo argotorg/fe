@@ -769,21 +769,26 @@ pub fn inject_doc_urls(scip_json: &str, doc_index: &DocIndex) -> String {
                 // the descriptor chain and join with "::" for doc path matching.
                 let qualified = scip_symbol_to_qualified_path(sym_str);
 
-                let doc_url = if has_enclosing {
-                    // Sub-item: try qualified lookup first, fall back to simple name
-                    qualified
-                        .as_deref()
-                        .and_then(|q| qualified_child_to_url.get(q))
-                        .or_else(|| child_to_url.get(&name))
-                        .cloned()
-                } else {
-                    // Top-level item: try qualified path first, fall back to name
-                    qualified
-                        .as_deref()
-                        .and_then(|q| path_to_url.get(q))
-                        .or_else(|| name_to_url.get(name.as_str()))
-                        .cloned()
-                };
+                // Try all lookup maps in order of specificity.
+                // Items with an enclosing symbol may be either true sub-items
+                // (fields/methods → child maps) or module-level items that happen
+                // to have a parent module in SCIP (e.g. core::option::Option).
+                let doc_url = qualified
+                    .as_deref()
+                    .and_then(|q| {
+                        qualified_child_to_url
+                            .get(q)
+                            .or_else(|| path_to_url.get(q))
+                    })
+                    .cloned()
+                    .or_else(|| {
+                        if has_enclosing {
+                            child_to_url.get(&name).cloned()
+                        } else {
+                            None
+                        }
+                    })
+                    .or_else(|| name_to_url.get(name.as_str()).cloned());
                 if let Some(url) = doc_url {
                     obj.insert(
                         "doc_url".to_string(),
