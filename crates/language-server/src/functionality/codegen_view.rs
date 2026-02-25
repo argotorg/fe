@@ -242,15 +242,41 @@ async fn handle_open_docs(
         ResponseError::new(ErrorCode::INTERNAL_ERROR, format!("invalid docs URL: {e}"))
     })?;
 
-    let _ = backend
+    // Try window/showDocument first (works in VS Code)
+    let show_result = backend
         .client
         .show_document(ShowDocumentParams {
-            uri,
+            uri: uri.clone(),
             external: Some(true),
             take_focus: Some(true),
             selection: None,
         })
         .await;
 
+    if let Ok(result) = show_result
+        && result.success
+    {
+        return Ok(None);
+    }
+
+    // Fallback: open in system browser directly (Zed doesn't support showDocument)
+    open_in_browser(uri.as_str());
+
     Ok(None)
+}
+
+fn open_in_browser(url: &str) {
+    #[cfg(target_os = "linux")]
+    let cmd = "xdg-open";
+    #[cfg(target_os = "macos")]
+    let cmd = "open";
+    #[cfg(target_os = "windows")]
+    let cmd = "start";
+
+    let _ = std::process::Command::new(cmd)
+        .arg(url)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
 }
