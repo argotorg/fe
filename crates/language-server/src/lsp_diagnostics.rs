@@ -13,9 +13,9 @@ use hir::analysis::analysis_pass::{
 };
 use hir::analysis::name_resolution::ImportAnalysisPass;
 use hir::analysis::ty::{
-    AdtDefAnalysisPass, BodyAnalysisPass, DefConflictAnalysisPass, FuncAnalysisPass,
-    ImplAnalysisPass, ImplTraitAnalysisPass, MsgSelectorAnalysisPass, TraitAnalysisPass,
-    TypeAliasAnalysisPass,
+    AdtDefAnalysisPass, BodyAnalysisPass, ContractAnalysisPass, DefConflictAnalysisPass,
+    FuncAnalysisPass, ImplAnalysisPass, ImplTraitAnalysisPass, MsgSelectorAnalysisPass,
+    TraitAnalysisPass, TypeAliasAnalysisPass,
 };
 use hir::hir_def::HirIngot;
 use hir::lower::map_file_to_mod;
@@ -185,6 +185,7 @@ fn initialize_analysis_pass() -> AnalysisPassManager {
     pass_manager.add_module_pass("ImplTrait", Box::new(ImplTraitAnalysisPass {}));
     pass_manager.add_module_pass("Func", Box::new(FuncAnalysisPass {}));
     pass_manager.add_module_pass("Body", Box::new(BodyAnalysisPass {}));
+    pass_manager.add_module_pass("Contract", Box::new(ContractAnalysisPass {}));
     pass_manager
 }
 
