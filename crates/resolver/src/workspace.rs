@@ -285,7 +285,7 @@ pub fn discover_context(url: &Url) -> Result<ContextDiscovery, FilesResolutionEr
     // Upward walk found nothing and this is a directory without fe.toml.
     // Scan downward for fe.toml files to discover nested workspaces/ingots
     // (e.g. editor opened at a parent directory like a monorepo or workbook).
-    discover_nested_configs(&start_dir, url, &mut resolver, &mut discovery)?;
+    discover_nested_configs(&start_dir, &mut resolver, &mut discovery)?;
 
     Ok(discovery)
 }
@@ -295,7 +295,6 @@ pub fn discover_context(url: &Url) -> Result<ContextDiscovery, FilesResolutionEr
 /// that doesn't itself contain a Fe project (e.g. a monorepo or workbook).
 fn discover_nested_configs(
     root: &Path,
-    root_url: &Url,
     resolver: &mut FilesResolver,
     discovery: &mut ContextDiscovery,
 ) -> Result<(), FilesResolutionError> {
@@ -315,7 +314,6 @@ fn discover_nested_configs(
         depth: usize,
         resolver: &mut FilesResolver,
         discovery: &mut ContextDiscovery,
-        root_url: &Url,
     ) -> Result<(), FilesResolutionError> {
         if depth > MAX_DEPTH {
             return Ok(());
@@ -380,13 +378,13 @@ fn discover_nested_configs(
             .collect();
         subdirs.sort();
         for subdir in subdirs {
-            walk(&subdir, depth + 1, resolver, discovery, root_url)?;
+            walk(&subdir, depth + 1, resolver, discovery)?;
         }
 
         Ok(())
     }
 
-    walk(root, 0, resolver, discovery, root_url)
+    walk(root, 0, resolver, discovery)
 }
 
 fn ancestor_root_for_src(path: &Path) -> Option<PathBuf> {

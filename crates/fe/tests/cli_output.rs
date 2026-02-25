@@ -749,7 +749,10 @@ fn assert_fe_test_backends_agree(path: &str, call_trace: bool) {
     );
 
     if !solc_available() {
-        eprintln!("skipping yul backend comparison because `solc` is missing");
+        #[allow(clippy::print_stdout)]
+        {
+            println!("skipping yul backend comparison because `solc` is missing");
+        }
         return;
     }
 
