@@ -657,3 +657,62 @@ pub(crate) fn remote_checkout_root(ingot_url: &Url) -> Utf8PathBuf {
     ingot_path.push("git");
     ingot_path
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// discover_and_init should not panic on a directory with no fe.toml.
+    #[test]
+    fn discover_and_init_empty_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let url = Url::from_directory_path(tmp.path()).unwrap();
+        let mut db = DriverDataBase::default();
+        let result = discover_and_init(&mut db, &url);
+        assert!(result.is_empty());
+    }
+
+    /// discover_and_init should find a single ingot at root.
+    #[test]
+    fn discover_and_init_single_ingot() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::write(
+            root.join("fe.toml"),
+            "[ingot]\nname = \"test\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src").join("lib.fe"), "pub fn foo() {}").unwrap();
+
+        let url = Url::from_directory_path(root).unwrap();
+        let mut db = DriverDataBase::default();
+        let result = discover_and_init(&mut db, &url);
+        assert_eq!(result.len(), 1);
+    }
+
+    /// discover_and_init should scan downward and find child ingots when
+    /// the root has no fe.toml.
+    #[test]
+    fn discover_and_init_scattered_ingots() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+
+        // Create two child ingots under lessons/
+        for name in &["alpha", "beta"] {
+            let ingot_dir = root.join("lessons").join(name);
+            std::fs::create_dir_all(ingot_dir.join("src")).unwrap();
+            std::fs::write(
+                ingot_dir.join("fe.toml"),
+                format!("[ingot]\nname = \"{name}\"\nversion = \"0.1.0\"\n"),
+            )
+            .unwrap();
+            std::fs::write(ingot_dir.join("src").join("lib.fe"), "pub fn f() {}").unwrap();
+        }
+
+        let url = Url::from_directory_path(root).unwrap();
+        let mut db = DriverDataBase::default();
+        let result = discover_and_init(&mut db, &url);
+        assert_eq!(result.len(), 2, "should find both child ingots");
+    }
+}
