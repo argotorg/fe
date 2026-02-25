@@ -1,0 +1,11 @@
+struct Cap<const ROOT: u256 = _> {}
+
+fn needs_cap() uses (cap: Cap) {
+    ()
+}
+
+contract C uses (root: Cap) {
+    init() uses (cap: Cap) {
+        ()
+    }
+}

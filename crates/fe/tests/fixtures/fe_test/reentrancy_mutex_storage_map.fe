@@ -1,0 +1,138 @@
+use std::evm::{Address, Call, Create, Ctx, Evm, Mutex, StorageMap}
+use std::evm::effects::assert
+
+msg AMsg {
+    #[selector = 1]
+    Start { b: Address, user: Address } -> u256,
+    #[selector = 2]
+    Callback { b: Address, user: Address },
+}
+
+msg BMsg {
+    #[selector = 3]
+    Enter { a: Address, user: Address } -> u256,
+    #[selector = 4]
+    Protected { user: Address } -> u256,
+    #[selector = 5]
+    Get { user: Address } -> u256,
+    #[selector = 6]
+    IsLocked -> bool,
+    #[selector = 7]
+    LockAndCheck -> bool,
+}
+
+pub contract A uses (ctx: Ctx, call: mut Call) {
+    recv AMsg {
+        Start { b, user } -> u256 uses (ctx, mut call) {
+            let self_addr = ctx.address()
+            let gas = 150000
+            let value = 0
+
+            // this calls B::Enter -> A::Callback -> B::Protected
+            let _ = call.call(addr: b, gas, value, message: BMsg::Enter { a: self_addr, user: user })
+
+            // within the same transaction, now unlocked: Protected should increment map[user]
+            call.call(addr: b, gas, value, message: BMsg::Protected { user: user })
+        }
+
+        Callback { b, user } uses (mut call) {
+            // Attempt reentrancy: this should be blocked by B's mutex lock.
+            call.call(
+                addr: b,
+                gas: 150000,
+                value: 0,
+                message: BMsg::Protected { user: user },
+            )
+        }
+    }
+}
+
+pub contract B {
+    mut guarded_balances: Mutex<StorageMap<Address, u256>>,
+
+    recv BMsg {
+        Enter { a, user } -> u256 uses (mut guarded_balances, ctx: Ctx, call: mut Call) {
+            guarded_balances.lock()
+            let pre = guarded_balances.value.get(key: user)
+            call.call(
+                addr: a,
+                gas: 150000,
+                value: 0,
+                message: AMsg::Callback { b: ctx.address(), user: user },
+            )
+            let post = guarded_balances.value.get(key: user)
+            assert(post == pre)
+            guarded_balances.unlock()
+            post
+        }
+
+        Protected { user } -> u256 uses (mut guarded_balances) {
+            let mut result = guarded_balances.value.get(key: user)
+            let mut did_lock = false
+            match guarded_balances.try_lock() {
+                Option::Some(mut balances) => {
+                    let current = balances.get(key: user)
+                    balances.set(key: user, value: current + 1)
+                    result = balances.get(key: user)
+                    did_lock = true
+                }
+                Option::None => ()
+            }
+            if did_lock {
+                guarded_balances.unlock()
+            }
+            result
+        }
+
+        Get { user } -> u256 uses (guarded_balances) {
+            guarded_balances.value.get(key: user)
+        }
+
+        IsLocked -> bool uses (guarded_balances) {
+            guarded_balances.is_locked()
+        }
+
+        LockAndCheck -> bool uses (mut guarded_balances) {
+            guarded_balances.lock()
+            let locked = guarded_balances.is_locked()
+            guarded_balances.unlock()
+            locked
+        }
+    }
+}
+
+#[test]
+fn test_reentrancy_guard_mutex_storage_map() uses (cr: mut Create, evm: mut Evm) {
+    let a = cr.create2<A>(value: 0, args: (), salt: 11)
+    let b = cr.create2<B>(value: 0, args: (), salt: 12)
+    assert(a.inner != 0)
+    assert(b.inner != 0)
+
+    let user = Address { inner: 0x1111 }
+    let gas = 200000
+    let value = 0
+
+    // lock state starts clear
+    let initially_locked = evm.call(addr: b, gas, value, message: BMsg::IsLocked {})
+    assert(initially_locked == false)
+
+    // explicit lock/unlock path works and leaves mutex unlocked
+    let saw_locked = evm.call(addr: b, gas, value, message: BMsg::LockAndCheck {})
+    assert(saw_locked == true)
+    let unlocked_again = evm.call(addr: b, gas, value, message: BMsg::IsLocked {})
+    assert(unlocked_again == false)
+
+    let before = evm.call(addr: b, gas, value, message: BMsg::Get { user: user })
+    assert(before == 0)
+
+    // Reentrant Protected call during Enter is blocked; only the post-Enter Protected increments.
+    let started = evm.call(addr: a, gas, value, message: AMsg::Start { b: b, user: user })
+    assert(started == 1)
+
+    let after = evm.call(addr: b, gas, value, message: BMsg::Get { user: user })
+    assert(after == 1)
+
+    // A standalone Protected call increments again.
+    let direct = evm.call(addr: b, gas, value, message: BMsg::Protected { user: user })
+    assert(direct == 2)
+}

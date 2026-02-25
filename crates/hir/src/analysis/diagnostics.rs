@@ -1007,6 +1007,21 @@ impl DiagnosticVoucher for PathResDiag<'_> {
                 }
             }
 
+            Self::TraitConstHoleArg { span, ident } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: format!(
+                    "layout hole `_` is not allowed in trait generic arguments for `{}`",
+                    ident.data(db)
+                ),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "replace `_` with an explicit const argument".to_string(),
+                    span: span.resolve(db),
+                }],
+                notes: vec![],
+                error_code,
+            },
+
             Self::TypeMustBeKnown(span) => CompleteDiagnostic {
                 severity: Severity::Error,
                 message: "type must be known here".to_string(),
@@ -1677,6 +1692,20 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                     span: span.resolve(db),
                 }],
                 notes: vec![],
+                error_code,
+            },
+
+            Self::ConstHoleInValuePosition { span } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "layout hole `_` is not allowed in value position".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "this type contains `_`, which is only allowed in contract fields and `uses (...)` parameter types".to_string(),
+                    span: span.resolve(db),
+                }],
+                notes: vec![
+                    "replace `_` with an explicit const argument in value positions".to_string(),
+                ],
                 error_code,
             },
 

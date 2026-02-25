@@ -163,6 +163,8 @@ where
 
                     (_, ConstTyData::TyVar(var, _)) => self.unify_var_value(var, ty1),
 
+                    (ConstTyData::Hole(_), _) | (_, ConstTyData::Hole(_)) => Ok(()),
+
                     (ConstTyData::TyParam(..), ConstTyData::TyParam(..))
                     | (ConstTyData::Evaluated(..), ConstTyData::Evaluated(..))
                     | (ConstTyData::Abstract(..), ConstTyData::Abstract(..)) => {

@@ -26,7 +26,7 @@ msg VaultMsg {
 struct VaultStore {
     total_assets: u256,
     total_shares: u256,
-    user_shares: StorageMap<Address, u256, 0>,
+    user_shares: StorageMap<Address, u256>,
 }
 
 pub contract Vault uses (ctx: Ctx) {

@@ -99,7 +99,7 @@ impl<'db> TyChecker<'db> {
         &mut self,
         pat: PatId,
         pat_data: &Pat<'db>,
-        _expected: TyId<'db>,
+        expected: TyId<'db>,
     ) -> TyId<'db> {
         let Pat::Path(path, is_mut) = pat_data else {
             unreachable!()
@@ -108,6 +108,14 @@ impl<'db> TyChecker<'db> {
         let Partial::Present(path) = path else {
             return TyId::invalid(self.db, InvalidCause::ParseError);
         };
+
+        if let Some(expected) = self.expected_msg_variant_for_named_recv_pat(pat, *path, expected) {
+            if !expected.field_types(self.db).is_empty() {
+                let record_like = RecordLike::from_ty(expected);
+                return self.emit_unit_variant_expected(pat, record_like);
+            }
+            return expected;
+        }
 
         let span = pat.span(self.body()).into_path_pat();
         let res = self.resolve_path(*path, true, span.clone().path());
@@ -378,6 +386,19 @@ impl<'db> TyChecker<'db> {
 
         let span = pat.span(self.body()).into_record_pat();
 
+        if let Some(expected) = self.expected_msg_variant_for_named_recv_pat(pat, *path, expected) {
+            let record_like = RecordLike::from_ty(expected);
+            if record_like.is_record(self.db) {
+                self.check_record_pat_fields(record_like, pat);
+                return expected;
+            }
+
+            let diag =
+                BodyDiag::record_expected(self.db, pat.span(self.body()).into(), Some(record_like));
+            self.push_diag(diag);
+            return TyId::invalid(self.db, InvalidCause::Other);
+        }
+
         match self.resolve_path(*path, true, span.clone().path()) {
             Ok(reso) => match reso {
                 PathRes::Ty(ty) | PathRes::TyAlias(_, ty)
@@ -456,6 +477,25 @@ impl<'db> TyChecker<'db> {
                 TyId::invalid(self.db, InvalidCause::Other)
             }
         }
+    }
+
+    fn expected_msg_variant_for_named_recv_pat(
+        &self,
+        pat: PatId,
+        path: PathId<'db>,
+        expected: TyId<'db>,
+    ) -> Option<TyId<'db>> {
+        if !matches!(self.env.owner().recv_arm(self.db), Some(arm) if arm.pat == pat) {
+            return None;
+        }
+        self.env.owner().recv_msg_path(self.db)?;
+        let path_ident = path.as_ident(self.db)?;
+        let adt_def = expected.adt_def(self.db)?;
+        let AdtRef::Struct(struct_) = adt_def.adt_ref(self.db) else {
+            return None;
+        };
+        let struct_name = struct_.name(self.db).to_opt()?;
+        (path_ident == struct_name).then_some(expected)
     }
 
     fn check_record_pat_fields(&mut self, record_like: RecordLike<'db>, pat: PatId) {

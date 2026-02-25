@@ -2,8 +2,8 @@
 
 use crate::{
     core::hir_def::{
-        AssocTypeGenericArg, HirIngot, IdentId, ImplTrait, ItemKind, Partial, PathId, Trait,
-        TraitRefId, params::GenericArg, scope_graph::ScopeId,
+        AssocTypeGenericArg, ConstGenericArgValue, HirIngot, IdentId, ImplTrait, ItemKind, Partial,
+        PathId, Trait, TraitRefId, params::GenericArg, scope_graph::ScopeId,
     },
     hir_def::Func,
 };
@@ -154,6 +154,9 @@ pub(crate) enum TraitArgError<'db> {
         expected: Option<TyId<'db>>,
         given: Option<TyId<'db>>,
     },
+    ConstHoleNotAllowed {
+        arg_idx: usize,
+    },
     Ignored,
 }
 
@@ -168,17 +171,23 @@ pub(crate) fn lower_trait_ref_impl<'db>(
     let args = path.generic_args(db).data(db);
 
     // Lower provided explicit args (excluding Self)
-    let provided_explicit: Vec<TyId<'db>> = args
-        .iter()
-        .filter_map(|arg| match arg {
-            GenericArg::Type(ty_arg) => Some(lower_opt_hir_ty(db, ty_arg.ty, scope, assumptions)),
-            GenericArg::Const(const_arg) => {
-                let const_ty_id = ConstTyId::from_opt_body(db, const_arg.body);
-                Some(TyId::const_ty(db, const_ty_id))
+    let mut provided_explicit = Vec::new();
+    for (arg_idx, arg) in args.iter().enumerate() {
+        match arg {
+            GenericArg::Type(ty_arg) => {
+                provided_explicit.push(lower_opt_hir_ty(db, ty_arg.ty, scope, assumptions));
             }
-            _ => None,
-        })
-        .collect();
+            GenericArg::Const(const_arg) => match const_arg.value {
+                ConstGenericArgValue::Expr(body) => {
+                    provided_explicit.push(TyId::const_ty(db, ConstTyId::from_opt_body(db, body)));
+                }
+                ConstGenericArgValue::Hole => {
+                    return Err(TraitArgError::ConstHoleNotAllowed { arg_idx });
+                }
+            },
+            GenericArg::AssocType(..) => {}
+        }
+    }
 
     // Fill trailing defaults using the trait's param set. Bind Self (idx 0).
     let non_self_completed = t.param_set(db).complete_explicit_args_with_defaults(

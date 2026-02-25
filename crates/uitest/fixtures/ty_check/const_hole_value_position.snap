@@ -1,0 +1,29 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/const_hole_value_position.fe
+---
+error[3-0032]: layout hole `_` is not allowed in value position
+  ┌─ const_hole_value_position.fe:9:17
+  │
+9 │ fn bad_param(x: Slot<u256>) {}
+  │                 ^^^^^^^^^^ this type contains `_`, which is only allowed in contract fields and `uses (...)` parameter types
+  │
+  = replace `_` with an explicit const argument in value positions
+
+error[3-0032]: layout hole `_` is not allowed in value position
+   ┌─ const_hole_value_position.fe:11:20
+   │
+11 │ fn bad_return() -> Slot<u256> {
+   │                    ^^^^^^^^^^ this type contains `_`, which is only allowed in contract fields and `uses (...)` parameter types
+   │
+   = replace `_` with an explicit const argument in value positions
+
+error[3-0032]: layout hole `_` is not allowed in value position
+   ┌─ const_hole_value_position.fe:16:12
+   │
+16 │     let x: Slot<u256>
+   │            ^^^^^^^^^^ this type contains `_`, which is only allowed in contract fields and `uses (...)` parameter types
+   │
+   = replace `_` with an explicit const argument in value positions

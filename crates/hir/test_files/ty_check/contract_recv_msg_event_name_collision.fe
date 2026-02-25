@@ -1,0 +1,23 @@
+msg Erc20 {
+    #[selector = 0xa9059cbb]
+    Transfer { to: u256, amount: u256 } -> bool,
+}
+
+#[event]
+struct Transfer {
+    #[indexed]
+    from: u256,
+    #[indexed]
+    to: u256,
+    value: u256,
+}
+
+pub contract C {
+    recv Erc20 {
+        Transfer { to, amount } -> bool {
+            let _ = to
+            let _ = amount
+            true
+        }
+    }
+}

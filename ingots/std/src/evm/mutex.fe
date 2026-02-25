@@ -1,0 +1,61 @@
+use core::effect_ref::EffectHandle
+
+use super::effects::{TStorPtr, assert}
+
+/// A storage-backed value guarded by a transient reentrancy lock.
+///
+/// `LOCK_SLOT` identifies the transient storage slot used for the lock bit.
+pub struct Mutex<T, const LOCK_SLOT: u256 = _> {
+    pub value: T
+}
+
+fn lock_get() -> bool uses (lock: bool) {
+    lock
+}
+
+fn lock_set(value: bool) uses (lock: mut bool) {
+    lock = value
+}
+
+impl<T, const LOCK_SLOT: u256> Mutex<T, LOCK_SLOT> {
+    fn lock_ptr() -> TStorPtr<bool> {
+        TStorPtr::from_raw(LOCK_SLOT)
+    }
+
+    pub fn lock(mut self) -> mut T {
+        let mut lock = Self::lock_ptr()
+        with (lock) {
+            if lock_get() {
+                assert(false)
+            }
+            lock_set(value: true)
+            mut self.value
+        }
+    }
+
+    pub fn try_lock(mut self) -> Option<mut T> {
+        let mut lock = Self::lock_ptr()
+        with (lock) {
+            if lock_get() {
+                Option::None
+            } else {
+                lock_set(value: true)
+                Option::Some(mut self.value)
+            }
+        }
+    }
+
+    pub fn unlock(mut self) {
+        let mut lock = Self::lock_ptr()
+        with (lock) {
+            lock_set(value: false)
+        }
+    }
+
+    pub fn is_locked(self) -> bool {
+        let lock = Self::lock_ptr()
+        with (lock) {
+            lock_get()
+        }
+    }
+}

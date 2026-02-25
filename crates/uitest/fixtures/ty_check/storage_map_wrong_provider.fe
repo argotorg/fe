@@ -1,0 +1,25 @@
+use std::evm::StorageMap
+
+const BALANCES_ROOT: u256 = 0
+
+fn needs_balances() uses (balances: StorageMap<u256, u256, BALANCES_ROOT>) {
+    ()
+}
+
+msg M {
+    #[selector = 0]
+    Ping -> (),
+}
+
+contract C {
+    balances: StorageMap<u256, u256>
+    allowances: StorageMap<u256, u256>
+
+    recv M {
+        Ping -> () uses (allowances) {
+            with (StorageMap<u256, u256, BALANCES_ROOT> = allowances) {
+                needs_balances()
+            }
+        }
+    }
+}

@@ -1,0 +1,11 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/effect_key_alias_const_default.fe
+---
+error[8-0038]: effect `MyMap<u256, u256>` provided to `needs_map` has type `StorageMap<u256, u256, 0>`, but `StorageMap<u256, u256, 1>` is required
+   ┌─ effect_key_alias_const_default.fe:19:13
+   │
+19 │             needs_map()
+   │             ^^^^^^^^^^^ expected `StorageMap<u256, u256, 1>` for effect `MyMap<u256, u256>`, found `StorageMap<u256, u256, 0>`

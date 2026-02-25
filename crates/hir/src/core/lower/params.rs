@@ -93,9 +93,13 @@ impl<'db> ConstGenericParam<'db> {
     fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::ConstGenericParam) -> Self {
         let name = IdentId::lower_token_partial(ctxt, ast.name());
         let ty = TypeId::lower_ast_partial(ctxt, ast.ty());
-        let default = ast
-            .default_expr()
-            .map(|expr| Body::lower_ast_nameless(ctxt, expr));
+        let default = if ast.default_hole().is_some() {
+            Some(ConstGenericArgValue::Hole)
+        } else {
+            ast.default_expr().map(|expr| {
+                ConstGenericArgValue::Expr(Partial::Present(Body::lower_ast_nameless(ctxt, expr)))
+            })
+        };
         Self { name, ty, default }
     }
 }
@@ -125,12 +129,17 @@ impl<'db> TypeGenericArg<'db> {
 
 impl<'db> ConstGenericArg<'db> {
     fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::ConstGenericArg) -> Self {
-        let body = ast
-            .expr()
-            .map(|expr| Body::lower_ast_nameless(ctxt, expr))
-            .into();
+        let value = if ast.hole_token().is_some() {
+            ConstGenericArgValue::Hole
+        } else {
+            let body = ast
+                .expr()
+                .map(|expr| Body::lower_ast_nameless(ctxt, expr))
+                .into();
+            ConstGenericArgValue::Expr(body)
+        };
 
-        Self { body }
+        Self { value }
     }
 }
 

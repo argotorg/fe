@@ -21,8 +21,8 @@ fn abi_encode_string(word: u256, len: u256) -> ! uses (ops: mut RawOps) {
 // ERC20 storage ---------------------------------------------------------
 
 struct Erc20 {
-    balances: StorageMap<Address, u256, BALANCES_SALT>,
-    allowances: StorageMap<(Address, Address), u256, ALLOWANCES_SALT>,
+    balances: StorageMap<Address, u256>,
+    allowances: StorageMap<(Address, Address), u256>,
     supply: u256,
     owner: Address,
 }
@@ -119,7 +119,7 @@ fn mint(to: Address, amount: u256) -> u256 uses (erc20: mut Erc20, ctx: Ctx, ops
 
 #[contract_init(Erc20Contract)]
 fn init() uses (evm: mut Evm) {
-    let mut erc20: StorPtr<Erc20> = evm.stor_ptr(0)
+    let mut erc20: StorPtr<Erc20<BALANCES_SALT, ALLOWANCES_SALT>> = evm.stor_ptr(0)
     with (erc20, Ctx = evm, RawOps = evm) {
         do_init()
     }
@@ -131,7 +131,7 @@ fn init() uses (evm: mut Evm) {
 
 #[contract_runtime(Erc20Contract)]
 fn runtime() uses (evm: mut Evm) {
-    let mut erc20: StorPtr<Erc20> = evm.stor_ptr(0)
+    let mut erc20: StorPtr<Erc20<BALANCES_SALT, ALLOWANCES_SALT>> = evm.stor_ptr(0)
     let selector = evm.calldataload(0) >> 224
     with (erc20, Ctx = evm, RawOps = evm) {
         match selector {

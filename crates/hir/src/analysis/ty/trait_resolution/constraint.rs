@@ -30,6 +30,10 @@ fn collect_effect_constraints_for_func<'db>(
 ) -> Vec<TraitInstId<'db>> {
     let provider_map = place_effect_provider_param_index_map(db, func);
     let provider_params = CallableDef::Func(func).params(db);
+    let mut effect_key_tys = vec![None; func.effects(db).data(db).len()];
+    for binding in func.effect_bindings(db) {
+        effect_key_tys[binding.binding_idx as usize] = binding.key_ty;
+    }
 
     let effect_ref_trait = resolve_core_trait(db, func.scope(), &["effect_ref", "EffectRef"])
         .expect("missing required core trait `core::effect_ref::EffectRef`");
@@ -77,9 +81,7 @@ fn collect_effect_constraints_for_func<'db>(
                 ));
             }
             EffectKeyKind::Type => {
-                let Ok(PathRes::Ty(target_ty) | PathRes::TyAlias(_, target_ty)) =
-                    resolve_path(db, key_path, func.scope(), assumptions, false)
-                else {
+                let Some(target_ty) = effect_key_tys.get(effect.index()).copied().flatten() else {
                     continue;
                 };
                 if !target_ty.is_star_kind(db) {

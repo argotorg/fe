@@ -1,0 +1,17 @@
+struct Slot<T, const ROOT: u256 = _> {}
+
+contract C {
+    storage: Slot<u256>
+}
+
+fn ok() uses (storage: Slot<u256>) {}
+
+fn bad_param(x: Slot<u256>) {}
+
+fn bad_return() -> Slot<u256> {
+    loop {}
+}
+
+fn bad_local() {
+    let x: Slot<u256>
+}
