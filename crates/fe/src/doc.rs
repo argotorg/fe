@@ -586,22 +586,6 @@ fn detect_source_link_base(working_dir: &std::path::Path) -> Option<String> {
     Some(format!("{}/blob/{}", CANONICAL_REPO, commit))
 }
 
-/// Extract docs from a single ingot (lightweight, for LSP startup).
-pub(crate) fn extract_ingot_for_lsp(
-    db: &mut DriverDataBase,
-    dir_path: &Utf8PathBuf,
-) -> Option<DocIndex> {
-    extract_ingot(db, dir_path, None)
-}
-
-/// Extract docs from a workspace (lightweight, for LSP startup).
-pub(crate) fn extract_workspace_for_lsp(
-    db: &mut DriverDataBase,
-    workspace_root: &Utf8PathBuf,
-    ws_config: &common::config::WorkspaceConfig,
-) -> Option<DocIndex> {
-    extract_workspace(db, workspace_root, ws_config, None)
-}
 
 fn print_doc_summary(index: &DocIndex) {
     println!("Fe Documentation Index");

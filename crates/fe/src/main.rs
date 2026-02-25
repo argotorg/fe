@@ -710,37 +710,71 @@ async fn run_lsp_with_combined_server(resolved_root: Option<Utf8PathBuf>, port: 
 }
 
 /// Generate the doc HTML for the combined server.
-/// Falls back to a minimal page if extraction fails.
+///
+/// Uses `discover_context` (same discovery the LS uses) to find all ingots
+/// under the workspace root, so it works for:
+/// - Single ingots (directory with fe.toml)
+/// - Workspaces (fe.toml with [workspace] members)
+/// - Directories containing multiple ingots without a root fe.toml
+/// - Sentinel workspaces with members=[] (discovers child ingots)
 #[cfg(feature = "lsp")]
 fn generate_lsp_doc_html(resolved_root: Option<&Utf8PathBuf>, port: u16) -> String {
+    use crate::extract::DocExtractor;
+    use common::InputDb;
+    use hir::hir_def::HirIngot;
+    use resolver::workspace::discover_context;
+
     let root_path = resolved_root
         .cloned()
         .unwrap_or_else(|| Utf8PathBuf::from("."));
 
-    // Try to extract a DocIndex for the workspace
     let mut db = driver::DriverDataBase::default();
-    let index = if root_path.is_dir() {
-        let fe_toml = root_path.join("fe.toml");
-        if fe_toml.is_file() {
-            if let Ok(content) = std::fs::read_to_string(&fe_toml) {
-                if let Ok(common::config::Config::Workspace(ws_config)) =
-                    common::config::Config::parse(&content)
-                {
-                    doc::extract_workspace_for_lsp(&mut db, &root_path, &ws_config)
-                } else {
-                    doc::extract_ingot_for_lsp(&mut db, &root_path)
-                }
-            } else {
-                doc::extract_ingot_for_lsp(&mut db, &root_path)
-            }
-        } else {
-            None
-        }
-    } else {
-        None
-    };
+    let mut index = fe_web::model::DocIndex::new();
 
-    let index = index.unwrap_or_default();
+    // Use the same discovery logic the LS uses in its initialize handler
+    if let Ok(root_url) = url::Url::from_directory_path(
+        root_path
+            .canonicalize_utf8()
+            .unwrap_or_else(|_| root_path.clone()),
+    )
+        && let Ok(discovery) = discover_context(&root_url)
+    {
+        // Collect all ingot URLs to init (same order as LS initialize handler)
+        let mut ingot_urls = Vec::new();
+        if let Some(ws_root) = &discovery.workspace_root {
+            driver::init_ingot(&mut db, ws_root);
+            ingot_urls.push(ws_root.clone());
+        }
+        for ingot_url in &discovery.ingot_roots {
+            driver::init_ingot(&mut db, ingot_url);
+            ingot_urls.push(ingot_url.clone());
+        }
+        if discovery.workspace_root.is_none() && discovery.ingot_roots.is_empty() {
+            driver::init_ingot(&mut db, &root_url);
+            ingot_urls.push(root_url.clone());
+        }
+
+        // Extract docs from each discovered ingot
+        let extractor = DocExtractor::new(&db);
+        for ingot_url in &ingot_urls {
+            let Some(ingot) = db.workspace().containing_ingot(&db, ingot_url.clone()) else {
+                continue;
+            };
+            for top_mod in ingot.all_modules(&db) {
+                for item in top_mod.children_nested(&db) {
+                    if let Some(doc_item) = extractor.extract_item_for_ingot(item, ingot) {
+                        index.items.push(doc_item);
+                    }
+                }
+            }
+            let root_mod = ingot.root_mod(&db);
+            index
+                .modules
+                .extend(extractor.build_module_tree_for_ingot(ingot, root_mod));
+            let trait_impl_links = extractor.extract_trait_impl_links(ingot);
+            index.link_trait_impls(trait_impl_links);
+        }
+    }
 
     // Generate HTML with auto-connect script
     let mut value = serde_json::to_value(&index).expect("serialize DocIndex");
@@ -757,7 +791,6 @@ fn generate_lsp_doc_html(resolved_root: Option<&Utf8PathBuf>, port: u16) -> Stri
     let connect_script = format!(
         r#"<script>window.FE_LSP = connectLsp("ws://127.0.0.1:{port}/lsp");</script>"#,
     );
-    // Insert before </body>
     if let Some(pos) = html.rfind("</body>") {
         html.insert_str(pos, &connect_script);
     }
