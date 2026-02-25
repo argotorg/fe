@@ -12,7 +12,6 @@ use async_lsp::{
 
 use common::InputDb;
 use driver::init_ingot;
-use resolver::workspace::discover_context;
 use resolver::{
     ResolutionHandler, Resolver,
     files::{FilesResolver, FilesResource},
@@ -69,45 +68,7 @@ async fn discover_and_load_ingots(
         )
     })?;
 
-    let discovery = discover_context(&root_url, true).map_err(|e| {
-        ResponseError::new(ErrorCode::INTERNAL_ERROR, format!("Discovery error: {e}"))
-    })?;
-
-    if let Some(workspace_root) = discovery.workspace_root.as_ref() {
-        let had_diagnostics = init_ingot(&mut backend.db, workspace_root);
-        if had_diagnostics {
-            warn!("Ingot initialization produced diagnostics for workspace root");
-        }
-    }
-
-    for ingot_url in &discovery.ingot_roots {
-        // Skip if already initialized as workspace root above
-        if discovery.workspace_root.as_ref() == Some(ingot_url) {
-            continue;
-        }
-        let had_diagnostics = init_ingot(&mut backend.db, ingot_url);
-        if had_diagnostics {
-            warn!(
-                "Ingot initialization produced diagnostics for {:?}",
-                ingot_url
-            );
-        }
-    }
-
-    if discovery.workspace_root.is_none() && discovery.ingot_roots.is_empty() {
-        // Only try init if the root actually has a fe.toml (avoid panic on
-        // directories that aren't ingots, e.g. a workbook with scattered child ingots).
-        let has_config = root_url
-            .to_file_path()
-            .map(|p| p.join("fe.toml").is_file())
-            .unwrap_or(false);
-        if has_config {
-            let had_diagnostics = init_ingot(&mut backend.db, &root_url);
-            if had_diagnostics {
-                warn!("Ingot initialization produced diagnostics for workspace root");
-            }
-        }
-    }
+    driver::discover_and_init(&mut backend.db, &root_url);
 
     Ok(())
 }

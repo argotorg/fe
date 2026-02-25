@@ -722,7 +722,6 @@ fn generate_lsp_doc_html(resolved_root: Option<&Utf8PathBuf>, port: u16) -> Stri
     use crate::extract::DocExtractor;
     use common::InputDb;
     use hir::hir_def::HirIngot;
-    use resolver::workspace::discover_context;
 
     let root_path = resolved_root
         .cloned()
@@ -731,31 +730,12 @@ fn generate_lsp_doc_html(resolved_root: Option<&Utf8PathBuf>, port: u16) -> Stri
     let mut db = driver::DriverDataBase::default();
     let mut index = fe_web::model::DocIndex::new();
 
-    // Use the same discovery logic the LS uses in its initialize handler
     if let Ok(root_url) = url::Url::from_directory_path(
         root_path
             .canonicalize_utf8()
             .unwrap_or_else(|_| root_path.clone()),
-    )
-        && let Ok(discovery) = discover_context(&root_url)
-    {
-        // Collect all ingot URLs to init (same order as LS initialize handler)
-        let mut ingot_urls = Vec::new();
-        if let Some(ws_root) = &discovery.workspace_root {
-            driver::init_ingot(&mut db, ws_root);
-            ingot_urls.push(ws_root.clone());
-        }
-        for ingot_url in &discovery.ingot_roots {
-            driver::init_ingot(&mut db, ingot_url);
-            ingot_urls.push(ingot_url.clone());
-        }
-        if discovery.workspace_root.is_none() && discovery.ingot_roots.is_empty() {
-            // Only try init if the root actually has a fe.toml (avoid panic)
-            if root_path.join("fe.toml").is_file() {
-                driver::init_ingot(&mut db, &root_url);
-                ingot_urls.push(root_url.clone());
-            }
-        }
+    ) {
+        let ingot_urls = driver::discover_and_init(&mut db, &root_url);
 
         // Extract docs from each discovered ingot
         let extractor = DocExtractor::new(&db);
