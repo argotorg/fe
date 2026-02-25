@@ -118,15 +118,31 @@ pub async fn initialize(
     // Discover and load all ingots in the workspace
     discover_and_load_ingots(backend, &root).await?;
 
+    Ok(initialize_result())
+}
+
+/// Read-only initialize for secondary connections (e.g. browser WS clients).
+///
+/// Returns server capabilities without mutating backend state, so that
+/// browser doc-page LSP sessions don't overwrite the editor's workspace_root
+/// or definition_link_support.
+pub async fn initialize_readonly(
+    _backend: &Backend,
+    _message: InitializeParams,
+) -> Result<InitializeResult, ResponseError> {
+    info!("initializing language server (read-only, WS client)");
+    Ok(initialize_result())
+}
+
+fn initialize_result() -> InitializeResult {
     let capabilities = server_capabilities();
-    let initialize_result = InitializeResult {
+    InitializeResult {
         capabilities,
         server_info: Some(async_lsp::lsp_types::ServerInfo {
             name: String::from("fe-language-server"),
             version: Some(String::from(env!("CARGO_PKG_VERSION"))),
         }),
-    };
-    Ok(initialize_result)
+    }
 }
 
 pub async fn initialized(

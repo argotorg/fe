@@ -31,7 +31,7 @@ pub fn goto_target_at_cursor<'db>(
 }
 
 pub async fn handle_goto_definition(
-    backend: &mut Backend,
+    backend: &Backend,
     params: async_lsp::lsp_types::GotoDefinitionParams,
 ) -> Result<Option<async_lsp::lsp_types::GotoDefinitionResponse>, ResponseError> {
     let params = params.text_document_position_params;
