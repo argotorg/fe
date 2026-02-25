@@ -810,9 +810,12 @@
           window.FE_DOC_INDEX = reloadParams.docIndex;
         }
         if (reloadParams.scipData) {
-          window.FE_SCIP_DATA = reloadParams.scipData;
+          var scipObj = typeof reloadParams.scipData === "string"
+            ? JSON.parse(reloadParams.scipData)
+            : reloadParams.scipData;
+          window.FE_SCIP_DATA = scipObj;
           if (typeof ScipStore !== "undefined") {
-            window.FE_SCIP = new ScipStore(reloadParams.scipData);
+            window.FE_SCIP = new ScipStore(scipObj);
           }
         }
         _lastRenderedPath = null;  // force full re-render

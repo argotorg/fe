@@ -230,7 +230,7 @@ fn setup_streams(client: ClientSocket, router: &mut Router<()>) {
     // Debounced doc reload: coalesce rapid file changes into a single reload
     let mut doc_reload_stream = router
         .event_stream::<DocReloadRequest>()
-        .chunks_timeout(100, std::time::Duration::from_millis(500))
+        .chunks_timeout(100, std::time::Duration::from_millis(200))
         .map(|_batch| DocReloadExecute)
         .fuse();
 

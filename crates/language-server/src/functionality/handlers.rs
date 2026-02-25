@@ -336,6 +336,10 @@ pub async fn handle_did_save_text_document(
     backend.notify_ws(crate::ws_notify::WsServerMsg::Update {
         uri: message.text_document.uri.to_string(),
     });
+    // Request doc reload on save (debounced by the stream in setup_streams)
+    if backend.doc_regenerate_fn.is_some() {
+        let _ = backend.client.clone().emit(DocReloadRequest);
+    }
     Ok(())
 }
 
@@ -484,7 +488,9 @@ pub async fn handle_file_change(
 
     let _ = backend.client.emit(NeedsDiagnostics(message.uri));
 
-    // Request doc reload (debounced by the stream in setup_streams)
+    // Request doc reload (debounced by the stream in setup_streams).
+    // Now that regen uses a read-only salsa snapshot of the backend's db,
+    // the snapshot reflects the in-memory changes from didChange above.
     if backend.doc_regenerate_fn.is_some() {
         let _ = backend.client.emit(DocReloadRequest);
     }
@@ -665,18 +671,34 @@ pub async fn handle_doc_reload(
     info!("regenerating doc data for live reload");
     let t_start = std::time::Instant::now();
 
-    // Run on a blocking thread — regen_fn creates its own fresh db internally
-    // (we can't use a salsa snapshot because discover_and_init needs &mut).
-    match tokio::task::spawn_blocking(move || regen_fn()).await {
-        Ok((doc_json, scip_json)) => {
-            tracing::debug!(
-                "[fe:timing] doc reload regeneration: {:?}",
-                t_start.elapsed()
-            );
-            backend.notify_doc_reload(doc_json, scip_json);
+    // Bump generation so concurrent/stale regens get discarded
+    let generation = backend
+        .doc_reload_generation
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        + 1;
+    let generation_ref = std::sync::Arc::clone(&backend.doc_reload_generation);
+
+    // Run on the worker pool with a salsa snapshot — read-only, shares cached
+    // query results with the Backend's db, no mutation needed.
+    let rx = backend.spawn_on_workers(move |db| {
+        let result = regen_fn(db);
+        (result, generation)
+    });
+
+    match rx.await {
+        Ok(((doc_json, scip_json), completed_gen)) => {
+            if completed_gen == generation_ref.load(std::sync::atomic::Ordering::Relaxed) {
+                tracing::debug!(
+                    "[fe:timing] doc reload regeneration: {:?}",
+                    t_start.elapsed()
+                );
+                backend.notify_doc_reload(doc_json, scip_json);
+            } else {
+                info!("doc reload: discarding stale result");
+            }
         }
-        Err(e) => {
-            warn!("doc reload: worker task panicked: {e}");
+        Err(_) => {
+            warn!("doc reload: worker cancelled");
         }
     }
     Ok(())

@@ -699,15 +699,11 @@ async fn run_lsp_with_combined_server(resolved_root: Option<Utf8PathBuf>, port: 
     }
 
     // Create the doc regeneration closure for live reload.
-    // Creates a fresh db each time — salsa snapshots can't be mutated
-    // while the original Backend db exists.
-    let root_for_regen = resolved_root
-        .clone()
-        .unwrap_or_else(|| Utf8PathBuf::from("."));
-    let doc_regenerate_fn: language_server::DocRegenerateFn = Arc::new(move || {
-        let mut db = driver::DriverDataBase::default();
-        regenerate_doc_data(&mut db, &root_for_regen)
-    });
+    // Uses a read-only salsa snapshot — the Backend's db is already initialized
+    // with all ingots/files, so we enumerate from the snapshot's dependency graph
+    // and workspace rather than re-discovering from disk.
+    let doc_regenerate_fn: language_server::DocRegenerateFn =
+        Arc::new(|db| regenerate_doc_data_from_db(db));
 
     let config = language_server::CombinedServerConfig {
         listener,
@@ -722,15 +718,73 @@ async fn run_lsp_with_combined_server(resolved_root: Option<Utf8PathBuf>, port: 
     doc::LspServerInfo::remove_from_workspace(&workspace_root_path);
 }
 
-/// Regenerate doc index JSON and SCIP JSON from a mutable database.
+/// Initial doc data generation from a workspace root.
 ///
-/// This is the core logic shared by initial doc generation and live reload.
-/// Takes `&mut` because `discover_and_init` needs to mutate the db.
-/// Returns `(doc_index_json, scip_json)`.
+/// Discovers ingots via `discover_and_init` (requires `&mut`), then delegates
+/// to `build_doc_index` for the actual extraction. Used at LSP startup.
 #[cfg(feature = "lsp")]
-pub fn regenerate_doc_data(
+fn regenerate_doc_data(
     db: &mut driver::DriverDataBase,
     workspace_root: &camino::Utf8Path,
+) -> (String, Option<String>) {
+    let root_path = workspace_root
+        .canonicalize_utf8()
+        .unwrap_or_else(|_| workspace_root.to_owned());
+
+    if let Ok(root_url) = url::Url::from_directory_path(&root_path) {
+        let discovered = driver::discover_and_init(db, &root_url);
+        build_doc_index(db, &discovered.ingot_urls, &discovered.standalone_files)
+    } else {
+        let json = serde_json::to_string(&fe_web::model::DocIndex::new()).unwrap();
+        (json, None)
+    }
+}
+
+/// Regenerate doc data from an already-initialized database snapshot.
+///
+/// Enumerates ingots from the dependency graph and standalone files from the
+/// workspace — no mutation needed. Used for live reload on save.
+#[cfg(feature = "lsp")]
+pub fn regenerate_doc_data_from_db(db: &driver::DriverDataBase) -> (String, Option<String>) {
+    use common::InputDb;
+
+    let builtin_core_url = url::Url::parse(common::stdlib::BUILTIN_CORE_BASE_URL).unwrap();
+    let builtin_std_url = url::Url::parse(common::stdlib::BUILTIN_STD_BASE_URL).unwrap();
+
+    // Get non-builtin ingot URLs from the dependency graph
+    let ingot_urls: Vec<url::Url> = db
+        .dependency_graph()
+        .petgraph(db)
+        .node_weights()
+        .filter(|u| *u != &builtin_core_url && *u != &builtin_std_url)
+        .cloned()
+        .collect();
+
+    // Find standalone files (in workspace but not under any ingot)
+    let standalone_files: Vec<url::Url> = db
+        .workspace()
+        .all_files(db)
+        .iter()
+        .filter_map(|(url, _file)| {
+            if db.workspace().containing_ingot(db, url.clone()).is_none() {
+                Some(url)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    build_doc_index(db, &ingot_urls, &standalone_files)
+}
+
+/// Core doc extraction logic shared by initial generation and live reload.
+///
+/// Takes a read-only db reference and pre-computed URL lists.
+#[cfg(feature = "lsp")]
+fn build_doc_index(
+    db: &driver::DriverDataBase,
+    ingot_urls: &[url::Url],
+    standalone_file_urls: &[url::Url],
 ) -> (String, Option<String>) {
     use crate::extract::DocExtractor;
     use common::InputDb;
@@ -740,123 +794,111 @@ pub fn regenerate_doc_data(
     let mut index = fe_web::model::DocIndex::new();
     let mut scip_json: Option<String> = None;
 
-    let root_path = workspace_root
-        .canonicalize_utf8()
-        .unwrap_or_else(|_| workspace_root.to_owned());
+    let extractor = DocExtractor::new(db);
 
-    if let Ok(root_url) = url::Url::from_directory_path(&root_path) {
-        let discovered = driver::discover_and_init(db, &root_url);
-
-        let extractor = DocExtractor::new(db);
-
-        // Extract docs from each discovered ingot
-        for ingot_url in &discovered.ingot_urls {
-            let Some(ingot) = db.workspace().containing_ingot(db, ingot_url.clone()) else {
-                continue;
-            };
-            for top_mod in ingot.all_modules(db) {
-                for item in top_mod.children_nested(db) {
-                    if let Some(doc_item) = extractor.extract_item_for_ingot(item, ingot) {
-                        index.items.push(doc_item);
-                    }
+    // Extract docs from each ingot
+    for ingot_url in ingot_urls {
+        let Some(ingot) = db.workspace().containing_ingot(db, ingot_url.clone()) else {
+            continue;
+        };
+        for top_mod in ingot.all_modules(db) {
+            for item in top_mod.children_nested(db) {
+                if let Some(doc_item) = extractor.extract_item_for_ingot(item, ingot) {
+                    index.items.push(doc_item);
                 }
             }
-            let root_mod = ingot.root_mod(db);
+        }
+        let root_mod = ingot.root_mod(db);
+        index
+            .modules
+            .extend(extractor.build_module_tree_for_ingot(ingot, root_mod));
+        let trait_impl_links = extractor.extract_trait_impl_links(ingot);
+        index.link_trait_impls(trait_impl_links);
+    }
+
+    // Extract docs from standalone .fe files
+    for file_url in standalone_file_urls {
+        if let Some(file) = db.workspace().get(db, file_url) {
+            let top_mod = db.top_mod(file);
+            for item in top_mod.children_nested(db) {
+                if let Some(doc_item) = extractor.extract_item(item) {
+                    index.items.push(doc_item);
+                }
+            }
             index
                 .modules
-                .extend(extractor.build_module_tree_for_ingot(ingot, root_mod));
-            let trait_impl_links = extractor.extract_trait_impl_links(ingot);
-            index.link_trait_impls(trait_impl_links);
+                .push(extractor.build_standalone_module_tree(top_mod));
         }
+    }
 
-        // Extract docs from standalone .fe files
-        for file_url in &discovered.standalone_files {
-            if let Some(file) = db.workspace().get(db, file_url) {
-                let top_mod = db.top_mod(file);
-                for item in top_mod.children_nested(db) {
-                    if let Some(doc_item) = extractor.extract_item(item) {
-                        index.items.push(doc_item);
-                    }
-                }
-                index
-                    .modules
-                    .push(extractor.build_standalone_module_tree(top_mod));
-            }
+    // Include builtin libraries (core, std)
+    let existing: std::collections::HashSet<_> =
+        index.modules.iter().map(|m| m.name.clone()).collect();
+    for (label, builtin) in [("core", db.builtin_core()), ("std", db.builtin_std())] {
+        if existing.contains(label) {
+            continue;
         }
-
-        // Include builtin libraries (core, std)
-        let existing: std::collections::HashSet<_> =
-            index.modules.iter().map(|m| m.name.clone()).collect();
-        for (label, builtin) in [("core", db.builtin_core()), ("std", db.builtin_std())] {
-            if existing.contains(label) {
-                continue;
-            }
-            for top_mod in builtin.all_modules(db) {
-                for item in top_mod.children_nested(db) {
-                    if let Some(doc_item) = extractor.extract_item_for_ingot(item, builtin) {
-                        index.items.push(doc_item);
-                    }
+        for top_mod in builtin.all_modules(db) {
+            for item in top_mod.children_nested(db) {
+                if let Some(doc_item) = extractor.extract_item_for_ingot(item, builtin) {
+                    index.items.push(doc_item);
                 }
             }
-            let root_mod = builtin.root_mod(db);
-            index
-                .builtin_modules
-                .extend(extractor.build_module_tree_for_ingot(builtin, root_mod));
-            let trait_impl_links = extractor.extract_trait_impl_links(builtin);
-            index.link_trait_impls(trait_impl_links);
         }
+        let root_mod = builtin.root_mod(db);
+        index
+            .builtin_modules
+            .extend(extractor.build_module_tree_for_ingot(builtin, root_mod));
+        let trait_impl_links = extractor.extract_trait_impl_links(builtin);
+        index.link_trait_impls(trait_impl_links);
+    }
 
-        // Generate SCIP data
-        let mut combined_scip = scip::types::Index::default();
-        let mut any_scip = false;
+    // Generate SCIP data
+    let mut combined_scip = scip::types::Index::default();
+    let mut any_scip = false;
 
-        let builtin_urls = [
-            url::Url::parse(common::stdlib::BUILTIN_CORE_BASE_URL).unwrap(),
-            url::Url::parse(common::stdlib::BUILTIN_STD_BASE_URL).unwrap(),
-        ];
-        let all_scip_urls: Vec<_> = discovered
-            .ingot_urls
-            .iter()
-            .chain(builtin_urls.iter())
-            .collect();
+    let builtin_urls = [
+        url::Url::parse(common::stdlib::BUILTIN_CORE_BASE_URL).unwrap(),
+        url::Url::parse(common::stdlib::BUILTIN_STD_BASE_URL).unwrap(),
+    ];
+    let all_scip_urls: Vec<_> = ingot_urls.iter().chain(builtin_urls.iter()).collect();
 
-        for ingot_url in &all_scip_urls {
-            match crate::scip_index::generate_scip(db, ingot_url) {
-                Ok(mut scip_index) => {
-                    if ingot_url.scheme() == "file" {
-                        if let Some(project_root) = ingot_url
-                            .to_file_path()
-                            .ok()
-                            .and_then(|p| camino::Utf8PathBuf::from_path_buf(p).ok())
-                        {
-                            crate::scip_index::enrich_signatures(
-                                db,
-                                &project_root,
-                                &mut index,
-                                &mut scip_index,
-                            );
-                        }
-                    } else {
-                        crate::scip_index::enrich_signatures_with_base(
+    for ingot_url in &all_scip_urls {
+        match crate::scip_index::generate_scip(db, ingot_url) {
+            Ok(mut scip_index) => {
+                if ingot_url.scheme() == "file" {
+                    if let Some(project_root) = ingot_url
+                        .to_file_path()
+                        .ok()
+                        .and_then(|p| camino::Utf8PathBuf::from_path_buf(p).ok())
+                    {
+                        crate::scip_index::enrich_signatures(
                             db,
-                            camino::Utf8Path::new("/"),
-                            Some(ingot_url),
+                            &project_root,
                             &mut index,
                             &mut scip_index,
                         );
                     }
-                    combined_scip.documents.extend(scip_index.documents);
-                    any_scip = true;
+                } else {
+                    crate::scip_index::enrich_signatures_with_base(
+                        db,
+                        camino::Utf8Path::new("/"),
+                        Some(ingot_url),
+                        &mut index,
+                        &mut scip_index,
+                    );
                 }
-                Err(e) => {
-                    eprintln!("Warning: SCIP generation failed for {ingot_url}: {e}");
-                }
+                combined_scip.documents.extend(scip_index.documents);
+                any_scip = true;
+            }
+            Err(e) => {
+                eprintln!("Warning: SCIP generation failed for {ingot_url}: {e}");
             }
         }
-        if any_scip {
-            let json_data = crate::scip_index::scip_to_json_data(&combined_scip);
-            scip_json = Some(crate::scip_index::inject_doc_urls(&json_data, &index));
-        }
+    }
+    if any_scip {
+        let json_data = crate::scip_index::scip_to_json_data(&combined_scip);
+        scip_json = Some(crate::scip_index::inject_doc_urls(&json_data, &index));
     }
 
     // Serialize DocIndex with HTML bodies injected

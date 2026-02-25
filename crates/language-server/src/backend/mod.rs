@@ -3,18 +3,20 @@ use driver::DriverDataBase;
 use rustc_hash::FxHashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 use tokio::sync::broadcast;
 use url::Url;
 
 use crate::virtual_files::{VirtualFiles, materialize_builtins};
 use crate::ws_notify::{WsBroadcast, WsServerMsg};
 
-/// Closure type for regenerating doc+SCIP data.
+/// Closure type for regenerating doc+SCIP data from a read-only db snapshot.
 ///
-/// Creates a fresh `DriverDataBase` internally (salsa snapshots can't be
-/// mutated while the original exists, and `discover_and_init` needs `&mut`).
-/// Captures the workspace root path.
-pub type DocRegenerateFn = Arc<dyn Fn() -> (String, Option<String>) + Send + Sync>;
+/// Receives a salsa snapshot of the Backend's `DriverDataBase`. The snapshot
+/// shares cached query results so incremental queries are fast, and read-only
+/// access avoids the deadlock that would occur if we tried to mutate a snapshot
+/// while the original db is still alive.
+pub type DocRegenerateFn = Arc<dyn Fn(&DriverDataBase) -> (String, Option<String>) + Send + Sync>;
 
 pub struct Backend {
     pub(super) client: ClientSocket,
@@ -27,6 +29,7 @@ pub struct Backend {
     pub(super) doc_nav_tx: Option<broadcast::Sender<String>>,
     pub(super) doc_regenerate_fn: Option<DocRegenerateFn>,
     pub(super) doc_reload_tx: Option<broadcast::Sender<String>>,
+    pub(super) doc_reload_generation: Arc<AtomicU64>,
     pub(super) docs_url: Option<String>,
     pub(super) workspace_root: Option<PathBuf>,
 }
@@ -65,6 +68,7 @@ impl Backend {
             doc_nav_tx,
             doc_regenerate_fn,
             doc_reload_tx,
+            doc_reload_generation: Arc::new(AtomicU64::new(0)),
             docs_url,
             workspace_root: None,
         }
