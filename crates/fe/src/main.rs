@@ -8,6 +8,7 @@ mod scip_index;
 mod test;
 #[cfg(not(target_arch = "wasm32"))]
 mod tree;
+mod workspace_ingot;
 
 use std::fs;
 
@@ -61,6 +62,11 @@ pub enum Command {
         /// Path to an ingot/workspace directory (containing fe.toml), a workspace member name, or a .fe file.
         #[arg(default_value_t = default_project_path())]
         path: Utf8PathBuf,
+        /// Build artifacts for a single workspace ingot by member name.
+        ///
+        /// This requires targeting a workspace root path.
+        #[arg(short = 'i', long = "ingot", value_name = "INGOT")]
+        ingot: Option<String>,
         /// Treat a `.fe` file target as standalone, even if it is inside an ingot.
         #[arg(long)]
         standalone: bool,
@@ -122,6 +128,11 @@ pub enum Command {
     Check {
         #[arg(default_value_t = default_project_path())]
         path: Utf8PathBuf,
+        /// Check a single workspace ingot by member name.
+        ///
+        /// This requires targeting a workspace root path.
+        #[arg(short = 'i', long = "ingot", value_name = "INGOT")]
+        ingot: Option<String>,
         /// Treat a `.fe` file target as standalone, even if it is inside an ingot.
         #[arg(long)]
         standalone: bool,
@@ -164,6 +175,11 @@ pub enum Command {
         /// When omitted, defaults to the current project root (like `cargo test`).
         #[arg(value_name = "PATH", num_args = 0..)]
         paths: Vec<Utf8PathBuf>,
+        /// Run tests for a single workspace ingot by member name
+        ///
+        /// This requires targeting a workspace root path.
+        #[arg(short = 'i', long = "ingot", value_name = "INGOT")]
+        ingot: Option<String>,
         /// Optional filter pattern for test names.
         #[arg(short, long)]
         filter: Option<String>,
@@ -347,6 +363,7 @@ pub fn run(opts: &Options) {
     match &opts.command {
         Command::Build {
             path,
+            ingot,
             standalone,
             contract,
             backend,
@@ -378,6 +395,7 @@ pub fn run(opts: &Options) {
             }
             build(
                 path,
+                ingot.as_deref(),
                 *standalone,
                 contract.as_deref(),
                 backend_kind,
@@ -391,6 +409,7 @@ pub fn run(opts: &Options) {
         }
         Command::Check {
             path,
+            ingot,
             standalone,
             dump_mir,
             report,
@@ -399,6 +418,7 @@ pub fn run(opts: &Options) {
         } => {
             match check(
                 path,
+                ingot.as_deref(),
                 *standalone,
                 *dump_mir,
                 (*report).then_some(report_out),
@@ -426,6 +446,7 @@ pub fn run(opts: &Options) {
         }
         Command::Test {
             paths,
+            ingot,
             filter,
             jobs,
             show_logs,
@@ -487,6 +508,7 @@ pub fn run(opts: &Options) {
                 backend_kind == codegen::BackendKind::Yul && opt_level.yul_optimize();
             match test::run_tests(
                 &paths,
+                ingot.as_deref(),
                 filter.as_deref(),
                 *jobs,
                 *show_logs,

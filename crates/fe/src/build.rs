@@ -1,13 +1,11 @@
-use std::{collections::BTreeMap, fs};
+use std::{
+    collections::{BTreeMap, HashSet},
+    fs,
+};
 
 use camino::{Utf8Path, Utf8PathBuf};
 use codegen::{BackendKind, OptLevel, SonatinaContractBytecode};
-use common::{
-    InputDb,
-    config::{Config, WorkspaceConfig},
-    dependencies::WorkspaceMemberRecord,
-    file::IngotFileKind,
-};
+use common::{InputDb, config::Config, dependencies::WorkspaceMemberRecord, file::IngotFileKind};
 use driver::DriverDataBase;
 use driver::cli_target::{CliTarget, resolve_cli_target};
 use hir::hir_def::TopLevelMod;
@@ -21,6 +19,9 @@ use crate::{
     report::{
         ReportStaging, copy_input_into_report, create_dir_all_utf8, create_report_staging_root,
         enable_panic_report, normalize_report_out_path, tar_gz_dir, write_report_meta,
+    },
+    workspace_ingot::{
+        INGOT_REQUIRES_WORKSPACE_ROOT, WorkspaceMemberRef, select_workspace_member_paths,
     },
 };
 
@@ -79,6 +80,7 @@ fn write_report_file(report: &BuildReportContext, rel: &str, contents: &str) {
 fn write_build_manifest(
     report: &BuildReportContext,
     path: &Utf8PathBuf,
+    ingot: Option<&str>,
     force_standalone: bool,
     contract: Option<&str>,
     backend_kind: BackendKind,
@@ -91,6 +93,7 @@ fn write_build_manifest(
     let mut out = String::new();
     out.push_str("fe build report\n");
     out.push_str(&format!("path: {path}\n"));
+    out.push_str(&format!("ingot: {}\n", ingot.unwrap_or("<all>")));
     out.push_str(&format!("standalone: {force_standalone}\n"));
     out.push_str(&format!("contract: {}\n", contract.unwrap_or("<all>")));
     out.push_str(&format!("backend: {}\n", backend_kind.name()));
@@ -122,6 +125,7 @@ fn report_scope_dir(report: Option<&BuildReportContext>, scope: &str) -> Option<
 #[allow(clippy::too_many_arguments)]
 pub fn build(
     path: &Utf8PathBuf,
+    ingot: Option<&str>,
     force_standalone: bool,
     contract: Option<&str>,
     backend_kind: BackendKind,
@@ -188,6 +192,7 @@ pub fn build(
                     write_build_manifest(
                         report_ctx.as_ref().expect("report ctx"),
                         path,
+                        ingot,
                         force_standalone,
                         contract,
                         backend_kind,
@@ -227,6 +232,7 @@ pub fn build(
         CliTarget::StandaloneFile(file_path) => build_file(
             &mut db,
             &file_path,
+            ingot,
             contract,
             backend_kind,
             opt_level,
@@ -238,6 +244,7 @@ pub fn build(
         CliTarget::Directory(dir_path) => build_directory(
             &mut db,
             &dir_path,
+            ingot,
             contract,
             backend_kind,
             opt_level,
@@ -254,6 +261,7 @@ pub fn build(
             write_build_manifest(
                 report_ctx.as_ref().expect("report ctx"),
                 path,
+                ingot,
                 force_standalone,
                 contract,
                 backend_kind,
@@ -285,6 +293,7 @@ pub fn build(
 fn build_file(
     db: &mut DriverDataBase,
     file_path: &Utf8PathBuf,
+    ingot: Option<&str>,
     contract: Option<&str>,
     backend_kind: BackendKind,
     opt_level: OptLevel,
@@ -293,6 +302,11 @@ fn build_file(
     solc: Option<&str>,
     report: Option<&BuildReportContext>,
 ) -> bool {
+    if ingot.is_some() {
+        eprintln!("Error: {INGOT_REQUIRES_WORKSPACE_ROOT}");
+        return true;
+    }
+
     let canonical = match file_path.canonicalize_utf8() {
         Ok(path) => path,
         Err(_) => {
@@ -371,6 +385,7 @@ fn build_file(
 fn build_directory(
     db: &mut DriverDataBase,
     dir_path: &Utf8PathBuf,
+    ingot: Option<&str>,
     contract: Option<&str>,
     backend_kind: BackendKind,
     opt_level: OptLevel,
@@ -388,6 +403,10 @@ fn build_directory(
     };
 
     if !canonical.join("fe.toml").is_file() {
+        if ingot.is_some() {
+            eprintln!("Error: {INGOT_REQUIRES_WORKSPACE_ROOT}");
+            return true;
+        }
         eprintln!("Error: No fe.toml file found in the provided directory: {canonical}");
         return true;
     }
@@ -419,11 +438,11 @@ fn build_directory(
     };
 
     match config {
-        Config::Workspace(workspace) => build_workspace(
+        Config::Workspace(_) => build_workspace(
             db,
             &canonical,
             url,
-            *workspace,
+            ingot,
             contract,
             backend_kind,
             opt_level,
@@ -433,6 +452,10 @@ fn build_directory(
             report,
         ),
         Config::Ingot(_) => {
+            if ingot.is_some() {
+                eprintln!("Error: {INGOT_REQUIRES_WORKSPACE_ROOT}");
+                return true;
+            }
             let default_out_dir = canonical.join("out");
             let out_dir = out_dir.cloned().unwrap_or(default_out_dir);
             let report_dir = report_scope_dir(
@@ -469,7 +492,7 @@ fn build_workspace(
     db: &mut DriverDataBase,
     workspace_root: &Utf8PathBuf,
     workspace_url: Url,
-    _workspace_config: WorkspaceConfig,
+    ingot: Option<&str>,
     contract: Option<&str>,
     backend_kind: BackendKind,
     opt_level: OptLevel,
@@ -488,12 +511,32 @@ fn build_workspace(
         return false;
     }
 
+    let selected_member_paths = match select_workspace_member_paths(
+        workspace_root,
+        workspace_root,
+        members.iter().map(|member| {
+            WorkspaceMemberRef::new(member.path.as_path(), Some(member.name.as_str()))
+        }),
+        ingot,
+    ) {
+        Ok(paths) => paths,
+        Err(err) => {
+            eprintln!("Error: {err}");
+            return true;
+        }
+    };
+    let selected_member_paths: HashSet<Utf8PathBuf> = selected_member_paths.into_iter().collect();
+
     let out_dir = out_dir
         .cloned()
         .unwrap_or_else(|| workspace_root.join("out"));
 
-    let mut contract_names_by_member = Vec::with_capacity(members.len());
+    let mut contract_names_by_member = Vec::with_capacity(selected_member_paths.len());
     for member in members {
+        let member_path = workspace_root.join(member.path.as_str());
+        if !selected_member_paths.contains(&member_path) {
+            continue;
+        }
         let contract_names = match analyze_ingot_contract_names(db, &member.url) {
             Ok(names) => names,
             Err(()) => return true,

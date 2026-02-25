@@ -16,6 +16,9 @@ use crate::report::{
     copy_input_into_report, create_dir_all_utf8, create_report_staging_dir, enable_panic_report,
     normalize_report_out_path, tar_gz_dir, write_report_meta,
 };
+use crate::workspace_ingot::{
+    INGOT_REQUIRES_WORKSPACE_ROOT, WorkspaceMemberRef, select_workspace_member_paths,
+};
 
 #[derive(Debug, Clone)]
 struct ReportContext {
@@ -33,6 +36,7 @@ fn write_report_file(report: &ReportContext, rel: &str, contents: &str) {
 #[allow(clippy::too_many_arguments)]
 pub fn check(
     path: &Utf8PathBuf,
+    ingot: Option<&str>,
     force_standalone: bool,
     dump_mir: bool,
     report_out: Option<&Utf8PathBuf>,
@@ -107,10 +111,15 @@ pub fn check(
 
     let has_errors = match target {
         CliTarget::StandaloneFile(file_path) => {
-            check_single_file(&mut db, &file_path, dump_mir, report_ctx.as_ref())
+            if ingot.is_some() {
+                eprintln!("Error: {INGOT_REQUIRES_WORKSPACE_ROOT}");
+                true
+            } else {
+                check_single_file(&mut db, &file_path, dump_mir, report_ctx.as_ref())
+            }
         }
         CliTarget::Directory(dir_path) => {
-            check_directory(&mut db, &dir_path, dump_mir, report_ctx.as_ref())
+            check_directory(&mut db, &dir_path, ingot, dump_mir, report_ctx.as_ref())
         }
     };
 
@@ -137,6 +146,7 @@ pub fn check(
 fn check_directory(
     db: &mut DriverDataBase,
     dir_path: &Utf8PathBuf,
+    ingot: Option<&str>,
     dump_mir: bool,
     report: Option<&ReportContext>,
 ) -> bool {
@@ -163,6 +173,10 @@ fn check_directory(
     let config = match config_from_db(db, &ingot_url) {
         Ok(Some(config)) => config,
         Ok(None) => {
+            if ingot.is_some() {
+                eprintln!("Error: {INGOT_REQUIRES_WORKSPACE_ROOT}");
+                return true;
+            }
             eprintln!("Error: No fe.toml file found in the root directory");
             return true;
         }
@@ -173,8 +187,16 @@ fn check_directory(
     };
 
     match config {
-        Config::Workspace(workspace) => check_workspace(db, dir_path, *workspace, dump_mir, report),
-        Config::Ingot(_) => check_ingot_url(db, &ingot_url, dump_mir, report),
+        Config::Workspace(workspace) => {
+            check_workspace(db, dir_path, *workspace, ingot, dump_mir, report)
+        }
+        Config::Ingot(_) => {
+            if ingot.is_some() {
+                eprintln!("Error: {INGOT_REQUIRES_WORKSPACE_ROOT}");
+                return true;
+            }
+            check_ingot_url(db, &ingot_url, dump_mir, report)
+        }
     }
 }
 
@@ -247,6 +269,7 @@ fn check_workspace(
     db: &mut DriverDataBase,
     dir_path: &Utf8PathBuf,
     workspace_config: WorkspaceConfig,
+    ingot: Option<&str>,
     dump_mir: bool,
     report: Option<&ReportContext>,
 ) -> bool {
@@ -271,9 +294,29 @@ fn check_workspace(
         return false;
     }
 
+    let selected_member_paths = match select_workspace_member_paths(
+        dir_path,
+        dir_path,
+        members
+            .iter()
+            .map(|member| WorkspaceMemberRef::new(member.path.as_path(), member.name.as_deref())),
+        ingot,
+    ) {
+        Ok(paths) => paths,
+        Err(err) => {
+            eprintln!("Error: {err}");
+            return true;
+        }
+    };
+    let selected_member_paths: HashSet<Utf8PathBuf> = selected_member_paths.into_iter().collect();
+
     let mut seen = HashSet::new();
     let mut has_errors = false;
     for member in members {
+        let member_path = dir_path.join(member.path.as_str());
+        if !selected_member_paths.contains(&member_path) {
+            continue;
+        }
         let member_url = member.url;
         let member_has_errors =
             check_ingot_and_dependencies(db, &member_url, dump_mir, report, &mut seen);
