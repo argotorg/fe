@@ -852,8 +852,6 @@
   // In-Page Section Outline
   // ============================================================================
 
-  var _outlineObserver = null;
-
   /** Sync outline active state to the current URL anchor. */
   function syncOutlineHighlight() {
     var anchor = currentAnchor();
@@ -867,8 +865,6 @@
     // Remove previous outline
     var prev = sidebarEl.querySelector(".page-outline");
     if (prev) prev.remove();
-    if (_outlineObserver) { _outlineObserver.disconnect(); _outlineObserver = null; }
-
     // Collect section headings (h2), impl blocks, and method items.
     // Skip section[id] — its h2 child already represents it.
     var targets = contentEl.querySelectorAll("h2[id], details.impl-block[id], details.method-item[id], div.method-item[id]");
@@ -976,6 +972,11 @@
 
     // Close sidebar on navigation
     window.addEventListener("hashchange", closeSidebar);
+
+    // Close sidebar on Escape key
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape") closeSidebar();
+    });
   }
 
   // ============================================================================
