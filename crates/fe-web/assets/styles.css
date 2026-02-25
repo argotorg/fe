@@ -220,6 +220,26 @@ body {
     color: var(--accent);
 }
 
+.source-toggle {
+    margin-top: 0.25rem;
+}
+.source-toggle summary {
+    cursor: pointer;
+    list-style: none;
+}
+.source-toggle summary::before {
+    content: "\25b6\00a0";
+    font-size: 0.7em;
+    transition: transform 0.15s;
+    display: inline-block;
+}
+.source-toggle[open] summary::before {
+    transform: rotate(90deg);
+}
+.source-toggle fe-code-block {
+    margin-top: 0.5rem;
+}
+
 .kind-badge {
     font-size: 0.7rem;
     font-weight: 500;
@@ -1034,4 +1054,21 @@ fe-code-block {
     border-radius: 4px;
     font-family: "JetBrains Mono", "Fira Code", monospace;
     font-size: 0.875em;
+}
+
+/* ============================================================================
+   Focus Styles (keyboard accessibility)
+   ============================================================================ */
+:focus-visible {
+    outline: 2px solid var(--accent-color, #4a90d9);
+    outline-offset: 2px;
+}
+.nav-items a:focus-visible,
+.outline-list a:focus-visible {
+    outline-offset: -1px;
+    border-radius: 4px;
+}
+.type-link:focus-visible {
+    outline-offset: 0;
+    border-radius: 2px;
 }
