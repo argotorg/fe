@@ -127,8 +127,13 @@ body {
     gap: 0.5rem;
 }
 
-.nav-items a:hover, .nav-items li.current a {
+.nav-items a:hover {
     color: var(--text);
+}
+
+.nav-items li.current a {
+    color: var(--accent);
+    font-weight: 600;
 }
 
 /* Grouped navigation by kind */
@@ -967,6 +972,24 @@ fe-code-block {
 .outline-list a.active {
     color: var(--accent);
     border-left-color: var(--accent);
+}
+
+/* Outline hierarchy: indent impl blocks and methods */
+.outline-list li.outline-level-1 {
+    padding-left: 0.75rem;
+}
+
+.outline-list li.outline-level-1 a {
+    font-size: 0.8rem;
+}
+
+.outline-list li.outline-level-2 {
+    padding-left: 1.5rem;
+}
+
+.outline-list li.outline-level-2 a {
+    font-size: 0.75rem;
+    font-family: var(--font-mono, ui-monospace, monospace);
 }
 
 /* Doc sections (Examples, Panics, Safety, etc.) */

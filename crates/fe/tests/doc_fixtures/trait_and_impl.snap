@@ -1,6 +1,5 @@
 ---
 source: crates/fe/src/extract.rs
-assertion_line: 907
 expression: output
 input_file: tests/doc_fixtures/trait_and_impl.fe
 ---
@@ -21,6 +20,7 @@ input_file: tests/doc_fixtures/trait_and_impl.fe
         "line": 1,
         "column": 0
       },
+      "source_text": "/// A trait for things that can be displayed.\npub trait Displayable {\n    /// Returns a string representation.\n    fn display(self) -> u256\n}\n\n/// A simple counter.\npub struct Counter {\n    pub value: u256\n}\n\nimpl Displayable for Counter {\n    fn display(self) -> u256 {\n        return self.value\n    }\n}\n",
       "trait_impls": []
     },
     {
@@ -54,6 +54,7 @@ input_file: tests/doc_fixtures/trait_and_impl.fe
         "line": 1,
         "column": 0
       },
+      "source_text": "/// A trait for things that can be displayed.\npub trait Displayable {\n    /// Returns a string representation.\n    fn display(self) -> u256\n}",
       "trait_impls": []
     },
     {
@@ -75,6 +76,7 @@ input_file: tests/doc_fixtures/trait_and_impl.fe
         "line": 3,
         "column": 4
       },
+      "source_text": "/// Returns a string representation.\n    fn display(self) -> u256",
       "trait_impls": []
     },
     {
@@ -104,6 +106,7 @@ input_file: tests/doc_fixtures/trait_and_impl.fe
         "line": 7,
         "column": 0
       },
+      "source_text": "/// A simple counter.\npub struct Counter {\n    pub value: u256\n}",
       "trait_impls": []
     }
   ],

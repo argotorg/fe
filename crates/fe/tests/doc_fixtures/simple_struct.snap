@@ -1,6 +1,5 @@
 ---
 source: crates/fe/src/extract.rs
-assertion_line: 907
 expression: output
 input_file: tests/doc_fixtures/simple_struct.fe
 ---
@@ -21,6 +20,7 @@ input_file: tests/doc_fixtures/simple_struct.fe
         "line": 1,
         "column": 0
       },
+      "source_text": "/// A point in 2D space.\n///\n/// Used to represent coordinates in the plane.\npub struct Point {\n    /// The x coordinate\n    pub x: u256\n    /// The y coordinate\n    pub y: u256\n}\n",
       "trait_impls": []
     },
     {
@@ -65,6 +65,7 @@ input_file: tests/doc_fixtures/simple_struct.fe
         "line": 1,
         "column": 0
       },
+      "source_text": "/// A point in 2D space.\n///\n/// Used to represent coordinates in the plane.\npub struct Point {\n    /// The x coordinate\n    pub x: u256\n    /// The y coordinate\n    pub y: u256\n}",
       "trait_impls": []
     }
   ],

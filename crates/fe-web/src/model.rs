@@ -97,6 +97,9 @@ pub struct DocItem {
     pub children: Vec<DocChild>,
     /// Source location for "view source" links
     pub source: Option<DocSourceLoc>,
+    /// Full source text of the item definition (for inline "view source")
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_text: Option<String>,
     /// Trait implementations for this type (structs, enums, contracts)
     #[serde(default)]
     pub trait_impls: Vec<DocTraitImpl>,
@@ -753,6 +756,7 @@ mod tests {
                 line: 1,
                 column: 0,
             }),
+            source_text: None,
             trait_impls: vec![],
             implementors: vec![],
         });
@@ -791,6 +795,7 @@ mod tests {
                 },
             ],
             source: None,
+            source_text: None,
             trait_impls: vec![],
             implementors: vec![],
         });
@@ -808,6 +813,7 @@ mod tests {
             where_bounds: vec![],
             children: vec![],
             source: None,
+            source_text: None,
             trait_impls: vec![],
             implementors: vec![],
         });

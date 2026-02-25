@@ -184,7 +184,9 @@
   function renderModuleNav(mod, curPath) {
     var modUrl = mod.path + "/mod";
     var isCurrent = modUrl === curPath;
-    var isExpanded = curPath.indexOf(mod.path) === 0;
+    var isExpanded = isCurrent
+      || curPath.indexOf(mod.path + "::") === 0
+      || curPath.indexOf(mod.path + "/") === 0;
     var hasChildren = mod.children && mod.children.length > 0;
     var hasItems = mod.items && mod.items.length > 0;
 
@@ -253,15 +255,16 @@
     html += '<span class="kind-badge ' + esc(kindStr(item.kind)) + '">' + esc(kindDisplayName(item.kind)) + "</span>";
     html += "<h1>" + esc(item.name) + "</h1>";
     html += "</div>";
-    if (item.source && item.source.display_file) {
-      var srcBase = window.FE_SOURCE_BASE;
-      var srcHref = srcBase
-        ? srcBase + "/" + item.source.display_file + (item.source.line ? "#L" + item.source.line : "")
-        : "#";
-      var srcTarget = srcBase ? ' target="_blank" rel="noopener"' : "";
-      html += '<a class="src-link" href="' + esc(srcHref) + '"' + srcTarget + ">" + esc(item.source.display_file);
-      if (item.source.line) html += ":" + item.source.line;
-      html += "</a>";
+    if (item.source_text) {
+      html += '<details class="source-toggle"><summary class="src-link">';
+      html += esc(item.source.display_file) + ':' + item.source.line;
+      html += '</summary>';
+      html += '<fe-code-block lang="fe" line-numbers>' + esc(item.source_text) + '</fe-code-block>';
+      html += '</details>';
+    } else if (item.source && item.source.display_file) {
+      html += '<span class="src-link">' + esc(item.source.display_file);
+      if (item.source.line) html += ':' + item.source.line;
+      html += '</span>';
     }
     html += "</div>";
 
@@ -453,7 +456,9 @@
     if (impl_.methods && impl_.methods.length > 0) {
       html += '<div class="impl-items">';
       impl_.methods.forEach(function (method) {
-        var methodAnchor = "method." + method.name;
+        // Scope method anchors by impl block to avoid duplicate IDs
+        // (e.g. map() in inherent impl vs map() in Functor trait impl)
+        var methodAnchor = anchorId + ".method." + method.name;
         html += renderMethodItem(method, methodAnchor, parentUrl, anchorId);
       });
       html += "</div>";
@@ -654,6 +659,7 @@
     if (path === _lastRenderedPath && anchor) {
       applyDefaultHighlight(path, anchor);
       highlightAnchorTarget(contentEl, anchor);
+      syncOutlineHighlight();
       var el = document.getElementById(anchor);
       if (el) el.scrollIntoView({ behavior: "smooth" });
       return;
@@ -662,6 +668,12 @@
 
     // Render sidebar
     sidebarEl.innerHTML = renderSidebar(index.modules || [], path, index.builtin_modules || []);
+
+    // Scroll active sidebar item into view
+    var activeLi = sidebarEl.querySelector(".nav-items li.current");
+    var activeMod = sidebarEl.querySelector("summary.current");
+    var activeEl = activeLi || activeMod;
+    if (activeEl) activeEl.scrollIntoView({ block: "nearest" });
 
     // Find and render the requested item
     var item = findByUrl(index, path);
@@ -842,6 +854,15 @@
 
   var _outlineObserver = null;
 
+  /** Sync outline active state to the current URL anchor. */
+  function syncOutlineHighlight() {
+    var anchor = currentAnchor();
+    var links = document.querySelectorAll(".outline-list a");
+    for (var i = 0; i < links.length; i++) {
+      links[i].classList.toggle("active", anchor !== null && links[i].dataset.outlineId === anchor);
+    }
+  }
+
   function buildPageOutline(contentEl, sidebarEl) {
     // Remove previous outline
     var prev = sidebarEl.querySelector(".page-outline");
@@ -858,24 +879,29 @@
       var el = targets[i];
       var id = el.id;
       var text = "";
+      var level = 0; // 0 = section header, 1 = impl block, 2 = method
+      var methodDot = id.indexOf(".method.");
       if (el.tagName === "H2") {
         text = el.textContent.replace("\u00a7", "").trim();
-      } else if (id.indexOf("method.") === 0) {
-        text = id.substring(7) + "()";
+        level = 0;
+      } else if (methodDot !== -1) {
+        text = id.substring(methodDot + 8) + "()";
+        level = 2;
       } else if (el.classList.contains("impl-block")) {
-        // Use the h3 text from the impl summary (e.g. "impl Display")
         var h3 = el.querySelector("summary h3");
         text = h3 ? h3.textContent.trim() : id;
         if (text.length > 50) text = text.substring(0, 47) + "\u2026";
+        level = 1;
       } else {
         var heading = el.querySelector("summary h3, summary h4");
         text = heading ? heading.textContent.trim()
           : (el.querySelector("summary") || el).textContent
               .replace("\u00a7", "").replace(/\u25b6/g, "").trim();
         if (text.length > 50) text = text.substring(0, 47) + "\u2026";
+        level = 1;
       }
       if (id && text) {
-        entries.push({ id: id, text: text });
+        entries.push({ id: id, text: text, level: level });
       }
     }
     if (entries.length === 0) return;
@@ -894,6 +920,7 @@
     var path = currentPath();
     entries.forEach(function (entry) {
       var li = document.createElement("li");
+      if (entry.level > 0) li.className = "outline-level-" + entry.level;
       var a = document.createElement("a");
       a.href = "#" + path + "~" + entry.id;
       a.textContent = entry.text;
@@ -912,40 +939,8 @@
       sidebarEl.appendChild(outline);
     }
 
-    // Highlight current section via IntersectionObserver.
-    // Track all currently-visible sections and activate the topmost one,
-    // so that clicking an outline link (which scrolls) doesn't get
-    // hijacked by a different section passing through the viewport.
-    if (typeof IntersectionObserver !== "undefined") {
-      var links = list.querySelectorAll("a");
-      var visibleIds = {};
-
-      function updateActiveLink() {
-        // Find the topmost visible section by comparing DOM order
-        var bestId = null;
-        for (var ti = 0; ti < targets.length; ti++) {
-          if (visibleIds[targets[ti].id]) { bestId = targets[ti].id; break; }
-        }
-        for (var j = 0; j < links.length; j++) {
-          links[j].classList.toggle("active", bestId !== null && links[j].dataset.outlineId === bestId);
-        }
-      }
-
-      _outlineObserver = new IntersectionObserver(function (obs) {
-        for (var oi = 0; oi < obs.length; oi++) {
-          if (obs[oi].isIntersecting) {
-            visibleIds[obs[oi].target.id] = true;
-          } else {
-            delete visibleIds[obs[oi].target.id];
-          }
-        }
-        updateActiveLink();
-      }, { rootMargin: "-80px 0px -70% 0px" });
-
-      for (var k = 0; k < targets.length; k++) {
-        _outlineObserver.observe(targets[k]);
-      }
-    }
+    // Initial highlight from current anchor
+    syncOutlineHighlight();
   }
 
   // ============================================================================
