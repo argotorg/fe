@@ -1,4 +1,3 @@
-use std::evm::{Address, Evm}
 
 #[event]
 struct Transfer {

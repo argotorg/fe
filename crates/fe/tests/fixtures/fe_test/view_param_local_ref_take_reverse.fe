@@ -1,4 +1,3 @@
-use std::evm::effects::assert
 use core::Seq
 
 struct Reverse<I, T: Seq<Item = I>> {

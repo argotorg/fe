@@ -5,10 +5,6 @@
 /// return, enum with data, comparisons, bit shifts, arithmetic, function
 /// calls in loops, wildcard patterns, if-expressions.
 ///
-use std::evm::{Evm, Call}
-use std::evm::effects::assert
-use core::abi::{Abi, AbiEncoder, AbiSize, Encode}
-use std::abi::Sol
 use core::ops::{Add, Sub, Neg, Mul}
 
 // ---------- Fixed-point signed number ----------
@@ -73,8 +69,6 @@ impl Mul for SFixed {
         SFixed { mag: product >> 64, neg: result_neg }
     }
 }
-
-
 // ---------- Complex number (nested struct) ----------
 
 struct Complex {
@@ -104,16 +98,12 @@ impl Complex {
         }
     }
 }
-
-
 // ---------- Escape result ----------
 
 enum EscapeResult {
     Escaped(u256),   // iteration count when it escaped
     InSet,           // didn't escape within max iterations
 }
-
-
 // ---------- Core iteration ----------
 
 fn iterate(c: Complex, max_iter: u256) -> EscapeResult {
@@ -169,8 +159,6 @@ fn compute_row_sum(
     }
     sum
 }
-
-
 // ---------- Contract ----------
 
 msg MandelbrotMsg {
@@ -213,8 +201,6 @@ pub contract Mandelbrot {
         }
     }
 }
-
-
 // ---------- Tests ----------
 
 #[test]

@@ -4,9 +4,6 @@
 /// Tests: multiplication, division, if-expressions, math-heavy business logic,
 /// invariant maintenance (K only increases due to integer rounding).
 
-use std::evm::Evm
-use std::evm::effects::assert
-
 msg AmmMsg {
     #[selector = 0x01]
     AddLiquidity { amount_a: u256, amount_b: u256 },

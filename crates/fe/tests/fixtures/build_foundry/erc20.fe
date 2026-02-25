@@ -1,5 +1,4 @@
-use std::evm::{Address, Ctx, Log, StorageMap}
-use core::abi::{Abi, AbiEncoder, AbiSize, Encode}
+use std::evm::{Ctx, Log, StorageMap}
 use std::abi::sol
 
 msg Erc20 {

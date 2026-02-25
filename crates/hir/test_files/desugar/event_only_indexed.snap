@@ -1,10 +1,10 @@
 ---
 source: crates/hir/tests/desugar.rs
-assertion_line: 28
 expression: output
 input_file: test_files/desugar/event_only_indexed.fe
 ---
 use core::prelude::*
+use std::prelude::*
 use std::evm::Address
 
 struct Approval {

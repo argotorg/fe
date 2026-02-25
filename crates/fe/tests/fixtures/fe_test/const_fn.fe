@@ -1,5 +1,3 @@
-use std::evm::Address
-use std::evm::effects::assert
 
 #[event]
 struct Transfer {

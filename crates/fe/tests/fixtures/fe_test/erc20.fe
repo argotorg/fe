@@ -1,6 +1,3 @@
-use std::evm::{Address, Evm, Call, StorageMap, Ctx}
-use std::evm::effects::assert
-use core::abi::{Abi, AbiEncoder, AbiSize, Encode}
 use std::abi::sol
 
 msg Erc20 {

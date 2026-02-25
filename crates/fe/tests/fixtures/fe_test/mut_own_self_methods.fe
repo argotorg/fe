@@ -1,4 +1,3 @@
-use std::evm::effects::assert
 
 struct Packet {
     version: u256,

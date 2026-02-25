@@ -1,6 +1,6 @@
 ---
 source: crates/fe/tests/cli_output.rs
-assertion_line: 748
+assertion_line: 947
 expression: output
 input_file: tests/fixtures/cli_output/workspaces/dependency_scope/dependency_in_scope_file_path_standalone.case
 ---
@@ -8,15 +8,15 @@ input_file: tests/fixtures/cli_output/workspaces/dependency_scope/dependency_in_
 errors in file://<project>/crates/fe/tests/fixtures/cli_output/workspaces/dependency_scope/ingots/app/src/lib.fe
 
 error[2-0002]: `lib` is not found
-  ┌─ lib.fe:2:5
+  ┌─ lib.fe:1:5
   │
-2 │ use lib::foo
+1 │ use lib::foo
   │     ^^^ `lib` is not found
 
 error[8-0012]: undefined variable
-   ┌─ lib.fe:13:13
+   ┌─ lib.fe:11:13
    │
-13 │             foo()
+11 │             foo()
    │             ^^^ undefined variable `foo`
 
 
