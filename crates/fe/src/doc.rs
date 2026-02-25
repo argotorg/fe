@@ -39,10 +39,36 @@ impl LspServerInfo {
         let _ = std::fs::remove_file(info_path);
     }
 
-    /// Check if the LSP process is still running
+    /// Check if the LSP process is still running (cross-platform).
     pub(crate) fn is_alive(&self) -> bool {
-        // Simple check: see if the process exists
-        std::path::Path::new(&format!("/proc/{}", self.pid)).exists() || cfg!(windows)
+        #[cfg(unix)]
+        {
+            // `kill -0 pid` checks if a process exists without signalling it.
+            // Returns exit code 0 if the process exists.
+            std::process::Command::new("kill")
+                .args(["-0", &self.pid.to_string()])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success())
+        }
+        #[cfg(windows)]
+        {
+            // `tasklist /FI "PID eq <pid>"` outputs the process if it exists.
+            std::process::Command::new("tasklist")
+                .args(["/FI", &format!("PID eq {}", self.pid), "/NH"])
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null())
+                .output()
+                .is_ok_and(|o| {
+                    let out = String::from_utf8_lossy(&o.stdout);
+                    out.contains(&self.pid.to_string())
+                })
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            true
+        }
     }
 }
 
