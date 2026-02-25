@@ -458,6 +458,9 @@ pub struct DocIndex {
     pub items: Vec<DocItem>,
     /// Module hierarchy for navigation
     pub modules: Vec<DocModuleTree>,
+    /// Builtin library modules (core, std), rendered separately in sidebar
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub builtin_modules: Vec<DocModuleTree>,
 }
 
 impl DocIndex {

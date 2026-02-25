@@ -161,7 +161,7 @@
   // Sidebar Rendering
   // ============================================================================
 
-  function renderSidebar(modules, curPath) {
+  function renderSidebar(modules, curPath, builtinModules) {
     var html = '<nav class="doc-sidebar">';
     html += '<div class="sidebar-header">';
     html += '<h1><a href="#">Fe Docs</a></h1>';
@@ -171,6 +171,12 @@
     modules.forEach(function (mod) {
       html += renderModuleNav(mod, curPath);
     });
+    if (builtinModules && builtinModules.length) {
+      html += '<hr class="sidebar-separator">';
+      builtinModules.forEach(function (mod) {
+        html += renderModuleNav(mod, curPath);
+      });
+    }
     html += "</div></nav>";
     return html;
   }
@@ -654,7 +660,7 @@
     _lastRenderedPath = path;
 
     // Render sidebar
-    sidebarEl.innerHTML = renderSidebar(index.modules || [], path);
+    sidebarEl.innerHTML = renderSidebar(index.modules || [], path, index.builtin_modules || []);
 
     // Find and render the requested item
     var item = findByUrl(index, path);

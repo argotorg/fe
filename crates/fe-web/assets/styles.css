@@ -88,6 +88,12 @@ body {
     margin-top: 1rem;
 }
 
+.sidebar-separator {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 0.75rem 0;
+}
+
 .nav-item {
     margin-bottom: 0.5rem;
 }
