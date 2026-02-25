@@ -87,7 +87,7 @@ pub fn discover_and_init(db: &mut DriverDataBase, root_url: &Url) -> DiscoveredP
         standalone_files: Vec::new(),
     };
 
-    let Ok(discovery) = discover_context(root_url) else {
+    let Ok(discovery) = discover_context(root_url, false) else {
         return result;
     };
 
@@ -182,7 +182,7 @@ pub fn discover_and_init(db: &mut DriverDataBase, root_url: &Url) -> DiscoveredP
         ingot_src_dirs.push(dir.clone());
         // Run discover_context on each top-level config dir to properly
         // handle workspaces (expands members) vs plain ingots.
-        if let Ok(sub_discovery) = discover_context(&dir_url) {
+        if let Ok(sub_discovery) = discover_context(&dir_url, false) {
             if let Some(ws_root) = &sub_discovery.workspace_root {
                 init_ingot(db, ws_root);
                 result.ingot_urls.push(ws_root.clone());
