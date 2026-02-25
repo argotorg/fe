@@ -79,14 +79,18 @@ async fn handle_ws_lsp(
     mut actor_rx: watch::Receiver<Option<SharedActor>>,
     doc_nav_tx: broadcast::Sender<String>,
 ) {
-    // Wait for the shared Backend actor to be ready
-    let actor_ref = {
-        if actor_rx.wait_for(|v| v.is_some()).await.is_err() {
-            warn!("Combined server: actor channel closed before backend was ready");
-            return;
-        }
-        actor_rx.borrow().clone().unwrap()
+    // Wait for the shared Backend actor to be ready (with timeout)
+    let ready = {
+        let wait = actor_rx.wait_for(|v| v.is_some());
+        tokio::time::timeout(std::time::Duration::from_secs(30), wait)
+            .await
+            .is_ok_and(|r| r.is_ok())
     };
+    if !ready {
+        warn!("Combined server: backend actor not ready within 30s, dropping WS connection");
+        return;
+    }
+    let actor_ref = actor_rx.borrow().clone().unwrap();
 
     let (ws_sink, ws_source) = socket.split();
     let ws_sink = Arc::new(Mutex::new(ws_sink));
@@ -118,9 +122,11 @@ async fn handle_ws_lsp(
                 "method": "fe/navigate",
                 "params": { "path": path }
             });
-            let text = serde_json::to_string(&notification).unwrap();
+            let text = serde_json::to_string(&notification)
+                .expect("fe/navigate notification should always serialize");
             let mut sink = nav_sink.lock().await;
             if sink.send(AxumMessage::Text(text.into())).await.is_err() {
+                warn!("fe/navigate: WS sink closed, stopping nav forwarding");
                 break;
             }
         }
@@ -215,26 +221,39 @@ where
 
 // ============================================================================
 // LSP → WS Writer: parses Content-Length frames and sends as WS text messages
+//
+// Uses an mpsc channel to a single background sender task, preserving message
+// ordering (unlike per-message spawns which can reorder under contention).
 // ============================================================================
 
-struct LspToWsWriter<Sink> {
-    sink: Arc<Mutex<Sink>>,
+struct LspToWsWriter {
+    tx: tokio::sync::mpsc::UnboundedSender<String>,
     buf: Vec<u8>,
 }
 
-impl<Sink> LspToWsWriter<Sink> {
-    fn new(sink: Arc<Mutex<Sink>>) -> Self {
+impl LspToWsWriter {
+    fn new<Sink>(sink: Arc<Mutex<Sink>>) -> Self
+    where
+        Sink: futures::Sink<AxumMessage, Error = axum::Error> + Unpin + Send + 'static,
+    {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        tokio::spawn(async move {
+            while let Some(body) = rx.recv().await {
+                let mut sink = sink.lock().await;
+                if let Err(e) = sink.send(AxumMessage::Text(body.into())).await {
+                    warn!("Failed to send WS message: {e}");
+                    break;
+                }
+            }
+        });
         Self {
-            sink,
+            tx,
             buf: Vec::new(),
         }
     }
 }
 
-impl<Sink> AsyncWrite for LspToWsWriter<Sink>
-where
-    Sink: futures::Sink<AxumMessage, Error = axum::Error> + Unpin + Send + 'static,
-{
+impl AsyncWrite for LspToWsWriter {
     fn poll_write(
         self: Pin<&mut Self>,
         _cx: &mut Context<'_>,
@@ -271,13 +290,12 @@ where
             let body = String::from_utf8_lossy(&this.buf[body_start..message_end]).into_owned();
             this.buf.drain(..message_end);
 
-            let sink = this.sink.clone();
-            tokio::spawn(async move {
-                let mut sink = sink.lock().await;
-                if let Err(e) = sink.send(AxumMessage::Text(body.into())).await {
-                    warn!("Failed to send WS message: {e}");
-                }
-            });
+            if this.tx.send(body).is_err() {
+                return Poll::Ready(Err(std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "WS sender task closed",
+                )));
+            }
         }
 
         Poll::Ready(Ok(data.len()))
