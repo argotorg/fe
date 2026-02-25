@@ -39,12 +39,15 @@ impl super::Parse for FnParamScope {
 
     fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
         parser.bump_if(SyntaxKind::MutKw);
-        let allow_ref_self_shorthand = parser.dry_run(|p| {
-            p.bump_if(SyntaxKind::RefKw) && p.current_kind() == Some(SyntaxKind::SelfKw)
-        });
-        let allow_own_self_shorthand = parser.dry_run(|p| {
-            p.bump_if(SyntaxKind::OwnKw) && p.current_kind() == Some(SyntaxKind::SelfKw)
-        });
+        let lookahead = parser.peek_n_non_trivia(2);
+        let allow_ref_self_shorthand = matches!(
+            lookahead.as_slice(),
+            [SyntaxKind::RefKw, SyntaxKind::SelfKw]
+        );
+        let allow_own_self_shorthand = matches!(
+            lookahead.as_slice(),
+            [SyntaxKind::OwnKw, SyntaxKind::SelfKw]
+        );
         if allow_ref_self_shorthand {
             parser.bump_expected(SyntaxKind::RefKw);
         }
@@ -375,12 +378,10 @@ impl super::Parse for GenericArgScope {
         parser.set_newline_as_trivia(false);
 
         // Check if this is an associated type argument (Ident = Type)
-        let is_assoc_type = parser.dry_run(|parser| {
-            parser.current_kind() == Some(SyntaxKind::Ident) && {
-                parser.bump();
-                parser.current_kind() == Some(SyntaxKind::Eq)
-            }
-        });
+        let is_assoc_type = matches!(
+            parser.peek_n_non_trivia(2).as_slice(),
+            [SyntaxKind::Ident, SyntaxKind::Eq]
+        );
 
         if is_assoc_type {
             self.set_kind(SyntaxKind::AssocTypeGenericArg);
@@ -453,9 +454,10 @@ impl super::Parse for CallArgScope {
 
     fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
         parser.set_newline_as_trivia(false);
-        let has_label = parser.dry_run(|parser| {
-            parser.bump_if(SyntaxKind::Ident) && parser.bump_if(SyntaxKind::Colon)
-        });
+        let has_label = matches!(
+            parser.peek_n_non_trivia(2).as_slice(),
+            [SyntaxKind::Ident, SyntaxKind::Colon]
+        );
 
         if has_label {
             parser.bump_expected(SyntaxKind::Ident);

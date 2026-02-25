@@ -612,10 +612,39 @@ impl<S: TokenStream> Parser<S> {
         tokens
     }
 
-    /// Skip trivias, then peek the next two tokens.
+    /// Skip leading trivias, then peek the next two raw tokens.
     pub fn peek_two(&mut self) -> (Option<SyntaxKind>, Option<SyntaxKind>) {
         let (a, b, _) = self.peek_three();
         (a, b)
+    }
+
+    /// Peek up to `n` non-trivia tokens, skipping trivia before and between
+    /// tokens.
+    pub fn peek_n_non_trivia(&mut self, n: usize) -> SmallVec<SyntaxKind, 4> {
+        self.stream.set_bt_point();
+
+        let mut next_trivia_index = 0;
+        let mut tokens = SmallVec::new();
+        while tokens.len() < n {
+            let next = if let Some(tok) = self.next_trivias.get(next_trivia_index) {
+                next_trivia_index += 1;
+                Some(tok.syntax_kind())
+            } else {
+                self.stream.next().map(|tok| tok.syntax_kind())
+            };
+
+            let Some(kind) = next else {
+                break;
+            };
+
+            if self.is_trivia(kind) {
+                continue;
+            }
+            tokens.push(kind);
+        }
+
+        self.stream.backtrack();
+        tokens
     }
 
     /// Add the `msg` to the error list, at `current_pos`.
