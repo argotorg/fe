@@ -290,7 +290,20 @@ fn check_workspace(
     };
 
     if members.is_empty() {
-        eprintln!("Warning: No workspace members found");
+        let paths: Vec<&str> = workspace_config
+            .workspace
+            .members
+            .iter()
+            .map(|m| m.path.as_str())
+            .collect();
+        if paths.is_empty() {
+            eprintln!("Warning: No workspace members configured in fe.toml");
+        } else {
+            eprintln!(
+                "Warning: No workspace members found. The configured member paths do not exist:\n  {}",
+                paths.join("\n  ")
+            );
+        }
         return false;
     }
 

@@ -32,7 +32,7 @@ The CLI intentionally does **not** use emoji/icon markers.
 
 Notable exceptions:
 
-- `fe check` / `fe build` / `fe tree` on a workspace root with **no members** prints `Warning: No workspace members found` and exits `0`.
+- `fe check` / `fe build` / `fe tree` on a workspace root with **no members** prints a warning explaining why (no members configured, or configured paths don't exist) and exits `0`.
 
 ### Paths and UTF-8
 
@@ -268,13 +268,7 @@ Same target resolution rules as `fe build`:
 - `fe check <workspace-root>` checks all members in the workspace’s default selection.
   - If the workspace `fe.toml` sets `default-members`, only those member paths are checked.
   - Otherwise, all discovered members are checked.
-- If the selection is empty, it prints:
-
-```
-Warning: No workspace members found
-```
-
-and exits `0`.
+- If the selection is empty, it prints a warning explaining why (no members configured, or configured paths don't exist on disk) and exits `0`.
 
 ### Dependency errors
 

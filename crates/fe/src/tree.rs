@@ -137,7 +137,20 @@ fn print_workspace_trees(
 ) -> Result<(), String> {
     let members = workspace_members(&workspace_config.workspace, workspace_url)?;
     if members.is_empty() {
-        eprintln!("Warning: No workspace members found");
+        let paths: Vec<&str> = workspace_config
+            .workspace
+            .members
+            .iter()
+            .map(|m| m.path.as_str())
+            .collect();
+        if paths.is_empty() {
+            eprintln!("Warning: No workspace members configured in fe.toml");
+        } else {
+            eprintln!(
+                "Warning: No workspace members found. The configured member paths do not exist:\n  {}",
+                paths.join("\n  ")
+            );
+        }
         return Ok(());
     }
 
