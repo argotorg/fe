@@ -90,10 +90,16 @@ fn top_mod_url(
 }
 
 fn relative_path(project_root: &Utf8Path, doc_url: &url::Url) -> Option<String> {
-    let file_path = doc_url.to_file_path().ok()?;
-    let file_path = Utf8PathBuf::from_path_buf(file_path).ok()?;
-    let relative = file_path.strip_prefix(project_root).ok()?;
-    Some(relative.to_string())
+    if let Ok(file_path) = doc_url.to_file_path() {
+        let file_path = Utf8PathBuf::from_path_buf(file_path).ok()?;
+        let relative = file_path.strip_prefix(project_root).ok()?;
+        Some(relative.to_string())
+    } else {
+        // Non-file URLs (e.g. builtin-core:///src/lib.fe): use URL path,
+        // stripping the leading slash.
+        let path = doc_url.path();
+        Some(path.strip_prefix('/').unwrap_or(path).to_string())
+    }
 }
 
 fn item_descriptor_suffix(item: ItemKind<'_>) -> descriptor::Suffix {
@@ -219,11 +225,14 @@ pub fn generate_scip(
 ) -> io::Result<types::Index> {
     let ctx = index_util::IngotContext::resolve(db, ingot_url)?;
 
+    // For file:// URLs, use the real filesystem path as project root.
+    // For non-file URLs (e.g. builtin-core:///), use "/" as a virtual root
+    // so that relative_path() can strip it from URL paths.
     let project_root_path = ingot_url
         .to_file_path()
         .ok()
         .and_then(|p| Utf8PathBuf::from_path_buf(p).ok())
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "ingot URL must be file://"))?;
+        .unwrap_or_else(|| Utf8PathBuf::from("/"));
 
     // Pre-compute relative paths for all module files
     let file_relative_paths: HashMap<String, String> = ctx
@@ -784,6 +793,19 @@ pub fn enrich_signatures(
     index: &mut DocIndex,
     scip_index: &mut types::Index,
 ) {
+    enrich_signatures_with_base(db, project_root, None, index, scip_index);
+}
+
+/// Like `enrich_signatures`, but accepts an optional URL base for non-file ingots
+/// (e.g. builtin-core:///). When `base_url` is Some, file URLs are resolved by
+/// joining relative paths onto it instead of constructing file:// URLs.
+pub fn enrich_signatures_with_base(
+    db: &driver::DriverDataBase,
+    project_root: &Utf8Path,
+    base_url: Option<&url::Url>,
+    index: &mut DocIndex,
+    scip_index: &mut types::Index,
+) {
     // Step 1: Build SCIP symbol → doc_url map.
     // Build a name→url map with ambiguity tracking (same logic as build_type_links):
     // if the same display name maps to different URLs, mark it ambiguous and exclude.
@@ -849,10 +871,18 @@ pub fn enrich_signatures(
     // We need file text to convert SCIP line/col → byte offsets.
     let mut file_occurrences: HashMap<String, Vec<ByteOccurrence>> = HashMap::new();
     for doc in &scip_index.documents {
-        let abs_path = project_root.join(&doc.relative_path);
-        let file_url = match url::Url::from_file_path(abs_path.as_std_path()) {
-            Ok(u) => u,
-            Err(_) => continue,
+        let file_url = if let Some(base) = base_url {
+            // Non-file URL base (e.g. builtin-core:///): join relative path onto it
+            match base.join(&doc.relative_path) {
+                Ok(u) => u,
+                Err(_) => continue,
+            }
+        } else {
+            let abs_path = project_root.join(&doc.relative_path);
+            match url::Url::from_file_path(abs_path.as_std_path()) {
+                Ok(u) => u,
+                Err(_) => continue,
+            }
         };
         let Some(file) = db.workspace().get(db, &file_url) else {
             continue;

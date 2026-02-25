@@ -280,7 +280,8 @@
 
     // Module members (for module items)
     if (isModule) {
-      var modContent = findModuleContent(index.modules, item.path);
+      var modContent = findModuleContent(index.modules, item.path)
+        || findModuleContent(index.builtin_modules || [], item.path);
       if (modContent) {
         html += renderModuleMembers(modContent.items, modContent.submodules, index);
       }
