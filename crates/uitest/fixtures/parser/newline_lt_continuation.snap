@@ -1,0 +1,6 @@
+---
+source: crates/uitest/tests/parser.rs
+expression: diags
+input_file: fixtures/parser/newline_lt_continuation.fe
+---
+

@@ -1,0 +1,6 @@
+---
+source: crates/uitest/tests/parser.rs
+expression: diags
+input_file: fixtures/parser/newline_aug_assign_minus.fe
+---
+

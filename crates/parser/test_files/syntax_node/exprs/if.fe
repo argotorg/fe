@@ -31,3 +31,6 @@ if match x {
 } else {
     1
 }
+
+if round < POSEIDON_T6_HALF_FULL_ROUNDS
+    || round >= POSEIDON_T6_HALF_FULL_ROUNDS + POSEIDON_T6_PARTIAL_ROUNDS {}
