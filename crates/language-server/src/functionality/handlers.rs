@@ -81,6 +81,10 @@ async fn discover_and_load_ingots(
     }
 
     for ingot_url in &discovery.ingot_roots {
+        // Skip if already initialized as workspace root above
+        if discovery.workspace_root.as_ref() == Some(ingot_url) {
+            continue;
+        }
         let had_diagnostics = init_ingot(&mut backend.db, ingot_url);
         if had_diagnostics {
             warn!(

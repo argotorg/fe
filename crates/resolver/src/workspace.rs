@@ -278,9 +278,115 @@ pub fn discover_context(url: &Url) -> Result<ContextDiscovery, FilesResolutionEr
         {
             discovery.standalone_files.push(file_url);
         }
+
+        return Ok(discovery);
     }
 
+    // Upward walk found nothing and this is a directory without fe.toml.
+    // Scan downward for fe.toml files to discover nested workspaces/ingots
+    // (e.g. editor opened at a parent directory like a monorepo or workbook).
+    discover_nested_configs(&start_dir, url, &mut resolver, &mut discovery)?;
+
     Ok(discovery)
+}
+
+/// Recursively scan subdirectories for `fe.toml` files to discover nested
+/// workspaces and ingots. Used when the editor root is a parent directory
+/// that doesn't itself contain a Fe project (e.g. a monorepo or workbook).
+fn discover_nested_configs(
+    root: &Path,
+    root_url: &Url,
+    resolver: &mut FilesResolver,
+    discovery: &mut ContextDiscovery,
+) -> Result<(), FilesResolutionError> {
+    const MAX_DEPTH: usize = 8;
+    const SKIP_DIRS: &[&str] = &[
+        ".git",
+        ".hg",
+        "node_modules",
+        "target",
+        "out",
+        ".claude",
+        "__pycache__",
+    ];
+
+    fn walk(
+        dir: &Path,
+        depth: usize,
+        resolver: &mut FilesResolver,
+        discovery: &mut ContextDiscovery,
+        root_url: &Url,
+    ) -> Result<(), FilesResolutionError> {
+        if depth > MAX_DEPTH {
+            return Ok(());
+        }
+
+        let dir_url = match Url::from_directory_path(dir) {
+            Ok(u) => u,
+            Err(_) => return Ok(()),
+        };
+
+        let mut handler = ContextProbe;
+        let probe = resolver.resolve(&mut handler, &dir_url)?;
+        match probe {
+            Some(DiscoveredConfig::Workspace(config)) => {
+                // Use the first discovered workspace as the primary root;
+                // additional workspaces are still loaded via ingot_roots.
+                if discovery.workspace_root.is_none() {
+                    discovery.workspace_root = Some(dir_url.clone());
+                }
+                // Always add the workspace root itself so init_ingot processes it
+                if !discovery.ingot_roots.contains(&dir_url) {
+                    discovery.ingot_roots.push(dir_url.clone());
+                }
+                if let Ok(members) = expand_workspace_members(
+                    &config.workspace,
+                    &dir_url,
+                    WorkspaceMemberSelection::All,
+                ) {
+                    for member in members {
+                        if !discovery.ingot_roots.contains(&member.url) {
+                            discovery.ingot_roots.push(member.url);
+                        }
+                    }
+                }
+                // Don't recurse into a workspace — its members are already expanded
+                return Ok(());
+            }
+            Some(DiscoveredConfig::Ingot) => {
+                if !discovery.ingot_roots.contains(&dir_url) {
+                    discovery.ingot_roots.push(dir_url);
+                }
+                // Don't recurse into an ingot
+                return Ok(());
+            }
+            Some(DiscoveredConfig::Invalid) | None => {}
+        }
+
+        // Recurse into subdirectories (sorted for deterministic discovery order)
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(_) => return Ok(()),
+        };
+        let mut subdirs: Vec<PathBuf> = entries
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().is_dir())
+            .filter(|e| {
+                let name = e.file_name();
+                let name_str = name.to_string_lossy();
+                !SKIP_DIRS.contains(&name_str.as_ref()) && !name_str.starts_with('.')
+            })
+            .map(|e| e.path())
+            .collect();
+        subdirs.sort();
+        for subdir in subdirs {
+            walk(&subdir, depth + 1, resolver, discovery, root_url)?;
+        }
+
+        Ok(())
+    }
+
+    walk(root, 0, resolver, discovery, root_url)
 }
 
 fn ancestor_root_for_src(path: &Path) -> Option<PathBuf> {
@@ -500,5 +606,193 @@ exclude = ["../{outside_name}"]
         let err = expand_workspace_members(&workspace, &root_url, WorkspaceMemberSelection::All)
             .expect_err("expected error");
         assert!(err.contains("escapes workspace root"));
+    }
+
+    #[test]
+    fn discovers_nested_workspace_from_parent_directory() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+
+        // Create a nested workspace: root/lessons/lesson1/fe.toml
+        write_file(
+            &root.join("lessons/lesson1/fe.toml"),
+            r#"
+[workspace]
+members = ["counter", "counter_user"]
+"#,
+        );
+        fs::create_dir_all(root.join("lessons/lesson1/counter/src")).expect("create counter");
+        write_file(
+            &root.join("lessons/lesson1/counter/fe.toml"),
+            r#"
+[ingot]
+name = "counter"
+version = "0.1.0"
+"#,
+        );
+        fs::create_dir_all(root.join("lessons/lesson1/counter_user/src"))
+            .expect("create counter_user");
+        write_file(
+            &root.join("lessons/lesson1/counter_user/fe.toml"),
+            r#"
+[ingot]
+name = "counter_user"
+version = "0.1.0"
+"#,
+        );
+
+        // Discover from the parent root (no fe.toml here)
+        let root_url = Url::from_directory_path(root).expect("root url");
+        let discovery = discover_context(&root_url).expect("discover context");
+
+        let ws_url = Url::from_directory_path(root.join("lessons/lesson1")).expect("workspace url");
+        assert_eq!(discovery.workspace_root, Some(ws_url.clone()));
+
+        let counter_url =
+            Url::from_directory_path(root.join("lessons/lesson1/counter")).expect("counter url");
+        let counter_user_url = Url::from_directory_path(root.join("lessons/lesson1/counter_user"))
+            .expect("counter_user url");
+        assert!(
+            discovery.ingot_roots.contains(&ws_url),
+            "workspace root should be in ingot_roots"
+        );
+        assert!(
+            discovery.ingot_roots.contains(&counter_url),
+            "counter should be in ingot_roots"
+        );
+        assert!(
+            discovery.ingot_roots.contains(&counter_user_url),
+            "counter_user should be in ingot_roots"
+        );
+    }
+
+    #[test]
+    fn discovers_standalone_ingot_from_parent_directory() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+
+        // Create a nested ingot without a workspace
+        fs::create_dir_all(root.join("projects/mylib/src")).expect("create mylib");
+        write_file(
+            &root.join("projects/mylib/fe.toml"),
+            r#"
+[ingot]
+name = "mylib"
+version = "0.1.0"
+"#,
+        );
+
+        let root_url = Url::from_directory_path(root).expect("root url");
+        let discovery = discover_context(&root_url).expect("discover context");
+
+        let mylib_url = Url::from_directory_path(root.join("projects/mylib")).expect("mylib url");
+        assert!(
+            discovery.ingot_roots.contains(&mylib_url),
+            "standalone ingot should be discovered"
+        );
+        assert!(
+            discovery.workspace_root.is_none(),
+            "no workspace root expected"
+        );
+    }
+
+    #[test]
+    fn discover_context_skips_noise_directories() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+
+        // Put fe.toml in target/ and node_modules/ — should be skipped
+        write_file(
+            &root.join("target/fe.toml"),
+            "[ingot]\nname = \"bad\"\nversion = \"0.1.0\"",
+        );
+        write_file(
+            &root.join("node_modules/fe.toml"),
+            "[ingot]\nname = \"bad2\"\nversion = \"0.1.0\"",
+        );
+        write_file(
+            &root.join(".hidden/fe.toml"),
+            "[ingot]\nname = \"bad3\"\nversion = \"0.1.0\"",
+        );
+
+        // Real project
+        fs::create_dir_all(root.join("mylib/src")).expect("create mylib");
+        write_file(
+            &root.join("mylib/fe.toml"),
+            "[ingot]\nname = \"mylib\"\nversion = \"0.1.0\"",
+        );
+
+        let root_url = Url::from_directory_path(root).expect("root url");
+        let discovery = discover_context(&root_url).expect("discover context");
+
+        assert_eq!(discovery.ingot_roots.len(), 1, "only mylib should be found");
+        let mylib_url = Url::from_directory_path(root.join("mylib")).expect("mylib url");
+        assert!(discovery.ingot_roots.contains(&mylib_url));
+    }
+
+    #[test]
+    fn discover_context_multiple_workspaces_under_parent() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+
+        // Two sibling workspaces under the root
+        write_file(
+            &root.join("ws_a/fe.toml"),
+            "[workspace]\nmembers = [\"app\"]",
+        );
+        fs::create_dir_all(root.join("ws_a/app")).expect("create ws_a/app");
+        write_file(
+            &root.join("ws_b/fe.toml"),
+            "[workspace]\nmembers = [\"lib\"]",
+        );
+        fs::create_dir_all(root.join("ws_b/lib")).expect("create ws_b/lib");
+
+        let root_url = Url::from_directory_path(root).expect("root url");
+        let discovery = discover_context(&root_url).expect("discover context");
+
+        // First workspace alphabetically should be primary
+        let ws_a_url = Url::from_directory_path(root.join("ws_a")).expect("ws_a url");
+        assert_eq!(
+            discovery.workspace_root,
+            Some(ws_a_url.clone()),
+            "first workspace alphabetically should be primary"
+        );
+
+        // Both workspaces and their members should be in ingot_roots
+        let ws_b_url = Url::from_directory_path(root.join("ws_b")).expect("ws_b url");
+        let app_url = Url::from_directory_path(root.join("ws_a/app")).expect("app url");
+        let lib_url = Url::from_directory_path(root.join("ws_b/lib")).expect("lib url");
+        assert!(discovery.ingot_roots.contains(&ws_a_url));
+        assert!(discovery.ingot_roots.contains(&app_url));
+        assert!(discovery.ingot_roots.contains(&ws_b_url));
+        assert!(discovery.ingot_roots.contains(&lib_url));
+    }
+
+    #[test]
+    fn discover_context_upward_takes_precedence_over_downward() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+
+        // Workspace at root level
+        write_file(&root.join("fe.toml"), "[workspace]\nmembers = [\"app\"]");
+        fs::create_dir_all(root.join("app")).expect("create app");
+
+        // Nested workspace that should NOT be discovered (upward walk finds root first)
+        write_file(
+            &root.join("nested/fe.toml"),
+            "[workspace]\nmembers = [\"other\"]",
+        );
+        fs::create_dir_all(root.join("nested/other")).expect("create nested/other");
+
+        let root_url = Url::from_directory_path(root).expect("root url");
+        let discovery = discover_context(&root_url).expect("discover context");
+
+        // Upward walk finds workspace at root — downward scan should NOT run
+        assert_eq!(discovery.workspace_root, Some(root_url));
+        let nested_url = Url::from_directory_path(root.join("nested")).expect("nested url");
+        assert!(
+            !discovery.ingot_roots.contains(&nested_url),
+            "nested workspace should not be discovered when upward walk succeeds"
+        );
     }
 }
