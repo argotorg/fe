@@ -912,17 +912,34 @@
       sidebarEl.appendChild(outline);
     }
 
-    // Highlight current section via IntersectionObserver
+    // Highlight current section via IntersectionObserver.
+    // Track all currently-visible sections and activate the topmost one,
+    // so that clicking an outline link (which scrolls) doesn't get
+    // hijacked by a different section passing through the viewport.
     if (typeof IntersectionObserver !== "undefined") {
       var links = list.querySelectorAll("a");
+      var visibleIds = {};
+
+      function updateActiveLink() {
+        // Find the topmost visible section by comparing DOM order
+        var bestId = null;
+        for (var ti = 0; ti < targets.length; ti++) {
+          if (visibleIds[targets[ti].id]) { bestId = targets[ti].id; break; }
+        }
+        for (var j = 0; j < links.length; j++) {
+          links[j].classList.toggle("active", bestId !== null && links[j].dataset.outlineId === bestId);
+        }
+      }
+
       _outlineObserver = new IntersectionObserver(function (obs) {
-        obs.forEach(function (entry) {
-          if (entry.isIntersecting) {
-            for (var j = 0; j < links.length; j++) {
-              links[j].classList.toggle("active", links[j].dataset.outlineId === entry.target.id);
-            }
+        for (var oi = 0; oi < obs.length; oi++) {
+          if (obs[oi].isIntersecting) {
+            visibleIds[obs[oi].target.id] = true;
+          } else {
+            delete visibleIds[obs[oi].target.id];
           }
-        });
+        }
+        updateActiveLink();
       }, { rootMargin: "-80px 0px -70% 0px" });
 
       for (var k = 0; k < targets.length; k++) {

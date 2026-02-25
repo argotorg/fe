@@ -863,10 +863,6 @@ pub fn enrich_signatures_with_base(
         }
     }
 
-    if symbol_to_url.is_empty() {
-        return;
-    }
-
     // Step 2: Build per-file byte-indexed occurrence lists from SCIP documents.
     // We need file text to convert SCIP line/col → byte offsets.
     let mut file_occurrences: HashMap<String, Vec<ByteOccurrence>> = HashMap::new();
