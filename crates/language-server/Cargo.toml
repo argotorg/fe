@@ -42,6 +42,7 @@ url = "2.5.4"
 codegen.workspace = true
 common.workspace = true
 driver.workspace = true
+fe-web.workspace = true
 mir.workspace = true
 fmt.workspace = true
 hir.workspace = true

@@ -2331,6 +2331,7 @@ dependencies = [
  "fe-parser",
  "fe-resolver",
  "fe-test-utils",
+ "fe-web",
  "futures",
  "futures-batch",
  "rustc-hash 2.1.1",
