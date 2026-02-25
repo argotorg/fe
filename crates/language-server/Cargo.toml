@@ -34,6 +34,7 @@ smol_str.workspace = true
 tokio = { version = "1.43.0", features = ["full", "io-std", "tracing", "net"] }
 tokio-tungstenite = "0.26"
 tower = "0.5.2"
+axum = { version = "0.8", features = ["ws"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 url = "2.5.4"

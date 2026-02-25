@@ -784,6 +784,10 @@
         document.dispatchEvent(new CustomEvent("fe-diagnostics", {
           detail: { uri: params.uri, diagnostics: params.diagnostics || [] }
         }));
+      } else if (msg.method === "fe/navigate") {
+        // Editor hover/goto → navigate doc browser to the target item
+        var p = (msg.params || {}).path;
+        if (p) navigate(p);
       }
     };
 

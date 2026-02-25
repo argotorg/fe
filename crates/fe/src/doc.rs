@@ -10,24 +10,39 @@ use crate::extract::DocExtractor;
 
 /// Server info written by LSP for discovery
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct LspServerInfo {
-    pid: u32,
-    workspace_root: Option<String>,
-    docs_url: Option<String>,
+pub(crate) struct LspServerInfo {
+    pub pid: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+    pub workspace_root: Option<String>,
+    pub docs_url: Option<String>,
 }
 
 impl LspServerInfo {
     /// Read server info from a workspace
-    fn read_from_workspace(workspace_root: &std::path::Path) -> Option<Self> {
+    pub(crate) fn read_from_workspace(workspace_root: &std::path::Path) -> Option<Self> {
         let info_path = workspace_root.join(".fe-lsp.json");
         let json = std::fs::read_to_string(&info_path).ok()?;
         serde_json::from_str(&json).ok()
     }
 
+    /// Write server info to the workspace root.
+    pub(crate) fn write_to_workspace(&self, workspace_root: &std::path::Path) -> std::io::Result<()> {
+        let info_path = workspace_root.join(".fe-lsp.json");
+        let json = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
+        std::fs::write(&info_path, json)
+    }
+
+    /// Remove the .fe-lsp.json file from a workspace.
+    pub(crate) fn remove_from_workspace(workspace_root: &std::path::Path) {
+        let info_path = workspace_root.join(".fe-lsp.json");
+        let _ = std::fs::remove_file(info_path);
+    }
+
     /// Check if the LSP process is still running
-    fn is_alive(&self) -> bool {
+    pub(crate) fn is_alive(&self) -> bool {
         // Simple check: see if the process exists
-        std::path::Path::new(&format!("/proc/{}", self.pid)).exists() || cfg!(windows) // On Windows, just assume it's alive if the file exists
+        std::path::Path::new(&format!("/proc/{}", self.pid)).exists() || cfg!(windows)
     }
 }
 
@@ -569,6 +584,23 @@ fn detect_source_link_base(working_dir: &std::path::Path) -> Option<String> {
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())?;
 
     Some(format!("{}/blob/{}", CANONICAL_REPO, commit))
+}
+
+/// Extract docs from a single ingot (lightweight, for LSP startup).
+pub(crate) fn extract_ingot_for_lsp(
+    db: &mut DriverDataBase,
+    dir_path: &Utf8PathBuf,
+) -> Option<DocIndex> {
+    extract_ingot(db, dir_path, None)
+}
+
+/// Extract docs from a workspace (lightweight, for LSP startup).
+pub(crate) fn extract_workspace_for_lsp(
+    db: &mut DriverDataBase,
+    workspace_root: &Utf8PathBuf,
+    ws_config: &common::config::WorkspaceConfig,
+) -> Option<DocIndex> {
+    extract_workspace(db, workspace_root, ws_config, None)
 }
 
 fn print_doc_summary(index: &DocIndex) {

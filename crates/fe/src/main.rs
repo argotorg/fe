@@ -342,6 +342,9 @@ pub enum Command {
         /// for ingot/workspace discovery.
         #[arg(long)]
         root: Option<Utf8PathBuf>,
+        /// Port for the combined doc+LSP server (default: auto-pick).
+        #[arg(long)]
+        port: Option<u16>,
         /// Communication mode (default: stdio).
         #[command(subcommand)]
         mode: Option<LspMode>,
@@ -609,7 +612,7 @@ pub fn run(opts: &Options) {
             run_root(path.as_ref());
         }
         #[cfg(feature = "lsp")]
-        Command::Lsp { root, mode } => {
+        Command::Lsp { root, port, mode } => {
             // If --root is explicit, use it. Otherwise, auto-discover from cwd.
             let resolved_root = match root {
                 Some(r) => Some(r.canonicalize_utf8().unwrap_or_else(|e| {
@@ -618,7 +621,7 @@ pub fn run(opts: &Options) {
                 })),
                 None => driver::files::find_project_root(),
             };
-            if let Some(root) = resolved_root {
+            if let Some(root) = &resolved_root {
                 std::env::set_current_dir(root.as_std_path()).unwrap_or_else(|e| {
                     eprintln!("Error: cannot chdir to {root}: {e}");
                     std::process::exit(1);
@@ -644,7 +647,7 @@ pub fn run(opts: &Options) {
                         .await;
                     }
                     None => {
-                        language_server::run_stdio_server(None).await;
+                        run_lsp_with_combined_server(resolved_root, *port).await;
                     }
                 }
             });
@@ -656,6 +659,110 @@ pub fn run(opts: &Options) {
             run_scip(path, output);
         }
     }
+}
+
+#[cfg(feature = "lsp")]
+async fn run_lsp_with_combined_server(resolved_root: Option<Utf8PathBuf>, port: Option<u16>) {
+    use tokio::net::TcpListener;
+
+    // Bind the combined server listener
+    let addr = format!("127.0.0.1:{}", port.unwrap_or(0));
+    let listener = match TcpListener::bind(&addr).await {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("Warning: could not bind combined server: {e}");
+            language_server::run_stdio_server(None, None).await;
+            return;
+        }
+    };
+    let actual_port = listener.local_addr().unwrap().port();
+
+    // Generate doc HTML for the workspace (best-effort)
+    let doc_html = generate_lsp_doc_html(resolved_root.as_ref(), actual_port);
+
+    eprintln!("Documentation: http://127.0.0.1:{actual_port}");
+
+    // Write .fe-lsp.json for discovery
+    let workspace_root_path = resolved_root
+        .as_ref()
+        .map(|r| r.as_std_path().to_path_buf())
+        .unwrap_or_else(|| std::env::current_dir().unwrap());
+    let server_info = doc::LspServerInfo {
+        pid: std::process::id(),
+        port: Some(actual_port),
+        workspace_root: Some(workspace_root_path.display().to_string()),
+        docs_url: Some(format!("http://127.0.0.1:{actual_port}")),
+    };
+    if let Err(e) = server_info.write_to_workspace(&workspace_root_path) {
+        eprintln!("Warning: could not write .fe-lsp.json: {e}");
+    }
+
+    let config = language_server::CombinedServerConfig {
+        listener,
+        doc_html,
+        docs_url: Some(format!("http://127.0.0.1:{actual_port}")),
+    };
+
+    language_server::run_stdio_server(None, Some(config)).await;
+
+    // Cleanup on exit
+    doc::LspServerInfo::remove_from_workspace(&workspace_root_path);
+}
+
+/// Generate the doc HTML for the combined server.
+/// Falls back to a minimal page if extraction fails.
+#[cfg(feature = "lsp")]
+fn generate_lsp_doc_html(resolved_root: Option<&Utf8PathBuf>, port: u16) -> String {
+    let root_path = resolved_root
+        .cloned()
+        .unwrap_or_else(|| Utf8PathBuf::from("."));
+
+    // Try to extract a DocIndex for the workspace
+    let mut db = driver::DriverDataBase::default();
+    let index = if root_path.is_dir() {
+        let fe_toml = root_path.join("fe.toml");
+        if fe_toml.is_file() {
+            if let Ok(content) = std::fs::read_to_string(&fe_toml) {
+                if let Ok(common::config::Config::Workspace(ws_config)) =
+                    common::config::Config::parse(&content)
+                {
+                    doc::extract_workspace_for_lsp(&mut db, &root_path, &ws_config)
+                } else {
+                    doc::extract_ingot_for_lsp(&mut db, &root_path)
+                }
+            } else {
+                doc::extract_ingot_for_lsp(&mut db, &root_path)
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let index = index.unwrap_or_default();
+
+    // Generate HTML with auto-connect script
+    let mut value = serde_json::to_value(&index).expect("serialize DocIndex");
+    fe_web::static_site::inject_html_bodies(&mut value);
+    let json = serde_json::to_string(&value).expect("serialize JSON");
+    let title = if let Some(root) = index.modules.first() {
+        format!("{} — Fe Documentation", root.name)
+    } else {
+        "Fe Documentation".to_string()
+    };
+    let mut html = fe_web::assets::html_shell_full(&title, &json, None, None);
+
+    // Append auto-connect script
+    let connect_script = format!(
+        r#"<script>window.FE_LSP = connectLsp("ws://127.0.0.1:{port}/lsp");</script>"#,
+    );
+    // Insert before </body>
+    if let Some(pos) = html.rfind("</body>") {
+        html.insert_str(pos, &connect_script);
+    }
+
+    html
 }
 
 fn effective_opt_level(

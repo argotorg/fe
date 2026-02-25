@@ -2,8 +2,9 @@ use crate::fallback::WithFallbackService;
 use crate::functionality::handlers::{FileChange, FilesNeedDiagnostics, NeedsDiagnostics};
 use crate::logging;
 use crate::lsp_actor::LspActor;
-use crate::lsp_actor::service::LspActorService;
+use crate::lsp_actor::service::{LspActorKey, LspActorService};
 use crate::lsp_streams::RouterStreams;
+use act_locally::actor::ActorRef;
 use act_locally::builder::ActorBuilder;
 use async_lsp::ClientSocket;
 use async_lsp::lsp_types::notification::{
@@ -22,7 +23,7 @@ use async_lsp::lsp_types::request::{
 };
 use async_std::stream::StreamExt;
 use futures_batch::ChunksTimeoutStreamExt;
-// use serde_json::Value;
+use tokio::sync::broadcast;
 use tracing::instrument::WithSubscriber;
 use tracing::{info, warn};
 
@@ -37,22 +38,39 @@ use crate::ws_notify::WsBroadcast;
 use async_lsp::lsp_types::request::Initialize;
 use async_lsp::router::Router;
 
-pub(crate) fn setup(
+/// Spawn the Backend actor. Call once per LS process.
+pub(crate) fn spawn_backend(
     client: ClientSocket,
     name: String,
     ws_broadcast: Option<WsBroadcast>,
-) -> WithFallbackService<LspActorService<Backend>, Router<()>> {
-    info!("Setting up server");
+    doc_nav_tx: Option<broadcast::Sender<String>>,
+    docs_url: Option<String>,
+) -> ActorRef<Backend, LspActorKey> {
+    info!("Spawning backend actor");
     let client_for_actor = client.clone();
     let client_for_logging = client.clone();
-    let backend_actor = ActorBuilder::new()
+    ActorBuilder::new()
         .with_name(name)
-        .with_state_init(move || Ok(Backend::new(client_for_actor, ws_broadcast)))
+        .with_state_init(move || {
+            Ok(Backend::new(
+                client_for_actor,
+                ws_broadcast,
+                doc_nav_tx,
+                docs_url,
+            ))
+        })
         .with_subscriber_init(logging::init_fn(client_for_logging))
         .spawn()
-        .expect("Failed to spawn backend actor");
+        .expect("Failed to spawn backend actor")
+}
 
-    let mut lsp_actor_service = LspActorService::with(backend_actor);
+/// Create an LspService wrapping an existing Backend actor.
+/// Call once per connection (stdio, WS).
+pub(crate) fn setup_service(
+    actor_ref: ActorRef<Backend, LspActorKey>,
+    client: ClientSocket,
+) -> WithFallbackService<LspActorService<Backend>, Router<()>> {
+    let mut lsp_actor_service = LspActorService::with(actor_ref);
 
     lsp_actor_service
         // mutating handlers
@@ -102,10 +120,21 @@ pub(crate) fn setup(
         .handle_request::<Shutdown>(handlers::handle_shutdown);
 
     let mut streaming_router = Router::new(());
-    setup_streams(client.clone(), &mut streaming_router);
+    setup_streams(client, &mut streaming_router);
     setup_unhandled(&mut streaming_router);
 
     WithFallbackService::new(lsp_actor_service, streaming_router)
+}
+
+/// Convenience: spawn a backend and create a service in one call.
+/// Used by connections that own their own Backend (TCP mode).
+pub(crate) fn setup(
+    client: ClientSocket,
+    name: String,
+    ws_broadcast: Option<WsBroadcast>,
+) -> WithFallbackService<LspActorService<Backend>, Router<()>> {
+    let actor_ref = spawn_backend(client.clone(), name, ws_broadcast, None, None);
+    setup_service(actor_ref, client)
 }
 
 fn setup_streams(client: ClientSocket, router: &mut Router<()>) {

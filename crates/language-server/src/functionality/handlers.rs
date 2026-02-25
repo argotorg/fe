@@ -660,10 +660,13 @@ pub async fn handle_hover_request(
     };
 
     info!("handling hover request in file: {:?}", file);
-    let response = hover_helper(&backend.db, file, message).unwrap_or_else(|e| {
+    let (response, doc_path) = hover_helper(&backend.db, file, message).unwrap_or_else(|e| {
         error!("Error handling hover: {:?}", e);
-        None
+        (None, None)
     });
+    if let Some(path) = doc_path {
+        backend.notify_doc_navigate(path);
+    }
     info!("sending hover response: {:?}", response);
     Ok(response)
 }

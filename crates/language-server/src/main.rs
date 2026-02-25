@@ -31,7 +31,7 @@ async fn main() {
             .await;
         }
         None => {
-            fe_language_server::run_stdio_server(args.ws_port).await;
+            fe_language_server::run_stdio_server(args.ws_port, None).await;
         }
     }
 }

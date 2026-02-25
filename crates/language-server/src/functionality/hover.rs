@@ -23,6 +23,10 @@ use super::{
 use crate::util::{to_lsp_range_from_span, to_offset_from_position};
 use driver::DriverDataBase;
 
+/// Returns `(hover_result, doc_path)`.
+///
+/// `doc_path` is the documentation URL path for the first resolved scope target
+/// (e.g. `"mylib::Foo/struct"`), used for `fe/navigate` notifications.
 fn local_name_from_reference<'db>(
     db: &'db dyn HirDb,
     reference: &ReferenceView<'db>,
@@ -224,7 +228,7 @@ pub fn hover_helper(
     db: &DriverDataBase,
     file: File,
     params: async_lsp::lsp_types::HoverParams,
-) -> Result<Option<Hover>, Error> {
+) -> Result<(Option<Hover>, Option<String>), Error> {
     info!("handling hover");
     let file_text = file.text(db);
 
@@ -237,10 +241,16 @@ pub fn hover_helper(
 
     // Get the reference at cursor and resolve it
     let Some(r) = top_mod.reference_at(db, cursor) else {
-        return Ok(None);
+        return Ok((None, None));
     };
 
     let resolution = r.target_at(db, cursor);
+
+    // Extract doc path from the first scope target (for fe/navigate)
+    let doc_path = resolution.as_slice().iter().find_map(|target| match target {
+        Target::Scope(scope) => hir::semantic::scope_to_doc_path(db, *scope),
+        Target::Local { .. } => None,
+    });
 
     // Compute the hover range from the reference span at the cursor position.
     // For paths, use the specific segment span containing the cursor.
@@ -280,10 +290,10 @@ pub fn hover_helper(
         sections.join("")
     } else {
         let Some(target) = resolution.first() else {
-            return Ok(None);
+            return Ok((None, doc_path));
         };
         let Some(info) = hover_markdown_for_target(db, r, target) else {
-            return Ok(None);
+            return Ok((None, doc_path));
         };
         info
     };
@@ -297,5 +307,5 @@ pub fn hover_helper(
         ),
         range: hover_range,
     };
-    Ok(Some(result))
+    Ok((Some(result), doc_path))
 }

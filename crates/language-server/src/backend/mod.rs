@@ -2,6 +2,7 @@ use async_lsp::ClientSocket;
 use driver::DriverDataBase;
 use rustc_hash::FxHashSet;
 use std::path::PathBuf;
+use tokio::sync::broadcast;
 use url::Url;
 
 use crate::virtual_files::{VirtualFiles, materialize_builtins};
@@ -15,11 +16,18 @@ pub struct Backend {
     pub(super) readonly_warnings: FxHashSet<Url>,
     pub(super) definition_link_support: bool,
     pub(super) ws_broadcast: Option<WsBroadcast>,
+    pub(super) doc_nav_tx: Option<broadcast::Sender<String>>,
+    pub(super) docs_url: Option<String>,
     pub(super) workspace_root: Option<PathBuf>,
 }
 
 impl Backend {
-    pub fn new(client: ClientSocket, ws_broadcast: Option<WsBroadcast>) -> Self {
+    pub fn new(
+        client: ClientSocket,
+        ws_broadcast: Option<WsBroadcast>,
+        doc_nav_tx: Option<broadcast::Sender<String>>,
+        docs_url: Option<String>,
+    ) -> Self {
         let db = DriverDataBase::default();
         let mut virtual_files = VirtualFiles::new("fe-language-server-").ok();
         if let Some(vfs) = virtual_files.as_mut()
@@ -42,6 +50,8 @@ impl Backend {
             readonly_warnings: FxHashSet::default(),
             definition_link_support: false,
             ws_broadcast,
+            doc_nav_tx,
+            docs_url,
             workspace_root: None,
         }
     }
@@ -51,6 +61,13 @@ impl Backend {
         if let Some(tx) = &self.ws_broadcast {
             // Ignore send errors — just means no one is listening
             let _ = tx.send(msg);
+        }
+    }
+
+    /// Broadcast a doc-navigate event (path like "mylib::Foo/struct").
+    pub fn notify_doc_navigate(&self, path: String) {
+        if let Some(tx) = &self.doc_nav_tx {
+            let _ = tx.send(path);
         }
     }
 
