@@ -377,13 +377,16 @@ impl<'db> Callable<'db> {
                     expected = tc.normalize_ty(expected);
                 }
 
-                let mode = mode.unwrap_or_else(|| {
-                    params
-                        .get(i)
-                        .copied()
-                        .unwrap_or_else(|| panic!("missing func param at index {i}"))
-                        .mode(db)
-                });
+                let mode = match mode {
+                    Some(m) => m,
+                    None => match params.get(i).copied() {
+                        Some(p) => p.mode(db),
+                        None => {
+                            tracing::error!("missing func param at index {i}");
+                            continue;
+                        }
+                    },
+                };
                 if mode == FuncParamMode::Own {
                     if expected.as_borrow(db).is_some() {
                         tc.push_diag(BodyDiag::OwnParamCannotBeBorrow {

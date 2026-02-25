@@ -296,14 +296,14 @@ impl<'db> TyCheckEnv<'db> {
                 continue;
             }
 
-            let provider_param_idx = provider_map
-                .get(idx)
-                .copied()
-                .flatten()
-                .expect("missing provider param for effect");
-            let provider_ty = *provider_params
-                .get(provider_param_idx)
-                .expect("provider param index out of range");
+            let Some(provider_param_idx) = provider_map.get(idx).copied().flatten() else {
+                tracing::warn!("missing provider param for effect at index {idx}");
+                continue;
+            };
+            let Some(&provider_ty) = provider_params.get(provider_param_idx) else {
+                tracing::warn!("provider param index {provider_param_idx} out of range");
+                continue;
+            };
 
             let provided_ty = match kind {
                 EffectKeyKind::Trait => provider_ty,

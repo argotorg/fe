@@ -120,10 +120,10 @@ impl<'a> cs_files::Files<'a> for LspDb<'a> {
     type Source = &'a str;
 
     fn name(&'a self, file_id: Self::FileId) -> Result<Self::Name, cs_files::Error> {
-        Ok(file_id
+        file_id
             .path(self.0)
-            .as_ref()
-            .expect("File path should be valid"))
+            .as_deref()
+            .ok_or(cs_files::Error::FileMissing)
     }
 
     fn source(&'a self, file_id: Self::FileId) -> Result<Self::Source, cs_files::Error> {

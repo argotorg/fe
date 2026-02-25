@@ -174,11 +174,11 @@ impl<'db> ScopeId<'db> {
         match self {
             ScopeId::Item(item) => item.attrs(db),
             ScopeId::Field(..) => {
-                let def: &FieldDef = self.resolve_to(db).unwrap();
+                let def: &FieldDef = self.resolve_to(db)?;
                 Some(def.attributes)
             }
             ScopeId::Variant(..) => {
-                let def: &VariantDef = self.resolve_to(db).unwrap();
+                let def: &VariantDef = self.resolve_to(db)?;
                 Some(def.attributes)
             }
             ScopeId::TraitType(t, idx) => t.types(db).get(idx as usize).map(|d| d.attributes),
@@ -333,17 +333,17 @@ impl<'db> ScopeId<'db> {
         match self {
             ScopeId::Item(item) => item.name(db),
 
-            ScopeId::Variant(..) => self.resolve_to::<&VariantDef>(db).unwrap().name.to_opt(),
+            ScopeId::Variant(..) => self.resolve_to::<&VariantDef>(db)?.name.to_opt(),
 
-            ScopeId::Field(..) => self.resolve_to::<&FieldDef>(db).unwrap().name.to_opt(),
+            ScopeId::Field(..) => self.resolve_to::<&FieldDef>(db)?.name.to_opt(),
 
             ScopeId::FuncParam(..) => {
-                let param: &FuncParam = self.resolve_to(db).unwrap();
+                let param: &FuncParam = self.resolve_to(db)?;
                 param.name()
             }
 
             ScopeId::GenericParam(..) => {
-                let param: &GenericParam = self.resolve_to(db).unwrap();
+                let param: &GenericParam = self.resolve_to(db)?;
                 param.name().to_opt()
             }
 
