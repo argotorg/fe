@@ -44,7 +44,55 @@ pub async fn run(
     doc_nav_tx: broadcast::Sender<String>,
     doc_reload_tx: broadcast::Sender<String>,
 ) {
-    let html = Arc::new(doc_html);
+    let port = listener.local_addr().unwrap().port();
+    let html = Arc::new(tokio::sync::RwLock::new(doc_html));
+
+    // Spawn a task to rebuild the served HTML when doc data changes
+    let html_for_reload = Arc::clone(&html);
+    let mut reload_rx = doc_reload_tx.subscribe();
+    tokio::spawn(async move {
+        while let Ok(payload) = reload_rx.recv().await {
+            if let Ok(data) = serde_json::from_str::<serde_json::Value>(&payload) {
+                let doc_index_json = data
+                    .get("docIndex")
+                    .map(|v| serde_json::to_string(v).unwrap_or_default())
+                    .unwrap_or_default();
+                let scip_json = data
+                    .get("scipData")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+
+                // Extract title from the doc index
+                let title = data
+                    .get("docIndex")
+                    .and_then(|idx| idx.get("modules"))
+                    .and_then(|m| m.as_array())
+                    .and_then(|a| a.first())
+                    .and_then(|m| m.get("name"))
+                    .and_then(|n| n.as_str())
+                    .map(|n| format!("{n} — Fe Documentation"))
+                    .unwrap_or_else(|| "Fe Documentation".to_string());
+
+                let mut new_html = fe_web::assets::html_shell_full(
+                    &title,
+                    &doc_index_json,
+                    scip_json.as_deref(),
+                    None,
+                );
+
+                // Append auto-connect script
+                let connect_script = format!(
+                    r#"<script>window.FE_LSP = connectLsp("ws://127.0.0.1:{port}/lsp");</script>"#,
+                );
+                if let Some(pos) = new_html.rfind("</body>") {
+                    new_html.insert_str(pos, &connect_script);
+                }
+
+                *html_for_reload.write().await = new_html;
+                info!("Updated served doc HTML with fresh data");
+            }
+        }
+    });
 
     let html_for_fallback = Arc::clone(&html);
     let app = Router::new()
@@ -68,7 +116,7 @@ pub async fn run(
         )
         .fallback(get(move || {
             let html = Arc::clone(&html_for_fallback);
-            async move { Html((*html).clone()) }
+            async move { Html(html.read().await.clone()) }
         }));
 
     info!(
