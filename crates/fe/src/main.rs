@@ -721,6 +721,7 @@ async fn run_lsp_with_combined_server(resolved_root: Option<Utf8PathBuf>, port: 
 fn generate_lsp_doc_html(resolved_root: Option<&Utf8PathBuf>, port: u16) -> String {
     use crate::extract::DocExtractor;
     use common::InputDb;
+    use common::stdlib::{HasBuiltinCore, HasBuiltinStd};
     use hir::hir_def::HirIngot;
 
     let root_path = resolved_root
@@ -735,11 +736,12 @@ fn generate_lsp_doc_html(resolved_root: Option<&Utf8PathBuf>, port: u16) -> Stri
             .canonicalize_utf8()
             .unwrap_or_else(|_| root_path.clone()),
     ) {
-        let ingot_urls = driver::discover_and_init(&mut db, &root_url);
+        let discovered = driver::discover_and_init(&mut db, &root_url);
+
+        let extractor = DocExtractor::new(&db);
 
         // Extract docs from each discovered ingot
-        let extractor = DocExtractor::new(&db);
-        for ingot_url in &ingot_urls {
+        for ingot_url in &discovered.ingot_urls {
             let Some(ingot) = db.workspace().containing_ingot(&db, ingot_url.clone()) else {
                 continue;
             };
@@ -755,6 +757,41 @@ fn generate_lsp_doc_html(resolved_root: Option<&Utf8PathBuf>, port: u16) -> Stri
                 .modules
                 .extend(extractor.build_module_tree_for_ingot(ingot, root_mod));
             let trait_impl_links = extractor.extract_trait_impl_links(ingot);
+            index.link_trait_impls(trait_impl_links);
+        }
+
+        // Extract docs from standalone .fe files
+        for file_url in &discovered.standalone_files {
+            if let Some(file) = db.workspace().get(&db, file_url) {
+                let top_mod = db.top_mod(file);
+                for item in top_mod.children_nested(&db) {
+                    if let Some(doc_item) = extractor.extract_item(item) {
+                        index.items.push(doc_item);
+                    }
+                }
+                index.modules.push(extractor.build_standalone_module_tree(top_mod));
+            }
+        }
+
+        // Include builtin libraries (core, std) in a separate section
+        let existing: std::collections::HashSet<_> =
+            index.modules.iter().map(|m| m.name.clone()).collect();
+        for (label, builtin) in [("core", db.builtin_core()), ("std", db.builtin_std())] {
+            if existing.contains(label) {
+                continue;
+            }
+            for top_mod in builtin.all_modules(&db) {
+                for item in top_mod.children_nested(&db) {
+                    if let Some(doc_item) = extractor.extract_item_for_ingot(item, builtin) {
+                        index.items.push(doc_item);
+                    }
+                }
+            }
+            let root_mod = builtin.root_mod(&db);
+            index
+                .builtin_modules
+                .extend(extractor.build_module_tree_for_ingot(builtin, root_mod));
+            let trait_impl_links = extractor.extract_trait_impl_links(builtin);
             index.link_trait_impls(trait_impl_links);
         }
     }

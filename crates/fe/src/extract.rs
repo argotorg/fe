@@ -690,6 +690,11 @@ impl<'db> DocExtractor<'db> {
         vec![self.build_module_node(top_mod.into())]
     }
 
+    /// Build module tree for a standalone .fe file (no ingot context).
+    pub fn build_standalone_module_tree(&self, top_mod: TopLevelMod<'db>) -> DocModuleTree {
+        self.build_module_node(top_mod.into())
+    }
+
     /// Build module tree for an entire ingot (includes file-based child modules)
     pub fn build_module_tree_for_ingot(
         &self,

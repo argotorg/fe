@@ -64,38 +64,48 @@ pub fn init_ingot(db: &mut DriverDataBase, ingot_url: &Url) -> bool {
     init_ingot_graph(db, ingot_url)
 }
 
+/// Result of discovering and initializing ingots/files from a root directory.
+pub struct DiscoveredProject {
+    /// Ingot URLs that were loaded into the DB.
+    pub ingot_urls: Vec<Url>,
+    /// Standalone `.fe` file URLs that were loaded into the DB.
+    pub standalone_files: Vec<Url>,
+}
+
 /// Discover ingots/workspaces from `root_url` and init them into `db`.
 ///
 /// 1. Runs `discover_context` (walks up looking for fe.toml).
 /// 2. If nothing found AND root has no fe.toml, scans downward for child
-///    ingots/workspaces (e.g. a workbook directory with scattered lessons).
-///
-/// Returns the list of ingot URLs that were initialized.
-pub fn discover_and_init(db: &mut DriverDataBase, root_url: &Url) -> Vec<Url> {
+///    ingots/workspaces and standalone `.fe` files (e.g. a workbook with
+///    scattered lessons).
+pub fn discover_and_init(db: &mut DriverDataBase, root_url: &Url) -> DiscoveredProject {
     use resolver::workspace::discover_context;
     use std::collections::BTreeSet;
 
-    let mut ingot_urls = Vec::new();
+    let mut result = DiscoveredProject {
+        ingot_urls: Vec::new(),
+        standalone_files: Vec::new(),
+    };
 
     let Ok(discovery) = discover_context(root_url) else {
-        return ingot_urls;
+        return result;
     };
 
     // Init workspace root if present
     if let Some(ws_root) = &discovery.workspace_root {
         init_ingot(db, ws_root);
-        ingot_urls.push(ws_root.clone());
+        result.ingot_urls.push(ws_root.clone());
     }
 
-    // Init all discovered ingots (workspace members or standalone)
+    // Init all discovered ingots (workspace members)
     for url in &discovery.ingot_roots {
         init_ingot(db, url);
-        ingot_urls.push(url.clone());
+        result.ingot_urls.push(url.clone());
     }
 
     // If discover_context found something, we're done
-    if !ingot_urls.is_empty() {
-        return ingot_urls;
+    if !result.ingot_urls.is_empty() {
+        return result;
     }
 
     // Fallback: if root itself has fe.toml, init it directly
@@ -105,32 +115,44 @@ pub fn discover_and_init(db: &mut DriverDataBase, root_url: &Url) -> Vec<Url> {
         .unwrap_or(false);
     if root_has_config {
         init_ingot(db, root_url);
-        return vec![root_url.clone()];
+        result.ingot_urls.push(root_url.clone());
+        return result;
     }
 
     // Nothing discovered upward and no root config — scan downward for
     // child ingots/workspaces (e.g. a workbook with scattered lessons).
     let Ok(root_path) = root_url.to_file_path() else {
-        return ingot_urls;
+        return result;
     };
 
-    // Collect fe.toml locations via recursive directory scan
+    // Collect fe.toml locations and standalone .fe files via recursive scan
     let mut config_dirs = BTreeSet::new();
-    fn scan_for_configs(dir: &std::path::Path, out: &mut BTreeSet<std::path::PathBuf>) {
+    let mut fe_files = Vec::new();
+    fn scan_dir(
+        dir: &std::path::Path,
+        configs: &mut BTreeSet<std::path::PathBuf>,
+        files: &mut Vec<std::path::PathBuf>,
+    ) {
         let Ok(entries) = std::fs::read_dir(dir) else {
             return;
         };
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
-                if path.join("fe.toml").is_file() {
-                    out.insert(path.clone());
+                // Skip hidden dirs like .solutions
+                if path.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.')) {
+                    continue;
                 }
-                scan_for_configs(&path, out);
+                if path.join("fe.toml").is_file() {
+                    configs.insert(path.clone());
+                }
+                scan_dir(&path, configs, files);
+            } else if path.extension().is_some_and(|ext| ext == "fe") {
+                files.push(path);
             }
         }
     }
-    scan_for_configs(&root_path, &mut config_dirs);
+    scan_dir(&root_path, &mut config_dirs, &mut fe_files);
 
     // Filter out dirs that are inside another discovered dir (workspace members
     // will be expanded by discover_context, so we only want top-level configs).
@@ -144,31 +166,52 @@ pub fn discover_and_init(db: &mut DriverDataBase, root_url: &Url) -> Vec<Url> {
         .cloned()
         .collect();
 
+    // Collect all ingot src/ directories to filter out .fe files that belong to ingots
+    let mut ingot_src_dirs: Vec<std::path::PathBuf> = Vec::new();
+
     for dir in top_level_dirs {
         let Ok(dir_url) = Url::from_directory_path(&dir) else {
             continue;
         };
+        ingot_src_dirs.push(dir.clone());
         // Run discover_context on each top-level config dir to properly
         // handle workspaces (expands members) vs plain ingots.
         if let Ok(sub_discovery) = discover_context(&dir_url) {
             if let Some(ws_root) = &sub_discovery.workspace_root {
                 init_ingot(db, ws_root);
-                ingot_urls.push(ws_root.clone());
+                result.ingot_urls.push(ws_root.clone());
             }
             for url in &sub_discovery.ingot_roots {
-                if !ingot_urls.contains(url) {
+                if !result.ingot_urls.contains(url) {
                     init_ingot(db, url);
-                    ingot_urls.push(url.clone());
+                    result.ingot_urls.push(url.clone());
+                    if let Ok(p) = url.to_file_path() {
+                        ingot_src_dirs.push(p);
+                    }
                 }
             }
             if sub_discovery.workspace_root.is_none() && sub_discovery.ingot_roots.is_empty() {
                 init_ingot(db, &dir_url);
-                ingot_urls.push(dir_url);
+                result.ingot_urls.push(dir_url);
             }
         }
     }
 
-    ingot_urls
+    // Load standalone .fe files that aren't under any discovered ingot
+    for fe_path in &fe_files {
+        let under_ingot = ingot_src_dirs.iter().any(|d| fe_path.starts_with(d));
+        if under_ingot {
+            continue;
+        }
+        if let Ok(content) = std::fs::read_to_string(fe_path)
+            && let Ok(url) = Url::from_file_path(fe_path)
+        {
+            db.workspace().touch(db, url.clone(), Some(content));
+            result.standalone_files.push(url);
+        }
+    }
+
+    result
 }
 
 pub fn check_library_requirements(db: &DriverDataBase) -> Vec<String> {
@@ -669,7 +712,8 @@ mod tests {
         let url = Url::from_directory_path(tmp.path()).unwrap();
         let mut db = DriverDataBase::default();
         let result = discover_and_init(&mut db, &url);
-        assert!(result.is_empty());
+        assert!(result.ingot_urls.is_empty());
+        assert!(result.standalone_files.is_empty());
     }
 
     /// discover_and_init should find a single ingot at root.
@@ -688,7 +732,7 @@ mod tests {
         let url = Url::from_directory_path(root).unwrap();
         let mut db = DriverDataBase::default();
         let result = discover_and_init(&mut db, &url);
-        assert_eq!(result.len(), 1);
+        assert_eq!(result.ingot_urls.len(), 1);
     }
 
     /// discover_and_init should scan downward and find child ingots when
@@ -713,6 +757,38 @@ mod tests {
         let url = Url::from_directory_path(root).unwrap();
         let mut db = DriverDataBase::default();
         let result = discover_and_init(&mut db, &url);
-        assert_eq!(result.len(), 2, "should find both child ingots");
+        assert_eq!(result.ingot_urls.len(), 2, "should find both child ingots");
+    }
+
+    /// discover_and_init should find standalone .fe files not under any ingot.
+    #[test]
+    fn discover_and_init_standalone_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+
+        // Create a standalone .fe file
+        let lessons = root.join("lessons").join("basics");
+        std::fs::create_dir_all(&lessons).unwrap();
+        std::fs::write(lessons.join("hello.fe"), "pub fn hello() {}").unwrap();
+
+        // And an ingot alongside it
+        let ingot_dir = root.join("lessons").join("myingot");
+        std::fs::create_dir_all(ingot_dir.join("src")).unwrap();
+        std::fs::write(
+            ingot_dir.join("fe.toml"),
+            "[ingot]\nname = \"myingot\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        std::fs::write(ingot_dir.join("src").join("lib.fe"), "pub fn f() {}").unwrap();
+
+        let url = Url::from_directory_path(root).unwrap();
+        let mut db = DriverDataBase::default();
+        let result = discover_and_init(&mut db, &url);
+        assert_eq!(result.ingot_urls.len(), 1, "should find the ingot");
+        assert_eq!(
+            result.standalone_files.len(),
+            1,
+            "should find the standalone file"
+        );
     }
 }
