@@ -200,28 +200,38 @@ where
 
 /// Accepts Content-Length-framed LSP output and sends each body as a
 /// WebSocket text message.
-struct LspToWsWriter<Sink> {
-    sink: Arc<Mutex<Sink>>,
+///
+/// Uses a single ordered mpsc channel to ensure messages are sent in the
+/// order they were written (a per-message `tokio::spawn` would race).
+struct LspToWsWriter {
+    tx: tokio::sync::mpsc::UnboundedSender<String>,
     /// Accumulator for incoming bytes (may contain partial headers/bodies)
     buf: Vec<u8>,
 }
 
-impl<Sink> LspToWsWriter<Sink> {
-    fn new(sink: Arc<Mutex<Sink>>) -> Self {
-        Self {
-            sink,
-            buf: Vec::new(),
-        }
+impl LspToWsWriter {
+    fn new<Sink>(sink: Arc<Mutex<Sink>>) -> Self
+    where
+        Sink: futures::Sink<Message, Error = tokio_tungstenite::tungstenite::Error>
+            + Unpin
+            + Send
+            + 'static,
+    {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        tokio::spawn(async move {
+            while let Some(body) = rx.recv().await {
+                let mut sink = sink.lock().await;
+                if let Err(e) = sink.send(Message::Text(body.into())).await {
+                    warn!("Failed to send WS message: {e}");
+                    break;
+                }
+            }
+        });
+        Self { tx, buf: Vec::new() }
     }
 }
 
-impl<Sink> AsyncWrite for LspToWsWriter<Sink>
-where
-    Sink: futures::Sink<Message, Error = tokio_tungstenite::tungstenite::Error>
-        + Unpin
-        + Send
-        + 'static,
-{
+impl AsyncWrite for LspToWsWriter {
     fn poll_write(
         self: Pin<&mut Self>,
         _cx: &mut Context<'_>,
@@ -263,14 +273,8 @@ where
             // Remove the consumed message from buffer
             this.buf.drain(..message_end);
 
-            // Send as WebSocket text message (spawn to avoid blocking)
-            let sink = this.sink.clone();
-            tokio::spawn(async move {
-                let mut sink = sink.lock().await;
-                if let Err(e) = sink.send(Message::Text(body.into())).await {
-                    warn!("Failed to send WS message: {e}");
-                }
-            });
+            // Send through ordered channel (preserves message ordering)
+            let _ = this.tx.send(body);
         }
 
         Poll::Ready(Ok(data.len()))

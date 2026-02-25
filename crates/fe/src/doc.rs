@@ -86,19 +86,29 @@ pub fn generate_docs(
     // First, check if there's a running LSP with docs server
     if serve_docs {
         let canonical_path = path.canonicalize_utf8().ok();
-        let workspace_root = canonical_path.as_ref().and_then(|p| {
+        let start_dir = canonical_path.as_ref().and_then(|p| {
             if p.is_file() {
-                p.parent().map(|p| p.as_std_path())
+                p.parent().map(|p| p.as_std_path().to_path_buf())
             } else {
-                Some(p.as_std_path())
+                Some(p.as_std_path().to_path_buf())
             }
         });
 
-        if let Some(root) = workspace_root
-            && let Some(info) = LspServerInfo::read_from_workspace(root)
-            && info.is_alive()
-            && let Some(docs_url) = &info.docs_url
-        {
+        // Walk ancestor directories to find .fe-lsp.json (it lives at project root,
+        // which may be several levels above the given path).
+        let found = start_dir.and_then(|dir| {
+            let mut current = dir.as_path();
+            loop {
+                if let Some(info) = LspServerInfo::read_from_workspace(current) {
+                    if info.is_alive() {
+                        return info.docs_url.clone();
+                    }
+                }
+                current = current.parent()?;
+            }
+        });
+
+        if let Some(docs_url) = &found {
             println!("Found running language server with documentation at:");
             println!("  {}", docs_url);
             println!();
