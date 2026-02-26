@@ -462,6 +462,28 @@ impl<'db, 'a> LowerReprCtx<'db, 'a> {
                 }
                 Rvalue::Intrinsic { op, args }
             }
+            Rvalue::ConstArrayElemLoad {
+                data,
+                mut index,
+                elem_size,
+            } => {
+                if let hir::projection::IndexSource::Dynamic(value) = index
+                    && let Some(rewritten) = rewrite_place_root_value(
+                        self.db,
+                        self.core,
+                        self.values,
+                        self.locals,
+                        value,
+                    )
+                {
+                    index = hir::projection::IndexSource::Dynamic(rewritten);
+                }
+                Rvalue::ConstArrayElemLoad {
+                    data,
+                    index,
+                    elem_size,
+                }
+            }
             other => other,
         };
         out.push(MirInst::Assign {

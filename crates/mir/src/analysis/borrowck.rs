@@ -1877,6 +1877,12 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         match rvalue {
             Rvalue::Value(value) => self.local_loans_in_value(state, *value),
             Rvalue::Load { place } => self.local_loans_from_load_place(state, place),
+            Rvalue::ConstArrayElemLoad { index, .. } => match index {
+                hir::projection::IndexSource::Constant(_) => LocalLoanState::default(),
+                hir::projection::IndexSource::Dynamic(value) => {
+                    self.local_loans_in_value(state, *value)
+                }
+            },
             Rvalue::ZeroInit
             | Rvalue::Call(_)
             | Rvalue::Intrinsic { .. }
@@ -2876,6 +2882,11 @@ fn locals_used_by_inst<'db>(body: &MirBody<'db>, inst: &MirInst<'db>) -> FxHashS
                     collect_locals_in_value(body, *arg, &mut out);
                 }
             }
+            Rvalue::ConstArrayElemLoad { index, .. } => {
+                if let hir::projection::IndexSource::Dynamic(value) = index {
+                    collect_locals_in_value(body, *value, &mut out);
+                }
+            }
             Rvalue::Load { place } => {
                 collect_locals_in_value(body, place.base, &mut out);
                 collect_locals_in_place_path(body, &place.projection, &mut out);
@@ -3048,6 +3059,10 @@ fn value_operands_in_inst(inst: &MirInst<'_>) -> Vec<ValueId> {
                 out
             }
             Rvalue::Intrinsic { args, .. } => args.clone(),
+            Rvalue::ConstArrayElemLoad { index, .. } => match index {
+                hir::projection::IndexSource::Constant(_) => Vec::new(),
+                hir::projection::IndexSource::Dynamic(value) => vec![*value],
+            },
             Rvalue::Load { .. }
             | Rvalue::ZeroInit
             | Rvalue::Alloc { .. }
@@ -3107,6 +3122,11 @@ fn borrow_values_in_inst<'db>(body: &MirBody<'db>, inst: &MirInst<'db>) -> FxHas
             Rvalue::Intrinsic { args, .. } => {
                 for arg in args {
                     collect_borrow_values(body, *arg, &mut out);
+                }
+            }
+            Rvalue::ConstArrayElemLoad { index, .. } => {
+                if let hir::projection::IndexSource::Dynamic(value) = index {
+                    collect_borrow_values(body, *value, &mut out);
                 }
             }
             Rvalue::ZeroInit | Rvalue::Alloc { .. } | Rvalue::ConstAggregate { .. } => {}
@@ -3173,6 +3193,11 @@ fn move_places_in_inst<'db>(
             Rvalue::Intrinsic { args, .. } => {
                 for arg in args {
                     collect_move_places(body, *arg, &mut out);
+                }
+            }
+            Rvalue::ConstArrayElemLoad { index, .. } => {
+                if let hir::projection::IndexSource::Dynamic(value) = index {
+                    collect_move_places(body, *value, &mut out);
                 }
             }
             Rvalue::ZeroInit | Rvalue::Alloc { .. } | Rvalue::ConstAggregate { .. } => {}

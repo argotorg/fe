@@ -380,6 +380,27 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
                         self.write_usize(data.len());
                         self.hasher.write(data);
                     }
+                    Rvalue::ConstArrayElemLoad {
+                        data,
+                        index,
+                        elem_size,
+                    } => {
+                        self.write_u8(7);
+                        self.write_usize(data.len());
+                        self.hasher.write(data);
+                        self.write_usize(*elem_size);
+                        match index {
+                            hir::projection::IndexSource::Constant(idx) => {
+                                self.write_u8(0);
+                                self.write_usize(*idx);
+                            }
+                            hir::projection::IndexSource::Dynamic(value) => {
+                                self.write_u8(1);
+                                let slot = self.placeholder_value(*value);
+                                self.write_u32(slot);
+                            }
+                        }
+                    }
                 }
             }
             MirInst::BindValue { value, .. } => {

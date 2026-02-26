@@ -10,11 +10,11 @@ object "main" {
       if iszero(v0) {
         v0 := 0x80
       }
-      mstore(0x40, add(v0, 96))
-      datacopy(v0, dataoffset("data_get_sum_0"), datasize("data_get_sum_0"))
-      let v1 := mload(v0)
-      let v2 := addmod(1, v1, 100)
-      ret := v2
+      mstore(0x40, add(v0, 32))
+      datacopy(v0, dataoffset("data_get_sum_0"), 32)
+      v0 := mload(v0)
+      let v1 := addmod(1, v0, 100)
+      ret := v1
       leave
     }
   }

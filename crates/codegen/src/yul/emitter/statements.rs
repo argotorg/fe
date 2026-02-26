@@ -3,7 +3,7 @@
 //! The functions defined in this module operate within `FunctionEmitter` and walk
 //! straight-line MIR instructions (non-terminators) to produce Yul statements.
 
-use hir::projection::Projection;
+use hir::projection::{IndexSource, Projection};
 use mir::ir::{IntrinsicOp, IntrinsicValue};
 use mir::{self, LocalId, MirProjectionPath, ValueId, layout};
 
@@ -120,6 +120,18 @@ impl<'db> FunctionEmitter<'db> {
                     ));
                 };
                 self.emit_const_aggregate_inst(docs, dest, data, state)?
+            }
+            mir::ir::Rvalue::ConstArrayElemLoad {
+                data,
+                index,
+                elem_size,
+            } => {
+                let Some(dest) = dest else {
+                    return Err(YulError::Unsupported(
+                        "const_array_elem_load without destination".into(),
+                    ));
+                };
+                self.emit_const_array_elem_load_inst(docs, dest, data, index, *elem_size, state)?
             }
         }
         Ok(())
@@ -266,6 +278,62 @@ impl<'db> FunctionEmitter<'db> {
         docs.push(YulDoc::line(format!(
             "datacopy({yul_name}, dataoffset(\"{label}\"), datasize(\"{label}\"))"
         )));
+        Ok(())
+    }
+
+    fn emit_const_array_elem_load_inst(
+        &mut self,
+        docs: &mut Vec<YulDoc>,
+        dest: LocalId,
+        data: &[u8],
+        index: &IndexSource<ValueId>,
+        elem_size: usize,
+        state: &mut BlockState,
+    ) -> Result<(), YulError> {
+        if elem_size == 0 {
+            let (yul_name, declared) = self.resolve_local_for_write(dest, state)?;
+            if declared {
+                docs.push(YulDoc::line(format!("let {yul_name} := 0")));
+            } else {
+                docs.push(YulDoc::line(format!("{yul_name} := 0")));
+            }
+            return Ok(());
+        }
+        if elem_size > 32 {
+            return Err(YulError::Unsupported(
+                "const array indexed load only supports element size <= 32 bytes".into(),
+            ));
+        }
+
+        let label = self.register_data_region(data.to_vec());
+        let data_offset = format!("dataoffset(\"{label}\")");
+        let src_offset = match index {
+            IndexSource::Constant(idx) => {
+                let byte_offset = idx.checked_mul(elem_size).ok_or_else(|| {
+                    YulError::Unsupported("const index byte offset overflow".into())
+                })?;
+                if byte_offset == 0 {
+                    data_offset
+                } else {
+                    format!("add({data_offset}, {byte_offset})")
+                }
+            }
+            IndexSource::Dynamic(value) => {
+                let index_expr = self.lower_value(*value, state)?;
+                if elem_size == 1 {
+                    format!("add({data_offset}, {index_expr})")
+                } else {
+                    format!("add({data_offset}, mul({index_expr}, {elem_size}))")
+                }
+            }
+        };
+
+        let (yul_name, declared) = self.resolve_local_for_write(dest, state)?;
+        self.emit_alloc_value(docs, &yul_name, elem_size.max(32), declared);
+        docs.push(YulDoc::line(format!(
+            "datacopy({yul_name}, {src_offset}, {elem_size})"
+        )));
+        docs.push(YulDoc::line(format!("{yul_name} := mload({yul_name})")));
         Ok(())
     }
 

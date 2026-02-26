@@ -1,0 +1,31 @@
+---
+source: crates/codegen/tests/yul.rs
+expression: output
+input_file: tests/fixtures/const_array_loop.fe
+---
+object "main" {
+  code {
+    function $sum_loop($n) -> ret {
+      let v0 := 0
+      let v1 := 0
+      for { } 1 { } {
+        if iszero(lt(v0, $n)) {
+          break
+        }
+        let v2 := mod(v0, 3)
+        let v3 := mload(0x40)
+        if iszero(v3) {
+          v3 := 0x80
+        }
+        mstore(0x40, add(v3, 32))
+        datacopy(v3, add(dataoffset("data_sum_loop_0"), mul(v2, 32)), 32)
+        v3 := mload(v3)
+        v1 := add(v1, v3)
+        v0 := add(v0, 1)
+      }
+      ret := v1
+      leave
+    }
+  }
+  data "data_sum_loop_0" hex"000000000000000000000000000000000000000000000000000000000000000a0000000000000000000000000000000000000000000000000000000000000014000000000000000000000000000000000000000000000000000000000000001e"
+}

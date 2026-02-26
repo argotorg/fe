@@ -1,0 +1,14 @@
+const VALS: [u256; 3] = [10, 20, 30]
+
+pub fn sum_loop(n: usize) -> u256 {
+    let mut i: usize = 0
+    let mut acc: u256 = 0
+
+    while i < n {
+        let idx: usize = i % 3
+        acc = acc + VALS[idx]
+        i = i + 1
+    }
+
+    acc
+}

@@ -139,6 +139,11 @@ pub(crate) fn insert_temp_binds<'db>(db: &'db dyn HirAnalysisDb, body: &mut MirB
                                     ctx.stabilize_value(*arg, true, false);
                                 }
                             }
+                            Rvalue::ConstArrayElemLoad { index, .. } => {
+                                if let hir::projection::IndexSource::Dynamic(value) = index {
+                                    ctx.stabilize_value(*value, true, false);
+                                }
+                            }
                             Rvalue::Load { place } => {
                                 ctx.stabilize_value(place.base, true, false);
                                 ctx.stabilize_path(&place.projection);
@@ -489,6 +494,11 @@ pub(crate) fn canonicalize_zero_sized<'db>(db: &'db dyn HirAnalysisDb, body: &mu
                                 // any side effects in the base/index expressions.
                                 push_place_eval(db, values, &mut rewritten, &place);
                             }
+                            Rvalue::ConstArrayElemLoad { index, .. } => {
+                                if let hir::projection::IndexSource::Dynamic(value) = index {
+                                    push_eval_value(db, values, &mut rewritten, value);
+                                }
+                            }
                             Rvalue::Alloc { .. }
                             | Rvalue::ZeroInit
                             | Rvalue::ConstAggregate { .. } => {}
@@ -698,6 +708,11 @@ fn compute_value_use_counts<'db>(body: &MirBody<'db>) -> Vec<usize> {
                     Rvalue::Intrinsic { args, .. } => {
                         for arg in args {
                             bump(*arg);
+                        }
+                    }
+                    Rvalue::ConstArrayElemLoad { index, .. } => {
+                        if let hir::projection::IndexSource::Dynamic(value) = index {
+                            bump(*value);
                         }
                     }
                     Rvalue::Load { place } => {

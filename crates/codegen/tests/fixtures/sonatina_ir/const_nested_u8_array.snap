@@ -23,11 +23,6 @@ func public %const_nested_u8_array() -> i256 {
         v13.i256 = mload v12 i256;
         v14.i8 = trunc v13 i8;
         v15.i256 = zext v14 i256;
-        v16.*i8 = evm_malloc 128.i256;
-        v17.i256 = ptr_to_int v16 i256;
-        v18.i256 = sym_addr $__fe_const_data_0;
-        v19.i256 = sym_size $__fe_const_data_0;
-        evm_code_copy v17 v18 v19;
         return v15;
 }
 

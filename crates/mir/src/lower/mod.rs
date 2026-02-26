@@ -25,6 +25,7 @@ use hir::hir_def::{
     HirIngot, IdentId, ItemKind, LitKind, MatchArm, Partial, Pat, PatId, Stmt, StmtId, TopLevelMod,
     VariantKind, expr::BinOp,
 };
+use hir::projection::IndexSource;
 
 use crate::{
     capability_space::{
@@ -1853,6 +1854,10 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 }
             }
             Rvalue::ZeroInit | Rvalue::Alloc { .. } | Rvalue::ConstAggregate { .. } => Vec::new(),
+            Rvalue::ConstArrayElemLoad { index, .. } => match index {
+                IndexSource::Constant(_) => Vec::new(),
+                IndexSource::Dynamic(value) => self.capability_spaces_for_value(*value),
+            },
         }
     }
 
@@ -2666,6 +2671,11 @@ fn first_unlowered_expr_used_by_mir<'db>(body: &MirBody<'db>) -> Option<ExprId> 
                     }
                     crate::ir::Rvalue::Alloc { .. } => {}
                     crate::ir::Rvalue::ConstAggregate { .. } => {}
+                    crate::ir::Rvalue::ConstArrayElemLoad { index, .. } => {
+                        if let IndexSource::Dynamic(value) = index {
+                            used_values.insert(*value);
+                        }
+                    }
                 },
                 MirInst::BindValue { value, .. } => {
                     used_values.insert(*value);
