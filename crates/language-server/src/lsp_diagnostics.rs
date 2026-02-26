@@ -2,7 +2,7 @@ use async_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range, Url}
 use camino::Utf8Path;
 use codespan_reporting::files as cs_files;
 use common::{
-    diagnostics::CompleteDiagnostic,
+    diagnostics::{CompleteDiagnostic, cmp_complete_diagnostics},
     file::{File, IngotFileKind},
     ingot::IngotKind,
 };
@@ -68,19 +68,7 @@ impl LspDiagnostics for DriverDataBase {
                 .iter()
                 .map(|d| d.to_complete(self).clone())
                 .collect();
-            finalized_diags.sort_by(|lhs, rhs| match lhs.error_code.cmp(&rhs.error_code) {
-                std::cmp::Ordering::Equal => {
-                    let lhs_span = lhs.primary_span();
-                    let rhs_span = rhs.primary_span();
-                    match (lhs_span, rhs_span) {
-                        (Some(lhs_span), Some(rhs_span)) => lhs_span.cmp(&rhs_span),
-                        (Some(_), None) => std::cmp::Ordering::Less,
-                        (None, Some(_)) => std::cmp::Ordering::Greater,
-                        (None, None) => std::cmp::Ordering::Equal,
-                    }
-                }
-                ord => ord,
-            });
+            finalized_diags.sort_by(cmp_complete_diagnostics);
             for diag in finalized_diags {
                 let lsp_diags = diag_to_lsp(self, diag).clone();
                 for (uri, more_diags) in lsp_diags {
@@ -99,19 +87,7 @@ impl LspDiagnostics for DriverDataBase {
             Vec::new()
         };
         tracing::debug!("[fe:timing]  MIR diagnostics: {:?}", t_mir.elapsed());
-        mir_diags.sort_by(|lhs, rhs| match lhs.error_code.cmp(&rhs.error_code) {
-            std::cmp::Ordering::Equal => {
-                let lhs_span = lhs.primary_span();
-                let rhs_span = rhs.primary_span();
-                match (lhs_span, rhs_span) {
-                    (Some(lhs_span), Some(rhs_span)) => lhs_span.cmp(&rhs_span),
-                    (Some(_), None) => std::cmp::Ordering::Less,
-                    (None, Some(_)) => std::cmp::Ordering::Greater,
-                    (None, None) => std::cmp::Ordering::Equal,
-                }
-            }
-            ord => ord,
-        });
+        mir_diags.sort_by(cmp_complete_diagnostics);
         for diag in mir_diags {
             let lsp_diags = diag_to_lsp(self, diag).clone();
             for (uri, more_diags) in lsp_diags {

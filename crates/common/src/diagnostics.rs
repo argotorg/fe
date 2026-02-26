@@ -48,6 +48,25 @@ impl CompleteDiagnostic {
     }
 }
 
+pub fn cmp_complete_diagnostics(
+    lhs: &CompleteDiagnostic,
+    rhs: &CompleteDiagnostic,
+) -> std::cmp::Ordering {
+    match lhs.error_code.cmp(&rhs.error_code) {
+        std::cmp::Ordering::Equal => {
+            let lhs_span = lhs.primary_span();
+            let rhs_span = rhs.primary_span();
+            match (lhs_span, rhs_span) {
+                (Some(lhs_span), Some(rhs_span)) => lhs_span.cmp(&rhs_span),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => std::cmp::Ordering::Equal,
+            }
+        }
+        ord => ord,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct GlobalErrorCode {
     pub pass: DiagnosticPass,
