@@ -31,10 +31,20 @@ impl CompleteDiagnostic {
     }
 
     pub fn primary_span(&self) -> Option<Span> {
-        self.sub_diagnostics
+        let span = self
+            .sub_diagnostics
             .iter()
             .find_map(|sub| sub.is_primary().then(|| sub.span.clone()).flatten())
-            .or_else(|| self.sub_diagnostics.iter().find_map(|sub| sub.span.clone()))
+            .or_else(|| self.sub_diagnostics.iter().find_map(|sub| sub.span.clone()));
+
+        debug_assert!(
+            span.is_some(),
+            "spanless diagnostic ({}): {}",
+            self.error_code,
+            self.message
+        );
+
+        span
     }
 }
 

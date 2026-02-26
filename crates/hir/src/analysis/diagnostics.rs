@@ -27,6 +27,7 @@ use common::diagnostics::{
 };
 use either::Either;
 use itertools::Itertools;
+use parser::TextRange;
 use std::cmp::Ordering;
 
 use common::file::File;
@@ -661,13 +662,21 @@ impl DiagnosticVoucher for PathResDiag<'_> {
 
             Self::NotFound(prim_span, ident) => {
                 let ident = ident.data(db);
+                let span = prim_span.resolve(db).or_else(|| {
+                    let top_mod = prim_span.top_mod(db)?;
+                    Some(Span::new(
+                        top_mod.file(db),
+                        TextRange::new(0.into(), 0.into()),
+                        SpanKind::NotFound,
+                    ))
+                });
                 CompleteDiagnostic {
                     severity,
                     message: format!("`{ident}` is not found"),
                     sub_diagnostics: vec![SubDiagnostic {
                         style: LabelStyle::Primary,
                         message: format!("`{ident}` is not found"),
-                        span: prim_span.resolve(db),
+                        span,
                     }],
                     notes: vec![],
                     error_code,
