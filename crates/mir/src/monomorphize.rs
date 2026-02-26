@@ -350,6 +350,9 @@ impl<'db> Monomorphizer<'db> {
                 return Err(err);
             }
         }
+        if let Some(err) = self.take_deferred_error() {
+            return Err(err);
+        }
         Ok(())
     }
 
@@ -1306,8 +1309,14 @@ impl<'db> Monomorphizer<'db> {
             Vec::new(),
             Vec::new(),
             Vec::new(),
-        )
-        .ok()?;
+        );
+        let lowered = match lowered {
+            Ok(lowered) => lowered,
+            Err(err) => {
+                self.defer_error(err);
+                return None;
+            }
+        };
         let idx = self.templates.len();
         self.templates.push(lowered);
         self.func_index.insert(key, idx);
@@ -1765,6 +1774,29 @@ mod tests {
         };
         assert_eq!(func_name, "test_symbol");
         assert!(message.contains("conflicting non-memory capability-space override"));
+    }
+
+    #[test]
+    fn deferred_error_is_reported_with_empty_worklist() {
+        let db = DriverDataBase::default();
+        let mut monomorphizer = Monomorphizer::new(&db, Vec::new());
+        monomorphizer.defer_error(MirLowerError::Unsupported {
+            func_name: "seed_roots".to_owned(),
+            message: "boom".to_owned(),
+        });
+        assert!(
+            monomorphizer.worklist.is_empty(),
+            "test assumes no worklist entries"
+        );
+
+        let err = monomorphizer
+            .process_worklist()
+            .expect_err("deferred errors should be reported even with empty worklists");
+        let MirLowerError::Unsupported { func_name, message } = err else {
+            panic!("expected Unsupported, got {err:?}");
+        };
+        assert_eq!(func_name, "seed_roots");
+        assert_eq!(message, "boom");
     }
 
     #[test]

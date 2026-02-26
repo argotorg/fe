@@ -2450,12 +2450,14 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         .and_then(|effect| effect.name)
                         .map(|ident| ident.data(self.db).to_string()),
                 };
-                explicit.or_else(|| {
-                    key_path
-                        .ident(self.db)
-                        .to_opt()
-                        .map(|ident| ident.data(self.db).to_string())
-                })
+                explicit
+                    .or_else(|| {
+                        key_path
+                            .ident(self.db)
+                            .to_opt()
+                            .map(|ident| ident.data(self.db).to_string())
+                    })
+                    .or_else(|| Some(format!("effect{idx}")))
             }
         }
     }

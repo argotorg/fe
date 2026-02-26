@@ -1298,6 +1298,24 @@ impl<'db> TyChecker<'db> {
                 continue;
             }
 
+            let invalid_effect_arg = match pass_mode {
+                super::EffectPassMode::ByPlace => !matches!(arg, super::EffectArg::Place(_)),
+                super::EffectPassMode::ByTempPlace => !matches!(arg, super::EffectArg::Value(_)),
+                super::EffectPassMode::ByValue => {
+                    matches!(arg, super::EffectArg::Unknown | super::EffectArg::Place(_))
+                }
+                super::EffectPassMode::Unknown => true,
+            };
+            if invalid_effect_arg {
+                let diag = BodyDiag::MissingEffect {
+                    primary: call_span.clone(),
+                    func,
+                    key: key_path,
+                };
+                self.push_diag(diag);
+                continue;
+            }
+
             // If the caller supplies a concrete provider value, unify it with the callee's hidden
             // provider generic argument now so later stages don't have to re-infer it from
             // expression types.
