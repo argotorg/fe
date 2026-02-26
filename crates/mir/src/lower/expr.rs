@@ -292,15 +292,16 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
                 match op {
                     hir::hir_def::expr::UnOp::Mut | hir::hir_def::expr::UnOp::Ref => {
-                        let Some(place) = self.place_for_borrow_expr(*inner) else {
-                            panic!("borrow operand must lower to a place");
-                        };
-                        let space = self.value_address_space(place.base);
-                        let value_ty = self.builder.body.value(value_id).ty;
-                        self.builder.body.values[value_id.index()].origin =
-                            ValueOrigin::PlaceRef(place);
-                        self.builder.body.values[value_id.index()].repr =
-                            self.value_repr_for_ty(value_ty, space);
+                        if let Some(place) = self.place_for_borrow_expr(*inner) {
+                            let space = self.value_address_space(place.base);
+                            let value_ty = self.builder.body.value(value_id).ty;
+                            self.builder.body.values[value_id.index()].origin =
+                                ValueOrigin::PlaceRef(place);
+                            self.builder.body.values[value_id.index()].repr =
+                                self.value_repr_for_ty(value_ty, space);
+                        } else {
+                            let _ = self.lower_expr(*inner);
+                        }
                     }
                     _ => {
                         let _ = self.lower_expr(*inner);
