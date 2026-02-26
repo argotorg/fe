@@ -1,4 +1,4 @@
-use async_lsp::lsp_types::{DocumentLinkOptions, HoverProviderCapability, OneOf, ServerCapabilities};
+use async_lsp::lsp_types::{HoverProviderCapability, OneOf, ServerCapabilities};
 
 use super::semantic_tokens::semantic_tokens_options;
 
@@ -73,11 +73,6 @@ pub(crate) fn server_capabilities() -> ServerCapabilities {
         ),
         // go to declaration
         declaration_provider: Some(async_lsp::lsp_types::DeclarationCapability::Simple(true)),
-        // document links (clickable type references → docs)
-        document_link_provider: Some(DocumentLinkOptions {
-            resolve_provider: Some(false),
-            work_done_progress_options: Default::default(),
-        }),
         // code actions (quick fixes)
         code_action_provider: Some(async_lsp::lsp_types::CodeActionProviderCapability::Simple(
             true,

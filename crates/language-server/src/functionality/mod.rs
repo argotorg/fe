@@ -1,7 +1,6 @@
 pub(super) mod call_hierarchy;
 mod capabilities;
 pub(super) mod code_actions;
-pub(super) mod document_links;
 pub(super) mod code_lens;
 pub(super) mod codegen_view;
 pub(super) mod completion;
