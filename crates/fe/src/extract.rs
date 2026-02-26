@@ -353,15 +353,24 @@ impl<'db> DocExtractor<'db> {
     /// node end, which exactly matches the signature text layout.
     fn field_sig_span(&self, field_view: FieldView<'db>) -> Option<SignatureSpanData> {
         let name_span = match field_view.parent {
-            hir::hir_def::FieldParent::Struct(s) => {
-                s.span().fields().field(field_view.idx).name().resolve(self.db)
-            }
-            hir::hir_def::FieldParent::Contract(c) => {
-                c.span().fields().field(field_view.idx).name().resolve(self.db)
-            }
-            hir::hir_def::FieldParent::Variant(v) => {
-                v.span().fields().field(field_view.idx).name().resolve(self.db)
-            }
+            hir::hir_def::FieldParent::Struct(s) => s
+                .span()
+                .fields()
+                .field(field_view.idx)
+                .name()
+                .resolve(self.db),
+            hir::hir_def::FieldParent::Contract(c) => c
+                .span()
+                .fields()
+                .field(field_view.idx)
+                .name()
+                .resolve(self.db),
+            hir::hir_def::FieldParent::Variant(v) => v
+                .span()
+                .fields()
+                .field(field_view.idx)
+                .name()
+                .resolve(self.db),
         }?;
         let ty_span = field_view.ty_span().resolve(self.db)?;
         let file_url = name_span.file.url(self.db)?;
