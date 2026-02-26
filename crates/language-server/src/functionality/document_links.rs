@@ -3,19 +3,21 @@ use async_lsp::lsp_types::{DocumentLink, DocumentLinkParams};
 use common::InputDb;
 use hir::{lower::map_file_to_mod, semantic::reference::resolved_item_scope_targets, span::LazySpan};
 
-use crate::{backend::Backend, util::doc_command_uri};
+use crate::backend::Backend;
 
 /// Provide document links for all scope references in the given file.
 ///
-/// Each link targets `command:fe.openDocs?[...]` so that clicking it invokes
-/// `fe.openDocs` with the relevant documentation path.  Links are only emitted
-/// when the documentation server URL is configured.
+/// Each link points to the HTTP docs page for the referenced item.
+/// Links are only emitted when the documentation server URL is configured.
 pub async fn handle_document_links(
     backend: &Backend,
     params: DocumentLinkParams,
 ) -> Result<Option<Vec<DocumentLink>>, ResponseError> {
     let lsp_uri = params.text_document.uri.clone();
-    if backend.is_virtual_uri(&lsp_uri) || backend.docs_url.is_none() {
+    let Some(base_url) = backend.docs_url.clone() else {
+        return Ok(None);
+    };
+    if backend.is_virtual_uri(&lsp_uri) {
         return Ok(None);
     }
 
@@ -46,8 +48,8 @@ pub async fn handle_document_links(
                     continue;
                 };
 
-                let uri_str = doc_command_uri(&doc_path);
-                let Ok(target_uri) = url::Url::parse(&uri_str) else {
+                let url_str = format!("{base_url}#{doc_path}");
+                let Ok(target_uri) = url::Url::parse(&url_str) else {
                     continue;
                 };
 
