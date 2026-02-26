@@ -715,23 +715,12 @@ pub async fn handle_hover_request(
     };
 
     info!("handling hover request in file: {:?}", file);
-    let (mut response, doc_path) = hover_helper(&backend.db, file, message).unwrap_or_else(|e| {
+    let (response, doc_path) = hover_helper(&backend.db, file, message).unwrap_or_else(|e| {
         error!("Error handling hover: {:?}", e);
         (None, None)
     });
 
     if let Some(path) = doc_path {
-        // Append an "Open docs" link when the doc server is running.
-        // Use the real HTTP URL — command: URIs are stripped by VS Code in LSP hover.
-        if let Some(base) = &backend.docs_url {
-            if let Some(hover) = response.as_mut() {
-                use async_lsp::lsp_types::HoverContents;
-                if let HoverContents::Markup(mc) = &mut hover.contents {
-                    let url = format!("{base}#{path}");
-                    mc.value.push_str(&format!("\n\n[Open docs →]({url})"));
-                }
-            }
-        }
         backend.notify_doc_navigate(path);
     }
     info!("sending hover response: {:?}", response);
