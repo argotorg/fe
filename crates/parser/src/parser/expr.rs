@@ -505,14 +505,17 @@ fn bump_aug_assign_op<S: TokenStream>(parser: &mut Parser<S>) -> bool {
 
 fn is_method_call<S: TokenStream>(parser: &mut Parser<S>) -> bool {
     let is_trivia = parser.set_newline_as_trivia(true);
-    let res = parser.dry_run(|parser| {
-        if !parser.bump_if(SyntaxKind::Dot) {
-            return false;
-        }
+    if !matches!(
+        parser.peek_n_non_trivia(2).as_slice(),
+        [SyntaxKind::Dot, SyntaxKind::Ident]
+    ) {
+        parser.set_newline_as_trivia(is_trivia);
+        return false;
+    }
 
-        if !parser.bump_if(SyntaxKind::Ident) {
-            return false;
-        }
+    let res = parser.dry_run(|parser| {
+        parser.bump_expected(SyntaxKind::Dot);
+        parser.bump_expected(SyntaxKind::Ident);
 
         // After the identifier, require `<` or `(` to be on the same line
         parser.set_newline_as_trivia(false);

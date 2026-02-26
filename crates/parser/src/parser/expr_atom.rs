@@ -40,29 +40,25 @@ pub(super) fn parse_expr_atom<S: TokenStream>(
         Some(SyntaxKind::Ident) => {
             // Contextual 'with': only treat as with-block when:
             // ident text is "with" AND we can parse a WithParamList AND next is '{'
-            let is_with = parser.dry_run(|p| {
-                let is_with_ident = p
-                    .current_token()
-                    .map(|t| t.text() == "with")
-                    .unwrap_or(false);
-                if !is_with_ident {
-                    return false;
-                }
-                p.bump();
-                // Must start with '(' for with param list
-                if p.current_kind() != Some(SyntaxKind::LParen) {
-                    return false;
-                }
-                // Try parse the with param list
-                if !p
-                    .parse_ok(WithParamListScope::default())
-                    .is_ok_and(identity)
-                {
-                    return false;
-                }
-                // Require a block immediately after
-                p.current_kind() == Some(SyntaxKind::LBrace)
-            });
+            let is_with = parser
+                .current_token()
+                .map(|t| t.text() == "with")
+                .unwrap_or(false)
+                && matches!(
+                    parser.peek_n_non_trivia(2).as_slice(),
+                    [SyntaxKind::Ident, SyntaxKind::LParen]
+                )
+                && parser.dry_run(|p| {
+                    p.bump_expected(SyntaxKind::Ident);
+                    // Try parse the with param list body and require a block right after.
+                    if !p
+                        .parse_ok(WithParamListScope::default())
+                        .is_ok_and(identity)
+                    {
+                        return false;
+                    }
+                    p.current_kind() == Some(SyntaxKind::LBrace)
+                });
             if is_with {
                 parser.parse_cp(WithExprScope::default(), None)
             } else {
@@ -217,7 +213,10 @@ impl super::Parse for WithParamScope {
         // `with` parameter supports either:
         // - `Key = value` (legacy)
         // - `value` (shorthand; key inferred from value type / usage)
-        let is_keyed = parser.dry_run(|p| {
+        let is_keyed = matches!(
+            parser.peek_n_non_trivia(1).as_slice(),
+            [kind] if path::is_path_segment(*kind)
+        ) && parser.dry_run(|p| {
             if !p.parse_ok(path::PathScope::default()).is_ok_and(identity) {
                 return false;
             }

@@ -200,25 +200,25 @@ impl super::Parse for UsesParamScope {
         // - `f: mut Foo`
         //
         // Legacy typed form `mut f: Foo` is rejected with a targeted parse error.
-        let is_legacy_labeled = parser.dry_run(|p| {
-            p.bump_if(SyntaxKind::MutKw)
-                && (p.current_kind() == Some(SyntaxKind::Ident)
-                    || p.current_kind() == Some(SyntaxKind::Underscore))
-                && {
-                    p.bump();
-                    p.current_kind() == Some(SyntaxKind::Colon)
-                }
-        });
+        let lookahead = parser.peek_n_non_trivia(3);
+        let is_legacy_labeled = matches!(
+            lookahead.as_slice(),
+            [
+                SyntaxKind::MutKw,
+                SyntaxKind::Ident | SyntaxKind::Underscore,
+                SyntaxKind::Colon
+            ]
+        );
 
         // Detect labeled form (ident/underscore, then `:`)
-        let is_labeled = parser.dry_run(|p| {
-            (p.current_kind() == Some(SyntaxKind::Ident)
-                || p.current_kind() == Some(SyntaxKind::Underscore))
-                && {
-                    p.bump();
-                    p.current_kind() == Some(SyntaxKind::Colon)
-                }
-        });
+        let is_labeled = matches!(
+            lookahead.as_slice(),
+            [
+                SyntaxKind::Ident | SyntaxKind::Underscore,
+                SyntaxKind::Colon,
+                ..
+            ]
+        );
 
         if is_legacy_labeled {
             let pos = parser.current_pos;
