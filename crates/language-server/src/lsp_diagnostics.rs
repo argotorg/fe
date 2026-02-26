@@ -26,6 +26,11 @@ use crate::util::diag_to_lsp;
 /// Test-only latch: set to `true` to force the next `diagnostics_for_ingot`
 /// call to panic (simulating an analysis-pass crash). The flag is consumed
 /// atomically (swap to false), so only one call panics per arm.
+///
+/// Safety assumption: only used inside `mock_lsp_scenarios`, which runs its
+/// scenario functions sequentially. If tests ever run in parallel this latch
+/// could be consumed by the wrong scenario and should be replaced with a
+/// per-ingot or per-connection signal.
 #[cfg(test)]
 pub(crate) static FORCE_DIAGNOSTIC_PANIC: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
@@ -101,7 +106,28 @@ impl LspDiagnostics for DriverDataBase {
         // Skip MIR diagnostics when HIR already has errors: MIR assumes HIR is
         // sound and panics on broken input. Also skip for ingots with no modules.
         let mut mir_diags = if !hir_has_errors && ingot.module_tree(self).root_data().is_some() {
-            self.mir_diagnostics_for_ingot(ingot, MirDiagnosticsMode::TemplatesOnly)
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.mir_diagnostics_for_ingot(ingot, MirDiagnosticsMode::TemplatesOnly)
+            })) {
+                Ok(diags) => diags,
+                Err(panic_info) => {
+                    if panic_info.is::<salsa::Cancelled>() {
+                        std::panic::resume_unwind(panic_info);
+                    }
+                    let msg = panic_info
+                        .downcast_ref::<&str>()
+                        .copied()
+                        .or_else(|| panic_info.downcast_ref::<String>().map(|s| s.as_str()))
+                        .unwrap_or("<non-string panic>");
+                    tracing::error!("MIR diagnostics panicked (skipping): {msg}");
+                    // Intentional degradation: return empty MIR diagnostics rather
+                    // than letting the panic propagate to the outer handler and
+                    // losing the HIR diagnostics we already collected. The outer
+                    // catch_unwind in handle_files_need_diagnostics is the safety
+                    // net for panics that originate before we have any HIR results.
+                    Vec::new()
+                }
+            }
         } else {
             Vec::new()
         };

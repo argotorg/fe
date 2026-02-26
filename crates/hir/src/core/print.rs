@@ -23,7 +23,10 @@ fn unwrap_partial<T>(partial: Partial<T>, context: &str) -> T {
     match partial {
         Partial::Present(v) => v,
         Partial::Absent => {
-            debug_assert!(false, "HIR pretty_print: missing required node at {context}");
+            debug_assert!(
+                false,
+                "HIR pretty_print: missing required node at {context}"
+            );
             panic!("HIR pretty_print: missing required node at {context}")
         }
     }
@@ -34,7 +37,10 @@ fn unwrap_partial_ref<'a, T>(partial: &'a Partial<T>, context: &str) -> &'a T {
     match partial {
         Partial::Present(v) => v,
         Partial::Absent => {
-            debug_assert!(false, "HIR pretty_print: missing required node at {context}");
+            debug_assert!(
+                false,
+                "HIR pretty_print: missing required node at {context}"
+            );
             panic!("HIR pretty_print: missing required node at {context}")
         }
     }
@@ -380,7 +386,7 @@ impl<'db> FuncParam<'db> {
         // Name — may be Absent if parsing failed; use "_" as fallback.
         match self.name {
             Partial::Present(name) => result.push_str(&name.pretty_print(db)),
-            Partial::Absent => result.push_str("_"),
+            Partial::Absent => result.push('_'),
         }
 
         // Type (if not a self param with fallback) — use "?" if Absent.
@@ -388,7 +394,7 @@ impl<'db> FuncParam<'db> {
             result.push_str(": ");
             match self.ty {
                 Partial::Present(ty) => result.push_str(&ty.pretty_print(db)),
-                Partial::Absent => result.push_str("?"),
+                Partial::Absent => result.push('?'),
             }
         }
 

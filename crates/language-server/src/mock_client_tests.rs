@@ -616,13 +616,9 @@ pub contract Broken {
 /// panic without killing the server actor. After recovery the diagnostics
 /// pipeline must remain fully functional — error codes must still be emitted
 /// for code sent after the panic.
-async fn scenario_errors_reported_after_panic_recovery(
-    client: &mut MockLspClient,
-    uri: &Url,
-) {
+async fn scenario_errors_reported_after_panic_recovery(client: &mut MockLspClient, uri: &Url) {
     // Arm the latch: the next diagnostics_for_ingot call will panic.
-    crate::lsp_diagnostics::FORCE_DIAGNOSTIC_PANIC
-        .store(true, std::sync::atomic::Ordering::SeqCst);
+    crate::lsp_diagnostics::FORCE_DIAGNOSTIC_PANIC.store(true, std::sync::atomic::Ordering::SeqCst);
 
     // Trigger a diagnostics run; the actor will hit the panic and the outer
     // catch_unwind in handle_files_need_diagnostics must absorb it.

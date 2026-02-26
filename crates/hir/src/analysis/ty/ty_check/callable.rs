@@ -382,7 +382,9 @@ impl<'db> Callable<'db> {
                     None => match params.get(i).copied() {
                         Some(p) => p.mode(db),
                         None => {
-                            unreachable!("missing func param at index {i} — length check above should have caught this");
+                            unreachable!(
+                                "missing func param at index {i} — length check above should have caught this"
+                            );
                         }
                     },
                 };
