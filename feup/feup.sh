@@ -187,6 +187,13 @@ download_fe() {
     }
 
     chmod +x "$tmp_file"
+
+    # macOS quarantines binaries downloaded via curl; remove the flag so the
+    # binary can execute without Gatekeeper killing it (Abort trap: 6).
+    if [ "$OS" = "mac" ]; then
+        xattr -d com.apple.quarantine "$tmp_file" 2>/dev/null || true
+    fi
+
     mv "$tmp_file" "$FE_BIN_DIR/fe"
     trap - EXIT
 
