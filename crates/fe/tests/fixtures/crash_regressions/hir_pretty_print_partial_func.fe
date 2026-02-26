@@ -1,0 +1,15 @@
+struct Foo { v: u8 }
+
+pub fn move_reinit(b: bool) -> Foo {
+    let mut x = Foo { v: 1}
+
+    if b {
+        consume(ref x)
+    }
+
+    x = Foo { v: 2 }
+    x
+}
+
+fn  ref Foo) {}
+
