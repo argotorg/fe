@@ -18,8 +18,7 @@ fn indent_str(level: usize) -> String {
 /// Absent nodes in the HIR occur when parsing fails (e.g. incomplete source
 /// during editing). In debug builds this fires a debug_assert so tests catch
 /// regressions; in release the panic propagates to the LSP catch_unwind
-/// boundary. Code that produces error *messages* (not analysis results) should
-/// prefer `unwrap_partial_or` to avoid swallowing the original diagnostic.
+/// boundary.
 fn unwrap_partial<T>(partial: Partial<T>, context: &str) -> T {
     match partial {
         Partial::Present(v) => v,
@@ -27,16 +26,6 @@ fn unwrap_partial<T>(partial: Partial<T>, context: &str) -> T {
             debug_assert!(false, "HIR pretty_print: missing required node at {context}");
             panic!("HIR pretty_print: missing required node at {context}")
         }
-    }
-}
-
-/// Unwraps a Partial<T>, returning `fallback` if Absent instead of panicking.
-/// Use this in error-message generation paths where a panic would swallow the
-/// diagnostic being formatted.
-fn unwrap_partial_or<T>(partial: Partial<T>, fallback: T) -> T {
-    match partial {
-        Partial::Present(v) => v,
-        Partial::Absent => fallback,
     }
 }
 
