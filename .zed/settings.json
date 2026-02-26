@@ -1,7 +1,7 @@
 {
   "languages": {
     "Fe": {
-      "enable_language_server": true,
-    },
-  },
+      "enable_language_server": false
+    }
+  }
 }
