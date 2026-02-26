@@ -121,7 +121,10 @@ pub fn diag_to_lsp(
     diag: CompleteDiagnostic,
 ) -> FxHashMap<async_lsp::lsp_types::Url, Vec<async_lsp::lsp_types::Diagnostic>> {
     let mut result = FxHashMap::default();
-    let Ok(primary_location) = to_lsp_location_from_span(db, diag.primary_span()) else {
+    let Some(primary_span) = diag.primary_span() else {
+        return result;
+    };
+    let Ok(primary_location) = to_lsp_location_from_span(db, primary_span) else {
         return result;
     };
 

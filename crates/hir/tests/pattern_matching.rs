@@ -33,7 +33,16 @@ fn exhaustive_matches(fixture: Fixture<&str>) {
 
         let mut complete_diags: Vec<_> = diags.iter().map(|d| d.to_complete(&db)).collect();
         complete_diags.sort_by(|lhs, rhs| match lhs.error_code.cmp(&rhs.error_code) {
-            std::cmp::Ordering::Equal => lhs.primary_span().cmp(&rhs.primary_span()),
+            std::cmp::Ordering::Equal => {
+                let lhs_span = lhs.primary_span();
+                let rhs_span = rhs.primary_span();
+                match (lhs_span, rhs_span) {
+                    (Some(lhs_span), Some(rhs_span)) => lhs_span.cmp(&rhs_span),
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) => std::cmp::Ordering::Equal,
+                }
+            }
             ord => ord,
         });
 
@@ -87,7 +96,16 @@ fn non_exhaustive_matches(fixture: Fixture<&str>) {
 
     let mut complete_diags: Vec<_> = diags.iter().map(|d| d.to_complete(&db)).collect();
     complete_diags.sort_by(|lhs, rhs| match lhs.error_code.cmp(&rhs.error_code) {
-        std::cmp::Ordering::Equal => lhs.primary_span().cmp(&rhs.primary_span()),
+        std::cmp::Ordering::Equal => {
+            let lhs_span = lhs.primary_span();
+            let rhs_span = rhs.primary_span();
+            match (lhs_span, rhs_span) {
+                (Some(lhs_span), Some(rhs_span)) => lhs_span.cmp(&rhs_span),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => std::cmp::Ordering::Equal,
+            }
+        }
         ord => ord,
     });
 
@@ -134,7 +152,16 @@ fn unreachable_patterns(fixture: Fixture<&str>) {
 
     let mut complete_diags: Vec<_> = diags.iter().map(|d| d.to_complete(&db)).collect();
     complete_diags.sort_by(|lhs, rhs| match lhs.error_code.cmp(&rhs.error_code) {
-        std::cmp::Ordering::Equal => lhs.primary_span().cmp(&rhs.primary_span()),
+        std::cmp::Ordering::Equal => {
+            let lhs_span = lhs.primary_span();
+            let rhs_span = rhs.primary_span();
+            match (lhs_span, rhs_span) {
+                (Some(lhs_span), Some(rhs_span)) => lhs_span.cmp(&rhs_span),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => std::cmp::Ordering::Equal,
+            }
+        }
         ord => ord,
     });
 
@@ -176,7 +203,16 @@ fn misc_pattern_tests(fixture: Fixture<&str>) {
 
         let mut complete_diags: Vec<_> = diags.iter().map(|d| d.to_complete(&db)).collect();
         complete_diags.sort_by(|lhs, rhs| match lhs.error_code.cmp(&rhs.error_code) {
-            std::cmp::Ordering::Equal => lhs.primary_span().cmp(&rhs.primary_span()),
+            std::cmp::Ordering::Equal => {
+                let lhs_span = lhs.primary_span();
+                let rhs_span = rhs.primary_span();
+                match (lhs_span, rhs_span) {
+                    (Some(lhs_span), Some(rhs_span)) => lhs_span.cmp(&rhs_span),
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) => std::cmp::Ordering::Equal,
+                }
+            }
             ord => ord,
         });
 
@@ -223,7 +259,16 @@ fn stress_pattern_tests(fixture: Fixture<&str>) {
 
         let mut complete_diags: Vec<_> = diags.iter().map(|d| d.to_complete(&db)).collect();
         complete_diags.sort_by(|lhs, rhs| match lhs.error_code.cmp(&rhs.error_code) {
-            std::cmp::Ordering::Equal => lhs.primary_span().cmp(&rhs.primary_span()),
+            std::cmp::Ordering::Equal => {
+                let lhs_span = lhs.primary_span();
+                let rhs_span = rhs.primary_span();
+                match (lhs_span, rhs_span) {
+                    (Some(lhs_span), Some(rhs_span)) => lhs_span.cmp(&rhs_span),
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) => std::cmp::Ordering::Equal,
+                }
+            }
             ord => ord,
         });
 

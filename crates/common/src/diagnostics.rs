@@ -30,12 +30,11 @@ impl CompleteDiagnostic {
         }
     }
 
-    pub fn primary_span(&self) -> Span {
+    pub fn primary_span(&self) -> Option<Span> {
         self.sub_diagnostics
             .iter()
             .find_map(|sub| sub.is_primary().then(|| sub.span.clone()).flatten())
             .or_else(|| self.sub_diagnostics.iter().find_map(|sub| sub.span.clone()))
-            .unwrap()
     }
 }
 
