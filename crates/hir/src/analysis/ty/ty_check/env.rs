@@ -1353,7 +1353,8 @@ impl<'db> LocalBinding<'db> {
                 path.ident(hir_db).unwrap()
             }
 
-            Self::Param { site, idx, .. } => param_name(env.db, *site, *idx).unwrap(),
+            Self::Param { site, idx, .. } => param_name(env.db, *site, *idx)
+                .unwrap_or_else(|| IdentId::new(env.db, "_".to_string())),
             Self::EffectParam { key_path, .. } => key_path
                 .ident(env.db)
                 .to_opt()
