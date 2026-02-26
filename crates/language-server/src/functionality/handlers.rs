@@ -570,6 +570,17 @@ pub async fn handle_files_need_diagnostics(
     );
 
     for ingot in ingots_need_diagnostics {
+        // Test-only: trigger an induced panic to verify the catch_unwind
+        // recovery path. This lives here (not in diagnostics_for_ingot) so
+        // that unit tests calling diagnostics_for_ingot directly never
+        // interact with the latch — only the full LSP handler path does.
+        #[cfg(test)]
+        if crate::lsp_diagnostics::FORCE_DIAGNOSTIC_PANIC
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            panic!("__test_induced_diagnostic_panic__");
+        }
+
         // Wrap diagnostics computation in catch_unwind: analysis passes
         // (parsing, type checking, etc.) can panic on malformed intermediate
         // text during editing. Without this, a panic kills the Backend actor

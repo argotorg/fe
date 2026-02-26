@@ -23,14 +23,14 @@ use rustc_hash::FxHashMap;
 
 use crate::util::diag_to_lsp;
 
-/// Test-only latch: set to `true` to force the next `diagnostics_for_ingot`
-/// call to panic (simulating an analysis-pass crash). The flag is consumed
-/// atomically (swap to false), so only one call panics per arm.
+/// Test-only latch: set to `true` to force the next
+/// `handle_files_need_diagnostics` call to panic (simulating an analysis-pass
+/// crash). The flag is consumed atomically (swap to false), so only one call
+/// panics per arm.
 ///
-/// Safety assumption: only used inside `mock_lsp_scenarios`, which runs its
-/// scenario functions sequentially. If tests ever run in parallel this latch
-/// could be consumed by the wrong scenario and should be replaced with a
-/// per-ingot or per-connection signal.
+/// The check lives in `handle_files_need_diagnostics` (handlers.rs), not in
+/// `diagnostics_for_ingot`, so unit tests that call `diagnostics_for_ingot`
+/// directly never interact with the latch — only the mock LSP test path does.
 #[cfg(test)]
 pub(crate) static FORCE_DIAGNOSTIC_PANIC: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
@@ -48,11 +48,6 @@ pub trait LspDiagnostics {
 
 impl LspDiagnostics for DriverDataBase {
     fn diagnostics_for_ingot(&self, ingot: Ingot) -> FxHashMap<Url, Vec<Diagnostic>> {
-        #[cfg(test)]
-        if FORCE_DIAGNOSTIC_PANIC.swap(false, std::sync::atomic::Ordering::SeqCst) {
-            panic!("__test_induced_diagnostic_panic__");
-        }
-
         let t_total = std::time::Instant::now();
         let mut result = FxHashMap::<Url, Vec<Diagnostic>>::default();
         let mut pass_manager = initialize_analysis_pass();

@@ -617,13 +617,20 @@ pub contract Broken {
 /// pipeline must remain fully functional — error codes must still be emitted
 /// for code sent after the panic.
 async fn scenario_errors_reported_after_panic_recovery(client: &mut MockLspClient, uri: &Url) {
-    // Arm the latch: the next diagnostics_for_ingot call will panic.
+    // Arm the latch: the next handle_files_need_diagnostics call will panic.
     crate::lsp_diagnostics::FORCE_DIAGNOSTIC_PANIC.store(true, std::sync::atomic::Ordering::SeqCst);
 
-    // Trigger a diagnostics run; the actor will hit the panic and the outer
+    // Trigger a diagnostics run; the handler will hit the panic and the outer
     // catch_unwind in handle_files_need_diagnostics must absorb it.
     client.did_change(uri, 900, "struct TriggerDiag {}");
     client.settle(500).await;
+
+    // Verify the latch was actually consumed by this server and not stolen
+    // by a concurrent test. If this fires, the test is racy.
+    assert!(
+        !crate::lsp_diagnostics::FORCE_DIAGNOSTIC_PANIC.load(std::sync::atomic::Ordering::SeqCst),
+        "FORCE_DIAGNOSTIC_PANIC was not consumed — another test may have stolen it"
+    );
 
     // After the panic, send code with a deterministic error code.
     // If the panic killed the diagnostics actor, this will time out.
