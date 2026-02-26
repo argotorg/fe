@@ -1062,15 +1062,19 @@ impl<'db> Func<'db> {
         result.push_str("fn ");
 
         // Name
-        let name = unwrap_partial(self.name(db), "Func::name");
-        result.push_str(name.data(db));
+        match self.name(db) {
+            Partial::Present(name) => result.push_str(name.data(db)),
+            Partial::Absent => result.push_str("<anonymous>"),
+        }
 
         // Generic parameters
         result.push_str(&self.generic_params(db).pretty_print_params(db));
 
         // Parameters
-        let params = unwrap_partial(self.params_list(db), "Func::params_list");
-        result.push_str(&params.pretty_print(db));
+        match self.params_list(db) {
+            Partial::Present(params) => result.push_str(&params.pretty_print(db)),
+            Partial::Absent => result.push_str("(..)"),
+        }
 
         // Return type (comes before effects)
         if let Some(ret_ty) = self.ret_type_ref(db) {
