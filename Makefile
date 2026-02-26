@@ -70,4 +70,4 @@ push-tag:
 	./newsfragments/validate_files.py is-empty
 	# Tag the release with the current version number
 	git tag "v$$(cargo pkgid fe | cut -d# -f2 | cut -d: -f2)"
-	git push --tags upstream master
+	git push --tags upstream
