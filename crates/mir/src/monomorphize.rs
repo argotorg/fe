@@ -487,7 +487,11 @@ impl<'db> Monomorphizer<'db> {
                         }
 
                         let name = func.pretty_print_signature(self.db);
-                        panic!("failed to instantiate MIR for `{name}`");
+                        self.defer_error(MirLowerError::Unsupported {
+                            func_name: name,
+                            message: "failed to instantiate MIR".to_string(),
+                        });
+                        return;
                     };
                     Some(symbol)
                 }
