@@ -580,6 +580,10 @@ pub async fn handle_files_need_diagnostics(
         })) {
             Ok(map) => map,
             Err(panic_info) => {
+                // Salsa uses panics for query cancellation — never swallow them.
+                if panic_info.is::<salsa::Cancelled>() {
+                    std::panic::resume_unwind(panic_info);
+                }
                 let msg = panic_info
                     .downcast_ref::<&str>()
                     .copied()
