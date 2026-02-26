@@ -863,11 +863,18 @@ impl<'db> Monomorphizer<'db> {
             if base_args.len() < trait_arg_len {
                 let inst_desc = inst.pretty_print(self.db, false);
                 let name = method_name.data(self.db);
-                panic!(
-                    "trait method `{name}` args too short for `{inst_desc}`: got {}, expected at least {}",
-                    base_args.len(),
-                    trait_arg_len
-                );
+                self.defer_error(MirLowerError::Unsupported {
+                    func_name: self
+                        .current_symbol
+                        .clone()
+                        .unwrap_or_else(|| "<unknown function>".to_string()),
+                    message: format!(
+                        "trait method `{name}` args too short for `{inst_desc}`: got {}, expected at least {}",
+                        base_args.len(),
+                        trait_arg_len
+                    ),
+                });
+                return None;
             }
             if let Some((func, impl_args)) =
                 resolve_trait_method_instance(self.db, solve_cx, inst, method_name)
@@ -889,9 +896,13 @@ impl<'db> Monomorphizer<'db> {
                 .current_symbol
                 .as_deref()
                 .unwrap_or("<unknown function>");
-            panic!(
-                "failed to resolve trait method `{name}` for `{inst_desc}` while lowering `{current}` (no impl and no default)"
-            );
+            self.defer_error(MirLowerError::Unsupported {
+                func_name: current.to_string(),
+                message: format!(
+                    "failed to resolve trait method `{name}` for `{inst_desc}` (no impl and no default)"
+                ),
+            });
+            return None;
         }
 
         if let CallableDef::Func(func) = hir_target.callable_def {
@@ -903,7 +914,15 @@ impl<'db> Monomorphizer<'db> {
                 && matches!(item, ItemKind::Trait(_) | ItemKind::ImplTrait(_))
             {
                 let name = func.pretty_print_signature(self.db);
-                panic!("unresolved trait method `{name}` during monomorphization");
+                let current = self
+                    .current_symbol
+                    .as_deref()
+                    .unwrap_or("<unknown function>");
+                self.defer_error(MirLowerError::Unsupported {
+                    func_name: current.to_string(),
+                    message: format!("unresolved trait method `{name}` during monomorphization"),
+                });
+                return None;
             }
             return Some((CallTarget::Decl(func), base_args));
         }
