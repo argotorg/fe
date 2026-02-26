@@ -701,8 +701,7 @@ async fn run_lsp_with_combined_server(resolved_root: Option<Utf8PathBuf>, port: 
     // Uses a read-only salsa snapshot — the Backend's db is already initialized
     // with all ingots/files, so we enumerate from the snapshot's dependency graph
     // and workspace rather than re-discovering from disk.
-    let doc_regenerate_fn: language_server::DocRegenerateFn =
-        Arc::new(|db| regenerate_doc_data_from_db(db));
+    let doc_regenerate_fn: language_server::DocRegenerateFn = Arc::new(regenerate_doc_data_from_db);
 
     let config = language_server::CombinedServerConfig {
         listener,

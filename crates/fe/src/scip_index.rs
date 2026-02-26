@@ -294,12 +294,7 @@ pub fn generate_scip(
     // targets that appear in this ingot's scope graphs.  Here we iterate
     // remaining targets in foreign ingots and emit reference occurrences
     // so that cross-ingot type usages are visible in the SCIP data.
-    emit_cross_ingot_references(
-        db,
-        &ctx,
-        &file_relative_paths,
-        &mut documents,
-    );
+    emit_cross_ingot_references(db, &ctx, &file_relative_paths, &mut documents);
 
     let mut index = types::Index::new();
     index.metadata = Some(types::Metadata {
@@ -648,7 +643,10 @@ fn scope_to_scip_symbol<'db>(
             let param_name = scope.name(db)?;
             Some(format!("{}[{}]", parent_sym, param_name.data(db)))
         }
-        ScopeId::Field(_, _) | ScopeId::Variant(_) | ScopeId::TraitType(_, _) | ScopeId::TraitConst(_, _) => {
+        ScopeId::Field(_, _)
+        | ScopeId::Variant(_)
+        | ScopeId::TraitType(_, _)
+        | ScopeId::TraitConst(_, _) => {
             let parent_item = scope.item();
             let (parent_sym, _) = item_symbol(db, parent_item, ingot_name, ingot_version)?;
             let child_name = scope.name(db)?;
@@ -680,23 +678,20 @@ fn emit_cross_ingot_references<'db>(
             continue;
         }
 
-        let (target_name, target_version) = ingot_meta
-            .entry(target_ingot)
-            .or_insert_with(|| {
-                let name = target_ingot
-                    .config(db)
-                    .and_then(|c| c.metadata.name)
-                    .map(|n| n.to_string())
-                    .unwrap_or_else(|| "unknown".to_string());
-                let version = target_ingot
-                    .version(db)
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|| "0.0.0".to_string());
-                (name, version)
-            });
+        let (target_name, target_version) = ingot_meta.entry(target_ingot).or_insert_with(|| {
+            let name = target_ingot
+                .config(db)
+                .and_then(|c| c.metadata.name)
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+            let version = target_ingot
+                .version(db)
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "0.0.0".to_string());
+            (name, version)
+        });
 
-        let Some(symbol) =
-            scope_to_scip_symbol(db, target_scope, target_name, target_version)
+        let Some(symbol) = scope_to_scip_symbol(db, target_scope, target_name, target_version)
         else {
             continue;
         };
@@ -869,8 +864,7 @@ pub fn inject_doc_urls(scip_json: &str, doc_index: &DocIndex) -> String {
         for child in &item.children {
             let anchor = format!("{}.{}", child.kind.anchor_prefix(), child.name);
             let url = format!("{}~{}", parent_url, anchor);
-            qualified_child_to_url
-                .insert(format!("{}::{}", item.path, child.name), url.clone());
+            qualified_child_to_url.insert(format!("{}::{}", item.path, child.name), url.clone());
             child_to_url.insert(child.name.clone(), url);
         }
         // Also include methods from trait impl blocks
@@ -909,11 +903,7 @@ pub fn inject_doc_urls(scip_json: &str, doc_index: &DocIndex) -> String {
                 // to have a parent module in SCIP (e.g. core::option::Option).
                 let doc_url = qualified
                     .as_deref()
-                    .and_then(|q| {
-                        qualified_child_to_url
-                            .get(q)
-                            .or_else(|| path_to_url.get(q))
-                    })
+                    .and_then(|q| qualified_child_to_url.get(q).or_else(|| path_to_url.get(q)))
                     .cloned()
                     .or_else(|| {
                         if has_enclosing {
@@ -924,10 +914,7 @@ pub fn inject_doc_urls(scip_json: &str, doc_index: &DocIndex) -> String {
                     })
                     .or_else(|| name_to_url.get(name.as_str()).cloned());
                 if let Some(url) = doc_url {
-                    obj.insert(
-                        "doc_url".to_string(),
-                        serde_json::Value::String(url),
-                    );
+                    obj.insert("doc_url".to_string(), serde_json::Value::String(url));
                 }
             }
         }
@@ -960,7 +947,7 @@ fn scip_symbol_to_qualified_path(sym: &str) -> Option<String> {
     while !current.is_empty() {
         // Find the next descriptor suffix: / # . ( [
         let end = current
-            .find(|c: char| matches!(c, '/' | '#' | '.' | '(' | '['))
+            .find(['/', '#', '.', '(', '['])
             .unwrap_or(current.len());
         if end > 0 {
             path_parts.push(&current[..end]);
@@ -1776,9 +1763,6 @@ fn make_point() -> Point {
             Some("Foo".into())
         );
         // Empty descriptor part
-        assert_eq!(
-            scip_symbol_to_qualified_path("fe fe pkg 1.0 "),
-            None
-        );
+        assert_eq!(scip_symbol_to_qualified_path("fe fe pkg 1.0 "), None);
     }
 }

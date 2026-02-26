@@ -77,10 +77,7 @@ async fn handle_ws_lsp_client(
     let writer = LspToWsWriter::new(ws_sink);
 
     let (server, client) = async_lsp::MainLoop::new_server(|client| {
-        let lsp_service = setup(
-            client.clone(),
-            format!("LSP WS actor for {peer}"),
-        );
+        let lsp_service = setup(client.clone(), format!("LSP WS actor for {peer}"));
         ServiceBuilder::new()
             .layer(LifecycleLayer::default())
             .layer(CatchUnwindLayer::default())
@@ -218,7 +215,10 @@ impl LspToWsWriter {
                 }
             }
         });
-        Self { tx, buf: Vec::new() }
+        Self {
+            tx,
+            buf: Vec::new(),
+        }
     }
 }
 

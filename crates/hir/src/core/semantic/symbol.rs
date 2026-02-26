@@ -229,9 +229,9 @@ impl<'db> SymbolView<'db> {
         let text = span.file.text(db);
         let offset: usize = span.range.start().into();
         let (line, col) = byte_offset_to_line_col(text, offset);
-        let file_path = span.file.url(db)?.to_file_path().ok()?;
+        let file_url = span.file.url(db)?;
         Some(SourceLocation {
-            file: file_path.to_string_lossy().into_owned(),
+            file: file_url.path().to_string(),
             line: line as u32,
             column: col as u32,
         })

@@ -142,11 +142,17 @@ pub fn discover_and_init(db: &mut DriverDataBase, root_url: &Url) -> DiscoveredP
             let path = entry.path();
             if path.is_dir() {
                 // Skip hidden dirs like .solutions
-                if path.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.')) {
+                if path
+                    .file_name()
+                    .is_some_and(|n| n.to_string_lossy().starts_with('.'))
+                {
                     continue;
                 }
                 // Skip symlinks to avoid infinite recursion on cyclic links
-                if path.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink()) {
+                if path
+                    .symlink_metadata()
+                    .is_ok_and(|m| m.file_type().is_symlink())
+                {
                     continue;
                 }
                 if path.join("fe.toml").is_file() {
@@ -774,11 +780,7 @@ mod tests {
         let root = tmp.path();
 
         // Create a workspace with empty members
-        std::fs::write(
-            root.join("fe.toml"),
-            "[workspace]\nmembers = []\n",
-        )
-        .unwrap();
+        std::fs::write(root.join("fe.toml"), "[workspace]\nmembers = []\n").unwrap();
 
         // Create a child ingot that should be discovered by downward scan
         let child = root.join("packages").join("child");
@@ -812,7 +814,7 @@ mod tests {
         // Create a directory with a cyclic symlink
         let subdir = root.join("lessons");
         std::fs::create_dir_all(&subdir).unwrap();
-        std::os::unix::fs::symlink(&root, subdir.join("loop")).unwrap();
+        std::os::unix::fs::symlink(root, subdir.join("loop")).unwrap();
 
         // Create a standalone .fe file to prove we still scan non-symlink entries
         std::fs::write(root.join("hello.fe"), "pub fn hello() {}").unwrap();

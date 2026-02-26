@@ -247,10 +247,13 @@ pub fn hover_helper(
     let resolution = r.target_at(db, cursor);
 
     // Extract doc path from the first scope target (for fe/navigate)
-    let doc_path = resolution.as_slice().iter().find_map(|target| match target {
-        Target::Scope(scope) => hir::semantic::scope_to_doc_path(db, *scope),
-        Target::Local { .. } => None,
-    });
+    let doc_path = resolution
+        .as_slice()
+        .iter()
+        .find_map(|target| match target {
+            Target::Scope(scope) => hir::semantic::scope_to_doc_path(db, *scope),
+            Target::Local { .. } => None,
+        });
 
     // Compute the hover range from the reference span at the cursor position.
     // For paths, use the specific segment span containing the cursor.

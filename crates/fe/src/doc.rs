@@ -27,7 +27,10 @@ impl LspServerInfo {
     }
 
     /// Write server info to the workspace root.
-    pub(crate) fn write_to_workspace(&self, workspace_root: &std::path::Path) -> std::io::Result<()> {
+    pub(crate) fn write_to_workspace(
+        &self,
+        workspace_root: &std::path::Path,
+    ) -> std::io::Result<()> {
         let info_path = workspace_root.join(".fe-lsp.json");
         let json = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
         std::fs::write(&info_path, json)
@@ -99,10 +102,10 @@ pub fn generate_docs(
         let found = start_dir.and_then(|dir| {
             let mut current = dir.as_path();
             loop {
-                if let Some(info) = LspServerInfo::read_from_workspace(current) {
-                    if info.is_alive() {
-                        return info.docs_url.clone();
-                    }
+                if let Some(info) = LspServerInfo::read_from_workspace(current)
+                    && info.is_alive()
+                {
+                    return info.docs_url.clone();
                 }
                 current = current.parent()?;
             }
@@ -621,7 +624,6 @@ fn detect_source_link_base(working_dir: &std::path::Path) -> Option<String> {
 
     Some(format!("{}/blob/{}", CANONICAL_REPO, commit))
 }
-
 
 fn print_doc_summary(index: &DocIndex) {
     println!("Fe Documentation Index");

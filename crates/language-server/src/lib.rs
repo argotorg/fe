@@ -129,10 +129,7 @@ pub async fn run_tcp_server(port: u16, timeout: Duration) {
         let connections_count = Arc::clone(&connections_count);
         let task = async move {
             let (server, client) = async_lsp::MainLoop::new_server(|client| {
-                let router = setup(
-                    client.clone(),
-                    format!("LSP actor for {client_address}"),
-                );
+                let router = setup(client.clone(), format!("LSP actor for {client_address}"));
                 ServiceBuilder::new()
                     .layer(LifecycleLayer::default())
                     .layer(CatchUnwindLayer::default())

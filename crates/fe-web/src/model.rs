@@ -698,11 +698,7 @@ impl DocIndex {
                     if trait_matches && let Some(impls) = impls {
                         // Only add if not already present (dedup by type_url, not name)
                         for imp in impls {
-                            if !item
-                                .implementors
-                                .iter()
-                                .any(|i| i.type_url == imp.type_url)
-                            {
+                            if !item.implementors.iter().any(|i| i.type_url == imp.type_url) {
                                 item.implementors.push(imp.clone());
                             }
                         }
@@ -1109,7 +1105,11 @@ mod tests {
             2,
             "both a::Foo and b::Foo should appear as implementors"
         );
-        let urls: Vec<&str> = display.implementors.iter().map(|i| i.type_url.as_str()).collect();
+        let urls: Vec<&str> = display
+            .implementors
+            .iter()
+            .map(|i| i.type_url.as_str())
+            .collect();
         assert!(urls.contains(&"a::Foo/struct"));
         assert!(urls.contains(&"b::Foo/struct"));
     }
