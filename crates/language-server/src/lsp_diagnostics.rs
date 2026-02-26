@@ -58,6 +58,7 @@ impl LspDiagnostics for DriverDataBase {
             .filter(|(_, f)| matches!(f.kind(self), Some(IngotFileKind::Source)))
             .count();
 
+        let mut hir_has_errors = false;
         for (url, file) in ingot_files.iter() {
             if !matches!(file.kind(self), Some(IngotFileKind::Source)) {
                 continue;
@@ -80,6 +81,12 @@ impl LspDiagnostics for DriverDataBase {
                 .iter()
                 .map(|d| d.to_complete(self).clone())
                 .collect();
+            if finalized_diags
+                .iter()
+                .any(|d| d.severity == common::diagnostics::Severity::Error)
+            {
+                hir_has_errors = true;
+            }
             finalized_diags.sort_by(cmp_complete_diagnostics);
             for diag in finalized_diags {
                 let lsp_diags = diag_to_lsp(self, diag).clone();
@@ -91,9 +98,9 @@ impl LspDiagnostics for DriverDataBase {
         }
 
         let t_mir = std::time::Instant::now();
-        // Skip MIR diagnostics for ingots with no modules (e.g. deleted ingots
-        // that are still referenced in the dependency graph).
-        let mut mir_diags = if ingot.module_tree(self).root_data().is_some() {
+        // Skip MIR diagnostics when HIR already has errors: MIR assumes HIR is
+        // sound and panics on broken input. Also skip for ingots with no modules.
+        let mut mir_diags = if !hir_has_errors && ingot.module_tree(self).root_data().is_some() {
             self.mir_diagnostics_for_ingot(ingot, MirDiagnosticsMode::TemplatesOnly)
         } else {
             Vec::new()
