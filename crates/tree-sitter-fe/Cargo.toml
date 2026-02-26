@@ -1,7 +1,7 @@
 [package]
 name = "tree-sitter-fe"
 description = "Fe language grammar for tree-sitter"
-version = "26.0.0-alpha.7"
+version = "26.0.0-alpha.8"
 authors = ["Fe Language Team"]
 license = "MIT"
 keywords = ["incremental", "parsing", "tree-sitter", "fe"]

@@ -1,6 +1,6 @@
 [package]
 name = "fe-solc-runner"
-version = "26.0.0-alpha.7"
+version = "26.0.0-alpha.8"
 edition = "2024"
 
 [dependencies]
