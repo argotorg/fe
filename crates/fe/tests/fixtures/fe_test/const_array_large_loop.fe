@@ -19,6 +19,9 @@ const ARR: [u256; 128] = [
     121, 122, 123, 124, 125, 126, 127, 128,
 ]
 
+const IDX: [usize; 4] = [1, 2, 3, 0]
+const NEG: [i8; 2] = [-1, 2]
+
 #[test]
 fn test_const_array_loop() {
     let mut sum: u256 = 0
@@ -31,4 +34,25 @@ fn test_const_array_loop() {
     }
     assert(sum == 8256)
     assert(sum2 == 8256)
+}
+
+#[test]
+fn test_const_array_index_self_assign() {
+    let mut i: usize = 1
+    i = IDX[i]
+    assert(i == 2)
+    i = IDX[i]
+    assert(i == 3)
+    i = IDX[i]
+    assert(i == 0)
+}
+
+#[test]
+fn test_const_array_signed_load() {
+    let mut i: usize = 0
+    let mut x: i8 = NEG[i]
+    assert(x == -1)
+    i = 1
+    x = NEG[i]
+    assert(x == 2)
 }

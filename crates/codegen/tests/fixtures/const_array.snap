@@ -12,15 +12,15 @@ object "main" {
       }
       mstore(0x40, add(v0, 32))
       datacopy(v0, add(dataoffset("data_sum_two_0"), mul($i, 32)), 32)
-      v0 := mload(v0)
-      let v1 := mload(0x40)
-      if iszero(v1) {
-        v1 := 0x80
+      let v1 := mload(v0)
+      let v2 := mload(0x40)
+      if iszero(v2) {
+        v2 := 0x80
       }
-      mstore(0x40, add(v1, 32))
-      datacopy(v1, add(dataoffset("data_sum_two_0"), mul($j, 32)), 32)
-      v1 := mload(v1)
-      ret := add(v0, v1)
+      mstore(0x40, add(v2, 32))
+      datacopy(v2, add(dataoffset("data_sum_two_0"), mul($j, 32)), 32)
+      let v3 := mload(v2)
+      ret := add(v1, v3)
       leave
     }
   }

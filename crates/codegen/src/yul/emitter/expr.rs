@@ -392,7 +392,7 @@ impl<'db> FunctionEmitter<'db> {
     ///
     /// NOTE: This is a single source of truth for codegen. If the stdlib word
     /// conversion semantics change, this function must be updated to match.
-    fn apply_from_word_conversion(&self, raw_load: &str, ty: TyId<'db>) -> String {
+    pub(super) fn apply_from_word_conversion(&self, raw_load: &str, ty: TyId<'db>) -> String {
         let ty = mir::repr::word_conversion_leaf_ty(self.db, ty);
         let base_ty = ty.base_ty(self.db);
         if let TyData::TyBase(TyBase::Prim(prim)) = base_ty.data(self.db) {

@@ -19,8 +19,8 @@ object "main" {
         }
         mstore(0x40, add(v3, 32))
         datacopy(v3, add(dataoffset("data_sum_loop_0"), mul(v2, 32)), 32)
-        v3 := mload(v3)
-        v1 := add(v1, v3)
+        let v4 := mload(v3)
+        v1 := add(v1, v4)
         v0 := add(v0, 1)
       }
       ret := v1

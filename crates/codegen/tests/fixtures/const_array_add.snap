@@ -12,8 +12,8 @@ object "main" {
       }
       mstore(0x40, add(v0, 32))
       datacopy(v0, dataoffset("data_get_sum_0"), 32)
-      v0 := mload(v0)
-      ret := add(1, v0)
+      let v1 := mload(v0)
+      ret := add(1, v1)
       leave
     }
   }

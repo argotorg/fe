@@ -328,12 +328,19 @@ impl<'db> FunctionEmitter<'db> {
             }
         };
 
-        let (yul_name, declared) = self.resolve_local_for_write(dest, state)?;
-        self.emit_alloc_value(docs, &yul_name, elem_size.max(32), declared);
+        let copy_ptr = state.alloc_local();
+        self.emit_alloc_value(docs, &copy_ptr, elem_size.max(32), true);
         docs.push(YulDoc::line(format!(
-            "datacopy({yul_name}, {src_offset}, {elem_size})"
+            "datacopy({copy_ptr}, {src_offset}, {elem_size})"
         )));
-        docs.push(YulDoc::line(format!("{yul_name} := mload({yul_name})")));
+        let ty = self.mir_func.body.local(dest).ty;
+        let loaded = self.apply_from_word_conversion(&format!("mload({copy_ptr})"), ty);
+        let (yul_name, declared) = self.resolve_local_for_write(dest, state)?;
+        if declared {
+            docs.push(YulDoc::line(format!("let {yul_name} := {loaded}")));
+        } else {
+            docs.push(YulDoc::line(format!("{yul_name} := {loaded}")));
+        }
         Ok(())
     }
 
