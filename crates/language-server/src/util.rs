@@ -185,23 +185,6 @@ fn to_lsp_location_from_span(
     Ok(async_lsp::lsp_types::Location { uri: url, range })
 }
 
-/// Build a `command:fe.openDocs?...` URI string for the given documentation path.
-///
-/// The arguments are percent-encoded so VS Code can decode them as a JSON array
-/// `["doc_path"]` when invoking the `fe.openDocs` execute-command.
-pub fn doc_command_uri(doc_path: &str) -> String {
-    let encoded: String = doc_path
-        .bytes()
-        .map(|b| match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' => {
-                (b as char).to_string()
-            }
-            _ => format!("%{b:02X}"),
-        })
-        .collect();
-    format!("command:fe.openDocs?%5B%22{encoded}%22%5D")
-}
-
 /// Convert a lazy span to an LSP location.
 ///
 /// Returns an error if the span cannot be resolved or if the location cannot be created.

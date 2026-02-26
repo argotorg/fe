@@ -721,13 +721,14 @@ pub async fn handle_hover_request(
     });
 
     if let Some(path) = doc_path {
-        // Append an "Open docs" link when the doc server is running
-        if backend.docs_url.is_some() {
+        // Append an "Open docs" link when the doc server is running.
+        // Use the real HTTP URL — command: URIs are stripped by VS Code in LSP hover.
+        if let Some(base) = &backend.docs_url {
             if let Some(hover) = response.as_mut() {
                 use async_lsp::lsp_types::HoverContents;
                 if let HoverContents::Markup(mc) = &mut hover.contents {
-                    let uri = crate::util::doc_command_uri(&path);
-                    mc.value.push_str(&format!("\n\n[Open docs →]({uri})"));
+                    let url = format!("{base}#{path}");
+                    mc.value.push_str(&format!("\n\n[Open docs →]({url})"));
                 }
             }
         }
