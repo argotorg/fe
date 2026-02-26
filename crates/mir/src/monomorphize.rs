@@ -734,7 +734,7 @@ impl<'db> Monomorphizer<'db> {
                 assumptions,
             };
             let typed_body = typed_body.fold_with(self.db, &mut normalizer);
-            let mut instance = lower_function(
+            let mut instance = match lower_function(
                 self.db,
                 func,
                 typed_body,
@@ -742,11 +742,13 @@ impl<'db> Monomorphizer<'db> {
                 normalized_args.clone(),
                 normalized_effect_param_space_overrides.clone(),
                 normalized_param_capability_space_overrides.clone(),
-            )
-            .unwrap_or_else(|err| {
-                let name = func.pretty_print_signature(self.db);
-                panic!("failed to instantiate MIR for `{name}`: {err}");
-            });
+            ) {
+                Ok(instance) => instance,
+                Err(err) => {
+                    self.defer_error(err);
+                    return None;
+                }
+            };
             instance.receiver_space = receiver_space;
             instance.symbol_name = symbol_name.clone();
             instance
