@@ -1,0 +1,31 @@
+---
+source: crates/codegen/tests/yul.rs
+expression: output
+input_file: tests/fixtures/cast_u8_usize_cmp.fe
+---
+function $cast_u8_usize_cmp($indices, $i, $j) -> ret {
+  let v0 := and(mload(add($indices, mul($i, 32))), 0xff)
+  let v1 := lt($j, v0)
+  if v1 {
+    ret := 1
+    leave
+  }
+  if iszero(v1) {
+    let v2 := eq($j, v0)
+    if v2 {
+      ret := 2
+      leave
+    }
+    if iszero(v2) {
+      let v3 := gt($j, v0)
+      if v3 {
+        ret := 3
+        leave
+      }
+      if iszero(v3) {
+        ret := 0
+        leave
+      }
+    }
+  }
+}
