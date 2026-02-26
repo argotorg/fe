@@ -124,8 +124,16 @@ pub fn diag_to_lsp(
     let Some(primary_span) = diag.primary_span() else {
         return result;
     };
-    let Ok(primary_location) = to_lsp_location_from_span(db, primary_span) else {
-        return result;
+    let primary_location = match to_lsp_location_from_span(db, primary_span) {
+        Ok(loc) => loc,
+        Err(e) => {
+            tracing::warn!(
+                "dropping diagnostic {:?} ({}): failed to resolve primary span: {e}",
+                diag.error_code,
+                diag.message,
+            );
+            return result;
+        }
     };
 
     diag.sub_diagnostics.into_iter().for_each(|sub| {

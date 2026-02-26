@@ -23,6 +23,13 @@ use rustc_hash::FxHashMap;
 
 use crate::util::diag_to_lsp;
 
+/// Test-only latch: set to `true` to force the next `diagnostics_for_ingot`
+/// call to panic (simulating an analysis-pass crash). The flag is consumed
+/// atomically (swap to false), so only one call panics per arm.
+#[cfg(test)]
+pub(crate) static FORCE_DIAGNOSTIC_PANIC: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Wrapper type to implement codespan Files trait
 #[allow(dead_code)]
 pub struct LspDb<'a>(pub &'a DriverDataBase);
@@ -36,6 +43,11 @@ pub trait LspDiagnostics {
 
 impl LspDiagnostics for DriverDataBase {
     fn diagnostics_for_ingot(&self, ingot: Ingot) -> FxHashMap<Url, Vec<Diagnostic>> {
+        #[cfg(test)]
+        if FORCE_DIAGNOSTIC_PANIC.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            panic!("__test_induced_diagnostic_panic__");
+        }
+
         let t_total = std::time::Instant::now();
         let mut result = FxHashMap::<Url, Vec<Diagnostic>>::default();
         let mut pass_manager = initialize_analysis_pass();
