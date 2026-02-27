@@ -43,42 +43,7 @@ fn match_imported_variants(tag: Tag) -> u8 {
     }
 }
 
-// Test 3: Unreachable pattern with imported variants
-fn match_with_unreachable_imported(tag: Tag) -> u8 {
-    use Tag::*
-    
-    match tag {
-        Tag1 => {
-            return 1
-        }
-        _ => {
-            return 0
-        }
-        // If imported variants are treated as wildcards, the compiler
-        // should correctly identify these as unreachable
-        Tag2 => {
-            return 2
-        }
-    }
-}
-
-// Test 4: Unreachable pattern with fully qualified paths
-fn match_with_unreachable_full_path(tag: Tag) -> u8 {
-    match tag {
-        Tag::Tag1 => {
-            return 1
-        }
-        _ => {
-            return 0
-        }
-        // This should be identified as unreachable regardless
-        Tag::Tag2 => {
-            return 2
-        }
-    }
-}
-
-// Test 5: Matching with tuple variant using imported name
+// Test 3: Matching with tuple variant using imported name
 fn match_imported_tuple_variant(c: Color) -> u8 {
     use Color::*
     

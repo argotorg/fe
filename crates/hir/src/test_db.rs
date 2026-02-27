@@ -197,64 +197,12 @@ impl HirAnalysisTestDb {
         let mut manager = initialize_analysis_pass();
         let diags = manager.run_on_module(self, top_mod);
 
-        // Filter diagnostics based on file paths found in the diagnostic spans
-        let filtered_diags: Vec<_> = diags
-            .into_iter()
-            .filter(|diag_box| {
-                let complete_diag = diag_box.to_complete(self);
-
-                // If it's not an unreachable pattern warning, keep it
-                if complete_diag.error_code.pass != common::diagnostics::DiagnosticPass::TyCheck
-                    || complete_diag.error_code.local_code != 35
-                {
-                    return true;
-                }
-
-                // Extract the file path from the primary span's file
-                let Some(span) = complete_diag.primary_span() else {
-                    return true;
-                };
-                let file_path = span
-                    .file
-                    .path(self)
-                    .as_ref()
-                    .map(|p| p.as_str().to_string());
-
-                // Define problematic files where we filter unreachable patterns
-                let problematic_ty_check_files = [
-                    "minimal_variant_paths.fe",
-                    "custom_imported_variants.fe",
-                    "patterns_comparison.fe",
-                    "ret.fe",
-                ];
-
-                // Check if this is a file where we should filter the warning
-                if let Some(path) = file_path {
-                    // Don't filter warnings from match_stmt.fe as those are intentional test cases
-                    // unless they're in a directory specifically testing unreachability
-                    if path.contains("match_stmt.fe") && !path.contains("unreachable/") {
-                        return true;
-                    }
-
-                    let should_filter = problematic_ty_check_files
-                        .iter()
-                        .any(|name| path.contains(name))
-                        && !path.contains("unreachable/");
-
-                    // If it's a problematic file, filter out the unreachable pattern warning
-                    return !should_filter;
-                }
-
-                true
-            })
-            .collect();
-
-        if !filtered_diags.is_empty() {
+        if !diags.is_empty() {
             let writer = BufferWriter::stderr(ColorChoice::Auto);
             let mut buffer = writer.buffer();
             let config = term::Config::default();
 
-            let mut diags: Vec<_> = filtered_diags.iter().map(|d| d.to_complete(self)).collect();
+            let mut diags: Vec<_> = diags.iter().map(|d| d.to_complete(self)).collect();
             diags.sort_by(cmp_complete_diagnostics);
 
             for diag in diags {
