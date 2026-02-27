@@ -301,7 +301,8 @@ pub fn emit_test_module_yul_with_layout(
     top_mod: TopLevelMod<'_>,
     layout: TargetDataLayout,
 ) -> Result<TestModuleOutput, EmitModuleError> {
-    let module = lower_module(db, top_mod).map_err(EmitModuleError::MirLower)?;
+    let ingot = top_mod.ingot(db);
+    let module = lower_ingot(db, ingot).map_err(EmitModuleError::MirLower)?;
 
     let contract_graph = build_contract_graph(&module.functions);
 
