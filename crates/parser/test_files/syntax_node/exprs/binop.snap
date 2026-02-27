@@ -3,7 +3,7 @@ source: crates/parser/tests/syntax_node.rs
 expression: node
 input_file: test_files/syntax_node/exprs/binop.fe
 ---
-Root@0..214
+Root@0..204
   BinExpr@0..9
     LitExpr@0..1
       Lit@0..1
@@ -274,51 +274,37 @@ Root@0..214
         PathSegment@172..173
           Ident@172..173 "b"
   Newline@173..174 "\n"
-  BinExpr@174..183
-    PathExpr@174..175
-      Path@174..175
-        PathSegment@174..175
-          Ident@174..175 "a"
-    Newline@175..176 "\n"
-    WhiteSpace@176..180 "    "
-    Lt@180..181 "<"
-    WhiteSpace@181..182 " "
-    PathExpr@182..183
-      Path@182..183
-        PathSegment@182..183
-          Ident@182..183 "b"
-  Newline@183..184 "\n"
-  BinExpr@184..201
-    LitExpr@184..188
-      Lit@184..188
-        TrueKw@184..188 "true"
-    Newline@188..189 "\n"
-    WhiteSpace@189..193 "    "
-    Pipe2@193..195 "||"
-    WhiteSpace@195..196 " "
-    LitExpr@196..201
-      Lit@196..201
-        FalseKw@196..201 "false"
-  Newline@201..202 "\n"
-  FieldExpr@202..207
-    FieldExpr@202..205
-      PathExpr@202..203
-        Path@202..203
-          PathSegment@202..203
-            Ident@202..203 "a"
-      Dot@203..204 "."
-      Ident@204..205 "b"
-    Dot@205..206 "."
-    Ident@206..207 "c"
-  Newline@207..208 "\n"
-  FieldExpr@208..213
-    FieldExpr@208..211
-      PathExpr@208..209
-        Path@208..209
-          PathSegment@208..209
-            Ident@208..209 "a"
-      Dot@209..210 "."
-      Int@210..211 "0"
-    Dot@211..212 "."
-    Ident@212..213 "c"
-  Newline@213..214 "\n"
+  BinExpr@174..191
+    LitExpr@174..178
+      Lit@174..178
+        TrueKw@174..178 "true"
+    Newline@178..179 "\n"
+    WhiteSpace@179..183 "    "
+    Pipe2@183..185 "||"
+    WhiteSpace@185..186 " "
+    LitExpr@186..191
+      Lit@186..191
+        FalseKw@186..191 "false"
+  Newline@191..192 "\n"
+  FieldExpr@192..197
+    FieldExpr@192..195
+      PathExpr@192..193
+        Path@192..193
+          PathSegment@192..193
+            Ident@192..193 "a"
+      Dot@193..194 "."
+      Ident@194..195 "b"
+    Dot@195..196 "."
+    Ident@196..197 "c"
+  Newline@197..198 "\n"
+  FieldExpr@198..203
+    FieldExpr@198..201
+      PathExpr@198..199
+        Path@198..199
+          PathSegment@198..199
+            Ident@198..199 "a"
+      Dot@199..200 "."
+      Int@200..201 "0"
+    Dot@201..202 "."
+    Ident@202..203 "c"
+  Newline@203..204 "\n"

@@ -143,37 +143,6 @@ static bool scan_automatic_semicolon(TSLexer *lexer) {
       return lexer->lookahead != '=';
     }
 
-    if (c == '<') {
-      // Disambiguate newline-start `<` without consuming too much input:
-      // - `< x` continues previous expression (emit COMPARISON_LT).
-      // - `<=` / `<<` continue previous expression (handled by internal lexer).
-      // - `<T...` / `<<T...` start a new qualified-path expression statement.
-      advance(lexer);
-      int32_t next = lexer->lookahead;
-
-      if (next == '=') return false;
-
-      if (next == '<') {
-        advance(lexer);
-        int32_t after_shift = lexer->lookahead;
-        if (after_shift == '=' ||
-            after_shift == ' ' || after_shift == '\t' ||
-            after_shift == '\r' || after_shift == '\n' ||
-            after_shift == '/') {
-          return false;
-        }
-        return true;
-      }
-
-      if (next == ' ' || next == '\t' || next == '\r' || next == '\n' || next == '/') {
-        lexer->result_symbol = COMPARISON_LT;
-        lexer->mark_end(lexer);
-        return true;
-      }
-
-      return true;
-    }
-
     // Any other token after a newline -- insert semicolon
     return true;
   }

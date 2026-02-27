@@ -68,6 +68,13 @@ fn parse_expr_with_min_bp<S: TokenStream>(
             ));
             break;
         }
+        if min_bp == 0
+            && kind == SyntaxKind::Lt
+            && has_line_break_before(parser)
+            && is_line_start_qualified_type(parser)
+        {
+            break;
+        }
 
         // Parse postfix operators.
         match postfix_binding_power(parser) {
@@ -201,10 +208,6 @@ fn infix_binding_power<S: TokenStream>(parser: &mut Parser<S>) -> Option<(u8, u8
         Amp2 => (60, 61),
         NotEq | Eq2 => (70, 71),
         Lt => {
-            if has_line_break_before(parser) && is_qualified_type(parser) {
-                parser.set_newline_as_trivia(is_trivia);
-                return None;
-            }
             if is_lshift(parser) {
                 (110, 111)
             } else {
@@ -493,6 +496,13 @@ fn has_line_break_before<S: TokenStream>(parser: &mut Parser<S>) -> bool {
     let has_line_break = parser.current_kind() == Some(SyntaxKind::Newline);
     parser.set_newline_as_trivia(nt);
     has_line_break
+}
+
+fn is_line_start_qualified_type<S: TokenStream>(parser: &mut Parser<S>) -> bool {
+    let nt = parser.set_newline_as_trivia(true);
+    let is_qualified = parser.current_kind() == Some(SyntaxKind::Lt) && is_qualified_type(parser);
+    parser.set_newline_as_trivia(nt);
+    is_qualified
 }
 
 fn bump_bin_op<S: TokenStream>(parser: &mut Parser<S>) {

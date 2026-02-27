@@ -1,0 +1,10 @@
+fn f() {
+    x
+    <T as Foo>::bar()
+
+    x
+    < T as Foo >::bar()
+
+    x
+    <<T as Foo>::Assoc as Bar>::baz()
+}
