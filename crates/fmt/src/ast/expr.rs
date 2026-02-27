@@ -1145,7 +1145,13 @@ impl ToDoc for ast::WithParam {
 
         let path = match self.path() {
             Some(p) => p.to_doc(ctx),
-            None => return alloc.nil(),
+            None => {
+                // Shorthand form: `with (expr)` — no key path, just a value.
+                return match self.value_expr() {
+                    Some(v) => v.to_doc(ctx),
+                    None => alloc.nil(),
+                };
+            }
         };
         let value = match self.value_expr() {
             Some(v) => v.to_doc(ctx),

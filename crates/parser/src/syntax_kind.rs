@@ -12,7 +12,7 @@ pub enum SyntaxKind {
 
     #[regex(r"(\n|\r\n|\r)+")]
     Newline,
-    #[regex(r"[ ]+")]
+    #[regex(r"[ \t]+")]
     WhiteSpace,
     /// `foo`
     #[regex("[a-zA-Z_][a-zA-Z0-9_]*")]
