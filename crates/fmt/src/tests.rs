@@ -56,3 +56,16 @@ fn test_takes_array_single_param() {
     let result = crate::format_str(source, &config).unwrap();
     assert_eq!(result, "fn takes_array(arr: Array<i32, 10>) {}");
 }
+
+#[test]
+fn test_with_shorthand_preserves_content() {
+    // Regression: `with (expr)` shorthand (no `Key = value`) was silently
+    // deleted because WithParam::to_doc only looked for a Path child.
+    let source = "fn test() {\n    with (counter) {\n        bump_twice()\n    }\n}\n";
+    let config = crate::Config::default();
+    let result = crate::format_str(source, &config).unwrap();
+    assert!(
+        result.contains("counter"),
+        "formatter deleted with-param content! got:\n{result}"
+    );
+}

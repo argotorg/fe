@@ -1,0 +1,3 @@
+fn f()	uses	Ctx {}
+
+fn g()	uses	(Foo, Bar) {}

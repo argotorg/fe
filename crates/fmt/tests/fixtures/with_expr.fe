@@ -1,0 +1,17 @@
+fn keyed() {
+    with (Counter = counter) {
+        bump()
+    }
+}
+
+fn shorthand() {
+    with (counter) {
+        bump()
+    }
+}
+
+fn multi() {
+    with (Counter = counter, Logger = logger) {
+        bump()
+    }
+}

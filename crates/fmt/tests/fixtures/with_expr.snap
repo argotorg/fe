@@ -1,0 +1,22 @@
+---
+source: crates/fmt/tests/format_snapshots.rs
+expression: output
+input_file: tests/fixtures/with_expr.fe
+---
+fn keyed() {
+    with (Counter = counter) {
+        bump()
+    }
+}
+
+fn shorthand() {
+    with (counter) {
+        bump()
+    }
+}
+
+fn multi() {
+    with (Counter = counter, Logger = logger) {
+        bump()
+    }
+}
