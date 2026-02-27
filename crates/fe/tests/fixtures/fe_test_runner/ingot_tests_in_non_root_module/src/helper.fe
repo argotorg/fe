@@ -1,0 +1,7 @@
+use std::evm::{Evm, assert}
+use ingot::add
+
+#[test]
+fn test_add() uses (evm: mut Evm) {
+    assert(add(2, 3) == 5)
+}

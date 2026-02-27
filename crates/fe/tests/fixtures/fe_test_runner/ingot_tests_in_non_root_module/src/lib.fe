@@ -1,0 +1,6 @@
+// Root module with no #[test] functions.
+// Tests live only in the sibling module (helper.fe).
+
+pub fn add(a: u256, b: u256) -> u256 {
+    a + b
+}

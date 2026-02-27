@@ -21,6 +21,7 @@ use colored::Colorize;
 use common::{
     InputDb,
     config::{Config, WorkspaceMemberSelection},
+    ingot::Ingot,
 };
 use contract_harness::{CallGasProfile, EvmTraceOptions, ExecutionOptions, RuntimeInstance};
 use driver::DriverDataBase;
@@ -1266,7 +1267,7 @@ fn run_tests_ingot(
     }
 
     let root_mod = ingot.root_mod(db);
-    if !has_test_functions(db, root_mod) {
+    if !ingot_has_test_functions(db, ingot) {
         return Vec::new();
     }
 
@@ -1742,6 +1743,15 @@ fn expand_workspace_test_paths(
 
 fn has_test_functions(db: &DriverDataBase, top_mod: TopLevelMod<'_>) -> bool {
     top_mod.all_funcs(db).iter().any(|func| {
+        ItemKind::from(*func)
+            .attrs(db)
+            .is_some_and(|attrs| attrs.has_attr(db, "test"))
+    })
+}
+
+/// Like [`has_test_functions`] but checks all modules in the ingot, not just one.
+fn ingot_has_test_functions(db: &DriverDataBase, ingot: Ingot<'_>) -> bool {
+    ingot.all_funcs(db).iter().any(|func| {
         ItemKind::from(*func)
             .attrs(db)
             .is_some_and(|attrs| attrs.has_attr(db, "test"))
