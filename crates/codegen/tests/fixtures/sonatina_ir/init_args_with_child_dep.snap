@@ -71,18 +71,6 @@ func private %__Child_runtime() {
         evm_invalid;
 }
 
-func private %__Child_init_code_offset() -> i256 {
-    block0:
-        v1.i256 = sym_addr &__Child_init;
-        return v1;
-}
-
-func private %__Child_init_code_len() -> i256 {
-    block0:
-        v1.i256 = sym_size &__Child_init;
-        return v1;
-}
-
 func private %__Parent_init_contract(v0.i256, v1.i256) {
     block0:
         v4.*i8 = evm_malloc 64.i256;
@@ -148,18 +136,6 @@ func private %__Parent_runtime() {
     block1:
         call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort 0.i256;
         evm_invalid;
-}
-
-func private %__Parent_init_code_offset() -> i256 {
-    block0:
-        v1.i256 = sym_addr &__Parent_init;
-        return v1;
-}
-
-func private %__Parent_init_code_len() -> i256 {
-    block0:
-        v1.i256 = sym_size &__Parent_init;
-        return v1;
 }
 
 func private %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort(v0.i256) {
@@ -374,6 +350,18 @@ func private %sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_with_base__Cal
     block0:
         v3.i256 = call %soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563 v0 v1;
         return v3;
+}
+
+func private %__Child_init_code_len() -> i256 {
+    block0:
+        v1.i256 = sym_size &__Child_init;
+        return v1;
+}
+
+func private %__Child_init_code_offset() -> i256 {
+    block0:
+        v1.i256 = sym_addr &__Child_init;
+        return v1;
 }
 
 func private %_t0__t1__h61373471174c18a_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_u256_u256_SolEncoder_h1b9228b90dad6928__9e0831f7c11d9f64(v0.i256, v1.i256) {

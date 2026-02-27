@@ -120,18 +120,6 @@ func private %__ByRefTraitProviderStorageBug_runtime() {
         evm_invalid;
 }
 
-func private %__ByRefTraitProviderStorageBug_init_code_offset() -> i256 {
-    block0:
-        v1.i256 = sym_addr &__ByRefTraitProviderStorageBug_init;
-        return v1;
-}
-
-func private %__ByRefTraitProviderStorageBug_init_code_len() -> i256 {
-    block0:
-        v1.i256 = sym_size &__ByRefTraitProviderStorageBug_init;
-        return v1;
-}
-
 func private %use_ctx_eff0_stor__Pair_h956dff41e88ee341__acec41afdc898140(v0.i256) -> i256 {
     block0:
         v2.i256 = call %pair_h956dff41e88ee341_ctx_h4952b3c1f066f039_sum_stor_arg0_root_stor v0;

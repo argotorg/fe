@@ -53,16 +53,6 @@ fn __Guard_runtime() -> ():
     eval __Guard_recv_0_0((), v0)
     terminate return_unit__Evm_hef0af3106e109414__3af54274b2985741(())
 
-fn __Guard_init_code_offset() -> u256:
-  bb0:
-    v0: u256 = code_region_offset(func_item(__Guard_init))
-    ret v0
-
-fn __Guard_init_code_len() -> u256:
-  bb0:
-    v0: u256 = code_region_len(func_item(__Guard_init))
-    ret v0
-
 fn bump_lock__TStorPtr_u256___e67d09080c0f1393(v0: u256) -> ():
   bb0:
     v1: u256 = load tstor[v0]

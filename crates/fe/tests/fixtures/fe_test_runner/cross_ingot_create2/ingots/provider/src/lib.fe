@@ -1,0 +1,20 @@
+use std::abi::sol
+
+pub msg GreetMsg {
+    #[selector = sol("greet()")]
+    Greet -> u256,
+}
+
+pub contract Greeter {
+    mut value: u256,
+
+    init(initial_value: u256) uses (mut value) {
+        value = initial_value
+    }
+
+    recv GreetMsg {
+        Greet -> u256 uses (value) {
+            value
+        }
+    }
+}

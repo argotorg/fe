@@ -67,16 +67,6 @@ fn __EchoContract_runtime() -> ():
     v6: u256 = __EchoContract_recv_0_2((), v0)
     terminate return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f((), v6)
 
-fn __EchoContract_init_code_offset() -> u256:
-  bb0:
-    v0: u256 = code_region_offset(func_item(__EchoContract_init))
-    ret v0
-
-fn __EchoContract_init_code_len() -> u256:
-  bb0:
-    v0: u256 = code_region_len(func_item(__EchoContract_init))
-    ret v0
-
 fn init_field__Evm_hef0af3106e109414_Foo_h6dbce71a6ea992b8__c09e6c6fc5a7b23d(v0: mut Evm, v1: u256) -> StorPtr<Foo>:
   bb0:
     v2: StorPtr<Foo> = evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__Foo_h6dbce71a6ea992b8__21493237fe9c2c26(v0, v1)
