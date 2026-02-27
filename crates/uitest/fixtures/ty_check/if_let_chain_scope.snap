@@ -1,0 +1,22 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/if_let_chain_scope.fe
+---
+error[8-0012]: undefined variable
+  ┌─ if_let_chain_scope.fe:5:5
+  │
+5 │     x
+  │     ^ undefined variable `x`
+
+error[8-0012]: undefined variable
+   ┌─ if_let_chain_scope.fe:11:9
+   │
+11 │         x
+   │         ^ undefined variable `x`
+
+error[8-0012]: undefined variable
+   ┌─ if_let_chain_scope.fe:18:5
+   │
+18 │     x
+   │     ^ undefined variable `x`

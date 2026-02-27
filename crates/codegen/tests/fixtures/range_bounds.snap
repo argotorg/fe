@@ -73,16 +73,13 @@ function $sum_dynamic($start, $end) -> ret {
 }
 function $range_known_const_s__usize___known_const_e__usize___hc7c7abc3858dd85e_seq_ha637d2df505bccf2_len__0_4__f9605efabd18106c($self) -> ret {
   let v0 := 0
-  switch lt(4, 0)
-    case 1 {
-      v0 := 0
-    }
-    case 0 {
-      v0 := sub(4, 0)
-    }
-    default {
-      v0 := sub(4, 0)
-    }
+  let v1 := lt(4, 0)
+  if v1 {
+    v0 := 0
+  }
+  if iszero(v1) {
+    v0 := sub(4, 0)
+  }
   ret := v0
   leave
 }
@@ -91,39 +88,31 @@ function $range_known_const_s__usize___known_const_e__usize___hc7c7abc3858dd85e_
   leave
 }
 function $range_known_const_s__usize___unknown__h4e84f6b6b8307914_seq_ha637d2df505bccf2_len__0__fc6647014fb554e5($self) -> ret {
-  let v0 := mload($self)
-  let v1 := 0
-  switch lt(v0, 0)
-    case 1 {
-      v1 := 0
-    }
-    case 0 {
-      let v2 := mload($self)
-      v1 := sub(v2, 0)
-    }
-    default {
-      let v3 := mload($self)
-      v1 := sub(v3, 0)
-    }
-  ret := v1
+  let v0 := 0
+  let v1 := mload($self)
+  let v2 := lt(v1, 0)
+  if v2 {
+    v0 := 0
+  }
+  if iszero(v2) {
+    let v3 := mload($self)
+    v0 := sub(v3, 0)
+  }
+  ret := v0
   leave
 }
 function $range_unknown__known_const_e__usize___h7984c64777ae465_seq_ha637d2df505bccf2_len__4__f248ae0e02044d7e($self) -> ret {
-  let v0 := mload($self)
-  let v1 := 0
-  switch lt(4, v0)
-    case 1 {
-      v1 := 0
-    }
-    case 0 {
-      let v2 := mload($self)
-      v1 := sub(4, v2)
-    }
-    default {
-      let v3 := mload($self)
-      v1 := sub(4, v3)
-    }
-  ret := v1
+  let v0 := 0
+  let v1 := mload($self)
+  let v2 := lt(4, v1)
+  if v2 {
+    v0 := 0
+  }
+  if iszero(v2) {
+    let v3 := mload($self)
+    v0 := sub(4, v3)
+  }
+  ret := v0
   leave
 }
 function $range_unknown__known_const_e__usize___h7984c64777ae465_seq_ha637d2df505bccf2_get__4__f248ae0e02044d7e($self, $i) -> ret {
@@ -132,23 +121,18 @@ function $range_unknown__known_const_e__usize___h7984c64777ae465_seq_ha637d2df50
   leave
 }
 function $range_unknown__unknown__h1dfb0ca64ed7bf96_seq_ha637d2df505bccf2_len($self) -> ret {
-  let v0 := mload(add($self, 32))
-  let v1 := mload($self)
-  let v2 := 0
-  switch lt(v0, v1)
-    case 1 {
-      v2 := 0
-    }
-    case 0 {
-      let v3 := mload(add($self, 32))
-      let v4 := mload($self)
-      v2 := sub(v3, v4)
-    }
-    default {
-      let v5 := mload(add($self, 32))
-      let v6 := mload($self)
-      v2 := sub(v5, v6)
-    }
-  ret := v2
+  let v0 := 0
+  let v1 := mload(add($self, 32))
+  let v2 := mload($self)
+  let v3 := lt(v1, v2)
+  if v3 {
+    v0 := 0
+  }
+  if iszero(v3) {
+    let v4 := mload(add($self, 32))
+    let v5 := mload($self)
+    v0 := sub(v4, v5)
+  }
+  ret := v0
   leave
 }

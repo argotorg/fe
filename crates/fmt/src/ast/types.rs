@@ -1133,6 +1133,7 @@ impl ToDoc for ast::Expr {
             ExprKind::Tuple(tuple) => tuple.to_doc(ctx),
             ExprKind::Array(array) => array.to_doc(ctx),
             ExprKind::ArrayRep(array_rep) => array_rep.to_doc(ctx),
+            ExprKind::Let(let_expr) => let_expr.to_doc(ctx),
             ExprKind::If(if_expr) => if_expr.to_doc(ctx),
             ExprKind::Match(match_expr) => match_expr.to_doc(ctx),
             ExprKind::With(with_expr) => with_expr.to_doc(ctx),

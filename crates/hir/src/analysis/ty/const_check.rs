@@ -2,7 +2,9 @@ use crate::analysis::HirAnalysisDb;
 use crate::analysis::ty::adt_def::AdtRef;
 use crate::analysis::ty::diagnostics::{BodyDiag, FuncBodyDiag};
 use crate::analysis::ty::ty_check::TypedBody;
-use crate::hir_def::{Body, CallableDef, Expr, ExprId, Func, Partial, Pat, Stmt, StmtId};
+use crate::hir_def::{
+    Body, CallableDef, Cond, CondId, Expr, ExprId, Func, Partial, Pat, Stmt, StmtId,
+};
 
 pub(crate) fn check_const_fn_body<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -158,7 +160,7 @@ impl<'db> ConstFnChecker<'db, '_> {
             }
 
             Expr::If(cond, then, else_) => {
-                self.check_expr(*cond);
+                self.check_cond(*cond);
                 self.check_expr(*then);
                 if let Some(else_) = else_ {
                     self.check_expr(*else_);
@@ -198,6 +200,24 @@ impl<'db> ConstFnChecker<'db, '_> {
 
             Expr::Tuple(elems) | Expr::Array(elems) => {
                 elems.iter().for_each(|elem| self.check_expr(*elem));
+            }
+        }
+    }
+
+    fn check_cond(&mut self, cond: CondId) {
+        let Partial::Present(cond_data) = cond.data(self.db, self.body) else {
+            return;
+        };
+
+        match cond_data {
+            Cond::Expr(expr) => self.check_expr(*expr),
+            Cond::Let(pat, value) => {
+                self.check_let_pat(*pat);
+                self.check_expr(*value);
+            }
+            Cond::Bin(lhs, rhs, _) => {
+                self.check_cond(*lhs);
+                self.check_cond(*rhs);
             }
         }
     }

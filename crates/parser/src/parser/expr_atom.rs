@@ -6,7 +6,7 @@ use unwrap_infallible::UnwrapInfallible;
 use super::token_stream::LexicalToken;
 use super::{
     ErrProof, Parser, Recovery, define_scope,
-    expr::{parse_expr, parse_expr_no_struct},
+    expr::{parse_condition_expr, parse_expr, parse_expr_no_struct},
     item::ItemScope,
     parse_list, parse_pat,
     stmt::parse_stmt,
@@ -146,7 +146,7 @@ impl super::Parse for IfExprScope {
         parser.bump_expected(SyntaxKind::IfKw);
 
         parser.set_scope_recovery_stack(&[SyntaxKind::LBrace, SyntaxKind::ElseKw]);
-        parse_expr_no_struct(parser)?;
+        parse_condition_expr(parser)?;
 
         if parser.find_and_pop(SyntaxKind::LBrace, ExpectedKind::Body(SyntaxKind::IfExpr))? {
             parser.parse(BlockExprScope::default())?;

@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/if_else.fe
 ---
@@ -7,24 +8,20 @@ target = "evm-ethereum-osaka"
 
 func public %if_else(v0.i256) -> i256 {
     block0:
-        v3.i1 = eq v0 1.i256;
-        br v3 block1 block4;
+        v2.i1 = ne v0 0.i256;
+        br v2 block1 block2;
 
     block1:
-        v5.i256 = call %helper 1.i256;
+        v4.i256 = call %helper 1.i256;
         jump block3;
 
     block2:
-        v7.i256 = call %helper 2.i256;
+        v6.i256 = call %helper 2.i256;
         jump block3;
 
     block3:
-        v8.i256 = phi (v5 block1) (v7 block2);
-        return v8;
-
-    block4:
-        v4.i1 = eq v0 0.i256;
-        br v4 block2 block2;
+        v7.i256 = phi (v4 block1) (v6 block2);
+        return v7;
 }
 
 func private %helper(v0.i256) -> i256 {

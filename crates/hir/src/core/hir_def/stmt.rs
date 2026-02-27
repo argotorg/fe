@@ -1,6 +1,6 @@
 use cranelift_entity::entity_impl;
 
-use super::{Body, ExprId, Partial, PatId, TypeId};
+use super::{Body, CondId, ExprId, Partial, PatId, TypeId};
 use crate::{HirDb, span::stmt::LazyStmtSpan};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
@@ -24,9 +24,9 @@ pub enum Stmt<'db> {
     /// - `Some(false)`: #[no_unroll] attribute prevents unrolling
     For(PatId, ExprId, ExprId, Option<bool>),
 
-    /// The first `ExprId` is the condition of the while-loop.
+    /// The first `CondId` is the condition of the while-loop.
     /// The second `ExprId` is the body of the while-loop.
-    While(ExprId, ExprId),
+    While(CondId, ExprId),
     Continue,
     Break,
     Return(Option<ExprId>),

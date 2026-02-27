@@ -154,7 +154,7 @@ impl<'db> Expr<'db> {
             }
 
             ast::ExprKind::If(if_) => {
-                let cond = Self::push_to_body_opt(ctxt, if_.cond());
+                let cond = Cond::push_to_body_opt(ctxt, if_.cond());
                 let then = Expr::push_to_body_opt(
                     ctxt,
                     if_.then()
@@ -219,6 +219,9 @@ impl<'db> Expr<'db> {
                 let op = ArithBinOp::lower_ast(op);
                 Self::AugAssign(lhs, rhs, op)
             }
+
+            // `let` expressions are condition-only and lowered through `Cond`.
+            ast::ExprKind::Let(_) => return ctxt.push_invalid_expr(HirOrigin::raw(&ast)),
         };
 
         ctxt.push_expr(expr, HirOrigin::raw(&ast))
@@ -230,6 +233,56 @@ impl<'db> Expr<'db> {
         } else {
             ctxt.push_missing_expr()
         }
+    }
+}
+
+impl Cond {
+    pub(super) fn push_to_body_opt<'db>(
+        ctxt: &mut BodyCtxt<'_, 'db>,
+        ast: Option<ast::Expr>,
+    ) -> CondId {
+        if let Some(ast) = ast {
+            Self::lower_ast(ctxt, ast)
+        } else {
+            ctxt.push_missing_cond()
+        }
+    }
+
+    fn lower_ast<'db>(ctxt: &mut BodyCtxt<'_, 'db>, ast: ast::Expr) -> CondId {
+        let cond = match ast.kind() {
+            ast::ExprKind::Let(let_expr) => {
+                let pat = Pat::lower_ast_opt(ctxt, let_expr.pat());
+                let scrutinee = Expr::push_to_body_opt(ctxt, let_expr.expr());
+                Self::Let(pat, scrutinee)
+            }
+
+            ast::ExprKind::Bin(bin)
+                if matches!(
+                    bin.op(),
+                    Some(ast::BinOp::Logical(ast::LogicalBinOp::And(_)))
+                        | Some(ast::BinOp::Logical(ast::LogicalBinOp::Or(_)))
+                ) =>
+            {
+                let lhs = Cond::push_to_body_opt(ctxt, bin.lhs());
+                let rhs = Cond::push_to_body_opt(ctxt, bin.rhs());
+                let op = LogicalBinOp::lower_ast(match bin.op().expect("parser guarantees op") {
+                    ast::BinOp::Logical(op) => op,
+                    _ => unreachable!(),
+                });
+                Self::Bin(lhs, rhs, op)
+            }
+
+            ast::ExprKind::Paren(paren) => {
+                return Cond::push_to_body_opt(ctxt, paren.expr());
+            }
+
+            _ => {
+                let expr = Expr::lower_ast(ctxt, ast);
+                Self::Expr(expr)
+            }
+        };
+
+        ctxt.push_cond(cond)
     }
 }
 

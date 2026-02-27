@@ -849,6 +849,11 @@ impl<'db> TyCheckEnv<'db> {
         self.var_env.push(var_env);
     }
 
+    pub(super) fn enter_lexical_scope(&mut self) {
+        let var_env = BlockEnv::new(self.scope(), self.var_env.len());
+        self.var_env.push(var_env);
+    }
+
     pub(super) fn leave_scope(&mut self) {
         self.var_env.pop().unwrap();
     }
@@ -929,6 +934,10 @@ impl<'db> TyCheckEnv<'db> {
         for (name, binding) in self.pending_vars.drain() {
             var_env.register_var(name, binding);
         }
+    }
+
+    pub(super) fn clear_pending_bindings(&mut self) {
+        self.pending_vars.clear();
     }
 
     pub(super) fn register_confirmation(&mut self, inst: TraitInstId<'db>, span: DynLazySpan<'db>) {

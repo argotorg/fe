@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 33
 expression: output
 input_file: tests/fixtures/erc20.fe
 ---
@@ -96,16 +97,13 @@ object "CoolCoin" {
     }
     function $bool_h947c0c03c59c6f07_wordrepr_h7483d41ac8178d88_to_word($self) -> ret {
       let v0 := 0
-      switch $self
-        case 1 {
-          v0 := 1
-        }
-        case 0 {
-          v0 := 0
-        }
-        default {
-          v0 := 0
-        }
+      let v1 := $self
+      if v1 {
+        v0 := 1
+      }
+      if iszero(v1) {
+        v0 := 0
+      }
       ret := v0
       leave
     }
@@ -202,14 +200,18 @@ object "CoolCoin" {
       let v1 := mload(add($self, 64))
       let v2 := add(v1, 32)
       let v3 := mload(add($self, 64))
-      let v4 := or(lt(v2, v3), gt(v2, v0))
+      let v4 := lt(v2, v3)
       if v4 {
         revert(0, 0)
       }
-      let v5 := mload(add($self, 64))
-      let v6 := $memorybytes_h1e381015a9b0111b_byteinput_hc4c2cb44299530ae_word_at($self, v5)
+      let v5 := gt(v2, v0)
+      if v5 {
+        revert(0, 0)
+      }
+      let v6 := mload(add($self, 64))
+      let v7 := $memorybytes_h1e381015a9b0111b_byteinput_hc4c2cb44299530ae_word_at($self, v6)
       mstore(add($self, 64), v2)
-      ret := v6
+      ret := v7
       leave
     }
     function $soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b($input) -> ret {
@@ -1037,15 +1039,19 @@ object "CoolCoin" {
         let v2 := mload(add($self, 32))
         let v3 := add(v2, 32)
         let v4 := mload(add($self, 32))
-        let v5 := or(lt(v3, v4), gt(v3, v1))
+        let v5 := lt(v3, v4)
         if v5 {
           revert(0, 0)
         }
-        let v6 := mload($self)
-        let v7 := mload(add($self, 32))
-        let v8 := $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at(v6, v7)
+        let v6 := gt(v3, v1)
+        if v6 {
+          revert(0, 0)
+        }
+        let v7 := mload($self)
+        let v8 := mload(add($self, 32))
+        let v9 := $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at(v7, v8)
         mstore(add($self, 32), v3)
-        ret := v8
+        ret := v9
         leave
       }
       function $soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($input, $base) -> ret {

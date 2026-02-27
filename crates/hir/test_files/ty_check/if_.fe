@@ -21,6 +21,22 @@ fn no_else() -> () {
     }
 }
 
+// `if let` without `else` should follow the same typing rule as plain `if`:
+// the expression itself has `()` type, while the then branch can be non-unit.
+fn no_else_if_let(opt: Option<i32>) -> () {
+    if let Option::Some(v) = opt {
+        v
+    }
+}
+
+fn block_condition() -> i32 {
+    if { true } {
+        1
+    } else {
+        2
+    }
+}
+
 fn else_if(b1: bool, b2: bool) -> i32 {
     if b1 {
         1

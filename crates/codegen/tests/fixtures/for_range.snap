@@ -26,24 +26,19 @@ function $for_range_sum() -> ret {
   leave
 }
 function $range_unknown__unknown__h1dfb0ca64ed7bf96_seq_ha637d2df505bccf2_len($self) -> ret {
-  let v0 := mload(add($self, 32))
-  let v1 := mload($self)
-  let v2 := 0
-  switch lt(v0, v1)
-    case 1 {
-      v2 := 0
-    }
-    case 0 {
-      let v3 := mload(add($self, 32))
-      let v4 := mload($self)
-      v2 := sub(v3, v4)
-    }
-    default {
-      let v5 := mload(add($self, 32))
-      let v6 := mload($self)
-      v2 := sub(v5, v6)
-    }
-  ret := v2
+  let v0 := 0
+  let v1 := mload(add($self, 32))
+  let v2 := mload($self)
+  let v3 := lt(v1, v2)
+  if v3 {
+    v0 := 0
+  }
+  if iszero(v3) {
+    let v4 := mload(add($self, 32))
+    let v5 := mload($self)
+    v0 := sub(v4, v5)
+  }
+  ret := v0
   leave
 }
 function $range_unknown__unknown__h1dfb0ca64ed7bf96_seq_ha637d2df505bccf2_get($self, $i) -> ret {

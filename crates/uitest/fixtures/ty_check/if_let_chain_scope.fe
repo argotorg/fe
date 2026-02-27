@@ -1,0 +1,19 @@
+fn if_let_chain_scope_after(opt: Option<i32>) {
+    if let Option::Some(x) = opt && true {
+    } else {
+    }
+    x
+}
+
+fn if_let_chain_scope_else(opt: Option<i32>) {
+    if let Option::Some(x) = opt && true {
+    } else {
+        x
+    }
+}
+
+fn while_let_chain_scope_after(opt: Option<i32>) {
+    while let Option::Some(x) = opt && false {
+    }
+    x
+}

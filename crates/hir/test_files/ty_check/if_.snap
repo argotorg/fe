@@ -1,7 +1,7 @@
 ---
-source: crates/hir-analysis/tests/ty_check.rs
+source: crates/hir/tests/ty_check.rs
 expression: res
-input_file: crates/hir-analysis/test_files/ty_check/if_.fe
+input_file: test_files/ty_check/if_.fe
 ---
 note: 
   ┌─ if_.fe:1:20
@@ -169,199 +169,316 @@ note:
    │         ^^^^^ bool
 
 note: 
-   ┌─ if_.fe:24:39
+   ┌─ if_.fe:26:43
    │  
-24 │   fn else_if(b1: bool, b2: bool) -> i32 {
-   │ ╭───────────────────────────────────────^
-25 │ │     if b1 {
-26 │ │         1
-27 │ │     } else if b2 {
-   · │
-31 │ │     }
-32 │ │ }
-   │ ╰─^ i32
+26 │   fn no_else_if_let(opt: Option<i32>) -> () {
+   │ ╭───────────────────────────────────────────^
+27 │ │     if let Option::Some(v) = opt {
+28 │ │         v
+29 │ │     }
+30 │ │ }
+   │ ╰─^ ()
 
 note: 
-   ┌─ if_.fe:25:5
+   ┌─ if_.fe:27:5
    │  
-25 │ ╭     if b1 {
-26 │ │         1
-27 │ │     } else if b2 {
-28 │ │         2
-29 │ │     } else {
-30 │ │         3
-31 │ │     }
-   │ ╰─────^ i32
-
-note: 
-   ┌─ if_.fe:25:8
-   │
-25 │     if b1 {
-   │        ^^ bool
-
-note: 
-   ┌─ if_.fe:25:11
-   │  
-25 │       if b1 {
-   │ ╭───────────^
-26 │ │         1
-27 │ │     } else if b2 {
-   │ ╰─────^ i32
-
-note: 
-   ┌─ if_.fe:26:9
-   │
-26 │         1
-   │         ^ i32
+27 │ ╭     if let Option::Some(v) = opt {
+28 │ │         v
+29 │ │     }
+   │ ╰─────^ ()
 
 note: 
    ┌─ if_.fe:27:12
-   │  
-27 │       } else if b2 {
-   │ ╭────────────^
-28 │ │         2
-29 │ │     } else {
-30 │ │         3
-31 │ │     }
-   │ ╰─────^ i32
-
-note: 
-   ┌─ if_.fe:27:15
    │
-27 │     } else if b2 {
-   │               ^^ bool
+27 │     if let Option::Some(v) = opt {
+   │            ^^^^^^^^^^^^^^^ Option<i32>
 
 note: 
-   ┌─ if_.fe:27:18
+   ┌─ if_.fe:27:25
+   │
+27 │     if let Option::Some(v) = opt {
+   │                         ^ ref i32
+
+note: 
+   ┌─ if_.fe:27:30
+   │
+27 │     if let Option::Some(v) = opt {
+   │                              ^^^ Option<i32>
+
+note: 
+   ┌─ if_.fe:27:34
    │  
-27 │       } else if b2 {
-   │ ╭──────────────────^
-28 │ │         2
-29 │ │     } else {
-   │ ╰─────^ i32
+27 │       if let Option::Some(v) = opt {
+   │ ╭──────────────────────────────────^
+28 │ │         v
+29 │ │     }
+   │ ╰─────^ ref i32
 
 note: 
    ┌─ if_.fe:28:9
    │
-28 │         2
-   │         ^ i32
+28 │         v
+   │         ^ ref i32
 
 note: 
-   ┌─ if_.fe:29:12
+   ┌─ if_.fe:32:29
    │  
-29 │       } else {
-   │ ╭────────────^
-30 │ │         3
-31 │ │     }
+32 │   fn block_condition() -> i32 {
+   │ ╭─────────────────────────────^
+33 │ │     if { true } {
+34 │ │         1
+35 │ │     } else {
+36 │ │         2
+37 │ │     }
+38 │ │ }
+   │ ╰─^ i32
+
+note: 
+   ┌─ if_.fe:33:5
+   │  
+33 │ ╭     if { true } {
+34 │ │         1
+35 │ │     } else {
+36 │ │         2
+37 │ │     }
    │ ╰─────^ i32
 
 note: 
-   ┌─ if_.fe:30:9
+   ┌─ if_.fe:33:8
    │
-30 │         3
+33 │     if { true } {
+   │        ^^^^^^^^ bool
+
+note: 
+   ┌─ if_.fe:33:10
+   │
+33 │     if { true } {
+   │          ^^^^ bool
+
+note: 
+   ┌─ if_.fe:33:17
+   │  
+33 │       if { true } {
+   │ ╭─────────────────^
+34 │ │         1
+35 │ │     } else {
+   │ ╰─────^ i32
+
+note: 
+   ┌─ if_.fe:34:9
+   │
+34 │         1
    │         ^ i32
 
 note: 
-   ┌─ if_.fe:34:45
+   ┌─ if_.fe:35:12
    │  
-34 │   fn nested(b1: bool, b2: bool) -> String<10> {
-   │ ╭─────────────────────────────────────────────^
-35 │ │     if b1 {
-36 │ │         "Foo"
-37 │ │     } else {
-   · │
-43 │ │     }
-44 │ │ }
-   │ ╰─^ String<10>
-
-note: 
-   ┌─ if_.fe:35:5
-   │  
-35 │ ╭     if b1 {
-36 │ │         "Foo"
-37 │ │     } else {
-38 │ │         if b2 {
-   · │
-42 │ │         }
-43 │ │     }
-   │ ╰─────^ String<10>
-
-note: 
-   ┌─ if_.fe:35:8
-   │
-35 │     if b1 {
-   │        ^^ bool
-
-note: 
-   ┌─ if_.fe:35:11
-   │  
-35 │       if b1 {
-   │ ╭───────────^
-36 │ │         "Foo"
-37 │ │     } else {
-   │ ╰─────^ String<10>
+35 │       } else {
+   │ ╭────────────^
+36 │ │         2
+37 │ │     }
+   │ ╰─────^ i32
 
 note: 
    ┌─ if_.fe:36:9
    │
-36 │         "Foo"
-   │         ^^^^^ String<10>
+36 │         2
+   │         ^ i32
 
 note: 
-   ┌─ if_.fe:37:12
+   ┌─ if_.fe:40:39
    │  
-37 │       } else {
+40 │   fn else_if(b1: bool, b2: bool) -> i32 {
+   │ ╭───────────────────────────────────────^
+41 │ │     if b1 {
+42 │ │         1
+43 │ │     } else if b2 {
+   · │
+47 │ │     }
+48 │ │ }
+   │ ╰─^ i32
+
+note: 
+   ┌─ if_.fe:41:5
+   │  
+41 │ ╭     if b1 {
+42 │ │         1
+43 │ │     } else if b2 {
+44 │ │         2
+45 │ │     } else {
+46 │ │         3
+47 │ │     }
+   │ ╰─────^ i32
+
+note: 
+   ┌─ if_.fe:41:8
+   │
+41 │     if b1 {
+   │        ^^ bool
+
+note: 
+   ┌─ if_.fe:41:11
+   │  
+41 │       if b1 {
+   │ ╭───────────^
+42 │ │         1
+43 │ │     } else if b2 {
+   │ ╰─────^ i32
+
+note: 
+   ┌─ if_.fe:42:9
+   │
+42 │         1
+   │         ^ i32
+
+note: 
+   ┌─ if_.fe:43:12
+   │  
+43 │       } else if b2 {
    │ ╭────────────^
-38 │ │         if b2 {
-39 │ │             "Bar"
-40 │ │         } else {
-41 │ │             "Baz"
-42 │ │         }
-43 │ │     }
+44 │ │         2
+45 │ │     } else {
+46 │ │         3
+47 │ │     }
+   │ ╰─────^ i32
+
+note: 
+   ┌─ if_.fe:43:15
+   │
+43 │     } else if b2 {
+   │               ^^ bool
+
+note: 
+   ┌─ if_.fe:43:18
+   │  
+43 │       } else if b2 {
+   │ ╭──────────────────^
+44 │ │         2
+45 │ │     } else {
+   │ ╰─────^ i32
+
+note: 
+   ┌─ if_.fe:44:9
+   │
+44 │         2
+   │         ^ i32
+
+note: 
+   ┌─ if_.fe:45:12
+   │  
+45 │       } else {
+   │ ╭────────────^
+46 │ │         3
+47 │ │     }
+   │ ╰─────^ i32
+
+note: 
+   ┌─ if_.fe:46:9
+   │
+46 │         3
+   │         ^ i32
+
+note: 
+   ┌─ if_.fe:50:45
+   │  
+50 │   fn nested(b1: bool, b2: bool) -> String<10> {
+   │ ╭─────────────────────────────────────────────^
+51 │ │     if b1 {
+52 │ │         "Foo"
+53 │ │     } else {
+   · │
+59 │ │     }
+60 │ │ }
+   │ ╰─^ String<10>
+
+note: 
+   ┌─ if_.fe:51:5
+   │  
+51 │ ╭     if b1 {
+52 │ │         "Foo"
+53 │ │     } else {
+54 │ │         if b2 {
+   · │
+58 │ │         }
+59 │ │     }
    │ ╰─────^ String<10>
 
 note: 
-   ┌─ if_.fe:38:9
+   ┌─ if_.fe:51:8
+   │
+51 │     if b1 {
+   │        ^^ bool
+
+note: 
+   ┌─ if_.fe:51:11
    │  
-38 │ ╭         if b2 {
-39 │ │             "Bar"
-40 │ │         } else {
-41 │ │             "Baz"
-42 │ │         }
+51 │       if b1 {
+   │ ╭───────────^
+52 │ │         "Foo"
+53 │ │     } else {
+   │ ╰─────^ String<10>
+
+note: 
+   ┌─ if_.fe:52:9
+   │
+52 │         "Foo"
+   │         ^^^^^ String<10>
+
+note: 
+   ┌─ if_.fe:53:12
+   │  
+53 │       } else {
+   │ ╭────────────^
+54 │ │         if b2 {
+55 │ │             "Bar"
+56 │ │         } else {
+57 │ │             "Baz"
+58 │ │         }
+59 │ │     }
+   │ ╰─────^ String<10>
+
+note: 
+   ┌─ if_.fe:54:9
+   │  
+54 │ ╭         if b2 {
+55 │ │             "Bar"
+56 │ │         } else {
+57 │ │             "Baz"
+58 │ │         }
    │ ╰─────────^ String<10>
 
 note: 
-   ┌─ if_.fe:38:12
+   ┌─ if_.fe:54:12
    │
-38 │         if b2 {
+54 │         if b2 {
    │            ^^ bool
 
 note: 
-   ┌─ if_.fe:38:15
+   ┌─ if_.fe:54:15
    │  
-38 │           if b2 {
+54 │           if b2 {
    │ ╭───────────────^
-39 │ │             "Bar"
-40 │ │         } else {
+55 │ │             "Bar"
+56 │ │         } else {
    │ ╰─────────^ String<10>
 
 note: 
-   ┌─ if_.fe:39:13
+   ┌─ if_.fe:55:13
    │
-39 │             "Bar"
+55 │             "Bar"
    │             ^^^^^ String<10>
 
 note: 
-   ┌─ if_.fe:40:16
+   ┌─ if_.fe:56:16
    │  
-40 │           } else {
+56 │           } else {
    │ ╭────────────────^
-41 │ │             "Baz"
-42 │ │         }
+57 │ │             "Baz"
+58 │ │         }
    │ ╰─────────^ String<10>
 
 note: 
-   ┌─ if_.fe:41:13
+   ┌─ if_.fe:57:13
    │
-41 │             "Baz"
+57 │             "Baz"
    │             ^^^^^ String<10>

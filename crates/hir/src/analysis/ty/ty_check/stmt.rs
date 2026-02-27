@@ -350,11 +350,18 @@ impl<'db> TyChecker<'db> {
             unreachable!()
         };
 
-        self.check_expr(*cond, TyId::bool(self.db));
+        // Keep let-chain bindings local to the loop condition/body.
+        self.env.enter_lexical_scope();
+        self.check_cond(*cond);
 
         self.env.enter_loop(stmt);
+        self.env.enter_scope(*body);
+        self.env.flush_pending_bindings();
         self.check_expr(*body, TyId::unit(self.db));
+        self.env.leave_scope();
+        self.env.clear_pending_bindings();
         self.env.leave_loop();
+        self.env.leave_scope();
 
         TyId::unit(self.db)
     }

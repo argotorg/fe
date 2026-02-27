@@ -7,14 +7,14 @@ use crate::{
         transition::ChainRoot,
     },
     hir_def::{
-        Body, CallArg, Const, ConstGenericArgValue, Contract, ContractRecv, ContractRecvArm,
-        ContractRecvArmListId, EffectParam, EffectParamListId, Enum, EnumVariant, Expr, ExprId,
-        Field, FieldDef, FieldDefListId, FieldIndex, FieldParent, Func, FuncParam, FuncParamListId,
-        FuncParamName, GenericArg, GenericArgListId, GenericParam, GenericParamListId, IdentId,
-        Impl, ImplTrait, ItemKind, KindBound, LitKind, MatchArm, Mod, Partial, Pat, PatId, PathId,
-        PathKind, Stmt, StmtId, Struct, TopLevelMod, Trait, TraitRefId, TupleTypeId, TypeAlias,
-        TypeBound, TypeId, TypeKind, Use, UseAlias, UsePathId, UsePathSegment, VariantDef,
-        VariantDefListId, VariantKind, WhereClauseId, WherePredicate,
+        Body, CallArg, Cond, CondId, Const, ConstGenericArgValue, Contract, ContractRecv,
+        ContractRecvArm, ContractRecvArmListId, EffectParam, EffectParamListId, Enum, EnumVariant,
+        Expr, ExprId, Field, FieldDef, FieldDefListId, FieldIndex, FieldParent, Func, FuncParam,
+        FuncParamListId, FuncParamName, GenericArg, GenericArgListId, GenericParam,
+        GenericParamListId, IdentId, Impl, ImplTrait, ItemKind, KindBound, LitKind, MatchArm, Mod,
+        Partial, Pat, PatId, PathId, PathKind, Stmt, StmtId, Struct, TopLevelMod, Trait,
+        TraitRefId, TupleTypeId, TypeAlias, TypeBound, TypeId, TypeKind, Use, UseAlias, UsePathId,
+        UsePathSegment, VariantDef, VariantDefListId, VariantKind, WhereClauseId, WherePredicate,
         attr::{self, AttrArgValue},
         scope_graph::ScopeId,
     },
@@ -1168,7 +1168,7 @@ pub fn walk_stmt<'db, V>(
         }
 
         Stmt::While(cond_id, while_body_id) => {
-            visit_node_in_body!(visitor, ctxt, cond_id, expr);
+            walk_cond(visitor, ctxt, *cond_id);
             visit_node_in_body!(visitor, ctxt, while_body_id, expr);
         }
 
@@ -1355,7 +1355,7 @@ pub fn walk_expr<'db, V>(
         }
 
         Expr::If(cond, then, else_) => {
-            visit_node_in_body!(visitor, ctxt, cond, expr);
+            walk_cond(visitor, ctxt, *cond);
             visit_node_in_body!(visitor, ctxt, then, expr);
             if let Some(else_) = else_ {
                 visit_node_in_body!(visitor, ctxt, else_, expr);
@@ -1397,6 +1397,28 @@ pub fn walk_expr<'db, V>(
                 visit_node_in_body!(visitor, ctxt, &b.value, expr);
             }
             visit_node_in_body!(visitor, ctxt, body_expr, expr);
+        }
+    }
+}
+
+fn walk_cond<'db, V, T>(visitor: &mut V, ctxt: &mut VisitorCtxt<'db, T>, cond: CondId)
+where
+    V: Visitor<'db> + ?Sized,
+    T: LazySpan,
+{
+    let Partial::Present(cond_data) = cond.data(ctxt.db, ctxt.body()) else {
+        return;
+    };
+
+    match cond_data {
+        Cond::Expr(expr) => visit_node_in_body!(visitor, ctxt, expr, expr),
+        Cond::Let(pat, expr) => {
+            visit_node_in_body!(visitor, ctxt, pat, pat);
+            visit_node_in_body!(visitor, ctxt, expr, expr);
+        }
+        Cond::Bin(lhs, rhs, _) => {
+            walk_cond(visitor, ctxt, *lhs);
+            walk_cond(visitor, ctxt, *rhs);
         }
     }
 }

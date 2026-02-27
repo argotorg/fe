@@ -2432,7 +2432,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     /// - `cond_expr`: Condition expression id.
     /// - `body_expr`: Loop body expression id.
     ///
-    pub(super) fn lower_while(&mut self, cond_expr: ExprId, body_expr: ExprId) {
+    pub(super) fn lower_while(&mut self, cond_expr: CondId, body_expr: ExprId) {
         let Some(block) = self.current_block() else {
             return;
         };
@@ -2444,10 +2444,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         self.goto(cond_entry);
 
         self.move_to_block(cond_entry);
-        let cond_val = self.lower_expr(cond_expr);
-        let Some(cond_header) = self.current_block() else {
-            return;
-        };
+        self.lower_condition_branch(cond_expr, body_block, exit_block);
 
         self.loop_stack.push(LoopScope {
             continue_target: cond_entry,
@@ -2466,9 +2463,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             self.goto(cond_entry);
             backedge = Some(body_end_block);
         }
-
-        self.move_to_block(cond_header);
-        self.branch(cond_val, body_block, exit_block);
 
         self.builder.body.loop_headers.insert(
             cond_entry,
@@ -2957,10 +2951,48 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         self.move_to_block(exit_block);
     }
 
+    fn lower_condition_branch(
+        &mut self,
+        cond_expr: CondId,
+        true_block: BasicBlockId,
+        false_block: BasicBlockId,
+    ) {
+        let Partial::Present(cond_data) = cond_expr.data(self.db, self.body) else {
+            if self.current_block().is_some() {
+                self.goto(false_block);
+            }
+            return;
+        };
+
+        match cond_data {
+            Cond::Bin(lhs, rhs, hir::hir_def::expr::LogicalBinOp::And) => {
+                let rhs_entry = self.alloc_block();
+                self.lower_condition_branch(*lhs, rhs_entry, false_block);
+                self.move_to_block(rhs_entry);
+                self.lower_condition_branch(*rhs, true_block, false_block);
+            }
+            Cond::Bin(lhs, rhs, hir::hir_def::expr::LogicalBinOp::Or) => {
+                let rhs_entry = self.alloc_block();
+                self.lower_condition_branch(*lhs, true_block, rhs_entry);
+                self.move_to_block(rhs_entry);
+                self.lower_condition_branch(*rhs, true_block, false_block);
+            }
+            Cond::Let(pat, scrutinee) => {
+                self.lower_let_condition_branch(*pat, *scrutinee, true_block, false_block);
+            }
+            Cond::Expr(expr) => {
+                let cond_val = self.lower_expr(*expr);
+                if self.current_block().is_some() {
+                    self.branch(cond_val, true_block, false_block);
+                }
+            }
+        }
+    }
+
     fn lower_if(
         &mut self,
         if_expr: ExprId,
-        cond: ExprId,
+        cond: CondId,
         then_expr: ExprId,
         else_expr: Option<ExprId>,
     ) -> ValueId {
@@ -2971,12 +3003,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         let if_ty = self.typed_body.expr_ty(self.db, if_expr);
         let produces_value = !self.is_unit_ty(if_ty) && !if_ty.is_never(self.db);
-
-        self.move_to_block(block);
-        let cond_val = self.lower_expr(cond);
-        let Some(cond_block) = self.current_block() else {
-            return value;
-        };
 
         let then_block = self.alloc_block();
         if produces_value {
@@ -2991,12 +3017,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
             let result_local = self.alloc_temp_local(if_ty, true, "if");
             self.builder.body.values[value.index()].origin = ValueOrigin::Local(result_local);
-
-            self.move_to_block(cond_block);
-            self.assign(None, Some(result_local), Rvalue::ZeroInit);
-
             let else_block = self.alloc_block();
 
+            self.move_to_block(block);
+            self.assign(None, Some(result_local), Rvalue::ZeroInit);
+            self.lower_condition_branch(cond, then_block, else_block);
             self.move_to_block(then_block);
             let then_value = self.lower_expr(then_expr);
             let then_end = self.current_block();
@@ -3024,22 +3049,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 }
             }
 
-            self.move_to_block(cond_block);
-            self.switch(
-                cond_val,
-                vec![
-                    SwitchTarget {
-                        value: SwitchValue::Bool(true),
-                        block: then_block,
-                    },
-                    SwitchTarget {
-                        value: SwitchValue::Bool(false),
-                        block: else_block,
-                    },
-                ],
-                else_block,
-            );
-
             if let Some(merge) = merge_block {
                 self.move_to_block(merge);
             }
@@ -3048,8 +3057,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             let merge_block = self.alloc_block();
             let else_block = else_expr.map(|_| self.alloc_block());
 
-            self.move_to_block(cond_block);
-            self.branch(cond_val, then_block, else_block.unwrap_or(merge_block));
+            self.move_to_block(block);
+            self.lower_condition_branch(cond, then_block, else_block.unwrap_or(merge_block));
 
             self.move_to_block(then_block);
             let _ = self.lower_expr(then_expr);

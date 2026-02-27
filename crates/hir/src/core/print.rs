@@ -992,6 +992,40 @@ impl<'db> Stmt<'db> {
     }
 }
 
+impl Cond {
+    fn pretty_print<'db>(&self, db: &'db dyn HirDb, body: Body<'db>, indent: usize) -> String {
+        match self {
+            Cond::Expr(expr) => {
+                let expr = unwrap_partial_ref(expr.data(db, body), "Cond::Expr");
+                expr.pretty_print(db, body, indent)
+            }
+            Cond::Let(pat, expr) => {
+                let pat = unwrap_partial_ref(pat.data(db, body), "Cond::Let::pat");
+                let expr = unwrap_partial_ref(expr.data(db, body), "Cond::Let::expr");
+                format!(
+                    "let {} = {}",
+                    pat.pretty_print(db, body),
+                    expr.pretty_print(db, body, indent)
+                )
+            }
+            Cond::Bin(lhs, rhs, op) => {
+                let lhs = unwrap_partial_ref(lhs.data(db, body), "Cond::Bin::lhs");
+                let rhs = unwrap_partial_ref(rhs.data(db, body), "Cond::Bin::rhs");
+                let op = match op {
+                    LogicalBinOp::And => "&&",
+                    LogicalBinOp::Or => "||",
+                };
+                format!(
+                    "{} {} {}",
+                    lhs.pretty_print(db, body, indent),
+                    op,
+                    rhs.pretty_print(db, body, indent)
+                )
+            }
+        }
+    }
+}
+
 // ============================================================================
 // Body
 // ============================================================================

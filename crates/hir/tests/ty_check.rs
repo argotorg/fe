@@ -2,6 +2,7 @@ use std::path::Path;
 
 use dir_test::{Fixture, dir_test};
 use fe_hir::analysis::ty::ty_check::{check_contract_recv_arm_body, check_func_body};
+use fe_hir::span::LazySpan;
 use fe_hir::test_db::HirAnalysisTestDb;
 use test_utils::snap_test;
 
@@ -47,19 +48,29 @@ fn collect_body_props<'db>(
     prop_formatter: &mut fe_hir::test_db::HirPropertyFormatter<'db>,
 ) {
     for expr in body.exprs(db).keys() {
+        let span = expr.span(body);
+        if span.resolve(db).is_none() {
+            continue;
+        }
+
         let ty = typed_body.expr_ty(db, expr);
         prop_formatter.push_prop(
             body.top_mod(db),
-            expr.span(body).into(),
+            span.into(),
             ty.pretty_print(db).to_string(),
         );
     }
 
     for pat in body.pats(db).keys() {
+        let span = pat.span(body);
+        if span.resolve(db).is_none() {
+            continue;
+        }
+
         let ty = typed_body.pat_ty(db, pat);
         prop_formatter.push_prop(
             body.top_mod(db),
-            pat.span(body).into(),
+            span.into(),
             ty.pretty_print(db).to_string(),
         );
     }

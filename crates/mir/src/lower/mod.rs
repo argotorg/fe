@@ -21,9 +21,9 @@ use hir::analysis::{
     },
 };
 use hir::hir_def::{
-    Attr, AttrArg, AttrArgValue, Body, CallableDef, Const, Expr, ExprId, Field, FieldIndex, Func,
-    HirIngot, IdentId, ItemKind, LitKind, MatchArm, Partial, Pat, PatId, Stmt, StmtId, TopLevelMod,
-    VariantKind, expr::BinOp,
+    Attr, AttrArg, AttrArgValue, Body, CallableDef, Cond, CondId, Const, Expr, ExprId, Field,
+    FieldIndex, Func, HirIngot, IdentId, ItemKind, LitKind, MatchArm, Partial, Pat, PatId, Stmt,
+    StmtId, TopLevelMod, VariantKind, expr::BinOp,
 };
 
 use crate::{
@@ -1365,7 +1365,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 );
             }
             Stmt::While(cond, loop_body) => {
-                self.collect_explicit_return_param_sources_in_expr(
+                self.collect_explicit_return_param_sources_in_cond(
                     body,
                     typed_body,
                     *cond,
@@ -1522,7 +1522,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 saw_non_param,
             ),
             Expr::If(cond, then_expr, else_expr) => {
-                self.collect_explicit_return_param_sources_in_expr(
+                self.collect_explicit_return_param_sources_in_cond(
                     body,
                     typed_body,
                     *cond,
@@ -1663,6 +1663,52 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     }
                     PlaceBase::Binding(_) => *saw_non_param = true,
                 }
+            }
+        }
+    }
+
+    fn collect_explicit_return_param_sources_in_cond(
+        &self,
+        body: Body<'db>,
+        typed_body: &TypedBody<'db>,
+        cond: CondId,
+        out: &mut FxHashSet<usize>,
+        saw_non_param: &mut bool,
+    ) {
+        let Partial::Present(cond_data) = cond.data(self.db, body) else {
+            return;
+        };
+
+        match cond_data {
+            Cond::Expr(expr) => self.collect_explicit_return_param_sources_in_expr(
+                body,
+                typed_body,
+                *expr,
+                out,
+                saw_non_param,
+            ),
+            Cond::Let(_, value) => self.collect_explicit_return_param_sources_in_expr(
+                body,
+                typed_body,
+                *value,
+                out,
+                saw_non_param,
+            ),
+            Cond::Bin(lhs, rhs, _) => {
+                self.collect_explicit_return_param_sources_in_cond(
+                    body,
+                    typed_body,
+                    *lhs,
+                    out,
+                    saw_non_param,
+                );
+                self.collect_explicit_return_param_sources_in_cond(
+                    body,
+                    typed_body,
+                    *rhs,
+                    out,
+                    saw_non_param,
+                );
             }
         }
     }

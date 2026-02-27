@@ -21,3 +21,7 @@ fn plain_if() {
 fn nested() {
     let x = if a { if b { 1 } else { 2 } } else { 3 }
 }
+
+fn if_let_width(maybe: Option<u64>) -> u64 {
+    if  let  Some(value) = maybe { value }  else  { 0 }
+}

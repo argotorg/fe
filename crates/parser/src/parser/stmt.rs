@@ -8,7 +8,7 @@ use super::{
     ErrProof, Parser, Recovery,
     attr::parse_attr_list,
     define_scope,
-    expr::{parse_expr, parse_expr_no_struct},
+    expr::{parse_condition_expr, parse_expr, parse_expr_no_struct},
     expr_atom::BlockExprScope,
     pat::parse_pat,
     token_stream::TokenStream,
@@ -117,7 +117,7 @@ impl super::Parse for WhileStmtScope {
         parser.bump_expected(SyntaxKind::WhileKw);
 
         parser.set_scope_recovery_stack(&[SyntaxKind::LBrace]);
-        parse_expr_no_struct(parser)?;
+        parse_condition_expr(parser)?;
 
         if parser.find_and_pop(
             SyntaxKind::LBrace,

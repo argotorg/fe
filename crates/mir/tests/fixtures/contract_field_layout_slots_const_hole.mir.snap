@@ -1,5 +1,6 @@
 ---
 source: crates/mir/tests/lowering_snapshots.rs
+assertion_line: 26
 expression: mir_output
 ---
 fn __LayoutHoles_recv_0_0(v0: Set, v1: u256, v2: u256) -> ():
@@ -314,7 +315,7 @@ fn soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallD
     v4: u256 = load mem[&mem[v0].0].1
     v3: u256 = (v4 + 32)
     v5: u256 = load mem[&mem[v0].0].1
-    br ((v3 < v5) || (v3 > v1)) bb1 bb2
+    br (v3 < v5) bb1 bb3
   bb1:
     terminate revert(0, 0)
   bb2:
@@ -323,6 +324,8 @@ fn soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallD
     v6: u256 = calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at(v7, v8)
     store mem[&mem[v0].0].1 = v3
     ret v6
+  bb3:
+    br (v3 > v1) bb1 bb2
 
 fn solencoder_h1b9228b90dad6928_new() -> SolEncoder:
   bb0:
