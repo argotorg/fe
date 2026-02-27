@@ -14,8 +14,6 @@ a
     + b
 a
     -= b
-a
-    < b
 true
     || false
 a.b.c

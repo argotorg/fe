@@ -2,7 +2,7 @@ use std::convert::{Infallible, identity};
 use unwrap_infallible::UnwrapInfallible;
 
 use super::{
-    Checkpoint, ErrProof, Parser, Recovery, define_scope,
+    Checkpoint, ErrProof, Parser, Recovery, TextSize, define_scope,
     expr_atom::{self, is_expr_atom_head},
     param::{CallArgListScope, GenericArgListScope},
     path::is_qualified_type,
@@ -61,11 +61,19 @@ fn parse_expr_with_min_bp<S: TokenStream>(
             && has_line_break_before(parser)
             && !is_aug_assign(parser)
         {
+            let range = line_start_op_range(parser);
             parser.add_error(ParseError::Msg(
                 "line-start `-` after an expression is ambiguous; move `-` to the previous line for subtraction or parenthesize explicitly"
                     .to_string(),
-                TextRange::empty(parser.end_of_prev_token),
+                range,
             ));
+            break;
+        }
+        if min_bp == 0
+            && kind == SyntaxKind::Lt
+            && has_line_break_before(parser)
+            && is_line_start_qualified_type(parser)
+        {
             break;
         }
 
@@ -201,10 +209,6 @@ fn infix_binding_power<S: TokenStream>(parser: &mut Parser<S>) -> Option<(u8, u8
         Amp2 => (60, 61),
         NotEq | Eq2 => (70, 71),
         Lt => {
-            if has_line_break_before(parser) && is_qualified_type(parser) {
-                parser.set_newline_as_trivia(is_trivia);
-                return None;
-            }
             if is_lshift(parser) {
                 (110, 111)
             } else {
@@ -493,6 +497,26 @@ fn has_line_break_before<S: TokenStream>(parser: &mut Parser<S>) -> bool {
     let has_line_break = parser.current_kind() == Some(SyntaxKind::Newline);
     parser.set_newline_as_trivia(nt);
     has_line_break
+}
+
+fn is_line_start_qualified_type<S: TokenStream>(parser: &mut Parser<S>) -> bool {
+    let nt = parser.set_newline_as_trivia(true);
+    let is_qualified = parser.current_kind() == Some(SyntaxKind::Lt) && is_qualified_type(parser);
+    parser.set_newline_as_trivia(nt);
+    is_qualified
+}
+
+fn line_start_op_range<S: TokenStream>(parser: &mut Parser<S>) -> TextRange {
+    parser.dry_run(|parser| {
+        let nt = parser.set_newline_as_trivia(true);
+        parser.bump_trivias();
+        let start = parser.current_pos;
+        let end = parser
+            .current_token()
+            .map_or(start, |current_token| start + current_token.text_size());
+        parser.set_newline_as_trivia(nt);
+        TextRange::new(start, end)
+    })
 }
 
 fn bump_bin_op<S: TokenStream>(parser: &mut Parser<S>) {
