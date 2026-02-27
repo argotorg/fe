@@ -192,47 +192,47 @@ note:
    │                    ^ u8
 
 note: 
-   ┌─ custom_imported_variants.fe:47:52
+   ┌─ custom_imported_variants.fe:47:49
    │  
-47 │   fn match_with_unreachable_imported(tag: Tag) -> u8 {
-   │ ╭────────────────────────────────────────────────────^
-48 │ │     use Tag::*
+47 │   fn match_imported_tuple_variant(c: Color) -> u8 {
+   │ ╭─────────────────────────────────────────────────^
+48 │ │     use Color::*
 49 │ │     
-50 │ │     match tag {
+50 │ │     match c {
    · │
-62 │ │     }
-63 │ │ }
+63 │ │     }
+64 │ │ }
    │ ╰─^ u8
 
 note: 
    ┌─ custom_imported_variants.fe:50:5
    │  
-50 │ ╭     match tag {
-51 │ │         Tag1 => {
+50 │ ╭     match c {
+51 │ │         Red => {
 52 │ │             return 1
 53 │ │         }
    · │
-61 │ │         }
-62 │ │     }
+62 │ │         }
+63 │ │     }
    │ ╰─────^ u8
 
 note: 
    ┌─ custom_imported_variants.fe:50:11
    │
-50 │     match tag {
-   │           ^^^ Tag
+50 │     match c {
+   │           ^ Color
 
 note: 
    ┌─ custom_imported_variants.fe:51:9
    │
-51 │         Tag1 => {
-   │         ^^^^ Tag
+51 │         Red => {
+   │         ^^^ Color
 
 note: 
-   ┌─ custom_imported_variants.fe:51:17
+   ┌─ custom_imported_variants.fe:51:16
    │  
-51 │           Tag1 => {
-   │ ╭─────────────────^
+51 │           Red => {
+   │ ╭────────────────^
 52 │ │             return 1
 53 │ │         }
    │ ╰─────────^ u8
@@ -246,449 +246,261 @@ note:
 note: 
    ┌─ custom_imported_variants.fe:54:9
    │
-54 │         _ => {
-   │         ^ Tag
+54 │         Green => {
+   │         ^^^^^ Color
 
 note: 
-   ┌─ custom_imported_variants.fe:54:14
+   ┌─ custom_imported_variants.fe:54:18
    │  
-54 │           _ => {
-   │ ╭──────────────^
-55 │ │             return 0
+54 │           Green => {
+   │ ╭──────────────────^
+55 │ │             return 2
 56 │ │         }
    │ ╰─────────^ u8
 
 note: 
    ┌─ custom_imported_variants.fe:55:20
    │
-55 │             return 0
+55 │             return 2
    │                    ^ u8
 
 note: 
-   ┌─ custom_imported_variants.fe:59:9
+   ┌─ custom_imported_variants.fe:57:9
    │
-59 │         Tag2 => {
-   │         ^^^^ Tag
+57 │         Blue => {
+   │         ^^^^ Color
 
 note: 
-   ┌─ custom_imported_variants.fe:59:17
+   ┌─ custom_imported_variants.fe:57:17
    │  
-59 │           Tag2 => {
+57 │           Blue => {
    │ ╭─────────────────^
-60 │ │             return 2
-61 │ │         }
+58 │ │             return 3
+59 │ │         }
    │ ╰─────────^ u8
 
 note: 
-   ┌─ custom_imported_variants.fe:60:20
+   ┌─ custom_imported_variants.fe:58:20
    │
-60 │             return 2
+58 │             return 3
    │                    ^ u8
 
 note: 
-   ┌─ custom_imported_variants.fe:66:53
+   ┌─ custom_imported_variants.fe:60:9
+   │
+60 │         Rgb(r, g, b) => {
+   │         ^^^^^^^^^^^^ Color
+
+note: 
+   ┌─ custom_imported_variants.fe:60:13
+   │
+60 │         Rgb(r, g, b) => {
+   │             ^ ref u8
+
+note: 
+   ┌─ custom_imported_variants.fe:60:16
+   │
+60 │         Rgb(r, g, b) => {
+   │                ^ ref u8
+
+note: 
+   ┌─ custom_imported_variants.fe:60:19
+   │
+60 │         Rgb(r, g, b) => {
+   │                   ^ ref u8
+
+note: 
+   ┌─ custom_imported_variants.fe:60:25
    │  
-66 │   fn match_with_unreachable_full_path(tag: Tag) -> u8 {
-   │ ╭─────────────────────────────────────────────────────^
-67 │ │     match tag {
-68 │ │         Tag::Tag1 => {
-69 │ │             return 1
+60 │           Rgb(r, g, b) => {
+   │ ╭─────────────────────────^
+61 │ │             return r + g + b
+62 │ │         }
+   │ ╰─────────^ u8
+
+note: 
+   ┌─ custom_imported_variants.fe:61:20
+   │
+61 │             return r + g + b
+   │                    ^ u8
+
+note: 
+   ┌─ custom_imported_variants.fe:61:20
+   │
+61 │             return r + g + b
+   │                    ^^^^^ u8
+
+note: 
+   ┌─ custom_imported_variants.fe:61:20
+   │
+61 │             return r + g + b
+   │                    ^^^^^^^^^ u8
+
+note: 
+   ┌─ custom_imported_variants.fe:61:24
+   │
+61 │             return r + g + b
+   │                        ^ u8
+
+note: 
+   ┌─ custom_imported_variants.fe:61:28
+   │
+61 │             return r + g + b
+   │                            ^ u8
+
+note: 
+   ┌─ custom_imported_variants.fe:67:50
+   │  
+67 │   fn match_full_path_tuple_variant(c: Color) -> u8 {
+   │ ╭──────────────────────────────────────────────────^
+68 │ │     match c {
+69 │ │         Color::Red => {
+70 │ │             return 1
    · │
-78 │ │     }
-79 │ │ }
+81 │ │     }
+82 │ │ }
    │ ╰─^ u8
 
 note: 
-   ┌─ custom_imported_variants.fe:67:5
+   ┌─ custom_imported_variants.fe:68:5
    │  
-67 │ ╭     match tag {
-68 │ │         Tag::Tag1 => {
-69 │ │             return 1
-70 │ │         }
+68 │ ╭     match c {
+69 │ │         Color::Red => {
+70 │ │             return 1
+71 │ │         }
    · │
-77 │ │         }
-78 │ │     }
+80 │ │         }
+81 │ │     }
    │ ╰─────^ u8
 
 note: 
-   ┌─ custom_imported_variants.fe:67:11
+   ┌─ custom_imported_variants.fe:68:11
    │
-67 │     match tag {
-   │           ^^^ Tag
+68 │     match c {
+   │           ^ Color
 
 note: 
-   ┌─ custom_imported_variants.fe:68:9
+   ┌─ custom_imported_variants.fe:69:9
    │
-68 │         Tag::Tag1 => {
-   │         ^^^^^^^^^ Tag
+69 │         Color::Red => {
+   │         ^^^^^^^^^^ Color
 
 note: 
-   ┌─ custom_imported_variants.fe:68:22
+   ┌─ custom_imported_variants.fe:69:23
    │  
-68 │           Tag::Tag1 => {
-   │ ╭──────────────────────^
-69 │ │             return 1
-70 │ │         }
+69 │           Color::Red => {
+   │ ╭───────────────────────^
+70 │ │             return 1
+71 │ │         }
    │ ╰─────────^ u8
 
 note: 
-   ┌─ custom_imported_variants.fe:69:20
+   ┌─ custom_imported_variants.fe:70:20
    │
-69 │             return 1
+70 │             return 1
    │                    ^ u8
 
 note: 
-   ┌─ custom_imported_variants.fe:71:9
+   ┌─ custom_imported_variants.fe:72:9
    │
-71 │         _ => {
-   │         ^ Tag
+72 │         Color::Green => {
+   │         ^^^^^^^^^^^^ Color
 
 note: 
-   ┌─ custom_imported_variants.fe:71:14
+   ┌─ custom_imported_variants.fe:72:25
    │  
-71 │           _ => {
-   │ ╭──────────────^
-72 │ │             return 0
-73 │ │         }
+72 │           Color::Green => {
+   │ ╭─────────────────────────^
+73 │ │             return 2
+74 │ │         }
    │ ╰─────────^ u8
 
 note: 
-   ┌─ custom_imported_variants.fe:72:20
+   ┌─ custom_imported_variants.fe:73:20
    │
-72 │             return 0
+73 │             return 2
    │                    ^ u8
 
 note: 
    ┌─ custom_imported_variants.fe:75:9
    │
-75 │         Tag::Tag2 => {
-   │         ^^^^^^^^^ Tag
+75 │         Color::Blue => {
+   │         ^^^^^^^^^^^ Color
 
 note: 
-   ┌─ custom_imported_variants.fe:75:22
+   ┌─ custom_imported_variants.fe:75:24
    │  
-75 │           Tag::Tag2 => {
-   │ ╭──────────────────────^
-76 │ │             return 2
+75 │           Color::Blue => {
+   │ ╭────────────────────────^
+76 │ │             return 3
 77 │ │         }
    │ ╰─────────^ u8
 
 note: 
    ┌─ custom_imported_variants.fe:76:20
    │
-76 │             return 2
+76 │             return 3
    │                    ^ u8
 
 note: 
-   ┌─ custom_imported_variants.fe:82:49
-   │  
-82 │   fn match_imported_tuple_variant(c: Color) -> u8 {
-   │ ╭─────────────────────────────────────────────────^
-83 │ │     use Color::*
-84 │ │     
-85 │ │     match c {
-   · │
-98 │ │     }
-99 │ │ }
-   │ ╰─^ u8
-
-note: 
-   ┌─ custom_imported_variants.fe:85:5
-   │  
-85 │ ╭     match c {
-86 │ │         Red => {
-87 │ │             return 1
-88 │ │         }
-   · │
-97 │ │         }
-98 │ │     }
-   │ ╰─────^ u8
-
-note: 
-   ┌─ custom_imported_variants.fe:85:11
+   ┌─ custom_imported_variants.fe:78:9
    │
-85 │     match c {
-   │           ^ Color
+78 │         Color::Rgb(r, g, b) => {
+   │         ^^^^^^^^^^^^^^^^^^^ Color
 
 note: 
-   ┌─ custom_imported_variants.fe:86:9
+   ┌─ custom_imported_variants.fe:78:20
    │
-86 │         Red => {
-   │         ^^^ Color
+78 │         Color::Rgb(r, g, b) => {
+   │                    ^ ref u8
 
 note: 
-   ┌─ custom_imported_variants.fe:86:16
+   ┌─ custom_imported_variants.fe:78:23
+   │
+78 │         Color::Rgb(r, g, b) => {
+   │                       ^ ref u8
+
+note: 
+   ┌─ custom_imported_variants.fe:78:26
+   │
+78 │         Color::Rgb(r, g, b) => {
+   │                          ^ ref u8
+
+note: 
+   ┌─ custom_imported_variants.fe:78:32
    │  
-86 │           Red => {
-   │ ╭────────────────^
-87 │ │             return 1
-88 │ │         }
+78 │           Color::Rgb(r, g, b) => {
+   │ ╭────────────────────────────────^
+79 │ │             return r + g + b
+80 │ │         }
    │ ╰─────────^ u8
 
 note: 
-   ┌─ custom_imported_variants.fe:87:20
+   ┌─ custom_imported_variants.fe:79:20
    │
-87 │             return 1
+79 │             return r + g + b
    │                    ^ u8
 
 note: 
-   ┌─ custom_imported_variants.fe:89:9
+   ┌─ custom_imported_variants.fe:79:20
    │
-89 │         Green => {
-   │         ^^^^^ Color
-
-note: 
-   ┌─ custom_imported_variants.fe:89:18
-   │  
-89 │           Green => {
-   │ ╭──────────────────^
-90 │ │             return 2
-91 │ │         }
-   │ ╰─────────^ u8
-
-note: 
-   ┌─ custom_imported_variants.fe:90:20
-   │
-90 │             return 2
-   │                    ^ u8
-
-note: 
-   ┌─ custom_imported_variants.fe:92:9
-   │
-92 │         Blue => {
-   │         ^^^^ Color
-
-note: 
-   ┌─ custom_imported_variants.fe:92:17
-   │  
-92 │           Blue => {
-   │ ╭─────────────────^
-93 │ │             return 3
-94 │ │         }
-   │ ╰─────────^ u8
-
-note: 
-   ┌─ custom_imported_variants.fe:93:20
-   │
-93 │             return 3
-   │                    ^ u8
-
-note: 
-   ┌─ custom_imported_variants.fe:95:9
-   │
-95 │         Rgb(r, g, b) => {
-   │         ^^^^^^^^^^^^ Color
-
-note: 
-   ┌─ custom_imported_variants.fe:95:13
-   │
-95 │         Rgb(r, g, b) => {
-   │             ^ ref u8
-
-note: 
-   ┌─ custom_imported_variants.fe:95:16
-   │
-95 │         Rgb(r, g, b) => {
-   │                ^ ref u8
-
-note: 
-   ┌─ custom_imported_variants.fe:95:19
-   │
-95 │         Rgb(r, g, b) => {
-   │                   ^ ref u8
-
-note: 
-   ┌─ custom_imported_variants.fe:95:25
-   │  
-95 │           Rgb(r, g, b) => {
-   │ ╭─────────────────────────^
-96 │ │             return r + g + b
-97 │ │         }
-   │ ╰─────────^ u8
-
-note: 
-   ┌─ custom_imported_variants.fe:96:20
-   │
-96 │             return r + g + b
-   │                    ^ u8
-
-note: 
-   ┌─ custom_imported_variants.fe:96:20
-   │
-96 │             return r + g + b
+79 │             return r + g + b
    │                    ^^^^^ u8
 
 note: 
-   ┌─ custom_imported_variants.fe:96:20
+   ┌─ custom_imported_variants.fe:79:20
    │
-96 │             return r + g + b
+79 │             return r + g + b
    │                    ^^^^^^^^^ u8
 
 note: 
-   ┌─ custom_imported_variants.fe:96:24
+   ┌─ custom_imported_variants.fe:79:24
    │
-96 │             return r + g + b
+79 │             return r + g + b
    │                        ^ u8
 
 note: 
-   ┌─ custom_imported_variants.fe:96:28
+   ┌─ custom_imported_variants.fe:79:28
    │
-96 │             return r + g + b
+79 │             return r + g + b
    │                            ^ u8
-
-note: 
-    ┌─ custom_imported_variants.fe:102:50
-    │  
-102 │   fn match_full_path_tuple_variant(c: Color) -> u8 {
-    │ ╭──────────────────────────────────────────────────^
-103 │ │     match c {
-104 │ │         Color::Red => {
-105 │ │             return 1
-    · │
-116 │ │     }
-117 │ │ }
-    │ ╰─^ u8
-
-note: 
-    ┌─ custom_imported_variants.fe:103:5
-    │  
-103 │ ╭     match c {
-104 │ │         Color::Red => {
-105 │ │             return 1
-106 │ │         }
-    · │
-115 │ │         }
-116 │ │     }
-    │ ╰─────^ u8
-
-note: 
-    ┌─ custom_imported_variants.fe:103:11
-    │
-103 │     match c {
-    │           ^ Color
-
-note: 
-    ┌─ custom_imported_variants.fe:104:9
-    │
-104 │         Color::Red => {
-    │         ^^^^^^^^^^ Color
-
-note: 
-    ┌─ custom_imported_variants.fe:104:23
-    │  
-104 │           Color::Red => {
-    │ ╭───────────────────────^
-105 │ │             return 1
-106 │ │         }
-    │ ╰─────────^ u8
-
-note: 
-    ┌─ custom_imported_variants.fe:105:20
-    │
-105 │             return 1
-    │                    ^ u8
-
-note: 
-    ┌─ custom_imported_variants.fe:107:9
-    │
-107 │         Color::Green => {
-    │         ^^^^^^^^^^^^ Color
-
-note: 
-    ┌─ custom_imported_variants.fe:107:25
-    │  
-107 │           Color::Green => {
-    │ ╭─────────────────────────^
-108 │ │             return 2
-109 │ │         }
-    │ ╰─────────^ u8
-
-note: 
-    ┌─ custom_imported_variants.fe:108:20
-    │
-108 │             return 2
-    │                    ^ u8
-
-note: 
-    ┌─ custom_imported_variants.fe:110:9
-    │
-110 │         Color::Blue => {
-    │         ^^^^^^^^^^^ Color
-
-note: 
-    ┌─ custom_imported_variants.fe:110:24
-    │  
-110 │           Color::Blue => {
-    │ ╭────────────────────────^
-111 │ │             return 3
-112 │ │         }
-    │ ╰─────────^ u8
-
-note: 
-    ┌─ custom_imported_variants.fe:111:20
-    │
-111 │             return 3
-    │                    ^ u8
-
-note: 
-    ┌─ custom_imported_variants.fe:113:9
-    │
-113 │         Color::Rgb(r, g, b) => {
-    │         ^^^^^^^^^^^^^^^^^^^ Color
-
-note: 
-    ┌─ custom_imported_variants.fe:113:20
-    │
-113 │         Color::Rgb(r, g, b) => {
-    │                    ^ ref u8
-
-note: 
-    ┌─ custom_imported_variants.fe:113:23
-    │
-113 │         Color::Rgb(r, g, b) => {
-    │                       ^ ref u8
-
-note: 
-    ┌─ custom_imported_variants.fe:113:26
-    │
-113 │         Color::Rgb(r, g, b) => {
-    │                          ^ ref u8
-
-note: 
-    ┌─ custom_imported_variants.fe:113:32
-    │  
-113 │           Color::Rgb(r, g, b) => {
-    │ ╭────────────────────────────────^
-114 │ │             return r + g + b
-115 │ │         }
-    │ ╰─────────^ u8
-
-note: 
-    ┌─ custom_imported_variants.fe:114:20
-    │
-114 │             return r + g + b
-    │                    ^ u8
-
-note: 
-    ┌─ custom_imported_variants.fe:114:20
-    │
-114 │             return r + g + b
-    │                    ^^^^^ u8
-
-note: 
-    ┌─ custom_imported_variants.fe:114:20
-    │
-114 │             return r + g + b
-    │                    ^^^^^^^^^ u8
-
-note: 
-    ┌─ custom_imported_variants.fe:114:24
-    │
-114 │             return r + g + b
-    │                        ^ u8
-
-note: 
-    ┌─ custom_imported_variants.fe:114:28
-    │
-114 │             return r + g + b
-    │                            ^ u8
