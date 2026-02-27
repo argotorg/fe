@@ -292,15 +292,16 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
                 match op {
                     hir::hir_def::expr::UnOp::Mut | hir::hir_def::expr::UnOp::Ref => {
-                        let Some(place) = self.place_for_borrow_expr(*inner) else {
-                            panic!("borrow operand must lower to a place");
-                        };
-                        let space = self.value_address_space(place.base);
-                        let value_ty = self.builder.body.value(value_id).ty;
-                        self.builder.body.values[value_id.index()].origin =
-                            ValueOrigin::PlaceRef(place);
-                        self.builder.body.values[value_id.index()].repr =
-                            self.value_repr_for_ty(value_ty, space);
+                        if let Some(place) = self.place_for_borrow_expr(*inner) {
+                            let space = self.value_address_space(place.base);
+                            let value_ty = self.builder.body.value(value_id).ty;
+                            self.builder.body.values[value_id.index()].origin =
+                                ValueOrigin::PlaceRef(place);
+                            self.builder.body.values[value_id.index()].repr =
+                                self.value_repr_for_ty(value_ty, space);
+                        } else {
+                            let _ = self.lower_expr(*inner);
+                        }
                     }
                     _ => {
                         let _ = self.lower_expr(*inner);
@@ -1265,7 +1266,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         // Handle ByPlace: resolve binding and materialize as needed
         if resolved_arg.pass_mode == EffectPassMode::ByPlace {
             let EffectArg::Place(place) = &resolved_arg.arg else {
-                return self.default_effect_arg();
+                panic!("invalid effect argument for ByPlace: {resolved_arg:?}");
             };
             let PlaceBase::Binding(binding) = place.base;
 
@@ -1276,7 +1277,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             if matches!(binding, LocalBinding::EffectParam { .. }) {
                 let value = self
                     .binding_value(binding)
-                    .unwrap_or_else(|| self.synthetic_u256(BigUint::from(0u8)));
+                    .unwrap_or_else(|| panic!("missing value for effect binding `{binding:?}`"));
                 return value;
             }
 
@@ -1287,7 +1288,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             };
 
             let Some(local) = self.local_for_binding(binding) else {
-                return self.default_effect_arg();
+                panic!("missing local for effect binding `{binding:?}`");
             };
 
             let value_repr = self.value_repr_for_ty(binding_ty, addr_space);
@@ -1299,29 +1300,24 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 return value;
             }
 
-            // Memory provider: materialize in temp place
-            if matches!(addr_space, AddressSpaceKind::Memory) {
-                let initial =
-                    self.alloc_value(binding_ty, ValueOrigin::Local(local), ValueRepr::Word);
-                let (addr_value, addr_place) = self.materialize_value_in_temp_place(
-                    binding_ty,
-                    initial,
-                    AddressSpaceKind::Memory,
-                    "eff",
-                );
-                if binding.is_mut() {
-                    effect_writebacks.push((local, addr_place));
-                }
-                return addr_value;
+            // Memory provider: materialize in temp place.
+            let initial = self.alloc_value(binding_ty, ValueOrigin::Local(local), ValueRepr::Word);
+            let (addr_value, addr_place) = self.materialize_value_in_temp_place(
+                binding_ty,
+                initial,
+                AddressSpaceKind::Memory,
+                "eff",
+            );
+            if binding.is_mut() {
+                effect_writebacks.push((local, addr_place));
             }
-
-            return self.default_effect_arg();
+            return addr_value;
         }
 
         // Handle ByTempPlace: lower value and materialize if needed
         if resolved_arg.pass_mode == EffectPassMode::ByTempPlace {
             let EffectArg::Value(expr_id) = &resolved_arg.arg else {
-                return self.default_effect_arg();
+                panic!("invalid effect argument for ByTempPlace: {resolved_arg:?}");
             };
 
             let value = self.lower_expr(*expr_id);
@@ -1346,19 +1342,16 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 EffectArg::Value(expr_id) => self.lower_expr(*expr_id),
                 EffectArg::Binding(binding) => self
                     .binding_value(*binding)
-                    .unwrap_or_else(|| self.synthetic_u256(BigUint::from(0u8))),
-                EffectArg::Unknown | EffectArg::Place(_) => self.synthetic_u256(BigUint::from(0u8)),
+                    .unwrap_or_else(|| panic!("missing value for effect binding `{binding:?}`")),
+                EffectArg::Unknown | EffectArg::Place(_) => {
+                    panic!("invalid effect argument for ByValue: {resolved_arg:?}");
+                }
             };
 
             return value;
         }
 
-        // Unknown or any other case
-        self.default_effect_arg()
-    }
-
-    fn default_effect_arg(&mut self) -> ValueId {
-        self.synthetic_u256(BigUint::from(0u8))
+        panic!("invalid effect argument pass mode: {resolved_arg:?}");
     }
 
     fn lower_expr_into_local(&mut self, stmt: StmtId, expr: ExprId, dest: LocalId) -> ValueId {
@@ -3200,5 +3193,92 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use common::InputDb;
+    use driver::DriverDataBase;
+    use hir::analysis::ty::ty_check::check_func_body;
+    use url::Url;
+
+    use super::*;
+
+    #[test]
+    #[should_panic(expected = "invalid effect argument for ByValue")]
+    fn lower_effect_arg_panics_instead_of_silently_defaulting() {
+        let mut db = DriverDataBase::default();
+        let url = Url::parse("file:///invalid_effect_arg_panics.fe").unwrap();
+        let src = r#"
+fn callee() uses (x: mut u256) {
+    x += 1
+}
+
+pub fn entry() -> u256 {
+    0
+}
+"#;
+
+        let file = db.workspace().touch(&mut db, url, Some(src.to_owned()));
+        let top_mod = db.top_mod(file);
+
+        let entry = top_mod
+            .all_funcs(&db)
+            .iter()
+            .copied()
+            .find(|func| {
+                func.name(&db)
+                    .to_opt()
+                    .is_some_and(|name| name.data(&db) == "entry")
+            })
+            .expect("expected `entry` function");
+
+        let callee = top_mod
+            .all_funcs(&db)
+            .iter()
+            .copied()
+            .find(|func| {
+                func.name(&db)
+                    .to_opt()
+                    .is_some_and(|name| name.data(&db) == "callee")
+            })
+            .expect("expected `callee` function");
+
+        let (diags, typed_body) = check_func_body(&db, entry);
+        assert!(diags.is_empty(), "expected no diagnostics, got {diags:?}");
+        let body = entry.body(&db).expect("expected `entry` body");
+
+        let mut builder = MirBuilder::new_for_func(
+            &db,
+            entry,
+            body,
+            typed_body,
+            &[],
+            LoweringOverrides {
+                receiver_space: None,
+                effect_param_space_overrides: &[],
+                param_capability_space_overrides: &[],
+            },
+        )
+        .expect("failed to create MirBuilder");
+
+        let key = callee
+            .effect_params(&db)
+            .next()
+            .and_then(|effect| effect.key_path(&db))
+            .expect("expected a callee effect key path");
+
+        let resolved_arg = ResolvedEffectArg {
+            param_idx: 0,
+            key,
+            arg: EffectArg::Unknown,
+            pass_mode: EffectPassMode::ByValue,
+            key_kind: EffectKeyKind::Type,
+            instantiated_target_ty: None,
+        };
+
+        let mut writebacks = Vec::new();
+        let _ = builder.lower_effect_arg(&resolved_arg, &mut writebacks);
     }
 }

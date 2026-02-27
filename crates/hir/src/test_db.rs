@@ -37,7 +37,7 @@ use codespan_reporting::{
 };
 use common::{
     InputDb, define_input_db,
-    diagnostics::{LabelStyle, Severity, Span},
+    diagnostics::{LabelStyle, Severity, Span, cmp_complete_diagnostics},
     file::File,
     indexmap::IndexMap,
     stdlib::{HasBuiltinCore, HasBuiltinStd},
@@ -211,7 +211,9 @@ impl HirAnalysisTestDb {
                 }
 
                 // Extract the file path from the primary span's file
-                let span = complete_diag.primary_span();
+                let Some(span) = complete_diag.primary_span() else {
+                    return true;
+                };
                 let file_path = span
                     .file
                     .path(self)
@@ -252,12 +254,8 @@ impl HirAnalysisTestDb {
             let mut buffer = writer.buffer();
             let config = term::Config::default();
 
-            // copied from driver
             let mut diags: Vec<_> = filtered_diags.iter().map(|d| d.to_complete(self)).collect();
-            diags.sort_by(|lhs, rhs| match lhs.error_code.cmp(&rhs.error_code) {
-                std::cmp::Ordering::Equal => lhs.primary_span().cmp(&rhs.primary_span()),
-                ord => ord,
-            });
+            diags.sort_by(cmp_complete_diagnostics);
 
             for diag in diags {
                 let cs_diag = &diag.to_cs(self);

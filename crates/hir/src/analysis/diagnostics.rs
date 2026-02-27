@@ -23,10 +23,11 @@ use crate::{
 };
 use common::diagnostics::{
     CompleteDiagnostic, DiagnosticPass, GlobalErrorCode, LabelStyle, Severity, Span, SpanKind,
-    SubDiagnostic,
+    SubDiagnostic, cmp_complete_diagnostics,
 };
 use either::Either;
 use itertools::Itertools;
+use parser::TextRange;
 use std::cmp::Ordering;
 
 use common::file::File;
@@ -265,10 +266,7 @@ where
     let config = term::Config::default();
 
     let mut completes: Vec<_> = diags.into_iter().map(|diag| diag.to_complete(db)).collect();
-    completes.sort_by(|lhs, rhs| match lhs.error_code.cmp(&rhs.error_code) {
-        std::cmp::Ordering::Equal => lhs.primary_span().cmp(&rhs.primary_span()),
-        ord => ord,
-    });
+    completes.sort_by(cmp_complete_diagnostics);
 
     for diag in completes {
         term::emit(
@@ -652,13 +650,21 @@ impl DiagnosticVoucher for PathResDiag<'_> {
 
             Self::NotFound(prim_span, ident) => {
                 let ident = ident.data(db);
+                let span = prim_span.resolve(db).or_else(|| {
+                    let top_mod = prim_span.top_mod(db)?;
+                    Some(Span::new(
+                        top_mod.file(db),
+                        TextRange::new(0.into(), 0.into()),
+                        SpanKind::NotFound,
+                    ))
+                });
                 CompleteDiagnostic {
                     severity,
                     message: format!("`{ident}` is not found"),
                     sub_diagnostics: vec![SubDiagnostic {
                         style: LabelStyle::Primary,
                         message: format!("`{ident}` is not found"),
-                        span: prim_span.resolve(db),
+                        span,
                     }],
                     notes: vec![],
                     error_code,

@@ -2,7 +2,7 @@ use async_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range, Url}
 use camino::Utf8Path;
 use codespan_reporting::files as cs_files;
 use common::{
-    diagnostics::CompleteDiagnostic,
+    diagnostics::{CompleteDiagnostic, cmp_complete_diagnostics},
     file::{File, IngotFileKind},
     ingot::IngotKind,
 };
@@ -68,10 +68,7 @@ impl LspDiagnostics for DriverDataBase {
                 .iter()
                 .map(|d| d.to_complete(self).clone())
                 .collect();
-            finalized_diags.sort_by(|lhs, rhs| match lhs.error_code.cmp(&rhs.error_code) {
-                std::cmp::Ordering::Equal => lhs.primary_span().cmp(&rhs.primary_span()),
-                ord => ord,
-            });
+            finalized_diags.sort_by(cmp_complete_diagnostics);
             for diag in finalized_diags {
                 let lsp_diags = diag_to_lsp(self, diag).clone();
                 for (uri, more_diags) in lsp_diags {
@@ -90,10 +87,7 @@ impl LspDiagnostics for DriverDataBase {
             Vec::new()
         };
         tracing::debug!("[fe:timing]  MIR diagnostics: {:?}", t_mir.elapsed());
-        mir_diags.sort_by(|lhs, rhs| match lhs.error_code.cmp(&rhs.error_code) {
-            std::cmp::Ordering::Equal => lhs.primary_span().cmp(&rhs.primary_span()),
-            ord => ord,
-        });
+        mir_diags.sort_by(cmp_complete_diagnostics);
         for diag in mir_diags {
             let lsp_diags = diag_to_lsp(self, diag).clone();
             for (uri, more_diags) in lsp_diags {

@@ -4,6 +4,7 @@ use codespan_reporting::term::{
     self,
     termcolor::{BufferWriter, ColorChoice},
 };
+use common::diagnostics::cmp_complete_diagnostics;
 use dir_test::{Fixture, dir_test};
 use driver::diagnostics::{CsDbWrapper, ToCsDiag};
 use fe_hir::test_db::{HirAnalysisTestDb, initialize_analysis_pass};
@@ -32,10 +33,7 @@ fn exhaustive_matches(fixture: Fixture<&str>) {
         let config = term::Config::default();
 
         let mut complete_diags: Vec<_> = diags.iter().map(|d| d.to_complete(&db)).collect();
-        complete_diags.sort_by(|lhs, rhs| match lhs.error_code.cmp(&rhs.error_code) {
-            std::cmp::Ordering::Equal => lhs.primary_span().cmp(&rhs.primary_span()),
-            ord => ord,
-        });
+        complete_diags.sort_by(cmp_complete_diagnostics);
 
         let mut diagnostic_output = format!(
             "Exhaustive test file {} has {} diagnostic(s):\n\n",
@@ -86,10 +84,7 @@ fn non_exhaustive_matches(fixture: Fixture<&str>) {
     let config = term::Config::default();
 
     let mut complete_diags: Vec<_> = diags.iter().map(|d| d.to_complete(&db)).collect();
-    complete_diags.sort_by(|lhs, rhs| match lhs.error_code.cmp(&rhs.error_code) {
-        std::cmp::Ordering::Equal => lhs.primary_span().cmp(&rhs.primary_span()),
-        ord => ord,
-    });
+    complete_diags.sort_by(cmp_complete_diagnostics);
 
     let mut diagnostic_output = format!(
         "Non-exhaustive test file {} has {} diagnostic(s):\n\n",
@@ -133,10 +128,7 @@ fn unreachable_patterns(fixture: Fixture<&str>) {
     let config = term::Config::default();
 
     let mut complete_diags: Vec<_> = diags.iter().map(|d| d.to_complete(&db)).collect();
-    complete_diags.sort_by(|lhs, rhs| match lhs.error_code.cmp(&rhs.error_code) {
-        std::cmp::Ordering::Equal => lhs.primary_span().cmp(&rhs.primary_span()),
-        ord => ord,
-    });
+    complete_diags.sort_by(cmp_complete_diagnostics);
 
     let mut diagnostic_output = format!(
         "Unreachable test file {} has {} diagnostic(s):\n\n",
@@ -175,10 +167,7 @@ fn misc_pattern_tests(fixture: Fixture<&str>) {
         let config = term::Config::default();
 
         let mut complete_diags: Vec<_> = diags.iter().map(|d| d.to_complete(&db)).collect();
-        complete_diags.sort_by(|lhs, rhs| match lhs.error_code.cmp(&rhs.error_code) {
-            std::cmp::Ordering::Equal => lhs.primary_span().cmp(&rhs.primary_span()),
-            ord => ord,
-        });
+        complete_diags.sort_by(cmp_complete_diagnostics);
 
         let mut diagnostic_output = format!(
             "Misc test file {} has {} diagnostic(s):\n\n",
@@ -222,10 +211,7 @@ fn stress_pattern_tests(fixture: Fixture<&str>) {
         let config = term::Config::default();
 
         let mut complete_diags: Vec<_> = diags.iter().map(|d| d.to_complete(&db)).collect();
-        complete_diags.sort_by(|lhs, rhs| match lhs.error_code.cmp(&rhs.error_code) {
-            std::cmp::Ordering::Equal => lhs.primary_span().cmp(&rhs.primary_span()),
-            ord => ord,
-        });
+        complete_diags.sort_by(cmp_complete_diagnostics);
 
         let mut diagnostic_output = format!(
             "Stress test file {} has {} diagnostic(s):\n\n",

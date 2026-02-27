@@ -1,0 +1,36 @@
+msg Commands {
+    #[selector = 0x01]
+    GetValue -> u64,
+    #[selector = 0x02]
+    SetValue { value: u64 } -> bool,
+    #[selector = 0x03]
+    Add { a: u64, b: u64 } -> u64,
+}
+
+fn helper(x: u64, y: u64) -> u64 {
+    x + y
+}
+
+pub contract Counter {
+    value: u64,
+
+    init(initial: u64) uses (mut value) {
+        value = initial
+    }
+
+    recv Commands {
+        GetValue {} -> u64 uses (value) {
+            value
+        pass
+
+        SetValue { value: v } -> bool uses (mut value) {
+            value = v
+            true
+        }
+
+        Add { a, b } -> u64 {
+            helper(a, b)
+        }
+    }
+}
+
