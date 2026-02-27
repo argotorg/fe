@@ -184,7 +184,7 @@ impl<'db> TyChecker<'db> {
             Expr::Tuple(..) => self.check_tuple(expr, expr_data, expected),
             Expr::Array(..) => self.check_array(expr, expr_data, expected),
             Expr::ArrayRep(..) => self.check_array_rep(expr, expr_data, expected),
-            Expr::If(..) => self.check_if(expr, expr_data),
+            Expr::If(..) => self.check_if(expr, expr_data, expected),
             Expr::Match(..) => self.check_match(expr, expr_data, expected),
             Expr::Assign(..) => self.check_assign(expr, expr_data),
             Expr::AugAssign(..) => self.check_aug_assign(expr, expr_data),
@@ -2251,7 +2251,12 @@ impl<'db> TyChecker<'db> {
         ExprProp::new(ty, true)
     }
 
-    fn check_if(&mut self, _expr: ExprId, expr_data: &Expr<'db>) -> ExprProp<'db> {
+    fn check_if(
+        &mut self,
+        _expr: ExprId,
+        expr_data: &Expr<'db>,
+        expected: TyId<'db>,
+    ) -> ExprProp<'db> {
         let Expr::If(cond, then, else_) = expr_data else {
             unreachable!()
         };
@@ -2262,19 +2267,19 @@ impl<'db> TyChecker<'db> {
         self.env.enter_lexical_scope();
         self.check_cond(*cond);
 
-        let if_ty = self.fresh_ty();
         let ty = match else_ {
             Some(else_) => {
                 self.env.enter_scope(*then);
                 self.env.flush_pending_bindings();
-                self.check_expr(*then, if_ty);
+                self.check_expr(*then, expected);
                 self.env.leave_scope();
                 self.env.clear_pending_bindings();
                 self.env.leave_scope();
-                self.check_expr_in_new_scope(*else_, if_ty).ty
+                self.check_expr_in_new_scope(*else_, expected).ty
             }
 
             None => {
+                let if_ty = self.fresh_ty();
                 // If there is no else branch, the if expression itself typed as `()`
                 self.env.enter_scope(*then);
                 self.env.flush_pending_bindings();

@@ -1,0 +1,7 @@
+fn f(opt: Option<i32>, ready: bool) -> i32 {
+    if let Option::Some(x) = opt || ready {
+        x
+    } else {
+        0
+    }
+}
