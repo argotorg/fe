@@ -122,6 +122,20 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             PatternMatrix::from_hir_patterns(self.db, &patterns, self.body, scope, scrutinee_ty);
         let tree = build_decision_tree(self.db, &matrix);
         let leaf_bindings = self.collect_leaf_bindings(&tree);
+        let consume_place = if scrutinee_expr_ty.as_capability(self.db).is_none()
+            && leaf_bindings.values().any(|bindings| !bindings.is_empty())
+        {
+            self.place_for_borrow_expr(scrutinee)
+        } else {
+            None
+        };
+        let needs_false_prelude = consume_place.is_some();
+
+        let tree_false_block = if needs_false_prelude {
+            self.alloc_block()
+        } else {
+            false_block
+        };
 
         if let Some(bindings) = leaf_bindings.get(&0) {
             self.move_to_block(true_block);
@@ -168,13 +182,25 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 self.assign(None, Some(local), crate::ir::Rvalue::Value(value_id));
             }
         }
+        if let Some(place) = consume_place.clone() {
+            self.move_to_block(true_block);
+            self.emit_scrutinee_move_bind(scrutinee, scrutinee_expr_ty, place);
+        }
+
+        if needs_false_prelude {
+            self.move_to_block(tree_false_block);
+            if let Some(place) = consume_place {
+                self.emit_scrutinee_move_bind(scrutinee, scrutinee_expr_ty, place);
+            }
+            self.goto(false_block);
+        }
 
         let ctx = MatchLoweringCtx {
             scrutinee_value,
             scrutinee_ty,
-            wildcard_arm_block: Some(false_block),
+            wildcard_arm_block: Some(tree_false_block),
         };
-        let tree_entry = self.lower_decision_tree(&tree, &[true_block, false_block], &ctx);
+        let tree_entry = self.lower_decision_tree(&tree, &[true_block, tree_false_block], &ctx);
 
         self.move_to_block(scrut_block);
         self.goto(tree_entry);
@@ -438,22 +464,31 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         if let Some(merge) = merge_block {
             self.move_to_block(merge);
             if consume_scrutinee && let Some(place) = self.place_for_borrow_expr(scrutinee) {
-                let moved = self.alloc_value(
-                    scrutinee_expr_ty,
-                    ValueOrigin::MoveOut {
-                        place: place.clone(),
-                    },
-                    self.value_repr_for_ty(scrutinee_expr_ty, self.value_address_space(place.base)),
-                );
-                let source = self.source_for_expr(scrutinee);
-                self.builder.body.values[moved.index()].source = source;
-                self.push_inst_here(MirInst::BindValue {
-                    source,
-                    value: moved,
-                });
+                self.emit_scrutinee_move_bind(scrutinee, scrutinee_expr_ty, place);
             }
         }
         value
+    }
+
+    fn emit_scrutinee_move_bind(
+        &mut self,
+        scrutinee: ExprId,
+        scrutinee_ty: TyId<'db>,
+        place: Place<'db>,
+    ) {
+        let moved = self.alloc_value(
+            scrutinee_ty,
+            ValueOrigin::MoveOut {
+                place: place.clone(),
+            },
+            self.value_repr_for_ty(scrutinee_ty, self.value_address_space(place.base)),
+        );
+        let source = self.source_for_expr(scrutinee);
+        self.builder.body.values[moved.index()].source = source;
+        self.push_inst_here(MirInst::BindValue {
+            source,
+            value: moved,
+        });
     }
 
     /// Recursively lowers a decision tree to MIR basic blocks.

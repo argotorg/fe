@@ -1,6 +1,5 @@
 ---
 source: crates/mir/tests/lowering_snapshots.rs
-assertion_line: 26
 expression: mir_output
 ---
 fn if_let_sum(v0: Option<Point>) -> u64:
@@ -30,14 +29,18 @@ fn while_let_sum() -> u64:
     v1: u64 = 0
     jmp bb1
   bb1:
-    jmp bb4
+    jmp bb5
   bb2:
     v3: u64 = load mem[v0].0[0]
     v2: u64 = v3
+    bind move_out(mem[v0])
     v1 = v2
     jmp bb3
   bb3:
     ret v1
   bb4:
+    bind move_out(mem[v0])
+    jmp bb3
+  bb5:
     v4: u256 = load mem[v0].discr
-    switch v4 [0 => bb2] else bb3
+    switch v4 [0 => bb2] else bb4

@@ -218,14 +218,20 @@ impl<'db> CtfeInterpreter<'db> {
             Expr::Cast(inner, _) => self.eval_cast(expr, *inner),
             Expr::Bin(lhs, rhs, op) => self.eval_binary(expr, *lhs, *rhs, *op),
             Expr::If(cond, then, else_) => {
-                let cond = self.eval_cond(*cond)?;
-                if cond {
-                    self.eval_expr(*then)
-                } else if let Some(else_) = else_ {
-                    self.eval_expr(*else_)
-                } else {
-                    Ok(unit_const(self.db))
-                }
+                let old_bindings = self.env().bindings.clone();
+                let result = match self.eval_cond(*cond) {
+                    Ok(true) => self.eval_expr(*then),
+                    Ok(false) => {
+                        if let Some(else_) = else_ {
+                            self.eval_expr(*else_)
+                        } else {
+                            Ok(unit_const(self.db))
+                        }
+                    }
+                    Err(err) => Err(err),
+                };
+                self.env_mut().bindings = old_bindings;
+                result
             }
 
             Expr::Match(scrutinee, arms) => self.eval_match(expr, *scrutinee, arms),
