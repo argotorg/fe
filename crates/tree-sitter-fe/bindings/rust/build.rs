@@ -1,6 +1,10 @@
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
 fn main() {
+    // Keep generated grammar ABI aligned with the Rust runtime dependency
+    // (`tree-sitter` 0.24.x).
+    const TREE_SITTER_ABI_VERSION: &str = "14";
+
     let src_dir = std::path::Path::new("src");
     let grammar_path = std::path::Path::new("grammar.js");
     let parser_path = src_dir.join("parser.c");
@@ -23,6 +27,7 @@ fn main() {
         if needs_generate {
             let status = std::process::Command::new("tree-sitter")
                 .arg("generate")
+                .arg(format!("--abi={TREE_SITTER_ABI_VERSION}"))
                 .status();
             match status {
                 Ok(s) if s.success() => {}

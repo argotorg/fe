@@ -1094,6 +1094,16 @@ mod tests {
                 .any(|e| e.msg().contains("cannot be mixed with `let` conditions")),
             "expected let-chain `||` diagnostic, got: {errors:?}"
         );
+
+        let source = "if ready || let Some(x) = maybe { x } else { 0 }";
+        let (_if_expr, errors): (IfExpr, Vec<ParseError>) = parse_expr_with_errors(source);
+        let diag = errors
+            .iter()
+            .find(|e| e.msg().contains("cannot be mixed with `let` conditions"))
+            .unwrap_or_else(|| panic!("expected let-chain `||` diagnostic, got: {errors:?}"));
+        let or_pos = source.find("||").unwrap() as u32;
+        assert_eq!(diag.range().start(), crate::TextSize::from(or_pos));
+        assert_eq!(diag.range().end(), crate::TextSize::from(or_pos + 2));
     }
 
     #[test]

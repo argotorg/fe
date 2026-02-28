@@ -305,19 +305,25 @@ mod tests {
             crate::ast::ExprKind::Bin(_)
         ));
 
-        let (_while_stmt, errors): (WhileStmt, Vec<ParseError>) = parse_stmt_with_errors(
-            r#"
+        let source = r#"
             while ready || let Some(value) = values {
                 value
             }
-        "#,
-        );
+        "#;
+        let (_while_stmt, errors): (WhileStmt, Vec<ParseError>) = parse_stmt_with_errors(source);
         assert!(
             errors
                 .iter()
                 .any(|e| e.msg().contains("cannot be mixed with `let` conditions")),
             "expected let-chain `||` diagnostic, got: {errors:?}"
         );
+        let diag = errors
+            .iter()
+            .find(|e| e.msg().contains("cannot be mixed with `let` conditions"))
+            .unwrap_or_else(|| panic!("expected let-chain `||` diagnostic, got: {errors:?}"));
+        let or_pos = source.find("||").unwrap() as u32;
+        assert_eq!(diag.range().start(), crate::TextSize::from(or_pos));
+        assert_eq!(diag.range().end(), crate::TextSize::from(or_pos + 2));
     }
 
     #[test]

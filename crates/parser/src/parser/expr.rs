@@ -337,8 +337,14 @@ impl super::Parse for BinExprScope {
             .condition_state
             .as_ref()
             .is_some_and(|state| state.borrow().saw_let);
+        let rhs_starts_with_let = self.allow_let_expr
+            && is_or
+            && parser.dry_run(|parser| {
+                parser.bump();
+                parser.current_kind() == Some(SyntaxKind::LetKw)
+            });
         let mut reported = false;
-        if self.allow_let_expr && is_or && saw_let_before {
+        if self.allow_let_expr && is_or && (saw_let_before || rhs_starts_with_let) {
             parser.error_msg_on_current_token(msg);
             reported = true;
         }

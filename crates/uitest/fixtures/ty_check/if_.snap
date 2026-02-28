@@ -1,7 +1,7 @@
 ---
 source: crates/uitest/tests/ty_check.rs
 expression: diags
-input_file: crates/uitest/fixtures/ty_check/if_.fe
+input_file: fixtures/ty_check/if_.fe
 ---
 error[8-0000]: type mismatch
   ┌─ if_.fe:2:16
@@ -19,6 +19,4 @@ error[8-0000]: type mismatch
    ┌─ if_.fe:17:9
    │
 17 │         false
-   │         ^^^^^ expected `{integer}`, but `bool` is given
-
-
+   │         ^^^^^ expected `i32`, but `bool` is given
