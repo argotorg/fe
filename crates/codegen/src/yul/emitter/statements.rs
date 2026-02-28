@@ -672,15 +672,12 @@ impl<'db> FunctionEmitter<'db> {
             ));
         }
 
-        let label = self
-            .code_regions
-            .get(&self.mir_func.symbol_name)
-            .ok_or_else(|| {
-                YulError::Unsupported(format!(
-                    "no code region available for current function `{}`",
-                    self.mir_func.symbol_name
-                ))
-            })?;
+        let Some(label) = self.code_regions.get(&self.mir_func.symbol_name) else {
+            return Err(YulError::Unsupported(format!(
+                "current_code_region_len is only supported in code region root functions; `{}` is not a root",
+                self.mir_func.symbol_name
+            )));
+        };
         Ok(format!("datasize(\"{label}\")"))
     }
 
