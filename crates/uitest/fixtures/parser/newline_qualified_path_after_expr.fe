@@ -7,4 +7,12 @@ fn f() {
 
     x
     <<T as Foo>::Assoc as Bar>::baz()
+
+    true
+        || x
+    <T as Foo>::bar()
+
+    let mut y = x
+    y = x
+    <T as Foo>::bar()
 }

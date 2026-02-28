@@ -227,6 +227,10 @@ fn infix_binding_power<S: TokenStream>(parser: &mut Parser<S>) -> Option<(u8, u8
         Amp2 => (60, 61),
         NotEq | Eq2 => (70, 71),
         Lt => {
+            if has_line_break_before(parser) && is_line_start_qualified_type(parser) {
+                parser.set_newline_as_trivia(is_trivia);
+                return None;
+            }
             if is_lshift(parser) {
                 (110, 111)
             } else {
