@@ -880,6 +880,18 @@ fn lower_intrinsic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     op: IntrinsicOp,
     args: &[mir::ValueId],
 ) -> Result<Option<ValueId>, LowerError> {
+    if matches!(op, IntrinsicOp::CurrentCodeRegionLen) {
+        if !args.is_empty() {
+            return Err(LowerError::Internal(
+                "current_code_region_len requires 0 arguments".to_string(),
+            ));
+        }
+        return Ok(Some(ctx.fb.insert_inst(
+            SymSize::new(ctx.is, SymbolRef::CurrentSection),
+            Type::I256,
+        )));
+    }
+
     if matches!(
         op,
         IntrinsicOp::CodeRegionOffset | IntrinsicOp::CodeRegionLen
@@ -1046,7 +1058,9 @@ fn lower_intrinsic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 .insert_inst_no_result(EvmCodeCopy::new(ctx.is, *dst, *offset, *len));
             Ok(None)
         }
-        IntrinsicOp::CodeRegionOffset | IntrinsicOp::CodeRegionLen => {
+        IntrinsicOp::CodeRegionOffset
+        | IntrinsicOp::CodeRegionLen
+        | IntrinsicOp::CurrentCodeRegionLen => {
             unreachable!("code region intrinsics are handled in the early return above")
         }
         IntrinsicOp::Keccak => {

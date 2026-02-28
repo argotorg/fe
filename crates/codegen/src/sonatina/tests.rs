@@ -781,6 +781,7 @@ fn compile_runtime_section(
                 }
                 SymbolId::Global(gv) => format!("{gv:?}"),
                 SymbolId::Embed(embed) => format!("&{}", embed.0.as_str()),
+                SymbolId::CurrentSection => "<current_section>".to_string(),
             };
             defs.push((def.offset, def.size, name));
         }

@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 33
 expression: output
 input_file: tests/fixtures/newtype_storage_byplace_effect_arg.fe
 ---
@@ -11,19 +10,19 @@ object "NewtypeByPlaceEffectArg" {
       let v1 := $init_field__Evm_hef0af3106e109414_Wrap_haf9e70905fcbd513__fd5231d549c91f24(0, 1)
       let v2 := dataoffset("NewtypeByPlaceEffectArg_deployed")
       let v3 := datasize("NewtypeByPlaceEffectArg_deployed")
-      let v4 := codesize()
-      let v5 := add(v2, v3)
-      let v6 := lt(v4, v5)
+      let v4 := datasize("NewtypeByPlaceEffectArg")
+      let v5 := codesize()
+      let v6 := lt(v5, v4)
       if v6 {
         $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort(0)
       }
-      let v7 := sub(v4, v5)
+      let v7 := sub(v5, v4)
       let v8 := mload(64)
       if iszero(v8) {
         v8 := 0x80
       }
       mstore(64, add(v8, v7))
-      codecopy(v8, v5, v7)
+      codecopy(v8, v4, v7)
       let v9 := mload(0x40)
       if iszero(v9) {
         v9 := 0x80

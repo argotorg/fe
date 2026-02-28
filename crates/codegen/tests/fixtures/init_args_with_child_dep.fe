@@ -1,0 +1,11 @@
+use std::evm::Create
+
+pub contract Child {
+    init(x: u256, y: u256) {}
+}
+
+pub contract Parent uses (create: mut Create) {
+    init(seed: u256) uses (mut create) {
+        create.create<Child>(value: 0, args: (seed, seed))
+    }
+}
