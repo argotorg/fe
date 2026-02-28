@@ -288,6 +288,18 @@ pub trait Call {
               M::Return: Decode<Sol>
 }
 
+impl Address {
+    /// Call a contract at this address with a typed message.
+    ///
+    /// Forwards all available gas and sends no value. Reverts on failure.
+    pub fn call<M>(self, _ message: own M) -> M::Return uses (call: mut Call)
+        where M: MsgVariant<Sol> + Encode<Sol>,
+              M::Return: Decode<Sol>
+    {
+        call.call(addr: self, gas: ops::gas(), value: 0, message)
+    }
+}
+
 /// Combined EVM capability: provides all EVM effects.
 pub trait Super: Ctx + RawOps + Log + Create + Call {}
 
