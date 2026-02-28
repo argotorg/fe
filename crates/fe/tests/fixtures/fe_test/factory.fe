@@ -56,13 +56,15 @@ msg FactoryMsg {
 
 struct FactoryStore {
     child_count: u256,
+    creator_inner: u256,
 }
 
 pub contract Factory uses (create: mut Create) {
     mut store: FactoryStore
 
-    init() uses (mut store) {
-        store.child_count = 0
+    init(child_count: u256, creator_inner: u256) uses (mut store) {
+        store.child_count = child_count
+        store.creator_inner = creator_inner
     }
 
     recv FactoryMsg {
@@ -70,7 +72,7 @@ pub contract Factory uses (create: mut Create) {
             store.child_count += 1
             let child = create.create2<Child>(
                 value: 0,
-                args: (store.child_count, 0),
+                args: (store.child_count, store.creator_inner),
                 salt: store.child_count,
             )
             child.inner
@@ -84,7 +86,7 @@ pub contract Factory uses (create: mut Create) {
 
 #[test]
 fn test_factory() uses (evm: mut Evm) {
-    let factory = evm.create2<Factory>(value: 0, args: (), salt: 0)
+    let factory = evm.create2<Factory>(value: 0, args: (0, 0), salt: 0)
     assert(factory.inner != 0)
 
     // Create child 1

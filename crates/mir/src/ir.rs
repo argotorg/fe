@@ -803,6 +803,8 @@ pub enum IntrinsicOp {
     CodeRegionOffset,
     /// `datasize` of the code region rooted at a function.
     CodeRegionLen,
+    /// `datasize` of the current code section/object.
+    CurrentCodeRegionLen,
     /// `keccak256(ptr, len)`
     Keccak,
     /// `addmod(a, b, m)` — (a + b) % m without overflow
@@ -831,6 +833,7 @@ impl IntrinsicOp {
                 | IntrinsicOp::Codesize
                 | IntrinsicOp::CodeRegionOffset
                 | IntrinsicOp::CodeRegionLen
+                | IntrinsicOp::CurrentCodeRegionLen
                 | IntrinsicOp::Keccak
                 | IntrinsicOp::Addmod
                 | IntrinsicOp::Mulmod

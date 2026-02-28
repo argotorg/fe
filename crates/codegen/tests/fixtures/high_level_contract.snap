@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 33
 expression: output
 input_file: tests/fixtures/high_level_contract.fe
 ---
@@ -10,19 +9,19 @@ object "EchoContract" {
       let v0 := $init_field__Evm_hef0af3106e109414_Foo_h6dbce71a6ea992b8__c09e6c6fc5a7b23d(0, 0)
       let v1 := dataoffset("EchoContract_deployed")
       let v2 := datasize("EchoContract_deployed")
-      let v3 := codesize()
-      let v4 := add(v1, v2)
-      let v5 := lt(v3, v4)
+      let v3 := datasize("EchoContract")
+      let v4 := codesize()
+      let v5 := lt(v4, v3)
       if v5 {
         $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort(0)
       }
-      let v6 := sub(v3, v4)
+      let v6 := sub(v4, v3)
       let v7 := mload(64)
       if iszero(v7) {
         v7 := 0x80
       }
       mstore(64, add(v7, v6))
-      codecopy(v7, v4, v6)
+      codecopy(v7, v3, v6)
       let v8 := mload(0x40)
       if iszero(v8) {
         v8 := 0x80

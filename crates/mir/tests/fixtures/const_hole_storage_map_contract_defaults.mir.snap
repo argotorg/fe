@@ -28,20 +28,19 @@ fn __BalanceMap_init() -> ():
     v0: u256 = init_field__Evm_hef0af3106e109414_Store_0__1___20b3d78bbd2b6198((), 0)
     v1: u256 = code_region_offset(func_item(__BalanceMap_runtime))
     v2: u256 = code_region_len(func_item(__BalanceMap_runtime))
-    v3: u256 = codesize()
-    bind (v1 + v2)
-    br (v3 < (v1 + v2)) bb1 bb2
+    v3: u256 = current_code_region_len()
+    v4: u256 = codesize()
+    br (v4 < v3) bb1 bb2
   bb1:
     terminate evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort(())
   bb2:
-    bind (v1 + v2)
-    bind (v3 - (v1 + v2))
-    v4: u256 = alloc((v3 - (v1 + v2)))
-    eval codecopy(v4, (v1 + v2), (v3 - (v1 + v2)))
-    v5: MemoryBytes = alloc mem
-    store mem[v5].0 = v4
-    store mem[v5].1 = (v3 - (v1 + v2))
-    v6: SolDecoder<MemoryBytes> = sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v5)
+    bind (v4 - v3)
+    v5: u256 = alloc((v4 - v3))
+    eval codecopy(v5, v3, (v4 - v3))
+    v6: MemoryBytes = alloc mem
+    store mem[v6].0 = v5
+    store mem[v6].1 = (v4 - v3)
+    v7: SolDecoder<MemoryBytes> = sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v6)
     eval __BalanceMap_init_contract(v0)
     eval codecopy(0, v1, v2)
     terminate return_data(0, v2)

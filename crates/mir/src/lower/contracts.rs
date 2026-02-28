@@ -1013,15 +1013,18 @@ fn lower_init_entrypoint<'db>(
     {
         let init_args_ty = contract.init_args_ty(db);
         // Inline `ContractHost::init_input` semantics (avoids needing a synthetic HIR function-item type).
-        let args_offset_value = builder.alloc_value(
-            TyId::u256(db),
-            ValueOrigin::Binary {
-                op: BinOp::Arith(ArithBinOp::Add),
-                lhs: runtime_offset,
-                rhs: runtime_len,
-            },
-            ValueRepr::Word,
-        );
+        let args_offset_value = builder
+            .assign_to_new_local(
+                "init_code_len",
+                TyId::u256(db),
+                false,
+                AddressSpaceKind::Memory,
+                Rvalue::Intrinsic {
+                    op: IntrinsicOp::CurrentCodeRegionLen,
+                    args: Vec::new(),
+                },
+            )
+            .value;
         let code_size = builder
             .assign_to_new_local(
                 "code_size",
