@@ -1,0 +1,34 @@
+struct Holder {
+    value: bool
+}
+
+fn id(x: bool) -> bool {
+    x
+}
+
+fn f(x: i32, y: i32) {
+    let arr = [x, y]
+
+    let _a = (
+        x
+        < y
+    )
+
+    let _b = id(
+        x
+        < y
+    )
+
+    let _c = [
+        x
+        < y
+    ]
+
+    let _d = arr[x
+        < y]
+
+    let _e = Holder {
+        value: x
+            < y
+    }
+}

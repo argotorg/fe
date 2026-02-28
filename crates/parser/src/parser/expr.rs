@@ -10,6 +10,17 @@ use super::{
 };
 use crate::{ExpectedKind, ParseError, SyntaxKind, TextRange};
 
+const LINE_START_LT_ALLOWED_SCOPES: [SyntaxKind; 8] = [
+    SyntaxKind::ParenExpr,
+    SyntaxKind::TupleExpr,
+    SyntaxKind::ArrayExpr,
+    SyntaxKind::IndexExpr,
+    SyntaxKind::CallArgList,
+    SyntaxKind::CallArg,
+    SyntaxKind::RecordFieldList,
+    SyntaxKind::RecordField,
+];
+
 /// Parses expression.
 pub fn parse_expr<S: TokenStream>(parser: &mut Parser<S>) -> Result<(), Recovery<ErrProof>> {
     parse_expr_with_min_bp(parser, 0, true)
@@ -69,12 +80,19 @@ fn parse_expr_with_min_bp<S: TokenStream>(
             ));
             break;
         }
-        if min_bp == 0
-            && kind == SyntaxKind::Lt
-            && has_line_break_before(parser)
-            && is_line_start_qualified_type(parser)
-        {
-            break;
+        if min_bp == 0 && kind == SyntaxKind::Lt && has_line_break_before(parser) {
+            if is_line_start_qualified_type(parser) {
+                break;
+            }
+            let is_bare_lt = !is_lt_eq(parser) && !is_lshift(parser);
+            if is_bare_lt && !is_allowed_line_start_lt_context(parser) {
+                let range = line_start_op_range(parser);
+                parser.add_error(ParseError::Msg(
+                    "line-start `<` is ambiguous; use parentheses to disambiguate".to_string(),
+                    range,
+                ));
+                break;
+            }
         }
 
         // Parse postfix operators.
@@ -504,6 +522,10 @@ fn is_line_start_qualified_type<S: TokenStream>(parser: &mut Parser<S>) -> bool 
     let is_qualified = parser.current_kind() == Some(SyntaxKind::Lt) && is_qualified_type(parser);
     parser.set_newline_as_trivia(nt);
     is_qualified
+}
+
+fn is_allowed_line_start_lt_context<S: TokenStream>(parser: &Parser<S>) -> bool {
+    parser.in_scope_set(&LINE_START_LT_ALLOWED_SCOPES)
 }
 
 fn line_start_op_range<S: TokenStream>(parser: &mut Parser<S>) -> TextRange {

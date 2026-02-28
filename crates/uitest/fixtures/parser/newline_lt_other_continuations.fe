@@ -1,0 +1,11 @@
+fn f(x: i32, y: i32) {
+    let a = x
+        <= y
+
+    let b = x
+        << y
+
+    let mut c = x
+    c
+        <<= y
+}
