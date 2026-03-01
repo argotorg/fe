@@ -1,10 +1,11 @@
 ---
 source: crates/fe/tests/cli_output.rs
+assertion_line: 838
 expression: output
 input_file: tests/fixtures/fe_test_runner/fail_revert.fe
 ---
 === STDOUT ===
-test test_revert ... FAILED
+FAIL  [<time>] test_revert
     Test reverted: 0x
 
 test result: FAILED. 0 passed; 1 failed

@@ -2078,6 +2078,7 @@ dependencies = [
  "clap_complete",
  "colored",
  "cranelift-entity 0.115.1",
+ "crossbeam-channel",
  "dir-test",
  "fe-codegen",
  "fe-common",

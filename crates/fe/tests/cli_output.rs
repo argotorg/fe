@@ -20,7 +20,125 @@ fn normalize_output(output: &str) -> String {
         .expect("parent");
 
     // Replace absolute paths with relative ones
-    output.replace(&project_root.to_string_lossy().to_string(), "<project>")
+    let normalized = output.replace(&project_root.to_string_lossy().to_string(), "<project>");
+    normalize_timing_output(&normalized)
+}
+
+fn normalize_timing_output(output: &str) -> String {
+    let has_trailing_newline = output.ends_with('\n');
+    let mut normalized = output
+        .lines()
+        .map(normalize_timing_line)
+        .collect::<Vec<_>>()
+        .join("\n");
+    if has_trailing_newline {
+        normalized.push('\n');
+    }
+    normalized
+}
+
+fn normalize_timing_line(line: &str) -> String {
+    let Some(status_idx) = ["PASS  [", "FAIL  [", "READY [", "ERROR ["]
+        .into_iter()
+        .filter_map(|marker| line.find(marker))
+        .min()
+    else {
+        return line.to_string();
+    };
+    let Some(open_rel) = line[status_idx..].find('[') else {
+        return line.to_string();
+    };
+    let open = status_idx + open_rel;
+    let Some(close_rel) = line[open..].find(']') else {
+        return line.to_string();
+    };
+    let close = open + close_rel;
+    let bracket = &line[open + 1..close];
+    let Some(seconds) = bracket.strip_suffix('s') else {
+        return line.to_string();
+    };
+    if seconds.is_empty()
+        || !seconds
+            .chars()
+            .all(|ch| ch.is_ascii_digit() || ch == '.' || ch == ' ')
+    {
+        return line.to_string();
+    }
+
+    let mut normalized = String::new();
+    normalized.push_str(&line[..open]);
+    normalized.push_str("[<time>]");
+    normalized.push_str(&line[close + 1..]);
+    normalized
+}
+
+fn canonicalize_backend_test_stdout(output: &str) -> String {
+    let lines: Vec<_> = output.lines().collect();
+    let mut statuses = Vec::new();
+    let mut call_traces = Vec::new();
+    let mut others = Vec::new();
+    let mut summaries = Vec::new();
+    let mut idx = 0;
+
+    while idx < lines.len() {
+        let line = lines[idx];
+        if line.starts_with("PASS  [") || line.starts_with("FAIL  [") {
+            statuses.push(line.to_string());
+            idx += 1;
+            continue;
+        }
+        if line == "--- call trace ---" {
+            let mut trace = vec![line.to_string()];
+            idx += 1;
+            while idx < lines.len() {
+                let current = lines[idx];
+                trace.push(current.to_string());
+                idx += 1;
+                if current == "--- end trace ---" {
+                    break;
+                }
+            }
+            call_traces.push(trace.join("\n"));
+            continue;
+        }
+        if line.starts_with("test result: ") {
+            summaries.push(line.to_string());
+            idx += 1;
+            continue;
+        }
+        if !line.trim().is_empty() {
+            others.push(line.to_string());
+        }
+        idx += 1;
+    }
+
+    statuses.sort();
+    call_traces.sort();
+    others.sort();
+    summaries.sort();
+
+    let mut canonical = String::new();
+    for line in statuses {
+        canonical.push_str(&line);
+        canonical.push('\n');
+    }
+    for trace in call_traces {
+        canonical.push_str(&trace);
+        canonical.push('\n');
+    }
+    for line in others {
+        canonical.push_str(&line);
+        canonical.push('\n');
+    }
+    if !summaries.is_empty() {
+        canonical.push('\n');
+        for summary in summaries {
+            canonical.push_str(&summary);
+            canonical.push('\n');
+        }
+    }
+
+    canonical
 }
 
 // Helper function to run fe check
@@ -768,15 +886,19 @@ fn assert_fe_test_backends_agree(path: &str, call_trace: bool) {
         yo = yul.combined(),
     );
 
-    // Compare stdout (test names + pass/fail lines). Stderr may contain
-    // backend-specific diagnostics so we only check stdout here.
+    // Compare normalized stdout order-insensitively. Parallel test execution
+    // can reorder PASS/FAIL lines and trace blocks without changing semantics.
+    let yul_stdout = canonicalize_backend_test_stdout(&yul.stdout);
+    let sonatina_stdout = canonicalize_backend_test_stdout(&sonatina.stdout);
     assert_eq!(
-        yul.stdout,
-        sonatina.stdout,
-        "Test output mismatch for {path}:\n\n--- yul ---\n{yo}\n\n--- sonatina ---\n{so}",
+        yul_stdout,
+        sonatina_stdout,
+        "Test output mismatch for {path}:\n\n--- yul ---\n{yo}\n\n--- sonatina ---\n{so}\n\n--- canonical yul ---\n{cy}\n\n--- canonical sonatina ---\n{cs}",
         path = path,
         yo = yul.stdout,
         so = sonatina.stdout,
+        cy = yul_stdout,
+        cs = sonatina_stdout,
     );
 }
 
@@ -786,7 +908,7 @@ fn assert_fe_test_backends_agree(path: &str, call_trace: bool) {
     glob: "*.fe",
 )]
 fn test_fe_test_runner(fixture: Fixture<&str>) {
-    let mut args = vec!["test"];
+    let mut args = vec!["test", "--jobs", "1"];
     if fixture.path().contains("logs") {
         args.push("--show-logs");
     }
@@ -949,7 +1071,7 @@ fn test_cli_test_ingot_discovers_tests_in_non_root_modules() {
     let (output, exit_code) = run_fe_main(&["test", fixture_dir_str]);
     assert_eq!(exit_code, 0, "fe test failed:\n{output}");
     assert!(
-        output.contains("test test_add"),
+        output.contains("PASS  [<time>] test_add"),
         "expected test_add to be discovered, got:\n{output}"
     );
     assert!(
@@ -957,6 +1079,23 @@ fn test_cli_test_ingot_discovers_tests_in_non_root_modules() {
         "expected 1 passed test, got:\n{output}"
     );
 }
+#[test]
+fn test_cli_test_single_input_suite_setup_failure_surfaces_error_status() {
+    let temp = tempdir().expect("tempdir");
+    let invalid = temp.path().join("not_a_fe_input.txt");
+    fs::write(&invalid, "not an fe input").expect("write invalid input");
+    let invalid = invalid.to_str().expect("invalid path utf8");
+
+    let (output, exit_code) = run_fe_main(&["test", invalid]);
+    assert_ne!(exit_code, 0, "expected non-zero exit code:\n{output}");
+    assert!(
+        output.contains(
+            "ERROR [<time>] Path must be either a .fe file or a directory containing fe.toml"
+        ),
+        "expected setup failure status line, got:\n{output}"
+    );
+}
+
 #[test]
 fn test_cli_test_repo_core_ingot_without_tests_is_ok() {
     let project_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

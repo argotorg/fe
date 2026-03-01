@@ -373,7 +373,7 @@ Runs Fe tests via the test harness (revm-based execution).
 ### Synopsis
 
 ```
-fe test [--filter <pattern>] [--jobs <n>] [--show-logs] [--debug[=<mode>]] [--backend <backend>] [--solc <path>] [--opt-level <level>] [--optimize] [--trace-evm] [--trace-evm-keep <n>] [--trace-evm-stack-n <n>] [--sonatina-symtab] [--debug-dir <dir>] [--report [--report-out <out>]] [--report-dir <dir> [--report-failed-only]] [--call-trace] [path]...
+fe test [--filter <pattern>] [--jobs <n>] [--grouped] [--show-logs] [--debug[=<mode>]] [--backend <backend>] [--solc <path>] [--opt-level <level>] [--optimize] [--trace-evm] [--trace-evm-keep <n>] [--trace-evm-stack-n <n>] [--sonatina-symtab] [--debug-dir <dir>] [--report [--report-out <out>]] [--report-dir <dir> [--report-failed-only]] [--call-trace] [path]...
 ```
 
 ### Inputs
@@ -390,6 +390,8 @@ fe test [--filter <pattern>] [--jobs <n>] [--show-logs] [--debug[=<mode>]] [--ba
 ### Execution
 
 - `--jobs <n>` controls how many suites run in parallel (`0` = auto).
+- By default, parallel execution uses per-test jobs after suite discovery.
+- `--grouped` keeps suite-by-suite execution (each worker runs whole suites).
 
 ### Debugging
 
@@ -401,7 +403,9 @@ fe test [--filter <pattern>] [--jobs <n>] [--show-logs] [--debug[=<mode>]] [--ba
 
 ### Output
 
-- Per-test output is similar to Rust’s harness: `test <name> ... ok` / `FAILED` (colored).
+- Per-test output is `PASS  [<seconds>s] <name>` / `FAIL  [<seconds>s] <name>` (colored).
+- In multi-input runs, output is tabular: `<status> <suite> <message>`, with suite names colored magenta.
+- Progress/status labels include `COMPILING`, `READY` (blue), `PASS` (green), `FAIL` (red), and `ERROR` (red).
 - `--show-logs` prints EVM logs (when available).
 - A summary is printed if at least one test ran.
 - If a suite has no tests, it prints `Warning: No tests found in <path>` and continues (exit code is still `0` if there are no failures elsewhere).
