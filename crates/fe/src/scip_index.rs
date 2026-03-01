@@ -367,13 +367,24 @@ pub fn generate_scip(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
+
+    fn file_url(path: &Path) -> url::Url {
+        url::Url::from_file_path(path).expect("file path to url")
+    }
+
+    fn dir_url(path: &Path) -> url::Url {
+        url::Url::from_directory_path(path).expect("directory path to url")
+    }
 
     fn generate_test_scip(code: &str) -> types::Index {
+        let temp = tempfile::tempdir().expect("create temp dir");
+        let file_path = temp.path().join("test.fe");
         let mut db = driver::DriverDataBase::default();
-        let url = url::Url::parse("file:///test.fe").unwrap();
+        let url = file_url(&file_path);
         db.workspace()
             .touch(&mut db, url.clone(), Some(code.to_string()));
-        let ingot_url = url::Url::parse("file:///").unwrap();
+        let ingot_url = dir_url(temp.path());
         generate_scip(&mut db, &ingot_url).expect("generate scip index")
     }
 

@@ -6,6 +6,7 @@ pub mod diagnostics;
 pub mod file;
 pub mod indexmap;
 pub mod ingot;
+pub mod paths;
 pub mod stdlib;
 pub mod urlext;
 

@@ -9,6 +9,7 @@ use fe_parser::{
     },
     syntax_node::SyntaxNode,
 };
+use test_utils::normalize::normalize_newlines;
 use tracing::error;
 
 static INIT: Once = Once::new();
@@ -94,6 +95,8 @@ impl TestRunner {
 
     pub fn run(&self, input: &str) -> SyntaxNode {
         init_tracing();
+        let input = normalize_newlines(input);
+        let input = input.as_ref();
         let lexer = lexer::Lexer::new(input);
         let mut parser = Parser::new(lexer);
 

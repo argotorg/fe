@@ -2,6 +2,7 @@ use std::fs;
 
 use camino::{Utf8Path, Utf8PathBuf};
 use common::config::{Config, WorkspaceMemberSelection};
+use common::paths::{absolute_utf8, file_url_to_utf8_path, normalize_slashes};
 use resolver::workspace::{discover_context, expand_workspace_members};
 use toml::Value;
 use url::Url;
@@ -248,16 +249,7 @@ fn sanitize_name(candidate: &str, fallback: String) -> String {
 }
 
 fn absolute_target(path: &Utf8PathBuf) -> Result<Utf8PathBuf, String> {
-    let cwd = std::env::current_dir()
-        .map_err(|err| format!("Failed to read current directory: {err}"))?;
-    let cwd = Utf8PathBuf::from_path_buf(cwd)
-        .map_err(|_| "Current directory is not valid UTF-8".to_string())?;
-
-    if path.is_absolute() {
-        Ok(path.clone())
-    } else {
-        Ok(cwd.join(path))
-    }
+    absolute_utf8(path).map_err(|err| format!("Failed to resolve absolute path for {path}: {err}"))
 }
 
 fn find_workspace_root(start: &Utf8Path) -> Result<Option<Utf8PathBuf>, String> {
@@ -267,11 +259,8 @@ fn find_workspace_root(start: &Utf8Path) -> Result<Option<Utf8PathBuf>, String> 
     let Some(workspace_url) = discovery.workspace_root else {
         return Ok(None);
     };
-    let path = workspace_url
-        .to_file_path()
-        .map_err(|_| "Workspace URL is not a file URL".to_string())?;
-    let path = Utf8PathBuf::from_path_buf(path)
-        .map_err(|_| "Workspace path is not valid UTF-8".to_string())?;
+    let path = file_url_to_utf8_path(&workspace_url)
+        .ok_or_else(|| "Workspace path is not valid UTF-8".to_string())?;
     Ok(Some(path))
 }
 
@@ -293,6 +282,7 @@ fn workspace_member_suggestion(
         .strip_prefix(workspace_root)
         .map_err(|_| "Ingot path is not inside workspace".to_string())?
         .to_path_buf();
+    let relative_member_str = normalize_member_path(&relative_member);
     if relative_member.as_str().is_empty() {
         return Ok(None);
     }
@@ -301,7 +291,9 @@ fn workspace_member_suggestion(
         .map_err(|_| format!("Invalid workspace path: {workspace_root}"))?;
     if let Ok(expanded) =
         expand_workspace_members(&workspace, &base_url, WorkspaceMemberSelection::All)
-        && expanded.iter().any(|member| member.path == relative_member)
+        && expanded
+            .iter()
+            .any(|member| normalize_member_path(&member.path) == relative_member_str)
     {
         return Ok(None);
     }
@@ -349,6 +341,10 @@ fn workspace_member_suggestion(
     };
 
     Ok(Some(format!(
-        "Workspace detected at {workspace_root}. To include this ingot, add \"{relative_member}\" to {members_path} in {config_path}."
+        "Workspace detected at {workspace_root}. To include this ingot, add \"{relative_member_str}\" to {members_path} in {config_path}."
     )))
+}
+
+fn normalize_member_path(path: &Utf8Path) -> String {
+    normalize_slashes(path.as_str())
 }

@@ -2352,6 +2352,7 @@ name = "fe-test-utils"
 version = "26.0.0-alpha.7"
 dependencies = [
  "insta",
+ "regex",
  "tracing",
  "tracing-subscriber 0.3.22",
  "tracing-tree",
@@ -2986,6 +2987,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e82db8c87c7f1ccecb34ce0c24399b8a73081427f3c7c50a5d597925356115e4"
 dependencies = [
  "once_cell",
+ "regex",
  "similar",
  "tempfile",
 ]

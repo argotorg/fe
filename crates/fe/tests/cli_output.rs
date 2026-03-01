@@ -7,11 +7,16 @@ use std::{
     sync::OnceLock,
 };
 use tempfile::tempdir;
-use test_utils::snap_test;
+use test_utils::{
+    normalize::{normalize_newlines, normalize_path_separators, replace_path_token},
+    snap_test,
+};
 
 // Helper function to normalize paths in output for portability
 fn normalize_output(output: &str) -> String {
-    // Get the project root directory
+    let output = normalize_newlines(output);
+    let output = normalize_path_separators(output.as_ref());
+
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let project_root = std::path::Path::new(manifest_dir)
         .parent()
@@ -19,8 +24,7 @@ fn normalize_output(output: &str) -> String {
         .parent()
         .expect("parent");
 
-    // Replace absolute paths with relative ones
-    let normalized = output.replace(&project_root.to_string_lossy().to_string(), "<project>");
+    let normalized = replace_path_token(&output, project_root, "<project>");
     normalize_timing_output(&normalized)
 }
 
@@ -385,7 +389,7 @@ fn test_cli_build_fake_solc_artifacts(fixture: Fixture<&str>) {
     let deploy = fs::read_to_string(&deploy_path).expect("read deploy bytecode");
     let runtime = fs::read_to_string(&runtime_path).expect("read runtime bytecode");
 
-    let mut snapshot = output.replace(&out_dir_str, "<out>");
+    let mut snapshot = replace_path_token(&output, &out_dir, "<out>");
     snapshot.push_str("\n\n=== ARTIFACTS ===\n");
     snapshot.push_str(&format!("Foo.bin: {}\n", deploy.trim()));
     snapshot.push_str(&format!("Foo.runtime.bin: {}\n", runtime.trim()));
@@ -442,7 +446,7 @@ fn test_cli_build_all_contracts_fake_solc_artifacts() {
     let foo_deploy = fs::read_to_string(&foo_deploy_path).expect("read Foo deploy bytecode");
     let foo_runtime = fs::read_to_string(&foo_runtime_path).expect("read Foo runtime bytecode");
 
-    let mut snapshot = output.replace(&out_dir_str, "<out>");
+    let mut snapshot = replace_path_token(&output, &out_dir, "<out>");
     snapshot.push_str("\n\n=== ARTIFACTS ===\n");
     snapshot.push_str(&format!("Bar.bin: {}\n", bar_deploy.trim()));
     snapshot.push_str(&format!("Bar.runtime.bin: {}\n", bar_runtime.trim()));
@@ -492,7 +496,7 @@ fn test_cli_build_ingot_dir_fake_solc_artifacts() {
     let deploy = fs::read_to_string(&deploy_path).expect("read deploy bytecode");
     let runtime = fs::read_to_string(&runtime_path).expect("read runtime bytecode");
 
-    let mut snapshot = output.replace(&out_dir_str, "<out>");
+    let mut snapshot = replace_path_token(&output, &out_dir, "<out>");
     snapshot.push_str("\n\n=== ARTIFACTS ===\n");
     snapshot.push_str(&format!("Foo.bin: {}\n", deploy.trim()));
     snapshot.push_str(&format!("Foo.runtime.bin: {}\n", runtime.trim()));
@@ -540,7 +544,7 @@ fn test_cli_build_ingot_dir_all_contracts_multi_file_fake_solc_artifacts() {
     let foo_deploy = fs::read_to_string(&foo_deploy_path).expect("read Foo deploy bytecode");
     let foo_runtime = fs::read_to_string(&foo_runtime_path).expect("read Foo runtime bytecode");
 
-    let mut snapshot = output.replace(&out_dir_str, "<out>");
+    let mut snapshot = replace_path_token(&output, &out_dir, "<out>");
     snapshot.push_str("\n\n=== ARTIFACTS ===\n");
     snapshot.push_str(&format!("Bar.bin: {}\n", bar_deploy.trim()));
     snapshot.push_str(&format!("Bar.runtime.bin: {}\n", bar_runtime.trim()));
@@ -1399,7 +1403,7 @@ fn test_cli_build_workspace_root_fake_solc_artifacts() {
     let bar_deploy = fs::read_to_string(&bar_deploy_path).expect("read Bar deploy bytecode");
     let bar_runtime = fs::read_to_string(&bar_runtime_path).expect("read Bar runtime bytecode");
 
-    let mut snapshot = output.replace(&out_dir_str, "<out>");
+    let mut snapshot = replace_path_token(&output, &out_dir, "<out>");
     snapshot.push_str("\n\n=== ARTIFACTS ===\n");
     snapshot.push_str(&format!("Foo.bin: {}\n", foo_deploy.trim()));
     snapshot.push_str(&format!("Foo.runtime.bin: {}\n", foo_runtime.trim()));
@@ -1447,7 +1451,7 @@ fn test_cli_build_workspace_root_skips_library_member_fake_solc_artifacts() {
     let bar_deploy = fs::read_to_string(&bar_deploy_path).expect("read Bar deploy bytecode");
     let bar_runtime = fs::read_to_string(&bar_runtime_path).expect("read Bar runtime bytecode");
 
-    let mut snapshot = output.replace(&out_dir_str, "<out>");
+    let mut snapshot = replace_path_token(&output, &out_dir, "<out>");
     snapshot.push_str("\n\n=== ARTIFACTS ===\n");
     snapshot.push_str(&format!("Foo.bin: {}\n", foo_deploy.trim()));
     snapshot.push_str(&format!("Foo.runtime.bin: {}\n", foo_runtime.trim()));
@@ -1497,7 +1501,7 @@ fn test_cli_build_workspace_root_contract_filter_fake_solc_artifacts() {
     let foo_deploy = fs::read_to_string(&foo_deploy_path).expect("read Foo deploy bytecode");
     let foo_runtime = fs::read_to_string(&foo_runtime_path).expect("read Foo runtime bytecode");
 
-    let mut snapshot = output.replace(&out_dir_str, "<out>");
+    let mut snapshot = replace_path_token(&output, &out_dir, "<out>");
     snapshot.push_str("\n\n=== ARTIFACTS ===\n");
     snapshot.push_str(&format!("Foo.bin: {}\n", foo_deploy.trim()));
     snapshot.push_str(&format!("Foo.runtime.bin: {}\n", foo_runtime.trim()));
@@ -1541,7 +1545,7 @@ fn test_cli_build_workspace_member_by_name_fake_solc_artifacts() {
     let deploy = fs::read_to_string(&deploy_path).expect("read deploy bytecode");
     let runtime = fs::read_to_string(&runtime_path).expect("read runtime bytecode");
 
-    let mut snapshot = output.replace(&out_dir_str, "<out>");
+    let mut snapshot = replace_path_token(&output, &out_dir, "<out>");
     snapshot.push_str("\n\n=== ARTIFACTS ===\n");
     snapshot.push_str(&format!("Foo.bin: {}\n", deploy.trim()));
     snapshot.push_str(&format!("Foo.runtime.bin: {}\n", runtime.trim()));
@@ -1947,7 +1951,7 @@ fn test_cli_build_workspace_dependency_in_scope_file_path_fake_solc_artifacts() 
     let deploy = fs::read_to_string(&deploy_path).expect("read deploy bytecode");
     let runtime = fs::read_to_string(&runtime_path).expect("read runtime bytecode");
 
-    let mut snapshot = output.replace(&out_dir_str, "<out>");
+    let mut snapshot = replace_path_token(&output, &out_dir, "<out>");
     snapshot.push_str("\n\n=== ARTIFACTS ===\n");
     snapshot.push_str(&format!("Foo.bin: {}\n", deploy.trim()));
     snapshot.push_str(&format!("Foo.runtime.bin: {}\n", runtime.trim()));
