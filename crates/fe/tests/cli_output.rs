@@ -1051,7 +1051,7 @@ fn test_cli_test_cross_ingot_create2() {
     let (output, exit_code) = run_fe_main(&["test", fixture_dir_str]);
     assert_eq!(exit_code, 0, "fe test failed:\n{output}");
     assert!(
-        output.contains("test test_create2_contract_from_other_ingot"),
+        output.contains("test_create2_contract_from_other_ingot"),
         "expected cross-ingot create2 test, got:\n{output}"
     );
     assert!(
