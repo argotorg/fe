@@ -1,3 +1,9 @@
+// libgit2 uses Win32 security/registry APIs that are provided by advapi32.
+// Link it explicitly so Windows builds don't rely on transitive system libs.
+#[cfg(windows)]
+#[link(name = "advapi32")]
+unsafe extern "system" {}
+
 pub mod files;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod git;
