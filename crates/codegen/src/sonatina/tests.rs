@@ -12,7 +12,7 @@ use sonatina_codegen::{
     isa::evm::EvmBackend,
     liveness::Liveness,
     machinst::lower::{LowerBackend, SectionLoweringCtx},
-    object::{CompileOptions, SymbolId, compile_object},
+    object::{CompileOptions, ObjectArtifact, SymbolId, compile_all_objects},
     stackalloc::StackifyBuilder,
 };
 use sonatina_ir::{
@@ -129,9 +129,15 @@ pub fn emit_test_module_sonatina(
     run_sonatina_optimization_pipeline(&mut module, opt_level);
     super::ensure_module_sonatina_ir_valid(&module)?;
 
+    // Compile all objects at once to avoid repeated prepare_section mutations
+    // on shared functions. compile_all_objects builds a single section cache
+    // so each function is lowered exactly once.
+    let all_artifacts = compile_all_objects_for_tests(&module, debug)?;
+
     let mut output_tests = Vec::with_capacity(tests.len());
     for test in tests {
-        let runtime = compile_runtime_section(&module, &test.object_name, debug)?;
+        let runtime =
+            extract_runtime_from_artifact(&module, &all_artifacts, &test.object_name, debug)?;
         let init_bytecode = wrap_as_init_code(&runtime.bytes);
 
         output_tests.push(TestMetadata {
@@ -726,29 +732,47 @@ struct RuntimeCompileOutput {
     observability_json: Option<String>,
 }
 
-fn compile_runtime_section(
+/// Compile all objects in the module at once so that shared functions are
+/// lowered exactly once (avoiding accumulated mutations from repeated
+/// `prepare_section` calls).
+fn compile_all_objects_for_tests(
     module: &Module,
-    object_name: &str,
     debug: &SonatinaTestDebugConfig,
-) -> Result<RuntimeCompileOutput, LowerError> {
+) -> Result<Vec<ObjectArtifact>, LowerError> {
     let isa = super::create_evm_isa();
     let backend = EvmBackend::new(isa);
 
     let mut opts: CompileOptions<_> = CompileOptions::default();
     let mut verifier_cfg = VerifierConfig::for_level(VerificationLevel::Full);
-    // Sonatina SSA currently keeps removed trivial-phi instructions detached from layout.
-    // Keep full verifier checks enabled while tolerating detached entities until SSA cleanup lands.
     verifier_cfg.allow_detached_entities = true;
     opts.verifier_cfg = verifier_cfg;
     opts.emit_observability = debug.emit_observability;
-    let artifact = compile_object(module, &backend, object_name, &opts).map_err(|errors| {
+
+    compile_all_objects(module, &backend, &opts).map_err(|errors| {
         let msg = errors
             .iter()
             .map(|e| format!("{:?}", e))
             .collect::<Vec<_>>()
             .join("; ");
         LowerError::Internal(msg)
-    })?;
+    })
+}
+
+/// Extract the runtime section for a specific object from pre-compiled artifacts.
+fn extract_runtime_from_artifact(
+    module: &Module,
+    all_artifacts: &[ObjectArtifact],
+    object_name: &str,
+    debug: &SonatinaTestDebugConfig,
+) -> Result<RuntimeCompileOutput, LowerError> {
+    let artifact = all_artifacts
+        .iter()
+        .find(|a| a.object.0.as_str() == object_name)
+        .ok_or_else(|| {
+            LowerError::Internal(format!(
+                "compiled object `{object_name}` not found in artifacts"
+            ))
+        })?;
 
     let section_name = SectionName::from("runtime");
     let runtime_section = artifact.sections.get(&section_name).ok_or_else(|| {
