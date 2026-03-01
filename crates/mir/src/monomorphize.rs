@@ -238,7 +238,9 @@ impl<'db> Monomorphizer<'db> {
             let receiver_space = canonicalize_receiver_space(self.templates[idx].receiver_space);
 
             if let crate::ir::MirFunctionOrigin::Synthetic(_) = origin {
-                let _ = self.ensure_synthetic_instance(origin, receiver_space, &[], &[]);
+                if !self.templates[idx].defer_root {
+                    let _ = self.ensure_synthetic_instance(origin, receiver_space, &[], &[]);
+                }
                 continue;
             }
 
@@ -656,6 +658,37 @@ impl<'db> Monomorphizer<'db> {
         self.instances.push(instance);
         self.instance_map.insert(key, idx);
         self.worklist.push_back(idx);
+
+        // When a deferred synthetic template is first instantiated, co-instantiate
+        // all other synthetic templates for the same contract.  Contract entrypoints
+        // call init_handler and recv_arm_handlers via pre-resolved symbol names
+        // (`call_symbol` with `hir_target: None`), which the monomorphizer cannot
+        // trace through `resolve_call_target`.  Co-instantiation ensures that every
+        // helper referenced by symbol is present.
+        if self.templates[template_idx].defer_root {
+            let crate::ir::MirFunctionOrigin::Synthetic(syn_id) = origin else {
+                unreachable!();
+            };
+            let contract = syn_id.contract();
+            // Collect sibling template keys first to avoid borrow conflict.
+            let siblings: Vec<_> = self
+                .func_index
+                .iter()
+                .filter_map(|(k, _)| {
+                    if let crate::ir::MirFunctionOrigin::Synthetic(other_syn) = k.origin
+                        && other_syn.contract() == contract
+                        && k.origin != origin
+                    {
+                        return Some((k.origin, k.receiver_space));
+                    }
+                    None
+                })
+                .collect();
+            for (sib_origin, sib_receiver_space) in siblings {
+                let _ = self.ensure_synthetic_instance(sib_origin, sib_receiver_space, &[], &[]);
+            }
+        }
+
         Some((idx, symbol))
     }
 

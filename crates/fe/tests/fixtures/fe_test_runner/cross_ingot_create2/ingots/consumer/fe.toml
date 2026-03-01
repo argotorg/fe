@@ -1,0 +1,6 @@
+[ingot]
+name = "consumer"
+version = "0.1.0"
+
+[dependencies]
+provider = true

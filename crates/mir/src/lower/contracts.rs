@@ -3,7 +3,10 @@
 //! This is the implementation of `contract_lowering_target_architecture.md`'s contract lowering
 //! pipeline: HIR remains purely syntactic, while typed contract elaboration drives MIR generation.
 
-use common::{indexmap::IndexMap, ingot::IngotKind};
+use common::{
+    indexmap::IndexMap,
+    ingot::{Ingot, IngotKind},
+};
 use hir::hir_def::params::FuncParamMode;
 use hir::{
     analysis::{
@@ -26,7 +29,7 @@ use hir::{
         },
     },
     hir_def::{
-        CallableDef, Contract, IdentId, PathId, TopLevelMod,
+        CallableDef, Contract, HirIngot, IdentId, PathId, TopLevelMod,
         expr::{ArithBinOp, BinOp, CompBinOp},
     },
 };
@@ -49,56 +52,99 @@ pub(super) fn lower_contract_templates<'db>(
     db: &'db dyn SpannedHirAnalysisDb,
     top_mod: TopLevelMod<'db>,
 ) -> MirLowerResult<Vec<MirFunction<'db>>> {
-    let mut out = Vec::new();
-
     let target = TargetContext::new(db, top_mod)?;
-
+    let mut out = Vec::new();
     for &contract in top_mod.all_contracts(db) {
-        let symbols = ContractSymbols::new(db, contract);
-
-        let core_lib = CoreLib::new(db, contract.scope());
-
-        let slot_offsets = contract
-            .field_layout(db)
-            .values()
-            .map(|field| BigUint::from(field.slot_offset))
-            .collect::<Vec<_>>();
-
-        // User-body handlers first (so entrypoints can call them by symbol).
-        if contract.init(db).is_some() {
-            out.push(lower_init_handler(db, contract, &symbols, &core_lib)?);
-        }
-        for recv in contract.recv_views(db) {
-            for arm in recv.arms(db) {
-                out.push(lower_recv_arm_handler(
-                    db,
-                    contract,
-                    arm,
-                    target.abi.abi_ty,
-                    &symbols,
-                    &core_lib,
-                )?);
-            }
-        }
-
-        // Entrypoints + metadata hooks.
-        out.push(lower_init_entrypoint(
-            db,
-            contract,
-            &target,
-            &symbols,
-            &slot_offsets,
-        )?);
-        out.push(lower_runtime_entrypoint(
-            db,
-            contract,
-            &target,
-            &symbols,
-            &slot_offsets,
-        )?);
-        out.push(lower_init_code_offset(db, contract, &symbols)?);
-        out.push(lower_init_code_len(db, contract, &symbols)?);
+        out.extend(lower_single_contract(&target, db, contract, None)?);
     }
+    Ok(out)
+}
+
+/// Lower contract templates for contracts defined in a dependency ingot.
+///
+/// `host_top_mod` is a module from the *current* ingot and is used to create
+/// the [`TargetContext`] (resolving `std::evm::EvmTarget` etc.).  The contracts
+/// come from `dep_ingot` which may be a different ingot in the same workspace.
+///
+/// This is needed so that `create2<SomeContract>` works when `SomeContract`
+/// lives in a different ingot.
+pub(super) fn lower_dependency_contract_templates<'db>(
+    db: &'db dyn SpannedHirAnalysisDb,
+    host_top_mod: TopLevelMod<'db>,
+    dep_ingot: Ingot<'db>,
+    dep_name: &str,
+) -> MirLowerResult<Vec<MirFunction<'db>>> {
+    let target = TargetContext::new(db, host_top_mod)?;
+    let mut out = Vec::new();
+    for &dep_mod in dep_ingot.all_modules(db).iter() {
+        for &contract in dep_mod.all_contracts(db) {
+            let mut templates = lower_single_contract(&target, db, contract, Some(dep_name))?;
+            // Mark dependency templates so the monomorphizer does not eagerly
+            // seed them as roots.  They will still be instantiated on demand
+            // when referenced by `create2`.
+            for t in &mut templates {
+                t.defer_root = true;
+            }
+            out.extend(templates);
+        }
+    }
+    Ok(out)
+}
+
+/// Generate all synthetic MIR templates for a single contract.
+///
+/// `ingot_prefix` is used to qualify symbol names for dependency contracts,
+/// preventing collisions when two ingots define contracts with the same name.
+fn lower_single_contract<'db>(
+    target: &TargetContext<'db>,
+    db: &'db dyn SpannedHirAnalysisDb,
+    contract: Contract<'db>,
+    ingot_prefix: Option<&str>,
+) -> MirLowerResult<Vec<MirFunction<'db>>> {
+    let mut out = Vec::new();
+    let symbols = ContractSymbols::with_prefix(db, contract, ingot_prefix);
+    let core_lib = CoreLib::new(db, contract.scope());
+
+    let slot_offsets = contract
+        .field_layout(db)
+        .values()
+        .map(|field| BigUint::from(field.slot_offset))
+        .collect::<Vec<_>>();
+
+    // User-body handlers first (so entrypoints can call them by symbol).
+    if contract.init(db).is_some() {
+        out.push(lower_init_handler(db, contract, &symbols, &core_lib)?);
+    }
+    for recv in contract.recv_views(db) {
+        for arm in recv.arms(db) {
+            out.push(lower_recv_arm_handler(
+                db,
+                contract,
+                arm,
+                target.abi.abi_ty,
+                &symbols,
+                &core_lib,
+            )?);
+        }
+    }
+
+    // Entrypoints + metadata hooks.
+    out.push(lower_init_entrypoint(
+        db,
+        contract,
+        target,
+        &symbols,
+        &slot_offsets,
+    )?);
+    out.push(lower_runtime_entrypoint(
+        db,
+        contract,
+        target,
+        &symbols,
+        &slot_offsets,
+    )?);
+    out.push(lower_init_code_offset(db, contract, &symbols)?);
+    out.push(lower_init_code_len(db, contract, &symbols)?);
 
     Ok(out)
 }
@@ -113,12 +159,22 @@ struct ContractSymbols {
 }
 
 impl ContractSymbols {
-    fn new(db: &dyn HirAnalysisDb, contract: Contract<'_>) -> Self {
-        let contract_name = contract
+    /// Build symbols with an optional ingot-name prefix to disambiguate
+    /// contracts from different ingots that share the same name.
+    fn with_prefix(
+        db: &dyn HirAnalysisDb,
+        contract: Contract<'_>,
+        ingot_prefix: Option<&str>,
+    ) -> Self {
+        let bare_name = contract
             .name(db)
             .to_opt()
             .map(|id| id.data(db).to_string())
             .unwrap_or_else(|| "<anonymous_contract>".to_string());
+        let contract_name = match ingot_prefix {
+            Some(prefix) => format!("{prefix}__{bare_name}"),
+            None => bare_name,
+        };
         let init_entrypoint = format!("__{contract_name}_init");
         let runtime_entrypoint = format!("__{contract_name}_runtime");
         let init_handler = format!("__{contract_name}_init_contract");
@@ -768,6 +824,7 @@ fn lower_init_handler<'db>(
         contract_function: None,
         symbol_name: symbols.init_handler.clone(),
         receiver_space: None,
+        defer_root: false,
     })
 }
 
@@ -895,6 +952,7 @@ fn lower_recv_arm_handler<'db>(
         contract_function: None,
         symbol_name: symbols.recv_handler(recv_idx, arm_idx),
         receiver_space: None,
+        defer_root: false,
     })
 }
 
@@ -1178,6 +1236,7 @@ fn lower_init_entrypoint<'db>(
         contract_function: Some(contract_fn),
         symbol_name: symbols.init_entrypoint.clone(),
         receiver_space: None,
+        defer_root: false,
     })
 }
 
@@ -1309,6 +1368,7 @@ fn lower_runtime_entrypoint<'db>(
         contract_function: Some(contract_fn),
         symbol_name: symbols.runtime_entrypoint.clone(),
         receiver_space: None,
+        defer_root: false,
     })
 }
 
@@ -1383,5 +1443,12 @@ fn lower_code_region_query<'db>(
         contract_function: None,
         symbol_name,
         receiver_space: None,
+        // Code-region queries (init_code_offset / init_code_len) use
+        // `sym_addr` / `sym_size` that reference the init entrypoint as an
+        // embed symbol.  They must only be instantiated when `create2`
+        // actually triggers them; otherwise the Sonatina verifier complains
+        // about undeclared embed symbols in ingots where the contract is
+        // never deployed.
+        defer_root: true,
     })
 }

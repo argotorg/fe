@@ -918,6 +918,26 @@ fn test_cli_test_workspace_ingot_missing_member_is_error() {
     );
 }
 
+/// Regression test: `create2` of a contract defined in another ingot within
+/// the same workspace must compile and run correctly.
+#[test]
+fn test_cli_test_cross_ingot_create2() {
+    let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/fe_test_runner/cross_ingot_create2");
+    let fixture_dir_str = fixture_dir.to_str().expect("fixture dir utf8");
+
+    let (output, exit_code) = run_fe_main(&["test", fixture_dir_str]);
+    assert_eq!(exit_code, 0, "fe test failed:\n{output}");
+    assert!(
+        output.contains("test test_create2_contract_from_other_ingot"),
+        "expected cross-ingot create2 test, got:\n{output}"
+    );
+    assert!(
+        output.contains("1 passed"),
+        "expected 1 passed test, got:\n{output}"
+    );
+}
+
 /// Regression test: `fe test` must discover tests in non-root modules of an
 /// ingot even when `lib.fe` itself contains no `#[test]` functions.
 #[test]
@@ -937,7 +957,6 @@ fn test_cli_test_ingot_discovers_tests_in_non_root_modules() {
         "expected 1 passed test, got:\n{output}"
     );
 }
-
 #[test]
 fn test_cli_test_repo_core_ingot_without_tests_is_ok() {
     let project_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

@@ -50,16 +50,6 @@ fn __LayoutHoles_runtime() -> ():
     v8: u256 = __LayoutHoles_recv_0_1(v7, v1, v3)
     terminate return_value__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f_u256__c4b26908c66ef75f((), v8)
 
-fn __LayoutHoles_init_code_offset() -> u256:
-  bb0:
-    v0: u256 = code_region_offset(func_item(__LayoutHoles_init))
-    ret v0
-
-fn __LayoutHoles_init_code_len() -> u256:
-  bb0:
-    v0: u256 = code_region_len(func_item(__LayoutHoles_init))
-    ret v0
-
 fn storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set_stor_arg0_root_stor__u256_u256_2__7d7bd47f3e4876cc(v0: StorageMap<u256, u256, 2>, v1: u256, v2: u256) -> ():
   bb0:
     v3: u256 = u256_h3271ca15373d4483_wordrepr_h7483d41ac8178d88_to_word(v2)

@@ -440,6 +440,21 @@ pub fn lower_ingot<'db>(
         templates.extend(contracts::lower_contract_templates(db, top_mod)?);
     }
 
+    // Also generate contract templates for contracts defined in dependency
+    // ingots. This is needed so that `create2<SomeContract>` works when
+    // `SomeContract` lives in a different ingot within the same workspace.
+    // The TargetContext is created from the *current* ingot's root module so
+    // that `std::evm::EvmTarget` etc. resolve correctly.
+    let host_top_mod = ingot.root_mod(db);
+    for &(dep_name, dep_ingot) in ingot.resolved_external_ingots(db).iter() {
+        templates.extend(contracts::lower_dependency_contract_templates(
+            db,
+            host_top_mod,
+            dep_ingot,
+            dep_name.data(db),
+        )?);
+    }
+
     // Run MIR diagnostics on the generic templates as well as the monomorphized instances. This
     // ensures borrow/move errors are surfaced even when a generic function is never instantiated.
     run_borrow_checks_or_error(db, &templates)?;
@@ -588,6 +603,7 @@ pub(crate) fn lower_function<'db>(
         contract_function,
         symbol_name,
         receiver_space,
+        defer_root: false,
     })
 }
 

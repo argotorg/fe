@@ -434,18 +434,6 @@ func private %__CoolCoin_runtime() {
         br v33 block15 block1;
 }
 
-func private %__CoolCoin_init_code_offset() -> i256 {
-    block0:
-        v1.i256 = sym_addr &__CoolCoin_init;
-        return v1;
-}
-
-func private %__CoolCoin_init_code_len() -> i256 {
-    block0:
-        v1.i256 = sym_size &__CoolCoin_init;
-        return v1;
-}
-
 func public %accesscontrol____h4c85da5bbb505ade_grant_stor_arg0_root_stor__3__577ab43c73dd3cef(v0.i256, v1.i256, v2.i256) {
     block0:
         v5.*i8 = evm_malloc 64.i256;

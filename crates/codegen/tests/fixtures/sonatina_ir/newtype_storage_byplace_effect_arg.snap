@@ -98,18 +98,6 @@ func private %__NewtypeByPlaceEffectArg_runtime() {
         evm_invalid;
 }
 
-func private %__NewtypeByPlaceEffectArg_init_code_offset() -> i256 {
-    block0:
-        v1.i256 = sym_addr &__NewtypeByPlaceEffectArg_init;
-        return v1;
-}
-
-func private %__NewtypeByPlaceEffectArg_init_code_len() -> i256 {
-    block0:
-        v1.i256 = sym_size &__NewtypeByPlaceEffectArg_init;
-        return v1;
-}
-
 func private %init_field__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9(v0.i256, v1.i256) -> i256 {
     block0:
         v3.i256 = call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__u256__3271ca15373d4483 v0 v1;
