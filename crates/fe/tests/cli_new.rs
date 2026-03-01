@@ -330,7 +330,8 @@ fn new_refuses_to_overwrite_existing_src_lib_fe() {
     let (output, exit_code) = run_fe(&["new", ingot_dir.to_str().unwrap()], tmp.path());
     assert_ne!(exit_code, 0, "expected `fe new` to fail, got:\n{output}");
     assert!(
-        output.contains("Refusing to overwrite existing") && output.contains("src/lib.fe"),
+        output.contains("Refusing to overwrite existing")
+            && (output.contains("src/lib.fe") || output.contains("src\\lib.fe")),
         "expected overwrite refusal for src/lib.fe, got:\n{output}"
     );
 }

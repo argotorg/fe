@@ -22,6 +22,7 @@ petgraph.workspace = true
 
 parser.workspace = true
 url.workspace = true
+typed-path.workspace = true
 ordermap = "0.5.5"
 rustc-hash.workspace = true
 radix_immutable = "0.1"

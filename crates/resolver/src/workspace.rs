@@ -1,6 +1,7 @@
 use camino::Utf8PathBuf;
 use common::config::{Config, WorkspaceMemberSelection, WorkspaceSettings};
 use common::ingot::Version;
+use common::paths::{canonicalize_utf8, file_url_to_utf8_path, glob_pattern, normalize_slashes};
 use common::urlext::UrlExt;
 use glob::glob;
 use smol_str::SmolStr;
@@ -59,31 +60,21 @@ pub fn expand_workspace_members(
     base_url: &Url,
     selection: WorkspaceMemberSelection,
 ) -> Result<Vec<ExpandedWorkspaceMember>, String> {
-    let base_path_buf = base_url
-        .to_file_path()
-        .map_err(|_| "workspace URL is not a file URL".to_string())?;
-    let base_path = Utf8PathBuf::from_path_buf(base_path_buf)
-        .map_err(|_| "workspace path is not UTF-8".to_string())?;
-    let base_canonical = base_path
-        .as_std_path()
-        .canonicalize()
+    let base_path = file_url_to_utf8_path(base_url)
+        .ok_or_else(|| "workspace URL is not a file URL or not UTF-8".to_string())?;
+    let base_canonical = canonicalize_utf8(base_path.as_std_path())
         .map_err(|err| format!("failed to canonicalize workspace root {base_path}: {err}"))?;
-    let base_canonical = Utf8PathBuf::from_path_buf(base_canonical)
-        .map_err(|_| "workspace path is not UTF-8".to_string())?;
 
     let mut excluded = std::collections::HashSet::new();
     for pattern in &workspace.exclude {
         let pattern_path = base_path.join(pattern.as_str());
-        let entries = glob(pattern_path.as_str())
+        let entries = glob(&glob_pattern(pattern_path.as_std_path()))
             .map_err(|err| format!("Invalid exclude pattern \"{pattern}\": {err}"))?;
         for entry in entries {
             let path = entry
                 .map_err(|err| format!("Glob error for exclude pattern \"{pattern}\": {err}"))?;
-            let canonical = path
-                .canonicalize()
+            let canonical = canonicalize_utf8(&path)
                 .map_err(|err| format!("Glob error for exclude pattern \"{pattern}\": {err}"))?;
-            let canonical = Utf8PathBuf::from_path_buf(canonical)
-                .map_err(|_| "exclude path is not UTF-8".to_string())?;
             if !canonical.starts_with(&base_canonical) {
                 return Err(format!(
                     "Exclude pattern \"{pattern}\" escapes workspace root {base_path}"
@@ -104,21 +95,16 @@ pub fn expand_workspace_members(
     };
     for spec in workspace.members_for_selection(spec_selection) {
         let pattern = spec.path.as_str();
-        if spec.name.is_some() || spec.version.is_some() {
-            if pattern.contains(['*', '?', '[']) {
-                return Err(format!(
-                    "Member path \"{pattern}\" with name/version cannot contain glob patterns"
-                ));
-            }
+        let has_glob = pattern.contains(['*', '?', '[']);
+
+        if !has_glob {
             let path = base_path.join(pattern);
             if !path.is_dir() {
                 continue;
             }
-            let canonical = path.as_std_path().canonicalize().map_err(|err| {
+            let canonical = canonicalize_utf8(path.as_std_path()).map_err(|err| {
                 format!("failed to canonicalize member path \"{pattern}\": {err}")
             })?;
-            let canonical = Utf8PathBuf::from_path_buf(canonical)
-                .map_err(|_| "member path is not UTF-8".to_string())?;
             if !canonical.starts_with(&base_canonical) {
                 return Err(format!(
                     "Member path \"{pattern}\" escapes workspace root {base_path}"
@@ -145,18 +131,21 @@ pub fn expand_workspace_members(
             continue;
         }
 
+        if spec.name.is_some() || spec.version.is_some() {
+            return Err(format!(
+                "Member path \"{pattern}\" with name/version cannot contain glob patterns"
+            ));
+        }
+
         let pattern_path = base_path.join(pattern);
-        let entries = glob(pattern_path.as_str())
+        let entries = glob(&glob_pattern(pattern_path.as_std_path()))
             .map_err(|err| format!("Invalid member pattern \"{pattern}\": {err}"))?;
 
         for entry in entries {
             let path = entry
                 .map_err(|err| format!("Glob error for member pattern \"{pattern}\": {err}"))?;
-            let canonical = path
-                .canonicalize()
+            let canonical = canonicalize_utf8(&path)
                 .map_err(|err| format!("Glob error for member pattern \"{pattern}\": {err}"))?;
-            let canonical = Utf8PathBuf::from_path_buf(canonical)
-                .map_err(|_| "member path is not UTF-8".to_string())?;
             if !canonical.starts_with(&base_canonical) {
                 return Err(format!(
                     "Member pattern \"{pattern}\" escapes workspace root {base_path}"
@@ -188,9 +177,11 @@ pub fn expand_workspace_members(
     if matches!(selection, WorkspaceMemberSelection::DefaultOnly)
         && let Some(default_members) = &workspace.default_members
     {
-        let defaults: std::collections::HashSet<&str> =
-            default_members.iter().map(|m| m.as_str()).collect();
-        members.retain(|member| defaults.contains(member.path.as_str()));
+        let defaults: std::collections::HashSet<String> = default_members
+            .iter()
+            .map(|member| normalize_slashes(member))
+            .collect();
+        members.retain(|member| defaults.contains(&normalize_slashes(member.path.as_str())));
     }
 
     Ok(members)
@@ -540,7 +531,7 @@ default-members = ["ingots/app"]
                 .expect("expand members");
 
         assert_eq!(members.len(), 1);
-        assert_eq!(members[0].path.as_str(), "ingots/app");
+        assert_eq!(members[0].path, Utf8PathBuf::from("ingots").join("app"));
     }
 
     #[test]

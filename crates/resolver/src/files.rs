@@ -1,4 +1,5 @@
 use camino::Utf8PathBuf;
+use common::paths::{file_url_to_utf8_path, glob_pattern};
 use glob::glob;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -163,8 +164,8 @@ pub fn path_exists(path: &Path) -> bool {
 }
 
 pub fn find_fe_toml_paths(root: &Path) -> Result<Vec<PathBuf>, FilesResolutionError> {
-    let pattern = format!("{}/**/fe.toml", root.to_string_lossy());
-    let entries = glob(&pattern).map_err(FilesResolutionError::PatternError)?;
+    let pattern = root.join("**").join("fe.toml");
+    let entries = glob(&glob_pattern(&pattern)).map_err(FilesResolutionError::PatternError)?;
     let mut paths = Vec::new();
     for entry in entries {
         match entry {
@@ -207,7 +208,8 @@ impl Resolver for FilesResolver {
         tracing::info!(target: "resolver", "Starting file resolution for URL: {}", url);
         let mut files = vec![];
 
-        let ingot_path = Utf8PathBuf::from(url.path());
+        let ingot_path = file_url_to_utf8_path(url)
+            .ok_or_else(|| FilesResolutionError::DirectoryDoesNotExist(url.clone()))?;
         tracing::info!(target: "resolver", "Resolving files in path: {}", ingot_path);
 
         if ingot_path.exists() && ingot_path.is_file() {
@@ -269,8 +271,8 @@ impl Resolver for FilesResolver {
 
         for pattern in self.file_patterns.clone() {
             let pattern_path = ingot_path.join(&pattern);
-            let entries =
-                glob(pattern_path.as_str()).map_err(FilesResolutionError::PatternError)?;
+            let entries = glob(&glob_pattern(pattern_path.as_std_path()))
+                .map_err(FilesResolutionError::PatternError)?;
 
             for entry in entries {
                 match entry {
@@ -312,5 +314,55 @@ impl Resolver for FilesResolver {
         tracing::info!(target: "resolver", "File resolution completed successfully, found {} files", files.len());
         let resource = FilesResource { files };
         Ok(handler.handle_resolution(url, resource))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{ResolutionHandler, Resolver};
+
+    struct EchoHandler;
+
+    impl ResolutionHandler<FilesResolver> for EchoHandler {
+        type Item = FilesResource;
+
+        fn handle_resolution(&mut self, _description: &Url, resource: FilesResource) -> Self::Item {
+            resource
+        }
+    }
+
+    #[test]
+    fn resolves_directory_urls_created_from_paths() {
+        let temp = tempfile::tempdir().expect("create temp dir");
+        let source_file = temp.path().join("main.fe");
+        fs::write(&source_file, "fn main() {}\n").expect("write source file");
+
+        let url = Url::from_directory_path(temp.path()).expect("directory url");
+        let mut resolver = FilesResolver::new().with_pattern("*.fe");
+        let mut handler = EchoHandler;
+        let files = resolver
+            .resolve(&mut handler, &url)
+            .expect("resolve directory url");
+
+        assert_eq!(files.files.len(), 1);
+        assert_eq!(files.files[0].path.file_name(), Some("main.fe"));
+    }
+
+    #[test]
+    fn resolves_file_urls_created_from_paths() {
+        let temp = tempfile::tempdir().expect("create temp dir");
+        let source_file = temp.path().join("entry.fe");
+        fs::write(&source_file, "fn entry() {}\n").expect("write source file");
+
+        let url = Url::from_file_path(&source_file).expect("file url");
+        let mut resolver = FilesResolver::new();
+        let mut handler = EchoHandler;
+        let files = resolver
+            .resolve(&mut handler, &url)
+            .expect("resolve file url");
+
+        assert_eq!(files.files.len(), 1);
+        assert_eq!(files.files[0].path.file_name(), Some("entry.fe"));
     }
 }

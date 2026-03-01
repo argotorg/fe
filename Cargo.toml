@@ -19,6 +19,7 @@ mir = { path = "crates/mir", package = "fe-mir" }
 cranelift-entity = "0.115"
 url = "2.5.4"
 camino = "1.1.9"
+typed-path = "0.12.3"
 clap = { version = "4.5.26", features = ["derive"] }
 clap_complete = "4.5.65"
 codespan-reporting = "0.11"
