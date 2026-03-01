@@ -1,6 +1,7 @@
 use camino::{Utf8Path, Utf8PathBuf};
 use std::io;
 use std::path::{Path, PathBuf};
+use typed_path::{Utf8WindowsComponent, Utf8WindowsPath, Utf8WindowsPrefix};
 use url::Url;
 
 fn non_utf8_path_error(path: PathBuf) -> io::Error {
@@ -11,11 +12,72 @@ fn non_utf8_path_error(path: PathBuf) -> io::Error {
 }
 
 pub fn normalize_slashes(raw: &str) -> String {
-    raw.replace('\\', "/")
+    if !raw.contains('\\') {
+        return raw.to_string();
+    }
+
+    let mut normalized = String::with_capacity(raw.len());
+    let mut needs_separator = false;
+
+    for component in Utf8WindowsPath::new(raw).components() {
+        match component {
+            Utf8WindowsComponent::Prefix(prefix) => {
+                if needs_separator {
+                    normalized.push('/');
+                }
+
+                let is_disk_prefix = matches!(prefix.kind(), Utf8WindowsPrefix::Disk(_));
+                normalized.push_str(&normalize_windows_prefix(prefix.kind()));
+                needs_separator = !is_disk_prefix && !normalized.ends_with('/');
+            }
+            Utf8WindowsComponent::RootDir => {
+                if !normalized.ends_with('/') {
+                    normalized.push('/');
+                }
+                needs_separator = false;
+            }
+            Utf8WindowsComponent::CurDir => {
+                if needs_separator {
+                    normalized.push('/');
+                }
+                normalized.push('.');
+                needs_separator = true;
+            }
+            Utf8WindowsComponent::ParentDir => {
+                if needs_separator {
+                    normalized.push('/');
+                }
+                normalized.push_str("..");
+                needs_separator = true;
+            }
+            Utf8WindowsComponent::Normal(component) => {
+                if needs_separator {
+                    normalized.push('/');
+                }
+                normalized.push_str(component);
+                needs_separator = true;
+            }
+        }
+    }
+
+    normalized
 }
 
 pub fn glob_pattern(path: &Path) -> String {
     normalize_slashes(path.to_string_lossy().as_ref())
+}
+
+fn normalize_windows_prefix(prefix: Utf8WindowsPrefix<'_>) -> String {
+    match prefix {
+        Utf8WindowsPrefix::Verbatim(component) => format!("//?/{component}"),
+        Utf8WindowsPrefix::VerbatimUNC(server, share) => {
+            format!("//?/UNC/{server}/{share}")
+        }
+        Utf8WindowsPrefix::VerbatimDisk(drive) => format!("//?/{drive}:"),
+        Utf8WindowsPrefix::DeviceNS(device) => format!("//./{device}"),
+        Utf8WindowsPrefix::UNC(server, share) => format!("//{server}/{share}"),
+        Utf8WindowsPrefix::Disk(drive) => format!("{drive}:"),
+    }
 }
 
 pub fn file_url_to_utf8_path(url: &Url) -> Option<Utf8PathBuf> {
@@ -53,6 +115,20 @@ mod tests {
     #[test]
     fn normalizes_slashes() {
         assert_eq!(normalize_slashes(r"a\b\c"), "a/b/c");
+    }
+
+    #[test]
+    fn normalizes_disk_paths() {
+        assert_eq!(normalize_slashes(r"C:\a\b\c"), "C:/a/b/c");
+        assert_eq!(normalize_slashes(r"C:a\b\c"), "C:a/b/c");
+    }
+
+    #[test]
+    fn normalizes_unc_paths() {
+        assert_eq!(
+            normalize_slashes(r"\\server\share\path\to\file"),
+            "//server/share/path/to/file"
+        );
     }
 
     #[test]
