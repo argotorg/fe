@@ -12,7 +12,7 @@ use super::{
 use crate::analysis::{HirAnalysisDb, ty::ty_def::TyData};
 use crate::hir_def::CallableDef;
 
-#[salsa::tracked(return_ref)]
+#[salsa::tracked(return_ref, cycle_fn=collect_methods_cycle_recover, cycle_initial=collect_methods_cycle_initial)]
 pub(crate) fn collect_methods<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
@@ -22,6 +22,22 @@ pub(crate) fn collect_methods<'db>(
     let impls = ingot.all_impls(db);
     collector.collect_impls(impls);
     collector.finalize()
+}
+
+fn collect_methods_cycle_initial<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _ingot: Ingot<'db>,
+) -> MethodTable<'db> {
+    MethodTable::new()
+}
+
+fn collect_methods_cycle_recover<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _value: &MethodTable<'db>,
+    _count: u32,
+    _ingot: Ingot<'db>,
+) -> salsa::CycleRecoveryAction<MethodTable<'db>> {
+    salsa::CycleRecoveryAction::Iterate
 }
 
 #[salsa::tracked(return_ref)]

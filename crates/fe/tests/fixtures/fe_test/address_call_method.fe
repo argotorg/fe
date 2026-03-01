@@ -1,0 +1,49 @@
+/// Regression test: calling a contract via `addr.call(msg)` (impl method on
+/// Address that references the Call trait) must not trigger a Salsa cycle crash
+/// in `collect_methods`.
+
+use std::abi::sol
+
+msg CounterMsg {
+    #[selector = sol("increment()")]
+    Increment,
+    #[selector = sol("get()")]
+    Get -> u256,
+}
+
+struct CounterStore {
+    value: u256,
+}
+
+pub contract Counter {
+    mut store: CounterStore
+
+    init() uses (mut store) {
+        store.value = 0
+    }
+
+    recv CounterMsg {
+        Increment uses (mut store) {
+            store.value = store.value + 1
+        }
+
+        Get -> u256 uses (store) {
+            store.value
+        }
+    }
+}
+
+#[test]
+fn test_address_call_method() uses (evm: mut Evm, call: mut Call) {
+    let addr = evm.create2<Counter>(value: 0, args: (), salt: 0)
+    assert(addr.inner != 0)
+
+    // Use the impl Address::call method (not the trait method directly)
+    let v0: u256 = addr.call(CounterMsg::Get {})
+    assert(v0 == 0)
+
+    addr.call(CounterMsg::Increment {})
+
+    let v1: u256 = addr.call(CounterMsg::Get {})
+    assert(v1 == 1)
+}
