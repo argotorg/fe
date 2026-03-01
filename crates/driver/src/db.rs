@@ -6,7 +6,7 @@ use codespan_reporting::term::{
 use common::file::File;
 use common::{
     define_input_db,
-    diagnostics::{CompleteDiagnostic, cmp_complete_diagnostics},
+    diagnostics::{CompleteDiagnostic, Severity, cmp_complete_diagnostics},
 };
 use hir::analysis::{
     analysis_pass::{AnalysisPassManager, EventLowerPass, MsgLowerPass, ParsingPass},
@@ -100,6 +100,12 @@ pub struct DiagnosticsCollection<'db>(Vec<Box<dyn DiagnosticVoucher + 'db>>);
 impl DiagnosticsCollection<'_> {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
+    }
+
+    pub fn has_errors(&self, db: &DriverDataBase) -> bool {
+        self.finalize(db)
+            .iter()
+            .any(|d| d.severity == Severity::Error)
     }
 
     pub fn emit(&self, db: &DriverDataBase) {

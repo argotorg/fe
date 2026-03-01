@@ -1,9 +1,4 @@
 //! HIR-to-source pretty printing.
-//!
-//! # Panics
-//!
-//! All pretty_print methods will panic if they encounter `Partial::Absent` nodes,
-//! as the HIR is expected to be complete for pretty printing.
 
 use crate::HirDb;
 use crate::hir_def::scope_graph::ScopeId;
@@ -18,11 +13,22 @@ fn indent_str(level: usize) -> String {
     "    ".repeat(level)
 }
 
-/// Unwraps a Partial<T>, panicking with context if Absent.
+/// Unwraps a Partial<T>, returning the value or panicking with context.
+///
+/// Absent nodes in the HIR occur when parsing fails (e.g. incomplete source
+/// during editing). In debug builds this fires a debug_assert so tests catch
+/// regressions; in release the panic propagates to the LSP catch_unwind
+/// boundary.
 fn unwrap_partial<T>(partial: Partial<T>, context: &str) -> T {
     match partial {
         Partial::Present(v) => v,
-        Partial::Absent => panic!("HIR pretty_print: missing required node at {}", context),
+        Partial::Absent => {
+            debug_assert!(
+                false,
+                "HIR pretty_print: missing required node at {context}"
+            );
+            panic!("HIR pretty_print: missing required node at {context}")
+        }
     }
 }
 
@@ -30,7 +36,13 @@ fn unwrap_partial<T>(partial: Partial<T>, context: &str) -> T {
 fn unwrap_partial_ref<'a, T>(partial: &'a Partial<T>, context: &str) -> &'a T {
     match partial {
         Partial::Present(v) => v,
-        Partial::Absent => panic!("HIR pretty_print: missing required node at {}", context),
+        Partial::Absent => {
+            debug_assert!(
+                false,
+                "HIR pretty_print: missing required node at {context}"
+            );
+            panic!("HIR pretty_print: missing required node at {context}")
+        }
     }
 }
 
@@ -353,7 +365,6 @@ impl<'db> FuncParam<'db> {
     /// Pretty-prints a function parameter.
     pub fn pretty_print(&self, db: &'db dyn HirDb) -> String {
         let mut result = String::new();
-        let name = unwrap_partial(self.name, "FuncParam::name");
         let mode_prefix = match self.mode {
             FuncParamMode::View => "",
             FuncParamMode::Own => "own ",
@@ -372,15 +383,19 @@ impl<'db> FuncParam<'db> {
             result.push_str("_ ");
         }
 
-        // Name
-        let name = name.pretty_print(db);
-        result.push_str(&name);
+        // Name — may be Absent if parsing failed; use "_" as fallback.
+        match self.name {
+            Partial::Present(name) => result.push_str(&name.pretty_print(db)),
+            Partial::Absent => result.push('_'),
+        }
 
-        // Type (if not a self param with fallback)
+        // Type (if not a self param with fallback) — use "?" if Absent.
         if !self.self_ty_fallback {
-            let ty = unwrap_partial(self.ty, "FuncParam::ty").pretty_print(db);
             result.push_str(": ");
-            result.push_str(&ty);
+            match self.ty {
+                Partial::Present(ty) => result.push_str(&ty.pretty_print(db)),
+                Partial::Absent => result.push('?'),
+            }
         }
 
         result

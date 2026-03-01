@@ -301,6 +301,35 @@ impl MockLspClient {
         }
     }
 
+    /// Poll until a diagnostic with the given code appears for the URI, or give up.
+    pub async fn wait_for_diagnostic_code(&self, uri: &Url, code: &str) -> bool {
+        for _ in 0..20 {
+            self.settle(500).await;
+            let found = self
+                .diagnostics()
+                .iter()
+                .filter(|d| &d.uri == uri)
+                .flat_map(|d| &d.diagnostics)
+                .any(|d| match &d.code {
+                    Some(NumberOrString::String(s)) => s == code,
+                    _ => false,
+                });
+            if found {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Return all diagnostics for a specific URI from the latest publish.
+    pub fn diagnostics_for_uri(&self, uri: &Url) -> Vec<Diagnostic> {
+        self.diagnostics()
+            .into_iter()
+            .filter(|d| &d.uri == uri)
+            .flat_map(|d| d.diagnostics)
+            .collect()
+    }
+
     /// Shut down the server cleanly.
     pub async fn shutdown(mut self) {
         let _ = self.server.shutdown(()).await;
@@ -333,6 +362,8 @@ async fn mock_lsp_scenarios() {
     scenario_format_concurrent_with_diagnostics(&mut client, &uri).await;
     scenario_format_during_generic_struct_keystroke_sequence(&mut client, &uri).await;
     scenario_diagnostics_published_for_broken_code(&mut client).await;
+    scenario_contract_analysis_reports_errors(&mut client, &uri).await;
+    scenario_errors_reported_after_panic_recovery(&mut client, &uri).await;
 
     client.shutdown().await;
 }
@@ -545,6 +576,82 @@ async fn scenario_format_during_generic_struct_keystroke_sequence(
             "format crashed at step {i} '{code}': {fmt_result:?}"
         );
     }
+}
+
+/// Regression test: ContractAnalysisPass was absent from initialize_analysis_pass().
+/// BodyAnalysisPass explicitly skips contract bodies ("contract-specific analysis is
+/// handled separately"), so errors in init/recv blocks were never reported by the LSP.
+async fn scenario_contract_analysis_reports_errors(client: &mut MockLspClient, uri: &Url) {
+    client.clear_diagnostics();
+    // Contract with an unresolved effect: ContractAnalysisPass produces error 8-0051.
+    // BodyAnalysisPass will NOT catch this — it only visits all_funcs(), not contract bodies.
+    client.did_change(
+        uri,
+        800,
+        r#"struct Store { value: u256 }
+
+pub contract Broken {
+    mut store: Store
+
+    init() uses (mut nonexistent_effect) {
+        store.value = 0
+    }
+}"#,
+    );
+
+    let found = client.wait_for_diagnostic_code(uri, "8-0051").await;
+    assert!(
+        found,
+        "expected error 8-0051 (unresolved effect in contract init) — \
+         ContractAnalysisPass must be registered in initialize_analysis_pass(); \
+         got: {:?}",
+        client.diagnostics_for_uri(uri),
+    );
+}
+
+/// Test that error diagnostics are still reported after a panic inside
+/// `diagnostics_for_ingot`.
+///
+/// The outer `catch_unwind` in `handle_files_need_diagnostics` must absorb the
+/// panic without killing the server actor. After recovery the diagnostics
+/// pipeline must remain fully functional — error codes must still be emitted
+/// for code sent after the panic.
+async fn scenario_errors_reported_after_panic_recovery(client: &mut MockLspClient, uri: &Url) {
+    // Arm the latch: the next handle_files_need_diagnostics call will panic.
+    crate::lsp_diagnostics::FORCE_DIAGNOSTIC_PANIC.store(true, std::sync::atomic::Ordering::SeqCst);
+
+    // Trigger a diagnostics run; the handler will hit the panic and the outer
+    // catch_unwind in handle_files_need_diagnostics must absorb it.
+    client.did_change(uri, 900, "struct TriggerDiag {}");
+    client.settle(500).await;
+
+    // Verify the latch was actually consumed by this server and not stolen
+    // by a concurrent test. If this fires, the test is racy.
+    assert!(
+        !crate::lsp_diagnostics::FORCE_DIAGNOSTIC_PANIC.load(std::sync::atomic::Ordering::SeqCst),
+        "FORCE_DIAGNOSTIC_PANIC was not consumed — another test may have stolen it"
+    );
+
+    // After the panic, send code with a deterministic error code.
+    // If the panic killed the diagnostics actor, this will time out.
+    client.clear_diagnostics();
+    client.did_change(
+        uri,
+        901,
+        r#"pub contract StillReports {
+    init() uses (mut ghost_effect) {
+    }
+}"#,
+    );
+
+    let found = client.wait_for_diagnostic_code(uri, "8-0051").await;
+    assert!(
+        found,
+        "server must still emit error 8-0051 after a panic in diagnostics_for_ingot — \
+         the outer catch_unwind in handle_files_need_diagnostics must keep \
+         the actor alive; got: {:?}",
+        client.diagnostics_for_uri(uri),
+    );
 }
 
 /// Verify diagnostics are published via the async pipeline.

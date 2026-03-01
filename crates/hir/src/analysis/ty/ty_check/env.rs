@@ -297,17 +297,10 @@ impl<'db> TyCheckEnv<'db> {
             }
 
             let Some(provider_param_idx) = provider_map.get(idx).copied().flatten() else {
-                debug_assert!(false, "missing provider param for effect at index {idx}");
-                tracing::warn!("missing provider param for effect at index {idx}");
-                continue;
+                panic!("missing provider param for effect at index {idx}");
             };
             let Some(&provider_ty) = provider_params.get(provider_param_idx) else {
-                debug_assert!(
-                    false,
-                    "provider param index {provider_param_idx} out of range"
-                );
-                tracing::warn!("provider param index {provider_param_idx} out of range");
-                continue;
+                panic!("provider param index {provider_param_idx} out of range");
             };
 
             let provided_ty = match kind {

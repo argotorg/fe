@@ -362,6 +362,7 @@ fn check_ingot_and_dependencies(
     }
 
     let hir_diags = db.run_on_ingot(ingot);
+    let hir_has_errors = hir_diags.has_errors(db);
     let mut has_errors = false;
 
     if !hir_diags.is_empty() {
@@ -373,7 +374,13 @@ fn check_ingot_and_dependencies(
         has_errors = true;
     }
 
-    let mir_diags = db.mir_diagnostics_for_ingot(ingot, MirDiagnosticsMode::CompilerParity);
+    // MIR assumes HIR is sound and panics on invalid HIR. Skip it when HIR
+    // already reported errors to prevent cascading panics on broken input.
+    let mir_diags = if hir_has_errors {
+        vec![]
+    } else {
+        db.mir_diagnostics_for_ingot(ingot, MirDiagnosticsMode::CompilerParity)
+    };
     if !mir_diags.is_empty() {
         db.emit_complete_diagnostics(&mir_diags);
         has_errors = true;
@@ -403,7 +410,11 @@ fn check_ingot_and_dependencies(
             continue;
         }
         let hir_diags = db.run_on_ingot(ingot);
-        let mir_diags = db.mir_diagnostics_for_ingot(ingot, MirDiagnosticsMode::CompilerParity);
+        let mir_diags = if hir_diags.has_errors(db) {
+            vec![]
+        } else {
+            db.mir_diagnostics_for_ingot(ingot, MirDiagnosticsMode::CompilerParity)
+        };
         if !hir_diags.is_empty() || !mir_diags.is_empty() {
             dependency_errors.push((dependency_url, hir_diags, mir_diags));
         }
