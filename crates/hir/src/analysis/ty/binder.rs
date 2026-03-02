@@ -115,11 +115,17 @@ impl<'db> TyFolder<'db> for InstantiateFolder<'db, '_> {
     fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
         match ty.data(db) {
             TyData::TyParam(param) if !param.is_effect() => {
-                return self.args[param.idx];
+                if let Some(arg) = self.args.get(param.idx) {
+                    return *arg;
+                }
+                return ty;
             }
             TyData::ConstTy(const_ty) => {
                 if let ConstTyData::TyParam(param, _) = const_ty.data(db) {
-                    return self.args[param.idx];
+                    if let Some(arg) = self.args.get(param.idx) {
+                        return *arg;
+                    }
+                    return ty;
                 }
 
                 let folded = ty.super_fold_with(db, self);
