@@ -56,16 +56,12 @@ pub async fn handle_code_action(
         &mut actions,
     );
 
-    if actions.is_empty() {
-        Ok(None)
-    } else {
-        // Convert CodeAction to CodeActionOrCommand
-        let response: Vec<CodeActionOrCommand> = actions
-            .into_iter()
-            .map(CodeActionOrCommand::CodeAction)
-            .collect();
-        Ok(Some(response))
-    }
+    // Convert CodeAction to CodeActionOrCommand
+    let response: Vec<CodeActionOrCommand> = actions
+        .into_iter()
+        .map(CodeActionOrCommand::CodeAction)
+        .collect();
+    Ok(Some(response))
 }
 
 /// Collect code actions for adding return type annotations to functions.

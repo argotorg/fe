@@ -1,0 +1,1074 @@
+:root {
+    --bg: #0f0f1a;
+    --bg-secondary: #16162a;
+    --text: #e2e8f0;
+    --text-muted: #9ba3af;
+    --accent: #6366f1;
+    --accent-hover: #c7d2fe;
+    --text-accent: #a5b4fc;
+    --border: #2d3748;
+    --code-bg: #0d1117;
+
+    /* SCIP symbol highlighting (used by feHighlight() in JS) */
+    --hl-ref-bg: rgba(99, 102, 241, 0.18);
+    --hl-def-bg: rgba(99, 102, 241, 0.30);
+    --hl-def-underline: rgba(99, 102, 241, 0.6);
+
+    /* Navigated-to item highlight (used by .is-target / :target) */
+    --target-bg: color-mix(in srgb, var(--accent) 10%, var(--bg-secondary));
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+}
+
+.doc-layout {
+    display: grid;
+    grid-template-columns: 280px 1fr;
+    min-height: 100vh;
+}
+
+.doc-sidebar {
+    background: var(--bg-secondary);
+    border-right: 1px solid var(--border);
+    padding: 0.75rem;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow-y: auto;
+}
+
+.sidebar-header h1 {
+    font-size: 1.25rem;
+    margin-bottom: 1rem;
+}
+
+.sidebar-header h1 a {
+    color: var(--accent);
+    text-decoration: none;
+}
+
+#search {
+    width: 100%;
+    padding: 0.5rem;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
+    margin-bottom: 0.5rem;
+}
+
+#search-results {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.search-result {
+    display: flex;
+    gap: 0.5rem;
+    padding: 0.25rem 0.5rem;
+    background: var(--bg);
+    border-radius: 4px;
+    text-decoration: none;
+    color: var(--text);
+    font-size: 0.875rem;
+}
+
+.search-result:hover {
+    background: var(--border);
+}
+
+.sidebar-nav {
+    margin-top: 1rem;
+}
+
+.sidebar-separator {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 0.75rem 0;
+}
+
+.nav-item {
+    margin-bottom: 0.5rem;
+}
+
+.nav-module {
+    color: var(--text);
+    text-decoration: none;
+    font-weight: 600;
+}
+
+.nav-module:hover {
+    color: var(--accent);
+}
+
+.nav-items {
+    list-style: none;
+    margin-left: 1rem;
+    margin-top: 0.25rem;
+}
+
+.nav-items li {
+    margin: 0.25rem 0;
+}
+
+.nav-items a {
+    color: var(--text-muted);
+    text-decoration: none;
+    font-size: 0.875rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.nav-items a:hover {
+    color: var(--text);
+}
+
+.nav-items li.current a {
+    color: var(--accent);
+    font-weight: 600;
+}
+
+/* Grouped navigation by kind */
+.nav-groups {
+    margin-left: 0.5rem;
+    margin-top: 0.5rem;
+}
+
+.nav-kind-group {
+    margin-bottom: 0.75rem;
+}
+
+.nav-kind-header {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 0.25rem;
+    padding-left: 0.5rem;
+}
+
+.nav-kind-group .nav-items {
+    margin-left: 0.5rem;
+}
+
+.doc-content {
+    padding: 1.5rem 2rem;
+    max-width: 900px;
+}
+
+/* Breadcrumb navigation */
+.breadcrumb {
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: 0.875rem;
+    color: var(--text-muted);
+    margin-bottom: 0.75rem;
+}
+
+.breadcrumb-link {
+    color: var(--accent);
+    text-decoration: none;
+}
+
+.breadcrumb-link:hover {
+    text-decoration: underline;
+}
+
+.breadcrumb-sep {
+    color: var(--text-muted);
+    margin: 0 0.125rem;
+}
+
+.breadcrumb-current {
+    color: var(--text);
+}
+
+.item-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 1rem;
+}
+
+.item-title {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.item-header h1 {
+    font-size: 1.75rem;
+    margin: 0;
+}
+
+.src-link {
+    font-size: 0.875rem;
+    color: var(--text-muted);
+    text-decoration: none;
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+}
+
+.src-link:hover {
+    color: var(--accent);
+}
+
+.source-toggle {
+    margin-top: 0.25rem;
+}
+.source-toggle summary {
+    cursor: pointer;
+    list-style: none;
+}
+.source-toggle summary::before {
+    content: "\25b6\00a0";
+    font-size: 0.7em;
+    transition: transform 0.15s;
+    display: inline-block;
+}
+.source-toggle[open] summary::before {
+    transform: rotate(90deg);
+}
+.source-toggle fe-code-block {
+    margin-top: 0.5rem;
+}
+
+.kind-badge {
+    font-size: 0.7rem;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    background: var(--border);
+    color: var(--text-muted);
+    text-transform: lowercase;
+}
+
+.kind-badge.struct { background: #2d4a3e; color: #7ee787; }
+.kind-badge.enum { background: #3d3a2d; color: #e7c77e; }
+.kind-badge.function, .kind-badge.fn { background: #2d3a4a; color: #7eb8e7; }
+.kind-badge.trait { background: #4a2d4a; color: #e77ee7; }
+.kind-badge.module, .kind-badge.mod { background: #2d2d4a; color: #9d7ee7; }
+.kind-badge.contract { background: #4a3d2d; color: #e7b87e; }
+.kind-badge.type { background: #2d4a4a; color: #7ee7e7; }
+.kind-badge.const { background: #3a2d4a; color: #b87ee7; }
+
+.signature {
+    background: var(--code-bg);
+    padding: 0.625rem 0.875rem;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    overflow-x: auto;
+    margin-bottom: 1rem;
+}
+
+.signature code {
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: 0.875rem;
+    white-space: pre;
+    color: var(--text);
+}
+
+/* Type links in signatures and code blocks — underline indicates clickable,
+   color is inherited from the syntax highlight class (hl-type, hl-type-builtin, etc.) */
+.type-link {
+    color: inherit;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    text-decoration-color: currentColor;
+    cursor: pointer;
+}
+
+.type-link:hover {
+    text-decoration-style: dashed;
+}
+
+
+.docs {
+    margin-bottom: 1.25rem;
+}
+
+.docs p {
+    margin-bottom: 1rem;
+}
+
+.docs code {
+    background: var(--code-bg);
+    padding: 0.125rem 0.375rem;
+    border-radius: 4px;
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: 0.875em;
+}
+
+h2 {
+    font-size: 1.25rem;
+    margin: 1rem 0 0.5rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border);
+}
+
+.members {
+    display: grid;
+    gap: 0.75rem;
+}
+
+.members dt {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.members dd {
+    margin-left: 2rem;
+    color: var(--text-muted);
+    margin-bottom: 0.5rem;
+}
+
+/* Children sections (Fields, Variants, Methods) */
+.children-sections {
+    margin-top: 1.25rem;
+}
+
+.children-section {
+    margin-bottom: 1rem;
+}
+
+.children-section:last-child {
+    margin-bottom: 0;
+}
+
+.item-list {
+    list-style: none;
+}
+
+.item-list li {
+    margin: 0.5rem 0;
+}
+
+.item-list a {
+    color: var(--accent);
+    text-decoration: none;
+}
+
+.item-list a:hover {
+    text-decoration: underline;
+}
+
+.not-found {
+    text-align: center;
+    padding: 4rem 2rem;
+}
+
+.not-found h1 {
+    font-size: 2rem;
+    margin-bottom: 1rem;
+    color: var(--text);
+}
+
+.not-found p {
+    color: var(--text-muted);
+    margin-bottom: 0.5rem;
+}
+
+.not-found code {
+    background: var(--code-bg);
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+}
+
+.not-found-hint {
+    font-size: 0.875rem;
+    font-style: italic;
+}
+
+/* Implementations sections */
+.implementations {
+    margin-top: 1.25rem;
+}
+
+.inherent-impls,
+.trait-impls {
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+    margin-bottom: 1rem;
+}
+
+.inherent-impls h2,
+.trait-impls h2 {
+    font-size: 1.25rem;
+    margin-bottom: 0.75rem;
+    color: var(--text);
+}
+
+.impl-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+/* Impl block styling */
+.impl-block {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0;
+    margin-bottom: 0.75rem;
+    border-left: 3px solid transparent;
+}
+
+.impl-block h3 {
+    margin: 0 0 0.5rem 0;
+    font-size: 1rem;
+}
+
+.impl-block h3 a {
+    color: var(--accent);
+    text-decoration: none;
+}
+
+.impl-block h3 a:hover {
+    text-decoration: underline;
+}
+
+.impl-block .signature {
+    margin: 0;
+    font-size: 0.85rem;
+}
+
+/* Rustdoc-inspired toggle/collapsible sections */
+.toggle {
+    margin-bottom: 0.75rem;
+}
+
+.toggle > summary {
+    cursor: pointer;
+    list-style: none;
+    display: flex;
+    align-items: center;
+}
+
+.toggle > summary::-webkit-details-marker {
+    display: none;
+}
+
+.toggle > summary::before {
+    content: '\25b6';
+    flex-shrink: 0;
+    width: 1rem;
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    transition: transform 0.15s ease;
+}
+
+.toggle[open] > summary::before {
+    transform: rotate(90deg);
+}
+
+/* Anchor links */
+.anchor {
+    color: var(--text-muted);
+    text-decoration: none;
+    font-size: 0.8rem;
+    margin-right: 0.5rem;
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+
+.impl-block:hover .anchor,
+.method-item:hover > summary .anchor,
+h2:hover .anchor {
+    opacity: 1;
+}
+
+.anchor:hover {
+    color: var(--accent);
+}
+
+.impl-block > summary {
+    padding: 0.625rem 0.875rem;
+    background: var(--bg-secondary);
+    border-radius: 6px 6px 0 0;
+}
+
+.impl-block[open] > summary {
+    border-bottom: 1px solid var(--border);
+}
+
+.impl-header {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.impl-header h3 {
+    margin: 0;
+    font-size: 0.95rem;
+    font-weight: 600;
+}
+
+.impl-header code {
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    color: var(--accent);
+}
+
+.impl-content {
+    padding: 0.5rem 0.75rem;
+}
+
+.impl-signature {
+    background: var(--code-bg);
+    padding: 0.5rem 0.75rem;
+    border-radius: 4px;
+    margin: 0 0 0.5rem 0;
+    font-size: 0.85rem;
+    overflow-x: auto;
+}
+
+.impl-signature code {
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    white-space: pre;
+}
+
+/* Method items within impl blocks */
+.impl-items {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.method-item {
+    border-left: 3px solid var(--border);
+    margin-left: 0.5rem;
+}
+
+.method-item > summary {
+    padding: 0.375rem 0.625rem;
+}
+
+.method-item[open] > summary {
+    border-bottom: 1px dashed var(--border);
+}
+
+/* Method items without toggle (no docs to collapse) */
+.method-item.no-toggle {
+    padding: 0.375rem 0.625rem;
+}
+
+.method-header {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.method-header h4 {
+    margin: 0;
+    font-size: 0.875rem;
+    font-weight: 500;
+}
+
+.code-header code {
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    color: var(--text);
+}
+
+.method-docblock {
+    padding: 0.375rem 0.625rem;
+    color: var(--text-muted);
+    font-size: 0.875rem;
+    line-height: 1.5;
+}
+
+/* Module items - rustdoc-style table layout */
+.module-items {
+    margin-top: 1rem;
+}
+
+.item-table {
+    margin-bottom: 1.25rem;
+}
+
+.item-table h2 {
+    font-size: 1.125rem;
+    margin-bottom: 0.5rem;
+    padding-bottom: 0.375rem;
+    border-bottom: 1px solid var(--border);
+}
+
+.item-list {
+    display: flex;
+    flex-direction: column;
+}
+
+.item-row {
+    display: grid;
+    grid-template-columns: minmax(150px, max-content) 1fr;
+    align-items: baseline;
+    gap: 0.75rem;
+    padding: 0.25rem 0;
+    border-bottom: 1px solid var(--border);
+}
+
+.item-row:last-child {
+    border-bottom: none;
+}
+
+.item-name {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.item-name a {
+    color: var(--accent);
+    text-decoration: none;
+}
+
+.item-name a:hover {
+    text-decoration: underline;
+}
+
+.item-name code {
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: 0.875rem;
+}
+
+.item-summary {
+    color: var(--text-muted);
+    font-size: 0.875rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Implementors section for traits */
+.implementors {
+    margin-top: 1.25rem;
+}
+
+.implementors h2 {
+    font-size: 1.25rem;
+    margin-bottom: 0.75rem;
+    padding-bottom: 0.375rem;
+    border-bottom: 1px solid var(--border);
+}
+
+.implementor-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.implementor-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.375rem 0.625rem;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+}
+
+.implementor-item:target,
+.implementor-item.is-target {
+    border-color: var(--accent);
+    background: var(--target-bg);
+}
+
+.implementor-sig {
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: 0.875rem;
+    color: var(--text);
+}
+
+/* Recursive sidebar module tree */
+.nav-module-tree {
+    margin-bottom: 0.25rem;
+}
+
+.nav-module-tree > summary {
+    cursor: pointer;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.25rem 0;
+}
+
+.nav-module-tree > summary::-webkit-details-marker {
+    display: none;
+}
+
+.nav-module-tree > summary::before {
+    content: '\25b6';
+    font-size: 0.6rem;
+    color: var(--text-muted);
+    transition: transform 0.15s ease;
+    width: 0.75rem;
+    flex-shrink: 0;
+}
+
+.nav-module-tree[open] > summary::before {
+    transform: rotate(90deg);
+}
+
+.nav-module-tree > summary a {
+    color: var(--text);
+    text-decoration: none;
+    font-weight: 600;
+}
+
+.nav-module-tree > summary a:hover {
+    color: var(--accent);
+}
+
+.nav-module-tree > summary.current a {
+    color: var(--accent);
+}
+
+.nav-module-content {
+    margin-left: 0.5rem;
+    padding-left: 0.5rem;
+    border-left: 1px solid var(--border);
+}
+
+.nav-submodules {
+    margin-top: 0.25rem;
+}
+
+/* Member items (fields, variants, methods) with anchors */
+.member-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.375rem;
+}
+
+.member-item {
+    padding: 0.375rem 0.625rem;
+    background: var(--bg-secondary);
+    border-radius: 4px;
+    border-left: 3px solid var(--border);
+}
+
+.member-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.member-signature {
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: 0.875rem;
+    color: var(--text);
+}
+
+.member-docs {
+    margin-top: 0.375rem;
+    padding-top: 0.375rem;
+    border-top: 1px dashed var(--border);
+    color: var(--text-muted);
+    font-size: 0.875rem;
+    line-height: 1.5;
+}
+
+/* Link to implementation on type's page */
+.impl-link {
+    margin-left: auto;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    text-decoration: none;
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+
+.implementor-item:hover .impl-link {
+    opacity: 1;
+}
+
+.impl-link:hover {
+    color: var(--accent);
+}
+
+/* ============================================================================
+   Navigable items: consolidated hover / target / is-target highlighting.
+   All items with a left border indicator share these rules. Individual
+   base styles (border-left color, background) live with each component above.
+   ============================================================================ */
+.member-item:hover,
+.method-item:hover,
+.impl-block:hover {
+    border-left-color: var(--accent);
+}
+
+.member-item:target,  .member-item.is-target,
+.method-item:target,  .method-item.is-target,
+.impl-block:target,   .impl-block.is-target {
+    border-left-color: var(--accent);
+    background: var(--target-bg);
+}
+
+/* Syntax highlighting rules live in fe-highlight.css (single source of truth).
+   Both the static site and guide/Starlight import that file. */
+
+/* <fe-code-block> custom element */
+fe-code-block {
+    display: block;
+    margin: 1rem 0;
+}
+
+.fe-code-block-wrapper {
+    display: flex;
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow-x: auto;
+}
+
+.fe-line-numbers {
+    display: flex;
+    flex-direction: column;
+    padding: 0.875rem 0.5rem;
+    border-right: 1px solid var(--border);
+    text-align: right;
+    user-select: none;
+    color: var(--text-muted);
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: 0.8rem;
+    line-height: 1.6;
+}
+
+.fe-code-pre {
+    flex: 1;
+    margin: 0;
+    padding: 0.875rem 1rem;
+    background: transparent;
+    overflow-x: auto;
+}
+
+.fe-code-pre code {
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: 0.875rem;
+    line-height: 1.6;
+    color: var(--text);
+}
+
+/* <fe-search> custom element */
+.fe-search-container {
+    position: relative;
+}
+
+.fe-search-input {
+    width: 100%;
+    padding: 0.5rem;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
+    font-size: 0.875rem;
+}
+
+.fe-search-results {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-top: 0.25rem;
+}
+
+/* <fe-signature> custom element */
+.fe-sig {
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: 0.875rem;
+    white-space: pre;
+    color: var(--text);
+}
+
+/* Mobile hamburger button */
+.mobile-menu-btn {
+    display: none;
+    position: fixed;
+    top: 0.75rem;
+    left: 0.75rem;
+    z-index: 101;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    padding: 0.375rem 0.5rem;
+    cursor: pointer;
+    font-size: 1.25rem;
+    line-height: 1;
+}
+
+.mobile-menu-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.sidebar-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 99;
+}
+
+.sidebar-backdrop.open {
+    display: block;
+}
+
+/* Responsive: collapse sidebar on narrow viewports */
+@media (max-width: 768px) {
+    .doc-layout {
+        grid-template-columns: 1fr;
+    }
+    .doc-sidebar {
+        position: fixed;
+        left: -100%;
+        top: 0;
+        width: 280px;
+        z-index: 100;
+        transition: left 0.2s ease;
+    }
+    .doc-sidebar.open {
+        left: 0;
+    }
+    .doc-content {
+        padding: 1rem;
+        padding-top: 3rem;
+    }
+    .mobile-menu-btn {
+        display: block;
+    }
+}
+
+/* In-page section outline */
+.page-outline {
+    margin-bottom: 1.5rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid var(--border);
+}
+
+.outline-header {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 0.5rem;
+    padding-left: 0.5rem;
+}
+
+.outline-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.outline-list li {
+    margin: 0.125rem 0;
+}
+
+.outline-list a {
+    display: block;
+    padding: 0.125rem 0.5rem;
+    color: var(--text-muted);
+    text-decoration: none;
+    font-size: 0.8rem;
+    border-left: 2px solid transparent;
+    transition: color 0.15s, border-color 0.15s;
+}
+
+.outline-list a:hover {
+    color: var(--text);
+}
+
+.outline-list a.active {
+    color: var(--accent);
+    border-left-color: var(--accent);
+}
+
+/* Outline hierarchy: indent impl blocks and methods */
+.outline-list li.outline-level-1 {
+    padding-left: 0.75rem;
+}
+
+.outline-list li.outline-level-1 a {
+    font-size: 0.8rem;
+}
+
+.outline-list li.outline-level-2 {
+    padding-left: 1.5rem;
+}
+
+.outline-list li.outline-level-2 a {
+    font-size: 0.75rem;
+    font-family: var(--font-mono, ui-monospace, monospace);
+}
+
+/* Doc sections (Examples, Panics, Safety, etc.) */
+.doc-section {
+    margin: 1rem 0;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.doc-section-badge {
+    display: inline-block;
+    padding: 0.25rem 0.625rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--text-muted);
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+    width: 100%;
+}
+
+.doc-section-content {
+    padding: 0.625rem 0.875rem;
+    font-size: 0.9rem;
+    line-height: 1.6;
+}
+
+.doc-section-content p {
+    margin-bottom: 0.75rem;
+}
+
+.doc-section-content p:last-child {
+    margin-bottom: 0;
+}
+
+.doc-section-content code {
+    background: var(--code-bg);
+    padding: 0.125rem 0.375rem;
+    border-radius: 4px;
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: 0.875em;
+}
+
+/* ============================================================================
+   Focus Styles (keyboard accessibility)
+   ============================================================================ */
+:focus-visible {
+    outline: 2px solid var(--accent-color, #4a90d9);
+    outline-offset: 2px;
+}
+.nav-items a:focus-visible,
+.outline-list a:focus-visible {
+    outline-offset: -1px;
+    border-radius: 4px;
+}
+.type-link:focus-visible {
+    outline-offset: 0;
+    border-radius: 2px;
+}

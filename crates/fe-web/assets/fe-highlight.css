@@ -1,0 +1,105 @@
+/* Fe syntax highlighting (tree-sitter) — One Dark inspired
+   Standalone version with hardcoded colors for embedding in Starlight/Astro.
+   When loaded in the generated doc site, styles.css overrides layout rules
+   (fe-code-block, fe-code-pre, etc.) with CSS-variable versions. */
+
+.hl-keyword { color: #c678dd; }
+.hl-type, .hl-type-builtin { color: #e5c07b; }
+.hl-type-interface { color: #e77ee7; }
+.hl-type-enum-variant { color: #e7c77e; }
+.hl-function, .hl-function-definition, .hl-function-method { color: #61afef; }
+.hl-string { color: #98c379; }
+.hl-string-escape { color: #56b6c2; }
+.hl-number { color: #d19a66; }
+.hl-comment, .hl-comment-doc { color: #5c6370; font-style: italic; }
+.hl-operator { color: #abb2bf; }
+.hl-property, .hl-variable-parameter { color: #e06c75; }
+.hl-variable { color: #e06c75; }
+.hl-attribute { color: #d19a66; }
+.hl-constant { color: #d19a66; font-weight: bold; }
+.hl-punctuation-bracket, .hl-punctuation-delimiter, .hl-punctuation-special { color: #abb2bf; }
+
+/* Smooth transition for SCIP symbol hover highlights.
+   feHighlight() sets inline styles; the browser tweens the change. */
+[class*="sym-"] {
+    transition: background 0.2s ease-out, text-decoration 0.2s ease-out,
+                text-decoration-color 0.2s ease-out;
+}
+
+/* <fe-code-block> custom element */
+fe-code-block {
+    display: block;
+    margin: 1rem 0;
+}
+
+.fe-code-block-wrapper {
+    display: flex;
+    background: #0d1117;
+    border: 1px solid #2d3748;
+    border-radius: 6px;
+    overflow-x: auto;
+}
+
+/* When fe-code-block is nested inside a signature container,
+   the parent already provides background/border/padding. */
+.signature fe-code-block,
+.impl-signature fe-code-block {
+    margin: 0;
+}
+.signature .fe-code-block-wrapper,
+.impl-signature .fe-code-block-wrapper {
+    background: transparent;
+    border: none;
+    border-radius: 0;
+}
+.signature .fe-code-pre,
+.impl-signature .fe-code-pre {
+    padding: 0;
+}
+
+/* Tighter margins in member/method/implementor contexts */
+.member-header fe-code-block,
+.code-header fe-code-block,
+.implementor-sig fe-code-block {
+    margin: 0;
+}
+.member-header .fe-code-block-wrapper,
+.code-header .fe-code-block-wrapper,
+.implementor-sig .fe-code-block-wrapper {
+    border: none;
+    background: transparent;
+    border-radius: 0;
+}
+.member-header .fe-code-pre,
+.code-header .fe-code-pre,
+.implementor-sig .fe-code-pre {
+    padding: 0;
+}
+
+.fe-line-numbers {
+    display: flex;
+    flex-direction: column;
+    padding: 0.875rem 0.5rem;
+    border-right: 1px solid #2d3748;
+    text-align: right;
+    user-select: none;
+    color: #9ba3af;
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: 0.8rem;
+    line-height: 1.6;
+}
+
+.fe-code-pre {
+    flex: 1;
+    margin: 0;
+    padding: 0.875rem 1rem;
+    background: transparent;
+    overflow-x: auto;
+}
+
+.fe-code-pre code {
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-size: 0.875rem;
+    line-height: 1.6;
+    color: #e4e4e4;
+}

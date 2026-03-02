@@ -4,7 +4,8 @@ version = "26.0.0-alpha.7"
 edition.workspace = true
 
 [features]
-default = ["lsp"]
+default = ["doc-server", "lsp"]
+doc-server = ["dep:tokio", "dep:axum"]
 lsp = ["dep:language-server", "dep:tokio"]
 vendored-openssl = ["resolver/vendored-openssl"]
 
@@ -20,14 +21,18 @@ petgraph.workspace = true
 url.workspace = true
 smol_str.workspace = true
 hir.workspace = true
+rayon = "1"
 mir.workspace = true
 cranelift-entity.workspace = true
 rustc-hash.workspace = true
 codegen = { path = "../codegen", package = "fe-codegen" }
 contract-harness = { path = "../contract-harness", package = "fe-contract-harness" }
 solc-runner = { path = "../solc-runner", package = "fe-solc-runner" }
-fmt.workspace = true
+# fe-web for model, assets, and static site generation
+fe-web = { path = "../fe-web" }
+serde = { version = "1.0", features = ["derive"] }
 serde_json = "1"
+fmt.workspace = true
 walkdir = "2"
 similar = "2"
 colored = "2"
@@ -36,8 +41,10 @@ toml = "0.8.8"
 glob.workspace = true
 crossbeam-channel.workspace = true
 scip = "0.6.1"
+protobuf = "=3.7.2"
 language-server = { workspace = true, optional = true }
 tokio = { version = "1.43.0", features = ["full"], optional = true }
+axum = { version = "0.8", optional = true }
 
 [dev-dependencies]
 dir-test.workspace = true

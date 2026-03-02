@@ -31,7 +31,7 @@ pub fn goto_target_at_cursor<'db>(
 }
 
 pub async fn handle_goto_definition(
-    backend: &mut Backend,
+    backend: &Backend,
     params: async_lsp::lsp_types::GotoDefinitionParams,
 ) -> Result<Option<async_lsp::lsp_types::GotoDefinitionResponse>, ResponseError> {
     let params = params.text_document_position_params;
@@ -49,6 +49,14 @@ pub async fn handle_goto_definition(
 
     let top_mod = map_file_to_mod(&backend.db, file);
     let resolution = goto_target_at_cursor(&backend.db, top_mod, cursor);
+
+    // Broadcast doc-navigate for the first scope target
+    if let Some(doc_path) = resolution.as_slice().iter().find_map(|t| match t {
+        Target::Scope(scope) => hir::semantic::scope_to_doc_path(&backend.db, *scope),
+        Target::Local { .. } => None,
+    }) {
+        backend.notify_doc_navigate(doc_path);
+    }
 
     // Compute origin_selection_range: the span of the identifier being clicked.
     // For paths like `ops::returndatasize`, this is the specific segment at the cursor.

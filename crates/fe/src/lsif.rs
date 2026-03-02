@@ -4,10 +4,12 @@ use std::io::{self, Write};
 use common::InputDb;
 use common::diagnostics::Span;
 use hir::{
-    HirDb, SpannedHirDb,
-    hir_def::{Attr, HirIngot, ItemKind, scope_graph::ScopeId},
+    core::semantic::SymbolView,
+    hir_def::{HirIngot, ItemKind, scope_graph::ScopeId},
     span::LazySpan,
 };
+
+use crate::index_util::{self, LineIndex};
 
 /// Position in LSIF (0-based line and character).
 #[derive(Clone, Copy)]
@@ -23,17 +25,6 @@ struct LsifRange {
     end: LsifPos,
 }
 
-/// Compute line offsets for a text string.
-fn calculate_line_offsets(text: &str) -> Vec<usize> {
-    let mut offsets = vec![0];
-    for (i, b) in text.bytes().enumerate() {
-        if b == b'\n' {
-            offsets.push(i + 1);
-        }
-    }
-    offsets
-}
-
 fn utf16_column(text: &str, line_start: usize, offset: usize) -> Option<u32> {
     if line_start > offset || offset > text.len() {
         return None;
@@ -45,28 +36,21 @@ fn utf16_column(text: &str, line_start: usize, offset: usize) -> Option<u32> {
 /// Convert a Span to an LsifRange.
 fn span_to_range(span: &Span, db: &dyn InputDb) -> Option<LsifRange> {
     let text = span.file.text(db);
-    let line_offsets = calculate_line_offsets(text);
+    let line_index = LineIndex::new(text);
 
-    let start: usize = span.range.start().into();
-    let end: usize = span.range.end().into();
+    let start = line_index.position(span.range.start().into());
+    let end = line_index.position(span.range.end().into());
 
-    let start_line = line_offsets
-        .partition_point(|&line_start| line_start <= start)
-        .saturating_sub(1);
-    let end_line = line_offsets
-        .partition_point(|&line_start| line_start <= end)
-        .saturating_sub(1);
-
-    let start_character = utf16_column(text, line_offsets[start_line], start)?;
-    let end_character = utf16_column(text, line_offsets[end_line], end)?;
+    let start_character = utf16_column(text, start.line_start_offset, start.byte_offset)?;
+    let end_character = utf16_column(text, end.line_start_offset, end.byte_offset)?;
 
     Some(LsifRange {
         start: LsifPos {
-            line: start_line as u32,
+            line: start.line as u32,
             character: start_character,
         },
         end: LsifPos {
-            line: end_line as u32,
+            line: end.line as u32,
             character: end_character,
         },
     })
@@ -215,64 +199,90 @@ impl<W: Write> LsifEmitter<W> {
     }
 }
 
-/// Get the docstring for a scope.
-fn get_docstring(db: &dyn HirDb, scope: ScopeId) -> Option<String> {
-    scope
-        .attrs(db)?
-        .data(db)
-        .iter()
-        .filter_map(|attr| {
-            if let Attr::DocComment(doc) = attr {
-                Some(doc.text.data(db).clone())
-            } else {
-                None
-            }
-        })
-        .reduce(|a, b| a + "\n" + &b)
-}
-
-/// Get a simple definition string for an item (used for hover).
-fn get_item_definition(db: &dyn SpannedHirDb, item: ItemKind) -> Option<String> {
-    let span = item.span().resolve(db)?;
-
-    let mut start: usize = span.range.start().into();
-    let mut end: usize = span.range.end().into();
-
-    // Trim body for functions, modules
-    let body_start = match item {
-        ItemKind::Func(func) => Some(func.body(db)?.span().resolve(db)?.range.start()),
-        ItemKind::Mod(module) => Some(module.scope().name_span(db)?.resolve(db)?.range.end()),
-        _ => None,
+/// Emit LSIF vertices/edges for a single scope (field, variant, generic param, etc.).
+fn emit_scope_lsif<W: Write>(
+    db: &driver::DriverDataBase,
+    ctx: &index_util::IngotContext,
+    emitter: &mut LsifEmitter<W>,
+    documents: &mut HashMap<String, (u64, Vec<u64>)>,
+    doc_url: &str,
+    doc_id: u64,
+    scope: ScopeId,
+) -> io::Result<()> {
+    let view = SymbolView::new(scope);
+    let name_span = match scope.name_span(db) {
+        Some(ns) => ns,
+        None => return Ok(()),
     };
-    if let Some(body_start) = body_start {
-        end = body_start.into();
+    let resolved = match name_span.resolve(db) {
+        Some(s) => s,
+        None => return Ok(()),
+    };
+    let name_range = match span_to_range(&resolved, db) {
+        Some(r) => r,
+        None => return Ok(()),
+    };
+
+    let range_id = emitter.emit_range(name_range)?;
+    documents.get_mut(doc_url).unwrap().1.push(range_id);
+
+    let result_set_id = emitter.emit_result_set()?;
+    emitter.emit_edge("next", range_id, result_set_id)?;
+
+    // Definition result
+    let def_result_id = emitter.emit_definition_result()?;
+    emitter.emit_edge("textDocument/definition", result_set_id, def_result_id)?;
+    emitter.emit_edge_many("item", def_result_id, &[range_id], Some(doc_id))?;
+
+    // Hover result
+    let hover = index_util::hover_parts_for_scope(db, &view);
+    if let Some(hover_content) = hover.to_lsif_hover() {
+        let hover_id = emitter.emit_hover_result(&hover_content)?;
+        emitter.emit_edge("textDocument/hover", result_set_id, hover_id)?;
     }
 
-    // Start at the beginning of the name line
-    let name_span = item.name_span()?.resolve(db);
-    if let Some(name_span) = name_span {
-        let file_text = span.file.text(db).as_str();
-        let mut name_line_start: usize = name_span.range.start().into();
-        while name_line_start > 0 && file_text.as_bytes().get(name_line_start - 1) != Some(&b'\n') {
-            name_line_start -= 1;
+    // Reference result
+    let ref_result_id = emitter.emit_reference_result()?;
+    emitter.emit_edge("textDocument/references", result_set_id, ref_result_id)?;
+    emitter.emit_edge_many("item", ref_result_id, &[range_id], Some(doc_id))?;
+
+    // Collect references from the pre-built index
+    let mut refs_by_doc: HashMap<String, Vec<u64>> = HashMap::new();
+    for indexed_ref in ctx.ref_index.references_to(&scope) {
+        if let Some(resolved) = indexed_ref.span.resolve(db)
+            && let Some(r) = span_to_range(&resolved, db)
+        {
+            let ref_doc_url = match resolved.file.url(db) {
+                Some(url) => url.to_string(),
+                None => continue,
+            };
+            let ref_range_id = emitter.emit_range(r)?;
+            refs_by_doc
+                .entry(ref_doc_url)
+                .or_default()
+                .push(ref_range_id);
         }
-        start = name_line_start;
+    }
+    for (ref_doc_url, ref_range_ids) in &refs_by_doc {
+        if !ref_range_ids.is_empty() {
+            let ref_doc_id = documents[ref_doc_url].0;
+            documents
+                .get_mut(ref_doc_url)
+                .unwrap()
+                .1
+                .extend_from_slice(ref_range_ids);
+            emitter.emit_edge_many("item", ref_result_id, ref_range_ids, Some(ref_doc_id))?;
+        }
     }
 
-    let item_definition = span.file.text(db).as_str()[start..end].to_string();
-    Some(item_definition.trim().to_string())
-}
-
-/// Build hover content for an item (definition + docstring).
-fn build_hover_content(db: &driver::DriverDataBase, item: ItemKind) -> Option<String> {
-    let definition = get_item_definition(db, item)?;
-    let docstring = get_docstring(db, item.scope());
-
-    if let Some(doc) = docstring {
-        Some(format!("{definition}\n\n{doc}"))
-    } else {
-        Some(definition)
+    // Moniker
+    if let Some(pretty_path) = scope.pretty_path(db) {
+        let identifier = format!("{}:{}:{pretty_path}", ctx.name, ctx.version);
+        let moniker_id = emitter.emit_moniker("fe", &identifier)?;
+        emitter.emit_edge("moniker/attach", result_set_id, moniker_id)?;
     }
+
+    Ok(())
 }
 
 /// Run LSIF generation on a project.
@@ -287,29 +297,13 @@ pub fn generate_lsif(
     emitter.emit_metadata()?;
     let project_id = emitter.emit_project()?;
 
-    let Some(ingot) = db.workspace().containing_ingot(db, ingot_url.clone()) else {
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            "Could not resolve ingot",
-        ));
-    };
-
-    // Get ingot name and version for monikers
-    let ingot_name = ingot
-        .config(db)
-        .and_then(|c| c.metadata.name)
-        .map(|n| n.to_string())
-        .unwrap_or_else(|| "unknown".to_string());
-    let ingot_version = ingot
-        .version(db)
-        .map(|v| v.to_string())
-        .unwrap_or_else(|| "0.0.0".to_string());
+    let ctx = index_util::IngotContext::resolve(db, ingot_url)?;
 
     // Track documents: url -> (vertex_id, range_ids)
     let mut documents: HashMap<String, (u64, Vec<u64>)> = HashMap::new();
 
     // Pre-emit document vertices for each module
-    for top_mod in ingot.all_modules(db) {
+    for top_mod in ctx.ingot.all_modules(db) {
         let doc_span = top_mod.span().resolve(db);
         let doc_url = match &doc_span {
             Some(span) => match span.file.url(db) {
@@ -325,7 +319,7 @@ pub fn generate_lsif(
     }
 
     // Process each module's items
-    for top_mod in ingot.all_modules(db) {
+    for top_mod in ctx.ingot.all_modules(db) {
         let scope_graph = top_mod.scope_graph(db);
 
         let doc_span = top_mod.span().resolve(db);
@@ -368,57 +362,49 @@ pub fn generate_lsif(
             emitter.emit_edge_many("item", def_result_id, &[range_id], Some(doc_id))?;
 
             // Hover result
-            if let Some(hover_content) = build_hover_content(db, item) {
+            if let Some(hover_content) = index_util::hover_parts(db, item).to_lsif_hover() {
                 let hover_id = emitter.emit_hover_result(&hover_content)?;
                 emitter.emit_edge("textDocument/hover", result_set_id, hover_id)?;
             }
 
-            // Reference result
-            let target = hir::core::semantic::reference::Target::Scope(scope);
+            // Reference result using ReferenceIndex
             let ref_result_id = emitter.emit_reference_result()?;
             emitter.emit_edge("textDocument/references", result_set_id, ref_result_id)?;
 
             // Definition is also a reference
             emitter.emit_edge_many("item", ref_result_id, &[range_id], Some(doc_id))?;
 
-            // Collect references from all modules
-            for ref_mod in ingot.all_modules(db) {
-                let refs = ref_mod.references_to_target(db, &target);
-                if refs.is_empty() {
-                    continue;
-                }
-
-                let ref_doc_span = ref_mod.span().resolve(db);
-                let ref_doc_url = match &ref_doc_span {
-                    Some(span) => match span.file.url(db) {
+            // Collect references from the pre-built index
+            // Group by document URL so we can emit per-document item edges
+            let mut refs_by_doc: HashMap<String, Vec<u64>> = HashMap::new();
+            for indexed_ref in ctx.ref_index.references_to(&scope) {
+                if let Some(resolved) = indexed_ref.span.resolve(db)
+                    && let Some(r) = span_to_range(&resolved, db)
+                {
+                    let ref_doc_url = match resolved.file.url(db) {
                         Some(url) => url.to_string(),
                         None => continue,
-                    },
-                    None => continue,
-                };
-
-                let mut ref_range_ids = Vec::new();
-                for matched in refs {
-                    if let Some(resolved) = matched.span.resolve(db)
-                        && let Some(r) = span_to_range(&resolved, db)
-                    {
-                        let ref_range_id = emitter.emit_range(r)?;
-                        ref_range_ids.push(ref_range_id);
-                    }
+                    };
+                    let ref_range_id = emitter.emit_range(r)?;
+                    refs_by_doc
+                        .entry(ref_doc_url)
+                        .or_default()
+                        .push(ref_range_id);
                 }
+            }
 
+            for (ref_doc_url, ref_range_ids) in &refs_by_doc {
                 if !ref_range_ids.is_empty() {
-                    // Look up existing document (guaranteed to exist from pre-emission)
-                    let ref_doc_id = documents[&ref_doc_url].0;
+                    let ref_doc_id = documents[ref_doc_url].0;
                     documents
-                        .get_mut(&ref_doc_url)
+                        .get_mut(ref_doc_url)
                         .unwrap()
                         .1
-                        .extend_from_slice(&ref_range_ids);
+                        .extend_from_slice(ref_range_ids);
                     emitter.emit_edge_many(
                         "item",
                         ref_result_id,
-                        &ref_range_ids,
+                        ref_range_ids,
                         Some(ref_doc_id),
                     )?;
                 }
@@ -426,9 +412,52 @@ pub fn generate_lsif(
 
             // Moniker
             if let Some(pretty_path) = scope.pretty_path(db) {
-                let identifier = format!("{ingot_name}:{ingot_version}:{pretty_path}");
+                let identifier = format!("{}:{}:{pretty_path}", ctx.name, ctx.version);
                 let moniker_id = emitter.emit_moniker("fe", &identifier)?;
                 emitter.emit_edge("moniker/attach", result_set_id, moniker_id)?;
+            }
+
+            // Sub-items: fields, variants, associated types/consts.
+            // Skip modules — their children are top-level items already in items_dfs.
+            if !matches!(item, ItemKind::Mod(_) | ItemKind::TopMod(_)) {
+                let sym_view = SymbolView::from_item(item);
+                for child in sym_view.children(db) {
+                    // Methods are ItemKind::Func and already yielded by items_dfs
+                    if matches!(
+                        child.scope(),
+                        ScopeId::Item(ItemKind::Func(_))
+                            | ScopeId::Item(ItemKind::TopMod(_))
+                            | ScopeId::Item(ItemKind::Mod(_))
+                    ) {
+                        continue;
+                    }
+
+                    emit_scope_lsif(
+                        db,
+                        &ctx,
+                        &mut emitter,
+                        &mut documents,
+                        &doc_url,
+                        doc_id,
+                        child.scope(),
+                    )?;
+                }
+            }
+
+            // Generic parameters (T, A, etc.)
+            let item_scope = ScopeId::from_item(item);
+            for child_scope in scope_graph.children(item_scope) {
+                if matches!(child_scope, ScopeId::GenericParam(..)) {
+                    emit_scope_lsif(
+                        db,
+                        &ctx,
+                        &mut emitter,
+                        &mut documents,
+                        &doc_url,
+                        doc_id,
+                        child_scope,
+                    )?;
+                }
             }
         }
     }
@@ -788,12 +817,9 @@ fn make_point() -> Point {
     #[test]
     fn test_utf16_column_counts_surrogate_pairs() {
         let text = "a😀b";
-        let line_offsets = calculate_line_offsets(text);
-        assert_eq!(line_offsets, vec![0]);
-
         // byte offsets: a=0..1, 😀=1..5, b=5..6
-        assert_eq!(utf16_column(text, line_offsets[0], 1), Some(1));
-        assert_eq!(utf16_column(text, line_offsets[0], 5), Some(3));
-        assert_eq!(utf16_column(text, line_offsets[0], 6), Some(4));
+        assert_eq!(utf16_column(text, 0, 1), Some(1));
+        assert_eq!(utf16_column(text, 0, 5), Some(3));
+        assert_eq!(utf16_column(text, 0, 6), Some(4));
     }
 }

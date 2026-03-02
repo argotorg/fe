@@ -1,0 +1,1139 @@
+//! Documentation data model
+//!
+//! These types represent extracted documentation in a format suitable for rendering.
+//! They are designed to be serializable for static site generation and cacheable
+//! for dynamic serving.
+
+use serde::{Deserialize, Serialize};
+
+// ============================================================================
+// Rich Signature Types (for rendering signatures with embedded links)
+// ============================================================================
+
+/// A part of a signature - either plain text or a linkable reference
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SignaturePart {
+    /// The display text
+    pub text: String,
+    /// If Some, render as a link to this doc path (e.g., "hoverable::Numbers/struct")
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<String>,
+}
+
+impl SignaturePart {
+    /// Create a plain text part
+    pub fn text(s: impl Into<String>) -> Self {
+        Self {
+            text: s.into(),
+            link: None,
+        }
+    }
+
+    /// Create a linked part
+    pub fn link(text: impl Into<String>, path: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            link: Some(path.into()),
+        }
+    }
+}
+
+/// A rich signature with embedded links
+pub type RichSignature = Vec<SignaturePart>;
+
+/// Helper to create a RichSignature from a plain string (no links)
+pub fn plain_signature(s: impl Into<String>) -> RichSignature {
+    vec![SignaturePart::text(s)]
+}
+
+/// Source location of a signature in its file, used to overlay SCIP occurrences.
+///
+/// Byte offsets are exact: `file_text[byte_start..byte_end] == signature_text`.
+/// Skipped during serialization — only used in-memory during doc generation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SignatureSpanData {
+    /// Absolute file URL (file:// scheme), used to compute relative path for
+    /// matching against SCIP document `relative_path` fields.
+    pub file_url: String,
+    /// Start byte offset in the file text.
+    pub byte_start: usize,
+    /// End byte offset in the file text.
+    pub byte_end: usize,
+}
+
+// ============================================================================
+// Core Documentation Types
+// ============================================================================
+
+/// A documented item in the Fe codebase
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DocItem {
+    /// Unique path identifier (e.g., "std::option::Option")
+    pub path: String,
+    /// Short name of the item
+    pub name: String,
+    /// What kind of item this is
+    pub kind: DocItemKind,
+    /// The item's visibility
+    pub visibility: DocVisibility,
+    /// Parsed documentation content
+    pub docs: Option<DocContent>,
+    /// The item's signature/definition (plain text for backward compat)
+    pub signature: String,
+    /// Rich signature with embedded links (for rendering)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rich_signature: RichSignature,
+    /// Source span of the signature (for SCIP occurrence overlay, not serialized)
+    #[serde(skip)]
+    pub signature_span: Option<SignatureSpanData>,
+    /// SCIP scope path for this signature (set during enrich_signatures)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sig_scope: Option<String>,
+    /// Generic parameters, if any
+    pub generics: Vec<DocGenericParam>,
+    /// Where clause bounds, if any
+    pub where_bounds: Vec<String>,
+    /// Child items (methods, fields, variants, etc.)
+    pub children: Vec<DocChild>,
+    /// Source location for "view source" links
+    pub source: Option<DocSourceLoc>,
+    /// Full source text of the item definition (for inline "view source")
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_text: Option<String>,
+    /// Trait implementations for this type (structs, enums, contracts)
+    #[serde(default)]
+    pub trait_impls: Vec<DocTraitImpl>,
+    /// Types that implement this trait (for trait pages)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub implementors: Vec<DocImplementor>,
+}
+
+/// A type that implements a trait
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DocImplementor {
+    /// The implementing type name
+    pub type_name: String,
+    /// Path to the type's documentation
+    pub type_url: String,
+    /// The trait name (for linking to the impl block)
+    pub trait_name: String,
+    /// The full impl signature (plain text)
+    pub signature: String,
+    /// Rich signature with embedded links
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rich_signature: RichSignature,
+    /// Source span for the full impl signature (for SCIP positional linking).
+    /// In-memory only; not serialized to JSON.
+    #[serde(skip)]
+    pub signature_span: Option<SignatureSpanData>,
+    /// SCIP scope path for this implementor signature
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sig_scope: Option<String>,
+}
+
+impl DocItem {
+    /// Get the URL path for this item (includes kind suffix)
+    pub fn url_path(&self) -> String {
+        format!("{}/{}", self.path, self.kind.as_str())
+    }
+}
+
+/// The kind of documented item
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DocItemKind {
+    Module,
+    Function,
+    Struct,
+    Enum,
+    Trait,
+    Contract,
+    TypeAlias,
+    Const,
+    Impl,
+    ImplTrait,
+}
+
+impl DocItemKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            DocItemKind::Module => "mod",
+            DocItemKind::Function => "fn",
+            DocItemKind::Struct => "struct",
+            DocItemKind::Enum => "enum",
+            DocItemKind::Trait => "trait",
+            DocItemKind::Contract => "contract",
+            DocItemKind::TypeAlias => "type",
+            DocItemKind::Const => "const",
+            DocItemKind::Impl => "impl",
+            DocItemKind::ImplTrait => "impl",
+        }
+    }
+
+    /// Parse kind from URL suffix string
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "mod" | "module" => Some(DocItemKind::Module),
+            "fn" | "function" => Some(DocItemKind::Function),
+            "struct" => Some(DocItemKind::Struct),
+            "enum" => Some(DocItemKind::Enum),
+            "trait" => Some(DocItemKind::Trait),
+            "contract" => Some(DocItemKind::Contract),
+            "type" => Some(DocItemKind::TypeAlias),
+            "const" => Some(DocItemKind::Const),
+            "impl" => Some(DocItemKind::Impl),
+            _ => None,
+        }
+    }
+
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            DocItemKind::Module => "Module",
+            DocItemKind::Function => "Function",
+            DocItemKind::Struct => "Struct",
+            DocItemKind::Enum => "Enum",
+            DocItemKind::Trait => "Trait",
+            DocItemKind::Contract => "Contract",
+            DocItemKind::TypeAlias => "Type Alias",
+            DocItemKind::Const => "Constant",
+            DocItemKind::Impl => "Implementation",
+            DocItemKind::ImplTrait => "Trait Implementation",
+        }
+    }
+
+    /// Plural display name for section headers
+    pub fn plural_name(&self) -> &'static str {
+        match self {
+            DocItemKind::Module => "Modules",
+            DocItemKind::Function => "Functions",
+            DocItemKind::Struct => "Structs",
+            DocItemKind::Enum => "Enums",
+            DocItemKind::Trait => "Traits",
+            DocItemKind::Contract => "Contracts",
+            DocItemKind::TypeAlias => "Type Aliases",
+            DocItemKind::Const => "Constants",
+            DocItemKind::Impl => "Implementations",
+            DocItemKind::ImplTrait => "Trait Implementations",
+        }
+    }
+
+    /// Display order for sidebar grouping (lower = first)
+    pub fn display_order(&self) -> u8 {
+        match self {
+            DocItemKind::Module => 0,
+            DocItemKind::Trait => 1,
+            DocItemKind::Contract => 2,
+            DocItemKind::Struct => 3,
+            DocItemKind::Enum => 4,
+            DocItemKind::TypeAlias => 5,
+            DocItemKind::Function => 6,
+            DocItemKind::Const => 7,
+            DocItemKind::Impl => 8,
+            DocItemKind::ImplTrait => 9,
+        }
+    }
+}
+
+/// Visibility of a documented item
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DocVisibility {
+    Public,
+    Private,
+}
+
+/// Parsed documentation content with sections
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DocContent {
+    /// The main summary (first paragraph)
+    pub summary: String,
+    /// Full documentation body (markdown)
+    pub body: String,
+    /// Extracted sections like # Examples, # Panics, etc.
+    pub sections: Vec<DocSection>,
+}
+
+impl DocContent {
+    pub fn from_raw(raw: &str) -> Self {
+        let trimmed = raw.trim();
+
+        // Split into summary (first paragraph) and body
+        let (summary, body) = if let Some(idx) = trimmed.find("\n\n") {
+            (trimmed[..idx].to_string(), trimmed.to_string())
+        } else {
+            (trimmed.to_string(), trimmed.to_string())
+        };
+
+        // Extract known sections
+        let sections = Self::extract_sections(trimmed);
+
+        DocContent {
+            summary,
+            body,
+            sections,
+        }
+    }
+
+    fn extract_sections(text: &str) -> Vec<DocSection> {
+        let mut sections = Vec::new();
+        let mut current_section: Option<(String, String)> = None;
+
+        for line in text.lines() {
+            if let Some(header) = line.strip_prefix("# ") {
+                // Save previous section if any
+                if let Some((name, content)) = current_section.take() {
+                    sections.push(DocSection {
+                        name,
+                        content: content.trim().to_string(),
+                    });
+                }
+                // Start new section
+                let name = header.trim().to_string();
+                current_section = Some((name, String::new()));
+            } else if let Some((_, ref mut content)) = current_section {
+                content.push_str(line);
+                content.push('\n');
+            }
+        }
+
+        // Save final section
+        if let Some((name, content)) = current_section {
+            sections.push(DocSection {
+                name,
+                content: content.trim().to_string(),
+            });
+        }
+
+        sections
+    }
+}
+
+/// A named section within documentation (e.g., "Examples", "Panics")
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DocSection {
+    pub name: String,
+    pub content: String,
+}
+
+/// A generic parameter with its bounds
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DocGenericParam {
+    pub name: String,
+    pub bounds: Vec<String>,
+    pub default: Option<String>,
+}
+
+/// A child of a documented item
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DocChild {
+    pub kind: DocChildKind,
+    pub name: String,
+    pub docs: Option<DocContent>,
+    pub signature: String,
+    /// Rich signature with embedded links
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rich_signature: RichSignature,
+    /// Source span of the signature (for SCIP occurrence overlay, not serialized)
+    #[serde(skip)]
+    pub signature_span: Option<SignatureSpanData>,
+    /// SCIP scope path for this signature
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sig_scope: Option<String>,
+    pub visibility: DocVisibility,
+}
+
+/// Kind of child item
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DocChildKind {
+    Field,
+    Variant,
+    Method,
+    AssocType,
+    AssocConst,
+}
+
+impl DocChildKind {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            DocChildKind::Field => "Field",
+            DocChildKind::Variant => "Variant",
+            DocChildKind::Method => "Method",
+            DocChildKind::AssocType => "Associated Type",
+            DocChildKind::AssocConst => "Associated Constant",
+        }
+    }
+
+    /// Plural display name for section headers
+    pub fn plural_name(&self) -> &'static str {
+        match self {
+            DocChildKind::Field => "Fields",
+            DocChildKind::Variant => "Variants",
+            DocChildKind::Method => "Methods",
+            DocChildKind::AssocType => "Associated Types",
+            DocChildKind::AssocConst => "Associated Constants",
+        }
+    }
+
+    /// Display order for grouping (lower = first)
+    pub fn display_order(&self) -> u8 {
+        match self {
+            DocChildKind::Variant => 0,
+            DocChildKind::Field => 1,
+            DocChildKind::AssocType => 2,
+            DocChildKind::AssocConst => 3,
+            DocChildKind::Method => 4,
+        }
+    }
+
+    /// Anchor prefix for linking (rustdoc-style)
+    pub fn anchor_prefix(&self) -> &'static str {
+        match self {
+            DocChildKind::Field => "field",
+            DocChildKind::Variant => "variant",
+            DocChildKind::Method => "tymethod",
+            DocChildKind::AssocType => "associatedtype",
+            DocChildKind::AssocConst => "associatedconstant",
+        }
+    }
+}
+
+/// Source location for linking to source code
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DocSourceLoc {
+    /// Absolute file path — used only in-memory by LSP for "goto source".
+    /// Never serialized to JSON (avoids leaking machine paths into static output).
+    #[serde(skip)]
+    pub file: String,
+    /// Relative display path (shown in UI)
+    pub display_file: String,
+    pub line: u32,
+    pub column: u32,
+}
+
+/// A trait implementation reference (shown on type pages)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DocTraitImpl {
+    /// The name of the trait being implemented (e.g., "Clone"). Empty for inherent impls.
+    pub trait_name: String,
+    /// URL path to the impl item's documentation
+    pub impl_url: String,
+    /// The full signature of the impl (e.g., "impl Clone for MyStruct")
+    pub signature: String,
+    /// Rich signature with embedded links
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rich_signature: RichSignature,
+    /// Source span of the signature (for SCIP occurrence overlay, not serialized)
+    #[serde(skip)]
+    pub signature_span: Option<SignatureSpanData>,
+    /// SCIP scope path for this impl signature
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sig_scope: Option<String>,
+    /// Methods defined in this impl block (displayed inline on type pages)
+    #[serde(default)]
+    pub methods: Vec<DocImplMethod>,
+}
+
+/// A method in an impl block (for inline display on type pages)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DocImplMethod {
+    /// Method name
+    pub name: String,
+    /// Method signature (e.g., "pub fn foo(&self) -> u32")
+    pub signature: String,
+    /// Rich signature with embedded links
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rich_signature: RichSignature,
+    /// Source span of the signature (for SCIP occurrence overlay, not serialized)
+    #[serde(skip)]
+    pub signature_span: Option<SignatureSpanData>,
+    /// SCIP scope path for this method signature
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sig_scope: Option<String>,
+    /// Parsed documentation content
+    pub docs: Option<DocContent>,
+}
+
+/// A collection of documented items forming a documentation index
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DocIndex {
+    /// All documented items, keyed by path
+    pub items: Vec<DocItem>,
+    /// Module hierarchy for navigation
+    pub modules: Vec<DocModuleTree>,
+    /// Builtin library modules (core, std), rendered separately in sidebar
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub builtin_modules: Vec<DocModuleTree>,
+}
+
+impl DocIndex {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn add_item(&mut self, item: DocItem) {
+        self.items.push(item);
+    }
+
+    /// Find an item by its path (without kind suffix)
+    pub fn find_by_path(&self, path: &str) -> Option<&DocItem> {
+        self.items.iter().find(|item| item.path == path)
+    }
+
+    /// Find an item by path and kind
+    pub fn find_by_path_and_kind(&self, path: &str, kind: DocItemKind) -> Option<&DocItem> {
+        self.items
+            .iter()
+            .find(|item| item.path == path && item.kind == kind)
+    }
+
+    /// Parse a URL path (potentially with kind suffix) and find the item.
+    /// URL format: "path::to::item" or "path::to::item/kind"
+    /// Returns the item if found, handling both formats.
+    pub fn find_by_url(&self, url_path: &str) -> Option<&DocItem> {
+        // Try to parse kind suffix (e.g., "lib::foo/fn" -> path="lib::foo", kind="fn")
+        if let Some((path, kind_str)) = url_path.rsplit_once('/')
+            && let Some(kind) = DocItemKind::parse(kind_str)
+        {
+            // URL has valid kind suffix - find by path and kind
+            return self.find_by_path_and_kind(path, kind);
+        }
+        // No valid kind suffix - find by path alone (may be ambiguous)
+        self.find_by_path(url_path)
+    }
+
+    /// Find all items with a given path (for disambiguation)
+    pub fn find_all_by_path(&self, path: &str) -> Vec<&DocItem> {
+        self.items.iter().filter(|item| item.path == path).collect()
+    }
+
+    /// Build a searchable index of items
+    pub fn search(&self, query: &str) -> Vec<&DocItem> {
+        let query_lower = query.to_lowercase();
+        self.items
+            .iter()
+            .filter(|item| {
+                item.name.to_lowercase().contains(&query_lower)
+                    || item.path.to_lowercase().contains(&query_lower)
+            })
+            .collect()
+    }
+
+    /// Link trait implementations to their target types and implementors to traits.
+    /// `links` is a list of (target_type_path, DocTraitImpl) pairs extracted
+    /// from the HIR using semantic helpers.
+    pub fn link_trait_impls(&mut self, links: Vec<(String, DocTraitImpl)>) {
+        // Build lookup maps keyed by full path to avoid collisions between
+        // same-named types in different modules (e.g. a::Foo vs b::Foo).
+        // Maps own their strings so we can mutably borrow self.items later.
+        let type_items: std::collections::HashMap<String, (String, DocItemKind)> = self
+            .items
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item.kind,
+                    DocItemKind::Struct | DocItemKind::Enum | DocItemKind::Contract
+                )
+            })
+            .map(|item| (item.path.clone(), (item.path.clone(), item.kind)))
+            .collect();
+
+        let trait_items: std::collections::HashMap<String, String> = self
+            .items
+            .iter()
+            .filter(|item| item.kind == DocItemKind::Trait)
+            .map(|item| (item.path.clone(), item.path.clone()))
+            .collect();
+
+        /// Look up a type by path: try exact path first, then fall back to
+        /// simple-name scan (for unqualified paths from older extractors).
+        fn lookup_type(
+            map: &std::collections::HashMap<String, (String, DocItemKind)>,
+            target: &str,
+        ) -> Option<(String, String)> {
+            if let Some((path, kind)) = map.get(target) {
+                return Some((path.clone(), kind.as_str().to_string()));
+            }
+            // Simple-name fallback when target has no `::`
+            if !target.contains("::") {
+                for (path, kind) in map.values() {
+                    let simple = extract_simple_type_name(path);
+                    if simple == target {
+                        return Some((path.clone(), kind.as_str().to_string()));
+                    }
+                }
+            }
+            None
+        }
+
+        /// Look up a trait by path: try exact path first, then simple-name scan.
+        fn lookup_trait(
+            map: &std::collections::HashMap<String, String>,
+            target: &str,
+        ) -> Option<String> {
+            if let Some(path) = map.get(target) {
+                return Some(path.clone());
+            }
+            if !target.contains("::") {
+                for path in map.values() {
+                    let simple = extract_simple_type_name(path);
+                    if simple == target {
+                        return Some(path.clone());
+                    }
+                }
+            }
+            None
+        }
+
+        // First pass: collect implementors for each trait (keyed by trait path)
+        let mut trait_implementors: std::collections::HashMap<String, Vec<DocImplementor>> =
+            std::collections::HashMap::new();
+
+        for (target_type, trait_impl) in &links {
+            // Skip inherent impls (empty trait_name)
+            if trait_impl.trait_name.is_empty() {
+                continue;
+            }
+
+            let trait_simple_name = extract_simple_type_name(&trait_impl.trait_name);
+            let type_simple_name = extract_simple_type_name(target_type);
+
+            // Look up the actual type item to get the correct path and kind
+            let (type_path, type_kind_suffix) =
+                if let Some((path, kind)) = lookup_type(&type_items, target_type) {
+                    (path, kind)
+                } else {
+                    // Fallback to the target_type path with struct suffix
+                    (target_type.clone(), "struct".to_string())
+                };
+
+            // Look up the actual trait to get the correct path
+            let trait_path = lookup_trait(&trait_items, &trait_impl.trait_name)
+                .unwrap_or_else(|| trait_impl.trait_name.clone());
+
+            // Build rich signature: "impl Trait for Type"
+            let rich_signature = vec![
+                SignaturePart::text("impl "),
+                SignaturePart::link(&trait_simple_name, format!("{}/trait", trait_path)),
+                SignaturePart::text(" for "),
+                SignaturePart::link(
+                    &type_simple_name,
+                    format!("{}/{}", type_path, type_kind_suffix),
+                ),
+            ];
+
+            // Create implementor entry with correct URL and rich signature
+            let implementor = DocImplementor {
+                type_name: type_simple_name.clone(),
+                type_url: format!("{}/{}", type_path, type_kind_suffix),
+                trait_name: trait_simple_name.clone(),
+                signature: trait_impl.signature.clone(),
+                rich_signature,
+                signature_span: trait_impl.signature_span.clone(),
+                sig_scope: None,
+            };
+
+            // Key by trait path (not simple name) to avoid cross-module collisions
+            let trait_key = trait_path.to_string();
+            trait_implementors
+                .entry(trait_key)
+                .or_default()
+                .push(implementor);
+        }
+
+        // Second pass: link trait impls to types and implementors to traits
+        for (target_type, mut trait_impl) in links {
+            let target_simple_name = extract_simple_type_name(&target_type);
+            let trait_simple_name = extract_simple_type_name(&trait_impl.trait_name);
+
+            for item in &mut self.items {
+                // Link trait impls to types (structs, enums, contracts)
+                let is_type = matches!(
+                    item.kind,
+                    DocItemKind::Struct | DocItemKind::Enum | DocItemKind::Contract
+                );
+                if is_type {
+                    // Prefer exact canonical path match; only fall back to
+                    // simple-name matching when the caller didn't provide a
+                    // fully qualified path (e.g. from older extractors).
+                    let matches = item.path == target_type
+                        || (!target_type.contains("::")
+                            && (item.name == target_simple_name
+                                || item.path.ends_with(&format!("::{}", target_simple_name))));
+
+                    if matches {
+                        // Build rich signature for this trait impl if it's a trait impl (not inherent)
+                        if !trait_impl.trait_name.is_empty() && trait_impl.rich_signature.is_empty()
+                        {
+                            // Look up the trait URL
+                            let trait_url = lookup_trait(&trait_items, &trait_impl.trait_name)
+                                .map(|p| format!("{}/trait", p))
+                                .unwrap_or_else(|| format!("{}/trait", &trait_impl.trait_name));
+
+                            // Use the target item's path and kind for the type URL
+                            let type_url = format!("{}/{}", item.path, item.kind.as_str());
+
+                            trait_impl.rich_signature = vec![
+                                SignaturePart::text("impl "),
+                                SignaturePart::link(&trait_simple_name, trait_url),
+                                SignaturePart::text(" for "),
+                                SignaturePart::link(&target_simple_name, type_url),
+                            ];
+                        }
+                        item.trait_impls.push(trait_impl.clone());
+                    }
+                }
+
+                // Link implementors to traits
+                if item.kind == DocItemKind::Trait && !trait_impl.trait_name.is_empty() {
+                    let trait_matches = item.path == trait_impl.trait_name
+                        || item.name == trait_simple_name
+                        || item.path.ends_with(&format!("::{}", trait_simple_name));
+
+                    // Look up by item's full path first, then by simple name
+                    let impls = trait_implementors
+                        .get(item.path.as_str())
+                        .or_else(|| trait_implementors.get(&trait_simple_name));
+
+                    if trait_matches && let Some(impls) = impls {
+                        // Only add if not already present (dedup by type_url, not name)
+                        for imp in impls {
+                            if !item.implementors.iter().any(|i| i.type_url == imp.type_url) {
+                                item.implementors.push(imp.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Extract the simple type name from a potentially qualified/generic path.
+/// "mod::MyStruct<T>" -> "MyStruct"
+/// "MyStruct" -> "MyStruct"
+fn extract_simple_type_name(type_str: &str) -> String {
+    let without_generics = type_str.split('<').next().unwrap_or(type_str);
+    without_generics
+        .rsplit("::")
+        .next()
+        .unwrap_or(without_generics)
+        .trim()
+        .to_string()
+}
+
+/// Module tree for navigation sidebar
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DocModuleTree {
+    pub name: String,
+    pub path: String,
+    pub children: Vec<DocModuleTree>,
+    /// Direct items in this module (non-module children)
+    pub items: Vec<DocModuleItem>,
+}
+
+impl DocModuleTree {
+    /// Get the URL path for this module (includes kind suffix)
+    pub fn url_path(&self) -> String {
+        format!("{}/mod", self.path)
+    }
+}
+
+/// A reference to an item within a module
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DocModuleItem {
+    pub name: String,
+    pub path: String,
+    pub kind: DocItemKind,
+    /// Brief summary (first sentence of docs)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+}
+
+impl DocModuleItem {
+    /// Get the URL path for this item (includes kind suffix)
+    pub fn url_path(&self) -> String {
+        format!("{}/{}", self.path, self.kind.as_str())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_index() -> DocIndex {
+        let mut index = DocIndex::new();
+        index.add_item(DocItem {
+            path: "mylib::Point".into(),
+            name: "Point".into(),
+            kind: DocItemKind::Struct,
+            visibility: DocVisibility::Public,
+            docs: Some(DocContent::from_raw("A 2D point.\n\nUsed for coordinates.")),
+            signature: "pub struct Point".into(),
+            rich_signature: vec![],
+            signature_span: None,
+            sig_scope: None,
+            generics: vec![DocGenericParam {
+                name: "T".into(),
+                bounds: vec![],
+                default: None,
+            }],
+            where_bounds: vec![],
+            children: vec![DocChild {
+                kind: DocChildKind::Field,
+                name: "x".into(),
+                docs: Some(DocContent::from_raw("The x coordinate")),
+                signature: "x: u256".into(),
+                rich_signature: vec![],
+                signature_span: None,
+                sig_scope: None,
+                visibility: DocVisibility::Public,
+            }],
+            source: Some(DocSourceLoc {
+                file: "/src/lib.fe".into(),
+                display_file: "lib.fe".into(),
+                line: 1,
+                column: 0,
+            }),
+            source_text: None,
+            trait_impls: vec![],
+            implementors: vec![],
+        });
+        index.add_item(DocItem {
+            path: "mylib::Color".into(),
+            name: "Color".into(),
+            kind: DocItemKind::Enum,
+            visibility: DocVisibility::Public,
+            docs: None,
+            signature: "pub enum Color".into(),
+            rich_signature: vec![],
+            signature_span: None,
+            sig_scope: None,
+            generics: vec![],
+            where_bounds: vec![],
+            children: vec![
+                DocChild {
+                    kind: DocChildKind::Variant,
+                    name: "Red".into(),
+                    docs: None,
+                    signature: "Red".into(),
+                    rich_signature: vec![],
+                    signature_span: None,
+                    sig_scope: None,
+                    visibility: DocVisibility::Public,
+                },
+                DocChild {
+                    kind: DocChildKind::Variant,
+                    name: "Green".into(),
+                    docs: None,
+                    signature: "Green".into(),
+                    rich_signature: vec![],
+                    signature_span: None,
+                    sig_scope: None,
+                    visibility: DocVisibility::Public,
+                },
+            ],
+            source: None,
+            source_text: None,
+            trait_impls: vec![],
+            implementors: vec![],
+        });
+        index.add_item(DocItem {
+            path: "mylib::add".into(),
+            name: "add".into(),
+            kind: DocItemKind::Function,
+            visibility: DocVisibility::Public,
+            docs: Some(DocContent::from_raw("Add two numbers.")),
+            signature: "pub fn add(a: u256, b: u256) -> u256".into(),
+            rich_signature: vec![],
+            signature_span: None,
+            sig_scope: None,
+            generics: vec![],
+            where_bounds: vec![],
+            children: vec![],
+            source: None,
+            source_text: None,
+            trait_impls: vec![],
+            implementors: vec![],
+        });
+        index
+    }
+
+    #[test]
+    fn json_round_trip() {
+        let index = sample_index();
+        let json = serde_json::to_string_pretty(&index).expect("serialize");
+        let deserialized: DocIndex = serde_json::from_str(&json).expect("deserialize");
+
+        assert_eq!(index.items.len(), deserialized.items.len());
+        for (a, b) in index.items.iter().zip(deserialized.items.iter()) {
+            assert_eq!(a.path, b.path);
+            assert_eq!(a.name, b.name);
+            assert_eq!(a.kind, b.kind);
+            assert_eq!(a.visibility, b.visibility);
+            assert_eq!(a.docs, b.docs);
+            assert_eq!(a.signature, b.signature);
+            assert_eq!(a.generics, b.generics);
+            assert_eq!(a.children, b.children);
+            // source.file is #[serde(skip)] — verify it's dropped on round-trip
+            if let (Some(sa), Some(sb)) = (&a.source, &b.source) {
+                assert!(
+                    sb.file.is_empty(),
+                    "source.file should not survive serialization"
+                );
+                assert_eq!(sa.display_file, sb.display_file);
+                assert_eq!(sa.line, sb.line);
+                assert_eq!(sa.column, sb.column);
+            } else {
+                assert_eq!(a.source.is_some(), b.source.is_some());
+            }
+        }
+    }
+
+    #[test]
+    fn find_by_url_with_kind() {
+        let index = sample_index();
+        let item = index.find_by_url("mylib::Point/struct");
+        assert!(item.is_some());
+        assert_eq!(item.unwrap().name, "Point");
+    }
+
+    #[test]
+    fn find_by_url_without_kind() {
+        let index = sample_index();
+        let item = index.find_by_url("mylib::Color");
+        assert!(item.is_some());
+        assert_eq!(item.unwrap().name, "Color");
+    }
+
+    #[test]
+    fn find_by_url_not_found() {
+        let index = sample_index();
+        assert!(index.find_by_url("mylib::Missing/struct").is_none());
+    }
+
+    #[test]
+    fn search_by_name() {
+        let index = sample_index();
+        let results = index.search("Point");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "Point");
+    }
+
+    #[test]
+    fn search_case_insensitive() {
+        let index = sample_index();
+        let results = index.search("color");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "Color");
+    }
+
+    #[test]
+    fn search_by_path() {
+        let index = sample_index();
+        let results = index.search("mylib");
+        assert_eq!(results.len(), 3);
+    }
+
+    #[test]
+    fn doc_content_parsing() {
+        let content = DocContent::from_raw(
+            "Summary line.\n\nDetailed body here.\n\n# Examples\nSome example code.",
+        );
+        assert_eq!(content.summary, "Summary line.");
+        assert!(content.body.contains("Detailed body here."));
+        assert_eq!(content.sections.len(), 1);
+        assert_eq!(content.sections[0].name, "Examples");
+        assert_eq!(content.sections[0].content, "Some example code.");
+    }
+
+    #[test]
+    fn doc_item_url_path() {
+        let index = sample_index();
+        let item = index.find_by_path("mylib::Point").unwrap();
+        assert_eq!(item.url_path(), "mylib::Point/struct");
+    }
+
+    fn make_struct_item(path: &str, name: &str) -> DocItem {
+        DocItem {
+            path: path.into(),
+            name: name.into(),
+            kind: DocItemKind::Struct,
+            visibility: DocVisibility::Public,
+            docs: None,
+            signature: format!("pub struct {name}"),
+            rich_signature: vec![],
+            signature_span: None,
+            sig_scope: None,
+            generics: vec![],
+            where_bounds: vec![],
+            children: vec![],
+            source: None,
+            source_text: None,
+            trait_impls: vec![],
+            implementors: vec![],
+        }
+    }
+
+    fn make_trait_item(path: &str, name: &str) -> DocItem {
+        DocItem {
+            path: path.into(),
+            name: name.into(),
+            kind: DocItemKind::Trait,
+            visibility: DocVisibility::Public,
+            docs: None,
+            signature: format!("pub trait {name}"),
+            rich_signature: vec![],
+            signature_span: None,
+            sig_scope: None,
+            generics: vec![],
+            where_bounds: vec![],
+            children: vec![],
+            source: None,
+            source_text: None,
+            trait_impls: vec![],
+            implementors: vec![],
+        }
+    }
+
+    fn make_trait_impl(trait_name: &str) -> DocTraitImpl {
+        DocTraitImpl {
+            trait_name: trait_name.into(),
+            impl_url: String::new(),
+            signature: format!("impl {trait_name} for ..."),
+            rich_signature: vec![],
+            signature_span: None,
+            sig_scope: None,
+            methods: vec![],
+        }
+    }
+
+    #[test]
+    fn link_trait_impls_exact_path_match() {
+        let mut index = DocIndex::new();
+        index.add_item(make_struct_item("mylib::Point", "Point"));
+        index.add_item(make_trait_item("mylib::Clone", "Clone"));
+
+        let links = vec![("mylib::Point".into(), make_trait_impl("mylib::Clone"))];
+        index.link_trait_impls(links);
+
+        let point = index.find_by_path("mylib::Point").unwrap();
+        assert_eq!(point.trait_impls.len(), 1, "exact path should match");
+    }
+
+    #[test]
+    fn link_trait_impls_no_false_match_across_modules() {
+        let mut index = DocIndex::new();
+        // Two structs with the same simple name in different modules
+        index.add_item(make_struct_item("mod_a::Point", "Point"));
+        index.add_item(make_struct_item("mod_b::Point", "Point"));
+
+        // Impl targets mod_a::Point specifically
+        let links = vec![("mod_a::Point".into(), make_trait_impl("Clone"))];
+        index.link_trait_impls(links);
+
+        let point_a = index.find_by_path("mod_a::Point").unwrap();
+        let point_b = index.find_by_path("mod_b::Point").unwrap();
+        assert_eq!(point_a.trait_impls.len(), 1, "exact path match on mod_a");
+        assert_eq!(
+            point_b.trait_impls.len(),
+            0,
+            "mod_b::Point should NOT match mod_a::Point"
+        );
+    }
+
+    #[test]
+    fn link_trait_impls_simple_name_fallback() {
+        let mut index = DocIndex::new();
+        index.add_item(make_struct_item("mylib::Point", "Point"));
+
+        // When target is a simple name (no "::"), fall back to name matching
+        let links = vec![("Point".into(), make_trait_impl("Clone"))];
+        index.link_trait_impls(links);
+
+        let point = index.find_by_path("mylib::Point").unwrap();
+        assert_eq!(
+            point.trait_impls.len(),
+            1,
+            "simple name should fall back to name matching"
+        );
+    }
+
+    #[test]
+    fn link_trait_impls_populates_implementors() {
+        let mut index = DocIndex::new();
+        index.add_item(make_struct_item("mylib::Point", "Point"));
+        index.add_item(make_trait_item("mylib::Display", "Display"));
+
+        let links = vec![("mylib::Point".into(), make_trait_impl("Display"))];
+        index.link_trait_impls(links);
+
+        let display = index.find_by_path("mylib::Display").unwrap();
+        assert_eq!(
+            display.implementors.len(),
+            1,
+            "trait should get implementor entry"
+        );
+        assert_eq!(display.implementors[0].type_name, "Point");
+    }
+
+    #[test]
+    fn link_trait_impls_type_lookup_no_collision() {
+        // Two structs with the same simple name — the lookup map must
+        // resolve each to the correct full path without collisions.
+        let mut index = DocIndex::new();
+        index.add_item(make_struct_item("a::Foo", "Foo"));
+        index.add_item(make_struct_item("b::Foo", "Foo"));
+        index.add_item(make_trait_item("mylib::Display", "Display"));
+
+        let links = vec![
+            ("a::Foo".into(), make_trait_impl("Display")),
+            ("b::Foo".into(), make_trait_impl("Display")),
+        ];
+        index.link_trait_impls(links);
+
+        // Both should get the impl
+        let foo_a = index.find_by_path("a::Foo").unwrap();
+        let foo_b = index.find_by_path("b::Foo").unwrap();
+        assert_eq!(foo_a.trait_impls.len(), 1);
+        assert_eq!(foo_b.trait_impls.len(), 1);
+
+        // The trait should have BOTH as implementors (dedup by type_url)
+        let display = index.find_by_path("mylib::Display").unwrap();
+        assert_eq!(
+            display.implementors.len(),
+            2,
+            "both a::Foo and b::Foo should appear as implementors"
+        );
+        let urls: Vec<&str> = display
+            .implementors
+            .iter()
+            .map(|i| i.type_url.as_str())
+            .collect();
+        assert!(urls.contains(&"a::Foo/struct"));
+        assert!(urls.contains(&"b::Foo/struct"));
+    }
+
+    #[test]
+    fn link_trait_impls_dedup_by_url_not_name() {
+        // Two types with the same simple name implementing the same trait
+        // should not be deduplicated — dedup should use type_url, not type_name.
+        let mut index = DocIndex::new();
+        index.add_item(make_struct_item("x::Result", "Result"));
+        index.add_item(make_struct_item("y::Result", "Result"));
+        index.add_item(make_trait_item("mylib::Debug", "Debug"));
+
+        let links = vec![
+            ("x::Result".into(), make_trait_impl("Debug")),
+            ("y::Result".into(), make_trait_impl("Debug")),
+        ];
+        index.link_trait_impls(links);
+
+        let debug_trait = index.find_by_path("mylib::Debug").unwrap();
+        assert_eq!(
+            debug_trait.implementors.len(),
+            2,
+            "both x::Result and y::Result should be separate implementors"
+        );
+    }
+}

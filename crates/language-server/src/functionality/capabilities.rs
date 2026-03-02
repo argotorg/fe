@@ -83,6 +83,7 @@ pub(crate) fn server_capabilities() -> ServerCapabilities {
                 "fe.viewMir".into(),
                 "fe.viewYul".into(),
                 "fe.viewSonatinaIr".into(),
+                "fe.openDocs".into(),
             ],
             ..Default::default()
         }),

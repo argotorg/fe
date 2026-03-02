@@ -12,7 +12,6 @@ use async_lsp::{
 
 use common::InputDb;
 use driver::init_ingot;
-use resolver::workspace::discover_context;
 use resolver::{
     ResolutionHandler, Resolver,
     files::{FilesResolver, FilesResource},
@@ -56,6 +55,26 @@ pub enum ChangeKind {
     Delete,
 }
 
+/// Emitted after a file change to request doc regeneration (debounced).
+#[derive(Debug)]
+pub struct DocReloadRequest;
+
+impl std::fmt::Display for DocReloadRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "DocReloadRequest")
+    }
+}
+
+/// Emitted after the debounce window to trigger actual doc regeneration.
+#[derive(Debug)]
+pub struct DocReloadExecute;
+
+impl std::fmt::Display for DocReloadExecute {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "DocReloadExecute")
+    }
+}
+
 // Implementation moved to backend/mod.rs
 
 async fn discover_and_load_ingots(
@@ -69,37 +88,7 @@ async fn discover_and_load_ingots(
         )
     })?;
 
-    let discovery = discover_context(&root_url, true).map_err(|e| {
-        ResponseError::new(ErrorCode::INTERNAL_ERROR, format!("Discovery error: {e}"))
-    })?;
-
-    if let Some(workspace_root) = discovery.workspace_root.as_ref() {
-        let had_diagnostics = init_ingot(&mut backend.db, workspace_root);
-        if had_diagnostics {
-            warn!("Ingot initialization produced diagnostics for workspace root");
-        }
-    }
-
-    for ingot_url in &discovery.ingot_roots {
-        // Skip if already initialized as workspace root above
-        if discovery.workspace_root.as_ref() == Some(ingot_url) {
-            continue;
-        }
-        let had_diagnostics = init_ingot(&mut backend.db, ingot_url);
-        if had_diagnostics {
-            warn!(
-                "Ingot initialization produced diagnostics for {:?}",
-                ingot_url
-            );
-        }
-    }
-
-    if discovery.workspace_root.is_none() && discovery.ingot_roots.is_empty() {
-        let had_diagnostics = init_ingot(&mut backend.db, &root_url);
-        if had_diagnostics {
-            warn!("Ingot initialization produced diagnostics for workspace root");
-        }
-    }
+    driver::discover_and_init(&mut backend.db, &root_url);
 
     Ok(())
 }
@@ -144,20 +133,36 @@ pub async fn initialize(
         .and_then(|folder| folder.uri.to_file_path().ok())
         .unwrap_or_else(|| std::env::current_dir().unwrap());
 
-    backend.workspace_root = Some(root.clone());
+    backend.lsp_workspace_root = Some(root.clone());
 
     // Discover and load all ingots in the workspace
     discover_and_load_ingots(backend, &root).await?;
 
+    Ok(initialize_result())
+}
+
+/// Read-only initialize for secondary connections (e.g. browser WS clients).
+///
+/// Returns server capabilities without mutating backend state, so that
+/// browser doc-page LSP sessions don't overwrite the editor's workspace_root
+/// or definition_link_support.
+pub async fn initialize_readonly(
+    _backend: &Backend,
+    _message: InitializeParams,
+) -> Result<InitializeResult, ResponseError> {
+    info!("initializing language server (read-only, WS client)");
+    Ok(initialize_result())
+}
+
+fn initialize_result() -> InitializeResult {
     let capabilities = server_capabilities();
-    let initialize_result = InitializeResult {
+    InitializeResult {
         capabilities,
         server_info: Some(async_lsp::lsp_types::ServerInfo {
             name: String::from("fe-language-server"),
             version: Some(String::from(env!("CARGO_PKG_VERSION"))),
         }),
-    };
-    Ok(initialize_result)
+    }
 }
 
 pub async fn initialized(
@@ -219,7 +224,7 @@ pub async fn initialized(
             continue;
         }
 
-        if let Some(root) = backend.workspace_root.as_ref() {
+        if let Some(root) = backend.lsp_workspace_root.as_ref() {
             let Ok(path) = url.to_file_path() else {
                 continue;
             };
@@ -321,10 +326,14 @@ pub async fn handle_did_change_text_document(
 }
 
 pub async fn handle_did_save_text_document(
-    _backend: &Backend,
+    backend: &Backend,
     message: async_lsp::lsp_types::DidSaveTextDocumentParams,
 ) -> Result<(), ResponseError> {
     info!("file saved: {:?}", message.text_document.uri);
+    // Request doc reload on save (debounced by the stream in setup_streams)
+    if backend.doc_regenerate_fn.is_some() {
+        let _ = backend.client.clone().emit(DocReloadRequest);
+    }
     Ok(())
 }
 
@@ -472,6 +481,14 @@ pub async fn handle_file_change(
     }
 
     let _ = backend.client.emit(NeedsDiagnostics(message.uri));
+
+    // Request doc reload (debounced by the stream in setup_streams).
+    // Now that regen uses a read-only salsa snapshot of the backend's db,
+    // the snapshot reflects the in-memory changes from didChange above.
+    if backend.doc_regenerate_fn.is_some() {
+        let _ = backend.client.emit(DocReloadRequest);
+    }
+
     Ok(())
 }
 
@@ -637,6 +654,50 @@ fn map_related_info_uris(backend: &Backend, diagnostics: &mut [async_lsp::lsp_ty
     }
 }
 
+pub async fn handle_doc_reload(
+    backend: &Backend,
+    _message: DocReloadExecute,
+) -> Result<(), ResponseError> {
+    let Some(regen_fn) = backend.doc_regenerate_fn.as_ref().cloned() else {
+        return Ok(());
+    };
+
+    info!("regenerating doc data for live reload");
+    let t_start = std::time::Instant::now();
+
+    // Bump generation so concurrent/stale regens get discarded
+    let generation = backend
+        .doc_reload_generation
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        + 1;
+    let generation_ref = std::sync::Arc::clone(&backend.doc_reload_generation);
+
+    // Run on the worker pool with a salsa snapshot — read-only, shares cached
+    // query results with the Backend's db, no mutation needed.
+    let rx = backend.spawn_on_workers(move |db| {
+        let result = regen_fn(db);
+        (result, generation)
+    });
+
+    match rx.await {
+        Ok(((doc_json, scip_json), completed_gen)) => {
+            if completed_gen == generation_ref.load(std::sync::atomic::Ordering::Relaxed) {
+                tracing::debug!(
+                    "[fe:timing] doc reload regeneration: {:?}",
+                    t_start.elapsed()
+                );
+                backend.notify_doc_reload(doc_json, scip_json);
+            } else {
+                info!("doc reload: discarding stale result");
+            }
+        }
+        Err(_) => {
+            warn!("doc reload: worker cancelled");
+        }
+    }
+    Ok(())
+}
+
 pub async fn handle_hover_request(
     backend: &Backend,
     message: HoverParams,
@@ -654,10 +715,14 @@ pub async fn handle_hover_request(
     };
 
     info!("handling hover request in file: {:?}", file);
-    let response = hover_helper(&backend.db, file, message).unwrap_or_else(|e| {
+    let (response, doc_path) = hover_helper(&backend.db, file, message).unwrap_or_else(|e| {
         error!("Error handling hover: {:?}", e);
-        None
+        (None, None)
     });
+
+    if let Some(path) = doc_path {
+        backend.notify_doc_navigate(path);
+    }
     info!("sending hover response: {:?}", response);
     Ok(response)
 }

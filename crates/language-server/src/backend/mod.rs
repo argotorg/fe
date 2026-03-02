@@ -2,9 +2,20 @@ use async_lsp::ClientSocket;
 use driver::DriverDataBase;
 use rustc_hash::FxHashSet;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+use tokio::sync::broadcast;
 use url::Url;
 
 use crate::virtual_files::{VirtualFiles, materialize_builtins};
+
+/// Closure type for regenerating doc+SCIP data from a read-only db snapshot.
+///
+/// Receives a salsa snapshot of the Backend's `DriverDataBase`. The snapshot
+/// shares cached query results so incremental queries are fast, and read-only
+/// access avoids the deadlock that would occur if we tried to mutate a snapshot
+/// while the original db is still alive.
+pub type DocRegenerateFn = Arc<dyn Fn(&DriverDataBase) -> (String, Option<String>) + Send + Sync>;
 
 pub struct Backend {
     pub(super) client: ClientSocket,
@@ -13,11 +24,22 @@ pub struct Backend {
     pub(super) virtual_files: Option<VirtualFiles>,
     pub(super) readonly_warnings: FxHashSet<Url>,
     pub(super) definition_link_support: bool,
-    pub(super) workspace_root: Option<PathBuf>,
+    pub(super) doc_nav_tx: Option<broadcast::Sender<String>>,
+    pub(super) doc_regenerate_fn: Option<DocRegenerateFn>,
+    pub(super) doc_reload_tx: Option<broadcast::Sender<String>>,
+    pub(super) doc_reload_generation: Arc<AtomicU64>,
+    pub(super) docs_url: Option<String>,
+    pub(super) lsp_workspace_root: Option<PathBuf>,
 }
 
 impl Backend {
-    pub fn new(client: ClientSocket) -> Self {
+    pub fn new(
+        client: ClientSocket,
+        doc_nav_tx: Option<broadcast::Sender<String>>,
+        doc_regenerate_fn: Option<DocRegenerateFn>,
+        doc_reload_tx: Option<broadcast::Sender<String>>,
+        docs_url: Option<String>,
+    ) -> Self {
         let db = DriverDataBase::default();
         let mut virtual_files = VirtualFiles::new("fe-language-server-").ok();
         if let Some(vfs) = virtual_files.as_mut()
@@ -39,7 +61,31 @@ impl Backend {
             virtual_files,
             readonly_warnings: FxHashSet::default(),
             definition_link_support: false,
-            workspace_root: None,
+            doc_nav_tx,
+            doc_regenerate_fn,
+            doc_reload_tx,
+            doc_reload_generation: Arc::new(AtomicU64::new(0)),
+            docs_url,
+            lsp_workspace_root: None,
+        }
+    }
+
+    /// Broadcast a doc-navigate event (path like "mylib::Foo/struct").
+    pub fn notify_doc_navigate(&self, path: String) {
+        if let Some(tx) = &self.doc_nav_tx {
+            let _ = tx.send(path);
+        }
+    }
+
+    /// Broadcast a doc reload with fresh doc_index_json and scip_json.
+    pub fn notify_doc_reload(&self, doc_index_json: String, scip_json: Option<String>) {
+        if let Some(tx) = &self.doc_reload_tx {
+            let payload = serde_json::json!({
+                "docIndex": serde_json::from_str::<serde_json::Value>(&doc_index_json)
+                    .unwrap_or(serde_json::Value::Null),
+                "scipData": scip_json,
+            });
+            let _ = tx.send(payload.to_string());
         }
     }
 

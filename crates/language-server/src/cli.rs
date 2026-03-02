@@ -7,6 +7,13 @@ use clap::{Parser, Subcommand};
 #[command(version = "1.0")]
 #[command(about = "LSP server for the Fe language", long_about = None)]
 pub struct CliArgs {
+    /// Start a full LSP-over-WebSocket server on this port.
+    ///
+    /// Browser clients can connect and use standard LSP protocol
+    /// (initialize, textDocument/*, etc.) over WebSocket transport.
+    #[arg(long)]
+    pub lsp_ws_port: Option<u16>,
+
     /// Choose the communication method
     #[command(subcommand)]
     pub command: Option<Commands>,

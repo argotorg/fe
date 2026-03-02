@@ -6,6 +6,7 @@ tarpaulin-report.html
 /docs/tmp_snippets
 .vscode
 .DS_Store
+**/*.fe-lsp.json
 
 # OpenSpec and AI assistant files
 openspec/

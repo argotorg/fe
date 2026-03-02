@@ -61,6 +61,11 @@ pub async fn handle_execute_command(
     backend: &mut Backend,
     params: ExecuteCommandParams,
 ) -> Result<Option<Value>, ResponseError> {
+    // Handle fe.openDocs separately — it opens a URL, not codegen
+    if params.command == "fe.openDocs" {
+        return handle_open_docs(backend, &params.arguments).await;
+    }
+
     let kind = match params.command.as_str() {
         "fe.viewMir" => CodegenKind::Mir,
         "fe.viewYul" => CodegenKind::Yul,
@@ -200,4 +205,104 @@ pub async fn handle_execute_command(
         .await;
 
     Ok(None)
+}
+
+/// Handle `fe.openDocs` — open the documentation page for an item.
+///
+/// Arguments: `[path]` where `path` is a doc URL path like `"mylib::Foo/struct"`,
+/// or no arguments to open the docs root.
+async fn handle_open_docs(
+    backend: &mut Backend,
+    arguments: &[Value],
+) -> Result<Option<Value>, ResponseError> {
+    let base = match &backend.docs_url {
+        Some(url) => url.clone(),
+        None => {
+            let _ = backend.client.clone().show_message(ShowMessageParams {
+                typ: MessageType::INFO,
+                message: "Documentation server is not running. Start with `fe lsp` to enable."
+                    .to_string(),
+            });
+            return Ok(None);
+        }
+    };
+
+    let doc_path = arguments
+        .first()
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    // If a browser doc client is connected, navigate there instead of opening a new window
+    if backend
+        .doc_nav_tx
+        .as_ref()
+        .is_some_and(|tx| tx.receiver_count() > 0)
+    {
+        backend.notify_doc_navigate(doc_path);
+        return Ok(None);
+    }
+
+    let url_str = if doc_path.is_empty() {
+        base
+    } else {
+        format!("{base}#{doc_path}")
+    };
+
+    let uri = Url::parse(&url_str).map_err(|e| {
+        ResponseError::new(ErrorCode::INTERNAL_ERROR, format!("invalid docs URL: {e}"))
+    })?;
+
+    // Try window/showDocument first (works in VS Code)
+    let show_result = backend
+        .client
+        .show_document(ShowDocumentParams {
+            uri: uri.clone(),
+            external: Some(true),
+            take_focus: Some(true),
+            selection: None,
+        })
+        .await;
+
+    if let Ok(result) = show_result
+        && result.success
+    {
+        return Ok(None);
+    }
+
+    // Fallback: open in system browser directly (Zed doesn't support showDocument)
+    open_in_browser(uri.as_str());
+
+    Ok(None)
+}
+
+fn open_in_browser(url: &str) {
+    #[cfg(target_os = "linux")]
+    {
+        let _ = std::process::Command::new("xdg-open")
+            .arg(url)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open")
+            .arg(url)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // `start` is a cmd.exe builtin, not a standalone executable
+        let _ = std::process::Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+    }
 }

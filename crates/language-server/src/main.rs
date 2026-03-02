@@ -13,6 +13,10 @@ async fn main() {
 
     let args = CliArgs::parse();
 
+    if let Some(lsp_ws_port) = args.lsp_ws_port {
+        tokio::spawn(fe_language_server::ws_lsp::run_ws_lsp_server(lsp_ws_port));
+    }
+
     match args.command {
         Some(Commands::Tcp(tcp_args)) => {
             fe_language_server::run_tcp_server(
@@ -22,7 +26,7 @@ async fn main() {
             .await;
         }
         None => {
-            fe_language_server::run_stdio_server().await;
+            fe_language_server::run_stdio_server(None).await;
         }
     }
 }
