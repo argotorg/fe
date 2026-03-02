@@ -12,7 +12,7 @@ use super::{
     const_expr::{ConstExpr, ConstExprId},
     fold::{TyFoldable, TyFolder},
     trait_def::{ImplementorId, TraitInstId},
-    ty_def::{ApplicableTyProp, Kind, TyData, TyId, TyVar, TyVarSort, inference_keys},
+    ty_def::{ApplicableTyProp, InvalidCause, Kind, TyData, TyId, TyVar, TyVarSort, inference_keys},
 };
 use crate::analysis::{
     HirAnalysisDb,
@@ -657,6 +657,12 @@ where
     fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
         let (shallow_resolved, key) = match ty.data(db) {
             TyData::TyVar(var) if !self.var_stack.contains(&var.key) => {
+                if var.key.0 as usize >= self.table.len() {
+                    // This type variable originates from a different
+                    // unification table; degrade gracefully instead of
+                    // panicking on out-of-bounds access.
+                    return TyId::invalid(db, InvalidCause::Other);
+                }
                 match self.table.probe_impl(var.key) {
                     Either::Left(ty) => (ty, var.key),
                     Either::Right(var) => return TyId::ty_var(db, var.sort, var.kind, var.key),
@@ -665,6 +671,12 @@ where
 
             TyData::ConstTy(cty) => match cty.data(db) {
                 ConstTyData::TyVar(var, ty) if !self.var_stack.contains(&var.key) => {
+                    if var.key.0 as usize >= self.table.len() {
+                        // This type variable originates from a different
+                        // unification table; degrade gracefully instead of
+                        // panicking on out-of-bounds access.
+                        return TyId::invalid(db, InvalidCause::Other);
+                    }
                     match self.table.probe_impl(var.key) {
                         Either::Left(ty) => (ty, var.key),
                         Either::Right(var) => {

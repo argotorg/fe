@@ -1,0 +1,23 @@
+extern {
+    fn todo() -> !
+}
+
+trait Level1 {
+    type Middle: Level1
+}
+
+struct ConcreteLevel1<T> {
+    phantom: T
+}
+
+struct ConcreteLevel2<T> {
+    phantom: T
+}
+
+impl<T> Level1 for ConcreteLevel1<T> {
+    type Middle = ConcreteLevel2<T>
+}
+
+fn extract_value<T: Level1>() -> T::Middle {
+    todo()
+}

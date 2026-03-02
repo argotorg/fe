@@ -1,0 +1,30 @@
+struct Add<T = Self> {
+    type Output = Self
+
+    fn add(own self, _ rhs: own T) -> Self::Output
+}
+trait Sub<T = Self> {
+    type Output = Self
+
+    fn sub(own self, _ rhs: own T) -> Self::Output
+}
+
+struct Foo {}
+struct Bar {}
+
+impl Add for Foo {
+    fn add(own self, _ rhs: own Self) -> Self { self }
+}
+impl Sub for Foo {
+    fn sub(own self, _ rhs: own Self) -> Self { self }
+}
+impl Add for Bar {
+    fn add(own self, _ rhs: own Self) -> Self { self }
+}
+
+fn f(x: own Foo, y: own Bar) -> Foo {
+    let _ = y.add(Bar {})
+    let _ = x.sub(Foo {})
+    let z = Foo {}
+    z.add(Foo {})
+}

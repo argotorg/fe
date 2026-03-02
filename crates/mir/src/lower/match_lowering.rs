@@ -439,7 +439,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
     fn try_lower_non_ref_scrutinee_projection_as_transparent_cast(
         &mut self,
-        context: &'static str,
+        _context: &'static str,
         scrutinee_value: ValueId,
         scrutinee_ty: TyId<'db>,
         path: &ProjectionPath<'db>,
@@ -458,12 +458,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let Some(current_ty) =
             crate::repr::peel_transparent_field0_projection_path(self.db, scrutinee_ty, path)
         else {
-            panic!(
-                "{context} requires `Ref` scrutinee (ty={}, repr={:?}, path_len={})",
-                scrutinee_ty.pretty_print(self.db),
-                scrutinee_repr,
-                path.len()
-            );
+            return None;
         };
 
         debug_assert_eq!(

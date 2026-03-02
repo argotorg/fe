@@ -37,13 +37,11 @@ fn collect_effect_constraints_for_func<'db>(
 
     let Some(effect_ref_trait) = resolve_core_trait(db, func.scope(), &["effect_ref", "EffectRef"])
     else {
-        debug_assert!(false, "missing required core trait EffectRef");
         return vec![];
     };
     let Some(effect_ref_mut_trait) =
         resolve_core_trait(db, func.scope(), &["effect_ref", "EffectRefMut"])
     else {
-        debug_assert!(false, "missing required core trait EffectRefMut");
         return vec![];
     };
 
@@ -259,7 +257,10 @@ fn collect_func_def_constraints_cycle_recover<'db>(
     salsa::CycleRecoveryAction::Iterate
 }
 
-#[salsa::tracked]
+#[salsa::tracked(
+    cycle_fn=collect_constraints_cycle_recover,
+    cycle_initial=collect_constraints_cycle_initial
+)]
 pub fn collect_constraints<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: GenericParamOwner<'db>,
@@ -351,6 +352,24 @@ pub fn collect_constraints<'db>(
         db,
         all_predicates.into_iter().collect::<Vec<_>>(),
     ))
+}
+
+fn collect_constraints_cycle_initial<'db>(
+    db: &'db dyn HirAnalysisDb,
+    _owner: GenericParamOwner<'db>,
+) -> Binder<PredicateListId<'db>> {
+    Binder::bind(PredicateListId::empty_list(db))
+}
+
+fn collect_constraints_cycle_recover<'db>(
+    db: &'db dyn HirAnalysisDb,
+    _value: &Binder<PredicateListId<'db>>,
+    _count: u32,
+    _owner: GenericParamOwner<'db>,
+) -> salsa::CycleRecoveryAction<Binder<PredicateListId<'db>>> {
+    // Cycles through trait/impl constraint collection can occur on malformed
+    // inputs; use an empty fallback constraint set rather than panicking.
+    salsa::CycleRecoveryAction::Fallback(Binder::bind(PredicateListId::empty_list(db)))
 }
 
 struct Deferred<'db> {

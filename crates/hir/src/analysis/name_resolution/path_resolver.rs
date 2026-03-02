@@ -331,7 +331,8 @@ impl<'db> PathResError<'db> {
                         let ty_span = seg_span.qualified_type().ty().into_path_type().path();
                         PathResDiag::ExpectedType(ty_span.into(), type_ident, res.kind_name())
                     } else {
-                        unreachable!()
+                        let ty_span = seg_span.qualified_type().ty().into_path_type().path();
+                        PathResDiag::ExpectedType(ty_span.into(), ident, res.kind_name())
                     }
                 }
                 Err(inner) => {
@@ -347,7 +348,8 @@ impl<'db> PathResError<'db> {
                         let trait_span = seg_span.qualified_type().trait_qualifier().name().into();
                         PathResDiag::ExpectedTrait(trait_span, trait_ident, res.kind_name())
                     } else {
-                        unreachable!()
+                        let trait_span = seg_span.qualified_type().trait_qualifier().name().into();
+                        PathResDiag::ExpectedTrait(trait_span, ident, res.kind_name())
                     }
                 }
                 Err(inner) => {
@@ -1192,22 +1194,24 @@ pub fn find_associated_type<'db>(
     // Case 3: The LHS `ty` is an associated type (e.g., `T::Encoder` in `T::Encoder::Output`).
     // We need to look at the trait bound on the associated type.
     if let TyData::AssocTy(assoc_ty) = ty.value.data(db) {
+        let mut assoc_table = UnificationTable::new(db);
+
         // Extract the canonical type's substitutions into the unification table
         // This ensures we maintain any type parameter bindings from the outer context
-        let ty_with_subst = ty.extract_identity(&mut table);
+        let ty_with_subst = ty.extract_identity(&mut assoc_table);
 
         // First, check if there are trait bounds on this associated type in the assumptions
         // (e.g., from where clauses like `T::Assoc: Level1`).
         for &trait_inst in assumptions.list(db) {
-            let snapshot = table.snapshot();
+            let snapshot = assoc_table.snapshot();
             // Allow unification to account for type variables in either side
-            if table.unify(ty_with_subst, trait_inst.self_ty(db)).is_ok()
+            if assoc_table.unify(ty_with_subst, trait_inst.self_ty(db)).is_ok()
                 && let Some(assoc_ty) = trait_inst.assoc_ty(db, name)
             {
-                let folded = assoc_ty.fold_with(db, &mut table);
+                let folded = assoc_ty.fold_with(db, &mut assoc_table);
                 candidates.push((trait_inst, folded));
             }
-            table.rollback_to(snapshot);
+            assoc_table.rollback_to(snapshot);
         }
 
         // Also check bounds defined on the associated type in the trait definition.
@@ -1216,7 +1220,7 @@ pub fn find_associated_type<'db>(
         let trait_ = assoc_ty.trait_.def(db);
         let assoc_name = assoc_ty.name;
         if let Some(decl) = trait_.assoc_ty(db, assoc_name) {
-            let subject = ty_with_subst.fold_with(db, &mut table);
+            let subject = ty_with_subst.fold_with(db, &mut assoc_table);
             // owner_self is used to substitute `Self` in bounds like `type Assoc: Encode<Self>`
             let owner_self = assoc_ty.trait_.self_ty(db);
             for bound in &decl.bounds {
@@ -1232,7 +1236,7 @@ pub fn find_associated_type<'db>(
                     && inst.def(db).assoc_ty(db, name).is_some()
                 {
                     let assoc_ty = TyId::assoc_ty(db, inst, name);
-                    let folded = assoc_ty.fold_with(db, &mut table);
+                    let folded = assoc_ty.fold_with(db, &mut assoc_table);
                     candidates.push((inst, folded));
                 }
             }

@@ -37,10 +37,15 @@ impl AnalysisPassManager {
         let mut diags = vec![];
         for (name, pass) in self.module_passes.iter_mut() {
             let t0 = std::time::Instant::now();
-            diags.extend(pass.run_on_module(db, top_mod));
+            let pass_diags = pass.run_on_module(db, top_mod);
             let elapsed = t0.elapsed();
             if elapsed.as_micros() > 100 {
                 tracing::debug!("[fe:timing]   pass {name}: {elapsed:?}");
+            }
+            let has_diags = !pass_diags.is_empty();
+            diags.extend(pass_diags);
+            if *name == "Parsing" && has_diags {
+                break;
             }
         }
         diags
@@ -55,10 +60,15 @@ impl AnalysisPassManager {
         for module in tree.all_modules() {
             for (name, pass) in self.module_passes.iter_mut() {
                 let t0 = std::time::Instant::now();
-                diags.extend(pass.run_on_module(db, module));
+                let pass_diags = pass.run_on_module(db, module);
                 let elapsed = t0.elapsed();
                 if elapsed.as_micros() > 100 {
                     tracing::debug!("[fe:timing]   pass {name}: {elapsed:?}");
+                }
+                let has_diags = !pass_diags.is_empty();
+                diags.extend(pass_diags);
+                if *name == "Parsing" && has_diags {
+                    break;
                 }
             }
         }

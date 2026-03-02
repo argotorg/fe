@@ -1,0 +1,57 @@
+trait Default {
+    fn default() -> Self
+}
+
+struct Foo<T> {
+    t: T
+}
+
+impl<T: Default> Foo<T> {
+    fn method() -> T {
+        T::default()
+    }
+}
+
+impl Default for i32 {
+    fn  -> Self {
+        0
+    }
+}
+
+enum E<T> {
+    A,
+    B(T),
+    C(i32),
+    D { x: i32 },
+}
+
+impl<T> E<T> {
+    fn gimme<U>(_ val: own U) -> E<U> {
+        E::B(val)
+    }
+}
+
+trait F where Self: * -> * {
+    fn replace<T, U>(self: own Self<T>, with: own U) -> Self<U>
+}
+
+impl F for E {
+    fn replace<T, U>(self: own Self<T>, with: own U) -> Self<U> {
+        Self::B(with)
+    }
+}
+
+fn foo() {
+    // Deciding the `Foo` type is not possible without a type argument for `Foo`.
+    // let x = Foo::method()
+
+    let x = Foo<i32>::method()
+
+    let e0 = E::B(x)
+    let e1 = E<u64>::C(10)
+    let e2 = E<u64>::A
+    let e3 = E<u64>::D { x: 10 }
+
+    let e4 = E<()>::gimme<u64>(10)
+    let e5 = e1.replace(with: "hi")
+}

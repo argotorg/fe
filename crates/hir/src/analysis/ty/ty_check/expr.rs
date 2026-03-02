@@ -2566,7 +2566,15 @@ impl<'db> TyChecker<'db> {
                 return ExprProp::invalid(self.db);
             }
             Err(err) => {
-                unreachable!("unexpected error: {err:?}");
+                let span = expr.span(self.body());
+                let diag = body_diag_from_method_selection_err(
+                    self.db,
+                    err,
+                    Spanned::new(lhs_ty, span.clone().into()),
+                    Spanned::new(op.trait_method(self.db), span.into()),
+                );
+                self.push_diag(diag);
+                return ExprProp::invalid(self.db);
             }
         };
 

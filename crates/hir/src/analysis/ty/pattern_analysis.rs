@@ -423,7 +423,9 @@ impl<'db> SigmaSet<'db> {
         match self.0.first() {
             Some(ctor) => {
                 let expected = ctor_variant_num(db, ctor);
-                debug_assert!(self.0.len() <= expected);
+                if self.0.len() > expected {
+                    return false;
+                }
                 self.0.len() == expected
             }
             None => false,
