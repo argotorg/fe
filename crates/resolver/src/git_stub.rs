@@ -77,6 +77,12 @@ impl fmt::Display for GitResolutionDiagnostic {
 #[derive(Default)]
 pub struct GitResolver;
 
+#[derive(Debug, Clone, Copy)]
+pub enum SparseCheckoutMode {
+    Cone,
+    NoCone,
+}
+
 impl GitResolver {
     pub fn new(_checkout_root: Utf8PathBuf) -> Self {
         Self
@@ -93,6 +99,15 @@ impl GitResolver {
     pub fn ensure_checkout_resource(
         &self,
         _description: &GitDescription,
+    ) -> Result<GitResource, GitResolutionError> {
+        Err(GitResolutionError::UnsupportedTarget)
+    }
+
+    pub fn ensure_sparse_checkout(
+        &self,
+        _description: &GitDescription,
+        _patterns: &[String],
+        _mode: SparseCheckoutMode,
     ) -> Result<GitResource, GitResolutionError> {
         Err(GitResolutionError::UnsupportedTarget)
     }

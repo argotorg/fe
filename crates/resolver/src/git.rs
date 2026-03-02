@@ -1,4 +1,7 @@
-use std::{fmt, fs, io};
+use std::{
+    fmt, fs, io,
+    process::{Command, ExitStatus},
+};
 
 use camino::{Utf8Path, Utf8PathBuf};
 use git2::{Repository, build::CheckoutBuilder};
@@ -49,6 +52,12 @@ pub struct GitResolver {
     pub checkout_root: Utf8PathBuf,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum SparseCheckoutMode {
+    Cone,
+    NoCone,
+}
+
 impl GitResolver {
     pub fn new(checkout_root: impl Into<Utf8PathBuf>) -> Self {
         Self {
@@ -59,6 +68,11 @@ impl GitResolver {
     pub fn has_valid_cached_checkout(&self, description: &GitDescription) -> bool {
         let checkout_path = self.checkout_path(description);
         if !checkout_path.exists() {
+            return false;
+        }
+        if let Some(path) = &description.path
+            && !checkout_path.join(path).exists()
+        {
             return false;
         }
         let repo = match Repository::open(checkout_path.as_std_path()) {
@@ -89,6 +103,13 @@ impl GitResolver {
         &self,
         description: &GitDescription,
     ) -> Result<GitResource, GitResolutionError> {
+        if let Some(path) = &description.path {
+            return self.ensure_sparse_checkout(
+                description,
+                &[path.as_str().to_string()],
+                SparseCheckoutMode::Cone,
+            );
+        }
         self.ensure_checkout_root()?;
         let checkout_path = self.checkout_path(description);
         let status = self.ensure_checkout(description, &checkout_path)?;
@@ -221,6 +242,201 @@ impl GitResolver {
             Ok(description.source.as_str().to_owned())
         }
     }
+
+    pub fn ensure_sparse_checkout(
+        &self,
+        description: &GitDescription,
+        patterns: &[String],
+        mode: SparseCheckoutMode,
+    ) -> Result<GitResource, GitResolutionError> {
+        self.ensure_checkout_root()?;
+        let checkout_path = self.checkout_path(description);
+        let existed = checkout_path.exists();
+
+        if !checkout_path.exists() {
+            if let Some(parent) = checkout_path.parent() {
+                fs::create_dir_all(parent.as_std_path()).map_err(|source| {
+                    GitResolutionError::PrepareCheckoutDirectory {
+                        path: parent.to_owned(),
+                        source,
+                    }
+                })?;
+            }
+            let source = Self::source_for_clone(description)?;
+            let output = Command::new("git")
+                .arg("clone")
+                .arg("--filter=blob:none")
+                .arg("--no-checkout")
+                .arg(source)
+                .arg(checkout_path.as_std_path())
+                .output()
+                .map_err(|error| GitResolutionError::GitCommand {
+                    command: "git clone".to_string(),
+                    error,
+                })?;
+            if !output.status.success() {
+                return Err(GitResolutionError::GitCommandFailure {
+                    command: "git clone".to_string(),
+                    status: output.status,
+                    stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+                });
+            }
+        }
+
+        let mut combined_patterns = self.list_sparse_patterns(&checkout_path)?;
+        combined_patterns.extend(patterns.iter().cloned());
+        combined_patterns = normalize_sparse_patterns(combined_patterns);
+
+        let mode_arg = match mode {
+            SparseCheckoutMode::Cone => "--cone",
+            SparseCheckoutMode::NoCone => "--no-cone",
+        };
+        self.run_git(
+            &checkout_path,
+            &["config", "core.sparseCheckout", "true"],
+            &[],
+        )?;
+        let cone_value = match mode {
+            SparseCheckoutMode::Cone => "true",
+            SparseCheckoutMode::NoCone => "false",
+        };
+        self.run_git(
+            &checkout_path,
+            &["config", "core.sparseCheckoutCone", cone_value],
+            &[],
+        )?;
+        self.run_git_allow_failure(
+            &checkout_path,
+            &["sparse-checkout", "init", mode_arg],
+            &[],
+            &["already initialized", "already enabled", "already exists"],
+        )?;
+        let combined_pattern_args: Vec<&str> = combined_patterns
+            .iter()
+            .map(|pattern| pattern.as_str())
+            .collect();
+        self.run_git(
+            &checkout_path,
+            &["sparse-checkout", "set", mode_arg],
+            &combined_pattern_args,
+        )?;
+
+        self.ensure_revision_present_sparse(&checkout_path, description)?;
+        self.run_git(
+            &checkout_path,
+            &["checkout", "--detach", &description.rev],
+            &[],
+        )?;
+
+        Ok(GitResource {
+            reused_checkout: existed,
+            checkout_path,
+        })
+    }
+
+    fn run_git(
+        &self,
+        checkout_path: &Utf8Path,
+        args: &[&str],
+        extra_args: &[&str],
+    ) -> Result<(), GitResolutionError> {
+        let output = self.run_git_command(checkout_path, args, extra_args)?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(GitResolutionError::GitCommandFailure {
+                command: format!("git {}", args.join(" ")),
+                status: output.status,
+                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            })
+        }
+    }
+
+    fn run_git_allow_failure(
+        &self,
+        checkout_path: &Utf8Path,
+        args: &[&str],
+        extra_args: &[&str],
+        allowed_errors: &[&str],
+    ) -> Result<(), GitResolutionError> {
+        let output = self.run_git_command(checkout_path, args, extra_args)?;
+        if output.status.success() {
+            return Ok(());
+        }
+
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        if allowed_errors
+            .iter()
+            .any(|allowed| stderr.contains(allowed))
+        {
+            return Ok(());
+        }
+        Err(GitResolutionError::GitCommandFailure {
+            command: format!("git {}", args.join(" ")),
+            status: output.status,
+            stderr,
+        })
+    }
+
+    fn run_git_command(
+        &self,
+        checkout_path: &Utf8Path,
+        args: &[&str],
+        extra_args: &[&str],
+    ) -> Result<std::process::Output, GitResolutionError> {
+        let mut command = Command::new("git");
+        command.arg("-C").arg(checkout_path.as_std_path());
+        command.args(args);
+        command.args(extra_args);
+        command
+            .output()
+            .map_err(|error| GitResolutionError::GitCommand {
+                command: format!("git {}", args.join(" ")),
+                error,
+            })
+    }
+
+    fn list_sparse_patterns(
+        &self,
+        checkout_path: &Utf8Path,
+    ) -> Result<Vec<String>, GitResolutionError> {
+        let output = self.run_git_command(checkout_path, &["sparse-checkout", "list"], &[])?;
+        if !output.status.success() {
+            return Ok(Vec::new());
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        Ok(stdout
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(ToOwned::to_owned)
+            .collect())
+    }
+
+    fn ensure_revision_present_sparse(
+        &self,
+        checkout_path: &Utf8Path,
+        description: &GitDescription,
+    ) -> Result<(), GitResolutionError> {
+        if self
+            .run_git_command(checkout_path, &["cat-file", "-e", &description.rev], &[])
+            .is_ok_and(|output| output.status.success())
+        {
+            return Ok(());
+        }
+
+        if self
+            .run_git(
+                checkout_path,
+                &["fetch", "--depth=1", "origin", &description.rev],
+                &[],
+            )
+            .is_ok()
+        {
+            return Ok(());
+        }
+        self.run_git(checkout_path, &["fetch", "origin", &description.rev], &[])
+    }
 }
 
 enum CheckoutStatus {
@@ -294,6 +510,15 @@ pub enum GitResolutionError {
         rev: String,
         error: git2::Error,
     },
+    GitCommand {
+        command: String,
+        error: io::Error,
+    },
+    GitCommandFailure {
+        command: String,
+        status: ExitStatus,
+        stderr: String,
+    },
     FetchRepository {
         source: Url,
         error: git2::Error,
@@ -332,6 +557,16 @@ impl fmt::Display for GitResolutionError {
             GitResolutionError::Checkout { rev, error } => {
                 write!(f, "Failed to checkout revision '{rev}': {error}")
             }
+            GitResolutionError::GitCommand { command, error } => {
+                write!(f, "Failed to run {command}: {error}")
+            }
+            GitResolutionError::GitCommandFailure {
+                command,
+                status,
+                stderr,
+            } => {
+                write!(f, "Command {command} failed ({status}): {stderr}")
+            }
             GitResolutionError::FetchRepository { source, error } => {
                 write!(
                     f,
@@ -364,9 +599,11 @@ impl std::error::Error for GitResolutionError {
             GitResolutionError::InvalidRevision { error, .. } => Some(error),
             GitResolutionError::RevisionLookup { error, .. } => Some(error),
             GitResolutionError::Checkout { error, .. } => Some(error),
+            GitResolutionError::GitCommand { error, .. } => Some(error),
             GitResolutionError::FetchRepository { error, .. } => Some(error),
             GitResolutionError::MissingSubdirectory { .. } => None,
             GitResolutionError::SourcePathConversion { .. } => None,
+            GitResolutionError::GitCommandFailure { .. } => None,
         }
     }
 }
@@ -379,4 +616,15 @@ impl fmt::Display for GitResolutionDiagnostic {
         let _ = f;
         unreachable!("GitResolutionDiagnostic has no variants")
     }
+}
+
+fn normalize_sparse_patterns(mut patterns: Vec<String>) -> Vec<String> {
+    patterns = patterns
+        .into_iter()
+        .map(|pattern| pattern.trim().to_owned())
+        .filter(|pattern| !pattern.is_empty())
+        .collect();
+    patterns.sort();
+    patterns.dedup();
+    patterns
 }
