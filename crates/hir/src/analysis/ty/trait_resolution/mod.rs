@@ -18,10 +18,17 @@ use crate::{
 };
 use common::indexmap::IndexSet;
 use constraint::collect_constraints;
+use rustc_hash::FxHashSet;
 use salsa::Update;
 
 pub(crate) mod constraint;
 mod proof_forest;
+
+/// Prevent runaway bound expansion for recursive associated-type constraints.
+///
+/// Example:
+/// `trait T { type A: T }` can otherwise generate `Self::A: T`, `Self::A::A: T`, ...
+const MAX_BOUND_PREDICATE_TY_DEPTH: usize = 8;
 
 #[derive(Debug, Clone)]
 pub(crate) enum Selection<T> {
@@ -312,11 +319,17 @@ impl<'db> PredicateListId<'db> {
             for super_trait in pred.def(db).super_traits(db) {
                 // Instantiate with current predicate's args
                 let inst = super_trait.instantiate(db, pred.args(db));
+                if !predicate_within_depth_limit(db, inst) {
+                    continue;
+                }
 
                 // Also substitute `Self` and associated types using current predicate's
                 // assoc-type bindings so derived bounds are as concrete as possible.
                 let mut subst = AssocTySubst::new(pred);
                 let inst = inst.fold_with(db, &mut subst);
+                if !predicate_within_depth_limit(db, inst) {
+                    continue;
+                }
 
                 if all_predicates.insert(inst) {
                     // New predicate added, add to worklist for further processing
@@ -342,6 +355,9 @@ impl<'db> PredicateListId<'db> {
                     // Substitute `Self` and associated types using the original predicate instance
                     let mut subst = AssocTySubst::new(pred);
                     trait_inst = trait_inst.fold_with(db, &mut subst);
+                    if !predicate_within_depth_limit(db, trait_inst) {
+                        continue;
+                    }
                     if all_predicates.insert(trait_inst) {
                         worklist.push(trait_inst);
                     }
@@ -351,4 +367,35 @@ impl<'db> PredicateListId<'db> {
 
         Self::new(db, all_predicates.into_iter().collect::<Vec<_>>())
     }
+}
+
+fn predicate_within_depth_limit<'db>(db: &'db dyn HirAnalysisDb, pred: TraitInstId<'db>) -> bool {
+    pred.args(db)
+        .iter()
+        .all(|&arg| projection_depth(db, arg) <= MAX_BOUND_PREDICATE_TY_DEPTH)
+}
+
+fn projection_depth<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> usize {
+    fn impl_<'db>(
+        db: &'db dyn HirAnalysisDb,
+        ty: TyId<'db>,
+        seen: &mut FxHashSet<TyId<'db>>,
+    ) -> usize {
+        if !seen.insert(ty) {
+            return 0;
+        }
+
+        let depth = match ty.data(db) {
+            TyData::ConstTy(const_ty) => impl_(db, const_ty.ty(db), seen),
+            TyData::AssocTy(assoc_ty) => 1 + impl_(db, assoc_ty.trait_.self_ty(db), seen),
+            TyData::QualifiedTy(trait_inst) => 1 + impl_(db, trait_inst.self_ty(db), seen),
+            TyData::TyApp(lhs, rhs) => std::cmp::max(impl_(db, *lhs, seen), impl_(db, *rhs, seen)),
+            _ => 0,
+        };
+
+        seen.remove(&ty);
+        depth
+    }
+
+    impl_(db, ty, &mut FxHashSet::default())
 }

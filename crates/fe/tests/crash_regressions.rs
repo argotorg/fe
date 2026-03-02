@@ -2,9 +2,19 @@ use std::{
     ffi::OsStr,
     fs,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
     sync::OnceLock,
+    thread::sleep,
+    time::{Duration, Instant},
 };
+
+const FE_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
+
+struct FeCheckRun {
+    code: i32,
+    combined: String,
+    timed_out: bool,
+}
 
 fn fe_binary() -> PathBuf {
     static BIN: OnceLock<PathBuf> = OnceLock::new();
@@ -57,14 +67,38 @@ fn is_fe_file(path: &Path) -> bool {
     path.extension().and_then(OsStr::to_str) == Some("fe")
 }
 
-fn run_fe_check(path: &Path) -> (i32, String) {
-    let output = Command::new(fe_binary())
+fn run_fe_check(path: &Path) -> FeCheckRun {
+    let mut child = Command::new(fe_binary())
         .args(["check", "--standalone", "--color", "never"])
         .arg(path)
         .env("NO_COLOR", "1")
         .env("RUST_BACKTRACE", "0")
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .unwrap_or_else(|err| panic!("failed to run `fe check` on {path:?}: {err}"));
+
+    let start = Instant::now();
+    let timed_out = loop {
+        if child
+            .try_wait()
+            .unwrap_or_else(|err| panic!("failed to poll `fe check` on {path:?}: {err}"))
+            .is_some()
+        {
+            break false;
+        }
+
+        if start.elapsed() >= FE_CHECK_TIMEOUT {
+            let _ = child.kill();
+            break true;
+        }
+
+        sleep(Duration::from_millis(10));
+    };
+
+    let output = child
+        .wait_with_output()
+        .unwrap_or_else(|err| panic!("failed to collect `fe check` output on {path:?}: {err}"));
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -74,7 +108,11 @@ fn run_fe_check(path: &Path) -> (i32, String) {
         .status
         .code()
         .unwrap_or_else(|| panic!("`fe check` terminated by signal for {path:?}\n{combined}"));
-    (code, combined)
+    FeCheckRun {
+        code,
+        combined,
+        timed_out,
+    }
 }
 
 #[test]
@@ -93,8 +131,15 @@ fn crash_regressions_do_not_panic() {
     );
 
     for fixture in fixtures {
-        let (code, combined) = run_fe_check(&fixture);
+        let run = run_fe_check(&fixture);
+        let code = run.code;
+        let combined = run.combined;
 
+        assert!(
+            !run.timed_out,
+            "`fe check` timed out after {:?} on {fixture:?}\n{combined}",
+            FE_CHECK_TIMEOUT
+        );
         assert_ne!(code, 101, "`fe check` panicked on {fixture:?}\n{combined}");
         assert!(
             !combined.contains("panicked at")
