@@ -353,7 +353,11 @@ impl<'db> FuncParam<'db> {
     /// Pretty-prints a function parameter.
     pub fn pretty_print(&self, db: &'db dyn HirDb) -> String {
         let mut result = String::new();
-        let name = unwrap_partial(self.name, "FuncParam::name");
+        let name = self
+            .name
+            .to_opt()
+            .map(|name| name.pretty_print(db))
+            .unwrap_or_else(|| "_".to_string());
         let mode_prefix = match self.mode {
             FuncParamMode::View => "",
             FuncParamMode::Own => "own ",
@@ -373,14 +377,15 @@ impl<'db> FuncParam<'db> {
         }
 
         // Name
-        let name = name.pretty_print(db);
         result.push_str(&name);
 
         // Type (if not a self param with fallback)
         if !self.self_ty_fallback {
-            let ty = unwrap_partial(self.ty, "FuncParam::ty").pretty_print(db);
-            result.push_str(": ");
-            result.push_str(&ty);
+            if let Some(ty) = self.ty.to_opt() {
+                let ty = ty.pretty_print(db);
+                result.push_str(": ");
+                result.push_str(&ty);
+            }
         }
 
         result
