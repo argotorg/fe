@@ -67,7 +67,8 @@ impl<'db> SimplifiedPattern<'db> {
     ) -> Self {
         match pat {
             HirPat::Rest => {
-                unreachable!("Rest pattern is only allowed within tuple and record patterns")
+                // Keep pattern analysis resilient to malformed HIR recovered from parse errors.
+                SimplifiedPattern::error(expected_ty)
             }
             HirPat::WildCard => SimplifiedPattern::wildcard(None, expected_ty),
 
@@ -159,12 +160,10 @@ impl<'db> SimplifiedPattern<'db> {
                         .collect();
 
                     let mut canonicalized_fields = vec![];
-                    for (name, field_ty) in ctor
-                        .field_names(db)
-                        .expect("Pat::Record constructor must have field names")
-                        .iter()
-                        .zip(ctor.field_types(db))
-                    {
+                    let Some(field_names) = ctor.field_names(db) else {
+                        return SimplifiedPattern::error(expected_ty);
+                    };
+                    for (name, field_ty) in field_names.iter().zip(ctor.field_types(db)) {
                         let p = match named.get(name) {
                             Some(Partial::Present(fp)) => {
                                 Self::from_hir_pat(db, fp, body, scope, arm_idx, field_ty)
