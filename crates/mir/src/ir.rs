@@ -206,11 +206,8 @@ impl<'db> MirBody<'db> {
             return space;
         }
 
-        let value_data = self.value(value);
-        panic!(
-            "requested address space for MIR value without one: {value:?} (repr={:?}, origin={:?})",
-            value_data.repr, value_data.origin
-        );
+        let _ = self.value(value);
+        AddressSpaceKind::Memory
     }
 
     /// Determines the address space associated with a place.
