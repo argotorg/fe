@@ -2,7 +2,12 @@ struct Foo {}
 
 fn foo() {
     let f = Foo {}
-    +f
-    -f
-    !f
+    let _x = +f
+    let _y = -f
+    let _z = !f
+
+    let a: usize = 1
+    +2
+    -3
+    *4
 }

@@ -1,0 +1,17 @@
+---
+source: crates/uitest/tests/parser.rs
+assertion_line: 26
+expression: diags
+input_file: fixtures/parser/newline_ambiguous_minus.fe
+---
+error[1-0001]: line-start `-` after an expression is ambiguous; move `-` to the previous line for subtraction or parenthesize explicitly
+  ┌─ newline_ambiguous_minus.fe:3:9
+  │
+3 │         - y
+  │         ^ line-start `-` after an expression is ambiguous; move `-` to the previous line for subtraction or parenthesize explicitly
+
+error[1-0001]: line-start `-` after an expression is ambiguous; move `-` to the previous line for subtraction or parenthesize explicitly
+  ┌─ newline_ambiguous_minus.fe:7:9
+  │
+7 │         - z
+  │         ^ line-start `-` after an expression is ambiguous; move `-` to the previous line for subtraction or parenthesize explicitly

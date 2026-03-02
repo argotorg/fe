@@ -91,10 +91,12 @@ impl super::Parse for QualifiedTypeScope {
     }
 }
 
-fn is_qualified_type<S: TokenStream>(parser: &mut Parser<S>) -> bool {
+pub(super) fn is_qualified_type<S: TokenStream>(parser: &mut Parser<S>) -> bool {
     parser
         .dry_run(|parser| {
-            parser.bump_expected(SyntaxKind::Lt);
+            if !parser.bump_if(SyntaxKind::Lt) {
+                return None;
+            }
             parse_type(parser, None).ok()?;
             (parser.current_kind() == Some(SyntaxKind::AsKw)).then_some(())
         })

@@ -126,6 +126,12 @@ impl<S: TokenStream> Parser<S> {
         &mut self.parents.last_mut().unwrap().aux_recovery_tokens
     }
 
+    pub(super) fn in_scope_set(&self, scopes: &[SyntaxKind]) -> bool {
+        self.parents
+            .iter()
+            .any(|scope| scopes.contains(&scope.scope.syntax_kind()))
+    }
+
     pub fn expect_and_pop_recovery_stack(&mut self) -> Result<(), Recovery<ErrProof>> {
         let current = self.current_kind();
         let r = if current.is_some() && self.scope_aux_recovery().contains(&current.unwrap()) {

@@ -18,6 +18,24 @@ void tree_sitter_fe_external_scanner_deserialize(void *payload, const char *buff
 static void advance(TSLexer *lexer) { lexer->advance(lexer, false); }
 static void skip(TSLexer *lexer) { lexer->advance(lexer, true); }
 
+static bool is_continuation_after_newline(int32_t c) {
+  switch (c) {
+    case '.':
+    case '+':
+    case '*':
+    case '/':
+    case '%':
+    case '|':
+    case '&':
+    case '^':
+    case '>':
+    case '=':
+      return true;
+    default:
+      return false;
+  }
+}
+
 // Skip a block comment (after consuming /*). Returns true if successfully skipped.
 static bool skip_block_comment(TSLexer *lexer) {
   int depth = 1;
@@ -48,11 +66,13 @@ static bool skip_block_comment(TSLexer *lexer) {
 // continue without one.
 //
 // After finding a newline (or EOF/closing-brace), we peek at the first
-// non-whitespace token on the *next* line. If it is a continuation token
-// (currently just `.` for method chaining), we suppress the semicolon so
+// non-whitespace token on the *next* line. If it is a continuation token,
+// we suppress the semicolon so
 // that multi-line expressions work correctly:
 //
 //   x
+//   + y      <- no semicolon after x
+//   || z     <- no semicolon after + y
 //   .y()     <- no semicolon after x
 //   .z()     <- no semicolon after .y()
 //
@@ -98,9 +118,7 @@ static bool scan_automatic_semicolon(TSLexer *lexer) {
         skip_block_comment(lexer);
         continue;
       }
-      // Just `/` -- division operator on the same line (no newline yet)
-      // or continuation after newline
-      if (saw_newline) return false; // `/` is not a continuation token
+      // Just `/` -- division operator continuation
       return false;
     }
 
@@ -111,8 +129,39 @@ static bool scan_automatic_semicolon(TSLexer *lexer) {
     }
 
     // We're past a newline. Check for continuation tokens.
-    // `.` means method chaining -- don't insert semicolon
-    if (c == '.') return false;
+    if (is_continuation_after_newline(c)) return false;
+
+    if (c == '!') {
+      // `!=` is a continuation; unary `!` starts a new expression.
+      advance(lexer);
+      return lexer->lookahead != '=';
+    }
+
+    if (c == '-') {
+      // `-=` is a continuation; unary/binary `-` starts a new expression.
+      advance(lexer);
+      return lexer->lookahead != '=';
+    }
+
+    if (c == '<') {
+      // `<=`, `<<`, and `<<=` are continuations.
+      // Bare `<` starts a new expression boundary.
+      advance(lexer);
+      if (lexer->lookahead == '=') return false;
+
+      if (lexer->lookahead == '<') {
+        advance(lexer);
+        int32_t after_shift = lexer->lookahead;
+        if (after_shift == '=' ||
+            after_shift == ' ' || after_shift == '\t' ||
+            after_shift == '\r' || after_shift == '\n' ||
+            after_shift == '/') {
+          return false;
+        }
+      }
+
+      return true;
+    }
 
     // Any other token after a newline -- insert semicolon
     return true;

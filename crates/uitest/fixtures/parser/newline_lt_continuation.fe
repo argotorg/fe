@@ -1,0 +1,22 @@
+fn f(x: i32, y: i32) {
+    let a = x
+        < y
+
+    let b = x
+        <= y
+
+    let c = x
+        << y
+
+    let mut d = x
+    d
+        <<= y
+
+    let e = x
+    < Foo as Bar >::baz()
+}
+
+struct Foo{}
+trait Bar {
+    fn baz() {}
+}

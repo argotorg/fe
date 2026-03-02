@@ -1,0 +1,17 @@
+---
+source: crates/uitest/tests/parser.rs
+assertion_line: 26
+expression: diags
+input_file: fixtures/parser/newline_lt_continuation.fe
+---
+error[1-0001]: line-start `<` is ambiguous; use parentheses to disambiguate
+  ┌─ newline_lt_continuation.fe:3:9
+  │
+3 │         < y
+  │         ^ line-start `<` is ambiguous; use parentheses to disambiguate
+
+error[1-0001]: unexpected syntax while parsing block
+  ┌─ newline_lt_continuation.fe:3:11
+  │
+3 │         < y
+  │           ^ unexpected
