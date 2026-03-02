@@ -373,10 +373,12 @@ fn check_ingot_and_dependencies(
         has_errors = true;
     }
 
-    let mir_diags = db.mir_diagnostics_for_ingot(ingot, MirDiagnosticsMode::CompilerParity);
-    if !mir_diags.is_empty() {
-        db.emit_complete_diagnostics(&mir_diags);
-        has_errors = true;
+    if hir_diags.is_empty() {
+        let mir_diags = db.mir_diagnostics_for_ingot(ingot, MirDiagnosticsMode::CompilerParity);
+        if !mir_diags.is_empty() {
+            db.emit_complete_diagnostics(&mir_diags);
+            has_errors = true;
+        }
     }
 
     if !has_errors {
@@ -403,7 +405,11 @@ fn check_ingot_and_dependencies(
             continue;
         }
         let hir_diags = db.run_on_ingot(ingot);
-        let mir_diags = db.mir_diagnostics_for_ingot(ingot, MirDiagnosticsMode::CompilerParity);
+        let mir_diags = if hir_diags.is_empty() {
+            db.mir_diagnostics_for_ingot(ingot, MirDiagnosticsMode::CompilerParity)
+        } else {
+            Vec::new()
+        };
         if !hir_diags.is_empty() || !mir_diags.is_empty() {
             dependency_errors.push((dependency_url, hir_diags, mir_diags));
         }
@@ -506,6 +512,10 @@ fn check_single_file(
                 write_report_file(report, "errors/diagnostics.txt", &formatted);
             }
             has_errors = true;
+        }
+
+        if has_errors {
+            return true;
         }
 
         let mir_output = collect_mir_diagnostics(db, top_mod, MirDiagnosticsMode::CompilerParity);
