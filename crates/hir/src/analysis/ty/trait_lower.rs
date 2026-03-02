@@ -306,7 +306,9 @@ pub(crate) fn collect_implementor_methods<'db>(
         ItemKind::Func(func) => Some(func),
         _ => None,
     }) {
-        let name = method.name(db).to_opt().expect("impl methods have names");
+        let Some(name) = method.name(db).to_opt() else {
+            continue;
+        };
         methods.insert(name, method);
     }
 
