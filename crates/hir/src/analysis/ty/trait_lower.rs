@@ -87,7 +87,10 @@ pub(crate) fn lower_impl_trait<'db>(
 /// arguments and associated type bindings, while `self_ty` is used as the implementor (args[0]).
 /// This is needed for associated type bounds like `type Assoc: Encode<Self>` where `Self`
 /// refers to the owner trait's Self, not the associated type.
-#[salsa::tracked]
+#[salsa::tracked(
+    cycle_fn=lower_trait_ref_cycle_recover,
+    cycle_initial=lower_trait_ref_cycle_initial
+)]
 pub(crate) fn lower_trait_ref<'db>(
     db: &'db dyn HirAnalysisDb,
     self_ty: TyId<'db>,
@@ -138,6 +141,31 @@ pub(crate) fn lower_trait_ref<'db>(
         Ok(res) => Err(TraitRefLowerError::InvalidDomain(res)),
         Err(e) => Err(TraitRefLowerError::PathResError(e)),
     }
+}
+
+fn lower_trait_ref_cycle_initial<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _self_ty: TyId<'db>,
+    _trait_ref: TraitRefId<'db>,
+    _scope: ScopeId<'db>,
+    _assumptions: PredicateListId<'db>,
+    _owner_self: Option<TyId<'db>>,
+) -> Result<TraitInstId<'db>, TraitRefLowerError<'db>> {
+    // Break dependency cycles in trait-ref lowering instead of panicking in salsa.
+    Err(TraitRefLowerError::Ignored)
+}
+
+fn lower_trait_ref_cycle_recover<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _value: &Result<TraitInstId<'db>, TraitRefLowerError<'db>>,
+    _count: u32,
+    _self_ty: TyId<'db>,
+    _trait_ref: TraitRefId<'db>,
+    _scope: ScopeId<'db>,
+    _assumptions: PredicateListId<'db>,
+    _owner_self: Option<TyId<'db>>,
+) -> salsa::CycleRecoveryAction<Result<TraitInstId<'db>, TraitRefLowerError<'db>>> {
+    salsa::CycleRecoveryAction::Iterate
 }
 
 pub(crate) enum TraitArgError<'db> {
