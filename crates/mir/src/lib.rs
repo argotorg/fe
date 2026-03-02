@@ -13,9 +13,10 @@ mod transform;
 mod ty;
 
 pub use ir::{
-    BasicBlockId, CallOrigin, LocalData, LocalId, LoopInfo, MirBackend, MirBody, MirFunction,
-    MirInst, MirModule, MirProjection, MirProjectionPath, MirStage, Rvalue, SwitchTarget,
-    SwitchValue, TerminatingCall, Terminator, ValueData, ValueId, ValueOrigin, ValueRepr,
+    BasicBlockId, CallOrigin, ConstRegion, ConstRegionId, LocalData, LocalId, LoopInfo, MirBackend,
+    MirBody, MirFunction, MirInst, MirModule, MirProjection, MirProjectionPath, MirStage, Rvalue,
+    SwitchTarget, SwitchValue, TerminatingCall, Terminator, ValueData, ValueId, ValueOrigin,
+    ValueRepr,
 };
 pub use lower::{
     MirDiagnosticsMode, MirDiagnosticsOutput, MirLowerError, MirLowerResult,

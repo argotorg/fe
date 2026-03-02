@@ -11,10 +11,11 @@
 //! - Structs/tuples pack fields contiguously
 //! - Preserved for future packed storage and ABI-level size decisions
 //!
-//! **Word-padded memory layout** (`ty_memory_size_in`, `field_offset_memory_in`):
-//! - Each primitive occupies at least one word (32 bytes on EVM)
-//! - Required because EVM `mload`/`mstore` always read/write 32 bytes
-//! - Without padding, adjacent sub-word fields corrupt each other in memory
+//! **Hybrid memory layout** (`ty_memory_size_in`, `field_offset_memory_in`):
+//! - Struct/tuple/enum fields stay word-padded for safe word loads/stores
+//! - Fixed arrays of packed element types (`u8`, `bool`) use byte stride
+//! - Required because EVM `mload`/`mstore` are word-oriented, while packed arrays
+//!   rely on byte-oriented lowering (`mstore8` and byte extraction)
 //!
 //! **Storage slot layout** (`ty_size_slots`, `field_offset_slots`):
 //! - Each primitive occupies one 256-bit slot regardless of byte size
@@ -600,14 +601,9 @@ pub fn variant_payload_size_bytes_in(
 // Word-Padded Memory Layout
 // ============================================================================
 //
-// EVM `mload`/`mstore` always operate on 32-byte words. When a struct field is
-// smaller than a word (e.g. bool = 1 byte), a packed byte layout causes adjacent
-// memory allocations to corrupt each other: `mstore(offset, val)` writes 32 bytes
-// starting at `offset`, overwriting data beyond the field's logical size.
-//
-// These functions compute word-padded sizes and offsets where each field occupies
-// at least one full word. The raw `ty_size_bytes_in` functions are preserved for
-// contexts that need packed sizes (e.g. future packed storage, ABI decisions).
+// EVM `mload`/`mstore` operate on 32-byte words. To avoid overlap bugs, struct-like
+// field layout remains word-padded. Fixed arrays can still opt into packed element
+// stride when lowering uses byte-oriented operations (`mstore8` + byte extraction).
 
 /// Rounds `size` up to the nearest multiple of `word_size`. Returns 0 for zero-sized types.
 fn round_up_to_word(size: usize, word_size: usize) -> usize {
@@ -617,10 +613,10 @@ fn round_up_to_word(size: usize, word_size: usize) -> usize {
     size.div_ceil(word_size) * word_size
 }
 
-/// Computes the word-padded allocation size for a type in memory.
+/// Computes the allocation size for a type in memory.
 ///
-/// Each primitive field occupies at least one full word. Struct sizes are the
-/// sum of word-padded field sizes. This prevents `mload`/`mstore` overlap.
+/// Struct-like fields are word-padded. Packed arrays use byte stride for elements,
+/// then round up the whole array allocation to a word for stable aggregate offsets.
 pub fn ty_memory_size(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> Option<usize> {
     ty_memory_size_in(db, &EVM_LAYOUT, ty)
 }
@@ -670,11 +666,11 @@ pub fn ty_memory_size_in(
         }
     }
 
-    // Arrays: element stride is word-padded.
+    // Arrays: total size is word-padded.
     if ty.is_array(db) {
         let len = array_len(db, ty)?;
         let stride = array_elem_stride_memory_in(db, layout, ty)?;
-        return Some(len * stride);
+        return Some(round_up_to_word(len * stride, layout.word_size_bytes));
     }
 
     // Structs: sum of word-padded field sizes.
@@ -782,7 +778,9 @@ pub fn variant_field_offset_memory_in(
     offset
 }
 
-/// Returns the word-padded stride for an array element in memory.
+/// Returns the memory stride for an array element.
+///
+/// Byte-sized logical elements (`u8`, `bool`) use packed stride (`1`).
 pub fn array_elem_stride_memory(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> Option<usize> {
     array_elem_stride_memory_in(db, &EVM_LAYOUT, ty)
 }
@@ -793,7 +791,20 @@ pub fn array_elem_stride_memory_in(
     ty: TyId<'_>,
 ) -> Option<usize> {
     let elem_ty = array_elem_ty(db, ty)?;
+    if is_packed_memory_array_elem_ty(db, elem_ty) {
+        return Some(1);
+    }
     Some(ty_memory_size_in(db, layout, elem_ty).unwrap_or(layout.word_size_bytes))
+}
+
+/// Returns `true` if array elements of `elem_ty` should use packed byte stride in memory.
+///
+/// EVM currently packs only byte-sized logical elements in arrays.
+pub fn is_packed_memory_array_elem_ty(db: &dyn HirAnalysisDb, elem_ty: TyId<'_>) -> bool {
+    matches!(
+        elem_ty.base_ty(db).data(db),
+        TyData::TyBase(TyBase::Prim(PrimTy::U8 | PrimTy::Bool))
+    )
 }
 
 // ============================================================================

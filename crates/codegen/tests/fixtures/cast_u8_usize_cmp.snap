@@ -1,10 +1,11 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 33
 expression: output
 input_file: tests/fixtures/cast_u8_usize_cmp.fe
 ---
 function $cast_u8_usize_cmp($indices, $i, $j) -> ret {
-  let v0 := and(mload(add($indices, mul($i, 32))), 0xff)
+  let v0 := and(byte(0, mload(add($indices, $i))), 0xff)
   let v1 := lt($j, v0)
   if v1 {
     ret := 1

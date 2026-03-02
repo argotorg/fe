@@ -9,34 +9,24 @@ global private const [i8; 96] $__fe_const_data_0 = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 
 func private %sum_two(v0.i256, v1.i256) -> i256 {
     block0:
-        v4.*i8 = evm_malloc 96.i256;
-        v5.i256 = ptr_to_int v4 i256;
-        v6.i256 = sym_addr $__fe_const_data_0;
-        v7.i256 = sym_size $__fe_const_data_0;
-        evm_code_copy v5 v6 v7;
-        v8.*[i256; 3] = bitcast v4 *[i256; 3];
-        v9.*i256 = gep v8 0.i256 v0;
+        v3.i256 = sym_addr $__fe_const_data_0;
+        v4.*[i256; 3] = int_to_ptr v3 *[i256; 3];
+        v5.*i256 = gep v4 0.i256 v0;
+        v6.i256 = ptr_to_int v5 i256;
+        v8.*i8 = evm_malloc 32.i256;
+        v9.i256 = ptr_to_int v8 i256;
+        evm_code_copy v9 v6 32.i256;
         v10.i256 = mload v9 i256;
-        v11.*i8 = evm_malloc 96.i256;
-        v12.i256 = ptr_to_int v11 i256;
-        v13.i256 = sym_addr $__fe_const_data_0;
-        v14.i256 = sym_size $__fe_const_data_0;
-        evm_code_copy v12 v13 v14;
-        v15.*[i256; 3] = bitcast v11 *[i256; 3];
-        v16.*i256 = gep v15 0.i256 v1;
+        v11.i256 = sym_addr $__fe_const_data_0;
+        v12.*[i256; 3] = int_to_ptr v11 *[i256; 3];
+        v13.*i256 = gep v12 0.i256 v1;
+        v14.i256 = ptr_to_int v13 i256;
+        v15.*i8 = evm_malloc 32.i256;
+        v16.i256 = ptr_to_int v15 i256;
+        evm_code_copy v16 v14 32.i256;
         v17.i256 = mload v16 i256;
-        v18.*i8 = evm_malloc 96.i256;
-        v19.i256 = ptr_to_int v18 i256;
-        v20.i256 = sym_addr $__fe_const_data_0;
-        v21.i256 = sym_size $__fe_const_data_0;
-        evm_code_copy v19 v20 v21;
-        v22.*i8 = evm_malloc 96.i256;
-        v23.i256 = ptr_to_int v22 i256;
-        v24.i256 = sym_addr $__fe_const_data_0;
-        v25.i256 = sym_size $__fe_const_data_0;
-        evm_code_copy v23 v24 v25;
-        v26.i256 = add v10 v17;
-        return v26;
+        v18.i256 = add v10 v17;
+        return v18;
 }
 
 func private %__fe_sonatina_entry() {

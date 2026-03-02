@@ -10,30 +10,31 @@ func private %cast_u8_usize_cmp(v0.i256, v1.i256, v2.i256) -> i256 {
         v4.*[i256; 8] = int_to_ptr v0 *[i256; 8];
         v5.*i256 = gep v4 0.i256 v1;
         v6.i256 = mload v5 i256;
-        v7.i8 = trunc v6 i8;
-        v8.i256 = zext v7 i256;
-        v9.i1 = lt v2 v8;
+        v8.i256 = shr 248.i256 v6;
+        v9.i8 = trunc v8 i8;
         v10.i256 = zext v9 i256;
-        v11.i1 = ne v10 0.i256;
-        br v11 block1 block2;
+        v11.i1 = lt v2 v10;
+        v12.i256 = zext v11 i256;
+        v13.i1 = ne v12 0.i256;
+        br v13 block1 block2;
 
     block1:
         return 1.i256;
 
     block2:
-        v15.i1 = eq v2 v8;
-        v16.i256 = zext v15 i256;
-        v17.i1 = ne v16 0.i256;
-        br v17 block3 block4;
+        v17.i1 = eq v2 v10;
+        v18.i256 = zext v17 i256;
+        v19.i1 = ne v18 0.i256;
+        br v19 block3 block4;
 
     block3:
         return 2.i256;
 
     block4:
-        v21.i1 = gt v2 v8;
-        v22.i256 = zext v21 i256;
-        v23.i1 = ne v22 0.i256;
-        br v23 block5 block6;
+        v23.i1 = gt v2 v10;
+        v24.i256 = zext v23 i256;
+        v25.i1 = ne v24 0.i256;
+        br v25 block5 block6;
 
     block5:
         return 3.i256;
