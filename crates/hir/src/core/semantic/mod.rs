@@ -1326,8 +1326,10 @@ impl<'db> Contract<'db> {
         let scope = self.top_mod(db).scope();
         let assumptions = PredicateListId::empty_list(db);
 
-        let effect_handle = resolve_core_trait(db, scope, &["effect_ref", "EffectHandle"])
-            .expect("missing required core trait `core::effect_ref::EffectHandle`");
+        let Some(effect_handle) = resolve_core_trait(db, scope, &["effect_ref", "EffectHandle"])
+        else {
+            return IndexMap::new();
+        };
         let address_space_ident = IdentId::new(db, "AddressSpace".to_string());
         let target_ident = IdentId::new(db, "Target".to_string());
         let default_storage_address_space =
