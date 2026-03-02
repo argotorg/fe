@@ -8,7 +8,7 @@ use common::diagnostics::Span;
 use hir::analysis::ty::trait_def::TraitInstId;
 use hir::analysis::ty::ty_def::TyId;
 use hir::hir_def::{CallableDef, Contract, EnumVariant, ExprId, Func, PatId, TopLevelMod};
-use hir::projection::{Projection, ProjectionPath};
+use hir::projection::{IndexSource, Projection, ProjectionPath};
 use num_bigint::BigUint;
 use rustc_hash::FxHashMap;
 
@@ -483,6 +483,19 @@ pub enum Rvalue<'db> {
         data: Vec<u8>,
         /// The aggregate type being initialized.
         ty: TyId<'db>,
+    },
+    /// Backend-neutral indexed load from constant array data in bytecode.
+    ///
+    /// This avoids materializing an entire constant array in memory when only one
+    /// element is needed at runtime (e.g. `C[i]` in tight loops). Backends load
+    /// a single element from code/data into scratch memory and read one word.
+    ConstArrayElemLoad {
+        /// Raw constant bytes in big-endian EVM word format.
+        data: Vec<u8>,
+        /// Runtime or compile-time element index.
+        index: IndexSource<ValueId>,
+        /// Serialized byte stride per element.
+        elem_size: usize,
     },
 }
 

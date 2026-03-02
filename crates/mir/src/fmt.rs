@@ -196,6 +196,23 @@ fn format_rvalue(body: &MirBody<'_>, rvalue: &Rvalue<'_>) -> String {
         Rvalue::ConstAggregate { data, .. } => {
             format!("const_aggregate ({} bytes)", data.len())
         }
+        Rvalue::ConstArrayElemLoad {
+            data,
+            index,
+            elem_size,
+        } => match index {
+            hir::projection::IndexSource::Constant(idx) => format!(
+                "const_array_elem_load ({} bytes, elem_size={}, idx={idx})",
+                data.len(),
+                elem_size
+            ),
+            hir::projection::IndexSource::Dynamic(value) => format!(
+                "const_array_elem_load ({} bytes, elem_size={}, idx={})",
+                data.len(),
+                elem_size,
+                format_value(body, *value)
+            ),
+        },
     }
 }
 

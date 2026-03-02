@@ -43,6 +43,14 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         self.ensure_expr_values(
             |expr| matches!(expr, Expr::Path(..)),
             |this, expr_id| {
+                let expr_ty = this.typed_body.expr_ty(this.db, expr_id);
+                let expr_ty = expr_ty
+                    .as_capability(this.db)
+                    .map(|(_, inner)| inner)
+                    .unwrap_or(expr_ty);
+                if expr_ty.is_array(this.db) {
+                    return;
+                }
                 if let Some(value_id) = this.try_const_expr(expr_id) {
                     if let Some(&existing) = this.builder.body.expr_values.get(&expr_id) {
                         if matches!(
@@ -177,11 +185,17 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             Partial::Present(Expr::Cast(inner, _)) => ValueOrigin::TransparentCast {
                 value: self.ensure_value(*inner),
             },
-            Partial::Present(Expr::Bin(lhs, rhs, op)) => ValueOrigin::Binary {
-                op: *op,
-                lhs: self.ensure_value(*lhs),
-                rhs: self.ensure_value(*rhs),
-            },
+            Partial::Present(Expr::Bin(lhs, rhs, op)) => {
+                if matches!(op, hir::hir_def::expr::BinOp::Index) {
+                    ValueOrigin::Expr(expr)
+                } else {
+                    ValueOrigin::Binary {
+                        op: *op,
+                        lhs: self.ensure_value(*lhs),
+                        rhs: self.ensure_value(*rhs),
+                    }
+                }
+            }
             Partial::Present(Expr::If(..) | Expr::Match(..)) => {
                 ValueOrigin::ControlFlowResult { expr }
             }
@@ -456,6 +470,156 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         };
 
         Some(self.alloc_synthetic_value(expected_ty, value))
+    }
+
+    pub(super) fn const_array_data_for_expr(
+        &mut self,
+        expr: ExprId,
+        array_ty: TyId<'db>,
+    ) -> Option<Vec<u8>> {
+        let Partial::Present(Expr::Path(path)) = expr.data(self.db, self.body) else {
+            return None;
+        };
+        let path = path.to_opt()?;
+        let assumptions = PredicateListId::empty_list(self.db);
+        let expected_ty = normalize_ty(self.db, array_ty, self.body.scope(), assumptions);
+
+        if let Some(mut cref) = self.typed_body.expr_const_ref(expr) {
+            struct GenericSubst<'a, 'db> {
+                generic_args: &'a [TyId<'db>],
+            }
+            impl<'db> hir::analysis::ty::fold::TyFolder<'db> for GenericSubst<'_, 'db> {
+                fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+                    match ty.data(db) {
+                        hir::analysis::ty::ty_def::TyData::TyParam(param) => {
+                            self.generic_args.get(param.idx).copied().unwrap_or(ty)
+                        }
+                        hir::analysis::ty::ty_def::TyData::ConstTy(const_ty) => {
+                            if let ConstTyData::TyParam(param, _) = const_ty.data(db)
+                                && let Some(rep) = self.generic_args.get(param.idx).copied()
+                            {
+                                return rep;
+                            }
+                            ty.super_fold_with(db, self)
+                        }
+                        _ => ty.super_fold_with(db, self),
+                    }
+                }
+            }
+
+            let mut subst = GenericSubst {
+                generic_args: self.generic_args,
+            };
+            cref = cref.fold_with(self.db, &mut subst);
+            if let hir::analysis::ty::ty_check::ConstRef::TraitConst { inst, name } = cref
+                && matches!(
+                    inst.self_ty(self.db).data(self.db),
+                    hir::analysis::ty::ty_def::TyData::TyParam(_)
+                        | hir::analysis::ty::ty_def::TyData::TyVar(_)
+                )
+                && let Some(&self_arg) = self.generic_args.first()
+            {
+                let mut args = inst.args(self.db).to_vec();
+                if let Some(arg) = args.first_mut() {
+                    *arg = self_arg;
+                }
+                cref = hir::analysis::ty::ty_check::ConstRef::TraitConst {
+                    inst: hir::analysis::ty::trait_def::TraitInstId::new(
+                        self.db,
+                        inst.def(self.db),
+                        args,
+                        inst.assoc_type_bindings(self.db).clone(),
+                    ),
+                    name,
+                };
+            }
+
+            let capability_expected_ty = expected_ty.as_capability(self.db).map(|(_, ty)| ty);
+            let base_expected_ty = expected_ty.base_ty(self.db);
+            if let Some(ConstValue::ConstArray(elems)) =
+                try_eval_const_ref(self.db, cref, expected_ty)
+                    .or_else(|| {
+                        capability_expected_ty.and_then(|inner_expected_ty| {
+                            try_eval_const_ref(self.db, cref, inner_expected_ty)
+                        })
+                    })
+                    .or_else(|| {
+                        (base_expected_ty != expected_ty)
+                            .then(|| try_eval_const_ref(self.db, cref, base_expected_ty))
+                            .flatten()
+                    })
+                    .or_else(|| {
+                        eval_const_expr(
+                            self.db,
+                            self.body,
+                            self.typed_body,
+                            self.generic_args,
+                            expr,
+                        )
+                        .ok()
+                        .flatten()
+                    })
+            {
+                return self.const_array_data_for_ref(&cref, expected_ty, &elems);
+            }
+        }
+
+        if self.generic_args.is_empty()
+            || self.typed_body.expr_prop(self.db, expr).binding.is_some()
+        {
+            return None;
+        }
+
+        let resolved = resolve_path(self.db, path, self.body.scope(), assumptions, true).ok()?;
+        let ty = match resolved {
+            PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => ty,
+            _ => return None,
+        };
+        let TyData::ConstTy(const_ty) = ty.data(self.db) else {
+            return None;
+        };
+        let ConstTyData::TyParam(param, _) = const_ty.data(self.db) else {
+            return None;
+        };
+        let arg = *self.generic_args.get(param.idx)?;
+        let TyData::ConstTy(const_arg) = arg.data(self.db) else {
+            return None;
+        };
+        let capability_expected_ty = expected_ty.as_capability(self.db).map(|(_, ty)| ty);
+        let base_expected_ty = expected_ty.base_ty(self.db);
+        match const_arg.data(self.db) {
+            ConstTyData::Evaluated(EvaluatedConstTy::Array(elems), _) => {
+                let values: Option<Vec<_>> = elems
+                    .iter()
+                    .map(|elem_ty| {
+                        let TyData::ConstTy(elem_const) = elem_ty.data(self.db) else {
+                            return None;
+                        };
+                        evaluated_const_to_value(self.db, *elem_const)
+                    })
+                    .collect();
+                values.and_then(|elems| self.serialize_const_array_data(expected_ty, &elems))
+            }
+            ConstTyData::UnEvaluated { body, .. } => {
+                match try_eval_const_body(self.db, *body, expected_ty)
+                    .or_else(|| {
+                        capability_expected_ty.and_then(|inner_expected_ty| {
+                            try_eval_const_body(self.db, *body, inner_expected_ty)
+                        })
+                    })
+                    .or_else(|| {
+                        (base_expected_ty != expected_ty)
+                            .then(|| try_eval_const_body(self.db, *body, base_expected_ty))
+                            .flatten()
+                    }) {
+                    Some(ConstValue::ConstArray(elems)) => {
+                        self.serialize_const_array_data(expected_ty, &elems)
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
     }
 
     /// Allocates a synthetic literal value with the provided type.

@@ -1488,6 +1488,15 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 let Some(elem_ty) = lhs_place_ty.generic_args(self.db).first().copied() else {
                     return value_id;
                 };
+                if let Some(local) =
+                    self.try_emit_const_array_elem_load(expr, *lhs, *rhs, Some(dest), Some(stmt))
+                {
+                    if self.current_block().is_some() {
+                        self.builder.body.values[value_id.index()].origin =
+                            ValueOrigin::Local(local);
+                    }
+                    return value_id;
+                }
                 let base_value = self.lower_expr(*lhs);
                 let index_source = self.lower_index_source(*rhs);
                 if self.current_block().is_none() {
@@ -1856,6 +1865,12 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let Some(elem_ty) = lhs_place_ty.generic_args(self.db).first().copied() else {
             return value_id;
         };
+        if let Some(dest) = self.try_emit_const_array_elem_load(expr, lhs, rhs, None, None) {
+            if self.current_block().is_some() {
+                self.builder.body.values[value_id.index()].origin = ValueOrigin::Local(dest);
+            }
+            return value_id;
+        }
 
         let base_value = self.lower_expr(lhs);
         let index_source = self.lower_index_source(rhs);
@@ -1889,6 +1904,49 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         self.assign(None, Some(dest), Rvalue::Load { place });
         self.builder.body.values[value_id.index()].origin = ValueOrigin::Local(dest);
         value_id
+    }
+
+    fn try_emit_const_array_elem_load(
+        &mut self,
+        expr: ExprId,
+        lhs: ExprId,
+        rhs: ExprId,
+        dest: Option<LocalId>,
+        stmt: Option<StmtId>,
+    ) -> Option<LocalId> {
+        let lhs_ty = self.typed_body.expr_ty(self.db, lhs);
+        let array_ty = lhs_ty
+            .as_capability(self.db)
+            .map(|(_, inner)| inner)
+            .unwrap_or(lhs_ty);
+        if !array_ty.is_array(self.db) {
+            return None;
+        }
+        let elem_ty = *array_ty.generic_args(self.db).first()?;
+        if self.is_by_ref_ty(elem_ty) {
+            return None;
+        }
+        let elem_size = layout::ty_memory_size(self.db, elem_ty)?;
+        if elem_size == 0 || elem_size > 32 {
+            return None;
+        }
+        let data = self.const_array_data_for_expr(lhs, array_ty)?;
+        let dest = dest.unwrap_or_else(|| self.alloc_temp_local(elem_ty, false, "const_load"));
+        let index_source = self.lower_index_source(rhs);
+        if self.current_block().is_none() {
+            return Some(dest);
+        }
+        self.builder.body.locals[dest.index()].address_space = self.expr_address_space(expr);
+        self.assign(
+            stmt,
+            Some(dest),
+            Rvalue::ConstArrayElemLoad {
+                data,
+                index: index_source,
+                elem_size,
+            },
+        );
+        Some(dest)
     }
 
     fn field_access_info_for_expr(

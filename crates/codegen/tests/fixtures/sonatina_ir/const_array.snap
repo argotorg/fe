@@ -9,36 +9,22 @@ global private const [i8; 96] $__fe_const_data_0 = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 
 func public %sum_two(v0.i256, v1.i256) -> i256 {
     block0:
-        v4.*i8 = evm_malloc 96.i256;
-        v5.i256 = ptr_to_int v4 i256;
-        v6.i256 = sym_addr $__fe_const_data_0;
-        v7.i256 = sym_size $__fe_const_data_0;
-        evm_code_copy v5 v6 v7;
-        v8.*[i256; 3] = int_to_ptr v5 *[i256; 3];
-        v9.*i256 = gep v8 0.i256 v0;
-        v10.i256 = ptr_to_int v9 i256;
-        v11.i256 = mload v10 i256;
-        v12.*i8 = evm_malloc 96.i256;
-        v13.i256 = ptr_to_int v12 i256;
-        v14.i256 = sym_addr $__fe_const_data_0;
-        v15.i256 = sym_size $__fe_const_data_0;
-        evm_code_copy v13 v14 v15;
-        v16.*[i256; 3] = int_to_ptr v13 *[i256; 3];
-        v17.*i256 = gep v16 0.i256 v1;
-        v18.i256 = ptr_to_int v17 i256;
-        v19.i256 = mload v18 i256;
-        v20.*i8 = evm_malloc 96.i256;
-        v21.i256 = ptr_to_int v20 i256;
-        v22.i256 = sym_addr $__fe_const_data_0;
-        v23.i256 = sym_size $__fe_const_data_0;
-        evm_code_copy v21 v22 v23;
-        v24.*i8 = evm_malloc 96.i256;
-        v25.i256 = ptr_to_int v24 i256;
-        v26.i256 = sym_addr $__fe_const_data_0;
-        v27.i256 = sym_size $__fe_const_data_0;
-        evm_code_copy v25 v26 v27;
-        v28.i256 = add v11 v19;
-        return v28;
+        v3.i256 = sym_addr $__fe_const_data_0;
+        v5.i256 = mul v0 32.i256;
+        v6.i256 = add v3 v5;
+        v7.*i8 = evm_malloc 32.i256;
+        v8.i256 = ptr_to_int v7 i256;
+        evm_code_copy v8 v6 32.i256;
+        v9.i256 = mload v8 i256;
+        v10.i256 = sym_addr $__fe_const_data_0;
+        v11.i256 = mul v1 32.i256;
+        v12.i256 = add v10 v11;
+        v13.*i8 = evm_malloc 32.i256;
+        v14.i256 = ptr_to_int v13 i256;
+        evm_code_copy v14 v12 32.i256;
+        v15.i256 = mload v14 i256;
+        v16.i256 = add v9 v15;
+        return v16;
 }
 
 func public %__fe_sonatina_entry() {

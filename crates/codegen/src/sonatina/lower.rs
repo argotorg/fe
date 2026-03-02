@@ -14,7 +14,7 @@ use num_bigint::BigUint;
 use rustc_hash::FxHashMap;
 use smallvec1::SmallVec;
 use sonatina_ir::{
-    BlockId, GlobalVariableData, I256, Immediate, Linkage, Type, ValueId,
+    BlockId, GlobalVariableData, GlobalVariableRef, I256, Immediate, Linkage, Type, ValueId,
     global_variable::GvInitializer,
     inst::{
         arith::{Add, Mul, Neg, Shl, Shr, Sub},
@@ -83,7 +83,10 @@ pub(super) fn lower_instruction<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                     LowerError::Internal(format!("missing SSA variable for local {dest_local:?}"))
                 })?;
                 // Apply from_word conversion for Load operations
-                let converted = if matches!(rvalue, mir::Rvalue::Load { .. }) {
+                let converted = if matches!(
+                    rvalue,
+                    mir::Rvalue::Load { .. } | mir::Rvalue::ConstArrayElemLoad { .. }
+                ) {
                     let dest_ty = ctx
                         .body
                         .locals
@@ -527,6 +530,14 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 }
             };
             Ok(Some(result))
+        }
+        Rvalue::ConstArrayElemLoad {
+            data,
+            index,
+            elem_size,
+        } => {
+            let loaded = lower_const_array_elem_load(ctx, data, index, *elem_size)?;
+            Ok(Some(loaded))
         }
         Rvalue::Alloc { .. } => Err(LowerError::Internal(
             "Alloc rvalue should be handled directly in Assign lowering".to_string(),
@@ -2167,6 +2178,87 @@ fn emit_evm_malloc_word_addr<C: sonatina_ir::func_cursor::FuncCursor>(
     fb.insert_inst(PtrToInt::new(is, ptr, Type::I256), Type::I256)
 }
 
+fn ensure_const_data_global<C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, '_, C>,
+    data: &[u8],
+) -> GlobalVariableRef {
+    if let Some(&existing) = ctx.const_data_globals.get(data) {
+        return existing;
+    }
+
+    let elems: Vec<GvInitializer> = data
+        .iter()
+        .map(|&b| GvInitializer::make_imm(Immediate::I8(b as i8)))
+        .collect();
+    let array_init = GvInitializer::make_array(elems);
+
+    let label = format!("__fe_const_data_{}", *ctx.data_global_counter);
+    *ctx.data_global_counter += 1;
+    let array_ty = ctx
+        .fb
+        .module_builder
+        .declare_array_type(Type::I8, data.len());
+    let gv_data = GlobalVariableData::constant(label, array_ty, Linkage::Private, array_init);
+    let gv_ref = ctx.fb.module_builder.declare_gv(gv_data);
+    ctx.const_data_globals.insert(data.to_vec(), gv_ref);
+    ctx.data_globals.push(gv_ref);
+    gv_ref
+}
+
+fn lower_const_array_elem_load<C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, '_, C>,
+    data: &[u8],
+    index: &hir::projection::IndexSource<mir::ValueId>,
+    elem_size: usize,
+) -> Result<ValueId, LowerError> {
+    if elem_size == 0 {
+        return Ok(ctx.fb.make_imm_value(I256::zero()));
+    }
+    if elem_size > 32 {
+        return Err(LowerError::Unsupported(
+            "const array indexed load only supports element size <= 32 bytes".to_string(),
+        ));
+    }
+
+    let gv_ref = ensure_const_data_global(ctx, data);
+    let base = ctx
+        .fb
+        .insert_inst(SymAddr::new(ctx.is, SymbolRef::Global(gv_ref)), Type::I256);
+    let idx_val = match index {
+        hir::projection::IndexSource::Constant(idx) => {
+            ctx.fb.make_imm_value(I256::from(*idx as u64))
+        }
+        hir::projection::IndexSource::Dynamic(value) => {
+            let raw = lower_value(ctx, *value)?;
+            let value_ty = ctx
+                .body
+                .values
+                .get(value.index())
+                .ok_or_else(|| LowerError::Internal(format!("unknown value: {value:?}")))?
+                .ty;
+            apply_to_word(ctx.fb, ctx.db, raw, value_ty, ctx.is)
+        }
+    };
+
+    let elem_size_val = ctx.fb.make_imm_value(I256::from(elem_size as u64));
+    let byte_offset = ctx
+        .fb
+        .insert_inst(Mul::new(ctx.is, idx_val, elem_size_val), Type::I256);
+    let src = ctx
+        .fb
+        .insert_inst(Add::new(ctx.is, base, byte_offset), Type::I256);
+    let alloc_size = elem_size.max(32);
+    let alloc_size_val = ctx.fb.make_imm_value(I256::from(alloc_size as u64));
+    let dst = emit_evm_malloc_word_addr(ctx.fb, alloc_size_val, ctx.is);
+    let copy_size = ctx.fb.make_imm_value(I256::from(elem_size as u64));
+    ctx.fb
+        .insert_inst_no_result(EvmCodeCopy::new(ctx.is, dst, src, copy_size));
+    let loaded = ctx
+        .fb
+        .insert_inst(Mload::new(ctx.is, dst, Type::I256), Type::I256);
+    Ok(loaded)
+}
+
 /// Lower a `ConstAggregate` by registering a global data section and using CODECOPY.
 ///
 /// Registers the constant bytes as a Sonatina global variable (data section),
@@ -2176,29 +2268,7 @@ fn lower_const_aggregate<C: sonatina_ir::func_cursor::FuncCursor>(
     ctx: &mut LowerCtx<'_, '_, C>,
     data: &[u8],
 ) -> Result<ValueId, LowerError> {
-    let gv_ref = if let Some(&existing) = ctx.const_data_globals.get(data) {
-        existing
-    } else {
-        // Build array initializer from raw bytes (each element is one byte)
-        let elems: Vec<GvInitializer> = data
-            .iter()
-            .map(|&b| GvInitializer::make_imm(Immediate::I8(b as i8)))
-            .collect();
-        let array_init = GvInitializer::make_array(elems);
-
-        // Register as a const global variable
-        let label = format!("__fe_const_data_{}", *ctx.data_global_counter);
-        *ctx.data_global_counter += 1;
-        let array_ty = ctx
-            .fb
-            .module_builder
-            .declare_array_type(Type::I8, data.len());
-        let gv_data = GlobalVariableData::constant(label, array_ty, Linkage::Private, array_init);
-        let gv_ref = ctx.fb.module_builder.declare_gv(gv_data);
-        ctx.const_data_globals.insert(data.to_vec(), gv_ref);
-        ctx.data_globals.push(gv_ref);
-        gv_ref
-    };
+    let gv_ref = ensure_const_data_global(ctx, data);
 
     // Emit: malloc + codecopy
     let size_val = ctx.fb.make_imm_value(I256::from(data.len() as u64));
