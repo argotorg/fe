@@ -12,8 +12,8 @@ use rustc_hash::FxHashMap;
 use salsa::Update;
 
 use super::{
-    Expr, ExprId, Func, ItemKind, Partial, Pat, PatId, Stmt, StmtId, TopLevelMod, TrackedItemId,
-    scope_graph::ScopeId,
+    Cond, CondId, Expr, ExprId, Func, ItemKind, Partial, Pat, PatId, Stmt, StmtId, TopLevelMod,
+    TrackedItemId, scope_graph::ScopeId,
 };
 use crate::{
     HirDb,
@@ -37,6 +37,8 @@ pub struct Body<'db> {
     pub stmts: NodeStore<StmtId, Partial<Stmt<'db>>>,
     #[return_ref]
     pub exprs: NodeStore<ExprId, Partial<Expr<'db>>>,
+    #[return_ref]
+    pub conds: NodeStore<CondId, Partial<Cond>>,
     #[return_ref]
     pub pats: NodeStore<PatId, Partial<Pat<'db>>>,
     pub top_mod: TopLevelMod<'db>,

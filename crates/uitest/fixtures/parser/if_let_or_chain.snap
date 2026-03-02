@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/parser.rs
+expression: diags
+input_file: fixtures/parser/if_let_or_chain.fe
+---
+error[1-0001]: `||` cannot be mixed with `let` conditions in this position
+  ┌─ if_let_or_chain.fe:2:34
+  │
+2 │     if let Option::Some(x) = opt || ready {
+  │                                  ^^ `||` cannot be mixed with `let` conditions in this position

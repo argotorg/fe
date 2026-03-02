@@ -273,6 +273,57 @@ mod tests {
         assert!(while_stmt.cond().is_some());
         assert!(while_stmt.body().is_some());
         assert_ne!(while_stmt.cond(), while_stmt.body());
+
+        let while_stmt: WhileStmt = parse_stmt(
+            r#"
+            while let Some(value) = values {
+                value
+            }
+        "#,
+        );
+        let crate::ast::ExprKind::Let(let_expr) = while_stmt.cond().unwrap().kind() else {
+            panic!("expected let condition");
+        };
+        assert!(matches!(
+            let_expr.pat().unwrap().kind(),
+            crate::ast::PatKind::PathTuple(_)
+        ));
+        assert!(matches!(
+            let_expr.expr().unwrap().kind(),
+            crate::ast::ExprKind::Path(_)
+        ));
+
+        let while_stmt: WhileStmt = parse_stmt(
+            r#"
+            while let Some(value) = values && ready {
+                value
+            }
+        "#,
+        );
+        assert!(matches!(
+            while_stmt.cond().unwrap().kind(),
+            crate::ast::ExprKind::Bin(_)
+        ));
+
+        let source = r#"
+            while ready || let Some(value) = values {
+                value
+            }
+        "#;
+        let (_while_stmt, errors): (WhileStmt, Vec<ParseError>) = parse_stmt_with_errors(source);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.msg().contains("cannot be mixed with `let` conditions")),
+            "expected let-chain `||` diagnostic, got: {errors:?}"
+        );
+        let diag = errors
+            .iter()
+            .find(|e| e.msg().contains("cannot be mixed with `let` conditions"))
+            .unwrap_or_else(|| panic!("expected let-chain `||` diagnostic, got: {errors:?}"));
+        let or_pos = source.find("||").unwrap() as u32;
+        assert_eq!(diag.range().start(), crate::TextSize::from(or_pos));
+        assert_eq!(diag.range().end(), crate::TextSize::from(or_pos + 2));
     }
 
     #[test]

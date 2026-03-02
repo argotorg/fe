@@ -42,20 +42,17 @@ function $token_params($kind) -> ret {
 }
 function $pack_config($decimals, $paused, $fee_bps) -> ret {
   let v0 := 0
-  switch $paused
-    case 1 {
-      v0 := 1
-    }
-    case 0 {
-      v0 := 0
-    }
-    default {
-      v0 := 0
-    }
-  let v1 := v0
-  let v2 := $decimals
-  let v3 := $fee_bps
-  ret := or(or(shl(24, v1), shl(16, v2)), v3)
+  let v1 := $paused
+  if v1 {
+    v0 := 1
+  }
+  if iszero(v1) {
+    v0 := 0
+  }
+  let v2 := v0
+  let v3 := $decimals
+  let v4 := $fee_bps
+  ret := or(or(shl(24, v2), shl(16, v3)), v4)
   leave
 }
 function $packed_token_config($kind, $paused) -> ret {

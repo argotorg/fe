@@ -1,5 +1,6 @@
 ---
 source: crates/mir/tests/lowering_snapshots.rs
+assertion_line: 26
 expression: mir_output
 ---
 fn for_continue() -> usize:
@@ -28,7 +29,7 @@ fn for_continue() -> usize:
 fn range_known_const_s__usize___known_const_e__usize___hc7c7abc3858dd85e_seq_ha637d2df505bccf2_len__0_4__f9605efabd18106c(v0: Range<Known<0>, Known<4>>) -> usize:
   bb0:
     v1: usize = 0
-    switch (4 < 0) [true => bb1, false => bb2] else bb2
+    br (4 < 0) bb1 bb2
   bb1:
     v1 = 0
     jmp bb3

@@ -1,0 +1,22 @@
+pub struct Point {
+    x: u64,
+    y: u64,
+}
+
+pub fn if_let_sum(p: Option<Point>) -> u64 {
+    if let Some(Point { x, y }) = p {
+        x + y
+    } else {
+        0
+    }
+}
+
+pub fn while_let_sum() -> u64 {
+    let value = Some(1)
+    let mut sum = 0
+    while let Some(v) = value {
+        sum = v
+        break
+    }
+    sum
+}

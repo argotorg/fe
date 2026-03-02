@@ -1,9 +1,10 @@
 ---
 source: crates/parser/tests/syntax_node.rs
+assertion_line: 35
 expression: node
-input_file: crates/parser/test_files/syntax_node/stmts/while.fe
+input_file: test_files/syntax_node/stmts/while.fe
 ---
-Root@0..46
+Root@0..195
   WhileStmt@0..46
     WhileKw@0..5 "while"
     WhiteSpace@5..6 " "
@@ -66,3 +67,145 @@ Root@0..46
                 Int@43..44 "1"
       Newline@44..45 "\n"
       RBrace@45..46 "}"
+  Newline@46..48 "\n\n"
+  WhileStmt@48..101
+    WhileKw@48..53 "while"
+    WhiteSpace@53..54 " "
+    LetExpr@54..76
+      LetKw@54..57 "let"
+      WhiteSpace@57..58 " "
+      PathTuplePat@58..68
+        Path@58..62
+          PathSegment@58..62
+            Ident@58..62 "Some"
+        TuplePatElemList@62..68
+          LParen@62..63 "("
+          PathPat@63..67
+            Path@63..67
+              PathSegment@63..67
+                Ident@63..67 "item"
+          RParen@67..68 ")"
+      WhiteSpace@68..69 " "
+      Eq@69..70 "="
+      WhiteSpace@70..71 " "
+      PathExpr@71..76
+        Path@71..76
+          PathSegment@71..76
+            Ident@71..76 "items"
+    WhiteSpace@76..77 " "
+    BlockExpr@77..101
+      LBrace@77..78 "{"
+      Newline@78..79 "\n"
+      WhiteSpace@79..83 "    "
+      ExprStmt@83..99
+        AssignExpr@83..99
+          PathExpr@83..86
+            Path@83..86
+              PathSegment@83..86
+                Ident@83..86 "sum"
+          WhiteSpace@86..87 " "
+          Eq@87..88 "="
+          WhiteSpace@88..89 " "
+          BinExpr@89..99
+            PathExpr@89..92
+              Path@89..92
+                PathSegment@89..92
+                  Ident@89..92 "sum"
+            WhiteSpace@92..93 " "
+            Plus@93..94 "+"
+            WhiteSpace@94..95 " "
+            PathExpr@95..99
+              Path@95..99
+                PathSegment@95..99
+                  Ident@95..99 "item"
+      Newline@99..100 "\n"
+      RBrace@100..101 "}"
+  Newline@101..103 "\n\n"
+  WhileStmt@103..194
+    WhileKw@103..108 "while"
+    WhiteSpace@108..109 " "
+    LetExpr@109..150
+      LetKw@109..112 "let"
+      WhiteSpace@112..113 " "
+      PathTuplePat@113..132
+        Path@113..125
+          PathSegment@113..119
+            Ident@113..119 "Option"
+          Colon2@119..121 "::"
+          PathSegment@121..125
+            Ident@121..125 "Some"
+        TuplePatElemList@125..132
+          LParen@125..126 "("
+          PathPat@126..131
+            Path@126..131
+              PathSegment@126..131
+                Ident@126..131 "value"
+          RParen@131..132 ")"
+      WhiteSpace@132..133 " "
+      Eq@133..134 "="
+      WhiteSpace@134..135 " "
+      UnExpr@135..150
+        RefKw@135..138 "ref"
+        WhiteSpace@138..139 " "
+        IndexExpr@139..150
+          PathExpr@139..145
+            Path@139..145
+              PathSegment@139..145
+                Ident@139..145 "values"
+          LBracket@145..146 "["
+          PathExpr@146..149
+            Path@146..149
+              PathSegment@146..149
+                Ident@146..149 "idx"
+          RBracket@149..150 "]"
+    WhiteSpace@150..151 " "
+    BlockExpr@151..194
+      LBrace@151..152 "{"
+      Newline@152..153 "\n"
+      WhiteSpace@153..157 "    "
+      ExprStmt@157..170
+        AssignExpr@157..170
+          PathExpr@157..160
+            Path@157..160
+              PathSegment@157..160
+                Ident@157..160 "idx"
+          WhiteSpace@160..161 " "
+          Eq@161..162 "="
+          WhiteSpace@162..163 " "
+          BinExpr@163..170
+            PathExpr@163..166
+              Path@163..166
+                PathSegment@163..166
+                  Ident@163..166 "idx"
+            WhiteSpace@166..167 " "
+            Plus@167..168 "+"
+            WhiteSpace@168..169 " "
+            LitExpr@169..170
+              Lit@169..170
+                Int@169..170 "1"
+      Newline@170..171 "\n"
+      WhiteSpace@171..175 "    "
+      ExprStmt@175..192
+        AssignExpr@175..192
+          PathExpr@175..178
+            Path@175..178
+              PathSegment@175..178
+                Ident@175..178 "sum"
+          WhiteSpace@178..179 " "
+          Eq@179..180 "="
+          WhiteSpace@180..181 " "
+          BinExpr@181..192
+            PathExpr@181..184
+              Path@181..184
+                PathSegment@181..184
+                  Ident@181..184 "sum"
+            WhiteSpace@184..185 " "
+            Plus@185..186 "+"
+            WhiteSpace@186..187 " "
+            PathExpr@187..192
+              Path@187..192
+                PathSegment@187..192
+                  Ident@187..192 "value"
+      Newline@192..193 "\n"
+      RBrace@193..194 "}"
+  Newline@194..195 "\n"

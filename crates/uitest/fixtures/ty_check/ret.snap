@@ -1,13 +1,13 @@
 ---
 source: crates/uitest/tests/ty_check.rs
 expression: diags
-input_file: crates/uitest/fixtures/ty_check/ret.fe
+input_file: fixtures/ty_check/ret.fe
 ---
 error[8-0000]: type mismatch
    ┌─ ret.fe:15:9
    │
 15 │         false
-   │         ^^^^^ expected `{integer}`, but `bool` is given
+   │         ^^^^^ expected `i32`, but `bool` is given
 
 error[8-0013]: returned type mismatch
   ┌─ ret.fe:2:5
@@ -24,5 +24,3 @@ error[8-0013]: returned type mismatch
   │              --- this function expects `i32` to be returned
 6 │     return false
   │     ^^^^^^^^^^^^ expected `i32`, but `bool` is returned
-
-

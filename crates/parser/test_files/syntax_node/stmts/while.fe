@@ -2,3 +2,12 @@ while i < 10 {
     sum = 1 + 2
     i = i + 1
 }
+
+while let Some(item) = items {
+    sum = sum + item
+}
+
+while let Option::Some(value) = ref values[idx] {
+    idx = idx + 1
+    sum = sum + value
+}

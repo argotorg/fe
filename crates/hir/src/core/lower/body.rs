@@ -3,8 +3,8 @@ use parser::ast;
 use super::FileLowerCtxt;
 use crate::{
     hir_def::{
-        Body, BodyKind, BodySourceMap, Expr, ExprId, NodeStore, Partial, Pat, PatId, Stmt, StmtId,
-        TrackedItemId, TrackedItemVariant,
+        Body, BodyKind, BodySourceMap, Cond, CondId, Expr, ExprId, NodeStore, Partial, Pat, PatId,
+        Stmt, StmtId, TrackedItemId, TrackedItemVariant,
     },
     span::HirOrigin,
 };
@@ -47,6 +47,7 @@ pub(super) struct BodyCtxt<'ctxt, 'db> {
 
     pub(super) stmts: NodeStore<StmtId, Partial<Stmt<'db>>>,
     pub(super) exprs: NodeStore<ExprId, Partial<Expr<'db>>>,
+    pub(super) conds: NodeStore<CondId, Partial<Cond>>,
     pub(super) pats: NodeStore<PatId, Partial<Pat<'db>>>,
     pub(super) source_map: BodySourceMap,
 }
@@ -70,6 +71,14 @@ impl<'ctxt, 'db> BodyCtxt<'ctxt, 'db> {
         let expr_id = self.exprs.push(Partial::Absent);
         self.source_map.expr_map.insert(expr_id, HirOrigin::None);
         expr_id
+    }
+
+    pub(super) fn push_cond(&mut self, cond: Cond) -> CondId {
+        self.conds.push(Partial::Present(cond))
+    }
+
+    pub(super) fn push_missing_cond(&mut self) -> CondId {
+        self.conds.push(Partial::Absent)
     }
 
     pub(super) fn push_stmt(&mut self, stmt: Stmt<'db>, origin: HirOrigin<ast::Stmt>) -> StmtId {
@@ -98,6 +107,7 @@ impl<'ctxt, 'db> BodyCtxt<'ctxt, 'db> {
             id,
             stmts: NodeStore::new(),
             exprs: NodeStore::new(),
+            conds: NodeStore::new(),
             pats: NodeStore::new(),
             source_map: BodySourceMap::default(),
         }
@@ -117,6 +127,7 @@ impl<'ctxt, 'db> BodyCtxt<'ctxt, 'db> {
             body_kind,
             self.stmts,
             self.exprs,
+            self.conds,
             self.pats,
             self.f_ctxt.top_mod(),
             self.source_map,

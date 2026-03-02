@@ -1,6 +1,6 @@
 ---
 source: crates/hir/tests/ty_check.rs
-assertion_line: 40
+assertion_line: 41
 expression: res
 input_file: test_files/ty_check/contract_effects.fe
 ---
@@ -206,12 +206,6 @@ note:
    │
 58 │     if ctx.caller() == owner && amount >= balance {
    │        ^^^^^^^^^^^^^^^^^^^^^ bool
-
-note: 
-   ┌─ contract_effects.fe:58:8
-   │
-58 │     if ctx.caller() == owner && amount >= balance {
-   │        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ bool
 
 note: 
    ┌─ contract_effects.fe:58:24

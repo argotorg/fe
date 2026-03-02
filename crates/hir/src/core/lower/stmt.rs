@@ -2,7 +2,7 @@ use parser::ast::{self, AttrListOwner, prelude::*};
 
 use super::body::BodyCtxt;
 use crate::{
-    hir_def::{Expr, Pat, TypeId, stmt::*},
+    hir_def::{Cond, Expr, Pat, TypeId, stmt::*},
     span::HirOrigin,
 };
 
@@ -48,7 +48,7 @@ impl<'db> Stmt<'db> {
             }
 
             ast::StmtKind::While(while_) => {
-                let cond = Expr::push_to_body_opt(ctxt, while_.cond());
+                let cond = Cond::push_to_body_opt(ctxt, while_.cond());
                 let body = Expr::push_to_body_opt(
                     ctxt,
                     while_

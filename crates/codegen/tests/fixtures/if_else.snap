@@ -1,24 +1,20 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 42
+assertion_line: 33
 expression: output
 input_file: tests/fixtures/if_else.fe
 ---
 function $if_else($cond) -> ret {
   let v0 := 0
-  switch $cond
-    case 1 {
-      let v1 := $helper(1)
-      v0 := v1
-    }
-    case 0 {
-      let v2 := $helper(2)
-      v0 := v2
-    }
-    default {
-      let v3 := $helper(2)
-      v0 := v3
-    }
+  let v1 := $cond
+  if v1 {
+    let v2 := $helper(1)
+    v0 := v2
+  }
+  if iszero(v1) {
+    let v3 := $helper(2)
+    v0 := v3
+  }
   ret := v0
   leave
 }

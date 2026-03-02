@@ -15,4 +15,12 @@ break
             continue
         }
     }
+
+    let mut maybe = Some(1)
+    while  let   Some(v)=maybe{
+        maybe = None
+        if v > 0 {
+            break
+        }
+    }
 }

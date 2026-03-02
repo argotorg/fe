@@ -1,0 +1,60 @@
+use std::evm::effects::assert
+
+struct Point {
+    x: u256,
+    y: u256,
+}
+
+fn sum_if_let(point: Option<Point>) -> u256 {
+    if let Option::Some(Point { x, y }) = point {
+        x + y
+    } else {
+        0
+    }
+}
+
+fn sum_compound_if_let(a: Option<Option<usize>>) -> usize {
+    if let Option::Some(b) = a && let Option::Some(c) = b {
+        c
+    } else {
+        0
+    }
+}
+
+fn sum_compound_if_let_annotated(a: Option<Option<usize>>) -> usize {
+    let x: usize = if let Option::Some(b) = a && let Option::Some(c) = b {
+        c
+    } else {
+        0
+    }
+
+    x
+}
+
+fn sum_while_let(values: [Option<usize>; 4]) -> usize {
+    let mut idx: usize = 0
+    let mut sum: usize = 0
+
+    while let Option::Some(value) = ref values[idx] {
+        sum += value
+        idx += 1
+        if idx == 4 {
+            break
+        }
+    }
+
+    sum
+}
+
+#[test]
+fn test_if_let_while_let() {
+    assert(sum_if_let(Option::Some(Point { x: 2, y: 3 })) == 5)
+    assert(sum_if_let(Option::None) == 0)
+    assert(sum_compound_if_let(Option::Some(Option::Some(7))) == 7)
+    assert(sum_compound_if_let(Option::Some(Option::None)) == 0)
+    assert(sum_compound_if_let(Option::None) == 0)
+    assert(sum_compound_if_let_annotated(Option::Some(Option::Some(11))) == 11)
+    assert(sum_compound_if_let_annotated(Option::Some(Option::None)) == 0)
+    assert(sum_compound_if_let_annotated(Option::None) == 0)
+    assert(sum_while_let([Option::Some(2), Option::Some(5), Option::None, Option::Some(9)]) == 7)
+}

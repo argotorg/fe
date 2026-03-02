@@ -14,4 +14,10 @@ fn loop_examples(arr: Array<i32, 10>) {
         x = x + 1
         if x % 2 == 0 { continue }
     }
+
+    let mut maybe = Some(1)
+    while let Some(v) = maybe {
+        maybe = None
+        if v > 0 { break }
+    }
 }

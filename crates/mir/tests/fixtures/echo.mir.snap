@@ -1,5 +1,6 @@
 ---
 source: crates/mir/tests/lowering_snapshots.rs
+assertion_line: 26
 expression: mir_output
 ---
 fn __EchoContract_init_contract(v0: u256, v1: u256, v2: u256) -> ():
@@ -146,7 +147,7 @@ fn soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__Memor
     v3: u256 = load mem[&mem[v0].0].1
     v2: u256 = (v3 + 32)
     v4: u256 = load mem[&mem[v0].0].1
-    br ((v2 < v4) || (v2 > v1)) bb1 bb2
+    br (v2 < v4) bb1 bb3
   bb1:
     terminate revert(0, 0)
   bb2:
@@ -154,6 +155,8 @@ fn soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__Memor
     v5: u256 = memorybytes_h1e381015a9b0111b_byteinput_hc4c2cb44299530ae_word_at(&mem[&mem[v0].0].0, v6)
     store mem[&mem[v0].0].1 = v2
     ret v5
+  bb3:
+    br (v2 > v1) bb1 bb2
 
 fn stor_ptr__Evm_hef0af3106e109414_Foo_h6dbce71a6ea992b8__c09e6c6fc5a7b23d(v0: Evm, v1: u256) -> StorPtr<Foo>:
   bb0:
@@ -282,7 +285,7 @@ fn soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallD
     v4: u256 = load mem[&mem[v0].0].1
     v3: u256 = (v4 + 32)
     v5: u256 = load mem[&mem[v0].0].1
-    br ((v3 < v5) || (v3 > v1)) bb1 bb2
+    br (v3 < v5) bb1 bb3
   bb1:
     terminate revert(0, 0)
   bb2:
@@ -291,6 +294,8 @@ fn soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallD
     v6: u256 = calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at(v7, v8)
     store mem[&mem[v0].0].1 = v3
     ret v6
+  bb3:
+    br (v3 > v1) bb1 bb2
 
 fn u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word(v0: u256) -> u256:
   bb0:

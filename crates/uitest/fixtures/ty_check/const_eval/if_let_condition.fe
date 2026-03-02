@@ -1,0 +1,15 @@
+const fn pick(x: usize) -> usize {
+    if let y = x && y > 3 {
+        y
+    } else {
+        0
+    }
+}
+
+type T = [u8; pick(5)]
+type F = [u8; pick(1)]
+
+fn ok(a: T, b: F) {
+    a
+    b
+}

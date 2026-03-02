@@ -19,8 +19,8 @@ use crate::analysis::{
     },
 };
 use crate::hir_def::{
-    Body, CallableDef, Expr, ExprId, Field, IntegerId, LitKind, MatchArm, Partial, Pat, PatId,
-    PathId, Stmt, StmtId, VariantKind,
+    Body, CallableDef, Cond, CondId, Expr, ExprId, Field, IntegerId, LitKind, MatchArm, Partial,
+    Pat, PatId, PathId, Stmt, StmtId, VariantKind,
     expr::{ArithBinOp, BinOp, CompBinOp, LogicalBinOp, UnOp},
 };
 
@@ -218,15 +218,20 @@ impl<'db> CtfeInterpreter<'db> {
             Expr::Cast(inner, _) => self.eval_cast(expr, *inner),
             Expr::Bin(lhs, rhs, op) => self.eval_binary(expr, *lhs, *rhs, *op),
             Expr::If(cond, then, else_) => {
-                let cond = self.eval_expr(*cond)?;
-                let cond = const_as_bool(self.db, cond, body, expr)?;
-                if cond {
-                    self.eval_expr(*then)
-                } else if let Some(else_) = else_ {
-                    self.eval_expr(*else_)
-                } else {
-                    Ok(unit_const(self.db))
-                }
+                let old_bindings = self.env().bindings.clone();
+                let result = match self.eval_cond(*cond) {
+                    Ok(true) => self.eval_expr(*then),
+                    Ok(false) => {
+                        if let Some(else_) = else_ {
+                            self.eval_expr(*else_)
+                        } else {
+                            Ok(unit_const(self.db))
+                        }
+                    }
+                    Err(err) => Err(err),
+                };
+                self.env_mut().bindings = old_bindings;
+                result
             }
 
             Expr::Match(scrutinee, arms) => self.eval_match(expr, *scrutinee, arms),
@@ -239,6 +244,73 @@ impl<'db> CtfeInterpreter<'db> {
             Expr::RecordInit(path, fields) => self.eval_record_init(expr, path, fields),
             Expr::Field(lhs, field) => self.eval_field(expr, *lhs, field),
             _ => Err(InvalidCause::ConstEvalUnsupported { body, expr }.into()),
+        }
+    }
+
+    fn eval_cond(&mut self, cond: CondId) -> CtfeResult<'db, bool> {
+        let body = self.body();
+        let Partial::Present(cond_data) = cond.data(self.db, body) else {
+            return Err(InvalidCause::ParseError.into());
+        };
+
+        match cond_data {
+            Cond::Expr(expr) => {
+                let value = self.eval_expr(*expr)?;
+                const_as_bool(self.db, value, body, *expr).map_err(Into::into)
+            }
+            Cond::Let(pat, scrutinee) => {
+                let base_bindings = self.env().bindings.clone();
+                let value = self.eval_expr(*scrutinee)?;
+                if !matches!(value.data(self.db), ConstTyData::Evaluated(..)) {
+                    self.env_mut().bindings = base_bindings;
+                    return Err(InvalidCause::ConstEvalUnsupported {
+                        body,
+                        expr: *scrutinee,
+                    }
+                    .into());
+                }
+
+                let mut cond_bindings = base_bindings.clone();
+                let matched = self.try_match_pat(*scrutinee, *pat, value, &mut cond_bindings)?;
+                if matched {
+                    self.env_mut().bindings = cond_bindings;
+                    Ok(true)
+                } else {
+                    self.env_mut().bindings = base_bindings;
+                    Ok(false)
+                }
+            }
+            Cond::Bin(lhs, rhs, op) => match op {
+                LogicalBinOp::And => {
+                    let base_bindings = self.env().bindings.clone();
+                    let lhs = self.eval_cond(*lhs)?;
+                    if !lhs {
+                        self.env_mut().bindings = base_bindings;
+                        Ok(false)
+                    } else {
+                        let rhs = self.eval_cond(*rhs)?;
+                        if rhs {
+                            Ok(true)
+                        } else {
+                            self.env_mut().bindings = base_bindings;
+                            Ok(false)
+                        }
+                    }
+                }
+                LogicalBinOp::Or => {
+                    let base_bindings = self.env().bindings.clone();
+                    let lhs = self.eval_cond(*lhs)?;
+                    if lhs {
+                        self.env_mut().bindings = base_bindings;
+                        Ok(true)
+                    } else {
+                        self.env_mut().bindings = base_bindings.clone();
+                        let rhs = self.eval_cond(*rhs)?;
+                        self.env_mut().bindings = base_bindings;
+                        Ok(rhs)
+                    }
+                }
+            },
         }
     }
 

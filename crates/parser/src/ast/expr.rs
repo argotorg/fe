@@ -21,6 +21,7 @@ ast_node! {
     | SK::ArrayExpr
     | SK::ArrayRepExpr
     | SK::LitExpr
+    | SK::LetExpr
     | SK::IfExpr
     | SK::MatchExpr
     | SK::WithExpr
@@ -51,6 +52,7 @@ impl Expr {
             SK::ArrayExpr => ExprKind::Array(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::ArrayRepExpr => ExprKind::ArrayRep(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::LitExpr => ExprKind::Lit(AstNode::cast(self.syntax().clone()).unwrap()),
+            SK::LetExpr => ExprKind::Let(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::IfExpr => ExprKind::If(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::MatchExpr => ExprKind::Match(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::WithExpr => ExprKind::With(AstNode::cast(self.syntax().clone()).unwrap()),
@@ -313,6 +315,23 @@ impl LitExpr {
 }
 
 ast_node! {
+    /// `let pat = expr` (condition-only expression)
+    pub struct LetExpr,
+    SK::LetExpr
+}
+impl LetExpr {
+    /// Returns the destructuring pattern of the `let` condition.
+    pub fn pat(&self) -> Option<super::Pat> {
+        support::child(self.syntax())
+    }
+
+    /// Returns the value expression of the `let` condition.
+    pub fn expr(&self) -> Option<Expr> {
+        support::child(self.syntax())
+    }
+}
+
+ast_node! {
     /// `if cond { then } else { else_ }`
     pub struct IfExpr,
     SK::IfExpr
@@ -453,6 +472,7 @@ impl AugAssignExpr {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, derive_more::From, derive_more::TryInto)]
 pub enum ExprKind {
     Lit(LitExpr),
+    Let(LetExpr),
     Block(BlockExpr),
     Bin(BinExpr),
     Un(UnExpr),
@@ -747,7 +767,7 @@ impl LogicalBinOp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ast::*, lexer::Lexer, parser::Parser};
+    use crate::{ParseError, ast::*, lexer::Lexer, parser::Parser};
 
     use derive_more::TryIntoError;
     use wasm_bindgen_test::wasm_bindgen_test;
@@ -764,6 +784,18 @@ mod tests {
             .kind()
             .try_into()
             .unwrap()
+    }
+
+    fn parse_expr_with_errors<T>(source: &str) -> (T, Vec<ParseError>)
+    where
+        T: TryFrom<ExprKind, Error = TryIntoError<ExprKind>>,
+    {
+        let lexer = Lexer::new(source);
+        let mut parser = Parser::new(lexer);
+        crate::parser::expr::parse_expr(&mut parser).unwrap();
+        let (node, errors) = parser.finish_to_node();
+        let expr = Expr::cast(node).unwrap().kind().try_into().unwrap();
+        (expr, errors)
     }
 
     #[test]
@@ -1018,20 +1050,60 @@ mod tests {
         } else {
             panic!("expected block statement");
         };
-        matches!(
+        assert!(matches!(
             if_expr.then().unwrap().into_iter().next().unwrap().kind(),
             crate::ast::StmtKind::Return(_)
-        );
+        ));
         let ExprKind::Block(else_) = if_expr.else_().unwrap().kind() else {
             panic!("expected block statement");
         };
-        matches!(
+        assert!(matches!(
             else_.into_iter().next().unwrap().kind(),
-            crate::ast::StmtKind::Return(_)
-        );
+            crate::ast::StmtKind::Continue(_)
+        ));
 
         let if_expr: IfExpr = parse_expr("if false { return } else if true { continue }");
         assert!(matches!(if_expr.else_().unwrap().kind(), ExprKind::If(_)));
+
+        let if_expr: IfExpr = parse_expr("if let Some(x) = maybe { x } else { 0 }");
+        let ExprKind::Let(let_expr) = if_expr.cond().unwrap().kind() else {
+            panic!("expected let condition");
+        };
+        assert!(matches!(
+            let_expr.pat().unwrap().kind(),
+            PatKind::PathTuple(_)
+        ));
+        assert!(matches!(let_expr.expr().unwrap().kind(), ExprKind::Path(_)));
+        assert!(if_expr.then().is_some());
+        assert!(if_expr.else_().is_some());
+
+        let if_expr: IfExpr = parse_expr("if let Some(x) = a && let Some(y) = b && ok { x }");
+        let ExprKind::Bin(and2) = if_expr.cond().unwrap().kind() else {
+            panic!("expected chained condition");
+        };
+        assert!(matches!(
+            and2.op().unwrap(),
+            BinOp::Logical(LogicalBinOp::And(_))
+        ));
+
+        let (_if_expr, errors): (IfExpr, Vec<ParseError>) =
+            parse_expr_with_errors("if let Some(x) = maybe || ready { x } else { 0 }");
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.msg().contains("cannot be mixed with `let` conditions")),
+            "expected let-chain `||` diagnostic, got: {errors:?}"
+        );
+
+        let source = "if ready || let Some(x) = maybe { x } else { 0 }";
+        let (_if_expr, errors): (IfExpr, Vec<ParseError>) = parse_expr_with_errors(source);
+        let diag = errors
+            .iter()
+            .find(|e| e.msg().contains("cannot be mixed with `let` conditions"))
+            .unwrap_or_else(|| panic!("expected let-chain `||` diagnostic, got: {errors:?}"));
+        let or_pos = source.find("||").unwrap() as u32;
+        assert_eq!(diag.range().start(), crate::TextSize::from(or_pos));
+        assert_eq!(diag.range().end(), crate::TextSize::from(or_pos + 2));
     }
 
     #[test]

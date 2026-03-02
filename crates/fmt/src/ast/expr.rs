@@ -855,6 +855,47 @@ impl ToDoc for ast::LitExpr {
     }
 }
 
+impl ToDoc for ast::LetExpr {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
+        if !has_comment_tokens(self.syntax()) {
+            let pat = match self.pat() {
+                Some(p) => p.to_doc(ctx),
+                None => return alloc.text("let"),
+            };
+            let expr = match self.expr() {
+                Some(e) => e.to_doc(ctx),
+                None => return alloc.text("let ").append(pat),
+            };
+
+            return alloc
+                .text("let ")
+                .append(pat)
+                .append(alloc.text(" = "))
+                .append(expr);
+        }
+
+        let indent = ctx.config.indent_width as isize;
+        token_doc(
+            ctx,
+            self.syntax(),
+            indent,
+            |node| {
+                if let Some(pat) = ast::Pat::cast(node.clone()) {
+                    return Some(TokenPiece::new(pat.to_doc(ctx)));
+                }
+                ast::Expr::cast(node).map(|expr| TokenPiece::new(expr.to_doc(ctx)))
+            },
+            |token| match token.kind() {
+                SyntaxKind::LetKw => Some(TokenPiece::new(alloc.text("let")).space_after()),
+                SyntaxKind::Eq => Some(TokenPiece::new(alloc.text("=")).spaces()),
+                _ => None,
+            },
+        )
+    }
+}
+
 impl ToDoc for ast::IfExpr {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
         let alloc = &ctx.alloc;
@@ -892,14 +933,16 @@ impl ToDoc for ast::IfExpr {
             self.syntax(),
             indent,
             |node| {
-                let expr = ast::Expr::cast(node)?;
-                expr_count += 1;
-                let piece = TokenPiece::new(expr.to_doc(ctx));
-                Some(if expr_count == 1 {
-                    piece.space_after()
-                } else {
-                    piece
-                })
+                if let Some(expr) = ast::Expr::cast(node.clone()) {
+                    expr_count += 1;
+                    let piece = TokenPiece::new(expr.to_doc(ctx));
+                    return Some(if expr_count == 1 {
+                        piece.space_after()
+                    } else {
+                        piece
+                    });
+                }
+                None
             },
             |token| match token.kind() {
                 SyntaxKind::IfKw => Some(TokenPiece::new(alloc.text("if")).space_after()),

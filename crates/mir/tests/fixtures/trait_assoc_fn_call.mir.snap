@@ -1,5 +1,6 @@
 ---
 source: crates/mir/tests/lowering_snapshots.rs
+assertion_line: 26
 expression: mir_output
 ---
 fn example() -> Bar:
@@ -7,7 +8,7 @@ fn example() -> Bar:
     v0: Bar = bar_h9f829bcd60910980_t_ha4fe9660e49389ad_make()
     v1: Bar = bar_h9f829bcd60910980_t_ha4fe9660e49389ad_make()
     v3: Bar = 0
-    switch true [true => bb1, false => bb2] else bb2
+    br true bb1 bb2
   bb1:
     v3 = v0
     jmp bb3

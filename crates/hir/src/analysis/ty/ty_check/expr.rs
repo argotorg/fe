@@ -4,8 +4,8 @@ use num_traits::ToPrimitive;
 use smallvec1::SmallVec;
 
 use crate::core::hir_def::{
-    ArithBinOp, BinOp, CallableDef, Expr, ExprId, FieldIndex, IdentId, IntegerId, LitKind, Partial,
-    Pat, PatId, PathId, UnOp, VariantKind, WithBinding,
+    ArithBinOp, BinOp, CallableDef, Cond, CondId, Expr, ExprId, FieldIndex, IdentId, IntegerId,
+    LitKind, LogicalBinOp, Partial, Pat, PatId, PathId, UnOp, VariantKind, WithBinding,
 };
 use crate::span::DynLazySpan;
 
@@ -184,7 +184,7 @@ impl<'db> TyChecker<'db> {
             Expr::Tuple(..) => self.check_tuple(expr, expr_data, expected),
             Expr::Array(..) => self.check_array(expr, expr_data, expected),
             Expr::ArrayRep(..) => self.check_array_rep(expr, expr_data, expected),
-            Expr::If(..) => self.check_if(expr, expr_data),
+            Expr::If(..) => self.check_if(expr, expr_data, expected),
             Expr::Match(..) => self.check_match(expr, expr_data, expected),
             Expr::Assign(..) => self.check_assign(expr, expr_data),
             Expr::AugAssign(..) => self.check_aug_assign(expr, expr_data),
@@ -565,7 +565,7 @@ impl<'db> TyChecker<'db> {
         op: BinOp,
     ) -> ExprProp<'db> {
         // Logical operands must be bools
-        if matches!(op, BinOp::Logical(_)) {
+        if let BinOp::Logical(_) = op {
             let bool = TyId::bool(self.db);
             let lhs = self.check_expr(lhs_expr, bool);
             let rhs = self.check_expr(rhs_expr, bool);
@@ -627,6 +627,42 @@ impl<'db> TyChecker<'db> {
         }
 
         self.check_ops_trait(expr, lhs_ty, &op, Some(rhs_expr))
+    }
+
+    fn check_let_condition(&mut self, pat: PatId, scrutinee: ExprId) -> ExprProp<'db> {
+        let scrutinee_ty = self.fresh_ty();
+        let scrutinee_prop = self.check_expr(scrutinee, scrutinee_ty);
+        let (pat_expected, mode) = self.destructure_source_mode(scrutinee_prop.ty);
+        self.check_pat(pat, pat_expected);
+        if let super::DestructureSourceMode::Borrow(kind) = mode {
+            self.retype_pattern_bindings_for_borrow(pat, kind);
+        }
+
+        ExprProp::new(TyId::bool(self.db), true)
+    }
+
+    pub(super) fn check_cond(&mut self, cond: CondId) -> ExprProp<'db> {
+        let Partial::Present(cond_data) = cond.data(self.db, self.body()) else {
+            return ExprProp::invalid(self.db);
+        };
+
+        match cond_data {
+            Cond::Expr(expr) => self.check_expr(*expr, TyId::bool(self.db)),
+            Cond::Let(pat, scrutinee) => self.check_let_condition(*pat, *scrutinee),
+            Cond::Bin(lhs, rhs, op) => {
+                let lhs = self.check_cond(*lhs);
+                match op {
+                    LogicalBinOp::And => self.env.flush_pending_bindings(),
+                    LogicalBinOp::Or => self.env.clear_pending_bindings(),
+                }
+                let rhs = self.check_cond(*rhs);
+                if lhs.ty.is_bool(self.db) && rhs.ty.is_bool(self.db) {
+                    ExprProp::new(TyId::bool(self.db), true)
+                } else {
+                    ExprProp::invalid(self.db)
+                }
+            }
+        }
     }
 
     /// Check a range expression `start..end` and return the Range type.
@@ -2233,23 +2269,42 @@ impl<'db> TyChecker<'db> {
         ExprProp::new(ty, true)
     }
 
-    fn check_if(&mut self, _expr: ExprId, expr_data: &Expr<'db>) -> ExprProp<'db> {
+    fn check_if(
+        &mut self,
+        _expr: ExprId,
+        expr_data: &Expr<'db>,
+        expected: TyId<'db>,
+    ) -> ExprProp<'db> {
         let Expr::If(cond, then, else_) = expr_data else {
             unreachable!()
         };
 
-        self.check_expr(*cond, TyId::bool(self.db));
+        // Keep let-chain bindings scoped to this conditional so they can flow
+        // into the then branch (and chained `&&` segments) without leaking to
+        // the enclosing scope.
+        self.env.enter_lexical_scope();
+        self.check_cond(*cond);
 
-        let if_ty = self.fresh_ty();
         let ty = match else_ {
             Some(else_) => {
-                self.check_expr_in_new_scope(*then, if_ty);
-                self.check_expr_in_new_scope(*else_, if_ty).ty
+                self.env.enter_scope(*then);
+                self.env.flush_pending_bindings();
+                self.check_expr(*then, expected);
+                self.env.leave_scope();
+                self.env.clear_pending_bindings();
+                self.env.leave_scope();
+                self.check_expr_in_new_scope(*else_, expected).ty
             }
 
             None => {
+                let if_ty = self.fresh_ty();
                 // If there is no else branch, the if expression itself typed as `()`
-                self.check_expr_in_new_scope(*then, if_ty);
+                self.env.enter_scope(*then);
+                self.env.flush_pending_bindings();
+                self.check_expr(*then, if_ty);
+                self.env.leave_scope();
+                self.env.clear_pending_bindings();
+                self.env.leave_scope();
                 TyId::unit(self.db)
             }
         };

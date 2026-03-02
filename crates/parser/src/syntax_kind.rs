@@ -301,6 +301,8 @@ pub enum SyntaxKind {
     WithParam,
     /// `1`
     LitExpr,
+    /// `let pat = expr` (condition-only expression)
+    LetExpr,
     /// `if x { 1 } else { 2 }`
     IfExpr,
     /// `match x { pat => { .. } }`
@@ -696,6 +698,7 @@ impl SyntaxKind {
             SyntaxKind::WithParamList => "`with` parameter list",
             SyntaxKind::WithParam => "`with` parameter",
             SyntaxKind::LitExpr => "literal expression",
+            SyntaxKind::LetExpr => "`let` condition expression",
             SyntaxKind::IfExpr => "`if` expression",
             SyntaxKind::MatchExpr => "`match` expression",
             SyntaxKind::WithExpr => "`with` expression",

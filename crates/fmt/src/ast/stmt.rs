@@ -152,14 +152,16 @@ impl ToDoc for ast::WhileStmt {
             self.syntax(),
             indent,
             |node| {
-                let expr = ast::Expr::cast(node)?;
-                expr_count += 1;
-                let piece = TokenPiece::new(expr.to_doc(ctx));
-                Some(if expr_count == 1 {
-                    piece.space_after()
-                } else {
-                    piece
-                })
+                if let Some(expr) = ast::Expr::cast(node.clone()) {
+                    expr_count += 1;
+                    let piece = TokenPiece::new(expr.to_doc(ctx));
+                    return Some(if expr_count == 1 {
+                        piece.space_after()
+                    } else {
+                        piece
+                    });
+                }
+                None
             },
             |token| match token.kind() {
                 SyntaxKind::WhileKw => Some(TokenPiece::new(alloc.text("while")).space_after()),

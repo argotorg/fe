@@ -52,8 +52,9 @@ module.exports = grammar({
     // [$.self_type, $._expression, $.path_segment], -- resolved by precedence
     // recv arm pattern
     [$.recv_arm_pattern],
-    // _condition uses same terminals as _expression, needs same conflicts
-    [$._condition, $.path_segment],
+    // _condition variants use the same terminals as expressions.
+    [$._condition_atom_no_let, $.path_segment],
+    [$._condition_let_value, $.path_segment],
     // scoped_path / path ambiguity: identifiers, scoped_path, keywords can be
     // expression, _path (for further ::), or path_segment (for type paths)
     [$._expression, $.path_segment],
@@ -62,6 +63,9 @@ module.exports = grammar({
     // with generic args), or path_segment. Need three-way conflict.
     [$._expression, $._path, $.path_segment],
     [$._expression, $._path],
+    [$._expression, $._condition_atom_no_let],
+    [$._expression, $._condition_let_value],
+    [$._condition_atom, $._condition_no_or_no_let],
     // attribute name can be identifier or path (path starts with path_segment which is identifier)
     [$.path_segment, $.attribute],
     // recv arm pattern name can be identifier or path
@@ -684,6 +688,99 @@ module.exports = grammar({
       );
     },
 
+    // Condition binary expressions without `||`.
+    // Used by let-chains so unparenthesized `||` is rejected whenever
+    // a `let` condition is part of the chain.
+    condition_binary_expression_no_or: $ => {
+      const table = [
+        [PREC.AND, '&&'],
+        [PREC.COMPARE, choice('==', '!=', $._comparison_lt, '>', '<=', '>=')],
+        [PREC.BITOR, '|'],
+        [PREC.BITXOR, '^'],
+        [PREC.BITAND, '&'],
+        [PREC.SHIFT, choice('<<', '>>')],
+        [PREC.ADD, choice('+', '-')],
+        [PREC.MUL, choice('*', '/', '%')],
+      ];
+
+      return choice(
+        ...table.map(([precedence, operator]) =>
+          prec.left(precedence, seq(
+            field('left', $._condition_no_or),
+            field('operator', operator),
+            field('right', $._condition_no_or),
+          ))
+        ),
+        // ** is right-associative
+        prec.right(PREC.EXP, seq(
+          field('left', $._condition_no_or),
+          field('operator', '**'),
+          field('right', $._condition_no_or),
+        )),
+      );
+    },
+
+    // Condition binary expressions used in places where `let` conditions
+    // are not allowed (`for .. in`, `match` scrutinee, `||` chains).
+    condition_binary_expression_no_or_no_let: $ => {
+      const table = [
+        [PREC.AND, '&&'],
+        [PREC.COMPARE, choice('==', '!=', $._comparison_lt, '>', '<=', '>=')],
+        [PREC.BITOR, '|'],
+        [PREC.BITXOR, '^'],
+        [PREC.BITAND, '&'],
+        [PREC.SHIFT, choice('<<', '>>')],
+        [PREC.ADD, choice('+', '-')],
+        [PREC.MUL, choice('*', '/', '%')],
+      ];
+
+      return choice(
+        ...table.map(([precedence, operator]) =>
+          prec.left(precedence, seq(
+            field('left', $._condition_no_or_no_let),
+            field('operator', operator),
+            field('right', $._condition_no_or_no_let),
+          ))
+        ),
+        // ** is right-associative
+        prec.right(PREC.EXP, seq(
+          field('left', $._condition_no_or_no_let),
+          field('operator', '**'),
+          field('right', $._condition_no_or_no_let),
+        )),
+      );
+    },
+
+    // let-condition rhs follows the compiler parser's higher minimum
+    // precedence and therefore excludes top-level `&&` / `||`.
+    condition_binary_expression_let_value: $ => {
+      const table = [
+        [PREC.COMPARE, choice('==', '!=', $._comparison_lt, '>', '<=', '>=')],
+        [PREC.BITOR, '|'],
+        [PREC.BITXOR, '^'],
+        [PREC.BITAND, '&'],
+        [PREC.SHIFT, choice('<<', '>>')],
+        [PREC.ADD, choice('+', '-')],
+        [PREC.MUL, choice('*', '/', '%')],
+      ];
+
+      return choice(
+        ...table.map(([precedence, operator]) =>
+          prec.left(precedence, seq(
+            field('left', $._condition_let_value),
+            field('operator', operator),
+            field('right', $._condition_let_value),
+          ))
+        ),
+        // ** is right-associative
+        prec.right(PREC.EXP, seq(
+          field('left', $._condition_let_value),
+          field('operator', '**'),
+          field('right', $._condition_let_value),
+        )),
+      );
+    },
+
     unary_expression: $ => prec(PREC.UNARY, seq(
       field('operator', choice('!', '-', '~', '+')),
       field('operand', $._expression),
@@ -814,11 +911,9 @@ module.exports = grammar({
       ')',
     ),
 
-    // Condition expression: excludes record_expression to avoid ambiguity
-    // with the opening { of a block. Same approach as Rust's tree-sitter grammar.
-    // "if x < Foo { ... }" would be ambiguous: comparison+block vs record expression.
-    _condition: $ => choice(
-      $.binary_expression,
+    // Condition expression atoms excluding let-conditions and condition-specific
+    // binary operator nodes.
+    _condition_atom_no_let: $ => choice(
       $.unary_expression,
       $.cast_expression,
       $.call_expression,
@@ -849,6 +944,83 @@ module.exports = grammar({
       $.mode_expression,
     ),
 
+    // Condition expression atoms, including let-conditions.
+    _condition_atom: $ => choice(
+      $._condition_atom_no_let,
+      $.let_condition,
+    ),
+
+    // Condition expressions without top-level `||`.
+    _condition_no_or: $ => choice(
+      $.condition_binary_expression_no_or,
+      $._condition_atom,
+    ),
+
+    // No-let condition expressions without top-level `||`.
+    _condition_no_or_no_let: $ => choice(
+      $.condition_binary_expression_no_or_no_let,
+      $._condition_atom_no_let,
+    ),
+
+    // No-let condition expressions with `||`.
+    condition_or_expression_no_let: $ => prec.left(PREC.OR, seq(
+      field('left', $._condition_no_or_no_let),
+      field('operator', '||'),
+      field('right', $._condition_no_or_no_let),
+    )),
+
+    // Condition expressions where `let` is never allowed.
+    _condition_no_let: $ => choice(
+      $.condition_or_expression_no_let,
+      $._condition_no_or_no_let,
+    ),
+
+    // Full condition expression used by `if`/`while`.
+    _condition: $ => choice(
+      $.condition_or_expression_no_let,
+      $._condition_no_or,
+    ),
+
+    // let-condition rhs allows tighter operators but excludes top-level `&&`
+    // and `||` to match compiler parsing behavior.
+    _condition_let_value: $ => choice(
+      $.condition_binary_expression_let_value,
+      $.unary_expression,
+      $.cast_expression,
+      $.call_expression,
+      $.method_call_expression,
+      $.instantiation_expression,
+      $.field_expression,
+      $.index_expression,
+      prec.left($.identifier),
+      $.scoped_path,
+      'self',
+      'Self',
+      'super',
+      'ingot',
+      $.tuple_expression,
+      $.array_expression,
+      $.array_repeat_expression,
+      $.paren_expression,
+      $.literal,
+      $.if_expression,
+      $.match_expression,
+      $.with_expression,
+      $.block,
+      $.qualified_path_expression,
+      $.mode_expression,
+    ),
+
+    // Destructuring condition for `if`/`while` condition chains.
+    // `let` participates in `&&` chains only. Mixing with unparenthesized
+    // `||` is rejected at the grammar level.
+    let_condition: $ => prec.left(PREC.AND, seq(
+      'let',
+      field('pattern', $._pattern),
+      '=',
+      field('value', $._condition_let_value),
+    )),
+
     if_expression: $ => prec.right(seq(
       'if',
       field('condition', $._condition),
@@ -861,7 +1033,7 @@ module.exports = grammar({
 
     match_expression: $ => seq(
       'match',
-      field('value', $._condition),
+      field('value', $._condition_no_let),
       field('body', $.match_arm_list),
     ),
 
@@ -965,7 +1137,7 @@ module.exports = grammar({
       'for',
       field('pattern', $._pattern),
       'in',
-      field('iterable', $._condition),
+      field('iterable', $._condition_no_let),
       prec.dynamic(1, field('body', $.block)),
     ),
 

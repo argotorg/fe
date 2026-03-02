@@ -31,3 +31,23 @@ if match x {
 } else {
     1
 }
+
+if let Some(Point { x, y }) = p {
+    x + y
+} else {
+    0
+}
+
+if let Some(x) = p {
+    x
+} else if let Some(y) = q {
+    y
+} else {
+    0
+}
+
+if let Option::Some(Point { x, y }) = p {
+    x + y
+} else {
+    0
+}

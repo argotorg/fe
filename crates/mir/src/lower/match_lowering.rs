@@ -38,6 +38,174 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         )
     }
 
+    /// Lowers a `let` condition (`let pat = scrutinee`) into decision-tree
+    /// branching.
+    ///
+    /// On success, control transfers to `true_block` and all bindings from
+    /// `pat` are materialized. On failure, control transfers to `false_block`.
+    pub(super) fn lower_let_condition_branch(
+        &mut self,
+        pat: PatId,
+        scrutinee: ExprId,
+        true_block: BasicBlockId,
+        false_block: BasicBlockId,
+    ) {
+        let Some(block) = self.current_block() else {
+            return;
+        };
+
+        self.move_to_block(block);
+        let scrutinee_value = self.lower_expr(scrutinee);
+        let Some(scrut_block) = self.current_block() else {
+            return;
+        };
+
+        let scrutinee_expr_ty = self.typed_body.expr_ty(self.db, scrutinee);
+        let (scrutinee_value, scrutinee_ty) =
+            if let Some((_, inner_ty)) = scrutinee_expr_ty.as_capability(self.db) {
+                let inner_repr = self.value_repr_for_ty(inner_ty, AddressSpaceKind::Memory);
+                let scrutinee_value = if inner_repr.address_space().is_none() {
+                    self.alloc_value(
+                        inner_ty,
+                        ValueOrigin::TransparentCast {
+                            value: scrutinee_value,
+                        },
+                        inner_repr,
+                    )
+                } else if self.capability_value_is_address_backed(scrutinee_value) {
+                    let space = self.value_address_space(scrutinee_value);
+                    self.alloc_value(
+                        inner_ty,
+                        ValueOrigin::TransparentCast {
+                            value: scrutinee_value,
+                        },
+                        self.value_repr_for_ty(inner_ty, space),
+                    )
+                } else if let Some(place) =
+                    self.place_from_capability_value(scrutinee_value, scrutinee_expr_ty)
+                {
+                    let space = self.value_address_space(place.base);
+                    self.alloc_value(
+                        inner_ty,
+                        ValueOrigin::PlaceRef(place),
+                        self.value_repr_for_ty(inner_ty, space),
+                    )
+                } else {
+                    self.alloc_value(
+                        inner_ty,
+                        ValueOrigin::TransparentCast {
+                            value: scrutinee_value,
+                        },
+                        inner_repr,
+                    )
+                };
+                (scrutinee_value, inner_ty)
+            } else {
+                (scrutinee_value, scrutinee_expr_ty)
+            };
+
+        let Some(body) = self.typed_body.body() else {
+            self.move_to_block(scrut_block);
+            self.goto(false_block);
+            return;
+        };
+        let scope = body.scope();
+
+        let Partial::Present(pat_data) = pat.data(self.db, self.body) else {
+            self.move_to_block(scrut_block);
+            self.goto(false_block);
+            return;
+        };
+
+        let patterns = vec![pat_data.clone(), Pat::WildCard];
+        let matrix =
+            PatternMatrix::from_hir_patterns(self.db, &patterns, self.body, scope, scrutinee_ty);
+        let tree = build_decision_tree(self.db, &matrix);
+        let leaf_bindings = self.collect_leaf_bindings(&tree);
+        let consume_place = if scrutinee_expr_ty.as_capability(self.db).is_none()
+            && leaf_bindings.values().any(|bindings| !bindings.is_empty())
+        {
+            self.place_for_borrow_expr(scrutinee)
+        } else {
+            None
+        };
+        let needs_false_prelude = consume_place.is_some();
+
+        let tree_false_block = if needs_false_prelude {
+            self.alloc_block()
+        } else {
+            false_block
+        };
+
+        if let Some(bindings) = leaf_bindings.get(&0) {
+            self.move_to_block(true_block);
+            for (name, path) in bindings {
+                let Some(binding_pat) = self.pat_id_for_binding_name(pat, name) else {
+                    continue;
+                };
+                let binding =
+                    self.typed_body
+                        .pat_binding(binding_pat)
+                        .unwrap_or(LocalBinding::Local {
+                            pat: binding_pat,
+                            is_mut: false,
+                        });
+                let Some(local) = self.local_for_binding(binding) else {
+                    continue;
+                };
+                let binding_ty = self.typed_body.pat_ty(self.db, binding_pat);
+                let binding_mode = self
+                    .typed_body
+                    .pat_binding_mode(binding_pat)
+                    .unwrap_or(PatBindingMode::ByValue);
+                let (_place, value_id) = self.lower_projection_path_for_binding(
+                    path,
+                    scrutinee_value,
+                    scrutinee_ty,
+                    binding_ty,
+                    binding_mode,
+                );
+                let carries_space = self
+                    .value_repr_for_ty(binding_ty, AddressSpaceKind::Memory)
+                    .address_space()
+                    .is_some()
+                    || binding_ty.as_capability(self.db).is_some();
+                if carries_space
+                    && let Some(space) = crate::ir::try_value_address_space_in(
+                        &self.builder.body.values,
+                        &self.builder.body.locals,
+                        value_id,
+                    )
+                {
+                    self.set_pat_address_space(binding_pat, space);
+                }
+                self.assign(None, Some(local), crate::ir::Rvalue::Value(value_id));
+            }
+        }
+        if let Some(place) = consume_place.clone() {
+            self.move_to_block(true_block);
+            self.emit_scrutinee_move_bind(scrutinee, scrutinee_expr_ty, place);
+        }
+
+        if needs_false_prelude {
+            self.move_to_block(tree_false_block);
+            if let Some(place) = consume_place {
+                self.emit_scrutinee_move_bind(scrutinee, scrutinee_expr_ty, place);
+            }
+            self.goto(false_block);
+        }
+
+        let ctx = MatchLoweringCtx {
+            scrutinee_value,
+            scrutinee_ty,
+            wildcard_arm_block: Some(tree_false_block),
+        };
+        let tree_entry = self.lower_decision_tree(&tree, &[true_block, tree_false_block], &ctx);
+
+        self.move_to_block(scrut_block);
+        self.goto(tree_entry);
+    }
+
     fn pat_id_for_binding_name(&self, pat: PatId, name: &str) -> Option<PatId> {
         let Partial::Present(pat_data) = pat.data(self.db, self.body) else {
             return None;
@@ -296,22 +464,31 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         if let Some(merge) = merge_block {
             self.move_to_block(merge);
             if consume_scrutinee && let Some(place) = self.place_for_borrow_expr(scrutinee) {
-                let moved = self.alloc_value(
-                    scrutinee_expr_ty,
-                    ValueOrigin::MoveOut {
-                        place: place.clone(),
-                    },
-                    self.value_repr_for_ty(scrutinee_expr_ty, self.value_address_space(place.base)),
-                );
-                let source = self.source_for_expr(scrutinee);
-                self.builder.body.values[moved.index()].source = source;
-                self.push_inst_here(MirInst::BindValue {
-                    source,
-                    value: moved,
-                });
+                self.emit_scrutinee_move_bind(scrutinee, scrutinee_expr_ty, place);
             }
         }
         value
+    }
+
+    fn emit_scrutinee_move_bind(
+        &mut self,
+        scrutinee: ExprId,
+        scrutinee_ty: TyId<'db>,
+        place: Place<'db>,
+    ) {
+        let moved = self.alloc_value(
+            scrutinee_ty,
+            ValueOrigin::MoveOut {
+                place: place.clone(),
+            },
+            self.value_repr_for_ty(scrutinee_ty, self.value_address_space(place.base)),
+        );
+        let source = self.source_for_expr(scrutinee);
+        self.builder.body.values[moved.index()].source = source;
+        self.push_inst_here(MirInst::BindValue {
+            source,
+            value: moved,
+        });
     }
 
     /// Recursively lowers a decision tree to MIR basic blocks.
