@@ -331,7 +331,8 @@ impl<'db> PathResError<'db> {
                         let ty_span = seg_span.qualified_type().ty().into_path_type().path();
                         PathResDiag::ExpectedType(ty_span.into(), type_ident, res.kind_name())
                     } else {
-                        unreachable!()
+                        let ty_span = seg_span.qualified_type().ty().into_path_type().path();
+                        PathResDiag::ExpectedType(ty_span.into(), ident, res.kind_name())
                     }
                 }
                 Err(inner) => {
@@ -347,7 +348,8 @@ impl<'db> PathResError<'db> {
                         let trait_span = seg_span.qualified_type().trait_qualifier().name().into();
                         PathResDiag::ExpectedTrait(trait_span, trait_ident, res.kind_name())
                     } else {
-                        unreachable!()
+                        let trait_span = seg_span.qualified_type().trait_qualifier().name().into();
+                        PathResDiag::ExpectedTrait(trait_span, ident, res.kind_name())
                     }
                 }
                 Err(inner) => {
