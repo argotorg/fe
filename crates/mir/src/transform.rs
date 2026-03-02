@@ -127,9 +127,7 @@ pub(crate) fn insert_temp_binds<'db>(db: &'db dyn HirAnalysisDb, body: &mut MirB
                         rvalue,
                     } => {
                         match &rvalue {
-                            Rvalue::ZeroInit
-                            | Rvalue::Alloc { .. }
-                            | Rvalue::ConstAggregate { .. } => {}
+                            Rvalue::ZeroInit | Rvalue::Alloc { .. } => {}
                             Rvalue::Value(value) => {
                                 ctx.stabilize_value(*value, dest.is_some(), false);
                             }
@@ -260,7 +258,7 @@ pub(crate) fn compute_live_values<'db>(body: &MirBody<'db>) -> Vec<bool> {
             match inst {
                 MirInst::BindValue { value, .. } => mark_root(*value),
                 MirInst::Assign { rvalue, .. } => match rvalue {
-                    Rvalue::ZeroInit | Rvalue::Alloc { .. } | Rvalue::ConstAggregate { .. } => {}
+                    Rvalue::ZeroInit | Rvalue::Alloc { .. } => {}
                     Rvalue::Value(value) => mark_root(*value),
                     Rvalue::Call(call) => {
                         for arg in call.args.iter().chain(call.effect_args.iter()) {
@@ -402,6 +400,7 @@ fn add_value_runtime_uses<'db>(
         ValueOrigin::Expr(..)
         | ValueOrigin::ControlFlowResult { .. }
         | ValueOrigin::Unit
+        | ValueOrigin::ConstRegion(_)
         | ValueOrigin::Synthetic(..)
         | ValueOrigin::FuncItem(..) => {}
     }
@@ -520,7 +519,7 @@ fn transfer_runtime_inst<'db>(
         MirInst::Assign { dest, rvalue, .. } => {
             let dest_live = dest.is_some_and(|local| live.remove(&local));
             match rvalue {
-                Rvalue::ZeroInit | Rvalue::Alloc { .. } | Rvalue::ConstAggregate { .. } => {}
+                Rvalue::ZeroInit | Rvalue::Alloc { .. } => {}
                 Rvalue::Value(value) => {
                     if dest.is_none() || dest_live {
                         add_value_runtime_uses(db, body, *value, live, &mut seen_values);
@@ -718,10 +717,7 @@ fn removable_memory_root_local_for_place<'db>(
 
 fn removable_assign_rvalue<'db>(_body: &MirBody<'db>, rvalue: &Rvalue<'db>) -> bool {
     match rvalue {
-        Rvalue::ZeroInit
-        | Rvalue::Alloc { .. }
-        | Rvalue::ConstAggregate { .. }
-        | Rvalue::Value(_) => true,
+        Rvalue::ZeroInit | Rvalue::Alloc { .. } | Rvalue::Value(_) => true,
         Rvalue::Load { .. } => true,
         Rvalue::Call(_) | Rvalue::Intrinsic { .. } => false,
     }
@@ -773,6 +769,7 @@ fn mark_value_runtime_live<'db>(
         ValueOrigin::Expr(..)
         | ValueOrigin::ControlFlowResult { .. }
         | ValueOrigin::Unit
+        | ValueOrigin::ConstRegion(_)
         | ValueOrigin::Synthetic(..)
         | ValueOrigin::FuncItem(..) => {}
     }
@@ -827,7 +824,7 @@ fn mark_runtime_inst_live_operands<'db>(
     let mut changed = false;
     match inst {
         MirInst::Assign { rvalue, .. } => match rvalue {
-            Rvalue::ZeroInit | Rvalue::Alloc { .. } | Rvalue::ConstAggregate { .. } => {}
+            Rvalue::ZeroInit | Rvalue::Alloc { .. } => {}
             Rvalue::Value(value) => {
                 changed |= mark_value_runtime_live(body, live_values, live_locals, *value);
             }
@@ -1528,9 +1525,7 @@ pub(crate) fn canonicalize_zero_sized<'db>(db: &'db dyn HirAnalysisDb, body: &mu
                                 // any side effects in the base/index expressions.
                                 push_place_eval(db, values, &mut rewritten, &place);
                             }
-                            Rvalue::Alloc { .. }
-                            | Rvalue::ZeroInit
-                            | Rvalue::ConstAggregate { .. } => {}
+                            Rvalue::Alloc { .. } | Rvalue::ZeroInit => {}
                         }
                     }
                     _ => {
@@ -1724,6 +1719,7 @@ fn value_deps_in_eval_order(origin: &ValueOrigin<'_>) -> Vec<ValueId> {
             deps
         }
         ValueOrigin::TransparentCast { value } => vec![*value],
+        ValueOrigin::ConstRegion(_) => vec![],
         ValueOrigin::Expr(..)
         | ValueOrigin::ControlFlowResult { .. }
         | ValueOrigin::Unit
@@ -1754,7 +1750,6 @@ fn compute_value_use_counts<'db>(body: &MirBody<'db>) -> Vec<usize> {
             match inst {
                 MirInst::BindValue { value, .. } => bump(*value),
                 MirInst::Assign { rvalue, .. } => match rvalue {
-                    Rvalue::ZeroInit | Rvalue::Alloc { .. } | Rvalue::ConstAggregate { .. } => {}
                     Rvalue::Value(value) => bump(*value),
                     Rvalue::Call(call) => {
                         for arg in call.args.iter().chain(call.effect_args.iter()) {
@@ -1770,6 +1765,7 @@ fn compute_value_use_counts<'db>(body: &MirBody<'db>) -> Vec<usize> {
                         bump(place.base);
                         bump_place_path(&mut bump, &place.projection);
                     }
+                    Rvalue::Alloc { .. } | Rvalue::ZeroInit => {}
                 },
                 MirInst::Store { place, value, .. } => {
                     bump(place.base);

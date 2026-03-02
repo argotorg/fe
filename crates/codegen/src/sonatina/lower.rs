@@ -18,7 +18,7 @@ use num_bigint::BigUint;
 use rustc_hash::FxHashMap;
 use smallvec1::SmallVec;
 use sonatina_ir::{
-    BlockId, GlobalVariableData, I256, Immediate, Linkage, Type, Value, ValueId,
+    BlockId, GlobalVariableData, GlobalVariableRef, I256, Immediate, Linkage, Type, Value, ValueId,
     global_variable::GvInitializer,
     inst::{
         arith::{Add, Mul, Neg, Sar, Shl, Shr, Sub},
@@ -88,38 +88,6 @@ pub(super) fn lower_instruction<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 return Ok(());
             }
 
-            if let mir::Rvalue::ConstAggregate { data, .. } = rvalue {
-                let Some(dest_local) = dest else {
-                    return Err(LowerError::Internal(
-                        "ConstAggregate without destination local".to_string(),
-                    ));
-                };
-                let value = lower_const_aggregate(ctx, data)?;
-                let dest_ty = ctx
-                    .body
-                    .locals
-                    .get(dest_local.index())
-                    .ok_or_else(|| {
-                        LowerError::Internal(format!("missing local type for {dest_local:?}"))
-                    })?
-                    .ty;
-                let dest_var = ctx.local_vars.get(dest_local).copied().ok_or_else(|| {
-                    LowerError::Internal(format!("missing SSA variable for local {dest_local:?}"))
-                })?;
-                let value = coerce_value_to_runtime_ty(
-                    ctx,
-                    value,
-                    dest_ty,
-                    ctx.local_runtime_types[dest_local.index()],
-                );
-                ctx.fb.def_var(dest_var, value);
-                ctx.initialized_locals.insert(*dest_local);
-                if ctx.local_place_roots.contains_key(dest_local) {
-                    store_runtime_value_to_local_slot(ctx, *dest_local, value)?;
-                }
-                return Ok(());
-            }
-
             let result = lower_rvalue(ctx, rvalue, *dest)?;
             if let (Some(dest_local), Some(result_val)) = (dest, result) {
                 let dest_ty = ctx
@@ -160,7 +128,8 @@ pub(super) fn lower_instruction<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         }
         MirInst::SetDiscriminant { place, variant, .. } => {
             let val = ctx.fb.make_imm_value(I256::from(variant.idx as u64));
-            store_word_to_place(ctx, place, val)?;
+            let discr_ty = TyId::new(ctx.db, TyData::TyBase(TyBase::Prim(PrimTy::U256)));
+            store_typed_to_place(ctx, place, val, discr_ty)?;
         }
         MirInst::BindValue { value, .. } => {
             // Ensure the value is lowered and cached
@@ -730,9 +699,6 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         Rvalue::Alloc { .. } => Err(LowerError::Internal(
             "Alloc rvalue should be handled directly in Assign lowering".to_string(),
         )),
-        Rvalue::ConstAggregate { .. } => Err(LowerError::Unsupported(
-            "ConstAggregate not yet supported in Sonatina backend".to_string(),
-        )),
     }
 }
 
@@ -1031,6 +997,13 @@ fn lower_value_origin<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 )
             }
         }
+        ValueOrigin::ConstRegion(region_id) => {
+            let region = ctx.body.const_region(*region_id);
+            let gv_ref = ensure_const_data_global(ctx, &region.bytes);
+            Ok(ctx
+                .fb
+                .insert_inst(SymAddr::new(ctx.is, SymbolRef::Global(gv_ref)), Type::I256))
+        }
         ValueOrigin::FieldPtr(field_ptr) => {
             let base = lower_value(ctx, field_ptr.base)?;
             if field_ptr.offset_bytes == 0 {
@@ -1049,6 +1022,7 @@ fn lower_value_origin<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             } else {
                 let offset = match field_ptr.addr_space {
                     AddressSpaceKind::Calldata => field_ptr.offset_bytes,
+                    AddressSpaceKind::Code => field_ptr.offset_bytes,
                     AddressSpaceKind::Storage | AddressSpaceKind::TransientStorage => {
                         field_ptr.offset_bytes / 32
                     }
@@ -2164,6 +2138,7 @@ fn load_from_terminal<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     terminal: LoweredPlaceTerminal<'db>,
     loaded_ty: TyId<'db>,
     expected_runtime_ty: Type,
+    packed: bool,
 ) -> Result<ValueId, LowerError> {
     match terminal
         .state
@@ -2174,15 +2149,22 @@ fn load_from_terminal<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             let ptr_addr = terminal.native_memory_ptr().ok_or_else(|| {
                 LowerError::Internal("memory place terminal missing pointer".to_string())
             })?;
-            if expected_runtime_ty.is_pointer(&ctx.fb.module_builder.ctx) {
+            if expected_runtime_ty.is_pointer(&ctx.fb.module_builder.ctx) && !packed {
                 return Ok(ctx.fb.insert_inst(
                     Mload::new(ctx.is, ptr_addr, expected_runtime_ty),
                     expected_runtime_ty,
                 ));
             }
-            let raw = ctx
+            let word = ctx
                 .fb
                 .insert_inst(Mload::new(ctx.is, ptr_addr, Type::I256), Type::I256);
+            let raw = if packed {
+                let shift = ctx.fb.make_imm_value(I256::from(248));
+                ctx.fb
+                    .insert_inst(Shr::new(ctx.is, shift, word), Type::I256)
+            } else {
+                word
+            };
             Ok(apply_from_word(ctx.fb, ctx.db, raw, loaded_ty, ctx.is))
         }
         AddressSpaceKind::Storage => {
@@ -2206,6 +2188,26 @@ fn load_from_terminal<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             let raw = ctx
                 .fb
                 .insert_inst(EvmCalldataLoad::new(ctx.is, word_addr), Type::I256);
+            let loaded = apply_from_word(ctx.fb, ctx.db, raw, loaded_ty, ctx.is);
+            Ok(coerce_value_to_type(ctx, loaded, expected_runtime_ty))
+        }
+        AddressSpaceKind::Code => {
+            let word_addr = terminal.word_addr(ctx);
+            let copy_size = if packed { 1 } else { 32 };
+            let size_val = ctx.fb.make_imm_value(I256::from(copy_size));
+            let scratch = emit_evm_malloc_word_addr(ctx.fb, size_val, ctx.is);
+            ctx.fb
+                .insert_inst_no_result(EvmCodeCopy::new(ctx.is, scratch, word_addr, size_val));
+            let word = ctx
+                .fb
+                .insert_inst(Mload::new(ctx.is, scratch, Type::I256), Type::I256);
+            let raw = if packed {
+                let shift = ctx.fb.make_imm_value(I256::from(248));
+                ctx.fb
+                    .insert_inst(Shr::new(ctx.is, shift, word), Type::I256)
+            } else {
+                word
+            };
             let loaded = apply_from_word(ctx.fb, ctx.db, raw, loaded_ty, ctx.is);
             Ok(coerce_value_to_type(ctx, loaded, expected_runtime_ty))
         }
@@ -2236,6 +2238,7 @@ fn lower_place_segment_terminal<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     );
     if !is_slot_addressed
         && projections_eligible_for_gep(&segment.projections)
+        && !place_requires_packed_layout_arithmetic(ctx.db, segment.base.ty, &segment.projections)?
         && let Some(sonatina_ty) = fe_ty_to_sonatina(
             &ctx.fb.module_builder,
             ctx.db,
@@ -2315,7 +2318,7 @@ fn lower_place_terminal<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                     &mut *ctx.gep_type_cache,
                     &mut *ctx.gep_name_counter,
                 );
-                load_from_terminal(ctx, base_terminal, segment.before.ty, runtime_ty)?
+                load_from_terminal(ctx, base_terminal, segment.before.ty, runtime_ty, false)?
             }
             (false, Some(mir::repr::DerefStepKind::ReuseLocation), Some(terminal)) => {
                 terminal_runtime_value(terminal)
@@ -2334,7 +2337,7 @@ fn lower_place_terminal<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                     &mut *ctx.gep_type_cache,
                     &mut *ctx.gep_name_counter,
                 );
-                load_from_terminal(ctx, terminal, segment.before.ty, runtime_ty)?
+                load_from_terminal(ctx, terminal, segment.before.ty, runtime_ty, false)?
             }
             (false, None, Some(_))
             | (false, Some(mir::repr::DerefStepKind::UseBaseValue), Some(_))
@@ -2357,6 +2360,161 @@ fn lower_place_terminal<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     current_terminal.ok_or_else(|| {
         LowerError::Internal(format!("resolved place produced no segments for {place:?}"))
     })
+}
+
+fn ty_contains_packed_memory_array<'db>(db: &'db DriverDataBase, ty: TyId<'db>) -> bool {
+    if ty.is_array(db) {
+        if let Some(elem_ty) = layout::array_elem_ty(db, ty) {
+            return layout::is_packed_memory_array_elem_ty(db, elem_ty)
+                || ty_contains_packed_memory_array(db, elem_ty);
+        }
+        return false;
+    }
+
+    if ty.field_count(db) > 0 {
+        return ty
+            .field_types(db)
+            .iter()
+            .copied()
+            .any(|field_ty| ty_contains_packed_memory_array(db, field_ty));
+    }
+
+    false
+}
+
+fn place_requires_packed_layout_arithmetic<'db>(
+    db: &'db DriverDataBase,
+    base_ty: TyId<'db>,
+    projections: &[ResolvedPlaceProjection<'db>],
+) -> Result<bool, LowerError> {
+    let mut current_ty = base_ty;
+    for step in projections {
+        match &step.projection {
+            Projection::Field(field_idx) => {
+                let field_types = current_ty.field_types(db);
+                if field_types
+                    .iter()
+                    .take(*field_idx)
+                    .copied()
+                    .any(|field_ty| ty_contains_packed_memory_array(db, field_ty))
+                {
+                    return Ok(true);
+                }
+                current_ty = *field_types.get(*field_idx).ok_or_else(|| {
+                    LowerError::Unsupported(format!("projection: field {field_idx} out of bounds"))
+                })?;
+            }
+            Projection::VariantField {
+                variant,
+                enum_ty,
+                field_idx,
+            } => {
+                let ctor = hir::analysis::ty::simplified_pattern::ConstructorKind::Variant(
+                    *variant, *enum_ty,
+                );
+                let field_types = ctor.field_types(db);
+                current_ty = *field_types.get(*field_idx).ok_or_else(|| {
+                    LowerError::Unsupported(format!(
+                        "projection: variant field {field_idx} out of bounds"
+                    ))
+                })?;
+            }
+            Projection::Discriminant => {
+                current_ty = TyId::new(db, TyData::TyBase(TyBase::Prim(PrimTy::U256)));
+            }
+            Projection::Index(_) => {
+                let elem_ty = layout::array_elem_ty(db, current_ty).ok_or_else(|| {
+                    LowerError::Unsupported("projection: array index on non-array type".to_string())
+                })?;
+                if layout::is_packed_memory_array_elem_ty(db, elem_ty)
+                    || ty_contains_packed_memory_array(db, elem_ty)
+                {
+                    return Ok(true);
+                }
+                current_ty = elem_ty;
+            }
+            Projection::Deref => {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(false)
+}
+
+fn is_packed_scalar_array_access<'db>(
+    db: &'db DriverDataBase,
+    body: &mir::MirBody<'db>,
+    place: &Place<'db>,
+    scalar_ty: TyId<'db>,
+) -> Result<bool, LowerError> {
+    let space = body.place_address_space(place);
+    if !matches!(space, AddressSpaceKind::Memory | AddressSpaceKind::Code) {
+        return Ok(false);
+    }
+
+    let scalar_ty = mir::repr::word_conversion_leaf_ty(db, scalar_ty);
+    if !layout::is_packed_memory_array_elem_ty(db, scalar_ty) {
+        return Ok(false);
+    }
+
+    let base_ty = body
+        .values
+        .get(place.base.index())
+        .ok_or_else(|| {
+            LowerError::Internal(format!(
+                "unknown MIR place base value {}",
+                place.base.index()
+            ))
+        })?
+        .ty;
+
+    let mut current_ty = base_ty;
+    let Some(last_idx) = place.projection.len().checked_sub(1) else {
+        return Ok(false);
+    };
+
+    for (idx, proj) in place.projection.iter().enumerate() {
+        match proj {
+            Projection::Field(field_idx) => {
+                let field_types = current_ty.field_types(db);
+                current_ty = *field_types.get(*field_idx).ok_or_else(|| {
+                    LowerError::Unsupported(format!("projection: field {field_idx} out of bounds"))
+                })?;
+            }
+            Projection::VariantField {
+                variant,
+                enum_ty,
+                field_idx,
+            } => {
+                let ctor = hir::analysis::ty::simplified_pattern::ConstructorKind::Variant(
+                    *variant, *enum_ty,
+                );
+                let field_types = ctor.field_types(db);
+                current_ty = *field_types.get(*field_idx).ok_or_else(|| {
+                    LowerError::Unsupported(format!(
+                        "projection: variant field {field_idx} out of bounds"
+                    ))
+                })?;
+            }
+            Projection::Discriminant => {
+                current_ty = TyId::new(db, TyData::TyBase(TyBase::Prim(PrimTy::U256)));
+            }
+            Projection::Index(_) => {
+                let elem_ty = layout::array_elem_ty(db, current_ty).ok_or_else(|| {
+                    LowerError::Unsupported("projection: array index on non-array type".to_string())
+                })?;
+                if idx == last_idx && layout::is_packed_memory_array_elem_ty(db, elem_ty) {
+                    return Ok(true);
+                }
+                current_ty = elem_ty;
+            }
+            Projection::Deref => {
+                return Ok(false);
+            }
+        }
+    }
+
+    Ok(false)
 }
 
 /// Computes the address for a place by walking the projection path.
@@ -2901,10 +3059,11 @@ fn lower_store_inst<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     store_runtime_value_to_place(ctx, place, value_ty, val)
 }
 
-fn store_word_to_place<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+fn store_typed_to_place<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     ctx: &mut LowerCtx<'_, 'db, C>,
     place: &Place<'db>,
     val: ValueId,
+    stored_ty: TyId<'db>,
 ) -> Result<(), LowerError> {
     let lowered = lower_place_terminal(ctx, place)?;
     match lowered
@@ -2913,11 +3072,17 @@ fn store_word_to_place<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         .ok_or_else(|| LowerError::Internal(format!("store target is not a location: {place:?}")))?
     {
         AddressSpaceKind::Memory => {
-            let ptr_addr = lowered.native_memory_ptr().ok_or_else(|| {
-                LowerError::Internal("memory place terminal missing pointer".to_string())
-            })?;
-            ctx.fb
-                .insert_inst_no_result(Mstore::new(ctx.is, ptr_addr, val, Type::I256));
+            if is_packed_scalar_array_access(ctx.db, ctx.body, place, stored_ty)? {
+                let addr = lowered.word_addr(ctx);
+                ctx.fb
+                    .insert_inst_no_result(EvmMstore8::new(ctx.is, addr, val));
+            } else {
+                let ptr_addr = lowered.native_memory_ptr().ok_or_else(|| {
+                    LowerError::Internal("memory place terminal missing pointer".to_string())
+                })?;
+                ctx.fb
+                    .insert_inst_no_result(Mstore::new(ctx.is, ptr_addr, val, Type::I256));
+            }
         }
         AddressSpaceKind::Storage => {
             let word_addr = lowered.word_addr(ctx);
@@ -2931,6 +3096,11 @@ fn store_word_to_place<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         }
         AddressSpaceKind::Calldata => {
             return Err(LowerError::Unsupported("store to calldata".to_string()));
+        }
+        AddressSpaceKind::Code => {
+            return Err(LowerError::Unsupported(
+                "cannot store to code space".to_string(),
+            ));
         }
     }
     Ok(())
@@ -2954,6 +3124,13 @@ fn store_runtime_value_to_place<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         .ok_or_else(|| LowerError::Internal(format!("store target is not a location: {place:?}")))?
     {
         AddressSpaceKind::Memory => {
+            if is_packed_scalar_array_access(ctx.db, ctx.body, place, stored_ty)? {
+                let addr = lowered.word_addr(ctx);
+                let val = apply_to_word(ctx.fb, ctx.db, value, stored_ty, ctx.is);
+                ctx.fb
+                    .insert_inst_no_result(EvmMstore8::new(ctx.is, addr, val));
+                return Ok(());
+            }
             let ptr_addr = lowered.native_memory_ptr().ok_or_else(|| {
                 LowerError::Internal("memory place terminal missing pointer".to_string())
             })?;
@@ -2986,6 +3163,9 @@ fn store_runtime_value_to_place<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             Ok(())
         }
         AddressSpaceKind::Calldata => Err(LowerError::Unsupported("store to calldata".to_string())),
+        AddressSpaceKind::Code => Err(LowerError::Unsupported(
+            "cannot store to code space".to_string(),
+        )),
     }
 }
 
@@ -3009,8 +3189,9 @@ fn load_place_runtime<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         return Ok(coerce_value_to_type(ctx, loaded, expected_runtime_ty));
     }
 
+    let packed = is_packed_scalar_array_access(ctx.db, ctx.body, place, loaded_ty)?;
     let lowered = lower_place_terminal(ctx, place)?;
-    load_from_terminal(ctx, lowered, loaded_ty, expected_runtime_ty)
+    load_from_terminal(ctx, lowered, loaded_ty, expected_runtime_ty, packed)
 }
 
 fn is_transparent_field0_place<'db, C: sonatina_ir::func_cursor::FuncCursor>(
@@ -3058,7 +3239,35 @@ fn deep_copy_from_places<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         return store_runtime_value_to_place(ctx, dst_place, value_ty, loaded);
     }
 
+    let dst_space = ctx.body.place_address_space(dst_place);
+    let src_space = ctx.body.place_address_space(src_place);
+
     if value_ty.is_array(ctx.db) {
+        if dst_space == AddressSpaceKind::Memory
+            && src_space == AddressSpaceKind::Code
+            && src_place.projection.is_empty()
+        {
+            let copy_size = if let Some(mir::ValueData {
+                origin: mir::ValueOrigin::ConstRegion(region_id),
+                ..
+            }) = ctx.body.values.get(src_place.base.index())
+            {
+                Some(ctx.body.const_region(*region_id).bytes.len())
+            } else {
+                layout::ty_memory_size_in(ctx.db, ctx.target_layout, value_ty)
+            };
+            if let Some(size) = copy_size
+                && size > 0
+            {
+                let dst_addr = lower_place_address(ctx, dst_place)?;
+                let src_addr = lower_place_address(ctx, src_place)?;
+                let size_val = ctx.fb.make_imm_value(I256::from(size as u64));
+                ctx.fb
+                    .insert_inst_no_result(EvmCodeCopy::new(ctx.is, dst_addr, src_addr, size_val));
+            }
+            return Ok(());
+        }
+
         let Some(len) = layout::array_len(ctx.db, value_ty) else {
             return Err(LowerError::Unsupported(
                 "array store requires a constant length".into(),
@@ -3125,7 +3334,7 @@ fn deep_copy_enum_from_places<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         discr_ty,
         types::value_type(ctx.db, discr_ty),
     )?;
-    store_word_to_place(ctx, dst_place, discr)?;
+    store_typed_to_place(ctx, dst_place, discr, discr_ty)?;
 
     let origin_block = ctx
         .fb
@@ -3229,52 +3438,31 @@ fn emit_evm_malloc_word_addr<C: sonatina_ir::func_cursor::FuncCursor>(
     fb.insert_inst(PtrToInt::new(is, ptr, Type::I256), Type::I256)
 }
 
-/// Lower a `ConstAggregate` by registering a global data section and using CODECOPY.
-///
-/// Registers the constant bytes as a Sonatina global variable (data section),
-/// then emits: malloc → symaddr → symsize → codecopy. This is the Sonatina
-/// equivalent of Yul's datacopy/dataoffset/datasize pattern.
-fn lower_const_aggregate<C: sonatina_ir::func_cursor::FuncCursor>(
+fn ensure_const_data_global<C: sonatina_ir::func_cursor::FuncCursor>(
     ctx: &mut LowerCtx<'_, '_, C>,
     data: &[u8],
-) -> Result<ValueId, LowerError> {
-    let gv_ref = if let Some(&existing) = ctx.const_data_globals.get(data) {
-        existing
-    } else {
-        // Build array initializer from raw bytes (each element is one byte)
-        let elems: Vec<GvInitializer> = data
-            .iter()
-            .map(|&b| GvInitializer::make_imm(Immediate::I8(b as i8)))
-            .collect();
-        let array_init = GvInitializer::make_array(elems);
+) -> GlobalVariableRef {
+    if let Some(&existing) = ctx.const_data_globals.get(data) {
+        return existing;
+    }
 
-        // Register as a const global variable
-        let label = format!("__fe_const_data_{}", *ctx.data_global_counter);
-        *ctx.data_global_counter += 1;
-        let array_ty = ctx
-            .fb
-            .module_builder
-            .declare_array_type(Type::I8, data.len());
-        let gv_data = GlobalVariableData::constant(label, array_ty, Linkage::Private, array_init);
-        let gv_ref = ctx.fb.module_builder.declare_gv(gv_data);
-        ctx.const_data_globals.insert(data.to_vec(), gv_ref);
-        ctx.data_globals.push(gv_ref);
-        gv_ref
-    };
+    let elems: Vec<GvInitializer> = data
+        .iter()
+        .map(|&b| GvInitializer::make_imm(Immediate::I8(b as i8)))
+        .collect();
+    let array_init = GvInitializer::make_array(elems);
 
-    // Emit: malloc + codecopy
-    let size_val = ctx.fb.make_imm_value(I256::from(data.len() as u64));
-    let ptr = emit_evm_malloc_ptr(ctx.fb, size_val, ctx.is);
-    let sym = SymbolRef::Global(gv_ref);
-    let code_offset = ctx
+    let label = format!("__fe_const_data_{}", *ctx.data_global_counter);
+    *ctx.data_global_counter += 1;
+    let array_ty = ctx
         .fb
-        .insert_inst(SymAddr::new(ctx.is, sym.clone()), Type::I256);
-    let code_size = ctx.fb.insert_inst(SymSize::new(ctx.is, sym), Type::I256);
-    let dst = coerce_value_to_word(ctx, ptr);
-    ctx.fb
-        .insert_inst_no_result(EvmCodeCopy::new(ctx.is, dst, code_offset, code_size));
-
-    Ok(ptr)
+        .module_builder
+        .declare_array_type(Type::I8, data.len());
+    let gv_data = GlobalVariableData::constant(label, array_ty, Linkage::Private, array_init);
+    let gv_ref = ctx.fb.module_builder.declare_gv(gv_data);
+    ctx.const_data_globals.insert(data.to_vec(), gv_ref);
+    ctx.data_globals.push(gv_ref);
+    gv_ref
 }
 
 fn emit_alloca_ptr<C: sonatina_ir::func_cursor::FuncCursor>(

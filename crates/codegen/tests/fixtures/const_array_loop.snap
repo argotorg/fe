@@ -1,0 +1,117 @@
+---
+source: crates/codegen/tests/yul.rs
+expression: output
+input_file: tests/fixtures/const_array_loop.fe
+---
+object "main" {
+  code {
+    function $sum_loop($n) -> ret {
+      let v0 := 0
+      let v1 := 0
+      for { } 1 { } {
+        let v2 := $usize_ha12462c6d36e68b0_ord_h264f6d6d75097a_lt(v0, $n)
+        if iszero(v2) {
+          break
+        }
+        let v3 := $checked_rem_usize(v0, 3)
+        let v4 := v3
+        let v5 := mload(0x40)
+        if iszero(v5) {
+          v5 := 0x80
+        }
+        mstore(0x40, add(v5, 32))
+        datacopy(v5, add(dataoffset("data_sum_loop_0"), mul(v4, 32)), 32)
+        let v6 := mload(v5)
+        let v7 := $checked_add_u256(v1, v6)
+        v1 := v7
+        let v8 := $checked_add_usize(v0, 1)
+        v0 := v8
+      }
+      ret := v1
+      leave
+    }
+    function $usize_ha12462c6d36e68b0_ord_h264f6d6d75097a_lt($self, $other) -> ret {
+      let v0 := lt($self, $other)
+      ret := v0
+      leave
+    }
+    function $checked_add_u256($a, $b) -> ret {
+      let v0 := $checked_add_unsigned_impl__u256__3271ca15373d4483($a, $b)
+      ret := v0
+      leave
+    }
+    function $checked_add_unsigned_impl__u256__3271ca15373d4483($a, $b) -> ret {
+      let v0 := $u256_h3271ca15373d4483_wrappingadd_h14afa79b3047617f_wrapping_add($a, $b)
+      let v1 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word(v0)
+      let v2 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($a)
+      let v3 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v1, v2)
+      let v4 := v3
+      if v4 {
+        revert(0, 0)
+      }
+      ret := v0
+      leave
+    }
+    function $checked_add_unsigned_impl__usize__a12462c6d36e68b0($a, $b) -> ret {
+      let v0 := $usize_ha12462c6d36e68b0_wrappingadd_h14afa79b3047617f_wrapping_add($a, $b)
+      let v1 := $usize_ha12462c6d36e68b0_intword_h9a147c8c32b1323c_to_word(v0)
+      let v2 := $usize_ha12462c6d36e68b0_intword_h9a147c8c32b1323c_to_word($a)
+      let v3 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v1, v2)
+      let v4 := v3
+      if v4 {
+        revert(0, 0)
+      }
+      ret := v0
+      leave
+    }
+    function $checked_add_usize($a, $b) -> ret {
+      let v0 := $checked_add_unsigned_impl__usize__a12462c6d36e68b0($a, $b)
+      ret := v0
+      leave
+    }
+    function $checked_rem_usize($a, $b) -> ret {
+      $ensure_nonzero_divisor__usize__a12462c6d36e68b0($b)
+      let v0 := mod($a, $b)
+      ret := v0
+      leave
+    }
+    function $ensure_nonzero_divisor__usize__a12462c6d36e68b0($b) {
+      let v0 := $usize_ha12462c6d36e68b0_intword_h9a147c8c32b1323c_to_word($b)
+      let v1 := $u256_h3271ca15373d4483_eq_he50383edd273619f_eq(v0, 0)
+      let v2 := v1
+      if v2 {
+        revert(0, 0)
+      }
+      leave
+    }
+    function $u256_h3271ca15373d4483_eq_he50383edd273619f_eq($self, $other) -> ret {
+      let v0 := eq($self, $other)
+      ret := v0
+      leave
+    }
+    function $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($self) -> ret {
+      ret := $self
+      leave
+    }
+    function $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt($self, $other) -> ret {
+      let v0 := lt($self, $other)
+      ret := v0
+      leave
+    }
+    function $u256_h3271ca15373d4483_wrappingadd_h14afa79b3047617f_wrapping_add($self, $other) -> ret {
+      let v0 := add($self, $other)
+      ret := v0
+      leave
+    }
+    function $usize_ha12462c6d36e68b0_intword_h9a147c8c32b1323c_to_word($self) -> ret {
+      ret := $self
+      leave
+    }
+    function $usize_ha12462c6d36e68b0_wrappingadd_h14afa79b3047617f_wrapping_add($self, $other) -> ret {
+      let v0 := add($self, $other)
+      ret := v0
+      leave
+    }
+  }
+  data "data_sum_loop_0" hex"000000000000000000000000000000000000000000000000000000000000000a0000000000000000000000000000000000000000000000000000000000000014000000000000000000000000000000000000000000000000000000000000001e"
+}

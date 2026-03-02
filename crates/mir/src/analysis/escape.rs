@@ -636,6 +636,7 @@ fn value_depends_on_local<'db>(
         | ValueOrigin::ControlFlowResult { .. }
         | ValueOrigin::Unit
         | ValueOrigin::Synthetic(_)
+        | ValueOrigin::ConstRegion(_)
         | ValueOrigin::FuncItem(_) => false,
     };
     value_visiting[value.index()] = false;
@@ -691,11 +692,7 @@ fn rvalue_may_escape_local<'db>(
             intrinsic_arg_may_escape(*op, idx)
                 && value_depends_on_local(body, value, local, local_depends, value_visiting)
         }),
-        Rvalue::ZeroInit
-        | Rvalue::Value(_)
-        | Rvalue::Load { .. }
-        | Rvalue::Alloc { .. }
-        | Rvalue::ConstAggregate { .. } => false,
+        Rvalue::ZeroInit | Rvalue::Value(_) | Rvalue::Load { .. } | Rvalue::Alloc { .. } => false,
     }
 }
 
@@ -838,7 +835,7 @@ fn rvalue_depends_on_local_value<'db>(
     state: &mut LocalDependencyState,
 ) -> bool {
     match rvalue {
-        Rvalue::ZeroInit | Rvalue::Alloc { .. } | Rvalue::ConstAggregate { .. } => false,
+        Rvalue::ZeroInit | Rvalue::Alloc { .. } => false,
         Rvalue::Value(value) => value_depends_on_local(
             body,
             *value,
@@ -961,6 +958,7 @@ fn value_must_alias_local_alloc<'db>(
         | ValueOrigin::Unary { .. }
         | ValueOrigin::Binary { .. }
         | ValueOrigin::Synthetic(_)
+        | ValueOrigin::ConstRegion(_)
         | ValueOrigin::FuncItem(_) => None,
     };
 
@@ -993,6 +991,7 @@ fn value_origin_local<'db>(
         | ValueOrigin::Unary { .. }
         | ValueOrigin::Binary { .. }
         | ValueOrigin::Synthetic(_)
+        | ValueOrigin::ConstRegion(_)
         | ValueOrigin::FuncItem(_) => None,
     };
 
@@ -1053,8 +1052,7 @@ fn rvalue_must_alias_local_alloc<'db>(
         Rvalue::ZeroInit
         | Rvalue::Load { .. }
         | Rvalue::Intrinsic { .. }
-        | Rvalue::Alloc { .. }
-        | Rvalue::ConstAggregate { .. } => None,
+        | Rvalue::Alloc { .. } => None,
     }
 }
 
@@ -1288,11 +1286,7 @@ fn rvalue_may_escape_local_value<'db>(
             intrinsic_arg_may_escape(*op, idx)
                 && value_depends_on_local(body, value, local, local_depends, value_visiting)
         }),
-        Rvalue::ZeroInit
-        | Rvalue::Value(_)
-        | Rvalue::Load { .. }
-        | Rvalue::Alloc { .. }
-        | Rvalue::ConstAggregate { .. } => false,
+        Rvalue::ZeroInit | Rvalue::Value(_) | Rvalue::Load { .. } | Rvalue::Alloc { .. } => false,
     }
 }
 

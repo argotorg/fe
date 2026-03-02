@@ -11,18 +11,19 @@ object "main" {
         v0 := 0x80
       }
       mstore(0x40, add(v0, 800))
-      datacopy(v0, dataoffset("data_for_array_sum_0"), datasize("data_for_array_sum_0"))
-      let v1 := v0
-      let v2 := 0
+      let v1 := dataoffset("data_for_array_sum_0")
+      datacopy(v0, v1, 800)
+      let v2 := v0
       let v3 := 0
-      let v4 := $_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_len__u64_25__540b817a073b29f5()
-      for { } lt(v3, v4) { v3 := add(v3, 1) } {
-        let v5 := $_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_get__u64_25__540b817a073b29f5(v1, v3)
-        let v6 := v5
-        let v7 := $checked_add_u64(v2, v6)
-        v2 := v7
+      let v4 := 0
+      let v5 := $_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_len__u64_25__540b817a073b29f5()
+      for { } lt(v4, v5) { v4 := add(v4, 1) } {
+        let v6 := $_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_get__u64_25__540b817a073b29f5(v2, v4)
+        let v7 := v6
+        let v8 := $checked_add_u64(v3, v7)
+        v3 := v8
       }
-      ret := v2
+      ret := v3
       leave
     }
     function $_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_len__u64_25__540b817a073b29f5() -> ret {

@@ -83,6 +83,7 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
             Some(AddressSpaceKind::Calldata) => self.write_u8(2),
             Some(AddressSpaceKind::Storage) => self.write_u8(3),
             Some(AddressSpaceKind::TransientStorage) => self.write_u8(4),
+            Some(AddressSpaceKind::Code) => self.write_u8(5),
             None => self.write_u8(0),
         }
 
@@ -90,6 +91,13 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
         self.write_usize(func.body.values.len());
         for value in func.body.values.iter() {
             self.hash_value(value);
+        }
+
+        self.write_usize(func.body.const_regions.len());
+        for region in &func.body.const_regions {
+            self.write_str(region.ty.pretty_print(self.db));
+            self.write_usize(region.bytes.len());
+            self.hasher.write(&region.bytes);
         }
 
         self.write_usize(func.body.blocks.len());
@@ -117,6 +125,8 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
             ValueRepr::Ptr(AddressSpaceKind::Calldata) => self.write_u8(6),
             ValueRepr::Ptr(AddressSpaceKind::Storage) => self.write_u8(7),
             ValueRepr::Ptr(AddressSpaceKind::TransientStorage) => self.write_u8(8),
+            ValueRepr::Ref(AddressSpaceKind::Code) => self.write_u8(9),
+            ValueRepr::Ptr(AddressSpaceKind::Code) => self.write_u8(10),
         }
         self.hash_value_origin(&value.origin);
     }
@@ -226,6 +236,7 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
                     AddressSpaceKind::Calldata => 2,
                     AddressSpaceKind::Storage => 3,
                     AddressSpaceKind::TransientStorage => 4,
+                    AddressSpaceKind::Code => 5,
                 });
             }
             ValueOrigin::PlaceRef(place) => {
@@ -240,6 +251,10 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
                 self.write_u8(0x10);
                 let slot = self.placeholder_value(*value);
                 self.write_u32(slot);
+            }
+            ValueOrigin::ConstRegion(region) => {
+                self.write_u8(0x13);
+                self.write_usize(region.index());
             }
         }
     }
@@ -386,12 +401,8 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
                             AddressSpaceKind::Calldata => 2,
                             AddressSpaceKind::Storage => 3,
                             AddressSpaceKind::TransientStorage => 4,
+                            AddressSpaceKind::Code => 5,
                         });
-                    }
-                    Rvalue::ConstAggregate { data, .. } => {
-                        self.write_u8(6);
-                        self.write_usize(data.len());
-                        self.hasher.write(data);
                     }
                 }
             }

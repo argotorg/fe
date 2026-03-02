@@ -1,0 +1,32 @@
+---
+source: crates/codegen/tests/yul.rs
+expression: output
+input_file: tests/fixtures/packed_struct_u8_array_field.fe
+---
+object "main" {
+  code {
+    function $packed_field_offset() -> ret {
+      let v0 := mload(0x40)
+      if iszero(v0) {
+        v0 := 0x80
+      }
+      mstore(0x40, add(v0, 32))
+      let v1 := dataoffset("data_packed_field_offset_0")
+      datacopy(v0, v1, 2)
+      let v2 := mload(0x40)
+      if iszero(v2) {
+        v2 := 0x80
+      }
+      mstore(0x40, add(v2, 64))
+      let v3 := v0
+      mstore8(v2, and(and(byte(0, mload(v3)), 0xff), 0xff))
+      mstore8(add(v2, 1), and(and(byte(0, mload(add(v3, 1))), 0xff), 0xff))
+      mstore(add(v2, 32), 42)
+      let v4 := v2
+      let v5 := mload(add(v4, 32))
+      ret := v5
+      leave
+    }
+  }
+  data "data_packed_field_offset_0" hex"0102"
+}

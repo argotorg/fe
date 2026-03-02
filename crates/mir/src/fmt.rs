@@ -234,11 +234,9 @@ fn format_rvalue(db: &dyn HirAnalysisDb, body: &MirBody<'_>, rvalue: &Rvalue<'_>
                 AddressSpaceKind::Calldata => "calldata",
                 AddressSpaceKind::Storage => "stor",
                 AddressSpaceKind::TransientStorage => "tstor",
+                AddressSpaceKind::Code => "code",
             };
             format!("alloc {space}")
-        }
-        Rvalue::ConstAggregate { data, .. } => {
-            format!("const_aggregate ({} bytes)", data.len())
         }
     }
 }
@@ -315,6 +313,7 @@ fn format_value_inner(
             }
         }
         ValueOrigin::PlaceRef(place) => format!("&{}", format_place(body, place)),
+        ValueOrigin::ConstRegion(id) => format!("const_region_{}", id.0),
         ValueOrigin::MoveOut { place } => format!("move_out({})", format_place(body, place)),
         ValueOrigin::TransparentCast { value } => {
             format_value_inner(body, *value, stack, depth + 1)
@@ -335,6 +334,7 @@ fn format_place(body: &MirBody<'_>, place: &Place<'_>) -> String {
         AddressSpaceKind::Calldata => "calldata",
         AddressSpaceKind::Storage => "stor",
         AddressSpaceKind::TransientStorage => "tstor",
+        AddressSpaceKind::Code => "code",
     };
     let base = format_value(body, place.base);
     let proj = format_projection_path(body, place.projection.iter());

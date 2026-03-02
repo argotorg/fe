@@ -1,0 +1,12 @@
+struct Pair {
+    bytes: [u8; 2],
+    value: u256,
+}
+
+pub fn packed_field_offset() -> u256 {
+    let pair = Pair {
+        bytes: [1, 2],
+        value: 42,
+    }
+    pair.value
+}

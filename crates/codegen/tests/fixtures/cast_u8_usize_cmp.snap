@@ -4,7 +4,7 @@ expression: output
 input_file: tests/fixtures/cast_u8_usize_cmp.fe
 ---
 function $cast_u8_usize_cmp($indices, $i, $j) -> ret {
-  let v0 := and(mload(add($indices, mul($i, 32))), 0xff)
+  let v0 := and(mload(add($indices, $i)), 0xff)
   let v1 := v0
   let v2 := $usize_ha12462c6d36e68b0_ord_h264f6d6d75097a_lt($j, v1)
   let v3 := v2

@@ -33,11 +33,11 @@ use crate::{
     },
     core_lib::CoreLib,
     ir::{
-        AddressSpaceKind, BasicBlockId, BodyBuilder, CallOrigin, CodeRegionRoot, ContractFunction,
-        ContractFunctionKind, IntrinsicOp, LocalData, LocalId, LoopInfo, MirBody, MirFunction,
-        MirInst, MirModule, MirProjection, MirProjectionPath, Place, PointerInfo, Rvalue,
-        SwitchTarget, SwitchValue, SyntheticValue, Terminator, ValueData, ValueId, ValueOrigin,
-        ValueRepr,
+        AddressSpaceKind, BasicBlockId, BodyBuilder, CallOrigin, CodeRegionRoot, ConstRegionId,
+        ContractFunction, ContractFunctionKind, IntrinsicOp, LocalData, LocalId, LoopInfo, MirBody,
+        MirFunction, MirInst, MirModule, MirProjection, MirProjectionPath, Place, PointerInfo,
+        Rvalue, SwitchTarget, SwitchValue, SyntheticValue, Terminator, ValueData, ValueId,
+        ValueOrigin, ValueRepr,
     },
     monomorphize::monomorphize_functions,
 };
@@ -627,7 +627,7 @@ pub(super) struct MirBuilder<'db, 'a> {
     pub(super) core: CoreLib<'db>,
     pub(super) loop_stack: Vec<LoopScope>,
     pub(super) const_cache: FxHashMap<Const<'db>, ValueId>,
-    pub(super) const_array_data_cache: FxHashMap<Const<'db>, (TyId<'db>, Vec<u8>)>,
+    pub(super) const_array_region_cache: FxHashMap<Const<'db>, (TyId<'db>, ConstRegionId)>,
     pub(super) source_info_cache: FxHashMap<Span, crate::ir::SourceInfoId>,
     pub(super) pat_address_space: FxHashMap<PatId, AddressSpaceKind>,
     pub(super) binding_locals: FxHashMap<LocalBinding<'db>, LocalId>,
@@ -717,7 +717,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             core,
             loop_stack: Vec::new(),
             const_cache: FxHashMap::default(),
-            const_array_data_cache: FxHashMap::default(),
+            const_array_region_cache: FxHashMap::default(),
             source_info_cache: FxHashMap::default(),
             pat_address_space: FxHashMap::default(),
             binding_locals: FxHashMap::default(),
@@ -2101,7 +2101,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     target_ty: Some(dest_ty),
                 },
             )],
-            Rvalue::ZeroInit | Rvalue::ConstAggregate { .. } => Vec::new(),
+            Rvalue::ZeroInit => Vec::new(),
         }
     }
 
@@ -2148,7 +2148,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             )
             .map(|info| info.address_space),
             Rvalue::Alloc { address_space } => Some(*address_space),
-            Rvalue::ZeroInit | Rvalue::ConstAggregate { .. } => None,
+            Rvalue::ZeroInit => None,
         }
     }
 
@@ -3055,7 +3055,6 @@ fn first_unlowered_expr_used_by_mir<'db>(body: &MirBody<'db>) -> Option<ExprId> 
                         used_values.extend(dynamic_indices(&place.projection));
                     }
                     crate::ir::Rvalue::Alloc { .. } => {}
-                    crate::ir::Rvalue::ConstAggregate { .. } => {}
                 },
                 MirInst::BindValue { value, .. } => {
                     used_values.insert(*value);

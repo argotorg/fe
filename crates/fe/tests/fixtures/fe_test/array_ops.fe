@@ -42,3 +42,24 @@ fn test_multiple_arrays() {
     }
     assert(sum == 66)
 }
+
+#[test]
+fn test_u8_array_mut() {
+    let mut arr: [u8; 4] = [1, 2, 3, 4]
+    arr[1] = 9
+    assert(arr[0] == 1)
+    assert(arr[1] == 9)
+    assert(arr[2] == 3)
+    assert(arr[3] == 4)
+}
+
+#[test]
+fn test_bool_array_mut() {
+    let mut arr: [bool; 4] = [true, false, true, false]
+    arr[1] = true
+    arr[2] = false
+    assert(arr[0] == true)
+    assert(arr[1] == true)
+    assert(arr[2] == false)
+    assert(arr[3] == false)
+}
