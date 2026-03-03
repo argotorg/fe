@@ -8,7 +8,7 @@ use std::{
 
 const SOLC_ENV: &str = "FE_SOLC_PATH";
 
-/// Error wrapper used throughout the Yul compilation pipeline.
+/// Error wrapper used throughout the compilation pipeline.
 #[derive(Debug, Clone)]
 pub struct YulcError(pub String);
 
@@ -64,18 +64,30 @@ pub fn compile_single_contract_with_solc(
     verify_runtime_bytecode: bool,
     solc_path: Option<&str>,
 ) -> Result<ContractBytecode, YulcError> {
-    let input_json = build_standard_json(yul_src, optimize)?;
+    let input_json = build_standard_json_yul(yul_src, optimize)?;
     let solc_output = run_solc_with_path(&input_json, solc_path)?;
-    parse_contract_output(name, &solc_output, verify_runtime_bytecode)
+    parse_contract_output_for_source(name, &solc_output, "input.yul", verify_runtime_bytecode)
 }
 
-/// Builds the standard JSON input description expected by `solc`.
+/// Compiles a Solidity source file to bytecode using `solc`.
 ///
-/// * `yul_src` - Yul program fed into the compiler.
-/// * `optimize` - Toggles optimizer support in the generated JSON.
-///
-/// Returns a serialized JSON string or a [`YulcError`] if serialization fails.
-fn build_standard_json(yul_src: &str, optimize: bool) -> Result<String, YulcError> {
+/// * `name` - Contract name as declared in the Solidity source.
+/// * `solidity_src` - Solidity source code.
+/// * `optimize` - Enables `solc`'s optimizer when `true`.
+/// * `solc_path` - Optional path to `solc` binary; falls back to `FE_SOLC_PATH` / `solc`.
+pub fn compile_solidity(
+    name: &str,
+    solidity_src: &str,
+    optimize: bool,
+    solc_path: Option<&str>,
+) -> Result<ContractBytecode, YulcError> {
+    let input_json = build_standard_json_solidity(solidity_src, optimize)?;
+    let solc_output = run_solc_with_path(&input_json, solc_path)?;
+    parse_contract_output_for_source(name, &solc_output, "input.sol", true)
+}
+
+/// Builds the standard JSON input for Yul compilation.
+fn build_standard_json_yul(yul_src: &str, optimize: bool) -> Result<String, YulcError> {
     let value = json!({
         "language": "Yul",
         "sources": {
@@ -102,9 +114,36 @@ fn build_standard_json(yul_src: &str, optimize: bool) -> Result<String, YulcErro
     serde_json::to_string(&value).map_err(|err| YulcError(format!("failed to encode json: {err}")))
 }
 
+/// Builds the standard JSON input for Solidity compilation.
+fn build_standard_json_solidity(solidity_src: &str, optimize: bool) -> Result<String, YulcError> {
+    let value = json!({
+        "language": "Solidity",
+        "sources": {
+            "input.sol": { "content": solidity_src }
+        },
+        "settings": {
+            "optimizer": {
+                "enabled": optimize,
+                "runs": 200
+            },
+            "evmVersion": "cancun",
+            "outputSelection": {
+                "*": {
+                    "*": [
+                        "evm.bytecode.object",
+                        "evm.deployedBytecode.object"
+                    ]
+                }
+            }
+        }
+    });
+
+    serde_json::to_string(&value).map_err(|err| YulcError(format!("failed to encode json: {err}")))
+}
+
 /// Invokes the `solc` binary with the provided standard JSON input.
 ///
-/// * `input` - Serialized standard JSON payload describing the Yul compilation.
+/// * `input` - Serialized standard JSON payload.
 ///
 /// Returns the raw stdout emitted by `solc`, or a [`YulcError`] if the process fails or produces
 /// invalid UTF-8.
@@ -156,12 +195,12 @@ fn run_solc_with_path(input: &str, solc_path: Option<&str>) -> Result<String, Yu
 ///
 /// * `name` - Target contract identifier.
 /// * `raw_output` - Raw JSON string written by `solc`.
+/// * `source_key` - Source file key in the JSON (e.g. `"input.yul"` or `"input.sol"`).
 /// * `verify_runtime_bytecode` - When `true`, enforces that deployed runtime bytecode is present.
-///
-/// Returns the parsed [`ContractBytecode`] or a [`YulcError`] describing why parsing failed.
-fn parse_contract_output(
+fn parse_contract_output_for_source(
     name: &str,
     raw_output: &str,
+    source_key: &str,
     verify_runtime_bytecode: bool,
 ) -> Result<ContractBytecode, YulcError> {
     let value: Value =
@@ -183,8 +222,8 @@ fn parse_contract_output(
 
     let contracts = value
         .get("contracts")
-        .and_then(|contracts| contracts.get("input.yul"))
-        .ok_or_else(|| YulcError("solc output missing `contracts.input.yul`".into()))?;
+        .and_then(|contracts| contracts.get(source_key))
+        .ok_or_else(|| YulcError(format!("solc output missing `contracts.{source_key}`")))?;
 
     let contract = contracts
         .get(name)
@@ -247,11 +286,21 @@ mod tests {
     }
     #[test]
     fn build_standard_json_contains_fields() {
-        let json_str = build_standard_json("{ sstore(0, 0) }", false).unwrap();
+        let json_str = build_standard_json_yul("{ sstore(0, 0) }", false).unwrap();
         let value: Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(value["language"], "Yul");
         assert_eq!(value["settings"]["optimizer"]["enabled"], false);
         assert_eq!(value["sources"]["input.yul"]["content"], "{ sstore(0, 0) }");
+    }
+
+    #[test]
+    fn build_standard_json_solidity_contains_fields() {
+        let json_str =
+            build_standard_json_solidity("contract Foo {}", false).unwrap();
+        let value: Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(value["language"], "Solidity");
+        assert_eq!(value["settings"]["optimizer"]["enabled"], false);
+        assert_eq!(value["sources"]["input.sol"]["content"], "contract Foo {}");
     }
 
     #[test]
