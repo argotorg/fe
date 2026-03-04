@@ -1,0 +1,328 @@
+use std::ops::Range;
+
+use rustc_hash::FxHashMap;
+use salsa::Update;
+
+use super::{
+    const_ty::{ConstTyData, ConstTyId},
+    fold::{TyFoldable, TyFolder},
+    ty_def::{TyData, TyId},
+    ty_lower::{
+        CallableInputLayoutHoleOrigin, callable_input_layout_hole_groups, collect_generic_params,
+    },
+    visitor::{TyVisitable, TyVisitor, walk_ty},
+};
+use crate::analysis::HirAnalysisDb;
+use crate::hir_def::{CallableDef, Func};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LayoutPlaceholderPolicy {
+    HolesOnly,
+    HolesAndImplicitParams,
+}
+
+pub(crate) fn layout_hole_fallback_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    hole_ty: TyId<'db>,
+) -> TyId<'db> {
+    if hole_ty.has_invalid(db) {
+        TyId::u256(db)
+    } else {
+        hole_ty
+    }
+}
+
+pub(crate) fn layout_hole_with_fallback_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    hole_ty: TyId<'db>,
+) -> TyId<'db> {
+    TyId::const_ty(
+        db,
+        ConstTyId::hole_with_ty(db, layout_hole_fallback_ty(db, hole_ty)),
+    )
+}
+
+fn is_layout_placeholder<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    policy: LayoutPlaceholderPolicy,
+) -> bool {
+    let TyData::ConstTy(const_ty) = ty.data(db) else {
+        return false;
+    };
+
+    match const_ty.data(db) {
+        ConstTyData::Hole(_) => true,
+        ConstTyData::TyParam(param, _)
+            if policy == LayoutPlaceholderPolicy::HolesAndImplicitParams && param.is_implicit() =>
+        {
+            true
+        }
+        _ => false,
+    }
+}
+
+pub fn ty_contains_const_hole<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
+    struct HoleFinder<'db> {
+        db: &'db dyn HirAnalysisDb,
+        found: bool,
+    }
+
+    impl<'db> TyVisitor<'db> for HoleFinder<'db> {
+        fn db(&self) -> &'db dyn HirAnalysisDb {
+            self.db
+        }
+
+        fn visit_ty(&mut self, ty: TyId<'db>) {
+            if self.found {
+                return;
+            }
+
+            if let TyData::ConstTy(const_ty) = ty.data(self.db)
+                && matches!(const_ty.data(self.db), ConstTyData::Hole(_))
+            {
+                self.found = true;
+                return;
+            }
+
+            walk_ty(self, ty);
+        }
+    }
+
+    let mut finder = HoleFinder { db, found: false };
+    ty.visit_with(&mut finder);
+    finder.found
+}
+
+pub(crate) fn collect_layout_placeholders_in_order<'db, T>(
+    db: &'db dyn HirAnalysisDb,
+    value: T,
+) -> Vec<TyId<'db>>
+where
+    T: TyVisitable<'db>,
+{
+    collect_layout_placeholders_in_order_with_policy(db, value, LayoutPlaceholderPolicy::HolesOnly)
+}
+
+pub(crate) fn collect_layout_placeholders_in_order_with_policy<'db, T>(
+    db: &'db dyn HirAnalysisDb,
+    value: T,
+    policy: LayoutPlaceholderPolicy,
+) -> Vec<TyId<'db>>
+where
+    T: TyVisitable<'db>,
+{
+    struct LayoutPlaceholderCollector<'a, 'db> {
+        db: &'db dyn HirAnalysisDb,
+        policy: LayoutPlaceholderPolicy,
+        out: &'a mut Vec<TyId<'db>>,
+    }
+
+    impl<'a, 'db> TyVisitor<'db> for LayoutPlaceholderCollector<'a, 'db> {
+        fn db(&self) -> &'db dyn HirAnalysisDb {
+            self.db
+        }
+
+        fn visit_ty(&mut self, ty: TyId<'db>) {
+            if is_layout_placeholder(self.db, ty, self.policy) {
+                self.out.push(ty);
+            }
+            walk_ty(self, ty);
+        }
+    }
+
+    let mut out = Vec::new();
+    value.visit_with(&mut LayoutPlaceholderCollector {
+        db,
+        policy,
+        out: &mut out,
+    });
+    out
+}
+
+pub(crate) fn substitute_layout_placeholders_in_order<'db, T>(
+    db: &'db dyn HirAnalysisDb,
+    value: T,
+    layout_args: &[TyId<'db>],
+    policy: LayoutPlaceholderPolicy,
+) -> T
+where
+    T: TyFoldable<'db>,
+{
+    if layout_args.is_empty() {
+        return value;
+    }
+
+    struct LayoutPlaceholderSubst<'a, 'db> {
+        db: &'db dyn HirAnalysisDb,
+        args: &'a [TyId<'db>],
+        policy: LayoutPlaceholderPolicy,
+        next: usize,
+    }
+
+    impl<'a, 'db> TyFolder<'db> for LayoutPlaceholderSubst<'a, 'db> {
+        fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+            if is_layout_placeholder(self.db, ty, self.policy)
+                && let Some(arg) = self.args.get(self.next).copied()
+            {
+                self.next += 1;
+                return arg;
+            }
+
+            ty.super_fold_with(db, self)
+        }
+    }
+
+    let mut folder = LayoutPlaceholderSubst {
+        db,
+        args: layout_args,
+        policy,
+        next: 0,
+    };
+    value.fold_with(db, &mut folder)
+}
+
+pub(crate) fn substitute_layout_holes<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    layout_args: &[TyId<'db>],
+) -> TyId<'db> {
+    substitute_layout_placeholders_in_order(db, ty, layout_args, LayoutPlaceholderPolicy::HolesOnly)
+}
+
+pub(crate) fn collect_layout_hole_tys_in_order<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+) -> Vec<TyId<'db>> {
+    collect_layout_placeholders_in_order(db, ty)
+        .into_iter()
+        .filter_map(|hole| {
+            let TyData::ConstTy(const_ty) = hole.data(db) else {
+                return None;
+            };
+            let ConstTyData::Hole(hole_ty) = const_ty.data(db) else {
+                return None;
+            };
+            Some(layout_hole_fallback_ty(db, *hole_ty))
+        })
+        .collect()
+}
+
+pub(crate) fn alpha_rename_hidden_layout_placeholders<'db, T>(
+    db: &'db dyn HirAnalysisDb,
+    expected: T,
+    actual: T,
+) -> T
+where
+    T: TyFoldable<'db> + TyVisitable<'db> + Copy,
+{
+    let expected_hidden = collect_layout_placeholders_in_order_with_policy(
+        db,
+        expected,
+        LayoutPlaceholderPolicy::HolesAndImplicitParams,
+    );
+    let actual_hidden = collect_layout_placeholders_in_order_with_policy(
+        db,
+        actual,
+        LayoutPlaceholderPolicy::HolesAndImplicitParams,
+    );
+    if expected_hidden.len() != actual_hidden.len() {
+        return expected;
+    }
+
+    substitute_layout_placeholders_in_order(
+        db,
+        expected,
+        &actual_hidden,
+        LayoutPlaceholderPolicy::HolesAndImplicitParams,
+    )
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub(crate) struct CallableInputLayoutArgRange {
+    pub(crate) origin: CallableInputLayoutHoleOrigin,
+    pub(crate) range: Range<usize>,
+}
+
+/// Returns the implicit layout const-params inserted for a callable's input layout holes.
+///
+/// These args are ordered to match `callable_input_layout_hole_groups`.
+#[salsa::tracked(return_ref)]
+pub(crate) fn callable_input_layout_implicit_args<'db>(
+    db: &'db dyn HirAnalysisDb,
+    func: Func<'db>,
+) -> Vec<TyId<'db>> {
+    collect_generic_params(db, func.into())
+        .params(db)
+        .iter()
+        .copied()
+        .filter(|ty| {
+            if let TyData::ConstTy(const_ty) = ty.data(db)
+                && let ConstTyData::TyParam(param, _) = const_ty.data(db)
+            {
+                param.is_implicit()
+            } else {
+                false
+            }
+        })
+        .collect()
+}
+
+#[salsa::tracked(return_ref)]
+pub(crate) fn callable_input_layout_arg_ranges<'db>(
+    db: &'db dyn HirAnalysisDb,
+    func: Func<'db>,
+) -> Vec<CallableInputLayoutArgRange> {
+    let groups = callable_input_layout_hole_groups(db, func);
+    let implicit_layout_args = callable_input_layout_implicit_args(db, func);
+    let expected_layout_arg_count = groups
+        .iter()
+        .map(|group| group.hole_tys.len())
+        .sum::<usize>();
+    assert_eq!(
+        implicit_layout_args.len(),
+        expected_layout_arg_count,
+        "layout-hole binder count mismatch while elaborating callable input types"
+    );
+
+    let mut ranges = Vec::with_capacity(groups.len());
+    let mut next_layout_arg = 0usize;
+
+    for group in groups {
+        let end = next_layout_arg + group.hole_tys.len();
+        let layout_range = next_layout_arg..end;
+        next_layout_arg = end;
+        ranges.push(CallableInputLayoutArgRange {
+            origin: group.origin,
+            range: layout_range,
+        });
+    }
+    assert_eq!(
+        next_layout_arg,
+        implicit_layout_args.len(),
+        "layout-hole binder walk did not consume all hidden layout arguments"
+    );
+
+    ranges
+}
+
+pub(crate) fn callable_input_layout_implicit_params_by_origin<'db>(
+    db: &'db dyn HirAnalysisDb,
+    method: CallableDef<'db>,
+) -> FxHashMap<CallableInputLayoutHoleOrigin, Vec<TyId<'db>>> {
+    let CallableDef::Func(func) = method else {
+        return FxHashMap::default();
+    };
+    let implicit_layout_args = callable_input_layout_implicit_args(db, func);
+    let ranges = callable_input_layout_arg_ranges(db, func);
+
+    let mut out: FxHashMap<CallableInputLayoutHoleOrigin, Vec<TyId<'db>>> = FxHashMap::default();
+    for range in ranges {
+        out.insert(
+            range.origin,
+            implicit_layout_args[range.range.start..range.range.end].to_vec(),
+        );
+    }
+
+    out
+}

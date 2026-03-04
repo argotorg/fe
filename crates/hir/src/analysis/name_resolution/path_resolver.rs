@@ -28,8 +28,8 @@ use crate::analysis::{
         adt_def::{AdtRef, adt_layout_hole_tys},
         binder::Binder,
         canonical::{Canonical, Canonicalized},
-        const_ty::ConstTyId,
         fold::TyFoldable,
+        layout_holes::layout_hole_with_fallback_ty,
         normalize::normalize_ty,
         trait_def::{TraitInstId, impls_for_ty_with_constraints},
         trait_lower::{TraitArgError, TraitRefLowerError, lower_trait_ref, lower_trait_ref_impl},
@@ -1524,17 +1524,7 @@ fn ty_from_adtref<'db>(
     let layout_hole_tys = adt_layout_hole_tys(db, adt);
     let provided_layout_len = layout_provided.len();
     for hole_ty in layout_hole_tys.iter().copied().skip(provided_layout_len) {
-        completed_args.push(TyId::new(
-            db,
-            TyData::ConstTy(ConstTyId::hole_with_ty(
-                db,
-                if hole_ty.has_invalid(db) {
-                    TyId::u256(db)
-                } else {
-                    hole_ty
-                },
-            )),
-        ));
+        completed_args.push(layout_hole_with_fallback_ty(db, hole_ty));
     }
 
     let applied = TyId::foldl(db, ty, &completed_args);

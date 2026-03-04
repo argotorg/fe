@@ -62,6 +62,10 @@ use crate::analysis::ty::adt_def::{AdtCycleMember, AdtDef, AdtField, AdtRef};
 use crate::analysis::ty::const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy};
 use crate::analysis::ty::effects::{EffectKeyKind, resolve_normalized_type_effect_key};
 use crate::analysis::ty::fold::{TyFoldable, TyFolder};
+use crate::analysis::ty::layout_holes::{
+    CallableInputLayoutArgRange, callable_input_layout_arg_ranges,
+    callable_input_layout_implicit_args, layout_hole_fallback_ty, substitute_layout_holes,
+};
 use crate::analysis::ty::trait_def::{
     ImplementorId, ImplementorOrigin, TraitInstId, does_impl_trait_conflict, ingot_trait_env,
 };
@@ -73,7 +77,6 @@ use crate::analysis::ty::ty_def::{TyBase, TyData};
 use crate::analysis::ty::ty_lower::{GenericParamTypeSet, collect_generic_params};
 use crate::analysis::ty::visitor::{TyVisitor, walk_ty};
 use crate::analysis::ty::{
-    collect_layout_hole_tys_in_order,
     diagnostics::{TraitConstraintDiag, TyDiagCollection},
     trait_resolution::{
         GoalSatisfiability, PredicateListId, TraitSolveCx, WellFormedness, check_ty_wf,
@@ -81,11 +84,11 @@ use crate::analysis::ty::{
     },
     ty_check::EffectParamSite,
     ty_contains_const_hole,
-    ty_def::{InvalidCause, PrimTy, TyId, instantiate_adt_field_ty, substitute_layout_holes},
+    ty_def::{InvalidCause, PrimTy, TyId, instantiate_adt_field_ty},
     ty_error::collect_ty_lower_errors,
     ty_lower::{
-        TyAlias, lower_hir_ty, lower_opt_hir_ty, lower_type_alias, lower_type_alias_from_hir,
-        method_receiver_layout_hole_tys,
+        CallableInputLayoutHoleOrigin, TyAlias, lower_hir_ty, lower_opt_hir_ty, lower_type_alias,
+        lower_type_alias_from_hir,
     },
 };
 use crate::core::adt_lower::{lower_adt, lower_contract_fields};
@@ -136,6 +139,84 @@ pub fn constraints_for<'db>(
     }
 }
 
+struct CallableInputLayoutArgMap<'db> {
+    implicit_layout_args: &'db [TyId<'db>],
+    ranges: &'db [CallableInputLayoutArgRange],
+}
+
+impl<'db> CallableInputLayoutArgMap<'db> {
+    fn args_for_origin(&self, origin: CallableInputLayoutHoleOrigin) -> Option<&'db [TyId<'db>]> {
+        let range = self.ranges.iter().find_map(|entry| {
+            (entry.origin == origin).then_some(entry.range.start..entry.range.end)
+        })?;
+        Some(&self.implicit_layout_args[range.start..range.end])
+    }
+
+    fn receiver_args(&self) -> &[TyId<'db>] {
+        self.args_for_origin(CallableInputLayoutHoleOrigin::Receiver)
+            .unwrap_or(&[])
+    }
+
+    fn value_param_args(&self, idx: usize) -> Option<&[TyId<'db>]> {
+        self.args_for_origin(CallableInputLayoutHoleOrigin::ValueParam(idx))
+    }
+
+    fn effect_args(&self, idx: usize) -> Option<&[TyId<'db>]> {
+        self.args_for_origin(CallableInputLayoutHoleOrigin::Effect(idx))
+    }
+}
+
+fn callable_input_layout_args<'db>(
+    db: &'db dyn HirAnalysisDb,
+    func: Func<'db>,
+) -> CallableInputLayoutArgMap<'db> {
+    CallableInputLayoutArgMap {
+        implicit_layout_args: callable_input_layout_implicit_args(db, func),
+        ranges: callable_input_layout_arg_ranges(db, func),
+    }
+}
+
+fn elaborate_func_param_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    func: Func<'db>,
+    assumptions: PredicateListId<'db>,
+    layout_args: &CallableInputLayoutArgMap<'db>,
+    param_idx: usize,
+    param: &FuncParam<'db>,
+    apply_view: bool,
+) -> TyId<'db> {
+    let mut ty = match param.ty.to_opt() {
+        Some(hir_ty) => lower_hir_ty(db, hir_ty, func.scope(), assumptions),
+        None => TyId::invalid(db, InvalidCause::ParseError),
+    };
+    let had_layout_hole = ty_contains_const_hole(db, ty);
+
+    if param.is_self_param(db) && had_layout_hole {
+        ty = substitute_layout_holes(db, ty, layout_args.receiver_args());
+    } else if had_layout_hole
+        && let Some(param_layout_args) = layout_args.value_param_args(param_idx)
+    {
+        ty = substitute_layout_holes(db, ty, param_layout_args);
+    }
+
+    let ty = if apply_view
+        && param.mode == crate::hir_def::params::FuncParamMode::View
+        && ty.as_capability(db).is_none()
+    {
+        TyId::view_of(db, ty)
+    } else {
+        ty
+    };
+
+    if had_layout_hole {
+        debug_assert!(
+            !ty_contains_const_hole(db, ty) || ty.has_invalid(db),
+            "unelaborated layout hole remained in callable parameter type"
+        );
+    }
+    ty
+}
+
 // Top‑level module items ----------------------------------------------------
 
 impl<'db> TopLevelMod<'db> {
@@ -178,46 +259,27 @@ impl<'db> Func<'db> {
 
     /// Semantic argument types bound to identity parameters.
     pub fn arg_tys(self, db: &'db dyn HirAnalysisDb) -> Vec<Binder<TyId<'db>>> {
-        use crate::analysis::ty::ty_def::{InvalidCause, TyId};
         let assumptions = self.assumptions(db);
-        let implicit_const_layout_args = collect_generic_params(db, self.into())
-            .params(db)
-            .iter()
-            .copied()
-            .filter(|ty| {
-                if let TyData::ConstTy(const_ty) = ty.data(db)
-                    && let ConstTyData::TyParam(param, _) = const_ty.data(db)
-                {
-                    param.is_implicit()
-                } else {
-                    false
-                }
-            })
-            .collect::<Vec<_>>();
-        let self_layout_count = method_receiver_layout_hole_tys(db, self).len();
-        let implicit_self_layout_args = implicit_const_layout_args
-            .into_iter()
-            .take(self_layout_count)
-            .collect::<Vec<_>>();
+        let layout_args = callable_input_layout_args(db, self);
         match self.params_list(db).to_opt() {
             Some(params) => params
                 .data(db)
                 .iter()
-                .map(|p| {
-                    let mut ty = match p.ty.to_opt() {
-                        Some(hir_ty) => lower_hir_ty(db, hir_ty, self.scope(), assumptions),
-                        None => TyId::invalid(db, InvalidCause::ParseError),
-                    };
-                    if p.is_self_param(db) && ty_contains_const_hole(db, ty) {
-                        ty = substitute_layout_holes(db, ty, &implicit_self_layout_args);
-                    }
-                    let ty = if p.mode == crate::hir_def::params::FuncParamMode::View
-                        && ty.as_capability(db).is_none()
-                    {
-                        TyId::view_of(db, ty)
-                    } else {
-                        ty
-                    };
+                .enumerate()
+                .map(|(param_idx, param)| {
+                    let ty = elaborate_func_param_ty(
+                        db,
+                        self,
+                        assumptions,
+                        &layout_args,
+                        param_idx,
+                        param,
+                        true,
+                    );
+                    debug_assert!(
+                        !ty_contains_const_hole(db, ty) || ty.has_invalid(db),
+                        "unelaborated layout hole remained in Func::arg_tys"
+                    );
                     Binder::bind(ty)
                 })
                 .collect(),
@@ -528,6 +590,14 @@ pub struct FuncParamView<'db> {
 }
 
 impl<'db> FuncParamView<'db> {
+    pub(crate) fn hir_ty(self, db: &'db dyn HirDb) -> Option<TypeId<'db>> {
+        self.func
+            .params_list(db)
+            .to_opt()
+            .and_then(|l| l.data(db).get(self.idx))
+            .and_then(|param| param.ty.to_opt())
+    }
+
     pub fn name(self, db: &'db dyn HirDb) -> Option<IdentId<'db>> {
         let list = self.func.params_list(db).to_opt()?;
         list.data(db).get(self.idx)?.name()
@@ -690,7 +760,15 @@ impl<'db> FuncParamView<'db> {
             return errs;
         }
 
-        let ty = lower_hir_ty(db, hir_ty, func.scope(), assumptions);
+        let semantic_ty = self.ty(db);
+        let ty = if semantic_ty.has_invalid(db) {
+            let layout_args = callable_input_layout_args(db, func);
+            elaborate_func_param_ty(db, func, assumptions, &layout_args, self.idx, param, false)
+        } else if self.mode(db) == crate::hir_def::params::FuncParamMode::View {
+            semantic_ty.as_view(db).unwrap_or(semantic_ty)
+        } else {
+            semantic_ty
+        };
         let ty_span = self.ty_span(db);
 
         let mut out = Vec::new();
@@ -706,15 +784,6 @@ impl<'db> FuncParamView<'db> {
                 TyLowerDiag::NormalTypeExpected {
                     span: ty_span.clone(),
                     given: ty,
-                }
-                .into(),
-            );
-            return out;
-        }
-        if !self.is_self_param(db) && ty_contains_const_hole(db, ty) {
-            out.push(
-                TyLowerDiag::ConstHoleInValuePosition {
-                    span: ty_span.clone(),
                 }
                 .into(),
             );
@@ -750,10 +819,14 @@ impl<'db> FuncParamView<'db> {
 
         // Self-parameter type shape check
         if self.is_self_param(db)
-            && let Some(expected) = func.expected_self_ty(db)
+            && let Some(mut expected) = func.expected_self_ty(db)
             && !ty.has_invalid(db)
             && !expected.has_invalid(db)
         {
+            if ty_contains_const_hole(db, expected) {
+                let layout_args = callable_input_layout_args(db, func);
+                expected = substitute_layout_holes(db, expected, layout_args.receiver_args());
+            }
             let ty_norm = normalize_ty(db, ty, func.scope(), assumptions);
 
             let matches_expected = |candidate: TyId<'db>| {
@@ -766,7 +839,7 @@ impl<'db> FuncParamView<'db> {
 
             let is_allowed_self_ty = matches_expected(ty_norm)
                 || ty_norm
-                    .as_borrow(db)
+                    .as_capability(db)
                     .is_some_and(|(_, inner)| matches_expected(inner));
 
             if !is_allowed_self_ty {
@@ -1132,11 +1205,7 @@ fn concretize_contract_layout_holes<'db>(
                 let slot = *self.next_slot;
                 *self.next_slot = slot.saturating_add(1);
 
-                let const_ty_ty = if hole_ty.has_invalid(self.db) {
-                    TyId::u256(self.db)
-                } else {
-                    *hole_ty
-                };
+                let const_ty_ty = layout_hole_fallback_ty(self.db, *hole_ty);
                 return slot_const_ty(self.db, slot, const_ty_ty);
             }
 
@@ -1500,10 +1569,10 @@ impl<'db> Func<'db> {
             key_trait: Option<TraitInstId<'db>>,
             is_mut: bool,
             binding_path: PathId<'db>,
-            layout_hole_count: usize,
         }
 
         let assumptions = PredicateListId::empty_list(db);
+        let layout_args = callable_input_layout_args(db, self);
         let mut pending = Vec::new();
         for (idx, effect) in self.effects(db).data(db).iter().enumerate() {
             let Some(key_path) = effect.key_path.to_opt() else {
@@ -1520,44 +1589,11 @@ impl<'db> Func<'db> {
                 idx,
                 binding_name,
                 key_kind,
-                layout_hole_count: key_ty
-                    .map(|ty| collect_layout_hole_tys_in_order(db, ty).len())
-                    .unwrap_or(0),
                 key_ty,
                 key_trait,
                 is_mut: effect.is_mut,
                 binding_path: key_path,
             });
-        }
-
-        let implicit_layout_args: Vec<TyId<'db>> = CallableDef::Func(self)
-            .params(db)
-            .iter()
-            .copied()
-            .filter(|ty| {
-                if let TyData::ConstTy(const_ty) = ty.data(db)
-                    && let ConstTyData::TyParam(param, _) = const_ty.data(db)
-                {
-                    param.is_implicit()
-                } else {
-                    false
-                }
-            })
-            .collect();
-        let mut next_layout_arg = method_receiver_layout_hole_tys(db, self)
-            .len()
-            .min(implicit_layout_args.len());
-        let mut effect_layout_args: FxHashMap<usize, Vec<TyId<'db>>> = FxHashMap::default();
-        for binding in &pending {
-            if binding.layout_hole_count == 0 {
-                continue;
-            }
-            let end = (next_layout_arg + binding.layout_hole_count).min(implicit_layout_args.len());
-            effect_layout_args.insert(
-                binding.idx,
-                implicit_layout_args[next_layout_arg..end].to_vec(),
-            );
-            next_layout_arg = end;
         }
 
         let mut out = Vec::new();
@@ -1566,10 +1602,15 @@ impl<'db> Func<'db> {
                 if !ty_contains_const_hole(db, ty) {
                     return ty;
                 }
-                let Some(layout_args) = effect_layout_args.get(&binding.idx) else {
+                let Some(effect_layout_args) = layout_args.effect_args(binding.idx) else {
                     return ty;
                 };
-                substitute_layout_holes(db, ty, layout_args)
+                let ty = substitute_layout_holes(db, ty, effect_layout_args);
+                debug_assert!(
+                    !ty_contains_const_hole(db, ty) || ty.has_invalid(db),
+                    "unelaborated layout hole remained in callable effect key type"
+                );
+                ty
             });
             out.push(EffectBinding {
                 binding_name: binding.binding_name,

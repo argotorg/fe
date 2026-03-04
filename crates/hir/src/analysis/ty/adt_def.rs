@@ -8,7 +8,7 @@ use salsa::Update;
 
 use super::{
     binder::Binder,
-    collect_layout_hole_tys_in_order,
+    layout_holes::collect_layout_hole_tys_in_order,
     trait_resolution::constraint::collect_constraints,
     ty_def::{InvalidCause, TyId},
     ty_lower::{GenericParamTypeSet, lower_hir_ty},

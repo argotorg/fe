@@ -8,11 +8,11 @@ use salsa::Update;
 use smallvec::smallvec;
 
 use super::{
-    collect_layout_hole_tys_in_order,
     const_expr::{ConstExpr, ConstExprId},
     const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
     effects::{EffectKeyKind, effect_key_kind, resolve_normalized_type_effect_key},
     fold::{TyFoldable, TyFolder},
+    layout_holes::collect_layout_hole_tys_in_order,
     trait_def::TraitInstId,
     trait_resolution::{PredicateListId, TraitSolveCx, constraint::collect_constraints},
     ty_def::{InvalidCause, Kind, TyData, TyId, TyParam},
@@ -234,17 +234,86 @@ fn collect_generic_params_cycle_recover<'db>(
     salsa::CycleRecoveryAction::Iterate
 }
 
-pub(crate) fn method_receiver_layout_hole_tys<'db>(
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub(crate) enum CallableInputLayoutHoleOrigin {
+    Receiver,
+    ValueParam(usize),
+    Effect(usize),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct CallableInputLayoutHoleGroup<'db> {
+    pub(crate) origin: CallableInputLayoutHoleOrigin,
+    pub(crate) hole_tys: Vec<TyId<'db>>,
+}
+
+pub(crate) fn callable_input_layout_hole_groups<'db>(
     db: &'db dyn HirAnalysisDb,
     func: crate::hir_def::Func<'db>,
-) -> Vec<TyId<'db>> {
-    if !func.is_method(db) {
-        return Vec::new();
+) -> Vec<CallableInputLayoutHoleGroup<'db>> {
+    let mut groups = Vec::new();
+
+    if func.is_method(db)
+        && let Some(expected_self_ty) = func.expected_self_ty(db)
+    {
+        let hole_tys = collect_layout_hole_tys_in_order(db, expected_self_ty);
+        if !hole_tys.is_empty() {
+            groups.push(CallableInputLayoutHoleGroup {
+                origin: CallableInputLayoutHoleOrigin::Receiver,
+                hole_tys,
+            });
+        }
     }
-    let Some(expected_self_ty) = func.expected_self_ty(db) else {
-        return Vec::new();
-    };
-    collect_layout_hole_tys_in_order(db, expected_self_ty)
+
+    let assumptions = PredicateListId::empty_list(db);
+    for param in func.params(db) {
+        if param.is_self_param(db) {
+            continue;
+        }
+        let Some(hir_ty) = param.hir_ty(db) else {
+            continue;
+        };
+
+        let ty = lower_hir_ty(db, hir_ty, func.scope(), assumptions);
+        let hole_tys = collect_layout_hole_tys_in_order(db, ty);
+        if hole_tys.is_empty() {
+            continue;
+        }
+
+        groups.push(CallableInputLayoutHoleGroup {
+            origin: CallableInputLayoutHoleOrigin::ValueParam(param.index()),
+            hole_tys,
+        });
+    }
+
+    for effect in func.effect_params(db) {
+        let Some(key_path) = effect.key_path(db) else {
+            continue;
+        };
+        if !matches!(
+            effect_key_kind(db, key_path, func.scope()),
+            EffectKeyKind::Type
+        ) {
+            continue;
+        }
+
+        let Some(key_ty) =
+            resolve_normalized_type_effect_key(db, key_path, func.scope(), assumptions)
+        else {
+            continue;
+        };
+        let hole_tys = collect_layout_hole_tys_in_order(db, key_ty);
+        if hole_tys.is_empty() {
+            continue;
+        }
+
+        groups.push(CallableInputLayoutHoleGroup {
+            origin: CallableInputLayoutHoleOrigin::Effect(effect.index()),
+            hole_tys,
+        });
+    }
+
+    groups
 }
 
 /// Lowers the given type alias to [`TyAlias`].
@@ -662,41 +731,19 @@ impl<'db> GenericParamCollector<'db> {
         };
 
         if let GenericParamOwner::Func(func) = owner {
-            for (layout_idx, hole_ty) in method_receiver_layout_hole_tys(db, func)
-                .into_iter()
-                .enumerate()
-            {
-                let name = IdentId::new(db, format!("__self_layout{layout_idx}"));
-                params.push(TyParamPrecursor::implicit_const_param(
-                    db,
-                    Partial::Present(name),
-                    hole_ty,
-                ));
-            }
-
-            let assumptions = PredicateListId::empty_list(db);
-            for effect in func.effect_params(db) {
-                let Some(key_path) = effect.key_path(db) else {
-                    continue;
-                };
-                if !matches!(
-                    effect_key_kind(db, key_path, func.scope()),
-                    EffectKeyKind::Type
-                ) {
-                    continue;
-                }
-
-                let Some(key_ty) =
-                    resolve_normalized_type_effect_key(db, key_path, func.scope(), assumptions)
-                else {
-                    continue;
-                };
-                for (layout_idx, hole_ty) in collect_layout_hole_tys_in_order(db, key_ty)
-                    .into_iter()
-                    .enumerate()
-                {
-                    let name =
-                        IdentId::new(db, format!("__efflayout{}_{}", effect.index(), layout_idx));
+            for group in callable_input_layout_hole_groups(db, func) {
+                for (layout_idx, hole_ty) in group.hole_tys.into_iter().enumerate() {
+                    let name = match group.origin {
+                        CallableInputLayoutHoleOrigin::Receiver => {
+                            IdentId::new(db, format!("__self_layout{layout_idx}"))
+                        }
+                        CallableInputLayoutHoleOrigin::ValueParam(param_idx) => {
+                            IdentId::new(db, format!("__arglayout{param_idx}_{layout_idx}"))
+                        }
+                        CallableInputLayoutHoleOrigin::Effect(effect_idx) => {
+                            IdentId::new(db, format!("__efflayout{effect_idx}_{layout_idx}"))
+                        }
+                    };
                     params.push(TyParamPrecursor::implicit_const_param(
                         db,
                         Partial::Present(name),

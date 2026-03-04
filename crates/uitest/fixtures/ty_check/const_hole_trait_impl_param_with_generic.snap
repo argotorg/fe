@@ -1,0 +1,5 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_hole_trait_impl_param_with_generic.fe
+---

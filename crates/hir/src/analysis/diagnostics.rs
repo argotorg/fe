@@ -1701,19 +1701,31 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 error_code,
             },
 
-            Self::ConstHoleInValuePosition { span } => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: "layout hole `_` is not allowed in value position".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
+            Self::ConstHoleInValuePosition { span, ty } => {
+                let mut sub_diagnostics = vec![SubDiagnostic {
                     style: LabelStyle::Primary,
-                    message: "this type contains `_`, which is only allowed in contract fields and `uses (...)` parameter types".to_string(),
+                    message: "this type contains an inferred const (`_`)".to_string(),
                     span: span.resolve(db),
-                }],
-                notes: vec![
-                    "replace `_` with an explicit const argument in value positions".to_string(),
-                ],
-                error_code,
-            },
+                }];
+                if let Some(name_span) = ty.name_span(db) {
+                    let type_name = ty.base_ty(db).pretty_print(db);
+                    sub_diagnostics.push(SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format!("`{type_name}` is defined here"),
+                        span: name_span.resolve(db),
+                    });
+                }
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "type with inferred const generic parameter `_` can not be used here".to_string(),
+                    sub_diagnostics,
+                    notes: vec![
+                        "specify an explicit const generic argument".to_string(),
+                    ],
+                    error_code,
+                }
+            }
 
             Self::OwnParamCannotBeBorrow { span, ty } => CompleteDiagnostic {
                 severity: Severity::Error,

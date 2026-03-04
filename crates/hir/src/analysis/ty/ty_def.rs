@@ -25,7 +25,8 @@ use super::{
     adt_def::{AdtDef, adt_layout_hole_tys},
     const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
     diagnostics::{TraitConstraintDiag, TyDiagCollection},
-    fold::{TyFoldable, TyFolder},
+    effects::place_effect_provider_param_index_map,
+    layout_holes::substitute_layout_holes,
     trait_def::TraitInstId,
     trait_resolution::{PredicateListId, WellFormedness},
     ty_lower::collect_generic_params,
@@ -867,43 +868,6 @@ pub(crate) fn instantiate_adt_field_ty<'db>(
     )
 }
 
-pub(crate) fn substitute_layout_holes<'db>(
-    db: &'db dyn HirAnalysisDb,
-    ty: TyId<'db>,
-    layout_args: &[TyId<'db>],
-) -> TyId<'db> {
-    if layout_args.is_empty() {
-        return ty;
-    }
-
-    struct LayoutHoleSubst<'a, 'db> {
-        db: &'db dyn HirAnalysisDb,
-        args: &'a [TyId<'db>],
-        next: usize,
-    }
-
-    impl<'a, 'db> TyFolder<'db> for LayoutHoleSubst<'a, 'db> {
-        fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
-            if let TyData::ConstTy(const_ty) = ty.data(self.db)
-                && matches!(const_ty.data(self.db), ConstTyData::Hole(_))
-                && let Some(arg) = self.args.get(self.next).copied()
-            {
-                self.next += 1;
-                return arg;
-            }
-
-            ty.super_fold_with(db, self)
-        }
-    }
-
-    let mut folder = LayoutHoleSubst {
-        db,
-        args: layout_args,
-        next: 0,
-    };
-    ty.fold_with(db, &mut folder)
-}
-
 fn adt_field_layout_hole_offset<'db>(
     db: &'db dyn HirAnalysisDb,
     adt_def: AdtDef<'db>,
@@ -1289,6 +1253,33 @@ impl<'db> TyParam<'db> {
     }
 
     pub(super) fn pretty_print(&self, db: &dyn HirAnalysisDb) -> String {
+        if self.is_implicit() {
+            return "_".to_string();
+        }
+
+        if self.is_effect_provider() {
+            if let ItemKind::Func(func) = self.owner.item() {
+                let provider_map = place_effect_provider_param_index_map(db, func);
+                for effect in func.effect_params(db) {
+                    let Some(provider_idx) = provider_map.get(effect.index()).copied().flatten()
+                    else {
+                        continue;
+                    };
+                    if provider_idx != self.idx {
+                        continue;
+                    }
+
+                    let effect_name = effect
+                        .name(db)
+                        .or_else(|| effect.key_path(db).and_then(|path| path.ident(db).to_opt()))
+                        .map(|ident| ident.data(db).to_string())
+                        .unwrap_or_else(|| "_effect".to_string());
+                    return effect_name;
+                }
+            }
+            return "_effect".to_string();
+        }
+
         // For effect parameters, show `name: Trait` if possible
         if self.is_effect() {
             let name_str = self.name.data(db).to_string();
@@ -1839,10 +1830,17 @@ fn pretty_print_ty_app<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> String
                         .copied()
                         .enumerate()
                         .filter_map(|(idx, arg)| {
-                            let is_provider = params.get(idx).is_some_and(|param_ty| {
-                                matches!(param_ty.data(db), TyData::TyParam(p) if p.is_effect_provider())
+                            let is_hidden = params.get(idx).is_some_and(|param_ty| match param_ty
+                                .data(db)
+                            {
+                                TyData::TyParam(param) => param.is_effect_provider(),
+                                TyData::ConstTy(const_ty) => matches!(
+                                    const_ty.data(db),
+                                    ConstTyData::TyParam(param, _) if param.is_implicit()
+                                ),
+                                _ => false,
                             });
-                            (!is_provider).then_some(arg)
+                            (!is_hidden).then_some(arg)
                         })
                         .collect()
                 }

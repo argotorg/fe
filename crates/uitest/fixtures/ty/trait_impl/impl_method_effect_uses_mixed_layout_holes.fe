@@ -1,0 +1,12 @@
+struct S<const ROOT: u256 = _> {}
+struct P<const ROOT: u256 = _> {}
+struct A<const ROOT: u256 = _> {}
+struct B<const ROOT: u256 = _> {}
+
+trait T {
+    fn f(self, p: P) uses (a: A, b: B)
+}
+
+impl T for S {
+    fn f(self, p: P) uses (b: B, a: A) {}
+}

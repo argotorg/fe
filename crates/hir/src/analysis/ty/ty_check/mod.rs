@@ -213,6 +213,7 @@ impl<'db> TyChecker<'db> {
                         self.push_diag(TyDiagCollection::from(
                             TyLowerDiag::ConstHoleInValuePosition {
                                 span: contract.span().init_block().params().param(idx).ty().into(),
+                                ty,
                             },
                         ));
                         continue;
@@ -1156,6 +1157,7 @@ impl<'db> TyChecker<'db> {
             self.push_diag(TyDiagCollection::from(
                 TyLowerDiag::ConstHoleInValuePosition {
                     span: span.clone().into(),
+                    ty,
                 },
             ));
             return TyId::invalid(self.db, InvalidCause::Other);

@@ -1,0 +1,5 @@
+struct Slot<T, const ROOT: u256 = _> {}
+
+contract C {
+    init(x: Slot<u256>) {}
+}

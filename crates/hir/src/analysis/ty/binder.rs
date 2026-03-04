@@ -191,7 +191,12 @@ where
     F: FnMut(TyId<'db>) -> TyId<'db>,
 {
     f: F,
-    params: FxHashMap<usize, TyId<'db>>,
+    // Cache by full param identity (TyId), not by param.idx.
+    //
+    // Different generic-param owners can legally reuse the same idx; caching by idx
+    // conflates distinct params and makes instantiate_with unsound for values that
+    // contain params from multiple owners.
+    params: FxHashMap<TyId<'db>, TyId<'db>>,
 }
 
 impl<'db, F> TyFolder<'db> for InstantiateWithFolder<'db, F>
@@ -201,7 +206,7 @@ where
     fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
         match ty.data(db) {
             TyData::TyParam(param) if !param.is_effect() => {
-                match self.params.entry(param.idx) {
+                match self.params.entry(ty) {
                     Entry::Occupied(entry) => return *entry.get(),
                     Entry::Vacant(entry) => {
                         let ty = (self.f)(ty);
@@ -212,7 +217,8 @@ where
             }
             TyData::ConstTy(const_ty) => {
                 if let ConstTyData::TyParam(param, _) = const_ty.data(db) {
-                    match self.params.entry(param.idx) {
+                    let _ = param;
+                    match self.params.entry(ty) {
                         Entry::Occupied(entry) => return *entry.get(),
                         Entry::Vacant(entry) => {
                             let ty = (self.f)(ty);

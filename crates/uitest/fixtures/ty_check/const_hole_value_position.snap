@@ -4,26 +4,24 @@ assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/const_hole_value_position.fe
 ---
-error[3-0032]: layout hole `_` is not allowed in value position
-  ┌─ const_hole_value_position.fe:9:17
-  │
-9 │ fn bad_param(x: Slot<u256>) {}
-  │                 ^^^^^^^^^^ this type contains `_`, which is only allowed in contract fields and `uses (...)` parameter types
-  │
-  = replace `_` with an explicit const argument in value positions
-
-error[3-0032]: layout hole `_` is not allowed in value position
+error[3-0032]: type with inferred const generic parameter `_` can not be used here
    ┌─ const_hole_value_position.fe:11:20
    │
+ 1 │ struct Slot<T, const ROOT: u256 = _> {}
+   │        ---- `Slot` is defined here
+   ·
 11 │ fn bad_return() -> Slot<u256> {
-   │                    ^^^^^^^^^^ this type contains `_`, which is only allowed in contract fields and `uses (...)` parameter types
+   │                    ^^^^^^^^^^ this type contains an inferred const (`_`)
    │
-   = replace `_` with an explicit const argument in value positions
+   = specify an explicit const generic argument
 
-error[3-0032]: layout hole `_` is not allowed in value position
+error[3-0032]: type with inferred const generic parameter `_` can not be used here
    ┌─ const_hole_value_position.fe:16:12
    │
+ 1 │ struct Slot<T, const ROOT: u256 = _> {}
+   │        ---- `Slot` is defined here
+   ·
 16 │     let x: Slot<u256>
-   │            ^^^^^^^^^^ this type contains `_`, which is only allowed in contract fields and `uses (...)` parameter types
+   │            ^^^^^^^^^^ this type contains an inferred const (`_`)
    │
-   = replace `_` with an explicit const argument in value positions
+   = specify an explicit const generic argument
