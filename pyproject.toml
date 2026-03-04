@@ -1,10 +1,10 @@
 [tool.towncrier]
-# Read https://github.com/ethereum/fe/newsfragments/README.md for instructions
+# Read https://github.com/argotorg/fe/newsfragments/README.md for instructions
 # package = "fe"
 filename = "docs/src/release_notes.md"
 directory = "newsfragments"
 underlines = ["", ""]
-issue_format = "[#{issue}](https://github.com/ethereum/fe/issues/{issue})"
+issue_format = "[#{issue}](https://github.com/argotorg/fe/issues/{issue})"
 start_string = "[//]: # (towncrier release notes start)"
 title_format = "## {version} ({project_date})"
 

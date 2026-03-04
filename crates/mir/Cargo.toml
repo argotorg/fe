@@ -3,7 +3,7 @@ name = "fe-mir"
 version = "26.0.0-alpha.7"
 edition.workspace = true
 license = "Apache-2.0"
-repository = "https://github.com/ethereum/fe"
+repository = "https://github.com/argotorg/fe"
 description = "Placeholder MIR layer for the Fe compiler rewrite"
 
 [lib]

@@ -3,7 +3,7 @@ name = "fe-driver"
 version = "26.0.0-alpha.7"
 edition.workspace = true
 license = "Apache-2.0"
-repository = "https://github.com/ethereum/fe"
+repository = "https://github.com/argotorg/fe"
 description = "Provides Fe driver"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

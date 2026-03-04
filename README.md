@@ -2,7 +2,7 @@
 # Fe
 
 The Fe compiler is in the late stages of a major compiler rewrite. The `master` branch supports `fe check`/`fe test` and includes an experimental `fe build` for EVM bytecode generation (default backend: Sonatina), but language/codegen coverage is still evolving.
-For the older version of the compiler, see the [legacy branch](https://github.com/ethereum/fe/tree/legacy).
+For the older version of the compiler, see the [legacy branch](https://github.com/argotorg/fe/tree/legacy).
 
 ## Overview
 
