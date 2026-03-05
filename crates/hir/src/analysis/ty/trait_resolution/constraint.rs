@@ -13,7 +13,10 @@ use crate::analysis::{
         adt_def::AdtDef,
         binder::Binder,
         corelib::resolve_core_trait,
-        effects::{EffectKeyKind, effect_key_kind, place_effect_provider_param_index_map},
+        effects::{
+            EffectKeyKind, effect_key_kind, place_effect_provider_param_index_map,
+            resolve_normalized_type_effect_key,
+        },
         trait_def::TraitInstId,
         trait_lower::{lower_impl_trait, lower_trait_ref},
         trait_resolution::PredicateListId,
@@ -30,10 +33,6 @@ fn collect_effect_constraints_for_func<'db>(
 ) -> Vec<TraitInstId<'db>> {
     let provider_map = place_effect_provider_param_index_map(db, func);
     let provider_params = CallableDef::Func(func).params(db);
-    let mut effect_key_tys = vec![None; func.effects(db).data(db).len()];
-    for binding in func.effect_bindings(db) {
-        effect_key_tys[binding.binding_idx as usize] = binding.key_ty;
-    }
 
     let Some(effect_ref_trait) = resolve_core_trait(db, func.scope(), &["effect_ref", "EffectRef"])
     else {
@@ -88,7 +87,9 @@ fn collect_effect_constraints_for_func<'db>(
                 ));
             }
             EffectKeyKind::Type => {
-                let Some(target_ty) = effect_key_tys.get(effect.index()).copied().flatten() else {
+                let Some(target_ty) =
+                    resolve_normalized_type_effect_key(db, key_path, func.scope(), assumptions)
+                else {
                     continue;
                 };
                 if !target_ty.is_star_kind(db) {
@@ -275,7 +276,9 @@ pub fn collect_constraints<'db>(
         let GenericParam::Type(hir_param) = param else {
             continue;
         };
-        let ty = param_set.param_by_original_idx(db, idx).unwrap();
+        let Some(ty) = param_set.param_by_original_idx(db, idx) else {
+            continue;
+        };
         for bound in &hir_param.bounds {
             if let TypeBound::Trait(trait_ref) = bound {
                 deferred.push(Deferred {
