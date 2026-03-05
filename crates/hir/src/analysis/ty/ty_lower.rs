@@ -923,7 +923,10 @@ impl<'db> TyParamPrecursor<'db> {
             }
             Variant::Const(Some(ty)) => {
                 let param = TyParam::normal_param(name, lowered_idx, kind, scope);
-                let ty = lower_const_ty_ty(db, scope, ty, PredicateListId::empty_list(db)); // xxx fixme
+                let assumptions = GenericParamOwner::from_item_opt(scope.item())
+                    .map(|owner| collect_constraints(db, owner).instantiate_identity())
+                    .unwrap_or_else(|| PredicateListId::empty_list(db));
+                let ty = lower_const_ty_ty(db, scope, ty, assumptions);
                 let const_ty = ConstTyId::new(db, ConstTyData::TyParam(param, ty));
                 TyId::new(db, TyData::ConstTy(const_ty))
             }
