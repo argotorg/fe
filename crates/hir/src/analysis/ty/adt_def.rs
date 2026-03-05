@@ -5,6 +5,7 @@ use crate::hir_def::{
 use crate::span::DynLazySpan;
 use common::ingot::Ingot;
 use salsa::Update;
+use std::ops::Range;
 
 use super::{
     binder::Binder,
@@ -228,6 +229,49 @@ pub(crate) fn adt_layout_hole_tys<'db>(
     }
 
     hole_tys
+}
+
+#[salsa::tracked(
+    return_ref,
+    cycle_initial=adt_field_layout_hole_ranges_cycle_initial,
+    cycle_fn=adt_field_layout_hole_ranges_cycle_recover
+)]
+pub(crate) fn adt_field_layout_hole_ranges<'db>(
+    db: &'db dyn HirAnalysisDb,
+    adt: AdtDef<'db>,
+) -> Vec<Vec<Range<usize>>> {
+    let mut next_layout_arg = 0usize;
+    adt.fields(db)
+        .iter()
+        .map(|variant| {
+            (0..variant.num_types())
+                .map(|field_idx| {
+                    let field_ty = variant.ty(db, field_idx).instantiate_identity();
+                    let end =
+                        next_layout_arg + collect_layout_hole_tys_in_order(db, field_ty).len();
+                    let range = next_layout_arg..end;
+                    next_layout_arg = end;
+                    range
+                })
+                .collect()
+        })
+        .collect()
+}
+
+fn adt_field_layout_hole_ranges_cycle_initial<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _adt: AdtDef<'db>,
+) -> Vec<Vec<Range<usize>>> {
+    Vec::new()
+}
+
+fn adt_field_layout_hole_ranges_cycle_recover<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _value: &Vec<Vec<Range<usize>>>,
+    _count: u32,
+    _adt: AdtDef<'db>,
+) -> salsa::CycleRecoveryAction<Vec<Vec<Range<usize>>>> {
+    salsa::CycleRecoveryAction::Iterate
 }
 
 fn adt_layout_hole_tys_cycle_initial<'db>(

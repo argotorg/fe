@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/def/adt_layout_hole_misbinding.fe
+---
+error[8-0000]: type mismatch
+   ┌─ adt_layout_hole_misbinding.fe:11:18
+   │
+11 │     takes_root_1(o.a)
+   │                  ^^^ expected `Slot<u256, 1>`, but `Slot<u256, const _: u256>` is given

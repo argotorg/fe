@@ -22,7 +22,8 @@ use salsa::Update;
 use smallvec::SmallVec;
 
 use super::{
-    adt_def::{AdtDef, adt_layout_hole_tys},
+    adt_def::{AdtDef, adt_field_layout_hole_ranges, adt_layout_hole_tys},
+    binder::Binder,
     const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
     diagnostics::{TraitConstraintDiag, TyDiagCollection},
     effects::place_effect_provider_param_index_map,
@@ -31,7 +32,7 @@ use super::{
     trait_resolution::{PredicateListId, WellFormedness},
     ty_lower::collect_generic_params,
     unify::InferenceKey,
-    visitor::{TyVisitable, TyVisitor, walk_ty},
+    visitor::{TyVisitable, TyVisitor},
 };
 use crate::analysis::{
     HirAnalysisDb,
@@ -854,72 +855,19 @@ pub(crate) fn instantiate_adt_field_ty<'db>(
     let field_ty = adt_def
         .fields(db)
         .get(variant_idx)
-        .and_then(|field_list| {
-            (field_idx < field_list.num_types()).then(|| field_list.ty(db, field_idx))
-        })
-        .map(|field_ty| field_ty.instantiate(db, explicit_args))
+        .and_then(|variant| (field_idx < variant.num_types()).then(|| variant.ty(db, field_idx)))
+        .map(|field_ty| field_ty.instantiate_identity())
         .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other));
-    let layout_offset =
-        adt_field_layout_hole_offset(db, adt_def, variant_idx, field_idx, explicit_args);
-    substitute_layout_holes(
-        db,
-        field_ty,
-        &layout_args[layout_offset.min(layout_args.len())..],
-    )
-}
 
-fn adt_field_layout_hole_offset<'db>(
-    db: &'db dyn HirAnalysisDb,
-    adt_def: AdtDef<'db>,
-    variant_idx: usize,
-    field_idx: usize,
-    explicit_args: &[TyId<'db>],
-) -> usize {
-    adt_def
-        .fields(db)
-        .iter()
-        .enumerate()
-        .map(|(idx, field_list)| {
-            let end = if idx < variant_idx {
-                field_list.num_types()
-            } else if idx == variant_idx {
-                field_idx
-            } else {
-                0
-            };
-            (0..end)
-                .map(|field| {
-                    count_const_holes(db, field_list.ty(db, field).instantiate(db, explicit_args))
-                })
-                .sum::<usize>()
-        })
-        .sum()
-}
-
-fn count_const_holes<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> usize {
-    struct Counter<'db> {
-        db: &'db dyn HirAnalysisDb,
-        count: usize,
-    }
-
-    impl<'db> TyVisitor<'db> for Counter<'db> {
-        fn db(&self) -> &'db dyn HirAnalysisDb {
-            self.db
-        }
-
-        fn visit_ty(&mut self, ty: TyId<'db>) {
-            if let TyData::ConstTy(const_ty) = ty.data(self.db)
-                && matches!(const_ty.data(self.db), ConstTyData::Hole(_))
-            {
-                self.count += 1;
-            }
-            walk_ty(self, ty);
-        }
-    }
-
-    let mut counter = Counter { db, count: 0 };
-    ty.visit_with(&mut counter);
-    counter.count
+    let range = adt_field_layout_hole_ranges(db, adt_def)
+        .get(variant_idx)
+        .and_then(|variant| variant.get(field_idx))
+        .cloned()
+        .unwrap_or(0..0);
+    let start = range.start.min(layout_args.len());
+    let end = range.end.min(layout_args.len());
+    let field_ty = substitute_layout_holes(db, field_ty, &layout_args[start..end]);
+    Binder::bind(field_ty).instantiate(db, explicit_args)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
