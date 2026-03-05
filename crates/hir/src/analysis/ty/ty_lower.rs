@@ -14,7 +14,10 @@ use super::{
     fold::{TyFoldable, TyFolder},
     layout_holes::collect_layout_hole_tys_in_order,
     trait_def::TraitInstId,
-    trait_resolution::{PredicateListId, TraitSolveCx, constraint::collect_constraints},
+    trait_resolution::{
+        PredicateListId, TraitSolveCx,
+        constraint::{collect_constraints, collect_func_def_constraints},
+    },
     ty_def::{InvalidCause, Kind, TyData, TyId, TyParam},
 };
 use crate::analysis::name_resolution::{PathRes, PathResErrorKind, resolve_path};
@@ -265,7 +268,7 @@ pub(crate) fn callable_input_layout_hole_groups<'db>(
         }
     }
 
-    let assumptions = PredicateListId::empty_list(db);
+    let assumptions = collect_func_def_constraints(db, func.into(), true).instantiate_identity();
     for param in func.params(db) {
         if param.is_self_param(db) {
             continue;

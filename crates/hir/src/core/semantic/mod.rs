@@ -1571,7 +1571,7 @@ impl<'db> Func<'db> {
             binding_path: PathId<'db>,
         }
 
-        let assumptions = PredicateListId::empty_list(db);
+        let assumptions = self.assumptions(db);
         let layout_args = callable_input_layout_args(db, self);
         let mut pending = Vec::new();
         for (idx, effect) in self.effects(db).data(db).iter().enumerate() {
