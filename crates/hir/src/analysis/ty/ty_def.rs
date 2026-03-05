@@ -23,10 +23,10 @@ use smallvec::SmallVec;
 
 use super::{
     adt_def::{AdtDef, adt_field_layout_hole_ranges, adt_layout_hole_tys},
+    binder::Binder,
     const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
     diagnostics::{TraitConstraintDiag, TyDiagCollection},
     effects::place_effect_provider_param_index_map,
-    fold::{TyFoldable, TyFolder},
     layout_holes::substitute_layout_holes,
     trait_def::TraitInstId,
     trait_resolution::{PredicateListId, WellFormedness},
@@ -867,35 +867,7 @@ pub(crate) fn instantiate_adt_field_ty<'db>(
     let start = range.start.min(layout_args.len());
     let end = range.end.min(layout_args.len());
     let field_ty = substitute_layout_holes(db, field_ty, &layout_args[start..end]);
-    struct AdtParamSubst<'db, 'a> {
-        adt_scope: ScopeId<'db>,
-        args: &'a [TyId<'db>],
-    }
-
-    impl<'db> TyFolder<'db> for AdtParamSubst<'db, '_> {
-        fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
-            match ty.data(db) {
-                TyData::TyParam(param) if param.owner == self.adt_scope && !param.is_effect() => {
-                    self.args.get(param.idx).copied().unwrap_or(ty)
-                }
-                TyData::ConstTy(const_ty) => {
-                    if let ConstTyData::TyParam(param, _) = const_ty.data(db)
-                        && param.owner == self.adt_scope
-                    {
-                        return self.args.get(param.idx).copied().unwrap_or(ty);
-                    }
-                    ty.super_fold_with(db, self)
-                }
-                _ => ty.super_fold_with(db, self),
-            }
-        }
-    }
-
-    let mut subst = AdtParamSubst {
-        adt_scope: adt_def.scope(db),
-        args: explicit_args,
-    };
-    field_ty.fold_with(db, &mut subst)
+    Binder::bind(field_ty).instantiate_scoped(db, adt_def.scope(db), explicit_args)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

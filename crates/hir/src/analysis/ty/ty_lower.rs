@@ -293,19 +293,25 @@ pub(crate) fn callable_input_layout_hole_groups<'db>(
         let Some(key_path) = effect.key_path(db) else {
             continue;
         };
-        if !matches!(
-            effect_key_kind(db, key_path, func.scope()),
-            EffectKeyKind::Type
-        ) {
-            continue;
-        }
-
-        let Some(key_ty) =
-            resolve_normalized_type_effect_key(db, key_path, func.scope(), assumptions)
-        else {
-            continue;
+        let hole_tys = match effect_key_kind(db, key_path, func.scope()) {
+            EffectKeyKind::Type => {
+                let Some(key_ty) =
+                    resolve_normalized_type_effect_key(db, key_path, func.scope(), assumptions)
+                else {
+                    continue;
+                };
+                collect_layout_hole_tys_in_order(db, key_ty)
+            }
+            EffectKeyKind::Trait => {
+                let Ok(PathRes::Trait(trait_inst)) =
+                    resolve_path(db, key_path, func.scope(), assumptions, false)
+                else {
+                    continue;
+                };
+                collect_layout_hole_tys_in_order(db, trait_inst)
+            }
+            EffectKeyKind::Other => continue,
         };
-        let hole_tys = collect_layout_hole_tys_in_order(db, key_ty);
         if hole_tys.is_empty() {
             continue;
         }

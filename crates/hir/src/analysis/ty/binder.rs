@@ -9,6 +9,7 @@ use super::{
     ty_def::{AssocTy, TyData, TyId},
 };
 use crate::analysis::HirAnalysisDb;
+use crate::hir_def::scope_graph::ScopeId;
 
 /// A `Binder` is a type constructor that binds a type variable within its
 /// scope.
@@ -79,6 +80,18 @@ where
     /// arguments applied.
     pub fn instantiate(self, db: &'db dyn HirAnalysisDb, args: &[TyId<'db>]) -> T {
         let mut folder = InstantiateFolder { args };
+        self.value.fold_with(db, &mut folder)
+    }
+
+    /// Instantiates the binder with the provided arguments, substituting only
+    /// params owned by `owner`.
+    pub fn instantiate_scoped(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        owner: ScopeId<'db>,
+        args: &[TyId<'db>],
+    ) -> T {
+        let mut folder = InstantiateScopedFolder { owner, args };
         self.value.fold_with(db, &mut folder)
     }
 
@@ -169,6 +182,82 @@ impl<'db> TyFolder<'db> for InstantiateFolder<'db, '_> {
                     );
 
                     // Return a new associated type with the updated trait instance
+                    return TyId::new(
+                        db,
+                        TyData::AssocTy(AssocTy {
+                            trait_: new_trait_inst,
+                            name: assoc_ty.name,
+                        }),
+                    );
+                }
+            }
+
+            _ => {}
+        }
+
+        ty.super_fold_with(db, self)
+    }
+}
+
+struct InstantiateScopedFolder<'db, 'a> {
+    owner: ScopeId<'db>,
+    args: &'a [TyId<'db>],
+}
+
+impl<'db> TyFolder<'db> for InstantiateScopedFolder<'db, '_> {
+    fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+        match ty.data(db) {
+            TyData::TyParam(param) if param.owner == self.owner && !param.is_effect() => {
+                return self.args[param.idx];
+            }
+            TyData::ConstTy(const_ty) => {
+                if let ConstTyData::TyParam(param, _) = const_ty.data(db)
+                    && param.owner == self.owner
+                {
+                    return self.args[param.idx];
+                }
+
+                let folded = ty.super_fold_with(db, self);
+                if let TyData::ConstTy(const_ty) = folded.data(db)
+                    && let ConstTyData::UnEvaluated {
+                        body,
+                        ty,
+                        const_def,
+                        generic_args,
+                    } = const_ty.data(db)
+                    && generic_args.is_empty()
+                    && !self.args.is_empty()
+                {
+                    let const_ty = ConstTyId::new(
+                        db,
+                        ConstTyData::UnEvaluated {
+                            body: *body,
+                            ty: *ty,
+                            const_def: *const_def,
+                            generic_args: self.args.to_vec(),
+                        },
+                    );
+                    return TyId::const_ty(db, const_ty);
+                }
+                return folded;
+            }
+
+            TyData::AssocTy(assoc_ty) => {
+                let trait_inst = assoc_ty.trait_;
+
+                let mut folded_generic_args = vec![];
+                for &arg in trait_inst.args(db) {
+                    folded_generic_args.push(self.fold_ty(db, arg));
+                }
+
+                if folded_generic_args != *trait_inst.args(db) {
+                    let new_trait_inst = TraitInstId::new(
+                        db,
+                        trait_inst.def(db),
+                        folded_generic_args,
+                        trait_inst.assoc_type_bindings(db).clone(),
+                    );
+
                     return TyId::new(
                         db,
                         TyData::AssocTy(AssocTy {

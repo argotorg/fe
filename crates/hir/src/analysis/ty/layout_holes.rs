@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::Update;
 
 use super::{
@@ -182,19 +182,92 @@ where
     value.fold_with(db, &mut folder)
 }
 
+pub(crate) fn substitute_layout_placeholders_by_identity<'db, T>(
+    db: &'db dyn HirAnalysisDb,
+    value: T,
+    layout_args: &FxHashMap<TyId<'db>, TyId<'db>>,
+    policy: LayoutPlaceholderPolicy,
+) -> T
+where
+    T: TyFoldable<'db>,
+{
+    if layout_args.is_empty() {
+        return value;
+    }
+
+    struct LayoutPlaceholderIdentitySubst<'a, 'db> {
+        db: &'db dyn HirAnalysisDb,
+        args: &'a FxHashMap<TyId<'db>, TyId<'db>>,
+        policy: LayoutPlaceholderPolicy,
+    }
+
+    impl<'a, 'db> TyFolder<'db> for LayoutPlaceholderIdentitySubst<'a, 'db> {
+        fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+            if is_layout_placeholder(self.db, ty, self.policy)
+                && let Some(arg) = self.args.get(&ty).copied()
+            {
+                return arg;
+            }
+
+            ty.super_fold_with(db, self)
+        }
+    }
+
+    let mut folder = LayoutPlaceholderIdentitySubst {
+        db,
+        args: layout_args,
+        policy,
+    };
+    value.fold_with(db, &mut folder)
+}
+
+pub(crate) fn substitute_layout_holes_in<'db, T>(
+    db: &'db dyn HirAnalysisDb,
+    value: T,
+    layout_args: &[TyId<'db>],
+) -> T
+where
+    T: TyFoldable<'db>,
+{
+    substitute_layout_placeholders_in_order(
+        db,
+        value,
+        layout_args,
+        LayoutPlaceholderPolicy::HolesOnly,
+    )
+}
+
 pub(crate) fn substitute_layout_holes<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
     layout_args: &[TyId<'db>],
 ) -> TyId<'db> {
-    substitute_layout_placeholders_in_order(db, ty, layout_args, LayoutPlaceholderPolicy::HolesOnly)
+    substitute_layout_holes_in(db, ty, layout_args)
 }
 
-pub(crate) fn collect_layout_hole_tys_in_order<'db>(
+fn collect_unique_layout_placeholders_in_order_with_policy<'db, T>(
     db: &'db dyn HirAnalysisDb,
-    ty: TyId<'db>,
-) -> Vec<TyId<'db>> {
-    collect_layout_placeholders_in_order(db, ty)
+    value: T,
+    policy: LayoutPlaceholderPolicy,
+) -> Vec<TyId<'db>>
+where
+    T: TyVisitable<'db>,
+{
+    let mut seen = FxHashSet::default();
+    collect_layout_placeholders_in_order_with_policy(db, value, policy)
+        .into_iter()
+        .filter(|ty| seen.insert(*ty))
+        .collect()
+}
+
+pub(crate) fn collect_layout_hole_tys_in_order<'db, T>(
+    db: &'db dyn HirAnalysisDb,
+    value: T,
+) -> Vec<TyId<'db>>
+where
+    T: TyVisitable<'db>,
+{
+    collect_layout_placeholders_in_order(db, value)
         .into_iter()
         .filter_map(|hole| {
             let TyData::ConstTy(const_ty) = hole.data(db) else {
@@ -216,12 +289,12 @@ pub(crate) fn alpha_rename_hidden_layout_placeholders<'db, T>(
 where
     T: TyFoldable<'db> + TyVisitable<'db> + Copy,
 {
-    let expected_hidden = collect_layout_placeholders_in_order_with_policy(
+    let expected_hidden = collect_unique_layout_placeholders_in_order_with_policy(
         db,
         expected,
         LayoutPlaceholderPolicy::HolesAndImplicitParams,
     );
-    let actual_hidden = collect_layout_placeholders_in_order_with_policy(
+    let actual_hidden = collect_unique_layout_placeholders_in_order_with_policy(
         db,
         actual,
         LayoutPlaceholderPolicy::HolesAndImplicitParams,
@@ -230,10 +303,14 @@ where
         return expected;
     }
 
-    substitute_layout_placeholders_in_order(
+    let layout_args = expected_hidden
+        .into_iter()
+        .zip(actual_hidden)
+        .collect::<FxHashMap<_, _>>();
+    substitute_layout_placeholders_by_identity(
         db,
         expected,
-        &actual_hidden,
+        &layout_args,
         LayoutPlaceholderPolicy::HolesAndImplicitParams,
     )
 }
@@ -325,4 +402,55 @@ pub(crate) fn callable_input_layout_implicit_params_by_origin<'db>(
     }
 
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use camino::Utf8PathBuf;
+
+    use super::alpha_rename_hidden_layout_placeholders;
+    use crate::analysis::ty::{
+        const_ty::{ConstTyData, ConstTyId},
+        ty_def::{Kind, TyId, TyParam},
+    };
+    use crate::hir_def::{IdentId, ItemKind};
+    use crate::test_db::HirAnalysisTestDb;
+
+    #[test]
+    fn alpha_rename_preserves_repeated_placeholder_identity() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from("alpha_rename_preserves_repeated_placeholder_identity.fe"),
+            "fn f() {}",
+        );
+        let (top_mod, _) = db.top_mod(file);
+        let func = top_mod
+            .children_non_nested(&db)
+            .find_map(|item| match item {
+                ItemKind::Func(func) => Some(func),
+                _ => None,
+            })
+            .expect("missing `f` function");
+        let scope = func.scope();
+
+        let mk_param_ty = |idx, name: &str| {
+            let param = TyParam::implicit_param(
+                IdentId::new(&db, name.to_string()),
+                idx,
+                Kind::Star,
+                scope,
+            );
+            TyId::const_ty(
+                &db,
+                ConstTyId::new(&db, ConstTyData::TyParam(param, TyId::u256(&db))),
+            )
+        };
+
+        let expected =
+            TyId::tuple_with_elems(&db, &[mk_param_ty(0, "__p0"), mk_param_ty(0, "__p0")]);
+        let actual = TyId::tuple_with_elems(&db, &[mk_param_ty(1, "__p1"), mk_param_ty(2, "__p2")]);
+        let renamed = alpha_rename_hidden_layout_placeholders(&db, expected, actual);
+
+        assert_ne!(renamed, actual);
+    }
 }

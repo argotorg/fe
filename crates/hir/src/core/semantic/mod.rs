@@ -64,7 +64,8 @@ use crate::analysis::ty::effects::{EffectKeyKind, resolve_normalized_type_effect
 use crate::analysis::ty::fold::{TyFoldable, TyFolder};
 use crate::analysis::ty::layout_holes::{
     CallableInputLayoutArgRange, callable_input_layout_arg_ranges,
-    callable_input_layout_implicit_args, layout_hole_fallback_ty, substitute_layout_holes,
+    callable_input_layout_implicit_args, collect_layout_hole_tys_in_order, layout_hole_fallback_ty,
+    substitute_layout_holes, substitute_layout_holes_in,
 };
 use crate::analysis::ty::trait_def::{
     ImplementorId, ImplementorOrigin, TraitInstId, does_impl_trait_conflict, ingot_trait_env,
@@ -1598,13 +1599,11 @@ impl<'db> Func<'db> {
 
         let mut out = Vec::new();
         for binding in pending {
+            let effect_layout_args = layout_args.effect_args(binding.idx).unwrap_or(&[]);
             let key_ty = binding.key_ty.map(|ty| {
                 if !ty_contains_const_hole(db, ty) {
                     return ty;
                 }
-                let Some(effect_layout_args) = layout_args.effect_args(binding.idx) else {
-                    return ty;
-                };
                 let ty = substitute_layout_holes(db, ty, effect_layout_args);
                 debug_assert!(
                     !ty_contains_const_hole(db, ty) || ty.has_invalid(db),
@@ -1612,11 +1611,22 @@ impl<'db> Func<'db> {
                 );
                 ty
             });
+            let key_trait = binding.key_trait.map(|trait_inst| {
+                if collect_layout_hole_tys_in_order(db, trait_inst).is_empty() {
+                    return trait_inst;
+                }
+                let trait_inst = substitute_layout_holes_in(db, trait_inst, effect_layout_args);
+                debug_assert!(
+                    collect_layout_hole_tys_in_order(db, trait_inst).is_empty(),
+                    "unelaborated layout hole remained in callable effect key trait"
+                );
+                trait_inst
+            });
             out.push(EffectBinding {
                 binding_name: binding.binding_name,
                 key_kind: binding.key_kind,
                 key_ty,
-                key_trait: binding.key_trait,
+                key_trait,
                 is_mut: binding.is_mut,
                 source: EffectSource::Root,
                 binding_site: EffectParamSite::Func(self),
