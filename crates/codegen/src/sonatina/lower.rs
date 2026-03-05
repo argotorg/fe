@@ -517,7 +517,8 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 })?
                 .ty;
             let place_ty = place_projection_ty(ctx.db, base_ty, place)?;
-            let packed = is_packed_scalar_array_access(ctx.db, ctx.body, place, place_ty)?;
+            let packed = layout::is_packed_scalar_array_access(ctx.db, ctx.body, place, place_ty)
+                .map_err(LowerError::Unsupported)?;
 
             let result = match addr_space {
                 AddressSpaceKind::Memory => {
@@ -687,6 +688,12 @@ fn lower_value_origin<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 Ok(ctx.fb.make_imm_value(val))
             }
             SyntheticValue::Bytes(bytes) => {
+                if bytes.len() > 32 {
+                    return Err(LowerError::Unsupported(format!(
+                        "SyntheticValue::Bytes must fit in one EVM word, got {} bytes",
+                        bytes.len()
+                    )));
+                }
                 // Convert bytes to I256 (left-padded to 32 bytes)
                 let i256_val = bytes_to_i256(bytes);
                 Ok(ctx.fb.make_imm_value(i256_val))
@@ -1491,165 +1498,6 @@ fn place_projection_ty<'db>(
     Ok(current_ty)
 }
 
-fn ty_contains_packed_memory_array<'db>(db: &'db DriverDataBase, ty: TyId<'db>) -> bool {
-    if ty.is_array(db) {
-        if let Some(elem_ty) = layout::array_elem_ty(db, ty) {
-            return layout::is_packed_memory_array_elem_ty(db, elem_ty)
-                || ty_contains_packed_memory_array(db, elem_ty);
-        }
-        return false;
-    }
-
-    if ty.field_count(db) > 0 {
-        return ty
-            .field_types(db)
-            .iter()
-            .copied()
-            .any(|field_ty| ty_contains_packed_memory_array(db, field_ty));
-    }
-
-    false
-}
-
-fn place_requires_packed_layout_arithmetic<'db>(
-    db: &'db DriverDataBase,
-    base_ty: TyId<'db>,
-    place: &Place<'db>,
-) -> Result<bool, LowerError> {
-    let mut current_ty = base_ty;
-    for proj in place.projection.iter() {
-        match proj {
-            Projection::Field(field_idx) => {
-                let field_types = current_ty.field_types(db);
-                if field_types
-                    .iter()
-                    .take(*field_idx)
-                    .copied()
-                    .any(|field_ty| ty_contains_packed_memory_array(db, field_ty))
-                {
-                    return Ok(true);
-                }
-                current_ty = *field_types.get(*field_idx).ok_or_else(|| {
-                    LowerError::Unsupported(format!("projection: field {field_idx} out of bounds"))
-                })?;
-            }
-            Projection::VariantField {
-                variant,
-                enum_ty,
-                field_idx,
-            } => {
-                let ctor = hir::analysis::ty::simplified_pattern::ConstructorKind::Variant(
-                    *variant, *enum_ty,
-                );
-                let field_types = ctor.field_types(db);
-                current_ty = *field_types.get(*field_idx).ok_or_else(|| {
-                    LowerError::Unsupported(format!(
-                        "projection: variant field {field_idx} out of bounds"
-                    ))
-                })?;
-            }
-            Projection::Discriminant => {
-                current_ty = TyId::new(db, TyData::TyBase(TyBase::Prim(PrimTy::U256)));
-            }
-            Projection::Index(_) => {
-                let elem_ty = layout::array_elem_ty(db, current_ty).ok_or_else(|| {
-                    LowerError::Unsupported("projection: array index on non-array type".to_string())
-                })?;
-                if layout::is_packed_memory_array_elem_ty(db, elem_ty)
-                    || ty_contains_packed_memory_array(db, elem_ty)
-                {
-                    return Ok(true);
-                }
-                current_ty = elem_ty;
-            }
-            Projection::Deref => {
-                return Err(LowerError::Unsupported(
-                    "projection: pointer dereference not implemented".to_string(),
-                ));
-            }
-        }
-    }
-    Ok(false)
-}
-
-fn is_packed_scalar_array_access<'db>(
-    db: &'db DriverDataBase,
-    body: &mir::MirBody<'db>,
-    place: &Place<'db>,
-    scalar_ty: TyId<'db>,
-) -> Result<bool, LowerError> {
-    let space = body.place_address_space(place);
-    if !matches!(space, AddressSpaceKind::Memory | AddressSpaceKind::Code) {
-        return Ok(false);
-    }
-
-    let scalar_ty = mir::repr::word_conversion_leaf_ty(db, scalar_ty);
-    if !layout::is_packed_memory_array_elem_ty(db, scalar_ty) {
-        return Ok(false);
-    }
-
-    let base_ty = body
-        .values
-        .get(place.base.index())
-        .ok_or_else(|| {
-            LowerError::Internal(format!(
-                "unknown MIR place base value {}",
-                place.base.index()
-            ))
-        })?
-        .ty;
-
-    let mut current_ty = base_ty;
-    let Some(last_idx) = place.projection.len().checked_sub(1) else {
-        return Ok(false);
-    };
-
-    for (idx, proj) in place.projection.iter().enumerate() {
-        match proj {
-            Projection::Field(field_idx) => {
-                let field_types = current_ty.field_types(db);
-                current_ty = *field_types.get(*field_idx).ok_or_else(|| {
-                    LowerError::Unsupported(format!("projection: field {field_idx} out of bounds"))
-                })?;
-            }
-            Projection::VariantField {
-                variant,
-                enum_ty,
-                field_idx,
-            } => {
-                let ctor = hir::analysis::ty::simplified_pattern::ConstructorKind::Variant(
-                    *variant, *enum_ty,
-                );
-                let field_types = ctor.field_types(db);
-                current_ty = *field_types.get(*field_idx).ok_or_else(|| {
-                    LowerError::Unsupported(format!(
-                        "projection: variant field {field_idx} out of bounds"
-                    ))
-                })?;
-            }
-            Projection::Discriminant => {
-                current_ty = TyId::new(db, TyData::TyBase(TyBase::Prim(PrimTy::U256)));
-            }
-            Projection::Index(_) => {
-                let elem_ty = layout::array_elem_ty(db, current_ty).ok_or_else(|| {
-                    LowerError::Unsupported("projection: array index on non-array type".to_string())
-                })?;
-                if idx == last_idx && layout::is_packed_memory_array_elem_ty(db, elem_ty) {
-                    return Ok(true);
-                }
-                current_ty = elem_ty;
-            }
-            Projection::Deref => {
-                return Err(LowerError::Unsupported(
-                    "projection: pointer dereference not implemented".to_string(),
-                ));
-            }
-        }
-    }
-
-    Ok(false)
-}
-
 /// Computes the address for a place by walking the projection path.
 ///
 /// For memory, computes byte offsets. For storage, computes slot offsets.
@@ -1684,7 +1532,8 @@ fn lower_place_address<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     // Use GEP for memory-addressed places where all projections are Field or Index
     if !is_slot_addressed
         && projections_eligible_for_gep(place)
-        && !place_requires_packed_layout_arithmetic(ctx.db, current_ty, place)?
+        && !layout::place_requires_packed_layout_arithmetic(ctx.db, current_ty, place)
+            .map_err(LowerError::Unsupported)?
         && let Some(sonatina_ty) = fe_ty_to_sonatina(
             ctx.fb,
             ctx.db,
@@ -2249,7 +2098,9 @@ fn store_typed_to_place<'db, C: sonatina_ir::func_cursor::FuncCursor>(
 ) -> Result<(), LowerError> {
     match ctx.body.place_address_space(place) {
         AddressSpaceKind::Memory => {
-            if is_packed_scalar_array_access(ctx.db, ctx.body, place, stored_ty)? {
+            if layout::is_packed_scalar_array_access(ctx.db, ctx.body, place, stored_ty)
+                .map_err(LowerError::Unsupported)?
+            {
                 let addr = lower_place_address(ctx, place)?;
                 ctx.fb
                     .insert_inst_no_result(EvmMstore8::new(ctx.is, addr, val));
@@ -2290,7 +2141,8 @@ fn load_place_typed<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         return Ok(ctx.fb.make_imm_value(I256::zero()));
     }
 
-    let packed = is_packed_scalar_array_access(ctx.db, ctx.body, place, loaded_ty)?;
+    let packed = layout::is_packed_scalar_array_access(ctx.db, ctx.body, place, loaded_ty)
+        .map_err(LowerError::Unsupported)?;
     let raw = match ctx.body.place_address_space(place) {
         AddressSpaceKind::Memory => {
             let ptr_addr = lower_place_memory_ptr(ctx, place)?;

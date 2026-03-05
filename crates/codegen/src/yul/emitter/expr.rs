@@ -325,7 +325,15 @@ impl<'db> FunctionEmitter<'db> {
         match value {
             SyntheticValue::Int(int) => Ok(int.to_string()),
             SyntheticValue::Bool(flag) => Ok(if *flag { "1" } else { "0" }.into()),
-            SyntheticValue::Bytes(bytes) => Ok(format!("0x{}", hex::encode(bytes))),
+            SyntheticValue::Bytes(bytes) => {
+                if bytes.len() > 32 {
+                    return Err(YulError::Unsupported(format!(
+                        "SyntheticValue::Bytes must fit in one EVM word, got {} bytes",
+                        bytes.len()
+                    )));
+                }
+                Ok(format!("0x{}", hex::encode(bytes)))
+            }
         }
     }
 
@@ -400,71 +408,8 @@ impl<'db> FunctionEmitter<'db> {
         place: &Place<'db>,
         scalar_ty: TyId<'db>,
     ) -> Result<bool, YulError> {
-        let space = self.mir_func.body.place_address_space(place);
-        if !matches!(
-            space,
-            mir::ir::AddressSpaceKind::Memory | mir::ir::AddressSpaceKind::Code
-        ) {
-            return Ok(false);
-        }
-
-        let scalar_ty = mir::repr::word_conversion_leaf_ty(self.db, scalar_ty);
-        if !layout::is_packed_memory_array_elem_ty(self.db, scalar_ty) {
-            return Ok(false);
-        }
-
-        let base_value = self.mir_func.body.value(place.base);
-        let mut current_ty = base_value.ty;
-        let Some(last_idx) = place.projection.len().checked_sub(1) else {
-            return Ok(false);
-        };
-
-        for (idx, proj) in place.projection.iter().enumerate() {
-            match proj {
-                Projection::Field(field_idx) => {
-                    let field_types = current_ty.field_types(self.db);
-                    current_ty = *field_types.get(*field_idx).ok_or_else(|| {
-                        YulError::Unsupported(format!(
-                            "packed check: field {} out of bounds (have {} fields)",
-                            field_idx,
-                            field_types.len()
-                        ))
-                    })?;
-                }
-                Projection::VariantField {
-                    variant,
-                    enum_ty,
-                    field_idx,
-                } => {
-                    let ctor = ConstructorKind::Variant(*variant, *enum_ty);
-                    let field_types = ctor.field_types(self.db);
-                    current_ty = *field_types.get(*field_idx).ok_or_else(|| {
-                        YulError::Unsupported(format!(
-                            "packed check: variant field {} out of bounds (have {} fields)",
-                            field_idx,
-                            field_types.len()
-                        ))
-                    })?;
-                }
-                Projection::Discriminant => {
-                    current_ty = TyId::new(self.db, TyData::TyBase(TyBase::Prim(PrimTy::U256)));
-                }
-                Projection::Index(_) => {
-                    let elem_ty = layout::array_elem_ty(self.db, current_ty).ok_or_else(|| {
-                        YulError::Unsupported(
-                            "packed check: array index on non-array type".to_string(),
-                        )
-                    })?;
-                    if idx == last_idx && layout::is_packed_memory_array_elem_ty(self.db, elem_ty) {
-                        return Ok(true);
-                    }
-                    current_ty = elem_ty;
-                }
-                Projection::Deref => return Ok(false),
-            }
-        }
-
-        Ok(false)
+        layout::is_packed_scalar_array_access(self.db, &self.mir_func.body, place, scalar_ty)
+            .map_err(YulError::Unsupported)
     }
 
     /// Applies the `WordRepr::from_word` conversion for a given type.

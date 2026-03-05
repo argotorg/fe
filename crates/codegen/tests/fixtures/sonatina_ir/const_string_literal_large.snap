@@ -1,13 +1,13 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
 expression: output
-input_file: crates/codegen/tests/fixtures/string_literal_large.fe
+input_file: crates/codegen/tests/fixtures/const_string_literal_large.fe
 ---
 target = "evm-ethereum-osaka"
 
 global private const [i8; 63] $__fe_const_data_0 = [84, 104, 105, 115, 32, 105, 115, 32, 97, 32, 108, 111, 110, 103, 32, 115, 116, 114, 105, 110, 103, 32, 116, 104, 97, 116, 32, 101, 120, 99, 101, 101, 100, 115, 32, 116, 104, 105, 114, 116, 121, 45, 116, 119, 111, 32, 98, 121, 116, 101, 115, 32, 105, 110, 32, 108, 101, 110, 103, 116, 104, 33, 33];
 
-func private %large_string() -> i256 {
+func private %large_string_const() -> i256 {
     block0:
         v1.i256 = sym_addr $__fe_const_data_0;
         return v1;
@@ -15,7 +15,7 @@ func private %large_string() -> i256 {
 
 func private %__fe_sonatina_entry() {
     block0:
-        v0.i256 = call %large_string;
+        v0.i256 = call %large_string_const;
         evm_stop;
 }
 

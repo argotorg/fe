@@ -176,6 +176,17 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         let ty = self.typed_body.expr_ty(self.db, expr);
+        if let Partial::Present(Expr::Lit(LitKind::String(str_id))) = expr.data(self.db, self.body)
+        {
+            match self.alloc_bytes_value(ty, str_id.data(self.db).as_bytes().to_vec()) {
+                Ok(value_id) => {
+                    self.builder.body.values[value_id.index()].source = self.source_for_expr(expr);
+                    return value_id;
+                }
+                Err(message) => self.defer_materialization_error(expr, ty, &message),
+            }
+        }
+
         let mut repr = self.value_repr_for_expr(expr, ty);
         let origin = match expr.data(self.db, self.body) {
             Partial::Present(Expr::Lit(LitKind::Int(int_id))) => {
@@ -184,9 +195,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             Partial::Present(Expr::Lit(LitKind::Bool(flag))) => {
                 ValueOrigin::Synthetic(SyntheticValue::Bool(*flag))
             }
-            Partial::Present(Expr::Lit(LitKind::String(str_id))) => ValueOrigin::Synthetic(
-                SyntheticValue::Bytes(str_id.data(self.db).as_bytes().to_vec()),
-            ),
             Partial::Present(Expr::Path(_)) => {
                 let expr_prop = self.typed_body.expr_prop(self.db, expr);
                 if let Some(binding) = expr_prop.binding {
@@ -365,20 +373,26 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 // Const arrays lower to an allocation + store.
                 // Reusing that ValueId across control-flow paths is unsound, so we
                 // materialize arrays at each use site and do not cache their ValueId.
-                if let ConstValue::ConstArray(ref elems) = value
-                    && let Some(region) = self.const_array_region_for_ref(&cref, ty, elems)
-                    && let Some(value_id) = self.try_emit_const_array(ty, region)
-                {
-                    return Some(value_id);
+                match self.const_array_region_for_value(&cref, expected_ty, &value) {
+                    Ok(Some(region)) => {
+                        if let Some(value_id) = self.try_emit_const_array(expected_ty, region) {
+                            return Some(value_id);
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(message) => {
+                        self.defer_materialization_error(expr, expected_ty, &message);
+                        return None;
+                    }
                 }
-                let value = match value {
-                    ConstValue::Int(int) => SyntheticValue::Int(int),
-                    ConstValue::Bool(flag) => SyntheticValue::Bool(flag),
-                    ConstValue::Bytes(bytes) => SyntheticValue::Bytes(bytes),
-                    ConstValue::EnumVariant(idx) => SyntheticValue::Int(BigUint::from(idx as u64)),
-                    ConstValue::ConstArray(_) => return None,
+                let value_id = match self.alloc_const_scalar_value(expected_ty, value) {
+                    Ok(Some(value_id)) => value_id,
+                    Ok(None) => return None,
+                    Err(message) => {
+                        self.defer_materialization_error(expr, expected_ty, &message);
+                        return None;
+                    }
                 };
-                let value_id = self.alloc_synthetic_value(ty, value);
                 if let hir::analysis::ty::ty_check::ConstRef::Const(const_def) = cref {
                     self.const_cache.insert(const_def, value_id);
                 }
@@ -416,15 +430,41 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let expected_ty = normalize_ty(self.db, expected_ty, self.body.scope(), assumptions);
         let capability_expected_ty = expected_ty.as_capability(self.db).map(|(_, ty)| ty);
         let base_expected_ty = expected_ty.base_ty(self.db);
-        let value = match const_arg.data(self.db) {
+        match const_arg.data(self.db) {
             ConstTyData::Evaluated(EvaluatedConstTy::LitInt(value), _) => {
-                SyntheticValue::Int(value.data(self.db).clone())
+                Some(self.alloc_synthetic_value(
+                    expected_ty,
+                    SyntheticValue::Int(value.data(self.db).clone()),
+                ))
             }
             ConstTyData::Evaluated(EvaluatedConstTy::LitBool(flag), _) => {
-                SyntheticValue::Bool(*flag)
+                Some(self.alloc_synthetic_value(expected_ty, SyntheticValue::Bool(*flag)))
             }
             ConstTyData::Evaluated(EvaluatedConstTy::EnumVariant(variant), _) => {
-                SyntheticValue::Int(BigUint::from(variant.idx as u64))
+                Some(self.alloc_synthetic_value(
+                    expected_ty,
+                    SyntheticValue::Int(BigUint::from(variant.idx as u64)),
+                ))
+            }
+            ConstTyData::Evaluated(EvaluatedConstTy::Bytes(bytes), _) => {
+                if expected_ty.is_array(self.db) {
+                    let region = match self.intern_const_u8_array_region(expected_ty, bytes) {
+                        Ok(region) => region,
+                        Err(message) => {
+                            self.defer_const_materialization_error(expr, expected_ty, &message);
+                            return None;
+                        }
+                    };
+                    self.try_emit_const_array(expected_ty, region)
+                } else {
+                    match self.alloc_bytes_value(expected_ty, bytes.clone()) {
+                        Ok(value_id) => Some(value_id),
+                        Err(message) => {
+                            self.defer_materialization_error(expr, expected_ty, &message);
+                            None
+                        }
+                    }
+                }
             }
             ConstTyData::Evaluated(EvaluatedConstTy::Array(elems), _) => {
                 let values: Option<Vec<_>> = elems
@@ -437,12 +477,17 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     })
                     .collect();
                 if let Some(elems) = values {
-                    let region = self.intern_const_array_region(expected_ty, &elems)?;
-                    if let Some(value_id) = self.try_emit_const_array(expected_ty, region) {
-                        return Some(value_id);
-                    }
+                    let region = match self.intern_const_array_region(expected_ty, &elems) {
+                        Ok(region) => region,
+                        Err(message) => {
+                            self.defer_const_materialization_error(expr, expected_ty, &message);
+                            return None;
+                        }
+                    };
+                    self.try_emit_const_array(expected_ty, region)
+                } else {
+                    None
                 }
-                return None;
             }
             ConstTyData::UnEvaluated { body, .. } => {
                 match try_eval_const_body(self.db, *body, expected_ty)
@@ -457,28 +502,52 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                             .flatten()
                     }) {
                     Some(ConstValue::ConstArray(ref elems)) => {
-                        let region = self.intern_const_array_region(expected_ty, elems)?;
-                        if let Some(value_id) = self.try_emit_const_array(expected_ty, region) {
-                            return Some(value_id);
-                        }
-                        return None;
+                        let region = match self.intern_const_array_region(expected_ty, elems) {
+                            Ok(region) => region,
+                            Err(message) => {
+                                self.defer_const_materialization_error(expr, expected_ty, &message);
+                                return None;
+                            }
+                        };
+                        self.try_emit_const_array(expected_ty, region)
                     }
-                    Some(value) => match value {
-                        ConstValue::Int(value) => SyntheticValue::Int(value),
-                        ConstValue::Bool(flag) => SyntheticValue::Bool(flag),
-                        ConstValue::Bytes(bytes) => SyntheticValue::Bytes(bytes),
-                        ConstValue::EnumVariant(idx) => {
-                            SyntheticValue::Int(BigUint::from(idx as u64))
+                    Some(ConstValue::Bytes(bytes)) => {
+                        if expected_ty.is_array(self.db) {
+                            let region =
+                                match self.intern_const_u8_array_region(expected_ty, &bytes) {
+                                    Ok(region) => region,
+                                    Err(message) => {
+                                        self.defer_const_materialization_error(
+                                            expr,
+                                            expected_ty,
+                                            &message,
+                                        );
+                                        return None;
+                                    }
+                                };
+                            self.try_emit_const_array(expected_ty, region)
+                        } else {
+                            match self.alloc_bytes_value(expected_ty, bytes) {
+                                Ok(value_id) => Some(value_id),
+                                Err(message) => {
+                                    self.defer_materialization_error(expr, expected_ty, &message);
+                                    None
+                                }
+                            }
                         }
-                        ConstValue::ConstArray(_) => unreachable!(),
+                    }
+                    Some(value) => match self.alloc_const_scalar_value(expected_ty, value) {
+                        Ok(value) => value,
+                        Err(message) => {
+                            self.defer_materialization_error(expr, expected_ty, &message);
+                            None
+                        }
                     },
-                    None => return None,
+                    None => None,
                 }
             }
-            _ => return None,
-        };
-
-        Some(self.alloc_synthetic_value(expected_ty, value))
+            _ => None,
+        }
     }
 
     pub(super) fn const_array_region_for_expr(
@@ -498,31 +567,31 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
             let capability_expected_ty = expected_ty.as_capability(self.db).map(|(_, ty)| ty);
             let base_expected_ty = expected_ty.base_ty(self.db);
-            if let Some(ConstValue::ConstArray(elems)) =
-                try_eval_const_ref(self.db, cref, expected_ty)
-                    .or_else(|| {
-                        capability_expected_ty.and_then(|inner_expected_ty| {
-                            try_eval_const_ref(self.db, cref, inner_expected_ty)
-                        })
+            if let Some(value) = try_eval_const_ref(self.db, cref, expected_ty)
+                .or_else(|| {
+                    capability_expected_ty.and_then(|inner_expected_ty| {
+                        try_eval_const_ref(self.db, cref, inner_expected_ty)
                     })
-                    .or_else(|| {
-                        (base_expected_ty != expected_ty)
-                            .then(|| try_eval_const_ref(self.db, cref, base_expected_ty))
-                            .flatten()
-                    })
-                    .or_else(|| {
-                        eval_const_expr(
-                            self.db,
-                            self.body,
-                            self.typed_body,
-                            self.generic_args,
-                            expr,
-                        )
+                })
+                .or_else(|| {
+                    (base_expected_ty != expected_ty)
+                        .then(|| try_eval_const_ref(self.db, cref, base_expected_ty))
+                        .flatten()
+                })
+                .or_else(|| {
+                    eval_const_expr(self.db, self.body, self.typed_body, self.generic_args, expr)
                         .ok()
                         .flatten()
-                    })
+                })
             {
-                return self.const_array_region_for_ref(&cref, expected_ty, &elems);
+                match self.const_array_region_for_value(&cref, expected_ty, &value) {
+                    Ok(Some(region)) => return Some(region),
+                    Ok(None) => {}
+                    Err(message) => {
+                        self.defer_const_materialization_error(expr, expected_ty, &message);
+                        return None;
+                    }
+                }
             }
         }
 
@@ -550,6 +619,15 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let capability_expected_ty = expected_ty.as_capability(self.db).map(|(_, ty)| ty);
         let base_expected_ty = expected_ty.base_ty(self.db);
         match const_arg.data(self.db) {
+            ConstTyData::Evaluated(EvaluatedConstTy::Bytes(bytes), _) => {
+                match self.intern_const_u8_array_region(expected_ty, bytes) {
+                    Ok(region) => Some(region),
+                    Err(message) => {
+                        self.defer_const_materialization_error(expr, expected_ty, &message);
+                        None
+                    }
+                }
+            }
             ConstTyData::Evaluated(EvaluatedConstTy::Array(elems), _) => {
                 let values: Option<Vec<_>> = elems
                     .iter()
@@ -560,7 +638,16 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         evaluated_const_to_value(self.db, *elem_const)
                     })
                     .collect();
-                values.and_then(|elems| self.intern_const_array_region(expected_ty, &elems))
+                match values {
+                    Some(elems) => match self.intern_const_array_region(expected_ty, &elems) {
+                        Ok(region) => Some(region),
+                        Err(message) => {
+                            self.defer_const_materialization_error(expr, expected_ty, &message);
+                            None
+                        }
+                    },
+                    None => None,
+                }
             }
             ConstTyData::UnEvaluated { body, .. } => {
                 match try_eval_const_body(self.db, *body, expected_ty)
@@ -575,7 +662,22 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                             .flatten()
                     }) {
                     Some(ConstValue::ConstArray(elems)) => {
-                        self.intern_const_array_region(expected_ty, &elems)
+                        match self.intern_const_array_region(expected_ty, &elems) {
+                            Ok(region) => Some(region),
+                            Err(message) => {
+                                self.defer_const_materialization_error(expr, expected_ty, &message);
+                                None
+                            }
+                        }
+                    }
+                    Some(ConstValue::Bytes(bytes)) => {
+                        match self.intern_const_u8_array_region(expected_ty, &bytes) {
+                            Ok(region) => Some(region),
+                            Err(message) => {
+                                self.defer_const_materialization_error(expr, expected_ty, &message);
+                                None
+                            }
+                        }
                     }
                     _ => None,
                 }
@@ -600,11 +702,103 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         self.alloc_value(ty, ValueOrigin::Synthetic(value), ValueRepr::Word)
     }
 
+    fn alloc_const_region_value(
+        &mut self,
+        ty: TyId<'db>,
+        bytes: Vec<u8>,
+    ) -> Result<ValueId, String> {
+        let region = self.builder.body.intern_const_region(ty, bytes);
+        Ok(self.alloc_value(
+            ty,
+            ValueOrigin::ConstRegion(region),
+            self.value_repr_for_ty(ty, AddressSpaceKind::Code),
+        ))
+    }
+
+    fn alloc_bytes_value(&mut self, ty: TyId<'db>, bytes: Vec<u8>) -> Result<ValueId, String> {
+        if bytes.len() <= 32 {
+            return Ok(self.alloc_synthetic_value(ty, SyntheticValue::Bytes(bytes)));
+        }
+        self.alloc_const_region_value(ty, bytes)
+    }
+
+    fn alloc_const_scalar_value(
+        &mut self,
+        ty: TyId<'db>,
+        value: ConstValue,
+    ) -> Result<Option<ValueId>, String> {
+        Ok(Some(match value {
+            ConstValue::Int(value) => self.alloc_synthetic_value(ty, SyntheticValue::Int(value)),
+            ConstValue::Bool(flag) => self.alloc_synthetic_value(ty, SyntheticValue::Bool(flag)),
+            ConstValue::Bytes(bytes) => self.alloc_bytes_value(ty, bytes)?,
+            ConstValue::EnumVariant(idx) => {
+                self.alloc_synthetic_value(ty, SyntheticValue::Int(BigUint::from(idx as u64)))
+            }
+            ConstValue::ConstArray(_) => return Ok(None),
+        }))
+    }
+
+    fn defer_materialization_error(&mut self, expr: ExprId, ty: TyId<'db>, detail: &str) {
+        if self.deferred_error.is_some() {
+            return;
+        }
+        let func_name = self
+            .hir_func
+            .map(|func| func.pretty_print_signature(self.db))
+            .unwrap_or_else(|| "<body owner>".to_owned());
+        let expr_context = super::format_hir_expr_context(self.db, self.body, expr);
+        self.deferred_error = Some(MirLowerError::Unsupported {
+            func_name,
+            message: format!(
+                "failed to materialize `{expr_context}` as `{}`: {detail}",
+                ty.pretty_print(self.db)
+            ),
+        });
+    }
+
+    fn defer_const_materialization_error(&mut self, expr: ExprId, ty: TyId<'db>, detail: &str) {
+        if self.deferred_error.is_some() {
+            return;
+        }
+        let func_name = self
+            .hir_func
+            .map(|func| func.pretty_print_signature(self.db))
+            .unwrap_or_else(|| "<body owner>".to_owned());
+        let expr_context = super::format_hir_expr_context(self.db, self.body, expr);
+        self.deferred_error = Some(MirLowerError::Unsupported {
+            func_name,
+            message: format!(
+                "failed to materialize const `{expr_context}` as `{}`: {detail}",
+                ty.pretty_print(self.db)
+            ),
+        });
+    }
+
     fn is_const_cache_value_reusable(&self, value_id: ValueId) -> bool {
         matches!(
             self.builder.body.value(value_id).origin,
-            ValueOrigin::Synthetic(_)
+            ValueOrigin::Synthetic(_) | ValueOrigin::ConstRegion(_)
         )
+    }
+
+    fn const_array_region_for_value(
+        &mut self,
+        cref: &hir::analysis::ty::ty_check::ConstRef<'db>,
+        array_ty: TyId<'db>,
+        value: &ConstValue,
+    ) -> Result<Option<ConstRegionId>, String> {
+        if !array_ty.is_array(self.db) {
+            return Ok(None);
+        }
+        match value {
+            ConstValue::ConstArray(elems) => self
+                .const_array_region_for_ref(cref, array_ty, elems)
+                .map(Some),
+            ConstValue::Bytes(raw) => self
+                .const_u8_array_region_for_ref(cref, array_ty, raw)
+                .map(Some),
+            _ => Ok(None),
+        }
     }
 
     fn const_array_region_for_ref(
@@ -612,7 +806,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         cref: &hir::analysis::ty::ty_check::ConstRef<'db>,
         array_ty: TyId<'db>,
         elems: &[ConstValue],
-    ) -> Option<ConstRegionId> {
+    ) -> Result<ConstRegionId, String> {
         let hir::analysis::ty::ty_check::ConstRef::Const(const_def) = cref else {
             return self.intern_const_array_region(array_ty, elems);
         };
@@ -620,23 +814,67 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         if let Some((cached_ty, region)) = self.const_array_region_cache.get(const_def)
             && *cached_ty == array_ty
         {
-            return Some(*region);
+            return Ok(*region);
         }
 
         let region = self.intern_const_array_region(array_ty, elems)?;
         self.const_array_region_cache
             .insert(*const_def, (array_ty, region));
-        Some(region)
+        Ok(region)
+    }
+
+    fn const_u8_array_region_for_ref(
+        &mut self,
+        cref: &hir::analysis::ty::ty_check::ConstRef<'db>,
+        array_ty: TyId<'db>,
+        raw: &[u8],
+    ) -> Result<ConstRegionId, String> {
+        let hir::analysis::ty::ty_check::ConstRef::Const(const_def) = cref else {
+            return self.intern_const_u8_array_region(array_ty, raw);
+        };
+
+        if let Some((cached_ty, region)) = self.const_array_region_cache.get(const_def)
+            && *cached_ty == array_ty
+        {
+            return Ok(*region);
+        }
+
+        let region = self.intern_const_u8_array_region(array_ty, raw)?;
+        self.const_array_region_cache
+            .insert(*const_def, (array_ty, region));
+        Ok(region)
     }
 
     fn intern_const_array_region(
         &mut self,
         array_ty: TyId<'db>,
         elems: &[ConstValue],
-    ) -> Option<ConstRegionId> {
-        let bytes =
-            serialize_const_array_to_bytes(self.db, &crate::layout::EVM_LAYOUT, array_ty, elems)?;
-        Some(self.builder.body.intern_const_region(array_ty, bytes))
+    ) -> Result<ConstRegionId, String> {
+        let Some(bytes) =
+            serialize_const_array_to_bytes(self.db, &crate::layout::EVM_LAYOUT, array_ty, elems)
+        else {
+            return Err(format!(
+                "unsupported EVM const-array layout or element serialization for `{}`",
+                array_ty.pretty_print(self.db)
+            ));
+        };
+        Ok(self.builder.body.intern_const_region(array_ty, bytes))
+    }
+
+    fn intern_const_u8_array_region(
+        &mut self,
+        array_ty: TyId<'db>,
+        raw: &[u8],
+    ) -> Result<ConstRegionId, String> {
+        let Some(bytes) =
+            serialize_const_u8_array_bytes(self.db, &crate::layout::EVM_LAYOUT, array_ty, raw)
+        else {
+            return Err(format!(
+                "unsupported EVM `[u8; N]` const-array layout or byte serialization for `{}`",
+                array_ty.pretty_print(self.db)
+            ));
+        };
+        Ok(self.builder.body.intern_const_region(array_ty, bytes))
     }
 
     /// Emits a memory allocation and copies the constant array from code space.

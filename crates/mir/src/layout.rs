@@ -35,8 +35,11 @@ use hir::{
         },
     },
     hir_def::{EnumVariant, scope_graph::ScopeId},
+    projection::Projection,
 };
 use num_traits::ToPrimitive;
+
+use crate::ir::{AddressSpaceKind, MirBody, Place};
 
 #[derive(Clone, Copy, Debug)]
 pub struct TargetDataLayout {
@@ -805,6 +808,145 @@ pub fn is_packed_memory_array_elem_ty(db: &dyn HirAnalysisDb, elem_ty: TyId<'_>)
         elem_ty.base_ty(db).data(db),
         TyData::TyBase(TyBase::Prim(PrimTy::U8 | PrimTy::Bool))
     )
+}
+
+pub fn ty_contains_packed_memory_array(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> bool {
+    if ty.is_array(db) {
+        if let Some(elem_ty) = array_elem_ty(db, ty) {
+            return is_packed_memory_array_elem_ty(db, elem_ty)
+                || ty_contains_packed_memory_array(db, elem_ty);
+        }
+        return false;
+    }
+
+    if ty.field_count(db) > 0 {
+        return ty
+            .field_types(db)
+            .iter()
+            .copied()
+            .any(|field_ty| ty_contains_packed_memory_array(db, field_ty));
+    }
+
+    false
+}
+
+pub fn place_requires_packed_layout_arithmetic<'db>(
+    db: &'db dyn HirAnalysisDb,
+    base_ty: TyId<'db>,
+    place: &Place<'db>,
+) -> Result<bool, String> {
+    let mut current_ty = base_ty;
+    for proj in place.projection.iter() {
+        match proj {
+            Projection::Field(field_idx) => {
+                let field_types = current_ty.field_types(db);
+                if field_types
+                    .iter()
+                    .take(*field_idx)
+                    .copied()
+                    .any(|field_ty| ty_contains_packed_memory_array(db, field_ty))
+                {
+                    return Ok(true);
+                }
+                current_ty = *field_types
+                    .get(*field_idx)
+                    .ok_or_else(|| format!("projection: field {field_idx} out of bounds"))?;
+            }
+            Projection::VariantField {
+                variant,
+                enum_ty,
+                field_idx,
+            } => {
+                let ctor = ConstructorKind::Variant(*variant, *enum_ty);
+                let field_types = ctor.field_types(db);
+                current_ty = *field_types.get(*field_idx).ok_or_else(|| {
+                    format!("projection: variant field {field_idx} out of bounds")
+                })?;
+            }
+            Projection::Discriminant => {
+                current_ty = TyId::new(db, TyData::TyBase(TyBase::Prim(PrimTy::U256)));
+            }
+            Projection::Index(_) => {
+                let elem_ty = array_elem_ty(db, current_ty)
+                    .ok_or_else(|| "projection: array index on non-array type".to_string())?;
+                if is_packed_memory_array_elem_ty(db, elem_ty)
+                    || ty_contains_packed_memory_array(db, elem_ty)
+                {
+                    return Ok(true);
+                }
+                current_ty = elem_ty;
+            }
+            Projection::Deref => {
+                return Err("projection: pointer dereference not implemented".to_string());
+            }
+        }
+    }
+    Ok(false)
+}
+
+pub fn is_packed_scalar_array_access<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: &MirBody<'db>,
+    place: &Place<'db>,
+    scalar_ty: TyId<'db>,
+) -> Result<bool, String> {
+    let space = body.place_address_space(place);
+    if !matches!(space, AddressSpaceKind::Memory | AddressSpaceKind::Code) {
+        return Ok(false);
+    }
+
+    let scalar_ty = crate::repr::word_conversion_leaf_ty(db, scalar_ty);
+    if !is_packed_memory_array_elem_ty(db, scalar_ty) {
+        return Ok(false);
+    }
+
+    let base_ty = body
+        .values
+        .get(place.base.index())
+        .ok_or_else(|| format!("unknown MIR place base value {}", place.base.index()))?
+        .ty;
+    let mut current_ty = base_ty;
+    let Some(last_idx) = place.projection.len().checked_sub(1) else {
+        return Ok(false);
+    };
+
+    for (idx, proj) in place.projection.iter().enumerate() {
+        match proj {
+            Projection::Field(field_idx) => {
+                let field_types = current_ty.field_types(db);
+                current_ty = *field_types
+                    .get(*field_idx)
+                    .ok_or_else(|| format!("projection: field {field_idx} out of bounds"))?;
+            }
+            Projection::VariantField {
+                variant,
+                enum_ty,
+                field_idx,
+            } => {
+                let ctor = ConstructorKind::Variant(*variant, *enum_ty);
+                let field_types = ctor.field_types(db);
+                current_ty = *field_types.get(*field_idx).ok_or_else(|| {
+                    format!("projection: variant field {field_idx} out of bounds")
+                })?;
+            }
+            Projection::Discriminant => {
+                current_ty = TyId::new(db, TyData::TyBase(TyBase::Prim(PrimTy::U256)));
+            }
+            Projection::Index(_) => {
+                let elem_ty = array_elem_ty(db, current_ty)
+                    .ok_or_else(|| "projection: array index on non-array type".to_string())?;
+                if idx == last_idx && is_packed_memory_array_elem_ty(db, elem_ty) {
+                    return Ok(true);
+                }
+                current_ty = elem_ty;
+            }
+            Projection::Deref => {
+                return Err("projection: pointer dereference not implemented".to_string());
+            }
+        }
+    }
+
+    Ok(false)
 }
 
 // ============================================================================
