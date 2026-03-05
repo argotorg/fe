@@ -8,14 +8,13 @@ use either::Either;
 
 use crate::analysis::{
     HirAnalysisDb,
-    name_resolution::{PathRes, resolve_path},
     ty::{
         adt_def::AdtDef,
         binder::Binder,
         corelib::resolve_core_trait,
         effects::{
-            EffectKeyKind, effect_key_kind, place_effect_provider_param_index_map,
-            resolve_normalized_type_effect_key,
+            EffectKeyKind, ResolvedEffectKey, effect_key_kind,
+            place_effect_provider_param_index_map, resolve_effect_key,
         },
         trait_def::TraitInstId,
         trait_lower::{lower_impl_trait, lower_trait_ref},
@@ -65,14 +64,8 @@ fn collect_effect_constraints_for_func<'db>(
             continue;
         };
 
-        match key_kind {
-            EffectKeyKind::Trait => {
-                let Ok(PathRes::Trait(inst)) =
-                    resolve_path(db, key_path, func.scope(), assumptions, false)
-                else {
-                    continue;
-                };
-
+        match resolve_effect_key(db, key_path, func.scope(), assumptions) {
+            ResolvedEffectKey::Trait(inst) => {
                 let mut args = inst.args(db).to_vec();
                 if args.is_empty() {
                     args.push(provider_ty);
@@ -86,12 +79,7 @@ fn collect_effect_constraints_for_func<'db>(
                     inst.assoc_type_bindings(db).clone(),
                 ));
             }
-            EffectKeyKind::Type => {
-                let Some(target_ty) =
-                    resolve_normalized_type_effect_key(db, key_path, func.scope(), assumptions)
-                else {
-                    continue;
-                };
+            ResolvedEffectKey::Type(target_ty) => {
                 if !target_ty.is_star_kind(db) {
                     continue;
                 }
@@ -112,7 +100,7 @@ fn collect_effect_constraints_for_func<'db>(
                     ));
                 }
             }
-            EffectKeyKind::Other => {}
+            ResolvedEffectKey::Other => {}
         }
     }
 

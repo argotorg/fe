@@ -60,7 +60,7 @@ use crate::hir_def::*;
 // rather than exposing raw syntax.
 use crate::analysis::ty::adt_def::{AdtCycleMember, AdtDef, AdtField, AdtRef};
 use crate::analysis::ty::const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy};
-use crate::analysis::ty::effects::{EffectKeyKind, resolve_normalized_type_effect_key};
+use crate::analysis::ty::effects::{EffectKeyKind, resolve_effect_key};
 use crate::analysis::ty::fold::{TyFoldable, TyFolder};
 use crate::analysis::ty::layout_holes::{
     CallableInputLayoutArgRange, callable_input_layout_arg_ranges,
@@ -1328,25 +1328,55 @@ fn concretize_contract_layout_holes_and_count<'db>(
     (declared_ty, slot_count)
 }
 
-fn contract_field_address_space<'db>(
-    db: &'db dyn HirAnalysisDb,
+#[derive(Clone, Copy)]
+struct ContractFieldEffectHandleInfo<'db> {
+    is_provider: bool,
+    address_space: TyId<'db>,
+    target_ty: TyId<'db>,
+}
+
+#[derive(Clone, Copy)]
+struct ContractFieldEffectHandleCx<'db> {
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
     effect_handle: Trait<'db>,
     address_space_ident: IdentId<'db>,
-    field_ty: TyId<'db>,
+    target_ident: IdentId<'db>,
     fallback_space: TyId<'db>,
-) -> TyId<'db> {
-    let inst = TraitInstId::new(db, effect_handle, vec![field_ty], IndexMap::new());
-    let goal = Canonicalized::new(db, inst).value;
+}
 
-    match is_goal_satisfiable(db, TraitSolveCx::new(db, scope), goal) {
-        GoalSatisfiability::ContainsInvalid | GoalSatisfiability::UnSat(_) => fallback_space,
-        GoalSatisfiability::Satisfied(_) | GoalSatisfiability::NeedsConfirmation(_) => inst
-            .assoc_ty(db, address_space_ident)
-            .map(|assoc| normalize_ty(db, assoc, scope, assumptions))
-            .filter(|space| !space.has_invalid(db))
-            .unwrap_or(fallback_space),
+impl<'db> ContractFieldEffectHandleCx<'db> {
+    fn metadata(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        field_ty: TyId<'db>,
+    ) -> ContractFieldEffectHandleInfo<'db> {
+        let inst = TraitInstId::new(db, self.effect_handle, vec![field_ty], IndexMap::new());
+        let goal = Canonicalized::new(db, inst).value;
+
+        match is_goal_satisfiable(db, TraitSolveCx::new(db, self.scope), goal) {
+            GoalSatisfiability::ContainsInvalid | GoalSatisfiability::UnSat(_) => {
+                ContractFieldEffectHandleInfo {
+                    is_provider: false,
+                    address_space: self.fallback_space,
+                    target_ty: field_ty,
+                }
+            }
+            GoalSatisfiability::Satisfied(_) | GoalSatisfiability::NeedsConfirmation(_) => {
+                let normalize_assoc = |name, fallback| {
+                    inst.assoc_ty(db, name)
+                        .map(|assoc| normalize_ty(db, assoc, self.scope, self.assumptions))
+                        .filter(|ty| !ty.has_invalid(db))
+                        .unwrap_or(fallback)
+                };
+
+                ContractFieldEffectHandleInfo {
+                    is_provider: true,
+                    address_space: normalize_assoc(self.address_space_ident, self.fallback_space),
+                    target_ty: normalize_assoc(self.target_ident, field_ty),
+                }
+            }
+        }
     }
 }
 
@@ -1403,6 +1433,14 @@ impl<'db> Contract<'db> {
         let default_storage_address_space =
             resolve_lib_type_path(db, scope, "core::effect_ref::Storage")
                 .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other));
+        let effect_handle_cx = ContractFieldEffectHandleCx {
+            scope,
+            assumptions,
+            effect_handle,
+            address_space_ident,
+            target_ident,
+            fallback_space: default_storage_address_space,
+        };
 
         let hir_fields = self.hir_fields(db).data(db);
         let mut next_slot_by_address_space: FxHashMap<TyId<'db>, usize> = FxHashMap::default();
@@ -1414,35 +1452,19 @@ impl<'db> Contract<'db> {
             .enumerate()
         {
             let lowered_ty = lower_opt_hir_ty(db, field.type_ref(), scope, assumptions);
-            let address_space = contract_field_address_space(
-                db,
-                scope,
-                assumptions,
-                effect_handle,
-                address_space_ident,
-                lowered_ty,
-                default_storage_address_space,
-            );
-            let next_slot = next_slot_by_address_space.entry(address_space).or_insert(0);
+            let lowered_info = effect_handle_cx.metadata(db, lowered_ty);
+            let next_slot = next_slot_by_address_space
+                .entry(lowered_info.address_space)
+                .or_insert(0);
             let slot_offset = *next_slot;
             let (declared_ty, slot_count) =
                 concretize_contract_layout_holes_and_count(db, lowered_ty, next_slot);
-
-            let inst = TraitInstId::new(db, effect_handle, vec![declared_ty], IndexMap::new());
-            let goal = Canonicalized::new(db, inst).value;
-            let (is_provider, target_ty) =
-                match is_goal_satisfiable(db, TraitSolveCx::new(db, scope), goal) {
-                    GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid => {
-                        (false, None)
-                    }
-                    GoalSatisfiability::Satisfied(_) | GoalSatisfiability::NeedsConfirmation(_) => {
-                        (
-                            true,
-                            inst.assoc_ty(db, target_ident)
-                                .map(|assoc| normalize_ty(db, assoc, scope, assumptions)),
-                        )
-                    }
-                };
+            let declared_info = effect_handle_cx.metadata(db, declared_ty);
+            debug_assert!(
+                lowered_info.is_provider == declared_info.is_provider
+                    && lowered_info.address_space == declared_info.address_space,
+                "contract field EffectHandle metadata changed after concretizing layout holes"
+            );
 
             let name = field.name.unwrap();
             layout.insert(
@@ -1451,9 +1473,9 @@ impl<'db> Contract<'db> {
                     index: idx as u32,
                     name,
                     declared_ty,
-                    is_provider,
-                    target_ty: target_ty.unwrap_or(declared_ty),
-                    address_space,
+                    is_provider: declared_info.is_provider,
+                    target_ty: declared_info.target_ty,
+                    address_space: lowered_info.address_space,
                     slot_offset,
                     slot_count,
                 },
@@ -1528,7 +1550,7 @@ impl<'db> Contract<'db> {
                     .or_else(|| key_path.ident(db).to_opt())
                     .unwrap_or_else(|| IdentId::new(db, "_effect".to_string()));
                 let (key_kind, key_ty, key_trait) =
-                    resolve_effect_key(db, key_path, self.scope(), assumptions);
+                    resolve_effect_key(db, key_path, self.scope(), assumptions).into_parts();
                 Some(EffectBinding {
                     binding_name,
                     key_kind,
@@ -1584,7 +1606,7 @@ impl<'db> Func<'db> {
                 .or_else(|| key_path.ident(db).to_opt())
                 .unwrap_or_else(|| IdentId::new(db, "_effect".to_string()));
             let (key_kind, key_ty, key_trait) =
-                resolve_effect_key(db, key_path, self.scope(), assumptions);
+                resolve_effect_key(db, key_path, self.scope(), assumptions).into_parts();
 
             pending.push(PendingBinding {
                 idx,
@@ -1672,7 +1694,7 @@ fn contract_scoped_effect_bindings<'db>(
 
         if let Some(binding_name) = effect.name {
             let (key_kind, key_ty, key_trait) =
-                resolve_effect_key(db, key_path, contract.scope(), assumptions);
+                resolve_effect_key(db, key_path, contract.scope(), assumptions).into_parts();
 
             out.push(EffectBinding {
                 binding_name,
@@ -1715,7 +1737,7 @@ fn contract_scoped_effect_bindings<'db>(
                 contract_named_effects.get(&name).copied()
         {
             let (key_kind, key_ty, key_trait) =
-                resolve_effect_key(db, referenced_key, contract.scope(), assumptions);
+                resolve_effect_key(db, referenced_key, contract.scope(), assumptions).into_parts();
 
             out.push(EffectBinding {
                 binding_name: name,
@@ -1752,24 +1774,6 @@ fn contract_scoped_effect_bindings<'db>(
     }
 
     out
-}
-
-fn resolve_effect_key<'db>(
-    db: &'db dyn HirAnalysisDb,
-    key_path: PathId<'db>,
-    scope: ScopeId<'db>,
-    assumptions: PredicateListId<'db>,
-) -> (EffectKeyKind, Option<TyId<'db>>, Option<TraitInstId<'db>>) {
-    use crate::analysis::name_resolution::{PathRes, resolve_path};
-
-    if let Some(ty) = resolve_normalized_type_effect_key(db, key_path, scope, assumptions) {
-        return (EffectKeyKind::Type, Some(ty), None);
-    }
-
-    match resolve_path(db, key_path, scope, assumptions, false) {
-        Ok(PathRes::Trait(inst)) => (EffectKeyKind::Trait, None, Some(inst)),
-        _ => (EffectKeyKind::Other, None, None),
-    }
 }
 
 fn compute_arg_bindings<'db>(

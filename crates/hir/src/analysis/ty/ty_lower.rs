@@ -10,7 +10,7 @@ use smallvec::smallvec;
 use super::{
     const_expr::{ConstExpr, ConstExprId},
     const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
-    effects::{EffectKeyKind, effect_key_kind, resolve_normalized_type_effect_key},
+    effects::{EffectKeyKind, ResolvedEffectKey, effect_key_kind, resolve_effect_key},
     fold::{TyFoldable, TyFolder},
     layout_holes::collect_layout_hole_tys_in_order,
     trait_def::TraitInstId,
@@ -209,6 +209,15 @@ fn lower_const_ty_ty<'db>(
     }
 }
 
+fn generic_param_owner_assumptions<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+) -> PredicateListId<'db> {
+    GenericParamOwner::from_item_opt(scope.item())
+        .map(|owner| collect_constraints(db, owner).instantiate_identity())
+        .unwrap_or_else(|| PredicateListId::empty_list(db))
+}
+
 /// Collects the generic parameters of the given generic parameter owner.
 #[salsa::tracked(
     cycle_initial=collect_generic_params_cycle_initial,
@@ -293,24 +302,12 @@ pub(crate) fn callable_input_layout_hole_groups<'db>(
         let Some(key_path) = effect.key_path(db) else {
             continue;
         };
-        let hole_tys = match effect_key_kind(db, key_path, func.scope()) {
-            EffectKeyKind::Type => {
-                let Some(key_ty) =
-                    resolve_normalized_type_effect_key(db, key_path, func.scope(), assumptions)
-                else {
-                    continue;
-                };
-                collect_layout_hole_tys_in_order(db, key_ty)
-            }
-            EffectKeyKind::Trait => {
-                let Ok(PathRes::Trait(trait_inst)) =
-                    resolve_path(db, key_path, func.scope(), assumptions, false)
-                else {
-                    continue;
-                };
+        let hole_tys = match resolve_effect_key(db, key_path, func.scope(), assumptions) {
+            ResolvedEffectKey::Type(key_ty) => collect_layout_hole_tys_in_order(db, key_ty),
+            ResolvedEffectKey::Trait(trait_inst) => {
                 collect_layout_hole_tys_in_order(db, trait_inst)
             }
-            EffectKeyKind::Other => continue,
+            ResolvedEffectKey::Other => continue,
         };
         if hole_tys.is_empty() {
             continue;
@@ -559,17 +556,22 @@ impl<'db> GenericParamTypeSet<'db> {
         &self.params(db)[offset..]
     }
 
-    pub(crate) fn explicit_const_param_default_is_hole(
+    pub(crate) fn explicit_param_count(self, db: &'db dyn HirAnalysisDb) -> usize {
+        self.params_precursor(db)
+            .len()
+            .saturating_sub(self.offset_to_explicit(db))
+    }
+
+    pub(crate) fn explicit_const_param_default_hole_ty(
         self,
         db: &'db dyn HirAnalysisDb,
         explicit_idx: usize,
-    ) -> bool {
+    ) -> Option<TyId<'db>> {
         let idx = self.offset_to_explicit(db) + explicit_idx;
-        let Some(param) = self.params_precursor(db).get(idx) else {
-            return false;
-        };
-        matches!(param.variant, Variant::Const(_))
-            && matches!(param.default_hir_const, Some(ConstGenericArgValue::Hole))
+        let param = self.params_precursor(db).get(idx)?;
+        matches!(param.default_hir_const, Some(ConstGenericArgValue::Hole))
+            .then(|| param.declared_const_ty(db, self.scope(db)))
+            .flatten()
     }
 
     pub(crate) fn empty(db: &'db dyn HirAnalysisDb, scope: ScopeId<'db>) -> Self {
@@ -677,7 +679,7 @@ impl<'db> GenericParamTypeSet<'db> {
             }
 
             if let Some(default) = prec.default_hir_const {
-                let expected = prec.evaluate(db, scope, i).const_ty_ty(db);
+                let expected = prec.declared_const_ty(db, scope);
                 let lowered = match default {
                     ConstGenericArgValue::Expr(default) => {
                         let const_ty = ConstTyId::from_opt_body(db, default);
@@ -927,12 +929,11 @@ impl<'db> TyParamPrecursor<'db> {
                 let param = TyParam::effect_provider_param(name, lowered_idx, scope);
                 TyId::new(db, TyData::TyParam(param))
             }
-            Variant::Const(Some(ty)) => {
+            Variant::Const(Some(_)) => {
                 let param = TyParam::normal_param(name, lowered_idx, kind, scope);
-                let assumptions = GenericParamOwner::from_item_opt(scope.item())
-                    .map(|owner| collect_constraints(db, owner).instantiate_identity())
-                    .unwrap_or_else(|| PredicateListId::empty_list(db));
-                let ty = lower_const_ty_ty(db, scope, ty, assumptions);
+                let ty = self
+                    .declared_const_ty(db, scope)
+                    .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other));
                 let const_ty = ConstTyId::new(db, ConstTyData::TyParam(param, ty));
                 TyId::new(db, TyData::ConstTy(const_ty))
             }
@@ -1021,6 +1022,18 @@ impl<'db> TyParamPrecursor<'db> {
 
     fn is_const_ty(&self) -> bool {
         matches!(self.variant, Variant::Const(_) | Variant::ImplicitConst(_))
+    }
+
+    fn declared_const_ty(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        scope: ScopeId<'db>,
+    ) -> Option<TyId<'db>> {
+        let Variant::Const(Some(ty)) = self.variant else {
+            return None;
+        };
+        let assumptions = generic_param_owner_assumptions(db, scope);
+        Some(lower_const_ty_ty(db, scope, ty, assumptions))
     }
 }
 

@@ -20,6 +20,23 @@ pub enum EffectKeyKind {
     Other,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum ResolvedEffectKey<'db> {
+    Type(TyId<'db>),
+    Trait(TraitInstId<'db>),
+    Other,
+}
+
+impl<'db> ResolvedEffectKey<'db> {
+    pub(crate) fn into_parts(self) -> (EffectKeyKind, Option<TyId<'db>>, Option<TraitInstId<'db>>) {
+        match self {
+            Self::Type(ty) => (EffectKeyKind::Type, Some(ty), None),
+            Self::Trait(trait_inst) => (EffectKeyKind::Trait, None, Some(trait_inst)),
+            Self::Other => (EffectKeyKind::Other, None, None),
+        }
+    }
+}
+
 /// Classifies an effect key path without inspecting its generic arguments.
 ///
 /// This is cached and cycle-recoverable because effect-key classification can be queried while
@@ -156,6 +173,22 @@ pub(crate) fn resolve_normalized_type_effect_key<'db>(
     }
 }
 
+pub(crate) fn resolve_effect_key<'db>(
+    db: &'db dyn HirAnalysisDb,
+    key_path: PathId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> ResolvedEffectKey<'db> {
+    if let Some(ty) = resolve_normalized_type_effect_key(db, key_path, scope, assumptions) {
+        return ResolvedEffectKey::Type(ty);
+    }
+
+    match resolve_path(db, key_path, scope, assumptions, false) {
+        Ok(PathRes::Trait(trait_inst)) => ResolvedEffectKey::Trait(trait_inst),
+        _ => ResolvedEffectKey::Other,
+    }
+}
+
 /// Replaces omitted trailing const generic arguments in a type effect key with typed holes.
 ///
 /// Example: for `uses (map: StorageMap<K, V>)`, where `StorageMap` has
@@ -171,44 +204,39 @@ pub(crate) fn existentialize_omitted_const_args_in_effect_key<'db>(
         return ty;
     };
 
-    let (param_set, params, offset) = match base_ty {
+    let (param_set, offset) = match base_ty {
         TyBase::Adt(adt) => {
             let set = *adt.param_set(db);
-            (
-                set,
-                set.explicit_params(db),
-                set.offset_to_explicit_params_position(db),
-            )
+            (set, set.offset_to_explicit_params_position(db))
         }
         TyBase::Func(func) => match *func {
             CallableDef::Func(def) => {
                 let set = collect_generic_params(db, def.into());
-                (
-                    set,
-                    set.explicit_params(db),
-                    set.offset_to_explicit_params_position(db),
-                )
+                (set, set.offset_to_explicit_params_position(db))
             }
             CallableDef::VariantCtor(_) => return ty,
         },
         _ => return ty,
     };
-    if params.is_empty() {
+    let explicit_param_count = param_set.explicit_param_count(db);
+    if explicit_param_count == 0 {
         return ty;
     }
 
-    let provided_explicit_len = key_path.generic_args(db).data(db).len().min(params.len());
-    if provided_explicit_len >= params.len() {
+    let provided_explicit_len = key_path
+        .generic_args(db)
+        .data(db)
+        .len()
+        .min(explicit_param_count);
+    if provided_explicit_len >= explicit_param_count {
         return ty;
     }
 
     let mut completed_args = args.to_vec();
     let mut changed = false;
-    for (explicit_idx, param) in params.iter().enumerate().skip(provided_explicit_len) {
-        if !param_set.explicit_const_param_default_is_hole(db, explicit_idx) {
-            continue;
-        }
-        let Some(const_ty_ty) = param.const_ty_ty(db) else {
+    for explicit_idx in provided_explicit_len..explicit_param_count {
+        let Some(const_ty_ty) = param_set.explicit_const_param_default_hole_ty(db, explicit_idx)
+        else {
             continue;
         };
 
