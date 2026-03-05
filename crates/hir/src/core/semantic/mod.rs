@@ -141,6 +141,22 @@ pub fn constraints_for<'db>(
     }
 }
 
+/// Trait header validation must not assume `Self: Trait` yet.
+///
+/// The synthetic self-predicate from [`constraints_for`] is only valid once the trait
+/// interface has been established. Using it while lowering the trait's own super-traits or
+/// where-predicate headers can make projection resolution recurse through the in-progress trait
+/// definition.
+pub(crate) fn header_constraints_for<'db>(
+    db: &'db dyn HirAnalysisDb,
+    item: ItemKind<'db>,
+) -> PredicateListId<'db> {
+    match item {
+        ItemKind::Trait(trait_) => collect_constraints(db, trait_.into()).instantiate_identity(),
+        _ => constraints_for(db, item),
+    }
+}
+
 // Top‑level module items ----------------------------------------------------
 
 impl<'db> TopLevelMod<'db> {
@@ -2228,7 +2244,7 @@ impl<'db> WherePredicateView<'db> {
     pub fn subject_ty(self, db: &'db dyn HirAnalysisDb) -> Option<TyId<'db>> {
         let hir_ty = self.hir_pred(db).ty.to_opt()?;
         let owner_item = ItemKind::from(self.clause.owner);
-        let assumptions = constraints_for(db, owner_item);
+        let assumptions = header_constraints_for(db, owner_item);
         Some(lower_hir_ty(db, hir_ty, owner_item.scope(), assumptions))
     }
 
@@ -2315,7 +2331,7 @@ impl<'db> WherePredicateBoundView<'db> {
     ) -> Option<TraitInstId<'db>> {
         let subject = self.pred.subject_ty(db)?;
         let owner_item = ItemKind::from(self.pred.clause.owner);
-        let assumptions = constraints_for(db, owner_item);
+        let assumptions = header_constraints_for(db, owner_item);
         let scope = owner_item.scope();
         lower_trait_ref(db, subject, self.trait_ref(db), scope, assumptions, None).ok()
     }
@@ -2632,7 +2648,7 @@ impl<'db> SuperTraitRefView<'db> {
     }
 
     pub fn assumptions(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
-        constraints_for(db, self.owner.into())
+        header_constraints_for(db, self.owner.into())
     }
 
     /// Lower this super-trait reference to a semantic trait instance using the trait's

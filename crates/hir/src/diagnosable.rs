@@ -30,7 +30,8 @@ use crate::analysis::ty::binder::Binder;
 use crate::analysis::ty::trait_def::ImplementorId;
 use crate::semantic::{
     FieldView, FuncParamView, ImplAssocTypeView, SuperTraitRefView, VariantView,
-    WherePredicateBoundView, WherePredicateView, constraints_for, lower_hir_kind_local,
+    WherePredicateBoundView, WherePredicateView, constraints_for, header_constraints_for,
+    lower_hir_kind_local,
 };
 
 /// Unified "pull" diagnostics surface for HIR items and views.
@@ -170,7 +171,7 @@ impl<'db> WherePredicateView<'db> {
 
         // Path-resolution failures are carried via the subject's InvalidCause.
         let owner_item = ItemKind::from(self.clause.owner);
-        let assumptions = constraints_for(db, owner_item);
+        let assumptions = header_constraints_for(db, owner_item);
         if let Some(InvalidCause::PathResolutionFailed { path }) = subject.invalid_cause(db) {
             // Re-run name resolution on the failed path and surface a precise diagnostic
             // at the type path span within the where-predicate.
@@ -220,7 +221,7 @@ impl<'db> WherePredicateBoundView<'db> {
         let mut out = Vec::new();
         let owner_item = ItemKind::from(self.pred.clause.owner);
         let scope = owner_item.scope();
-        let assumptions = constraints_for(db, owner_item);
+        let assumptions = header_constraints_for(db, owner_item);
         let is_trait_self_subject =
             matches!(owner_item, ItemKind::Trait(_)) && self.pred.is_self_subject(db);
         let tr = self.trait_ref(db);
@@ -1227,7 +1228,7 @@ impl<'db> GenericParamOwner<'db> {
         let mut out = Vec::new();
         let param_set = ty::ty_lower::collect_generic_params(db, self);
         let scope = self.scope();
-        let assumptions = constraints_for(db, self.into());
+        let assumptions = header_constraints_for(db, self.into());
 
         for view in self.params(db) {
             let GenericParam::Type(tp) = view.param else {
