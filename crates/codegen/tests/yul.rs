@@ -27,7 +27,7 @@ fn yul_snap(fixture: Fixture<&str>) {
 
     let output = match emit_module_yul(&db, top_mod) {
         Ok(yul) => yul,
-        Err(err) => panic!("MIR ERROR: {err}"),
+        Err(err) => panic!("Yul snapshot failed: {err}"),
     };
 
     snap_test!(output, fixture.path());

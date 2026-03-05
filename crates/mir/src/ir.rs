@@ -989,10 +989,11 @@ pub enum SyntheticValue {
     Int(BigUint),
     /// Boolean literal stored as `0` or `1`.
     Bool(bool),
-    /// Byte string literal encoded as a `0x...` word.
+    /// Inline byte-backed scalar value emitted as a `0x...` word.
     ///
-    /// This is a stopgap representation: the literal is emitted inline as a numeric constant.
-    /// Only suitable for data that fits in a single EVM word (≤32 bytes).
+    /// This is only valid for payloads that fit in a single EVM word (≤32 bytes). Larger
+    /// byte-backed values must either lower through by-reference const regions or be rejected
+    /// during MIR lowering.
     Bytes(Vec<u8>),
 }
 
