@@ -19,6 +19,7 @@ use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use colored::Colorize;
 use fmt as fe_fmt;
 use similar::{ChangeTag, TextDiff};
+use tracing_subscriber::EnvFilter;
 use walkdir::WalkDir;
 
 use crate::test::TestDebugOptions;
@@ -348,7 +349,25 @@ fn default_project_path() -> Utf8PathBuf {
 
 fn main() {
     let opts = Options::parse();
+    init_tracing(opts.verbose);
     run(&opts);
+}
+
+fn init_tracing(verbose: bool) {
+    let filter = EnvFilter::try_from_default_env().ok().or_else(|| {
+        if verbose {
+            Some(EnvFilter::new("warn"))
+        } else {
+            None
+        }
+    });
+    let Some(filter) = filter else {
+        return;
+    };
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .try_init();
 }
 pub fn run(opts: &Options) {
     let preference = match opts.color {
