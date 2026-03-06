@@ -13,7 +13,7 @@ use super::{
         TraitSolveCx,
         constraint::{collect_constraints, collect_func_def_constraints},
     },
-    ty_check::{check_anon_const_body, check_const_body},
+    ty_check::{TypedBody, check_anon_const_body, check_const_body},
     ty_def::{InvalidCause, TyId, TyParam, TyVar},
     unify::UnificationTable,
 };
@@ -187,6 +187,78 @@ pub(crate) fn normalize_const_tys_for_comparison<'db>(
     ty.fold_with(db, &mut ComparisonConstFolder)
 }
 
+pub(crate) struct ValidatedUnEvaluatedConst<'db> {
+    pub const_ty: ConstTyId<'db>,
+    pub expected_ty: TyId<'db>,
+    pub typed_body: TypedBody<'db>,
+}
+
+pub(crate) fn validate_unevaluated_const_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    const_ty: ConstTyId<'db>,
+    expected_ty: Option<TyId<'db>>,
+) -> Result<ValidatedUnEvaluatedConst<'db>, InvalidCause<'db>> {
+    let ConstTyData::UnEvaluated {
+        body,
+        ty: const_ty_ty,
+        const_def,
+        generic_args,
+        ..
+    } = const_ty.data(db)
+    else {
+        return Err(InvalidCause::Other);
+    };
+
+    let Some(expected_ty) = expected_ty.or(*const_ty_ty) else {
+        return Err(InvalidCause::InvalidConstTyExpr { body: *body });
+    };
+    let check_ty = if generic_args.is_empty() {
+        expected_ty
+    } else {
+        const_ty_ty.unwrap_or(expected_ty)
+    };
+    let const_ty = const_ty.with_ty(db, expected_ty);
+
+    let (diags, typed_body) = match const_def {
+        Some(const_def) => {
+            let result = check_const_body(db, *const_def);
+            (result.0.clone(), result.1.clone())
+        }
+        None => {
+            let result = check_anon_const_body(db, *body, check_ty);
+            (result.0.clone(), result.1.clone())
+        }
+    };
+
+    if let Some((expected, given)) = diags.iter().find_map(|diag| match diag {
+        FuncBodyDiag::Body(BodyDiag::TypeMismatch {
+            expected, given, ..
+        }) => Some((*expected, *given)),
+        _ => None,
+    }) {
+        if matches!(body.scope().parent_item(db), Some(ItemKind::ImplTrait(_))) {
+            return Err(InvalidCause::Other);
+        }
+        return Err(InvalidCause::ConstTyMismatch { expected, given });
+    }
+
+    if !diags.is_empty() {
+        return Err(InvalidCause::InvalidConstTyExpr { body: *body });
+    }
+
+    check_const_ty(
+        db,
+        check_ty,
+        Some(expected_ty),
+        &mut UnificationTable::new(db),
+    )?;
+    Ok(ValidatedUnEvaluatedConst {
+        const_ty,
+        expected_ty,
+        typed_body,
+    })
+}
+
 #[salsa::interned]
 #[derive(Debug)]
 pub struct ConstTyId<'db> {
@@ -228,14 +300,13 @@ pub(crate) fn evaluate_const_ty<'db>(
         return evaluated;
     }
 
-    let (body, const_ty_ty, const_def, generic_args) = match const_ty.data(db) {
+    let (body, const_ty_ty, generic_args) = match const_ty.data(db) {
         ConstTyData::UnEvaluated {
             body,
             ty,
-            const_def,
             generic_args,
             ..
-        } => (*body, *ty, *const_def, generic_args.clone()),
+        } => (*body, *ty, generic_args.clone()),
         _ => {
             let const_ty_ty = const_ty.ty(db);
             return match check_const_ty(
@@ -406,59 +477,40 @@ pub(crate) fn evaluate_const_ty<'db>(
         );
     }
 
-    let Some(check_ty) = check_ty else {
+    if check_ty.is_none() {
         return ConstTyId::invalid(db, InvalidCause::InvalidConstTyExpr { body });
-    };
-    let expected_ty = expected_ty.expect("check_ty implies expected_ty is present");
-
-    let (diags, typed_body) = match const_def {
-        Some(const_def) => {
-            let result = check_const_body(db, const_def);
-            (result.0.clone(), result.1.clone())
-        }
-        None => {
-            let result = check_anon_const_body(db, body, check_ty);
-            (result.0.clone(), result.1.clone())
-        }
-    };
-
-    if let Some((expected, given)) = diags.iter().find_map(|diag| match diag {
-        FuncBodyDiag::Body(BodyDiag::TypeMismatch {
-            expected, given, ..
-        }) => Some((*expected, *given)),
-        _ => None,
-    }) {
-        // If this const body belongs to a trait impl associated const, prefer
-        // reporting the mismatch at the const definition during impl checks.
-        if matches!(body.scope().parent_item(db), Some(ItemKind::ImplTrait(_))) {
-            return ConstTyId::invalid(db, InvalidCause::Other);
-        }
-
-        return ConstTyId::invalid(db, InvalidCause::ConstTyMismatch { expected, given });
     }
-
-    if !diags.is_empty() {
-        return ConstTyId::invalid(
-            db,
-            InvalidCause::ConstEvalUnsupported {
-                body,
-                expr: body.expr(db),
-            },
-        );
-    }
+    let validated = match validate_unevaluated_const_ty(db, const_ty, expected_ty) {
+        Ok(validated) => validated,
+        Err(InvalidCause::InvalidConstTyExpr { body }) => {
+            return ConstTyId::invalid(
+                db,
+                InvalidCause::ConstEvalUnsupported {
+                    body,
+                    expr: body.expr(db),
+                },
+            );
+        }
+        Err(cause) => return ConstTyId::invalid(db, cause),
+    };
 
     let mut interp = CtfeInterpreter::new(db, CtfeConfig::default());
     let typed_body = if generic_args.is_empty() {
-        typed_body
+        validated.typed_body
     } else {
-        instantiate_typed_body(db, typed_body.clone(), &generic_args)
+        instantiate_typed_body(db, validated.typed_body.clone(), &generic_args)
     };
     let evaluated = interp
         .eval_expr_in_body(body, typed_body, generic_args, body.expr(db))
         .unwrap_or_else(|cause| ConstTyId::invalid(db, cause));
 
     let mut table = UnificationTable::new(db);
-    match check_const_ty(db, evaluated.ty(db), Some(expected_ty), &mut table) {
+    match check_const_ty(
+        db,
+        evaluated.ty(db),
+        Some(validated.expected_ty),
+        &mut table,
+    ) {
         Ok(ty) => evaluated.swap_ty(db, ty),
         Err(cause) => evaluated.swap_ty(db, TyId::invalid(db, cause)),
     }
@@ -516,7 +568,7 @@ pub(super) fn const_ty_from_trait_const<'db>(
 
 // FIXME: When we add type inference, we need to use the inference engine to
 // check the type of the expression instead of this function.
-fn check_const_ty<'db>(
+pub(crate) fn check_const_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     const_ty_ty: TyId<'db>,
     expected_ty: Option<TyId<'db>>,

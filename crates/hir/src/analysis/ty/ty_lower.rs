@@ -625,7 +625,31 @@ impl<'db> GenericParamTypeSet<'db> {
             trait_self,
             provided_explicit,
             assumptions,
-            ConstDefaultCompletionMode::MetadataOnly,
+            ConstDefaultCompletionConfig {
+                mode: ConstDefaultCompletionMode::MetadataOnly,
+                propagate_explicit_checks: false,
+            },
+            application_path,
+        )
+    }
+
+    pub(crate) fn complete_explicit_args_with_metadata_defaults_and_checked_explicit_args(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        trait_self: Option<TyId<'db>>,
+        provided_explicit: &[TyId<'db>],
+        assumptions: PredicateListId<'db>,
+        application_path: Option<PathId<'db>>,
+    ) -> Vec<TyId<'db>> {
+        self.complete_explicit_args_with_defaults_in_mode(
+            db,
+            trait_self,
+            provided_explicit,
+            assumptions,
+            ConstDefaultCompletionConfig {
+                mode: ConstDefaultCompletionMode::MetadataOnly,
+                propagate_explicit_checks: true,
+            },
             application_path,
         )
     }
@@ -642,7 +666,10 @@ impl<'db> GenericParamTypeSet<'db> {
             trait_self,
             provided_explicit,
             assumptions,
-            ConstDefaultCompletionMode::Evaluate,
+            ConstDefaultCompletionConfig {
+                mode: ConstDefaultCompletionMode::Evaluate,
+                propagate_explicit_checks: false,
+            },
             None,
         )
     }
@@ -653,7 +680,7 @@ impl<'db> GenericParamTypeSet<'db> {
         trait_self: Option<TyId<'db>>,
         provided_explicit: &[TyId<'db>],
         assumptions: PredicateListId<'db>,
-        const_default_mode: ConstDefaultCompletionMode,
+        completion: ConstDefaultCompletionConfig,
         application_path: Option<PathId<'db>>,
     ) -> Vec<TyId<'db>> {
         let total = self.params_precursor(db).len();
@@ -661,12 +688,13 @@ impl<'db> GenericParamTypeSet<'db> {
 
         // mapping from lowered param idx -> bound arg, used to substitute in defaults
         let mut mapping = vec![];
+        let mut result = Vec::with_capacity(provided_explicit.len());
         if let Some(self_ty) = trait_self {
             mapping.push(Some(self_ty));
         }
         for (explicit_idx, ty) in provided_explicit.iter().enumerate() {
             let lowered_idx = offset + explicit_idx;
-            let ty = if self.params_precursor(db)[lowered_idx].is_const_ty() {
+            let checked = if self.params_precursor(db)[lowered_idx].is_const_ty() {
                 ty.check_const_ty_without_eval(
                     db,
                     self.params_precursor(db)[lowered_idx].declared_const_ty(db, self.scope(db)),
@@ -675,7 +703,12 @@ impl<'db> GenericParamTypeSet<'db> {
             } else {
                 *ty
             };
-            mapping.push(Some(ty));
+            mapping.push(Some(checked));
+            result.push(if completion.propagate_explicit_checks {
+                checked
+            } else {
+                *ty
+            });
         }
         mapping.resize(total, None);
         let scope = self.scope(db);
@@ -726,7 +759,6 @@ impl<'db> GenericParamTypeSet<'db> {
         }
 
         // Build the returned explicit arg list, appending defaults where available.
-        let mut result: Vec<TyId<'db>> = provided_explicit.to_vec();
         for i in (offset + provided_explicit.len())..total {
             let prec = &self.params_precursor(db)[i];
 
@@ -755,14 +787,13 @@ impl<'db> GenericParamTypeSet<'db> {
                                 default,
                                 expected,
                                 mapped_generic_args(&mapping, i),
-                                matches!(
-                                    const_default_mode,
-                                    ConstDefaultCompletionMode::MetadataOnly
-                                ),
+                                matches!(completion.mode, ConstDefaultCompletionMode::MetadataOnly),
                             ),
                         );
-                        match const_default_mode {
-                            ConstDefaultCompletionMode::MetadataOnly => lowered,
+                        match completion.mode {
+                            ConstDefaultCompletionMode::MetadataOnly => lowered
+                                .check_const_ty_without_eval(db, expected)
+                                .unwrap_or_else(|cause| TyId::invalid(db, cause)),
                             ConstDefaultCompletionMode::Evaluate => lowered
                                 .evaluate_const_ty(db, expected)
                                 .unwrap_or_else(|cause| TyId::invalid(db, cause)),
@@ -814,6 +845,12 @@ impl<'db> GenericParamTypeSet<'db> {
 enum ConstDefaultCompletionMode {
     MetadataOnly,
     Evaluate,
+}
+
+#[derive(Clone, Copy)]
+struct ConstDefaultCompletionConfig {
+    mode: ConstDefaultCompletionMode,
+    propagate_explicit_checks: bool,
 }
 
 struct GenericParamCollector<'db> {

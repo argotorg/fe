@@ -31,7 +31,7 @@ use super::{
     trait_def::TraitInstId,
     trait_resolution::{PredicateListId, WellFormedness},
     ty_lower::collect_generic_params,
-    unify::InferenceKey,
+    unify::{InferenceKey, UnificationTable},
     visitor::{TyVisitable, TyVisitor},
 };
 use crate::analysis::{
@@ -683,7 +683,21 @@ impl<'db> TyId<'db> {
                 if expected_const_ty.has_invalid(db) {
                     return Err(InvalidCause::Other);
                 }
-                Ok(TyId::const_ty(db, const_ty.with_ty(db, expected_const_ty)))
+                if matches!(const_ty.data(db), ConstTyData::UnEvaluated { .. }) {
+                    return super::const_ty::validate_unevaluated_const_ty(
+                        db,
+                        *const_ty,
+                        Some(expected_const_ty),
+                    )
+                    .map(|validated| TyId::const_ty(db, validated.const_ty));
+                }
+                let ty = super::const_ty::check_const_ty(
+                    db,
+                    const_ty.ty(db),
+                    Some(expected_const_ty),
+                    &mut UnificationTable::new(db),
+                )?;
+                Ok(TyId::const_ty(db, const_ty.with_ty(db, ty)))
             }
             (Some(expected_const_ty), _) => {
                 if expected_const_ty.has_invalid(db) {

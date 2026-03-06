@@ -262,3 +262,63 @@ fn f(x: Foo<4>) {
     let (top_mod, _) = db.top_mod(file);
     db.assert_no_diags(top_mod);
 }
+
+#[test]
+fn metadata_only_default_const_args_validate_adt_defaults() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("metadata_only_default_const_args_validate_adt_defaults.fe"),
+        r#"
+struct Bad<const N: u256 = false> {}
+
+fn f(x: Bad) {}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let result = catch_unwind(AssertUnwindSafe(|| db.assert_no_diags(top_mod)));
+
+    assert!(
+        result.is_err(),
+        "metadata-only default validation unexpectedly accepted `false` as a `u256` default"
+    );
+}
+
+#[test]
+fn metadata_only_default_const_args_validate_type_alias_defaults() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("metadata_only_default_const_args_validate_type_alias_defaults.fe"),
+        r#"
+type Alias<const N: u256 = false> = u256
+
+fn f(x: Alias) {}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let result = catch_unwind(AssertUnwindSafe(|| db.assert_no_diags(top_mod)));
+
+    assert!(
+        result.is_err(),
+        "metadata-only alias default validation unexpectedly accepted `false` as a `u256` default"
+    );
+}
+
+#[test]
+fn type_alias_explicit_const_args_still_validate_type_mismatches() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("type_alias_explicit_const_args_still_validate_type_mismatches.fe"),
+        r#"
+type Alias<const N: u256> = bool
+
+fn f(x: Alias<false>) {}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let result = catch_unwind(AssertUnwindSafe(|| db.assert_no_diags(top_mod)));
+
+    assert!(
+        result.is_err(),
+        "type-alias explicit const arg validation unexpectedly accepted `false` as a `u256` arg"
+    );
+}
