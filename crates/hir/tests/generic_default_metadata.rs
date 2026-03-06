@@ -215,3 +215,50 @@ fn f() {
         default_const.data(&db)
     );
 }
+
+#[test]
+fn omitted_const_expr_defaults_unify_with_explicit_defaults() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("omitted_const_expr_defaults_unify_with_explicit_defaults.fe"),
+        r#"
+const fn plus1(x: usize) -> usize {
+    x + 1
+}
+
+struct Foo<const N: usize, const M: usize = plus1(N)> {}
+
+fn takes(_: Foo<4, 5>) {}
+
+fn f(x: Foo<4>) {
+    takes(x)
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+}
+
+#[test]
+fn type_alias_omitted_const_expr_defaults_unify_with_explicit_defaults() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("type_alias_omitted_const_expr_defaults_unify_with_explicit_defaults.fe"),
+        r#"
+const fn plus1(x: usize) -> usize {
+    x + 1
+}
+
+struct Raw<const N: usize, const M: usize> {}
+type Foo<const N: usize, const M: usize = plus1(N)> = Raw<N, M>
+
+fn takes(_: Raw<4, 5>) {}
+
+fn f(x: Foo<4>) {
+    takes(x)
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+}

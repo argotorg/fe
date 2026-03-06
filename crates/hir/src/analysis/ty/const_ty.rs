@@ -7,6 +7,7 @@ use super::const_expr::{ConstExpr, ConstExprId, pretty_print_un_op};
 use super::{
     ctfe::{CtfeConfig, CtfeInterpreter, instantiate_typed_body},
     diagnostics::{BodyDiag, FuncBodyDiag},
+    fold::{TyFoldable, TyFolder},
     trait_def::TraitInstId,
     trait_resolution::{
         TraitSolveCx,
@@ -148,6 +149,42 @@ impl<'a, 'db> ConstBodyExprPrinter<'a, 'db> {
             path.pretty_print(self.db)
         }
     }
+}
+
+pub(crate) fn normalize_const_tys_for_comparison<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+) -> TyId<'db> {
+    struct ComparisonConstFolder;
+
+    impl<'db> TyFolder<'db> for ComparisonConstFolder {
+        fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+            let TyData::ConstTy(const_ty) = ty.data(db) else {
+                return ty.super_fold_with(db, self);
+            };
+            let ConstTyData::UnEvaluated {
+                ty: Some(expected_ty),
+                ..
+            } = const_ty.data(db)
+            else {
+                return ty.super_fold_with(db, self);
+            };
+
+            let normalized = const_ty.evaluate(db, Some(*expected_ty));
+            if normalized.ty(db).invalid_cause(db).is_none()
+                && matches!(
+                    normalized.data(db),
+                    ConstTyData::Evaluated(..) | ConstTyData::Abstract(..)
+                )
+            {
+                TyId::const_ty(db, normalized)
+            } else {
+                ty.super_fold_with(db, self)
+            }
+        }
+    }
+
+    ty.fold_with(db, &mut ComparisonConstFolder)
 }
 
 #[salsa::interned]

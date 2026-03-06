@@ -33,3 +33,31 @@ impl T for S {
     let (top_mod, _) = db.top_mod(file);
     db.assert_no_diags(top_mod);
 }
+
+#[test]
+fn impl_method_effect_keys_match_with_omitted_const_expr_defaults() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("impl_method_effect_keys_match_with_omitted_const_expr_defaults.fe"),
+        r#"
+const fn plus1(x: usize) -> usize {
+    x + 1
+}
+
+trait Cap<T> {}
+
+struct Slot<const N: usize, const M: usize = plus1(N)> {}
+struct S {}
+
+trait T {
+    fn f(self) uses (cap: Cap<Slot<4>>)
+}
+
+impl T for S {
+    fn f(self) uses (cap: Cap<Slot<4, 5>>) {}
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+}

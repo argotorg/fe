@@ -4,7 +4,7 @@ use super::{
     binder::Binder,
     canonical::Canonical,
     const_expr::ConstExpr,
-    const_ty::{ConstTyData, const_ty_from_trait_const},
+    const_ty::{ConstTyData, const_ty_from_trait_const, normalize_const_tys_for_comparison},
     diagnostics::{ImplDiag, TyDiagCollection},
     effects::{EffectKeyKind, place_effect_provider_param_index_map},
     fold::{AssocTySubst, TyFoldable, TyFolder},
@@ -21,7 +21,7 @@ use super::{
     ty_lower::CallableInputLayoutHoleOrigin,
 };
 use crate::analysis::HirAnalysisDb;
-use crate::hir_def::{CallableDef, Expr, Partial, PathId, PathKind, scope_graph::ScopeId};
+use crate::hir_def::{CallableDef, PathId, scope_graph::ScopeId};
 use common::indexmap::IndexMap;
 use rustc_hash::FxHashMap;
 
@@ -230,10 +230,8 @@ fn compare_ty<'db>(
         let trait_m_ty_normalized =
             normalize_ty(db, trait_m_ty_substituted, impl_m.scope(), assumptions);
         let impl_m_ty_normalized = normalize_ty(db, impl_m_ty, impl_m.scope(), assumptions);
-        let trait_m_ty_normalized =
-            normalize_const_tys(db, trait_m_ty_normalized, solve_cx, trait_inst);
-        let impl_m_ty_normalized =
-            normalize_const_tys(db, impl_m_ty_normalized, solve_cx, trait_inst);
+        let trait_m_ty_normalized = normalize_const_tys(db, trait_m_ty_normalized, solve_cx);
+        let impl_m_ty_normalized = normalize_const_tys(db, impl_m_ty_normalized, solve_cx);
         let trait_m_ty_normalized = alpha_rename_hidden_layout_placeholders(
             db,
             trait_m_ty_normalized,
@@ -264,10 +262,8 @@ fn compare_ty<'db>(
     let trait_m_ret_ty_normalized =
         normalize_ty(db, trait_m_ret_ty_substituted, impl_m.scope(), assumptions);
     let impl_m_ret_ty_normalized = normalize_ty(db, impl_m_ret_ty, impl_m.scope(), assumptions);
-    let trait_m_ret_ty_normalized =
-        normalize_const_tys(db, trait_m_ret_ty_normalized, solve_cx, trait_inst);
-    let impl_m_ret_ty_normalized =
-        normalize_const_tys(db, impl_m_ret_ty_normalized, solve_cx, trait_inst);
+    let trait_m_ret_ty_normalized = normalize_const_tys(db, trait_m_ret_ty_normalized, solve_cx);
+    let impl_m_ret_ty_normalized = normalize_const_tys(db, impl_m_ret_ty_normalized, solve_cx);
     let trait_m_ret_ty_normalized = alpha_rename_hidden_layout_placeholders(
         db,
         trait_m_ret_ty_normalized,
@@ -526,7 +522,6 @@ fn normalize_effect_identity_ty<'db>(
         db,
         ty,
         TraitSolveCx::new(db, scope).with_assumptions(assumptions),
-        trait_inst,
     )
 }
 
@@ -629,11 +624,11 @@ fn normalize_const_tys<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
     solve_cx: TraitSolveCx<'db>,
-    trait_inst: TraitInstId<'db>,
 ) -> TyId<'db> {
+    let ty = normalize_const_tys_for_comparison(db, ty);
+
     struct ConstFolder<'db> {
         solve_cx: TraitSolveCx<'db>,
-        trait_inst: TraitInstId<'db>,
     }
 
     impl<'db> TyFolder<'db> for ConstFolder<'db> {
@@ -663,54 +658,12 @@ fn normalize_const_tys<'db>(
 
                     TyId::new(db, TyData::ConstTy(evaluated))
                 }
-                super::const_ty::ConstTyData::UnEvaluated {
-                    body,
-                    ty: expected_ty,
-                    ..
-                } => {
-                    let Some(expected_ty) = *expected_ty else {
-                        return ty.super_fold_with(db, self);
-                    };
-                    let expr = body.expr(db);
-                    let Partial::Present(expr) = expr.data(db, *body) else {
-                        return ty.super_fold_with(db, self);
-                    };
-                    let Expr::Path(path) = expr else {
-                        return ty.super_fold_with(db, self);
-                    };
-                    let Some(path) = path.to_opt() else {
-                        return ty.super_fold_with(db, self);
-                    };
-
-                    let mut const_ty = *const_ty;
-                    if let Some(parent) = path.parent(db)
-                        && parent.is_self_ty(db)
-                        && let PathKind::Ident {
-                            ident,
-                            generic_args,
-                        } = path.kind(db)
-                        && generic_args.is_empty(db)
-                        && let Some(name) = ident.to_opt()
-                        && let Some(repl) =
-                            const_ty_from_trait_const(db, self.solve_cx, self.trait_inst, name)
-                    {
-                        const_ty = repl;
-                    }
-
-                    TyId::new(
-                        db,
-                        TyData::ConstTy(const_ty.evaluate(db, Some(expected_ty))),
-                    )
-                }
                 _ => ty.super_fold_with(db, self),
             }
         }
     }
 
-    let mut folder = ConstFolder {
-        solve_cx,
-        trait_inst,
-    };
+    let mut folder = ConstFolder { solve_cx };
     ty.fold_with(db, &mut folder)
 }
 
