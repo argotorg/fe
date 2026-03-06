@@ -1,0 +1,48 @@
+extern {
+    fn todo() -> !
+}
+
+trait Level3 {
+    type Value
+}
+
+trait Level2 {
+    type Nested: Level3
+}
+
+trait Level1 {
+    type Middle: Level2
+}
+
+struct ConcreteLevel3<T> {
+    phantom: T
+}
+
+impl<T> Level3 for ConcreteLevel3<T> {
+    type Value = T
+}
+
+struct ConcreteLevel2<T> {
+    phantom: T
+}
+
+impl<T> Level2 for ConcreteLevel2<T> {
+    type Nested = ConcreteLevel3<T>
+}
+
+struct ConcreteLevel1<T> {
+    phantom: T
+}
+
+impl<T> Level1 for ConcreteLevel1<T> {
+    type Middle = ConcreteLevel2<T>
+}
+
+fn extract_value<T: Level1>() -> T::Middle::Nested::Value {
+    todo()
+}
+
+fn test() {
+    let _a: u32 = extract_value<ConcreteLevel1<u32>>()
+    let _b: u256 = extract_value<ConcreteLevel1<u256>>()
+}

@@ -635,6 +635,21 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let Some(current_ty) =
             crate::repr::peel_transparent_field0_projection_path(self.db, scrutinee_ty, path)
         else {
+            if scrutinee_ty.has_invalid(self.db) || result_ty.has_invalid(self.db) {
+                // Keep lowering alive for already-invalid HIR so diagnostics can be emitted.
+                // For valid HIR, the invariant below must continue to panic.
+                let fallback_space = scrutinee_repr
+                    .address_space()
+                    .unwrap_or(AddressSpaceKind::Memory);
+                return Some(self.alloc_value(
+                    result_ty,
+                    ValueOrigin::TransparentCast {
+                        value: scrutinee_value,
+                    },
+                    self.value_repr_for_ty(result_ty, fallback_space),
+                ));
+            }
+
             panic!(
                 "{context} requires `Ref` scrutinee (ty={}, repr={:?}, path_len={})",
                 scrutinee_ty.pretty_print(self.db),

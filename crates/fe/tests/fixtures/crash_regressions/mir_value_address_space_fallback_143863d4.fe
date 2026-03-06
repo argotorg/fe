@@ -1,0 +1,7 @@
+use std::evm::ops::addmod
+
+const C: [u256; 0] = [10, 20, 30]
+
+pub fn get_sum() -> u256 {
+    return addmod(1, C[0], 100)
+}

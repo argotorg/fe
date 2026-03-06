@@ -34,7 +34,7 @@ use crate::analysis::{
         trait_def::{TraitInstId, impls_for_ty_with_constraints},
         trait_lower::{TraitArgError, TraitRefLowerError, lower_trait_ref, lower_trait_ref_impl},
         trait_resolution::PredicateListId,
-        ty_def::{InvalidCause, Kind, TyData, TyId},
+        ty_def::{InvalidCause, Kind, TyData, TyId, inference_keys},
         ty_lower::{
             TyAlias, collect_generic_params, lower_generic_arg_list, lower_hir_ty, lower_type_alias,
         },
@@ -74,6 +74,10 @@ pub enum PathResErrorKind<'db> {
     AmbiguousAssociatedConst {
         name: IdentId<'db>,
         trait_insts: ThinVec<TraitInstId<'db>>,
+    },
+
+    InfiniteBoundRecursion {
+        context: &'static str,
     },
 
     /// The name is found, but it can't be used in the middle of a use path.
@@ -162,6 +166,9 @@ impl<'db> PathResError<'db> {
                     trait_insts.len()
                 )
             }
+            PathResErrorKind::InfiniteBoundRecursion { .. } => {
+                "Infinite trait bound recursion".to_string()
+            }
             PathResErrorKind::InvalidPathSegment(_) => "Invalid path segment".to_string(),
             PathResErrorKind::QualifiedTypeType(res) => match res.as_ref() {
                 Ok(res) => format!(
@@ -211,6 +218,17 @@ impl<'db> PathResError<'db> {
                     "Receiver type must be known".to_string()
                 }
             },
+        }
+    }
+
+    fn is_infinite_bound_recursion(&self) -> bool {
+        match &self.kind {
+            PathResErrorKind::InfiniteBoundRecursion { .. } => true,
+            PathResErrorKind::QualifiedTypeType(result)
+            | PathResErrorKind::QualifiedTypeTrait(result) => {
+                matches!(result.as_ref(), Err(inner) if inner.is_infinite_bound_recursion())
+            }
+            _ => false,
         }
     }
 
@@ -322,6 +340,13 @@ impl<'db> PathResError<'db> {
                 }
             }
 
+            PathResErrorKind::InfiniteBoundRecursion { context } => {
+                PathResDiag::InfiniteBoundRecursion(
+                    span,
+                    format!("cyclic trait reference prevented lowering this {context}"),
+                )
+            }
+
             PathResErrorKind::QualifiedTypeType(result) => match *result {
                 Ok(res) => {
                     if let PathKind::QualifiedType { type_, .. } = seg_path.kind(db)
@@ -331,7 +356,8 @@ impl<'db> PathResError<'db> {
                         let ty_span = seg_span.qualified_type().ty().into_path_type().path();
                         PathResDiag::ExpectedType(ty_span.into(), type_ident, res.kind_name())
                     } else {
-                        unreachable!()
+                        let ty_span = seg_span.qualified_type().ty().into_path_type().path();
+                        PathResDiag::ExpectedType(ty_span.into(), ident, res.kind_name())
                     }
                 }
                 Err(inner) => {
@@ -347,7 +373,8 @@ impl<'db> PathResError<'db> {
                         let trait_span = seg_span.qualified_type().trait_qualifier().name().into();
                         PathResDiag::ExpectedTrait(trait_span, trait_ident, res.kind_name())
                     } else {
-                        unreachable!()
+                        let trait_span = seg_span.qualified_type().trait_qualifier().name().into();
+                        PathResDiag::ExpectedTrait(trait_span, ident, res.kind_name())
                     }
                 }
                 Err(inner) => {
@@ -779,6 +806,12 @@ where
                         PathResErrorKind::QualifiedTypeTrait(Box::new(Ok(res))),
                         trait_path,
                     ),
+                    TraitRefLowerError::Cycle => PathResError::new(
+                        PathResErrorKind::InfiniteBoundRecursion {
+                            context: "qualified trait reference",
+                        },
+                        path,
+                    ),
                     TraitRefLowerError::Ignored => PathResError::parse_err(trait_path),
                 };
                 return Err(err);
@@ -902,8 +935,23 @@ where
             }
 
             // Find raw associated types, then dedup by normalized result here.
-            let assoc_tys =
-                find_associated_type(db, scope, Canonical::new(db, ty), ident, assumptions);
+            let assoc_tys = match find_associated_type(
+                db,
+                scope,
+                Canonicalized::new(db, ty),
+                ident,
+                assumptions,
+            ) {
+                Ok(assoc_tys) => assoc_tys,
+                Err(FindAssociatedTypeError::InfiniteBoundRecursion) => {
+                    return Err(PathResError::new(
+                        PathResErrorKind::InfiniteBoundRecursion {
+                            context: "associated type",
+                        },
+                        path,
+                    ));
+                }
+            };
 
             if assoc_tys.is_empty() {
                 return Err(PathResError::new(
@@ -1020,6 +1068,11 @@ enum AssocConstSelection<'db> {
     NotFound,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FindAssociatedTypeError {
+    InfiniteBoundRecursion,
+}
+
 fn select_assoc_const_candidate<'db>(
     db: &'db dyn HirAnalysisDb,
     receiver_ty: TyId<'db>,
@@ -1110,40 +1163,47 @@ fn select_assoc_const_candidate<'db>(
     }
 }
 
-pub fn find_associated_type<'db>(
+pub(crate) fn find_associated_type<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
-    ty: Canonical<TyId<'db>>,
+    ty: Canonicalized<'db, TyId<'db>>,
     name: IdentId<'db>,
     assumptions: PredicateListId<'db>,
-) -> SmallVec<(TraitInstId<'db>, TyId<'db>), 4> {
+) -> Result<SmallVec<(TraitInstId<'db>, TyId<'db>), 4>, FindAssociatedTypeError> {
+    let canonical_ty = ty.value;
+    let original_ty = ty.decanonicalize(db, canonical_ty.value);
+
     // Qualified type: `<A as T>::B`. Always construct the associated type projection
     // against the qualified trait instance; bindings (if any) will be handled downstream.
-    if let TyData::QualifiedTy(trait_inst) = ty.value.data(db) {
+    if let TyData::QualifiedTy(trait_inst) = canonical_ty.value.data(db) {
         let proj = TyId::assoc_ty(db, *trait_inst, name);
-        return smallvec![(*trait_inst, proj)];
+        let proj = ty.decanonicalize(db, proj);
+        let inst = ty.decanonicalize(db, *trait_inst);
+        return Ok(smallvec![(inst, proj)]);
     }
 
     let scope_ingot = scope.ingot(db);
     // Use a single unification table and snapshots to preserve outer
     // substitutions while isolating per-candidate attempts.
     let mut table = UnificationTable::new(db);
-    let lhs_ty = ty.extract_identity(&mut table);
+    let lhs_ty = canonical_ty.extract_identity(&mut table);
+    let lhs_keys = inference_keys(db, &lhs_ty);
 
-    if let TyData::TyParam(param) = ty.value.data(db) {
+    if let TyData::TyParam(param) = canonical_ty.value.data(db) {
         // Trait self, in trait or impl trait. Associated type must be in this trait.
         if param.is_trait_self() {
             if let Some(trait_) = param.owner.resolve_to::<Trait>(db) {
                 if trait_.assoc_ty(db, name).is_some() {
-                    let trait_inst = TraitInstId::new(db, trait_, vec![ty.value], IndexMap::new());
+                    let trait_inst =
+                        TraitInstId::new(db, trait_, vec![original_ty], IndexMap::new());
                     let assoc_ty = TyId::assoc_ty(db, trait_inst, name);
-                    return smallvec![(trait_inst, assoc_ty)];
+                    return Ok(smallvec![(trait_inst, assoc_ty)]);
                 }
             } else if let Some(impl_trait) = param.owner.resolve_to::<ImplTrait>(db)
                 && let Some(trait_inst) = impl_trait.trait_inst(db)
                 && let Some(assoc_ty) = trait_inst.assoc_ty(db, name)
             {
-                return smallvec![(trait_inst, assoc_ty)];
+                return Ok(smallvec![(trait_inst, assoc_ty)]);
             }
         }
     }
@@ -1151,7 +1211,7 @@ pub fn find_associated_type<'db>(
     let mut candidates = SmallVec::new();
     // Check explicit bounds in assumptions that match `ty` only when `ty` is a type
     // parameter (to avoid spurious ambiguities for concrete types that already have impls).
-    if let TyData::TyParam(_) = ty.value.data(db) {
+    if let TyData::TyParam(_) = canonical_ty.value.data(db) {
         for &trait_inst in assumptions.list(db) {
             // `trait_inst` is a specific trait bound, e.g., `A: Abi` or `S<A>: SomeTrait`.
             let snapshot = table.snapshot();
@@ -1161,8 +1221,16 @@ pub fn find_associated_type<'db>(
             if table.unify(lhs_ty, pred_self_ty).is_ok()
                 && let Some(assoc_ty) = trait_inst.assoc_ty(db, name)
             {
-                let folded = assoc_ty.fold_with(db, &mut table);
-                candidates.push((trait_inst, folded));
+                let folded_inst = trait_inst.fold_with(db, &mut table);
+                let folded_ty = assoc_ty.fold_with(db, &mut table);
+                let folded_inst_keys = inference_keys(db, &folded_inst);
+                let folded_ty_keys = inference_keys(db, &folded_ty);
+                if folded_inst_keys.is_subset(&lhs_keys) && folded_ty_keys.is_subset(&lhs_keys) {
+                    candidates.push((
+                        ty.decanonicalize(db, folded_inst),
+                        ty.decanonicalize(db, folded_ty),
+                    ));
+                }
             }
             table.rollback_to(snapshot);
         }
@@ -1170,20 +1238,28 @@ pub fn find_associated_type<'db>(
 
     let search_ingots = [
         Some(scope_ingot),
-        ty.value.ingot(db).filter(|&ingot| ingot != scope_ingot),
+        original_ty.ingot(db).filter(|&ingot| ingot != scope_ingot),
     ];
 
     // Check impls for `ty` across both the call-site ingot and `ty`'s defining ingot.
     for ingot in search_ingots.into_iter().flatten() {
-        for impl_ in impls_for_ty_with_constraints(db, ingot, ty, assumptions) {
+        for impl_ in impls_for_ty_with_constraints(db, ingot, canonical_ty, assumptions) {
             let snapshot = table.snapshot();
             let impl_ = table.instantiate_with_fresh_vars(impl_);
 
             if table.unify(lhs_ty, impl_.self_ty(db)).is_ok()
-                && let Some(ty) = impl_.assoc_ty(db, name)
+                && let Some(assoc_ty) = impl_.assoc_ty(db, name)
             {
-                let folded = ty.fold_with(db, &mut table);
-                candidates.push((impl_.trait_(db), folded));
+                let folded_inst = impl_.trait_(db).fold_with(db, &mut table);
+                let folded_ty = assoc_ty.fold_with(db, &mut table);
+                let folded_inst_keys = inference_keys(db, &folded_inst);
+                let folded_ty_keys = inference_keys(db, &folded_ty);
+                if folded_inst_keys.is_subset(&lhs_keys) && folded_ty_keys.is_subset(&lhs_keys) {
+                    candidates.push((
+                        ty.decanonicalize(db, folded_inst),
+                        ty.decanonicalize(db, folded_ty),
+                    ));
+                }
             }
             table.rollback_to(snapshot);
         }
@@ -1191,23 +1267,38 @@ pub fn find_associated_type<'db>(
 
     // Case 3: The LHS `ty` is an associated type (e.g., `T::Encoder` in `T::Encoder::Output`).
     // We need to look at the trait bound on the associated type.
-    if let TyData::AssocTy(assoc_ty) = ty.value.data(db) {
+    if let TyData::AssocTy(assoc_ty) = canonical_ty.value.data(db) {
+        let mut assoc_table = UnificationTable::new(db);
+
         // Extract the canonical type's substitutions into the unification table
         // This ensures we maintain any type parameter bindings from the outer context
-        let ty_with_subst = ty.extract_identity(&mut table);
+        let ty_with_subst = canonical_ty.extract_identity(&mut assoc_table);
+        let assoc_lhs_keys = inference_keys(db, &ty_with_subst);
 
         // First, check if there are trait bounds on this associated type in the assumptions
         // (e.g., from where clauses like `T::Assoc: Level1`).
         for &trait_inst in assumptions.list(db) {
-            let snapshot = table.snapshot();
+            let snapshot = assoc_table.snapshot();
             // Allow unification to account for type variables in either side
-            if table.unify(ty_with_subst, trait_inst.self_ty(db)).is_ok()
+            if assoc_table
+                .unify(ty_with_subst, trait_inst.self_ty(db))
+                .is_ok()
                 && let Some(assoc_ty) = trait_inst.assoc_ty(db, name)
             {
-                let folded = assoc_ty.fold_with(db, &mut table);
-                candidates.push((trait_inst, folded));
+                let folded_inst = trait_inst.fold_with(db, &mut assoc_table);
+                let folded_ty = assoc_ty.fold_with(db, &mut assoc_table);
+                let folded_inst_keys = inference_keys(db, &folded_inst);
+                let folded_ty_keys = inference_keys(db, &folded_ty);
+                if folded_inst_keys.is_subset(&assoc_lhs_keys)
+                    && folded_ty_keys.is_subset(&assoc_lhs_keys)
+                {
+                    candidates.push((
+                        ty.decanonicalize(db, folded_inst),
+                        ty.decanonicalize(db, folded_ty),
+                    ));
+                }
             }
-            table.rollback_to(snapshot);
+            assoc_table.rollback_to(snapshot);
         }
 
         // Also check bounds defined on the associated type in the trait definition.
@@ -1216,30 +1307,54 @@ pub fn find_associated_type<'db>(
         let trait_ = assoc_ty.trait_.def(db);
         let assoc_name = assoc_ty.name;
         if let Some(decl) = trait_.assoc_ty(db, assoc_name) {
-            let subject = ty_with_subst.fold_with(db, &mut table);
+            let subject = ty_with_subst.fold_with(db, &mut assoc_table);
             // owner_self is used to substitute `Self` in bounds like `type Assoc: Encode<Self>`
             let owner_self = assoc_ty.trait_.self_ty(db);
             for bound in &decl.bounds {
-                if let TypeBound::Trait(trait_ref) = *bound
-                    && let Ok(inst) = crate::analysis::ty::trait_lower::lower_trait_ref(
-                        db,
-                        subject,
-                        trait_ref,
-                        scope,
-                        assumptions,
-                        Some(owner_self),
-                    )
-                    && inst.def(db).assoc_ty(db, name).is_some()
-                {
+                let TypeBound::Trait(trait_ref) = *bound else {
+                    continue;
+                };
+
+                let inst = match crate::analysis::ty::trait_lower::lower_trait_ref(
+                    db,
+                    subject,
+                    trait_ref,
+                    scope,
+                    assumptions,
+                    Some(owner_self),
+                ) {
+                    Ok(inst) => inst,
+                    Err(TraitRefLowerError::Cycle) => {
+                        return Err(FindAssociatedTypeError::InfiniteBoundRecursion);
+                    }
+                    Err(TraitRefLowerError::PathResError(err))
+                        if err.is_infinite_bound_recursion() =>
+                    {
+                        return Err(FindAssociatedTypeError::InfiniteBoundRecursion);
+                    }
+                    Err(_) => continue,
+                };
+
+                if inst.def(db).assoc_ty(db, name).is_some() {
                     let assoc_ty = TyId::assoc_ty(db, inst, name);
-                    let folded = assoc_ty.fold_with(db, &mut table);
-                    candidates.push((inst, folded));
+                    let folded_inst = inst.fold_with(db, &mut assoc_table);
+                    let folded_ty = assoc_ty.fold_with(db, &mut assoc_table);
+                    let folded_inst_keys = inference_keys(db, &folded_inst);
+                    let folded_ty_keys = inference_keys(db, &folded_ty);
+                    if folded_inst_keys.is_subset(&assoc_lhs_keys)
+                        && folded_ty_keys.is_subset(&assoc_lhs_keys)
+                    {
+                        candidates.push((
+                            ty.decanonicalize(db, folded_inst),
+                            ty.decanonicalize(db, folded_ty),
+                        ));
+                    }
                 }
             }
         }
     }
 
-    candidates
+    Ok(candidates)
 }
 
 pub fn resolve_name_res<'db>(

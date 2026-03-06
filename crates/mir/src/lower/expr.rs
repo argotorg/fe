@@ -1875,10 +1875,10 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 MirProjectionPath::from_projection(Projection::Index(index_source)),
             )
         };
-        let addr_space = self.value_address_space(base);
         let place = Place::new(base, projection);
 
         if self.is_by_ref_ty(elem_ty) {
+            let addr_space = self.value_address_space(base);
             self.builder.body.values[value_id.index()].origin = ValueOrigin::PlaceRef(place);
             self.builder.body.values[value_id.index()].repr = ValueRepr::Ref(addr_space);
             return value_id;

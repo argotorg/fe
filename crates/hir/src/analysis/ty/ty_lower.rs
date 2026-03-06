@@ -585,7 +585,11 @@ impl<'db> GenericParamTypeSet<'db> {
             let prec = &self.params_precursor(db)[i];
 
             if let Some(hir_ty) = prec.default_hir_ty {
-                let lowered = lower_hir_ty(db, hir_ty, scope, assumptions);
+                let lowered = if hir_ty.is_self_ty(db) && trait_self.is_none() {
+                    TyId::invalid(db, InvalidCause::Other)
+                } else {
+                    lower_hir_ty(db, hir_ty, scope, assumptions)
+                };
                 let lowered = {
                     let mut subst = ParamSubst {
                         db,

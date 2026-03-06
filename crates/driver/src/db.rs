@@ -60,6 +60,19 @@ impl DriverDataBase {
         map_file_to_mod(self, input)
     }
 
+    pub fn mir_diagnostics_for_top_mod<'db>(
+        &'db self,
+        top_mod: TopLevelMod<'db>,
+        mode: MirDiagnosticsMode,
+    ) -> Vec<CompleteDiagnostic> {
+        let mut output = collect_mir_diagnostics(self, top_mod, mode);
+        for err in output.internal_errors {
+            tracing::debug!(target: "lsp", "MIR diagnostics internal error: {err}");
+        }
+        sort_and_dedup_complete_diagnostics(&mut output.diagnostics);
+        output.diagnostics
+    }
+
     pub fn mir_diagnostics_for_ingot<'db>(
         &'db self,
         ingot: Ingot<'db>,
@@ -70,13 +83,7 @@ impl DriverDataBase {
         let Some(root_data) = ingot.module_tree(self).root_data() else {
             return Vec::new();
         };
-        let top_mod = root_data.top_mod;
-        let mut output = collect_mir_diagnostics(self, top_mod, mode);
-        for err in output.internal_errors {
-            tracing::debug!(target: "lsp", "MIR diagnostics internal error: {err}");
-        }
-        sort_and_dedup_complete_diagnostics(&mut output.diagnostics);
-        output.diagnostics
+        self.mir_diagnostics_for_top_mod(root_data.top_mod, mode)
     }
 
     pub fn emit_complete_diagnostics(&self, diagnostics: &[CompleteDiagnostic]) {
