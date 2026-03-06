@@ -1,4 +1,5 @@
 #![allow(clippy::print_stderr, clippy::print_stdout)]
+mod bench;
 mod build;
 mod check;
 mod cli;
@@ -264,6 +265,21 @@ pub enum Command {
         /// Print a normalized call trace for each test (for backend comparison).
         #[arg(long)]
         call_trace: bool,
+    },
+    /// Run gas benchmarks comparing Fe (Yul + Sonatina) against Solidity.
+    Bench {
+        /// Path to benchmark fixtures directory.
+        #[arg(value_name = "PATH", default_value = "bench_fixtures")]
+        path: Utf8PathBuf,
+        /// Filter benchmarks by name.
+        #[arg(short, long)]
+        filter: Option<String>,
+        /// solc binary to use (overrides FE_SOLC_PATH).
+        #[arg(long)]
+        solc: Option<String>,
+        /// Output directory for CSV reports.
+        #[arg(long, short)]
+        output: Option<Utf8PathBuf>,
     },
     /// Create a new ingot or workspace.
     New {
@@ -538,6 +554,23 @@ pub fn run(opts: &Options) {
                 }
             }
         }
+        Command::Bench {
+            path,
+            filter,
+            solc,
+            output,
+        } => match bench::run_benchmarks(
+            path.as_path(),
+            filter.as_deref(),
+            solc.as_deref(),
+            output.as_ref().map(|p| p.as_path()),
+        ) {
+            Ok(()) => {}
+            Err(err) => {
+                eprintln!("Error: {err}");
+                std::process::exit(1);
+            }
+        },
         Command::New {
             path,
             workspace,
