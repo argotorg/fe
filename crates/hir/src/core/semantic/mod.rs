@@ -61,11 +61,12 @@ use crate::hir_def::*;
 use crate::analysis::ty::adt_def::{AdtCycleMember, AdtDef, AdtField, AdtRef};
 use crate::analysis::ty::const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy};
 use crate::analysis::ty::effects::{EffectKeyKind, resolve_effect_key};
-use crate::analysis::ty::fold::{TyFoldable, TyFolder};
 use crate::analysis::ty::layout_holes::{
-    CallableInputLayoutArgRange, callable_input_layout_arg_ranges,
-    callable_input_layout_implicit_args, collect_layout_hole_tys_in_order, layout_hole_fallback_ty,
-    substitute_layout_holes, substitute_layout_holes_in,
+    CallableInputLayoutArgRange, LayoutPlaceholderPolicy, alpha_rename_hidden_layout_placeholders,
+    callable_input_layout_arg_ranges, callable_input_layout_implicit_args,
+    collect_layout_hole_tys_in_order, collect_unique_layout_placeholders_in_order,
+    layout_hole_fallback_ty, substitute_layout_holes, substitute_layout_holes_in,
+    substitute_layout_placeholders_by_identity,
 };
 use crate::analysis::ty::trait_def::{
     ImplementorId, ImplementorOrigin, TraitInstId, does_impl_trait_conflict, ingot_trait_env,
@@ -1188,36 +1189,6 @@ fn slot_const_ty<'db>(db: &'db dyn HirAnalysisDb, value: usize, ty: TyId<'db>) -
     TyId::new(db, TyData::ConstTy(const_ty))
 }
 
-fn concretize_contract_layout_holes<'db>(
-    db: &'db dyn HirAnalysisDb,
-    ty: TyId<'db>,
-    next_slot: &mut usize,
-) -> TyId<'db> {
-    struct HoleRewriter<'a, 'db> {
-        db: &'db dyn HirAnalysisDb,
-        next_slot: &'a mut usize,
-    }
-
-    impl<'a, 'db> TyFolder<'db> for HoleRewriter<'a, 'db> {
-        fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
-            if let TyData::ConstTy(const_ty) = ty.data(self.db)
-                && let ConstTyData::Hole(hole_ty) = const_ty.data(self.db)
-            {
-                let slot = *self.next_slot;
-                *self.next_slot = slot.saturating_add(1);
-
-                let const_ty_ty = layout_hole_fallback_ty(self.db, *hole_ty);
-                return slot_const_ty(self.db, slot, const_ty_ty);
-            }
-
-            ty.super_fold_with(db, self)
-        }
-    }
-
-    let mut rewriter = HoleRewriter { db, next_slot };
-    ty.fold_with(db, &mut rewriter)
-}
-
 fn const_ty_to_usize<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<usize> {
     let TyData::ConstTy(const_ty) = ty.data(db) else {
         return None;
@@ -1314,25 +1285,18 @@ fn contract_field_base_slot_count<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>
     inner(db, ty, &mut FxHashSet::default())
 }
 
-fn concretize_contract_layout_holes_and_count<'db>(
-    db: &'db dyn HirAnalysisDb,
-    ty: TyId<'db>,
-    next_slot: &mut usize,
-) -> (TyId<'db>, usize) {
-    let start = *next_slot;
-    let declared_ty = concretize_contract_layout_holes(db, ty, next_slot);
-    let hole_slots = (*next_slot).saturating_sub(start);
-    let base_slots = contract_field_base_slot_count(db, declared_ty);
-    let slot_count = base_slots.saturating_add(hole_slots);
-    *next_slot = start.saturating_add(slot_count);
-    (declared_ty, slot_count)
-}
-
 #[derive(Clone, Copy)]
 struct ContractFieldEffectHandleInfo<'db> {
     is_provider: bool,
     address_space: TyId<'db>,
     target_ty: TyId<'db>,
+}
+
+struct ContractFieldLayoutPlan<'db> {
+    declared_ty: TyId<'db>,
+    target_ty: TyId<'db>,
+    metadata: ContractFieldEffectHandleInfo<'db>,
+    layout_placeholders: Vec<TyId<'db>>,
 }
 
 #[derive(Clone, Copy)]
@@ -1363,21 +1327,83 @@ impl<'db> ContractFieldEffectHandleCx<'db> {
                 }
             }
             GoalSatisfiability::Satisfied(_) | GoalSatisfiability::NeedsConfirmation(_) => {
-                let normalize_assoc = |name, fallback| {
+                let normalize_assoc = |name, fallback, allow_holes| {
                     inst.assoc_ty(db, name)
                         .map(|assoc| normalize_ty(db, assoc, self.scope, self.assumptions))
-                        .filter(|ty| !ty.has_invalid(db))
+                        .filter(|ty| {
+                            !ty.has_invalid(db) && (allow_holes || !ty_contains_const_hole(db, *ty))
+                        })
                         .unwrap_or(fallback)
                 };
 
                 ContractFieldEffectHandleInfo {
                     is_provider: true,
-                    address_space: normalize_assoc(self.address_space_ident, self.fallback_space),
-                    target_ty: normalize_assoc(self.target_ident, field_ty),
+                    address_space: normalize_assoc(
+                        self.address_space_ident,
+                        self.fallback_space,
+                        false,
+                    ),
+                    target_ty: normalize_assoc(self.target_ident, field_ty, true),
                 }
             }
         }
     }
+
+    fn layout_plan(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        field_ty: TyId<'db>,
+    ) -> ContractFieldLayoutPlan<'db> {
+        let metadata = self.metadata(db, field_ty);
+        let target_ty = alpha_rename_hidden_layout_placeholders(db, metadata.target_ty, field_ty);
+        let layout_placeholders = collect_unique_layout_placeholders_in_order(db, field_ty);
+        ContractFieldLayoutPlan {
+            declared_ty: field_ty,
+            target_ty,
+            metadata,
+            layout_placeholders,
+        }
+    }
+}
+
+fn contract_field_layout_slot_assignments<'db>(
+    db: &'db dyn HirAnalysisDb,
+    layout_placeholders: &[TyId<'db>],
+    start_slot: usize,
+) -> FxHashMap<TyId<'db>, TyId<'db>> {
+    layout_placeholders
+        .iter()
+        .enumerate()
+        .filter_map(|(offset, hole)| {
+            let TyData::ConstTy(const_ty) = hole.data(db) else {
+                return None;
+            };
+            let ConstTyData::Hole(hole_ty, _) = const_ty.data(db) else {
+                return None;
+            };
+            Some((
+                *hole,
+                slot_const_ty(
+                    db,
+                    start_slot.saturating_add(offset),
+                    layout_hole_fallback_ty(db, *hole_ty),
+                ),
+            ))
+        })
+        .collect()
+}
+
+fn materialize_contract_layout_holes<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    slot_assignments: &FxHashMap<TyId<'db>, TyId<'db>>,
+) -> TyId<'db> {
+    substitute_layout_placeholders_by_identity(
+        db,
+        ty,
+        slot_assignments,
+        LayoutPlaceholderPolicy::HolesOnly,
+    )
 }
 
 #[salsa::tracked]
@@ -1452,19 +1478,29 @@ impl<'db> Contract<'db> {
             .enumerate()
         {
             let lowered_ty = lower_opt_hir_ty(db, field.type_ref(), scope, assumptions);
-            let lowered_info = effect_handle_cx.metadata(db, lowered_ty);
+            let plan = effect_handle_cx.layout_plan(db, lowered_ty);
             let next_slot = next_slot_by_address_space
-                .entry(lowered_info.address_space)
+                .entry(plan.metadata.address_space)
                 .or_insert(0);
             let slot_offset = *next_slot;
-            let (declared_ty, slot_count) =
-                concretize_contract_layout_holes_and_count(db, lowered_ty, next_slot);
-            let declared_info = effect_handle_cx.metadata(db, declared_ty);
+            let slot_assignments =
+                contract_field_layout_slot_assignments(db, &plan.layout_placeholders, slot_offset);
+            let declared_ty =
+                materialize_contract_layout_holes(db, plan.declared_ty, &slot_assignments);
+            let target_ty =
+                materialize_contract_layout_holes(db, plan.target_ty, &slot_assignments);
             debug_assert!(
-                lowered_info.is_provider == declared_info.is_provider
-                    && lowered_info.address_space == declared_info.address_space,
-                "contract field EffectHandle metadata changed after concretizing layout holes"
+                !ty_contains_const_hole(db, declared_ty) && !ty_contains_const_hole(db, target_ty),
+                "contract field layout materialization left unresolved holes"
             );
+            let slot_basis_ty = if plan.metadata.is_provider {
+                target_ty
+            } else {
+                declared_ty
+            };
+            let slot_count = contract_field_base_slot_count(db, slot_basis_ty)
+                .saturating_add(slot_assignments.len());
+            *next_slot = slot_offset.saturating_add(slot_count);
 
             let name = field.name.unwrap();
             layout.insert(
@@ -1473,9 +1509,9 @@ impl<'db> Contract<'db> {
                     index: idx as u32,
                     name,
                     declared_ty,
-                    is_provider: declared_info.is_provider,
-                    target_ty: declared_info.target_ty,
-                    address_space: lowered_info.address_space,
+                    is_provider: plan.metadata.is_provider,
+                    target_ty,
+                    address_space: plan.metadata.address_space,
                     slot_offset,
                     slot_count,
                 },

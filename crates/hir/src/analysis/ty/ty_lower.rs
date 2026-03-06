@@ -612,12 +612,49 @@ impl<'db> GenericParamTypeSet<'db> {
     /// - `implicit_bindings`: mapping of (lowered_idx -> TyId) for implicit
     ///   parameters that should be available when evaluating defaults (e.g.,
     ///   trait `Self` at index 0).
-    pub(crate) fn complete_explicit_args_with_defaults(
+    pub(crate) fn complete_explicit_args_with_metadata_defaults(
         self,
         db: &'db dyn HirAnalysisDb,
         trait_self: Option<TyId<'db>>,
         provided_explicit: &[TyId<'db>],
         assumptions: PredicateListId<'db>,
+        application_path: Option<PathId<'db>>,
+    ) -> Vec<TyId<'db>> {
+        self.complete_explicit_args_with_defaults_in_mode(
+            db,
+            trait_self,
+            provided_explicit,
+            assumptions,
+            ConstDefaultCompletionMode::MetadataOnly,
+            application_path,
+        )
+    }
+
+    pub(crate) fn complete_explicit_args_with_evaluated_defaults(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        trait_self: Option<TyId<'db>>,
+        provided_explicit: &[TyId<'db>],
+        assumptions: PredicateListId<'db>,
+    ) -> Vec<TyId<'db>> {
+        self.complete_explicit_args_with_defaults_in_mode(
+            db,
+            trait_self,
+            provided_explicit,
+            assumptions,
+            ConstDefaultCompletionMode::Evaluate,
+            None,
+        )
+    }
+
+    fn complete_explicit_args_with_defaults_in_mode(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        trait_self: Option<TyId<'db>>,
+        provided_explicit: &[TyId<'db>],
+        assumptions: PredicateListId<'db>,
+        const_default_mode: ConstDefaultCompletionMode,
+        application_path: Option<PathId<'db>>,
     ) -> Vec<TyId<'db>> {
         let total = self.params_precursor(db).len();
         let offset = self.offset_to_explicit(db);
@@ -627,8 +664,38 @@ impl<'db> GenericParamTypeSet<'db> {
         if let Some(self_ty) = trait_self {
             mapping.push(Some(self_ty));
         }
-        mapping.extend(provided_explicit.iter().map(|ty| Some(*ty)));
+        for (explicit_idx, ty) in provided_explicit.iter().enumerate() {
+            let lowered_idx = offset + explicit_idx;
+            let ty = if self.params_precursor(db)[lowered_idx].is_const_ty() {
+                ty.check_const_ty_without_eval(
+                    db,
+                    self.params_precursor(db)[lowered_idx].declared_const_ty(db, self.scope(db)),
+                )
+                .unwrap_or_else(|cause| TyId::invalid(db, cause))
+            } else {
+                *ty
+            };
+            mapping.push(Some(ty));
+        }
         mapping.resize(total, None);
+        let scope = self.scope(db);
+
+        let mapped_generic_args = |mapping: &[Option<TyId<'db>>], end: usize| {
+            self.params_precursor(db)
+                .iter()
+                .take(end)
+                .enumerate()
+                .map(|(idx, param)| {
+                    let arg = mapping[idx]
+                        .expect("generic-default metadata args should only capture bound prefix");
+                    if idx >= offset + provided_explicit.len() || !param.is_const_ty() {
+                        return arg;
+                    }
+                    arg.evaluate_const_ty(db, param.declared_const_ty(db, scope))
+                        .unwrap_or(arg)
+                })
+                .collect()
+        };
 
         // Helper folder to substitute known params when lowering defaults
         struct ParamSubst<'a, 'db> {
@@ -660,7 +727,6 @@ impl<'db> GenericParamTypeSet<'db> {
 
         // Build the returned explicit arg list, appending defaults where available.
         let mut result: Vec<TyId<'db>> = provided_explicit.to_vec();
-        let scope = self.scope(db);
         for i in (offset + provided_explicit.len())..total {
             let prec = &self.params_precursor(db)[i];
 
@@ -682,18 +748,45 @@ impl<'db> GenericParamTypeSet<'db> {
                 let expected = prec.declared_const_ty(db, scope);
                 let lowered = match default {
                     ConstGenericArgValue::Expr(default) => {
-                        let const_ty = ConstTyId::from_opt_body(db, default);
-                        let lowered = TyId::const_ty(db, const_ty);
-                        lowered
-                            .evaluate_const_ty(db, expected)
-                            .unwrap_or_else(|cause| TyId::invalid(db, cause))
+                        let lowered = TyId::const_ty(
+                            db,
+                            ConstTyId::from_opt_body_with_ty_and_generic_args(
+                                db,
+                                default,
+                                expected,
+                                mapped_generic_args(&mapping, i),
+                                matches!(
+                                    const_default_mode,
+                                    ConstDefaultCompletionMode::MetadataOnly
+                                ),
+                            ),
+                        );
+                        match const_default_mode {
+                            ConstDefaultCompletionMode::MetadataOnly => lowered,
+                            ConstDefaultCompletionMode::Evaluate => lowered
+                                .evaluate_const_ty(db, expected)
+                                .unwrap_or_else(|cause| TyId::invalid(db, cause)),
+                        }
                     }
                     ConstGenericArgValue::Hole => TyId::const_ty(
                         db,
-                        ConstTyId::hole_with_ty(
-                            db,
-                            expected.unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other)),
-                        ),
+                        application_path
+                            .map(|path| {
+                                ConstTyId::hole_with_path_arg(
+                                    db,
+                                    expected
+                                        .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other)),
+                                    path,
+                                    i,
+                                )
+                            })
+                            .unwrap_or_else(|| {
+                                ConstTyId::hole_with_ty(
+                                    db,
+                                    expected
+                                        .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other)),
+                                )
+                            }),
                     ),
                 };
 
@@ -715,6 +808,12 @@ impl<'db> GenericParamTypeSet<'db> {
 
         result
     }
+}
+
+#[derive(Clone, Copy)]
+enum ConstDefaultCompletionMode {
+    MetadataOnly,
+    Evaluate,
 }
 
 struct GenericParamCollector<'db> {

@@ -142,6 +142,7 @@ impl<'db> TyFolder<'db> for InstantiateFolder<'db, '_> {
                         ty,
                         const_def,
                         generic_args,
+                        preserve_unevaluated,
                     } = const_ty.data(db)
                     && generic_args.is_empty()
                     && !self.args.is_empty()
@@ -153,6 +154,7 @@ impl<'db> TyFolder<'db> for InstantiateFolder<'db, '_> {
                             ty: *ty,
                             const_def: *const_def,
                             generic_args: self.args.to_vec(),
+                            preserve_unevaluated: *preserve_unevaluated,
                         },
                     );
                     return TyId::const_ty(db, const_ty);
@@ -224,6 +226,7 @@ impl<'db> TyFolder<'db> for InstantiateScopedFolder<'db, '_> {
                         ty,
                         const_def,
                         generic_args,
+                        preserve_unevaluated,
                     } = const_ty.data(db)
                     && generic_args.is_empty()
                     && !self.args.is_empty()
@@ -235,6 +238,7 @@ impl<'db> TyFolder<'db> for InstantiateScopedFolder<'db, '_> {
                             ty: *ty,
                             const_def: *const_def,
                             generic_args: self.args.to_vec(),
+                            preserve_unevaluated: *preserve_unevaluated,
                         },
                     );
                     return TyId::const_ty(db, const_ty);

@@ -52,6 +52,12 @@ pub struct TyId<'db> {
     pub data: TyData<'db>,
 }
 
+#[derive(Clone, Copy)]
+enum ConstTyApplicationMode {
+    Evaluate,
+    MetadataOnly,
+}
+
 #[salsa::tracked]
 impl<'db> TyId<'db> {
     /// Returns the kind of the type.
@@ -605,6 +611,19 @@ impl<'db> TyId<'db> {
 
     /// Perform type level application.
     pub fn app(db: &'db dyn HirAnalysisDb, lhs: Self, rhs: Self) -> TyId<'db> {
+        Self::app_in_mode(db, lhs, rhs, ConstTyApplicationMode::Evaluate)
+    }
+
+    pub(crate) fn app_metadata_only(db: &'db dyn HirAnalysisDb, lhs: Self, rhs: Self) -> TyId<'db> {
+        Self::app_in_mode(db, lhs, rhs, ConstTyApplicationMode::MetadataOnly)
+    }
+
+    fn app_in_mode(
+        db: &'db dyn HirAnalysisDb,
+        lhs: Self,
+        rhs: Self,
+        const_mode: ConstTyApplicationMode,
+    ) -> TyId<'db> {
         let Some(applicable_ty) = lhs.applicable_ty(db) else {
             return Self::invalid(
                 db,
@@ -615,9 +634,30 @@ impl<'db> TyId<'db> {
             );
         };
 
-        let rhs = rhs
-            .evaluate_const_ty(db, applicable_ty.const_ty)
-            .unwrap_or_else(|cause| Self::invalid(db, cause));
+        let rhs = match const_mode {
+            ConstTyApplicationMode::Evaluate
+                if matches!(
+                    rhs.data(db),
+                    TyData::ConstTy(const_ty)
+                        if matches!(
+                            const_ty.data(db),
+                            ConstTyData::UnEvaluated {
+                                preserve_unevaluated: true,
+                                ..
+                            }
+                        )
+                ) =>
+            {
+                rhs.check_const_ty_without_eval(db, applicable_ty.const_ty)
+                    .unwrap_or_else(|cause| Self::invalid(db, cause))
+            }
+            ConstTyApplicationMode::Evaluate => rhs
+                .evaluate_const_ty(db, applicable_ty.const_ty)
+                .unwrap_or_else(|cause| Self::invalid(db, cause)),
+            ConstTyApplicationMode::MetadataOnly => rhs
+                .check_const_ty_without_eval(db, applicable_ty.const_ty)
+                .unwrap_or_else(|cause| Self::invalid(db, cause)),
+        };
 
         let applicable_kind = applicable_ty.kind;
         if !applicable_kind.does_match(rhs.kind(db)) {
@@ -631,6 +671,34 @@ impl<'db> TyId<'db> {
         };
 
         Self::new(db, TyData::TyApp(lhs, rhs))
+    }
+
+    pub(crate) fn check_const_ty_without_eval(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        expected_ty: Option<TyId<'db>>,
+    ) -> Result<TyId<'db>, InvalidCause<'db>> {
+        match (expected_ty, self.data(db)) {
+            (Some(expected_const_ty), TyData::ConstTy(const_ty)) => {
+                if expected_const_ty.has_invalid(db) {
+                    return Err(InvalidCause::Other);
+                }
+                Ok(TyId::const_ty(db, const_ty.with_ty(db, expected_const_ty)))
+            }
+            (Some(expected_const_ty), _) => {
+                if expected_const_ty.has_invalid(db) {
+                    Err(InvalidCause::Other)
+                } else {
+                    Err(InvalidCause::ConstTyExpected {
+                        expected: expected_const_ty,
+                    })
+                }
+            }
+            (None, TyData::ConstTy(const_ty)) => Err(InvalidCause::NormalTypeExpected {
+                given: TyId::const_ty(db, *const_ty),
+            }),
+            (None, _) => Ok(self),
+        }
     }
 
     /// Check if this type contains an associated type of a type parameter

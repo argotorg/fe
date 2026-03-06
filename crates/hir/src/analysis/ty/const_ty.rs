@@ -1,8 +1,9 @@
 use crate::core::hir_def::{
-    Body, Const, EnumVariant, Expr, IdentId, IntegerId, LitKind, Partial, Stmt,
+    BinOp, Body, Const, EnumVariant, Expr, GenericParamOwner, IdentId, IntegerId, Partial, PathId,
+    Stmt,
 };
 
-use super::const_expr::{ConstExpr, ConstExprId};
+use super::const_expr::{ConstExpr, ConstExprId, pretty_print_un_op};
 use super::{
     ctfe::{CtfeConfig, CtfeInterpreter, instantiate_typed_body},
     diagnostics::{BodyDiag, FuncBodyDiag},
@@ -23,6 +24,131 @@ use crate::analysis::{
 };
 use crate::hir_def::ItemKind;
 use common::indexmap::IndexMap;
+use rustc_hash::FxHashMap;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LayoutHoleId<'db> {
+    Opaque,
+    PathArg { path: PathId<'db>, arg_idx: usize },
+}
+
+fn pretty_print_const_arg<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> String {
+    match ty.data(db) {
+        TyData::ConstTy(const_ty) if matches!(const_ty.data(db), ConstTyData::TyParam(param, _) if param.is_normal()) =>
+        {
+            let ConstTyData::TyParam(param, _) = const_ty.data(db) else {
+                unreachable!()
+            };
+            param.name.data(db).to_string()
+        }
+        _ => ty.pretty_print(db).to_string(),
+    }
+}
+
+fn generic_const_param_display_map<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+    generic_args: &[TyId<'db>],
+) -> FxHashMap<IdentId<'db>, String> {
+    let Some(owner) = body.scope().parent_item(db).and_then(|item| match item {
+        ItemKind::Func(func) => Some(GenericParamOwner::Func(func)),
+        ItemKind::Struct(struct_) => Some(GenericParamOwner::Struct(struct_)),
+        ItemKind::Enum(enum_) => Some(GenericParamOwner::Enum(enum_)),
+        ItemKind::TypeAlias(alias) => Some(GenericParamOwner::TypeAlias(alias)),
+        ItemKind::Impl(impl_) => Some(GenericParamOwner::Impl(impl_)),
+        ItemKind::Trait(trait_) => Some(GenericParamOwner::Trait(trait_)),
+        ItemKind::ImplTrait(impl_trait) => Some(GenericParamOwner::ImplTrait(impl_trait)),
+        _ => None,
+    }) else {
+        return FxHashMap::default();
+    };
+
+    super::ty_lower::collect_generic_params(db, owner)
+        .params(db)
+        .iter()
+        .copied()
+        .enumerate()
+        .filter_map(|(idx, param_ty)| {
+            let TyData::ConstTy(const_ty) = param_ty.data(db) else {
+                return None;
+            };
+            let ConstTyData::TyParam(param, _) = const_ty.data(db) else {
+                return None;
+            };
+            generic_args
+                .get(idx)
+                .map(|arg| (param.name, pretty_print_const_arg(db, *arg)))
+        })
+        .collect()
+}
+
+fn pretty_print_const_body_expr<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+    expr_id: crate::hir_def::ExprId,
+    generic_param_display: &FxHashMap<IdentId<'db>, String>,
+) -> Option<String> {
+    ConstBodyExprPrinter {
+        db,
+        body,
+        generic_param_display,
+    }
+    .pretty_print(expr_id)
+}
+
+struct ConstBodyExprPrinter<'a, 'db> {
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+    generic_param_display: &'a FxHashMap<IdentId<'db>, String>,
+}
+
+impl<'a, 'db> ConstBodyExprPrinter<'a, 'db> {
+    fn pretty_print(&self, expr_id: crate::hir_def::ExprId) -> Option<String> {
+        let Partial::Present(expr) = expr_id.data(self.db, self.body) else {
+            return None;
+        };
+
+        match expr {
+            Expr::Lit(lit) => Some(lit.pretty_print(self.db)),
+            Expr::Path(path) if path.is_present() => Some(self.pretty_print_path(path.unwrap())),
+            Expr::Call(callee, args) => {
+                let callee = self.pretty_print(*callee)?;
+                let args = args
+                    .iter()
+                    .map(|arg| self.pretty_print(arg.expr))
+                    .collect::<Option<Vec<_>>>()?;
+                Some(format!("{callee}({})", args.join(", ")))
+            }
+            Expr::Bin(lhs, rhs, op) if !matches!(op, BinOp::Index) => {
+                let lhs = self.pretty_print(*lhs)?;
+                let rhs = self.pretty_print(*rhs)?;
+                Some(format!("({lhs} {} {rhs})", op.pretty_print()))
+            }
+            Expr::Un(expr, op) => Some(pretty_print_un_op(*op, self.pretty_print(*expr)?)),
+            Expr::Cast(expr, to) => Some(format!(
+                "({} as {})",
+                self.pretty_print(*expr)?,
+                to.to_opt()?.pretty_print(self.db)
+            )),
+            Expr::Block(stmts) if stmts.len() == 1 => match stmts[0].data(self.db, self.body) {
+                Partial::Present(Stmt::Expr(tail_expr)) => self.pretty_print(*tail_expr),
+                Partial::Present(_) | Partial::Absent => None,
+            },
+            _ => None,
+        }
+    }
+
+    fn pretty_print_path(&self, path: PathId<'db>) -> String {
+        if path.parent(self.db).is_none()
+            && let Some(ident) = path.as_ident(self.db)
+            && let Some(replacement) = self.generic_param_display.get(&ident)
+        {
+            replacement.clone()
+        } else {
+            path.pretty_print(self.db)
+        }
+    }
+}
 
 #[salsa::interned]
 #[derive(Debug)]
@@ -37,7 +163,7 @@ pub(crate) fn evaluate_const_ty<'db>(
     const_ty: ConstTyId<'db>,
     expected_ty: Option<TyId<'db>>,
 ) -> ConstTyId<'db> {
-    if let ConstTyData::Hole(ty) = const_ty.data(db) {
+    if let ConstTyData::Hole(ty, _) = const_ty.data(db) {
         if let Some(expected_ty) = expected_ty {
             return const_ty.swap_ty(db, expected_ty);
         }
@@ -71,6 +197,7 @@ pub(crate) fn evaluate_const_ty<'db>(
             ty,
             const_def,
             generic_args,
+            ..
         } => (*body, *ty, *const_def, generic_args.clone()),
         _ => {
             let const_ty_ty = const_ty.ty(db);
@@ -162,6 +289,14 @@ pub(crate) fn evaluate_const_ty<'db>(
             match resolved_path {
                 PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {
                     if let TyData::ConstTy(const_ty) = ty.data(db) {
+                        if !generic_args.is_empty()
+                            && let ConstTyData::TyParam(param, _) = const_ty.data(db)
+                            && let Some(arg) = generic_args.get(param.idx).copied()
+                            && let TyData::ConstTy(arg_const) = arg.data(db)
+                        {
+                            let expected = expected_ty.or(Some(arg_const.ty(db)));
+                            return arg_const.evaluate(db, expected);
+                        }
                         return const_ty.evaluate(db, expected_ty);
                     }
                 }
@@ -378,7 +513,7 @@ impl<'db> ConstTyId<'db> {
         match self.data(db) {
             ConstTyData::TyVar(_, ty) => *ty,
             ConstTyData::TyParam(_, ty) => *ty,
-            ConstTyData::Hole(ty) => *ty,
+            ConstTyData::Hole(ty, _) => *ty,
             ConstTyData::Evaluated(_, ty) => *ty,
             ConstTyData::Abstract(_, ty) => *ty,
             ConstTyData::UnEvaluated { ty, .. } => {
@@ -393,11 +528,15 @@ impl<'db> ConstTyId<'db> {
             ConstTyData::TyParam(param, ty) => {
                 format!("const {}: {}", param.pretty_print(db), ty.pretty_print(db))
             }
-            ConstTyData::Hole(_) => "_".to_string(),
+            ConstTyData::Hole(..) => "_".to_string(),
             ConstTyData::Evaluated(resolved, _) => resolved.pretty_print(db),
             ConstTyData::Abstract(expr, _) => expr.pretty_print(db),
             ConstTyData::UnEvaluated {
-                body, const_def, ..
+                body,
+                ty,
+                const_def,
+                generic_args,
+                ..
             } => {
                 if let Some(const_def) = const_def
                     && let Some(name) = const_def.name(db).to_opt()
@@ -406,36 +545,21 @@ impl<'db> ConstTyId<'db> {
                 }
 
                 let expr = body.expr(db);
-                let Partial::Present(expr) = expr.data(db, *body) else {
-                    return "const value".into();
-                };
-
-                match expr {
-                    Expr::Lit(LitKind::Bool(value)) => format!("{value}"),
-                    Expr::Lit(LitKind::Int(int)) => format!("{}", int.data(db)),
-                    Expr::Lit(LitKind::String(string)) => format!("\"{}\"", string.data(db)),
-                    Expr::Path(path) if path.is_present() => path.unwrap().pretty_print(db),
-                    Expr::Block(stmts) if stmts.len() == 1 => {
-                        let Partial::Present(Stmt::Expr(tail_expr)) = stmts[0].data(db, *body)
-                        else {
-                            return "const value".into();
-                        };
-                        let Partial::Present(expr) = tail_expr.data(db, *body) else {
-                            return "const value".into();
-                        };
-
-                        match expr {
-                            Expr::Lit(LitKind::Bool(value)) => format!("{value}"),
-                            Expr::Lit(LitKind::Int(int)) => format!("{}", int.data(db)),
-                            Expr::Lit(LitKind::String(string)) => {
-                                format!("\"{}\"", string.data(db))
-                            }
-                            Expr::Path(path) if path.is_present() => path.unwrap().pretty_print(db),
-                            _ => "const value".into(),
-                        }
-                    }
-                    _ => "const value".into(),
+                if let Some(rendered) = pretty_print_const_body_expr(
+                    db,
+                    *body,
+                    expr,
+                    &generic_const_param_display_map(db, *body, generic_args),
+                ) {
+                    return rendered;
                 }
+
+                let fallback = self.evaluate(db, *ty);
+                if fallback != self {
+                    return fallback.pretty_print(db);
+                }
+
+                "const value".into()
             }
         }
     }
@@ -464,11 +588,30 @@ impl<'db> ConstTyId<'db> {
         const_def: Option<Const<'db>>,
         generic_args: Vec<TyId<'db>>,
     ) -> Self {
+        Self::from_body_with_generic_args_and_preservation(
+            db,
+            body,
+            ty,
+            const_def,
+            generic_args,
+            false,
+        )
+    }
+
+    pub(super) fn from_body_with_generic_args_and_preservation(
+        db: &'db dyn HirAnalysisDb,
+        body: Body<'db>,
+        ty: Option<TyId<'db>>,
+        const_def: Option<Const<'db>>,
+        generic_args: Vec<TyId<'db>>,
+        preserve_unevaluated: bool,
+    ) -> Self {
         let data = ConstTyData::UnEvaluated {
             body,
             ty,
             const_def,
             generic_args,
+            preserve_unevaluated,
         };
         Self::new(db, data)
     }
@@ -478,6 +621,30 @@ impl<'db> ConstTyId<'db> {
             Partial::Present(body) => Self::from_body(db, body, None, None),
             Partial::Absent => Self::invalid(db, InvalidCause::ParseError),
         }
+    }
+
+    pub(super) fn from_opt_body_with_ty_and_generic_args(
+        db: &'db dyn HirAnalysisDb,
+        body: Partial<Body<'db>>,
+        ty: Option<TyId<'db>>,
+        generic_args: Vec<TyId<'db>>,
+        preserve_unevaluated: bool,
+    ) -> Self {
+        match body {
+            Partial::Present(body) => Self::from_body_with_generic_args_and_preservation(
+                db,
+                body,
+                ty,
+                None,
+                generic_args,
+                preserve_unevaluated,
+            ),
+            Partial::Absent => Self::invalid(db, InvalidCause::ParseError),
+        }
+    }
+
+    pub(super) fn with_ty(self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Self {
+        self.swap_ty(db, ty)
     }
 
     pub(super) fn invalid(db: &'db dyn HirAnalysisDb, cause: InvalidCause<'db>) -> Self {
@@ -492,26 +659,40 @@ impl<'db> ConstTyId<'db> {
     }
 
     pub fn hole_with_ty(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Self {
-        Self::new(db, ConstTyData::Hole(ty))
+        Self::new(db, ConstTyData::Hole(ty, LayoutHoleId::Opaque))
+    }
+
+    pub fn hole_with_path_arg(
+        db: &'db dyn HirAnalysisDb,
+        ty: TyId<'db>,
+        path: PathId<'db>,
+        arg_idx: usize,
+    ) -> Self {
+        Self::new(
+            db,
+            ConstTyData::Hole(ty, LayoutHoleId::PathArg { path, arg_idx }),
+        )
     }
 
     fn swap_ty(self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Self {
         let data = match self.data(db) {
             ConstTyData::TyVar(var, _) => ConstTyData::TyVar(var.clone(), ty),
             ConstTyData::TyParam(param, _) => ConstTyData::TyParam(param.clone(), ty),
-            ConstTyData::Hole(_) => ConstTyData::Hole(ty),
+            ConstTyData::Hole(_, hole_id) => ConstTyData::Hole(ty, *hole_id),
             ConstTyData::Evaluated(evaluated, _) => ConstTyData::Evaluated(evaluated.clone(), ty),
             ConstTyData::Abstract(expr, _) => ConstTyData::Abstract(*expr, ty),
             ConstTyData::UnEvaluated {
                 body,
                 const_def,
                 generic_args,
+                preserve_unevaluated,
                 ..
             } => ConstTyData::UnEvaluated {
                 body: *body,
                 ty: Some(ty),
                 const_def: *const_def,
                 generic_args: generic_args.clone(),
+                preserve_unevaluated: *preserve_unevaluated,
             },
         };
 
@@ -523,7 +704,7 @@ impl<'db> ConstTyId<'db> {
 pub enum ConstTyData<'db> {
     TyVar(TyVar<'db>, TyId<'db>),
     TyParam(TyParam<'db>, TyId<'db>),
-    Hole(TyId<'db>),
+    Hole(TyId<'db>, LayoutHoleId<'db>),
     Evaluated(EvaluatedConstTy<'db>, TyId<'db>),
     Abstract(ConstExprId<'db>, TyId<'db>),
     UnEvaluated {
@@ -531,6 +712,7 @@ pub enum ConstTyData<'db> {
         ty: Option<TyId<'db>>,
         const_def: Option<Const<'db>>,
         generic_args: Vec<TyId<'db>>,
+        preserve_unevaluated: bool,
     },
 }
 

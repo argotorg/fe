@@ -224,3 +224,126 @@ contract C {
         field_layout.target_ty
     );
 }
+
+#[test]
+fn contract_field_layout_partitions_slots_by_address_space() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("contract_field_layout_partitions_slots_by_address_space.fe"),
+        r#"
+use core::effect_ref::{MemPtr, StorPtr}
+
+struct Slot<const ROOT: u256 = _> {}
+
+contract C {
+    storage0: StorPtr<Slot>
+    memory0: MemPtr<Slot>
+    storage1: StorPtr<Slot>
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let contract = top_mod
+        .children_non_nested(&db)
+        .find_map(|item| match item {
+            ItemKind::Contract(contract)
+                if contract
+                    .name(&db)
+                    .to_opt()
+                    .is_some_and(|n| n.data(&db) == "C") =>
+            {
+                Some(contract)
+            }
+            _ => None,
+        })
+        .expect("missing `C` contract");
+
+    let layout = contract.field_layout(&db);
+    let storage = resolve_lib_type_path(&db, contract.scope(), "core::effect_ref::Storage")
+        .expect("missing storage address space");
+    let memory = resolve_lib_type_path(&db, contract.scope(), "core::effect_ref::Memory")
+        .expect("missing memory address space");
+
+    let storage0 = layout
+        .get(&IdentId::new(&db, "storage0".to_string()))
+        .expect("missing `storage0` field");
+    let memory0 = layout
+        .get(&IdentId::new(&db, "memory0".to_string()))
+        .expect("missing `memory0` field");
+    let storage1 = layout
+        .get(&IdentId::new(&db, "storage1".to_string()))
+        .expect("missing `storage1` field");
+
+    assert_eq!(storage0.address_space, storage);
+    assert_eq!(memory0.address_space, memory);
+    assert_eq!(storage1.address_space, storage);
+    assert_eq!(storage0.slot_offset, 0);
+    assert_eq!(memory0.slot_offset, 0);
+    assert_eq!(storage1.slot_offset, 1);
+    assert_eq!(storage0.slot_count, 1);
+    assert_eq!(memory0.slot_count, 1);
+    assert_eq!(storage1.slot_count, 1);
+}
+
+#[test]
+fn contract_field_layout_reuses_repeated_placeholder_identity() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("contract_field_layout_reuses_repeated_placeholder_identity.fe"),
+        r#"
+use core::effect_ref::StorPtr
+
+struct Leaf<const ROOT: u256> {}
+type Repeated<const ROOT: u256 = _> = (Leaf<ROOT>, Leaf<ROOT>)
+
+contract C {
+    value: StorPtr<Repeated>
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let contract = top_mod
+        .children_non_nested(&db)
+        .find_map(|item| match item {
+            ItemKind::Contract(contract)
+                if contract
+                    .name(&db)
+                    .to_opt()
+                    .is_some_and(|n| n.data(&db) == "C") =>
+            {
+                Some(contract)
+            }
+            _ => None,
+        })
+        .expect("missing `C` contract");
+
+    let field = contract
+        .field_layout(&db)
+        .get(&IdentId::new(&db, "value".to_string()))
+        .cloned()
+        .expect("missing `value` field");
+    let target_fields = field.target_ty.field_types(&db);
+    assert_eq!(target_fields.len(), 2);
+    let left_root = target_fields[0]
+        .generic_args(&db)
+        .first()
+        .copied()
+        .expect("missing left root const arg");
+    let right_root = target_fields[1]
+        .generic_args(&db)
+        .first()
+        .copied()
+        .expect("missing right root const arg");
+
+    assert_eq!(field.slot_count, 1);
+    assert_eq!(left_root, right_root);
+    assert!(
+        !ty_contains_const_hole(&db, field.target_ty),
+        "unelaborated const hole remained in repeated target type: {:?}",
+        field.target_ty
+    );
+}

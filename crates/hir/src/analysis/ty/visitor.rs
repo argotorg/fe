@@ -112,7 +112,7 @@ where
     match &const_ty.data(db) {
         ConstTyData::TyVar(var, _) => visitor.visit_var(var),
         ConstTyData::TyParam(param, ty) => visitor.visit_const_param(param, *ty),
-        ConstTyData::Hole(_) => {}
+        ConstTyData::Hole(..) => {}
         ConstTyData::Evaluated(val, _) => match val {
             EvaluatedConstTy::Tuple(elems)
             | EvaluatedConstTy::Array(elems)

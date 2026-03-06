@@ -2,7 +2,7 @@ use crate::analysis::HirAnalysisDb;
 use crate::analysis::name_resolution::{
     NameDomain, PathRes, resolve_ident_to_bucket, resolve_path,
 };
-use crate::analysis::ty::const_ty::ConstTyData;
+use crate::analysis::ty::const_ty::{ConstTyData, LayoutHoleId};
 use crate::analysis::ty::fold::{AssocTySubst, TyFoldable, TyFolder};
 use crate::analysis::ty::layout_holes::layout_hole_with_fallback_ty;
 use crate::analysis::ty::trait_def::TraitInstId;
@@ -244,7 +244,14 @@ pub(crate) fn existentialize_omitted_const_args_in_effect_key<'db>(
         if arg_idx >= completed_args.len() {
             continue;
         }
-        let hole = layout_hole_with_fallback_ty(db, const_ty_ty);
+        let hole = layout_hole_with_fallback_ty(
+            db,
+            const_ty_ty,
+            LayoutHoleId::PathArg {
+                path: key_path,
+                arg_idx,
+            },
+        );
         if completed_args[arg_idx] != hole {
             completed_args[arg_idx] = hole;
             changed = true;

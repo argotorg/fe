@@ -4,7 +4,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::Update;
 
 use super::{
-    const_ty::{ConstTyData, ConstTyId},
+    const_ty::{ConstTyData, ConstTyId, LayoutHoleId},
     fold::{TyFoldable, TyFolder},
     ty_def::{TyData, TyId},
     ty_lower::{
@@ -35,10 +35,21 @@ pub(crate) fn layout_hole_fallback_ty<'db>(
 pub(crate) fn layout_hole_with_fallback_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     hole_ty: TyId<'db>,
+    hole_id: LayoutHoleId<'db>,
 ) -> TyId<'db> {
     TyId::const_ty(
         db,
-        ConstTyId::hole_with_ty(db, layout_hole_fallback_ty(db, hole_ty)),
+        match hole_id {
+            LayoutHoleId::Opaque => {
+                ConstTyId::hole_with_ty(db, layout_hole_fallback_ty(db, hole_ty))
+            }
+            LayoutHoleId::PathArg { path, arg_idx } => ConstTyId::hole_with_path_arg(
+                db,
+                layout_hole_fallback_ty(db, hole_ty),
+                path,
+                arg_idx,
+            ),
+        },
     )
 }
 
@@ -52,7 +63,7 @@ fn is_layout_placeholder<'db>(
     };
 
     match const_ty.data(db) {
-        ConstTyData::Hole(_) => true,
+        ConstTyData::Hole(..) => true,
         ConstTyData::TyParam(param, _)
             if policy == LayoutPlaceholderPolicy::HolesAndImplicitParams && param.is_implicit() =>
         {
@@ -79,7 +90,7 @@ pub fn ty_contains_const_hole<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) ->
             }
 
             if let TyData::ConstTy(const_ty) = ty.data(self.db)
-                && matches!(const_ty.data(self.db), ConstTyData::Hole(_))
+                && matches!(const_ty.data(self.db), ConstTyData::Hole(..))
             {
                 self.found = true;
                 return;
@@ -260,6 +271,20 @@ where
         .collect()
 }
 
+pub(crate) fn collect_unique_layout_placeholders_in_order<'db, T>(
+    db: &'db dyn HirAnalysisDb,
+    value: T,
+) -> Vec<TyId<'db>>
+where
+    T: TyVisitable<'db>,
+{
+    collect_unique_layout_placeholders_in_order_with_policy(
+        db,
+        value,
+        LayoutPlaceholderPolicy::HolesOnly,
+    )
+}
+
 pub(crate) fn collect_layout_hole_tys_in_order<'db, T>(
     db: &'db dyn HirAnalysisDb,
     value: T,
@@ -273,7 +298,7 @@ where
             let TyData::ConstTy(const_ty) = hole.data(db) else {
                 return None;
             };
-            let ConstTyData::Hole(hole_ty) = const_ty.data(db) else {
+            let ConstTyData::Hole(hole_ty, _) = const_ty.data(db) else {
                 return None;
             };
             Some(layout_hole_fallback_ty(db, *hole_ty))

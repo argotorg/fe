@@ -1,0 +1,217 @@
+use std::panic::{AssertUnwindSafe, catch_unwind};
+
+use camino::Utf8PathBuf;
+use fe_hir::analysis::ty::{
+    const_ty::ConstTyData,
+    ty_check::check_func_body,
+    ty_def::{TyData, TyId},
+};
+use fe_hir::hir_def::{ItemKind, Partial, Pat};
+use fe_hir::test_db::HirAnalysisTestDb;
+
+fn find_func<'db>(
+    db: &'db HirAnalysisTestDb,
+    top_mod: fe_hir::hir_def::TopLevelMod<'db>,
+    name: &str,
+) -> fe_hir::hir_def::Func<'db> {
+    top_mod
+        .children_non_nested(db)
+        .find_map(|item| match item {
+            ItemKind::Func(func) if func.name(db).to_opt().is_some_and(|n| n.data(db) == name) => {
+                Some(func)
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("missing `{name}` function"))
+}
+
+#[test]
+fn type_effect_keys_keep_omitted_const_expr_defaults_unevaluated() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("type_effect_keys_keep_omitted_const_expr_defaults_unevaluated.fe"),
+        r#"
+const ROOT: u256 = 7
+
+struct Slot<T, const N: u256 = ROOT> {}
+
+fn f() uses (slot: Slot<u256>) {}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let func = find_func(&db, top_mod, "f");
+    let key_ty = func
+        .effect_bindings(&db)
+        .first()
+        .and_then(|binding| binding.key_ty)
+        .expect("missing type effect key");
+    let default_arg = key_ty
+        .generic_args(&db)
+        .get(1)
+        .copied()
+        .expect("missing defaulted const arg");
+
+    let TyData::ConstTy(default_const) = default_arg.data(&db) else {
+        panic!("expected const generic arg, got {default_arg:?}");
+    };
+    assert!(
+        matches!(default_const.data(&db), ConstTyData::UnEvaluated { .. }),
+        "default const arg was unexpectedly evaluated: {default_const:?}"
+    );
+    assert_eq!(default_const.ty(&db), TyId::u256(&db));
+}
+
+#[test]
+fn type_alias_effect_keys_keep_omitted_const_expr_defaults_unevaluated() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("type_alias_effect_keys_keep_omitted_const_expr_defaults_unevaluated.fe"),
+        r#"
+const ROOT: u256 = 7
+
+struct Raw<T, const N: u256> {}
+type Slot<T, const N: u256 = ROOT> = Raw<T, N>
+
+fn f() uses (slot: Slot<u256>) {}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let func = find_func(&db, top_mod, "f");
+    let key_ty = func
+        .effect_bindings(&db)
+        .first()
+        .and_then(|binding| binding.key_ty)
+        .expect("missing type effect key");
+    let default_arg = key_ty
+        .generic_args(&db)
+        .get(1)
+        .copied()
+        .expect("missing defaulted const arg");
+
+    let TyData::ConstTy(default_const) = default_arg.data(&db) else {
+        panic!("expected const generic arg, got {default_arg:?}");
+    };
+    assert!(
+        matches!(default_const.data(&db), ConstTyData::UnEvaluated { .. }),
+        "type-alias default const arg was unexpectedly evaluated: {:?}",
+        default_const.data(&db)
+    );
+    assert_eq!(default_const.ty(&db), TyId::u256(&db));
+}
+
+#[test]
+fn metadata_default_const_args_capture_prior_generic_bindings() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("metadata_default_const_args_capture_prior_generic_bindings.fe"),
+        r#"
+struct Slot<const BASE: u256, const N: u256 = BASE> {}
+
+fn f() uses (slot: Slot<7>) {}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let func = find_func(&db, top_mod, "f");
+    let key_ty = func
+        .effect_bindings(&db)
+        .first()
+        .and_then(|binding| binding.key_ty)
+        .expect("missing type effect key");
+    let base_arg = key_ty
+        .generic_args(&db)
+        .first()
+        .copied()
+        .expect("missing explicit const arg");
+    let default_arg = key_ty
+        .generic_args(&db)
+        .get(1)
+        .copied()
+        .expect("missing defaulted const arg");
+
+    let TyData::ConstTy(default_const) = default_arg.data(&db) else {
+        panic!("expected const generic arg, got {default_arg:?}");
+    };
+    let ConstTyData::UnEvaluated { generic_args, .. } = default_const.data(&db) else {
+        panic!("expected unevaluated default const arg, got {default_const:?}");
+    };
+
+    assert_eq!(generic_args.len(), 1);
+    assert_eq!(generic_args[0], base_arg);
+}
+
+#[test]
+fn trait_generic_args_still_validate_const_type_mismatches() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("trait_generic_args_still_validate_const_type_mismatches.fe"),
+        r#"
+trait Cap<const N: u256> {}
+
+fn f() uses (cap: Cap<false>) {}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let result = catch_unwind(AssertUnwindSafe(|| db.assert_no_diags(top_mod)));
+
+    assert!(
+        result.is_err(),
+        "trait generic arg type checking unexpectedly accepted a bool const for `u256`"
+    );
+}
+
+#[test]
+fn typed_body_preserves_metadata_only_const_defaults() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("typed_body_preserves_metadata_only_const_defaults.fe"),
+        r#"
+const fn plus1(x: usize) -> usize {
+    x + 1
+}
+
+struct Foo<const N: usize, const M: usize = plus1(N)> {}
+
+fn f() {
+    let x: Foo<4>
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let func = find_func(&db, top_mod, "f");
+    let body = func.body(&db).expect("missing function body");
+    let typed_body = check_func_body(&db, func).1.clone();
+    let x_pat = body
+        .pats(&db)
+        .keys()
+        .find(|pat| {
+            matches!(
+                pat.data(&db, body),
+                Partial::Present(Pat::Path(Partial::Present(path), _))
+                    if path.as_ident(&db).is_some_and(|ident| ident.data(&db) == "x")
+            )
+        })
+        .expect("missing `x` pattern");
+    let x_ty = typed_body.pat_ty(&db, x_pat);
+    let default_arg = x_ty
+        .generic_args(&db)
+        .get(1)
+        .copied()
+        .expect("missing defaulted const arg");
+
+    let TyData::ConstTy(default_const) = default_arg.data(&db) else {
+        panic!("expected const generic arg, got {default_arg:?}");
+    };
+    assert!(
+        matches!(default_const.data(&db), ConstTyData::UnEvaluated { .. }),
+        "typed-body const default was unexpectedly evaluated: {:?}",
+        default_const.data(&db)
+    );
+}

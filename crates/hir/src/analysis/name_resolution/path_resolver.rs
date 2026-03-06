@@ -1317,12 +1317,15 @@ pub fn resolve_name_res<'db>(
                             path,
                         ));
                     } else {
-                        let completed = alias.param_set.complete_explicit_args_with_defaults(
-                            db,
-                            None,
-                            args,
-                            assumptions,
-                        );
+                        let completed = alias
+                            .param_set
+                            .complete_explicit_args_with_metadata_defaults(
+                                db,
+                                None,
+                                args,
+                                assumptions,
+                                Some(path),
+                            );
                         if completed.len() < expected {
                             return Ok(PathRes::TyAlias(
                                 alias.clone(),
@@ -1513,21 +1516,37 @@ fn ty_from_adtref<'db>(
     let layout_provided = &args[explicit_provided_len..];
 
     // Fill trailing defaults (if any)
-    let mut completed_args = adt.param_set(db).complete_explicit_args_with_defaults(
-        db,
-        None,
-        explicit_args,
-        assumptions,
-    );
+    let mut completed_args = adt
+        .param_set(db)
+        .complete_explicit_args_with_metadata_defaults(
+            db,
+            None,
+            explicit_args,
+            assumptions,
+            Some(path),
+        );
     completed_args.extend(layout_provided.iter().copied());
 
     let layout_hole_tys = adt_layout_hole_tys(db, adt);
     let provided_layout_len = layout_provided.len();
-    for hole_ty in layout_hole_tys.iter().copied().skip(provided_layout_len) {
-        completed_args.push(layout_hole_with_fallback_ty(db, hole_ty));
+    for (layout_idx, hole_ty) in layout_hole_tys
+        .iter()
+        .copied()
+        .enumerate()
+        .skip(provided_layout_len)
+    {
+        completed_args.push(layout_hole_with_fallback_ty(
+            db,
+            hole_ty,
+            super::super::ty::const_ty::LayoutHoleId::PathArg {
+                path,
+                arg_idx: explicit_param_len + layout_idx,
+            },
+        ));
     }
 
-    let applied = TyId::foldl(db, ty, &completed_args);
+    let applied =
+        apply_ty_args_with_metadata_suffix(db, ty, &completed_args, explicit_provided_len);
     if let TyData::Invalid(InvalidCause::TooManyGenericArgs { expected, given }) = applied.data(db)
     {
         Err(PathResError::new(
@@ -1540,6 +1559,32 @@ fn ty_from_adtref<'db>(
     } else {
         Ok(applied)
     }
+}
+
+fn apply_ty_args_with_metadata_suffix<'db>(
+    db: &'db dyn HirAnalysisDb,
+    mut base: TyId<'db>,
+    args: &[TyId<'db>],
+    metadata_start: usize,
+) -> TyId<'db> {
+    for (idx, arg) in args.iter().enumerate() {
+        if base.applicable_ty(db).is_none() {
+            return TyId::invalid(
+                db,
+                InvalidCause::TooManyGenericArgs {
+                    expected: idx,
+                    given: args.len(),
+                },
+            );
+        }
+        base = if idx < metadata_start {
+            TyId::app(db, base, *arg)
+        } else {
+            TyId::app_metadata_only(db, base, *arg)
+        };
+    }
+
+    base
 }
 
 fn pick_type_domain_from_bucket<'db>(
