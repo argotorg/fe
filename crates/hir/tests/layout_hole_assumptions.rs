@@ -347,3 +347,139 @@ contract C {
         field.target_ty
     );
 }
+
+#[test]
+fn contract_field_layout_counts_target_only_holes() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("contract_field_layout_counts_target_only_holes.fe"),
+        r#"
+use core::effect_ref::EffectHandle
+
+struct Payload<T, const ROOT: u256 = _> {}
+
+struct Ptr<T> {
+    raw: u256
+}
+
+impl<T> EffectHandle for Ptr<T> {
+    type Target = Payload<T>
+    type AddressSpace = core::effect_ref::Storage
+
+    fn from_raw(raw: u256) -> Self {
+        Self { raw }
+    }
+
+    fn raw(self) -> u256 {
+        self.raw
+    }
+}
+
+contract C {
+    first: Ptr<u256>
+    second: u256
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let contract = top_mod
+        .children_non_nested(&db)
+        .find_map(|item| match item {
+            ItemKind::Contract(contract)
+                if contract
+                    .name(&db)
+                    .to_opt()
+                    .is_some_and(|n| n.data(&db) == "C") =>
+            {
+                Some(contract)
+            }
+            _ => None,
+        })
+        .expect("missing `C` contract");
+
+    let layout = contract.field_layout(&db);
+    let first = layout
+        .get(&IdentId::new(&db, "first".to_string()))
+        .expect("missing `first` field");
+    let second = layout
+        .get(&IdentId::new(&db, "second".to_string()))
+        .expect("missing `second` field");
+
+    assert!(first.is_provider);
+    assert_eq!(first.slot_count, 1);
+    assert_eq!(second.slot_offset, 1);
+    assert!(
+        !ty_contains_const_hole(&db, first.target_ty),
+        "unelaborated const hole remained in target-only layout type: {:?}",
+        first.target_ty
+    );
+}
+
+#[test]
+fn contract_field_layout_ignores_wrapper_only_holes_for_slot_count() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("contract_field_layout_ignores_wrapper_only_holes_for_slot_count.fe"),
+        r#"
+use core::effect_ref::EffectHandle
+
+struct Wrapper<const ROOT: u256 = _> {
+    raw: u256
+}
+
+impl<const ROOT: u256> EffectHandle for Wrapper<ROOT> {
+    type Target = u256
+    type AddressSpace = core::effect_ref::Storage
+
+    fn from_raw(raw: u256) -> Self {
+        Self { raw }
+    }
+
+    fn raw(self) -> u256 {
+        self.raw
+    }
+}
+
+contract C {
+    first: Wrapper
+    second: u256
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let contract = top_mod
+        .children_non_nested(&db)
+        .find_map(|item| match item {
+            ItemKind::Contract(contract)
+                if contract
+                    .name(&db)
+                    .to_opt()
+                    .is_some_and(|n| n.data(&db) == "C") =>
+            {
+                Some(contract)
+            }
+            _ => None,
+        })
+        .expect("missing `C` contract");
+
+    let layout = contract.field_layout(&db);
+    let first = layout
+        .get(&IdentId::new(&db, "first".to_string()))
+        .expect("missing `first` field");
+    let second = layout
+        .get(&IdentId::new(&db, "second".to_string()))
+        .expect("missing `second` field");
+
+    assert!(first.is_provider);
+    assert_eq!(first.slot_count, 1);
+    assert_eq!(second.slot_offset, 1);
+    assert!(
+        !ty_contains_const_hole(&db, first.declared_ty),
+        "unelaborated const hole remained in wrapper-only layout type: {:?}",
+        first.declared_ty
+    );
+}

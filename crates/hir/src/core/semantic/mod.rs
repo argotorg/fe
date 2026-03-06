@@ -1295,8 +1295,10 @@ struct ContractFieldEffectHandleInfo<'db> {
 struct ContractFieldLayoutPlan<'db> {
     declared_ty: TyId<'db>,
     target_ty: TyId<'db>,
+    slot_basis_ty: TyId<'db>,
     metadata: ContractFieldEffectHandleInfo<'db>,
-    layout_placeholders: Vec<TyId<'db>>,
+    slot_placeholders: Vec<TyId<'db>>,
+    materialization_placeholders: Vec<TyId<'db>>,
 }
 
 #[derive(Clone, Copy)]
@@ -1356,22 +1358,43 @@ impl<'db> ContractFieldEffectHandleCx<'db> {
     ) -> ContractFieldLayoutPlan<'db> {
         let metadata = self.metadata(db, field_ty);
         let target_ty = alpha_rename_hidden_layout_placeholders(db, metadata.target_ty, field_ty);
-        let layout_placeholders = collect_unique_layout_placeholders_in_order(db, field_ty);
+        let slot_basis_ty = if metadata.is_provider {
+            target_ty
+        } else {
+            field_ty
+        };
+        let slot_placeholders = collect_unique_layout_placeholders_in_order(db, slot_basis_ty);
+        let other_placeholders = if metadata.is_provider {
+            collect_unique_layout_placeholders_in_order(db, field_ty)
+        } else {
+            collect_unique_layout_placeholders_in_order(db, target_ty)
+        };
+        let mut seen = slot_placeholders.iter().copied().collect::<FxHashSet<_>>();
+        let mut materialization_placeholders = slot_placeholders.clone();
+        materialization_placeholders.extend(
+            other_placeholders
+                .into_iter()
+                .filter(|placeholder| seen.insert(*placeholder)),
+        );
         ContractFieldLayoutPlan {
             declared_ty: field_ty,
             target_ty,
+            slot_basis_ty,
             metadata,
-            layout_placeholders,
+            slot_placeholders,
+            materialization_placeholders,
         }
     }
 }
 
 fn contract_field_layout_slot_assignments<'db>(
     db: &'db dyn HirAnalysisDb,
-    layout_placeholders: &[TyId<'db>],
+    slot_placeholders: &[TyId<'db>],
+    materialization_placeholders: &[TyId<'db>],
     start_slot: usize,
 ) -> FxHashMap<TyId<'db>, TyId<'db>> {
-    layout_placeholders
+    debug_assert!(materialization_placeholders.starts_with(slot_placeholders));
+    materialization_placeholders
         .iter()
         .enumerate()
         .filter_map(|(offset, hole)| {
@@ -1483,23 +1506,26 @@ impl<'db> Contract<'db> {
                 .entry(plan.metadata.address_space)
                 .or_insert(0);
             let slot_offset = *next_slot;
-            let slot_assignments =
-                contract_field_layout_slot_assignments(db, &plan.layout_placeholders, slot_offset);
+            let slot_assignments = contract_field_layout_slot_assignments(
+                db,
+                &plan.slot_placeholders,
+                &plan.materialization_placeholders,
+                slot_offset,
+            );
             let declared_ty =
                 materialize_contract_layout_holes(db, plan.declared_ty, &slot_assignments);
             let target_ty =
                 materialize_contract_layout_holes(db, plan.target_ty, &slot_assignments);
+            let slot_basis_ty =
+                materialize_contract_layout_holes(db, plan.slot_basis_ty, &slot_assignments);
             debug_assert!(
-                !ty_contains_const_hole(db, declared_ty) && !ty_contains_const_hole(db, target_ty),
+                !ty_contains_const_hole(db, declared_ty)
+                    && !ty_contains_const_hole(db, target_ty)
+                    && !ty_contains_const_hole(db, slot_basis_ty),
                 "contract field layout materialization left unresolved holes"
             );
-            let slot_basis_ty = if plan.metadata.is_provider {
-                target_ty
-            } else {
-                declared_ty
-            };
             let slot_count = contract_field_base_slot_count(db, slot_basis_ty)
-                .saturating_add(slot_assignments.len());
+                .saturating_add(plan.slot_placeholders.len());
             *next_slot = slot_offset.saturating_add(slot_count);
 
             let name = field.name.unwrap();
