@@ -10,4 +10,3 @@ fn takes_root_1(x: Slot<u256, 1>) {}
 fn test(o: Outer<Slot<u256>, 2>) {
     takes_root_1(o.a)
 }
-

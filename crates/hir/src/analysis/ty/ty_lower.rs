@@ -443,6 +443,36 @@ impl<'db> TyAlias<'db> {
     pub fn params(&self, db: &'db dyn HirAnalysisDb) -> &'db [TyId<'db>] {
         self.param_set.params(db)
     }
+
+    pub(crate) fn instantiate_from_path(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        path: PathId<'db>,
+        args: &[TyId<'db>],
+        assumptions: PredicateListId<'db>,
+    ) -> TyId<'db> {
+        let expected = self.param_set.explicit_param_count(db);
+        let mut completed = self
+            .param_set
+            .complete_explicit_args_with_metadata_defaults(db, None, args, assumptions, Some(path));
+        for (explicit_idx, arg) in args.iter().take(expected).copied().enumerate() {
+            completed[explicit_idx] = self.param_set.checked_explicit_arg(db, explicit_idx, arg);
+        }
+        if completed.len() < expected {
+            return TyId::invalid(
+                db,
+                InvalidCause::UnboundTypeAliasParam {
+                    alias: self.alias,
+                    n_given_args: args.len(),
+                },
+            );
+        }
+        if let Some(cause) = completed.iter().find_map(|arg| arg.invalid_cause(db)) {
+            return TyId::invalid(db, cause);
+        }
+
+        self.alias_to.instantiate(db, &completed)
+    }
 }
 
 pub(crate) fn lower_generic_arg_list<'db>(
@@ -629,28 +659,6 @@ impl<'db> GenericParamTypeSet<'db> {
             assumptions,
             ConstDefaultCompletionConfig {
                 mode: ConstDefaultCompletionMode::MetadataOnly,
-                propagate_explicit_checks: false,
-            },
-            application_path,
-        )
-    }
-
-    pub(crate) fn complete_explicit_args_with_metadata_defaults_and_checked_explicit_args(
-        self,
-        db: &'db dyn HirAnalysisDb,
-        trait_self: Option<TyId<'db>>,
-        provided_explicit: &[TyId<'db>],
-        assumptions: PredicateListId<'db>,
-        application_path: Option<PathId<'db>>,
-    ) -> Vec<TyId<'db>> {
-        self.complete_explicit_args_with_defaults_in_mode(
-            db,
-            trait_self,
-            provided_explicit,
-            assumptions,
-            ConstDefaultCompletionConfig {
-                mode: ConstDefaultCompletionMode::MetadataOnly,
-                propagate_explicit_checks: true,
             },
             application_path,
         )
@@ -671,10 +679,27 @@ impl<'db> GenericParamTypeSet<'db> {
             assumptions,
             ConstDefaultCompletionConfig {
                 mode: ConstDefaultCompletionMode::Evaluate,
-                propagate_explicit_checks: false,
             },
             application_path,
         )
+    }
+
+    fn checked_explicit_arg(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        explicit_idx: usize,
+        ty: TyId<'db>,
+    ) -> TyId<'db> {
+        let lowered_idx = self.offset_to_explicit(db) + explicit_idx;
+        let Some(param) = self.params_precursor(db).get(lowered_idx) else {
+            return ty;
+        };
+        if !param.is_const_ty() {
+            return ty;
+        }
+
+        ty.check_const_ty_without_eval(db, param.declared_const_ty(db, self.scope(db)))
+            .unwrap_or_else(|cause| TyId::invalid(db, cause))
     }
 
     fn complete_explicit_args_with_defaults_in_mode(
@@ -696,22 +721,9 @@ impl<'db> GenericParamTypeSet<'db> {
             mapping.push(Some(self_ty));
         }
         for (explicit_idx, ty) in provided_explicit.iter().enumerate() {
-            let lowered_idx = offset + explicit_idx;
-            let checked = if self.params_precursor(db)[lowered_idx].is_const_ty() {
-                ty.check_const_ty_without_eval(
-                    db,
-                    self.params_precursor(db)[lowered_idx].declared_const_ty(db, self.scope(db)),
-                )
-                .unwrap_or_else(|cause| TyId::invalid(db, cause))
-            } else {
-                *ty
-            };
+            let checked = self.checked_explicit_arg(db, explicit_idx, *ty);
             mapping.push(Some(checked));
-            result.push(if completion.propagate_explicit_checks {
-                checked
-            } else {
-                *ty
-            });
+            result.push(*ty);
         }
         mapping.resize(total, None);
         let scope = self.scope(db);
@@ -853,7 +865,6 @@ enum ConstDefaultCompletionMode {
 #[derive(Clone, Copy)]
 struct ConstDefaultCompletionConfig {
     mode: ConstDefaultCompletionMode,
-    propagate_explicit_checks: bool,
 }
 
 struct GenericParamCollector<'db> {

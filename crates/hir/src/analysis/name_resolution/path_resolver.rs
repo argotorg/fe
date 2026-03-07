@@ -1316,48 +1316,11 @@ pub fn resolve_name_res<'db>(
                             },
                             path,
                         ));
-                    } else {
-                        let completed = alias
-                            .param_set
-                            .complete_explicit_args_with_metadata_defaults_and_checked_explicit_args(
-                                db,
-                                None,
-                                args,
-                                assumptions,
-                                Some(path),
-                            );
-                        if completed.len() < expected {
-                            return Ok(PathRes::TyAlias(
-                                alias.clone(),
-                                TyId::invalid(
-                                    db,
-                                    InvalidCause::UnboundTypeAliasParam {
-                                        alias: type_alias,
-                                        n_given_args: args.len(),
-                                    },
-                                ),
-                            ));
-                        }
-                        if let Some(cause) = args
-                            .iter()
-                            .zip(alias.param_set.explicit_params(db))
-                            .find_map(|(arg, param)| match param.data(db) {
-                                TyData::ConstTy(const_ty) => arg
-                                    .check_const_ty_without_eval(db, Some(const_ty.ty(db)))
-                                    .err(),
-                                _ => None,
-                            })
-                        {
-                            return Ok(PathRes::TyAlias(alias.clone(), TyId::invalid(db, cause)));
-                        }
-                        if let Some(cause) = completed.iter().find_map(|arg| arg.invalid_cause(db))
-                        {
-                            return Ok(PathRes::TyAlias(alias.clone(), TyId::invalid(db, cause)));
-                        }
-
-                        let instantiated = alias.alias_to.instantiate(db, &completed);
-                        PathRes::TyAlias(alias.clone(), instantiated)
                     }
+                    PathRes::TyAlias(
+                        alias.clone(),
+                        alias.instantiate_from_path(db, path, args, assumptions),
+                    )
                 }
 
                 ItemKind::Impl(impl_) => {
