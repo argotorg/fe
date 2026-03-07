@@ -1,0 +1,11 @@
+struct Slot<T, const ROOT: u256 = _> {}
+
+trait Tr {
+    fn f<U>(x: Slot<U>)
+}
+
+struct S {}
+
+impl Tr for S {
+    fn f<U>(x: Slot<U>) {}
+}

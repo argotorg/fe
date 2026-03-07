@@ -68,7 +68,7 @@ note:
    ┌─ effect_pointer_providers.fe:10:37
    │
 10 │     let p: std::evm::MemPtr<u256> = mem.mem_ptr(0)
-   │                                     ^^^ __effprov0
+   │                                     ^^^ mem
 
 note: 
    ┌─ effect_pointer_providers.fe:10:37

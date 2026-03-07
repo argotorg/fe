@@ -22,15 +22,17 @@ use salsa::Update;
 use smallvec::SmallVec;
 
 use super::{
-    adt_def::{AdtDef, adt_layout_hole_tys},
+    adt_def::{AdtDef, adt_field_layout_hole_ranges, adt_layout_hole_tys},
+    binder::Binder,
     const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
     diagnostics::{TraitConstraintDiag, TyDiagCollection},
-    fold::{TyFoldable, TyFolder},
+    effects::place_effect_provider_param_index_map,
+    layout_holes::substitute_layout_holes,
     trait_def::TraitInstId,
     trait_resolution::{PredicateListId, WellFormedness},
     ty_lower::collect_generic_params,
-    unify::InferenceKey,
-    visitor::{TyVisitable, TyVisitor, walk_ty},
+    unify::{InferenceKey, UnificationTable},
+    visitor::{TyVisitable, TyVisitor},
 };
 use crate::analysis::{
     HirAnalysisDb,
@@ -48,6 +50,12 @@ use crate::hir_def::CallableDef;
 pub struct TyId<'db> {
     #[return_ref]
     pub data: TyData<'db>,
+}
+
+#[derive(Clone, Copy)]
+enum ConstTyApplicationMode {
+    Evaluate,
+    MetadataOnly,
 }
 
 #[salsa::tracked]
@@ -603,6 +611,19 @@ impl<'db> TyId<'db> {
 
     /// Perform type level application.
     pub fn app(db: &'db dyn HirAnalysisDb, lhs: Self, rhs: Self) -> TyId<'db> {
+        Self::app_in_mode(db, lhs, rhs, ConstTyApplicationMode::Evaluate)
+    }
+
+    pub(crate) fn app_metadata_only(db: &'db dyn HirAnalysisDb, lhs: Self, rhs: Self) -> TyId<'db> {
+        Self::app_in_mode(db, lhs, rhs, ConstTyApplicationMode::MetadataOnly)
+    }
+
+    fn app_in_mode(
+        db: &'db dyn HirAnalysisDb,
+        lhs: Self,
+        rhs: Self,
+        const_mode: ConstTyApplicationMode,
+    ) -> TyId<'db> {
         let Some(applicable_ty) = lhs.applicable_ty(db) else {
             return Self::invalid(
                 db,
@@ -613,9 +634,30 @@ impl<'db> TyId<'db> {
             );
         };
 
-        let rhs = rhs
-            .evaluate_const_ty(db, applicable_ty.const_ty)
-            .unwrap_or_else(|cause| Self::invalid(db, cause));
+        let rhs = match const_mode {
+            ConstTyApplicationMode::Evaluate
+                if matches!(
+                    rhs.data(db),
+                    TyData::ConstTy(const_ty)
+                        if matches!(
+                            const_ty.data(db),
+                            ConstTyData::UnEvaluated {
+                                preserve_unevaluated: true,
+                                ..
+                            }
+                        )
+                ) =>
+            {
+                rhs.check_const_ty_without_eval(db, applicable_ty.const_ty)
+                    .unwrap_or_else(|cause| Self::invalid(db, cause))
+            }
+            ConstTyApplicationMode::Evaluate => rhs
+                .evaluate_const_ty(db, applicable_ty.const_ty)
+                .unwrap_or_else(|cause| Self::invalid(db, cause)),
+            ConstTyApplicationMode::MetadataOnly => rhs
+                .check_const_ty_without_eval(db, applicable_ty.const_ty)
+                .unwrap_or_else(|cause| Self::invalid(db, cause)),
+        };
 
         let applicable_kind = applicable_ty.kind;
         if !applicable_kind.does_match(rhs.kind(db)) {
@@ -629,6 +671,48 @@ impl<'db> TyId<'db> {
         };
 
         Self::new(db, TyData::TyApp(lhs, rhs))
+    }
+
+    pub(crate) fn check_const_ty_without_eval(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        expected_ty: Option<TyId<'db>>,
+    ) -> Result<TyId<'db>, InvalidCause<'db>> {
+        match (expected_ty, self.data(db)) {
+            (Some(expected_const_ty), TyData::ConstTy(const_ty)) => {
+                if expected_const_ty.has_invalid(db) {
+                    return Err(InvalidCause::Other);
+                }
+                if matches!(const_ty.data(db), ConstTyData::UnEvaluated { .. }) {
+                    return super::const_ty::validate_unevaluated_const_ty(
+                        db,
+                        *const_ty,
+                        Some(expected_const_ty),
+                    )
+                    .map(|validated| TyId::const_ty(db, validated.const_ty));
+                }
+                let ty = super::const_ty::check_const_ty(
+                    db,
+                    const_ty.ty(db),
+                    Some(expected_const_ty),
+                    &mut UnificationTable::new(db),
+                )?;
+                Ok(TyId::const_ty(db, const_ty.with_ty(db, ty)))
+            }
+            (Some(expected_const_ty), _) => {
+                if expected_const_ty.has_invalid(db) {
+                    Err(InvalidCause::Other)
+                } else {
+                    Err(InvalidCause::ConstTyExpected {
+                        expected: expected_const_ty,
+                    })
+                }
+            }
+            (None, TyData::ConstTy(const_ty)) => Err(InvalidCause::NormalTypeExpected {
+                given: TyId::const_ty(db, *const_ty),
+            }),
+            (None, _) => Ok(self),
+        }
     }
 
     /// Check if this type contains an associated type of a type parameter
@@ -853,109 +937,19 @@ pub(crate) fn instantiate_adt_field_ty<'db>(
     let field_ty = adt_def
         .fields(db)
         .get(variant_idx)
-        .and_then(|field_list| {
-            (field_idx < field_list.num_types()).then(|| field_list.ty(db, field_idx))
-        })
-        .map(|field_ty| field_ty.instantiate(db, explicit_args))
+        .and_then(|variant| (field_idx < variant.num_types()).then(|| variant.ty(db, field_idx)))
+        .map(|field_ty| field_ty.instantiate_identity())
         .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other));
-    let layout_offset =
-        adt_field_layout_hole_offset(db, adt_def, variant_idx, field_idx, explicit_args);
-    substitute_layout_holes(
-        db,
-        field_ty,
-        &layout_args[layout_offset.min(layout_args.len())..],
-    )
-}
 
-pub(crate) fn substitute_layout_holes<'db>(
-    db: &'db dyn HirAnalysisDb,
-    ty: TyId<'db>,
-    layout_args: &[TyId<'db>],
-) -> TyId<'db> {
-    if layout_args.is_empty() {
-        return ty;
-    }
-
-    struct LayoutHoleSubst<'a, 'db> {
-        db: &'db dyn HirAnalysisDb,
-        args: &'a [TyId<'db>],
-        next: usize,
-    }
-
-    impl<'a, 'db> TyFolder<'db> for LayoutHoleSubst<'a, 'db> {
-        fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
-            if let TyData::ConstTy(const_ty) = ty.data(self.db)
-                && matches!(const_ty.data(self.db), ConstTyData::Hole(_))
-                && let Some(arg) = self.args.get(self.next).copied()
-            {
-                self.next += 1;
-                return arg;
-            }
-
-            ty.super_fold_with(db, self)
-        }
-    }
-
-    let mut folder = LayoutHoleSubst {
-        db,
-        args: layout_args,
-        next: 0,
-    };
-    ty.fold_with(db, &mut folder)
-}
-
-fn adt_field_layout_hole_offset<'db>(
-    db: &'db dyn HirAnalysisDb,
-    adt_def: AdtDef<'db>,
-    variant_idx: usize,
-    field_idx: usize,
-    explicit_args: &[TyId<'db>],
-) -> usize {
-    adt_def
-        .fields(db)
-        .iter()
-        .enumerate()
-        .map(|(idx, field_list)| {
-            let end = if idx < variant_idx {
-                field_list.num_types()
-            } else if idx == variant_idx {
-                field_idx
-            } else {
-                0
-            };
-            (0..end)
-                .map(|field| {
-                    count_const_holes(db, field_list.ty(db, field).instantiate(db, explicit_args))
-                })
-                .sum::<usize>()
-        })
-        .sum()
-}
-
-fn count_const_holes<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> usize {
-    struct Counter<'db> {
-        db: &'db dyn HirAnalysisDb,
-        count: usize,
-    }
-
-    impl<'db> TyVisitor<'db> for Counter<'db> {
-        fn db(&self) -> &'db dyn HirAnalysisDb {
-            self.db
-        }
-
-        fn visit_ty(&mut self, ty: TyId<'db>) {
-            if let TyData::ConstTy(const_ty) = ty.data(self.db)
-                && matches!(const_ty.data(self.db), ConstTyData::Hole(_))
-            {
-                self.count += 1;
-            }
-            walk_ty(self, ty);
-        }
-    }
-
-    let mut counter = Counter { db, count: 0 };
-    ty.visit_with(&mut counter);
-    counter.count
+    let range = adt_field_layout_hole_ranges(db, adt_def)
+        .get(variant_idx)
+        .and_then(|variant| variant.get(field_idx))
+        .cloned()
+        .unwrap_or(0..0);
+    let start = range.start.min(layout_args.len());
+    let end = range.end.min(layout_args.len());
+    let field_ty = substitute_layout_holes(db, field_ty, &layout_args[start..end]);
+    Binder::bind(field_ty).instantiate_scoped(db, adt_def.scope(db), explicit_args)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1289,6 +1283,33 @@ impl<'db> TyParam<'db> {
     }
 
     pub(super) fn pretty_print(&self, db: &dyn HirAnalysisDb) -> String {
+        if self.is_implicit() {
+            return "_".to_string();
+        }
+
+        if self.is_effect_provider() {
+            if let ItemKind::Func(func) = self.owner.item() {
+                let provider_map = place_effect_provider_param_index_map(db, func);
+                for effect in func.effect_params(db) {
+                    let Some(provider_idx) = provider_map.get(effect.index()).copied().flatten()
+                    else {
+                        continue;
+                    };
+                    if provider_idx != self.idx {
+                        continue;
+                    }
+
+                    let effect_name = effect
+                        .name(db)
+                        .or_else(|| effect.key_path(db).and_then(|path| path.ident(db).to_opt()))
+                        .map(|ident| ident.data(db).to_string())
+                        .unwrap_or_else(|| "_effect".to_string());
+                    return effect_name;
+                }
+            }
+            return "_effect".to_string();
+        }
+
         // For effect parameters, show `name: Trait` if possible
         if self.is_effect() {
             let name_str = self.name.data(db).to_string();
@@ -1839,10 +1860,17 @@ fn pretty_print_ty_app<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> String
                         .copied()
                         .enumerate()
                         .filter_map(|(idx, arg)| {
-                            let is_provider = params.get(idx).is_some_and(|param_ty| {
-                                matches!(param_ty.data(db), TyData::TyParam(p) if p.is_effect_provider())
+                            let is_hidden = params.get(idx).is_some_and(|param_ty| match param_ty
+                                .data(db)
+                            {
+                                TyData::TyParam(param) => param.is_effect_provider(),
+                                TyData::ConstTy(const_ty) => matches!(
+                                    const_ty.data(db),
+                                    ConstTyData::TyParam(param, _) if param.is_implicit()
+                                ),
+                                _ => false,
                             });
-                            (!is_provider).then_some(arg)
+                            (!is_hidden).then_some(arg)
                         })
                         .collect()
                 }

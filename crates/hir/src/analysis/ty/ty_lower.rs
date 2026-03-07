@@ -8,13 +8,16 @@ use salsa::Update;
 use smallvec::smallvec;
 
 use super::{
-    collect_layout_hole_tys_in_order,
     const_expr::{ConstExpr, ConstExprId},
     const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
-    effects::{EffectKeyKind, effect_key_kind, resolve_normalized_type_effect_key},
+    effects::{EffectKeyKind, ResolvedEffectKey, effect_key_kind, resolve_effect_key},
     fold::{TyFoldable, TyFolder},
+    layout_holes::{collect_unique_layout_placeholders_in_order, layout_hole_fallback_ty},
     trait_def::TraitInstId,
-    trait_resolution::{PredicateListId, TraitSolveCx, constraint::collect_constraints},
+    trait_resolution::{
+        PredicateListId, TraitSolveCx,
+        constraint::{collect_constraints, collect_func_def_constraints},
+    },
     ty_def::{InvalidCause, Kind, TyData, TyId, TyParam},
 };
 use crate::analysis::name_resolution::{PathRes, PathResErrorKind, resolve_path};
@@ -206,6 +209,15 @@ fn lower_const_ty_ty<'db>(
     }
 }
 
+fn generic_param_owner_assumptions<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+) -> PredicateListId<'db> {
+    GenericParamOwner::from_item_opt(scope.item())
+        .map(|owner| collect_constraints(db, owner).instantiate_identity())
+        .unwrap_or_else(|| PredicateListId::empty_list(db))
+}
+
 /// Collects the generic parameters of the given generic parameter owner.
 #[salsa::tracked(
     cycle_initial=collect_generic_params_cycle_initial,
@@ -234,17 +246,82 @@ fn collect_generic_params_cycle_recover<'db>(
     salsa::CycleRecoveryAction::Iterate
 }
 
-pub(crate) fn method_receiver_layout_hole_tys<'db>(
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub(crate) enum CallableInputLayoutHoleOrigin {
+    Receiver,
+    ValueParam(usize),
+    Effect(usize),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct CallableInputLayoutHoleGroup<'db> {
+    pub(crate) origin: CallableInputLayoutHoleOrigin,
+    pub(crate) placeholders: Vec<TyId<'db>>,
+}
+
+pub(crate) fn callable_input_layout_hole_groups<'db>(
     db: &'db dyn HirAnalysisDb,
     func: crate::hir_def::Func<'db>,
-) -> Vec<TyId<'db>> {
-    if !func.is_method(db) {
-        return Vec::new();
+) -> Vec<CallableInputLayoutHoleGroup<'db>> {
+    let mut groups = Vec::new();
+
+    if func.is_method(db)
+        && let Some(expected_self_ty) = func.expected_self_ty(db)
+    {
+        let placeholders = collect_unique_layout_placeholders_in_order(db, expected_self_ty);
+        if !placeholders.is_empty() {
+            groups.push(CallableInputLayoutHoleGroup {
+                origin: CallableInputLayoutHoleOrigin::Receiver,
+                placeholders,
+            });
+        }
     }
-    let Some(expected_self_ty) = func.expected_self_ty(db) else {
-        return Vec::new();
-    };
-    collect_layout_hole_tys_in_order(db, expected_self_ty)
+
+    let assumptions = collect_func_def_constraints(db, func.into(), true).instantiate_identity();
+    for param in func.params(db) {
+        if param.is_self_param(db) {
+            continue;
+        }
+        let Some(hir_ty) = param.hir_ty(db) else {
+            continue;
+        };
+
+        let ty = lower_hir_ty(db, hir_ty, func.scope(), assumptions);
+        let placeholders = collect_unique_layout_placeholders_in_order(db, ty);
+        if placeholders.is_empty() {
+            continue;
+        }
+
+        groups.push(CallableInputLayoutHoleGroup {
+            origin: CallableInputLayoutHoleOrigin::ValueParam(param.index()),
+            placeholders,
+        });
+    }
+
+    for effect in func.effect_params(db) {
+        let Some(key_path) = effect.key_path(db) else {
+            continue;
+        };
+        let placeholders = match resolve_effect_key(db, key_path, func.scope(), assumptions) {
+            ResolvedEffectKey::Type(key_ty) => {
+                collect_unique_layout_placeholders_in_order(db, key_ty)
+            }
+            ResolvedEffectKey::Trait(trait_inst) => {
+                collect_unique_layout_placeholders_in_order(db, trait_inst)
+            }
+            ResolvedEffectKey::Other => continue,
+        };
+        if placeholders.is_empty() {
+            continue;
+        }
+
+        groups.push(CallableInputLayoutHoleGroup {
+            origin: CallableInputLayoutHoleOrigin::Effect(effect.index()),
+            placeholders,
+        });
+    }
+
+    groups
 }
 
 /// Lowers the given type alias to [`TyAlias`].
@@ -366,6 +443,36 @@ impl<'db> TyAlias<'db> {
     pub fn params(&self, db: &'db dyn HirAnalysisDb) -> &'db [TyId<'db>] {
         self.param_set.params(db)
     }
+
+    pub(crate) fn instantiate_from_path(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        path: PathId<'db>,
+        args: &[TyId<'db>],
+        assumptions: PredicateListId<'db>,
+    ) -> TyId<'db> {
+        let expected = self.param_set.explicit_param_count(db);
+        let mut completed = self
+            .param_set
+            .complete_explicit_args_with_metadata_defaults(db, None, args, assumptions, Some(path));
+        for (explicit_idx, arg) in args.iter().take(expected).copied().enumerate() {
+            completed[explicit_idx] = self.param_set.checked_explicit_arg(db, explicit_idx, arg);
+        }
+        if completed.len() < expected {
+            return TyId::invalid(
+                db,
+                InvalidCause::UnboundTypeAliasParam {
+                    alias: self.alias,
+                    n_given_args: args.len(),
+                },
+            );
+        }
+        if let Some(cause) = completed.iter().find_map(|arg| arg.invalid_cause(db)) {
+            return TyId::invalid(db, cause);
+        }
+
+        self.alias_to.instantiate(db, &completed)
+    }
 }
 
 pub(crate) fn lower_generic_arg_list<'db>(
@@ -481,17 +588,22 @@ impl<'db> GenericParamTypeSet<'db> {
         &self.params(db)[offset..]
     }
 
-    pub(crate) fn explicit_const_param_default_is_hole(
+    pub(crate) fn explicit_param_count(self, db: &'db dyn HirAnalysisDb) -> usize {
+        self.params_precursor(db)
+            .len()
+            .saturating_sub(self.offset_to_explicit(db))
+    }
+
+    pub(crate) fn explicit_const_param_default_hole_ty(
         self,
         db: &'db dyn HirAnalysisDb,
         explicit_idx: usize,
-    ) -> bool {
+    ) -> Option<TyId<'db>> {
         let idx = self.offset_to_explicit(db) + explicit_idx;
-        let Some(param) = self.params_precursor(db).get(idx) else {
-            return false;
-        };
-        matches!(param.variant, Variant::Const(_))
-            && matches!(param.default_hir_const, Some(ConstGenericArgValue::Hole))
+        let param = self.params_precursor(db).get(idx)?;
+        matches!(param.default_hir_const, Some(ConstGenericArgValue::Hole))
+            .then(|| param.declared_const_ty(db, self.scope(db)))
+            .flatten()
     }
 
     pub(crate) fn empty(db: &'db dyn HirAnalysisDb, scope: ScopeId<'db>) -> Self {
@@ -532,23 +644,106 @@ impl<'db> GenericParamTypeSet<'db> {
     /// - `implicit_bindings`: mapping of (lowered_idx -> TyId) for implicit
     ///   parameters that should be available when evaluating defaults (e.g.,
     ///   trait `Self` at index 0).
-    pub(crate) fn complete_explicit_args_with_defaults(
+    pub(crate) fn complete_explicit_args_with_metadata_defaults(
         self,
         db: &'db dyn HirAnalysisDb,
         trait_self: Option<TyId<'db>>,
         provided_explicit: &[TyId<'db>],
         assumptions: PredicateListId<'db>,
+        application_path: Option<PathId<'db>>,
+    ) -> Vec<TyId<'db>> {
+        self.complete_explicit_args_with_defaults_in_mode(
+            db,
+            trait_self,
+            provided_explicit,
+            assumptions,
+            ConstDefaultCompletionConfig {
+                mode: ConstDefaultCompletionMode::MetadataOnly,
+            },
+            application_path,
+        )
+    }
+
+    pub(crate) fn complete_explicit_args_with_evaluated_defaults(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        trait_self: Option<TyId<'db>>,
+        provided_explicit: &[TyId<'db>],
+        assumptions: PredicateListId<'db>,
+        application_path: Option<PathId<'db>>,
+    ) -> Vec<TyId<'db>> {
+        self.complete_explicit_args_with_defaults_in_mode(
+            db,
+            trait_self,
+            provided_explicit,
+            assumptions,
+            ConstDefaultCompletionConfig {
+                mode: ConstDefaultCompletionMode::Evaluate,
+            },
+            application_path,
+        )
+    }
+
+    fn checked_explicit_arg(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        explicit_idx: usize,
+        ty: TyId<'db>,
+    ) -> TyId<'db> {
+        let lowered_idx = self.offset_to_explicit(db) + explicit_idx;
+        let Some(param) = self.params_precursor(db).get(lowered_idx) else {
+            return ty;
+        };
+        if !param.is_const_ty() {
+            return ty;
+        }
+
+        ty.check_const_ty_without_eval(db, param.declared_const_ty(db, self.scope(db)))
+            .unwrap_or_else(|cause| TyId::invalid(db, cause))
+    }
+
+    fn complete_explicit_args_with_defaults_in_mode(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        trait_self: Option<TyId<'db>>,
+        provided_explicit: &[TyId<'db>],
+        assumptions: PredicateListId<'db>,
+        completion: ConstDefaultCompletionConfig,
+        application_path: Option<PathId<'db>>,
     ) -> Vec<TyId<'db>> {
         let total = self.params_precursor(db).len();
         let offset = self.offset_to_explicit(db);
 
         // mapping from lowered param idx -> bound arg, used to substitute in defaults
         let mut mapping = vec![];
+        let mut result = Vec::with_capacity(provided_explicit.len());
         if let Some(self_ty) = trait_self {
             mapping.push(Some(self_ty));
         }
-        mapping.extend(provided_explicit.iter().map(|ty| Some(*ty)));
+        for (explicit_idx, ty) in provided_explicit.iter().enumerate() {
+            let checked = self.checked_explicit_arg(db, explicit_idx, *ty);
+            mapping.push(Some(checked));
+            result.push(*ty);
+        }
         mapping.resize(total, None);
+        let scope = self.scope(db);
+
+        let mapped_generic_args = |mapping: &[Option<TyId<'db>>], end: usize| {
+            self.params_precursor(db)
+                .iter()
+                .take(end)
+                .enumerate()
+                .map(|(idx, param)| {
+                    let arg = mapping[idx]
+                        .expect("generic-default metadata args should only capture bound prefix");
+                    if idx >= offset + provided_explicit.len() || !param.is_const_ty() {
+                        return arg;
+                    }
+                    arg.evaluate_const_ty(db, param.declared_const_ty(db, scope))
+                        .unwrap_or(arg)
+                })
+                .collect()
+        };
 
         // Helper folder to substitute known params when lowering defaults
         struct ParamSubst<'a, 'db> {
@@ -579,8 +774,6 @@ impl<'db> GenericParamTypeSet<'db> {
         }
 
         // Build the returned explicit arg list, appending defaults where available.
-        let mut result: Vec<TyId<'db>> = provided_explicit.to_vec();
-        let scope = self.scope(db);
         for i in (offset + provided_explicit.len())..total {
             let prec = &self.params_precursor(db)[i];
 
@@ -599,21 +792,47 @@ impl<'db> GenericParamTypeSet<'db> {
             }
 
             if let Some(default) = prec.default_hir_const {
-                let expected = prec.evaluate(db, scope, i).const_ty_ty(db);
+                let expected = prec.declared_const_ty(db, scope);
                 let lowered = match default {
                     ConstGenericArgValue::Expr(default) => {
-                        let const_ty = ConstTyId::from_opt_body(db, default);
-                        let lowered = TyId::const_ty(db, const_ty);
-                        lowered
-                            .evaluate_const_ty(db, expected)
-                            .unwrap_or_else(|cause| TyId::invalid(db, cause))
+                        let lowered = TyId::const_ty(
+                            db,
+                            ConstTyId::from_opt_body_with_ty_and_generic_args(
+                                db,
+                                default,
+                                expected,
+                                mapped_generic_args(&mapping, i),
+                                matches!(completion.mode, ConstDefaultCompletionMode::MetadataOnly),
+                            ),
+                        );
+                        match completion.mode {
+                            ConstDefaultCompletionMode::MetadataOnly => lowered
+                                .check_const_ty_without_eval(db, expected)
+                                .unwrap_or_else(|cause| TyId::invalid(db, cause)),
+                            ConstDefaultCompletionMode::Evaluate => lowered
+                                .evaluate_const_ty(db, expected)
+                                .unwrap_or_else(|cause| TyId::invalid(db, cause)),
+                        }
                     }
                     ConstGenericArgValue::Hole => TyId::const_ty(
                         db,
-                        ConstTyId::hole_with_ty(
-                            db,
-                            expected.unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other)),
-                        ),
+                        application_path
+                            .map(|path| {
+                                ConstTyId::hole_with_path_arg(
+                                    db,
+                                    expected
+                                        .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other)),
+                                    path,
+                                    i,
+                                )
+                            })
+                            .unwrap_or_else(|| {
+                                ConstTyId::hole_with_ty(
+                                    db,
+                                    expected
+                                        .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other)),
+                                )
+                            }),
                     ),
                 };
 
@@ -635,6 +854,17 @@ impl<'db> GenericParamTypeSet<'db> {
 
         result
     }
+}
+
+#[derive(Clone, Copy)]
+enum ConstDefaultCompletionMode {
+    MetadataOnly,
+    Evaluate,
+}
+
+#[derive(Clone, Copy)]
+struct ConstDefaultCompletionConfig {
+    mode: ConstDefaultCompletionMode,
 }
 
 struct GenericParamCollector<'db> {
@@ -662,45 +892,29 @@ impl<'db> GenericParamCollector<'db> {
         };
 
         if let GenericParamOwner::Func(func) = owner {
-            for (layout_idx, hole_ty) in method_receiver_layout_hole_tys(db, func)
-                .into_iter()
-                .enumerate()
-            {
-                let name = IdentId::new(db, format!("__self_layout{layout_idx}"));
-                params.push(TyParamPrecursor::implicit_const_param(
-                    db,
-                    Partial::Present(name),
-                    hole_ty,
-                ));
-            }
-
-            let assumptions = PredicateListId::empty_list(db);
-            for effect in func.effect_params(db) {
-                let Some(key_path) = effect.key_path(db) else {
-                    continue;
-                };
-                if !matches!(
-                    effect_key_kind(db, key_path, func.scope()),
-                    EffectKeyKind::Type
-                ) {
-                    continue;
-                }
-
-                let Some(key_ty) =
-                    resolve_normalized_type_effect_key(db, key_path, func.scope(), assumptions)
-                else {
-                    continue;
-                };
-                for (layout_idx, hole_ty) in collect_layout_hole_tys_in_order(db, key_ty)
-                    .into_iter()
-                    .enumerate()
-                {
-                    let name =
-                        IdentId::new(db, format!("__efflayout{}_{}", effect.index(), layout_idx));
+            for group in callable_input_layout_hole_groups(db, func) {
+                for (layout_idx, placeholder) in group.placeholders.into_iter().enumerate() {
+                    let TyData::ConstTy(const_ty) = placeholder.data(db) else {
+                        unreachable!("callable layout placeholder was not a const type");
+                    };
+                    let ConstTyData::Hole(hole_ty, _) = const_ty.data(db) else {
+                        unreachable!("callable layout placeholder was not a hole");
+                    };
+                    let name = match group.origin {
+                        CallableInputLayoutHoleOrigin::Receiver => {
+                            IdentId::new(db, format!("__self_layout{layout_idx}"))
+                        }
+                        CallableInputLayoutHoleOrigin::ValueParam(param_idx) => {
+                            IdentId::new(db, format!("__arglayout{param_idx}_{layout_idx}"))
+                        }
+                        CallableInputLayoutHoleOrigin::Effect(effect_idx) => {
+                            IdentId::new(db, format!("__efflayout{effect_idx}_{layout_idx}"))
+                        }
+                    };
                     params.push(TyParamPrecursor::implicit_const_param(
                         db,
                         Partial::Present(name),
-                        hole_ty,
+                        layout_hole_fallback_ty(db, *hole_ty),
                     ));
                 }
             }
@@ -871,9 +1085,11 @@ impl<'db> TyParamPrecursor<'db> {
                 let param = TyParam::effect_provider_param(name, lowered_idx, scope);
                 TyId::new(db, TyData::TyParam(param))
             }
-            Variant::Const(Some(ty)) => {
+            Variant::Const(Some(_)) => {
                 let param = TyParam::normal_param(name, lowered_idx, kind, scope);
-                let ty = lower_const_ty_ty(db, scope, ty, PredicateListId::empty_list(db)); // xxx fixme
+                let ty = self
+                    .declared_const_ty(db, scope)
+                    .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other));
                 let const_ty = ConstTyId::new(db, ConstTyData::TyParam(param, ty));
                 TyId::new(db, TyData::ConstTy(const_ty))
             }
@@ -962,6 +1178,18 @@ impl<'db> TyParamPrecursor<'db> {
 
     fn is_const_ty(&self) -> bool {
         matches!(self.variant, Variant::Const(_) | Variant::ImplicitConst(_))
+    }
+
+    fn declared_const_ty(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        scope: ScopeId<'db>,
+    ) -> Option<TyId<'db>> {
+        let Variant::Const(Some(ty)) = self.variant else {
+            return None;
+        };
+        let assumptions = generic_param_owner_assumptions(db, scope);
+        Some(lower_const_ty_ty(db, scope, ty, assumptions))
     }
 }
 

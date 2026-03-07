@@ -1,0 +1,11 @@
+trait Cap {}
+
+struct S {}
+
+trait T {
+    fn f() uses (cap: Cap)
+}
+
+impl T for S {
+    fn f() uses (cap: Cap, extra: Cap) {}
+}

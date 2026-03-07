@@ -8,12 +8,14 @@ use either::Either;
 
 use crate::analysis::{
     HirAnalysisDb,
-    name_resolution::{PathRes, resolve_path},
     ty::{
         adt_def::AdtDef,
         binder::Binder,
         corelib::resolve_core_trait,
-        effects::{EffectKeyKind, effect_key_kind, place_effect_provider_param_index_map},
+        effects::{
+            EffectKeyKind, ResolvedEffectKey, effect_key_kind,
+            place_effect_provider_param_index_map, resolve_effect_key,
+        },
         trait_def::TraitInstId,
         trait_lower::{lower_impl_trait, lower_trait_ref},
         trait_resolution::PredicateListId,
@@ -30,10 +32,6 @@ fn collect_effect_constraints_for_func<'db>(
 ) -> Vec<TraitInstId<'db>> {
     let provider_map = place_effect_provider_param_index_map(db, func);
     let provider_params = CallableDef::Func(func).params(db);
-    let mut effect_key_tys = vec![None; func.effects(db).data(db).len()];
-    for binding in func.effect_bindings(db) {
-        effect_key_tys[binding.binding_idx as usize] = binding.key_ty;
-    }
 
     let Some(effect_ref_trait) = resolve_core_trait(db, func.scope(), &["effect_ref", "EffectRef"])
     else {
@@ -66,14 +64,8 @@ fn collect_effect_constraints_for_func<'db>(
             continue;
         };
 
-        match key_kind {
-            EffectKeyKind::Trait => {
-                let Ok(PathRes::Trait(inst)) =
-                    resolve_path(db, key_path, func.scope(), assumptions, false)
-                else {
-                    continue;
-                };
-
+        match resolve_effect_key(db, key_path, func.scope(), assumptions) {
+            ResolvedEffectKey::Trait(inst) => {
                 let mut args = inst.args(db).to_vec();
                 if args.is_empty() {
                     args.push(provider_ty);
@@ -87,10 +79,7 @@ fn collect_effect_constraints_for_func<'db>(
                     inst.assoc_type_bindings(db).clone(),
                 ));
             }
-            EffectKeyKind::Type => {
-                let Some(target_ty) = effect_key_tys.get(effect.index()).copied().flatten() else {
-                    continue;
-                };
+            ResolvedEffectKey::Type(target_ty) => {
                 if !target_ty.is_star_kind(db) {
                     continue;
                 }
@@ -111,7 +100,7 @@ fn collect_effect_constraints_for_func<'db>(
                     ));
                 }
             }
-            EffectKeyKind::Other => {}
+            ResolvedEffectKey::Other => {}
         }
     }
 
@@ -260,7 +249,7 @@ fn collect_func_def_constraints_cycle_recover<'db>(
     salsa::CycleRecoveryAction::Iterate
 }
 
-#[salsa::tracked]
+#[salsa::tracked(cycle_fn=collect_constraints_cycle_recover, cycle_initial=collect_constraints_cycle_initial)]
 pub fn collect_constraints<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: GenericParamOwner<'db>,
@@ -275,7 +264,9 @@ pub fn collect_constraints<'db>(
         let GenericParam::Type(hir_param) = param else {
             continue;
         };
-        let ty = param_set.param_by_original_idx(db, idx).unwrap();
+        let Some(ty) = param_set.param_by_original_idx(db, idx) else {
+            continue;
+        };
         for bound in &hir_param.bounds {
             if let TypeBound::Trait(trait_ref) = bound {
                 deferred.push(Deferred {
@@ -352,6 +343,22 @@ pub fn collect_constraints<'db>(
         db,
         all_predicates.into_iter().collect::<Vec<_>>(),
     ))
+}
+
+fn collect_constraints_cycle_initial<'db>(
+    db: &'db dyn HirAnalysisDb,
+    _owner: GenericParamOwner<'db>,
+) -> Binder<PredicateListId<'db>> {
+    Binder::bind(PredicateListId::empty_list(db))
+}
+
+fn collect_constraints_cycle_recover<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _value: &Binder<PredicateListId<'db>>,
+    _count: u32,
+    _owner: GenericParamOwner<'db>,
+) -> salsa::CycleRecoveryAction<Binder<PredicateListId<'db>>> {
+    salsa::CycleRecoveryAction::Iterate
 }
 
 struct Deferred<'db> {

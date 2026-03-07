@@ -1,6 +1,6 @@
 ---
 source: crates/hir/tests/ty_check.rs
-assertion_line: 40
+assertion_line: 41
 expression: res
 input_file: test_files/ty_check/const_generic_const_fn_args.fe
 ---
@@ -20,7 +20,7 @@ note:
    ┌─ const_generic_const_fn_args.fe:13:9
    │
 13 │     let x: Foo
-   │         ^ Foo<add(1, 2)>
+   │         ^ Foo<add(ONE, 2)>
 
 note: 
    ┌─ const_generic_const_fn_args.fe:14:9

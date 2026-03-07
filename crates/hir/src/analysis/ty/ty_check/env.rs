@@ -23,7 +23,10 @@ use crate::analysis::{
     name_resolution::{PathRes, resolve_path},
     ty::{
         const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
-        effects::{EffectKeyKind, effect_key_kind, place_effect_provider_param_index_map},
+        effects::{
+            EffectKeyKind, ResolvedEffectKey, effect_key_kind,
+            place_effect_provider_param_index_map, resolve_effect_key,
+        },
         fold::{TyFoldable, TyFolder},
         trait_def::TraitInstId,
         trait_resolution::{
@@ -1449,14 +1452,10 @@ impl<'db> TyCheckEnv<'db> {
         scope: ScopeId<'db>,
         assumptions: PredicateListId<'db>,
     ) -> Option<EffectKey<'db>> {
-        let path_res = resolve_path(self.db, key_path, scope, assumptions, false).ok()?;
-        match path_res {
-            PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {
-                // Use the full TyId which includes generic arguments
-                Some(EffectKey::Type(ty))
-            }
-            PathRes::Trait(trait_inst) => Some(EffectKey::Trait(trait_inst)),
-            _ => None,
+        match resolve_effect_key(self.db, key_path, scope, assumptions) {
+            ResolvedEffectKey::Type(ty) => Some(EffectKey::Type(ty)),
+            ResolvedEffectKey::Trait(trait_inst) => Some(EffectKey::Trait(trait_inst)),
+            ResolvedEffectKey::Other => None,
         }
     }
 }
