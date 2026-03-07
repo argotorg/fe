@@ -110,6 +110,60 @@ fn f() uses (cap: Cap<Slot<u256>>) {}
 }
 
 #[test]
+fn trait_effect_keys_keep_distinct_omitted_hole_defaults() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("trait_effect_keys_keep_distinct_omitted_hole_defaults.fe"),
+        r#"
+trait Cap<const LEFT: u256 = _, const RIGHT: u256 = _> {}
+
+fn f() uses (cap: Cap) {}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let func = top_mod
+        .children_non_nested(&db)
+        .find_map(|item| match item {
+            ItemKind::Func(func) if func.name(&db).to_opt().is_some_and(|n| n.data(&db) == "f") => {
+                Some(func)
+            }
+            _ => None,
+        })
+        .expect("missing `f` function");
+
+    let implicit_layout_params = CallableDef::Func(func)
+        .params(&db)
+        .iter()
+        .filter(|ty| {
+            matches!(
+                ty.data(&db),
+                TyData::ConstTy(const_ty)
+                    if matches!(const_ty.data(&db), ConstTyData::TyParam(param, _) if param.is_implicit())
+            )
+        })
+        .count();
+    assert_eq!(implicit_layout_params, 2);
+
+    let key_trait = func
+        .effect_bindings(&db)
+        .first()
+        .expect("missing effect binding")
+        .key_trait
+        .expect("missing trait effect key");
+    let args = key_trait.args(&db);
+    assert_eq!(args.len(), 3);
+    assert_ne!(args[1], args[2]);
+    assert!(
+        args.iter()
+            .copied()
+            .all(|arg| !ty_contains_const_hole(&db, arg)),
+        "unelaborated const hole remained in trait effect key: {key_trait:?}"
+    );
+}
+
+#[test]
 fn type_effect_keys_use_assumptions_for_collection() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(

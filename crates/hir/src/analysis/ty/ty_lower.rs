@@ -662,6 +662,7 @@ impl<'db> GenericParamTypeSet<'db> {
         trait_self: Option<TyId<'db>>,
         provided_explicit: &[TyId<'db>],
         assumptions: PredicateListId<'db>,
+        application_path: Option<PathId<'db>>,
     ) -> Vec<TyId<'db>> {
         self.complete_explicit_args_with_defaults_in_mode(
             db,
@@ -672,7 +673,7 @@ impl<'db> GenericParamTypeSet<'db> {
                 mode: ConstDefaultCompletionMode::Evaluate,
                 propagate_explicit_checks: false,
             },
-            None,
+            application_path,
         )
     }
 

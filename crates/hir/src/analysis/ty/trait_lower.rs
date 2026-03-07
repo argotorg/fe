@@ -197,6 +197,7 @@ pub(crate) fn lower_trait_ref_impl<'db>(
             Some(t.self_param(db)),
             &provided_explicit,
             assumptions,
+            Some(path),
         );
 
     if non_self_completed.len() != trait_params.len() - 1 {
@@ -261,6 +262,84 @@ pub(crate) fn lower_trait_ref_impl<'db>(
         .collect();
 
     Ok(TraitInstId::new(db, t, final_args, assoc_bindings))
+}
+
+#[cfg(test)]
+mod tests {
+    use camino::Utf8PathBuf;
+
+    use super::lower_trait_ref_impl;
+    use crate::analysis::ty::{
+        const_ty::{ConstTyData, LayoutHoleId},
+        trait_resolution::PredicateListId,
+        ty_def::TyData,
+    };
+    use crate::hir_def::{ItemKind, PathId};
+    use crate::test_db::HirAnalysisTestDb;
+
+    #[test]
+    fn omitted_trait_hole_defaults_keep_distinct_path_arg_identity() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from("omitted_trait_hole_defaults_keep_distinct_path_arg_identity.fe"),
+            r#"
+trait Cap<const LEFT: u256 = _, const RIGHT: u256 = _> {}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+
+        let trait_ = top_mod
+            .children_non_nested(&db)
+            .find_map(|item| match item {
+                ItemKind::Trait(trait_)
+                    if trait_
+                        .name(&db)
+                        .to_opt()
+                        .is_some_and(|name| name.data(&db) == "Cap") =>
+                {
+                    Some(trait_)
+                }
+                _ => None,
+            })
+            .expect("missing `Cap` trait");
+        let name = trait_.name(&db).to_opt().expect("trait must have a name");
+        let path = PathId::from_ident(&db, name);
+        let inst = match lower_trait_ref_impl(
+            &db,
+            path,
+            trait_.scope(),
+            PredicateListId::empty_list(&db),
+            trait_,
+        ) {
+            Ok(inst) => inst,
+            Err(_) => panic!("failed to lower trait ref"),
+        };
+        let args = inst.args(&db);
+
+        assert_eq!(args.len(), 3);
+        let left = args[1];
+        let right = args[2];
+        assert_ne!(left, right);
+
+        let TyData::ConstTy(left) = left.data(&db) else {
+            panic!("expected left arg to be a const hole");
+        };
+        let TyData::ConstTy(right) = right.data(&db) else {
+            panic!("expected right arg to be a const hole");
+        };
+
+        assert!(matches!(
+            left.data(&db),
+            ConstTyData::Hole(_, LayoutHoleId::PathArg { path: hole_path, arg_idx: 1 })
+                if *hole_path == path
+        ));
+        assert!(matches!(
+            right.data(&db),
+            ConstTyData::Hole(_, LayoutHoleId::PathArg { path: hole_path, arg_idx: 2 })
+                if *hole_path == path
+        ));
+    }
 }
 
 #[salsa::tracked(return_ref)]
