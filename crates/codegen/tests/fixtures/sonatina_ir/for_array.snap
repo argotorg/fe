@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/for_array.fe
 ---
@@ -9,48 +10,48 @@ global private const [i8; 800] $__fe_const_data_0 = [0, 0, 0, 0, 0, 0, 0, 0, 0, 
 
 func private %for_array_sum() -> i256 {
     block0:
-        v2.*i8 = evm_malloc 800.i256;
-        v3.i256 = ptr_to_int v2 i256;
-        v4.i256 = sym_addr $__fe_const_data_0;
-        v5.i256 = sym_size $__fe_const_data_0;
-        evm_code_copy v3 v4 v5;
-        v6.i256 = call %_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_len__u64_25__540b817a073b29f5 v3;
+        v1.*i8 = evm_malloc 800.i256;
+        v2.i256 = sym_addr $__fe_const_data_0;
+        v3.i256 = sym_size $__fe_const_data_0;
+        v4.i256 = ptr_to_int v1 i256;
+        evm_code_copy v4 v2 v3;
+        v5.*[i256; 25] = bitcast v1 *[i256; 25];
+        v7.i256 = call %_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_len__u64_25__540b817a073b29f5 v5;
         jump block1;
 
     block1:
-        v24.i256 = phi (0.i256 block0) (v16 block3);
-        v7.i256 = phi (0.i256 block0) (v19 block3);
-        v9.i1 = lt v7 v6;
-        v10.i256 = zext v9 i256;
-        v11.i1 = ne v10 0.i256;
-        br v11 block2 block4;
+        v25.i256 = phi (0.i256 block0) (v17 block3);
+        v8.i256 = phi (0.i256 block0) (v20 block3);
+        v10.i1 = lt v8 v7;
+        v11.i256 = zext v10 i256;
+        v12.i1 = ne v11 0.i256;
+        br v12 block2 block4;
 
     block2:
-        v14.i256 = call %_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_get__u64_25__540b817a073b29f5 v3 v7;
-        v16.i256 = add v24 v14;
+        v15.i256 = call %_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_get__u64_25__540b817a073b29f5 v5 v8;
+        v17.i256 = add v25 v15;
         jump block3;
 
     block3:
-        v19.i256 = add v7 1.i256;
+        v20.i256 = add v8 1.i256;
         jump block1;
 
     block4:
-        return v24;
+        return v25;
 }
 
-func private %_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_len__u64_25__540b817a073b29f5(v0.i256) -> i256 {
+func private %_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_len__u64_25__540b817a073b29f5(v0.*[i256; 25]) -> i256 {
     block0:
         return 25.i256;
 }
 
-func private %_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_get__u64_25__540b817a073b29f5(v0.i256, v1.i256) -> i256 {
+func private %_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_get__u64_25__540b817a073b29f5(v0.*[i256; 25], v1.i256) -> i256 {
     block0:
-        v3.*[i256; 25] = int_to_ptr v0 *[i256; 25];
-        v4.*i256 = gep v3 0.i256 v1;
-        v5.i256 = mload v4 i256;
-        v6.i64 = trunc v5 i64;
-        v7.i256 = zext v6 i256;
-        return v7;
+        v3.*i256 = gep v0 0.i256 v1;
+        v4.i256 = mload v3 i256;
+        v5.i64 = trunc v4 i64;
+        v6.i256 = zext v5 i256;
+        return v6;
 }
 
 func private %__fe_sonatina_entry() {

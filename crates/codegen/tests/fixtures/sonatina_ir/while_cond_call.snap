@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/while_cond_call.fe
 ---
@@ -7,9 +8,9 @@ target = "evm-ethereum-osaka"
 
 func private %lt_ten(v0.i256) -> i256 {
     block0:
-        v3.i1 = lt v0 10.i256;
-        v4.i256 = zext v3 i256;
-        return v4;
+        v2.i1 = lt v0 10.i256;
+        v3.i256 = zext v2 i256;
+        return v3;
 }
 
 func private %while_cond_call() -> i256 {

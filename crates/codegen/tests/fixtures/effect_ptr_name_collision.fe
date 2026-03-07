@@ -1,0 +1,13 @@
+struct MemPtr<T> {
+    value: T,
+    tag: u256,
+}
+
+fn read_tag(ptr: MemPtr<u256>) -> u256 {
+    ptr.tag
+}
+
+pub fn effect_ptr_name_collision() -> u256 {
+    let ptr = MemPtr { value: 1, tag: 7 }
+    read_tag(ptr)
+}

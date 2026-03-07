@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/unary_expr.fe
 ---
@@ -7,9 +8,9 @@ target = "evm-ethereum-osaka"
 
 func private %unary_expr() -> i256 {
     block0:
-        v3.i256 = add 1.i256 2.i256;
-        v4.i256 = neg v3;
-        return v4;
+        v2.i256 = add 1.i256 2.i256;
+        v3.i256 = neg v2;
+        return v3;
 }
 
 func private %__fe_sonatina_entry() {

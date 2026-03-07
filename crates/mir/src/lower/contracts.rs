@@ -134,6 +134,7 @@ fn lower_single_contract<'db>(
         contract,
         target,
         &symbols,
+        &core_lib,
         &slot_offsets,
     )?);
     out.push(lower_runtime_entrypoint(
@@ -141,6 +142,7 @@ fn lower_single_contract<'db>(
         contract,
         target,
         &symbols,
+        &core_lib,
         &slot_offsets,
     )?);
     out.push(lower_init_code_offset(db, contract, &symbols)?);
@@ -386,21 +388,32 @@ impl<'db> AbiContext<'db> {
 
 struct ContractMirCx<'db, 'a> {
     db: &'db dyn SpannedHirAnalysisDb,
+    core: &'a CoreLib<'db>,
     host: &'a TargetHostContext<'db>,
     abi: &'a AbiContext<'db>,
 }
 
 impl<'db, 'a> ContractMirCx<'db, 'a> {
-    fn new(db: &'db dyn SpannedHirAnalysisDb, target: &'a TargetContext<'db>) -> Self {
-        Self::new_with_abi(db, &target.host, &target.abi)
+    fn new(
+        db: &'db dyn SpannedHirAnalysisDb,
+        core: &'a CoreLib<'db>,
+        target: &'a TargetContext<'db>,
+    ) -> Self {
+        Self::new_with_abi(db, core, &target.host, &target.abi)
     }
 
     fn new_with_abi(
         db: &'db dyn SpannedHirAnalysisDb,
+        core: &'a CoreLib<'db>,
         host: &'a TargetHostContext<'db>,
         abi: &'a AbiContext<'db>,
     ) -> Self {
-        Self { db, host, abi }
+        Self {
+            db,
+            core,
+            host,
+            abi,
+        }
     }
 
     fn call_hir(
@@ -438,6 +451,45 @@ impl<'db, 'a> ContractMirCx<'db, 'a> {
             resolved_name: Some(symbol_name.into()),
             receiver_space: None,
         }
+    }
+
+    fn value_repr_for_ty(
+        &self,
+        stage: crate::ir::MirStage,
+        ty: TyId<'db>,
+        space: AddressSpaceKind,
+    ) -> ValueRepr {
+        if ty.as_capability(self.db).is_some() {
+            if matches!(stage, crate::ir::MirStage::Capability) {
+                return ValueRepr::Word;
+            }
+            return match repr::repr_kind_for_ty(self.db, self.core, ty) {
+                repr::ReprKind::Ptr(_) => ValueRepr::Ptr(space),
+                repr::ReprKind::Ref => ValueRepr::Ref(space),
+                repr::ReprKind::Zst | repr::ReprKind::Word => ValueRepr::Word,
+            };
+        }
+
+        match repr::repr_kind_for_ty(self.db, self.core, ty) {
+            repr::ReprKind::Ptr(space) => ValueRepr::Ptr(space),
+            repr::ReprKind::Ref => ValueRepr::Ref(space),
+            repr::ReprKind::Zst | repr::ReprKind::Word => ValueRepr::Word,
+        }
+    }
+
+    fn assign_runtime_local(
+        &self,
+        builder: &mut BodyBuilder<'db>,
+        name: impl Into<String>,
+        ty: TyId<'db>,
+        is_mut: bool,
+        address_space: AddressSpaceKind,
+        rvalue: Rvalue<'db>,
+    ) -> ValueId {
+        let repr = self.value_repr_for_ty(builder.body.stage, ty, address_space);
+        builder
+            .assign_to_new_local(name, ty, is_mut, address_space, repr, rvalue)
+            .value
     }
 
     fn host_abort(&self, root_value: ValueId) -> CallOrigin<'db> {
@@ -590,15 +642,14 @@ impl<'db, 'a> ContractMirCx<'db, 'a> {
                     field.declared_ty,
                     field.is_provider,
                 );
-                builder
-                    .assign_to_new_local(
-                        format!("field{idx}"),
-                        u256_ty,
-                        true,
-                        AddressSpaceKind::Memory,
-                        Rvalue::Call(call),
-                    )
-                    .value
+                self.assign_runtime_local(
+                    builder,
+                    format!("field{idx}"),
+                    u256_ty,
+                    true,
+                    AddressSpaceKind::Memory,
+                    Rvalue::Call(call),
+                )
             })
             .collect()
     }
@@ -640,15 +691,14 @@ impl<'db, 'a> ContractMirCx<'db, 'a> {
             return builder.unit_value(target_ty);
         }
 
-        builder
-            .assign_to_new_local(
-                name_hint,
-                target_ty,
-                false,
-                AddressSpaceKind::Memory,
-                Rvalue::Call(self.decode_decode(decoder_value, decoder_ty, target_ty)),
-            )
-            .value
+        self.assign_runtime_local(
+            builder,
+            name_hint,
+            target_ty,
+            false,
+            AddressSpaceKind::Memory,
+            Rvalue::Call(self.decode_decode(decoder_value, decoder_ty, target_ty)),
+        )
     }
 }
 
@@ -1008,6 +1058,7 @@ fn lower_init_entrypoint<'db>(
     contract: Contract<'db>,
     target: &TargetContext<'db>,
     symbols: &ContractSymbols,
+    core: &CoreLib<'db>,
     slot_offsets: &[BigUint],
 ) -> MirLowerResult<MirFunction<'db>> {
     let contract_fn = ContractFunction {
@@ -1015,7 +1066,7 @@ fn lower_init_entrypoint<'db>(
         kind: ContractFunctionKind::Init,
     };
 
-    let cx = ContractMirCx::new(db, target);
+    let cx = ContractMirCx::new(db, core, target);
     let mut builder = BodyBuilder::new();
     let entry = builder.entry_block();
     builder.move_to_block(entry);
@@ -1041,60 +1092,56 @@ fn lower_init_entrypoint<'db>(
             symbol: None,
         },
     );
-    let runtime_offset = builder
-        .assign_to_new_local(
-            "runtime_offset",
-            TyId::u256(db),
-            false,
-            AddressSpaceKind::Memory,
-            Rvalue::Intrinsic {
-                op: IntrinsicOp::CodeRegionOffset,
-                args: vec![runtime_func_item],
-            },
-        )
-        .value;
-    let runtime_len = builder
-        .assign_to_new_local(
-            "runtime_len",
-            TyId::u256(db),
-            false,
-            AddressSpaceKind::Memory,
-            Rvalue::Intrinsic {
-                op: IntrinsicOp::CodeRegionLen,
-                args: vec![runtime_func_item],
-            },
-        )
-        .value;
+    let runtime_offset = cx.assign_runtime_local(
+        &mut builder,
+        "runtime_offset",
+        TyId::u256(db),
+        false,
+        AddressSpaceKind::Memory,
+        Rvalue::Intrinsic {
+            op: IntrinsicOp::CodeRegionOffset,
+            args: vec![runtime_func_item],
+        },
+    );
+    let runtime_len = cx.assign_runtime_local(
+        &mut builder,
+        "runtime_len",
+        TyId::u256(db),
+        false,
+        AddressSpaceKind::Memory,
+        Rvalue::Intrinsic {
+            op: IntrinsicOp::CodeRegionLen,
+            args: vec![runtime_func_item],
+        },
+    );
 
     if contract.init(db).is_some()
         && let Some(init_env) = contract.init_effect_env(db)
     {
         let init_args_ty = contract.init_args_ty(db);
         // Inline `ContractHost::init_input` semantics (avoids needing a synthetic HIR function-item type).
-        let args_offset_value = builder
-            .assign_to_new_local(
-                "init_code_len",
-                TyId::u256(db),
-                false,
-                AddressSpaceKind::Memory,
-                Rvalue::Intrinsic {
-                    op: IntrinsicOp::CurrentCodeRegionLen,
-                    args: Vec::new(),
-                },
-            )
-            .value;
-        let code_size = builder
-            .assign_to_new_local(
-                "code_size",
-                TyId::u256(db),
-                false,
-                AddressSpaceKind::Memory,
-                Rvalue::Intrinsic {
-                    op: IntrinsicOp::Codesize,
-                    args: Vec::new(),
-                },
-            )
-            .value;
+        let args_offset_value = cx.assign_runtime_local(
+            &mut builder,
+            "init_code_len",
+            TyId::u256(db),
+            false,
+            AddressSpaceKind::Memory,
+            Rvalue::Intrinsic {
+                op: IntrinsicOp::CurrentCodeRegionLen,
+                args: Vec::new(),
+            },
+        );
+        let code_size = cx.assign_runtime_local(
+            &mut builder,
+            "code_size",
+            TyId::u256(db),
+            false,
+            AddressSpaceKind::Memory,
+            Rvalue::Intrinsic {
+                op: IntrinsicOp::Codesize,
+                args: Vec::new(),
+            },
+        );
         let cond_value = builder.alloc_value(
             TyId::bool(db),
             ValueOrigin::Binary {
@@ -1127,18 +1174,17 @@ fn lower_init_entrypoint<'db>(
             },
             ValueRepr::Word,
         );
-        let args_ptr_value = builder
-            .assign_to_new_local(
-                "args_ptr",
-                TyId::u256(db),
-                false,
-                AddressSpaceKind::Memory,
-                Rvalue::Intrinsic {
-                    op: IntrinsicOp::Alloc,
-                    args: vec![args_len_value],
-                },
-            )
-            .value;
+        let args_ptr_value = cx.assign_runtime_local(
+            &mut builder,
+            "args_ptr",
+            TyId::u256(db),
+            false,
+            AddressSpaceKind::Memory,
+            Rvalue::Intrinsic {
+                op: IntrinsicOp::Alloc,
+                args: vec![args_len_value],
+            },
+        );
         builder.assign(
             None,
             Rvalue::Intrinsic {
@@ -1148,30 +1194,28 @@ fn lower_init_entrypoint<'db>(
         );
 
         // Construct `InitInput` (MemoryBytes) with `{ base: args_ptr, len: args_len }`.
-        let input_value = builder
-            .assign_to_new_local(
-                "input",
-                target.host.init_input_ty,
-                false,
-                AddressSpaceKind::Memory,
-                Rvalue::Alloc {
-                    address_space: AddressSpaceKind::Memory,
-                },
-            )
-            .value;
+        let input_value = cx.assign_runtime_local(
+            &mut builder,
+            "input",
+            target.host.init_input_ty,
+            false,
+            AddressSpaceKind::Memory,
+            Rvalue::Alloc {
+                address_space: AddressSpaceKind::Memory,
+            },
+        );
         builder.store_field(input_value, 0, args_ptr_value);
         builder.store_field(input_value, 1, args_len_value);
 
         // Decoder: `A::decoder_new(input)`.
-        let decoder_value = builder
-            .assign_to_new_local(
-                "decoder",
-                target.abi.init_decoder_ty,
-                false,
-                AddressSpaceKind::Memory,
-                Rvalue::Call(cx.abi_decoder_new(input_value, target.host.init_input_ty)),
-            )
-            .value;
+        let decoder_value = cx.assign_runtime_local(
+            &mut builder,
+            "decoder",
+            target.abi.init_decoder_ty,
+            false,
+            AddressSpaceKind::Memory,
+            Rvalue::Call(cx.abi_decoder_new(input_value, target.host.init_input_ty)),
+        );
 
         // Decode init params in order.
         let mut decoded_params = Vec::new();
@@ -1245,6 +1289,7 @@ fn lower_runtime_entrypoint<'db>(
     contract: Contract<'db>,
     target: &TargetContext<'db>,
     symbols: &ContractSymbols,
+    core: &CoreLib<'db>,
     slot_offsets: &[BigUint],
 ) -> MirLowerResult<MirFunction<'db>> {
     let contract_fn = ContractFunction {
@@ -1252,7 +1297,7 @@ fn lower_runtime_entrypoint<'db>(
         kind: ContractFunctionKind::Runtime,
     };
 
-    let cx = ContractMirCx::new(db, target);
+    let cx = ContractMirCx::new(db, core, target);
     let mut builder = BodyBuilder::new();
     let entry = builder.entry_block();
     builder.move_to_block(entry);
@@ -1269,24 +1314,22 @@ fn lower_runtime_entrypoint<'db>(
     );
 
     // Selector + decoder.
-    let selector_value = builder
-        .assign_to_new_local(
-            "selector",
-            target.abi.selector_ty,
-            false,
-            AddressSpaceKind::Memory,
-            Rvalue::Call(cx.host_runtime_selector(root_value)),
-        )
-        .value;
-    let decoder_value = builder
-        .assign_to_new_local(
-            "decoder",
-            target.abi.runtime_decoder_ty,
-            false,
-            AddressSpaceKind::Memory,
-            Rvalue::Call(cx.host_runtime_decoder(root_value)),
-        )
-        .value;
+    let selector_value = cx.assign_runtime_local(
+        &mut builder,
+        "selector",
+        target.abi.selector_ty,
+        false,
+        AddressSpaceKind::Memory,
+        Rvalue::Call(cx.host_runtime_selector(root_value)),
+    );
+    let decoder_value = cx.assign_runtime_local(
+        &mut builder,
+        "decoder",
+        target.abi.runtime_decoder_ty,
+        false,
+        AddressSpaceKind::Memory,
+        Rvalue::Call(cx.host_runtime_decoder(root_value)),
+    );
 
     // Dispatch switch.
     let mut targets = Vec::new();
@@ -1319,15 +1362,14 @@ fn lower_runtime_entrypoint<'db>(
             let handler_symbol = symbols.recv_handler(recv_idx, arm_idx);
 
             if let Some(ret_ty) = abi_info.ret_ty {
-                let result_value = builder
-                    .assign_to_new_local(
-                        format!("result_{recv_idx}_{arm_idx}"),
-                        ret_ty,
-                        false,
-                        AddressSpaceKind::Memory,
-                        Rvalue::Call(cx.call_symbol(handler_symbol, vec![args_value], effect_args)),
-                    )
-                    .value;
+                let result_value = cx.assign_runtime_local(
+                    &mut builder,
+                    format!("result_{recv_idx}_{arm_idx}"),
+                    ret_ty,
+                    false,
+                    AddressSpaceKind::Memory,
+                    Rvalue::Call(cx.call_symbol(handler_symbol, vec![args_value], effect_args)),
+                );
                 builder.terminate_current(Terminator::TerminatingCall {
                     source: SourceInfoId::SYNTHETIC,
                     call: TerminatingCall::Call(cx.host_return_value(
@@ -1425,6 +1467,7 @@ fn lower_code_region_query<'db>(
             TyId::u256(db),
             false,
             AddressSpaceKind::Memory,
+            ValueRepr::Word,
             Rvalue::Intrinsic {
                 op,
                 args: vec![func_item],

@@ -1,11 +1,12 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/match_return.fe
 ---
 target = "evm-ethereum-osaka"
 
-func private %f__Evm_hef0af3106e109414__3af54274b2985741(v0.i256, v1.i256) {
+func private %f__Evm_hef0af3106e109414__3af54274b2985741(v0.*i8, v1.i256) {
     block0:
         jump block3;
 
@@ -16,8 +17,8 @@ func private %f__Evm_hef0af3106e109414__3af54274b2985741(v0.i256, v1.i256) {
         evm_return 0.i256 0.i256;
 
     block3:
-        v4.*i256 = int_to_ptr v0 *i256;
-        v5.i256 = mload v4 i256;
+        v4.i256 = ptr_to_int v0 i256;
+        v5.i256 = mload v0 i256;
         br_table v5 block4 (0.i256 block1) (1.i256 block2);
 
     block4:
@@ -26,7 +27,8 @@ func private %f__Evm_hef0af3106e109414__3af54274b2985741(v0.i256, v1.i256) {
 
 func private %__fe_sonatina_entry() {
     block0:
-        call %f__Evm_hef0af3106e109414__3af54274b2985741 0.i256 0.i256;
+        v1.*i8 = int_to_ptr 0.i256 *i8;
+        call %f__Evm_hef0af3106e109414__3af54274b2985741 v1 0.i256;
         evm_stop;
 }
 

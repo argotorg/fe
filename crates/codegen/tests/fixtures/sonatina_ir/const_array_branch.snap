@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/const_array_branch.fe
 ---
@@ -14,10 +15,10 @@ func private %const_array_branch(v0.i256) -> i256 {
 
     block1:
         v4.*i8 = evm_malloc 32.i256;
-        v5.i256 = ptr_to_int v4 i256;
-        v6.i256 = sym_addr $__fe_const_data_0;
-        v7.i256 = sym_size $__fe_const_data_0;
-        evm_code_copy v5 v6 v7;
+        v5.i256 = sym_addr $__fe_const_data_0;
+        v6.i256 = sym_size $__fe_const_data_0;
+        v7.i256 = ptr_to_int v4 i256;
+        evm_code_copy v7 v5 v6;
         v8.*[i256; 1] = bitcast v4 *[i256; 1];
         v9.*i256 = gep v8 0.i256 0.i256;
         v10.i256 = mload v9 i256;
@@ -25,28 +26,30 @@ func private %const_array_branch(v0.i256) -> i256 {
 
     block2:
         v11.*i8 = evm_malloc 32.i256;
-        v12.i256 = ptr_to_int v11 i256;
-        v13.i256 = sym_addr $__fe_const_data_0;
-        v14.i256 = sym_size $__fe_const_data_0;
-        evm_code_copy v12 v13 v14;
+        v12.i256 = sym_addr $__fe_const_data_0;
+        v13.i256 = sym_size $__fe_const_data_0;
+        v14.i256 = ptr_to_int v11 i256;
+        evm_code_copy v14 v12 v13;
         v15.*[i256; 1] = bitcast v11 *[i256; 1];
         v16.*i256 = gep v15 0.i256 0.i256;
         v17.i256 = mload v16 i256;
         jump block3;
 
     block3:
-        v26.i256 = phi (v10 block1) (v17 block2);
+        v28.i256 = phi (v10 block1) (v17 block2);
         v18.*i8 = evm_malloc 32.i256;
-        v19.i256 = ptr_to_int v18 i256;
-        v20.i256 = sym_addr $__fe_const_data_0;
-        v21.i256 = sym_size $__fe_const_data_0;
-        evm_code_copy v19 v20 v21;
-        v22.*i8 = evm_malloc 32.i256;
-        v23.i256 = ptr_to_int v22 i256;
+        v19.i256 = sym_addr $__fe_const_data_0;
+        v20.i256 = sym_size $__fe_const_data_0;
+        v21.i256 = ptr_to_int v18 i256;
+        evm_code_copy v21 v19 v20;
+        v22.*[i256; 1] = bitcast v18 *[i256; 1];
+        v23.*i8 = evm_malloc 32.i256;
         v24.i256 = sym_addr $__fe_const_data_0;
         v25.i256 = sym_size $__fe_const_data_0;
-        evm_code_copy v23 v24 v25;
-        return v26;
+        v26.i256 = ptr_to_int v23 i256;
+        evm_code_copy v26 v24 v25;
+        v27.*[i256; 1] = bitcast v23 *[i256; 1];
+        return v28;
 }
 
 func private %__fe_sonatina_entry() {

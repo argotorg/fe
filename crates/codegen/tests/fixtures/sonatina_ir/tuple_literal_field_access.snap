@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/tuple_literal_field_access.fe
 ---
@@ -10,55 +11,50 @@ type @__fe_tuple_1 = {i256, @__fe_tuple_0};
 
 func private %tuple_literal_field_access() -> i256 {
     block0:
-        v3.*@__fe_tuple_0 = alloca @__fe_tuple_0;
-        v4.i256 = ptr_to_int v3 i256;
-        v5.*i256 = gep v3 0.i256 0.i256;
-        mstore v5 1.i256 i256;
-        v6.*i256 = gep v3 0.i256 1.i256;
-        mstore v6 2.i256 i256;
-        v7.*i256 = gep v3 0.i256 1.i256;
-        v8.i256 = mload v7 i256;
-        return v8;
+        v2.*@__fe_tuple_0 = alloca @__fe_tuple_0;
+        v4.*i256 = gep v2 0.i256 0.i256;
+        mstore v4 1.i256 i256;
+        v5.*i256 = gep v2 0.i256 1.i256;
+        mstore v5 2.i256 i256;
+        v6.*i256 = gep v2 0.i256 1.i256;
+        v7.i256 = mload v6 i256;
+        return v7;
 }
 
 func private %tuple_literal_nested_access() -> i256 {
     block0:
-        v4.*@__fe_tuple_0 = alloca @__fe_tuple_0;
-        v5.i256 = ptr_to_int v4 i256;
-        v6.*i256 = gep v4 0.i256 0.i256;
-        mstore v6 2.i256 i256;
-        v7.*i256 = gep v4 0.i256 1.i256;
-        mstore v7 3.i256 i256;
-        v8.*@__fe_tuple_1 = alloca @__fe_tuple_1;
-        v9.i256 = ptr_to_int v8 i256;
-        v10.*i256 = gep v8 0.i256 0.i256;
-        mstore v10 1.i256 i256;
-        v11.*i256 = gep v4 0.i256 0.i256;
-        v12.i256 = mload v11 i256;
-        v13.*i256 = gep v8 0.i256 1.i256 0.i256;
-        mstore v13 v12 i256;
-        v14.*i256 = gep v4 0.i256 1.i256;
-        v15.i256 = mload v14 i256;
-        v16.*i256 = gep v8 0.i256 1.i256 1.i256;
-        mstore v16 v15 i256;
-        v17.*@__fe_tuple_0 = gep v8 0.i256 1.i256;
-        v18.i256 = ptr_to_int v17 i256;
-        v19.*i256 = gep v17 0.i256 0.i256;
-        v20.i256 = mload v19 i256;
-        return v20;
+        v3.*@__fe_tuple_0 = alloca @__fe_tuple_0;
+        v5.*i256 = gep v3 0.i256 0.i256;
+        mstore v5 2.i256 i256;
+        v6.*i256 = gep v3 0.i256 1.i256;
+        mstore v6 3.i256 i256;
+        v7.*@__fe_tuple_1 = alloca @__fe_tuple_1;
+        v8.*i256 = gep v7 0.i256 0.i256;
+        mstore v8 1.i256 i256;
+        v9.*i256 = gep v3 0.i256 0.i256;
+        v10.i256 = mload v9 i256;
+        v11.*i256 = gep v7 0.i256 1.i256 0.i256;
+        mstore v11 v10 i256;
+        v12.*i256 = gep v3 0.i256 1.i256;
+        v13.i256 = mload v12 i256;
+        v14.*i256 = gep v7 0.i256 1.i256 1.i256;
+        mstore v14 v13 i256;
+        v15.*@__fe_tuple_0 = gep v7 0.i256 1.i256;
+        v16.*i256 = gep v15 0.i256 0.i256;
+        v17.i256 = mload v16 i256;
+        return v17;
 }
 
 func private %tuple_literal_struct_chain() -> i256 {
     block0:
-        v3.*@__fe_tuple_0 = alloca @__fe_tuple_0;
-        v4.i256 = ptr_to_int v3 i256;
-        v5.*i256 = gep v3 0.i256 0.i256;
-        mstore v5 1.i256 i256;
-        v6.*i256 = gep v3 0.i256 1.i256;
-        mstore v6 2.i256 i256;
-        v7.*i256 = gep v3 0.i256 1.i256;
-        v8.i256 = mload v7 i256;
-        return v8;
+        v2.*@__fe_tuple_0 = alloca @__fe_tuple_0;
+        v4.*i256 = gep v2 0.i256 0.i256;
+        mstore v4 1.i256 i256;
+        v5.*i256 = gep v2 0.i256 1.i256;
+        mstore v5 2.i256 i256;
+        v6.*i256 = gep v2 0.i256 1.i256;
+        v7.i256 = mload v6 i256;
+        return v7;
 }
 
 func private %__fe_sonatina_entry() {

@@ -37,8 +37,8 @@ pub contract C {
     }
 
     recv Msg {
-        // BUG: This currently fails to persist the write through `self.p`.
-        // Expected: line.p1.x increases by `by`.
+        // Regression test: the transparent receiver wrapper must preserve the
+        // storage-backed `self.p` handle through the method call.
         MoveP1 { by } -> u256 uses (mut line) {
             let p1 = mut line.p1
             let mut mover = PointMover { p: p1 }

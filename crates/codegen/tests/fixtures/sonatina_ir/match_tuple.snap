@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/match_tuple.fe
 ---
@@ -8,7 +9,7 @@ target = "evm-ethereum-osaka"
 type @__fe_tuple_0 = {i256, i256};
 type @__fe_tuple_1 = {i256, i256};
 
-func private %match_bool_tuple(v0.i256) -> i256 {
+func private %match_bool_tuple(v0.*@__fe_tuple_0) -> i256 {
     block0:
         jump block6;
 
@@ -29,31 +30,28 @@ func private %match_bool_tuple(v0.i256) -> i256 {
         jump block2;
 
     block6:
-        v7.*@__fe_tuple_0 = int_to_ptr v0 *@__fe_tuple_0;
-        v8.*i256 = gep v7 0.i256 1.i256;
-        v9.i256 = mload v8 i256;
-        v10.i1 = ne v9 0.i256;
-        v11.i256 = zext v10 i256;
-        br_table v11 block11 (1.i256 block7) (0.i256 block9);
+        v7.*i256 = gep v0 0.i256 1.i256;
+        v8.i256 = mload v7 i256;
+        v9.i1 = ne v8 0.i256;
+        v10.i256 = zext v9 i256;
+        br_table v10 block11 (1.i256 block7) (0.i256 block9);
 
     block7:
-        v13.*@__fe_tuple_0 = int_to_ptr v0 *@__fe_tuple_0;
-        v14.*i256 = gep v13 0.i256 0.i256;
-        v15.i256 = mload v14 i256;
-        v16.i1 = ne v15 0.i256;
-        v17.i256 = zext v16 i256;
-        br_table v17 block8 (1.i256 block1) (0.i256 block4);
+        v12.*i256 = gep v0 0.i256 0.i256;
+        v13.i256 = mload v12 i256;
+        v14.i1 = ne v13 0.i256;
+        v15.i256 = zext v14 i256;
+        br_table v15 block8 (1.i256 block1) (0.i256 block4);
 
     block8:
         evm_invalid;
 
     block9:
-        v19.*@__fe_tuple_0 = int_to_ptr v0 *@__fe_tuple_0;
-        v20.*i256 = gep v19 0.i256 0.i256;
-        v21.i256 = mload v20 i256;
-        v22.i1 = ne v21 0.i256;
-        v23.i256 = zext v22 i256;
-        br_table v23 block10 (1.i256 block3) (0.i256 block5);
+        v17.*i256 = gep v0 0.i256 0.i256;
+        v18.i256 = mload v17 i256;
+        v19.i1 = ne v18 0.i256;
+        v20.i256 = zext v19 i256;
+        br_table v20 block10 (1.i256 block3) (0.i256 block5);
 
     block10:
         evm_invalid;
@@ -62,7 +60,7 @@ func private %match_bool_tuple(v0.i256) -> i256 {
         evm_invalid;
 }
 
-func private %match_tuple_with_wildcard(v0.i256) -> i256 {
+func private %match_tuple_with_wildcard(v0.*@__fe_tuple_0) -> i256 {
     block0:
         jump block4;
 
@@ -77,18 +75,17 @@ func private %match_tuple_with_wildcard(v0.i256) -> i256 {
         jump block2;
 
     block4:
-        v5.*@__fe_tuple_0 = int_to_ptr v0 *@__fe_tuple_0;
-        v6.*i256 = gep v5 0.i256 0.i256;
-        v7.i256 = mload v6 i256;
-        v8.i1 = ne v7 0.i256;
-        v9.i256 = zext v8 i256;
-        br_table v9 block5 (1.i256 block1) (0.i256 block3);
+        v5.*i256 = gep v0 0.i256 0.i256;
+        v6.i256 = mload v5 i256;
+        v7.i1 = ne v6 0.i256;
+        v8.i256 = zext v7 i256;
+        br_table v8 block5 (1.i256 block1) (0.i256 block3);
 
     block5:
         evm_invalid;
 }
 
-func private %match_mixed_tuple(v0.i256) -> i256 {
+func private %match_mixed_tuple(v0.*@__fe_tuple_1) -> i256 {
     block0:
         jump block6;
 
@@ -109,20 +106,18 @@ func private %match_mixed_tuple(v0.i256) -> i256 {
         jump block2;
 
     block6:
-        v7.*@__fe_tuple_1 = int_to_ptr v0 *@__fe_tuple_1;
-        v8.*i256 = gep v7 0.i256 0.i256;
-        v9.i256 = mload v8 i256;
-        v10.i1 = ne v9 0.i256;
-        v11.i256 = zext v10 i256;
-        br_table v11 block8 (1.i256 block7) (0.i256 block5);
+        v7.*i256 = gep v0 0.i256 0.i256;
+        v8.i256 = mload v7 i256;
+        v9.i1 = ne v8 0.i256;
+        v10.i256 = zext v9 i256;
+        br_table v10 block8 (1.i256 block7) (0.i256 block5);
 
     block7:
-        v14.*@__fe_tuple_1 = int_to_ptr v0 *@__fe_tuple_1;
-        v15.*i256 = gep v14 0.i256 1.i256;
-        v16.i256 = mload v15 i256;
-        v17.i8 = trunc v16 i8;
-        v18.i256 = zext v17 i256;
-        br_table v18 block4 (0.i256 block1) (1.i256 block3);
+        v13.*i256 = gep v0 0.i256 1.i256;
+        v14.i256 = mload v13 i256;
+        v15.i8 = trunc v14 i8;
+        v16.i256 = zext v15 i256;
+        br_table v16 block4 (0.i256 block1) (1.i256 block3);
 
     block8:
         evm_invalid;
@@ -130,7 +125,8 @@ func private %match_mixed_tuple(v0.i256) -> i256 {
 
 func private %__fe_sonatina_entry() {
     block0:
-        v1.i256 = call %match_bool_tuple 0.i256;
+        v1.*@__fe_tuple_0 = int_to_ptr 0.i256 *@__fe_tuple_0;
+        v2.i256 = call %match_bool_tuple v1;
         evm_stop;
 }
 

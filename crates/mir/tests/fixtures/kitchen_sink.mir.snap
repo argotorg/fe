@@ -99,7 +99,7 @@ fn stor_ptr_stor_arg0_root_stor__Evm_hef0af3106e109414_Foo_h6dbce71a6ea992b8__c0
 
 fn stor_ptr_stor_arg0_root_stor__Evm_hef0af3106e109414_StorageMap_u256__u256__0___25d90c867c72c521(v0: Evm, v1: u256) -> StorPtr<StorageMap<u256, u256, 0>>:
   bb0:
-    v2: StorPtr<StorageMap<u256, u256, 0>> = storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Foo_h6dbce71a6ea992b8__21493237fe9c2c26(v1)
+    v2: StorPtr<StorageMap<u256, u256, 0>> = storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__StorageMap_u256__u256__0___1c0a02ebf7a26473(v1)
     ret v2
 
 fn set_balance__0_StorPtr_StorageMap_u256__u256__0____94067de1d730f5c7(v0: u256, v1: u256, v2: u256) -> ():
@@ -117,6 +117,10 @@ fn memptr_t__hf71ec14ffe47fb3f_effecthandle_hfc52f915596f993a_from_raw__Foo_h6db
     ret v0
 
 fn storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Foo_h6dbce71a6ea992b8__21493237fe9c2c26(v0: u256) -> StorPtr<Foo>:
+  bb0:
+    ret v0
+
+fn storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__StorageMap_u256__u256__0___1c0a02ebf7a26473(v0: u256) -> StorPtr<StorageMap<u256, u256, 0>>:
   bb0:
     ret v0
 

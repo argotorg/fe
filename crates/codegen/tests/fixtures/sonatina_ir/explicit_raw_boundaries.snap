@@ -1,0 +1,74 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
+expression: output
+input_file: crates/codegen/tests/fixtures/explicit_raw_boundaries.fe
+---
+target = "evm-ethereum-osaka"
+
+func private %bump__StorPtr_u256___64779554cfbf0358(v0.i256) {
+    block0:
+        v1.i256 = evm_sload v0;
+        v3.i256 = add v1 1.i256;
+        evm_sstore v0 v3;
+        return;
+}
+
+func private %raw_store__StorPtr_Data__Evm_hef0af3106e109414__b983b35bde2c3014(v0.i256, v1.i256) {
+    block0:
+        v2.i256 = evm_sload v0;
+        mstore v2 8.i256 i256;
+        return;
+}
+
+func private %explicit_raw_boundaries__Evm_hef0af3106e109414__3af54274b2985741(v0.i256) {
+    block0:
+        v2.*i256 = call %mem_ptr_stor_arg0_root_stor__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9 v0 256.i256;
+        call %bump__MemPtr_u256___25949c86160e9382 v2;
+        v5.*i8 = evm_malloc 32.i256;
+        v6.*i256 = bitcast v5 *i256;
+        mstore v6 7.i256 i256;
+        call %raw_store__MemPtr_Data__Evm_hef0af3106e109414__239cf9c159fd8b13 v6 0.i256;
+        v8.i256 = mload v6 i256;
+        return;
+}
+
+func private %mem_ptr_stor_arg0_root_stor__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9(v0.i256, v1.i256) -> *i256 {
+    block0:
+        v2.i256 = call %memptr_t__hf71ec14ffe47fb3f_effecthandle_hfc52f915596f993a_from_raw__u256__3271ca15373d4483 v1;
+        v3.*i256 = int_to_ptr v2 *i256;
+        return v3;
+}
+
+func private %bump__MemPtr_u256___25949c86160e9382(v0.*i256) {
+    block0:
+        v1.i256 = mload v0 i256;
+        v3.i256 = add v1 1.i256;
+        mstore v0 v3 i256;
+        return;
+}
+
+func private %raw_store__MemPtr_Data__Evm_hef0af3106e109414__239cf9c159fd8b13(v0.*i256, v1.i256) {
+    block0:
+        v2.i256 = mload v0 i256;
+        mstore v2 8.i256 i256;
+        return;
+}
+
+func private %memptr_t__hf71ec14ffe47fb3f_effecthandle_hfc52f915596f993a_from_raw__u256__3271ca15373d4483(v0.i256) -> i256 {
+    block0:
+        return v0;
+}
+
+func private %__fe_sonatina_entry() {
+    block0:
+        call %bump__StorPtr_u256___64779554cfbf0358 0.i256;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+    }
+}

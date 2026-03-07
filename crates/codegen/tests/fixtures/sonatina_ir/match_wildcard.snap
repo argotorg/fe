@@ -1,11 +1,12 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/match_wildcard.fe
 ---
 target = "evm-ethereum-osaka"
 
-func private %match_with_wildcard(v0.i256) -> i256 {
+func private %match_with_wildcard(v0.*i8) -> i256 {
     block0:
         jump block4;
 
@@ -20,8 +21,8 @@ func private %match_with_wildcard(v0.i256) -> i256 {
         jump block2;
 
     block4:
-        v5.*i256 = int_to_ptr v0 *i256;
-        v6.i256 = mload v5 i256;
+        v5.i256 = ptr_to_int v0 i256;
+        v6.i256 = mload v0 i256;
         br_table v6 block3 (0.i256 block1);
 }
 
@@ -43,7 +44,7 @@ func private %wildcard_not_last(v0.i256) -> i256 {
         br_table v0 block3 (0.i256 block1);
 }
 
-func private %multiple_before_wildcard(v0.i256) -> i256 {
+func private %multiple_before_wildcard(v0.*i8) -> i256 {
     block0:
         jump block5;
 
@@ -61,14 +62,15 @@ func private %multiple_before_wildcard(v0.i256) -> i256 {
         jump block2;
 
     block5:
-        v7.*i256 = int_to_ptr v0 *i256;
-        v8.i256 = mload v7 i256;
+        v7.i256 = ptr_to_int v0 i256;
+        v8.i256 = mload v0 i256;
         br_table v8 block4 (0.i256 block1) (1.i256 block3);
 }
 
 func private %__fe_sonatina_entry() {
     block0:
-        v1.i256 = call %match_with_wildcard 0.i256;
+        v1.*i8 = int_to_ptr 0.i256 *i8;
+        v2.i256 = call %match_with_wildcard v1;
         evm_stop;
 }
 

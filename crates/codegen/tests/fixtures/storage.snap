@@ -114,11 +114,15 @@ object "Coin" {
         leave
       }
       function $stor_ptr_stor__Evm_hef0af3106e109414_TotalSupply_hddb16bb19b5b088e__f5679b0709de743a($self, $slot) -> ret {
-        let v0 := $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__CoinStore_hd26a92ca525e0e79__a9c0a742c4f0cede($slot)
+        let v0 := $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__TotalSupply_hddb16bb19b5b088e__4092604729aa99eb($slot)
         ret := v0
         leave
       }
       function $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__CoinStore_hd26a92ca525e0e79__a9c0a742c4f0cede($raw) -> ret {
+        ret := $raw
+        leave
+      }
+      function $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__TotalSupply_hddb16bb19b5b088e__4092604729aa99eb($raw) -> ret {
         ret := $raw
         leave
       }

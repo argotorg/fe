@@ -163,6 +163,12 @@ fn is_dedup_candidate<'db>(db: &'db dyn HirAnalysisDb, func: &MirFunction<'db>) 
         crate::ir::MirFunctionOrigin::Hir(func) => func,
         crate::ir::MirFunctionOrigin::Synthetic(_) => return false,
     };
+    if hir_func.name(db).to_opt().is_some_and(|name| {
+        let name = name.data(db);
+        matches!(name.as_str(), "from_raw" | "raw")
+    }) {
+        return false;
+    }
     matches!(
         hir_func.top_mod(db).ingot(db).kind(db),
         IngotKind::Core | IngotKind::External

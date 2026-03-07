@@ -14,6 +14,7 @@
 
 use hir::analysis::HirAnalysisDb;
 use hir::analysis::ty::adt_def::AdtRef;
+use hir::analysis::ty::normalize::normalize_ty;
 use hir::analysis::ty::ty_def::{TyBase, TyData, TyId};
 use hir::analysis::ty::{
     canonical::Canonicalized,
@@ -130,6 +131,45 @@ pub fn effect_provider_space_for_ty<'db>(
 
     transparent_newtype_field_ty(db, ty)
         .and_then(|inner| effect_provider_space_for_ty(db, core, inner))
+}
+
+/// Returns the normalized `EffectHandle::Target` type for an effect provider, looking through
+/// transparent newtype wrappers.
+pub fn effect_provider_target_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    core: &CoreLib<'db>,
+    ty: TyId<'db>,
+) -> Option<TyId<'db>> {
+    if let Some((_, inner)) = ty.as_capability(db) {
+        return Some(inner);
+    }
+
+    let effect_handle = resolve_core_trait(db, core.scope, &["effect_ref", "EffectHandle"])
+        .expect("missing required core trait `core::effect_ref::EffectHandle`");
+    let assumptions = PredicateListId::empty_list(db);
+    let target_ident = IdentId::new(db, "Target".to_string());
+    let inst = TraitInstId::new(db, effect_handle, vec![ty], IndexMap::new());
+    let goal = Canonicalized::new(db, inst).value;
+    match is_goal_satisfiable(
+        db,
+        TraitSolveCx::new(db, core.scope).with_assumptions(assumptions),
+        goal,
+    ) {
+        GoalSatisfiability::Satisfied(_) => {
+            if let Some(target) = inst
+                .assoc_ty(db, target_ident)
+                .map(|assoc| normalize_ty(db, assoc, core.scope, assumptions))
+                .filter(|target| !target.has_invalid(db))
+            {
+                return Some(target);
+            }
+        }
+        GoalSatisfiability::NeedsConfirmation(_) => return None,
+        GoalSatisfiability::ContainsInvalid | GoalSatisfiability::UnSat(_) => {}
+    }
+
+    transparent_newtype_field_ty(db, ty)
+        .and_then(|inner| effect_provider_target_ty(db, core, inner))
 }
 
 fn effect_provider_space_via_domain_trait<'db>(

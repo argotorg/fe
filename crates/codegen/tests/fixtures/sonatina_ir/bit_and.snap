@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/bit_and.fe
 ---
@@ -7,8 +8,8 @@ target = "evm-ethereum-osaka"
 
 func private %bit_and() -> i256 {
     block0:
-        v3.i256 = and 1.i256 2.i256;
-        return v3;
+        v2.i256 = and 1.i256 2.i256;
+        return v2;
 }
 
 func private %__fe_sonatina_entry() {

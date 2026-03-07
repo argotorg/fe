@@ -192,17 +192,17 @@ fn stor_ptr__Evm_hef0af3106e109414__u256__u256___9c197f2ec4026f04(v0: Evm, v1: u
 
 fn stor_ptr__Evm_hef0af3106e109414_StorageMap_u256__u256__2___208326135adc87f4(v0: Evm, v1: u256) -> StorPtr<StorageMap<u256, u256, 2>>:
   bb0:
-    v2: StorPtr<StorageMap<u256, u256, 2>> = storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw___u256__u256___f8fb67624e92e2b2(v1)
+    v2: StorPtr<StorageMap<u256, u256, 2>> = storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__StorageMap_u256__u256__2___6ef63009f66beaf4(v1)
     ret v2
 
 fn stor_ptr__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9(v0: Evm, v1: u256) -> StorPtr<u256>:
   bb0:
-    v2: StorPtr<u256> = storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw___u256__u256___f8fb67624e92e2b2(v1)
+    v2: StorPtr<u256> = storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__u256__3271ca15373d4483(v1)
     ret v2
 
 fn stor_ptr__Evm_hef0af3106e109414_StorageMap_u256__u256__4___c9a24c839c9d1e0b(v0: Evm, v1: u256) -> StorPtr<StorageMap<u256, u256, 4>>:
   bb0:
-    v2: StorPtr<StorageMap<u256, u256, 4>> = storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw___u256__u256___f8fb67624e92e2b2(v1)
+    v2: StorPtr<StorageMap<u256, u256, 4>> = storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__StorageMap_u256__u256__4___173e98e83ba93f89(v1)
     ret v2
 
 fn evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input(v0: Evm) -> CallData:
@@ -281,6 +281,18 @@ fn storagemap_storage_slot_with_salt__u256__3271ca15373d4483(v0: u256, v1: u256)
     ret v4
 
 fn storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw___u256__u256___f8fb67624e92e2b2(v0: u256) -> StorPtr<(u256, u256)>:
+  bb0:
+    ret v0
+
+fn storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__StorageMap_u256__u256__2___6ef63009f66beaf4(v0: u256) -> StorPtr<StorageMap<u256, u256, 2>>:
+  bb0:
+    ret v0
+
+fn storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__u256__3271ca15373d4483(v0: u256) -> StorPtr<u256>:
+  bb0:
+    ret v0
+
+fn storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__StorageMap_u256__u256__4___173e98e83ba93f89(v0: u256) -> StorPtr<StorageMap<u256, u256, 4>>:
   bb0:
     ret v0
 

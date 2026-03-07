@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/literal_add.fe
 ---
@@ -7,14 +8,14 @@ target = "evm-ethereum-osaka"
 
 func private %main() -> i256 {
     block0:
-        v3.i256 = call %add 10.i256 20.i256;
-        return v3;
+        v2.i256 = call %add 10.i256 20.i256;
+        return v2;
 }
 
 func private %add(v0.i256, v1.i256) -> i256 {
     block0:
-        v3.i256 = add v0 v1;
-        return v3;
+        v2.i256 = add v0 v1;
+        return v2;
 }
 
 func private %__fe_sonatina_entry() {

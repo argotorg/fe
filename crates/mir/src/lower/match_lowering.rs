@@ -84,7 +84,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 } else if let Some(place) =
                     self.place_from_capability_value(scrutinee_value, scrutinee_expr_ty)
                 {
-                    let space = self.value_address_space(place.base);
+                    let space = self.place_address_space(&place);
                     self.alloc_value(
                         inner_ty,
                         ValueOrigin::PlaceRef(place),
@@ -283,7 +283,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 } else if let Some(place) =
                     self.place_from_capability_value(scrutinee_value, scrutinee_expr_ty)
                 {
-                    let space = self.value_address_space(place.base);
+                    let space = self.place_address_space(&place);
                     self.alloc_value(
                         inner_ty,
                         ValueOrigin::PlaceRef(place),
@@ -481,7 +481,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             ValueOrigin::MoveOut {
                 place: place.clone(),
             },
-            self.value_repr_for_ty(scrutinee_ty, self.value_address_space(place.base)),
+            self.value_repr_for_ty(scrutinee_ty, self.place_address_space(&place)),
         );
         let source = self.source_for_expr(scrutinee);
         self.builder.body.values[moved.index()].source = source;

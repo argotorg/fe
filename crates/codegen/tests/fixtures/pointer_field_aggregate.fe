@@ -1,0 +1,24 @@
+use std::evm::{MemPtr, RawMem}
+
+struct Holder {
+    ptr: MemPtr<u256>,
+    value: u256,
+}
+
+fn bump() uses (value: mut u256) {
+    value += 1
+}
+
+pub fn pointer_field_aggregate() uses (mem: mut RawMem) {
+    let mut holder = Holder { ptr: mem.mem_ptr(0x100), value: 1 }
+    let first = holder.ptr
+    with (first) {
+        bump()
+    }
+
+    holder.ptr = mem.mem_ptr(0x120)
+    let second = holder.ptr
+    with (second) {
+        bump()
+    }
+}
