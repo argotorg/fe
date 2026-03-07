@@ -39,8 +39,8 @@ use sonatina_ir::{
 };
 
 use super::{
-    LowerCtx, LowerError, is_erased_runtime_ty, memory_pointer_target_ty, runtime_type_for_value,
-    types, zero_value_for_type,
+    LowerCtx, LowerError, RuntimeTypeCx, is_erased_runtime_ty, memory_pointer_target_ty, types,
+    zero_value_for_type,
 };
 
 /// Lower a MIR instruction.
@@ -728,15 +728,15 @@ fn lower_value_origin<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             {
                 lower_place_memory_ptr(ctx, place)
             } else if matches!(value_data.repr, mir::ValueRepr::Ptr(_)) {
-                let runtime_ty = runtime_type_for_value(
-                    &ctx.fb.module_builder,
-                    ctx.db,
-                    ctx.target_layout,
-                    value_data.ty,
-                    value_data.repr,
-                    ctx.gep_type_cache,
-                    ctx.gep_name_counter,
-                );
+                let runtime_ty = RuntimeTypeCx {
+                    builder: &ctx.fb.module_builder,
+                    db: ctx.db,
+                    core: ctx.core,
+                    target_layout: ctx.target_layout,
+                    cache: &mut *ctx.gep_type_cache,
+                    name_counter: &mut *ctx.gep_name_counter,
+                }
+                .runtime_type_for_value(value_data.ty, value_data.repr);
                 load_place_runtime(ctx, place, value_data.ty, runtime_ty)
             } else if value_data.repr.address_space().is_some() {
                 lower_place_address(ctx, place)
@@ -1338,6 +1338,7 @@ fn apply_to_word<'db, C: sonatina_ir::func_cursor::FuncCursor>(
 pub(super) fn fe_ty_to_sonatina<'db>(
     builder: &sonatina_ir::builder::ModuleBuilder,
     db: &'db DriverDataBase,
+    core: &mir::CoreLib<'db>,
     target_layout: &TargetDataLayout,
     ty: hir::analysis::ty::ty_def::TyId<'db>,
     cache: &mut FxHashMap<String, Option<Type>>,
@@ -1348,7 +1349,7 @@ pub(super) fn fe_ty_to_sonatina<'db>(
         return *cached;
     }
 
-    let result = fe_ty_to_sonatina_inner(builder, db, target_layout, ty, cache, name_counter);
+    let result = fe_ty_to_sonatina_inner(builder, db, core, target_layout, ty, cache, name_counter);
     cache.insert(cache_key, result);
     result
 }
@@ -1356,13 +1357,14 @@ pub(super) fn fe_ty_to_sonatina<'db>(
 fn pointer_like_sonatina_ty<'db>(
     builder: &sonatina_ir::builder::ModuleBuilder,
     db: &'db DriverDataBase,
+    core: &mir::CoreLib<'db>,
     target_layout: &TargetDataLayout,
     ty: hir::analysis::ty::ty_def::TyId<'db>,
     cache: &mut FxHashMap<String, Option<Type>>,
     name_counter: &mut usize,
 ) -> Type {
-    let pointee =
-        fe_ty_to_sonatina(builder, db, target_layout, ty, cache, name_counter).unwrap_or(Type::I8);
+    let pointee = fe_ty_to_sonatina(builder, db, core, target_layout, ty, cache, name_counter)
+        .unwrap_or(Type::I8);
     builder.ptr_type(if pointee == Type::Unit {
         Type::I8
     } else {
@@ -1372,6 +1374,7 @@ fn pointer_like_sonatina_ty<'db>(
 
 fn lowers_by_ref_layout<'db>(
     db: &'db DriverDataBase,
+    core: &mir::CoreLib<'db>,
     mut ty: hir::analysis::ty::ty_def::TyId<'db>,
 ) -> bool {
     loop {
@@ -1383,7 +1386,7 @@ fn lowers_by_ref_layout<'db>(
             return false;
         }
 
-        if memory_pointer_target_ty(db, ty).is_some() {
+        if memory_pointer_target_ty(db, core, ty).is_some() {
             return false;
         }
 
@@ -1403,6 +1406,7 @@ fn lowers_by_ref_layout<'db>(
 fn fe_ty_to_sonatina_inner<'db>(
     builder: &sonatina_ir::builder::ModuleBuilder,
     db: &'db DriverDataBase,
+    core: &mir::CoreLib<'db>,
     target_layout: &TargetDataLayout,
     ty: hir::analysis::ty::ty_def::TyId<'db>,
     cache: &mut FxHashMap<String, Option<Type>>,
@@ -1415,27 +1419,37 @@ fn fe_ty_to_sonatina_inner<'db>(
     if let Some((capability, inner)) = ty.as_capability(db) {
         return match capability {
             CapabilityKind::View => {
-                fe_ty_to_sonatina(builder, db, target_layout, inner, cache, name_counter)
+                fe_ty_to_sonatina(builder, db, core, target_layout, inner, cache, name_counter)
             }
             CapabilityKind::Mut => Some(pointer_like_sonatina_ty(
                 builder,
                 db,
+                core,
                 target_layout,
                 inner,
                 cache,
                 name_counter,
             )),
-            CapabilityKind::Ref if lowers_by_ref_layout(db, inner) => Some(
-                pointer_like_sonatina_ty(builder, db, target_layout, inner, cache, name_counter),
-            ),
+            CapabilityKind::Ref if lowers_by_ref_layout(db, core, inner) => {
+                Some(pointer_like_sonatina_ty(
+                    builder,
+                    db,
+                    core,
+                    target_layout,
+                    inner,
+                    cache,
+                    name_counter,
+                ))
+            }
             CapabilityKind::Ref => Some(Type::I256),
         };
     }
 
-    if let Some(target_ty) = memory_pointer_target_ty(db, ty) {
+    if let Some(target_ty) = memory_pointer_target_ty(db, core, ty) {
         return Some(pointer_like_sonatina_ty(
             builder,
             db,
+            core,
             target_layout,
             target_ty,
             cache,
@@ -1444,7 +1458,7 @@ fn fe_ty_to_sonatina_inner<'db>(
     }
 
     if let Some(inner) = mir::repr::transparent_newtype_field_ty(db, ty) {
-        return fe_ty_to_sonatina(builder, db, target_layout, inner, cache, name_counter);
+        return fe_ty_to_sonatina(builder, db, core, target_layout, inner, cache, name_counter);
     }
 
     let base_ty = ty.base_ty(db);
@@ -1481,6 +1495,7 @@ fn fe_ty_to_sonatina_inner<'db>(
                     sonatina_fields.push(fe_ty_to_sonatina(
                         builder,
                         db,
+                        core,
                         target_layout,
                         *ft,
                         cache,
@@ -1498,8 +1513,15 @@ fn fe_ty_to_sonatina_inner<'db>(
             PrimTy::Array => {
                 let elem_ty = layout::array_elem_ty(db, ty)?;
                 let len = layout::array_len(db, ty)?;
-                let sonatina_elem =
-                    fe_ty_to_sonatina(builder, db, target_layout, elem_ty, cache, name_counter)?;
+                let sonatina_elem = fe_ty_to_sonatina(
+                    builder,
+                    db,
+                    core,
+                    target_layout,
+                    elem_ty,
+                    cache,
+                    name_counter,
+                )?;
                 Some(builder.declare_array_type(sonatina_elem, len))
             }
         },
@@ -1512,6 +1534,7 @@ fn fe_ty_to_sonatina_inner<'db>(
                         sonatina_fields.push(fe_ty_to_sonatina(
                             builder,
                             db,
+                            core,
                             target_layout,
                             *ft,
                             cache,
@@ -1552,11 +1575,12 @@ fn projections_eligible_for_gep(place: &Place<'_>) -> bool {
 
 fn memory_place_projection_root_ty<'db>(
     db: &'db DriverDataBase,
+    core: &mir::CoreLib<'db>,
     value_ty: hir::analysis::ty::ty_def::TyId<'db>,
     value_repr: mir::ValueRepr,
 ) -> hir::analysis::ty::ty_def::TyId<'db> {
     if value_repr.address_space() == Some(AddressSpaceKind::Memory)
-        && let Some(target_ty) = memory_pointer_target_ty(db, value_ty)
+        && let Some(target_ty) = memory_pointer_target_ty(db, core, value_ty)
     {
         return target_ty;
     }
@@ -1634,7 +1658,8 @@ fn lower_place_address<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             place.base.index()
         ))
     })?;
-    let current_ty = memory_place_projection_root_ty(ctx.db, base_value.ty, base_value.repr);
+    let current_ty =
+        memory_place_projection_root_ty(ctx.db, ctx.core, base_value.ty, base_value.repr);
     if is_erased_runtime_ty(ctx.db, ctx.target_layout, current_ty) {
         return Ok(if is_memory_address {
             coerce_value_to_word(ctx, base_val)
@@ -1654,6 +1679,7 @@ fn lower_place_address<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         && let Some(sonatina_ty) = fe_ty_to_sonatina(
             &ctx.fb.module_builder,
             ctx.db,
+            ctx.core,
             ctx.target_layout,
             current_ty,
             ctx.gep_type_cache,
@@ -1784,7 +1810,8 @@ fn lower_place_memory_ptr<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             place.base.index()
         ))
     })?;
-    let current_ty = memory_place_projection_root_ty(ctx.db, base_value.ty, base_value.repr);
+    let current_ty =
+        memory_place_projection_root_ty(ctx.db, ctx.core, base_value.ty, base_value.repr);
     if is_erased_runtime_ty(ctx.db, ctx.target_layout, current_ty) {
         let opaque_ptr_ty = ctx.fb.ptr_type(Type::I8);
         return Ok(coerce_word_addr_to_ptr(ctx, base_val, opaque_ptr_ty));
@@ -1794,6 +1821,7 @@ fn lower_place_memory_ptr<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         && let Some(sonatina_ty) = fe_ty_to_sonatina(
             &ctx.fb.module_builder,
             ctx.db,
+            ctx.core,
             ctx.target_layout,
             current_ty,
             ctx.gep_type_cache,
@@ -2220,6 +2248,7 @@ fn lower_alloc<C: sonatina_ir::func_cursor::FuncCursor>(
     let alloca_ty = fe_ty_to_sonatina(
         &ctx.fb.module_builder,
         ctx.db,
+        ctx.core,
         ctx.target_layout,
         alloc_ty,
         ctx.gep_type_cache,
@@ -2381,7 +2410,7 @@ fn deep_copy_from_places<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         return Ok(());
     }
 
-    if memory_pointer_target_ty(ctx.db, value_ty).is_some() {
+    if memory_pointer_target_ty(ctx.db, ctx.core, value_ty).is_some() {
         let ptr_ty = ctx.fb.ptr_type(Type::I8);
         let loaded = load_place_runtime(ctx, src_place, value_ty, ptr_ty)?;
         return store_runtime_value_to_place(ctx, dst_place, value_ty, loaded);

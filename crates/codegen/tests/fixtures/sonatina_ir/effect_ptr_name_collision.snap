@@ -1,0 +1,41 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+expression: output
+input_file: crates/codegen/tests/fixtures/effect_ptr_name_collision.fe
+---
+target = "evm-ethereum-osaka"
+
+type @__fe_MemPtr_0 = {i256, i256};
+
+func private %read_tag(v0.*@__fe_MemPtr_0) -> i256 {
+    block0:
+        v3.*i256 = gep v0 0.i256 1.i256;
+        v4.i256 = mload v3 i256;
+        return v4;
+}
+
+func private %effect_ptr_name_collision() -> i256 {
+    block0:
+        v1.*i8 = evm_malloc 64.i256;
+        v2.*@__fe_MemPtr_0 = bitcast v1 *@__fe_MemPtr_0;
+        v5.*i256 = gep v2 0.i256 0.i256;
+        mstore v5 1.i256 i256;
+        v7.*i256 = gep v2 0.i256 1.i256;
+        mstore v7 7.i256 i256;
+        v8.i256 = call %read_tag v2;
+        return v8;
+}
+
+func private %__fe_sonatina_entry() {
+    block0:
+        v1.*@__fe_MemPtr_0 = int_to_ptr 0.i256 *@__fe_MemPtr_0;
+        v2.i256 = call %read_tag v1;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+    }
+}

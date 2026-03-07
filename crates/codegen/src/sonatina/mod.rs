@@ -120,80 +120,42 @@ fn merge_runtime_type(slot: &mut Option<Type>, ty: Type, what: &str) -> Result<(
 
 pub(super) fn memory_pointer_target_ty<'db>(
     db: &'db DriverDataBase,
-    mut ty: TyId<'db>,
+    core: &CoreLib<'db>,
+    ty: TyId<'db>,
 ) -> Option<TyId<'db>> {
-    loop {
-        if let Some((_, inner)) = ty.as_capability(db) {
-            return Some(inner);
-        }
-
-        if let Some(adt) = ty.adt_ref(db) {
-            let name = adt
-                .name(db)
-                .map(|ident| ident.data(db).to_string())
-                .unwrap_or_default();
-            if name == "MemPtr" {
-                return ty.generic_args(db).first().copied();
-            }
-            if matches!(name.as_str(), "StorPtr" | "TStorPtr" | "CalldataPtr") {
-                return None;
-            }
-        }
-
-        ty = mir::repr::transparent_newtype_field_ty(db, ty)?;
+    if ty.as_capability(db).is_some() {
+        return mir::repr::effect_provider_target_ty(db, core, ty);
     }
+
+    (mir::repr::effect_provider_space_for_ty(db, core, ty)
+        == Some(mir::ir::AddressSpaceKind::Memory))
+    .then(|| mir::repr::effect_provider_target_ty(db, core, ty))
+    .flatten()
 }
 
 fn runtime_pointer_type_from_target(
     builder: &ModuleBuilder,
     db: &DriverDataBase,
+    core: &CoreLib<'_>,
     target_layout: &TargetDataLayout,
     target_ty: TyId<'_>,
     cache: &mut FxHashMap<String, Option<Type>>,
     name_counter: &mut usize,
 ) -> Type {
-    let pointee =
-        lower::fe_ty_to_sonatina(builder, db, target_layout, target_ty, cache, name_counter)
-            .unwrap_or(Type::I8);
+    let pointee = lower::fe_ty_to_sonatina(
+        builder,
+        db,
+        core,
+        target_layout,
+        target_ty,
+        cache,
+        name_counter,
+    )
+    .unwrap_or(Type::I8);
     if pointee == Type::Unit {
         return types::word_type();
     }
     builder.ptr_type(pointee)
-}
-
-pub(super) fn runtime_type_for_value(
-    builder: &ModuleBuilder,
-    db: &DriverDataBase,
-    target_layout: &TargetDataLayout,
-    ty: TyId<'_>,
-    repr: ValueRepr,
-    cache: &mut FxHashMap<String, Option<Type>>,
-    name_counter: &mut usize,
-) -> Type {
-    if is_erased_runtime_ty(db, target_layout, ty) {
-        return types::word_type();
-    }
-
-    match repr {
-        ValueRepr::Word => types::word_type(),
-        ValueRepr::Ref(mir::ir::AddressSpaceKind::Memory) => {
-            runtime_pointer_type_from_target(builder, db, target_layout, ty, cache, name_counter)
-        }
-        ValueRepr::Ptr(mir::ir::AddressSpaceKind::Memory) => {
-            let Some(target_ty) = memory_pointer_target_ty(db, ty) else {
-                return builder.ptr_type(Type::I8);
-            };
-            runtime_pointer_type_from_target(
-                builder,
-                db,
-                target_layout,
-                target_ty,
-                cache,
-                name_counter,
-            )
-        }
-        ValueRepr::Ptr(_) | ValueRepr::Ref(_) => types::word_type(),
-    }
 }
 
 fn function_core_lib<'db>(db: &'db DriverDataBase, func: &mir::MirFunction<'db>) -> CoreLib<'db> {
@@ -207,26 +169,27 @@ fn function_core_lib<'db>(db: &'db DriverDataBase, func: &mir::MirFunction<'db>)
 fn infer_local_root_runtime_types(
     builder: &ModuleBuilder,
     db: &DriverDataBase,
+    core: &CoreLib<'_>,
     target_layout: &TargetDataLayout,
     func: &mir::MirFunction<'_>,
     cache: &mut FxHashMap<String, Option<Type>>,
     name_counter: &mut usize,
 ) -> Result<Vec<Option<Type>>, LowerError> {
     let mut local_runtime_types = vec![None; func.body.locals.len()];
+    let mut runtime_type_cx = RuntimeTypeCx {
+        builder,
+        db,
+        core,
+        target_layout,
+        cache,
+        name_counter,
+    };
 
     for value in &func.body.values {
         let mir::ValueOrigin::Local(local) = value.origin else {
             continue;
         };
-        let runtime_ty = runtime_type_for_value(
-            builder,
-            db,
-            target_layout,
-            value.ty,
-            value.repr,
-            cache,
-            name_counter,
-        );
+        let runtime_ty = runtime_type_cx.runtime_type_for_value(value.ty, value.repr);
         merge_runtime_type(
             &mut local_runtime_types[local.index()],
             runtime_ty,
@@ -265,6 +228,40 @@ struct RuntimeTypeCx<'a, 'db> {
 }
 
 impl<'a, 'db> RuntimeTypeCx<'a, 'db> {
+    fn runtime_type_for_value(&mut self, ty: TyId<'db>, repr: ValueRepr) -> Type {
+        if is_erased_runtime_ty(self.db, self.target_layout, ty) {
+            return types::word_type();
+        }
+
+        match repr {
+            ValueRepr::Word => types::word_type(),
+            ValueRepr::Ref(mir::ir::AddressSpaceKind::Memory) => runtime_pointer_type_from_target(
+                self.builder,
+                self.db,
+                self.core,
+                self.target_layout,
+                ty,
+                self.cache,
+                self.name_counter,
+            ),
+            ValueRepr::Ptr(mir::ir::AddressSpaceKind::Memory) => {
+                let Some(target_ty) = memory_pointer_target_ty(self.db, self.core, ty) else {
+                    return self.builder.ptr_type(Type::I8);
+                };
+                runtime_pointer_type_from_target(
+                    self.builder,
+                    self.db,
+                    self.core,
+                    self.target_layout,
+                    target_ty,
+                    self.cache,
+                    self.name_counter,
+                )
+            }
+            ValueRepr::Ptr(_) | ValueRepr::Ref(_) => types::word_type(),
+        }
+    }
+
     fn runtime_type_for_plain_local(
         &mut self,
         ty: TyId<'db>,
@@ -279,10 +276,11 @@ impl<'a, 'db> RuntimeTypeCx<'a, 'db> {
             ReprKind::Ptr(mir::ir::AddressSpaceKind::Memory)
                 if address_space == mir::ir::AddressSpaceKind::Memory =>
             {
-                if let Some(target_ty) = memory_pointer_target_ty(self.db, ty) {
+                if let Some(target_ty) = memory_pointer_target_ty(self.db, self.core, ty) {
                     return runtime_pointer_type_from_target(
                         self.builder,
                         self.db,
+                        self.core,
                         self.target_layout,
                         target_ty,
                         self.cache,
@@ -297,6 +295,7 @@ impl<'a, 'db> RuntimeTypeCx<'a, 'db> {
                 runtime_pointer_type_from_target(
                     self.builder,
                     self.db,
+                    self.core,
                     self.target_layout,
                     ty,
                     self.cache,
@@ -327,15 +326,7 @@ impl<'a, 'db> RuntimeTypeCx<'a, 'db> {
             let value = func.body.values.get(value_id.index()).ok_or_else(|| {
                 LowerError::Internal(format!("unknown return value id {}", value_id.index()))
             })?;
-            let runtime_ty = runtime_type_for_value(
-                self.builder,
-                self.db,
-                self.target_layout,
-                value.ty,
-                value.repr,
-                self.cache,
-                self.name_counter,
-            );
+            let runtime_ty = self.runtime_type_for_value(value.ty, value.repr);
             merge_runtime_type(
                 &mut ret,
                 runtime_ty,
@@ -360,6 +351,7 @@ impl<'a, 'db> RuntimeTypeCx<'a, 'db> {
         let mut local_runtime_types = infer_local_root_runtime_types(
             self.builder,
             self.db,
+            self.core,
             self.target_layout,
             func,
             self.cache,
@@ -894,6 +886,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         let local_root_runtime_types = infer_local_root_runtime_types(
             &self.builder,
             self.db,
+            &core,
             &self.target_layout,
             func,
             &mut self.gep_type_cache,
@@ -1539,6 +1532,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             let mut ctx = LowerCtx {
                 fb: &mut fb,
                 db: self.db,
+                core: &core,
                 target_layout: &self.target_layout,
                 body: &func.body,
                 local_vars: &local_vars,
@@ -1587,6 +1581,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
 pub(super) struct LowerCtx<'a, 'db, C: sonatina_ir::func_cursor::FuncCursor> {
     pub(super) fb: &'a mut sonatina_ir::builder::FunctionBuilder<C>,
     pub(super) db: &'db DriverDataBase,
+    pub(super) core: &'a CoreLib<'db>,
     pub(super) target_layout: &'a TargetDataLayout,
     pub(super) body: &'a mir::MirBody<'db>,
     pub(super) local_vars: &'a FxHashMap<mir::LocalId, Variable>,
