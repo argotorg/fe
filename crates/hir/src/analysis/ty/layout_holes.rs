@@ -1,7 +1,4 @@
-use std::ops::Range;
-
 use rustc_hash::{FxHashMap, FxHashSet};
-use salsa::Update;
 
 use super::{
     const_ty::{ConstTyData, ConstTyId, LayoutHoleId},
@@ -256,6 +253,30 @@ pub(crate) fn substitute_layout_holes<'db>(
     substitute_layout_holes_in(db, ty, layout_args)
 }
 
+pub(crate) fn substitute_layout_holes_by_identity_in<'db, T>(
+    db: &'db dyn HirAnalysisDb,
+    value: T,
+    layout_args: &FxHashMap<TyId<'db>, TyId<'db>>,
+) -> T
+where
+    T: TyFoldable<'db>,
+{
+    substitute_layout_placeholders_by_identity(
+        db,
+        value,
+        layout_args,
+        LayoutPlaceholderPolicy::HolesOnly,
+    )
+}
+
+pub(crate) fn substitute_layout_holes_by_identity<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    layout_args: &FxHashMap<TyId<'db>, TyId<'db>>,
+) -> TyId<'db> {
+    substitute_layout_holes_by_identity_in(db, ty, layout_args)
+}
+
 fn collect_unique_layout_placeholders_in_order_with_policy<'db, T>(
     db: &'db dyn HirAnalysisDb,
     value: T,
@@ -340,12 +361,6 @@ where
     )
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
-pub(crate) struct CallableInputLayoutArgRange {
-    pub(crate) origin: CallableInputLayoutHoleOrigin,
-    pub(crate) range: Range<usize>,
-}
-
 /// Returns the implicit layout const-params inserted for a callable's input layout holes.
 ///
 /// These args are ordered to match `callable_input_layout_hole_groups`.
@@ -370,16 +385,18 @@ pub(crate) fn callable_input_layout_implicit_args<'db>(
         .collect()
 }
 
-#[salsa::tracked(return_ref)]
-pub(crate) fn callable_input_layout_arg_ranges<'db>(
+pub(crate) fn callable_input_layout_bindings_by_origin<'db>(
     db: &'db dyn HirAnalysisDb,
-    func: Func<'db>,
-) -> Vec<CallableInputLayoutArgRange> {
+    method: CallableDef<'db>,
+) -> FxHashMap<CallableInputLayoutHoleOrigin, Vec<(TyId<'db>, TyId<'db>)>> {
+    let CallableDef::Func(func) = method else {
+        return FxHashMap::default();
+    };
     let groups = callable_input_layout_hole_groups(db, func);
     let implicit_layout_args = callable_input_layout_implicit_args(db, func);
     let expected_layout_arg_count = groups
         .iter()
-        .map(|group| group.hole_tys.len())
+        .map(|group| group.placeholders.len())
         .sum::<usize>();
     assert_eq!(
         implicit_layout_args.len(),
@@ -387,46 +404,41 @@ pub(crate) fn callable_input_layout_arg_ranges<'db>(
         "layout-hole binder count mismatch while elaborating callable input types"
     );
 
-    let mut ranges = Vec::with_capacity(groups.len());
+    let mut out = FxHashMap::default();
     let mut next_layout_arg = 0usize;
-
     for group in groups {
-        let end = next_layout_arg + group.hole_tys.len();
-        let layout_range = next_layout_arg..end;
-        next_layout_arg = end;
-        ranges.push(CallableInputLayoutArgRange {
-            origin: group.origin,
-            range: layout_range,
-        });
+        let mut bindings = Vec::with_capacity(group.placeholders.len());
+        for placeholder in group.placeholders {
+            let implicit_param = implicit_layout_args[next_layout_arg];
+            next_layout_arg += 1;
+            bindings.push((placeholder, implicit_param));
+        }
+        out.insert(group.origin, bindings);
     }
     assert_eq!(
         next_layout_arg,
         implicit_layout_args.len(),
         "layout-hole binder walk did not consume all hidden layout arguments"
     );
-
-    ranges
+    out
 }
 
 pub(crate) fn callable_input_layout_implicit_params_by_origin<'db>(
     db: &'db dyn HirAnalysisDb,
     method: CallableDef<'db>,
 ) -> FxHashMap<CallableInputLayoutHoleOrigin, Vec<TyId<'db>>> {
-    let CallableDef::Func(func) = method else {
-        return FxHashMap::default();
-    };
-    let implicit_layout_args = callable_input_layout_implicit_args(db, func);
-    let ranges = callable_input_layout_arg_ranges(db, func);
-
-    let mut out: FxHashMap<CallableInputLayoutHoleOrigin, Vec<TyId<'db>>> = FxHashMap::default();
-    for range in ranges {
-        out.insert(
-            range.origin,
-            implicit_layout_args[range.range.start..range.range.end].to_vec(),
-        );
-    }
-
-    out
+    callable_input_layout_bindings_by_origin(db, method)
+        .into_iter()
+        .map(|(origin, bindings)| {
+            (
+                origin,
+                bindings
+                    .into_iter()
+                    .map(|(_, implicit_param)| implicit_param)
+                    .collect(),
+            )
+        })
+        .collect()
 }
 
 #[cfg(test)]

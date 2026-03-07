@@ -62,10 +62,10 @@ use crate::analysis::ty::adt_def::{AdtCycleMember, AdtDef, AdtField, AdtRef};
 use crate::analysis::ty::const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy};
 use crate::analysis::ty::effects::{EffectKeyKind, resolve_effect_key};
 use crate::analysis::ty::layout_holes::{
-    CallableInputLayoutArgRange, LayoutPlaceholderPolicy, alpha_rename_hidden_layout_placeholders,
-    callable_input_layout_arg_ranges, callable_input_layout_implicit_args,
-    collect_layout_hole_tys_in_order, collect_unique_layout_placeholders_in_order,
-    layout_hole_fallback_ty, substitute_layout_holes, substitute_layout_holes_in,
+    LayoutPlaceholderPolicy, alpha_rename_hidden_layout_placeholders,
+    callable_input_layout_bindings_by_origin, collect_layout_hole_tys_in_order,
+    collect_unique_layout_placeholders_in_order, layout_hole_fallback_ty,
+    substitute_layout_holes_by_identity, substitute_layout_holes_by_identity_in,
     substitute_layout_placeholders_by_identity,
 };
 use crate::analysis::ty::trait_def::{
@@ -142,28 +142,26 @@ pub fn constraints_for<'db>(
 }
 
 struct CallableInputLayoutArgMap<'db> {
-    implicit_layout_args: &'db [TyId<'db>],
-    ranges: &'db [CallableInputLayoutArgRange],
+    args_by_origin: FxHashMap<CallableInputLayoutHoleOrigin, FxHashMap<TyId<'db>, TyId<'db>>>,
 }
 
 impl<'db> CallableInputLayoutArgMap<'db> {
-    fn args_for_origin(&self, origin: CallableInputLayoutHoleOrigin) -> Option<&'db [TyId<'db>]> {
-        let range = self.ranges.iter().find_map(|entry| {
-            (entry.origin == origin).then_some(entry.range.start..entry.range.end)
-        })?;
-        Some(&self.implicit_layout_args[range.start..range.end])
+    fn args_for_origin(
+        &self,
+        origin: CallableInputLayoutHoleOrigin,
+    ) -> Option<&FxHashMap<TyId<'db>, TyId<'db>>> {
+        self.args_by_origin.get(&origin)
     }
 
-    fn receiver_args(&self) -> &[TyId<'db>] {
+    fn receiver_args(&self) -> Option<&FxHashMap<TyId<'db>, TyId<'db>>> {
         self.args_for_origin(CallableInputLayoutHoleOrigin::Receiver)
-            .unwrap_or(&[])
     }
 
-    fn value_param_args(&self, idx: usize) -> Option<&[TyId<'db>]> {
+    fn value_param_args(&self, idx: usize) -> Option<&FxHashMap<TyId<'db>, TyId<'db>>> {
         self.args_for_origin(CallableInputLayoutHoleOrigin::ValueParam(idx))
     }
 
-    fn effect_args(&self, idx: usize) -> Option<&[TyId<'db>]> {
+    fn effect_args(&self, idx: usize) -> Option<&FxHashMap<TyId<'db>, TyId<'db>>> {
         self.args_for_origin(CallableInputLayoutHoleOrigin::Effect(idx))
     }
 }
@@ -173,8 +171,10 @@ fn callable_input_layout_args<'db>(
     func: Func<'db>,
 ) -> CallableInputLayoutArgMap<'db> {
     CallableInputLayoutArgMap {
-        implicit_layout_args: callable_input_layout_implicit_args(db, func),
-        ranges: callable_input_layout_arg_ranges(db, func),
+        args_by_origin: callable_input_layout_bindings_by_origin(db, CallableDef::Func(func))
+            .into_iter()
+            .map(|(origin, bindings)| (origin, bindings.into_iter().collect()))
+            .collect(),
     }
 }
 
@@ -193,12 +193,15 @@ fn elaborate_func_param_ty<'db>(
     };
     let had_layout_hole = ty_contains_const_hole(db, ty);
 
-    if param.is_self_param(db) && had_layout_hole {
-        ty = substitute_layout_holes(db, ty, layout_args.receiver_args());
+    if param.is_self_param(db)
+        && had_layout_hole
+        && let Some(receiver_layout_args) = layout_args.receiver_args()
+    {
+        ty = substitute_layout_holes_by_identity(db, ty, receiver_layout_args);
     } else if had_layout_hole
         && let Some(param_layout_args) = layout_args.value_param_args(param_idx)
     {
-        ty = substitute_layout_holes(db, ty, param_layout_args);
+        ty = substitute_layout_holes_by_identity(db, ty, param_layout_args);
     }
 
     let ty = if apply_view
@@ -827,7 +830,10 @@ impl<'db> FuncParamView<'db> {
         {
             if ty_contains_const_hole(db, expected) {
                 let layout_args = callable_input_layout_args(db, func);
-                expected = substitute_layout_holes(db, expected, layout_args.receiver_args());
+                if let Some(receiver_layout_args) = layout_args.receiver_args() {
+                    expected =
+                        substitute_layout_holes_by_identity(db, expected, receiver_layout_args);
+                }
             }
             let ty_norm = normalize_ty(db, ty, func.scope(), assumptions);
 
@@ -1683,12 +1689,14 @@ impl<'db> Func<'db> {
 
         let mut out = Vec::new();
         for binding in pending {
-            let effect_layout_args = layout_args.effect_args(binding.idx).unwrap_or(&[]);
             let key_ty = binding.key_ty.map(|ty| {
                 if !ty_contains_const_hole(db, ty) {
                     return ty;
                 }
-                let ty = substitute_layout_holes(db, ty, effect_layout_args);
+                let Some(effect_layout_args) = layout_args.effect_args(binding.idx) else {
+                    return ty;
+                };
+                let ty = substitute_layout_holes_by_identity(db, ty, effect_layout_args);
                 debug_assert!(
                     !ty_contains_const_hole(db, ty) || ty.has_invalid(db),
                     "unelaborated layout hole remained in callable effect key type"
@@ -1699,7 +1707,11 @@ impl<'db> Func<'db> {
                 if collect_layout_hole_tys_in_order(db, trait_inst).is_empty() {
                     return trait_inst;
                 }
-                let trait_inst = substitute_layout_holes_in(db, trait_inst, effect_layout_args);
+                let Some(effect_layout_args) = layout_args.effect_args(binding.idx) else {
+                    return trait_inst;
+                };
+                let trait_inst =
+                    substitute_layout_holes_by_identity_in(db, trait_inst, effect_layout_args);
                 debug_assert!(
                     collect_layout_hole_tys_in_order(db, trait_inst).is_empty(),
                     "unelaborated layout hole remained in callable effect key trait"

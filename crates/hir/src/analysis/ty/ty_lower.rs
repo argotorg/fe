@@ -12,7 +12,7 @@ use super::{
     const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
     effects::{EffectKeyKind, ResolvedEffectKey, effect_key_kind, resolve_effect_key},
     fold::{TyFoldable, TyFolder},
-    layout_holes::collect_layout_hole_tys_in_order,
+    layout_holes::{collect_unique_layout_placeholders_in_order, layout_hole_fallback_ty},
     trait_def::TraitInstId,
     trait_resolution::{
         PredicateListId, TraitSolveCx,
@@ -256,7 +256,7 @@ pub(crate) enum CallableInputLayoutHoleOrigin {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct CallableInputLayoutHoleGroup<'db> {
     pub(crate) origin: CallableInputLayoutHoleOrigin,
-    pub(crate) hole_tys: Vec<TyId<'db>>,
+    pub(crate) placeholders: Vec<TyId<'db>>,
 }
 
 pub(crate) fn callable_input_layout_hole_groups<'db>(
@@ -268,11 +268,11 @@ pub(crate) fn callable_input_layout_hole_groups<'db>(
     if func.is_method(db)
         && let Some(expected_self_ty) = func.expected_self_ty(db)
     {
-        let hole_tys = collect_layout_hole_tys_in_order(db, expected_self_ty);
-        if !hole_tys.is_empty() {
+        let placeholders = collect_unique_layout_placeholders_in_order(db, expected_self_ty);
+        if !placeholders.is_empty() {
             groups.push(CallableInputLayoutHoleGroup {
                 origin: CallableInputLayoutHoleOrigin::Receiver,
-                hole_tys,
+                placeholders,
             });
         }
     }
@@ -287,14 +287,14 @@ pub(crate) fn callable_input_layout_hole_groups<'db>(
         };
 
         let ty = lower_hir_ty(db, hir_ty, func.scope(), assumptions);
-        let hole_tys = collect_layout_hole_tys_in_order(db, ty);
-        if hole_tys.is_empty() {
+        let placeholders = collect_unique_layout_placeholders_in_order(db, ty);
+        if placeholders.is_empty() {
             continue;
         }
 
         groups.push(CallableInputLayoutHoleGroup {
             origin: CallableInputLayoutHoleOrigin::ValueParam(param.index()),
-            hole_tys,
+            placeholders,
         });
     }
 
@@ -302,20 +302,22 @@ pub(crate) fn callable_input_layout_hole_groups<'db>(
         let Some(key_path) = effect.key_path(db) else {
             continue;
         };
-        let hole_tys = match resolve_effect_key(db, key_path, func.scope(), assumptions) {
-            ResolvedEffectKey::Type(key_ty) => collect_layout_hole_tys_in_order(db, key_ty),
+        let placeholders = match resolve_effect_key(db, key_path, func.scope(), assumptions) {
+            ResolvedEffectKey::Type(key_ty) => {
+                collect_unique_layout_placeholders_in_order(db, key_ty)
+            }
             ResolvedEffectKey::Trait(trait_inst) => {
-                collect_layout_hole_tys_in_order(db, trait_inst)
+                collect_unique_layout_placeholders_in_order(db, trait_inst)
             }
             ResolvedEffectKey::Other => continue,
         };
-        if hole_tys.is_empty() {
+        if placeholders.is_empty() {
             continue;
         }
 
         groups.push(CallableInputLayoutHoleGroup {
             origin: CallableInputLayoutHoleOrigin::Effect(effect.index()),
-            hole_tys,
+            placeholders,
         });
     }
 
@@ -879,7 +881,13 @@ impl<'db> GenericParamCollector<'db> {
 
         if let GenericParamOwner::Func(func) = owner {
             for group in callable_input_layout_hole_groups(db, func) {
-                for (layout_idx, hole_ty) in group.hole_tys.into_iter().enumerate() {
+                for (layout_idx, placeholder) in group.placeholders.into_iter().enumerate() {
+                    let TyData::ConstTy(const_ty) = placeholder.data(db) else {
+                        unreachable!("callable layout placeholder was not a const type");
+                    };
+                    let ConstTyData::Hole(hole_ty, _) = const_ty.data(db) else {
+                        unreachable!("callable layout placeholder was not a hole");
+                    };
                     let name = match group.origin {
                         CallableInputLayoutHoleOrigin::Receiver => {
                             IdentId::new(db, format!("__self_layout{layout_idx}"))
@@ -894,7 +902,7 @@ impl<'db> GenericParamCollector<'db> {
                     params.push(TyParamPrecursor::implicit_const_param(
                         db,
                         Partial::Present(name),
-                        hole_ty,
+                        layout_hole_fallback_ty(db, *hole_ty),
                     ));
                 }
             }

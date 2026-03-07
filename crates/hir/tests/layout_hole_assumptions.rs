@@ -162,6 +162,190 @@ fn f<T: HasRootTy<RootTy = u256>>() uses (slot: Slot<T>) {}
 }
 
 #[test]
+fn callable_value_params_reuse_repeated_placeholder_identity() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("callable_value_params_reuse_repeated_placeholder_identity.fe"),
+        r#"
+struct Leaf<const ROOT: u256> {}
+type Repeated<const ROOT: u256 = _> = (Leaf<ROOT>, Leaf<ROOT>)
+
+fn f(x: Repeated) {}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let func = top_mod
+        .children_non_nested(&db)
+        .find_map(|item| match item {
+            ItemKind::Func(func) if func.name(&db).to_opt().is_some_and(|n| n.data(&db) == "f") => {
+                Some(func)
+            }
+            _ => None,
+        })
+        .expect("missing `f` function");
+
+    let implicit_layout_params = CallableDef::Func(func)
+        .params(&db)
+        .iter()
+        .filter(|ty| {
+            matches!(
+                ty.data(&db),
+                TyData::ConstTy(const_ty)
+                    if matches!(const_ty.data(&db), ConstTyData::TyParam(param, _) if param.is_implicit())
+            )
+        })
+        .count();
+    assert_eq!(implicit_layout_params, 1);
+
+    let arg_ty = func.arg_tys(&db)[0].instantiate_identity();
+    let arg_ty = arg_ty.as_view(&db).unwrap_or(arg_ty);
+    let fields = arg_ty.field_types(&db);
+    assert_eq!(fields.len(), 2);
+    let left_root = fields[0]
+        .generic_args(&db)
+        .first()
+        .copied()
+        .expect("missing left root const arg");
+    let right_root = fields[1]
+        .generic_args(&db)
+        .first()
+        .copied()
+        .expect("missing right root const arg");
+
+    assert_eq!(left_root, right_root);
+    assert!(
+        !ty_contains_const_hole(&db, arg_ty),
+        "unelaborated const hole remained in callable parameter type: {arg_ty:?}"
+    );
+}
+
+#[test]
+fn callable_effect_keys_reuse_repeated_placeholder_identity() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("callable_effect_keys_reuse_repeated_placeholder_identity.fe"),
+        r#"
+struct Leaf<const ROOT: u256> {}
+type Repeated<const ROOT: u256 = _> = (Leaf<ROOT>, Leaf<ROOT>)
+
+fn f() uses (slot: Repeated) {}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let func = top_mod
+        .children_non_nested(&db)
+        .find_map(|item| match item {
+            ItemKind::Func(func) if func.name(&db).to_opt().is_some_and(|n| n.data(&db) == "f") => {
+                Some(func)
+            }
+            _ => None,
+        })
+        .expect("missing `f` function");
+
+    let implicit_layout_params = CallableDef::Func(func)
+        .params(&db)
+        .iter()
+        .filter(|ty| {
+            matches!(
+                ty.data(&db),
+                TyData::ConstTy(const_ty)
+                    if matches!(const_ty.data(&db), ConstTyData::TyParam(param, _) if param.is_implicit())
+            )
+        })
+        .count();
+    assert_eq!(implicit_layout_params, 1);
+
+    let key_ty = func
+        .effect_bindings(&db)
+        .first()
+        .expect("missing effect binding")
+        .key_ty
+        .expect("missing type effect key");
+    let fields = key_ty.field_types(&db);
+    assert_eq!(fields.len(), 2);
+    let left_root = fields[0]
+        .generic_args(&db)
+        .first()
+        .copied()
+        .expect("missing left root const arg");
+    let right_root = fields[1]
+        .generic_args(&db)
+        .first()
+        .copied()
+        .expect("missing right root const arg");
+
+    assert_eq!(left_root, right_root);
+    assert!(
+        !ty_contains_const_hole(&db, key_ty),
+        "unelaborated const hole remained in callable effect key: {key_ty:?}"
+    );
+}
+
+#[test]
+fn callable_value_params_keep_distinct_placeholder_identity() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("callable_value_params_keep_distinct_placeholder_identity.fe"),
+        r#"
+struct Leaf<const ROOT: u256> {}
+type Distinct<const LEFT: u256 = _, const RIGHT: u256 = _> = (Leaf<LEFT>, Leaf<RIGHT>)
+
+fn f(x: Distinct) {}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let func = top_mod
+        .children_non_nested(&db)
+        .find_map(|item| match item {
+            ItemKind::Func(func) if func.name(&db).to_opt().is_some_and(|n| n.data(&db) == "f") => {
+                Some(func)
+            }
+            _ => None,
+        })
+        .expect("missing `f` function");
+
+    let implicit_layout_params = CallableDef::Func(func)
+        .params(&db)
+        .iter()
+        .filter(|ty| {
+            matches!(
+                ty.data(&db),
+                TyData::ConstTy(const_ty)
+                    if matches!(const_ty.data(&db), ConstTyData::TyParam(param, _) if param.is_implicit())
+            )
+        })
+        .count();
+    assert_eq!(implicit_layout_params, 2);
+
+    let arg_ty = func.arg_tys(&db)[0].instantiate_identity();
+    let arg_ty = arg_ty.as_view(&db).unwrap_or(arg_ty);
+    let fields = arg_ty.field_types(&db);
+    assert_eq!(fields.len(), 2);
+    let left_root = fields[0]
+        .generic_args(&db)
+        .first()
+        .copied()
+        .expect("missing left root const arg");
+    let right_root = fields[1]
+        .generic_args(&db)
+        .first()
+        .copied()
+        .expect("missing right root const arg");
+
+    assert_ne!(left_root, right_root);
+    assert!(
+        !ty_contains_const_hole(&db, arg_ty),
+        "unelaborated const hole remained in callable parameter type: {arg_ty:?}"
+    );
+}
+
+#[test]
 fn contract_field_layout_uses_consistent_effect_handle_metadata() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
