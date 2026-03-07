@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 33
 expression: output
 input_file: tests/fixtures/newtype_storage_field_mut_method_call.fe
 ---
@@ -95,13 +96,17 @@ object "NewtypeStorageFieldMutMethodCall" {
       leave
     }
     function $stor_ptr__Evm_hef0af3106e109414_Wrap_haf9e70905fcbd513__fd5231d549c91f24($self, $slot) -> ret {
-      let v0 := $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__u256__3271ca15373d4483($slot)
+      let v0 := $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Wrap_haf9e70905fcbd513__945a70bbbf171dbd($slot)
       ret := v0
       leave
     }
     function $stor_ptr__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9($self, $slot) -> ret {
       let v0 := $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__u256__3271ca15373d4483($slot)
       ret := v0
+      leave
+    }
+    function $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Wrap_haf9e70905fcbd513__945a70bbbf171dbd($raw) -> ret {
+      ret := $raw
       leave
     }
     function $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__u256__3271ca15373d4483($raw) -> ret {
@@ -305,13 +310,17 @@ object "NewtypeStorageFieldMutMethodCall" {
         leave
       }
       function $stor_ptr__Evm_hef0af3106e109414_Wrap_haf9e70905fcbd513__fd5231d549c91f24($self, $slot) -> ret {
-        let v0 := $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__u256__3271ca15373d4483($slot)
+        let v0 := $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Wrap_haf9e70905fcbd513__945a70bbbf171dbd($slot)
         ret := v0
         leave
       }
       function $stor_ptr__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9($self, $slot) -> ret {
         let v0 := $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__u256__3271ca15373d4483($slot)
         ret := v0
+        leave
+      }
+      function $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Wrap_haf9e70905fcbd513__945a70bbbf171dbd($raw) -> ret {
+        ret := $raw
         leave
       }
       function $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__u256__3271ca15373d4483($raw) -> ret {

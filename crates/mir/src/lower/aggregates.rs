@@ -11,7 +11,6 @@ use num_bigint::BigUint;
 impl<'db, 'a> MirBuilder<'db, 'a> {
     fn try_lower_transparent_newtype_aggregate_cast(
         &mut self,
-        expr: ExprId,
         aggregate_ty: TyId<'db>,
         fallback: ValueId,
         field_count: usize,
@@ -134,7 +133,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let record_ty = self.typed_body.expr_ty(self.db, expr);
 
         if let Some(value) = self.try_lower_transparent_newtype_aggregate_cast(
-            expr,
             record_ty,
             fallback,
             lowered_fields.len(),
@@ -194,7 +192,6 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         if let Some(value) = self.try_lower_transparent_newtype_aggregate_cast(
-            expr,
             tuple_ty,
             fallback,
             lowered_elems.len(),

@@ -203,7 +203,7 @@ func private %stor_ptr__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9(v0.i256, v1
 
 func private %stor_ptr__Evm_hef0af3106e109414_Wrap_haf9e70905fcbd513__fd5231d549c91f24(v0.i256, v1.i256) -> i256 {
     block0:
-        v2.i256 = call %storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__u256__3271ca15373d4483 v1;
+        v2.i256 = call %storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Wrap_haf9e70905fcbd513__945a70bbbf171dbd v1;
         return v2;
 }
 
@@ -318,6 +318,11 @@ func private %cursor_i__h140a998c67d6d59c_new__MemoryBytes_h1e381015a9b0111b__59
 }
 
 func private %storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__u256__3271ca15373d4483(v0.i256) -> i256 {
+    block0:
+        return v0;
+}
+
+func private %storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Wrap_haf9e70905fcbd513__945a70bbbf171dbd(v0.i256) -> i256 {
     block0:
         return v0;
 }

@@ -2545,6 +2545,22 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         self.builder.body.value_address_space(value)
     }
 
+    pub(super) fn place_address_space(&self, place: &Place<'db>) -> AddressSpaceKind {
+        let mut value = place.base;
+        loop {
+            match &self.builder.body.value(value).origin {
+                ValueOrigin::TransparentCast { value: inner } => value = *inner,
+                ValueOrigin::PlaceRef(inner) | ValueOrigin::MoveOut { place: inner } => {
+                    value = inner.base;
+                }
+                ValueOrigin::PlaceRoot(_) => return AddressSpaceKind::Memory,
+                ValueOrigin::Local(local) => return self.builder.body.local(*local).address_space,
+                ValueOrigin::FieldPtr(field_ptr) => return field_ptr.addr_space,
+                _ => return self.value_address_space_or_memory_fallback(place.base),
+            }
+        }
+    }
+
     pub(super) fn value_address_space_or_memory_fallback(
         &self,
         value: ValueId,

@@ -278,7 +278,7 @@ object "CoolCoin" {
       leave
     }
     function $stor_ptr__Evm_hef0af3106e109414_AccessControl_3___1911f7c438797961($self, $slot) -> ret {
-      let v0 := $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__TokenStore_0__1___175215aa56127bde($slot)
+      let v0 := $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__AccessControl_3___3633e113b859df5f($slot)
       ret := v0
       leave
     }
@@ -343,6 +343,10 @@ object "CoolCoin" {
       let v2 := add(v1, 32)
       let v3 := keccak256(v0, v2)
       ret := v3
+      leave
+    }
+    function $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__AccessControl_3___3633e113b859df5f($raw) -> ret {
+      ret := $raw
       leave
     }
     function $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__TokenStore_0__1___175215aa56127bde($raw) -> ret {
@@ -1140,7 +1144,7 @@ object "CoolCoin" {
         leave
       }
       function $stor_ptr__Evm_hef0af3106e109414_AccessControl_3___1911f7c438797961($self, $slot) -> ret {
-        let v0 := $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__TokenStore_0__1___175215aa56127bde($slot)
+        let v0 := $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__AccessControl_3___3633e113b859df5f($slot)
         ret := v0
         leave
       }
@@ -1242,6 +1246,10 @@ object "CoolCoin" {
         let v2 := add(v1, 32)
         let v3 := keccak256(v0, v2)
         ret := v3
+        leave
+      }
+      function $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__AccessControl_3___3633e113b859df5f($raw) -> ret {
+        ret := $raw
         leave
       }
       function $storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__TokenStore_0__1___175215aa56127bde($raw) -> ret {
