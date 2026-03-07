@@ -9,9 +9,16 @@ func private %borrow_storage_field_handle__StorPtr_CoinStore___ba1c0d0726e89ba2(
     block0:
         v2.i256 = evm_sload v0;
         v4.i256 = add v2 1.i256;
+        v5.i1 = lt v4 v2;
+        br v5 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
         evm_sstore v0 v4;
-        v5.i256 = evm_sload v0;
-        return v5;
+        v8.i256 = evm_sload v0;
+        return v8;
 }
 
 func private %__fe_sonatina_entry() {

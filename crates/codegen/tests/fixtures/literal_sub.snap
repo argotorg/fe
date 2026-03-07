@@ -4,6 +4,43 @@ expression: output
 input_file: tests/fixtures/literal_sub.fe
 ---
 function $literal_sub() -> ret {
-  ret := sub(1, 2)
+  let v0 := $u64_haee7f05a097ffa16_sub_h7b686d389c07535e_sub(1, 2)
+  ret := v0
+  leave
+}
+function $u64_haee7f05a097ffa16_sub_h7b686d389c07535e_sub($self, $other) -> ret {
+  let v0 := $checked_sub_u64($self, $other)
+  ret := v0
+  leave
+}
+function $checked_sub_u64($a, $b) -> ret {
+  let v0 := $checked_sub_unsigned_impl__u64__aee7f05a097ffa16($a, $b)
+  ret := v0
+  leave
+}
+function $checked_sub_unsigned_impl__u64__aee7f05a097ffa16($a, $b) -> ret {
+  let v0 := $u8_hbc9d6eeaea22ffb5_intword_h9a147c8c32b1323c_to_word($b)
+  let v1 := $u8_hbc9d6eeaea22ffb5_intword_h9a147c8c32b1323c_to_word($a)
+  let v2 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt(v0, v1)
+  let v3 := v2
+  if v3 {
+    revert(0, 0)
+  }
+  let v4 := $u64_haee7f05a097ffa16_wrappingsub_h6880d1ff91f0a556_wrapping_sub($a, $b)
+  ret := v4
+  leave
+}
+function $u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt($self, $other) -> ret {
+  let v0 := gt($self, $other)
+  ret := v0
+  leave
+}
+function $u64_haee7f05a097ffa16_wrappingsub_h6880d1ff91f0a556_wrapping_sub($self, $other) -> ret {
+  let v0 := and(sub(and($self, 0xffffffffffffffff), and($other, 0xffffffffffffffff)), 0xffffffffffffffff)
+  ret := v0
+  leave
+}
+function $u8_hbc9d6eeaea22ffb5_intword_h9a147c8c32b1323c_to_word($self) -> ret {
+  ret := $self
   leave
 }

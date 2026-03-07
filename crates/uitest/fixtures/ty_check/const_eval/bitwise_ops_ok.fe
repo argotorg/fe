@@ -1,0 +1,26 @@
+struct Byte<const N: u8> {}
+
+const NOT: u8 = ~0
+
+type ShlArr = [u8; 1 << 3]
+type ShrArr = [u8; 8 >> 1]
+type AndArr = [u8; 6 & 3]
+type OrArr = [u8; 4 | 2]
+type XorArr = [u8; 5 ^ 1]
+type NotByte = Byte<NOT>
+
+fn takes_shl(_x: ShlArr) {}
+fn takes_shr(_x: ShrArr) {}
+fn takes_and(_x: AndArr) {}
+fn takes_or(_x: OrArr) {}
+fn takes_xor(_x: XorArr) {}
+fn takes_not(_x: NotByte) {}
+
+fn ok(a: ShlArr, b: ShrArr, c: AndArr, d: OrArr, e: XorArr, f: NotByte) {
+    takes_shl(a)
+    takes_shr(b)
+    takes_and(c)
+    takes_or(d)
+    takes_xor(e)
+    takes_not(f)
+}

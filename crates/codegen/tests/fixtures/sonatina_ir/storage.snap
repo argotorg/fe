@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/storage.fe
 ---
@@ -141,10 +140,10 @@ func private %total_supply__StorPtr_TotalSupply___2e654c25952f42f9(v0.i256) -> i
 func private %credit_alice__StorPtr_CoinStore__StorPtr_TotalSupply___c407f5b00af9ba78(v0.i256, v1.i256, v2.i256) -> i256 {
     block0:
         v4.i256 = evm_sload v1;
-        v5.i256 = add v4 v0;
+        v5.i256 = call %u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add_stor v4 v0;
         evm_sstore v1 v5;
         v6.i256 = evm_sload v2;
-        v7.i256 = add v6 v0;
+        v7.i256 = call %u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add_stor v6 v0;
         evm_sstore v2 v7;
         v8.i256 = evm_sload v1;
         return v8;
@@ -154,11 +153,11 @@ func private %credit_bob__StorPtr_CoinStore__StorPtr_TotalSupply___c407f5b00af9b
     block0:
         v5.i256 = add v1 1.i256;
         v6.i256 = evm_sload v5;
-        v7.i256 = add v6 v0;
+        v7.i256 = call %u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add_stor v6 v0;
         v8.i256 = add v1 1.i256;
         evm_sstore v8 v7;
         v9.i256 = evm_sload v2;
-        v10.i256 = add v9 v0;
+        v10.i256 = call %u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add_stor v9 v0;
         evm_sstore v2 v10;
         v11.i256 = add v1 1.i256;
         v12.i256 = evm_sload v11;
@@ -168,64 +167,62 @@ func private %credit_bob__StorPtr_CoinStore__StorPtr_TotalSupply___c407f5b00af9b
 func private %transfer_from_alice__StorPtr_CoinStore___ba1c0d0726e89ba2(v0.i256, v1.i256) -> i256 {
     block0:
         v3.i256 = evm_sload v1;
-        v4.i1 = lt v3 v0;
-        v5.i256 = zext v4 i256;
-        v6.i1 = ne v5 0.i256;
-        br v6 block1 block2;
+        v4.i256 = call %u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt_stor_arg0_root_stor v3 v0;
+        v5.i1 = ne v4 0.i256;
+        br v5 block1 block2;
 
     block1:
-        v8.*i8 = evm_malloc 32.i256;
-        v9.i256 = ptr_to_int v8 i256;
-        v11.*i256 = bitcast v8 *i256;
-        mstore v11 1.i256 i256;
-        return v9;
+        v7.*i8 = evm_malloc 32.i256;
+        v8.i256 = ptr_to_int v7 i256;
+        v10.*i256 = bitcast v7 *i256;
+        mstore v10 1.i256 i256;
+        return v8;
 
     block2:
-        v13.i256 = evm_sload v1;
-        v15.i256 = sub v13 v0;
-        evm_sstore v1 v15;
-        v16.i256 = add v1 1.i256;
-        v17.i256 = evm_sload v16;
-        v18.i256 = add v17 v0;
-        v19.i256 = add v1 1.i256;
-        evm_sstore v19 v18;
-        v20.*i8 = evm_malloc 32.i256;
-        v21.i256 = ptr_to_int v20 i256;
-        v22.*i256 = bitcast v20 *i256;
-        mstore v22 0.i256 i256;
-        return v21;
+        v12.i256 = evm_sload v1;
+        v14.i256 = call %u256_h3271ca15373d4483_sub_h7b686d389c07535e_sub_stor v12 v0;
+        evm_sstore v1 v14;
+        v15.i256 = add v1 1.i256;
+        v16.i256 = evm_sload v15;
+        v17.i256 = call %u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add_stor v16 v0;
+        v18.i256 = add v1 1.i256;
+        evm_sstore v18 v17;
+        v19.*i8 = evm_malloc 32.i256;
+        v20.i256 = ptr_to_int v19 i256;
+        v21.*i256 = bitcast v19 *i256;
+        mstore v21 0.i256 i256;
+        return v20;
 }
 
 func private %transfer_from_bob__StorPtr_CoinStore___ba1c0d0726e89ba2(v0.i256, v1.i256) -> i256 {
     block0:
         v4.i256 = add v1 1.i256;
         v5.i256 = evm_sload v4;
-        v6.i1 = lt v5 v0;
-        v7.i256 = zext v6 i256;
-        v8.i1 = ne v7 0.i256;
-        br v8 block1 block2;
+        v6.i256 = call %u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt_stor_arg0_root_stor v5 v0;
+        v7.i1 = ne v6 0.i256;
+        br v7 block1 block2;
 
     block1:
-        v10.*i8 = evm_malloc 32.i256;
-        v11.i256 = ptr_to_int v10 i256;
-        v12.*i256 = bitcast v10 *i256;
-        mstore v12 1.i256 i256;
-        return v11;
+        v9.*i8 = evm_malloc 32.i256;
+        v10.i256 = ptr_to_int v9 i256;
+        v11.*i256 = bitcast v9 *i256;
+        mstore v11 1.i256 i256;
+        return v10;
 
     block2:
-        v14.i256 = add v1 1.i256;
-        v15.i256 = evm_sload v14;
-        v17.i256 = sub v15 v0;
-        v18.i256 = add v1 1.i256;
-        evm_sstore v18 v17;
-        v19.i256 = evm_sload v1;
-        v20.i256 = add v19 v0;
-        evm_sstore v1 v20;
-        v21.*i8 = evm_malloc 32.i256;
-        v22.i256 = ptr_to_int v21 i256;
-        v23.*i256 = bitcast v21 *i256;
-        mstore v23 0.i256 i256;
-        return v22;
+        v13.i256 = add v1 1.i256;
+        v14.i256 = evm_sload v13;
+        v16.i256 = call %u256_h3271ca15373d4483_sub_h7b686d389c07535e_sub_stor v14 v0;
+        v17.i256 = add v1 1.i256;
+        evm_sstore v17 v16;
+        v18.i256 = evm_sload v1;
+        v19.i256 = call %u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add_stor v18 v0;
+        evm_sstore v1 v19;
+        v20.*i8 = evm_malloc 32.i256;
+        v21.i256 = ptr_to_int v20 i256;
+        v22.*i256 = bitcast v20 *i256;
+        mstore v22 0.i256 i256;
+        return v21;
 }
 
 func private %init__StorPtr_Evm___207f35a85ac4062e() {
@@ -303,6 +300,39 @@ func private %runtime__StorPtr_Evm___207f35a85ac4062e() {
 
     block14:
         br_table v6 block13 (2877082652.i256 block1) (1818602213.i256 block6) (217554442.i256 block7) (960555502.i256 block12);
+}
+
+func private %u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add_stor(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = add v0 v1;
+        v4.i1 = lt v3 v0;
+        br v4 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        return v3;
+}
+
+func private %u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt_stor_arg0_root_stor(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i1 = lt v0 v1;
+        v4.i256 = zext v3 i256;
+        return v4;
+}
+
+func private %u256_h3271ca15373d4483_sub_h7b686d389c07535e_sub_stor(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = sub v0 v1;
+        v4.i1 = gt v1 v0;
+        br v4 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        return v3;
 }
 
 func private %stor_ptr_stor__Evm_hef0af3106e109414_CoinStore_hd26a92ca525e0e79__b6feb5585dda62f1(v0.i256, v1.i256) -> i256 {

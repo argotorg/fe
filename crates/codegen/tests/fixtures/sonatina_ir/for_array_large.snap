@@ -27,7 +27,7 @@ func private %for_array_large_sum() -> i256 {
 
     block2:
         v14.i256 = call %_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_get__u64_10__2b47acd750beacf4 v3 v7;
-        v16.i256 = add v24 v14;
+        v16.i256 = call %u64_haee7f05a097ffa16_add_h4cebc227a0cfd3c0_add v24 v14;
         jump block3;
 
     block3:
@@ -51,6 +51,24 @@ func private %_t__const_n__usize__h8b63f3f6d3df6413_seq_ha637d2df505bccf2_get__u
         v6.i64 = trunc v5 i64;
         v7.i256 = zext v6 i256;
         return v7;
+}
+
+func private %u64_haee7f05a097ffa16_add_h4cebc227a0cfd3c0_add(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i64 = trunc v0 i64;
+        v4.i64 = trunc v1 i64;
+        v5.i64 = add v3 v4;
+        v6.i256 = zext v3 i256;
+        v7.i256 = zext v4 i256;
+        v8.i256 = zext v5 i256;
+        v9.i1 = lt v8 v6;
+        br v9 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        return v8;
 }
 
 func private %__fe_sonatina_entry() {

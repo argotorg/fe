@@ -2,7 +2,7 @@
 
 use mir::{
     BasicBlockId, LoopInfo, Terminator, ValueId,
-    ir::{IntrinsicValue, SwitchTarget, SwitchValue},
+    ir::{BuiltinTerminatorKind, IntrinsicValue, SwitchTarget, SwitchValue},
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -127,6 +127,14 @@ impl<'db> FunctionEmitter<'db> {
             }
             Terminator::TerminatingCall { call, .. } => match call {
                 mir::TerminatingCall::Call(call) => {
+                    if let Some(builtin) = call.builtin_terminator {
+                        match builtin {
+                            BuiltinTerminatorKind::Abort => {
+                                ctx.docs.push(YulDoc::line("revert(0, 0)"));
+                                return Ok(());
+                            }
+                        }
+                    }
                     let call_expr = self.lower_call_value(call, ctx.state)?;
                     ctx.docs.push(YulDoc::line(call_expr));
                     Ok(())

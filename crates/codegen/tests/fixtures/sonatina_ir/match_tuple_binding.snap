@@ -43,7 +43,7 @@ func private %match_tuple_extract(v0.i256) -> i256 {
         v25.i256 = mload v24 i256;
         v26.i8 = trunc v25 i8;
         v27.i256 = zext v26 i256;
-        v28.i256 = add v22 v27;
+        v28.i256 = call %u8_hbc9d6eeaea22ffb5_add_h4cebc227a0cfd3c0_add v22 v27;
         jump block2;
 
     block5:
@@ -90,7 +90,7 @@ func private %match_nested_extract(v0.i256) -> i256 {
         v19.i256 = mload v18 i256;
         v20.i8 = trunc v19 i8;
         v21.i256 = zext v20 i256;
-        v22.i256 = add v21 v16;
+        v22.i256 = call %u8_hbc9d6eeaea22ffb5_add_h4cebc227a0cfd3c0_add v21 v16;
         jump block2;
 
     block4:
@@ -104,7 +104,7 @@ func private %match_nested_extract(v0.i256) -> i256 {
         v31.i256 = mload v30 i256;
         v32.i8 = trunc v31 i8;
         v33.i256 = zext v32 i256;
-        v34.i256 = add v28 v33;
+        v34.i256 = call %u8_hbc9d6eeaea22ffb5_add_h4cebc227a0cfd3c0_add v28 v33;
         jump block2;
 
     block5:
@@ -138,6 +138,24 @@ func private %match_nested_extract(v0.i256) -> i256 {
         v57.i8 = trunc v56 i8;
         v58.i256 = zext v57 i256;
         br_table v58 block4 (0.i256 block3);
+}
+
+func private %u8_hbc9d6eeaea22ffb5_add_h4cebc227a0cfd3c0_add(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i8 = trunc v0 i8;
+        v4.i8 = trunc v1 i8;
+        v5.i8 = add v3 v4;
+        v6.i256 = zext v3 i256;
+        v7.i256 = zext v4 i256;
+        v8.i256 = zext v5 i256;
+        v9.i1 = lt v8 v6;
+        br v9 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        return v8;
 }
 
 func private %__fe_sonatina_entry() {

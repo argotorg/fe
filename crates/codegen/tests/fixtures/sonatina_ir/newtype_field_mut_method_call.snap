@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/newtype_field_mut_method_call.fe
 ---
@@ -54,9 +53,16 @@ func private %counter_h872958864d1ad471_bump(v0.i256) {
         v3.*i256 = gep v2 0.i256 0.i256;
         v4.i256 = mload v3 i256;
         v6.i256 = add v4 1.i256;
-        v7.*@__fe_Counter_0 = int_to_ptr v0 *@__fe_Counter_0;
-        v8.*i256 = gep v7 0.i256 0.i256;
-        mstore v8 v6 i256;
+        v7.i1 = lt v6 v4;
+        br v7 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        v9.*@__fe_Counter_0 = int_to_ptr v0 *@__fe_Counter_0;
+        v10.*i256 = gep v9 0.i256 0.i256;
+        mstore v10 v6 i256;
         return;
 }
 
@@ -66,9 +72,16 @@ func private %wrapcounter_hbcbd3a74a267488b_bump(v0.i256) {
         v3.*i256 = gep v2 0.i256 0.i256;
         v4.i256 = mload v3 i256;
         v6.i256 = add v4 1.i256;
-        v7.*@__fe_Counter_0 = int_to_ptr v0 *@__fe_Counter_0;
-        v8.*i256 = gep v7 0.i256 0.i256;
-        mstore v8 v6 i256;
+        v7.i1 = lt v6 v4;
+        br v7 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        v9.*@__fe_Counter_0 = int_to_ptr v0 *@__fe_Counter_0;
+        v10.*i256 = gep v9 0.i256 0.i256;
+        mstore v10 v6 i256;
         return;
 }
 

@@ -40,6 +40,11 @@ impl AddAssign for Ok {
     }
 }
 
+fn assign_yes(mut ok: own Ok) -> Ok {
+    ok += Ok::Yes
+    ok
+}
+
 struct Point {
     x: i32,
     y: i32,

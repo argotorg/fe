@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 33
 expression: output
 input_file: tests/fixtures/full_contract.fe
 ---
@@ -22,47 +21,147 @@ object "ShapeDispatcher" {
         mstore(v0, $value)
         return(v0, 32)
       }
+      function $checked_add_u256($a, $b) -> ret {
+        let v0 := $checked_add_unsigned_impl__u256__3271ca15373d4483($a, $b)
+        ret := v0
+        leave
+      }
+      function $checked_add_unsigned_impl__u256__3271ca15373d4483($a, $b) -> ret {
+        let v0 := $u256_h3271ca15373d4483_wrappingadd_h14afa79b3047617f_wrapping_add($a, $b)
+        let v1 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word(v0)
+        let v2 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($a)
+        let v3 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v1, v2)
+        let v4 := v3
+        if v4 {
+          revert(0, 0)
+        }
+        ret := v0
+        leave
+      }
+      function $checked_mul_u256($a, $b) -> ret {
+        let v0 := $checked_mul_unsigned_impl__u256__3271ca15373d4483($a, $b)
+        ret := v0
+        leave
+      }
+      function $checked_mul_unsigned_impl__u256__3271ca15373d4483($a, $b) -> ret {
+        let v0 := $u256_h3271ca15373d4483_wrappingmul_h64e6b83610cda761_wrapping_mul($a, $b)
+        let v1 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($a)
+        let v2 := $u256_h3271ca15373d4483_eq_he50383edd273619f_ne(v1, 0)
+        let v3 := v2
+        if v3 {
+          let v4 := $u256_h3271ca15373d4483_div_h14000ca7bc1a1bc4_div(v0, $a)
+          let v5 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word(v4)
+          let v6 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($b)
+          let v7 := $u256_h3271ca15373d4483_eq_he50383edd273619f_ne(v5, v6)
+          let v8 := v7
+          if v8 {
+            revert(0, 0)
+          }
+          ret := v0
+          leave
+        }
+        if iszero(v3) {
+          ret := v0
+          leave
+        }
+      }
       function $dispatch__StorPtr_Evm___207f35a85ac4062e() {
         let v0 := calldataload(0)
         let v1 := shr(224, v0)
-        let v2 := eq(v1, 151146943)
-        if v2 {
-          let v3 := calldataload(4)
-          let v4 := calldataload(36)
-          let v5 := mload(0x40)
-          if iszero(v5) {
-            v5 := 0x80
+        let v2 := $u256_h3271ca15373d4483_eq_he50383edd273619f_eq(v1, 151146943)
+        let v3 := v2
+        if v3 {
+          let v4 := calldataload(4)
+          let v5 := calldataload(36)
+          let v6 := mload(0x40)
+          if iszero(v6) {
+            v6 := 0x80
           }
-          mstore(0x40, add(v5, 64))
-          mstore(v5, v3)
-          mstore(add(v5, 32), v4)
-          let v6 := v5
-          let v7 := mload(v6)
-          mstore(v6, add(v7, 1))
-          let v8 := mload(add(v6, 32))
-          mstore(add(v6, 32), add(v8, 2))
-          let v9 := $point_hac92469562809d28_area(v6)
-          $abi_encode__Evm_hef0af3106e109414__3af54274b2985741(v9, 0)
+          mstore(0x40, add(v6, 64))
+          mstore(v6, v4)
+          mstore(add(v6, 32), v5)
+          let v7 := v6
+          let v8 := mload(v7)
+          let v9 := $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v8, 1)
+          mstore(v7, v9)
+          let v10 := mload(add(v7, 32))
+          let v11 := $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v10, 2)
+          mstore(add(v7, 32), v11)
+          let v12 := $point_hac92469562809d28_area(v7)
+          $abi_encode__Evm_hef0af3106e109414__3af54274b2985741(v12, 0)
         }
-        let v10 := eq(v1, 2066295049)
-        if v10 {
-          let v11 := calldataload(4)
-          let v12 := v11
-          v12 := add(v12, 3)
-          let v13 := $square_h97afaa872b6ea17e_area(v12)
-          $abi_encode__Evm_hef0af3106e109414__3af54274b2985741(v13, 0)
+        let v13 := $u256_h3271ca15373d4483_eq_he50383edd273619f_eq(v1, 2066295049)
+        let v14 := v13
+        if v14 {
+          let v15 := calldataload(4)
+          let v16 := v15
+          let v17 := $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v16, 3)
+          v16 := v17
+          let v18 := $square_h97afaa872b6ea17e_area(v16)
+          $abi_encode__Evm_hef0af3106e109414__3af54274b2985741(v18, 0)
         }
         return(0, 0)
       }
       function $point_hac92469562809d28_area($self) -> ret {
         let v0 := mload($self)
         let v1 := mload(add($self, 32))
-        ret := mul(v0, v1)
+        let v2 := $u256_h3271ca15373d4483_mul_h290dcc921ed80777_mul(v0, v1)
+        ret := v2
         leave
       }
       function $square_h97afaa872b6ea17e_area($self) -> ret {
         let v0 := $self
-        ret := mul(v0, v0)
+        let v1 := $u256_h3271ca15373d4483_mul_h290dcc921ed80777_mul(v0, v0)
+        ret := v1
+        leave
+      }
+      function $u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add($self, $other) -> ret {
+        let v0 := $checked_add_u256($self, $other)
+        ret := v0
+        leave
+      }
+      function $u256_h3271ca15373d4483_div_h14000ca7bc1a1bc4_div($self, $other) -> ret {
+        let v0 := $u256_h3271ca15373d4483_eq_he50383edd273619f_eq($other, 0)
+        let v1 := v0
+        if v1 {
+          revert(0, 0)
+        }
+        let v2 := div($self, $other)
+        ret := v2
+        leave
+      }
+      function $u256_h3271ca15373d4483_eq_he50383edd273619f_eq($self, $other) -> ret {
+        let v0 := eq($self, $other)
+        ret := v0
+        leave
+      }
+      function $u256_h3271ca15373d4483_eq_he50383edd273619f_ne($self, $other) -> ret {
+        let v0 := iszero(eq($self, $other))
+        ret := v0
+        leave
+      }
+      function $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($self) -> ret {
+        ret := $self
+        leave
+      }
+      function $u256_h3271ca15373d4483_mul_h290dcc921ed80777_mul($self, $other) -> ret {
+        let v0 := $checked_mul_u256($self, $other)
+        ret := v0
+        leave
+      }
+      function $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt($self, $other) -> ret {
+        let v0 := lt($self, $other)
+        ret := v0
+        leave
+      }
+      function $u256_h3271ca15373d4483_wrappingadd_h14afa79b3047617f_wrapping_add($self, $other) -> ret {
+        let v0 := add($self, $other)
+        ret := v0
+        leave
+      }
+      function $u256_h3271ca15373d4483_wrappingmul_h64e6b83610cda761_wrapping_mul($self, $other) -> ret {
+        let v0 := mul($self, $other)
+        ret := v0
         leave
       }
       $dispatch__StorPtr_Evm___207f35a85ac4062e()

@@ -19,6 +19,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         if self.current_block().is_none() {
             return Some(self.ensure_value(expr));
         }
+
         let (op, args) = self.intrinsic_stmt_args(expr)?;
         let value_id = self.ensure_value(expr);
         if matches!(op, IntrinsicOp::ReturnData | IntrinsicOp::Revert) {
@@ -135,6 +136,88 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return false;
         };
         name.data(self.db).as_str() == "__bitcast"
+    }
+
+    pub(super) fn checked_intrinsic_kind(
+        &self,
+        func_def: CallableDef<'db>,
+        ty: TyId<'db>,
+    ) -> Option<crate::ir::CheckedIntrinsic<'db>> {
+        match func_def.ingot(self.db).kind(self.db) {
+            IngotKind::Core | IngotKind::Std => {}
+            _ => return None,
+        }
+
+        let CallableDef::Func(func) = func_def else {
+            return None;
+        };
+        if func.body(self.db).is_some() {
+            return None;
+        }
+
+        let name = func_def.name(self.db)?;
+        let inner_ty = ty
+            .as_capability(self.db)
+            .map(|(_, inner)| inner)
+            .unwrap_or(ty);
+        let op = match name.data(self.db).as_str() {
+            "__checked_add" => crate::ir::CheckedArithmeticOp::Add,
+            "__checked_sub" => crate::ir::CheckedArithmeticOp::Sub,
+            "__checked_mul" => crate::ir::CheckedArithmeticOp::Mul,
+            "__checked_neg" => crate::ir::CheckedArithmeticOp::Neg,
+            _ => return None,
+        };
+
+        self.checked_intrinsic_ty_suffix(inner_ty)?;
+
+        Some(crate::ir::CheckedIntrinsic { op, ty: inner_ty })
+    }
+
+    pub(super) fn builtin_terminator_kind(
+        &self,
+        func_def: CallableDef<'db>,
+    ) -> Option<crate::ir::BuiltinTerminatorKind> {
+        match func_def.ingot(self.db).kind(self.db) {
+            IngotKind::Core => {}
+            _ => return None,
+        }
+
+        let CallableDef::Func(func) = func_def else {
+            return None;
+        };
+        if func.body(self.db).is_some() {
+            return None;
+        }
+
+        let name = func_def.name(self.db)?;
+        match name.data(self.db).as_str() {
+            "panic" | "todo" => Some(crate::ir::BuiltinTerminatorKind::Abort),
+            _ => None,
+        }
+    }
+
+    fn checked_intrinsic_ty_suffix(&self, ty: TyId<'db>) -> Option<&'static str> {
+        let base_ty = ty.base_ty(self.db);
+        let TyData::TyBase(TyBase::Prim(prim)) = base_ty.data(self.db) else {
+            return None;
+        };
+        match prim {
+            PrimTy::U8 => Some("u8"),
+            PrimTy::U16 => Some("u16"),
+            PrimTy::U32 => Some("u32"),
+            PrimTy::U64 => Some("u64"),
+            PrimTy::U128 => Some("u128"),
+            PrimTy::U256 => Some("u256"),
+            PrimTy::Usize => Some("usize"),
+            PrimTy::I8 => Some("i8"),
+            PrimTy::I16 => Some("i16"),
+            PrimTy::I32 => Some("i32"),
+            PrimTy::I64 => Some("i64"),
+            PrimTy::I128 => Some("i128"),
+            PrimTy::I256 => Some("i256"),
+            PrimTy::Isize => Some("isize"),
+            _ => None,
+        }
     }
 
     /// Resolves the `code_region` target represented by an intrinsic argument path.

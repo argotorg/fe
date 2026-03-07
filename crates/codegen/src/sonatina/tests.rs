@@ -77,6 +77,7 @@ pub fn emit_test_module_sonatina(
 ) -> Result<TestModuleOutput, LowerError> {
     let ingot = top_mod.ingot(db);
     let mir_module = lower_ingot(db, ingot)?;
+
     let tests = collect_tests(db, &mir_module.functions);
 
     if tests.is_empty() {

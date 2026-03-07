@@ -9,54 +9,90 @@ type @__fe_tuple_0 = {i256, i256, i256, i256, i256, i256};
 
 func private %comparison_ops() -> i256 {
     block0:
-        v5.*i8 = evm_malloc 192.i256;
-        v6.i256 = ptr_to_int v5 i256;
-        v7.i1 = eq 1.i256 1.i256;
-        v8.i256 = zext v7 i256;
-        v9.i1 = ne v8 0.i256;
-        v10.i256 = zext v9 i256;
-        v11.*@__fe_tuple_0 = bitcast v5 *@__fe_tuple_0;
-        v12.*i256 = gep v11 0.i256 0.i256;
-        mstore v12 v10 i256;
-        v13.i1 = eq 1.i256 2.i256;
-        v14.i1 = is_zero v13;
-        v15.i256 = zext v14 i256;
-        v16.i1 = ne v15 0.i256;
-        v17.i256 = zext v16 i256;
-        v18.*@__fe_tuple_0 = bitcast v5 *@__fe_tuple_0;
-        v19.*i256 = gep v18 0.i256 1.i256;
-        mstore v19 v17 i256;
-        v20.i1 = lt 1.i256 2.i256;
-        v21.i256 = zext v20 i256;
-        v22.i1 = ne v21 0.i256;
-        v23.i256 = zext v22 i256;
-        v24.*@__fe_tuple_0 = bitcast v5 *@__fe_tuple_0;
-        v25.*i256 = gep v24 0.i256 2.i256;
-        mstore v25 v23 i256;
-        v26.i1 = gt 2.i256 2.i256;
-        v27.i1 = is_zero v26;
-        v28.i256 = zext v27 i256;
-        v29.i1 = ne v28 0.i256;
+        v4.i256 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_eq 1.i256 1.i256;
+        v5.i256 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_ne 1.i256 2.i256;
+        v6.i256 = call %u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt 1.i256 2.i256;
+        v7.i256 = call %u256_h3271ca15373d4483_ord_h264f6d6d75097a_le 2.i256 2.i256;
+        v8.i256 = call %u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt 3.i256 2.i256;
+        v9.i256 = call %u256_h3271ca15373d4483_ord_h264f6d6d75097a_ge 3.i256 3.i256;
+        v11.*i8 = evm_malloc 192.i256;
+        v12.i256 = ptr_to_int v11 i256;
+        v13.i1 = ne v4 0.i256;
+        v14.i256 = zext v13 i256;
+        v15.*@__fe_tuple_0 = bitcast v11 *@__fe_tuple_0;
+        v16.*i256 = gep v15 0.i256 0.i256;
+        mstore v16 v14 i256;
+        v17.i1 = ne v5 0.i256;
+        v18.i256 = zext v17 i256;
+        v19.*@__fe_tuple_0 = bitcast v11 *@__fe_tuple_0;
+        v20.*i256 = gep v19 0.i256 1.i256;
+        mstore v20 v18 i256;
+        v21.i1 = ne v6 0.i256;
+        v22.i256 = zext v21 i256;
+        v23.*@__fe_tuple_0 = bitcast v11 *@__fe_tuple_0;
+        v24.*i256 = gep v23 0.i256 2.i256;
+        mstore v24 v22 i256;
+        v25.i1 = ne v7 0.i256;
+        v26.i256 = zext v25 i256;
+        v27.*@__fe_tuple_0 = bitcast v11 *@__fe_tuple_0;
+        v28.*i256 = gep v27 0.i256 3.i256;
+        mstore v28 v26 i256;
+        v29.i1 = ne v8 0.i256;
         v30.i256 = zext v29 i256;
-        v31.*@__fe_tuple_0 = bitcast v5 *@__fe_tuple_0;
-        v32.*i256 = gep v31 0.i256 3.i256;
-        mstore v32 v30 i256;
-        v33.i1 = gt 3.i256 2.i256;
-        v34.i256 = zext v33 i256;
-        v35.i1 = ne v34 0.i256;
-        v36.i256 = zext v35 i256;
-        v37.*@__fe_tuple_0 = bitcast v5 *@__fe_tuple_0;
-        v39.*i256 = gep v37 0.i256 4.i256;
-        mstore v39 v36 i256;
-        v40.i1 = lt 3.i256 3.i256;
-        v41.i1 = is_zero v40;
-        v42.i256 = zext v41 i256;
-        v43.i1 = ne v42 0.i256;
-        v44.i256 = zext v43 i256;
-        v45.*@__fe_tuple_0 = bitcast v5 *@__fe_tuple_0;
-        v47.*i256 = gep v45 0.i256 5.i256;
-        mstore v47 v44 i256;
-        return v6;
+        v31.*@__fe_tuple_0 = bitcast v11 *@__fe_tuple_0;
+        v33.*i256 = gep v31 0.i256 4.i256;
+        mstore v33 v30 i256;
+        v34.i1 = ne v9 0.i256;
+        v35.i256 = zext v34 i256;
+        v36.*@__fe_tuple_0 = bitcast v11 *@__fe_tuple_0;
+        v38.*i256 = gep v36 0.i256 5.i256;
+        mstore v38 v35 i256;
+        return v12;
+}
+
+func private %u256_h3271ca15373d4483_eq_he50383edd273619f_eq(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i1 = eq v0 v1;
+        v4.i256 = zext v3 i256;
+        return v4;
+}
+
+func private %u256_h3271ca15373d4483_eq_he50383edd273619f_ne(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i1 = eq v0 v1;
+        v4.i1 = is_zero v3;
+        v5.i256 = zext v4 i256;
+        return v5;
+}
+
+func private %u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i1 = lt v0 v1;
+        v4.i256 = zext v3 i256;
+        return v4;
+}
+
+func private %u256_h3271ca15373d4483_ord_h264f6d6d75097a_le(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i1 = gt v0 v1;
+        v4.i1 = is_zero v3;
+        v5.i256 = zext v4 i256;
+        return v5;
+}
+
+func private %u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i1 = gt v0 v1;
+        v4.i256 = zext v3 i256;
+        return v4;
+}
+
+func private %u256_h3271ca15373d4483_ord_h264f6d6d75097a_ge(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i1 = lt v0 v1;
+        v4.i1 = is_zero v3;
+        v5.i256 = zext v4 i256;
+        return v5;
 }
 
 func private %__fe_sonatina_entry() {

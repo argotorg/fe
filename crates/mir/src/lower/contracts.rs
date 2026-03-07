@@ -52,9 +52,13 @@ pub(super) fn lower_contract_templates<'db>(
     db: &'db dyn SpannedHirAnalysisDb,
     top_mod: TopLevelMod<'db>,
 ) -> MirLowerResult<Vec<MirFunction<'db>>> {
+    let contracts = top_mod.all_contracts(db);
+    if contracts.is_empty() {
+        return Ok(Vec::new());
+    }
     let target = TargetContext::new(db, top_mod)?;
     let mut out = Vec::new();
-    for &contract in top_mod.all_contracts(db) {
+    for &contract in contracts {
         out.extend(lower_single_contract(&target, db, contract, None)?);
     }
     Ok(out)
@@ -420,6 +424,8 @@ impl<'db, 'a> ContractMirCx<'db, 'a> {
             args,
             effect_args: Vec::new(),
             resolved_name: None,
+            checked_intrinsic: None,
+            builtin_terminator: None,
             receiver_space: None,
         }
     }
@@ -436,6 +442,8 @@ impl<'db, 'a> ContractMirCx<'db, 'a> {
             args,
             effect_args,
             resolved_name: Some(symbol_name.into()),
+            checked_intrinsic: None,
+            builtin_terminator: None,
             receiver_space: None,
         }
     }

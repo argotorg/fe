@@ -1,0 +1,19 @@
+use core::ops::Add
+
+struct AddOnly {
+    value: u8,
+}
+
+impl Copy for AddOnly {}
+
+impl Add for AddOnly {
+    fn add(own self, _ other: own AddOnly) -> AddOnly {
+        AddOnly { value: self.value + other.value }
+    }
+}
+
+pub fn bad() {
+    let mut x = AddOnly { value: 1 }
+    let y = AddOnly { value: 2 }
+    x += y
+}

@@ -93,20 +93,19 @@ func private %set_balance__0_MemPtr_StorageMap_u256__u256__0____a41b2ecb073da43d
 func private %transfer__0_MemPtr_StorageMap_u256__u256__0____a41b2ecb073da43d(v0.i256, v1.i256, v2.i256, v3.i256) -> i256 {
     block0:
         v5.i256 = call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get__u256_u256_0__6a346ad3c930d971 v3 v0;
-        v6.i1 = lt v5 v2;
-        v7.i256 = zext v6 i256;
-        v8.i1 = ne v7 0.i256;
-        br v8 block1 block2;
+        v6.i256 = call %u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt v5 v2;
+        v7.i1 = ne v6 0.i256;
+        br v7 block1 block2;
 
     block1:
         return 1.i256;
 
     block2:
-        v12.i256 = call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get__u256_u256_0__6a346ad3c930d971 v3 v1;
-        v16.i256 = sub v5 v2;
-        call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set__u256_u256_0__6a346ad3c930d971 v3 v0 v16;
-        v17.i256 = add v12 v2;
-        call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set__u256_u256_0__6a346ad3c930d971 v3 v1 v17;
+        v11.i256 = call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get__u256_u256_0__6a346ad3c930d971 v3 v1;
+        v14.i256 = call %u256_h3271ca15373d4483_sub_h7b686d389c07535e_sub v5 v2;
+        call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set__u256_u256_0__6a346ad3c930d971 v3 v0 v14;
+        v16.i256 = call %u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add v11 v2;
+        call %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set__u256_u256_0__6a346ad3c930d971 v3 v1 v16;
         return 0.i256;
 }
 
@@ -134,6 +133,39 @@ func private %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_set__u256_u25
         v4.i256 = call %u256_h3271ca15373d4483_wordrepr_h7483d41ac8178d88_to_word v2;
         call %storagemap_set_word_with_salt__u256__3271ca15373d4483 v1 0.i256 v4;
         return;
+}
+
+func private %u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i1 = lt v0 v1;
+        v4.i256 = zext v3 i256;
+        return v4;
+}
+
+func private %u256_h3271ca15373d4483_sub_h7b686d389c07535e_sub(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = sub v0 v1;
+        v4.i1 = gt v1 v0;
+        br v4 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        return v3;
+}
+
+func private %u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = add v0 v1;
+        v4.i1 = lt v3 v0;
+        br v4 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        return v3;
 }
 
 func private %storagemap_k__v__const_salt__u256__h5955888dd44c2a19_get__u256_u256_1__3c02c0f2b86be0bb(v0.i256, v1.i256) -> i256 {
@@ -179,12 +211,11 @@ func private %storagemap_storage_slot_with_salt__u256__3271ca15373d4483(v0.i256,
         v3.*i8 = evm_malloc 0.i256;
         v4.i256 = ptr_to_int v3 i256;
         v5.i256 = call %u256_h3271ca15373d4483_storagekey_hf9e3d38a13ff4409_write_key v4 v0;
-        v6.i256 = add v4 v5;
+        v6.i256 = call %u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add v4 v5;
         mstore v6 v1 i256;
-        v8.i256 = add v5 32.i256;
-        v9.i256 = add v5 32.i256;
-        v10.i256 = evm_keccak256 v4 v9;
-        return v10;
+        v8.i256 = call %u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add v5 32.i256;
+        v9.i256 = evm_keccak256 v4 v8;
+        return v9;
 }
 
 func private %u256_h3271ca15373d4483_storagekey_hf9e3d38a13ff4409_write_key(v0.i256, v1.i256) -> i256 {

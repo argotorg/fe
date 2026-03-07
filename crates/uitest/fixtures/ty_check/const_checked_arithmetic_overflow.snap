@@ -1,0 +1,64 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_checked_arithmetic_overflow.fe
+---
+error[3-0015]: the expression is not supported in a const type context
+  ┌─ const_checked_arithmetic_overflow.fe:2:26
+  │
+2 │ const ADD_OVERFLOW: u8 = 255 + 1
+  │                          ^^^^^^^ expected a literal, const, or const fn call
+
+error[3-0015]: the expression is not supported in a const type context
+  ┌─ const_checked_arithmetic_overflow.fe:3:27
+  │
+3 │ const SUB_UNDERFLOW: u8 = 0 - 1
+  │                           ^^^^^ expected a literal, const, or const fn call
+
+error[3-0015]: the expression is not supported in a const type context
+  ┌─ const_checked_arithmetic_overflow.fe:4:25
+  │
+4 │ const DIV_BY_ZERO: u8 = 1 / 0
+  │                         ^^^^^ expected a literal, const, or const fn call
+
+error[3-0015]: the expression is not supported in a const type context
+  ┌─ const_checked_arithmetic_overflow.fe:5:25
+  │
+5 │ const REM_BY_ZERO: u8 = 1 % 0
+  │                         ^^^^^ expected a literal, const, or const fn call
+
+error[3-0015]: the expression is not supported in a const type context
+  ┌─ const_checked_arithmetic_overflow.fe:6:26
+  │
+6 │ const POW_OVERFLOW: u8 = 2 ** 8
+  │                          ^^^^^^ expected a literal, const, or const fn call
+
+error[3-0015]: the expression is not supported in a const type context
+  ┌─ const_checked_arithmetic_overflow.fe:8:30
+  │
+8 │ const POW_NEGATIVE_EXP: i8 = 2 ** -1
+  │                              ^^^^^^^ expected a literal, const, or const fn call
+
+error[3-0015]: the expression is not supported in a const type context
+  ┌─ const_checked_arithmetic_overflow.fe:9:26
+  │
+9 │ const NEG_OVERFLOW: i8 = -(-128)
+  │                          ^^^^^^^ expected a literal, const, or const fn call
+
+error[3-0015]: the expression is not supported in a const type context
+   ┌─ const_checked_arithmetic_overflow.fe:10:26
+   │
+10 │ const DIV_OVERFLOW: i8 = (-128) / (-1)
+   │                          ^^^^^^^^^^^^^ expected a literal, const, or const fn call
+
+error[3-0025]: division by zero in const context
+  ┌─ const_checked_arithmetic_overflow.fe:4:25
+  │
+4 │ const DIV_BY_ZERO: u8 = 1 / 0
+  │                         ^^^^^ cannot divide by zero
+
+error[3-0025]: division by zero in const context
+  ┌─ const_checked_arithmetic_overflow.fe:5:25
+  │
+5 │ const REM_BY_ZERO: u8 = 1 % 0
+  │                         ^^^^^ cannot divide by zero

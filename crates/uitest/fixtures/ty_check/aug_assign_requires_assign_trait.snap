@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/aug_assign_requires_assign_trait.fe
+---
+error[8-0016]: `core::ops::AddAssign` trait is not implemented
+   ┌─ aug_assign_requires_assign_trait.fe:18:5
+   │
+18 │     x += y
+   │     ^^^^^^
+   │     │
+   │     `+=` can't be applied to `AddOnly`
+   │     Try implementing `core::ops::AddAssign` for `AddOnly`

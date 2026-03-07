@@ -1,0 +1,150 @@
+use super::ops::*
+use super::num::IntWord
+use super::panic
+
+// ---------- generic checked-arithmetic helpers ----------
+
+fn checked_add_unsigned_impl<T>(a: T, b: T) -> T
+    where T: IntWord + WrappingAdd<Output = T>
+{
+    let result = a.wrapping_add(b)
+    if result.to_word() < a.to_word() { panic() }
+    result
+}
+
+fn checked_sub_unsigned_impl<T>(a: T, b: T) -> T
+    where T: IntWord + WrappingSub<Output = T>
+{
+    if b.to_word() > a.to_word() { panic() }
+    a.wrapping_sub(b)
+}
+
+fn checked_mul_unsigned_impl<T>(a: T, b: T) -> T
+    where T: IntWord + WrappingMul<Output = T> + Div<Output = T>
+{
+    let result = a.wrapping_mul(b)
+    if a.to_word() != 0 && (result / a).to_word() != b.to_word() { panic() }
+    result
+}
+
+fn checked_add_signed_impl<T>(a: T, b: T) -> T
+    where T: IntWord + WrappingAdd<Output = T>
+{
+    let result = a.wrapping_add(b)
+    let sign = T::SIGN_BIT
+    let a_neg = (a.to_word() & sign) != 0
+    let b_neg = (b.to_word() & sign) != 0
+    let r_neg = (result.to_word() & sign) != 0
+    if a_neg == b_neg && a_neg != r_neg { panic() }
+    result
+}
+
+fn checked_sub_signed_impl<T>(a: T, b: T) -> T
+    where T: IntWord + WrappingSub<Output = T>
+{
+    let result = a.wrapping_sub(b)
+    let sign = T::SIGN_BIT
+    let a_neg = (a.to_word() & sign) != 0
+    let b_neg = (b.to_word() & sign) != 0
+    let r_neg = (result.to_word() & sign) != 0
+    if a_neg != b_neg && a_neg != r_neg { panic() }
+    result
+}
+
+fn checked_mul_signed_impl<T>(a: T, b: T) -> T
+    where T: IntWord + WrappingMul<Output = T> + Div<Output = T>
+{
+    let result = a.wrapping_mul(b)
+    if a.to_word() != 0 && (result / a).to_word() != b.to_word() { panic() }
+    result
+}
+
+fn checked_neg_signed_impl<T>(x: T) -> T
+    where T: IntWord + WrappingSub<Output = T>
+{
+    let zero = T::from_word(0)
+    let result = zero.wrapping_sub(x)
+    if x.to_word() != 0 && result.to_word() == x.to_word() { panic() }
+    result
+}
+
+// ---------- unsigned thin wrappers ----------
+
+// u8
+pub fn checked_add_u8(a: u8, b: u8) -> u8 { checked_add_unsigned_impl(a, b) }
+pub fn checked_sub_u8(a: u8, b: u8) -> u8 { checked_sub_unsigned_impl(a, b) }
+pub fn checked_mul_u8(a: u8, b: u8) -> u8 { checked_mul_unsigned_impl(a, b) }
+
+// u16
+pub fn checked_add_u16(a: u16, b: u16) -> u16 { checked_add_unsigned_impl(a, b) }
+pub fn checked_sub_u16(a: u16, b: u16) -> u16 { checked_sub_unsigned_impl(a, b) }
+pub fn checked_mul_u16(a: u16, b: u16) -> u16 { checked_mul_unsigned_impl(a, b) }
+
+// u32
+pub fn checked_add_u32(a: u32, b: u32) -> u32 { checked_add_unsigned_impl(a, b) }
+pub fn checked_sub_u32(a: u32, b: u32) -> u32 { checked_sub_unsigned_impl(a, b) }
+pub fn checked_mul_u32(a: u32, b: u32) -> u32 { checked_mul_unsigned_impl(a, b) }
+
+// u64
+pub fn checked_add_u64(a: u64, b: u64) -> u64 { checked_add_unsigned_impl(a, b) }
+pub fn checked_sub_u64(a: u64, b: u64) -> u64 { checked_sub_unsigned_impl(a, b) }
+pub fn checked_mul_u64(a: u64, b: u64) -> u64 { checked_mul_unsigned_impl(a, b) }
+
+// u128
+pub fn checked_add_u128(a: u128, b: u128) -> u128 { checked_add_unsigned_impl(a, b) }
+pub fn checked_sub_u128(a: u128, b: u128) -> u128 { checked_sub_unsigned_impl(a, b) }
+pub fn checked_mul_u128(a: u128, b: u128) -> u128 { checked_mul_unsigned_impl(a, b) }
+
+// u256
+pub fn checked_add_u256(a: u256, b: u256) -> u256 { checked_add_unsigned_impl(a, b) }
+pub fn checked_sub_u256(a: u256, b: u256) -> u256 { checked_sub_unsigned_impl(a, b) }
+pub fn checked_mul_u256(a: u256, b: u256) -> u256 { checked_mul_unsigned_impl(a, b) }
+
+// usize
+pub fn checked_add_usize(a: usize, b: usize) -> usize { checked_add_unsigned_impl(a, b) }
+pub fn checked_sub_usize(a: usize, b: usize) -> usize { checked_sub_unsigned_impl(a, b) }
+pub fn checked_mul_usize(a: usize, b: usize) -> usize { checked_mul_unsigned_impl(a, b) }
+
+// ---------- signed thin wrappers ----------
+
+// i8
+pub fn checked_add_i8(a: i8, b: i8) -> i8 { checked_add_signed_impl(a, b) }
+pub fn checked_sub_i8(a: i8, b: i8) -> i8 { checked_sub_signed_impl(a, b) }
+pub fn checked_mul_i8(a: i8, b: i8) -> i8 { checked_mul_signed_impl(a, b) }
+pub fn checked_neg_i8(x: i8) -> i8 { checked_neg_signed_impl(x) }
+
+// i16
+pub fn checked_add_i16(a: i16, b: i16) -> i16 { checked_add_signed_impl(a, b) }
+pub fn checked_sub_i16(a: i16, b: i16) -> i16 { checked_sub_signed_impl(a, b) }
+pub fn checked_mul_i16(a: i16, b: i16) -> i16 { checked_mul_signed_impl(a, b) }
+pub fn checked_neg_i16(x: i16) -> i16 { checked_neg_signed_impl(x) }
+
+// i32
+pub fn checked_add_i32(a: i32, b: i32) -> i32 { checked_add_signed_impl(a, b) }
+pub fn checked_sub_i32(a: i32, b: i32) -> i32 { checked_sub_signed_impl(a, b) }
+pub fn checked_mul_i32(a: i32, b: i32) -> i32 { checked_mul_signed_impl(a, b) }
+pub fn checked_neg_i32(x: i32) -> i32 { checked_neg_signed_impl(x) }
+
+// i64
+pub fn checked_add_i64(a: i64, b: i64) -> i64 { checked_add_signed_impl(a, b) }
+pub fn checked_sub_i64(a: i64, b: i64) -> i64 { checked_sub_signed_impl(a, b) }
+pub fn checked_mul_i64(a: i64, b: i64) -> i64 { checked_mul_signed_impl(a, b) }
+pub fn checked_neg_i64(x: i64) -> i64 { checked_neg_signed_impl(x) }
+
+// i128
+pub fn checked_add_i128(a: i128, b: i128) -> i128 { checked_add_signed_impl(a, b) }
+pub fn checked_sub_i128(a: i128, b: i128) -> i128 { checked_sub_signed_impl(a, b) }
+pub fn checked_mul_i128(a: i128, b: i128) -> i128 { checked_mul_signed_impl(a, b) }
+pub fn checked_neg_i128(x: i128) -> i128 { checked_neg_signed_impl(x) }
+
+// i256
+pub fn checked_add_i256(a: i256, b: i256) -> i256 { checked_add_signed_impl(a, b) }
+pub fn checked_sub_i256(a: i256, b: i256) -> i256 { checked_sub_signed_impl(a, b) }
+pub fn checked_mul_i256(a: i256, b: i256) -> i256 { checked_mul_signed_impl(a, b) }
+pub fn checked_neg_i256(x: i256) -> i256 { checked_neg_signed_impl(x) }
+
+// isize
+pub fn checked_add_isize(a: isize, b: isize) -> isize { checked_add_signed_impl(a, b) }
+pub fn checked_sub_isize(a: isize, b: isize) -> isize { checked_sub_signed_impl(a, b) }
+pub fn checked_mul_isize(a: isize, b: isize) -> isize { checked_mul_signed_impl(a, b) }
+pub fn checked_neg_isize(x: isize) -> isize { checked_neg_signed_impl(x) }

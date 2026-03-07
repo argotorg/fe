@@ -1,0 +1,715 @@
+use std::evm::effects::assert
+
+// =====================================================================
+// u8 / i8
+// =====================================================================
+
+#[test(should_revert)]
+fn unsigned_add_overflow_u8() {
+    let x: u8 = 255
+    let y: u8 = x + 1
+}
+
+#[test(should_revert)]
+fn unsigned_sub_underflow_u8() {
+    let a: u8 = 0
+    let b: u8 = 1
+    let c: u8 = a - b
+}
+
+#[test(should_revert)]
+fn unsigned_mul_overflow_u8() {
+    let a: u8 = 16
+    let b: u8 = 16
+    let c: u8 = a * b
+}
+
+#[test(should_revert)]
+fn unsigned_div_by_zero_u8() {
+    let a: u8 = 1
+    let b: u8 = a / 0
+}
+
+#[test(should_revert)]
+fn unsigned_rem_by_zero_u8() {
+    let a: u8 = 1
+    let b: u8 = a % 0
+}
+
+#[test(should_revert)]
+fn unsigned_pow_overflow_u8() {
+    let x: u8 = 2
+    let y: u8 = x ** 8
+}
+
+#[test]
+fn unsigned_happy_path_u8() {
+    let a: u8 = 12
+    let b: u8 = 10
+    let c: u8 = 5
+    let p: u8 = 3
+    assert(a + b == 22)
+    assert(a - b == 2)
+    assert(a * b == 120)
+    assert(a / c == 2)
+    assert(a % c == 2)
+    assert(p ** 4 == 81)
+}
+
+#[test(should_revert)]
+fn signed_add_overflow_i8() {
+    let x: i8 = 127
+    let y: i8 = x + 1
+}
+
+#[test(should_revert)]
+fn signed_sub_overflow_i8() {
+    let x: i8 = -128
+    let y: i8 = x - 1
+}
+
+#[test(should_revert)]
+fn signed_mul_overflow_min_neg1_i8() {
+    let min: i8 = -128
+    let y: i8 = min * -1
+}
+
+#[test(should_revert)]
+fn signed_neg_overflow_i8() {
+    let x: i8 = -128
+    let y: i8 = -x
+}
+
+#[test(should_revert)]
+fn signed_div_by_zero_i8() {
+    let a: i8 = 1
+    let b: i8 = a / 0
+}
+
+#[test(should_revert)]
+fn signed_div_overflow_min_neg1_i8() {
+    let min: i8 = -128
+    let y: i8 = min / -1
+}
+
+#[test(should_revert)]
+fn signed_rem_by_zero_i8() {
+    let a: i8 = 1
+    let b: i8 = a % 0
+}
+
+#[test(should_revert)]
+fn signed_pow_overflow_i8() {
+    let x: i8 = 2
+    let y: i8 = x ** 7
+}
+
+#[test]
+fn signed_happy_path_i8() {
+    let a: i8 = -12
+    let b: i8 = 10
+    let c: i8 = 5
+    let p: i8 = 3
+    assert(a + b == -2)
+    assert(a - b == -22)
+    assert(a * b == -120)
+    assert(a / c == -2)
+    assert(a % c == -2)
+    assert(-a == 12)
+    assert(p ** 4 == 81)
+}
+
+// =====================================================================
+// u16 / i16
+// =====================================================================
+
+#[test(should_revert)]
+fn unsigned_add_overflow_u16() {
+    let x: u16 = 65535
+    let y: u16 = x + 1
+}
+
+#[test(should_revert)]
+fn unsigned_sub_underflow_u16() {
+    let a: u16 = 0
+    let b: u16 = 1
+    let c: u16 = a - b
+}
+
+#[test(should_revert)]
+fn unsigned_mul_overflow_u16() {
+    let a: u16 = 256
+    let b: u16 = 256
+    let c: u16 = a * b
+}
+
+#[test(should_revert)]
+fn unsigned_div_by_zero_u16() {
+    let a: u16 = 1
+    let b: u16 = a / 0
+}
+
+#[test(should_revert)]
+fn unsigned_rem_by_zero_u16() {
+    let a: u16 = 1
+    let b: u16 = a % 0
+}
+
+#[test(should_revert)]
+fn unsigned_pow_overflow_u16() {
+    let x: u16 = 2
+    let y: u16 = x ** 16
+}
+
+#[test]
+fn unsigned_happy_path_u16() {
+    let a: u16 = 12
+    let b: u16 = 10
+    let c: u16 = 5
+    let p: u16 = 3
+    assert(a + b == 22)
+    assert(a - b == 2)
+    assert(a * b == 120)
+    assert(a / c == 2)
+    assert(a % c == 2)
+    assert(p ** 4 == 81)
+}
+
+#[test(should_revert)]
+fn signed_add_overflow_i16() {
+    let x: i16 = 32767
+    let y: i16 = x + 1
+}
+
+#[test(should_revert)]
+fn signed_sub_overflow_i16() {
+    let x: i16 = -32768
+    let y: i16 = x - 1
+}
+
+#[test(should_revert)]
+fn signed_mul_overflow_min_neg1_i16() {
+    let min: i16 = -32768
+    let y: i16 = min * -1
+}
+
+#[test(should_revert)]
+fn signed_neg_overflow_i16() {
+    let x: i16 = -32768
+    let y: i16 = -x
+}
+
+#[test(should_revert)]
+fn signed_div_by_zero_i16() {
+    let a: i16 = 1
+    let b: i16 = a / 0
+}
+
+#[test(should_revert)]
+fn signed_div_overflow_min_neg1_i16() {
+    let min: i16 = -32768
+    let y: i16 = min / -1
+}
+
+#[test(should_revert)]
+fn signed_rem_by_zero_i16() {
+    let a: i16 = 1
+    let b: i16 = a % 0
+}
+
+#[test(should_revert)]
+fn signed_pow_overflow_i16() {
+    let x: i16 = 2
+    let y: i16 = x ** 15
+}
+
+#[test]
+fn signed_happy_path_i16() {
+    let a: i16 = -12
+    let b: i16 = 10
+    let c: i16 = 5
+    let p: i16 = 3
+    assert(a + b == -2)
+    assert(a - b == -22)
+    assert(a * b == -120)
+    assert(a / c == -2)
+    assert(a % c == -2)
+    assert(-a == 12)
+    assert(p ** 4 == 81)
+}
+
+// =====================================================================
+// u32 / i32
+// =====================================================================
+
+#[test(should_revert)]
+fn unsigned_add_overflow_u32() {
+    let x: u32 = 4294967295
+    let y: u32 = x + 1
+}
+
+#[test(should_revert)]
+fn unsigned_sub_underflow_u32() {
+    let a: u32 = 0
+    let b: u32 = 1
+    let c: u32 = a - b
+}
+
+#[test(should_revert)]
+fn unsigned_mul_overflow_u32() {
+    let a: u32 = 65536
+    let b: u32 = 65536
+    let c: u32 = a * b
+}
+
+#[test(should_revert)]
+fn unsigned_div_by_zero_u32() {
+    let a: u32 = 1
+    let b: u32 = a / 0
+}
+
+#[test(should_revert)]
+fn unsigned_rem_by_zero_u32() {
+    let a: u32 = 1
+    let b: u32 = a % 0
+}
+
+#[test(should_revert)]
+fn unsigned_pow_overflow_u32() {
+    let x: u32 = 2
+    let y: u32 = x ** 32
+}
+
+#[test]
+fn unsigned_happy_path_u32() {
+    let a: u32 = 12
+    let b: u32 = 10
+    let c: u32 = 5
+    let p: u32 = 3
+    assert(a + b == 22)
+    assert(a - b == 2)
+    assert(a * b == 120)
+    assert(a / c == 2)
+    assert(a % c == 2)
+    assert(p ** 4 == 81)
+}
+
+#[test(should_revert)]
+fn signed_add_overflow_i32() {
+    let x: i32 = 2147483647
+    let y: i32 = x + 1
+}
+
+#[test(should_revert)]
+fn signed_sub_overflow_i32() {
+    let x: i32 = -2147483648
+    let y: i32 = x - 1
+}
+
+#[test(should_revert)]
+fn signed_mul_overflow_min_neg1_i32() {
+    let min: i32 = -2147483648
+    let y: i32 = min * -1
+}
+
+#[test(should_revert)]
+fn signed_neg_overflow_i32() {
+    let x: i32 = -2147483648
+    let y: i32 = -x
+}
+
+#[test(should_revert)]
+fn signed_div_by_zero_i32() {
+    let a: i32 = 1
+    let b: i32 = a / 0
+}
+
+#[test(should_revert)]
+fn signed_div_overflow_min_neg1_i32() {
+    let min: i32 = -2147483648
+    let y: i32 = min / -1
+}
+
+#[test(should_revert)]
+fn signed_rem_by_zero_i32() {
+    let a: i32 = 1
+    let b: i32 = a % 0
+}
+
+#[test(should_revert)]
+fn signed_pow_overflow_i32() {
+    let x: i32 = 2
+    let y: i32 = x ** 31
+}
+
+#[test]
+fn signed_happy_path_i32() {
+    let a: i32 = -12
+    let b: i32 = 10
+    let c: i32 = 5
+    let p: i32 = 3
+    assert(a + b == -2)
+    assert(a - b == -22)
+    assert(a * b == -120)
+    assert(a / c == -2)
+    assert(a % c == -2)
+    assert(-a == 12)
+    assert(p ** 4 == 81)
+}
+
+// =====================================================================
+// u64 / i64
+// =====================================================================
+
+#[test(should_revert)]
+fn unsigned_add_overflow_u64() {
+    let x: u64 = 18446744073709551615
+    let y: u64 = x + 1
+}
+
+#[test(should_revert)]
+fn unsigned_sub_underflow_u64() {
+    let a: u64 = 0
+    let b: u64 = 1
+    let c: u64 = a - b
+}
+
+#[test(should_revert)]
+fn unsigned_mul_overflow_u64() {
+    let a: u64 = 4294967296
+    let b: u64 = 4294967296
+    let c: u64 = a * b
+}
+
+#[test(should_revert)]
+fn unsigned_div_by_zero_u64() {
+    let a: u64 = 1
+    let b: u64 = a / 0
+}
+
+#[test(should_revert)]
+fn unsigned_rem_by_zero_u64() {
+    let a: u64 = 1
+    let b: u64 = a % 0
+}
+
+#[test(should_revert)]
+fn unsigned_pow_overflow_u64() {
+    let x: u64 = 2
+    let y: u64 = x ** 64
+}
+
+#[test]
+fn unsigned_happy_path_u64() {
+    let a: u64 = 12
+    let b: u64 = 10
+    let c: u64 = 5
+    let p: u64 = 3
+    assert(a + b == 22)
+    assert(a - b == 2)
+    assert(a * b == 120)
+    assert(a / c == 2)
+    assert(a % c == 2)
+    assert(p ** 4 == 81)
+}
+
+#[test(should_revert)]
+fn signed_add_overflow_i64() {
+    let x: i64 = 9223372036854775807
+    let y: i64 = x + 1
+}
+
+#[test(should_revert)]
+fn signed_sub_overflow_i64() {
+    let x: i64 = -9223372036854775808
+    let y: i64 = x - 1
+}
+
+#[test(should_revert)]
+fn signed_mul_overflow_min_neg1_i64() {
+    let min: i64 = -9223372036854775808
+    let y: i64 = min * -1
+}
+
+#[test(should_revert)]
+fn signed_neg_overflow_i64() {
+    let x: i64 = -9223372036854775808
+    let y: i64 = -x
+}
+
+#[test(should_revert)]
+fn signed_div_by_zero_i64() {
+    let a: i64 = 1
+    let b: i64 = a / 0
+}
+
+#[test(should_revert)]
+fn signed_div_overflow_min_neg1_i64() {
+    let min: i64 = -9223372036854775808
+    let y: i64 = min / -1
+}
+
+#[test(should_revert)]
+fn signed_rem_by_zero_i64() {
+    let a: i64 = 1
+    let b: i64 = a % 0
+}
+
+#[test(should_revert)]
+fn signed_pow_overflow_i64() {
+    let x: i64 = 2
+    let y: i64 = x ** 63
+}
+
+#[test]
+fn signed_happy_path_i64() {
+    let a: i64 = -12
+    let b: i64 = 10
+    let c: i64 = 5
+    let p: i64 = 3
+    assert(a + b == -2)
+    assert(a - b == -22)
+    assert(a * b == -120)
+    assert(a / c == -2)
+    assert(a % c == -2)
+    assert(-a == 12)
+    assert(p ** 4 == 81)
+}
+
+// =====================================================================
+// u128 / i128
+// =====================================================================
+
+#[test(should_revert)]
+fn unsigned_add_overflow_u128() {
+    let x: u128 = 340282366920938463463374607431768211455
+    let y: u128 = x + 1
+}
+
+#[test(should_revert)]
+fn unsigned_sub_underflow_u128() {
+    let a: u128 = 0
+    let b: u128 = 1
+    let c: u128 = a - b
+}
+
+#[test(should_revert)]
+fn unsigned_mul_overflow_u128() {
+    let a: u128 = 18446744073709551616
+    let b: u128 = 18446744073709551616
+    let c: u128 = a * b
+}
+
+#[test(should_revert)]
+fn unsigned_div_by_zero_u128() {
+    let a: u128 = 1
+    let b: u128 = a / 0
+}
+
+#[test(should_revert)]
+fn unsigned_rem_by_zero_u128() {
+    let a: u128 = 1
+    let b: u128 = a % 0
+}
+
+#[test(should_revert)]
+fn unsigned_pow_overflow_u128() {
+    let x: u128 = 2
+    let y: u128 = x ** 128
+}
+
+#[test]
+fn unsigned_happy_path_u128() {
+    let a: u128 = 12
+    let b: u128 = 10
+    let c: u128 = 5
+    let p: u128 = 3
+    assert(a + b == 22)
+    assert(a - b == 2)
+    assert(a * b == 120)
+    assert(a / c == 2)
+    assert(a % c == 2)
+    assert(p ** 4 == 81)
+}
+
+#[test(should_revert)]
+fn signed_add_overflow_i128() {
+    let x: i128 = 170141183460469231731687303715884105727
+    let y: i128 = x + 1
+}
+
+#[test(should_revert)]
+fn signed_sub_overflow_i128() {
+    let x: i128 = -170141183460469231731687303715884105728
+    let y: i128 = x - 1
+}
+
+#[test(should_revert)]
+fn signed_mul_overflow_min_neg1_i128() {
+    let min: i128 = -170141183460469231731687303715884105728
+    let y: i128 = min * -1
+}
+
+#[test(should_revert)]
+fn signed_neg_overflow_i128() {
+    let x: i128 = -170141183460469231731687303715884105728
+    let y: i128 = -x
+}
+
+#[test(should_revert)]
+fn signed_div_by_zero_i128() {
+    let a: i128 = 1
+    let b: i128 = a / 0
+}
+
+#[test(should_revert)]
+fn signed_div_overflow_min_neg1_i128() {
+    let min: i128 = -170141183460469231731687303715884105728
+    let y: i128 = min / -1
+}
+
+#[test(should_revert)]
+fn signed_rem_by_zero_i128() {
+    let a: i128 = 1
+    let b: i128 = a % 0
+}
+
+#[test(should_revert)]
+fn signed_pow_overflow_i128() {
+    let x: i128 = 2
+    let y: i128 = x ** 127
+}
+
+#[test]
+fn signed_happy_path_i128() {
+    let a: i128 = -12
+    let b: i128 = 10
+    let c: i128 = 5
+    let p: i128 = 3
+    assert(a + b == -2)
+    assert(a - b == -22)
+    assert(a * b == -120)
+    assert(a / c == -2)
+    assert(a % c == -2)
+    assert(-a == 12)
+    assert(p ** 4 == 81)
+}
+
+// =====================================================================
+// u256 / i256
+// =====================================================================
+
+#[test(should_revert)]
+fn unsigned_add_overflow_u256() {
+    let x: u256 = 115792089237316195423570985008687907853269984665640564039457584007913129639935
+    let y: u256 = x + 1
+}
+
+#[test(should_revert)]
+fn unsigned_sub_underflow_u256() {
+    let a: u256 = 0
+    let b: u256 = 1
+    let c: u256 = a - b
+}
+
+#[test(should_revert)]
+fn unsigned_mul_overflow_u256() {
+    let a: u256 = 340282366920938463463374607431768211456
+    let b: u256 = 340282366920938463463374607431768211456
+    let c: u256 = a * b
+}
+
+#[test(should_revert)]
+fn unsigned_div_by_zero_u256() {
+    let a: u256 = 1
+    let b: u256 = a / 0
+}
+
+#[test(should_revert)]
+fn unsigned_rem_by_zero_u256() {
+    let a: u256 = 1
+    let b: u256 = a % 0
+}
+
+#[test(should_revert)]
+fn unsigned_pow_overflow_u256() {
+    let x: u256 = 2
+    let y: u256 = x ** 256
+}
+
+#[test]
+fn unsigned_happy_path_u256() {
+    let a: u256 = 12
+    let b: u256 = 10
+    let c: u256 = 5
+    let p: u256 = 3
+    assert(a + b == 22)
+    assert(a - b == 2)
+    assert(a * b == 120)
+    assert(a / c == 2)
+    assert(a % c == 2)
+    assert(p ** 4 == 81)
+}
+
+#[test(should_revert)]
+fn signed_add_overflow_i256() {
+    let x: i256 = 57896044618658097711785492504343953926634992332820282019728792003956564819967
+    let y: i256 = x + 1
+}
+
+#[test(should_revert)]
+fn signed_sub_overflow_i256() {
+    let x: i256 = -57896044618658097711785492504343953926634992332820282019728792003956564819968
+    let y: i256 = x - 1
+}
+
+#[test(should_revert)]
+fn signed_mul_overflow_min_neg1_i256() {
+    let min: i256 = -57896044618658097711785492504343953926634992332820282019728792003956564819968
+    let y: i256 = min * -1
+}
+
+#[test(should_revert)]
+fn signed_neg_overflow_i256() {
+    let x: i256 = -57896044618658097711785492504343953926634992332820282019728792003956564819968
+    let y: i256 = -x
+}
+
+#[test(should_revert)]
+fn signed_div_by_zero_i256() {
+    let a: i256 = 1
+    let b: i256 = a / 0
+}
+
+#[test(should_revert)]
+fn signed_div_overflow_min_neg1_i256() {
+    let min: i256 = -57896044618658097711785492504343953926634992332820282019728792003956564819968
+    let y: i256 = min / -1
+}
+
+#[test(should_revert)]
+fn signed_rem_by_zero_i256() {
+    let a: i256 = 1
+    let b: i256 = a % 0
+}
+
+#[test(should_revert)]
+fn signed_pow_overflow_i256() {
+    let x: i256 = 2
+    let y: i256 = x ** 255
+}
+
+#[test]
+fn signed_happy_path_i256() {
+    let a: i256 = -12
+    let b: i256 = 10
+    let c: i256 = 5
+    let p: i256 = 3
+    assert(a + b == -2)
+    assert(a - b == -22)
+    assert(a * b == -120)
+    assert(a / c == -2)
+    assert(a % c == -2)
+    assert(-a == 12)
+    assert(p ** 4 == 81)
+}

@@ -1,0 +1,100 @@
+use std::evm::effects::assert
+
+// =====================================================================
+// Division and remainder semantics
+// =====================================================================
+
+#[test]
+fn signed_div_i8_neg_by_pos() {
+    let a: i8 = -6
+    let b: i8 = 3
+    assert(a / b == -2)
+}
+
+#[test]
+fn signed_div_i8_pos_by_neg() {
+    let a: i8 = 6
+    let b: i8 = -3
+    assert(a / b == -2)
+}
+
+#[test]
+fn signed_div_i8_neg_by_neg() {
+    let a: i8 = -6
+    let b: i8 = -3
+    assert(a / b == 2)
+}
+
+#[test]
+fn signed_rem_i8_neg_by_pos() {
+    let a: i8 = -7
+    let b: i8 = 3
+    assert(a % b == -1)
+}
+
+#[test]
+fn signed_rem_i8_pos_by_neg() {
+    let a: i8 = 7
+    let b: i8 = -3
+    assert(a % b == 1)
+}
+
+#[test]
+fn signed_rem_i8_neg_by_neg() {
+    let a: i8 = -7
+    let b: i8 = -3
+    assert(a % b == -1)
+}
+
+// =====================================================================
+// Comparisons
+// =====================================================================
+
+#[test]
+fn signed_cmp_i8_uses_signed_order() {
+    let a: i8 = -1
+    let b: i8 = 1
+    assert(a < b)
+    assert((a > b) == false)
+    assert((a <= b) == true)
+    assert((a >= b) == false)
+}
+
+#[test]
+fn signed_cmp_i256_uses_signed_order() {
+    let a: i256 = -1
+    let b: i256 = 1
+    assert(a < b)
+    assert((a > b) == false)
+    assert((a <= b) == true)
+    assert((a >= b) == false)
+}
+
+// =====================================================================
+// Right shift semantics
+// =====================================================================
+
+fn signed_shr_assign_i8(v: mut i8) {
+    v >>= 2
+    assert(v == -4)
+}
+
+#[test]
+fn signed_shr_i8_negative() {
+    let a: i8 = -16
+    let b: i8 = 2
+    assert(a >> b == -4)
+}
+
+#[test]
+fn signed_shr_i8_minus_one() {
+    let a: i8 = -1
+    let b: i8 = 4
+    assert(a >> b == -1)
+}
+
+#[test]
+fn signed_shr_assign_i8_is_arithmetic() {
+    let mut x: i8 = -16
+    signed_shr_assign_i8(mut x)
+}

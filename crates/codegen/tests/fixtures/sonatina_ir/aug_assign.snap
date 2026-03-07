@@ -7,10 +7,60 @@ target = "evm-ethereum-osaka"
 
 func private %aug_assign(v0.i256, v1.i256) -> i256 {
     block0:
-        v3.i256 = add v0 v1;
-        v5.i256 = mul v3 2.i256;
-        v6.i256 = evm_udiv v5 2.i256;
-        return v6;
+        v3.i64 = trunc v0 i64;
+        v4.i64 = trunc v1 i64;
+        v5.i64 = add v3 v4;
+        v6.i256 = zext v3 i256;
+        v7.i256 = zext v4 i256;
+        v8.i256 = zext v5 i256;
+        v9.i1 = lt v8 v6;
+        br v9 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        v11.i64 = trunc v8 i64;
+        v12.i64 = trunc 2.i256 i64;
+        v13.i64 = mul v11 v12;
+        v14.i256 = zext v11 i256;
+        v15.i256 = zext v12 i256;
+        v16.i256 = zext v13 i256;
+        v17.i1 = ne v14 0.i256;
+        v18.i256 = evm_udiv v16 v14;
+        v19.i1 = ne v18 v15;
+        v20.i1 = and v17 v19;
+        br v20 block3 block4;
+
+    block3:
+        evm_revert 0.i256 0.i256;
+
+    block4:
+        v21.i256 = call %u64_haee7f05a097ffa16_div_h14000ca7bc1a1bc4_div v16 2.i256;
+        return v21;
+}
+
+func private %u64_haee7f05a097ffa16_div_h14000ca7bc1a1bc4_div(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = call %u64_haee7f05a097ffa16_eq_he50383edd273619f_eq v1 0.i256;
+        v4.i1 = ne v3 0.i256;
+        br v4 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        v7.i256 = evm_udiv v0 v1;
+        return v7;
+}
+
+func private %u64_haee7f05a097ffa16_eq_he50383edd273619f_eq(v0.i256, v1.i256) -> i256 {
+    block0:
+        v4.i256 = and v0 18446744073709551615.i256;
+        v5.i256 = and v1 18446744073709551615.i256;
+        v6.i1 = eq v4 v5;
+        v7.i256 = zext v6 i256;
+        return v7;
 }
 
 func private %__fe_sonatina_entry() {

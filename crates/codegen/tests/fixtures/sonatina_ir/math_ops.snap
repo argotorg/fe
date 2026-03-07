@@ -10,8 +10,31 @@ func private %math_ops() -> i256 {
         v3.i256 = sub 10.i256 3.i256;
         v5.i256 = mul v3 2.i256;
         v7.i256 = evm_udiv v5 7.i256;
-        v8.i256 = evm_umod v7 3.i256;
+        v8.i256 = call %u64_haee7f05a097ffa16_rem_h890eb23a7e6cfef7_rem v7 3.i256;
         return v8;
+}
+
+func private %u64_haee7f05a097ffa16_rem_h890eb23a7e6cfef7_rem(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = call %u64_haee7f05a097ffa16_eq_he50383edd273619f_eq v1 0.i256;
+        v4.i1 = ne v3 0.i256;
+        br v4 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        v7.i256 = evm_umod v0 v1;
+        return v7;
+}
+
+func private %u64_haee7f05a097ffa16_eq_he50383edd273619f_eq(v0.i256, v1.i256) -> i256 {
+    block0:
+        v4.i256 = and v0 18446744073709551615.i256;
+        v5.i256 = and v1 18446744073709551615.i256;
+        v6.i1 = eq v4 v5;
+        v7.i256 = zext v6 i256;
+        return v7;
 }
 
 func private %__fe_sonatina_entry() {

@@ -7,9 +7,8 @@ target = "evm-ethereum-osaka"
 
 func private %lt_ten(v0.i256) -> i256 {
     block0:
-        v3.i1 = lt v0 10.i256;
-        v4.i256 = zext v3 i256;
-        return v4;
+        v3.i256 = call %u64_haee7f05a097ffa16_ord_h264f6d6d75097a_lt v0 10.i256;
+        return v3;
 }
 
 func private %while_cond_call() -> i256 {
@@ -23,11 +22,38 @@ func private %while_cond_call() -> i256 {
         br v3 block2 block3;
 
     block2:
-        v6.i256 = add v1 1.i256;
+        v6.i256 = call %u64_haee7f05a097ffa16_add_h4cebc227a0cfd3c0_add v1 1.i256;
         jump block1;
 
     block3:
         return v1;
+}
+
+func private %u64_haee7f05a097ffa16_ord_h264f6d6d75097a_lt(v0.i256, v1.i256) -> i256 {
+    block0:
+        v4.i256 = and v0 18446744073709551615.i256;
+        v5.i256 = and v1 18446744073709551615.i256;
+        v6.i1 = lt v4 v5;
+        v7.i256 = zext v6 i256;
+        return v7;
+}
+
+func private %u64_haee7f05a097ffa16_add_h4cebc227a0cfd3c0_add(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i64 = trunc v0 i64;
+        v4.i64 = trunc v1 i64;
+        v5.i64 = add v3 v4;
+        v6.i256 = zext v3 i256;
+        v7.i256 = zext v4 i256;
+        v8.i256 = zext v5 i256;
+        v9.i1 = lt v8 v6;
+        br v9 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        return v8;
 }
 
 func private %__fe_sonatina_entry() {

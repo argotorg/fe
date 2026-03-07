@@ -10,7 +10,8 @@ fn if_let_sum(v0: Option<Point>) -> u64:
     bind v0
     v2: ref u64 = &mem[v0].0[0].0
     v3: ref u64 = &mem[v0].0[0].1
-    v1 = (v2 + v3)
+    v5: u64 = u64_haee7f05a097ffa16_add_h4cebc227a0cfd3c0_add(v2, v3)
+    v1 = v5
     jmp bb4
   bb2:
     v1 = 0
@@ -44,3 +45,8 @@ fn while_let_sum() -> u64:
   bb5:
     v4: u256 = load mem[v0].discr
     switch v4 [0 => bb2] else bb4
+
+fn u64_haee7f05a097ffa16_add_h4cebc227a0cfd3c0_add(v0: u64, v1: u64) -> u64:
+  bb0:
+    v2: u64 = __checked_add__u64__aee7f05a097ffa16(v0, v1)
+    ret v2

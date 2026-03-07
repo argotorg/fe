@@ -45,7 +45,7 @@ func private %match_struct_fields(v0.i256) -> i256 {
         v24.i256 = mload v23 i256;
         v25.i8 = trunc v24 i8;
         v26.i256 = zext v25 i256;
-        v27.i256 = add v26 v21;
+        v27.i256 = call %u8_hbc9d6eeaea22ffb5_add_h4cebc227a0cfd3c0_add v26 v21;
         jump block2;
 
     block6:
@@ -105,6 +105,24 @@ func private %match_struct_wildcard(v0.i256) -> i256 {
         v16.i8 = trunc v15 i8;
         v17.i256 = zext v16 i256;
         br_table v17 block4 (0.i256 block3);
+}
+
+func private %u8_hbc9d6eeaea22ffb5_add_h4cebc227a0cfd3c0_add(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i8 = trunc v0 i8;
+        v4.i8 = trunc v1 i8;
+        v5.i8 = add v3 v4;
+        v6.i256 = zext v3 i256;
+        v7.i256 = zext v4 i256;
+        v8.i256 = zext v5 i256;
+        v9.i1 = lt v8 v6;
+        br v9 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        return v8;
 }
 
 func private %__fe_sonatina_entry() {

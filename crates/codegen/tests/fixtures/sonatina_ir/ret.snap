@@ -14,27 +14,79 @@ func private %retfoo(v0.i256, v1.i256) -> i256 {
         return 0.i256;
 
     block2:
-        v6.i1 = lt v1 5.i256;
-        v7.i256 = zext v6 i256;
-        v8.i1 = ne v7 0.i256;
-        br v8 block3 block4;
+        v6.i256 = call %u64_haee7f05a097ffa16_ord_h264f6d6d75097a_lt v1 5.i256;
+        v7.i1 = ne v6 0.i256;
+        br v7 block3 block4;
 
     block3:
         return 1.i256;
 
     block4:
-        v11.i256 = sub v1 1.i256;
-        v13.i1 = eq v11 42.i256;
-        v14.i256 = zext v13 i256;
-        v15.i1 = ne v14 0.i256;
-        br v15 block5 block6;
+        v10.i256 = call %u64_haee7f05a097ffa16_sub_h7b686d389c07535e_sub v1 1.i256;
+        v12.i256 = call %u64_haee7f05a097ffa16_eq_he50383edd273619f_eq v10 42.i256;
+        v13.i1 = ne v12 0.i256;
+        br v13 block5 block6;
 
     block5:
         return 2.i256;
 
     block6:
-        v18.i256 = add v11 1.i256;
-        return v18;
+        v16.i256 = call %u64_haee7f05a097ffa16_add_h4cebc227a0cfd3c0_add v10 1.i256;
+        return v16;
+}
+
+func private %u64_haee7f05a097ffa16_ord_h264f6d6d75097a_lt(v0.i256, v1.i256) -> i256 {
+    block0:
+        v4.i256 = and v0 18446744073709551615.i256;
+        v5.i256 = and v1 18446744073709551615.i256;
+        v6.i1 = lt v4 v5;
+        v7.i256 = zext v6 i256;
+        return v7;
+}
+
+func private %u64_haee7f05a097ffa16_sub_h7b686d389c07535e_sub(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i64 = trunc v0 i64;
+        v4.i64 = trunc v1 i64;
+        v5.i64 = sub v3 v4;
+        v6.i256 = zext v3 i256;
+        v7.i256 = zext v4 i256;
+        v8.i256 = zext v5 i256;
+        v9.i1 = gt v7 v6;
+        br v9 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        return v8;
+}
+
+func private %u64_haee7f05a097ffa16_eq_he50383edd273619f_eq(v0.i256, v1.i256) -> i256 {
+    block0:
+        v4.i256 = and v0 18446744073709551615.i256;
+        v5.i256 = and v1 18446744073709551615.i256;
+        v6.i1 = eq v4 v5;
+        v7.i256 = zext v6 i256;
+        return v7;
+}
+
+func private %u64_haee7f05a097ffa16_add_h4cebc227a0cfd3c0_add(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i64 = trunc v0 i64;
+        v4.i64 = trunc v1 i64;
+        v5.i64 = add v3 v4;
+        v6.i256 = zext v3 i256;
+        v7.i256 = zext v4 i256;
+        v8.i256 = zext v5 i256;
+        v9.i1 = lt v8 v6;
+        br v9 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        return v8;
 }
 
 func private %__fe_sonatina_entry() {

@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/for_range.fe
 ---
@@ -28,7 +27,7 @@ func private %for_range_sum() -> i256 {
 
     block2:
         v17.i256 = call %range_unknown__unknown__h1dfb0ca64ed7bf96_seq_ha637d2df505bccf2_get v4 v10;
-        v19.i256 = add v27 v17;
+        v19.i256 = call %usize_ha12462c6d36e68b0_add_h4cebc227a0cfd3c0_add v27 v17;
         jump block3;
 
     block3:
@@ -46,34 +45,66 @@ func private %range_unknown__unknown__h1dfb0ca64ed7bf96_seq_ha637d2df505bccf2_le
         v5.i256 = mload v4 i256;
         v6.*i256 = int_to_ptr v0 *i256;
         v7.i256 = mload v6 i256;
-        v8.i1 = lt v5 v7;
-        v9.i256 = zext v8 i256;
-        v10.i1 = ne v9 0.i256;
-        br v10 block1 block2;
+        v8.i256 = call %usize_ha12462c6d36e68b0_ord_h264f6d6d75097a_lt v5 v7;
+        v9.i1 = ne v8 0.i256;
+        br v9 block1 block2;
 
     block1:
         jump block3;
 
     block2:
-        v12.i256 = add v0 32.i256;
-        v13.*i256 = int_to_ptr v12 *i256;
-        v14.i256 = mload v13 i256;
-        v15.*i256 = int_to_ptr v0 *i256;
-        v16.i256 = mload v15 i256;
-        v17.i256 = sub v14 v16;
+        v11.i256 = add v0 32.i256;
+        v12.*i256 = int_to_ptr v11 *i256;
+        v13.i256 = mload v12 i256;
+        v14.*i256 = int_to_ptr v0 *i256;
+        v15.i256 = mload v14 i256;
+        v16.i256 = call %usize_ha12462c6d36e68b0_sub_h7b686d389c07535e_sub v13 v15;
         jump block3;
 
     block3:
-        v18.i256 = phi (0.i256 block1) (v17 block2);
-        return v18;
+        v17.i256 = phi (0.i256 block1) (v16 block2);
+        return v17;
 }
 
 func private %range_unknown__unknown__h1dfb0ca64ed7bf96_seq_ha637d2df505bccf2_get(v0.i256, v1.i256) -> i256 {
     block0:
         v3.*i256 = int_to_ptr v0 *i256;
         v4.i256 = mload v3 i256;
-        v5.i256 = add v4 v1;
+        v5.i256 = call %usize_ha12462c6d36e68b0_add_h4cebc227a0cfd3c0_add v4 v1;
         return v5;
+}
+
+func private %usize_ha12462c6d36e68b0_add_h4cebc227a0cfd3c0_add(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = add v0 v1;
+        v4.i1 = lt v3 v0;
+        br v4 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        return v3;
+}
+
+func private %usize_ha12462c6d36e68b0_ord_h264f6d6d75097a_lt(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i1 = lt v0 v1;
+        v4.i256 = zext v3 i256;
+        return v4;
+}
+
+func private %usize_ha12462c6d36e68b0_sub_h7b686d389c07535e_sub(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = sub v0 v1;
+        v4.i1 = gt v1 v0;
+        br v4 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        return v3;
 }
 
 func private %__fe_sonatina_entry() {

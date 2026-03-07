@@ -7,7 +7,10 @@ use hir::analysis::ty::adt_def::AdtRef;
 use hir::analysis::ty::ty_def::{PrimTy, TyBase, TyData};
 use hir::hir_def::expr::{ArithBinOp, BinOp, CompBinOp, LogicalBinOp, UnOp};
 use hir::projection::{IndexSource, Projection};
-use mir::ir::{AddressSpaceKind, IntrinsicOp, Place, SyntheticValue};
+use mir::ir::{
+    AddressSpaceKind, BuiltinTerminatorKind, CheckedArithmeticOp, CheckedIntrinsic, IntrinsicOp,
+    Place, SyntheticValue,
+};
 use mir::layout;
 use mir::layout::TargetDataLayout;
 use num_bigint::BigUint;
@@ -17,9 +20,9 @@ use sonatina_ir::{
     BlockId, GlobalVariableData, I256, Immediate, Linkage, Type, Value, ValueId,
     global_variable::GvInitializer,
     inst::{
-        arith::{Add, Mul, Neg, Shl, Shr, Sub},
+        arith::{Add, Mul, Neg, Sar, Shl, Shr, Sub},
         cast::{Bitcast, IntToPtr, PtrToInt, Sext, Trunc, Zext},
-        cmp::{Eq, Gt, IsZero, Lt, Ne},
+        cmp::{Eq, Gt, IsZero, Lt, Ne, Slt},
         control_flow::{Br, BrTable, Call, Jump, Return},
         data::{Alloca, Gep, Mload, Mstore, SymAddr, SymSize, SymbolRef},
         evm::{
@@ -28,9 +31,9 @@ use sonatina_ir::{
             EvmCodeSize, EvmCoinBase, EvmCreate, EvmCreate2, EvmDelegateCall, EvmExp, EvmGas,
             EvmGasLimit, EvmInvalid, EvmKeccak256, EvmLog0, EvmLog1, EvmLog2, EvmLog3, EvmLog4,
             EvmMalloc, EvmMsize, EvmMstore8, EvmMulMod, EvmNumber, EvmOrigin, EvmPrevRandao,
-            EvmReturn, EvmReturnDataCopy, EvmReturnDataSize, EvmRevert, EvmSelfBalance,
-            EvmSelfDestruct, EvmSload, EvmSstore, EvmStaticCall, EvmStop, EvmTimestamp, EvmTload,
-            EvmTstore, EvmUdiv, EvmUmod,
+            EvmReturn, EvmReturnDataCopy, EvmReturnDataSize, EvmRevert, EvmSdiv, EvmSelfBalance,
+            EvmSelfDestruct, EvmSload, EvmSmod, EvmSstore, EvmStaticCall, EvmStop, EvmTimestamp,
+            EvmTload, EvmTstore, EvmUdiv, EvmUmod,
         },
         logic::{And, Not, Or, Xor},
     },
@@ -143,6 +146,16 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             Ok(Some(val))
         }
         Rvalue::Call(call) => {
+            if let Some(checked) = call.checked_intrinsic {
+                if !call.effect_args.is_empty() {
+                    return Err(LowerError::Internal(format!(
+                        "checked intrinsic call unexpectedly has effect args: {checked:?}"
+                    )));
+                }
+                let result = lower_checked_intrinsic(ctx, checked, &call.args)?;
+                return Ok(Some(result));
+            }
+
             // Get the callee function reference
             let callee_name = call.resolved_name.as_ref().ok_or_else(|| {
                 LowerError::Unsupported("call without resolved symbol name".to_string())
@@ -481,6 +494,15 @@ fn lower_rvalue<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 }
             }
 
+            // Core numeric intrinsics (extern functions from `core::num`).
+            // All integer types are represented as I256 on the EVM, so the same
+            // Sonatina instructions apply regardless of the Fe type suffix.
+            if call.effect_args.is_empty()
+                && let Some(result) = try_lower_numeric_intrinsic(ctx, callee_name, &call.args)?
+            {
+                return Ok(Some(result));
+            }
+
             let func_ref = ctx
                 .name_map
                 .get(callee_name)
@@ -676,7 +698,8 @@ fn lower_value_origin<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             let var = ctx.local_vars.get(local_id).copied().ok_or_else(|| {
                 LowerError::Internal(format!("SSA variable not found for local {local_id:?}"))
             })?;
-            Ok(ctx.fb.use_var(var))
+            let val = ctx.fb.use_var(var);
+            Ok(val)
         }
         ValueOrigin::Unit => {
             // Unit is represented as 0
@@ -1864,9 +1887,22 @@ pub(super) fn lower_terminator<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                     }
                 }
 
-                let func_ref = ctx.name_map.get(callee_name).ok_or_else(|| {
-                    LowerError::Internal(format!("unknown function: {callee_name}"))
-                })?;
+                if let Some(builtin) = call.builtin_terminator {
+                    match builtin {
+                        BuiltinTerminatorKind::Abort => {
+                            let zero = ctx.fb.make_imm_value(I256::zero());
+                            ctx.fb
+                                .insert_inst_no_result(EvmRevert::new(ctx.is, zero, zero));
+                            return Ok(());
+                        }
+                    }
+                }
+
+                let Some(func_ref) = ctx.name_map.get(callee_name) else {
+                    return Err(LowerError::Internal(format!(
+                        "missing sonatina callee for terminating call: {callee_name}"
+                    )));
+                };
 
                 let args = lower_call_args(
                     ctx,
@@ -2340,4 +2376,632 @@ fn bitcast_ptr<'db, C: sonatina_ir::func_cursor::FuncCursor>(
     }
     ctx.fb
         .insert_inst(Bitcast::new(ctx.is, ptr, ptr_ty), ptr_ty)
+}
+
+/// Returns `true` if the callee name suffix indicates a signed type.
+fn is_signed_type(callee_name: &str) -> bool {
+    callee_name.ends_with("_i8")
+        || callee_name.ends_with("_i16")
+        || callee_name.ends_with("_i32")
+        || callee_name.ends_with("_i64")
+        || callee_name.ends_with("_i128")
+        || callee_name.ends_with("_i256")
+        || callee_name.ends_with("_isize")
+}
+
+/// Emit a conditional branch to a revert block if `overflow_flag` (I1) is true.
+/// Returns the continue block that execution falls through to on no overflow.
+fn emit_overflow_revert<C: sonatina_ir::func_cursor::FuncCursor>(
+    fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
+    is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
+    overflow_flag: ValueId,
+) -> BlockId {
+    let revert_block = fb.append_block();
+    let continue_block = fb.append_block();
+    fb.insert_inst_no_result(Br::new(is, overflow_flag, revert_block, continue_block));
+    fb.switch_to_block(revert_block);
+    let zero = fb.make_imm_value(I256::zero());
+    fb.insert_inst_no_result(EvmRevert::new(is, zero, zero));
+    fb.switch_to_block(continue_block);
+    continue_block
+}
+
+fn checked_intrinsic_prim<'db>(
+    db: &'db DriverDataBase,
+    ty: hir::analysis::ty::ty_def::TyId<'db>,
+) -> Result<PrimTy, LowerError> {
+    let base_ty = ty.base_ty(db);
+    let TyData::TyBase(TyBase::Prim(prim)) = base_ty.data(db) else {
+        return Err(LowerError::Internal(format!(
+            "checked intrinsic type must be a primitive integer, got `{}`",
+            ty.pretty_print(db)
+        )));
+    };
+    if !prim.is_integral() {
+        return Err(LowerError::Internal(format!(
+            "checked intrinsic type must be integral, got `{}`",
+            ty.pretty_print(db)
+        )));
+    }
+    Ok(*prim)
+}
+
+fn checked_intrinsic_value_type(prim: PrimTy) -> Result<Type, LowerError> {
+    match prim {
+        PrimTy::U8 | PrimTy::I8 => Ok(Type::I8),
+        PrimTy::U16 | PrimTy::I16 => Ok(Type::I16),
+        PrimTy::U32 | PrimTy::I32 => Ok(Type::I32),
+        PrimTy::U64 | PrimTy::I64 => Ok(Type::I64),
+        PrimTy::U128 | PrimTy::I128 => Ok(Type::I128),
+        PrimTy::U256 | PrimTy::I256 | PrimTy::Usize | PrimTy::Isize => Ok(Type::I256),
+        _ => Err(LowerError::Internal(format!(
+            "checked intrinsic type must be integral, got `{prim:?}`"
+        ))),
+    }
+}
+
+fn lower_checked_operand<C: sonatina_ir::func_cursor::FuncCursor>(
+    fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
+    is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
+    value: ValueId,
+    op_ty: Type,
+) -> ValueId {
+    if op_ty == Type::I256 {
+        value
+    } else {
+        fb.insert_inst(Trunc::new(is, value, op_ty), op_ty)
+    }
+}
+
+fn extend_checked_result<C: sonatina_ir::func_cursor::FuncCursor>(
+    fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
+    is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
+    value: ValueId,
+    prim: PrimTy,
+    op_ty: Type,
+) -> ValueId {
+    if op_ty == Type::I256 {
+        value
+    } else if prim_is_signed(prim) {
+        fb.insert_inst(Sext::new(is, value, Type::I256), Type::I256)
+    } else {
+        fb.insert_inst(Zext::new(is, value, Type::I256), Type::I256)
+    }
+}
+
+fn i256_min_immediate<C: sonatina_ir::func_cursor::FuncCursor>(
+    fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
+) -> ValueId {
+    let mut bytes = [0u8; 32];
+    bytes[0] = 0x80;
+    fb.make_imm_value(I256::from_be_bytes(&bytes))
+}
+
+fn i256_neg_one_immediate<C: sonatina_ir::func_cursor::FuncCursor>(
+    fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
+) -> ValueId {
+    fb.make_imm_value(I256::all_one())
+}
+
+fn lower_checked_intrinsic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, 'db, C>,
+    checked: CheckedIntrinsic<'db>,
+    args: &[mir::ir::ValueId],
+) -> Result<ValueId, LowerError> {
+    let prim = checked_intrinsic_prim(ctx.db, checked.ty)?;
+    let op_ty = checked_intrinsic_value_type(prim)?;
+    let signed = prim_is_signed(prim);
+
+    match checked.op {
+        CheckedArithmeticOp::Add => {
+            let [a, b] = args else {
+                return Err(LowerError::Internal(format!(
+                    "checked add expects 2 arguments, got {}",
+                    args.len()
+                )));
+            };
+            let lhs_word = lower_value(ctx, *a)?;
+            let rhs_word = lower_value(ctx, *b)?;
+            let lhs = lower_checked_operand(ctx.fb, ctx.is, lhs_word, op_ty);
+            let rhs = lower_checked_operand(ctx.fb, ctx.is, rhs_word, op_ty);
+            let raw = ctx.fb.insert_inst(Add::new(ctx.is, lhs, rhs), op_ty);
+            let lhs_ext = extend_checked_result(ctx.fb, ctx.is, lhs, prim, op_ty);
+            let rhs_ext = extend_checked_result(ctx.fb, ctx.is, rhs, prim, op_ty);
+            let result = extend_checked_result(ctx.fb, ctx.is, raw, prim, op_ty);
+            let overflow = if signed {
+                let zero = ctx.fb.make_imm_value(I256::zero());
+                let a_neg = ctx
+                    .fb
+                    .insert_inst(Slt::new(ctx.is, lhs_ext, zero), Type::I1);
+                let b_neg = ctx
+                    .fb
+                    .insert_inst(Slt::new(ctx.is, rhs_ext, zero), Type::I1);
+                let r_neg = ctx.fb.insert_inst(Slt::new(ctx.is, result, zero), Type::I1);
+                let signs_same = ctx.fb.insert_inst(Eq::new(ctx.is, a_neg, b_neg), Type::I1);
+                let sign_changed_eq = ctx.fb.insert_inst(Eq::new(ctx.is, a_neg, r_neg), Type::I1);
+                let sign_changed = ctx
+                    .fb
+                    .insert_inst(IsZero::new(ctx.is, sign_changed_eq), Type::I1);
+                ctx.fb
+                    .insert_inst(And::new(ctx.is, signs_same, sign_changed), Type::I1)
+            } else {
+                ctx.fb
+                    .insert_inst(Lt::new(ctx.is, result, lhs_ext), Type::I1)
+            };
+            emit_overflow_revert(ctx.fb, ctx.is, overflow);
+            Ok(result)
+        }
+        CheckedArithmeticOp::Sub => {
+            let [a, b] = args else {
+                return Err(LowerError::Internal(format!(
+                    "checked sub expects 2 arguments, got {}",
+                    args.len()
+                )));
+            };
+            let lhs_word = lower_value(ctx, *a)?;
+            let rhs_word = lower_value(ctx, *b)?;
+            let lhs = lower_checked_operand(ctx.fb, ctx.is, lhs_word, op_ty);
+            let rhs = lower_checked_operand(ctx.fb, ctx.is, rhs_word, op_ty);
+            let raw = ctx.fb.insert_inst(Sub::new(ctx.is, lhs, rhs), op_ty);
+            let lhs_ext = extend_checked_result(ctx.fb, ctx.is, lhs, prim, op_ty);
+            let rhs_ext = extend_checked_result(ctx.fb, ctx.is, rhs, prim, op_ty);
+            let result = extend_checked_result(ctx.fb, ctx.is, raw, prim, op_ty);
+            let overflow = if signed {
+                let zero = ctx.fb.make_imm_value(I256::zero());
+                let a_neg = ctx
+                    .fb
+                    .insert_inst(Slt::new(ctx.is, lhs_ext, zero), Type::I1);
+                let b_neg = ctx
+                    .fb
+                    .insert_inst(Slt::new(ctx.is, rhs_ext, zero), Type::I1);
+                let r_neg = ctx.fb.insert_inst(Slt::new(ctx.is, result, zero), Type::I1);
+                let signs_diff_eq = ctx.fb.insert_inst(Eq::new(ctx.is, a_neg, b_neg), Type::I1);
+                let signs_diff = ctx
+                    .fb
+                    .insert_inst(IsZero::new(ctx.is, signs_diff_eq), Type::I1);
+                let sign_changed_eq = ctx.fb.insert_inst(Eq::new(ctx.is, a_neg, r_neg), Type::I1);
+                let sign_changed = ctx
+                    .fb
+                    .insert_inst(IsZero::new(ctx.is, sign_changed_eq), Type::I1);
+                ctx.fb
+                    .insert_inst(And::new(ctx.is, signs_diff, sign_changed), Type::I1)
+            } else {
+                ctx.fb
+                    .insert_inst(Gt::new(ctx.is, rhs_ext, lhs_ext), Type::I1)
+            };
+            emit_overflow_revert(ctx.fb, ctx.is, overflow);
+            Ok(result)
+        }
+        CheckedArithmeticOp::Mul => {
+            let [a, b] = args else {
+                return Err(LowerError::Internal(format!(
+                    "checked mul expects 2 arguments, got {}",
+                    args.len()
+                )));
+            };
+            let lhs_word = lower_value(ctx, *a)?;
+            let rhs_word = lower_value(ctx, *b)?;
+            let lhs = lower_checked_operand(ctx.fb, ctx.is, lhs_word, op_ty);
+            let rhs = lower_checked_operand(ctx.fb, ctx.is, rhs_word, op_ty);
+            let raw = ctx.fb.insert_inst(Mul::new(ctx.is, lhs, rhs), op_ty);
+            let lhs_ext = extend_checked_result(ctx.fb, ctx.is, lhs, prim, op_ty);
+            let rhs_ext = extend_checked_result(ctx.fb, ctx.is, rhs, prim, op_ty);
+            let result = extend_checked_result(ctx.fb, ctx.is, raw, prim, op_ty);
+            let overflow = if signed {
+                let zero = ctx.fb.make_imm_value(I256::zero());
+                let a_nz = ctx.fb.insert_inst(Ne::new(ctx.is, lhs_ext, zero), Type::I1);
+                let quot = ctx
+                    .fb
+                    .insert_inst(EvmSdiv::new(ctx.is, result, lhs_ext), Type::I256);
+                let quot_ne_b = ctx.fb.insert_inst(Ne::new(ctx.is, quot, rhs_ext), Type::I1);
+                let div_mismatch = ctx
+                    .fb
+                    .insert_inst(And::new(ctx.is, a_nz, quot_ne_b), Type::I1);
+                if op_ty == Type::I256 {
+                    let min = i256_min_immediate(ctx.fb);
+                    let neg_one = i256_neg_one_immediate(ctx.fb);
+                    let lhs_is_neg_one = ctx
+                        .fb
+                        .insert_inst(Eq::new(ctx.is, lhs_ext, neg_one), Type::I1);
+                    let rhs_is_neg_one = ctx
+                        .fb
+                        .insert_inst(Eq::new(ctx.is, rhs_ext, neg_one), Type::I1);
+                    let lhs_is_min = ctx.fb.insert_inst(Eq::new(ctx.is, lhs_ext, min), Type::I1);
+                    let rhs_is_min = ctx.fb.insert_inst(Eq::new(ctx.is, rhs_ext, min), Type::I1);
+                    let lhs_neg_one_rhs_min = ctx
+                        .fb
+                        .insert_inst(And::new(ctx.is, lhs_is_neg_one, rhs_is_min), Type::I1);
+                    let rhs_neg_one_lhs_min = ctx
+                        .fb
+                        .insert_inst(And::new(ctx.is, rhs_is_neg_one, lhs_is_min), Type::I1);
+                    let min_times_neg_one = ctx.fb.insert_inst(
+                        Or::new(ctx.is, lhs_neg_one_rhs_min, rhs_neg_one_lhs_min),
+                        Type::I1,
+                    );
+                    ctx.fb
+                        .insert_inst(Or::new(ctx.is, div_mismatch, min_times_neg_one), Type::I1)
+                } else {
+                    div_mismatch
+                }
+            } else {
+                let zero = ctx.fb.make_imm_value(I256::zero());
+                let a_nz = ctx.fb.insert_inst(Ne::new(ctx.is, lhs_ext, zero), Type::I1);
+                let quot = ctx
+                    .fb
+                    .insert_inst(EvmUdiv::new(ctx.is, result, lhs_ext), Type::I256);
+                let quot_ne_b = ctx.fb.insert_inst(Ne::new(ctx.is, quot, rhs_ext), Type::I1);
+                ctx.fb
+                    .insert_inst(And::new(ctx.is, a_nz, quot_ne_b), Type::I1)
+            };
+            emit_overflow_revert(ctx.fb, ctx.is, overflow);
+            Ok(result)
+        }
+        CheckedArithmeticOp::Neg => {
+            let [arg] = args else {
+                return Err(LowerError::Internal(format!(
+                    "checked neg expects 1 argument, got {}",
+                    args.len()
+                )));
+            };
+            if !signed {
+                return Err(LowerError::Internal(format!(
+                    "checked neg is not defined for unsigned type `{}`",
+                    checked.ty.pretty_print(ctx.db)
+                )));
+            }
+            let val_word = lower_value(ctx, *arg)?;
+            let val = lower_checked_operand(ctx.fb, ctx.is, val_word, op_ty);
+            let zero = ctx.fb.make_imm_value(I256::zero());
+            let zero_narrow = if op_ty == Type::I256 {
+                zero
+            } else {
+                ctx.fb.insert_inst(Trunc::new(ctx.is, zero, op_ty), op_ty)
+            };
+            let raw = ctx
+                .fb
+                .insert_inst(Sub::new(ctx.is, zero_narrow, val), op_ty);
+            let result = extend_checked_result(ctx.fb, ctx.is, raw, prim, op_ty);
+            let val_ext = extend_checked_result(ctx.fb, ctx.is, val, prim, op_ty);
+            let x_nz = ctx.fb.insert_inst(Ne::new(ctx.is, val_ext, zero), Type::I1);
+            let r_eq_x = ctx
+                .fb
+                .insert_inst(Eq::new(ctx.is, result, val_ext), Type::I1);
+            let overflow = ctx.fb.insert_inst(And::new(ctx.is, x_nz, r_eq_x), Type::I1);
+            emit_overflow_revert(ctx.fb, ctx.is, overflow);
+            Ok(result)
+        }
+    }
+}
+
+/// Valid type suffixes for core numeric intrinsics.
+const INTRINSIC_TYPE_SUFFIXES: &[&str] = &[
+    "_u8", "_u16", "_u32", "_u64", "_u128", "_u256", "_usize", "_i8", "_i16", "_i32", "_i64",
+    "_i128", "_i256", "_isize", "_bool",
+];
+
+/// Describes how to mask a sub-256-bit arithmetic result.
+enum SubWordMask {
+    /// Unsigned: apply `and(result, mask)`
+    Unsigned { mask: I256 },
+    /// Signed: truncate to `narrow_ty` then sign-extend back to I256
+    Signed { narrow_ty: Type },
+}
+
+/// Returns the masking info for a sub-256-bit intrinsic, or `None` for 256-bit
+/// types that don't need masking.
+fn sub_word_mask(callee_name: &str) -> Option<SubWordMask> {
+    if callee_name.ends_with("_u8") {
+        Some(SubWordMask::Unsigned {
+            mask: I256::from(0xffu64),
+        })
+    } else if callee_name.ends_with("_u16") {
+        Some(SubWordMask::Unsigned {
+            mask: I256::from(0xffffu64),
+        })
+    } else if callee_name.ends_with("_u32") {
+        Some(SubWordMask::Unsigned {
+            mask: I256::from(0xffff_ffffu64),
+        })
+    } else if callee_name.ends_with("_u64") {
+        Some(SubWordMask::Unsigned {
+            mask: I256::from(0xffff_ffff_ffff_ffffu64),
+        })
+    } else if callee_name.ends_with("_u128") {
+        let mut bytes = [0u8; 32];
+        for b in &mut bytes[16..32] {
+            *b = 0xff;
+        }
+        Some(SubWordMask::Unsigned {
+            mask: I256::from_be_bytes(&bytes),
+        })
+    } else if callee_name.ends_with("_i8") {
+        Some(SubWordMask::Signed {
+            narrow_ty: Type::I8,
+        })
+    } else if callee_name.ends_with("_i16") {
+        Some(SubWordMask::Signed {
+            narrow_ty: Type::I16,
+        })
+    } else if callee_name.ends_with("_i32") {
+        Some(SubWordMask::Signed {
+            narrow_ty: Type::I32,
+        })
+    } else if callee_name.ends_with("_i64") {
+        Some(SubWordMask::Signed {
+            narrow_ty: Type::I64,
+        })
+    } else if callee_name.ends_with("_i128") {
+        Some(SubWordMask::Signed {
+            narrow_ty: Type::I128,
+        })
+    } else {
+        None // u256, i256, usize, bool - no masking needed
+    }
+}
+
+/// Apply sub-256-bit masking to an arithmetic result.
+fn apply_sub_word_mask<C: sonatina_ir::func_cursor::FuncCursor>(
+    fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
+    is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
+    result: ValueId,
+    mask_info: &SubWordMask,
+) -> ValueId {
+    match mask_info {
+        SubWordMask::Unsigned { mask } => {
+            let mask_val = fb.make_imm_value(*mask);
+            fb.insert_inst(And::new(is, result, mask_val), Type::I256)
+        }
+        SubWordMask::Signed { narrow_ty, .. } => {
+            let truncated = fb.insert_inst(Trunc::new(is, result, *narrow_ty), *narrow_ty);
+            fb.insert_inst(Sext::new(is, truncated, Type::I256), Type::I256)
+        }
+    }
+}
+
+/// Try to lower a `__<op>_<type>` core numeric intrinsic to native Sonatina
+/// instructions. Returns `Ok(Some(value))` if the intrinsic was handled,
+/// `Ok(None)` if the callee name is not a recognized intrinsic.
+fn try_lower_numeric_intrinsic<C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, '_, C>,
+    callee_name: &str,
+    args: &[mir::ir::ValueId],
+) -> Result<Option<ValueId>, LowerError> {
+    if !callee_name.starts_with("__") {
+        return Ok(None);
+    }
+
+    // Strip the type suffix to get the operation name.
+    let op = INTRINSIC_TYPE_SUFFIXES
+        .iter()
+        .find_map(|suffix| callee_name.strip_suffix(suffix))
+        .and_then(|s| s.strip_prefix("__"));
+
+    let Some(op) = op else {
+        return Ok(None);
+    };
+
+    if op.starts_with("checked_") {
+        return Err(LowerError::Internal(format!(
+            "checked arithmetic intrinsic `{callee_name}` must be lowered via typed checked metadata"
+        )));
+    }
+
+    // Precompute sub-word masking info (shared by comparisons and arithmetic).
+    let mask_info = sub_word_mask(callee_name);
+
+    match op {
+        // --- Binary comparison ops (normalize operands for sub-word types) ---
+        "lt" | "gt" | "eq" | "ne" | "le" | "ge" => {
+            let (mut lhs, mut rhs) = lower_binary_args(ctx, callee_name, args)?;
+            // Normalize operands so comparisons work regardless of upper-bit state.
+            if let Some(ref mi) = mask_info {
+                lhs = apply_sub_word_mask(ctx.fb, ctx.is, lhs, mi);
+                rhs = apply_sub_word_mask(ctx.fb, ctx.is, rhs, mi);
+            }
+            let signed = is_signed_type(callee_name);
+            let cmp = match op {
+                "lt" => {
+                    if signed {
+                        ctx.fb.insert_inst(Slt::new(ctx.is, lhs, rhs), Type::I1)
+                    } else {
+                        ctx.fb.insert_inst(Lt::new(ctx.is, lhs, rhs), Type::I1)
+                    }
+                }
+                "gt" => {
+                    if signed {
+                        ctx.fb.insert_inst(Slt::new(ctx.is, rhs, lhs), Type::I1)
+                    } else {
+                        ctx.fb.insert_inst(Gt::new(ctx.is, lhs, rhs), Type::I1)
+                    }
+                }
+                "eq" => ctx.fb.insert_inst(Eq::new(ctx.is, lhs, rhs), Type::I1),
+                "ne" => {
+                    let eq = ctx.fb.insert_inst(Eq::new(ctx.is, lhs, rhs), Type::I1);
+                    ctx.fb.insert_inst(IsZero::new(ctx.is, eq), Type::I1)
+                }
+                "le" => {
+                    let gt = if signed {
+                        ctx.fb.insert_inst(Slt::new(ctx.is, rhs, lhs), Type::I1)
+                    } else {
+                        ctx.fb.insert_inst(Gt::new(ctx.is, lhs, rhs), Type::I1)
+                    };
+                    ctx.fb.insert_inst(IsZero::new(ctx.is, gt), Type::I1)
+                }
+                "ge" => {
+                    let lt = if signed {
+                        ctx.fb.insert_inst(Slt::new(ctx.is, lhs, rhs), Type::I1)
+                    } else {
+                        ctx.fb.insert_inst(Lt::new(ctx.is, lhs, rhs), Type::I1)
+                    };
+                    ctx.fb.insert_inst(IsZero::new(ctx.is, lt), Type::I1)
+                }
+                _ => unreachable!(),
+            };
+            Ok(Some(ctx.fb.insert_inst(
+                Zext::new(ctx.is, cmp, Type::I256),
+                Type::I256,
+            )))
+        }
+
+        // --- Binary arithmetic ops (may need sub-word masking) ---
+        "add" | "sub" | "mul" | "pow" | "shl" => {
+            let (lhs, rhs) = lower_binary_args(ctx, callee_name, args)?;
+            let raw = match op {
+                "add" => ctx.fb.insert_inst(Add::new(ctx.is, lhs, rhs), Type::I256),
+                "sub" => ctx.fb.insert_inst(Sub::new(ctx.is, lhs, rhs), Type::I256),
+                "mul" => ctx.fb.insert_inst(Mul::new(ctx.is, lhs, rhs), Type::I256),
+                "pow" => ctx
+                    .fb
+                    .insert_inst(EvmExp::new(ctx.is, lhs, rhs), Type::I256),
+                "shl" => ctx.fb.insert_inst(Shl::new(ctx.is, rhs, lhs), Type::I256),
+                _ => unreachable!(),
+            };
+            let result = if let Some(ref mi) = mask_info {
+                apply_sub_word_mask(ctx.fb, ctx.is, raw, mi)
+            } else {
+                raw
+            };
+            Ok(Some(result))
+        }
+        // div/rem/shr: signed types need sign-extended operands + signed instructions.
+        "div" => {
+            let (mut lhs, mut rhs) = lower_binary_args(ctx, callee_name, args)?;
+            if is_signed_type(callee_name) {
+                if let Some(ref mi) = mask_info {
+                    lhs = apply_sub_word_mask(ctx.fb, ctx.is, lhs, mi);
+                    rhs = apply_sub_word_mask(ctx.fb, ctx.is, rhs, mi);
+                }
+                Ok(Some(
+                    ctx.fb
+                        .insert_inst(EvmSdiv::new(ctx.is, lhs, rhs), Type::I256),
+                ))
+            } else {
+                Ok(Some(
+                    ctx.fb
+                        .insert_inst(EvmUdiv::new(ctx.is, lhs, rhs), Type::I256),
+                ))
+            }
+        }
+        "rem" => {
+            let (mut lhs, mut rhs) = lower_binary_args(ctx, callee_name, args)?;
+            if is_signed_type(callee_name) {
+                if let Some(ref mi) = mask_info {
+                    lhs = apply_sub_word_mask(ctx.fb, ctx.is, lhs, mi);
+                    rhs = apply_sub_word_mask(ctx.fb, ctx.is, rhs, mi);
+                }
+                Ok(Some(
+                    ctx.fb
+                        .insert_inst(EvmSmod::new(ctx.is, lhs, rhs), Type::I256),
+                ))
+            } else {
+                Ok(Some(
+                    ctx.fb
+                        .insert_inst(EvmUmod::new(ctx.is, lhs, rhs), Type::I256),
+                ))
+            }
+        }
+        "shr" => {
+            let (lhs, rhs) = lower_binary_args(ctx, callee_name, args)?;
+            if is_signed_type(callee_name) {
+                let val = if let Some(ref mi) = mask_info {
+                    apply_sub_word_mask(ctx.fb, ctx.is, lhs, mi)
+                } else {
+                    lhs
+                };
+                Ok(Some(
+                    ctx.fb.insert_inst(Sar::new(ctx.is, rhs, val), Type::I256),
+                ))
+            } else {
+                Ok(Some(
+                    ctx.fb.insert_inst(Shr::new(ctx.is, rhs, lhs), Type::I256),
+                ))
+            }
+        }
+
+        // --- Bitwise binary ops (don't need masking) ---
+        "bitand" => {
+            let (lhs, rhs) = lower_binary_args(ctx, callee_name, args)?;
+            Ok(Some(
+                ctx.fb.insert_inst(And::new(ctx.is, lhs, rhs), Type::I256),
+            ))
+        }
+        "bitor" => {
+            let (lhs, rhs) = lower_binary_args(ctx, callee_name, args)?;
+            Ok(Some(
+                ctx.fb.insert_inst(Or::new(ctx.is, lhs, rhs), Type::I256),
+            ))
+        }
+        "bitxor" => {
+            let (lhs, rhs) = lower_binary_args(ctx, callee_name, args)?;
+            Ok(Some(
+                ctx.fb.insert_inst(Xor::new(ctx.is, lhs, rhs), Type::I256),
+            ))
+        }
+
+        // --- Unary ops (may need sub-word masking) ---
+        "bitnot" => {
+            let val = lower_unary_arg(ctx, callee_name, args)?;
+            let raw = ctx.fb.insert_inst(Not::new(ctx.is, val), Type::I256);
+            let result = if let Some(ref mi) = mask_info {
+                apply_sub_word_mask(ctx.fb, ctx.is, raw, mi)
+            } else {
+                raw
+            };
+            Ok(Some(result))
+        }
+        "not" => {
+            if !callee_name.ends_with("_bool") {
+                return Err(LowerError::Internal(format!(
+                    "logical not intrinsic must be bool-typed, got `{callee_name}`"
+                )));
+            }
+            let val = lower_unary_arg(ctx, callee_name, args)?;
+            let is_zero = ctx.fb.insert_inst(IsZero::new(ctx.is, val), Type::I1);
+            let result = ctx
+                .fb
+                .insert_inst(Zext::new(ctx.is, is_zero, Type::I256), Type::I256);
+            Ok(Some(result))
+        }
+        "neg" => {
+            let val = lower_unary_arg(ctx, callee_name, args)?;
+            let raw = ctx.fb.insert_inst(Neg::new(ctx.is, val), Type::I256);
+            let result = if let Some(ref mi) = mask_info {
+                apply_sub_word_mask(ctx.fb, ctx.is, raw, mi)
+            } else {
+                raw
+            };
+            Ok(Some(result))
+        }
+
+        // Not a recognized intrinsic operation.
+        _ => Ok(None),
+    }
+}
+
+fn lower_binary_args<C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, '_, C>,
+    callee_name: &str,
+    args: &[mir::ir::ValueId],
+) -> Result<(ValueId, ValueId), LowerError> {
+    let [a, b] = args else {
+        return Err(LowerError::Internal(format!(
+            "{callee_name} requires 2 arguments"
+        )));
+    };
+    let lhs = lower_value(ctx, *a)?;
+    let rhs = lower_value(ctx, *b)?;
+    Ok((lhs, rhs))
+}
+
+fn lower_unary_arg<C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, '_, C>,
+    callee_name: &str,
+    args: &[mir::ir::ValueId],
+) -> Result<ValueId, LowerError> {
+    let [a] = args else {
+        return Err(LowerError::Internal(format!(
+            "{callee_name} requires 1 argument"
+        )));
+    };
+    lower_value(ctx, *a)
 }

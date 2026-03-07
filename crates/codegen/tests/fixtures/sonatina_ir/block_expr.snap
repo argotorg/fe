@@ -7,8 +7,26 @@ target = "evm-ethereum-osaka"
 
 func private %block_expr() -> i256 {
     block0:
-        v3.i256 = add 1.i256 2.i256;
+        v3.i256 = call %u64_haee7f05a097ffa16_add_h4cebc227a0cfd3c0_add 1.i256 2.i256;
         return v3;
+}
+
+func private %u64_haee7f05a097ffa16_add_h4cebc227a0cfd3c0_add(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i64 = trunc v0 i64;
+        v4.i64 = trunc v1 i64;
+        v5.i64 = add v3 v4;
+        v6.i256 = zext v3 i256;
+        v7.i256 = zext v4 i256;
+        v8.i256 = zext v5 i256;
+        v9.i1 = lt v8 v6;
+        br v9 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        return v8;
 }
 
 func private %__fe_sonatina_entry() {

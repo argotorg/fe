@@ -1,0 +1,18 @@
+use core::ops::{WrappingAdd, WrappingSub, WrappingMul}
+use core::ops::{SaturatingAdd, SaturatingSub, SaturatingMul}
+
+pub fn wrapping_ops_u64(a: u64, b: u64) -> (u64, u64, u64) {
+    (a.wrapping_add(b), a.wrapping_sub(b), a.wrapping_mul(b))
+}
+
+pub fn saturating_ops_u64(a: u64, b: u64) -> (u64, u64, u64) {
+    (a.saturating_add(b), a.saturating_sub(b), a.saturating_mul(b))
+}
+
+pub fn wrapping_ops_u256(a: u256, b: u256) -> (u256, u256, u256) {
+    (a.wrapping_add(b), a.wrapping_sub(b), a.wrapping_mul(b))
+}
+
+pub fn saturating_ops_u256(a: u256, b: u256) -> (u256, u256, u256) {
+    (a.saturating_add(b), a.saturating_sub(b), a.saturating_mul(b))
+}

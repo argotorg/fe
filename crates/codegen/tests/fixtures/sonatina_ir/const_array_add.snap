@@ -17,8 +17,21 @@ func private %get_sum() -> i256 {
         v6.*[i256; 3] = bitcast v2 *[i256; 3];
         v7.*i256 = gep v6 0.i256 0.i256;
         v8.i256 = mload v7 i256;
-        v10.i256 = add 1.i256 v8;
+        v10.i256 = call %u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add 1.i256 v8;
         return v10;
+}
+
+func private %u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = add v0 v1;
+        v4.i1 = lt v3 v0;
+        br v4 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        return v3;
 }
 
 func private %__fe_sonatina_entry() {

@@ -14,6 +14,13 @@ func private %newtype_word_mut_method_call(v0.i256) -> i256 {
 func private %wrap_haf9e70905fcbd513_bump(v0.i256) -> i256 {
     block0:
         v3.i256 = add v0 1.i256;
+        v4.i1 = lt v3 v0;
+        br v4 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
         return v3;
 }
 

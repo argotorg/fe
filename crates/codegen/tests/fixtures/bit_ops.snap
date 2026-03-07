@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 42
 expression: output
 input_file: tests/fixtures/bit_ops.fe
 ---
@@ -24,6 +23,162 @@ function $bit_ops($x, $y) -> ret {
   leave
 }
 function $pow_op($x, $y) -> ret {
-  ret := exp($x, $y)
+  let v0 := $u256_h3271ca15373d4483_pow_haae116e5e5042c2c_pow($x, $y)
+  ret := v0
+  leave
+}
+function $u256_h3271ca15373d4483_pow_haae116e5e5042c2c_pow($self, $other) -> ret {
+  let v0 := $pow_checked__u256__3271ca15373d4483($self, $other)
+  ret := v0
+  leave
+}
+function $pow_checked__u256__3271ca15373d4483($base, $exp) -> ret {
+  let v0 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_from_word($exp)
+  let v1 := and(v0, 115792089237316195423570985008687907853269984665640564039457584007913129639935)
+  let v2 := 0
+  if v2 {
+    let v3 := $u256_h3271ca15373d4483_eq_he50383edd273619f_ne(and(v1, 0), 0)
+    let v4 := v3
+    if v4 {
+      revert(0, 0)
+    }
+    let v5 := 1
+    let v6 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_from_word($base)
+    let v7 := v1
+    for { } 1 { } {
+      let v8 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt(v7, 0)
+      if iszero(v8) {
+        break
+      }
+      let v9 := $u256_h3271ca15373d4483_eq_he50383edd273619f_ne(and(v7, 1), 0)
+      let v10 := v9
+      if v10 {
+        let v11 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_from_word(v5)
+        let v12 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_from_word(v6)
+        let v13 := $u256_h3271ca15373d4483_mul_h290dcc921ed80777_mul(v11, v12)
+        let v14 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_from_word(v13)
+        v5 := v14
+      }
+      v7 := shr(1, v7)
+      let v15 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt(v7, 0)
+      let v16 := v15
+      if v16 {
+        let v17 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_from_word(v6)
+        let v18 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_from_word(v6)
+        let v19 := $u256_h3271ca15373d4483_mul_h290dcc921ed80777_mul(v17, v18)
+        let v20 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_from_word(v19)
+        v6 := v20
+      }
+      if iszero(v16) {
+      }
+    }
+    let v21 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_from_word(v5)
+    ret := v21
+    leave
+  }
+  if iszero(v2) {
+    let v22 := 1
+    let v23 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_from_word($base)
+    let v24 := v1
+    for { } 1 { } {
+      let v25 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt(v24, 0)
+      if iszero(v25) {
+        break
+      }
+      let v26 := $u256_h3271ca15373d4483_eq_he50383edd273619f_ne(and(v24, 1), 0)
+      let v27 := v26
+      if v27 {
+        let v28 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_from_word(v22)
+        let v29 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_from_word(v23)
+        let v30 := $u256_h3271ca15373d4483_mul_h290dcc921ed80777_mul(v28, v29)
+        let v31 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_from_word(v30)
+        v22 := v31
+      }
+      v24 := shr(1, v24)
+      let v32 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt(v24, 0)
+      let v33 := v32
+      if v33 {
+        let v34 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_from_word(v23)
+        let v35 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_from_word(v23)
+        let v36 := $u256_h3271ca15373d4483_mul_h290dcc921ed80777_mul(v34, v35)
+        let v37 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_from_word(v36)
+        v23 := v37
+      }
+      if iszero(v33) {
+      }
+    }
+    let v38 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_from_word(v22)
+    ret := v38
+    leave
+  }
+}
+function $u256_h3271ca15373d4483_eq_he50383edd273619f_ne($self, $other) -> ret {
+  let v0 := iszero(eq($self, $other))
+  ret := v0
+  leave
+}
+function $u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt($self, $other) -> ret {
+  let v0 := gt($self, $other)
+  ret := v0
+  leave
+}
+function $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_from_word($word) -> ret {
+  ret := $word
+  leave
+}
+function $u256_h3271ca15373d4483_mul_h290dcc921ed80777_mul($self, $other) -> ret {
+  let v0 := $checked_mul_u256($self, $other)
+  ret := v0
+  leave
+}
+function $checked_mul_u256($a, $b) -> ret {
+  let v0 := $checked_mul_unsigned_impl__u256__3271ca15373d4483($a, $b)
+  ret := v0
+  leave
+}
+function $checked_mul_unsigned_impl__u256__3271ca15373d4483($a, $b) -> ret {
+  let v0 := $u256_h3271ca15373d4483_wrappingmul_h64e6b83610cda761_wrapping_mul($a, $b)
+  let v1 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($a)
+  let v2 := $u256_h3271ca15373d4483_eq_he50383edd273619f_ne(v1, 0)
+  let v3 := v2
+  if v3 {
+    let v4 := $u256_h3271ca15373d4483_div_h14000ca7bc1a1bc4_div(v0, $a)
+    let v5 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word(v4)
+    let v6 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($b)
+    let v7 := $u256_h3271ca15373d4483_eq_he50383edd273619f_ne(v5, v6)
+    let v8 := v7
+    if v8 {
+      revert(0, 0)
+    }
+    ret := v0
+    leave
+  }
+  if iszero(v3) {
+    ret := v0
+    leave
+  }
+}
+function $u256_h3271ca15373d4483_div_h14000ca7bc1a1bc4_div($self, $other) -> ret {
+  let v0 := $u256_h3271ca15373d4483_eq_he50383edd273619f_eq($other, 0)
+  let v1 := v0
+  if v1 {
+    revert(0, 0)
+  }
+  let v2 := div($self, $other)
+  ret := v2
+  leave
+}
+function $u256_h3271ca15373d4483_eq_he50383edd273619f_eq($self, $other) -> ret {
+  let v0 := eq($self, $other)
+  ret := v0
+  leave
+}
+function $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($self) -> ret {
+  ret := $self
+  leave
+}
+function $u256_h3271ca15373d4483_wrappingmul_h64e6b83610cda761_wrapping_mul($self, $other) -> ret {
+  let v0 := mul($self, $other)
+  ret := v0
   leave
 }

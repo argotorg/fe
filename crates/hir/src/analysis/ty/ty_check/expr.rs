@@ -166,6 +166,10 @@ impl<'db> TyChecker<'db> {
             self.env.type_expr(expr, typed.clone());
             return typed;
         };
+        let late_resolve_bin = match expr_data {
+            Expr::Bin(lhs, rhs, op) => Some((*lhs, *rhs, *op)),
+            _ => None,
+        };
 
         let expected = normalize_ty(self.db, expected, self.env.scope(), self.env.assumptions());
 
@@ -200,6 +204,9 @@ impl<'db> TyChecker<'db> {
         }
         let typeable = Typeable::Expr(expr, actual.clone());
         actual.ty = self.unify_ty(typeable, actual.ty, expected);
+        if let Some((lhs, rhs, op)) = late_resolve_bin {
+            self.try_late_resolve_primitive_bin_callable(expr, lhs, rhs, op);
+        }
         actual
     }
 
@@ -627,6 +634,53 @@ impl<'db> TyChecker<'db> {
         }
 
         self.check_ops_trait(expr, lhs_ty, &op, Some(rhs_expr))
+    }
+
+    fn try_late_resolve_primitive_bin_callable(
+        &mut self,
+        expr: ExprId,
+        lhs_expr: ExprId,
+        _rhs_expr: ExprId,
+        op: BinOp,
+    ) {
+        if self.env.callable_expr(expr).is_some() {
+            return;
+        }
+        if !matches!(
+            op,
+            BinOp::Arith(
+                ArithBinOp::Add
+                    | ArithBinOp::Sub
+                    | ArithBinOp::Mul
+                    | ArithBinOp::Div
+                    | ArithBinOp::Rem
+                    | ArithBinOp::Pow
+            ) | BinOp::Comp(..)
+        ) {
+            return;
+        }
+
+        let Some(lhs_prop) = self.env.typed_expr(lhs_expr) else {
+            return;
+        };
+        let lhs_ty = lhs_prop
+            .ty
+            .as_capability(self.db)
+            .map(|(_, inner)| inner)
+            .unwrap_or(lhs_prop.ty);
+        let lhs_ty = self.normalize_ty(lhs_ty);
+        if lhs_ty.has_invalid(self.db)
+            || lhs_ty.is_integral_var(self.db)
+            || lhs_ty.base_ty(self.db).is_ty_var(self.db)
+            || !(lhs_ty.is_integral(self.db) || lhs_ty.is_bool(self.db))
+        {
+            return;
+        }
+
+        // Pass `None` for rhs_expr because the RHS was already type-checked
+        // during the initial `check_binary` call. Re-checking it would
+        // re-register const refs / other environment state and panic.
+        let _ = self.check_ops_trait(expr, lhs_ty, &op, None);
     }
 
     fn check_let_condition(&mut self, pat: PatId, scrutinee: ExprId) -> ExprProp<'db> {
@@ -2449,6 +2503,9 @@ impl<'db> TyChecker<'db> {
             return unit;
         }
 
+        // `x += y` is semantically defined by the `*Assign` traits. Primitive
+        // integer fast paths are introduced later during MIR lowering without
+        // changing which trait method the source program resolves to here.
         self.check_ops_trait(expr, lhs_place_ty, &AugAssignOp(*op), Some(*rhs));
 
         // Return unit ty even if trait resolution fails

@@ -1024,27 +1024,8 @@ impl<'db> Monomorphizer<'db> {
                     rvalue: crate::ir::Rvalue::Call(call),
                     ..
                 } = inst
+                    && let Some(target) = &mut call.hir_target
                 {
-                    if let Some(target) = &mut call.hir_target {
-                        target.generic_args = target
-                            .generic_args
-                            .iter()
-                            .map(|ty| ty.fold_with(self.db, &mut folder))
-                            .collect();
-                        if let Some(inst) = target.trait_inst {
-                            target.trait_inst = Some(inst.fold_with(self.db, &mut folder));
-                        }
-                    }
-                    call.resolved_name = None;
-                }
-            }
-
-            if let crate::Terminator::TerminatingCall {
-                call: crate::ir::TerminatingCall::Call(call),
-                ..
-            } = &mut block.terminator
-            {
-                if let Some(target) = &mut call.hir_target {
                     target.generic_args = target
                         .generic_args
                         .iter()
@@ -1053,6 +1034,27 @@ impl<'db> Monomorphizer<'db> {
                     if let Some(inst) = target.trait_inst {
                         target.trait_inst = Some(inst.fold_with(self.db, &mut folder));
                     }
+                    // Clear resolved_name so it will be re-resolved after
+                    // type substitution. Calls without hir_target keep
+                    // `resolved_name` as-is; typed checked intrinsics are
+                    // tracked via `call.checked_intrinsic`.
+                    call.resolved_name = None;
+                }
+            }
+
+            if let crate::Terminator::TerminatingCall {
+                call: crate::ir::TerminatingCall::Call(call),
+                ..
+            } = &mut block.terminator
+                && let Some(target) = &mut call.hir_target
+            {
+                target.generic_args = target
+                    .generic_args
+                    .iter()
+                    .map(|ty| ty.fold_with(self.db, &mut folder))
+                    .collect();
+                if let Some(inst) = target.trait_inst {
+                    target.trait_inst = Some(inst.fold_with(self.db, &mut folder));
                 }
                 call.resolved_name = None;
             }

@@ -1,14 +1,15 @@
 ---
 source: crates/mir/tests/lowering_snapshots.rs
-assertion_line: 26
 expression: mir_output
 ---
 fn bump__StorPtr_Foo___3698cc3c4b2626e3(v0: u256) -> ():
   bb0:
     v1: u256 = load stor[v0].0
-    store stor[v0].0 = (v1 + 1)
-    v2: u256 = load stor[v0].1
-    store stor[v0].1 = (v2 + 2)
+    v2: u256 = u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add_stor(v1, 1)
+    store stor[v0].0 = v2
+    v3: u256 = load stor[v0].1
+    v4: u256 = u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add_stor(v3, 2)
+    store stor[v0].1 = v4
     ret
 
 fn maybe_inc(v0: Opt) -> u64:
@@ -38,7 +39,8 @@ fn maybe_inc(v0: Opt) -> u64:
     v6 = (v6 + 1)
     jmp bb6
   bb8:
-    ret (v1 + v6)
+    v7: u64 = u64_haee7f05a097ffa16_add_h4cebc227a0cfd3c0_add(v1, v6)
+    ret v7
 
 fn test_effects_and_aggregates__Evm_hef0af3106e109414_Evm_hef0af3106e109414__7ab75559784fbc59(v0: u256, v1: u256) -> ():
   bb0:
@@ -79,6 +81,16 @@ fn selector_match__Evm_hef0af3106e109414__3af54274b2985741(v0: u256) -> u256:
   bb5:
     switch v1 [151146943 => bb1, 2066295049 => bb3] else bb4
 
+fn u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add_stor(v0: u256, v1: u256) -> u256:
+  bb0:
+    v2: u256 = __checked_add__u256__3271ca15373d4483(v0, v1)
+    ret v2
+
+fn u64_haee7f05a097ffa16_add_h4cebc227a0cfd3c0_add(v0: u64, v1: u64) -> u64:
+  bb0:
+    v2: u64 = __checked_add__u64__aee7f05a097ffa16(v0, v1)
+    ret v2
+
 fn mem_ptr_stor_arg0_root_stor__Evm_hef0af3106e109414_Foo_h6dbce71a6ea992b8__c09e6c6fc5a7b23d(v0: Evm, v1: u256) -> MemPtr<Foo>:
   bb0:
     v2: MemPtr<Foo> = memptr_t__hf71ec14ffe47fb3f_effecthandle_hfc52f915596f993a_from_raw__Foo_h6dbce71a6ea992b8__21493237fe9c2c26(v1)
@@ -87,9 +99,11 @@ fn mem_ptr_stor_arg0_root_stor__Evm_hef0af3106e109414_Foo_h6dbce71a6ea992b8__c09
 fn bump__MemPtr_Foo___cdd30998d577b6ea(v0: u256) -> ():
   bb0:
     v1: u256 = load mem[v0].0
-    store mem[v0].0 = (v1 + 1)
-    v2: u256 = load mem[v0].1
-    store mem[v0].1 = (v2 + 2)
+    v2: u256 = u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v1, 1)
+    store mem[v0].0 = v2
+    v3: u256 = load mem[v0].1
+    v4: u256 = u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v3, 2)
+    store mem[v0].1 = v4
     ret
 
 fn stor_ptr_stor_arg0_root_stor__Evm_hef0af3106e109414_Foo_h6dbce71a6ea992b8__c09e6c6fc5a7b23d(v0: Evm, v1: u256) -> StorPtr<Foo>:
@@ -115,6 +129,11 @@ fn get_balance__0_StorPtr_StorageMap_u256__u256__0____94067de1d730f5c7(v0: u256,
 fn memptr_t__hf71ec14ffe47fb3f_effecthandle_hfc52f915596f993a_from_raw__Foo_h6dbce71a6ea992b8__21493237fe9c2c26(v0: u256) -> MemPtr<Foo>:
   bb0:
     ret v0
+
+fn u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v0: u256, v1: u256) -> u256:
+  bb0:
+    v2: u256 = __checked_add__u256__3271ca15373d4483(v0, v1)
+    ret v2
 
 fn storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Foo_h6dbce71a6ea992b8__21493237fe9c2c26(v0: u256) -> StorPtr<Foo>:
   bb0:
@@ -156,10 +175,11 @@ fn storagemap_storage_slot_with_salt__u256__3271ca15373d4483(v0: u256, v1: u256)
   bb0:
     v2: u256 = alloc(0)
     v3: u256 = u256_h3271ca15373d4483_storagekey_hf9e3d38a13ff4409_write_key(v2, v0)
-    eval mstore((v2 + v3), v1)
-    bind (v3 + 32)
-    v4: u256 = keccak256(v2, (v3 + 32))
-    ret v4
+    v4: u256 = u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v2, v3)
+    eval mstore(v4, v1)
+    v5: u256 = u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v3, 32)
+    v6: u256 = keccak256(v2, v5)
+    ret v6
 
 fn u256_h3271ca15373d4483_storagekey_hf9e3d38a13ff4409_write_key(v0: u256, v1: u256) -> u256:
   bb0:

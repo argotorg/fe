@@ -91,7 +91,7 @@ pub contract CoolCoin uses (ctx: Ctx, log: mut Log) {
 
     recv Erc20Extended {
         Mint { to, amount } -> bool uses (mut store, mut log) {
-            store.total_supply += amount
+            store.total_supply = store.total_supply + amount
             store.balances.set(key: to, value: store.balances.get(key: to) + amount)
             emit_transfer(from: Address::zero(), to: to, value: amount)
             return true

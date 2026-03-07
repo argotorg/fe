@@ -1,0 +1,366 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+expression: output
+input_file: crates/codegen/tests/fixtures/wrapping_saturating.fe
+---
+target = "evm-ethereum-osaka"
+
+type @__fe_tuple_0 = {i256, i256, i256};
+type @__fe_tuple_1 = {i256, i256, i256};
+
+func private %wrapping_ops_u64(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = call %u64_haee7f05a097ffa16_wrappingadd_h14afa79b3047617f_wrapping_add v0 v1;
+        v4.i256 = call %u64_haee7f05a097ffa16_wrappingsub_h6880d1ff91f0a556_wrapping_sub v0 v1;
+        v5.i256 = call %u64_haee7f05a097ffa16_wrappingmul_h64e6b83610cda761_wrapping_mul v0 v1;
+        v7.*i8 = evm_malloc 96.i256;
+        v8.i256 = ptr_to_int v7 i256;
+        v9.i64 = trunc v3 i64;
+        v10.i256 = zext v9 i256;
+        v11.*@__fe_tuple_0 = bitcast v7 *@__fe_tuple_0;
+        v12.*i256 = gep v11 0.i256 0.i256;
+        mstore v12 v10 i256;
+        v13.i64 = trunc v4 i64;
+        v14.i256 = zext v13 i256;
+        v15.*@__fe_tuple_0 = bitcast v7 *@__fe_tuple_0;
+        v17.*i256 = gep v15 0.i256 1.i256;
+        mstore v17 v14 i256;
+        v18.i64 = trunc v5 i64;
+        v19.i256 = zext v18 i256;
+        v20.*@__fe_tuple_0 = bitcast v7 *@__fe_tuple_0;
+        v22.*i256 = gep v20 0.i256 2.i256;
+        mstore v22 v19 i256;
+        return v8;
+}
+
+func private %saturating_ops_u64(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = call %u64_haee7f05a097ffa16_saturatingadd_h7ca6e43aca8f23bb_saturating_add v0 v1;
+        v4.i256 = call %u64_haee7f05a097ffa16_saturatingsub_hd0c1c727e69d9468_saturating_sub v0 v1;
+        v5.i256 = call %u64_haee7f05a097ffa16_saturatingmul_hf2bc6be7b84ff8f7_saturating_mul v0 v1;
+        v7.*i8 = evm_malloc 96.i256;
+        v8.i256 = ptr_to_int v7 i256;
+        v9.i64 = trunc v3 i64;
+        v10.i256 = zext v9 i256;
+        v11.*@__fe_tuple_0 = bitcast v7 *@__fe_tuple_0;
+        v12.*i256 = gep v11 0.i256 0.i256;
+        mstore v12 v10 i256;
+        v13.i64 = trunc v4 i64;
+        v14.i256 = zext v13 i256;
+        v15.*@__fe_tuple_0 = bitcast v7 *@__fe_tuple_0;
+        v17.*i256 = gep v15 0.i256 1.i256;
+        mstore v17 v14 i256;
+        v18.i64 = trunc v5 i64;
+        v19.i256 = zext v18 i256;
+        v20.*@__fe_tuple_0 = bitcast v7 *@__fe_tuple_0;
+        v22.*i256 = gep v20 0.i256 2.i256;
+        mstore v22 v19 i256;
+        return v8;
+}
+
+func private %wrapping_ops_u256(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = call %u256_h3271ca15373d4483_wrappingadd_h14afa79b3047617f_wrapping_add v0 v1;
+        v4.i256 = call %u256_h3271ca15373d4483_wrappingsub_h6880d1ff91f0a556_wrapping_sub v0 v1;
+        v5.i256 = call %u256_h3271ca15373d4483_wrappingmul_h64e6b83610cda761_wrapping_mul v0 v1;
+        v7.*i8 = evm_malloc 96.i256;
+        v8.i256 = ptr_to_int v7 i256;
+        v9.*@__fe_tuple_1 = bitcast v7 *@__fe_tuple_1;
+        v10.*i256 = gep v9 0.i256 0.i256;
+        mstore v10 v3 i256;
+        v11.*@__fe_tuple_1 = bitcast v7 *@__fe_tuple_1;
+        v13.*i256 = gep v11 0.i256 1.i256;
+        mstore v13 v4 i256;
+        v14.*@__fe_tuple_1 = bitcast v7 *@__fe_tuple_1;
+        v16.*i256 = gep v14 0.i256 2.i256;
+        mstore v16 v5 i256;
+        return v8;
+}
+
+func private %saturating_ops_u256(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = call %u256_h3271ca15373d4483_saturatingadd_h7ca6e43aca8f23bb_saturating_add v0 v1;
+        v4.i256 = call %u256_h3271ca15373d4483_saturatingsub_hd0c1c727e69d9468_saturating_sub v0 v1;
+        v5.i256 = call %u256_h3271ca15373d4483_saturatingmul_hf2bc6be7b84ff8f7_saturating_mul v0 v1;
+        v7.*i8 = evm_malloc 96.i256;
+        v8.i256 = ptr_to_int v7 i256;
+        v9.*@__fe_tuple_1 = bitcast v7 *@__fe_tuple_1;
+        v10.*i256 = gep v9 0.i256 0.i256;
+        mstore v10 v3 i256;
+        v11.*@__fe_tuple_1 = bitcast v7 *@__fe_tuple_1;
+        v13.*i256 = gep v11 0.i256 1.i256;
+        mstore v13 v4 i256;
+        v14.*@__fe_tuple_1 = bitcast v7 *@__fe_tuple_1;
+        v16.*i256 = gep v14 0.i256 2.i256;
+        mstore v16 v5 i256;
+        return v8;
+}
+
+func private %u64_haee7f05a097ffa16_wrappingadd_h14afa79b3047617f_wrapping_add(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = add v0 v1;
+        v5.i256 = and v3 18446744073709551615.i256;
+        return v5;
+}
+
+func private %u64_haee7f05a097ffa16_wrappingsub_h6880d1ff91f0a556_wrapping_sub(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = sub v0 v1;
+        v5.i256 = and v3 18446744073709551615.i256;
+        return v5;
+}
+
+func private %u64_haee7f05a097ffa16_wrappingmul_h64e6b83610cda761_wrapping_mul(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = mul v0 v1;
+        v5.i256 = and v3 18446744073709551615.i256;
+        return v5;
+}
+
+func private %u64_haee7f05a097ffa16_saturatingadd_h7ca6e43aca8f23bb_saturating_add(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = add v0 v1;
+        v5.i256 = and v3 18446744073709551615.i256;
+        v6.i256 = and v5 18446744073709551615.i256;
+        v7.i256 = and v0 18446744073709551615.i256;
+        v8.i1 = lt v6 v7;
+        v9.i256 = zext v8 i256;
+        v10.i1 = ne v9 0.i256;
+        br v10 block1 block2;
+
+    block1:
+        jump block3;
+
+    block2:
+        jump block3;
+
+    block3:
+        v12.i256 = phi (18446744073709551615.i256 block1) (v5 block2);
+        return v12;
+}
+
+func private %u64_haee7f05a097ffa16_saturatingsub_hd0c1c727e69d9468_saturating_sub(v0.i256, v1.i256) -> i256 {
+    block0:
+        v4.i256 = and v1 18446744073709551615.i256;
+        v5.i256 = and v0 18446744073709551615.i256;
+        v6.i1 = gt v4 v5;
+        v7.i256 = zext v6 i256;
+        v8.i1 = ne v7 0.i256;
+        br v8 block1 block2;
+
+    block1:
+        jump block3;
+
+    block2:
+        v11.i256 = sub v0 v1;
+        v12.i256 = and v11 18446744073709551615.i256;
+        jump block3;
+
+    block3:
+        v13.i256 = phi (0.i256 block1) (v12 block2);
+        return v13;
+}
+
+func private %u64_haee7f05a097ffa16_saturatingmul_hf2bc6be7b84ff8f7_saturating_mul(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = call %u64_haee7f05a097ffa16_eq_he50383edd273619f_eq v0 0.i256;
+        v4.i1 = ne v3 0.i256;
+        br v4 block1 block3;
+
+    block1:
+        jump block7;
+
+    block2:
+        v7.i256 = mul v0 v1;
+        v9.i256 = and v7 18446744073709551615.i256;
+        v10.i256 = call %u64_haee7f05a097ffa16_div_h14000ca7bc1a1bc4_div v9 v0;
+        v11.i256 = call %u64_haee7f05a097ffa16_eq_he50383edd273619f_ne v10 v1;
+        v12.i1 = ne v11 0.i256;
+        br v12 block4 block5;
+
+    block3:
+        v14.i256 = call %u64_haee7f05a097ffa16_eq_he50383edd273619f_eq v1 0.i256;
+        v15.i1 = ne v14 0.i256;
+        br v15 block1 block2;
+
+    block4:
+        jump block6;
+
+    block5:
+        jump block6;
+
+    block6:
+        v17.i256 = phi (18446744073709551615.i256 block4) (v9 block5);
+        jump block7;
+
+    block7:
+        v18.i256 = phi (0.i256 block1) (v17 block6);
+        return v18;
+}
+
+func private %u256_h3271ca15373d4483_wrappingadd_h14afa79b3047617f_wrapping_add(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = add v0 v1;
+        return v3;
+}
+
+func private %u256_h3271ca15373d4483_wrappingsub_h6880d1ff91f0a556_wrapping_sub(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = sub v0 v1;
+        return v3;
+}
+
+func private %u256_h3271ca15373d4483_wrappingmul_h64e6b83610cda761_wrapping_mul(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = mul v0 v1;
+        return v3;
+}
+
+func private %u256_h3271ca15373d4483_saturatingadd_h7ca6e43aca8f23bb_saturating_add(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = add v0 v1;
+        v4.i1 = lt v3 v0;
+        v5.i256 = zext v4 i256;
+        v6.i1 = ne v5 0.i256;
+        br v6 block1 block2;
+
+    block1:
+        jump block3;
+
+    block2:
+        jump block3;
+
+    block3:
+        v9.i256 = phi (-1.i256 block1) (v3 block2);
+        return v9;
+}
+
+func private %u256_h3271ca15373d4483_saturatingsub_hd0c1c727e69d9468_saturating_sub(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i1 = gt v1 v0;
+        v4.i256 = zext v3 i256;
+        v5.i1 = ne v4 0.i256;
+        br v5 block1 block2;
+
+    block1:
+        jump block3;
+
+    block2:
+        v8.i256 = sub v0 v1;
+        jump block3;
+
+    block3:
+        v9.i256 = phi (0.i256 block1) (v8 block2);
+        return v9;
+}
+
+func private %u256_h3271ca15373d4483_saturatingmul_hf2bc6be7b84ff8f7_saturating_mul(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_eq v0 0.i256;
+        v4.i1 = ne v3 0.i256;
+        br v4 block1 block3;
+
+    block1:
+        jump block7;
+
+    block2:
+        v7.i256 = mul v0 v1;
+        v8.i256 = call %u256_h3271ca15373d4483_div_h14000ca7bc1a1bc4_div v7 v0;
+        v9.i256 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_ne v8 v1;
+        v10.i1 = ne v9 0.i256;
+        br v10 block4 block5;
+
+    block3:
+        v12.i256 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_eq v1 0.i256;
+        v13.i1 = ne v12 0.i256;
+        br v13 block1 block2;
+
+    block4:
+        jump block6;
+
+    block5:
+        jump block6;
+
+    block6:
+        v16.i256 = phi (-1.i256 block4) (v7 block5);
+        jump block7;
+
+    block7:
+        v17.i256 = phi (0.i256 block1) (v16 block6);
+        return v17;
+}
+
+func private %u64_haee7f05a097ffa16_eq_he50383edd273619f_eq(v0.i256, v1.i256) -> i256 {
+    block0:
+        v4.i256 = and v0 18446744073709551615.i256;
+        v5.i256 = and v1 18446744073709551615.i256;
+        v6.i1 = eq v4 v5;
+        v7.i256 = zext v6 i256;
+        return v7;
+}
+
+func private %u64_haee7f05a097ffa16_div_h14000ca7bc1a1bc4_div(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = call %u64_haee7f05a097ffa16_eq_he50383edd273619f_eq v1 0.i256;
+        v4.i1 = ne v3 0.i256;
+        br v4 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        v7.i256 = evm_udiv v0 v1;
+        return v7;
+}
+
+func private %u64_haee7f05a097ffa16_eq_he50383edd273619f_ne(v0.i256, v1.i256) -> i256 {
+    block0:
+        v4.i256 = and v0 18446744073709551615.i256;
+        v5.i256 = and v1 18446744073709551615.i256;
+        v6.i1 = eq v4 v5;
+        v7.i1 = is_zero v6;
+        v8.i256 = zext v7 i256;
+        return v8;
+}
+
+func private %u256_h3271ca15373d4483_eq_he50383edd273619f_eq(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i1 = eq v0 v1;
+        v4.i256 = zext v3 i256;
+        return v4;
+}
+
+func private %u256_h3271ca15373d4483_div_h14000ca7bc1a1bc4_div(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_eq v1 0.i256;
+        v4.i1 = ne v3 0.i256;
+        br v4 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        v7.i256 = evm_udiv v0 v1;
+        return v7;
+}
+
+func private %u256_h3271ca15373d4483_eq_he50383edd273619f_ne(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i1 = eq v0 v1;
+        v4.i1 = is_zero v3;
+        v5.i256 = zext v4 i256;
+        return v5;
+}
+
+func private %__fe_sonatina_entry() {
+    block0:
+        v1.i256 = call %wrapping_ops_u64 0.i256 0.i256;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+    }
+}

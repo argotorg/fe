@@ -4,6 +4,22 @@ expression: output
 input_file: tests/fixtures/math_ops.fe
 ---
 function $math_ops() -> ret {
-  ret := mod(div(mul(sub(10, 3), 2), 7), 3)
+  let v0 := $u64_haee7f05a097ffa16_rem_h890eb23a7e6cfef7_rem(div(mul(sub(10, 3), 2), 7), 3)
+  ret := v0
+  leave
+}
+function $u64_haee7f05a097ffa16_rem_h890eb23a7e6cfef7_rem($self, $other) -> ret {
+  let v0 := $u64_haee7f05a097ffa16_eq_he50383edd273619f_eq($other, 0)
+  let v1 := v0
+  if v1 {
+    revert(0, 0)
+  }
+  let v2 := and(mod(and($self, 0xffffffffffffffff), and($other, 0xffffffffffffffff)), 0xffffffffffffffff)
+  ret := v2
+  leave
+}
+function $u64_haee7f05a097ffa16_eq_he50383edd273619f_eq($self, $other) -> ret {
+  let v0 := eq(and($self, 0xffffffffffffffff), and($other, 0xffffffffffffffff))
+  ret := v0
   leave
 }

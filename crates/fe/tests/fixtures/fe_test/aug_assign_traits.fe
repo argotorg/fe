@@ -1,0 +1,52 @@
+use std::evm::effects::assert
+use core::ops::{Add, AddAssign}
+
+struct OnlyAssign {
+    value: u8,
+}
+
+impl Copy for OnlyAssign {}
+
+impl AddAssign for OnlyAssign {
+    fn add_assign(mut self, _ other: own OnlyAssign) {
+        self.value = self.value + other.value + 1
+    }
+}
+
+struct Divergent {
+    value: u8,
+}
+
+impl Copy for Divergent {}
+
+impl Add for Divergent {
+    fn add(own self, _ other: own Divergent) -> Divergent {
+        Divergent { value: 99 }
+    }
+}
+
+impl AddAssign for Divergent {
+    fn add_assign(mut self, _ other: own Divergent) {
+        self.value = 7
+    }
+}
+
+#[test]
+fn add_assign_without_add_trait() {
+    let mut x = OnlyAssign { value: 1 }
+    let y = OnlyAssign { value: 2 }
+    x += y
+    assert(x.value == 4)
+}
+
+#[test]
+fn aug_assign_prefers_add_assign_semantics() {
+    let mut x = Divergent { value: 1 }
+    let y = Divergent { value: 2 }
+    x += y
+    assert(x.value == 7)
+
+    let z = Divergent { value: 2 }
+    let sum = x + z
+    assert(sum.value == 99)
+}

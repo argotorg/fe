@@ -9,22 +9,40 @@ type @__fe_tuple_0 = {i256, i256};
 
 func private %tuple_expr() -> i256 {
     block0:
-        v2.*i8 = evm_malloc 64.i256;
-        v3.i256 = ptr_to_int v2 i256;
-        v6.i256 = add 1.i256 2.i256;
-        v7.i64 = trunc v6 i64;
+        v3.i256 = call %u64_haee7f05a097ffa16_add_h4cebc227a0cfd3c0_add 1.i256 2.i256;
+        v5.*i8 = evm_malloc 64.i256;
+        v6.i256 = ptr_to_int v5 i256;
+        v7.i64 = trunc v3 i64;
         v8.i256 = zext v7 i256;
-        v9.*@__fe_tuple_0 = bitcast v2 *@__fe_tuple_0;
+        v9.*@__fe_tuple_0 = bitcast v5 *@__fe_tuple_0;
         v10.*i256 = gep v9 0.i256 0.i256;
         mstore v10 v8 i256;
         v11.i1 = is_zero 0.i256;
         v12.i256 = zext v11 i256;
         v13.i1 = ne v12 0.i256;
         v14.i256 = zext v13 i256;
-        v15.*@__fe_tuple_0 = bitcast v2 *@__fe_tuple_0;
+        v15.*@__fe_tuple_0 = bitcast v5 *@__fe_tuple_0;
         v16.*i256 = gep v15 0.i256 1.i256;
         mstore v16 v14 i256;
-        return v3;
+        return v6;
+}
+
+func private %u64_haee7f05a097ffa16_add_h4cebc227a0cfd3c0_add(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i64 = trunc v0 i64;
+        v4.i64 = trunc v1 i64;
+        v5.i64 = add v3 v4;
+        v6.i256 = zext v3 i256;
+        v7.i256 = zext v4 i256;
+        v8.i256 = zext v5 i256;
+        v9.i1 = lt v8 v6;
+        br v9 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        return v8;
 }
 
 func private %__fe_sonatina_entry() {

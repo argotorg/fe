@@ -1,0 +1,25 @@
+const OK: u8 = 200 + 1
+const ADD_OVERFLOW: u8 = 255 + 1
+const SUB_UNDERFLOW: u8 = 0 - 1
+const DIV_BY_ZERO: u8 = 1 / 0
+const REM_BY_ZERO: u8 = 1 % 0
+const POW_OVERFLOW: u8 = 2 ** 8
+
+const POW_NEGATIVE_EXP: i8 = 2 ** -1
+const NEG_OVERFLOW: i8 = -(-128)
+const DIV_OVERFLOW: i8 = (-128) / (-1)
+
+struct U8<const N: u8> {}
+struct I8<const N: i8> {}
+
+fn ok(_ x: U8<OK>) {}
+
+fn add_overflow_u8(_ x: U8<ADD_OVERFLOW>) {}
+fn sub_underflow_u8(_ x: U8<SUB_UNDERFLOW>) {}
+fn div_by_zero_u8(_ x: U8<DIV_BY_ZERO>) {}
+fn rem_by_zero_u8(_ x: U8<REM_BY_ZERO>) {}
+fn pow_overflow_u8(_ x: U8<POW_OVERFLOW>) {}
+
+fn pow_negative_exp_i8(_ x: I8<POW_NEGATIVE_EXP>) {}
+fn neg_overflow_i8(_ x: I8<NEG_OVERFLOW>) {}
+fn div_overflow_i8(_ x: I8<DIV_OVERFLOW>) {}

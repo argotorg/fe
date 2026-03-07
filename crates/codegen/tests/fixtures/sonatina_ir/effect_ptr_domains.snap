@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/effect_ptr_domains.fe
 ---
@@ -11,11 +10,11 @@ type @__fe_Foo_0 = {i256, i256};
 func private %bump__StorPtr_Foo___3698cc3c4b2626e3(v0.i256) {
     block0:
         v2.i256 = evm_sload v0;
-        v4.i256 = add v2 1.i256;
+        v4.i256 = call %u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add_stor v2 1.i256;
         evm_sstore v0 v4;
         v5.i256 = add v0 1.i256;
         v6.i256 = evm_sload v5;
-        v8.i256 = add v6 2.i256;
+        v8.i256 = call %u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add_stor v6 2.i256;
         v9.i256 = add v0 1.i256;
         evm_sstore v9 v8;
         return;
@@ -39,6 +38,19 @@ func private %test_effect_ptr_domains__Evm_hef0af3106e109414_Evm_hef0af3106e1094
         return;
 }
 
+func private %u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add_stor(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = add v0 v1;
+        v4.i1 = lt v3 v0;
+        br v4 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        return v3;
+}
+
 func private %mem_ptr_stor_arg0_root_stor__Evm_hef0af3106e109414_Foo_h6dbce71a6ea992b8__c09e6c6fc5a7b23d(v0.i256, v1.i256) -> i256 {
     block0:
         v3.i256 = call %memptr_t__hf71ec14ffe47fb3f_effecthandle_hfc52f915596f993a_from_raw__Foo_h6dbce71a6ea992b8__21493237fe9c2c26 v1;
@@ -50,14 +62,14 @@ func private %bump__MemPtr_Foo___cdd30998d577b6ea(v0.i256) {
         v2.*@__fe_Foo_0 = int_to_ptr v0 *@__fe_Foo_0;
         v3.*i256 = gep v2 0.i256 0.i256;
         v4.i256 = mload v3 i256;
-        v6.i256 = add v4 1.i256;
+        v6.i256 = call %u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add v4 1.i256;
         v7.*@__fe_Foo_0 = int_to_ptr v0 *@__fe_Foo_0;
         v8.*i256 = gep v7 0.i256 0.i256;
         mstore v8 v6 i256;
         v9.*@__fe_Foo_0 = int_to_ptr v0 *@__fe_Foo_0;
         v10.*i256 = gep v9 0.i256 1.i256;
         v11.i256 = mload v10 i256;
-        v13.i256 = add v11 2.i256;
+        v13.i256 = call %u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add v11 2.i256;
         v14.*@__fe_Foo_0 = int_to_ptr v0 *@__fe_Foo_0;
         v15.*i256 = gep v14 0.i256 1.i256;
         mstore v15 v13 i256;
@@ -73,6 +85,19 @@ func private %stor_ptr_stor_arg0_root_stor__Evm_hef0af3106e109414_Foo_h6dbce71a6
 func private %memptr_t__hf71ec14ffe47fb3f_effecthandle_hfc52f915596f993a_from_raw__Foo_h6dbce71a6ea992b8__21493237fe9c2c26(v0.i256) -> i256 {
     block0:
         return v0;
+}
+
+func private %u256_h3271ca15373d4483_add_h4cebc227a0cfd3c0_add(v0.i256, v1.i256) -> i256 {
+    block0:
+        v3.i256 = add v0 v1;
+        v4.i1 = lt v3 v0;
+        br v4 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
+        return v3;
 }
 
 func private %storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Foo_h6dbce71a6ea992b8__21493237fe9c2c26(v0.i256) -> i256 {

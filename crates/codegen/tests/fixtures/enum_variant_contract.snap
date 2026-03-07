@@ -25,87 +25,95 @@ object "EnumContract" {
       function $runtime__StorPtr_Evm___207f35a85ac4062e() {
         let v0 := calldataload(0)
         let v1 := shr(224, v0)
-        let v2 := eq(v1, 1817627404)
-        if v2 {
-          let v3 := calldataload(4)
-          let v4 := mload(0x40)
-          if iszero(v4) {
-            v4 := 0x80
+        let v2 := $u256_h3271ca15373d4483_eq_he50383edd273619f_eq(v1, 1817627404)
+        let v3 := v2
+        if v3 {
+          let v4 := calldataload(4)
+          let v5 := mload(0x40)
+          if iszero(v5) {
+            v5 := 0x80
           }
-          mstore(0x40, add(v4, 64))
-          mstore(v4, 1)
-          mstore(add(v4, 32), v3)
-          let v5 := 0
-          let v6 := mload(v4)
-          switch v6
+          mstore(0x40, add(v5, 64))
+          mstore(v5, 1)
+          mstore(add(v5, 32), v4)
+          let v6 := 0
+          let v7 := mload(v5)
+          switch v7
             case 1 {
-              let v7 := mload(add(v4, 32))
-              let v8 := v7
-              v5 := v8
+              let v8 := mload(add(v5, 32))
+              let v9 := v8
+              v6 := v9
             }
             case 0 {
-              v5 := 0
+              v6 := 0
             }
             default {
             }
-          let v9 := v4
           let v10 := v5
-          $abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741(v10, 0)
+          let v11 := v6
+          $abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741(v11, 0)
         }
-        if iszero(v2) {
-          let v11 := eq(v1, 1163776883)
-          if v11 {
-            let v12 := mload(0x40)
-            if iszero(v12) {
-              v12 := 0x80
+        if iszero(v3) {
+          let v12 := $u256_h3271ca15373d4483_eq_he50383edd273619f_eq(v1, 1163776883)
+          let v13 := v12
+          if v13 {
+            let v14 := mload(0x40)
+            if iszero(v14) {
+              v14 := 0x80
             }
-            mstore(0x40, add(v12, 64))
-            mstore(v12, 0)
-            let v13 := 0
-            let v14 := mload(v12)
-            switch v14
+            mstore(0x40, add(v14, 64))
+            mstore(v14, 0)
+            let v15 := 0
+            let v16 := mload(v14)
+            switch v16
               case 1 {
-                let v15 := mload(add(v12, 32))
-                let v16 := v15
-                v13 := v16
+                let v17 := mload(add(v14, 32))
+                let v18 := v17
+                v15 := v18
               }
               case 0 {
-                v13 := 0
+                v15 := 0
               }
               default {
               }
-            let v17 := v12
-            let v18 := v13
-            $abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741(v18, 0)
+            let v19 := v14
+            let v20 := v15
+            $abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741(v20, 0)
           }
-          if iszero(v11) {
-            let v19 := eq(v1, 3572425762)
-            if iszero(v19) {
+          if iszero(v13) {
+            let v21 := $u256_h3271ca15373d4483_eq_he50383edd273619f_eq(v1, 3572425762)
+            let v22 := v21
+            if iszero(v22) {
               return(0, 0)
             }
-            let v20 := calldataload(4)
-            let v21 := mload(0x40)
-            if iszero(v21) {
-              v21 := 0x80
+            let v23 := calldataload(4)
+            let v24 := mload(0x40)
+            if iszero(v24) {
+              v24 := 0x80
             }
-            mstore(0x40, add(v21, 64))
-            mstore(v21, 1)
-            mstore(add(v21, 32), v20)
-            let v22 := 0
-            let v23 := mload(v21)
-            switch v23
+            mstore(0x40, add(v24, 64))
+            mstore(v24, 1)
+            mstore(add(v24, 32), v23)
+            let v25 := 0
+            let v26 := mload(v24)
+            switch v26
               case 1 {
-                v22 := 1
+                v25 := 1
               }
               case 0 {
-                v22 := 0
+                v25 := 0
               }
               default {
               }
-            let v24 := v22
-            $abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741(v24, 0)
+            let v27 := v25
+            $abi_encode_u256__Evm_hef0af3106e109414__3af54274b2985741(v27, 0)
           }
         }
+      }
+      function $u256_h3271ca15373d4483_eq_he50383edd273619f_eq($self, $other) -> ret {
+        let v0 := eq($self, $other)
+        ret := v0
+        leave
       }
       $runtime__StorPtr_Evm___207f35a85ac4062e()
       return(0, 0)

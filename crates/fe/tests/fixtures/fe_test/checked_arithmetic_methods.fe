@@ -1,0 +1,56 @@
+use std::evm::effects::assert
+use core::ops::{
+    SaturatingAdd, SaturatingMul, SaturatingSub, WrappingAdd, WrappingMul, WrappingSub,
+}
+
+// =====================================================================
+// Unsigned wrapping and saturating methods
+// =====================================================================
+
+#[test]
+fn wrapping_unsigned_u8() {
+    let max: u8 = 255
+    let zero: u8 = 0
+    let sixteen: u8 = 16
+
+    assert(max.wrapping_add(1) == 0)
+    assert(zero.wrapping_sub(1) == 255)
+    assert(sixteen.wrapping_mul(sixteen) == 0)
+}
+
+#[test]
+fn saturating_unsigned_u8() {
+    let max: u8 = 255
+    let zero: u8 = 0
+    let sixteen: u8 = 16
+
+    assert(max.saturating_add(1) == 255)
+    assert(zero.saturating_sub(1) == 0)
+    assert(sixteen.saturating_mul(sixteen) == 255)
+}
+
+// =====================================================================
+// Signed wrapping and saturating methods
+// =====================================================================
+
+#[test]
+fn wrapping_signed_i8() {
+    let max: i8 = 127
+    let min: i8 = -128
+    let sixty_four: i8 = 64
+
+    assert(max.wrapping_add(1) == -128)
+    assert(min.wrapping_sub(1) == 127)
+    assert(sixty_four.wrapping_mul(4) == 0)
+}
+
+#[test]
+fn saturating_signed_i8() {
+    let max: i8 = 127
+    let min: i8 = -128
+    let sixty_four: i8 = 64
+
+    assert(max.saturating_add(1) == 127)
+    assert(min.saturating_sub(1) == -128)
+    assert(sixty_four.saturating_mul(4) == 127)
+}

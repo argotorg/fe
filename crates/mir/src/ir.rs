@@ -529,6 +529,13 @@ pub enum TerminatingCall<'db> {
     Intrinsic { op: IntrinsicOp, args: Vec<ValueId> },
 }
 
+/// Backend-known termination semantics for calls that never return.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BuiltinTerminatorKind {
+    /// Abort execution and revert with an empty payload.
+    Abort,
+}
+
 #[derive(Debug, Clone)]
 pub struct SwitchTarget {
     pub value: SwitchValue,
@@ -715,8 +722,37 @@ pub struct CallOrigin<'db> {
     pub effect_args: Vec<ValueId>,
     /// Final lowered symbol name of the callee after monomorphization.
     pub resolved_name: Option<String>,
+    /// Typed checked-arithmetic call metadata used by backends.
+    pub checked_intrinsic: Option<CheckedIntrinsic<'db>>,
+    /// Backend-known termination semantics for bodyless builtins like `core::panic`.
+    pub builtin_terminator: Option<BuiltinTerminatorKind>,
     /// For methods on struct types, the statically known address space of the receiver.
     pub receiver_space: Option<AddressSpaceKind>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CheckedArithmeticOp {
+    Add,
+    Sub,
+    Mul,
+    Neg,
+}
+
+impl CheckedArithmeticOp {
+    pub fn helper_symbol_prefix(self) -> &'static str {
+        match self {
+            Self::Add => "checked_add",
+            Self::Sub => "checked_sub",
+            Self::Mul => "checked_mul",
+            Self::Neg => "checked_neg",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CheckedIntrinsic<'db> {
+    pub op: CheckedArithmeticOp,
+    pub ty: TyId<'db>,
 }
 
 /// HIR-based call target metadata used by monomorphization and diagnostics.

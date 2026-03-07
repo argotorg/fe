@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/yul.rs
-assertion_line: 33
 expression: output
 input_file: tests/fixtures/range_bounds.fe
 ---
@@ -11,7 +10,8 @@ function $sum_const() -> ret {
   for { } lt(v1, v2) { v1 := add(v1, 1) } {
     let v3 := $range_known_const_s__usize___known_const_e__usize___hc7c7abc3858dd85e_seq_ha637d2df505bccf2_get__0_4__f9605efabd18106c(0, v1)
     let v4 := v3
-    v0 := add(v0, v4)
+    let v5 := $usize_ha12462c6d36e68b0_add_h4cebc227a0cfd3c0_add(v0, v4)
+    v0 := v5
   }
   ret := v0
   leave
@@ -29,7 +29,8 @@ function $sum_dynamic_end($end) -> ret {
   for { } lt(v2, v3) { v2 := add(v2, 1) } {
     let v4 := $range_known_const_s__usize___known_const_e__usize___hc7c7abc3858dd85e_seq_ha637d2df505bccf2_get__0_4__f9605efabd18106c(v1, v2)
     let v5 := v4
-    v0 := add(v0, v5)
+    let v6 := $usize_ha12462c6d36e68b0_add_h4cebc227a0cfd3c0_add(v0, v5)
+    v0 := v6
   }
   ret := v0
   leave
@@ -47,7 +48,8 @@ function $sum_dynamic_start($start) -> ret {
   for { } lt(v2, v3) { v2 := add(v2, 1) } {
     let v4 := $range_unknown__known_const_e__usize___h7984c64777ae465_seq_ha637d2df505bccf2_get__4__f248ae0e02044d7e(v1, v2)
     let v5 := v4
-    v0 := add(v0, v5)
+    let v6 := $usize_ha12462c6d36e68b0_add_h4cebc227a0cfd3c0_add(v0, v5)
+    v0 := v6
   }
   ret := v0
   leave
@@ -66,37 +68,48 @@ function $sum_dynamic($start, $end) -> ret {
   for { } lt(v2, v3) { v2 := add(v2, 1) } {
     let v4 := $range_unknown__known_const_e__usize___h7984c64777ae465_seq_ha637d2df505bccf2_get__4__f248ae0e02044d7e(v1, v2)
     let v5 := v4
-    v0 := add(v0, v5)
+    let v6 := $usize_ha12462c6d36e68b0_add_h4cebc227a0cfd3c0_add(v0, v5)
+    v0 := v6
   }
   ret := v0
   leave
 }
 function $range_known_const_s__usize___known_const_e__usize___hc7c7abc3858dd85e_seq_ha637d2df505bccf2_len__0_4__f9605efabd18106c($self) -> ret {
   let v0 := 0
-  let v1 := lt(4, 0)
-  if v1 {
+  let v1 := $usize_ha12462c6d36e68b0_ord_h264f6d6d75097a_lt(4, 0)
+  let v2 := v1
+  if v2 {
     v0 := 0
   }
-  if iszero(v1) {
-    v0 := sub(4, 0)
+  if iszero(v2) {
+    let v3 := $usize_ha12462c6d36e68b0_sub_h7b686d389c07535e_sub(4, 0)
+    v0 := v3
   }
   ret := v0
   leave
 }
 function $range_known_const_s__usize___known_const_e__usize___hc7c7abc3858dd85e_seq_ha637d2df505bccf2_get__0_4__f9605efabd18106c($self, $i) -> ret {
-  ret := add(0, $i)
+  let v0 := $usize_ha12462c6d36e68b0_add_h4cebc227a0cfd3c0_add(0, $i)
+  ret := v0
+  leave
+}
+function $usize_ha12462c6d36e68b0_add_h4cebc227a0cfd3c0_add($self, $other) -> ret {
+  let v0 := $checked_add_usize($self, $other)
+  ret := v0
   leave
 }
 function $range_known_const_s__usize___unknown__h4e84f6b6b8307914_seq_ha637d2df505bccf2_len__0__fc6647014fb554e5($self) -> ret {
   let v0 := 0
   let v1 := mload($self)
-  let v2 := lt(v1, 0)
-  if v2 {
+  let v2 := $usize_ha12462c6d36e68b0_ord_h264f6d6d75097a_lt(v1, 0)
+  let v3 := v2
+  if v3 {
     v0 := 0
   }
-  if iszero(v2) {
-    let v3 := mload($self)
-    v0 := sub(v3, 0)
+  if iszero(v3) {
+    let v4 := mload($self)
+    let v5 := $usize_ha12462c6d36e68b0_sub_h7b686d389c07535e_sub(v4, 0)
+    v0 := v5
   }
   ret := v0
   leave
@@ -104,35 +117,108 @@ function $range_known_const_s__usize___unknown__h4e84f6b6b8307914_seq_ha637d2df5
 function $range_unknown__known_const_e__usize___h7984c64777ae465_seq_ha637d2df505bccf2_len__4__f248ae0e02044d7e($self) -> ret {
   let v0 := 0
   let v1 := mload($self)
-  let v2 := lt(4, v1)
-  if v2 {
+  let v2 := $usize_ha12462c6d36e68b0_ord_h264f6d6d75097a_lt(4, v1)
+  let v3 := v2
+  if v3 {
     v0 := 0
   }
-  if iszero(v2) {
-    let v3 := mload($self)
-    v0 := sub(4, v3)
+  if iszero(v3) {
+    let v4 := mload($self)
+    let v5 := $usize_ha12462c6d36e68b0_sub_h7b686d389c07535e_sub(4, v4)
+    v0 := v5
   }
   ret := v0
   leave
 }
 function $range_unknown__known_const_e__usize___h7984c64777ae465_seq_ha637d2df505bccf2_get__4__f248ae0e02044d7e($self, $i) -> ret {
   let v0 := mload($self)
-  ret := add(v0, $i)
+  let v1 := $usize_ha12462c6d36e68b0_add_h4cebc227a0cfd3c0_add(v0, $i)
+  ret := v1
   leave
 }
 function $range_unknown__unknown__h1dfb0ca64ed7bf96_seq_ha637d2df505bccf2_len($self) -> ret {
   let v0 := 0
   let v1 := mload(add($self, 32))
   let v2 := mload($self)
-  let v3 := lt(v1, v2)
-  if v3 {
+  let v3 := $usize_ha12462c6d36e68b0_ord_h264f6d6d75097a_lt(v1, v2)
+  let v4 := v3
+  if v4 {
     v0 := 0
   }
-  if iszero(v3) {
-    let v4 := mload(add($self, 32))
-    let v5 := mload($self)
-    v0 := sub(v4, v5)
+  if iszero(v4) {
+    let v5 := mload(add($self, 32))
+    let v6 := mload($self)
+    let v7 := $usize_ha12462c6d36e68b0_sub_h7b686d389c07535e_sub(v5, v6)
+    v0 := v7
   }
+  ret := v0
+  leave
+}
+function $usize_ha12462c6d36e68b0_ord_h264f6d6d75097a_lt($self, $other) -> ret {
+  let v0 := lt($self, $other)
+  ret := v0
+  leave
+}
+function $usize_ha12462c6d36e68b0_sub_h7b686d389c07535e_sub($self, $other) -> ret {
+  let v0 := $checked_sub_usize($self, $other)
+  ret := v0
+  leave
+}
+function $checked_add_unsigned_impl__usize__a12462c6d36e68b0($a, $b) -> ret {
+  let v0 := $usize_ha12462c6d36e68b0_wrappingadd_h14afa79b3047617f_wrapping_add($a, $b)
+  let v1 := $u8_hbc9d6eeaea22ffb5_intword_h9a147c8c32b1323c_to_word(v0)
+  let v2 := $u8_hbc9d6eeaea22ffb5_intword_h9a147c8c32b1323c_to_word($a)
+  let v3 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v1, v2)
+  let v4 := v3
+  if v4 {
+    revert(0, 0)
+  }
+  ret := v0
+  leave
+}
+function $checked_add_usize($a, $b) -> ret {
+  let v0 := $checked_add_unsigned_impl__usize__a12462c6d36e68b0($a, $b)
+  ret := v0
+  leave
+}
+function $checked_sub_unsigned_impl__usize__a12462c6d36e68b0($a, $b) -> ret {
+  let v0 := $u8_hbc9d6eeaea22ffb5_intword_h9a147c8c32b1323c_to_word($b)
+  let v1 := $u8_hbc9d6eeaea22ffb5_intword_h9a147c8c32b1323c_to_word($a)
+  let v2 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt(v0, v1)
+  let v3 := v2
+  if v3 {
+    revert(0, 0)
+  }
+  let v4 := $usize_ha12462c6d36e68b0_wrappingsub_h6880d1ff91f0a556_wrapping_sub($a, $b)
+  ret := v4
+  leave
+}
+function $checked_sub_usize($a, $b) -> ret {
+  let v0 := $checked_sub_unsigned_impl__usize__a12462c6d36e68b0($a, $b)
+  ret := v0
+  leave
+}
+function $u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt($self, $other) -> ret {
+  let v0 := gt($self, $other)
+  ret := v0
+  leave
+}
+function $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt($self, $other) -> ret {
+  let v0 := lt($self, $other)
+  ret := v0
+  leave
+}
+function $u8_hbc9d6eeaea22ffb5_intword_h9a147c8c32b1323c_to_word($self) -> ret {
+  ret := $self
+  leave
+}
+function $usize_ha12462c6d36e68b0_wrappingadd_h14afa79b3047617f_wrapping_add($self, $other) -> ret {
+  let v0 := add($self, $other)
+  ret := v0
+  leave
+}
+function $usize_ha12462c6d36e68b0_wrappingsub_h6880d1ff91f0a556_wrapping_sub($self, $other) -> ret {
+  let v0 := sub($self, $other)
   ret := v0
   leave
 }

@@ -10,4 +10,4 @@ error[11-0002]: move conflict in `fn match_pattern_owned_local_use_after_move`
    │                   --- `foo` is moved here
    ·
 10 │     foo.x + y
-   │     ^^^^^^^^^ cannot use a value after it was moved
+   │     ^^^^^ cannot use a value after it was moved

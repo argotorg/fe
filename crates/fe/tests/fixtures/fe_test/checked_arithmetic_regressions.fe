@@ -1,0 +1,113 @@
+use std::evm::effects::assert
+
+fn add_assign_overflow_u8(v: mut u8) {
+    v += 1
+}
+
+fn sub_assign_underflow_u8(v: mut u8) {
+    v -= 1
+}
+
+fn mul_assign_overflow_u8(v: mut u8) {
+    v *= 16
+}
+
+fn div_assign_zero_u8(v: mut u8) {
+    v /= 0
+}
+
+fn rem_assign_zero_u8(v: mut u8) {
+    v %= 0
+}
+
+fn pow_assign_overflow_u8(v: mut u8) {
+    v **= 8
+}
+
+// =====================================================================
+// Assignment operator regressions
+// =====================================================================
+
+#[test(should_revert)]
+fn add_assign_overflow_u8_reverts() {
+    let mut x: u8 = 255
+    add_assign_overflow_u8(mut x)
+}
+
+#[test(should_revert)]
+fn sub_assign_underflow_u8_reverts() {
+    let mut x: u8 = 0
+    sub_assign_underflow_u8(mut x)
+}
+
+#[test(should_revert)]
+fn mul_assign_overflow_u8_reverts() {
+    let mut x: u8 = 16
+    mul_assign_overflow_u8(mut x)
+}
+
+#[test(should_revert)]
+fn div_assign_zero_u8_reverts() {
+    let mut x: u8 = 1
+    div_assign_zero_u8(mut x)
+}
+
+#[test(should_revert)]
+fn rem_assign_zero_u8_reverts() {
+    let mut x: u8 = 1
+    rem_assign_zero_u8(mut x)
+}
+
+#[test(should_revert)]
+fn pow_assign_overflow_u8_reverts() {
+    let mut x: u8 = 2
+    pow_assign_overflow_u8(mut x)
+}
+
+// =====================================================================
+// Expression-shape regressions
+// =====================================================================
+
+#[test(should_revert)]
+fn signed_add_neg_overflow_i8() {
+    let a: i8 = -100
+    let b: i8 = -100
+    let c: i8 = a + b
+}
+
+#[test(should_revert)]
+fn signed_sub_pos_overflow_i8() {
+    let a: i8 = 100
+    let b: i8 = -100
+    let c: i8 = a - b
+}
+
+#[test(should_revert)]
+fn signed_mul_overflow_i8_literal_literal() {
+    let x: i8 = -1 * -128
+}
+
+#[test(should_revert)]
+fn signed_mul_overflow_i8_lhs_literal() {
+    let min: i8 = -128
+    let y: i8 = -1 * min
+}
+
+#[test(should_revert)]
+fn signed_mul_overflow_i8_rhs_literal() {
+    let min: i8 = -128
+    let y: i8 = min * -1
+}
+
+#[test(should_revert)]
+fn signed_pow_negative_exp_i8() {
+    let x: i8 = 2
+    let y: i8 = x ** -1
+}
+
+#[test]
+fn signed_mul_no_overflow_i8_neg_neg() {
+    let a: i8 = -6
+    let b: i8 = -3
+    assert(a * b == 18)
+}

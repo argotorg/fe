@@ -1,31 +1,50 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 33
 expression: output
 input_file: tests/fixtures/cast_u8_usize_cmp.fe
 ---
 function $cast_u8_usize_cmp($indices, $i, $j) -> ret {
   let v0 := and(mload(add($indices, mul($i, 32))), 0xff)
-  let v1 := lt($j, v0)
-  if v1 {
+  let v1 := $usize_ha12462c6d36e68b0_ord_h264f6d6d75097a_lt($j, v0)
+  let v2 := v1
+  if v2 {
     ret := 1
     leave
   }
-  if iszero(v1) {
-    let v2 := eq($j, v0)
-    if v2 {
+  if iszero(v2) {
+    let v3 := $usize_ha12462c6d36e68b0_eq_he50383edd273619f_eq($j, v0)
+    let v4 := v3
+    if v4 {
       ret := 2
       leave
     }
-    if iszero(v2) {
-      let v3 := gt($j, v0)
-      if v3 {
+    if iszero(v4) {
+      let v5 := $usize_ha12462c6d36e68b0_ord_h264f6d6d75097a_gt($j, v0)
+      let v6 := v5
+      if v6 {
         ret := 3
         leave
       }
-      if iszero(v3) {
+      if iszero(v6) {
         ret := 0
         leave
       }
     }
   }
+}
+function $usize_ha12462c6d36e68b0_ord_h264f6d6d75097a_lt($self, $other) -> ret {
+  let v0 := lt($self, $other)
+  ret := v0
+  leave
+}
+function $usize_ha12462c6d36e68b0_eq_he50383edd273619f_eq($self, $other) -> ret {
+  let v0 := eq($self, $other)
+  ret := v0
+  leave
+}
+function $usize_ha12462c6d36e68b0_ord_h264f6d6d75097a_gt($self, $other) -> ret {
+  let v0 := gt($self, $other)
+  ret := v0
+  leave
 }

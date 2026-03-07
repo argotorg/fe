@@ -1,10 +1,14 @@
 //! Module-level Yul emission helpers (functions + code regions).
 
-use common::ingot::Ingot;
+use common::{
+    InputDb,
+    ingot::{Ingot, IngotKind},
+};
 use driver::DriverDataBase;
 use hir::HirDb;
 use hir::analysis::HirAnalysisDb;
-use hir::hir_def::{ItemKind, TopLevelMod};
+use hir::analysis::ty::ty_def::{PrimTy, TyBase, TyData};
+use hir::hir_def::{HirIngot, ItemKind, TopLevelMod};
 use mir::analysis::{
     CallGraph, ContractRegion, ContractRegionKind, build_call_graph, build_contract_graph,
     reachable_functions,
@@ -84,7 +88,8 @@ pub fn emit_module_yul_with_layout(
     top_mod: TopLevelMod<'_>,
     layout: TargetDataLayout,
 ) -> Result<String, EmitModuleError> {
-    let module = lower_module(db, top_mod).map_err(EmitModuleError::MirLower)?;
+    let mut module = lower_module(db, top_mod).map_err(EmitModuleError::MirLower)?;
+    link_yul_checked_arithmetic_helpers(db, &mut module)?;
     emit_lowered_module_yul_with_layout(db, &module, layout)
 }
 
@@ -98,7 +103,8 @@ pub fn emit_ingot_yul_with_layout(
     ingot: Ingot<'_>,
     layout: TargetDataLayout,
 ) -> Result<String, EmitModuleError> {
-    let module = lower_ingot(db, ingot).map_err(EmitModuleError::MirLower)?;
+    let mut module = lower_ingot(db, ingot).map_err(EmitModuleError::MirLower)?;
+    link_yul_checked_arithmetic_helpers(db, &mut module)?;
     emit_lowered_module_yul_with_layout(db, &module, layout)
 }
 
@@ -302,7 +308,8 @@ pub fn emit_test_module_yul_with_layout(
     layout: TargetDataLayout,
 ) -> Result<TestModuleOutput, EmitModuleError> {
     let ingot = top_mod.ingot(db);
-    let module = lower_ingot(db, ingot).map_err(EmitModuleError::MirLower)?;
+    let mut module = lower_ingot(db, ingot).map_err(EmitModuleError::MirLower)?;
+    link_yul_checked_arithmetic_helpers(db, &mut module)?;
 
     let contract_graph = build_contract_graph(&module.functions);
 
@@ -488,6 +495,160 @@ fn sanitize_symbol(component: &str) -> String {
         .chars()
         .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
         .collect()
+}
+
+fn link_yul_checked_arithmetic_helpers<'db>(
+    db: &'db DriverDataBase,
+    module: &mut mir::MirModule<'db>,
+) -> Result<(), EmitModuleError> {
+    fn checked_intrinsic_ty_suffix<'db>(
+        db: &'db DriverDataBase,
+        ty: hir::analysis::ty::ty_def::TyId<'db>,
+    ) -> Result<&'static str, EmitModuleError> {
+        let base_ty = ty.base_ty(db);
+        let TyData::TyBase(TyBase::Prim(prim)) = base_ty.data(db) else {
+            return Err(EmitModuleError::Yul(YulError::Unsupported(format!(
+                "checked arithmetic helper type must be primitive integral, got `{}`",
+                ty.pretty_print(db)
+            ))));
+        };
+        match prim {
+            PrimTy::U8 => Ok("u8"),
+            PrimTy::U16 => Ok("u16"),
+            PrimTy::U32 => Ok("u32"),
+            PrimTy::U64 => Ok("u64"),
+            PrimTy::U128 => Ok("u128"),
+            PrimTy::U256 => Ok("u256"),
+            PrimTy::Usize => Ok("usize"),
+            PrimTy::I8 => Ok("i8"),
+            PrimTy::I16 => Ok("i16"),
+            PrimTy::I32 => Ok("i32"),
+            PrimTy::I64 => Ok("i64"),
+            PrimTy::I128 => Ok("i128"),
+            PrimTy::I256 => Ok("i256"),
+            PrimTy::Isize => Ok("isize"),
+            _ => Err(EmitModuleError::Yul(YulError::Unsupported(format!(
+                "checked arithmetic helper type must be integral, got `{}`",
+                ty.pretty_print(db)
+            )))),
+        }
+    }
+
+    fn helper_symbol_from_checked_intrinsic<'db>(
+        db: &'db DriverDataBase,
+        intrinsic: mir::ir::CheckedIntrinsic<'db>,
+    ) -> Result<String, EmitModuleError> {
+        let suffix = checked_intrinsic_ty_suffix(db, intrinsic.ty)?;
+        Ok(format!(
+            "{}_{}",
+            intrinsic.op.helper_symbol_prefix(),
+            suffix
+        ))
+    }
+
+    let mut required_helpers = FxHashSet::default();
+    for func in &mut module.functions {
+        for block in &mut func.body.blocks {
+            for inst in &mut block.insts {
+                if let MirInst::Assign {
+                    rvalue: Rvalue::Call(call),
+                    ..
+                } = inst
+                    && let Some(intrinsic) = call.checked_intrinsic
+                {
+                    let helper = helper_symbol_from_checked_intrinsic(db, intrinsic)?;
+                    required_helpers.insert(helper.clone());
+                    call.resolved_name = Some(helper);
+                }
+            }
+
+            if let mir::Terminator::TerminatingCall {
+                call: mir::TerminatingCall::Call(call),
+                ..
+            } = &mut block.terminator
+                && let Some(intrinsic) = call.checked_intrinsic
+            {
+                let helper = helper_symbol_from_checked_intrinsic(db, intrinsic)?;
+                required_helpers.insert(helper.clone());
+                call.resolved_name = Some(helper);
+            }
+        }
+    }
+
+    if required_helpers.is_empty() {
+        return Ok(());
+    }
+
+    let current_ingot = module.top_mod.ingot(db);
+    let core_ingot = if current_ingot.kind(db) == IngotKind::Core {
+        current_ingot
+    } else {
+        current_ingot
+            .resolved_external_ingots(db)
+            .iter()
+            .find_map(|(name, ingot)| {
+                if name.data(db) == "core" {
+                    Some(*ingot)
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| {
+                EmitModuleError::Yul(YulError::Unsupported(
+                    "failed to resolve `core` ingot while linking checked arithmetic helpers"
+                        .into(),
+                ))
+            })?
+    };
+
+    let num_yul_url = core_ingot.base(db).join("src/num_yul.fe").map_err(|_| {
+        EmitModuleError::Yul(YulError::Unsupported(
+            "failed to locate `core::num_yul` source while linking checked arithmetic helpers"
+                .into(),
+        ))
+    })?;
+    let num_yul_file = db.workspace().get(db, &num_yul_url).ok_or_else(|| {
+        EmitModuleError::Yul(YulError::Unsupported(
+            "missing `core::num_yul` source while linking checked arithmetic helpers".into(),
+        ))
+    })?;
+    let num_yul_top_mod = db.top_mod(num_yul_file);
+
+    let num_yul_module = lower_module(db, num_yul_top_mod).map_err(EmitModuleError::MirLower)?;
+    let num_yul_call_graph = build_call_graph(&num_yul_module.functions);
+
+    let mut required_symbols = FxHashSet::default();
+    for helper in &required_helpers {
+        required_symbols.extend(reachable_functions(&num_yul_call_graph, helper));
+    }
+
+    let mut by_symbol: FxHashMap<_, _> = num_yul_module
+        .functions
+        .into_iter()
+        .map(|func| (func.symbol_name.clone(), func))
+        .collect();
+
+    let mut known = FxHashSet::default();
+    for func in &module.functions {
+        known.insert(func.symbol_name.clone());
+    }
+
+    let mut symbols: Vec<_> = required_symbols.into_iter().collect();
+    symbols.sort();
+    for symbol in symbols {
+        if known.contains(&symbol) {
+            continue;
+        }
+        let Some(func) = by_symbol.remove(&symbol) else {
+            return Err(EmitModuleError::Yul(YulError::Unsupported(format!(
+                "missing required checked arithmetic helper function `{symbol}`"
+            ))));
+        };
+        known.insert(symbol);
+        module.functions.push(func);
+    }
+
+    Ok(())
 }
 
 struct FunctionDocInfo {

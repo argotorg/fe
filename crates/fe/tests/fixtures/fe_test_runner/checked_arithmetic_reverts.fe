@@ -1,0 +1,47 @@
+#[test]
+fn test_add_overflow_u8() {
+    let x: u8 = 255
+    let y: u8 = x + 1
+}
+
+#[test]
+fn test_aug_assign_overflow_u8() {
+    let mut x: u8 = 255
+    x += 1
+}
+
+#[test]
+fn test_div_by_zero_u8() {
+    let x: u8 = 1
+    let y: u8 = x / 0
+}
+
+#[test]
+fn test_rem_by_zero_u8() {
+    let x: u8 = 1
+    let y: u8 = x % 0
+}
+
+#[test]
+fn test_pow_overflow_u8() {
+    let x: u8 = 2
+    let y: u8 = x ** 8
+}
+
+#[test]
+fn test_neg_overflow_i8() {
+    let x: i8 = -128
+    let y: i8 = -x
+}
+
+#[test]
+fn test_div_overflow_i8() {
+    let x: i8 = -128
+    let y: i8 = x / -1
+}
+
+#[test]
+fn test_pow_negative_exp_i8() {
+    let x: i8 = 2
+    let y: i8 = x ** -1
+}
