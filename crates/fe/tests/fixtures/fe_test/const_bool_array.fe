@@ -1,0 +1,52 @@
+use std::evm::effects::assert
+
+type FlagsAlias = [bool; 4]
+
+const FLAGS: [bool; 4] = [true, false, true, false]
+const FLAGS_ALIAS: FlagsAlias = [true, false, true, false]
+const NESTED: [[bool; 3]; 2] = [[true, false, true], [false, true, false]]
+
+#[test]
+fn test_const_bool_array_direct_index() {
+    assert(FLAGS[0] == true)
+    assert(FLAGS[1] == false)
+    assert(FLAGS[2] == true)
+    assert(FLAGS[3] == false)
+}
+
+#[test]
+fn test_const_bool_array_alias_copy() {
+    let flags: [bool; 4] = FLAGS
+    assert(flags[0] == true)
+    assert(flags[1] == false)
+    assert(flags[2] == true)
+    assert(flags[3] == false)
+}
+
+#[test]
+fn test_const_bool_array_type_alias_copy() {
+    let flags: FlagsAlias = FLAGS_ALIAS
+    assert(flags[0] == true)
+    assert(flags[1] == false)
+    assert(flags[2] == true)
+    assert(flags[3] == false)
+}
+
+#[test]
+fn test_const_nested_bool_array_index() {
+    assert(NESTED[0][0] == true)
+    assert(NESTED[0][1] == false)
+    assert(NESTED[1][1] == true)
+    assert(NESTED[1][2] == false)
+}
+
+#[test]
+fn test_const_bool_array_for_loop() {
+    let mut count: u256 = 0
+    for flag in FLAGS {
+        if flag {
+            count += 1
+        }
+    }
+    assert(count == 2)
+}

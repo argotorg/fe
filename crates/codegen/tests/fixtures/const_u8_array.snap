@@ -1,0 +1,79 @@
+---
+source: crates/codegen/tests/yul.rs
+expression: output
+input_file: tests/fixtures/const_u8_array.fe
+---
+object "main" {
+  code {
+    function $index_direct() -> ret {
+      let v0 := mload(0x40)
+      if iszero(v0) {
+        v0 := 0x80
+      }
+      mstore(0x40, add(v0, 32))
+      datacopy(v0, add(dataoffset("data_index_direct_0"), 1), 1)
+      let v1 := and(byte(0, mload(v0)), 0xff)
+      ret := v1
+      leave
+    }
+    function $alias_then_index() -> ret {
+      let v0 := mload(0x40)
+      if iszero(v0) {
+        v0 := 0x80
+      }
+      mstore(0x40, add(v0, 32))
+      let v1 := dataoffset("data_alias_then_index_0")
+      datacopy(v0, v1, 32)
+      let v2 := v0
+      let v3 := and(byte(0, mload(v2)), 0xff)
+      ret := v3
+      leave
+    }
+    function $pass_then_index() -> ret {
+      let v0 := mload(0x40)
+      if iszero(v0) {
+        v0 := 0x80
+      }
+      mstore(0x40, add(v0, 32))
+      let v1 := dataoffset("data_pass_then_index_0")
+      datacopy(v0, v1, 32)
+      let v2 := $f(v0)
+      ret := v2
+      leave
+    }
+    function $f($arr) -> ret {
+      let v0 := and(byte(0, mload(add($arr, 1))), 0xff)
+      ret := v0
+      leave
+    }
+    function $big_index() -> ret {
+      let v0 := mload(0x40)
+      if iszero(v0) {
+        v0 := 0x80
+      }
+      mstore(0x40, add(v0, 32))
+      datacopy(v0, add(dataoffset("data_big_index_0"), 39), 1)
+      let v1 := and(byte(0, mload(v0)), 0xff)
+      ret := v1
+      leave
+    }
+    function $big_copy_first() -> ret {
+      let v0 := mload(0x40)
+      if iszero(v0) {
+        v0 := 0x80
+      }
+      mstore(0x40, add(v0, 64))
+      let v1 := dataoffset("data_big_copy_first_0")
+      datacopy(v0, v1, 64)
+      let v2 := v0
+      let v3 := and(byte(0, mload(v2)), 0xff)
+      ret := v3
+      leave
+    }
+  }
+  data "data_big_index_0" hex"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f2021222324252627000000000000000000000000000000000000000000000000"
+  data "data_pass_then_index_0" hex"0102000000000000000000000000000000000000000000000000000000000000"
+  data "data_big_copy_first_0" hex"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f2021222324252627000000000000000000000000000000000000000000000000"
+  data "data_alias_then_index_0" hex"0102000000000000000000000000000000000000000000000000000000000000"
+  data "data_index_direct_0" hex"0102000000000000000000000000000000000000000000000000000000000000"
+}

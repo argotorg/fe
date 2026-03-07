@@ -5,27 +5,21 @@ input_file: crates/codegen/tests/fixtures/const_nested_u8_array.fe
 ---
 target = "evm-ethereum-osaka"
 
-global private const [i8; 128] $__fe_const_data_0 = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4];
+global private const [i8; 64] $__fe_const_data_0 = [1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 
 func private %const_nested_u8_array() -> i256 {
     block0:
-        v2.*i8 = evm_malloc 128.i256;
+        v2.*i8 = evm_malloc 64.i256;
         v3.i256 = ptr_to_int v2 i256;
         v4.i256 = sym_addr $__fe_const_data_0;
-        v5.i256 = sym_size $__fe_const_data_0;
-        evm_code_copy v3 v4 v5;
-        v6.*[[i256; 2]; 2] = bitcast v2 *[[i256; 2]; 2];
-        v8.*[i256; 2] = gep v6 0.i256 1.i256;
-        v9.i256 = ptr_to_int v8 i256;
-        v10.*i256 = gep v8 0.i256 0.i256;
-        v11.i256 = mload v10 i256;
+        evm_code_copy v3 v4 64.i256;
+        v6.i256 = add v3 32.i256;
+        v7.*[i256; 2] = int_to_ptr v6 *[i256; 2];
+        v8.*i256 = gep v7 0.i256 0.i256;
+        v9.i256 = mload v8 i256;
+        v11.i256 = shr 248.i256 v9;
         v12.i8 = trunc v11 i8;
         v13.i256 = zext v12 i256;
-        v14.*i8 = evm_malloc 128.i256;
-        v15.i256 = ptr_to_int v14 i256;
-        v16.i256 = sym_addr $__fe_const_data_0;
-        v17.i256 = sym_size $__fe_const_data_0;
-        evm_code_copy v15 v16 v17;
         return v13;
 }
 

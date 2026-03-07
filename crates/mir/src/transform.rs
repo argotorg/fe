@@ -123,9 +123,7 @@ pub(crate) fn insert_temp_binds<'db>(db: &'db dyn HirAnalysisDb, body: &mut MirB
                         rvalue,
                     } => {
                         match &rvalue {
-                            Rvalue::ZeroInit
-                            | Rvalue::Alloc { .. }
-                            | Rvalue::ConstAggregate { .. } => {}
+                            Rvalue::ZeroInit | Rvalue::Alloc { .. } => {}
                             Rvalue::Value(value) => {
                                 ctx.stabilize_value(*value, dest.is_some(), false);
                             }
@@ -489,9 +487,7 @@ pub(crate) fn canonicalize_zero_sized<'db>(db: &'db dyn HirAnalysisDb, body: &mu
                                 // any side effects in the base/index expressions.
                                 push_place_eval(db, values, &mut rewritten, &place);
                             }
-                            Rvalue::Alloc { .. }
-                            | Rvalue::ZeroInit
-                            | Rvalue::ConstAggregate { .. } => {}
+                            Rvalue::Alloc { .. } | Rvalue::ZeroInit => {}
                         }
                     }
                     _ => {
@@ -658,6 +654,7 @@ fn value_deps_in_eval_order(origin: &ValueOrigin<'_>) -> Vec<ValueId> {
             deps
         }
         ValueOrigin::TransparentCast { value } => vec![*value],
+        ValueOrigin::ConstRegion(_) => vec![],
         ValueOrigin::Expr(..)
         | ValueOrigin::ControlFlowResult { .. }
         | ValueOrigin::Unit
@@ -688,7 +685,6 @@ fn compute_value_use_counts<'db>(body: &MirBody<'db>) -> Vec<usize> {
             match inst {
                 MirInst::BindValue { value, .. } => bump(*value),
                 MirInst::Assign { rvalue, .. } => match rvalue {
-                    Rvalue::ZeroInit | Rvalue::Alloc { .. } | Rvalue::ConstAggregate { .. } => {}
                     Rvalue::Value(value) => bump(*value),
                     Rvalue::Call(call) => {
                         for arg in call.args.iter().chain(call.effect_args.iter()) {
@@ -704,6 +700,7 @@ fn compute_value_use_counts<'db>(body: &MirBody<'db>) -> Vec<usize> {
                         bump(place.base);
                         bump_place_path(&mut bump, &place.projection);
                     }
+                    Rvalue::Alloc { .. } | Rvalue::ZeroInit => {}
                 },
                 MirInst::Store { place, value, .. } => {
                     bump(place.base);

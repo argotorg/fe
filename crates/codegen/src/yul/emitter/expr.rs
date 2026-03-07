@@ -227,6 +227,10 @@ impl<'db> FunctionEmitter<'db> {
                     self.lower_place_load(place, value.ty, state)
                 }
             }
+            ValueOrigin::ConstRegion(id) => {
+                let label = self.const_region_labels.get(id).unwrap();
+                Ok(format!("dataoffset(\"{label}\")"))
+            }
             ValueOrigin::TransparentCast { value } => self.lower_value(*value, state),
         }
     }
@@ -321,7 +325,15 @@ impl<'db> FunctionEmitter<'db> {
         match value {
             SyntheticValue::Int(int) => Ok(int.to_string()),
             SyntheticValue::Bool(flag) => Ok(if *flag { "1" } else { "0" }.into()),
-            SyntheticValue::Bytes(bytes) => Ok(format!("0x{}", hex::encode(bytes))),
+            SyntheticValue::Bytes(bytes) => {
+                if bytes.len() > 32 {
+                    return Err(YulError::Unsupported(format!(
+                        "SyntheticValue::Bytes must fit in one EVM word, got {} bytes",
+                        bytes.len()
+                    )));
+                }
+                Ok(format!("0x{}", hex::encode(bytes)))
+            }
         }
     }
 
@@ -341,9 +353,9 @@ impl<'db> FunctionEmitter<'db> {
             Ok(base)
         } else {
             let offset = match field_ptr.addr_space {
-                mir::ir::AddressSpaceKind::Memory | mir::ir::AddressSpaceKind::Calldata => {
-                    field_ptr.offset_bytes
-                }
+                mir::ir::AddressSpaceKind::Memory
+                | mir::ir::AddressSpaceKind::Calldata
+                | mir::ir::AddressSpaceKind::Code => field_ptr.offset_bytes,
                 mir::ir::AddressSpaceKind::Storage
                 | mir::ir::AddressSpaceKind::TransientStorage => field_ptr.offset_bytes / 32,
             };
@@ -368,15 +380,36 @@ impl<'db> FunctionEmitter<'db> {
         }
 
         let addr = self.lower_place_address(place, state)?;
+        let packed = self.is_packed_scalar_array_access(place, loaded_ty)?;
         let raw_load = match self.mir_func.body.place_address_space(place) {
-            mir::ir::AddressSpaceKind::Memory => format!("mload({addr})"),
+            mir::ir::AddressSpaceKind::Memory => {
+                if packed {
+                    format!("byte(0, mload({addr}))")
+                } else {
+                    format!("mload({addr})")
+                }
+            }
             mir::ir::AddressSpaceKind::Calldata => format!("calldataload({addr})"),
             mir::ir::AddressSpaceKind::Storage => format!("sload({addr})"),
             mir::ir::AddressSpaceKind::TransientStorage => format!("tload({addr})"),
+            mir::ir::AddressSpaceKind::Code => {
+                return Err(YulError::Unsupported(
+                    "cannot lower code space load into a pure expression. intercept in emit_load_inst".into(),
+                ));
+            }
         };
 
         // Apply type-specific conversion (std::evm::word::WordRepr::from_word equivalent)
         Ok(self.apply_from_word_conversion(&raw_load, loaded_ty))
+    }
+
+    pub(super) fn is_packed_scalar_array_access(
+        &self,
+        place: &Place<'db>,
+        scalar_ty: TyId<'db>,
+    ) -> Result<bool, YulError> {
+        layout::is_packed_scalar_array_access(self.db, &self.mir_func.body, place, scalar_ty)
+            .map_err(YulError::Unsupported)
     }
 
     /// Applies the `WordRepr::from_word` conversion for a given type.
@@ -392,7 +425,7 @@ impl<'db> FunctionEmitter<'db> {
     ///
     /// NOTE: This is a single source of truth for codegen. If the stdlib word
     /// conversion semantics change, this function must be updated to match.
-    fn apply_from_word_conversion(&self, raw_load: &str, ty: TyId<'db>) -> String {
+    pub(super) fn apply_from_word_conversion(&self, raw_load: &str, ty: TyId<'db>) -> String {
         let ty = mir::repr::word_conversion_leaf_ty(self.db, ty);
         let base_ty = ty.base_ty(self.db);
         if let TyData::TyBase(TyBase::Prim(prim)) = base_ty.data(self.db) {
@@ -498,7 +531,7 @@ impl<'db> FunctionEmitter<'db> {
     ///
     /// Returns a Yul expression representing the memory/storage address.
     /// For memory, computes byte offsets. For storage, computes slot offsets.
-    fn lower_place_address(
+    pub(super) fn lower_place_address(
         &self,
         place: &Place<'db>,
         state: &BlockState,
