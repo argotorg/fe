@@ -1,0 +1,45 @@
+---
+source: crates/codegen/tests/yul.rs
+assertion_line: 33
+expression: output
+input_file: tests/fixtures/pointer_field_aggregate.fe
+---
+function $bump__StorPtr_u256___64779554cfbf0358($value) {
+  let v0 := sload($value)
+  sstore($value, add(v0, 1))
+  leave
+}
+function $pointer_field_aggregate__Evm_hef0af3106e109414__3af54274b2985741($mem) {
+  let v0 := $mem_ptr_stor_arg0_root_stor__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9($mem, 256)
+  let v1 := mload(0x40)
+  if iszero(v1) {
+    v1 := 0x80
+  }
+  mstore(0x40, add(v1, 64))
+  mstore(v1, v0)
+  mstore(add(v1, 32), 1)
+  let v2 := v1
+  let v3 := v2
+  let v4 := v3
+  $bump__MemPtr_u256___25949c86160e9382(v4)
+  let v5 := $mem_ptr_stor_arg0_root_stor__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9($mem, 288)
+  mstore(v2, v5)
+  let v6 := v2
+  let v7 := v6
+  $bump__MemPtr_u256___25949c86160e9382(v7)
+  leave
+}
+function $mem_ptr_stor_arg0_root_stor__Evm_hef0af3106e109414_u256__3b1b0af5b20737f9($self, $addr) -> ret {
+  let v0 := $memptr_t__hf71ec14ffe47fb3f_effecthandle_hfc52f915596f993a_from_raw__u256__3271ca15373d4483($addr)
+  ret := v0
+  leave
+}
+function $bump__MemPtr_u256___25949c86160e9382($value) {
+  let v0 := mload($value)
+  mstore($value, add(v0, 1))
+  leave
+}
+function $memptr_t__hf71ec14ffe47fb3f_effecthandle_hfc52f915596f993a_from_raw__u256__3271ca15373d4483($raw) -> ret {
+  ret := $raw
+  leave
+}

@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/generic_identity.fe
 ---
@@ -7,14 +8,14 @@ target = "evm-ethereum-osaka"
 
 func private %call_identity_u32() -> i256 {
     block0:
-        v2.i256 = call %identity__u32__20aa0c10687491ad 7.i256;
-        return v2;
+        v1.i256 = call %identity__u32__20aa0c10687491ad 7.i256;
+        return v1;
 }
 
 func private %call_identity_bool() -> i256 {
     block0:
-        v2.i256 = call %identity__bool__947c0c03c59c6f07 1.i256;
-        return v2;
+        v1.i256 = call %identity__bool__947c0c03c59c6f07 1.i256;
+        return v1;
 }
 
 func private %identity__u32__20aa0c10687491ad(v0.i256) -> i256 {

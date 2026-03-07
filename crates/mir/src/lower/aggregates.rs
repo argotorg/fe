@@ -25,8 +25,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let inner_value = inner_value?;
         self.builder.body.values[fallback.index()].origin =
             ValueOrigin::TransparentCast { value: inner_value };
-        self.builder.body.values[fallback.index()].repr =
-            self.value_repr_for_expr(expr, aggregate_ty);
+        self.builder.body.values[fallback.index()].repr = self.builder.body.value(inner_value).repr;
         Some(fallback)
     }
 

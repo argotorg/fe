@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/zero_sized_aggregates.fe
 ---
@@ -10,13 +11,12 @@ type @__fe_Wrap_1 = {unit, i256};
 
 func private %tuple_with_empty() -> i256 {
     block0:
-        v2.*@__fe_tuple_0 = alloca @__fe_tuple_0;
-        v3.i256 = ptr_to_int v2 i256;
-        v5.*i256 = gep v2 0.i256 1.i256;
-        mstore v5 5.i256 i256;
-        v6.*i256 = gep v2 0.i256 1.i256;
-        v7.i256 = mload v6 i256;
-        return v7;
+        v1.*@__fe_tuple_0 = alloca @__fe_tuple_0;
+        v4.*i256 = gep v1 0.i256 1.i256;
+        mstore v4 5.i256 i256;
+        v5.*i256 = gep v1 0.i256 1.i256;
+        v6.i256 = mload v5 i256;
+        return v6;
 }
 
 func private %tuple_only_empty() {
@@ -26,21 +26,19 @@ func private %tuple_only_empty() {
 
 func private %struct_with_empty() -> i256 {
     block0:
-        v2.*@__fe_Wrap_1 = alloca @__fe_Wrap_1;
-        v3.i256 = ptr_to_int v2 i256;
-        v5.*i256 = gep v2 0.i256 1.i256;
-        mstore v5 7.i256 i256;
-        v6.*i256 = gep v2 0.i256 1.i256;
-        v7.i256 = mload v6 i256;
-        return v7;
+        v1.*@__fe_Wrap_1 = alloca @__fe_Wrap_1;
+        v4.*i256 = gep v1 0.i256 1.i256;
+        mstore v4 7.i256 i256;
+        v5.*i256 = gep v1 0.i256 1.i256;
+        v6.i256 = mload v5 i256;
+        return v6;
 }
 
 func private %empty_field_assign() {
     block0:
-        v1.*@__fe_Wrap_1 = alloca @__fe_Wrap_1;
-        v2.i256 = ptr_to_int v1 i256;
-        v4.*i256 = gep v1 0.i256 1.i256;
-        mstore v4 1.i256 i256;
+        v0.*@__fe_Wrap_1 = alloca @__fe_Wrap_1;
+        v3.*i256 = gep v0 0.i256 1.i256;
+        mstore v3 1.i256 i256;
         return;
 }
 

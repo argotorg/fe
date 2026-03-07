@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/const_nested_u8_array.fe
 ---
@@ -9,24 +10,24 @@ global private const [i8; 128] $__fe_const_data_0 = [0, 0, 0, 0, 0, 0, 0, 0, 0, 
 
 func private %const_nested_u8_array() -> i256 {
     block0:
-        v2.*i8 = evm_malloc 128.i256;
-        v3.i256 = ptr_to_int v2 i256;
-        v4.i256 = sym_addr $__fe_const_data_0;
-        v5.i256 = sym_size $__fe_const_data_0;
-        evm_code_copy v3 v4 v5;
-        v6.*[[i256; 2]; 2] = bitcast v2 *[[i256; 2]; 2];
-        v8.*[i256; 2] = gep v6 0.i256 1.i256;
-        v9.i256 = ptr_to_int v8 i256;
-        v10.*i256 = gep v8 0.i256 0.i256;
-        v11.i256 = mload v10 i256;
-        v12.i8 = trunc v11 i8;
-        v13.i256 = zext v12 i256;
-        v14.*i8 = evm_malloc 128.i256;
-        v15.i256 = ptr_to_int v14 i256;
-        v16.i256 = sym_addr $__fe_const_data_0;
-        v17.i256 = sym_size $__fe_const_data_0;
-        evm_code_copy v15 v16 v17;
-        return v13;
+        v1.*i8 = evm_malloc 128.i256;
+        v2.i256 = sym_addr $__fe_const_data_0;
+        v3.i256 = sym_size $__fe_const_data_0;
+        v4.i256 = ptr_to_int v1 i256;
+        evm_code_copy v4 v2 v3;
+        v5.*[[i256; 2]; 2] = bitcast v1 *[[i256; 2]; 2];
+        v8.*[i256; 2] = gep v5 0.i256 1.i256;
+        v9.*i256 = gep v8 0.i256 0.i256;
+        v10.i256 = mload v9 i256;
+        v11.i8 = trunc v10 i8;
+        v12.i256 = zext v11 i256;
+        v13.*i8 = evm_malloc 128.i256;
+        v14.i256 = sym_addr $__fe_const_data_0;
+        v15.i256 = sym_size $__fe_const_data_0;
+        v16.i256 = ptr_to_int v13 i256;
+        evm_code_copy v16 v14 v15;
+        v17.*[[i256; 2]; 2] = bitcast v13 *[[i256; 2]; 2];
+        return v12;
 }
 
 func private %__fe_sonatina_entry() {

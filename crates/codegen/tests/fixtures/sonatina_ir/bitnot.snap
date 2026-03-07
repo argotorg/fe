@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/bitnot.fe
 ---
@@ -7,8 +8,8 @@ target = "evm-ethereum-osaka"
 
 func private %bit_not(v0.i256) -> i256 {
     block0:
-        v2.i256 = not v0;
-        return v2;
+        v1.i256 = not v0;
+        return v1;
 }
 
 func private %__fe_sonatina_entry() {

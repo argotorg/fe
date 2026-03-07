@@ -239,26 +239,12 @@ impl<'db> BodyBuilder<'db> {
         ty: TyId<'db>,
         is_mut: bool,
         address_space: AddressSpaceKind,
+        repr: ValueRepr,
         rvalue: Rvalue<'db>,
     ) -> LocalValue {
         let local = self.alloc_local(name, ty, is_mut, address_space);
         self.assign(Some(local), rvalue);
-        let value = self.local_value(ty, local, ValueRepr::Word);
-        LocalValue { local, value }
-    }
-
-    pub fn assign_to_new_local_in(
-        &mut self,
-        block: BasicBlockId,
-        name: impl Into<String>,
-        ty: TyId<'db>,
-        is_mut: bool,
-        address_space: AddressSpaceKind,
-        rvalue: Rvalue<'db>,
-    ) -> LocalValue {
-        let local = self.alloc_local(name, ty, is_mut, address_space);
-        self.assign_in(block, Some(local), rvalue);
-        let value = self.local_value(ty, local, ValueRepr::Word);
+        let value = self.local_value(ty, local, repr);
         LocalValue { local, value }
     }
 }

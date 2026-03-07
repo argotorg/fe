@@ -1,40 +1,37 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/array_mut.fe
 ---
 target = "evm-ethereum-osaka"
 
-func private %array_mut(v0.i256) -> i256 {
+func private %array_mut(v0.i256) -> *[i256; 4] {
     block0:
-        v3.*i8 = evm_malloc 128.i256;
-        v4.i256 = ptr_to_int v3 i256;
-        v5.i8 = trunc v0 i8;
-        v6.i256 = zext v5 i256;
-        v7.*[i256; 4] = bitcast v3 *[i256; 4];
-        v8.*i256 = gep v7 0.i256 0.i256;
-        mstore v8 v6 i256;
-        v10.i8 = trunc 2.i256 i8;
-        v11.i256 = zext v10 i256;
-        v12.*[i256; 4] = bitcast v3 *[i256; 4];
-        v14.*i256 = gep v12 0.i256 1.i256;
-        mstore v14 v11 i256;
-        v16.i8 = trunc 3.i256 i8;
-        v17.i256 = zext v16 i256;
-        v18.*[i256; 4] = bitcast v3 *[i256; 4];
-        v19.*i256 = gep v18 0.i256 2.i256;
-        mstore v19 v17 i256;
-        v21.i8 = trunc 4.i256 i8;
-        v22.i256 = zext v21 i256;
-        v23.*[i256; 4] = bitcast v3 *[i256; 4];
-        v24.*i256 = gep v23 0.i256 3.i256;
-        mstore v24 v22 i256;
-        return v4;
+        v2.*i8 = evm_malloc 128.i256;
+        v3.*[i256; 4] = bitcast v2 *[i256; 4];
+        v5.*i256 = gep v3 0.i256 0.i256;
+        v6.i8 = trunc v0 i8;
+        v7.i256 = zext v6 i256;
+        mstore v5 v7 i256;
+        v10.*i256 = gep v3 0.i256 1.i256;
+        v11.i8 = trunc 2.i256 i8;
+        v12.i256 = zext v11 i256;
+        mstore v10 v12 i256;
+        v14.*i256 = gep v3 0.i256 2.i256;
+        v15.i8 = trunc 3.i256 i8;
+        v16.i256 = zext v15 i256;
+        mstore v14 v16 i256;
+        v18.*i256 = gep v3 0.i256 3.i256;
+        v19.i8 = trunc 4.i256 i8;
+        v20.i256 = zext v19 i256;
+        mstore v18 v20 i256;
+        return v3;
 }
 
 func private %__fe_sonatina_entry() {
     block0:
-        v1.i256 = call %array_mut 0.i256;
+        v1.*[i256; 4] = call %array_mut 0.i256;
         evm_stop;
 }
 

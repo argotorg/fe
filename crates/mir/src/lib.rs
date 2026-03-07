@@ -12,6 +12,7 @@ pub mod repr;
 mod transform;
 mod ty;
 
+pub use core_lib::CoreLib;
 pub use ir::{
     BasicBlockId, CallOrigin, LocalData, LocalId, LoopInfo, MirBackend, MirBody, MirFunction,
     MirInst, MirModule, MirProjection, MirProjectionPath, MirStage, Rvalue, SwitchTarget,

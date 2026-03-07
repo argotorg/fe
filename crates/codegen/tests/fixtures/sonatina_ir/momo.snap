@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/momo.fe
 ---
@@ -7,25 +8,24 @@ target = "evm-ethereum-osaka"
 
 type @__fe_MyStruct_0 = {i256, i256};
 
-func private %read_x(v0.i256) -> i256 {
+func private %read_x(v0.*@__fe_MyStruct_0) -> i256 {
     block0:
-        v2.*@__fe_MyStruct_0 = int_to_ptr v0 *@__fe_MyStruct_0;
-        v3.*i256 = gep v2 0.i256 0.i256;
-        v4.i256 = mload v3 i256;
-        v5.i8 = trunc v4 i8;
-        v6.i256 = zext v5 i256;
-        v7.*@__fe_MyStruct_0 = int_to_ptr v0 *@__fe_MyStruct_0;
-        v9.*i256 = gep v7 0.i256 1.i256;
-        v10.i256 = mload v9 i256;
-        v11.i8 = trunc v10 i8;
-        v12.i256 = zext v11 i256;
-        v13.i256 = add v6 v12;
-        return v13;
+        v2.*i256 = gep v0 0.i256 0.i256;
+        v3.i256 = mload v2 i256;
+        v4.i8 = trunc v3 i8;
+        v5.i256 = zext v4 i256;
+        v7.*i256 = gep v0 0.i256 1.i256;
+        v8.i256 = mload v7 i256;
+        v9.i8 = trunc v8 i8;
+        v10.i256 = zext v9 i256;
+        v11.i256 = add v5 v10;
+        return v11;
 }
 
 func private %__fe_sonatina_entry() {
     block0:
-        v1.i256 = call %read_x 0.i256;
+        v1.*@__fe_MyStruct_0 = int_to_ptr 0.i256 *@__fe_MyStruct_0;
+        v2.i256 = call %read_x v1;
         evm_stop;
 }
 

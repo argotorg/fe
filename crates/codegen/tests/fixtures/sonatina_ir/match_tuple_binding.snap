@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/match_tuple_binding.fe
 ---
@@ -8,141 +9,127 @@ target = "evm-ethereum-osaka"
 type @__fe_tuple_0 = {i256, i256};
 type @__fe_tuple_1 = {@__fe_tuple_0, i256};
 
-func private %match_tuple_extract(v0.i256) -> i256 {
+func private %match_tuple_extract(v0.*@__fe_tuple_0) -> i256 {
     block0:
         jump block5;
 
     block1:
-        v3.*@__fe_tuple_0 = int_to_ptr v0 *@__fe_tuple_0;
-        v5.*i256 = gep v3 0.i256 1.i256;
-        v6.i256 = mload v5 i256;
-        v7.i8 = trunc v6 i8;
-        v8.i256 = zext v7 i256;
+        v4.*i256 = gep v0 0.i256 1.i256;
+        v5.i256 = mload v4 i256;
+        v6.i8 = trunc v5 i8;
+        v7.i256 = zext v6 i256;
         jump block2;
 
     block2:
-        v10.i256 = phi (v8 block1) (v16 block3) (v28 block4);
-        return v10;
+        v9.i256 = phi (v7 block1) (v14 block3) (v24 block4);
+        return v9;
 
     block3:
-        v12.*@__fe_tuple_0 = int_to_ptr v0 *@__fe_tuple_0;
-        v13.*i256 = gep v12 0.i256 0.i256;
-        v14.i256 = mload v13 i256;
-        v15.i8 = trunc v14 i8;
-        v16.i256 = zext v15 i256;
+        v11.*i256 = gep v0 0.i256 0.i256;
+        v12.i256 = mload v11 i256;
+        v13.i8 = trunc v12 i8;
+        v14.i256 = zext v13 i256;
         jump block2;
 
     block4:
-        v18.*@__fe_tuple_0 = int_to_ptr v0 *@__fe_tuple_0;
-        v19.*i256 = gep v18 0.i256 0.i256;
-        v20.i256 = mload v19 i256;
-        v21.i8 = trunc v20 i8;
-        v22.i256 = zext v21 i256;
-        v23.*@__fe_tuple_0 = int_to_ptr v0 *@__fe_tuple_0;
-        v24.*i256 = gep v23 0.i256 1.i256;
-        v25.i256 = mload v24 i256;
-        v26.i8 = trunc v25 i8;
-        v27.i256 = zext v26 i256;
-        v28.i256 = add v22 v27;
+        v16.*i256 = gep v0 0.i256 0.i256;
+        v17.i256 = mload v16 i256;
+        v18.i8 = trunc v17 i8;
+        v19.i256 = zext v18 i256;
+        v20.*i256 = gep v0 0.i256 1.i256;
+        v21.i256 = mload v20 i256;
+        v22.i8 = trunc v21 i8;
+        v23.i256 = zext v22 i256;
+        v24.i256 = add v19 v23;
         jump block2;
 
     block5:
-        v30.*@__fe_tuple_0 = int_to_ptr v0 *@__fe_tuple_0;
-        v31.*i256 = gep v30 0.i256 0.i256;
+        v26.*i256 = gep v0 0.i256 0.i256;
+        v27.i256 = mload v26 i256;
+        v28.i8 = trunc v27 i8;
+        v29.i256 = zext v28 i256;
+        br_table v29 block6 (0.i256 block1);
+
+    block6:
+        v31.*i256 = gep v0 0.i256 1.i256;
         v32.i256 = mload v31 i256;
         v33.i8 = trunc v32 i8;
         v34.i256 = zext v33 i256;
-        br_table v34 block6 (0.i256 block1);
-
-    block6:
-        v36.*@__fe_tuple_0 = int_to_ptr v0 *@__fe_tuple_0;
-        v37.*i256 = gep v36 0.i256 1.i256;
-        v38.i256 = mload v37 i256;
-        v39.i8 = trunc v38 i8;
-        v40.i256 = zext v39 i256;
-        br_table v40 block4 (0.i256 block3);
+        br_table v34 block4 (0.i256 block3);
 }
 
-func private %match_nested_extract(v0.i256) -> i256 {
+func private %match_nested_extract(v0.*@__fe_tuple_1) -> i256 {
     block0:
         jump block5;
 
     block1:
-        v3.*@__fe_tuple_1 = int_to_ptr v0 *@__fe_tuple_1;
-        v5.*i256 = gep v3 0.i256 1.i256;
-        v6.i256 = mload v5 i256;
-        v7.i8 = trunc v6 i8;
-        v8.i256 = zext v7 i256;
+        v4.*i256 = gep v0 0.i256 1.i256;
+        v5.i256 = mload v4 i256;
+        v6.i8 = trunc v5 i8;
+        v7.i256 = zext v6 i256;
         jump block2;
 
     block2:
-        v10.i256 = phi (v8 block1) (v22 block3) (v34 block4);
-        return v10;
+        v9.i256 = phi (v7 block1) (v19 block3) (v29 block4);
+        return v9;
 
     block3:
-        v12.*@__fe_tuple_1 = int_to_ptr v0 *@__fe_tuple_1;
-        v13.*i256 = gep v12 0.i256 0.i256 1.i256;
-        v14.i256 = mload v13 i256;
-        v15.i8 = trunc v14 i8;
-        v16.i256 = zext v15 i256;
-        v17.*@__fe_tuple_1 = int_to_ptr v0 *@__fe_tuple_1;
-        v18.*i256 = gep v17 0.i256 0.i256 0.i256;
-        v19.i256 = mload v18 i256;
-        v20.i8 = trunc v19 i8;
-        v21.i256 = zext v20 i256;
-        v22.i256 = add v21 v16;
+        v11.*i256 = gep v0 0.i256 0.i256 1.i256;
+        v12.i256 = mload v11 i256;
+        v13.i8 = trunc v12 i8;
+        v14.i256 = zext v13 i256;
+        v15.*i256 = gep v0 0.i256 0.i256 0.i256;
+        v16.i256 = mload v15 i256;
+        v17.i8 = trunc v16 i8;
+        v18.i256 = zext v17 i256;
+        v19.i256 = add v18 v14;
         jump block2;
 
     block4:
-        v24.*@__fe_tuple_1 = int_to_ptr v0 *@__fe_tuple_1;
-        v25.*i256 = gep v24 0.i256 0.i256 0.i256;
+        v21.*i256 = gep v0 0.i256 0.i256 0.i256;
+        v22.i256 = mload v21 i256;
+        v23.i8 = trunc v22 i8;
+        v24.i256 = zext v23 i256;
+        v25.*i256 = gep v0 0.i256 1.i256;
         v26.i256 = mload v25 i256;
         v27.i8 = trunc v26 i8;
         v28.i256 = zext v27 i256;
-        v29.*@__fe_tuple_1 = int_to_ptr v0 *@__fe_tuple_1;
-        v30.*i256 = gep v29 0.i256 1.i256;
-        v31.i256 = mload v30 i256;
-        v32.i8 = trunc v31 i8;
-        v33.i256 = zext v32 i256;
-        v34.i256 = add v28 v33;
+        v29.i256 = add v24 v28;
         jump block2;
 
     block5:
-        v36.*@__fe_tuple_1 = int_to_ptr v0 *@__fe_tuple_1;
-        v37.*i256 = gep v36 0.i256 0.i256 1.i256;
-        v38.i256 = mload v37 i256;
-        v39.i8 = trunc v38 i8;
-        v40.i256 = zext v39 i256;
-        br_table v40 block8 (0.i256 block6);
+        v31.*i256 = gep v0 0.i256 0.i256 1.i256;
+        v32.i256 = mload v31 i256;
+        v33.i8 = trunc v32 i8;
+        v34.i256 = zext v33 i256;
+        br_table v34 block8 (0.i256 block6);
 
     block6:
-        v42.*@__fe_tuple_1 = int_to_ptr v0 *@__fe_tuple_1;
-        v43.*i256 = gep v42 0.i256 0.i256 0.i256;
-        v44.i256 = mload v43 i256;
-        v45.i8 = trunc v44 i8;
-        v46.i256 = zext v45 i256;
-        br_table v46 block7 (0.i256 block1);
+        v36.*i256 = gep v0 0.i256 0.i256 0.i256;
+        v37.i256 = mload v36 i256;
+        v38.i8 = trunc v37 i8;
+        v39.i256 = zext v38 i256;
+        br_table v39 block7 (0.i256 block1);
 
     block7:
-        v48.*@__fe_tuple_1 = int_to_ptr v0 *@__fe_tuple_1;
-        v49.*i256 = gep v48 0.i256 1.i256;
-        v50.i256 = mload v49 i256;
-        v51.i8 = trunc v50 i8;
-        v52.i256 = zext v51 i256;
-        br_table v52 block4 (0.i256 block3);
+        v41.*i256 = gep v0 0.i256 1.i256;
+        v42.i256 = mload v41 i256;
+        v43.i8 = trunc v42 i8;
+        v44.i256 = zext v43 i256;
+        br_table v44 block4 (0.i256 block3);
 
     block8:
-        v54.*@__fe_tuple_1 = int_to_ptr v0 *@__fe_tuple_1;
-        v55.*i256 = gep v54 0.i256 1.i256;
-        v56.i256 = mload v55 i256;
-        v57.i8 = trunc v56 i8;
-        v58.i256 = zext v57 i256;
-        br_table v58 block4 (0.i256 block3);
+        v46.*i256 = gep v0 0.i256 1.i256;
+        v47.i256 = mload v46 i256;
+        v48.i8 = trunc v47 i8;
+        v49.i256 = zext v48 i256;
+        br_table v49 block4 (0.i256 block3);
 }
 
 func private %__fe_sonatina_entry() {
     block0:
-        v1.i256 = call %match_tuple_extract 0.i256;
+        v1.*@__fe_tuple_0 = int_to_ptr 0.i256 *@__fe_tuple_0;
+        v2.i256 = call %match_tuple_extract v1;
         evm_stop;
 }
 

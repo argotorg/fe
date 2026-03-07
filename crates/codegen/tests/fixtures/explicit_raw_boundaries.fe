@@ -1,0 +1,25 @@
+use std::evm::{MemPtr, RawMem}
+
+struct Data {
+    value: u256,
+}
+
+fn bump() uses (value: mut u256) {
+    value += 1
+}
+
+fn raw_store() uses (data: mut Data, mem: mut RawMem) {
+    mem.mstore(core::addr_of(data), 8)
+}
+
+pub fn explicit_raw_boundaries() uses (mem: mut RawMem) {
+    let ptr: MemPtr<u256> = mem.mem_ptr(0x100)
+    with (ptr) {
+        bump()
+    }
+
+    let mut data = Data { value: 7 }
+    with (data, mem) {
+        raw_store()
+    }
+}

@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/const_array_add.fe
 ---
@@ -9,13 +10,13 @@ global private const [i8; 96] $__fe_const_data_0 = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 
 func private %get_sum() -> i256 {
     block0:
-        v2.*i8 = evm_malloc 96.i256;
-        v3.i256 = ptr_to_int v2 i256;
-        v4.i256 = sym_addr $__fe_const_data_0;
-        v5.i256 = sym_size $__fe_const_data_0;
-        evm_code_copy v3 v4 v5;
-        v6.*[i256; 3] = bitcast v2 *[i256; 3];
-        v7.*i256 = gep v6 0.i256 0.i256;
+        v1.*i8 = evm_malloc 96.i256;
+        v2.i256 = sym_addr $__fe_const_data_0;
+        v3.i256 = sym_size $__fe_const_data_0;
+        v4.i256 = ptr_to_int v1 i256;
+        evm_code_copy v4 v2 v3;
+        v5.*[i256; 3] = bitcast v1 *[i256; 3];
+        v7.*i256 = gep v5 0.i256 0.i256;
         v8.i256 = mload v7 i256;
         v10.i256 = add 1.i256 v8;
         return v10;
