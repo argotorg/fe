@@ -8,7 +8,7 @@ error[2-0003]: `C` is not visible
    ┌─ assoc_const_visibility_span.fe:16:15
    │
  4 │         const C: u32
-   │         ------------ `C` is defined here
+   │               - `C` is defined here
    ·
 16 │     inner::S::C
    │               ^ `C` is not visible
