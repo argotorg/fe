@@ -612,7 +612,7 @@ impl<S: IntWord, T: IntWord> IntDowncast<T> for S {
 fn sign_extend(word: u256, _ mask: u256, _ sign_bit: u256) -> u256 {
     let value = word & mask
     if value & sign_bit != 0 {
-        value | (!mask)
+        value | (U256_MASK ^ mask)
     } else {
         value
     }

@@ -9,7 +9,7 @@ use ingot::evm::intrinsic::{
     code_region_offset as intrinsic_code_region_offset,
 }
 use ingot::abi::Sol
-use ingot::abi::sol::{encoded_size, SolDecoder, SolEncoder}
+use ingot::abi::sol::{decode_input_at, encoded_size, SolEncoder}
 use super::calldata::CallData
 use super::contract_field_slot
 use ingot::evm::mem
@@ -48,7 +48,11 @@ impl AbiSize for Address {
 
 impl<A: Abi> Decode<A> for Address {
     fn decode<D: AbiDecoder<A>>(_ d: mut D) -> Self {
-        Address { inner: d.read_word() }
+        let word = d.read_word()
+        if word >> 160 != 0 {
+            ops::revert(0, 0)
+        }
+        Address { inner: word }
     }
 }
 
@@ -310,6 +314,25 @@ pub struct Evm {
     seal: Private
 }
 
+impl Evm {
+    /// Return the current Solidity selector from raw calldata.
+    pub fn selector(self) -> u32 {
+        self.runtime_selector<Sol>()
+    }
+
+    /// Return a calldata view over the current Solidity call arguments.
+    pub fn args(self) -> CallData {
+        CallData::with_base(size_of<Sol::Selector>())
+    }
+
+    /// Decode the current Solidity call arguments, skipping the 4-byte selector.
+    pub fn decode_args<T>(self) -> T
+        where T: Decode<Sol>
+    {
+        decode_input_at(self.input(), size_of<Sol::Selector>())
+    }
+}
+
 impl Ctx for Evm {
     fn address(self) -> Address { Address { inner: ops::address() } }
     fn caller(self) -> Address { Address { inner: ops::caller() } }
@@ -396,13 +419,7 @@ fn encode_calldata<M>(selector: u32, message: own M) -> (u256, u256)
 fn decode_returndata<R>(ptr: u256, len: u256) -> R
     where R: Decode<Sol>
 {
-    if len < encoded_size<R>() {
-        ops::revert(0, 0)
-    }
-
-    let input = MemoryBytes { base: ptr, len: len }
-    let mut d = SolDecoder<MemoryBytes>::new(input)
-    R::decode(mut d)
+    MemoryBytes::new(ptr, len).decode<R>()
 }
 
 impl Call for Evm {
@@ -496,7 +513,7 @@ impl ContractHost for Evm {
     type InitInput = MemoryBytes
 
     fn input(self) -> Self::Input {
-        CallData { base: 0 }
+        CallData::new()
     }
 
     fn init_input<F>(mut self, runtime: F) -> Self::InitInput {
@@ -510,7 +527,7 @@ impl ContractHost for Evm {
         let args_len = code_size - args_offset
         let args_ptr = mem::alloc(args_len)
         self.codecopy(args_ptr, args_offset, args_len)
-        MemoryBytes { base: args_ptr, len: args_len }
+        MemoryBytes::new(args_ptr, args_len)
     }
 
     fn field<T>(mut self, slot: u256) -> core::effect_ref::StorPtr<T> {

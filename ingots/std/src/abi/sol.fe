@@ -1,11 +1,31 @@
-use core::abi::{Abi, AbiDecoder, AbiEncoder, ByteInput, Cursor, Encode}
+use core::abi::{Abi, AbiDecoder, AbiEncoder, ByteInput, Cursor, Decode, Encode}
 use core::{AsBytes, keccak}
 use ingot::evm::mem
 use ingot::evm::ops::{mstore, mstore8, revert}
 use ingot::evm::Address
 use ingot::evm::TopicValue
+use core::num::IntDowncast
 
 pub struct Sol {}
+
+const FULL_WORD_MASK: u256 = 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+
+fn canonical_signed_word(_ word: u256, _ mask: u256, _ sign_bit: u256) -> u256 {
+    let value = word & mask
+    if value & sign_bit != 0 {
+        let canonical = value | (FULL_WORD_MASK ^ mask)
+        if canonical == word {
+            return canonical
+        }
+        revert(0, 0)
+    }
+
+    if value == word {
+        return value
+    }
+
+    revert(0, 0)
+}
 
 /// Compute the 4-byte Solidity selector for a signature string.
 ///
@@ -28,6 +48,83 @@ impl Abi for Sol {
         (prefix >> 224).downcast_unchecked()
     }
 
+    fn decode_bool_word(_ word: u256) -> bool {
+        if word == 0 {
+            return false
+        }
+
+        if word == 1 {
+            return true
+        }
+
+        revert(0, 0)
+    }
+
+    fn decode_u8_word(_ word: u256) -> u8 {
+        if let Option::Some(value) = word.downcast() {
+            return value
+        }
+        revert(0, 0)
+    }
+
+    fn decode_u16_word(_ word: u256) -> u16 {
+        if let Option::Some(value) = word.downcast() {
+            return value
+        }
+        revert(0, 0)
+    }
+
+    fn decode_u32_word(_ word: u256) -> u32 {
+        if let Option::Some(value) = word.downcast() {
+            return value
+        }
+        revert(0, 0)
+    }
+
+    fn decode_u64_word(_ word: u256) -> u64 {
+        if let Option::Some(value) = word.downcast() {
+            return value
+        }
+        revert(0, 0)
+    }
+
+    fn decode_u128_word(_ word: u256) -> u128 {
+        if let Option::Some(value) = word.downcast() {
+            return value
+        }
+        revert(0, 0)
+    }
+
+    fn decode_i8_word(_ word: u256) -> i8 {
+        let signed_word: i256 = canonical_signed_word(word, 0xff, 0x80).downcast_unchecked()
+        signed_word.downcast_unchecked()
+    }
+
+    fn decode_i16_word(_ word: u256) -> i16 {
+        let signed_word: i256 = canonical_signed_word(word, 0xffff, 0x8000).downcast_unchecked()
+        signed_word.downcast_unchecked()
+    }
+
+    fn decode_i32_word(_ word: u256) -> i32 {
+        let signed_word: i256 = canonical_signed_word(word, 0xffffffff, 0x80000000).downcast_unchecked()
+        signed_word.downcast_unchecked()
+    }
+
+    fn decode_i64_word(_ word: u256) -> i64 {
+        let signed_word: i256 =
+            canonical_signed_word(word, 0xffffffffffffffff, 0x8000000000000000).downcast_unchecked()
+        signed_word.downcast_unchecked()
+    }
+
+    fn decode_i128_word(_ word: u256) -> i128 {
+        let signed_word: i256 = canonical_signed_word(
+            word,
+            0xffffffffffffffffffffffffffffffff,
+            0x80000000000000000000000000000000,
+        ).downcast_unchecked()
+        signed_word.downcast_unchecked()
+    }
+
     fn decoder_new<I: ByteInput>(_ input: own I) -> Self::Decoder<I> {
         SolDecoder::new(input)
     }
@@ -36,9 +133,7 @@ impl Abi for Sol {
         SolDecoder::with_base(input, base)
     }
 
-    fn encoder_new() -> Self::Encoder {
-        SolEncoder::new()
-    }
+    fn encoder_new() -> Self::Encoder { SolEncoder::new() }
 }
 
 pub struct SolDecoder<I> {
@@ -62,6 +157,28 @@ impl<I> SolDecoder<I>
             base,
         }
     }
+}
+
+/// Decode a Solidity ABI payload from an arbitrary byte input starting at byte 0.
+pub fn decode_input<T, I>(input: own I) -> T
+    where T: Decode<Sol>, I: ByteInput
+{
+    decode_input_at(input, 0)
+}
+
+/// Decode a Solidity ABI payload from an arbitrary byte input using an explicit base offset.
+///
+/// The input stays raw; `base` chooses where the ABI payload begins. Dynamic
+/// offsets remain relative to `base`, matching Solidity ABI rules.
+pub fn decode_input_at<T, I>(input: own I, base: u256) -> T
+    where T: Decode<Sol>, I: ByteInput
+{
+    if base > input.len() {
+        revert(0, 0)
+    }
+
+    let mut d = SolDecoder<I>::with_base(input, base)
+    T::decode(mut d)
 }
 
 impl<I> AbiDecoder<Sol> for SolDecoder<I>

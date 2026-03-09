@@ -1,14 +1,30 @@
-use core::abi::ByteInput
+use core::abi::{ByteInput, Decode}
 use core::Copy
 use core::num::IntDowncast
+use ingot::abi::Sol
+use ingot::abi::sol::decode_input
 use ingot::evm::ops::mload
 
+/// A view over an in-memory byte buffer.
 pub struct MemoryBytes {
     pub base: u256,
     pub len: u256,
 }
 
 impl Copy for MemoryBytes {}
+
+impl MemoryBytes {
+    pub fn new(base: u256, len: u256) -> Self {
+        MemoryBytes { base, len }
+    }
+
+    /// Decode Solidity ABI data from this memory view.
+    pub fn decode<T>(self) -> T
+        where T: Decode<Sol>
+    {
+        decode_input(self)
+    }
+}
 
 impl ByteInput for MemoryBytes {
     fn len(self) -> u256 {
