@@ -1,5 +1,10 @@
 // <fe-doc-item> — Renders a documentation item from FE_DOC_INDEX.
 //
+// Delegates to the same renderDocItem() used by the static site, so the
+// output is identical.  Falls back to a minimal rendering if fe-web.js
+// hasn't loaded (e.g. when only the component bundle is used without the
+// full app JS).
+//
 // Usage:
 //   <fe-doc-item symbol="mylib::Game/struct"></fe-doc-item>
 //
@@ -47,10 +52,22 @@ class FeDocItem extends HTMLElement {
 
     if (!item) {
       this.innerHTML = "<span class=\"fe-doc-item-error\">Item not found: " +
-        _escapeHtml(symbolPath) + "</span>";
+        _feEscapeHtml(symbolPath) + "</span>";
       return;
     }
 
+    // Use the full renderer from fe-web.js if available
+    if (window._feRenderDocItem) {
+      this.innerHTML = window._feRenderDocItem(item);
+      this._setupScipInteraction();
+      return;
+    }
+
+    // Fallback: minimal rendering for standalone component bundle usage
+    this._renderFallback(item);
+  }
+
+  _renderFallback(item) {
     var compact = this.hasAttribute("compact");
     var showSource = this.hasAttribute("show-source");
 
@@ -58,8 +75,8 @@ class FeDocItem extends HTMLElement {
 
     // Header: kind badge + name
     html += "<div class=\"fe-doc-item-header\">";
-    html += "<span class=\"fe-doc-item-kind\">" + _escapeHtml(item.kind) + "</span> ";
-    html += "<span class=\"fe-doc-item-name\">" + _escapeHtml(item.name) + "</span>";
+    html += "<span class=\"fe-doc-item-kind\">" + _feEscapeHtml(item.kind) + "</span> ";
+    html += "<span class=\"fe-doc-item-name\">" + _feEscapeHtml(item.name) + "</span>";
     html += "</div>";
 
     // Signature (prefer rich_signature, fall back to plain)
@@ -69,22 +86,16 @@ class FeDocItem extends HTMLElement {
       html += "<div class=\"fe-doc-item-sig\">" + sigEl.outerHTML + "</div>";
     } else if (item.signature) {
       html += "<div class=\"fe-doc-item-sig\"><code class=\"fe-sig\">" +
-        _escapeHtml(item.signature) + "</code></div>";
+        _feEscapeHtml(item.signature) + "</code></div>";
     }
 
     // Documentation
     if (item.docs) {
-      if (compact) {
-        if (item.docs.summary) {
-          html += "<p class=\"fe-doc-item-summary\">" + item.docs.summary + "</p>";
-        }
-      } else {
-        if (item.docs.summary) {
-          html += "<p class=\"fe-doc-item-summary\">" + item.docs.summary + "</p>";
-        }
-        if (item.docs.body) {
-          html += "<div class=\"fe-doc-item-body\">" + item.docs.body + "</div>";
-        }
+      if (item.docs.summary) {
+        html += "<p class=\"fe-doc-item-summary\">" + item.docs.summary + "</p>";
+      }
+      if (!compact && item.docs.body) {
+        html += "<div class=\"fe-doc-item-body\">" + item.docs.body + "</div>";
       }
     }
 
@@ -95,7 +106,7 @@ class FeDocItem extends HTMLElement {
       html += "<dl class=\"fe-doc-item-members\">";
       for (var ci = 0; ci < item.children.length; ci++) {
         var child = item.children[ci];
-        html += "<dt><code>" + _escapeHtml(child.signature || child.name) + "</code></dt>";
+        html += "<dt><code>" + _feEscapeHtml(child.signature || child.name) + "</code></dt>";
         if (child.docs && child.docs.summary) {
           html += "<dd>" + child.docs.summary + "</dd>";
         }
@@ -122,14 +133,22 @@ class FeDocItem extends HTMLElement {
     var docsBase = window.FE_DOCS_BASE;
     if (docsBase) {
       html += "<a class=\"fe-doc-item-link\" href=\"" +
-        _escapeHtml(docsBase + "#" + symbolPath) + "\">View full docs</a>";
+        _feEscapeHtml(docsBase + "#" + item.path + "/" + item.kind) + "\">View full docs</a>";
     }
 
     this.innerHTML = html;
   }
+
+  /** Wire up SCIP interaction on any code blocks we just rendered. */
+  _setupScipInteraction() {
+    var blocks = this.querySelectorAll("fe-code-block");
+    for (var i = 0; i < blocks.length; i++) {
+      if (blocks[i].refresh) blocks[i].refresh();
+    }
+  }
 }
 
-function _escapeHtml(s) {
+function _feEscapeHtml(s) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 

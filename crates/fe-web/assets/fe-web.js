@@ -1021,4 +1021,9 @@
   } else {
     init();
   }
+
+  // Expose rendering helpers for <fe-doc-item> and other external consumers.
+  window._feRenderDocItem = function (item) {
+    return renderDocItem(item, getIndex());
+  };
 })();
