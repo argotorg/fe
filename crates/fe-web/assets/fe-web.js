@@ -571,6 +571,7 @@
       html += renderRichSignature(imp.rich_signature, imp.signature, imp.highlighted_signature, imp.sig_scope);
       html += "</code>";
       html += '<a href="' + itemHref(implTarget) + '" class="impl-go" title="Go to implementation">\u21B3</a>';
+      html += '<a href="#' + esc(parentUrl) + "~" + esc(anchorId) + '" class="anchor">\u00a7</a>';
       html += "</div>";
     });
     html += "</div></section>";

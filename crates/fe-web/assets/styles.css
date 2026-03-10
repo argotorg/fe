@@ -676,12 +676,11 @@ fe-code-block.impl-signature {
 }
 
 .impl-go {
-    margin-left: auto;
     font-size: 1rem;
     font-weight: bold;
     color: var(--text-muted);
     text-decoration: none;
-    padding-left: 0.5rem;
+    margin-left: 0.5rem;
 }
 
 .impl-go:hover {
