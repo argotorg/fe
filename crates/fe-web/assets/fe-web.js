@@ -565,13 +565,11 @@
     html += '<div class="implementor-list">';
     implementors.forEach(function (imp) {
       var anchorId = "impl-" + imp.type_name.replace(/[<> ,]/g, "_");
-      var implLink = itemHref(imp.type_url + "~impl-" + imp.trait_name);
       html += '<div class="implementor-item" id="' + esc(anchorId) + '">';
       html += '<code class="implementor-sig">';
       html += renderRichSignature(imp.rich_signature, imp.signature, imp.highlighted_signature, imp.sig_scope);
       html += "</code>";
       html += '<a href="#' + esc(parentUrl) + "~" + esc(anchorId) + '" class="anchor">\u00a7</a>';
-      html += '<a href="' + implLink + '" class="impl-link" title="Go to implementation">\u2192</a>';
       html += "</div>";
     });
     html += "</div></section>";

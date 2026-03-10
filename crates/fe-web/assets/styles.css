@@ -776,23 +776,6 @@ fe-code-block.impl-signature {
     line-height: 1.5;
 }
 
-/* Link to implementation on type's page */
-.impl-link {
-    margin-left: auto;
-    font-size: 0.75rem;
-    color: var(--text-muted);
-    text-decoration: none;
-    opacity: 0;
-    transition: opacity 0.15s;
-}
-
-.implementor-item:hover .impl-link {
-    opacity: 1;
-}
-
-.impl-link:hover {
-    color: var(--accent);
-}
 
 /* ============================================================================
    Navigable items: consolidated hover / target / is-target highlighting.
