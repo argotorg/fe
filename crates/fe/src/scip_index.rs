@@ -712,11 +712,7 @@ fn emit_cross_ingot_references<'db>(
         }
 
         let (target_name, target_version) = ingot_meta.entry(target_ingot).or_insert_with(|| {
-            let name = target_ingot
-                .config(db)
-                .and_then(|c| c.metadata.name)
-                .map(|n| n.to_string())
-                .unwrap_or_else(|| "unknown".to_string());
+            let name = index_util::ingot_display_name(db, target_ingot);
             let version = target_ingot
                 .version(db)
                 .map(|v| v.to_string())

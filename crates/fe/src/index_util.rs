@@ -21,6 +21,19 @@ pub(crate) fn is_container_item(item: ItemKind) -> bool {
     )
 }
 
+/// Resolve the display name for an ingot, using config metadata with kind-based fallback.
+pub(crate) fn ingot_display_name(db: &dyn InputDb, ingot: Ingot) -> String {
+    ingot
+        .config(db)
+        .and_then(|c| c.metadata.name)
+        .map(|n| n.to_string())
+        .unwrap_or_else(|| match ingot.kind(db) {
+            common::ingot::IngotKind::Core => "core".to_string(),
+            common::ingot::IngotKind::Std => "std".to_string(),
+            _ => "unknown".to_string(),
+        })
+}
+
 /// Byte-offset index of line starts in a text string.
 pub(crate) struct LineIndex {
     offsets: Vec<usize>,
@@ -85,11 +98,7 @@ impl<'db> IngotContext<'db> {
             ));
         };
 
-        let name = ingot
-            .config(db)
-            .and_then(|c| c.metadata.name)
-            .map(|n| n.to_string())
-            .unwrap_or_else(|| "unknown".to_string());
+        let name = ingot_display_name(db, ingot);
         let version = ingot
             .version(db)
             .map(|v| v.to_string())
