@@ -140,38 +140,18 @@ class FeCodeBlock extends HTMLElement {
     var symbolPath = this.getAttribute("symbol");
     if (!symbolPath) return;
 
-    var index = window.FE_DOC_INDEX;
-    if (!index || !index.items) {
-      // Data not loaded yet — listen for it
-      if (!this._waitingForData) {
-        this._waitingForData = true;
-        var self = this;
-        document.addEventListener("fe-web-ready", function onReady() {
-          document.removeEventListener("fe-web-ready", onReady);
-          self._waitingForData = false;
-          self._resolveSymbol();
-          self._render();
-        });
-      }
-      return;
-    }
+    var self = this;
+    if (!feWhenReady(function () { self._resolveSymbol(); self._render(); })) return;
 
-    // Find item by path
-    var items = index.items;
-    for (var i = 0; i < items.length; i++) {
-      if (items[i].path === symbolPath) {
-        var item = items[i];
-        // Use source_text if available, fall back to signature
-        if (item.source_text) {
-          this._rawSource = item.source_text;
-        } else if (item.signature) {
-          this._rawSource = item.signature;
-        }
-        // Set data-file from source location for SCIP resolution
-        if (item.source && item.source.display_file && !this.getAttribute("data-file")) {
-          this.setAttribute("data-file", item.source.display_file);
-        }
-        break;
+    var item = feFindItem(symbolPath);
+    if (item) {
+      if (item.source_text) {
+        this._rawSource = item.source_text;
+      } else if (item.signature) {
+        this._rawSource = item.signature;
+      }
+      if (item.source && item.source.display_file && !this.getAttribute("data-file")) {
+        this.setAttribute("data-file", item.source.display_file);
       }
     }
   }

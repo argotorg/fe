@@ -27,8 +27,6 @@ class FeSignature extends HTMLElement {
     const code = document.createElement("code");
     code.className = "fe-sig";
 
-    var scip = window.FE_SCIP;
-
     for (var i = 0; i < parts.length; i++) {
       var part = parts[i];
       if (part.link) {
@@ -36,10 +34,7 @@ class FeSignature extends HTMLElement {
         a.className = "type-link";
         a.href = "#" + part.link;
         a.textContent = part.text;
-        // If SCIP is available, add symbol class for CSS-based highlighting
-        if (scip) {
-          this._enrichLink(a, part.link, part.text, scip);
-        }
+        feEnrichLink(a, part.link);
         code.appendChild(a);
       } else {
         code.appendChild(document.createTextNode(part.text));
@@ -48,43 +43,6 @@ class FeSignature extends HTMLElement {
 
     this.innerHTML = "";
     this.appendChild(code);
-  }
-
-  /** Add SCIP symbol class and hover tooltip to a type link element. */
-  _enrichLink(anchor, docUrl, typeName, scip) {
-    var symbol = scip.symbolForDocUrl(docUrl);
-
-    // If we couldn't resolve via doc URL, fall back to name search
-    if (!symbol) {
-      try {
-        var results = JSON.parse(scip.search(typeName));
-        for (var i = 0; i < results.length; i++) {
-          if (results[i].display_name === typeName) {
-            symbol = results[i].symbol;
-            break;
-          }
-        }
-      } catch (_) {}
-    }
-
-    if (!symbol) return;
-
-    var cls = scip.symbolClass(symbol);
-    anchor.classList.add(cls);
-
-    // Set hover tooltip from SCIP docs
-    var info = scip.symbolInfo(symbol);
-    if (info) {
-      try {
-        var parsed = JSON.parse(info);
-        if (parsed.documentation && parsed.documentation.length > 0) {
-          anchor.title = parsed.documentation[0].replace(/```[\s\S]*?```/g, "").trim();
-        }
-      } catch (_) {}
-    }
-
-    anchor.addEventListener("mouseenter", function () { feHighlight(cls); });
-    anchor.addEventListener("mouseleave", feUnhighlight);
   }
 }
 

@@ -266,3 +266,84 @@ ScipStore.prototype.symbolForDocUrl = function (docUrl) {
   }
   return this._byDocUrl[docUrl] || null;
 };
+
+// ============================================================================
+// Shared helpers (used by fe-code-block, fe-doc-item, fe-symbol-link, etc.)
+// ============================================================================
+
+/** Escape HTML special characters. */
+function feEscapeHtml(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+/** Look up a DocIndex item by path. Returns the item or null. */
+function feFindItem(path) {
+  var index = window.FE_DOC_INDEX;
+  if (!index || !index.items) return null;
+  for (var i = 0; i < index.items.length; i++) {
+    if (index.items[i].path === path) return index.items[i];
+  }
+  return null;
+}
+
+/**
+ * Wait for FE_DOC_INDEX to be available, then call the callback.
+ * Returns true if data is already available (callback called synchronously),
+ * false if waiting (callback will be called later).
+ */
+function feWhenReady(callback) {
+  var index = window.FE_DOC_INDEX;
+  if (index && index.items) {
+    callback();
+    return true;
+  }
+  document.addEventListener("fe-web-ready", function onReady() {
+    document.removeEventListener("fe-web-ready", onReady);
+    callback();
+  });
+  return false;
+}
+
+/**
+ * Enrich an anchor element with SCIP hover highlighting and tooltip.
+ * `docUrl` is the doc path (e.g. "mylib::Foo/struct").
+ */
+function feEnrichLink(anchor, docUrl) {
+  var scip = window.FE_SCIP;
+  if (!scip) return;
+
+  var symbol = scip.symbolForDocUrl(docUrl);
+
+  // Fallback: name search
+  if (!symbol) {
+    var text = anchor.textContent.trim();
+    if (text) {
+      try {
+        var results = JSON.parse(scip.search(text));
+        for (var i = 0; i < results.length; i++) {
+          if (results[i].display_name === text) {
+            symbol = results[i].symbol;
+            break;
+          }
+        }
+      } catch (_) {}
+    }
+  }
+  if (!symbol) return;
+
+  anchor.classList.add(scip.symbolClass(symbol));
+
+  var hash = scip.symbolHash(symbol);
+  anchor.addEventListener("mouseenter", function () { feHighlight(hash); });
+  anchor.addEventListener("mouseleave", feUnhighlight);
+
+  var info = scip.symbolInfo(symbol);
+  if (info) {
+    try {
+      var parsed = JSON.parse(info);
+      if (parsed.documentation && parsed.documentation.length > 0) {
+        anchor.title = parsed.documentation[0].replace(/```[\s\S]*?```/g, "").trim();
+      }
+    } catch (_) {}
+  }
+}
