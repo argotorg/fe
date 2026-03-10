@@ -888,7 +888,7 @@ fn generate_lsp_doc_html(resolved_root: Option<&Utf8PathBuf>) -> String {
 
     // Append auto-connect script
     let connect_script =
-        r#"<script>window.FE_LSP = connectLsp(`ws://${location.host}/lsp`);</script>"#.to_string();
+        r#"<script>window.FE_LSP = connectLsp(`${location.protocol==='https:'?'wss:':'ws:'}://${location.host}/lsp`);</script>"#.to_string();
     if let Some(pos) = html.rfind("</body>") {
         html.insert_str(pos, &connect_script);
     }

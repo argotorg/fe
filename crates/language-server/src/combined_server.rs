@@ -86,7 +86,7 @@ pub async fn run(
 
                 // Append auto-connect script — derive WS URL from page origin
                 let connect_script =
-                    r#"<script>window.FE_LSP = connectLsp(`ws://${location.host}/lsp`);</script>"#
+                    r#"<script>window.FE_LSP = connectLsp(`${location.protocol==='https:'?'wss:':'ws:'}://${location.host}/lsp`);</script>"#
                         .to_string();
                 if let Some(pos) = new_html.rfind("</body>") {
                     new_html.insert_str(pos, &connect_script);
@@ -177,7 +177,12 @@ async fn handle_ws_lsp(
     let nav_sink = Arc::clone(&ws_sink);
     let mut nav_rx = doc_nav_tx.subscribe();
     let nav_task = tokio::spawn(async move {
-        while let Ok(path) = nav_rx.recv().await {
+        loop {
+            let path = match nav_rx.recv().await {
+                Ok(p) => p,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            };
             let notification = serde_json::json!({
                 "jsonrpc": "2.0",
                 "method": "fe/navigate",
