@@ -10,6 +10,8 @@
 //   lang         — language name (default "fe")
 //   line-numbers — show line number gutter
 //   collapsed    — start collapsed with <details>/<summary>
+//   symbol       — doc path (e.g. "mylib::Game/struct") to fetch source from FE_DOC_INDEX
+//   region       — extract a named region (// #region name ... // #endregion name) from source
 //   data-file    — SCIP source file path for positional symbol resolution
 //   data-scope   — SCIP scope path for signature code blocks (set by server)
 
@@ -37,12 +39,79 @@ function _invalidateCodeBlockSheet() {
   _codeBlockSheet = null;
 }
 
+/**
+ * Extract a named region from source text.
+ * Regions are delimited by `// #region name` and `// #endregion name` comments.
+ * The delimiter lines themselves are excluded from the output.
+ * Returns the original source if the region is not found.
+ */
+function _extractRegion(source, name) {
+  var lines = source.split("\n");
+  var startPattern = new RegExp("^\\s*//\\s*#region\\s+" + _regexEscape(name) + "\\s*$");
+  var endPattern = new RegExp("^\\s*//\\s*#endregion\\s+" + _regexEscape(name) + "\\s*$");
+
+  var collecting = false;
+  var result = [];
+  for (var i = 0; i < lines.length; i++) {
+    if (!collecting && startPattern.test(lines[i])) {
+      collecting = true;
+      continue;
+    }
+    if (collecting && endPattern.test(lines[i])) {
+      break;
+    }
+    if (collecting) {
+      result.push(lines[i]);
+    }
+  }
+
+  if (result.length === 0) return source;
+
+  // Dedent: find minimum leading whitespace and strip it
+  var minIndent = Infinity;
+  for (var j = 0; j < result.length; j++) {
+    if (result[j].trim().length === 0) continue;
+    var m = result[j].match(/^(\s*)/);
+    if (m && m[1].length < minIndent) minIndent = m[1].length;
+  }
+  if (minIndent > 0 && minIndent < Infinity) {
+    for (var k = 0; k < result.length; k++) {
+      result[k] = result[k].substring(minIndent);
+    }
+  }
+
+  // Trim trailing empty lines
+  while (result.length > 0 && result[result.length - 1].trim() === "") {
+    result.pop();
+  }
+
+  return result.join("\n");
+}
+
+function _regexEscape(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 class FeCodeBlock extends HTMLElement {
+  static get observedAttributes() { return ["symbol", "region"]; }
+
+  attributeChangedCallback(name, oldVal, newVal) {
+    if (oldVal === newVal || !this.shadowRoot) return;
+    if (name === "symbol") {
+      this._rawSource = null;
+      this._resolveSymbol();
+    }
+    this._render();
+  }
+
   connectedCallback() {
     // Preserve raw source from light DOM (only on first connect)
     if (this._rawSource == null) {
       this._rawSource = this.textContent;
     }
+
+    // If `symbol` attribute is set, resolve source text from FE_DOC_INDEX
+    this._resolveSymbol();
 
     // Create shadow root once
     if (!this.shadowRoot) {
@@ -60,6 +129,51 @@ class FeCodeBlock extends HTMLElement {
     }
 
     this._render();
+  }
+
+  /**
+   * Resolve the `symbol` attribute against FE_DOC_INDEX.
+   * Populates _rawSource from the item's source_text and sets data-file
+   * from the item's source location for SCIP interactivity.
+   */
+  _resolveSymbol() {
+    var symbolPath = this.getAttribute("symbol");
+    if (!symbolPath) return;
+
+    var index = window.FE_DOC_INDEX;
+    if (!index || !index.items) {
+      // Data not loaded yet — listen for it
+      if (!this._waitingForData) {
+        this._waitingForData = true;
+        var self = this;
+        document.addEventListener("fe-web-ready", function onReady() {
+          document.removeEventListener("fe-web-ready", onReady);
+          self._waitingForData = false;
+          self._resolveSymbol();
+          self._render();
+        });
+      }
+      return;
+    }
+
+    // Find item by path
+    var items = index.items;
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].path === symbolPath) {
+        var item = items[i];
+        // Use source_text if available, fall back to signature
+        if (item.source_text) {
+          this._rawSource = item.source_text;
+        } else if (item.signature) {
+          this._rawSource = item.signature;
+        }
+        // Set data-file from source location for SCIP resolution
+        if (item.source && item.source.display_file && !this.getAttribute("data-file")) {
+          this.setAttribute("data-file", item.source.display_file);
+        }
+        break;
+      }
+    }
   }
 
   /** Re-render with current ScipStore (e.g. after live reload). */
@@ -80,6 +194,12 @@ class FeCodeBlock extends HTMLElement {
     var showLineNumbers = this.hasAttribute("line-numbers");
     var collapsed = this.hasAttribute("collapsed");
     var source = this._rawSource || "";
+
+    // Extract named region if specified
+    var regionName = this.getAttribute("region");
+    if (regionName && source) {
+      source = _extractRegion(source, regionName);
+    }
 
     var wrapper = document.createElement("div");
     wrapper.className = "fe-code-block-wrapper";

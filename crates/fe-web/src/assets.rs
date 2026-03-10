@@ -17,6 +17,12 @@ pub const FE_SIGNATURE_JS: &str = include_str!("../assets/fe-signature.js");
 /// `<fe-search>` custom element.
 pub const FE_SEARCH_JS: &str = include_str!("../assets/fe-search.js");
 
+/// `<fe-doc-item>` custom element.
+pub const FE_DOC_ITEM_JS: &str = include_str!("../assets/fe-doc-item.js");
+
+/// `<fe-symbol-link>` custom element.
+pub const FE_SYMBOL_LINK_JS: &str = include_str!("../assets/fe-symbol-link.js");
+
 /// Standalone syntax highlighting CSS (hardcoded colors, no CSS variables).
 /// For embedding in Starlight/Astro or any external site.
 pub const FE_HIGHLIGHT_CSS: &str = include_str!("../assets/fe-highlight.css");
@@ -147,6 +153,8 @@ pub fn html_shell_full(
   <script>{highlighter_js}</script>
   <script>{code_block_js}</script>
   <script>{signature_js}</script>
+  <script>{doc_item_js}</script>
+  <script>{symbol_link_js}</script>
   <script>{search_js}</script>
   <div class="doc-layout">
     <div id="sidebar"></div>
@@ -165,8 +173,115 @@ pub fn html_shell_full(
         highlighter_js = highlighter_js,
         code_block_js = FE_CODE_BLOCK_JS,
         signature_js = FE_SIGNATURE_JS,
+        doc_item_js = FE_DOC_ITEM_JS,
+        symbol_link_js = FE_SYMBOL_LINK_JS,
         search_js = FE_SEARCH_JS,
         js = FE_WEB_JS,
+    )
+}
+
+/// Build a standalone fe-web.js bundle for external consumption.
+///
+/// This is the single JS file that consumers load via:
+///   `<script type="module" src="fe-web.js" data-src="docs.json" data-docs="/api/">`
+///
+/// It includes: the script-tag loader (reads data-src/data-docs, fetches JSON,
+/// populates the global store), ScipStore, tree-sitter + highlighter with
+/// embedded WASM, and all custom element definitions.
+pub fn web_component_bundle() -> String {
+    let highlighter_js = build_highlighter_js();
+
+    format!(
+        r#"// fe-web.js — Fe documentation web components bundle
+// Usage: <script type="module" src="fe-web.js" data-src="docs.json" data-docs="/api/"></script>
+
+// ============================================================================
+// Script-tag loader: reads data-src and data-docs, fetches JSON, populates globals
+// ============================================================================
+(function() {{
+  "use strict";
+  var script = document.currentScript || document.querySelector('script[data-src]');
+  if (!script) return;
+
+  var dataSrc = script.getAttribute('data-src');
+  var dataDocs = script.getAttribute('data-docs');
+
+  if (dataDocs) {{
+    window.FE_DOCS_BASE = dataDocs;
+  }}
+
+  // Signal that the bundle is loading
+  window.FE_WEB_READY = new Promise(function(resolve) {{
+    window._feWebResolve = resolve;
+  }});
+
+  if (dataSrc) {{
+    fetch(dataSrc)
+      .then(function(r) {{ return r.json(); }})
+      .then(function(data) {{
+        if (data.index) {{
+          window.FE_DOC_INDEX = data.index;
+          if (data.scip) {{
+            window.FE_SCIP_DATA = data.scip;
+            if (typeof ScipStore !== 'undefined') {{
+              try {{ window.FE_SCIP = new ScipStore(data.scip); }} catch(e) {{
+                console.error('[fe-web] ScipStore init failed:', e);
+              }}
+            }}
+          }}
+        }} else {{
+          // Plain DocIndex without SCIP wrapper
+          window.FE_DOC_INDEX = data;
+        }}
+        window._feWebResolve();
+        document.dispatchEvent(new CustomEvent('fe-web-ready'));
+      }})
+      .catch(function(err) {{
+        console.error('[fe-web] Failed to load', dataSrc, err);
+        window._feWebResolve();
+      }});
+  }} else {{
+    // No data-src — globals may already be set (e.g. static site)
+    window._feWebResolve();
+  }}
+}})();
+
+// ============================================================================
+// ScipStore
+// ============================================================================
+{scip_store_js}
+
+// ============================================================================
+// Tree-sitter runtime
+// ============================================================================
+{tree_sitter_js}
+
+// ============================================================================
+// Highlighter (with embedded WASM)
+// ============================================================================
+{highlighter_js}
+
+// ============================================================================
+// Custom elements
+// ============================================================================
+{code_block_js}
+
+{signature_js}
+
+{doc_item_js}
+
+{symbol_link_js}
+
+{search_js}
+"#,
+        scip_store_js = FE_SCIP_STORE_JS,
+        tree_sitter_js = TREE_SITTER_JS,
+        highlighter_js = highlighter_js,
+        code_block_js = FE_CODE_BLOCK_JS,
+        signature_js = FE_SIGNATURE_JS,
+        doc_item_js = FE_DOC_ITEM_JS,
+        symbol_link_js = FE_SYMBOL_LINK_JS,
+        search_js = FE_SEARCH_JS,
     )
 }
 
@@ -191,6 +306,8 @@ mod tests {
         assert!(FE_CODE_BLOCK_JS.contains("fe-code-block"));
         assert!(FE_SIGNATURE_JS.contains("fe-signature"));
         assert!(FE_SEARCH_JS.contains("fe-search"));
+        assert!(FE_DOC_ITEM_JS.contains("fe-doc-item"));
+        assert!(FE_SYMBOL_LINK_JS.contains("fe-symbol-link"));
     }
 
     #[test]
@@ -232,6 +349,8 @@ mod tests {
         // Custom elements are loaded before the main app JS
         assert!(html.contains("fe-code-block"));
         assert!(html.contains("fe-signature"));
+        assert!(html.contains("fe-doc-item"));
+        assert!(html.contains("fe-symbol-link"));
         assert!(html.contains("fe-search"));
         // Tree-sitter and highlighter are loaded
         assert!(
