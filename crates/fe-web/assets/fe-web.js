@@ -271,11 +271,8 @@
 
     // Signature (non-modules only)
     if (!isModule && item.signature) {
-      html += '<div class="signature-wrapper">';
-      html += '<a href="#' + esc(parentUrl) + '" class="anchor">\u00a7</a>';
       html += renderRichSignature(item.rich_signature, item.signature, item.highlighted_signature,
         item.sig_scope, "signature");
-      html += '</div>';
     }
 
     // Documentation body
