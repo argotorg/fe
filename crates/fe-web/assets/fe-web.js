@@ -272,9 +272,9 @@
     // Signature (non-modules only)
     if (!isModule && item.signature) {
       html += '<div class="signature-wrapper">';
-      html += '<a href="#' + esc(parentUrl) + '" class="anchor">\u00a7</a>';
       html += renderRichSignature(item.rich_signature, item.signature, item.highlighted_signature,
         item.sig_scope, "signature");
+      html += '<a href="#' + esc(parentUrl) + '" class="anchor">\u00a7</a>';
       html += '</div>';
     }
 
@@ -377,9 +377,9 @@
         var anchorId = info.anchor + "." + child.name;
         html += '<div class="member-item" id="' + esc(anchorId) + '">';
         html += '<div class="member-header">';
-        html += '<a href="#' + esc(parentUrl) + "~" + esc(anchorId) + '" class="anchor">\u00a7</a>';
         var sig = child.signature || child.name;
         html += renderRichSignature(child.rich_signature, sig, child.highlighted_signature, child.sig_scope);
+        html += '<a href="#' + esc(parentUrl) + "~" + esc(anchorId) + '" class="anchor">\u00a7</a>';
         html += "</div>";
         if (child.docs) {
           var childDocsHtml = child.docs.html_body || esc(child.docs.body || child.docs.summary || "");
@@ -442,8 +442,8 @@
     var html = '<details class="impl-block toggle" open id="' + esc(anchorId) + '">';
     html += "<summary>";
     html += '<span class="impl-header">';
-    html += '<a href="#' + esc(parentUrl) + "~" + esc(anchorId) + '" class="anchor">\u00a7</a>';
     html += "<h3><code>" + esc(headerDisplay) + "</code></h3>";
+    html += '<a href="#' + esc(parentUrl) + "~" + esc(anchorId) + '" class="anchor">\u00a7</a>';
     html += "</span></summary>";
     html += '<div class="impl-content">';
 
@@ -472,8 +472,8 @@
     var anchorHref = parentUrl ? "#" + esc(parentUrl) + "~" + esc(anchorId) : "#" + esc(anchorId);
     var headerHtml =
       '<div class="method-header">' +
-      '<a href="' + anchorHref + '" class="anchor">\u00a7</a>' +
       '<h4 class="code-header">' + renderRichSignature(method.rich_signature, method.signature, method.highlighted_signature, method.sig_scope) + "</h4>" +
+      '<a href="' + anchorHref + '" class="anchor">\u00a7</a>' +
       "</div>";
 
     if (method.docs) {
@@ -567,10 +567,10 @@
       var anchorId = "impl-" + imp.type_name.replace(/[<> ,]/g, "_");
       var implLink = itemHref(imp.type_url + "~impl-" + imp.trait_name);
       html += '<div class="implementor-item" id="' + esc(anchorId) + '">';
-      html += '<a href="#' + esc(parentUrl) + "~" + esc(anchorId) + '" class="anchor">\u00a7</a>';
       html += '<code class="implementor-sig">';
       html += renderRichSignature(imp.rich_signature, imp.signature, imp.highlighted_signature, imp.sig_scope);
       html += "</code>";
+      html += '<a href="#' + esc(parentUrl) + "~" + esc(anchorId) + '" class="anchor">\u00a7</a>';
       html += '<a href="' + implLink + '" class="impl-link" title="Go to implementation">\u2192</a>';
       html += "</div>";
     });
