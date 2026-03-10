@@ -341,7 +341,9 @@ fn extract_workspace(
 ) -> Option<DocIndex> {
     use common::config::WorkspaceMemberSelection;
 
-    let canonical_root = workspace_root.canonicalize_utf8().unwrap_or_else(|_| workspace_root.clone());
+    let canonical_root = workspace_root
+        .canonicalize_utf8()
+        .unwrap_or_else(|_| workspace_root.clone());
     let base_url = match Url::from_directory_path(canonical_root.as_str()) {
         Ok(u) => u,
         Err(_) => {
@@ -674,13 +676,13 @@ fn build_merged_json(index: &DocIndex, scip_json: Option<&str>) -> String {
 /// Write the fe-web.js component bundle to a file path.
 pub fn write_bundle(path: &Utf8PathBuf) {
     let bundle = fe_web::assets::web_component_bundle();
-    if let Some(parent) = path.parent() {
-        if !parent.as_str().is_empty() {
-            std::fs::create_dir_all(parent).unwrap_or_else(|e| {
-                eprintln!("Error creating directory {parent}: {e}");
-                std::process::exit(1);
-            });
-        }
+    if let Some(parent) = path.parent()
+        && !parent.as_str().is_empty()
+    {
+        std::fs::create_dir_all(parent).unwrap_or_else(|e| {
+            eprintln!("Error creating directory {parent}: {e}");
+            std::process::exit(1);
+        });
     }
     std::fs::write(path, bundle).unwrap_or_else(|e| {
         eprintln!("Error writing bundle to {path}: {e}");
