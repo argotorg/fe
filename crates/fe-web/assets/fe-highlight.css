@@ -72,7 +72,7 @@ fe-code-block {
     user-select: none;
     color: var(--fe-code-line-number, #9ba3af);
     font-family: var(--fe-code-font, "JetBrains Mono", "Fira Code", monospace);
-    font-size: 0.8rem;
+    font-size: 0.875rem;
     line-height: 1.6;
 }
 

@@ -828,7 +828,7 @@ fe-code-block {
     user-select: none;
     color: var(--text-muted);
     font-family: "JetBrains Mono", "Fira Code", monospace;
-    font-size: 0.8rem;
+    font-size: 0.875rem;
     line-height: 1.6;
 }
 
