@@ -1928,13 +1928,13 @@ fn make_point() -> Point {
             .iter()
             .filter(|o| (o.symbol_roles & (types::SymbolRole::Definition as i32)) != 0)
             .count();
-        let refs = t_occs
-            .iter()
-            .filter(|o| o.symbol_roles == 0)
-            .count();
+        let refs = t_occs.iter().filter(|o| o.symbol_roles == 0).count();
 
         assert!(defs >= 1, "T should have at least 1 definition, got {defs}");
-        assert!(refs >= 1, "T should have at least 1 reference (in `own T`), got {refs}");
+        assert!(
+            refs >= 1,
+            "T should have at least 1 reference (in `own T`), got {refs}"
+        );
     }
 
     #[test]
@@ -1951,13 +1951,12 @@ fn make_point() -> Point {
             .expect("document");
 
         // Self should appear as a reference occurrence (resolving to the trait)
-        let self_occs: Vec<_> = doc
+        let _self_occs: Vec<_> = doc
             .occurrences
             .iter()
             .filter(|o| {
                 // Self references on line 0 (the `= Self` part)
-                o.range[0] == 0 && o.range.len() >= 3
-                    && o.symbol_roles == 0 // reference, not definition
+                o.range[0] == 0 && o.range.len() >= 3 && o.symbol_roles == 0 // reference, not definition
             })
             .collect();
 
@@ -1973,7 +1972,11 @@ fn make_point() -> Point {
             .filter(|o| o.symbol == t_sym.symbol && o.symbol_roles == 0)
             .collect();
 
-        assert!(t_refs.len() >= 1, "T should have at least 1 reference (in return type), got {}", t_refs.len());
+        assert!(
+            t_refs.len() >= 1,
+            "T should have at least 1 reference (in return type), got {}",
+            t_refs.len()
+        );
     }
 
     #[test]
@@ -2009,11 +2012,17 @@ fn make_point() -> Point {
             for child in scope_graph.children(item_scope) {
                 if let ScopeId::GenericParam(_, _) = child {
                     let refs = ctx.ref_index.references_to(&child);
-                    assert!(refs.len() >= 1, "GenericParam T should have references in the index");
+                    assert!(
+                        refs.len() >= 1,
+                        "GenericParam T should have references in the index"
+                    );
                     found_generic_param = true;
                 }
             }
         }
-        assert!(found_generic_param, "Should have found a GenericParam scope");
+        assert!(
+            found_generic_param,
+            "Should have found a GenericParam scope"
+        );
     }
 }
