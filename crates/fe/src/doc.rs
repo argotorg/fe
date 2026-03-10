@@ -85,6 +85,7 @@ pub fn generate_docs(
     static_site: bool,
     markdown_pages: bool,
     builtins: bool,
+    base_url: &str,
 ) {
     // First, check if there's a running LSP with docs server
     if serve_docs {
@@ -208,14 +209,24 @@ pub fn generate_docs(
             eprintln!("Error generating static docs: {e}");
             std::process::exit(1);
         }
-        if scip_json.is_some() {
-            println!(
-                "Static docs written to {} (with SCIP)",
-                output_dir.display()
-            );
-        } else {
-            println!("Static docs written to {}", output_dir.display());
+
+        // When --json is also set, write docs.json alongside index.html
+        if json {
+            let merged = build_merged_json(&index, scip_json.as_deref());
+            let json_path = output_dir.join("docs.json");
+            std::fs::write(&json_path, &merged).unwrap_or_else(|e| {
+                eprintln!("Error writing docs.json: {e}");
+                std::process::exit(1);
+            });
         }
+
+        let suffix = match (scip_json.is_some(), json) {
+            (true, true) => " (with SCIP + docs.json)",
+            (true, false) => " (with SCIP)",
+            (false, true) => " (with docs.json)",
+            (false, false) => "",
+        };
+        println!("Static docs written to {}{suffix}", output_dir.display());
         return;
     }
 
@@ -223,7 +234,7 @@ pub fn generate_docs(
         let output_dir = output
             .map(|p| p.as_std_path().to_path_buf())
             .unwrap_or_else(|| std::path::PathBuf::from("docs"));
-        if let Err(e) = fe_web::starlight::generate(&index, &output_dir, "/api") {
+        if let Err(e) = fe_web::starlight::generate(&index, &output_dir, base_url) {
             eprintln!("Error generating markdown pages: {e}");
             std::process::exit(1);
         }
@@ -262,16 +273,22 @@ pub fn generate_docs(
     }
 
     if json {
-        // Output JSON to stdout or file
-        let json_output = serde_json::to_string_pretty(&index).unwrap();
+        // Produce merged docs.json (DocIndex + SCIP) for web component consumption
+        let merged = build_merged_json(&index, scip_json.as_deref());
         if let Some(output_path) = output {
-            std::fs::write(output_path, &json_output).unwrap_or_else(|e| {
-                eprintln!("Error writing to {output_path}: {e}");
+            let output_dir = output_path.as_std_path();
+            std::fs::create_dir_all(output_dir).unwrap_or_else(|e| {
+                eprintln!("Error creating output directory {output_path}: {e}");
                 std::process::exit(1);
             });
-            println!("Wrote documentation JSON to {output_path}");
+            let json_path = output_dir.join("docs.json");
+            std::fs::write(&json_path, &merged).unwrap_or_else(|e| {
+                eprintln!("Error writing docs.json: {e}");
+                std::process::exit(1);
+            });
+            println!("Wrote docs.json to {output_path}");
         } else {
-            println!("{json_output}");
+            println!("{merged}");
         }
     } else {
         // Print summary
@@ -487,10 +504,10 @@ fn generate_scip_json_for_doc(
             common::stdlib::BUILTIN_CORE_BASE_URL,
             common::stdlib::BUILTIN_STD_BASE_URL,
         ] {
-            if let Ok(url) = url::Url::parse(base_url) {
-                if !ingot_urls.contains(&url) {
-                    ingot_urls.push(url);
-                }
+            if let Ok(url) = url::Url::parse(base_url)
+                && !ingot_urls.contains(&url)
+            {
+                ingot_urls.push(url);
             }
         }
     }
@@ -635,6 +652,40 @@ fn detect_source_link_base(working_dir: &std::path::Path) -> Option<String> {
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())?;
 
     Some(format!("{}/blob/{}", CANONICAL_REPO, commit))
+}
+
+/// Build a merged JSON string containing both the DocIndex and SCIP data.
+///
+/// This is the single data file that web components consume via `data-src`.
+/// The structure is: `{ "index": <DocIndex>, "scip": <SCIP data or null> }`
+fn build_merged_json(index: &DocIndex, scip_json: Option<&str>) -> String {
+    let index_value = serde_json::to_value(index).unwrap();
+    let scip_value = scip_json
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+        .unwrap_or(serde_json::Value::Null);
+    let merged = serde_json::json!({
+        "index": index_value,
+        "scip": scip_value,
+    });
+    serde_json::to_string_pretty(&merged).unwrap()
+}
+
+/// Write the fe-web.js component bundle to a file path.
+pub fn write_bundle(path: &Utf8PathBuf) {
+    let bundle = fe_web::assets::web_component_bundle();
+    if let Some(parent) = path.parent() {
+        if !parent.as_str().is_empty() {
+            std::fs::create_dir_all(parent).unwrap_or_else(|e| {
+                eprintln!("Error creating directory {parent}: {e}");
+                std::process::exit(1);
+            });
+        }
+    }
+    std::fs::write(path, bundle).unwrap_or_else(|e| {
+        eprintln!("Error writing bundle to {path}: {e}");
+        std::process::exit(1);
+    });
+    println!("Wrote fe-web.js to {path}");
 }
 
 fn print_doc_summary(index: &DocIndex) {
