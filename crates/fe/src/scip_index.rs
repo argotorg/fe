@@ -867,10 +867,13 @@ pub fn inject_doc_urls(scip_json: &str, doc_index: &DocIndex) -> String {
             qualified_child_to_url.insert(format!("{}::{}", item.path, child.name), url.clone());
             child_to_url.insert(child.name.clone(), url);
         }
-        // Also include methods from trait impl blocks
+        // Also include methods from trait impl blocks.
+        // Anchors must match the JS frontend format: impl-{trait_name}.method.{name}
         for trait_impl in &item.trait_impls {
+            let sanitized = trait_impl.trait_name.replace(['<', '>', ' ', ','], "_");
+            let impl_anchor = format!("impl-{sanitized}");
             for method in &trait_impl.methods {
-                let anchor = format!("method.{}", method.name);
+                let anchor = format!("{impl_anchor}.method.{}", method.name);
                 let url = format!("{}~{}", parent_url, anchor);
                 qualified_child_to_url
                     .insert(format!("{}::{}", item.path, method.name), url.clone());
