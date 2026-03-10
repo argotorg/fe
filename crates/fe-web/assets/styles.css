@@ -241,6 +241,12 @@ body {
     margin-top: 0.5rem;
 }
 
+/* Limit source view height for large items */
+.source-toggle[open] fe-code-block {
+    max-height: 70vh;
+    overflow-y: auto;
+}
+
 .kind-badge {
     font-size: 0.7rem;
     font-weight: 500;

@@ -255,18 +255,17 @@
     html += '<span class="kind-badge ' + esc(kindStr(item.kind)) + '">' + esc(kindDisplayName(item.kind)) + "</span>";
     html += "<h1>" + esc(item.name) + "</h1>";
     html += "</div>";
-    if (item.source_text) {
-      html += '<details class="source-toggle"><summary class="src-link">';
-      html += esc(item.source.display_file) + ':' + item.source.line;
-      html += '</summary>';
-      html += '<fe-code-block lang="fe" line-numbers data-file="' + esc(item.source.display_file) + '" data-line-offset="' + (item.source.line - 1) + '">' + esc(item.source_text) + '</fe-code-block>';
-      html += '</details>';
-    } else if (item.source && item.source.display_file) {
+    if (item.source && item.source.display_file) {
       html += '<span class="src-link">' + esc(item.source.display_file);
       if (item.source.line) html += ':' + item.source.line;
       html += '</span>';
     }
     html += "</div>";
+    if (item.source_text) {
+      html += '<details class="source-toggle"><summary class="src-link">Source</summary>';
+      html += '<fe-code-block lang="fe" line-numbers data-file="' + esc(item.source.display_file) + '" data-line-offset="' + (item.source.line - 1) + '">' + esc(item.source_text) + '</fe-code-block>';
+      html += '</details>';
+    }
 
     // Signature (non-modules only)
     if (!isModule && item.signature) {
