@@ -87,11 +87,14 @@ fe-code-block {
     padding: 0.75rem 1rem;
     background: transparent;
     overflow-x: auto;
-}
-
-.fe-code-pre code {
     font-family: var(--fe-code-font, "JetBrains Mono", "Fira Code", monospace);
     font-size: var(--fe-code-size, 0.8rem);
     line-height: var(--fe-code-line-height, 1.6);
+}
+
+.fe-code-pre code {
+    font-family: inherit;
+    font-size: inherit;
+    line-height: inherit;
     color: var(--fe-code-text, #e4e4e4);
 }

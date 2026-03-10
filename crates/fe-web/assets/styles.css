@@ -208,13 +208,6 @@ body {
 .item-header h1 {
     font-size: 1.75rem;
     margin: 0;
-    position: relative;
-}
-
-.item-header h1 > .anchor {
-    position: absolute;
-    left: -1.25rem;
-    margin-right: 0;
 }
 
 .src-link {
@@ -275,14 +268,9 @@ body {
 .kind-badge.const { background: #3a2d4a; color: #b87ee7; }
 
 .signature-wrapper {
-    position: relative;
+    display: flex;
+    align-items: flex-start;
     margin-bottom: 1rem;
-}
-
-.signature-wrapper > .anchor {
-    position: absolute;
-    left: -1.25rem;
-    top: 0.5rem;
 }
 
 fe-code-block.signature {
@@ -325,14 +313,6 @@ h2 {
     margin: 1rem 0 0.5rem;
     padding-bottom: 0.5rem;
     border-bottom: 1px solid var(--border);
-    position: relative;
-}
-
-h2 > .anchor {
-    position: absolute;
-    left: -1.25rem;
-    margin-right: 0;
-}
 }
 
 .members {
@@ -493,14 +473,19 @@ h2 > .anchor {
     transform: rotate(90deg);
 }
 
-/* Anchor links */
+/* Anchor links — consistent across all contexts.
+   Anchors are inline flex-items or inline elements that appear on hover. */
 .anchor {
     color: var(--text-muted);
     text-decoration: none;
-    font-size: 0.8rem;
-    margin-right: 0.5rem;
+    font-size: 0.75rem;
     opacity: 0;
     transition: opacity 0.15s;
+    flex-shrink: 0;
+    width: 1rem;
+    text-align: center;
+    margin: 0;
+    padding: 0;
 }
 
 .impl-block:hover .anchor,
@@ -515,22 +500,6 @@ h2:hover .anchor {
 
 .anchor:hover {
     color: var(--accent);
-}
-
-.member-header,
-.method-header,
-.implementor-item,
-.impl-header {
-    position: relative;
-}
-
-.member-header > .anchor,
-.method-header > .anchor,
-.implementor-item > .anchor,
-.impl-header > .anchor {
-    position: absolute;
-    left: -1.25rem;
-    margin-right: 0;
 }
 
 .impl-block > summary {
