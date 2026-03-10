@@ -87,7 +87,7 @@ fe-code-block {
     border-right: 1px solid var(--fe-code-border, #2d3748);
     text-align: right;
     user-select: none;
-    color: #9ba3af;
+    color: var(--fe-code-line-number, #9ba3af);
     font-family: var(--fe-code-font, "JetBrains Mono", "Fira Code", monospace);
     font-size: 0.8rem;
     line-height: 1.6;

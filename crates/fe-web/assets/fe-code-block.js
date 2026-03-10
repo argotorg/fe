@@ -16,16 +16,31 @@
 //   data-scope   — SCIP scope path for signature code blocks (set by server)
 
 // Shared stylesheet adopted by all <fe-code-block> shadow roots.
+// Only includes fe-highlight.css (syntax + layout), NOT the full page styles,
+// so that CSS custom properties from the host page inherit through the
+// shadow boundary without being overridden by a copied :root block.
 var _codeBlockSheet = null;
 
 function _getCodeBlockSheet() {
   if (_codeBlockSheet) return _codeBlockSheet;
   try {
     _codeBlockSheet = new CSSStyleSheet();
+    // Look for the highlight-specific <style> tag first (static site injects
+    // it separately). Fall back to scanning for fe-highlight content.
     var css = "";
     var styles = document.querySelectorAll("style");
     for (var i = 0; i < styles.length; i++) {
-      css += styles[i].textContent + "\n";
+      var text = styles[i].textContent || "";
+      if (text.indexOf(".hl-keyword") !== -1 && text.indexOf(".fe-code-block-wrapper") !== -1) {
+        css = text;
+        break;
+      }
+    }
+    // If no highlight stylesheet found, use all page styles as fallback
+    if (!css) {
+      for (var j = 0; j < styles.length; j++) {
+        css += styles[j].textContent + "\n";
+      }
     }
     _codeBlockSheet.replaceSync(css);
   } catch (e) {

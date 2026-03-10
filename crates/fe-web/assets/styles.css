@@ -7,7 +7,8 @@
     --accent-hover: #c7d2fe;
     --text-accent: #a5b4fc;
     --border: #2d3748;
-    --code-bg: #0d1117;
+    --fe-code-bg: #0d1117;
+    --code-bg: var(--fe-code-bg);
 
     /* SCIP symbol highlighting (used by feHighlight() in JS) */
     --hl-ref-bg: rgba(99, 102, 241, 0.18);

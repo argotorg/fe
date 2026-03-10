@@ -44,8 +44,18 @@ class FeDocItem extends HTMLElement {
       return;
     }
 
-    // Fallback: minimal rendering for standalone component bundle usage
+    // Fallback: minimal rendering for standalone component bundle usage.
+    // Re-render when fe-web.js finishes loading (provides the full renderer).
     this._renderFallback(item);
+    if (!this._awaitingRenderer) {
+      this._awaitingRenderer = true;
+      var self = this;
+      document.addEventListener("fe-web-ready", function onReady() {
+        document.removeEventListener("fe-web-ready", onReady);
+        self._awaitingRenderer = false;
+        if (window._feRenderDocItem) self._renderItem();
+      });
+    }
   }
 
   _renderFallback(item) {
@@ -69,11 +79,15 @@ class FeDocItem extends HTMLElement {
     }
 
     if (item.docs) {
-      if (item.docs.summary) {
-        html += "<p class=\"fe-doc-item-summary\">" + item.docs.summary + "</p>";
+      if (item.docs.html_summary) {
+        html += "<p class=\"fe-doc-item-summary\">" + item.docs.html_summary + "</p>";
+      } else if (item.docs.summary) {
+        html += "<p class=\"fe-doc-item-summary\">" + feEscapeHtml(item.docs.summary) + "</p>";
       }
-      if (!compact && item.docs.body) {
-        html += "<div class=\"fe-doc-item-body\">" + item.docs.body + "</div>";
+      if (!compact && item.docs.html_body) {
+        html += "<div class=\"fe-doc-item-body\">" + item.docs.html_body + "</div>";
+      } else if (!compact && item.docs.body) {
+        html += "<div class=\"fe-doc-item-body\">" + feEscapeHtml(item.docs.body) + "</div>";
       }
     }
 
@@ -84,7 +98,7 @@ class FeDocItem extends HTMLElement {
         var child = item.children[ci];
         html += "<dt><code>" + feEscapeHtml(child.signature || child.name) + "</code></dt>";
         if (child.docs && child.docs.summary) {
-          html += "<dd>" + child.docs.summary + "</dd>";
+          html += "<dd>" + feEscapeHtml(child.docs.summary) + "</dd>";
         }
       }
       html += "</dl></div>";
