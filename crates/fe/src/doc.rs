@@ -298,7 +298,8 @@ fn extract_single_file(
     file_path: &Utf8PathBuf,
     git_root: Option<&std::path::Path>,
 ) -> Option<DocIndex> {
-    let file_url = Url::from_file_path(file_path.canonicalize_utf8().unwrap()).ok()?;
+    let canonical = file_path.canonicalize_utf8().ok()?;
+    let file_url = Url::from_file_path(&canonical).ok()?;
 
     let content = std::fs::read_to_string(file_path).ok()?;
     db.workspace().touch(db, file_url.clone(), Some(content));
@@ -559,7 +560,8 @@ fn collect_ingot_urls(db: &DriverDataBase, path: &Utf8PathBuf) -> Vec<Url> {
         _ => return Vec::new(),
     };
 
-    let base_url = match Url::from_directory_path(path.as_str()) {
+    let canonical = path.canonicalize_utf8().unwrap_or_else(|_| path.clone());
+    let base_url = match Url::from_directory_path(canonical.as_str()) {
         Ok(u) => u,
         Err(_) => return Vec::new(),
     };
