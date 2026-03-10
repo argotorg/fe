@@ -522,6 +522,69 @@ fn process_module<'db>(
                         }
                     }
                 }
+
+                // Index generic parameters of child items (e.g. T in fn map<T>).
+                // Trait methods skipped by items_dfs need their type params indexed here.
+                if let ScopeId::Item(child_item) = child_scope {
+                    let child_item_scope = ScopeId::from_item(child_item);
+                    for gp_scope in scope_graph.children(child_item_scope) {
+                        let ScopeId::GenericParam(_, _) = gp_scope else {
+                            continue;
+                        };
+                        let Some(gp_name) = gp_scope.name(db) else {
+                            continue;
+                        };
+                        let gp_name_str = gp_name.data(db).to_string();
+                        let gp_symbol = format!("{}[{}]", child_symbol, gp_name_str);
+
+                        if let Some(doc) = documents.get_mut(&doc_url) {
+                            if doc.seen_symbols.insert(gp_symbol.clone()) {
+                                doc.symbols.push(types::SymbolInformation {
+                                    symbol: gp_symbol.clone(),
+                                    documentation: Vec::new(),
+                                    relationships: Vec::new(),
+                                    kind: symbol_information::Kind::TypeParameter.into(),
+                                    display_name: gp_name_str,
+                                    signature_documentation: None.into(),
+                                    enclosing_symbol: child_symbol.clone(),
+                                    special_fields: Default::default(),
+                                });
+                            }
+
+                            if let Some(name_span) = gp_scope.name_span(db)
+                                && let Some(resolved) = name_span.resolve(db)
+                                && let Some(range) = span_to_scip_range(&resolved, db)
+                            {
+                                push_occurrence(
+                                    doc,
+                                    range,
+                                    gp_symbol.clone(),
+                                    types::SymbolRole::Definition as i32,
+                                );
+                            }
+                        }
+
+                        for indexed_ref in ctx.ref_index.references_to(&gp_scope) {
+                            if let Some(resolved) = indexed_ref.span.resolve(db) {
+                                let ref_url = match resolved.file.url(db) {
+                                    Some(url) => url.to_string(),
+                                    None => continue,
+                                };
+                                let ref_doc =
+                                    documents.entry(ref_url.clone()).or_insert_with(|| {
+                                        let relative = file_relative_paths
+                                            .get(&ref_url)
+                                            .cloned()
+                                            .unwrap_or_default();
+                                        ScipDocumentBuilder::new(relative)
+                                    });
+                                if let Some(range) = span_to_scip_range(&resolved, db) {
+                                    push_occurrence(ref_doc, range, gp_symbol.clone(), 0);
+                                }
+                            }
+                        }
+                    }
+                }
             }
         } // end if !Mod/TopMod
 
@@ -1514,48 +1577,10 @@ fn build_virtual_occurrences_with_extra(
         });
     }
 
-    // Fallback: scan signature text for names that appear in existing occurrences
-    // but have missing references.  Covers:
-    //   - Type params (T in Self<T>) not tracked by the ref_index
-    //   - Self references in arg positions that the HIR doesn't emit
-    // Collect (text_in_signature, scip_symbol) pairs from existing occurrences.
+    // Inject extra name→symbol mappings (e.g. parent type params, Self) into
+    // child signatures where the SCIP byte range doesn't include those definitions.
+    // This is a targeted injection of known parent-scoped symbols, not a heuristic scan.
     let mut name_to_symbol: HashMap<String, String> = HashMap::new();
-    for occ in &result {
-        if occ.symbol.is_empty() {
-            continue;
-        }
-        // Extract the text this occurrence covers in the signature
-        let (line, cs, ce) = match occ.range.len() {
-            3 => (occ.range[0], occ.range[1], occ.range[2]),
-            4 => (occ.range[0], occ.range[1], occ.range[3]),
-            _ => continue,
-        };
-        // For single-line occurrences on line 0, extract text directly
-        if occ.range.len() == 3 {
-            let line_start = sig_text
-                .bytes()
-                .enumerate()
-                .filter(|&(_, b)| b == b'\n')
-                .nth(line as usize)
-                .map(|(i, _)| i + 1)
-                .unwrap_or(if line == 0 { 0 } else { sig_text.len() });
-            let start = line_start + cs as usize;
-            let end = line_start + ce as usize;
-            if let Some(text) = sig_text.get(start..end) {
-                // Only track short identifiers (type params, Self, etc.)
-                if !text.is_empty()
-                    && text.len() <= 20
-                    && text.chars().all(|c| c.is_alphanumeric() || c == '_')
-                {
-                    name_to_symbol
-                        .entry(text.to_string())
-                        .or_insert_with(|| occ.symbol.clone());
-                }
-            }
-        }
-    }
-
-    // Inject extra name→symbol mappings (e.g. parent type params)
     for (name, symbol) in extra_names {
         name_to_symbol.entry(name.clone()).or_insert(symbol.clone());
     }
@@ -1920,5 +1945,72 @@ pub trait Greet {
         let has_method_anchor = result.doc_urls.values().any(|u| u.contains("~tymethod.hello"));
         assert!(has_field_anchor, "field x should have anchored URL: {:?}", result.doc_urls);
         assert!(has_method_anchor, "method hello should have anchored URL: {:?}", result.doc_urls);
+    }
+
+    #[test]
+    fn test_trait_method_symbols_use_type_descriptor() {
+        let code = r#"pub trait Foo {
+    fn bar(self)
+}
+"#;
+        let result = generate_test_scip(code);
+        let doc = result
+            .index
+            .documents
+            .iter()
+            .find(|d| d.relative_path == "test.fe")
+            .expect("document");
+
+        // bar's SCIP symbol should use # (type descriptor) for Foo, not / (namespace)
+        let bar_sym = doc.symbols.iter().find(|s| s.display_name == "bar");
+        assert!(bar_sym.is_some(), "bar symbol should exist");
+        let bar = bar_sym.unwrap();
+        assert!(
+            bar.symbol.contains("Foo#"),
+            "bar's symbol should have Foo# (type), got: {}",
+            bar.symbol
+        );
+        assert!(
+            !bar.symbol.contains("Foo/"),
+            "bar's symbol should NOT have Foo/ (namespace), got: {}",
+            bar.symbol
+        );
+    }
+
+    #[test]
+    fn test_method_level_type_params_indexed() {
+        let code = r#"pub trait Transform {
+    fn map<T>(self, _ f: own T) -> T
+}
+"#;
+        let result = generate_test_scip(code);
+        let doc = result
+            .index
+            .documents
+            .iter()
+            .find(|d| d.relative_path == "test.fe")
+            .expect("document");
+
+        // T should be indexed as a TypeParameter child of map
+        let t_sym = doc
+            .symbols
+            .iter()
+            .find(|s| s.display_name == "T" && s.kind.value() == symbol_information::Kind::TypeParameter as i32);
+        assert!(t_sym.is_some(), "T type param should exist as TypeParameter");
+        let t = t_sym.unwrap();
+
+        // T's enclosing symbol should be map's symbol
+        let map_sym = doc.symbols.iter().find(|s| s.display_name == "map").expect("map symbol");
+        assert_eq!(
+            t.enclosing_symbol, map_sym.symbol,
+            "T should be enclosed by map"
+        );
+
+        // T should have both definition and reference occurrences
+        let t_occs: Vec<_> = doc.occurrences.iter().filter(|o| o.symbol == t.symbol).collect();
+        let defs = t_occs.iter().filter(|o| o.symbol_roles != 0).count();
+        let refs = t_occs.iter().filter(|o| o.symbol_roles == 0).count();
+        assert!(defs >= 1, "T should have at least 1 definition");
+        assert!(refs >= 1, "T should have at least 1 reference (in own T or return type)");
     }
 }
