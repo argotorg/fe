@@ -274,7 +274,7 @@ body {
 
 .signature-wrapper > .anchor {
     position: absolute;
-    right: 0.5rem;
+    left: -1.25rem;
     top: 0.5rem;
 }
 
@@ -502,6 +502,12 @@ h2:hover .anchor {
     color: var(--accent);
 }
 
+.member-header > .anchor,
+.method-header > .anchor,
+.implementor-item > .anchor {
+    margin-right: 0;
+}
+
 .impl-block > summary {
     padding: 0.625rem 0.875rem;
     background: var(--bg-secondary);
@@ -566,7 +572,6 @@ fe-code-block.impl-signature {
 .method-header {
     display: flex;
     align-items: center;
-    gap: 0.25rem;
 }
 
 .method-header h4 {
@@ -670,7 +675,6 @@ fe-code-block.impl-signature {
 .implementor-item {
     display: flex;
     align-items: center;
-    gap: 0.25rem;
     padding: 0.375rem 0.625rem;
     background: var(--bg-secondary);
     border: 1px solid var(--border);
@@ -761,13 +765,6 @@ fe-code-block.impl-signature {
 .member-header {
     display: flex;
     align-items: center;
-    gap: 0.25rem;
-}
-
-.member-header > .anchor,
-.method-header > .anchor,
-.implementor-item > .anchor {
-    margin-right: 0;
 }
 
 .member-signature {
