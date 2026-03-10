@@ -62,6 +62,22 @@ impl SymbolKind {
             Self::TraitConst => "const",
         }
     }
+
+    /// Anchor prefix for doc URLs of child items.
+    ///
+    /// Returns the prefix used in `parent_url~{prefix}.{name}` anchors,
+    /// matching `DocChildKind::anchor_prefix()`. Returns None for kinds
+    /// that don't appear as doc children (modules, generic params, etc.).
+    pub fn doc_anchor_prefix(self) -> Option<&'static str> {
+        match self {
+            Self::Field => Some("field"),
+            Self::Variant => Some("variant"),
+            Self::Func => Some("tymethod"),
+            Self::TraitType => Some("associatedtype"),
+            Self::TraitConst => Some("associatedconstant"),
+            _ => None,
+        }
+    }
 }
 
 impl<'db> From<ItemKind<'db>> for SymbolKind {

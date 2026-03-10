@@ -219,10 +219,18 @@ fn push_occurrence(
     });
 }
 
+/// Result of SCIP generation: the index plus a map from SCIP symbol → doc URL.
+pub struct ScipResult {
+    pub index: types::Index,
+    /// Maps SCIP symbol strings to their documentation URL paths.
+    /// Computed directly from HIR during generation — no post-hoc string matching.
+    pub doc_urls: HashMap<String, String>,
+}
+
 pub fn generate_scip(
     db: &driver::DriverDataBase,
     ingot_url: &url::Url,
-) -> io::Result<types::Index> {
+) -> io::Result<ScipResult> {
     let ctx = index_util::IngotContext::resolve(db, ingot_url)?;
 
     // For file:// URLs, use the real filesystem path as project root.
@@ -255,7 +263,7 @@ pub fn generate_scip(
     let fork_count = rayon::current_num_threads().max(1).min(module_count);
     let db_forks: Vec<driver::DriverDataBase> = (0..fork_count).map(|_| db.clone()).collect();
 
-    let parallel_results: Vec<Vec<HashMap<String, ScipDocumentBuilder>>> = db_forks
+    let parallel_results: Vec<Vec<ModuleResult>> = db_forks
         .into_par_iter()
         .enumerate()
         .map(|(thread_idx, fork)| {
@@ -271,9 +279,11 @@ pub fn generate_scip(
         .collect();
 
     let mut documents: HashMap<String, ScipDocumentBuilder> = HashMap::new();
+    let mut all_doc_urls: HashMap<String, String> = HashMap::new();
     for chunk in parallel_results {
         for result in chunk {
-            for (url, builder) in result {
+            all_doc_urls.extend(result.doc_urls);
+            for (url, builder) in result.documents {
                 match documents.entry(url) {
                     std::collections::hash_map::Entry::Occupied(mut e) => {
                         e.get_mut().merge(builder);
@@ -319,23 +329,35 @@ pub fn generate_scip(
     docs.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
     index.documents = docs;
 
-    Ok(index)
+    Ok(ScipResult {
+        index,
+        doc_urls: all_doc_urls,
+    })
 }
 
 /// Process a single module and return document fragments for all files it touches.
 ///
 /// Each module produces definitions for its own file and reference occurrences
 /// potentially spanning other files. Returns a map of file URL → document builder.
+/// Result of processing a single module: document builders + doc URL mappings.
+struct ModuleResult {
+    documents: HashMap<String, ScipDocumentBuilder>,
+    doc_urls: HashMap<String, String>,
+}
+
 fn process_module<'db>(
     db: &'db driver::DriverDataBase,
     top_mod: hir::hir_def::TopLevelMod<'db>,
     ctx: &index_util::IngotContext<'db>,
     file_relative_paths: &HashMap<String, String>,
-) -> Option<HashMap<String, ScipDocumentBuilder>> {
+) -> Option<ModuleResult> {
+    use hir::core::semantic::{SymbolKind, scope_to_doc_path};
+
     let scope_graph = top_mod.scope_graph(db);
     let doc_url = top_mod_url(db, &top_mod)?.to_string();
 
     let mut documents: HashMap<String, ScipDocumentBuilder> = HashMap::new();
+    let mut doc_urls: HashMap<String, String> = HashMap::new();
 
     // Ensure this module's file has a builder
     if let Some(relative) = file_relative_paths.get(&doc_url) {
@@ -345,6 +367,16 @@ fn process_module<'db>(
     }
 
     for item in scope_graph.items_dfs(db) {
+        // Skip items that are children of non-module items (traits, structs, enums).
+        // These are handled correctly by the child-indexing path below, which
+        // produces proper SCIP symbols (e.g. Trait#method. not Trait/method.).
+        let scope = ScopeId::from_item(item);
+        if let Some(parent) = scope.parent_item(db) {
+            if !matches!(parent, ItemKind::Mod(_) | ItemKind::TopMod(_)) {
+                continue;
+            }
+        }
+
         let maybe_symbol = item_symbol(db, item, &ctx.name, &ctx.version);
 
         // For unnamed items (Impl, ImplTrait, and functions inside them),
@@ -362,6 +394,13 @@ fn process_module<'db>(
             );
             continue;
         };
+
+        // Compute doc URL from HIR data (single source of truth)
+        let scope = ScopeId::from_item(item);
+        let item_doc_url = scope_to_doc_path(db, scope);
+        if let Some(ref url) = item_doc_url {
+            doc_urls.insert(symbol.clone(), url.clone());
+        }
 
         if let Some(doc) = documents.get_mut(&doc_url) {
             if doc.seen_symbols.insert(symbol.clone()) {
@@ -424,6 +463,17 @@ fn process_module<'db>(
 
                 let child_symbol = child_scip_symbol(symbol, &child_name, child_scope);
                 let child_kind = child_symbol_kind(child_scope);
+
+                // Compute child doc URL: parent_url~anchor_prefix.child_name
+                let child_sym_kind = SymbolKind::from(child_scope);
+                if let (Some(parent_url), Some(anchor)) =
+                    (&item_doc_url, child_sym_kind.doc_anchor_prefix())
+                {
+                    doc_urls.insert(
+                        child_symbol.clone(),
+                        format!("{}~{}.{}", parent_url, anchor, child_name),
+                    );
+                }
 
                 if let Some(doc) = documents.get_mut(&doc_url) {
                     if doc.seen_symbols.insert(child_symbol.clone()) {
@@ -538,7 +588,10 @@ fn process_module<'db>(
         }
     }
 
-    Some(documents)
+    Some(ModuleResult {
+        documents,
+        doc_urls,
+    })
 }
 
 /// Index generic parameters for items that lack a resolvable symbol.
@@ -725,7 +778,7 @@ fn emit_cross_ingot_references<'db>(
                 }
 
                 // Add SymbolInformation entry so the symbol appears in the JSON
-                // `symbols` map (needed for inject_doc_urls and browser lookups).
+                // `symbols` map (needed for browser lookups).
                 // Only needs to be added once per symbol.
                 if ref_doc.seen_symbols.insert(symbol.clone()) {
                     ref_doc.symbols.push(types::SymbolInformation {
@@ -749,7 +802,7 @@ fn emit_cross_ingot_references<'db>(
 /// The JSON has two top-level keys:
 /// - `symbols`: map from SCIP symbol string to metadata
 /// - `files`: map from relative file path to sorted occurrence arrays
-pub fn scip_to_json_data(index: &types::Index) -> String {
+pub fn scip_to_json_data(index: &types::Index, doc_urls: &HashMap<String, String>) -> String {
     use serde_json::{Map, Value, json};
 
     let mut symbols = Map::new();
@@ -778,6 +831,9 @@ pub fn scip_to_json_data(index: &types::Index) -> String {
                     "enclosing".into(),
                     Value::String(si.enclosing_symbol.clone()),
                 );
+            }
+            if let Some(url) = doc_urls.get(&si.symbol) {
+                entry.insert("doc_url".into(), Value::String(url.clone()));
             }
             symbols.insert(si.symbol.clone(), Value::Object(entry));
         }
@@ -836,155 +892,6 @@ pub fn scip_to_json_data(index: &types::Index) -> String {
     Value::Object(root).to_string()
 }
 
-/// Inject `doc_url` fields into a SCIP JSON string by matching SCIP symbols
-/// against items in the DocIndex. Sub-items get parent page + anchor URLs.
-pub fn inject_doc_urls(scip_json: &str, doc_index: &DocIndex) -> String {
-    let mut root: serde_json::Value = match serde_json::from_str(scip_json) {
-        Ok(v) => v,
-        Err(_) => return scip_json.to_string(),
-    };
-
-    // Build name → url_path lookups from DocIndex items.
-    // Key by both full path and simple name; full path takes priority in lookups
-    // to avoid collisions between same-named items (e.g. a::Foo vs b::Foo).
-    let mut path_to_url: HashMap<&str, String> = HashMap::new();
-    let mut name_to_url: HashMap<&str, String> = HashMap::new();
-    for item in &doc_index.items {
-        let url = item.url_path();
-        path_to_url.insert(&item.path, url.clone());
-        name_to_url.insert(&item.name, url);
-    }
-
-    // Build child lookups keyed by "parent_path::child_name" (qualified) and
-    // simple child name (fallback). Uses `~` separator for SPA hash anchors.
-    let mut qualified_child_to_url: HashMap<String, String> = HashMap::new();
-    let mut child_to_url: HashMap<String, String> = HashMap::new();
-    for item in &doc_index.items {
-        let parent_url = item.url_path();
-        for child in &item.children {
-            let anchor = format!("{}.{}", child.kind.anchor_prefix(), child.name);
-            let url = format!("{}~{}", parent_url, anchor);
-            qualified_child_to_url.insert(format!("{}::{}", item.path, child.name), url.clone());
-            child_to_url.insert(child.name.clone(), url);
-        }
-        // Also include methods from trait impl blocks.
-        // Anchors must match the JS frontend format: impl-{trait_name}.method.{name}
-        for trait_impl in &item.trait_impls {
-            let sanitized = trait_impl.trait_name.replace(['<', '>', ' ', ','], "_");
-            let impl_anchor = format!("impl-{sanitized}");
-            for method in &trait_impl.methods {
-                let anchor = format!("{impl_anchor}.method.{}", method.name);
-                let url = format!("{}~{}", parent_url, anchor);
-                qualified_child_to_url
-                    .insert(format!("{}::{}", item.path, method.name), url.clone());
-                child_to_url.insert(method.name.clone(), url);
-            }
-        }
-    }
-
-    if let Some(symbols) = root.get_mut("symbols").and_then(|s| s.as_object_mut()) {
-        for (sym_str, entry) in symbols.iter_mut() {
-            if let Some(obj) = entry.as_object_mut() {
-                let name = obj
-                    .get("name")
-                    .and_then(|n| n.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let has_enclosing = obj
-                    .get("enclosing")
-                    .and_then(|e| e.as_str())
-                    .is_some_and(|e| !e.is_empty());
-
-                // Extract qualified path from SCIP symbol for precise lookup.
-                // SCIP symbols look like "fe fe <pkg> <ver> Mod/Foo#" — extract
-                // the descriptor chain and join with "::" for doc path matching.
-                let qualified = scip_symbol_to_qualified_path(sym_str);
-
-                // Try all lookup maps in order of specificity.
-                // Items with an enclosing symbol may be either true sub-items
-                // (fields/methods → child maps) or module-level items that happen
-                // to have a parent module in SCIP (e.g. core::option::Option).
-                let doc_url = qualified
-                    .as_deref()
-                    .and_then(|q| qualified_child_to_url.get(q).or_else(|| path_to_url.get(q)))
-                    .cloned()
-                    .or_else(|| {
-                        if has_enclosing {
-                            child_to_url.get(&name).cloned()
-                        } else {
-                            None
-                        }
-                    })
-                    .or_else(|| name_to_url.get(name.as_str()).cloned());
-                if let Some(url) = doc_url {
-                    obj.insert("doc_url".to_string(), serde_json::Value::String(url));
-                }
-            }
-        }
-    }
-
-    root.to_string()
-}
-
-/// Extract a qualified path (e.g. "core::ops::Foo::bar") from a SCIP symbol string.
-///
-/// SCIP symbols look like: `fe fe <package> <version> Mod/Struct#method.`
-/// Descriptor suffixes: `/` = namespace, `#` = type, `.` = term/method, `()` = macro
-/// We strip the suffix char and join parts with `::`, replacing the `lib` root
-/// module with the SCIP package name so paths match the doc index (which uses
-/// ingot-qualified names like `core::ops::Foo` rather than `lib::ops::Foo`).
-fn scip_symbol_to_qualified_path(sym: &str) -> Option<String> {
-    // Split "fe fe <package> <version> <descriptors>"
-    let mut parts_iter = sym.splitn(5, ' ');
-    let _scheme = parts_iter.next()?;
-    let _manager = parts_iter.next()?;
-    let package = parts_iter.next()?;
-    let _version = parts_iter.next()?;
-    let descriptor_part = parts_iter.next()?.trim();
-
-    if descriptor_part.is_empty() {
-        return None;
-    }
-
-    // Split on SCIP descriptor suffixes and collect the names
-    let mut path_parts = Vec::new();
-    let mut current = descriptor_part;
-    while !current.is_empty() {
-        // Find the next descriptor suffix: / # . ( [
-        let end = current
-            .find(['/', '#', '.', '(', '['])
-            .unwrap_or(current.len());
-        if end > 0 {
-            path_parts.push(current[..end].to_string());
-        }
-        // Skip the suffix character(s)
-        current = &current[end..];
-        if current.starts_with("().") {
-            current = &current[3..];
-        } else if !current.is_empty() {
-            current = &current[1..];
-        }
-    }
-
-    if path_parts.is_empty() {
-        return None;
-    }
-
-    // Align SCIP filesystem-based paths with the doc index's ingot-qualified paths.
-    // SCIP descriptors use filesystem module names (lib/ops/Foo) but the doc
-    // index uses ingot-qualified paths (core::ops::Foo).
-    if !package.is_empty() {
-        if path_parts[0] == "lib" {
-            // lib/ops/Foo → core::ops::Foo (replace lib with package name)
-            path_parts[0] = package.to_string();
-        } else {
-            // ops/Foo → core::ops::Foo (prepend package name)
-            path_parts.insert(0, package.to_string());
-        }
-    }
-
-    Some(path_parts.join("::"))
-}
 
 /// Enrich `rich_signature` fields in a DocIndex using SCIP occurrence positions,
 /// and inject virtual SCIP documents for each signature's code block.
@@ -1744,7 +1651,7 @@ mod tests {
         url::Url::from_directory_path(path).expect("directory path to url")
     }
 
-    fn generate_test_scip(code: &str) -> types::Index {
+    fn generate_test_scip(code: &str) -> ScipResult {
         let temp = tempfile::tempdir().expect("create temp dir");
         let file_path = temp.path().join("test.fe");
         let mut db = driver::DriverDataBase::default();
@@ -1757,9 +1664,9 @@ mod tests {
 
     #[test]
     fn test_scip_basic_structure() {
-        let index = generate_test_scip("fn hello() -> i32 {\n    42\n}\n");
+        let result = generate_test_scip("fn hello() -> i32 {\n    42\n}\n");
 
-        let metadata = index.metadata.as_ref().expect("metadata");
+        let metadata = result.index.metadata.as_ref().expect("metadata");
         assert_eq!(
             metadata.tool_info.as_ref().expect("tool info").name,
             "fe-scip"
@@ -1768,7 +1675,7 @@ mod tests {
             metadata.text_document_encoding.value(),
             types::TextEncoding::UTF8 as i32
         );
-        assert!(!index.documents.is_empty(), "should contain documents");
+        assert!(!result.index.documents.is_empty(), "should contain documents");
     }
 
     #[test]
@@ -1782,8 +1689,9 @@ fn make_point() -> Point {
     Point { x: 1, y: 2 }
 }
 "#;
-        let index = generate_test_scip(code);
-        let doc = index
+        let result = generate_test_scip(code);
+        let doc = result
+            .index
             .documents
             .iter()
             .find(|d| d.relative_path == "test.fe")
@@ -1812,8 +1720,9 @@ fn make_point() -> Point {
     Point { x: 1, y: 2 }
 }
 "#;
-        let index = generate_test_scip(code);
-        let doc = index
+        let result = generate_test_scip(code);
+        let doc = result
+            .index
             .documents
             .iter()
             .find(|d| d.relative_path == "test.fe")
@@ -1858,8 +1767,8 @@ fn make_point() -> Point {
     Point { x: 1 }
 }
 "#;
-        let index = generate_test_scip(code);
-        let json = scip_to_json_data(&index);
+        let result = generate_test_scip(code);
+        let json = scip_to_json_data(&result.index, &result.doc_urls);
 
         // Parse and check structure
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
@@ -1880,44 +1789,14 @@ fn make_point() -> Point {
     }
 
     #[test]
-    fn test_scip_symbol_to_qualified_path() {
-        // Type descriptor: Mod/Struct# — prepends package name
-        assert_eq!(
-            scip_symbol_to_qualified_path("fe fe mylib 0.1.0 Mod/Struct#"),
-            Some("mylib::Mod::Struct".into())
-        );
-        // Method descriptor: Mod/Struct#method.
-        assert_eq!(
-            scip_symbol_to_qualified_path("fe fe mylib 0.1.0 Mod/Struct#method."),
-            Some("mylib::Mod::Struct::method".into())
-        );
-        // lib root: lib/ops/Foo# — replaces lib with package name
-        assert_eq!(
-            scip_symbol_to_qualified_path("fe fe core 1.0 lib/ops/Foo#"),
-            Some("core::ops::Foo".into())
-        );
-        // Non-lib root: ops/Foo# — prepends package name
-        assert_eq!(
-            scip_symbol_to_qualified_path("fe fe core 1.0 ops/BitXorAssign#bitxor_assign."),
-            Some("core::ops::BitXorAssign::bitxor_assign".into())
-        );
-        // Single item — prepends package name
-        assert_eq!(
-            scip_symbol_to_qualified_path("fe fe pkg 1.0 Foo#"),
-            Some("pkg::Foo".into())
-        );
-        // Empty descriptor part
-        assert_eq!(scip_symbol_to_qualified_path("fe fe pkg 1.0 "), None);
-    }
-
-    #[test]
     fn test_scip_type_param_references() {
         let code = r#"pub trait Foo<T> {
     fn bar(self, _ x: own T)
 }
 "#;
-        let index = generate_test_scip(code);
-        let doc = index
+        let result = generate_test_scip(code);
+        let doc = result
+            .index
             .documents
             .iter()
             .find(|d| d.relative_path == "test.fe")
@@ -1957,8 +1836,9 @@ fn make_point() -> Point {
     fn bar(self) -> T
 }
 "#;
-        let index = generate_test_scip(code);
-        let doc = index
+        let result = generate_test_scip(code);
+        let doc = result
+            .index
             .documents
             .iter()
             .find(|d| d.relative_path == "test.fe")
@@ -2038,5 +1918,31 @@ fn make_point() -> Point {
             found_generic_param,
             "Should have found a GenericParam scope"
         );
+    }
+
+    #[test]
+    fn test_doc_urls_computed_during_generation() {
+        let code = r#"pub struct Point {
+    pub x: i32
+    pub y: i32
+}
+
+pub trait Greet {
+    fn hello(self)
+}
+"#;
+        let result = generate_test_scip(code);
+
+        // Top-level items should have doc URLs
+        let has_struct_url = result.doc_urls.values().any(|u| u.contains("Point"));
+        let has_trait_url = result.doc_urls.values().any(|u| u.contains("Greet"));
+        assert!(has_struct_url, "Point should have a doc URL: {:?}", result.doc_urls);
+        assert!(has_trait_url, "Greet should have a doc URL: {:?}", result.doc_urls);
+
+        // Child items should have anchored doc URLs
+        let has_field_anchor = result.doc_urls.values().any(|u| u.contains("~field.x"));
+        let has_method_anchor = result.doc_urls.values().any(|u| u.contains("~tymethod.hello"));
+        assert!(has_field_anchor, "field x should have anchored URL: {:?}", result.doc_urls);
+        assert!(has_method_anchor, "method hello should have anchored URL: {:?}", result.doc_urls);
     }
 }

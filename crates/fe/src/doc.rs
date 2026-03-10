@@ -506,21 +506,28 @@ fn generate_scip_json_for_doc(
 
     // Generate SCIP for each ingot and merge into one index
     let mut combined_index = scip::types::Index::default();
+    let mut combined_doc_urls = std::collections::HashMap::new();
     let mut any_succeeded = false;
 
     for ingot_url in &ingot_urls {
         match crate::scip_index::generate_scip(db, ingot_url) {
-            Ok(mut scip_index) => {
+            Ok(mut result) => {
                 let project_root = ingot_url
                     .to_file_path()
                     .ok()
                     .and_then(|p| camino::Utf8PathBuf::from_path_buf(p).ok());
 
                 if let Some(ref root) = project_root {
-                    crate::scip_index::enrich_signatures(db, root, doc_index, &mut scip_index);
+                    crate::scip_index::enrich_signatures(
+                        db,
+                        root,
+                        doc_index,
+                        &mut result.index,
+                    );
                 }
 
-                combined_index.documents.extend(scip_index.documents);
+                combined_index.documents.extend(result.index.documents);
+                combined_doc_urls.extend(result.doc_urls);
                 any_succeeded = true;
             }
             Err(e) => {
@@ -533,8 +540,10 @@ fn generate_scip_json_for_doc(
         return None;
     }
 
-    let json = crate::scip_index::scip_to_json_data(&combined_index);
-    Some(crate::scip_index::inject_doc_urls(&json, doc_index))
+    Some(crate::scip_index::scip_to_json_data(
+        &combined_index,
+        &combined_doc_urls,
+    ))
 }
 
 /// Collect ingot URLs to generate SCIP for.
