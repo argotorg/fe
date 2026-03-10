@@ -1,23 +1,27 @@
 /* Fe syntax highlighting (tree-sitter) — One Dark inspired
    Standalone version with hardcoded colors for embedding in Starlight/Astro.
-   When loaded in the generated doc site, styles.css overrides layout rules
-   (fe-code-block, fe-code-pre, etc.) with CSS-variable versions. */
+   Override these CSS custom properties to theme the syntax colors:
+     --fe-hl-keyword, --fe-hl-type, --fe-hl-type-interface, --fe-hl-type-variant,
+     --fe-hl-function, --fe-hl-string, --fe-hl-string-escape, --fe-hl-number,
+     --fe-hl-comment, --fe-hl-operator, --fe-hl-variable, --fe-hl-attribute,
+     --fe-hl-constant, --fe-hl-punctuation,
+     --fe-code-bg, --fe-code-border, --fe-code-text, --fe-code-font */
 
-.hl-keyword { color: #c678dd; }
-.hl-type, .hl-type-builtin { color: #e5c07b; }
-.hl-type-interface { color: #e77ee7; }
-.hl-type-enum-variant { color: #e7c77e; }
-.hl-function, .hl-function-definition, .hl-function-method { color: #61afef; }
-.hl-string { color: #98c379; }
-.hl-string-escape { color: #56b6c2; }
-.hl-number { color: #d19a66; }
-.hl-comment, .hl-comment-doc { color: #5c6370; font-style: italic; }
-.hl-operator { color: #abb2bf; }
-.hl-property, .hl-variable-parameter { color: #e06c75; }
-.hl-variable { color: #e06c75; }
-.hl-attribute { color: #d19a66; }
-.hl-constant { color: #d19a66; font-weight: bold; }
-.hl-punctuation-bracket, .hl-punctuation-delimiter, .hl-punctuation-special { color: #abb2bf; }
+.hl-keyword { color: var(--fe-hl-keyword, #c678dd); }
+.hl-type, .hl-type-builtin { color: var(--fe-hl-type, #e5c07b); }
+.hl-type-interface { color: var(--fe-hl-type-interface, #e77ee7); }
+.hl-type-enum-variant { color: var(--fe-hl-type-variant, #e7c77e); }
+.hl-function, .hl-function-definition, .hl-function-method { color: var(--fe-hl-function, #61afef); }
+.hl-string { color: var(--fe-hl-string, #98c379); }
+.hl-string-escape { color: var(--fe-hl-string-escape, #56b6c2); }
+.hl-number { color: var(--fe-hl-number, #d19a66); }
+.hl-comment, .hl-comment-doc { color: var(--fe-hl-comment, #5c6370); font-style: italic; }
+.hl-operator { color: var(--fe-hl-operator, #abb2bf); }
+.hl-property, .hl-variable-parameter { color: var(--fe-hl-variable, #e06c75); }
+.hl-variable { color: var(--fe-hl-variable, #e06c75); }
+.hl-attribute { color: var(--fe-hl-attribute, #d19a66); }
+.hl-constant { color: var(--fe-hl-constant, #d19a66); font-weight: bold; }
+.hl-punctuation-bracket, .hl-punctuation-delimiter, .hl-punctuation-special { color: var(--fe-hl-punctuation, #abb2bf); }
 
 /* Smooth transition for SCIP symbol hover highlights.
    feHighlight() sets inline styles; the browser tweens the change. */
@@ -34,8 +38,8 @@ fe-code-block {
 
 .fe-code-block-wrapper {
     display: flex;
-    background: #0d1117;
-    border: 1px solid #2d3748;
+    background: var(--fe-code-bg, #0d1117);
+    border: 1px solid var(--fe-code-border, #2d3748);
     border-radius: 6px;
     overflow-x: auto;
 }
@@ -80,11 +84,11 @@ fe-code-block {
     display: flex;
     flex-direction: column;
     padding: 0.875rem 0.5rem;
-    border-right: 1px solid #2d3748;
+    border-right: 1px solid var(--fe-code-border, #2d3748);
     text-align: right;
     user-select: none;
     color: #9ba3af;
-    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-family: var(--fe-code-font, "JetBrains Mono", "Fira Code", monospace);
     font-size: 0.8rem;
     line-height: 1.6;
 }
@@ -98,8 +102,8 @@ fe-code-block {
 }
 
 .fe-code-pre code {
-    font-family: "JetBrains Mono", "Fira Code", monospace;
+    font-family: var(--fe-code-font, "JetBrains Mono", "Fira Code", monospace);
     font-size: 0.875rem;
     line-height: 1.6;
-    color: #e4e4e4;
+    color: var(--fe-code-text, #e4e4e4);
 }
