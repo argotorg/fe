@@ -2138,7 +2138,7 @@ dependencies = [
 
 [[package]]
 name = "fe"
-version = "26.0.0-alpha.7"
+version = "26.0.0-alpha.9"
 dependencies = [
  "axum",
  "camino",
@@ -2181,7 +2181,7 @@ dependencies = [
 
 [[package]]
 name = "fe-bench"
-version = "26.0.0-alpha.7"
+version = "26.0.0-alpha.9"
 dependencies = [
  "camino",
  "criterion",
@@ -2195,7 +2195,7 @@ dependencies = [
 
 [[package]]
 name = "fe-codegen"
-version = "26.0.0-alpha.7"
+version = "26.0.0-alpha.9"
 dependencies = [
  "dir-test",
  "fe-common",
@@ -2217,7 +2217,7 @@ dependencies = [
 
 [[package]]
 name = "fe-common"
-version = "26.0.0-alpha.7"
+version = "26.0.0-alpha.9"
 dependencies = [
  "camino",
  "fe-parser",
@@ -2238,7 +2238,7 @@ dependencies = [
 
 [[package]]
 name = "fe-contract-harness"
-version = "26.0.0-alpha.7"
+version = "26.0.0-alpha.9"
 dependencies = [
  "ethers-core",
  "fe-codegen",
@@ -2256,7 +2256,7 @@ dependencies = [
 
 [[package]]
 name = "fe-driver"
-version = "26.0.0-alpha.7"
+version = "26.0.0-alpha.9"
 dependencies = [
  "camino",
  "codespan-reporting",
@@ -2275,7 +2275,7 @@ dependencies = [
 
 [[package]]
 name = "fe-fmt"
-version = "26.0.0-alpha.7"
+version = "26.0.0-alpha.9"
 dependencies = [
  "dir-test",
  "fe-parser",
@@ -2285,7 +2285,7 @@ dependencies = [
 
 [[package]]
 name = "fe-hir"
-version = "26.0.0-alpha.7"
+version = "26.0.0-alpha.9"
 dependencies = [
  "ascii_tree",
  "bitflags 2.11.0",
@@ -2318,7 +2318,7 @@ dependencies = [
 
 [[package]]
 name = "fe-language-server"
-version = "26.0.0-alpha.7"
+version = "26.0.0-alpha.9"
 dependencies = [
  "act-locally",
  "anyhow",
@@ -2359,7 +2359,7 @@ dependencies = [
 
 [[package]]
 name = "fe-mir"
-version = "26.0.0-alpha.7"
+version = "26.0.0-alpha.9"
 dependencies = [
  "cranelift-entity 0.115.1",
  "dir-test",
@@ -2375,7 +2375,7 @@ dependencies = [
 
 [[package]]
 name = "fe-parser"
-version = "26.0.0-alpha.7"
+version = "26.0.0-alpha.9"
 dependencies = [
  "derive_more 1.0.0",
  "dir-test",
@@ -2396,7 +2396,7 @@ dependencies = [
 
 [[package]]
 name = "fe-resolver"
-version = "26.0.0-alpha.7"
+version = "26.0.0-alpha.9"
 dependencies = [
  "camino",
  "dir-test",
@@ -2416,7 +2416,7 @@ dependencies = [
 
 [[package]]
 name = "fe-solc-runner"
-version = "26.0.0-alpha.7"
+version = "26.0.0-alpha.9"
 dependencies = [
  "fe-contract-harness",
  "indexmap 2.13.0",
@@ -2425,7 +2425,7 @@ dependencies = [
 
 [[package]]
 name = "fe-test-utils"
-version = "26.0.0-alpha.7"
+version = "26.0.0-alpha.9"
 dependencies = [
  "fe-common",
  "insta",
@@ -2438,7 +2438,7 @@ dependencies = [
 
 [[package]]
 name = "fe-uitest"
-version = "26.0.0-alpha.7"
+version = "26.0.0-alpha.9"
 dependencies = [
  "dir-test",
  "fe-common",
@@ -2452,7 +2452,7 @@ dependencies = [
 
 [[package]]
 name = "fe-web"
-version = "0.1.0"
+version = "26.0.0-alpha.9"
 dependencies = [
  "js-sys",
  "protobuf",
@@ -5897,7 +5897,7 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter-fe"
-version = "26.0.0-alpha.7"
+version = "26.0.0-alpha.9"
 dependencies = [
  "cc",
  "tree-sitter",
