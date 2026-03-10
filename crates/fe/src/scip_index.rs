@@ -377,10 +377,10 @@ fn process_module<'db>(
         // These are handled correctly by the child-indexing path below, which
         // produces proper SCIP symbols (e.g. Trait#method. not Trait/method.).
         let scope = ScopeId::from_item(item);
-        if let Some(parent) = scope.parent_item(db) {
-            if index_util::is_container_item(parent) {
-                continue;
-            }
+        if let Some(parent) = scope.parent_item(db)
+            && index_util::is_container_item(parent)
+        {
+            continue;
         }
 
         let maybe_symbol = item_symbol(db, item, &ctx.name, &ctx.version);
@@ -1814,7 +1814,7 @@ fn make_point() -> Point {
             .collect();
 
         assert!(
-            t_refs.len() >= 1,
+            !t_refs.is_empty(),
             "T should have at least 1 reference (in return type), got {}",
             t_refs.len()
         );
@@ -1843,18 +1843,14 @@ fn make_point() -> Point {
             let item_scope = ScopeId::from_item(
                 scope_graph
                     .items_dfs(&db)
-                    .find(|i| {
-                        i.name(&db)
-                            .map(|n| n.data(&db).to_string() == "Foo")
-                            .unwrap_or(false)
-                    })
+                    .find(|i| i.name(&db).map(|n| *n.data(&db) == "Foo").unwrap_or(false))
                     .expect("Foo item"),
             );
             for child in scope_graph.children(item_scope) {
                 if let ScopeId::GenericParam(_, _) = child {
                     let refs = ctx.ref_index.references_to(&child);
                     assert!(
-                        refs.len() >= 1,
+                        !refs.is_empty(),
                         "GenericParam T should have references in the index"
                     );
                     found_generic_param = true;

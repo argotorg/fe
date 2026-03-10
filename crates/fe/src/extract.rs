@@ -239,10 +239,10 @@ impl<'db> DocExtractor<'db> {
 
         // Skip items nested inside containers (traits, structs, enums, impls) —
         // they are already captured as children of their parent DocItem.
-        if let Some(parent) = item.scope().parent_item(self.db) {
-            if crate::index_util::is_container_item(parent) {
-                return None;
-            }
+        if let Some(parent) = item.scope().parent_item(self.db)
+            && crate::index_util::is_container_item(parent)
+        {
+            return None;
         }
 
         let scope = item.scope();
