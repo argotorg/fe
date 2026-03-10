@@ -271,7 +271,7 @@ body {
    box; the inner fe-code-block border is suppressed to avoid doubling. */
 .signature-wrapper {
     display: flex;
-    align-items: center;
+    align-items: baseline;
     background: var(--code-bg);
     border: 1px solid var(--border);
     border-radius: 4px;
@@ -522,7 +522,7 @@ h2:hover .anchor {
 
 .impl-header {
     display: flex;
-    align-items: center;
+    align-items: baseline;
 }
 
 .impl-header h3 {
@@ -565,7 +565,7 @@ fe-code-block.impl-signature {
 
 .method-header {
     display: flex;
-    align-items: center;
+    align-items: baseline;
 }
 
 .method-header h4 {
@@ -668,11 +668,14 @@ fe-code-block.impl-signature {
 
 .implementor-item {
     display: flex;
-    align-items: center;
+    align-items: baseline;
     padding: 0.375rem 0.625rem;
     background: var(--bg-secondary);
     border: 1px solid var(--border);
     border-radius: 4px;
+    text-decoration: none;
+    color: inherit;
+    cursor: pointer;
 }
 
 .implementor-item:target,
@@ -758,7 +761,7 @@ fe-code-block.impl-signature {
 
 .member-header {
     display: flex;
-    align-items: center;
+    align-items: baseline;
 }
 
 .member-signature {
