@@ -2,8 +2,11 @@
 
 use super::*;
 use hir::{
-    analysis::ty::const_eval::{ConstValue, try_eval_const_body},
-    hir_def::{Expr, LitKind, Partial},
+    analysis::ty::{
+        const_eval::{ConstValue, try_eval_const_body},
+        simplified_pattern::ConstructorKind,
+    },
+    hir_def::{EnumVariant, Expr, LitKind, Partial},
     projection::{IndexSource, Projection},
 };
 use num_bigint::BigUint;
@@ -395,6 +398,23 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
         if let TyData::TyBase(TyBase::Prim(_)) = ty.base_ty(self.db).data(self.db) {
             return Some(32);
+        }
+
+        // Enums: discriminant (one 32-byte word) + max variant payload.
+        if let Some(adt_def) = ty.adt_def(self.db)
+            && let AdtRef::Enum(enm) = adt_def.adt_ref(self.db)
+        {
+            let mut max_payload = 0;
+            for variant in enm.variants(self.db) {
+                let ev = EnumVariant::new(enm, variant.idx);
+                let ctor = ConstructorKind::Variant(ev, ty);
+                let mut payload = 0;
+                for field_ty in ctor.field_types(self.db) {
+                    payload += self.abi_static_size_bytes(field_ty)?;
+                }
+                max_payload = max_payload.max(payload);
+            }
+            return Some(32 + max_payload);
         }
 
         None
