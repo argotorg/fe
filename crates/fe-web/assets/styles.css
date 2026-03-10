@@ -267,30 +267,8 @@ body {
 .kind-badge.type { background: #2d4a4a; color: #7ee7e7; }
 .kind-badge.const { background: #3a2d4a; color: #b87ee7; }
 
-.signature {
-    background: var(--code-bg);
-    padding: 0.625rem 0.875rem;
-    border-radius: 6px;
-    border: 1px solid var(--border);
-    overflow-x: auto;
+fe-code-block.signature {
     margin-bottom: 1rem;
-}
-
-.signature code {
-    font-family: "JetBrains Mono", "Fira Code", monospace;
-    font-size: 0.875rem;
-    white-space: pre;
-    color: var(--text);
-}
-
-.signature .fe-code-block-wrapper {
-    border: none;
-    margin: 0;
-    background: none;
-}
-
-.signature fe-code-block {
-    margin: 0;
 }
 
 /* Type links in signatures and code blocks — underline indicates clickable,
@@ -542,18 +520,9 @@ h2:hover .anchor {
     padding: 0.5rem 0.75rem;
 }
 
-.impl-signature {
-    background: var(--code-bg);
-    padding: 0.5rem 0.75rem;
-    border-radius: 4px;
+fe-code-block.impl-signature {
     margin: 0 0 0.5rem 0;
     font-size: 0.85rem;
-    overflow-x: auto;
-}
-
-.impl-signature code {
-    font-family: "JetBrains Mono", "Fira Code", monospace;
-    white-space: pre;
 }
 
 /* Method items within impl blocks */

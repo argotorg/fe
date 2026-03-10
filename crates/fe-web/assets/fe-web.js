@@ -130,7 +130,7 @@
     var slashIdx = urlPath.lastIndexOf("/");
     var path = slashIdx !== -1 ? urlPath.substring(0, slashIdx) : urlPath;
     var html = '<div class="generated-type"><h1>Compiler-Generated Type</h1>';
-    html += '<pre class="signature"><fe-code-block lang="fe">' + esc(path) + "</fe-code-block></pre>";
+    html += '<fe-code-block lang="fe" class="signature">' + esc(path) + "</fe-code-block>";
     html += "<p>This is a compiler-generated type. Tuple types like <code>" + esc(path) + "</code> ";
     html += "are created automatically by the compiler and do not have dedicated documentation pages.</p>";
     html += "</div>";
@@ -149,11 +149,12 @@
   // Rich Signature Rendering
   // ============================================================================
 
-  function renderRichSignature(rich, fallback, highlightedFallback, sigScope) {
+  function renderRichSignature(rich, fallback, highlightedFallback, sigScope, cssClass) {
     // Always emit raw text — client-side FeHighlighter handles
     // syntax highlighting and type linking via tree-sitter WASM + ScipStore.
     var attrs = 'lang="fe"';
     if (sigScope) attrs += ' data-scope="' + esc(sigScope) + '"';
+    if (cssClass) attrs += ' class="' + esc(cssClass) + '"';
     return "<fe-code-block " + attrs + ">" + esc(fallback || "") + "</fe-code-block>";
   }
 
@@ -269,10 +270,8 @@
 
     // Signature (non-modules only)
     if (!isModule && item.signature) {
-      html += '<pre class="signature">';
       html += renderRichSignature(item.rich_signature, item.signature, item.highlighted_signature,
-        item.sig_scope);
-      html += "</pre>";
+        item.sig_scope, "signature");
     }
 
     // Documentation body
@@ -446,9 +445,7 @@
 
     // Signature for trait impls
     if (isTraitImpl) {
-      html += '<pre class="rust impl-signature">';
-      html += renderRichSignature(impl_.rich_signature, impl_.signature, impl_.highlighted_signature, impl_.sig_scope);
-      html += "</pre>";
+      html += renderRichSignature(impl_.rich_signature, impl_.signature, impl_.highlighted_signature, impl_.sig_scope, "impl-signature");
     }
 
     // Methods

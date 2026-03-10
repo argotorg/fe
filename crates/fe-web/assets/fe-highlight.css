@@ -44,40 +44,23 @@ fe-code-block {
     overflow-x: auto;
 }
 
-/* When fe-code-block is nested inside a signature container,
-   the parent already provides background/border/padding. */
-.signature fe-code-block,
-.impl-signature fe-code-block {
-    margin: 0;
-}
-.signature .fe-code-block-wrapper,
-.impl-signature .fe-code-block-wrapper {
-    background: transparent;
-    border: none;
-    border-radius: 0;
-}
-.signature .fe-code-pre,
-.impl-signature .fe-code-pre {
-    padding: 0;
-}
-
-/* Tighter margins in member/method/implementor contexts */
+/* Tighter margins in inline contexts (member headers, code headers, etc.)
+   These target the fe-code-block element in the light DOM. The shadow DOM
+   wrapper styles (border, background) are controlled via CSS custom
+   properties that inherit through the shadow boundary. */
 .member-header fe-code-block,
 .code-header fe-code-block,
 .implementor-sig fe-code-block {
     margin: 0;
 }
-.member-header .fe-code-block-wrapper,
-.code-header .fe-code-block-wrapper,
-.implementor-sig .fe-code-block-wrapper {
-    border: none;
-    background: transparent;
-    border-radius: 0;
-}
-.member-header .fe-code-pre,
-.code-header .fe-code-pre,
-.implementor-sig .fe-code-pre {
-    padding: 0;
+
+/* Inline signature contexts: suppress border/background via custom properties
+   (these inherit into the shadow root where .fe-code-block-wrapper reads them). */
+.member-header,
+.code-header,
+.implementor-sig {
+    --fe-code-bg: transparent;
+    --fe-code-border: transparent;
 }
 
 .fe-line-numbers {
