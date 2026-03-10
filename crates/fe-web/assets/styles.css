@@ -277,6 +277,16 @@ body {
     color: var(--text);
 }
 
+.signature .fe-code-block-wrapper {
+    border: none;
+    margin: 0;
+    background: none;
+}
+
+.signature fe-code-block {
+    margin: 0;
+}
+
 /* Type links in signatures and code blocks — underline indicates clickable,
    color is inherited from the syntax highlight class (hl-type, hl-type-builtin, etc.) */
 .type-link {
@@ -484,7 +494,9 @@ h2 {
 }
 
 .impl-block:hover .anchor,
+.member-item:hover > .member-header .anchor,
 .method-item:hover > summary .anchor,
+.implementor-item:hover .anchor,
 h2:hover .anchor {
     opacity: 1;
 }
