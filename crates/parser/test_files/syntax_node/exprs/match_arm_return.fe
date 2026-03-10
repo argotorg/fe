@@ -1,0 +1,4 @@
+match e {
+    Enum::A(v) => return v
+    Enum::B => return 0
+}

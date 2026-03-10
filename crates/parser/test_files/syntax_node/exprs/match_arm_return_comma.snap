@@ -1,0 +1,57 @@
+---
+source: crates/parser/tests/syntax_node.rs
+expression: node
+input_file: test_files/syntax_node/exprs/match_arm_return_comma.fe
+---
+Root@0..60
+  MatchExpr@0..59
+    MatchKw@0..5 "match"
+    WhiteSpace@5..6 " "
+    PathExpr@6..7
+      Path@6..7
+        PathSegment@6..7
+          Ident@6..7 "e"
+    WhiteSpace@7..8 " "
+    MatchArmList@8..59
+      LBrace@8..9 "{"
+      Newline@9..10 "\n"
+      WhiteSpace@10..14 "    "
+      MatchArm@14..31
+        PathPat@14..21
+          Path@14..21
+            PathSegment@14..18
+              Ident@14..18 "Enum"
+            Colon2@18..20 "::"
+            PathSegment@20..21
+              Ident@20..21 "A"
+        WhiteSpace@21..22 " "
+        FatArrow@22..24 "=>"
+        WhiteSpace@24..25 " "
+        BlockExpr@25..31
+          ReturnStmt@25..31
+            ReturnKw@25..31 "return"
+      Comma@31..32 ","
+      Newline@32..33 "\n"
+      WhiteSpace@33..37 "    "
+      MatchArm@37..56
+        PathPat@37..44
+          Path@37..44
+            PathSegment@37..41
+              Ident@37..41 "Enum"
+            Colon2@41..43 "::"
+            PathSegment@43..44
+              Ident@43..44 "B"
+        WhiteSpace@44..45 " "
+        FatArrow@45..47 "=>"
+        WhiteSpace@47..48 " "
+        BlockExpr@48..56
+          ReturnStmt@48..56
+            ReturnKw@48..54 "return"
+            WhiteSpace@54..55 " "
+            LitExpr@55..56
+              Lit@55..56
+                Int@55..56 "0"
+      Comma@56..57 ","
+      Newline@57..58 "\n"
+      RBrace@58..59 "}"
+  Newline@59..60 "\n"

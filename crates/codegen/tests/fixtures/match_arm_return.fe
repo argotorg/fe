@@ -1,0 +1,14 @@
+// Regression test: `return` directly in a match arm (without block braces)
+// should be accepted by the parser.
+
+enum E {
+    A(u256),
+    B,
+}
+
+fn f(e: E) -> u256 {
+    match e {
+        E::A(v) => return v
+        E::B => return 0
+    }
+}
