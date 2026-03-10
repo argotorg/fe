@@ -1168,14 +1168,98 @@ pub fn enrich_signatures_with_base(
     // browser can resolve them positionally via character offsets.
     let mut virtual_docs: Vec<types::Document> = Vec::new();
 
+    // Pre-compute child symbol name→scip_symbol for each enclosing item.
+    // Includes type parameters, trait consts, and associated types so that
+    // child/method virtual sig builders can inject parent-scoped names via
+    // the fallback text scan.
+    let child_scope_symbols: HashMap<String, Vec<(String, String)>> = {
+        let mut map: HashMap<String, Vec<(String, String)>> = HashMap::new();
+        for doc in &scip_index.documents {
+            for si in &doc.symbols {
+                if si.enclosing_symbol.is_empty() || si.display_name.is_empty() {
+                    continue;
+                }
+                let kind = si.kind.enum_value().ok();
+                if matches!(
+                    kind,
+                    Some(symbol_information::Kind::TypeParameter)
+                        | Some(symbol_information::Kind::Constant)
+                        | Some(symbol_information::Kind::TypeAlias)
+                ) {
+                    map.entry(si.enclosing_symbol.clone())
+                        .or_default()
+                        .push((si.display_name.clone(), si.symbol.clone()));
+                }
+            }
+        }
+        map
+    };
+    // Build display_name → [scip_symbol] for Self resolution.
+    // Multiple SCIP symbols can share a display name (cross-ingot refs).
+    let name_to_scip: HashMap<String, Vec<String>> = {
+        let mut map: HashMap<String, Vec<String>> = HashMap::new();
+        for doc in &scip_index.documents {
+            for si in &doc.symbols {
+                if si.display_name.is_empty() || si.symbol.is_empty() {
+                    continue;
+                }
+                let kind = si.kind.enum_value().ok();
+                if matches!(
+                    kind,
+                    Some(symbol_information::Kind::Trait)
+                        | Some(symbol_information::Kind::Struct)
+                        | Some(symbol_information::Kind::Enum)
+                        | Some(symbol_information::Kind::Interface)
+                        | Some(symbol_information::Kind::Class)
+                ) {
+                    map.entry(si.display_name.clone())
+                        .or_default()
+                        .push(si.symbol.clone());
+                }
+            }
+        }
+        map
+    };
+
     for item in &mut index.items {
         let parent_url = item.url_path();
+
+        // Collect parent type params + Self for child signature enrichment
+        let mut parent_type_params: Vec<(String, String)> = Vec::new();
 
         // Item signature
         if let Some(ref span) = item.signature_span {
             let scope = format!("__sig__/{}", parent_url);
-            let occs =
-                build_virtual_occurrences(span, &item.signature, project_root, &file_occurrences);
+
+            // Find the SCIP symbol(s) for this item so we can inject Self and
+            // collect type parameters for child signature enrichment.
+            let item_scip_syms = name_to_scip.get(&item.name);
+
+            let mut self_extras: Vec<(String, String)> = Vec::new();
+            if let Some(syms) = item_scip_syms {
+                // Use the first symbol for Self mapping
+                if let Some(first) = syms.first() {
+                    self_extras.push(("Self".to_string(), first.clone()));
+                }
+                // Collect type params from all matching SCIP symbols
+                for sym in syms {
+                    if let Some(params) = child_scope_symbols.get(sym) {
+                        for p in params {
+                            if !parent_type_params.iter().any(|(n, _)| n == &p.0) {
+                                parent_type_params.push(p.clone());
+                            }
+                        }
+                    }
+                }
+            }
+
+            let occs = build_virtual_occurrences_with_extra(
+                span,
+                &item.signature,
+                project_root,
+                &file_occurrences,
+                &self_extras,
+            );
             if !occs.is_empty() {
                 item.sig_scope = Some(scope.clone());
                 virtual_docs.push(types::Document {
@@ -1199,7 +1283,13 @@ pub fn enrich_signatures_with_base(
                 } else {
                     &child.signature
                 };
-                let occs = build_virtual_occurrences(span, sig, project_root, &file_occurrences);
+                let occs = build_virtual_occurrences_with_extra(
+                    span,
+                    sig,
+                    project_root,
+                    &file_occurrences,
+                    &parent_type_params,
+                );
                 if !occs.is_empty() {
                     child.sig_scope = Some(scope.clone());
                     virtual_docs.push(types::Document {
@@ -1252,11 +1342,12 @@ pub fn enrich_signatures_with_base(
                         "__sig__/{}/{}/method.{}",
                         parent_url, impl_anchor, method.name
                     );
-                    let occs = build_virtual_occurrences(
+                    let occs = build_virtual_occurrences_with_extra(
                         span,
                         &method.signature,
                         project_root,
                         &file_occurrences,
+                        &parent_type_params,
                     );
                     if !occs.is_empty() {
                         method.sig_scope = Some(scope.clone());
@@ -1428,11 +1519,26 @@ fn byte_offset_to_sig_line_col(sig_text: &str, byte_offset: usize) -> (i32, i32)
 /// Unlike `overlay_occurrences` (which filters to non-definition references with
 /// known doc URLs), this returns ALL occurrences within the byte range — defs,
 /// refs, type params, Self, etc. — so the browser can highlight everything.
+///
+/// `extra_names` provides additional name→symbol mappings (e.g. parent type
+/// params like `T` from `trait Foo<T>`) that the fallback text scanner should
+/// inject into child signatures even when no SCIP occurrence exists in the
+/// child's byte range.
 fn build_virtual_occurrences(
     span: &fe_web::model::SignatureSpanData,
     sig_text: &str,
     project_root: &Utf8Path,
     file_occurrences: &HashMap<String, Vec<ByteOccurrence>>,
+) -> Vec<types::Occurrence> {
+    build_virtual_occurrences_with_extra(span, sig_text, project_root, file_occurrences, &[])
+}
+
+fn build_virtual_occurrences_with_extra(
+    span: &fe_web::model::SignatureSpanData,
+    sig_text: &str,
+    project_root: &Utf8Path,
+    file_occurrences: &HashMap<String, Vec<ByteOccurrence>>,
+    extra_names: &[(String, String)],
 ) -> Vec<types::Occurrence> {
     let rel_path = match url::Url::parse(&span.file_url) {
         Ok(u) => relative_path(project_root, &u),
@@ -1546,6 +1652,11 @@ fn build_virtual_occurrences(
                 }
             }
         }
+    }
+
+    // Inject extra name→symbol mappings (e.g. parent type params)
+    for (name, symbol) in extra_names {
+        name_to_symbol.entry(name.clone()).or_insert(symbol.clone());
     }
 
     let sig_bytes = sig_text.as_bytes();
