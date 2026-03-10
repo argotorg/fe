@@ -58,7 +58,8 @@ pub mod lazy_spans {
         path::{LazyPathSegmentSpan, LazyPathSpan},
         stmt::{LazyLetStmtSpan, LazyStmtSpan},
         types::{
-            LazyArrayTypeSpan, LazyPathTypeSpan, LazyPtrTypeSpan, LazyTupleTypeSpan, LazyTySpan,
+            LazyArrayTypeSpan, LazyModeTypeSpan, LazyPathTypeSpan, LazyPtrTypeSpan,
+            LazyTupleTypeSpan, LazyTySpan,
         },
         use_tree::{LazyUseAliasSpan, LazyUsePathSegmentSpan, LazyUsePathSpan},
     };

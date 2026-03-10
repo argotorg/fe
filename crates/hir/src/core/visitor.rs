@@ -1669,6 +1669,15 @@ pub fn walk_generic_param<'db, V>(
                         visitor.visit_type_bound_list(ctxt, &ty_param.bounds);
                     },
                 );
+
+                if let Some(default_ty) = ty_param.default_ty {
+                    ctxt.with_new_ctxt(
+                        |span| span.default_ty(),
+                        |ctxt| {
+                            visitor.visit_ty(ctxt, default_ty);
+                        },
+                    );
+                }
             },
         ),
 
@@ -2060,7 +2069,12 @@ pub fn walk_type<'db, V>(
 
         TypeKind::Mode(_, ty) => {
             if let Some(ty) = ty.to_opt() {
-                visitor.visit_ty(ctxt, ty);
+                ctxt.with_new_ctxt(
+                    |span| span.into_mode_type().inner(),
+                    |ctxt| {
+                        visitor.visit_ty(ctxt, ty);
+                    },
+                );
             }
         }
 

@@ -1895,4 +1895,125 @@ fn make_point() -> Point {
         // Empty descriptor part
         assert_eq!(scip_symbol_to_qualified_path("fe fe pkg 1.0 "), None);
     }
+
+    #[test]
+    fn test_scip_type_param_references() {
+        let code = r#"pub trait Foo<T> {
+    fn bar(self, _ x: own T)
+}
+"#;
+        let index = generate_test_scip(code);
+        let doc = index
+            .documents
+            .iter()
+            .find(|d| d.relative_path == "test.fe")
+            .expect("document");
+
+        // T should have a definition occurrence
+        let t_sym = doc
+            .symbols
+            .iter()
+            .find(|s| s.display_name == "T")
+            .expect("T symbol should exist");
+
+        // Find all occurrences of T's symbol
+        let t_occs: Vec<_> = doc
+            .occurrences
+            .iter()
+            .filter(|o| o.symbol == t_sym.symbol)
+            .collect();
+
+        // Should have at least a definition AND a reference (in `own T`)
+        let defs = t_occs
+            .iter()
+            .filter(|o| (o.symbol_roles & (types::SymbolRole::Definition as i32)) != 0)
+            .count();
+        let refs = t_occs
+            .iter()
+            .filter(|o| o.symbol_roles == 0)
+            .count();
+
+        assert!(defs >= 1, "T should have at least 1 definition, got {defs}");
+        assert!(refs >= 1, "T should have at least 1 reference (in `own T`), got {refs}");
+    }
+
+    #[test]
+    fn test_scip_default_ty_self_reference() {
+        let code = r#"pub trait Foo<T = Self> {
+    fn bar(self) -> T
+}
+"#;
+        let index = generate_test_scip(code);
+        let doc = index
+            .documents
+            .iter()
+            .find(|d| d.relative_path == "test.fe")
+            .expect("document");
+
+        // Self should appear as a reference occurrence (resolving to the trait)
+        let self_occs: Vec<_> = doc
+            .occurrences
+            .iter()
+            .filter(|o| {
+                // Self references on line 0 (the `= Self` part)
+                o.range[0] == 0 && o.range.len() >= 3
+                    && o.symbol_roles == 0 // reference, not definition
+            })
+            .collect();
+
+        // T in return position should also have a reference
+        let t_sym = doc
+            .symbols
+            .iter()
+            .find(|s| s.display_name == "T")
+            .expect("T symbol");
+        let t_refs: Vec<_> = doc
+            .occurrences
+            .iter()
+            .filter(|o| o.symbol == t_sym.symbol && o.symbol_roles == 0)
+            .collect();
+
+        assert!(t_refs.len() >= 1, "T should have at least 1 reference (in return type), got {}", t_refs.len());
+    }
+
+    #[test]
+    fn test_ref_index_type_params() {
+        use hir::hir_def::scope_graph::ScopeId;
+
+        let code = r#"pub trait Foo<T> {
+    fn bar(self, _ x: own T)
+}
+"#;
+        let temp = tempfile::tempdir().expect("create temp dir");
+        let file_path = temp.path().join("test.fe");
+        let mut db = driver::DriverDataBase::default();
+        let url = file_url(&file_path);
+        db.workspace()
+            .touch(&mut db, url.clone(), Some(code.to_string()));
+        let ingot_url = dir_url(temp.path());
+        let ctx = index_util::IngotContext::resolve(&db, &ingot_url).unwrap();
+
+        let mut found_generic_param = false;
+        for top_mod in ctx.ingot.all_modules(&db) {
+            let scope_graph = top_mod.scope_graph(&db);
+            let item_scope = ScopeId::from_item(
+                scope_graph
+                    .items_dfs(&db)
+                    .find(|i| {
+                        i.name(&db)
+                            .map(|n| n.data(&db).to_string() == "Foo")
+                            .unwrap_or(false)
+                    })
+                    .expect("Foo item"),
+            );
+            for child in scope_graph.children(item_scope) {
+                if let ScopeId::GenericParam(_, _) = child {
+                    let refs = ctx.ref_index.references_to(&child);
+                    assert!(refs.len() >= 1, "GenericParam T should have references in the index");
+                    found_generic_param = true;
+                }
+            }
+        }
+        assert!(found_generic_param, "Should have found a GenericParam scope");
+    }
 }

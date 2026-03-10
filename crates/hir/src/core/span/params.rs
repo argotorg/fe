@@ -160,6 +160,7 @@ define_lazy_span_node!(
     }
     @node {
         (bounds, bounds, LazyTypeBoundListSpan),
+        (default_ty, default_ty, LazyTySpan),
     }
 );
 

@@ -21,6 +21,14 @@ impl<'db> LazyTySpan<'db> {
         LazyPtrTypeSpan(self.0)
     }
 
+    /// Convert this [`LazyTySpan`] into a [`LazyModeTypeSpan`].
+    ///
+    /// If the type that is pointed to by this is not a mode type, the result
+    /// span will point to the same span of the original type.
+    pub fn into_mode_type(self) -> LazyModeTypeSpan<'db> {
+        LazyModeTypeSpan(self.0)
+    }
+
     /// Convert this [`LazyTySpan`] into a [`LazyTupleTypeSpan`].
     ///
     /// If the type that is pointed to by this is not a tuple type, the result
@@ -46,6 +54,14 @@ define_lazy_span_node!(
     }
     @node {
         (pointee, inner, LazyTySpan),
+    }
+);
+
+define_lazy_span_node!(
+    LazyModeTypeSpan,
+    ast::ModeType,
+    @node {
+        (inner, inner, LazyTySpan),
     }
 );
 
