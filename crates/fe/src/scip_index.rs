@@ -561,6 +561,10 @@ fn process_module<'db>(
 /// `item_symbol()` returns None for Impl/ImplTrait blocks (no name) and also
 /// for items nested inside them (pretty_path fails through unnamed parent).
 /// Their type params still need SCIP occurrences so virtual sig files can resolve them.
+///
+/// Also indexes generic params of child items (methods) inside unnamed containers,
+/// since the child-indexing path in `process_module` is unreachable when the parent
+/// has no symbol.
 fn index_unnamed_item_generic_params<'db>(
     db: &'db driver::DriverDataBase,
     item: ItemKind<'db>,
@@ -590,6 +594,27 @@ fn index_unnamed_item_generic_params<'db>(
         file_relative_paths,
         documents,
     );
+
+    // Also index generic params of children (methods inside impl blocks).
+    // These children are skipped by items_dfs (parent is a container) and the
+    // child-indexing path is unreachable when the parent has no symbol.
+    for child in sym_view.children(db) {
+        let child_scope = child.scope();
+        let Some(child_name) = child.name(db) else {
+            continue;
+        };
+        let child_symbol = format!("{}{}", parent_symbol, child_name);
+        let child_view = SymbolView::new(child_scope);
+        index_generic_params_for(
+            db,
+            &child_view,
+            &child_symbol,
+            ctx,
+            doc_url,
+            file_relative_paths,
+            documents,
+        );
+    }
 }
 
 /// Index generic parameters for a symbol using SymbolView::generic_params().
@@ -1925,5 +1950,104 @@ pub trait Greet {
         let refs = t_occs.iter().filter(|o| o.symbol_roles == 0).count();
         assert!(defs >= 1, "T should have at least 1 definition");
         assert!(refs >= 1, "T should have at least 1 reference (in own T or return type)");
+    }
+
+    #[test]
+    fn test_impl_block_method_type_params_indexed() {
+        let code = r#"pub trait Applicative {
+    fn pure<T>(_ value: own T) -> Self<T>
+    fn ap<T, U, F: Fn<T, U>>(self: own Self<F>, _ value: own Self<T>) -> Self<U>
+}
+
+pub enum Result<E> {
+    Ok
+    Err(E)
+}
+
+impl<E> Applicative for Result<E> {
+    fn pure<T>(_ value: own T) -> Self<T> {
+        Result::Ok
+    }
+    fn ap<T, U, F: Fn<T, U>>(self: own Self<F>, _ value: own Self<T>) -> Self<U> {
+        Result::Ok
+    }
+}
+"#;
+        let result = generate_test_scip(code);
+        let doc = result
+            .index
+            .documents
+            .iter()
+            .find(|d| d.relative_path == "test.fe")
+            .expect("document");
+
+        // Collect all TypeParameter symbols
+        let type_params: Vec<&types::SymbolInformation> = doc
+            .symbols
+            .iter()
+            .filter(|s| s.kind.value() == symbol_information::Kind::TypeParameter as i32)
+            .collect();
+
+        let param_names: Vec<&str> = type_params.iter().map(|s| s.display_name.as_str()).collect();
+
+        // The impl block's E should be indexed
+        assert!(
+            param_names.contains(&"E"),
+            "impl block's E type param should be indexed, got: {param_names:?}"
+        );
+
+        // Method-level type params (T, U, F) from the impl's methods should be indexed
+        // There should be T from both the trait and the impl methods
+        let t_count = param_names.iter().filter(|&&n| n == "T").count();
+        assert!(
+            t_count >= 2,
+            "T should appear at least twice (trait + impl method), got {t_count}: {param_names:?}"
+        );
+    }
+
+    #[test]
+    fn test_builtin_core_ingot_symbol_identity() {
+        // Verify that the builtin core ingot produces consistent symbols.
+        // This is a regression test for the E vs T divergence where definitions
+        // got "unknown 0.0.0" but cross-ingot refs got "core 0.1.0".
+        let mut db = driver::DriverDataBase::default();
+
+        // Set up a user ingot that imports core (triggers stdlib loading)
+        let temp = tempfile::tempdir().expect("create temp dir");
+        let file_path = temp.path().join("test.fe");
+        let url = file_url(&file_path);
+        db.workspace()
+            .touch(&mut db, url.clone(), Some("use core::result::Result\nfn foo() -> Result<u8> {\n    Result::Ok\n}\n".to_string()));
+
+        // Generate SCIP for the core ingot
+        let core_url = url::Url::parse(common::stdlib::BUILTIN_CORE_BASE_URL).unwrap();
+        let core_result = generate_scip(&db, &core_url);
+
+        if let Ok(result) = core_result {
+            // Find Result enum's type param symbols
+            for doc in &result.index.documents {
+                for si in &doc.symbols {
+                    if si.display_name == "E"
+                        && si.kind.value() == symbol_information::Kind::TypeParameter as i32
+                        && si.symbol.contains("Result")
+                    {
+                        // The definition symbol should use "core", not "unknown"
+                        assert!(
+                            !si.symbol.contains("unknown"),
+                            "Result's E param definition should use 'core', not 'unknown': {}",
+                            si.symbol
+                        );
+                    }
+                }
+            }
+
+            // Check that the ingot context used "core" as the name
+            let ctx = index_util::IngotContext::resolve(&db, &core_url).unwrap();
+            assert_eq!(
+                ctx.name, "core",
+                "core ingot should resolve with name 'core', got '{}'",
+                ctx.name
+            );
+        }
     }
 }
