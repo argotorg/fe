@@ -267,9 +267,27 @@ body {
 .kind-badge.type { background: #2d4a4a; color: #7ee7e7; }
 .kind-badge.const { background: #3a2d4a; color: #b87ee7; }
 
-fe-code-block.signature {
-    display: block;
+/* Main item signature at top of page. The wrapper provides the visual
+   box; the inner fe-code-block border is suppressed to avoid doubling. */
+.signature-wrapper {
+    display: flex;
+    align-items: center;
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.5rem 0.75rem;
     margin-bottom: 1rem;
+    --fe-code-bg: transparent;
+    --fe-code-border: transparent;
+}
+
+.signature-wrapper fe-code-block {
+    flex: 1;
+    margin: 0;
+}
+
+.signature-wrapper:hover .anchor {
+    opacity: 1;
 }
 
 /* Type links in signatures and code blocks — underline indicates clickable,
@@ -468,22 +486,15 @@ h2 {
     transform: rotate(90deg);
 }
 
-/* Anchor links — consistent across all contexts.
-   In flex containers: first child, fixed width, vertically centered.
-   In headings (h1, h2): inline after the text. */
+/* Anchor links — uniform § link that appears on hover.
+   Always inline, always the same size, placed after text content. */
 .anchor {
     color: var(--text-muted);
     text-decoration: none;
-    font-size: 0.75rem;
-    line-height: 1;
+    font-size: 0.75em;
+    margin-left: 0.35em;
     opacity: 0;
     transition: opacity 0.15s;
-    flex-shrink: 0;
-    width: 1rem;
-    text-align: center;
-    align-self: center;
-    margin: 0;
-    padding: 0;
 }
 
 .impl-block:hover .anchor,
