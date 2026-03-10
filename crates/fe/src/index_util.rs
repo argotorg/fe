@@ -7,6 +7,20 @@ use hir::{
     hir_def::ItemKind,
 };
 
+/// Whether an item is a "container" that holds child items (methods, fields, variants).
+/// Items nested inside containers are indexed as children, not as top-level items.
+pub(crate) fn is_container_item(item: ItemKind) -> bool {
+    matches!(
+        item,
+        ItemKind::Trait(_)
+            | ItemKind::Struct(_)
+            | ItemKind::Enum(_)
+            | ItemKind::Contract(_)
+            | ItemKind::Impl(_)
+            | ItemKind::ImplTrait(_)
+    )
+}
+
 /// Byte-offset index of line starts in a text string.
 pub(crate) struct LineIndex {
     offsets: Vec<usize>,

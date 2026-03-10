@@ -237,18 +237,12 @@ impl<'db> DocExtractor<'db> {
             _ => {}
         }
 
-        // Skip items nested inside traits/structs/enums/impls — they are
-        // already captured as children of their parent DocItem.
-        if let Some(
-            ItemKind::Trait(_)
-            | ItemKind::Struct(_)
-            | ItemKind::Enum(_)
-            | ItemKind::Contract(_)
-            | ItemKind::Impl(_)
-            | ItemKind::ImplTrait(_),
-        ) = item.scope().parent_item(self.db)
-        {
-            return None;
+        // Skip items nested inside containers (traits, structs, enums, impls) —
+        // they are already captured as children of their parent DocItem.
+        if let Some(parent) = item.scope().parent_item(self.db) {
+            if crate::index_util::is_container_item(parent) {
+                return None;
+            }
         }
 
         let scope = item.scope();

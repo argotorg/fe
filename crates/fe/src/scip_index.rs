@@ -367,12 +367,12 @@ fn process_module<'db>(
     }
 
     for item in scope_graph.items_dfs(db) {
-        // Skip items that are children of non-module items (traits, structs, enums).
+        // Skip items that are children of container items (traits, structs, enums, impls).
         // These are handled correctly by the child-indexing path below, which
         // produces proper SCIP symbols (e.g. Trait#method. not Trait/method.).
         let scope = ScopeId::from_item(item);
         if let Some(parent) = scope.parent_item(db) {
-            if !matches!(parent, ItemKind::Mod(_) | ItemKind::TopMod(_)) {
+            if index_util::is_container_item(parent) {
                 continue;
             }
         }
@@ -1119,32 +1119,13 @@ pub fn enrich_signatures_with_base(
         }
         map
     };
-    // Build display_name → [scip_symbol] for Self resolution.
-    // Multiple SCIP symbols can share a display name (cross-ingot refs).
-    let name_to_scip: HashMap<String, Vec<String>> = {
-        let mut map: HashMap<String, Vec<String>> = HashMap::new();
-        for doc in &scip_index.documents {
-            for si in &doc.symbols {
-                if si.display_name.is_empty() || si.symbol.is_empty() {
-                    continue;
-                }
-                let kind = si.kind.enum_value().ok();
-                if matches!(
-                    kind,
-                    Some(symbol_information::Kind::Trait)
-                        | Some(symbol_information::Kind::Struct)
-                        | Some(symbol_information::Kind::Enum)
-                        | Some(symbol_information::Kind::Interface)
-                        | Some(symbol_information::Kind::Class)
-                ) {
-                    map.entry(si.display_name.clone())
-                        .or_default()
-                        .push(si.symbol.clone());
-                }
-            }
-        }
-        map
-    };
+    // Build doc_url_path → scip_symbol for Self resolution.
+    // Uses the symbol_to_url map (built in Step 1) inverted: url → scip_symbol.
+    // This avoids ambiguity from display_name collisions (e.g. multiple "Option" types).
+    let url_to_scip: HashMap<String, String> = symbol_to_url
+        .iter()
+        .map(|(sym, url)| (url.clone(), sym.clone()))
+        .collect();
 
     for item in &mut index.items {
         let parent_url = item.url_path();
@@ -1156,23 +1137,18 @@ pub fn enrich_signatures_with_base(
         if let Some(ref span) = item.signature_span {
             let scope = format!("__sig__/{}", parent_url);
 
-            // Find the SCIP symbol(s) for this item so we can inject Self and
-            // collect type parameters for child signature enrichment.
-            let item_scip_syms = name_to_scip.get(&item.name);
+            // Find the SCIP symbol for this item using its unique doc URL path.
+            // This avoids display_name collisions (e.g. multiple types named "Option").
+            let item_scip_sym = url_to_scip.get(&parent_url);
 
             let mut self_extras: Vec<(String, String)> = Vec::new();
-            if let Some(syms) = item_scip_syms {
-                // Use the first symbol for Self mapping
-                if let Some(first) = syms.first() {
-                    self_extras.push(("Self".to_string(), first.clone()));
-                }
-                // Collect type params from all matching SCIP symbols
-                for sym in syms {
-                    if let Some(params) = child_scope_symbols.get(sym) {
-                        for p in params {
-                            if !parent_type_params.iter().any(|(n, _)| n == &p.0) {
-                                parent_type_params.push(p.clone());
-                            }
+            if let Some(sym) = item_scip_sym {
+                self_extras.push(("Self".to_string(), sym.clone()));
+                // Collect type params from the item's child scope symbols
+                if let Some(params) = child_scope_symbols.get(sym) {
+                    for p in params {
+                        if !parent_type_params.iter().any(|(n, _)| n == &p.0) {
+                            parent_type_params.push(p.clone());
                         }
                     }
                 }
@@ -1292,7 +1268,7 @@ pub fn enrich_signatures_with_base(
         // Implementors (shown on trait pages)
         for imp in &mut item.implementors {
             if let Some(ref span) = imp.signature_span {
-                let type_anchor = imp.type_name.replace(['<', '>', ' ', ','], "_");
+                let type_anchor = sanitize_anchor_name(&imp.type_name);
                 let scope = format!("__sig__/{}/impl-{}", parent_url, type_anchor);
                 let occs = build_virtual_occurrences(
                     span,
