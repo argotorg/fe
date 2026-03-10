@@ -251,10 +251,10 @@
     // Breadcrumbs
     html += renderBreadcrumbs(item);
 
-    // Header with kind badge, name, and source link
+    // Header with kind badge, name, and anchor link
     html += '<div class="item-header"><div class="item-title">';
     html += '<span class="kind-badge ' + esc(kindStr(item.kind)) + '">' + esc(kindDisplayName(item.kind)) + "</span>";
-    html += "<h1>" + esc(item.name) + "</h1>";
+    html += '<h1>' + esc(item.name) + '<a href="#' + esc(parentUrl) + '" class="anchor">\u00a7</a></h1>';
     html += "</div></div>";
     if (item.source_text) {
       html += '<details class="source-toggle"><summary class="src-link">';
@@ -271,8 +271,11 @@
 
     // Signature (non-modules only)
     if (!isModule && item.signature) {
+      html += '<div class="signature-wrapper">';
+      html += '<a href="#' + esc(parentUrl) + '" class="anchor">\u00a7</a>';
       html += renderRichSignature(item.rich_signature, item.signature, item.highlighted_signature,
         item.sig_scope, "signature");
+      html += '</div>';
     }
 
     // Documentation body

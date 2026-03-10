@@ -267,8 +267,19 @@ body {
 .kind-badge.type { background: #2d4a4a; color: #7ee7e7; }
 .kind-badge.const { background: #3a2d4a; color: #b87ee7; }
 
-fe-code-block.signature {
+.signature-wrapper {
+    position: relative;
     margin-bottom: 1rem;
+}
+
+.signature-wrapper > .anchor {
+    position: absolute;
+    right: 0.5rem;
+    top: 0.5rem;
+}
+
+fe-code-block.signature {
+    display: block;
 }
 
 /* Type links in signatures and code blocks — underline indicates clickable,
@@ -481,6 +492,8 @@ h2 {
 .member-item:hover > .member-header .anchor,
 .method-item:hover > summary .anchor,
 .implementor-item:hover .anchor,
+.item-header:hover .anchor,
+.signature-wrapper:hover > .anchor,
 h2:hover .anchor {
     opacity: 1;
 }
@@ -748,7 +761,11 @@ fe-code-block.impl-signature {
 .member-header {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: 0.25rem;
+}
+
+.member-header > .anchor {
+    margin-right: 0;
 }
 
 .member-signature {
