@@ -75,20 +75,15 @@ impl LspServerInfo {
     }
 }
 
-#[allow(unused_variables, clippy::too_many_arguments)]
+#[allow(unused_variables)]
 pub fn generate_docs(
     path: &Utf8PathBuf,
     output: Option<&Utf8PathBuf>,
-    json: bool,
-    serve_docs: bool,
-    port: u16,
-    static_site: bool,
-    markdown_pages: bool,
     builtins: bool,
-    base_url: &str,
+    action: Option<&crate::DocAction>,
 ) {
     // First, check if there's a running LSP with docs server
-    if serve_docs {
+    if matches!(action, Some(crate::DocAction::Serve { .. })) {
         let canonical_path = path.canonicalize_utf8().ok();
         let start_dir = canonical_path.as_ref().and_then(|p| {
             if p.is_file() {
@@ -192,107 +187,96 @@ pub fn generate_docs(
     // This enriches rich_signature fields and produces JSON for embedding.
     let scip_json = generate_scip_json_for_doc(&mut db, path, &mut index, builtins);
 
-    if static_site {
-        let output_dir = output
-            .map(|p| p.as_std_path().to_path_buf())
-            .unwrap_or_else(|| std::path::PathBuf::from("docs"));
+    match action {
+        Some(crate::DocAction::Static) => {
+            let output_dir = output
+                .map(|p| p.as_std_path().to_path_buf())
+                .unwrap_or_else(|| std::path::PathBuf::from("docs"));
 
-        // Auto-detect git source link base for GitHub links
-        let source_link_base = detect_source_link_base(path.as_std_path());
-
-        if let Err(e) = fe_web::static_site::StaticSiteGenerator::generate_full(
-            &index,
-            &output_dir,
-            scip_json.as_deref(),
-            source_link_base.as_deref(),
-        ) {
-            eprintln!("Error generating static docs: {e}");
-            std::process::exit(1);
-        }
-
-        // When --json is also set, write docs.json alongside index.html
-        if json {
-            let merged = build_merged_json(&index, scip_json.as_deref());
-            let json_path = output_dir.join("docs.json");
-            std::fs::write(&json_path, &merged).unwrap_or_else(|e| {
-                eprintln!("Error writing docs.json: {e}");
-                std::process::exit(1);
-            });
-        }
-
-        let suffix = match (scip_json.is_some(), json) {
-            (true, true) => " (with SCIP + docs.json)",
-            (true, false) => " (with SCIP)",
-            (false, true) => " (with docs.json)",
-            (false, false) => "",
-        };
-        println!("Static docs written to {}{suffix}", output_dir.display());
-        return;
-    }
-
-    if markdown_pages {
-        let output_dir = output
-            .map(|p| p.as_std_path().to_path_buf())
-            .unwrap_or_else(|| std::path::PathBuf::from("docs"));
-        if let Err(e) = fe_web::starlight::generate(&index, &output_dir, base_url) {
-            eprintln!("Error generating markdown pages: {e}");
-            std::process::exit(1);
-        }
-        println!("Markdown pages written to {}", output_dir.display());
-        return;
-    }
-
-    #[cfg(feature = "doc-server")]
-    if serve_docs {
-        use crate::doc_serve::{DocServeConfig, serve_docs as serve};
-
-        let config = DocServeConfig {
-            port,
-            host: "127.0.0.1".to_string(),
-        };
-
-        println!("Starting documentation server...");
-        println!("Open http://127.0.0.1:{port} in your browser");
-        println!("Press Ctrl+C to stop");
-
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
             let source_link_base = detect_source_link_base(path.as_std_path());
-            if let Err(e) = serve(index, config, scip_json, source_link_base).await {
-                eprintln!("Server error: {e}");
+
+            if let Err(e) = fe_web::static_site::StaticSiteGenerator::generate_full(
+                &index,
+                &output_dir,
+                scip_json.as_deref(),
+                source_link_base.as_deref(),
+            ) {
+                eprintln!("Error generating static docs: {e}");
                 std::process::exit(1);
             }
-        });
-        return;
-    }
 
-    #[cfg(not(feature = "doc-server"))]
-    if serve_docs {
-        eprintln!("Error: doc-server feature not enabled. Rebuild with --features doc-server");
-        std::process::exit(1);
-    }
-
-    if json {
-        // Produce merged docs.json (DocIndex + SCIP) for web component consumption
-        let merged = build_merged_json(&index, scip_json.as_deref());
-        if let Some(output_path) = output {
-            let output_dir = output_path.as_std_path();
-            std::fs::create_dir_all(output_dir).unwrap_or_else(|e| {
-                eprintln!("Error creating output directory {output_path}: {e}");
-                std::process::exit(1);
-            });
-            let json_path = output_dir.join("docs.json");
-            std::fs::write(&json_path, &merged).unwrap_or_else(|e| {
-                eprintln!("Error writing docs.json: {e}");
-                std::process::exit(1);
-            });
-            println!("Wrote docs.json to {output_path}");
-        } else {
-            println!("{merged}");
+            let suffix = if scip_json.is_some() {
+                " (with SCIP)"
+            } else {
+                ""
+            };
+            println!("Static docs written to {}{suffix}", output_dir.display());
         }
-    } else {
-        // Print summary
-        print_doc_summary(&index);
+        Some(crate::DocAction::Json) => {
+            let merged = build_merged_json(&index, scip_json.as_deref());
+            if let Some(output_path) = output {
+                let output_dir = output_path.as_std_path();
+                std::fs::create_dir_all(output_dir).unwrap_or_else(|e| {
+                    eprintln!("Error creating output directory {output_path}: {e}");
+                    std::process::exit(1);
+                });
+                let json_path = output_dir.join("docs.json");
+                std::fs::write(&json_path, &merged).unwrap_or_else(|e| {
+                    eprintln!("Error writing docs.json: {e}");
+                    std::process::exit(1);
+                });
+                println!("Wrote docs.json to {output_path}");
+            } else {
+                println!("{merged}");
+            }
+        }
+        Some(crate::DocAction::Pages { base_url }) => {
+            let output_dir = output
+                .map(|p| p.as_std_path().to_path_buf())
+                .unwrap_or_else(|| std::path::PathBuf::from("docs"));
+            if let Err(e) = fe_web::starlight::generate(&index, &output_dir, base_url) {
+                eprintln!("Error generating markdown pages: {e}");
+                std::process::exit(1);
+            }
+            println!("Markdown pages written to {}", output_dir.display());
+        }
+        Some(crate::DocAction::Serve { port }) => {
+            #[cfg(feature = "doc-server")]
+            {
+                use crate::doc_serve::{DocServeConfig, serve_docs as serve};
+
+                let config = DocServeConfig {
+                    port: *port,
+                    host: "127.0.0.1".to_string(),
+                };
+
+                println!("Starting documentation server...");
+                println!("Open http://127.0.0.1:{port} in your browser");
+                println!("Press Ctrl+C to stop");
+
+                let rt = tokio::runtime::Runtime::new().unwrap();
+                rt.block_on(async {
+                    let source_link_base = detect_source_link_base(path.as_std_path());
+                    if let Err(e) = serve(index, config, scip_json, source_link_base).await {
+                        eprintln!("Server error: {e}");
+                        std::process::exit(1);
+                    }
+                });
+            }
+            #[cfg(not(feature = "doc-server"))]
+            {
+                eprintln!(
+                    "Error: doc-server feature not enabled. Rebuild with --features doc-server"
+                );
+                std::process::exit(1);
+            }
+        }
+        Some(crate::DocAction::Bundle) => {
+            unreachable!("Bundle is handled before generate_docs is called")
+        }
+        None => {
+            print_doc_summary(&index);
+        }
     }
 }
 
