@@ -331,7 +331,7 @@ impl<'db> DocExtractor<'db> {
                     byte_start: sig_span.byte_start,
                     byte_end: sig_span.byte_end,
                 });
-                (sig_span.text, span_data)
+                (sig_span.text.replace("\r\n", "\n"), span_data)
             }
             None => (sym.signature(self.db).unwrap_or_default(), None),
         }
@@ -710,7 +710,7 @@ impl<'db> DocExtractor<'db> {
         let start: usize = span.range.start().into();
         let end: usize = span.range.end().into();
         let text = span.file.text(self.db);
-        Some(text.get(start..end)?.to_string())
+        Some(text.get(start..end)?.replace("\r\n", "\n"))
     }
 
     /// Build module tree for navigation sidebar (single module, no file-based children)
