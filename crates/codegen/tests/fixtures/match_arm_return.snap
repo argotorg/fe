@@ -1,0 +1,22 @@
+---
+source: crates/codegen/tests/yul.rs
+expression: output
+input_file: tests/fixtures/match_arm_return.fe
+---
+function $f($e) -> ret {
+  let v0 := 0
+  let v1 := $e
+  let v2 := mload(v1)
+  switch v2
+    case 0 {
+      let v3 := mload(add(v1, 32))
+      ret := v3
+      leave
+    }
+    case 1 {
+      ret := 0
+      leave
+    }
+    default {
+    }
+}

@@ -159,7 +159,7 @@ impl super::Parse for ReturnStmtScope {
 
         if !matches!(
             parser.current_kind(),
-            None | Some(SyntaxKind::Newline | SyntaxKind::RBrace)
+            None | Some(SyntaxKind::Newline | SyntaxKind::RBrace | SyntaxKind::Comma)
         ) {
             parse_expr(parser)?;
         }

@@ -1,0 +1,67 @@
+---
+source: crates/parser/tests/syntax_node.rs
+expression: node
+input_file: test_files/syntax_node/exprs/match_arm_return.fe
+---
+Root@0..63
+  MatchExpr@0..62
+    MatchKw@0..5 "match"
+    WhiteSpace@5..6 " "
+    PathExpr@6..7
+      Path@6..7
+        PathSegment@6..7
+          Ident@6..7 "e"
+    WhiteSpace@7..8 " "
+    MatchArmList@8..62
+      LBrace@8..9 "{"
+      Newline@9..10 "\n"
+      WhiteSpace@10..14 "    "
+      MatchArm@14..36
+        PathTuplePat@14..24
+          Path@14..21
+            PathSegment@14..18
+              Ident@14..18 "Enum"
+            Colon2@18..20 "::"
+            PathSegment@20..21
+              Ident@20..21 "A"
+          TuplePatElemList@21..24
+            LParen@21..22 "("
+            PathPat@22..23
+              Path@22..23
+                PathSegment@22..23
+                  Ident@22..23 "v"
+            RParen@23..24 ")"
+        WhiteSpace@24..25 " "
+        FatArrow@25..27 "=>"
+        WhiteSpace@27..28 " "
+        BlockExpr@28..36
+          ReturnStmt@28..36
+            ReturnKw@28..34 "return"
+            WhiteSpace@34..35 " "
+            PathExpr@35..36
+              Path@35..36
+                PathSegment@35..36
+                  Ident@35..36 "v"
+      Newline@36..37 "\n"
+      WhiteSpace@37..41 "    "
+      MatchArm@41..60
+        PathPat@41..48
+          Path@41..48
+            PathSegment@41..45
+              Ident@41..45 "Enum"
+            Colon2@45..47 "::"
+            PathSegment@47..48
+              Ident@47..48 "B"
+        WhiteSpace@48..49 " "
+        FatArrow@49..51 "=>"
+        WhiteSpace@51..52 " "
+        BlockExpr@52..60
+          ReturnStmt@52..60
+            ReturnKw@52..58 "return"
+            WhiteSpace@58..59 " "
+            LitExpr@59..60
+              Lit@59..60
+                Int@59..60 "0"
+      Newline@60..61 "\n"
+      RBrace@61..62 "}"
+  Newline@62..63 "\n"

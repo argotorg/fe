@@ -297,7 +297,28 @@ impl super::Parse for MatchArmScope {
         if parser.find_and_pop(SyntaxKind::FatArrow, ExpectedKind::Unspecified)? {
             parser.bump();
         }
-        parse_expr(parser)
+
+        // Allow statement-like keywords (return, break, continue) in match
+        // arms by wrapping them in an implicit block expression.
+        if matches!(
+            parser.current_kind(),
+            Some(SyntaxKind::ReturnKw | SyntaxKind::BreakKw | SyntaxKind::ContinueKw)
+        ) {
+            parser.parse(ImplicitBlockExprScope::default())
+        } else {
+            parse_expr(parser)
+        }
+    }
+}
+
+// A block expression without braces, used to wrap a single statement
+// (e.g. `return`) in match arm bodies where only expressions are expected.
+define_scope! { ImplicitBlockExprScope, BlockExpr }
+impl super::Parse for ImplicitBlockExprScope {
+    type Error = Recovery<ErrProof>;
+
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        parse_stmt(parser)
     }
 }
 
