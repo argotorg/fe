@@ -524,131 +524,30 @@ fn process_module<'db>(
                 }
 
                 // Index generic parameters of child items (e.g. T in fn map<T>).
-                // Trait methods skipped by items_dfs need their type params indexed here.
-                if let ScopeId::Item(child_item) = child_scope {
-                    let child_item_scope = ScopeId::from_item(child_item);
-                    for gp_scope in scope_graph.children(child_item_scope) {
-                        let ScopeId::GenericParam(_, _) = gp_scope else {
-                            continue;
-                        };
-                        let Some(gp_name) = gp_scope.name(db) else {
-                            continue;
-                        };
-                        let gp_name_str = gp_name.data(db).to_string();
-                        let gp_symbol = format!("{}[{}]", child_symbol, gp_name_str);
-
-                        if let Some(doc) = documents.get_mut(&doc_url) {
-                            if doc.seen_symbols.insert(gp_symbol.clone()) {
-                                doc.symbols.push(types::SymbolInformation {
-                                    symbol: gp_symbol.clone(),
-                                    documentation: Vec::new(),
-                                    relationships: Vec::new(),
-                                    kind: symbol_information::Kind::TypeParameter.into(),
-                                    display_name: gp_name_str,
-                                    signature_documentation: None.into(),
-                                    enclosing_symbol: child_symbol.clone(),
-                                    special_fields: Default::default(),
-                                });
-                            }
-
-                            if let Some(name_span) = gp_scope.name_span(db)
-                                && let Some(resolved) = name_span.resolve(db)
-                                && let Some(range) = span_to_scip_range(&resolved, db)
-                            {
-                                push_occurrence(
-                                    doc,
-                                    range,
-                                    gp_symbol.clone(),
-                                    types::SymbolRole::Definition as i32,
-                                );
-                            }
-                        }
-
-                        for indexed_ref in ctx.ref_index.references_to(&gp_scope) {
-                            if let Some(resolved) = indexed_ref.span.resolve(db) {
-                                let ref_url = match resolved.file.url(db) {
-                                    Some(url) => url.to_string(),
-                                    None => continue,
-                                };
-                                let ref_doc =
-                                    documents.entry(ref_url.clone()).or_insert_with(|| {
-                                        let relative = file_relative_paths
-                                            .get(&ref_url)
-                                            .cloned()
-                                            .unwrap_or_default();
-                                        ScipDocumentBuilder::new(relative)
-                                    });
-                                if let Some(range) = span_to_scip_range(&resolved, db) {
-                                    push_occurrence(ref_doc, range, gp_symbol.clone(), 0);
-                                }
-                            }
-                        }
-                    }
-                }
+                let child_view = SymbolView::new(child_scope);
+                index_generic_params_for(
+                    db,
+                    &child_view,
+                    &child_symbol,
+                    ctx,
+                    &doc_url,
+                    file_relative_paths,
+                    &mut documents,
+                );
             }
         } // end if !Mod/TopMod
 
         // Index generic parameters (type params like T, A, etc.)
-        let item_scope = ScopeId::from_item(item);
-        for child_scope in scope_graph.children(item_scope) {
-            let ScopeId::GenericParam(_, _) = child_scope else {
-                continue;
-            };
-            let Some(param_name) = child_scope.name(db) else {
-                continue;
-            };
-            let param_name_str = param_name.data(db).to_string();
-
-            // SCIP TypeParameter descriptor: parent_symbol[name]
-            let param_symbol = format!("{}[{}]", symbol, param_name_str);
-
-            if let Some(doc) = documents.get_mut(&doc_url) {
-                if doc.seen_symbols.insert(param_symbol.clone()) {
-                    doc.symbols.push(types::SymbolInformation {
-                        symbol: param_symbol.clone(),
-                        documentation: Vec::new(),
-                        relationships: Vec::new(),
-                        kind: symbol_information::Kind::TypeParameter.into(),
-                        display_name: param_name_str,
-                        signature_documentation: None.into(),
-                        enclosing_symbol: symbol.clone(),
-                        special_fields: Default::default(),
-                    });
-                }
-
-                if let Some(name_span) = child_scope.name_span(db)
-                    && let Some(resolved) = name_span.resolve(db)
-                    && let Some(range) = span_to_scip_range(&resolved, db)
-                {
-                    push_occurrence(
-                        doc,
-                        range,
-                        param_symbol.clone(),
-                        types::SymbolRole::Definition as i32,
-                    );
-                }
-            }
-
-            // Reference occurrences for generic params
-            for indexed_ref in ctx.ref_index.references_to(&child_scope) {
-                if let Some(resolved) = indexed_ref.span.resolve(db) {
-                    let ref_url = match resolved.file.url(db) {
-                        Some(url) => url.to_string(),
-                        None => continue,
-                    };
-                    let ref_doc = documents.entry(ref_url.clone()).or_insert_with(|| {
-                        let relative = file_relative_paths
-                            .get(&ref_url)
-                            .cloned()
-                            .unwrap_or_default();
-                        ScipDocumentBuilder::new(relative)
-                    });
-                    if let Some(range) = span_to_scip_range(&resolved, db) {
-                        push_occurrence(ref_doc, range, param_symbol.clone(), 0);
-                    }
-                }
-            }
-        }
+        let sym_view = SymbolView::from_item(item);
+        index_generic_params_for(
+            db,
+            &sym_view,
+            symbol,
+            ctx,
+            &doc_url,
+            file_relative_paths,
+            &mut documents,
+        );
     }
 
     Some(ModuleResult {
@@ -665,7 +564,7 @@ fn process_module<'db>(
 fn index_unnamed_item_generic_params<'db>(
     db: &'db driver::DriverDataBase,
     item: ItemKind<'db>,
-    scope_graph: &hir::core::hir_def::scope_graph::ScopeGraph<'db>,
+    _scope_graph: &hir::core::hir_def::scope_graph::ScopeGraph<'db>,
     ctx: &index_util::IngotContext<'db>,
     doc_url: &str,
     file_relative_paths: &HashMap<String, String>,
@@ -674,7 +573,6 @@ fn index_unnamed_item_generic_params<'db>(
     // Construct a synthetic parent symbol from the impl's byte offset.
     // The exact string doesn't matter — it just needs to be unique so type param
     // symbols like `parent[E]` are distinguishable.
-    let item_scope = ScopeId::from_item(item);
     let impl_offset = item
         .span()
         .resolve(db)
@@ -682,45 +580,64 @@ fn index_unnamed_item_generic_params<'db>(
         .unwrap_or(0);
     let parent_symbol = format!("fe fe {} {} __impl_{} ", ctx.name, ctx.version, impl_offset);
 
-    for child_scope in scope_graph.children(item_scope) {
-        let ScopeId::GenericParam(_, _) = child_scope else {
+    let sym_view = SymbolView::from_item(item);
+    index_generic_params_for(
+        db,
+        &sym_view,
+        &parent_symbol,
+        ctx,
+        doc_url,
+        file_relative_paths,
+        documents,
+    );
+}
+
+/// Index generic parameters for a symbol using SymbolView::generic_params().
+/// Shared by both top-level items and child items (trait methods, etc.).
+fn index_generic_params_for<'db>(
+    db: &'db driver::DriverDataBase,
+    sym_view: &SymbolView<'db>,
+    parent_symbol: &str,
+    ctx: &index_util::IngotContext<'db>,
+    doc_url: &str,
+    file_relative_paths: &HashMap<String, String>,
+    documents: &mut HashMap<String, ScipDocumentBuilder>,
+) {
+    for gp_scope in sym_view.generic_params(db) {
+        let Some(gp_name) = gp_scope.name(db) else {
             continue;
         };
-        let Some(param_name) = child_scope.name(db) else {
-            continue;
-        };
-        let param_name_str = param_name.data(db).to_string();
-        let param_symbol = format!("{}[{}]", parent_symbol, param_name_str);
+        let gp_name_str = gp_name.data(db).to_string();
+        let gp_symbol = format!("{}[{}]", parent_symbol, gp_name_str);
 
         if let Some(doc) = documents.get_mut(doc_url) {
-            if doc.seen_symbols.insert(param_symbol.clone()) {
+            if doc.seen_symbols.insert(gp_symbol.clone()) {
                 doc.symbols.push(types::SymbolInformation {
-                    symbol: param_symbol.clone(),
+                    symbol: gp_symbol.clone(),
                     documentation: Vec::new(),
                     relationships: Vec::new(),
                     kind: symbol_information::Kind::TypeParameter.into(),
-                    display_name: param_name_str,
+                    display_name: gp_name_str,
                     signature_documentation: None.into(),
-                    enclosing_symbol: parent_symbol.clone(),
+                    enclosing_symbol: parent_symbol.to_string(),
                     special_fields: Default::default(),
                 });
             }
 
-            if let Some(name_span) = child_scope.name_span(db)
+            if let Some(name_span) = gp_scope.name_span(db)
                 && let Some(resolved) = name_span.resolve(db)
                 && let Some(range) = span_to_scip_range(&resolved, db)
             {
                 push_occurrence(
                     doc,
                     range,
-                    param_symbol.clone(),
+                    gp_symbol.clone(),
                     types::SymbolRole::Definition as i32,
                 );
             }
         }
 
-        // Reference occurrences
-        for indexed_ref in ctx.ref_index.references_to(&child_scope) {
+        for indexed_ref in ctx.ref_index.references_to(&gp_scope) {
             if let Some(resolved) = indexed_ref.span.resolve(db) {
                 let ref_url = match resolved.file.url(db) {
                     Some(url) => url.to_string(),
@@ -734,7 +651,7 @@ fn index_unnamed_item_generic_params<'db>(
                     ScipDocumentBuilder::new(relative)
                 });
                 if let Some(range) = span_to_scip_range(&resolved, db) {
-                    push_occurrence(ref_doc, range, param_symbol.clone(), 0);
+                    push_occurrence(ref_doc, range, gp_symbol.clone(), 0);
                 }
             }
         }

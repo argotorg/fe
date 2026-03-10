@@ -445,19 +445,17 @@ pub fn generate_lsif(
             }
 
             // Generic parameters (T, A, etc.)
-            let item_scope = ScopeId::from_item(item);
-            for child_scope in scope_graph.children(item_scope) {
-                if matches!(child_scope, ScopeId::GenericParam(..)) {
-                    emit_scope_lsif(
-                        db,
-                        &ctx,
-                        &mut emitter,
-                        &mut documents,
-                        &doc_url,
-                        doc_id,
-                        child_scope,
-                    )?;
-                }
+            let sym_view_for_params = SymbolView::from_item(item);
+            for gp_scope in sym_view_for_params.generic_params(db) {
+                emit_scope_lsif(
+                    db,
+                    &ctx,
+                    &mut emitter,
+                    &mut documents,
+                    &doc_url,
+                    doc_id,
+                    gp_scope,
+                )?;
             }
         }
     }

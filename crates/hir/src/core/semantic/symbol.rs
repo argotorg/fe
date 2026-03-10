@@ -261,6 +261,20 @@ impl<'db> SymbolView<'db> {
             _ => Vec::new(),
         }
     }
+
+    /// Iterate generic parameter scopes (type params like T, A, etc.).
+    /// Works for any item scope that has generic parameters.
+    pub fn generic_params(&self, db: &'db dyn HirDb) -> Vec<ScopeId<'db>> {
+        let ScopeId::Item(item) = self.scope else {
+            return Vec::new();
+        };
+        let scope = ScopeId::from_item(item);
+        let scope_graph = scope.top_mod(db).scope_graph(db);
+        scope_graph
+            .children(scope)
+            .filter(|child| matches!(child, ScopeId::GenericParam(..)))
+            .collect()
+    }
 }
 
 /// Signature text paired with its exact byte range in the source file.
