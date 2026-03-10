@@ -66,27 +66,27 @@ fe-code-block {
 .fe-line-numbers {
     display: flex;
     flex-direction: column;
-    padding: 0.875rem 0.5rem;
+    padding: 0.75rem 0.5rem;
     border-right: 1px solid var(--fe-code-border, #2d3748);
     text-align: right;
     user-select: none;
     color: var(--fe-code-line-number, #9ba3af);
     font-family: var(--fe-code-font, "JetBrains Mono", "Fira Code", monospace);
-    font-size: 0.875rem;
+    font-size: 0.8rem;
     line-height: 1.6;
 }
 
 .fe-code-pre {
     flex: 1;
     margin: 0;
-    padding: 0.875rem 1rem;
+    padding: 0.75rem 1rem;
     background: transparent;
     overflow-x: auto;
 }
 
 .fe-code-pre code {
     font-family: var(--fe-code-font, "JetBrains Mono", "Fira Code", monospace);
-    font-size: 0.875rem;
+    font-size: 0.8rem;
     line-height: 1.6;
     color: var(--fe-code-text, #e4e4e4);
 }
