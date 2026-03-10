@@ -566,12 +566,12 @@
     implementors.forEach(function (imp) {
       var anchorId = "impl-" + imp.type_name.replace(/[<> ,]/g, "_");
       var implTarget = imp.type_url + "~impl-" + imp.trait_name.replace(/[<> ,]/g, "_");
-      html += '<a class="implementor-item" id="' + esc(anchorId) + '" href="' + itemHref(implTarget) + '">';
+      html += '<div class="implementor-item" id="' + esc(anchorId) + '">';
       html += '<code class="implementor-sig">';
       html += renderRichSignature(imp.rich_signature, imp.signature, imp.highlighted_signature, imp.sig_scope);
       html += "</code>";
-      html += '<span class="anchor">\u00a7</span>';
-      html += "</a>";
+      html += '<a href="' + itemHref(implTarget) + '" class="impl-go" title="Go to implementation">\u2794</a>';
+      html += "</div>";
     });
     html += "</div></section>";
     return html;

@@ -673,9 +673,18 @@ fe-code-block.impl-signature {
     background: var(--bg-secondary);
     border: 1px solid var(--border);
     border-radius: 4px;
+}
+
+.impl-go {
+    margin-left: auto;
+    font-size: 1rem;
+    color: var(--text-muted);
     text-decoration: none;
-    color: inherit;
-    cursor: pointer;
+    padding-left: 0.5rem;
+}
+
+.impl-go:hover {
+    color: var(--accent);
 }
 
 .implementor-item:target,
