@@ -44,14 +44,18 @@ pub async fn run(
     doc_nav_tx: broadcast::Sender<String>,
     doc_reload_tx: broadcast::Sender<String>,
 ) {
-    let port = listener.local_addr().unwrap().port();
     let html = Arc::new(tokio::sync::RwLock::new(doc_html));
 
     // Spawn a task to rebuild the served HTML when doc data changes
     let html_for_reload = Arc::clone(&html);
     let mut reload_rx = doc_reload_tx.subscribe();
     tokio::spawn(async move {
-        while let Ok(payload) = reload_rx.recv().await {
+        loop {
+            let payload = match reload_rx.recv().await {
+                Ok(p) => p,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            };
             if let Ok(data) = serde_json::from_str::<serde_json::Value>(&payload) {
                 let doc_index_json = data
                     .get("docIndex")
@@ -80,10 +84,10 @@ pub async fn run(
                     None,
                 );
 
-                // Append auto-connect script
-                let connect_script = format!(
-                    r#"<script>window.FE_LSP = connectLsp("ws://127.0.0.1:{port}/lsp");</script>"#,
-                );
+                // Append auto-connect script — derive WS URL from page origin
+                let connect_script =
+                    r#"<script>window.FE_LSP = connectLsp(`ws://${location.host}/lsp`);</script>"#
+                        .to_string();
                 if let Some(pos) = new_html.rfind("</body>") {
                     new_html.insert_str(pos, &connect_script);
                 }
@@ -193,7 +197,12 @@ async fn handle_ws_lsp(
     let reload_sink = Arc::clone(&ws_sink);
     let mut reload_rx = doc_reload_tx.subscribe();
     let reload_task = tokio::spawn(async move {
-        while let Ok(payload) = reload_rx.recv().await {
+        loop {
+            let payload = match reload_rx.recv().await {
+                Ok(p) => p,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            };
             // payload is a JSON string with {docIndex, scipData}
             let params: serde_json::Value =
                 serde_json::from_str(&payload).unwrap_or(serde_json::Value::Null);

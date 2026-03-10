@@ -630,7 +630,7 @@ async fn run_lsp_with_combined_server(resolved_root: Option<Utf8PathBuf>, port: 
     let actual_port = listener.local_addr().unwrap().port();
 
     // Generate doc HTML for the workspace (best-effort)
-    let doc_html = generate_lsp_doc_html(resolved_root.as_ref(), actual_port);
+    let doc_html = generate_lsp_doc_html(resolved_root.as_ref());
 
     eprintln!("Documentation: http://127.0.0.1:{actual_port}");
 
@@ -868,7 +868,7 @@ fn build_doc_index(
 /// - Directories containing multiple ingots without a root fe.toml
 /// - Sentinel workspaces with members=[] (discovers child ingots)
 #[cfg(feature = "lsp")]
-fn generate_lsp_doc_html(resolved_root: Option<&Utf8PathBuf>, port: u16) -> String {
+fn generate_lsp_doc_html(resolved_root: Option<&Utf8PathBuf>) -> String {
     let root_path = resolved_root
         .cloned()
         .unwrap_or_else(|| Utf8PathBuf::from("."));
@@ -888,7 +888,7 @@ fn generate_lsp_doc_html(resolved_root: Option<&Utf8PathBuf>, port: u16) -> Stri
 
     // Append auto-connect script
     let connect_script =
-        format!(r#"<script>window.FE_LSP = connectLsp("ws://127.0.0.1:{port}/lsp");</script>"#,);
+        r#"<script>window.FE_LSP = connectLsp(`ws://${location.host}/lsp`);</script>"#.to_string();
     if let Some(pos) = html.rfind("</body>") {
         html.insert_str(pos, &connect_script);
     }
