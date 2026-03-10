@@ -1046,9 +1046,26 @@ module.exports = grammar({
     match_arm: $ => seq(
       field('pattern', $._pattern),
       '=>',
-      field('value', $._expression),
+      field('value', choice(
+        $._expression,
+        $.match_arm_return,
+        $.match_arm_break,
+        $.match_arm_continue,
+      )),
       choice(',', $._terminator),
     ),
+
+    // Statement-like keywords allowed in match arm bodies.
+    // These mirror return/break/continue_statement but without a trailing
+    // terminator (the match_arm rule already handles that).
+    match_arm_return: $ => prec.right(seq(
+      'return',
+      optional(field('value', $._expression)),
+    )),
+
+    match_arm_break: $ => 'break',
+
+    match_arm_continue: $ => 'continue',
 
     with_expression: $ => seq(
       'with',
