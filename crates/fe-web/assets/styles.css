@@ -677,7 +677,8 @@ fe-code-block.impl-signature {
 
 .impl-go {
     margin-left: auto;
-    font-size: 1rem;
+    font-size: 1.25rem;
+    font-weight: bold;
     color: var(--text-muted);
     text-decoration: none;
     padding-left: 0.5rem;
