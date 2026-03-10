@@ -259,7 +259,7 @@
       html += '<details class="source-toggle"><summary class="src-link">';
       html += esc(item.source.display_file) + ':' + item.source.line;
       html += '</summary>';
-      html += '<fe-code-block lang="fe" line-numbers>' + esc(item.source_text) + '</fe-code-block>';
+      html += '<fe-code-block lang="fe" line-numbers data-file="' + esc(item.source.display_file) + '" data-line-offset="' + (item.source.line - 1) + '">' + esc(item.source_text) + '</fe-code-block>';
       html += '</details>';
     } else if (item.source && item.source.display_file) {
       html += '<span class="src-link">' + esc(item.source.display_file);

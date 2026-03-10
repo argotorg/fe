@@ -13,6 +13,7 @@
 //   symbol       — doc path (e.g. "mylib::Game/struct") to fetch source from FE_DOC_INDEX
 //   region       — extract a named region (// #region name ... // #endregion name) from source
 //   data-file    — SCIP source file path for positional symbol resolution
+//   data-line-offset — 0-based line offset for source excerpts (maps local line 0 to file line N)
 //   data-scope   — SCIP scope path for signature code blocks (set by server)
 
 // Shared stylesheet adopted by all <fe-code-block> shadow roots.
@@ -307,9 +308,12 @@ class FeCodeBlock extends HTMLElement {
         }
       }
     } else if (this._highlighted) {
-      // Path 2: Signature blocks — resolve tree-sitter spans via character offset
+      // Path 2: Tree-sitter highlighted blocks — resolve spans via character offset
       var source = this._rawSource || "";
       if (!source) return;
+
+      // Line offset for source excerpts (data-line-offset is 0-based)
+      var lineOffset = parseInt(this.getAttribute("data-line-offset") || "0", 10);
 
       // Build line-start index for offset→(line,col) conversion
       var lineStarts = [0];
@@ -324,37 +328,82 @@ class FeCodeBlock extends HTMLElement {
           if (lineStarts[mid] <= pos) lo = mid;
           else hi = mid - 1;
         }
-        return [lo, pos - lineStarts[lo]];
+        return [lo + lineOffset, pos - lineStarts[lo]];
       }
 
-      // Walk DOM tree tracking character offset, resolve each span
+      function annotateEl(el, startOff) {
+        var lc = charToLineCol(startOff);
+        var occ = scip.resolveOccurrence(file, lc[0], lc[1]);
+        if (occ) {
+          var hash = scip.symbolHash(occ.sym);
+          el.classList.add("sym-" + hash);
+          if (occ.def) el.classList.add("sym-d-" + hash);
+          else el.classList.add("sym-r-" + hash);
+          el.setAttribute("data-sym", occ.sym);
+          return true;
+        }
+        return false;
+      }
+
+      // Walk DOM tree tracking character offset, resolve spans and bare text
       var offset = 0;
       var annotated = false;
+      var pendingWraps = []; // [{textNode, startInNode, length, occ}]
       function walk(node) {
         var children = node.childNodes;
         for (var ci = 0; ci < children.length; ci++) {
           var child = children[ci];
           if (child.nodeType === 3) { // TEXT_NODE
-            offset += child.textContent.length;
-          } else if (child.nodeType === 1) { // ELEMENT_NODE
-            var startOff = offset;
-            if (child.tagName === "SPAN") {
-              var lc = charToLineCol(startOff);
+            // Scan text for SCIP occurrences on identifier-like tokens
+            var text = child.textContent;
+            var re = /[A-Za-z_][A-Za-z0-9_]*/g;
+            var m;
+            while ((m = re.exec(text)) !== null) {
+              var tokOff = offset + m.index;
+              var lc = charToLineCol(tokOff);
               var occ = scip.resolveOccurrence(file, lc[0], lc[1]);
               if (occ) {
-                var hash = scip.symbolHash(occ.sym);
-                child.classList.add("sym-" + hash);
-                if (occ.def) child.classList.add("sym-d-" + hash);
-                else child.classList.add("sym-r-" + hash);
-                child.setAttribute("data-sym", occ.sym);
-                annotated = true;
+                pendingWraps.push({
+                  textNode: child, startInNode: m.index, length: m[0].length, occ: occ
+                });
               }
+            }
+            offset += text.length;
+          } else if (child.nodeType === 1) { // ELEMENT_NODE
+            var startOff = offset;
+            if (child.tagName === "SPAN" || child.tagName === "A") {
+              if (annotateEl(child, startOff)) annotated = true;
             }
             walk(child);
           }
         }
       }
       walk(codeEl);
+
+      // Apply text-node wraps (iterate backwards to preserve offsets)
+      for (var wi = pendingWraps.length - 1; wi >= 0; wi--) {
+        var pw = pendingWraps[wi];
+        // Split text node and wrap the token in a span
+        var before = pw.textNode.textContent.substring(0, pw.startInNode);
+        var token = pw.textNode.textContent.substring(pw.startInNode, pw.startInNode + pw.length);
+        var after = pw.textNode.textContent.substring(pw.startInNode + pw.length);
+        var span = document.createElement("span");
+        span.textContent = token;
+        var hash = scip.symbolHash(pw.occ.sym);
+        span.classList.add("sym-" + hash);
+        if (pw.occ.def) span.classList.add("sym-d-" + hash);
+        else span.classList.add("sym-r-" + hash);
+        span.setAttribute("data-sym", pw.occ.sym);
+        var parent = pw.textNode.parentNode;
+        if (after) parent.insertBefore(document.createTextNode(after), pw.textNode.nextSibling);
+        parent.insertBefore(span, pw.textNode.nextSibling);
+        if (before) {
+          pw.textNode.textContent = before;
+        } else {
+          parent.removeChild(pw.textNode);
+        }
+        annotated = true;
+      }
 
       if (annotated) self._scipAnnotated = true;
     }

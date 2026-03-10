@@ -110,6 +110,9 @@ class FeDocItem extends HTMLElement {
       cb.setAttribute("line-numbers", "");
       if (item.source && item.source.display_file) {
         cb.setAttribute("data-file", item.source.display_file);
+        if (item.source.line) {
+          cb.setAttribute("data-line-offset", item.source.line - 1);
+        }
       }
       cb.textContent = item.source_text;
       html += cb.outerHTML;
