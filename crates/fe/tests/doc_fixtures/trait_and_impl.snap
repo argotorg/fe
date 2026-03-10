@@ -1,5 +1,6 @@
 ---
 source: crates/fe/src/extract.rs
+assertion_line: 998
 expression: output
 input_file: tests/doc_fixtures/trait_and_impl.fe
 ---
@@ -55,28 +56,6 @@ input_file: tests/doc_fixtures/trait_and_impl.fe
         "column": 0
       },
       "source_text": "/// A trait for things that can be displayed.\npub trait Displayable {\n    /// Returns a string representation.\n    fn display(self) -> u256\n}",
-      "trait_impls": []
-    },
-    {
-      "path": "trait_and_impl::Displayable::display",
-      "name": "display",
-      "kind": "function",
-      "visibility": "private",
-      "docs": {
-        "summary": "Returns a string representation.",
-        "body": "Returns a string representation.",
-        "sections": []
-      },
-      "signature": "fn display(self) -> u256",
-      "generics": [],
-      "where_bounds": [],
-      "children": [],
-      "source": {
-        "display_file": "trait_and_impl.fe",
-        "line": 3,
-        "column": 4
-      },
-      "source_text": "/// Returns a string representation.\n    fn display(self) -> u256",
       "trait_impls": []
     },
     {

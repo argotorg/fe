@@ -923,17 +923,19 @@ pub fn inject_doc_urls(scip_json: &str, doc_index: &DocIndex) -> String {
     root.to_string()
 }
 
-/// Extract a qualified path (e.g. "mylib::Foo::bar") from a SCIP symbol string.
+/// Extract a qualified path (e.g. "core::ops::Foo::bar") from a SCIP symbol string.
 ///
 /// SCIP symbols look like: `fe fe <package> <version> Mod/Struct#method.`
 /// Descriptor suffixes: `/` = namespace, `#` = type, `.` = term/method, `()` = macro
-/// We strip the suffix char and join parts with `::`.
+/// We strip the suffix char and join parts with `::`, replacing the `lib` root
+/// module with the SCIP package name so paths match the doc index (which uses
+/// ingot-qualified names like `core::ops::Foo` rather than `lib::ops::Foo`).
 fn scip_symbol_to_qualified_path(sym: &str) -> Option<String> {
-    // Skip the "fe fe <package> <version> " prefix — 4 space-separated tokens
+    // Split "fe fe <package> <version> <descriptors>"
     let mut parts_iter = sym.splitn(5, ' ');
     let _scheme = parts_iter.next()?;
     let _manager = parts_iter.next()?;
-    let _package = parts_iter.next()?;
+    let package = parts_iter.next()?;
     let _version = parts_iter.next()?;
     let descriptor_part = parts_iter.next()?.trim();
 
@@ -950,7 +952,7 @@ fn scip_symbol_to_qualified_path(sym: &str) -> Option<String> {
             .find(['/', '#', '.', '(', '['])
             .unwrap_or(current.len());
         if end > 0 {
-            path_parts.push(&current[..end]);
+            path_parts.push(current[..end].to_string());
         }
         // Skip the suffix character(s)
         current = &current[end..];
@@ -962,10 +964,17 @@ fn scip_symbol_to_qualified_path(sym: &str) -> Option<String> {
     }
 
     if path_parts.is_empty() {
-        None
-    } else {
-        Some(path_parts.join("::"))
+        return None;
     }
+
+    // Replace the "lib" root module with the package (ingot) name.
+    // SCIP descriptors use filesystem module names (lib/ops/Foo) but the doc
+    // index uses ingot-qualified paths (core::ops::Foo).
+    if path_parts[0] == "lib" && !package.is_empty() {
+        path_parts[0] = package.to_string();
+    }
+
+    Some(path_parts.join("::"))
 }
 
 /// Enrich `rich_signature` fields in a DocIndex using SCIP occurrence positions,
