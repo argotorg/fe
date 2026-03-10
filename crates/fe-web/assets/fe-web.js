@@ -570,7 +570,7 @@
       html += '<code class="implementor-sig">';
       html += renderRichSignature(imp.rich_signature, imp.signature, imp.highlighted_signature, imp.sig_scope);
       html += "</code>";
-      html += '<a href="' + itemHref(implTarget) + '" class="impl-go" title="Go to implementation">\u27A1</a>';
+      html += '<a href="' + itemHref(implTarget) + '" class="impl-go" title="Go to implementation">\u21B3</a>';
       html += "</div>";
     });
     html += "</div></section>";
