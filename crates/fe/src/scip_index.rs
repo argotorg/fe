@@ -227,20 +227,26 @@ pub struct ScipResult {
     pub doc_urls: HashMap<String, String>,
 }
 
-pub fn generate_scip(
-    db: &driver::DriverDataBase,
-    ingot_url: &url::Url,
-) -> io::Result<ScipResult> {
-    let ctx = index_util::IngotContext::resolve(db, ingot_url)?;
-
-    // For file:// URLs, use the real filesystem path as project root.
-    // For non-file URLs (e.g. builtin-core:///), use "/" as a virtual root
-    // so that relative_path() can strip it from URL paths.
+pub fn generate_scip(db: &driver::DriverDataBase, ingot_url: &url::Url) -> io::Result<ScipResult> {
     let project_root_path = ingot_url
         .to_file_path()
         .ok()
         .and_then(|p| Utf8PathBuf::from_path_buf(p).ok())
         .unwrap_or_else(|| Utf8PathBuf::from("/"));
+    generate_scip_with_root(db, ingot_url, &project_root_path)
+}
+
+/// Like `generate_scip`, but uses `project_root` for computing relative paths
+/// instead of deriving it from the ingot URL. This ensures SCIP document paths
+/// are relative to the workspace root when generating docs for workspace members.
+pub fn generate_scip_with_root(
+    db: &driver::DriverDataBase,
+    ingot_url: &url::Url,
+    project_root: &Utf8Path,
+) -> io::Result<ScipResult> {
+    let ctx = index_util::IngotContext::resolve(db, ingot_url)?;
+
+    let project_root_path = project_root.to_path_buf();
 
     // Pre-compute relative paths for all module files
     let file_relative_paths: HashMap<String, String> = ctx
@@ -892,7 +898,6 @@ pub fn scip_to_json_data(index: &types::Index, doc_urls: &HashMap<String, String
     );
     Value::Object(root).to_string()
 }
-
 
 /// Enrich `rich_signature` fields in a DocIndex using SCIP occurrence positions,
 /// and inject virtual SCIP documents for each signature's code block.
@@ -1614,7 +1619,10 @@ mod tests {
             metadata.text_document_encoding.value(),
             types::TextEncoding::UTF8 as i32
         );
-        assert!(!result.index.documents.is_empty(), "should contain documents");
+        assert!(
+            !result.index.documents.is_empty(),
+            "should contain documents"
+        );
     }
 
     #[test]
@@ -1875,14 +1883,33 @@ pub trait Greet {
         // Top-level items should have doc URLs
         let has_struct_url = result.doc_urls.values().any(|u| u.contains("Point"));
         let has_trait_url = result.doc_urls.values().any(|u| u.contains("Greet"));
-        assert!(has_struct_url, "Point should have a doc URL: {:?}", result.doc_urls);
-        assert!(has_trait_url, "Greet should have a doc URL: {:?}", result.doc_urls);
+        assert!(
+            has_struct_url,
+            "Point should have a doc URL: {:?}",
+            result.doc_urls
+        );
+        assert!(
+            has_trait_url,
+            "Greet should have a doc URL: {:?}",
+            result.doc_urls
+        );
 
         // Child items should have anchored doc URLs
         let has_field_anchor = result.doc_urls.values().any(|u| u.contains("~field.x"));
-        let has_method_anchor = result.doc_urls.values().any(|u| u.contains("~tymethod.hello"));
-        assert!(has_field_anchor, "field x should have anchored URL: {:?}", result.doc_urls);
-        assert!(has_method_anchor, "method hello should have anchored URL: {:?}", result.doc_urls);
+        let has_method_anchor = result
+            .doc_urls
+            .values()
+            .any(|u| u.contains("~tymethod.hello"));
+        assert!(
+            has_field_anchor,
+            "field x should have anchored URL: {:?}",
+            result.doc_urls
+        );
+        assert!(
+            has_method_anchor,
+            "method hello should have anchored URL: {:?}",
+            result.doc_urls
+        );
     }
 
     #[test]
@@ -1930,26 +1957,40 @@ pub trait Greet {
             .expect("document");
 
         // T should be indexed as a TypeParameter child of map
-        let t_sym = doc
-            .symbols
-            .iter()
-            .find(|s| s.display_name == "T" && s.kind.value() == symbol_information::Kind::TypeParameter as i32);
-        assert!(t_sym.is_some(), "T type param should exist as TypeParameter");
+        let t_sym = doc.symbols.iter().find(|s| {
+            s.display_name == "T"
+                && s.kind.value() == symbol_information::Kind::TypeParameter as i32
+        });
+        assert!(
+            t_sym.is_some(),
+            "T type param should exist as TypeParameter"
+        );
         let t = t_sym.unwrap();
 
         // T's enclosing symbol should be map's symbol
-        let map_sym = doc.symbols.iter().find(|s| s.display_name == "map").expect("map symbol");
+        let map_sym = doc
+            .symbols
+            .iter()
+            .find(|s| s.display_name == "map")
+            .expect("map symbol");
         assert_eq!(
             t.enclosing_symbol, map_sym.symbol,
             "T should be enclosed by map"
         );
 
         // T should have both definition and reference occurrences
-        let t_occs: Vec<_> = doc.occurrences.iter().filter(|o| o.symbol == t.symbol).collect();
+        let t_occs: Vec<_> = doc
+            .occurrences
+            .iter()
+            .filter(|o| o.symbol == t.symbol)
+            .collect();
         let defs = t_occs.iter().filter(|o| o.symbol_roles != 0).count();
         let refs = t_occs.iter().filter(|o| o.symbol_roles == 0).count();
         assert!(defs >= 1, "T should have at least 1 definition");
-        assert!(refs >= 1, "T should have at least 1 reference (in own T or return type)");
+        assert!(
+            refs >= 1,
+            "T should have at least 1 reference (in own T or return type)"
+        );
     }
 
     #[test]
@@ -1988,7 +2029,10 @@ impl<E> Applicative for Result<E> {
             .filter(|s| s.kind.value() == symbol_information::Kind::TypeParameter as i32)
             .collect();
 
-        let param_names: Vec<&str> = type_params.iter().map(|s| s.display_name.as_str()).collect();
+        let param_names: Vec<&str> = type_params
+            .iter()
+            .map(|s| s.display_name.as_str())
+            .collect();
 
         // The impl block's E should be indexed
         assert!(
@@ -2016,8 +2060,14 @@ impl<E> Applicative for Result<E> {
         let temp = tempfile::tempdir().expect("create temp dir");
         let file_path = temp.path().join("test.fe");
         let url = file_url(&file_path);
-        db.workspace()
-            .touch(&mut db, url.clone(), Some("use core::result::Result\nfn foo() -> Result<u8> {\n    Result::Ok\n}\n".to_string()));
+        db.workspace().touch(
+            &mut db,
+            url.clone(),
+            Some(
+                "use core::result::Result\nfn foo() -> Result<u8> {\n    Result::Ok\n}\n"
+                    .to_string(),
+            ),
+        );
 
         // Generate SCIP for the core ingot
         let core_url = url::Url::parse(common::stdlib::BUILTIN_CORE_BASE_URL).unwrap();
@@ -2049,5 +2099,57 @@ impl<E> Applicative for Result<E> {
                 ctx.name
             );
         }
+    }
+
+    /// Verify that a file:// workspace member ingot with fe.toml gets its
+    /// name from the config, not the "unknown" fallback.
+    #[test]
+    fn test_workspace_member_ingot_name_from_config() {
+        let temp = tempfile::tempdir().expect("create temp dir");
+        let ingot_dir = temp.path().join("ingots").join("core");
+        let src_dir = ingot_dir.join("src");
+        std::fs::create_dir_all(&src_dir).unwrap();
+
+        // Write fe.toml with name = "core"
+        std::fs::write(
+            ingot_dir.join("fe.toml"),
+            "[ingot]\nname = \"core\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+
+        // Write a source file
+        std::fs::write(
+            src_dir.join("lib.fe"),
+            "pub enum Option<T> {\n    Some(T),\n    None\n}\n",
+        )
+        .unwrap();
+
+        let mut db = driver::DriverDataBase::default();
+        let ingot_url = dir_url(&ingot_dir);
+
+        // Initialize the ingot through the driver (loads fe.toml + sources)
+        driver::init_ingot(&mut db, &ingot_url);
+
+        // Generate SCIP and check symbol package names
+        let result = generate_scip(&db, &ingot_url).expect("generate scip");
+
+        // Every symbol should use "core" as the package name, not "unknown"
+        for doc in &result.index.documents {
+            for si in &doc.symbols {
+                assert!(
+                    !si.symbol.contains("unknown"),
+                    "Symbol should use 'core' from fe.toml, not 'unknown': {}",
+                    si.symbol
+                );
+            }
+        }
+
+        // Also verify IngotContext
+        let ctx = index_util::IngotContext::resolve(&db, &ingot_url).unwrap();
+        assert_eq!(
+            ctx.name, "core",
+            "ingot name should come from fe.toml config"
+        );
+        assert_eq!(ctx.version, "0.1.0");
     }
 }

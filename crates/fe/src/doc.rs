@@ -509,22 +509,28 @@ fn generate_scip_json_for_doc(
     let mut combined_doc_urls = std::collections::HashMap::new();
     let mut any_succeeded = false;
 
-    for ingot_url in &ingot_urls {
-        match crate::scip_index::generate_scip(db, ingot_url) {
-            Ok(mut result) => {
-                let project_root = ingot_url
-                    .to_file_path()
-                    .ok()
-                    .and_then(|p| camino::Utf8PathBuf::from_path_buf(p).ok());
+    // Use the workspace root for relative path computation so SCIP document
+    // paths match the display_file paths used by the doc extractor.
+    let workspace_root = path.canonicalize_utf8().unwrap_or_else(|_| path.clone());
 
-                if let Some(ref root) = project_root {
-                    crate::scip_index::enrich_signatures(
-                        db,
-                        root,
-                        doc_index,
-                        &mut result.index,
-                    );
-                }
+    for ingot_url in &ingot_urls {
+        match crate::scip_index::generate_scip_with_root(db, ingot_url, &workspace_root) {
+            Ok(mut result) => {
+                // For file:// ingots, base_url is None (paths resolve via
+                // workspace_root). For builtin ingots, pass the URL base
+                // so file lookup works for non-file:// schemes.
+                let base_url = if ingot_url.to_file_path().is_ok() {
+                    None
+                } else {
+                    Some(ingot_url)
+                };
+                crate::scip_index::enrich_signatures_with_base(
+                    db,
+                    &workspace_root,
+                    base_url,
+                    doc_index,
+                    &mut result.index,
+                );
 
                 combined_index.documents.extend(result.index.documents);
                 combined_doc_urls.extend(result.doc_urls);
@@ -551,24 +557,32 @@ fn generate_scip_json_for_doc(
 /// For a single ingot path, returns that path's URL.
 /// For a workspace, reads fe.toml to find member paths.
 fn collect_ingot_urls(db: &DriverDataBase, path: &Utf8PathBuf) -> Vec<Url> {
-    // Try the path itself as a single ingot first
+    // Check fe.toml first to distinguish workspace roots from single ingots.
+    // A workspace root has a [workspace] section and should expand to member URLs,
+    // not be treated as an ingot itself (its config has no ingot metadata).
+    let fe_toml = path.join("fe.toml");
+    if let Ok(content) = std::fs::read_to_string(&fe_toml)
+        && let Ok(common::config::Config::Workspace(ws_config)) =
+            common::config::Config::parse(&content)
+    {
+        return collect_workspace_member_urls(db, path, &ws_config);
+    }
+
+    // Single ingot: the path itself
     if let Some(url) = path_to_ingot_url(path)
         && db.workspace().containing_ingot(db, url.clone()).is_some()
     {
         return vec![url];
     }
 
-    // Workspace mode: read fe.toml to discover member ingot paths
-    let fe_toml = path.join("fe.toml");
-    let content = match std::fs::read_to_string(&fe_toml) {
-        Ok(c) => c,
-        Err(_) => return Vec::new(),
-    };
-    let ws_config = match common::config::Config::parse(&content) {
-        Ok(common::config::Config::Workspace(ws)) => ws,
-        _ => return Vec::new(),
-    };
+    Vec::new()
+}
 
+fn collect_workspace_member_urls(
+    db: &DriverDataBase,
+    path: &Utf8PathBuf,
+    ws_config: &common::config::WorkspaceConfig,
+) -> Vec<Url> {
     let canonical = path.canonicalize_utf8().unwrap_or_else(|_| path.clone());
     let base_url = match Url::from_directory_path(canonical.as_str()) {
         Ok(u) => u,
