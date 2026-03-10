@@ -331,6 +331,28 @@ pub enum Command {
     },
 }
 
+#[derive(Debug, Clone, Subcommand)]
+pub enum DocAction {
+    /// Generate a self-contained static site (index.html)
+    Static,
+    /// Produce docs.json for web component consumption
+    Json,
+    /// Write the fe-web.js component bundle
+    Bundle,
+    /// Generate Starlight-compatible markdown pages
+    Pages {
+        /// Base URL prefix for generated links
+        #[arg(long, default_value = "/api")]
+        base_url: String,
+    },
+    /// Start an HTTP server to browse docs
+    Serve {
+        /// Port for HTTP server
+        #[arg(long, default_value = "8080")]
+        port: u16,
+    },
+}
+
 #[cfg(feature = "lsp")]
 #[derive(Debug, Clone, Subcommand)]
 pub enum LspMode {
