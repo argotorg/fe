@@ -298,7 +298,6 @@ var _feReadyCallbacks = null;
 function feWhenReady(callback) {
   var index = window.FE_DOC_INDEX;
   if (index && index.items) {
-    callback();
     return true;
   }
   if (!_feReadyCallbacks) {
