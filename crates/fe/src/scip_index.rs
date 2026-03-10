@@ -967,11 +967,17 @@ fn scip_symbol_to_qualified_path(sym: &str) -> Option<String> {
         return None;
     }
 
-    // Replace the "lib" root module with the package (ingot) name.
+    // Align SCIP filesystem-based paths with the doc index's ingot-qualified paths.
     // SCIP descriptors use filesystem module names (lib/ops/Foo) but the doc
     // index uses ingot-qualified paths (core::ops::Foo).
-    if path_parts[0] == "lib" && !package.is_empty() {
-        path_parts[0] = package.to_string();
+    if !package.is_empty() {
+        if path_parts[0] == "lib" {
+            // lib/ops/Foo → core::ops::Foo (replace lib with package name)
+            path_parts[0] = package.to_string();
+        } else {
+            // ops/Foo → core::ops::Foo (prepend package name)
+            path_parts.insert(0, package.to_string());
+        }
     }
 
     Some(path_parts.join("::"))
@@ -1872,25 +1878,30 @@ fn make_point() -> Point {
 
     #[test]
     fn test_scip_symbol_to_qualified_path() {
-        // Type descriptor: Mod/Struct#
+        // Type descriptor: Mod/Struct# — prepends package name
         assert_eq!(
             scip_symbol_to_qualified_path("fe fe mylib 0.1.0 Mod/Struct#"),
-            Some("Mod::Struct".into())
+            Some("mylib::Mod::Struct".into())
         );
         // Method descriptor: Mod/Struct#method.
         assert_eq!(
             scip_symbol_to_qualified_path("fe fe mylib 0.1.0 Mod/Struct#method."),
-            Some("Mod::Struct::method".into())
+            Some("mylib::Mod::Struct::method".into())
         );
-        // Deeply nested: a/b/Foo#
+        // lib root: lib/ops/Foo# — replaces lib with package name
         assert_eq!(
-            scip_symbol_to_qualified_path("fe fe pkg 1.0 a/b/Foo#"),
-            Some("a::b::Foo".into())
+            scip_symbol_to_qualified_path("fe fe core 1.0 lib/ops/Foo#"),
+            Some("core::ops::Foo".into())
         );
-        // Single item
+        // Non-lib root: ops/Foo# — prepends package name
+        assert_eq!(
+            scip_symbol_to_qualified_path("fe fe core 1.0 ops/BitXorAssign#bitxor_assign."),
+            Some("core::ops::BitXorAssign::bitxor_assign".into())
+        );
+        // Single item — prepends package name
         assert_eq!(
             scip_symbol_to_qualified_path("fe fe pkg 1.0 Foo#"),
-            Some("Foo".into())
+            Some("pkg::Foo".into())
         );
         // Empty descriptor part
         assert_eq!(scip_symbol_to_qualified_path("fe fe pkg 1.0 "), None);
