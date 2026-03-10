@@ -290,17 +290,27 @@ function feFindItem(path) {
  * Wait for FE_DOC_INDEX to be available, then call the callback.
  * Returns true if data is already available (callback called synchronously),
  * false if waiting (callback will be called later).
+ *
+ * Multiple calls coalesce on a single event listener to avoid redundant
+ * re-renders when many components mount before data loads.
  */
+var _feReadyCallbacks = null;
 function feWhenReady(callback) {
   var index = window.FE_DOC_INDEX;
   if (index && index.items) {
     callback();
     return true;
   }
-  document.addEventListener("fe-web-ready", function onReady() {
-    document.removeEventListener("fe-web-ready", onReady);
-    callback();
-  });
+  if (!_feReadyCallbacks) {
+    _feReadyCallbacks = [];
+    document.addEventListener("fe-web-ready", function onReady() {
+      document.removeEventListener("fe-web-ready", onReady);
+      var cbs = _feReadyCallbacks;
+      _feReadyCallbacks = null;
+      for (var i = 0; i < cbs.length; i++) cbs[i]();
+    });
+  }
+  _feReadyCallbacks.push(callback);
   return false;
 }
 

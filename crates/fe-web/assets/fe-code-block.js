@@ -492,17 +492,19 @@ class FeCodeBlock extends HTMLElement {
     var file = this.getAttribute("data-file");
     if (!file) return;
 
+    // Remove previous listener to avoid accumulation across re-renders
+    if (this._diagHandler) {
+      document.removeEventListener("fe-diagnostics", this._diagHandler);
+    }
+
     var shadow = this.shadowRoot;
-    document.addEventListener("fe-diagnostics", function (e) {
+    this._diagHandler = function (e) {
       var detail = e.detail;
-      // Match by file path suffix (LSP uses full URIs)
       if (!detail.uri || !detail.uri.endsWith(file)) return;
 
-      // Remove previous diagnostic markers from shadow root
       var old = shadow.querySelectorAll(".fe-diagnostic-marker");
       for (var i = 0; i < old.length; i++) old[i].remove();
 
-      // Add new markers
       var diags = detail.diagnostics || [];
       for (var j = 0; j < diags.length; j++) {
         var diag = diags[j];
@@ -517,7 +519,15 @@ class FeCodeBlock extends HTMLElement {
         marker.style.cssText = "color: var(--diag-color, #e55); font-size: 0.85em; padding-left: 2ch;";
         codeEl.parentNode.appendChild(marker);
       }
-    });
+    };
+    document.addEventListener("fe-diagnostics", this._diagHandler);
+  }
+
+  disconnectedCallback() {
+    if (this._diagHandler) {
+      document.removeEventListener("fe-diagnostics", this._diagHandler);
+      this._diagHandler = null;
+    }
   }
 }
 
