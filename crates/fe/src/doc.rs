@@ -189,7 +189,7 @@ pub fn generate_docs(
 
     // Generate SCIP for interactive navigation (best-effort).
     // This enriches rich_signature fields and produces JSON for embedding.
-    let scip_json = generate_scip_json_for_doc(&mut db, path, &mut index);
+    let scip_json = generate_scip_json_for_doc(&mut db, path, &mut index, builtins);
 
     if static_site {
         let output_dir = output
@@ -474,11 +474,27 @@ fn generate_scip_json_for_doc(
     db: &mut DriverDataBase,
     path: &Utf8PathBuf,
     doc_index: &mut fe_web::model::DocIndex,
+    include_builtins: bool,
 ) -> Option<String> {
     // Collect ingot URLs to generate SCIP for.
     // For a single ingot, this is just the path itself.
     // For a workspace, we find all user ingots loaded in the db.
-    let ingot_urls = collect_ingot_urls(db, path);
+    let mut ingot_urls = collect_ingot_urls(db, path);
+
+    // Include builtin ingots (core/std) when --builtins is enabled
+    if include_builtins {
+        for base_url in [
+            common::stdlib::BUILTIN_CORE_BASE_URL,
+            common::stdlib::BUILTIN_STD_BASE_URL,
+        ] {
+            if let Ok(url) = url::Url::parse(base_url) {
+                if !ingot_urls.contains(&url) {
+                    ingot_urls.push(url);
+                }
+            }
+        }
+    }
+
     if ingot_urls.is_empty() {
         return None;
     }

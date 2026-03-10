@@ -233,11 +233,12 @@ async fn handle_open_docs(
         .unwrap_or("")
         .to_string();
 
-    // If a browser doc client is connected, navigate there instead of opening a new window
+    // If a browser doc client is connected, navigate there instead of opening a new window.
+    // receiver_count() > 1 because the placeholder receiver in run_stdio_server always exists.
     if backend
         .doc_nav_tx
         .as_ref()
-        .is_some_and(|tx| tx.receiver_count() > 0)
+        .is_some_and(|tx| tx.receiver_count() > 1)
     {
         backend.notify_doc_navigate(doc_path);
         return Ok(None);
