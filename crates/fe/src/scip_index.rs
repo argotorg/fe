@@ -1415,7 +1415,7 @@ fn overlay_occurrences(
 /// Convert a byte offset within a signature text to (line, col) relative to the
 /// signature start.  Line 0 is the first line; col is byte offset from last newline.
 fn byte_offset_to_sig_line_col(sig_text: &str, byte_offset: usize) -> (i32, i32) {
-    let clamped = byte_offset.min(sig_text.len());
+    let clamped = sig_text.floor_char_boundary(byte_offset.min(sig_text.len()));
     let prefix = &sig_text[..clamped];
     let line = prefix.bytes().filter(|&b| b == b'\n').count() as i32;
     let last_newline = prefix.rfind('\n').map(|p| p + 1).unwrap_or(0);
@@ -1534,8 +1534,7 @@ fn build_virtual_occurrences(
                 .unwrap_or(if line == 0 { 0 } else { sig_text.len() });
             let start = line_start + cs as usize;
             let end = line_start + ce as usize;
-            if end <= sig_text.len() {
-                let text = &sig_text[start..end];
+            if let Some(text) = sig_text.get(start..end) {
                 // Only track short identifiers (type params, Self, etc.)
                 if !text.is_empty()
                     && text.len() <= 20

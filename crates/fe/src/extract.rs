@@ -303,14 +303,17 @@ impl<'db> DocExtractor<'db> {
     fn get_summary(&self, scope: ScopeId<'db>) -> Option<String> {
         let docs = self.get_docstring(scope)?;
         let trimmed = docs.trim();
-        // Find first sentence ending or paragraph break
+        // Find first sentence ending or paragraph break.
+        // find() returns byte offsets that are always on char boundaries
+        // since `. `, `.\n`, and `\n\n` are all ASCII, so `i + 1` lands
+        // on the byte after `.` or `\n` which is also a valid boundary.
         let end = trimmed
             .find(". ")
             .or_else(|| trimmed.find(".\n"))
             .or_else(|| trimmed.find("\n\n"))
             .map(|i| i + 1)
             .unwrap_or(trimmed.len());
-        let summary = trimmed[..end].trim();
+        let summary = trimmed.get(..end).unwrap_or(trimmed).trim();
         if summary.is_empty() {
             None
         } else {
@@ -388,11 +391,7 @@ impl<'db> DocExtractor<'db> {
         let end: usize = ty_span.range.end().into();
         let file_text = ty_span.file.text(self.db).as_str();
 
-        if end > file_text.len() || start > end {
-            return None;
-        }
-
-        Some(file_text[start..end].trim().to_string())
+        Some(file_text.get(start..end)?.trim().to_string())
     }
 
     /// Extract generic parameters from an item
@@ -557,11 +556,7 @@ impl<'db> DocExtractor<'db> {
         let end: usize = ty_span.range.end().into();
         let file_text = ty_span.file.text(self.db).as_str();
 
-        if end > file_text.len() || start > end {
-            return None;
-        }
-
-        Some(file_text[start..end].trim().to_string())
+        Some(file_text.get(start..end)?.trim().to_string())
     }
 
     fn extract_trait_members(&self, t: Trait<'db>) -> Vec<DocChild> {
@@ -693,17 +688,12 @@ impl<'db> DocExtractor<'db> {
         };
 
         // Convert byte offset to 1-based line number
-        let line = file_text[..byte_offset.min(file_text.len())]
-            .chars()
-            .filter(|&c| c == '\n')
-            .count() as u32
-            + 1;
+        let clamped = byte_offset.min(file_text.len());
+        let prefix = file_text.get(..clamped).unwrap_or(file_text);
+        let line = prefix.chars().filter(|&c| c == '\n').count() as u32 + 1;
 
         // Calculate column (bytes from start of line)
-        let line_start = file_text[..byte_offset]
-            .rfind('\n')
-            .map(|pos| pos + 1)
-            .unwrap_or(0);
+        let line_start = prefix.rfind('\n').map(|pos| pos + 1).unwrap_or(0);
         let column = (byte_offset - line_start) as u32;
 
         Some(DocSourceLoc {

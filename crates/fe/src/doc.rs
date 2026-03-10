@@ -324,19 +324,35 @@ fn extract_workspace(
 ) -> Option<DocIndex> {
     use common::config::WorkspaceMemberSelection;
 
-    let members = ws_config
-        .workspace
-        .members_for_selection(WorkspaceMemberSelection::PrimaryOnly);
+    let base_url = match Url::from_directory_path(workspace_root.as_str()) {
+        Ok(u) => u,
+        Err(_) => {
+            eprintln!("Error: Failed to build URL for workspace root");
+            return None;
+        }
+    };
 
-    if members.is_empty() {
+    let expanded = match resolver::workspace::expand_workspace_members(
+        &ws_config.workspace,
+        &base_url,
+        WorkspaceMemberSelection::PrimaryOnly,
+    ) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("Error: Failed to expand workspace members: {e}");
+            return None;
+        }
+    };
+
+    if expanded.is_empty() {
         eprintln!("Error: Workspace has no members");
         return None;
     }
 
     println!(
         "Workspace with {} member(s): {}",
-        members.len(),
-        members
+        expanded.len(),
+        expanded
             .iter()
             .map(|m| m.name.as_deref().unwrap_or(m.path.as_str()))
             .collect::<Vec<_>>()
@@ -345,58 +361,25 @@ fn extract_workspace(
 
     // Initialize all members in the shared db first so cross-ingot
     // references resolve correctly (e.g. ingot A imports ingot B).
-    let mut member_paths: Vec<(String, Utf8PathBuf)> = Vec::new();
-    for member in &members {
-        let member_path = workspace_root.join(member.path.as_str());
-        if !member_path.is_dir() {
-            eprintln!(
-                "Warning: Workspace member '{}' at {} not found, skipping",
-                member.name.as_deref().unwrap_or(member.path.as_str()),
-                member_path,
-            );
-            continue;
-        }
+    let mut member_entries: Vec<(String, Url)> = Vec::new();
+    for member in &expanded {
         let member_name = member
             .name
             .as_deref()
             .unwrap_or(member.path.as_str())
             .to_string();
 
-        let canonical = match member_path.canonicalize_utf8() {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("  Warning: Failed to canonicalize '{member_name}': {e}");
-                continue;
-            }
-        };
-        let ingot_url = match Url::from_directory_path(canonical.as_str()) {
-            Ok(u) => u,
-            Err(_) => {
-                eprintln!("  Warning: Failed to build URL for '{member_name}'");
-                continue;
-            }
-        };
-
         println!("  Initializing '{member_name}'...");
-        driver::init_ingot(db, &ingot_url);
-        member_paths.push((member_name, member_path));
+        driver::init_ingot(db, &member.url);
+        member_entries.push((member_name, member.url.clone()));
     }
 
     // Extract docs from each member using the shared db
     let mut combined = DocIndex::new();
-    for (member_name, member_path) in &member_paths {
+    for (member_name, ingot_url) in &member_entries {
         println!("  Extracting docs for '{member_name}'...");
 
-        let canonical = match member_path.canonicalize_utf8() {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
-        let ingot_url = match Url::from_directory_path(canonical.as_str()) {
-            Ok(u) => u,
-            Err(_) => continue,
-        };
-
-        let Some(ingot) = db.workspace().containing_ingot(db, ingot_url) else {
+        let Some(ingot) = db.workspace().containing_ingot(db, ingot_url.clone()) else {
             eprintln!("  Warning: Could not find ingot for '{member_name}'");
             continue;
         };
@@ -556,17 +539,28 @@ fn collect_ingot_urls(db: &DriverDataBase, path: &Utf8PathBuf) -> Vec<Url> {
         _ => return Vec::new(),
     };
 
-    let members = ws_config
-        .workspace
-        .members_for_selection(common::config::WorkspaceMemberSelection::PrimaryOnly);
+    let base_url = match Url::from_directory_path(path.as_str()) {
+        Ok(u) => u,
+        Err(_) => return Vec::new(),
+    };
+
+    let expanded = match resolver::workspace::expand_workspace_members(
+        &ws_config.workspace,
+        &base_url,
+        common::config::WorkspaceMemberSelection::PrimaryOnly,
+    ) {
+        Ok(m) => m,
+        Err(_) => return Vec::new(),
+    };
 
     let mut urls = Vec::new();
-    for member in &members {
-        let member_path = path.join(member.path.as_str());
-        if let Some(url) = path_to_ingot_url(&member_path)
-            && db.workspace().containing_ingot(db, url.clone()).is_some()
+    for member in &expanded {
+        if db
+            .workspace()
+            .containing_ingot(db, member.url.clone())
+            .is_some()
         {
-            urls.push(url);
+            urls.push(member.url.clone());
         }
     }
     urls
@@ -652,7 +646,8 @@ fn print_doc_summary(index: &DocIndex) {
                 .map(|d| {
                     let summary = &d.summary;
                     if summary.len() > 60 {
-                        format!("{}...", &summary[..60])
+                        let trunc = &summary[..summary.floor_char_boundary(60)];
+                        format!("{trunc}...")
                     } else {
                         summary.clone()
                     }
