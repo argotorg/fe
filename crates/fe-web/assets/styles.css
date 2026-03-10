@@ -208,6 +208,13 @@ body {
 .item-header h1 {
     font-size: 1.75rem;
     margin: 0;
+    position: relative;
+}
+
+.item-header h1 > .anchor {
+    position: absolute;
+    left: -1.25rem;
+    margin-right: 0;
 }
 
 .src-link {
@@ -318,6 +325,14 @@ h2 {
     margin: 1rem 0 0.5rem;
     padding-bottom: 0.5rem;
     border-bottom: 1px solid var(--border);
+    position: relative;
+}
+
+h2 > .anchor {
+    position: absolute;
+    left: -1.25rem;
+    margin-right: 0;
+}
 }
 
 .members {
@@ -502,9 +517,19 @@ h2:hover .anchor {
     color: var(--accent);
 }
 
+.member-header,
+.method-header,
+.implementor-item,
+.impl-header {
+    position: relative;
+}
+
 .member-header > .anchor,
 .method-header > .anchor,
-.implementor-item > .anchor {
+.implementor-item > .anchor,
+.impl-header > .anchor {
+    position: absolute;
+    left: -1.25rem;
     margin-right: 0;
 }
 
@@ -521,7 +546,6 @@ h2:hover .anchor {
 .impl-header {
     display: flex;
     align-items: center;
-    gap: 0.25rem;
 }
 
 .impl-header h3 {
@@ -821,46 +845,15 @@ fe-code-block.impl-signature {
 /* Syntax highlighting rules live in fe-highlight.css (single source of truth).
    Both the static site and guide/Starlight import that file. */
 
-/* <fe-code-block> custom element */
+/* <fe-code-block> custom element (light-DOM host style only).
+   Internal shadow-DOM styles (.fe-code-block-wrapper, .fe-line-numbers,
+   .fe-code-pre) are in fe-highlight.css — the single source of truth.
+   Customize via CSS custom properties:
+     --fe-code-bg, --fe-code-border, --fe-code-text,
+     --fe-code-font, --fe-code-size, --fe-code-line-height */
 fe-code-block {
     display: block;
     margin: 1rem 0;
-}
-
-.fe-code-block-wrapper {
-    display: flex;
-    background: var(--code-bg);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    overflow-x: auto;
-}
-
-.fe-line-numbers {
-    display: flex;
-    flex-direction: column;
-    padding: 0.75rem 0.5rem;
-    border-right: 1px solid var(--border);
-    text-align: right;
-    user-select: none;
-    color: var(--text-muted);
-    font-family: "JetBrains Mono", "Fira Code", monospace;
-    font-size: 0.8rem;
-    line-height: 1.6;
-}
-
-.fe-code-pre {
-    flex: 1;
-    margin: 0;
-    padding: 0.75rem 1rem;
-    background: transparent;
-    overflow-x: auto;
-}
-
-.fe-code-pre code {
-    font-family: "JetBrains Mono", "Fira Code", monospace;
-    font-size: 0.8rem;
-    line-height: 1.6;
-    color: var(--text);
 }
 
 /* <fe-search> custom element */

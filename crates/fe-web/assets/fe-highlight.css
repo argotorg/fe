@@ -5,7 +5,8 @@
      --fe-hl-function, --fe-hl-string, --fe-hl-string-escape, --fe-hl-number,
      --fe-hl-comment, --fe-hl-operator, --fe-hl-variable, --fe-hl-attribute,
      --fe-hl-constant, --fe-hl-punctuation,
-     --fe-code-bg, --fe-code-border, --fe-code-text, --fe-code-font */
+     --fe-code-bg, --fe-code-border, --fe-code-text, --fe-code-font,
+     --fe-code-size, --fe-code-line-height */
 
 .hl-keyword { color: var(--fe-hl-keyword, #c678dd); }
 .hl-type, .hl-type-builtin { color: var(--fe-hl-type, #e5c07b); }
@@ -72,8 +73,12 @@ fe-code-block {
     user-select: none;
     color: var(--fe-code-line-number, #9ba3af);
     font-family: var(--fe-code-font, "JetBrains Mono", "Fira Code", monospace);
-    font-size: 0.8rem;
-    line-height: 1.6;
+    font-size: var(--fe-code-size, 0.8rem);
+    line-height: var(--fe-code-line-height, 1.6);
+}
+
+.fe-line-numbers span {
+    line-height: var(--fe-code-line-height, 1.6);
 }
 
 .fe-code-pre {
@@ -86,7 +91,7 @@ fe-code-block {
 
 .fe-code-pre code {
     font-family: var(--fe-code-font, "JetBrains Mono", "Fira Code", monospace);
-    font-size: 0.8rem;
-    line-height: 1.6;
+    font-size: var(--fe-code-size, 0.8rem);
+    line-height: var(--fe-code-line-height, 1.6);
     color: var(--fe-code-text, #e4e4e4);
 }
