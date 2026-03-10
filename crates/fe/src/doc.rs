@@ -341,10 +341,11 @@ fn extract_workspace(
 ) -> Option<DocIndex> {
     use common::config::WorkspaceMemberSelection;
 
-    let base_url = match Url::from_directory_path(workspace_root.as_str()) {
+    let canonical_root = workspace_root.canonicalize_utf8().unwrap_or_else(|_| workspace_root.clone());
+    let base_url = match Url::from_directory_path(canonical_root.as_str()) {
         Ok(u) => u,
         Err(_) => {
-            eprintln!("Error: Failed to build URL for workspace root");
+            eprintln!("Error: Failed to build URL for workspace root: {canonical_root}");
             return None;
         }
     };
