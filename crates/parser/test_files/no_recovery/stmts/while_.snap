@@ -1,0 +1,7 @@
+---
+source: crates/parser/tests/no_recovery.rs
+assertion_line: 35
+expression: output
+input_file: test_files/no_recovery/stmts/while_.fe
+---
+expected expression@5..5

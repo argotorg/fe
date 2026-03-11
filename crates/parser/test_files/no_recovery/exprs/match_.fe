@@ -1,0 +1,9 @@
+match X  => { 
+   Foo() => true
+   Bar
+} 
+
+match X  { 
+   Foo(i, j,   => true x
+   Bar => x
+} 

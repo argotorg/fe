@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use parser::{SyntaxNode, ast, ast::prelude::AstNode, parse_source_file};
+use parser::{RecoveryMode, SyntaxNode, ast, ast::prelude::AstNode, parse_source_file};
 use pretty::RcAllocator;
 
 use crate::ast::ToDoc;
@@ -24,7 +24,8 @@ impl From<std::io::Error> for FormatError {
 
 /// Format a Fe source string according to the provided [`Config`].
 pub fn format_str(source: &str, config: &Config) -> Result<String, FormatError> {
-    let (green, parse_errors) = parse_source_file(source);
+    let recovery_mode = RecoveryMode::new(config.use_recovery_mode);
+    let (green, parse_errors) = parse_source_file(source, recovery_mode);
     if !parse_errors.is_empty() {
         return Err(FormatError::ParseErrors(parse_errors));
     }

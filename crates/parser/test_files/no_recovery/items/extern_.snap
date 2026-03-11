@@ -1,0 +1,7 @@
+---
+source: crates/parser/tests/no_recovery.rs
+assertion_line: 20
+expression: output
+input_file: test_files/no_recovery/items/extern_.fe
+---
+expected function parameter list@30..30

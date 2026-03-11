@@ -767,7 +767,12 @@ impl LogicalBinOp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ParseError, ast::*, lexer::Lexer, parser::Parser};
+    use crate::{
+        ParseError,
+        ast::*,
+        lexer::Lexer,
+        parser::{Parser, RecoveryMode},
+    };
 
     use derive_more::TryIntoError;
     use wasm_bindgen_test::wasm_bindgen_test;
@@ -777,7 +782,7 @@ mod tests {
         T: TryFrom<ExprKind, Error = TryIntoError<ExprKind>>,
     {
         let lexer = Lexer::new(source);
-        let mut parser = Parser::new(lexer);
+        let mut parser = Parser::new(lexer, RecoveryMode::Recover);
         crate::parser::expr::parse_expr(&mut parser).unwrap();
         Expr::cast(parser.finish_to_node().0)
             .unwrap()
@@ -791,7 +796,7 @@ mod tests {
         T: TryFrom<ExprKind, Error = TryIntoError<ExprKind>>,
     {
         let lexer = Lexer::new(source);
-        let mut parser = Parser::new(lexer);
+        let mut parser = Parser::new(lexer, RecoveryMode::Recover);
         crate::parser::expr::parse_expr(&mut parser).unwrap();
         let (node, errors) = parser.finish_to_node();
         let expr = Expr::cast(node).unwrap().kind().try_into().unwrap();

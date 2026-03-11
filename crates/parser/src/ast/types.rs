@@ -172,7 +172,7 @@ mod tests {
         T: TryFrom<TypeKind, Error = TryIntoError<TypeKind>> + std::fmt::Debug,
     {
         let lexer = Lexer::new(source);
-        let mut parser = parser::Parser::new(lexer);
+        let mut parser = parser::Parser::new(lexer, parser::RecoveryMode::Recover);
         let _ = parser::type_::parse_type(&mut parser, None);
         Type::cast(parser.finish_to_node().0)
             .unwrap()

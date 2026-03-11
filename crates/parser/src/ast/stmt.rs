@@ -164,7 +164,7 @@ mod tests {
         ParseError,
         ast::{AttrListOwner, PatKind, TypeKind},
         lexer::Lexer,
-        parser::Parser,
+        parser::{Parser, RecoveryMode},
     };
 
     fn parse_stmt<T>(source: &str) -> T
@@ -172,7 +172,7 @@ mod tests {
         T: TryFrom<StmtKind, Error = TryIntoError<StmtKind>>,
     {
         let lexer = Lexer::new(source);
-        let mut parser = Parser::new(lexer);
+        let mut parser = Parser::new(lexer, RecoveryMode::Recover);
         crate::parser::stmt::parse_stmt(&mut parser).unwrap();
         Stmt::cast(parser.finish_to_node().0)
             .unwrap()
@@ -186,7 +186,7 @@ mod tests {
         T: TryFrom<StmtKind, Error = TryIntoError<StmtKind>>,
     {
         let lexer = Lexer::new(source);
-        let mut parser = Parser::new(lexer);
+        let mut parser = Parser::new(lexer, RecoveryMode::Recover);
         crate::parser::stmt::parse_stmt(&mut parser).unwrap();
         let (node, errors) = parser.finish_to_node();
         let stmt = Stmt::cast(node).unwrap().kind().try_into().unwrap();

@@ -111,14 +111,14 @@ mod tests {
     use super::*;
     use crate::{
         lexer::Lexer,
-        parser::{Parser, path::PathScope},
+        parser::{Parser, RecoveryMode, path::PathScope},
     };
 
     use wasm_bindgen_test::wasm_bindgen_test;
 
     fn parse_path(source: &str) -> Path {
         let lexer = Lexer::new(source);
-        let mut parser = Parser::new(lexer);
+        let mut parser = Parser::new(lexer, RecoveryMode::Recover);
         parser.parse(PathScope::default()).unwrap();
         Path::cast(parser.finish_to_node().0).unwrap()
     }

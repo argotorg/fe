@@ -1,0 +1,10 @@
+---
+source: crates/parser/tests/no_recovery.rs
+assertion_line: 20
+expression: output
+input_file: test_files/no_recovery/items/enum_.fe
+---
+missing closing `)` for tuple type definition@33..33
+missing closing `}` for `enum` variant list@33..33
+missing closing `}` for `enum` variant list@39..39
+missing closing `}` for `enum` variant list@53..53

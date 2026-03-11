@@ -135,9 +135,11 @@ pub fn build(
     solc: Option<&str>,
     report_out: Option<&Utf8PathBuf>,
     report_failed_only: bool,
+    use_recovery_mode: bool,
 ) {
     let emit = EmitSelection::from_requested(emit);
     let mut db = DriverDataBase::default();
+    db.compiler_options().set_recovery_mode(use_recovery_mode);
 
     let report_root = match report_out
         .map(|out| -> Result<_, String> {

@@ -153,7 +153,7 @@ pub trait AttrListOwner: AstNode<Language = FeLang> {
 mod tests {
     use crate::{
         lexer::Lexer,
-        parser::{Parser, attr::AttrListScope},
+        parser::{Parser, RecoveryMode, attr::AttrListScope},
     };
 
     use wasm_bindgen_test::wasm_bindgen_test;
@@ -162,7 +162,7 @@ mod tests {
 
     fn parse_attr_list(source: &str) -> AttrList {
         let lexer = Lexer::new(source);
-        let mut parser = Parser::new(lexer);
+        let mut parser = Parser::new(lexer, RecoveryMode::Recover);
         parser.parse(AttrListScope::default()).unwrap();
         AttrList::cast(parser.finish_to_node().0).unwrap()
     }

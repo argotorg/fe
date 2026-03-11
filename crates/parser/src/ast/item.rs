@@ -709,7 +709,7 @@ mod tests {
     use crate::{
         ast::{ExprKind, TypeKind, prelude::*},
         lexer::Lexer,
-        parser::{ItemListScope, Parser},
+        parser::{ItemListScope, Parser, RecoveryMode},
     };
 
     fn parse_item<T>(source: &str) -> T
@@ -717,7 +717,7 @@ mod tests {
         T: TryFrom<ItemKind, Error = TryIntoError<ItemKind>>,
     {
         let lexer = Lexer::new(source);
-        let mut parser = Parser::new(lexer);
+        let mut parser = Parser::new(lexer, RecoveryMode::Recover);
 
         let _ = parser.parse(ItemListScope::default());
         let (node, errs) = parser.finish_to_node();

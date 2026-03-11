@@ -1,0 +1,9 @@
+extern {
+    pub unsafe fn Foo
+
+    pub fn bar()
+
+    struct Foo {
+
+    pub unsafe fn foo()
+}

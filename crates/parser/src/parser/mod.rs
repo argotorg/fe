@@ -4,10 +4,11 @@ pub(crate) use item::ItemListScope;
 use smallvec::SmallVec;
 
 use self::token_stream::{BackTrackableTokenStream, LexicalToken, TokenStream};
-use crate::{ExpectedKind, GreenNode, ParseError, SyntaxKind, TextRange, syntax_node::SyntaxNode};
+use crate::{ExpectedKind, GreenNode, SyntaxKind, TextRange, syntax_node::SyntaxNode};
 
 pub mod token_stream;
 
+pub use crate::ParseError;
 pub use pat::parse_pat;
 
 pub mod attr;
@@ -26,6 +27,23 @@ pub mod use_tree;
 mod expr_atom;
 
 type Checkpoint = rowan::Checkpoint;
+
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RecoveryMode {
+    #[default]
+    Recover,
+    NoRecover,
+}
+
+impl RecoveryMode {
+    pub fn new(use_recovery: bool) -> Self {
+        if use_recovery {
+            Self::Recover
+        } else {
+            Self::NoRecover
+        }
+    }
+}
 
 /// Parser to build a rowan syntax tree.
 pub struct Parser<S: TokenStream> {
@@ -47,11 +65,14 @@ pub struct Parser<S: TokenStream> {
     /// enters dry run mode.
     dry_run_states: Vec<DryRunState<S>>,
     dry_run_next_trivias_pool: Vec<VecDeque<S::Token>>,
+
+    /// Whether or not to recover from syntax errors automatically.
+    recovery_mode: RecoveryMode,
 }
 
 impl<S: TokenStream> Parser<S> {
     /// Create a parser with the given token stream.
-    pub fn new(stream: S) -> Self {
+    pub fn new(stream: S, recovery_mode: RecoveryMode) -> Self {
         Self {
             stream: BackTrackableTokenStream::new(stream),
             builder: rowan::GreenNodeBuilder::new(),
@@ -63,6 +84,7 @@ impl<S: TokenStream> Parser<S> {
             next_trivias: VecDeque::new(),
             dry_run_states: Vec::new(),
             dry_run_next_trivias_pool: Vec::new(),
+            recovery_mode,
         }
     }
 
@@ -460,6 +482,10 @@ impl<S: TokenStream> Parser<S> {
     /// Returns the index of the scope that matched the recovery token,
     /// and the total string length of the unexpected tokens.
     fn recover(&mut self) -> (Option<ScopeIndex>, Option<rowan::TextSize>) {
+        if self.recovery_mode == RecoveryMode::NoRecover {
+            return (None, None);
+        }
+
         let mut unexpected = None;
         let mut match_scope_index = None;
         while let Some(kind) = self.current_kind() {

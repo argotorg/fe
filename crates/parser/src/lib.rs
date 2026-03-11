@@ -4,6 +4,7 @@ pub mod parser;
 pub mod syntax_kind;
 pub mod syntax_node;
 
+pub use parser::RecoveryMode;
 pub use rowan::TextSize;
 use smallvec::SmallVec;
 pub use syntax_kind::SyntaxKind;
@@ -11,9 +12,9 @@ pub use syntax_node::{FeLang, GreenNode, NodeOrToken, SyntaxNode, SyntaxToken, T
 
 use parser::RootScope;
 
-pub fn parse_source_file(text: &str) -> (GreenNode, Vec<ParseError>) {
+pub fn parse_source_file(text: &str, recovery_mode: RecoveryMode) -> (GreenNode, Vec<ParseError>) {
     let lexer = lexer::Lexer::new(text);
-    let mut parser = parser::Parser::new(lexer);
+    let mut parser = parser::Parser::new(lexer, recovery_mode);
     let checkpoint = parser.enter(RootScope::default(), None);
 
     let _ = parser.parse(parser::ItemListScope::default());
@@ -32,7 +33,11 @@ pub enum ParseError {
 }
 
 impl ParseError {
-    pub fn expected(tokens: &[SyntaxKind], kind: Option<ExpectedKind>, pos: TextSize) -> Self {
+    pub(crate) fn expected(
+        tokens: &[SyntaxKind],
+        kind: Option<ExpectedKind>,
+        pos: TextSize,
+    ) -> Self {
         let mut expected_tokens = SmallVec::<SyntaxKind, 2>::new();
         expected_tokens.extend_from_slice(tokens);
         ParseError::Expected(

@@ -565,7 +565,7 @@ mod tests {
         ast::TypeKind,
         lexer::Lexer,
         parser::{
-            Parser,
+            Parser, RecoveryMode,
             func::FuncScope,
             param::{GenericArgListScope, GenericParamListScope, WhereClauseScope},
         },
@@ -575,21 +575,21 @@ mod tests {
 
     fn parse_generic_params(source: &str) -> GenericParamList {
         let lexer = Lexer::new(source);
-        let mut parser = Parser::new(lexer);
+        let mut parser = Parser::new(lexer, RecoveryMode::Recover);
         parser.parse(GenericParamListScope::default()).unwrap();
         GenericParamList::cast(parser.finish_to_node().0).unwrap()
     }
 
     fn parse_generic_arg(source: &str) -> GenericArgList {
         let lexer = Lexer::new(source);
-        let mut parser = Parser::new(lexer);
+        let mut parser = Parser::new(lexer, RecoveryMode::Recover);
         parser.parse(GenericArgListScope::default()).unwrap();
         GenericArgList::cast(parser.finish_to_node().0).unwrap()
     }
 
     fn parse_where_clause(source: &str) -> WhereClause {
         let lexer = Lexer::new(source);
-        let mut parser = Parser::new(lexer);
+        let mut parser = Parser::new(lexer, RecoveryMode::Recover);
         parser.parse(WhereClauseScope::default()).unwrap();
         WhereClause::cast(parser.finish_to_node().0).unwrap()
     }
@@ -760,14 +760,14 @@ mod tests {
 
     fn parse_func(source: &str) -> crate::ast::Func {
         let lexer = Lexer::new(source);
-        let mut parser = Parser::new(lexer);
+        let mut parser = Parser::new(lexer, RecoveryMode::Recover);
         parser.parse(FuncScope::default()).unwrap();
         crate::ast::Func::cast(parser.finish_to_node().0).unwrap()
     }
 
     fn parse_func_with_errors(source: &str) -> Vec<crate::ParseError> {
         let lexer = Lexer::new(source);
-        let mut parser = Parser::new(lexer);
+        let mut parser = Parser::new(lexer, RecoveryMode::Recover);
         parser.parse(FuncScope::default()).unwrap();
         parser.finish_to_node().1
     }

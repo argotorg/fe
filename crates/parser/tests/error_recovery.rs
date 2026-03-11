@@ -11,7 +11,7 @@ use test_runner::*;
 )]
 fn test_item_list(fixture: Fixture<&str>) {
     let runner = TestRunner::item_list(false);
-    let node = format! {"{:#?}", runner.run(fixture.content())};
+    let node = format! {"{:#?}", runner.run(fixture.content()).unwrap()};
     snap_test!(node, fixture.path());
 }
 
@@ -21,7 +21,7 @@ fn test_item_list(fixture: Fixture<&str>) {
 )]
 fn test_stmt(fixture: Fixture<&str>) {
     let runner = TestRunner::stmt_list(false);
-    let node = format! {"{:#?}", runner.run(fixture.content())};
+    let node = format! {"{:#?}", runner.run(fixture.content()).unwrap()};
     snap_test!(node, fixture.path());
 }
 
@@ -31,7 +31,7 @@ fn test_stmt(fixture: Fixture<&str>) {
 )]
 fn test_expr(fixture: Fixture<&str>) {
     let runner = TestRunner::expr_list(false);
-    let node = format! {"{:#?}", runner.run(fixture.content())};
+    let node = format! {"{:#?}", runner.run(fixture.content()).unwrap()};
     snap_test!(node, fixture.path());
 }
 
@@ -49,7 +49,7 @@ mod wasm {
         #[wasm_bindgen_test]
     )]
     fn test_item_list(fixture: Fixture<&str>) {
-        TestRunner::item_list(false).run(fixture.content());
+        TestRunner::item_list(false).run(fixture.content()).unwrap();
     }
 
     #[dir_test(
@@ -61,7 +61,7 @@ mod wasm {
         #[wasm_bindgen_test]
     )]
     fn test_stmt(fixture: Fixture<&str>) {
-        TestRunner::stmt_list(false).run(fixture.content());
+        TestRunner::stmt_list(false).run(fixture.content()).unwrap();
     }
 
     #[dir_test(
@@ -73,6 +73,6 @@ mod wasm {
         #[wasm_bindgen_test]
     )]
     fn test_expr(fixture: Fixture<&str>) {
-        TestRunner::expr_list(false).run(fixture.content());
+        TestRunner::expr_list(false).run(fixture.content()).unwrap();
     }
 }

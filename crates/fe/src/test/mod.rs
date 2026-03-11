@@ -673,6 +673,7 @@ struct WorkerSharedConfig {
     aggregate_report: bool,
     call_trace: bool,
     multi: bool,
+    use_recovery: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1170,6 +1171,7 @@ pub fn run_tests(
     report_dir: Option<&Utf8PathBuf>,
     report_failed_only: bool,
     call_trace: bool,
+    use_recovery: bool,
 ) -> Result<bool, String> {
     let expanded_paths = expand_test_paths(paths)?;
     if ingot.is_some() && expanded_paths.len() != 1 {
@@ -1225,6 +1227,7 @@ pub fn run_tests(
         aggregate_report: report_root.is_some(),
         call_trace,
         multi,
+        use_recovery,
     });
     let mut suite_runs = std::thread::scope(|scope| -> Result<Vec<SuiteRunResult>, String> {
         let (suite_tx, suite_rx) = crossbeam_channel::unbounded::<SuitePlan>();
@@ -1823,6 +1826,7 @@ fn prepare_suite_job(
 
     let build_started = Instant::now();
     let mut db = DriverDataBase::default();
+    db.compiler_options().set_recovery_mode(shared.use_recovery);
     let prep = if plan.path.is_file() && plan.path.extension() == Some("fe") {
         prepare_tests_single_file(
             &mut db,

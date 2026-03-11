@@ -41,8 +41,10 @@ pub fn check(
     dump_mir: bool,
     report_out: Option<&Utf8PathBuf>,
     report_failed_only: bool,
+    recovery_mode: bool,
 ) -> Result<bool, String> {
     let mut db = DriverDataBase::default();
+    db.compiler_options().set_recovery_mode(recovery_mode);
 
     let report_root = report_out
         .map(|out| -> Result<_, String> {

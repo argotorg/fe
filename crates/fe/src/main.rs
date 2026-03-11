@@ -124,6 +124,9 @@ pub enum Command {
         /// Only write the report if `fe build` fails.
         #[arg(long, requires = "report")]
         report_failed_only: bool,
+        /// Use recovery mode when parsing.
+        #[arg(long, default_value = "false")]
+        recovery_mode: bool,
     },
     Check {
         #[arg(default_value_t = default_project_path())]
@@ -152,6 +155,9 @@ pub enum Command {
         /// Only write the report if `fe check` fails.
         #[arg(long, requires = "report")]
         report_failed_only: bool,
+        /// Use recovery mode when parsing.
+        #[arg(long, default_value = "false")]
+        recovery_mode: bool,
     },
     #[cfg(not(target_arch = "wasm32"))]
     Tree {
@@ -264,6 +270,9 @@ pub enum Command {
         /// Print a normalized call trace for each test (for backend comparison).
         #[arg(long)]
         call_trace: bool,
+        /// Use recovery mode when parsing.
+        #[arg(long, default_value = "false")]
+        recovery_mode: bool,
     },
     /// Create a new ingot or workspace.
     New {
@@ -378,6 +387,7 @@ pub fn run(opts: &Options) {
             report,
             report_out,
             report_failed_only,
+            recovery_mode,
         } => {
             let backend_kind: codegen::BackendKind = match backend.parse() {
                 Ok(kind) => kind,
@@ -408,6 +418,7 @@ pub fn run(opts: &Options) {
                 solc.as_deref(),
                 (*report).then_some(report_out),
                 *report_failed_only,
+                *recovery_mode,
             )
         }
         Command::Check {
@@ -418,6 +429,7 @@ pub fn run(opts: &Options) {
             report,
             report_out,
             report_failed_only,
+            recovery_mode,
         } => {
             match check(
                 path,
@@ -426,6 +438,7 @@ pub fn run(opts: &Options) {
                 *dump_mir,
                 (*report).then_some(report_out),
                 *report_failed_only,
+                *recovery_mode,
             ) {
                 Ok(has_errors) => {
                     if has_errors {
@@ -469,6 +482,7 @@ pub fn run(opts: &Options) {
             report_dir,
             report_failed_only,
             call_trace,
+            recovery_mode,
         } => {
             let backend_kind: codegen::BackendKind = match backend.parse() {
                 Ok(kind) => kind,
@@ -526,6 +540,7 @@ pub fn run(opts: &Options) {
                 report_dir.as_ref(),
                 *report_failed_only,
                 *call_trace,
+                *recovery_mode,
             ) {
                 Ok(has_failures) => {
                     if has_failures {

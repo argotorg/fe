@@ -8,7 +8,7 @@ use driver::DriverDataBase;
 use url::Url;
 use walkdir::WalkDir;
 
-use parser::parse_source_file;
+use parser::{RecoveryMode, parse_source_file};
 
 fn diagnostics(c: &mut Criterion) {
     let mut g = c.benchmark_group("analysis");
@@ -37,7 +37,7 @@ fn diagnostics(c: &mut Criterion) {
     g.bench_function("uitest parsing", |b| {
         b.iter(|| {
             for (_, content) in &files {
-                parse_source_file(content);
+                parse_source_file(content, RecoveryMode::Recover);
             }
         })
     });

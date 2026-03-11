@@ -1,0 +1,14 @@
+if a b {
+}
+
+if c {
+
+} else d {}
+
+if e { } else f if g { } else { }
+
+if h {
+    10
+else {
+    1
+}

@@ -1,0 +1,5 @@
+foo::bar.baz<i32, u32 T,>(1, 2)
+
+foo::bar.x(1, 2 E,)
+
+foo::bar.baz<i32, u32>()

@@ -1,0 +1,9 @@
+{
+for i arr { }
+
+for in arr { }
+
+for @ in arr {}
+
+for @ in arr x y {}
+}

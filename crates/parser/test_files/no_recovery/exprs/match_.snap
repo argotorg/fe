@@ -1,0 +1,7 @@
+---
+source: crates/parser/tests/no_recovery.rs
+assertion_line: 50
+expression: output
+input_file: test_files/no_recovery/exprs/match_.fe
+---
+`match` expression requires a body@7..7

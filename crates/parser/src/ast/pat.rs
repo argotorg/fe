@@ -179,14 +179,17 @@ mod tests {
     use wasm_bindgen_test::wasm_bindgen_test;
 
     use super::*;
-    use crate::{lexer::Lexer, parser::Parser};
+    use crate::{
+        lexer::Lexer,
+        parser::{Parser, RecoveryMode},
+    };
 
     fn parse_pat<T>(source: &str) -> T
     where
         T: TryFrom<PatKind, Error = TryIntoError<PatKind>>,
     {
         let lexer = Lexer::new(source);
-        let mut parser = Parser::new(lexer);
+        let mut parser = Parser::new(lexer, RecoveryMode::Recover);
         crate::parser::pat::parse_pat(&mut parser).unwrap();
         Pat::cast(parser.finish_to_node().0)
             .unwrap()

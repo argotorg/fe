@@ -1,0 +1,15 @@
+pub enum MyEnum<T> {
+    X(u32, T
+    A
+    Y(T, u32) B
+    Z
+}
+
+pub enum MyEnum2<T, U>
+where
+    T: * -> (* -> *
+    U: * -> *
+{
+    T(t)
+    U(U)
+}

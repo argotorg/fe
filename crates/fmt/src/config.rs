@@ -44,6 +44,8 @@ pub struct Config {
     pub use_tree_width: usize,
     /// Maximum width of a function signature before breaking the `uses` clause to a new line.
     pub fn_sig_width: usize,
+    /// Whether to use recovery mode when parsing.
+    pub use_recovery_mode: bool,
 }
 
 impl Default for Config {
@@ -62,6 +64,7 @@ impl Default for Config {
             struct_variant_width: 35,
             use_tree_width: 40,
             fn_sig_width: 80,
+            use_recovery_mode: false,
         }
     }
 }

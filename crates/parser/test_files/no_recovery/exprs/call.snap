@@ -1,0 +1,8 @@
+---
+source: crates/parser/tests/no_recovery.rs
+assertion_line: 50
+expression: output
+input_file: test_files/no_recovery/exprs/call.fe
+---
+missing closing `)` for function call arguments@8..8
+expected expression@10..10
