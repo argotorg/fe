@@ -25,18 +25,24 @@ use crate::analysis::{
     HirAnalysisDb,
     name_resolution::QueryDirective,
     ty::{
-        adt_def::{AdtRef, adt_layout_hole_tys},
+        adt_def::{AdtRef, adt_layout_hole_plan, adt_layout_hole_plan_with_explicit_args},
         binder::Binder,
         canonical::{Canonical, Canonicalized},
-        const_ty::ConstTyId,
+        const_ty::{CallableInputHoleCx, LayoutHoleArgSite, LayoutHoleId},
         fold::TyFoldable,
+        layout_holes::layout_hole_with_fallback_ty,
         normalize::normalize_ty,
         trait_def::{TraitInstId, impls_for_ty_with_constraints},
-        trait_lower::{TraitArgError, TraitRefLowerError, lower_trait_ref, lower_trait_ref_impl},
+        trait_lower::{
+            TraitArgError, TraitRefLowerError, lower_trait_ref, lower_trait_ref_impl,
+            lower_trait_ref_impl_with_callable_holes,
+        },
         trait_resolution::PredicateListId,
         ty_def::{InvalidCause, Kind, TyData, TyId},
         ty_lower::{
-            TyAlias, collect_generic_params, lower_generic_arg_list, lower_hir_ty, lower_type_alias,
+            ConstDefaultCompletion, TyAlias, collect_generic_params,
+            lower_generic_arg_list_with_callable_holes, lower_hir_ty,
+            lower_hir_ty_with_callable_holes, lower_type_alias,
         },
         unify::UnificationTable,
     },
@@ -669,6 +675,17 @@ pub fn resolve_path<'db>(
     assumptions: PredicateListId<'db>,
     resolve_tail_as_value: bool,
 ) -> PathResolutionResult<'db, PathRes<'db>> {
+    resolve_path_with_callable_holes(db, path, scope, assumptions, resolve_tail_as_value, None)
+}
+
+pub(crate) fn resolve_path_with_callable_holes<'db>(
+    db: &'db dyn HirAnalysisDb,
+    path: PathId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    resolve_tail_as_value: bool,
+    callable_holes: Option<&CallableInputHoleCx<'db>>,
+) -> PathResolutionResult<'db, PathRes<'db>> {
     let directive = QueryDirective::for_scope(db, scope);
     resolve_path_impl(
         db,
@@ -678,6 +695,7 @@ pub fn resolve_path<'db>(
         resolve_tail_as_value,
         directive,
         true,
+        callable_holes,
         &mut |_, _| {},
     )
 }
@@ -702,6 +720,7 @@ where
         resolve_tail_as_value,
         directive,
         true,
+        None,
         observer,
     )
 }
@@ -715,6 +734,7 @@ fn resolve_path_impl<'db, F>(
     resolve_tail_as_value: bool,
     base_directive: QueryDirective,
     is_tail: bool,
+    callable_holes: Option<&CallableInputHoleCx<'db>>,
     observer: &mut F,
 ) -> PathResolutionResult<'db, PathRes<'db>>
 where
@@ -731,6 +751,7 @@ where
                 resolve_tail_as_value,
                 base_directive,
                 false,
+                callable_holes,
                 observer,
             )
         })
@@ -746,7 +767,11 @@ where
                 path,
             ));
         }
-        let ty = lower_hir_ty(db, type_, scope, assumptions);
+        let ty = callable_holes
+            .map(|callable_holes| {
+                lower_hir_ty_with_callable_holes(db, type_, scope, assumptions, callable_holes)
+            })
+            .unwrap_or_else(|| lower_hir_ty(db, type_, scope, assumptions));
         if let Some(cause) = ty.invalid_cause(db) {
             match cause {
                 InvalidCause::NotAType(res) => {
@@ -756,7 +781,14 @@ where
                     ));
                 }
                 InvalidCause::PathResolutionFailed { path: ty_path } => {
-                    if let Err(inner) = resolve_path(db, ty_path, scope, assumptions, false) {
+                    if let Err(inner) = resolve_path_with_callable_holes(
+                        db,
+                        ty_path,
+                        scope,
+                        assumptions,
+                        false,
+                        callable_holes,
+                    ) {
                         return Err(PathResError {
                             kind: PathResErrorKind::QualifiedTypeType(Box::new(Err(inner))),
                             failed_at: path,
@@ -766,7 +798,21 @@ where
                 _ => {}
             }
         }
-        let trait_inst = match lower_trait_ref(db, ty, trait_, scope, assumptions, None) {
+        let trait_inst_result = match callable_holes {
+            Some(callable_holes) => {
+                crate::analysis::ty::trait_lower::lower_trait_ref_with_callable_holes(
+                    db,
+                    ty,
+                    trait_,
+                    scope,
+                    assumptions,
+                    None,
+                    callable_holes,
+                )
+            }
+            None => lower_trait_ref(db, ty, trait_, scope, assumptions, None),
+        };
+        let trait_inst = match trait_inst_result {
             Ok(inst) => inst,
             Err(err) => {
                 let trait_path = trait_.path(db).to_opt().unwrap_or(path);
@@ -918,7 +964,14 @@ where
             // Deduplicate by normalized type, but preserve and return the original
             // (unnormalized) candidate to avoid prematurely collapsing projections
             // like `T::IntoIter::Item` into `T::Item`.
-            let seg_args = lower_generic_arg_list(db, path.generic_args(db), scope, assumptions);
+            let seg_args = lower_generic_arg_list_with_callable_holes(
+                db,
+                path.generic_args(db),
+                scope,
+                assumptions,
+                LayoutHoleArgSite::Path(path),
+                callable_holes,
+            );
             let mut dedup: IndexMap<TyId<'db>, (TraitInstId<'db>, TyId<'db>)> = IndexMap::new();
             for (inst, ty_candidate) in assoc_tys.iter().copied() {
                 let applied = if seg_args.is_empty() {
@@ -1009,7 +1062,15 @@ where
         pick_type_domain_from_bucket(parent_res, bucket, path, path.parent(db))?
     };
 
-    let r = resolve_name_res(db, &res, parent_ty, path, scope, assumptions)?;
+    let r = resolve_name_res_with_callable_holes(
+        db,
+        &res,
+        parent_ty,
+        path,
+        scope,
+        assumptions,
+        callable_holes,
+    )?;
     observer(path, &r);
     Ok(r)
 }
@@ -1250,7 +1311,26 @@ pub fn resolve_name_res<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> PathResolutionResult<'db, PathRes<'db>> {
-    let args = &lower_generic_arg_list(db, path.generic_args(db), scope, assumptions);
+    resolve_name_res_with_callable_holes(db, nameres, parent_ty, path, scope, assumptions, None)
+}
+
+fn resolve_name_res_with_callable_holes<'db>(
+    db: &'db dyn HirAnalysisDb,
+    nameres: &NameRes<'db>,
+    parent_ty: Option<TyId<'db>>,
+    path: PathId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    callable_holes: Option<&CallableInputHoleCx<'db>>,
+) -> PathResolutionResult<'db, PathRes<'db>> {
+    let args = &lower_generic_arg_list_with_callable_holes(
+        db,
+        path.generic_args(db),
+        scope,
+        assumptions,
+        LayoutHoleArgSite::Path(path),
+        callable_holes,
+    );
 
     let res = match nameres.kind {
         NameResKind::Prim(prim) => {
@@ -1261,7 +1341,14 @@ pub fn resolve_name_res<'db>(
             ScopeId::Item(item) => match item {
                 ItemKind::Struct(_) | ItemKind::Enum(_) => {
                     let adt_ref = AdtRef::try_from_item(item).unwrap();
-                    PathRes::Ty(ty_from_adtref(db, path, adt_ref, args, assumptions)?)
+                    PathRes::Ty(ty_from_adtref(
+                        db,
+                        path,
+                        adt_ref,
+                        args,
+                        assumptions,
+                        callable_holes,
+                    )?)
                 }
                 ItemKind::Contract(contract) => {
                     // Contracts have no generic parameters
@@ -1316,29 +1403,11 @@ pub fn resolve_name_res<'db>(
                             },
                             path,
                         ));
-                    } else {
-                        let completed = alias.param_set.complete_explicit_args_with_defaults(
-                            db,
-                            None,
-                            args,
-                            assumptions,
-                        );
-                        if completed.len() < expected {
-                            return Ok(PathRes::TyAlias(
-                                alias.clone(),
-                                TyId::invalid(
-                                    db,
-                                    InvalidCause::UnboundTypeAliasParam {
-                                        alias: type_alias,
-                                        n_given_args: args.len(),
-                                    },
-                                ),
-                            ));
-                        }
-
-                        let instantiated = alias.alias_to.instantiate(db, &completed);
-                        PathRes::TyAlias(alias.clone(), instantiated)
                     }
+                    PathRes::TyAlias(
+                        alias.clone(),
+                        alias.instantiate_from_path(db, path, args, assumptions, callable_holes),
+                    )
                 }
 
                 ItemKind::Impl(impl_) => {
@@ -1395,7 +1464,18 @@ pub fn resolve_name_res<'db>(
                                 }
                             }
                         }
-                        match lower_trait_ref_impl(db, path, scope, assumptions, t) {
+                        let lowered = match callable_holes {
+                            Some(callable_holes) => lower_trait_ref_impl_with_callable_holes(
+                                db,
+                                path,
+                                scope,
+                                assumptions,
+                                t,
+                                callable_holes,
+                            ),
+                            None => lower_trait_ref_impl(db, path, scope, assumptions, t),
+                        };
+                        match lowered {
                             Ok(t) => PathRes::Trait(t),
                             Err(err) => {
                                 let kind = match err {
@@ -1470,7 +1550,7 @@ pub fn resolve_name_res<'db>(
                 } else {
                     // The variant was imported via `use`.
                     debug_assert!(path.parent(db).is_none());
-                    ty_from_adtref(db, path, var.enum_.into(), &[], assumptions)?
+                    ty_from_adtref(db, path, var.enum_.into(), &[], assumptions, callable_holes)?
                 };
                 // TODO report error if args isn't empty
                 PathRes::EnumVariant(ResolvedVariant {
@@ -1504,6 +1584,7 @@ fn ty_from_adtref<'db>(
     adt_ref: AdtRef<'db>,
     args: &[TyId<'db>],
     assumptions: PredicateListId<'db>,
+    callable_holes: Option<&CallableInputHoleCx<'db>>,
 ) -> PathResolutionResult<'db, TyId<'db>> {
     let adt = adt_ref.as_adt(db);
     let ty = TyId::adt(db, adt);
@@ -1513,31 +1594,40 @@ fn ty_from_adtref<'db>(
     let layout_provided = &args[explicit_provided_len..];
 
     // Fill trailing defaults (if any)
-    let mut completed_args = adt.param_set(db).complete_explicit_args_with_defaults(
+    let mut completed_args = adt.param_set(db).complete_explicit_args(
         db,
         None,
         explicit_args,
         assumptions,
+        ConstDefaultCompletion::metadata(Some(path)).with_callable_holes(callable_holes),
     );
+    let layout_plan = if completed_args.len() == explicit_param_len {
+        adt_layout_hole_plan_with_explicit_args(db, adt, &completed_args)
+    } else {
+        adt_layout_hole_plan(db, adt)
+    };
     completed_args.extend(layout_provided.iter().copied());
 
-    let layout_hole_tys = adt_layout_hole_tys(db, adt);
     let provided_layout_len = layout_provided.len();
-    for hole_ty in layout_hole_tys.iter().copied().skip(provided_layout_len) {
-        completed_args.push(TyId::new(
+    for (layout_idx, hole_ty) in layout_plan
+        .hole_tys()
+        .iter()
+        .copied()
+        .enumerate()
+        .skip(provided_layout_len)
+    {
+        completed_args.push(layout_hole_with_fallback_ty(
             db,
-            TyData::ConstTy(ConstTyId::hole_with_ty(
-                db,
-                if hole_ty.has_invalid(db) {
-                    TyId::u256(db)
-                } else {
-                    hole_ty
-                },
-            )),
+            hole_ty,
+            LayoutHoleId::ExplicitArg {
+                site: LayoutHoleArgSite::Path(path),
+                arg_idx: explicit_param_len + layout_idx,
+            },
         ));
     }
 
-    let applied = TyId::foldl(db, ty, &completed_args);
+    let applied =
+        apply_ty_args_with_metadata_suffix(db, ty, &completed_args, explicit_provided_len);
     if let TyData::Invalid(InvalidCause::TooManyGenericArgs { expected, given }) = applied.data(db)
     {
         Err(PathResError::new(
@@ -1550,6 +1640,32 @@ fn ty_from_adtref<'db>(
     } else {
         Ok(applied)
     }
+}
+
+fn apply_ty_args_with_metadata_suffix<'db>(
+    db: &'db dyn HirAnalysisDb,
+    mut base: TyId<'db>,
+    args: &[TyId<'db>],
+    metadata_start: usize,
+) -> TyId<'db> {
+    for (idx, arg) in args.iter().enumerate() {
+        if base.applicable_ty(db).is_none() {
+            return TyId::invalid(
+                db,
+                InvalidCause::TooManyGenericArgs {
+                    expected: idx,
+                    given: args.len(),
+                },
+            );
+        }
+        base = if idx < metadata_start {
+            TyId::app(db, base, *arg)
+        } else {
+            TyId::app_metadata_only(db, base, *arg)
+        };
+    }
+
+    base
 }
 
 fn pick_type_domain_from_bucket<'db>(

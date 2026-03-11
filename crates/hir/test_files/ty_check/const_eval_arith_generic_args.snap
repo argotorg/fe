@@ -1,6 +1,6 @@
 ---
 source: crates/hir/tests/ty_check.rs
-assertion_line: 40
+assertion_line: 41
 expression: res
 input_file: test_files/ty_check/const_eval_arith_generic_args.fe
 ---
@@ -18,7 +18,7 @@ note:
   ┌─ const_eval_arith_generic_args.fe:4:9
   │
 4 │     let a: Foo
-  │         ^ Foo<3>
+  │         ^ Foo<(1 + 2)>
 
 note: 
   ┌─ const_eval_arith_generic_args.fe:5:9

@@ -6,7 +6,7 @@ use salsa::Update;
 use super::{
     binder::Binder,
     canonical::Canonical,
-    ty_def::{TyBase, TyId},
+    ty_def::{TyBase, TyId, strip_derived_adt_layout_args},
     unify::UnificationTable,
 };
 use crate::analysis::{HirAnalysisDb, ty::ty_def::TyData};
@@ -127,11 +127,13 @@ impl<'db> MethodBucket<'db> {
         name: IdentId<'db>,
     ) -> Vec<CallableDef<'db>> {
         let mut methods = vec![];
+        let ty = strip_derived_adt_layout_args(table.db, ty);
         for (&cand_ty, funcs) in self.methods.iter() {
             let snapshot = table.snapshot();
 
             let ty = table.instantiate_to_term(ty);
             let cand_ty = table.instantiate_with_fresh_vars(cand_ty);
+            let cand_ty = strip_derived_adt_layout_args(table.db, cand_ty);
             let cand_ty = table.instantiate_to_term(cand_ty);
 
             if table.unify(cand_ty, ty).is_ok()

@@ -23,12 +23,18 @@ use crate::analysis::{
     name_resolution::{PathRes, resolve_path},
     ty::{
         const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
-        effects::{EffectKeyKind, effect_key_kind, place_effect_provider_param_index_map},
+        effects::{
+            EffectKeyKind, ResolvedEffectKey, place_effect_provider_param_index_map,
+            resolve_effect_key,
+        },
         fold::{TyFoldable, TyFolder},
+        layout_holes::collect_layout_hole_tys_in_order,
         trait_def::TraitInstId,
         trait_resolution::{
             PredicateListId,
-            constraint::{collect_constraints, collect_func_def_constraints},
+            constraint::{
+                collect_constraints, collect_func_decl_constraints, collect_func_def_constraints,
+            },
         },
         ty_contains_const_hole,
         ty_def::{InvalidCause, TyData, TyId, TyVarSort},
@@ -36,6 +42,7 @@ use crate::analysis::{
         unify::UnificationTable,
     },
 };
+use crate::core::semantic::EffectBinding;
 
 pub(super) struct TyCheckEnv<'db> {
     db: &'db dyn HirAnalysisDb,
@@ -106,7 +113,7 @@ impl<'db> TyCheckEnv<'db> {
                 };
                 if let Some(func) = containing_func {
                     let mut preds =
-                        collect_func_def_constraints(db, func.into(), true).instantiate_identity();
+                        collect_func_decl_constraints(db, func.into(), true).instantiate_identity();
                     if let Some(ItemKind::Trait(trait_)) = func.scope().parent_item(db) {
                         let self_pred = TraitInstId::new(
                             db,
@@ -267,7 +274,7 @@ impl<'db> TyCheckEnv<'db> {
                 if self.parent_contract_for_func(func).is_some() {
                     self.seed_contract_effects(base_assumptions)
                 } else {
-                    self.seed_func_effects(func, base_assumptions)
+                    self.seed_func_effects(func)
                 }
             }
             BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => {}
@@ -276,25 +283,14 @@ impl<'db> TyCheckEnv<'db> {
         }
     }
 
-    fn seed_func_effects(&mut self, func: Func<'db>, base_assumptions: PredicateListId<'db>) {
+    fn seed_func_effects(&mut self, func: Func<'db>) {
         let provider_map = place_effect_provider_param_index_map(self.db, func);
         let provider_params = CallableDef::Func(func).params(self.db);
-        let resolved_effect_key_tys: FxHashMap<usize, TyId<'db>> = func
-            .effect_bindings(self.db)
-            .iter()
-            .filter_map(|binding| binding.key_ty.map(|ty| (binding.binding_idx as usize, ty)))
-            .collect();
-
-        for effect in func.effect_params(self.db) {
-            let idx = effect.index();
-            let Some(key_path) = effect.key_path(self.db) else {
-                continue;
-            };
-
-            let kind = effect_key_kind(self.db, key_path, func.scope());
-            if !matches!(kind, EffectKeyKind::Type | EffectKeyKind::Trait) {
+        for binding in func.effect_bindings(self.db) {
+            if !matches!(binding.key_kind, EffectKeyKind::Type | EffectKeyKind::Trait) {
                 continue;
             }
+            let idx = binding.binding_idx as usize;
 
             let Some(provider_param_idx) = provider_map.get(idx).copied().flatten() else {
                 panic!("missing provider param for effect at index {idx}");
@@ -303,45 +299,42 @@ impl<'db> TyCheckEnv<'db> {
                 panic!("provider param index {provider_param_idx} out of range");
             };
 
-            let provided_ty = match kind {
+            let provided_ty = match binding.key_kind {
                 EffectKeyKind::Trait => provider_ty,
-                EffectKeyKind::Type => resolved_effect_key_tys
-                    .get(&idx)
-                    .copied()
+                EffectKeyKind::Type => binding
+                    .key_ty
                     .unwrap_or_else(|| TyId::invalid(self.db, InvalidCause::Other)),
                 EffectKeyKind::Other => unreachable!(),
             };
 
-            let binding_ident = effect
-                .name(self.db)
-                .or_else(|| key_path.ident(self.db).to_opt());
-            let binding = LocalBinding::EffectParam {
+            let local_binding = LocalBinding::EffectParam {
                 site: EffectParamSite::Func(func),
                 idx,
-                key_path,
-                is_mut: effect.is_mut(self.db),
+                key_path: binding.binding_path,
+                is_mut: binding.is_mut,
             };
-            if let Some(ident) = binding_ident {
+            if let Some(ident) = Some(binding.binding_name) {
                 self.var_env
                     .last_mut()
                     .expect("function scope exists")
-                    .register_var(ident, binding);
+                    .register_var(ident, local_binding);
             }
 
             let origin = EffectOrigin::Param {
                 site: EffectParamSite::Func(func),
                 index: idx,
-                name: effect.name(self.db),
+                name: func
+                    .effect_params(self.db)
+                    .nth(idx)
+                    .and_then(|effect| effect.name(self.db)),
             };
             let provided = ProvidedEffect {
                 origin,
                 ty: provided_ty,
-                is_mut: effect.is_mut(self.db),
-                binding: Some(binding),
+                is_mut: local_binding.is_mut(),
+                binding: Some(local_binding),
             };
-            if let Some(key) =
-                self.effect_key_for_path_in_scope(key_path, func.scope(), base_assumptions)
-            {
+            if let Some(key) = effect_key_from_binding(self.db, binding) {
                 self.effect_env.insert(key, provided);
             }
         }
@@ -582,7 +575,6 @@ impl<'db> TyCheckEnv<'db> {
     ) -> Option<TyId<'db>> {
         let contract = self.contract_from_site(site)?;
         let ident = key_path.ident(self.db).to_opt()?;
-
         let ty = contract
             .fields(self.db)
             .get(&ident)
@@ -1045,6 +1037,161 @@ impl<'db> TyCheckEnv<'db> {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use camino::Utf8PathBuf;
+
+    use super::*;
+    use crate::analysis::ty::layout_holes::{
+        collect_layout_hole_tys_in_order, ty_contains_const_hole,
+    };
+    use crate::test_db::HirAnalysisTestDb;
+
+    fn find_func<'db>(
+        db: &'db HirAnalysisTestDb,
+        top_mod: crate::hir_def::TopLevelMod<'db>,
+        func_name: &str,
+    ) -> crate::hir_def::Func<'db> {
+        top_mod
+            .children_non_nested(db)
+            .find_map(|item| match item {
+                ItemKind::Func(func)
+                    if func
+                        .name(db)
+                        .to_opt()
+                        .is_some_and(|name| name.data(db) == func_name) =>
+                {
+                    Some(func)
+                }
+                _ => None,
+            })
+            .expect("missing function")
+    }
+
+    fn seeded_env<'db>(db: &'db HirAnalysisTestDb, func: Func<'db>) -> TyCheckEnv<'db> {
+        TyCheckEnv::new(db, BodyOwner::Func(func)).expect("function body should lower")
+    }
+
+    fn assert_hole_free_effect_key<'db>(db: &'db HirAnalysisTestDb, key: EffectKey<'db>) {
+        match key {
+            EffectKey::Type(ty) => assert!(
+                !ty_contains_const_hole(db, ty),
+                "seeded effect type key should be hole-free"
+            ),
+            EffectKey::Trait(trait_inst) => assert!(
+                collect_layout_hole_tys_in_order(db, trait_inst).is_empty(),
+                "seeded effect trait key should be hole-free"
+            ),
+        }
+    }
+
+    #[test]
+    fn seed_func_effects_uses_canonical_distinct_callable_type_keys() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from("seed_func_effects_uses_canonical_distinct_callable_type_keys.fe"),
+            r#"
+struct Slot<const ROOT: u256 = _> {}
+
+fn f() uses (a: Slot, b: Slot) {}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+        let func = find_func(&db, top_mod, "f");
+        let env = seeded_env(&db, func);
+        let frame = env
+            .effect_env
+            .frames
+            .last()
+            .expect("missing root effect frame");
+        let expected_keys: Vec<_> = func
+            .effect_bindings(&db)
+            .iter()
+            .map(|binding| effect_key_from_binding(&db, binding).expect("missing canonical key"))
+            .collect();
+
+        assert_eq!(frame.bindings.len(), 2);
+        assert_eq!(expected_keys.len(), 2);
+        assert_ne!(expected_keys[0], expected_keys[1]);
+        for key in expected_keys {
+            assert_hole_free_effect_key(&db, key);
+            assert!(frame.bindings.contains_key(&key));
+        }
+    }
+
+    #[test]
+    fn seed_func_effects_uses_canonical_assoc_type_keys() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from("seed_func_effects_uses_canonical_assoc_type_keys.fe"),
+            r#"
+trait HasSlot {
+    type Assoc
+}
+
+struct Slot<const ROOT: u256 = _> {}
+
+fn f<T>() uses (slot: T::Assoc)
+where
+    T: HasSlot<Assoc = Slot<u256>>
+{}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+        let func = find_func(&db, top_mod, "f");
+        let env = seeded_env(&db, func);
+        let frame = env
+            .effect_env
+            .frames
+            .last()
+            .expect("missing root effect frame");
+        let binding = &func.effect_bindings(&db)[0];
+        let expected_key = effect_key_from_binding(&db, binding).expect("missing canonical key");
+
+        assert_hole_free_effect_key(&db, expected_key);
+        assert_eq!(frame.bindings.len(), 1);
+        assert!(frame.bindings.contains_key(&expected_key));
+        assert_eq!(
+            expected_key,
+            EffectKey::Type(binding.key_ty.expect("missing type key"))
+        );
+    }
+
+    #[test]
+    fn seed_func_effects_uses_canonical_trait_keys() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from("seed_func_effects_uses_canonical_trait_keys.fe"),
+            r#"
+trait Cap<const LEFT: u256 = _, const RIGHT: u256 = _> {}
+
+fn f() uses (cap: Cap) {}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+        let func = find_func(&db, top_mod, "f");
+        let env = seeded_env(&db, func);
+        let frame = env
+            .effect_env
+            .frames
+            .last()
+            .expect("missing root effect frame");
+        let binding = &func.effect_bindings(&db)[0];
+        let expected_key = effect_key_from_binding(&db, binding).expect("missing canonical key");
+
+        assert_hole_free_effect_key(&db, expected_key);
+        assert_eq!(frame.bindings.len(), 1);
+        assert!(frame.bindings.contains_key(&expected_key));
+        assert_eq!(
+            expected_key,
+            EffectKey::Trait(binding.key_trait.expect("missing trait key"))
+        );
+    }
+}
+
 pub(super) struct BlockEnv<'db> {
     pub(super) scope: ScopeId<'db>,
     pub(super) vars: FxHashMap<IdentId<'db>, LocalBinding<'db>>,
@@ -1079,6 +1226,31 @@ pub(super) enum EffectKey<'db> {
     Type(TyId<'db>),
     /// A trait with type arguments (e.g., `SomeTrait<u8>`)
     Trait(TraitInstId<'db>),
+}
+
+fn effect_key_from_binding<'db>(
+    db: &'db dyn HirAnalysisDb,
+    binding: &EffectBinding<'db>,
+) -> Option<EffectKey<'db>> {
+    match binding.key_kind {
+        EffectKeyKind::Type => {
+            let ty = binding.key_ty?;
+            debug_assert!(
+                !ty_contains_const_hole(db, ty) || ty.has_invalid(db),
+                "canonical function effect type key still contains unresolved layout holes"
+            );
+            Some(EffectKey::Type(ty))
+        }
+        EffectKeyKind::Trait => {
+            let trait_inst = binding.key_trait?;
+            debug_assert!(
+                collect_layout_hole_tys_in_order(db, trait_inst).is_empty(),
+                "canonical function effect trait key still contains unresolved layout holes"
+            );
+            Some(EffectKey::Trait(trait_inst))
+        }
+        EffectKeyKind::Other => None,
+    }
 }
 
 #[derive(Default)]
@@ -1477,14 +1649,10 @@ impl<'db> TyCheckEnv<'db> {
         scope: ScopeId<'db>,
         assumptions: PredicateListId<'db>,
     ) -> Option<EffectKey<'db>> {
-        let path_res = resolve_path(self.db, key_path, scope, assumptions, false).ok()?;
-        match path_res {
-            PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {
-                // Use the full TyId which includes generic arguments
-                Some(EffectKey::Type(ty))
-            }
-            PathRes::Trait(trait_inst) => Some(EffectKey::Trait(trait_inst)),
-            _ => None,
+        match resolve_effect_key(self.db, key_path, scope, assumptions) {
+            ResolvedEffectKey::Type(ty) => Some(EffectKey::Type(ty)),
+            ResolvedEffectKey::Trait(trait_inst) => Some(EffectKey::Trait(trait_inst)),
+            ResolvedEffectKey::Other => None,
         }
     }
 }

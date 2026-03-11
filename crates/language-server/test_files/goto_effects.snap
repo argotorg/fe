@@ -1,6 +1,5 @@
 ---
 source: crates/language-server/src/functionality/goto.rs
-assertion_line: 448
 expression: snapshot
 input_file: test_files/goto_effects.fe
 ---
@@ -68,7 +67,7 @@ note:
    ┌─ goto_effects.fe:37:12
    │
 37 │     return ctx.caller()
-   │            ^^^ -> local: __effprov0
+   │            ^^^ -> local: ctx
 
 note: 
    ┌─ goto_effects.fe:40:48
@@ -122,7 +121,7 @@ note:
    ┌─ goto_effects.fe:46:19
    │
 46 │     let c: u256 = ctx.caller()
-   │                   ^^^ -> local: __effprov0
+   │                   ^^^ -> local: ctx
 
 note: 
    ┌─ goto_effects.fe:47:5
@@ -194,7 +193,7 @@ note:
    ┌─ goto_effects.fe:63:32
    │
 63 │         let caller_val: u256 = ctx.caller()
-   │                                ^^^ -> local: __effprov0
+   │                                ^^^ -> local: ctx
 
 note: 
    ┌─ goto_effects.fe:64:16

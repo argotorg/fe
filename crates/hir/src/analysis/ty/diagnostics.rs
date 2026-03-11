@@ -122,9 +122,10 @@ pub enum TyLowerDiag<'db> {
         given: TyId<'db>,
     },
 
-    /// Layout holes (`_`) are only allowed in effect positions.
+    /// Layout holes (`_`) are only allowed in callable input types and contract fields.
     ConstHoleInValuePosition {
         span: DynLazySpan<'db>,
+        ty: TyId<'db>,
     },
 
     /// `own` parameters must have owned types. Borrow-handle types (`mut`/`ref`) are not owned.
