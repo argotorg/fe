@@ -25,6 +25,11 @@ use hir::hir_def::{
     FieldIndex, Func, HirIngot, IdentId, ItemKind, LitKind, MatchArm, Partial, Pat, PatId, Stmt,
     StmtId, TopLevelMod, VariantKind,
 };
+use hir::hir_def::{
+    ArithmeticMode, Attr, AttrArg, AttrArgValue, Body, CallableDef, Cond, CondId, Const, Expr,
+    ExprId, Field, FieldIndex, Func, HirIngot, IdentId, ItemKind, LitKind, MatchArm, Partial, Pat,
+    PatId, Stmt, StmtId, TopLevelMod, VariantKind, expr::BinOp,
+};
 
 use crate::{
     capability_space::{
@@ -619,6 +624,7 @@ pub(crate) fn lower_function<'db>(
 pub(super) struct MirBuilder<'db, 'a> {
     pub(super) db: &'db dyn SpannedHirAnalysisDb,
     pub(super) hir_func: Option<Func<'db>>,
+    pub(super) arithmetic_mode: ArithmeticMode,
     pub(super) body: Body<'db>,
     pub(super) typed_body: &'a TypedBody<'db>,
     pub(super) generic_args: &'a [TyId<'db>],
@@ -705,10 +711,20 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         param_capability_space_overrides: &[Vec<(MirProjectionPath<'db>, AddressSpaceKind)>],
     ) -> Result<Self, MirLowerError> {
         let core = CoreLib::new(db, body.scope());
+        let arithmetic_mode = hir_func
+            .map(|func| {
+                ItemKind::Func(func)
+                    .attrs(db)
+                    .expect("functions always have an attribute list")
+                    .arithmetic_mode(db)
+                    .unwrap_or(ArithmeticMode::Checked)
+            })
+            .unwrap_or(ArithmeticMode::Checked);
 
         let mut builder = Self {
             db,
             hir_func,
+            arithmetic_mode,
             body,
             typed_body,
             generic_args,

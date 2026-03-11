@@ -9,7 +9,9 @@ use common::{
     diagnostics::{CompleteDiagnostic, Severity, cmp_complete_diagnostics},
 };
 use hir::analysis::{
-    analysis_pass::{AnalysisPassManager, EventLowerPass, MsgLowerPass, ParsingPass},
+    analysis_pass::{
+        AnalysisPassManager, ArithmeticAttrPass, EventLowerPass, MsgLowerPass, ParsingPass,
+    },
     diagnostics::DiagnosticVoucher,
     name_resolution::ImportAnalysisPass,
     ty::{
@@ -154,6 +156,7 @@ fn sort_and_dedup_complete_diagnostics(diags: &mut Vec<CompleteDiagnostic>) {
 fn initialize_analysis_pass() -> AnalysisPassManager {
     let mut pass_manager = AnalysisPassManager::new();
     pass_manager.add_module_pass("Parsing", Box::new(ParsingPass {}));
+    pass_manager.add_module_pass("ArithmeticAttr", Box::new(ArithmeticAttrPass {}));
     pass_manager.add_module_pass("MsgLower", Box::new(MsgLowerPass {}));
     pass_manager.add_module_pass("EventLower", Box::new(EventLowerPass {}));
     pass_manager.add_module_pass("MsgSelector", Box::new(MsgSelectorAnalysisPass {}));

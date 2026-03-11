@@ -464,35 +464,15 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             }
             Partial::Present(Expr::Un(inner, op)) => {
                 let has_callable = self.typed_body.callable_expr(expr).is_some();
+                let unchecked_primitive_neg = matches!(op, hir::hir_def::expr::UnOp::Minus)
+                    && self.is_unchecked_primitive_neg(expr);
                 if matches!(op, hir::hir_def::expr::UnOp::Minus)
                     && let Some(value_id) = self.try_lower_negated_int_literal(expr, *inner)
                 {
                     return value_id;
                 }
-                // Checked arithmetic: unary minus with a callable (Neg::neg trait)
-                // uses call-based lowering for overflow detection.
-                if matches!(op, hir::hir_def::expr::UnOp::Minus) {
-                    let inner_ty = self
-                        .typed_body
-                        .expr_ty(self.db, *inner)
-                        .as_capability(self.db)
-                        .map(|(_, inner)| inner)
-                        .unwrap_or_else(|| self.typed_body.expr_ty(self.db, *inner));
-                    let is_const_minus = eval_const_expr(
-                        self.db,
-                        self.body,
-                        self.typed_body,
-                        self.generic_args,
-                        expr,
-                    )
-                    .ok()
-                    .flatten()
-                    .is_some();
-                    // When the core library is not available (standalone `.fe`
-                    // files), no callable is registered — allow unchecked fallback.
-                    let _ = inner_ty.is_integral(self.db) && !has_callable && !is_const_minus;
-                }
                 if matches!(op, hir::hir_def::expr::UnOp::Minus)
+                    && !unchecked_primitive_neg
                     && let Some(intrinsic) = self.direct_checked_intrinsic(
                         expr,
                         self.typed_body.expr_ty(self.db, *inner),
@@ -508,7 +488,10 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         self.coerce_primitive_operand_if_copy_capability(*inner, inner_value);
                     return self.lower_checked_intrinsic_expr(expr, vec![inner_value], intrinsic);
                 }
-                if matches!(op, hir::hir_def::expr::UnOp::Minus) && has_callable {
+                if matches!(op, hir::hir_def::expr::UnOp::Minus)
+                    && has_callable
+                    && !unchecked_primitive_neg
+                {
                     return self.lower_call_expr(expr);
                 }
 
@@ -585,29 +568,34 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 self.lower_range_expr(expr, *lhs, *rhs)
             }
             Partial::Present(Expr::Bin(lhs, rhs, op)) => {
-                if let Some((expected_name, checked_op)) = match op {
-                    BinOp::Arith(ArithBinOp::Add) => {
-                        Some(("add", crate::ir::CheckedArithmeticOp::Add))
+                let unchecked_primitive_arith =
+                    self.is_unchecked_primitive_binary_op(*lhs, *rhs, *op);
+                if !unchecked_primitive_arith
+                    && let Some((expected_name, checked_op)) = match op {
+                        BinOp::Arith(ArithBinOp::Add) => {
+                            Some(("add", crate::ir::CheckedArithmeticOp::Add))
+                        }
+                        BinOp::Arith(ArithBinOp::Sub) => {
+                            Some(("sub", crate::ir::CheckedArithmeticOp::Sub))
+                        }
+                        BinOp::Arith(ArithBinOp::Mul) => {
+                            Some(("mul", crate::ir::CheckedArithmeticOp::Mul))
+                        }
+                        BinOp::Arith(ArithBinOp::Div) => {
+                            Some(("div", crate::ir::CheckedArithmeticOp::Div))
+                        }
+                        BinOp::Arith(ArithBinOp::Rem) => {
+                            Some(("rem", crate::ir::CheckedArithmeticOp::Rem))
+                        }
+                        _ => None,
                     }
-                    BinOp::Arith(ArithBinOp::Sub) => {
-                        Some(("sub", crate::ir::CheckedArithmeticOp::Sub))
-                    }
-                    BinOp::Arith(ArithBinOp::Mul) => {
-                        Some(("mul", crate::ir::CheckedArithmeticOp::Mul))
-                    }
-                    BinOp::Arith(ArithBinOp::Div) => {
-                        Some(("div", crate::ir::CheckedArithmeticOp::Div))
-                    }
-                    BinOp::Arith(ArithBinOp::Rem) => {
-                        Some(("rem", crate::ir::CheckedArithmeticOp::Rem))
-                    }
-                    _ => None,
-                } && let Some(intrinsic) = self.direct_checked_intrinsic(
-                    expr,
-                    self.typed_body.expr_ty(self.db, *lhs),
-                    expected_name,
-                    checked_op,
-                ) {
+                    && let Some(intrinsic) = self.direct_checked_intrinsic(
+                        expr,
+                        self.typed_body.expr_ty(self.db, *lhs),
+                        expected_name,
+                        checked_op,
+                    )
+                {
                     let lhs_value = self.lower_expr(*lhs);
                     let rhs_value = self.lower_expr(*rhs);
                     if self.current_block().is_none() {
@@ -657,7 +645,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     // nothing — fall through to unchecked raw-binary in that case.
                     let _ = primitive_operands;
                 }
-                if critical_primitive_op && has_callable {
+                if critical_primitive_op && has_callable && !unchecked_primitive_arith {
                     self.lower_call_expr(expr)
                 } else if self.needs_op_trait_call(expr) {
                     self.lower_call_expr_inner(expr, None, None)
@@ -778,6 +766,62 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
 
         Some(crate::ir::CheckedIntrinsic { op, ty: operand_ty })
+    }
+
+    fn arithmetic_is_unchecked(&self) -> bool {
+        self.arithmetic_mode == hir::hir_def::ArithmeticMode::Unchecked
+    }
+
+    fn expr_primitive_integral_ty(&self, expr: ExprId) -> Option<PrimTy> {
+        let expr_ty = self
+            .typed_body
+            .expr_ty(self.db, expr)
+            .as_capability(self.db)
+            .map(|(_, inner)| inner)
+            .unwrap_or_else(|| self.typed_body.expr_ty(self.db, expr));
+        let TyData::TyBase(TyBase::Prim(prim)) = expr_ty.base_ty(self.db).data(self.db) else {
+            return None;
+        };
+        prim.is_integral().then_some(*prim)
+    }
+
+    fn is_signed_primitive_int(prim: PrimTy) -> bool {
+        matches!(
+            prim,
+            PrimTy::I8
+                | PrimTy::I16
+                | PrimTy::I32
+                | PrimTy::I64
+                | PrimTy::I128
+                | PrimTy::I256
+                | PrimTy::Isize
+        )
+    }
+
+    fn is_unchecked_primitive_neg(&self, expr: ExprId) -> bool {
+        self.arithmetic_is_unchecked()
+            && self
+                .expr_primitive_integral_ty(expr)
+                .is_some_and(Self::is_signed_primitive_int)
+    }
+
+    fn is_unchecked_primitive_binary_op(&self, lhs: ExprId, rhs: ExprId, op: BinOp) -> bool {
+        self.arithmetic_is_unchecked()
+            && matches!(
+                op,
+                BinOp::Arith(
+                    ArithBinOp::Add
+                        | ArithBinOp::Sub
+                        | ArithBinOp::Mul
+                        | ArithBinOp::Div
+                        | ArithBinOp::Rem
+                        | ArithBinOp::Pow
+                )
+            )
+            && matches!(
+                (self.expr_primitive_integral_ty(lhs), self.expr_primitive_integral_ty(rhs)),
+                (Some(lhs), Some(rhs)) if lhs == rhs
+            )
     }
 
     fn call_expected_arg_tys(&self, callable: &Callable<'db>) -> Vec<TyId<'db>> {
@@ -2577,7 +2621,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let updated = if matches!(
             op,
             ArithBinOp::Add | ArithBinOp::Sub | ArithBinOp::Mul | ArithBinOp::Div | ArithBinOp::Rem
-        ) {
+        ) && self.arithmetic_mode == hir::hir_def::ArithmeticMode::Checked
+        {
             let checked_op = match op {
                 ArithBinOp::Add => crate::ir::CheckedArithmeticOp::Add,
                 ArithBinOp::Sub => crate::ir::CheckedArithmeticOp::Sub,
@@ -2635,6 +2680,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         rhs_value: ValueId,
         op: hir::hir_def::expr::ArithBinOp,
     ) -> bool {
+        if self.is_unchecked_primitive_aug_assign(target, op) {
+            self.lower_aug_assign_to_lvalue(stmt_id, target, rhs_value, op);
+            return true;
+        }
+
         // When the core library is not available (standalone `.fe` files),
         // no callable is registered — fall back to unchecked raw binary.
         let Some(callable) = self.typed_body.callable_expr(expr).cloned() else {
@@ -2647,6 +2697,20 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
         self.lower_aug_assign_to_lvalue(stmt_id, target, rhs_value, op);
         true
+    }
+
+    fn is_unchecked_primitive_aug_assign(&self, target: ExprId, op: ArithBinOp) -> bool {
+        self.arithmetic_is_unchecked()
+            && matches!(
+                op,
+                ArithBinOp::Add
+                    | ArithBinOp::Sub
+                    | ArithBinOp::Mul
+                    | ArithBinOp::Div
+                    | ArithBinOp::Rem
+                    | ArithBinOp::Pow
+            )
+            && self.expr_primitive_integral_ty(target).is_some()
     }
 
     fn lower_aug_assign_trait_call(

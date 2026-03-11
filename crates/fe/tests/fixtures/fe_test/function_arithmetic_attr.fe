@@ -1,0 +1,47 @@
+use std::evm::effects::assert
+
+#[test(should_revert)]
+fn checked_add_overflow_u8_reverts() {
+    let x: u8 = 255
+    let y: u8 = x + 1
+}
+
+#[arithmetic(unchecked)]
+#[test]
+fn unchecked_add_wraps_u8() {
+    let x: u8 = 255
+    let y: u8 = x + 1
+    assert(y == 0)
+}
+
+#[arithmetic(unchecked)]
+#[test]
+fn unchecked_aug_assign_wraps_u8() {
+    let mut x: u8 = 255
+    x += 1
+    assert(x == 0)
+}
+
+#[arithmetic(unchecked)]
+#[test]
+fn unchecked_div_zero_u8_returns_zero() {
+    let x: u8 = 1
+    let y: u8 = x / 0
+    assert(y == 0)
+}
+
+#[arithmetic(unchecked)]
+#[test]
+fn unchecked_pow_wraps_u8() {
+    let x: u8 = 2
+    let y: u8 = x ** 8
+    assert(y == 0)
+}
+
+#[arithmetic(unchecked)]
+#[test]
+fn unchecked_neg_wraps_i8() {
+    let x: i8 = -128
+    let y: i8 = -x
+    assert(y == -128)
+}

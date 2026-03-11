@@ -4,6 +4,6 @@ expression: output
 input_file: tests/fixtures/bit_and.fe
 ---
 function $bit_and() -> ret {
-  ret := and(1, 2)
+  ret := and(and(and(1, 0xffffffffffffffff), and(2, 0xffffffffffffffff)), 0xffffffffffffffff)
   leave
 }
