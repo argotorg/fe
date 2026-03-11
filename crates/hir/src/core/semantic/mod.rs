@@ -172,6 +172,13 @@ impl<'db> Func<'db> {
             scope = module_scope.parent_module(db);
         }
 
+        if let Some(mode) = self.top_mod(db).ingot(db).arithmetic_mode(db) {
+            return match mode {
+                common::config::ArithmeticMode::Checked => ArithmeticMode::Checked,
+                common::config::ArithmeticMode::Unchecked => ArithmeticMode::Unchecked,
+            };
+        }
+
         ArithmeticMode::Checked
     }
 

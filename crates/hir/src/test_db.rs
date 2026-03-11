@@ -37,7 +37,7 @@ use codespan_reporting::{
 };
 use common::{
     InputDb, define_input_db,
-    diagnostics::{LabelStyle, Severity, Span, cmp_complete_diagnostics},
+    diagnostics::{LabelStyle, Severity, cmp_complete_diagnostics},
     file::File,
     indexmap::IndexMap,
     paths::absolute_utf8,
@@ -258,16 +258,24 @@ impl<'db> HirPropertyFormatter<'db> {
                 continue;
             }
 
-            let diags = self.properties[top_mod]
-                .iter()
-                .map(|(prop, span)| {
-                    let (span, diag) = self.property_to_diag(db, *top_mod, prop, span.clone());
-                    ((span.file, (span.range.start(), span.range.end())), diag)
-                })
-                .collect::<BTreeMap<_, _>>();
+            let diags =
+                self.properties[top_mod]
+                    .iter()
+                    .fold(BTreeMap::new(), |mut diags, (prop, span)| {
+                        let span = span.resolve(db).unwrap();
+                        diags
+                            .entry((span.file, span.range.start(), span.range.end()))
+                            .or_insert_with(Vec::new)
+                            .push(prop.clone());
+                        diags
+                    });
 
-            for diag in diags.values() {
-                term::emit(&mut buffer, &config, &self.code_span_files, diag).unwrap();
+            for ((_, start, end), mut props) in diags {
+                props.sort_unstable();
+                props.dedup();
+                let diag =
+                    self.property_to_diag(*top_mod, &props.join(" | "), start.into()..end.into());
+                term::emit(&mut buffer, &config, &self.code_span_files, &diag).unwrap();
             }
         }
 
@@ -276,16 +284,12 @@ impl<'db> HirPropertyFormatter<'db> {
 
     fn property_to_diag(
         &self,
-        db: &'db dyn SpannedHirDb,
         top_mod: TopLevelMod<'db>,
         prop: &str,
-        span: DynLazySpan<'db>,
-    ) -> (Span, Diagnostic<usize>) {
+        range: Range<usize>,
+    ) -> Diagnostic<usize> {
         let file_id = self.top_mod_to_file[&top_mod];
-        let span = span.resolve(db).unwrap();
-        let diag = Diagnostic::note()
-            .with_labels(vec![Label::primary(file_id, span.range).with_message(prop)]);
-        (span, diag)
+        Diagnostic::note().with_labels(vec![Label::primary(file_id, range).with_message(prop)])
     }
 
     pub fn register_top_mod(&mut self, path: &str, text: &str, top_mod: TopLevelMod<'db>) {

@@ -7,7 +7,7 @@ use url::Url;
 
 use crate::{
     InputDb,
-    config::{Config, IngotConfig},
+    config::{ArithmeticMode, Config, IngotConfig, WorkspaceConfig, resolve_arithmetic_mode},
     dependencies::DependencyLocation,
     file::{File, Workspace},
     stdlib::{BUILTIN_CORE_BASE_URL, BUILTIN_STD_BASE_URL},
@@ -137,6 +137,52 @@ impl<'db> Ingot<'db> {
     #[salsa::tracked]
     pub fn config_parse_error(self, db: &'db dyn InputDb) -> Option<String> {
         self.parse_config(db).and_then(|result| result.err())
+    }
+
+    #[salsa::tracked]
+    pub fn workspace_root(self, db: &'db dyn InputDb) -> Option<Url> {
+        db.dependency_graph()
+            .workspace_root_for_member(db, &self.base(db))
+    }
+
+    #[salsa::tracked]
+    pub fn workspace_config_file(self, db: &'db dyn InputDb) -> Option<File> {
+        let workspace_root = self.workspace_root(db)?;
+        let config_url = workspace_root.join("fe.toml").ok()?;
+        db.workspace().get(db, &config_url)
+    }
+
+    #[salsa::tracked]
+    fn parse_workspace_config(
+        self,
+        db: &'db dyn InputDb,
+    ) -> Option<Result<WorkspaceConfig, String>> {
+        self.workspace_config_file(db)
+            .map(|config_file| Config::parse(config_file.text(db)))
+            .map(|result| {
+                result.and_then(|config_file| match config_file {
+                    Config::Workspace(config) => Ok(*config),
+                    Config::Ingot(_) => {
+                        Err("Expected a workspace config but found an ingot config".to_string())
+                    }
+                })
+            })
+    }
+
+    #[salsa::tracked]
+    pub fn workspace_config(self, db: &'db dyn InputDb) -> Option<WorkspaceConfig> {
+        self.parse_workspace_config(db)
+            .and_then(|result| result.ok())
+    }
+
+    #[salsa::tracked]
+    pub fn arithmetic_mode(self, db: &'db dyn InputDb) -> Option<ArithmeticMode> {
+        let profile = db.compilation_settings().profile(db);
+        resolve_arithmetic_mode(
+            self.config(db).as_ref(),
+            self.workspace_config(db).as_ref(),
+            profile.as_str(),
+        )
     }
 
     #[salsa::tracked]

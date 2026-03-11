@@ -1,6 +1,6 @@
 ---
 source: crates/hir/tests/ty_check.rs
-assertion_line: 40
+assertion_line: 41
 expression: res
 input_file: test_files/ty_check/contract_recv_variants.fe
 ---
@@ -8,13 +8,13 @@ note:
    ┌─ contract_recv_variants.fe:11:5
    │
 11 │     Deposit { amount: u64 } -> u64,
-   │     ^^^^^^^ u64
+   │     ^^^^^^^ () | Deposit | fn decode<u64, Sol, D> | mut D | mut E | u64
 
 note: 
    ┌─ contract_recv_variants.fe:13:5
    │
 13 │     Withdraw { amount: u64 } -> bool,
-   │     ^^^^^^^^ u64
+   │     ^^^^^^^^ () | Withdraw | fn decode<u64, Sol, D> | mut D | mut E | u64
 
 note: 
    ┌─ contract_recv_variants.fe:26:82

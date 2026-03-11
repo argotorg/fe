@@ -29,6 +29,7 @@ use driver::DriverDataBase;
 use hir::hir_def::{HirIngot, TopLevelMod, item::ItemKind};
 use mir::{fmt as mir_fmt, lower_module};
 use rustc_hash::{FxHashMap, FxHashSet};
+use salsa::Setter;
 use solc_runner::compile_single_contract_with_solc;
 use std::{
     fmt::Write as _,
@@ -665,6 +666,7 @@ struct SuitePreparation {
 struct WorkerSharedConfig {
     show_logs: bool,
     backend: String,
+    profile: String,
     yul_optimize: bool,
     solc: Option<String>,
     opt_level: OptLevel,
@@ -1162,6 +1164,7 @@ pub fn run_tests(
     grouped: bool,
     show_logs: bool,
     backend: &str,
+    profile: &str,
     yul_optimize: bool,
     solc: Option<&str>,
     opt_level: OptLevel,
@@ -1217,6 +1220,7 @@ pub fn run_tests(
     let shared = Arc::new(WorkerSharedConfig {
         show_logs,
         backend: backend.to_string(),
+        profile: profile.to_string(),
         yul_optimize,
         solc: solc.map(str::to_owned),
         opt_level,
@@ -1823,6 +1827,9 @@ fn prepare_suite_job(
 
     let build_started = Instant::now();
     let mut db = DriverDataBase::default();
+    db.compilation_settings()
+        .set_profile(&mut db)
+        .to(shared.profile.clone().into());
     let prep = if plan.path.is_file() && plan.path.extension() == Some("fe") {
         prepare_tests_single_file(
             &mut db,

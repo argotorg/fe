@@ -1,9 +1,14 @@
+use std::collections::BTreeMap;
+
 use smol_str::SmolStr;
 use toml::Value;
 
 use crate::ingot::Version;
 
-use super::{ConfigDiagnostic, dependency, is_valid_name};
+use super::{
+    ArithmeticMode, ConfigDiagnostic, ProfileSettings, dependency, is_valid_name,
+    parse_arithmetic_field, parse_profiles_table,
+};
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Hash)]
 pub struct IngotMetadata {
@@ -14,6 +19,8 @@ pub struct IngotMetadata {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IngotConfig {
     pub metadata: IngotMetadata,
+    pub arithmetic: Option<ArithmeticMode>,
+    pub profiles: BTreeMap<SmolStr, ProfileSettings>,
     pub dependency_entries: Vec<dependency::DependencyEntry>,
     pub diagnostics: Vec<ConfigDiagnostic>,
 }
@@ -21,21 +28,34 @@ pub struct IngotConfig {
 impl IngotConfig {
     pub fn parse_from_value(parsed: &Value) -> Self {
         let mut diagnostics = Vec::new();
-        let metadata = parse_ingot(parsed, &mut diagnostics);
+        let (metadata, arithmetic) = parse_ingot(parsed, &mut diagnostics);
+        let profiles = parsed
+            .as_table()
+            .map(|table| parse_profiles_table(table, &mut diagnostics))
+            .unwrap_or_default();
         let dependency_entries = dependency::parse_root_dependencies(parsed, &mut diagnostics);
         Self {
             metadata,
+            arithmetic,
+            profiles,
             dependency_entries,
             diagnostics,
         }
+    }
+
+    pub fn arithmetic_for_profile(&self, profile: &str) -> Option<ArithmeticMode> {
+        self.profiles
+            .get(profile)
+            .and_then(|settings| settings.arithmetic)
     }
 }
 
 pub(crate) fn parse_ingot(
     parsed: &Value,
     diagnostics: &mut Vec<ConfigDiagnostic>,
-) -> IngotMetadata {
+) -> (IngotMetadata, Option<ArithmeticMode>) {
     let mut metadata = IngotMetadata::default();
+    let mut arithmetic = None;
 
     let table = match parsed.get("ingot").and_then(|value| value.as_table()) {
         Some(table) => Some(table),
@@ -65,9 +85,11 @@ pub(crate) fn parse_ingot(
         } else {
             diagnostics.push(ConfigDiagnostic::MissingVersion);
         }
+
+        arithmetic = parse_arithmetic_field("ingot", table, diagnostics);
     } else {
         diagnostics.push(ConfigDiagnostic::MissingIngotMetadata);
     }
 
-    metadata
+    (metadata, arithmetic)
 }

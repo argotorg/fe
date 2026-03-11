@@ -1,4 +1,4 @@
-use std::fmt::Display;
+use std::{collections::BTreeMap, fmt::Display};
 
 use smol_str::SmolStr;
 use toml::Value;
@@ -18,6 +18,30 @@ pub use ingot::{IngotConfig, IngotMetadata};
 pub use workspace::{
     WorkspaceConfig, WorkspaceMemberSelection, WorkspaceResolution, WorkspaceSettings,
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ArithmeticMode {
+    Checked,
+    Unchecked,
+}
+
+impl ArithmeticMode {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "checked" => Some(Self::Checked),
+            "unchecked" => Some(Self::Unchecked),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ProfileSettings {
+    pub arithmetic: Option<ArithmeticMode>,
+    pub extra: toml::value::Table,
+}
+
+impl Eq for ProfileSettings {}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Config {
@@ -60,7 +84,6 @@ pub fn looks_like_workspace(parsed: &Value) -> bool {
         || table.contains_key("default-members")
         || table.contains_key("exclude")
         || table.contains_key("resolution")
-        || table.contains_key("profiles")
         || table.contains_key("scripts")
 }
 
@@ -152,6 +175,10 @@ pub enum ConfigDiagnostic {
         alias: SmolStr,
         value: SmolStr,
     },
+    InvalidArithmeticMode {
+        field: SmolStr,
+        value: SmolStr,
+    },
     UnexpectedTomlData {
         field: SmolStr,
         found: SmolStr,
@@ -219,6 +246,10 @@ impl Display for ConfigDiagnostic {
                 f,
                 "The dependency \"{alias}\" has an invalid source \"{value}\""
             ),
+            Self::InvalidArithmeticMode { field, value } => write!(
+                f,
+                "Invalid arithmetic mode \"{value}\" in field {field}; expected \"checked\" or \"unchecked\""
+            ),
             Self::UnexpectedTomlData {
                 field,
                 found,
@@ -276,6 +307,90 @@ pub(crate) fn parse_string_array_field(
             vec![]
         }
     }
+}
+
+pub(crate) fn parse_arithmetic_field(
+    parent: &str,
+    table: &toml::value::Table,
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+) -> Option<ArithmeticMode> {
+    let value = table.get("arithmetic")?;
+    let field = if parent.is_empty() {
+        SmolStr::new("arithmetic")
+    } else {
+        SmolStr::new(format!("{parent}.arithmetic"))
+    };
+    let Some(value) = value.as_str() else {
+        diagnostics.push(ConfigDiagnostic::UnexpectedTomlData {
+            field,
+            found: value.type_str().to_lowercase().into(),
+            expected: Some("string".into()),
+        });
+        return None;
+    };
+    match ArithmeticMode::parse(value) {
+        Some(mode) => Some(mode),
+        None => {
+            diagnostics.push(ConfigDiagnostic::InvalidArithmeticMode {
+                field,
+                value: value.into(),
+            });
+            None
+        }
+    }
+}
+
+pub(crate) fn parse_profiles_table(
+    table: &toml::value::Table,
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+) -> BTreeMap<SmolStr, ProfileSettings> {
+    let Some(value) = table.get("profiles") else {
+        return BTreeMap::new();
+    };
+    let Some(entries) = value.as_table() else {
+        diagnostics.push(ConfigDiagnostic::UnexpectedTomlData {
+            field: "profiles".into(),
+            found: value.type_str().to_lowercase().into(),
+            expected: Some("table".into()),
+        });
+        return BTreeMap::new();
+    };
+
+    let mut profiles = BTreeMap::new();
+    for (name, value) in entries {
+        let Some(profile_table) = value.as_table() else {
+            diagnostics.push(ConfigDiagnostic::UnexpectedTomlData {
+                field: format!("profiles.{name}").into(),
+                found: value.type_str().to_lowercase().into(),
+                expected: Some("table".into()),
+            });
+            continue;
+        };
+
+        let arithmetic =
+            parse_arithmetic_field(&format!("profiles.{name}"), profile_table, diagnostics);
+        let mut extra = profile_table.clone();
+        extra.remove("arithmetic");
+        profiles.insert(name.clone().into(), ProfileSettings { arithmetic, extra });
+    }
+    profiles
+}
+
+pub fn resolve_arithmetic_mode(
+    ingot: Option<&IngotConfig>,
+    workspace: Option<&WorkspaceConfig>,
+    profile: &str,
+) -> Option<ArithmeticMode> {
+    ingot
+        .and_then(|config| config.arithmetic_for_profile(profile).or(config.arithmetic))
+        .or_else(|| {
+            workspace.and_then(|config| {
+                config
+                    .workspace
+                    .arithmetic_for_profile(profile)
+                    .or(config.workspace.arithmetic)
+            })
+        })
 }
 
 fn format_field_path(parent: &str, key: &str) -> String {
@@ -432,5 +547,93 @@ util = "0.1.0"
             dependency.location,
             DependencyLocation::WorkspaceCurrent
         ));
+    }
+
+    #[test]
+    fn resolves_arithmetic_mode_with_ingot_profile_precedence() {
+        let ingot = IngotConfig {
+            metadata: IngotMetadata::default(),
+            arithmetic: Some(ArithmeticMode::Unchecked),
+            profiles: BTreeMap::from([(
+                SmolStr::new("release"),
+                ProfileSettings {
+                    arithmetic: Some(ArithmeticMode::Checked),
+                    extra: toml::value::Table::new(),
+                },
+            )]),
+            dependency_entries: vec![],
+            diagnostics: vec![],
+        };
+        let workspace = WorkspaceConfig {
+            workspace: WorkspaceSettings {
+                arithmetic: Some(ArithmeticMode::Checked),
+                profiles: BTreeMap::from([(
+                    SmolStr::new("release"),
+                    ProfileSettings {
+                        arithmetic: Some(ArithmeticMode::Unchecked),
+                        extra: toml::value::Table::new(),
+                    },
+                )]),
+                ..WorkspaceSettings::default()
+            },
+            diagnostics: vec![],
+        };
+
+        assert_eq!(
+            resolve_arithmetic_mode(Some(&ingot), Some(&workspace), "release"),
+            Some(ArithmeticMode::Checked)
+        );
+        assert_eq!(
+            resolve_arithmetic_mode(Some(&ingot), Some(&workspace), "dev"),
+            Some(ArithmeticMode::Unchecked)
+        );
+    }
+
+    #[test]
+    fn resolves_arithmetic_mode_from_workspace_when_ingot_has_no_override() {
+        let workspace = WorkspaceConfig {
+            workspace: WorkspaceSettings {
+                arithmetic: Some(ArithmeticMode::Unchecked),
+                profiles: BTreeMap::from([(
+                    SmolStr::new("release"),
+                    ProfileSettings {
+                        arithmetic: Some(ArithmeticMode::Checked),
+                        extra: toml::value::Table::new(),
+                    },
+                )]),
+                ..WorkspaceSettings::default()
+            },
+            diagnostics: vec![],
+        };
+
+        assert_eq!(
+            resolve_arithmetic_mode(None, Some(&workspace), "release"),
+            Some(ArithmeticMode::Checked)
+        );
+        assert_eq!(
+            resolve_arithmetic_mode(None, Some(&workspace), "dev"),
+            Some(ArithmeticMode::Unchecked)
+        );
+        assert_eq!(resolve_arithmetic_mode(None, None, "dev"), None);
+    }
+
+    #[test]
+    fn parses_root_profiles_as_ingot_config() {
+        let toml = r#"
+[ingot]
+name = "root"
+version = "0.1.0"
+
+[profiles.release]
+arithmetic = "unchecked"
+"#;
+        let config = Config::parse(toml).expect("config parses");
+        let Config::Ingot(config) = config else {
+            panic!("expected ingot config");
+        };
+        assert_eq!(
+            config.arithmetic_for_profile("release"),
+            Some(ArithmeticMode::Unchecked)
+        );
     }
 }

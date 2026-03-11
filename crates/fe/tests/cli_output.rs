@@ -237,6 +237,37 @@ fn run_fe_main_impl(args: &[&str], cwd: Option<&Path>, extra_env: &[(&str, &str)
     }
 }
 
+fn write_temp_ingot(temp: &tempfile::TempDir, fe_toml: &str, lib_fe: &str) -> std::path::PathBuf {
+    let root = temp
+        .path()
+        .canonicalize()
+        .expect("canonicalize tempdir")
+        .join("ingot");
+    fs::create_dir_all(root.join("src")).expect("create ingot src");
+    fs::write(root.join("fe.toml"), fe_toml).expect("write fe.toml");
+    fs::write(root.join("src/lib.fe"), lib_fe).expect("write lib.fe");
+    root
+}
+
+fn write_temp_workspace(
+    temp: &tempfile::TempDir,
+    workspace_toml: &str,
+    member_toml: &str,
+    lib_fe: &str,
+) -> std::path::PathBuf {
+    let root = temp
+        .path()
+        .canonicalize()
+        .expect("canonicalize tempdir")
+        .join("workspace");
+    let member = root.join("ingots/app");
+    fs::create_dir_all(member.join("src")).expect("create workspace member src");
+    fs::write(root.join("fe.toml"), workspace_toml).expect("write workspace fe.toml");
+    fs::write(member.join("fe.toml"), member_toml).expect("write member fe.toml");
+    fs::write(member.join("src/lib.fe"), lib_fe).expect("write member lib.fe");
+    root
+}
+
 #[cfg(unix)]
 fn write_fake_solc(temp: &tempfile::TempDir) -> std::path::PathBuf {
     use std::os::unix::fs::PermissionsExt;
@@ -761,6 +792,149 @@ fn test_tree_workspace_root_default_path() {
     let snapshot_path = root.join("tree_root_default_path.case");
     let (output, _) = run_fe_main_in_dir(&["tree"], &root);
     snap_test!(output, snapshot_path.to_str().unwrap());
+}
+
+#[test]
+fn test_cli_check_profile_selects_ingot_arithmetic() {
+    let temp = tempfile::Builder::new()
+        .prefix("fe-arithmetic-ingot-")
+        .tempdir()
+        .expect("tempdir");
+    let root = write_temp_ingot(
+        &temp,
+        r#"
+[ingot]
+name = "arith"
+version = "0.1.0"
+arithmetic = "checked"
+
+[profiles.dev]
+arithmetic = "unchecked"
+"#,
+        r#"
+pub fn add(x: u8, y: u8) -> u8 {
+    x + y
+}
+"#,
+    );
+
+    let (dev_output, dev_exit_code) = run_fe_main_in_dir(&["check", "--dump-mir"], &root);
+    assert_eq!(dev_exit_code, 0, "fe check failed:\n{dev_output}");
+    assert!(
+        dev_output.contains("ret (v0 + v1)"),
+        "expected unchecked MIR in dev profile:\n{dev_output}"
+    );
+
+    let (release_output, release_exit_code) =
+        run_fe_main_in_dir(&["check", "--dump-mir", "--profile", "release"], &root);
+    assert_eq!(
+        release_exit_code, 0,
+        "fe check --profile release failed:\n{release_output}"
+    );
+    assert!(
+        release_output.contains("checked_add<u8>"),
+        "expected checked MIR in release profile:\n{release_output}"
+    );
+}
+
+#[test]
+fn test_cli_check_profile_selects_workspace_arithmetic() {
+    let temp = tempfile::Builder::new()
+        .prefix("fe-arithmetic-workspace-")
+        .tempdir()
+        .expect("tempdir");
+    let root = write_temp_workspace(
+        &temp,
+        r#"
+[workspace]
+members = ["ingots/app"]
+arithmetic = "unchecked"
+
+[profiles.release]
+arithmetic = "checked"
+"#,
+        r#"
+[ingot]
+name = "app"
+version = "0.1.0"
+"#,
+        r#"
+pub fn add(x: u8, y: u8) -> u8 {
+    x + y
+}
+"#,
+    );
+
+    let (dev_output, dev_exit_code) = run_fe_main_in_dir(&["check", "--dump-mir", "app"], &root);
+    assert_eq!(dev_exit_code, 0, "fe check failed:\n{dev_output}");
+    assert!(
+        dev_output.contains("ret (v0 + v1)"),
+        "expected workspace default unchecked MIR:\n{dev_output}"
+    );
+
+    let (release_output, release_exit_code) = run_fe_main_in_dir(
+        &["check", "--dump-mir", "--profile", "release", "app"],
+        &root,
+    );
+    assert_eq!(
+        release_exit_code, 0,
+        "fe check --profile release failed:\n{release_output}"
+    );
+    assert!(
+        release_output.contains("checked_add<u8>"),
+        "expected workspace release checked MIR:\n{release_output}"
+    );
+}
+
+#[test]
+fn test_cli_test_profile_selects_arithmetic() {
+    let temp = tempfile::Builder::new()
+        .prefix("fe-arithmetic-test-")
+        .tempdir()
+        .expect("tempdir");
+    let root = write_temp_ingot(
+        &temp,
+        r#"
+[ingot]
+name = "arith"
+version = "0.1.0"
+arithmetic = "checked"
+
+[profiles.test]
+arithmetic = "unchecked"
+"#,
+        r#"
+use std::evm::effects::assert
+
+#[test]
+fn wraps_in_test_profile() {
+    let x: u8 = 255
+    let y: u8 = x + 1
+    assert(y == 0)
+}
+"#,
+    );
+
+    let (test_output, test_exit_code) =
+        run_fe_main_in_dir(&["test", "--backend", "sonatina"], &root);
+    assert_eq!(test_exit_code, 0, "fe test failed:\n{test_output}");
+    assert!(
+        test_output.contains("1 passed"),
+        "expected test profile to run unchecked arithmetic:\n{test_output}"
+    );
+
+    let (release_output, release_exit_code) = run_fe_main_in_dir(
+        &["test", "--backend", "sonatina", "--profile", "release"],
+        &root,
+    );
+    assert_ne!(
+        release_exit_code, 0,
+        "expected release profile test failure:\n{release_output}"
+    );
+    assert!(
+        release_output.contains("1 failed"),
+        "expected checked arithmetic failure in release profile:\n{release_output}"
+    );
 }
 
 #[test]

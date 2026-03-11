@@ -10,6 +10,7 @@ use driver::DriverDataBase;
 use driver::cli_target::{CliTarget, resolve_cli_target};
 use hir::hir_def::TopLevelMod;
 use mir::{analysis::build_contract_graph, fmt as mir_fmt, lower_ingot, lower_module};
+use salsa::Setter;
 use smol_str::SmolStr;
 use solc_runner::compile_single_contract_with_solc;
 use url::Url;
@@ -132,12 +133,16 @@ pub fn build(
     opt_level: OptLevel,
     emit: &[BuildEmit],
     out_dir: Option<&Utf8PathBuf>,
+    profile: &str,
     solc: Option<&str>,
     report_out: Option<&Utf8PathBuf>,
     report_failed_only: bool,
 ) {
     let emit = EmitSelection::from_requested(emit);
     let mut db = DriverDataBase::default();
+    db.compilation_settings()
+        .set_profile(&mut db)
+        .to(profile.into());
 
     let report_root = match report_out
         .map(|out| -> Result<_, String> {

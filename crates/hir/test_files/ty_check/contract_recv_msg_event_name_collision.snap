@@ -1,6 +1,6 @@
 ---
 source: crates/hir/tests/ty_check.rs
-assertion_line: 40
+assertion_line: 41
 expression: res
 input_file: test_files/ty_check/contract_recv_msg_event_name_collision.fe
 ---
@@ -8,7 +8,7 @@ note:
   ┌─ contract_recv_msg_event_name_collision.fe:3:5
   │
 3 │     Transfer { to: u256, amount: u256 } -> bool,
-  │     ^^^^^^^^ u256
+  │     ^^^^^^^^ () | Transfer | fn decode<u256, Sol, D> | mut D | mut E | u256
 
 note: 
    ┌─ contract_recv_msg_event_name_collision.fe:6:1
@@ -20,7 +20,7 @@ note:
    · │
 12 │ │     value: u256,
 13 │ │ }
-   │ ╰─^ (u256, u256)
+   │ ╰─^ () | (u256, u256) | SolEncoder | Transfer | fn encoded_size<u256> | fn new | mut L | mut SolEncoder | u256
 
 note: 
    ┌─ contract_recv_msg_event_name_collision.fe:17:9

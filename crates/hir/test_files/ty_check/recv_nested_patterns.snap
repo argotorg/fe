@@ -1,6 +1,6 @@
 ---
 source: crates/hir/tests/ty_check.rs
-assertion_line: 40
+assertion_line: 41
 expression: res
 input_file: test_files/ty_check/recv_nested_patterns.fe
 ---
@@ -8,25 +8,25 @@ note:
   ┌─ recv_nested_patterns.fe:6:5
   │
 6 │     SetPair { pair: (u64, bool) } -> u64,
-  │     ^^^^^^^ (u64, bool)
+  │     ^^^^^^^ () | (u64, bool) | SetPair | bool | fn decode<bool, Sol, D> | fn decode<u64, Sol, D> | mut D | mut E | u64
 
 note: 
   ┌─ recv_nested_patterns.fe:8:5
   │
 8 │     SetTriple { triple: (u64, u64, u64) } -> u64,
-  │     ^^^^^^^^^ (u64, u64, u64)
+  │     ^^^^^^^^^ () | (u64, u64, u64) | SetTriple | fn decode<u64, Sol, D> | mut D | mut E | u64
 
 note: 
    ┌─ recv_nested_patterns.fe:10:5
    │
 10 │     SetNested { nested: ((u64, u64), bool) } -> u64,
-   │     ^^^^^^^^^ ((u64, u64), bool)
+   │     ^^^^^^^^^ ((u64, u64), bool) | () | (u64, u64) | SetNested | bool | fn decode<bool, Sol, D> | fn decode<u64, Sol, D> | mut D | mut E | u64
 
 note: 
    ┌─ recv_nested_patterns.fe:12:5
    │
 12 │     Multi { a: (u64, u64), b: (bool, bool) } -> bool,
-   │     ^^^^^ (bool, bool)
+   │     ^^^^^ () | (bool, bool) | (u64, u64) | Multi | bool | fn decode<bool, Sol, D> | fn decode<u64, Sol, D> | mut D | mut E | u64
 
 note: 
    ┌─ recv_nested_patterns.fe:20:9
@@ -945,7 +945,7 @@ note:
     ┌─ recv_nested_patterns.fe:109:5
     │
 109 │     TypeMismatch { pair: (u64, u64) } -> u64,
-    │     ^^^^^^^^^^^^ (u64, u64)
+    │     ^^^^^^^^^^^^ () | (u64, u64) | TypeMismatch | fn decode<u64, Sol, D> | mut D | mut E | u64
 
 note: 
     ┌─ recv_nested_patterns.fe:117:9
@@ -1002,7 +1002,7 @@ note:
     ┌─ recv_nested_patterns.fe:126:5
     │
 126 │     Deep { nested: (((u64, u64), u64), bool) } -> u64,
-    │     ^^^^ (((u64, u64), u64), bool)
+    │     ^^^^ (((u64, u64), u64), bool) | ((u64, u64), u64) | () | (u64, u64) | Deep | bool | fn decode<bool, Sol, D> | fn decode<u64, Sol, D> | mut D | mut E | u64
 
 note: 
     ┌─ recv_nested_patterns.fe:134:9

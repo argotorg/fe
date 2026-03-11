@@ -1,9 +1,14 @@
+use std::collections::BTreeMap;
+
 use smol_str::SmolStr;
 use toml::Value;
 
 use crate::ingot::Version;
 
-use super::{ConfigDiagnostic, dependency, is_valid_name, parse_string_array_field};
+use super::{
+    ArithmeticMode, ConfigDiagnostic, ProfileSettings, dependency, is_valid_name,
+    parse_arithmetic_field, parse_profiles_table, parse_string_array_field,
+};
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct WorkspaceSettings {
@@ -14,7 +19,8 @@ pub struct WorkspaceSettings {
     pub default_members: Option<Vec<SmolStr>>,
     pub exclude: Vec<SmolStr>,
     pub metadata: Option<toml::value::Table>,
-    pub profiles: Option<toml::value::Table>,
+    pub arithmetic: Option<ArithmeticMode>,
+    pub profiles: BTreeMap<SmolStr, ProfileSettings>,
     pub scripts: Vec<WorkspaceScript>,
     pub resolution: Option<WorkspaceResolution>,
     pub dependencies: Vec<dependency::DependencyEntry>,
@@ -58,7 +64,15 @@ pub struct WorkspaceConfig {
     pub diagnostics: Vec<ConfigDiagnostic>,
 }
 
+impl Eq for WorkspaceConfig {}
+
 impl WorkspaceSettings {
+    pub fn arithmetic_for_profile(&self, profile: &str) -> Option<ArithmeticMode> {
+        self.profiles
+            .get(profile)
+            .and_then(|settings| settings.arithmetic)
+    }
+
     pub fn members_for_selection(
         &self,
         selection: WorkspaceMemberSelection,
@@ -109,7 +123,8 @@ pub(crate) fn parse_workspace(
     parse_default_members(table, &mut workspace, diagnostics);
     parse_exclude(table, &mut workspace, diagnostics);
     parse_metadata(table, &mut workspace, diagnostics);
-    parse_profiles(table, &mut workspace, diagnostics);
+    parse_arithmetic(table, &mut workspace, diagnostics);
+    workspace.profiles = parse_profiles_table(table, diagnostics);
     parse_scripts(table, &mut workspace, diagnostics);
     workspace.resolution = parse_resolution(table, diagnostics);
 
@@ -313,21 +328,12 @@ fn parse_metadata(
     }
 }
 
-fn parse_profiles(
+fn parse_arithmetic(
     table: &toml::value::Table,
     workspace: &mut WorkspaceSettings,
     diagnostics: &mut Vec<ConfigDiagnostic>,
 ) {
-    if let Some(value) = table.get("profiles") {
-        match value.as_table() {
-            Some(table) => workspace.profiles = Some(table.clone()),
-            None => diagnostics.push(ConfigDiagnostic::UnexpectedTomlData {
-                field: "profiles".into(),
-                found: value.type_str().to_lowercase().into(),
-                expected: Some("table".into()),
-            }),
-        }
-    }
+    workspace.arithmetic = parse_arithmetic_field("workspace", table, diagnostics);
 }
 
 fn parse_scripts(
@@ -424,11 +430,13 @@ version = "0.1.0"
 members = { main = ["ingot-a", "ingot-b/**"], dev = ["examples/**"] }
 default-members = ["ingot-a"]
 exclude = ["target", "ignored/**"]
+arithmetic = "unchecked"
 
 [metadata]
 docs = true
 
 [profiles.release]
+arithmetic = "checked"
 opt-level = 3
 
 [scripts]
@@ -486,7 +494,10 @@ util = { path = "ingots/util" }
         );
         assert_eq!(workspace.exclude, vec!["target", "ignored/**"]);
         assert!(workspace.metadata.is_some());
-        assert!(workspace.profiles.is_some());
+        assert_eq!(workspace.arithmetic, Some(ArithmeticMode::Unchecked));
+        let release = workspace.profiles.get("release").expect("release profile");
+        assert_eq!(release.arithmetic, Some(ArithmeticMode::Checked));
+        assert_eq!(release.extra.get("opt-level"), Some(&Value::Integer(3)));
         assert_eq!(workspace.scripts.len(), 2);
         let resolution = workspace.resolution.expect("resolution parsed");
         assert_eq!(resolution.registry.as_deref(), Some("local"));

@@ -20,6 +20,7 @@ camino.workspace = true
 petgraph.workspace = true
 url.workspace = true
 smol_str.workspace = true
+salsa.workspace = true
 hir.workspace = true
 rayon = "1"
 mir.workspace = true

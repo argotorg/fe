@@ -106,6 +106,9 @@ pub enum Command {
         /// Output directory for artifacts.
         #[arg(long)]
         out_dir: Option<Utf8PathBuf>,
+        /// Compilation profile to use when resolving profile-aware config.
+        #[arg(long, default_value = "release", value_name = "PROFILE")]
+        profile: String,
         /// Comma-delimited artifacts to emit.
         #[arg(
             long,
@@ -141,6 +144,9 @@ pub enum Command {
         /// Treat a `.fe` file target as standalone, even if it is inside an ingot.
         #[arg(long)]
         standalone: bool,
+        /// Compilation profile to use when resolving profile-aware config.
+        #[arg(long, default_value = "dev", value_name = "PROFILE")]
+        profile: String,
         #[arg(long)]
         dump_mir: bool,
         /// Write a debugging report as a `.tar.gz` file (includes sources and diagnostics).
@@ -223,6 +229,9 @@ pub enum Command {
         /// Backend to use for codegen (yul or sonatina).
         #[arg(long, default_value = "sonatina")]
         backend: String,
+        /// Compilation profile to use when resolving profile-aware config.
+        #[arg(long, default_value = "test", value_name = "PROFILE")]
+        profile: String,
         /// solc binary to use (overrides FE_SOLC_PATH).
         ///
         /// Only used with `--backend yul` (ignored with a warning otherwise).
@@ -418,6 +427,7 @@ pub fn run(opts: &Options) {
             optimize,
             solc,
             out_dir,
+            profile,
             emit,
             report,
             report_out,
@@ -449,6 +459,7 @@ pub fn run(opts: &Options) {
                 opt_level,
                 emit,
                 out_dir.as_ref(),
+                profile,
                 solc.as_deref(),
                 (*report).then_some(report_out),
                 *report_failed_only,
@@ -458,6 +469,7 @@ pub fn run(opts: &Options) {
             path,
             ingot,
             standalone,
+            profile,
             dump_mir,
             report,
             report_out,
@@ -467,6 +479,7 @@ pub fn run(opts: &Options) {
                 path,
                 ingot.as_deref(),
                 *standalone,
+                profile,
                 *dump_mir,
                 (*report).then_some(report_out),
                 *report_failed_only,
@@ -513,6 +526,7 @@ pub fn run(opts: &Options) {
             show_logs,
             debug: test_debug,
             backend,
+            profile,
             solc,
             opt_level,
             optimize,
@@ -575,6 +589,7 @@ pub fn run(opts: &Options) {
                 *grouped,
                 *show_logs,
                 backend,
+                profile,
                 yul_optimize,
                 solc,
                 opt_level,
