@@ -408,11 +408,16 @@ impl DiagnosticVoucher for crate::ArithmeticAttrError {
     fn to_complete(&self, _db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
         let span = Span::new(self.file, self.primary_range, SpanKind::Original);
         let (local_code, message, label, notes) = match &self.kind {
-            crate::ArithmeticAttrErrorKind::ArithmeticAttrOnNonFunction { item_kind } => (
+            crate::ArithmeticAttrErrorKind::ArithmeticAttrOnUnsupportedItem { item_kind } => (
                 1,
-                format!("`#[arithmetic(...)]` is only valid on functions (found on {item_kind})"),
-                "move this attribute to a function item".to_string(),
-                vec!["module, ingot, and workspace arithmetic configuration is not implemented in this slice".to_string()],
+                format!(
+                    "`#[arithmetic(...)]` is only valid on functions and modules (found on {item_kind})"
+                ),
+                "move this attribute to a function or module item".to_string(),
+                vec![
+                    "ingot and workspace arithmetic configuration is not implemented in this slice"
+                        .to_string(),
+                ],
             ),
             crate::ArithmeticAttrErrorKind::InvalidArithmeticAttrForm => (
                 2,

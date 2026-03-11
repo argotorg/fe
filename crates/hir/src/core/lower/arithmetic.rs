@@ -13,11 +13,11 @@ pub struct ArithmeticAttrError {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ArithmeticAttrErrorKind {
-    ArithmeticAttrOnNonFunction { item_kind: &'static str },
+    ArithmeticAttrOnUnsupportedItem { item_kind: &'static str },
     InvalidArithmeticAttrForm,
 }
 
-pub(super) fn report_arithmetic_attr_on_non_function_item<'db>(
+pub(super) fn report_arithmetic_attr_on_unsupported_item<'db>(
     ctxt: &mut FileLowerCtxt<'db>,
     attrs: Option<ast::AttrList>,
     item_kind: &'static str,
@@ -35,7 +35,7 @@ pub(super) fn report_arithmetic_attr_on_non_function_item<'db>(
         }
 
         ArithmeticAttrError {
-            kind: ArithmeticAttrErrorKind::ArithmeticAttrOnNonFunction { item_kind },
+            kind: ArithmeticAttrErrorKind::ArithmeticAttrOnUnsupportedItem { item_kind },
             file,
             primary_range: attr.syntax().text_range(),
         }
@@ -48,6 +48,31 @@ pub(super) fn report_invalid_function_arithmetic_attrs<'db>(
     func: &ast::Func,
 ) {
     let Some(attrs) = func.attr_list() else {
+        return;
+    };
+    let db = ctxt.db();
+    let file = ctxt.top_mod().file(db);
+
+    for attr in attrs {
+        let ast::AttrKind::Normal(normal) = attr.kind() else {
+            continue;
+        };
+        if is_arithmetic_attr(&normal) && !is_valid_arithmetic_attr(&normal) {
+            ArithmeticAttrError {
+                kind: ArithmeticAttrErrorKind::InvalidArithmeticAttrForm,
+                file,
+                primary_range: attr.syntax().text_range(),
+            }
+            .accumulate(db);
+        }
+    }
+}
+
+pub(super) fn report_invalid_mod_arithmetic_attrs<'db>(
+    ctxt: &mut FileLowerCtxt<'db>,
+    mod_: &ast::Mod,
+) {
+    let Some(attrs) = mod_.attr_list() else {
         return;
     };
     let db = ctxt.db();

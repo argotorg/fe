@@ -712,13 +712,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     ) -> Result<Self, MirLowerError> {
         let core = CoreLib::new(db, body.scope());
         let arithmetic_mode = hir_func
-            .map(|func| {
-                ItemKind::Func(func)
-                    .attrs(db)
-                    .expect("functions always have an attribute list")
-                    .arithmetic_mode(db)
-                    .unwrap_or(ArithmeticMode::Checked)
-            })
+            .map(|func| func.arithmetic_mode(db))
             .unwrap_or(ArithmeticMode::Checked);
 
         let mut builder = Self {

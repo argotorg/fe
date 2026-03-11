@@ -54,11 +54,7 @@ impl<'db> ItemKind<'db> {
 
         match kind {
             ast::ItemKind::Mod(mod_) => {
-                super::arithmetic::report_arithmetic_attr_on_non_function_item(
-                    ctxt,
-                    mod_.attr_list(),
-                    "mod",
-                );
+                super::arithmetic::report_invalid_mod_arithmetic_attrs(ctxt, &mod_);
                 super::event::report_event_attr_on_non_struct_item(ctxt, mod_.attr_list(), "mod");
                 Mod::lower_ast(ctxt, mod_);
             }
@@ -68,7 +64,7 @@ impl<'db> ItemKind<'db> {
                 Func::lower_ast(ctxt, fn_);
             }
             ast::ItemKind::Struct(struct_) => {
-                super::arithmetic::report_arithmetic_attr_on_non_function_item(
+                super::arithmetic::report_arithmetic_attr_on_unsupported_item(
                     ctxt,
                     struct_.attr_list(),
                     "struct",
@@ -76,7 +72,7 @@ impl<'db> ItemKind<'db> {
                 Struct::lower_ast(ctxt, struct_);
             }
             ast::ItemKind::Contract(contract) => {
-                super::arithmetic::report_arithmetic_attr_on_non_function_item(
+                super::arithmetic::report_arithmetic_attr_on_unsupported_item(
                     ctxt,
                     contract.attr_list(),
                     "contract",
@@ -89,7 +85,7 @@ impl<'db> ItemKind<'db> {
                 Contract::lower_ast(ctxt, contract);
             }
             ast::ItemKind::Enum(enum_) => {
-                super::arithmetic::report_arithmetic_attr_on_non_function_item(
+                super::arithmetic::report_arithmetic_attr_on_unsupported_item(
                     ctxt,
                     enum_.attr_list(),
                     "enum",
@@ -98,7 +94,7 @@ impl<'db> ItemKind<'db> {
                 Enum::lower_ast(ctxt, enum_);
             }
             ast::ItemKind::Msg(msg) => {
-                super::arithmetic::report_arithmetic_attr_on_non_function_item(
+                super::arithmetic::report_arithmetic_attr_on_unsupported_item(
                     ctxt,
                     msg.attr_list(),
                     "msg",
@@ -107,7 +103,7 @@ impl<'db> ItemKind<'db> {
                 lower_msg_as_mod(ctxt, msg);
             }
             ast::ItemKind::TypeAlias(alias) => {
-                super::arithmetic::report_arithmetic_attr_on_non_function_item(
+                super::arithmetic::report_arithmetic_attr_on_unsupported_item(
                     ctxt,
                     alias.attr_list(),
                     "type alias",
@@ -120,7 +116,7 @@ impl<'db> ItemKind<'db> {
                 TypeAlias::lower_ast(ctxt, alias);
             }
             ast::ItemKind::Impl(impl_) => {
-                super::arithmetic::report_arithmetic_attr_on_non_function_item(
+                super::arithmetic::report_arithmetic_attr_on_unsupported_item(
                     ctxt,
                     impl_.attr_list(),
                     "impl",
@@ -129,7 +125,7 @@ impl<'db> ItemKind<'db> {
                 Impl::lower_ast(ctxt, impl_);
             }
             ast::ItemKind::Trait(trait_) => {
-                super::arithmetic::report_arithmetic_attr_on_non_function_item(
+                super::arithmetic::report_arithmetic_attr_on_unsupported_item(
                     ctxt,
                     trait_.attr_list(),
                     "trait",
@@ -142,7 +138,7 @@ impl<'db> ItemKind<'db> {
                 Trait::lower_ast(ctxt, trait_);
             }
             ast::ItemKind::ImplTrait(impl_trait) => {
-                super::arithmetic::report_arithmetic_attr_on_non_function_item(
+                super::arithmetic::report_arithmetic_attr_on_unsupported_item(
                     ctxt,
                     impl_trait.attr_list(),
                     "impl trait",
@@ -155,7 +151,7 @@ impl<'db> ItemKind<'db> {
                 ImplTrait::lower_ast(ctxt, impl_trait);
             }
             ast::ItemKind::Const(const_) => {
-                super::arithmetic::report_arithmetic_attr_on_non_function_item(
+                super::arithmetic::report_arithmetic_attr_on_unsupported_item(
                     ctxt,
                     const_.attr_list(),
                     "const",
@@ -168,7 +164,7 @@ impl<'db> ItemKind<'db> {
                 Const::lower_ast(ctxt, const_);
             }
             ast::ItemKind::Use(use_) => {
-                super::arithmetic::report_arithmetic_attr_on_non_function_item(
+                super::arithmetic::report_arithmetic_attr_on_unsupported_item(
                     ctxt,
                     use_.attr_list(),
                     "use",
@@ -177,7 +173,7 @@ impl<'db> ItemKind<'db> {
                 Use::lower_ast(ctxt, use_);
             }
             ast::ItemKind::Extern(extern_) => {
-                super::arithmetic::report_arithmetic_attr_on_non_function_item(
+                super::arithmetic::report_arithmetic_attr_on_unsupported_item(
                     ctxt,
                     extern_.attr_list(),
                     "extern",
@@ -189,7 +185,7 @@ impl<'db> ItemKind<'db> {
                 );
                 if let Some(extern_block) = extern_.extern_block() {
                     for fn_ in extern_block {
-                        super::arithmetic::report_arithmetic_attr_on_non_function_item(
+                        super::arithmetic::report_arithmetic_attr_on_unsupported_item(
                             ctxt,
                             fn_.attr_list(),
                             "extern fn",
