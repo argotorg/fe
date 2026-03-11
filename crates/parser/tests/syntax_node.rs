@@ -11,7 +11,9 @@ use test_runner::*;
 )]
 fn test_item_list(fixture: Fixture<&str>) {
     let runner = TestRunner::item_list(true);
-    let node = format! {"{:#?}", runner.run(fixture.content()).unwrap()};
+    let (cst, _) = runner.run(fixture.content());
+    let node = format! {"{:#?}", cst};
+    assert_eq!(fixture.content(), &cst.to_string());
     snap_test!(node, fixture.path());
 }
 
@@ -21,7 +23,9 @@ fn test_item_list(fixture: Fixture<&str>) {
 )]
 fn test_struct(fixture: Fixture<&str>) {
     let runner = TestRunner::item_list(true);
-    let node = format! {"{:#?}", runner.run(fixture.content()).unwrap()};
+    let (cst, _) = runner.run(fixture.content());
+    let node = format! {"{:#?}", cst};
+    assert_eq!(fixture.content(), &cst.to_string());
     snap_test!(node, fixture.path());
 }
 
@@ -31,7 +35,9 @@ fn test_struct(fixture: Fixture<&str>) {
 )]
 fn test_stmt(fixture: Fixture<&str>) {
     let runner = TestRunner::stmt_list(true);
-    let node = format! {"{:#?}", runner.run(fixture.content()).unwrap()};
+    let (cst, _) = runner.run(fixture.content());
+    let node = format! {"{:#?}", cst};
+    assert_eq!(fixture.content(), &cst.to_string());
     snap_test!(node, fixture.path());
 }
 
@@ -42,7 +48,9 @@ fn test_stmt(fixture: Fixture<&str>) {
 )]
 fn test_expr(fixture: Fixture<&str>) {
     let runner = TestRunner::expr_list(true);
-    let node = format! {"{:#?}", runner.run(fixture.content()).unwrap()};
+    let (cst, _) = runner.run(fixture.content());
+    let node = format! {"{:#?}", cst};
+    assert_eq!(fixture.content(), &cst.to_string());
     snap_test!(node, fixture.path());
 }
 
@@ -52,7 +60,9 @@ fn test_expr(fixture: Fixture<&str>) {
 )]
 fn test_pat(fixture: Fixture<&str>) {
     let runner = TestRunner::pat_list(true);
-    let node = format! {"{:#?}", runner.run(fixture.content()).unwrap()};
+    let (cst, _) = runner.run(fixture.content());
+    let node = format! {"{:#?}", cst};
+    assert_eq!(fixture.content(), &cst.to_string());
     snap_test!(node, fixture.path());
 }
 
@@ -70,7 +80,8 @@ mod wasm {
         #[wasm_bindgen_test]
     )]
     fn test_item_list(fixture: dir_test::Fixture<&str>) {
-        TestRunner::item_list(true).run(fixture.content()).unwrap();
+        TestRunner::item_list(true).run(fixture.content());
+        assert_eq!(fixture.content(), &cst.to_string());
     }
 
     #[dir_test::dir_test(
@@ -82,7 +93,8 @@ mod wasm {
         #[wasm_bindgen_test]
     )]
     fn test_struct(fixture: dir_test::Fixture<&str>) {
-        TestRunner::item_list(true).run(fixture.content()).unwrap();
+        TestRunner::item_list(true).run(fixture.content());
+        assert_eq!(fixture.content(), &cst.to_string());
     }
 
     #[dir_test::dir_test(
@@ -94,7 +106,8 @@ mod wasm {
         #[wasm_bindgen_test]
     )]
     fn test_stmt(fixture: dir_test::Fixture<&str>) {
-        TestRunner::stmt_list(true).run(fixture.content()).unwrap();
+        TestRunner::stmt_list(true).run(fixture.content());
+        assert_eq!(fixture.content(), &cst.to_string());
     }
 
     #[dir_test::dir_test(
@@ -106,7 +119,8 @@ mod wasm {
         #[wasm_bindgen_test]
     )]
     fn test_expr(fixture: dir_test::Fixture<&str>) {
-        TestRunner::expr_list(true).run(fixture.content()).unwrap();
+        TestRunner::expr_list(true).run(fixture.content());
+        assert_eq!(fixture.content(), &cst.to_string());
     }
 
     #[dir_test(
@@ -118,6 +132,7 @@ mod wasm {
         #[wasm_bindgen_test]
     )]
     fn test_pat(fixture: Fixture<&str>) {
-        TestRunner::pat_list(true).run(fixture.content()).unwrap();
+        TestRunner::pat_list(true).run(fixture.content());
+        assert_eq!(fixture.content(), &cst.to_string());
     }
 }

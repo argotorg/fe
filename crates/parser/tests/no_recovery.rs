@@ -11,7 +11,7 @@ use test_runner::*;
 )]
 fn test_item_list(fixture: Fixture<&str>) {
     let runner = TestRunner::item_list(false).set_recovery_mode(false);
-    let errors = runner.run(fixture.content()).unwrap_err();
+    let (_, errors) = runner.run(fixture.content());
     let output = errors
         .iter()
         .map(|e| format!("{}@{:?}", e.msg(), e.range()))
@@ -26,7 +26,7 @@ fn test_item_list(fixture: Fixture<&str>) {
 )]
 fn test_stmt(fixture: Fixture<&str>) {
     let runner = TestRunner::stmt_list(false).set_recovery_mode(false);
-    let errors = runner.run(fixture.content()).unwrap_err();
+    let (_, errors) = runner.run(fixture.content());
     let output = errors
         .iter()
         .map(|e| format!("{}@{:?}", e.msg(), e.range()))
@@ -41,7 +41,7 @@ fn test_stmt(fixture: Fixture<&str>) {
 )]
 fn test_expr(fixture: Fixture<&str>) {
     let runner = TestRunner::expr_list(false).set_recovery_mode(false);
-    let errors = runner.run(fixture.content()).unwrap_err();
+    let (_, errors) = runner.run(fixture.content());
     let output = errors
         .iter()
         .map(|e| format!("{}@{:?}", e.msg(), e.range()))

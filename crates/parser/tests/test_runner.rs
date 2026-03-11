@@ -105,7 +105,7 @@ impl TestRunner {
         Self::new(parse, should_success)
     }
 
-    pub fn run(&self, input: &str) -> Result<SyntaxNode, Vec<ParseError>> {
+    pub fn run(&self, input: &str) -> (SyntaxNode, Vec<ParseError>) {
         init_tracing();
         let input = normalize_newlines(input);
         let input = input.as_ref();
@@ -126,11 +126,9 @@ impl TestRunner {
             assert! {errors.is_empty()}
         } else {
             assert! {!errors.is_empty()}
-            return Err(errors);
         }
-        assert_eq!(input, cst.to_string());
 
-        Ok(cst)
+        (cst, errors)
     }
 }
 
