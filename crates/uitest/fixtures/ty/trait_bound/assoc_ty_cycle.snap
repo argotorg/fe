@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/trait_bound/assoc_ty_cycle.fe
+---
+error[2-0020]: infinite trait bound recursion
+   ┌─ assoc_ty_cycle.fe:17:28
+   │
+17 │     fn fail(x: Self::Item::Assoc)
+   │                            ^^^^^ cyclic trait reference prevented lowering this associated type

@@ -260,7 +260,10 @@ fn collect_func_def_constraints_cycle_recover<'db>(
     salsa::CycleRecoveryAction::Iterate
 }
 
-#[salsa::tracked]
+#[salsa::tracked(
+    cycle_fn=collect_constraints_cycle_recover,
+    cycle_initial=collect_constraints_cycle_initial
+)]
 pub fn collect_constraints<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: GenericParamOwner<'db>,
@@ -352,6 +355,22 @@ pub fn collect_constraints<'db>(
         db,
         all_predicates.into_iter().collect::<Vec<_>>(),
     ))
+}
+
+fn collect_constraints_cycle_initial<'db>(
+    db: &'db dyn HirAnalysisDb,
+    _owner: GenericParamOwner<'db>,
+) -> Binder<PredicateListId<'db>> {
+    Binder::bind(PredicateListId::empty_list(db))
+}
+
+fn collect_constraints_cycle_recover<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _value: &Binder<PredicateListId<'db>>,
+    _count: u32,
+    _owner: GenericParamOwner<'db>,
+) -> salsa::CycleRecoveryAction<Binder<PredicateListId<'db>>> {
+    salsa::CycleRecoveryAction::Iterate
 }
 
 struct Deferred<'db> {

@@ -1,0 +1,11 @@
+// Small reproducer for operator method-selection error handling in ty-check.
+fn test_deeply_nested_tuple_patterns(data: ((((((u8, bool), u1), bool), u8), bool), u8)) -> u8 {
+    match data {
+        ((((((0, true), 1), false), 2), true), 3) => 255
+        ((((((x, true), _), _), _), _), _) => x + 200
+        ((((_, _), z), _), _) => z + 100
+        (((_, w), _), _) => w + 50
+        ((_, _), v) => v + 10
+        _ => 1
+    }
+}

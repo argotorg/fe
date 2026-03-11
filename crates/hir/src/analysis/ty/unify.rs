@@ -657,6 +657,14 @@ where
     fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
         let (shallow_resolved, key) = match ty.data(db) {
             TyData::TyVar(var) if !self.var_stack.contains(&var.key) => {
+                if var.key.0 as usize >= self.table.len() {
+                    panic!(
+                        "inference key out of bounds in TyVarResolver: key={:?}, table_len={}, ty={}",
+                        var.key,
+                        self.table.len(),
+                        ty.pretty_print(db)
+                    );
+                }
                 match self.table.probe_impl(var.key) {
                     Either::Left(ty) => (ty, var.key),
                     Either::Right(var) => return TyId::ty_var(db, var.sort, var.kind, var.key),
@@ -665,6 +673,14 @@ where
 
             TyData::ConstTy(cty) => match cty.data(db) {
                 ConstTyData::TyVar(var, ty) if !self.var_stack.contains(&var.key) => {
+                    if var.key.0 as usize >= self.table.len() {
+                        panic!(
+                            "inference key out of bounds in const TyVarResolver: key={:?}, table_len={}, const_ty={}",
+                            var.key,
+                            self.table.len(),
+                            ty.pretty_print(db)
+                        );
+                    }
                     match self.table.probe_impl(var.key) {
                         Either::Left(ty) => (ty, var.key),
                         Either::Right(var) => {

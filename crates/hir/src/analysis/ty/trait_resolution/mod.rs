@@ -18,6 +18,7 @@ use crate::{
 };
 use common::indexmap::IndexSet;
 use constraint::collect_constraints;
+use rustc_hash::FxHashSet;
 use salsa::Update;
 
 pub(crate) mod constraint;
@@ -317,6 +318,9 @@ impl<'db> PredicateListId<'db> {
                 // assoc-type bindings so derived bounds are as concrete as possible.
                 let mut subst = AssocTySubst::new(pred);
                 let inst = inst.fold_with(db, &mut subst);
+                if predicate_has_recursive_assoc_projection(db, inst) {
+                    continue;
+                }
 
                 if all_predicates.insert(inst) {
                     // New predicate added, add to worklist for further processing
@@ -342,6 +346,9 @@ impl<'db> PredicateListId<'db> {
                     // Substitute `Self` and associated types using the original predicate instance
                     let mut subst = AssocTySubst::new(pred);
                     trait_inst = trait_inst.fold_with(db, &mut subst);
+                    if predicate_has_recursive_assoc_projection(db, trait_inst) {
+                        continue;
+                    }
                     if all_predicates.insert(trait_inst) {
                         worklist.push(trait_inst);
                     }
@@ -351,4 +358,68 @@ impl<'db> PredicateListId<'db> {
 
         Self::new(db, all_predicates.into_iter().collect::<Vec<_>>())
     }
+}
+
+fn predicate_has_recursive_assoc_projection<'db>(
+    db: &'db dyn HirAnalysisDb,
+    pred: TraitInstId<'db>,
+) -> bool {
+    pred.args(db)
+        .iter()
+        .any(|&arg| ty_has_recursive_assoc_projection(db, arg))
+}
+
+fn ty_has_recursive_assoc_projection<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
+    fn impl_<'db>(
+        db: &'db dyn HirAnalysisDb,
+        ty: TyId<'db>,
+        visited_tys: &mut FxHashSet<TyId<'db>>,
+        seen_assoc_keys: &mut FxHashSet<(crate::hir_def::Trait<'db>, crate::hir_def::IdentId<'db>)>,
+    ) -> bool {
+        if !visited_tys.insert(ty) {
+            return false;
+        }
+
+        let has_cycle = match ty.data(db) {
+            TyData::ConstTy(const_ty) => impl_(db, const_ty.ty(db), visited_tys, seen_assoc_keys),
+            TyData::AssocTy(assoc_ty) => {
+                let key = (assoc_ty.trait_.def(db), assoc_ty.name);
+                if !seen_assoc_keys.insert(key) {
+                    true
+                } else {
+                    let has_cycle = assoc_ty
+                        .trait_
+                        .args(db)
+                        .iter()
+                        .copied()
+                        .any(|arg| impl_(db, arg, visited_tys, seen_assoc_keys));
+                    seen_assoc_keys.remove(&key);
+                    has_cycle
+                }
+            }
+            TyData::QualifiedTy(trait_inst) => {
+                let args_have_cycle = trait_inst
+                    .args(db)
+                    .iter()
+                    .copied()
+                    .any(|arg| impl_(db, arg, visited_tys, seen_assoc_keys));
+                let assoc_bindings_have_cycle = trait_inst
+                    .assoc_type_bindings(db)
+                    .values()
+                    .copied()
+                    .any(|ty| impl_(db, ty, visited_tys, seen_assoc_keys));
+                args_have_cycle || assoc_bindings_have_cycle
+            }
+            TyData::TyApp(lhs, rhs) => {
+                impl_(db, *lhs, visited_tys, seen_assoc_keys)
+                    || impl_(db, *rhs, visited_tys, seen_assoc_keys)
+            }
+            _ => false,
+        };
+
+        visited_tys.remove(&ty);
+        has_cycle
+    }
+
+    impl_(db, ty, &mut FxHashSet::default(), &mut FxHashSet::default())
 }

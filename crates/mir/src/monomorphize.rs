@@ -1853,7 +1853,7 @@ struct Pair {
     right: Wrapper
 }
 
-fn bump(mut pair: Pair) -> u256 {
+fn bump(mut pair: own Pair) -> u256 {
     pair.left.value += 1
     pair.right.value += 10
     pair.left.value * 100 + pair.right.value

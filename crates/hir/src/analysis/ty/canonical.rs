@@ -36,19 +36,15 @@ where
     /// # Returns
     /// The canonical value after initializing the unification table.
     ///
-    /// # Panics
-    /// This function will panic if the `table` is not empty.
     pub fn extract_identity<S>(self, table: &mut UnificationTableBase<'db, S>) -> T
     where
         S: UnificationStore<'db>,
     {
-        assert!(table.is_empty());
-
-        for var in collect_variables(table.db, &self.value) {
-            table.new_var(var.sort, &var.kind);
-        }
-
-        self.value
+        // Re-materialize canonical vars through the current table instead of
+        // assuming canonical keys are contiguous and start from zero.
+        let db = table.db;
+        let mut extractor = SolutionExtractor::new(table, FxHashMap::default());
+        self.value.fold_with(db, &mut extractor)
     }
 
     /// Canonicalize a new solution that corresponds to the canonical query.
