@@ -29,6 +29,7 @@ use driver::DriverDataBase;
 use hir::hir_def::{HirIngot, TopLevelMod, item::ItemKind};
 use mir::{fmt as mir_fmt, lower_module};
 use rustc_hash::{FxHashMap, FxHashSet};
+use salsa::Setter;
 use solc_runner::compile_single_contract_with_solc;
 use std::{
     fmt::Write as _,
@@ -1826,7 +1827,9 @@ fn prepare_suite_job(
 
     let build_started = Instant::now();
     let mut db = DriverDataBase::default();
-    db.compiler_options().set_recovery_mode(shared.use_recovery);
+    db.compiler_options()
+        .set_recovery_mode(&mut db)
+        .to(shared.use_recovery);
     let prep = if plan.path.is_file() && plan.path.extension() == Some("fe") {
         prepare_tests_single_file(
             &mut db,

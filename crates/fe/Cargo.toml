@@ -18,6 +18,7 @@ resolver.workspace = true
 camino.workspace = true
 petgraph.workspace = true
 url.workspace = true
+salsa.workspace = true
 smol_str.workspace = true
 hir.workspace = true
 mir.workspace = true

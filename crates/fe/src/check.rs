@@ -10,6 +10,7 @@ use driver::DriverDataBase;
 use driver::cli_target::{CliTarget, resolve_cli_target};
 use hir::hir_def::{HirIngot, TopLevelMod};
 use mir::{MirDiagnosticsMode, collect_mir_diagnostics, fmt as mir_fmt, lower_module};
+use salsa::Setter;
 use url::Url;
 
 use crate::report::{
@@ -44,7 +45,9 @@ pub fn check(
     recovery_mode: bool,
 ) -> Result<bool, String> {
     let mut db = DriverDataBase::default();
-    db.compiler_options().set_recovery_mode(recovery_mode);
+    db.compiler_options()
+        .set_recovery_mode(&mut db)
+        .to(recovery_mode);
 
     let report_root = report_out
         .map(|out| -> Result<_, String> {

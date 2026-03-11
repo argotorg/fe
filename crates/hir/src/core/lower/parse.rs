@@ -8,7 +8,7 @@ use crate::{HirDb, hir_def::TopLevelMod};
 pub fn parse_file_impl<'db>(db: &'db dyn HirDb, top_mod: TopLevelMod<'db>) -> GreenNode {
     let file = top_mod.file(db);
     let text = file.text(db);
-    let recovery_mode = RecoveryMode::new(db.compiler_options().use_recovery_mode);
+    let recovery_mode = RecoveryMode::new(db.compiler_options().recovery_mode(db));
     let (node, parse_errors) = parser::parse_source_file(text, recovery_mode);
 
     for error in parse_errors {

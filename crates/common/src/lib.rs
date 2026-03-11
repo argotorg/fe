@@ -70,7 +70,7 @@ macro_rules! impl_db_default {
                 db.index = Some(index);
                 let graph = $crate::dependencies::DependencyGraph::default(&db);
                 db.graph = Some(graph);
-                let options = $crate::options::CompilerOptions::default();
+                let options = $crate::options::CompilerOptions::default(&db);
                 db.options = Some(options);
                 $crate::stdlib::HasBuiltinCore::initialize_builtin_core(&mut db);
                 $crate::stdlib::HasBuiltinStd::initialize_builtin_std(&mut db);
