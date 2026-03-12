@@ -379,7 +379,19 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         if self.current_block().is_none() {
             return self.ensure_value(expr);
         }
+        if self.lowered_exprs.contains(&expr) {
+            return self.ensure_value(expr);
+        }
+        if !self.lowering_exprs.insert(expr) {
+            return self.ensure_value(expr);
+        }
+        let value = self.lower_expr_inner(expr);
+        self.lowering_exprs.remove(&expr);
+        self.lowered_exprs.insert(expr);
+        value
+    }
 
+    fn lower_expr_inner(&mut self, expr: ExprId) -> ValueId {
         if self.typed_body.is_implicit_move(expr) {
             let assumptions =
                 hir::analysis::ty::trait_resolution::PredicateListId::empty_list(self.db);

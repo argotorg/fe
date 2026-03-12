@@ -1,0 +1,38 @@
+const N: usize = 4
+const LIM: u256 = 100
+
+fn slot(level: usize, pos: usize) -> usize {
+    level * 3 + pos
+}
+
+pub fn repro(siblings: [u256; 16], indices: [u8; 32]) -> u256 {
+    let mut acc: u256 = 1
+    let mut i: usize = 0
+
+    while i < 2 {
+        let path_usize = indices[i] as usize
+        let mut nodes: [u256; N] = [0; N]
+        let mut j: usize = 0
+        while j < N {
+            if j < path_usize {
+                if siblings[slot(i, j)] >= LIM {
+                    return 0
+                }
+                nodes[j] = siblings[slot(i, j)]
+            } else if j == path_usize {
+                nodes[j] = acc
+            } else {
+                if siblings[slot(i, j - 1)] >= LIM {
+                    return 0
+                }
+                nodes[j] = siblings[slot(i, j - 1)]
+            }
+            j += 1
+        }
+
+        acc = nodes[0] + nodes[1] + nodes[2] + nodes[3]
+        i += 1
+    }
+
+    acc
+}

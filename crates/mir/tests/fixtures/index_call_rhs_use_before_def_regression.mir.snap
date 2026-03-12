@@ -1,0 +1,99 @@
+---
+source: crates/mir/tests/lowering_snapshots.rs
+expression: mir_output
+---
+fn slot(v0: usize, v1: usize) -> usize:
+  bb0:
+    v2: usize = checked_mul<usize>(v0, 3)
+    v3: usize = checked_add<usize>(v2, v1)
+    ret v3
+
+fn repro(v0: [u256; 16], v1: [u8; 32]) -> u256:
+  bb0:
+    v2: u256 = 1
+    v3: usize = 0
+    jmp bb1
+  bb1:
+    v4: bool = usize_ha12462c6d36e68b0_ord_h264f6d6d75097a_lt(v3, 2)
+    br v4 bb2 bb3
+  bb2:
+    v6: u8 = load mem[v1].*[v3]
+    v5: usize = v6
+    v8: [u256; 4] = alloc mem
+    init mem[v8] { [0] = 0, [1] = 0, [2] = 0, [3] = 0 }
+    v7: [u256; 4] = v8
+    v9: usize = 0
+    jmp bb4
+  bb3:
+    ret v2
+  bb4:
+    v10: bool = usize_ha12462c6d36e68b0_ord_h264f6d6d75097a_lt(v9, 4)
+    br v10 bb5 bb6
+  bb5:
+    v11: bool = usize_ha12462c6d36e68b0_ord_h264f6d6d75097a_lt(v9, v5)
+    br v11 bb7 bb9
+  bb6:
+    v26: u256 = load mem[v7][0]
+    v27: u256 = load mem[v7][1]
+    v28: u256 = checked_add<u256>(v26, v27)
+    v29: u256 = load mem[v7][2]
+    v30: u256 = checked_add<u256>(v28, v29)
+    v31: u256 = load mem[v7][3]
+    v32: u256 = checked_add<u256>(v30, v31)
+    v2 = v32
+    v33: usize = checked_add<usize>(v3, 1)
+    v3 = v33
+    jmp bb1
+  bb7:
+    v12: usize = slot(v3, v9)
+    v13: u256 = load mem[v0].*[v12]
+    v14: bool = u256_h3271ca15373d4483_ord_h264f6d6d75097a_ge(v13, 100)
+    br v14 bb10 bb11
+  bb8:
+    v25: usize = checked_add<usize>(v9, 1)
+    v9 = v25
+    jmp bb4
+  bb9:
+    v17: bool = usize_ha12462c6d36e68b0_eq_he50383edd273619f_eq(v9, v5)
+    br v17 bb12 bb14
+  bb10:
+    ret 0
+  bb11:
+    v15: usize = slot(v3, v9)
+    v16: u256 = load mem[v0].*[v15]
+    store mem[v7][v9] = v16
+    jmp bb8
+  bb12:
+    store mem[v7][v9] = v2
+    jmp bb13
+  bb13:
+    jmp bb8
+  bb14:
+    v18: usize = checked_sub<usize>(v9, 1)
+    v19: usize = slot(v3, v18)
+    v20: u256 = load mem[v0].*[v19]
+    v21: bool = u256_h3271ca15373d4483_ord_h264f6d6d75097a_ge(v20, 100)
+    br v21 bb15 bb16
+  bb15:
+    ret 0
+  bb16:
+    v22: usize = checked_sub<usize>(v9, 1)
+    v23: usize = slot(v3, v22)
+    v24: u256 = load mem[v0].*[v23]
+    store mem[v7][v9] = v24
+    jmp bb13
+
+fn usize_ha12462c6d36e68b0_ord_h264f6d6d75097a_lt(v0: usize, v1: usize) -> bool:
+  bb0:
+    v2: bool = __lt_usize(v0, v1)
+    ret v2
+
+fn u256_h3271ca15373d4483_ord_h264f6d6d75097a_ge(v0: u256, v1: u256) -> bool:
+  bb0:
+    v2: bool = __ge_u256(v0, v1)
+    ret v2
+
+fn usize_ha12462c6d36e68b0_eq_he50383edd273619f_eq(v0: usize, v1: usize) -> bool:
+  bb0:
+    v2: bool = __eq_usize(v0, v1)
+    ret v2
