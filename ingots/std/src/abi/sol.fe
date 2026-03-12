@@ -41,32 +41,18 @@ impl Abi for Sol {
     }
 }
 
-pub struct SolDecoder<I> {
-    pub cur: Cursor<I>,
-    pub base: u256,
-}
+pub struct SolDecoder<I> { pub cur: Cursor<I>, pub base: u256 }
 
-impl<I> SolDecoder<I>
-    where I: ByteInput
-{
+impl<I> SolDecoder<I> where I: ByteInput {
     pub fn new(input: own I) -> Self {
-        SolDecoder {
-            cur: Cursor::new(input),
-            base: 0,
-        }
+        SolDecoder { cur: Cursor::new(input), base: 0 }
     }
-
     pub fn with_base(input: own I, base: u256) -> Self {
-        SolDecoder {
-            cur: Cursor::new(input).fork(base),
-            base,
-        }
+        SolDecoder { cur: Cursor { input, pos: base }, base }
     }
 }
 
-impl<I> AbiDecoder<Sol> for SolDecoder<I>
-    where I: ByteInput
-{
+impl<I> AbiDecoder<Sol> for SolDecoder<I> where I: ByteInput {
     type Input = I
 
     fn input(self) -> Self::Input {
@@ -85,10 +71,11 @@ impl<I> AbiDecoder<Sol> for SolDecoder<I>
         self.cur.pos = new_pos
     }
 
+    #[arithmetic(unchecked)]
     fn read_u8(mut self) -> u8 {
         let len = self.cur.input.len()
         let new_pos = self.cur.pos + 1
-        if new_pos < self.cur.pos || new_pos > len {
+        if new_pos > len {
             revert(0, 0)
         }
         let b = self.cur.input.byte_at(self.cur.pos)
@@ -96,10 +83,11 @@ impl<I> AbiDecoder<Sol> for SolDecoder<I>
         b
     }
 
+    #[arithmetic(unchecked)]
     fn read_word(mut self) -> u256 {
         let len = self.cur.input.len()
         let new_pos = self.cur.pos + 32
-        if new_pos < self.cur.pos || new_pos > len {
+        if new_pos > len {
             revert(0, 0)
         }
         let w = self.cur.input.word_at(self.cur.pos)
@@ -107,12 +95,11 @@ impl<I> AbiDecoder<Sol> for SolDecoder<I>
         w
     }
 
+    #[arithmetic(unchecked)]
     fn peek_word(self, at: u256) -> u256 {
         let len = self.cur.input.len()
         let end = at + 32
-        if end < at || end > len {
-            revert(0, 0)
-        }
+        if end > len { revert(0, 0) }
         self.cur.input.word_at(at)
     }
 
@@ -121,21 +108,14 @@ impl<I> AbiDecoder<Sol> for SolDecoder<I>
     }
 }
 
-pub struct SolEncoder {
-    pub start: u256,
-    pub pos: u256,
-    pub end: u256,
-}
+pub struct SolEncoder { pub start: u256, pub pos: u256, pub end: u256 }
 
 impl SolEncoder {
     pub fn new() -> Self {
-        SolEncoder {
-            start: 0,
-            pos: 0,
-            end: 0,
-        }
+        SolEncoder { start: 0, pos: 0, end: 0 }
     }
 
+    #[arithmetic(unchecked)]
     fn ensure_init(mut self, bytes: u256) {
         if self.start == 0 {
             let ptr = mem::alloc(bytes)
@@ -159,11 +139,13 @@ impl AbiEncoder<Sol> for SolEncoder {
         self.pos = new_pos
     }
 
+    #[arithmetic(unchecked)]
     fn write_u8(mut self, v: u8) {
         mstore8(self.pos, v)
         self.pos = self.pos + 1
     }
 
+    #[arithmetic(unchecked)]
     fn write_word(mut self, v: u256) {
         let p = self.pos
         mstore(p, v)
@@ -174,6 +156,7 @@ impl AbiEncoder<Sol> for SolEncoder {
         mstore(at, v)
     }
 
+    #[arithmetic(unchecked)]
     fn reserve_head(mut self, bytes: u256) -> u256 {
         if self.start == 0 {
             let ptr = mem::alloc(bytes)
@@ -184,6 +167,7 @@ impl AbiEncoder<Sol> for SolEncoder {
         self.start
     }
 
+    #[arithmetic(unchecked)]
     fn append_tail(mut self, bytes: u256) -> u256 {
         let ptr = mem::alloc(bytes)
         self.end = ptr + bytes

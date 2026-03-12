@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 33
 expression: output
 input_file: tests/fixtures/high_level_contract.fe
 ---
@@ -41,23 +42,6 @@ object "EchoContract" {
       sstore(add($state, 1), $y)
       leave
     }
-    function $checked_add_u256($a, $b) -> ret {
-      let v0 := $checked_add_unsigned_impl__u256__3271ca15373d4483($a, $b)
-      ret := v0
-      leave
-    }
-    function $checked_add_unsigned_impl__u256__3271ca15373d4483($a, $b) -> ret {
-      let v0 := $u256_h3271ca15373d4483_wrappingadd_h14afa79b3047617f_wrapping_add($a, $b)
-      let v1 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word(v0)
-      let v2 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($a)
-      let v3 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v1, v2)
-      let v4 := v3
-      if v4 {
-        revert(0, 0)
-      }
-      ret := v0
-      leave
-    }
     function $cursor_i__h140a998c67d6d59c_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b($input) -> ret {
       let v0 := mload(0x40)
       if iszero(v0) {
@@ -91,7 +75,7 @@ object "EchoContract" {
     }
     function $memorybytes_h1e381015a9b0111b_byteinput_hc4c2cb44299530ae_word_at($self, $byte_offset) -> ret {
       let v0 := mload($self)
-      let v1 := $checked_add_u256(v0, $byte_offset)
+      let v1 := add(v0, $byte_offset)
       let v2 := mload(v1)
       ret := v2
       leave
@@ -105,24 +89,17 @@ object "EchoContract" {
       let v0 := $self
       let v1 := $memorybytes_h1e381015a9b0111b_byteinput_hc4c2cb44299530ae_len(v0)
       let v2 := mload(add($self, 64))
-      let v3 := $checked_add_u256(v2, 32)
-      let v4 := v3
-      let v5 := mload(add($self, 64))
-      let v6 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v4, v5)
-      let v7 := v6
-      if v7 {
+      let v3 := add(v2, 32)
+      let v4 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt(v3, v1)
+      let v5 := v4
+      if v5 {
         revert(0, 0)
       }
-      let v8 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt(v4, v1)
-      let v9 := v8
-      if v9 {
-        revert(0, 0)
-      }
-      let v10 := mload(add($self, 64))
-      let v11 := $self
-      let v12 := $memorybytes_h1e381015a9b0111b_byteinput_hc4c2cb44299530ae_word_at(v11, v10)
-      mstore(add($self, 64), v4)
-      ret := v12
+      let v6 := mload(add($self, 64))
+      let v7 := $self
+      let v8 := $memorybytes_h1e381015a9b0111b_byteinput_hc4c2cb44299530ae_word_at(v7, v6)
+      mstore(add($self, 64), v3)
+      ret := v8
       leave
     }
     function $soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b($input) -> ret {
@@ -154,22 +131,8 @@ object "EchoContract" {
       ret := v0
       leave
     }
-    function $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($self) -> ret {
-      ret := $self
-      leave
-    }
     function $u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt($self, $other) -> ret {
       let v0 := gt($self, $other)
-      ret := v0
-      leave
-    }
-    function $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt($self, $other) -> ret {
-      let v0 := lt($self, $other)
-      ret := v0
-      leave
-    }
-    function $u256_h3271ca15373d4483_wrappingadd_h14afa79b3047617f_wrapping_add($self, $other) -> ret {
-      let v0 := add($self, $other)
       ret := v0
       leave
     }
@@ -221,26 +184,9 @@ object "EchoContract" {
         leave
       }
       function $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at($self, $byte_offset) -> ret {
-        let v0 := $checked_add_u256($self, $byte_offset)
+        let v0 := add($self, $byte_offset)
         let v1 := calldataload(v0)
         ret := v1
-        leave
-      }
-      function $checked_add_u256($a, $b) -> ret {
-        let v0 := $checked_add_unsigned_impl__u256__3271ca15373d4483($a, $b)
-        ret := v0
-        leave
-      }
-      function $checked_add_unsigned_impl__u256__3271ca15373d4483($a, $b) -> ret {
-        let v0 := $u256_h3271ca15373d4483_wrappingadd_h14afa79b3047617f_wrapping_add($a, $b)
-        let v1 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word(v0)
-        let v2 := $u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word($a)
-        let v3 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v1, v2)
-        let v4 := v3
-        if v4 {
-          revert(0, 0)
-        }
-        ret := v0
         leave
       }
       function $checked_sub_u256($a, $b) -> ret {
@@ -258,29 +204,6 @@ object "EchoContract" {
         }
         let v4 := $u256_h3271ca15373d4483_wrappingsub_h6880d1ff91f0a556_wrapping_sub($a, $b)
         ret := v4
-        leave
-      }
-      function $cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($self, $pos) -> ret {
-        let v0 := mload($self)
-        let v1 := mload(0x40)
-        if iszero(v1) {
-          v1 := 0x80
-        }
-        mstore(0x40, add(v1, 64))
-        mstore(v1, v0)
-        mstore(add(v1, 32), $pos)
-        ret := v1
-        leave
-      }
-      function $cursor_i__h140a998c67d6d59c_new__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($input) -> ret {
-        let v0 := mload(0x40)
-        if iszero(v0) {
-          v0 := 0x80
-        }
-        mstore(0x40, add(v0, 64))
-        mstore(v0, $input)
-        mstore(add(v0, 32), 0)
-        ret := v0
         leave
       }
       function $echo_h9f932a87feb06bd2_decode_h624c3cd8c996d995_decode__SolDecoder_CallData___c1e4510fd444b966($d) -> ret {
@@ -356,39 +279,37 @@ object "EchoContract" {
         let v0 := mload($self)
         let v1 := $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len(v0)
         let v2 := mload(add($self, 32))
-        let v3 := $checked_add_u256(v2, 32)
-        let v4 := v3
-        let v5 := mload(add($self, 32))
-        let v6 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v4, v5)
-        let v7 := v6
-        if v7 {
+        let v3 := add(v2, 32)
+        let v4 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt(v3, v1)
+        let v5 := v4
+        if v5 {
           revert(0, 0)
         }
-        let v8 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt(v4, v1)
-        let v9 := v8
-        if v9 {
-          revert(0, 0)
-        }
-        let v10 := mload($self)
-        let v11 := mload(add($self, 32))
-        let v12 := $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at(v10, v11)
-        mstore(add($self, 32), v4)
-        ret := v12
+        let v6 := mload($self)
+        let v7 := mload(add($self, 32))
+        let v8 := $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at(v6, v7)
+        mstore(add($self, 32), v3)
+        ret := v8
         leave
       }
       function $soldecoder_i__ha12a03fcb5ba844b_with_base__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($input, $base) -> ret {
-        let v0 := $cursor_i__h140a998c67d6d59c_new__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563($input)
-        let v1 := $cursor_i__h140a998c67d6d59c_fork__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563(v0, $base)
-        let v2 := mload(0x40)
-        if iszero(v2) {
-          v2 := 0x80
+        let v0 := mload(0x40)
+        if iszero(v0) {
+          v0 := 0x80
         }
-        mstore(0x40, add(v2, 96))
-        let v3 := v1
-        mstore(v2, mload(v3))
-        mstore(add(v2, 32), mload(add(v3, 32)))
-        mstore(add(v2, 64), $base)
-        ret := v2
+        mstore(0x40, add(v0, 64))
+        mstore(v0, $input)
+        mstore(add(v0, 32), $base)
+        let v1 := mload(0x40)
+        if iszero(v1) {
+          v1 := 0x80
+        }
+        mstore(0x40, add(v1, 96))
+        let v2 := v0
+        mstore(v1, mload(v2))
+        mstore(add(v1, 32), mload(add(v2, 32)))
+        mstore(add(v1, 64), $base)
+        ret := v1
         leave
       }
       function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_finish($self) -> ret {
@@ -418,19 +339,17 @@ object "EchoContract" {
           mstore(64, add(v3, $bytes))
           mstore($self, v3)
           mstore(add($self, 32), v3)
-          let v4 := $checked_add_u256(v3, $bytes)
-          mstore(add($self, 64), v4)
+          mstore(add($self, 64), add(v3, $bytes))
         }
-        let v5 := mload($self)
-        ret := v5
+        let v4 := mload($self)
+        ret := v4
         leave
       }
       function $solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_word($self, $v) {
         let v0 := mload(add($self, 32))
         let v1 := v0
         mstore(v1, $v)
-        let v2 := $checked_add_u256(v1, 32)
-        mstore(add($self, 32), v2)
+        mstore(add($self, 32), add(v1, 32))
         leave
       }
       function $solencoder_h1b9228b90dad6928_new() -> ret {
@@ -479,11 +398,6 @@ object "EchoContract" {
       }
       function $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt($self, $other) -> ret {
         let v0 := lt($self, $other)
-        ret := v0
-        leave
-      }
-      function $u256_h3271ca15373d4483_wrappingadd_h14afa79b3047617f_wrapping_add($self, $other) -> ret {
-        let v0 := add($self, $other)
         ret := v0
         leave
       }

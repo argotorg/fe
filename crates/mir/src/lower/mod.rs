@@ -21,14 +21,9 @@ use hir::analysis::{
     },
 };
 use hir::hir_def::{
-    Attr, AttrArg, AttrArgValue, Body, CallableDef, Cond, CondId, Const, Expr, ExprId, Field,
-    FieldIndex, Func, HirIngot, IdentId, ItemKind, LitKind, MatchArm, Partial, Pat, PatId, Stmt,
-    StmtId, TopLevelMod, VariantKind,
-};
-use hir::hir_def::{
     ArithmeticMode, Attr, AttrArg, AttrArgValue, Body, CallableDef, Cond, CondId, Const, Expr,
     ExprId, Field, FieldIndex, Func, HirIngot, IdentId, ItemKind, LitKind, MatchArm, Partial, Pat,
-    PatId, Stmt, StmtId, TopLevelMod, VariantKind, expr::BinOp,
+    PatId, Stmt, StmtId, TopLevelMod, VariantKind,
 };
 
 use crate::{
