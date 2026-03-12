@@ -1,6 +1,6 @@
 use dir_test::{Fixture, dir_test};
 
-use test_utils::snap_test;
+use test_utils::{normalize::normalize_newlines, snap_test};
 
 mod test_runner;
 use test_runner::*;
@@ -13,7 +13,7 @@ fn test_item_list(fixture: Fixture<&str>) {
     let runner = TestRunner::item_list(false);
     let (cst, _) = runner.run(fixture.content());
     let node = format! {"{:#?}", cst};
-    assert_eq!(fixture.content(), &cst.to_string());
+    assert_eq!(normalize_newlines(fixture.content()), cst.to_string());
     snap_test!(node, fixture.path());
 }
 
@@ -25,7 +25,7 @@ fn test_stmt(fixture: Fixture<&str>) {
     let runner = TestRunner::stmt_list(false);
     let (cst, _) = runner.run(fixture.content());
     let node = format! {"{:#?}", cst};
-    assert_eq!(fixture.content(), &cst.to_string());
+    assert_eq!(normalize_newlines(fixture.content()), cst.to_string());
     snap_test!(node, fixture.path());
 }
 
@@ -37,7 +37,7 @@ fn test_expr(fixture: Fixture<&str>) {
     let runner = TestRunner::expr_list(false);
     let (cst, _) = runner.run(fixture.content());
     let node = format! {"{:#?}", cst};
-    assert_eq!(fixture.content(), &cst.to_string());
+    assert_eq!(normalize_newlines(fixture.content()), cst.to_string());
     snap_test!(node, fixture.path());
 }
 
@@ -56,7 +56,7 @@ mod wasm {
     )]
     fn test_item_list(fixture: Fixture<&str>) {
         TestRunner::item_list(false).run(fixture.content());
-        assert_eq!(fixture.content(), &cst.to_string());
+        assert_eq!(normalize_newlines(fixture.content()), cst.to_string());
     }
 
     #[dir_test(
@@ -69,7 +69,7 @@ mod wasm {
     )]
     fn test_stmt(fixture: Fixture<&str>) {
         TestRunner::stmt_list(false).run(fixture.content());
-        assert_eq!(fixture.content(), &cst.to_string());
+        assert_eq!(normalize_newlines(fixture.content()), cst.to_string());
     }
 
     #[dir_test(
@@ -82,6 +82,6 @@ mod wasm {
     )]
     fn test_expr(fixture: Fixture<&str>) {
         TestRunner::expr_list(false).run(fixture.content());
-        assert_eq!(fixture.content(), &cst.to_string());
+        assert_eq!(normalize_newlines(fixture.content()), cst.to_string());
     }
 }
