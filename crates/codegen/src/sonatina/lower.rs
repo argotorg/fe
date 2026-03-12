@@ -2418,9 +2418,32 @@ fn lower_place_address_gep<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 )?;
             }
             Projection::Index(idx_source) => {
+                // Bounds check: revert if index >= array length
+                let arr_len = layout::array_len(ctx.db, step.owner.ty);
                 let idx_val = match idx_source {
-                    IndexSource::Constant(idx) => ctx.fb.make_imm_value(I256::from(*idx as u64)),
-                    IndexSource::Dynamic(value_id) => lower_value(ctx, *value_id)?,
+                    IndexSource::Constant(idx) => {
+                        if let Some(len) = arr_len
+                            && *idx >= len
+                        {
+                            let revert_block = ensure_overflow_revert_block(ctx)?;
+                            ctx.fb
+                                .insert_inst_no_result(Jump::new(ctx.is, revert_block));
+                            let unreachable_block = ctx.fb.append_block();
+                            ctx.fb.switch_to_block(unreachable_block);
+                        }
+                        ctx.fb.make_imm_value(I256::from(*idx as u64))
+                    }
+                    IndexSource::Dynamic(value_id) => {
+                        let val = lower_value(ctx, *value_id)?;
+                        if let Some(len) = arr_len {
+                            let len_val = ctx.fb.make_imm_value(I256::from(len as u64));
+                            let in_bounds =
+                                ctx.fb.insert_inst(Lt::new(ctx.is, val, len_val), Type::I1);
+                            let oob = ctx.fb.insert_inst(IsZero::new(ctx.is, in_bounds), Type::I1);
+                            emit_overflow_revert(ctx, oob)?;
+                        }
+                        val
+                    }
                 };
                 gep_values.push(idx_val);
 
@@ -2565,8 +2588,21 @@ fn lower_place_address_arithmetic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                     ))
                 })?;
 
+                // Get the array length for bounds checking
+                let arr_len = layout::array_len(ctx.db, step.owner.ty);
+
                 match idx_source {
                     IndexSource::Constant(idx) => {
+                        // Compile-time bounds check for constant indices
+                        if let Some(len) = arr_len
+                            && *idx >= len
+                        {
+                            let revert_block = ensure_overflow_revert_block(ctx)?;
+                            ctx.fb
+                                .insert_inst_no_result(Jump::new(ctx.is, revert_block));
+                            let unreachable_block = ctx.fb.append_block();
+                            ctx.fb.switch_to_block(unreachable_block);
+                        }
                         total_offset += idx * stride;
                     }
                     IndexSource::Dynamic(value_id) => {
@@ -2578,8 +2614,21 @@ fn lower_place_address_arithmetic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                                 .insert_inst(Add::new(ctx.is, base_val, offset_val), Type::I256);
                             total_offset = 0;
                         }
-                        // Compute dynamic index offset: idx * stride
+
+                        // Bounds check: revert if index >= array length
                         let idx_val = lower_value(ctx, *value_id)?;
+                        if let Some(len) = arr_len {
+                            let len_val = ctx.fb.make_imm_value(I256::from(len as u64));
+                            // idx < len → 1 (in bounds) → IsZero → 0 (don't revert)
+                            // idx >= len → 0 (OOB) → IsZero → 1 (revert)
+                            let in_bounds = ctx
+                                .fb
+                                .insert_inst(Lt::new(ctx.is, idx_val, len_val), Type::I1);
+                            let oob = ctx.fb.insert_inst(IsZero::new(ctx.is, in_bounds), Type::I1);
+                            emit_overflow_revert(ctx, oob)?;
+                        }
+
+                        // Compute dynamic index offset: idx * stride
                         let offset_val = if stride == 1 {
                             idx_val
                         } else {

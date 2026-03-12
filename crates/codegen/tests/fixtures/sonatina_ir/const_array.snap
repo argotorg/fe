@@ -15,24 +15,34 @@ func private %sum_two(v0.i256, v1.i256) -> i256 {
         v6.i256 = ptr_to_int v3 i256;
         evm_code_copy v6 v4 v5;
         v7.*[i256; 3] = bitcast v3 *[i256; 3];
-        v9.*i256 = gep v7 0.i256 v0;
-        v10.i256 = mload v9 i256;
-        v11.*i8 = evm_malloc 96.i256;
-        v12.i256 = sym_addr $__fe_const_data_0;
-        v13.i256 = sym_size $__fe_const_data_0;
-        v14.i256 = ptr_to_int v11 i256;
-        evm_code_copy v14 v12 v13;
-        v15.*[i256; 3] = bitcast v11 *[i256; 3];
-        v16.*i256 = gep v15 0.i256 v1;
-        v17.i256 = mload v16 i256;
-        (v18.i256, v19.i1) = uaddo v10 v17;
-        br v19 block1 block2;
+        v10.i1 = lt v0 3.i256;
+        v11.i1 = is_zero v10;
+        br v11 block1 block2;
 
     block1:
         evm_revert 0.i256 0.i256;
 
     block2:
-        return v18;
+        v12.*i256 = gep v7 0.i256 v0;
+        v13.i256 = mload v12 i256;
+        v14.*i8 = evm_malloc 96.i256;
+        v15.i256 = sym_addr $__fe_const_data_0;
+        v16.i256 = sym_size $__fe_const_data_0;
+        v17.i256 = ptr_to_int v14 i256;
+        evm_code_copy v17 v15 v16;
+        v18.*[i256; 3] = bitcast v14 *[i256; 3];
+        v20.i1 = lt v1 3.i256;
+        v21.i1 = is_zero v20;
+        br v21 block1 block3;
+
+    block3:
+        v22.*i256 = gep v18 0.i256 v1;
+        v23.i256 = mload v22 i256;
+        (v25.i256, v26.i1) = uaddo v13 v23;
+        br v26 block1 block4;
+
+    block4:
+        return v25;
 }
 
 func private %__fe_sonatina_entry() {

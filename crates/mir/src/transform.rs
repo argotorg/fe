@@ -703,6 +703,46 @@ fn path_has_deref<'db>(path: &MirProjectionPath<'db>) -> bool {
     path.iter().any(|proj| matches!(proj, Projection::Deref))
 }
 
+fn path_has_index<'db>(path: &MirProjectionPath<'db>) -> bool {
+    path.iter().any(|proj| matches!(proj, Projection::Index(_)))
+}
+
+/// Returns `true` when any projection in the full resolution chain of `place`
+/// (both the base-value prefix obtained via `resolve_local_projection_root` and
+/// the explicit `place.projection`) contains an `Index` step.  Evaluating such
+/// a place has a side effect in codegen (an OOB bounds-check revert), so
+/// instructions that touch it must not be eliminated as dead code.
+fn place_has_indexed_projection<'db>(body: &MirBody<'db>, place: &Place<'db>) -> bool {
+    if path_has_index(&place.projection) {
+        return true;
+    }
+    value_has_indexed_origin(&body.values, place.base)
+}
+
+/// Walks the value origin chain and returns `true` if any `PlaceRef` or
+/// `MoveOut` along the way contains an `Index` projection.  This catches
+/// by-ref element accesses that are wrapped in `Rvalue::Value(value_id)`
+/// rather than `Rvalue::Load { place }`.
+fn value_has_indexed_origin<'db>(values: &[ValueData<'db>], value: ValueId) -> bool {
+    use crate::ir::ValueOrigin;
+    let mut current = value;
+    loop {
+        let Some(data) = values.get(current.index()) else {
+            return false;
+        };
+        match &data.origin {
+            ValueOrigin::TransparentCast { value } => current = *value,
+            ValueOrigin::PlaceRef(place) | ValueOrigin::MoveOut { place } => {
+                if path_has_index(&place.projection) {
+                    return true;
+                }
+                current = place.base;
+            }
+            _ => return false,
+        }
+    }
+}
+
 fn removable_memory_root_local_for_place<'db>(
     body: &MirBody<'db>,
     place: &Place<'db>,
@@ -711,20 +751,40 @@ fn removable_memory_root_local_for_place<'db>(
     if path_has_deref(&prefix) || path_has_deref(&place.projection) {
         return None;
     }
+    // Stores/loads through indexed projections must not be eliminated: the
+    // codegen emits a bounds check (revert on OOB) as a side effect of
+    // evaluating the index.  Removing the instruction would silently drop
+    // that check.
+    if path_has_index(&prefix) || path_has_index(&place.projection) {
+        return None;
+    }
     (crate::ir::try_place_address_space_in(&body.values, &body.locals, place)
         == Some(AddressSpaceKind::Memory))
     .then_some(local)
 }
 
-fn removable_assign_rvalue<'db>(_body: &MirBody<'db>, rvalue: &Rvalue<'db>) -> bool {
+fn removable_assign_rvalue<'db>(body: &MirBody<'db>, rvalue: &Rvalue<'db>) -> bool {
     match rvalue {
-        Rvalue::ZeroInit
-        | Rvalue::Alloc { .. }
-        | Rvalue::ConstAggregate { .. }
-        | Rvalue::Value(_) => true,
-        Rvalue::Load { .. } => true,
+        Rvalue::ZeroInit | Rvalue::Alloc { .. } | Rvalue::ConstAggregate { .. } => true,
+        // A plain value is removable unless it originates from an indexed
+        // place (PlaceRef/MoveOut with an Index projection).  By-ref element
+        // accesses lower to PlaceRef values, and evaluating the place in
+        // codegen triggers a bounds check that must not be dropped.
+        Rvalue::Value(value) => !value_has_indexed_origin(&body.values, *value),
+        // Loads through indexed projections are not removable: the codegen
+        // emits a bounds check (revert on OOB) as a side effect of evaluating
+        // the index.  Removing the load would silently drop that check.
+        // We check both `place.projection` and the base-value prefix to
+        // cover nested accesses like `arr[i].field`.
+        Rvalue::Load { place } => !place_has_indexed_projection(body, place),
         Rvalue::Call(_) | Rvalue::Intrinsic { .. } => false,
     }
+}
+
+fn removable_bind_value<'db>(body: &MirBody<'db>, value: ValueId) -> bool {
+    // Binding an indexed place is not side-effect-free: lowering the value
+    // evaluates the place and emits the OOB bounds check in codegen.
+    !value_has_indexed_origin(&body.values, value)
 }
 
 fn mark_value_runtime_live<'db>(
@@ -813,7 +873,8 @@ fn instruction_is_runtime_root<'db>(
                 .is_none_or(|local| live_locals.contains(&local))
         }
         MirInst::BindValue { value, .. } => {
-            live_values.get(value.index()).copied().unwrap_or(false)
+            !removable_bind_value(body, *value)
+                || live_values.get(value.index()).copied().unwrap_or(false)
         }
     }
 }

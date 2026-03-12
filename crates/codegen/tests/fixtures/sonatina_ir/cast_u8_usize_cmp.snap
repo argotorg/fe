@@ -7,34 +7,42 @@ target = "evm-ethereum-osaka"
 
 func private %cast_u8_usize_cmp(v0.*[i8; 8], v1.i256, v2.i256) -> i8 {
     block0:
-        v4.*i8 = gep v0 0.i256 v1;
-        v5.i256 = mload v4 i256;
-        v6.i8 = trunc v5 i8;
-        v7.i256 = zext v6 i256;
-        v8.i1 = call %usize_ha12462c6d36e68b0_ord_h264f6d6d75097a_lt v2 v7;
-        br v8 block1 block2;
+        v5.i1 = lt v1 8.i256;
+        v6.i1 = is_zero v5;
+        br v6 block7 block8;
 
     block1:
         return 1.i8;
 
     block2:
-        v12.i256 = zext v6 i256;
-        v13.i1 = call %usize_ha12462c6d36e68b0_eq_he50383edd273619f_eq v2 v12;
-        br v13 block3 block4;
+        v16.i256 = zext v9 i256;
+        v17.i1 = call %usize_ha12462c6d36e68b0_eq_he50383edd273619f_eq v2 v16;
+        br v17 block3 block4;
 
     block3:
         return 2.i8;
 
     block4:
-        v17.i256 = zext v6 i256;
-        v18.i1 = call %usize_ha12462c6d36e68b0_ord_h264f6d6d75097a_gt v2 v17;
-        br v18 block5 block6;
+        v21.i256 = zext v9 i256;
+        v22.i1 = call %usize_ha12462c6d36e68b0_ord_h264f6d6d75097a_gt v2 v21;
+        br v22 block5 block6;
 
     block5:
         return 3.i8;
 
     block6:
         return 0.i8;
+
+    block7:
+        evm_revert 0.i256 0.i256;
+
+    block8:
+        v7.*i8 = gep v0 0.i256 v1;
+        v8.i256 = mload v7 i256;
+        v9.i8 = trunc v8 i8;
+        v11.i256 = zext v9 i256;
+        v12.i1 = call %usize_ha12462c6d36e68b0_ord_h264f6d6d75097a_lt v2 v11;
+        br v12 block1 block2;
 }
 
 func private %usize_ha12462c6d36e68b0_ord_h264f6d6d75097a_lt(v0.i256, v1.i256) -> i1 {

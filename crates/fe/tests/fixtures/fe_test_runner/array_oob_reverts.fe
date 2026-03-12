@@ -1,0 +1,57 @@
+use std::evm::effects::assert
+
+// Verifies that out-of-bounds array access reverts at runtime.
+// The Sonatina backend emits `lt idx len` + `is_zero` + conditional branch
+// to a revert block for every dynamic array index.
+
+// --- used results (value is consumed) ---
+
+#[test(should_revert)]
+fn test_oob_read_reverts() {
+    let arr: [u256; 4] = [10, 20, 30, 40]
+    let i: u256 = 4
+    let val = arr[i as usize]
+    assert(val == 0)
+}
+
+#[test(should_revert)]
+fn test_oob_write_reverts() {
+    let mut arr: [u256; 4] = [10, 20, 30, 40]
+    let i: u256 = 4
+    arr[i as usize] = 99
+}
+
+#[test(should_revert)]
+fn test_oob_large_index_reverts() {
+    let arr: [u256; 4] = [10, 20, 30, 40]
+    let i: u256 = 100
+    let val = arr[i as usize]
+    assert(val == 0)
+}
+
+#[test(should_revert)]
+fn test_oob_into_adjacent_array_reverts() {
+    let a: [u256; 4] = [10, 20, 30, 40]
+    let b: [u256; 4] = [100, 200, 300, 400]
+
+    // i=4 is OOB for `a` — reverts instead of silently reading b[0]
+    let i: u256 = 4
+    let leaked = a[i as usize]
+    assert(leaked == 100)
+}
+
+// --- dead results (value unused — DCE must not drop the bounds check) ---
+
+#[test(should_revert)]
+fn test_oob_dead_read_reverts() {
+    let arr: [u256; 4] = [10, 20, 30, 40]
+    let i: u256 = 4
+    let _val = arr[i as usize]
+}
+
+#[test(should_revert)]
+fn test_oob_dead_write_reverts() {
+    let mut arr: [u256; 4] = [10, 20, 30, 40]
+    let i: u256 = 4
+    arr[i as usize] = 99
+}
