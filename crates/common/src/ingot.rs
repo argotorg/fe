@@ -177,6 +177,12 @@ impl<'db> Ingot<'db> {
 
     #[salsa::tracked]
     pub fn arithmetic_mode(self, db: &'db dyn InputDb) -> Option<ArithmeticMode> {
+        if let Some(mode) = db
+            .dependency_graph()
+            .forced_dependency_arithmetic_for(db, &self.base(db))
+        {
+            return Some(mode);
+        }
         let profile = db.compilation_settings().profile(db);
         resolve_arithmetic_mode(
             self.config(db).as_ref(),

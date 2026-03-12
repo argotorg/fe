@@ -1,0 +1,8 @@
+[workspace]
+name = "dependency_arithmetic_profile"
+version = "0.1.0"
+members = ["ingots/app"]
+dependency-arithmetic = "checked"
+
+[profiles.test]
+dependency-arithmetic = "unchecked"

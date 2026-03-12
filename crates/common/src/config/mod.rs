@@ -35,9 +35,28 @@ impl ArithmeticMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DependencyArithmeticMode {
+    Defer,
+    Checked,
+    Unchecked,
+}
+
+impl DependencyArithmeticMode {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "defer" => Some(Self::Defer),
+            "checked" => Some(Self::Checked),
+            "unchecked" => Some(Self::Unchecked),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ProfileSettings {
     pub arithmetic: Option<ArithmeticMode>,
+    pub dependency_arithmetic: Option<DependencyArithmeticMode>,
     pub extra: toml::value::Table,
 }
 
@@ -179,6 +198,10 @@ pub enum ConfigDiagnostic {
         field: SmolStr,
         value: SmolStr,
     },
+    InvalidDependencyArithmeticMode {
+        field: SmolStr,
+        value: SmolStr,
+    },
     UnexpectedTomlData {
         field: SmolStr,
         found: SmolStr,
@@ -249,6 +272,10 @@ impl Display for ConfigDiagnostic {
             Self::InvalidArithmeticMode { field, value } => write!(
                 f,
                 "Invalid arithmetic mode \"{value}\" in field {field}; expected \"checked\" or \"unchecked\""
+            ),
+            Self::InvalidDependencyArithmeticMode { field, value } => write!(
+                f,
+                "Invalid dependency arithmetic mode \"{value}\" in field {field}; expected \"defer\", \"checked\", or \"unchecked\""
             ),
             Self::UnexpectedTomlData {
                 field,
@@ -340,6 +367,37 @@ pub(crate) fn parse_arithmetic_field(
     }
 }
 
+pub(crate) fn parse_dependency_arithmetic_field(
+    parent: &str,
+    table: &toml::value::Table,
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+) -> Option<DependencyArithmeticMode> {
+    let value = table.get("dependency-arithmetic")?;
+    let field = if parent.is_empty() {
+        SmolStr::new("dependency-arithmetic")
+    } else {
+        SmolStr::new(format!("{parent}.dependency-arithmetic"))
+    };
+    let Some(value) = value.as_str() else {
+        diagnostics.push(ConfigDiagnostic::UnexpectedTomlData {
+            field,
+            found: value.type_str().to_lowercase().into(),
+            expected: Some("string".into()),
+        });
+        return None;
+    };
+    match DependencyArithmeticMode::parse(value) {
+        Some(mode) => Some(mode),
+        None => {
+            diagnostics.push(ConfigDiagnostic::InvalidDependencyArithmeticMode {
+                field,
+                value: value.into(),
+            });
+            None
+        }
+    }
+}
+
 pub(crate) fn parse_profiles_table(
     table: &toml::value::Table,
     diagnostics: &mut Vec<ConfigDiagnostic>,
@@ -369,9 +427,22 @@ pub(crate) fn parse_profiles_table(
 
         let arithmetic =
             parse_arithmetic_field(&format!("profiles.{name}"), profile_table, diagnostics);
+        let dependency_arithmetic = parse_dependency_arithmetic_field(
+            &format!("profiles.{name}"),
+            profile_table,
+            diagnostics,
+        );
         let mut extra = profile_table.clone();
         extra.remove("arithmetic");
-        profiles.insert(name.clone().into(), ProfileSettings { arithmetic, extra });
+        extra.remove("dependency-arithmetic");
+        profiles.insert(
+            name.clone().into(),
+            ProfileSettings {
+                arithmetic,
+                dependency_arithmetic,
+                extra,
+            },
+        );
     }
     profiles
 }
@@ -391,6 +462,28 @@ pub fn resolve_arithmetic_mode(
                     .or(config.workspace.arithmetic)
             })
         })
+}
+
+pub fn resolve_dependency_arithmetic_mode(
+    ingot: Option<&IngotConfig>,
+    workspace: Option<&WorkspaceConfig>,
+    profile: &str,
+) -> DependencyArithmeticMode {
+    ingot
+        .and_then(|config| {
+            config
+                .dependency_arithmetic_for_profile(profile)
+                .or(config.dependency_arithmetic)
+        })
+        .or_else(|| {
+            workspace.and_then(|config| {
+                config
+                    .workspace
+                    .dependency_arithmetic_for_profile(profile)
+                    .or(config.workspace.dependency_arithmetic)
+            })
+        })
+        .unwrap_or(DependencyArithmeticMode::Defer)
 }
 
 fn format_field_path(parent: &str, key: &str) -> String {
@@ -554,10 +647,12 @@ util = "0.1.0"
         let ingot = IngotConfig {
             metadata: IngotMetadata::default(),
             arithmetic: Some(ArithmeticMode::Unchecked),
+            dependency_arithmetic: None,
             profiles: BTreeMap::from([(
                 SmolStr::new("release"),
                 ProfileSettings {
                     arithmetic: Some(ArithmeticMode::Checked),
+                    dependency_arithmetic: None,
                     extra: toml::value::Table::new(),
                 },
             )]),
@@ -571,6 +666,7 @@ util = "0.1.0"
                     SmolStr::new("release"),
                     ProfileSettings {
                         arithmetic: Some(ArithmeticMode::Unchecked),
+                        dependency_arithmetic: None,
                         extra: toml::value::Table::new(),
                     },
                 )]),
@@ -598,6 +694,7 @@ util = "0.1.0"
                     SmolStr::new("release"),
                     ProfileSettings {
                         arithmetic: Some(ArithmeticMode::Checked),
+                        dependency_arithmetic: None,
                         extra: toml::value::Table::new(),
                     },
                 )]),
@@ -626,6 +723,7 @@ version = "0.1.0"
 
 [profiles.release]
 arithmetic = "unchecked"
+dependency-arithmetic = "checked"
 "#;
         let config = Config::parse(toml).expect("config parses");
         let Config::Ingot(config) = config else {
@@ -634,6 +732,61 @@ arithmetic = "unchecked"
         assert_eq!(
             config.arithmetic_for_profile("release"),
             Some(ArithmeticMode::Unchecked)
+        );
+        assert_eq!(
+            config.dependency_arithmetic_for_profile("release"),
+            Some(DependencyArithmeticMode::Checked)
+        );
+    }
+
+    #[test]
+    fn resolves_dependency_arithmetic_mode_with_profile_precedence() {
+        let ingot = IngotConfig {
+            metadata: IngotMetadata::default(),
+            arithmetic: None,
+            dependency_arithmetic: Some(DependencyArithmeticMode::Checked),
+            profiles: BTreeMap::from([(
+                SmolStr::new("release"),
+                ProfileSettings {
+                    arithmetic: None,
+                    dependency_arithmetic: Some(DependencyArithmeticMode::Unchecked),
+                    extra: toml::value::Table::new(),
+                },
+            )]),
+            dependency_entries: vec![],
+            diagnostics: vec![],
+        };
+        let workspace = WorkspaceConfig {
+            workspace: WorkspaceSettings {
+                dependency_arithmetic: Some(DependencyArithmeticMode::Unchecked),
+                profiles: BTreeMap::from([(
+                    SmolStr::new("release"),
+                    ProfileSettings {
+                        arithmetic: None,
+                        dependency_arithmetic: Some(DependencyArithmeticMode::Checked),
+                        extra: toml::value::Table::new(),
+                    },
+                )]),
+                ..WorkspaceSettings::default()
+            },
+            diagnostics: vec![],
+        };
+
+        assert_eq!(
+            resolve_dependency_arithmetic_mode(Some(&ingot), Some(&workspace), "release"),
+            DependencyArithmeticMode::Unchecked
+        );
+        assert_eq!(
+            resolve_dependency_arithmetic_mode(Some(&ingot), Some(&workspace), "dev"),
+            DependencyArithmeticMode::Checked
+        );
+        assert_eq!(
+            resolve_dependency_arithmetic_mode(None, Some(&workspace), "release"),
+            DependencyArithmeticMode::Checked
+        );
+        assert_eq!(
+            resolve_dependency_arithmetic_mode(None, None, "dev"),
+            DependencyArithmeticMode::Defer
         );
     }
 }

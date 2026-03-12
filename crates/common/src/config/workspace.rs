@@ -6,8 +6,9 @@ use toml::Value;
 use crate::ingot::Version;
 
 use super::{
-    ArithmeticMode, ConfigDiagnostic, ProfileSettings, dependency, is_valid_name,
-    parse_arithmetic_field, parse_profiles_table, parse_string_array_field,
+    ArithmeticMode, ConfigDiagnostic, DependencyArithmeticMode, ProfileSettings, dependency,
+    is_valid_name, parse_arithmetic_field, parse_dependency_arithmetic_field, parse_profiles_table,
+    parse_string_array_field,
 };
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -20,6 +21,7 @@ pub struct WorkspaceSettings {
     pub exclude: Vec<SmolStr>,
     pub metadata: Option<toml::value::Table>,
     pub arithmetic: Option<ArithmeticMode>,
+    pub dependency_arithmetic: Option<DependencyArithmeticMode>,
     pub profiles: BTreeMap<SmolStr, ProfileSettings>,
     pub scripts: Vec<WorkspaceScript>,
     pub resolution: Option<WorkspaceResolution>,
@@ -71,6 +73,15 @@ impl WorkspaceSettings {
         self.profiles
             .get(profile)
             .and_then(|settings| settings.arithmetic)
+    }
+
+    pub fn dependency_arithmetic_for_profile(
+        &self,
+        profile: &str,
+    ) -> Option<DependencyArithmeticMode> {
+        self.profiles
+            .get(profile)
+            .and_then(|settings| settings.dependency_arithmetic)
     }
 
     pub fn members_for_selection(
@@ -334,6 +345,8 @@ fn parse_arithmetic(
     diagnostics: &mut Vec<ConfigDiagnostic>,
 ) {
     workspace.arithmetic = parse_arithmetic_field("workspace", table, diagnostics);
+    workspace.dependency_arithmetic =
+        parse_dependency_arithmetic_field("workspace", table, diagnostics);
 }
 
 fn parse_scripts(
@@ -431,12 +444,14 @@ members = { main = ["ingot-a", "ingot-b/**"], dev = ["examples/**"] }
 default-members = ["ingot-a"]
 exclude = ["target", "ignored/**"]
 arithmetic = "unchecked"
+dependency-arithmetic = "defer"
 
 [metadata]
 docs = true
 
 [profiles.release]
 arithmetic = "checked"
+dependency-arithmetic = "unchecked"
 opt-level = 3
 
 [scripts]
@@ -495,8 +510,16 @@ util = { path = "ingots/util" }
         assert_eq!(workspace.exclude, vec!["target", "ignored/**"]);
         assert!(workspace.metadata.is_some());
         assert_eq!(workspace.arithmetic, Some(ArithmeticMode::Unchecked));
+        assert_eq!(
+            workspace.dependency_arithmetic,
+            Some(DependencyArithmeticMode::Defer)
+        );
         let release = workspace.profiles.get("release").expect("release profile");
         assert_eq!(release.arithmetic, Some(ArithmeticMode::Checked));
+        assert_eq!(
+            release.dependency_arithmetic,
+            Some(DependencyArithmeticMode::Unchecked)
+        );
         assert_eq!(release.extra.get("opt-level"), Some(&Value::Integer(3)));
         assert_eq!(workspace.scripts.len(), 2);
         let resolution = workspace.resolution.expect("resolution parsed");

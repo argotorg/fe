@@ -3,7 +3,10 @@ use std::collections::{HashMap, HashSet};
 use camino::{Utf8Path, Utf8PathBuf};
 use common::{
     InputDb,
-    config::{Config, ConfigDiagnostic, WorkspaceMemberSelection},
+    config::{
+        ArithmeticMode, Config, ConfigDiagnostic, DependencyArithmeticMode,
+        WorkspaceMemberSelection, resolve_dependency_arithmetic_mode,
+    },
     dependencies::{
         DependencyAlias, DependencyArguments, DependencyLocation, LocalFiles, RemoteFiles,
         WorkspaceMemberRecord,
@@ -32,6 +35,8 @@ pub struct IngotHandler<'a> {
     had_diagnostics: bool,
     reported_checkouts: HashSet<GitDescription>,
     dependency_contexts: HashMap<IngotDescriptor, Vec<DependencyContext>>,
+    dependency_arithmetic_requests: HashMap<IngotDescriptor, Vec<DependencyArithmeticRequest>>,
+    forced_dependency_arithmetic_sources: HashMap<Url, DependencyArithmeticRequest>,
     emitted_diagnostics: HashSet<String>,
 }
 
@@ -39,6 +44,28 @@ pub struct IngotHandler<'a> {
 struct DependencyContext {
     from_ingot_url: Url,
     dependency: SmolStr,
+}
+
+#[derive(Clone, Debug)]
+struct DependencyArithmeticRequest {
+    from_ingot_url: Url,
+    dependency: SmolStr,
+    mode: ArithmeticMode,
+}
+
+fn dependency_arithmetic_mode(mode: DependencyArithmeticMode) -> Option<ArithmeticMode> {
+    match mode {
+        DependencyArithmeticMode::Defer => None,
+        DependencyArithmeticMode::Checked => Some(ArithmeticMode::Checked),
+        DependencyArithmeticMode::Unchecked => Some(ArithmeticMode::Unchecked),
+    }
+}
+
+fn forced_dependency_policy(mode: ArithmeticMode) -> DependencyArithmeticMode {
+    match mode {
+        ArithmeticMode::Checked => DependencyArithmeticMode::Checked,
+        ArithmeticMode::Unchecked => DependencyArithmeticMode::Unchecked,
+    }
 }
 
 fn workspace_version_for_member(
@@ -65,6 +92,8 @@ impl<'a> IngotHandler<'a> {
             had_diagnostics: false,
             reported_checkouts: HashSet::new(),
             dependency_contexts: HashMap::new(),
+            dependency_arithmetic_requests: HashMap::new(),
+            forced_dependency_arithmetic_sources: HashMap::new(),
             emitted_diagnostics: HashSet::new(),
         }
     }
@@ -112,6 +141,172 @@ impl<'a> IngotHandler<'a> {
         self.had_diagnostics = true;
         tracing::error!(target: "resolver", "{diagnostic_string}");
         eprintln!("Error: {diagnostic_string}");
+    }
+
+    fn workspace_config_for_root(
+        &mut self,
+        workspace_root: Option<&Url>,
+    ) -> Option<common::config::WorkspaceConfig> {
+        let workspace_root = workspace_root?;
+        match self.config_at_url(workspace_root).ok()? {
+            Config::Workspace(config) => Some(*config),
+            Config::Ingot(_) => None,
+        }
+    }
+
+    fn record_dependency_arithmetic_request(
+        &mut self,
+        descriptor: &IngotDescriptor,
+        from_ingot_url: &Url,
+        dependency: &SmolStr,
+        mode: ArithmeticMode,
+    ) {
+        let requests = self
+            .dependency_arithmetic_requests
+            .entry(descriptor.clone())
+            .or_default();
+        if requests.iter().any(|request| {
+            request.from_ingot_url == *from_ingot_url
+                && request.dependency == *dependency
+                && request.mode == mode
+        }) {
+            return;
+        }
+        requests.push(DependencyArithmeticRequest {
+            from_ingot_url: from_ingot_url.clone(),
+            dependency: dependency.clone(),
+            mode,
+        });
+    }
+
+    fn requested_dependency_arithmetic(
+        &self,
+        descriptor: &IngotDescriptor,
+    ) -> Option<DependencyArithmeticRequest> {
+        self.dependency_arithmetic_requests
+            .get(descriptor)
+            .and_then(|requests| requests.first().cloned())
+    }
+
+    fn register_forced_dependency_arithmetic(
+        &mut self,
+        dependency_url: &Url,
+        request: DependencyArithmeticRequest,
+    ) {
+        if let Some(existing) = self
+            .forced_dependency_arithmetic_sources
+            .get(dependency_url)
+            .cloned()
+        {
+            if existing.mode != request.mode {
+                self.report_error(IngotInitDiagnostics::DependencyArithmeticConflict {
+                    dependency_url: dependency_url.clone(),
+                    first_ingot_url: existing.from_ingot_url,
+                    first_dependency: existing.dependency,
+                    first_mode: existing.mode,
+                    second_ingot_url: request.from_ingot_url,
+                    second_dependency: request.dependency,
+                    second_mode: request.mode,
+                });
+                return;
+            }
+        } else {
+            self.forced_dependency_arithmetic_sources
+                .insert(dependency_url.clone(), request.clone());
+        }
+
+        self.db.dependency_graph().force_dependency_arithmetic(
+            self.db,
+            dependency_url,
+            request.mode,
+        );
+    }
+
+    fn outbound_dependency_policy_for_ingot(
+        &mut self,
+        descriptor: &IngotDescriptor,
+        ingot_url: &Url,
+        workspace_root: Option<&Url>,
+        config: &common::config::IngotConfig,
+    ) -> DependencyArithmeticMode {
+        if let Some(mode) = self
+            .db
+            .dependency_graph()
+            .forced_dependency_arithmetic_for(self.db, ingot_url)
+            .or_else(|| {
+                self.requested_dependency_arithmetic(descriptor)
+                    .map(|request| request.mode)
+            })
+        {
+            return forced_dependency_policy(mode);
+        }
+
+        let workspace_config = self.workspace_config_for_root(workspace_root);
+        let profile = self.db.compilation_settings().profile(self.db);
+        resolve_dependency_arithmetic_mode(
+            Some(config),
+            workspace_config.as_ref(),
+            profile.as_str(),
+        )
+    }
+
+    fn outbound_dependency_policy_for_url(&mut self, ingot_url: &Url) -> DependencyArithmeticMode {
+        if let Some(mode) = self
+            .db
+            .dependency_graph()
+            .forced_dependency_arithmetic_for(self.db, ingot_url)
+        {
+            return forced_dependency_policy(mode);
+        }
+
+        let profile = self.db.compilation_settings().profile(self.db);
+        let workspace_root = self
+            .db
+            .dependency_graph()
+            .workspace_root_for_member(self.db, ingot_url);
+        let workspace_config = self.workspace_config_for_root(workspace_root.as_ref());
+        match self.config_at_url(ingot_url) {
+            Ok(Config::Ingot(config)) => resolve_dependency_arithmetic_mode(
+                Some(&config),
+                workspace_config.as_ref(),
+                profile.as_str(),
+            ),
+            Ok(Config::Workspace(config)) => {
+                resolve_dependency_arithmetic_mode(None, Some(&config), profile.as_str())
+            }
+            Err(_) => DependencyArithmeticMode::Defer,
+        }
+    }
+
+    fn is_external_dependency(
+        &self,
+        workspace_root: Option<&Url>,
+        dependency: &common::dependencies::Dependency,
+    ) -> bool {
+        match &dependency.location {
+            DependencyLocation::WorkspaceCurrent => false,
+            DependencyLocation::Remote(_) => true,
+            DependencyLocation::Local(local) => workspace_root.is_none_or(|workspace_root| {
+                self.db
+                    .dependency_graph()
+                    .workspace_root_for_member(self.db, &local.url)
+                    .as_ref()
+                    != Some(workspace_root)
+            }),
+        }
+    }
+
+    fn is_external_dependency_url(&self, from_url: &Url, to_url: &Url) -> bool {
+        self.db
+            .dependency_graph()
+            .workspace_root_for_member(self.db, from_url)
+            .is_none_or(|workspace_root| {
+                self.db
+                    .dependency_graph()
+                    .workspace_root_for_member(self.db, to_url)
+                    .as_ref()
+                    != Some(&workspace_root)
+            })
     }
 
     fn record_files(&mut self, files: &[resolver::files::File]) {
@@ -1070,11 +1265,30 @@ impl<'a> ResolutionHandler<IngotResolverImpl> for IngotHandler<'a> {
             aliases.push(concrete_description);
         }
 
+        if let Some(request) = self.requested_dependency_arithmetic(descriptor) {
+            self.register_forced_dependency_arithmetic(&ingot_url, request);
+        }
+
+        let dependency_policy = self.outbound_dependency_policy_for_ingot(
+            descriptor,
+            &ingot_url,
+            workspace_root.as_ref(),
+            &config,
+        );
         let mut dependencies = Vec::new();
         for dependency in config.dependencies(&ingot_url) {
+            let is_external = self.is_external_dependency(workspace_root.as_ref(), &dependency);
             if let Some(converted) =
                 self.convert_dependency(&ingot_url, &origin, workspace_root.as_ref(), dependency)
             {
+                if is_external && let Some(mode) = dependency_arithmetic_mode(dependency_policy) {
+                    self.record_dependency_arithmetic_request(
+                        &converted.0,
+                        &ingot_url,
+                        &converted.1.0,
+                        mode,
+                    );
+                }
                 let priority = match &converted.0 {
                     IngotDescriptor::Local(_) | IngotDescriptor::LocalByName { .. } => {
                         IngotPriority::local()
@@ -1175,6 +1389,20 @@ impl<'a>
                             found_name,
                             found_version,
                         });
+                    }
+                    if self.is_external_dependency_url(&from_url, &to_url)
+                        && let Some(mode) = dependency_arithmetic_mode(
+                            self.outbound_dependency_policy_for_url(&from_url),
+                        )
+                    {
+                        self.register_forced_dependency_arithmetic(
+                            &to_url,
+                            DependencyArithmeticRequest {
+                                from_ingot_url: from_url.clone(),
+                                dependency: alias.clone(),
+                                mode,
+                            },
+                        );
                     }
                     self.db.dependency_graph().add_dependency(
                         self.db,

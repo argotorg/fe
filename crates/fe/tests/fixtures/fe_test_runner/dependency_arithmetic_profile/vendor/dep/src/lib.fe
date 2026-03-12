@@ -1,0 +1,4 @@
+pub fn overflow_add() -> u8 {
+    let x: u8 = 255
+    x + 1
+}
