@@ -404,6 +404,39 @@ impl DiagnosticVoucher for ParserError {
     }
 }
 
+impl DiagnosticVoucher for crate::ArithmeticAttrError {
+    fn to_complete(&self, _db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
+        let span = Span::new(self.file, self.primary_range, SpanKind::Original);
+        let (local_code, message, label, notes) = match &self.kind {
+            crate::ArithmeticAttrErrorKind::ArithmeticAttrOnUnsupportedItem { item_kind } => (
+                1,
+                format!(
+                    "`#[arithmetic(...)]` is only valid on functions and modules (found on {item_kind})"
+                ),
+                "move this attribute to a function or module item".to_string(),
+                vec![
+                    "ingot and workspace arithmetic configuration is not implemented in this slice"
+                        .to_string(),
+                ],
+            ),
+            crate::ArithmeticAttrErrorKind::InvalidArithmeticAttrForm => (
+                2,
+                "invalid `#[arithmetic]` attribute form".to_string(),
+                "expected `#[arithmetic(checked)]` or `#[arithmetic(unchecked)]`".to_string(),
+                vec![],
+            ),
+        };
+
+        CompleteDiagnostic::new(
+            Severity::Error,
+            message,
+            vec![SubDiagnostic::new(LabelStyle::Primary, label, Some(span))],
+            notes,
+            GlobalErrorCode::new(DiagnosticPass::ArithmeticAttr, local_code),
+        )
+    }
+}
+
 impl DiagnosticVoucher for crate::SelectorError {
     fn to_complete(&self, _db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
         use crate::SelectorErrorKind;

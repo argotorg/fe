@@ -2,6 +2,22 @@ use crate::HirDb;
 
 use super::{IdentId, Partial, PathId, StringId};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ArithmeticMode {
+    Checked,
+    Unchecked,
+}
+
+impl ArithmeticMode {
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "checked" => Some(Self::Checked),
+            "unchecked" => Some(Self::Unchecked),
+            _ => None,
+        }
+    }
+}
+
 #[salsa::interned]
 #[derive(Debug)]
 pub struct AttrListId<'db> {
@@ -40,6 +56,23 @@ impl<'db> AttrListId<'db> {
             }
         })
     }
+
+    pub fn arithmetic_mode(self, db: &'db dyn HirDb) -> Option<ArithmeticMode> {
+        self.data(db)
+            .iter()
+            .filter_map(|attr| {
+                let Attr::Normal(normal_attr) = attr else {
+                    return None;
+                };
+                let path = normal_attr.path.to_opt()?;
+                let ident = path.as_ident(db)?;
+                if ident.data(db) != "arithmetic" {
+                    return None;
+                }
+                normal_attr.arithmetic_mode_arg(db)
+            })
+            .last()
+    }
 }
 
 impl<'db> NormalAttr<'db> {
@@ -55,6 +88,21 @@ impl<'db> NormalAttr<'db> {
                     .and_then(|p| p.as_ident(db))
                     .is_some_and(|ident| ident.data(db) == key)
         })
+    }
+
+    pub fn arithmetic_mode_arg(&self, db: &'db dyn HirDb) -> Option<ArithmeticMode> {
+        let [arg] = self.args.as_slice() else {
+            return None;
+        };
+        if arg.value.is_some() {
+            return None;
+        }
+        let mode = arg
+            .key
+            .to_opt()
+            .and_then(|path| path.as_ident(db))
+            .map(|ident| ident.data(db).as_str())?;
+        ArithmeticMode::parse(mode)
     }
 }
 

@@ -1,0 +1,7 @@
+[ingot]
+name = "arithmetic_profile_ingot"
+version = "0.1.0"
+arithmetic = "checked"
+
+[profiles.test]
+arithmetic = "unchecked"

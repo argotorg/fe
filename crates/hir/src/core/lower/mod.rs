@@ -20,12 +20,14 @@ use crate::{
     },
     span::HirOrigin,
 };
+pub use arithmetic::{ArithmeticAttrError, ArithmeticAttrErrorKind};
 pub use event::{EventError, EventErrorKind};
 pub use item::{SelectorError, SelectorErrorKind};
 pub use parse::parse_file_impl;
 
 pub(crate) mod parse;
 
+mod arithmetic;
 mod attr;
 mod body;
 mod contract;

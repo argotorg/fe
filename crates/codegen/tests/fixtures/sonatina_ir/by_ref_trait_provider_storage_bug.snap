@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/by_ref_trait_provider_storage_bug.fe
 ---
@@ -175,15 +176,10 @@ func private %u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v0.i256, v1.i256) ->
 
 func private %calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at(v0.i256, v1.i256) -> i256 {
     block0:
-        (v2.i256, v3.i1) = uaddo v0 v1;
-        br v3 block1 block2;
-
-    block1:
-        evm_revert 0.i256 0.i256;
-
-    block2:
-        v5.i256 = evm_calldata_load v2;
-        return v5;
+        v2.i256 = add v0 v1;
+        v3.i256 = add v0 v1;
+        v4.i256 = evm_calldata_load v3;
+        return v4;
 }
 
 func private %sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_selector_from_prefix(v0.i256) -> i32 {
@@ -213,21 +209,15 @@ func private %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_reserve_
         mstore v10 v8 i256;
         v12.*i256 = gep v0 0.i256 1.i256;
         mstore v12 v8 i256;
-        (v13.i256, v14.i1) = uaddo v8 v1;
-        br v14 block3 block4;
+        v13.i256 = add v8 v1;
+        v15.*i256 = gep v0 0.i256 2.i256;
+        mstore v15 v13 i256;
+        jump block2;
 
     block2:
-        v19.*i256 = gep v0 0.i256 0.i256;
-        v20.i256 = mload v19 i256;
-        return v20;
-
-    block3:
-        evm_revert 0.i256 0.i256;
-
-    block4:
-        v17.*i256 = gep v0 0.i256 2.i256;
-        mstore v17 v13 i256;
-        jump block2;
+        v17.*i256 = gep v0 0.i256 0.i256;
+        v18.i256 = mload v17 i256;
+        return v18;
 }
 
 func private %u256_h3271ca15373d4483_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383(v0.i256, v1.*@__fe_SolEncoder_1) {
@@ -299,15 +289,9 @@ func private %solencoder_h1b9228b90dad6928_abiencoder_hffd58d20d4321024_write_wo
         v4.*i256 = gep v0 0.i256 1.i256;
         v5.i256 = mload v4 i256;
         mstore v5 v1 i256;
-        (v7.i256, v8.i1) = uaddo v5 32.i256;
-        br v8 block1 block2;
-
-    block1:
-        evm_revert 0.i256 0.i256;
-
-    block2:
-        v10.*i256 = gep v0 0.i256 1.i256;
-        mstore v10 v7 i256;
+        v7.i256 = add v5 32.i256;
+        v8.*i256 = gep v0 0.i256 1.i256;
+        mstore v8 v7 i256;
         return;
 }
 

@@ -113,19 +113,19 @@ note:
    ┌─ contract_effects.fe:30:5
    │
 30 │     Deposit { amount: u256 } -> u256,
-   │     ^^^^^^^ u256
+   │     ^^^^^^^ () | Deposit | fn decode<u256, Sol, D> | mut D | mut E | u256
 
 note: 
    ┌─ contract_effects.fe:33:5
    │
 33 │     Withdraw { amount: u256 } -> bool,
-   │     ^^^^^^^^ u256
+   │     ^^^^^^^^ () | Withdraw | fn decode<u256, Sol, D> | mut D | mut E | u256
 
 note: 
    ┌─ contract_effects.fe:36:5
    │
 36 │     Balance -> u256,
-   │     ^^^^^^^ Balance
+   │     ^^^^^^^ () | Balance
 
 note: 
    ┌─ contract_effects.fe:50:40

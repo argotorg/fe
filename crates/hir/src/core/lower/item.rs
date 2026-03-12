@@ -54,17 +54,29 @@ impl<'db> ItemKind<'db> {
 
         match kind {
             ast::ItemKind::Mod(mod_) => {
+                super::arithmetic::report_invalid_mod_arithmetic_attrs(ctxt, &mod_);
                 super::event::report_event_attr_on_non_struct_item(ctxt, mod_.attr_list(), "mod");
                 Mod::lower_ast(ctxt, mod_);
             }
             ast::ItemKind::Func(fn_) => {
+                super::arithmetic::report_invalid_function_arithmetic_attrs(ctxt, &fn_);
                 super::event::report_event_attr_on_non_struct_item(ctxt, fn_.attr_list(), "fn");
                 Func::lower_ast(ctxt, fn_);
             }
             ast::ItemKind::Struct(struct_) => {
+                super::arithmetic::report_arithmetic_attr_on_unsupported_item(
+                    ctxt,
+                    struct_.attr_list(),
+                    "struct",
+                );
                 Struct::lower_ast(ctxt, struct_);
             }
             ast::ItemKind::Contract(contract) => {
+                super::arithmetic::report_arithmetic_attr_on_unsupported_item(
+                    ctxt,
+                    contract.attr_list(),
+                    "contract",
+                );
                 super::event::report_event_attr_on_non_struct_item(
                     ctxt,
                     contract.attr_list(),
@@ -73,14 +85,29 @@ impl<'db> ItemKind<'db> {
                 Contract::lower_ast(ctxt, contract);
             }
             ast::ItemKind::Enum(enum_) => {
+                super::arithmetic::report_arithmetic_attr_on_unsupported_item(
+                    ctxt,
+                    enum_.attr_list(),
+                    "enum",
+                );
                 super::event::report_event_attr_on_non_struct_item(ctxt, enum_.attr_list(), "enum");
                 Enum::lower_ast(ctxt, enum_);
             }
             ast::ItemKind::Msg(msg) => {
+                super::arithmetic::report_arithmetic_attr_on_unsupported_item(
+                    ctxt,
+                    msg.attr_list(),
+                    "msg",
+                );
                 super::event::report_event_attr_on_non_struct_item(ctxt, msg.attr_list(), "msg");
                 lower_msg_as_mod(ctxt, msg);
             }
             ast::ItemKind::TypeAlias(alias) => {
+                super::arithmetic::report_arithmetic_attr_on_unsupported_item(
+                    ctxt,
+                    alias.attr_list(),
+                    "type alias",
+                );
                 super::event::report_event_attr_on_non_struct_item(
                     ctxt,
                     alias.attr_list(),
@@ -89,10 +116,20 @@ impl<'db> ItemKind<'db> {
                 TypeAlias::lower_ast(ctxt, alias);
             }
             ast::ItemKind::Impl(impl_) => {
+                super::arithmetic::report_arithmetic_attr_on_unsupported_item(
+                    ctxt,
+                    impl_.attr_list(),
+                    "impl",
+                );
                 super::event::report_event_attr_on_non_struct_item(ctxt, impl_.attr_list(), "impl");
                 Impl::lower_ast(ctxt, impl_);
             }
             ast::ItemKind::Trait(trait_) => {
+                super::arithmetic::report_arithmetic_attr_on_unsupported_item(
+                    ctxt,
+                    trait_.attr_list(),
+                    "trait",
+                );
                 super::event::report_event_attr_on_non_struct_item(
                     ctxt,
                     trait_.attr_list(),
@@ -101,6 +138,11 @@ impl<'db> ItemKind<'db> {
                 Trait::lower_ast(ctxt, trait_);
             }
             ast::ItemKind::ImplTrait(impl_trait) => {
+                super::arithmetic::report_arithmetic_attr_on_unsupported_item(
+                    ctxt,
+                    impl_trait.attr_list(),
+                    "impl trait",
+                );
                 super::event::report_event_attr_on_non_struct_item(
                     ctxt,
                     impl_trait.attr_list(),
@@ -109,6 +151,11 @@ impl<'db> ItemKind<'db> {
                 ImplTrait::lower_ast(ctxt, impl_trait);
             }
             ast::ItemKind::Const(const_) => {
+                super::arithmetic::report_arithmetic_attr_on_unsupported_item(
+                    ctxt,
+                    const_.attr_list(),
+                    "const",
+                );
                 super::event::report_event_attr_on_non_struct_item(
                     ctxt,
                     const_.attr_list(),
@@ -117,10 +164,20 @@ impl<'db> ItemKind<'db> {
                 Const::lower_ast(ctxt, const_);
             }
             ast::ItemKind::Use(use_) => {
+                super::arithmetic::report_arithmetic_attr_on_unsupported_item(
+                    ctxt,
+                    use_.attr_list(),
+                    "use",
+                );
                 super::event::report_event_attr_on_non_struct_item(ctxt, use_.attr_list(), "use");
                 Use::lower_ast(ctxt, use_);
             }
             ast::ItemKind::Extern(extern_) => {
+                super::arithmetic::report_arithmetic_attr_on_unsupported_item(
+                    ctxt,
+                    extern_.attr_list(),
+                    "extern",
+                );
                 super::event::report_event_attr_on_non_struct_item(
                     ctxt,
                     extern_.attr_list(),
@@ -128,6 +185,11 @@ impl<'db> ItemKind<'db> {
                 );
                 if let Some(extern_block) = extern_.extern_block() {
                     for fn_ in extern_block {
+                        super::arithmetic::report_arithmetic_attr_on_unsupported_item(
+                            ctxt,
+                            fn_.attr_list(),
+                            "extern fn",
+                        );
                         super::event::report_event_attr_on_non_struct_item(
                             ctxt,
                             fn_.attr_list(),

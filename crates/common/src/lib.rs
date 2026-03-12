@@ -1,5 +1,6 @@
 pub mod cache;
 pub mod color;
+pub mod compilation;
 pub mod config;
 pub mod dependencies;
 pub mod diagnostics;
@@ -10,6 +11,7 @@ pub mod paths;
 pub mod stdlib;
 pub mod urlext;
 
+use compilation::CompilationSettings;
 use dependencies::DependencyGraph;
 use file::Workspace;
 
@@ -18,6 +20,7 @@ use file::Workspace;
 pub trait InputDb: salsa::Database {
     fn workspace(&self) -> Workspace;
     fn dependency_graph(&self) -> DependencyGraph;
+    fn compilation_settings(&self) -> CompilationSettings;
 }
 
 #[doc(hidden)]
@@ -35,6 +38,11 @@ macro_rules! impl_input_db {
             }
             fn dependency_graph(&self) -> $crate::dependencies::DependencyGraph {
                 self.graph.clone().expect("Graph not initialized")
+            }
+            fn compilation_settings(&self) -> $crate::compilation::CompilationSettings {
+                self.settings
+                    .clone()
+                    .expect("Compilation settings not initialized")
             }
         }
     };
@@ -56,11 +64,14 @@ macro_rules! impl_db_default {
                     storage: salsa::Storage::default(),
                     index: None,
                     graph: None,
+                    settings: None,
                 };
                 let index = $crate::file::Workspace::default(&db);
                 db.index = Some(index);
                 let graph = $crate::dependencies::DependencyGraph::default(&db);
                 db.graph = Some(graph);
+                let settings = $crate::compilation::CompilationSettings::default(&db);
+                db.settings = Some(settings);
                 $crate::stdlib::HasBuiltinCore::initialize_builtin_core(&mut db);
                 $crate::stdlib::HasBuiltinStd::initialize_builtin_std(&mut db);
                 db
@@ -79,6 +90,7 @@ macro_rules! define_input_db {
             storage: salsa::Storage<Self>,
             index: Option<$crate::file::Workspace>,
             graph: Option<$crate::dependencies::DependencyGraph>,
+            settings: Option<$crate::compilation::CompilationSettings>,
         }
 
         #[salsa::db]

@@ -1,6 +1,7 @@
 use common::InputDb;
 pub use core::lower::{
-    EventError, EventErrorKind, SelectorError, SelectorErrorKind, parse::ParserError,
+    ArithmeticAttrError, ArithmeticAttrErrorKind, EventError, EventErrorKind, SelectorError,
+    SelectorErrorKind, parse::ParserError,
 };
 
 pub mod analysis;

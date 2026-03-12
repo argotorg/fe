@@ -1,0 +1,7 @@
+[ingot]
+name = "dependency_arithmetic_defer"
+version = "0.1.0"
+dependency-arithmetic = "defer"
+
+[dependencies]
+dep = { path = "vendor/dep" }

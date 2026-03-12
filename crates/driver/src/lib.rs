@@ -445,6 +445,15 @@ pub enum IngotInitDiagnostics {
         found_name: Option<SmolStr>,
         found_version: Option<Version>,
     },
+    DependencyArithmeticConflict {
+        dependency_url: Url,
+        first_ingot_url: Url,
+        first_dependency: SmolStr,
+        first_mode: common::config::ArithmeticMode,
+        second_ingot_url: Url,
+        second_dependency: SmolStr,
+        second_mode: common::config::ArithmeticMode,
+    },
     WorkspaceMemberResolutionFailed {
         ingot_url: Url,
         dependency: SmolStr,
@@ -634,6 +643,20 @@ impl std::fmt::Display for IngotInitDiagnostics {
                         format_metadata(found_name, found_version)
                     )
                 }
+            }
+            IngotInitDiagnostics::DependencyArithmeticConflict {
+                dependency_url,
+                first_ingot_url,
+                first_dependency,
+                first_mode,
+                second_ingot_url,
+                second_dependency,
+                second_mode,
+            } => {
+                write!(
+                    f,
+                    "Dependency arithmetic conflict for {dependency_url}: '{first_dependency}' in {first_ingot_url} forced {first_mode:?}, but '{second_dependency}' in {second_ingot_url} forced {second_mode:?}"
+                )
             }
             IngotInitDiagnostics::WorkspaceMemberResolutionFailed {
                 ingot_url,

@@ -1,0 +1,7 @@
+use std::evm::assert
+use dep::overflow_add
+
+#[test]
+fn dependency_arithmetic_profile_wraps_external_overflow() {
+    assert(overflow_add() == 0)
+}

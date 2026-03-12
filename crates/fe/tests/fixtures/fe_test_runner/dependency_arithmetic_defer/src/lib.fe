@@ -1,0 +1,6 @@
+use dep::overflow_add
+
+#[test(should_revert)]
+fn dependency_arithmetic_defer_respects_dependency_setting() {
+    overflow_add()
+}

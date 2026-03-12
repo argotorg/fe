@@ -1,5 +1,6 @@
 ---
 source: crates/mir/tests/lowering_snapshots.rs
+assertion_line: 26
 expression: mir_output
 ---
 fn decode_u256() -> u256:
@@ -31,22 +32,17 @@ fn soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallD
     v2: CallData = load mem[&mem[v0].*.0].0
     v1: u256 = calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len(v2)
     v4: u256 = load mem[&mem[v0].*.0].1
-    v5: u256 = checked_add<u256>(v4, 32)
-    v3: u256 = v5
-    v6: u256 = load mem[&mem[v0].*.0].1
-    v7: bool = u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v3, v6)
-    br v7 bb1 bb3
+    v3: u256 = (v4 + 32)
+    v5: bool = u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt(v3, v1)
+    br v5 bb1 bb2
   bb1:
     terminate revert(0, 0)
   bb2:
-    v10: CallData = load mem[&mem[v0].*.0].0
-    v11: u256 = load mem[&mem[v0].*.0].1
-    v9: u256 = calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at(v10, v11)
+    v7: CallData = load mem[&mem[v0].*.0].0
+    v8: u256 = load mem[&mem[v0].*.0].1
+    v6: u256 = calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at(v7, v8)
     store mem[&mem[v0].*.0].1 = v3
-    ret v9
-  bb3:
-    v8: bool = u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt(v3, v1)
-    br v8 bb1 bb2
+    ret v6
 
 fn calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len(v0: CallData) -> u256:
   bb0:
@@ -54,18 +50,13 @@ fn calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len(v0: CallData) -> u
     v2: u256 = checked_sub<u256>(v1, v0)
     ret v2
 
-fn u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v0: u256, v1: u256) -> bool:
+fn u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt(v0: u256, v1: u256) -> bool:
   bb0:
-    v2: bool = __lt_u256(v0, v1)
+    v2: bool = __gt_u256(v0, v1)
     ret v2
 
 fn calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at(v0: CallData, v1: u256) -> u256:
   bb0:
-    v2: u256 = checked_add<u256>(v0, v1)
-    v3: u256 = calldataload(v2)
-    ret v3
-
-fn u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt(v0: u256, v1: u256) -> bool:
-  bb0:
-    v2: bool = __gt_u256(v0, v1)
+    bind (v0 + v1)
+    v2: u256 = calldataload((v0 + v1))
     ret v2

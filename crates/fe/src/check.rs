@@ -10,6 +10,7 @@ use driver::DriverDataBase;
 use driver::cli_target::{CliTarget, resolve_cli_target};
 use hir::hir_def::{HirIngot, TopLevelMod};
 use mir::{MirDiagnosticsMode, collect_mir_diagnostics, fmt as mir_fmt, lower_module};
+use salsa::Setter;
 use url::Url;
 
 use crate::report::{
@@ -38,11 +39,15 @@ pub fn check(
     path: &Utf8PathBuf,
     ingot: Option<&str>,
     force_standalone: bool,
+    profile: &str,
     dump_mir: bool,
     report_out: Option<&Utf8PathBuf>,
     report_failed_only: bool,
 ) -> Result<bool, String> {
     let mut db = DriverDataBase::default();
+    db.compilation_settings()
+        .set_profile(&mut db)
+        .to(profile.into());
 
     let report_root = report_out
         .map(|out| -> Result<_, String> {

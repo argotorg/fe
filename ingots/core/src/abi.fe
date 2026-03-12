@@ -60,12 +60,14 @@ impl<I> Cursor<I>
         }
     }
 
+    #[arithmetic(unchecked)]
     pub fn read_u8(mut self) -> u8 {
         let b = self.input.byte_at(self.pos)
         self.pos = self.pos + 1
         b
     }
 
+    #[arithmetic(unchecked)]
     pub fn read_word(mut self) -> u256 {
         let w = self.input.word_at(self.pos)
         self.pos = self.pos + 32
@@ -158,10 +160,12 @@ pub struct BytesView<I> {
 impl<I> BytesView<I>
     where I: ByteInput
 {
+    #[arithmetic(unchecked)]
     pub fn byte_at(self, offset: u256) -> u8 {
         self.input.byte_at(self.start + offset)
     }
 
+    #[arithmetic(unchecked)]
     pub fn word_at(self, offset: u256) -> u256 {
         self.input.word_at(self.start + offset)
     }

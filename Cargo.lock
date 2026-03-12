@@ -2166,6 +2166,7 @@ dependencies = [
  "protobuf",
  "rayon",
  "rustc-hash 2.1.1",
+ "salsa",
  "scip",
  "serde",
  "serde_json",

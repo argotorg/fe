@@ -1,5 +1,6 @@
 ---
 source: crates/mir/tests/lowering_snapshots.rs
+assertion_line: 26
 expression: mir_output
 ---
 fn bump_lock__StorPtr_u256___64779554cfbf0358(v0: u256) -> ():
@@ -92,9 +93,9 @@ fn u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v0: u256, v1: u256) -> bool:
 
 fn calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at(v0: CallData, v1: u256) -> u256:
   bb0:
-    v2: u256 = checked_add<u256>(v0, v1)
-    v3: u256 = calldataload(v2)
-    ret v3
+    bind (v0 + v1)
+    v2: u256 = calldataload((v0 + v1))
+    ret v2
 
 fn sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_selector_from_prefix(v0: u256) -> u32:
   bb0:

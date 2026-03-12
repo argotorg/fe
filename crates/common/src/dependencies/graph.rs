@@ -9,7 +9,7 @@ use smol_str::SmolStr;
 use url::Url;
 
 use super::{DependencyAlias, DependencyArguments, RemoteFiles, WorkspaceMemberRecord};
-use crate::{InputDb, ingot::Version};
+use crate::{InputDb, config::ArithmeticMode, ingot::Version};
 
 type EdgeWeight = (DependencyAlias, DependencyArguments);
 
@@ -24,6 +24,7 @@ pub struct DependencyGraph {
     workspace_members: HashMap<Url, Vec<WorkspaceMemberRecord>>,
     workspace_root_by_member: HashMap<Url, Url>,
     expected_member_metadata: HashMap<Url, (SmolStr, Version)>,
+    forced_dependency_arithmetic: HashMap<Url, ArithmeticMode>,
 }
 
 #[salsa::tracked]
@@ -32,6 +33,7 @@ impl DependencyGraph {
         DependencyGraph::new(
             db,
             DiGraph::new(),
+            HashMap::new(),
             HashMap::new(),
             HashMap::new(),
             HashMap::new(),
@@ -191,6 +193,25 @@ impl DependencyGraph {
 
     pub fn contains_url(&self, db: &dyn InputDb, url: &Url) -> bool {
         self.node_map(db).contains_key(url)
+    }
+
+    pub fn force_dependency_arithmetic(
+        &self,
+        db: &mut dyn InputDb,
+        url: &Url,
+        arithmetic: ArithmeticMode,
+    ) {
+        let mut forced = self.forced_dependency_arithmetic(db);
+        forced.insert(url.clone(), arithmetic);
+        self.set_forced_dependency_arithmetic(db).to(forced);
+    }
+
+    pub fn forced_dependency_arithmetic_for(
+        &self,
+        db: &dyn InputDb,
+        url: &Url,
+    ) -> Option<ArithmeticMode> {
+        self.forced_dependency_arithmetic(db).get(url).copied()
     }
 
     pub fn add_dependency(

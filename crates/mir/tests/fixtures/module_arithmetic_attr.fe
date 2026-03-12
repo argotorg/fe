@@ -1,0 +1,20 @@
+#[arithmetic(unchecked)]
+pub mod math {
+    pub fn unchecked_add(v0: u8, v1: u8) -> u8 {
+        v0 + v1
+    }
+
+    #[arithmetic(checked)]
+    pub fn checked_add(v0: u8, v1: u8) -> u8 {
+        v0 + v1
+    }
+
+    #[arithmetic(unchecked)]
+    pub mod inner {
+        pub fn unchecked_pow_assign() -> u8 {
+            let mut v0: u8 = 2
+            v0 **= 8
+            v0
+        }
+    }
+}

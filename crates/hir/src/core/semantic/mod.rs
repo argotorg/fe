@@ -157,6 +157,31 @@ impl<'db> Mod<'db> {
 // Function items ------------------------------------------------------------
 
 impl<'db> Func<'db> {
+    pub fn arithmetic_mode(self, db: &'db dyn HirDb) -> ArithmeticMode {
+        if let Some(mode) = self.attributes(db).arithmetic_mode(db) {
+            return mode;
+        }
+
+        let mut scope = self.scope().parent_module(db);
+        while let Some(module_scope) = scope {
+            if let ItemKind::Mod(mod_) = module_scope.item()
+                && let Some(mode) = mod_.attributes(db).arithmetic_mode(db)
+            {
+                return mode;
+            }
+            scope = module_scope.parent_module(db);
+        }
+
+        if let Some(mode) = self.top_mod(db).ingot(db).arithmetic_mode(db) {
+            return match mode {
+                common::config::ArithmeticMode::Checked => ArithmeticMode::Checked,
+                common::config::ArithmeticMode::Unchecked => ArithmeticMode::Unchecked,
+            };
+        }
+
+        ArithmeticMode::Checked
+    }
+
     /// Semantic predicate list (assumptions) for this function.
     pub(crate) fn assumptions(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
         constraints_for(db, self.into())

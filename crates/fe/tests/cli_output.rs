@@ -237,6 +237,12 @@ fn run_fe_main_impl(args: &[&str], cwd: Option<&Path>, extra_env: &[(&str, &str)
     }
 }
 
+fn fe_test_runner_fixture_dir(name: &str) -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/fe_test_runner")
+        .join(name)
+}
+
 #[cfg(unix)]
 fn write_fake_solc(temp: &tempfile::TempDir) -> std::path::PathBuf {
     use std::os::unix::fs::PermissionsExt;
@@ -764,6 +770,216 @@ fn test_tree_workspace_root_default_path() {
 }
 
 #[test]
+fn test_cli_check_dependency_arithmetic_conflict_is_error() {
+    let temp = tempfile::Builder::new()
+        .prefix("fe-dependency-arithmetic-conflict-")
+        .tempdir()
+        .expect("tempdir");
+    let root = temp
+        .path()
+        .canonicalize()
+        .expect("canonicalize tempdir")
+        .join("workspace");
+    let dep = root.join("dep");
+    let a = root.join("ingots/a");
+    let b = root.join("ingots/b");
+    fs::create_dir_all(dep.join("src")).expect("create dep src");
+    fs::create_dir_all(a.join("src")).expect("create a src");
+    fs::create_dir_all(b.join("src")).expect("create b src");
+
+    fs::write(
+        root.join("fe.toml"),
+        r#"
+[workspace]
+members = ["ingots/a", "ingots/b"]
+"#,
+    )
+    .expect("write workspace fe.toml");
+    fs::write(
+        dep.join("fe.toml"),
+        r#"
+[ingot]
+name = "dep"
+version = "0.1.0"
+"#,
+    )
+    .expect("write dep fe.toml");
+    fs::write(
+        dep.join("src/lib.fe"),
+        r#"
+pub fn add(x: u8, y: u8) -> u8 {
+    x + y
+}
+"#,
+    )
+    .expect("write dep lib.fe");
+    fs::write(
+        a.join("fe.toml"),
+        r#"
+[ingot]
+name = "a"
+version = "0.1.0"
+dependency-arithmetic = "checked"
+
+[dependencies]
+dep = { path = "../../dep" }
+"#,
+    )
+    .expect("write a fe.toml");
+    fs::write(
+        a.join("src/lib.fe"),
+        r#"
+use dep::add
+
+pub fn call(x: u8, y: u8) -> u8 {
+    add(x, y)
+}
+"#,
+    )
+    .expect("write a lib.fe");
+    fs::write(
+        b.join("fe.toml"),
+        r#"
+[ingot]
+name = "b"
+version = "0.1.0"
+dependency-arithmetic = "unchecked"
+
+[dependencies]
+dep = { path = "../../dep" }
+"#,
+    )
+    .expect("write b fe.toml");
+    fs::write(
+        b.join("src/lib.fe"),
+        r#"
+use dep::add
+
+pub fn call(x: u8, y: u8) -> u8 {
+    add(x, y)
+}
+"#,
+    )
+    .expect("write b lib.fe");
+
+    let (output, exit_code) = run_fe_main_in_dir(&["check"], &root);
+    assert_ne!(
+        exit_code, 0,
+        "expected dependency arithmetic conflict:\n{output}"
+    );
+    assert!(
+        output.contains("Dependency arithmetic conflict for")
+            && output.contains("forced Checked")
+            && output.contains("forced Unchecked"),
+        "expected conflict diagnostic in output:\n{output}"
+    );
+}
+
+#[test]
+fn test_cli_test_profile_selects_ingot_arithmetic() {
+    let fixture_dir = fe_test_runner_fixture_dir("arithmetic_profile_ingot");
+    let fixture_dir_str = fixture_dir.to_str().expect("fixture dir utf8");
+
+    let (test_output, test_exit_code) = run_fe_main(&["test", fixture_dir_str]);
+    assert_eq!(test_exit_code, 0, "fe test failed:\n{test_output}");
+    assert!(
+        test_output.contains("PASS  [<time>] arithmetic_profile_ingot_wraps_in_test_profile")
+            && test_output.contains("1 passed"),
+        "expected test profile to run unchecked arithmetic:\n{test_output}"
+    );
+
+    let (release_output, release_exit_code) =
+        run_fe_main(&["test", "--profile", "release", fixture_dir_str]);
+    assert_ne!(
+        release_exit_code, 0,
+        "expected release profile test failure:\n{release_output}"
+    );
+    assert!(
+        release_output.contains("1 failed"),
+        "expected checked arithmetic failure in release profile:\n{release_output}"
+    );
+}
+
+#[test]
+fn test_cli_test_profile_selects_workspace_arithmetic() {
+    let fixture_dir = fe_test_runner_fixture_dir("arithmetic_profile_workspace");
+    let fixture_dir_str = fixture_dir.to_str().expect("fixture dir utf8");
+
+    let (test_output, test_exit_code) = run_fe_main(&["test", fixture_dir_str]);
+    assert_eq!(test_exit_code, 0, "fe test failed:\n{test_output}");
+    assert!(
+        test_output.contains("PASS  [<time>] arithmetic_profile_workspace_wraps_in_test_profile")
+            && test_output.contains("1 passed"),
+        "expected workspace test profile to run unchecked arithmetic:\n{test_output}"
+    );
+
+    let (release_output, release_exit_code) =
+        run_fe_main(&["test", "--profile", "release", fixture_dir_str]);
+    assert_ne!(
+        release_exit_code, 0,
+        "expected release profile test failure:\n{release_output}"
+    );
+    assert!(
+        release_output.contains("1 failed"),
+        "expected checked arithmetic failure in workspace release profile:\n{release_output}"
+    );
+}
+
+#[test]
+fn test_cli_test_dependency_arithmetic_override() {
+    let fixture_dir = fe_test_runner_fixture_dir("dependency_arithmetic_override");
+    let fixture_dir_str = fixture_dir.to_str().expect("fixture dir utf8");
+
+    let (output, exit_code) = run_fe_main(&["test", fixture_dir_str]);
+    assert_eq!(exit_code, 0, "fe test failed:\n{output}");
+    assert!(
+        output.contains("PASS  [<time>] dependency_arithmetic_override_wraps_external_overflow")
+            && output.contains("1 passed"),
+        "expected dependency arithmetic override test to pass, got:\n{output}"
+    );
+}
+
+#[test]
+fn test_cli_test_dependency_arithmetic_defer() {
+    let fixture_dir = fe_test_runner_fixture_dir("dependency_arithmetic_defer");
+    let fixture_dir_str = fixture_dir.to_str().expect("fixture dir utf8");
+
+    let (output, exit_code) = run_fe_main(&["test", fixture_dir_str]);
+    assert_eq!(exit_code, 0, "fe test failed:\n{output}");
+    assert!(
+        output.contains("PASS  [<time>] dependency_arithmetic_defer_respects_dependency_setting")
+            && output.contains("1 passed"),
+        "expected dependency arithmetic defer test to pass, got:\n{output}"
+    );
+}
+
+#[test]
+fn test_cli_test_profile_selects_workspace_dependency_arithmetic() {
+    let fixture_dir = fe_test_runner_fixture_dir("dependency_arithmetic_profile");
+    let fixture_dir_str = fixture_dir.to_str().expect("fixture dir utf8");
+
+    let (test_output, test_exit_code) = run_fe_main(&["test", fixture_dir_str]);
+    assert_eq!(test_exit_code, 0, "fe test failed:\n{test_output}");
+    assert!(
+        test_output
+            .contains("PASS  [<time>] dependency_arithmetic_profile_wraps_external_overflow")
+            && test_output.contains("1 passed"),
+        "expected test profile to force unchecked dependency arithmetic:\n{test_output}"
+    );
+
+    let (release_output, release_exit_code) =
+        run_fe_main(&["test", "--profile", "release", fixture_dir_str]);
+    assert_ne!(
+        release_exit_code, 0,
+        "expected release profile test failure:\n{release_output}"
+    );
+    assert!(
+        release_output.contains("1 failed"),
+        "expected checked dependency arithmetic in release profile:\n{release_output}"
+    );
+}
+
+#[test]
 fn test_cli_test_workspace_root_is_workspace_aware() {
     let root = workspace_fixture("test_workspace_fe_test_core_std_no_tests");
     let (output, exit_code) = run_fe_main_in_dir(&["test"], &root);
@@ -851,6 +1067,7 @@ fn test_cli_test_ingot_discovers_tests_in_non_root_modules() {
         "expected 1 passed test, got:\n{output}"
     );
 }
+
 #[test]
 fn test_cli_test_single_input_suite_setup_failure_surfaces_error_status() {
     let temp = tempdir().expect("tempdir");

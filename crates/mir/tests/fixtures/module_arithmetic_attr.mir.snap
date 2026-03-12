@@ -1,0 +1,18 @@
+---
+source: crates/mir/tests/lowering_snapshots.rs
+expression: mir_output
+---
+fn unchecked_add(v0: u8, v1: u8) -> u8:
+  bb0:
+    ret (v0 + v1)
+
+fn checked_add(v0: u8, v1: u8) -> u8:
+  bb0:
+    v2: u8 = checked_add<u8>(v0, v1)
+    ret v2
+
+fn unchecked_pow_assign() -> u8:
+  bb0:
+    v0: u8 = 2
+    v0 = (v0 ** 8)
+    ret v0

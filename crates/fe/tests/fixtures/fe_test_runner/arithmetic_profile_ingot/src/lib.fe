@@ -1,0 +1,8 @@
+use std::evm::effects::assert
+
+#[test]
+fn arithmetic_profile_ingot_wraps_in_test_profile() {
+    let x: u8 = 255
+    let y: u8 = x + 1
+    assert(y == 0)
+}
