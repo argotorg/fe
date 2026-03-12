@@ -55,7 +55,7 @@ mod wasm {
         #[wasm_bindgen_test]
     )]
     fn test_item_list(fixture: Fixture<&str>) {
-        TestRunner::item_list(false).run(fixture.content());
+        let (cst, _) = TestRunner::item_list(false).run(fixture.content());
         assert_eq!(normalize_newlines(fixture.content()), cst.to_string());
     }
 
@@ -68,7 +68,7 @@ mod wasm {
         #[wasm_bindgen_test]
     )]
     fn test_stmt(fixture: Fixture<&str>) {
-        TestRunner::stmt_list(false).run(fixture.content());
+        let (cst, _) = TestRunner::stmt_list(false).run(fixture.content());
         assert_eq!(normalize_newlines(fixture.content()), cst.to_string());
     }
 
@@ -81,7 +81,7 @@ mod wasm {
         #[wasm_bindgen_test]
     )]
     fn test_expr(fixture: Fixture<&str>) {
-        TestRunner::expr_list(false).run(fixture.content());
+        let (cst, _) = TestRunner::expr_list(false).run(fixture.content());
         assert_eq!(normalize_newlines(fixture.content()), cst.to_string());
     }
 }
