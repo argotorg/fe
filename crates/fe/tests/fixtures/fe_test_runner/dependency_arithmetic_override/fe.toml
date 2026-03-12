@@ -1,0 +1,7 @@
+[ingot]
+name = "dependency_arithmetic_override"
+version = "0.1.0"
+dependency-arithmetic = "unchecked"
+
+[dependencies]
+dep = { path = "vendor/dep" }

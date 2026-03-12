@@ -1,0 +1,8 @@
+[workspace]
+name = "arithmetic_profile_workspace"
+version = "0.1.0"
+members = ["ingots/app"]
+arithmetic = "checked"
+
+[profiles.test]
+arithmetic = "unchecked"

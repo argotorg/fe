@@ -237,35 +237,10 @@ fn run_fe_main_impl(args: &[&str], cwd: Option<&Path>, extra_env: &[(&str, &str)
     }
 }
 
-fn write_temp_ingot(temp: &tempfile::TempDir, fe_toml: &str, lib_fe: &str) -> std::path::PathBuf {
-    let root = temp
-        .path()
-        .canonicalize()
-        .expect("canonicalize tempdir")
-        .join("ingot");
-    fs::create_dir_all(root.join("src")).expect("create ingot src");
-    fs::write(root.join("fe.toml"), fe_toml).expect("write fe.toml");
-    fs::write(root.join("src/lib.fe"), lib_fe).expect("write lib.fe");
-    root
-}
-
-fn write_temp_workspace(
-    temp: &tempfile::TempDir,
-    workspace_toml: &str,
-    member_toml: &str,
-    lib_fe: &str,
-) -> std::path::PathBuf {
-    let root = temp
-        .path()
-        .canonicalize()
-        .expect("canonicalize tempdir")
-        .join("workspace");
-    let member = root.join("ingots/app");
-    fs::create_dir_all(member.join("src")).expect("create workspace member src");
-    fs::write(root.join("fe.toml"), workspace_toml).expect("write workspace fe.toml");
-    fs::write(member.join("fe.toml"), member_toml).expect("write member fe.toml");
-    fs::write(member.join("src/lib.fe"), lib_fe).expect("write member lib.fe");
-    root
+fn fe_test_runner_fixture_dir(name: &str) -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/fe_test_runner")
+        .join(name)
 }
 
 #[cfg(unix)]
@@ -795,290 +770,6 @@ fn test_tree_workspace_root_default_path() {
 }
 
 #[test]
-fn test_cli_check_profile_selects_ingot_arithmetic() {
-    let temp = tempfile::Builder::new()
-        .prefix("fe-arithmetic-ingot-")
-        .tempdir()
-        .expect("tempdir");
-    let root = write_temp_ingot(
-        &temp,
-        r#"
-[ingot]
-name = "arith"
-version = "0.1.0"
-arithmetic = "checked"
-
-[profiles.dev]
-arithmetic = "unchecked"
-"#,
-        r#"
-pub fn add(x: u8, y: u8) -> u8 {
-    x + y
-}
-"#,
-    );
-
-    let (dev_output, dev_exit_code) = run_fe_main_in_dir(&["check", "--dump-mir"], &root);
-    assert_eq!(dev_exit_code, 0, "fe check failed:\n{dev_output}");
-    assert!(
-        dev_output.contains("ret (v0 + v1)"),
-        "expected unchecked MIR in dev profile:\n{dev_output}"
-    );
-
-    let (release_output, release_exit_code) =
-        run_fe_main_in_dir(&["check", "--dump-mir", "--profile", "release"], &root);
-    assert_eq!(
-        release_exit_code, 0,
-        "fe check --profile release failed:\n{release_output}"
-    );
-    assert!(
-        release_output.contains("checked_add<u8>"),
-        "expected checked MIR in release profile:\n{release_output}"
-    );
-}
-
-#[test]
-fn test_cli_check_profile_selects_workspace_arithmetic() {
-    let temp = tempfile::Builder::new()
-        .prefix("fe-arithmetic-workspace-")
-        .tempdir()
-        .expect("tempdir");
-    let root = write_temp_workspace(
-        &temp,
-        r#"
-[workspace]
-members = ["ingots/app"]
-arithmetic = "unchecked"
-
-[profiles.release]
-arithmetic = "checked"
-"#,
-        r#"
-[ingot]
-name = "app"
-version = "0.1.0"
-"#,
-        r#"
-pub fn add(x: u8, y: u8) -> u8 {
-    x + y
-}
-"#,
-    );
-
-    let (dev_output, dev_exit_code) = run_fe_main_in_dir(&["check", "--dump-mir", "app"], &root);
-    assert_eq!(dev_exit_code, 0, "fe check failed:\n{dev_output}");
-    assert!(
-        dev_output.contains("ret (v0 + v1)"),
-        "expected workspace default unchecked MIR:\n{dev_output}"
-    );
-
-    let (release_output, release_exit_code) = run_fe_main_in_dir(
-        &["check", "--dump-mir", "--profile", "release", "app"],
-        &root,
-    );
-    assert_eq!(
-        release_exit_code, 0,
-        "fe check --profile release failed:\n{release_output}"
-    );
-    assert!(
-        release_output.contains("checked_add<u8>"),
-        "expected workspace release checked MIR:\n{release_output}"
-    );
-}
-
-#[test]
-fn test_cli_check_dependency_arithmetic_overrides_dependency_setting() {
-    let temp = tempfile::Builder::new()
-        .prefix("fe-dependency-arithmetic-ingot-")
-        .tempdir()
-        .expect("tempdir");
-    let root = write_temp_ingot(
-        &temp,
-        r#"
-[ingot]
-name = "root"
-version = "0.1.0"
-dependency-arithmetic = "unchecked"
-
-[dependencies]
-dep = { path = "../dep" }
-"#,
-        r#"
-use dep::add
-
-pub fn call(x: u8, y: u8) -> u8 {
-    add(x, y)
-}
-"#,
-    );
-    let dep = root.parent().expect("temp ingot parent").join("dep");
-    fs::create_dir_all(dep.join("src")).expect("create dep src");
-    fs::write(
-        dep.join("fe.toml"),
-        r#"
-[ingot]
-name = "dep"
-version = "0.1.0"
-arithmetic = "checked"
-"#,
-    )
-    .expect("write dep fe.toml");
-    fs::write(
-        dep.join("src/lib.fe"),
-        r#"
-pub fn add(x: u8, y: u8) -> u8 {
-    x + y
-}
-"#,
-    )
-    .expect("write dep lib.fe");
-
-    let (output, exit_code) = run_fe_main_in_dir(&["check", "--dump-mir"], &root);
-    assert_eq!(exit_code, 0, "fe check failed:\n{output}");
-    assert!(
-        output.contains("fn add(v0: u8, v1: u8) -> u8:") && output.contains("ret (v0 + v1)"),
-        "expected dependency MIR to use unchecked arithmetic:\n{output}"
-    );
-    assert!(
-        !output.contains("checked_add<u8>(v0, v1)"),
-        "did not expect dependency arithmetic override to defer:\n{output}"
-    );
-}
-
-#[test]
-fn test_cli_check_dependency_arithmetic_defer_respects_dependency_setting() {
-    let temp = tempfile::Builder::new()
-        .prefix("fe-dependency-arithmetic-defer-")
-        .tempdir()
-        .expect("tempdir");
-    let root = write_temp_ingot(
-        &temp,
-        r#"
-[ingot]
-name = "root"
-version = "0.1.0"
-dependency-arithmetic = "defer"
-
-[dependencies]
-dep = { path = "../dep" }
-"#,
-        r#"
-use dep::add
-
-pub fn call(x: u8, y: u8) -> u8 {
-    add(x, y)
-}
-"#,
-    );
-    let dep = root.parent().expect("temp ingot parent").join("dep");
-    fs::create_dir_all(dep.join("src")).expect("create dep src");
-    fs::write(
-        dep.join("fe.toml"),
-        r#"
-[ingot]
-name = "dep"
-version = "0.1.0"
-arithmetic = "checked"
-"#,
-    )
-    .expect("write dep fe.toml");
-    fs::write(
-        dep.join("src/lib.fe"),
-        r#"
-pub fn add(x: u8, y: u8) -> u8 {
-    x + y
-}
-"#,
-    )
-    .expect("write dep lib.fe");
-
-    let (output, exit_code) = run_fe_main_in_dir(&["check", "--dump-mir"], &root);
-    assert_eq!(exit_code, 0, "fe check failed:\n{output}");
-    assert!(
-        output.contains("fn add(v0: u8, v1: u8) -> u8:")
-            && output.contains("checked_add<u8>(v0, v1)"),
-        "expected dependency MIR to defer to checked arithmetic:\n{output}"
-    );
-}
-
-#[test]
-fn test_cli_check_profile_selects_workspace_dependency_arithmetic() {
-    let temp = tempfile::Builder::new()
-        .prefix("fe-dependency-arithmetic-workspace-")
-        .tempdir()
-        .expect("tempdir");
-    let root = write_temp_workspace(
-        &temp,
-        r#"
-[workspace]
-members = ["ingots/app"]
-dependency-arithmetic = "checked"
-
-[profiles.release]
-dependency-arithmetic = "unchecked"
-"#,
-        r#"
-[ingot]
-name = "app"
-version = "0.1.0"
-
-[dependencies]
-dep = { path = "../../dep" }
-"#,
-        r#"
-use dep::add
-
-pub fn call(x: u8, y: u8) -> u8 {
-    add(x, y)
-}
-"#,
-    );
-    let dep = root.join("dep");
-    fs::create_dir_all(dep.join("src")).expect("create dep src");
-    fs::write(
-        dep.join("fe.toml"),
-        r#"
-[ingot]
-name = "dep"
-version = "0.1.0"
-arithmetic = "checked"
-"#,
-    )
-    .expect("write dep fe.toml");
-    fs::write(
-        dep.join("src/lib.fe"),
-        r#"
-pub fn add(x: u8, y: u8) -> u8 {
-    x + y
-}
-"#,
-    )
-    .expect("write dep lib.fe");
-
-    let (dev_output, dev_exit_code) = run_fe_main_in_dir(&["check", "--dump-mir", "app"], &root);
-    assert_eq!(dev_exit_code, 0, "fe check failed:\n{dev_output}");
-    assert!(
-        dev_output.contains("checked_add<u8>(v0, v1)"),
-        "expected workspace default dependency arithmetic to stay checked:\n{dev_output}"
-    );
-
-    let (release_output, release_exit_code) = run_fe_main_in_dir(
-        &["check", "--dump-mir", "--profile", "release", "app"],
-        &root,
-    );
-    assert_eq!(
-        release_exit_code, 0,
-        "fe check --profile release failed:\n{release_output}"
-    );
-    assert!(
-        release_output.contains("fn add(v0: u8, v1: u8) -> u8:")
-            && release_output.contains("ret (v0 + v1)")
-            && !release_output.contains("checked_add<u8>(v0, v1)"),
-        "expected workspace release dependency arithmetic to be unchecked:\n{release_output}"
-    );
-}
-
-#[test]
 fn test_cli_check_dependency_arithmetic_conflict_is_error() {
     let temp = tempfile::Builder::new()
         .prefix("fe-dependency-arithmetic-conflict-")
@@ -1185,46 +876,20 @@ pub fn call(x: u8, y: u8) -> u8 {
 }
 
 #[test]
-fn test_cli_test_profile_selects_arithmetic() {
-    let temp = tempfile::Builder::new()
-        .prefix("fe-arithmetic-test-")
-        .tempdir()
-        .expect("tempdir");
-    let root = write_temp_ingot(
-        &temp,
-        r#"
-[ingot]
-name = "arith"
-version = "0.1.0"
-arithmetic = "checked"
+fn test_cli_test_profile_selects_ingot_arithmetic() {
+    let fixture_dir = fe_test_runner_fixture_dir("arithmetic_profile_ingot");
+    let fixture_dir_str = fixture_dir.to_str().expect("fixture dir utf8");
 
-[profiles.test]
-arithmetic = "unchecked"
-"#,
-        r#"
-use std::evm::effects::assert
-
-#[test]
-fn wraps_in_test_profile() {
-    let x: u8 = 255
-    let y: u8 = x + 1
-    assert(y == 0)
-}
-"#,
-    );
-
-    let (test_output, test_exit_code) =
-        run_fe_main_in_dir(&["test", "--backend", "sonatina"], &root);
+    let (test_output, test_exit_code) = run_fe_main(&["test", fixture_dir_str]);
     assert_eq!(test_exit_code, 0, "fe test failed:\n{test_output}");
     assert!(
-        test_output.contains("1 passed"),
+        test_output.contains("PASS  [<time>] arithmetic_profile_ingot_wraps_in_test_profile")
+            && test_output.contains("1 passed"),
         "expected test profile to run unchecked arithmetic:\n{test_output}"
     );
 
-    let (release_output, release_exit_code) = run_fe_main_in_dir(
-        &["test", "--backend", "sonatina", "--profile", "release"],
-        &root,
-    );
+    let (release_output, release_exit_code) =
+        run_fe_main(&["test", "--profile", "release", fixture_dir_str]);
     assert_ne!(
         release_exit_code, 0,
         "expected release profile test failure:\n{release_output}"
@@ -1232,6 +897,85 @@ fn wraps_in_test_profile() {
     assert!(
         release_output.contains("1 failed"),
         "expected checked arithmetic failure in release profile:\n{release_output}"
+    );
+}
+
+#[test]
+fn test_cli_test_profile_selects_workspace_arithmetic() {
+    let fixture_dir = fe_test_runner_fixture_dir("arithmetic_profile_workspace");
+    let fixture_dir_str = fixture_dir.to_str().expect("fixture dir utf8");
+
+    let (test_output, test_exit_code) = run_fe_main(&["test", fixture_dir_str]);
+    assert_eq!(test_exit_code, 0, "fe test failed:\n{test_output}");
+    assert!(
+        test_output.contains("PASS  [<time>] arithmetic_profile_workspace_wraps_in_test_profile")
+            && test_output.contains("1 passed"),
+        "expected workspace test profile to run unchecked arithmetic:\n{test_output}"
+    );
+
+    let (release_output, release_exit_code) =
+        run_fe_main(&["test", "--profile", "release", fixture_dir_str]);
+    assert_ne!(
+        release_exit_code, 0,
+        "expected release profile test failure:\n{release_output}"
+    );
+    assert!(
+        release_output.contains("1 failed"),
+        "expected checked arithmetic failure in workspace release profile:\n{release_output}"
+    );
+}
+
+#[test]
+fn test_cli_test_dependency_arithmetic_override() {
+    let fixture_dir = fe_test_runner_fixture_dir("dependency_arithmetic_override");
+    let fixture_dir_str = fixture_dir.to_str().expect("fixture dir utf8");
+
+    let (output, exit_code) = run_fe_main(&["test", fixture_dir_str]);
+    assert_eq!(exit_code, 0, "fe test failed:\n{output}");
+    assert!(
+        output.contains("PASS  [<time>] dependency_arithmetic_override_wraps_external_overflow")
+            && output.contains("1 passed"),
+        "expected dependency arithmetic override test to pass, got:\n{output}"
+    );
+}
+
+#[test]
+fn test_cli_test_dependency_arithmetic_defer() {
+    let fixture_dir = fe_test_runner_fixture_dir("dependency_arithmetic_defer");
+    let fixture_dir_str = fixture_dir.to_str().expect("fixture dir utf8");
+
+    let (output, exit_code) = run_fe_main(&["test", fixture_dir_str]);
+    assert_eq!(exit_code, 0, "fe test failed:\n{output}");
+    assert!(
+        output.contains("PASS  [<time>] dependency_arithmetic_defer_respects_dependency_setting")
+            && output.contains("1 passed"),
+        "expected dependency arithmetic defer test to pass, got:\n{output}"
+    );
+}
+
+#[test]
+fn test_cli_test_profile_selects_workspace_dependency_arithmetic() {
+    let fixture_dir = fe_test_runner_fixture_dir("dependency_arithmetic_profile");
+    let fixture_dir_str = fixture_dir.to_str().expect("fixture dir utf8");
+
+    let (test_output, test_exit_code) = run_fe_main(&["test", fixture_dir_str]);
+    assert_eq!(test_exit_code, 0, "fe test failed:\n{test_output}");
+    assert!(
+        test_output
+            .contains("PASS  [<time>] dependency_arithmetic_profile_wraps_external_overflow")
+            && test_output.contains("1 passed"),
+        "expected test profile to force unchecked dependency arithmetic:\n{test_output}"
+    );
+
+    let (release_output, release_exit_code) =
+        run_fe_main(&["test", "--profile", "release", fixture_dir_str]);
+    assert_ne!(
+        release_exit_code, 0,
+        "expected release profile test failure:\n{release_output}"
+    );
+    assert!(
+        release_output.contains("1 failed"),
+        "expected checked dependency arithmetic in release profile:\n{release_output}"
     );
 }
 
@@ -1317,24 +1061,6 @@ fn test_cli_test_ingot_discovers_tests_in_non_root_modules() {
     assert!(
         output.contains("PASS  [<time>] test_add"),
         "expected test_add to be discovered, got:\n{output}"
-    );
-    assert!(
-        output.contains("1 passed"),
-        "expected 1 passed test, got:\n{output}"
-    );
-}
-
-#[test]
-fn test_cli_test_dependency_arithmetic_profile() {
-    let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/fe_test_runner/dependency_arithmetic_profile");
-    let fixture_dir_str = fixture_dir.to_str().expect("fixture dir utf8");
-
-    let (output, exit_code) = run_fe_main(&["test", fixture_dir_str]);
-    assert_eq!(exit_code, 0, "fe test failed:\n{output}");
-    assert!(
-        output.contains("PASS  [<time>] dependency_arithmetic_profile_wraps_external_overflow"),
-        "expected dependency arithmetic runtime test to pass, got:\n{output}"
     );
     assert!(
         output.contains("1 passed"),
