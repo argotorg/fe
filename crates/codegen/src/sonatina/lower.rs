@@ -27,7 +27,7 @@ use sonatina_ir::{
         control_flow::{Br, BrTable, Call, Jump, Return},
         data::{Alloca, Gep, Mload, Mstore, SymAddr, SymSize, SymbolRef},
         evm::{
-            EvmAddMod, EvmAddress, EvmBaseFee, EvmBlockHash, EvmCall, EvmCallValue,
+            EvmAddMod, EvmAddress, EvmBaseFee, EvmBlockHash, EvmByte, EvmCall, EvmCallValue,
             EvmCalldataCopy, EvmCalldataLoad, EvmCalldataSize, EvmCaller, EvmChainId, EvmCodeCopy,
             EvmCodeSize, EvmCoinBase, EvmCreate, EvmCreate2, EvmDelegateCall, EvmExp, EvmGas,
             EvmGasLimit, EvmInvalid, EvmKeccak256, EvmLog0, EvmLog1, EvmLog2, EvmLog3, EvmLog4,
@@ -1657,6 +1657,17 @@ fn make_int_immediate<C: sonatina_ir::func_cursor::FuncCursor>(
     fb.make_imm_value(Immediate::from_i256(value, ty))
 }
 
+fn extract_evm_byte<C: sonatina_ir::func_cursor::FuncCursor>(
+    fb: &mut sonatina_ir::builder::FunctionBuilder<C>,
+    is: &sonatina_ir::inst::evm::inst_set::EvmInstSet,
+    pos: u64,
+    value: ValueId,
+) -> ValueId {
+    let pos = fb.make_imm_value(I256::from(pos));
+    let ty = fb.type_of(value);
+    fb.insert_inst(EvmByte::new(is, pos, value), ty)
+}
+
 /// Applies `from_word` conversion after loading a value.
 ///
 /// This mirrors the stdlib `WordRepr::from_word` semantics, but returns the
@@ -2165,9 +2176,7 @@ fn load_from_terminal<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 .fb
                 .insert_inst(Mload::new(ctx.is, ptr_addr, Type::I256), Type::I256);
             let raw = if packed {
-                let shift = ctx.fb.make_imm_value(I256::from(248));
-                ctx.fb
-                    .insert_inst(Shr::new(ctx.is, shift, word), Type::I256)
+                extract_evm_byte(ctx.fb, ctx.is, 0, word)
             } else {
                 word
             };
@@ -2208,9 +2217,7 @@ fn load_from_terminal<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 .fb
                 .insert_inst(Mload::new(ctx.is, scratch, Type::I256), Type::I256);
             let raw = if packed {
-                let shift = ctx.fb.make_imm_value(I256::from(248));
-                ctx.fb
-                    .insert_inst(Shr::new(ctx.is, shift, word), Type::I256)
+                extract_evm_byte(ctx.fb, ctx.is, 0, word)
             } else {
                 word
             };

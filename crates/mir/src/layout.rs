@@ -302,6 +302,14 @@ fn ty_size_bytes_word_aligned_fallback_in(
 pub fn array_elem_ty<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<TyId<'db>> {
     let (base, args) = ty.decompose_ty_app(db);
     if !base.is_array(db) || args.is_empty() {
+        if let TyData::TyApp(lhs, rhs) = ty.data(db)
+            && matches!(rhs.data(db), TyData::ConstTy(_))
+        {
+            let (lhs_base, lhs_args) = lhs.decompose_ty_app(db);
+            if lhs_base.is_array(db) && !lhs_args.is_empty() {
+                return Some(lhs_args[0]);
+            }
+        }
         return None;
     }
     Some(args[0])
@@ -874,6 +882,10 @@ where
             }
             Projection::Index(_) => {
                 let elem_ty = array_elem_ty(db, current_ty)
+                    .or_else(|| {
+                        normalize_ty_for_layout(db, current_ty)
+                            .and_then(|normalized| array_elem_ty(db, normalized))
+                    })
                     .ok_or_else(|| "projection: array index on non-array type".to_string())?;
                 if is_packed_memory_array_elem_ty(db, elem_ty)
                     || ty_contains_packed_memory_array(db, elem_ty)
@@ -920,55 +932,8 @@ pub fn is_packed_scalar_array_access<'db>(
     }
 
     let scalar_ty = crate::repr::word_conversion_leaf_ty(db, scalar_ty);
-    if !is_packed_memory_array_elem_ty(db, scalar_ty) {
-        return Ok(false);
-    }
-
-    let base_ty = body
-        .values
-        .get(place.base.index())
-        .ok_or_else(|| format!("unknown MIR place base value {}", place.base.index()))?
-        .ty;
-    let mut current_ty = base_ty;
-    let Some(last_idx) = place.projection.len().checked_sub(1) else {
-        return Ok(false);
-    };
-
-    for (idx, proj) in place.projection.iter().enumerate() {
-        match proj {
-            Projection::Field(field_idx) => {
-                let field_types = current_ty.field_types(db);
-                current_ty = *field_types
-                    .get(*field_idx)
-                    .ok_or_else(|| format!("projection: field {field_idx} out of bounds"))?;
-            }
-            Projection::VariantField {
-                variant,
-                enum_ty,
-                field_idx,
-            } => {
-                let ctor = ConstructorKind::Variant(*variant, *enum_ty);
-                let field_types = ctor.field_types(db);
-                current_ty = *field_types.get(*field_idx).ok_or_else(|| {
-                    format!("projection: variant field {field_idx} out of bounds")
-                })?;
-            }
-            Projection::Discriminant => {
-                current_ty = TyId::new(db, TyData::TyBase(TyBase::Prim(PrimTy::U256)));
-            }
-            Projection::Index(_) => {
-                let elem_ty = array_elem_ty(db, current_ty)
-                    .ok_or_else(|| "projection: array index on non-array type".to_string())?;
-                if idx == last_idx && is_packed_memory_array_elem_ty(db, elem_ty) {
-                    return Ok(true);
-                }
-                current_ty = elem_ty;
-            }
-            Projection::Deref => return Ok(false),
-        }
-    }
-
-    Ok(false)
+    Ok(is_packed_memory_array_elem_ty(db, scalar_ty)
+        && matches!(place.projection.iter().last(), Some(Projection::Index(_))))
 }
 
 // ============================================================================

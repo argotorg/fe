@@ -20,7 +20,7 @@ func private %packed_field_offset() -> i256 {
         v7.i256 = ptr_to_int v2 i256;
         v8.*i8 = bitcast v2 *i8;
         v9.i256 = mload v8 i256;
-        v11.i256 = shr 248.i256 v9;
+        v11.i256 = evm_byte 0.i256 v9;
         v12.i8 = trunc v11 i8;
         v13.i256 = ptr_to_int v6 i256;
         v14.*i8 = bitcast v6 *i8;
@@ -31,7 +31,7 @@ func private %packed_field_offset() -> i256 {
         v19.i256 = add v17 1.i256;
         v20.*i8 = int_to_ptr v19 *i8;
         v21.i256 = mload v20 i256;
-        v22.i256 = shr 248.i256 v21;
+        v22.i256 = evm_byte 0.i256 v21;
         v23.i8 = trunc v22 i8;
         v24.i256 = ptr_to_int v6 i256;
         v25.i256 = add v24 1.i256;

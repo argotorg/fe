@@ -19,7 +19,7 @@ func private %const_nested_u8_array() -> i8 {
         v8.*i8 = int_to_ptr v7 *i8;
         v9.i256 = ptr_to_int v8 i256;
         v10.i256 = mload v8 i256;
-        v12.i256 = shr 248.i256 v10;
+        v12.i256 = evm_byte 0.i256 v10;
         v13.i8 = trunc v12 i8;
         return v13;
 }
