@@ -338,6 +338,7 @@ pub fn lower_module<'db>(
         crate::transform::canonicalize_transparent_newtypes(db, &mut func.body);
         crate::transform::insert_temp_binds(db, &mut func.body);
     }
+    validate_lowered_mir_functions(db, &functions)?;
     for func in &functions {
         if let Some(diag) = crate::analysis::noesc::check_noesc_escapes(db, func) {
             let func_name = match func.origin {
@@ -361,10 +362,12 @@ pub fn lower_module<'db>(
         crate::transform::insert_temp_binds(db, &mut func.body);
         crate::transform::canonicalize_zero_sized(db, &mut func.body);
     }
+    validate_lowered_mir_functions(db, &functions)?;
     let mut module = MirModule { top_mod, functions };
     crate::transform::normalize_runtime_abi(db, &mut module);
     crate::transform::eliminate_dead_erased_arg_materializations(db, &mut module);
     crate::transform::normalize_runtime_shapes(db, &mut module);
+    validate_lowered_mir_functions(db, &module.functions)?;
     Ok(module)
 }
 
@@ -465,6 +468,7 @@ pub fn lower_ingot<'db>(
         crate::transform::canonicalize_transparent_newtypes(db, &mut func.body);
         crate::transform::insert_temp_binds(db, &mut func.body);
     }
+    validate_lowered_mir_functions(db, &functions)?;
 
     for func in &functions {
         if let Some(diag) = crate::analysis::noesc::check_noesc_escapes(db, func) {
@@ -486,6 +490,7 @@ pub fn lower_ingot<'db>(
         crate::transform::insert_temp_binds(db, &mut func.body);
         crate::transform::canonicalize_zero_sized(db, &mut func.body);
     }
+    validate_lowered_mir_functions(db, &functions)?;
     let mut module = MirModule {
         top_mod: root_mod,
         functions,
@@ -493,6 +498,7 @@ pub fn lower_ingot<'db>(
     crate::transform::normalize_runtime_abi(db, &mut module);
     crate::transform::eliminate_dead_erased_arg_materializations(db, &mut module);
     crate::transform::normalize_runtime_shapes(db, &mut module);
+    validate_lowered_mir_functions(db, &module.functions)?;
     Ok(module)
 }
 
@@ -578,18 +584,12 @@ pub(crate) fn lower_function<'db>(
         return Err(err);
     }
 
-    if let Some(expr) = first_unlowered_expr_used_by_mir(&mir_body) {
-        let expr_context = format_hir_expr_context(db, body, expr);
-        // Generic functions are re-lowered from HIR during monomorphization, so their initial
-        // templates are never codegen'd. Allow construction-time placeholders here.
-        let is_uninstantiated_generic =
-            generic_args.is_empty() && !CallableDef::Func(func).params(db).is_empty();
-        if !is_uninstantiated_generic {
-            return Err(MirLowerError::UnloweredHirExpr {
-                func_name: symbol_name.clone(),
-                expr: expr_context,
-            });
-        }
+    // Generic functions are re-lowered from HIR during monomorphization, so their initial
+    // templates are never codegen'd. Allow construction-time placeholders here.
+    let is_uninstantiated_generic =
+        generic_args.is_empty() && !CallableDef::Func(func).params(db).is_empty();
+    if !is_uninstantiated_generic {
+        validate_lowered_mir_body(db, &symbol_name, body, &mir_body)?;
     }
 
     // Note: `MirFunction` may be used as a generic template during monomorphization.
@@ -3050,7 +3050,55 @@ fn format_hir_expr_context(db: &dyn SpannedHirAnalysisDb, body: Body<'_>, expr: 
     format!("expr={expr:?} at {span_context}: {expr_data}")
 }
 
-fn first_unlowered_expr_used_by_mir<'db>(body: &MirBody<'db>) -> Option<ExprId> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MirLoweringInvariantViolation {
+    UnloweredExpr(ExprId),
+    ControlFlowResult(ExprId),
+}
+
+impl MirLoweringInvariantViolation {
+    fn expr(self) -> ExprId {
+        match self {
+            Self::UnloweredExpr(expr) | Self::ControlFlowResult(expr) => expr,
+        }
+    }
+}
+
+pub(super) fn validate_lowered_mir_body<'db>(
+    db: &'db dyn SpannedHirAnalysisDb,
+    func_name: &str,
+    body: Body<'db>,
+    mir_body: &MirBody<'db>,
+) -> MirLowerResult<()> {
+    let Some(violation) = first_lowering_invariant_violation_used_by_mir(mir_body) else {
+        return Ok(());
+    };
+    let expr_context = format_hir_expr_context(db, body, violation.expr());
+    Err(MirLowerError::UnloweredHirExpr {
+        func_name: func_name.to_string(),
+        expr: expr_context,
+    })
+}
+
+fn validate_lowered_mir_functions<'db>(
+    db: &'db dyn SpannedHirAnalysisDb,
+    functions: &[MirFunction<'db>],
+) -> MirLowerResult<()> {
+    for func in functions {
+        let Some(typed_body) = &func.typed_body else {
+            continue;
+        };
+        let Some(body) = typed_body.body() else {
+            continue;
+        };
+        validate_lowered_mir_body(db, &mir_func_name(db, func), body, &func.body)?;
+    }
+    Ok(())
+}
+
+fn first_lowering_invariant_violation_used_by_mir<'db>(
+    body: &MirBody<'db>,
+) -> Option<MirLoweringInvariantViolation> {
     let mut used_values: FxHashSet<ValueId> = FxHashSet::default();
 
     for block in &body.blocks {
@@ -3133,7 +3181,12 @@ fn first_unlowered_expr_used_by_mir<'db>(body: &MirBody<'db>) -> Option<ExprId> 
         }
 
         match &body.value(value_id).origin {
-            ValueOrigin::Expr(expr) => return Some(*expr),
+            ValueOrigin::Expr(expr) => {
+                return Some(MirLoweringInvariantViolation::UnloweredExpr(*expr));
+            }
+            ValueOrigin::ControlFlowResult { expr } => {
+                return Some(MirLoweringInvariantViolation::ControlFlowResult(*expr));
+            }
             ValueOrigin::Unary { inner, .. } => worklist.push(*inner),
             ValueOrigin::Binary { lhs, rhs, .. } => {
                 worklist.push(*lhs);
@@ -3156,4 +3209,43 @@ fn dynamic_indices<'db, 'a>(
         }
         _ => None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use cranelift_entity::EntityRef;
+    use driver::DriverDataBase;
+    use hir::analysis::ty::ty_def::TyId;
+
+    use super::*;
+    use crate::ir::{BodyBuilder, Rvalue, ValueOrigin, ValueRepr};
+
+    #[test]
+    fn lowering_invariant_detects_live_control_flow_results() {
+        let db = DriverDataBase::default();
+        let ty = TyId::unit(&db);
+        let expr = ExprId::new(0);
+        let mut builder = BodyBuilder::new();
+        let value =
+            builder.alloc_value(ty, ValueOrigin::ControlFlowResult { expr }, ValueRepr::Word);
+        builder.assign(None, Rvalue::Value(value));
+        let body = builder.build();
+
+        assert_eq!(
+            first_lowering_invariant_violation_used_by_mir(&body),
+            Some(MirLoweringInvariantViolation::ControlFlowResult(expr))
+        );
+    }
+
+    #[test]
+    fn lowering_invariant_ignores_dead_placeholders() {
+        let db = DriverDataBase::default();
+        let ty = TyId::unit(&db);
+        let expr = ExprId::new(0);
+        let mut builder = BodyBuilder::new();
+        let _ = builder.alloc_value(ty, ValueOrigin::Expr(expr), ValueRepr::Word);
+        let body = builder.build();
+
+        assert_eq!(first_lowering_invariant_violation_used_by_mir(&body), None);
+    }
 }

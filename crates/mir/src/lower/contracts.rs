@@ -886,13 +886,7 @@ fn lower_init_handler<'db>(
         return Err(err);
     }
 
-    if let Some(expr) = super::first_unlowered_expr_used_by_mir(&mir_body) {
-        let expr_context = super::format_hir_expr_context(db, body, expr);
-        return Err(MirLowerError::UnloweredHirExpr {
-            func_name: symbols.init_handler.clone(),
-            expr: expr_context,
-        });
-    }
+    super::validate_lowered_mir_body(db, &symbols.init_handler, body, &mir_body)?;
     let runtime_abi = crate::ir::RuntimeAbi::source_shaped(
         mir_body.param_locals.len(),
         vec![None; mir_body.effect_param_locals.len()],
@@ -1020,13 +1014,12 @@ fn lower_recv_arm_handler<'db>(
         return Err(err);
     }
 
-    if let Some(expr) = super::first_unlowered_expr_used_by_mir(&mir_body) {
-        let expr_context = super::format_hir_expr_context(db, body, expr);
-        return Err(MirLowerError::UnloweredHirExpr {
-            func_name: symbols.recv_handler(recv_idx, arm_idx),
-            expr: expr_context,
-        });
-    }
+    super::validate_lowered_mir_body(
+        db,
+        &symbols.recv_handler(recv_idx, arm_idx),
+        body,
+        &mir_body,
+    )?;
     let runtime_abi = crate::ir::RuntimeAbi::source_shaped(
         mir_body.param_locals.len(),
         vec![None; mir_body.effect_param_locals.len()],
