@@ -15,10 +15,10 @@ use std::fmt;
 pub enum OptLevel {
     /// No optimization — maximum debuggability.
     O0,
-    /// Balanced optimization (default).
+    /// Size-oriented optimization.
+    Os,
+    /// Speed-oriented optimization (default).
     #[default]
-    O1,
-    /// Aggressive optimization.
     O2,
 }
 
@@ -28,10 +28,11 @@ impl std::str::FromStr for OptLevel {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "0" => Ok(OptLevel::O0),
-            "1" => Ok(OptLevel::O1),
+            "s" => Ok(OptLevel::Os),
+            "1" => Ok(OptLevel::O2),
             "2" => Ok(OptLevel::O2),
             _ => Err(format!(
-                "unknown optimization level: {s} (expected '0', '1', or '2')"
+                "unknown optimization level: {s} (expected '0', '1', '2', or 's')"
             )),
         }
     }
@@ -48,7 +49,7 @@ impl fmt::Display for OptLevel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             OptLevel::O0 => write!(f, "0"),
-            OptLevel::O1 => write!(f, "1"),
+            OptLevel::Os => write!(f, "s"),
             OptLevel::O2 => write!(f, "2"),
         }
     }
@@ -277,8 +278,8 @@ impl Backend for SonatinaBackend {
         // Run the optimization pipeline based on opt_level.
         match opt_level {
             OptLevel::O0 => { /* no optimization */ }
-            OptLevel::O1 => sonatina_codegen::optim::Pipeline::balanced().run(&mut module),
-            OptLevel::O2 => sonatina_codegen::optim::Pipeline::aggressive().run(&mut module),
+            OptLevel::Os => sonatina_codegen::optim::Pipeline::size().run(&mut module),
+            OptLevel::O2 => sonatina_codegen::optim::Pipeline::speed().run(&mut module),
         }
         if opt_level != OptLevel::O0 {
             crate::sonatina::ensure_module_sonatina_ir_valid(&module)?;
@@ -358,5 +359,31 @@ impl Backend for SonatinaBackend {
         })?;
 
         Ok(BackendOutput::Bytecode(runtime_section.bytes.clone()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::OptLevel;
+    use std::str::FromStr;
+
+    #[test]
+    fn opt_level_parses_os() {
+        assert_eq!(OptLevel::from_str("s"), Ok(OptLevel::Os));
+    }
+
+    #[test]
+    fn opt_level_parses_o1_as_o2() {
+        assert_eq!(OptLevel::from_str("1"), Ok(OptLevel::O2));
+    }
+
+    #[test]
+    fn opt_level_default_is_o2() {
+        assert_eq!(OptLevel::default(), OptLevel::O2);
+    }
+
+    #[test]
+    fn opt_level_display_uses_os() {
+        assert_eq!(OptLevel::Os.to_string(), "s");
     }
 }

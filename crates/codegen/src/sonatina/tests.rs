@@ -164,8 +164,8 @@ pub fn emit_test_module_sonatina(
 fn run_sonatina_optimization_pipeline(module: &mut Module, opt_level: OptLevel) {
     match opt_level {
         OptLevel::O0 => { /* no optimization */ }
-        OptLevel::O1 => sonatina_codegen::optim::Pipeline::balanced().run(module),
-        OptLevel::O2 => sonatina_codegen::optim::Pipeline::aggressive().run(module),
+        OptLevel::Os => sonatina_codegen::optim::Pipeline::size().run(module),
+        OptLevel::O2 => sonatina_codegen::optim::Pipeline::speed().run(module),
     }
 }
 

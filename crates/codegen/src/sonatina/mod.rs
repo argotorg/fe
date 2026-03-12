@@ -417,8 +417,8 @@ fn compile_mir_module_for_sonatina_output<'db>(
 
     match opt_level {
         OptLevel::O0 => {}
-        OptLevel::O1 => sonatina_codegen::optim::Pipeline::balanced().run(&mut module),
-        OptLevel::O2 => sonatina_codegen::optim::Pipeline::aggressive().run(&mut module),
+        OptLevel::Os => sonatina_codegen::optim::Pipeline::size().run(&mut module),
+        OptLevel::O2 => sonatina_codegen::optim::Pipeline::speed().run(&mut module),
     }
     if opt_level != OptLevel::O0 {
         ensure_module_sonatina_ir_valid(&module)?;

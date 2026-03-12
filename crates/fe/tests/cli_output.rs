@@ -1374,28 +1374,26 @@ fn test_cli_test_solc_flag_overrides_env() {
 }
 
 #[test]
-fn test_cli_build_optimize_and_opt_level_0_is_error() {
+fn test_cli_build_opt_level_flag_is_error() {
     let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/cli_output/build/simple_contract.fe");
     let fixture_path_str = fixture_path.to_str().expect("fixture path utf8");
 
-    let (output, exit_code) =
-        run_fe_main(&["build", "--optimize", "--opt-level", "0", fixture_path_str]);
+    let (output, exit_code) = run_fe_main(&["build", "--opt-level", "0", fixture_path_str]);
     assert_ne!(exit_code, 0, "expected non-zero exit code:\n{output}");
     assert!(
-        output.contains("Error: --optimize is shorthand for"),
-        "expected error about conflicting optimization flags, got:\n{output}"
+        output.contains("unexpected argument '--opt-level'"),
+        "expected `fe build` to reject `--opt-level`, got:\n{output}"
     );
 }
 
 #[test]
-fn test_cli_check_optimize_and_opt_level_0_is_error() {
+fn test_cli_check_optimize_flag_is_error() {
     let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/cli_output/build/simple_contract.fe");
     let fixture_path_str = fixture_path.to_str().expect("fixture path utf8");
 
-    let (output, exit_code) =
-        run_fe_main(&["check", "--optimize", "--opt-level", "0", fixture_path_str]);
+    let (output, exit_code) = run_fe_main(&["check", "--optimize", "0", fixture_path_str]);
     assert_ne!(exit_code, 0, "expected non-zero exit code:\n{output}");
     assert!(
         output.contains("unexpected argument '--optimize'"),
@@ -1404,23 +1402,22 @@ fn test_cli_check_optimize_and_opt_level_0_is_error() {
 }
 
 #[test]
-fn test_cli_test_optimize_and_opt_level_0_is_error() {
+fn test_cli_test_opt_level_flag_is_error() {
     let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/fe_test_runner/pass.fe");
     let fixture_path_str = fixture_path.to_str().expect("fixture path utf8");
 
-    let (output, exit_code) =
-        run_fe_main(&["test", "--optimize", "--opt-level", "0", fixture_path_str]);
+    let (output, exit_code) = run_fe_main(&["test", "--opt-level", "0", fixture_path_str]);
     assert_ne!(exit_code, 0, "expected non-zero exit code:\n{output}");
     assert!(
-        output.contains("Error: --optimize is shorthand for"),
-        "expected error about conflicting optimization flags, got:\n{output}"
+        output.contains("unexpected argument '--opt-level'"),
+        "expected `fe test` to reject `--opt-level`, got:\n{output}"
     );
 }
 
 #[cfg(unix)]
 #[test]
-fn test_cli_test_optimize_flag_is_forwarded_to_solc() {
+fn test_cli_test_optimize_s_enables_solc_optimizer_for_yul() {
     let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/fe_test_runner/pass.fe");
     let fixture_path_str = fixture_path.to_str().expect("fixture path utf8");
@@ -1435,6 +1432,7 @@ fn test_cli_test_optimize_flag_is_forwarded_to_solc() {
             "--backend",
             "yul",
             "--optimize",
+            "s",
             "--solc",
             fake_solc_str,
             fixture_path_str,
@@ -1450,7 +1448,7 @@ fn test_cli_test_optimize_flag_is_forwarded_to_solc() {
 
 #[cfg(unix)]
 #[test]
-fn test_cli_test_opt_level_enables_solc_optimizer_for_yul() {
+fn test_cli_test_optimize_1_enables_solc_optimizer_for_yul() {
     let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/fe_test_runner/pass.fe");
     let fixture_path_str = fixture_path.to_str().expect("fixture path utf8");
@@ -1464,7 +1462,38 @@ fn test_cli_test_opt_level_enables_solc_optimizer_for_yul() {
             "test",
             "--backend",
             "yul",
-            "--opt-level",
+            "-O",
+            "1",
+            "--solc",
+            fake_solc_str,
+            fixture_path_str,
+        ],
+        &[
+            ("FE_SOLC_PATH", "/no/such/solc"),
+            ("FAKE_SOLC_CONTRACT", "test_test_pass"),
+            ("FAKE_SOLC_EXPECT_OPTIMIZE", "true"),
+        ],
+    );
+    assert_eq!(exit_code, 0, "fe test failed:\n{output}");
+}
+
+#[cfg(unix)]
+#[test]
+fn test_cli_test_optimize_2_enables_solc_optimizer_for_yul() {
+    let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/fe_test_runner/pass.fe");
+    let fixture_path_str = fixture_path.to_str().expect("fixture path utf8");
+
+    let temp = tempdir().expect("tempdir");
+    let fake_solc = write_fake_solc(&temp);
+    let fake_solc_str = fake_solc.to_str().expect("fake solc utf8");
+
+    let (output, exit_code) = run_fe_main_with_env(
+        &[
+            "test",
+            "--backend",
+            "yul",
+            "--optimize",
             "2",
             "--solc",
             fake_solc_str,
@@ -1481,7 +1510,7 @@ fn test_cli_test_opt_level_enables_solc_optimizer_for_yul() {
 
 #[cfg(unix)]
 #[test]
-fn test_cli_test_opt_level_0_disables_solc_optimizer_for_yul() {
+fn test_cli_test_optimize_0_disables_solc_optimizer_for_yul() {
     let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/fe_test_runner/pass.fe");
     let fixture_path_str = fixture_path.to_str().expect("fixture path utf8");
@@ -1495,7 +1524,7 @@ fn test_cli_test_opt_level_0_disables_solc_optimizer_for_yul() {
             "test",
             "--backend",
             "yul",
-            "--opt-level",
+            "--optimize",
             "0",
             "--solc",
             fake_solc_str,
@@ -1512,7 +1541,7 @@ fn test_cli_test_opt_level_0_disables_solc_optimizer_for_yul() {
 
 #[cfg(unix)]
 #[test]
-fn test_cli_build_optimize_flag_is_forwarded_to_solc() {
+fn test_cli_build_optimize_s_enables_solc_optimizer_for_yul() {
     let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/cli_output/build/simple_contract.fe");
     let fixture_path_str = fixture_path.to_str().expect("fixture path utf8");
@@ -1531,6 +1560,7 @@ fn test_cli_build_optimize_flag_is_forwarded_to_solc() {
             "--contract",
             "Foo",
             "--optimize",
+            "s",
             "--out-dir",
             out_dir_str.as_str(),
             fixture_path_str,
@@ -1546,7 +1576,7 @@ fn test_cli_build_optimize_flag_is_forwarded_to_solc() {
 
 #[cfg(unix)]
 #[test]
-fn test_cli_build_opt_level_enables_solc_optimizer_for_yul() {
+fn test_cli_build_optimize_1_enables_solc_optimizer_for_yul() {
     let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/cli_output/build/simple_contract.fe");
     let fixture_path_str = fixture_path.to_str().expect("fixture path utf8");
@@ -1564,8 +1594,8 @@ fn test_cli_build_opt_level_enables_solc_optimizer_for_yul() {
             "yul",
             "--contract",
             "Foo",
-            "--opt-level",
-            "2",
+            "-O",
+            "1",
             "--out-dir",
             out_dir_str.as_str(),
             fixture_path_str,
@@ -1581,7 +1611,7 @@ fn test_cli_build_opt_level_enables_solc_optimizer_for_yul() {
 
 #[cfg(unix)]
 #[test]
-fn test_cli_build_opt_level_0_disables_solc_optimizer_for_yul() {
+fn test_cli_build_optimize_0_disables_solc_optimizer_for_yul() {
     let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/cli_output/build/simple_contract.fe");
     let fixture_path_str = fixture_path.to_str().expect("fixture path utf8");
@@ -1599,7 +1629,7 @@ fn test_cli_build_opt_level_0_disables_solc_optimizer_for_yul() {
             "yul",
             "--contract",
             "Foo",
-            "--opt-level",
+            "--optimize",
             "0",
             "--out-dir",
             out_dir_str.as_str(),

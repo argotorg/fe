@@ -81,23 +81,23 @@ pub enum Command {
         /// Code generation backend to use (yul or sonatina).
         #[arg(long, default_value = "sonatina")]
         backend: String,
-        /// Optimization level (0 = none, 1 = balanced, 2 = aggressive).
+        /// Optimization level (0 = none, s = size-oriented, 1/2 = speed-oriented).
         ///
-        /// Defaults to `1`.
+        /// Defaults to `2`.
         ///
-        /// Note: with `--backend yul`, opt levels `1` and `2` are currently equivalent.
+        /// Note: with `--backend yul`, optimize levels `s`, `1`, and `2` are currently equivalent.
+        ///
+        /// `1` is currently an alias for `2`.
         ///
         /// - Sonatina backend: controls the optimization pipeline.
-        /// - Yul backend: controls whether solc optimization is enabled (0 = disabled, 1/2 = enabled).
-        #[arg(long, default_value = "1", value_name = "LEVEL")]
-        opt_level: String,
-        /// Enable optimization.
-        ///
-        /// Shorthand for `--opt-level 1`.
-        ///
-        /// It is an error to pass `--optimize` with `--opt-level 0`.
-        #[arg(long)]
-        optimize: bool,
+        /// - Yul backend: controls whether solc optimization is enabled (0 = disabled, s/1/2 = enabled).
+        #[arg(
+            long = "optimize",
+            short = 'O',
+            value_name = "LEVEL",
+            value_parser = ["0", "1", "2", "s"]
+        )]
+        optimize: Option<String>,
         /// solc binary to use (overrides FE_SOLC_PATH).
         ///
         /// Only used with `--backend yul` (ignored with a warning otherwise).
@@ -234,23 +234,23 @@ pub enum Command {
         /// Only used with `--backend yul` (ignored with a warning otherwise).
         #[arg(long)]
         solc: Option<String>,
-        /// Optimization level (0 = none, 1 = balanced, 2 = aggressive).
+        /// Optimization level (0 = none, s = size-oriented, 1/2 = speed-oriented).
         ///
-        /// Defaults to `1`.
+        /// Defaults to `2`.
         ///
-        /// Note: with `--backend yul`, opt levels `1` and `2` are currently equivalent.
+        /// Note: with `--backend yul`, optimize levels `s`, `1`, and `2` are currently equivalent.
+        ///
+        /// `1` is currently an alias for `2`.
         ///
         /// - Sonatina backend: controls the optimization pipeline.
-        /// - Yul backend: controls whether solc optimization is enabled (0 = disabled, 1/2 = enabled).
-        #[arg(long, default_value = "1", value_name = "LEVEL")]
-        opt_level: String,
-        /// Enable optimization.
-        ///
-        /// Shorthand for `--opt-level 1`.
-        ///
-        /// It is an error to pass `--optimize` with `--opt-level 0`.
-        #[arg(long)]
-        optimize: bool,
+        /// - Yul backend: controls whether solc optimization is enabled (0 = disabled, s/1/2 = enabled).
+        #[arg(
+            long = "optimize",
+            short = 'O',
+            value_name = "LEVEL",
+            value_parser = ["0", "1", "2", "s"]
+        )]
+        optimize: Option<String>,
         /// Trace executed EVM opcodes while running tests.
         #[arg(long)]
         trace_evm: bool,
@@ -423,7 +423,6 @@ pub fn run(opts: &Options) {
             standalone,
             contract,
             backend,
-            opt_level,
             optimize,
             solc,
             out_dir,
@@ -440,7 +439,7 @@ pub fn run(opts: &Options) {
                     std::process::exit(1);
                 }
             };
-            let opt_level = match effective_opt_level(backend_kind, opt_level, *optimize) {
+            let opt_level = match effective_opt_level(backend_kind, optimize.as_deref()) {
                 Ok(level) => level,
                 Err(err) => {
                     eprintln!("Error: {err}");
@@ -527,7 +526,6 @@ pub fn run(opts: &Options) {
             debug: test_debug,
             backend,
             solc,
-            opt_level,
             optimize,
             trace_evm,
             trace_evm_keep,
@@ -548,7 +546,7 @@ pub fn run(opts: &Options) {
                     std::process::exit(1);
                 }
             };
-            let opt_level = match effective_opt_level(backend_kind, opt_level, *optimize) {
+            let opt_level = match effective_opt_level(backend_kind, optimize.as_deref()) {
                 Ok(level) => level,
                 Err(err) => {
                     eprintln!("Error: {err}");
@@ -971,20 +969,16 @@ fn generate_lsp_doc_html(resolved_root: Option<&Utf8PathBuf>) -> String {
 
 fn effective_opt_level(
     backend_kind: codegen::BackendKind,
-    opt_level: &str,
-    optimize: bool,
+    optimize: Option<&str>,
 ) -> Result<codegen::OptLevel, String> {
-    let level: codegen::OptLevel = opt_level.parse()?;
+    let level: codegen::OptLevel = optimize.unwrap_or("2").parse()?;
 
-    if optimize && level == codegen::OptLevel::O0 {
-        return Err(
-            "--optimize is shorthand for `--opt-level 1` and cannot be used with `--opt-level 0`"
-                .to_string(),
+    if backend_kind == codegen::BackendKind::Yul
+        && let Some(optimize @ ("1" | "2")) = optimize
+    {
+        eprintln!(
+            "Warning: --optimize {optimize} has no additional effect for --backend yul (same as s)"
         );
-    }
-
-    if backend_kind == codegen::BackendKind::Yul && level == codegen::OptLevel::O2 {
-        eprintln!("Warning: --opt-level 2 has no additional effect for --backend yul (same as 1)");
     }
 
     Ok(level)
