@@ -6,6 +6,7 @@ use std::{error::Error, fmt};
 
 use common::diagnostics::{CompleteDiagnostic, Span};
 use common::ingot::{Ingot, IngotKind};
+use cranelift_entity::EntityRef;
 use hir::analysis::{
     HirAnalysisDb,
     diagnostics::SpannedHirAnalysisDb,
@@ -632,8 +633,7 @@ pub(super) struct MirBuilder<'db, 'a> {
     pub(super) pat_address_space: FxHashMap<PatId, AddressSpaceKind>,
     pub(super) binding_locals: FxHashMap<LocalBinding<'db>, LocalId>,
     pub(super) address_taken_locals: FxHashSet<LocalId>,
-    pub(super) lowering_exprs: FxHashSet<ExprId>,
-    pub(super) lowered_exprs: FxHashSet<ExprId>,
+    pub(super) expr_lower_states: Vec<ExprLowerState>,
     /// For methods, the address space variant being lowered.
     pub(super) receiver_space: Option<AddressSpaceKind>,
     /// Address space for each effect parameter, indexed by effect param position.
@@ -647,6 +647,13 @@ pub(super) struct MirBuilder<'db, 'a> {
         Vec<Vec<(MirProjectionPath<'db>, AddressSpaceKind)>>,
     /// Deferred error from intrinsic lowering (e.g. `encoded_size` on a non-static type).
     pub(super) deferred_error: Option<MirLowerError>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ExprLowerState {
+    NotStarted,
+    InProgress,
+    Done,
 }
 
 /// Loop context capturing break/continue targets.
@@ -724,8 +731,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             pat_address_space: FxHashMap::default(),
             binding_locals: FxHashMap::default(),
             address_taken_locals: FxHashSet::default(),
-            lowering_exprs: FxHashSet::default(),
-            lowered_exprs: FxHashSet::default(),
+            expr_lower_states: vec![ExprLowerState::NotStarted; body.exprs(db).len()],
             receiver_space,
             effect_param_spaces: Vec::new(),
             effect_binding_spaces: FxHashMap::default(),
@@ -757,6 +763,14 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let id = self.builder.body.alloc_source_info(Some(span.clone()));
         self.source_info_cache.insert(span, id);
         id
+    }
+
+    pub(super) fn expr_lower_state(&self, expr: ExprId) -> ExprLowerState {
+        self.expr_lower_states[expr.index()]
+    }
+
+    pub(super) fn set_expr_lower_state(&mut self, expr: ExprId, state: ExprLowerState) {
+        self.expr_lower_states[expr.index()] = state;
     }
 
     fn source_for_expr(&mut self, expr: ExprId) -> crate::ir::SourceInfoId {

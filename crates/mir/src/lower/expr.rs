@@ -379,15 +379,16 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         if self.current_block().is_none() {
             return self.ensure_value(expr);
         }
-        if self.lowered_exprs.contains(&expr) {
-            return self.ensure_value(expr);
-        }
-        if !self.lowering_exprs.insert(expr) {
-            return self.ensure_value(expr);
+        match self.expr_lower_state(expr) {
+            super::ExprLowerState::Done | super::ExprLowerState::InProgress => {
+                return self.ensure_value(expr);
+            }
+            super::ExprLowerState::NotStarted => {
+                self.set_expr_lower_state(expr, super::ExprLowerState::InProgress)
+            }
         }
         let value = self.lower_expr_inner(expr);
-        self.lowering_exprs.remove(&expr);
-        self.lowered_exprs.insert(expr);
+        self.set_expr_lower_state(expr, super::ExprLowerState::Done);
         value
     }
 
