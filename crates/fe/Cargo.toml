@@ -39,6 +39,8 @@ similar = "2"
 colored = "2"
 hex = "0.4"
 toml = "0.8.8"
+serde = { version = "1", features = ["derive"] }
+ethers-core = "2"
 glob.workspace = true
 crossbeam-channel.workspace = true
 scip = "0.6.1"
