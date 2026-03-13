@@ -10,12 +10,13 @@ object "main" {
       if iszero(v0) {
         v0 := 0x80
       }
-      mstore(0x40, add(v0, 128))
-      datacopy(v0, dataoffset("data_const_nested_u8_array_0"), datasize("data_const_nested_u8_array_0"))
-      let v1 := and(mload(add(v0, 64)), 0xff)
-      ret := v1
+      mstore(0x40, add(v0, 64))
+      let v1 := dataoffset("data_const_nested_u8_array_0")
+      datacopy(v0, v1, 64)
+      let v2 := and(byte(0, mload(add(v0, 32))), 0xff)
+      ret := v2
       leave
     }
   }
-  data "data_const_nested_u8_array_0" hex"0000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000030000000000000000000000000000000000000000000000000000000000000004"
+  data "data_const_nested_u8_array_0" hex"01020000000000000000000000000000000000000000000000000000000000000304000000000000000000000000000000000000000000000000000000000000"
 }

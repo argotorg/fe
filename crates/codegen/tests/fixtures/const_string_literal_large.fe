@@ -1,0 +1,5 @@
+const BIG: String<64> = "This is a long string that exceeds thirty-two bytes in length!!"
+
+pub fn large_string_const() -> String<64> {
+    BIG
+}

@@ -1,0 +1,14 @@
+---
+source: crates/mir/tests/lowering_snapshots.rs
+expression: mir_output
+---
+fn id(v0: usize) -> usize:
+  bb0:
+    ret v0
+
+fn read(v0: [u256; 8], v1: usize) -> u256:
+  bb0:
+    v2: usize = id(v1)
+    v3: usize = checked_add<usize>(v2, 1)
+    v4: u256 = load mem[v0].*[v3]
+    ret v4

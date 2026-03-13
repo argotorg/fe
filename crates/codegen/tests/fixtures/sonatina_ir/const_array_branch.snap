@@ -12,24 +12,24 @@ func private %const_array_branch(v0.i1) -> i256 {
         br v0 block1 block2;
 
     block1:
-        v3.*i8 = evm_malloc 32.i256;
-        v4.i256 = sym_addr $__fe_const_data_0;
-        v5.i256 = sym_size $__fe_const_data_0;
-        v6.i256 = ptr_to_int v3 i256;
-        evm_code_copy v6 v4 v5;
-        v7.*[i256; 1] = bitcast v3 *[i256; 1];
-        v8.*i256 = gep v7 0.i256 0.i256;
+        v2.i256 = sym_addr $__fe_const_data_0;
+        v3.*[i256; 1] = int_to_ptr v2 *[i256; 1];
+        v4.*i256 = gep v3 0.i256 0.i256;
+        v5.i256 = ptr_to_int v4 i256;
+        v7.*i8 = evm_malloc 32.i256;
+        v8.i256 = ptr_to_int v7 i256;
+        evm_code_copy v8 v5 32.i256;
         v9.i256 = mload v8 i256;
         jump block3;
 
     block2:
-        v10.*i8 = evm_malloc 32.i256;
-        v11.i256 = sym_addr $__fe_const_data_0;
-        v12.i256 = sym_size $__fe_const_data_0;
-        v13.i256 = ptr_to_int v10 i256;
-        evm_code_copy v13 v11 v12;
-        v14.*[i256; 1] = bitcast v10 *[i256; 1];
-        v15.*i256 = gep v14 0.i256 0.i256;
+        v10.i256 = sym_addr $__fe_const_data_0;
+        v11.*[i256; 1] = int_to_ptr v10 *[i256; 1];
+        v12.*i256 = gep v11 0.i256 0.i256;
+        v13.i256 = ptr_to_int v12 i256;
+        v14.*i8 = evm_malloc 32.i256;
+        v15.i256 = ptr_to_int v14 i256;
+        evm_code_copy v15 v13 32.i256;
         v16.i256 = mload v15 i256;
         jump block3;
 

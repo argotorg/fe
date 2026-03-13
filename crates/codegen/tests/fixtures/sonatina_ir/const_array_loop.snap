@@ -1,0 +1,68 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+expression: output
+input_file: crates/codegen/tests/fixtures/const_array_loop.fe
+---
+target = "evm-ethereum-osaka"
+
+global private const [i8; 96] $__fe_const_data_0 = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 30];
+
+func private %sum_loop(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v26.i256 = phi (0.i256 block0) (v18 block7);
+        v2.i256 = phi (0.i256 block0) (v22 block7);
+        v4.i1 = call %usize_ha12462c6d36e68b0_ord_h264f6d6d75097a_lt v2 v0;
+        br v4 block2 block3;
+
+    block2:
+        (v7.i256, v8.i1) = evm_umodo v2 3.i256;
+        br v8 block4 block5;
+
+    block3:
+        return v26;
+
+    block4:
+        evm_revert 0.i256 0.i256;
+
+    block5:
+        v9.i256 = sym_addr $__fe_const_data_0;
+        v10.*[i256; 3] = int_to_ptr v9 *[i256; 3];
+        v11.*i256 = gep v10 0.i256 v7;
+        v12.i256 = ptr_to_int v11 i256;
+        v14.*i8 = evm_malloc 32.i256;
+        v15.i256 = ptr_to_int v14 i256;
+        evm_code_copy v15 v12 32.i256;
+        v16.i256 = mload v15 i256;
+        (v18.i256, v19.i1) = uaddo v26 v16;
+        br v19 block4 block6;
+
+    block6:
+        (v22.i256, v23.i1) = uaddo v2 1.i256;
+        br v23 block4 block7;
+
+    block7:
+        jump block1;
+}
+
+func private %usize_ha12462c6d36e68b0_ord_h264f6d6d75097a_lt(v0.i256, v1.i256) -> i1 {
+    block0:
+        v2.i1 = lt v0 v1;
+        return v2;
+}
+
+func private %__fe_sonatina_entry() {
+    block0:
+        v1.i256 = call %sum_loop 0.i256;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+        data $__fe_const_data_0;
+    }
+}

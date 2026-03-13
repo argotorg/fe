@@ -1,0 +1,65 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+expression: output
+input_file: crates/codegen/tests/fixtures/packed_struct_u8_array_field.fe
+---
+target = "evm-ethereum-osaka"
+
+type @__fe_Pair_0 = {[i8; 2], i256};
+
+global private const [i8; 2] $__fe_const_data_0 = [1, 2];
+
+func private %packed_field_offset() -> i256 {
+    block0:
+        v1.*i8 = evm_malloc 32.i256;
+        v2.*[i8; 2] = bitcast v1 *[i8; 2];
+        v3.i256 = ptr_to_int v2 i256;
+        v4.i256 = sym_addr $__fe_const_data_0;
+        evm_code_copy v3 v4 2.i256;
+        v6.*@__fe_Pair_0 = alloca @__fe_Pair_0;
+        v7.i256 = ptr_to_int v2 i256;
+        v8.*i8 = bitcast v2 *i8;
+        v9.i256 = mload v8 i256;
+        v11.i256 = evm_byte 0.i256 v9;
+        v12.i8 = trunc v11 i8;
+        v13.i256 = ptr_to_int v6 i256;
+        v14.*i8 = bitcast v6 *i8;
+        v15.i256 = ptr_to_int v14 i256;
+        v16.i256 = zext v12 i256;
+        evm_mstore8 v15 v16;
+        v17.i256 = ptr_to_int v2 i256;
+        v19.i256 = add v17 1.i256;
+        v20.*i8 = int_to_ptr v19 *i8;
+        v21.i256 = mload v20 i256;
+        v22.i256 = evm_byte 0.i256 v21;
+        v23.i8 = trunc v22 i8;
+        v24.i256 = ptr_to_int v6 i256;
+        v25.i256 = add v24 1.i256;
+        v26.*i8 = int_to_ptr v25 *i8;
+        v27.i256 = ptr_to_int v26 i256;
+        v28.i256 = zext v23 i256;
+        evm_mstore8 v27 v28;
+        v30.i256 = ptr_to_int v6 i256;
+        v31.i256 = add v30 32.i256;
+        v32.*i8 = int_to_ptr v31 *i8;
+        mstore v32 42.i256 i256;
+        v33.i256 = ptr_to_int v6 i256;
+        v34.i256 = add v33 32.i256;
+        v35.*i8 = int_to_ptr v34 *i8;
+        v36.i256 = mload v35 i256;
+        return v36;
+}
+
+func private %__fe_sonatina_entry() {
+    block0:
+        v0.i256 = call %packed_field_offset;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+        data $__fe_const_data_0;
+    }
+}

@@ -1,0 +1,108 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+expression: output
+input_file: crates/codegen/tests/fixtures/const_u8_array.fe
+---
+target = "evm-ethereum-osaka"
+
+global private const [i8; 32] $__fe_const_data_0 = [1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+global private const [i8; 32] $__fe_const_data_1 = [1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+global private const [i8; 32] $__fe_const_data_2 = [1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+global private const [i8; 64] $__fe_const_data_3 = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+global private const [i8; 64] $__fe_const_data_4 = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+
+func private %index_direct() -> i8 {
+    block0:
+        v0.i256 = sym_addr $__fe_const_data_0;
+        v2.i256 = add v0 1.i256;
+        v3.*i8 = evm_malloc 1.i256;
+        v4.i256 = ptr_to_int v3 i256;
+        evm_code_copy v4 v2 1.i256;
+        v5.i256 = mload v4 i256;
+        v7.i256 = evm_byte 0.i256 v5;
+        v8.i8 = trunc v7 i8;
+        return v8;
+}
+
+func private %alias_then_index() -> i8 {
+    block0:
+        v1.*i8 = evm_malloc 32.i256;
+        v2.*[i8; 2] = bitcast v1 *[i8; 2];
+        v3.i256 = ptr_to_int v2 i256;
+        v4.i256 = sym_addr $__fe_const_data_1;
+        evm_code_copy v3 v4 32.i256;
+        v5.i256 = ptr_to_int v2 i256;
+        v6.*i8 = bitcast v2 *i8;
+        v7.i256 = mload v6 i256;
+        v9.i256 = evm_byte 0.i256 v7;
+        v10.i8 = trunc v9 i8;
+        return v10;
+}
+
+func private %pass_then_index() -> i8 {
+    block0:
+        v1.*i8 = evm_malloc 32.i256;
+        v2.*[i8; 2] = bitcast v1 *[i8; 2];
+        v3.i256 = ptr_to_int v2 i256;
+        v4.i256 = sym_addr $__fe_const_data_2;
+        evm_code_copy v3 v4 32.i256;
+        v5.i8 = call %f v2;
+        return v5;
+}
+
+func private %f(v0.*[i8; 2]) -> i8 {
+    block0:
+        v1.i256 = ptr_to_int v0 i256;
+        v3.i256 = add v1 1.i256;
+        v4.*i8 = int_to_ptr v3 *i8;
+        v5.i256 = mload v4 i256;
+        v7.i256 = evm_byte 0.i256 v5;
+        v8.i8 = trunc v7 i8;
+        return v8;
+}
+
+func private %big_index() -> i8 {
+    block0:
+        v0.i256 = sym_addr $__fe_const_data_3;
+        v2.i256 = add v0 39.i256;
+        v4.*i8 = evm_malloc 1.i256;
+        v5.i256 = ptr_to_int v4 i256;
+        evm_code_copy v5 v2 1.i256;
+        v6.i256 = mload v5 i256;
+        v8.i256 = evm_byte 0.i256 v6;
+        v9.i8 = trunc v8 i8;
+        return v9;
+}
+
+func private %big_copy_first() -> i8 {
+    block0:
+        v1.*i8 = evm_malloc 64.i256;
+        v2.*[i8; 40] = bitcast v1 *[i8; 40];
+        v3.i256 = ptr_to_int v2 i256;
+        v4.i256 = sym_addr $__fe_const_data_4;
+        evm_code_copy v3 v4 64.i256;
+        v5.i256 = ptr_to_int v2 i256;
+        v6.*i8 = bitcast v2 *i8;
+        v7.i256 = mload v6 i256;
+        v9.i256 = evm_byte 0.i256 v7;
+        v10.i8 = trunc v9 i8;
+        return v10;
+}
+
+func private %__fe_sonatina_entry() {
+    block0:
+        v0.i8 = call %index_direct;
+        evm_stop;
+}
+
+
+object @Contract {
+    section runtime {
+        entry %__fe_sonatina_entry;
+        data $__fe_const_data_0;
+        data $__fe_const_data_1;
+        data $__fe_const_data_2;
+        data $__fe_const_data_3;
+        data $__fe_const_data_4;
+    }
+}

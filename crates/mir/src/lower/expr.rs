@@ -146,6 +146,117 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             .unwrap_or_else(|| IndexSource::Dynamic(self.lower_expr(expr)))
     }
 
+    fn lowered_expr_value(&mut self, expr: ExprId) -> Option<ValueId> {
+        match self.expr_lower_state(expr) {
+            super::ExprLowerState::NotStarted => None,
+            super::ExprLowerState::InProgress | super::ExprLowerState::Done => {
+                Some(self.ensure_value(expr))
+            }
+        }
+    }
+
+    fn lowered_index_source(&mut self, expr: ExprId) -> Option<IndexSource<ValueId>> {
+        self.u256_lit_from_expr(expr)
+            .and_then(|lit| lit.to_usize())
+            .map(IndexSource::Constant)
+            .or_else(|| self.lowered_expr_value(expr).map(IndexSource::Dynamic))
+    }
+
+    fn lower_borrow_place_operands(&mut self, expr: ExprId) {
+        if self.current_block().is_none() {
+            return;
+        }
+
+        match expr.data(self.db, self.body) {
+            Partial::Present(Expr::Field(lhs, field_index)) => {
+                let Some(field_index) = field_index.to_opt() else {
+                    return;
+                };
+                let lhs_ty = self.typed_body.expr_ty(self.db, *lhs);
+                let lhs_place_ty = self.place_base_ty(lhs_ty);
+                let Some(info) = self.field_access_info_for_expr(expr, lhs_place_ty, field_index)
+                else {
+                    return;
+                };
+
+                if self.direct_deref_target_ty(lhs_ty).is_some() {
+                    let _ = self.lower_expr(*lhs);
+                } else {
+                    self.lower_borrow_place_operands(*lhs);
+                    if self.is_transparent_field0(lhs_place_ty, info.field_idx)
+                        && self.current_block().is_some()
+                        && self.place_for_borrow_expr_from_lowered(*lhs).is_none()
+                    {
+                        let _ = self.lower_expr(*lhs);
+                    }
+                }
+            }
+            Partial::Present(Expr::Bin(lhs, rhs, BinOp::Index)) => {
+                let lhs_ty = self.typed_body.expr_ty(self.db, *lhs);
+                let lhs_place_ty = self.place_base_ty(lhs_ty);
+                if !lhs_place_ty.is_array(self.db) {
+                    return;
+                }
+
+                if self.direct_deref_target_ty(lhs_ty).is_some() {
+                    let _ = self.lower_expr(*lhs);
+                } else {
+                    self.lower_borrow_place_operands(*lhs);
+                }
+                if self.current_block().is_some() && self.u256_lit_from_expr(*rhs).is_none() {
+                    let _ = self.lower_expr(*rhs);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn lower_value_place_operands(&mut self, expr: ExprId) {
+        if self.current_block().is_none() {
+            return;
+        }
+
+        match expr.data(self.db, self.body) {
+            Partial::Present(Expr::Field(lhs, field_index)) => {
+                let Some(field_index) = field_index.to_opt() else {
+                    return;
+                };
+                let lhs_ty = self.typed_body.expr_ty(self.db, *lhs);
+                let lhs_place_ty = self.place_base_ty(lhs_ty);
+                let Some(info) = self.field_access_info_for_expr(expr, lhs_place_ty, field_index)
+                else {
+                    return;
+                };
+
+                if self.is_transparent_field0(lhs_place_ty, info.field_idx)
+                    && self.direct_deref_target_ty(lhs_ty).is_none()
+                {
+                    self.lower_value_place_operands(*lhs);
+                    if self.current_block().is_some()
+                        && self.place_for_expr_from_lowered(*lhs).is_none()
+                    {
+                        let _ = self.lower_expr(*lhs);
+                    }
+                } else {
+                    let _ = self.lower_expr(*lhs);
+                }
+            }
+            Partial::Present(Expr::Bin(lhs, rhs, BinOp::Index)) => {
+                let lhs_ty = self.typed_body.expr_ty(self.db, *lhs);
+                let lhs_place_ty = self.place_base_ty(lhs_ty);
+                if !lhs_place_ty.is_array(self.db) {
+                    return;
+                }
+
+                let _ = self.lower_expr(*lhs);
+                if self.current_block().is_some() && self.u256_lit_from_expr(*rhs).is_none() {
+                    let _ = self.lower_expr(*rhs);
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn set_expr_value_from_lowered_value(&mut self, value_id: ValueId, lowered: ValueId) {
         if value_id == lowered {
             return;
@@ -379,7 +490,20 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         if self.current_block().is_none() {
             return self.ensure_value(expr);
         }
+        match self.expr_lower_state(expr) {
+            super::ExprLowerState::Done | super::ExprLowerState::InProgress => {
+                return self.ensure_value(expr);
+            }
+            super::ExprLowerState::NotStarted => {
+                self.set_expr_lower_state(expr, super::ExprLowerState::InProgress)
+            }
+        }
+        let value = self.lower_expr_inner(expr);
+        self.set_expr_lower_state(expr, super::ExprLowerState::Done);
+        value
+    }
 
+    fn lower_expr_inner(&mut self, expr: ExprId) -> ValueId {
         if self.typed_body.is_implicit_move(expr) {
             let assumptions =
                 hir::analysis::ty::trait_resolution::PredicateListId::empty_list(self.db);
@@ -2124,6 +2248,12 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let Some(elem_ty) = lhs_place_ty.generic_args(self.db).first().copied() else {
             return value_id;
         };
+        if let Some(dest) = self.try_emit_const_array_elem_load(expr, lhs, rhs, None, None) {
+            if self.current_block().is_some() {
+                self.builder.body.values[value_id.index()].origin = ValueOrigin::Local(dest);
+            }
+            return value_id;
+        }
 
         let base_value = self.lower_expr(lhs);
         let index_source = self.lower_index_source(rhs);
@@ -2159,6 +2289,48 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         crate::repr::pointer_info_for_ty(self.db, &self.core, ty, source_space)
             .map(|info| info.address_space)
             .unwrap_or_else(|| self.expr_address_space(expr))
+    }
+
+    fn try_emit_const_array_elem_load(
+        &mut self,
+        expr: ExprId,
+        lhs: ExprId,
+        rhs: ExprId,
+        dest: Option<LocalId>,
+        stmt: Option<StmtId>,
+    ) -> Option<LocalId> {
+        let array_ty = self.place_base_ty(self.typed_body.expr_ty(self.db, lhs));
+        if !array_ty.is_array(self.db) {
+            return None;
+        }
+        let elem_ty = *array_ty.generic_args(self.db).first()?;
+        if self.is_by_ref_ty(elem_ty) {
+            return None;
+        }
+        let elem_size = layout::ty_memory_size(self.db, elem_ty)?;
+        if elem_size == 0 || elem_size > 32 {
+            return None;
+        }
+        let region = self.const_array_region_for_expr(lhs, array_ty)?;
+        let dest = dest.unwrap_or_else(|| self.alloc_temp_local(elem_ty, false, "const_load"));
+        let index_source = self.lower_index_source(rhs);
+        if self.current_block().is_none() {
+            return Some(dest);
+        }
+        self.builder.body.locals[dest.index()].address_space = self.expr_address_space(expr);
+
+        let region_val = self.alloc_value(
+            array_ty,
+            ValueOrigin::ConstRegion(region),
+            ValueRepr::Ref(AddressSpaceKind::Code),
+        );
+        let place = Place::new(
+            region_val,
+            MirProjectionPath::from_projection(Projection::Index(index_source)),
+        );
+
+        self.assign(stmt, Some(dest), Rvalue::Load { place });
+        Some(dest)
     }
 
     fn field_access_info_for_expr(
@@ -2208,6 +2380,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     // explicit `MirInst::Load` instructions.
 
     pub(super) fn place_for_borrow_expr(&mut self, expr: ExprId) -> Option<Place<'db>> {
+        self.lower_borrow_place_operands(expr);
+        self.place_for_borrow_expr_from_lowered(expr)
+    }
+
+    fn place_for_borrow_expr_from_lowered(&mut self, expr: ExprId) -> Option<Place<'db>> {
         match expr.data(self.db, self.body) {
             Partial::Present(Expr::Path(_)) => {
                 let ty = self.typed_body.expr_ty(self.db, expr);
@@ -2259,7 +2436,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
 
                 if self.is_transparent_field0(lhs_place_ty, info.field_idx) {
                     if self.direct_deref_target_ty(lhs_ty).is_some() {
-                        return self.project_expr_place(
+                        return self.project_expr_place_from_lowered(
                             *lhs,
                             lhs_ty,
                             Projection::Field(info.field_idx),
@@ -2267,18 +2444,23 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         );
                     }
 
-                    if let Some(place) = self.place_for_borrow_expr(*lhs) {
+                    if let Some(place) = self.place_for_borrow_expr_from_lowered(*lhs) {
                         return Some(place);
                     }
 
-                    let base_value = self.lower_expr(*lhs);
+                    let base_value = self.lowered_expr_value(*lhs)?;
                     if self.builder.body.value(base_value).repr.is_ref() {
                         return Some(Place::new(base_value, MirProjectionPath::new()));
                     }
                     return None;
                 }
 
-                self.project_expr_place(*lhs, lhs_ty, Projection::Field(info.field_idx), true)
+                self.project_expr_place_from_lowered(
+                    *lhs,
+                    lhs_ty,
+                    Projection::Field(info.field_idx),
+                    true,
+                )
             }
             Partial::Present(Expr::Bin(lhs, rhs, BinOp::Index)) => {
                 let lhs_ty = self.typed_body.expr_ty(self.db, *lhs);
@@ -2287,14 +2469,19 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     return None;
                 }
 
-                let index_source = self.lower_index_source(*rhs);
-                self.project_expr_place(*lhs, lhs_ty, Projection::Index(index_source), true)
+                let index_source = self.lowered_index_source(*rhs)?;
+                self.project_expr_place_from_lowered(
+                    *lhs,
+                    lhs_ty,
+                    Projection::Index(index_source),
+                    true,
+                )
             }
             _ => None,
         }
     }
 
-    fn project_expr_place(
+    fn project_expr_place_from_lowered(
         &mut self,
         lhs: ExprId,
         lhs_ty: TyId<'db>,
@@ -2302,7 +2489,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         recurse_from_lhs_place: bool,
     ) -> Option<Place<'db>> {
         if self.direct_deref_target_ty(lhs_ty).is_some() {
-            let base_value = self.lower_expr(lhs);
+            let base_value = self.lowered_expr_value(lhs)?;
             let mut place = self.place_from_derefable_value(base_value, lhs_ty)?;
             place.projection.push(proj);
             return Some(place);
@@ -2312,12 +2499,12 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             let Place {
                 base,
                 mut projection,
-            } = self.place_for_borrow_expr(lhs)?;
+            } = self.place_for_borrow_expr_from_lowered(lhs)?;
             projection.push(proj);
             return Some(Place::new(base, projection));
         }
 
-        let base_value = self.lower_expr(lhs);
+        let base_value = self.lowered_expr_value(lhs)?;
         Some(Place::new(
             base_value,
             MirProjectionPath::from_projection(proj),
@@ -2325,6 +2512,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     }
 
     fn place_for_expr(&mut self, expr: ExprId) -> Option<Place<'db>> {
+        self.lower_value_place_operands(expr);
+        self.place_for_expr_from_lowered(expr)
+    }
+
+    fn place_for_expr_from_lowered(&mut self, expr: ExprId) -> Option<Place<'db>> {
         match expr.data(self.db, self.body) {
             Partial::Present(Expr::Path(_)) => {
                 let ty = self.typed_body.expr_ty(self.db, expr);
@@ -2363,7 +2555,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 // already addressable, otherwise fall back to scalar newtype semantics.
                 if self.is_transparent_field0(lhs_place_ty, info.field_idx) {
                     if self.direct_deref_target_ty(lhs_ty).is_some() {
-                        return self.project_expr_place(
+                        return self.project_expr_place_from_lowered(
                             *lhs,
                             lhs_ty,
                             Projection::Field(info.field_idx),
@@ -2371,17 +2563,22 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         );
                     }
 
-                    if let Some(place) = self.place_for_expr(*lhs) {
+                    if let Some(place) = self.place_for_expr_from_lowered(*lhs) {
                         return Some(place);
                     }
-                    let base_value = self.lower_expr(*lhs);
+                    let base_value = self.lowered_expr_value(*lhs)?;
                     if self.builder.body.value(base_value).repr.is_ref() {
                         return Some(Place::new(base_value, MirProjectionPath::new()));
                     }
                     return None;
                 }
 
-                self.project_expr_place(*lhs, lhs_ty, Projection::Field(info.field_idx), false)
+                self.project_expr_place_from_lowered(
+                    *lhs,
+                    lhs_ty,
+                    Projection::Field(info.field_idx),
+                    false,
+                )
             }
             Partial::Present(Expr::Bin(lhs, rhs, BinOp::Index)) => {
                 let lhs_ty = self.typed_body.expr_ty(self.db, *lhs);
@@ -2389,8 +2586,13 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 if !lhs_place_ty.is_array(self.db) {
                     return None;
                 }
-                let index_source = self.lower_index_source(*rhs);
-                self.project_expr_place(*lhs, lhs_ty, Projection::Index(index_source), false)
+                let index_source = self.lowered_index_source(*rhs)?;
+                self.project_expr_place_from_lowered(
+                    *lhs,
+                    lhs_ty,
+                    Projection::Index(index_source),
+                    false,
+                )
             }
             _ => None,
         }

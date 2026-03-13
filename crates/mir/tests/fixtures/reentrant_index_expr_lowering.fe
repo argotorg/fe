@@ -1,0 +1,7 @@
+fn id(x: usize) -> usize {
+    x
+}
+
+pub fn read(arr: [u256; 8], i: usize) -> u256 {
+    arr[id(i) + 1]
+}

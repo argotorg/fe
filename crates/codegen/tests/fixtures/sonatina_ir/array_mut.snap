@@ -7,20 +7,31 @@ target = "evm-ethereum-osaka"
 
 func private %array_mut(v0.i8) -> *[i8; 4] {
     block0:
-        v2.*i8 = evm_malloc 128.i256;
+        v2.*i8 = evm_malloc 32.i256;
         v3.*[i8; 4] = bitcast v2 *[i8; 4];
-        v5.*i8 = gep v3 0.i256 0.i256;
-        v6.i256 = zext v0 i256;
-        mstore v5 v6 i256;
-        v9.*i8 = gep v3 0.i256 1.i256;
-        v10.i256 = zext 2.i8 i256;
-        mstore v9 v10 i256;
-        v13.*i8 = gep v3 0.i256 2.i256;
-        v14.i256 = zext 3.i8 i256;
-        mstore v13 v14 i256;
-        v17.*i8 = gep v3 0.i256 3.i256;
-        v18.i256 = zext 4.i8 i256;
-        mstore v17 v18 i256;
+        v4.i256 = ptr_to_int v3 i256;
+        v5.*i8 = bitcast v3 *i8;
+        v6.i256 = ptr_to_int v5 i256;
+        v7.i256 = zext v0 i256;
+        evm_mstore8 v6 v7;
+        v9.i256 = ptr_to_int v3 i256;
+        v11.i256 = add v9 1.i256;
+        v12.*i8 = int_to_ptr v11 *i8;
+        v13.i256 = ptr_to_int v12 i256;
+        v14.i256 = zext 2.i8 i256;
+        evm_mstore8 v13 v14;
+        v16.i256 = ptr_to_int v3 i256;
+        v18.i256 = add v16 2.i256;
+        v19.*i8 = int_to_ptr v18 *i8;
+        v20.i256 = ptr_to_int v19 i256;
+        v21.i256 = zext 3.i8 i256;
+        evm_mstore8 v20 v21;
+        v23.i256 = ptr_to_int v3 i256;
+        v25.i256 = add v23 3.i256;
+        v26.*i8 = int_to_ptr v25 *i8;
+        v27.i256 = ptr_to_int v26 i256;
+        v28.i256 = zext 4.i8 i256;
+        evm_mstore8 v27 v28;
         return v3;
 }
 

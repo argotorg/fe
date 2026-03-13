@@ -26,6 +26,7 @@ pub(super) struct FunctionEmitter<'db> {
     data_region_counter: u32,
     /// Reuse labels for identical payloads so we don't emit duplicate data sections.
     data_region_labels: FxHashMap<Vec<u8>, String>,
+    pub(super) const_region_labels: FxHashMap<mir::ir::ConstRegionId, String>,
     pub(super) data_regions: Vec<YulDataRegion>,
 }
 
@@ -52,7 +53,7 @@ impl<'db> FunctionEmitter<'db> {
             return Err(YulError::MissingBody(function_name(db, func)));
         }
         let ipdom = compute_immediate_postdominators(&mir_func.body);
-        Ok(Self {
+        let mut emitter = Self {
             db,
             mir_func,
             code_regions,
@@ -60,8 +61,18 @@ impl<'db> FunctionEmitter<'db> {
             ipdom,
             data_region_counter: 0,
             data_region_labels: FxHashMap::default(),
+            const_region_labels: FxHashMap::default(),
             data_regions: Vec::new(),
-        })
+        };
+
+        // Pre-register all const regions so expressions can load them without mutating self.
+        for (idx, region) in mir_func.body.const_regions.iter().enumerate() {
+            let id = mir::ir::ConstRegionId(idx as u32);
+            let label = emitter.register_data_region(&region.bytes);
+            emitter.const_region_labels.insert(id, label);
+        }
+
+        Ok(emitter)
     }
 
     pub(super) fn ipdom(&self, block: BasicBlockId) -> Option<BasicBlockId> {
@@ -72,10 +83,12 @@ impl<'db> FunctionEmitter<'db> {
     ///
     /// Labels include the function's symbol name to ensure global uniqueness
     /// across functions within the same Yul object.
-    pub(super) fn register_data_region(&mut self, bytes: Vec<u8>) -> String {
-        if let Some(label) = self.data_region_labels.get(bytes.as_slice()) {
+    pub(super) fn register_data_region(&mut self, bytes: &[u8]) -> String {
+        if let Some(label) = self.data_region_labels.get(bytes) {
             return label.clone();
         }
+
+        let bytes = bytes.to_vec();
         let label = format!(
             "data_{}_{}",
             self.mir_func.symbol_name, self.data_region_counter
