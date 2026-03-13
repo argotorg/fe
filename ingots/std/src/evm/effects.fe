@@ -489,6 +489,40 @@ pub fn assert(_ b: own bool) {
     }
 }
 
+/// Revert the current transaction with ABI-encoded data.
+///
+/// Encodes the given value using Solidity ABI encoding and reverts
+/// with the encoded bytes as revert data.
+pub fn revert<T>(value: own T) -> !
+    where T: Encode<Sol> + AbiSize
+{
+    let size = encoded_size<T>()
+    let mut enc = SolEncoder::new()
+    let _ = enc.reserve_head(size)
+    value.encode(mut enc)
+    let result = enc.finish()
+    ops::revert(result.0, result.1)
+}
+
+/// EVM-specific extension methods for `Result`.
+pub trait EvmResultExt<T> {
+    /// Reverts with the ABI-encoded error on `Err`, or returns the `Ok` value.
+    fn unwrap_or_revert(own self) -> T
+}
+
+impl<T, E> EvmResultExt<T> for Result<E, T>
+    where E: Encode<Sol> + AbiSize
+{
+    fn unwrap_or_revert(own self) -> T {
+        let mut val: T
+        match self {
+            Ok(v) => { val = v }
+            Err(e) => revert(e)
+        }
+        val
+    }
+}
+
 impl Super for Evm {}
 
 impl ContractHost for Evm {

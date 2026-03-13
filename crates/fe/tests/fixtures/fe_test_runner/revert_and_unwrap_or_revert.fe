@@ -1,0 +1,61 @@
+use core::abi::{Abi, AbiEncoder, AbiSize, Encode}
+
+enum MyError {
+    NotAllowed,
+    OutOfBounds,
+}
+
+impl MyError {
+    fn to_int(self) -> u256 {
+        match self {
+            Self::NotAllowed => 1
+            Self::OutOfBounds => 2
+        }
+    }
+}
+
+impl AbiSize for MyError {
+    const ENCODED_SIZE: u256 = 32
+}
+
+impl<A: Abi> Encode<A> for MyError {
+    fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
+        e.write_word(self.to_int())
+    }
+}
+
+fn fallible_operation(ok: bool) -> Result<MyError, u256> {
+    if ok {
+        Ok(42)
+    } else {
+        Err(MyError::NotAllowed)
+    }
+}
+
+// --- revert tests ---
+
+#[test(should_revert)]
+fn test_revert_with_error() uses (evm: mut Evm) {
+    revert(MyError::NotAllowed)
+}
+
+#[test(should_revert)]
+fn test_revert_with_u256() uses (evm: mut Evm) {
+    let code: u256 = 99
+    revert(code)
+}
+
+// --- unwrap_or_revert tests ---
+
+#[test]
+fn test_unwrap_or_revert_ok() uses (evm: mut Evm) {
+    let result = fallible_operation(ok: true)
+    let val = result.unwrap_or_revert()
+    assert(val == 42)
+}
+
+#[test(should_revert)]
+fn test_unwrap_or_revert_err() uses (evm: mut Evm) {
+    let result = fallible_operation(ok: false)
+    result.unwrap_or_revert()
+}
