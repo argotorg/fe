@@ -15,6 +15,7 @@ use super::{ExprProp, TyChecker};
 use crate::analysis::{
     HirAnalysisDb,
     ty::{
+        const_ty::LayoutHoleArgSite,
         diagnostics::{BodyDiag, FuncBodyDiag},
         fold::{AssocTySubst, TyFoldable, TyFolder},
         trait_def::TraitInstId,
@@ -28,6 +29,51 @@ use crate::analysis::{
 use crate::hir_def::Body;
 use crate::hir_def::CallableDef;
 use crate::hir_def::params::FuncParamMode;
+
+pub(super) enum CallGenericArgUnifyError {
+    ArityMismatch { given: usize, expected: usize },
+    UnificationFailed,
+}
+
+pub(super) fn unify_explicit_call_generic_args<'db>(
+    callable: &mut Callable<'db>,
+    tc: &mut TyChecker<'db>,
+    args: GenericArgListId<'db>,
+    mut unify_arg: impl FnMut(&mut TyChecker<'db>, usize, TyId<'db>, &mut TyId<'db>) -> bool,
+) -> Result<(), CallGenericArgUnifyError> {
+    let db = tc.db;
+    if !args.is_given(db) {
+        return Ok(());
+    }
+
+    let given_args = lower_generic_arg_list(
+        db,
+        args,
+        tc.env.scope(),
+        tc.env.assumptions(),
+        LayoutHoleArgSite::GenericArgList(args),
+    );
+    let offset = callable.callable_def.offset_to_explicit_params_position(db);
+    let current_args = &mut callable.generic_args[offset..];
+    if current_args.len() != given_args.len() {
+        return Err(CallGenericArgUnifyError::ArityMismatch {
+            given: given_args.len(),
+            expected: current_args.len(),
+        });
+    }
+
+    for (idx, (given, current)) in given_args
+        .into_iter()
+        .zip(current_args.iter_mut())
+        .enumerate()
+    {
+        if !unify_arg(tc, idx, given, current) {
+            return Err(CallGenericArgUnifyError::UnificationFailed);
+        }
+    }
+
+    Ok(())
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub struct Callable<'db> {
@@ -136,32 +182,22 @@ impl<'db> Callable<'db> {
         args: GenericArgListId<'db>,
         span: LazyGenericArgListSpan<'db>,
     ) -> bool {
-        let db = tc.db;
-        if !args.is_given(db) {
-            return true;
+        match unify_explicit_call_generic_args(self, tc, args, |tc, idx, given, current| {
+            *current = tc.equate_ty(given, *current, span.clone().arg(idx).into());
+            true
+        }) {
+            Ok(()) => true,
+            Err(CallGenericArgUnifyError::ArityMismatch { given, expected }) => {
+                tc.push_diag(BodyDiag::CallGenericArgNumMismatch {
+                    primary: span.into(),
+                    def_span: self.callable_def.name_span(),
+                    given,
+                    expected,
+                });
+                false
+            }
+            Err(CallGenericArgUnifyError::UnificationFailed) => false,
         }
-
-        let given_args = lower_generic_arg_list(db, args, tc.env.scope(), tc.env.assumptions());
-        let offset = self.callable_def.offset_to_explicit_params_position(db);
-        let current_args = &mut self.generic_args[offset..];
-
-        if current_args.len() != given_args.len() {
-            let diag = BodyDiag::CallGenericArgNumMismatch {
-                primary: span.into(),
-                def_span: self.callable_def.name_span(),
-                given: given_args.len(),
-                expected: current_args.len(),
-            };
-            tc.push_diag(diag);
-
-            return false;
-        }
-
-        for (i, (&given, arg)) in given_args.iter().zip(current_args.iter_mut()).enumerate() {
-            *arg = tc.equate_ty(given, *arg, span.clone().arg(i).into());
-        }
-
-        true
     }
 
     pub(super) fn check_args(

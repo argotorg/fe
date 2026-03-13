@@ -5,12 +5,14 @@ use crate::hir_def::{
 use crate::span::DynLazySpan;
 use common::ingot::Ingot;
 use salsa::Update;
+use std::ops::Range;
 
 use super::{
     binder::Binder,
-    collect_layout_hole_tys_in_order,
+    const_ty::ConstTyData,
+    layout_holes::{LayoutPlaceholderPolicy, collect_layout_placeholder_tys_in_order_with_policy},
     trait_resolution::constraint::collect_constraints,
-    ty_def::{InvalidCause, TyId},
+    ty_def::{InvalidCause, TyData, TyId},
     ty_lower::{GenericParamTypeSet, lower_hir_ty},
 };
 use crate::analysis::HirAnalysisDb;
@@ -213,35 +215,97 @@ pub struct AdtCycleMember<'db> {
     pub ty_idx: u16,
 }
 
-#[salsa::tracked(return_ref, cycle_initial=adt_layout_hole_tys_cycle_initial, cycle_fn=adt_layout_hole_tys_cycle_recover)]
-pub(crate) fn adt_layout_hole_tys<'db>(
-    db: &'db dyn HirAnalysisDb,
-    adt: AdtDef<'db>,
-) -> Vec<TyId<'db>> {
-    let mut hole_tys = Vec::new();
+#[derive(Default)]
+pub(crate) struct AdtLayoutHolePlan<'db> {
+    hole_tys: Vec<TyId<'db>>,
+    field_ranges: Vec<Vec<Range<usize>>>,
+}
 
-    for variant in adt.fields(db) {
-        for field_ty in variant.iter_types(db) {
-            let field_ty = field_ty.instantiate_identity();
-            hole_tys.extend(collect_layout_hole_tys_in_order(db, field_ty));
-        }
+impl<'db> AdtLayoutHolePlan<'db> {
+    pub(crate) fn hole_tys(&self) -> &[TyId<'db>] {
+        &self.hole_tys
     }
 
-    hole_tys
+    pub(crate) fn field_range(&self, variant_idx: usize, field_idx: usize) -> Range<usize> {
+        self.field_ranges
+            .get(variant_idx)
+            .and_then(|variant| variant.get(field_idx))
+            .cloned()
+            .unwrap_or(0..0)
+    }
 }
 
-fn adt_layout_hole_tys_cycle_initial<'db>(
-    _db: &'db dyn HirAnalysisDb,
-    _adt: AdtDef<'db>,
-) -> Vec<TyId<'db>> {
-    Vec::new()
+pub(crate) fn adt_layout_hole_plan<'db>(
+    db: &'db dyn HirAnalysisDb,
+    adt: AdtDef<'db>,
+) -> AdtLayoutHolePlan<'db> {
+    adt_layout_hole_plan_with_explicit_args(db, adt, &[])
 }
 
-fn adt_layout_hole_tys_cycle_recover<'db>(
-    _db: &'db dyn HirAnalysisDb,
-    _value: &Vec<TyId<'db>>,
-    _count: u32,
-    _adt: AdtDef<'db>,
-) -> salsa::CycleRecoveryAction<Vec<TyId<'db>>> {
-    salsa::CycleRecoveryAction::Iterate
+pub(crate) fn adt_layout_hole_plan_with_explicit_args<'db>(
+    db: &'db dyn HirAnalysisDb,
+    adt: AdtDef<'db>,
+    explicit_args: &[TyId<'db>],
+) -> AdtLayoutHolePlan<'db> {
+    let mut hole_tys = Vec::new();
+    let field_ranges = adt
+        .fields(db)
+        .iter()
+        .enumerate()
+        .map(|(variant_idx, variant)| {
+            (0..variant.num_types())
+                .map(|field_idx| {
+                    let field_ty =
+                        instantiated_adt_field_ty(db, adt, variant_idx, field_idx, explicit_args);
+                    let start = hole_tys.len();
+                    hole_tys.extend(collect_layout_placeholder_tys_in_order_with_policy(
+                        db,
+                        field_ty,
+                        LayoutPlaceholderPolicy::HolesAndImplicitParams,
+                    ));
+                    start..hole_tys.len()
+                })
+                .collect()
+        })
+        .collect();
+
+    AdtLayoutHolePlan {
+        hole_tys,
+        field_ranges,
+    }
+}
+
+pub(crate) fn instantiated_adt_field_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    adt: AdtDef<'db>,
+    variant_idx: usize,
+    field_idx: usize,
+    explicit_args: &[TyId<'db>],
+) -> TyId<'db> {
+    let scope = adt.scope(db);
+    let param_count = adt.params(db).len();
+    adt.fields(db)
+        .get(variant_idx)
+        .and_then(|variant| (field_idx < variant.num_types()).then(|| variant.ty(db, field_idx)))
+        .map(|field_ty| {
+            if explicit_args.len() >= param_count {
+                return field_ty.instantiate_scoped(db, scope, explicit_args);
+            }
+
+            field_ty.instantiate_with(db, |ty| match ty.data(db) {
+                TyData::TyParam(param) if param.owner == scope => {
+                    explicit_args.get(param.idx).copied().unwrap_or(ty)
+                }
+                TyData::ConstTy(const_ty) => {
+                    if let ConstTyData::TyParam(param, _) = const_ty.data(db)
+                        && param.owner == scope
+                    {
+                        return explicit_args.get(param.idx).copied().unwrap_or(ty);
+                    }
+                    ty
+                }
+                _ => ty,
+            })
+        })
+        .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other))
 }

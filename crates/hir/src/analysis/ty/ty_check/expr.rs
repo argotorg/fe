@@ -1714,10 +1714,10 @@ impl<'db> TyChecker<'db> {
         };
 
         let (func_ty, trait_inst) = match candidate {
-            MethodCandidate::InherentMethod(func_def) => {
-                let func_ty = TyId::func(self.db, func_def);
-                (self.instantiate_to_term(func_ty), None)
-            }
+            MethodCandidate::InherentMethod(func_def) => (
+                self.instantiate_inherent_method_to_term(func_def, selected_receiver_ty),
+                None,
+            ),
 
             MethodCandidate::TraitMethod(cand) => {
                 let inst = canonical_r_ty.extract_solution(&mut self.table, cand.inst);
@@ -1838,7 +1838,11 @@ impl<'db> TyChecker<'db> {
 
         match res {
             ResolvedPathInBody::Binding(binding) => {
-                let ty = self.env.lookup_binding_ty(&binding);
+                let ty = self
+                    .env
+                    .lookup_binding_ty(&binding)
+                    .fold_with(self.db, &mut self.table);
+                let ty = self.normalize_ty(ty);
                 let mut is_mut = binding.is_mut();
                 if let Some((cap, _)) = ty.as_capability(self.db) {
                     is_mut = match cap {
@@ -1935,22 +1939,10 @@ impl<'db> TyChecker<'db> {
                 PathRes::Method(receiver_ty, candidate) => {
                     let canonical_r_ty = Canonicalized::new(self.db, receiver_ty);
                     let (method_ty, trait_inst) = match candidate {
-                        MethodCandidate::InherentMethod(func_def) => {
-                            // TODO: move this to path resolver
-                            let mut method_ty = TyId::func(self.db, func_def);
-                            for &arg in receiver_ty.generic_args(self.db) {
-                                // If the method is defined in "specialized" impl block
-                                // of a generic type (eg `impl Option<i32>`), then
-                                // calling `TyId::app(db, method_ty, ..)` will result in
-                                // `TyId::invalid`.
-                                if method_ty.applicable_ty(self.db).is_some() {
-                                    method_ty = TyId::app(self.db, method_ty, arg);
-                                } else {
-                                    break;
-                                }
-                            }
-                            (self.instantiate_to_term(method_ty), None)
-                        }
+                        MethodCandidate::InherentMethod(func_def) => (
+                            self.instantiate_inherent_method_to_term(func_def, receiver_ty),
+                            None,
+                        ),
                         MethodCandidate::TraitMethod(cand)
                         | MethodCandidate::NeedsConfirmation(cand) => {
                             let inst = canonical_r_ty.extract_solution(&mut self.table, cand.inst);

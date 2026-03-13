@@ -16,6 +16,7 @@ pub use name_resolver::{
     EarlyNameQueryId, NameDerivation, NameDomain, NameRes, NameResBucket, NameResKind,
     NameResolutionError, QueryDirective,
 };
+pub(crate) use path_resolver::resolve_path_with_callable_holes;
 pub use path_resolver::{
     PathRes, PathResError, PathResErrorKind, ResolvedVariant, find_associated_type,
     resolve_ident_to_bucket, resolve_name_res, resolve_path, resolve_path_with_observer,
