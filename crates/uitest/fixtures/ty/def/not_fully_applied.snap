@@ -28,10 +28,10 @@ error[3-0000]: expected `*` kind in this context
    │                                    ^^^^^^^^ expected `*` kind here
 
 error[3-0000]: expected `*` kind in this context
-   ┌─ not_fully_applied.fe:17:8
+   ┌─ not_fully_applied.fe:17:12
    │
-17 │     f: Gen<i32>,
-   │        ^^^^^^^^ expected `*` kind here
+17 │     mut f: Gen<i32>,
+   │            ^^^^^^^^ expected `*` kind here
 
 error[3-0000]: expected `*` kind in this context
    ┌─ not_fully_applied.fe:22:12
@@ -50,5 +50,4 @@ error[3-0000]: expected `*` kind in this context
    │
 28 │ fn foo(gen: Gen) {}
    │             ^^^ expected `*` kind here
-
 

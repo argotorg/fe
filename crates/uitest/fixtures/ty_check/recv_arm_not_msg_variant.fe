@@ -13,7 +13,7 @@ msg OtherMsg {
 }
 
 pub contract BadContract {
-    data: u64,
+    mut data: u64,
 
     recv Foo {
         Bar {}
@@ -33,7 +33,7 @@ pub contract BadContract {
 }
 
 pub contract BadContract2 {
-    data: u64,
+    mut data: u64,
 
     recv BankMsg {
         // Error: Ping is a variant of OtherMsg, not BankMsg
@@ -44,7 +44,7 @@ pub contract BadContract2 {
 }
 
 pub contract BadContract3 {
-    data: u64,
+    mut data: u64,
 
     recv BankMsg {
         // Error: random_identifier is not a variant

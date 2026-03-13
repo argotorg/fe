@@ -1,0 +1,18 @@
+msg CounterMsg {
+    #[selector = 0x01]
+    Get -> u256,
+}
+
+pub contract Counter {
+    value: u256
+
+    init(initial: u256) uses (value) {
+        value = initial
+    }
+
+    recv CounterMsg {
+        Get {} -> u256 uses (mut value) {
+            0
+        }
+    }
+}

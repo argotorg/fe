@@ -4,13 +4,10 @@ use async_lsp::lsp_types::Hover;
 use common::file::File;
 use hir::{
     HirDb,
-    analysis::ty::{
-        ty_check::{EffectParamSite, LocalBinding, ParamSite},
-        ty_def::TyId,
-    },
-    core::semantic::EffectSource,
+    analysis::ty::ty_check::{EffectParamSite, LocalBinding},
     core::semantic::reference::{ReferenceView, Target},
-    hir_def::{FieldParent, ItemKind, PathId, scope_graph::ScopeId},
+    core::semantic::{ContractFieldInfo, EffectSource},
+    hir_def::{FieldDef, FieldParent, scope_graph::ScopeId},
     lower::map_file_to_mod,
     span::LazySpan,
 };
@@ -38,56 +35,11 @@ fn local_name_from_reference<'db>(
     Some(ident.data(db).to_string())
 }
 
-fn contract_from_effect_site<'db>(
-    db: &'db DriverDataBase,
-    site: EffectParamSite<'db>,
-) -> Option<hir::hir_def::Contract<'db>> {
-    match site {
-        EffectParamSite::Contract(contract)
-        | EffectParamSite::ContractInit { contract }
-        | EffectParamSite::ContractRecvArm { contract, .. } => Some(contract),
-        EffectParamSite::Func(func) => match func.scope().parent_item(db) {
-            Some(ItemKind::Contract(contract)) => Some(contract),
-            _ => None,
-        },
-    }
-}
-
-fn effect_key_path_at_site<'db>(
-    db: &'db DriverDataBase,
-    site: EffectParamSite<'db>,
-    idx: usize,
-) -> Option<PathId<'db>> {
-    match site {
-        EffectParamSite::Func(func) => func.effect_params(db).nth(idx)?.key_path(db),
-        EffectParamSite::Contract(contract) => contract.effect_params(db).nth(idx)?.key_path(db),
-        EffectParamSite::ContractInit { contract } => contract
-            .init(db)?
-            .effects(db)
-            .data(db)
-            .get(idx)?
-            .key_path
-            .to_opt(),
-        EffectParamSite::ContractRecvArm {
-            contract,
-            recv_idx,
-            arm_idx,
-        } => contract
-            .recv(db, recv_idx)?
-            .arm(db, arm_idx)?
-            .effects(db)
-            .data(db)
-            .get(idx)?
-            .key_path
-            .to_opt(),
-    }
-}
-
 fn effect_binding_source_at_site<'db>(
     db: &'db DriverDataBase,
     site: EffectParamSite<'db>,
     idx: usize,
-) -> Option<EffectSource> {
+) -> Option<EffectSource<'db>> {
     match site {
         EffectParamSite::Func(func) => func
             .effect_bindings(db)
@@ -123,18 +75,18 @@ fn contract_field_layout_by_index<'db>(
     db: &'db DriverDataBase,
     contract: hir::hir_def::Contract<'db>,
     field_idx: u32,
-) -> Option<(usize, usize, TyId<'db>)> {
-    let field = contract
+) -> Option<ContractFieldInfo<'db>> {
+    contract
         .field_layout(db)
         .values()
-        .find(|field| field.index == field_idx)?;
-    Some((field.slot_offset, field.slot_count, field.address_space))
+        .find(|field| field.index == field_idx)
+        .copied()
 }
 
 fn contract_field_layout_from_scope<'db>(
     db: &'db DriverDataBase,
     scope: ScopeId<'db>,
-) -> Option<(usize, usize, TyId<'db>)> {
+) -> Option<ContractFieldInfo<'db>> {
     let ScopeId::Field(FieldParent::Contract(contract), idx) = scope else {
         return None;
     };
@@ -142,7 +94,7 @@ fn contract_field_layout_from_scope<'db>(
     if let Some(name) = scope.name(db)
         && let Some(field) = contract.field_layout(db).get(&name)
     {
-        return Some((field.slot_offset, field.slot_count, field.address_space));
+        return Some(*field);
     }
 
     contract_field_layout_by_index(db, contract, idx as u32)
@@ -151,28 +103,47 @@ fn contract_field_layout_from_scope<'db>(
 fn contract_field_layout_from_local_binding<'db>(
     db: &'db DriverDataBase,
     binding: LocalBinding<'db>,
-) -> Option<(usize, usize, TyId<'db>)> {
+) -> Option<ContractFieldInfo<'db>> {
     match binding {
-        LocalBinding::Param {
-            site: ParamSite::EffectField(effect_site),
-            idx,
-            ..
-        } => {
-            let contract = contract_from_effect_site(db, effect_site)?;
-            let key_path = effect_key_path_at_site(db, effect_site, idx)?;
-            let name = key_path.ident(db).to_opt()?;
-            let field = contract.field_layout(db).get(&name)?;
-            Some((field.slot_offset, field.slot_count, field.address_space))
-        }
         LocalBinding::EffectParam { site, idx, .. } => {
-            let EffectSource::Field(field_idx) = effect_binding_source_at_site(db, site, idx)?
-            else {
+            let EffectSource::Field(field) = effect_binding_source_at_site(db, site, idx)? else {
                 return None;
             };
-            let contract = contract_from_effect_site(db, site)?;
-            contract_field_layout_by_index(db, contract, field_idx)
+            Some(field.field)
         }
+        LocalBinding::ContractField {
+            contract,
+            field_idx,
+            ..
+        } => contract_field_layout_by_index(db, contract, field_idx),
         _ => None,
+    }
+}
+
+fn contract_field_layout_footer_from_info<'db>(
+    db: &'db DriverDataBase,
+    field: ContractFieldInfo<'db>,
+) -> Option<String> {
+    match field.kind {
+        hir::semantic::ContractFieldKind::MutableStorage => {
+            let layout = field.storage_layout()?;
+            Some(format!(
+                "slot: {} (count: {})\nspace: {}",
+                layout.slot_offset,
+                layout.slot_count,
+                field.address_space.pretty_print(db)
+            ))
+        }
+        hir::semantic::ContractFieldKind::ImmutableCode => {
+            let layout = field.immutable_layout()?;
+            Some(format!(
+                "bytes: {byte_offset}..{byte_end} (len: {byte_len})\nspace: {space}",
+                byte_offset = layout.byte_offset,
+                byte_end = layout.byte_offset + layout.byte_len,
+                byte_len = layout.byte_len,
+                space = field.address_space.pretty_print(db)
+            ))
+        }
     }
 }
 
@@ -180,13 +151,23 @@ fn contract_field_layout_footer<'db>(
     db: &'db DriverDataBase,
     target: &Target<'db>,
 ) -> Option<String> {
-    let (slot_offset, slot_count, address_space) = match target {
+    let field = match target {
         Target::Scope(scope) => contract_field_layout_from_scope(db, *scope)?,
         Target::Local { binding, .. } => contract_field_layout_from_local_binding(db, *binding)?,
     };
+    contract_field_layout_footer_from_info(db, field)
+}
+
+fn contract_field_markdown<'db>(db: &'db DriverDataBase, scope: ScopeId<'db>) -> Option<String> {
+    let field: &FieldDef<'db> = scope.resolve_to(db)?;
+    let path = scope.pretty_path(db)?;
+    let name = field.name.to_opt()?.data(db);
+    let ty = field.type_ref().to_opt()?.pretty_print(db);
+    let vis = field.vis.pretty_print();
+    let mut_prefix = if field.is_mut { "mut " } else { "" };
+
     Some(format!(
-        "slot: {slot_offset} (count: {slot_count})\nspace: {}",
-        address_space.pretty_print(db)
+        "```fe\n{path}\n```\n\n```fe\n{vis}{mut_prefix}{name}: {ty}\n```"
     ))
 }
 
@@ -196,6 +177,14 @@ fn hover_markdown_for_target<'db>(
     target: &Target<'db>,
 ) -> Option<String> {
     let mut body = match target {
+        Target::Scope(scope @ ScopeId::Field(FieldParent::Contract(_), _)) => {
+            let docs = get_docstring(db, *scope);
+            [contract_field_markdown(db, *scope), docs]
+                .iter()
+                .filter_map(|info| info.clone().map(|info| format!("{info}\n")))
+                .collect::<Vec<String>>()
+                .join("\n")
+        }
         Target::Scope(scope) => {
             let item = scope.item();
             let pretty_path = get_item_path_markdown(db, item);

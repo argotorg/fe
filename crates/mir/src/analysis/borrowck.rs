@@ -227,7 +227,7 @@ fn compute_borrow_summaries_worklist<'db>(
     functions: &[MirFunction<'db>],
     mut on_analyze: impl FnMut(usize),
 ) -> Result<BorrowSummaryMap<'db>, Box<BorrowSummaryError>> {
-    let callers_by_callee = build_callers_by_callee(functions);
+    let callers_by_callee = build_callers_by_callee(db, functions);
     let mut summaries: BorrowSummaryMap<'db> = functions
         .iter()
         .map(|func| (func.symbol_name.clone(), FxHashSet::default()))
@@ -275,14 +275,17 @@ fn compute_borrow_summaries_worklist<'db>(
     Ok(summaries)
 }
 
-fn build_callers_by_callee(functions: &[MirFunction<'_>]) -> Vec<Vec<usize>> {
+fn build_callers_by_callee(
+    db: &dyn HirAnalysisDb,
+    functions: &[MirFunction<'_>],
+) -> Vec<Vec<usize>> {
     let symbol_to_idx: FxHashMap<String, usize> = functions
         .iter()
         .enumerate()
         .map(|(idx, func)| (func.symbol_name.clone(), idx))
         .collect();
     let mut callers_by_callee = vec![Vec::new(); functions.len()];
-    let call_graph = build_call_graph(functions);
+    let call_graph = build_call_graph(db, functions);
 
     for (caller, callees) in call_graph {
         let Some(&caller_idx) = symbol_to_idx.get(&caller) else {
@@ -430,6 +433,9 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                             LocalBinding::EffectParam { idx, .. } => {
                                 body.effect_param_locals.get(idx).copied()
                             }
+                            LocalBinding::ContractField { effect_idx, .. } => {
+                                body.effect_param_locals.get(effect_idx).copied()
+                            }
                             LocalBinding::Local { .. } => None,
                         }
                     })
@@ -443,6 +449,9 @@ impl<'db, 'a> Borrowck<'db, 'a> {
                             LocalBinding::Param { idx, .. } => body.param_locals.get(idx).copied(),
                             LocalBinding::EffectParam { idx, .. } => {
                                 body.effect_param_locals.get(idx).copied()
+                            }
+                            LocalBinding::ContractField { effect_idx, .. } => {
+                                body.effect_param_locals.get(effect_idx).copied()
                             }
                             LocalBinding::Local { .. } => None,
                         }
@@ -1326,7 +1335,8 @@ impl<'db, 'a> Borrowck<'db, 'a> {
         let fallback_expr = match term {
             Terminator::TerminatingCall { call, .. } => match call {
                 crate::TerminatingCall::Call(call) => call.expr,
-                crate::TerminatingCall::Intrinsic { .. } => None,
+                crate::TerminatingCall::Intrinsic { .. }
+                | crate::TerminatingCall::DeployRuntime { .. } => None,
             },
             _ => None,
         };
@@ -2857,6 +2867,17 @@ fn for_each_terminating_call_arg<'db>(
         crate::TerminatingCall::Intrinsic { args, .. } => {
             for arg in args {
                 f(*arg);
+            }
+        }
+        crate::TerminatingCall::DeployRuntime {
+            runtime_offset,
+            runtime_len,
+            immutable_payload,
+        } => {
+            f(*runtime_offset);
+            f(*runtime_len);
+            if let Some((ptr, _)) = immutable_payload {
+                f(*ptr);
             }
         }
     }

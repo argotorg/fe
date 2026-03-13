@@ -591,10 +591,10 @@ note:
    │              ^^^^^ def: defined here @ 99:13 (1 refs)
 
 note: 
-    ┌─ lib.fe:100:3
+    ┌─ lib.fe:100:7
     │
-100 │   supply: i32
-    │   ^^^^^^ def: defined here @ 100:2 (5 refs)
+100 │   mut supply: i32
+    │       ^^^^^^ def: defined here @ 100:6 (5 refs)
 
 note: 
     ┌─ lib.fe:102:8

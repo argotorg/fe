@@ -217,7 +217,6 @@ pub fn compile_module(
 ) -> Result<Module, LowerError> {
     // Lower HIR to MIR
     let mir_module = lower_module(db, top_mod)?;
-
     compile_mir_module(
         db,
         &mir_module,
@@ -390,7 +389,7 @@ fn compile_mir_module_for_sonatina_output<'db>(
 ) -> Result<(Module, Vec<String>), LowerError> {
     use mir::analysis::build_contract_graph;
 
-    let contract_graph = build_contract_graph(&mir_module.functions);
+    let contract_graph = build_contract_graph(db, &mir_module.functions);
     let mut contract_names: Vec<String> = contract_graph.contracts.keys().cloned().collect();
     contract_names.sort();
 
@@ -769,7 +768,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
     fn identify_entry_functions(&mut self) -> Result<(), LowerError> {
         use mir::analysis::build_contract_graph;
 
-        let contract_graph = build_contract_graph(&self.mir.functions);
+        let contract_graph = build_contract_graph(self.db, &self.mir.functions);
         if contract_graph.contracts.is_empty() {
             return Ok(());
         }
@@ -815,7 +814,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
     fn create_objects(&mut self) -> Result<(), LowerError> {
         use mir::analysis::build_contract_graph;
 
-        let contract_graph = build_contract_graph(&self.mir.functions);
+        let contract_graph = build_contract_graph(self.db, &self.mir.functions);
         if !contract_graph.contracts.is_empty() {
             return self.create_contract_objects(&contract_graph);
         }
@@ -1275,6 +1274,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         {
             let mut const_data_globals = FxHashMap::default();
             let mut overflow_revert_block = None;
+            let mut code_load_scratch = None;
             let ptr_escape_summary = self.ptr_escape_summaries.get(&func.symbol_name);
             let mut ctx = LowerCtx {
                 fb: &mut fb,
@@ -1298,6 +1298,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
                 data_global_counter: &mut self.data_global_counter,
                 const_data_globals: &mut const_data_globals,
                 overflow_revert_block: &mut overflow_revert_block,
+                code_load_scratch: &mut code_load_scratch,
                 ptr_escape_summary,
             };
             for (idx, block) in ctx.body.blocks.iter().enumerate() {
@@ -1355,6 +1356,8 @@ pub(super) struct LowerCtx<'a, 'db, C: sonatina_ir::func_cursor::FuncCursor> {
     pub(super) const_data_globals: &'a mut FxHashMap<Vec<u8>, GlobalVariableRef>,
     /// Lazily-created shared overflow trap block for checked arithmetic in this function.
     pub(super) overflow_revert_block: &'a mut Option<BlockId>,
+    /// Lazily-created shared scratch word used for immutable code reads in this function.
+    pub(super) code_load_scratch: &'a mut Option<ValueId>,
     /// Escape summary for the current function.
     pub(super) ptr_escape_summary: Option<&'a mir::analysis::escape::MirPtrEscapeSummary>,
 }

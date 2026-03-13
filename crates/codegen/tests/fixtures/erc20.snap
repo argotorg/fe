@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 33
 expression: output
 input_file: tests/fixtures/erc20.fe
 ---
@@ -10,32 +11,18 @@ object "CoolCoin" {
       let v1 := $init_field__Evm_hef0af3106e109414_AccessControl_3___1911f7c438797961(3)
       let v2 := dataoffset("CoolCoin_deployed")
       let v3 := datasize("CoolCoin_deployed")
-      let v4 := datasize("CoolCoin")
-      let v5 := codesize()
-      let v6 := lt(v5, v4)
-      if v6 {
-        $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
-      }
-      let v7 := sub(v5, v4)
+      let v4 := $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_init_input_arg1_code_5b8167cf8ea658ad______2439715d39cd513()
+      let v5 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v4)
+      let v6 := $u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_MemoryBytes___a53dbc6192a658d6(v5)
+      let v7 := $address_h257056268eac7027_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_MemoryBytes___a53dbc6192a658d6(v5)
+      $__CoolCoin_init_contract(v6, v7, v0)
       let v8 := mload(64)
       if iszero(v8) {
         v8 := 0x80
       }
-      mstore(64, add(v8, v7))
-      codecopy(v8, v4, v7)
-      let v9 := mload(0x40)
-      if iszero(v9) {
-        v9 := 0x80
-      }
-      mstore(0x40, add(v9, 64))
-      mstore(v9, v8)
-      mstore(add(v9, 32), v7)
-      let v10 := $sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v9)
-      let v11 := $u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_MemoryBytes___a53dbc6192a658d6(v10)
-      let v12 := $address_h257056268eac7027_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_MemoryBytes___a53dbc6192a658d6(v10)
-      $__CoolCoin_init_contract(v11, v12, v0)
-      codecopy(0, v2, v3)
-      return(0, v3)
+      mstore(64, add(v8, v3))
+      codecopy(v8, v2, v3)
+      return(v8, v3)
     }
     function $__CoolCoin_init_contract($initial_supply, $owner, $store) {
       $accesscontrol____h4c85da5bbb505ade_grant_stor_arg0_root_stor__3__577ab43c73dd3cef(1, $owner)
@@ -172,6 +159,35 @@ object "CoolCoin" {
     function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_field__TokenStore_0__1___175215aa56127bde($slot) -> ret {
       let v0 := $stor_ptr__Evm_hef0af3106e109414_TokenStore_0__1___db7d7c067dc14cc5($slot)
       ret := v0
+      leave
+    }
+    function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_init_input_arg1_code_5b8167cf8ea658ad______2439715d39cd513() -> ret {
+      let v0 := dataoffset("CoolCoin_deployed")
+      let v1 := datasize("CoolCoin_deployed")
+      let v2 := $checked_add_u256(v0, v1)
+      let v3 := v2
+      let v4 := codesize()
+      let v5 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v4, v3)
+      let v6 := v5
+      if v6 {
+        $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort()
+      }
+      let v7 := $checked_sub_u256(v4, v3)
+      let v8 := v7
+      let v9 := mload(64)
+      if iszero(v9) {
+        v9 := 0x80
+      }
+      mstore(64, add(v9, v8))
+      codecopy(v9, v3, v8)
+      let v10 := mload(0x40)
+      if iszero(v10) {
+        v10 := 0x80
+      }
+      mstore(0x40, add(v10, 64))
+      mstore(v10, v9)
+      mstore(add(v10, 32), v8)
+      ret := v10
       leave
     }
     function $evm_hef0af3106e109414_log_h22d1a10952034bae_log3_stor_arg0_root_stor($offset, $len, $topic0, $topic1, $topic2) {

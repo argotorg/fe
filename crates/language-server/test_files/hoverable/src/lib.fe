@@ -97,7 +97,7 @@ msg TokenMsg {
 }
 
 pub contract Token {
-  supply: i32
+  mut supply: i32
 
   recv TokenMsg {
     Mint { to, amount } -> bool uses (mut supply) {

@@ -503,6 +503,7 @@ impl<'db> FunctionEmitter<'db> {
             mir::ir::AddressSpaceKind::Calldata => unreachable!("write to calldata"),
             mir::ir::AddressSpaceKind::Storage => format!("sstore({addr}, {value})"),
             mir::ir::AddressSpaceKind::TransientStorage => format!("tstore({addr}, {value})"),
+            mir::ir::AddressSpaceKind::ImmutableCode => unreachable!("write to immutable code"),
         }
     }
 
@@ -512,6 +513,7 @@ impl<'db> FunctionEmitter<'db> {
             mir::ir::AddressSpaceKind::Calldata => format!("calldataload({addr})"),
             mir::ir::AddressSpaceKind::Storage => format!("sload({addr})"),
             mir::ir::AddressSpaceKind::TransientStorage => format!("tload({addr})"),
+            mir::ir::AddressSpaceKind::ImmutableCode => format!("__fe_code_load({addr})"),
         }
     }
 

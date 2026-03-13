@@ -25,6 +25,9 @@ use hir::hir_def::{
     FieldIndex, Func, HirIngot, IdentId, ItemKind, LitKind, MatchArm, Partial, Pat, PatId, Stmt,
     StmtId, TopLevelMod, VariantKind,
 };
+use hir::semantic::{
+    ContractFieldAccessMode, ContractFieldInfo, ContractFieldKind, EffectBinding, EffectSource,
+};
 
 use crate::{
     capability_space::{
@@ -214,6 +217,36 @@ fn run_borrow_checks_or_error<'db>(
     Ok(())
 }
 
+fn run_init_immutable_checks_collect<'db>(
+    db: &'db dyn SpannedHirAnalysisDb,
+    functions: &[MirFunction<'db>],
+    output: &mut MirDiagnosticsOutput,
+) -> FxHashSet<String> {
+    let mut invalid = FxHashSet::default();
+    for diag in crate::analysis::init_immutables::check_init_immutables(db, functions) {
+        invalid.insert(diag.func_name.clone());
+        output.diagnostics.push(diag.diagnostic);
+    }
+    invalid
+}
+
+fn run_init_immutable_checks_or_error<'db>(
+    db: &'db dyn SpannedHirAnalysisDb,
+    functions: &[MirFunction<'db>],
+) -> MirLowerResult<()> {
+    if let Some(diag) = crate::analysis::init_immutables::check_init_immutables(db, functions)
+        .into_iter()
+        .next()
+    {
+        let diagnostics = hir::analysis::diagnostics::format_diags(db, [&diag.diagnostic]);
+        return Err(MirLowerError::MirDiagnostics {
+            func_name: diag.func_name,
+            diagnostics,
+        });
+    }
+    Ok(())
+}
+
 pub fn collect_mir_diagnostics<'db>(
     db: &'db dyn SpannedHirAnalysisDb,
     top_mod: TopLevelMod<'db>,
@@ -249,13 +282,18 @@ pub fn collect_mir_diagnostics<'db>(
         Err(err) => output.internal_errors.push(err),
     }
 
-    run_borrow_checks_collect(db, &templates, &mut output);
+    let invalid_templates = run_init_immutable_checks_collect(db, &templates, &mut output);
+    let valid_templates: Vec<_> = templates
+        .into_iter()
+        .filter(|func| !invalid_templates.contains(&func.symbol_name))
+        .collect();
+    run_borrow_checks_collect(db, &valid_templates, &mut output);
 
     if matches!(mode, MirDiagnosticsMode::TemplatesOnly) {
         return output;
     }
 
-    let mut functions = match monomorphize_functions(db, templates) {
+    let mut functions = match monomorphize_functions(db, valid_templates) {
         Ok(functions) => functions,
         Err(err) => {
             output.internal_errors.push(err);
@@ -327,44 +365,7 @@ pub fn lower_module<'db>(
     }
 
     templates.extend(contracts::lower_contract_templates(db, top_mod)?);
-
-    // Run MIR diagnostics on the generic templates as well as the monomorphized instances. This
-    // ensures borrow/move errors are surfaced even when a generic function is never instantiated.
-    run_borrow_checks_or_error(db, &templates)?;
-
-    let mut functions = monomorphize_functions(db, templates)?;
-    for func in &mut functions {
-        crate::transform::canonicalize_transparent_newtypes(db, &mut func.body);
-        crate::transform::insert_temp_binds(db, &mut func.body);
-    }
-    for func in &functions {
-        if let Some(diag) = crate::analysis::noesc::check_noesc_escapes(db, func) {
-            let func_name = match func.origin {
-                crate::ir::MirFunctionOrigin::Hir(hir_func) => hir_func.pretty_print_signature(db),
-                crate::ir::MirFunctionOrigin::Synthetic(_) => func.symbol_name.clone(),
-            };
-            let diagnostics = hir::analysis::diagnostics::format_diags(db, [&diag]);
-            return Err(MirLowerError::MirDiagnostics {
-                func_name,
-                diagnostics,
-            });
-        }
-    }
-    run_borrow_checks_or_error(db, &functions)?;
-
-    // Lower semantic capability MIR into backend-neutral runtime representation MIR.
-    let core = CoreLib::new(db, top_mod.scope());
-    for func in &mut functions {
-        crate::transform::lower_capability_to_repr(db, &core, &mut func.body);
-        crate::transform::canonicalize_transparent_newtypes(db, &mut func.body);
-        crate::transform::insert_temp_binds(db, &mut func.body);
-        crate::transform::canonicalize_zero_sized(db, &mut func.body);
-    }
-    let mut module = MirModule { top_mod, functions };
-    crate::transform::normalize_runtime_abi(db, &mut module);
-    crate::transform::eliminate_dead_erased_arg_materializations(db, &mut module);
-    crate::transform::normalize_runtime_shapes(db, &mut module);
-    Ok(module)
+    finalize_lowered_module(db, top_mod, templates)
 }
 
 /// Lowers every function within every top-level module of an ingot into MIR.
@@ -454,9 +455,18 @@ pub fn lower_ingot<'db>(
             dep_name.data(db),
         )?);
     }
+    let root_mod = ingot.root_mod(db);
+    finalize_lowered_module(db, root_mod, templates)
+}
 
+fn finalize_lowered_module<'db>(
+    db: &'db dyn SpannedHirAnalysisDb,
+    top_mod: TopLevelMod<'db>,
+    templates: Vec<MirFunction<'db>>,
+) -> MirLowerResult<MirModule<'db>> {
     // Run MIR diagnostics on the generic templates as well as the monomorphized instances. This
     // ensures borrow/move errors are surfaced even when a generic function is never instantiated.
+    run_init_immutable_checks_or_error(db, &templates)?;
     run_borrow_checks_or_error(db, &templates)?;
 
     let mut functions = monomorphize_functions(db, templates)?;
@@ -464,7 +474,6 @@ pub fn lower_ingot<'db>(
         crate::transform::canonicalize_transparent_newtypes(db, &mut func.body);
         crate::transform::insert_temp_binds(db, &mut func.body);
     }
-
     for func in &functions {
         if let Some(diag) = crate::analysis::noesc::check_noesc_escapes(db, func) {
             let diagnostics = hir::analysis::diagnostics::format_diags(db, [&diag]);
@@ -477,18 +486,14 @@ pub fn lower_ingot<'db>(
     run_borrow_checks_or_error(db, &functions)?;
 
     // Lower semantic capability MIR into backend-neutral runtime representation MIR.
-    let root_mod = ingot.root_mod(db);
-    let core = CoreLib::new(db, root_mod.scope());
+    let core = CoreLib::new(db, top_mod.scope());
     for func in &mut functions {
         crate::transform::lower_capability_to_repr(db, &core, &mut func.body);
         crate::transform::canonicalize_transparent_newtypes(db, &mut func.body);
         crate::transform::insert_temp_binds(db, &mut func.body);
         crate::transform::canonicalize_zero_sized(db, &mut func.body);
     }
-    let mut module = MirModule {
-        top_mod: root_mod,
-        functions,
-    };
+    let mut module = MirModule { top_mod, functions };
     crate::transform::normalize_runtime_abi(db, &mut module);
     crate::transform::eliminate_dead_erased_arg_materializations(db, &mut module);
     crate::transform::normalize_runtime_shapes(db, &mut module);
@@ -673,6 +678,55 @@ pub(super) struct InferredEffectProvider<'db> {
     pub(super) provider_ty: Option<TyId<'db>>,
     pub(super) address_space: AddressSpaceKind,
     pub(super) rationale: EffectProviderInferenceRationale,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ContractFieldBindingInfo<'db> {
+    field: ContractFieldInfo<'db>,
+    access: ContractFieldAccessMode,
+}
+
+impl<'db> ContractFieldBindingInfo<'db> {
+    fn provider_ty(self) -> Option<TyId<'db>> {
+        self.field.is_provider.then_some(self.field.declared_ty)
+    }
+
+    fn fallback_provider_ty(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        core: &CoreLib<'db>,
+        target_ty: TyId<'db>,
+    ) -> TyId<'db> {
+        let ptr_ctor = match self.field.kind {
+            ContractFieldKind::MutableStorage => core.stor_ptr_ctor,
+            ContractFieldKind::ImmutableCode
+                if self.access == ContractFieldAccessMode::InitAssignable =>
+            {
+                core.mem_ptr_ctor
+            }
+            ContractFieldKind::ImmutableCode => core.code_ptr_ctor,
+        };
+        TyId::app(db, ptr_ctor, target_ty)
+    }
+
+    fn fallback_space(self, db: &'db dyn HirAnalysisDb, core: &CoreLib<'db>) -> AddressSpaceKind {
+        match self.field.kind {
+            ContractFieldKind::MutableStorage => {
+                if self.field.is_provider {
+                    crate::repr::effect_provider_space_for_ty(db, core, self.field.declared_ty)
+                        .unwrap_or(AddressSpaceKind::Storage)
+                } else {
+                    AddressSpaceKind::Storage
+                }
+            }
+            ContractFieldKind::ImmutableCode
+                if self.access == ContractFieldAccessMode::InitAssignable =>
+            {
+                AddressSpaceKind::Memory
+            }
+            ContractFieldKind::ImmutableCode => AddressSpaceKind::ImmutableCode,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1018,8 +1072,9 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             return inferred;
         }
 
-        if let Some(provider_ty) =
-            self.contract_field_provider_ty_for_effect_site(EffectParamSite::Func(func), effect_idx)
+        if let Some(provider_ty) = self
+            .contract_field_for_effect_site(EffectParamSite::Func(func), effect_idx)
+            .and_then(ContractFieldBindingInfo::provider_ty)
             && let Some(inferred) = self.infer_effect_provider_from_provider_ty(
                 provider_ty,
                 EffectProviderInferenceRationale::ContractFieldProviderTy,
@@ -1126,13 +1181,10 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                             EffectProviderInferenceRationale::ForwardedEffectParamFallbackMemPtr,
                         ))
                     }
-                    LocalBinding::Param {
-                        site: ParamSite::EffectField(effect_site),
-                        idx,
-                        ..
-                    } => {
+                    binding @ LocalBinding::ContractField { .. } => {
+                        let field = self.contract_field(binding);
                         if let Some(provider_ty) =
-                            self.contract_field_provider_ty_for_effect_site(effect_site, idx)
+                            field.and_then(ContractFieldBindingInfo::provider_ty)
                         {
                             return Some(self.infer_effect_provider_or_fallback(
                                 provider_ty,
@@ -1142,11 +1194,18 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                             ));
                         }
 
-                        let provider_ty = TyId::app(self.db, self.core.stor_ptr_ctor, target_ty);
+                        let provider_ty = field
+                            .map(|field| field.fallback_provider_ty(self.db, &self.core, target_ty))
+                            .unwrap_or_else(|| {
+                                TyId::app(self.db, self.core.stor_ptr_ctor, target_ty)
+                            });
+                        let fallback_space = field
+                            .map(|field| field.fallback_space(self.db, &self.core))
+                            .unwrap_or(AddressSpaceKind::Storage);
                         Some(self.infer_effect_provider_or_fallback(
                             provider_ty,
                             EffectProviderInferenceRationale::ContractFieldFallbackStorPtr,
-                            AddressSpaceKind::Storage,
+                            fallback_space,
                             EffectProviderInferenceRationale::ContractFieldFallbackStorPtr,
                         ))
                     }
@@ -1165,58 +1224,79 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         }
     }
 
-    fn contract_field_provider_ty_for_effect_site(
+    fn contract_field(&self, binding: LocalBinding<'db>) -> Option<ContractFieldBindingInfo<'db>> {
+        let LocalBinding::ContractField {
+            contract,
+            field_idx,
+            access,
+            ..
+        } = binding
+        else {
+            return None;
+        };
+        let field = contract
+            .fields(self.db)
+            .get_index(field_idx as usize)
+            .map(|(_, field)| *field)?;
+        Some(ContractFieldBindingInfo { field, access })
+    }
+
+    fn contract_field_for_effect_site(
         &self,
         site: EffectParamSite<'db>,
         idx: usize,
-    ) -> Option<TyId<'db>> {
-        let contract = match site {
-            EffectParamSite::Func(func) => {
-                let ItemKind::Contract(contract) = func.scope().parent_item(self.db)? else {
-                    return None;
-                };
-                contract
-            }
-            EffectParamSite::Contract(contract)
-            | EffectParamSite::ContractInit { contract }
-            | EffectParamSite::ContractRecvArm { contract, .. } => contract,
+    ) -> Option<ContractFieldBindingInfo<'db>> {
+        let EffectSource::Field(field) = self.effect_binding_for_site(site, idx)?.source else {
+            return None;
         };
+        Some(ContractFieldBindingInfo {
+            field: field.field,
+            access: field.access,
+        })
+    }
 
-        let key_path = match site {
-            EffectParamSite::Func(func) => func
-                .effect_params(self.db)
-                .nth(idx)
-                .and_then(|effect| effect.key_path(self.db))?,
-            EffectParamSite::Contract(contract) => contract
-                .effect_params(self.db)
-                .nth(idx)
-                .and_then(|effect| effect.key_path(self.db))?,
-            EffectParamSite::ContractInit { contract } => contract
-                .init(self.db)?
-                .effects(self.db)
-                .data(self.db)
-                .get(idx)?
-                .key_path
-                .to_opt()?,
+    fn effect_binding_for_site(
+        &self,
+        site: EffectParamSite<'db>,
+        idx: usize,
+    ) -> Option<EffectBinding<'db>> {
+        match site {
+            EffectParamSite::Func(func) => Some(
+                func.effect_bindings(self.db)
+                    .iter()
+                    .find(|binding| binding.binding_idx as usize == idx)
+                    .cloned()?,
+            ),
+            EffectParamSite::Contract(contract) => Some(
+                contract
+                    .effect_bindings(self.db)
+                    .iter()
+                    .find(|binding| binding.binding_idx as usize == idx)
+                    .cloned()?,
+            ),
+            EffectParamSite::ContractInit { contract } => Some(
+                contract
+                    .init_effect_env(self.db)?
+                    .bindings(self.db)
+                    .iter()
+                    .find(|binding| binding.binding_idx as usize == idx)
+                    .cloned()?,
+            ),
             EffectParamSite::ContractRecvArm {
                 contract,
                 recv_idx,
                 arm_idx,
-            } => contract
-                .recv_arm(self.db, recv_idx as usize, arm_idx as usize)?
-                .effects
-                .data(self.db)
-                .get(idx)?
-                .key_path
-                .to_opt()?,
-        };
-
-        if key_path.len(self.db) != 1 {
-            return None;
+            } => {
+                let recv = hir::semantic::RecvView::new(self.db, contract, recv_idx);
+                Some(
+                    hir::semantic::RecvArmView::new(self.db, recv, arm_idx)
+                        .effective_effect_bindings(self.db)
+                        .iter()
+                        .find(|binding| binding.binding_idx as usize == idx)
+                        .cloned()?,
+                )
+            }
         }
-        let field_name = key_path.ident(self.db).to_opt()?;
-        let field = contract.fields(self.db).get(&field_name)?;
-        field.is_provider.then_some(field.declared_ty)
     }
 
     /// Consumes the builder and returns the accumulated MIR body.
@@ -2264,11 +2344,12 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         &self,
         binding: &LocalBinding<'db>,
     ) -> AddressSpaceKind {
+        if let Some(space) = self.effect_binding_spaces.get(binding).copied() {
+            return space;
+        }
+
         match binding {
             LocalBinding::EffectParam { site, idx, .. } => {
-                if let Some(space) = self.effect_binding_spaces.get(binding).copied() {
-                    return space;
-                }
                 if let Some(func) = self.hir_func
                     && matches!(site, EffectParamSite::Func(site_func) if *site_func == func)
                 {
@@ -2293,23 +2374,11 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     AddressSpaceKind::Memory
                 }
                 ParamSite::ContractInit(_) => AddressSpaceKind::Memory,
-                ParamSite::EffectField(effect_site) => match effect_site {
-                    _ if self.effect_binding_spaces.contains_key(binding) => self
-                        .effect_binding_spaces
-                        .get(binding)
-                        .copied()
-                        .unwrap_or(AddressSpaceKind::Storage),
-                    EffectParamSite::Func(effect_func)
-                        if self.hir_func.is_some_and(|current| current == *effect_func) =>
-                    {
-                        self.effect_param_spaces
-                            .get(*idx)
-                            .copied()
-                            .unwrap_or(AddressSpaceKind::Storage)
-                    }
-                    _ => AddressSpaceKind::Storage,
-                },
             },
+            LocalBinding::ContractField { .. } => self
+                .contract_field(*binding)
+                .map(|field| field.fallback_space(self.db, &self.core))
+                .unwrap_or(AddressSpaceKind::Storage),
         }
     }
 
@@ -2658,27 +2727,27 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         let effects_source = self.source_info_for_span(func.span().effects().resolve(self.db));
         let provider_arg_idx_by_effect =
             hir::analysis::ty::effects::place_effect_provider_param_index_map(self.db, func);
-        for effect in func.effect_params(self.db) {
-            let idx = effect.index();
-            let Some(key_path) = effect.key_path(self.db) else {
-                continue;
+        for effect in func.effect_bindings(self.db) {
+            let idx = effect.binding_idx as usize;
+            let binding = match effect.source {
+                EffectSource::Root => LocalBinding::EffectParam {
+                    site: EffectParamSite::Func(func),
+                    idx,
+                    key_path: effect.binding_path,
+                    is_mut: effect.is_mut,
+                },
+                EffectSource::Field(field) => LocalBinding::ContractField {
+                    site: EffectParamSite::Func(func),
+                    effect_idx: idx,
+                    contract: field.contract,
+                    field_idx: field.field.index,
+                    name: field.field.name,
+                    kind: field.field.kind,
+                    ty: field.field.target_ty,
+                    access: field.access,
+                },
             };
-            let binding = LocalBinding::EffectParam {
-                site: EffectParamSite::Func(func),
-                idx,
-                key_path,
-                is_mut: effect.is_mut(self.db),
-            };
-            let name = effect
-                .name(self.db)
-                .map(|ident| ident.data(self.db).to_string())
-                .or_else(|| {
-                    key_path
-                        .ident(self.db)
-                        .to_opt()
-                        .map(|ident| ident.data(self.db).to_string())
-                })
-                .unwrap_or_else(|| format!("effect{idx}"));
+            let name = effect.binding_name.data(self.db).to_string();
             let address_space = self.address_space_for_binding(&binding);
             let inferred =
                 self.infer_effect_provider_for_effect_param(func, idx, provider_arg_idx_by_effect);
@@ -2722,23 +2791,12 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 ..
             }
         );
-        if let LocalBinding::Param {
-            site: ParamSite::EffectField(effect_site),
-            idx,
-            ..
-        } = binding
-            && let Some(current) = self.hir_func
-            && matches!(effect_site, EffectParamSite::Func(func) if func == current)
-            && let Some(&local) = self.builder.body.effect_param_locals.get(idx)
-        {
-            self.binding_locals.insert(binding, local);
-            return Some(local);
-        }
         let name = self.binding_name(binding)?;
         let (ty, is_mut) = match binding {
             LocalBinding::Local { pat, is_mut } => (self.typed_body.pat_ty(self.db, pat), is_mut),
             LocalBinding::Param { ty, is_mut, .. } => (ty, is_mut),
             LocalBinding::EffectParam { is_mut, .. } => (self.u256_ty(), is_mut),
+            LocalBinding::ContractField { ty, .. } => (ty, binding.is_mut()),
         };
         let source = match &binding {
             LocalBinding::Local { pat, .. } => self.source_for_pat(*pat),
@@ -2747,6 +2805,18 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 idx,
                 ..
             } => self.source_for_func_param(*func, *idx),
+            LocalBinding::ContractField {
+                contract,
+                field_idx,
+                ..
+            } => self.source_info_for_span(
+                contract
+                    .span()
+                    .fields()
+                    .field(*field_idx as usize)
+                    .name()
+                    .resolve(self.db),
+            ),
             _ => crate::ir::SourceInfoId::SYNTHETIC,
         };
         let pointer_leaf_infos = pointer_leaf_infos_for_ty_with_default(
@@ -2796,38 +2866,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                     .and_then(|param| param.name())
                     .map(|ident| ident.data(self.db).to_string())
                     .or_else(|| Some(format!("arg{idx}"))),
-                ParamSite::EffectField(effect_site) => {
-                    let name = match effect_site {
-                        EffectParamSite::Func(func) => func
-                            .effect_params(self.db)
-                            .nth(idx)
-                            .and_then(|effect| effect.name(self.db)),
-                        EffectParamSite::Contract(contract) => contract
-                            .effects(self.db)
-                            .data(self.db)
-                            .get(idx)
-                            .and_then(|effect| effect.name),
-                        EffectParamSite::ContractInit { contract } => contract
-                            .init(self.db)?
-                            .effects(self.db)
-                            .data(self.db)
-                            .get(idx)
-                            .and_then(|effect| effect.name),
-                        EffectParamSite::ContractRecvArm {
-                            contract,
-                            recv_idx,
-                            arm_idx,
-                        } => contract
-                            .recv_arm(self.db, recv_idx as usize, arm_idx as usize)?
-                            .effects
-                            .data(self.db)
-                            .get(idx)
-                            .and_then(|effect| effect.name),
-                    };
-                    name.map(|ident| ident.data(self.db).to_string())
-                        .or_else(|| Some(format!("effect_field{idx}")))
-                }
             },
+            LocalBinding::ContractField { name, .. } => Some(name.data(self.db).to_string()),
             LocalBinding::EffectParam {
                 site,
                 idx,
@@ -3093,6 +3133,17 @@ fn first_unlowered_expr_used_by_mir<'db>(body: &MirBody<'db>) -> Option<ExprId> 
                 }
                 crate::ir::TerminatingCall::Intrinsic { args, .. } => {
                     used_values.extend(args.iter().copied());
+                }
+                crate::ir::TerminatingCall::DeployRuntime {
+                    runtime_offset,
+                    runtime_len,
+                    immutable_payload,
+                } => {
+                    used_values.insert(*runtime_offset);
+                    used_values.insert(*runtime_len);
+                    if let Some((ptr, _)) = immutable_payload {
+                        used_values.insert(*ptr);
+                    }
                 }
             },
             Terminator::Branch { cond, .. } => {

@@ -72,6 +72,7 @@ pub use core::effect_ref::MemPtr
 
 /// Storage pointer/handle to a value of type `T`.
 pub use core::effect_ref::StorPtr
+pub use core::effect_ref::CodePtr
 
 /// Calldata pointer to a value of type `T` (read-only).
 pub struct CalldataPtr<T> {
@@ -515,6 +516,14 @@ impl ContractHost for Evm {
 
     fn field<T>(mut self, slot: u256) -> core::effect_ref::StorPtr<T> {
         self.stor_ptr(slot)
+    }
+
+    fn immutable_field<T>(self, offset: u256) -> core::effect_ref::CodePtr<T> {
+        core::effect_ref::CodePtr::from_raw(offset)
+    }
+
+    fn init_immutable_field<T>(mut self, offset: u256) -> core::effect_ref::MemPtr<T> {
+        self.mem_ptr(offset)
     }
 
     fn create_contract<F>(mut self, runtime: F) -> ! {

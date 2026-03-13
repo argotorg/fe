@@ -20,7 +20,7 @@ use crate::analysis::ty::{
     binder::Binder,
     canonical::Canonicalized,
     corelib::{resolve_core_range_types, resolve_core_trait, resolve_lib_type_path},
-    diagnostics::{BodyDiag, FuncBodyDiag},
+    diagnostics::{BodyDiag, FuncBodyDiag, MutabilitySuggestion},
     effects::EffectKeyKind,
     effects::place_effect_provider_param_index_map,
     fold::{AssocTySubst, TyFoldable as _, TyFolder},
@@ -286,8 +286,15 @@ impl<'db> TyChecker<'db> {
                 UnOp::Ref => ExprProp::new(TyId::borrow_ref_of(self.db, place_ty), false),
                 UnOp::Mut => {
                     if !prop.is_mut {
-                        let binding = self.find_base_binding(*lhs).map(|binding| {
-                            (binding.binding_name(&self.env), binding.def_span(&self.env))
+                        let binding = self.find_base_binding(*lhs).map(|binding| match binding {
+                            LocalBinding::Local { .. } => MutabilitySuggestion::LetBinding {
+                                name: binding.binding_name(&self.env),
+                                span: binding.def_span(&self.env),
+                            },
+                            _ => MutabilitySuggestion::BindingDecl {
+                                name: binding.binding_name(&self.env),
+                                span: binding.def_span(&self.env),
+                            },
                         });
                         self.push_diag(BodyDiag::CannotBorrowMut {
                             primary: expr.span(self.body()).into(),
@@ -2799,7 +2806,7 @@ impl<'db> TyChecker<'db> {
             return;
         }
 
-        if !typed_lhs.is_mut {
+        if !typed_lhs.is_mut && !self.is_directly_assignable_init_contract_field(lhs, typed_lhs) {
             let binding = self.find_base_binding(lhs);
             let diag = match binding {
                 Some(binding) => {
@@ -2820,6 +2827,19 @@ impl<'db> TyChecker<'db> {
 
             self.push_diag(diag);
         }
+    }
+
+    fn is_directly_assignable_init_contract_field(
+        &self,
+        lhs: ExprId,
+        typed_lhs: &ExprProp<'db>,
+    ) -> bool {
+        matches!(
+            lhs.data(self.db, self.body()),
+            Partial::Present(Expr::Path(..))
+        ) && typed_lhs
+            .binding
+            .is_some_and(|binding| binding.allows_direct_assign())
     }
 
     fn check_expr_in_new_scope(&mut self, expr: ExprId, expected: TyId<'db>) -> ExprProp<'db> {

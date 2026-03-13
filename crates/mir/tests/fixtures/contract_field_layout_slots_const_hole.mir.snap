@@ -31,8 +31,7 @@ fn __LayoutHoles_init() -> ():
     v3: u256 = init_field__Evm_hef0af3106e109414_StorageMap_u256__u256__4___c9a24c839c9d1e0b(4)
     v4: u256 = code_region_offset(func_item(__LayoutHoles_runtime))
     v5: u256 = code_region_len(func_item(__LayoutHoles_runtime))
-    eval codecopy(0, v4, v5)
-    terminate return_data(0, v5)
+    terminate deploy_runtime(v4, v5, none)
 
 fn __LayoutHoles_runtime() -> ():
   bb0:

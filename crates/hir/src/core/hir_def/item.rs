@@ -1432,6 +1432,7 @@ pub struct FieldDef<'db> {
     pub name: Partial<IdentId<'db>>,
     pub(in crate::core) type_ref: Partial<TypeId<'db>>,
     pub vis: Visibility,
+    pub is_mut: bool,
 }
 
 impl<'db> FieldDef<'db> {
@@ -1440,12 +1441,14 @@ impl<'db> FieldDef<'db> {
         name: Partial<IdentId<'db>>,
         type_ref: Partial<TypeId<'db>>,
         vis: Visibility,
+        is_mut: bool,
     ) -> Self {
         Self {
             attributes,
             name,
             type_ref,
             vis,
+            is_mut,
         }
     }
 

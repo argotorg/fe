@@ -232,7 +232,7 @@ fn lower_msg_variant_fields<'db>(
                     let name = IdentId::lower_token_partial(ctxt, field.name());
                     let type_ref = TypeId::lower_ast_partial(ctxt, field.ty());
                     // All msg variant fields are public
-                    FieldDef::new(attributes, name, type_ref, Visibility::Public)
+                    FieldDef::new(attributes, name, type_ref, Visibility::Public, false)
                 })
                 .collect::<Vec<_>>();
             FieldDefListId::new(db, fields)

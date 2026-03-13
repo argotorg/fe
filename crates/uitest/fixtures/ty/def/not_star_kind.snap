@@ -34,10 +34,10 @@ error[3-0000]: expected `*` kind in this context
    │                                    ^^^^^^^^ expected `*` kind here
 
 error[3-0000]: expected `*` kind in this context
-   ┌─ not_star_kind.fe:17:8
+   ┌─ not_star_kind.fe:17:12
    │
-17 │     f: Gen<i32>,
-   │        ^^^^^^^^ expected `*` kind here
+17 │     mut f: Gen<i32>,
+   │            ^^^^^^^^ expected `*` kind here
 
 error[3-0000]: expected `*` kind in this context
    ┌─ not_star_kind.fe:22:12

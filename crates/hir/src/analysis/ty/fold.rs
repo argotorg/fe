@@ -348,6 +348,25 @@ impl<'db> TyFoldable<'db> for LocalBinding<'db> {
                 ty: ty.fold_with(db, folder),
                 is_mut,
             },
+            LocalBinding::ContractField {
+                site,
+                effect_idx,
+                contract,
+                field_idx,
+                name,
+                kind,
+                ty,
+                access,
+            } => LocalBinding::ContractField {
+                site,
+                effect_idx,
+                contract,
+                field_idx,
+                name,
+                kind,
+                ty: ty.fold_with(db, folder),
+                access,
+            },
         }
     }
 }

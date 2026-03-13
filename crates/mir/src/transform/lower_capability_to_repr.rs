@@ -1360,6 +1360,17 @@ pub(crate) fn prepare_body_for_evm_yul_codegen<'db>(
                         check_direct_value(*arg);
                     }
                 }
+                crate::ir::TerminatingCall::DeployRuntime {
+                    runtime_offset,
+                    runtime_len,
+                    immutable_payload,
+                } => {
+                    check_direct_value(*runtime_offset);
+                    check_direct_value(*runtime_len);
+                    if let Some((ptr, _)) = immutable_payload {
+                        check_direct_value(*ptr);
+                    }
+                }
             },
             crate::ir::Terminator::Branch { cond, .. } => check_direct_value(*cond),
             crate::ir::Terminator::Switch { discr, .. } => check_direct_value(*discr),

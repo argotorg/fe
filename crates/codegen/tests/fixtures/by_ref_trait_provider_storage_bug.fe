@@ -26,7 +26,7 @@ msg Msg {
 }
 
 pub contract ByRefTraitProviderStorageBug {
-    ctx: Pair
+    mut ctx: Pair
 
     init() uses (mut ctx) {
         ctx = Pair { a: 40, b: 2 }

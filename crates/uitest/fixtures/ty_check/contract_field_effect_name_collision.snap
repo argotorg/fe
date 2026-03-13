@@ -1,0 +1,15 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/contract_field_effect_name_collision.fe
+---
+error[3-0020]: contract field `ctx` conflicts with a named contract effect
+  ┌─ contract_field_effect_name_collision.fe:1:28
+  │
+1 │ pub contract Counter uses (ctx: Ctx) {
+  │                            ^^^ named contract effect declared here
+2 │     mut ctx: u256
+  │         --- field with the same name declared here
+  │
+  = note: contract fields and named contract effects share one namespace

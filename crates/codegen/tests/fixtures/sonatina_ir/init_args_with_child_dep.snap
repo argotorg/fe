@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/init_args_with_child_dep.fe
 ---
@@ -20,35 +21,15 @@ func private %__Child_init() {
     block0:
         v0.i256 = sym_addr &__Child_runtime;
         v1.i256 = sym_size &__Child_runtime;
-        v2.i256 = sym_size .;
-        v3.i256 = evm_code_size;
-        v4.i1 = lt v3 v2;
-        br v4 block1 block2;
-
-    block1:
-        call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort;
-        evm_invalid;
-
-    block2:
-        v7.i256 = sub v3 v2;
-        v8.i256 = sub v3 v2;
-        v9.*i8 = evm_malloc v8;
-        v10.i256 = ptr_to_int v9 i256;
-        v11.i256 = sub v3 v2;
-        evm_code_copy v10 v2 v11;
-        v13.*i8 = evm_malloc 64.i256;
-        v14.*@__fe_MemoryBytes_0 = bitcast v13 *@__fe_MemoryBytes_0;
-        v16.*i256 = gep v14 0.i256 0.i256;
-        mstore v16 v10 i256;
-        v17.i256 = sub v3 v2;
-        v19.*i256 = gep v14 0.i256 1.i256;
-        mstore v19 v17 i256;
-        v20.*@__fe_SolDecoder_2 = call %sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b v14;
-        v21.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_MemoryBytes___a53dbc6192a658d6 v20;
-        v22.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_MemoryBytes___a53dbc6192a658d6 v20;
+        v2.*@__fe_MemoryBytes_0 = call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_init_input_arg1_code_f27f2200efc7e62______2439715d39cd513;
+        v3.*@__fe_SolDecoder_2 = call %sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b v2;
+        v4.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_MemoryBytes___a53dbc6192a658d6 v3;
+        v5.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_MemoryBytes___a53dbc6192a658d6 v3;
         call %__Child_init_contract;
-        evm_code_copy 0.i256 v0 v1;
-        evm_return 0.i256 v1;
+        v6.*i8 = evm_malloc v1;
+        v7.i256 = ptr_to_int v6 i256;
+        evm_code_copy v7 v0 v1;
+        evm_return v7 v1;
 }
 
 func private %__Child_runtime() {
@@ -77,34 +58,14 @@ func private %__Parent_init() {
     block0:
         v0.i256 = sym_addr &__Parent_runtime;
         v1.i256 = sym_size &__Parent_runtime;
-        v2.i256 = sym_size .;
-        v3.i256 = evm_code_size;
-        v4.i1 = lt v3 v2;
-        br v4 block1 block2;
-
-    block1:
-        call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort;
-        evm_invalid;
-
-    block2:
-        v7.i256 = sub v3 v2;
-        v8.i256 = sub v3 v2;
-        v9.*i8 = evm_malloc v8;
-        v10.i256 = ptr_to_int v9 i256;
-        v11.i256 = sub v3 v2;
-        evm_code_copy v10 v2 v11;
-        v13.*i8 = evm_malloc 64.i256;
-        v14.*@__fe_MemoryBytes_0 = bitcast v13 *@__fe_MemoryBytes_0;
-        v16.*i256 = gep v14 0.i256 0.i256;
-        mstore v16 v10 i256;
-        v17.i256 = sub v3 v2;
-        v19.*i256 = gep v14 0.i256 1.i256;
-        mstore v19 v17 i256;
-        v20.*@__fe_SolDecoder_2 = call %sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b v14;
-        v21.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_MemoryBytes___a53dbc6192a658d6 v20;
-        call %__Parent_init_contract v21;
-        evm_code_copy 0.i256 v0 v1;
-        evm_return 0.i256 v1;
+        v2.*@__fe_MemoryBytes_0 = call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_init_input_arg1_code_8367cdddc5a4bdd______2439715d39cd513;
+        v3.*@__fe_SolDecoder_2 = call %sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b v2;
+        v4.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_MemoryBytes___a53dbc6192a658d6 v3;
+        call %__Parent_init_contract v4;
+        v5.*i8 = evm_malloc v1;
+        v6.i256 = ptr_to_int v5 i256;
+        evm_code_copy v6 v0 v1;
+        evm_return v6 v1;
 }
 
 func private %__Parent_runtime() {
@@ -117,9 +78,40 @@ func private %__Parent_runtime() {
         evm_invalid;
 }
 
-func private %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort() {
+func private %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_init_input_arg1_code_f27f2200efc7e62______2439715d39cd513() -> *@__fe_MemoryBytes_0 {
     block0:
+        v2.i256 = sym_addr &__Child_runtime;
+        v3.i256 = sym_size &__Child_runtime;
+        (v4.i256, v5.i1) = uaddo v2 v3;
+        br v5 block3 block4;
+
+    block1:
+        call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort;
+        evm_invalid;
+
+    block2:
+        (v11.i256, v12.i1) = usubo v7 v4;
+        br v12 block3 block5;
+
+    block3:
         evm_revert 0.i256 0.i256;
+
+    block4:
+        v7.i256 = evm_code_size;
+        v8.i1 = call %u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt v7 v4;
+        br v8 block1 block2;
+
+    block5:
+        v13.*i8 = evm_malloc v11;
+        v14.i256 = ptr_to_int v13 i256;
+        evm_code_copy v14 v4 v11;
+        v17.*i8 = evm_malloc 64.i256;
+        v18.*@__fe_MemoryBytes_0 = bitcast v17 *@__fe_MemoryBytes_0;
+        v19.*i256 = gep v18 0.i256 0.i256;
+        mstore v19 v14 i256;
+        v21.*i256 = gep v18 0.i256 1.i256;
+        mstore v21 v11 i256;
+        return v18;
 }
 
 func private %sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v0.*@__fe_MemoryBytes_0) -> *@__fe_SolDecoder_2 {
@@ -149,6 +141,11 @@ func private %runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e
         v7.i256 = call %calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at v1 0.i256;
         v8.i32 = call %sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_selector_from_prefix v7;
         return v8;
+}
+
+func private %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort() {
+    block0:
+        evm_revert 0.i256 0.i256;
 }
 
 func private %create_stor_arg0_root_stor__Evm_hef0af3106e109414_Child_hdfa2e9d62e9c9ad3__8303e18f50f8d8ed(v0.i256, v1.*@__fe_tuple_3) -> i256 {
@@ -195,6 +192,48 @@ func private %create_stor_arg0_root_stor__Evm_hef0af3106e109414_Child_hdfa2e9d62
         v31.i256 = call %evm_hef0af3106e109414_create_h3f3c4b410ec53b45_create_raw_stor_arg0_root_stor v0 v10 v6;
         v32.i1 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_eq v31 0.i256;
         br v32 block1 block2;
+}
+
+func private %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_init_input_arg1_code_8367cdddc5a4bdd______2439715d39cd513() -> *@__fe_MemoryBytes_0 {
+    block0:
+        v2.i256 = sym_addr &__Parent_runtime;
+        v3.i256 = sym_size &__Parent_runtime;
+        (v4.i256, v5.i1) = uaddo v2 v3;
+        br v5 block3 block4;
+
+    block1:
+        call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort;
+        evm_invalid;
+
+    block2:
+        (v11.i256, v12.i1) = usubo v7 v4;
+        br v12 block3 block5;
+
+    block3:
+        evm_revert 0.i256 0.i256;
+
+    block4:
+        v7.i256 = evm_code_size;
+        v8.i1 = call %u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt v7 v4;
+        br v8 block1 block2;
+
+    block5:
+        v13.*i8 = evm_malloc v11;
+        v14.i256 = ptr_to_int v13 i256;
+        evm_code_copy v14 v4 v11;
+        v17.*i8 = evm_malloc 64.i256;
+        v18.*@__fe_MemoryBytes_0 = bitcast v17 *@__fe_MemoryBytes_0;
+        v19.*i256 = gep v18 0.i256 0.i256;
+        mstore v19 v14 i256;
+        v21.*i256 = gep v18 0.i256 1.i256;
+        mstore v21 v11 i256;
+        return v18;
+}
+
+func private %u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v0.i256, v1.i256) -> i1 {
+    block0:
+        v2.i1 = lt v0 v1;
+        return v2;
 }
 
 func private %soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v0.*@__fe_MemoryBytes_0) -> *@__fe_SolDecoder_2 {
@@ -277,12 +316,6 @@ func private %calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len(v0.i256
         evm_revert 0.i256 0.i256;
 
     block2:
-        return v2;
-}
-
-func private %u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v0.i256, v1.i256) -> i1 {
-    block0:
-        v2.i1 = lt v0 v1;
         return v2;
 }
 

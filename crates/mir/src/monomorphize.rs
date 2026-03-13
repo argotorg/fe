@@ -65,6 +65,7 @@ struct Monomorphizer<'db> {
     func_index: FxHashMap<TemplateKey<'db>, usize>,
     func_defs: FxHashMap<Func<'db>, CallableDef<'db>>,
     instances: Vec<MirFunction<'db>>,
+    instance_param_code_region_roots: Vec<ParamCodeRegionRoots<'db>>,
     instance_map: FxHashMap<InstanceKey<'db>, usize>,
     worklist: VecDeque<usize>,
     current_symbol: Option<String>,
@@ -79,6 +80,7 @@ struct InstanceKey<'db> {
     receiver_space: Option<AddressSpaceKind>,
     effect_param_space_overrides: Vec<Option<AddressSpaceKind>>,
     param_capability_space_overrides: Vec<Vec<(crate::MirProjectionPath<'db>, AddressSpaceKind)>>,
+    param_code_region_roots: Vec<Option<CodeRegionParamRootKey<'db>>>,
 }
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct TemplateKey<'db> {
@@ -99,11 +101,19 @@ enum CallTarget<'db> {
 
 type ParamCapabilitySpaceOverrides<'db> =
     Vec<Vec<(crate::MirProjectionPath<'db>, AddressSpaceKind)>>;
+type ParamCodeRegionRoots<'db> = Vec<Option<crate::ir::CodeRegionRoot<'db>>>;
 type NormalizedCallInstanceInputs<'db> = (
     Vec<TyId<'db>>,
     Vec<Option<AddressSpaceKind>>,
     ParamCapabilitySpaceOverrides<'db>,
+    ParamCodeRegionRoots<'db>,
 );
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct CodeRegionParamRootKey<'db> {
+    origin: crate::ir::MirFunctionOrigin<'db>,
+    generic_args: Vec<TyId<'db>>,
+}
 
 struct CallSite<'db> {
     bb_idx: usize,
@@ -113,6 +123,7 @@ struct CallSite<'db> {
     receiver_space: Option<AddressSpaceKind>,
     effect_param_space_overrides: Vec<Option<AddressSpaceKind>>,
     param_capability_space_overrides: ParamCapabilitySpaceOverrides<'db>,
+    param_code_region_roots: ParamCodeRegionRoots<'db>,
 }
 
 fn resolve_default_root_effect_ty<'db>(
@@ -143,6 +154,7 @@ impl<'db> InstanceKey<'db> {
             crate::MirProjectionPath<'db>,
             AddressSpaceKind,
         )>],
+        param_code_region_roots: &[Option<crate::ir::CodeRegionRoot<'db>>],
     ) -> Self {
         Self {
             origin,
@@ -150,6 +162,15 @@ impl<'db> InstanceKey<'db> {
             receiver_space,
             effect_param_space_overrides: effect_param_space_overrides.to_vec(),
             param_capability_space_overrides: param_capability_space_overrides.to_vec(),
+            param_code_region_roots: param_code_region_roots
+                .iter()
+                .map(|root| {
+                    root.as_ref().map(|root| CodeRegionParamRootKey {
+                        origin: root.origin,
+                        generic_args: root.generic_args.clone(),
+                    })
+                })
+                .collect(),
         }
     }
 }
@@ -194,6 +215,7 @@ impl<'db> Monomorphizer<'db> {
             func_index,
             func_defs,
             instances: Vec::new(),
+            instance_param_code_region_roots: Vec::new(),
             instance_map: FxHashMap::default(),
             worklist: VecDeque::new(),
             current_symbol: None,
@@ -245,7 +267,7 @@ impl<'db> Monomorphizer<'db> {
 
             if let crate::ir::MirFunctionOrigin::Synthetic(_) = origin {
                 if !self.templates[idx].defer_root {
-                    let _ = self.ensure_synthetic_instance(origin, receiver_space, &[], &[]);
+                    let _ = self.ensure_synthetic_instance(origin, receiver_space, &[], &[], &[]);
                 }
                 continue;
             }
@@ -260,7 +282,7 @@ impl<'db> Monomorphizer<'db> {
             // Seed non-generic functions immediately so we always emit them.
             let params = def.params(self.db);
             if params.is_empty() {
-                let _ = self.ensure_instance(func, &[], receiver_space, &[], &[]);
+                let _ = self.ensure_instance(func, &[], receiver_space, &[], &[], &[]);
                 continue;
             }
 
@@ -339,7 +361,7 @@ impl<'db> Monomorphizer<'db> {
             }
 
             if can_seed && args.len() == provider_param_count {
-                let _ = self.ensure_instance(func, &args, receiver_space, &[], &[]);
+                let _ = self.ensure_instance(func, &args, receiver_space, &[], &[], &[]);
             }
         }
     }
@@ -368,6 +390,7 @@ impl<'db> Monomorphizer<'db> {
     fn resolve_calls(&mut self, func_idx: usize) {
         let call_sites: Vec<CallSite<'db>> = {
             let function = &self.instances[func_idx];
+            let param_code_region_roots = self.instance_param_code_region_roots[func_idx].clone();
             let solve_cx = TraitSolveCx::new(
                 self.db,
                 match function.origin {
@@ -409,6 +432,11 @@ impl<'db> Monomorphizer<'db> {
                                 &args,
                                 receiver_space,
                             );
+                        let param_code_region_roots = self.call_param_code_region_roots(
+                            function,
+                            &param_code_region_roots,
+                            call,
+                        );
                         sites.push(CallSite {
                             bb_idx,
                             inst_idx: Some(inst_idx),
@@ -417,6 +445,7 @@ impl<'db> Monomorphizer<'db> {
                             receiver_space,
                             effect_param_space_overrides,
                             param_capability_space_overrides,
+                            param_code_region_roots,
                         });
                     }
                 }
@@ -443,6 +472,8 @@ impl<'db> Monomorphizer<'db> {
                             &args,
                             receiver_space,
                         );
+                    let param_code_region_roots =
+                        self.call_param_code_region_roots(function, &param_code_region_roots, call);
                     sites.push(CallSite {
                         bb_idx,
                         inst_idx: None,
@@ -451,6 +482,7 @@ impl<'db> Monomorphizer<'db> {
                         receiver_space,
                         effect_param_space_overrides,
                         param_capability_space_overrides,
+                        param_code_region_roots,
                     });
                 }
             }
@@ -482,6 +514,7 @@ impl<'db> Monomorphizer<'db> {
             receiver_space,
             effect_param_space_overrides,
             param_capability_space_overrides,
+            param_code_region_roots,
         } in call_sites
         {
             let resolved_name = match target {
@@ -492,6 +525,7 @@ impl<'db> Monomorphizer<'db> {
                         receiver_space,
                         &effect_param_space_overrides,
                         &param_capability_space_overrides,
+                        &param_code_region_roots,
                     ) else {
                         if self.deferred_error.borrow().is_some() {
                             return;
@@ -507,19 +541,25 @@ impl<'db> Monomorphizer<'db> {
                     Some(symbol)
                 }
                 CallTarget::Decl(func) => {
-                    let (normalized_args, normalized_effect_param_space_overrides, _) = self
-                        .normalize_call_instance_inputs(
-                            func,
-                            &args,
-                            &effect_param_space_overrides,
-                            &param_capability_space_overrides,
-                        );
+                    let (
+                        normalized_args,
+                        normalized_effect_param_space_overrides,
+                        _,
+                        normalized_param_code_region_roots,
+                    ) = self.normalize_call_instance_inputs(
+                        func,
+                        &args,
+                        &effect_param_space_overrides,
+                        &param_capability_space_overrides,
+                        &param_code_region_roots,
+                    );
                     Some(self.mangled_name(
                         func,
                         &normalized_args,
                         receiver_space,
                         &normalized_effect_param_space_overrides,
                         &[],
+                        &normalized_param_code_region_roots,
                     ))
                 }
                 CallTarget::Synthetic(origin) => {
@@ -529,6 +569,7 @@ impl<'db> Monomorphizer<'db> {
                             receiver_space,
                             &effect_param_space_overrides,
                             &param_capability_space_overrides,
+                            &[],
                         )
                         .unwrap_or_else(|| {
                             panic!("failed to instantiate synthetic MIR for `{origin:?}`")
@@ -568,7 +609,7 @@ impl<'db> Monomorphizer<'db> {
             let symbol = match target.origin {
                 crate::ir::MirFunctionOrigin::Hir(func) => {
                     let Some((_, symbol)) =
-                        self.ensure_instance(func, &target.generic_args, None, &[], &[])
+                        self.ensure_instance(func, &target.generic_args, None, &[], &[], &[])
                     else {
                         if self.deferred_error.borrow().is_some() {
                             return;
@@ -580,7 +621,7 @@ impl<'db> Monomorphizer<'db> {
                     symbol
                 }
                 crate::ir::MirFunctionOrigin::Synthetic(_) => {
-                    self.ensure_synthetic_instance(target.origin, None, &[], &[])
+                    self.ensure_synthetic_instance(target.origin, None, &[], &[], &[])
                         .unwrap_or_else(|| {
                             panic!("failed to instantiate synthetic MIR for `{target:?}`")
                         })
@@ -604,6 +645,7 @@ impl<'db> Monomorphizer<'db> {
             crate::MirProjectionPath<'db>,
             AddressSpaceKind,
         )>],
+        param_code_region_roots: &[Option<crate::ir::CodeRegionRoot<'db>>],
     ) -> Option<(usize, String)> {
         let receiver_space = canonicalize_receiver_space(receiver_space);
         debug_assert!(
@@ -626,6 +668,10 @@ impl<'db> Monomorphizer<'db> {
                 template.body.param_locals.len(),
                 param_capability_space_overrides,
             );
+        let normalized_param_code_region_roots = self.normalize_param_code_region_roots_for_len(
+            template.body.param_locals.len(),
+            param_code_region_roots,
+        );
 
         let key = InstanceKey::new(
             origin,
@@ -633,6 +679,7 @@ impl<'db> Monomorphizer<'db> {
             receiver_space,
             &normalized_effect_param_space_overrides,
             &normalized_param_capability_space_overrides,
+            &normalized_param_code_region_roots,
         );
         if let Some(&idx) = self.instance_map.get(&key) {
             let symbol = self.instances[idx].symbol_name.clone();
@@ -658,10 +705,17 @@ impl<'db> Monomorphizer<'db> {
         if !param_cap_suffix.is_empty() {
             symbol = format!("{symbol}_{param_cap_suffix}");
         }
+        let param_code_region_suffix =
+            param_code_region_root_suffix(&normalized_param_code_region_roots);
+        if !param_code_region_suffix.is_empty() {
+            symbol = format!("{symbol}_{param_code_region_suffix}");
+        }
         instance.symbol_name = symbol.clone();
 
         let idx = self.instances.len();
         self.instances.push(instance);
+        self.instance_param_code_region_roots
+            .push(normalized_param_code_region_roots);
         self.instance_map.insert(key, idx);
         self.worklist.push_back(idx);
 
@@ -691,7 +745,8 @@ impl<'db> Monomorphizer<'db> {
                 })
                 .collect();
             for (sib_origin, sib_receiver_space) in siblings {
-                let _ = self.ensure_synthetic_instance(sib_origin, sib_receiver_space, &[], &[]);
+                let _ =
+                    self.ensure_synthetic_instance(sib_origin, sib_receiver_space, &[], &[], &[]);
             }
         }
 
@@ -709,17 +764,20 @@ impl<'db> Monomorphizer<'db> {
             crate::MirProjectionPath<'db>,
             AddressSpaceKind,
         )>],
+        param_code_region_roots: &[Option<crate::ir::CodeRegionRoot<'db>>],
     ) -> Option<(usize, String)> {
         let receiver_space = canonicalize_receiver_space(receiver_space);
         let (
             normalized_args,
             normalized_effect_param_space_overrides,
             normalized_param_capability_space_overrides,
+            normalized_param_code_region_roots,
         ) = self.normalize_call_instance_inputs(
             func,
             args,
             effect_param_space_overrides,
             param_capability_space_overrides,
+            param_code_region_roots,
         );
         let norm_scope = crate::ty::normalization_scope_for_args(self.db, func, &normalized_args);
         let assumptions = PredicateListId::empty_list(self.db);
@@ -730,6 +788,7 @@ impl<'db> Monomorphizer<'db> {
             receiver_space,
             &normalized_effect_param_space_overrides,
             &normalized_param_capability_space_overrides,
+            &normalized_param_code_region_roots,
         );
         if let Some(&idx) = self.instance_map.get(&key) {
             let symbol = self.instances[idx].symbol_name.clone();
@@ -742,17 +801,23 @@ impl<'db> Monomorphizer<'db> {
             receiver_space,
             &normalized_effect_param_space_overrides,
             &normalized_param_capability_space_overrides,
+            &normalized_param_code_region_roots,
         );
 
         let mut instance = if args.is_empty()
             && normalized_effect_param_space_overrides.is_empty()
             && normalized_param_capability_space_overrides.is_empty()
+            && normalized_param_code_region_roots.is_empty()
         {
             let template_idx = self.ensure_template(func, receiver_space)?;
             let mut instance = self.templates[template_idx].clone();
             instance.receiver_space = receiver_space;
             instance.symbol_name = symbol_name.clone();
             self.apply_substitution(&mut instance);
+            self.materialize_code_region_intrinsic_args(
+                &mut instance,
+                &normalized_param_code_region_roots,
+            );
             instance
         } else {
             let (diags, typed_body) = check_func_body(self.db, func);
@@ -793,6 +858,10 @@ impl<'db> Monomorphizer<'db> {
             };
             instance.receiver_space = receiver_space;
             instance.symbol_name = symbol_name.clone();
+            self.materialize_code_region_intrinsic_args(
+                &mut instance,
+                &normalized_param_code_region_roots,
+            );
             instance
         };
 
@@ -807,6 +876,8 @@ impl<'db> Monomorphizer<'db> {
         let idx = self.instances.len();
         let symbol = instance.symbol_name.clone();
         self.instances.push(instance);
+        self.instance_param_code_region_roots
+            .push(normalized_param_code_region_roots);
         self.instance_map.insert(key, idx);
         self.worklist.push_back(idx);
         Some((idx, symbol))
@@ -821,6 +892,7 @@ impl<'db> Monomorphizer<'db> {
             crate::MirProjectionPath<'db>,
             AddressSpaceKind,
         )>],
+        param_code_region_roots: &[Option<crate::ir::CodeRegionRoot<'db>>],
     ) -> NormalizedCallInstanceInputs<'db> {
         let norm_scope = crate::ty::normalization_scope_for_args(self.db, func, args);
         let assumptions = PredicateListId::empty_list(self.db);
@@ -833,10 +905,13 @@ impl<'db> Monomorphizer<'db> {
             self.normalize_effect_param_space_overrides(func, effect_param_space_overrides);
         let normalized_param_capability_space_overrides =
             self.normalize_param_capability_space_overrides(func, param_capability_space_overrides);
+        let normalized_param_code_region_roots =
+            self.normalize_param_code_region_roots(func, param_code_region_roots);
         (
             normalized_args,
             normalized_effect_param_space_overrides,
             normalized_param_capability_space_overrides,
+            normalized_param_code_region_roots,
         )
     }
 
@@ -1007,7 +1082,7 @@ impl<'db> Monomorphizer<'db> {
     }
 
     /// Substitute concrete type arguments directly into the MIR body values.
-    fn apply_substitution(&self, function: &mut MirFunction<'db>) {
+    fn apply_substitution(&mut self, function: &mut MirFunction<'db>) {
         let mut folder = ParamSubstFolder {
             args: &function.generic_args,
         };
@@ -1022,7 +1097,7 @@ impl<'db> Monomorphizer<'db> {
                     .collect();
                 target.symbol = match target.origin {
                     crate::ir::MirFunctionOrigin::Hir(func) => {
-                        Some(self.mangled_name(func, &target.generic_args, None, &[], &[]))
+                        Some(self.mangled_name(func, &target.generic_args, None, &[], &[], &[]))
                     }
                     crate::ir::MirFunctionOrigin::Synthetic(_) => self
                         .func_index
@@ -1078,6 +1153,174 @@ impl<'db> Monomorphizer<'db> {
         }
     }
 
+    fn materialize_code_region_intrinsic_args(
+        &mut self,
+        function: &mut MirFunction<'db>,
+        param_code_region_roots: &[Option<crate::ir::CodeRegionRoot<'db>>],
+    ) {
+        let mut needed = FxHashSet::default();
+        for block in &function.body.blocks {
+            for inst in &block.insts {
+                let crate::MirInst::Assign {
+                    rvalue:
+                        crate::ir::Rvalue::Intrinsic {
+                            op:
+                                crate::ir::IntrinsicOp::CodeRegionOffset
+                                | crate::ir::IntrinsicOp::CodeRegionLen,
+                            args,
+                        },
+                    ..
+                } = inst
+                else {
+                    continue;
+                };
+                let Some(&arg) = args.first() else {
+                    continue;
+                };
+                if !matches!(
+                    function.body.value(arg).origin,
+                    crate::ValueOrigin::FuncItem(_)
+                ) {
+                    needed.insert(arg);
+                }
+            }
+        }
+
+        let mut replacements = FxHashMap::default();
+        for arg in needed {
+            let Some(target) =
+                self.code_region_target_for_value(function, arg, param_code_region_roots)
+            else {
+                continue;
+            };
+            let Some((_, symbol)) = (match target.origin {
+                crate::ir::MirFunctionOrigin::Hir(func) => {
+                    self.ensure_instance(func, &target.generic_args, None, &[], &[], &[])
+                }
+                crate::ir::MirFunctionOrigin::Synthetic(origin) => self.ensure_synthetic_instance(
+                    crate::ir::MirFunctionOrigin::Synthetic(origin),
+                    None,
+                    &[],
+                    &[],
+                    &[],
+                ),
+            }) else {
+                continue;
+            };
+            let replacement = crate::ValueId(function.body.values.len() as u32);
+            let mut value = function.body.value(arg).clone();
+            value.origin = crate::ValueOrigin::FuncItem(crate::ir::CodeRegionRoot {
+                symbol: Some(symbol),
+                ..target
+            });
+            function.body.values.push(value);
+            replacements.insert(arg, replacement);
+        }
+
+        for block in &mut function.body.blocks {
+            for inst in &mut block.insts {
+                let crate::MirInst::Assign {
+                    rvalue:
+                        crate::ir::Rvalue::Intrinsic {
+                            op:
+                                crate::ir::IntrinsicOp::CodeRegionOffset
+                                | crate::ir::IntrinsicOp::CodeRegionLen,
+                            args,
+                        },
+                    ..
+                } = inst
+                else {
+                    continue;
+                };
+                let Some(arg) = args.first_mut() else {
+                    continue;
+                };
+                if let Some(&replacement) = replacements.get(arg) {
+                    *arg = replacement;
+                }
+            }
+        }
+    }
+
+    fn code_region_target_from_ty(&self, ty: TyId<'db>) -> Option<crate::ir::CodeRegionRoot<'db>> {
+        let ty = ty
+            .as_capability(self.db)
+            .map(|(_, inner)| inner)
+            .unwrap_or(ty);
+        let (base, args) = ty.decompose_ty_app(self.db);
+        let TyData::TyBase(TyBase::Func(CallableDef::Func(func))) = base.data(self.db) else {
+            return None;
+        };
+        Some(crate::ir::CodeRegionRoot {
+            origin: crate::ir::MirFunctionOrigin::Hir(*func),
+            generic_args: args.to_vec(),
+            symbol: None,
+        })
+    }
+
+    fn code_region_target_for_value(
+        &self,
+        function: &MirFunction<'db>,
+        value: crate::ValueId,
+        param_code_region_roots: &[Option<crate::ir::CodeRegionRoot<'db>>],
+    ) -> Option<crate::ir::CodeRegionRoot<'db>> {
+        self.code_region_target_from_param_local(function, value, param_code_region_roots)
+            .or_else(|| self.code_region_target_from_ty(function.body.value(value).ty))
+    }
+
+    fn code_region_target_from_param_local(
+        &self,
+        function: &MirFunction<'db>,
+        value: crate::ValueId,
+        param_code_region_roots: &[Option<crate::ir::CodeRegionRoot<'db>>],
+    ) -> Option<crate::ir::CodeRegionRoot<'db>> {
+        fn value_local<'db>(
+            body: &crate::MirBody<'db>,
+            value: crate::ValueId,
+        ) -> Option<crate::LocalId> {
+            match &body.value(value).origin {
+                crate::ValueOrigin::Local(local) | crate::ValueOrigin::PlaceRoot(local) => {
+                    Some(*local)
+                }
+                crate::ValueOrigin::TransparentCast { value } => value_local(body, *value),
+                _ => None,
+            }
+        }
+
+        let crate::ir::MirFunctionOrigin::Hir(hir_func) = function.origin else {
+            return value_local(&function.body, value)
+                .and_then(|local| {
+                    function
+                        .body
+                        .param_locals
+                        .iter()
+                        .position(|&param| param == local)
+                })
+                .and_then(|param_idx| param_code_region_roots.get(param_idx).cloned().flatten());
+        };
+        let local = value_local(&function.body, value)?;
+        let param_idx = function
+            .body
+            .param_locals
+            .iter()
+            .position(|&param| param == local)?;
+        if let Some(root) = param_code_region_roots.get(param_idx).cloned().flatten() {
+            return Some(root);
+        }
+        let mut folder = ParamSubstFolder {
+            args: &function.generic_args,
+        };
+        let param_ty = hir_func
+            .params(self.db)
+            .nth(param_idx)?
+            .ty(self.db)
+            .fold_with(self.db, &mut folder);
+        let scope =
+            crate::ty::normalization_scope_for_args(self.db, hir_func, &function.generic_args);
+        let assumptions = PredicateListId::empty_list(self.db);
+        self.code_region_target_from_ty(normalize_ty(self.db, param_ty, scope, assumptions))
+    }
+
     /// Produce a globally unique (yet mostly readable) symbol name per instance.
     fn mangled_name(
         &self,
@@ -1089,6 +1332,7 @@ impl<'db> Monomorphizer<'db> {
             crate::MirProjectionPath<'db>,
             AddressSpaceKind,
         )>],
+        param_code_region_roots: &[Option<crate::ir::CodeRegionRoot<'db>>],
     ) -> String {
         let receiver_space = canonicalize_receiver_space(receiver_space);
         let mut base = self.base_name_root_without_disambiguation(func, receiver_space);
@@ -1104,6 +1348,10 @@ impl<'db> Monomorphizer<'db> {
         let param_cap_suffix = param_capability_space_suffix(param_capability_space_overrides);
         if !param_cap_suffix.is_empty() {
             base = format!("{base}_{param_cap_suffix}");
+        }
+        let param_code_region_suffix = param_code_region_root_suffix(param_code_region_roots);
+        if !param_code_region_suffix.is_empty() {
+            base = format!("{base}_{param_code_region_suffix}");
         }
 
         if args.is_empty() {
@@ -1259,6 +1507,7 @@ impl<'db> Monomorphizer<'db> {
                 AddressSpaceKind::Calldata => "calldata",
                 AddressSpaceKind::Storage => "stor",
                 AddressSpaceKind::TransientStorage => "tstor",
+                AddressSpaceKind::ImmutableCode => "code",
             };
             base = format!("{base}_{suffix}");
         }
@@ -1449,6 +1698,46 @@ impl<'db> Monomorphizer<'db> {
         }
 
         self.normalize_param_capability_space_overrides(func, &overrides)
+    }
+
+    fn call_param_code_region_roots(
+        &self,
+        caller: &MirFunction<'db>,
+        caller_param_code_region_roots: &[Option<crate::ir::CodeRegionRoot<'db>>],
+        call: &CallOrigin<'db>,
+    ) -> ParamCodeRegionRoots<'db> {
+        let roots: Vec<_> = call
+            .args
+            .iter()
+            .map(|&arg| self.arg_code_region_root(caller, caller_param_code_region_roots, arg))
+            .collect();
+        if roots.iter().all(Option::is_none) {
+            Vec::new()
+        } else {
+            roots
+        }
+    }
+
+    fn arg_code_region_root(
+        &self,
+        caller: &MirFunction<'db>,
+        caller_param_code_region_roots: &[Option<crate::ir::CodeRegionRoot<'db>>],
+        value: crate::ValueId,
+    ) -> Option<crate::ir::CodeRegionRoot<'db>> {
+        match &caller.body.value(value).origin {
+            crate::ValueOrigin::FuncItem(root) => Some(root.clone()),
+            crate::ValueOrigin::TransparentCast { value } => {
+                self.arg_code_region_root(caller, caller_param_code_region_roots, *value)
+            }
+            crate::ValueOrigin::Local(local) | crate::ValueOrigin::PlaceRoot(local) => caller
+                .body
+                .param_locals
+                .iter()
+                .position(|&param| param == *local)
+                .and_then(|param_idx| caller_param_code_region_roots.get(param_idx).cloned())
+                .flatten(),
+            _ => None,
+        }
     }
 
     fn call_effect_param_space_overrides(
@@ -1698,6 +1987,33 @@ impl<'db> Monomorphizer<'db> {
             normalized
         }
     }
+
+    fn normalize_param_code_region_roots(
+        &self,
+        func: Func<'db>,
+        roots: &[Option<crate::ir::CodeRegionRoot<'db>>],
+    ) -> ParamCodeRegionRoots<'db> {
+        self.normalize_param_code_region_roots_for_len(func.params(self.db).count(), roots)
+    }
+
+    fn normalize_param_code_region_roots_for_len(
+        &self,
+        param_count: usize,
+        roots: &[Option<crate::ir::CodeRegionRoot<'db>>],
+    ) -> ParamCodeRegionRoots<'db> {
+        if roots.is_empty() || roots.iter().all(Option::is_none) {
+            return Vec::new();
+        }
+
+        let mut normalized = vec![None; param_count];
+        let len = std::cmp::min(param_count, roots.len());
+        normalized[..len].clone_from_slice(&roots[..len]);
+        if normalized.iter().all(Option::is_none) {
+            Vec::new()
+        } else {
+            normalized
+        }
+    }
 }
 
 /// Simple folder that replaces `TyParam` occurrences with the concrete args for
@@ -1782,6 +2098,7 @@ fn effect_param_space_suffix(spaces: &[Option<AddressSpaceKind>]) -> String {
                 AddressSpaceKind::Calldata => "calldata",
                 AddressSpaceKind::Storage => "stor",
                 AddressSpaceKind::TransientStorage => "tstor",
+                AddressSpaceKind::ImmutableCode => "code",
             };
             format!("eff{idx}_{suffix}")
         })
@@ -1823,9 +2140,27 @@ fn param_capability_space_suffix(
                     AddressSpaceKind::Calldata => "calldata",
                     AddressSpaceKind::Storage => "stor",
                     AddressSpaceKind::TransientStorage => "tstor",
+                    AddressSpaceKind::ImmutableCode => "code",
                 };
                 let path_suffix = projection_path_suffix(path);
                 format!("arg{param_idx}_{path_suffix}_{space_suffix}")
+            })
+        })
+        .collect::<Vec<_>>()
+        .join("_")
+}
+
+fn param_code_region_root_suffix(roots: &[Option<crate::ir::CodeRegionRoot<'_>>]) -> String {
+    roots
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, root)| {
+            root.as_ref().map(|root| {
+                let key = CodeRegionParamRootKey {
+                    origin: root.origin,
+                    generic_args: root.generic_args.clone(),
+                };
+                format!("arg{idx}_code_{:x}", stable_hash(&key))
             })
         })
         .collect::<Vec<_>>()

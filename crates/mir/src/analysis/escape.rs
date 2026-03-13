@@ -73,7 +73,7 @@ pub fn compute_ptr_escape_summaries<'db>(
         .map(|(idx, func)| (func.symbol_name.clone(), idx))
         .collect();
 
-    let call_graph = build_call_graph(&mir.functions);
+    let call_graph = build_call_graph(db, &mir.functions);
     let mut callers_by_callee = vec![Vec::new(); mir.functions.len()];
     for (caller, callees) in call_graph {
         let Some(&caller_idx) = symbol_to_idx.get(&caller) else {
@@ -747,6 +747,23 @@ fn terminator_may_escape_local<'db>(
                         && value_depends_on_local(body, value, local, local_depends, value_visiting)
                 })
             }
+            TerminatingCall::DeployRuntime {
+                runtime_offset,
+                runtime_len,
+                immutable_payload,
+            } => {
+                value_depends_on_local(body, *runtime_offset, local, local_depends, value_visiting)
+                    || value_depends_on_local(
+                        body,
+                        *runtime_len,
+                        local,
+                        local_depends,
+                        value_visiting,
+                    )
+                    || immutable_payload.is_some_and(|(ptr, _)| {
+                        value_depends_on_local(body, ptr, local, local_depends, value_visiting)
+                    })
+            }
         },
         Terminator::Return { .. }
         | Terminator::Goto { .. }
@@ -1332,6 +1349,23 @@ fn terminator_may_escape_local_value<'db>(
                     intrinsic_arg_may_escape(*op, idx)
                         && value_depends_on_local(body, value, local, local_depends, value_visiting)
                 })
+            }
+            TerminatingCall::DeployRuntime {
+                runtime_offset,
+                runtime_len,
+                immutable_payload,
+            } => {
+                value_depends_on_local(body, *runtime_offset, local, local_depends, value_visiting)
+                    || value_depends_on_local(
+                        body,
+                        *runtime_len,
+                        local,
+                        local_depends,
+                        value_visiting,
+                    )
+                    || immutable_payload.is_some_and(|(ptr, _)| {
+                        value_depends_on_local(body, ptr, local, local_depends, value_visiting)
+                    })
             }
         },
         Terminator::Return { .. }

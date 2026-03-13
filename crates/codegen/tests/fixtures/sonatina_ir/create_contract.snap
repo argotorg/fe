@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/create_contract.fe
 ---
@@ -28,35 +29,15 @@ func private %__Child_init() {
         v1.i256 = call %init_field__Evm_hef0af3106e109414_Pair_h956dff41e88ee341__18f2eb617f185785 0.i256;
         v2.i256 = sym_addr &__Child_runtime;
         v3.i256 = sym_size &__Child_runtime;
-        v4.i256 = sym_size .;
-        v5.i256 = evm_code_size;
-        v6.i1 = lt v5 v4;
-        br v6 block1 block2;
-
-    block1:
-        call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort;
-        evm_invalid;
-
-    block2:
-        v9.i256 = sub v5 v4;
-        v10.i256 = sub v5 v4;
-        v11.*i8 = evm_malloc v10;
-        v12.i256 = ptr_to_int v11 i256;
-        v13.i256 = sub v5 v4;
-        evm_code_copy v12 v4 v13;
-        v15.*i8 = evm_malloc 64.i256;
-        v16.*@__fe_MemoryBytes_2 = bitcast v15 *@__fe_MemoryBytes_2;
-        v17.*i256 = gep v16 0.i256 0.i256;
-        mstore v17 v12 i256;
-        v18.i256 = sub v5 v4;
-        v20.*i256 = gep v16 0.i256 1.i256;
-        mstore v20 v18 i256;
-        v21.*@__fe_SolDecoder_4 = call %sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b v16;
-        v22.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_MemoryBytes___a53dbc6192a658d6 v21;
-        v23.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_MemoryBytes___a53dbc6192a658d6 v21;
-        call %__Child_init_contract v22 v23 v1;
-        evm_code_copy 0.i256 v2 v3;
-        evm_return 0.i256 v3;
+        v4.*@__fe_MemoryBytes_2 = call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_init_input_arg1_code_9cb8a107945c4736______2439715d39cd513;
+        v5.*@__fe_SolDecoder_4 = call %sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b v4;
+        v6.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_MemoryBytes___a53dbc6192a658d6 v5;
+        v7.i256 = call %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_MemoryBytes___a53dbc6192a658d6 v5;
+        call %__Child_init_contract v6 v7 v1;
+        v8.*i8 = evm_malloc v3;
+        v9.i256 = ptr_to_int v8 i256;
+        evm_code_copy v9 v2 v3;
+        evm_return v9 v3;
 }
 
 func private %__Child_runtime() {
@@ -108,8 +89,10 @@ func private %__Factory_init() {
     block0:
         v0.i256 = sym_addr &__Factory_runtime;
         v1.i256 = sym_size &__Factory_runtime;
-        evm_code_copy 0.i256 v0 v1;
-        evm_return 0.i256 v1;
+        v2.*i8 = evm_malloc v1;
+        v3.i256 = ptr_to_int v2 i256;
+        evm_code_copy v3 v0 v1;
+        evm_return v3 v1;
 }
 
 func private %__Factory_runtime() {
@@ -141,9 +124,40 @@ func private %init_field__Evm_hef0af3106e109414_Pair_h956dff41e88ee341__18f2eb61
         return v2;
 }
 
-func private %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort() {
+func private %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_init_input_arg1_code_9cb8a107945c4736______2439715d39cd513() -> *@__fe_MemoryBytes_2 {
     block0:
+        v2.i256 = sym_addr &__Child_runtime;
+        v3.i256 = sym_size &__Child_runtime;
+        (v4.i256, v5.i1) = uaddo v2 v3;
+        br v5 block3 block4;
+
+    block1:
+        call %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort;
+        evm_invalid;
+
+    block2:
+        (v11.i256, v12.i1) = usubo v7 v4;
+        br v12 block3 block5;
+
+    block3:
         evm_revert 0.i256 0.i256;
+
+    block4:
+        v7.i256 = evm_code_size;
+        v8.i1 = call %u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt v7 v4;
+        br v8 block1 block2;
+
+    block5:
+        v13.*i8 = evm_malloc v11;
+        v14.i256 = ptr_to_int v13 i256;
+        evm_code_copy v14 v4 v11;
+        v17.*i8 = evm_malloc 64.i256;
+        v18.*@__fe_MemoryBytes_2 = bitcast v17 *@__fe_MemoryBytes_2;
+        v19.*i256 = gep v18 0.i256 0.i256;
+        mstore v19 v14 i256;
+        v21.*i256 = gep v18 0.i256 1.i256;
+        mstore v21 v11 i256;
+        return v18;
 }
 
 func private %sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v0.*@__fe_MemoryBytes_2) -> *@__fe_SolDecoder_4 {
@@ -179,6 +193,11 @@ func private %runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e
         v7.i256 = call %calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_word_at v1 0.i256;
         v8.i32 = call %sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_selector_from_prefix v7;
         return v8;
+}
+
+func private %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort() {
+    block0:
+        evm_revert 0.i256 0.i256;
 }
 
 func private %create_stor_arg0_root_stor__Evm_hef0af3106e109414_Child_hdfa2e9d62e9c9ad3__8303e18f50f8d8ed(v0.i256, v1.*@__fe_tuple_5) -> i256 {
@@ -323,6 +342,12 @@ func private %deploy2_ha2b981aa2f8bf9fd_decode_h624c3cd8c996d995_decode__SolDeco
         return v6;
 }
 
+func private %u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v0.i256, v1.i256) -> i1 {
+    block0:
+        v2.i1 = lt v0 v1;
+        return v2;
+}
+
 func private %soldecoder_i__ha12a03fcb5ba844b_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b(v0.*@__fe_MemoryBytes_2) -> *@__fe_SolDecoder_4 {
     block0:
         v1.*@__fe_Cursor_3 = call %cursor_i__h140a998c67d6d59c_new__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b v0;
@@ -409,12 +434,6 @@ func private %calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len(v0.i256
         evm_revert 0.i256 0.i256;
 
     block2:
-        return v2;
-}
-
-func private %u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v0.i256, v1.i256) -> i1 {
-    block0:
-        v2.i1 = lt v0 v1;
         return v2;
 }
 

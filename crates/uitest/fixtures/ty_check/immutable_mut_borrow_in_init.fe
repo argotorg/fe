@@ -1,0 +1,9 @@
+pub contract Counter {
+    value: u256
+
+    init(initial: u256) uses (value) {
+        let p = mut value
+        let _ = p
+        value = initial
+    }
+}

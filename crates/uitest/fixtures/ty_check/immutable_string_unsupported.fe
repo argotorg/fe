@@ -1,0 +1,7 @@
+contract BadImmutableString {
+    name: String<4>
+
+    init() uses (name) {
+        name = "abcd"
+    }
+}

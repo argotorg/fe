@@ -1,5 +1,5 @@
 use super::abi::{Abi, AbiEncoder, AbiSize, ByteInput, Encode}
-use super::effect_ref::StorPtr
+use super::effect_ref::{CodePtr, MemPtr, StorPtr}
 
 /// Host interface required by compiler-generated contract entrypoints.
 ///
@@ -18,6 +18,8 @@ pub trait ContractHost {
     fn init_field<T>(mut self, slot: u256) -> StorPtr<T> {
         self.field(slot)
     }
+    fn immutable_field<T>(self, offset: u256) -> CodePtr<T>
+    fn init_immutable_field<T>(mut self, offset: u256) -> MemPtr<T>
 
     fn create_contract<F>(mut self, runtime: F) -> !
     fn abort(self) -> !

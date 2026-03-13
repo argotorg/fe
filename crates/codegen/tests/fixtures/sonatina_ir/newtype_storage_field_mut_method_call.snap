@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 64
 expression: output
 input_file: crates/codegen/tests/fixtures/newtype_storage_field_mut_method_call.fe
 ---
@@ -43,8 +44,10 @@ func private %__NewtypeStorageFieldMutMethodCall_init() {
         v4.i256 = sym_addr &__NewtypeStorageFieldMutMethodCall_runtime;
         v5.i256 = sym_size &__NewtypeStorageFieldMutMethodCall_runtime;
         call %__NewtypeStorageFieldMutMethodCall_init_contract;
-        evm_code_copy 0.i256 v4 v5;
-        evm_return 0.i256 v5;
+        v6.*i8 = evm_malloc v5;
+        v7.i256 = ptr_to_int v6 i256;
+        evm_code_copy v7 v4 v5;
+        evm_return v7 v5;
 }
 
 func private %__NewtypeStorageFieldMutMethodCall_runtime() {

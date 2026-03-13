@@ -115,7 +115,7 @@ fn emit_lowered_module_yul_with_layout(
     module: &MirModule<'_>,
     layout: TargetDataLayout,
 ) -> Result<String, EmitModuleError> {
-    let contract_graph = build_contract_graph(&module.functions);
+    let contract_graph = build_contract_graph(db, &module.functions);
 
     let mut code_regions = FxHashMap::default();
     for (name, entry) in &contract_graph.contracts {
@@ -234,7 +234,7 @@ fn emit_lowered_module_yul_with_layout(
     }
 
     // Free-function code regions not tied to contract entrypoints.
-    let call_graph = build_call_graph(&module.functions);
+    let call_graph = build_call_graph(db, &module.functions);
     for root in code_region_roots {
         if contract_graph.symbol_to_region.contains_key(&root) {
             continue;
@@ -258,6 +258,7 @@ fn emit_lowered_module_yul_with_layout(
                 }
             }
         }
+        prepend_code_load_helper(&mut region_docs);
         let mut components = vec![YulDoc::block("code ", region_docs)];
         components.extend(emit_data_sections(&data_regions));
         docs.push(YulDoc::block(format!("object \"{label}\" "), components));
@@ -278,6 +279,7 @@ fn emit_lowered_module_yul_with_layout(
         for (func_docs, _) in function_docs {
             docs.extend(func_docs);
         }
+        prepend_code_load_helper(&mut docs);
         // If there are data regions but no contract objects, we need to wrap in an object
         if !all_data_regions.is_empty() {
             let mut components = vec![YulDoc::block("code ", docs)];
@@ -314,7 +316,7 @@ pub fn emit_test_module_yul_with_layout(
     link_yul_checked_arithmetic_helpers(db, &mut module)?;
     prepare_module_for_evm_yul_codegen(db, &mut module);
 
-    let contract_graph = build_contract_graph(&module.functions);
+    let contract_graph = build_contract_graph(db, &module.functions);
 
     let mut code_regions = FxHashMap::default();
     for (name, entry) in &contract_graph.contracts {
@@ -368,7 +370,7 @@ pub fn emit_test_module_yul_with_layout(
         );
     }
 
-    let call_graph = build_call_graph(&module.functions);
+    let call_graph = build_call_graph(db, &module.functions);
 
     let mut tests = collect_test_infos(db, &module.functions);
     if tests.is_empty() {
@@ -627,7 +629,7 @@ fn link_yul_checked_arithmetic_helpers<'db>(
     let mut num_yul_module =
         lower_module(db, num_yul_top_mod).map_err(EmitModuleError::MirLower)?;
     rewrite_checked_calls(db, &mut num_yul_module)?;
-    let num_yul_call_graph = build_call_graph(&num_yul_module.functions);
+    let num_yul_call_graph = build_call_graph(db, &num_yul_module.functions);
 
     let mut required_symbols = FxHashSet::default();
     for helper in &required_helpers {
@@ -1113,6 +1115,7 @@ fn emit_code_region_docs(
                 }
             }
         }
+        prepend_code_load_helper(&mut region_docs);
         let mut components = vec![YulDoc::block("code ", region_docs)];
         components.extend(emit_data_sections(&data_regions));
         docs.push(YulDoc::block(format!("object \"{label}\" "), components));
@@ -1152,6 +1155,7 @@ fn emit_test_object(
             }
         }
     }
+    prepend_code_load_helper(&mut runtime_docs);
 
     let total_param_count = test.value_param_count + test.effect_param_count;
     let call_args = format_call_args(total_param_count);
@@ -1204,6 +1208,36 @@ fn format_call_args(count: usize) -> String {
         .join(", ")
 }
 
+fn code_load_helper_doc() -> YulDoc {
+    YulDoc::block(
+        "function __fe_code_load(off) -> out ",
+        vec![
+            YulDoc::line("let p := mload(0x40)"),
+            YulDoc::line("codecopy(p, off, 0x20)"),
+            YulDoc::line("out := mload(p)"),
+        ],
+    )
+}
+
+fn prepend_code_load_helper(docs: &mut Vec<YulDoc>) {
+    if !docs_use_code_load(docs) {
+        return;
+    }
+    docs.insert(0, YulDoc::line(String::new()));
+    docs.insert(0, code_load_helper_doc());
+}
+
+fn docs_use_code_load(docs: &[YulDoc]) -> bool {
+    docs.iter().any(doc_uses_code_load)
+}
+
+fn doc_uses_code_load(doc: &YulDoc) -> bool {
+    match doc {
+        YulDoc::Line(text) => text.contains("__fe_code_load("),
+        YulDoc::Block { body, .. } | YulDoc::WideBlock { body, .. } => docs_use_code_load(body),
+    }
+}
+
 /// Emits the contract init object and its direct region dependencies.
 ///
 /// * `name` - Contract name to emit.
@@ -1236,6 +1270,7 @@ fn emit_contract_init_object(
         let symbol = prefix_yul_name(symbol);
         init_docs.push(YulDoc::line(format!("{symbol}()")));
     }
+    prepend_code_load_helper(&mut init_docs);
     components.push(YulDoc::block("code ", init_docs));
 
     // Always emit the deployed object (if present) for the contract itself.
@@ -1305,6 +1340,7 @@ fn emit_contract_deployed_object(
     let symbol = prefix_yul_name(symbol);
     runtime_docs.push(YulDoc::line(format!("{symbol}()")));
     runtime_docs.push(YulDoc::line("return(0, 0)"));
+    prepend_code_load_helper(&mut runtime_docs);
 
     let mut components = vec![YulDoc::block("code ", runtime_docs)];
 

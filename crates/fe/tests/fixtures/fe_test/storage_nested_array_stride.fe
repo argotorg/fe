@@ -9,7 +9,7 @@ msg StrideMsg {
 }
 
 pub contract NestedStorageArrayStride {
-    data: [[u256; 2]; 2]
+    mut data: [[u256; 2]; 2]
 
     init() uses (mut data) {
         data[0][0] = 1

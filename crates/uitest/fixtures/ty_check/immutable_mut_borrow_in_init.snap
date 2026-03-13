@@ -1,0 +1,14 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/immutable_mut_borrow_in_init.fe
+---
+error[8-0066]: mutable borrow requires a mutable place
+  ┌─ immutable_mut_borrow_in_init.fe:5:17
+  │
+2 │     value: u256
+  │     ----- try changing to `mut value`
+  ·
+5 │         let p = mut value
+  │                 ^^^^^^^^^ cannot borrow as `mut`

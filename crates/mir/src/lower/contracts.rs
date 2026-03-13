@@ -7,7 +7,6 @@ use common::{
     indexmap::IndexMap,
     ingot::{Ingot, IngotKind},
 };
-use hir::hir_def::params::FuncParamMode;
 use hir::{
     analysis::{
         HirAnalysisDb,
@@ -18,19 +17,19 @@ use hir::{
         },
     },
     hir_def::{Func, Trait, scope_graph::ScopeId},
-    semantic::{EffectBinding, EffectSource, RecvArmView},
+    semantic::{ContractFieldInfo, ContractFieldKind, EffectBinding, EffectSource, RecvArmView},
 };
 use hir::{
     analysis::{
         diagnostics::SpannedHirAnalysisDb,
         ty::{
-            ty_check::{LocalBinding, ParamSite, PatBindingMode},
+            ty_check::{EffectParamSite, LocalBinding, ParamSite, PatBindingMode},
             ty_def::InvalidCause,
         },
     },
     hir_def::{
         CallableDef, Contract, HirIngot, IdentId, PathId, TopLevelMod,
-        expr::{ArithBinOp, BinOp, CompBinOp},
+        expr::{ArithBinOp, BinOp},
     },
 };
 use num_bigint::BigUint;
@@ -109,10 +108,10 @@ fn lower_single_contract<'db>(
     let symbols = ContractSymbols::with_prefix(db, contract, ingot_prefix);
     let core_lib = CoreLib::new(db, contract.scope());
 
-    let slot_offsets = contract
+    let field_layout = contract
         .field_layout(db)
         .values()
-        .map(|field| BigUint::from(field.slot_offset))
+        .cloned()
         .collect::<Vec<_>>();
 
     // User-body handlers first (so entrypoints can call them by symbol).
@@ -139,7 +138,7 @@ fn lower_single_contract<'db>(
         target,
         &symbols,
         &core_lib,
-        &slot_offsets,
+        &field_layout,
     )?);
     out.push(lower_runtime_entrypoint(
         db,
@@ -147,7 +146,7 @@ fn lower_single_contract<'db>(
         target,
         &symbols,
         &core_lib,
-        &slot_offsets,
+        &field_layout,
     )?);
     out.push(lower_init_code_offset(db, contract, &symbols)?);
     out.push(lower_init_code_len(db, contract, &symbols)?);
@@ -215,6 +214,9 @@ struct TargetHostContext<'db> {
     effect_handle_from_raw_fn: Func<'db>,
     field_fn: Func<'db>,
     init_field_fn: Func<'db>,
+    init_input_fn: Func<'db>,
+    immutable_field_fn: Func<'db>,
+    init_immutable_field_fn: Func<'db>,
     runtime_selector_fn: Func<'db>,
     runtime_decoder_fn: Func<'db>,
     return_value_fn: Func<'db>,
@@ -288,6 +290,11 @@ impl<'db> TargetHostContext<'db> {
 
         let host_field = require_trait_method(db, contract_host_trait, "field")?;
         let host_init_field = require_trait_method(db, contract_host_trait, "init_field")?;
+        let host_init_input = require_trait_method(db, contract_host_trait, "init_input")?;
+        let host_immutable_field =
+            require_trait_method(db, contract_host_trait, "immutable_field")?;
+        let host_init_immutable_field =
+            require_trait_method(db, contract_host_trait, "init_immutable_field")?;
         let host_runtime_selector =
             require_trait_method(db, contract_host_trait, "runtime_selector")?;
         let host_runtime_decoder =
@@ -305,6 +312,9 @@ impl<'db> TargetHostContext<'db> {
             effect_handle_from_raw_fn: effect_handle_from_raw,
             field_fn: host_field,
             init_field_fn: host_init_field,
+            init_input_fn: host_init_input,
+            immutable_field_fn: host_immutable_field,
+            init_immutable_field_fn: host_init_immutable_field,
             runtime_selector_fn: host_runtime_selector,
             runtime_decoder_fn: host_runtime_decoder,
             return_value_fn: host_return_value,
@@ -557,6 +567,22 @@ impl<'db, 'a> ContractMirCx<'db, 'a> {
         )
     }
 
+    fn host_init_input(
+        &self,
+        root_value: ValueId,
+        runtime_value: ValueId,
+        runtime_ty: TyId<'db>,
+    ) -> CallOrigin<'db> {
+        let mut generic_args = self.host.contract_host_inst.args(self.db).to_vec();
+        generic_args.push(runtime_ty);
+        self.call_hir(
+            CallableDef::Func(self.host.init_input_fn),
+            generic_args,
+            Some(self.host.contract_host_inst),
+            vec![root_value, runtime_value],
+        )
+    }
+
     fn abi_decoder_new(&self, input_value: ValueId, input_ty: TyId<'db>) -> CallOrigin<'db> {
         let mut generic_args = self.abi.abi_inst.args(self.db).to_vec();
         generic_args.push(input_ty);
@@ -626,25 +652,54 @@ impl<'db, 'a> ContractMirCx<'db, 'a> {
     fn emit_field_providers(
         &self,
         builder: &mut BodyBuilder<'db>,
-        contract: Contract<'db>,
-        slot_offsets: &[BigUint],
+        field_layout: &[ContractFieldInfo<'db>],
         root_value: ValueId,
         host_field_func: Func<'db>,
+        host_immutable_field_func: Func<'db>,
+        immutable_base: Option<ValueId>,
     ) -> Vec<ValueId> {
         let u256_ty = TyId::u256(self.db);
 
-        contract
-            .fields(self.db)
+        field_layout
             .iter()
             .enumerate()
-            .map(|(idx, (_, field))| {
-                let slot = slot_offsets
-                    .get(idx)
-                    .cloned()
-                    .unwrap_or_else(|| BigUint::from(0u8));
-                let slot_value = builder.const_int_value(u256_ty, slot);
+            .map(|(idx, field)| {
+                let slot_value = match field.kind {
+                    ContractFieldKind::MutableStorage => builder.const_int_value(
+                        u256_ty,
+                        BigUint::from(
+                            field
+                                .storage_layout()
+                                .map_or(0, |layout| layout.slot_offset),
+                        ),
+                    ),
+                    ContractFieldKind::ImmutableCode => {
+                        let byte_offset = field
+                            .immutable_layout()
+                            .map_or(0, |layout| layout.byte_offset);
+                        let offset_value =
+                            builder.const_int_value(u256_ty, BigUint::from(byte_offset));
+                        if let Some(base) = immutable_base {
+                            builder.alloc_value(
+                                u256_ty,
+                                ValueOrigin::Binary {
+                                    op: BinOp::Arith(ArithBinOp::Add),
+                                    lhs: base,
+                                    rhs: offset_value,
+                                },
+                                ValueRepr::Word,
+                            )
+                        } else {
+                            offset_value
+                        }
+                    }
+                };
+                let host_func = match field.kind {
+                    ContractFieldKind::MutableStorage => host_field_func,
+                    ContractFieldKind::ImmutableCode => host_immutable_field_func,
+                };
                 let call = self.field_value_call(
-                    host_field_func,
+                    host_func,
                     root_value,
                     slot_value,
                     field.declared_ty,
@@ -672,9 +727,9 @@ impl<'db, 'a> ContractMirCx<'db, 'a> {
         for effect in effects {
             match effect.source {
                 EffectSource::Root => out.push(zero_u256),
-                EffectSource::Field(field_idx) => out.push(
+                EffectSource::Field(field) => out.push(
                     field_values
-                        .get(field_idx as usize)
+                        .get(field.field.index as usize)
                         .copied()
                         .unwrap_or(zero_u256),
                 ),
@@ -1059,7 +1114,6 @@ fn seed_effect_param_locals<'db>(
     effects: &[EffectBinding<'db>],
     core: &CoreLib<'db>,
 ) {
-    let fields = contract.fields(db);
     for effect in effects {
         let name = effect.binding_name.data(db).to_string();
         let binding = match effect.source {
@@ -1069,30 +1123,35 @@ fn seed_effect_param_locals<'db>(
                 key_path: effect.binding_path,
                 is_mut: effect.is_mut,
             },
-            EffectSource::Field(field_idx) => {
-                let ty = fields
-                    .get_index(field_idx as usize)
-                    .map(|(_, field)| field.target_ty)
-                    .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other));
-                LocalBinding::Param {
-                    site: ParamSite::EffectField(effect.binding_site),
-                    idx: effect.binding_idx as usize,
-                    mode: FuncParamMode::View,
-                    ty,
-                    is_mut: effect.is_mut,
-                }
-            }
+            EffectSource::Field(field) => LocalBinding::ContractField {
+                site: effect.binding_site,
+                effect_idx: effect.binding_idx as usize,
+                contract,
+                field_idx: field.field.index,
+                name: field.field.name,
+                kind: field.field.kind,
+                ty: field.field.target_ty,
+                access: field.access,
+            },
         };
 
         let addr_space = match effect.source {
             EffectSource::Root => AddressSpaceKind::Storage,
-            EffectSource::Field(field_idx) => match fields.get_index(field_idx as usize) {
-                Some((_, field)) if field.is_provider => {
-                    repr::effect_provider_space_for_ty(db, core, field.declared_ty)
-                        .unwrap_or(AddressSpaceKind::Storage)
+            EffectSource::Field(field)
+                if matches!(field.field.kind, ContractFieldKind::ImmutableCode) =>
+            {
+                match effect.binding_site {
+                    EffectParamSite::ContractInit { .. } => AddressSpaceKind::Memory,
+                    EffectParamSite::Contract(_) => AddressSpaceKind::ImmutableCode,
+                    EffectParamSite::ContractRecvArm { .. } => AddressSpaceKind::ImmutableCode,
+                    EffectParamSite::Func(_) => AddressSpaceKind::ImmutableCode,
                 }
-                _ => AddressSpaceKind::Storage,
-            },
+            }
+            EffectSource::Field(field) if field.field.is_provider => {
+                repr::effect_provider_space_for_ty(db, core, field.field.declared_ty)
+                    .unwrap_or(AddressSpaceKind::Storage)
+            }
+            EffectSource::Field(_) => AddressSpaceKind::Storage,
         };
 
         builder.seed_synthetic_effect_param_local(name, binding, addr_space);
@@ -1105,7 +1164,7 @@ fn lower_init_entrypoint<'db>(
     target: &TargetContext<'db>,
     symbols: &ContractSymbols,
     core: &CoreLib<'db>,
-    slot_offsets: &[BigUint],
+    field_layout: &[ContractFieldInfo<'db>],
 ) -> MirLowerResult<MirFunction<'db>> {
     let contract_fn = ContractFunction {
         contract_name: symbols.contract_name.clone(),
@@ -1120,12 +1179,34 @@ fn lower_init_entrypoint<'db>(
     let root_value = builder.unit_value(target.host.root_effect_ty);
     let zero_u256 = builder.const_int_value(TyId::u256(db), BigUint::from(0u8));
 
+    let immutable_bytes = immutable_payload_len_bytes(field_layout);
+    let immutable_base = if immutable_bytes == 0 {
+        None
+    } else {
+        let len = builder.const_int_value(TyId::u256(db), BigUint::from(immutable_bytes));
+        Some(
+            builder
+                .assign_to_new_local(
+                    "immutable_base",
+                    TyId::u256(db),
+                    false,
+                    AddressSpaceKind::Memory,
+                    ValueRepr::Word,
+                    Rvalue::Intrinsic {
+                        op: IntrinsicOp::Alloc,
+                        args: vec![len],
+                    },
+                )
+                .value,
+        )
+    };
     let field_values = cx.emit_field_providers(
         &mut builder,
-        contract,
-        slot_offsets,
+        field_layout,
         root_value,
         target.host.init_field_fn,
+        target.host.init_immutable_field_fn,
+        immutable_base,
     );
 
     // Code region queries for the runtime entrypoint are shared by init-input decoding and
@@ -1138,6 +1219,7 @@ fn lower_init_entrypoint<'db>(
             symbol: None,
         },
     );
+    let runtime_func_item_ty = builder.body.value(runtime_func_item).ty;
     let runtime_offset = cx.assign_runtime_local(
         &mut builder,
         "runtime_offset",
@@ -1167,89 +1249,18 @@ fn lower_init_entrypoint<'db>(
         let init_args_ty = contract.init_args_ty(db);
         let mut decoded_params = Vec::new();
         if !abi_payload_is_empty(db, init_args_ty) {
-            let args_offset_value = cx.assign_runtime_local(
-                &mut builder,
-                "init_code_len",
-                TyId::u256(db),
-                false,
-                AddressSpaceKind::Memory,
-                Rvalue::Intrinsic {
-                    op: IntrinsicOp::CurrentCodeRegionLen,
-                    args: Vec::new(),
-                },
-            );
-            let code_size = cx.assign_runtime_local(
-                &mut builder,
-                "code_size",
-                TyId::u256(db),
-                false,
-                AddressSpaceKind::Memory,
-                Rvalue::Intrinsic {
-                    op: IntrinsicOp::Codesize,
-                    args: Vec::new(),
-                },
-            );
-            let cond_value = builder.alloc_value(
-                TyId::bool(db),
-                ValueOrigin::Binary {
-                    op: BinOp::Comp(CompBinOp::Lt),
-                    lhs: code_size,
-                    rhs: args_offset_value,
-                },
-                ValueRepr::Word,
-            );
-
-            let abort_block = builder.make_block();
-            let cont_block = builder.make_block();
-            builder.branch(cond_value, abort_block, cont_block);
-
-            builder.move_to_block(abort_block);
-            builder.terminate_current(Terminator::TerminatingCall {
-                source: crate::ir::SourceInfoId::SYNTHETIC,
-                call: TerminatingCall::Call(cx.host_abort(root_value)),
-            });
-
-            builder.move_to_block(cont_block);
-            let args_len_value = builder.alloc_value(
-                TyId::u256(db),
-                ValueOrigin::Binary {
-                    op: BinOp::Arith(ArithBinOp::Sub),
-                    lhs: code_size,
-                    rhs: args_offset_value,
-                },
-                ValueRepr::Word,
-            );
-            let args_ptr_value = cx.assign_runtime_local(
-                &mut builder,
-                "args_ptr",
-                TyId::u256(db),
-                false,
-                AddressSpaceKind::Memory,
-                Rvalue::Intrinsic {
-                    op: IntrinsicOp::Alloc,
-                    args: vec![args_len_value],
-                },
-            );
-            builder.assign(
-                None,
-                Rvalue::Intrinsic {
-                    op: IntrinsicOp::Codecopy,
-                    args: vec![args_ptr_value, args_offset_value, args_len_value],
-                },
-            );
-
             let input_value = cx.assign_runtime_local(
                 &mut builder,
                 "input",
                 target.host.init_input_ty,
                 false,
                 AddressSpaceKind::Memory,
-                Rvalue::Alloc {
-                    address_space: AddressSpaceKind::Memory,
-                },
+                Rvalue::Call(cx.host_init_input(
+                    root_value,
+                    runtime_func_item,
+                    runtime_func_item_ty,
+                )),
             );
-            builder.store_field(input_value, 0, args_ptr_value);
-            builder.store_field(input_value, 1, args_len_value);
 
             let decoder_value = cx.assign_runtime_local(
                 &mut builder,
@@ -1286,36 +1297,21 @@ fn lower_init_entrypoint<'db>(
             None,
             Rvalue::Call(cx.call_symbol(symbols.init_handler.clone(), decoded_params, effect_args)),
         );
-
-        // Inline `ContractHost::create_contract` semantics.
-        builder.assign(
-            None,
-            Rvalue::Intrinsic {
-                op: IntrinsicOp::Codecopy,
-                args: vec![zero_u256, runtime_offset, runtime_len],
-            },
-        );
         builder.terminate_current(Terminator::TerminatingCall {
             source: crate::ir::SourceInfoId::SYNTHETIC,
-            call: TerminatingCall::Intrinsic {
-                op: IntrinsicOp::ReturnData,
-                args: vec![zero_u256, runtime_len],
+            call: TerminatingCall::DeployRuntime {
+                runtime_offset,
+                runtime_len,
+                immutable_payload: immutable_base.map(|base| (base, immutable_bytes)),
             },
         });
     } else {
-        // No init block: just return the runtime region.
-        builder.assign(
-            None,
-            Rvalue::Intrinsic {
-                op: IntrinsicOp::Codecopy,
-                args: vec![zero_u256, runtime_offset, runtime_len],
-            },
-        );
         builder.terminate_current(Terminator::TerminatingCall {
             source: crate::ir::SourceInfoId::SYNTHETIC,
-            call: TerminatingCall::Intrinsic {
-                op: IntrinsicOp::ReturnData,
-                args: vec![zero_u256, runtime_len],
+            call: TerminatingCall::DeployRuntime {
+                runtime_offset,
+                runtime_len,
+                immutable_payload: None,
             },
         });
     }
@@ -1342,7 +1338,7 @@ fn lower_runtime_entrypoint<'db>(
     target: &TargetContext<'db>,
     symbols: &ContractSymbols,
     core: &CoreLib<'db>,
-    slot_offsets: &[BigUint],
+    field_layout: &[ContractFieldInfo<'db>],
 ) -> MirLowerResult<MirFunction<'db>> {
     let contract_fn = ContractFunction {
         contract_name: symbols.contract_name.clone(),
@@ -1357,12 +1353,41 @@ fn lower_runtime_entrypoint<'db>(
     let root_value = builder.unit_value(target.host.root_effect_ty);
     let zero_u256 = builder.const_int_value(TyId::u256(db), BigUint::from(0u8));
 
+    let immutable_bytes = immutable_payload_len_bytes(field_layout);
+    let immutable_base = if immutable_bytes == 0 {
+        None
+    } else {
+        let code_size = builder
+            .assign_to_new_local(
+                "code_size",
+                TyId::u256(db),
+                false,
+                AddressSpaceKind::Memory,
+                ValueRepr::Word,
+                Rvalue::Intrinsic {
+                    op: IntrinsicOp::Codesize,
+                    args: Vec::new(),
+                },
+            )
+            .value;
+        let imm_len = builder.const_int_value(TyId::u256(db), BigUint::from(immutable_bytes));
+        Some(builder.alloc_value(
+            TyId::u256(db),
+            ValueOrigin::Binary {
+                op: BinOp::Arith(ArithBinOp::Sub),
+                lhs: code_size,
+                rhs: imm_len,
+            },
+            ValueRepr::Word,
+        ))
+    };
     let field_values = cx.emit_field_providers(
         &mut builder,
-        contract,
-        slot_offsets,
+        field_layout,
         root_value,
         target.host.field_fn,
+        target.host.immutable_field_fn,
+        immutable_base,
     );
     let needs_runtime_decoder = contract.recv_views(db).any(|recv| {
         recv.arms(db)
@@ -1482,6 +1507,15 @@ fn lower_runtime_entrypoint<'db>(
         receiver_space: None,
         defer_root: false,
     })
+}
+
+fn immutable_payload_len_bytes<'db>(field_layout: &[ContractFieldInfo<'db>]) -> usize {
+    field_layout
+        .iter()
+        .filter_map(|field| field.immutable_layout())
+        .map(|layout| layout.byte_offset.saturating_add(layout.byte_len))
+        .max()
+        .unwrap_or(0)
 }
 
 fn lower_init_code_offset<'db>(

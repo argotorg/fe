@@ -130,11 +130,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                         .is_some_and(|func| extract_contract_function(self.db, func).is_some())
                         && matches!(
                             binding,
-                            LocalBinding::EffectParam { .. }
-                                | LocalBinding::Param {
-                                    site: ParamSite::EffectField(_),
-                                    ..
-                                }
+                            LocalBinding::EffectParam { .. } | LocalBinding::ContractField { .. }
                         )
                     {
                         // TODO: document/enforce this rule:

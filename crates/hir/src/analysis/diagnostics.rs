@@ -8,8 +8,8 @@ use crate::analysis::{
     name_resolution::diagnostics::{ImportDiag, PathResDiag},
     ty::{
         diagnostics::{
-            BodyDiag, DefConflictError, FuncBodyDiag, ImplDiag, TraitConstraintDiag,
-            TraitLowerDiag, TyDiagCollection, TyLowerDiag,
+            BodyDiag, DefConflictError, FuncBodyDiag, ImplDiag, MutabilitySuggestion,
+            TraitConstraintDiag, TraitLowerDiag, TyDiagCollection, TyLowerDiag,
         },
         trait_def::TraitInstId,
         ty_check::{EffectParamOwner, RecordLike},
@@ -1626,6 +1626,35 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 }
             }
 
+            Self::ContractFieldEffectNameCollision {
+                field,
+                effect,
+                name,
+            } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: format!(
+                    "contract field `{}` conflicts with a named contract effect",
+                    name.data(db)
+                ),
+                sub_diagnostics: vec![
+                    SubDiagnostic::new(
+                        LabelStyle::Primary,
+                        "named contract effect declared here".to_string(),
+                        effect.resolve(db),
+                    ),
+                    SubDiagnostic::new(
+                        LabelStyle::Secondary,
+                        "field with the same name declared here".to_string(),
+                        field.resolve(db),
+                    ),
+                ],
+                notes: vec![
+                    "note: contract fields and named contract effects share one namespace"
+                        .to_string(),
+                ],
+                error_code,
+            },
+
             Self::InvalidConstParamTy(span) => CompleteDiagnostic {
                 severity: Severity::Error,
                 message: "invalid const parameter type".to_string(),
@@ -2309,6 +2338,57 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
 
+            Self::ImmutableFieldCannotBeMutEffect { owner, idx, field } => {
+                let span = owner.effect_param_path_span(db, *idx).resolve(db);
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "immutable field effect cannot be mutable".to_string(),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!(
+                            "`{}` is immutable; remove `mut` from this effect binding",
+                            field.data(db)
+                        ),
+                        span,
+                    }],
+                    notes: vec![
+                        "immutable contract fields are readable in `uses (...)` but writable only inside `init`".to_string(),
+                    ],
+                    error_code,
+                }
+            }
+
+            Self::ImmutableContractMissingInit { primary } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "immutable fields require `init`".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "add an `init(...)` block to assign immutable fields".to_string(),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![],
+                error_code,
+            },
+
+            Self::ImmutableFieldUnsupportedType { primary, field, ty } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "unsupported immutable field type".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "immutable field `{}` has unsupported type `{}`",
+                        field.data(db),
+                        ty.pretty_print(db)
+                    ),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![
+                    "immutable fields currently support only fixed-size aggregate and scalar types"
+                        .to_string(),
+                ],
+                error_code,
+            },
+
             Self::MissingEffect { primary, func, key } => {
                 let func_name = func
                     .name(db)
@@ -2759,10 +2839,18 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     span: primary.resolve(db),
                 }];
 
-                if let Some((name, span)) = binding {
+                if let Some(binding) = binding {
+                    let (message, span) = match binding {
+                        MutabilitySuggestion::LetBinding { name, span } => {
+                            (format!("try changing to `let mut {}`", name.data(db)), span)
+                        }
+                        MutabilitySuggestion::BindingDecl { name, span } => {
+                            (format!("try changing to `mut {}`", name.data(db)), span)
+                        }
+                    };
                     sub_diagnostics.push(SubDiagnostic {
                         style: LabelStyle::Secondary,
-                        message: format!("try changing to `let mut {}`", name.data(db)),
+                        message,
                         span: span.resolve(db),
                     });
                 }

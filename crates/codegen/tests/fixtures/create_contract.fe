@@ -14,7 +14,7 @@ pub struct Pair {
 }
 
 pub contract Child {
-    state: Pair
+    mut state: Pair
 
     init(x: u256, y: u256) uses (mut state) {
         state.x = x

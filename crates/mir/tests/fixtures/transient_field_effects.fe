@@ -10,7 +10,7 @@ fn bump_lock() uses (lock: mut u256) {
 }
 
 pub contract Guard {
-    lock: TStorPtr<u256>
+    mut lock: TStorPtr<u256>
 
     init() uses (mut lock) {
         lock = 0

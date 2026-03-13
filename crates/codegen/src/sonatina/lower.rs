@@ -1052,6 +1052,7 @@ fn lower_value_origin<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                     AddressSpaceKind::Storage | AddressSpaceKind::TransientStorage => {
                         field_ptr.offset_bytes / 32
                     }
+                    AddressSpaceKind::ImmutableCode => field_ptr.offset_bytes,
                     AddressSpaceKind::Memory => unreachable!(),
                 };
                 let offset_val = ctx.fb.make_imm_value(I256::from(offset as u64));
@@ -1313,6 +1314,10 @@ fn lower_intrinsic<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                 "code region intrinsics require 1 argument".to_string(),
             ));
         };
+        let mut func_item = *func_item;
+        while let mir::ValueOrigin::TransparentCast { value } = &ctx.body.value(func_item).origin {
+            func_item = *value;
+        }
         let value_data = ctx
             .body
             .values
@@ -2209,6 +2214,12 @@ fn load_from_terminal<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             let loaded = apply_from_word(ctx.fb, ctx.db, raw, loaded_ty, ctx.is);
             Ok(coerce_value_to_type(ctx, loaded, expected_runtime_ty))
         }
+        AddressSpaceKind::ImmutableCode => {
+            let word_addr = terminal.word_addr(ctx);
+            let raw = load_code_word(ctx, word_addr);
+            let loaded = apply_from_word(ctx.fb, ctx.db, raw, loaded_ty, ctx.is);
+            Ok(coerce_value_to_type(ctx, loaded, expected_runtime_ty))
+        }
     }
 }
 
@@ -2854,6 +2865,55 @@ pub(super) fn lower_terminator<'db, C: sonatina_ir::func_cursor::FuncCursor>(
                     }
                 }
             }
+            mir::TerminatingCall::DeployRuntime {
+                runtime_offset,
+                runtime_len,
+                immutable_payload,
+            } => {
+                let runtime_offset = lower_value(ctx, *runtime_offset)?;
+                let runtime_len = lower_value(ctx, *runtime_len)?;
+                let total_len =
+                    if let Some((_, len)) = immutable_payload.filter(|(_, len)| *len > 0) {
+                        let imm_len = ctx.fb.make_imm_value(I256::from(len as u64));
+                        ctx.fb
+                            .insert_inst(Add::new(ctx.is, runtime_len, imm_len), Type::I256)
+                    } else {
+                        runtime_len
+                    };
+                let out = emit_evm_malloc_word_addr(ctx.fb, total_len, ctx.is);
+                ctx.fb.insert_inst_no_result(EvmCodeCopy::new(
+                    ctx.is,
+                    out,
+                    runtime_offset,
+                    runtime_len,
+                ));
+
+                if let Some((immutable_ptr, immutable_len)) =
+                    immutable_payload.filter(|(_, len)| *len > 0)
+                {
+                    let immutable_ptr = lower_value(ctx, immutable_ptr)?;
+                    let runtime_dst = ctx
+                        .fb
+                        .insert_inst(Add::new(ctx.is, out, runtime_len), Type::I256);
+                    for byte_off in (0..immutable_len).step_by(32) {
+                        let byte_off = ctx.fb.make_imm_value(I256::from(byte_off as u64));
+                        let src = ctx
+                            .fb
+                            .insert_inst(Add::new(ctx.is, immutable_ptr, byte_off), Type::I256);
+                        let dst = ctx
+                            .fb
+                            .insert_inst(Add::new(ctx.is, runtime_dst, byte_off), Type::I256);
+                        let word = ctx
+                            .fb
+                            .insert_inst(Mload::new(ctx.is, src, Type::I256), Type::I256);
+                        ctx.fb
+                            .insert_inst_no_result(Mstore::new(ctx.is, dst, word, Type::I256));
+                    }
+                }
+
+                ctx.fb
+                    .insert_inst_no_result(EvmReturn::new(ctx.is, out, total_len));
+            }
         },
         Terminator::Unreachable { .. } => {
             // Emit INVALID opcode (0xFE) - this consumes all gas and reverts
@@ -2981,6 +3041,11 @@ fn store_word_to_place<'db, C: sonatina_ir::func_cursor::FuncCursor>(
         AddressSpaceKind::Calldata => {
             return Err(LowerError::Unsupported("store to calldata".to_string()));
         }
+        AddressSpaceKind::ImmutableCode => {
+            return Err(LowerError::Unsupported(
+                "store to immutable code".to_string(),
+            ));
+        }
     }
     Ok(())
 }
@@ -3035,6 +3100,9 @@ fn store_runtime_value_to_place<'db, C: sonatina_ir::func_cursor::FuncCursor>(
             Ok(())
         }
         AddressSpaceKind::Calldata => Err(LowerError::Unsupported("store to calldata".to_string())),
+        AddressSpaceKind::ImmutableCode => Err(LowerError::Unsupported(
+            "store to immutable code".to_string(),
+        )),
     }
 }
 
@@ -3276,6 +3344,25 @@ fn emit_evm_malloc_word_addr<C: sonatina_ir::func_cursor::FuncCursor>(
 ) -> ValueId {
     let ptr = emit_evm_malloc_ptr(fb, size, is);
     fb.insert_inst(PtrToInt::new(is, ptr, Type::I256), Type::I256)
+}
+
+fn load_code_word<C: sonatina_ir::func_cursor::FuncCursor>(
+    ctx: &mut LowerCtx<'_, '_, C>,
+    code_offset: ValueId,
+) -> ValueId {
+    let word_size = ctx.fb.make_imm_value(I256::from(32u64));
+    let ptr = if let Some(ptr) = *ctx.code_load_scratch {
+        ptr
+    } else {
+        let alloca_ty = ctx.fb.declare_array_type(Type::I8, 32);
+        let ptr = emit_alloca_word_addr(ctx.fb, alloca_ty, ctx.is);
+        *ctx.code_load_scratch = Some(ptr);
+        ptr
+    };
+    ctx.fb
+        .insert_inst_no_result(EvmCodeCopy::new(ctx.is, ptr, code_offset, word_size));
+    ctx.fb
+        .insert_inst(Mload::new(ctx.is, ptr, Type::I256), Type::I256)
 }
 
 /// Lower a `ConstAggregate` by registering a global data section and using CODECOPY.

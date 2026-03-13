@@ -728,7 +728,7 @@ async fn mock_lsp_hover_shows_contract_field_layout_info() {
 }
 
 pub contract C {
-  supply: i32
+  mut supply: i32
 
   recv M {
     Ping { amount } -> bool uses (mut supply) {

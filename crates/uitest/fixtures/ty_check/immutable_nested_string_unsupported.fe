@@ -1,0 +1,11 @@
+struct Meta {
+    labels: [String<4>; 2]
+}
+
+contract BadImmutableNestedString {
+    meta: Meta
+
+    init() uses (meta) {
+        let _ = meta
+    }
+}

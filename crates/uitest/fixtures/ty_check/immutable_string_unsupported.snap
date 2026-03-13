@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/immutable_string_unsupported.fe
+---
+error[8-0076]: unsupported immutable field type
+  ┌─ immutable_string_unsupported.fe:2:11
+  │
+2 │     name: String<4>
+  │           ^^^^^^^^^ immutable field `name` has unsupported type `String<4>`
+  │
+  = immutable fields currently support only fixed-size aggregate and scalar types

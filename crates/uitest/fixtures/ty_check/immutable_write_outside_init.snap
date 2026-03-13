@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/immutable_write_outside_init.fe
+---
+error[8-0018]: left-hand side of assignment is immutable
+   ┌─ immutable_write_outside_init.fe:15:13
+   │
+ 7 │     value: u256
+   │     ----- try changing to `mut value`
+   ·
+15 │             value = next_value
+   │             ^^^^^ immutable assignment

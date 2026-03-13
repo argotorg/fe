@@ -1,0 +1,27 @@
+struct X {
+    val: u256,
+}
+
+struct Y {
+    val: u256,
+}
+
+fn inner() -> u256 uses (y: Y) {
+    y.val
+}
+
+fn outer() -> u256 uses (x: X, y: Y) {
+    inner()
+}
+
+pub contract Counter {
+    a: X
+    b: Y
+
+    init() uses (a, b) {
+        a = X { val: 1 }
+        let current = with (a, b) {
+            outer()
+        }
+    }
+}

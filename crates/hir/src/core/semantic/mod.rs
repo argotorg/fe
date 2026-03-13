@@ -40,6 +40,7 @@ use crate::analysis::ty::ty_def::Kind;
 use crate::analysis::ty::ty_error::collect_hir_ty_diags;
 use crate::hir_def::params::KindBound as HirKindBound;
 use crate::hir_def::scope_graph::ScopeId;
+use crate::layout;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 pub fn lower_hir_kind_local(k: &HirKindBound) -> Kind {
@@ -1008,28 +1009,71 @@ impl<'db> RecvArmView<'db> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub enum ContractFieldKind {
+    MutableStorage,
+    ImmutableCode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub struct MutableFieldLayout {
+    pub slot_offset: usize,
+    pub slot_count: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub struct ImmutableFieldLayout {
+    pub byte_offset: usize,
+    pub byte_len: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub enum ContractFieldLayout {
+    MutableStorage(MutableFieldLayout),
+    ImmutableCode(Option<ImmutableFieldLayout>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
 pub struct ContractFieldInfo<'db> {
     pub index: u32,
     pub name: IdentId<'db>,
-    pub declared_ty: TyId<'db>,
-    pub is_provider: bool,
-    pub target_ty: TyId<'db>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
-pub struct ContractFieldLayoutInfo<'db> {
-    pub index: u32,
-    pub name: IdentId<'db>,
+    pub kind: ContractFieldKind,
     pub declared_ty: TyId<'db>,
     pub is_provider: bool,
     pub target_ty: TyId<'db>,
     /// Semantic address space in which this field is allocated.
     pub address_space: TyId<'db>,
-    /// Slot offset from the start of `address_space`.
-    pub slot_offset: usize,
-    /// Total number of slots consumed by this field.
-    pub slot_count: usize,
+    pub layout: ContractFieldLayout,
+}
+
+impl ContractFieldInfo<'_> {
+    pub fn storage_layout(self) -> Option<MutableFieldLayout> {
+        match self.layout {
+            ContractFieldLayout::MutableStorage(layout) => Some(layout),
+            ContractFieldLayout::ImmutableCode(_) => None,
+        }
+    }
+
+    pub fn immutable_layout(self) -> Option<ImmutableFieldLayout> {
+        match self.layout {
+            ContractFieldLayout::MutableStorage(_) => None,
+            ContractFieldLayout::ImmutableCode(layout) => layout,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub enum ContractFieldAccessMode {
+    ReadOnly,
+    ReadWrite,
+    InitAssignable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+pub struct ResolvedContractFieldBinding<'db> {
+    pub contract: Contract<'db>,
+    pub field: ContractFieldInfo<'db>,
+    pub access: ContractFieldAccessMode,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
@@ -1040,9 +1084,9 @@ pub struct ArgBinding<'db> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
-pub enum EffectSource {
+pub enum EffectSource<'db> {
     Root,
-    Field(u32),
+    Field(ResolvedContractFieldBinding<'db>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
@@ -1052,7 +1096,7 @@ pub struct EffectBinding<'db> {
     pub key_ty: Option<TyId<'db>>,
     pub key_trait: Option<TraitInstId<'db>>,
     pub is_mut: bool,
-    pub source: EffectSource,
+    pub source: EffectSource<'db>,
     pub binding_site: EffectParamSite<'db>,
     pub binding_idx: u32,
     /// The path written at the binding site (e.g. `uses (ctx)` or `uses (mut store)`).
@@ -1314,7 +1358,7 @@ impl<'db> Contract<'db> {
         (0..len).map(move |idx| EffectParamView { owner, idx })
     }
 
-    /// Contract field layout for semantic consumers.
+    /// Contract field info for semantic consumers.
     ///
     /// User-visible layout behavior:
     /// - Slot counters are maintained independently per address space.
@@ -1327,7 +1371,7 @@ impl<'db> Contract<'db> {
     pub fn field_layout(
         self,
         db: &'db dyn HirAnalysisDb,
-    ) -> IndexMap<IdentId<'db>, ContractFieldLayoutInfo<'db>> {
+    ) -> IndexMap<IdentId<'db>, ContractFieldInfo<'db>> {
         let scope = self.top_mod(db).scope();
         let assumptions = PredicateListId::empty_list(db);
 
@@ -1338,9 +1382,13 @@ impl<'db> Contract<'db> {
         let default_storage_address_space =
             resolve_lib_type_path(db, scope, "core::effect_ref::Storage")
                 .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other));
+        let immutable_code_address_space =
+            resolve_lib_type_path(db, scope, "core::effect_ref::Code")
+                .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other));
 
         let hir_fields = self.hir_fields(db).data(db);
         let mut next_slot_by_address_space: FxHashMap<TyId<'db>, usize> = FxHashMap::default();
+        let mut next_immutable_byte_offset = 0usize;
         let mut layout = IndexMap::new();
 
         for (idx, field) in hir_fields
@@ -1349,19 +1397,51 @@ impl<'db> Contract<'db> {
             .enumerate()
         {
             let lowered_ty = lower_opt_hir_ty(db, field.type_ref(), scope, assumptions);
-            let address_space = contract_field_address_space(
-                db,
-                scope,
-                assumptions,
-                effect_handle,
-                address_space_ident,
-                lowered_ty,
-                default_storage_address_space,
-            );
-            let next_slot = next_slot_by_address_space.entry(address_space).or_insert(0);
-            let slot_offset = *next_slot;
-            let (declared_ty, slot_count) =
-                concretize_contract_layout_holes_and_count(db, lowered_ty, next_slot);
+            let kind = if field.is_mut {
+                ContractFieldKind::MutableStorage
+            } else {
+                ContractFieldKind::ImmutableCode
+            };
+            let address_space = match kind {
+                ContractFieldKind::MutableStorage => contract_field_address_space(
+                    db,
+                    scope,
+                    assumptions,
+                    effect_handle,
+                    address_space_ident,
+                    lowered_ty,
+                    default_storage_address_space,
+                ),
+                ContractFieldKind::ImmutableCode => immutable_code_address_space,
+            };
+            let (declared_ty, field_layout) = match kind {
+                ContractFieldKind::MutableStorage => {
+                    let next_slot = next_slot_by_address_space.entry(address_space).or_insert(0);
+                    let slot_offset = *next_slot;
+                    let (declared_ty, slot_count) =
+                        concretize_contract_layout_holes_and_count(db, lowered_ty, next_slot);
+                    (
+                        declared_ty,
+                        ContractFieldLayout::MutableStorage(MutableFieldLayout {
+                            slot_offset,
+                            slot_count,
+                        }),
+                    )
+                }
+                ContractFieldKind::ImmutableCode => {
+                    let byte_len = layout::immutable_payload_size(db, lowered_ty);
+                    let layout = byte_len.map(|byte_len| {
+                        let layout = ImmutableFieldLayout {
+                            byte_offset: next_immutable_byte_offset,
+                            byte_len,
+                        };
+                        next_immutable_byte_offset =
+                            next_immutable_byte_offset.saturating_add(byte_len);
+                        layout
+                    });
+                    (lowered_ty, ContractFieldLayout::ImmutableCode(layout))
+                }
+            };
 
             let inst = TraitInstId::new(db, effect_handle, vec![declared_ty], IndexMap::new());
             let goal = Canonicalized::new(db, inst).value;
@@ -1382,15 +1462,15 @@ impl<'db> Contract<'db> {
             let name = field.name.unwrap();
             layout.insert(
                 name,
-                ContractFieldLayoutInfo {
+                ContractFieldInfo {
                     index: idx as u32,
                     name,
+                    kind,
                     declared_ty,
                     is_provider,
                     target_ty: target_ty.unwrap_or(declared_ty),
                     address_space,
-                    slot_offset,
-                    slot_count,
+                    layout: field_layout,
                 },
             );
         }
@@ -1403,21 +1483,7 @@ impl<'db> Contract<'db> {
         self,
         db: &'db dyn HirAnalysisDb,
     ) -> IndexMap<IdentId<'db>, ContractFieldInfo<'db>> {
-        self.field_layout(db)
-            .iter()
-            .map(|(name, field)| {
-                (
-                    *name,
-                    ContractFieldInfo {
-                        index: field.index,
-                        name: field.name,
-                        declared_ty: field.declared_ty,
-                        is_provider: field.is_provider,
-                        target_ty: field.target_ty,
-                    },
-                )
-            })
-            .collect()
+        self.field_layout(db).clone()
     }
 
     #[salsa::tracked]
@@ -1497,6 +1563,15 @@ impl<'db> Contract<'db> {
 impl<'db> Func<'db> {
     #[salsa::tracked(return_ref)]
     pub fn effect_bindings(self, db: &'db dyn HirAnalysisDb) -> Vec<EffectBinding<'db>> {
+        if let Some(ItemKind::Contract(contract)) = self.scope().parent_item(db) {
+            return contract_scoped_effect_bindings(
+                db,
+                contract,
+                EffectParamSite::Func(self),
+                self.effects(db),
+            );
+        }
+
         struct PendingBinding<'db> {
             idx: usize,
             binding_name: IdentId<'db>,
@@ -1608,7 +1683,7 @@ fn contract_effect_decl_map<'db>(
     out
 }
 
-fn contract_scoped_effect_bindings<'db>(
+pub(crate) fn contract_scoped_effect_bindings<'db>(
     db: &'db dyn HirAnalysisDb,
     contract: Contract<'db>,
     list_site: EffectParamSite<'db>,
@@ -1646,16 +1721,17 @@ fn contract_scoped_effect_bindings<'db>(
             && let Some(name) = key_path.ident(db).to_opt()
             && let Some(field) = fields.get(&name)
         {
-            let field_idx = field.index;
-            let target_ty = field.target_ty;
-
             out.push(EffectBinding {
                 binding_name: name,
                 key_kind: EffectKeyKind::Type,
-                key_ty: Some(target_ty),
+                key_ty: Some(field.target_ty),
                 key_trait: None,
                 is_mut: effect.is_mut,
-                source: EffectSource::Field(field_idx),
+                source: EffectSource::Field(ResolvedContractFieldBinding {
+                    contract,
+                    field: *field,
+                    access: contract_field_access_mode(field.kind, list_site, effect.is_mut),
+                }),
                 binding_site: list_site,
                 binding_idx: idx as u32,
                 binding_path: key_path,
@@ -1706,6 +1782,29 @@ fn contract_scoped_effect_bindings<'db>(
     }
 
     out
+}
+
+fn contract_field_access_mode(
+    kind: ContractFieldKind,
+    site: EffectParamSite<'_>,
+    requested_mut: bool,
+) -> ContractFieldAccessMode {
+    match kind {
+        ContractFieldKind::MutableStorage => {
+            if requested_mut {
+                ContractFieldAccessMode::ReadWrite
+            } else {
+                ContractFieldAccessMode::ReadOnly
+            }
+        }
+        ContractFieldKind::ImmutableCode => {
+            if matches!(site, EffectParamSite::ContractInit { .. }) && !requested_mut {
+                ContractFieldAccessMode::InitAssignable
+            } else {
+                ContractFieldAccessMode::ReadOnly
+            }
+        }
+    }
 }
 
 fn resolve_effect_key<'db>(

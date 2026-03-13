@@ -14,8 +14,8 @@ impl Wrap {
 }
 
 pub contract NewtypeStorageFieldMutMethodCall {
-    pad: u256
-    w: Wrap
+    mut pad: u256
+    mut w: Wrap
 
     init() {}
 

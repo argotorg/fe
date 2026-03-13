@@ -1,0 +1,3 @@
+pub contract Counter uses (ctx: Ctx) {
+    mut ctx: u256
+}

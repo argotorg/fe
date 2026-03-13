@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/immutable_nested_string_unsupported.fe
+---
+error[8-0076]: unsupported immutable field type
+  ┌─ immutable_nested_string_unsupported.fe:6:11
+  │
+6 │     meta: Meta
+  │           ^^^^ immutable field `meta` has unsupported type `Meta`
+  │
+  = immutable fields currently support only fixed-size aggregate and scalar types

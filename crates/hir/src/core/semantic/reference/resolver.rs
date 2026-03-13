@@ -27,7 +27,7 @@ use super::{
         impl_references, impl_trait_references, struct_references, trait_references,
         type_alias_references, use_references,
     },
-    resolve_path_with_recv_fallback, typed_body_for_body,
+    contract_field_scope, resolve_path_with_recv_fallback, typed_body_for_body,
 };
 
 /// A pre-resolved scope reference: target scope paired with the span
@@ -99,6 +99,10 @@ fn resolve_references<'db>(
                 if is_let_local_binding(db, pv) {
                     continue;
                 }
+                if let Some(target) = contract_field_scope_target(db, pv) {
+                    results.push(target);
+                    continue;
+                }
                 let last_idx = pv.path.segment_index(db);
                 for idx in 0..=last_idx {
                     if let Some(seg_path) = pv.path.segment(db, idx) {
@@ -152,6 +156,28 @@ fn resolve_references<'db>(
         }
     }
     results
+}
+
+fn contract_field_scope_target<'db>(
+    db: &'db dyn HirAnalysisDb,
+    pv: &PathView<'db>,
+) -> Option<ResolvedScopeTarget<'db>> {
+    let body_ctx = pv.body_ctx?;
+    let body = pv.scope.body()?;
+    let typed_body = typed_body_for_body(db, body)?;
+    let binding = match body_ctx {
+        BodyPathContext::Expr(expr_id) => typed_body.expr_binding(expr_id)?,
+        BodyPathContext::PatBinding(pat_id) => typed_body.pat_binding(pat_id)?,
+        BodyPathContext::PatReference(_) => return None,
+    };
+    let scope = contract_field_scope(binding)?;
+    let idx = pv.path.segment_index(db);
+
+    Some(ResolvedScopeTarget {
+        scope,
+        span: pv.span.clone().segment(idx).ident().into(),
+        is_self_ty: false,
+    })
 }
 
 // --- Per-type salsa queries ---

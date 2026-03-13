@@ -84,7 +84,7 @@ pub fn emit_test_module_sonatina(
         return Ok(TestModuleOutput { tests: Vec::new() });
     }
 
-    let call_graph = build_call_graph(&mir_module.functions);
+    let call_graph = build_call_graph(db, &mir_module.functions);
     let funcs_by_symbol = build_funcs_by_symbol(&mir_module.functions);
 
     let code_region_roots = collect_code_region_roots(&mir_module.functions);

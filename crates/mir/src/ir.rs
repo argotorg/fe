@@ -821,7 +821,15 @@ pub enum Terminator<'db> {
 #[derive(Debug, Clone)]
 pub enum TerminatingCall<'db> {
     Call(CallOrigin<'db>),
-    Intrinsic { op: IntrinsicOp, args: Vec<ValueId> },
+    Intrinsic {
+        op: IntrinsicOp,
+        args: Vec<ValueId>,
+    },
+    DeployRuntime {
+        runtime_offset: ValueId,
+        runtime_len: ValueId,
+        immutable_payload: Option<(ValueId, usize)>,
+    },
 }
 
 /// Backend-known termination semantics for calls that never return.
@@ -981,6 +989,7 @@ pub enum AddressSpaceKind {
     Calldata,
     Storage,
     TransientStorage,
+    ImmutableCode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

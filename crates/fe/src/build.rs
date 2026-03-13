@@ -1124,7 +1124,7 @@ fn collect_contract_names(
     top_mod: TopLevelMod<'_>,
 ) -> Result<Vec<String>, String> {
     let module = lower_module(db, top_mod).map_err(|err| err.to_string())?;
-    let graph = build_contract_graph(&module.functions);
+    let graph = build_contract_graph(db, &module.functions);
     let mut names: Vec<_> = graph.contracts.keys().cloned().collect();
     names.sort();
     Ok(names)
@@ -1135,7 +1135,7 @@ fn collect_ingot_contract_names(
     ingot: hir::Ingot<'_>,
 ) -> Result<Vec<String>, String> {
     let module = lower_ingot(db, ingot).map_err(|err| err.to_string())?;
-    let graph = build_contract_graph(&module.functions);
+    let graph = build_contract_graph(db, &module.functions);
     let mut names: Vec<_> = graph.contracts.keys().cloned().collect();
     names.sort();
     Ok(names)

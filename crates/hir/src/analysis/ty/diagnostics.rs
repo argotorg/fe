@@ -102,6 +102,11 @@ pub enum TyLowerDiag<'db> {
     DuplicateFieldName(FieldParent<'db>, SmallVec<[u16; 4]>),
     DuplicateVariantName(Enum<'db>, SmallVec<[u16; 4]>),
     DuplicateGenericParamName(GenericParamOwner<'db>, SmallVec<[u16; 4]>),
+    ContractFieldEffectNameCollision {
+        field: DynLazySpan<'db>,
+        effect: DynLazySpan<'db>,
+        name: IdentId<'db>,
+    },
 
     InvalidConstParamTy(DynLazySpan<'db>),
     RecursiveConstParamTy(DynLazySpan<'db>),
@@ -198,6 +203,7 @@ impl TyLowerDiag<'_> {
             Self::DuplicateFieldName(..) => 17,
             Self::DuplicateVariantName(..) => 18,
             Self::DuplicateGenericParamName(..) => 19,
+            Self::ContractFieldEffectNameCollision { .. } => 20,
             Self::NonTrailingDefaultGenericParam(_) => 21,
             Self::GenericDefaultForwardRef { .. } => 22,
         }
@@ -294,6 +300,22 @@ pub enum BodyDiag<'db> {
         given: TyId<'db>,
     },
 
+    ImmutableFieldCannotBeMutEffect {
+        owner: EffectParamOwner<'db>,
+        idx: usize,
+        field: IdentId<'db>,
+    },
+
+    ImmutableContractMissingInit {
+        primary: DynLazySpan<'db>,
+    },
+
+    ImmutableFieldUnsupportedType {
+        primary: DynLazySpan<'db>,
+        field: IdentId<'db>,
+        ty: TyId<'db>,
+    },
+
     MissingEffect {
         primary: DynLazySpan<'db>,
         func: Func<'db>,
@@ -382,7 +404,7 @@ pub enum BodyDiag<'db> {
 
     CannotBorrowMut {
         primary: DynLazySpan<'db>,
-        binding: Option<(IdentId<'db>, DynLazySpan<'db>)>,
+        binding: Option<MutabilitySuggestion<'db>>,
     },
 
     /// A call argument is not a place, but the callee requires a borrow handle (`mut`/`ref`).
@@ -603,6 +625,18 @@ pub enum BodyDiag<'db> {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+pub enum MutabilitySuggestion<'db> {
+    LetBinding {
+        name: IdentId<'db>,
+        span: DynLazySpan<'db>,
+    },
+    BindingDecl {
+        name: IdentId<'db>,
+        span: DynLazySpan<'db>,
+    },
+}
+
 impl<'db> BodyDiag<'db> {
     pub(super) fn unit_variant_expected(
         db: &'db dyn HirAnalysisDb,
@@ -696,6 +730,9 @@ impl<'db> BodyDiag<'db> {
             Self::InvalidEffectKey { .. } => 51,
             Self::ContractRootEffectTraitNotImplemented { .. } => 53,
             Self::ContractRootEffectTypeNotZeroSized { .. } => 54,
+            Self::ImmutableFieldCannotBeMutEffect { .. } => 74,
+            Self::ImmutableContractMissingInit { .. } => 75,
+            Self::ImmutableFieldUnsupportedType { .. } => 76,
             Self::MissingEffect { .. } => 36,
             Self::EffectMutabilityMismatch { .. } => 37,
             Self::EffectTypeMismatch { .. } => 38,

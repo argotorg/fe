@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/immutable_mut_effect.fe
+---
+error[8-0074]: immutable field effect cannot be mutable
+   ┌─ immutable_mut_effect.fe:14:34
+   │
+14 │         Get {} -> u256 uses (mut value) {
+   │                                  ^^^^^ `value` is immutable; remove `mut` from this effect binding
+   │
+   = immutable contract fields are readable in `uses (...)` but writable only inside `init`

@@ -1,6 +1,5 @@
 ---
 source: crates/uitest/tests/ty_check.rs
-assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/effect_resolution.fe
 ---
@@ -48,5 +47,37 @@ error[8-0053]: unsupported contract effect
   │
 1 │ contract Mine uses (foo: Foo, x: X, y) {
   │                          ^^^ contract root effect `Evm` does not implement `Foo`
+  │
+  = contract-scoped trait effects must be implemented by the target `RootEffect` (`Evm`)
+
+error[8-0053]: unsupported contract effect
+  ┌─ effect_resolution.fe:4:18
+  │
+4 │     init() uses (foo, mut owner, foo) {
+  │                  ^^^ contract root effect `Evm` does not implement `Foo`
+  │
+  = contract-scoped trait effects must be implemented by the target `RootEffect` (`Evm`)
+
+error[8-0053]: unsupported contract effect
+  ┌─ effect_resolution.fe:4:34
+  │
+4 │     init() uses (foo, mut owner, foo) {
+  │                                  ^^^ contract root effect `Evm` does not implement `Foo`
+  │
+  = contract-scoped trait effects must be implemented by the target `RootEffect` (`Evm`)
+
+error[8-0053]: unsupported contract effect
+  ┌─ effect_resolution.fe:9:26
+  │
+9 │         Hi -> bool uses (foo, owner, foo) {
+  │                          ^^^ contract root effect `Evm` does not implement `Foo`
+  │
+  = contract-scoped trait effects must be implemented by the target `RootEffect` (`Evm`)
+
+error[8-0053]: unsupported contract effect
+  ┌─ effect_resolution.fe:9:38
+  │
+9 │         Hi -> bool uses (foo, owner, foo) {
+  │                                      ^^^ contract root effect `Evm` does not implement `Foo`
   │
   = contract-scoped trait effects must be implemented by the target `RootEffect` (`Evm`)

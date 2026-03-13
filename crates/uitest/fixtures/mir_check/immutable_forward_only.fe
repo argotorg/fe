@@ -1,0 +1,18 @@
+struct Y {
+    val: u256,
+}
+
+fn inner() uses (y: Y) {}
+
+fn outer() uses (y: Y) {
+    inner()
+}
+
+pub contract Counter {
+    b: Y
+
+    init() uses (b) {
+        outer()
+        b = Y { val: 1 }
+    }
+}

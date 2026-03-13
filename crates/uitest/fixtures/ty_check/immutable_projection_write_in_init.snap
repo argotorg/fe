@@ -1,0 +1,14 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/immutable_projection_write_in_init.fe
+---
+error[8-0018]: left-hand side of assignment is immutable
+  ┌─ immutable_projection_write_in_init.fe:9:9
+  │
+6 │     meta: Meta
+  │     ---- try changing to `mut meta`
+  ·
+9 │         meta.inner = initial
+  │         ^^^^^^^^^^ immutable assignment

@@ -308,7 +308,8 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
         contract
             .field_layout(self.db)
             .get_index(field_idx)
-            .map(|(_, field)| field.slot_offset)
+            .and_then(|(_, field)| field.storage_layout())
+            .map(|layout| layout.slot_offset)
     }
 
     /// Lowers the body root expression, starting from the current block.
@@ -1702,8 +1703,10 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             let addr_space = self.address_space_for_binding(&binding);
             let is_non_memory = !matches!(addr_space, AddressSpaceKind::Memory);
 
-            // EffectParam: just get the binding value
-            if matches!(binding, LocalBinding::EffectParam { .. }) {
+            if matches!(
+                binding,
+                LocalBinding::EffectParam { .. } | LocalBinding::ContractField { .. }
+            ) {
                 let value = self
                     .binding_value(binding)
                     .unwrap_or_else(|| panic!("missing value for effect binding `{binding:?}`"));
@@ -1714,6 +1717,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 LocalBinding::Local { pat, .. } => self.typed_body.pat_ty(self.db, pat),
                 LocalBinding::Param { ty, .. } => ty,
                 LocalBinding::EffectParam { .. } => self.u256_ty(),
+                LocalBinding::ContractField { .. } => self.u256_ty(),
             };
 
             let Some(local) = self.local_for_binding(binding) else {
@@ -1931,14 +1935,10 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 return value_id;
             }
         }
-        let is_effect_binding = matches!(binding, LocalBinding::EffectParam { .. })
-            || matches!(
-                binding,
-                LocalBinding::Param {
-                    site: ParamSite::EffectField(_),
-                    ..
-                }
-            );
+        let is_effect_binding = matches!(
+            binding,
+            LocalBinding::EffectParam { .. } | LocalBinding::ContractField { .. }
+        );
         if !is_effect_binding {
             return value_id;
         }
@@ -2234,13 +2234,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 }
 
                 let is_runtime_place = self.is_by_ref_ty(ty)
-                    || matches!(
-                        binding,
-                        LocalBinding::Param {
-                            site: ParamSite::EffectField(_),
-                            ..
-                        }
-                    )
+                    || matches!(binding, LocalBinding::ContractField { .. })
                     || matches!(binding, LocalBinding::EffectParam { .. })
                         && self.effect_param_key_is_type(binding);
                 let base_value = if is_runtime_place {
@@ -2335,10 +2329,7 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                             return None;
                         }
                     }
-                    LocalBinding::Param {
-                        site: ParamSite::EffectField(_),
-                        ..
-                    } => {}
+                    LocalBinding::ContractField { .. } => {}
                     _ => return None,
                 }
 

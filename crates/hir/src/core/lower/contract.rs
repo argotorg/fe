@@ -130,7 +130,7 @@ fn lower_contract_field_def<'db>(
         Visibility::Private
     };
 
-    FieldDef::new(attributes, name, type_ref, vis)
+    FieldDef::new(attributes, name, type_ref, vis, ast.mut_kw().is_some())
 }
 
 fn lower_contract_init<'db>(

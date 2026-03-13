@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/immutable_requires_init.fe
+---
+error[8-0075]: immutable fields require `init`
+  ┌─ immutable_requires_init.fe:1:14
+  │
+1 │ pub contract Counter {
+  │              ^^^^^^^ add an `init(...)` block to assign immutable fields

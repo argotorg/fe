@@ -111,8 +111,14 @@ fn format_field_def<'db>(field: &FieldDef<'db>, db: &dyn HirDb, indent_level: us
     let vis = field.vis.pretty_print();
     let name = unwrap_partial(field.name, "FieldDef::name");
     let ty = unwrap_partial(field.type_ref, "FieldDef::type_ref");
+    let mut_prefix = if field.is_mut { "mut " } else { "" };
     result.push_str(&indent_text(
-        &format!("{}{}: {}", vis, name.data(db), ty.pretty_print(db)),
+        &format!(
+            "{}{mut_prefix}{}: {}",
+            vis,
+            name.data(db),
+            ty.pretty_print(db)
+        ),
         indent_level,
     ));
 

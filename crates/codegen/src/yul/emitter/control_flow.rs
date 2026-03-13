@@ -153,6 +153,16 @@ impl<'db> FunctionEmitter<'db> {
                         ))
                     }
                 }
+                mir::TerminatingCall::DeployRuntime {
+                    runtime_offset,
+                    runtime_len,
+                    immutable_payload,
+                } => self.emit_deploy_runtime_terminator(
+                    *runtime_offset,
+                    *runtime_len,
+                    *immutable_payload,
+                    ctx,
+                ),
             },
             Terminator::Branch {
                 cond,
@@ -190,6 +200,53 @@ impl<'db> FunctionEmitter<'db> {
         }
         let expr = self.lower_value(value_id, state)?;
         docs.push(YulDoc::line(format!("ret := {expr}")));
+        Ok(())
+    }
+
+    fn emit_deploy_runtime_terminator(
+        &mut self,
+        runtime_offset: ValueId,
+        runtime_len: ValueId,
+        immutable_payload: Option<(ValueId, usize)>,
+        ctx: &mut BlockEmitCtx<'_, '_, '_>,
+    ) -> Result<(), YulError> {
+        let runtime_offset = self.lower_value(runtime_offset, ctx.state)?;
+        let runtime_len = self.lower_value(runtime_len, ctx.state)?;
+        let total_len = if let Some((_, len)) = immutable_payload.filter(|(_, len)| *len > 0) {
+            let total_len = ctx.state.alloc_local();
+            ctx.docs.push(YulDoc::line(format!(
+                "let {total_len} := add({runtime_len}, 0x{len:x})"
+            )));
+            total_len
+        } else {
+            runtime_len.clone()
+        };
+
+        let out = ctx.state.alloc_local();
+        ctx.docs
+            .push(YulDoc::line(format!("let {out} := mload(64)")));
+        ctx.docs.push(YulDoc::block(
+            format!("if iszero({out}) "),
+            vec![YulDoc::line(format!("{out} := 0x80"))],
+        ));
+        ctx.docs
+            .push(YulDoc::line(format!("mstore(64, add({out}, {total_len}))")));
+        ctx.docs.push(YulDoc::line(format!(
+            "codecopy({out}, {runtime_offset}, {runtime_len})"
+        )));
+
+        if let Some((immutable_ptr, immutable_len)) = immutable_payload.filter(|(_, len)| *len > 0)
+        {
+            let immutable_ptr = self.lower_value(immutable_ptr, ctx.state)?;
+            for byte_off in (0..immutable_len).step_by(32) {
+                ctx.docs.push(YulDoc::line(format!(
+                    "mstore(add({out}, add({runtime_len}, 0x{byte_off:x})), mload(add({immutable_ptr}, 0x{byte_off:x})))"
+                )));
+            }
+        }
+
+        ctx.docs
+            .push(YulDoc::line(format!("return({out}, {total_len})")));
         Ok(())
     }
 

@@ -1,5 +1,5 @@
 contract Mine uses (foo: Foo, x: X, y) {
-    owner: Address
+    mut owner: Address
 
     init() uses (foo, mut owner, foo) {
         owner = foo.caller()

@@ -164,7 +164,7 @@ note:
    ┌─ goto_contract.fe:87:9
    │
 87 │         store.supply = initial_supply
-   │         ^^^^^ -> local: TokenStore
+   │         ^^^^^ -> goto_contract::Token::store
 
 note: 
    ┌─ goto_contract.fe:87:24
@@ -176,7 +176,7 @@ note:
    ┌─ goto_contract.fe:88:9
    │
 88 │         store.name_hash = compute_hash(initial_supply, owner_addr)
-   │         ^^^^^ -> local: TokenStore
+   │         ^^^^^ -> goto_contract::Token::store
 
 note: 
    ┌─ goto_contract.fe:88:27
@@ -200,7 +200,7 @@ note:
    ┌─ goto_contract.fe:89:9
    │
 89 │         auth.owner = owner_addr
-   │         ^^^^ -> local: AccessControl
+   │         ^^^^ -> goto_contract::Token::auth
 
 note: 
    ┌─ goto_contract.fe:89:22
@@ -242,13 +242,13 @@ note:
    ┌─ goto_contract.fe:94:13
    │
 94 │             store.supply = store.supply + amount
-   │             ^^^^^ -> local: TokenStore
+   │             ^^^^^ -> goto_contract::Token::store
 
 note: 
    ┌─ goto_contract.fe:94:28
    │
 94 │             store.supply = store.supply + amount
-   │                            ^^^^^ -> local: TokenStore
+   │                            ^^^^^ -> goto_contract::Token::store
 
 note: 
    ┌─ goto_contract.fe:94:43
@@ -266,7 +266,7 @@ note:
    ┌─ goto_contract.fe:95:36
    │
 95 │             let new_supply: u256 = store.supply
-   │                                    ^^^^^ -> local: TokenStore
+   │                                    ^^^^^ -> goto_contract::Token::store
 
 note: 
    ┌─ goto_contract.fe:96:17
@@ -278,7 +278,7 @@ note:
    ┌─ goto_contract.fe:96:31
    │
 96 │             let valid: bool = store.validate()
-   │                               ^^^^^ -> local: TokenStore
+   │                               ^^^^^ -> goto_contract::Token::store
 
 note: 
    ┌─ goto_contract.fe:97:20
@@ -302,7 +302,7 @@ note:
     ┌─ goto_contract.fe:101:20
     │
 101 │             return store.get_balance()
-    │                    ^^^^^ -> local: TokenStore
+    │                    ^^^^^ -> goto_contract::Token::store
 
 note: 
     ┌─ goto_contract.fe:105:10
@@ -332,7 +332,7 @@ note:
     ┌─ goto_contract.fe:107:13
     │
 107 │             auth.owner = new_owner
-    │             ^^^^ -> local: AccessControl
+    │             ^^^^ -> goto_contract::Token::auth
 
 note: 
     ┌─ goto_contract.fe:107:26
@@ -350,7 +350,7 @@ note:
     ┌─ goto_contract.fe:108:28
     │
 108 │             let ok: bool = auth.is_authorized()
-    │                            ^^^^ -> local: AccessControl
+    │                            ^^^^ -> goto_contract::Token::auth
 
 note: 
     ┌─ goto_contract.fe:109:20
@@ -374,4 +374,4 @@ note:
     ┌─ goto_contract.fe:113:20
     │
 113 │             return auth.owner
-    │                    ^^^^ -> local: AccessControl
+    │                    ^^^^ -> goto_contract::Token::auth

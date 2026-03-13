@@ -10,8 +10,10 @@ pub struct CoreLib<'db> {
     pub scope: ScopeId<'db>,
     pub mem_ptr_ctor: TyId<'db>,
     pub stor_ptr_ctor: TyId<'db>,
+    pub code_ptr_ctor: TyId<'db>,
     pub addr_space_mem: TyId<'db>,
     pub addr_space_calldata: TyId<'db>,
+    pub addr_space_code: TyId<'db>,
     pub addr_space_stor: TyId<'db>,
     pub addr_space_transient: TyId<'db>,
 }
@@ -22,10 +24,14 @@ impl<'db> CoreLib<'db> {
             .unwrap_or_else(|| panic!("missing required core helper `core::effect_ref::MemPtr`"));
         let stor_ptr_ctor = resolve_lib_type_path(db, scope, "core::effect_ref::StorPtr")
             .unwrap_or_else(|| panic!("missing required core helper `core::effect_ref::StorPtr`"));
+        let code_ptr_ctor = resolve_lib_type_path(db, scope, "core::effect_ref::CodePtr")
+            .unwrap_or_else(|| panic!("missing required core helper `core::effect_ref::CodePtr`"));
         let addr_space_mem = resolve_lib_type_path(db, scope, "core::effect_ref::Memory")
             .unwrap_or_else(|| panic!("missing required core helper `core::effect_ref::Memory`"));
         let addr_space_calldata = resolve_lib_type_path(db, scope, "core::effect_ref::Calldata")
             .unwrap_or_else(|| panic!("missing required core helper `core::effect_ref::Calldata`"));
+        let addr_space_code = resolve_lib_type_path(db, scope, "core::effect_ref::Code")
+            .unwrap_or_else(|| panic!("missing required core helper `core::effect_ref::Code`"));
         let addr_space_stor = resolve_lib_type_path(db, scope, "core::effect_ref::Storage")
             .unwrap_or_else(|| panic!("missing required core helper `core::effect_ref::Storage`"));
         let addr_space_transient =
@@ -37,8 +43,10 @@ impl<'db> CoreLib<'db> {
             scope,
             mem_ptr_ctor,
             stor_ptr_ctor,
+            code_ptr_ctor,
             addr_space_mem,
             addr_space_calldata,
+            addr_space_code,
             addr_space_stor,
             addr_space_transient,
         }

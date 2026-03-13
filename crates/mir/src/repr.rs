@@ -741,6 +741,7 @@ fn effect_provider_space_via_domain_trait<'db>(
     for (space_ty, space_kind) in [
         (core.addr_space_mem, AddressSpaceKind::Memory),
         (core.addr_space_calldata, AddressSpaceKind::Calldata),
+        (core.addr_space_code, AddressSpaceKind::ImmutableCode),
         (
             core.addr_space_transient,
             AddressSpaceKind::TransientStorage,
@@ -763,7 +764,7 @@ fn effect_provider_space_via_domain_trait<'db>(
     }
 
     panic!(
-        "`{}` implements `EffectHandle` but `AddressSpace` is not one of: core::effect_ref::Memory | Calldata | Storage | TransientStorage",
+        "`{}` implements `EffectHandle` but `AddressSpace` is not one of: core::effect_ref::Memory | Calldata | Code | Storage | TransientStorage",
         ty.pretty_print(db)
     )
 }

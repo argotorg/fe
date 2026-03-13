@@ -25,8 +25,7 @@ fn __Guard_init() -> ():
     v1: u256 = code_region_offset(func_item(__Guard_runtime))
     v2: u256 = code_region_len(func_item(__Guard_runtime))
     eval __Guard_init_contract(v0)
-    eval codecopy(0, v1, v2)
-    terminate return_data(0, v2)
+    terminate deploy_runtime(v1, v2, none)
 
 fn __Guard_runtime() -> ():
   bb0:

@@ -773,6 +773,7 @@ impl<'db> FunctionEmitter<'db> {
                 }
                 mir::ir::AddressSpaceKind::Storage
                 | mir::ir::AddressSpaceKind::TransientStorage => field_ptr.offset_bytes / 32,
+                mir::ir::AddressSpaceKind::ImmutableCode => field_ptr.offset_bytes,
             };
             Ok(format!("add({}, {})", base, offset))
         }
@@ -803,6 +804,7 @@ impl<'db> FunctionEmitter<'db> {
             mir::ir::AddressSpaceKind::Calldata => format!("calldataload({addr})"),
             mir::ir::AddressSpaceKind::Storage => format!("sload({addr})"),
             mir::ir::AddressSpaceKind::TransientStorage => format!("tload({addr})"),
+            mir::ir::AddressSpaceKind::ImmutableCode => format!("__fe_code_load({addr})"),
         };
 
         // Apply type-specific conversion (std::evm::word::WordRepr::from_word equivalent)

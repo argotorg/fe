@@ -1,0 +1,11 @@
+struct Meta {
+    inner: u256
+}
+
+pub contract Counter {
+    meta: Meta
+
+    init(initial: u256) uses (meta) {
+        meta.inner = initial
+    }
+}

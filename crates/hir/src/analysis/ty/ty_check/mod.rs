@@ -44,7 +44,7 @@ use crate::analysis::place::Place;
 use super::{
     canonical::{Canonical, Canonicalized},
     diagnostics::{BodyDiag, FuncBodyDiag, TraitConstraintDiag, TyDiagCollection, TyLowerDiag},
-    effects::{EffectKeyKind, resolve_normalized_type_effect_key},
+    effects::EffectKeyKind,
     trait_def::TraitInstId,
     trait_resolution::{GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable},
     ty_contains_const_hole,
@@ -293,7 +293,7 @@ impl<'db> TyChecker<'db> {
         &mut self,
         owner: BodyOwner<'db>,
         contract: Contract<'db>,
-        effects: crate::hir_def::EffectParamListId<'db>,
+        _effects: crate::hir_def::EffectParamListId<'db>,
     ) {
         let owner = match owner {
             BodyOwner::Func(func) => EffectParamOwner::Func(func),
@@ -309,112 +309,103 @@ impl<'db> TyChecker<'db> {
                 arm_idx,
             },
         };
-        let contract_effect_names: FxHashSet<_> = contract
-            .effects(self.db)
-            .data(self.db)
-            .iter()
-            .filter_map(|e| e.name)
-            .collect();
-        let contract_field_names: FxHashSet<_> = crate::hir_def::FieldParent::Contract(contract)
-            .fields(self.db)
-            .filter_map(|f| f.name(self.db))
-            .collect();
-
         let assumptions = PredicateListId::empty_list(self.db);
         let root_effect_ty =
             super::resolve_default_root_effect_ty(self.db, contract.scope(), assumptions);
+        let effects = match owner {
+            EffectParamOwner::Func(func) => func.effect_bindings(self.db).to_vec(),
+            EffectParamOwner::Contract(contract) => contract.effect_bindings(self.db).to_vec(),
+            EffectParamOwner::ContractInit { contract } => contract
+                .init_effect_env(self.db)
+                .map(|env| env.bindings(self.db).to_vec())
+                .unwrap_or_default(),
+            EffectParamOwner::ContractRecvArm {
+                contract,
+                recv_idx,
+                arm_idx,
+            } => {
+                let recv = crate::semantic::RecvView::new(self.db, contract, recv_idx);
+                crate::semantic::RecvArmView::new(self.db, recv, arm_idx)
+                    .effective_effect_bindings(self.db)
+                    .clone()
+            }
+        };
 
-        for (idx, effect) in effects.data(self.db).iter().enumerate() {
-            let Some(key_path) = effect
-                .key_path
-                .to_opt()
-                .filter(|path| path.ident(self.db).is_present())
-            else {
-                continue;
-            };
+        for effect in effects {
+            let idx = effect.binding_idx as usize;
+            let key_path = effect.binding_path;
 
-            // Labeled effects are always type/trait keyed: `name: Type`.
-            if effect.name.is_some() {
-                let resolved = resolve_path(
-                    self.db,
-                    key_path,
-                    contract.scope(),
-                    self.env.assumptions(),
-                    false,
-                );
-                match resolved {
-                    Ok(PathRes::Trait(trait_inst)) => {
-                        let Some(root_effect_ty) = root_effect_ty else {
-                            continue;
-                        };
-                        let trait_req =
-                            super::instantiate_trait_self(self.db, trait_inst, root_effect_ty);
-                        let goal = Canonicalized::new(self.db, trait_req).value;
-                        if matches!(
-                            is_goal_satisfiable(
-                                self.db,
-                                TraitSolveCx::new(self.db, contract.scope()),
-                                goal
-                            ),
-                            GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
-                        ) {
-                            self.push_diag(BodyDiag::ContractRootEffectTraitNotImplemented {
-                                owner,
-                                idx,
-                                root_ty: root_effect_ty,
-                                trait_req,
-                            });
-                        }
-                    }
-                    Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty)) => {
-                        let given = resolve_normalized_type_effect_key(
-                            self.db,
-                            key_path,
-                            contract.scope(),
-                            assumptions,
-                        )
-                        .map(|ty| normalize_ty(self.db, ty, contract.scope(), assumptions))
-                        .unwrap_or_else(|| {
-                            normalize_ty(self.db, ty, contract.scope(), assumptions)
-                        });
-                        if !given.is_zero_sized(self.db) {
-                            self.push_diag(BodyDiag::ContractRootEffectTypeNotZeroSized {
-                                owner,
-                                key: key_path,
-                                idx,
-                                given,
-                            });
-                        }
-                    }
-                    Ok(_) | Err(_) => self.push_diag(BodyDiag::InvalidEffectKey {
+            if let crate::semantic::EffectSource::Field(field) = effect.source {
+                if effect.is_mut
+                    && matches!(
+                        field.field.kind,
+                        crate::semantic::ContractFieldKind::ImmutableCode
+                    )
+                {
+                    self.push_diag(BodyDiag::ImmutableFieldCannotBeMutEffect {
                         owner,
-                        key: key_path,
                         idx,
-                    }),
+                        field: field.field.name,
+                    });
                 }
                 continue;
             }
 
-            // Unlabeled contract-scoped effects refer to a contract field name or an
-            // existing named contract effect (e.g. `ctx`).
-            let Some(ident) = key_path.ident(self.db).to_opt() else {
-                self.push_diag(BodyDiag::InvalidEffectKey {
+            match effect.key_kind {
+                EffectKeyKind::Trait => {
+                    let Some(trait_inst) = effect.key_trait else {
+                        self.push_diag(BodyDiag::InvalidEffectKey {
+                            owner,
+                            key: key_path,
+                            idx,
+                        });
+                        continue;
+                    };
+                    let Some(root_effect_ty) = root_effect_ty else {
+                        continue;
+                    };
+                    let trait_req =
+                        super::instantiate_trait_self(self.db, trait_inst, root_effect_ty);
+                    let goal = Canonicalized::new(self.db, trait_req).value;
+                    if matches!(
+                        is_goal_satisfiable(
+                            self.db,
+                            TraitSolveCx::new(self.db, contract.scope()),
+                            goal
+                        ),
+                        GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
+                    ) {
+                        self.push_diag(BodyDiag::ContractRootEffectTraitNotImplemented {
+                            owner,
+                            idx,
+                            root_ty: root_effect_ty,
+                            trait_req,
+                        });
+                    }
+                }
+                EffectKeyKind::Type => {
+                    let Some(given) = effect.key_ty else {
+                        self.push_diag(BodyDiag::InvalidEffectKey {
+                            owner,
+                            key: key_path,
+                            idx,
+                        });
+                        continue;
+                    };
+                    if !given.is_zero_sized(self.db) {
+                        self.push_diag(BodyDiag::ContractRootEffectTypeNotZeroSized {
+                            owner,
+                            key: key_path,
+                            idx,
+                            given,
+                        });
+                    }
+                }
+                EffectKeyKind::Other => self.push_diag(BodyDiag::InvalidEffectKey {
                     owner,
                     key: key_path,
                     idx,
-                });
-                continue;
-            };
-
-            if key_path.len(self.db) != 1
-                || (!contract_effect_names.contains(&ident)
-                    && !contract_field_names.contains(&ident))
-            {
-                self.push_diag(BodyDiag::InvalidEffectKey {
-                    owner,
-                    key: key_path,
-                    idx,
-                });
+                }),
             }
         }
     }
@@ -1766,6 +1757,10 @@ impl<'db> TypedBody<'db> {
     /// Returns a place representation for `expr` if it denotes an assignable location.
     pub fn expr_place(&self, db: &'db dyn HirAnalysisDb, expr: ExprId) -> Option<Place<'db>> {
         Place::from_expr(db, self, expr)
+    }
+
+    pub fn expr_ids(&self) -> impl Iterator<Item = ExprId> + '_ {
+        self.expr_ty.keys().copied()
     }
 
     /// Find all expressions that reference the same local binding as the given expression.

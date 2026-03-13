@@ -83,6 +83,7 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
             Some(AddressSpaceKind::Calldata) => self.write_u8(2),
             Some(AddressSpaceKind::Storage) => self.write_u8(3),
             Some(AddressSpaceKind::TransientStorage) => self.write_u8(4),
+            Some(AddressSpaceKind::ImmutableCode) => self.write_u8(5),
             None => self.write_u8(0),
         }
 
@@ -113,10 +114,12 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
             ValueRepr::Ref(AddressSpaceKind::Calldata) => self.write_u8(2),
             ValueRepr::Ref(AddressSpaceKind::Storage) => self.write_u8(3),
             ValueRepr::Ref(AddressSpaceKind::TransientStorage) => self.write_u8(4),
-            ValueRepr::Ptr(AddressSpaceKind::Memory) => self.write_u8(5),
-            ValueRepr::Ptr(AddressSpaceKind::Calldata) => self.write_u8(6),
-            ValueRepr::Ptr(AddressSpaceKind::Storage) => self.write_u8(7),
-            ValueRepr::Ptr(AddressSpaceKind::TransientStorage) => self.write_u8(8),
+            ValueRepr::Ref(AddressSpaceKind::ImmutableCode) => self.write_u8(5),
+            ValueRepr::Ptr(AddressSpaceKind::Memory) => self.write_u8(6),
+            ValueRepr::Ptr(AddressSpaceKind::Calldata) => self.write_u8(7),
+            ValueRepr::Ptr(AddressSpaceKind::Storage) => self.write_u8(8),
+            ValueRepr::Ptr(AddressSpaceKind::TransientStorage) => self.write_u8(9),
+            ValueRepr::Ptr(AddressSpaceKind::ImmutableCode) => self.write_u8(10),
         }
         self.hash_value_origin(&value.origin);
     }
@@ -226,6 +229,7 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
                     AddressSpaceKind::Calldata => 2,
                     AddressSpaceKind::Storage => 3,
                     AddressSpaceKind::TransientStorage => 4,
+                    AddressSpaceKind::ImmutableCode => 5,
                 });
             }
             ValueOrigin::PlaceRef(place) => {
@@ -386,6 +390,7 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
                             AddressSpaceKind::Calldata => 2,
                             AddressSpaceKind::Storage => 3,
                             AddressSpaceKind::TransientStorage => 4,
+                            AddressSpaceKind::ImmutableCode => 5,
                         });
                     }
                     Rvalue::ConstAggregate { data, .. } => {
@@ -454,6 +459,26 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
                         for arg in args {
                             let slot = self.placeholder_value(*arg);
                             self.write_u32(slot);
+                        }
+                    }
+                    TerminatingCall::DeployRuntime {
+                        runtime_offset,
+                        runtime_len,
+                        immutable_payload,
+                    } => {
+                        self.write_u8(2);
+                        let runtime_offset = self.placeholder_value(*runtime_offset);
+                        let runtime_len = self.placeholder_value(*runtime_len);
+                        self.write_u32(runtime_offset);
+                        self.write_u32(runtime_len);
+                        match immutable_payload {
+                            Some((ptr, len)) => {
+                                self.write_u8(1);
+                                let ptr = self.placeholder_value(*ptr);
+                                self.write_u32(ptr);
+                                self.write_usize(*len);
+                            }
+                            None => self.write_u8(0),
                         }
                     }
                 }

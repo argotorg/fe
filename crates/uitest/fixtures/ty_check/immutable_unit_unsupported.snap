@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/immutable_unit_unsupported.fe
+---
+error[8-0076]: unsupported immutable field type
+  ┌─ immutable_unit_unsupported.fe:2:13
+  │
+2 │     marker: ()
+  │             ^^ immutable field `marker` has unsupported type `()`
+  │
+  = immutable fields currently support only fixed-size aggregate and scalar types

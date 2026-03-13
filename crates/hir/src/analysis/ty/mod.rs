@@ -23,6 +23,7 @@ use crate::analysis::name_resolution::{PathRes, resolve_path};
 use crate::analysis::{
     HirAnalysisDb, analysis_pass::ModuleAnalysisPass, diagnostics::DiagnosticVoucher,
 };
+use crate::semantic::ContractFieldKind;
 use crate::semantic::diagnostics::Diagnosable;
 
 pub mod adt_def;
@@ -476,13 +477,63 @@ impl ModuleAnalysisPass for ContractAnalysisPass {
                     .map(|diag| diag.to_voucher()),
             );
 
+            for (effect_idx, effect) in contract.effects(db).data(db).iter().enumerate() {
+                let Some(name) = effect.name else {
+                    continue;
+                };
+                let Some(field) = contract.fields(db).get(&name) else {
+                    continue;
+                };
+                diags.push(Box::new(TyLowerDiag::ContractFieldEffectNameCollision {
+                    field: contract
+                        .span()
+                        .fields()
+                        .field(field.index as usize)
+                        .name()
+                        .into(),
+                    effect: contract
+                        .span()
+                        .effects()
+                        .param_idx(effect_idx)
+                        .name()
+                        .into(),
+                    name,
+                }) as _);
+            }
+
+            let immutable_fields: Vec<_> = contract
+                .fields(db)
+                .iter()
+                .filter(|(_, field)| matches!(field.kind, ContractFieldKind::ImmutableCode))
+                .map(|(name, field)| (*name, *field))
+                .collect();
+
+            if !immutable_fields.is_empty() {
+                if contract.init(db).is_none() {
+                    diags.push(Box::new(BodyDiag::ImmutableContractMissingInit {
+                        primary: contract.span().name().into(),
+                    }) as _);
+                }
+
+                for (field_name, field) in &immutable_fields {
+                    if !immutable_field_type_supported(db, field) {
+                        diags.push(Box::new(BodyDiag::ImmutableFieldUnsupportedType {
+                            primary: contract
+                                .span()
+                                .fields()
+                                .field(field.index as usize)
+                                .ty()
+                                .into(),
+                            field: *field_name,
+                            ty: field.declared_ty,
+                        }) as _);
+                    }
+                }
+            }
+
             if contract.init(db).is_some() {
-                diags.extend(
-                    ty_check::check_contract_init_body(db, contract)
-                        .0
-                        .iter()
-                        .map(|diag| diag.to_voucher()),
-                );
+                let (init_diags, _) = ty_check::check_contract_init_body(db, contract);
+                diags.extend(init_diags.iter().map(|diag| diag.to_voucher()));
             }
 
             let recvs = contract.recvs(db);
@@ -549,6 +600,13 @@ fn instantiate_trait_self<'db>(
         args[0] = self_ty;
     }
     trait_def::TraitInstId::new(db, def, args, inst.assoc_type_bindings(db).clone())
+}
+
+fn immutable_field_type_supported<'db>(
+    db: &'db dyn HirAnalysisDb,
+    field: &crate::semantic::ContractFieldInfo<'db>,
+) -> bool {
+    !field.is_provider && crate::layout::is_runtime_immutable_payload_ty(db, field.declared_ty)
 }
 
 /// An analysis pass for trait definitions.

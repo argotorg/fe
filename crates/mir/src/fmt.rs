@@ -157,6 +157,22 @@ pub fn format_terminator(
                 let args: Vec<String> = args.iter().map(|arg| format_value(body, *arg)).collect();
                 format!("terminate {}({})", format_intrinsic(*op), args.join(", "))
             }
+            TerminatingCall::DeployRuntime {
+                runtime_offset,
+                runtime_len,
+                immutable_payload,
+            } => {
+                let runtime_offset = format_value(body, *runtime_offset);
+                let runtime_len = format_value(body, *runtime_len);
+                let immutable_payload = immutable_payload.map_or_else(
+                    || "none".to_string(),
+                    |(ptr, len)| format!("({}, {})", format_value(body, ptr), len),
+                );
+                format!(
+                    "terminate deploy_runtime({}, {}, {})",
+                    runtime_offset, runtime_len, immutable_payload
+                )
+            }
         },
         Terminator::Goto { target, .. } => format!("jmp bb{}", target.index()),
         Terminator::Branch {
@@ -234,6 +250,7 @@ fn format_rvalue(db: &dyn HirAnalysisDb, body: &MirBody<'_>, rvalue: &Rvalue<'_>
                 AddressSpaceKind::Calldata => "calldata",
                 AddressSpaceKind::Storage => "stor",
                 AddressSpaceKind::TransientStorage => "tstor",
+                AddressSpaceKind::ImmutableCode => "code",
             };
             format!("alloc {space}")
         }
@@ -335,6 +352,7 @@ fn format_place(body: &MirBody<'_>, place: &Place<'_>) -> String {
         AddressSpaceKind::Calldata => "calldata",
         AddressSpaceKind::Storage => "stor",
         AddressSpaceKind::TransientStorage => "tstor",
+        AddressSpaceKind::ImmutableCode => "code",
     };
     let base = format_value(body, place.base);
     let proj = format_projection_path(body, place.projection.iter());

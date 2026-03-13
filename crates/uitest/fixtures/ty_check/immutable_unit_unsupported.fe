@@ -1,0 +1,7 @@
+pub contract Counter {
+    marker: ()
+
+    init() uses (marker) {
+        marker = ()
+    }
+}

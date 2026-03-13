@@ -596,7 +596,7 @@ impl<'db> FieldDef<'db> {
             Visibility::Private
         };
 
-        Self::new(attributes, name, type_ref, vis)
+        Self::new(attributes, name, type_ref, vis, ast.mut_kw().is_some())
     }
 }
 

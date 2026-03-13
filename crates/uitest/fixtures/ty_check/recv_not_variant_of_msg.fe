@@ -36,7 +36,7 @@ impl core::message::MsgVariant<std::abi::Sol> for CustomMsg {
 }
 
 pub contract BadContract {
-    data: u64,
+    mut data: u64,
 
     recv BankMsg {
         // OK: Deposit is a variant of BankMsg

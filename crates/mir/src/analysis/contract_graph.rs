@@ -1,3 +1,4 @@
+use hir::analysis::HirAnalysisDb;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::call_graph::{build_call_graph, reachable_functions};
@@ -43,8 +44,11 @@ pub struct ContractGraph {
 /// - collecting contract init/runtime roots
 /// - computing call-graph reachability for each region root
 /// - scanning reachable functions for `code_region_offset/len` references
-pub fn build_contract_graph(functions: &[MirFunction<'_>]) -> ContractGraph {
-    let call_graph = build_call_graph(functions);
+pub fn build_contract_graph(
+    db: &dyn HirAnalysisDb,
+    functions: &[MirFunction<'_>],
+) -> ContractGraph {
+    let call_graph = build_call_graph(db, functions);
     let funcs_by_symbol: FxHashMap<_, _> = functions
         .iter()
         .map(|func| (func.symbol_name.as_str(), func))

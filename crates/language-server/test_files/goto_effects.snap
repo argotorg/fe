@@ -254,7 +254,7 @@ note:
    ┌─ goto_effects.fe:80:9
    │
 80 │         state.value = start
-   │         ^^^^^ -> local: State
+   │         ^^^^^ -> goto_effects::EffectContract::state
 
 note: 
    ┌─ goto_effects.fe:80:23
@@ -266,7 +266,7 @@ note:
    ┌─ goto_effects.fe:81:9
    │
 81 │         state.count = 0
-   │         ^^^^^ -> local: State
+   │         ^^^^^ -> goto_effects::EffectContract::state
 
 note: 
    ┌─ goto_effects.fe:84:10
@@ -314,13 +314,13 @@ note:
    ┌─ goto_effects.fe:87:13
    │
 87 │             state.value = state.value + x + c
-   │             ^^^^^ -> local: State
+   │             ^^^^^ -> goto_effects::EffectContract::state
 
 note: 
    ┌─ goto_effects.fe:87:27
    │
 87 │             state.value = state.value + x + c
-   │                           ^^^^^ -> local: State
+   │                           ^^^^^ -> goto_effects::EffectContract::state
 
 note: 
    ┌─ goto_effects.fe:87:41
@@ -338,19 +338,19 @@ note:
    ┌─ goto_effects.fe:88:13
    │
 88 │             log.entries = log.entries + 1
-   │             ^^^ -> local: Logger
+   │             ^^^ -> goto_effects::EffectContract::log
 
 note: 
    ┌─ goto_effects.fe:88:27
    │
 88 │             log.entries = log.entries + 1
-   │                           ^^^ -> local: Logger
+   │                           ^^^ -> goto_effects::EffectContract::log
 
 note: 
    ┌─ goto_effects.fe:89:20
    │
 89 │             return state.value
-   │                    ^^^^^ -> local: State
+   │                    ^^^^^ -> goto_effects::EffectContract::state
 
 note: 
    ┌─ goto_effects.fe:92:9
@@ -368,4 +368,4 @@ note:
    ┌─ goto_effects.fe:93:20
    │
 93 │             return state.value
-   │                    ^^^^^ -> local: State
+   │                    ^^^^^ -> goto_effects::EffectContract::state

@@ -14,7 +14,7 @@ pub enum MyE {
 }
 
 pub contract MyC {
-    f: Gen<i32>,
+    mut f: Gen<i32>,
 }
 
 

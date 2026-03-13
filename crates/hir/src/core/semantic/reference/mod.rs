@@ -31,7 +31,8 @@ use crate::{
     },
     hir_def::scope_graph::ScopeId,
     hir_def::{
-        Body, Contract, Expr, ExprId, FieldIndex, ItemKind, Partial, PathId, Use, UsePathSegment,
+        Body, Contract, Expr, ExprId, FieldIndex, FieldParent, ItemKind, Partial, PathId, Use,
+        UsePathSegment,
     },
     hir_def::{GenericParamOwner, HirIngot},
     span::{
@@ -105,6 +106,22 @@ pub(crate) fn typed_body_for_body<'db>(
     }
 
     None
+}
+
+pub(crate) fn contract_field_scope<'db>(binding: LocalBinding<'db>) -> Option<ScopeId<'db>> {
+    let LocalBinding::ContractField {
+        contract,
+        field_idx,
+        ..
+    } = binding
+    else {
+        return None;
+    };
+
+    Some(ScopeId::Field(
+        FieldParent::Contract(contract),
+        u16::try_from(field_idx).ok()?,
+    ))
 }
 
 /// Extract all resolvable scopes from a path resolution result, including
@@ -369,9 +386,13 @@ impl<'db> PathView<'db> {
         match body_ctx {
             BodyPathContext::Expr(expr_id) => {
                 // Expression reference (e.g., `p` in `p.foo()` or `x + 1`)
+                let binding = typed_body.expr_binding(expr_id)?;
+                if let Some(scope) = contract_field_scope(binding) {
+                    return Some(Target::Scope(scope));
+                }
+
                 let def_span = typed_body.expr_binding_def_span_in_body(body, expr_id)?;
                 let ty = typed_body.expr_ty(db, expr_id);
-                let binding = typed_body.expr_binding(expr_id)?;
 
                 Some(Target::Local {
                     span: def_span,
@@ -385,6 +406,9 @@ impl<'db> PathView<'db> {
                 // If the type checker recorded this as a binding, it's a local variable.
                 // Otherwise it's something else (enum variant, etc.) - return None.
                 let binding = typed_body.pat_binding(pat_id)?;
+                if let Some(scope) = contract_field_scope(binding) {
+                    return Some(Target::Scope(scope));
+                }
                 let ty = typed_body.pat_ty(db, pat_id);
                 let def_span = pat_id.span(body).into();
 

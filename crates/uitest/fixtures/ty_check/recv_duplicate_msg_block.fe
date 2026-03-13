@@ -6,7 +6,7 @@ msg BankMsg {
 }
 
 pub contract BadContract {
-    data: u64,
+    mut data: u64,
 
     recv BankMsg {
         Deposit {}

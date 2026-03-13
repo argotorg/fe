@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/mir_check.rs
+assertion_line: 32
+expression: res
+input_file: fixtures/mir_check/immutable_unbound_missing_assignment.fe
+---
+error[11-0003]: immutable field `value` may be uninitialized when `init` returns
+  ┌─ immutable_unbound_missing_assignment.fe:1:14
+  │
+1 │ pub contract Counter {
+  │              ^^^^^^^ this return path does not definitely assign the immutable field
+  │
+  = note: assign every immutable field on all non-aborting `init` paths

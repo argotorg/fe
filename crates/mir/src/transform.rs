@@ -44,6 +44,17 @@ impl<'db> StabilizeCtx<'db, '_, '_> {
                         self.stabilize_value(*arg, true, false);
                     }
                 }
+                TerminatingCall::DeployRuntime {
+                    runtime_offset,
+                    runtime_len,
+                    immutable_payload,
+                } => {
+                    self.stabilize_value(*runtime_offset, true, false);
+                    self.stabilize_value(*runtime_len, true, false);
+                    if let Some((ptr, _)) = immutable_payload {
+                        self.stabilize_value(*ptr, true, false);
+                    }
+                }
             },
             Terminator::Branch { cond, .. } => self.stabilize_value(*cond, true, false),
             Terminator::Switch { discr, .. } => self.stabilize_value(*discr, true, false),
@@ -312,6 +323,17 @@ pub(crate) fn compute_live_values<'db>(body: &MirBody<'db>) -> Vec<bool> {
                         mark_root(*arg);
                     }
                 }
+                TerminatingCall::DeployRuntime {
+                    runtime_offset,
+                    runtime_len,
+                    immutable_payload,
+                } => {
+                    mark_root(*runtime_offset);
+                    mark_root(*runtime_len);
+                    if let Some((ptr, _)) = immutable_payload {
+                        mark_root(*ptr);
+                    }
+                }
             },
             Terminator::Branch { cond, .. } => mark_root(*cond),
             Terminator::Switch { discr, .. } => mark_root(*discr),
@@ -492,6 +514,17 @@ fn transfer_runtime_terminator<'db>(
                     for &arg in args {
                         add_value_runtime_uses(db, body, arg, live, &mut seen_values);
                     }
+                }
+            }
+            TerminatingCall::DeployRuntime {
+                runtime_offset,
+                runtime_len,
+                immutable_payload,
+            } => {
+                add_value_runtime_uses(db, body, *runtime_offset, live, &mut seen_values);
+                add_value_runtime_uses(db, body, *runtime_len, live, &mut seen_values);
+                if let Some((ptr, _)) = immutable_payload {
+                    add_value_runtime_uses(db, body, *ptr, live, &mut seen_values);
                 }
             }
         },
@@ -953,6 +986,17 @@ fn mark_runtime_terminator_live_operands<'db>(
             TerminatingCall::Intrinsic { args, .. } => {
                 for arg in args {
                     changed |= mark_value_runtime_live(body, live_values, live_locals, *arg);
+                }
+            }
+            TerminatingCall::DeployRuntime {
+                runtime_offset,
+                runtime_len,
+                immutable_payload,
+            } => {
+                changed |= mark_value_runtime_live(body, live_values, live_locals, *runtime_offset);
+                changed |= mark_value_runtime_live(body, live_values, live_locals, *runtime_len);
+                if let Some((ptr, _)) = immutable_payload {
+                    changed |= mark_value_runtime_live(body, live_values, live_locals, *ptr);
                 }
             }
         },
@@ -1865,6 +1909,17 @@ fn compute_value_use_counts<'db>(body: &MirBody<'db>) -> Vec<usize> {
                 TerminatingCall::Intrinsic { args, .. } => {
                     for arg in args {
                         bump(*arg);
+                    }
+                }
+                TerminatingCall::DeployRuntime {
+                    runtime_offset,
+                    runtime_len,
+                    immutable_payload,
+                } => {
+                    bump(*runtime_offset);
+                    bump(*runtime_len);
+                    if let Some((ptr, _)) = immutable_payload {
+                        bump(*ptr);
                     }
                 }
             },
