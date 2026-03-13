@@ -1,6 +1,5 @@
 ---
 source: crates/language-server/src/functionality/completion.rs
-assertion_line: 1722
 expression: snapshot
 input_file: test_files/completion.fe
 ---
@@ -25,6 +24,7 @@ completions:
   - Encode (Interface)
   - Err (EnumMember)
   - Evm (Struct)
+  - EvmResultExt (Interface)
   - Helpable (Interface) [use utils::Helpable [Helpable]] {+0:use utils::Helpable}
   - Helper (Struct) [use utils::Helper [Helper]] {+0:use utils::Helper}
   - Helper (Struct) [use shadow_test::Helper [Helper]] {+0:use shadow_test::Helper}
@@ -48,6 +48,7 @@ completions:
   - needs_import (Function) -> "needs_import()$0" [use import_test::needs_import [fn needs_import()]] {+0:use import_test::needs_import}
   - other_stuff (Module) -> "other_stuff::"
   - panic (Function) -> "panic()$0" [fn panic() -> !]
+  - revert (Function) -> "revert(${1:value})$0" [fn revert(value: T) -> !]
   - self (Variable) [self: Point]
   - shadow_test (Module) -> "shadow_test::"
   - test_expression_context (Function) -> "test_expression_context()$0" [fn test_expression_context()]
@@ -110,6 +111,7 @@ completions:
   - needs_import (Function) -> "needs_import()$0" [use import_test::needs_import [fn needs_import()]] {+0:use import_test::needs_import}
   - panic (Function) -> "panic()$0" [fn panic() -> !]
   - result (Variable) [result: _]
+  - revert (Function) -> "revert(${1:value})$0" [fn revert(value: T) -> !]
   - test_expression_context (Function) -> "test_expression_context()$0" [fn test_expression_context()]
   - test_locals (Function) -> "test_locals(${1:param})$0" [fn test_locals(param: i32)]
   - test_member_completion (Function) -> "test_member_completion()$0" [fn test_member_completion()]
@@ -169,6 +171,7 @@ completions:
   - needs_import (Function) -> "needs_import()$0" [use import_test::needs_import [fn needs_import()]] {+0:use import_test::needs_import}
   - panic (Function) -> "panic()$0" [fn panic() -> !]
   - param (Variable) [param: i32]
+  - revert (Function) -> "revert(${1:value})$0" [fn revert(value: T) -> !]
   - test_expression_context (Function) -> "test_expression_context()$0" [fn test_expression_context()]
   - test_locals (Function) -> "test_locals(${1:param})$0" [fn test_locals(param: i32)]
   - test_member_completion (Function) -> "test_member_completion()$0" [fn test_member_completion()]
