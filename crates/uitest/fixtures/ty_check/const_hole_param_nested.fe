@@ -1,3 +1,0 @@
-use std::evm::{Mutex, StorageMap}
-
-fn ok(m: Mutex<StorageMap<u256, u256>>) {}

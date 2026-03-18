@@ -1,5 +1,0 @@
----
-source: crates/uitest/tests/ty.rs
-expression: diags
-input_file: fixtures/ty/trait_impl/impl_method_effect_uses_mixed_layout_holes.fe
----

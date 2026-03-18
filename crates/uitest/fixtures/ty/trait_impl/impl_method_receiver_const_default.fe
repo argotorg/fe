@@ -1,9 +1,0 @@
-struct S<const ROOT: u256 = _> {}
-
-trait T {
-    fn f(self)
-}
-
-impl T for S {
-    fn f(self) {}
-}

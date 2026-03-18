@@ -1,3 +1,0 @@
-use std::evm::StorageMap
-
-fn ok(a: StorageMap<u256, u256>, b: StorageMap<u256, u256>) {}
