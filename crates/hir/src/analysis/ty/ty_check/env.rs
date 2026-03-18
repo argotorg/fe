@@ -40,6 +40,7 @@ use crate::analysis::{
         ty_def::{InvalidCause, TyData, TyId, TyVarSort},
         ty_lower::lower_hir_ty,
         unify::UnificationTable,
+        visitor::TyVisitor,
     },
 };
 use crate::core::semantic::EffectBinding;
@@ -776,57 +777,89 @@ impl<'db> TyCheckEnv<'db> {
         scope: ScopeId<'db>,
         assumptions: PredicateListId<'db>,
     ) -> Vec<SmallVec<[ProvidedEffect<'db>; 2]>> {
-        let mut frames_out = Vec::new();
-        let Some(path_res) = resolve_path(self.db, key_path, scope, assumptions, false).ok() else {
-            return frames_out;
+        let Some(lookup) = self.requested_effect_lookup(key_path, scope, assumptions) else {
+            return Vec::new();
         };
 
-        for frame in self.effect_env.frames.iter().rev() {
-            let mut out = SmallVec::new();
-            for (effect_key, provided) in &frame.bindings {
-                match (&path_res, effect_key) {
-                    (PathRes::Ty(req) | PathRes::TyAlias(_, req), EffectKey::Type(got)) => {
-                        if req.base_ty(self.db).as_scope(self.db)
-                            == got.base_ty(self.db).as_scope(self.db)
-                        {
+        let scan_frames = |lookup| {
+            let mut frames_out = Vec::new();
+            let mut saw_exact_keyed = false;
+            for frame in self.effect_env.frames.iter().rev() {
+                let mut out = SmallVec::new();
+                match lookup {
+                    RequestedEffectLookup::Exact(key) => {
+                        if let Some(provided) = frame.bindings.get(&key) {
                             out.extend_from_slice(provided);
+                            saw_exact_keyed = true;
                         }
                     }
-                    (PathRes::Trait(req), EffectKey::Trait(got)) => {
-                        if req.def(self.db) == got.def(self.db) {
-                            out.extend_from_slice(provided);
+                    RequestedEffectLookup::SchematicType(req) => {
+                        for (effect_key, provided) in &frame.bindings {
+                            if let EffectKey::Type(got) = effect_key
+                                && req.base_ty(self.db).as_scope(self.db)
+                                    == got.base_ty(self.db).as_scope(self.db)
+                            {
+                                out.extend_from_slice(provided);
+                            }
                         }
                     }
-                    _ => {}
+                    RequestedEffectLookup::SchematicTrait(req) => {
+                        for (effect_key, provided) in &frame.bindings {
+                            if let EffectKey::Trait(got) = effect_key
+                                && req.def(self.db) == got.def(self.db)
+                            {
+                                out.extend_from_slice(provided);
+                            }
+                        }
+                    }
                 }
-            }
 
-            for provided in frame.unkeyed.iter() {
-                if provided.ty.has_invalid(self.db) {
+                for provided in frame.unkeyed.iter() {
+                    if provided.ty.has_invalid(self.db) {
+                        continue;
+                    }
+                    match lookup {
+                        RequestedEffectLookup::Exact(EffectKey::Type(_))
+                        | RequestedEffectLookup::SchematicType(_) => out.push(*provided),
+                        RequestedEffectLookup::Exact(EffectKey::Trait(_))
+                        | RequestedEffectLookup::SchematicTrait(_) => {
+                            // Trait satisfaction is checked at the call site so we
+                            // can consider type arguments and current assumptions.
+                            out.push(*provided);
+                        }
+                    }
+                }
+                if out.is_empty() {
                     continue;
                 }
-                match &path_res {
-                    PathRes::Ty(_) | PathRes::TyAlias(_, _) => out.push(*provided),
-                    PathRes::Trait(_) => {
-                        // Trait satisfaction is checked at the call site so we
-                        // can consider type arguments and current assumptions.
-                        out.push(*provided);
-                    }
-                    _ => {}
-                }
-            }
-            if out.is_empty() {
-                continue;
-            }
 
-            // Prefer call-site validation over eager deduplication: multiple distinct providers
-            // may share the same type (e.g. two `StorageMap<u256, u256, 0>` effects).
-            let mut seen = rustc_hash::FxHashSet::default();
-            out.retain(|p| seen.insert(*p));
-            frames_out.push(out);
+                // Prefer call-site validation over eager deduplication: multiple distinct
+                // providers may share the same type (e.g. two `StorageMap<u256, u256, 0>`
+                // effects).
+                let mut seen = rustc_hash::FxHashSet::default();
+                out.retain(|p| seen.insert(*p));
+                frames_out.push(out);
+            }
+            (frames_out, saw_exact_keyed)
+        };
+
+        let (frames_out, saw_exact_keyed) = scan_frames(lookup);
+        if saw_exact_keyed || !matches!(lookup, RequestedEffectLookup::Exact(_)) {
+            return frames_out;
         }
 
-        frames_out
+        let fallback = match lookup {
+            RequestedEffectLookup::Exact(EffectKey::Type(ty)) => {
+                RequestedEffectLookup::SchematicType(ty)
+            }
+            RequestedEffectLookup::Exact(EffectKey::Trait(trait_inst)) => {
+                RequestedEffectLookup::SchematicTrait(trait_inst)
+            }
+            RequestedEffectLookup::SchematicType(_) | RequestedEffectLookup::SchematicTrait(_) => {
+                unreachable!()
+            }
+        };
+        scan_frames(fallback).0
     }
 
     pub(super) fn enter_scope(&mut self, block: ExprId) {
@@ -1072,6 +1105,21 @@ mod tests {
         TyCheckEnv::new(db, BodyOwner::Func(func)).expect("function body should lower")
     }
 
+    fn marker_effect<'db>(
+        db: &'db HirAnalysisTestDb,
+        func: Func<'db>,
+        ty: TyId<'db>,
+    ) -> ProvidedEffect<'db> {
+        ProvidedEffect {
+            origin: EffectOrigin::With {
+                value_expr: func.body(db).expect("missing function body").expr(db),
+            },
+            ty,
+            is_mut: false,
+            binding: None,
+        }
+    }
+
     fn assert_hole_free_effect_key<'db>(db: &'db HirAnalysisTestDb, key: EffectKey<'db>) {
         match key {
             EffectKey::Type(ty) => assert!(
@@ -1189,6 +1237,256 @@ fn f() uses (cap: Cap) {}
             expected_key,
             EffectKey::Trait(binding.key_trait.expect("missing trait key"))
         );
+    }
+
+    #[test]
+    fn effect_candidate_frames_skip_inner_near_miss_for_concrete_type_keys() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from(
+                "effect_candidate_frames_skip_inner_near_miss_for_concrete_type_keys.fe",
+            ),
+            r#"
+struct Storage<T> {
+    value: T,
+}
+
+fn needs_u8() uses (store: Storage<u8>) {}
+fn needs_u16() uses (store: Storage<u16>) {}
+fn host() {}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+
+        let needs_u8 = find_func(&db, top_mod, "needs_u8");
+        let needs_u16 = find_func(&db, top_mod, "needs_u16");
+        let host = find_func(&db, top_mod, "host");
+        let request = needs_u8
+            .effect_params(&db)
+            .next()
+            .and_then(|effect| effect.key_path(&db))
+            .expect("missing request path");
+        let outer_key = seeded_env(&db, needs_u8)
+            .effect_key_for_path_in_scope(request, host.scope(), PredicateListId::empty_list(&db))
+            .expect("missing outer key");
+        let inner_request = needs_u16
+            .effect_params(&db)
+            .next()
+            .and_then(|effect| effect.key_path(&db))
+            .expect("missing inner request path");
+        let inner_key = seeded_env(&db, needs_u16)
+            .effect_key_for_path_in_scope(
+                inner_request,
+                host.scope(),
+                PredicateListId::empty_list(&db),
+            )
+            .expect("missing inner key");
+
+        let mut env = seeded_env(&db, host);
+        env.effect_env
+            .insert(outer_key, marker_effect(&db, host, TyId::bool(&db)));
+        env.effect_env.push_frame();
+        env.effect_env
+            .insert(inner_key, marker_effect(&db, host, TyId::u256(&db)));
+
+        let frames = env.effect_candidate_frames_in_scope(
+            request,
+            host.scope(),
+            PredicateListId::empty_list(&db),
+        );
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].len(), 1);
+        assert_eq!(frames[0][0].ty, TyId::bool(&db));
+    }
+
+    #[test]
+    fn effect_candidate_frames_fall_back_to_family_candidates_when_exact_type_key_is_missing() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from(
+                "effect_candidate_frames_fall_back_to_family_candidates_when_exact_type_key_is_missing.fe",
+            ),
+            r#"
+struct Storage<T> {
+    value: T,
+}
+
+fn needs_u8() uses (store: Storage<u8>) {}
+fn needs_u16() uses (store: Storage<u16>) {}
+fn host() {}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+
+        let needs_u8 = find_func(&db, top_mod, "needs_u8");
+        let needs_u16 = find_func(&db, top_mod, "needs_u16");
+        let host = find_func(&db, top_mod, "host");
+        let request = needs_u8
+            .effect_params(&db)
+            .next()
+            .and_then(|effect| effect.key_path(&db))
+            .expect("missing request path");
+        let inner_request = needs_u16
+            .effect_params(&db)
+            .next()
+            .and_then(|effect| effect.key_path(&db))
+            .expect("missing inner request path");
+        let inner_key = seeded_env(&db, needs_u16)
+            .effect_key_for_path_in_scope(
+                inner_request,
+                host.scope(),
+                PredicateListId::empty_list(&db),
+            )
+            .expect("missing inner key");
+
+        let mut env = seeded_env(&db, host);
+        env.effect_env.push_frame();
+        env.effect_env
+            .insert(inner_key, marker_effect(&db, host, TyId::u256(&db)));
+
+        let frames = env.effect_candidate_frames_in_scope(
+            request,
+            host.scope(),
+            PredicateListId::empty_list(&db),
+        );
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].len(), 1);
+        assert_eq!(frames[0][0].ty, TyId::u256(&db));
+    }
+
+    #[test]
+    fn effect_candidate_frames_skip_inner_near_miss_for_concrete_trait_keys() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from(
+                "effect_candidate_frames_skip_inner_near_miss_for_concrete_trait_keys.fe",
+            ),
+            r#"
+struct Slot<T> {}
+trait Cap<T> {}
+
+fn needs_u8() uses (cap: Cap<Slot<u8>>) {}
+fn needs_u16() uses (cap: Cap<Slot<u16>>) {}
+fn host() {}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+
+        let needs_u8 = find_func(&db, top_mod, "needs_u8");
+        let needs_u16 = find_func(&db, top_mod, "needs_u16");
+        let host = find_func(&db, top_mod, "host");
+        let request = needs_u8
+            .effect_params(&db)
+            .next()
+            .and_then(|effect| effect.key_path(&db))
+            .expect("missing request path");
+        let outer_key = seeded_env(&db, needs_u8)
+            .effect_key_for_path_in_scope(request, host.scope(), PredicateListId::empty_list(&db))
+            .expect("missing outer key");
+        let inner_request = needs_u16
+            .effect_params(&db)
+            .next()
+            .and_then(|effect| effect.key_path(&db))
+            .expect("missing inner request path");
+        let inner_key = seeded_env(&db, needs_u16)
+            .effect_key_for_path_in_scope(
+                inner_request,
+                host.scope(),
+                PredicateListId::empty_list(&db),
+            )
+            .expect("missing inner key");
+
+        let mut env = seeded_env(&db, host);
+        env.effect_env
+            .insert(outer_key, marker_effect(&db, host, TyId::bool(&db)));
+        env.effect_env.push_frame();
+        env.effect_env
+            .insert(inner_key, marker_effect(&db, host, TyId::u256(&db)));
+
+        let frames = env.effect_candidate_frames_in_scope(
+            request,
+            host.scope(),
+            PredicateListId::empty_list(&db),
+        );
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].len(), 1);
+        assert_eq!(frames[0][0].ty, TyId::bool(&db));
+    }
+
+    #[test]
+    fn effect_candidate_frames_keep_schematic_type_key_ambiguity() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from("effect_candidate_frames_keep_schematic_type_key_ambiguity.fe"),
+            r#"
+pub struct Storage<T> {
+    value: T,
+}
+
+pub fn needs_u8() uses (store: Storage<u8>) {}
+pub fn needs_u16() uses (store: Storage<u16>) {}
+pub fn needs_storage<T>() uses (store: Storage<T>) {}
+pub fn host() {}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+
+        let needs_u8 = find_func(&db, top_mod, "needs_u8");
+        let needs_u16 = find_func(&db, top_mod, "needs_u16");
+        let needs_storage = find_func(&db, top_mod, "needs_storage");
+        let host = find_func(&db, top_mod, "host");
+        let request = needs_storage
+            .effect_params(&db)
+            .next()
+            .and_then(|effect| effect.key_path(&db))
+            .expect("missing request path");
+        let outer_request = needs_u8
+            .effect_params(&db)
+            .next()
+            .and_then(|effect| effect.key_path(&db))
+            .expect("missing outer request path");
+        let inner_request = needs_u16
+            .effect_params(&db)
+            .next()
+            .and_then(|effect| effect.key_path(&db))
+            .expect("missing inner request path");
+        let outer_key = seeded_env(&db, needs_u8)
+            .effect_key_for_path_in_scope(
+                outer_request,
+                host.scope(),
+                PredicateListId::empty_list(&db),
+            )
+            .expect("missing outer key");
+        let inner_key = seeded_env(&db, needs_u16)
+            .effect_key_for_path_in_scope(
+                inner_request,
+                host.scope(),
+                PredicateListId::empty_list(&db),
+            )
+            .expect("missing inner key");
+        let generic_env = seeded_env(&db, needs_storage);
+
+        let mut env = seeded_env(&db, host);
+        env.effect_env
+            .insert(outer_key, marker_effect(&db, host, TyId::bool(&db)));
+        env.effect_env.push_frame();
+        env.effect_env
+            .insert(inner_key, marker_effect(&db, host, TyId::u256(&db)));
+
+        let frames = env.effect_candidate_frames_in_scope(
+            request,
+            needs_storage.scope(),
+            generic_env.assumptions,
+        );
+        assert_eq!(frames.len(), 2);
+        assert_eq!(frames[0].len(), 1);
+        assert_eq!(frames[0][0].ty, TyId::u256(&db));
+        assert_eq!(frames[1].len(), 1);
+        assert_eq!(frames[1][0].ty, TyId::bool(&db));
     }
 }
 
@@ -1655,4 +1953,94 @@ impl<'db> TyCheckEnv<'db> {
             ResolvedEffectKey::Other => None,
         }
     }
+
+    fn requested_effect_lookup(
+        &self,
+        key_path: PathId<'db>,
+        scope: ScopeId<'db>,
+        assumptions: PredicateListId<'db>,
+    ) -> Option<RequestedEffectLookup<'db>> {
+        let key = self.effect_key_for_path_in_scope(key_path, scope, assumptions)?;
+        Some(if effect_key_is_schematic(self.db, key) {
+            match key {
+                EffectKey::Type(ty) => RequestedEffectLookup::SchematicType(ty),
+                EffectKey::Trait(trait_inst) => RequestedEffectLookup::SchematicTrait(trait_inst),
+            }
+        } else {
+            RequestedEffectLookup::Exact(key)
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RequestedEffectLookup<'db> {
+    Exact(EffectKey<'db>),
+    SchematicType(TyId<'db>),
+    SchematicTrait(TraitInstId<'db>),
+}
+
+fn effect_key_is_schematic<'db>(db: &'db dyn HirAnalysisDb, key: EffectKey<'db>) -> bool {
+    match key {
+        EffectKey::Type(ty) => {
+            ty_contains_const_hole(db, ty) || ty_value_contains_schematic_structure(db, ty)
+        }
+        EffectKey::Trait(trait_inst) => {
+            !collect_layout_hole_tys_in_order(db, trait_inst).is_empty()
+                || ty_value_contains_schematic_structure(db, trait_inst)
+        }
+    }
+}
+
+fn ty_value_contains_schematic_structure<'db>(
+    db: &'db dyn HirAnalysisDb,
+    value: impl crate::analysis::ty::visitor::TyVisitable<'db>,
+) -> bool {
+    struct Finder<'db> {
+        db: &'db dyn HirAnalysisDb,
+        found: bool,
+    }
+
+    impl<'db> TyVisitor<'db> for Finder<'db> {
+        fn db(&self) -> &'db dyn HirAnalysisDb {
+            self.db
+        }
+
+        fn visit_var(&mut self, _: &crate::analysis::ty::ty_def::TyVar<'db>) {
+            self.found = true;
+        }
+
+        fn visit_param(&mut self, param: &crate::analysis::ty::ty_def::TyParam<'db>) {
+            self.found = !(param.is_trait_self() || param.is_effect_provider());
+        }
+
+        fn visit_const_param(
+            &mut self,
+            param: &crate::analysis::ty::ty_def::TyParam<'db>,
+            _: TyId<'db>,
+        ) {
+            self.found = !param.is_implicit();
+        }
+
+        fn visit_assoc_ty(&mut self, _: &crate::analysis::ty::ty_def::AssocTy<'db>) {
+            self.found = true;
+        }
+
+        fn visit_ty(&mut self, ty: TyId<'db>) {
+            if self.found {
+                return;
+            }
+            crate::analysis::ty::visitor::walk_ty(self, ty);
+        }
+
+        fn visit_const_ty(&mut self, const_ty: &ConstTyId<'db>) {
+            if self.found {
+                return;
+            }
+            crate::analysis::ty::visitor::walk_const_ty(self, const_ty);
+        }
+    }
+
+    let mut finder = Finder { db, found: false };
+    value.visit_with(&mut finder);
+    finder.found
 }
