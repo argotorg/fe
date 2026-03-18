@@ -6,6 +6,9 @@ expression: snapshot
 Wrote <out>/Foo.bin
 Wrote <out>/Foo.runtime.bin
 
+=== STDERR ===
+Warning: skipping recv arm `Ping`: selector signature is unknown; use `#[selector = sol("name(types)")]` to include it in the ABI
+
 === EXIT CODE: 0 ===
 
 === ARTIFACTS ===

@@ -1,4 +1,5 @@
 use dir_test::{Fixture, dir_test};
+use serde_json::Value;
 use std::{fs, io::IsTerminal, path::Path, process::Command, sync::OnceLock};
 use tempfile::tempdir;
 use test_utils::{
@@ -432,6 +433,401 @@ fn test_cli_build_all_contracts_fake_solc_artifacts() {
         .expect("fixture should have parent")
         .join("multi_contract_build_all_fake_solc.case");
     snap_test!(snapshot, snapshot_path.to_str().unwrap());
+}
+
+#[test]
+fn test_cli_build_emit_abi_writes_json_artifact() {
+    let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/cli_output/emit_abi/abi_contract.fe");
+    let fixture_path_str = fixture_path.to_str().expect("fixture path utf8");
+
+    let temp = tempdir().expect("tempdir");
+    let out_dir = temp.path().join("out");
+    let out_dir_str = out_dir.to_string_lossy().to_string();
+
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--emit",
+        "abi",
+        "--contract",
+        "Foo",
+        "--out-dir",
+        out_dir_str.as_str(),
+        fixture_path_str,
+    ]);
+    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
+
+    let abi_path = out_dir.join("Foo.abi.json");
+    assert!(abi_path.is_file(), "missing ABI artifact:\n{output}");
+    assert!(
+        !out_dir.join("Foo.bin").exists(),
+        "unexpected deploy artifact"
+    );
+    assert!(
+        !out_dir.join("Foo.runtime.bin").exists(),
+        "unexpected runtime artifact"
+    );
+
+    let abi: Value = serde_json::from_str(&fs::read_to_string(&abi_path).expect("read ABI"))
+        .expect("parse ABI JSON");
+    let function = abi
+        .as_array()
+        .expect("abi array")
+        .iter()
+        .find(|entry| entry["type"] == "function")
+        .expect("function entry");
+
+    assert!(
+        output.contains("Foo.abi.json"),
+        "unexpected output:\n{output}"
+    );
+    assert_eq!(function["name"], "ping");
+    assert_eq!(function["inputs"][0]["name"], "value");
+    assert_eq!(function["inputs"][0]["type"], "uint256");
+    assert_eq!(function["outputs"][0]["type"], "uint256");
+}
+
+#[test]
+fn test_cli_build_emit_abi_includes_imported_events() {
+    let temp = tempdir().expect("tempdir");
+    let src_dir = temp.path().join("src");
+    fs::create_dir_all(&src_dir).expect("create src dir");
+    fs::write(
+        temp.path().join("fe.toml"),
+        "[ingot]\nname = \"emit_abi_events\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("write fe.toml");
+    fs::write(
+        src_dir.join("events.fe"),
+        r#"
+#[event]
+pub struct Transfer {
+    pub value: u256,
+}
+
+#[event]
+pub struct UnusedEvent {
+    pub value: u256,
+}
+"#,
+    )
+    .expect("write events.fe");
+    fs::write(
+        src_dir.join("helpers.fe"),
+        r#"
+use std::evm::Log
+use super::events::Transfer
+
+pub fn emit_transfer(value: u256) uses (log: mut Log) {
+    log.emit(Transfer { value })
+}
+"#,
+    )
+    .expect("write helpers.fe");
+    fs::write(
+        src_dir.join("lib.fe"),
+        r#"
+use std::abi::sol
+use std::evm::Log
+use helpers::emit_transfer
+
+msg FooMsg {
+    #[selector = sol("ping()")]
+    Ping,
+}
+
+pub contract Foo uses (log: mut Log) {
+    recv FooMsg {
+        Ping uses (mut log) {
+            emit_transfer(value: 1)
+        }
+    }
+}
+"#,
+    )
+    .expect("write lib.fe");
+
+    let out_dir = temp.path().join("out");
+    let out_dir_str = out_dir.to_string_lossy().to_string();
+    let project_path = temp.path().to_str().expect("project path utf8");
+
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--emit",
+        "abi",
+        "--contract",
+        "Foo",
+        "--out-dir",
+        out_dir_str.as_str(),
+        project_path,
+    ]);
+    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
+
+    let abi_path = out_dir.join("Foo.abi.json");
+    let abi: Value = serde_json::from_str(&fs::read_to_string(&abi_path).expect("read ABI"))
+        .expect("parse ABI JSON");
+    let event = abi
+        .as_array()
+        .expect("abi array")
+        .iter()
+        .find(|entry| entry["type"] == "event" && entry["name"] == "Transfer")
+        .expect("event entry");
+
+    assert_eq!(event["inputs"][0]["name"], "value");
+    assert_eq!(event["inputs"][0]["type"], "uint256");
+    assert!(
+        abi.as_array()
+            .expect("abi array")
+            .iter()
+            .all(|entry| entry["name"] != "UnusedEvent"),
+        "unexpected unused event in ABI: {abi}"
+    );
+}
+
+#[test]
+fn test_cli_build_emit_abi_skips_hex_selectors_with_warning() {
+    let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/cli_output/build/simple_contract.fe");
+    let fixture_path_str = fixture_path.to_str().expect("fixture path utf8");
+
+    let temp = tempdir().expect("tempdir");
+    let out_dir = temp.path().join("out");
+    let out_dir_str = out_dir.to_string_lossy().to_string();
+
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--emit",
+        "abi",
+        "--contract",
+        "Foo",
+        "--out-dir",
+        out_dir_str.as_str(),
+        fixture_path_str,
+    ]);
+
+    assert_eq!(exit_code, 0, "ABI build should succeed:\n{output}");
+    assert!(
+        output.contains("selector signature is unknown"),
+        "expected warning about unknown selector:\n{output}"
+    );
+    assert!(
+        !out_dir.join("Foo.abi.json").exists(),
+        "empty ABI artifact should not be written"
+    );
+}
+
+#[test]
+fn test_cli_build_emit_abi_skips_manual_msgvariant_codecs() {
+    let temp = tempdir().expect("tempdir");
+    let src_dir = temp.path().join("src");
+    fs::create_dir_all(&src_dir).expect("create src dir");
+    fs::write(
+        temp.path().join("fe.toml"),
+        "[ingot]\nname = \"emit_abi_manual_msgvariant\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("write fe.toml");
+    fs::write(
+        src_dir.join("lib.fe"),
+        r#"
+use std::abi::sol
+
+struct Weird {
+    pub amount: u64,
+    pub flag: bool,
+}
+
+impl core::abi::AbiSize for Weird {
+    const ENCODED_SIZE: u256 = 64
+}
+
+impl core::abi::Encode<std::abi::Sol> for Weird {
+    const DIRECT_ENCODE: bool = false
+
+    fn encode<E: core::abi::AbiEncoder<std::abi::Sol>>(own self, _ e: mut E) {
+        self.flag.encode(e)
+        self.amount.encode(e)
+    }
+
+    fn encode_to_ptr(own self, ptr: u256) {
+        std::abi::Sol::store_word(ptr, if self.flag { 1 } else { 0 })
+        std::abi::Sol::store_word(ptr + 32, self.amount as u256)
+    }
+}
+
+impl core::abi::Decode<std::abi::Sol> for Weird {
+    fn decode<D: core::abi::AbiDecoder<std::abi::Sol>>(_ d: mut D) -> Self {
+        let flag = bool::decode(d)
+        let amount = u64::decode(d)
+        Self { amount, flag }
+    }
+}
+
+impl core::message::MsgVariant<std::abi::Sol> for Weird {
+    const SELECTOR: u32 = sol("foo(bool,uint64)")
+    type Return = ()
+}
+
+pub contract Foo {
+    recv {
+        Weird { amount, flag } uses () {
+            let _ = amount
+            let _ = flag
+        }
+    }
+}
+"#,
+    )
+    .expect("write lib.fe");
+
+    let out_dir = temp.path().join("out");
+    let out_dir_str = out_dir.to_string_lossy().to_string();
+    let project_path = temp.path().to_str().expect("project path utf8");
+
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--emit",
+        "abi",
+        "--contract",
+        "Foo",
+        "--out-dir",
+        out_dir_str.as_str(),
+        project_path,
+    ]);
+
+    assert_eq!(exit_code, 0, "ABI build should succeed:\n{output}");
+    assert!(
+        output.contains("manual `MsgVariant` impls"),
+        "expected warning about manual MsgVariant codecs:\n{output}"
+    );
+    assert!(
+        !out_dir.join("Foo.abi.json").exists(),
+        "empty ABI artifact should not be written"
+    );
+}
+
+#[test]
+fn test_cli_build_default_emit_skips_empty_abi_artifact() {
+    let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/cli_output/build/simple_contract.fe");
+    let fixture_path_str = fixture_path.to_str().expect("fixture path utf8");
+
+    let temp = tempdir().expect("tempdir");
+    let out_dir = temp.path().join("out");
+    let out_dir_str = out_dir.to_string_lossy().to_string();
+
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--contract",
+        "Foo",
+        "--out-dir",
+        out_dir_str.as_str(),
+        fixture_path_str,
+    ]);
+
+    assert_eq!(exit_code, 0, "default build should succeed:\n{output}");
+    assert!(
+        output.contains("selector signature is unknown"),
+        "expected warning about unknown selector:\n{output}"
+    );
+    assert!(
+        !output.contains("Foo.abi.json"),
+        "empty ABI artifact should not be reported as written:\n{output}"
+    );
+    assert!(
+        !out_dir.join("Foo.abi.json").exists(),
+        "empty ABI artifact should not be written"
+    );
+}
+
+#[test]
+fn test_cli_build_default_emit_removes_stale_empty_abi_artifact() {
+    let temp = tempdir().expect("tempdir");
+    let src_dir = temp.path().join("src");
+    fs::create_dir_all(&src_dir).expect("create src dir");
+    fs::write(
+        temp.path().join("fe.toml"),
+        "[ingot]\nname = \"stale_empty_abi\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("write fe.toml");
+    let out_dir = temp.path().join("out");
+    let out_dir_str = out_dir.to_string_lossy().to_string();
+    let project_path = temp.path().to_str().expect("project path utf8");
+
+    fs::write(
+        src_dir.join("lib.fe"),
+        r#"
+use std::abi::sol
+
+msg FooMsg {
+    #[selector = sol("ping()")]
+    Ping,
+}
+
+pub contract Foo {
+    recv FooMsg {
+        Ping {}
+    }
+}
+"#,
+    )
+    .expect("write initial lib.fe");
+
+    let (first_output, first_exit_code) = run_fe_main(&[
+        "build",
+        "--contract",
+        "Foo",
+        "--out-dir",
+        out_dir_str.as_str(),
+        project_path,
+    ]);
+
+    assert_eq!(
+        first_exit_code, 0,
+        "initial build should succeed:\n{first_output}"
+    );
+    assert!(
+        out_dir.join("Foo.abi.json").exists(),
+        "expected initial ABI artifact"
+    );
+
+    fs::write(
+        src_dir.join("lib.fe"),
+        r#"
+msg FooMsg {
+    #[selector = 0x12345678]
+    Ping,
+}
+
+pub contract Foo {
+    recv FooMsg {
+        Ping {}
+    }
+}
+"#,
+    )
+    .expect("write updated lib.fe");
+
+    let (second_output, second_exit_code) = run_fe_main(&[
+        "build",
+        "--contract",
+        "Foo",
+        "--out-dir",
+        out_dir_str.as_str(),
+        project_path,
+    ]);
+
+    assert_eq!(
+        second_exit_code, 0,
+        "second build should succeed:\n{second_output}"
+    );
+    assert!(
+        second_output.contains("selector signature is unknown"),
+        "expected warning about unknown selector:\n{second_output}"
+    );
+    assert!(
+        !out_dir.join("Foo.abi.json").exists(),
+        "stale ABI artifact should be removed after it becomes empty"
+    );
 }
 
 #[cfg(unix)]
@@ -1256,6 +1652,100 @@ fn test_cli_build_workspace_collisions_are_rejected() {
     let (output, exit_code) = run_fe_main_in_dir(&["build"], &root);
     assert_ne!(exit_code, 0, "expected non-zero exit code:\n{output}");
     snap_test!(output, snapshot_path.to_str().unwrap());
+}
+
+#[test]
+fn test_cli_build_emit_abi_workspace_empty_collisions_are_allowed() {
+    let root = workspace_fixture("build_contract_ambiguity");
+    let temp = tempdir().expect("tempdir");
+    let out_dir = temp.path().join("out");
+    let out_dir_str = out_dir.to_string_lossy().to_string();
+    let (output, exit_code) = run_fe_main_in_dir(
+        &["build", "--emit", "abi", "--out-dir", out_dir_str.as_str()],
+        &root,
+    );
+    assert_eq!(exit_code, 0, "expected zero exit code:\n{output}");
+    assert!(
+        !output.contains("Contract names collide"),
+        "unexpected collision error:\n{output}"
+    );
+    assert!(
+        !out_dir.join("Foo.abi.json").exists(),
+        "empty ABI-only workspace build should not write an ABI artifact"
+    );
+}
+
+#[test]
+fn test_cli_build_emit_abi_workspace_nonempty_collisions_are_rejected() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path();
+    fs::create_dir_all(root.join("ingots/a/src")).expect("create ingot a");
+    fs::create_dir_all(root.join("ingots/b/src")).expect("create ingot b");
+    fs::write(
+        root.join("fe.toml"),
+        r#"[workspace]
+name = "emit_abi_workspace_collision"
+version = "0.1.0"
+members = [
+  { path = "ingots/a", name = "a" },
+  { path = "ingots/b", name = "b" },
+]
+"#,
+    )
+    .expect("write workspace fe.toml");
+    fs::write(
+        root.join("ingots/a/fe.toml"),
+        "[ingot]\nname = \"a\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("write ingot a fe.toml");
+    fs::write(
+        root.join("ingots/b/fe.toml"),
+        "[ingot]\nname = \"b\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("write ingot b fe.toml");
+    fs::write(
+        root.join("ingots/a/src/lib.fe"),
+        r#"
+use std::abi::sol
+
+msg FooMsg {
+    #[selector = sol("ping()")]
+    Ping,
+}
+
+pub contract Foo {
+    recv FooMsg {
+        Ping {}
+    }
+}
+"#,
+    )
+    .expect("write ingot a source");
+    fs::write(
+        root.join("ingots/b/src/lib.fe"),
+        r#"
+use std::abi::sol
+
+msg FooMsg {
+    #[selector = sol("pong()")]
+    Pong,
+}
+
+pub contract Foo {
+    recv FooMsg {
+        Pong {}
+    }
+}
+"#,
+    )
+    .expect("write ingot b source");
+
+    let (output, exit_code) = run_fe_main_in_dir(&["build", "--emit", "abi"], root);
+    assert_ne!(exit_code, 0, "expected non-zero exit code:\n{output}");
+    assert!(
+        output.contains("Contract names collide in a flat workspace output directory"),
+        "expected ABI collision error:\n{output}"
+    );
 }
 
 #[test]

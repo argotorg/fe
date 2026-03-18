@@ -8,6 +8,10 @@ Wrote <out>/Foo.runtime.bin
 Wrote <out>/Bar.bin
 Wrote <out>/Bar.runtime.bin
 
+=== STDERR ===
+Warning: skipping recv arm `Ping`: selector signature is unknown; use `#[selector = sol("name(types)")]` to include it in the ABI
+Warning: skipping recv arm `Pong`: selector signature is unknown; use `#[selector = sol("name(types)")]` to include it in the ABI
+
 === EXIT CODE: 0 ===
 
 === ARTIFACTS ===

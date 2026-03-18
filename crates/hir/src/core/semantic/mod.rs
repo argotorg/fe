@@ -32,7 +32,9 @@ pub use symbol::{
 
 use crate::HirDb;
 use crate::analysis::HirAnalysisDb;
-use crate::analysis::ty::corelib::{resolve_core_trait, resolve_lib_type_path};
+use crate::analysis::ty::corelib::{
+    resolve_core_trait, resolve_lib_func_path, resolve_lib_type_path,
+};
 use crate::analysis::ty::diagnostics::{ImplDiag, TyLowerDiag};
 use crate::analysis::ty::normalize::normalize_ty;
 use crate::analysis::ty::ty_def::Kind;
@@ -950,15 +952,14 @@ impl<'db> RecvArmView<'db> {
         let contract = recv.contract(db);
 
         let variant_ty = self.variant_ty(db);
-        let selector_value = variant_struct_from_ty(db, variant_ty)
-            .and_then(|s| get_variant_selector(db, s))
-            .unwrap_or_default();
+        let selector_info = get_variant_selector_info(db, variant_ty, contract.scope());
 
         let Some(msg_variant_trait) =
             resolve_core_trait(db, contract.scope(), &["message", "MsgVariant"])
         else {
             return RecvArmAbiInfo {
-                selector_value,
+                selector_value: selector_info.value,
+                selector_signature: selector_info.signature,
                 args_ty: variant_ty,
                 ret_ty: None,
             };
@@ -982,7 +983,8 @@ impl<'db> RecvArmView<'db> {
         let ret_ty = (variant_ret_ty != TyId::unit(db)).then_some(variant_ret_ty);
 
         RecvArmAbiInfo {
-            selector_value,
+            selector_value: selector_info.value,
+            selector_signature: selector_info.signature,
             args_ty,
             ret_ty,
         }
@@ -1123,9 +1125,16 @@ impl<'db> EffectEnvView<'db> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub struct RecvArmAbiInfo<'db> {
-    pub selector_value: u32,
+    pub selector_value: Option<u32>,
+    pub selector_signature: Option<String>,
     pub args_ty: TyId<'db>,
     pub ret_ty: Option<TyId<'db>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
+struct VariantSelectorInfo {
+    value: Option<u32>,
+    signature: Option<String>,
 }
 
 fn variant_struct_from_ty<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<Struct<'db>> {
@@ -1884,41 +1893,244 @@ fn resolve_sol_abi_ty<'db>(
     }
 }
 
-fn get_variant_selector<'db>(db: &'db dyn HirAnalysisDb, struct_: Struct<'db>) -> Option<u32> {
+fn get_variant_selector_info<'db>(
+    db: &'db dyn HirAnalysisDb,
+    variant_ty: TyId<'db>,
+    scope: ScopeId<'db>,
+) -> VariantSelectorInfo {
     use crate::analysis::ty::{
+        canonical::Canonical,
         const_eval::{ConstValue, try_eval_const_body},
+        corelib::resolve_core_trait,
+        trait_def::impls_for_ty,
         ty_def::{PrimTy, TyBase, TyData},
     };
     use num_traits::ToPrimitive;
 
-    let msg_variant_trait = resolve_core_trait(db, struct_.scope(), &["message", "MsgVariant"])?;
+    let Some(msg_variant_trait) = resolve_core_trait(db, scope, &["message", "MsgVariant"]) else {
+        return VariantSelectorInfo {
+            value: None,
+            signature: None,
+        };
+    };
+    let canonical_ty = Canonical::new(db, variant_ty);
+    let scope_ingot = scope.ingot(db);
+    let search_ingots = [
+        Some(scope_ingot),
+        variant_ty.ingot(db).filter(|&ingot| ingot != scope_ingot),
+    ];
 
-    let adt_def = crate::analysis::ty::adt_def::AdtRef::from(struct_).as_adt(db);
-    let ty = TyId::adt(db, adt_def);
-    let canonical_ty = crate::analysis::ty::canonical::Canonical::new(db, ty);
-    let ingot = struct_.top_mod(db).ingot(db);
-
-    let impl_ = crate::analysis::ty::trait_def::impls_for_ty(db, ingot, canonical_ty)
-        .iter()
-        .find(|impl_| impl_.skip_binder().trait_def(db).eq(&msg_variant_trait))?
-        .skip_binder();
+    let Some(implementor) = search_ingots.into_iter().flatten().find_map(|ingot| {
+        impls_for_ty(db, ingot, canonical_ty)
+            .iter()
+            .find(|impl_| impl_.skip_binder().trait_def(db).eq(&msg_variant_trait))
+            .copied()
+    }) else {
+        return VariantSelectorInfo {
+            value: None,
+            signature: None,
+        };
+    };
+    let impl_ = implementor.skip_binder();
 
     let selector_name = IdentId::new(db, "SELECTOR".to_string());
     let hir_impl = impl_.hir_impl_trait(db);
-    let selector_const = hir_impl
+    let Some(selector_const) = hir_impl
         .hir_consts(db)
         .iter()
-        .find(|c| c.name.to_opt() == Some(selector_name))?;
+        .find(|c| c.name.to_opt() == Some(selector_name))
+    else {
+        return VariantSelectorInfo {
+            value: None,
+            signature: None,
+        };
+    };
 
-    let body = selector_const.value.to_opt()?;
+    let Some(body) = selector_const.value.to_opt() else {
+        return VariantSelectorInfo {
+            value: None,
+            signature: None,
+        };
+    };
+    let signature = selector_signature_from_body(db, body, hir_impl.scope());
     let expected_ty = TyId::new(db, TyData::TyBase(TyBase::Prim(PrimTy::U32)));
-    match try_eval_const_body(db, body, expected_ty)? {
-        ConstValue::Int(value) => value.to_u32(),
-        ConstValue::Bool(_)
-        | ConstValue::Bytes(_)
-        | ConstValue::EnumVariant(_)
-        | ConstValue::ConstArray(_) => None,
+    let value = match try_eval_const_body(db, body, expected_ty) {
+        Some(ConstValue::Int(value)) => value.to_u32(),
+        Some(
+            ConstValue::Bool(_)
+            | ConstValue::Bytes(_)
+            | ConstValue::EnumVariant(_)
+            | ConstValue::ConstArray(_),
+        )
+        | None => None,
+    };
+
+    VariantSelectorInfo { value, signature }
+}
+
+fn selector_signature_from_body<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+    scope: ScopeId<'db>,
+) -> Option<String> {
+    use crate::analysis::ty::ty_def::{PrimTy, TyBase, TyData};
+
+    let expected_ty = TyId::new(db, TyData::TyBase(TyBase::Prim(PrimTy::U32)));
+    let (_, typed_body) =
+        crate::analysis::ty::ty_check::check_anon_const_body(db, body, expected_ty);
+    let mut visited = SelectorSearchVisited::new();
+
+    selector_signature_from_typed_body(db, body, scope, typed_body, &mut visited)
+}
+
+/// Tracks already-visited items to prevent cycles when following const/fn references.
+struct SelectorSearchVisited<'db> {
+    consts: FxHashSet<Const<'db>>,
+    funcs: FxHashSet<Func<'db>>,
+    locals: FxHashSet<PatId>,
+}
+
+impl<'db> SelectorSearchVisited<'db> {
+    fn new() -> Self {
+        Self {
+            consts: FxHashSet::default(),
+            funcs: FxHashSet::default(),
+            locals: FxHashSet::default(),
+        }
     }
+}
+
+fn selector_signature_from_typed_body<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+    scope: ScopeId<'db>,
+    typed_body: &crate::analysis::ty::ty_check::TypedBody<'db>,
+    visited: &mut SelectorSearchVisited<'db>,
+) -> Option<String> {
+    let expr_id = body.expr(db);
+    selector_signature_from_expr(db, body, scope, typed_body, visited, expr_id)
+}
+
+fn selector_signature_from_expr<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+    scope: ScopeId<'db>,
+    typed_body: &crate::analysis::ty::ty_check::TypedBody<'db>,
+    visited: &mut SelectorSearchVisited<'db>,
+    expr_id: ExprId,
+) -> Option<String> {
+    match expr_id.data(db, body) {
+        Partial::Present(Expr::Call(_callee, args)) => {
+            if args.len() == 1
+                && args[0].label.is_none()
+                && let Partial::Present(Expr::Lit(LitKind::String(signature))) =
+                    args[0].expr.data(db, body)
+            {
+                let resolved_sol = resolve_lib_func_path(db, scope, "std::abi::sol")?;
+                if let crate::hir_def::CallableDef::Func(func) =
+                    typed_body.callable_expr(expr_id)?.callable_def
+                    && func == resolved_sol
+                {
+                    return Some(signature.data(db).to_string());
+                }
+            }
+
+            // Follow const fn calls
+            if let Some(callable) = typed_body.callable_expr(expr_id)
+                && let crate::hir_def::CallableDef::Func(func) = callable.callable_def
+                && func.is_const(db)
+                && visited.funcs.insert(func)
+            {
+                let (_, func_typed_body) = crate::analysis::ty::ty_check::check_func_body(db, func);
+                if let Some(func_body) = func_typed_body.body() {
+                    return selector_signature_from_typed_body(
+                        db,
+                        func_body,
+                        func.scope(),
+                        func_typed_body,
+                        visited,
+                    );
+                }
+            }
+        }
+        Partial::Present(Expr::Block(stmts)) => {
+            if let Some(last_stmt) = stmts.last()
+                && let Partial::Present(Stmt::Expr(inner_expr)) = last_stmt.data(db, body)
+            {
+                return selector_signature_from_expr(
+                    db,
+                    body,
+                    scope,
+                    typed_body,
+                    visited,
+                    *inner_expr,
+                );
+            }
+        }
+        _ => {}
+    }
+
+    if let Some(signature) =
+        selector_signature_from_local_binding(db, body, scope, typed_body, visited, expr_id)
+    {
+        return Some(signature);
+    }
+
+    match typed_body.expr_const_ref(expr_id)? {
+        crate::analysis::ty::ty_check::ConstRef::Const(const_) => {
+            if !visited.consts.insert(const_) {
+                return None;
+            }
+            let (_, const_typed_body) = crate::analysis::ty::ty_check::check_const_body(db, const_);
+            let const_body = const_typed_body.body()?;
+            selector_signature_from_typed_body(
+                db,
+                const_body,
+                const_.scope(),
+                const_typed_body,
+                visited,
+            )
+        }
+        crate::analysis::ty::ty_check::ConstRef::TraitConst { .. } => None,
+    }
+}
+
+fn selector_signature_from_local_binding<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+    scope: ScopeId<'db>,
+    typed_body: &crate::analysis::ty::ty_check::TypedBody<'db>,
+    visited: &mut SelectorSearchVisited<'db>,
+    expr_id: ExprId,
+) -> Option<String> {
+    let crate::analysis::ty::ty_check::LocalBinding::Local { pat, .. } =
+        typed_body.expr_binding(expr_id)?
+    else {
+        return None;
+    };
+
+    if !visited.locals.insert(pat) {
+        return None;
+    }
+
+    let init_expr = selector_local_binding_init_expr(db, body, pat)?;
+    selector_signature_from_expr(db, body, scope, typed_body, visited, init_expr)
+}
+
+fn selector_local_binding_init_expr<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+    pat: PatId,
+) -> Option<ExprId> {
+    for (_, stmt) in body.stmts(db).iter() {
+        if let Partial::Present(Stmt::Let(stmt_pat, _, Some(init_expr))) = stmt
+            && *stmt_pat == pat
+        {
+            return Some(*init_expr);
+        }
+    }
+
+    None
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]

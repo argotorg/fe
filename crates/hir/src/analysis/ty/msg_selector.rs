@@ -62,7 +62,12 @@ fn check_msg_mod<'db>(
             continue;
         };
 
-        let Some(selector) = eval_msg_variant_selector(db, struct_, ty_diags) else {
+        let variant_ty = crate::analysis::ty::ty_def::TyId::adt(
+            db,
+            crate::analysis::ty::adt_def::AdtRef::from(struct_).as_adt(db),
+        );
+        let Some(selector) = eval_msg_variant_selector(db, variant_ty, struct_.scope(), ty_diags)
+        else {
             continue;
         };
 

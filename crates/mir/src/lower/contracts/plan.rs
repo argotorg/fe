@@ -280,11 +280,22 @@ impl<'db> ContractPlan<'db> {
         for recv in contract.recv_views(db) {
             for arm in recv.arms(db) {
                 let abi_info = arm.abi_info(db, target.abi.abi_ty);
+                let selector =
+                    abi_info
+                        .selector_value
+                        .ok_or_else(|| MirLowerError::Unsupported {
+                            func_name: "<contract lowering>".into(),
+                            message: format!(
+                                "contract `{display_name}` recv arm {}:{} has no resolved selector",
+                                recv.index(db),
+                                arm.index(db)
+                            ),
+                        })?;
                 arms.push(RuntimeDispatchArmPlan {
                     recv_idx: recv.index(db),
                     arm_idx: arm.index(db),
                     is_payable: arm.arm(db).is_some_and(|a| a.is_payable(db)),
-                    selector: abi_info.selector_value,
+                    selector,
                     call: RuntimeCallPlan {
                         callee: SyntheticId::ContractRecvArmHandler {
                             contract,

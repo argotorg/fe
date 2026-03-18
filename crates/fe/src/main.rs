@@ -1,4 +1,5 @@
 #![allow(clippy::print_stderr, clippy::print_stdout)]
+mod abi;
 mod build;
 mod check;
 mod cli;
@@ -48,6 +49,7 @@ pub enum BuildEmit {
     Bytecode,
     RuntimeBytecode,
     Ir,
+    Abi,
 }
 
 #[derive(Debug, Clone, Parser)]
@@ -115,7 +117,7 @@ pub enum Command {
             short = 'e',
             value_enum,
             value_delimiter = ',',
-            default_value = "bytecode,runtime-bytecode"
+            default_value = "bytecode,runtime-bytecode,abi"
         )]
         emit: Vec<BuildEmit>,
         /// Write a debugging report as a `.tar.gz` file (includes sources, IR, backend output, and bytecode artifacts).

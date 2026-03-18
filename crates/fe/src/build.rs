@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     fs,
 };
 
@@ -36,11 +36,18 @@ struct BuildReportContext {
     root_dir: Utf8PathBuf,
 }
 
+#[derive(Debug, Default)]
+struct IngotBuildAnalysis {
+    contract_names: Vec<String>,
+    abi_artifact_names: Vec<String>,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct EmitSelection {
     bytecode: bool,
     runtime_bytecode: bool,
     ir: bool,
+    abi: bool,
 }
 
 impl EmitSelection {
@@ -49,12 +56,14 @@ impl EmitSelection {
             bytecode: false,
             runtime_bytecode: false,
             ir: false,
+            abi: false,
         };
         for emit in requested {
             match emit {
                 BuildEmit::Bytecode => selection.bytecode = true,
                 BuildEmit::RuntimeBytecode => selection.runtime_bytecode = true,
                 BuildEmit::Ir => selection.ir = true,
+                BuildEmit::Abi => selection.abi = true,
             }
         }
         selection
@@ -542,17 +551,27 @@ fn build_workspace(
         .cloned()
         .unwrap_or_else(|| workspace_root.join("out"));
 
+    let abi_collision_check_needs_filtering =
+        emit.abi && !emit.writes_any_bytecode() && contract.is_none();
     let mut contract_names_by_member = Vec::with_capacity(selected_member_paths.len());
+    let mut abi_artifact_names_by_member = Vec::with_capacity(selected_member_paths.len());
     for member in members {
         let member_path = workspace_root.join(member.path.as_str());
         if !selected_member_paths.contains(&member_path) {
             continue;
         }
-        let contract_names = match analyze_ingot_contract_names(db, &member.url) {
-            Ok(names) => names,
+        let analysis = match analyze_ingot_build_artifacts(
+            db,
+            &member.url,
+            abi_collision_check_needs_filtering,
+        ) {
+            Ok(analysis) => analysis,
             Err(()) => return true,
         };
-        contract_names_by_member.push((member, contract_names));
+        contract_names_by_member.push((member.clone(), analysis.contract_names));
+        if abi_collision_check_needs_filtering {
+            abi_artifact_names_by_member.push((member, analysis.abi_artifact_names));
+        }
     }
 
     if let Some(contract) = contract {
@@ -621,6 +640,11 @@ fn build_workspace(
     {
         return true;
     }
+    if abi_collision_check_needs_filtering
+        && let Err(()) = check_workspace_artifact_name_collisions(&abi_artifact_names_by_member)
+    {
+        return true;
+    }
     if emit.ir
         && let Err(()) = check_workspace_ir_output_name_collisions(&contract_names_by_member)
     {
@@ -660,10 +684,11 @@ fn build_workspace(
     had_errors
 }
 
-fn analyze_ingot_contract_names(
+fn analyze_ingot_build_artifacts(
     db: &mut DriverDataBase,
     ingot_url: &Url,
-) -> Result<Vec<String>, ()> {
+    include_abi_artifact_names: bool,
+) -> Result<IngotBuildAnalysis, ()> {
     let Some(ingot) = db.workspace().containing_ingot(db, ingot_url.clone()) else {
         eprintln!("Error: Could not resolve ingot from directory");
         return Err(());
@@ -684,7 +709,18 @@ fn analyze_ingot_contract_names(
         eprintln!("Error: Failed to analyze contracts: {err}");
     })?;
 
-    Ok(contract_names)
+    let abi_artifact_names = if include_abi_artifact_names {
+        collect_ingot_abi_artifact_names(db, ingot).map_err(|err| {
+            eprintln!("Error: Failed to analyze ABI artifacts: {err}");
+        })?
+    } else {
+        Vec::new()
+    };
+
+    Ok(IngotBuildAnalysis {
+        contract_names,
+        abi_artifact_names,
+    })
 }
 
 fn check_workspace_artifact_name_collisions(
@@ -902,97 +938,110 @@ fn build_ingot(
     let report_dir = report_dir.map(Utf8PathBuf::as_path);
 
     let mut had_errors = false;
-    match backend_kind {
-        BackendKind::Yul => {
-            let optimize = opt_level.yul_optimize();
-            let yul = match codegen::emit_ingot_yul(db, ingot) {
-                Ok(yul) => yul,
-                Err(err) => {
-                    eprintln!("Error: Failed to emit Yul: {err}");
-                    return BuildSummary { had_errors: true };
-                }
-            };
-            if let Some(dir) = report_dir {
-                let path = dir.join("ingot.yul");
-                let _ = std::fs::write(path.as_std_path(), &yul);
-                match lower_ingot(db, ingot) {
-                    Ok(mir) => {
-                        let path = dir.join("mir.txt");
-                        let _ =
-                            std::fs::write(path.as_std_path(), mir_fmt::format_module(db, &mir));
-                    }
+    if emit.ir || emit.writes_any_bytecode() {
+        match backend_kind {
+            BackendKind::Yul => {
+                let optimize = opt_level.yul_optimize();
+                let yul = match codegen::emit_ingot_yul(db, ingot) {
+                    Ok(yul) => yul,
                     Err(err) => {
-                        let path = dir.join("mir_error.txt");
-                        let _ = std::fs::write(path.as_std_path(), format!("{err}"));
-                    }
-                }
-            }
-            if emit.ir
-                && let Err(err) =
-                    write_named_ir_artifact(ir_out_dir, report_dir, ir_file_stem, "yul", &yul)
-            {
-                eprintln!("Error: {err}");
-                had_errors = true;
-            }
-            if emit.writes_any_bytecode() {
-                had_errors |= write_yul_bytecode_artifacts(
-                    &names_to_build,
-                    &yul,
-                    optimize,
-                    out_dir,
-                    report_dir,
-                    emit,
-                    solc,
-                );
-            }
-        }
-        BackendKind::Sonatina => {
-            if emit.ir {
-                let mir_module = match lower_ingot(db, ingot) {
-                    Ok(mir_module) => mir_module,
-                    Err(err) => {
-                        eprintln!("Error: Failed to compile Sonatina IR: {err}");
+                        eprintln!("Error: Failed to emit Yul: {err}");
                         return BuildSummary { had_errors: true };
                     }
                 };
-                let ir = match codegen::emit_mir_module_sonatina_ir_optimized(
-                    db,
-                    &mir_module,
-                    opt_level,
-                    contract,
-                ) {
-                    Ok(ir) => ir,
-                    Err(err) => {
-                        eprintln!("Error: Failed to compile Sonatina IR: {err}");
-                        return BuildSummary { had_errors: true };
+                if let Some(dir) = report_dir {
+                    let path = dir.join("ingot.yul");
+                    let _ = std::fs::write(path.as_std_path(), &yul);
+                    match lower_ingot(db, ingot) {
+                        Ok(mir) => {
+                            let path = dir.join("mir.txt");
+                            let _ = std::fs::write(
+                                path.as_std_path(),
+                                mir_fmt::format_module(db, &mir),
+                            );
+                        }
+                        Err(err) => {
+                            let path = dir.join("mir_error.txt");
+                            let _ = std::fs::write(path.as_std_path(), format!("{err}"));
+                        }
                     }
-                };
-                if let Err(err) =
-                    write_named_ir_artifact(ir_out_dir, report_dir, ir_file_stem, "sona", &ir)
+                }
+                if emit.ir
+                    && let Err(err) =
+                        write_named_ir_artifact(ir_out_dir, report_dir, ir_file_stem, "yul", &yul)
                 {
                     eprintln!("Error: {err}");
                     had_errors = true;
                 }
+                if emit.writes_any_bytecode() {
+                    had_errors |= write_yul_bytecode_artifacts(
+                        &names_to_build,
+                        &yul,
+                        optimize,
+                        out_dir,
+                        report_dir,
+                        emit,
+                        solc,
+                    );
+                }
             }
-            if emit.writes_any_bytecode() {
-                let bytecode =
-                    match codegen::emit_ingot_sonatina_bytecode(db, ingot, opt_level, contract) {
-                        Ok(bytecode) => bytecode,
+            BackendKind::Sonatina => {
+                if emit.ir {
+                    let mir_module = match lower_ingot(db, ingot) {
+                        Ok(mir_module) => mir_module,
                         Err(err) => {
-                            eprintln!("Error: Failed to compile Sonatina bytecode: {err}");
+                            eprintln!("Error: Failed to compile Sonatina IR: {err}");
                             return BuildSummary { had_errors: true };
                         }
                     };
-                had_errors |= write_sonatina_bytecode_artifacts(
-                    &names_to_build,
-                    &bytecode,
-                    out_dir,
-                    report_dir,
-                    emit,
-                );
+                    let ir = match codegen::emit_mir_module_sonatina_ir_optimized(
+                        db,
+                        &mir_module,
+                        opt_level,
+                        contract,
+                    ) {
+                        Ok(ir) => ir,
+                        Err(err) => {
+                            eprintln!("Error: Failed to compile Sonatina IR: {err}");
+                            return BuildSummary { had_errors: true };
+                        }
+                    };
+                    if let Err(err) =
+                        write_named_ir_artifact(ir_out_dir, report_dir, ir_file_stem, "sona", &ir)
+                    {
+                        eprintln!("Error: {err}");
+                        had_errors = true;
+                    }
+                }
+                if emit.writes_any_bytecode() {
+                    let bytecode =
+                        match codegen::emit_ingot_sonatina_bytecode(db, ingot, opt_level, contract)
+                        {
+                            Ok(bytecode) => bytecode,
+                            Err(err) => {
+                                eprintln!("Error: Failed to compile Sonatina bytecode: {err}");
+                                return BuildSummary { had_errors: true };
+                            }
+                        };
+                    had_errors |= write_sonatina_bytecode_artifacts(
+                        &names_to_build,
+                        &bytecode,
+                        out_dir,
+                        report_dir,
+                        emit,
+                    );
+                }
             }
         }
-    };
+    }
+
+    if emit.abi {
+        // For ingot builds, generate ABI from each top-level module
+        use hir::hir_def::HirIngot;
+        for top_mod in ingot.all_modules(db) {
+            had_errors |= write_abi_artifacts(db, *top_mod, &names_to_build, out_dir, report_dir);
+        }
+    }
 
     BuildSummary { had_errors }
 }
@@ -1037,88 +1086,96 @@ fn build_top_mod(
     let report_dir = report_dir.map(Utf8PathBuf::as_path);
 
     let mut had_errors = false;
-    match backend_kind {
-        BackendKind::Yul => {
-            let optimize = opt_level.yul_optimize();
-            let yul = match codegen::emit_module_yul(db, top_mod) {
-                Ok(yul) => yul,
-                Err(err) => {
-                    eprintln!("Error: Failed to emit Yul: {err}");
-                    return BuildSummary { had_errors: true };
-                }
-            };
-            if let Some(dir) = report_dir {
-                let path = dir.join("module.yul");
-                let _ = std::fs::write(path.as_std_path(), &yul);
-                match lower_module(db, top_mod) {
-                    Ok(mir) => {
-                        let path = dir.join("mir.txt");
-                        let _ =
-                            std::fs::write(path.as_std_path(), mir_fmt::format_module(db, &mir));
-                    }
+    if emit.ir || emit.writes_any_bytecode() {
+        match backend_kind {
+            BackendKind::Yul => {
+                let optimize = opt_level.yul_optimize();
+                let yul = match codegen::emit_module_yul(db, top_mod) {
+                    Ok(yul) => yul,
                     Err(err) => {
-                        let path = dir.join("mir_error.txt");
-                        let _ = std::fs::write(path.as_std_path(), format!("{err}"));
-                    }
-                }
-            }
-            if emit.ir
-                && let Err(err) =
-                    write_named_ir_artifact(ir_out_dir, report_dir, ir_file_stem, "yul", &yul)
-            {
-                eprintln!("Error: {err}");
-                had_errors = true;
-            }
-            if emit.writes_any_bytecode() {
-                had_errors |= write_yul_bytecode_artifacts(
-                    &names_to_build,
-                    &yul,
-                    optimize,
-                    out_dir,
-                    report_dir,
-                    emit,
-                    solc,
-                );
-            }
-        }
-        BackendKind::Sonatina => {
-            if emit.ir {
-                let ir = match codegen::emit_module_sonatina_ir_optimized(
-                    db, top_mod, opt_level, contract,
-                ) {
-                    Ok(ir) => ir,
-                    Err(err) => {
-                        eprintln!("Error: Failed to compile Sonatina IR: {err}");
+                        eprintln!("Error: Failed to emit Yul: {err}");
                         return BuildSummary { had_errors: true };
                     }
                 };
-                if let Err(err) =
-                    write_named_ir_artifact(ir_out_dir, report_dir, ir_file_stem, "sona", &ir)
+                if let Some(dir) = report_dir {
+                    let path = dir.join("module.yul");
+                    let _ = std::fs::write(path.as_std_path(), &yul);
+                    match lower_module(db, top_mod) {
+                        Ok(mir) => {
+                            let path = dir.join("mir.txt");
+                            let _ = std::fs::write(
+                                path.as_std_path(),
+                                mir_fmt::format_module(db, &mir),
+                            );
+                        }
+                        Err(err) => {
+                            let path = dir.join("mir_error.txt");
+                            let _ = std::fs::write(path.as_std_path(), format!("{err}"));
+                        }
+                    }
+                }
+                if emit.ir
+                    && let Err(err) =
+                        write_named_ir_artifact(ir_out_dir, report_dir, ir_file_stem, "yul", &yul)
                 {
                     eprintln!("Error: {err}");
                     had_errors = true;
                 }
+                if emit.writes_any_bytecode() {
+                    had_errors |= write_yul_bytecode_artifacts(
+                        &names_to_build,
+                        &yul,
+                        optimize,
+                        out_dir,
+                        report_dir,
+                        emit,
+                        solc,
+                    );
+                }
             }
-            if emit.writes_any_bytecode() {
-                let bytecode = match codegen::emit_module_sonatina_bytecode(
-                    db, top_mod, opt_level, contract,
-                ) {
-                    Ok(bytecode) => bytecode,
-                    Err(err) => {
-                        eprintln!("Error: Failed to compile Sonatina bytecode: {err}");
-                        return BuildSummary { had_errors: true };
+            BackendKind::Sonatina => {
+                if emit.ir {
+                    let ir = match codegen::emit_module_sonatina_ir_optimized(
+                        db, top_mod, opt_level, contract,
+                    ) {
+                        Ok(ir) => ir,
+                        Err(err) => {
+                            eprintln!("Error: Failed to compile Sonatina IR: {err}");
+                            return BuildSummary { had_errors: true };
+                        }
+                    };
+                    if let Err(err) =
+                        write_named_ir_artifact(ir_out_dir, report_dir, ir_file_stem, "sona", &ir)
+                    {
+                        eprintln!("Error: {err}");
+                        had_errors = true;
                     }
-                };
-                had_errors |= write_sonatina_bytecode_artifacts(
-                    &names_to_build,
-                    &bytecode,
-                    out_dir,
-                    report_dir,
-                    emit,
-                );
+                }
+                if emit.writes_any_bytecode() {
+                    let bytecode = match codegen::emit_module_sonatina_bytecode(
+                        db, top_mod, opt_level, contract,
+                    ) {
+                        Ok(bytecode) => bytecode,
+                        Err(err) => {
+                            eprintln!("Error: Failed to compile Sonatina bytecode: {err}");
+                            return BuildSummary { had_errors: true };
+                        }
+                    };
+                    had_errors |= write_sonatina_bytecode_artifacts(
+                        &names_to_build,
+                        &bytecode,
+                        out_dir,
+                        report_dir,
+                        emit,
+                    );
+                }
             }
         }
-    };
+    }
+
+    if emit.abi {
+        had_errors |= write_abi_artifacts(db, top_mod, &names_to_build, out_dir, report_dir);
+    }
 
     BuildSummary { had_errors }
 }
@@ -1143,6 +1200,34 @@ fn collect_ingot_contract_names(
     let mut names: Vec<_> = graph.contracts.keys().cloned().collect();
     names.sort();
     Ok(names)
+}
+
+fn collect_ingot_abi_artifact_names(
+    db: &DriverDataBase,
+    ingot: hir::Ingot<'_>,
+) -> Result<Vec<String>, String> {
+    use hir::hir_def::HirIngot;
+
+    let mut names = BTreeSet::new();
+    for top_mod in ingot.all_modules(db) {
+        for contract in top_mod.all_contracts(db) {
+            let Some(name) = contract
+                .name(db)
+                .to_opt()
+                .map(|name| name.data(db).to_string())
+            else {
+                continue;
+            };
+            let Some(result) = crate::abi::generate_contract_abi(db, *top_mod, &name)? else {
+                continue;
+            };
+            if result.entry_count > 0 {
+                names.insert(name);
+            }
+        }
+    }
+
+    Ok(names.into_iter().collect())
 }
 
 fn workspace_member_ir_out_dir(
@@ -1183,7 +1268,7 @@ fn ensure_output_dirs(
     out_dir: &Utf8Path,
     ir_out_dir: &Utf8Path,
 ) -> Result<(), String> {
-    if emit.writes_any_bytecode() {
+    if emit.writes_any_bytecode() || emit.abi {
         fs::create_dir_all(out_dir.as_std_path())
             .map_err(|err| format!("Failed to create output directory {out_dir}: {err}"))?;
     }
@@ -1192,6 +1277,64 @@ fn ensure_output_dirs(
             .map_err(|err| format!("Failed to create output directory {ir_out_dir}: {err}"))?;
     }
     Ok(())
+}
+
+fn write_abi_artifacts(
+    db: &DriverDataBase,
+    top_mod: TopLevelMod<'_>,
+    names_to_build: &[String],
+    out_dir: &Utf8Path,
+    report_dir: Option<&Utf8Path>,
+) -> bool {
+    let mut had_errors = false;
+    for name in names_to_build {
+        match crate::abi::generate_contract_abi(db, top_mod, name) {
+            Ok(Some(result)) => {
+                for warning in &result.warnings {
+                    eprintln!("Warning: {warning}");
+                }
+                let base = sanitize_filename(name);
+                let abi_path = out_dir.join(format!("{base}.abi.json"));
+                let report_path = report_dir.map(|dir| dir.join(format!("{base}.abi.json")));
+                if result.entry_count == 0 {
+                    if let Err(err) = remove_file_if_exists(&abi_path) {
+                        eprintln!("Error: Failed to remove stale ABI: {err}");
+                        had_errors = true;
+                    }
+                    if let Some(path) = report_path.as_ref()
+                        && let Err(err) = remove_file_if_exists(path)
+                    {
+                        eprintln!("Error: Failed to remove stale ABI from report dir: {err}");
+                        had_errors = true;
+                    }
+                    continue;
+                }
+                if let Err(err) = fs::write(abi_path.as_std_path(), &result.json) {
+                    eprintln!("Error: Failed to write ABI: {err}");
+                    had_errors = true;
+                } else {
+                    if let Some(path) = report_path.as_ref() {
+                        let _ = fs::write(path.as_std_path(), &result.json);
+                    }
+                    println!("Wrote {out_dir}/{base}.abi.json");
+                }
+            }
+            Ok(None) => {} // Contract not in this module, skip
+            Err(err) => {
+                eprintln!("Error: Failed to generate ABI for {name}: {err}");
+                had_errors = true;
+            }
+        }
+    }
+    had_errors
+}
+
+fn remove_file_if_exists(path: &Utf8Path) -> std::io::Result<()> {
+    match fs::remove_file(path.as_std_path()) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err),
+    }
 }
 
 fn write_named_ir_artifact(
@@ -1311,6 +1454,9 @@ fn describe_emit_selection(emit: EmitSelection) -> String {
     if emit.ir {
         parts.push("ir");
     }
+    if emit.abi {
+        parts.push("abi");
+    }
     parts.join(",")
 }
 
@@ -1382,4 +1528,136 @@ fn ingot_has_source_files(db: &DriverDataBase, ingot: hir::Ingot<'_>) -> bool {
         .files(db)
         .iter()
         .any(|(_, file)| matches!(file.kind(db), Some(IngotFileKind::Source)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::Value;
+    use tempfile::tempdir;
+
+    #[test]
+    fn describe_emit_selection_lists_abi() {
+        let emit = EmitSelection {
+            bytecode: false,
+            runtime_bytecode: false,
+            ir: false,
+            abi: true,
+        };
+        assert_eq!(describe_emit_selection(emit), "abi");
+    }
+
+    #[test]
+    fn write_abi_artifacts_copies_into_report_dir() {
+        let code = include_str!("../tests/fixtures/cli_output/emit_abi/abi_contract.fe");
+
+        let temp_input = tempdir().expect("tempdir");
+        let file_path = temp_input.path().join("test.fe");
+        let url = Url::from_file_path(&file_path).expect("file path to url");
+        let mut db = DriverDataBase::default();
+        let file = db.workspace().touch(&mut db, url, Some(code.to_string()));
+        let top_mod = db.top_mod(file);
+        let temp = tempdir().expect("tempdir");
+        let out_dir =
+            Utf8PathBuf::from_path_buf(temp.path().join("out")).expect("utf8 output path");
+        let report_dir =
+            Utf8PathBuf::from_path_buf(temp.path().join("report")).expect("utf8 report path");
+        fs::create_dir_all(out_dir.as_std_path()).expect("create output dir");
+        fs::create_dir_all(report_dir.as_std_path()).expect("create report dir");
+
+        let names = vec!["Foo".to_string()];
+        let had_errors = write_abi_artifacts(&db, top_mod, &names, &out_dir, Some(&report_dir));
+        assert!(!had_errors, "unexpected ABI write error");
+
+        let out_abi = out_dir.join("Foo.abi.json");
+        let report_abi = report_dir.join("Foo.abi.json");
+        assert!(out_abi.exists(), "missing output ABI");
+        assert!(report_abi.exists(), "missing report ABI");
+
+        let out_json = fs::read_to_string(out_abi.as_std_path()).expect("read output ABI");
+        let report_json = fs::read_to_string(report_abi.as_std_path()).expect("read report ABI");
+        assert_eq!(out_json, report_json);
+
+        let abi: Value = serde_json::from_str(&out_json).expect("parse output ABI");
+        let function = abi
+            .as_array()
+            .expect("abi array")
+            .iter()
+            .find(|entry| entry["type"] == "function")
+            .expect("function entry");
+        assert_eq!(function["name"], "ping");
+    }
+
+    #[test]
+    fn write_abi_artifacts_removes_stale_empty_outputs() {
+        let temp_input = tempdir().expect("tempdir");
+        let file_path = temp_input.path().join("test.fe");
+        let url = Url::from_file_path(&file_path).expect("file path to url");
+        let temp = tempdir().expect("tempdir");
+        let out_dir =
+            Utf8PathBuf::from_path_buf(temp.path().join("out")).expect("utf8 output path");
+        let report_dir =
+            Utf8PathBuf::from_path_buf(temp.path().join("report")).expect("utf8 report path");
+        fs::create_dir_all(out_dir.as_std_path()).expect("create output dir");
+        fs::create_dir_all(report_dir.as_std_path()).expect("create report dir");
+
+        let mut first_db = DriverDataBase::default();
+        let first_code = include_str!("../tests/fixtures/cli_output/emit_abi/abi_contract.fe");
+        let first_file =
+            first_db
+                .workspace()
+                .touch(&mut first_db, url.clone(), Some(first_code.to_string()));
+        let first_top_mod = first_db.top_mod(first_file);
+        let names = vec!["Foo".to_string()];
+        let had_errors = write_abi_artifacts(
+            &first_db,
+            first_top_mod,
+            &names,
+            &out_dir,
+            Some(&report_dir),
+        );
+        assert!(!had_errors, "unexpected ABI write error");
+        assert!(out_dir.join("Foo.abi.json").exists(), "missing output ABI");
+        assert!(
+            report_dir.join("Foo.abi.json").exists(),
+            "missing report ABI"
+        );
+
+        let mut second_db = DriverDataBase::default();
+        let second_code = r#"
+msg FooMsg {
+    #[selector = 0x12345678]
+    Ping -> u256,
+}
+
+pub contract Foo {
+    recv FooMsg {
+        Ping -> u256 {
+            return 1
+        }
+    }
+}
+"#;
+        let second_file =
+            second_db
+                .workspace()
+                .touch(&mut second_db, url, Some(second_code.to_string()));
+        let second_top_mod = second_db.top_mod(second_file);
+        let had_errors = write_abi_artifacts(
+            &second_db,
+            second_top_mod,
+            &names,
+            &out_dir,
+            Some(&report_dir),
+        );
+        assert!(!had_errors, "unexpected ABI cleanup error");
+        assert!(
+            !out_dir.join("Foo.abi.json").exists(),
+            "stale output ABI should be removed"
+        );
+        assert!(
+            !report_dir.join("Foo.abi.json").exists(),
+            "stale report ABI should be removed"
+        );
+    }
 }

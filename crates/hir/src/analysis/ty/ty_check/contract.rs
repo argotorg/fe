@@ -531,7 +531,10 @@ pub fn check_contract_recv_blocks<'db>(
                 let variant_span: DynLazySpan<'db> = variant.span().name().into();
 
                 // Check selector conflicts
-                if let Some(selector) = eval_msg_variant_selector(db, variant, &mut diags) {
+                let variant_ty = TyId::adt(db, AdtRef::from(variant).as_adt(db));
+                if let Some(selector) =
+                    eval_msg_variant_selector(db, variant_ty, variant.scope(), &mut diags)
+                {
                     check_selector_conflict(
                         selector,
                         variant,
@@ -563,7 +566,7 @@ pub fn check_contract_recv_blocks<'db>(
 
                     // Check selector conflicts
                     if let Some(selector) =
-                        eval_msg_variant_selector(db, resolved.variant_struct, &mut diags)
+                        eval_msg_variant_selector(db, resolved.ty, contract.scope(), &mut diags)
                     {
                         check_selector_conflict(
                             selector,
@@ -637,17 +640,25 @@ fn check_handler_conflict<'db>(
 /// Evaluates a msg variant's `SELECTOR` associated const via CTFE.
 pub(crate) fn eval_msg_variant_selector<'db>(
     db: &'db dyn HirAnalysisDb,
-    struct_: Struct<'db>,
+    variant_ty: TyId<'db>,
+    scope: ScopeId<'db>,
     diags: &mut Vec<FuncBodyDiag<'db>>,
 ) -> Option<u32> {
-    let msg_variant_trait = resolve_core_trait(db, struct_.scope(), &["message", "MsgVariant"])?;
+    let msg_variant_trait = resolve_core_trait(db, scope, &["message", "MsgVariant"])?;
 
-    let canonical_ty = Canonical::new(db, TyId::adt(db, AdtRef::from(struct_).as_adt(db)));
-    let ingot = struct_.top_mod(db).ingot(db);
-    let impl_ = impls_for_ty(db, ingot, canonical_ty)
-        .iter()
-        .find(|impl_| impl_.skip_binder().trait_def(db) == msg_variant_trait)?
-        .skip_binder();
+    let canonical_ty = Canonical::new(db, variant_ty);
+    let scope_ingot = scope.ingot(db);
+    let search_ingots = [
+        Some(scope_ingot),
+        variant_ty.ingot(db).filter(|&ingot| ingot != scope_ingot),
+    ];
+    let implementor = search_ingots.into_iter().flatten().find_map(|ingot| {
+        impls_for_ty(db, ingot, canonical_ty)
+            .iter()
+            .find(|impl_| impl_.skip_binder().trait_def(db) == msg_variant_trait)
+            .copied()
+    })?;
+    let impl_ = implementor.skip_binder();
 
     let selector_name = IdentId::new(db, "SELECTOR".to_string());
     let selector_const = impl_
