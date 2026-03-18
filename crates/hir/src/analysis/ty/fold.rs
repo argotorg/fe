@@ -36,6 +36,15 @@ where
 
 pub trait TyFolder<'db> {
     fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db>;
+
+    fn fold_ty_app(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+        abs: TyId<'db>,
+        arg: TyId<'db>,
+    ) -> TyId<'db> {
+        TyId::app(db, abs, arg)
+    }
 }
 
 impl<'db> TyFoldable<'db> for TyId<'db> {
@@ -50,7 +59,7 @@ impl<'db> TyFoldable<'db> for TyId<'db> {
                 let abs = folder.fold_ty(db, *abs);
                 let arg = folder.fold_ty(db, *arg);
 
-                TyId::app(db, abs, arg)
+                folder.fold_ty_app(db, abs, arg)
             }
 
             ConstTy(cty) => {
@@ -64,9 +73,9 @@ impl<'db> TyFoldable<'db> for TyId<'db> {
                         let ty = folder.fold_ty(db, *ty);
                         TyParam(param.clone(), ty)
                     }
-                    Hole(ty) => {
+                    Hole(ty, hole_id) => {
                         let ty = folder.fold_ty(db, *ty);
-                        Hole(ty)
+                        Hole(ty, *hole_id)
                     }
                     Evaluated(val, ty) => {
                         let ty = folder.fold_ty(db, *ty);
@@ -106,6 +115,7 @@ impl<'db> TyFoldable<'db> for TyId<'db> {
                         ty,
                         const_def,
                         generic_args,
+                        preserve_unevaluated,
                     } => {
                         let ty = ty.map(|t| folder.fold_ty(db, t));
                         let generic_args = generic_args
@@ -118,6 +128,7 @@ impl<'db> TyFoldable<'db> for TyId<'db> {
                             ty,
                             const_def: *const_def,
                             generic_args,
+                            preserve_unevaluated: *preserve_unevaluated,
                         }
                     }
                 };

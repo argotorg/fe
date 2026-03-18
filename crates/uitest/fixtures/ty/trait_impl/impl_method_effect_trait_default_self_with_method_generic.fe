@@ -1,0 +1,14 @@
+trait Cap<T = Self> {}
+
+struct Provider {}
+impl Cap for Provider {}
+
+trait T {
+    fn f<U>(x: U) uses (c: Cap)
+}
+
+struct S {}
+
+impl T for S {
+    fn f<U>(x: U) uses (c: Cap) {}
+}

@@ -1,139 +1,49 @@
 use crate::analysis::HirAnalysisDb;
-use crate::analysis::name_resolution::{
-    NameDomain, PathRes, resolve_ident_to_bucket, resolve_path,
-};
-use crate::analysis::ty::const_ty::{ConstTyData, ConstTyId};
+use crate::analysis::name_resolution::PathRes;
+use crate::analysis::ty::const_ty::{ConstTyData, HoleId, LocalFrameId, StructuralHoleOrigin};
 use crate::analysis::ty::fold::{AssocTySubst, TyFoldable, TyFolder};
+use crate::analysis::ty::layout_holes::layout_hole_with_fallback_ty;
 use crate::analysis::ty::trait_def::TraitInstId;
 use crate::analysis::ty::trait_resolution::PredicateListId;
 use crate::analysis::ty::ty_def::{TyBase, TyData, TyId};
-use crate::analysis::ty::ty_lower::collect_generic_params;
+use crate::analysis::ty::ty_lower::{collect_generic_params, func_implicit_param_plan};
+use crate::core::hir_def::GenericParamOwner;
 use crate::hir_def::scope_graph::ScopeId;
 use crate::hir_def::{CallableDef, Func, PathId};
-use salsa::Update;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EffectKeyKind {
     Type,
     Trait,
     Other,
 }
 
-/// Classifies an effect key path without inspecting its generic arguments.
-///
-/// This is cached and cycle-recoverable because effect-key classification can be queried while
-/// lowering generic arguments (and vice versa).
-#[salsa::tracked(cycle_fn=effect_key_kind_cycle_recover, cycle_initial=effect_key_kind_cycle_initial)]
-pub(crate) fn effect_key_kind<'db>(
-    db: &'db dyn HirAnalysisDb,
-    key_path: PathId<'db>,
-    scope: ScopeId<'db>,
-) -> EffectKeyKind {
-    let assumptions = PredicateListId::empty_list(db);
-    let stripped_path = key_path.strip_generic_args(db);
-
-    let classify = |res| match res {
-        Ok(PathRes::Ty(_) | PathRes::TyAlias(_, _)) => EffectKeyKind::Type,
-        Ok(PathRes::Trait(_) | PathRes::TraitMethod(..)) => EffectKeyKind::Trait,
-        _ => EffectKeyKind::Other,
-    };
-    let classify_bucket = |lookup_scope, ident| {
-        let path = PathId::from_ident(db, ident);
-        if let Ok(res) = resolve_ident_to_bucket(db, path, lookup_scope).pick(NameDomain::TYPE) {
-            if res.is_trait() {
-                return EffectKeyKind::Trait;
-            }
-            if res.is_type() {
-                return EffectKeyKind::Type;
-            }
-        }
-        EffectKeyKind::Other
-    };
-
-    // Prefer classifying the key without lowering generic args to avoid recursive generic-arg
-    // lowering cycles.
-    let kind = classify(resolve_path(db, stripped_path, scope, assumptions, false));
-    if kind != EffectKeyKind::Other {
-        return kind;
-    }
-
-    let Some(ident) = stripped_path.ident(db).to_opt() else {
-        return EffectKeyKind::Other;
-    };
-
-    // `resolve_path` rejects generic paths after stripping args (e.g. `Storage<T>` -> `Storage`).
-    // Resolve the parent path, then classify the leaf identifier in that scope without touching
-    // generic args.
-    if let Some(parent_path) = stripped_path.parent(db) {
-        if let Ok(parent_res) = resolve_path(db, parent_path, scope, assumptions, false)
-            && let Some(parent_scope) = parent_res.as_scope(db)
-        {
-            return classify_bucket(parent_scope, ident);
-        }
-        return EffectKeyKind::Other;
-    }
-
-    classify_bucket(scope, ident)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum ResolvedEffectKey<'db> {
+    Type(TyId<'db>),
+    Trait(TraitInstId<'db>),
+    Other,
 }
 
-fn effect_key_kind_cycle_initial<'db>(
-    _db: &'db dyn HirAnalysisDb,
-    _key_path: PathId<'db>,
-    _scope: ScopeId<'db>,
-) -> EffectKeyKind {
-    EffectKeyKind::Other
-}
-
-fn effect_key_kind_cycle_recover<'db>(
-    _db: &'db dyn HirAnalysisDb,
-    _value: &EffectKeyKind,
-    _count: u32,
-    _key_path: PathId<'db>,
-    _scope: ScopeId<'db>,
-) -> salsa::CycleRecoveryAction<EffectKeyKind> {
-    salsa::CycleRecoveryAction::Iterate
+impl<'db> ResolvedEffectKey<'db> {
+    pub(crate) fn into_parts(self) -> (EffectKeyKind, Option<TyId<'db>>, Option<TraitInstId<'db>>) {
+        match self {
+            Self::Type(ty) => (EffectKeyKind::Type, Some(ty), None),
+            Self::Trait(trait_inst) => (EffectKeyKind::Trait, None, Some(trait_inst)),
+            Self::Other => (EffectKeyKind::Other, None, None),
+        }
+    }
 }
 
 /// Returns a per-effect mapping from effect index → hidden provider generic-arg index.
-///
-/// Effects whose keys are neither a type nor a trait have `None` entries.
 #[salsa::tracked(return_ref)]
 pub fn place_effect_provider_param_index_map<'db>(
     db: &'db dyn HirAnalysisDb,
     func: Func<'db>,
 ) -> Vec<Option<usize>> {
-    let effect_count = func.effects(db).data(db).len();
-    let mut out = vec![None; effect_count];
-
-    let provider_param_indices: Vec<usize> = CallableDef::Func(func)
-        .params(db)
-        .iter()
-        .enumerate()
-        .filter_map(|(idx, ty)| match ty.data(db) {
-            TyData::TyParam(param) if param.is_effect_provider() => Some(idx),
-            _ => None,
-        })
-        .collect();
-
-    let mut ord = 0usize;
-    for effect in func.effect_params(db) {
-        let Some(key_path) = effect.key_path(db) else {
-            continue;
-        };
-        if !matches!(
-            effect_key_kind(db, key_path, func.scope()),
-            EffectKeyKind::Type | EffectKeyKind::Trait
-        ) {
-            continue;
-        }
-        let Some(provider_idx) = provider_param_indices.get(ord).copied() else {
-            break;
-        };
-        ord += 1;
-        out[effect.index()] = Some(provider_idx);
-    }
-
-    out
+    func_implicit_param_plan(db, func)
+        .provider_param_index_by_effect
+        .clone()
 }
 
 /// Resolves a type effect key path and applies effect-key normalization.
@@ -146,12 +56,28 @@ pub(crate) fn resolve_normalized_type_effect_key<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> Option<TyId<'db>> {
-    match resolve_path(db, key_path, scope, assumptions, false) {
+    match crate::analysis::name_resolution::resolve_path(db, key_path, scope, assumptions, false) {
         Ok(PathRes::Ty(ty)) if ty.is_star_kind(db) => Some(
             existentialize_omitted_const_args_in_effect_key(db, key_path, ty),
         ),
         Ok(PathRes::TyAlias(_, ty)) if ty.is_star_kind(db) => Some(ty),
         _ => None,
+    }
+}
+
+pub(crate) fn resolve_effect_key<'db>(
+    db: &'db dyn HirAnalysisDb,
+    key_path: PathId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> ResolvedEffectKey<'db> {
+    if let Some(ty) = resolve_normalized_type_effect_key(db, key_path, scope, assumptions) {
+        return ResolvedEffectKey::Type(ty);
+    }
+
+    match crate::analysis::name_resolution::resolve_path(db, key_path, scope, assumptions, false) {
+        Ok(PathRes::Trait(trait_inst)) => ResolvedEffectKey::Trait(trait_inst),
+        _ => ResolvedEffectKey::Other,
     }
 }
 
@@ -170,13 +96,13 @@ pub(crate) fn existentialize_omitted_const_args_in_effect_key<'db>(
         return ty;
     };
 
-    let (param_set, params, offset) = match base_ty {
+    let (param_set, offset, owner) = match base_ty {
         TyBase::Adt(adt) => {
             let set = *adt.param_set(db);
             (
                 set,
-                set.explicit_params(db),
                 set.offset_to_explicit_params_position(db),
+                GenericParamOwner::from_item_opt(adt.scope(db).item()),
             )
         }
         TyBase::Func(func) => match *func {
@@ -184,30 +110,36 @@ pub(crate) fn existentialize_omitted_const_args_in_effect_key<'db>(
                 let set = collect_generic_params(db, def.into());
                 (
                     set,
-                    set.explicit_params(db),
                     set.offset_to_explicit_params_position(db),
+                    Some(def.into()),
                 )
             }
             CallableDef::VariantCtor(_) => return ty,
         },
         _ => return ty,
     };
-    if params.is_empty() {
+    let explicit_param_count = param_set.explicit_param_count(db);
+    if explicit_param_count == 0 {
         return ty;
     }
+    let Some(owner) = owner else {
+        return ty;
+    };
 
-    let provided_explicit_len = key_path.generic_args(db).data(db).len().min(params.len());
-    if provided_explicit_len >= params.len() {
+    let provided_explicit_len = key_path
+        .generic_args(db)
+        .data(db)
+        .len()
+        .min(explicit_param_count);
+    if provided_explicit_len >= explicit_param_count {
         return ty;
     }
 
     let mut completed_args = args.to_vec();
     let mut changed = false;
-    for (explicit_idx, param) in params.iter().enumerate().skip(provided_explicit_len) {
-        if !param_set.explicit_const_param_default_is_hole(db, explicit_idx) {
-            continue;
-        }
-        let Some(const_ty_ty) = param.const_ty_ty(db) else {
+    for explicit_idx in provided_explicit_len..explicit_param_count {
+        let Some(const_ty_ty) = param_set.explicit_const_param_default_hole_ty(db, explicit_idx)
+        else {
             continue;
         };
 
@@ -215,12 +147,21 @@ pub(crate) fn existentialize_omitted_const_args_in_effect_key<'db>(
         if arg_idx >= completed_args.len() {
             continue;
         }
-        let hole_ty = if const_ty_ty.has_invalid(db) {
-            TyId::u256(db)
-        } else {
-            const_ty_ty
-        };
-        let hole = TyId::const_ty(db, ConstTyId::hole_with_ty(db, hole_ty));
+        let hole = layout_hole_with_fallback_ty(
+            db,
+            const_ty_ty,
+            HoleId::structural(
+                db,
+                const_ty_ty,
+                StructuralHoleOrigin::EffectKeyExistential {
+                    path: key_path,
+                    arg_idx,
+                    owner,
+                    param_idx: explicit_idx,
+                },
+                LocalFrameId::root_path(db, key_path),
+            ),
+        );
         if completed_args[arg_idx] != hole {
             completed_args[arg_idx] = hole;
             changed = true;

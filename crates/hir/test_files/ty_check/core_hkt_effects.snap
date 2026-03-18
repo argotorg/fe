@@ -409,7 +409,7 @@ note:
    ┌─ core_hkt_effects.fe:61:5
    │
 61 │     logger.log()
-   │     ^^^^^^ __effprov0
+   │     ^^^^^^ logger
 
 note: 
    ┌─ core_hkt_effects.fe:61:5
@@ -652,7 +652,7 @@ note:
    ┌─ core_hkt_effects.fe:84:5
    │
 84 │     logger.log()
-   │     ^^^^^^ __effprov0
+   │     ^^^^^^ logger
 
 note: 
    ┌─ core_hkt_effects.fe:84:5
