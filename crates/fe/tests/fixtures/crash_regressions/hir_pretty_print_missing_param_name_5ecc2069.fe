@@ -1,0 +1,9 @@
+trait Logger {
+    fn log(mut self)
+}
+
+struct ConsoleLogger {}
+
+impl Logger for ConsoleLogger {
+    fn log(mut  {}
+}
