@@ -2675,6 +2675,7 @@ impl<'db> SuperTraitRefView<'db> {
             Ok(v) => Ok(v),
             Err(TraitRefLowerError::PathResError(_)) => Err(SuperTraitLowerError::PathResolution),
             Err(TraitRefLowerError::InvalidDomain(_)) => Err(SuperTraitLowerError::InvalidDomain),
+            Err(TraitRefLowerError::Cycle) => Err(SuperTraitLowerError::Cycle),
             Err(TraitRefLowerError::Ignored) => Err(SuperTraitLowerError::Ignored),
         }
     }
@@ -2694,6 +2695,7 @@ impl<'db> SuperTraitRefView<'db> {
             Err(
                 TraitRefLowerError::PathResError(_)
                 | TraitRefLowerError::InvalidDomain(_)
+                | TraitRefLowerError::Cycle
                 | TraitRefLowerError::Ignored,
             ) => return None,
         };
@@ -2709,6 +2711,7 @@ impl<'db> SuperTraitRefView<'db> {
 pub enum SuperTraitLowerError {
     PathResolution,
     InvalidDomain,
+    Cycle,
     Ignored,
 }
 
@@ -3029,6 +3032,9 @@ impl<'db> ImplTrait<'db> {
                                     .into(),
                                 );
                             }
+                        }
+                        TraitRefLowerError::Cycle => {
+                            diags.push(TraitLowerDiag::CyclicTraitRef(self).into());
                         }
                         TraitRefLowerError::Ignored => {
                             diags.push(TraitLowerDiag::ExternalTraitForExternalType(self).into());

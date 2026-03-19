@@ -51,6 +51,8 @@ pub enum PathResDiag<'db> {
         trait_insts: ThinVec<TraitInstId<'db>>,
     },
 
+    InfiniteBoundRecursion(DynLazySpan<'db>, String),
+
     /// The name is found, but it can't be used as a middle segment of a path.
     InvalidPathSegment {
         span: DynLazySpan<'db>,
@@ -137,6 +139,7 @@ impl<'db> PathResDiag<'db> {
             Self::AmbiguousInherentMethod { primary, .. } => primary.top_mod(db).unwrap(),
             Self::AmbiguousTrait { primary, .. } => primary.top_mod(db).unwrap(),
             Self::AmbiguousAssociatedConst { primary, .. } => primary.top_mod(db).unwrap(),
+            Self::InfiniteBoundRecursion(span, _) => span.top_mod(db).unwrap(),
             Self::InvisibleAmbiguousTrait { primary, .. } => primary.top_mod(db).unwrap(),
         }
     }
@@ -183,6 +186,7 @@ impl<'db> PathResDiag<'db> {
             Self::AmbiguousInherentMethod { .. } => 15,
             Self::AmbiguousTrait { .. } => 16,
             Self::InvisibleAmbiguousTrait { .. } => 17,
+            Self::InfiniteBoundRecursion(..) => 20,
         }
     }
 }

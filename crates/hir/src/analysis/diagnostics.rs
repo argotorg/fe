@@ -875,6 +875,18 @@ impl DiagnosticVoucher for PathResDiag<'_> {
                 }
             }
 
+            Self::InfiniteBoundRecursion(span, msg) => CompleteDiagnostic {
+                severity,
+                message: "infinite trait bound recursion".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: msg.to_string(),
+                    span: span.resolve(db),
+                }],
+                notes: vec![],
+                error_code,
+            },
+
             Self::InvalidPathSegment {
                 span: prim_span,
                 segment,
@@ -3822,6 +3834,18 @@ impl DiagnosticVoucher for TraitLowerDiag<'_> {
                     error_code,
                 }
             }
+
+            Self::CyclicTraitRef(impl_trait) => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "cyclic trait reference prevented lowering this impl".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "trait lowering entered a dependency cycle here".to_string(),
+                    span: impl_trait.span().trait_ref().resolve(db),
+                }],
+                notes: vec![],
+                error_code,
+            },
         }
     }
 }

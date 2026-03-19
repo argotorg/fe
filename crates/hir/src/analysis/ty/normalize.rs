@@ -19,7 +19,10 @@ use super::{
     ty_def::{AssocTy, TyData, TyId, TyParam},
     unify::UnificationTable,
 };
-use crate::analysis::{HirAnalysisDb, name_resolution::find_associated_type};
+use crate::analysis::{
+    HirAnalysisDb,
+    name_resolution::{FindAssociatedTypeError, find_associated_type},
+};
 
 /// Normalizes a type by resolving all associated types to concrete types when possible.
 ///
@@ -141,13 +144,16 @@ impl<'db> TypeNormalizer<'db> {
         //    Search by the trait's self type: `SelfTy::assoc.name`.
         // Normalize the trait's self type before candidate search.
         let self_ty = self.fold_ty(self.db, assoc.trait_.self_ty(self.db));
-        let mut raw_cands = find_associated_type(
+        let mut raw_cands = match find_associated_type(
             self.db,
             self.scope,
             Canonical::new(self.db, self_ty),
             assoc.name,
             self.assumptions,
-        );
+        ) {
+            Ok(raw_cands) => raw_cands,
+            Err(FindAssociatedTypeError::InfiniteBoundRecursion) => return None,
+        };
 
         // Keep only candidates from the same trait as `assoc`.
         raw_cands.retain(|(inst, _)| inst.def(self.db) == assoc.trait_.def(self.db));
