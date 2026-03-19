@@ -1,0 +1,5 @@
+fn operator_method_selection(data: ((u8, u1), u8)) -> u8 {
+    match data {
+        ((x, _), _) => x + 1
+    }
+}

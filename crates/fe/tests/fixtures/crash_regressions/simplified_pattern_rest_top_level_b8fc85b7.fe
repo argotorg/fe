@@ -1,0 +1,10 @@
+enum Pair {
+    Data(u8, u8),
+}
+
+fn top_level_rest_patterns(p: Pair) -> u8 {
+    match p {
+        Pair(..) => 0
+        Pair::Data(x, ..) => x
+    }
+}

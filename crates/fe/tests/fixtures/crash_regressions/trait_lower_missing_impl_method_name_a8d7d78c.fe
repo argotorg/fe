@@ -1,0 +1,9 @@
+trait Default {
+    fn default() -> Self
+}
+
+impl Default for i32 {
+    fn  -> Self {
+        0
+    }
+}
