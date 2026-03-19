@@ -16,8 +16,9 @@ use super::{
     fold::{TyFoldable, TyFolder},
     trait_def::impls_for_ty_with_constraints,
     trait_resolution::{PredicateListId, TraitSolveCx},
-    ty_def::{AssocTy, TyData, TyId, TyParam},
+    ty_def::{AssocTy, TyData, TyId, TyParam, inference_keys},
     unify::UnificationTable,
+    visitor::{TyVisitable, TyVisitor},
 };
 use crate::analysis::{
     HirAnalysisDb,
@@ -47,6 +48,37 @@ pub struct TypeNormalizer<'db> {
     assumptions: PredicateListId<'db>,
     // Projection cache: None = in progress (cycle guard), Some(ty) = normalized result
     cache: FxHashMap<AssocTy<'db>, Option<TyId<'db>>>,
+}
+
+#[derive(Clone, Copy)]
+struct AssumptionUnifyInput<'db> {
+    lhs_self: TyId<'db>,
+    rhs_self: TyId<'db>,
+    bound: TyId<'db>,
+}
+
+impl<'db> TyFoldable<'db> for AssumptionUnifyInput<'db> {
+    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
+    where
+        F: TyFolder<'db>,
+    {
+        Self {
+            lhs_self: self.lhs_self.fold_with(db, folder),
+            rhs_self: self.rhs_self.fold_with(db, folder),
+            bound: self.bound.fold_with(db, folder),
+        }
+    }
+}
+
+impl<'db> TyVisitable<'db> for AssumptionUnifyInput<'db> {
+    fn visit_with<V>(&self, visitor: &mut V)
+    where
+        V: TyVisitor<'db> + ?Sized,
+    {
+        self.lhs_self.visit_with(visitor);
+        self.rhs_self.visit_with(visitor);
+        self.bound.visit_with(visitor);
+    }
 }
 
 impl<'db> TypeNormalizer<'db> {
@@ -116,15 +148,33 @@ impl<'db> TypeNormalizer<'db> {
                 continue;
             }
 
-            let mut table = UnificationTable::new(self.db);
-            // Normalize self types before attempting unification to avoid
-            // requiring a second outer pass for resolution.
             let lhs_self = self.fold_ty(self.db, assoc.trait_.self_ty(self.db));
             let rhs_self = self.fold_ty(self.db, pred.self_ty(self.db));
-            if table.unify(lhs_self, rhs_self).is_ok()
-                && let Some(&bound) = pred.assoc_type_bindings(self.db).get(&assoc.name)
-            {
-                return Some(bound.fold_with(self.db, &mut table));
+            let Some(&bound) = pred.assoc_type_bindings(self.db).get(&assoc.name) else {
+                continue;
+            };
+
+            // Unify in a canonicalized local table, then map the resolved
+            // associated type back to the original inference environment.
+            let canonical_input = Canonicalized::new(
+                self.db,
+                AssumptionUnifyInput {
+                    lhs_self,
+                    rhs_self,
+                    bound,
+                },
+            );
+
+            let mut table = UnificationTable::new(self.db);
+            let AssumptionUnifyInput {
+                lhs_self,
+                rhs_self,
+                bound,
+            } = canonical_input.value.extract_identity(&mut table);
+
+            if table.unify(lhs_self, rhs_self).is_ok() {
+                let resolved = bound.fold_with(self.db, &mut table);
+                return Some(canonical_input.decanonicalize(self.db, resolved));
             }
         }
 
@@ -147,7 +197,7 @@ impl<'db> TypeNormalizer<'db> {
         let mut raw_cands = match find_associated_type(
             self.db,
             self.scope,
-            Canonical::new(self.db, self_ty),
+            Canonicalized::new(self.db, self_ty),
             assoc.name,
             self.assumptions,
         ) {
@@ -196,6 +246,7 @@ impl<'db> TypeNormalizer<'db> {
 
         let mut table = UnificationTable::new(self.db);
         let target_inst = canonical_inst.extract_identity(&mut table);
+        let target_keys = inference_keys(self.db, &target_inst);
 
         for ingot in search_ingots.into_iter().flatten() {
             for implementor in
@@ -226,6 +277,14 @@ impl<'db> TypeNormalizer<'db> {
                 // Apply substitutions, then decanonicalize back to the original
                 // inference vars before further normalization.
                 let folded = assoc_ty.fold_with(self.db, &mut table);
+                let folded_keys = inference_keys(self.db, &folded);
+                if !folded_keys.is_subset(&target_keys) {
+                    // This candidate left unconstrained snapshot-local vars in
+                    // the projected associated type. Skipping avoids leaking
+                    // rollback-invalid keys into later analysis.
+                    table.rollback_to(snapshot);
+                    continue;
+                }
                 let folded = canonical_target.decanonicalize(self.db, folded);
                 let norm = self.fold_ty(self.db, folded);
                 dedup.entry(norm).or_insert(());

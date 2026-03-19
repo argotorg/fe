@@ -1,0 +1,19 @@
+extern {
+    fn todo() -> !
+}
+
+trait Iterator {
+    type Item
+}
+
+pub struct IntoIterator {
+    type Item
+    type IntoIter: Iterator<Item = Self::Item>
+}
+
+fn qualified_trait_projection<T>() -> <<T as IntoIterator>::IntoIter as Iterator>::Item
+where
+    T: IntoIterator,
+{
+    todo()
+}
