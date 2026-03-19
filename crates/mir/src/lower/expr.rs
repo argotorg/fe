@@ -2195,7 +2195,16 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
                 MirProjectionPath::from_projection(Projection::Index(index_source)),
             )
         };
-        let addr_space = self.place_address_space(&place);
+        let addr_space = if self.is_by_ref_ty(elem_ty) {
+            self.place_address_space(&place)
+        } else {
+            crate::ir::try_place_address_space_in(
+                &self.builder.body.values,
+                &self.builder.body.locals,
+                &place,
+            )
+            .unwrap_or_else(|| self.value_address_space_or_memory(base_value))
+        };
         let source_value = self.projection_source_value(expr, place, elem_ty, addr_space, "load");
         let lowered = self.coerce_contextual_capability_expr_value(expr, source_value, elem_ty);
         self.set_expr_value_from_lowered_value(value_id, lowered);
