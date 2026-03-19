@@ -8,18 +8,7 @@ use common::{
     define_input_db,
     diagnostics::{CompleteDiagnostic, Severity, cmp_complete_diagnostics},
 };
-use hir::analysis::{
-    analysis_pass::{
-        AnalysisPassManager, ArithmeticAttrPass, EventLowerPass, MsgLowerPass, ParsingPass,
-    },
-    diagnostics::DiagnosticVoucher,
-    name_resolution::ImportAnalysisPass,
-    ty::{
-        AdtDefAnalysisPass, BodyAnalysisPass, ContractAnalysisPass, DefConflictAnalysisPass,
-        FuncAnalysisPass, ImplAnalysisPass, ImplTraitAnalysisPass, MsgSelectorAnalysisPass,
-        TraitAnalysisPass, TypeAliasAnalysisPass,
-    },
-};
+use hir::analysis::{diagnostics::DiagnosticVoucher, initialize_analysis_pass};
 use hir::{
     Ingot,
     hir_def::{HirIngot, TopLevelMod},
@@ -40,7 +29,7 @@ impl DriverDataBase {
     pub fn run_on_file_with_pass_manager<'db>(
         &'db self,
         top_mod: TopLevelMod<'db>,
-        mut pass_manager: AnalysisPassManager,
+        mut pass_manager: hir::analysis::analysis_pass::AnalysisPassManager,
     ) -> DiagnosticsCollection<'db> {
         DiagnosticsCollection(pass_manager.run_on_module(self, top_mod))
     }
@@ -52,7 +41,7 @@ impl DriverDataBase {
     pub fn run_on_ingot_with_pass_manager<'db>(
         &'db self,
         ingot: Ingot<'db>,
-        mut pass_manager: AnalysisPassManager,
+        mut pass_manager: hir::analysis::analysis_pass::AnalysisPassManager,
     ) -> DiagnosticsCollection<'db> {
         let tree = module_tree(self, ingot);
         DiagnosticsCollection(pass_manager.run_on_module_tree(self, tree))
@@ -60,6 +49,19 @@ impl DriverDataBase {
 
     pub fn top_mod(&self, input: File) -> TopLevelMod<'_> {
         map_file_to_mod(self, input)
+    }
+
+    pub fn mir_diagnostics_for_top_mod<'db>(
+        &'db self,
+        top_mod: TopLevelMod<'db>,
+        mode: MirDiagnosticsMode,
+    ) -> Vec<CompleteDiagnostic> {
+        let mut output = collect_mir_diagnostics(self, top_mod, mode);
+        for err in output.internal_errors {
+            tracing::debug!(target: "lsp", "MIR diagnostics internal error: {err}");
+        }
+        sort_and_dedup_complete_diagnostics(&mut output.diagnostics);
+        output.diagnostics
     }
 
     pub fn mir_diagnostics_for_ingot<'db>(
@@ -72,13 +74,10 @@ impl DriverDataBase {
         let Some(root_data) = ingot.module_tree(self).root_data() else {
             return Vec::new();
         };
-        let top_mod = root_data.top_mod;
-        let mut output = collect_mir_diagnostics(self, top_mod, mode);
-        for err in output.internal_errors {
-            tracing::debug!(target: "lsp", "MIR diagnostics internal error: {err}");
+        if self.run_on_ingot(ingot).has_errors(self) {
+            return Vec::new();
         }
-        sort_and_dedup_complete_diagnostics(&mut output.diagnostics);
-        output.diagnostics
+        self.mir_diagnostics_for_top_mod(root_data.top_mod, mode)
     }
 
     pub fn emit_complete_diagnostics(&self, diagnostics: &[CompleteDiagnostic]) {
@@ -151,24 +150,4 @@ fn sort_complete_diagnostics(diags: &mut [CompleteDiagnostic]) {
 fn sort_and_dedup_complete_diagnostics(diags: &mut Vec<CompleteDiagnostic>) {
     sort_complete_diagnostics(diags);
     diags.dedup();
-}
-
-fn initialize_analysis_pass() -> AnalysisPassManager {
-    let mut pass_manager = AnalysisPassManager::new();
-    pass_manager.add_module_pass("Parsing", Box::new(ParsingPass {}));
-    pass_manager.add_module_pass("ArithmeticAttr", Box::new(ArithmeticAttrPass {}));
-    pass_manager.add_module_pass("MsgLower", Box::new(MsgLowerPass {}));
-    pass_manager.add_module_pass("EventLower", Box::new(EventLowerPass {}));
-    pass_manager.add_module_pass("MsgSelector", Box::new(MsgSelectorAnalysisPass {}));
-    pass_manager.add_module_pass("DefConflict", Box::new(DefConflictAnalysisPass {}));
-    pass_manager.add_module_pass("Import", Box::new(ImportAnalysisPass {}));
-    pass_manager.add_module_pass("AdtDef", Box::new(AdtDefAnalysisPass {}));
-    pass_manager.add_module_pass("TypeAlias", Box::new(TypeAliasAnalysisPass {}));
-    pass_manager.add_module_pass("Trait", Box::new(TraitAnalysisPass {}));
-    pass_manager.add_module_pass("Impl", Box::new(ImplAnalysisPass {}));
-    pass_manager.add_module_pass("ImplTrait", Box::new(ImplTraitAnalysisPass {}));
-    pass_manager.add_module_pass("Func", Box::new(FuncAnalysisPass {}));
-    pass_manager.add_module_pass("Body", Box::new(BodyAnalysisPass {}));
-    pass_manager.add_module_pass("Contract", Box::new(ContractAnalysisPass {}));
-    pass_manager
 }

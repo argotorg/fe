@@ -9,7 +9,7 @@ use common::{
 use driver::DriverDataBase;
 use driver::cli_target::{CliTarget, resolve_cli_target};
 use hir::hir_def::{HirIngot, TopLevelMod};
-use mir::{MirDiagnosticsMode, collect_mir_diagnostics, fmt as mir_fmt, lower_module};
+use mir::{MirDiagnosticsMode, fmt as mir_fmt, lower_module};
 use salsa::Setter;
 use url::Url;
 
@@ -371,8 +371,8 @@ fn check_ingot_and_dependencies(
     }
 
     let hir_diags = db.run_on_ingot(ingot);
-    let hir_has_errors = hir_diags.has_errors(db);
     let mut has_errors = false;
+    let hir_has_errors = hir_diags.has_errors(db);
 
     if !hir_diags.is_empty() {
         hir_diags.emit(db);
@@ -383,10 +383,8 @@ fn check_ingot_and_dependencies(
         has_errors = true;
     }
 
-    // MIR assumes HIR is sound and panics on invalid HIR. Skip it when HIR
-    // already reported errors to prevent cascading panics on broken input.
     let mir_diags = if hir_has_errors {
-        vec![]
+        Vec::new()
     } else {
         db.mir_diagnostics_for_ingot(ingot, MirDiagnosticsMode::CompilerParity)
     };
@@ -420,7 +418,7 @@ fn check_ingot_and_dependencies(
         }
         let hir_diags = db.run_on_ingot(ingot);
         let mir_diags = if hir_diags.has_errors(db) {
-            vec![]
+            Vec::new()
         } else {
             db.mir_diagnostics_for_ingot(ingot, MirDiagnosticsMode::CompilerParity)
         };
@@ -516,6 +514,7 @@ fn check_single_file(
         let top_mod = db.top_mod(file);
         let hir_diags = db.run_on_top_mod(top_mod);
         let mut has_errors = false;
+        let hir_has_errors = hir_diags.has_errors(db);
 
         if !hir_diags.is_empty() {
             eprintln!("errors in {file_url}");
@@ -528,13 +527,17 @@ fn check_single_file(
             has_errors = true;
         }
 
-        let mir_output = collect_mir_diagnostics(db, top_mod, MirDiagnosticsMode::CompilerParity);
-        if !mir_output.diagnostics.is_empty() {
+        let mir_diags = if hir_has_errors {
+            Vec::new()
+        } else {
+            db.mir_diagnostics_for_top_mod(top_mod, MirDiagnosticsMode::CompilerParity)
+        };
+        if !mir_diags.is_empty() {
             if !has_errors {
                 eprintln!("errors in {file_url}");
                 eprintln!();
             }
-            db.emit_complete_diagnostics(&mir_output.diagnostics);
+            db.emit_complete_diagnostics(&mir_diags);
             has_errors = true;
         }
 

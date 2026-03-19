@@ -8,15 +8,7 @@ use common::{
 };
 use driver::{DriverDataBase, MirDiagnosticsMode};
 use hir::Ingot;
-use hir::analysis::analysis_pass::{
-    AnalysisPassManager, EventLowerPass, MsgLowerPass, ParsingPass,
-};
-use hir::analysis::name_resolution::ImportAnalysisPass;
-use hir::analysis::ty::{
-    AdtDefAnalysisPass, BodyAnalysisPass, ContractAnalysisPass, DefConflictAnalysisPass,
-    FuncAnalysisPass, ImplAnalysisPass, ImplTraitAnalysisPass, MsgSelectorAnalysisPass,
-    TraitAnalysisPass, TypeAliasAnalysisPass,
-};
+use hir::analysis::initialize_analysis_pass;
 use hir::hir_def::HirIngot;
 use hir::lower::map_file_to_mod;
 use rustc_hash::FxHashMap;
@@ -202,25 +194,6 @@ impl<'a> cs_files::Files<'a> for LspDb<'a> {
 
         Ok(std::ops::Range { start, end })
     }
-}
-
-fn initialize_analysis_pass() -> AnalysisPassManager {
-    let mut pass_manager = AnalysisPassManager::new();
-    pass_manager.add_module_pass("Parsing", Box::new(ParsingPass {}));
-    pass_manager.add_module_pass("MsgLower", Box::new(MsgLowerPass {}));
-    pass_manager.add_module_pass("EventLower", Box::new(EventLowerPass {}));
-    pass_manager.add_module_pass("MsgSelector", Box::new(MsgSelectorAnalysisPass {}));
-    pass_manager.add_module_pass("DefConflict", Box::new(DefConflictAnalysisPass {}));
-    pass_manager.add_module_pass("Import", Box::new(ImportAnalysisPass {}));
-    pass_manager.add_module_pass("AdtDef", Box::new(AdtDefAnalysisPass {}));
-    pass_manager.add_module_pass("TypeAlias", Box::new(TypeAliasAnalysisPass {}));
-    pass_manager.add_module_pass("Trait", Box::new(TraitAnalysisPass {}));
-    pass_manager.add_module_pass("Impl", Box::new(ImplAnalysisPass {}));
-    pass_manager.add_module_pass("ImplTrait", Box::new(ImplTraitAnalysisPass {}));
-    pass_manager.add_module_pass("Func", Box::new(FuncAnalysisPass {}));
-    pass_manager.add_module_pass("Body", Box::new(BodyAnalysisPass {}));
-    pass_manager.add_module_pass("Contract", Box::new(ContractAnalysisPass {}));
-    pass_manager
 }
 
 /// Creates a warning diagnostic for standalone files (files outside of a proper ingot).
