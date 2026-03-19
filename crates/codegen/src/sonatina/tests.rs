@@ -1044,13 +1044,14 @@ mod regression_tests {
             file_url.clone(),
             Some(
                 r#"
-contract C:
-    pub fn value() -> u256:
-        return 1
+pub contract C {
+    init() {}
+}
 
-@test
-fn smoke():
-    assert true
+#[test]
+fn smoke() {
+    assert(true)
+}
 "#
                 .to_string(),
             ),
@@ -1079,15 +1080,18 @@ fn smoke():
             file_url.clone(),
             Some(
                 r#"
-fn sum_three() -> u256:
-    let acc: u256 = 0
-    for i in 0..3:
+fn sum_three() -> u256 {
+    let mut acc: u256 = 0
+    for i in 0..3 {
         acc += i as u256
+    }
     return acc
+}
 
-@test
-fn smoke():
-    assert sum_three() == 3
+#[test]
+fn smoke() {
+    assert(sum_three() == 3)
+}
 "#
                 .to_string(),
             ),
@@ -1116,15 +1120,13 @@ fn smoke():
             file_url.clone(),
             Some(
                 r#"
-pub contract C {
-    pub fn ping() -> u256 {
-        1
-    }
+pub fn ping() -> u256 {
+    return 1
 }
 
 #[test]
 fn smoke() {
-    assert true
+    assert(true)
 }
 "#
                 .to_string(),
@@ -1219,9 +1221,10 @@ struct Mixer {}
 
 impl Mixer {
     fn mix(input: [u256; 3]) -> [u256; 3] {
-        let out: [u256; 3] = [0, 0, 0]
-        for i in 0..3:
+        let mut out: [u256; 3] = [0, 0, 0]
+        for i in 0..3 {
             out[i] = input[i]
+        }
         return out
     }
 }
@@ -1230,7 +1233,7 @@ pub contract Foo {
     recv FooMsg {
         Run -> u256 {
             let out: [u256; 3] = Mixer::mix([1, 2, 3])
-            out[0] + out[1] + out[2]
+            return out[0] + out[1] + out[2]
         }
     }
 }
@@ -1266,19 +1269,23 @@ const M: [[u256; 3]; 3] = [
     [1, 1, 2],
 ]
 
-fn mix(state: [u256; 3]) -> [u256; 3]:
+fn mix(state: [u256; 3]) -> [u256; 3] {
     let mut out: [u256; 3] = [0, 0, 0]
-    for i in 0..3:
-        for j in 0..3:
+    for i in 0..3 {
+        for j in 0..3 {
             out[i] = out[i] + M[i][j] + state[j]
+        }
+    }
     return out
+}
 
-@test
-fn smoke():
+#[test]
+fn smoke() {
     let output: [u256; 3] = mix([1, 0, 0])
-    assert output[0] == 4
-    assert output[1] == 3
-    assert output[2] == 3
+    assert(output[0] == 4)
+    assert(output[1] == 3)
+    assert(output[2] == 3)
+}
 "#
                 .to_string(),
             ),
