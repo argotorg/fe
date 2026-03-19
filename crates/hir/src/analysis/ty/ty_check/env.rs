@@ -771,16 +771,30 @@ impl<'db> TyCheckEnv<'db> {
             .push(arg);
     }
 
+    #[cfg(test)]
     pub(super) fn effect_candidate_frames_in_scope(
         &self,
         key_path: PathId<'db>,
         scope: ScopeId<'db>,
         assumptions: PredicateListId<'db>,
-    ) -> Vec<SmallVec<[ProvidedEffect<'db>; 2]>> {
+    ) -> Vec<SmallVec<[EffectCandidate<'db>; 2]>> {
         let Some(lookup) = self.requested_effect_lookup(key_path, scope, assumptions) else {
             return Vec::new();
         };
+        self.effect_candidate_frames_for_lookup(lookup)
+    }
 
+    pub(super) fn effect_candidate_frames_for_key(
+        &self,
+        key: EffectKey<'db>,
+    ) -> Vec<SmallVec<[EffectCandidate<'db>; 2]>> {
+        self.effect_candidate_frames_for_lookup(self.requested_effect_lookup_for_key(key))
+    }
+
+    fn effect_candidate_frames_for_lookup(
+        &self,
+        lookup: RequestedEffectLookup<'db>,
+    ) -> Vec<SmallVec<[EffectCandidate<'db>; 2]>> {
         let scan_frames = |lookup| {
             let mut frames_out = Vec::new();
             let mut saw_exact_keyed = false;
@@ -789,7 +803,10 @@ impl<'db> TyCheckEnv<'db> {
                 match lookup {
                     RequestedEffectLookup::Exact(key) => {
                         if let Some(provided) = frame.bindings.get(&key) {
-                            out.extend_from_slice(provided);
+                            out.extend(provided.iter().copied().map(|provided| EffectCandidate {
+                                provided,
+                                matched_key: Some(key),
+                            }));
                             saw_exact_keyed = true;
                         }
                     }
@@ -799,7 +816,12 @@ impl<'db> TyCheckEnv<'db> {
                                 && req.base_ty(self.db).as_scope(self.db)
                                     == got.base_ty(self.db).as_scope(self.db)
                             {
-                                out.extend_from_slice(provided);
+                                out.extend(provided.iter().copied().map(|provided| {
+                                    EffectCandidate {
+                                        provided,
+                                        matched_key: Some(*effect_key),
+                                    }
+                                }));
                             }
                         }
                     }
@@ -808,7 +830,12 @@ impl<'db> TyCheckEnv<'db> {
                             if let EffectKey::Trait(got) = effect_key
                                 && req.def(self.db) == got.def(self.db)
                             {
-                                out.extend_from_slice(provided);
+                                out.extend(provided.iter().copied().map(|provided| {
+                                    EffectCandidate {
+                                        provided,
+                                        matched_key: Some(*effect_key),
+                                    }
+                                }));
                             }
                         }
                     }
@@ -820,12 +847,18 @@ impl<'db> TyCheckEnv<'db> {
                     }
                     match lookup {
                         RequestedEffectLookup::Exact(EffectKey::Type(_))
-                        | RequestedEffectLookup::SchematicType(_) => out.push(*provided),
+                        | RequestedEffectLookup::SchematicType(_) => out.push(EffectCandidate {
+                            provided: *provided,
+                            matched_key: None,
+                        }),
                         RequestedEffectLookup::Exact(EffectKey::Trait(_))
                         | RequestedEffectLookup::SchematicTrait(_) => {
                             // Trait satisfaction is checked at the call site so we
                             // can consider type arguments and current assumptions.
-                            out.push(*provided);
+                            out.push(EffectCandidate {
+                                provided: *provided,
+                                matched_key: None,
+                            });
                         }
                     }
                 }
@@ -1297,7 +1330,8 @@ fn host() {}
         );
         assert_eq!(frames.len(), 1);
         assert_eq!(frames[0].len(), 1);
-        assert_eq!(frames[0][0].ty, TyId::bool(&db));
+        assert_eq!(frames[0][0].provided.ty, TyId::bool(&db));
+        assert_eq!(frames[0][0].matched_key, Some(outer_key));
     }
 
     #[test]
@@ -1353,7 +1387,8 @@ fn host() {}
         );
         assert_eq!(frames.len(), 1);
         assert_eq!(frames[0].len(), 1);
-        assert_eq!(frames[0][0].ty, TyId::u256(&db));
+        assert_eq!(frames[0][0].provided.ty, TyId::u256(&db));
+        assert_eq!(frames[0][0].matched_key, Some(inner_key));
     }
 
     #[test]
@@ -1413,7 +1448,8 @@ fn host() {}
         );
         assert_eq!(frames.len(), 1);
         assert_eq!(frames[0].len(), 1);
-        assert_eq!(frames[0][0].ty, TyId::bool(&db));
+        assert_eq!(frames[0][0].provided.ty, TyId::bool(&db));
+        assert_eq!(frames[0][0].matched_key, Some(outer_key));
     }
 
     #[test]
@@ -1484,9 +1520,11 @@ pub fn host() {}
         );
         assert_eq!(frames.len(), 2);
         assert_eq!(frames[0].len(), 1);
-        assert_eq!(frames[0][0].ty, TyId::u256(&db));
+        assert_eq!(frames[0][0].provided.ty, TyId::u256(&db));
+        assert_eq!(frames[0][0].matched_key, Some(inner_key));
         assert_eq!(frames[1].len(), 1);
-        assert_eq!(frames[1][0].ty, TyId::bool(&db));
+        assert_eq!(frames[1][0].provided.ty, TyId::bool(&db));
+        assert_eq!(frames[1][0].matched_key, Some(outer_key));
     }
 }
 
@@ -1526,7 +1564,7 @@ pub(super) enum EffectKey<'db> {
     Trait(TraitInstId<'db>),
 }
 
-fn effect_key_from_binding<'db>(
+pub(super) fn effect_key_from_binding<'db>(
     db: &'db dyn HirAnalysisDb,
     binding: &EffectBinding<'db>,
 ) -> Option<EffectKey<'db>> {
@@ -1730,6 +1768,12 @@ pub(super) struct ProvidedEffect<'db> {
     pub ty: TyId<'db>,
     pub is_mut: bool,
     pub binding: Option<LocalBinding<'db>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) struct EffectCandidate<'db> {
+    pub provided: ProvidedEffect<'db>,
+    pub matched_key: Option<EffectKey<'db>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1954,6 +1998,7 @@ impl<'db> TyCheckEnv<'db> {
         }
     }
 
+    #[cfg(test)]
     fn requested_effect_lookup(
         &self,
         key_path: PathId<'db>,
@@ -1961,14 +2006,18 @@ impl<'db> TyCheckEnv<'db> {
         assumptions: PredicateListId<'db>,
     ) -> Option<RequestedEffectLookup<'db>> {
         let key = self.effect_key_for_path_in_scope(key_path, scope, assumptions)?;
-        Some(if effect_key_is_schematic(self.db, key) {
+        Some(self.requested_effect_lookup_for_key(key))
+    }
+
+    fn requested_effect_lookup_for_key(&self, key: EffectKey<'db>) -> RequestedEffectLookup<'db> {
+        if effect_key_is_schematic(self.db, key) {
             match key {
                 EffectKey::Type(ty) => RequestedEffectLookup::SchematicType(ty),
                 EffectKey::Trait(trait_inst) => RequestedEffectLookup::SchematicTrait(trait_inst),
             }
         } else {
             RequestedEffectLookup::Exact(key)
-        })
+        }
     }
 }
 
@@ -1991,7 +2040,7 @@ fn effect_key_is_schematic<'db>(db: &'db dyn HirAnalysisDb, key: EffectKey<'db>)
     }
 }
 
-fn ty_value_contains_schematic_structure<'db>(
+pub(super) fn ty_value_contains_schematic_structure<'db>(
     db: &'db dyn HirAnalysisDb,
     value: impl crate::analysis::ty::visitor::TyVisitable<'db>,
 ) -> bool {

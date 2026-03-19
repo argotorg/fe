@@ -2552,6 +2552,35 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
 
+            Self::WithEffectTraitUnsatisfied {
+                primary,
+                key,
+                trait_req,
+                given,
+            } => {
+                let key_str = key.pretty_print(db);
+                let trait_str = trait_req.pretty_print(db, false);
+                let given_ty = given.pretty_print(db).to_string();
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: format!(
+                        "keyed effect binding `{}` requires `{}` to implement `{}`",
+                        key_str, given_ty, trait_str
+                    ),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!(
+                            "`{}` does not implement `{}` for effect `{}`",
+                            given_ty, trait_str, key_str
+                        ),
+                        span: primary.resolve(db),
+                    }],
+                    notes: vec![],
+                    error_code,
+                }
+            }
+
             Self::ReturnedTypeMismatch {
                 primary,
                 actual,

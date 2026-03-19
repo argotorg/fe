@@ -289,17 +289,6 @@ pub(crate) fn collect_generic_params<'db>(
     GenericParamCollector::new(db, owner, true).finalize()
 }
 
-#[salsa::tracked(
-    cycle_initial=base_generic_params_cycle_initial,
-    cycle_fn=base_generic_params_cycle_recover
-)]
-pub(crate) fn base_generic_params<'db>(
-    db: &'db dyn HirAnalysisDb,
-    owner: GenericParamOwner<'db>,
-) -> GenericParamTypeSet<'db> {
-    GenericParamCollector::new(db, owner, false).finalize()
-}
-
 fn collect_generic_params_cycle_initial<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: GenericParamOwner<'db>,
@@ -308,22 +297,6 @@ fn collect_generic_params_cycle_initial<'db>(
 }
 
 fn collect_generic_params_cycle_recover<'db>(
-    _db: &'db dyn HirAnalysisDb,
-    _value: &GenericParamTypeSet<'db>,
-    _count: u32,
-    _owner: GenericParamOwner<'db>,
-) -> salsa::CycleRecoveryAction<GenericParamTypeSet<'db>> {
-    salsa::CycleRecoveryAction::Iterate
-}
-
-fn base_generic_params_cycle_initial<'db>(
-    db: &'db dyn HirAnalysisDb,
-    owner: GenericParamOwner<'db>,
-) -> GenericParamTypeSet<'db> {
-    GenericParamTypeSet::empty(db, owner.scope())
-}
-
-fn base_generic_params_cycle_recover<'db>(
     _db: &'db dyn HirAnalysisDb,
     _value: &GenericParamTypeSet<'db>,
     _count: u32,

@@ -175,11 +175,10 @@ pub(crate) fn existentialize_omitted_const_args_in_effect_key<'db>(
     TyId::foldl(db, base, &completed_args)
 }
 
-pub(crate) fn instantiate_trait_effect_requirement<'db>(
+pub(crate) fn instantiate_trait_effect_key<'db>(
     db: &'db dyn HirAnalysisDb,
-    trait_inst: TraitInstId<'db>,
+    trait_key: TraitInstId<'db>,
     callee_generic_args: &[TyId<'db>],
-    provided_ty: TyId<'db>,
     assoc_ty_subst: Option<TraitInstId<'db>>,
 ) -> TraitInstId<'db> {
     struct InstantiateCalleeArgs<'db, 'a> {
@@ -208,6 +207,24 @@ pub(crate) fn instantiate_trait_effect_requirement<'db>(
         }
     }
 
+    let mut instantiation = InstantiateCalleeArgs {
+        args: callee_generic_args,
+    };
+    let mut trait_key = trait_key.fold_with(db, &mut instantiation);
+
+    if let Some(inst) = assoc_ty_subst {
+        let mut subst = AssocTySubst::new(inst);
+        trait_key = trait_key.fold_with(db, &mut subst);
+    }
+
+    trait_key
+}
+
+pub(crate) fn instantiate_trait_effect_goal<'db>(
+    db: &'db dyn HirAnalysisDb,
+    trait_key: TraitInstId<'db>,
+    provided_ty: TyId<'db>,
+) -> TraitInstId<'db> {
     struct SelfSubst<'db> {
         self_subst: TyId<'db>,
     }
@@ -221,20 +238,10 @@ pub(crate) fn instantiate_trait_effect_requirement<'db>(
         }
     }
 
-    let mut instantiation = InstantiateCalleeArgs {
-        args: callee_generic_args,
-    };
-    let trait_inst = trait_inst.fold_with(db, &mut instantiation);
-
-    let mut self_subst = SelfSubst {
-        self_subst: provided_ty,
-    };
-    let mut trait_req = trait_inst.fold_with(db, &mut self_subst);
-
-    if let Some(inst) = assoc_ty_subst {
-        let mut subst = AssocTySubst::new(inst);
-        trait_req = trait_req.fold_with(db, &mut subst);
-    }
-
-    trait_req
+    trait_key.fold_with(
+        db,
+        &mut SelfSubst {
+            self_subst: provided_ty,
+        },
+    )
 }

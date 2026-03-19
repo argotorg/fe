@@ -18,7 +18,7 @@ use crate::analysis::{
         trait_lower::{lower_impl_trait, lower_trait_ref},
         trait_resolution::PredicateListId,
         ty_def::{TyBase, TyData, TyId, TyVarSort},
-        ty_lower::{base_generic_params, collect_generic_params, lower_hir_ty},
+        ty_lower::{collect_generic_params, lower_hir_ty},
         unify::InferenceKey,
     },
 };
@@ -289,10 +289,7 @@ pub(crate) fn collect_decl_constraints<'db>(
     let owner_scope = owner.scope();
 
     // Generic parameter bounds
-    let param_set = match owner {
-        GenericParamOwner::Func(_) => base_generic_params(db, owner),
-        _ => collect_generic_params(db, owner),
-    };
+    let param_set = collect_generic_params(db, owner);
     let params = owner.params(db);
     for (idx, GenericParamView { param, .. }) in params.enumerate() {
         let GenericParam::Type(hir_param) = param else {
