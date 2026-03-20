@@ -936,14 +936,15 @@ impl<'db> TyChecker<'db> {
 
             match binding.key_path {
                 Some(key_path) => {
-                    if let Some(key_path) = key_path.to_opt() {
+                    if let Some(key_path) = key_path.to_opt()
+                        && let Some(effect_key) = self.env.effect_key_for_with_binding_in_scope(
+                            key_path,
+                            self.env.scope(),
+                            self.env.assumptions(),
+                        )
+                    {
                         if !provided.ty.has_invalid(self.db)
-                            && let Some(EffectKey::Trait(trait_key)) =
-                                self.env.effect_key_for_path_in_scope(
-                                    key_path,
-                                    self.env.scope(),
-                                    self.env.assumptions(),
-                                )
+                            && let EffectKey::Trait(trait_key) = effect_key
                         {
                             let trait_req =
                                 instantiate_trait_effect_goal(self.db, trait_key, provided.ty);
@@ -965,7 +966,7 @@ impl<'db> TyChecker<'db> {
                                     given: provided.ty,
                                 });
                                 self.env.insert_effect_binding(
-                                    key_path,
+                                    effect_key,
                                     ProvidedEffect {
                                         ty: TyId::invalid(self.db, InvalidCause::Other),
                                         ..provided
@@ -974,7 +975,7 @@ impl<'db> TyChecker<'db> {
                                 continue;
                             }
                         }
-                        self.env.insert_effect_binding(key_path, provided);
+                        self.env.insert_effect_binding(effect_key, provided);
                     }
                 }
                 None => {

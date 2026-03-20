@@ -33,6 +33,14 @@ fn assert_single_trait_effect_arg<'db>(typed_body: &TypedBody<'db>, call_expr: E
     assert_eq!(effect_args[0].key_kind, EffectKeyKind::Trait);
 }
 
+fn assert_single_type_effect_arg<'db>(typed_body: &TypedBody<'db>, call_expr: ExprId) {
+    let effect_args = typed_body
+        .call_effect_args(call_expr)
+        .expect("missing resolved effect args");
+    assert_eq!(effect_args.len(), 1);
+    assert_eq!(effect_args[0].key_kind, EffectKeyKind::Type);
+}
+
 fn assert_trait_effect_provider_arg<'db>(
     db: &'db HirAnalysisTestDb,
     caller: Func<'db>,
@@ -647,6 +655,49 @@ fn caller() {
 }
 
 #[test]
+fn inferred_type_keyed_with_bindings_shadow_outer_providers() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("inferred_type_keyed_with_bindings_shadow_outer_providers.fe"),
+        r#"
+struct Storage<T> {
+    value: T,
+}
+
+fn needs<T>(x: T) uses (store: Storage<T>) {}
+
+fn caller() {
+    let x: u8 = 1
+    let good = Storage<u8> { value: x }
+    let bad = Storage<u16> { value: 2 }
+    with (Storage<u8> = good) {
+        with (Storage<u8> = bad) {
+            needs(x)
+        }
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let diags = diagnostics_for(&db, top_mod);
+    assert_eq!(diags.len(), 1, "unexpected diagnostics: {diags:#?}");
+    assert!(
+        diags[0].message.contains(
+            "effect `Storage<T>` provided to `needs` has type `Storage<u16>`, but `Storage<u8>` is required",
+        ),
+        "unexpected diagnostics: {diags:#?}"
+    );
+
+    let caller = find_func(&db, top_mod, "caller");
+    let call_expr = find_call_expr(&db, caller);
+    let typed_body = check_func_body(&db, caller).1.clone();
+    assert!(
+        typed_body.call_effect_args(call_expr).is_none(),
+        "inferred instantiated type-keyed binding should shadow the outer provider"
+    );
+}
+
+#[test]
 fn normalized_keyed_with_bindings_take_precedence_after_assoc_normalization() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
@@ -694,6 +745,42 @@ where
     let typed_body = check_func_body(&db, caller).1.clone();
     assert_single_trait_effect_arg(&typed_body, call_expr);
     assert_trait_effect_provider_arg(&db, caller, needs, call_expr, "Keyed");
+}
+
+#[test]
+fn ordinary_calls_use_keyed_type_effects_after_assoc_normalization() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("ordinary_calls_use_keyed_type_effects_after_assoc_normalization.fe"),
+        r#"
+trait HasTy {
+    type Assoc
+}
+
+struct Storage<T> {
+    value: T,
+}
+
+fn needs<T>() uses (store: Storage<T>) {}
+
+fn caller<X>()
+where
+    X: HasTy<Assoc = u256>
+{
+    let store = Storage<u256> { value: 1 }
+    with (Storage<u256> = store) {
+        needs<X::Assoc>()
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let caller = find_func(&db, top_mod, "caller");
+    let call_expr = find_call_expr(&db, caller);
+    let typed_body = check_func_body(&db, caller).1.clone();
+    assert_single_type_effect_arg(&typed_body, call_expr);
 }
 
 #[test]

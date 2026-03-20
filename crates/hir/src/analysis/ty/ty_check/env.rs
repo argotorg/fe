@@ -728,32 +728,10 @@ impl<'db> TyCheckEnv<'db> {
 
     pub(super) fn insert_effect_binding(
         &mut self,
-        key_path: PathId<'db>,
+        key: EffectKey<'db>,
         binding: ProvidedEffect<'db>,
     ) {
-        // Prefer a key derived from the provided type (preserves generic args)
-        // but fall back to the resolved path if bases don't match.
-        if let Ok(path_res) =
-            resolve_path(self.db, key_path, self.scope(), self.assumptions(), false)
-        {
-            let key = match path_res {
-                PathRes::Ty(resolved) | PathRes::TyAlias(_, resolved) => {
-                    let provided_base = binding.ty.base_ty(self.db).as_scope(self.db);
-                    let resolved_base = resolved.base_ty(self.db).as_scope(self.db);
-                    let ty = if provided_base == resolved_base {
-                        binding.ty
-                    } else {
-                        resolved
-                    };
-                    Some(EffectKey::Type(ty))
-                }
-                PathRes::Trait(trait_inst) => Some(EffectKey::Trait(trait_inst)),
-                _ => None,
-            };
-            if let Some(key) = key {
-                self.effect_env.insert(key, binding);
-            }
-        }
+        self.effect_env.insert(key, binding);
     }
 
     pub(super) fn insert_unkeyed_effect_binding(&mut self, binding: ProvidedEffect<'db>) {
@@ -2055,6 +2033,23 @@ impl<'db> TyCheckEnv<'db> {
             ResolvedEffectKey::Type(ty) => Some(EffectKey::Type(ty)),
             ResolvedEffectKey::Trait(trait_inst) => Some(EffectKey::Trait(trait_inst)),
             ResolvedEffectKey::Other => None,
+        }
+    }
+
+    pub(super) fn effect_key_for_with_binding_in_scope(
+        &self,
+        key_path: PathId<'db>,
+        scope: ScopeId<'db>,
+        assumptions: PredicateListId<'db>,
+    ) -> Option<EffectKey<'db>> {
+        if let Some(key) = self.effect_key_for_path_in_scope(key_path, scope, assumptions) {
+            return Some(key);
+        }
+
+        match resolve_path(self.db, key_path, scope, assumptions, false).ok()? {
+            PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => Some(EffectKey::Type(ty)),
+            PathRes::Trait(trait_inst) => Some(EffectKey::Trait(trait_inst)),
+            _ => None,
         }
     }
 

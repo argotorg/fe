@@ -4,10 +4,10 @@ assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/storage_map_wrong_provider.fe
 ---
-error[8-0036]: missing effect `StorageMap<u256, u256, BALANCES_ROOT>` required by `needs_balances`
+error[8-0038]: effect `StorageMap<u256, u256, BALANCES_ROOT>` provided to `needs_balances` has type `StorageMap<u256, u256, 1>`, but `StorageMap<u256, u256, 0>` is required
    ┌─ storage_map_wrong_provider.fe:21:17
    │
+20 │             with (StorageMap<u256, u256, BALANCES_ROOT> = allowances) {
+   │                                                           ---------- effect `StorageMap<u256, u256, BALANCES_ROOT>` is provided here
 21 │                 needs_balances()
-   │                 ^^^^^^^^^^^^^^^^ `needs_balances` requires effect `StorageMap<u256, u256, BALANCES_ROOT>` to be in scope
-   │
-   = provide it with `with (StorageMap<u256, u256, BALANCES_ROOT> = value)` or require it via `uses StorageMap<u256, u256, BALANCES_ROOT>`
+   │                 ^^^^^^^^^^^^^^^^ expected `StorageMap<u256, u256, 0>` for effect `StorageMap<u256, u256, BALANCES_ROOT>`, found `StorageMap<u256, u256, 1>`
