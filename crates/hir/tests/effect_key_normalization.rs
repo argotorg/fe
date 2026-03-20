@@ -509,6 +509,96 @@ fn caller() {
 }
 
 #[test]
+fn instantiated_keyed_with_bindings_shadow_outer_providers() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("instantiated_keyed_with_bindings_shadow_outer_providers.fe"),
+        r#"
+trait Cap<T> {
+    fn cap(self)
+}
+
+struct Good {}
+struct Bad {}
+
+impl Cap<u8> for Good {
+    fn cap(self) {}
+}
+
+fn needs<T>() uses (cap: Cap<T>) {}
+
+fn caller() {
+    with (Cap<u8> = Good {}) {
+        with (Cap<u8> = Bad {}) {
+            needs<u8>()
+        }
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let diags = diagnostics_for(&db, top_mod);
+    assert_eq!(diags.len(), 1, "unexpected diagnostics: {diags:#?}");
+    assert!(
+        diags[0]
+            .message
+            .contains("keyed effect binding `Cap<u8>` requires `Bad` to implement `Cap<u8>`"),
+        "unexpected diagnostics: {diags:#?}"
+    );
+
+    let caller = find_func(&db, top_mod, "caller");
+    let call_expr = find_call_expr(&db, caller);
+    let typed_body = check_func_body(&db, caller).1.clone();
+    assert!(
+        typed_body.call_effect_args(call_expr).is_none(),
+        "instantiated invalid keyed binding should shadow the outer provider"
+    );
+}
+
+#[test]
+fn instantiated_keyed_with_bindings_take_precedence_over_same_frame_unkeyed_providers() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from(
+            "instantiated_keyed_with_bindings_take_precedence_over_same_frame_unkeyed_providers.fe",
+        ),
+        r#"
+trait Cap<T> {
+    fn cap(self)
+}
+
+struct Keyed {}
+struct Unkeyed {}
+
+impl Cap<u8> for Keyed {
+    fn cap(self) {}
+}
+
+impl Cap<u8> for Unkeyed {
+    fn cap(self) {}
+}
+
+fn needs<T>() uses (cap: Cap<T>) {}
+
+fn caller() {
+    with (Cap<u8> = Keyed {}, Unkeyed {}) {
+        needs<u8>()
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let caller = find_func(&db, top_mod, "caller");
+    let needs = find_func(&db, top_mod, "needs");
+    let call_expr = find_call_expr(&db, caller);
+    let typed_body = check_func_body(&db, caller).1.clone();
+    assert_single_trait_effect_arg(&typed_body, call_expr);
+    assert_trait_effect_provider_arg(&db, caller, needs, call_expr, "Keyed");
+}
+
+#[test]
 fn keyed_with_trait_bindings_normalize_layout_holes() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(

@@ -14,7 +14,7 @@ use super::{
     ConstRef, RecordLike, Typeable,
     env::{
         EffectCandidate, EffectKey, EffectOrigin, ExprProp, LocalBinding, PendingPrimitiveOp,
-        ProvidedEffect, TyCheckEnv, effect_key_from_binding,
+        ProvidedEffect, TyCheckEnv,
     },
     path::ResolvedPathInBody,
 };
@@ -1105,8 +1105,14 @@ impl<'db> TyChecker<'db> {
             else {
                 continue;
             };
-            let Some(effect_key) = effect_key_from_binding(self.db, binding) else {
+            let Some(requirement) =
+                self.instantiate_effect_requirement_from_binding(binding, callable)
+            else {
                 continue;
+            };
+            let effect_key = match requirement {
+                EffectRequirement::Type(ty) => EffectKey::Type(ty),
+                EffectRequirement::TraitKey(trait_key) => EffectKey::Trait(trait_key),
             };
 
             let provider_arg_idx_for_param = callee_provider_arg_idx_by_effect
@@ -1141,12 +1147,6 @@ impl<'db> TyChecker<'db> {
                     if provided.ty.has_invalid(self.db) {
                         continue;
                     }
-
-                    let Some(requirement) =
-                        self.instantiate_effect_requirement_from_binding(binding, callable)
-                    else {
-                        continue;
-                    };
 
                     match requirement {
                         EffectRequirement::Type(expected) => {
@@ -1249,10 +1249,7 @@ impl<'db> TyChecker<'db> {
                     continue;
                 }
 
-                if let [candidate] = all_candidates.as_slice()
-                    && let Some(requirement) =
-                        self.instantiate_effect_requirement_from_binding(binding, callable)
-                {
+                if let [candidate] = all_candidates.as_slice() {
                     let provided = candidate.provided;
                     match requirement {
                         EffectRequirement::Type(expected) => {
@@ -1442,7 +1439,7 @@ impl<'db> TyChecker<'db> {
 
                     (arg, pass_mode)
                 }
-                EffectSatisfaction::Provider { .. } | EffectSatisfaction::TraitByValue { .. } => {
+                EffectSatisfaction::Provider { .. } | EffectSatisfaction::TraitByValue => {
                     let arg = match provided.origin {
                         EffectOrigin::With { value_expr } => super::EffectArg::Value(value_expr),
                         EffectOrigin::Param { .. } => provided
@@ -1500,7 +1497,7 @@ impl<'db> TyChecker<'db> {
                 && matches!(
                     satisfaction,
                     EffectSatisfaction::Provider { .. }
-                        | EffectSatisfaction::TraitByValue { .. }
+                        | EffectSatisfaction::TraitByValue
                         | EffectSatisfaction::TraitByWitness { .. }
                 )
                 && let Some(provider_var) = callable.generic_args().get(provider_arg_idx).copied()
