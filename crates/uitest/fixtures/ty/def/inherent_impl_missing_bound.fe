@@ -1,0 +1,68 @@
+trait Hashable {
+    fn hash(self) -> u256
+}
+
+struct Cache<T: Hashable> {
+    item: T,
+}
+
+impl<T> Cache<T> {
+    fn touch(self) {}
+}
+
+trait RepeatHashable {
+    fn hash(self) -> u256
+}
+
+struct RepeatCache<T: RepeatHashable> {
+    item: T,
+    hash: u256,
+}
+
+impl<T: RepeatHashable> RepeatCache<T> {
+    fn new(item: own T) -> RepeatCache<T> {
+        let hash = item.hash()
+        RepeatCache { item, hash }
+    }
+}
+
+trait WhereHashable {
+    fn hash(self) -> u256
+}
+
+struct WhereCache<T: WhereHashable> {
+    item: T,
+}
+
+impl<T> WhereCache<T>
+where
+    T: WhereHashable,
+{
+    fn touch(self) {}
+}
+
+trait BoundOnlyHashable {
+    fn hash(self) -> u256
+}
+
+struct Wrapper<T> {
+    item: T,
+}
+
+impl<T: BoundOnlyHashable> Wrapper<T> {
+    fn touch(self) {}
+}
+
+trait SuperHashable {
+    fn hash(self) -> u256
+}
+
+trait StrongHashable: SuperHashable {}
+
+struct SuperCache<T: SuperHashable> {
+    item: T,
+}
+
+impl<T: StrongHashable> SuperCache<T> {
+    fn touch(self) {}
+}

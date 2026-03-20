@@ -2697,9 +2697,19 @@ pub enum SuperTraitLowerError {
 }
 
 impl<'db> Impl<'db> {
+    /// Semantic predicate list (assumptions) for this inherent impl.
+    pub(crate) fn assumptions(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
+        constraints_for(db, self.into())
+    }
+
+    /// Assumptions for impl-target validation, elaborated with implied bounds.
+    pub(crate) fn elaborated_assumptions(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
+        self.assumptions(db).extend_all_bounds(db)
+    }
+
     /// Semantic implementor type of this inherent impl.
     pub fn ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
-        let assumptions = constraints_for(db, self.into());
+        let assumptions = self.assumptions(db);
         self.type_ref(db)
             .to_opt()
             .map(|hir_ty| lower_hir_ty(db, hir_ty, self.scope(), assumptions))
@@ -2711,7 +2721,7 @@ impl<'db> Impl<'db> {
         let Some(hir_ty) = self.type_ref(db).to_opt() else {
             return Vec::new();
         };
-        let assumptions = constraints_for(db, self.into());
+        let assumptions = self.assumptions(db);
         collect_ty_lower_errors(
             db,
             self.scope(),
