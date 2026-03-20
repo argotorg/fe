@@ -2702,14 +2702,14 @@ impl<'db> Impl<'db> {
         constraints_for(db, self.into())
     }
 
-    /// Assumptions for impl-target validation, elaborated with implied bounds.
+    /// Assumptions for impl-target lowering and validation, elaborated with implied bounds.
     pub(crate) fn elaborated_assumptions(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
         self.assumptions(db).extend_all_bounds(db)
     }
 
     /// Semantic implementor type of this inherent impl.
     pub fn ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
-        let assumptions = self.assumptions(db);
+        let assumptions = self.elaborated_assumptions(db);
         self.type_ref(db)
             .to_opt()
             .map(|hir_ty| lower_hir_ty(db, hir_ty, self.scope(), assumptions))
@@ -2721,7 +2721,7 @@ impl<'db> Impl<'db> {
         let Some(hir_ty) = self.type_ref(db).to_opt() else {
             return Vec::new();
         };
-        let assumptions = self.assumptions(db);
+        let assumptions = self.elaborated_assumptions(db);
         collect_ty_lower_errors(
             db,
             self.scope(),

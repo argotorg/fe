@@ -66,3 +66,17 @@ struct SuperCache<T: SuperHashable> {
 impl<T: StrongHashable> SuperCache<T> {
     fn touch(self) {}
 }
+
+trait AssocSuper {
+    type Item
+}
+
+trait AssocStrong: AssocSuper {}
+
+struct AssocBox<T> {
+    item: T,
+}
+
+impl<T: AssocStrong> AssocBox<T::Item> {
+    fn touch(self) {}
+}
