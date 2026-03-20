@@ -1,0 +1,43 @@
+trait Final {}
+
+trait Level8 {
+    type Next8: Final
+}
+
+trait Level7 {
+    type Next7: Level8
+}
+
+trait Level6 {
+    type Next6: Level7
+}
+
+trait Level5 {
+    type Next5: Level6
+}
+
+trait Level4 {
+    type Next4: Level5
+}
+
+trait Level3 {
+    type Next3: Level4
+}
+
+trait Level2 {
+    type Next2: Level3
+}
+
+trait Level1 {
+    type Next1: Level2
+}
+
+trait Level0 {
+    type Next0: Level1
+}
+
+fn require_final<T: Final>(_value: T) {}
+
+fn use_deep_bound<T: Level0>(value: T::Next0::Next1::Next2::Next3::Next4::Next5::Next6::Next7::Next8) {
+    require_final(value)
+}

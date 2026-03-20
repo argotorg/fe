@@ -1,9 +1,20 @@
 use std::{
     ffi::OsStr,
     fs,
+    io::Read,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
+    thread::{self, sleep},
+    time::{Duration, Instant},
 };
+
+const FE_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
+
+struct FeCheckRun {
+    code: i32,
+    combined: String,
+    timed_out: bool,
+}
 
 fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/crash_regressions")
@@ -13,24 +24,82 @@ fn is_fe_file(path: &Path) -> bool {
     path.extension().and_then(OsStr::to_str) == Some("fe")
 }
 
-fn run_fe_check(path: &Path) -> (i32, String) {
-    let output = Command::new(env!("CARGO_BIN_EXE_fe"))
+fn spawn_reader<R: Read + Send + 'static>(mut pipe: R) -> thread::JoinHandle<Vec<u8>> {
+    thread::spawn(move || {
+        let mut buf = Vec::new();
+        pipe.read_to_end(&mut buf).unwrap_or_else(|err| {
+            panic!("failed to read `fe check` output stream: {err}");
+        });
+        buf
+    })
+}
+
+fn run_fe_check(path: &Path) -> FeCheckRun {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_fe"))
         .args(["check", "--standalone", "--color", "never"])
         .arg(path)
         .env("NO_COLOR", "1")
         .env("RUST_BACKTRACE", "0")
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .unwrap_or_else(|err| panic!("failed to run `fe check` on {path:?}: {err}"));
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let combined = format!("{stdout}{stderr}");
+    // Drain both pipes concurrently to avoid deadlocking when diagnostics exceed pipe capacity.
+    let stdout_handle = spawn_reader(
+        child
+            .stdout
+            .take()
+            .unwrap_or_else(|| panic!("missing stdout pipe for `fe check` on {path:?}")),
+    );
+    let stderr_handle = spawn_reader(
+        child
+            .stderr
+            .take()
+            .unwrap_or_else(|| panic!("missing stderr pipe for `fe check` on {path:?}")),
+    );
 
-    let code = output
-        .status
-        .code()
-        .unwrap_or_else(|| panic!("`fe check` terminated by signal for {path:?}\n{combined}"));
-    (code, combined)
+    let start = Instant::now();
+    let timed_out = loop {
+        if child
+            .try_wait()
+            .unwrap_or_else(|err| panic!("failed to poll `fe check` on {path:?}: {err}"))
+            .is_some()
+        {
+            break false;
+        }
+
+        if start.elapsed() >= FE_CHECK_TIMEOUT {
+            let _ = child.kill();
+            break true;
+        }
+
+        sleep(Duration::from_millis(10));
+    };
+
+    let status = child
+        .wait()
+        .unwrap_or_else(|err| panic!("failed to wait for `fe check` on {path:?}: {err}"));
+
+    let stdout = stdout_handle
+        .join()
+        .unwrap_or_else(|_| panic!("stdout reader thread panicked for {path:?}"));
+    let stderr = stderr_handle
+        .join()
+        .unwrap_or_else(|_| panic!("stderr reader thread panicked for {path:?}"));
+
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&stdout),
+        String::from_utf8_lossy(&stderr)
+    );
+
+    let code = status.code().unwrap_or(-1);
+    FeCheckRun {
+        code,
+        combined,
+        timed_out,
+    }
 }
 
 #[test]
@@ -49,8 +118,15 @@ fn crash_regressions_do_not_panic() {
     );
 
     for fixture in fixtures {
-        let (code, combined) = run_fe_check(&fixture);
+        let run = run_fe_check(&fixture);
+        let code = run.code;
+        let combined = run.combined;
 
+        assert!(
+            !run.timed_out,
+            "`fe check` timed out after {:?} on {fixture:?}\n{combined}",
+            FE_CHECK_TIMEOUT
+        );
         assert_ne!(code, 101, "`fe check` panicked on {fixture:?}\n{combined}");
         assert!(
             !combined.contains("panicked at")

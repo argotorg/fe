@@ -2597,7 +2597,7 @@ mod tests {
     fn call_arg_marks_alloc_as_escaping_for_cross_frame_safety() {
         let mut db = DriverDataBase::default();
         let url = Url::parse("file:///escape_reborrow_call.fe").unwrap();
-        let src = "pub fn escape_id(value: u256) -> u256 { value } pub fn escape_caller() {}";
+        let src = "pub fn escape_id(value: u256) -> u256 { value }\npub fn escape_caller() {}";
         let file = db.workspace().touch(&mut db, url, Some(src.to_string()));
         let top_mod = db.top_mod(file);
         let mut module = crate::lower_module(&db, top_mod).expect("module should lower");
@@ -2707,7 +2707,7 @@ mod tests {
     fn returned_call_result_marks_alloc_as_escaping() {
         let mut db = DriverDataBase::default();
         let url = Url::parse("file:///escape_returned_call_result.fe").unwrap();
-        let src = "pub fn escape_id(value: u256) -> u256 { value } pub fn escape_returned_call_result() {}";
+        let src = "pub fn escape_id(value: u256) -> u256 { value }\npub fn escape_returned_call_result() {}";
         let file = db.workspace().touch(&mut db, url, Some(src.to_string()));
         let top_mod = db.top_mod(file);
         let mut module = crate::lower_module(&db, top_mod).expect("module should lower");
@@ -2745,7 +2745,7 @@ mod tests {
     fn returned_effect_call_result_marks_alloc_as_escaping() {
         let mut db = DriverDataBase::default();
         let url = Url::parse("file:///escape_returned_effect_call_result.fe").unwrap();
-        let src = "pub fn escape_effect_id() {} pub fn escape_returned_effect_call_result() {}";
+        let src = "pub fn escape_effect_id() {}\npub fn escape_returned_effect_call_result() {}";
         let file = db.workspace().touch(&mut db, url, Some(src.to_string()));
         let top_mod = db.top_mod(file);
         let mut module = crate::lower_module(&db, top_mod).expect("module should lower");

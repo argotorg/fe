@@ -4,7 +4,7 @@
 
 use std::{error::Error, fmt};
 
-use common::diagnostics::{CompleteDiagnostic, Span};
+use common::diagnostics::{CompleteDiagnostic, Severity, Span, cmp_complete_diagnostics};
 use common::ingot::{Ingot, IngotKind};
 use hir::analysis::{
     HirAnalysisDb,
@@ -129,6 +129,90 @@ pub struct MirDiagnosticsOutput {
     pub internal_errors: Vec<MirLowerError>,
 }
 
+fn sort_and_dedup_complete_diagnostics(diags: &mut Vec<CompleteDiagnostic>) {
+    diags.sort_by(cmp_complete_diagnostics);
+    diags.dedup();
+}
+
+fn collect_hir_error_diagnostics<'db>(
+    db: &'db dyn SpannedHirAnalysisDb,
+    top_mods: impl IntoIterator<Item = TopLevelMod<'db>>,
+) -> Vec<CompleteDiagnostic> {
+    let mut pass_manager = hir::analysis::initialize_analysis_pass();
+    let mut diags = Vec::new();
+    for top_mod in top_mods {
+        diags.extend(pass_manager.run_on_module(db, top_mod));
+    }
+
+    let mut complete_diags: Vec<_> = diags
+        .into_iter()
+        .map(|diag| diag.to_complete(db))
+        .filter(|diag| diag.severity == Severity::Error)
+        .collect();
+    sort_and_dedup_complete_diagnostics(&mut complete_diags);
+    complete_diags
+}
+
+fn collect_hir_error_diagnostics_for_top_mod<'db>(
+    db: &'db dyn SpannedHirAnalysisDb,
+    top_mod: TopLevelMod<'db>,
+) -> Vec<CompleteDiagnostic> {
+    collect_hir_error_diagnostics(db, std::iter::once(top_mod))
+}
+
+fn collect_hir_error_diagnostics_for_ingot<'db>(
+    db: &'db dyn SpannedHirAnalysisDb,
+    ingot: Ingot<'db>,
+) -> Vec<CompleteDiagnostic> {
+    let mut top_mods = ingot.all_modules(db).clone();
+    for &(_, dep_ingot) in ingot.resolved_external_ingots(db) {
+        top_mods.extend(dep_ingot.all_modules(db));
+    }
+    collect_hir_error_diagnostics(db, top_mods)
+}
+
+fn analysis_diagnostics_error(
+    db: &dyn SpannedHirAnalysisDb,
+    subject: String,
+    diags: Vec<CompleteDiagnostic>,
+) -> Option<MirLowerError> {
+    (!diags.is_empty()).then(|| MirLowerError::AnalysisDiagnostics {
+        func_name: subject,
+        diagnostics: hir::analysis::diagnostics::format_diags(db, diags.iter()),
+    })
+}
+
+fn invalid_hir_error_for_top_mod<'db>(
+    db: &'db dyn SpannedHirAnalysisDb,
+    top_mod: TopLevelMod<'db>,
+) -> Option<MirLowerError> {
+    let subject = top_mod
+        .scope()
+        .pretty_path(db)
+        .unwrap_or_else(|| "<module>".to_string());
+    analysis_diagnostics_error(
+        db,
+        subject,
+        collect_hir_error_diagnostics_for_top_mod(db, top_mod),
+    )
+}
+
+fn invalid_hir_error_for_ingot<'db>(
+    db: &'db dyn SpannedHirAnalysisDb,
+    ingot: Ingot<'db>,
+) -> Option<MirLowerError> {
+    let subject = ingot
+        .module_tree(db)
+        .root_data()
+        .and_then(|root| root.top_mod.scope().pretty_path(db))
+        .unwrap_or_else(|| "<ingot>".to_string());
+    analysis_diagnostics_error(
+        db,
+        subject,
+        collect_hir_error_diagnostics_for_ingot(db, ingot),
+    )
+}
+
 fn collect_funcs_to_lower<'db>(
     db: &'db dyn SpannedHirAnalysisDb,
     top_mod: TopLevelMod<'db>,
@@ -220,6 +304,9 @@ pub fn collect_mir_diagnostics<'db>(
     mode: MirDiagnosticsMode,
 ) -> MirDiagnosticsOutput {
     let mut output = MirDiagnosticsOutput::default();
+    if !collect_hir_error_diagnostics_for_top_mod(db, top_mod).is_empty() {
+        return output;
+    }
     let mut templates = Vec::new();
 
     for func in collect_funcs_to_lower(db, top_mod) {
@@ -296,6 +383,10 @@ pub fn lower_module<'db>(
     db: &'db dyn SpannedHirAnalysisDb,
     top_mod: TopLevelMod<'db>,
 ) -> MirLowerResult<MirModule<'db>> {
+    if let Some(err) = invalid_hir_error_for_top_mod(db, top_mod) {
+        return Err(err);
+    }
+
     let mut templates = Vec::new();
     for func in collect_funcs_to_lower(db, top_mod) {
         if func.body(db).is_none() {
@@ -376,6 +467,10 @@ pub fn lower_ingot<'db>(
     db: &'db dyn SpannedHirAnalysisDb,
     ingot: Ingot<'db>,
 ) -> MirLowerResult<MirModule<'db>> {
+    if let Some(err) = invalid_hir_error_for_ingot(db, ingot) {
+        return Err(err);
+    }
+
     let mut templates = Vec::new();
     let mut funcs_to_lower = Vec::new();
     let mut seen = FxHashSet::default();

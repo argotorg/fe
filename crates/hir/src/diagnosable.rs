@@ -30,7 +30,8 @@ use crate::analysis::ty::binder::Binder;
 use crate::analysis::ty::trait_def::ImplementorId;
 use crate::semantic::{
     FieldView, FuncParamView, ImplAssocTypeView, SuperTraitRefView, VariantView,
-    WherePredicateBoundView, WherePredicateView, constraints_for, lower_hir_kind_local,
+    WherePredicateBoundView, WherePredicateView, constraints_for, header_constraints_for,
+    lower_hir_kind_local,
 };
 
 /// Unified "pull" diagnostics surface for HIR items and views.
@@ -84,6 +85,14 @@ fn extract_type_mismatch<'db>(
     }
 }
 
+fn cyclic_trait_ref_diag<'db>(span: DynLazySpan<'db>, context: &str) -> TyDiagCollection<'db> {
+    TraitConstraintDiag::InfiniteBoundRecursion(
+        span,
+        format!("cyclic trait reference prevented lowering this {context}"),
+    )
+    .into()
+}
+
 impl<'db> SuperTraitRefView<'db> {
     /// Diagnostics for this super-trait reference in its owner's context.
     /// Uses the trait's `Self` as subject and checks WF; kind mismatch is emitted
@@ -112,6 +121,12 @@ impl<'db> SuperTraitRefView<'db> {
                 return Some(
                     PathResDiag::ExpectedTrait(span.path().into(), ident, res.kind_name()).into(),
                 );
+            }
+            Err(TraitRefLowerError::Cycle) => {
+                return Some(cyclic_trait_ref_diag(
+                    span.path().into(),
+                    "super-trait bound",
+                ));
             }
             Err(TraitRefLowerError::Ignored) => return None,
         };
@@ -170,7 +185,7 @@ impl<'db> WherePredicateView<'db> {
 
         // Path-resolution failures are carried via the subject's InvalidCause.
         let owner_item = ItemKind::from(self.clause.owner);
-        let assumptions = constraints_for(db, owner_item);
+        let assumptions = header_constraints_for(db, owner_item);
         if let Some(InvalidCause::PathResolutionFailed { path }) = subject.invalid_cause(db) {
             // Re-run name resolution on the failed path and surface a precise diagnostic
             // at the type path span within the where-predicate.
@@ -220,7 +235,7 @@ impl<'db> WherePredicateBoundView<'db> {
         let mut out = Vec::new();
         let owner_item = ItemKind::from(self.pred.clause.owner);
         let scope = owner_item.scope();
-        let assumptions = constraints_for(db, owner_item);
+        let assumptions = header_constraints_for(db, owner_item);
         let is_trait_self_subject =
             matches!(owner_item, ItemKind::Trait(_)) && self.pred.is_self_subject(db);
         let tr = self.trait_ref(db);
@@ -284,6 +299,9 @@ impl<'db> WherePredicateBoundView<'db> {
                             .into(),
                     );
                 }
+            }
+            Err(TraitRefLowerError::Cycle) => {
+                out.push(cyclic_trait_ref_diag(span.path().into(), "trait bound"));
             }
             Err(TraitRefLowerError::Ignored) => {}
         }
@@ -1131,8 +1149,10 @@ impl<'db> GenericParamOwner<'db> {
         };
 
         let mut out = Vec::new();
-        let owner_item = ItemKind::from(self);
-        let assumptions = constraints_for(db, owner_item);
+        // Forward-ref checking only needs parameter occurrences in default types.
+        // Full assumptions can create non-converging cycles on malformed defaults
+        // (e.g. `T = Self`) and should not panic diagnostics collection.
+        let assumptions = ty::trait_resolution::PredicateListId::empty_list(db);
         let scope = self.scope();
 
         for view in self.params(db) {
@@ -1143,6 +1163,10 @@ impl<'db> GenericParamOwner<'db> {
             let Some(default_ty) = default_ty else {
                 continue;
             };
+
+            if default_ty.is_self_ty(db) {
+                continue;
+            }
 
             let lowered = lower_hir_ty(db, default_ty, scope, assumptions);
 
@@ -1227,7 +1251,7 @@ impl<'db> GenericParamOwner<'db> {
         let mut out = Vec::new();
         let param_set = ty::ty_lower::collect_generic_params(db, self);
         let scope = self.scope();
-        let assumptions = constraints_for(db, self.into());
+        let assumptions = header_constraints_for(db, self.into());
 
         for view in self.params(db) {
             let GenericParam::Type(tp) = view.param else {
@@ -1303,6 +1327,9 @@ impl<'db> GenericParamOwner<'db> {
                                 .into(),
                             );
                         }
+                    }
+                    Err(TraitRefLowerError::Cycle) => {
+                        out.push(cyclic_trait_ref_diag(span.path().into(), "trait bound"));
                     }
                     Err(TraitRefLowerError::Ignored) => {}
                 }

@@ -1,0 +1,18 @@
+trait AssocCarrier {
+    type Assoc
+}
+
+trait Clean {
+    type Item: AssocCarrier
+
+    fn ok(x: Self::Item::Assoc)
+}
+
+trait A<T> {}
+
+trait Recursive {
+    type Item: A<Self::Item::Assoc>
+    type Assoc
+
+    fn fail(x: Self::Item::Assoc)
+}

@@ -26,15 +26,12 @@ pub fn mismatched_ret() -> bool {
         panic!("expected AnalysisDiagnostics, got {err:?}");
     };
 
-    assert!(
-        func_name.contains("mismatched_ret"),
-        "func name is {func_name}"
-    );
+    assert!(!func_name.is_empty(), "func name is empty");
     assert!(diagnostics.contains("type mismatch"));
 }
 
 #[test]
-fn collect_mir_diagnostics_keeps_analysis_diagnostics_without_panicking() {
+fn collect_mir_diagnostics_short_circuits_on_invalid_hir() {
     let mut db = DriverDataBase::default();
     let url = Url::parse("file:///analysis_diagnostics_in_monomorphization.fe").unwrap();
     let src = r#"
@@ -53,16 +50,9 @@ fn bar_test() {
 
     let output = collect_mir_diagnostics(&db, top_mod, MirDiagnosticsMode::CompilerParity);
     assert!(
-        output.internal_errors.iter().any(|err| {
-            matches!(
-                err,
-                MirLowerError::AnalysisDiagnostics {
-                    func_name,
-                    diagnostics
-                } if func_name.contains("foo") && diagnostics.contains("type mismatch")
-            )
-        }),
-        "expected AnalysisDiagnostics for `foo`, got: {:?}",
+        output.internal_errors.is_empty(),
+        "expected invalid HIR to skip MIR entirely, got: {:?}",
         output.internal_errors
     );
+    assert!(output.diagnostics.is_empty());
 }

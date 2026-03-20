@@ -1,0 +1,48 @@
+extern {
+    fn todo() -> !
+}
+
+trait Level3 {
+    type Value
+}
+
+trait Level2 {
+    type Nested: Level3
+}
+
+trait Level1 {
+    type Middle: Level2
+}
+
+struct L3<T> {
+    phantom: T
+}
+
+impl<T> Level3 for L3<T> {
+    type Value = T
+}
+
+struct L2<T> {
+    phantom: T
+}
+
+impl<T> Level2 for L2<T> {
+    type Nested = L3<T>
+}
+
+struct L1<T> {
+    phantom: T
+}
+
+impl<T> Level1 for L1<T> {
+    type Middle = L2<T>
+}
+
+fn extract_value<T: Level1>() -> T::Middle::Nested::Value {
+    todo()
+}
+
+fn reuse_assoc_type_table() {
+    let _a: u32 = extract_value<L1<u32>>()
+    let _b: u256 = extract_value<L1<u256>>()
+}

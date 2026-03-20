@@ -1,0 +1,38 @@
+extern {
+    fn todo() -> !
+}
+
+trait Serializer {
+    type Output
+}
+
+trait Codec {
+    type Encoder: Serializer
+
+    fn encode(self) -> Self::Encoder::Output
+}
+
+struct TypedSerializer<T> {
+    phantom: T
+}
+
+impl<T> Serializer for TypedSerializer<T> {
+    type Output = T
+}
+
+struct MyCodec<T> {
+    phantom: T
+}
+
+impl<T> Codec for MyCodec {
+    type Encoder = TypedSerializer<T>
+
+    fn encode(self) -> Self::Encoder::Output {
+        todo()
+    }
+}
+
+fn use_codec() {
+    let codec: MyCodec<u32> = MyCodec { phantom: 0 }
+    let _: u32 = codec.encode()
+}

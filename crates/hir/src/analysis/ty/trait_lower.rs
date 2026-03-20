@@ -87,7 +87,10 @@ pub(crate) fn lower_impl_trait<'db>(
 /// arguments and associated type bindings, while `self_ty` is used as the implementor (args[0]).
 /// This is needed for associated type bounds like `type Assoc: Encode<Self>` where `Self`
 /// refers to the owner trait's Self, not the associated type.
-#[salsa::tracked]
+#[salsa::tracked(
+    cycle_fn=lower_trait_ref_cycle_recover,
+    cycle_initial=lower_trait_ref_cycle_initial
+)]
 pub(crate) fn lower_trait_ref<'db>(
     db: &'db dyn HirAnalysisDb,
     self_ty: TyId<'db>,
@@ -138,6 +141,31 @@ pub(crate) fn lower_trait_ref<'db>(
         Ok(res) => Err(TraitRefLowerError::InvalidDomain(res)),
         Err(e) => Err(TraitRefLowerError::PathResError(e)),
     }
+}
+
+fn lower_trait_ref_cycle_initial<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _self_ty: TyId<'db>,
+    _trait_ref: TraitRefId<'db>,
+    _scope: ScopeId<'db>,
+    _assumptions: PredicateListId<'db>,
+    _owner_self: Option<TyId<'db>>,
+) -> Result<TraitInstId<'db>, TraitRefLowerError<'db>> {
+    Err(TraitRefLowerError::Cycle)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lower_trait_ref_cycle_recover<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _value: &Result<TraitInstId<'db>, TraitRefLowerError<'db>>,
+    _count: u32,
+    _self_ty: TyId<'db>,
+    _trait_ref: TraitRefId<'db>,
+    _scope: ScopeId<'db>,
+    _assumptions: PredicateListId<'db>,
+    _owner_self: Option<TyId<'db>>,
+) -> salsa::CycleRecoveryAction<Result<TraitInstId<'db>, TraitRefLowerError<'db>>> {
+    salsa::CycleRecoveryAction::Iterate
 }
 
 pub(crate) enum TraitArgError<'db> {
@@ -278,7 +306,9 @@ pub(crate) fn collect_implementor_methods<'db>(
         ItemKind::Func(func) => Some(func),
         _ => None,
     }) {
-        let name = method.name(db).to_opt().expect("impl methods have names");
+        let Some(name) = method.name(db).to_opt() else {
+            continue;
+        };
         methods.insert(name, method);
     }
 
@@ -289,6 +319,7 @@ pub(crate) fn collect_implementor_methods<'db>(
 pub(crate) enum TraitRefLowerError<'db> {
     PathResError(PathResError<'db>),
     InvalidDomain(PathRes<'db>),
+    Cycle,
     /// Error is expected to be reported elsewhere.
     Ignored,
 }
@@ -345,5 +376,34 @@ impl<'db> ImplementorCollector<'db> {
         }
 
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use camino::Utf8PathBuf;
+
+    use super::*;
+    use crate::{
+        analysis::ty::ty_def::InvalidCause, core::hir_def::Partial, test_db::HirAnalysisTestDb,
+    };
+
+    #[test]
+    fn lower_trait_ref_cycle_initial_returns_cycle() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(Utf8PathBuf::from("cycle_initial.fe"), "");
+        let (top_mod, _) = db.top_mod(file);
+        let scope = ScopeId::from_item(top_mod.into());
+
+        let result = lower_trait_ref_cycle_initial(
+            &db,
+            TyId::invalid(&db, InvalidCause::Other),
+            TraitRefId::new(&db, Partial::Absent),
+            scope,
+            PredicateListId::empty_list(&db),
+            None,
+        );
+
+        assert_eq!(result, Err(TraitRefLowerError::Cycle));
     }
 }

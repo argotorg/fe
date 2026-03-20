@@ -1,0 +1,11 @@
+enum Result<T, E> {
+    Ok(T),
+    Err(E)
+}
+
+fn bare_type_path_pattern(res: Result<bool, i32>) -> bool {
+    match res {
+        Result:(value) => value
+        Result::Err(_) => false
+    }
+}

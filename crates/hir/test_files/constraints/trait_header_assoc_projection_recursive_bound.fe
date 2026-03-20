@@ -1,0 +1,31 @@
+trait A<T> {}
+
+trait C {
+    type Assoc
+}
+
+trait RecursiveSuper: A<Self::Item::Assoc> {
+    type Item: RecursiveSuper
+    type Assoc
+}
+
+trait Direct: A<Self::Item> {
+    type Item
+}
+
+trait OtherTrait: A<Self::Item::Assoc> {
+    type Item: C
+}
+
+trait RecursiveWhere
+where
+    Self: A<Self::Item::Assoc>
+{
+    type Item: RecursiveWhere
+    type Assoc
+}
+
+trait RecursiveParam<T: A<Self::Item::Assoc>> {
+    type Item: RecursiveParam<T>
+    type Assoc
+}

@@ -2587,9 +2587,18 @@ fn runtime_abi_cleanup_removes_dead_zero_arg_create2_encoder_materialization() u
             &mut db,
             "file:///runtime_abi_erases_contract_entry_params.fe",
             r#"
-contract C:
-    pub fn ping() -> u256:
-        return 1
+msg Msg {
+    #[selector = 0x01]
+    Ping -> u256,
+}
+
+contract C {
+    recv Msg {
+        Ping -> u256 {
+            return 1
+        }
+    }
+}
 "#,
         );
 

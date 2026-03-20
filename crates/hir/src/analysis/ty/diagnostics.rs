@@ -766,6 +766,7 @@ pub enum TraitLowerDiag<'db> {
         conflict_with: ImplTrait<'db>,
     },
     ExternalTraitForExternalType(ImplTrait<'db>),
+    CyclicTraitRef(ImplTrait<'db>),
     CyclicSuperTraits(Vec<Trait<'db>>),
 }
 
@@ -775,6 +776,7 @@ impl TraitLowerDiag<'_> {
             Self::ExternalTraitForExternalType(_) => 0,
             Self::ConflictTraitImpl { .. } => 1,
             Self::CyclicSuperTraits { .. } => 2,
+            Self::CyclicTraitRef(_) => 3,
         }
     }
 }

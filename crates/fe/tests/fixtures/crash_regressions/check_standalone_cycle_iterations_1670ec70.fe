@@ -1,0 +1,3 @@
+struct Add<T = Self> {
+    type Output = Self
+}
