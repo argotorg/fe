@@ -766,12 +766,20 @@ impl<'db> FuncParamView<'db> {
             );
         }
 
+        let suppress_self_wf_diag = self.is_self_param(db)
+            && self.self_ty_fallback(db)
+            && func.containing_impl(db).is_some_and(|impl_| {
+                matches!(impl_.target_ty_wf(db), WellFormedness::IllFormed { .. })
+            });
+
         // Well-formedness / trait-bound satisfaction for parameter type
-        if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(
-            db,
-            TraitSolveCx::new(db, func.scope()).with_assumptions(assumptions),
-            ty,
-        ) {
+        if !suppress_self_wf_diag
+            && let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(
+                db,
+                TraitSolveCx::new(db, func.scope()).with_assumptions(assumptions),
+                ty,
+            )
+        {
             out.push(
                 TraitConstraintDiag::TraitBoundNotSat {
                     span: ty_span.clone(),
@@ -2728,6 +2736,15 @@ impl<'db> Impl<'db> {
             hir_ty,
             self.span().target_ty(),
             assumptions,
+        )
+    }
+
+    /// Well-formedness of the impl target under the impl's elaborated assumptions.
+    pub(crate) fn target_ty_wf(self, db: &'db dyn HirAnalysisDb) -> WellFormedness<'db> {
+        check_ty_wf(
+            db,
+            TraitSolveCx::new(db, self.scope()).with_assumptions(self.elaborated_assumptions(db)),
+            self.ty(db),
         )
     }
 

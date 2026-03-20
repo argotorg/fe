@@ -8,9 +8,3 @@ error[6-0003]: trait bound is not satisfied
   │
 9 │ impl<T> Cache<T> {
   │         ^^^^^^^^ `T` doesn't implement `Hashable`
-
-error[6-0003]: trait bound is not satisfied
-   ┌─ inherent_impl_missing_bound.fe:10:14
-   │
-10 │     fn touch(self) {}
-   │              ^^^^ `T` doesn't implement `Hashable`
