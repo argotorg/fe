@@ -210,7 +210,7 @@ trait Logger {
 
 fn needs_logger() uses (logger: Logger) {}
 
-fn with_logger<L: Logger>(logger: L) {
+fn with_logger<L: Logger>(logger: own L) {
     with (Logger = logger) {
         needs_logger()
     }
@@ -259,7 +259,7 @@ impl<T> EffectRef<T> for Ptr<T> {}
 
 fn needs() uses (logger: Logger) {}
 
-fn caller(p: Ptr<Console>) {
+fn caller(p: own Ptr<Console>) {
     with (Logger = p) {
         needs()
     }
@@ -325,6 +325,51 @@ fn caller(p: Ptr<Console>) {
             "keyed effect binding `Logger` requires `Ptr<Console>` to implement `Logger`",
         )),
         "expected keyed trait binding failure, got diagnostics: {diags:#?}"
+    );
+}
+
+#[test]
+fn keyed_trait_effects_do_not_accept_capability_wrapped_targets() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("keyed_trait_effects_do_not_accept_capability_wrapped_targets.fe"),
+        r#"
+trait Logger {
+    fn log(self)
+}
+
+struct Console {}
+
+impl Logger for Console {
+    fn log(self) {}
+}
+
+fn needs() uses (logger: Logger) {}
+
+fn caller(c: ref Console) {
+    with (Logger = c) {
+        needs()
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let diags = diagnostics_for(&db, top_mod);
+    assert!(
+        diags.iter().any(|diag| {
+            diag.message.contains(
+                "keyed effect binding `Logger` requires `ref Console` to implement `Logger`",
+            )
+        }),
+        "expected capability-wrapper trait binding failure, got diagnostics: {diags:#?}"
+    );
+
+    let caller = find_func(&db, top_mod, "caller");
+    let call_expr = find_call_expr(&db, caller);
+    let typed_body = check_func_body(&db, caller).1.clone();
+    assert!(
+        typed_body.call_effect_args(call_expr).is_none(),
+        "invalid ref provider should not resolve an effect argument"
     );
 }
 
