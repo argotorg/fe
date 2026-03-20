@@ -68,16 +68,9 @@ enum EffectRequirement<'db> {
 #[derive(Debug, Clone, Copy)]
 enum EffectSatisfaction<'db> {
     Direct,
-    Provider {
-        target_ty: TyId<'db>,
-    },
-    TraitByWitness {
-        matched_key: TraitInstId<'db>,
-        target_ty: TyId<'db>,
-    },
-    TraitByValue {
-        target_ty: TyId<'db>,
-    },
+    Provider { target_ty: TyId<'db> },
+    TraitByWitness { matched_key: TraitInstId<'db> },
+    TraitByValue,
 }
 
 pub(super) enum PendingPrimitiveOpResolution {
@@ -951,9 +944,7 @@ impl<'db> TyChecker<'db> {
                                     self.env.assumptions(),
                                 )
                         {
-                            let provider_ty = self
-                                .effect_provider_target_ty(provided.ty, false)
-                                .unwrap_or(provided.ty);
+                            let provider_ty = self.effect_provider_value_ty(provided.ty);
                             let trait_req =
                                 instantiate_trait_effect_goal(self.db, trait_key, provider_ty);
                             let canonical = Canonicalized::new(self.db, trait_req);
@@ -1208,28 +1199,23 @@ impl<'db> TyChecker<'db> {
                             }
                         }
                         EffectRequirement::TraitKey(trait_key) => {
-                            let target_ty = self
-                                .effect_provider_target_ty(provided.ty, false)
-                                .unwrap_or(provided.ty);
+                            let provider_ty = self.effect_provider_value_ty(provided.ty);
                             if let Some(EffectKey::Trait(matched_key)) = candidate.matched_key {
                                 if self.match_trait_effect_key(trait_key, matched_key, false) {
                                     viable.push((
                                         candidate,
                                         EffectRequirement::TraitKey(trait_key),
-                                        EffectSatisfaction::TraitByWitness {
-                                            matched_key,
-                                            target_ty,
-                                        },
+                                        EffectSatisfaction::TraitByWitness { matched_key },
                                     ));
                                 }
                             } else {
                                 let trait_goal =
-                                    instantiate_trait_effect_goal(self.db, trait_key, target_ty);
+                                    instantiate_trait_effect_goal(self.db, trait_key, provider_ty);
                                 if self.trait_effect_goal_is_satisfiable(trait_goal) {
                                     viable.push((
                                         candidate,
                                         EffectRequirement::TraitKey(trait_key),
-                                        EffectSatisfaction::TraitByValue { target_ty },
+                                        EffectSatisfaction::TraitByValue,
                                     ))
                                 }
                             }
@@ -1327,9 +1313,7 @@ impl<'db> TyChecker<'db> {
                             }
                         }
                         EffectRequirement::TraitKey(trait_key) => {
-                            let provider_ty = self
-                                .effect_provider_target_ty(provided.ty, false)
-                                .unwrap_or(provided.ty);
+                            let provider_ty = self.effect_provider_value_ty(provided.ty);
                             let trait_req =
                                 instantiate_trait_effect_goal(self.db, trait_key, provider_ty);
                             if candidate.matched_key.is_some()
@@ -1415,13 +1399,11 @@ impl<'db> TyChecker<'db> {
             let provided = candidate.provided;
             if let (
                 EffectRequirement::TraitKey(trait_key),
-                EffectSatisfaction::TraitByWitness { matched_key, .. },
+                EffectSatisfaction::TraitByWitness { matched_key },
             ) = (requirement, satisfaction)
                 && !self.match_trait_effect_key(trait_key, matched_key, true)
             {
-                let provider_ty = self
-                    .effect_provider_target_ty(provided.ty, false)
-                    .unwrap_or(provided.ty);
+                let provider_ty = self.effect_provider_value_ty(provided.ty);
                 let diag = BodyDiag::EffectTraitUnsatisfied {
                     primary: call_span.clone(),
                     func,
@@ -1530,8 +1512,10 @@ impl<'db> TyChecker<'db> {
                 let existing_provider = self.table.fold_ty(self.db, provider_var);
                 let given = match satisfaction {
                     EffectSatisfaction::Provider { .. } => provided.ty,
-                    EffectSatisfaction::TraitByValue { target_ty }
-                    | EffectSatisfaction::TraitByWitness { target_ty, .. } => target_ty,
+                    EffectSatisfaction::TraitByValue
+                    | EffectSatisfaction::TraitByWitness { .. } => {
+                        self.effect_provider_value_ty(provided.ty)
+                    }
                     EffectSatisfaction::Direct => provided.ty,
                 };
                 let snapshot = self.table.snapshot();
@@ -1582,8 +1566,8 @@ impl<'db> TyChecker<'db> {
                         .as_capability(self.db)
                         .map(|(_, inner)| inner)
                         .unwrap_or(provided.ty),
-                    EffectSatisfaction::TraitByValue { target_ty }
-                    | EffectSatisfaction::TraitByWitness { target_ty, .. } => target_ty,
+                    EffectSatisfaction::TraitByValue
+                    | EffectSatisfaction::TraitByWitness { .. } => provided.ty,
                 };
                 if self.table.unify(expected, given).is_err() {
                     let diag = BodyDiag::EffectTypeMismatch {
@@ -1640,6 +1624,13 @@ impl<'db> TyChecker<'db> {
             ),
             GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
         )
+    }
+
+    fn effect_provider_value_ty(&self, provided_ty: TyId<'db>) -> TyId<'db> {
+        provided_ty
+            .as_capability(self.db)
+            .map(|(_, inner)| inner)
+            .unwrap_or(provided_ty)
     }
 
     fn effect_provider_target_ty(

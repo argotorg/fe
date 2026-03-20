@@ -1,10 +1,9 @@
 use camino::Utf8PathBuf;
-use fe_hir::analysis::ty::{
-    effects::EffectKeyKind,
-    ty_check::{TypedBody, check_func_body},
-};
+use common::diagnostics::{CompleteDiagnostic, cmp_complete_diagnostics};
+use fe_hir::analysis::ty::effects::EffectKeyKind;
+use fe_hir::analysis::ty::ty_check::{TypedBody, check_func_body};
 use fe_hir::hir_def::{Expr, ExprId, Func, ItemKind, Partial, TopLevelMod};
-use fe_hir::test_db::HirAnalysisTestDb;
+use fe_hir::test_db::{HirAnalysisTestDb, initialize_analysis_pass};
 
 fn find_func<'db>(db: &'db HirAnalysisTestDb, top_mod: TopLevelMod<'db>, name: &str) -> Func<'db> {
     top_mod
@@ -32,6 +31,20 @@ fn assert_single_trait_effect_arg<'db>(typed_body: &TypedBody<'db>, call_expr: E
         .expect("missing resolved effect args");
     assert_eq!(effect_args.len(), 1);
     assert_eq!(effect_args[0].key_kind, EffectKeyKind::Trait);
+}
+
+fn diagnostics_for<'db>(
+    db: &'db HirAnalysisTestDb,
+    top_mod: TopLevelMod<'db>,
+) -> Vec<CompleteDiagnostic> {
+    let mut manager = initialize_analysis_pass();
+    let mut diags: Vec<_> = manager
+        .run_on_module(db, top_mod)
+        .into_iter()
+        .map(|diag| diag.to_complete(db))
+        .collect();
+    diags.sort_by(cmp_complete_diagnostics);
+    diags
 }
 
 #[test]
@@ -186,4 +199,105 @@ fn with_logger<L: Logger>(logger: L) {
     db.assert_no_diags(top_mod);
     let typed_body = check_func_body(&db, with_logger).1.clone();
     assert_single_trait_effect_arg(&typed_body, call_expr);
+}
+
+#[test]
+fn keyed_trait_effects_use_provider_type_for_with_bindings() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("keyed_trait_effects_use_provider_type_for_with_bindings.fe"),
+        r#"
+use core::effect_ref::{EffectHandle, EffectRef}
+
+trait Logger {
+    fn log(self)
+}
+
+struct Console {}
+
+struct Ptr<T> {
+    raw: u256
+}
+
+impl<T> Logger for Ptr<T> {
+    fn log(self) {}
+}
+
+impl<T> EffectHandle for Ptr<T> {
+    type Target = T
+    type AddressSpace = core::effect_ref::Memory
+
+    fn from_raw(raw: u256) -> Self { Self { raw } }
+    fn raw(self) -> u256 { self.raw }
+}
+
+impl<T> EffectRef<T> for Ptr<T> {}
+
+fn needs() uses (logger: Logger) {}
+
+fn caller(p: Ptr<Console>) {
+    with (Logger = p) {
+        needs()
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let caller = find_func(&db, top_mod, "caller");
+    let call_expr = find_call_expr(&db, caller);
+    let typed_body = check_func_body(&db, caller).1.clone();
+    assert_single_trait_effect_arg(&typed_body, call_expr);
+}
+
+#[test]
+fn keyed_trait_effects_do_not_accept_target_type_only_matches() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("keyed_trait_effects_do_not_accept_target_type_only_matches.fe"),
+        r#"
+use core::effect_ref::{EffectHandle, EffectRef}
+
+trait Logger {
+    fn log(self)
+}
+
+struct Console {}
+
+impl Logger for Console {
+    fn log(self) {}
+}
+
+struct Ptr<T> {
+    raw: u256
+}
+
+impl<T> EffectHandle for Ptr<T> {
+    type Target = T
+    type AddressSpace = core::effect_ref::Memory
+
+    fn from_raw(raw: u256) -> Self { Self { raw } }
+    fn raw(self) -> u256 { self.raw }
+}
+
+impl<T> EffectRef<T> for Ptr<T> {}
+
+fn needs() uses (logger: Logger) {}
+
+fn caller(p: Ptr<Console>) {
+    with (Logger = p) {
+        needs()
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let diags = diagnostics_for(&db, top_mod);
+    assert!(
+        diags.iter().any(|diag| diag.message.contains(
+            "keyed effect binding `Logger` requires `Ptr<Console>` to implement `Logger`",
+        )),
+        "expected keyed trait binding failure, got diagnostics: {diags:#?}"
+    );
 }
