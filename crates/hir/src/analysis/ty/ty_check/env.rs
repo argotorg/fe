@@ -800,6 +800,7 @@ impl<'db> TyCheckEnv<'db> {
             let mut saw_exact_keyed = false;
             for frame in self.effect_env.frames.iter().rev() {
                 let mut out = SmallVec::new();
+                let mut frame_has_exact_keyed = false;
                 match lookup {
                     RequestedEffectLookup::Exact(key) => {
                         if let Some(provided) = frame.bindings.get(&key) {
@@ -807,6 +808,7 @@ impl<'db> TyCheckEnv<'db> {
                                 provided,
                                 matched_key: Some(key),
                             }));
+                            frame_has_exact_keyed = true;
                             saw_exact_keyed = true;
                         }
                     }
@@ -841,28 +843,36 @@ impl<'db> TyCheckEnv<'db> {
                     }
                 }
 
-                for provided in frame.unkeyed.iter() {
-                    if provided.ty.has_invalid(self.db) {
-                        continue;
-                    }
-                    match lookup {
-                        RequestedEffectLookup::Exact(EffectKey::Type(_))
-                        | RequestedEffectLookup::SchematicType(_) => out.push(EffectCandidate {
-                            provided: *provided,
-                            matched_key: None,
-                        }),
-                        RequestedEffectLookup::Exact(EffectKey::Trait(_))
-                        | RequestedEffectLookup::SchematicTrait(_) => {
-                            // Trait satisfaction is checked at the call site so we
-                            // can consider type arguments and current assumptions.
-                            out.push(EffectCandidate {
-                                provided: *provided,
-                                matched_key: None,
-                            });
+                if !(frame_has_exact_keyed && matches!(lookup, RequestedEffectLookup::Exact(_))) {
+                    for provided in frame.unkeyed.iter() {
+                        if provided.ty.has_invalid(self.db) {
+                            continue;
+                        }
+                        match lookup {
+                            RequestedEffectLookup::Exact(EffectKey::Type(_))
+                            | RequestedEffectLookup::SchematicType(_) => {
+                                out.push(EffectCandidate {
+                                    provided: *provided,
+                                    matched_key: None,
+                                })
+                            }
+                            RequestedEffectLookup::Exact(EffectKey::Trait(_))
+                            | RequestedEffectLookup::SchematicTrait(_) => {
+                                // Trait satisfaction is checked at the call site so we
+                                // can consider type arguments and current assumptions.
+                                out.push(EffectCandidate {
+                                    provided: *provided,
+                                    matched_key: None,
+                                });
+                            }
                         }
                     }
                 }
+
                 if out.is_empty() {
+                    if frame_has_exact_keyed && matches!(lookup, RequestedEffectLookup::Exact(_)) {
+                        break;
+                    }
                     continue;
                 }
 
@@ -873,7 +883,7 @@ impl<'db> TyCheckEnv<'db> {
                 out.retain(|p| seen.insert(*p));
                 frames_out.push(out);
 
-                if saw_exact_keyed && matches!(lookup, RequestedEffectLookup::Exact(_)) {
+                if frame_has_exact_keyed && matches!(lookup, RequestedEffectLookup::Exact(_)) {
                     break;
                 }
             }
@@ -1454,6 +1464,52 @@ fn host() {}
         assert_eq!(frames[0].len(), 1);
         assert_eq!(frames[0][0].provided.ty, TyId::bool(&db));
         assert_eq!(frames[0][0].matched_key, Some(outer_key));
+    }
+
+    #[test]
+    fn effect_candidate_frames_skip_same_frame_unkeyed_when_exact_trait_key_exists() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from(
+                "effect_candidate_frames_skip_same_frame_unkeyed_when_exact_trait_key_exists.fe",
+            ),
+            r#"
+struct Slot<T> {}
+trait Cap<T> {}
+
+fn needs_u8() uses (cap: Cap<Slot<u8>>) {}
+fn host() {}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+
+        let needs_u8 = find_func(&db, top_mod, "needs_u8");
+        let host = find_func(&db, top_mod, "host");
+        let request = needs_u8
+            .effect_params(&db)
+            .next()
+            .and_then(|effect| effect.key_path(&db))
+            .expect("missing request path");
+        let key = seeded_env(&db, needs_u8)
+            .effect_key_for_path_in_scope(request, host.scope(), PredicateListId::empty_list(&db))
+            .expect("missing key");
+
+        let mut env = seeded_env(&db, host);
+        env.effect_env
+            .insert(key, marker_effect(&db, host, TyId::bool(&db)));
+        env.effect_env
+            .insert_unkeyed(marker_effect(&db, host, TyId::u256(&db)));
+
+        let frames = env.effect_candidate_frames_in_scope(
+            request,
+            host.scope(),
+            PredicateListId::empty_list(&db),
+        );
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].len(), 1);
+        assert_eq!(frames[0][0].provided.ty, TyId::bool(&db));
+        assert_eq!(frames[0][0].matched_key, Some(key));
     }
 
     #[test]

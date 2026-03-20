@@ -419,3 +419,175 @@ fn caller() {
         "inner invalid keyed binding should shadow the outer provider"
     );
 }
+
+#[test]
+fn invalid_keyed_with_bindings_shadow_same_frame_unkeyed_providers() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("invalid_keyed_with_bindings_shadow_same_frame_unkeyed_providers.fe"),
+        r#"
+trait Logger {
+    fn log(self)
+}
+
+struct Good {}
+struct Bad {}
+
+impl Logger for Good {
+    fn log(self) {}
+}
+
+fn needs() uses (logger: Logger) {}
+
+fn caller() {
+    with (Logger = Bad {}, Good {}) {
+        needs()
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let diags = diagnostics_for(&db, top_mod);
+    assert_eq!(diags.len(), 1, "unexpected diagnostics: {diags:#?}");
+    assert!(
+        diags[0]
+            .message
+            .contains("keyed effect binding `Logger` requires `Bad` to implement `Logger`"),
+        "unexpected diagnostics: {diags:#?}"
+    );
+
+    let caller = find_func(&db, top_mod, "caller");
+    let call_expr = find_call_expr(&db, caller);
+    let typed_body = check_func_body(&db, caller).1.clone();
+    assert!(
+        typed_body.call_effect_args(call_expr).is_none(),
+        "same-frame invalid keyed binding should shadow unkeyed fallback providers"
+    );
+}
+
+#[test]
+fn keyed_with_bindings_take_precedence_over_same_frame_unkeyed_providers() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from(
+            "keyed_with_bindings_take_precedence_over_same_frame_unkeyed_providers.fe",
+        ),
+        r#"
+trait Logger {
+    fn log(self)
+}
+
+struct Keyed {}
+struct Unkeyed {}
+
+impl Logger for Keyed {
+    fn log(self) {}
+}
+
+impl Logger for Unkeyed {
+    fn log(self) {}
+}
+
+fn needs() uses (logger: Logger) {}
+
+fn caller() {
+    with (Logger = Keyed {}, Unkeyed {}) {
+        needs()
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let caller = find_func(&db, top_mod, "caller");
+    let needs = find_func(&db, top_mod, "needs");
+    let call_expr = find_call_expr(&db, caller);
+    let typed_body = check_func_body(&db, caller).1.clone();
+    assert_single_trait_effect_arg(&typed_body, call_expr);
+    assert_trait_effect_provider_arg(&db, caller, needs, call_expr, "Keyed");
+}
+
+#[test]
+fn keyed_with_trait_bindings_normalize_layout_holes() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("keyed_with_trait_bindings_normalize_layout_holes.fe"),
+        r#"
+trait Cap<T> {
+    fn cap(self)
+}
+
+struct Slot<const ROOT: u256 = _> {}
+struct Provider {}
+
+impl Cap<Slot<u256>> for Provider {
+    fn cap(self) {}
+}
+
+fn needs() uses (cap: Cap<Slot>) {}
+
+fn caller(p: own Provider) {
+    with (Cap<Slot> = p) {
+        needs()
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let caller = find_func(&db, top_mod, "caller");
+    let needs = find_func(&db, top_mod, "needs");
+    let call_expr = find_call_expr(&db, caller);
+    let typed_body = check_func_body(&db, caller).1.clone();
+    assert_single_trait_effect_arg(&typed_body, call_expr);
+    assert_trait_effect_provider_arg(&db, caller, needs, call_expr, "Provider");
+}
+
+#[test]
+fn keyed_with_trait_bindings_normalize_assoc_requirements() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("keyed_with_trait_bindings_normalize_assoc_requirements.fe"),
+        r#"
+trait Cap<T> {
+    fn cap(self)
+}
+
+trait HasSlot {
+    type Assoc
+}
+
+struct Slot<T, const ROOT: u256 = _> {}
+struct Provider {}
+
+impl Cap<Slot<u256>> for Provider {
+    fn cap(self) {}
+}
+
+fn needs<X>() uses (cap: Cap<X::Assoc>)
+where
+    X: HasSlot<Assoc = Slot<u256>>
+{}
+
+fn caller<X>(p: own Provider)
+where
+    X: HasSlot<Assoc = Slot<u256>>
+{
+    with (Cap<X::Assoc> = p) {
+        needs<X>()
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let caller = find_func(&db, top_mod, "caller");
+    let needs = find_func(&db, top_mod, "needs");
+    let call_expr = find_call_expr(&db, caller);
+    let typed_body = check_func_body(&db, caller).1.clone();
+    assert_single_trait_effect_arg(&typed_body, call_expr);
+    assert_trait_effect_provider_arg(&db, caller, needs, call_expr, "Provider");
+}
