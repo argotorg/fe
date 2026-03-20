@@ -567,6 +567,47 @@ fn normalize_effect_identity_trait<'db>(
     TraitInstId::new(db, trait_key.def(db), args, assoc_type_bindings)
 }
 
+pub(crate) fn trait_effect_key_matches_with<'db>(
+    db: &'db dyn HirAnalysisDb,
+    expected: TraitInstId<'db>,
+    actual: TraitInstId<'db>,
+    mut cmp: impl FnMut(TyId<'db>, TyId<'db>) -> bool,
+) -> bool {
+    if expected.def(db) != actual.def(db) || expected.args(db).len() != actual.args(db).len() {
+        return false;
+    }
+
+    let expected_assoc = expected.assoc_type_bindings(db);
+    let actual_assoc = actual.assoc_type_bindings(db);
+    if expected_assoc.len() != actual_assoc.len() {
+        return false;
+    }
+
+    for (&expected_arg, &actual_arg) in expected
+        .args(db)
+        .iter()
+        .skip(1)
+        .zip(actual.args(db).iter().skip(1))
+    {
+        let expected_arg = alpha_rename_hidden_layout_placeholders(db, expected_arg, actual_arg);
+        if !cmp(expected_arg, actual_arg) {
+            return false;
+        }
+    }
+
+    for (name, &expected_ty) in expected_assoc {
+        let Some(&actual_ty) = actual_assoc.get(name) else {
+            return false;
+        };
+        let expected_ty = alpha_rename_hidden_layout_placeholders(db, expected_ty, actual_ty);
+        if !cmp(expected_ty, actual_ty) {
+            return false;
+        }
+    }
+
+    true
+}
+
 fn effect_identity_matches<'db>(
     db: &'db dyn HirAnalysisDb,
     trait_identity: EffectIdentity<'db>,
@@ -587,30 +628,10 @@ fn effect_identity_matches<'db>(
             _ => false,
         },
         EffectKeyKind::Trait => match (trait_identity.key_trait, impl_identity.key_trait) {
-            (Some(trait_key_trait), Some(impl_key_trait))
-                if trait_key_trait.def(db) == impl_key_trait.def(db)
-                    && trait_key_trait.args(db).len() == impl_key_trait.args(db).len() =>
-            {
-                let trait_args = trait_key_trait.args(db);
-                let impl_args = impl_key_trait.args(db);
-                let args_match = trait_args.iter().skip(1).zip(impl_args.iter().skip(1)).all(
-                    |(&trait_arg, &impl_arg)| {
-                        alpha_rename_hidden_layout_placeholders(db, trait_arg, impl_arg) == impl_arg
-                    },
-                );
-                if !args_match {
-                    return false;
-                }
-
-                let trait_assoc = trait_key_trait.assoc_type_bindings(db);
-                let impl_assoc = impl_key_trait.assoc_type_bindings(db);
-                trait_assoc.len() == impl_assoc.len()
-                    && trait_assoc.iter().all(|(name, &trait_ty)| {
-                        impl_assoc.get(name).is_some_and(|&impl_ty| {
-                            alpha_rename_hidden_layout_placeholders(db, trait_ty, impl_ty)
-                                == impl_ty
-                        })
-                    })
+            (Some(trait_key_trait), Some(impl_key_trait)) => {
+                trait_effect_key_matches_with(db, trait_key_trait, impl_key_trait, |lhs, rhs| {
+                    lhs == rhs
+                })
             }
             _ => false,
         },

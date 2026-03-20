@@ -872,6 +872,10 @@ impl<'db> TyCheckEnv<'db> {
                 let mut seen = rustc_hash::FxHashSet::default();
                 out.retain(|p| seen.insert(*p));
                 frames_out.push(out);
+
+                if saw_exact_keyed && matches!(lookup, RequestedEffectLookup::Exact(_)) {
+                    break;
+                }
             }
             (frames_out, saw_exact_keyed)
         };

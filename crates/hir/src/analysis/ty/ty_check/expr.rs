@@ -30,7 +30,7 @@ use crate::analysis::ty::{
         place_effect_provider_param_index_map,
     },
     fold::{AssocTySubst, TyFoldable as _, TyFolder},
-    layout_holes::alpha_rename_hidden_layout_placeholders,
+    method_cmp::trait_effect_key_matches_with,
     trait_def::TraitInstId,
     trait_resolution::{
         GoalSatisfiability, PredicateListId, TraitSolveCx,
@@ -1721,44 +1721,13 @@ impl<'db> TyChecker<'db> {
         actual: TraitInstId<'db>,
         commit: bool,
     ) -> bool {
-        if expected.def(self.db) != actual.def(self.db)
-            || expected.args(self.db).len() != actual.args(self.db).len()
-        {
-            return false;
-        }
-
-        let expected_assoc = expected.assoc_type_bindings(self.db);
-        let actual_assoc = actual.assoc_type_bindings(self.db);
-        if expected_assoc.len() != actual_assoc.len() {
-            return false;
-        }
-
         let snapshot = self.table.snapshot();
-        for (&expected_arg, &actual_arg) in expected
-            .args(self.db)
-            .iter()
-            .skip(1)
-            .zip(actual.args(self.db).iter().skip(1))
-        {
-            let expected_arg =
-                alpha_rename_hidden_layout_placeholders(self.db, expected_arg, actual_arg);
-            if self.table.unify(expected_arg, actual_arg).is_err() {
-                self.table.rollback_to(snapshot);
-                return false;
-            }
-        }
-
-        for (name, &expected_ty) in expected_assoc {
-            let Some(&actual_ty) = actual_assoc.get(name) else {
-                self.table.rollback_to(snapshot);
-                return false;
-            };
-            let expected_ty =
-                alpha_rename_hidden_layout_placeholders(self.db, expected_ty, actual_ty);
-            if self.table.unify(expected_ty, actual_ty).is_err() {
-                self.table.rollback_to(snapshot);
-                return false;
-            }
+        let matched = trait_effect_key_matches_with(self.db, expected, actual, |lhs, rhs| {
+            self.table.unify(lhs, rhs).is_ok()
+        });
+        if !matched {
+            self.table.rollback_to(snapshot);
+            return false;
         }
 
         if !commit {
