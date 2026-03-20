@@ -316,7 +316,7 @@ fn normalize_effect_identity_const_tys<'db>(
                     ) {
                         ty.super_fold_with(db, self)
                     } else {
-                        evaluated.ty(db)
+                        TyId::const_ty(db, evaluated)
                     }
                 }
                 _ => ty.super_fold_with(db, self),

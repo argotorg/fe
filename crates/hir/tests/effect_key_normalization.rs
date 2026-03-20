@@ -205,6 +205,53 @@ where
 }
 
 #[test]
+fn ordinary_calls_use_keyed_trait_effect_witnesses_after_trait_const_normalization() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from(
+            "ordinary_calls_use_keyed_trait_effect_witnesses_after_trait_const_normalization.fe",
+        ),
+        r#"
+trait Cap<T> {}
+
+trait HasRoot {
+    const ROOT: u256
+}
+
+struct Slot<const ROOT: u256> {}
+struct Impl {}
+struct Provider {}
+
+impl HasRoot for Impl {
+    const ROOT: u256 = 7
+}
+
+impl Cap<Slot<7>> for Provider {}
+
+fn needs<T>() uses (cap: Cap<Slot<T::ROOT>>)
+where
+    T: HasRoot
+{}
+
+fn caller(p: own Provider) {
+    with (Cap<Slot<7>> = p) {
+        let out: () = needs<Impl>()
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let caller = find_func(&db, top_mod, "caller");
+    let needs = find_func(&db, top_mod, "needs");
+    let call_expr = find_call_expr(&db, caller);
+    let typed_body = check_func_body(&db, caller).1.clone();
+    assert_single_trait_effect_arg(&typed_body, call_expr);
+    assert_trait_effect_provider_arg(&db, caller, needs, call_expr, "Provider");
+}
+
+#[test]
 fn keyed_with_trait_bindings_accept_schematic_providers_via_keyed_witnesses() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
@@ -770,6 +817,47 @@ where
     let store = Storage<u256> { value: 1 }
     with (Storage<u256> = store) {
         needs<X::Assoc>()
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let caller = find_func(&db, top_mod, "caller");
+    let call_expr = find_call_expr(&db, caller);
+    let typed_body = check_func_body(&db, caller).1.clone();
+    assert_single_type_effect_arg(&typed_body, call_expr);
+}
+
+#[test]
+fn ordinary_calls_use_keyed_type_effects_after_trait_const_normalization() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from(
+            "ordinary_calls_use_keyed_type_effects_after_trait_const_normalization.fe",
+        ),
+        r#"
+trait HasRoot {
+    const ROOT: u256
+}
+
+struct Slot<const ROOT: u256> {}
+struct Impl {}
+
+impl HasRoot for Impl {
+    const ROOT: u256 = 7
+}
+
+fn needs<T>() uses (slot: Slot<T::ROOT>)
+where
+    T: HasRoot
+{}
+
+fn caller() {
+    let slot = Slot<7> {}
+    with (Slot<7> = slot) {
+        let out: () = needs<Impl>()
     }
 }
 "#,
