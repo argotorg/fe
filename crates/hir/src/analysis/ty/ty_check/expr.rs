@@ -27,6 +27,7 @@ use crate::analysis::ty::{
     diagnostics::{BodyDiag, FuncBodyDiag},
     effects::{
         EffectKeyKind, instantiate_trait_effect_goal, instantiate_trait_effect_key,
+        normalize_effect_identity_trait, normalize_effect_identity_ty,
         place_effect_provider_param_index_map,
     },
     fold::{AssocTySubst, TyFoldable as _, TyFolder},
@@ -1584,22 +1585,32 @@ impl<'db> TyChecker<'db> {
     ) -> Option<EffectRequirement<'db>> {
         match binding.key_kind {
             EffectKeyKind::Type => {
-                let mut expected =
-                    Binder::bind(binding.key_ty?).instantiate(self.db, callable.generic_args());
-                if let Some(inst) = callable.trait_inst() {
-                    let mut subst = AssocTySubst::new(inst);
-                    expected = expected.fold_with(self.db, &mut subst);
-                }
-                Some(EffectRequirement::Type(expected))
-            }
-            EffectKeyKind::Trait => {
-                Some(EffectRequirement::TraitKey(instantiate_trait_effect_key(
+                let expected = Binder::bind(binding.key_ty?)
+                    .instantiate(self.db, callable.generic_args())
+                    .fold_with(self.db, &mut self.table);
+                Some(EffectRequirement::Type(normalize_effect_identity_ty(
                     self.db,
-                    binding.key_trait?,
-                    callable.generic_args(),
+                    expected,
+                    self.env.scope(),
+                    self.env.assumptions(),
                     callable.trait_inst(),
                 )))
             }
+            EffectKeyKind::Trait => Some(EffectRequirement::TraitKey(
+                normalize_effect_identity_trait(
+                    self.db,
+                    instantiate_trait_effect_key(
+                        self.db,
+                        binding.key_trait?,
+                        callable.generic_args(),
+                        None,
+                    )
+                    .fold_with(self.db, &mut self.table),
+                    self.env.scope(),
+                    self.env.assumptions(),
+                    callable.trait_inst(),
+                ),
+            )),
             EffectKeyKind::Other => None,
         }
     }

@@ -7,7 +7,10 @@ use super::{
     const_ty::CallableInputLayoutHoleOrigin,
     const_ty::{ConstTyData, const_ty_from_trait_const, normalize_const_tys_for_comparison},
     diagnostics::{ImplDiag, TyDiagCollection},
-    effects::{EffectKeyKind, place_effect_provider_param_index_map},
+    effects::{
+        EffectKeyKind, normalize_effect_identity_trait, normalize_effect_identity_ty,
+        place_effect_provider_param_index_map,
+    },
     fold::{AssocTySubst, TyFoldable, TyFolder},
     layout_holes::{
         alpha_rename_hidden_layout_placeholders, callable_input_layout_bindings_by_origin,
@@ -22,7 +25,6 @@ use super::{
 };
 use crate::analysis::HirAnalysisDb;
 use crate::hir_def::{CallableDef, PathId, scope_graph::ScopeId};
-use common::indexmap::IndexMap;
 use rustc_hash::FxHashMap;
 
 type ParamSubstMap<'db> = FxHashMap<(ScopeId<'db>, usize), TyId<'db>>;
@@ -499,13 +501,13 @@ fn collect_effect_provider_entries<'db>(
                 let key_ty = param_subst.map_or(key_ty, |subst| {
                     instantiate_with_partial_map(db, Binder::bind(key_ty), subst)
                 });
-                normalize_effect_identity_ty(db, key_ty, scope, assumptions, trait_inst)
+                normalize_effect_identity_ty(db, key_ty, scope, assumptions, Some(trait_inst))
             });
             let key_trait = binding.key_trait.map(|key_trait| {
                 let key_trait = param_subst.map_or(key_trait, |subst| {
                     instantiate_with_partial_map(db, Binder::bind(key_trait), subst)
                 });
-                normalize_effect_identity_trait(db, key_trait, scope, assumptions, trait_inst)
+                normalize_effect_identity_trait(db, key_trait, scope, assumptions, Some(trait_inst))
             });
             Some(EffectProviderEntry {
                 effect_idx,
@@ -520,51 +522,6 @@ fn collect_effect_provider_entries<'db>(
             })
         })
         .collect()
-}
-
-fn normalize_effect_identity_ty<'db>(
-    db: &'db dyn HirAnalysisDb,
-    ty: TyId<'db>,
-    scope: ScopeId<'db>,
-    assumptions: PredicateListId<'db>,
-    trait_inst: TraitInstId<'db>,
-) -> TyId<'db> {
-    let mut substituter = AssocTySubst::new(trait_inst);
-    let ty = ty.fold_with(db, &mut substituter);
-    let ty = normalize_ty(db, ty, scope, assumptions);
-    normalize_const_tys(
-        db,
-        ty,
-        TraitSolveCx::new(db, scope).with_assumptions(assumptions),
-    )
-}
-
-fn normalize_effect_identity_trait<'db>(
-    db: &'db dyn HirAnalysisDb,
-    trait_key: TraitInstId<'db>,
-    scope: ScopeId<'db>,
-    assumptions: PredicateListId<'db>,
-    trait_inst: TraitInstId<'db>,
-) -> TraitInstId<'db> {
-    let mut substituter = AssocTySubst::new(trait_inst);
-    let trait_key = trait_key.fold_with(db, &mut substituter);
-    let args: Vec<TyId<'db>> = trait_key
-        .args(db)
-        .iter()
-        .copied()
-        .map(|ty| normalize_effect_identity_ty(db, ty, scope, assumptions, trait_inst))
-        .collect();
-    let assoc_type_bindings: IndexMap<_, _> = trait_key
-        .assoc_type_bindings(db)
-        .iter()
-        .map(|(name, &ty)| {
-            (
-                *name,
-                normalize_effect_identity_ty(db, ty, scope, assumptions, trait_inst),
-            )
-        })
-        .collect();
-    TraitInstId::new(db, trait_key.def(db), args, assoc_type_bindings)
 }
 
 pub(crate) fn trait_effect_key_matches_with<'db>(
