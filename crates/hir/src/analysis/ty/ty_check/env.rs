@@ -24,7 +24,8 @@ use crate::analysis::{
     ty::{
         const_ty::{ConstTyData, ConstTyId, EvaluatedConstTy},
         effects::{
-            EffectKeyKind, ResolvedEffectKey, place_effect_provider_param_index_map,
+            EffectKeyKind, ResolvedEffectKey, normalize_effect_identity_trait,
+            normalize_effect_identity_ty, place_effect_provider_param_index_map,
             resolve_effect_key,
         },
         fold::{TyFoldable, TyFolder},
@@ -285,6 +286,7 @@ impl<'db> TyCheckEnv<'db> {
     }
 
     fn seed_func_effects(&mut self, func: Func<'db>) {
+        let assumptions = self.assumptions();
         let provider_map = place_effect_provider_param_index_map(self.db, func);
         let provider_params = CallableDef::Func(func).params(self.db);
         for binding in func.effect_bindings(self.db) {
@@ -336,6 +338,7 @@ impl<'db> TyCheckEnv<'db> {
                 binding: Some(local_binding),
             };
             if let Some(key) = effect_key_from_binding(self.db, binding) {
+                let key = self.normalize_effect_key_in_scope(key, func.scope(), assumptions);
                 self.effect_env.insert(key, provided);
             }
         }
@@ -495,7 +498,12 @@ impl<'db> TyCheckEnv<'db> {
                     is_mut: effect.is_mut,
                     binding: Some(binding),
                 };
-                self.effect_env.insert(EffectKey::Type(field_ty), provided);
+                let key = self.normalize_effect_key_in_scope(
+                    EffectKey::Type(field_ty),
+                    contract.scope(),
+                    assumptions,
+                );
+                self.effect_env.insert(key, provided);
                 continue;
             }
 
@@ -2018,9 +2026,33 @@ pub(super) enum DeferredTask<'db> {
 }
 
 impl<'db> TyCheckEnv<'db> {
-    /// Compute a normalized effect key for a given `key_path` resolved in `scope`
-    /// under `assumptions`. The key includes type arguments so that different
-    /// instantiations are distinct:
+    fn normalize_effect_key_in_scope(
+        &self,
+        key: EffectKey<'db>,
+        scope: ScopeId<'db>,
+        assumptions: PredicateListId<'db>,
+    ) -> EffectKey<'db> {
+        match key {
+            EffectKey::Type(ty) => EffectKey::Type(normalize_effect_identity_ty(
+                self.db,
+                ty,
+                scope,
+                assumptions,
+                None,
+            )),
+            EffectKey::Trait(trait_inst) => EffectKey::Trait(normalize_effect_identity_trait(
+                self.db,
+                trait_inst,
+                scope,
+                assumptions,
+                None,
+            )),
+        }
+    }
+
+    /// Compute a normalized effect-identity key for a given `key_path` resolved
+    /// in `scope` under `assumptions`. The key includes type arguments so that
+    /// different instantiations are distinct:
     /// - `SomeTrait<u8>` vs `SomeTrait<u16>` (traits)
     /// - `Storage<u8>` vs `Storage<u16>` (types)
     pub(super) fn effect_key_for_path_in_scope(
@@ -2030,8 +2062,14 @@ impl<'db> TyCheckEnv<'db> {
         assumptions: PredicateListId<'db>,
     ) -> Option<EffectKey<'db>> {
         match resolve_effect_key(self.db, key_path, scope, assumptions) {
-            ResolvedEffectKey::Type(ty) => Some(EffectKey::Type(ty)),
-            ResolvedEffectKey::Trait(trait_inst) => Some(EffectKey::Trait(trait_inst)),
+            ResolvedEffectKey::Type(ty) => {
+                Some(self.normalize_effect_key_in_scope(EffectKey::Type(ty), scope, assumptions))
+            }
+            ResolvedEffectKey::Trait(trait_inst) => Some(self.normalize_effect_key_in_scope(
+                EffectKey::Trait(trait_inst),
+                scope,
+                assumptions,
+            )),
             ResolvedEffectKey::Other => None,
         }
     }
@@ -2047,8 +2085,14 @@ impl<'db> TyCheckEnv<'db> {
         }
 
         match resolve_path(self.db, key_path, scope, assumptions, false).ok()? {
-            PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => Some(EffectKey::Type(ty)),
-            PathRes::Trait(trait_inst) => Some(EffectKey::Trait(trait_inst)),
+            PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {
+                Some(self.normalize_effect_key_in_scope(EffectKey::Type(ty), scope, assumptions))
+            }
+            PathRes::Trait(trait_inst) => Some(self.normalize_effect_key_in_scope(
+                EffectKey::Trait(trait_inst),
+                scope,
+                assumptions,
+            )),
             _ => None,
         }
     }

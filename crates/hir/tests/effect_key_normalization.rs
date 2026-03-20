@@ -141,6 +141,39 @@ impl T for S {
 }
 
 #[test]
+fn impl_method_effect_keys_match_after_trait_const_normalization() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("impl_method_effect_keys_match_after_trait_const_normalization.fe"),
+        r#"
+trait HasRoot {
+    const ROOT: u256
+}
+
+trait Cap<T> {}
+
+struct Slot<const ROOT: u256> {}
+struct Root {}
+struct S {}
+
+impl HasRoot for Root {
+    const ROOT: u256 = 7
+}
+
+trait T {
+    fn f(self) uses (cap: Cap<Slot<Root::ROOT>>)
+}
+
+impl T for S {
+    fn f(self) uses (cap: Cap<Slot<7>>) {}
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+}
+
+#[test]
 fn ordinary_calls_use_keyed_trait_effect_witnesses_with_layout_holes() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
@@ -249,6 +282,41 @@ fn caller(p: own Provider) {
     let typed_body = check_func_body(&db, caller).1.clone();
     assert_single_trait_effect_arg(&typed_body, call_expr);
     assert_trait_effect_provider_arg(&db, caller, needs, call_expr, "Provider");
+}
+
+#[test]
+fn ordinary_calls_use_forwarded_trait_const_effect_params() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("ordinary_calls_use_forwarded_trait_const_effect_params.fe"),
+        r#"
+trait HasRoot {
+    const ROOT: u256
+}
+
+trait Cap<T> {}
+
+struct Slot<const ROOT: u256 = _> {}
+struct S {}
+
+impl HasRoot for S {
+    const ROOT: u256 = 7
+}
+
+fn needs() uses (cap: Cap<Slot<S::ROOT>>) {}
+
+fn caller() uses (cap: Cap<Slot<S::ROOT>>) {
+    let out: () = needs()
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let caller = find_func(&db, top_mod, "caller");
+    let call_expr = find_call_expr(&db, caller);
+    let typed_body = check_func_body(&db, caller).1.clone();
+    assert_single_trait_effect_arg(&typed_body, call_expr);
 }
 
 #[test]
@@ -953,4 +1021,107 @@ where
     let typed_body = check_func_body(&db, caller).1.clone();
     assert_single_trait_effect_arg(&typed_body, call_expr);
     assert_trait_effect_provider_arg(&db, caller, needs, call_expr, "Provider");
+}
+
+#[test]
+fn keyed_with_trait_bindings_normalize_trait_const_requirements() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("keyed_with_trait_bindings_normalize_trait_const_requirements.fe"),
+        r#"
+trait HasRoot {
+    const ROOT: u256
+}
+
+trait Cap<T> {
+    fn cap(self)
+}
+
+struct Slot<const ROOT: u256 = _> {}
+struct S {}
+struct Provider {}
+
+impl HasRoot for S {
+    const ROOT: u256 = 7
+}
+
+impl Cap<Slot<7>> for Provider {
+    fn cap(self) {}
+}
+
+fn needs() uses (cap: Cap<Slot<S::ROOT>>) {}
+
+fn caller(p: own Provider) {
+    with (Cap<Slot<S::ROOT>> = p) {
+        needs()
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let caller = find_func(&db, top_mod, "caller");
+    let needs = find_func(&db, top_mod, "needs");
+    let call_expr = find_call_expr(&db, caller);
+    let typed_body = check_func_body(&db, caller).1.clone();
+    assert_single_trait_effect_arg(&typed_body, call_expr);
+    assert_trait_effect_provider_arg(&db, caller, needs, call_expr, "Provider");
+}
+
+#[test]
+fn keyed_with_trait_const_bindings_shadow_outer_providers() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("keyed_with_trait_const_bindings_shadow_outer_providers.fe"),
+        r#"
+trait HasRoot {
+    const ROOT: u256
+}
+
+trait Cap<T> {
+    fn cap(self)
+}
+
+struct Slot<const ROOT: u256 = _> {}
+struct S {}
+struct Good {}
+struct Bad {}
+
+impl HasRoot for S {
+    const ROOT: u256 = 7
+}
+
+impl Cap<Slot<7>> for Good {
+    fn cap(self) {}
+}
+
+fn needs() uses (cap: Cap<Slot<S::ROOT>>) {}
+
+fn caller() {
+    with (Cap<Slot<S::ROOT>> = Good {}) {
+        with (Cap<Slot<S::ROOT>> = Bad {}) {
+            let out: () = needs()
+        }
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let diags = diagnostics_for(&db, top_mod);
+    assert_eq!(diags.len(), 1, "unexpected diagnostics: {diags:#?}");
+    assert!(
+        diags[0]
+            .message
+            .contains("requires `Bad` to implement `Cap<Slot<7>>`"),
+        "unexpected diagnostics: {diags:#?}"
+    );
+
+    let caller = find_func(&db, top_mod, "caller");
+    let call_expr = find_call_expr(&db, caller);
+    let typed_body = check_func_body(&db, caller).1.clone();
+    assert!(
+        typed_body.call_effect_args(call_expr).is_none(),
+        "trait-const keyed binding should shadow the outer provider"
+    );
 }
