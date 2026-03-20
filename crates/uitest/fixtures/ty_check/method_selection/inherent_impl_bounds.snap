@@ -1,0 +1,22 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/method_selection/inherent_impl_bounds.fe
+---
+error[2-0010]: no method named `touch` found for View `View`
+   ┌─ inherent_impl_bounds.fe:16:10
+   │
+16 │     box_.touch()
+   │          ^^^^^ method not found in `View`
+
+error[2-0010]: no method named `touch` found for View `View`
+   ┌─ inherent_impl_bounds.fe:42:10
+   │
+42 │     box_.touch()
+   │          ^^^^^ method not found in `View`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ inherent_impl_bounds.fe:62:5
+   │
+62 │     Factory::make(item)
+   │     ^^^^^^^^^^^^^ `T` doesn't implement `FactoryInput`

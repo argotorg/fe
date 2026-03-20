@@ -527,30 +527,6 @@ impl<'db> TyChecker<'db> {
             result
         };
 
-        let dedup_equivalent_insts = |insts: Vec<TraitInstId<'db>>| -> Vec<TraitInstId<'db>> {
-            let mut unique: Vec<TraitInstId<'db>> = Vec::new();
-            'outer: for inst in insts {
-                for &seen in &unique {
-                    if inst.def(db) != seen.def(db) {
-                        continue;
-                    }
-
-                    let mut table = UnificationTable::new(db);
-                    let lhs = table.instantiate_with_fresh_vars(
-                        crate::analysis::ty::binder::Binder::bind(inst),
-                    );
-                    let rhs = table.instantiate_with_fresh_vars(
-                        crate::analysis::ty::binder::Binder::bind(seen),
-                    );
-                    if table.unify(lhs, rhs).is_ok() {
-                        continue 'outer;
-                    }
-                }
-                unique.push(inst);
-            }
-            unique
-        };
-
         // Fixed-point pass over deferred tasks.
         let mut progressed = true;
         while progressed {
@@ -582,7 +558,8 @@ impl<'db> TyChecker<'db> {
                                 }
                             }
                             GoalSatisfiability::NeedsConfirmation(ambiguous) => {
-                                let cands = dedup_equivalent_insts(
+                                let cands = super::dedup_equivalent_trait_insts(
+                                    db,
                                     ambiguous
                                         .iter()
                                         .map(|s| {
@@ -640,7 +617,7 @@ impl<'db> TyChecker<'db> {
                                 )
                             })
                             .collect();
-                        let viable = dedup_equivalent_insts(viable);
+                        let viable = super::dedup_equivalent_trait_insts(db, viable);
 
                         if let [inst] = viable.as_slice() {
                             if self.env.callable_expr(pending.expr).is_none() {
@@ -742,7 +719,8 @@ impl<'db> TyChecker<'db> {
                         canonical_inst.value,
                     ) {
                         GoalSatisfiability::NeedsConfirmation(ambiguous) => {
-                            let cands = dedup_equivalent_insts(
+                            let cands = super::dedup_equivalent_trait_insts(
+                                db,
                                 ambiguous
                                     .iter()
                                     .map(|s| {
@@ -808,7 +786,7 @@ impl<'db> TyChecker<'db> {
                             )
                         })
                         .collect();
-                    let viable = dedup_equivalent_insts(viable);
+                    let viable = super::dedup_equivalent_trait_insts(db, viable);
                     if viable.len() > 1 {
                         self.push_diag(BodyDiag::AmbiguousTrait {
                             primary: pending.span.clone(),

@@ -32,7 +32,7 @@ pub use symbol::{
 
 use crate::HirDb;
 use crate::analysis::HirAnalysisDb;
-use crate::analysis::ty::canonical::Canonicalized;
+use crate::analysis::ty::canonical::{Canonical, Canonicalized};
 use crate::analysis::ty::corelib::{resolve_core_trait, resolve_lib_type_path};
 use crate::analysis::ty::diagnostics::{ImplDiag, TyLowerDiag};
 use crate::analysis::ty::normalize::normalize_ty;
@@ -78,7 +78,7 @@ use crate::analysis::ty::ty_def::{TyBase, TyData};
 use crate::analysis::ty::ty_lower::{GenericParamTypeSet, collect_generic_params};
 use crate::analysis::ty::visitor::{TyVisitor, walk_ty};
 use crate::analysis::ty::{
-    collect_layout_hole_tys_in_order,
+    collect_layout_hole_tys_in_order, dedup_equivalent_trait_insts,
     diagnostics::{TraitConstraintDiag, TyDiagCollection},
     trait_resolution::{
         GoalSatisfiability, PredicateListId, TraitSolveCx, WellFormedness, check_ty_wf,
@@ -86,12 +86,16 @@ use crate::analysis::ty::{
     },
     ty_check::EffectParamSite,
     ty_contains_const_hole,
-    ty_def::{InvalidCause, PrimTy, TyId, instantiate_adt_field_ty, substitute_layout_holes},
+    ty_def::{
+        InvalidCause, PrimTy, TyId, inference_keys, instantiate_adt_field_ty,
+        substitute_layout_holes,
+    },
     ty_error::collect_ty_lower_errors,
     ty_lower::{
         TyAlias, lower_hir_ty, lower_opt_hir_ty, lower_type_alias, lower_type_alias_from_hir,
         method_receiver_layout_hole_tys,
     },
+    unify::UnificationTable,
 };
 use crate::core::adt_lower::{lower_adt, lower_contract_fields};
 use common::indexmap::IndexMap;
@@ -191,6 +195,12 @@ impl<'db> Func<'db> {
         constraints_for(db, self.into())
     }
 
+    /// Assumptions for function-signature lowering and validation, elaborated
+    /// with implied bounds.
+    pub(crate) fn elaborated_assumptions(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
+        self.assumptions(db).extend_all_bounds(db)
+    }
+
     /// Returns true if this function declares an explicit return type.
     pub fn has_explicit_return_ty(self, db: &'db dyn HirDb) -> bool {
         self.ret_type_ref(db).is_some()
@@ -199,7 +209,7 @@ impl<'db> Func<'db> {
     /// Explicit return type if annotated in source; `None` when the
     /// function has no explicit return type.
     fn explicit_return_ty(self, db: &'db dyn HirAnalysisDb) -> Option<TyId<'db>> {
-        let assumptions = self.assumptions(db);
+        let assumptions = self.elaborated_assumptions(db);
         let hir = self.ret_type_ref(db)?;
         Some(lower_hir_ty(db, hir, self.scope(), assumptions))
     }
@@ -213,7 +223,7 @@ impl<'db> Func<'db> {
     /// Semantic argument types bound to identity parameters.
     pub fn arg_tys(self, db: &'db dyn HirAnalysisDb) -> Vec<Binder<TyId<'db>>> {
         use crate::analysis::ty::ty_def::{InvalidCause, TyId};
-        let assumptions = self.assumptions(db);
+        let assumptions = self.elaborated_assumptions(db);
         let implicit_const_layout_args = collect_generic_params(db, self.into())
             .params(db)
             .iter()
@@ -283,7 +293,7 @@ impl<'db> Func<'db> {
         let Some(hir_ty) = self.ret_type_ref(db) else {
             return Vec::new();
         };
-        let assumptions = self.assumptions(db);
+        let assumptions = self.elaborated_assumptions(db);
         collect_ty_lower_errors(
             db,
             self.scope(),
@@ -670,7 +680,7 @@ impl<'db> FuncParamView<'db> {
     /// All type-related diagnostics for this parameter.
     pub fn ty_diags(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         let func = self.func;
-        let assumptions = func.assumptions(db);
+        let assumptions = func.elaborated_assumptions(db);
 
         let Some(param) = self
             .func
@@ -2704,6 +2714,12 @@ pub enum SuperTraitLowerError {
     Ignored,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InherentImplApplicability {
+    Applicable,
+    Unsatisfied,
+}
+
 impl<'db> Impl<'db> {
     /// Semantic predicate list (assumptions) for this inherent impl.
     pub(crate) fn assumptions(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
@@ -2715,7 +2731,8 @@ impl<'db> Impl<'db> {
         self.assumptions(db).extend_all_bounds(db)
     }
 
-    /// Semantic implementor type of this inherent impl.
+    /// Semantic implementor type of this inherent impl, lowered in the impl's
+    /// own elaborated predicate environment.
     pub fn ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
         let assumptions = self.elaborated_assumptions(db);
         self.type_ref(db)
@@ -2724,7 +2741,8 @@ impl<'db> Impl<'db> {
             .unwrap_or_else(|| TyId::invalid(db, InvalidCause::ParseError))
     }
 
-    /// Type lowering errors for the implementor type.
+    /// Type lowering errors for the implementor type in the impl's own
+    /// elaborated predicate environment.
     pub fn ty_errors(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         let Some(hir_ty) = self.type_ref(db).to_opt() else {
             return Vec::new();
@@ -2746,6 +2764,79 @@ impl<'db> Impl<'db> {
             TraitSolveCx::new(db, self.scope()).with_assumptions(self.elaborated_assumptions(db)),
             self.ty(db),
         )
+    }
+
+    pub(crate) fn method_applicability(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        receiver: Canonical<TyId<'db>>,
+        scope: ScopeId<'db>,
+        assumptions: PredicateListId<'db>,
+    ) -> InherentImplApplicability {
+        let mut table = UnificationTable::new(db);
+        let receiver = receiver.extract_identity(&mut table);
+        let receiver_keys = inference_keys(db, &receiver);
+        let args: Vec<_> = collect_generic_params(db, self.into())
+            .params(db)
+            .iter()
+            .map(|&param| table.new_var_from_param(param))
+            .collect();
+        let impl_ty = Binder::bind(self.ty(db)).instantiate(db, &args);
+        let impl_ty = table.instantiate_to_term(impl_ty);
+        let receiver = table.instantiate_to_term(receiver);
+        if table.unify(impl_ty, receiver).is_err() {
+            return InherentImplApplicability::Unsatisfied;
+        }
+
+        let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
+        let constraints = collect_constraints(db, self.into()).instantiate(db, &args);
+
+        for &constraint in constraints.list(db) {
+            let constraint = constraint.fold_with(db, &mut table);
+            let is_receiver_determined = inference_keys(db, &constraint)
+                .iter()
+                .all(|key| receiver_keys.contains(key));
+            let canonical_constraint = Canonicalized::new(db, constraint);
+
+            match is_goal_satisfiable(db, solve_cx, canonical_constraint.value) {
+                GoalSatisfiability::Satisfied(solution) => {
+                    let solution = canonical_constraint
+                        .extract_solution(&mut table, *solution)
+                        .inst;
+                    if table.unify(constraint, solution).is_err() && is_receiver_determined {
+                        return InherentImplApplicability::Unsatisfied;
+                    }
+                }
+                GoalSatisfiability::NeedsConfirmation(ambiguous) => {
+                    let candidates = dedup_equivalent_trait_insts(
+                        db,
+                        ambiguous
+                            .iter()
+                            .map(|solution| {
+                                canonical_constraint
+                                    .extract_solution(&mut table, *solution)
+                                    .inst
+                            })
+                            .collect(),
+                    );
+
+                    if let [solution] = candidates.as_slice()
+                        && table.unify(constraint, *solution).is_err()
+                        && is_receiver_determined
+                    {
+                        return InherentImplApplicability::Unsatisfied;
+                    }
+                }
+                GoalSatisfiability::ContainsInvalid => {}
+                GoalSatisfiability::UnSat(_) => {
+                    if is_receiver_determined {
+                        return InherentImplApplicability::Unsatisfied;
+                    }
+                }
+            }
+        }
+
+        InherentImplApplicability::Applicable
     }
 
     /// Returns the pretty-printed target type name from this impl block.

@@ -18,6 +18,7 @@ use super::{
     trait_resolution::{PredicateListId, TraitSolveCx},
     ty_def::{AssocTy, TyData, TyId, TyParam},
     unify::UnificationTable,
+    visitor::{TyVisitable, TyVisitor},
 };
 use crate::analysis::{HirAnalysisDb, name_resolution::find_associated_type};
 
@@ -44,6 +45,37 @@ pub struct TypeNormalizer<'db> {
     assumptions: PredicateListId<'db>,
     // Projection cache: None = in progress (cycle guard), Some(ty) = normalized result
     cache: FxHashMap<AssocTy<'db>, Option<TyId<'db>>>,
+}
+
+#[derive(Clone, Copy)]
+struct AssumptionAssocBindingMatch<'db> {
+    lhs_self: TyId<'db>,
+    rhs_self: TyId<'db>,
+    bound: TyId<'db>,
+}
+
+impl<'db> TyVisitable<'db> for AssumptionAssocBindingMatch<'db> {
+    fn visit_with<V>(&self, visitor: &mut V)
+    where
+        V: TyVisitor<'db> + ?Sized,
+    {
+        self.lhs_self.visit_with(visitor);
+        self.rhs_self.visit_with(visitor);
+        self.bound.visit_with(visitor);
+    }
+}
+
+impl<'db> TyFoldable<'db> for AssumptionAssocBindingMatch<'db> {
+    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
+    where
+        F: TyFolder<'db>,
+    {
+        Self {
+            lhs_self: self.lhs_self.fold_with(db, folder),
+            rhs_self: self.rhs_self.fold_with(db, folder),
+            bound: self.bound.fold_with(db, folder),
+        }
+    }
 }
 
 impl<'db> TypeNormalizer<'db> {
@@ -107,21 +139,31 @@ impl<'db> TypeNormalizer<'db> {
         }
 
         // 2) Check assumptions for an equivalent trait instance that carries
-        //    an explicit associated type binding (e.g., from where-clauses).
+        //    an explicit associated type binding (e.g. from where-clauses).
+        //    Canonicalize the whole match candidate first so we can safely
+        //    unify in a fresh table without mixing outer inference vars.
+        let lhs_self = self.fold_ty(self.db, assoc.trait_.self_ty(self.db));
         for &pred in self.assumptions.list(self.db) {
             if pred.def(self.db) != assoc.trait_.def(self.db) {
                 continue;
             }
 
+            let Some(&bound) = pred.assoc_type_bindings(self.db).get(&assoc.name) else {
+                continue;
+            };
+
+            let candidate = AssumptionAssocBindingMatch {
+                lhs_self,
+                rhs_self: self.fold_ty(self.db, pred.self_ty(self.db)),
+                bound,
+            };
+            let canonical_candidate = Canonicalized::new(self.db, candidate);
             let mut table = UnificationTable::new(self.db);
-            // Normalize self types before attempting unification to avoid
-            // requiring a second outer pass for resolution.
-            let lhs_self = self.fold_ty(self.db, assoc.trait_.self_ty(self.db));
-            let rhs_self = self.fold_ty(self.db, pred.self_ty(self.db));
-            if table.unify(lhs_self, rhs_self).is_ok()
-                && let Some(&bound) = pred.assoc_type_bindings(self.db).get(&assoc.name)
-            {
-                return Some(bound.fold_with(self.db, &mut table));
+            let candidate = canonical_candidate.value.extract_identity(&mut table);
+
+            if table.unify(candidate.lhs_self, candidate.rhs_self).is_ok() {
+                let bound = candidate.bound.fold_with(self.db, &mut table);
+                return Some(canonical_candidate.decanonicalize(self.db, bound));
             }
         }
 
