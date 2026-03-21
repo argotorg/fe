@@ -254,18 +254,23 @@ pub(crate) fn normalize_effect_identity_trait<'db>(
     assumptions: PredicateListId<'db>,
     assoc_ty_subst: Option<TraitInstId<'db>>,
 ) -> TraitInstId<'db> {
+    let original_self = trait_key.self_ty(db);
+    let preserve_self = assoc_ty_subst.is_some_and(|inst| inst.def(db) == trait_key.def(db));
     let trait_key = if let Some(inst) = assoc_ty_subst {
         let mut substituter = AssocTySubst::new(inst);
         trait_key.fold_with(db, &mut substituter)
     } else {
         trait_key
     };
-    let args: Vec<TyId<'db>> = trait_key
+    let mut args: Vec<TyId<'db>> = trait_key
         .args(db)
         .iter()
         .copied()
         .map(|ty| normalize_effect_identity_ty(db, ty, scope, assumptions, None))
         .collect();
+    if preserve_self && let Some(self_ty) = args.first_mut() {
+        *self_ty = normalize_effect_identity_ty(db, original_self, scope, assumptions, None);
+    }
     let assoc_type_bindings: IndexMap<_, _> = trait_key
         .assoc_type_bindings(db)
         .iter()

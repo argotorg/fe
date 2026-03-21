@@ -2,7 +2,7 @@ use camino::Utf8PathBuf;
 use common::diagnostics::{CompleteDiagnostic, cmp_complete_diagnostics};
 use fe_hir::analysis::ty::effects::{EffectKeyKind, place_effect_provider_param_index_map};
 use fe_hir::analysis::ty::ty_check::{TypedBody, check_func_body};
-use fe_hir::hir_def::{Expr, ExprId, Func, ItemKind, Partial, TopLevelMod};
+use fe_hir::hir_def::{CallableDef, Expr, ExprId, Func, ItemKind, Partial, TopLevelMod};
 use fe_hir::test_db::{HirAnalysisTestDb, initialize_analysis_pass};
 
 fn find_func<'db>(db: &'db HirAnalysisTestDb, top_mod: TopLevelMod<'db>, name: &str) -> Func<'db> {
@@ -23,6 +23,14 @@ fn find_call_expr<'db>(db: &'db HirAnalysisTestDb, func: Func<'db>) -> ExprId {
         .keys()
         .find(|expr| matches!(expr.data(db, body), Partial::Present(Expr::Call(..))))
         .expect("missing call expression")
+}
+
+fn find_method_call_expr<'db>(db: &'db HirAnalysisTestDb, func: Func<'db>) -> ExprId {
+    let body = func.body(db).expect("missing function body");
+    body.exprs(db)
+        .keys()
+        .find(|expr| matches!(expr.data(db, body), Partial::Present(Expr::MethodCall(..))))
+        .expect("missing method call expression")
 }
 
 fn assert_single_trait_effect_arg<'db>(typed_body: &TypedBody<'db>, call_expr: ExprId) {
@@ -52,6 +60,32 @@ fn assert_trait_effect_provider_arg<'db>(
     let callable = typed_body
         .callable_expr(call_expr)
         .expect("missing callable for effectful call");
+    let provider_arg_idx = place_effect_provider_param_index_map(db, callee)
+        .first()
+        .copied()
+        .flatten()
+        .expect("missing hidden provider arg index");
+    let provider_arg = callable
+        .generic_args()
+        .get(provider_arg_idx)
+        .copied()
+        .expect("missing hidden provider generic arg");
+    assert_eq!(provider_arg.pretty_print(db).to_string(), expected);
+}
+
+fn assert_callable_provider_arg<'db>(
+    db: &'db HirAnalysisTestDb,
+    caller: Func<'db>,
+    call_expr: ExprId,
+    expected: &str,
+) {
+    let typed_body = check_func_body(db, caller).1.clone();
+    let callable = typed_body
+        .callable_expr(call_expr)
+        .expect("missing callable for effectful call");
+    let CallableDef::Func(callee) = callable.callable_def else {
+        panic!("expected function callable");
+    };
     let provider_arg_idx = place_effect_provider_param_index_map(db, callee)
         .first()
         .copied()
@@ -1124,4 +1158,107 @@ fn caller() {
         typed_body.call_effect_args(call_expr).is_none(),
         "trait-const keyed binding should shadow the outer provider"
     );
+}
+
+#[test]
+fn method_calls_keep_invalid_keyed_trait_bindings_from_reaching_outer_providers() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from(
+            "method_calls_keep_invalid_keyed_trait_bindings_from_reaching_outer_providers.fe",
+        ),
+        r#"
+trait Logger {
+    fn log(self)
+
+    fn needs(self) uses (logger: Logger) {
+        logger.log()
+    }
+}
+
+struct Good {}
+struct Bad {}
+struct Receiver {}
+
+impl Logger for Good {
+    fn log(self) {}
+}
+
+impl Logger for Receiver {
+    fn log(self) {}
+}
+
+fn caller(provider: own Good, recv: own Receiver) {
+    with (Logger = provider) {
+        with (Logger = Bad {}) {
+            recv.needs()
+        }
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let diags = diagnostics_for(&db, top_mod);
+    assert_eq!(diags.len(), 1, "unexpected diagnostics: {diags:#?}");
+    assert!(
+        diags[0]
+            .message
+            .contains("keyed effect binding `Logger` requires `Bad` to implement `Logger`"),
+        "unexpected diagnostics: {diags:#?}"
+    );
+
+    let caller = find_func(&db, top_mod, "caller");
+    let call_expr = find_method_call_expr(&db, caller);
+    let typed_body = check_func_body(&db, caller).1.clone();
+    assert!(
+        typed_body.call_effect_args(call_expr).is_none(),
+        "inner invalid keyed binding should shadow the outer provider on method calls"
+    );
+}
+
+#[test]
+fn method_calls_prefer_same_frame_explicit_keyed_trait_bindings() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("method_calls_prefer_same_frame_explicit_keyed_trait_bindings.fe"),
+        r#"
+trait Logger {
+    fn log(self)
+
+    fn needs(self) uses (logger: Logger) {
+        logger.log()
+    }
+}
+
+struct Keyed {}
+struct Unkeyed {}
+struct Receiver {}
+
+impl Logger for Keyed {
+    fn log(self) {}
+}
+
+impl Logger for Unkeyed {
+    fn log(self) {}
+}
+
+impl Logger for Receiver {
+    fn log(self) {}
+}
+
+fn caller(keyed: own Keyed, recv: own Receiver, unkeyed: own Unkeyed) {
+    with (Logger = keyed, unkeyed) {
+        recv.needs()
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let caller = find_func(&db, top_mod, "caller");
+    let call_expr = find_method_call_expr(&db, caller);
+    let typed_body = check_func_body(&db, caller).1.clone();
+    assert_single_trait_effect_arg(&typed_body, call_expr);
+    assert_callable_provider_arg(&db, caller, call_expr, "Keyed");
 }
