@@ -279,20 +279,32 @@ func private %stor_ptr__Evm_hef0af3106e109414_Foo_h6dbce71a6ea992b8__c09e6c6fc5a
 
 func private %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input() -> i256 {
     block0:
-        return 0.i256;
+        v1.i256 = call %calldata_hf71d505b6ff5dc81_new;
+        return v1;
 }
 
 func private %calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len(v0.i256) -> i256 {
     block0:
         v1.i256 = evm_calldata_size;
-        (v2.i256, v3.i1) = usubo v1 v0;
+        v3.i1 = call %u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt v0 v1;
         br v3 block1 block2;
 
     block1:
-        evm_revert 0.i256 0.i256;
+        jump block3;
 
     block2:
-        return v2;
+        (v6.i256, v7.i1) = usubo v1 v0;
+        br v7 block4 block5;
+
+    block3:
+        v8.i256 = phi (0.i256 block1) (v6 block5);
+        return v8;
+
+    block4:
+        evm_revert 0.i256 0.i256;
+
+    block5:
+        jump block3;
 }
 
 func private %u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v0.i256, v1.i256) -> i1 {
@@ -429,6 +441,11 @@ func private %memorybytes_h1e381015a9b0111b_byteinput_hc4c2cb44299530ae_word_at(
 func private %storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__Foo_h6dbce71a6ea992b8__21493237fe9c2c26(v0.i256) -> i256 {
     block0:
         return v0;
+}
+
+func private %calldata_hf71d505b6ff5dc81_new() -> i256 {
+    block0:
+        return 0.i256;
 }
 
 func private %s_h33f7c3322e562590_intdowncast_hf946d58b157999e1_downcast_unchecked__u256_u32__6e3637cd3e911b35(v0.i256) -> i32 {

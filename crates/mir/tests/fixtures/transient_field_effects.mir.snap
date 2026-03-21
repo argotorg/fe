@@ -87,12 +87,23 @@ fn return_unit__Evm_hef0af3106e109414__3af54274b2985741(v0: Evm) -> !:
 fn evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input(v0: Evm) -> CallData:
   ; runtime_abi values=[] effects=[]
   bb0:
-    ret 0
+    v1: CallData = calldata_hf71d505b6ff5dc81_new()
+    ret v1
 
 fn calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len(v0: CallData) -> u256:
   bb0:
     v1: u256 = calldatasize()
-    v2: u256 = checked_sub<u256>(v1, v0)
+    v2: u256 = 0
+    v3: bool = u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt(v0, v1)
+    br v3 bb1 bb2
+  bb1:
+    v2 = 0
+    jmp bb3
+  bb2:
+    v4: u256 = checked_sub<u256>(v1, v0)
+    v2 = v4
+    jmp bb3
+  bb3:
     ret v2
 
 fn u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v0: u256, v1: u256) -> bool:
@@ -115,6 +126,15 @@ fn evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes(v0: Evm, v1
   ; runtime_abi values=[v1: u256, v2: u256] effects=[]
   bb0:
     terminate return_data(v1, v2)
+
+fn calldata_hf71d505b6ff5dc81_new() -> CallData:
+  bb0:
+    ret 0
+
+fn u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt(v0: u256, v1: u256) -> bool:
+  bb0:
+    v2: bool = __gt_u256(v0, v1)
+    ret v2
 
 fn s_h33f7c3322e562590_intdowncast_hf946d58b157999e1_downcast_unchecked__u256_u32__6e3637cd3e911b35(v0: u256) -> u32:
   bb0:

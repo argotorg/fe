@@ -724,6 +724,14 @@ func private %u256_h3271ca15373d4483_decode_hb2fe2bf528775e55_decode__Sol_hfd482
 func private %address_h257056268eac7027_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_MemoryBytes___a53dbc6192a658d6(v0.objref<@__fe_obj_SolDecoder_11>) -> i256 {
     block0:
         v1.i256 = call %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__MemoryBytes_h1e381015a9b0111b__59e0d528d54cca1b v0;
+        v3.i256 = shr 160.i256 v1;
+        v5.i1 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_ne v3 0.i256;
+        br v5 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
         return v1;
 }
 
@@ -1079,6 +1087,13 @@ func private %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_
         return v20;
 }
 
+func private %u256_h3271ca15373d4483_eq_he50383edd273619f_ne(v0.i256, v1.i256) -> i1 {
+    block0:
+        v2.i1 = eq v0 v1;
+        v3.i1 = is_zero v2;
+        return v3;
+}
+
 func private %stor_ptr__Evm_hef0af3106e109414_TokenStore_0__1___db7d7c067dc14cc5(v0.i256) -> i256 {
     block0:
         v2.i256 = call %storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_raw__TokenStore_0__1___175215aa56127bde v0;
@@ -1093,20 +1108,32 @@ func private %stor_ptr__Evm_hef0af3106e109414_AccessControl_3___1911f7c438797961
 
 func private %evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input() -> i256 {
     block0:
-        return 0.i256;
+        v1.i256 = call %calldata_hf71d505b6ff5dc81_new;
+        return v1;
 }
 
 func private %calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len(v0.i256) -> i256 {
     block0:
         v1.i256 = evm_calldata_size;
-        (v2.i256, v3.i1) = usubo v1 v0;
+        v3.i1 = call %u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt v0 v1;
         br v3 block1 block2;
 
     block1:
-        evm_revert 0.i256 0.i256;
+        jump block3;
 
     block2:
-        return v2;
+        (v6.i256, v7.i1) = usubo v1 v0;
+        br v7 block4 block5;
+
+    block3:
+        v8.i256 = phi (0.i256 block1) (v6 block5);
+        return v8;
+
+    block4:
+        evm_revert 0.i256 0.i256;
+
+    block5:
+        jump block3;
 }
 
 func private %u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v0.i256, v1.i256) -> i1 {
@@ -1139,6 +1166,14 @@ func private %sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_decoder_with_base__Cal
 func private %address_h257056268eac7027_decode_hb2fe2bf528775e55_decode__Sol_hfd482bb803ad8c5f_SolDecoder_CallData___fe17857f71623b98(v0.objref<@__fe_obj_SolDecoder_13>) -> i256 {
     block0:
         v1.i256 = call %soldecoder_i__ha12a03fcb5ba844b_abidecoder_h638151350e80a086_read_word__CallData_hf71d505b6ff5dc81__e6d5f05c3478f563 v0;
+        v3.i256 = shr 160.i256 v1;
+        v5.i1 = call %u256_h3271ca15373d4483_eq_he50383edd273619f_ne v3 0.i256;
+        br v5 block1 block2;
+
+    block1:
+        evm_revert 0.i256 0.i256;
+
+    block2:
         return v1;
 }
 
@@ -1431,6 +1466,11 @@ func private %storptr_t__hc45dea9607fd5340_effecthandle_hfc52f915596f993a_from_r
         return v0;
 }
 
+func private %calldata_hf71d505b6ff5dc81_new() -> i256 {
+    block0:
+        return 0.i256;
+}
+
 func private %s_h33f7c3322e562590_intdowncast_hf946d58b157999e1_downcast_unchecked__u256_u32__6e3637cd3e911b35(v0.i256) -> i32 {
     block0:
         v1.i256 = call %u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word v0;
@@ -1578,13 +1618,6 @@ func private %_a__b__h47f120de72304a2d_storagekey_hf9e3d38a13ff4409_write_key__A
 
     block3:
         return v14;
-}
-
-func private %u256_h3271ca15373d4483_eq_he50383edd273619f_ne(v0.i256, v1.i256) -> i1 {
-    block0:
-        v2.i1 = eq v0 v1;
-        v3.i1 = is_zero v2;
-        return v3;
 }
 
 func private %u256_h3271ca15373d4483_intword_h9a147c8c32b1323c_to_word(v0.i256) -> i256 {

@@ -1,17 +1,42 @@
-use core::abi::ByteInput
+use core::abi::{ByteInput, Decode}
 use core::Copy
 use core::num::IntDowncast
+use ingot::abi::Sol
+use ingot::abi::sol::{decode_input}
 use ingot::evm::ops::{calldataload, calldatasize}
 
-pub struct CallData {
-    pub base: u256,
-}
+/// A view over the current EVM calldata.
+///
+/// `base` marks the first byte visible through this view. External function
+/// selectors are not handled specially; callers choose whether to decode raw
+/// calldata (`CallData::new()`) or a rebased payload view
+/// (`CallData::with_base(4)`).
+pub struct CallData { pub base: u256 }
 
 impl Copy for CallData {}
 
+impl CallData {
+    pub fn new() -> Self {
+        CallData { base: 0 }
+    }
+    pub fn with_base(base: u256) -> Self {
+        CallData { base }
+    }
+
+    /// Decode Solidity ABI data from this calldata view.
+    pub fn decode<T>(self) -> T where T: Decode<Sol> {
+        decode_input(self)
+    }
+}
+
 impl ByteInput for CallData {
     fn len(self) -> u256 {
-        calldatasize() - self.base
+        let total = calldatasize()
+        if self.base > total {
+            0
+        } else {
+            total - self.base
+        }
     }
 
     #[arithmetic(unchecked)]

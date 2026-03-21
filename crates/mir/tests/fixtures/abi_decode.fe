@@ -1,8 +1,34 @@
-use core::abi::Decode
-use std::abi::sol::SolDecoder
-use std::evm::calldata::CallData
+use std::abi::{decode_input, decode_input_at}
+use std::evm::{CallData, Evm}
 
-pub fn decode_u256() -> u256 {
-    let mut d = SolDecoder::new(CallData { base: 0 })
-    u256::decode(mut d)
+pub fn decode_calldata_u256() -> u256 {
+    CallData::new().decode<u256>()
+}
+
+pub fn decode_rebased_calldata_u256() -> u256 {
+    CallData::with_base(4).decode<u256>()
+}
+
+pub fn decode_input_u256() -> u256 {
+    decode_input(CallData::new())
+}
+
+pub fn decode_input_u256_at_4() -> u256 {
+    decode_input_at(CallData::new(), 4)
+}
+
+pub fn decode_input_tuple_at_4() -> (u64, bool) {
+    decode_input_at(CallData::new(), 4)
+}
+
+pub fn decode_input_i8_at_4() -> i8 {
+    decode_input_at(CallData::new(), 4)
+}
+
+pub fn decode_runtime_args_u256() -> u256 uses (evm: mut Evm) {
+    evm.decode_args<u256>()
+}
+
+pub fn runtime_selector() -> u32 uses (evm: mut Evm) {
+    evm.selector()
 }

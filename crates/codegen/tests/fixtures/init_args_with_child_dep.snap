@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/yul.rs
+assertion_line: 33
 expression: output
 input_file: tests/fixtures/init_args_with_child_dep.fe
 ---
@@ -114,7 +115,7 @@ object "Parent" {
       mstore(add(v9, 32), v7)
       mstore(add(v9, 64), v8)
       let v10 := v9
-      $_t0__t1__h61373471174c18a_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_u256_u256_SolEncoder_h1b9228b90dad6928__9e0831f7c11d9f64($args, v10)
+      $encode_sol___u256__u256___f8fb67624e92e2b2($args, v10)
       let v11 := $evm_hef0af3106e109414_create_h3f3c4b410ec53b45_create_raw_stor_arg0_root_stor($value, v5, v4)
       let v12 := $u256_h3271ca15373d4483_eq_he50383edd273619f_eq(v11, 0)
       let v13 := v12
@@ -142,6 +143,16 @@ object "Parent" {
       mstore(add(v0, 32), mload(add(v1, 32)))
       mstore(add(v0, 64), 0)
       ret := v0
+      leave
+    }
+    function $encode_sol___u256__u256___f8fb67624e92e2b2($value, $e) {
+      let v0 := mload(0x40)
+      if iszero(v0) {
+        v0 := 0x80
+      }
+      mstore(0x40, add(v0, 32))
+      mstore(v0, $e)
+      $_t0__t1__h61373471174c18a_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_u256_u256_SolEncoder_h1b9228b90dad6928__9e0831f7c11d9f64($value, mload(v0))
       leave
     }
     function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_abort() {
@@ -255,7 +266,16 @@ object "Parent" {
       }
       function $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len($self) -> ret {
         let v0 := calldatasize()
-        let v1 := $checked_sub_u256(v0, $self)
+        let v1 := 0
+        let v2 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt($self, v0)
+        let v3 := v2
+        if v3 {
+          v1 := 0
+        }
+        if iszero(v3) {
+          let v4 := $checked_sub_u256(v0, $self)
+          v1 := v4
+        }
         ret := v1
         leave
       }
@@ -263,6 +283,10 @@ object "Parent" {
         let v0 := add($self, $byte_offset)
         let v1 := calldataload(v0)
         ret := v1
+        leave
+      }
+      function $calldata_hf71d505b6ff5dc81_new() -> ret {
+        ret := 0
         leave
       }
       function $checked_sub_u256($a, $b) -> ret {
@@ -286,7 +310,8 @@ object "Parent" {
         revert(0, 0)
       }
       function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input() -> ret {
-        ret := 0
+        let v0 := $calldata_hf71d505b6ff5dc81_new()
+        ret := v0
         leave
       }
       function $runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2() -> ret {
@@ -370,7 +395,16 @@ object "Parent" {
         }
         function $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len($self) -> ret {
           let v0 := calldatasize()
-          let v1 := $checked_sub_u256(v0, $self)
+          let v1 := 0
+          let v2 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt($self, v0)
+          let v3 := v2
+          if v3 {
+            v1 := 0
+          }
+          if iszero(v3) {
+            let v4 := $checked_sub_u256(v0, $self)
+            v1 := v4
+          }
           ret := v1
           leave
         }
@@ -378,6 +412,10 @@ object "Parent" {
           let v0 := add($self, $byte_offset)
           let v1 := calldataload(v0)
           ret := v1
+          leave
+        }
+        function $calldata_hf71d505b6ff5dc81_new() -> ret {
+          ret := 0
           leave
         }
         function $checked_sub_u256($a, $b) -> ret {
@@ -401,7 +439,8 @@ object "Parent" {
           revert(0, 0)
         }
         function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input() -> ret {
-          ret := 0
+          let v0 := $calldata_hf71d505b6ff5dc81_new()
+          ret := v0
           leave
         }
         function $runtime_selector__Evm_hef0af3106e109414_Sol_hfd482bb803ad8c5f__e4e3f8d20b3805a2() -> ret {

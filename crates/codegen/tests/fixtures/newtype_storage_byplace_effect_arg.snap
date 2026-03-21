@@ -59,7 +59,16 @@ object "NewtypeByPlaceEffectArg" {
       }
       function $calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len($self) -> ret {
         let v0 := calldatasize()
-        let v1 := $checked_sub_u256(v0, $self)
+        let v1 := 0
+        let v2 := $u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt($self, v0)
+        let v3 := v2
+        if v3 {
+          v1 := 0
+        }
+        if iszero(v3) {
+          let v4 := $checked_sub_u256(v0, $self)
+          v1 := v4
+        }
         ret := v1
         leave
       }
@@ -67,6 +76,10 @@ object "NewtypeByPlaceEffectArg" {
         let v0 := add($self, $byte_offset)
         let v1 := calldataload(v0)
         ret := v1
+        leave
+      }
+      function $calldata_hf71d505b6ff5dc81_new() -> ret {
+        ret := 0
         leave
       }
       function $checked_add_u256($a, $b) -> ret {
@@ -117,7 +130,8 @@ object "NewtypeByPlaceEffectArg" {
         leave
       }
       function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input() -> ret {
-        ret := 0
+        let v0 := $calldata_hf71d505b6ff5dc81_new()
+        ret := v0
         leave
       }
       function $evm_hef0af3106e109414_contracthost_h57111e7eb283a125_return_bytes($ptr, $len) {

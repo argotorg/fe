@@ -1,6 +1,5 @@
 ---
 source: crates/hir/tests/ty_check.rs
-assertion_line: 41
 expression: res
 input_file: test_files/ty_check/contract_recv_msg_event_name_collision.fe
 ---
@@ -20,7 +19,7 @@ note:
    · │
 12 │ │     value: u256,
 13 │ │ }
-   │ ╰─^ () | (u256, u256) | SolEncoder | Transfer | fn encoded_size<u256> | fn new | mut L | mut SolEncoder | u256
+   │ ╰─^ () | (String<8>, String<1>, String<7>, String<1>, String<7>, String<1>, String<7>, String<1>) | (u256, u256) | SolEncoder | String<1> | String<7> | String<8> | Transfer | fn encoded_size<u256> | fn keccak<(String<8>, String<1>, String<7>, String<1>, String<7>, String<1>, String<7>, String<1>)> | fn new | mut L | mut SolEncoder | u256
 
 note: 
    ┌─ contract_recv_msg_event_name_collision.fe:17:9

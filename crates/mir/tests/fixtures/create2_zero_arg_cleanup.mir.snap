@@ -42,7 +42,7 @@ fn create2_stor_arg0_root_stor__Evm_hef0af3106e109414_Counter_h872958864d1ad471_
     v11: u256 = checked_add<u256>(v9, v4)
     v10: u256 = v11
     v13: u256 = checked_add<u256>(v10, v6)
-    eval ___h2439715d39cd513_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383()
+    eval encode_sol______2439715d39cd513()
     v15: Address = evm_hef0af3106e109414_create_h3f3c4b410ec53b45_create2_raw_stor_arg0_root_stor(v1, v9, v7, v3)
     v16: bool = u256_h3271ca15373d4483_eq_he50383edd273619f_eq(v15, 0)
     br v16 bb1 bb2
@@ -96,9 +96,10 @@ fn __Counter_init_code_offset() -> u256:
     v0: u256 = code_region_offset(func_item(__Counter_init))
     ret v0
 
-fn ___h2439715d39cd513_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383(v0: (), v1: mut SolEncoder) -> ():
+fn encode_sol______2439715d39cd513(v0: (), v1: mut SolEncoder) -> ():
   ; runtime_abi values=[] effects=[]
   bb0:
+    eval ___h2439715d39cd513_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383()
     ret
 
 fn evm_hef0af3106e109414_create_h3f3c4b410ec53b45_create2_raw_stor_arg0_root_stor(v0: mut Evm, v1: u256, v2: u256, v3: u256, v4: u256) -> Address:
@@ -115,12 +116,23 @@ fn u256_h3271ca15373d4483_eq_he50383edd273619f_eq(v0: u256, v1: u256) -> bool:
 fn evm_hef0af3106e109414_contracthost_h57111e7eb283a125_input(v0: Evm) -> CallData:
   ; runtime_abi values=[] effects=[]
   bb0:
-    ret 0
+    v1: CallData = calldata_hf71d505b6ff5dc81_new()
+    ret v1
 
 fn calldata_hf71d505b6ff5dc81_byteinput_hc4c2cb44299530ae_len(v0: CallData) -> u256:
   bb0:
     v1: u256 = calldatasize()
-    v2: u256 = checked_sub<u256>(v1, v0)
+    v2: u256 = 0
+    v3: bool = u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt(v0, v1)
+    br v3 bb1 bb2
+  bb1:
+    v2 = 0
+    jmp bb3
+  bb2:
+    v4: u256 = checked_sub<u256>(v1, v0)
+    v2 = v4
+    jmp bb3
+  bb3:
     ret v2
 
 fn u256_h3271ca15373d4483_ord_h264f6d6d75097a_lt(v0: u256, v1: u256) -> bool:
@@ -138,6 +150,20 @@ fn sol_hfd482bb803ad8c5f_abi_h2da9a2d0b1ddaeb7_selector_from_prefix(v0: u256) ->
   bb0:
     v1: u32 = s_h33f7c3322e562590_intdowncast_hf946d58b157999e1_downcast_unchecked__u256_u32__6e3637cd3e911b35((v0 >> 224))
     ret v1
+
+fn ___h2439715d39cd513_encode_hab7243eccf2714fb_encode__Sol_hfd482bb803ad8c5f_SolEncoder_h1b9228b90dad6928__1a070c3866d16383(v0: (), v1: mut SolEncoder) -> ():
+  ; runtime_abi values=[] effects=[]
+  bb0:
+    ret
+
+fn calldata_hf71d505b6ff5dc81_new() -> CallData:
+  bb0:
+    ret 0
+
+fn u256_h3271ca15373d4483_ord_h264f6d6d75097a_gt(v0: u256, v1: u256) -> bool:
+  bb0:
+    v2: bool = __gt_u256(v0, v1)
+    ret v2
 
 fn s_h33f7c3322e562590_intdowncast_hf946d58b157999e1_downcast_unchecked__u256_u32__6e3637cd3e911b35(v0: u256) -> u32:
   bb0:

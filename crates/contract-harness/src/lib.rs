@@ -1296,8 +1296,186 @@ pub fn bytes_to_u256(bytes: &[u8]) -> Result<U256, HarnessError> {
 #[allow(clippy::print_stderr)]
 mod tests {
     use super::*;
-    use ethers_core::{abi::Token, types::U256 as AbiU256};
+    use ethers_core::{
+        abi::{AbiParser, Token},
+        types::U256 as AbiU256,
+    };
     use std::process::Command;
+
+    fn compile_calldata_decode_contract() -> Option<FeContractHarness> {
+        if !solc_available() {
+            eprintln!("skipping calldata decode contract tests because solc is missing");
+            return None;
+        }
+
+        let source = r#"
+use std::abi::sol
+use std::abi::{decode_input, decode_input_at}
+use std::evm::{CallData, Evm}
+
+msg DecodeMsg {
+    #[selector = sol("raw(uint256)")]
+    Raw { value: u256 } -> u256,
+    #[selector = sol("read(uint256)")]
+    Read { value: u256 } -> u256,
+    #[selector = sol("selector()")]
+    Selector -> u256,
+    #[selector = sol("args(uint256)")]
+    Args { value: u256 } -> u256,
+    #[selector = sol("tuple(uint64,bool)")]
+    Tuple { a: u64, flag: bool } -> u256,
+    #[selector = sol("generic(uint256)")]
+    Generic { value: u256 } -> u256,
+    #[selector = sol("bad()")]
+    Bad -> u256,
+    #[selector = sol("bad_view()")]
+    BadView -> u256,
+}
+
+pub contract DecodeHarness {
+    recv DecodeMsg {
+        Raw { value: _ } -> u256 {
+            CallData::new().decode<u256>()
+        }
+
+        Read { value } -> u256 {
+            let decoded = CallData::with_base(4).decode<u256>()
+            assert(decoded == value)
+            decoded
+        }
+
+        Selector -> u256 uses (evm: Evm) {
+            evm.selector() as u256
+        }
+
+        Args { value } -> u256 uses (evm: mut Evm) {
+            let decoded = evm.decode_args<u256>()
+            assert(decoded == value)
+            decoded
+        }
+
+        Tuple { a, flag } -> u256 uses (evm: mut Evm) {
+            let decoded: (u64, bool) = evm.decode_args<(u64, bool)>()
+            assert(decoded.0 == a)
+            assert(decoded.1 == flag)
+            if flag {
+                a as u256
+            } else {
+                0
+            }
+        }
+
+        Generic { value } -> u256 {
+            let input = CallData::with_base(4)
+            let decoded: u256 = decode_input(input)
+            let decoded_at: u256 = decode_input_at(CallData::new(), 4)
+            assert(decoded == value)
+            assert(decoded_at == value)
+            decoded
+        }
+
+        Bad -> u256 {
+            decode_input_at(CallData::new(), 5)
+        }
+
+        BadView -> u256 {
+            CallData::with_base(5).decode<u256>()
+        }
+    }
+}
+"#;
+
+        Some(
+            FeContractHarness::compile_from_source(
+                "DecodeHarness",
+                source,
+                CompileOptions::default(),
+            )
+            .expect("calldata decode contract should compile"),
+        )
+    }
+
+    fn compile_canonical_decode_contract() -> Option<FeContractHarness> {
+        if !solc_available() {
+            eprintln!("skipping canonical decode contract tests because solc is missing");
+            return None;
+        }
+
+        let source = r#"
+use std::abi::sol
+use std::evm::Address
+
+msg CanonicalMsg {
+    #[selector = sol("readBool(bool)")]
+    ReadBool { value: bool } -> u256,
+    #[selector = sol("readU8(uint8)")]
+    ReadU8 { value: u8 } -> u256,
+    #[selector = sol("readI8(int8)")]
+    ReadI8 { value: i8 } -> u256,
+    #[selector = sol("readAddress(address)")]
+    ReadAddress { value: Address } -> u256,
+}
+
+pub contract CanonicalHarness {
+    recv CanonicalMsg {
+        ReadBool { value } -> u256 {
+            if value { 1 } else { 0 }
+        }
+
+        ReadU8 { value } -> u256 {
+            value as u256
+        }
+
+        ReadI8 { value } -> u256 {
+            if value == 127 { 1 } else { 0 }
+        }
+
+        ReadAddress { value } -> u256 {
+            value.inner
+        }
+    }
+}
+"#;
+
+        Some(
+            FeContractHarness::compile_from_source(
+                "CanonicalHarness",
+                source,
+                CompileOptions::default(),
+            )
+            .expect("canonical decode contract should compile"),
+        )
+    }
+
+    fn assert_empty_revert(err: HarnessError) {
+        match err {
+            HarnessError::Revert(data) => {
+                assert!(data.0.is_empty(), "expected empty revert data, got {data}");
+            }
+            other => panic!("expected revert, got {other:?}"),
+        }
+    }
+
+    fn raw_single_word_call(signature: &str, word: [u8; 32]) -> Vec<u8> {
+        let function = AbiParser::default()
+            .parse_function(signature)
+            .expect("signature should parse");
+        let mut calldata = function.short_signature().to_vec();
+        calldata.extend_from_slice(&word);
+        calldata
+    }
+
+    fn word_from_u256(value: AbiU256) -> [u8; 32] {
+        let mut word = [0u8; 32];
+        value.to_big_endian(&mut word);
+        word
+    }
+
+    fn address_word(bytes: [u8; 20]) -> [u8; 32] {
+        let mut word = [0u8; 32];
+        word[12..].copy_from_slice(&bytes);
+        word
+    }
 
     fn solc_available() -> bool {
         let solc_path = std::env::var("FE_SOLC_PATH").unwrap_or_else(|_| "solc".to_string());
@@ -1588,6 +1766,249 @@ object "Counter" {
             U256::from(1_005u64),
             "totalSupply should decrease after burn"
         );
+    }
+
+    #[test]
+    fn calldata_rebased_view_reads_after_selector() {
+        let Some(harness) = compile_calldata_decode_contract() else {
+            return;
+        };
+
+        let call = encode_function_call("read(uint256)", &[Token::Uint(AbiU256::from(42u64))])
+            .expect("calldata should encode");
+        let result = harness
+            .call_raw(&call, ExecutionOptions::default())
+            .expect("read(uint256) should succeed");
+
+        assert_eq!(
+            bytes_to_u256(&result.return_data).unwrap(),
+            U256::from(42u64),
+            "CallData::with_base(4).decode() should read the ABI word after the selector"
+        );
+    }
+
+    #[test]
+    fn calldata_decode_raw_starts_at_byte_zero() {
+        let Some(harness) = compile_calldata_decode_contract() else {
+            return;
+        };
+
+        let call = encode_function_call("raw(uint256)", &[Token::Uint(AbiU256::from(42u64))])
+            .expect("calldata should encode");
+        let result = harness
+            .call_raw(&call, ExecutionOptions::default())
+            .expect("raw(uint256) should succeed");
+
+        assert_eq!(
+            bytes_to_u256(&result.return_data).unwrap(),
+            bytes_to_u256(&call[..32]).unwrap(),
+            "CallData::new().decode() should read the first 32 calldata bytes including the selector prefix"
+        );
+    }
+
+    #[test]
+    fn evm_decode_args_reads_after_selector() {
+        let Some(harness) = compile_calldata_decode_contract() else {
+            return;
+        };
+
+        let call = encode_function_call("args(uint256)", &[Token::Uint(AbiU256::from(77u64))])
+            .expect("calldata should encode");
+        let result = harness
+            .call_raw(&call, ExecutionOptions::default())
+            .expect("args(uint256) should succeed");
+
+        assert_eq!(
+            bytes_to_u256(&result.return_data).unwrap(),
+            U256::from(77u64),
+            "evm.decode_args() should decode the ABI payload after the selector"
+        );
+    }
+
+    #[test]
+    fn evm_selector_matches_current_call_selector() {
+        let Some(harness) = compile_calldata_decode_contract() else {
+            return;
+        };
+
+        let call = encode_function_call("selector()", &[]).expect("calldata should encode");
+        let result = harness
+            .call_raw(&call, ExecutionOptions::default())
+            .expect("selector() should succeed");
+        let expected = u32::from_be_bytes([call[0], call[1], call[2], call[3]]);
+
+        assert_eq!(
+            bytes_to_u256(&result.return_data).unwrap(),
+            U256::from(expected),
+            "evm.selector() should return the current 4-byte selector"
+        );
+    }
+
+    #[test]
+    fn evm_decode_args_tuple_round_trip() {
+        let Some(harness) = compile_calldata_decode_contract() else {
+            return;
+        };
+
+        let call = encode_function_call(
+            "tuple(uint64,bool)",
+            &[Token::Uint(AbiU256::from(7u64)), Token::Bool(true)],
+        )
+        .expect("calldata should encode");
+        let result = harness
+            .call_raw(&call, ExecutionOptions::default())
+            .expect("tuple(uint64,bool) should succeed");
+
+        assert_eq!(
+            bytes_to_u256(&result.return_data).unwrap(),
+            U256::from(7u64),
+            "evm.selector() and evm.decode_args() should round-trip tuple arguments"
+        );
+    }
+
+    #[test]
+    fn calldata_decode_input_over_rebased_view_matches_decode_input_at() {
+        let Some(harness) = compile_calldata_decode_contract() else {
+            return;
+        };
+
+        let call = encode_function_call("generic(uint256)", &[Token::Uint(AbiU256::from(99u64))])
+            .expect("calldata should encode");
+        let result = harness
+            .call_raw(&call, ExecutionOptions::default())
+            .expect("generic(uint256) should succeed");
+
+        assert_eq!(
+            bytes_to_u256(&result.return_data).unwrap(),
+            U256::from(99u64),
+            "decode_input(CallData::with_base(4)) should match decode_input_at(CallData::new(), 4)"
+        );
+    }
+
+    #[test]
+    fn calldata_decode_input_at_reverts_when_base_is_past_end() {
+        let Some(harness) = compile_calldata_decode_contract() else {
+            return;
+        };
+
+        let call = encode_function_call("bad()", &[]).expect("calldata should encode");
+        let err = harness
+            .call_raw(&call, ExecutionOptions::default())
+            .expect_err("bad() should revert when decode_input_at base exceeds calldata len");
+
+        assert_empty_revert(err);
+    }
+
+    #[test]
+    fn calldata_view_decode_reverts_when_base_is_past_end() {
+        let Some(harness) = compile_calldata_decode_contract() else {
+            return;
+        };
+
+        let call = encode_function_call("bad_view()", &[]).expect("calldata should encode");
+        let err = harness
+            .call_raw(&call, ExecutionOptions::default())
+            .expect_err("bad_view() should revert when the rebased calldata view is past the end");
+
+        assert_empty_revert(err);
+    }
+
+    #[test]
+    fn canonical_bool_decode_accepts_only_zero_or_one() {
+        let Some(harness) = compile_canonical_decode_contract() else {
+            return;
+        };
+
+        let ok = harness
+            .call_function(
+                "readBool(bool)",
+                &[Token::Bool(true)],
+                ExecutionOptions::default(),
+            )
+            .expect("canonical bool should decode");
+        assert_eq!(bytes_to_u256(&ok.return_data).unwrap(), U256::from(1u64));
+
+        let invalid = raw_single_word_call("readBool(bool)", word_from_u256(AbiU256::from(2u64)));
+        let err = harness
+            .call_raw(&invalid, ExecutionOptions::default())
+            .expect_err("bool=2 should revert");
+        assert_empty_revert(err);
+    }
+
+    #[test]
+    fn canonical_u8_decode_rejects_nonzero_high_bits() {
+        let Some(harness) = compile_canonical_decode_contract() else {
+            return;
+        };
+
+        let ok = harness
+            .call_function(
+                "readU8(uint8)",
+                &[Token::Uint(AbiU256::from(42u64))],
+                ExecutionOptions::default(),
+            )
+            .expect("canonical uint8 should decode");
+        assert_eq!(bytes_to_u256(&ok.return_data).unwrap(), U256::from(42u64));
+
+        let invalid =
+            raw_single_word_call("readU8(uint8)", word_from_u256(AbiU256::from(0x100u64)));
+        let err = harness
+            .call_raw(&invalid, ExecutionOptions::default())
+            .expect_err("uint8 with nonzero high bits should revert");
+        assert_empty_revert(err);
+    }
+
+    #[test]
+    fn canonical_i8_decode_requires_sign_extension() {
+        let Some(harness) = compile_canonical_decode_contract() else {
+            return;
+        };
+
+        let ok = raw_single_word_call("readI8(int8)", word_from_u256(AbiU256::from(127u64)));
+        let result = harness
+            .call_raw(&ok, ExecutionOptions::default())
+            .expect("canonical int8=127 should decode");
+        assert_eq!(
+            bytes_to_u256(&result.return_data).unwrap(),
+            U256::from(1u64)
+        );
+
+        let mut invalid_word = [0u8; 32];
+        invalid_word[31] = 0xff;
+        let invalid = raw_single_word_call("readI8(int8)", invalid_word);
+        let err = harness
+            .call_raw(&invalid, ExecutionOptions::default())
+            .expect_err("non-sign-extended int8 should revert");
+        assert_empty_revert(err);
+    }
+
+    #[test]
+    fn canonical_address_decode_rejects_nonzero_high_bits() {
+        let Some(harness) = compile_canonical_decode_contract() else {
+            return;
+        };
+
+        let raw = [0x11u8; 20];
+        let ok_word = address_word(raw);
+        let ok = harness
+            .call_raw(
+                &raw_single_word_call("readAddress(address)", ok_word),
+                ExecutionOptions::default(),
+            )
+            .expect("canonical address should decode");
+        assert_eq!(
+            bytes_to_u256(&ok.return_data).unwrap(),
+            bytes_to_u256(&ok_word).unwrap(),
+            "address decode should preserve the low 160 bits"
+        );
+
+        let mut invalid_word = ok_word;
+        invalid_word[0] = 1;
+        let invalid = raw_single_word_call("readAddress(address)", invalid_word);
+        let err = harness
+            .call_raw(&invalid, ExecutionOptions::default())
+            .expect_err("address with nonzero high bits should revert");
+        assert_empty_revert(err);
     }
 
     #[test]

@@ -219,7 +219,13 @@ pub(super) fn lower_event_struct<'db>(
                 vec![topic0_const],
                 builder.origin(),
             );
-            lower_emit_method(builder, &indexed_fields, &data_fields);
+            lower_emit_method(
+                builder,
+                struct_name_str.clone(),
+                ordered_field_type_paths.clone(),
+                &indexed_fields,
+                &data_fields,
+            );
             impl_trait
         },
     );
@@ -420,7 +426,6 @@ fn create_topic0_const<'db>(
             tuple_elems.push(body_ctxt.push_expr(comma, origin.clone()));
         }
 
-        // FieldType::SOL_TYPE
         let sol_type_path = field_path.push_str(db, "SOL_TYPE");
         let sol_type_expr = Expr::Path(Partial::Present(sol_type_path));
         tuple_elems.push(body_ctxt.push_expr(sol_type_expr, origin.clone()));
@@ -471,6 +476,8 @@ fn create_topic0_const<'db>(
 
 fn lower_emit_method<'db>(
     builder: &mut HirBuilder<'_, 'db, EventDesugared>,
+    struct_name: String,
+    field_type_paths: Vec<PathId<'db>>,
     indexed_fields: &[(IdentId<'db>, TypeId<'db>)],
     data_fields: &[(IdentId<'db>, TypeId<'db>)],
 ) {
@@ -483,8 +490,8 @@ fn lower_emit_method<'db>(
     let data_len_ident = builder.ident("data_len");
     let data_ptr_ident = builder.ident("data_ptr");
     let reserve_head_ident = builder.ident("reserve_head");
-    let encode_ident = builder.ident("encode");
     let finish_ident = builder.ident("finish");
+    let encode_ident = builder.ident("encode");
     let as_topic_ident = builder.ident("as_topic");
     let log_method_ident = builder.ident(&format!("log{}", indexed_fields.len() + 1));
 
@@ -539,6 +546,7 @@ fn lower_emit_method<'db>(
                 let enc_new_call = {
                     let new_path = PathId::from_ident(db, roots.std)
                         .push_str(db, "abi")
+                        .push_str(db, "sol")
                         .push_str(db, "SolEncoder")
                         .push_str(db, "new");
                     let callee = body.path_expr(new_path);
@@ -563,6 +571,7 @@ fn lower_emit_method<'db>(
                     let args = GenericArgListId::given1_type(db, size_ty);
                     let path = PathId::from_ident(db, roots.std)
                         .push_str(db, "abi")
+                        .push_str(db, "sol")
                         .push_str_args(db, "encoded_size", args);
                     let callee = body.path_expr(path);
                     body.call_expr(callee, vec![])
@@ -614,8 +623,43 @@ fn lower_emit_method<'db>(
             };
 
             let topic0 = {
-                let path = PathId::from_ident(db, IdentId::make_self_ty(db)).push_str(db, "TOPIC0");
-                body.path_expr(path)
+                let keccak_path = PathId::from_ident(db, roots.core).push_str(db, "keccak");
+                let keccak_callee = body.path_expr(keccak_path);
+
+                let mut tuple_elems = Vec::with_capacity(field_type_paths.len() * 2 + 3);
+                let name_lit = Expr::Lit(LitKind::String(crate::hir_def::StringId::new(
+                    db,
+                    struct_name.clone(),
+                )));
+                tuple_elems.push(body.push_expr(name_lit));
+
+                let open_paren = Expr::Lit(LitKind::String(crate::hir_def::StringId::new(
+                    db,
+                    "(".to_string(),
+                )));
+                tuple_elems.push(body.push_expr(open_paren));
+
+                for (idx, field_path) in field_type_paths.iter().copied().enumerate() {
+                    if idx > 0 {
+                        let comma = Expr::Lit(LitKind::String(crate::hir_def::StringId::new(
+                            db,
+                            ",".to_string(),
+                        )));
+                        tuple_elems.push(body.push_expr(comma));
+                    }
+
+                    let sol_type_path = field_path.push_str(db, "SOL_TYPE");
+                    tuple_elems.push(body.path_expr(sol_type_path));
+                }
+
+                let close_paren = Expr::Lit(LitKind::String(crate::hir_def::StringId::new(
+                    db,
+                    ")".to_string(),
+                )));
+                tuple_elems.push(body.push_expr(close_paren));
+
+                let tuple_expr = body.push_expr(Expr::Tuple(tuple_elems));
+                body.call_expr(keccak_callee, vec![tuple_expr])
             };
             let mut args = Vec::with_capacity(3 + indexed_fields.len());
             args.push(data_ptr);
