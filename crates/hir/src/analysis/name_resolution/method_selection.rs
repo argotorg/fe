@@ -19,6 +19,7 @@ use crate::analysis::{
     },
 };
 use crate::hir_def::{CallableDef, Func};
+use crate::semantic::InherentImplApplicability;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
 pub enum MethodCandidate<'db> {
@@ -246,23 +247,32 @@ impl<'db> MethodSelector<'db> {
             .copied()
             .filter(|cand| self.is_inherent_method_visible(*cand))
             .collect();
+        let applicable_inherent_methods: Vec<_> = visible_inherent_methods
+            .iter()
+            .copied()
+            .filter_map(|cand| self.applicable_inherent_method(cand))
+            .collect();
 
-        match visible_inherent_methods.len() {
+        match applicable_inherent_methods.len() {
             0 => {
-                if inherent_methods.is_empty() {
-                    None
+                if visible_inherent_methods.is_empty() {
+                    if inherent_methods.is_empty() {
+                        None
+                    } else {
+                        Some(Err(MethodSelectionError::InvisibleInherentMethod(
+                            *inherent_methods.iter().next().unwrap(),
+                        )))
+                    }
                 } else {
-                    Some(Err(MethodSelectionError::InvisibleInherentMethod(
-                        *inherent_methods.iter().next().unwrap(),
-                    )))
+                    None
                 }
             }
             1 => Some(Ok(MethodCandidate::InherentMethod(
-                visible_inherent_methods[0],
+                applicable_inherent_methods[0],
             ))),
 
             _ => Some(Err(MethodSelectionError::AmbiguousInherentMethod(
-                inherent_methods.iter().copied().collect(),
+                applicable_inherent_methods.iter().copied().collect(),
             ))),
         }
     }
@@ -399,6 +409,19 @@ impl<'db> MethodSelector<'db> {
 
     fn is_inherent_method_visible(&self, def: CallableDef) -> bool {
         is_scope_visible_from(self.db, def.scope(), self.scope)
+    }
+
+    fn applicable_inherent_method(&self, def: CallableDef<'db>) -> Option<CallableDef<'db>> {
+        let CallableDef::Func(func) = def else {
+            return Some(def);
+        };
+        let Some(impl_) = func.containing_impl(self.db) else {
+            return Some(def);
+        };
+        match impl_.method_applicability(self.db, self.receiver, self.scope, self.assumptions) {
+            InherentImplApplicability::Applicable => Some(def),
+            InherentImplApplicability::Unsatisfied => None,
+        }
     }
 
     fn available_traits(&self) -> IndexSet<Trait<'db>> {

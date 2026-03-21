@@ -1,10 +1,13 @@
+use crate::analysis::ty::binder::Binder;
 use crate::analysis::ty::canonical::Canonicalized;
 use crate::analysis::ty::diagnostics::BodyDiag;
 use crate::analysis::ty::effects::resolve_normalized_type_effect_key;
+use crate::analysis::ty::trait_def::TraitInstId;
 use crate::analysis::ty::trait_resolution::{
     GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable,
 };
 use crate::analysis::ty::ty_check::EffectParamOwner;
+use crate::analysis::ty::unify::UnificationTable;
 use crate::core::adt_lower::lower_adt;
 use crate::core::hir_def::{
     IdentId, ItemKind, PathId, TopLevelMod, Trait, TypeAlias,
@@ -171,6 +174,30 @@ pub fn ty_is_noesc<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
         TyData::TyVar(_) | TyData::Invalid(_) => false,
         _ => inner(db, ty, &mut FxHashSet::default()),
     }
+}
+
+pub(crate) fn dedup_equivalent_trait_insts<'db>(
+    db: &'db dyn HirAnalysisDb,
+    insts: Vec<TraitInstId<'db>>,
+) -> Vec<TraitInstId<'db>> {
+    let mut unique: Vec<TraitInstId<'db>> = Vec::new();
+    'outer: for inst in insts {
+        for &seen in &unique {
+            if inst.def(db) != seen.def(db) {
+                continue;
+            }
+
+            let mut table = UnificationTable::new(db);
+            let lhs = table.instantiate_with_fresh_vars(Binder::bind(inst));
+            let rhs = table.instantiate_with_fresh_vars(Binder::bind(seen));
+            if table.unify(lhs, rhs).is_ok() {
+                continue 'outer;
+            }
+        }
+        unique.push(inst);
+    }
+
+    unique
 }
 
 pub fn ty_contains_const_hole<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {

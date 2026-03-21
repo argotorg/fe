@@ -1,7 +1,7 @@
 ---
 source: crates/uitest/tests/ty.rs
 expression: diags
-input_file: crates/uitest/fixtures/ty/trait_bound/type_arg.fe
+input_file: fixtures/ty/trait_bound/type_arg.fe
 ---
 error[6-0003]: trait bound is not satisfied
    ┌─ type_arg.fe:10:8
@@ -22,15 +22,7 @@ error[6-0003]: trait bound is not satisfied
    │         ^^^^^^ `T` doesn't implement `Trait1`
 
 error[6-0003]: trait bound is not satisfied
-   ┌─ type_arg.fe:16:12
-   │
-16 │     fn foo(self) {}
-   │            ^^^^ `T` doesn't implement `Trait1`
-
-error[6-0003]: trait bound is not satisfied
    ┌─ type_arg.fe:27:21
    │
 27 │     fn foo<U>(self: Self<U>) {}
    │                     ^^^^^^^ `U` doesn't implement `Trait1`
-
-

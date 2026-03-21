@@ -461,8 +461,7 @@ impl<'db> Impl<'db> {
     /// Generic parameter diagnostics are handled by `Diagnosable::diags`.
     pub fn diags_preconditions(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         use ty::diagnostics::ImplDiag;
-        use ty::trait_resolution::constraint::ty_constraints;
-        use ty::trait_resolution::{TraitSolveCx, WellFormedness, check_ty_wf};
+        use ty::trait_resolution::WellFormedness;
 
         let mut out = self.ty_errors(db);
 
@@ -491,27 +490,8 @@ impl<'db> Impl<'db> {
             return out;
         }
 
-        match check_ty_wf(
-            db,
-            TraitSolveCx::new(db, self.scope()).with_assumptions(constraints_for(db, self.into())),
-            ty,
-        ) {
-            WellFormedness::WellFormed => {
-                let constraints = ty_constraints(db, ty);
-                for &goal in constraints.list(db) {
-                    if goal.self_ty(db).has_param(db) {
-                        out.push(
-                            TraitConstraintDiag::TraitBoundNotSat {
-                                span: self.span().target_ty().into(),
-                                primary_goal: goal,
-                                unsat_subgoal: None,
-                            }
-                            .into(),
-                        );
-                        break;
-                    }
-                }
-            }
+        match self.target_ty_wf(db) {
+            WellFormedness::WellFormed => {}
             WellFormedness::IllFormed { goal, subgoal } => {
                 out.push(
                     TraitConstraintDiag::TraitBoundNotSat {

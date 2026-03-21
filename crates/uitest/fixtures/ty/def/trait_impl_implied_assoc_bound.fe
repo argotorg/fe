@@ -1,0 +1,13 @@
+trait AssocSuper {
+    type Item
+}
+
+trait AssocStrong: AssocSuper {}
+
+trait Foo {}
+
+struct Box<T> {
+    item: T,
+}
+
+impl<T: AssocStrong> Foo for Box<T::Item> {}
