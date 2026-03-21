@@ -187,20 +187,75 @@ pub(crate) fn instantiate_trait_effect_key<'db>(
     callee_generic_args: &[TyId<'db>],
     assoc_ty_subst: Option<TraitInstId<'db>>,
 ) -> TraitInstId<'db> {
+    let mut trait_key = instantiate_effect_key_value(db, trait_key, callee_generic_args, false);
+
+    if let Some(inst) = assoc_ty_subst {
+        let mut subst = AssocTySubst::new(inst);
+        trait_key = trait_key.fold_with(db, &mut subst);
+    }
+
+    trait_key
+}
+
+pub(crate) fn instantiate_trait_effect_lookup_key<'db>(
+    db: &'db dyn HirAnalysisDb,
+    trait_key: TraitInstId<'db>,
+    callee_generic_args: &[TyId<'db>],
+    assoc_ty_subst: Option<TraitInstId<'db>>,
+) -> TraitInstId<'db> {
+    let mut trait_key = instantiate_effect_key_value(db, trait_key, callee_generic_args, true);
+
+    if let Some(inst) = assoc_ty_subst {
+        let mut subst = AssocTySubst::new(inst);
+        trait_key = trait_key.fold_with(db, &mut subst);
+    }
+
+    trait_key
+}
+
+pub(crate) fn instantiate_type_effect_lookup_key<'db>(
+    db: &'db dyn HirAnalysisDb,
+    key_ty: TyId<'db>,
+    callee_generic_args: &[TyId<'db>],
+) -> TyId<'db> {
+    instantiate_effect_key_value(db, key_ty, callee_generic_args, true)
+}
+
+pub(crate) fn instantiate_type_effect_key<'db>(
+    db: &'db dyn HirAnalysisDb,
+    key_ty: TyId<'db>,
+    callee_generic_args: &[TyId<'db>],
+) -> TyId<'db> {
+    instantiate_effect_key_value(db, key_ty, callee_generic_args, false)
+}
+
+fn instantiate_effect_key_value<'db, T>(
+    db: &'db dyn HirAnalysisDb,
+    value: T,
+    callee_generic_args: &[TyId<'db>],
+    preserve_implicit_const_params: bool,
+) -> T
+where
+    T: TyFoldable<'db>,
+{
     struct InstantiateCalleeArgs<'db, 'a> {
         args: &'a [TyId<'db>],
+        preserve_implicit_const_params: bool,
     }
 
     impl<'db> TyFolder<'db> for InstantiateCalleeArgs<'db, '_> {
         fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
             match ty.data(db) {
-                TyData::TyParam(param) if !param.is_effect() && !param.is_trait_self() => {
+                TyData::TyParam(param)
+                    if !param.is_effect() && !param.is_trait_self() && !param.is_implicit() =>
+                {
                     self.args.get(param.idx).copied().unwrap_or(ty)
                 }
                 TyData::ConstTy(const_ty) => {
                     if let ConstTyData::TyParam(param, _) = const_ty.data(db)
                         && !param.is_effect()
                         && !param.is_trait_self()
+                        && (!self.preserve_implicit_const_params || !param.is_implicit())
                         && let Some(arg) = self.args.get(param.idx)
                     {
                         *arg
@@ -213,17 +268,13 @@ pub(crate) fn instantiate_trait_effect_key<'db>(
         }
     }
 
-    let mut instantiation = InstantiateCalleeArgs {
-        args: callee_generic_args,
-    };
-    let mut trait_key = trait_key.fold_with(db, &mut instantiation);
-
-    if let Some(inst) = assoc_ty_subst {
-        let mut subst = AssocTySubst::new(inst);
-        trait_key = trait_key.fold_with(db, &mut subst);
-    }
-
-    trait_key
+    value.fold_with(
+        db,
+        &mut InstantiateCalleeArgs {
+            args: callee_generic_args,
+            preserve_implicit_const_params,
+        },
+    )
 }
 
 pub(crate) fn normalize_effect_identity_ty<'db>(
@@ -271,7 +322,7 @@ pub(crate) fn normalize_effect_identity_trait<'db>(
     if preserve_self && let Some(self_ty) = args.first_mut() {
         *self_ty = normalize_effect_identity_ty(db, original_self, scope, assumptions, None);
     }
-    let assoc_type_bindings: IndexMap<_, _> = trait_key
+    let mut assoc_type_bindings: Vec<_> = trait_key
         .assoc_type_bindings(db)
         .iter()
         .map(|(name, &ty)| {
@@ -281,6 +332,8 @@ pub(crate) fn normalize_effect_identity_trait<'db>(
             )
         })
         .collect();
+    assoc_type_bindings.sort_by(|(lhs, _), (rhs, _)| lhs.data(db).cmp(rhs.data(db)));
+    let assoc_type_bindings: IndexMap<_, _> = assoc_type_bindings.into_iter().collect();
     TraitInstId::new(db, trait_key.def(db), args, assoc_type_bindings)
 }
 

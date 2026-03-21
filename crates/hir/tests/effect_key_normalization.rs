@@ -1,7 +1,8 @@
 use camino::Utf8PathBuf;
 use common::diagnostics::{CompleteDiagnostic, cmp_complete_diagnostics};
+use fe_hir::analysis::place::PlaceBase;
 use fe_hir::analysis::ty::effects::{EffectKeyKind, place_effect_provider_param_index_map};
-use fe_hir::analysis::ty::ty_check::{TypedBody, check_func_body};
+use fe_hir::analysis::ty::ty_check::{EffectArg, TypedBody, check_func_body};
 use fe_hir::hir_def::{CallableDef, Expr, ExprId, Func, ItemKind, Partial, TopLevelMod};
 use fe_hir::test_db::{HirAnalysisTestDb, initialize_analysis_pass};
 
@@ -97,6 +98,24 @@ fn assert_callable_provider_arg<'db>(
         .copied()
         .expect("missing hidden provider generic arg");
     assert_eq!(provider_arg.pretty_print(db).to_string(), expected);
+}
+
+fn assert_effect_arg_uses_param_binding<'db>(
+    typed_body: &TypedBody<'db>,
+    call_expr: ExprId,
+    expected_binding: fe_hir::analysis::ty::ty_check::LocalBinding<'db>,
+) {
+    let effect_args = typed_body
+        .call_effect_args(call_expr)
+        .expect("missing resolved effect args");
+    assert_eq!(effect_args.len(), 1);
+    match &effect_args[0].arg {
+        EffectArg::Place(place) => {
+            assert_eq!(place.base, PlaceBase::Binding(expected_binding));
+            assert!(place.projections.is_empty());
+        }
+        other => panic!("expected place effect arg, got {other:?}"),
+    }
 }
 
 fn diagnostics_for<'db>(
@@ -974,6 +993,78 @@ fn caller() {
 }
 
 #[test]
+fn layout_hole_type_keyed_with_bindings_shadow_outer_providers() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("layout_hole_type_keyed_with_bindings_shadow_outer_providers.fe"),
+        r#"
+struct Slot<const ROOT: u256 = _> {}
+struct Other<const ROOT: u256 = _> {}
+
+fn needs() uses (slot: Slot) {}
+
+fn caller(good: Slot<1>, bad: Other<1>) {
+    with (Slot = good) {
+        with (Slot = bad) {
+            needs()
+        }
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let diags = diagnostics_for(&db, top_mod);
+    assert_eq!(diags.len(), 1, "unexpected diagnostics: {diags:#?}");
+    assert!(
+        diags[0].message.contains("Other<1>"),
+        "unexpected diagnostics: {diags:#?}"
+    );
+
+    let caller = find_func(&db, top_mod, "caller");
+    let call_expr = find_call_expr(&db, caller);
+    let typed_body = check_func_body(&db, caller).1.clone();
+    assert!(
+        typed_body.call_effect_args(call_expr).is_none(),
+        "invalid layout-hole keyed type binding should shadow the outer provider"
+    );
+}
+
+#[test]
+fn layout_hole_type_keyed_with_bindings_take_precedence_over_same_frame_unkeyed_providers() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from(
+            "layout_hole_type_keyed_with_bindings_take_precedence_over_same_frame_unkeyed_providers.fe",
+        ),
+        r#"
+struct Slot<const ROOT: u256 = _> {}
+
+fn needs() uses (slot: Slot) {}
+
+fn caller(keyed: Slot<1>, unkeyed: Slot<2>) {
+    with (Slot = keyed, unkeyed) {
+        needs()
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let caller = find_func(&db, top_mod, "caller");
+    let call_expr = find_call_expr(&db, caller);
+    let typed_body = check_func_body(&db, caller).1.clone();
+    assert_single_type_effect_arg(&typed_body, call_expr);
+    assert_effect_arg_uses_param_binding(
+        &typed_body,
+        call_expr,
+        typed_body
+            .param_binding(0)
+            .expect("missing keyed param binding"),
+    );
+}
+
+#[test]
 fn keyed_with_trait_bindings_normalize_layout_holes() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
@@ -1008,6 +1099,98 @@ fn caller(p: own Provider) {
     let typed_body = check_func_body(&db, caller).1.clone();
     assert_single_trait_effect_arg(&typed_body, call_expr);
     assert_trait_effect_provider_arg(&db, caller, needs, call_expr, "Provider");
+}
+
+#[test]
+fn layout_hole_trait_keyed_with_bindings_shadow_outer_providers() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("layout_hole_trait_keyed_with_bindings_shadow_outer_providers.fe"),
+        r#"
+trait Cap<T> {
+    fn cap(self)
+}
+
+struct Slot<const ROOT: u256 = _> {}
+struct Good {}
+struct Bad {}
+
+impl Cap<Slot<u256>> for Good {
+    fn cap(self) {}
+}
+
+fn needs() uses (cap: Cap<Slot>) {}
+
+fn caller() {
+    with (Cap<Slot> = Good {}) {
+        with (Cap<Slot> = Bad {}) {
+            needs()
+        }
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let diags = diagnostics_for(&db, top_mod);
+    assert_eq!(diags.len(), 1, "unexpected diagnostics: {diags:#?}");
+    assert!(
+        diags[0].message.contains(
+            "keyed effect binding `Cap<Slot>` requires `Bad` to implement `Cap<Slot<_>>`"
+        ),
+        "unexpected diagnostics: {diags:#?}"
+    );
+
+    let caller = find_func(&db, top_mod, "caller");
+    let call_expr = find_call_expr(&db, caller);
+    let typed_body = check_func_body(&db, caller).1.clone();
+    assert!(
+        typed_body.call_effect_args(call_expr).is_none(),
+        "invalid layout-hole keyed trait binding should shadow the outer provider"
+    );
+}
+
+#[test]
+fn layout_hole_trait_keyed_with_bindings_take_precedence_over_same_frame_unkeyed_providers() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from(
+            "layout_hole_trait_keyed_with_bindings_take_precedence_over_same_frame_unkeyed_providers.fe",
+        ),
+        r#"
+trait Cap<T> {
+    fn cap(self)
+}
+
+struct Slot<const ROOT: u256 = _> {}
+struct Keyed {}
+struct Unkeyed {}
+
+impl Cap<Slot<u256>> for Keyed {
+    fn cap(self) {}
+}
+
+impl Cap<Slot<u256>> for Unkeyed {
+    fn cap(self) {}
+}
+
+fn needs() uses (cap: Cap<Slot>) {}
+
+fn caller() {
+    with (Cap<Slot> = Keyed {}, Unkeyed {}) {
+        needs()
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let caller = find_func(&db, top_mod, "caller");
+    let needs = find_func(&db, top_mod, "needs");
+    let call_expr = find_call_expr(&db, caller);
+    let typed_body = check_func_body(&db, caller).1.clone();
+    assert_single_trait_effect_arg(&typed_body, call_expr);
+    assert_trait_effect_provider_arg(&db, caller, needs, call_expr, "Keyed");
 }
 
 #[test]
@@ -1261,4 +1444,51 @@ fn caller(keyed: own Keyed, recv: own Receiver, unkeyed: own Unkeyed) {
     let typed_body = check_func_body(&db, caller).1.clone();
     assert_single_trait_effect_arg(&typed_body, call_expr);
     assert_callable_provider_arg(&db, caller, call_expr, "Keyed");
+}
+
+#[test]
+fn permuted_assoc_binding_order_keeps_exact_keyed_precedence() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("permuted_assoc_binding_order_keeps_exact_keyed_precedence.fe"),
+        r#"
+trait Cap {
+    type A
+    type B
+    fn cap(self)
+}
+
+struct Keyed {}
+struct Unkeyed {}
+
+impl Cap for Keyed {
+    type A = u8
+    type B = u16
+    fn cap(self) {}
+}
+
+impl Cap for Unkeyed {
+    type A = u8
+    type B = u16
+    fn cap(self) {}
+}
+
+fn needs() uses (cap: Cap<A = u8, B = u16>) {}
+
+fn caller() {
+    with (Cap<B = u16, A = u8> = Keyed {}, Unkeyed {}) {
+        needs()
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let caller = find_func(&db, top_mod, "caller");
+    let needs = find_func(&db, top_mod, "needs");
+    let call_expr = find_call_expr(&db, caller);
+    let typed_body = check_func_body(&db, caller).1.clone();
+    assert_single_trait_effect_arg(&typed_body, call_expr);
+    assert_trait_effect_provider_arg(&db, caller, needs, call_expr, "Keyed");
 }

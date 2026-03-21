@@ -1486,7 +1486,15 @@ impl<'db> TyChecker<'db> {
             let param_ty = callable.params(self.db).get(param_index).copied();
             let arg = self.table.new_var_for(prop);
             if let Some(param_ty) = param_ty
-                && matches!(param_ty.data(self.db), TyData::TyParam(p) if p.is_effect_provider())
+                && (matches!(param_ty.data(self.db), TyData::TyParam(p) if p.is_effect_provider())
+                    || matches!(
+                        param_ty.data(self.db),
+                        TyData::ConstTy(const_ty)
+                            if matches!(
+                                const_ty.data(self.db),
+                                ConstTyData::TyParam(param, _) if param.is_implicit()
+                            )
+                    ))
             {
                 self.effect_provider_keys
                     .extend(inference_keys(self.db, &arg));

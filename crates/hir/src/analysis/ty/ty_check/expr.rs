@@ -21,14 +21,14 @@ use super::{
 use crate::analysis::place::{Place, PlaceBase};
 use crate::analysis::ty::{
     adt_def::AdtRef,
-    binder::Binder,
     canonical::Canonicalized,
     corelib::{resolve_core_range_types, resolve_core_trait, resolve_lib_type_path},
     diagnostics::{BodyDiag, FuncBodyDiag},
     effects::{
         EffectKeyKind, instantiate_trait_effect_goal, instantiate_trait_effect_key,
-        normalize_effect_identity_trait, normalize_effect_identity_ty,
-        place_effect_provider_param_index_map,
+        instantiate_trait_effect_lookup_key, instantiate_type_effect_key,
+        instantiate_type_effect_lookup_key, normalize_effect_identity_trait,
+        normalize_effect_identity_ty, place_effect_provider_param_index_map,
     },
     fold::{AssocTySubst, TyFoldable as _, TyFolder},
     method_cmp::trait_effect_key_matches_with,
@@ -1107,14 +1107,15 @@ impl<'db> TyChecker<'db> {
             else {
                 continue;
             };
+            let Some(effect_key) =
+                self.instantiate_effect_lookup_key_from_binding(binding, callable)
+            else {
+                continue;
+            };
             let Some(requirement) =
                 self.instantiate_effect_requirement_from_binding(binding, callable)
             else {
                 continue;
-            };
-            let effect_key = match requirement {
-                EffectRequirement::Type(ty) => EffectKey::Type(ty),
-                EffectRequirement::TraitKey(trait_key) => EffectKey::Trait(trait_key),
             };
 
             let provider_arg_idx_for_param = callee_provider_arg_idx_by_effect
@@ -1499,17 +1500,19 @@ impl<'db> TyChecker<'db> {
                 && matches!(
                     satisfaction,
                     EffectSatisfaction::Provider { .. }
+                        | EffectSatisfaction::Direct
                         | EffectSatisfaction::TraitByValue
                         | EffectSatisfaction::TraitByWitness { .. }
                 )
+                && !matches!(pass_mode, super::EffectPassMode::ByPlace)
                 && let Some(provider_var) = callable.generic_args().get(provider_arg_idx).copied()
             {
                 let existing_provider = self.table.fold_ty(self.db, provider_var);
                 let given = match satisfaction {
                     EffectSatisfaction::Provider { .. } => provided.ty,
+                    EffectSatisfaction::Direct => provided.ty,
                     EffectSatisfaction::TraitByValue
                     | EffectSatisfaction::TraitByWitness { .. } => provided.ty,
-                    EffectSatisfaction::Direct => provided.ty,
                 };
                 let snapshot = self.table.snapshot();
                 if self.table.unify(provider_var, given).is_err() {
@@ -1586,9 +1589,9 @@ impl<'db> TyChecker<'db> {
     ) -> Option<EffectRequirement<'db>> {
         match binding.key_kind {
             EffectKeyKind::Type => {
-                let expected = Binder::bind(binding.key_ty?)
-                    .instantiate(self.db, callable.generic_args())
-                    .fold_with(self.db, &mut self.table);
+                let expected =
+                    instantiate_type_effect_key(self.db, binding.key_ty?, callable.generic_args())
+                        .fold_with(self.db, &mut self.table);
                 Some(EffectRequirement::Type(normalize_effect_identity_ty(
                     self.db,
                     expected,
@@ -1612,6 +1615,47 @@ impl<'db> TyChecker<'db> {
                     callable.trait_inst(),
                 ),
             )),
+            EffectKeyKind::Other => None,
+        }
+    }
+
+    fn instantiate_effect_lookup_key_from_binding(
+        &mut self,
+        binding: &EffectBinding<'db>,
+        callable: &Callable<'db>,
+    ) -> Option<EffectKey<'db>> {
+        match binding.key_kind {
+            EffectKeyKind::Type => {
+                let key = instantiate_type_effect_lookup_key(
+                    self.db,
+                    binding.key_ty?,
+                    callable.generic_args(),
+                )
+                .fold_with(self.db, &mut self.table);
+                Some(EffectKey::Type(normalize_effect_identity_ty(
+                    self.db,
+                    key,
+                    self.env.scope(),
+                    self.env.assumptions(),
+                    callable.trait_inst(),
+                )))
+            }
+            EffectKeyKind::Trait => {
+                let key = instantiate_trait_effect_lookup_key(
+                    self.db,
+                    binding.key_trait?,
+                    callable.generic_args(),
+                    None,
+                )
+                .fold_with(self.db, &mut self.table);
+                Some(EffectKey::Trait(normalize_effect_identity_trait(
+                    self.db,
+                    key,
+                    self.env.scope(),
+                    self.env.assumptions(),
+                    callable.trait_inst(),
+                )))
+            }
             EffectKeyKind::Other => None,
         }
     }

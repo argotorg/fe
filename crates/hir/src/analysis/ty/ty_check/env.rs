@@ -29,7 +29,12 @@ use crate::analysis::{
             resolve_effect_key,
         },
         fold::{TyFoldable, TyFolder},
-        layout_holes::collect_layout_hole_tys_in_order,
+        layout_holes::{
+            LayoutPlaceholderPolicy, collect_layout_hole_tys_in_order,
+            collect_unique_layout_placeholders_in_order_with_policy, layout_hole_fallback_ty,
+            substitute_layout_placeholders_by_identity,
+        },
+        method_cmp::trait_effect_key_matches_with,
         trait_def::TraitInstId,
         trait_resolution::{
             PredicateListId,
@@ -781,12 +786,13 @@ impl<'db> TyCheckEnv<'db> {
         &self,
         lookup: RequestedEffectLookup<'db>,
     ) -> Vec<SmallVec<[EffectCandidate<'db>; 2]>> {
-        let scan_frames = |lookup| {
+        let scan_frames = |lookup: RequestedEffectLookup<'db>| {
+            let lookup_has_keyed_barrier = lookup.has_keyed_barrier();
             let mut frames_out = Vec::new();
-            let mut saw_exact_keyed = false;
+            let mut saw_keyed_barrier = false;
             for frame in self.effect_env.frames.iter().rev() {
                 let mut out = SmallVec::new();
-                let mut frame_has_exact_keyed = false;
+                let mut frame_has_keyed_barrier = false;
                 match lookup {
                     RequestedEffectLookup::Exact(key) => {
                         if let Some(provided) = frame.bindings.get(&key) {
@@ -794,8 +800,40 @@ impl<'db> TyCheckEnv<'db> {
                                 provided,
                                 matched_key: Some(key),
                             }));
-                            frame_has_exact_keyed = true;
-                            saw_exact_keyed = true;
+                            frame_has_keyed_barrier = true;
+                            saw_keyed_barrier = true;
+                        }
+                    }
+                    RequestedEffectLookup::IdentityType(req) => {
+                        for (effect_key, provided) in &frame.bindings {
+                            if let EffectKey::Type(got) = effect_key
+                                && type_effect_key_matches_by_identity(self.db, req, *got)
+                            {
+                                out.extend(provided.iter().copied().map(|provided| {
+                                    EffectCandidate {
+                                        provided,
+                                        matched_key: Some(*effect_key),
+                                    }
+                                }));
+                                frame_has_keyed_barrier = true;
+                                saw_keyed_barrier = true;
+                            }
+                        }
+                    }
+                    RequestedEffectLookup::IdentityTrait(req) => {
+                        for (effect_key, provided) in &frame.bindings {
+                            if let EffectKey::Trait(got) = effect_key
+                                && trait_effect_key_matches_by_identity(self.db, req, *got)
+                            {
+                                out.extend(provided.iter().copied().map(|provided| {
+                                    EffectCandidate {
+                                        provided,
+                                        matched_key: Some(*effect_key),
+                                    }
+                                }));
+                                frame_has_keyed_barrier = true;
+                                saw_keyed_barrier = true;
+                            }
                         }
                     }
                     RequestedEffectLookup::SchematicType(req) => {
@@ -829,13 +867,14 @@ impl<'db> TyCheckEnv<'db> {
                     }
                 }
 
-                if !(frame_has_exact_keyed && matches!(lookup, RequestedEffectLookup::Exact(_))) {
+                if !(frame_has_keyed_barrier && lookup_has_keyed_barrier) {
                     for provided in frame.unkeyed.iter() {
                         if provided.ty.has_invalid(self.db) {
                             continue;
                         }
                         match lookup {
                             RequestedEffectLookup::Exact(EffectKey::Type(_))
+                            | RequestedEffectLookup::IdentityType(_)
                             | RequestedEffectLookup::SchematicType(_) => {
                                 out.push(EffectCandidate {
                                     provided: *provided,
@@ -843,6 +882,7 @@ impl<'db> TyCheckEnv<'db> {
                                 })
                             }
                             RequestedEffectLookup::Exact(EffectKey::Trait(_))
+                            | RequestedEffectLookup::IdentityTrait(_)
                             | RequestedEffectLookup::SchematicTrait(_) => {
                                 // Trait satisfaction is checked at the call site so we
                                 // can consider type arguments and current assumptions.
@@ -856,7 +896,7 @@ impl<'db> TyCheckEnv<'db> {
                 }
 
                 if out.is_empty() {
-                    if frame_has_exact_keyed && matches!(lookup, RequestedEffectLookup::Exact(_)) {
+                    if frame_has_keyed_barrier && lookup_has_keyed_barrier {
                         break;
                     }
                     continue;
@@ -869,30 +909,25 @@ impl<'db> TyCheckEnv<'db> {
                 out.retain(|p| seen.insert(*p));
                 frames_out.push(out);
 
-                if frame_has_exact_keyed && matches!(lookup, RequestedEffectLookup::Exact(_)) {
+                if frame_has_keyed_barrier && lookup_has_keyed_barrier {
                     break;
                 }
             }
-            (frames_out, saw_exact_keyed)
+            (frames_out, saw_keyed_barrier)
         };
 
-        let (frames_out, saw_exact_keyed) = scan_frames(lookup);
-        if saw_exact_keyed || !matches!(lookup, RequestedEffectLookup::Exact(_)) {
-            return frames_out;
+        let mut current = Some(lookup);
+        while let Some(lookup) = current {
+            let (frames_out, saw_keyed_barrier) = scan_frames(lookup);
+            if saw_keyed_barrier {
+                return frames_out;
+            }
+            current = lookup.fallback();
+            if current.is_none() {
+                return frames_out;
+            }
         }
-
-        let fallback = match lookup {
-            RequestedEffectLookup::Exact(EffectKey::Type(ty)) => {
-                RequestedEffectLookup::SchematicType(ty)
-            }
-            RequestedEffectLookup::Exact(EffectKey::Trait(trait_inst)) => {
-                RequestedEffectLookup::SchematicTrait(trait_inst)
-            }
-            RequestedEffectLookup::SchematicType(_) | RequestedEffectLookup::SchematicTrait(_) => {
-                unreachable!()
-            }
-        };
-        scan_frames(fallback).0
+        unreachable!("lookup iteration always returns from inside the loop")
     }
 
     pub(super) fn enter_scope(&mut self, block: ExprId) {
@@ -1496,6 +1531,115 @@ fn host() {}
         assert_eq!(frames[0].len(), 1);
         assert_eq!(frames[0][0].provided.ty, TyId::bool(&db));
         assert_eq!(frames[0][0].matched_key, Some(key));
+    }
+
+    #[test]
+    fn effect_candidate_frames_skip_same_frame_unkeyed_when_layout_hole_trait_key_exists() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from(
+                "effect_candidate_frames_skip_same_frame_unkeyed_when_layout_hole_trait_key_exists.fe",
+            ),
+            r#"
+struct Slot<const ROOT: u256 = _> {}
+trait Cap<T> {
+    fn cap(self)
+}
+
+fn needs() uses (cap: Cap<Slot>) {}
+fn host() {}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+
+        let needs = find_func(&db, top_mod, "needs");
+        let host = find_func(&db, top_mod, "host");
+        let request = needs
+            .effect_params(&db)
+            .next()
+            .and_then(|effect| effect.key_path(&db))
+            .expect("missing request path");
+        let request_key = effect_key_from_binding(
+            &db,
+            needs
+                .effect_bindings(&db)
+                .first()
+                .expect("missing canonical binding"),
+        )
+        .expect("missing canonical key");
+        let keyed_key = seeded_env(&db, host)
+            .effect_key_for_with_binding_in_scope(
+                request,
+                host.scope(),
+                PredicateListId::empty_list(&db),
+            )
+            .expect("missing keyed with key");
+
+        let mut env = seeded_env(&db, host);
+        env.effect_env
+            .insert(keyed_key, marker_effect(&db, host, TyId::bool(&db)));
+        env.effect_env
+            .insert_unkeyed(marker_effect(&db, host, TyId::u256(&db)));
+
+        let frames = env.effect_candidate_frames_for_key(request_key);
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].len(), 1);
+        assert_eq!(frames[0][0].provided.ty, TyId::bool(&db));
+        assert_eq!(frames[0][0].matched_key, Some(keyed_key));
+    }
+
+    #[test]
+    fn effect_candidate_frames_skip_same_frame_unkeyed_when_layout_hole_type_key_exists() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from(
+                "effect_candidate_frames_skip_same_frame_unkeyed_when_layout_hole_type_key_exists.fe",
+            ),
+            r#"
+struct Slot<const ROOT: u256 = _> {}
+
+fn needs() uses (slot: Slot) {}
+fn host() {}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+
+        let needs = find_func(&db, top_mod, "needs");
+        let host = find_func(&db, top_mod, "host");
+        let request = needs
+            .effect_params(&db)
+            .next()
+            .and_then(|effect| effect.key_path(&db))
+            .expect("missing request path");
+        let request_key = effect_key_from_binding(
+            &db,
+            needs
+                .effect_bindings(&db)
+                .first()
+                .expect("missing canonical binding"),
+        )
+        .expect("missing canonical key");
+        let keyed_key = seeded_env(&db, host)
+            .effect_key_for_with_binding_in_scope(
+                request,
+                host.scope(),
+                PredicateListId::empty_list(&db),
+            )
+            .expect("missing keyed with key");
+
+        let mut env = seeded_env(&db, host);
+        env.effect_env
+            .insert(keyed_key, marker_effect(&db, host, TyId::bool(&db)));
+        env.effect_env
+            .insert_unkeyed(marker_effect(&db, host, TyId::u256(&db)));
+
+        let frames = env.effect_candidate_frames_for_key(request_key);
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].len(), 1);
+        assert_eq!(frames[0][0].provided.ty, TyId::bool(&db));
+        assert_eq!(frames[0][0].matched_key, Some(keyed_key));
     }
 
     #[test]
@@ -2109,7 +2253,7 @@ impl<'db> TyCheckEnv<'db> {
     }
 
     fn requested_effect_lookup_for_key(&self, key: EffectKey<'db>) -> RequestedEffectLookup<'db> {
-        if effect_key_is_schematic(self.db, key) {
+        if effect_key_contains_schematic_structure(self.db, key) {
             match key {
                 EffectKey::Type(ty) => RequestedEffectLookup::SchematicType(ty),
                 EffectKey::Trait(trait_inst) => RequestedEffectLookup::SchematicTrait(trait_inst),
@@ -2123,19 +2267,90 @@ impl<'db> TyCheckEnv<'db> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RequestedEffectLookup<'db> {
     Exact(EffectKey<'db>),
+    IdentityType(TyId<'db>),
+    IdentityTrait(TraitInstId<'db>),
     SchematicType(TyId<'db>),
     SchematicTrait(TraitInstId<'db>),
 }
 
-fn effect_key_is_schematic<'db>(db: &'db dyn HirAnalysisDb, key: EffectKey<'db>) -> bool {
+impl<'db> RequestedEffectLookup<'db> {
+    fn has_keyed_barrier(self) -> bool {
+        matches!(
+            self,
+            Self::Exact(_) | Self::IdentityType(_) | Self::IdentityTrait(_)
+        )
+    }
+
+    fn fallback(self) -> Option<Self> {
+        match self {
+            Self::Exact(EffectKey::Type(ty)) => Some(Self::IdentityType(ty)),
+            Self::Exact(EffectKey::Trait(trait_inst)) => Some(Self::IdentityTrait(trait_inst)),
+            Self::IdentityType(ty) => Some(Self::SchematicType(ty)),
+            Self::IdentityTrait(trait_inst) => Some(Self::SchematicTrait(trait_inst)),
+            Self::SchematicType(_) | Self::SchematicTrait(_) => None,
+        }
+    }
+}
+
+fn type_effect_key_matches_by_identity<'db>(
+    db: &'db dyn HirAnalysisDb,
+    expected: TyId<'db>,
+    actual: TyId<'db>,
+) -> bool {
+    normalize_hidden_layout_placeholders_for_identity(db, expected)
+        == normalize_hidden_layout_placeholders_for_identity(db, actual)
+}
+
+fn trait_effect_key_matches_by_identity<'db>(
+    db: &'db dyn HirAnalysisDb,
+    expected: TraitInstId<'db>,
+    actual: TraitInstId<'db>,
+) -> bool {
+    trait_effect_key_matches_with(db, expected, actual, |lhs, rhs| {
+        normalize_hidden_layout_placeholders_for_identity(db, lhs)
+            == normalize_hidden_layout_placeholders_for_identity(db, rhs)
+    })
+}
+
+fn normalize_hidden_layout_placeholders_for_identity<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+) -> TyId<'db> {
+    let layout_args = collect_unique_layout_placeholders_in_order_with_policy(
+        db,
+        ty,
+        LayoutPlaceholderPolicy::HolesAndImplicitParams,
+    )
+    .into_iter()
+    .filter_map(|placeholder| {
+        let TyData::ConstTy(const_ty) = placeholder.data(db) else {
+            return None;
+        };
+
+        let fallback = match const_ty.data(db) {
+            ConstTyData::Hole(hole_ty, _) => layout_hole_fallback_ty(db, *hole_ty),
+            ConstTyData::TyParam(param, fallback_ty) if param.is_implicit() => *fallback_ty,
+            _ => return None,
+        };
+        Some((placeholder, fallback))
+    })
+    .collect::<FxHashMap<_, _>>();
+
+    substitute_layout_placeholders_by_identity(
+        db,
+        ty,
+        &layout_args,
+        LayoutPlaceholderPolicy::HolesAndImplicitParams,
+    )
+}
+
+fn effect_key_contains_schematic_structure<'db>(
+    db: &'db dyn HirAnalysisDb,
+    key: EffectKey<'db>,
+) -> bool {
     match key {
-        EffectKey::Type(ty) => {
-            ty_contains_const_hole(db, ty) || ty_value_contains_schematic_structure(db, ty)
-        }
-        EffectKey::Trait(trait_inst) => {
-            !collect_layout_hole_tys_in_order(db, trait_inst).is_empty()
-                || ty_value_contains_schematic_structure(db, trait_inst)
-        }
+        EffectKey::Type(ty) => ty_value_contains_schematic_structure(db, ty),
+        EffectKey::Trait(trait_inst) => ty_value_contains_schematic_structure(db, trait_inst),
     }
 }
 
