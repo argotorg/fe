@@ -409,7 +409,7 @@ note:
    ┌─ core_hkt_effects.fe:61:5
    │
 61 │     logger.log()
-   │     ^^^^^^ __effprov0
+   │     ^^^^^^ logger
 
 note: 
    ┌─ core_hkt_effects.fe:61:5
@@ -589,10 +589,10 @@ note:
    │                       ^ ()
 
 note: 
-   ┌─ core_hkt_effects.fe:75:75
+   ┌─ core_hkt_effects.fe:75:79
    │  
-75 │   pub fn with_logger<R, L: Logger, F: Fn<(), R>>(logger: L, _ func: F) -> R {
-   │ ╭───────────────────────────────────────────────────────────────────────────^
+75 │   pub fn with_logger<R, L: Logger, F: Fn<(), R>>(logger: own L, _ func: F) -> R {
+   │ ╭───────────────────────────────────────────────────────────────────────────────^
 76 │ │     with (Logger = logger) {
 77 │ │         func.call(())
 78 │ │     }
@@ -652,7 +652,7 @@ note:
    ┌─ core_hkt_effects.fe:84:5
    │
 84 │     logger.log()
-   │     ^^^^^^ __effprov0
+   │     ^^^^^^ logger
 
 note: 
    ┌─ core_hkt_effects.fe:84:5

@@ -16,7 +16,7 @@ use super::{
 };
 use crate::analysis::{
     HirAnalysisDb,
-    ty::const_ty::{ConstTyData, EvaluatedConstTy},
+    ty::const_ty::{ConstTyData, EvaluatedConstTy, normalize_const_tys_for_comparison},
 };
 
 pub(crate) type UnificationTable<'db> = UnificationTableBase<'db, InPlace<InferenceKey<'db>>>;
@@ -152,6 +152,24 @@ where
             | (_, TyData::Never) => Ok(()),
 
             (TyData::ConstTy(const_ty1), TyData::ConstTy(const_ty2)) => {
+                let const_ty1 = match normalize_const_tys_for_comparison(
+                    self.db,
+                    TyId::const_ty(self.db, *const_ty1),
+                )
+                .data(self.db)
+                {
+                    TyData::ConstTy(const_ty) => *const_ty,
+                    _ => *const_ty1,
+                };
+                let const_ty2 = match normalize_const_tys_for_comparison(
+                    self.db,
+                    TyId::const_ty(self.db, *const_ty2),
+                )
+                .data(self.db)
+                {
+                    TyData::ConstTy(const_ty) => *const_ty,
+                    _ => *const_ty2,
+                };
                 self.unify_ty(const_ty1.ty(self.db), const_ty2.ty(self.db))?;
 
                 match (const_ty1.data(self.db), const_ty2.data(self.db)) {
@@ -163,7 +181,7 @@ where
 
                     (_, ConstTyData::TyVar(var, _)) => self.unify_var_value(var, ty1),
 
-                    (ConstTyData::Hole(_), _) | (_, ConstTyData::Hole(_)) => Ok(()),
+                    (ConstTyData::Hole(..), _) | (_, ConstTyData::Hole(..)) => Ok(()),
 
                     (ConstTyData::TyParam(..), ConstTyData::TyParam(..))
                     | (ConstTyData::Evaluated(..), ConstTyData::Evaluated(..))

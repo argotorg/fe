@@ -1026,14 +1026,10 @@ impl Cond {
             Cond::Bin(lhs, rhs, op) => {
                 let lhs = unwrap_partial_ref(lhs.data(db, body), "Cond::Bin::lhs");
                 let rhs = unwrap_partial_ref(rhs.data(db, body), "Cond::Bin::rhs");
-                let op = match op {
-                    LogicalBinOp::And => "&&",
-                    LogicalBinOp::Or => "||",
-                };
                 format!(
                     "{} {} {}",
                     lhs.pretty_print(db, body, indent),
-                    op,
+                    op.pretty_print(),
                     rhs.pretty_print(db, body, indent)
                 )
             }

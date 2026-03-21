@@ -122,9 +122,10 @@ pub enum TyLowerDiag<'db> {
         given: TyId<'db>,
     },
 
-    /// Layout holes (`_`) are only allowed in effect positions.
+    /// Layout holes (`_`) are only allowed in callable input types and contract fields.
     ConstHoleInValuePosition {
         span: DynLazySpan<'db>,
+        ty: TyId<'db>,
     },
 
     /// `own` parameters must have owned types. Borrow-handle types (`mut`/`ref`) are not owned.
@@ -338,6 +339,13 @@ pub enum BodyDiag<'db> {
         trait_req: TraitInstId<'db>,
         given: TyId<'db>,
         provided_span: Option<DynLazySpan<'db>>,
+    },
+
+    WithEffectTraitUnsatisfied {
+        primary: DynLazySpan<'db>,
+        key: PathId<'db>,
+        trait_req: TraitInstId<'db>,
+        given: TyId<'db>,
     },
 
     ReturnedTypeMismatch {
@@ -701,6 +709,7 @@ impl<'db> BodyDiag<'db> {
             Self::EffectTypeMismatch { .. } => 38,
             Self::EffectProviderMismatch { .. } => 52,
             Self::EffectTraitUnsatisfied { .. } => 39,
+            Self::WithEffectTraitUnsatisfied { .. } => 75,
             Self::AmbiguousEffect { .. } => 40,
             Self::ReturnedTypeMismatch { .. } => 13,
             Self::TypeMustBeKnown(..) => 14,

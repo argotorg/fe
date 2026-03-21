@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/trait_impl/impl_method_effect_uses_stricter_bound.fe
+---
+error[6-0009]: method has stricter bounds than trait
+   ┌─ impl_method_effect_uses_stricter_bound.fe:10:8
+   │
+10 │     fn f() uses (cap: Cap, extra: Cap) {}
+   │        ^ method has stricter bounds than the declared method in the trait: `extra: Cap`

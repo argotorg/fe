@@ -25,18 +25,20 @@ use crate::analysis::{
     HirAnalysisDb,
     name_resolution::QueryDirective,
     ty::{
-        adt_def::{AdtRef, adt_layout_hole_tys},
+        adt_def::{AdtRef, adt_layout_hole_plan, adt_layout_hole_plan_with_explicit_args},
         binder::Binder,
         canonical::{Canonical, Canonicalized},
-        const_ty::ConstTyId,
+        const_ty::{AppFrameId, HoleId, LayoutHoleArgSite, LocalFrameId, StructuralHoleOrigin},
         fold::TyFoldable,
+        layout_holes::layout_hole_with_fallback_ty,
         normalize::normalize_ty,
         trait_def::{TraitInstId, impls_for_ty_with_constraints},
         trait_lower::{TraitArgError, TraitRefLowerError, lower_trait_ref, lower_trait_ref_impl},
         trait_resolution::PredicateListId,
         ty_def::{InvalidCause, Kind, TyData, TyId},
         ty_lower::{
-            TyAlias, collect_generic_params, lower_generic_arg_list, lower_hir_ty, lower_type_alias,
+            ConstDefaultCompletion, TyAlias, collect_generic_params, lower_generic_arg_list,
+            lower_hir_ty, lower_type_alias,
         },
         unify::UnificationTable,
     },
@@ -766,7 +768,8 @@ where
                 _ => {}
             }
         }
-        let trait_inst = match lower_trait_ref(db, ty, trait_, scope, assumptions, None) {
+        let trait_inst_result = lower_trait_ref(db, ty, trait_, scope, assumptions, None);
+        let trait_inst = match trait_inst_result {
             Ok(inst) => inst,
             Err(err) => {
                 let trait_path = trait_.path(db).to_opt().unwrap_or(path);
@@ -918,7 +921,13 @@ where
             // Deduplicate by normalized type, but preserve and return the original
             // (unnormalized) candidate to avoid prematurely collapsing projections
             // like `T::IntoIter::Item` into `T::Item`.
-            let seg_args = lower_generic_arg_list(db, path.generic_args(db), scope, assumptions);
+            let seg_args = lower_generic_arg_list(
+                db,
+                path.generic_args(db),
+                scope,
+                assumptions,
+                LayoutHoleArgSite::Path(path),
+            );
             let mut dedup: IndexMap<TyId<'db>, (TraitInstId<'db>, TyId<'db>)> = IndexMap::new();
             for (inst, ty_candidate) in assoc_tys.iter().copied() {
                 let applied = if seg_args.is_empty() {
@@ -1250,18 +1259,23 @@ pub fn resolve_name_res<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> PathResolutionResult<'db, PathRes<'db>> {
-    let args = &lower_generic_arg_list(db, path.generic_args(db), scope, assumptions);
-
+    let args = lower_generic_arg_list(
+        db,
+        path.generic_args(db),
+        scope,
+        assumptions,
+        LayoutHoleArgSite::Path(path),
+    );
     let res = match nameres.kind {
         NameResKind::Prim(prim) => {
             let ty = TyId::from_hir_prim_ty(db, prim);
-            PathRes::Ty(TyId::foldl(db, ty, args))
+            PathRes::Ty(TyId::foldl(db, ty, &args))
         }
         NameResKind::Scope(scope_id) => match scope_id {
             ScopeId::Item(item) => match item {
                 ItemKind::Struct(_) | ItemKind::Enum(_) => {
                     let adt_ref = AdtRef::try_from_item(item).unwrap();
-                    PathRes::Ty(ty_from_adtref(db, path, adt_ref, args, assumptions)?)
+                    PathRes::Ty(ty_from_adtref(db, path, adt_ref, &args, assumptions)?)
                 }
                 ItemKind::Contract(contract) => {
                     // Contracts have no generic parameters
@@ -1316,45 +1330,27 @@ pub fn resolve_name_res<'db>(
                             },
                             path,
                         ));
-                    } else {
-                        let completed = alias.param_set.complete_explicit_args_with_defaults(
-                            db,
-                            None,
-                            args,
-                            assumptions,
-                        );
-                        if completed.len() < expected {
-                            return Ok(PathRes::TyAlias(
-                                alias.clone(),
-                                TyId::invalid(
-                                    db,
-                                    InvalidCause::UnboundTypeAliasParam {
-                                        alias: type_alias,
-                                        n_given_args: args.len(),
-                                    },
-                                ),
-                            ));
-                        }
-
-                        let instantiated = alias.alias_to.instantiate(db, &completed);
-                        PathRes::TyAlias(alias.clone(), instantiated)
                     }
+                    PathRes::TyAlias(
+                        alias.clone(),
+                        alias.instantiate_from_path(db, path, &args, assumptions),
+                    )
                 }
 
                 ItemKind::Impl(impl_) => {
                     let base = impl_.ty(db);
-                    PathRes::Ty(TyId::foldl(db, base, args))
+                    PathRes::Ty(TyId::foldl(db, base, &args))
                 }
                 ItemKind::ImplTrait(impl_) => {
                     let base = impl_.ty(db);
-                    PathRes::Ty(TyId::foldl(db, base, args))
+                    PathRes::Ty(TyId::foldl(db, base, &args))
                 }
 
                 ItemKind::Trait(t) => {
                     if path.is_self_ty(db) {
                         let params = collect_generic_params(db, t.into());
                         let ty = params.trait_self(db).unwrap();
-                        let ty = TyId::foldl(db, ty, args);
+                        let ty = TyId::foldl(db, ty, &args);
                         PathRes::Ty(ty)
                     } else {
                         // Pre-validate type generic arguments of the trait path to surface
@@ -1395,7 +1391,8 @@ pub fn resolve_name_res<'db>(
                                 }
                             }
                         }
-                        match lower_trait_ref_impl(db, path, scope, assumptions, t) {
+                        let lowered = lower_trait_ref_impl(db, path, scope, assumptions, t);
+                        match lowered {
                             Ok(t) => PathRes::Trait(t),
                             Err(err) => {
                                 let kind = match err {
@@ -1430,7 +1427,7 @@ pub fn resolve_name_res<'db>(
                 let ty = param_set
                     .param_by_original_idx(db, idx as usize)
                     .unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other));
-                let ty = TyId::foldl(db, ty, args);
+                let ty = TyId::foldl(db, ty, &args);
                 PathRes::Ty(ty)
             }
 
@@ -1442,7 +1439,7 @@ pub fn resolve_name_res<'db>(
                 let self_ty = params.trait_self(db).unwrap();
 
                 let mut trait_args = vec![self_ty];
-                trait_args.extend_from_slice(args);
+                trait_args.extend_from_slice(&args);
                 let trait_inst = TraitInstId::new(db, trait_def, &trait_args, IndexMap::new());
 
                 // Create an associated type reference
@@ -1457,7 +1454,7 @@ pub fn resolve_name_res<'db>(
                 let self_ty = params.trait_self(db).unwrap();
 
                 let mut trait_args = vec![self_ty];
-                trait_args.extend_from_slice(args);
+                trait_args.extend_from_slice(&args);
                 let trait_inst = TraitInstId::new(db, t, trait_args, IndexMap::new());
 
                 let const_name = t.const_by_index(idx as usize).name(db).unwrap();
@@ -1513,31 +1510,46 @@ fn ty_from_adtref<'db>(
     let layout_provided = &args[explicit_provided_len..];
 
     // Fill trailing defaults (if any)
-    let mut completed_args = adt.param_set(db).complete_explicit_args_with_defaults(
+    let mut completed_args = adt.param_set(db).complete_explicit_args(
         db,
         None,
         explicit_args,
         assumptions,
+        ConstDefaultCompletion::metadata(Some(path))
+            .with_app_frame(Some(AppFrameId::root_path(db, path))),
     );
+    let layout_plan = if completed_args.len() == explicit_param_len {
+        adt_layout_hole_plan_with_explicit_args(db, adt, &completed_args)
+    } else {
+        adt_layout_hole_plan(db, adt)
+    };
     completed_args.extend(layout_provided.iter().copied());
 
-    let layout_hole_tys = adt_layout_hole_tys(db, adt);
     let provided_layout_len = layout_provided.len();
-    for hole_ty in layout_hole_tys.iter().copied().skip(provided_layout_len) {
-        completed_args.push(TyId::new(
+    for (layout_idx, hole_ty) in layout_plan
+        .hole_tys()
+        .iter()
+        .copied()
+        .enumerate()
+        .skip(provided_layout_len)
+    {
+        completed_args.push(layout_hole_with_fallback_ty(
             db,
-            TyData::ConstTy(ConstTyId::hole_with_ty(
+            hole_ty,
+            HoleId::structural(
                 db,
-                if hole_ty.has_invalid(db) {
-                    TyId::u256(db)
-                } else {
-                    hole_ty
+                hole_ty,
+                StructuralHoleOrigin::ExplicitWildcard {
+                    site: LayoutHoleArgSite::Path(path),
+                    arg_idx: explicit_param_len + layout_idx,
                 },
-            )),
+                LocalFrameId::root_path(db, path),
+            ),
         ));
     }
 
-    let applied = TyId::foldl(db, ty, &completed_args);
+    let applied =
+        apply_ty_args_with_metadata_suffix(db, ty, &completed_args, explicit_provided_len);
     if let TyData::Invalid(InvalidCause::TooManyGenericArgs { expected, given }) = applied.data(db)
     {
         Err(PathResError::new(
@@ -1550,6 +1562,32 @@ fn ty_from_adtref<'db>(
     } else {
         Ok(applied)
     }
+}
+
+fn apply_ty_args_with_metadata_suffix<'db>(
+    db: &'db dyn HirAnalysisDb,
+    mut base: TyId<'db>,
+    args: &[TyId<'db>],
+    metadata_start: usize,
+) -> TyId<'db> {
+    for (idx, arg) in args.iter().enumerate() {
+        if base.applicable_ty(db).is_none() {
+            return TyId::invalid(
+                db,
+                InvalidCause::TooManyGenericArgs {
+                    expected: idx,
+                    given: args.len(),
+                },
+            );
+        }
+        base = if idx < metadata_start {
+            TyId::app(db, base, *arg)
+        } else {
+            TyId::app_metadata_only(db, base, *arg)
+        };
+    }
+
+    base
 }
 
 fn pick_type_domain_from_bucket<'db>(

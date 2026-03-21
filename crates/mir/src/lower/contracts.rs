@@ -1249,6 +1249,7 @@ fn seed_effect_param_locals<'db>(
     effects: &[EffectBinding<'db>],
     core: &CoreLib<'db>,
 ) {
+    let field_layout = contract.field_layout(db);
     let fields = contract.fields(db);
     for effect in effects {
         let name = effect.binding_name.data(db).to_string();
@@ -1276,7 +1277,7 @@ fn seed_effect_param_locals<'db>(
 
         let addr_space = match effect.source {
             EffectSource::Root => AddressSpaceKind::Storage,
-            EffectSource::Field(field_idx) => match fields.get_index(field_idx as usize) {
+            EffectSource::Field(field_idx) => match field_layout.get_index(field_idx as usize) {
                 Some((_, field)) if field.is_provider => {
                     repr::effect_provider_space_for_ty(db, core, field.declared_ty)
                         .unwrap_or(AddressSpaceKind::Storage)

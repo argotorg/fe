@@ -29,6 +29,7 @@ use crate::{
     visitor::{Visitor, VisitorCtxt, walk_expr, walk_pat},
 };
 pub use callable::Callable;
+use callable::{CallGenericArgUnifyError, unify_explicit_call_generic_args};
 use env::TyCheckEnv;
 pub use env::{EffectParamSite, ExprProp, LocalBinding, ParamSite, PatBindingMode};
 pub(super) use expr::TraitOps;
@@ -213,6 +214,7 @@ impl<'db> TyChecker<'db> {
                         self.push_diag(TyDiagCollection::from(
                             TyLowerDiag::ConstHoleInValuePosition {
                                 span: contract.span().init_block().params().param(idx).ty().into(),
+                                ty,
                             },
                         ));
                         continue;
@@ -454,7 +456,7 @@ impl<'db> TyChecker<'db> {
                 let func_ty =
                     instantiate_trait_method(db, trait_method, &mut this.table, recv_ty, inst);
                 let func_ty = this.table.instantiate_to_term(func_ty);
-                let callable =
+                let mut callable =
                     Callable::new(db, func_ty, receiver.span(body).into(), Some(inst)).ok()?;
 
                 let expected_arity = callable.callable_def.arg_tys(db).len();
@@ -463,21 +465,15 @@ impl<'db> TyChecker<'db> {
                     return None;
                 }
 
-                if generic_args.is_given(db) {
-                    let given_args = crate::analysis::ty::ty_lower::lower_generic_arg_list(
-                        db,
-                        generic_args,
-                        scope,
-                        assumptions,
-                    );
-                    let offset = callable.callable_def.offset_to_explicit_params_position(db);
-                    let current_args = &callable.generic_args()[offset..];
-                    if current_args.len() != given_args.len() {
-                        return None;
-                    }
-                    for (&given, &current) in given_args.iter().zip(current_args.iter()) {
-                        this.table.unify(given, current).ok()?;
-                    }
+                match unify_explicit_call_generic_args(
+                    &mut callable,
+                    this,
+                    generic_args,
+                    |this, _, given, current| this.table.unify(given, *current).is_ok(),
+                ) {
+                    Ok(()) => {}
+                    Err(CallGenericArgUnifyError::ArityMismatch { .. })
+                    | Err(CallGenericArgUnifyError::UnificationFailed) => return None,
                 }
 
                 let receiver_prop = this.env.typed_expr(receiver)?;
@@ -1170,6 +1166,7 @@ impl<'db> TyChecker<'db> {
             self.push_diag(TyDiagCollection::from(
                 TyLowerDiag::ConstHoleInValuePosition {
                     span: span.clone().into(),
+                    ty,
                 },
             ));
             return TyId::invalid(self.db, InvalidCause::Other);
@@ -1459,6 +1456,21 @@ impl<'db> TyChecker<'db> {
         self.instantiate_to_term(ty)
     }
 
+    fn instantiate_inherent_method_to_term(
+        &mut self,
+        method: CallableDef<'db>,
+        receiver_ty: TyId<'db>,
+    ) -> TyId<'db> {
+        let mut ty = TyId::func(self.db, method);
+        for &arg in receiver_ty.generic_args(self.db) {
+            if ty.applicable_ty(self.db).is_none() {
+                break;
+            }
+            ty = TyId::app(self.db, ty, arg);
+        }
+        self.instantiate_to_term(ty)
+    }
+
     fn instantiate_callable_to_term(
         &mut self,
         mut ty: TyId<'db>,
@@ -1474,7 +1486,15 @@ impl<'db> TyChecker<'db> {
             let param_ty = callable.params(self.db).get(param_index).copied();
             let arg = self.table.new_var_for(prop);
             if let Some(param_ty) = param_ty
-                && matches!(param_ty.data(self.db), TyData::TyParam(p) if p.is_effect_provider())
+                && (matches!(param_ty.data(self.db), TyData::TyParam(p) if p.is_effect_provider())
+                    || matches!(
+                        param_ty.data(self.db),
+                        TyData::ConstTy(const_ty)
+                            if matches!(
+                                const_ty.data(self.db),
+                                ConstTyData::TyParam(param, _) if param.is_implicit()
+                            )
+                    ))
             {
                 self.effect_provider_keys
                     .extend(inference_keys(self.db, &arg));

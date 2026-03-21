@@ -72,7 +72,7 @@ pub fn log_and_chain(x: i32) -> Result<(), Option<i32>>
     }
 }
 
-pub fn with_logger<R, L: Logger, F: Fn<(), R>>(logger: L, _ func: F) -> R {
+pub fn with_logger<R, L: Logger, F: Fn<(), R>>(logger: own L, _ func: F) -> R {
     with (Logger = logger) {
         func.call(())
     }

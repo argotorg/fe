@@ -1789,19 +1789,31 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 error_code,
             },
 
-            Self::ConstHoleInValuePosition { span } => CompleteDiagnostic {
-                severity: Severity::Error,
-                message: "layout hole `_` is not allowed in value position".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
+            Self::ConstHoleInValuePosition { span, ty } => {
+                let mut sub_diagnostics = vec![SubDiagnostic {
                     style: LabelStyle::Primary,
-                    message: "this type contains `_`, which is only allowed in contract fields and `uses (...)` parameter types".to_string(),
+                    message: "this type contains an inferred const (`_`)".to_string(),
                     span: span.resolve(db),
-                }],
-                notes: vec![
-                    "replace `_` with an explicit const argument in value positions".to_string(),
-                ],
-                error_code,
-            },
+                }];
+                if let Some(name_span) = ty.name_span(db) {
+                    let type_name = ty.base_ty(db).pretty_print(db);
+                    sub_diagnostics.push(SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format!("`{type_name}` is defined here"),
+                        span: name_span.resolve(db),
+                    });
+                }
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "type with inferred const generic parameter `_` can not be used here".to_string(),
+                    sub_diagnostics,
+                    notes: vec![
+                        "specify an explicit const generic argument".to_string(),
+                    ],
+                    error_code,
+                }
+            }
 
             Self::OwnParamCannotBeBorrow { span, ty } => CompleteDiagnostic {
                 severity: Severity::Error,
@@ -2623,6 +2635,35 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                         key_str, func_name, trait_str
                     ),
                     sub_diagnostics,
+                    notes: vec![],
+                    error_code,
+                }
+            }
+
+            Self::WithEffectTraitUnsatisfied {
+                primary,
+                key,
+                trait_req,
+                given,
+            } => {
+                let key_str = key.pretty_print(db);
+                let trait_str = trait_req.pretty_print(db, false);
+                let given_ty = given.pretty_print(db).to_string();
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: format!(
+                        "keyed effect binding `{}` requires `{}` to implement `{}`",
+                        key_str, given_ty, trait_str
+                    ),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!(
+                            "`{}` does not implement `{}` for effect `{}`",
+                            given_ty, trait_str, key_str
+                        ),
+                        span: primary.resolve(db),
+                    }],
                     notes: vec![],
                     error_code,
                 }

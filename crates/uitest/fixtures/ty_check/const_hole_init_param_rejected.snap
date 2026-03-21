@@ -1,0 +1,16 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/const_hole_init_param_rejected.fe
+---
+error[3-0032]: type with inferred const generic parameter `_` can not be used here
+  ┌─ const_hole_init_param_rejected.fe:4:13
+  │
+1 │ struct Slot<T, const ROOT: u256 = _> {}
+  │        ---- `Slot` is defined here
+  ·
+4 │     init(x: Slot<u256>) {}
+  │             ^^^^^^^^^^ this type contains an inferred const (`_`)
+  │
+  = specify an explicit const generic argument

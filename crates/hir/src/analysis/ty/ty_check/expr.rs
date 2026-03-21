@@ -7,23 +7,31 @@ use crate::core::hir_def::{
     ArithBinOp, BinOp, CallableDef, Cond, CondId, Expr, ExprId, FieldIndex, IdentId, IntegerId,
     LitKind, LogicalBinOp, Partial, Pat, PatId, PathId, UnOp, VariantKind, WithBinding,
 };
+use crate::core::semantic::EffectBinding;
 use crate::span::DynLazySpan;
 
 use super::{
     ConstRef, RecordLike, Typeable,
-    env::{EffectOrigin, ExprProp, LocalBinding, PendingPrimitiveOp, ProvidedEffect, TyCheckEnv},
+    env::{
+        EffectCandidate, EffectKey, EffectOrigin, ExprProp, LocalBinding, PendingPrimitiveOp,
+        ProvidedEffect, TyCheckEnv,
+    },
     path::ResolvedPathInBody,
 };
 use crate::analysis::place::{Place, PlaceBase};
 use crate::analysis::ty::{
     adt_def::AdtRef,
-    binder::Binder,
     canonical::Canonicalized,
     corelib::{resolve_core_range_types, resolve_core_trait, resolve_lib_type_path},
     diagnostics::{BodyDiag, FuncBodyDiag},
-    effects::EffectKeyKind,
-    effects::place_effect_provider_param_index_map,
+    effects::{
+        EffectKeyKind, instantiate_trait_effect_goal, instantiate_trait_effect_key,
+        instantiate_trait_effect_lookup_key, instantiate_type_effect_key,
+        instantiate_type_effect_lookup_key, normalize_effect_identity_trait,
+        normalize_effect_identity_ty, place_effect_provider_param_index_map,
+    },
     fold::{AssocTySubst, TyFoldable as _, TyFolder},
+    method_cmp::trait_effect_key_matches_with,
     trait_def::TraitInstId,
     trait_resolution::{
         GoalSatisfiability, PredicateListId, TraitSolveCx,
@@ -55,13 +63,14 @@ use common::indexmap::IndexMap;
 #[derive(Debug, Clone, Copy)]
 enum EffectRequirement<'db> {
     Type(TyId<'db>),
-    Trait(TraitInstId<'db>),
+    TraitKey(TraitInstId<'db>),
 }
 
 #[derive(Debug, Clone, Copy)]
 enum EffectSatisfaction<'db> {
     Direct,
     Provider { target_ty: TyId<'db> },
+    TraitByWitness { matched_key: TraitInstId<'db> },
     TraitByValue,
 }
 
@@ -927,8 +936,46 @@ impl<'db> TyChecker<'db> {
 
             match binding.key_path {
                 Some(key_path) => {
-                    if let Some(key_path) = key_path.to_opt() {
-                        self.env.insert_effect_binding(key_path, provided);
+                    if let Some(key_path) = key_path.to_opt()
+                        && let Some(effect_key) = self.env.effect_key_for_with_binding_in_scope(
+                            key_path,
+                            self.env.scope(),
+                            self.env.assumptions(),
+                        )
+                    {
+                        if !provided.ty.has_invalid(self.db)
+                            && let EffectKey::Trait(trait_key) = effect_key
+                        {
+                            let trait_req =
+                                instantiate_trait_effect_goal(self.db, trait_key, provided.ty);
+                            let canonical = Canonicalized::new(self.db, trait_req);
+                            let sat = is_goal_satisfiable(
+                                self.db,
+                                TraitSolveCx::new(self.db, self.env.scope())
+                                    .with_assumptions(self.env.assumptions()),
+                                canonical.value,
+                            );
+                            if matches!(
+                                sat,
+                                GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
+                            ) {
+                                self.push_diag(BodyDiag::WithEffectTraitUnsatisfied {
+                                    primary: binding.value.span(self.body()).into(),
+                                    key: key_path,
+                                    trait_req,
+                                    given: provided.ty,
+                                });
+                                self.env.insert_effect_binding(
+                                    effect_key,
+                                    ProvidedEffect {
+                                        ty: TyId::invalid(self.db, InvalidCause::Other),
+                                        ..provided
+                                    },
+                                );
+                                continue;
+                            }
+                        }
+                        self.env.insert_effect_binding(effect_key, provided);
                     }
                 }
                 None => {
@@ -1014,22 +1061,11 @@ impl<'db> TyChecker<'db> {
             .instantiate_identity()
             .extend_all_bounds(self.db);
 
-        let effect_ref_trait =
-            resolve_core_trait(self.db, self.env.scope(), &["effect_ref", "EffectRef"])
-                .expect("missing required core trait `core::effect_ref::EffectRef`");
-        let effect_ref_mut_trait =
-            resolve_core_trait(self.db, self.env.scope(), &["effect_ref", "EffectRefMut"])
-                .expect("missing required core trait `core::effect_ref::EffectRefMut`");
-        let effect_handle_trait =
-            resolve_core_trait(self.db, self.env.scope(), &["effect_ref", "EffectHandle"])
-                .expect("missing required core trait `core::effect_ref::EffectHandle`");
-        let target_ident = IdentId::new(self.db, "Target".to_string());
-
         let callee_provider_arg_idx_by_effect =
             place_effect_provider_param_index_map(self.db, func);
-        let mut callee_effect_key_tys = vec![None; func.effects(self.db).data(self.db).len()];
+        let mut callee_effect_bindings = vec![None; func.effects(self.db).data(self.db).len()];
         for binding in func.effect_bindings(self.db) {
-            callee_effect_key_tys[binding.binding_idx as usize] = binding.key_ty;
+            callee_effect_bindings[binding.binding_idx as usize] = Some(binding);
         }
 
         let provided_span = |provided: ProvidedEffect<'db>| match provided.origin {
@@ -1061,106 +1097,33 @@ impl<'db> TyChecker<'db> {
                 _ => super::EffectPassMode::Unknown,
             };
 
-        let provider_target_ty = |this: &mut Self,
-                                  provided_ty: TyId<'db>,
-                                  required_mut: bool|
-         -> Option<TyId<'db>> {
-            if let Some((kind, inner_ty)) = provided_ty.as_capability(this.db) {
-                if required_mut && !matches!(kind, CapabilityKind::Mut) {
-                    return None;
-                }
-                return Some(inner_ty);
-            }
-
-            let solve_cx = TraitSolveCx::new(this.db, this.env.scope())
-                .with_assumptions(this.env.assumptions());
-            let effect_handle_inst = TraitInstId::new(
-                this.db,
-                effect_handle_trait,
-                vec![provided_ty],
-                IndexMap::new(),
-            );
-            let canonical_handle = Canonicalized::new(this.db, effect_handle_inst);
-            let handle_sat = is_goal_satisfiable(this.db, solve_cx, canonical_handle.value);
-
-            let target_ty = match handle_sat {
-                GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid => provided_ty,
-                _ => {
-                    let target_assoc = effect_handle_inst.assoc_ty(this.db, target_ident)?;
-                    normalize_ty(
-                        this.db,
-                        target_assoc,
-                        this.env.scope(),
-                        this.env.assumptions(),
-                    )
-                    .fold_with(this.db, &mut this.table)
-                }
-            };
-
-            let effect_ref_inst = TraitInstId::new(
-                this.db,
-                effect_ref_trait,
-                vec![provided_ty, target_ty],
-                IndexMap::new(),
-            );
-            let canonical_ref = Canonicalized::new(this.db, effect_ref_inst);
-            let ref_sat = is_goal_satisfiable(this.db, solve_cx, canonical_ref.value);
-            if matches!(
-                ref_sat,
-                GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
-            ) {
-                return None;
-            }
-
-            if required_mut {
-                let effect_ref_mut_inst = TraitInstId::new(
-                    this.db,
-                    effect_ref_mut_trait,
-                    vec![provided_ty, target_ty],
-                    IndexMap::new(),
-                );
-                let canonical_mut = Canonicalized::new(this.db, effect_ref_mut_inst);
-                let mut_sat = is_goal_satisfiable(this.db, solve_cx, canonical_mut.value);
-                if matches!(
-                    mut_sat,
-                    GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
-                ) {
-                    return None;
-                }
-            }
-
-            Some(target_ty)
-        };
-
         for (param_idx, effect) in func.effect_params(self.db).enumerate() {
             let Some(key_path) = effect.key_path(self.db) else {
                 continue;
             };
-
-            // If the callee's effect key doesn't resolve, avoid cascading into
-            // confusing "missing effect" diagnostics at call sites.
-            let Ok(path_res) =
-                resolve_path(self.db, key_path, func.scope(), callee_assumptions, false)
+            let Some(binding) = callee_effect_bindings
+                .get(effect.index())
+                .and_then(|binding| binding.as_ref())
             else {
                 continue;
             };
-            if !matches!(
-                path_res,
-                PathRes::Ty(_) | PathRes::TyAlias(_, _) | PathRes::Trait(_)
-            ) {
+            let Some(effect_key) =
+                self.instantiate_effect_lookup_key_from_binding(binding, callable)
+            else {
                 continue;
-            }
+            };
+            let Some(requirement) =
+                self.instantiate_effect_requirement_from_binding(binding, callable)
+            else {
+                continue;
+            };
 
             let provider_arg_idx_for_param = callee_provider_arg_idx_by_effect
                 .get(effect.index())
                 .copied()
                 .flatten();
 
-            let candidate_frames = self.env.effect_candidate_frames_in_scope(
-                key_path,
-                func.scope(),
-                callee_assumptions,
-            );
+            let candidate_frames = self.env.effect_candidate_frames_for_key(effect_key);
             if candidate_frames.is_empty() {
                 let diag = BodyDiag::MissingEffect {
                     primary: call_span.clone(),
@@ -1173,24 +1136,20 @@ impl<'db> TyChecker<'db> {
 
             let required_mut = effect.is_mut(self.db);
 
-            let mut compute_viable = |cands: &[ProvidedEffect<'db>]| {
+            let mut compute_viable = |cands: &[EffectCandidate<'db>]| {
                 let mut viable: SmallVec<
                     [(
-                        ProvidedEffect<'db>,
+                        EffectCandidate<'db>,
                         EffectRequirement<'db>,
                         EffectSatisfaction<'db>,
                     ); 2],
                 > = SmallVec::new();
 
-                for provided in cands.iter().copied() {
-                    let Some(requirement) = self.resolve_effect_requirement(
-                        &path_res,
-                        callable,
-                        callee_effect_key_tys.get(effect.index()).copied().flatten(),
-                        provided.ty,
-                    ) else {
+                for candidate in cands.iter().copied() {
+                    let provided = candidate.provided;
+                    if provided.ty.has_invalid(self.db) {
                         continue;
-                    };
+                    }
 
                     match requirement {
                         EffectRequirement::Type(expected) => {
@@ -1216,7 +1175,7 @@ impl<'db> TyChecker<'db> {
                                 && direct_ty.is_some_and(|ty| can_unify(self, expected, ty))
                             {
                                 viable.push((
-                                    provided,
+                                    candidate,
                                     EffectRequirement::Type(expected),
                                     EffectSatisfaction::Direct,
                                 ));
@@ -1224,7 +1183,7 @@ impl<'db> TyChecker<'db> {
                             }
 
                             if let Some(target_ty) =
-                                provider_target_ty(self, provided.ty, required_mut)
+                                self.effect_provider_target_ty(provided.ty, required_mut)
                                 && can_unify(self, expected, target_ty)
                             {
                                 if required_mut
@@ -1235,28 +1194,31 @@ impl<'db> TyChecker<'db> {
                                     continue;
                                 }
                                 viable.push((
-                                    provided,
+                                    candidate,
                                     EffectRequirement::Type(expected),
                                     EffectSatisfaction::Provider { target_ty },
                                 ));
                             }
                         }
-                        EffectRequirement::Trait(trait_req) => {
-                            let canonical = Canonicalized::new(self.db, trait_req);
-                            if !matches!(
-                                is_goal_satisfiable(
-                                    self.db,
-                                    TraitSolveCx::new(self.db, self.env.scope())
-                                        .with_assumptions(self.env.assumptions()),
-                                    canonical.value
-                                ),
-                                GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
-                            ) {
-                                viable.push((
-                                    provided,
-                                    EffectRequirement::Trait(trait_req),
-                                    EffectSatisfaction::TraitByValue,
-                                ))
+                        EffectRequirement::TraitKey(trait_key) => {
+                            if let Some(EffectKey::Trait(matched_key)) = candidate.matched_key {
+                                if self.match_trait_effect_key(trait_key, matched_key, false) {
+                                    viable.push((
+                                        candidate,
+                                        EffectRequirement::TraitKey(trait_key),
+                                        EffectSatisfaction::TraitByWitness { matched_key },
+                                    ));
+                                }
+                            } else {
+                                let trait_goal =
+                                    instantiate_trait_effect_goal(self.db, trait_key, provided.ty);
+                                if self.trait_effect_goal_is_satisfiable(trait_goal) {
+                                    viable.push((
+                                        candidate,
+                                        EffectRequirement::TraitKey(trait_key),
+                                        EffectSatisfaction::TraitByValue,
+                                    ))
+                                }
                             }
                         }
                     }
@@ -1267,7 +1229,7 @@ impl<'db> TyChecker<'db> {
 
             let mut viable: SmallVec<
                 [(
-                    ProvidedEffect<'db>,
+                    EffectCandidate<'db>,
                     EffectRequirement<'db>,
                     EffectSatisfaction<'db>,
                 ); 2],
@@ -1281,25 +1243,25 @@ impl<'db> TyChecker<'db> {
             }
 
             if viable.is_empty() {
-                let all_candidates: SmallVec<[ProvidedEffect<'db>; 2]> =
+                let all_candidates: SmallVec<[EffectCandidate<'db>; 2]> =
                     candidate_frames.iter().flatten().copied().collect();
-
-                if let [provided] = all_candidates.as_slice()
-                    && let Some(requirement) = self.resolve_effect_requirement(
-                        &path_res,
-                        callable,
-                        callee_effect_key_tys.get(effect.index()).copied().flatten(),
-                        provided.ty,
-                    )
+                if all_candidates
+                    .iter()
+                    .all(|candidate| candidate.provided.ty.has_invalid(self.db))
                 {
+                    continue;
+                }
+
+                if let [candidate] = all_candidates.as_slice() {
+                    let provided = candidate.provided;
                     match requirement {
                         EffectRequirement::Type(expected) => {
-                            let place = place_for(self, *provided);
-                            let direct_pass_mode = direct_pass_mode_for(*provided, place.as_ref());
+                            let place = place_for(self, provided);
+                            let direct_pass_mode = direct_pass_mode_for(provided, place.as_ref());
                             let provider_target_nonmut =
-                                provider_target_ty(self, provided.ty, false);
+                                self.effect_provider_target_ty(provided.ty, false);
                             let provider_target_required = if required_mut {
-                                provider_target_ty(self, provided.ty, true)
+                                self.effect_provider_target_ty(provided.ty, true)
                             } else {
                                 None
                             };
@@ -1317,7 +1279,7 @@ impl<'db> TyChecker<'db> {
                                         primary: call_span.clone(),
                                         func,
                                         key: key_path,
-                                        provided_span: provided_span(*provided),
+                                        provided_span: provided_span(provided),
                                     };
                                     self.push_diag(diag);
                                 } else {
@@ -1333,7 +1295,7 @@ impl<'db> TyChecker<'db> {
                                     primary: call_span.clone(),
                                     func,
                                     key: key_path,
-                                    provided_span: provided_span(*provided),
+                                    provided_span: provided_span(provided),
                                 };
                                 self.push_diag(diag);
                             } else {
@@ -1343,31 +1305,24 @@ impl<'db> TyChecker<'db> {
                                     key: key_path,
                                     expected,
                                     given: provided.ty,
-                                    provided_span: provided_span(*provided),
+                                    provided_span: provided_span(provided),
                                 };
                                 self.push_diag(diag);
                             }
                         }
-                        EffectRequirement::Trait(trait_req) => {
-                            let canonical = Canonicalized::new(self.db, trait_req);
-                            let sat = is_goal_satisfiable(
-                                self.db,
-                                TraitSolveCx::new(self.db, self.env.scope())
-                                    .with_assumptions(self.env.assumptions()),
-                                canonical.value,
-                            );
-
-                            if matches!(
-                                sat,
-                                GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
-                            ) {
+                        EffectRequirement::TraitKey(trait_key) => {
+                            let trait_req =
+                                instantiate_trait_effect_goal(self.db, trait_key, provided.ty);
+                            if candidate.matched_key.is_some()
+                                || !self.trait_effect_goal_is_satisfiable(trait_req)
+                            {
                                 let diag = BodyDiag::EffectTraitUnsatisfied {
                                     primary: call_span.clone(),
                                     func,
                                     key: key_path,
                                     trait_req,
                                     given: provided.ty,
-                                    provided_span: provided_span(*provided),
+                                    provided_span: provided_span(provided),
                                 };
                                 self.push_diag(diag);
                             } else {
@@ -1392,8 +1347,10 @@ impl<'db> TyChecker<'db> {
                 continue;
             }
 
-            let (provided, requirement, satisfaction) = match viable.as_slice() {
-                [(provided, requirement, satisfaction)] => (*provided, *requirement, *satisfaction),
+            let (candidate, requirement, satisfaction) = match viable.as_slice() {
+                [(candidate, requirement, satisfaction)] => {
+                    (*candidate, *requirement, *satisfaction)
+                }
                 _ => {
                     let Some(required_name) = effect.name(self.db) else {
                         let diag = BodyDiag::AmbiguousEffect {
@@ -1405,20 +1362,21 @@ impl<'db> TyChecker<'db> {
                         continue;
                     };
 
-                    let mut name_matches = viable.iter().copied().filter(|(provided, ..)| {
-                        match (provided.origin, provided.binding) {
-                            (
-                                EffectOrigin::Param {
-                                    name: Some(name), ..
-                                },
-                                _,
-                            ) => name == required_name,
-                            (EffectOrigin::With { .. }, Some(binding)) => {
-                                binding.binding_name(&self.env) == required_name
+                    let mut name_matches =
+                        viable.iter().copied().filter(|(candidate, ..)| {
+                            match (candidate.provided.origin, candidate.provided.binding) {
+                                (
+                                    EffectOrigin::Param {
+                                        name: Some(name), ..
+                                    },
+                                    _,
+                                ) => name == required_name,
+                                (EffectOrigin::With { .. }, Some(binding)) => {
+                                    binding.binding_name(&self.env) == required_name
+                                }
+                                _ => false,
                             }
-                            _ => false,
-                        }
-                    });
+                        });
 
                     if let Some(best) = name_matches.next()
                         && name_matches.next().is_none()
@@ -1435,6 +1393,24 @@ impl<'db> TyChecker<'db> {
                     }
                 }
             };
+            let provided = candidate.provided;
+            if let (
+                EffectRequirement::TraitKey(trait_key),
+                EffectSatisfaction::TraitByWitness { matched_key },
+            ) = (requirement, satisfaction)
+                && !self.match_trait_effect_key(trait_key, matched_key, true)
+            {
+                let diag = BodyDiag::EffectTraitUnsatisfied {
+                    primary: call_span.clone(),
+                    func,
+                    key: key_path,
+                    trait_req: instantiate_trait_effect_goal(self.db, trait_key, provided.ty),
+                    given: provided.ty,
+                    provided_span: provided_span(provided),
+                };
+                self.push_diag(diag);
+                continue;
+            }
 
             let (arg, pass_mode) = match satisfaction {
                 EffectSatisfaction::Direct => {
@@ -1467,6 +1443,16 @@ impl<'db> TyChecker<'db> {
                     (arg, pass_mode)
                 }
                 EffectSatisfaction::Provider { .. } | EffectSatisfaction::TraitByValue => {
+                    let arg = match provided.origin {
+                        EffectOrigin::With { value_expr } => super::EffectArg::Value(value_expr),
+                        EffectOrigin::Param { .. } => provided
+                            .binding
+                            .map(super::EffectArg::Binding)
+                            .unwrap_or(super::EffectArg::Unknown),
+                    };
+                    (arg, super::EffectPassMode::ByValue)
+                }
+                EffectSatisfaction::TraitByWitness { .. } => {
                     let arg = match provided.origin {
                         EffectOrigin::With { value_expr } => super::EffectArg::Value(value_expr),
                         EffectOrigin::Param { .. } => provided
@@ -1513,20 +1499,30 @@ impl<'db> TyChecker<'db> {
             if let Some(provider_arg_idx) = provider_arg_idx_for_param
                 && matches!(
                     satisfaction,
-                    EffectSatisfaction::Provider { .. } | EffectSatisfaction::TraitByValue
+                    EffectSatisfaction::Provider { .. }
+                        | EffectSatisfaction::Direct
+                        | EffectSatisfaction::TraitByValue
+                        | EffectSatisfaction::TraitByWitness { .. }
                 )
+                && !matches!(pass_mode, super::EffectPassMode::ByPlace)
                 && let Some(provider_var) = callable.generic_args().get(provider_arg_idx).copied()
             {
                 let existing_provider = self.table.fold_ty(self.db, provider_var);
+                let given = match satisfaction {
+                    EffectSatisfaction::Provider { .. } => provided.ty,
+                    EffectSatisfaction::Direct => provided.ty,
+                    EffectSatisfaction::TraitByValue
+                    | EffectSatisfaction::TraitByWitness { .. } => provided.ty,
+                };
                 let snapshot = self.table.snapshot();
-                if self.table.unify(provider_var, provided.ty).is_err() {
+                if self.table.unify(provider_var, given).is_err() {
                     self.table.rollback_to(snapshot);
                     let diag = BodyDiag::EffectProviderMismatch {
                         primary: call_span.clone(),
                         func,
                         key: key_path,
                         expected: existing_provider,
-                        given: provided.ty,
+                        given,
                         provided_span: provided_span(provided),
                     };
                     self.push_diag(diag);
@@ -1543,7 +1539,7 @@ impl<'db> TyChecker<'db> {
                         callee_assumptions,
                     )),
                 ),
-                EffectRequirement::Trait(_) => (EffectKeyKind::Trait, None),
+                EffectRequirement::TraitKey(_) => (EffectKeyKind::Trait, None),
             };
 
             // Provider generic argument selection for direct place-effects is deferred to MIR
@@ -1566,7 +1562,8 @@ impl<'db> TyChecker<'db> {
                         .as_capability(self.db)
                         .map(|(_, inner)| inner)
                         .unwrap_or(provided.ty),
-                    EffectSatisfaction::TraitByValue => provided.ty,
+                    EffectSatisfaction::TraitByValue
+                    | EffectSatisfaction::TraitByWitness { .. } => provided.ty,
                 };
                 if self.table.unify(expected, given).is_err() {
                     let diag = BodyDiag::EffectTypeMismatch {
@@ -1585,35 +1582,198 @@ impl<'db> TyChecker<'db> {
         resolved_args
     }
 
-    fn resolve_effect_requirement(
+    fn instantiate_effect_requirement_from_binding(
         &mut self,
-        path_res: &PathRes<'db>,
+        binding: &EffectBinding<'db>,
         callable: &Callable<'db>,
-        expected_type_key: Option<TyId<'db>>,
-        provided_ty: TyId<'db>,
     ) -> Option<EffectRequirement<'db>> {
-        match path_res {
-            PathRes::Ty(_) | PathRes::TyAlias(_, _) => {
-                let mut expected =
-                    Binder::bind(expected_type_key?).instantiate(self.db, callable.generic_args());
-                if let Some(inst) = callable.trait_inst() {
-                    let mut subst = AssocTySubst::new(inst);
-                    expected = expected.fold_with(self.db, &mut subst);
-                }
-                Some(EffectRequirement::Type(expected))
-            }
-            PathRes::Trait(trait_inst) => {
-                let trait_req = crate::analysis::ty::effects::instantiate_trait_effect_requirement(
+        match binding.key_kind {
+            EffectKeyKind::Type => {
+                let expected =
+                    instantiate_type_effect_key(self.db, binding.key_ty?, callable.generic_args())
+                        .fold_with(self.db, &mut self.table);
+                Some(EffectRequirement::Type(normalize_effect_identity_ty(
                     self.db,
-                    *trait_inst,
-                    callable.generic_args(),
-                    provided_ty,
+                    expected,
+                    self.env.scope(),
+                    self.env.assumptions(),
                     callable.trait_inst(),
-                );
-                Some(EffectRequirement::Trait(trait_req))
+                )))
             }
-            _ => None,
+            EffectKeyKind::Trait => Some(EffectRequirement::TraitKey(
+                normalize_effect_identity_trait(
+                    self.db,
+                    instantiate_trait_effect_key(
+                        self.db,
+                        binding.key_trait?,
+                        callable.generic_args(),
+                        None,
+                    )
+                    .fold_with(self.db, &mut self.table),
+                    self.env.scope(),
+                    self.env.assumptions(),
+                    callable.trait_inst(),
+                ),
+            )),
+            EffectKeyKind::Other => None,
         }
+    }
+
+    fn instantiate_effect_lookup_key_from_binding(
+        &mut self,
+        binding: &EffectBinding<'db>,
+        callable: &Callable<'db>,
+    ) -> Option<EffectKey<'db>> {
+        match binding.key_kind {
+            EffectKeyKind::Type => {
+                let key = instantiate_type_effect_lookup_key(
+                    self.db,
+                    binding.key_ty?,
+                    callable.generic_args(),
+                )
+                .fold_with(self.db, &mut self.table);
+                Some(EffectKey::Type(normalize_effect_identity_ty(
+                    self.db,
+                    key,
+                    self.env.scope(),
+                    self.env.assumptions(),
+                    callable.trait_inst(),
+                )))
+            }
+            EffectKeyKind::Trait => {
+                let key = instantiate_trait_effect_lookup_key(
+                    self.db,
+                    binding.key_trait?,
+                    callable.generic_args(),
+                    None,
+                )
+                .fold_with(self.db, &mut self.table);
+                Some(EffectKey::Trait(normalize_effect_identity_trait(
+                    self.db,
+                    key,
+                    self.env.scope(),
+                    self.env.assumptions(),
+                    callable.trait_inst(),
+                )))
+            }
+            EffectKeyKind::Other => None,
+        }
+    }
+
+    fn trait_effect_goal_is_satisfiable(&self, trait_goal: TraitInstId<'db>) -> bool {
+        let canonical = Canonicalized::new(self.db, trait_goal);
+        !matches!(
+            is_goal_satisfiable(
+                self.db,
+                TraitSolveCx::new(self.db, self.env.scope())
+                    .with_assumptions(self.env.assumptions()),
+                canonical.value,
+            ),
+            GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
+        )
+    }
+
+    fn effect_provider_target_ty(
+        &mut self,
+        provided_ty: TyId<'db>,
+        required_mut: bool,
+    ) -> Option<TyId<'db>> {
+        if let Some((kind, inner_ty)) = provided_ty.as_capability(self.db) {
+            if required_mut && !matches!(kind, CapabilityKind::Mut) {
+                return None;
+            }
+            return Some(inner_ty);
+        }
+
+        let effect_ref_trait =
+            resolve_core_trait(self.db, self.env.scope(), &["effect_ref", "EffectRef"])
+                .expect("missing required core trait `core::effect_ref::EffectRef`");
+        let effect_ref_mut_trait =
+            resolve_core_trait(self.db, self.env.scope(), &["effect_ref", "EffectRefMut"])
+                .expect("missing required core trait `core::effect_ref::EffectRefMut`");
+        let effect_handle_trait =
+            resolve_core_trait(self.db, self.env.scope(), &["effect_ref", "EffectHandle"])
+                .expect("missing required core trait `core::effect_ref::EffectHandle`");
+        let target_ident = IdentId::new(self.db, "Target".to_string());
+        let solve_cx =
+            TraitSolveCx::new(self.db, self.env.scope()).with_assumptions(self.env.assumptions());
+        let effect_handle_inst = TraitInstId::new(
+            self.db,
+            effect_handle_trait,
+            vec![provided_ty],
+            IndexMap::new(),
+        );
+        let canonical_handle = Canonicalized::new(self.db, effect_handle_inst);
+        let handle_sat = is_goal_satisfiable(self.db, solve_cx, canonical_handle.value);
+
+        let target_ty = match handle_sat {
+            GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid => provided_ty,
+            _ => {
+                let target_assoc = effect_handle_inst.assoc_ty(self.db, target_ident)?;
+                normalize_ty(
+                    self.db,
+                    target_assoc,
+                    self.env.scope(),
+                    self.env.assumptions(),
+                )
+                .fold_with(self.db, &mut self.table)
+            }
+        };
+
+        let effect_ref_inst = TraitInstId::new(
+            self.db,
+            effect_ref_trait,
+            vec![provided_ty, target_ty],
+            IndexMap::new(),
+        );
+        let canonical_ref = Canonicalized::new(self.db, effect_ref_inst);
+        let ref_sat = is_goal_satisfiable(self.db, solve_cx, canonical_ref.value);
+        if matches!(
+            ref_sat,
+            GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
+        ) {
+            return None;
+        }
+
+        if required_mut {
+            let effect_ref_mut_inst = TraitInstId::new(
+                self.db,
+                effect_ref_mut_trait,
+                vec![provided_ty, target_ty],
+                IndexMap::new(),
+            );
+            let canonical_mut = Canonicalized::new(self.db, effect_ref_mut_inst);
+            let mut_sat = is_goal_satisfiable(self.db, solve_cx, canonical_mut.value);
+            if matches!(
+                mut_sat,
+                GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
+            ) {
+                return None;
+            }
+        }
+
+        Some(target_ty)
+    }
+
+    fn match_trait_effect_key(
+        &mut self,
+        expected: TraitInstId<'db>,
+        actual: TraitInstId<'db>,
+        commit: bool,
+    ) -> bool {
+        let snapshot = self.table.snapshot();
+        let matched = trait_effect_key_matches_with(self.db, expected, actual, |lhs, rhs| {
+            self.table.unify(lhs, rhs).is_ok()
+        });
+        if !matched {
+            self.table.rollback_to(snapshot);
+            return false;
+        }
+
+        if !commit {
+            self.table.rollback_to(snapshot);
+        }
+        true
     }
 
     fn check_method_call(&mut self, expr: ExprId, expr_data: &Expr<'db>) -> ExprProp<'db> {
@@ -1714,10 +1874,10 @@ impl<'db> TyChecker<'db> {
         };
 
         let (func_ty, trait_inst) = match candidate {
-            MethodCandidate::InherentMethod(func_def) => {
-                let func_ty = TyId::func(self.db, func_def);
-                (self.instantiate_to_term(func_ty), None)
-            }
+            MethodCandidate::InherentMethod(func_def) => (
+                self.instantiate_inherent_method_to_term(func_def, selected_receiver_ty),
+                None,
+            ),
 
             MethodCandidate::TraitMethod(cand) => {
                 let inst = canonical_r_ty.extract_solution(&mut self.table, cand.inst);
@@ -1838,7 +1998,11 @@ impl<'db> TyChecker<'db> {
 
         match res {
             ResolvedPathInBody::Binding(binding) => {
-                let ty = self.env.lookup_binding_ty(&binding);
+                let ty = self
+                    .env
+                    .lookup_binding_ty(&binding)
+                    .fold_with(self.db, &mut self.table);
+                let ty = self.normalize_ty(ty);
                 let mut is_mut = binding.is_mut();
                 if let Some((cap, _)) = ty.as_capability(self.db) {
                     is_mut = match cap {
@@ -1935,22 +2099,10 @@ impl<'db> TyChecker<'db> {
                 PathRes::Method(receiver_ty, candidate) => {
                     let canonical_r_ty = Canonicalized::new(self.db, receiver_ty);
                     let (method_ty, trait_inst) = match candidate {
-                        MethodCandidate::InherentMethod(func_def) => {
-                            // TODO: move this to path resolver
-                            let mut method_ty = TyId::func(self.db, func_def);
-                            for &arg in receiver_ty.generic_args(self.db) {
-                                // If the method is defined in "specialized" impl block
-                                // of a generic type (eg `impl Option<i32>`), then
-                                // calling `TyId::app(db, method_ty, ..)` will result in
-                                // `TyId::invalid`.
-                                if method_ty.applicable_ty(self.db).is_some() {
-                                    method_ty = TyId::app(self.db, method_ty, arg);
-                                } else {
-                                    break;
-                                }
-                            }
-                            (self.instantiate_to_term(method_ty), None)
-                        }
+                        MethodCandidate::InherentMethod(func_def) => (
+                            self.instantiate_inherent_method_to_term(func_def, receiver_ty),
+                            None,
+                        ),
                         MethodCandidate::TraitMethod(cand)
                         | MethodCandidate::NeedsConfirmation(cand) => {
                             let inst = canonical_r_ty.extract_solution(&mut self.table, cand.inst);

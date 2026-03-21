@@ -40,6 +40,7 @@ pub mod msg_selector;
 pub mod decision_tree;
 pub mod diagnostics;
 pub mod fold;
+pub(crate) mod layout_holes;
 pub(crate) mod method_cmp;
 pub mod method_table;
 pub mod normalize;
@@ -55,6 +56,7 @@ pub mod ty_lower;
 pub mod unify;
 pub mod visitor;
 
+pub use layout_holes::ty_contains_const_hole;
 pub use msg_selector::MsgSelectorAnalysisPass;
 
 const DEFAULT_TARGET_TY_PATH: &[&str] = &["std", "evm", "EvmTarget"];
@@ -171,81 +173,6 @@ pub fn ty_is_noesc<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
         TyData::TyVar(_) | TyData::Invalid(_) => false,
         _ => inner(db, ty, &mut FxHashSet::default()),
     }
-}
-
-pub fn ty_contains_const_hole<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
-    use crate::analysis::ty::{
-        const_ty::ConstTyData,
-        visitor::{TyVisitable, TyVisitor, walk_ty},
-    };
-
-    struct HoleFinder<'db> {
-        db: &'db dyn HirAnalysisDb,
-        found: bool,
-    }
-
-    impl<'db> TyVisitor<'db> for HoleFinder<'db> {
-        fn db(&self) -> &'db dyn HirAnalysisDb {
-            self.db
-        }
-
-        fn visit_ty(&mut self, ty: TyId<'db>) {
-            if self.found {
-                return;
-            }
-
-            if let TyData::ConstTy(const_ty) = ty.data(self.db)
-                && matches!(const_ty.data(self.db), ConstTyData::Hole(_))
-            {
-                self.found = true;
-                return;
-            }
-
-            walk_ty(self, ty);
-        }
-    }
-
-    let mut finder = HoleFinder { db, found: false };
-    ty.visit_with(&mut finder);
-    finder.found
-}
-
-pub(crate) fn collect_layout_hole_tys_in_order<'db>(
-    db: &'db dyn HirAnalysisDb,
-    ty: TyId<'db>,
-) -> Vec<TyId<'db>> {
-    use crate::analysis::ty::{
-        const_ty::ConstTyData,
-        visitor::{TyVisitable, TyVisitor, walk_ty},
-    };
-
-    struct HoleCollector<'a, 'db> {
-        db: &'db dyn HirAnalysisDb,
-        out: &'a mut Vec<TyId<'db>>,
-    }
-
-    impl<'a, 'db> TyVisitor<'db> for HoleCollector<'a, 'db> {
-        fn db(&self) -> &'db dyn HirAnalysisDb {
-            self.db
-        }
-
-        fn visit_ty(&mut self, ty: TyId<'db>) {
-            if let TyData::ConstTy(const_ty) = ty.data(self.db)
-                && let ConstTyData::Hole(hole_ty) = const_ty.data(self.db)
-            {
-                self.out.push(if hole_ty.has_invalid(self.db) {
-                    TyId::u256(self.db)
-                } else {
-                    *hole_ty
-                });
-            }
-            walk_ty(self, ty);
-        }
-    }
-
-    let mut out = Vec::new();
-    ty.visit_with(&mut HoleCollector { db, out: &mut out });
-    out
 }
 
 /// An analysis pass for type definitions.
