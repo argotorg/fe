@@ -2862,9 +2862,20 @@ pub(crate) enum ImplTraitLowerError<'db> {
 }
 
 impl<'db> ImplTrait<'db> {
+    /// Semantic predicate list (assumptions) for this impl-trait item.
+    pub(crate) fn assumptions(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
+        constraints_for(db, self.into())
+    }
+
+    /// Assumptions for impl-trait implementor lowering and validation,
+    /// elaborated with implied bounds.
+    pub(crate) fn elaborated_assumptions(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
+        self.assumptions(db).extend_all_bounds(db)
+    }
+
     /// Semantic self type of this impl-trait block.
     pub fn ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
-        let assumptions = constraints_for(db, self.into());
+        let assumptions = self.elaborated_assumptions(db);
         self.type_ref(db)
             .to_opt()
             .map(|hir_ty| lower_hir_ty(db, hir_ty, self.scope(), assumptions))
@@ -2971,7 +2982,7 @@ impl<'db> ImplTrait<'db> {
 
         // Assumptions derived from this impl-trait item, shared with other
         // semantic helpers.
-        let assumptions = constraints_for(db, self.into());
+        let assumptions = self.elaborated_assumptions(db);
 
         let trait_inst = lower_trait_ref(db, ty, trait_ref, self.scope(), assumptions, None)?;
 
