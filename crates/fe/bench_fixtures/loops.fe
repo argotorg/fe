@@ -1,0 +1,71 @@
+use std::abi::sol
+
+pub msg BenchMsg {
+    #[selector = sol("counter(uint256)")]
+    Counter { n: u256 } -> u256,
+    #[selector = sol("sum(uint256)")]
+    Sum { n: u256 } -> u256,
+    #[selector = sol("xorLoop(uint256,uint256)")]
+    XorLoop { n: u256, seed: u256 } -> u256,
+    #[selector = sol("counterUnchecked(uint256)")]
+    CounterUnchecked { n: u256 } -> u256,
+    #[selector = sol("sumUnchecked(uint256)")]
+    SumUnchecked { n: u256 } -> u256,
+    #[selector = sol("xorLoopUnchecked(uint256,uint256)")]
+    XorLoopUnchecked { n: u256, seed: u256 } -> u256,
+}
+
+pub contract Bench {
+    recv BenchMsg {
+        Counter { n } -> u256 {
+            let mut i: u256 = 0
+            while i < n {
+                i = i + 1
+            }
+            i
+        }
+        Sum { n } -> u256 {
+            let mut total: u256 = 0
+            let mut i: u256 = 1
+            while i <= n {
+                total = total + i
+                i = i + 1
+            }
+            total
+        }
+        XorLoop { n, seed } -> u256 {
+            let mut acc: u256 = seed
+            let mut i: u256 = 0
+            while i < n {
+                acc = acc ^ (seed ^ i)
+                i = i + 1
+            }
+            acc
+        }
+        CounterUnchecked { n } -> u256 {
+            let mut i: u256 = 0
+            while i < n {
+                i = i + 1
+            }
+            i
+        }
+        SumUnchecked { n } -> u256 {
+            let mut total: u256 = 0
+            let mut i: u256 = 1
+            while i <= n {
+                total = total + i
+                i = i + 1
+            }
+            total
+        }
+        XorLoopUnchecked { n, seed } -> u256 {
+            let mut acc: u256 = seed
+            let mut i: u256 = 0
+            while i < n {
+                acc = acc ^ (seed ^ i)
+                i = i + 1
+            }
+            acc
+        }
+    }
+}

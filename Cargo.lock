@@ -2148,6 +2148,7 @@ dependencies = [
  "cranelift-entity 0.115.1",
  "crossbeam-channel",
  "dir-test",
+ "ethers-core",
  "fe-codegen",
  "fe-common",
  "fe-contract-harness",
