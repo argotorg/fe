@@ -44,4 +44,5 @@ ascii_tree = "0.1"
 camino.workspace = true
 dir-test.workspace = true
 driver.workspace = true
+tempfile = "3.13"
 test-utils.workspace = true

@@ -933,11 +933,47 @@ impl<'db> TyChecker<'db> {
                 if self.has_dead_inference_keys(&solved) {
                     return TraitObligationOutcome::Discharged;
                 }
-                self.table.unify(goal, solved).unwrap();
-                if self.normalize_trait_goal(goal) != goal {
-                    TraitObligationOutcome::Progressed
-                } else {
-                    TraitObligationOutcome::Discharged
+                // Canonical trait solving can succeed even when the extracted
+                // solution becomes cyclic in the current inference table.
+                match self.table.unify(goal, solved) {
+                    Ok(()) => {
+                        if self.normalize_trait_goal(goal) != goal {
+                            TraitObligationOutcome::Progressed
+                        } else {
+                            TraitObligationOutcome::Discharged
+                        }
+                    }
+                    Err(UnificationError::OccursCheckFailed) => {
+                        if !final_pass {
+                            TraitObligationOutcome::Requeue(obligation)
+                        } else {
+                            self.push_diag(BodyDiag::InfiniteOccurrence(obligation.span));
+                            TraitObligationOutcome::Discharged
+                        }
+                    }
+                    Err(UnificationError::TypeMismatch) => {
+                        if !final_pass {
+                            TraitObligationOutcome::Requeue(obligation)
+                        } else {
+                            let required_by = match obligation.origin {
+                                env::TraitObligationOrigin::CallConstraint {
+                                    callable_def,
+                                    constraint_idx,
+                                    ..
+                                } => self.call_constraint_diag_info(callable_def, constraint_idx),
+                                env::TraitObligationOrigin::GenericConfirmation => None,
+                            };
+                            self.push_diag(TyDiagCollection::from(
+                                TraitConstraintDiag::TraitBoundNotSat {
+                                    span: obligation.span,
+                                    primary_goal: goal,
+                                    unsat_subgoal: None,
+                                    required_by,
+                                },
+                            ));
+                            TraitObligationOutcome::Discharged
+                        }
+                    }
                 }
             }
             GoalSatisfiability::NeedsConfirmation(ambiguous) => {

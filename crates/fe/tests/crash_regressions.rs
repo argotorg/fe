@@ -8,7 +8,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-const FE_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
+const FE_CHECK_TIMEOUT_STANDALONE: Duration = Duration::from_secs(5);
+const FE_CHECK_TIMEOUT_PROJECT: Duration = Duration::from_secs(60);
 
 struct FeCheckRun {
     code: i32,
@@ -24,6 +25,10 @@ fn is_fe_file(path: &Path) -> bool {
     path.extension().and_then(OsStr::to_str) == Some("fe")
 }
 
+fn is_project_fixture(path: &Path) -> bool {
+    path.is_dir() && path.join("fe.toml").is_file()
+}
+
 fn spawn_reader<R: Read + Send + 'static>(mut pipe: R) -> thread::JoinHandle<Vec<u8>> {
     thread::spawn(move || {
         let mut buf = Vec::new();
@@ -34,9 +39,22 @@ fn spawn_reader<R: Read + Send + 'static>(mut pipe: R) -> thread::JoinHandle<Vec
     })
 }
 
+fn fe_check_timeout(path: &Path) -> Duration {
+    if path.is_file() {
+        FE_CHECK_TIMEOUT_STANDALONE
+    } else {
+        FE_CHECK_TIMEOUT_PROJECT
+    }
+}
+
 fn run_fe_check(path: &Path) -> FeCheckRun {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_fe"))
-        .args(["check", "--standalone", "--color", "never"])
+    let mut command = Command::new(env!("CARGO_BIN_EXE_fe"));
+    command.arg("check");
+    if path.is_file() {
+        command.arg("--standalone");
+    }
+    let mut child = command
+        .args(["--color", "never"])
         .arg(path)
         .env("NO_COLOR", "1")
         .env("RUST_BACKTRACE", "0")
@@ -60,6 +78,7 @@ fn run_fe_check(path: &Path) -> FeCheckRun {
     );
 
     let start = Instant::now();
+    let timeout = fe_check_timeout(path);
     let timed_out = loop {
         if child
             .try_wait()
@@ -69,7 +88,7 @@ fn run_fe_check(path: &Path) -> FeCheckRun {
             break false;
         }
 
-        if start.elapsed() >= FE_CHECK_TIMEOUT {
+        if start.elapsed() >= timeout {
             let _ = child.kill();
             break true;
         }
@@ -108,7 +127,7 @@ fn crash_regressions_do_not_panic() {
     let mut fixtures: Vec<PathBuf> = fs::read_dir(&dir)
         .unwrap_or_else(|err| panic!("failed to read crash regressions dir {dir:?}: {err}"))
         .filter_map(|entry| entry.ok().map(|e| e.path()))
-        .filter(|path| is_fe_file(path))
+        .filter(|path| is_fe_file(path) || is_project_fixture(path))
         .collect();
     fixtures.sort();
 
@@ -125,7 +144,7 @@ fn crash_regressions_do_not_panic() {
         assert!(
             !run.timed_out,
             "`fe check` timed out after {:?} on {fixture:?}\n{combined}",
-            FE_CHECK_TIMEOUT
+            fe_check_timeout(&fixture)
         );
         assert_ne!(code, 101, "`fe check` panicked on {fixture:?}\n{combined}");
         assert!(

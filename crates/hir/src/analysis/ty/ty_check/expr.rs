@@ -2111,14 +2111,23 @@ impl<'db> TyChecker<'db> {
             return Some(ProviderTargetResolution::direct(inner_ty));
         }
 
-        let effect_ref_trait = resolve_core_trait(self.db, scope, &["effect_ref", "EffectRef"])
-            .expect("missing required core trait `core::effect_ref::EffectRef`");
-        let effect_ref_mut_trait =
+        let Some(effect_ref_trait) =
+            resolve_core_trait(self.db, scope, &["effect_ref", "EffectRef"])
+        else {
+            // The malformed core/std state is diagnosed earlier by the core-requirements pass.
+            // Recover here instead of panicking during body checking.
+            return None;
+        };
+        let Some(effect_ref_mut_trait) =
             resolve_core_trait(self.db, scope, &["effect_ref", "EffectRefMut"])
-                .expect("missing required core trait `core::effect_ref::EffectRefMut`");
-        let effect_handle_trait =
+        else {
+            return None;
+        };
+        let Some(effect_handle_trait) =
             resolve_core_trait(self.db, scope, &["effect_ref", "EffectHandle"])
-                .expect("missing required core trait `core::effect_ref::EffectHandle`");
+        else {
+            return None;
+        };
         let target_ident = IdentId::new(self.db, "Target".to_string());
         let effect_handle_inst = TraitInstId::new(
             self.db,
@@ -3839,16 +3848,11 @@ impl<'db> TyChecker<'db> {
                     self.instantiate_trait_method_to_term(cand.method, selected_lhs_ty, inst);
 
                 if let Some(rhs_expr) = rhs_expr {
-                    // Derive expected RHS type from the instantiated function type
-                    let (base, gen_args) = func_ty.decompose_ty_app(self.db);
-                    if let TyData::TyBase(TyBase::Func(func_def)) = base.data(self.db) {
-                        let mut expected_rhs =
-                            func_def.arg_tys(self.db)[1].instantiate(self.db, gen_args);
-                        let mut subst = AssocTySubst::new(inst);
-                        expected_rhs =
-                            self.normalize_ty(expected_rhs.fold_with(self.db, &mut subst));
-                        self.check_expr(rhs_expr, expected_rhs);
-                    }
+                    let Some(expected_rhs) = self.instantiated_binary_ops_rhs_ty(func_ty, inst)
+                    else {
+                        return ExprProp::invalid(self.db);
+                    };
+                    self.check_expr(rhs_expr, expected_rhs);
                 }
 
                 (func_ty, inst)
@@ -3877,15 +3881,12 @@ impl<'db> TyChecker<'db> {
                         inst,
                     );
                     let candidate_func_ty = self.table.instantiate_to_term(candidate_func_ty);
-                    let (base, gen_args) = candidate_func_ty.decompose_ty_app(self.db);
-                    let expected_rhs =
-                        if let TyData::TyBase(TyBase::Func(func_def)) = base.data(self.db) {
-                            let mut subst = AssocTySubst::new(inst);
-                            let ty = func_def.arg_tys(self.db)[1].instantiate(self.db, gen_args);
-                            self.normalize_ty(ty.fold_with(self.db, &mut subst))
-                        } else {
-                            unreachable!("candidate func ty should be a func");
-                        };
+                    let Some(expected_rhs) =
+                        self.instantiated_binary_ops_rhs_ty(candidate_func_ty, inst)
+                    else {
+                        self.rollback_state(snapshot);
+                        continue;
+                    };
                     let rhs_ty = self
                         .try_coerce_capability_for_expr_to_expected(rhs_expr, rhs.ty, expected_rhs)
                         .unwrap_or(rhs.ty);
@@ -3963,6 +3964,21 @@ impl<'db> TyChecker<'db> {
         let ret_ty = self.normalize_ty(callable.ret_ty(self.db));
         self.env.register_callable(expr, callable);
         ExprProp::new(ret_ty, true)
+    }
+
+    fn instantiated_binary_ops_rhs_ty(
+        &mut self,
+        func_ty: TyId<'db>,
+        inst: TraitInstId<'db>,
+    ) -> Option<TyId<'db>> {
+        let (base, gen_args) = func_ty.decompose_ty_app(self.db);
+        let TyData::TyBase(TyBase::Func(func_def)) = base.data(self.db) else {
+            unreachable!("operator trait method should instantiate to a function type");
+        };
+        let arg_ty = func_def.arg_tys(self.db).get(1).copied()?;
+        let mut subst = AssocTySubst::new(inst);
+        let ty = arg_ty.instantiate(self.db, gen_args);
+        Some(self.normalize_ty(ty.fold_with(self.db, &mut subst)))
     }
 
     fn check_assign_lhs(&mut self, lhs: ExprId, typed_lhs: &ExprProp<'db>) {

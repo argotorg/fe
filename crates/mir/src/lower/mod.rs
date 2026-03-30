@@ -198,7 +198,7 @@ fn invalid_hir_error_for_top_mod<'db>(
     )
 }
 
-fn invalid_hir_error_for_ingot<'db>(
+pub(crate) fn invalid_hir_error_for_ingot<'db>(
     db: &'db dyn SpannedHirAnalysisDb,
     ingot: Ingot<'db>,
 ) -> Option<MirLowerError> {

@@ -5,6 +5,7 @@
 
 use crate::analysis::{
     HirAnalysisDb,
+    core_requirements::CoreRequirementDiag,
     name_resolution::diagnostics::{ImportDiag, PathResDiag},
     ty::{
         diagnostics::{
@@ -249,6 +250,19 @@ pub trait DiagnosticVoucher: Send + Sync {
 impl DiagnosticVoucher for CompleteDiagnostic {
     fn to_complete(&self, _db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
         self.clone()
+    }
+}
+
+impl DiagnosticVoucher for CoreRequirementDiag<'_> {
+    fn to_complete(&self, db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
+        let message = self.violation.to_string();
+        primary_diag(
+            Severity::Error,
+            &message,
+            &message,
+            self.top_mod.span().resolve(db),
+            GlobalErrorCode::new(DiagnosticPass::TypeDefinition, self.violation.local_code()),
+        )
     }
 }
 

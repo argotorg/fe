@@ -1,0 +1,4 @@
+[workspace]
+name = "cross_ingot_create2"
+version = "0.1.0"
+members = ["ingots/*"]

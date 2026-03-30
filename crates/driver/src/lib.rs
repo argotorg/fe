@@ -235,7 +235,7 @@ pub fn check_library_requirements(db: &DriverDataBase) -> Vec<String> {
         missing.extend(
             core_requirements::check_core_requirements(db, top_mod.scope(), core.kind(db))
                 .into_iter()
-                .map(|req| req.to_string()),
+                .map(|violation| violation.to_string()),
         );
     } else {
         missing.push("missing required core ingot".to_string());
@@ -247,7 +247,7 @@ pub fn check_library_requirements(db: &DriverDataBase) -> Vec<String> {
         missing.extend(
             core_requirements::check_std_type_requirements(db, top_mod.scope(), std_ingot.kind(db))
                 .into_iter()
-                .map(|req| req.to_string()),
+                .map(|violation| violation.to_string()),
         );
     } else {
         missing.push("missing required std ingot".to_string());

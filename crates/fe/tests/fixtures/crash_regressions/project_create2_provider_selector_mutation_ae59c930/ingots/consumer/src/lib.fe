@@ -1,0 +1,14 @@
+// Regression test: create2 of a contract defined in another ingot
+// within the same workspace must work correctly.
+
+use std::evm::{Evm, assert}
+use provider::{Greeter, GreetMsg}
+
+#[test]
+fn test_create2_contract_from_other_ingot() uses (evm: mut Evm) {
+    let addr = evm.create2<Greeter>(value: 0, args: (42,), salt: 1)
+    assert(addr.inner != 0)
+
+    let result: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: GreetMsg::Greet {})
+    assert(result == 42)
+}

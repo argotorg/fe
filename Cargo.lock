@@ -2312,6 +2312,7 @@ dependencies = [
  "salsa",
  "smallvec 1.15.1",
  "smallvec 2.0.0-alpha.12",
+ "tempfile",
  "thin-vec",
  "tiny-keccak",
  "tracing",

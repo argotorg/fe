@@ -166,6 +166,32 @@ impl<'db> InstanceKey<'db> {
 }
 
 impl<'db> Monomorphizer<'db> {
+    fn defer_failed_instance(&self, subject: String, detail: String) {
+        self.defer_error(MirLowerError::Unsupported {
+            func_name: subject,
+            message: detail,
+        });
+    }
+
+    fn defer_invalid_origin_or_failed_instance(
+        &self,
+        origin: crate::ir::MirFunctionOrigin<'db>,
+        subject: String,
+        detail: String,
+    ) {
+        let ingot = match origin {
+            crate::ir::MirFunctionOrigin::Hir(func) => func.scope().ingot(self.db),
+            crate::ir::MirFunctionOrigin::Synthetic(synth) => {
+                synth.contract().scope().ingot(self.db)
+            }
+        };
+        if let Some(err) = crate::lower::invalid_hir_error_for_ingot(self.db, ingot) {
+            self.defer_error(err);
+        } else {
+            self.defer_failed_instance(subject, detail);
+        }
+    }
+
     /// Find the std ingot by searching all known templates for one whose ingot
     /// has std as a dependency (or is std itself). Returns `None` only if std
     /// is genuinely absent (e.g. a bare-core compilation).
@@ -617,16 +643,23 @@ impl<'db> Monomorphizer<'db> {
                     ))
                 }
                 CallTarget::Synthetic(origin) => {
-                    let (_, symbol) = self
-                        .ensure_synthetic_instance(
+                    let Some((_, symbol)) = self.ensure_synthetic_instance(
+                        origin,
+                        receiver_space,
+                        &effect_param_space_overrides,
+                        &param_capability_space_overrides,
+                    ) else {
+                        if self.deferred_error.borrow().is_some() {
+                            return;
+                        }
+
+                        self.defer_invalid_origin_or_failed_instance(
                             origin,
-                            receiver_space,
-                            &effect_param_space_overrides,
-                            &param_capability_space_overrides,
-                        )
-                        .unwrap_or_else(|| {
-                            panic!("failed to instantiate synthetic MIR for `{origin:?}`")
-                        });
+                            format!("{origin:?}"),
+                            "failed to instantiate synthetic MIR".to_string(),
+                        );
+                        return;
+                    };
                     Some(symbol)
                 }
             };
@@ -669,16 +702,31 @@ impl<'db> Monomorphizer<'db> {
                         }
 
                         let name = func.pretty_print(self.db);
-                        panic!("failed to instantiate MIR for `{name}`");
+                        self.defer_invalid_origin_or_failed_instance(
+                            crate::ir::MirFunctionOrigin::Hir(func),
+                            name,
+                            "failed to instantiate MIR".to_string(),
+                        );
+                        return;
                     };
                     symbol
                 }
                 crate::ir::MirFunctionOrigin::Synthetic(_) => {
-                    self.ensure_synthetic_instance(target.origin, None, &[], &[])
-                        .unwrap_or_else(|| {
-                            panic!("failed to instantiate synthetic MIR for `{target:?}`")
-                        })
-                        .1
+                    let Some((_, symbol)) =
+                        self.ensure_synthetic_instance(target.origin, None, &[], &[])
+                    else {
+                        if self.deferred_error.borrow().is_some() {
+                            return;
+                        }
+
+                        self.defer_invalid_origin_or_failed_instance(
+                            target.origin,
+                            format!("{target:?}"),
+                            "failed to instantiate synthetic MIR".to_string(),
+                        );
+                        return;
+                    };
+                    symbol
                 }
             };
             if let crate::ValueOrigin::CodeRegionRef(target) =
@@ -2625,6 +2673,91 @@ pub contract Greeter {
                 && symbols.contains(&"__provider__Greeter_init_code_offset")
                 && symbols.contains(&"__provider__Greeter_init_code_len"),
             "expected typed synthetic call/code-region edges to instantiate dependency contract templates, got: {symbols:?}",
+        );
+    }
+
+    #[test]
+    fn invalid_dependency_create2_reports_analysis_diagnostics() {
+        let mut db = DriverDataBase::default();
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("fe_mir_create2_invalid_{nonce}"));
+        fs::create_dir_all(root.join("ingots/consumer/src")).expect("consumer dir");
+        fs::create_dir_all(root.join("ingots/provider/src")).expect("provider dir");
+        fs::write(
+            root.join("fe.toml"),
+            "[workspace]\nname = \"cross_ingot_create2\"\nversion = \"0.1.0\"\nmembers = [\"ingots/*\"]\n",
+        )
+        .expect("workspace config");
+        fs::write(
+            root.join("ingots/consumer/fe.toml"),
+            "[ingot]\nname = \"consumer\"\nversion = \"0.1.0\"\n\n[dependencies]\nprovider = true\n",
+        )
+        .expect("consumer config");
+        fs::write(
+            root.join("ingots/provider/fe.toml"),
+            "[ingot]\nname = \"provider\"\nversion = \"0.1.0\"\n",
+        )
+        .expect("provider config");
+        fs::write(
+            root.join("ingots/consumer/src/lib.fe"),
+            r#"
+use std::evm::Evm
+use provider::Greeter
+
+fn deploy() uses (evm: mut Evm) {
+    let _ = evm.create2<Greeter>(value: 0, args: (42,), salt: 1)
+}
+"#,
+        )
+        .expect("consumer source");
+        fs::write(
+            root.join("ingots/provider/src/lib.fe"),
+            r#"
+use std::abi::sol
+
+pub msg GreetMsg {
+    #[selector = sol("greet()")]
+    Greet -> revert();u256,
+}
+
+pub contract Greeter {
+    mut value: u256,
+
+    init(initial_value: u256) uses (mut value) {
+        value = initial_value
+    }
+
+    recv GreetMsg {
+        Greet -> u256 uses (value) {
+            value
+        }
+    }
+}
+"#,
+        )
+        .expect("provider source");
+
+        let root_url = Url::from_directory_path(&root).expect("root url");
+        let _ = driver::init_ingot(&mut db, &root_url);
+        let consumer_url =
+            Url::from_directory_path(root.join("ingots/consumer")).expect("consumer url");
+        let consumer_ingot = db
+            .workspace()
+            .containing_ingot(&db, consumer_url)
+            .expect("consumer ingot");
+
+        let err = crate::lower::lower_ingot(&db, consumer_ingot)
+            .expect_err("invalid dependency should fail with diagnostics");
+        let MirLowerError::AnalysisDiagnostics { diagnostics, .. } = err else {
+            panic!("expected analysis diagnostics, got {err:?}");
+        };
+        assert!(
+            diagnostics.contains("unexpected syntax while parsing message variants")
+                || diagnostics.contains("expected type item here"),
+            "expected provider parse diagnostics, got: {diagnostics}",
         );
     }
 }
