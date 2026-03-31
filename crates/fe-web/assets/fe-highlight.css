@@ -6,56 +6,33 @@
    Color variables — the single source of truth
    ============================================================================ */
 
-/* Light mode: Catppuccin Latte */
+/* Catppuccin Mocha — always dark code blocks regardless of page theme.
+   Page chrome (sidebar, backgrounds) adapts via styles.css;
+   code blocks stay dark for consistent readability. */
 :root {
-    --fe-hl-keyword: #8839ef;
-    --fe-hl-type: #df8e1d;
-    --fe-hl-type-interface: #8839ef;
-    --fe-hl-type-variant: #df8e1d;
-    --fe-hl-function: #1e66f5;
-    --fe-hl-string: #40a02b;
-    --fe-hl-string-escape: #179299;
-    --fe-hl-number: #fe640b;
-    --fe-hl-comment: #9ca0b0;
-    --fe-hl-operator: #179299;
-    --fe-hl-variable: #4c4f69;
-    --fe-hl-attribute: #df8e1d;
-    --fe-hl-constant: #fe640b;
-    --fe-hl-punctuation: #9ca0b0;
+    --fe-hl-keyword: #cba6f7;
+    --fe-hl-type: #f9e2af;
+    --fe-hl-type-interface: #cba6f7;
+    --fe-hl-type-variant: #f9e2af;
+    --fe-hl-function: #89b4fa;
+    --fe-hl-string: #a6e3a1;
+    --fe-hl-string-escape: #94e2d5;
+    --fe-hl-number: #fab387;
+    --fe-hl-comment: #9399b2;
+    --fe-hl-operator: #94e2d5;
+    --fe-hl-variable: #cdd6f4;
+    --fe-hl-attribute: #f9e2af;
+    --fe-hl-constant: #fab387;
+    --fe-hl-punctuation: #9399b2;
 
-    --fe-code-bg: #eff1f5;
-    --fe-code-border: #ccd0da;
-    --fe-code-text: #4c4f69;
-    --fe-code-line-number: #9ca0b0;
+    --fe-code-bg: #1e1e2e;
+    --fe-code-border: #313244;
+    --fe-code-text: #cdd6f4;
+    --fe-code-line-number: #6c7086;
     --fe-code-font: "JetBrains Mono", "Fira Code", monospace;
     --fe-code-size: 0.8rem;
     --fe-code-line-height: 1.6;
     --fe-code-radius: 6px;
-}
-
-/* Dark mode: Catppuccin Mocha */
-@media (prefers-color-scheme: dark) {
-    :root {
-        --fe-hl-keyword: #cba6f7;
-        --fe-hl-type: #f9e2af;
-        --fe-hl-type-interface: #cba6f7;
-        --fe-hl-type-variant: #f9e2af;
-        --fe-hl-function: #89b4fa;
-        --fe-hl-string: #a6e3a1;
-        --fe-hl-string-escape: #94e2d5;
-        --fe-hl-number: #fab387;
-        --fe-hl-comment: #9399b2;
-        --fe-hl-operator: #94e2d5;
-        --fe-hl-variable: #cdd6f4;
-        --fe-hl-attribute: #f9e2af;
-        --fe-hl-constant: #fab387;
-        --fe-hl-punctuation: #9399b2;
-
-        --fe-code-bg: #1e1e2e;
-        --fe-code-border: #313244;
-        --fe-code-text: #cdd6f4;
-        --fe-code-line-number: #6c7086;
-    }
 }
 
 /* ============================================================================
