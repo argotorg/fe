@@ -7,6 +7,14 @@
 use super::ops
 use super::mem
 
+/// Assert that a precompile STATICCALL succeeded and returned the expected
+/// number of bytes. Reverts if the call failed or returndata is too short
+/// (e.g., calling a non-existent precompile address on a non-standard chain).
+fn assert_precompile_ok(_ ok: u256, _ expected_ret_len: u256) {
+    if ok == 0 { ops::revert(offset: 0, len: 0) }
+    if ops::returndatasize() < expected_ret_len { ops::revert(offset: 0, len: 0) }
+}
+
 // ---------------------------------------------------------------------------
 // Math builtins (pure, no state effects)
 // ---------------------------------------------------------------------------
@@ -41,7 +49,7 @@ pub fn sha256(_ offset: u256, _ len: u256) -> u256 {
         ret_offset: out,
         ret_len: 32,
     )
-    if ok == 0 { ops::revert(offset: 0, len: 0) }
+    assert_precompile_ok(ok, 32)
     ops::mload(out)
 }
 
@@ -66,7 +74,7 @@ pub fn ecrecover(_ hash: u256, _ v: u256, _ r: u256, _ s: u256) -> u256 {
         ret_offset: ptr,
         ret_len: 32,
     )
-    if ok == 0 { ops::revert(offset: 0, len: 0) }
+    assert_precompile_ok(ok, 32)
     ops::mload(ptr)
 }
 
@@ -89,7 +97,7 @@ pub fn ec_add(_ ax: u256, _ ay: u256, _ bx: u256, _ by: u256) -> (u256, u256) {
         ret_offset: ptr,
         ret_len: 64,
     )
-    if ok == 0 { ops::revert(offset: 0, len: 0) }
+    assert_precompile_ok(ok, 64)
     (ops::mload(ptr), ops::mload(ptr + 32))
 }
 
@@ -107,7 +115,7 @@ pub fn ec_mul(_ px: u256, _ py: u256, _ s: u256) -> (u256, u256) {
         ret_offset: ptr,
         ret_len: 64,
     )
-    if ok == 0 { ops::revert(offset: 0, len: 0) }
+    assert_precompile_ok(ok, 64)
     (ops::mload(ptr), ops::mload(ptr + 32))
 }
 
@@ -121,7 +129,6 @@ pub fn ec_mul(_ px: u256, _ py: u256, _ s: u256) -> (u256, u256) {
 /// `e(a1, b1) * e(a2, b2) * ... * e(aN, bN) == 1`
 ///
 /// Use effects (RawMem) to build the buffer, then pass it here.
-/// See rosetta-fe's `bn254::pairing_4` for a usage example.
 pub fn ec_pairing(_ offset: u256, _ len: u256) -> bool {
     let out: u256 = mem::alloc(32)
     let ok: u256 = ops::staticcall(
@@ -132,7 +139,7 @@ pub fn ec_pairing(_ offset: u256, _ len: u256) -> bool {
         ret_offset: out,
         ret_len: 32,
     )
-    if ok == 0 { ops::revert(offset: 0, len: 0) }
+    assert_precompile_ok(ok, 32)
     ops::mload(out) != 0
 }
 
@@ -154,6 +161,6 @@ pub fn modexp(_ base: u256, _ exp: u256, _ modulus: u256) -> u256 {
         ret_offset: ptr,
         ret_len: 32,
     )
-    if ok == 0 { ops::revert(offset: 0, len: 0) }
+    assert_precompile_ok(ok, 32)
     ops::mload(ptr)
 }
