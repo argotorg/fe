@@ -80,6 +80,34 @@ function _invalidateCodeBlockSheet() {
   _codeBlockSheet = null;
 }
 
+// Shared list of code blocks waiting for the highlight stylesheet to load.
+var _pendingStyleAdoptions = [];
+var _stylesheetWatchStarted = false;
+
+function _waitForHighlightStylesheet(codeBlock) {
+  _pendingStyleAdoptions.push(codeBlock);
+  if (_stylesheetWatchStarted) return;
+  _stylesheetWatchStarted = true;
+
+  var links = document.querySelectorAll('link[rel="stylesheet"]');
+  for (var i = 0; i < links.length; i++) {
+    var href = links[i].getAttribute("href") || "";
+    if (href.indexOf("highlight") !== -1) {
+      links[i].addEventListener("load", function onLoad() {
+        this.removeEventListener("load", onLoad);
+        _invalidateCodeBlockSheet();
+        var pending = _pendingStyleAdoptions;
+        _pendingStyleAdoptions = [];
+        for (var j = 0; j < pending.length; j++) {
+          pending[j]._adoptStyles();
+          pending[j]._render();
+        }
+      });
+      return;
+    }
+  }
+}
+
 /**
  * Extract a named region from source text.
  * Regions are delimited by `// #region name` and `// #endregion name` comments.

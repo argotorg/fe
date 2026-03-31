@@ -126,6 +126,7 @@ fe-code-block {
     border: 1px solid var(--fe-code-border);
     border-radius: var(--fe-code-radius);
     overflow-x: auto;
+    max-width: 100%;
 }
 
 .member-header fe-code-block,
@@ -151,6 +152,8 @@ fe-code-block {
     font-family: var(--fe-code-font);
     font-size: var(--fe-code-size);
     line-height: var(--fe-code-line-height);
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
 }
 
 .fe-line-numbers span {
@@ -159,6 +162,7 @@ fe-code-block {
 
 .fe-code-pre {
     flex: 1;
+    min-width: 0;
     margin: 0;
     padding: 0.75rem 1rem;
     background: transparent;
@@ -166,6 +170,13 @@ fe-code-block {
     font-family: var(--fe-code-font);
     font-size: var(--fe-code-size);
     line-height: var(--fe-code-line-height);
+    /* Prevent iOS Safari TextAutoSizing from inflating font-size in code blocks.
+       Without this, the algorithm selectively enlarges text in blocks whose
+       intrinsic width exceeds the viewport (timing-dependent on first load),
+       causing inconsistent sizes across code blocks with identical styles.
+       Using 100% (not none) preserves user zoom and accessibility settings. */
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
 }
 
 .fe-code-pre code {
@@ -173,4 +184,6 @@ fe-code-block {
     font-size: inherit;
     line-height: inherit;
     color: var(--fe-code-text);
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
 }

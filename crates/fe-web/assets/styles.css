@@ -1148,16 +1148,16 @@ fe-doc-viewer, .fe-doc-viewer {
 .mobile-menu-btn {
     display: none;
     position: fixed;
-    bottom: 1rem;
-    right: 1rem;
+    top: 0.5rem;
+    right: 0.75rem;
     z-index: 1001;
-    width: 3rem;
-    height: 3rem;
-    border-radius: 50%;
+    width: 2.5rem;
+    height: 2.5rem;
+    border-radius: 6px;
     border: none;
     background: var(--accent);
     color: white;
-    font-size: 1.25rem;
+    font-size: 1.1rem;
     cursor: pointer;
     box-shadow: 0 2px 8px rgba(0,0,0,0.3);
 }
@@ -1353,5 +1353,16 @@ fe-doc-viewer, .fe-doc-viewer {
     }
     .page-outline {
         display: none;
+    }
+    /* Prevent code blocks from blowing up on mobile */
+    .fe-doc-viewer-content {
+        overflow-x: hidden;
+    }
+    fe-code-block {
+        max-width: 100%;
+        overflow-x: auto;
+    }
+    .member-item, .impl-block, .method-item {
+        overflow-x: auto;
     }
 }
