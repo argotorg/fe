@@ -161,16 +161,7 @@ class FeCodeBlock extends HTMLElement {
     // Create shadow root once
     if (!this.shadowRoot) {
       this.attachShadow({ mode: "open" });
-      var sheet = _getCodeBlockSheet();
-      if (sheet) {
-        this.shadowRoot.adoptedStyleSheets = [sheet];
-      } else {
-        // Fallback: clone page styles into shadow root
-        var pageStyles = document.querySelectorAll("style");
-        for (var i = 0; i < pageStyles.length; i++) {
-          this.shadowRoot.appendChild(pageStyles[i].cloneNode(true));
-        }
-      }
+      this._adoptStyles();
     }
 
     this._render();
@@ -199,6 +190,30 @@ class FeCodeBlock extends HTMLElement {
       self._resolveSymbol();
       self._render();
     });
+  }
+
+  /** Adopt highlight styles into shadow root, with retry for late-loading stylesheets. */
+  _adoptStyles() {
+    var sheet = _getCodeBlockSheet();
+    if (sheet) {
+      this.shadowRoot.adoptedStyleSheets = [sheet];
+    } else {
+      // Fallback: clone page styles into shadow root
+      var pageStyles = document.querySelectorAll("style");
+      for (var i = 0; i < pageStyles.length; i++) {
+        this.shadowRoot.appendChild(pageStyles[i].cloneNode(true));
+      }
+      // If no styles found at all, retry after stylesheets finish loading
+      if (pageStyles.length === 0 && !this._styleRetryDone) {
+        this._styleRetryDone = true;
+        var self = this;
+        window.addEventListener("load", function () {
+          _invalidateCodeBlockSheet();
+          self._adoptStyles();
+          self._render();
+        });
+      }
+    }
   }
 
   /** Look up an item by path in per-component or global index. */
