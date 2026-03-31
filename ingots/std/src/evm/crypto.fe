@@ -1,10 +1,29 @@
-/// Precompile-backed cryptographic hash functions.
+/// Precompile-backed cryptographic hash functions and EVM math builtins.
 
 use super::ops
 use super::mem
+use super::effects::Address
+
+// ---------------------------------------------------------------------------
+// Math builtins (pure, no state effects)
+// ---------------------------------------------------------------------------
+
+/// Modular addition: `(a + b) % m` with 512-bit intermediate precision.
+pub fn addmod(_ a: u256, _ b: u256, _ m: u256) -> u256 {
+    ops::addmod(a, b, m)
+}
+
+/// Modular multiplication: `(a * b) % m` with 512-bit intermediate precision.
+pub fn mulmod(_ a: u256, _ b: u256, _ m: u256) -> u256 {
+    ops::mulmod(a, b, m)
+}
+
+// ---------------------------------------------------------------------------
+// Precompile helpers
+// ---------------------------------------------------------------------------
 
 /// SHA256 hash of a memory region (precompile 0x02).
-pub fn sha256(offset: u256, len: u256) -> u256 {
+pub fn sha256(_ offset: u256, _ len: u256) -> u256 {
     let out: u256 = mem::alloc(32)
     let ok: u256 = ops::staticcall(
         gas: ops::gas(),
@@ -16,4 +35,121 @@ pub fn sha256(offset: u256, len: u256) -> u256 {
     )
     if ok == 0 { ops::revert(offset: 0, len: 0) }
     ops::mload(out)
+}
+
+/// EC point addition on BN254 (precompile 0x06).
+/// Takes two points as (x, y) pairs packed in memory at `input_ptr`
+/// (128 bytes: x1, y1, x2, y2). Returns (x, y) as a pair.
+pub fn ec_add(_ ax: u256, _ ay: u256, _ bx: u256, _ by: u256) -> (u256, u256) {
+    let ptr: u256 = mem::alloc(128)
+    ops::mstore(addr: ptr, value: ax)
+    ops::mstore(addr: ptr + 32, value: ay)
+    ops::mstore(addr: ptr + 64, value: bx)
+    ops::mstore(addr: ptr + 96, value: by)
+    let ok: u256 = ops::staticcall(
+        gas: ops::gas(),
+        addr: 6,
+        args_offset: ptr,
+        args_len: 128,
+        ret_offset: ptr,
+        ret_len: 64,
+    )
+    if ok == 0 { ops::revert(offset: 0, len: 0) }
+    (ops::mload(ptr), ops::mload(ptr + 32))
+}
+
+/// EC scalar multiplication on BN254 (precompile 0x07).
+pub fn ec_mul(_ px: u256, _ py: u256, _ s: u256) -> (u256, u256) {
+    let ptr: u256 = mem::alloc(96)
+    ops::mstore(addr: ptr, value: px)
+    ops::mstore(addr: ptr + 32, value: py)
+    ops::mstore(addr: ptr + 64, value: s)
+    let ok: u256 = ops::staticcall(
+        gas: ops::gas(),
+        addr: 7,
+        args_offset: ptr,
+        args_len: 96,
+        ret_offset: ptr,
+        ret_len: 64,
+    )
+    if ok == 0 { ops::revert(offset: 0, len: 0) }
+    (ops::mload(ptr), ops::mload(ptr + 32))
+}
+
+/// Modular exponentiation (precompile 0x05).
+/// Computes `base^exp % mod`.
+pub fn modexp(_ base: u256, _ exp: u256, _ modulus: u256) -> u256 {
+    let ptr: u256 = mem::alloc(192)
+    // lengths: base=32, exp=32, mod=32
+    ops::mstore(addr: ptr, value: 32)
+    ops::mstore(addr: ptr + 32, value: 32)
+    ops::mstore(addr: ptr + 64, value: 32)
+    ops::mstore(addr: ptr + 96, value: base)
+    ops::mstore(addr: ptr + 128, value: exp)
+    ops::mstore(addr: ptr + 160, value: modulus)
+    let ok: u256 = ops::staticcall(
+        gas: ops::gas(),
+        addr: 5,
+        args_offset: ptr,
+        args_len: 192,
+        ret_offset: ptr,
+        ret_len: 32,
+    )
+    if ok == 0 { ops::revert(offset: 0, len: 0) }
+    ops::mload(ptr)
+}
+
+// ---------------------------------------------------------------------------
+// Low-level memory + call helpers for advanced precompile usage.
+// These give users raw access for precompile patterns that don't fit
+// the typed wrappers above.
+// ---------------------------------------------------------------------------
+
+/// Write a u256 word to EVM memory at `addr`.
+pub fn mstore(_ addr: u256, _ value: u256) {
+    ops::mstore(addr, value)
+}
+
+/// Write a single byte to EVM memory at `addr`.
+pub fn mstore8(_ addr: u256, _ value: u8) {
+    ops::mstore8(addr, value)
+}
+
+/// Read a u256 word from EVM memory at `addr`.
+pub fn mload(_ addr: u256) -> u256 {
+    ops::mload(addr)
+}
+
+/// Raw STATICCALL. Returns 1 on success, 0 on failure.
+pub fn raw_staticcall(
+    _ gas: u256,
+    _ addr: u256,
+    _ args_offset: u256,
+    _ args_len: u256,
+    _ ret_offset: u256,
+    _ ret_len: u256,
+) -> u256 {
+    ops::staticcall(
+        gas: gas,
+        addr: addr,
+        args_offset: args_offset,
+        args_len: args_len,
+        ret_offset: ret_offset,
+        ret_len: ret_len,
+    )
+}
+
+/// Keccak256 hash of a memory region.
+pub fn keccak256(_ offset: u256, _ len: u256) -> u256 {
+    ops::keccak256(offset, len)
+}
+
+/// Get remaining gas.
+pub fn gas() -> u256 {
+    ops::gas()
+}
+
+/// Load a u256 word from calldata at `offset`.
+pub fn calldataload(_ offset: u256) -> u256 {
+    ops::calldataload(offset)
 }
