@@ -46,6 +46,31 @@ pub fn sha256(_ offset: u256, _ len: u256) -> u256 {
 }
 
 // ---------------------------------------------------------------------------
+// Signature recovery
+// ---------------------------------------------------------------------------
+
+/// Recover signer address from a message hash and ECDSA signature (precompile 0x01).
+/// Returns the recovered address as a u256 (lower 160 bits).
+/// Reverts if recovery fails (invalid signature).
+pub fn ecrecover(_ hash: u256, _ v: u256, _ r: u256, _ s: u256) -> u256 {
+    let ptr: u256 = mem::alloc(128)
+    ops::mstore(addr: ptr, value: hash)
+    ops::mstore(addr: ptr + 32, value: v)
+    ops::mstore(addr: ptr + 64, value: r)
+    ops::mstore(addr: ptr + 96, value: s)
+    let ok: u256 = ops::staticcall(
+        gas: ops::gas(),
+        addr: 1,
+        args_offset: ptr,
+        args_len: 128,
+        ret_offset: ptr,
+        ret_len: 32,
+    )
+    if ok == 0 { ops::revert(offset: 0, len: 0) }
+    ops::mload(ptr)
+}
+
+// ---------------------------------------------------------------------------
 // EC precompile wrappers (BN254)
 // ---------------------------------------------------------------------------
 
@@ -86,94 +111,18 @@ pub fn ec_mul(_ px: u256, _ py: u256, _ s: u256) -> (u256, u256) {
     (ops::mload(ptr), ops::mload(ptr + 32))
 }
 
-/// EC pairing check on BN254 with 2 pairs (precompile 0x08).
-/// Returns true if the pairing equation holds.
-/// Each pair is (G1.x, G1.y, G2.x1, G2.x2, G2.y1, G2.y2).
-pub fn ec_pairing_2(
-    _ a1x: u256, _ a1y: u256,
-    _ b1x1: u256, _ b1x2: u256, _ b1y1: u256, _ b1y2: u256,
-    _ a2x: u256, _ a2y: u256,
-    _ b2x1: u256, _ b2x2: u256, _ b2y1: u256, _ b2y2: u256,
-) -> bool {
-    let ptr: u256 = mem::alloc(384)
-    ops::mstore(addr: ptr, value: a1x)
-    ops::mstore(addr: ptr + 32, value: a1y)
-    ops::mstore(addr: ptr + 64, value: b1x1)
-    ops::mstore(addr: ptr + 96, value: b1x2)
-    ops::mstore(addr: ptr + 128, value: b1y1)
-    ops::mstore(addr: ptr + 160, value: b1y2)
-    ops::mstore(addr: ptr + 192, value: a2x)
-    ops::mstore(addr: ptr + 224, value: a2y)
-    ops::mstore(addr: ptr + 256, value: b2x1)
-    ops::mstore(addr: ptr + 288, value: b2x2)
-    ops::mstore(addr: ptr + 320, value: b2y1)
-    ops::mstore(addr: ptr + 352, value: b2y2)
-    let ok: u256 = ops::staticcall(
-        gas: ops::gas(),
-        addr: 8,
-        args_offset: ptr,
-        args_len: 384,
-        ret_offset: ptr,
-        ret_len: 32,
-    )
-    if ok == 0 { ops::revert(offset: 0, len: 0) }
-    ops::mload(ptr) != 0
-}
-
-/// EC pairing check on BN254 with 4 pairs (precompile 0x08).
-/// Returns true if the pairing equation holds.
-pub fn ec_pairing_4(
-    _ a1x: u256, _ a1y: u256,
-    _ b1x1: u256, _ b1x2: u256, _ b1y1: u256, _ b1y2: u256,
-    _ a2x: u256, _ a2y: u256,
-    _ b2x1: u256, _ b2x2: u256, _ b2y1: u256, _ b2y2: u256,
-    _ a3x: u256, _ a3y: u256,
-    _ b3x1: u256, _ b3x2: u256, _ b3y1: u256, _ b3y2: u256,
-    _ a4x: u256, _ a4y: u256,
-    _ b4x1: u256, _ b4x2: u256, _ b4y1: u256, _ b4y2: u256,
-) -> bool {
-    let ptr: u256 = mem::alloc(768)
-    ops::mstore(addr: ptr, value: a1x)
-    ops::mstore(addr: ptr + 32, value: a1y)
-    ops::mstore(addr: ptr + 64, value: b1x1)
-    ops::mstore(addr: ptr + 96, value: b1x2)
-    ops::mstore(addr: ptr + 128, value: b1y1)
-    ops::mstore(addr: ptr + 160, value: b1y2)
-    ops::mstore(addr: ptr + 192, value: a2x)
-    ops::mstore(addr: ptr + 224, value: a2y)
-    ops::mstore(addr: ptr + 256, value: b2x1)
-    ops::mstore(addr: ptr + 288, value: b2x2)
-    ops::mstore(addr: ptr + 320, value: b2y1)
-    ops::mstore(addr: ptr + 352, value: b2y2)
-    ops::mstore(addr: ptr + 384, value: a3x)
-    ops::mstore(addr: ptr + 416, value: a3y)
-    ops::mstore(addr: ptr + 448, value: b3x1)
-    ops::mstore(addr: ptr + 480, value: b3x2)
-    ops::mstore(addr: ptr + 512, value: b3y1)
-    ops::mstore(addr: ptr + 544, value: b3y2)
-    ops::mstore(addr: ptr + 576, value: a4x)
-    ops::mstore(addr: ptr + 608, value: a4y)
-    ops::mstore(addr: ptr + 640, value: b4x1)
-    ops::mstore(addr: ptr + 672, value: b4x2)
-    ops::mstore(addr: ptr + 704, value: b4y1)
-    ops::mstore(addr: ptr + 736, value: b4y2)
-    let ok: u256 = ops::staticcall(
-        gas: ops::gas(),
-        addr: 8,
-        args_offset: ptr,
-        args_len: 768,
-        ret_offset: ptr,
-        ret_len: 32,
-    )
-    if ok == 0 { ops::revert(offset: 0, len: 0) }
-    ops::mload(ptr) != 0
-}
-
 /// EC pairing check on a pre-built memory buffer (precompile 0x08).
-/// The buffer at `offset` must contain N pairs of (G1, G2) points,
-/// each pair being 192 bytes: G1.x, G1.y, G2.x_imag, G2.x_real, G2.y_imag, G2.y_real.
-/// Total length must be N * 192.
-pub fn ec_pairing_raw(_ offset: u256, _ len: u256) -> bool {
+///
+/// The buffer at `offset` must contain N pairs, each 192 bytes:
+/// `G1.x, G1.y, G2.x_imag, G2.x_real, G2.y_imag, G2.y_real`.
+/// Total length must be `N * 192`.
+///
+/// Returns true if the pairing equation holds:
+/// `e(a1, b1) * e(a2, b2) * ... * e(aN, bN) == 1`
+///
+/// Use effects (RawMem) to build the buffer, then pass it here.
+/// See rosetta-fe's `bn254::pairing_4` for a usage example.
+pub fn ec_pairing(_ offset: u256, _ len: u256) -> bool {
     let out: u256 = mem::alloc(32)
     let ok: u256 = ops::staticcall(
         gas: ops::gas(),
