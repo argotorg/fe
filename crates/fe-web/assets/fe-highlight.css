@@ -6,21 +6,22 @@
    Color variables — the single source of truth
    ============================================================================ */
 
-/* Light mode: purple/indigo/green/yellow/blue */
+/* Light mode */
 :root {
     --fe-hl-keyword: #7c3aed;
+    --fe-hl-variable-builtin: #0891b2;
     --fe-hl-type: #b08800;
-    --fe-hl-type-interface: #6d28d9;
+    --fe-hl-type-interface: #7c3aed;
     --fe-hl-type-variant: #b08800;
     --fe-hl-function: #2563eb;
     --fe-hl-string: #16a34a;
     --fe-hl-string-escape: #0d9488;
-    --fe-hl-number: #4f46e5;
+    --fe-hl-number: #0891b2;
     --fe-hl-comment: #9ca0b0;
     --fe-hl-operator: #0891b2;
-    --fe-hl-variable: #374151;
-    --fe-hl-attribute: #6d28d9;
-    --fe-hl-constant: #4f46e5;
+    --fe-hl-variable: #0d9488;
+    --fe-hl-attribute: #7c3aed;
+    --fe-hl-constant: #0891b2;
     --fe-hl-punctuation: #6b7280;
 
     --fe-code-bg: #eff1f5;
@@ -58,22 +59,23 @@
     }
 }
 
-/* Explicit dark toggle override */
+/* Explicit dark toggle override — Catppuccin Mocha */
 :root[data-theme="dark"] {
     --fe-hl-keyword: #cba6f7;
+    --fe-hl-variable-builtin: #94e2d5;
     --fe-hl-type: #f9e2af;
     --fe-hl-type-interface: #cba6f7;
     --fe-hl-type-variant: #f9e2af;
     --fe-hl-function: #89b4fa;
     --fe-hl-string: #a6e3a1;
     --fe-hl-string-escape: #94e2d5;
-    --fe-hl-number: #fab387;
-    --fe-hl-comment: #9399b2;
+    --fe-hl-number: #94e2d5;
+    --fe-hl-comment: #6c7086;
     --fe-hl-operator: #94e2d5;
-    --fe-hl-variable: #cdd6f4;
-    --fe-hl-attribute: #f9e2af;
-    --fe-hl-constant: #fab387;
-    --fe-hl-punctuation: #9399b2;
+    --fe-hl-variable: #a6e3a1;
+    --fe-hl-attribute: #cba6f7;
+    --fe-hl-constant: #94e2d5;
+    --fe-hl-punctuation: #6c7086;
 
     --fe-code-bg: #1e1e2e;
     --fe-code-border: #313244;
@@ -86,6 +88,7 @@
    ============================================================================ */
 
 .hl-keyword { color: var(--fe-hl-keyword); }
+.hl-variable-builtin { color: var(--fe-hl-variable-builtin); font-style: italic; }
 .hl-type, .hl-type-builtin { color: var(--fe-hl-type); }
 .hl-type-interface { color: var(--fe-hl-type-interface); }
 .hl-type-enum-variant { color: var(--fe-hl-type-variant); }

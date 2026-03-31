@@ -91,7 +91,6 @@
   "mut"
   "own"
   "recv"
-  "self"
   "struct"
   "super"
   "trait"
@@ -103,6 +102,9 @@
   "while"
   "with"
 ] @keyword
+
+; self as a variable-like builtin
+"self" @variable.builtin
 
 (break_statement) @keyword
 (continue_statement) @keyword
