@@ -1,4 +1,5 @@
-/* Light mode (default) */
+/* Page layout variables — light mode default.
+   Code/syntax variables are in fe-highlight.css. */
 :root {
     --bg: #ffffff;
     --bg-secondary: #f8fafc;
@@ -8,7 +9,6 @@
     --accent-hover: #6366f1;
     --text-accent: #4f46e5;
     --border: #e2e8f0;
-    --fe-code-bg: #f1f5f9;
     --code-bg: var(--fe-code-bg);
 
     --hl-ref-bg: rgba(79, 70, 229, 0.08);
@@ -17,18 +17,16 @@
     --target-bg: rgba(79, 70, 229, 0.06);
 }
 
-/* Dark mode */
 @media (prefers-color-scheme: dark) {
     :root {
-        --bg: #0f0f1a;
-        --bg-secondary: #16162a;
-        --text: #e2e8f0;
-        --text-muted: #9ba3af;
-        --accent: #6366f1;
-        --accent-hover: #c7d2fe;
-        --text-accent: #a5b4fc;
-        --border: #2d3748;
-        --fe-code-bg: #0d1117;
+        --bg: #1e1e2e;
+        --bg-secondary: #181825;
+        --text: #cdd6f4;
+        --text-muted: #9399b2;
+        --accent: #89b4fa;
+        --accent-hover: #b4d0fb;
+        --text-accent: #89b4fa;
+        --border: #313244;
         --code-bg: var(--fe-code-bg);
 
         --hl-ref-bg: rgba(99, 102, 241, 0.18);
