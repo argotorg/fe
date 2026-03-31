@@ -1,10 +1,37 @@
-/// Precompile-backed cryptographic hash functions.
+/// Cryptographic primitives and EVM math builtins.
+///
+/// Safe, typed wrappers around EVM precompiles and modular arithmetic opcodes.
+/// Raw memory and call operations should go through the effects system
+/// (RawMem, RawOps, Ctx traits) instead.
 
 use super::ops
 use super::mem
 
+// ---------------------------------------------------------------------------
+// Math builtins (pure, no state effects)
+// ---------------------------------------------------------------------------
+
+/// Modular addition: `(a + b) % m` with 512-bit intermediate precision.
+pub fn addmod(_ a: u256, _ b: u256, _ m: u256) -> u256 {
+    ops::addmod(a, b, m)
+}
+
+/// Modular multiplication: `(a * b) % m` with 512-bit intermediate precision.
+pub fn mulmod(_ a: u256, _ b: u256, _ m: u256) -> u256 {
+    ops::mulmod(a, b, m)
+}
+
+// ---------------------------------------------------------------------------
+// Hash functions
+// ---------------------------------------------------------------------------
+
+/// Keccak256 hash of a memory region.
+pub fn keccak256(_ offset: u256, _ len: u256) -> u256 {
+    ops::keccak256(offset, len)
+}
+
 /// SHA256 hash of a memory region (precompile 0x02).
-pub fn sha256(offset: u256, len: u256) -> u256 {
+pub fn sha256(_ offset: u256, _ len: u256) -> u256 {
     let out: u256 = mem::alloc(32)
     let ok: u256 = ops::staticcall(
         gas: ops::gas(),
@@ -16,4 +43,150 @@ pub fn sha256(offset: u256, len: u256) -> u256 {
     )
     if ok == 0 { ops::revert(offset: 0, len: 0) }
     ops::mload(out)
+}
+
+// ---------------------------------------------------------------------------
+// EC precompile wrappers (BN254)
+// ---------------------------------------------------------------------------
+
+/// EC point addition on BN254 (precompile 0x06).
+pub fn ec_add(_ ax: u256, _ ay: u256, _ bx: u256, _ by: u256) -> (u256, u256) {
+    let ptr: u256 = mem::alloc(128)
+    ops::mstore(addr: ptr, value: ax)
+    ops::mstore(addr: ptr + 32, value: ay)
+    ops::mstore(addr: ptr + 64, value: bx)
+    ops::mstore(addr: ptr + 96, value: by)
+    let ok: u256 = ops::staticcall(
+        gas: ops::gas(),
+        addr: 6,
+        args_offset: ptr,
+        args_len: 128,
+        ret_offset: ptr,
+        ret_len: 64,
+    )
+    if ok == 0 { ops::revert(offset: 0, len: 0) }
+    (ops::mload(ptr), ops::mload(ptr + 32))
+}
+
+/// EC scalar multiplication on BN254 (precompile 0x07).
+pub fn ec_mul(_ px: u256, _ py: u256, _ s: u256) -> (u256, u256) {
+    let ptr: u256 = mem::alloc(96)
+    ops::mstore(addr: ptr, value: px)
+    ops::mstore(addr: ptr + 32, value: py)
+    ops::mstore(addr: ptr + 64, value: s)
+    let ok: u256 = ops::staticcall(
+        gas: ops::gas(),
+        addr: 7,
+        args_offset: ptr,
+        args_len: 96,
+        ret_offset: ptr,
+        ret_len: 64,
+    )
+    if ok == 0 { ops::revert(offset: 0, len: 0) }
+    (ops::mload(ptr), ops::mload(ptr + 32))
+}
+
+/// EC pairing check on BN254 with 2 pairs (precompile 0x08).
+/// Returns true if the pairing equation holds.
+/// Each pair is (G1.x, G1.y, G2.x1, G2.x2, G2.y1, G2.y2).
+pub fn ec_pairing_2(
+    _ a1x: u256, _ a1y: u256,
+    _ b1x1: u256, _ b1x2: u256, _ b1y1: u256, _ b1y2: u256,
+    _ a2x: u256, _ a2y: u256,
+    _ b2x1: u256, _ b2x2: u256, _ b2y1: u256, _ b2y2: u256,
+) -> bool {
+    let ptr: u256 = mem::alloc(384)
+    ops::mstore(addr: ptr, value: a1x)
+    ops::mstore(addr: ptr + 32, value: a1y)
+    ops::mstore(addr: ptr + 64, value: b1x1)
+    ops::mstore(addr: ptr + 96, value: b1x2)
+    ops::mstore(addr: ptr + 128, value: b1y1)
+    ops::mstore(addr: ptr + 160, value: b1y2)
+    ops::mstore(addr: ptr + 192, value: a2x)
+    ops::mstore(addr: ptr + 224, value: a2y)
+    ops::mstore(addr: ptr + 256, value: b2x1)
+    ops::mstore(addr: ptr + 288, value: b2x2)
+    ops::mstore(addr: ptr + 320, value: b2y1)
+    ops::mstore(addr: ptr + 352, value: b2y2)
+    let ok: u256 = ops::staticcall(
+        gas: ops::gas(),
+        addr: 8,
+        args_offset: ptr,
+        args_len: 384,
+        ret_offset: ptr,
+        ret_len: 32,
+    )
+    if ok == 0 { ops::revert(offset: 0, len: 0) }
+    ops::mload(ptr) != 0
+}
+
+/// EC pairing check on BN254 with 4 pairs (precompile 0x08).
+/// Returns true if the pairing equation holds.
+pub fn ec_pairing_4(
+    _ a1x: u256, _ a1y: u256,
+    _ b1x1: u256, _ b1x2: u256, _ b1y1: u256, _ b1y2: u256,
+    _ a2x: u256, _ a2y: u256,
+    _ b2x1: u256, _ b2x2: u256, _ b2y1: u256, _ b2y2: u256,
+    _ a3x: u256, _ a3y: u256,
+    _ b3x1: u256, _ b3x2: u256, _ b3y1: u256, _ b3y2: u256,
+    _ a4x: u256, _ a4y: u256,
+    _ b4x1: u256, _ b4x2: u256, _ b4y1: u256, _ b4y2: u256,
+) -> bool {
+    let ptr: u256 = mem::alloc(768)
+    ops::mstore(addr: ptr, value: a1x)
+    ops::mstore(addr: ptr + 32, value: a1y)
+    ops::mstore(addr: ptr + 64, value: b1x1)
+    ops::mstore(addr: ptr + 96, value: b1x2)
+    ops::mstore(addr: ptr + 128, value: b1y1)
+    ops::mstore(addr: ptr + 160, value: b1y2)
+    ops::mstore(addr: ptr + 192, value: a2x)
+    ops::mstore(addr: ptr + 224, value: a2y)
+    ops::mstore(addr: ptr + 256, value: b2x1)
+    ops::mstore(addr: ptr + 288, value: b2x2)
+    ops::mstore(addr: ptr + 320, value: b2y1)
+    ops::mstore(addr: ptr + 352, value: b2y2)
+    ops::mstore(addr: ptr + 384, value: a3x)
+    ops::mstore(addr: ptr + 416, value: a3y)
+    ops::mstore(addr: ptr + 448, value: b3x1)
+    ops::mstore(addr: ptr + 480, value: b3x2)
+    ops::mstore(addr: ptr + 512, value: b3y1)
+    ops::mstore(addr: ptr + 544, value: b3y2)
+    ops::mstore(addr: ptr + 576, value: a4x)
+    ops::mstore(addr: ptr + 608, value: a4y)
+    ops::mstore(addr: ptr + 640, value: b4x1)
+    ops::mstore(addr: ptr + 672, value: b4x2)
+    ops::mstore(addr: ptr + 704, value: b4y1)
+    ops::mstore(addr: ptr + 736, value: b4y2)
+    let ok: u256 = ops::staticcall(
+        gas: ops::gas(),
+        addr: 8,
+        args_offset: ptr,
+        args_len: 768,
+        ret_offset: ptr,
+        ret_len: 32,
+    )
+    if ok == 0 { ops::revert(offset: 0, len: 0) }
+    ops::mload(ptr) != 0
+}
+
+/// Modular exponentiation (precompile 0x05).
+/// Computes `base^exp % modulus` for u256-sized inputs.
+pub fn modexp(_ base: u256, _ exp: u256, _ modulus: u256) -> u256 {
+    let ptr: u256 = mem::alloc(192)
+    ops::mstore(addr: ptr, value: 32)
+    ops::mstore(addr: ptr + 32, value: 32)
+    ops::mstore(addr: ptr + 64, value: 32)
+    ops::mstore(addr: ptr + 96, value: base)
+    ops::mstore(addr: ptr + 128, value: exp)
+    ops::mstore(addr: ptr + 160, value: modulus)
+    let ok: u256 = ops::staticcall(
+        gas: ops::gas(),
+        addr: 5,
+        args_offset: ptr,
+        args_len: 192,
+        ret_offset: ptr,
+        ret_len: 32,
+    )
+    if ok == 0 { ops::revert(offset: 0, len: 0) }
+    ops::mload(ptr)
 }
