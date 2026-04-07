@@ -1,7 +1,7 @@
-use std::evm::{Evm, Address}
+use std::evm::{Evm, Ctx, Address}
 use std::abi::sol
 
-pub contract PayableBox {
+pub contract PayableBox uses (ctx: Ctx) {
     #[payable]
     init() {}
 
@@ -9,8 +9,10 @@ pub contract PayableBox {
         #[payable]
         Fund {} {}
 
-        GetBalance {} -> u256 {
-            0
+        GetBalance {} -> u256
+            uses (ctx)
+        {
+            ctx.selfbalance()
         }
     }
 }
@@ -126,4 +128,17 @@ fn test_payable_accepts_value() uses (evm: mut Evm) {
 fn test_payable_init_accepts_value() uses (evm: mut Evm) {
     let addr = evm.create2<PayableBox>(value: 1, args: (), salt: 0)
     assert(addr.inner != 0)
+}
+
+// Test: selfbalance reflects ETH sent to contract
+#[test(balance = 1000000000)]
+fn test_selfbalance() uses (evm: mut Evm) {
+    let addr = evm.create2<PayableBox>(value: 0, args: (), salt: 0)
+
+    // Fund the contract with 500 wei
+    evm.call(addr: addr, gas: 100000, value: 500, message: PayableMsg::Fund {})
+
+    // Query the balance via ctx.selfbalance()
+    let balance: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: PayableMsg::GetBalance {})
+    assert(balance == 500)
 }

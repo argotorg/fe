@@ -146,9 +146,17 @@ impl<T> EffectRefMut<T> for TStorPtr<T> {}
 pub trait Ctx {
     fn address(self) -> Address
     fn caller(self) -> Address
+    fn origin(self) -> Address
+    fn coinbase(self) -> Address
     fn value(self) -> u256
     fn timestamp(self) -> u256
     fn block_number(self) -> u256
+    fn prevrandao(self) -> u256
+    fn gaslimit(self) -> u256
+    fn chainid(self) -> u256
+    fn basefee(self) -> u256
+    fn selfbalance(self) -> u256
+    fn blockhash(self, _: u256) -> u256
     fn gas(self) -> u256
 }
 
@@ -412,6 +420,12 @@ impl Ctx for Evm {
     fn caller(self) -> Address {
         Address { inner: ops::caller() }
     }
+    fn origin(self) -> Address {
+        Address { inner: ops::origin() }
+    }
+    fn coinbase(self) -> Address {
+        Address { inner: ops::coinbase() }
+    }
     fn value(self) -> u256 {
         ops::callvalue()
     }
@@ -420,6 +434,24 @@ impl Ctx for Evm {
     }
     fn block_number(self) -> u256 {
         ops::number()
+    }
+    fn prevrandao(self) -> u256 {
+        ops::prevrandao()
+    }
+    fn gaslimit(self) -> u256 {
+        ops::gaslimit()
+    }
+    fn chainid(self) -> u256 {
+        ops::chainid()
+    }
+    fn basefee(self) -> u256 {
+        ops::basefee()
+    }
+    fn selfbalance(self) -> u256 {
+        ops::selfbalance()
+    }
+    fn blockhash(self, _ block: u256) -> u256 {
+        ops::blockhash(block)
     }
     fn gas(self) -> u256 {
         ops::gas()
