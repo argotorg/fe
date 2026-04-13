@@ -1,7 +1,7 @@
 [tool.towncrier]
 # Read https://github.com/argotorg/fe/newsfragments/README.md for instructions
 # package = "fe"
-filename = "docs/src/release_notes.md"
+filename = "CHANGELOG.md"
 directory = "newsfragments"
 underlines = ["", ""]
 issue_format = "[#{issue}](https://github.com/argotorg/fe/issues/{issue})"
@@ -10,35 +10,35 @@ title_format = "## {version} ({project_date})"
 
 [[tool.towncrier.type]]
 directory = "feature"
-name = "### Features"
+name = "Features"
 showcontent = true
 
 [[tool.towncrier.type]]
 directory = "bugfix"
-name = "### Bugfixes"
+name = "Bugfixes"
 showcontent = true
 
 [[tool.towncrier.type]]
 directory = "performance"
-name = "### Performance improvements"
+name = "Performance improvements"
 showcontent = true
 
 [[tool.towncrier.type]]
 directory = "doc"
-name = "### Improved Documentation"
+name = "Improved Documentation"
 showcontent = true
 
 [[tool.towncrier.type]]
 directory = "removal"
-name = "### Deprecations and Removals"
+name = "Deprecations and Removals"
 showcontent = true
 
 [[tool.towncrier.type]]
 directory = "internal"
-name = "### Internal Changes - for Fe Contributors"
+name = "Internal Changes - for Fe Contributors"
 showcontent = true
 
 [[tool.towncrier.type]]
 directory = "misc"
-name = "### Miscellaneous changes"
+name = "Miscellaneous changes"
 showcontent = false
