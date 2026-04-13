@@ -3,11 +3,6 @@
 [//]: # (towncrier release notes start)
 ## 26.0.1 (2026-04-13)
 
-### Features
-
-- Replace the git resolver backend from git2 (libgit2) to gitoxide (pure Rust). This removes the OpenSSL/libgit2 C dependency and adds sparse checkout support, allowing the resolver to fetch only the required subdirectory of a remote repository instead of the entire tree. ([#1383](https://github.com/argotorg/fe/issues/1383))
-- Expose missing `Ctx` trait APIs: `origin`, `coinbase`, `prevrandao`, `gaslimit`, `chainid`, `basefee`, `selfbalance`, and `blockhash`. ([#1388](https://github.com/argotorg/fe/issues/1388))
-
 ### Bugfixes
 
 - Suppress downstream type mismatch diagnostics when the underlying type is already invalid. This reduces cascading error noise and makes compiler output easier to read. ([#1386](https://github.com/argotorg/fe/issues/1386))
