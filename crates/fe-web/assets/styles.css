@@ -1,3 +1,5 @@
+/* Page layout variables. Code/syntax variables in fe-highlight.css. */
+
 /* Light mode (default) */
 :root {
     --bg: #ffffff;
@@ -8,7 +10,6 @@
     --accent-hover: #6366f1;
     --text-accent: #4f46e5;
     --border: #e2e8f0;
-    --fe-code-bg: #f1f5f9;
     --code-bg: var(--fe-code-bg);
 
     --hl-ref-bg: rgba(79, 70, 229, 0.08);
@@ -17,18 +18,17 @@
     --target-bg: rgba(79, 70, 229, 0.06);
 }
 
-/* Dark mode */
+/* Dark mode via OS preference */
 @media (prefers-color-scheme: dark) {
-    :root {
-        --bg: #0f0f1a;
-        --bg-secondary: #16162a;
-        --text: #e2e8f0;
-        --text-muted: #9ba3af;
-        --accent: #6366f1;
-        --accent-hover: #c7d2fe;
-        --text-accent: #a5b4fc;
-        --border: #2d3748;
-        --fe-code-bg: #0d1117;
+    :root:not([data-theme="light"]) {
+        --bg: #1e1e2e;
+        --bg-secondary: #181825;
+        --text: #cdd6f4;
+        --text-muted: #9399b2;
+        --accent: #89b4fa;
+        --accent-hover: #b4d0fb;
+        --text-accent: #89b4fa;
+        --border: #313244;
         --code-bg: var(--fe-code-bg);
 
         --hl-ref-bg: rgba(99, 102, 241, 0.18);
@@ -36,6 +36,24 @@
         --hl-def-underline: rgba(99, 102, 241, 0.6);
         --target-bg: color-mix(in srgb, var(--accent) 10%, var(--bg-secondary));
     }
+}
+
+/* Dark mode via explicit toggle */
+:root[data-theme="dark"] {
+    --bg: #1e1e2e;
+    --bg-secondary: #181825;
+    --text: #cdd6f4;
+    --text-muted: #9399b2;
+    --accent: #89b4fa;
+    --accent-hover: #b4d0fb;
+    --text-accent: #89b4fa;
+    --border: #313244;
+    --code-bg: var(--fe-code-bg);
+
+    --hl-ref-bg: rgba(99, 102, 241, 0.18);
+    --hl-def-bg: rgba(99, 102, 241, 0.30);
+    --hl-def-underline: rgba(99, 102, 241, 0.6);
+    --target-bg: color-mix(in srgb, var(--accent) 10%, var(--bg-secondary));
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -288,15 +306,27 @@ body {
 .kind-badge.const { background: #ede9fe; color: #5b21b6; }
 
 @media (prefers-color-scheme: dark) {
-    .kind-badge.struct { background: #2d4a3e; color: #7ee787; }
-    .kind-badge.enum { background: #3d3a2d; color: #e7c77e; }
-    .kind-badge.function, .kind-badge.fn { background: #2d3a4a; color: #7eb8e7; }
-    .kind-badge.trait { background: #4a2d4a; color: #e77ee7; }
-    .kind-badge.module, .kind-badge.mod { background: #2d2d4a; color: #9d7ee7; }
-    .kind-badge.contract { background: #4a3d2d; color: #e7b87e; }
-    .kind-badge.type { background: #2d4a4a; color: #7ee7e7; }
-    .kind-badge.const { background: #3a2d4a; color: #b87ee7; }
+    :root:not([data-theme="light"]) .kind-badge.struct { background: #2d4a3e; color: #7ee787; }
+    :root:not([data-theme="light"]) .kind-badge.enum { background: #3d3a2d; color: #e7c77e; }
+    :root:not([data-theme="light"]) .kind-badge.function,
+    :root:not([data-theme="light"]) .kind-badge.fn { background: #2d3a4a; color: #7eb8e7; }
+    :root:not([data-theme="light"]) .kind-badge.trait { background: #4a2d4a; color: #e77ee7; }
+    :root:not([data-theme="light"]) .kind-badge.module,
+    :root:not([data-theme="light"]) .kind-badge.mod { background: #2d2d4a; color: #9d7ee7; }
+    :root:not([data-theme="light"]) .kind-badge.contract { background: #4a3d2d; color: #e7b87e; }
+    :root:not([data-theme="light"]) .kind-badge.type { background: #2d4a4a; color: #7ee7e7; }
+    :root:not([data-theme="light"]) .kind-badge.const { background: #3a2d4a; color: #b87ee7; }
 }
+:root[data-theme="dark"] .kind-badge.struct { background: #2d4a3e; color: #7ee787; }
+:root[data-theme="dark"] .kind-badge.enum { background: #3d3a2d; color: #e7c77e; }
+:root[data-theme="dark"] .kind-badge.function,
+:root[data-theme="dark"] .kind-badge.fn { background: #2d3a4a; color: #7eb8e7; }
+:root[data-theme="dark"] .kind-badge.trait { background: #4a2d4a; color: #e77ee7; }
+:root[data-theme="dark"] .kind-badge.module,
+:root[data-theme="dark"] .kind-badge.mod { background: #2d2d4a; color: #9d7ee7; }
+:root[data-theme="dark"] .kind-badge.contract { background: #4a3d2d; color: #e7b87e; }
+:root[data-theme="dark"] .kind-badge.type { background: #2d4a4a; color: #7ee7e7; }
+:root[data-theme="dark"] .kind-badge.const { background: #3a2d4a; color: #b87ee7; }
 
 /* Main item signature at top of page. The wrapper provides the visual
    box; the inner fe-code-block border is suppressed to avoid doubling. */
@@ -881,27 +911,7 @@ fe-code-block {
     color: var(--text);
 }
 
-/* Mobile hamburger button */
-.mobile-menu-btn {
-    display: none;
-    position: fixed;
-    top: 0.75rem;
-    left: 0.75rem;
-    z-index: 101;
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    color: var(--text);
-    padding: 0.375rem 0.5rem;
-    cursor: pointer;
-    font-size: 1.25rem;
-    line-height: 1;
-}
-
-.mobile-menu-btn:hover {
-    border-color: var(--accent);
-    color: var(--accent);
-}
+/* Old mobile menu styles removed — see fe-doc-viewer component styles below */
 
 .sidebar-backdrop {
     display: none;
@@ -1148,16 +1158,16 @@ fe-doc-viewer, .fe-doc-viewer {
 .mobile-menu-btn {
     display: none;
     position: fixed;
-    bottom: 1rem;
-    right: 1rem;
+    top: 0.5rem;
+    right: 0.75rem;
     z-index: 1001;
-    width: 3rem;
-    height: 3rem;
-    border-radius: 50%;
+    width: 2.5rem;
+    height: 2.5rem;
+    border-radius: 6px;
     border: none;
     background: var(--accent);
     color: white;
-    font-size: 1.25rem;
+    font-size: 1.1rem;
     cursor: pointer;
     box-shadow: 0 2px 8px rgba(0,0,0,0.3);
 }
@@ -1309,15 +1319,23 @@ fe-doc-viewer, .fe-doc-viewer {
 .fe-nav-badge.const { background: #ede9fe; color: #5b21b6; }
 
 @media (prefers-color-scheme: dark) {
-    .fe-nav-badge.struct { background: #2d4a3e; color: #7ee787; }
-    .fe-nav-badge.enum { background: #3d3a2d; color: #e7c77e; }
-    .fe-nav-badge.fn { background: #2d3a4a; color: #7eb8e7; }
-    .fe-nav-badge.trait { background: #4a2d4a; color: #e77ee7; }
-    .fe-nav-badge.mod { background: #2d2d4a; color: #9d7ee7; }
-    .fe-nav-badge.contract { background: #4a3d2d; color: #e7b87e; }
-    .fe-nav-badge.type { background: #2d4a4a; color: #7ee7e7; }
-    .fe-nav-badge.const { background: #3a2d4a; color: #b87ee7; }
+    :root:not([data-theme="light"]) .fe-nav-badge.struct { background: #2d4a3e; color: #7ee787; }
+    :root:not([data-theme="light"]) .fe-nav-badge.enum { background: #3d3a2d; color: #e7c77e; }
+    :root:not([data-theme="light"]) .fe-nav-badge.fn { background: #2d3a4a; color: #7eb8e7; }
+    :root:not([data-theme="light"]) .fe-nav-badge.trait { background: #4a2d4a; color: #e77ee7; }
+    :root:not([data-theme="light"]) .fe-nav-badge.mod { background: #2d2d4a; color: #9d7ee7; }
+    :root:not([data-theme="light"]) .fe-nav-badge.contract { background: #4a3d2d; color: #e7b87e; }
+    :root:not([data-theme="light"]) .fe-nav-badge.type { background: #2d4a4a; color: #7ee7e7; }
+    :root:not([data-theme="light"]) .fe-nav-badge.const { background: #3a2d4a; color: #b87ee7; }
 }
+:root[data-theme="dark"] .fe-nav-badge.struct { background: #2d4a3e; color: #7ee787; }
+:root[data-theme="dark"] .fe-nav-badge.enum { background: #3d3a2d; color: #e7c77e; }
+:root[data-theme="dark"] .fe-nav-badge.fn { background: #2d3a4a; color: #7eb8e7; }
+:root[data-theme="dark"] .fe-nav-badge.trait { background: #4a2d4a; color: #e77ee7; }
+:root[data-theme="dark"] .fe-nav-badge.mod { background: #2d2d4a; color: #9d7ee7; }
+:root[data-theme="dark"] .fe-nav-badge.contract { background: #4a3d2d; color: #e7b87e; }
+:root[data-theme="dark"] .fe-nav-badge.type { background: #2d4a4a; color: #7ee7e7; }
+:root[data-theme="dark"] .fe-nav-badge.const { background: #3a2d4a; color: #b87ee7; }
 
 /* Scroll offset for anchored elements (clears sticky headers) */
 .member-item[id], .impl-block[id], .method-item[id], .children-section h2[id],
@@ -1353,5 +1371,16 @@ fe-doc-viewer, .fe-doc-viewer {
     }
     .page-outline {
         display: none;
+    }
+    /* Prevent code blocks from blowing up on mobile */
+    .fe-doc-viewer-content {
+        overflow-x: hidden;
+    }
+    fe-code-block {
+        max-width: 100%;
+        overflow-x: auto;
+    }
+    .member-item, .impl-block, .method-item {
+        overflow-x: auto;
     }
 }

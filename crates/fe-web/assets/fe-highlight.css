@@ -1,57 +1,120 @@
-/* Fe syntax highlighting (tree-sitter) — One Dark inspired
-   Standalone version with hardcoded colors for embedding in Starlight/Astro.
-   Override these CSS custom properties to theme the syntax colors:
-     --fe-hl-keyword, --fe-hl-type, --fe-hl-type-interface, --fe-hl-type-variant,
-     --fe-hl-function, --fe-hl-string, --fe-hl-string-escape, --fe-hl-number,
-     --fe-hl-comment, --fe-hl-operator, --fe-hl-variable, --fe-hl-attribute,
-     --fe-hl-constant, --fe-hl-punctuation,
-     --fe-code-bg, --fe-code-border, --fe-code-text, --fe-code-font,
-     --fe-code-size, --fe-code-line-height */
+/* Fe syntax highlighting — CSS custom properties define all colors.
+   Default: Catppuccin Mocha (dark). Light override via prefers-color-scheme
+   or data-theme="light". Host pages can override any --fe-* variable. */
 
-/* Light mode syntax colors */
-.hl-keyword { color: var(--fe-hl-keyword, #7c3aed); }
-.hl-type, .hl-type-builtin { color: var(--fe-hl-type, #b45309); }
-.hl-type-interface { color: var(--fe-hl-type-interface, #9333ea); }
-.hl-type-enum-variant { color: var(--fe-hl-type-variant, #a16207); }
-.hl-function, .hl-function-definition, .hl-function-method { color: var(--fe-hl-function, #2563eb); }
-.hl-string { color: var(--fe-hl-string, #16a34a); }
-.hl-string-escape { color: var(--fe-hl-string-escape, #0d9488); }
-.hl-number { color: var(--fe-hl-number, #c2410c); }
-.hl-comment, .hl-comment-doc { color: var(--fe-hl-comment, #6b7280); font-style: italic; }
-.hl-operator { color: var(--fe-hl-operator, #475569); }
-.hl-property, .hl-variable-parameter { color: var(--fe-hl-variable, #dc2626); }
-.hl-variable { color: var(--fe-hl-variable, #dc2626); }
-.hl-attribute { color: var(--fe-hl-attribute, #c2410c); }
-.hl-constant { color: var(--fe-hl-constant, #c2410c); font-weight: bold; }
-.hl-punctuation-bracket, .hl-punctuation-delimiter, .hl-punctuation-special { color: var(--fe-hl-punctuation, #64748b); }
+/* ============================================================================
+   Color variables
+   ============================================================================ */
 
-/* Dark mode syntax colors */
-@media (prefers-color-scheme: dark) {
-    .hl-keyword { color: var(--fe-hl-keyword, #c678dd); }
-    .hl-type, .hl-type-builtin { color: var(--fe-hl-type, #e5c07b); }
-    .hl-type-interface { color: var(--fe-hl-type-interface, #e77ee7); }
-    .hl-type-enum-variant { color: var(--fe-hl-type-variant, #e7c77e); }
-    .hl-function, .hl-function-definition, .hl-function-method { color: var(--fe-hl-function, #61afef); }
-    .hl-string { color: var(--fe-hl-string, #98c379); }
-    .hl-string-escape { color: var(--fe-hl-string-escape, #56b6c2); }
-    .hl-number { color: var(--fe-hl-number, #d19a66); }
-    .hl-comment, .hl-comment-doc { color: var(--fe-hl-comment, #5c6370); font-style: italic; }
-    .hl-operator { color: var(--fe-hl-operator, #abb2bf); }
-    .hl-property, .hl-variable-parameter { color: var(--fe-hl-variable, #e06c75); }
-    .hl-variable { color: var(--fe-hl-variable, #e06c75); }
-    .hl-attribute { color: var(--fe-hl-attribute, #d19a66); }
-    .hl-constant { color: var(--fe-hl-constant, #d19a66); font-weight: bold; }
-    .hl-punctuation-bracket, .hl-punctuation-delimiter, .hl-punctuation-special { color: var(--fe-hl-punctuation, #abb2bf); }
+/* Default: Catppuccin Mocha (dark) */
+:root {
+    --fe-hl-keyword: #cba6f7;
+    --fe-hl-variable-builtin: #94e2d5;
+    --fe-hl-type: #f9e2af;
+    --fe-hl-type-interface: #cba6f7;
+    --fe-hl-type-variant: #f9e2af;
+    --fe-hl-function: #89b4fa;
+    --fe-hl-string: #a6e3a1;
+    --fe-hl-string-escape: #94e2d5;
+    --fe-hl-number: #94e2d5;
+    --fe-hl-comment: #6c7086;
+    --fe-hl-operator: #94e2d5;
+    --fe-hl-variable: #a6e3a1;
+    --fe-hl-attribute: #cba6f7;
+    --fe-hl-constant: #94e2d5;
+    --fe-hl-punctuation: #6c7086;
+
+    --fe-code-bg: #1e1e2e;
+    --fe-code-border: #313244;
+    --fe-code-text: #cdd6f4;
+    --fe-code-line-number: #6c7086;
+    --fe-code-font: "JetBrains Mono", "Fira Code", monospace;
+    --fe-code-size: 0.8rem;
+    --fe-code-line-height: 1.6;
+    --fe-code-radius: 6px;
 }
 
-/* Smooth transition for SCIP symbol hover highlights.
-   feHighlight() sets inline styles; the browser tweens the change. */
+/* Light override: Catppuccin Latte — via OS preference */
+@media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+        --fe-hl-keyword: #7c3aed;
+        --fe-hl-variable-builtin: #0891b2;
+        --fe-hl-type: #b08800;
+        --fe-hl-type-interface: #7c3aed;
+        --fe-hl-type-variant: #b08800;
+        --fe-hl-function: #2563eb;
+        --fe-hl-string: #16a34a;
+        --fe-hl-string-escape: #0d9488;
+        --fe-hl-number: #0891b2;
+        --fe-hl-comment: #9ca0b0;
+        --fe-hl-operator: #0891b2;
+        --fe-hl-variable: #0d9488;
+        --fe-hl-attribute: #7c3aed;
+        --fe-hl-constant: #0891b2;
+        --fe-hl-punctuation: #6b7280;
+
+        --fe-code-bg: #eff1f5;
+        --fe-code-border: #ccd0da;
+        --fe-code-text: #4c4f69;
+        --fe-code-line-number: #9ca0b0;
+    }
+}
+
+/* Light override: explicit toggle */
+:root[data-theme="light"] {
+    --fe-hl-keyword: #7c3aed;
+    --fe-hl-variable-builtin: #0891b2;
+    --fe-hl-type: #b08800;
+    --fe-hl-type-interface: #7c3aed;
+    --fe-hl-type-variant: #b08800;
+    --fe-hl-function: #2563eb;
+    --fe-hl-string: #16a34a;
+    --fe-hl-string-escape: #0d9488;
+    --fe-hl-number: #0891b2;
+    --fe-hl-comment: #9ca0b0;
+    --fe-hl-operator: #0891b2;
+    --fe-hl-variable: #0d9488;
+    --fe-hl-attribute: #7c3aed;
+    --fe-hl-constant: #0891b2;
+    --fe-hl-punctuation: #6b7280;
+
+    --fe-code-bg: #eff1f5;
+    --fe-code-border: #ccd0da;
+    --fe-code-text: #4c4f69;
+    --fe-code-line-number: #9ca0b0;
+}
+
+/* ============================================================================
+   Syntax highlight rules — read variables, no fallbacks
+   ============================================================================ */
+
+.hl-keyword { color: var(--fe-hl-keyword); }
+.hl-variable-builtin { color: var(--fe-hl-variable-builtin); font-style: italic; }
+.hl-type, .hl-type-builtin { color: var(--fe-hl-type); }
+.hl-type-interface { color: var(--fe-hl-type-interface); }
+.hl-type-enum-variant { color: var(--fe-hl-type-variant); }
+.hl-function, .hl-function-definition, .hl-function-method { color: var(--fe-hl-function); }
+.hl-string { color: var(--fe-hl-string); }
+.hl-string-escape { color: var(--fe-hl-string-escape); }
+.hl-number { color: var(--fe-hl-number); }
+.hl-comment, .hl-comment-doc { color: var(--fe-hl-comment); font-style: italic; }
+.hl-operator { color: var(--fe-hl-operator); }
+.hl-property, .hl-variable-parameter { color: var(--fe-hl-variable); }
+.hl-variable { color: var(--fe-hl-variable); }
+.hl-attribute { color: var(--fe-hl-attribute); }
+.hl-constant { color: var(--fe-hl-constant); font-weight: bold; }
+.hl-punctuation-bracket, .hl-punctuation-delimiter, .hl-punctuation-special { color: var(--fe-hl-punctuation); }
+
+/* SCIP symbol hover highlight transitions */
 [class*="sym-"] {
     transition: background 0.2s ease-out, text-decoration 0.2s ease-out,
                 text-decoration-color 0.2s ease-out;
 }
 
-/* <fe-code-block> custom element */
+/* ============================================================================
+   <fe-code-block> component layout
+   ============================================================================ */
+
 fe-code-block {
     display: block;
     margin: 1rem 0;
@@ -59,24 +122,19 @@ fe-code-block {
 
 .fe-code-block-wrapper {
     display: flex;
-    background: var(--fe-code-bg, #0d1117);
-    border: 1px solid var(--fe-code-border, #2d3748);
-    border-radius: var(--fe-code-radius, 6px);
+    background: var(--fe-code-bg);
+    border: 1px solid var(--fe-code-border);
+    border-radius: var(--fe-code-radius);
     overflow-x: auto;
+    max-width: 100%;
 }
 
-/* Tighter margins in inline contexts (member headers, code headers, etc.)
-   These target the fe-code-block element in the light DOM. The shadow DOM
-   wrapper styles (border, background) are controlled via CSS custom
-   properties that inherit through the shadow boundary. */
 .member-header fe-code-block,
 .code-header fe-code-block,
 .implementor-sig fe-code-block {
     margin: 0;
 }
 
-/* Inline signature contexts: suppress border, keep code background.
-   (these inherit into the shadow root where .fe-code-block-wrapper reads them). */
 .member-header,
 .code-header,
 .implementor-sig {
@@ -87,39 +145,45 @@ fe-code-block {
     display: flex;
     flex-direction: column;
     padding: 0.75rem 0.5rem;
-    border-right: 1px solid var(--fe-code-border, #2d3748);
+    border-right: 1px solid var(--fe-code-border);
     text-align: right;
     user-select: none;
-    color: var(--fe-code-line-number, #9ba3af);
-    font-family: var(--fe-code-font, "JetBrains Mono", "Fira Code", monospace);
-    font-size: var(--fe-code-size, 0.8rem);
-    line-height: var(--fe-code-line-height, 1.6);
+    color: var(--fe-code-line-number);
+    font-family: var(--fe-code-font);
+    font-size: var(--fe-code-size);
+    line-height: var(--fe-code-line-height);
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
 }
 
 .fe-line-numbers span {
-    line-height: var(--fe-code-line-height, 1.6);
+    line-height: var(--fe-code-line-height);
 }
 
 .fe-code-pre {
     flex: 1;
+    min-width: 0;
     margin: 0;
     padding: 0.75rem 1rem;
     background: transparent;
     overflow-x: auto;
-    font-family: var(--fe-code-font, "JetBrains Mono", "Fira Code", monospace);
-    font-size: var(--fe-code-size, 0.8rem);
-    line-height: var(--fe-code-line-height, 1.6);
+    font-family: var(--fe-code-font);
+    font-size: var(--fe-code-size);
+    line-height: var(--fe-code-line-height);
+    /* Prevent iOS Safari TextAutoSizing from inflating font-size in code blocks.
+       Without this, the algorithm selectively enlarges text in blocks whose
+       intrinsic width exceeds the viewport (timing-dependent on first load),
+       causing inconsistent sizes across code blocks with identical styles.
+       Using 100% (not none) preserves user zoom and accessibility settings. */
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
 }
 
 .fe-code-pre code {
     font-family: inherit;
     font-size: inherit;
     line-height: inherit;
-    color: var(--fe-code-text, #334155);
-}
-
-@media (prefers-color-scheme: dark) {
-    .fe-code-pre code {
-        color: var(--fe-code-text, #e4e4e4);
-    }
+    color: var(--fe-code-text);
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
 }

@@ -80,6 +80,34 @@ function _invalidateCodeBlockSheet() {
   _codeBlockSheet = null;
 }
 
+// Shared list of code blocks waiting for the highlight stylesheet to load.
+var _pendingStyleAdoptions = [];
+var _stylesheetWatchStarted = false;
+
+function _waitForHighlightStylesheet(codeBlock) {
+  _pendingStyleAdoptions.push(codeBlock);
+  if (_stylesheetWatchStarted) return;
+  _stylesheetWatchStarted = true;
+
+  var links = document.querySelectorAll('link[rel="stylesheet"]');
+  for (var i = 0; i < links.length; i++) {
+    var href = links[i].getAttribute("href") || "";
+    if (href.indexOf("highlight") !== -1) {
+      links[i].addEventListener("load", function onLoad() {
+        this.removeEventListener("load", onLoad);
+        _invalidateCodeBlockSheet();
+        var pending = _pendingStyleAdoptions;
+        _pendingStyleAdoptions = [];
+        for (var j = 0; j < pending.length; j++) {
+          pending[j]._adoptStyles();
+          pending[j]._render();
+        }
+      });
+      return;
+    }
+  }
+}
+
 /**
  * Extract a named region from source text.
  * Regions are delimited by `// #region name` and `// #endregion name` comments.
@@ -161,16 +189,7 @@ class FeCodeBlock extends HTMLElement {
     // Create shadow root once
     if (!this.shadowRoot) {
       this.attachShadow({ mode: "open" });
-      var sheet = _getCodeBlockSheet();
-      if (sheet) {
-        this.shadowRoot.adoptedStyleSheets = [sheet];
-      } else {
-        // Fallback: clone page styles into shadow root
-        var pageStyles = document.querySelectorAll("style");
-        for (var i = 0; i < pageStyles.length; i++) {
-          this.shadowRoot.appendChild(pageStyles[i].cloneNode(true));
-        }
-      }
+      this._adoptStyles();
     }
 
     this._render();
@@ -199,6 +218,35 @@ class FeCodeBlock extends HTMLElement {
       self._resolveSymbol();
       self._render();
     });
+  }
+
+  /** Adopt highlight styles into shadow root, waiting for stylesheet if needed. */
+  _adoptStyles() {
+    var sheet = _getCodeBlockSheet();
+    if (sheet) {
+      this.shadowRoot.adoptedStyleSheets = [sheet];
+      return;
+    }
+    // Stylesheet not ready — find the <link> that loads it and wait for load
+    var self = this;
+    var links = document.querySelectorAll('link[rel="stylesheet"]');
+    for (var i = 0; i < links.length; i++) {
+      var href = links[i].getAttribute("href") || "";
+      if (href.indexOf("highlight") !== -1) {
+        links[i].addEventListener("load", function onLoad() {
+          this.removeEventListener("load", onLoad);
+          _invalidateCodeBlockSheet();
+          self._adoptStyles();
+          self._render();
+        });
+        return;
+      }
+    }
+    // No highlight <link> found — clone page <style> tags as fallback
+    var pageStyles = document.querySelectorAll("style");
+    for (var j = 0; j < pageStyles.length; j++) {
+      this.shadowRoot.appendChild(pageStyles[j].cloneNode(true));
+    }
   }
 
   /** Look up an item by path in per-component or global index. */
