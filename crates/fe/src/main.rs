@@ -17,6 +17,7 @@ mod tree;
 mod workspace_ingot;
 
 use std::fs;
+use std::sync::OnceLock;
 
 use build::build;
 use camino::Utf8PathBuf;
@@ -52,8 +53,18 @@ pub enum BuildEmit {
     Abi,
 }
 
+fn cli_version() -> &'static str {
+    static VERSION: OnceLock<String> = OnceLock::new();
+    VERSION
+        .get_or_init(|| match option_env!("FE_GIT_HASH") {
+            Some(hash) if !hash.is_empty() => format!("{} ({hash})", env!("CARGO_PKG_VERSION")),
+            _ => env!("CARGO_PKG_VERSION").to_string(),
+        })
+        .as_str()
+}
+
 #[derive(Debug, Clone, Parser)]
-#[command(version, about, long_about = None)]
+#[command(version = cli_version(), about, long_about = None)]
 pub struct Options {
     /// Control colored output (auto, always, never).
     #[arg(long, global = true, value_enum, default_value = "auto")]
