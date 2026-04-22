@@ -1,5 +1,5 @@
 use core::AsBytes
-use core::abi::DynString
+use core::abi::{Bytes, DynString}
 use core::num::IntDowncast
 use ingot::evm::Address
 use ingot::evm::TopicValue
@@ -91,6 +91,11 @@ impl<const N: usize> SolCompat for String<N> {
 impl SolCompat for DynString {
     type S = String<6>
     const SOL_TYPE: Self::S = "string"
+}
+
+impl SolCompat for Bytes {
+    type S = String<5>
+    const SOL_TYPE: Self::S = "bytes"
 }
 
 impl TopicValue for u8 {
