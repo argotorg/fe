@@ -52,3 +52,6 @@ axum = { version = "0.8", optional = true }
 dir-test.workspace = true
 test-utils.workspace = true
 tempfile = "3.23"
+contract-harness = { path = "../contract-harness", package = "fe-contract-harness" }
+solc-runner = { path = "../solc-runner", package = "fe-solc-runner" }
+sha2 = "0.10"

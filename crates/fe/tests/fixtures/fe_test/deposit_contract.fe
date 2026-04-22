@@ -1,0 +1,421 @@
+// Fe reimplementation of the ETH 2.0 Deposit Contract
+// (mainnet 0x00000000219ab540356cBB839Cbe05303d7705Fa).
+//
+// Shape-for-shape port of the Solidity reference:
+//   deposit(bytes pubkey, bytes withdrawal_credentials, bytes signature, bytes32 root)
+// Dynamic `bytes` inputs arrive as `std::abi::Bytes`, and the runtime validates
+// their lengths (48, 32, 96) exactly like Solidity's `require` checks. The
+// branchless Merkle-tree algorithm and SHA-256 construction match the original
+// contract bit-for-bit.
+
+use std::evm::{assert, crypto, Ctx, Evm, Log, Packed, RawMem}
+use std::evm::packed::{IntoPacked, PackedValue, u64_to_le_word}
+use std::abi::{Bytes, BytesView, MemoryInput, sol}
+use core::num::{IntDowncast, IntWord}
+
+const DEPOSIT_CONTRACT_TREE_DEPTH: usize = 32
+// NOTE: this also ensures `deposit_count` will fit into 64-bits
+const MAX_DEPOSIT_COUNT: u256 = 2 ** (DEPOSIT_CONTRACT_TREE_DEPTH as u256) - 1
+const GWEI: u256 = 1_000_000_000
+const ONE_ETHER_WEI: u256 = 1_000_000_000_000_000_000
+
+msg DepositMsg {
+    #[selector = sol("deposit(bytes,bytes,bytes,bytes32)")]
+    Deposit {
+        pubkey: Bytes,
+        withdrawal_credentials: Bytes,
+        signature: Bytes,
+        deposit_data_root: u256,
+    },
+
+    #[selector = sol("get_deposit_root()")]
+    GetDepositRoot -> u256,
+
+    #[selector = sol("get_deposit_count()")]
+    GetDepositCount -> Bytes,
+}
+
+#[event]
+struct DepositEvent {
+    pubkey: Bytes,
+    withdrawal_credentials: Bytes,
+    amount: Bytes,
+    signature: Bytes,
+    index: Bytes,
+}
+
+struct DepositStore {
+    branch: [u256; DEPOSIT_CONTRACT_TREE_DEPTH],
+    deposit_count: u256,
+    zero_hashes: [u256; DEPOSIT_CONTRACT_TREE_DEPTH],
+}
+
+pub contract DepositContract uses (ctx: Ctx, mem: mut RawMem, log: mut Log) {
+    mut store: DepositStore
+
+    // Precompute zero_hashes for empty subtrees. The Solidity original leaves
+    // zero_hashes[0] = 0 (implicit default) and writes levels 1..DEPOSIT_CONTRACT_TREE_DEPTH.
+    // We have to match that exact layout — otherwise every root is shifted
+    // one level.
+    init() uses (mut store, mut mem) {
+        for height in 0..DEPOSIT_CONTRACT_TREE_DEPTH - 1 {
+            let cur: u256 = store.zero_hashes[height]
+            store.zero_hashes[height + 1] = Packed::from([cur.into(), cur.into()]).sha256()
+        }
+    }
+
+    recv DepositMsg {
+        #[payable]
+        Deposit {
+            pubkey,
+            withdrawal_credentials,
+            signature,
+            deposit_data_root,
+        } uses (mut store, ctx, mut mem, mut log) {
+            assert(pubkey.len == 48)
+            assert(withdrawal_credentials.len == 32)
+            assert(signature.len == 96)
+
+            let value: u256 = ctx.value()
+            assert(value >= ONE_ETHER_WEI)
+            assert(value % GWEI == 0)
+            let deposit_amount: u256 = value / GWEI
+            assert(deposit_amount <= u64::MASK)
+            // Truncating cast matches Solidity's `uint64(x)`. The assert above
+            // guarantees no information is lost.
+            let amount_gwei: u64 = deposit_amount.downcast_truncate()
+
+            // Emit DepositEvent (index is the pre-increment deposit_count).
+            log.emit(DepositEvent {
+                pubkey,
+                withdrawal_credentials,
+                amount: Packed::from([PackedValue::U64Le(amount_gwei)]).as_bytes(),
+                signature,
+                index: Packed::from([
+                    PackedValue::U64Le(store.deposit_count.downcast_truncate()),
+                ]).as_bytes(),
+            })
+
+            let mut node: u256 = compute_deposit_data_root(
+                pubkey: pubkey.view(),
+                withdrawal_credentials: withdrawal_credentials.view(),
+                signature: signature.view(),
+                amount_gwei: amount_gwei,
+            )
+            assert(node == deposit_data_root)
+
+            assert(store.deposit_count < MAX_DEPOSIT_COUNT)
+            store.deposit_count += 1
+
+            let mut size: u256 = store.deposit_count
+            for height in 0..DEPOSIT_CONTRACT_TREE_DEPTH {
+                if size & 1 == 1 {
+                    store.branch[height] = node
+                    return
+                }
+                node = Packed::from([store.branch[height].into(), node.into()]).sha256()
+                size = size / 2
+            }
+            // Unreachable: the MAX_DEPOSIT_COUNT check above guarantees we exit
+            // via the `size & 1 == 1` branch within DEPOSIT_CONTRACT_TREE_DEPTH iterations.
+            assert(false)
+        }
+
+        GetDepositRoot -> u256 uses (store, mut mem) {
+            let mut node: u256 = 0
+            let mut size: u256 = store.deposit_count
+            for height in 0..DEPOSIT_CONTRACT_TREE_DEPTH {
+                if size & 1 == 1 {
+                    node = Packed::from([store.branch[height].into(), node.into()]).sha256()
+                } else {
+                    node = Packed::from([node.into(), store.zero_hashes[height].into()]).sha256()
+                }
+                size = size / 2
+            }
+            // Finalize as sha256(node || LE(count) || bytes24(0)).
+            // MAX_DEPOSIT_COUNT = 2**32 - 1 means the truncating cast never
+            // loses information.
+            Packed::from([
+                node.into(),
+                PackedValue::U64Le(store.deposit_count.downcast_truncate()),
+                PackedValue::ZeroBytes(24),
+            ]).sha256()
+        }
+
+        GetDepositCount -> Bytes uses (store, mut mem) {
+            let count: u64 = store.deposit_count.downcast_truncate()
+            Packed::from([PackedValue::U64Le(count)]).as_bytes()
+        }
+    }
+}
+
+// Reconstruct the deposit-data SSZ root from its constituent parts. Exposed at
+// module level so tests can precompute a valid `deposit_data_root` to pass in.
+//
+// Mirrors the Solidity reference:
+//   bytes32 pubkey_root = sha256(abi.encodePacked(pubkey, bytes16(0)));
+//   bytes32 signature_root = sha256(abi.encodePacked(
+//       sha256(abi.encodePacked(signature[:64])),
+//       sha256(abi.encodePacked(signature[64:], bytes32(0)))));
+//   bytes32 node = sha256(abi.encodePacked(
+//       sha256(abi.encodePacked(pubkey_root, withdrawal_credentials)),
+//       sha256(abi.encodePacked(amount, bytes24(0), signature_root))));
+pub fn compute_deposit_data_root(
+    pubkey: BytesView<MemoryInput>,
+    withdrawal_credentials: BytesView<MemoryInput>,
+    signature: BytesView<MemoryInput>,
+    amount_gwei: u64,
+) -> u256 uses (mem: mut RawMem) {
+    let pubkey_root: u256 = Packed::from([
+        pubkey.into(),
+        PackedValue::ZeroBytes(16),
+    ]).sha256()
+
+    let sig_base = signature.input.base + signature.start
+    let signature_root: u256 = Packed::from([
+        crypto::sha256(sig_base, 64).into(),
+        Packed::from([
+            mem.mload(sig_base + 64).into(),
+            PackedValue::U256(0),
+        ]).sha256().into(),
+    ]).sha256()
+
+    let left: u256 = Packed::from([
+        pubkey_root.into(),
+        withdrawal_credentials.into(),
+    ]).sha256()
+    let right: u256 = Packed::from([
+        PackedValue::U64Le(amount_gwei),
+        PackedValue::ZeroBytes(24),
+        signature_root.into(),
+    ]).sha256()
+    Packed::from([left.into(), right.into()]).sha256()
+}
+
+// Decode an 8-byte little-endian `Bytes` back into a `u64`. Used by tests to
+// check `GetDepositCount` results without depending on exact byte layout.
+fn le_bytes_to_u64(_ b: Bytes) -> u64 {
+    assert(b.len == 8)
+    let mut v: u256 = 0
+    let mut i: u256 = 0
+    while i < 8 {
+        v |= (b.byte_at(i) as u256) << (i * 8)
+        i += 1
+    }
+    v.downcast_truncate()
+}
+
+// NOTE: these helpers currently avoid `Packed::from(...).as_bytes()` because a
+// Bytes built that way and then passed as a msg-variant field through
+// `evm.call` comes out the other side with a garbled length (see the
+// deposit-contract history — round-trip-through-Packed is broken somewhere in
+// the Fe encode/decode pipeline). Manual mstore-based construction round-trips
+// fine, so we stick with that here.
+
+// Build a 48-byte pubkey `Bytes` from two u256 words: `hi` holds bytes 0..32
+// big-endian and `lo` holds bytes 32..48 left-aligned (low 16 bytes zero).
+fn pubkey_bytes(hi: u256, lo: u256) -> Bytes uses (mem: mut RawMem) {
+    let data = std::evm::mem::alloc(96)
+    mem.mstore(addr: data, value: 48)
+    mem.mstore(addr: data + 32, value: hi)
+    mem.mstore(addr: data + 64, value: lo)
+    Bytes { data: data, len: 48, size: 96 }
+}
+
+// Build a 96-byte signature `Bytes` from three u256 words.
+fn signature_bytes(s0: u256, s1: u256, s2: u256) -> Bytes uses (mem: mut RawMem) {
+    let data = std::evm::mem::alloc(128)
+    mem.mstore(addr: data, value: 96)
+    mem.mstore(addr: data + 32, value: s0)
+    mem.mstore(addr: data + 64, value: s1)
+    mem.mstore(addr: data + 96, value: s2)
+    Bytes { data: data, len: 96, size: 128 }
+}
+
+// Build a 32-byte `Bytes` from a single u256 word. Used for the
+// `withdrawal_credentials` parameter, which Solidity types as `bytes`
+// validated to length 32.
+fn word_bytes(w: u256) -> Bytes uses (mem: mut RawMem) {
+    let data = std::evm::mem::alloc(64)
+    mem.mstore(addr: data, value: 32)
+    mem.mstore(addr: data + 32, value: w)
+    Bytes { data: data, len: 32, size: 64 }
+}
+
+// -----------------------------------------------------------------------------
+// Tests
+// -----------------------------------------------------------------------------
+
+// Sample inputs used across the deposit tests. Values are arbitrary but fixed
+// so the expected Merkle root stays stable.
+const P_HI: u256 = 0x0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20
+// last 16 bytes of pubkey packed into the high 16 bytes of a word:
+const P_LO: u256 = 0x2122232425262728292a2b2c2d2e2f3000000000000000000000000000000000
+const WC:   u256 = 0x00ea0b30e4f74e5148b95b04a9c7c8ad91d00b0e0000000000000000deadbeef
+const S0:   u256 = 0x1111111111111111111111111111111111111111111111111111111111111111
+const S1:   u256 = 0x2222222222222222222222222222222222222222222222222222222222222222
+const S2:   u256 = 0x3333333333333333333333333333333333333333333333333333333333333333
+
+// Try to make a deposit without sending any ETH — this must revert (value < 1 ETH).
+#[test(should_revert)]
+fn test_deposit_rejects_zero_value() uses (evm: mut Evm, mem: mut RawMem) {
+    let c = evm.create2<DepositContract>(value: 0, args: (), salt: 0)
+    evm.call(
+        addr: c,
+        gas: 500000,
+        value: 0,
+        message: DepositMsg::Deposit {
+            pubkey: pubkey_bytes(hi: P_HI, lo: P_LO),
+            withdrawal_credentials: word_bytes(w: WC),
+            signature: signature_bytes(s0: S0, s1: S1, s2: S2),
+            deposit_data_root: 0,
+        },
+    )
+}
+
+// Deposit with a value that's not a multiple of 1 gwei must revert.
+#[test(should_revert, balance = 2_000_000_000_000_000_000)]
+fn test_deposit_rejects_non_gwei_amount() uses (evm: mut Evm, mem: mut RawMem) {
+    let c = evm.create2<DepositContract>(value: 0, args: (), salt: 0)
+    let amount_wei: u256 = 1_000_000_000_000_000_001  // 1 ETH + 1 wei
+    let amount_gwei: u64 = (amount_wei / GWEI).downcast_truncate()
+    let pk = pubkey_bytes(hi: P_HI, lo: P_LO)
+    let wc = word_bytes(w: WC)
+    let sig = signature_bytes(s0: S0, s1: S1, s2: S2)
+    let expected: u256 = compute_deposit_data_root(
+        pubkey: pk.view(),
+        withdrawal_credentials: wc.view(),
+        signature: sig.view(),
+        amount_gwei: amount_gwei,
+    )
+    evm.call(
+        addr: c,
+        gas: 500000,
+        value: amount_wei,
+        message: DepositMsg::Deposit {
+            pubkey: pk,
+            withdrawal_credentials: wc,
+            signature: sig,
+            deposit_data_root: expected,
+        },
+    )
+}
+
+// Valid deposit: count transitions 0 → 1 and the root changes.
+#[test(balance = 40_000_000_000_000_000_000)]
+fn test_deposit_success_updates_root_and_count() uses (evm: mut Evm, mem: mut RawMem) {
+    let c = evm.create2<DepositContract>(value: 0, args: (), salt: 0)
+
+    let count0: Bytes = evm.call(addr: c, gas: 200000, value: 0, message: DepositMsg::GetDepositCount {})
+    assert(le_bytes_to_u64(count0) == 0)
+    let root0: u256 = evm.call(addr: c, gas: 500000, value: 0, message: DepositMsg::GetDepositRoot {})
+
+    let amount_wei: u256 = 1_000_000_000_000_000_000  // 1 ETH
+    let amount_gwei: u64 = (amount_wei / GWEI).downcast_truncate()
+    let pk = pubkey_bytes(hi: P_HI, lo: P_LO)
+    let wc = word_bytes(w: WC)
+    let sig = signature_bytes(s0: S0, s1: S1, s2: S2)
+    let expected_root: u256 = compute_deposit_data_root(
+        pubkey: pk.view(),
+        withdrawal_credentials: wc.view(),
+        signature: sig.view(),
+        amount_gwei: amount_gwei,
+    )
+
+    evm.call(
+        addr: c,
+        gas: 2_000_000,
+        value: amount_wei,
+        message: DepositMsg::Deposit {
+            pubkey: pk,
+            withdrawal_credentials: wc,
+            signature: sig,
+            deposit_data_root: expected_root,
+        },
+    )
+
+    let count1: Bytes = evm.call(addr: c, gas: 200000, value: 0, message: DepositMsg::GetDepositCount {})
+    assert(le_bytes_to_u64(count1) == 1)
+
+    let root1: u256 = evm.call(addr: c, gas: 500000, value: 0, message: DepositMsg::GetDepositRoot {})
+    assert(root1 != root0)
+}
+
+// A caller whose claimed `deposit_data_root` doesn't match the reconstruction
+// must be rejected, even if their ETH value and other inputs are otherwise valid.
+#[test(should_revert, balance = 2_000_000_000_000_000_000)]
+fn test_deposit_rejects_mismatched_data_root() uses (evm: mut Evm, mem: mut RawMem) {
+    let c = evm.create2<DepositContract>(value: 0, args: (), salt: 0)
+    evm.call(
+        addr: c,
+        gas: 2_000_000,
+        value: 1_000_000_000_000_000_000,
+        message: DepositMsg::Deposit {
+            pubkey: pubkey_bytes(hi: P_HI, lo: P_LO),
+            withdrawal_credentials: word_bytes(w: WC),
+            signature: signature_bytes(s0: S0, s1: S1, s2: S2),
+            deposit_data_root: 0xdeadbeef,  // deliberately wrong
+        },
+    )
+}
+
+// Two valid deposits: count 0→1→2, and each root is distinct.
+#[test(balance = 40_000_000_000_000_000_000)]
+fn test_two_deposits_advance_state() uses (evm: mut Evm, mem: mut RawMem) {
+    let c = evm.create2<DepositContract>(value: 0, args: (), salt: 0)
+    let root0: u256 = evm.call(addr: c, gas: 500000, value: 0, message: DepositMsg::GetDepositRoot {})
+
+    let amount_wei: u256 = 1_000_000_000_000_000_000
+    let amount_gwei: u64 = (amount_wei / GWEI).downcast_truncate()
+    let pk = pubkey_bytes(hi: P_HI, lo: P_LO)
+    let wc = word_bytes(w: WC)
+    let sig = signature_bytes(s0: S0, s1: S1, s2: S2)
+    let expected: u256 = compute_deposit_data_root(
+        pubkey: pk.view(),
+        withdrawal_credentials: wc.view(),
+        signature: sig.view(),
+        amount_gwei: amount_gwei,
+    )
+
+    evm.call(
+        addr: c,
+        gas: 2_000_000,
+        value: amount_wei,
+        message: DepositMsg::Deposit {
+            pubkey: pk,
+            withdrawal_credentials: wc,
+            signature: sig,
+            deposit_data_root: expected,
+        },
+    )
+    let root1: u256 = evm.call(addr: c, gas: 500000, value: 0, message: DepositMsg::GetDepositRoot {})
+
+    evm.call(
+        addr: c,
+        gas: 2_000_000,
+        value: amount_wei,
+        message: DepositMsg::Deposit {
+            pubkey: pk,
+            withdrawal_credentials: wc,
+            signature: sig,
+            deposit_data_root: expected,
+        },
+    )
+    let root2: u256 = evm.call(addr: c, gas: 500000, value: 0, message: DepositMsg::GetDepositRoot {})
+    let count2: Bytes = evm.call(addr: c, gas: 200000, value: 0, message: DepositMsg::GetDepositCount {})
+
+    assert(root0 != root1)
+    assert(root1 != root2)
+    assert(le_bytes_to_u64(count2) == 2)
+}
+
+// Sanity check on the LE-u64 packing helper, since all the hash inputs depend
+// on it.
+#[test]
+fn test_u64_to_le_word_layout() {
+    // 0x0102030405060708 → bytes in LE are 08 07 06 05 04 03 02 01, packed at
+    // the top 8 bytes of the u256.
+    assert(u64_to_le_word(0x0102030405060708) == 0x0807060504030201000000000000000000000000000000000000000000000000)
+    assert(u64_to_le_word(0) == 0)
+    assert(u64_to_le_word(1) == 0x0100000000000000000000000000000000000000000000000000000000000000)
+}
