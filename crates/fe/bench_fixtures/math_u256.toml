@@ -1,0 +1,21 @@
+contract = "Bench"
+
+[[calls]]
+function = "add(uint256,uint256)"
+args = ["100", "200"]
+
+[[calls]]
+function = "sub(uint256,uint256)"
+args = ["300", "100"]
+
+[[calls]]
+function = "mul(uint256,uint256)"
+args = ["50", "4"]
+
+[[calls]]
+function = "div(uint256,uint256)"
+args = ["1000", "7"]
+
+[[calls]]
+function = "mod_(uint256,uint256)"
+args = ["1000", "7"]

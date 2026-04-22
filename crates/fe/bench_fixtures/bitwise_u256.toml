@@ -1,0 +1,21 @@
+contract = "Bench"
+
+[[calls]]
+function = "and_(uint256,uint256)"
+args = ["255", "170"]
+
+[[calls]]
+function = "or_(uint256,uint256)"
+args = ["255", "170"]
+
+[[calls]]
+function = "xor_(uint256,uint256)"
+args = ["255", "170"]
+
+[[calls]]
+function = "shl_(uint256,uint256)"
+args = ["1", "8"]
+
+[[calls]]
+function = "shr_(uint256,uint256)"
+args = ["256", "4"]

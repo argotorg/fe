@@ -1,0 +1,25 @@
+contract = "Bench"
+
+[[calls]]
+function = "counter(uint256)"
+args = ["100"]
+
+[[calls]]
+function = "sum(uint256)"
+args = ["100"]
+
+[[calls]]
+function = "xorLoop(uint256,uint256)"
+args = ["100", "42"]
+
+[[calls]]
+function = "counterUnchecked(uint256)"
+args = ["100"]
+
+[[calls]]
+function = "sumUnchecked(uint256)"
+args = ["100"]
+
+[[calls]]
+function = "xorLoopUnchecked(uint256,uint256)"
+args = ["100", "42"]

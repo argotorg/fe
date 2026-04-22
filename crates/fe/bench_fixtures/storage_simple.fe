@@ -1,0 +1,28 @@
+use std::abi::sol
+use std::evm::StorageMap
+
+pub msg BenchMsg {
+    #[selector = sol("store(uint256,uint256)")]
+    Store { key: u256, value: u256 },
+    #[selector = sol("load(uint256)")]
+    Load { key: u256 } -> u256,
+    #[selector = sol("storeAndLoad(uint256,uint256)")]
+    StoreAndLoad { key: u256, value: u256 } -> u256,
+}
+
+pub contract Bench {
+    mut data: StorageMap<u256, u256, 0>,
+
+    recv BenchMsg {
+        Store { key, value } uses (mut data) {
+            data.set(key, value)
+        }
+        Load { key } -> u256 uses (data) {
+            data.get(key)
+        }
+        StoreAndLoad { key, value } -> u256 uses (mut data) {
+            data.set(key, value)
+            data.get(key)
+        }
+    }
+}

@@ -1,0 +1,34 @@
+use std::abi::sol
+
+pub msg BenchMsg {
+    #[selector = sol("and_(uint256,uint256)")]
+    And { a: u256, b: u256 } -> u256,
+    #[selector = sol("or_(uint256,uint256)")]
+    Or { a: u256, b: u256 } -> u256,
+    #[selector = sol("xor_(uint256,uint256)")]
+    Xor { a: u256, b: u256 } -> u256,
+    #[selector = sol("shl_(uint256,uint256)")]
+    Shl { a: u256, b: u256 } -> u256,
+    #[selector = sol("shr_(uint256,uint256)")]
+    Shr { a: u256, b: u256 } -> u256,
+}
+
+pub contract Bench {
+    recv BenchMsg {
+        And { a, b } -> u256 {
+            a & b
+        }
+        Or { a, b } -> u256 {
+            a | b
+        }
+        Xor { a, b } -> u256 {
+            a ^ b
+        }
+        Shl { a, b } -> u256 {
+            a << b
+        }
+        Shr { a, b } -> u256 {
+            a >> b
+        }
+    }
+}
