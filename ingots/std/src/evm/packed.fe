@@ -1,0 +1,426 @@
+/// Runtime equivalent of Solidity's `abi.encodePacked(...)` paired with a
+/// hash.
+///
+/// Bytes are streamed into a fresh memory buffer one field at a time, then
+/// hashed in place with the chosen precompile. This is the runtime companion
+/// to `core::AsBytes` + `core::keccak`, which operate at compile time over
+/// const values (useful for event signatures and the like).
+///
+/// Typical usage:
+///
+/// ```
+/// let mut p = Packed::new(bytes: 64)
+/// p.u256(left)
+/// p.u256(right)
+/// let root = p.sha256()
+/// ```
+///
+/// For mixed-size payloads, chain the specific methods:
+///
+/// ```
+/// // sha256(abi.encodePacked(to_little_endian_64(amount), bytes24(0), sig_root))
+/// let mut p = Packed::new(bytes: 64)
+/// p.u64_le(amount)
+/// p.zero_bytes(24)
+/// p.u256(sig_root)
+/// let leaf = p.sha256()
+/// ```
+///
+/// Safety notes:
+///   * `Packed` is not `Copy`, so there is a single logical writer for the
+///     backing buffer.
+///   * Append methods mutate `self` in place, which keeps loops and generic
+///     helpers ergonomic.
+///   * Subword writes use byte-granular `mstore8` so a write is guaranteed
+///     never to touch memory past its declared width. A sibling `mstore` of
+///     the full word would bleed 24 bytes into whatever `mem::alloc` hands
+///     out next.
+
+use core::abi::{Bytes, BytesView, MemoryInput}
+use core::num::IntDowncast
+use super::crypto
+use super::effects::{Address, assert, RawMem}
+use super::mem
+
+pub struct Packed {
+    base: u256,
+    cursor: u256,
+    limit: u256,
+}
+
+/// A typed value together with the byte layout it should take inside a
+/// `Packed` buffer. Use the `IntoPacked` trait on the value side, or construct
+/// variants directly when you need a non-default encoding (little-endian,
+/// explicit zero padding, ...).
+pub enum PackedValue {
+    U256(u256),
+    U128Be(u128),
+    U128Le(u128),
+    U64Be(u64),
+    U64Le(u64),
+    U32Be(u32),
+    U32Le(u32),
+    U16Be(u16),
+    U16Le(u16),
+    U8(u8),
+    Bool(bool),
+    Address(Address),
+    /// N zero bytes, for explicit padding inside a packed payload.
+    ZeroBytes(u256),
+    /// `(ptr, len)` — raw byte slice of `len` bytes starting at memory `ptr`.
+    /// Typically constructed via `.into()` on a `BytesView<MemoryInput>`, so
+    /// callers write `pubkey.view().into()` and skip manual word extraction.
+    Bytes(u256, u256),
+}
+
+impl Copy for PackedValue {}
+
+impl PackedValue {
+    /// Number of bytes this value contributes to a packed buffer.
+    pub fn width(own self) -> u256 {
+        match self {
+            PackedValue::U256(_) => 32
+            PackedValue::U128Be(_) => 16
+            PackedValue::U128Le(_) => 16
+            PackedValue::U64Be(_) => 8
+            PackedValue::U64Le(_) => 8
+            PackedValue::U32Be(_) => 4
+            PackedValue::U32Le(_) => 4
+            PackedValue::U16Be(_) => 2
+            PackedValue::U16Le(_) => 2
+            PackedValue::U8(_) => 1
+            PackedValue::Bool(_) => 1
+            PackedValue::Address(_) => 20
+            PackedValue::ZeroBytes(n) => n
+            PackedValue::Bytes(_, n) => n
+        }
+    }
+
+    /// Append this value to the given builder.
+    pub fn write_into(own self, _ p: mut Packed) uses (mem: mut RawMem) {
+        match self {
+            PackedValue::U256(v) => p.u256(v)
+            PackedValue::U128Be(v) => p.u128_be(v)
+            PackedValue::U128Le(v) => p.u128_le(v)
+            PackedValue::U64Be(v) => p.u64_be(v)
+            PackedValue::U64Le(v) => p.u64_le(v)
+            PackedValue::U32Be(v) => p.u32_be(v)
+            PackedValue::U32Le(v) => p.u32_le(v)
+            PackedValue::U16Be(v) => p.u16_be(v)
+            PackedValue::U16Le(v) => p.u16_le(v)
+            PackedValue::U8(v) => p.u8(v)
+            PackedValue::Bool(v) => p.u8(if v { 1 } else { 0 })
+            PackedValue::Address(a) => p.address(a)
+            PackedValue::ZeroBytes(n) => p.zero_bytes(n)
+            PackedValue::Bytes(ptr, n) => p.append_mem(ptr: ptr, len: n)
+        }
+    }
+}
+
+/// Types that have a canonical packed-byte form. The default encoding for
+/// numeric types is big-endian, mirroring Solidity's `abi.encodePacked`. Use
+/// `PackedValue::U64Le(...)` etc. directly when you need the little-endian
+/// form (SSZ, beacon chain).
+pub trait IntoPacked {
+    fn into(self) -> PackedValue
+}
+
+impl IntoPacked for u256 {
+    fn into(self) -> PackedValue { PackedValue::U256(self) }
+}
+impl IntoPacked for u128 {
+    fn into(self) -> PackedValue { PackedValue::U128Be(self) }
+}
+impl IntoPacked for u64 {
+    fn into(self) -> PackedValue { PackedValue::U64Be(self) }
+}
+impl IntoPacked for u32 {
+    fn into(self) -> PackedValue { PackedValue::U32Be(self) }
+}
+impl IntoPacked for u16 {
+    fn into(self) -> PackedValue { PackedValue::U16Be(self) }
+}
+impl IntoPacked for u8 {
+    fn into(self) -> PackedValue { PackedValue::U8(self) }
+}
+impl IntoPacked for bool {
+    fn into(self) -> PackedValue { PackedValue::Bool(self) }
+}
+impl IntoPacked for Address {
+    fn into(self) -> PackedValue { PackedValue::Address(self) }
+}
+impl IntoPacked for BytesView<MemoryInput> {
+    fn into(self) -> PackedValue {
+        PackedValue::Bytes(self.input.base + self.start, self.len)
+    }
+}
+
+impl Packed {
+    /// Allocate a fresh buffer of the given size in bytes. Subsequent writes
+    /// are bounds-checked against this capacity; overflowing reverts with
+    /// `Panic(0x01)` rather than clobbering memory owned by the next
+    /// `mem::alloc`.
+    pub fn new(bytes: u256) -> Self uses (mem: mut RawMem) {
+        let base: u256 = mem::alloc(bytes)
+        Self { base: base, cursor: base, limit: base + bytes }
+    }
+
+    /// Current write offset, in bytes, relative to the start of the buffer.
+    pub fn len(self) -> u256 {
+        self.cursor - self.base
+    }
+
+    /// View the accumulated buffer as a Solidity-compatible `bytes memory`
+    /// payload. The logical length is `len()` (= sum of written item widths).
+    /// A fresh buffer of `32 + round_up_words(len())` bytes is allocated, the
+    /// length word is written as the leading word, and the payload is copied
+    /// in. Any slack in the final data word is zero (fresh EVM memory).
+    pub fn as_bytes(self) -> Bytes uses (mem: mut RawMem) {
+        let payload_len = self.cursor - self.base
+        let padded = ((payload_len + 31) / 32) * 32
+        let total = 32 + padded
+        let out: u256 = mem::alloc(total)
+        // Copy `padded` bytes from the packed buffer to `out + 32` word-by-word.
+        // The last iteration for a partial-word payload may read past the packed
+        // allocation. That's safe because:
+        //   (1) `mem::alloc(total)` above advanced the free pointer past the
+        //       packed buffer, so the overread lands inside the freshly
+        //       allocated `out` region;
+        //   (2) we haven't written to `out` yet, so that region reads as EVM
+        //       zero, which is exactly the padding value we want.
+        // The length word is written AFTER the copy so it doesn't contaminate
+        // any in-flight overread.
+        let word_count = padded / 32
+        let mut w: u256 = 0
+        while w < word_count {
+            let off = w * 32
+            mem.mstore(addr: out + 32 + off, value: mem.mload(self.base + off))
+            w += 1
+        }
+        mem.mstore(addr: out, value: payload_len)
+        Bytes { data: out, len: payload_len, size: total }
+    }
+
+    /// Append a u256 as 32 big-endian bytes. Uses a single `mstore` since the
+    /// write width exactly matches the word size.
+    pub fn u256(mut self, _ v: u256) uses (mem: mut RawMem) {
+        let cursor = self.cursor
+        self.advance(by: 32)
+        mem.mstore(addr: cursor, value: v)
+    }
+
+    /// Append a u128 as 16 big-endian bytes.
+    pub fn u128_be(mut self, _ v: u128) uses (mem: mut RawMem) {
+        let cursor = self.cursor
+        self.advance(by: 16)
+        write_be_bytes(at: cursor, value: v as u256, width: 16)
+    }
+
+    /// Append a u128 as 16 little-endian bytes.
+    pub fn u128_le(mut self, _ v: u128) uses (mem: mut RawMem) {
+        let cursor = self.cursor
+        self.advance(by: 16)
+        write_le_bytes(at: cursor, value: v as u256, width: 16)
+    }
+
+    /// Append a u64 as 8 big-endian bytes (matching Solidity's default
+    /// `abi.encodePacked` layout for `uint64`).
+    pub fn u64_be(mut self, _ v: u64) uses (mem: mut RawMem) {
+        let cursor = self.cursor
+        self.advance(by: 8)
+        write_be_bytes(at: cursor, value: v as u256, width: 8)
+    }
+
+    /// Append a u64 as 8 little-endian bytes. Useful for SSZ / beacon-chain
+    /// encodings where numeric fields are laid out little-endian.
+    pub fn u64_le(mut self, _ v: u64) uses (mem: mut RawMem) {
+        let cursor = self.cursor
+        self.advance(by: 8)
+        write_le_bytes(at: cursor, value: v as u256, width: 8)
+    }
+
+    /// Append a u32 as 4 big-endian bytes.
+    pub fn u32_be(mut self, _ v: u32) uses (mem: mut RawMem) {
+        let cursor = self.cursor
+        self.advance(by: 4)
+        write_be_bytes(at: cursor, value: v as u256, width: 4)
+    }
+
+    /// Append a u32 as 4 little-endian bytes.
+    pub fn u32_le(mut self, _ v: u32) uses (mem: mut RawMem) {
+        let cursor = self.cursor
+        self.advance(by: 4)
+        write_le_bytes(at: cursor, value: v as u256, width: 4)
+    }
+
+    /// Append a u16 as 2 big-endian bytes.
+    pub fn u16_be(mut self, _ v: u16) uses (mem: mut RawMem) {
+        let cursor = self.cursor
+        self.advance(by: 2)
+        write_be_bytes(at: cursor, value: v as u256, width: 2)
+    }
+
+    /// Append a u16 as 2 little-endian bytes.
+    pub fn u16_le(mut self, _ v: u16) uses (mem: mut RawMem) {
+        let cursor = self.cursor
+        self.advance(by: 2)
+        write_le_bytes(at: cursor, value: v as u256, width: 2)
+    }
+
+    /// Append a single byte.
+    pub fn u8(mut self, _ v: u8) uses (mem: mut RawMem) {
+        let cursor = self.cursor
+        self.advance(by: 1)
+        mem.mstore8(addr: cursor, value: v)
+    }
+
+    /// Append an `Address` as 20 big-endian bytes, matching Solidity's
+    /// `abi.encodePacked(address)`.
+    pub fn address(mut self, _ a: Address) uses (mem: mut RawMem) {
+        let cursor = self.cursor
+        self.advance(by: 20)
+        write_be_bytes(at: cursor, value: a.inner, width: 20)
+    }
+
+    /// Append `n` zero bytes.
+    pub fn zero_bytes(mut self, _ n: u256) uses (mem: mut RawMem) {
+        let cursor = self.cursor
+        self.advance(by: n)
+        let mut i: u256 = 0
+        while i < n {
+            mem.mstore8(addr: cursor + i, value: 0)
+            i += 1
+        }
+    }
+
+    /// Append a fixed-size `[u8; N]` array verbatim.
+    pub fn bytes<const N: usize>(mut self, _ arr: [u8; N]) uses (mem: mut RawMem) {
+        let cursor = self.cursor
+        self.advance(by: N as u256)
+        let mut i: usize = 0
+        while i < N {
+            mem.mstore8(addr: cursor + (i as u256), value: arr[i])
+            i += 1
+        }
+    }
+
+    /// Append `len` bytes copied from the memory region starting at `ptr`.
+    /// Full words are copied word-wise; a partial tail (for non-word-aligned
+    /// lengths) is written byte-precisely so the builder never emits bytes
+    /// past its declared length.
+    pub fn append_mem(mut self, ptr: u256, len: u256) uses (mem: mut RawMem) {
+        let cursor = self.cursor
+        self.advance(by: len)
+        let full_words = len / 32
+        let mut w: u256 = 0
+        while w < full_words {
+            let off = w * 32
+            mem.mstore(addr: cursor + off, value: mem.mload(ptr + off))
+            w += 1
+        }
+        let tail_len = len - full_words * 32
+        if tail_len > 0 {
+            let word_off = full_words * 32
+            // `mload` returns a big-endian u256, so the `tail_len` meaningful
+            // bytes live in the *high* bytes of the word. Shift them down so
+            // `write_be_bytes` can pick them up from the low bytes.
+            let src_word = mem.mload(ptr + word_off) >> ((32 - tail_len) * 8)
+            write_be_bytes(at: cursor + word_off, value: src_word, width: tail_len)
+        }
+    }
+
+    /// Build a `Packed` from a heterogeneous array of `PackedValue`. The total
+    /// size is computed from each item's `width()`; items are then written in
+    /// order via `write_into`.
+    ///
+    /// Combine with `IntoPacked` for the typical call shape:
+    ///
+    /// ```
+    /// let hash = Packed::from([
+    ///     addr.into(),
+    ///     flag.into(),
+    ///     PackedValue::U64Le(timestamp),
+    /// ]).sha256()
+    /// ```
+    pub fn from<const N: usize>(_ items: [PackedValue; N]) -> Self uses (mem: mut RawMem) {
+        let mut total: u256 = 0
+        let mut i: usize = 0
+        while i < N {
+            total += items[i].width()
+            i += 1
+        }
+        let mut p = Packed::new(bytes: total)
+        let mut j: usize = 0
+        while j < N {
+            items[j].write_into(mut p)
+            j += 1
+        }
+        p
+    }
+
+    /// Hash the accumulated byte range with SHA-256 (precompile 0x02).
+    pub fn sha256(self) -> u256 {
+        crypto::sha256(self.base, self.len())
+    }
+
+    /// Hash the accumulated byte range with Keccak-256.
+    pub fn keccak256(self) -> u256 {
+        crypto::keccak256(self.base, self.len())
+    }
+
+    // Compute the new cursor after appending `by` bytes, reverting (via
+    // Panic) if the write would overflow the declared capacity.
+    fn advance(mut self, by: u256) {
+        let next = self.cursor + by
+        assert(next <= self.limit)
+        self.cursor = next
+    }
+}
+
+
+// Write the low `width` bytes of `value` at `at`, big-endian: the most
+// significant byte lands at `at`, the least at `at + width - 1`.
+fn write_be_bytes(at: u256, value: u256, width: u256) uses (mem: mut RawMem) {
+    let mut i: u256 = 0
+    while i < width {
+        let shift: u256 = (width - 1 - i) * 8
+        let byte_val: u8 = ((value >> shift) & 0xff).downcast_truncate()
+        mem.mstore8(addr: at + i, value: byte_val)
+        i += 1
+    }
+}
+
+// Write the low `width` bytes of `value` at `at`, little-endian: the least
+// significant byte lands at `at`, the most at `at + width - 1`.
+fn write_le_bytes(at: u256, value: u256, width: u256) uses (mem: mut RawMem) {
+    let mut i: u256 = 0
+    while i < width {
+        let shift: u256 = i * 8
+        let byte_val: u8 = ((value >> shift) & 0xff).downcast_truncate()
+        mem.mstore8(addr: at + i, value: byte_val)
+        i += 1
+    }
+}
+
+/// Build a u256 whose top `len` bytes hold `value` in little-endian order,
+/// with the remaining `32 - len` low bytes zero. `mstore`'d to a word-aligned
+/// buffer this produces `[LE bytes of value | zero bytes]`, the common
+/// on-chain layout for SSZ / beacon-chain fields. `value` is taken modulo
+/// `1 << (len * 8)`; higher-order bits are dropped.
+pub fn to_le_word_top(value: u256, len: u256) -> u256 {
+    let mut result: u256 = 0
+    let mut i: u256 = 0
+    while i < len {
+        let byte_val: u256 = (value >> (i * 8)) & 0xff
+        result |= byte_val << ((31 - i) * 8)
+        i += 1
+    }
+    result
+}
+
+/// Pack a u64 as 8 little-endian bytes at the top of a u256. Thin wrapper
+/// over [`to_le_word_top`] for the SSZ-flavored u64 case used by e.g. the
+/// beacon-chain deposit contract.
+pub fn u64_to_le_word(_ value: u64) -> u256 {
+    to_le_word_top(value: value as u256, len: 8)
+}

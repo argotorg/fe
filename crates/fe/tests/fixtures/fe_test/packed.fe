@@ -1,0 +1,193 @@
+// Smoke tests for `std::evm::Packed` — the runtime `abi.encodePacked`
+// equivalent. Covers the big/little-endian variants, zero padding, and the
+// bounds check that keeps a runaway write from clobbering adjacent memory.
+
+use std::evm::{Evm, Packed, RawMem}
+use std::evm::packed::{IntoPacked, PackedValue, to_le_word_top, u64_to_le_word}
+
+// Hashing identical byte layouts via two different chains must yield the same
+// hash. This indirectly checks that LE/BE methods produce the intended byte
+// layout in memory.
+
+#[test]
+fn test_u64_le_matches_manual_packing() uses (evm: mut Evm, mem: mut RawMem) {
+    let value: u64 = 0x0102030405060708
+    // Method under test: stream the u64 as 8 LE bytes, pad with 24 zeros.
+    let mut via_methods_p = Packed::new(bytes: 32)
+    via_methods_p.u64_le(value)
+    via_methods_p.zero_bytes(24)
+    let via_methods: u256 = via_methods_p.sha256()
+    // Manually pack into one u256 word: same memory layout, one mstore.
+    let mut via_word_p = Packed::new(bytes: 32)
+    via_word_p.u256(u64_to_le_word(value))
+    let via_word: u256 = via_word_p.sha256()
+    assert(via_methods == via_word)
+}
+
+// Swapping endianness produces a different hash for any non-palindromic value.
+#[test]
+fn test_u32_le_and_be_differ() uses (evm: mut Evm, mem: mut RawMem) {
+    let value: u32 = 0xdeadbeef
+    let mut be_p = Packed::new(bytes: 4)
+    be_p.u32_be(value)
+    let be: u256 = be_p.sha256()
+    let mut le_p = Packed::new(bytes: 4)
+    le_p.u32_le(value)
+    let le: u256 = le_p.sha256()
+    assert(be != le)
+    assert(be != 0)
+}
+
+// u16_be packs as [MSB, LSB] — reversing the two bytes manually must match.
+#[test]
+fn test_u16_be_layout() uses (evm: mut Evm, mem: mut RawMem) {
+    let mut via_u16_p = Packed::new(bytes: 2)
+    via_u16_p.u16_be(0x1234)
+    let via_u16: u256 = via_u16_p.sha256()
+    let mut via_bytes_p = Packed::new(bytes: 2)
+    via_bytes_p.u8(0x12)
+    via_bytes_p.u8(0x34)
+    let via_bytes: u256 = via_bytes_p.sha256()
+    assert(via_u16 == via_bytes)
+}
+
+// u16_le is the same two bytes reversed.
+#[test]
+fn test_u16_le_layout() uses (evm: mut Evm, mem: mut RawMem) {
+    let mut via_u16_le_p = Packed::new(bytes: 2)
+    via_u16_le_p.u16_le(0x1234)
+    let via_u16_le: u256 = via_u16_le_p.sha256()
+    let mut via_bytes_p = Packed::new(bytes: 2)
+    via_bytes_p.u8(0x34)
+    via_bytes_p.u8(0x12)
+    let via_bytes: u256 = via_bytes_p.sha256()
+    assert(via_u16_le == via_bytes)
+}
+
+// Bounds check: writing one byte past the declared capacity must revert.
+#[test(should_revert, panic = 0x01)]
+fn test_bounds_check_panics_on_overflow() uses (evm: mut Evm, mem: mut RawMem) {
+    let mut p = Packed::new(bytes: 8)
+    p.u64_be(0x0102030405060708)
+    p.u8(0xff)  // this write pushes us to 9 bytes → must panic
+    let _: u256 = p.sha256()
+}
+
+// Bounds check is exact: writing exactly `capacity` bytes must succeed.
+#[test]
+fn test_bounds_check_allows_exact_fill() uses (evm: mut Evm, mem: mut RawMem) {
+    let mut p = Packed::new(bytes: 9)
+    p.u64_be(0x0102030405060708)
+    p.u8(0xff)
+    let h: u256 = p.sha256()
+    assert(h != 0)
+}
+
+// zero_bytes fills with zeros regardless of underlying memory. Hashing an
+// explicit zero-byte region must match hashing a u256(0) of the same length.
+#[test]
+fn test_zero_bytes_matches_u256_zero() uses (evm: mut Evm, mem: mut RawMem) {
+    let mut via_zero_bytes_p = Packed::new(bytes: 32)
+    via_zero_bytes_p.zero_bytes(32)
+    let via_zero_bytes: u256 = via_zero_bytes_p.sha256()
+    let mut via_u256_zero_p = Packed::new(bytes: 32)
+    via_u256_zero_p.u256(0)
+    let via_u256_zero: u256 = via_u256_zero_p.sha256()
+    assert(via_zero_bytes == via_u256_zero)
+}
+
+// len() tracks cursor across mixed-width writes.
+#[test]
+fn test_len_tracks_writes() uses (evm: mut Evm, mem: mut RawMem) {
+    let mut p = Packed::new(bytes: 64)
+    p.u256(1)
+    p.u64_be(2)
+    p.u32_be(3)
+    p.u8(4)
+    assert(p.len() == 32 + 8 + 4 + 1)
+}
+
+// `Packed::from([...])` plus the `IntoPacked` trait lets us describe a
+// heterogeneous payload as a single array literal. Result must match a
+// hand-written builder sequence.
+#[test]
+fn test_from_heterogeneous_matches_builder() uses (evm: mut Evm, mem: mut RawMem) {
+    let a: u256 = 0x1234
+    let flag: bool = true
+    let ts: u64 = 0xaabbccdd
+
+    let via_from: u256 = Packed::from([
+        a.into(),
+        flag.into(),
+        ts.into(),
+    ]).sha256()
+
+    let mut via_builder_p = Packed::new(bytes: 32 + 1 + 8)
+    via_builder_p.u256(a)
+    via_builder_p.u8(1)  // bool true → 1
+    via_builder_p.u64_be(ts)
+    let via_builder: u256 = via_builder_p.sha256()
+
+    assert(via_from == via_builder)
+}
+
+// Mixing default-encoded values with explicit `PackedValue` variants. The
+// SSZ-style leaf `LE(amount) || bytes24(0) || sig_root` uses one LE variant
+// and one explicit padding entry alongside the default-encoded u256.
+#[test]
+fn test_from_with_explicit_variants() uses (evm: mut Evm, mem: mut RawMem) {
+    let amount: u64 = 0x01020304
+    let sig_root: u256 = 0xabcdef
+
+    let via_from: u256 = Packed::from([
+        PackedValue::U64Le(amount),
+        PackedValue::ZeroBytes(24),
+        sig_root.into(),
+    ]).sha256()
+
+    let mut via_builder_p = Packed::new(bytes: 8 + 24 + 32)
+    via_builder_p.u64_le(amount)
+    via_builder_p.zero_bytes(24)
+    via_builder_p.u256(sig_root)
+    let via_builder: u256 = via_builder_p.sha256()
+
+    assert(via_from == via_builder)
+}
+
+// The mutable builder should also work as a generic accumulator in loops, not
+// just as a hand-written fixed-size sequence.
+#[test]
+fn test_loop_based_word_packing() uses (evm: mut Evm, mem: mut RawMem) {
+    let words: [u256; 3] = [1, 2, 3]
+
+    let mut via_loop_p = Packed::new(bytes: 96)
+    for w in words {
+        via_loop_p.u256(w)
+    }
+    let via_loop: u256 = via_loop_p.sha256()
+
+    let mut via_manual_p = Packed::new(bytes: 96)
+    via_manual_p.u256(1)
+    via_manual_p.u256(2)
+    via_manual_p.u256(3)
+    let via_manual: u256 = via_manual_p.sha256()
+
+    assert(via_loop == via_manual)
+}
+
+// The standalone helper matches the expected bit layout (sanity check on
+// `to_le_word_top` / `u64_to_le_word`).
+#[test]
+fn test_u64_to_le_word_layout() {
+    assert(u64_to_le_word(0x0102030405060708) == 0x0807060504030201000000000000000000000000000000000000000000000000)
+    assert(u64_to_le_word(0) == 0)
+    assert(u64_to_le_word(1) == 0x0100000000000000000000000000000000000000000000000000000000000000)
+}
+
+#[test]
+fn test_to_le_word_top_width() {
+    // 2 bytes of 0x1234 in LE = 0x34 0x12 at the top of the word.
+    assert(to_le_word_top(value: 0x1234, len: 2) == 0x3412000000000000000000000000000000000000000000000000000000000000)
+    // 4 bytes of 0x11223344 LE = 0x44 0x33 0x22 0x11 at the top.
+    assert(to_le_word_top(value: 0x11223344, len: 4) == 0x4433221100000000000000000000000000000000000000000000000000000000)
+}
