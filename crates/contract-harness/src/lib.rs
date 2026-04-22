@@ -4,7 +4,7 @@ use common::InputDb;
 use driver::DriverDataBase;
 use ethers_core::abi::{AbiParser, ParamType, ParseError as AbiParseError, Token, decode};
 use hex::FromHex;
-pub use revm::primitives::U256;
+pub use revm::primitives::{Address, Log, U256};
 use revm::{
     InspectCommitEvm,
     bytecode::Bytecode,
@@ -15,7 +15,7 @@ use revm::{
     database::InMemoryDB,
     handler::{ExecuteCommitEvm, MainBuilder, MainContext, MainnetContext, MainnetEvm},
     interpreter::interpreter_types::Jumps,
-    primitives::{Address, Bytes as EvmBytes, Log, TxKind},
+    primitives::{Bytes as EvmBytes, TxKind},
     state::AccountInfo,
 };
 use solc_runner::{ContractBytecode, YulcError, compile_single_contract};
@@ -166,6 +166,7 @@ pub struct CallResult {
 pub struct CallResultWithLogs {
     pub result: CallResult,
     pub logs: Vec<String>,
+    pub raw_logs: Vec<Log>,
 }
 
 /// Per-call gas attribution gathered from a full instruction trace replay.
@@ -262,6 +263,7 @@ fn transact_with_logs(
                 gas_used,
             },
             logs: format_logs(&logs),
+            raw_logs: logs,
         }),
         ExecutionResult::Success {
             output: Output::Create(..),
@@ -814,6 +816,15 @@ impl RuntimeInstance {
     /// via internal calls (e.g. `evm.call(value: 1, ...)`).
     pub fn fund_contract(&mut self, amount: U256) {
         let address = self.address;
+        self.fund_account(address, amount);
+    }
+
+    /// Adds `amount` wei to the given account's balance.
+    ///
+    /// Useful for tests where the caller needs to send ETH along with a call
+    /// (e.g. payable deposits). Default `ExecutionOptions` uses `Address::ZERO`
+    /// as the caller; fund that address to enable value transfers from it.
+    pub fn fund_account(&mut self, address: Address, amount: U256) {
         let js = &mut self.evm.ctx.journaled_state;
 
         // Update the underlying DB cache so future loads see the balance.
