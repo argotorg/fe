@@ -2051,6 +2051,7 @@ dependencies = [
  "fe-mir",
  "fe-resolver",
  "fe-semantic-indexing",
+ "fe-solc-runner",
  "fe-test-utils",
  "fe-web",
  "glob",
@@ -2063,6 +2064,7 @@ dependencies = [
  "scip",
  "serde",
  "serde_json",
+ "sha2",
  "similar",
  "smol_str 0.1.24",
  "tempfile",
@@ -2341,6 +2343,15 @@ dependencies = [
  "serde_json",
  "tempfile",
  "url",
+]
+
+[[package]]
+name = "fe-solc-runner"
+version = "26.1.0"
+dependencies = [
+ "fe-contract-harness",
+ "indexmap 2.13.0",
+ "serde_json",
 ]
 
 [[package]]

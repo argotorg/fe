@@ -53,3 +53,5 @@ dir-test.workspace = true
 test-utils.workspace = true
 tempfile = "3.23"
 semantic-indexing.workspace = true
+solc-runner = { path = "../solc-runner", package = "fe-solc-runner" }
+sha2 = "0.10"
