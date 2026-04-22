@@ -1,0 +1,34 @@
+use std::abi::sol
+
+pub msg BenchMsg {
+    #[selector = sol("add(uint256,uint256)")]
+    Add { a: u256, b: u256 } -> u256,
+    #[selector = sol("sub(uint256,uint256)")]
+    Sub { a: u256, b: u256 } -> u256,
+    #[selector = sol("mul(uint256,uint256)")]
+    Mul { a: u256, b: u256 } -> u256,
+    #[selector = sol("div(uint256,uint256)")]
+    Div { a: u256, b: u256 } -> u256,
+    #[selector = sol("mod_(uint256,uint256)")]
+    Mod { a: u256, b: u256 } -> u256,
+}
+
+pub contract Bench {
+    recv BenchMsg {
+        Add { a, b } -> u256 {
+            a + b
+        }
+        Sub { a, b } -> u256 {
+            a - b
+        }
+        Mul { a, b } -> u256 {
+            a * b
+        }
+        Div { a, b } -> u256 {
+            a / b
+        }
+        Mod { a, b } -> u256 {
+            a % b
+        }
+    }
+}

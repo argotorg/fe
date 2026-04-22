@@ -1,0 +1,13 @@
+contract = "Bench"
+
+[[calls]]
+function = "store(uint256,uint256)"
+args = ["42", "12345"]
+
+[[calls]]
+function = "load(uint256)"
+args = ["42"]
+
+[[calls]]
+function = "storeAndLoad(uint256,uint256)"
+args = ["99", "67890"]
