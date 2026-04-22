@@ -1,0 +1,13 @@
+use std::abi::Bytes
+use std::evm::encode_abi_payload
+
+#[test]
+fn test_abi_dynamic_payload_tuple_encoding() uses (evm: Evm) {
+    let payload: (u256, Bytes) = (0xdeadbeef, Bytes::empty())
+    let (ptr, len) = encode_abi_payload(payload)
+
+    assert(len == 96)
+    assert(evm.mload(ptr) == 0xdeadbeef)
+    assert(evm.mload(ptr + 32) == 64)
+    assert(evm.mload(ptr + 64) == 0)
+}
