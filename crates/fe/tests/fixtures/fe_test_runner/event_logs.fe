@@ -1,3 +1,4 @@
+use std::abi::Bytes
 
 #[event]
 struct Transfer {
@@ -23,6 +24,20 @@ struct AllIndexed {
     c: u256,
 }
 
+// Multi-field event with at least one dynamic data field. Regression
+// anchor for a HIR event-desugar bug where the tuple of data fields was
+// materialized after the encoder reserved head space — its allocation
+// landed between the reserved head and the tail from `append_tail`, so
+// `enc.finish()` returned a buffer that stretched past the real tail end
+// and included raw tuple memory. The expected snapshot here is exactly
+// the canonical ABI encoding of `(uint256, bytes)`; pre-fix this field
+// was bloated with garbage words.
+#[event]
+struct DynamicPayload {
+    header: u256,
+    payload: Bytes,
+}
+
 #[test]
 fn test_transfer_event() uses (evm: mut Evm) {
     let from = Address { inner: 0x1111111111111111111111111111111111111111 }
@@ -38,4 +53,9 @@ fn test_simple_event() uses (evm: mut Evm) {
 #[test]
 fn test_all_indexed() uses (evm: mut Evm) {
     evm.emit(AllIndexed { a: 1, b: 2, c: 3 })
+}
+
+#[test]
+fn test_dynamic_payload() uses (evm: mut Evm) {
+    evm.emit(DynamicPayload { header: 0xdeadbeef, payload: Bytes::empty() })
 }
