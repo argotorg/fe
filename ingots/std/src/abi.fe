@@ -1,4 +1,4 @@
-pub use core::abi::{Bytes, DynArray, DynString}
+pub use core::abi::{Bytes, BytesView, DynArray, DynString, MemoryInput}
 pub type Text = DynString
 pub type Vec<T> = DynArray<T>
 pub use sol::{self, *}
