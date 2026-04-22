@@ -8,6 +8,7 @@ pub use target::{self, *}
 pub use intrinsic::{code_region_len, code_region_offset, contract_field_slot}
 pub use mem::{self, *}
 pub use mutex::{self, *}
+pub use packed::{self, *}
 pub use storage_bytes::{self, *}
 pub use storage_map::{StorageKey, StorageMap}
 pub use word::{self, *}
