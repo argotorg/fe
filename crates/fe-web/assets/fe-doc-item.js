@@ -385,16 +385,8 @@ class FeDocItem extends HTMLElement {
         var child = group.items[j];
         var anchorId = info.anchor + "." + child.name;
         var rowHref = this._anchorHref(parentUrl, anchorId);
-        // Inline style="scroll-margin-top: 1rem" keeps deep-linked rows from
-        // hiding under sticky headers when scrolled into view. The parent
-        // agent owns styles.css parameterization, so inline is easiest here.
-        html += '<div class="member-item" id="' + _diEsc(anchorId) +
-          '" style="scroll-margin-top: 1rem">';
-        // Wrap the header row in an <a> so clicking anywhere on the name/
-        // signature navigates to the row's anchor. color: inherit and
-        // text-decoration: none preserve the existing visual.
-        html += '<a class="member-header-link" href="' + _diEsc(rowHref) +
-          '" style="color: inherit; text-decoration: none; display: block">';
+        html += '<div class="member-item" id="' + _diEsc(anchorId) + '">';
+        html += '<a class="member-header-link" href="' + _diEsc(rowHref) + '">';
         html += '<div class="member-header" data-row-link="true">';
         html += this._renderChildSignature(child);
         // Nested <a> is invalid HTML, so use a <span> for the visual anchor
