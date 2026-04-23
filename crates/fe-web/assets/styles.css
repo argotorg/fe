@@ -66,6 +66,30 @@ body {
     background: var(--bg);
     color: var(--text);
     line-height: 1.6;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) var(--bg);
+}
+
+::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+
+::-webkit-scrollbar-track {
+    background: var(--bg);
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--text-muted);
+}
+
+::-webkit-scrollbar-corner {
+    background: var(--bg);
 }
 
 .doc-layout {
@@ -1212,6 +1236,27 @@ fe-doc-viewer, .fe-doc-viewer {
     top: 0;
     height: 100vh;
     overflow-y: auto;
+    overflow-x: hidden;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) var(--bg-secondary);
+}
+
+.fe-doc-nav::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+.fe-doc-nav::-webkit-scrollbar-track {
+    background: var(--bg-secondary);
+}
+
+.fe-doc-nav::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 4px;
+}
+
+.fe-doc-nav::-webkit-scrollbar-thumb:hover {
+    background: var(--text-muted);
 }
 
 .fe-doc-nav-search {
@@ -1301,6 +1346,8 @@ fe-doc-viewer, .fe-doc-viewer {
     gap: 0.4rem;
     padding: 0.1rem 0.25rem;
     border-radius: 3px;
+    overflow-wrap: anywhere;
+    word-break: break-word;
 }
 
 .fe-nav-items a:hover {
