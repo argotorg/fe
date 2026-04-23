@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 /// any type reachable from them. When you bump it, you MUST also:
 ///   1. Update the snapshot test in this module (cargo test, accept new snap).
 ///   2. Add a migration case in fe-scip-store.js feMigrate().
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 // ============================================================================
 // Rich Signature Types (for rendering signatures with embedded links)
