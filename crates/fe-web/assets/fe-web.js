@@ -141,9 +141,14 @@
   var CHILD_KIND_INFO = {
     field: { plural: "Fields", anchor: "field", order: 1 },
     variant: { plural: "Variants", anchor: "variant", order: 0 },
-    method: { plural: "Methods", anchor: "tymethod", order: 4 },
-    assoc_type: { plural: "Associated Types", anchor: "associatedtype", order: 2 },
-    assoc_const: { plural: "Associated Constants", anchor: "associatedconstant", order: 3 },
+    method: { plural: "Methods", anchor: "tymethod", order: 6 },
+    assoc_type: { plural: "Associated Types", anchor: "associatedtype", order: 4 },
+    assoc_const: { plural: "Associated Constants", anchor: "associatedconstant", order: 5 },
+    // Contract init block & recv arm handlers (see crates/fe/src/extract.rs
+    // DocChildKind::{Init,RecvHandler}). Kept in sync with _CHILD_KIND in
+    // fe-doc-item.js.
+    init: { plural: "Initializer", anchor: "init", order: 2 },
+    recv_handler: { plural: "Message Handlers", anchor: "handler", order: 3 },
   };
 
   // ============================================================================
