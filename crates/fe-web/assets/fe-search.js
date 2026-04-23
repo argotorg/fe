@@ -104,6 +104,7 @@ class FeSearch extends HTMLElement {
       module: "mod", function: "fn", struct: "struct", enum: "enum",
       trait: "trait", contract: "contract", type_alias: "type",
       const: "const", impl: "impl", impl_trait: "impl",
+      msg: "msg",
     };
 
     var q = query.toLowerCase();

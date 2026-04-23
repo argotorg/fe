@@ -304,7 +304,8 @@ class FeDocItem extends HTMLElement {
 
   _renderBreadcrumbs(item) {
     var segments = item.path.split("::");
-    var base = this.getAttribute("base") || "";
+    var index = this._getIndex();
+    var items = (index && index.items) || [];
     var html = '<nav class="breadcrumb">';
     var accumulated = "";
     for (var i = 0; i < segments.length; i++) {
@@ -316,9 +317,17 @@ class FeDocItem extends HTMLElement {
       if (i === segments.length - 1) {
         html += '<span class="breadcrumb-current">' + _diEsc(segments[i]) + "</span>";
       } else {
-        var href = base ? base + "#" + accumulated + "/mod" : "#" + accumulated + "/mod";
-        html += '<a href="' + _diEsc(href) + '" class="breadcrumb-link">' +
-          _diEsc(segments[i]) + "</a>";
+        // Resolve the real kind for each ancestor segment so non-module
+        // containers (e.g. `msg`) link to their actual page, not `/mod`.
+        var suffix = "mod";
+        for (var k = 0; k < items.length; k++) {
+          if (items[k].path === accumulated) {
+            suffix = _diKindStr(items[k].kind);
+            break;
+          }
+        }
+        html += '<a href="' + _diEsc(this._itemHref(accumulated + "/" + suffix)) +
+          '" class="breadcrumb-link">' + _diEsc(segments[i]) + "</a>";
       }
     }
     html += "</nav>";
