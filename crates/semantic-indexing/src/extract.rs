@@ -26,6 +26,9 @@ pub struct DocExtractor<'db> {
     db: &'db dyn SpannedHirDb,
     /// Root path for computing relative display paths
     root_path: Option<std::path::PathBuf>,
+    /// Include `#[test]` functions in the output.
+    /// Off by default — test fns pollute the public API sidebar.
+    include_tests: bool,
 }
 
 impl<'db> DocExtractor<'db> {
@@ -33,6 +36,7 @@ impl<'db> DocExtractor<'db> {
         Self {
             db,
             root_path: None,
+            include_tests: false,
         }
     }
 
@@ -41,6 +45,24 @@ impl<'db> DocExtractor<'db> {
     pub fn with_root_path(mut self, root: std::path::PathBuf) -> Self {
         self.root_path = Some(root);
         self
+    }
+
+    /// Include `#[test]` functions in the extracted output.
+    pub fn with_include_tests(mut self, include: bool) -> Self {
+        self.include_tests = include;
+        self
+    }
+
+    /// Returns true if `item` is a `#[test(...)]` function that should be
+    /// filtered out unless `include_tests` is enabled.
+    fn is_filtered_test_item(&self, item: ItemKind<'db>) -> bool {
+        if self.include_tests {
+            return false;
+        }
+        matches!(item, ItemKind::Func(_))
+            && item
+                .attrs(self.db)
+                .is_some_and(|attrs| attrs.has_attr(self.db, "test"))
     }
 
     /// Rewrite a path to use the ingot's config name instead of "lib".
@@ -57,6 +79,20 @@ impl<'db> DocExtractor<'db> {
     ) -> Option<DocItem> {
         let mut doc_item = self.extract_item(item)?;
         doc_item.path = self.qualify_path_with_ingot(&doc_item.path, ingot);
+
+        // If this is the ingot root module (name is literally "lib" from
+        // `lib.fe`), substitute the ingot's configured name so pages don't
+        // render `<h1>lib</h1>`. Match on the qualified path being exactly
+        // the ingot name so a nested `foo::lib` submodule is left alone.
+        if matches!(doc_item.kind, DocItemKind::Module)
+            && doc_item.name == "lib"
+            && let Some(cfg_name) = ingot
+                .config(self.db)
+                .and_then(|c| c.metadata.name.clone())
+            && doc_item.path == cfg_name.as_str()
+        {
+            doc_item.name = cfg_name.to_string();
+        }
 
         // The display_file from get_source_location is already relative to workspace root,
         // which includes the ingot directory. No need to prepend ingot name again.
@@ -235,6 +271,12 @@ impl<'db> DocExtractor<'db> {
         match item {
             ItemKind::StaticAssert(_) | ItemKind::Use(_) | ItemKind::Body(_) => return None,
             _ => {}
+        }
+
+        // Skip `#[test]` fns unless explicitly requested. Doc pages should
+        // focus on the public API surface by default.
+        if self.is_filtered_test_item(item) {
+            return None;
         }
 
         // Skip the synthetic pieces produced by `msg` desugaring — the
@@ -484,7 +526,16 @@ impl<'db> DocExtractor<'db> {
     fn extract_children(&self, item: ItemKind<'db>) -> Vec<DocChild> {
         match item {
             ItemKind::Struct(s) => self.extract_struct_fields(s),
-            ItemKind::Contract(c) => self.extract_contract_fields(c),
+            ItemKind::Contract(c) => {
+                let mut children = self.extract_contract_fields(c);
+                // init block (if any)
+                if let Some(init_child) = self.extract_contract_init(c) {
+                    children.push(init_child);
+                }
+                // recv handler arms
+                children.extend(self.extract_contract_recv_handlers(c));
+                children
+            }
             ItemKind::Enum(e) => self.extract_enum_variants(e),
             ItemKind::Trait(t) => self.extract_trait_members(t),
             ItemKind::Impl(i) => self.extract_impl_members(i),
@@ -494,6 +545,129 @@ impl<'db> DocExtractor<'db> {
             }
             _ => Vec::new(),
         }
+    }
+
+    /// Extract the contract `init(...)` block as a `DocChild` of kind `Init`.
+    ///
+    /// The signature is the source text spanning the `init` keyword through
+    /// the closing paren of the params (and `uses (...)` clause if present),
+    /// i.e. everything up to the opening `{` of the body.
+    fn extract_contract_init(&self, c: Contract<'db>) -> Option<DocChild> {
+        let _init = c.init(self.db)?;
+
+        // Full span of the init block AST (includes body). We'll trim to the
+        // header by cutting at the first `{` so the signature is stable even
+        // if the body uses nested braces.
+        let init_span = c.span().init_block().resolve(self.db)?;
+        let start: usize = init_span.range.start().into();
+        let end: usize = init_span.range.end().into();
+        let file_text = init_span.file.text(self.db);
+        let slice = file_text.get(start..end)?;
+        // Cut at the first `{` to get the header.
+        let header_end_rel = slice.find('{').unwrap_or(slice.len());
+        let header = slice[..header_end_rel].trim_end().to_string();
+
+        let file_url = init_span.file.url(self.db)?;
+        let signature_span = Some(SignatureSpanData {
+            file_url: file_url.to_string(),
+            byte_start: start,
+            byte_end: start + header_end_rel,
+        });
+
+        Some(DocChild {
+            kind: DocChildKind::Init,
+            name: "init".to_string(),
+            docs: None,
+            signature: header,
+            rich_signature: vec![],
+            signature_span,
+            sig_scope: None,
+            visibility: DocVisibility::Public,
+        })
+    }
+
+    /// Extract each arm of every `recv` block in the contract as a
+    /// `DocChild` of kind `RecvHandler`.
+    ///
+    /// Signature is the source text of the arm header (pattern through the
+    /// optional return type and `uses (...)` clause), stopping at the body's
+    /// opening brace.
+    fn extract_contract_recv_handlers(&self, c: Contract<'db>) -> Vec<DocChild> {
+        let mut out = Vec::new();
+        let recvs = c.recvs(self.db);
+        for (recv_idx, recv) in recvs.data(self.db).iter().enumerate() {
+            let msg_type_name = recv
+                .msg_path
+                .and_then(|p| p.ident(self.db).to_opt())
+                .map(|id| id.data(self.db).to_string());
+
+            for (arm_idx, arm) in recv.arms.data(self.db).iter().enumerate() {
+                let arm_lazy = c.span().recv(recv_idx).arms().arm(arm_idx);
+                let Some(arm_span) = arm_lazy.clone().resolve(self.db) else {
+                    continue;
+                };
+
+                let start: usize = arm_span.range.start().into();
+                let end: usize = arm_span.range.end().into();
+                let file_text = arm_span.file.text(self.db);
+                let Some(slice) = file_text.get(start..end) else {
+                    continue;
+                };
+
+                // Header goes up to the body's opening `{`. Use the body
+                // span's start (if resolvable) to find it precisely — a
+                // naive `slice.find('{')` would stop at the first record
+                // pattern brace like `Lock { challenge }`.
+                let header_end_abs = arm_lazy
+                    .body()
+                    .resolve(self.db)
+                    .map(|bs| usize::from(bs.range.start()))
+                    .unwrap_or(end);
+                let header_end_rel = header_end_abs.saturating_sub(start).min(slice.len());
+                let header = slice[..header_end_rel].trim_end().to_string();
+
+                // Name: variant identifier when available; fallback to "_"
+                // for wildcard arms.
+                let name = arm
+                    .variant_path(self.db)
+                    .and_then(|p| p.ident(self.db).to_opt())
+                    .map(|id| id.data(self.db).to_string())
+                    .unwrap_or_else(|| {
+                        if arm.is_fallback(self.db) {
+                            "_".to_string()
+                        } else {
+                            format!("arm{}_{}", recv_idx, arm_idx)
+                        }
+                    });
+
+                // Disambiguate duplicate arm names across multiple recv blocks
+                // (rare, but possible if the same msg type is handled twice).
+                let qualified_name = if let Some(ref msg) = msg_type_name {
+                    format!("{}::{}", msg, name)
+                } else {
+                    name.clone()
+                };
+
+                let file_url = arm_span.file.url(self.db);
+                let signature_span = file_url.map(|u| SignatureSpanData {
+                    file_url: u.to_string(),
+                    byte_start: start,
+                    byte_end: start + header_end_rel,
+                });
+
+                out.push(DocChild {
+                    kind: DocChildKind::RecvHandler,
+                    name: qualified_name,
+                    docs: None,
+                    signature: header,
+                    rich_signature: vec![],
+                    signature_span,
+                    sig_scope: None,
+                    visibility: DocVisibility::Public,
+                });
+            }
+        }
+        out
     }
 
     /// Extract variants from a desugared `msg` Mod as `DocChild::Variant`.
@@ -836,6 +1010,11 @@ impl<'db> DocExtractor<'db> {
     /// should only appear as children of the Msg item, not as top-level
     /// entries in the enclosing module's sidebar).
     fn should_skip_module_item(&self, item: ItemKind<'db>) -> bool {
+        // Filter out `#[test]` functions by default so the nav tree is not
+        // dominated by test_* entries.
+        if self.is_filtered_test_item(item) {
+            return true;
+        }
         match item {
             ItemKind::Struct(s) if is_desugared_msg_variant_struct(self.db, s) => true,
             ItemKind::ImplTrait(it) if is_desugared_msg_impl_trait(self.db, it) => true,

@@ -69,12 +69,18 @@ class FeSearch extends HTMLElement {
     if (scip) {
       try {
         var results = JSON.parse(scip.search(query));
-        if (results.length > 0) {
-          for (var k = 0; k < results.length; k++) {
-            var r = results[k];
+        // Drop results without a doc_url — they would render as unclickable
+        // links that land back on the current page. Users hate those.
+        var clickable = [];
+        for (var ck = 0; ck < results.length; ck++) {
+          if (results[ck].doc_url) clickable.push(results[ck]);
+        }
+        if (clickable.length > 0) {
+          for (var k = 0; k < clickable.length; k++) {
+            var r = clickable[k];
             var a = document.createElement("a");
             a.className = "search-result";
-            a.href = "#" + (r.doc_url || "");
+            a.href = "#" + r.doc_url;
             a.setAttribute("role", "option");
 
             var badge = document.createElement("span");

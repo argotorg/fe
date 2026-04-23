@@ -38,11 +38,15 @@ var _ITEM_KIND = {
 };
 
 var _CHILD_KIND = {
-  field:       { plural: "Fields",              anchor: "field",            order: 1 },
-  variant:     { plural: "Variants",            anchor: "variant",          order: 0 },
-  method:      { plural: "Methods",             anchor: "tymethod",         order: 4 },
-  assoc_type:  { plural: "Associated Types",    anchor: "associatedtype",   order: 2 },
-  assoc_const: { plural: "Associated Constants", anchor: "associatedconstant", order: 3 },
+  field:        { plural: "Fields",              anchor: "field",            order: 1 },
+  variant:      { plural: "Variants",            anchor: "variant",          order: 0 },
+  method:       { plural: "Methods",             anchor: "tymethod",         order: 6 },
+  assoc_type:   { plural: "Associated Types",    anchor: "associatedtype",   order: 4 },
+  assoc_const:  { plural: "Associated Constants", anchor: "associatedconstant", order: 5 },
+  // Contract-specific child kinds (emitted by crates/fe/src/extract.rs for
+  // Contract items — see DocChildKind::{Init,RecvHandler}).
+  init:         { plural: "Initializer",         anchor: "init",             order: 2 },
+  recv_handler: { plural: "Message Handlers",    anchor: "handler",          order: 3 },
 };
 
 function _diKindStr(kind)     { return (_ITEM_KIND[kind] || {}).str || kind; }
@@ -380,11 +384,25 @@ class FeDocItem extends HTMLElement {
       for (var j = 0; j < group.items.length; j++) {
         var child = group.items[j];
         var anchorId = info.anchor + "." + child.name;
-        html += '<div class="member-item" id="' + _diEsc(anchorId) + '">';
-        html += '<div class="member-header">';
+        var rowHref = this._anchorHref(parentUrl, anchorId);
+        // Inline style="scroll-margin-top: 1rem" keeps deep-linked rows from
+        // hiding under sticky headers when scrolled into view. The parent
+        // agent owns styles.css parameterization, so inline is easiest here.
+        html += '<div class="member-item" id="' + _diEsc(anchorId) +
+          '" style="scroll-margin-top: 1rem">';
+        // Wrap the header row in an <a> so clicking anywhere on the name/
+        // signature navigates to the row's anchor. color: inherit and
+        // text-decoration: none preserve the existing visual.
+        html += '<a class="member-header-link" href="' + _diEsc(rowHref) +
+          '" style="color: inherit; text-decoration: none; display: block">';
+        html += '<div class="member-header" data-row-link="true">';
         html += this._renderChildSignature(child);
-        html += '<a href="' + this._anchorHref(parentUrl, anchorId) + '" class="anchor">\u00a7</a>';
+        // Nested <a> is invalid HTML, so use a <span> for the visual anchor
+        // glyph. Clicking anywhere in the header (including this glyph)
+        // navigates via the outer <a>.
+        html += '<span class="anchor" aria-hidden="true">\u00a7</span>';
         html += "</div>";
+        html += "</a>";
         if (child.docs) {
           var childHtml = child.docs.html_body || _diEsc(child.docs.body || child.docs.summary || "");
           html += '<div class="member-docs">' + childHtml + "</div>";

@@ -145,6 +145,14 @@ function feMigrate(data) {
     data.schema_version = 3;
   }
 
+  if (v < 4) {
+    // v3 → v4: contract pages now emit `init` and `recv_handler` children
+    // (the init block and each recv arm). No structural rewrite is needed
+    // for old data; downstream consumers just won't see these rows until
+    // they regenerate docs.json.
+    data.schema_version = 4;
+  }
+
   return data;
 }
 
