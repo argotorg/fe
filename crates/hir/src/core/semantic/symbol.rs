@@ -522,17 +522,52 @@ pub fn scope_to_doc_path(db: &dyn SpannedHirDb, scope: ScopeId) -> Option<String
     let ingot = scope.top_mod(db).ingot(db);
     let qualified_path = qualify_path_with_ingot_name(db, &path, ingot);
 
-    let kind_suffix = item_kind_to_url_suffix(item)?;
+    let kind_suffix = item_kind_to_url_suffix(db, item)?;
+
+    // Msg variants have no standalone page — link to the parent msg page
+    // with a `~variant.<name>` anchor so clicks scroll to the variant section.
+    if kind_suffix == "msg_variant" {
+        if let Some(sep) = qualified_path.rfind("::") {
+            let parent = &qualified_path[..sep];
+            let name = &qualified_path[sep + 2..];
+            return Some(format!("{}/msg~variant.{}", parent, name));
+        }
+    }
 
     Some(format!("{}/{}", qualified_path, kind_suffix))
 }
 
 /// Map HIR ItemKind to URL suffix string.
-pub fn item_kind_to_url_suffix(item: ItemKind) -> Option<&'static str> {
+///
+/// `msg` blocks and their per-variant structs are detected via their
+/// `HirOrigin::Desugared(Msg(_))` marker so their doc URLs use `/msg` and
+/// `/msg_variant` rather than the generic `/mod` and `/struct` that would
+/// point to non-existent DocItems.
+pub fn item_kind_to_url_suffix(db: &dyn SpannedHirDb, item: ItemKind) -> Option<&'static str> {
+    use crate::span::{DesugaredOrigin, HirOrigin, mod_ast, struct_ast};
     match item {
-        ItemKind::TopMod(_) | ItemKind::Mod(_) => Some("mod"),
+        ItemKind::TopMod(_) => Some("mod"),
+        ItemKind::Mod(m) => {
+            if matches!(
+                mod_ast(db, m),
+                HirOrigin::Desugared(DesugaredOrigin::Msg(_))
+            ) {
+                Some("msg")
+            } else {
+                Some("mod")
+            }
+        }
         ItemKind::Func(_) => Some("fn"),
-        ItemKind::Struct(_) => Some("struct"),
+        ItemKind::Struct(s) => {
+            if matches!(
+                struct_ast(db, s),
+                HirOrigin::Desugared(DesugaredOrigin::Msg(msg)) if msg.variant_idx.is_some()
+            ) {
+                Some("msg_variant")
+            } else {
+                Some("struct")
+            }
+        }
         ItemKind::Enum(_) => Some("enum"),
         ItemKind::Trait(_) => Some("trait"),
         ItemKind::Contract(_) => Some("contract"),

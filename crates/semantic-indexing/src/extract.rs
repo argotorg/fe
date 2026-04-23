@@ -237,12 +237,37 @@ impl<'db> DocExtractor<'db> {
             _ => {}
         }
 
+        // Skip the synthetic pieces produced by `msg` desugaring — the
+        // per-variant struct and its accompanying impl blocks. The `msg` Mod
+        // itself is the sole DocItem for that block; variants appear inline
+        // on its page (see `extract_children` for `ItemKind::Mod(_)`).
+        match item {
+            ItemKind::Struct(s) if is_desugared_msg_variant_struct(self.db, s) => return None,
+            ItemKind::ImplTrait(it) if is_desugared_msg_impl_trait(self.db, it) => return None,
+            ItemKind::Impl(i)
+                if matches!(
+                    span::impl_ast(self.db, i),
+                    HirOrigin::Desugared(DesugaredOrigin::Msg(_))
+                ) =>
+            {
+                return None;
+            }
+            _ => {}
+        }
+
         // Skip items nested inside containers (traits, structs, enums, impls) —
         // they are already captured as children of their parent DocItem.
-        if let Some(parent) = item.scope().parent_item(self.db)
-            && crate::index_util::is_container_item(parent)
-        {
-            return None;
+        // For a `msg` Mod the variants are also rendered as children, so
+        // treat that Mod as a container too.
+        if let Some(parent) = item.scope().parent_item(self.db) {
+            if crate::index_util::is_container_item(parent) {
+                return None;
+            }
+            if let ItemKind::Mod(m) = parent
+                && is_desugared_msg_mod(self.db, m)
+            {
+                return None;
+            }
         }
 
         let scope = item.scope();
@@ -282,10 +307,7 @@ impl<'db> DocExtractor<'db> {
         match item {
             ItemKind::TopMod(_) => Some(DocItemKind::Module),
             ItemKind::Mod(m) => {
-                if matches!(
-                    span::mod_ast(self.db, m),
-                    HirOrigin::Desugared(DesugaredOrigin::Msg(_))
-                ) {
+                if is_desugared_msg_mod(self.db, m) {
                     Some(DocItemKind::Msg)
                 } else {
                     Some(DocItemKind::Module)
@@ -293,10 +315,7 @@ impl<'db> DocExtractor<'db> {
             }
             ItemKind::Func(_) => Some(DocItemKind::Function),
             ItemKind::Struct(s) => {
-                if matches!(
-                    span::struct_ast(self.db, s),
-                    HirOrigin::Desugared(DesugaredOrigin::Msg(m)) if m.variant_idx.is_some()
-                ) {
+                if is_desugared_msg_variant_struct(self.db, s) {
                     Some(DocItemKind::MsgVariant)
                 } else {
                     Some(DocItemKind::Struct)
@@ -384,6 +403,17 @@ impl<'db> DocExtractor<'db> {
     /// to be resolved. Instead we span from the name token start to the type
     /// node end, which exactly matches the signature text layout.
     fn field_sig_span(&self, field_view: FieldView<'db>) -> Option<SignatureSpanData> {
+        // Desugared msg variant struct fields: the HIR field spans inherit
+        // the variant block's DesugaredOrigin, so `.fields().field(i).name()`
+        // collapses to the entire variant body. Skip the signature span so
+        // the renderer shows the plain signature text (`name: Type`) without
+        // overlaying SCIP occurrences on a span that would shift positions.
+        if let hir::hir_def::FieldParent::Struct(s) = field_view.parent
+            && is_desugared_msg_variant_struct(self.db, s)
+        {
+            return None;
+        }
+
         let name_span = match field_view.parent {
             hir::hir_def::FieldParent::Struct(s) => s
                 .span()
@@ -459,8 +489,47 @@ impl<'db> DocExtractor<'db> {
             ItemKind::Trait(t) => self.extract_trait_members(t),
             ItemKind::Impl(i) => self.extract_impl_members(i),
             ItemKind::ImplTrait(it) => self.extract_impl_trait_members(it),
+            ItemKind::Mod(m) if is_desugared_msg_mod(self.db, m) => {
+                self.extract_msg_variants(m)
+            }
             _ => Vec::new(),
         }
+    }
+
+    /// Extract variants from a desugared `msg` Mod as `DocChild::Variant`.
+    ///
+    /// A `msg` block desugars into a `Mod` whose children are the per-variant
+    /// structs (plus internal trait impls). For docs we surface each variant
+    /// struct as a child of the msg DocItem so the `msg` page renders like an
+    /// `enum` page — variants listed inline rather than as separate items.
+    fn extract_msg_variants(&self, m: hir::hir_def::Mod<'db>) -> Vec<DocChild> {
+        let mut out = Vec::new();
+        for child in m.children_non_nested(self.db) {
+            let ItemKind::Struct(s) = child else { continue };
+            if !is_desugared_msg_variant_struct(self.db, s) {
+                continue;
+            }
+            let Some(name_ident) = s.name(self.db).to_opt() else {
+                continue;
+            };
+            let name = name_ident.data(self.db).to_string();
+            let docs = self
+                .get_docstring(s.scope())
+                .map(|s| DocContent::from_raw(&s));
+            let (signature, signature_span) = self.get_signature_with_span(child);
+
+            out.push(DocChild {
+                kind: DocChildKind::Variant,
+                name,
+                docs,
+                signature,
+                rich_signature: vec![],
+                signature_span,
+                sig_scope: None,
+                visibility: DocVisibility::Public,
+            });
+        }
+        out
     }
 
     fn extract_struct_fields(&self, s: Struct<'db>) -> Vec<DocChild> {
@@ -761,6 +830,48 @@ impl<'db> DocExtractor<'db> {
         vec![self.build_module_node_for_ingot(ingot, root_mod)]
     }
 
+    /// Should this child be skipped when populating a parent module's item
+    /// list in the nav tree? Excludes msg-desugared synthetic impls and the
+    /// per-variant structs (which are siblings of the msg Mod in the HIR but
+    /// should only appear as children of the Msg item, not as top-level
+    /// entries in the enclosing module's sidebar).
+    fn should_skip_module_item(&self, item: ItemKind<'db>) -> bool {
+        match item {
+            ItemKind::Struct(s) if is_desugared_msg_variant_struct(self.db, s) => true,
+            ItemKind::ImplTrait(it) if is_desugared_msg_impl_trait(self.db, it) => true,
+            ItemKind::Impl(i) if matches!(
+                span::impl_ast(self.db, i),
+                HirOrigin::Desugared(DesugaredOrigin::Msg(_))
+            ) =>
+            {
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Emit a DocModuleItem entry into `items` for `child`.
+    fn push_item_entry(
+        &self,
+        ingot: Ingot<'db>,
+        child: ItemKind<'db>,
+        items: &mut Vec<DocModuleItem>,
+    ) {
+        if let (Some(name), Some(kind)) =
+            (child.name(self.db), self.item_kind_to_doc_kind(child))
+        {
+            let raw_child_path = child.scope().pretty_path(self.db).unwrap_or_default();
+            let child_path = self.qualify_path_with_ingot(&raw_child_path, ingot);
+            let summary = self.get_summary(child.scope());
+            items.push(DocModuleItem {
+                name: name.data(self.db).to_string(),
+                path: child_path,
+                kind,
+                summary,
+            });
+        }
+    }
+
     /// Build a module node including file-based children from the ingot's module tree
     fn build_module_node_for_ingot(
         &self,
@@ -792,6 +903,13 @@ impl<'db> DocExtractor<'db> {
         // Get inline children (defined in this file)
         for child in top_mod.children_non_nested(self.db) {
             match child {
+                ItemKind::Mod(m) if is_desugared_msg_mod(self.db, m) => {
+                    // A msg block desugars to a Mod; surface it as an item
+                    // (kind: msg) in the parent rather than a sub-module, so
+                    // nav links resolve to the msg DocItem instead of a
+                    // non-existent `.../mod` URL.
+                    self.push_item_entry(ingot, child, &mut items);
+                }
                 ItemKind::Mod(_) => {
                     // Use ingot-aware builder for inline modules too
                     children.push(self.build_module_node_for_ingot_inline(ingot, child));
@@ -801,19 +919,10 @@ impl<'db> DocExtractor<'db> {
                 | ItemKind::Body(_)
                 | ItemKind::TopMod(_) => {}
                 _ => {
-                    if let (Some(name), Some(kind)) =
-                        (child.name(self.db), self.item_kind_to_doc_kind(child))
-                    {
-                        let raw_child_path = child.scope().pretty_path(self.db).unwrap_or_default();
-                        let child_path = self.qualify_path_with_ingot(&raw_child_path, ingot);
-                        let summary = self.get_summary(child.scope());
-                        items.push(DocModuleItem {
-                            name: name.data(self.db).to_string(),
-                            path: child_path,
-                            kind,
-                            summary,
-                        });
+                    if self.should_skip_module_item(child) {
+                        continue;
                     }
+                    self.push_item_entry(ingot, child, &mut items);
                 }
             }
         }
@@ -867,24 +976,18 @@ impl<'db> DocExtractor<'db> {
 
         for child in direct_children {
             match child {
+                ItemKind::Mod(m) if is_desugared_msg_mod(self.db, m) => {
+                    self.push_item_entry(ingot, child, &mut items);
+                }
                 ItemKind::Mod(_) | ItemKind::TopMod(_) => {
                     children.push(self.build_module_node_for_ingot_inline(ingot, child));
                 }
                 ItemKind::StaticAssert(_) | ItemKind::Use(_) | ItemKind::Body(_) => {}
                 _ => {
-                    if let (Some(name), Some(kind)) =
-                        (child.name(self.db), self.item_kind_to_doc_kind(child))
-                    {
-                        let raw_child_path = child.scope().pretty_path(self.db).unwrap_or_default();
-                        let child_path = self.qualify_path_with_ingot(&raw_child_path, ingot);
-                        let summary = self.get_summary(child.scope());
-                        items.push(DocModuleItem {
-                            name: name.data(self.db).to_string(),
-                            path: child_path,
-                            kind,
-                            summary,
-                        });
+                    if self.should_skip_module_item(child) {
+                        continue;
                     }
+                    self.push_item_entry(ingot, child, &mut items);
                 }
             }
         }
@@ -926,11 +1029,28 @@ impl<'db> DocExtractor<'db> {
 
         for child in direct_children {
             match child {
+                ItemKind::Mod(m) if is_desugared_msg_mod(self.db, m) => {
+                    if let (Some(name), Some(kind)) =
+                        (child.name(self.db), self.item_kind_to_doc_kind(child))
+                    {
+                        let child_path = child.scope().pretty_path(self.db).unwrap_or_default();
+                        let summary = self.get_summary(child.scope());
+                        items.push(DocModuleItem {
+                            name: name.data(self.db).to_string(),
+                            path: child_path,
+                            kind,
+                            summary,
+                        });
+                    }
+                }
                 ItemKind::Mod(_) | ItemKind::TopMod(_) => {
                     children.push(self.build_module_node(child));
                 }
                 ItemKind::StaticAssert(_) | ItemKind::Use(_) | ItemKind::Body(_) => {}
                 _ => {
+                    if self.should_skip_module_item(child) {
+                        continue;
+                    }
                     if let (Some(name), Some(kind)) =
                         (child.name(self.db), self.item_kind_to_doc_kind(child))
                     {
@@ -964,6 +1084,38 @@ impl<'db> DocExtractor<'db> {
             items,
         }
     }
+}
+
+/// Returns true if `m` is a `Mod` synthesized from a `msg` block.
+///
+/// A `msg` block desugars into a `Mod` containing per-variant structs and
+/// their `impl MsgVariant` blocks. We treat that `Mod` as a single
+/// `DocItemKind::Msg` item (not as a navigable sub-module) so the user sees
+/// one "Message" entry in the sidebar rather than a phantom sub-module.
+fn is_desugared_msg_mod<'db>(db: &'db dyn SpannedHirDb, m: hir::hir_def::Mod<'db>) -> bool {
+    matches!(
+        span::mod_ast(db, m),
+        HirOrigin::Desugared(DesugaredOrigin::Msg(_))
+    )
+}
+
+/// Returns true if `s` is a `Struct` synthesized from one variant of a `msg`
+/// block (the per-variant payload struct).
+fn is_desugared_msg_variant_struct<'db>(db: &'db dyn SpannedHirDb, s: Struct<'db>) -> bool {
+    matches!(
+        span::struct_ast(db, s),
+        HirOrigin::Desugared(DesugaredOrigin::Msg(msg)) if msg.variant_idx.is_some()
+    )
+}
+
+/// Returns true if `it` is an `ImplTrait` synthesized by the msg desugaring
+/// (the per-variant `impl MsgVariant for V` block). These are internal and
+/// should not appear in docs.
+fn is_desugared_msg_impl_trait<'db>(db: &'db dyn SpannedHirDb, it: ImplTrait<'db>) -> bool {
+    matches!(
+        span::impl_trait_ast(db, it),
+        HirOrigin::Desugared(DesugaredOrigin::Msg(_))
+    )
 }
 
 /// Extract the simple name from a potentially qualified/generic type.

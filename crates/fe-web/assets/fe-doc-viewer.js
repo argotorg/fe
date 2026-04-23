@@ -572,6 +572,7 @@ class FeDocViewer extends HTMLElement {
         mod: "module", fn: "function", struct: "struct", enum: "enum",
         trait: "trait", contract: "contract", type: "type_alias",
         "const": "const", impl: "impl",
+        msg: "msg", msg_variant: "msg_variant",
       };
       var kindName = kindMap[kindSuffix];
       if (kindName) {

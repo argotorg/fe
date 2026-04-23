@@ -444,14 +444,22 @@ fn process_module<'db>(
                 let child_kind = child_symbol_kind(child_scope);
 
                 // Compute child doc URL: parent_url~anchor_prefix.child_name
+                //
+                // If the parent URL already contains an anchor (e.g. msg variants,
+                // which live as `...msg~variant.Name`), we can't nest a second `~`
+                // because the viewer's anchor extraction uses the first tilde.
+                // In that case the field link degrades to the variant anchor —
+                // a click lands on the variant row rather than a specific field.
                 let child_sym_kind = SymbolKind::from(child_scope);
                 if let (Some(parent_url), Some(anchor)) =
                     (&item_doc_url, child_sym_kind.doc_anchor_prefix())
                 {
-                    doc_urls.insert(
-                        child_symbol.clone(),
-                        format!("{}~{}.{}", parent_url, anchor, child_name),
-                    );
+                    let url = if parent_url.contains('~') {
+                        parent_url.clone()
+                    } else {
+                        format!("{}~{}.{}", parent_url, anchor, child_name)
+                    };
+                    doc_urls.insert(child_symbol.clone(), url);
                 }
 
                 if let Some(doc) = documents.get_mut(&doc_url) {
@@ -1417,6 +1425,19 @@ fn signature_offset_mapper<'a>(
     SignatureOffsetMapper::new(raw_text, sig_text)
 }
 
+/// Score a SCIP symbol by how specific its trailing descriptor is. Used as a
+/// tiebreaker when two occurrences share the same byte range so that, e.g.,
+/// `RegistryMsg::Claim#` wins over the enclosing `RegistryMsg:` namespace.
+fn symbol_specificity(symbol: &str) -> u8 {
+    match symbol.chars().last() {
+        Some('#') | Some('.') => 3, // type / term — most specific
+        Some(')') => 2,             // method signature
+        Some(']') => 1,             // type parameter
+        Some(':') | Some('/') => 0, // namespace / package — least specific
+        _ => 1,
+    }
+}
+
 /// Build `rich_signature` parts by overlaying SCIP occurrences on a signature span.
 ///
 /// Finds non-definition occurrences within the signature's byte range, maps their
@@ -1458,7 +1479,17 @@ fn overlay_occurrences(
                 && symbol_urls.contains_key(&o.symbol)
         })
         .collect();
-    sig_occs.sort_by_key(|o| o.byte_start);
+    // Sort by (byte_start asc, specificity desc). When two occurrences
+    // share a byte range the more specific symbol wins: SCIP descriptors
+    // ending in `#` (type) or `.` (term) target the concrete item, while
+    // ones ending in `:` are namespace-shaped (the enclosing msg mod).
+    // Without this tiebreak the namespace symbol lands first and the
+    // `occ_start < pos` guard below drops the variant/type link.
+    sig_occs.sort_by(|a, b| {
+        a.byte_start
+            .cmp(&b.byte_start)
+            .then_with(|| symbol_specificity(&b.symbol).cmp(&symbol_specificity(&a.symbol)))
+    });
 
     if sig_occs.is_empty() {
         return vec![];
