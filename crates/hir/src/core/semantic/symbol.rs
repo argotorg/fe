@@ -526,12 +526,12 @@ pub fn scope_to_doc_path(db: &dyn SpannedHirDb, scope: ScopeId) -> Option<String
 
     // Msg variants have no standalone page — link to the parent msg page
     // with a `~variant.<name>` anchor so clicks scroll to the variant section.
-    if kind_suffix == "msg_variant" {
-        if let Some(sep) = qualified_path.rfind("::") {
-            let parent = &qualified_path[..sep];
-            let name = &qualified_path[sep + 2..];
-            return Some(format!("{}/msg~variant.{}", parent, name));
-        }
+    if kind_suffix == "msg_variant"
+        && let Some(sep) = qualified_path.rfind("::")
+    {
+        let parent = &qualified_path[..sep];
+        let name = &qualified_path[sep + 2..];
+        return Some(format!("{}/msg~variant.{}", parent, name));
     }
 
     Some(format!("{}/{}", qualified_path, kind_suffix))

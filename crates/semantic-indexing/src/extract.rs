@@ -86,9 +86,7 @@ impl<'db> DocExtractor<'db> {
         // the ingot name so a nested `foo::lib` submodule is left alone.
         if matches!(doc_item.kind, DocItemKind::Module)
             && doc_item.name == "lib"
-            && let Some(cfg_name) = ingot
-                .config(self.db)
-                .and_then(|c| c.metadata.name.clone())
+            && let Some(cfg_name) = ingot.config(self.db).and_then(|c| c.metadata.name.clone())
             && doc_item.path == cfg_name.as_str()
         {
             doc_item.name = cfg_name.to_string();
@@ -540,9 +538,7 @@ impl<'db> DocExtractor<'db> {
             ItemKind::Trait(t) => self.extract_trait_members(t),
             ItemKind::Impl(i) => self.extract_impl_members(i),
             ItemKind::ImplTrait(it) => self.extract_impl_trait_members(it),
-            ItemKind::Mod(m) if is_desugared_msg_mod(self.db, m) => {
-                self.extract_msg_variants(m)
-            }
+            ItemKind::Mod(m) if is_desugared_msg_mod(self.db, m) => self.extract_msg_variants(m),
             _ => Vec::new(),
         }
     }
@@ -1018,10 +1014,11 @@ impl<'db> DocExtractor<'db> {
         match item {
             ItemKind::Struct(s) if is_desugared_msg_variant_struct(self.db, s) => true,
             ItemKind::ImplTrait(it) if is_desugared_msg_impl_trait(self.db, it) => true,
-            ItemKind::Impl(i) if matches!(
-                span::impl_ast(self.db, i),
-                HirOrigin::Desugared(DesugaredOrigin::Msg(_))
-            ) =>
+            ItemKind::Impl(i)
+                if matches!(
+                    span::impl_ast(self.db, i),
+                    HirOrigin::Desugared(DesugaredOrigin::Msg(_))
+                ) =>
             {
                 true
             }
@@ -1036,9 +1033,7 @@ impl<'db> DocExtractor<'db> {
         child: ItemKind<'db>,
         items: &mut Vec<DocModuleItem>,
     ) {
-        if let (Some(name), Some(kind)) =
-            (child.name(self.db), self.item_kind_to_doc_kind(child))
-        {
+        if let (Some(name), Some(kind)) = (child.name(self.db), self.item_kind_to_doc_kind(child)) {
             let raw_child_path = child.scope().pretty_path(self.db).unwrap_or_default();
             let child_path = self.qualify_path_with_ingot(&raw_child_path, ingot);
             let summary = self.get_summary(child.scope());
