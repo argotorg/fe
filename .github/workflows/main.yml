@@ -218,7 +218,7 @@ jobs:
           repository: fe-lang/fe-docs
           token: ${{ secrets.DOC_DEPLOY_TOKEN }}
           path: fe-docs
-          ref: gh-pages
+          ref: main
 
       - name: Deploy docs
         run: |
