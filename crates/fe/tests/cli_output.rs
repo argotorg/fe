@@ -1139,7 +1139,7 @@ fn test_cli_build_ingot_root_reexported_contract_fake_solc_artifacts() {
     snapshot.push_str(&format!("KeyperSet.bin: {}\n", deploy.trim()));
     snapshot.push_str(&format!("KeyperSet.runtime.bin: {}\n", runtime.trim()));
 
-    let snapshot_path = fixture_dir.join("build_fake_solc.case");
+    let snapshot_path = fixture_dir.join("reexport_build_fake_solc.case");
     snap_test!(snapshot, snapshot_path.to_str().unwrap());
 }
 
