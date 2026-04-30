@@ -1,1 +1,0 @@
-Checked arithmetic overflow now reverts with a Solidity-compatible `Panic(uint256)` payload (code `0x11`) instead of empty revert data. This makes overflow failures identifiable by off-chain tooling such as Foundry, Hardhat, and block explorers.

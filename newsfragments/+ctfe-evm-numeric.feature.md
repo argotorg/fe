@@ -1,1 +1,0 @@
-Make primitive numeric and boolean intrinsics, `IntDowncast` methods, and EVM `addmod`/`mulmod` const-evaluable. This enables modular arithmetic and field-arithmetic-heavy code to be used in `const fn` and `static_assert`.

@@ -1,1 +1,0 @@
-Improve CTFE performance and scale by reducing repeated const interning, using copy-on-write aggregate stores, caching semantic bodies and instances, and raising the default CTFE step limit to 1,000,000. Larger constant computations such as Poseidon test vectors can now complete during normal checks.

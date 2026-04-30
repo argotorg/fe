@@ -1,1 +1,0 @@
-`Result::unwrap()` now emits selector-prefixed revert data for `#[error]` types. Previously, `unwrap()` on a `Result<E, T>` where `E` is an `#[error]` type would ABI-encode the error without the 4-byte selector. Now the monomorphizer routes these to `revert_error()` instead of `revert()`, producing Solidity-compatible error payloads.

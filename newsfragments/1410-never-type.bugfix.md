@@ -1,1 +1,0 @@
-Fix never type (`!`) handling in trait checking and lowering. The compiler now avoids probing trait implementations for bare `!`, producing the intended diagnostic for invalid uses, and treats extern functions declared `-> !` as intrinsically non-returning even when they appear in functions with generic or associated return types.

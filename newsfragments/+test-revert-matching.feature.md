@@ -1,1 +1,0 @@
-Extend `#[test(should_revert)]` with `panic` and `selector` arguments for verifying revert payloads. `#[test(should_revert, panic = 0x11)]` checks that the test reverts with a Solidity-compatible `Panic(uint256)` and the expected code. `#[test(should_revert, selector = 0x4e487b71)]` checks only the 4-byte error selector.
