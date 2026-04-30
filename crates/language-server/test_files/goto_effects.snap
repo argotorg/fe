@@ -1,5 +1,6 @@
 ---
 source: crates/language-server/src/functionality/goto.rs
+assertion_line: 460
 expression: snapshot
 input_file: test_files/goto_effects.fe
 ---
@@ -217,13 +218,13 @@ note:
    ┌─ goto_effects.fe:71:5
    │
 71 │     Add { x: u256 } -> u256,
-   │     ^^^^^^^^^^^^^^^^^^^^^^^ -> goto_effects::CalcMsg::Add
+   │     ^^^ -> goto_effects::CalcMsg::Add
 
 note: 
    ┌─ goto_effects.fe:72:5
    │
 72 │     GetState -> u256,
-   │     ^^^^^^^^^^^^^^^^ -> goto_effects::CalcMsg::GetState
+   │     ^^^^^^^^ -> goto_effects::CalcMsg::GetState
 
 note: 
    ┌─ goto_effects.fe:75:40

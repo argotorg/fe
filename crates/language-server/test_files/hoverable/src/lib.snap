@@ -670,30 +670,16 @@ note:
    │ ╰─^ def: defined here @ 92:0 (11 refs)
 
 note: 
-   ┌─ lib.fe:93:3
-   │  
-93 │ ╭   #[selector = 0x01]
-94 │ │   Mint { to: i32, amount: i32 } -> bool,
-   │ ╰───────────────────────────────────────^ ref: 93:2
-
-note: 
    ┌─ lib.fe:94:3
    │
 94 │   Mint { to: i32, amount: i32 } -> bool,
-   │   ^^^^ def: defined here @ 94:2 (13 refs)
-
-note: 
-   ┌─ lib.fe:95:3
-   │  
-95 │ ╭   #[selector = 0x02]
-96 │ │   Burn { amount: i32 } -> bool,
-   │ ╰──────────────────────────────^ ref: 95:2
+   │   ^^^^ ref: 94:2
 
 note: 
    ┌─ lib.fe:96:3
    │
 96 │   Burn { amount: i32 } -> bool,
-   │   ^^^^ def: defined here @ 96:2 (13 refs)
+   │   ^^^^ ref: 96:2
 
 note: 
    ┌─ lib.fe:99:14
