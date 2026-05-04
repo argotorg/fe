@@ -112,6 +112,47 @@ function feMigrate(data) {
     data.schema_version = 2;
   }
 
+  if (v < 3) {
+    // v2 → v3: msg variants are no longer top-level DocItems; they live as
+    // `kind: "variant"` children of their parent msg DocItem (mirrors enum
+    // variants). SCIP doc_url for msg variants moved from
+    // `<path>/msg_variant` to `<parent>/msg~variant.<name>`.
+    //
+    // For v<3 data: drop stale top-level msg_variant items from index.items
+    // and rewrite any lingering `/msg_variant` SCIP doc_urls to the anchor
+    // form. Best-effort — consumers holding v<3 docs.json should regenerate.
+    if (data.index && data.index.items) {
+      data.index.items = data.index.items.filter(function (it) {
+        return it && it.kind !== "msg_variant";
+      });
+    }
+    if (data.scip && data.scip.symbols) {
+      var syms = data.scip.symbols;
+      for (var k in syms) {
+        if (!syms.hasOwnProperty(k)) continue;
+        var url = syms[k].doc_url;
+        if (!url) continue;
+        // /msg_variant → parent /msg~variant.<name>. Drop any legacy
+        // sub-anchor (e.g. ~field.x) — the router splits on the first ~,
+        // so a doubled tilde would produce a hash that matches no element
+        // ID. Migrated deep-links land on the variant row instead.
+        var m = url.match(/^(.*)::([^:]+)\/msg_variant(~.*)?$/);
+        if (m) {
+          syms[k].doc_url = m[1] + "/msg~variant." + m[2];
+        }
+      }
+    }
+    data.schema_version = 3;
+  }
+
+  if (v < 4) {
+    // v3 → v4: contract pages now emit `init` and `recv_handler` children
+    // (the init block and each recv arm). No structural rewrite is needed
+    // for old data; downstream consumers just won't see these rows until
+    // they regenerate docs.json.
+    data.schema_version = 4;
+  }
+
   return data;
 }
 

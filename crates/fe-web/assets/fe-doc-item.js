@@ -38,11 +38,15 @@ var _ITEM_KIND = {
 };
 
 var _CHILD_KIND = {
-  field:       { plural: "Fields",              anchor: "field",            order: 1 },
-  variant:     { plural: "Variants",            anchor: "variant",          order: 0 },
-  method:      { plural: "Methods",             anchor: "tymethod",         order: 4 },
-  assoc_type:  { plural: "Associated Types",    anchor: "associatedtype",   order: 2 },
-  assoc_const: { plural: "Associated Constants", anchor: "associatedconstant", order: 3 },
+  field:        { plural: "Fields",              anchor: "field",            order: 1 },
+  variant:      { plural: "Variants",            anchor: "variant",          order: 0 },
+  method:       { plural: "Methods",             anchor: "tymethod",         order: 6 },
+  assoc_type:   { plural: "Associated Types",    anchor: "associatedtype",   order: 4 },
+  assoc_const:  { plural: "Associated Constants", anchor: "associatedconstant", order: 5 },
+  // Contract-specific child kinds (emitted by crates/fe/src/extract.rs for
+  // Contract items — see DocChildKind::{Init,RecvHandler}).
+  init:         { plural: "Initializer",         anchor: "init",             order: 2 },
+  recv_handler: { plural: "Message Handlers",    anchor: "handler",          order: 3 },
 };
 
 function _diKindStr(kind)     { return (_ITEM_KIND[kind] || {}).str || kind; }
@@ -304,7 +308,8 @@ class FeDocItem extends HTMLElement {
 
   _renderBreadcrumbs(item) {
     var segments = item.path.split("::");
-    var base = this.getAttribute("base") || "";
+    var index = this._getIndex();
+    var items = (index && index.items) || [];
     var html = '<nav class="breadcrumb">';
     var accumulated = "";
     for (var i = 0; i < segments.length; i++) {
@@ -316,9 +321,17 @@ class FeDocItem extends HTMLElement {
       if (i === segments.length - 1) {
         html += '<span class="breadcrumb-current">' + _diEsc(segments[i]) + "</span>";
       } else {
-        var href = base ? base + "#" + accumulated + "/mod" : "#" + accumulated + "/mod";
-        html += '<a href="' + _diEsc(href) + '" class="breadcrumb-link">' +
-          _diEsc(segments[i]) + "</a>";
+        // Resolve the real kind for each ancestor segment so non-module
+        // containers (e.g. `msg`) link to their actual page, not `/mod`.
+        var suffix = "mod";
+        for (var k = 0; k < items.length; k++) {
+          if (items[k].path === accumulated) {
+            suffix = _diKindStr(items[k].kind);
+            break;
+          }
+        }
+        html += '<a href="' + _diEsc(this._itemHref(accumulated + "/" + suffix)) +
+          '" class="breadcrumb-link">' + _diEsc(segments[i]) + "</a>";
       }
     }
     html += "</nav>";
@@ -371,11 +384,17 @@ class FeDocItem extends HTMLElement {
       for (var j = 0; j < group.items.length; j++) {
         var child = group.items[j];
         var anchorId = info.anchor + "." + child.name;
+        var rowHref = this._anchorHref(parentUrl, anchorId);
         html += '<div class="member-item" id="' + _diEsc(anchorId) + '">';
-        html += '<div class="member-header">';
+        html += '<a class="member-header-link" href="' + _diEsc(rowHref) + '">';
+        html += '<div class="member-header" data-row-link="true">';
         html += this._renderChildSignature(child);
-        html += '<a href="' + this._anchorHref(parentUrl, anchorId) + '" class="anchor">\u00a7</a>';
+        // Nested <a> is invalid HTML, so use a <span> for the visual anchor
+        // glyph. Clicking anywhere in the header (including this glyph)
+        // navigates via the outer <a>.
+        html += '<span class="anchor" aria-hidden="true">\u00a7</span>';
         html += "</div>";
+        html += "</a>";
         if (child.docs) {
           var childHtml = child.docs.html_body || _diEsc(child.docs.body || child.docs.summary || "");
           html += '<div class="member-docs">' + childHtml + "</div>";

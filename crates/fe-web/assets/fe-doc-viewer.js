@@ -337,12 +337,23 @@ class FeDocViewer extends HTMLElement {
       ? "#" + CSS.escape(anchorId) + " { background: var(--target-bg, rgba(99,102,241,0.08)); }"
       : "";
 
+    // Retry a few times so the scroll lands even when the caller races the
+    // content render (e.g. initial page load with #path~anchor in the URL —
+    // _showItem rebuilds content asynchronously, so the target element may
+    // not exist at the first tick).
     var self = this;
-    setTimeout(function () {
+    var attempts = 0;
+    function tryScroll() {
       if (!self._contentEl) return;
       var el = self._contentEl.querySelector("#" + CSS.escape(anchorId));
-      if (el) el.scrollIntoView({ behavior: "smooth" });
-    }, 100);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "start" });
+        return;
+      }
+      attempts++;
+      if (attempts < 20) setTimeout(tryScroll, 50);
+    }
+    setTimeout(tryScroll, 50);
   }
 
   // ---- SCIP Ambient Highlighting ----
@@ -572,6 +583,7 @@ class FeDocViewer extends HTMLElement {
         mod: "module", fn: "function", struct: "struct", enum: "enum",
         trait: "trait", contract: "contract", type: "type_alias",
         "const": "const", impl: "impl",
+        msg: "msg", msg_variant: "msg_variant",
       };
       var kindName = kindMap[kindSuffix];
       if (kindName) {

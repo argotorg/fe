@@ -471,14 +471,22 @@ fn process_module<'db>(
                 let child_kind = child_symbol_kind(child_scope);
 
                 // Compute child doc URL: parent_url~anchor_prefix.child_name
+                //
+                // If the parent URL already contains an anchor (e.g. msg variants,
+                // which live as `...msg~variant.Name`), we can't nest a second `~`
+                // because the viewer's anchor extraction uses the first tilde.
+                // In that case the field link degrades to the variant anchor —
+                // a click lands on the variant row rather than a specific field.
                 let child_sym_kind = SymbolKind::from(child_scope);
                 if let (Some(parent_url), Some(anchor)) =
                     (&item_doc_url, child_sym_kind.doc_anchor_prefix())
                 {
-                    doc_urls.insert(
-                        child_symbol.clone(),
-                        format!("{}~{}.{}", parent_url, anchor, child_name),
-                    );
+                    let url = if parent_url.contains('~') {
+                        parent_url.clone()
+                    } else {
+                        format!("{}~{}.{}", parent_url, anchor, child_name)
+                    };
+                    doc_urls.insert(child_symbol.clone(), url);
                 }
 
                 if let Some(doc) = documents.get_mut(&doc_url) {
@@ -1356,6 +1364,19 @@ fn scip_range_to_byte_range(line_index: &LineIndex, range: &[i32]) -> (usize, us
     }
 }
 
+/// Score a SCIP symbol by how specific its trailing descriptor is. Used as a
+/// tiebreaker when two occurrences share the same byte range so that, e.g.,
+/// `RegistryMsg::Claim#` wins over the enclosing `RegistryMsg:` namespace.
+fn symbol_specificity(symbol: &str) -> u8 {
+    match symbol.chars().last() {
+        Some('#') | Some('.') => 3, // type / term — most specific
+        Some(')') => 2,             // method signature
+        Some(']') => 1,             // type parameter
+        Some(':') | Some('/') => 0, // namespace / package — least specific
+        _ => 1,
+    }
+}
+
 /// Build `rich_signature` parts by overlaying SCIP occurrences on a signature span.
 ///
 /// Finds non-definition occurrences within the signature's byte range, maps their
@@ -1382,18 +1403,51 @@ fn overlay_occurrences(
         return vec![];
     };
 
+    // Compute byte ranges of `#[...]` attribute regions within the signature
+    // text (relative to sig_text, i.e. offset 0 == span.byte_start).
+    //
+    // Attribute-internal occurrences — e.g. inside `#[selector = sol(...)]`,
+    // where the type checker may attribute the `sol(...)` call to an
+    // `Encode::encode_to_ptr` resolution — produce phantom rich-signature
+    // links that anchor to nothing on the target page. Exclude them so the
+    // attribute renders as plain text.
+    let attr_ranges: Vec<(usize, usize)> = find_attr_ranges(sig_text);
+
     // Filter to non-definition occurrences within the signature's byte range
-    // that have known doc URLs.
+    // that have known doc URLs, and that don't fall inside an attribute
+    // (`#[...]`) region.
     let mut sig_occs: Vec<&ByteOccurrence> = occs
         .iter()
         .filter(|o| {
-            o.byte_start >= span.byte_start
-                && o.byte_end <= span.byte_end
-                && !o.is_definition
-                && symbol_urls.contains_key(&o.symbol)
+            if o.byte_start < span.byte_start
+                || o.byte_end > span.byte_end
+                || o.is_definition
+                || !symbol_urls.contains_key(&o.symbol)
+            {
+                return false;
+            }
+            let rel_start = o.byte_start - span.byte_start;
+            // Drop any occurrence that starts inside a `#[...]` attribute.
+            // Simple `contained_in` isn't enough: the type checker sometimes
+            // attributes the `sol(...)` call to a range that extends past
+            // the closing `]` onto the following variant, producing a
+            // phantom `encode_to_ptr` link.
+            !attr_ranges
+                .iter()
+                .any(|&(s, e)| rel_start >= s && rel_start < e)
         })
         .collect();
-    sig_occs.sort_by_key(|o| o.byte_start);
+    // Sort by (byte_start asc, specificity desc). When two occurrences
+    // share a byte range the more specific symbol wins: SCIP descriptors
+    // ending in `#` (type) or `.` (term) target the concrete item, while
+    // ones ending in `:` are namespace-shaped (the enclosing msg mod).
+    // Without this tiebreak the namespace symbol lands first and the
+    // `occ_start < pos` guard below drops the variant/type link.
+    sig_occs.sort_by(|a, b| {
+        a.byte_start
+            .cmp(&b.byte_start)
+            .then_with(|| symbol_specificity(&b.symbol).cmp(&symbol_specificity(&a.symbol)))
+    });
 
     if sig_occs.is_empty() {
         return vec![];
@@ -1429,6 +1483,58 @@ fn overlay_occurrences(
     }
 
     parts
+}
+
+/// Find byte ranges of `#[...]` attribute regions within `text`.
+///
+/// Returns `(start, end)` pairs (relative to `text`) where `end` is the byte
+/// offset just past the matching `]`. Brackets inside string literals are
+/// respected — `#[sel = sol("f()")]` nests fine. Unterminated attributes are
+/// skipped.
+///
+/// Used to mask occurrence overlays over attribute tokens so the rich
+/// signature renders them as plain text.
+fn find_attr_ranges(text: &str) -> Vec<(usize, usize)> {
+    let bytes = text.as_bytes();
+    let mut ranges = Vec::new();
+    let mut i = 0;
+    while i + 1 < bytes.len() {
+        if bytes[i] == b'#' && bytes[i + 1] == b'[' {
+            let start = i;
+            let mut depth: i32 = 1;
+            let mut j = i + 2;
+            let mut in_str: Option<u8> = None;
+            while j < bytes.len() && depth > 0 {
+                let c = bytes[j];
+                match (in_str, c) {
+                    (Some(q), x) if x == q => {
+                        in_str = None;
+                    }
+                    (Some(_), b'\\') => {
+                        // Skip escaped next char.
+                        j += 1;
+                    }
+                    (None, b'"') | (None, b'\'') => {
+                        in_str = Some(c);
+                    }
+                    (None, b'[') => depth += 1,
+                    (None, b']') => depth -= 1,
+                    _ => {}
+                }
+                j += 1;
+            }
+            if depth == 0 {
+                ranges.push((start, j));
+                i = j;
+                continue;
+            } else {
+                // Unterminated — stop scanning to avoid runaway masking.
+                break;
+            }
+        }
+        i += 1;
+    }
+    ranges
 }
 
 /// Convert a byte offset within a signature text to (line, col) relative to the

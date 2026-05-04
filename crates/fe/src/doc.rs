@@ -161,6 +161,7 @@ pub fn generate_docs(
     output: Option<&Utf8PathBuf>,
     builtins: bool,
     stdlib_path: Option<&Utf8PathBuf>,
+    include_tests: bool,
     action: Option<&crate::DocAction>,
 ) {
     // First, check if there's a running LSP with docs server
@@ -213,7 +214,7 @@ pub fn generate_docs(
     let git_root = detect_git_root(path.as_std_path());
 
     let index = if path.is_file() && path.extension() == Some("fe") {
-        extract_single_file(&mut db, path, git_root.as_deref())
+        extract_single_file(&mut db, path, git_root.as_deref(), include_tests)
     } else if path.is_dir() {
         // Check if this is a workspace (fe.toml with [workspace] section)
         let fe_toml = path.join("fe.toml");
@@ -222,15 +223,21 @@ pub fn generate_docs(
                 if let Ok(common::config::Config::Workspace(ws_config)) =
                     common::config::Config::parse(&content)
                 {
-                    extract_workspace(&mut db, path, &ws_config, git_root.as_deref())
+                    extract_workspace(
+                        &mut db,
+                        path,
+                        &ws_config,
+                        git_root.as_deref(),
+                        include_tests,
+                    )
                 } else {
-                    extract_ingot(&mut db, path, git_root.as_deref())
+                    extract_ingot(&mut db, path, git_root.as_deref(), include_tests)
                 }
             } else {
-                extract_ingot(&mut db, path, git_root.as_deref())
+                extract_ingot(&mut db, path, git_root.as_deref(), include_tests)
             }
         } else {
-            extract_ingot(&mut db, path, git_root.as_deref())
+            extract_ingot(&mut db, path, git_root.as_deref(), include_tests)
         }
     } else {
         eprintln!("Error: Path must be either a .fe file or a directory containing fe.toml");
@@ -254,7 +261,9 @@ pub fn generate_docs(
                 continue;
             }
 
-            let extractor = make_extractor(&db, git_root.as_deref());
+            // Builtins never include tests regardless of the flag — stdlib
+            // test fns have no place in user-facing docs.
+            let extractor = make_extractor(&db, git_root.as_deref(), false);
             for top_mod in builtin_ingot.all_modules(&db) {
                 for item in top_mod.children_nested(&db) {
                     if let Some(doc_item) = extractor.extract_item_for_ingot(item, builtin_ingot) {
@@ -414,19 +423,20 @@ pub fn generate_docs(
 fn make_extractor<'db>(
     db: &'db dyn hir::SpannedHirDb,
     git_root: Option<&std::path::Path>,
+    include_tests: bool,
 ) -> DocExtractor<'db> {
-    let extractor = DocExtractor::new(db);
+    let mut extractor = DocExtractor::new(db).with_include_tests(include_tests);
     if let Some(root) = git_root {
-        extractor.with_root_path(root.to_path_buf())
-    } else {
-        extractor
+        extractor = extractor.with_root_path(root.to_path_buf());
     }
+    extractor
 }
 
 fn extract_single_file(
     db: &mut DriverDataBase,
     file_path: &Utf8PathBuf,
     git_root: Option<&std::path::Path>,
+    include_tests: bool,
 ) -> Option<DocIndex> {
     let canonical = file_path.canonicalize_utf8().ok()?;
     let file_url = Url::from_file_path(&canonical).ok()?;
@@ -444,7 +454,7 @@ fn extract_single_file(
         diags.emit(db);
     }
 
-    let extractor = make_extractor(db, git_root);
+    let extractor = make_extractor(db, git_root, include_tests);
     Some(extractor.extract_module(top_mod))
 }
 
@@ -453,6 +463,7 @@ fn extract_workspace(
     workspace_root: &Utf8PathBuf,
     ws_config: &common::config::WorkspaceConfig,
     git_root: Option<&std::path::Path>,
+    include_tests: bool,
 ) -> Option<DocIndex> {
     use common::config::WorkspaceMemberSelection;
 
@@ -525,7 +536,7 @@ fn extract_workspace(
             diags.emit(db);
         }
 
-        let extractor = make_extractor(db, git_root);
+        let extractor = make_extractor(db, git_root, include_tests);
         for top_mod in ingot.all_modules(db) {
             for item in top_mod.children_nested(db) {
                 if let Some(doc_item) = extractor.extract_item_for_ingot(item, ingot) {
@@ -555,6 +566,7 @@ fn extract_ingot(
     db: &mut DriverDataBase,
     dir_path: &Utf8PathBuf,
     git_root: Option<&std::path::Path>,
+    include_tests: bool,
 ) -> Option<DocIndex> {
     let canonical_path = dir_path.canonicalize_utf8().ok()?;
     let ingot_url = Url::from_directory_path(canonical_path.as_str()).ok()?;
@@ -573,7 +585,7 @@ fn extract_ingot(
         diags.emit(db);
     }
 
-    let extractor = make_extractor(db, git_root);
+    let extractor = make_extractor(db, git_root, include_tests);
     let mut index = DocIndex::new();
 
     // Extract items from all modules with ingot-qualified paths (like LSP does)
@@ -803,22 +815,33 @@ fn detect_source_link_base(working_dir: &std::path::Path) -> Option<String> {
     Some(format!("{}/blob/{}", CANONICAL_REPO, commit))
 }
 
+/// Top-level shape of `docs.json`. A struct (rather than a `serde_json::json!`
+/// object) so field order in serialized output is deterministic — `serde_json`'s
+/// default `Map` is HashMap-backed, which produces non-reproducible key ordering
+/// across builds.
+#[derive(Serialize)]
+struct MergedDocsJson<'a> {
+    schema_version: u32,
+    compiler_version: &'a str,
+    index: serde_json::Value,
+    scip: serde_json::Value,
+}
+
 /// Build a merged JSON string containing both the DocIndex and SCIP data.
 ///
 /// This is the single data file that web components consume via `data-src`.
-/// The structure is: `{ "schema_version": N, "index": <DocIndex>, "scip": <SCIP data or null> }`
 fn build_merged_json(index: &DocIndex, scip_json: Option<&str>) -> String {
     let mut index_value = serde_json::to_value(index).unwrap();
     fe_web::static_site::inject_html_bodies(&mut index_value);
     let scip_value = scip_json
         .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
         .unwrap_or(serde_json::Value::Null);
-    let merged = serde_json::json!({
-        "schema_version": fe_web::model::SCHEMA_VERSION,
-        "compiler_version": env!("CARGO_PKG_VERSION"),
-        "index": index_value,
-        "scip": scip_value,
-    });
+    let merged = MergedDocsJson {
+        schema_version: fe_web::model::SCHEMA_VERSION,
+        compiler_version: env!("CARGO_PKG_VERSION"),
+        index: index_value,
+        scip: scip_value,
+    };
     serde_json::to_string_pretty(&merged).unwrap()
 }
 
