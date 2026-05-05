@@ -3,9 +3,9 @@ use rustc_hash::FxHashSet;
 use crate::{
     db::MirDb,
     runtime::{
-        DispatchDefault, RExpr, RStmt, RTerminator, ResolvedCodeRegion, RuntimeCodeRegion,
-        RuntimeFunctionOwner, RuntimeObject, RuntimePackage, RuntimeProgramView,
-        RuntimeSyntheticSpec,
+        DispatchArm, DispatchDefault, RBlockId, RExpr, RStmt, RTerminator, ResolvedCodeRegion,
+        RuntimeBody, RuntimeCodeRegion, RuntimeFunctionOwner, RuntimeObject, RuntimePackage,
+        RuntimeProgramView, RuntimeSyntheticSpec,
         code_region::{code_region_runtime_entry, code_region_section_name, code_region_symbol},
     },
     verify::{VerifyError, verify_runtime_body},
@@ -137,46 +137,7 @@ fn verify_synthetic_function<'db>(
         RuntimeFunctionOwner::Synthetic(spec) => match spec {
             RuntimeSyntheticSpec::ContractRuntimeRoot {
                 dispatch, default, ..
-            } => {
-                let Some(entry) = body.blocks.first() else {
-                    return Err(VerifyError::InvalidReturnClass);
-                };
-                let RTerminator::SwitchScalar {
-                    cases,
-                    default: default_bb,
-                    ..
-                } = &entry.terminator
-                else {
-                    return Err(VerifyError::InvalidReturnClass);
-                };
-                if cases.len() != dispatch.len() {
-                    return Err(VerifyError::InvalidReturnClass);
-                }
-                for ((_, block), arm) in cases.iter().zip(dispatch.iter()) {
-                    let Some(target) = body.block(*block) else {
-                        return Err(VerifyError::MissingRuntimeBlock(*block));
-                    };
-                    let RTerminator::TerminalCall { callee, args } = &target.terminator else {
-                        return Err(VerifyError::InvalidReturnClass);
-                    };
-                    if *callee != arm.wrapper || !args.is_empty() {
-                        return Err(VerifyError::InvalidReturnClass);
-                    }
-                }
-
-                let Some(default_target) = body.block(*default_bb) else {
-                    return Err(VerifyError::MissingRuntimeBlock(*default_bb));
-                };
-                match (default, &default_target.terminator) {
-                    (DispatchDefault::RevertEmpty, RTerminator::Revert { .. }) => {}
-                    (
-                        DispatchDefault::Call { wrapper },
-                        RTerminator::TerminalCall { callee, args },
-                    ) if *callee == wrapper && args.is_empty() => {}
-                    _ => return Err(VerifyError::InvalidReturnClass),
-                }
-                Ok(())
-            }
+            } => verify_contract_runtime_dispatch(body, &dispatch, default),
             RuntimeSyntheticSpec::ContractInitRoot { .. } => {
                 verify_has_terminator(body, |term| matches!(term, RTerminator::ReturnData { .. }))
             }
@@ -192,6 +153,164 @@ fn verify_synthetic_function<'db>(
             | RuntimeSyntheticSpec::ContractInitAbi { .. }
             | RuntimeSyntheticSpec::CodeRegionRoot { .. } => Ok(()),
         },
+    }
+}
+
+fn verify_contract_runtime_dispatch<'db>(
+    body: &RuntimeBody<'db>,
+    dispatch: &[DispatchArm<'db>],
+    default: DispatchDefault<'db>,
+) -> Result<(), VerifyError<'db>> {
+    let Some(entry) = body.blocks.first() else {
+        return Err(VerifyError::InvalidReturnClass);
+    };
+
+    if let RTerminator::SwitchScalar {
+        cases,
+        default: default_bb,
+        ..
+    } = &entry.terminator
+    {
+        return verify_contract_runtime_switch(body, dispatch, default, cases, *default_bb);
+    }
+
+    let mut seen_blocks = FxHashSet::default();
+    let mut seen_arms = vec![false; dispatch.len()];
+    let mut saw_default = false;
+    verify_contract_runtime_dispatch_block(
+        body,
+        RBlockId::from_u32(0),
+        dispatch,
+        default,
+        &mut seen_arms,
+        &mut saw_default,
+        &mut seen_blocks,
+    )?;
+
+    if saw_default && seen_arms.into_iter().all(|seen| seen) {
+        Ok(())
+    } else {
+        Err(VerifyError::InvalidReturnClass)
+    }
+}
+
+fn verify_contract_runtime_switch<'db>(
+    body: &RuntimeBody<'db>,
+    dispatch: &[DispatchArm<'db>],
+    default: DispatchDefault<'db>,
+    cases: &[(crate::runtime::ConstScalar, RBlockId)],
+    default_bb: RBlockId,
+) -> Result<(), VerifyError<'db>> {
+    if cases.len() != dispatch.len() {
+        return Err(VerifyError::InvalidReturnClass);
+    }
+    for ((_, block), arm) in cases.iter().zip(dispatch.iter()) {
+        verify_contract_runtime_arm_target(body, *block, arm)?;
+    }
+
+    verify_contract_runtime_default_target(body, default_bb, default)
+}
+
+fn verify_contract_runtime_dispatch_block<'db>(
+    body: &RuntimeBody<'db>,
+    block: RBlockId,
+    dispatch: &[DispatchArm<'db>],
+    default: DispatchDefault<'db>,
+    seen_arms: &mut [bool],
+    saw_default: &mut bool,
+    seen_blocks: &mut FxHashSet<RBlockId>,
+) -> Result<(), VerifyError<'db>> {
+    if !seen_blocks.insert(block) {
+        return Ok(());
+    }
+
+    let Some(target) = body.block(block) else {
+        return Err(VerifyError::MissingRuntimeBlock(block));
+    };
+    match &target.terminator {
+        RTerminator::Goto(target) => verify_contract_runtime_dispatch_block(
+            body,
+            *target,
+            dispatch,
+            default,
+            seen_arms,
+            saw_default,
+            seen_blocks,
+        ),
+        RTerminator::Branch {
+            then_bb, else_bb, ..
+        } => {
+            verify_contract_runtime_dispatch_block(
+                body,
+                *then_bb,
+                dispatch,
+                default,
+                seen_arms,
+                saw_default,
+                seen_blocks,
+            )?;
+            verify_contract_runtime_dispatch_block(
+                body,
+                *else_bb,
+                dispatch,
+                default,
+                seen_arms,
+                saw_default,
+                seen_blocks,
+            )
+        }
+        RTerminator::TerminalCall { callee, args } if args.is_empty() => {
+            if let Some(idx) = dispatch.iter().position(|arm| arm.wrapper == *callee) {
+                seen_arms[idx] = true;
+                Ok(())
+            } else if matches!(default, DispatchDefault::Call { wrapper } if wrapper == *callee) {
+                *saw_default = true;
+                Ok(())
+            } else {
+                Err(VerifyError::InvalidReturnClass)
+            }
+        }
+        RTerminator::Revert { .. } if matches!(default, DispatchDefault::RevertEmpty) => {
+            *saw_default = true;
+            Ok(())
+        }
+        _ => Err(VerifyError::InvalidReturnClass),
+    }
+}
+
+fn verify_contract_runtime_arm_target<'db>(
+    body: &RuntimeBody<'db>,
+    block: RBlockId,
+    arm: &DispatchArm<'db>,
+) -> Result<(), VerifyError<'db>> {
+    let Some(target) = body.block(block) else {
+        return Err(VerifyError::MissingRuntimeBlock(block));
+    };
+    let RTerminator::TerminalCall { callee, args } = &target.terminator else {
+        return Err(VerifyError::InvalidReturnClass);
+    };
+    if *callee != arm.wrapper || !args.is_empty() {
+        return Err(VerifyError::InvalidReturnClass);
+    }
+    Ok(())
+}
+
+fn verify_contract_runtime_default_target<'db>(
+    body: &RuntimeBody<'db>,
+    block: RBlockId,
+    default: DispatchDefault<'db>,
+) -> Result<(), VerifyError<'db>> {
+    let Some(target) = body.block(block) else {
+        return Err(VerifyError::MissingRuntimeBlock(block));
+    };
+    match (default, &target.terminator) {
+        (DispatchDefault::RevertEmpty, RTerminator::Revert { .. }) => Ok(()),
+        (DispatchDefault::Call { wrapper }, RTerminator::TerminalCall { callee, args })
+            if *callee == wrapper && args.is_empty() =>
+        {
+            Ok(())
+        }
+        _ => Err(VerifyError::InvalidReturnClass),
     }
 }
 
