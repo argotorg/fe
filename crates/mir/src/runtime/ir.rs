@@ -867,6 +867,7 @@ pub struct ContractRecvAbiPlan<'db> {
     pub contract: Contract<'db>,
     pub selector: Option<u32>,
     pub payable: bool,
+    pub passthrough: bool,
     pub user_recv: RuntimeInstance<'db>,
     pub entry_effect_args: Box<[EntryEffectArgPlan<'db>]>,
     pub input: RuntimeInputPlan<'db>,
