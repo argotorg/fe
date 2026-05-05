@@ -795,11 +795,51 @@ impl<'db> SyntheticBodyBuilder<'db> {
             then_bb: default_bb,
             else_bb: selector_bb,
         };
-        self.blocks[selector_bb.index()].terminator = RTerminator::SwitchScalar {
-            discr: selector,
-            cases: cases.into_boxed_slice(),
-            default: default_bb,
+        self.emit_dispatch_tree(selector, selector_bb, &cases, default_bb);
+    }
+
+    fn emit_dispatch_tree(
+        &mut self,
+        selector: RLocalId,
+        into_block: RBlockId,
+        arms: &[(ConstScalar, RBlockId)],
+        default_block: RBlockId,
+    ) {
+        let terminator = match arms.len() {
+            0 => RTerminator::Goto(default_block),
+            1 => {
+                let selector_match = self.push_selector_const(into_block, arms[0].0.clone());
+                let cond =
+                    self.push_bool_binary(into_block, CompBinOp::Eq, selector, selector_match);
+                RTerminator::Branch {
+                    cond,
+                    then_bb: arms[0].1,
+                    else_bb: default_block,
+                }
+            }
+            _ => {
+                let pivot_idx = (arms.len() - 1) / 2;
+                let pivot = arms[pivot_idx].0.clone();
+                let left_block = self.new_block();
+                let right_block = self.new_block();
+                let pivot_value = self.push_selector_const(into_block, pivot);
+                let cond =
+                    self.push_bool_binary(into_block, CompBinOp::LtEq, selector, pivot_value);
+                self.emit_dispatch_tree(selector, left_block, &arms[..=pivot_idx], default_block);
+                self.emit_dispatch_tree(
+                    selector,
+                    right_block,
+                    &arms[pivot_idx + 1..],
+                    default_block,
+                );
+                RTerminator::Branch {
+                    cond,
+                    then_bb: left_block,
+                    else_bb: right_block,
+                }
+            }
         };
+        self.blocks[into_block.index()].terminator = terminator;
     }
 
     fn emit_nonpayable_guard(&mut self, zero: RLocalId) -> RBlockId {
@@ -1311,6 +1351,22 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 },
             },
         )
+    }
+
+    fn push_selector_const(&mut self, bb: RBlockId, value: ConstScalar) -> RLocalId {
+        let dst = self.push_local(
+            TyId::u256(self.db),
+            RuntimeCarrier::Value(RuntimeClass::Scalar(selector_scalar_class())),
+            RuntimeLocalRoot::None,
+        );
+        self.push_stmt(
+            bb,
+            RStmt::Assign {
+                dst,
+                expr: RExpr::ConstScalar(value),
+            },
+        );
+        dst
     }
 
     fn push_const_scalar(&mut self, bb: RBlockId, value: ConstScalar) -> RLocalId {
