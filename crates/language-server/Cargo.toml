@@ -48,6 +48,7 @@ fmt.workspace = true
 hir.workspace = true
 parser.workspace = true
 resolver.workspace = true
+semantic-indexing.workspace = true
 tempfile = "3.20.0"
 
 [features]

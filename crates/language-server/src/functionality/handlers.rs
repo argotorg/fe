@@ -555,6 +555,13 @@ pub async fn handle_file_change(
         }
     }
 
+    // Incrementally update the SemanticIndex for this file.
+    semantic_indexing::populate::update_for_file(
+        &mut backend.db,
+        backend.semantic_index,
+        &message.uri,
+    );
+
     let _ = backend.client.emit(NeedsDiagnostics(message.uri));
 
     // Request doc reload (debounced by the stream in setup_streams).

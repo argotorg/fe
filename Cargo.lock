@@ -2241,6 +2241,7 @@ dependencies = [
  "fe-mir",
  "fe-parser",
  "fe-resolver",
+ "fe-semantic-indexing",
  "fe-test-utils",
  "fe-web",
  "futures",

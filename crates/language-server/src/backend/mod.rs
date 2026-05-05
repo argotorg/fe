@@ -51,6 +51,7 @@ pub type DocRegenerateFn = Arc<dyn Fn(&DriverDataBase) -> (String, Option<String
 pub struct Backend {
     pub(super) client: ClientSocket,
     pub(super) db: DriverDataBase,
+    pub(super) semantic_index: semantic_indexing::index::SemanticIndex,
     pub(super) workers: tokio::runtime::Runtime,
     pub(super) virtual_files: Option<VirtualFiles>,
     pub(super) readonly_warnings: FxHashSet<Url>,
@@ -72,6 +73,7 @@ impl Backend {
         docs_url: Option<String>,
     ) -> Self {
         let db = DriverDataBase::default();
+        let semantic_index = semantic_indexing::index::SemanticIndex::empty(&db);
         let mut virtual_files = VirtualFiles::new("fe-language-server-").ok();
         if let Some(vfs) = virtual_files.as_mut()
             && let Err(e) = materialize_builtins(vfs, &db)
@@ -88,6 +90,7 @@ impl Backend {
         Self {
             client,
             db,
+            semantic_index,
             workers,
             virtual_files,
             readonly_warnings: FxHashSet::default(),
