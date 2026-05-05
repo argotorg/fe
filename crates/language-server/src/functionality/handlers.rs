@@ -755,9 +755,11 @@ pub async fn handle_doc_reload(
     backend: &Backend,
     _message: DocReloadExecute,
 ) -> Result<(), ResponseError> {
-    let Some(regen_fn) = backend.doc_regenerate_fn.as_ref().cloned() else {
-        return Ok(());
-    };
+    // If a legacy regen_fn is set (e.g., in tests), use it.
+    // Otherwise use the direct semantic_indexing path.
+    if let Some(regen_fn) = backend.doc_regenerate_fn.as_ref().cloned() {
+        return handle_doc_reload_legacy(backend, regen_fn).await;
+    }
 
     debug!("regenerating doc data for live reload");
     let t_start = std::time::Instant::now();
@@ -769,11 +771,13 @@ pub async fn handle_doc_reload(
         + 1;
     let generation_ref = std::sync::Arc::clone(&backend.doc_reload_generation);
 
+    let semantic_index = backend.semantic_index;
+
     // Run on the worker pool with a salsa snapshot — read-only, shares cached
     // query results with the Backend's db, no mutation needed.
     let outcome = backend
         .spawn_on_workers(move |db| {
-            let result = regen_fn(db);
+            let result = semantic_indexing::doc::regenerate(db, semantic_index);
             (result, generation)
         })
         .await;
@@ -796,6 +800,37 @@ pub async fn handle_doc_reload(
         Err(crate::backend::WorkerError::Cancelled) => {
             debug!("doc reload: worker cancelled");
         }
+    }
+    Ok(())
+}
+
+async fn handle_doc_reload_legacy(
+    backend: &Backend,
+    regen_fn: crate::backend::DocRegenerateFn,
+) -> Result<(), ResponseError> {
+    let generation = backend
+        .doc_reload_generation
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        + 1;
+    let generation_ref = std::sync::Arc::clone(&backend.doc_reload_generation);
+
+    let outcome = backend
+        .spawn_on_workers(move |db| {
+            let result = regen_fn(db);
+            (result, generation)
+        })
+        .await;
+
+    match outcome {
+        Ok(((doc_json, scip_json), completed_gen)) => {
+            if completed_gen == generation_ref.load(std::sync::atomic::Ordering::Relaxed) {
+                backend.notify_doc_reload(doc_json, scip_json);
+            }
+        }
+        Err(crate::backend::WorkerError::Panicked(msg)) => {
+            error!("doc reload legacy worker panicked: {msg}");
+        }
+        Err(crate::backend::WorkerError::Cancelled) => {}
     }
     Ok(())
 }

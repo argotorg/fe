@@ -1211,8 +1211,9 @@ async fn doc_reload_debounces_rapid_edits() {
     }
 
     // Wait for debounce window + regen to complete.
-    // Use a generous settle time since CI may be under load.
-    client.settle(3000).await;
+    // Generous settle: when running alongside 93 other LSP tests,
+    // the system is CPU-bound and event processing is delayed.
+    client.settle(5000).await;
 
     let count = regen_count.load(std::sync::atomic::Ordering::Relaxed);
 
