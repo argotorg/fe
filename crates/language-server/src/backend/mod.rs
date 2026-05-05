@@ -47,6 +47,7 @@ impl std::error::Error for WorkerError {}
 /// while the original db is still alive.
 pub type DocRegenerateFn = Arc<dyn Fn(&DriverDataBase) -> (String, Option<String>) + Send + Sync>;
 
+
 pub struct Backend {
     pub(super) client: ClientSocket,
     pub(super) db: DriverDataBase,

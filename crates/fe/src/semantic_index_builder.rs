@@ -414,6 +414,76 @@ fn index_generic_params<'db>(
     }
 }
 
+/// Incrementally update the SemanticIndex for a single file that changed.
+///
+/// Finds the containing ingot and re-indexes just that file's module.
+/// Much cheaper than a full populate — only walks one module's HIR.
+pub fn update_semantic_index_for_file(
+    db: &mut driver::DriverDataBase,
+    file_url: &url::Url,
+) {
+    use camino::Utf8PathBuf;
+    use common::InputDb;
+    use hir::hir_def::HirIngot;
+
+    let Some(_file) = db.workspace().get(db, file_url) else {
+        return;
+    };
+
+    let Some(ingot) = db.workspace().containing_ingot(db, file_url.clone()) else {
+        return;
+    };
+
+    let ingot_url = ingot.base(db);
+    let Ok(ctx) = index_util::IngotContext::resolve(db, &ingot_url) else {
+        return;
+    };
+
+    let project_root = ingot_url
+        .to_file_path()
+        .ok()
+        .and_then(|p| Utf8PathBuf::from_path_buf(p).ok())
+        .unwrap_or_default();
+
+    let file_relative_paths: HashMap<String, String> = ctx
+        .ingot
+        .all_modules(db)
+        .iter()
+        .filter_map(|top_mod| {
+            let doc_url = top_mod_url(db, top_mod)?;
+            let file_path = doc_url.to_file_path().ok()?;
+            let utf8 = Utf8PathBuf::from_path_buf(file_path).ok()?;
+            let relative = utf8
+                .strip_prefix(&project_root)
+                .ok()
+                .map(|p| p.to_string())
+                .unwrap_or_else(|| utf8.to_string());
+            Some((doc_url.to_string(), relative))
+        })
+        .collect();
+
+    // Find and re-index just the module corresponding to this file
+    let mut all_symbols: Vec<(String, IndexSymbol)> = Vec::new();
+    let mut all_references: Vec<(String, Vec<IndexReference>)> = Vec::new();
+
+    for top_mod in ctx.ingot.all_modules(db).iter() {
+        let mod_url = top_mod_url(db, top_mod);
+        if mod_url.as_ref() == Some(file_url) {
+            if let Some(result) = index_module(db, *top_mod, &ctx, &file_relative_paths) {
+                all_symbols = result.symbols;
+                all_references = result.references;
+            }
+            break;
+        }
+    }
+
+    if !all_symbols.is_empty() || !all_references.is_empty() {
+        let semantic_index = db.semantic_index();
+        semantic_index.upsert_module_symbols(db, all_symbols);
+        semantic_index.upsert_module_references(db, all_references);
+    }
+}
+
 /// Populate the SemanticIndex for all ingots in a workspace.
 pub fn populate_semantic_index(
     db: &mut driver::DriverDataBase,
