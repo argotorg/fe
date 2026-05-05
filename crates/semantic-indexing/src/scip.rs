@@ -147,3 +147,84 @@ fn push_occurrence(
         special_fields: Default::default(),
     });
 }
+
+/// Convert a SCIP Index into a compact JSON string for browser embedding.
+pub fn scip_to_json_data(index: &types::Index, doc_urls: &HashMap<String, String>) -> String {
+    use serde_json::{Map, Value, json};
+
+    let mut symbols = Map::new();
+    let mut files: HashMap<String, Vec<Value>> = HashMap::new();
+
+    for doc in &index.documents {
+        for si in &doc.symbols {
+            if symbols.contains_key(&si.symbol) {
+                continue;
+            }
+            let kind = si.kind.value();
+            let docs: Vec<Value> = si.documentation.iter().map(|d| Value::String(d.clone())).collect();
+            let mut entry = Map::new();
+            entry.insert("name".into(), Value::String(si.display_name.clone()));
+            entry.insert("kind".into(), Value::Number(kind.into()));
+            if !docs.is_empty() {
+                entry.insert("docs".into(), Value::Array(docs));
+            }
+            if !si.enclosing_symbol.is_empty() {
+                entry.insert("enclosing".into(), Value::String(si.enclosing_symbol.clone()));
+            }
+            if let Some(url) = doc_urls.get(&si.symbol) {
+                entry.insert("doc_url".into(), Value::String(url.clone()));
+            }
+            symbols.insert(si.symbol.clone(), Value::Object(entry));
+        }
+
+        let file_key = if doc.relative_path.is_empty() {
+            doc.symbols.first()
+                .and_then(|si| {
+                    let parts: Vec<&str> = si.symbol.split(' ').collect();
+                    parts.iter().rev()
+                        .find(|p| !p.is_empty() && **p != "/")
+                        .map(|s| {
+                            let name = s.trim_end_matches('/').trim_end_matches('#');
+                            format!("{}.fe", name)
+                        })
+                })
+                .unwrap_or_else(|| "input.fe".to_string())
+        } else {
+            doc.relative_path.clone()
+        };
+        let file_occs = files.entry(file_key).or_default();
+        for occ in &doc.occurrences {
+            if occ.range.is_empty() || occ.symbol.is_empty() {
+                continue;
+            }
+            let line = occ.range[0];
+            let cs = occ.range[1];
+            let ce = if occ.range.len() == 3 {
+                occ.range[2]
+            } else if occ.range.len() >= 4 {
+                occ.range[3]
+            } else {
+                continue;
+            };
+            let is_def = (occ.symbol_roles & (types::SymbolRole::Definition as i32)) != 0;
+            let mut obj = json!({ "line": line, "cs": cs, "ce": ce, "sym": occ.symbol });
+            if is_def {
+                obj.as_object_mut().unwrap().insert("def".into(), Value::Bool(true));
+            }
+            file_occs.push(obj);
+        }
+    }
+
+    for occs in files.values_mut() {
+        occs.sort_by(|a, b| {
+            let al = a["line"].as_i64().unwrap_or(0);
+            let bl = b["line"].as_i64().unwrap_or(0);
+            al.cmp(&bl).then(a["cs"].as_i64().unwrap_or(0).cmp(&b["cs"].as_i64().unwrap_or(0)))
+        });
+    }
+
+    let mut root = Map::new();
+    root.insert("symbols".into(), Value::Object(symbols));
+    root.insert("files".into(), serde_json::to_value(files).unwrap_or(Value::Object(Map::new())));
+    Value::Object(root).to_string()
+}
