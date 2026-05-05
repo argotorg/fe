@@ -1,0 +1,32 @@
+use std::abi::{sol, Bytes, DynString}
+
+msg FixedArrayCeilingSuiteMsg {
+    #[selector = sol("echoBoolArray17(bool[17])")]
+    EchoBoolArray17 { value: [bool; 17] } -> [bool; 17],
+    #[selector = sol("echoUintArray32(uint256[32])")]
+    EchoUintArray32 { value: [u256; 32] } -> [u256; 32],
+    #[selector = sol("echoStringArray17(string[17])")]
+    EchoStringArray17 { value: [DynString; 17] } -> [DynString; 17],
+    #[selector = sol("echoBytesArray17(bytes[17])")]
+    EchoBytesArray17 { value: [Bytes; 17] } -> [Bytes; 17],
+}
+
+pub contract FixedArrayCeilingSuite {
+    recv FixedArrayCeilingSuiteMsg {
+        EchoBoolArray17 { value } -> [bool; 17] {
+            value
+        }
+
+        EchoUintArray32 { value } -> [u256; 32] {
+            value
+        }
+
+        EchoStringArray17 { value } -> [DynString; 17] {
+            value
+        }
+
+        EchoBytesArray17 { value } -> [Bytes; 17] {
+            value
+        }
+    }
+}

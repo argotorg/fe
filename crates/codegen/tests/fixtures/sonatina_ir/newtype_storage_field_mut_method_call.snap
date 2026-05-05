@@ -1,6 +1,5 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 449
 expression: output
 input_file: crates/codegen/tests/fixtures/newtype_storage_field_mut_method_call.fe
 ---
@@ -182,7 +181,8 @@ func private %contract_runtime_root_NewtypeStorageFieldMutMethodCall() {
         v4.i256 = evm_calldata_load 0.i256;
         v6.i256 = shr 224.i256 v4;
         v7.i32 = trunc v6 i32;
-        br_table v7 block3 (1.i32 block4);
+        v9.i1 = eq v7 1.i32;
+        br v9 block4 block3;
 
     block3:
         evm_revert 0.i256 0.i256;

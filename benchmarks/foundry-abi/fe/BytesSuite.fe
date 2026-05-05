@@ -1,0 +1,14 @@
+use std::abi::{sol, Bytes}
+
+msg BytesSuiteMsg {
+    #[selector = sol("echoBytes(bytes)")]
+    EchoBytes { value: Bytes } -> Bytes,
+}
+
+pub contract BytesSuite {
+    recv BytesSuiteMsg {
+        EchoBytes { value } -> Bytes {
+            value
+        }
+    }
+}

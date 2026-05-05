@@ -2587,7 +2587,9 @@ func private %contract_runtime_root_CoolCoin() {
         v4.i256 = evm_calldata_load 0.i256;
         v6.i256 = shr 224.i256 v4;
         v7.i32 = trunc v6 i32;
-        br_table v7 block3 (117300739.i32 block4) (157198259.i32 block5) (404098525.i32 block6) (599290589.i32 block7) (826074471.i32 block8) (961581905.i32 block9) (1086394137.i32 block10) (1117154408.i32 block11) (1889567281.i32 block12) (2043438992.i32 block13) (-1780966591.i32 block14) (-1537752361.i32 block15) (-1459249989.i32 block16) (-580719298.i32 block17);
+        v9.i1 = gt v7 1086394137.i32;
+        v10.i1 = is_zero v9;
+        br v10 block18 block19;
 
     block3:
         evm_revert 0.i256 0.i256;
@@ -2647,6 +2649,122 @@ func private %contract_runtime_root_CoolCoin() {
     block17:
         call %contract_recv_abi_CoolCoin_3714247998;
         unreachable;
+
+    block18:
+        v14.i1 = gt v7 599290589.i32;
+        v15.i1 = is_zero v14;
+        br v15 block20 block21;
+
+    block19:
+        v18.i1 = gt v7 -1780966591.i32;
+        v19.i1 = is_zero v18;
+        br v19 block32 block33;
+
+    block20:
+        v22.i1 = gt v7 157198259.i32;
+        v23.i1 = is_zero v22;
+        br v23 block22 block23;
+
+    block21:
+        v26.i1 = gt v7 961581905.i32;
+        v27.i1 = is_zero v26;
+        br v27 block28 block29;
+
+    block22:
+        v30.i1 = gt v7 117300739.i32;
+        v31.i1 = is_zero v30;
+        br v31 block24 block25;
+
+    block23:
+        v34.i1 = gt v7 404098525.i32;
+        v35.i1 = is_zero v34;
+        br v35 block26 block27;
+
+    block24:
+        v37.i1 = eq v7 117300739.i32;
+        br v37 block4 block3;
+
+    block25:
+        v39.i1 = eq v7 157198259.i32;
+        br v39 block5 block3;
+
+    block26:
+        v41.i1 = eq v7 404098525.i32;
+        br v41 block6 block3;
+
+    block27:
+        v43.i1 = eq v7 599290589.i32;
+        br v43 block7 block3;
+
+    block28:
+        v46.i1 = gt v7 826074471.i32;
+        v47.i1 = is_zero v46;
+        br v47 block30 block31;
+
+    block29:
+        v49.i1 = eq v7 1086394137.i32;
+        br v49 block10 block3;
+
+    block30:
+        v51.i1 = eq v7 826074471.i32;
+        br v51 block8 block3;
+
+    block31:
+        v53.i1 = eq v7 961581905.i32;
+        br v53 block9 block3;
+
+    block32:
+        v56.i1 = gt v7 1889567281.i32;
+        v57.i1 = is_zero v56;
+        br v57 block34 block35;
+
+    block33:
+        v60.i1 = gt v7 -1459249989.i32;
+        v61.i1 = is_zero v60;
+        br v61 block40 block41;
+
+    block34:
+        v64.i1 = gt v7 1117154408.i32;
+        v65.i1 = is_zero v64;
+        br v65 block36 block37;
+
+    block35:
+        v68.i1 = gt v7 2043438992.i32;
+        v69.i1 = is_zero v68;
+        br v69 block38 block39;
+
+    block36:
+        v71.i1 = eq v7 1117154408.i32;
+        br v71 block11 block3;
+
+    block37:
+        v73.i1 = eq v7 1889567281.i32;
+        br v73 block12 block3;
+
+    block38:
+        v75.i1 = eq v7 2043438992.i32;
+        br v75 block13 block3;
+
+    block39:
+        v77.i1 = eq v7 -1780966591.i32;
+        br v77 block14 block3;
+
+    block40:
+        v80.i1 = gt v7 -1537752361.i32;
+        v81.i1 = is_zero v80;
+        br v81 block42 block43;
+
+    block41:
+        v84.i1 = eq v7 -580719298.i32;
+        br v84 block17 block3;
+
+    block42:
+        v86.i1 = eq v7 -1537752361.i32;
+        br v86 block15 block3;
+
+    block43:
+        v88.i1 = eq v7 -1459249989.i32;
+        br v88 block16 block3;
 }
 
 func private %std__lib__abi__sol__impl_trait_Sol_1f5f__decode_error_0b81() {

@@ -1,0 +1,63 @@
+use std::abi::{Bytes, DynArray, DynString, sol}
+use std::abi::sol::Uint24
+
+msg DeepDynamicSuiteMsg {
+    #[selector = sol("echoUint24Array(uint24[])")]
+    EchoUint24Array { value: DynArray<Uint24> } -> DynArray<Uint24>,
+    #[selector = sol("echoBytesArray(bytes[])")]
+    EchoBytesArray { value: DynArray<Bytes> } -> DynArray<Bytes>,
+    #[selector = sol("echoNestedBytesArray(bytes[][])")]
+    EchoNestedBytesArray { value: DynArray<DynArray<Bytes>> } -> DynArray<DynArray<Bytes>>,
+    #[selector = sol("echoNestedUintArray(uint256[][])")]
+    EchoNestedUintArray { value: DynArray<DynArray<u256>> } -> DynArray<DynArray<u256>>,
+    #[selector = sol("echoNestedStringArray(string[][])")]
+    EchoNestedStringArray { value: DynArray<DynArray<DynString>> } -> DynArray<DynArray<DynString>>,
+    #[selector = sol("echoNestedStringU64PairArray((string,uint64)[][])")]
+    EchoNestedStringU64PairArray { value: DynArray<DynArray<(DynString, u64)>> } -> DynArray<DynArray<(DynString, u64)>>,
+    #[selector = sol("echoBytesU64Pair((bytes,uint64))")]
+    EchoBytesU64Pair { value: (Bytes, u64) } -> (Bytes, u64),
+    #[selector = sol("echoBytesU64PairArray((bytes,uint64)[])")]
+    EchoBytesU64PairArray { value: DynArray<(Bytes, u64)> } -> DynArray<(Bytes, u64)>,
+    #[selector = sol("echoNestedBytesU64PairArray((bytes,uint64)[][])")]
+    EchoNestedBytesU64PairArray { value: DynArray<DynArray<(Bytes, u64)>> } -> DynArray<DynArray<(Bytes, u64)>>,
+}
+
+pub contract DeepDynamicSuite {
+    recv DeepDynamicSuiteMsg {
+        EchoUint24Array { value } -> DynArray<Uint24> {
+            value
+        }
+
+        EchoBytesArray { value } -> DynArray<Bytes> {
+            value
+        }
+
+        EchoNestedBytesArray { value } -> DynArray<DynArray<Bytes>> {
+            value
+        }
+
+        EchoNestedUintArray { value } -> DynArray<DynArray<u256>> {
+            value
+        }
+
+        EchoNestedStringArray { value } -> DynArray<DynArray<DynString>> {
+            value
+        }
+
+        EchoNestedStringU64PairArray { value } -> DynArray<DynArray<(DynString, u64)>> {
+            value
+        }
+
+        EchoBytesU64Pair { value } -> (Bytes, u64) {
+            value
+        }
+
+        EchoBytesU64PairArray { value } -> DynArray<(Bytes, u64)> {
+            value
+        }
+
+        EchoNestedBytesU64PairArray { value } -> DynArray<DynArray<(Bytes, u64)>> {
+            value
+        }
+    }
+}
