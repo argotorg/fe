@@ -10,6 +10,7 @@ pub mod ingot;
 pub mod layout;
 pub mod options;
 pub mod paths;
+pub mod semantic_index;
 pub mod stdlib;
 pub mod urlext;
 
@@ -17,6 +18,7 @@ use compilation::CompilationSettings;
 use dependencies::DependencyGraph;
 use file::Workspace;
 use options::CompilerOptions;
+use semantic_index::SemanticIndex;
 
 #[salsa::db]
 // Each database must implement InputDb explicitly with its own storage mechanism
@@ -25,6 +27,7 @@ pub trait InputDb: salsa::Database {
     fn dependency_graph(&self) -> DependencyGraph;
     fn compiler_options(&self) -> CompilerOptions;
     fn compilation_settings(&self) -> CompilationSettings;
+    fn semantic_index(&self) -> SemanticIndex;
 }
 
 #[doc(hidden)]
@@ -53,6 +56,11 @@ macro_rules! impl_input_db {
                     .clone()
                     .expect("Compilation settings not initialized")
             }
+            fn semantic_index(&self) -> $crate::semantic_index::SemanticIndex {
+                self.semantic_index
+                    .clone()
+                    .expect("SemanticIndex not initialized")
+            }
         }
     };
 }
@@ -75,6 +83,7 @@ macro_rules! impl_db_default {
                     graph: None,
                     options: None,
                     settings: None,
+                    semantic_index: None,
                 };
                 let index = $crate::file::Workspace::default(&db);
                 db.index = Some(index);
@@ -84,6 +93,8 @@ macro_rules! impl_db_default {
                 db.options = Some(options);
                 let settings = $crate::compilation::CompilationSettings::default(&db);
                 db.settings = Some(settings);
+                let sem_index = $crate::semantic_index::SemanticIndex::default(&db);
+                db.semantic_index = Some(sem_index);
                 $crate::stdlib::HasBuiltinCore::initialize_builtin_core(&mut db);
                 $crate::stdlib::HasBuiltinStd::initialize_builtin_std(&mut db);
                 db
@@ -104,6 +115,7 @@ macro_rules! define_input_db {
             graph: Option<$crate::dependencies::DependencyGraph>,
             options: Option<$crate::options::CompilerOptions>,
             settings: Option<$crate::compilation::CompilationSettings>,
+            semantic_index: Option<$crate::semantic_index::SemanticIndex>,
         }
 
         #[salsa::db]

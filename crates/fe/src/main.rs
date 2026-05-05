@@ -12,6 +12,8 @@ mod index_util;
 mod lsif;
 mod report;
 mod scip_index;
+#[allow(dead_code)]
+mod semantic_index_builder;
 mod test;
 #[cfg(not(target_arch = "wasm32"))]
 mod tree;

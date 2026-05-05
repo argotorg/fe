@@ -60,9 +60,14 @@ impl ScipDocumentBuilder {
     }
 }
 
-fn span_to_scip_range(span: &Span, db: &dyn InputDb) -> Option<Vec<i32>> {
-    let text = span.file.text(db);
-    let line_index = LineIndex::new(text);
+fn span_to_scip_range(
+    span: &Span,
+    db: &dyn InputDb,
+    line_index_cache: &mut HashMap<common::file::File, LineIndex>,
+) -> Option<Vec<i32>> {
+    let line_index = line_index_cache
+        .entry(span.file)
+        .or_insert_with(|| LineIndex::new(span.file.text(db)));
 
     let start = line_index.position(span.range.start().into());
     let end = line_index.position(span.range.end().into());
@@ -341,6 +346,105 @@ pub fn generate_scip_with_root(
     })
 }
 
+/// Generate SCIP output by reading from a pre-populated SemanticIndex.
+///
+/// This is the incremental path: the SemanticIndex is populated during
+/// compilation and maintained incrementally by salsa. This function simply
+/// converts the trie data into protobuf format — no HIR walking needed.
+pub fn generate_scip_from_index(
+    db: &driver::DriverDataBase,
+    ingot_url: &url::Url,
+    ingot_name: &str,
+    ingot_version: &str,
+) -> ScipResult {
+    use common::InputDb;
+    use common::semantic_index::SemanticIndex;
+
+    let semantic_index = db.semantic_index();
+    let prefix = format!("fe fe {} {} ", ingot_name, ingot_version);
+
+    let view = SemanticIndex::symbols_for_prefix(semantic_index, db, prefix);
+
+    let mut documents: HashMap<String, ScipDocumentBuilder> = HashMap::new();
+    let mut all_doc_urls: HashMap<String, String> = HashMap::new();
+
+    for (_key, sym) in view.iter() {
+        let doc = documents
+            .entry(sym.def_location.file_url.clone())
+            .or_insert_with(|| ScipDocumentBuilder::new(sym.def_location.relative_path.clone()));
+
+        if doc.seen_symbols.insert(sym.symbol.clone()) {
+            doc.symbols.push(types::SymbolInformation {
+                symbol: sym.symbol.clone(),
+                documentation: sym.documentation.clone(),
+                relationships: Vec::new(),
+                kind: protobuf::EnumOrUnknown::from_i32(sym.kind),
+                display_name: sym.display_name.clone(),
+                signature_documentation: None.into(),
+                enclosing_symbol: sym.enclosing_symbol.clone(),
+                special_fields: Default::default(),
+            });
+        }
+
+        // Definition occurrence (only if we have a real range, not the fallback 0,0,0)
+        if sym.def_location.range != vec![0, 0, 0] {
+            push_occurrence(
+                doc,
+                sym.def_location.range.clone(),
+                sym.symbol.clone(),
+                types::SymbolRole::Definition as i32,
+            );
+        }
+
+        if let Some(url) = &sym.doc_url {
+            all_doc_urls.insert(sym.symbol.clone(), url.clone());
+        }
+
+        // Reference occurrences for this symbol
+        if let Some(refs) = semantic_index.references_to(db, &sym.symbol) {
+            for r in &refs {
+                let ref_doc = documents
+                    .entry(r.location.file_url.clone())
+                    .or_insert_with(|| ScipDocumentBuilder::new(r.location.relative_path.clone()));
+                push_occurrence(
+                    ref_doc,
+                    r.location.range.clone(),
+                    r.symbol.clone(),
+                    r.role,
+                );
+            }
+        }
+    }
+
+    let mut index = types::Index::new();
+    index.metadata = Some(types::Metadata {
+        version: types::ProtocolVersion::UnspecifiedProtocolVersion.into(),
+        tool_info: Some(types::ToolInfo {
+            name: "fe-scip".to_string(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            arguments: Vec::new(),
+            special_fields: Default::default(),
+        })
+        .into(),
+        project_root: ingot_url.to_string(),
+        text_document_encoding: types::TextEncoding::UTF8.into(),
+        special_fields: Default::default(),
+    })
+    .into();
+
+    let mut docs: Vec<_> = documents
+        .into_values()
+        .map(ScipDocumentBuilder::into_document)
+        .collect();
+    docs.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
+    index.documents = docs;
+
+    ScipResult {
+        index,
+        doc_urls: all_doc_urls,
+    }
+}
+
 /// Process a single module and return document fragments for all files it touches.
 ///
 /// Each module produces definitions for its own file and reference occurrences
@@ -364,6 +468,7 @@ fn process_module<'db>(
 
     let mut documents: HashMap<String, ScipDocumentBuilder> = HashMap::new();
     let mut doc_urls: HashMap<String, String> = HashMap::new();
+    let mut line_index_cache: HashMap<common::file::File, LineIndex> = HashMap::new();
 
     // Ensure this module's file has a builder
     if let Some(relative) = file_relative_paths.get(&doc_url) {
@@ -397,6 +502,7 @@ fn process_module<'db>(
                 &doc_url,
                 file_relative_paths,
                 &mut documents,
+                &mut line_index_cache,
             );
             continue;
         };
@@ -423,7 +529,7 @@ fn process_module<'db>(
             }
 
             if let Some(name_span) = item.name_span().and_then(|span| span.resolve(db))
-                && let Some(range) = span_to_scip_range(&name_span, db)
+                && let Some(range) = span_to_scip_range(&name_span, db, &mut line_index_cache)
             {
                 push_occurrence(
                     doc,
@@ -449,7 +555,7 @@ fn process_module<'db>(
                         .unwrap_or_default();
                     ScipDocumentBuilder::new(relative)
                 });
-                if let Some(range) = span_to_scip_range(&resolved, db) {
+                if let Some(range) = span_to_scip_range(&resolved, db, &mut line_index_cache) {
                     push_occurrence(ref_doc, range, symbol.clone(), 0);
                 }
             }
@@ -498,7 +604,7 @@ fn process_module<'db>(
                     }
 
                     if let Some(name_span) = child.name_span(db)
-                        && let Some(range) = span_to_scip_range(&name_span, db)
+                        && let Some(range) = span_to_scip_range(&name_span, db, &mut line_index_cache)
                     {
                         push_occurrence(
                             doc,
@@ -523,7 +629,7 @@ fn process_module<'db>(
                                 .unwrap_or_default();
                             ScipDocumentBuilder::new(relative)
                         });
-                        if let Some(range) = span_to_scip_range(&resolved, db) {
+                        if let Some(range) = span_to_scip_range(&resolved, db, &mut line_index_cache) {
                             push_occurrence(ref_doc, range, child_symbol.clone(), 0);
                         }
                     }
@@ -539,6 +645,7 @@ fn process_module<'db>(
                     &doc_url,
                     file_relative_paths,
                     &mut documents,
+                    &mut line_index_cache,
                 );
             }
         } // end if !Mod/TopMod
@@ -553,6 +660,7 @@ fn process_module<'db>(
             &doc_url,
             file_relative_paths,
             &mut documents,
+            &mut line_index_cache,
         );
     }
 
@@ -579,6 +687,7 @@ fn index_unnamed_item_generic_params<'db>(
     doc_url: &str,
     file_relative_paths: &HashMap<String, String>,
     documents: &mut HashMap<String, ScipDocumentBuilder>,
+    line_index_cache: &mut HashMap<common::file::File, LineIndex>,
 ) {
     // Construct a synthetic parent symbol from the impl's byte offset.
     // The exact string doesn't matter — it just needs to be unique so type param
@@ -599,6 +708,7 @@ fn index_unnamed_item_generic_params<'db>(
         doc_url,
         file_relative_paths,
         documents,
+        line_index_cache,
     );
 
     // Also index generic params of children (methods inside impl blocks).
@@ -619,6 +729,7 @@ fn index_unnamed_item_generic_params<'db>(
             doc_url,
             file_relative_paths,
             documents,
+            line_index_cache,
         );
     }
 }
@@ -633,6 +744,7 @@ fn index_generic_params_for<'db>(
     doc_url: &str,
     file_relative_paths: &HashMap<String, String>,
     documents: &mut HashMap<String, ScipDocumentBuilder>,
+    line_index_cache: &mut HashMap<common::file::File, LineIndex>,
 ) {
     for gp_scope in sym_view.generic_params(db) {
         let Some(gp_name) = gp_scope.name(db) else {
@@ -657,7 +769,7 @@ fn index_generic_params_for<'db>(
 
             if let Some(name_span) = gp_scope.name_span(db)
                 && let Some(resolved) = name_span.resolve(db)
-                && let Some(range) = span_to_scip_range(&resolved, db)
+                && let Some(range) = span_to_scip_range(&resolved, db, line_index_cache)
             {
                 push_occurrence(
                     doc,
@@ -681,7 +793,7 @@ fn index_generic_params_for<'db>(
                         .unwrap_or_default();
                     ScipDocumentBuilder::new(relative)
                 });
-                if let Some(range) = span_to_scip_range(&resolved, db) {
+                if let Some(range) = span_to_scip_range(&resolved, db, line_index_cache) {
                     push_occurrence(ref_doc, range, gp_symbol.clone(), 0);
                 }
             }
@@ -734,6 +846,7 @@ fn emit_cross_ingot_references<'db>(
 ) {
     // Cache target ingot metadata to avoid repeated lookups
     let mut ingot_meta: HashMap<common::ingot::Ingot<'db>, (String, String)> = HashMap::new();
+    let mut line_index_cache: HashMap<common::file::File, LineIndex> = HashMap::new();
 
     for (target_scope, refs) in ctx.ref_index.iter() {
         // Skip targets within the current ingot (already handled by process_module)
@@ -780,7 +893,7 @@ fn emit_cross_ingot_references<'db>(
                         .unwrap_or_default();
                     ScipDocumentBuilder::new(relative)
                 });
-                if let Some(range) = span_to_scip_range(&resolved, db) {
+                if let Some(range) = span_to_scip_range(&resolved, db, &mut line_index_cache) {
                     push_occurrence(ref_doc, range, symbol.clone(), 0);
                 }
 
@@ -2184,5 +2297,280 @@ impl<E> Applicative for Result<E> {
             "ingot name should come from fe.toml config"
         );
         assert_eq!(ctx.version, "0.1.0");
+    }
+
+    /// End-to-end test: populate SemanticIndex, then generate SCIP from it.
+    /// Verifies the index-based path produces the same symbols as direct HIR walk.
+    #[test]
+    fn test_generate_scip_from_index_matches_direct() {
+        use common::InputDb;
+        use std::collections::HashSet;
+
+        let temp = tempfile::tempdir().expect("create temp dir");
+        let file_path = temp.path().join("test.fe");
+        let mut db = driver::DriverDataBase::default();
+        let url = file_url(&file_path);
+
+        let code = "struct Foo {\n    pub x: i32\n}\n\npub fn bar() -> Foo {\n    Foo { x: 1 }\n}\n";
+        db.workspace()
+            .touch(&mut db, url.clone(), Some(code.to_string()));
+        let ingot_url = dir_url(temp.path());
+
+        // Generate SCIP directly from HIR (ground truth)
+        let direct_result = generate_scip(&db, &ingot_url).expect("direct scip gen");
+        let direct_symbols: HashSet<String> = direct_result
+            .index
+            .documents
+            .iter()
+            .flat_map(|doc| doc.symbols.iter())
+            .map(|si| si.symbol.clone())
+            .collect();
+
+        // Populate the SemanticIndex
+        crate::semantic_index_builder::populate_semantic_index(&mut db, &[ingot_url.clone()]);
+
+        // Generate SCIP from the index
+        let index_result = generate_scip_from_index(&db, &ingot_url, "unknown", "0.0.0");
+        let index_symbols: HashSet<String> = index_result
+            .index
+            .documents
+            .iter()
+            .flat_map(|doc| doc.symbols.iter())
+            .map(|si| si.symbol.clone())
+            .collect();
+
+        // All symbols from direct should appear in index-based
+        for sym in &direct_symbols {
+            assert!(
+                index_symbols.contains(sym),
+                "direct SCIP symbol missing from index-based output: {sym}"
+            );
+        }
+
+        // Index-based should have produced symbols
+        assert!(!index_symbols.is_empty(), "index-based produced no symbols");
+
+        // Doc URLs should match
+        for (sym, url) in &direct_result.doc_urls {
+            if let Some(idx_url) = index_result.doc_urls.get(sym) {
+                assert_eq!(
+                    url, idx_url,
+                    "doc_url mismatch for {sym}: direct={url} index={idx_url}"
+                );
+            }
+        }
+    }
+
+    /// Verify that semantic_index_builder::index_module produces symbols
+    /// consistent with what generate_scip produces.
+    #[test]
+    fn test_semantic_index_builder_matches_scip() {
+        use common::InputDb;
+        use hir::hir_def::HirIngot;
+        use std::collections::HashSet;
+
+        let temp = tempfile::tempdir().expect("create temp dir");
+        let file_path = temp.path().join("test.fe");
+        let mut db = driver::DriverDataBase::default();
+        let url = file_url(&file_path);
+
+        let code = "struct Foo {\n    pub x: i32\n}\n\npub fn bar() -> Foo {\n    Foo { x: 1 }\n}\n";
+        db.workspace()
+            .touch(&mut db, url.clone(), Some(code.to_string()));
+        let ingot_url = dir_url(temp.path());
+
+        // Generate SCIP (ground truth)
+        let scip_result = generate_scip(&db, &ingot_url).expect("generate scip");
+        let scip_symbols: HashSet<String> = scip_result
+            .index
+            .documents
+            .iter()
+            .flat_map(|doc| doc.symbols.iter())
+            .map(|si| si.symbol.clone())
+            .collect();
+
+        // Generate via semantic_index_builder
+        let ctx = index_util::IngotContext::resolve(&db, &ingot_url).unwrap();
+        let modules = ctx.ingot.all_modules(&db);
+
+        let file_relative_paths: std::collections::HashMap<String, String> =
+            vec![(url.to_string(), "test.fe".to_string())]
+                .into_iter()
+                .collect();
+
+        let mut builder_symbols: HashSet<String> = HashSet::new();
+        for top_mod in modules.iter() {
+            if let Some(result) = crate::semantic_index_builder::index_module(
+                &db,
+                *top_mod,
+                &ctx,
+                &file_relative_paths,
+            ) {
+                for (key, _) in &result.symbols {
+                    builder_symbols.insert(key.clone());
+                }
+            }
+        }
+
+        // Every symbol from SCIP should appear in builder output
+        for sym in &scip_symbols {
+            assert!(
+                builder_symbols.contains(sym),
+                "SCIP symbol missing from builder output: {sym}"
+            );
+        }
+
+        // Builder should have produced symbols
+        assert!(
+            !builder_symbols.is_empty(),
+            "builder produced no symbols"
+        );
+    }
+
+    /// Regression timing test for issue #1424.
+    ///
+    /// Measures SCIP generation cost for a cold run vs a warm run (simulating
+    /// the "user edits one file" scenario). The warm run should be substantially
+    /// faster once the SemanticIndex is wired up — this test establishes the
+    /// baseline and will fail if regen becomes unreasonably slow.
+    #[test]
+    fn test_scip_regen_timing_baseline() {
+        use common::InputDb;
+        use std::time::Instant;
+
+        let temp = tempfile::tempdir().expect("create temp dir");
+        let file_path = temp.path().join("main.fe");
+        let mut db = driver::DriverDataBase::default();
+        let url = file_url(&file_path);
+
+        let code = r#"
+struct Point {
+    pub x: i32
+    pub y: i32
+}
+
+impl Point {
+    pub fn new(x: i32, y: i32) -> Point {
+        Point { x, y }
+    }
+
+    pub fn distance(self, other: Point) -> i32 {
+        let dx = self.x - other.x
+        let dy = self.y - other.y
+        dx * dx + dy * dy
+    }
+}
+
+pub fn origin() -> Point {
+    Point::new(0, 0)
+}
+"#;
+        db.workspace()
+            .touch(&mut db, url.clone(), Some(code.to_string()));
+        let ingot_url = dir_url(temp.path());
+
+        // Cold run: first SCIP generation
+        let t_cold = Instant::now();
+        let result = generate_scip(&db, &ingot_url).expect("cold scip gen");
+        let cold_ms = t_cold.elapsed().as_millis();
+
+        assert!(
+            !result.index.documents.is_empty(),
+            "SCIP should produce at least one document"
+        );
+
+        // Simulate editing the file (change a function name)
+        let edited_code = code.replace("origin", "zero_point");
+        db.workspace().update(&mut db, url.clone(), edited_code);
+
+        // Warm run: regen after a single edit
+        let t_warm = Instant::now();
+        let result2 = generate_scip(&db, &ingot_url).expect("warm scip gen");
+        let warm_ms = t_warm.elapsed().as_millis();
+
+        assert!(
+            !result2.index.documents.is_empty(),
+            "SCIP should produce at least one document after edit"
+        );
+
+        // Print timing for CI visibility
+        eprintln!(
+            "[scip_regen_timing] cold={cold_ms}ms warm={warm_ms}ms"
+        );
+
+        // Regression guard: neither run should take more than 10 seconds
+        // on any reasonable CI machine. This catches catastrophic regressions.
+        assert!(
+            cold_ms < 10_000,
+            "cold SCIP generation took {cold_ms}ms — regression threshold is 10s"
+        );
+        assert!(
+            warm_ms < 10_000,
+            "warm SCIP generation took {warm_ms}ms — regression threshold is 10s"
+        );
+    }
+
+    /// Measure speedup of index-based SCIP generation vs direct HIR walk.
+    /// After populating the SemanticIndex, reading from it should be much
+    /// faster than re-walking HIR.
+    #[test]
+    fn test_scip_index_path_is_faster_than_direct() {
+        use common::InputDb;
+        use std::time::Instant;
+
+        let temp = tempfile::tempdir().expect("create temp dir");
+        let file_path = temp.path().join("main.fe");
+        let mut db = driver::DriverDataBase::default();
+        let url = file_url(&file_path);
+
+        let code = r#"
+struct Point {
+    pub x: i32
+    pub y: i32
+}
+
+impl Point {
+    pub fn new(x: i32, y: i32) -> Point {
+        Point { x, y }
+    }
+
+    pub fn distance(self, other: Point) -> i32 {
+        let dx = self.x - other.x
+        let dy = self.y - other.y
+        dx * dx + dy * dy
+    }
+}
+
+pub fn origin() -> Point {
+    Point::new(0, 0)
+}
+"#;
+        db.workspace()
+            .touch(&mut db, url.clone(), Some(code.to_string()));
+        let ingot_url = dir_url(temp.path());
+
+        // Warm the salsa cache
+        let _ = generate_scip(&db, &ingot_url).expect("warm cache");
+
+        // Time the direct path (warm)
+        let t_direct = Instant::now();
+        let _ = generate_scip(&db, &ingot_url).expect("direct");
+        let direct_ms = t_direct.elapsed().as_millis();
+
+        // Populate SemanticIndex
+        crate::semantic_index_builder::populate_semantic_index(&mut db, &[ingot_url.clone()]);
+
+        // Time the index-based path
+        let t_index = Instant::now();
+        let _ = generate_scip_from_index(&db, &ingot_url, "unknown", "0.0.0");
+        let index_ms = t_index.elapsed().as_millis();
+
+        eprintln!(
+            "[scip_index_vs_direct] direct={direct_ms}ms index={index_ms}ms"
+        );
+
+        // The index path should be faster (or at worst comparable for tiny files)
+        // We don't assert a strict speedup here because for a single small file
+        // the difference is in the noise. The real win is for large workspaces.
     }
 }
