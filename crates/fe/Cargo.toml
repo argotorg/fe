@@ -51,3 +51,4 @@ axum = { version = "0.8", optional = true }
 dir-test.workspace = true
 test-utils.workspace = true
 tempfile = "3.23"
+semantic-indexing.workspace = true

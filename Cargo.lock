@@ -2049,6 +2049,7 @@ dependencies = [
  "fe-language-server",
  "fe-mir",
  "fe-resolver",
+ "fe-semantic-indexing",
  "fe-solc-runner",
  "fe-test-utils",
  "fe-web",
@@ -2316,6 +2317,26 @@ dependencies = [
  "tracing",
  "url",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "fe-semantic-indexing"
+version = "26.1.0"
+dependencies = [
+ "camino",
+ "fe-common",
+ "fe-driver",
+ "fe-hir",
+ "fe-web",
+ "protobuf",
+ "radix_immutable",
+ "rayon",
+ "rustc-hash 2.1.1",
+ "salsa",
+ "scip",
+ "serde",
+ "serde_json",
+ "url",
 ]
 
 [[package]]

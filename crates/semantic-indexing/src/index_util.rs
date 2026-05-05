@@ -82,7 +82,7 @@ impl LineIndex {
 }
 
 /// Shared ingot resolution context used by both SCIP and LSIF generators.
-pub(crate) struct IngotContext<'db> {
+pub struct IngotContext<'db> {
     pub ingot: Ingot<'db>,
     pub name: String,
     pub version: String,

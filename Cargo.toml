@@ -16,6 +16,7 @@ test-utils = { path = "crates/test-utils", package = "fe-test-utils" }
 resolver = { path = "crates/resolver", package = "fe-resolver" }
 codegen = { path = "crates/codegen", package = "fe-codegen" }
 fe-web = { path = "crates/fe-web" }
+semantic-indexing = { path = "crates/semantic-indexing", package = "fe-semantic-indexing" }
 language-server = { path = "crates/language-server", package = "fe-language-server" }
 mir = { path = "crates/mir", package = "fe-mir" }
 cranelift-entity = "0.130"

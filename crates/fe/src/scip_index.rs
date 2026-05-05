@@ -346,105 +346,6 @@ pub fn generate_scip_with_root(
     })
 }
 
-/// Generate SCIP output by reading from a pre-populated SemanticIndex.
-///
-/// This is the incremental path: the SemanticIndex is populated during
-/// compilation and maintained incrementally by salsa. This function simply
-/// converts the trie data into protobuf format — no HIR walking needed.
-pub fn generate_scip_from_index(
-    db: &driver::DriverDataBase,
-    ingot_url: &url::Url,
-    ingot_name: &str,
-    ingot_version: &str,
-) -> ScipResult {
-    use common::InputDb;
-    use common::semantic_index::SemanticIndex;
-
-    let semantic_index = db.semantic_index();
-    let prefix = format!("fe fe {} {} ", ingot_name, ingot_version);
-
-    let view = SemanticIndex::symbols_for_prefix(semantic_index, db, prefix);
-
-    let mut documents: HashMap<String, ScipDocumentBuilder> = HashMap::new();
-    let mut all_doc_urls: HashMap<String, String> = HashMap::new();
-
-    for (_key, sym) in view.iter() {
-        let doc = documents
-            .entry(sym.def_location.file_url.clone())
-            .or_insert_with(|| ScipDocumentBuilder::new(sym.def_location.relative_path.clone()));
-
-        if doc.seen_symbols.insert(sym.symbol.clone()) {
-            doc.symbols.push(types::SymbolInformation {
-                symbol: sym.symbol.clone(),
-                documentation: sym.documentation.clone(),
-                relationships: Vec::new(),
-                kind: protobuf::EnumOrUnknown::from_i32(sym.kind),
-                display_name: sym.display_name.clone(),
-                signature_documentation: None.into(),
-                enclosing_symbol: sym.enclosing_symbol.clone(),
-                special_fields: Default::default(),
-            });
-        }
-
-        // Definition occurrence (only if we have a real range, not the fallback 0,0,0)
-        if sym.def_location.range != vec![0, 0, 0] {
-            push_occurrence(
-                doc,
-                sym.def_location.range.clone(),
-                sym.symbol.clone(),
-                types::SymbolRole::Definition as i32,
-            );
-        }
-
-        if let Some(url) = &sym.doc_url {
-            all_doc_urls.insert(sym.symbol.clone(), url.clone());
-        }
-
-        // Reference occurrences for this symbol
-        if let Some(refs) = semantic_index.references_to(db, &sym.symbol) {
-            for r in &refs {
-                let ref_doc = documents
-                    .entry(r.location.file_url.clone())
-                    .or_insert_with(|| ScipDocumentBuilder::new(r.location.relative_path.clone()));
-                push_occurrence(
-                    ref_doc,
-                    r.location.range.clone(),
-                    r.symbol.clone(),
-                    r.role,
-                );
-            }
-        }
-    }
-
-    let mut index = types::Index::new();
-    index.metadata = Some(types::Metadata {
-        version: types::ProtocolVersion::UnspecifiedProtocolVersion.into(),
-        tool_info: Some(types::ToolInfo {
-            name: "fe-scip".to_string(),
-            version: env!("CARGO_PKG_VERSION").to_string(),
-            arguments: Vec::new(),
-            special_fields: Default::default(),
-        })
-        .into(),
-        project_root: ingot_url.to_string(),
-        text_document_encoding: types::TextEncoding::UTF8.into(),
-        special_fields: Default::default(),
-    })
-    .into();
-
-    let mut docs: Vec<_> = documents
-        .into_values()
-        .map(ScipDocumentBuilder::into_document)
-        .collect();
-    docs.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
-    index.documents = docs;
-
-    ScipResult {
-        index,
-        doc_urls: all_doc_urls,
-    }
-}
-
 /// Process a single module and return document fragments for all files it touches.
 ///
 /// Each module produces definitions for its own file and reference occurrences
@@ -2327,10 +2228,11 @@ impl<E> Applicative for Result<E> {
             .collect();
 
         // Populate the SemanticIndex
-        crate::semantic_index_builder::populate_semantic_index(&mut db, &[ingot_url.clone()]);
+        let si = semantic_indexing::index::SemanticIndex::empty(&db);
+        semantic_indexing::populate::populate(&mut db, si, &[ingot_url.clone()]);
 
         // Generate SCIP from the index
-        let index_result = generate_scip_from_index(&db, &ingot_url, "unknown", "0.0.0");
+        let index_result = semantic_indexing::scip::generate_from_index(&db, si, "unknown", "0.0.0", &ingot_url);
         let index_symbols: HashSet<String> = index_result
             .index
             .documents
@@ -2390,7 +2292,7 @@ impl<E> Applicative for Result<E> {
             .collect();
 
         // Generate via semantic_index_builder
-        let ctx = index_util::IngotContext::resolve(&db, &ingot_url).unwrap();
+        let ctx = semantic_indexing::index_util::IngotContext::resolve(&db, &ingot_url).unwrap();
         let modules = ctx.ingot.all_modules(&db);
 
         let file_relative_paths: std::collections::HashMap<String, String> =
@@ -2400,7 +2302,7 @@ impl<E> Applicative for Result<E> {
 
         let mut builder_symbols: HashSet<String> = HashSet::new();
         for top_mod in modules.iter() {
-            if let Some(result) = crate::semantic_index_builder::index_module(
+            if let Some(result) = semantic_indexing::populate::index_module(
                 &db,
                 *top_mod,
                 &ctx,
@@ -2558,11 +2460,12 @@ pub fn origin() -> Point {
         let direct_ms = t_direct.elapsed().as_millis();
 
         // Populate SemanticIndex
-        crate::semantic_index_builder::populate_semantic_index(&mut db, &[ingot_url.clone()]);
+        let si = semantic_indexing::index::SemanticIndex::empty(&db);
+        semantic_indexing::populate::populate(&mut db, si, &[ingot_url.clone()]);
 
         // Time the index-based path
         let t_index = Instant::now();
-        let _ = generate_scip_from_index(&db, &ingot_url, "unknown", "0.0.0");
+        let _ = semantic_indexing::scip::generate_from_index(&db, si, "unknown", "0.0.0", &ingot_url);
         let index_ms = t_index.elapsed().as_millis();
 
         eprintln!(
