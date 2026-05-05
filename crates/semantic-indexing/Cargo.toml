@@ -1,0 +1,23 @@
+[package]
+name = "fe-semantic-indexing"
+version = "26.1.0"
+edition.workspace = true
+license = "Apache-2.0"
+repository = "https://github.com/argotorg/fe"
+description = "Semantic indexing engine for Fe: SCIP, LSIF, and incremental SemanticIndex"
+
+[dependencies]
+common.workspace = true
+hir.workspace = true
+driver.workspace = true
+salsa.workspace = true
+url.workspace = true
+camino.workspace = true
+rayon = "1"
+scip = "0.6.1"
+protobuf = "=3.7.2"
+fe-web.workspace = true
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1"
+radix_immutable = "0.1.0"
+rustc-hash = "2"
