@@ -640,62 +640,71 @@ object "CoolCoin" {
       leave
     }
     function $core$lib$abi$encode_field$g2e64_1064(p0, p1, p2) {
-      let v28 := 0
-      let v8 := iszero(iszero(v28))
-      if iszero(iszero(v8)) {
-        let v29 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$base_4097(p1)
-        let v9 := v29
-        let v3 := v9
+      let v38 := 0
+      let v9 := iszero(iszero(v38))
+      if iszero(iszero(v9)) {
+        let v39 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$base_4097(p1)
+        let v10 := v39
+        let v3 := v10
         let v4 := p2
-        let v30 := $core$lib$abi$trait$AbiSize$payload_size$ge513_3812(p0)
-        let v10 := v30
-        let v5 := v10
-        let v11 := v4
-        let t54 := mload(v11)
-        let v31 := t54
-        let t55 := sub(v31, v3)
-        if gt(v3, v31) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v32 := t55
-        let v12 := v32
-        $std$lib$abi$sol$impl_trait$SolEncoder$19ce$write_word_406a(p1, v12)
-        let v35 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$pos_2f14(p1)
-        let v14 := v35
-        let v6 := v14
-        let t56 := mload(v4)
-        let v37 := t56
-        $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_base_e03a(p1, v37)
-        let t57 := mload(v4)
-        let v40 := t57
-        $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_4e67(p1, v40)
-        let v42 := p1
-        let v17 := v42
-        $core$lib$abi$impl_trait$u256$d99e$encode$g426c_cd38(p0, v17)
+        let v40 := $core$lib$abi$trait$AbiSize$payload_size$ge513_3812(p0)
+        let v11 := v40
+        let v5 := v11
+        let v12 := v4
+        let t72 := mload(v12)
+        let v41 := t72
+        let v42 := sub(v41, v3)
+        let v13 := v42
+        $std$lib$abi$sol$impl_trait$SolEncoder$19ce$write_word_406a(p1, v13)
+        let v45 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$pos_2f14(p1)
+        let v15 := v45
+        let v6 := v15
+        let t73 := mload(v4)
+        let v47 := t73
+        $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_base_e03a(p1, v47)
+        let t74 := mload(v4)
+        let v50 := t74
+        $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_4e67(p1, v50)
+        let v52 := p1
+        let v18 := v52
+        $core$lib$abi$impl_trait$u256$d99e$encode$g426c_cd38(p0, v18)
         $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_base_e03a(p1, v3)
         $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_4e67(p1, v6)
-        let v21 := v4
-        let t58 := mload(v21)
-        let v49 := t58
-        let t59 := add(v49, v5)
-        if lt(t59, v49) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
+        let v22 := v4
+        let t75 := mload(v22)
+        let v59 := t75
+        let v60 := add(v59, v5)
+        let v23 := v60
+        mstore(p2, v23)
+        leave
+      }
+      if iszero(iszero(iszero(v9))) {
+        let v61 := 1
+        let v28 := iszero(iszero(v61))
+        if iszero(iszero(v28)) {
+          let v62 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$pos_2f14(p1)
+          let v29 := v62
+          let v7 := v29
+          $core$lib$abi$impl_trait$u256$d99e$encode_to_ptr$gf13e_cb43(p0, v7)
+          let v65 := 0x20
+          let v31 := v65
+          let v66 := add(v7, v31)
+          let v32 := v66
+          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_4e67(p1, v32)
+          leave
         }
-        let v50 := t59
-        let v22 := v50
-        mstore(p2, v22)
-        leave
+        if iszero(iszero(iszero(v28))) {
+          let v69 := p1
+          let v36 := v69
+          $core$lib$abi$impl_trait$u256$d99e$encode$g426c_cd38(p0, v36)
+          leave
+        }
       }
-      if iszero(iszero(iszero(v8))) {
-        let v51 := p1
-        let v26 := v51
-        $core$lib$abi$impl_trait$u256$d99e$encode$g426c_cd38(p0, v26)
-        leave
-      }
+    }
+    function $core$lib$abi$impl_trait$u256$d99e$encode_to_ptr$gf13e_cb43(p0, p1) {
+      let v2 := p1
+      $std$lib$abi$sol$impl_trait$Sol$1f5f$store_word_eec3(v2, p0)
+      leave
     }
     function $std$lib$abi$sol$impl_trait$Sol$1f5f$encoder_new_8043(p0) -> ret {
       let v1 := p0
@@ -1049,17 +1058,11 @@ object "CoolCoin" {
       let v6 := t33
       let v23 := 0x20
       let v7 := v23
-      let t34 := add(v6, v7)
-      if lt(t34, v6) {
-        mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-        mstore(4, 0x11)
-        revert(0, 36)
-      }
-      let v24 := t34
+      let v24 := add(v6, v7)
       let v8 := v24
       v2 := v8
-      let t35 := mload(add(p0, 64))
-      let v25 := t35
+      let t34 := mload(add(p0, 64))
+      let v25 := t34
       let v26 := iszero(iszero(lt(v2, v25)))
       let v11 := iszero(iszero(v26))
       if iszero(iszero(v11)) {
@@ -1082,8 +1085,8 @@ object "CoolCoin" {
         }
         if iszero(iszero(iszero(v13))) {
           let v18 := p0
-          let t36 := mload(add(p0, 64))
-          let v19 := t36
+          let t35 := mload(add(p0, 64))
+          let v19 := t35
           let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_2d1c(v18, v19)
           let v20 := v31
           let v3 := v20
@@ -1104,17 +1107,11 @@ object "CoolCoin" {
       let v6 := t33
       let v23 := 0x20
       let v7 := v23
-      let t34 := add(v6, v7)
-      if lt(t34, v6) {
-        mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-        mstore(4, 0x11)
-        revert(0, 36)
-      }
-      let v24 := t34
+      let v24 := add(v6, v7)
       let v8 := v24
       v2 := v8
-      let t35 := mload(add(p0, 64))
-      let v25 := t35
+      let t34 := mload(add(p0, 64))
+      let v25 := t34
       let v26 := iszero(iszero(lt(v2, v25)))
       let v11 := iszero(iszero(v26))
       if iszero(iszero(v11)) {
@@ -1137,8 +1134,8 @@ object "CoolCoin" {
         }
         if iszero(iszero(iszero(v13))) {
           let v18 := p0
-          let t36 := mload(add(p0, 64))
-          let v19 := t36
+          let t35 := mload(add(p0, 64))
+          let v19 := t35
           let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_8ba4(v18, v19)
           let v20 := v31
           let v3 := v20
@@ -1159,17 +1156,11 @@ object "CoolCoin" {
       let v6 := t33
       let v23 := 0x20
       let v7 := v23
-      let t34 := add(v6, v7)
-      if lt(t34, v6) {
-        mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-        mstore(4, 0x11)
-        revert(0, 36)
-      }
-      let v24 := t34
+      let v24 := add(v6, v7)
       let v8 := v24
       v2 := v8
-      let t35 := mload(add(p0, 64))
-      let v25 := t35
+      let t34 := mload(add(p0, 64))
+      let v25 := t34
       let v26 := iszero(iszero(lt(v2, v25)))
       let v11 := iszero(iszero(v26))
       if iszero(iszero(v11)) {
@@ -1192,8 +1183,8 @@ object "CoolCoin" {
         }
         if iszero(iszero(iszero(v13))) {
           let v18 := p0
-          let t36 := mload(add(p0, 64))
-          let v19 := t36
+          let t35 := mload(add(p0, 64))
+          let v19 := t35
           let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_b2e2_0(v18, v19)
           let v20 := v31
           let v3 := v20
@@ -1214,17 +1205,11 @@ object "CoolCoin" {
       let v6 := t33
       let v23 := 0x20
       let v7 := v23
-      let t34 := add(v6, v7)
-      if lt(t34, v6) {
-        mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-        mstore(4, 0x11)
-        revert(0, 36)
-      }
-      let v24 := t34
+      let v24 := add(v6, v7)
       let v8 := v24
       v2 := v8
-      let t35 := mload(add(p0, 64))
-      let v25 := t35
+      let t34 := mload(add(p0, 64))
+      let v25 := t34
       let v26 := iszero(iszero(lt(v2, v25)))
       let v11 := iszero(iszero(v26))
       if iszero(iszero(v11)) {
@@ -1247,8 +1232,8 @@ object "CoolCoin" {
         }
         if iszero(iszero(iszero(v13))) {
           let v18 := p0
-          let t36 := mload(add(p0, 64))
-          let v19 := t36
+          let t35 := mload(add(p0, 64))
+          let v19 := t35
           let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_b2e2(v18, v19)
           let v20 := v31
           let v3 := v20
@@ -1443,6 +1428,12 @@ object "CoolCoin" {
       let v23 := keccak256(v2, v11)
       let v12 := v23
       ret := v12
+      leave
+    }
+    function $std$lib$abi$sol$impl_trait$Sol$1f5f$store_word_eec3(p0, p1) {
+      let v2 := p0
+      let v3 := p1
+      mstore(v2, v3)
       leave
     }
     function $std$lib$evm$word$impl_trait$u256$1f9e$to_word_3e9f(p0) -> ret {
@@ -3561,67 +3552,212 @@ object "CoolCoin" {
       }
       function $contract_runtime_root_CoolCoin() {
         let v0 := 0
+        let v1 := 0
         v0 := 0
-        let v1 := shr(224, calldataload(0))
-        switch and(v1, 0xffffffff)
-        case 0x06fdde03 {
-            $contract_recv_abi_CoolCoin_117300739()
-            invalid()
+        v1 := shr(224, calldataload(0))
+        let v2 := 0x40c10f19
+        let v3 := iszero(iszero(iszero(gt(and(v1, 0xffffffff), and(v2, 0xffffffff)))))
+        if iszero(iszero(v3)) {
+          let v4 := 0x23b872dd
+          let v5 := iszero(iszero(iszero(gt(and(v1, 0xffffffff), and(v4, 0xffffffff)))))
+          if iszero(iszero(v5)) {
+            let v6 := 0x095ea7b3
+            let v7 := iszero(iszero(iszero(gt(and(v1, 0xffffffff), and(v6, 0xffffffff)))))
+            if iszero(iszero(v7)) {
+              let v8 := 0x06fdde03
+              let v9 := iszero(iszero(iszero(gt(and(v1, 0xffffffff), and(v8, 0xffffffff)))))
+              if iszero(iszero(v9)) {
+                let v10 := 0x06fdde03
+                let v11 := iszero(iszero(eq(and(v1, 0xffffffff), and(v10, 0xffffffff))))
+                if iszero(iszero(v11)) {
+                  $contract_recv_abi_CoolCoin_117300739()
+                  invalid()
+                }
+                if iszero(iszero(iszero(v11))) {
+                  revert(v0, v0)
+                }
+              }
+              if iszero(iszero(iszero(v9))) {
+                let v12 := 0x095ea7b3
+                let v13 := iszero(iszero(eq(and(v1, 0xffffffff), and(v12, 0xffffffff))))
+                if iszero(iszero(v13)) {
+                  $contract_recv_abi_CoolCoin_157198259()
+                  invalid()
+                }
+                if iszero(iszero(iszero(v13))) {
+                  revert(v0, v0)
+                }
+              }
+            }
+            if iszero(iszero(iszero(v7))) {
+              let v14 := 0x18160ddd
+              let v15 := iszero(iszero(iszero(gt(and(v1, 0xffffffff), and(v14, 0xffffffff)))))
+              if iszero(iszero(v15)) {
+                let v16 := 0x18160ddd
+                let v17 := iszero(iszero(eq(and(v1, 0xffffffff), and(v16, 0xffffffff))))
+                if iszero(iszero(v17)) {
+                  $contract_recv_abi_CoolCoin_404098525()
+                  invalid()
+                }
+                if iszero(iszero(iszero(v17))) {
+                  revert(v0, v0)
+                }
+              }
+              if iszero(iszero(iszero(v15))) {
+                let v18 := 0x23b872dd
+                let v19 := iszero(iszero(eq(and(v1, 0xffffffff), and(v18, 0xffffffff))))
+                if iszero(iszero(v19)) {
+                  $contract_recv_abi_CoolCoin_599290589()
+                  invalid()
+                }
+                if iszero(iszero(iszero(v19))) {
+                  revert(v0, v0)
+                }
+              }
+            }
+          }
+          if iszero(iszero(iszero(v5))) {
+            let v20 := 0x39509351
+            let v21 := iszero(iszero(iszero(gt(and(v1, 0xffffffff), and(v20, 0xffffffff)))))
+            if iszero(iszero(v21)) {
+              let v22 := 0x313ce567
+              let v23 := iszero(iszero(iszero(gt(and(v1, 0xffffffff), and(v22, 0xffffffff)))))
+              if iszero(iszero(v23)) {
+                let v24 := 0x313ce567
+                let v25 := iszero(iszero(eq(and(v1, 0xffffffff), and(v24, 0xffffffff))))
+                if iszero(iszero(v25)) {
+                  $contract_recv_abi_CoolCoin_826074471()
+                  invalid()
+                }
+                if iszero(iszero(iszero(v25))) {
+                  revert(v0, v0)
+                }
+              }
+              if iszero(iszero(iszero(v23))) {
+                let v26 := 0x39509351
+                let v27 := iszero(iszero(eq(and(v1, 0xffffffff), and(v26, 0xffffffff))))
+                if iszero(iszero(v27)) {
+                  $contract_recv_abi_CoolCoin_961581905()
+                  invalid()
+                }
+                if iszero(iszero(iszero(v27))) {
+                  revert(v0, v0)
+                }
+              }
+            }
+            if iszero(iszero(iszero(v21))) {
+              let v28 := 0x40c10f19
+              let v29 := iszero(iszero(eq(and(v1, 0xffffffff), and(v28, 0xffffffff))))
+              if iszero(iszero(v29)) {
+                $contract_recv_abi_CoolCoin_1086394137()
+                invalid()
+              }
+              if iszero(iszero(iszero(v29))) {
+                revert(v0, v0)
+              }
+            }
+          }
         }
-        case 0x095ea7b3 {
-            $contract_recv_abi_CoolCoin_157198259()
-            invalid()
-        }
-        case 0x18160ddd {
-            $contract_recv_abi_CoolCoin_404098525()
-            invalid()
-        }
-        case 0x23b872dd {
-            $contract_recv_abi_CoolCoin_599290589()
-            invalid()
-        }
-        case 0x313ce567 {
-            $contract_recv_abi_CoolCoin_826074471()
-            invalid()
-        }
-        case 0x39509351 {
-            $contract_recv_abi_CoolCoin_961581905()
-            invalid()
-        }
-        case 0x40c10f19 {
-            $contract_recv_abi_CoolCoin_1086394137()
-            invalid()
-        }
-        case 0x42966c68 {
-            $contract_recv_abi_CoolCoin_1117154408()
-            invalid()
-        }
-        case 0x70a08231 {
-            $contract_recv_abi_CoolCoin_1889567281()
-            invalid()
-        }
-        case 0x79cc6790 {
-            $contract_recv_abi_CoolCoin_2043438992()
-            invalid()
-        }
-        case 0x95d89b41 {
-            $contract_recv_abi_CoolCoin_2514000705()
-            invalid()
-        }
-        case 0xa457c2d7 {
-            $contract_recv_abi_CoolCoin_2757214935()
-            invalid()
-        }
-        case 0xa9059cbb {
-            $contract_recv_abi_CoolCoin_2835717307()
-            invalid()
-        }
-        case 0xdd62ed3e {
-            $contract_recv_abi_CoolCoin_3714247998()
-            invalid()
-        }
-        default {
-            revert(v0, v0)
+        if iszero(iszero(iszero(v3))) {
+          let v30 := 0x95d89b41
+          let v31 := iszero(iszero(iszero(gt(and(v1, 0xffffffff), and(v30, 0xffffffff)))))
+          if iszero(iszero(v31)) {
+            let v32 := 0x70a08231
+            let v33 := iszero(iszero(iszero(gt(and(v1, 0xffffffff), and(v32, 0xffffffff)))))
+            if iszero(iszero(v33)) {
+              let v34 := 0x42966c68
+              let v35 := iszero(iszero(iszero(gt(and(v1, 0xffffffff), and(v34, 0xffffffff)))))
+              if iszero(iszero(v35)) {
+                let v36 := 0x42966c68
+                let v37 := iszero(iszero(eq(and(v1, 0xffffffff), and(v36, 0xffffffff))))
+                if iszero(iszero(v37)) {
+                  $contract_recv_abi_CoolCoin_1117154408()
+                  invalid()
+                }
+                if iszero(iszero(iszero(v37))) {
+                  revert(v0, v0)
+                }
+              }
+              if iszero(iszero(iszero(v35))) {
+                let v38 := 0x70a08231
+                let v39 := iszero(iszero(eq(and(v1, 0xffffffff), and(v38, 0xffffffff))))
+                if iszero(iszero(v39)) {
+                  $contract_recv_abi_CoolCoin_1889567281()
+                  invalid()
+                }
+                if iszero(iszero(iszero(v39))) {
+                  revert(v0, v0)
+                }
+              }
+            }
+            if iszero(iszero(iszero(v33))) {
+              let v40 := 0x79cc6790
+              let v41 := iszero(iszero(iszero(gt(and(v1, 0xffffffff), and(v40, 0xffffffff)))))
+              if iszero(iszero(v41)) {
+                let v42 := 0x79cc6790
+                let v43 := iszero(iszero(eq(and(v1, 0xffffffff), and(v42, 0xffffffff))))
+                if iszero(iszero(v43)) {
+                  $contract_recv_abi_CoolCoin_2043438992()
+                  invalid()
+                }
+                if iszero(iszero(iszero(v43))) {
+                  revert(v0, v0)
+                }
+              }
+              if iszero(iszero(iszero(v41))) {
+                let v44 := 0x95d89b41
+                let v45 := iszero(iszero(eq(and(v1, 0xffffffff), and(v44, 0xffffffff))))
+                if iszero(iszero(v45)) {
+                  $contract_recv_abi_CoolCoin_2514000705()
+                  invalid()
+                }
+                if iszero(iszero(iszero(v45))) {
+                  revert(v0, v0)
+                }
+              }
+            }
+          }
+          if iszero(iszero(iszero(v31))) {
+            let v46 := 0xa9059cbb
+            let v47 := iszero(iszero(iszero(gt(and(v1, 0xffffffff), and(v46, 0xffffffff)))))
+            if iszero(iszero(v47)) {
+              let v48 := 0xa457c2d7
+              let v49 := iszero(iszero(iszero(gt(and(v1, 0xffffffff), and(v48, 0xffffffff)))))
+              if iszero(iszero(v49)) {
+                let v50 := 0xa457c2d7
+                let v51 := iszero(iszero(eq(and(v1, 0xffffffff), and(v50, 0xffffffff))))
+                if iszero(iszero(v51)) {
+                  $contract_recv_abi_CoolCoin_2757214935()
+                  invalid()
+                }
+                if iszero(iszero(iszero(v51))) {
+                  revert(v0, v0)
+                }
+              }
+              if iszero(iszero(iszero(v49))) {
+                let v52 := 0xa9059cbb
+                let v53 := iszero(iszero(eq(and(v1, 0xffffffff), and(v52, 0xffffffff))))
+                if iszero(iszero(v53)) {
+                  $contract_recv_abi_CoolCoin_2835717307()
+                  invalid()
+                }
+                if iszero(iszero(iszero(v53))) {
+                  revert(v0, v0)
+                }
+              }
+            }
+            if iszero(iszero(iszero(v47))) {
+              let v54 := 0xdd62ed3e
+              let v55 := iszero(iszero(eq(and(v1, 0xffffffff), and(v54, 0xffffffff))))
+              if iszero(iszero(v55)) {
+                $contract_recv_abi_CoolCoin_3714247998()
+                invalid()
+              }
+              if iszero(iszero(iszero(v55))) {
+                revert(v0, v0)
+              }
+            }
+          }
         }
       }
       function $std$lib$evm$effects$copy_words_c4e2_0(p0, p1, p2) {
@@ -5743,525 +5879,551 @@ object "CoolCoin" {
         leave
       }
       function $encode_field$g0a88(p0, p1, p2) {
-        let v28 := 0
-        let v8 := iszero(iszero(v28))
-        if iszero(iszero(v8)) {
-          let v29 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$base_a9a0(p1)
-          let v9 := v29
-          let v3 := v9
+        let v38 := 0
+        let v9 := iszero(iszero(v38))
+        if iszero(iszero(v9)) {
+          let v39 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$base_a9a0(p1)
+          let v10 := v39
+          let v3 := v10
           let v4 := p2
-          let v30 := $core$lib$abi$trait$AbiSize$payload_size$g79ff_f3e8_0(and(p0, 0xff))
-          let v10 := v30
-          let v5 := v10
-          let v11 := v4
-          let t54 := mload(v11)
-          let v31 := t54
-          let t55 := sub(v31, v3)
-          if gt(v3, v31) {
-            mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-            mstore(4, 0x11)
-            revert(0, 36)
-          }
-          let v32 := t55
-          let v12 := v32
-          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$write_word_7b53(p1, v12)
-          let v35 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$pos_7b90(p1)
-          let v14 := v35
-          let v6 := v14
-          let t56 := mload(v4)
-          let v37 := t56
-          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_base_844b(p1, v37)
-          let t57 := mload(v4)
-          let v40 := t57
-          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_0f4a(p1, v40)
-          let v42 := p1
-          let v17 := v42
-          $impl_trait$u8$encode$g426c(and(p0, 0xff), v17)
+          let v40 := $core$lib$abi$trait$AbiSize$payload_size$g79ff_f3e8_0(and(p0, 0xff))
+          let v11 := v40
+          let v5 := v11
+          let v12 := v4
+          let t72 := mload(v12)
+          let v41 := t72
+          let v42 := sub(v41, v3)
+          let v13 := v42
+          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$write_word_7b53(p1, v13)
+          let v45 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$pos_7b90(p1)
+          let v15 := v45
+          let v6 := v15
+          let t73 := mload(v4)
+          let v47 := t73
+          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_base_844b(p1, v47)
+          let t74 := mload(v4)
+          let v50 := t74
+          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_0f4a(p1, v50)
+          let v52 := p1
+          let v18 := v52
+          $impl_trait$u8$encode$g426c(and(p0, 0xff), v18)
           $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_base_844b(p1, v3)
           $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_0f4a(p1, v6)
-          let v21 := v4
-          let t58 := mload(v21)
-          let v49 := t58
-          let t59 := add(v49, v5)
-          if lt(t59, v49) {
-            mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-            mstore(4, 0x11)
-            revert(0, 36)
-          }
-          let v50 := t59
-          let v22 := v50
-          mstore(p2, v22)
+          let v22 := v4
+          let t75 := mload(v22)
+          let v59 := t75
+          let v60 := add(v59, v5)
+          let v23 := v60
+          mstore(p2, v23)
           leave
         }
-        if iszero(iszero(iszero(v8))) {
-          let v51 := p1
-          let v26 := v51
-          $impl_trait$u8$encode$g426c(and(p0, 0xff), v26)
-          leave
+        if iszero(iszero(iszero(v9))) {
+          let v61 := 1
+          let v28 := iszero(iszero(v61))
+          if iszero(iszero(v28)) {
+            let v62 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$pos_7b90(p1)
+            let v29 := v62
+            let v7 := v29
+            $impl_trait$u8$encode_to_ptr$gf13e(and(p0, 0xff), v7)
+            let v65 := 0x20
+            let v31 := v65
+            let v66 := add(v7, v31)
+            let v32 := v66
+            $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_0f4a(p1, v32)
+            leave
+          }
+          if iszero(iszero(iszero(v28))) {
+            let v69 := p1
+            let v36 := v69
+            $impl_trait$u8$encode$g426c(and(p0, 0xff), v36)
+            leave
+          }
         }
       }
       function $core$lib$abi$encode_field$g2e64_1064_0(p0, p1, p2) {
-        let v28 := 0
-        let v8 := iszero(iszero(v28))
-        if iszero(iszero(v8)) {
-          let v29 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$base_4097_0(p1)
-          let v9 := v29
-          let v3 := v9
+        let v38 := 0
+        let v9 := iszero(iszero(v38))
+        if iszero(iszero(v9)) {
+          let v39 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$base_4097_0(p1)
+          let v10 := v39
+          let v3 := v10
           let v4 := p2
-          let v30 := $core$lib$abi$trait$AbiSize$payload_size$ge513_3812_0(p0)
-          let v10 := v30
-          let v5 := v10
-          let v11 := v4
-          let t54 := mload(v11)
-          let v31 := t54
-          let t55 := sub(v31, v3)
-          if gt(v3, v31) {
-            mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-            mstore(4, 0x11)
-            revert(0, 36)
-          }
-          let v32 := t55
-          let v12 := v32
-          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$write_word_406a_0(p1, v12)
-          let v35 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$pos_2f14_0(p1)
-          let v14 := v35
-          let v6 := v14
-          let t56 := mload(v4)
-          let v37 := t56
-          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_base_e03a_0(p1, v37)
-          let t57 := mload(v4)
-          let v40 := t57
-          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_4e67_0(p1, v40)
-          let v42 := p1
-          let v17 := v42
-          $core$lib$abi$impl_trait$u256$d99e$encode$g426c_cd38_0(p0, v17)
+          let v40 := $core$lib$abi$trait$AbiSize$payload_size$ge513_3812_0(p0)
+          let v11 := v40
+          let v5 := v11
+          let v12 := v4
+          let t72 := mload(v12)
+          let v41 := t72
+          let v42 := sub(v41, v3)
+          let v13 := v42
+          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$write_word_406a_0(p1, v13)
+          let v45 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$pos_2f14_0(p1)
+          let v15 := v45
+          let v6 := v15
+          let t73 := mload(v4)
+          let v47 := t73
+          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_base_e03a_0(p1, v47)
+          let t74 := mload(v4)
+          let v50 := t74
+          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_4e67_0(p1, v50)
+          let v52 := p1
+          let v18 := v52
+          $core$lib$abi$impl_trait$u256$d99e$encode$g426c_cd38_0(p0, v18)
           $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_base_e03a_0(p1, v3)
           $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_4e67_0(p1, v6)
-          let v21 := v4
-          let t58 := mload(v21)
-          let v49 := t58
-          let t59 := add(v49, v5)
-          if lt(t59, v49) {
-            mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-            mstore(4, 0x11)
-            revert(0, 36)
-          }
-          let v50 := t59
-          let v22 := v50
-          mstore(p2, v22)
+          let v22 := v4
+          let t75 := mload(v22)
+          let v59 := t75
+          let v60 := add(v59, v5)
+          let v23 := v60
+          mstore(p2, v23)
           leave
         }
-        if iszero(iszero(iszero(v8))) {
-          let v51 := p1
-          let v26 := v51
-          $core$lib$abi$impl_trait$u256$d99e$encode$g426c_cd38_0(p0, v26)
-          leave
+        if iszero(iszero(iszero(v9))) {
+          let v61 := 1
+          let v28 := iszero(iszero(v61))
+          if iszero(iszero(v28)) {
+            let v62 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$pos_2f14_0(p1)
+            let v29 := v62
+            let v7 := v29
+            $core$lib$abi$impl_trait$u256$d99e$encode_to_ptr$gf13e_cb43_0(p0, v7)
+            let v65 := 0x20
+            let v31 := v65
+            let v66 := add(v7, v31)
+            let v32 := v66
+            $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_4e67_0(p1, v32)
+            leave
+          }
+          if iszero(iszero(iszero(v28))) {
+            let v69 := p1
+            let v36 := v69
+            $core$lib$abi$impl_trait$u256$d99e$encode$g426c_cd38_0(p0, v36)
+            leave
+          }
         }
       }
       function $core$lib$abi$encode_field$g2e64_1064(p0, p1, p2) {
-        let v28 := 0
-        let v8 := iszero(iszero(v28))
-        if iszero(iszero(v8)) {
-          let v29 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$base_4097(p1)
-          let v9 := v29
-          let v3 := v9
+        let v38 := 0
+        let v9 := iszero(iszero(v38))
+        if iszero(iszero(v9)) {
+          let v39 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$base_4097(p1)
+          let v10 := v39
+          let v3 := v10
           let v4 := p2
-          let v30 := $core$lib$abi$trait$AbiSize$payload_size$ge513_3812(p0)
-          let v10 := v30
-          let v5 := v10
-          let v11 := v4
-          let t54 := mload(v11)
-          let v31 := t54
-          let t55 := sub(v31, v3)
-          if gt(v3, v31) {
-            mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-            mstore(4, 0x11)
-            revert(0, 36)
-          }
-          let v32 := t55
-          let v12 := v32
-          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$write_word_406a(p1, v12)
-          let v35 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$pos_2f14(p1)
-          let v14 := v35
-          let v6 := v14
-          let t56 := mload(v4)
-          let v37 := t56
-          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_base_e03a(p1, v37)
-          let t57 := mload(v4)
-          let v40 := t57
-          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_4e67(p1, v40)
-          let v42 := p1
-          let v17 := v42
-          $core$lib$abi$impl_trait$u256$d99e$encode$g426c_cd38(p0, v17)
+          let v40 := $core$lib$abi$trait$AbiSize$payload_size$ge513_3812(p0)
+          let v11 := v40
+          let v5 := v11
+          let v12 := v4
+          let t72 := mload(v12)
+          let v41 := t72
+          let v42 := sub(v41, v3)
+          let v13 := v42
+          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$write_word_406a(p1, v13)
+          let v45 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$pos_2f14(p1)
+          let v15 := v45
+          let v6 := v15
+          let t73 := mload(v4)
+          let v47 := t73
+          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_base_e03a(p1, v47)
+          let t74 := mload(v4)
+          let v50 := t74
+          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_4e67(p1, v50)
+          let v52 := p1
+          let v18 := v52
+          $core$lib$abi$impl_trait$u256$d99e$encode$g426c_cd38(p0, v18)
           $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_base_e03a(p1, v3)
           $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_4e67(p1, v6)
-          let v21 := v4
-          let t58 := mload(v21)
-          let v49 := t58
-          let t59 := add(v49, v5)
-          if lt(t59, v49) {
-            mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-            mstore(4, 0x11)
-            revert(0, 36)
-          }
-          let v50 := t59
-          let v22 := v50
-          mstore(p2, v22)
+          let v22 := v4
+          let t75 := mload(v22)
+          let v59 := t75
+          let v60 := add(v59, v5)
+          let v23 := v60
+          mstore(p2, v23)
           leave
         }
-        if iszero(iszero(iszero(v8))) {
-          let v51 := p1
-          let v26 := v51
-          $core$lib$abi$impl_trait$u256$d99e$encode$g426c_cd38(p0, v26)
-          leave
+        if iszero(iszero(iszero(v9))) {
+          let v61 := 1
+          let v28 := iszero(iszero(v61))
+          if iszero(iszero(v28)) {
+            let v62 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$pos_2f14(p1)
+            let v29 := v62
+            let v7 := v29
+            $core$lib$abi$impl_trait$u256$d99e$encode_to_ptr$gf13e_cb43(p0, v7)
+            let v65 := 0x20
+            let v31 := v65
+            let v66 := add(v7, v31)
+            let v32 := v66
+            $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_4e67(p1, v32)
+            leave
+          }
+          if iszero(iszero(iszero(v28))) {
+            let v69 := p1
+            let v36 := v69
+            $core$lib$abi$impl_trait$u256$d99e$encode$g426c_cd38(p0, v36)
+            leave
+          }
         }
       }
       function $core$lib$abi$encode_field$g2e64_1064_1(p0, p1, p2) {
-        let v28 := 0
-        let v8 := iszero(iszero(v28))
-        if iszero(iszero(v8)) {
-          let v29 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$base_4097_1(p1)
-          let v9 := v29
-          let v3 := v9
+        let v38 := 0
+        let v9 := iszero(iszero(v38))
+        if iszero(iszero(v9)) {
+          let v39 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$base_4097_1(p1)
+          let v10 := v39
+          let v3 := v10
           let v4 := p2
-          let v30 := $core$lib$abi$trait$AbiSize$payload_size$ge513_3812_1(p0)
-          let v10 := v30
-          let v5 := v10
-          let v11 := v4
-          let t54 := mload(v11)
-          let v31 := t54
-          let t55 := sub(v31, v3)
-          if gt(v3, v31) {
-            mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-            mstore(4, 0x11)
-            revert(0, 36)
-          }
-          let v32 := t55
-          let v12 := v32
-          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$write_word_406a_1(p1, v12)
-          let v35 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$pos_2f14_1(p1)
-          let v14 := v35
-          let v6 := v14
-          let t56 := mload(v4)
-          let v37 := t56
-          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_base_e03a_1(p1, v37)
-          let t57 := mload(v4)
-          let v40 := t57
-          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_4e67_1(p1, v40)
-          let v42 := p1
-          let v17 := v42
-          $core$lib$abi$impl_trait$u256$d99e$encode$g426c_cd38_1(p0, v17)
+          let v40 := $core$lib$abi$trait$AbiSize$payload_size$ge513_3812_1(p0)
+          let v11 := v40
+          let v5 := v11
+          let v12 := v4
+          let t72 := mload(v12)
+          let v41 := t72
+          let v42 := sub(v41, v3)
+          let v13 := v42
+          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$write_word_406a_1(p1, v13)
+          let v45 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$pos_2f14_1(p1)
+          let v15 := v45
+          let v6 := v15
+          let t73 := mload(v4)
+          let v47 := t73
+          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_base_e03a_1(p1, v47)
+          let t74 := mload(v4)
+          let v50 := t74
+          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_4e67_1(p1, v50)
+          let v52 := p1
+          let v18 := v52
+          $core$lib$abi$impl_trait$u256$d99e$encode$g426c_cd38_1(p0, v18)
           $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_base_e03a_1(p1, v3)
           $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_4e67_1(p1, v6)
-          let v21 := v4
-          let t58 := mload(v21)
-          let v49 := t58
-          let t59 := add(v49, v5)
-          if lt(t59, v49) {
-            mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-            mstore(4, 0x11)
-            revert(0, 36)
-          }
-          let v50 := t59
-          let v22 := v50
-          mstore(p2, v22)
+          let v22 := v4
+          let t75 := mload(v22)
+          let v59 := t75
+          let v60 := add(v59, v5)
+          let v23 := v60
+          mstore(p2, v23)
           leave
         }
-        if iszero(iszero(iszero(v8))) {
-          let v51 := p1
-          let v26 := v51
-          $core$lib$abi$impl_trait$u256$d99e$encode$g426c_cd38_1(p0, v26)
-          leave
+        if iszero(iszero(iszero(v9))) {
+          let v61 := 1
+          let v28 := iszero(iszero(v61))
+          if iszero(iszero(v28)) {
+            let v62 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$pos_2f14_1(p1)
+            let v29 := v62
+            let v7 := v29
+            $core$lib$abi$impl_trait$u256$d99e$encode_to_ptr$gf13e_cb43_1(p0, v7)
+            let v65 := 0x20
+            let v31 := v65
+            let v66 := add(v7, v31)
+            let v32 := v66
+            $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_4e67_1(p1, v32)
+            leave
+          }
+          if iszero(iszero(iszero(v28))) {
+            let v69 := p1
+            let v36 := v69
+            $core$lib$abi$impl_trait$u256$d99e$encode$g426c_cd38_1(p0, v36)
+            leave
+          }
         }
       }
       function $encode_field$ge927(p0, p1, p2) {
-        let v28 := 0
-        let v8 := iszero(iszero(v28))
-        if iszero(iszero(v8)) {
-          let v29 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$base_c13e(p1)
-          let v9 := v29
-          let v3 := v9
+        let v38 := 0
+        let v9 := iszero(iszero(v38))
+        if iszero(iszero(v9)) {
+          let v39 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$base_c13e(p1)
+          let v10 := v39
+          let v3 := v10
           let v4 := p2
-          let v30 := $core$lib$abi$trait$AbiSize$payload_size$gda9b_b33d_0(iszero(iszero(p0)))
-          let v10 := v30
-          let v5 := v10
-          let v11 := v4
-          let t54 := mload(v11)
-          let v31 := t54
-          let t55 := sub(v31, v3)
-          if gt(v3, v31) {
-            mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-            mstore(4, 0x11)
-            revert(0, 36)
-          }
-          let v32 := t55
-          let v12 := v32
-          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$write_word_aa60(p1, v12)
-          let v35 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$pos_6cac(p1)
-          let v14 := v35
-          let v6 := v14
-          let t56 := mload(v4)
-          let v37 := t56
-          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_base_cc2c(p1, v37)
-          let t57 := mload(v4)
-          let v40 := t57
-          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_b6ef(p1, v40)
-          let v42 := p1
-          let v17 := v42
-          $impl_trait$bool$encode$g426c(iszero(iszero(p0)), v17)
+          let v40 := $core$lib$abi$trait$AbiSize$payload_size$gda9b_b33d_0(iszero(iszero(p0)))
+          let v11 := v40
+          let v5 := v11
+          let v12 := v4
+          let t72 := mload(v12)
+          let v41 := t72
+          let v42 := sub(v41, v3)
+          let v13 := v42
+          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$write_word_aa60(p1, v13)
+          let v45 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$pos_6cac(p1)
+          let v15 := v45
+          let v6 := v15
+          let t73 := mload(v4)
+          let v47 := t73
+          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_base_cc2c(p1, v47)
+          let t74 := mload(v4)
+          let v50 := t74
+          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_b6ef(p1, v50)
+          let v52 := p1
+          let v18 := v52
+          $impl_trait$bool$encode$g426c(iszero(iszero(p0)), v18)
           $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_base_cc2c(p1, v3)
           $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_b6ef(p1, v6)
-          let v21 := v4
-          let t58 := mload(v21)
-          let v49 := t58
-          let t59 := add(v49, v5)
-          if lt(t59, v49) {
-            mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-            mstore(4, 0x11)
-            revert(0, 36)
-          }
-          let v50 := t59
-          let v22 := v50
-          mstore(p2, v22)
+          let v22 := v4
+          let t75 := mload(v22)
+          let v59 := t75
+          let v60 := add(v59, v5)
+          let v23 := v60
+          mstore(p2, v23)
           leave
         }
-        if iszero(iszero(iszero(v8))) {
-          let v51 := p1
-          let v26 := v51
-          $impl_trait$bool$encode$g426c(iszero(iszero(p0)), v26)
-          leave
+        if iszero(iszero(iszero(v9))) {
+          let v61 := 1
+          let v28 := iszero(iszero(v61))
+          if iszero(iszero(v28)) {
+            let v62 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$pos_6cac(p1)
+            let v29 := v62
+            let v7 := v29
+            $impl_trait$bool$encode_to_ptr$gf13e(iszero(iszero(p0)), v7)
+            let v65 := 0x20
+            let v31 := v65
+            let v66 := add(v7, v31)
+            let v32 := v66
+            $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_b6ef(p1, v32)
+            leave
+          }
+          if iszero(iszero(iszero(v28))) {
+            let v69 := p1
+            let v36 := v69
+            $impl_trait$bool$encode$g426c(iszero(iszero(p0)), v36)
+            leave
+          }
         }
       }
       function $encode_field$g859f(p0, p1, p2) {
-        let v28 := 1
-        let v8 := iszero(iszero(v28))
-        if iszero(iszero(v8)) {
-          let v29 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$base_25d4(p1)
-          let v9 := v29
-          let v3 := v9
+        let v38 := 1
+        let v9 := iszero(iszero(v38))
+        if iszero(iszero(v9)) {
+          let v39 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$base_25d4(p1)
+          let v10 := v39
+          let v3 := v10
           let v4 := p2
-          let v30 := $core$lib$abi$impl_trait$String$c06e$payload_size$g3eb7_dfa6_0(and(p0, 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff))
-          let v10 := v30
-          let v5 := v10
-          let v11 := v4
-          let t54 := mload(v11)
-          let v31 := t54
-          let t55 := sub(v31, v3)
-          if gt(v3, v31) {
-            mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-            mstore(4, 0x11)
-            revert(0, 36)
-          }
-          let v32 := t55
-          let v12 := v32
-          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$write_word_1ad1(p1, v12)
-          let v35 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$pos_d8ed(p1)
-          let v14 := v35
-          let v6 := v14
-          let t56 := mload(v4)
-          let v37 := t56
-          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_base_c5ff(p1, v37)
-          let t57 := mload(v4)
-          let v40 := t57
-          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_7410(p1, v40)
-          let v42 := p1
-          let v17 := v42
-          $encode$g3cd9(and(p0, 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff), v17)
+          let v40 := $core$lib$abi$impl_trait$String$c06e$payload_size$g3eb7_dfa6_0(and(p0, 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff))
+          let v11 := v40
+          let v5 := v11
+          let v12 := v4
+          let t68 := mload(v12)
+          let v41 := t68
+          let v42 := sub(v41, v3)
+          let v13 := v42
+          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$write_word_1ad1(p1, v13)
+          let v45 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$pos_d8ed(p1)
+          let v15 := v45
+          let v6 := v15
+          let t69 := mload(v4)
+          let v47 := t69
+          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_base_c5ff(p1, v47)
+          let t70 := mload(v4)
+          let v50 := t70
+          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_7410(p1, v50)
+          let v52 := p1
+          let v18 := v52
+          $encode$g3cd9(and(p0, 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff), v18)
           $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_base_c5ff(p1, v3)
           $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_7410(p1, v6)
-          let v21 := v4
-          let t58 := mload(v21)
-          let v49 := t58
-          let t59 := add(v49, v5)
-          if lt(t59, v49) {
-            mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-            mstore(4, 0x11)
-            revert(0, 36)
-          }
-          let v50 := t59
-          let v22 := v50
-          mstore(p2, v22)
+          let v22 := v4
+          let t71 := mload(v22)
+          let v59 := t71
+          let v60 := add(v59, v5)
+          let v23 := v60
+          mstore(p2, v23)
           leave
         }
-        if iszero(iszero(iszero(v8))) {
-          let v51 := p1
-          let v26 := v51
-          $encode$g3cd9(and(p0, 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff), v26)
-          leave
+        if iszero(iszero(iszero(v9))) {
+          let v61 := 0
+          let v28 := iszero(iszero(v61))
+          if iszero(iszero(v28)) {
+            let v62 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$pos_d8ed(p1)
+            let v29 := v62
+            let v7 := v29
+            $encode_to_ptr$g4320(and(p0, 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff), v7)
+            invalid()
+          }
+          if iszero(iszero(iszero(v28))) {
+            let v65 := p1
+            let v36 := v65
+            $encode$g3cd9(and(p0, 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff), v36)
+            leave
+          }
         }
       }
       function $core$lib$abi$encode_field$g2e64_555f(p0, p1, p2) {
-        let v28 := 0
-        let v8 := iszero(iszero(v28))
-        if iszero(iszero(v8)) {
-          let v29 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$base_fd6f(p1)
-          let v9 := v29
-          let v3 := v9
+        let v38 := 0
+        let v9 := iszero(iszero(v38))
+        if iszero(iszero(v9)) {
+          let v39 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$base_fd6f(p1)
+          let v10 := v39
+          let v3 := v10
           let v4 := p2
-          let v30 := $core$lib$abi$trait$AbiSize$payload_size$ge513_77e5_0(p0)
-          let v10 := v30
-          let v5 := v10
-          let v11 := v4
-          let t54 := mload(v11)
-          let v31 := t54
-          let t55 := sub(v31, v3)
-          if gt(v3, v31) {
-            mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-            mstore(4, 0x11)
-            revert(0, 36)
-          }
-          let v32 := t55
-          let v12 := v32
-          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$write_word_8f67(p1, v12)
-          let v35 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$pos_0de4(p1)
-          let v14 := v35
-          let v6 := v14
-          let t56 := mload(v4)
-          let v37 := t56
-          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_base_fa20(p1, v37)
-          let t57 := mload(v4)
-          let v40 := t57
-          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_3857(p1, v40)
-          let v42 := p1
-          let v17 := v42
-          $core$lib$abi$impl_trait$u256$d99e$encode$g426c_2910(p0, v17)
+          let v40 := $core$lib$abi$trait$AbiSize$payload_size$ge513_77e5_0(p0)
+          let v11 := v40
+          let v5 := v11
+          let v12 := v4
+          let t72 := mload(v12)
+          let v41 := t72
+          let v42 := sub(v41, v3)
+          let v13 := v42
+          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$write_word_8f67(p1, v13)
+          let v45 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$pos_0de4(p1)
+          let v15 := v45
+          let v6 := v15
+          let t73 := mload(v4)
+          let v47 := t73
+          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_base_fa20(p1, v47)
+          let t74 := mload(v4)
+          let v50 := t74
+          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_3857(p1, v50)
+          let v52 := p1
+          let v18 := v52
+          $core$lib$abi$impl_trait$u256$d99e$encode$g426c_2910(p0, v18)
           $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_base_fa20(p1, v3)
           $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_3857(p1, v6)
-          let v21 := v4
-          let t58 := mload(v21)
-          let v49 := t58
-          let t59 := add(v49, v5)
-          if lt(t59, v49) {
-            mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-            mstore(4, 0x11)
-            revert(0, 36)
-          }
-          let v50 := t59
-          let v22 := v50
-          mstore(p2, v22)
+          let v22 := v4
+          let t75 := mload(v22)
+          let v59 := t75
+          let v60 := add(v59, v5)
+          let v23 := v60
+          mstore(p2, v23)
           leave
         }
-        if iszero(iszero(iszero(v8))) {
-          let v51 := p1
-          let v26 := v51
-          $core$lib$abi$impl_trait$u256$d99e$encode$g426c_2910(p0, v26)
-          leave
+        if iszero(iszero(iszero(v9))) {
+          let v61 := 1
+          let v28 := iszero(iszero(v61))
+          if iszero(iszero(v28)) {
+            let v62 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$pos_0de4(p1)
+            let v29 := v62
+            let v7 := v29
+            $core$lib$abi$impl_trait$u256$d99e$encode_to_ptr$gf13e_1b98(p0, v7)
+            let v65 := 0x20
+            let v31 := v65
+            let v66 := add(v7, v31)
+            let v32 := v66
+            $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_3857(p1, v32)
+            leave
+          }
+          if iszero(iszero(iszero(v28))) {
+            let v69 := p1
+            let v36 := v69
+            $core$lib$abi$impl_trait$u256$d99e$encode$g426c_2910(p0, v36)
+            leave
+          }
         }
       }
       function $encode_field_arg0_root_stor(p0, p1, p2) {
-        let v28 := 0
-        let v8 := iszero(iszero(v28))
-        if iszero(iszero(v8)) {
-          let v29 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$base_fd6f(p1)
-          let v9 := v29
-          let v3 := v9
+        let v38 := 0
+        let v9 := iszero(iszero(v38))
+        if iszero(iszero(v9)) {
+          let v39 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$base_fd6f(p1)
+          let v10 := v39
+          let v3 := v10
           let v4 := p2
-          let v30 := $core$lib$abi$trait$AbiSize$payload_size$ge513_arg0_root_stor_77e5_0(p0)
-          let v10 := v30
-          let v5 := v10
-          let v11 := v4
-          let t54 := mload(v11)
-          let v31 := t54
-          let t55 := sub(v31, v3)
-          if gt(v3, v31) {
-            mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-            mstore(4, 0x11)
-            revert(0, 36)
-          }
-          let v32 := t55
-          let v12 := v32
-          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$write_word_8f67(p1, v12)
-          let v35 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$pos_0de4(p1)
-          let v14 := v35
-          let v6 := v14
-          let t56 := mload(v4)
-          let v37 := t56
-          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_base_fa20(p1, v37)
-          let t57 := mload(v4)
-          let v40 := t57
-          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_3857(p1, v40)
-          let v42 := p1
-          let v17 := v42
-          $encode_arg0_root_stor(p0, v17)
+          let v40 := $core$lib$abi$trait$AbiSize$payload_size$ge513_arg0_root_stor_77e5_0(p0)
+          let v11 := v40
+          let v5 := v11
+          let v12 := v4
+          let t72 := mload(v12)
+          let v41 := t72
+          let v42 := sub(v41, v3)
+          let v13 := v42
+          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$write_word_8f67(p1, v13)
+          let v45 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$pos_0de4(p1)
+          let v15 := v45
+          let v6 := v15
+          let t73 := mload(v4)
+          let v47 := t73
+          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_base_fa20(p1, v47)
+          let t74 := mload(v4)
+          let v50 := t74
+          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_3857(p1, v50)
+          let v52 := p1
+          let v18 := v52
+          $encode_arg0_root_stor(p0, v18)
           $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_base_fa20(p1, v3)
           $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_3857(p1, v6)
-          let v21 := v4
-          let t58 := mload(v21)
-          let v49 := t58
-          let t59 := add(v49, v5)
-          if lt(t59, v49) {
-            mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-            mstore(4, 0x11)
-            revert(0, 36)
-          }
-          let v50 := t59
-          let v22 := v50
-          mstore(p2, v22)
+          let v22 := v4
+          let t75 := mload(v22)
+          let v59 := t75
+          let v60 := add(v59, v5)
+          let v23 := v60
+          mstore(p2, v23)
           leave
         }
-        if iszero(iszero(iszero(v8))) {
-          let v51 := p1
-          let v26 := v51
-          $encode_arg0_root_stor(p0, v26)
-          leave
+        if iszero(iszero(iszero(v9))) {
+          let v61 := 1
+          let v28 := iszero(iszero(v61))
+          if iszero(iszero(v28)) {
+            let v62 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$pos_0de4(p1)
+            let v29 := v62
+            let v7 := v29
+            $encode_to_ptr_arg0_root_stor(p0, v7)
+            let v65 := 0x20
+            let v31 := v65
+            let v66 := add(v7, v31)
+            let v32 := v66
+            $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_3857(p1, v32)
+            leave
+          }
+          if iszero(iszero(iszero(v28))) {
+            let v69 := p1
+            let v36 := v69
+            $encode_arg0_root_stor(p0, v36)
+            leave
+          }
         }
       }
       function $encode_field$g6d7e(p0, p1, p2) {
-        let v28 := 1
-        let v8 := iszero(iszero(v28))
-        if iszero(iszero(v8)) {
-          let v29 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$base_6030(p1)
-          let v9 := v29
-          let v3 := v9
+        let v38 := 1
+        let v9 := iszero(iszero(v38))
+        if iszero(iszero(v9)) {
+          let v39 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$base_6030(p1)
+          let v10 := v39
+          let v3 := v10
           let v4 := p2
-          let v30 := $core$lib$abi$impl_trait$String$c06e$payload_size$gc7cf_9b7d_0(and(p0, 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff))
-          let v10 := v30
-          let v5 := v10
-          let v11 := v4
-          let t54 := mload(v11)
-          let v31 := t54
-          let t55 := sub(v31, v3)
-          if gt(v3, v31) {
-            mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-            mstore(4, 0x11)
-            revert(0, 36)
-          }
-          let v32 := t55
-          let v12 := v32
-          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$write_word_406d(p1, v12)
-          let v35 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$pos_324d(p1)
-          let v14 := v35
-          let v6 := v14
-          let t56 := mload(v4)
-          let v37 := t56
-          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_base_750c(p1, v37)
-          let t57 := mload(v4)
-          let v40 := t57
-          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_597d(p1, v40)
-          let v42 := p1
-          let v17 := v42
-          $encode$gbe21(and(p0, 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff), v17)
+          let v40 := $core$lib$abi$impl_trait$String$c06e$payload_size$gc7cf_9b7d_0(and(p0, 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff))
+          let v11 := v40
+          let v5 := v11
+          let v12 := v4
+          let t68 := mload(v12)
+          let v41 := t68
+          let v42 := sub(v41, v3)
+          let v13 := v42
+          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$write_word_406d(p1, v13)
+          let v45 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$pos_324d(p1)
+          let v15 := v45
+          let v6 := v15
+          let t69 := mload(v4)
+          let v47 := t69
+          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_base_750c(p1, v47)
+          let t70 := mload(v4)
+          let v50 := t70
+          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_597d(p1, v50)
+          let v52 := p1
+          let v18 := v52
+          $encode$gbe21(and(p0, 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff), v18)
           $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_base_750c(p1, v3)
           $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_597d(p1, v6)
-          let v21 := v4
-          let t58 := mload(v21)
-          let v49 := t58
-          let t59 := add(v49, v5)
-          if lt(t59, v49) {
-            mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-            mstore(4, 0x11)
-            revert(0, 36)
-          }
-          let v50 := t59
-          let v22 := v50
-          mstore(p2, v22)
+          let v22 := v4
+          let t71 := mload(v22)
+          let v59 := t71
+          let v60 := add(v59, v5)
+          let v23 := v60
+          mstore(p2, v23)
           leave
         }
-        if iszero(iszero(iszero(v8))) {
-          let v51 := p1
-          let v26 := v51
-          $encode$gbe21(and(p0, 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff), v26)
-          leave
+        if iszero(iszero(iszero(v9))) {
+          let v61 := 0
+          let v28 := iszero(iszero(v61))
+          if iszero(iszero(v28)) {
+            let v62 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$pos_324d(p1)
+            let v29 := v62
+            let v7 := v29
+            $encode_to_ptr$g30cc(and(p0, 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff), v7)
+            invalid()
+          }
+          if iszero(iszero(iszero(v28))) {
+            let v65 := p1
+            let v36 := v65
+            $encode$gbe21(and(p0, 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff), v36)
+            leave
+          }
         }
       }
       function $encode_single_root$ge927(p0, p1) {
@@ -6269,13 +6431,7 @@ object "CoolCoin" {
         let v3 := v9
         let v10 := 0x20
         let v4 := v10
-        let t16 := add(v3, v4)
-        if lt(t16, v3) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v11 := t16
+        let v11 := add(v3, v4)
         let v5 := v11
         let r2 := mload(0x40)
         if iszero(r2) {
@@ -6295,13 +6451,7 @@ object "CoolCoin" {
         let v3 := v9
         let v10 := 0x20
         let v4 := v10
-        let t16 := add(v3, v4)
-        if lt(t16, v3) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v11 := t16
+        let v11 := add(v3, v4)
         let v5 := v11
         let r2 := mload(0x40)
         if iszero(r2) {
@@ -6321,13 +6471,7 @@ object "CoolCoin" {
         let v3 := v9
         let v10 := 0x20
         let v4 := v10
-        let t16 := add(v3, v4)
-        if lt(t16, v3) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v11 := t16
+        let v11 := add(v3, v4)
         let v5 := v11
         let r2 := mload(0x40)
         if iszero(r2) {
@@ -6347,13 +6491,7 @@ object "CoolCoin" {
         let v3 := v9
         let v10 := 0x20
         let v4 := v10
-        let t16 := add(v3, v4)
-        if lt(t16, v3) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v11 := t16
+        let v11 := add(v3, v4)
         let v5 := v11
         let r2 := mload(0x40)
         if iszero(r2) {
@@ -6373,13 +6511,7 @@ object "CoolCoin" {
         let v3 := v9
         let v10 := 0x20
         let v4 := v10
-        let t16 := add(v3, v4)
-        if lt(t16, v3) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v11 := t16
+        let v11 := add(v3, v4)
         let v5 := v11
         let r2 := mload(0x40)
         if iszero(r2) {
@@ -6399,13 +6531,7 @@ object "CoolCoin" {
         let v3 := v9
         let v10 := 0x20
         let v4 := v10
-        let t16 := add(v3, v4)
-        if lt(t16, v3) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v11 := t16
+        let v11 := add(v3, v4)
         let v5 := v11
         let r2 := mload(0x40)
         if iszero(r2) {
@@ -6574,6 +6700,58 @@ object "CoolCoin" {
         mstore(add(v17, 32), v1)
         let v9 := v17
         ret := v9
+        leave
+      }
+      function $core$lib$abi$impl_trait$u256$d99e$encode_to_ptr$gf13e_1b98(p0, p1) {
+        let v2 := p1
+        $std$lib$abi$sol$impl_trait$Sol$1f5f$store_word_2361(v2, p0)
+        leave
+      }
+      function $encode_to_ptr_arg0_root_stor(p0, p1) {
+        let v2 := p1
+        $store_word_arg1_root_stor(v2, p0)
+        leave
+      }
+      function $impl_trait$bool$encode_to_ptr$gf13e(p0, p1) {
+        if iszero(iszero(p0)) {
+          let v3 := p1
+          let v9 := 0x01
+          let v4 := v9
+          $std$lib$abi$sol$impl_trait$Sol$1f5f$store_word_be96(v3, v4)
+        }
+        if iszero(iszero(iszero(p0))) {
+          let v6 := p1
+          let v12 := 0x00
+          let v7 := v12
+          $std$lib$abi$sol$impl_trait$Sol$1f5f$store_word_be96(v6, v7)
+        }
+        leave
+      }
+      function $encode_to_ptr$g30cc(p0, p1) {
+        invalid()
+      }
+      function $encode_to_ptr$g4320(p0, p1) {
+        invalid()
+      }
+      function $impl_trait$u8$encode_to_ptr$gf13e(p0, p1) {
+        let v2 := p1
+        let v3 := and(p0, 0xff)
+        $std$lib$abi$sol$impl_trait$Sol$1f5f$store_word_2c7e(v2, v3)
+        leave
+      }
+      function $core$lib$abi$impl_trait$u256$d99e$encode_to_ptr$gf13e_cb43_0(p0, p1) {
+        let v2 := p1
+        $std$lib$abi$sol$impl_trait$Sol$1f5f$store_word_eec3_0(v2, p0)
+        leave
+      }
+      function $core$lib$abi$impl_trait$u256$d99e$encode_to_ptr$gf13e_cb43(p0, p1) {
+        let v2 := p1
+        $std$lib$abi$sol$impl_trait$Sol$1f5f$store_word_eec3(v2, p0)
+        leave
+      }
+      function $core$lib$abi$impl_trait$u256$d99e$encode_to_ptr$gf13e_cb43_1(p0, p1) {
+        let v2 := p1
+        $std$lib$abi$sol$impl_trait$Sol$1f5f$store_word_eec3_1(v2, p0)
         leave
       }
       function $std$lib$abi$sol$impl_trait$Sol$1f5f$encoder_new_1514(p0) -> ret {
@@ -8357,17 +8535,11 @@ object "CoolCoin" {
         let v6 := t33
         let v23 := 0x20
         let v7 := v23
-        let t34 := add(v6, v7)
-        if lt(t34, v6) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v24 := t34
+        let v24 := add(v6, v7)
         let v8 := v24
         v2 := v8
-        let t35 := mload(add(p0, 64))
-        let v25 := t35
+        let t34 := mload(add(p0, 64))
+        let v25 := t34
         let v26 := iszero(iszero(lt(v2, v25)))
         let v11 := iszero(iszero(v26))
         if iszero(iszero(v11)) {
@@ -8390,8 +8562,8 @@ object "CoolCoin" {
           }
           if iszero(iszero(iszero(v13))) {
             let v18 := p0
-            let t36 := mload(add(p0, 64))
-            let v19 := t36
+            let t35 := mload(add(p0, 64))
+            let v19 := t35
             let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_f700(v18, v19)
             let v20 := v31
             let v3 := v20
@@ -8412,17 +8584,11 @@ object "CoolCoin" {
         let v6 := t33
         let v23 := 0x20
         let v7 := v23
-        let t34 := add(v6, v7)
-        if lt(t34, v6) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v24 := t34
+        let v24 := add(v6, v7)
         let v8 := v24
         v2 := v8
-        let t35 := mload(add(p0, 64))
-        let v25 := t35
+        let t34 := mload(add(p0, 64))
+        let v25 := t34
         let v26 := iszero(iszero(lt(v2, v25)))
         let v11 := iszero(iszero(v26))
         if iszero(iszero(v11)) {
@@ -8445,8 +8611,8 @@ object "CoolCoin" {
           }
           if iszero(iszero(iszero(v13))) {
             let v18 := p0
-            let t36 := mload(add(p0, 64))
-            let v19 := t36
+            let t35 := mload(add(p0, 64))
+            let v19 := t35
             let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_ebca(v18, v19)
             let v20 := v31
             let v3 := v20
@@ -8467,17 +8633,11 @@ object "CoolCoin" {
         let v6 := t33
         let v23 := 0x20
         let v7 := v23
-        let t34 := add(v6, v7)
-        if lt(t34, v6) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v24 := t34
+        let v24 := add(v6, v7)
         let v8 := v24
         v2 := v8
-        let t35 := mload(add(p0, 64))
-        let v25 := t35
+        let t34 := mload(add(p0, 64))
+        let v25 := t34
         let v26 := iszero(iszero(lt(v2, v25)))
         let v11 := iszero(iszero(v26))
         if iszero(iszero(v11)) {
@@ -8500,8 +8660,8 @@ object "CoolCoin" {
           }
           if iszero(iszero(iszero(v13))) {
             let v18 := p0
-            let t36 := mload(add(p0, 64))
-            let v19 := t36
+            let t35 := mload(add(p0, 64))
+            let v19 := t35
             let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_90b5(v18, v19)
             let v20 := v31
             let v3 := v20
@@ -8522,17 +8682,11 @@ object "CoolCoin" {
         let v6 := t33
         let v23 := 0x20
         let v7 := v23
-        let t34 := add(v6, v7)
-        if lt(t34, v6) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v24 := t34
+        let v24 := add(v6, v7)
         let v8 := v24
         v2 := v8
-        let t35 := mload(add(p0, 64))
-        let v25 := t35
+        let t34 := mload(add(p0, 64))
+        let v25 := t34
         let v26 := iszero(iszero(lt(v2, v25)))
         let v11 := iszero(iszero(v26))
         if iszero(iszero(v11)) {
@@ -8555,8 +8709,8 @@ object "CoolCoin" {
           }
           if iszero(iszero(iszero(v13))) {
             let v18 := p0
-            let t36 := mload(add(p0, 64))
-            let v19 := t36
+            let t35 := mload(add(p0, 64))
+            let v19 := t35
             let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_a844(v18, v19)
             let v20 := v31
             let v3 := v20
@@ -8577,17 +8731,11 @@ object "CoolCoin" {
         let v6 := t33
         let v23 := 0x20
         let v7 := v23
-        let t34 := add(v6, v7)
-        if lt(t34, v6) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v24 := t34
+        let v24 := add(v6, v7)
         let v8 := v24
         v2 := v8
-        let t35 := mload(add(p0, 64))
-        let v25 := t35
+        let t34 := mload(add(p0, 64))
+        let v25 := t34
         let v26 := iszero(iszero(lt(v2, v25)))
         let v11 := iszero(iszero(v26))
         if iszero(iszero(v11)) {
@@ -8610,8 +8758,8 @@ object "CoolCoin" {
           }
           if iszero(iszero(iszero(v13))) {
             let v18 := p0
-            let t36 := mload(add(p0, 64))
-            let v19 := t36
+            let t35 := mload(add(p0, 64))
+            let v19 := t35
             let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_dbef(v18, v19)
             let v20 := v31
             let v3 := v20
@@ -8632,17 +8780,11 @@ object "CoolCoin" {
         let v6 := t33
         let v23 := 0x20
         let v7 := v23
-        let t34 := add(v6, v7)
-        if lt(t34, v6) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v24 := t34
+        let v24 := add(v6, v7)
         let v8 := v24
         v2 := v8
-        let t35 := mload(add(p0, 64))
-        let v25 := t35
+        let t34 := mload(add(p0, 64))
+        let v25 := t34
         let v26 := iszero(iszero(lt(v2, v25)))
         let v11 := iszero(iszero(v26))
         if iszero(iszero(v11)) {
@@ -8665,8 +8807,8 @@ object "CoolCoin" {
           }
           if iszero(iszero(iszero(v13))) {
             let v18 := p0
-            let t36 := mload(add(p0, 64))
-            let v19 := t36
+            let t35 := mload(add(p0, 64))
+            let v19 := t35
             let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_5d2f(v18, v19)
             let v20 := v31
             let v3 := v20
@@ -8687,17 +8829,11 @@ object "CoolCoin" {
         let v6 := t33
         let v23 := 0x20
         let v7 := v23
-        let t34 := add(v6, v7)
-        if lt(t34, v6) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v24 := t34
+        let v24 := add(v6, v7)
         let v8 := v24
         v2 := v8
-        let t35 := mload(add(p0, 64))
-        let v25 := t35
+        let t34 := mload(add(p0, 64))
+        let v25 := t34
         let v26 := iszero(iszero(lt(v2, v25)))
         let v11 := iszero(iszero(v26))
         if iszero(iszero(v11)) {
@@ -8720,8 +8856,8 @@ object "CoolCoin" {
           }
           if iszero(iszero(iszero(v13))) {
             let v18 := p0
-            let t36 := mload(add(p0, 64))
-            let v19 := t36
+            let t35 := mload(add(p0, 64))
+            let v19 := t35
             let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_bd7e(v18, v19)
             let v20 := v31
             let v3 := v20
@@ -8742,17 +8878,11 @@ object "CoolCoin" {
         let v6 := t33
         let v23 := 0x20
         let v7 := v23
-        let t34 := add(v6, v7)
-        if lt(t34, v6) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v24 := t34
+        let v24 := add(v6, v7)
         let v8 := v24
         v2 := v8
-        let t35 := mload(add(p0, 64))
-        let v25 := t35
+        let t34 := mload(add(p0, 64))
+        let v25 := t34
         let v26 := iszero(iszero(lt(v2, v25)))
         let v11 := iszero(iszero(v26))
         if iszero(iszero(v11)) {
@@ -8775,8 +8905,8 @@ object "CoolCoin" {
           }
           if iszero(iszero(iszero(v13))) {
             let v18 := p0
-            let t36 := mload(add(p0, 64))
-            let v19 := t36
+            let t35 := mload(add(p0, 64))
+            let v19 := t35
             let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_3e3b(v18, v19)
             let v20 := v31
             let v3 := v20
@@ -8797,17 +8927,11 @@ object "CoolCoin" {
         let v6 := t33
         let v23 := 0x20
         let v7 := v23
-        let t34 := add(v6, v7)
-        if lt(t34, v6) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v24 := t34
+        let v24 := add(v6, v7)
         let v8 := v24
         v2 := v8
-        let t35 := mload(add(p0, 64))
-        let v25 := t35
+        let t34 := mload(add(p0, 64))
+        let v25 := t34
         let v26 := iszero(iszero(lt(v2, v25)))
         let v11 := iszero(iszero(v26))
         if iszero(iszero(v11)) {
@@ -8830,8 +8954,8 @@ object "CoolCoin" {
           }
           if iszero(iszero(iszero(v13))) {
             let v18 := p0
-            let t36 := mload(add(p0, 64))
-            let v19 := t36
+            let t35 := mload(add(p0, 64))
+            let v19 := t35
             let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_47bf(v18, v19)
             let v20 := v31
             let v3 := v20
@@ -8852,17 +8976,11 @@ object "CoolCoin" {
         let v6 := t33
         let v23 := 0x20
         let v7 := v23
-        let t34 := add(v6, v7)
-        if lt(t34, v6) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v24 := t34
+        let v24 := add(v6, v7)
         let v8 := v24
         v2 := v8
-        let t35 := mload(add(p0, 64))
-        let v25 := t35
+        let t34 := mload(add(p0, 64))
+        let v25 := t34
         let v26 := iszero(iszero(lt(v2, v25)))
         let v11 := iszero(iszero(v26))
         if iszero(iszero(v11)) {
@@ -8885,8 +9003,8 @@ object "CoolCoin" {
           }
           if iszero(iszero(iszero(v13))) {
             let v18 := p0
-            let t36 := mload(add(p0, 64))
-            let v19 := t36
+            let t35 := mload(add(p0, 64))
+            let v19 := t35
             let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_f4a7(v18, v19)
             let v20 := v31
             let v3 := v20
@@ -8907,17 +9025,11 @@ object "CoolCoin" {
         let v6 := t33
         let v23 := 0x20
         let v7 := v23
-        let t34 := add(v6, v7)
-        if lt(t34, v6) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v24 := t34
+        let v24 := add(v6, v7)
         let v8 := v24
         v2 := v8
-        let t35 := mload(add(p0, 64))
-        let v25 := t35
+        let t34 := mload(add(p0, 64))
+        let v25 := t34
         let v26 := iszero(iszero(lt(v2, v25)))
         let v11 := iszero(iszero(v26))
         if iszero(iszero(v11)) {
@@ -8940,8 +9052,8 @@ object "CoolCoin" {
           }
           if iszero(iszero(iszero(v13))) {
             let v18 := p0
-            let t36 := mload(add(p0, 64))
-            let v19 := t36
+            let t35 := mload(add(p0, 64))
+            let v19 := t35
             let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_71ef(v18, v19)
             let v20 := v31
             let v3 := v20
@@ -8962,17 +9074,11 @@ object "CoolCoin" {
         let v6 := t33
         let v23 := 0x20
         let v7 := v23
-        let t34 := add(v6, v7)
-        if lt(t34, v6) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v24 := t34
+        let v24 := add(v6, v7)
         let v8 := v24
         v2 := v8
-        let t35 := mload(add(p0, 64))
-        let v25 := t35
+        let t34 := mload(add(p0, 64))
+        let v25 := t34
         let v26 := iszero(iszero(lt(v2, v25)))
         let v11 := iszero(iszero(v26))
         if iszero(iszero(v11)) {
@@ -8995,8 +9101,8 @@ object "CoolCoin" {
           }
           if iszero(iszero(iszero(v13))) {
             let v18 := p0
-            let t36 := mload(add(p0, 64))
-            let v19 := t36
+            let t35 := mload(add(p0, 64))
+            let v19 := t35
             let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_10fb(v18, v19)
             let v20 := v31
             let v3 := v20
@@ -9017,17 +9123,11 @@ object "CoolCoin" {
         let v6 := t33
         let v23 := 0x20
         let v7 := v23
-        let t34 := add(v6, v7)
-        if lt(t34, v6) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v24 := t34
+        let v24 := add(v6, v7)
         let v8 := v24
         v2 := v8
-        let t35 := mload(add(p0, 64))
-        let v25 := t35
+        let t34 := mload(add(p0, 64))
+        let v25 := t34
         let v26 := iszero(iszero(lt(v2, v25)))
         let v11 := iszero(iszero(v26))
         if iszero(iszero(v11)) {
@@ -9050,8 +9150,8 @@ object "CoolCoin" {
           }
           if iszero(iszero(iszero(v13))) {
             let v18 := p0
-            let t36 := mload(add(p0, 64))
-            let v19 := t36
+            let t35 := mload(add(p0, 64))
+            let v19 := t35
             let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_63c2(v18, v19)
             let v20 := v31
             let v3 := v20
@@ -9072,17 +9172,11 @@ object "CoolCoin" {
         let v6 := t33
         let v23 := 0x20
         let v7 := v23
-        let t34 := add(v6, v7)
-        if lt(t34, v6) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v24 := t34
+        let v24 := add(v6, v7)
         let v8 := v24
         v2 := v8
-        let t35 := mload(add(p0, 64))
-        let v25 := t35
+        let t34 := mload(add(p0, 64))
+        let v25 := t34
         let v26 := iszero(iszero(lt(v2, v25)))
         let v11 := iszero(iszero(v26))
         if iszero(iszero(v11)) {
@@ -9105,8 +9199,8 @@ object "CoolCoin" {
           }
           if iszero(iszero(iszero(v13))) {
             let v18 := p0
-            let t36 := mload(add(p0, 64))
-            let v19 := t36
+            let t35 := mload(add(p0, 64))
+            let v19 := t35
             let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_348a(v18, v19)
             let v20 := v31
             let v3 := v20
@@ -9127,17 +9221,11 @@ object "CoolCoin" {
         let v6 := t33
         let v23 := 0x20
         let v7 := v23
-        let t34 := add(v6, v7)
-        if lt(t34, v6) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v24 := t34
+        let v24 := add(v6, v7)
         let v8 := v24
         v2 := v8
-        let t35 := mload(add(p0, 64))
-        let v25 := t35
+        let t34 := mload(add(p0, 64))
+        let v25 := t34
         let v26 := iszero(iszero(lt(v2, v25)))
         let v11 := iszero(iszero(v26))
         if iszero(iszero(v11)) {
@@ -9160,8 +9248,8 @@ object "CoolCoin" {
           }
           if iszero(iszero(iszero(v13))) {
             let v18 := p0
-            let t36 := mload(add(p0, 64))
-            let v19 := t36
+            let t35 := mload(add(p0, 64))
+            let v19 := t35
             let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_4b4e(v18, v19)
             let v20 := v31
             let v3 := v20
@@ -9182,17 +9270,11 @@ object "CoolCoin" {
         let v6 := t33
         let v23 := 0x20
         let v7 := v23
-        let t34 := add(v6, v7)
-        if lt(t34, v6) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v24 := t34
+        let v24 := add(v6, v7)
         let v8 := v24
         v2 := v8
-        let t35 := mload(add(p0, 64))
-        let v25 := t35
+        let t34 := mload(add(p0, 64))
+        let v25 := t34
         let v26 := iszero(iszero(lt(v2, v25)))
         let v11 := iszero(iszero(v26))
         if iszero(iszero(v11)) {
@@ -9215,8 +9297,8 @@ object "CoolCoin" {
           }
           if iszero(iszero(iszero(v13))) {
             let v18 := p0
-            let t36 := mload(add(p0, 64))
-            let v19 := t36
+            let t35 := mload(add(p0, 64))
+            let v19 := t35
             let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_ece9(v18, v19)
             let v20 := v31
             let v3 := v20
@@ -9237,17 +9319,11 @@ object "CoolCoin" {
         let v6 := t33
         let v23 := 0x20
         let v7 := v23
-        let t34 := add(v6, v7)
-        if lt(t34, v6) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v24 := t34
+        let v24 := add(v6, v7)
         let v8 := v24
         v2 := v8
-        let t35 := mload(add(p0, 64))
-        let v25 := t35
+        let t34 := mload(add(p0, 64))
+        let v25 := t34
         let v26 := iszero(iszero(lt(v2, v25)))
         let v11 := iszero(iszero(v26))
         if iszero(iszero(v11)) {
@@ -9270,8 +9346,8 @@ object "CoolCoin" {
           }
           if iszero(iszero(iszero(v13))) {
             let v18 := p0
-            let t36 := mload(add(p0, 64))
-            let v19 := t36
+            let t35 := mload(add(p0, 64))
+            let v19 := t35
             let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_2fc3(v18, v19)
             let v20 := v31
             let v3 := v20
@@ -9292,17 +9368,11 @@ object "CoolCoin" {
         let v6 := t33
         let v23 := 0x20
         let v7 := v23
-        let t34 := add(v6, v7)
-        if lt(t34, v6) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v24 := t34
+        let v24 := add(v6, v7)
         let v8 := v24
         v2 := v8
-        let t35 := mload(add(p0, 64))
-        let v25 := t35
+        let t34 := mload(add(p0, 64))
+        let v25 := t34
         let v26 := iszero(iszero(lt(v2, v25)))
         let v11 := iszero(iszero(v26))
         if iszero(iszero(v11)) {
@@ -9325,8 +9395,8 @@ object "CoolCoin" {
           }
           if iszero(iszero(iszero(v13))) {
             let v18 := p0
-            let t36 := mload(add(p0, 64))
-            let v19 := t36
+            let t35 := mload(add(p0, 64))
+            let v19 := t35
             let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_6fee(v18, v19)
             let v20 := v31
             let v3 := v20
@@ -9347,17 +9417,11 @@ object "CoolCoin" {
         let v6 := t33
         let v23 := 0x20
         let v7 := v23
-        let t34 := add(v6, v7)
-        if lt(t34, v6) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v24 := t34
+        let v24 := add(v6, v7)
         let v8 := v24
         v2 := v8
-        let t35 := mload(add(p0, 64))
-        let v25 := t35
+        let t34 := mload(add(p0, 64))
+        let v25 := t34
         let v26 := iszero(iszero(lt(v2, v25)))
         let v11 := iszero(iszero(v26))
         if iszero(iszero(v11)) {
@@ -9380,8 +9444,8 @@ object "CoolCoin" {
           }
           if iszero(iszero(iszero(v13))) {
             let v18 := p0
-            let t36 := mload(add(p0, 64))
-            let v19 := t36
+            let t35 := mload(add(p0, 64))
+            let v19 := t35
             let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_c1bd(v18, v19)
             let v20 := v31
             let v3 := v20
@@ -9402,17 +9466,11 @@ object "CoolCoin" {
         let v6 := t33
         let v23 := 0x20
         let v7 := v23
-        let t34 := add(v6, v7)
-        if lt(t34, v6) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v24 := t34
+        let v24 := add(v6, v7)
         let v8 := v24
         v2 := v8
-        let t35 := mload(add(p0, 64))
-        let v25 := t35
+        let t34 := mload(add(p0, 64))
+        let v25 := t34
         let v26 := iszero(iszero(lt(v2, v25)))
         let v11 := iszero(iszero(v26))
         if iszero(iszero(v11)) {
@@ -9435,8 +9493,8 @@ object "CoolCoin" {
           }
           if iszero(iszero(iszero(v13))) {
             let v18 := p0
-            let t36 := mload(add(p0, 64))
-            let v19 := t36
+            let t35 := mload(add(p0, 64))
+            let v19 := t35
             let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_2cc5(v18, v19)
             let v20 := v31
             let v3 := v20
@@ -9457,17 +9515,11 @@ object "CoolCoin" {
         let v6 := t33
         let v23 := 0x20
         let v7 := v23
-        let t34 := add(v6, v7)
-        if lt(t34, v6) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v24 := t34
+        let v24 := add(v6, v7)
         let v8 := v24
         v2 := v8
-        let t35 := mload(add(p0, 64))
-        let v25 := t35
+        let t34 := mload(add(p0, 64))
+        let v25 := t34
         let v26 := iszero(iszero(lt(v2, v25)))
         let v11 := iszero(iszero(v26))
         if iszero(iszero(v11)) {
@@ -9490,8 +9542,8 @@ object "CoolCoin" {
           }
           if iszero(iszero(iszero(v13))) {
             let v18 := p0
-            let t36 := mload(add(p0, 64))
-            let v19 := t36
+            let t35 := mload(add(p0, 64))
+            let v19 := t35
             let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_7f9b(v18, v19)
             let v20 := v31
             let v3 := v20
@@ -9512,17 +9564,11 @@ object "CoolCoin" {
         let v6 := t33
         let v23 := 0x20
         let v7 := v23
-        let t34 := add(v6, v7)
-        if lt(t34, v6) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v24 := t34
+        let v24 := add(v6, v7)
         let v8 := v24
         v2 := v8
-        let t35 := mload(add(p0, 64))
-        let v25 := t35
+        let t34 := mload(add(p0, 64))
+        let v25 := t34
         let v26 := iszero(iszero(lt(v2, v25)))
         let v11 := iszero(iszero(v26))
         if iszero(iszero(v11)) {
@@ -9545,8 +9591,8 @@ object "CoolCoin" {
           }
           if iszero(iszero(iszero(v13))) {
             let v18 := p0
-            let t36 := mload(add(p0, 64))
-            let v19 := t36
+            let t35 := mload(add(p0, 64))
+            let v19 := t35
             let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_091f(v18, v19)
             let v20 := v31
             let v3 := v20
@@ -9567,17 +9613,11 @@ object "CoolCoin" {
         let v6 := t33
         let v23 := 0x20
         let v7 := v23
-        let t34 := add(v6, v7)
-        if lt(t34, v6) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v24 := t34
+        let v24 := add(v6, v7)
         let v8 := v24
         v2 := v8
-        let t35 := mload(add(p0, 64))
-        let v25 := t35
+        let t34 := mload(add(p0, 64))
+        let v25 := t34
         let v26 := iszero(iszero(lt(v2, v25)))
         let v11 := iszero(iszero(v26))
         if iszero(iszero(v11)) {
@@ -9600,8 +9640,8 @@ object "CoolCoin" {
           }
           if iszero(iszero(iszero(v13))) {
             let v18 := p0
-            let t36 := mload(add(p0, 64))
-            let v19 := t36
+            let t35 := mload(add(p0, 64))
+            let v19 := t35
             let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_aab1(v18, v19)
             let v20 := v31
             let v3 := v20
@@ -9622,17 +9662,11 @@ object "CoolCoin" {
         let v6 := t33
         let v23 := 0x20
         let v7 := v23
-        let t34 := add(v6, v7)
-        if lt(t34, v6) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v24 := t34
+        let v24 := add(v6, v7)
         let v8 := v24
         v2 := v8
-        let t35 := mload(add(p0, 64))
-        let v25 := t35
+        let t34 := mload(add(p0, 64))
+        let v25 := t34
         let v26 := iszero(iszero(lt(v2, v25)))
         let v11 := iszero(iszero(v26))
         if iszero(iszero(v11)) {
@@ -9655,8 +9689,8 @@ object "CoolCoin" {
           }
           if iszero(iszero(iszero(v13))) {
             let v18 := p0
-            let t36 := mload(add(p0, 64))
-            let v19 := t36
+            let t35 := mload(add(p0, 64))
+            let v19 := t35
             let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_8e1e(v18, v19)
             let v20 := v31
             let v3 := v20
@@ -9677,17 +9711,11 @@ object "CoolCoin" {
         let v6 := t33
         let v23 := 0x20
         let v7 := v23
-        let t34 := add(v6, v7)
-        if lt(t34, v6) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v24 := t34
+        let v24 := add(v6, v7)
         let v8 := v24
         v2 := v8
-        let t35 := mload(add(p0, 64))
-        let v25 := t35
+        let t34 := mload(add(p0, 64))
+        let v25 := t34
         let v26 := iszero(iszero(lt(v2, v25)))
         let v11 := iszero(iszero(v26))
         if iszero(iszero(v11)) {
@@ -9710,8 +9738,8 @@ object "CoolCoin" {
           }
           if iszero(iszero(iszero(v13))) {
             let v18 := p0
-            let t36 := mload(add(p0, 64))
-            let v19 := t36
+            let t35 := mload(add(p0, 64))
+            let v19 := t35
             let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_0ddd(v18, v19)
             let v20 := v31
             let v3 := v20
@@ -9732,17 +9760,11 @@ object "CoolCoin" {
         let v6 := t33
         let v23 := 0x20
         let v7 := v23
-        let t34 := add(v6, v7)
-        if lt(t34, v6) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v24 := t34
+        let v24 := add(v6, v7)
         let v8 := v24
         v2 := v8
-        let t35 := mload(add(p0, 64))
-        let v25 := t35
+        let t34 := mload(add(p0, 64))
+        let v25 := t34
         let v26 := iszero(iszero(lt(v2, v25)))
         let v11 := iszero(iszero(v26))
         if iszero(iszero(v11)) {
@@ -9765,8 +9787,8 @@ object "CoolCoin" {
           }
           if iszero(iszero(iszero(v13))) {
             let v18 := p0
-            let t36 := mload(add(p0, 64))
-            let v19 := t36
+            let t35 := mload(add(p0, 64))
+            let v19 := t35
             let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_de6a(v18, v19)
             let v20 := v31
             let v3 := v20
@@ -9787,17 +9809,11 @@ object "CoolCoin" {
         let v6 := t33
         let v23 := 0x20
         let v7 := v23
-        let t34 := add(v6, v7)
-        if lt(t34, v6) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v24 := t34
+        let v24 := add(v6, v7)
         let v8 := v24
         v2 := v8
-        let t35 := mload(add(p0, 64))
-        let v25 := t35
+        let t34 := mload(add(p0, 64))
+        let v25 := t34
         let v26 := iszero(iszero(lt(v2, v25)))
         let v11 := iszero(iszero(v26))
         if iszero(iszero(v11)) {
@@ -9820,8 +9836,8 @@ object "CoolCoin" {
           }
           if iszero(iszero(iszero(v13))) {
             let v18 := p0
-            let t36 := mload(add(p0, 64))
-            let v19 := t36
+            let t35 := mload(add(p0, 64))
+            let v19 := t35
             let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_142c(v18, v19)
             let v20 := v31
             let v3 := v20
@@ -9842,17 +9858,11 @@ object "CoolCoin" {
         let v6 := t33
         let v23 := 0x20
         let v7 := v23
-        let t34 := add(v6, v7)
-        if lt(t34, v6) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v24 := t34
+        let v24 := add(v6, v7)
         let v8 := v24
         v2 := v8
-        let t35 := mload(add(p0, 64))
-        let v25 := t35
+        let t34 := mload(add(p0, 64))
+        let v25 := t34
         let v26 := iszero(iszero(lt(v2, v25)))
         let v11 := iszero(iszero(v26))
         if iszero(iszero(v11)) {
@@ -9875,8 +9885,8 @@ object "CoolCoin" {
           }
           if iszero(iszero(iszero(v13))) {
             let v18 := p0
-            let t36 := mload(add(p0, 64))
-            let v19 := t36
+            let t35 := mload(add(p0, 64))
+            let v19 := t35
             let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_f768(v18, v19)
             let v20 := v31
             let v3 := v20
@@ -9897,17 +9907,11 @@ object "CoolCoin" {
         let v6 := t33
         let v23 := 0x20
         let v7 := v23
-        let t34 := add(v6, v7)
-        if lt(t34, v6) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v24 := t34
+        let v24 := add(v6, v7)
         let v8 := v24
         v2 := v8
-        let t35 := mload(add(p0, 64))
-        let v25 := t35
+        let t34 := mload(add(p0, 64))
+        let v25 := t34
         let v26 := iszero(iszero(lt(v2, v25)))
         let v11 := iszero(iszero(v26))
         if iszero(iszero(v11)) {
@@ -9930,8 +9934,8 @@ object "CoolCoin" {
           }
           if iszero(iszero(iszero(v13))) {
             let v18 := p0
-            let t36 := mload(add(p0, 64))
-            let v19 := t36
+            let t35 := mload(add(p0, 64))
+            let v19 := t35
             let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_a988(v18, v19)
             let v20 := v31
             let v3 := v20
@@ -9952,17 +9956,11 @@ object "CoolCoin" {
         let v6 := t33
         let v23 := 0x20
         let v7 := v23
-        let t34 := add(v6, v7)
-        if lt(t34, v6) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v24 := t34
+        let v24 := add(v6, v7)
         let v8 := v24
         v2 := v8
-        let t35 := mload(add(p0, 64))
-        let v25 := t35
+        let t34 := mload(add(p0, 64))
+        let v25 := t34
         let v26 := iszero(iszero(lt(v2, v25)))
         let v11 := iszero(iszero(v26))
         if iszero(iszero(v11)) {
@@ -9985,8 +9983,8 @@ object "CoolCoin" {
           }
           if iszero(iszero(iszero(v13))) {
             let v18 := p0
-            let t36 := mload(add(p0, 64))
-            let v19 := t36
+            let t35 := mload(add(p0, 64))
+            let v19 := t35
             let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_3283(v18, v19)
             let v20 := v31
             let v3 := v20
@@ -10007,17 +10005,11 @@ object "CoolCoin" {
         let v6 := t33
         let v23 := 0x20
         let v7 := v23
-        let t34 := add(v6, v7)
-        if lt(t34, v6) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v24 := t34
+        let v24 := add(v6, v7)
         let v8 := v24
         v2 := v8
-        let t35 := mload(add(p0, 64))
-        let v25 := t35
+        let t34 := mload(add(p0, 64))
+        let v25 := t34
         let v26 := iszero(iszero(lt(v2, v25)))
         let v11 := iszero(iszero(v26))
         if iszero(iszero(v11)) {
@@ -10040,8 +10032,8 @@ object "CoolCoin" {
           }
           if iszero(iszero(iszero(v13))) {
             let v18 := p0
-            let t36 := mload(add(p0, 64))
-            let v19 := t36
+            let t35 := mload(add(p0, 64))
+            let v19 := t35
             let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_8ac3(v18, v19)
             let v20 := v31
             let v3 := v20
@@ -10062,17 +10054,11 @@ object "CoolCoin" {
         let v6 := t33
         let v23 := 0x20
         let v7 := v23
-        let t34 := add(v6, v7)
-        if lt(t34, v6) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v24 := t34
+        let v24 := add(v6, v7)
         let v8 := v24
         v2 := v8
-        let t35 := mload(add(p0, 64))
-        let v25 := t35
+        let t34 := mload(add(p0, 64))
+        let v25 := t34
         let v26 := iszero(iszero(lt(v2, v25)))
         let v11 := iszero(iszero(v26))
         if iszero(iszero(v11)) {
@@ -10095,8 +10081,8 @@ object "CoolCoin" {
           }
           if iszero(iszero(iszero(v13))) {
             let v18 := p0
-            let t36 := mload(add(p0, 64))
-            let v19 := t36
+            let t35 := mload(add(p0, 64))
+            let v19 := t35
             let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_9d5e(v18, v19)
             let v20 := v31
             let v3 := v20
@@ -10117,17 +10103,11 @@ object "CoolCoin" {
         let v6 := t33
         let v23 := 0x20
         let v7 := v23
-        let t34 := add(v6, v7)
-        if lt(t34, v6) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v24 := t34
+        let v24 := add(v6, v7)
         let v8 := v24
         v2 := v8
-        let t35 := mload(add(p0, 64))
-        let v25 := t35
+        let t34 := mload(add(p0, 64))
+        let v25 := t34
         let v26 := iszero(iszero(lt(v2, v25)))
         let v11 := iszero(iszero(v26))
         if iszero(iszero(v11)) {
@@ -10150,8 +10130,8 @@ object "CoolCoin" {
           }
           if iszero(iszero(iszero(v13))) {
             let v18 := p0
-            let t36 := mload(add(p0, 64))
-            let v19 := t36
+            let t35 := mload(add(p0, 64))
+            let v19 := t35
             let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_5ebd(v18, v19)
             let v20 := v31
             let v3 := v20
@@ -10172,17 +10152,11 @@ object "CoolCoin" {
         let v6 := t33
         let v23 := 0x20
         let v7 := v23
-        let t34 := add(v6, v7)
-        if lt(t34, v6) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v24 := t34
+        let v24 := add(v6, v7)
         let v8 := v24
         v2 := v8
-        let t35 := mload(add(p0, 64))
-        let v25 := t35
+        let t34 := mload(add(p0, 64))
+        let v25 := t34
         let v26 := iszero(iszero(lt(v2, v25)))
         let v11 := iszero(iszero(v26))
         if iszero(iszero(v11)) {
@@ -10205,8 +10179,8 @@ object "CoolCoin" {
           }
           if iszero(iszero(iszero(v13))) {
             let v18 := p0
-            let t36 := mload(add(p0, 64))
-            let v19 := t36
+            let t35 := mload(add(p0, 64))
+            let v19 := t35
             let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_41fc(v18, v19)
             let v20 := v31
             let v3 := v20
@@ -11317,6 +11291,48 @@ object "CoolCoin" {
         let v23 := keccak256(v2, v11)
         let v12 := v23
         ret := v12
+        leave
+      }
+      function $std$lib$abi$sol$impl_trait$Sol$1f5f$store_word_2361(p0, p1) {
+        let v2 := p0
+        let v3 := p1
+        mstore(v2, v3)
+        leave
+      }
+      function $store_word_arg1_root_stor(p0, p1) {
+        let v2 := p0
+        let v3 := p1
+        mstore(v2, v3)
+        leave
+      }
+      function $std$lib$abi$sol$impl_trait$Sol$1f5f$store_word_2c7e(p0, p1) {
+        let v2 := p0
+        let v3 := p1
+        mstore(v2, v3)
+        leave
+      }
+      function $std$lib$abi$sol$impl_trait$Sol$1f5f$store_word_be96(p0, p1) {
+        let v2 := p0
+        let v3 := p1
+        mstore(v2, v3)
+        leave
+      }
+      function $std$lib$abi$sol$impl_trait$Sol$1f5f$store_word_eec3_0(p0, p1) {
+        let v2 := p0
+        let v3 := p1
+        mstore(v2, v3)
+        leave
+      }
+      function $std$lib$abi$sol$impl_trait$Sol$1f5f$store_word_eec3(p0, p1) {
+        let v2 := p0
+        let v3 := p1
+        mstore(v2, v3)
+        leave
+      }
+      function $std$lib$abi$sol$impl_trait$Sol$1f5f$store_word_eec3_1(p0, p1) {
+        let v2 := p0
+        let v3 := p1
+        mstore(v2, v3)
         leave
       }
       function $std$lib$evm$word$impl_trait$u256$1f9e$to_word_05d2_0(p0) -> ret {

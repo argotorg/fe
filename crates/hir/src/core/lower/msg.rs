@@ -7,7 +7,7 @@ use super::{attr::named_attr_specs, hir_builder::HirBuilder};
 use crate::{
     HirDb, SelectorError, SelectorErrorKind,
     hir_def::{
-        ArithBinOp, AssocConstDef, AttrListId, BinOp, Body, BodyKind, Expr, FieldDef,
+        ArithBinOp, AssocConstDef, AttrListId, BinOp, Body, BodyKind, CompBinOp, Expr, FieldDef,
         FieldDefListId, FieldIndex, FuncModifiers, FuncParam, FuncParamMode, FuncParamName,
         IdentId, ImplTrait, IntegerId, LitKind, LogicalBinOp, Mod, Partial, Pat, PathId, PathKind,
         Stmt, Struct, TrackedItemVariant, TraitRefId, TupleTypeId, TypeId, TypeKind, Visibility,
@@ -124,6 +124,7 @@ fn lower_msg_variant_encode_decode_impls<'db>(
     lower_msg_variant_abi_size_impl(builder, variant, struct_);
     lower_msg_variant_encode_impl(builder, variant, struct_);
     lower_msg_variant_decode_trait_impl(builder, variant, struct_);
+    lower_msg_variant_abi_validate_impl(builder, variant, struct_);
 }
 
 fn lower_msg_variant_abi_size_impl<'db>(
@@ -650,6 +651,138 @@ fn lower_msg_variant_decode_trait_impl<'db>(
                     body.decode_into(name, ty, d_ty);
                 }
                 body.return_record_self(&field_names);
+            },
+        );
+    })
+}
+
+fn lower_msg_variant_abi_validate_impl<'db>(
+    builder: &mut HirBuilder<'_, 'db, MsgDesugared>,
+    variant: &ast::MsgVariant,
+    struct_: Struct<'db>,
+) -> ImplTrait<'db> {
+    let db = builder.db();
+    let fields = lower_msg_variant_field_specs(builder.ctxt(), variant);
+
+    let trait_ref = builder.core_abi_trait_ref_sol("AbiValidate");
+    let ty = variant_struct_ty(db, struct_);
+
+    builder.impl_trait(trait_ref, ty, |builder| {
+        let byte_input_trait_path = PathId::from_ident(db, builder.roots().core)
+            .push_str(db, "abi")
+            .push_str(db, "ByteInput");
+        let byte_input_trait_ref = TraitRefId::new(db, Partial::Present(byte_input_trait_path));
+        let (i_generic_params, i_ty) =
+            builder.type_param_with_trait_bound("I", byte_input_trait_ref);
+
+        let input_ident = builder.ident("input");
+        let base_ident = builder.ident("base");
+        let pos_ident = builder.ident("pos");
+
+        let u256_ty = builder.ty_ident(builder.ident("u256"));
+        let params = builder.params([
+            FuncParam {
+                mode: FuncParamMode::View,
+                is_mut: false,
+                has_ref_prefix: false,
+                has_own_prefix: false,
+                is_label_suppressed: true,
+                name: Partial::Present(FuncParamName::Ident(input_ident)),
+                ty: Partial::Present(i_ty),
+                self_ty_fallback: false,
+            },
+            FuncParam {
+                mode: FuncParamMode::View,
+                is_mut: false,
+                has_ref_prefix: false,
+                has_own_prefix: false,
+                is_label_suppressed: false,
+                name: Partial::Present(FuncParamName::Ident(base_ident)),
+                ty: Partial::Present(u256_ty),
+                self_ty_fallback: false,
+            },
+            FuncParam {
+                mode: FuncParamMode::View,
+                is_mut: false,
+                has_ref_prefix: false,
+                has_own_prefix: false,
+                is_label_suppressed: false,
+                name: Partial::Present(FuncParamName::Ident(pos_ident)),
+                ty: Partial::Present(u256_ty),
+                self_ty_fallback: false,
+            },
+        ]);
+
+        builder.func_generic(
+            "validate_end",
+            i_generic_params,
+            params,
+            Some(u256_ty),
+            FuncModifiers::new(Visibility::Private, false, false, false),
+            |body| {
+                let db = body.db();
+                let base = body.ident_expr(base_ident);
+                body.emit_expr_stmt(base);
+
+                let input = body.ident_expr(input_ident);
+                let pos = body.ident_expr(pos_ident);
+
+                if fields.is_empty() {
+                    body.emit_return(Some(pos));
+                    return;
+                }
+
+                let head_pos_ident = IdentId::new(db, "head_pos".to_string());
+                let end_ident = IdentId::new(db, "end".to_string());
+                let bind = |body: &mut super::hir_builder::BodyBuilder<'_, 'db, MsgDesugared>,
+                            ident: IdentId<'db>,
+                            expr: crate::hir_def::ExprId| {
+                    let pat = body.push_pat(Pat::Path(
+                        Partial::Present(PathId::from_ident(db, ident)),
+                        false,
+                    ));
+                    body.emit_stmt(Stmt::Let(pat, None, Some(expr)));
+                };
+
+                bind(body, head_pos_ident, pos);
+                bind(body, end_ident, pos);
+
+                // For static-only variants, `IS_DYNAMIC` is false at compile-time.
+                // Use it to prune max(end, head_end) bookkeeping from passthrough validation.
+                let is_dynamic_ident = IdentId::new(db, "is_dynamic".to_string());
+                let is_dynamic_expr = body.abi_size_assoc_expr(ty, "IS_DYNAMIC");
+                bind(body, is_dynamic_ident, is_dynamic_expr);
+
+                for (idx, (_name, field_ty)) in fields.iter().copied().enumerate() {
+                    let head_pos = body.ident_expr(head_pos_ident);
+                    let field_end =
+                        body.abi_field_validate_end_expr(field_ty, i_ty, input, pos, head_pos);
+                    let field_end_ident = IdentId::new(db, format!("field_end_{idx}"));
+                    bind(body, field_end_ident, field_end);
+
+                    let end = body.ident_expr(end_ident);
+                    let field_end = body.ident_expr(field_end_ident);
+                    let cond =
+                        body.push_expr(Expr::Bin(field_end, end, BinOp::Comp(CompBinOp::Gt)));
+                    let max_end = body.if_expr(cond, field_end, end);
+                    let is_dynamic = body.ident_expr(is_dynamic_ident);
+                    let next_end = body.if_expr(is_dynamic, max_end, end);
+                    bind(body, end_ident, next_end);
+
+                    let head_pos = body.ident_expr(head_pos_ident);
+                    let slot = body.abi_field_head_size_expr(field_ty);
+                    let next_head_pos =
+                        body.push_expr(Expr::Bin(head_pos, slot, BinOp::Arith(ArithBinOp::Add)));
+                    bind(body, head_pos_ident, next_head_pos);
+                }
+
+                let end = body.ident_expr(end_ident);
+                let head_pos = body.ident_expr(head_pos_ident);
+                let cond = body.push_expr(Expr::Bin(head_pos, end, BinOp::Comp(CompBinOp::Gt)));
+                let ret_dynamic = body.if_expr(cond, head_pos, end);
+                let is_dynamic = body.ident_expr(is_dynamic_ident);
+                let ret = body.if_expr(is_dynamic, ret_dynamic, head_pos);
+                body.emit_return(Some(ret));
             },
         );
     })

@@ -242,17 +242,11 @@ object "Child" {
       let v6 := t33
       let v23 := 0x20
       let v7 := v23
-      let t34 := add(v6, v7)
-      if lt(t34, v6) {
-        mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-        mstore(4, 0x11)
-        revert(0, 36)
-      }
-      let v24 := t34
+      let v24 := add(v6, v7)
       let v8 := v24
       v2 := v8
-      let t35 := mload(add(p0, 64))
-      let v25 := t35
+      let t34 := mload(add(p0, 64))
+      let v25 := t34
       let v26 := iszero(iszero(lt(v2, v25)))
       let v11 := iszero(iszero(v26))
       if iszero(iszero(v11)) {
@@ -275,8 +269,8 @@ object "Child" {
         }
         if iszero(iszero(iszero(v13))) {
           let v18 := p0
-          let t36 := mload(add(p0, 64))
-          let v19 := t36
+          let t35 := mload(add(p0, 64))
+          let v19 := t35
           let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_90b8(v18, v19)
           let v20 := v31
           let v3 := v20
@@ -297,17 +291,11 @@ object "Child" {
       let v6 := t33
       let v23 := 0x20
       let v7 := v23
-      let t34 := add(v6, v7)
-      if lt(t34, v6) {
-        mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-        mstore(4, 0x11)
-        revert(0, 36)
-      }
-      let v24 := t34
+      let v24 := add(v6, v7)
       let v8 := v24
       v2 := v8
-      let t35 := mload(add(p0, 64))
-      let v25 := t35
+      let t34 := mload(add(p0, 64))
+      let v25 := t34
       let v26 := iszero(iszero(lt(v2, v25)))
       let v11 := iszero(iszero(v26))
       if iszero(iszero(v11)) {
@@ -330,8 +318,8 @@ object "Child" {
         }
         if iszero(iszero(iszero(v13))) {
           let v18 := p0
-          let t36 := mload(add(p0, 64))
-          let v19 := t36
+          let t35 := mload(add(p0, 64))
+          let v19 := t35
           let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_1b26(v18, v19)
           let v20 := v31
           let v3 := v20
@@ -395,9 +383,6 @@ object "Child" {
         let v0 := 0
         v0 := 0
         let v1 := shr(224, calldataload(0))
-        switch and(v1, 0xffffffff)
-        default {
-        }
         revert(v0, v0)
       }
       $contract_runtime_root_Child()
@@ -685,19 +670,32 @@ object "Factory" {
       }
       function $contract_runtime_root_Factory() {
         let v0 := 0
+        let v1 := 0
         v0 := 0
-        let v1 := shr(224, calldataload(0))
-        switch and(v1, 0xffffffff)
-        case 0x01 {
+        v1 := shr(224, calldataload(0))
+        let v2 := 0x01
+        let v3 := iszero(iszero(iszero(gt(and(v1, 0xffffffff), and(v2, 0xffffffff)))))
+        if iszero(iszero(v3)) {
+          let v4 := 0x01
+          let v5 := iszero(iszero(eq(and(v1, 0xffffffff), and(v4, 0xffffffff))))
+          if iszero(iszero(v5)) {
             $contract_recv_abi_Factory_1()
             invalid()
+          }
+          if iszero(iszero(iszero(v5))) {
+            revert(v0, v0)
+          }
         }
-        case 0x02 {
+        if iszero(iszero(iszero(v3))) {
+          let v6 := 0x02
+          let v7 := iszero(iszero(eq(and(v1, 0xffffffff), and(v6, 0xffffffff))))
+          if iszero(iszero(v7)) {
             $contract_recv_abi_Factory_2()
             invalid()
-        }
-        default {
+          }
+          if iszero(iszero(iszero(v7))) {
             revert(v0, v0)
+          }
         }
       }
       function $copy_words(p0, p1, p2) {
@@ -1456,119 +1454,127 @@ object "Factory" {
         leave
       }
       function $encode_field$g2e64(p0, p1, p2) {
-        let v28 := 0
-        let v8 := iszero(iszero(v28))
-        if iszero(iszero(v8)) {
-          let v29 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$base_0639_0(p1)
-          let v9 := v29
-          let v3 := v9
+        let v38 := 0
+        let v9 := iszero(iszero(v38))
+        if iszero(iszero(v9)) {
+          let v39 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$base_0639_0(p1)
+          let v10 := v39
+          let v3 := v10
           let v4 := p2
-          let v30 := $core$lib$abi$trait$AbiSize$payload_size$ge513_ccad(p0)
-          let v10 := v30
-          let v5 := v10
-          let v11 := v4
-          let t54 := mload(v11)
-          let v31 := t54
-          let t55 := sub(v31, v3)
-          if gt(v3, v31) {
-            mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-            mstore(4, 0x11)
-            revert(0, 36)
-          }
-          let v32 := t55
-          let v12 := v32
-          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$write_word_1f5e(p1, v12)
-          let v35 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$pos_65f2(p1)
-          let v14 := v35
-          let v6 := v14
-          let t56 := mload(v4)
-          let v37 := t56
-          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_base_3f4d(p1, v37)
-          let t57 := mload(v4)
-          let v40 := t57
-          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_863e(p1, v40)
-          let v42 := p1
-          let v17 := v42
-          $impl_trait$u256$encode$g426c(p0, v17)
+          let v40 := $core$lib$abi$trait$AbiSize$payload_size$ge513_ccad(p0)
+          let v11 := v40
+          let v5 := v11
+          let v12 := v4
+          let t72 := mload(v12)
+          let v41 := t72
+          let v42 := sub(v41, v3)
+          let v13 := v42
+          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$write_word_1f5e(p1, v13)
+          let v45 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$pos_65f2(p1)
+          let v15 := v45
+          let v6 := v15
+          let t73 := mload(v4)
+          let v47 := t73
+          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_base_3f4d(p1, v47)
+          let t74 := mload(v4)
+          let v50 := t74
+          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_863e(p1, v50)
+          let v52 := p1
+          let v18 := v52
+          $impl_trait$u256$encode$g426c(p0, v18)
           $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_base_3f4d(p1, v3)
           $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_863e(p1, v6)
-          let v21 := v4
-          let t58 := mload(v21)
-          let v49 := t58
-          let t59 := add(v49, v5)
-          if lt(t59, v49) {
-            mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-            mstore(4, 0x11)
-            revert(0, 36)
-          }
-          let v50 := t59
-          let v22 := v50
-          mstore(p2, v22)
+          let v22 := v4
+          let t75 := mload(v22)
+          let v59 := t75
+          let v60 := add(v59, v5)
+          let v23 := v60
+          mstore(p2, v23)
           leave
         }
-        if iszero(iszero(iszero(v8))) {
-          let v51 := p1
-          let v26 := v51
-          $impl_trait$u256$encode$g426c(p0, v26)
-          leave
+        if iszero(iszero(iszero(v9))) {
+          let v61 := 1
+          let v28 := iszero(iszero(v61))
+          if iszero(iszero(v28)) {
+            let v62 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$pos_65f2(p1)
+            let v29 := v62
+            let v7 := v29
+            $impl_trait$u256$encode_to_ptr$gf13e(p0, v7)
+            let v65 := 0x20
+            let v31 := v65
+            let v66 := add(v7, v31)
+            let v32 := v66
+            $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_863e(p1, v32)
+            leave
+          }
+          if iszero(iszero(iszero(v28))) {
+            let v69 := p1
+            let v36 := v69
+            $impl_trait$u256$encode$g426c(p0, v36)
+            leave
+          }
         }
       }
       function $encode_field$gf6b4(p0, p1, p2) {
-        let v28 := 0
-        let v8 := iszero(iszero(v28))
-        if iszero(iszero(v8)) {
-          let v29 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$base_32b3(p1)
-          let v9 := v29
-          let v3 := v9
+        let v38 := 0
+        let v9 := iszero(iszero(v38))
+        if iszero(iszero(v9)) {
+          let v39 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$base_32b3(p1)
+          let v10 := v39
+          let v3 := v10
           let v4 := p2
-          let v30 := $core$lib$abi$trait$AbiSize$payload_size$g67a8_7f10_0(p0)
-          let v10 := v30
-          let v5 := v10
-          let v11 := v4
-          let t54 := mload(v11)
-          let v31 := t54
-          let t55 := sub(v31, v3)
-          if gt(v3, v31) {
-            mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-            mstore(4, 0x11)
-            revert(0, 36)
-          }
-          let v32 := t55
-          let v12 := v32
-          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$write_word_528a(p1, v12)
-          let v35 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$pos_de88(p1)
-          let v14 := v35
-          let v6 := v14
-          let t56 := mload(v4)
-          let v37 := t56
-          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_base_b006(p1, v37)
-          let t57 := mload(v4)
-          let v40 := t57
-          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_d061(p1, v40)
-          let v42 := p1
-          let v17 := v42
-          $impl_trait$Address$encode$g426c(p0, v17)
+          let v40 := $core$lib$abi$trait$AbiSize$payload_size$g67a8_7f10_0(p0)
+          let v11 := v40
+          let v5 := v11
+          let v12 := v4
+          let t72 := mload(v12)
+          let v41 := t72
+          let v42 := sub(v41, v3)
+          let v13 := v42
+          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$write_word_528a(p1, v13)
+          let v45 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$pos_de88(p1)
+          let v15 := v45
+          let v6 := v15
+          let t73 := mload(v4)
+          let v47 := t73
+          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_base_b006(p1, v47)
+          let t74 := mload(v4)
+          let v50 := t74
+          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_d061(p1, v50)
+          let v52 := p1
+          let v18 := v52
+          $impl_trait$Address$encode$g426c(p0, v18)
           $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_base_b006(p1, v3)
           $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_d061(p1, v6)
-          let v21 := v4
-          let t58 := mload(v21)
-          let v49 := t58
-          let t59 := add(v49, v5)
-          if lt(t59, v49) {
-            mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-            mstore(4, 0x11)
-            revert(0, 36)
-          }
-          let v50 := t59
-          let v22 := v50
-          mstore(p2, v22)
+          let v22 := v4
+          let t75 := mload(v22)
+          let v59 := t75
+          let v60 := add(v59, v5)
+          let v23 := v60
+          mstore(p2, v23)
           leave
         }
-        if iszero(iszero(iszero(v8))) {
-          let v51 := p1
-          let v26 := v51
-          $impl_trait$Address$encode$g426c(p0, v26)
-          leave
+        if iszero(iszero(iszero(v9))) {
+          let v61 := 1
+          let v28 := iszero(iszero(v61))
+          if iszero(iszero(v28)) {
+            let v62 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$pos_de88(p1)
+            let v29 := v62
+            let v7 := v29
+            $impl_trait$Address$encode_to_ptr$gf13e(p0, v7)
+            let v65 := 0x20
+            let v31 := v65
+            let v66 := add(v7, v31)
+            let v32 := v66
+            $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_d061(p1, v32)
+            leave
+          }
+          if iszero(iszero(iszero(v28))) {
+            let v69 := p1
+            let v36 := v69
+            $impl_trait$Address$encode$g426c(p0, v36)
+            leave
+          }
         }
       }
       function $encode_single_root(p0, p1) {
@@ -1576,13 +1582,7 @@ object "Factory" {
         let v3 := v9
         let v10 := 0x20
         let v4 := v10
-        let t16 := add(v3, v4)
-        if lt(t16, v3) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v11 := t16
+        let v11 := add(v3, v4)
         let v5 := v11
         let r2 := mload(0x40)
         if iszero(r2) {
@@ -1621,6 +1621,24 @@ object "Factory" {
         mstore(add(v17, 32), v1)
         let v9 := v17
         ret := v9
+        leave
+      }
+      function $impl_trait$u256$encode_to_ptr$gf13e(p0, p1) {
+        let v2 := p1
+        $std$lib$abi$sol$impl_trait$Sol$1f5f$store_word_bb6a(v2, p0)
+        leave
+      }
+      function $impl_trait$Address$encode_to_ptr$gf13e(p0, p1) {
+        let r0 := mload(0x40)
+        if iszero(r0) {
+          r0 := 0x80
+        }
+        mstore(0x40, add(r0, 32))
+        mstore(r0, p0)
+        let v2 := p1
+        let t7 := mload(r0)
+        let v3 := t7
+        $std$lib$abi$sol$impl_trait$Sol$1f5f$store_word_d9ea(v2, v3)
         leave
       }
       function $std$lib$abi$sol$impl_trait$Sol$1f5f$encoder_new_8751(p0) -> ret {
@@ -1894,17 +1912,11 @@ object "Factory" {
         let v6 := t33
         let v23 := 0x20
         let v7 := v23
-        let t34 := add(v6, v7)
-        if lt(t34, v6) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v24 := t34
+        let v24 := add(v6, v7)
         let v8 := v24
         v2 := v8
-        let t35 := mload(add(p0, 64))
-        let v25 := t35
+        let t34 := mload(add(p0, 64))
+        let v25 := t34
         let v26 := iszero(iszero(lt(v2, v25)))
         let v11 := iszero(iszero(v26))
         if iszero(iszero(v11)) {
@@ -1927,8 +1939,8 @@ object "Factory" {
           }
           if iszero(iszero(iszero(v13))) {
             let v18 := p0
-            let t36 := mload(add(p0, 64))
-            let v19 := t36
+            let t35 := mload(add(p0, 64))
+            let v19 := t35
             let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_a9cc(v18, v19)
             let v20 := v31
             let v3 := v20
@@ -1949,17 +1961,11 @@ object "Factory" {
         let v6 := t33
         let v23 := 0x20
         let v7 := v23
-        let t34 := add(v6, v7)
-        if lt(t34, v6) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v24 := t34
+        let v24 := add(v6, v7)
         let v8 := v24
         v2 := v8
-        let t35 := mload(add(p0, 64))
-        let v25 := t35
+        let t34 := mload(add(p0, 64))
+        let v25 := t34
         let v26 := iszero(iszero(lt(v2, v25)))
         let v11 := iszero(iszero(v26))
         if iszero(iszero(v11)) {
@@ -1982,8 +1988,8 @@ object "Factory" {
           }
           if iszero(iszero(iszero(v13))) {
             let v18 := p0
-            let t36 := mload(add(p0, 64))
-            let v19 := t36
+            let t35 := mload(add(p0, 64))
+            let v19 := t35
             let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_9d90(v18, v19)
             let v20 := v31
             let v3 := v20
@@ -2004,17 +2010,11 @@ object "Factory" {
         let v6 := t33
         let v23 := 0x20
         let v7 := v23
-        let t34 := add(v6, v7)
-        if lt(t34, v6) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v24 := t34
+        let v24 := add(v6, v7)
         let v8 := v24
         v2 := v8
-        let t35 := mload(add(p0, 64))
-        let v25 := t35
+        let t34 := mload(add(p0, 64))
+        let v25 := t34
         let v26 := iszero(iszero(lt(v2, v25)))
         let v11 := iszero(iszero(v26))
         if iszero(iszero(v11)) {
@@ -2037,8 +2037,8 @@ object "Factory" {
           }
           if iszero(iszero(iszero(v13))) {
             let v18 := p0
-            let t36 := mload(add(p0, 64))
-            let v19 := t36
+            let t35 := mload(add(p0, 64))
+            let v19 := t35
             let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_3b13(v18, v19)
             let v20 := v31
             let v3 := v20
@@ -2059,17 +2059,11 @@ object "Factory" {
         let v6 := t33
         let v23 := 0x20
         let v7 := v23
-        let t34 := add(v6, v7)
-        if lt(t34, v6) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v24 := t34
+        let v24 := add(v6, v7)
         let v8 := v24
         v2 := v8
-        let t35 := mload(add(p0, 64))
-        let v25 := t35
+        let t34 := mload(add(p0, 64))
+        let v25 := t34
         let v26 := iszero(iszero(lt(v2, v25)))
         let v11 := iszero(iszero(v26))
         if iszero(iszero(v11)) {
@@ -2092,8 +2086,8 @@ object "Factory" {
           }
           if iszero(iszero(iszero(v13))) {
             let v18 := p0
-            let t36 := mload(add(p0, 64))
-            let v19 := t36
+            let t35 := mload(add(p0, 64))
+            let v19 := t35
             let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_9b8c(v18, v19)
             let v20 := v31
             let v3 := v20
@@ -2141,6 +2135,18 @@ object "Factory" {
       function $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_d061(p0, p1) {
         let v2 := p1
         mstore(add(p0, 32), v2)
+        leave
+      }
+      function $std$lib$abi$sol$impl_trait$Sol$1f5f$store_word_bb6a(p0, p1) {
+        let v2 := p0
+        let v3 := p1
+        mstore(v2, v3)
+        leave
+      }
+      function $std$lib$abi$sol$impl_trait$Sol$1f5f$store_word_d9ea(p0, p1) {
+        let v2 := p0
+        let v3 := p1
+        mstore(v2, v3)
         leave
       }
       function $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_3b13(p0, p1) -> ret {
@@ -2508,17 +2514,11 @@ object "Factory" {
           let v6 := t33
           let v23 := 0x20
           let v7 := v23
-          let t34 := add(v6, v7)
-          if lt(t34, v6) {
-            mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-            mstore(4, 0x11)
-            revert(0, 36)
-          }
-          let v24 := t34
+          let v24 := add(v6, v7)
           let v8 := v24
           v2 := v8
-          let t35 := mload(add(p0, 64))
-          let v25 := t35
+          let t34 := mload(add(p0, 64))
+          let v25 := t34
           let v26 := iszero(iszero(lt(v2, v25)))
           let v11 := iszero(iszero(v26))
           if iszero(iszero(v11)) {
@@ -2541,8 +2541,8 @@ object "Factory" {
             }
             if iszero(iszero(iszero(v13))) {
               let v18 := p0
-              let t36 := mload(add(p0, 64))
-              let v19 := t36
+              let t35 := mload(add(p0, 64))
+              let v19 := t35
               let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_90b8(v18, v19)
               let v20 := v31
               let v3 := v20
@@ -2563,17 +2563,11 @@ object "Factory" {
           let v6 := t33
           let v23 := 0x20
           let v7 := v23
-          let t34 := add(v6, v7)
-          if lt(t34, v6) {
-            mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-            mstore(4, 0x11)
-            revert(0, 36)
-          }
-          let v24 := t34
+          let v24 := add(v6, v7)
           let v8 := v24
           v2 := v8
-          let t35 := mload(add(p0, 64))
-          let v25 := t35
+          let t34 := mload(add(p0, 64))
+          let v25 := t34
           let v26 := iszero(iszero(lt(v2, v25)))
           let v11 := iszero(iszero(v26))
           if iszero(iszero(v11)) {
@@ -2596,8 +2590,8 @@ object "Factory" {
             }
             if iszero(iszero(iszero(v13))) {
               let v18 := p0
-              let t36 := mload(add(p0, 64))
-              let v19 := t36
+              let t35 := mload(add(p0, 64))
+              let v19 := t35
               let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_1b26(v18, v19)
               let v20 := v31
               let v3 := v20
@@ -2661,9 +2655,6 @@ object "Factory" {
             let v0 := 0
             v0 := 0
             let v1 := shr(224, calldataload(0))
-            switch and(v1, 0xffffffff)
-            default {
-            }
             revert(v0, v0)
           }
           $contract_runtime_root_Child()

@@ -1,6 +1,5 @@
 ---
 source: crates/hir/tests/desugar.rs
-assertion_line: 28
 expression: output
 input_file: test_files/desugar/msg.fe
 ---
@@ -43,6 +42,14 @@ mod CounterMsg {
         }
     }
 
+    impl core::abi::AbiValidate<std::abi::Sol> for Increment {
+
+        fn validate_end<I: core::abi::ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+            base
+            return pos
+        }
+    }
+
     pub struct Get {}
 
     impl core::message::MsgVariant<std::abi::Sol> for Get {
@@ -71,6 +78,14 @@ mod CounterMsg {
 
         fn decode_payload<D: core::abi::AbiDecoder<std::abi::Sol>>(_ d: mut D) -> Self {
             return Self {  }
+        }
+    }
+
+    impl core::abi::AbiValidate<std::abi::Sol> for Get {
+
+        fn validate_end<I: core::abi::ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+            base
+            return pos
         }
     }
 
@@ -112,6 +127,36 @@ mod CounterMsg {
         fn decode_payload<D: core::abi::AbiDecoder<std::abi::Sol>>(_ d: mut D) -> Self {
             let val: u64 = core::abi::decode_field<std::abi::Sol, u64, D>(d)
             return Self { val: val }
+        }
+    }
+
+    impl core::abi::AbiValidate<std::abi::Sol> for Set {
+
+        fn validate_end<I: core::abi::ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+            base
+            let head_pos = pos
+            let end = pos
+            let is_dynamic = <Set as core::abi::AbiSize>::IS_DYNAMIC
+            let field_end_0 = core::abi::abi_field_validate_end<std::abi::Sol, u64, I>(input, base: pos, pos: head_pos)
+            let end = if is_dynamic {
+                if field_end_0 > end {
+                    field_end_0
+                } else {
+                    end
+                }
+            } else {
+                end
+            }
+            let head_pos = head_pos + core::abi::abi_field_head_size<u64>()
+            return if is_dynamic {
+                if head_pos > end {
+                    head_pos
+                } else {
+                    end
+                }
+            } else {
+                head_pos
+            }
         }
     }
 }

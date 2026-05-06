@@ -641,6 +641,12 @@ fn format_builtin<'db>(db: &'db dyn MirDb, builtin: &RuntimeBuiltin<'db>) -> Str
                 format_local_id(*value)
             )
         }
+        RuntimeBuiltin::Mcopy { dst, src, len } => format!(
+            "mcopy {}, {}, {}",
+            format_local_id(*dst),
+            format_local_id(*src),
+            format_local_id(*len)
+        ),
         RuntimeBuiltin::Msize => "msize".to_string(),
         RuntimeBuiltin::Sload { slot } => format!("sload {}", format_local_id(*slot)),
         RuntimeBuiltin::Sstore { slot, value } => {
@@ -691,6 +697,11 @@ fn format_builtin<'db>(db: &'db dyn MirDb, builtin: &RuntimeBuiltin<'db>) -> Str
             format_local_id(*lhs),
             format_local_id(*rhs),
             format_local_id(*modulus)
+        ),
+        RuntimeBuiltin::SignExtend { byte, value } => format!(
+            "signextend {}, {}",
+            format_local_id(*byte),
+            format_local_id(*value)
         ),
         RuntimeBuiltin::IntrinsicArith {
             op,

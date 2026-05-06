@@ -41,6 +41,12 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
                 self.scalar_word_expr(*addr)?,
                 self.scalar_word_expr(*value)?
             ))],
+            YBuiltin::Mcopy { dst, src, len } => vec![YulDoc::line(format!(
+                "mcopy({}, {}, {})",
+                self.scalar_word_expr(*dst)?,
+                self.scalar_word_expr(*src)?,
+                self.scalar_word_expr(*len)?
+            ))],
             YBuiltin::Sstore { slot, value } => vec![YulDoc::line(format!(
                 "sstore({}, {})",
                 self.scalar_word_expr(*slot)?,
@@ -505,6 +511,15 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
                 ),
                 class: expected.cloned().unwrap_or_else(|| self.word_u256_class()),
             },
+            YBuiltin::SignExtend { byte, value } => RenderedValue {
+                setup: Vec::new(),
+                value: format!(
+                    "signextend({}, {})",
+                    self.scalar_word_expr(*byte)?,
+                    self.scalar_word_expr(*value)?
+                ),
+                class: expected.cloned().unwrap_or_else(|| self.word_u256_class()),
+            },
             YBuiltin::IntrinsicArith {
                 op,
                 checked,
@@ -629,6 +644,7 @@ impl<'a, 'db> FunctionEmitter<'a, 'db> {
             },
             YBuiltin::Mstore { .. }
             | YBuiltin::Mstore8 { .. }
+            | YBuiltin::Mcopy { .. }
             | YBuiltin::Sstore { .. }
             | YBuiltin::ReturnDataCopy { .. }
             | YBuiltin::CallDataCopy { .. }

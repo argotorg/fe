@@ -1,5 +1,6 @@
 ---
 source: crates/hir/tests/ty_check.rs
+assertion_line: 46
 expression: res
 input_file: test_files/ty_check/contract_recv_variants.fe
 ---
@@ -7,13 +8,13 @@ note:
    ┌─ contract_recv_variants.fe:11:5
    │
 11 │     Deposit { amount: u64 } -> u64,
-   │     ^^^^^^^ () | Deposit | fn decode_field<Sol, u64, D> | fn dynamic_payload_size<u64> | fn encode_field<Sol, u64, E> | mut D | mut E | mut u256 | u256 | u64
+   │     ^^^^^^^ () | Deposit | I | bool | fn abi_field_head_size<u64> | fn abi_field_validate_end<Sol, u64, I> | fn decode_field<Sol, u64, D> | fn dynamic_payload_size<u64> | fn encode_field<Sol, u64, E> | mut D | mut E | mut u256 | u256 | u64
 
 note:
    ┌─ contract_recv_variants.fe:13:5
    │
 13 │     Withdraw { amount: u64 } -> bool,
-   │     ^^^^^^^^ () | Withdraw | fn decode_field<Sol, u64, D> | fn dynamic_payload_size<u64> | fn encode_field<Sol, u64, E> | mut D | mut E | mut u256 | u256 | u64
+   │     ^^^^^^^^ () | I | Withdraw | bool | fn abi_field_head_size<u64> | fn abi_field_validate_end<Sol, u64, I> | fn decode_field<Sol, u64, D> | fn dynamic_payload_size<u64> | fn encode_field<Sol, u64, E> | mut D | mut E | mut u256 | u256 | u64
 
 note:
    ┌─ contract_recv_variants.fe:33:82

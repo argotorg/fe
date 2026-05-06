@@ -6,6 +6,7 @@ use core::abi::{
     AbiDecoder,
     AbiEncoder,
     AbiSize,
+    AbiValidate,
     ByteInput,
     BytesView,
     Cursor,
@@ -17,29 +18,191 @@ use core::abi::{
     decode_single_root,
 }
 use core::{AsBytes, keccak}
-use core::num::IntDowncast
 use ingot::evm::mem
-use ingot::evm::ops::{mstore, mstore8, revert}
+use ingot::evm::ops::{mload, mstore, mstore8, revert, signextend}
+
+// Generic bitcast intrinsic - reinterprets bits between primitive integer types.
+extern {
+    fn __bitcast<From, To>(value: From) -> To
+}
 
 pub struct Sol {}
 
-const FULL_WORD_MASK: u256 = 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+// -----------------------------------------------------------------------------
+// ABI validation / measurement helpers
+//
+// These support "passthrough" contract fast paths that validate calldata ABI
+// (without allocating or copying dynamic payloads) and compute the precise end
+// of the encoded payload so the bytes can be returned directly.
+// -----------------------------------------------------------------------------
 
-fn canonical_signed_word(word: u256, mask: u256, sign_bit: u256) -> u256 {
-    let value = word & mask
-    if value & sign_bit != 0 {
-        let canonical = value | (FULL_WORD_MASK ^ mask)
-        if canonical == word {
-            return canonical
+pub struct NoCopyInput<I> {
+    pub input: I,
+    pub max_end_ptr: u256,
+}
+
+impl<I> Copy for NoCopyInput<I>
+    where I: ByteInput
+{
+}
+
+impl<I> ByteInput for NoCopyInput<I>
+    where I: ByteInput
+{
+    fn len(self) -> u256 {
+        self.input.len()
+    }
+
+    fn word_at(self, _ byte_offset: u256) -> u256 {
+        self.input.word_at(byte_offset)
+    }
+
+    fn byte_at(self, _ byte_offset: u256) -> u8 {
+        self.input.byte_at(byte_offset)
+    }
+
+    #[arithmetic(unchecked)]
+    fn copy_to_memory(self, dest: u256, src_offset: u256, len: u256) {
+        let _ = dest
+        if len % 32 != 0 {
+            revert(offset: 0, len: 0)
         }
+
+        let input_len = self.input.len()
+        let end = src_offset + len
+        if end < src_offset || end > input_len {
+            revert(offset: 0, len: 0)
+        }
+
+        let current = mload(self.max_end_ptr)
+        if end > current {
+            mstore(addr: self.max_end_ptr, value: end)
+        }
+    }
+}
+
+pub struct SolMeasureDecoder<I> {
+    pub cur: Cursor<I>,
+    pub base: u256,
+}
+
+impl<I> SolMeasureDecoder<I>
+    where I: ByteInput
+{
+    pub fn with_base(input: own I, base: u256) -> Self {
+        SolMeasureDecoder {
+            cur: Cursor::new(input).fork(base),
+            base,
+        }
+    }
+}
+
+impl<I> AbiDecoder<Sol> for SolMeasureDecoder<I>
+    where I: ByteInput
+{
+    type Input = I
+
+    fn input(self) -> Self::Input {
+        self.cur.input
+    }
+
+    fn base(self) -> u256 {
+        self.base
+    }
+
+    fn set_base(mut self, _ new_base: u256) {
+        self.base = new_base
+    }
+
+    fn pos(self) -> u256 {
+        self.cur.pos
+    }
+
+    fn set_pos(mut self, _ new_pos: u256) {
+        self.cur.pos = new_pos
+    }
+
+    #[arithmetic(unchecked)]
+    fn read_u8(mut self) -> u8 {
+        let len = self.cur.input.len()
+        let new_pos = self.cur.pos + 1
+        if new_pos < self.cur.pos || new_pos > len {
+            revert(offset: 0, len: 0)
+        }
+        let b = self.cur.input.byte_at(self.cur.pos)
+        self.cur.pos = new_pos
+        b
+    }
+
+    #[arithmetic(unchecked)]
+    fn read_word(mut self) -> u256 {
+        let len = self.cur.input.len()
+        let new_pos = self.cur.pos + 32
+        if new_pos < self.cur.pos || new_pos > len {
+            revert(offset: 0, len: 0)
+        }
+        let w = self.cur.input.word_at(self.cur.pos)
+        self.cur.pos = new_pos
+        w
+    }
+
+    #[arithmetic(unchecked)]
+    fn peek_word(self, _ at: u256) -> u256 {
+        let len = self.cur.input.len()
+        let end = at + 32
+        if end < at || end > len {
+            revert(offset: 0, len: 0)
+        }
+        self.cur.input.word_at(at)
+    }
+
+    fn alloc(mut self, _ size: u256) -> u256 {
+        let _ = size
+        0
+    }
+}
+
+/// Validate that `T` decodes successfully from `input` at `base` and return the
+/// end offset (absolute, in bytes) of the ABI payload that `T` occupies.
+///
+/// This runs the regular `Decode<Sol>` logic, but it disables dynamic payload
+/// allocation/copying by using:
+/// - a decoder whose `alloc()` returns `0`
+/// - a `ByteInput` wrapper whose `copy_to_memory()` is bounds-checked but a no-op
+///
+/// This is intended for contract passthrough fast paths where we want Solidity-
+/// compatible validation but only one actual calldata copy (into returndata).
+#[inline(always)]
+pub fn validate_payload_end<T, I>(input: own I, base: u256) -> u256
+    where T: Decode<Sol> + AbiSize,
+          I: ByteInput
+{
+    let max_end_ptr = mem::alloc(32)
+    mstore(addr: max_end_ptr, value: base + T::HEAD_SIZE)
+
+    let wrapped = NoCopyInput { input, max_end_ptr }
+    let mut d = SolMeasureDecoder<NoCopyInput<I>>::with_base(input: wrapped, base: base)
+    let _ = T::decode_payload(mut d)
+
+    mload(max_end_ptr)
+}
+
+/// A faster validation path for types that support `core::abi::AbiValidate`.
+#[inline(always)]
+pub fn validate_payload_end_fast<T, I>(input: own I, base: u256) -> u256
+    where T: AbiValidate<Sol> + AbiSize,
+          I: ByteInput
+{
+    let input_len = input.len()
+    if base > input_len {
         revert(offset: 0, len: 0)
     }
 
-    if value == word {
-        return value
+    let end = T::validate_end(input, base: base, pos: base)
+    if end < base || end > input_len {
+        revert(offset: 0, len: 0)
     }
-
-    revert(offset: 0, len: 0)
+    end
 }
 
 /// Compute the 4-byte Solidity selector for a signature string.
@@ -62,9 +225,10 @@ impl Abi for Sol {
     const SELECTOR_SIZE: u256 = 4
 
     fn selector_from_prefix(_ prefix: u256) -> Self::Selector {
-        (prefix >> 224).downcast_unchecked()
+        __bitcast(value: prefix >> 224)
     }
 
+    #[inline(always)]
     fn decode_bool_word(_ word: u256) -> bool {
         if word == 0 {
             return false
@@ -77,72 +241,84 @@ impl Abi for Sol {
         revert(offset: 0, len: 0)
     }
 
+    #[inline(always)]
     fn decode_u8_word(_ word: u256) -> u8 {
-        if let Option::Some(value) = word.downcast() {
-            return value
+        if word >> 8 != 0 {
+            revert(offset: 0, len: 0)
         }
-        revert(offset: 0, len: 0)
+        __bitcast(value: word)
     }
 
+    #[inline(always)]
     fn decode_u16_word(_ word: u256) -> u16 {
-        if let Option::Some(value) = word.downcast() {
-            return value
+        if word >> 16 != 0 {
+            revert(offset: 0, len: 0)
         }
-        revert(offset: 0, len: 0)
+        __bitcast(value: word)
     }
 
+    #[inline(always)]
     fn decode_u32_word(_ word: u256) -> u32 {
-        if let Option::Some(value) = word.downcast() {
-            return value
+        if word >> 32 != 0 {
+            revert(offset: 0, len: 0)
         }
-        revert(offset: 0, len: 0)
+        __bitcast(value: word)
     }
 
+    #[inline(always)]
     fn decode_u64_word(_ word: u256) -> u64 {
-        if let Option::Some(value) = word.downcast() {
-            return value
+        if word >> 64 != 0 {
+            revert(offset: 0, len: 0)
         }
-        revert(offset: 0, len: 0)
+        __bitcast(value: word)
     }
 
+    #[inline(always)]
     fn decode_u128_word(_ word: u256) -> u128 {
-        if let Option::Some(value) = word.downcast() {
-            return value
+        if word >> 128 != 0 {
+            revert(offset: 0, len: 0)
         }
-        revert(offset: 0, len: 0)
+        __bitcast(value: word)
     }
 
+    #[inline(always)]
     fn decode_i8_word(_ word: u256) -> i8 {
-        let signed_word: i256 = canonical_signed_word(word: word, mask: 0xff, sign_bit: 0x80).downcast_unchecked()
-        signed_word.downcast_unchecked()
+        if signextend(byte: 0, value: word) != word {
+            revert(offset: 0, len: 0)
+        }
+        __bitcast(value: word)
     }
 
+    #[inline(always)]
     fn decode_i16_word(_ word: u256) -> i16 {
-        let signed_word: i256 = canonical_signed_word(word: word, mask: 0xffff, sign_bit: 0x8000).downcast_unchecked()
-        signed_word.downcast_unchecked()
+        if signextend(byte: 1, value: word) != word {
+            revert(offset: 0, len: 0)
+        }
+        __bitcast(value: word)
     }
 
+    #[inline(always)]
     fn decode_i32_word(_ word: u256) -> i32 {
-        let signed_word: i256 = canonical_signed_word(word: word, mask: 0xffffffff, sign_bit: 0x80000000).downcast_unchecked()
-        signed_word.downcast_unchecked()
+        if signextend(byte: 3, value: word) != word {
+            revert(offset: 0, len: 0)
+        }
+        __bitcast(value: word)
     }
 
+    #[inline(always)]
     fn decode_i64_word(_ word: u256) -> i64 {
-        let signed_word: i256 = canonical_signed_word(
-            word: word,
-            mask: 0xffffffffffffffff,
-            sign_bit: 0x8000000000000000,
-        ).downcast_unchecked()
-        signed_word.downcast_unchecked()
+        if signextend(byte: 7, value: word) != word {
+            revert(offset: 0, len: 0)
+        }
+        __bitcast(value: word)
     }
 
+    #[inline(always)]
     fn decode_i128_word(_ word: u256) -> i128 {
-        let signed_word: i256 = canonical_signed_word(
-            word: word,
-            mask: 0xffffffffffffffffffffffffffffffff,
-            sign_bit: 0x80000000000000000000000000000000,
-        ).downcast_unchecked()
-        signed_word.downcast_unchecked()
+        if signextend(byte: 15, value: word) != word {
+            revert(offset: 0, len: 0)
+        }
+        __bitcast(value: word)
     }
 
     fn decode_error() -> ! {
@@ -187,9 +363,77 @@ impl<I> SolDecoder<I>
     }
 }
 
+/// Decoder optimized for static, fixed-size ABI payloads.
+///
+/// Bounds checks are performed up-front in `decode_input_at`; reads here assume
+/// the type's head fits within the input.
+pub struct SolFastDecoder<I> {
+    pub cur: Cursor<I>,
+    pub base: u256,
+}
+
+impl<I> SolFastDecoder<I>
+    where I: ByteInput
+{
+    pub fn with_base(input: own I, base: u256) -> Self {
+        SolFastDecoder {
+            cur: Cursor::new(input).fork(base),
+            base,
+        }
+    }
+}
+
+impl<I> AbiDecoder<Sol> for SolFastDecoder<I>
+    where I: ByteInput
+{
+    type Input = I
+
+    fn input(self) -> Self::Input {
+        self.cur.input
+    }
+
+    fn base(self) -> u256 {
+        self.base
+    }
+
+    fn set_base(mut self, _ new_base: u256) {
+        self.base = new_base
+    }
+
+    fn pos(self) -> u256 {
+        self.cur.pos
+    }
+
+    fn set_pos(mut self, _ new_pos: u256) {
+        self.cur.pos = new_pos
+    }
+
+    #[arithmetic(unchecked)]
+    fn read_u8(mut self) -> u8 {
+        let b = self.cur.input.byte_at(self.cur.pos)
+        self.cur.pos = self.cur.pos + 1
+        b
+    }
+
+    #[arithmetic(unchecked)]
+    fn read_word(mut self) -> u256 {
+        let w = self.cur.input.word_at(self.cur.pos)
+        self.cur.pos = self.cur.pos + 32
+        w
+    }
+
+    fn peek_word(self, _ at: u256) -> u256 {
+        self.cur.input.word_at(at)
+    }
+
+    fn alloc(mut self, _ size: u256) -> u256 {
+        mem::alloc(size)
+    }
+}
+
 /// Decode a Solidity ABI payload from an arbitrary byte input starting at byte 0.
 pub fn decode_input<T, I>(_ input: own I) -> T
-    where T: Decode<Sol>, I: ByteInput
+    where T: Decode<Sol> + AbiSize, I: ByteInput
 {
     decode_input_at(input, 0)
 }
@@ -198,15 +442,23 @@ pub fn decode_input<T, I>(_ input: own I) -> T
 ///
 /// The input stays raw; `base` chooses where the ABI payload begins. Dynamic
 /// offsets remain relative to `base`, matching Solidity ABI rules.
+#[arithmetic(unchecked)]
 pub fn decode_input_at<T, I>(_ input: own I, _ base: u256) -> T
-    where T: Decode<Sol>, I: ByteInput
+    where T: Decode<Sol> + AbiSize, I: ByteInput
 {
-    if base > input.len() {
+    let input_len = input.len()
+    let head_end = base + T::HEAD_SIZE
+    if head_end < base || head_end > input_len {
         revert(offset: 0, len: 0)
     }
 
-    let mut d = SolDecoder<I>::with_base(input, base)
-    decode_payload_root<Sol, T, SolDecoder<I>>(mut d)
+    if T::IS_DYNAMIC {
+        let mut d = SolDecoder<I>::with_base(input, base)
+        return decode_payload_root<Sol, T, SolDecoder<I>>(mut d)
+    }
+
+    let mut d = SolFastDecoder<I>::with_base(input, base)
+    decode_payload_root<Sol, T, SolFastDecoder<I>>(mut d)
 }
 
 /// Decode a Solidity ABI return/output payload from an arbitrary byte input at byte 0.
@@ -330,6 +582,7 @@ impl<I> AbiDecoder<Sol> for SolDecoder<I>
         self.cur.pos = new_pos
     }
 
+    #[arithmetic(unchecked)]
     fn read_u8(mut self) -> u8 {
         let len = self.cur.input.len()
         let new_pos = self.cur.pos + 1
@@ -341,6 +594,7 @@ impl<I> AbiDecoder<Sol> for SolDecoder<I>
         b
     }
 
+    #[arithmetic(unchecked)]
     fn read_word(mut self) -> u256 {
         let len = self.cur.input.len()
         let new_pos = self.cur.pos + 32

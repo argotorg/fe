@@ -217,7 +217,8 @@ func private %contract_runtime_root_NewtypeByPlaceEffectArg() {
         v1.i256 = evm_calldata_load 0.i256;
         v3.i256 = shr 224.i256 v1;
         v4.i32 = trunc v3 i32;
-        br_table v4 block2 (1.i32 block3);
+        v6.i1 = eq v4 1.i32;
+        br v6 block3 block2;
 
     block2:
         evm_revert 0.i256 0.i256;
@@ -264,37 +265,39 @@ func private %encode_field(v0.i256, v1.objref<@layout_0>, v2.i256) {
         v5.i256 = call %base v1;
         v8.i256 = call %core__lib__abi__trait_AbiSize__payload_size__ge513_a5ce v0;
         v9.i256 = mload v2 i256;
-        (v10.i256, v11.i1) = usubo v9 v5;
-        br v11 block5 block6;
+        v10.i256 = sub v9 v5;
+        call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__write_word_a98a v1 v10;
+        v12.i256 = call %pos v1;
+        v13.i256 = mload v2 i256;
+        call %set_base v1 v13;
+        v15.i256 = mload v2 i256;
+        call %set_pos v1 v15;
+        call %encode v0 v1;
+        call %set_base v1 v5;
+        call %set_pos v1 v12;
+        v20.i256 = mload v2 i256;
+        v21.i256 = add v20 v8;
+        mstore v2 v21 i256;
+        return;
 
     block3:
         jump block4;
 
     block4:
-        call %encode v0 v1;
-        return;
+        br 1.i1 block5 block6;
 
     block5:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
+        v24.i256 = call %pos v1;
+        call %encode_to_ptr v0 v24;
+        v28.i256 = add v24 32.i256;
+        call %set_pos v1 v28;
+        return;
 
     block6:
-        call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__write_word_a98a v1 v10;
-        v19.i256 = call %pos v1;
-        v21.i256 = mload v2 i256;
-        call %set_base v1 v21;
-        v23.i256 = mload v2 i256;
-        call %set_pos v1 v23;
-        call %encode v0 v1;
-        call %set_base v1 v5;
-        call %set_pos v1 v19;
-        v30.i256 = mload v2 i256;
-        (v32.i256, v33.i1) = uaddo v30 v8;
-        br v33 block5 block7;
+        jump block7;
 
     block7:
-        mstore v2 v32 i256;
+        call %encode v0 v1;
         return;
 }
 
@@ -305,18 +308,10 @@ func private %encode_single_root(v0.i256, v1.objref<@layout_0>) {
 
     block1:
         v4.i256 = call %base v1;
-        (v6.i256, v7.i1) = uaddo v4 32.i256;
-        br v7 block2 block3;
-
-    block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
-
-    block3:
+        v6.i256 = add v4 32.i256;
         mstore v2 v6 i256;
-        v14.i256 = ptr_to_int v2 i256;
-        call %encode_field v0 v1 v14;
+        v7.i256 = ptr_to_int v2 i256;
+        call %encode_field v0 v1 v7;
         return;
 }
 
@@ -343,6 +338,18 @@ func private %encode_single_root_alloc(v0.i256) -> @layout_4 {
         obj.store v15 v2;
         v16.@layout_4 = obj.load v13;
         return v16;
+}
+
+func private %encode_to_ptr(v0.i256, v1.i256) {
+    block0:
+        v2.*i256 = alloca i256;
+        mstore v2 v1 i256;
+        jump block1;
+
+    block1:
+        v3.i256 = mload v2 i256;
+        call %store_word v3 v0;
+        return;
 }
 
 func private %encoder_new(v0.i256) -> @layout_0 {
@@ -485,6 +492,21 @@ func private %set_pos(v0.objref<@layout_0>, v1.i256) {
         v3.i256 = mload v2 i256;
         v6.objref<i256> = obj.proj v0 1.i256;
         obj.store v6 v3;
+        return;
+}
+
+func private %store_word(v0.i256, v1.i256) {
+    block0:
+        v2.*i256 = alloca i256;
+        v3.*i256 = alloca i256;
+        mstore v2 v0 i256;
+        mstore v3 v1 i256;
+        jump block1;
+
+    block1:
+        v4.i256 = mload v2 i256;
+        v5.i256 = mload v3 i256;
+        mstore v4 v5 i256;
         return;
 }
 

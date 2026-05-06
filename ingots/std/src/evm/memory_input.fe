@@ -1,9 +1,9 @@
-use core::abi::{ByteInput, Decode}
+use core::abi::{AbiSize, ByteInput, Decode}
 use core::Copy
 use core::num::IntDowncast
 use ingot::abi::Sol
 use ingot::abi::sol::decode_input
-use ingot::evm::ops::mload
+use ingot::evm::ops::{mload, mstore}
 
 /// A view over an in-memory byte buffer.
 pub struct MemoryBytes {
@@ -20,7 +20,7 @@ impl MemoryBytes {
 
     /// Decode Solidity ABI data from this memory view.
     pub fn decode<T>(self) -> T
-        where T: Decode<Sol>
+        where T: Decode<Sol> + AbiSize
     {
         decode_input(self)
     }
@@ -43,5 +43,22 @@ impl ByteInput for MemoryBytes {
         let idx = byte_offset - word_offset
         let shift = (31 - idx) * 8
         (word >> shift).downcast_truncate()
+    }
+
+    fn copy_to_memory(self, dest: u256, src_offset: u256, len: u256) {
+        if len % 32 != 0 {
+            core::panic()
+        }
+
+        let end = src_offset + len
+        if end < src_offset || end > self.len {
+            core::panic()
+        }
+
+        let mut offset: u256 = 0
+        while offset < len {
+            mstore(addr: dest + offset, value: mload(self.base + src_offset + offset))
+            offset += 32
+        }
     }
 }

@@ -1,36 +1,45 @@
-use core::abi::{Abi, AbiDecoder, AbiEncoder, AbiSize, AbiSpan, Decode, Encode}
+use core::abi::{Abi, AbiDecoder, AbiEncoder, AbiSize, AbiSpan, AbiValidate, ByteInput, Decode, Encode}
 use core::num::IntDowncast
-use ingot::evm::{TopicValue, ops::revert}
+use ingot::evm::TopicValue
+use ingot::evm::ops::{revert, signextend}
 
 use super::types::SolCompat
 
 const FULL_WORD_MASK: u256 = 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
 
 fn canonical_unsigned_word(word: u256, bits: u256) -> u256 {
-    let mask = ((1 as u256) << bits) - 1
-    if word & (FULL_WORD_MASK ^ mask) == 0 {
-        return word & mask
+    // Canonical Solidity ABI encoding for an unsigned integer of width `bits`
+    // requires that all higher bits are zero.
+    //
+    // This shift-based check is cheaper than constructing a `(1 << bits) - 1`
+    // mask for every call.
+    if word >> bits == 0 {
+        return word
     }
     revert(offset: 0, len: 0)
 }
 
 fn canonical_custom_signed_word(word: u256, bits: u256) -> u256 {
-    let mask = ((1 as u256) << bits) - 1
-    let sign_bit = (1 as u256) << (bits - 1)
-    let value = word & mask
-
-    if value & sign_bit != 0 {
-        let canonical = value | (FULL_WORD_MASK ^ mask)
-        if canonical == word {
-            return canonical
+    // Canonical Solidity ABI encoding for a signed integer of width `bits`
+    // requires that all higher bits are a sign-extension of the sign bit.
+    if bits == 0 {
+        if word == 0 {
+            return 0
         }
         revert(offset: 0, len: 0)
     }
 
-    if value == word {
-        return value
+    let sign = (word >> (bits - 1)) & 1
+    if sign == 0 {
+        if word >> bits == 0 {
+            return word
+        }
+        revert(offset: 0, len: 0)
     }
 
+    if word >> bits == (FULL_WORD_MASK >> bits) {
+        return word
+    }
     revert(offset: 0, len: 0)
 }
 
@@ -1661,6 +1670,538 @@ impl<A: Abi> AbiSpan<A> for Int240 {
 }
 impl<A: Abi> AbiSpan<A> for Int248 {
     fn payload_end<I: core::abi::ByteInput>(_: I, base: u256, pos: u256) -> u256 { pos + 32 }
+}
+
+#[inline(always)]
+#[arithmetic(unchecked)]
+fn abi_word_end(pos: u256) -> u256 {
+    let end = pos + 32
+    if end < pos {
+        revert(offset: 0, len: 0)
+    }
+    end
+}
+
+impl<A: Abi> AbiValidate<A> for Uint24 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if word >> 24 != 0 {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Uint40 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if word >> 40 != 0 {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Uint48 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if word >> 48 != 0 {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Uint56 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if word >> 56 != 0 {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Uint72 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if word >> 72 != 0 {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Uint80 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if word >> 80 != 0 {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Uint88 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if word >> 88 != 0 {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Uint96 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if word >> 96 != 0 {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Uint104 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if word >> 104 != 0 {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Uint112 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if word >> 112 != 0 {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Uint120 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if word >> 120 != 0 {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Uint136 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if word >> 136 != 0 {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Uint144 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if word >> 144 != 0 {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Uint152 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if word >> 152 != 0 {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Uint160 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if word >> 160 != 0 {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Uint168 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if word >> 168 != 0 {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Uint176 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if word >> 176 != 0 {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Uint184 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if word >> 184 != 0 {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Uint192 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if word >> 192 != 0 {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Uint200 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if word >> 200 != 0 {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Uint208 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if word >> 208 != 0 {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Uint216 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if word >> 216 != 0 {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Uint224 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if word >> 224 != 0 {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Uint232 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if word >> 232 != 0 {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Uint240 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if word >> 240 != 0 {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Uint248 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if word >> 248 != 0 {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+
+impl<A: Abi> AbiValidate<A> for Int24 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if signextend(byte: 2, value: word) != word {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Int40 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if signextend(byte: 4, value: word) != word {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Int48 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if signextend(byte: 5, value: word) != word {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Int56 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if signextend(byte: 6, value: word) != word {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Int72 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if signextend(byte: 8, value: word) != word {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Int80 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if signextend(byte: 9, value: word) != word {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Int88 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if signextend(byte: 10, value: word) != word {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Int96 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if signextend(byte: 11, value: word) != word {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Int104 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if signextend(byte: 12, value: word) != word {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Int112 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if signextend(byte: 13, value: word) != word {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Int120 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if signextend(byte: 14, value: word) != word {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Int136 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if signextend(byte: 16, value: word) != word {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Int144 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if signextend(byte: 17, value: word) != word {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Int152 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if signextend(byte: 18, value: word) != word {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Int160 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if signextend(byte: 19, value: word) != word {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Int168 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if signextend(byte: 20, value: word) != word {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Int176 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if signextend(byte: 21, value: word) != word {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Int184 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if signextend(byte: 22, value: word) != word {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Int192 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if signextend(byte: 23, value: word) != word {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Int200 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if signextend(byte: 24, value: word) != word {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Int208 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if signextend(byte: 25, value: word) != word {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Int216 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if signextend(byte: 26, value: word) != word {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Int224 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if signextend(byte: 27, value: word) != word {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Int232 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if signextend(byte: 28, value: word) != word {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Int240 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if signextend(byte: 29, value: word) != word {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
+}
+impl<A: Abi> AbiValidate<A> for Int248 {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if signextend(byte: 30, value: word) != word {
+            revert(offset: 0, len: 0)
+        }
+        abi_word_end(pos)
+    }
 }
 
 impl TopicValue for Uint24 {

@@ -1,9 +1,9 @@
-use core::abi::{ByteInput, Decode}
+use core::abi::{AbiSize, ByteInput, Decode}
 use core::Copy
 use core::num::IntDowncast
 use ingot::abi::Sol
 use ingot::abi::sol::{decode_input}
-use ingot::evm::ops::{calldataload, calldatasize}
+use ingot::evm::ops::{calldataload, calldatacopy, calldatasize, revert}
 
 /// A view over the current EVM calldata.
 ///
@@ -24,12 +24,15 @@ impl CallData {
     }
 
     /// Decode Solidity ABI data from this calldata view.
-    pub fn decode<T>(self) -> T where T: Decode<Sol> {
+    pub fn decode<T>(self) -> T
+        where T: Decode<Sol> + AbiSize
+    {
         decode_input(self)
     }
 }
 
 impl ByteInput for CallData {
+    #[arithmetic(unchecked)]
     fn len(self) -> u256 {
         let total = calldatasize()
         if self.base > total {
@@ -51,5 +54,20 @@ impl ByteInput for CallData {
         let idx = byte_offset - word_offset
         let shift = (31 - idx) * 8
         (word >> shift).downcast_truncate()
+    }
+
+    #[arithmetic(unchecked)]
+    fn copy_to_memory(self, dest: u256, src_offset: u256, len: u256) {
+        if len % 32 != 0 {
+            revert(offset: 0, len: 0)
+        }
+
+        let input_len = self.len()
+        let end = src_offset + len
+        if end < src_offset || end > input_len {
+            revert(offset: 0, len: 0)
+        }
+
+        calldatacopy(dest: dest, offset: self.base + src_offset, len: len)
     }
 }

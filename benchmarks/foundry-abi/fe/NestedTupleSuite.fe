@@ -1,0 +1,51 @@
+use std::abi::{Bytes, DynArray, DynString, sol}
+use std::evm::Address
+
+msg NestedTupleSuiteMsg {
+    // Purely-static nested tuples.
+    #[selector = sol("echoNestedStatic(((bool,address),uint256))")]
+    EchoNestedStatic { value: ((bool, Address), u256) } -> ((bool, Address), u256),
+    #[selector = sol("echoNestedStaticFlipped((bool,(address,uint256)))")]
+    EchoNestedStaticFlipped { value: (bool, (Address, u256)) } -> (bool, (Address, u256)),
+
+    // Nested tuples with dynamic components (wrapper-required inner tuples).
+    #[selector = sol("echoNestedDynamic(((string,uint64),bool))")]
+    EchoNestedDynamic { value: ((DynString, u64), bool) } -> ((DynString, u64), bool),
+    #[selector = sol("echoNestedDynamicBoth(((string,uint64),(bytes,bool)))")]
+    EchoNestedDynamicBoth { value: ((DynString, u64), (Bytes, bool)) } -> ((DynString, u64), (Bytes, bool)),
+
+    // Arrays of nested tuples.
+    #[selector = sol("echoNestedStaticArray(((bool,address),uint256)[4])")]
+    EchoNestedStaticArray { value: [((bool, Address), u256); 4] } -> [((bool, Address), u256); 4],
+    #[selector = sol("echoNestedStaticDynArray(((bool,address),uint256)[])")]
+    EchoNestedStaticDynArray { value: DynArray<((bool, Address), u256)> } -> DynArray<((bool, Address), u256)>,
+}
+
+pub contract NestedTupleSuite {
+    recv NestedTupleSuiteMsg {
+        EchoNestedStatic { value } -> ((bool, Address), u256) {
+            value
+        }
+
+        EchoNestedStaticFlipped { value } -> (bool, (Address, u256)) {
+            value
+        }
+
+        EchoNestedDynamic { value } -> ((DynString, u64), bool) {
+            value
+        }
+
+        EchoNestedDynamicBoth { value } -> ((DynString, u64), (Bytes, bool)) {
+            value
+        }
+
+        EchoNestedStaticArray { value } -> [((bool, Address), u256); 4] {
+            value
+        }
+
+        EchoNestedStaticDynArray { value } -> DynArray<((bool, Address), u256)> {
+            value
+        }
+    }
+}
+

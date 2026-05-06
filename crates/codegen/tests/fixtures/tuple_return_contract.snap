@@ -174,13 +174,14 @@ object "TupleReturnContract" {
         let v0 := 0
         v0 := 0
         let v1 := shr(224, calldataload(0))
-        switch and(v1, 0xffffffff)
-        case 0x01 {
-            $contract_recv_abi_TupleReturnContract_1()
-            invalid()
+        let v2 := 0x01
+        let v3 := iszero(iszero(eq(and(v1, 0xffffffff), and(v2, 0xffffffff))))
+        if iszero(iszero(v3)) {
+          $contract_recv_abi_TupleReturnContract_1()
+          invalid()
         }
-        default {
-            revert(v0, v0)
+        if iszero(iszero(iszero(v3))) {
+          revert(v0, v0)
         }
       }
       function $decode_payload(p0) {
@@ -315,177 +316,189 @@ object "TupleReturnContract" {
         leave
       }
       function $encode_field$g189a(p0, p1, p2) {
-        let v28 := 0
-        let v8 := iszero(iszero(v28))
-        if iszero(iszero(v8)) {
-          let v29 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$base_a403(p1)
-          let v9 := v29
-          let v3 := v9
+        let v38 := 0
+        let v9 := iszero(iszero(v38))
+        if iszero(iszero(v9)) {
+          let v39 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$base_a403(p1)
+          let v10 := v39
+          let v3 := v10
           let v4 := p2
-          let v30 := $core$lib$abi$impl_trait$__$ccb6$payload_size$g6d15_e33b_0(p0)
-          let v10 := v30
-          let v5 := v10
-          let v11 := v4
-          let t54 := mload(v11)
-          let v31 := t54
-          let t55 := sub(v31, v3)
-          if gt(v3, v31) {
-            mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-            mstore(4, 0x11)
-            revert(0, 36)
-          }
-          let v32 := t55
-          let v12 := v32
-          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$write_word_4363(p1, v12)
-          let v35 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$pos_d646(p1)
-          let v14 := v35
-          let v6 := v14
-          let t56 := mload(v4)
-          let v37 := t56
-          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_base_80f4(p1, v37)
-          let t57 := mload(v4)
-          let v40 := t57
-          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_516e(p1, v40)
-          let v42 := p1
-          let v17 := v42
-          $encode$g4887(p0, v17)
+          let v40 := $core$lib$abi$impl_trait$__$ccb6$payload_size$g6d15_e33b_0(p0)
+          let v11 := v40
+          let v5 := v11
+          let v12 := v4
+          let t72 := mload(v12)
+          let v41 := t72
+          let v42 := sub(v41, v3)
+          let v13 := v42
+          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$write_word_4363(p1, v13)
+          let v45 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$pos_d646(p1)
+          let v15 := v45
+          let v6 := v15
+          let t73 := mload(v4)
+          let v47 := t73
+          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_base_80f4(p1, v47)
+          let t74 := mload(v4)
+          let v50 := t74
+          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_516e(p1, v50)
+          let v52 := p1
+          let v18 := v52
+          $encode$g4887(p0, v18)
           $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_base_80f4(p1, v3)
           $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_516e(p1, v6)
-          let v21 := v4
-          let t58 := mload(v21)
-          let v49 := t58
-          let t59 := add(v49, v5)
-          if lt(t59, v49) {
-            mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-            mstore(4, 0x11)
-            revert(0, 36)
-          }
-          let v50 := t59
-          let v22 := v50
-          mstore(p2, v22)
+          let v22 := v4
+          let t75 := mload(v22)
+          let v59 := t75
+          let v60 := add(v59, v5)
+          let v23 := v60
+          mstore(p2, v23)
           leave
         }
-        if iszero(iszero(iszero(v8))) {
-          let v51 := p1
-          let v26 := v51
-          $encode$g4887(p0, v26)
-          leave
+        if iszero(iszero(iszero(v9))) {
+          let v61 := 1
+          let v28 := iszero(iszero(v61))
+          if iszero(iszero(v28)) {
+            let v62 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$pos_d646(p1)
+            let v29 := v62
+            let v7 := v29
+            $encode_to_ptr$g753b(p0, v7)
+            let v65 := 0x40
+            let v31 := v65
+            let v66 := add(v7, v31)
+            let v32 := v66
+            $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_516e(p1, v32)
+            leave
+          }
+          if iszero(iszero(iszero(v28))) {
+            let v69 := p1
+            let v36 := v69
+            $encode$g4887(p0, v36)
+            leave
+          }
         }
       }
       function $encode_field$gf6b4(p0, p1, p2) {
-        let v28 := 0
-        let v8 := iszero(iszero(v28))
-        if iszero(iszero(v8)) {
-          let v29 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$base_8e95_1(p1)
-          let v9 := v29
-          let v3 := v9
+        let v38 := 0
+        let v9 := iszero(iszero(v38))
+        if iszero(iszero(v9)) {
+          let v39 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$base_8e95_1(p1)
+          let v10 := v39
+          let v3 := v10
           let v4 := p2
-          let v30 := $core$lib$abi$trait$AbiSize$payload_size$g67a8_7cab(p0)
-          let v10 := v30
-          let v5 := v10
-          let v11 := v4
-          let t54 := mload(v11)
-          let v31 := t54
-          let t55 := sub(v31, v3)
-          if gt(v3, v31) {
-            mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-            mstore(4, 0x11)
-            revert(0, 36)
-          }
-          let v32 := t55
-          let v12 := v32
-          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$write_word_647a_0(p1, v12)
-          let v35 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$pos_08db_0(p1)
-          let v14 := v35
-          let v6 := v14
-          let t56 := mload(v4)
-          let v37 := t56
-          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_base_3ff5_0(p1, v37)
-          let t57 := mload(v4)
-          let v40 := t57
-          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_0d08_0(p1, v40)
-          let v42 := p1
-          let v17 := v42
-          $impl_trait$Address$encode$g426c(p0, v17)
+          let v40 := $core$lib$abi$trait$AbiSize$payload_size$g67a8_7cab(p0)
+          let v11 := v40
+          let v5 := v11
+          let v12 := v4
+          let t72 := mload(v12)
+          let v41 := t72
+          let v42 := sub(v41, v3)
+          let v13 := v42
+          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$write_word_647a_0(p1, v13)
+          let v45 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$pos_08db_0(p1)
+          let v15 := v45
+          let v6 := v15
+          let t73 := mload(v4)
+          let v47 := t73
+          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_base_3ff5_0(p1, v47)
+          let t74 := mload(v4)
+          let v50 := t74
+          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_0d08_0(p1, v50)
+          let v52 := p1
+          let v18 := v52
+          $impl_trait$Address$encode$g426c(p0, v18)
           $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_base_3ff5_0(p1, v3)
           $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_0d08_0(p1, v6)
-          let v21 := v4
-          let t58 := mload(v21)
-          let v49 := t58
-          let t59 := add(v49, v5)
-          if lt(t59, v49) {
-            mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-            mstore(4, 0x11)
-            revert(0, 36)
-          }
-          let v50 := t59
-          let v22 := v50
-          mstore(p2, v22)
+          let v22 := v4
+          let t75 := mload(v22)
+          let v59 := t75
+          let v60 := add(v59, v5)
+          let v23 := v60
+          mstore(p2, v23)
           leave
         }
-        if iszero(iszero(iszero(v8))) {
-          let v51 := p1
-          let v26 := v51
-          $impl_trait$Address$encode$g426c(p0, v26)
-          leave
+        if iszero(iszero(iszero(v9))) {
+          let v61 := 1
+          let v28 := iszero(iszero(v61))
+          if iszero(iszero(v28)) {
+            let v62 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$pos_08db_0(p1)
+            let v29 := v62
+            let v7 := v29
+            $std$lib$evm$effects$impl_trait$Address$ed76$encode_to_ptr$gf13e_8bc3(p0, v7)
+            let v65 := 0x20
+            let v31 := v65
+            let v66 := add(v7, v31)
+            let v32 := v66
+            $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_0d08_0(p1, v32)
+            leave
+          }
+          if iszero(iszero(iszero(v28))) {
+            let v69 := p1
+            let v36 := v69
+            $impl_trait$Address$encode$g426c(p0, v36)
+            leave
+          }
         }
       }
       function $encode_field$g2e64(p0, p1, p2) {
-        let v28 := 0
-        let v8 := iszero(iszero(v28))
-        if iszero(iszero(v8)) {
-          let v29 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$base_8e95_0(p1)
-          let v9 := v29
-          let v3 := v9
+        let v38 := 0
+        let v9 := iszero(iszero(v38))
+        if iszero(iszero(v9)) {
+          let v39 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$base_8e95_0(p1)
+          let v10 := v39
+          let v3 := v10
           let v4 := p2
-          let v30 := $core$lib$abi$trait$AbiSize$payload_size$ge513_7c20(p0)
-          let v10 := v30
-          let v5 := v10
-          let v11 := v4
-          let t54 := mload(v11)
-          let v31 := t54
-          let t55 := sub(v31, v3)
-          if gt(v3, v31) {
-            mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-            mstore(4, 0x11)
-            revert(0, 36)
-          }
-          let v32 := t55
-          let v12 := v32
-          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$write_word_647a(p1, v12)
-          let v35 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$pos_08db(p1)
-          let v14 := v35
-          let v6 := v14
-          let t56 := mload(v4)
-          let v37 := t56
-          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_base_3ff5(p1, v37)
-          let t57 := mload(v4)
-          let v40 := t57
-          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_0d08(p1, v40)
-          let v42 := p1
-          let v17 := v42
-          $impl_trait$u256$encode$g426c(p0, v17)
+          let v40 := $core$lib$abi$trait$AbiSize$payload_size$ge513_7c20(p0)
+          let v11 := v40
+          let v5 := v11
+          let v12 := v4
+          let t72 := mload(v12)
+          let v41 := t72
+          let v42 := sub(v41, v3)
+          let v13 := v42
+          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$write_word_647a(p1, v13)
+          let v45 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$pos_08db(p1)
+          let v15 := v45
+          let v6 := v15
+          let t73 := mload(v4)
+          let v47 := t73
+          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_base_3ff5(p1, v47)
+          let t74 := mload(v4)
+          let v50 := t74
+          $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_0d08(p1, v50)
+          let v52 := p1
+          let v18 := v52
+          $impl_trait$u256$encode$g426c(p0, v18)
           $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_base_3ff5(p1, v3)
           $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_0d08(p1, v6)
-          let v21 := v4
-          let t58 := mload(v21)
-          let v49 := t58
-          let t59 := add(v49, v5)
-          if lt(t59, v49) {
-            mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-            mstore(4, 0x11)
-            revert(0, 36)
-          }
-          let v50 := t59
-          let v22 := v50
-          mstore(p2, v22)
+          let v22 := v4
+          let t75 := mload(v22)
+          let v59 := t75
+          let v60 := add(v59, v5)
+          let v23 := v60
+          mstore(p2, v23)
           leave
         }
-        if iszero(iszero(iszero(v8))) {
-          let v51 := p1
-          let v26 := v51
-          $impl_trait$u256$encode$g426c(p0, v26)
-          leave
+        if iszero(iszero(iszero(v9))) {
+          let v61 := 1
+          let v28 := iszero(iszero(v61))
+          if iszero(iszero(v28)) {
+            let v62 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$pos_08db(p1)
+            let v29 := v62
+            let v7 := v29
+            $core$lib$abi$impl_trait$u256$d99e$encode_to_ptr$gf13e_3ddf(p0, v7)
+            let v65 := 0x20
+            let v31 := v65
+            let v66 := add(v7, v31)
+            let v32 := v66
+            $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_0d08(p1, v32)
+            leave
+          }
+          if iszero(iszero(iszero(v28))) {
+            let v69 := p1
+            let v36 := v69
+            $impl_trait$u256$encode$g426c(p0, v36)
+            leave
+          }
         }
       }
       function $encode_single_root(p0, p1) {
@@ -493,13 +506,7 @@ object "TupleReturnContract" {
         let v3 := v9
         let v10 := 0x40
         let v4 := v10
-        let t16 := add(v3, v4)
-        if lt(t16, v3) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v11 := t16
+        let v11 := add(v3, v4)
         let v5 := v11
         let r2 := mload(0x40)
         if iszero(r2) {
@@ -538,6 +545,64 @@ object "TupleReturnContract" {
         mstore(add(v17, 32), v1)
         let v9 := v17
         ret := v9
+        leave
+      }
+      function $core$lib$abi$impl_trait$u256$d99e$encode_to_ptr$gf13e_3ddf(p0, p1) {
+        let v2 := p1
+        $std$lib$abi$sol$impl_trait$Sol$1f5f$store_word_5688(v2, p0)
+        leave
+      }
+      function $core$lib$abi$impl_trait$u256$d99e$encode_to_ptr$gf13e_3ddf_0(p0, p1) {
+        let v2 := p1
+        $std$lib$abi$sol$impl_trait$Sol$1f5f$store_word_5688(v2, p0)
+        leave
+      }
+      function $encode_to_ptr$g753b(p0, p1) {
+        let r0 := mload(0x40)
+        if iszero(r0) {
+          r0 := 0x80
+        }
+        mstore(0x40, add(r0, 64))
+        mstore(r0, mload(p0))
+        mstore(add(r0, 32), mload(add(p0, 32)))
+        let t16 := mload(r0)
+        let v2 := t16
+        let v3 := p1
+        $core$lib$abi$impl_trait$u256$d99e$encode_to_ptr$gf13e_3ddf_0(v2, v3)
+        let t17 := mload(add(r0, 32))
+        let v5 := t17
+        let v6 := p1
+        let v12 := 0x20
+        let v7 := v12
+        let v13 := add(v6, v7)
+        let v8 := v13
+        $std$lib$evm$effects$impl_trait$Address$ed76$encode_to_ptr$gf13e_8bc3_0(v5, v8)
+        leave
+      }
+      function $std$lib$evm$effects$impl_trait$Address$ed76$encode_to_ptr$gf13e_8bc3(p0, p1) {
+        let r0 := mload(0x40)
+        if iszero(r0) {
+          r0 := 0x80
+        }
+        mstore(0x40, add(r0, 32))
+        mstore(r0, p0)
+        let v2 := p1
+        let t7 := mload(r0)
+        let v3 := t7
+        $std$lib$abi$sol$impl_trait$Sol$1f5f$store_word_001d(v2, v3)
+        leave
+      }
+      function $std$lib$evm$effects$impl_trait$Address$ed76$encode_to_ptr$gf13e_8bc3_0(p0, p1) {
+        let r0 := mload(0x40)
+        if iszero(r0) {
+          r0 := 0x80
+        }
+        mstore(0x40, add(r0, 32))
+        mstore(r0, p0)
+        let v2 := p1
+        let t7 := mload(r0)
+        let v3 := t7
+        $std$lib$abi$sol$impl_trait$Sol$1f5f$store_word_001d_0(v2, v3)
         leave
       }
       function $encoder_new(p0) -> ret {
@@ -775,6 +840,24 @@ object "TupleReturnContract" {
       function $std$lib$abi$sol$impl_trait$SolEncoder$19ce$set_pos_516e(p0, p1) {
         let v2 := p1
         mstore(add(p0, 32), v2)
+        leave
+      }
+      function $std$lib$abi$sol$impl_trait$Sol$1f5f$store_word_001d(p0, p1) {
+        let v2 := p0
+        let v3 := p1
+        mstore(v2, v3)
+        leave
+      }
+      function $std$lib$abi$sol$impl_trait$Sol$1f5f$store_word_001d_0(p0, p1) {
+        let v2 := p0
+        let v3 := p1
+        mstore(v2, v3)
+        leave
+      }
+      function $std$lib$abi$sol$impl_trait$Sol$1f5f$store_word_5688(p0, p1) {
+        let v2 := p0
+        let v3 := p1
+        mstore(v2, v3)
         leave
       }
       function $std$lib$abi$sol$impl_trait$SolEncoder$19ce$write_word_4363(p0, p1) {

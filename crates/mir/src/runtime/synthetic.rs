@@ -6,7 +6,9 @@ use hir::{
         ty::{
             corelib::{resolve_core_trait, resolve_lib_func_path, resolve_lib_type_path},
             trait_def::{TraitInstId, resolve_trait_method_instance},
-            trait_resolution::{PredicateListId, TraitSolveCx},
+            trait_resolution::{
+                GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable,
+            },
             ty_check::BodyOwner,
             ty_def::{InvalidCause, TyId},
         },
@@ -476,6 +478,20 @@ impl<'db> SyntheticBodyBuilder<'db> {
             self.emit_nonpayable_guard(zero)
         };
 
+        if plan.passthrough
+            && matches!(plan.ret, RuntimeReturnPlan::Value { .. })
+            && let RuntimeInputPlan::DecodeCalldataPayload { msg_ty, .. } = &plan.input
+        {
+            self.build_contract_recv_passthrough(
+                plan.contract.scope(),
+                *msg_ty,
+                cont_bb,
+                zero,
+                four,
+            );
+            return;
+        }
+
         let mut call_args = Vec::new();
         if let RuntimeInputPlan::DecodeCalldataPayload {
             msg_ty,
@@ -562,6 +578,38 @@ impl<'db> SyntheticBodyBuilder<'db> {
         }
     }
 
+    fn build_contract_recv_passthrough(
+        &mut self,
+        scope: hir::hir_def::scope_graph::ScopeId<'db>,
+        msg_ty: TyId<'db>,
+        cont_bb: RBlockId,
+        zero: RLocalId,
+        four: RLocalId,
+    ) {
+        let input = self.push_calldata_value(cont_bb, scope, zero);
+        let input_ty = self.locals[input.index()].semantic_ty;
+        let validate_payload_end = if has_abi_validate(self.db, scope, msg_ty) {
+            resolve_sol_validate_payload_end(self.db, scope, msg_ty, input_ty, true)
+        } else {
+            resolve_sol_validate_payload_end(self.db, scope, msg_ty, input_ty, false)
+        }
+        .expect("validate_payload_end");
+        let payload_end = self.push_call_result(cont_bb, validate_payload_end, vec![input, four]);
+        let payload_len = self.push_binary_word(cont_bb, ArithBinOp::Sub, payload_end, four);
+        self.push_side_effect_builtin(
+            cont_bb,
+            RuntimeBuiltin::CallDataCopy {
+                dst: zero,
+                offset: four,
+                len: payload_len,
+            },
+        );
+        self.blocks[cont_bb.index()].terminator = RTerminator::ReturnData {
+            offset: zero,
+            len: payload_len,
+        };
+    }
+
     fn build_contract_init_root(
         &mut self,
         init_abi: RuntimeInstance<'db>,
@@ -631,11 +679,51 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 args: Box::default(),
             },
         };
-        self.blocks[0].terminator = RTerminator::SwitchScalar {
-            discr: selector,
-            cases: cases.into_boxed_slice(),
-            default: default_bb,
+        self.emit_dispatch_tree(selector, RBlockId::from_u32(0), &cases, default_bb);
+    }
+
+    fn emit_dispatch_tree(
+        &mut self,
+        selector: RLocalId,
+        into_block: RBlockId,
+        arms: &[(ConstScalar, RBlockId)],
+        default_block: RBlockId,
+    ) {
+        let terminator = match arms.len() {
+            0 => RTerminator::Goto(default_block),
+            1 => {
+                let selector_match = self.push_selector_const(into_block, arms[0].0.clone());
+                let cond =
+                    self.push_bool_binary(into_block, CompBinOp::Eq, selector, selector_match);
+                RTerminator::Branch {
+                    cond,
+                    then_bb: arms[0].1,
+                    else_bb: default_block,
+                }
+            }
+            _ => {
+                let pivot_idx = (arms.len() - 1) / 2;
+                let pivot = arms[pivot_idx].0.clone();
+                let left_block = self.new_block();
+                let right_block = self.new_block();
+                let pivot_value = self.push_selector_const(into_block, pivot);
+                let cond =
+                    self.push_bool_binary(into_block, CompBinOp::LtEq, selector, pivot_value);
+                self.emit_dispatch_tree(selector, left_block, &arms[..=pivot_idx], default_block);
+                self.emit_dispatch_tree(
+                    selector,
+                    right_block,
+                    &arms[pivot_idx + 1..],
+                    default_block,
+                );
+                RTerminator::Branch {
+                    cond,
+                    then_bb: left_block,
+                    else_bb: right_block,
+                }
+            }
         };
+        self.blocks[into_block.index()].terminator = terminator;
     }
 
     fn emit_nonpayable_guard(&mut self, zero: RLocalId) -> RBlockId {
@@ -1149,6 +1237,22 @@ impl<'db> SyntheticBodyBuilder<'db> {
         )
     }
 
+    fn push_selector_const(&mut self, bb: RBlockId, value: ConstScalar) -> RLocalId {
+        let dst = self.push_local(
+            TyId::u256(self.db),
+            RuntimeCarrier::Value(RuntimeClass::Scalar(selector_scalar_class())),
+            RuntimeLocalRoot::None,
+        );
+        self.push_stmt(
+            bb,
+            RStmt::Assign {
+                dst,
+                expr: RExpr::ConstScalar(value),
+            },
+        );
+        dst
+    }
+
     fn push_const_scalar(&mut self, bb: RBlockId, value: ConstScalar) -> RLocalId {
         let dst = self.push_local(
             TyId::u256(self.db),
@@ -1234,6 +1338,45 @@ impl<'db> SyntheticBodyBuilder<'db> {
                         .into_boxed_slice(),
                 },
                 src: len,
+            },
+        );
+        local
+    }
+
+    fn push_calldata_value(
+        &mut self,
+        bb: RBlockId,
+        scope: hir::hir_def::scope_graph::ScopeId<'db>,
+        base: RLocalId,
+    ) -> RLocalId {
+        let ty = calldata_ty(self.db, scope).expect("CallData");
+        let class = top_level_class_for_ty_in_env(
+            self.db,
+            self.runtime_type_env(scope),
+            ty,
+            AddressSpaceKind::Memory,
+        )
+        .expect("calldata runtime class");
+        let root = match &class {
+            RuntimeClass::Ref { .. } => RuntimeLocalRoot::Ref(class.clone()),
+            _ => RuntimeLocalRoot::Slot(class.clone()),
+        };
+        let local = self.push_local(ty, RuntimeCarrier::Value(class.clone()), root);
+        let root = match class {
+            RuntimeClass::Ref { .. } => PlaceRoot::Ref(local),
+            RuntimeClass::Scalar(_)
+            | RuntimeClass::RawAddr { .. }
+            | RuntimeClass::AggregateValue { .. } => PlaceRoot::Slot(local),
+        };
+        self.push_stmt(
+            bb,
+            RStmt::Store {
+                dst: RuntimePlace {
+                    root,
+                    path: vec![PlaceElem::Field(hir::analysis::semantic::FieldIndex(0))]
+                        .into_boxed_slice(),
+                },
+                src: base,
             },
         );
         local
@@ -1503,6 +1646,53 @@ fn u32_scalar(value: u32) -> ConstScalar {
     }
 }
 
+fn resolve_sol_validate_payload_end<'db>(
+    db: &'db dyn MirDb,
+    scope: hir::hir_def::scope_graph::ScopeId<'db>,
+    ty: TyId<'db>,
+    input_ty: TyId<'db>,
+    fast: bool,
+) -> Option<RuntimeInstance<'db>> {
+    let assumptions = PredicateListId::empty_list(db);
+    let path = if fast {
+        "std::abi::sol::validate_payload_end_fast"
+    } else {
+        "std::abi::sol::validate_payload_end"
+    };
+    let func = resolve_lib_func_path(db, scope, path)?;
+    let key = SemanticInstanceKey::new(
+        db,
+        BodyOwner::Func(func),
+        GenericSubst::new(db, vec![ty, input_ty]),
+        hir::analysis::semantic::EffectProviderSubst::empty(db),
+        ImplEnv::new(db, scope, assumptions, vec![]),
+    );
+    Some(runtime_instance_for_semantic(
+        db,
+        get_or_build_semantic_instance(db, key),
+    ))
+}
+
+fn has_abi_validate<'db>(
+    db: &'db dyn MirDb,
+    scope: hir::hir_def::scope_graph::ScopeId<'db>,
+    ty: TyId<'db>,
+) -> bool {
+    let Some(abi_ty) = sol_abi_ty(db, scope) else {
+        return false;
+    };
+    let Some(validate_trait) = resolve_core_trait(db, scope, &["abi", "AbiValidate"]) else {
+        return false;
+    };
+    let assumptions = PredicateListId::empty_list(db);
+    let inst = TraitInstId::new_simple(db, validate_trait, vec![ty, abi_ty]);
+    let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
+    matches!(
+        is_goal_satisfiable(db, solve_cx, inst),
+        GoalSatisfiability::Satisfied(_)
+    )
+}
+
 fn resolve_sol_decoder_new<'db>(
     db: &'db dyn MirDb,
     scope: hir::hir_def::scope_graph::ScopeId<'db>,
@@ -1569,6 +1759,14 @@ fn sol_abi_ty<'db>(
     scope: hir::hir_def::scope_graph::ScopeId<'db>,
 ) -> Option<TyId<'db>> {
     resolve_lib_type_path(db, scope, "std::abi::Sol")
+}
+
+fn calldata_ty<'db>(
+    db: &'db dyn MirDb,
+    scope: hir::hir_def::scope_graph::ScopeId<'db>,
+) -> Option<TyId<'db>> {
+    resolve_lib_type_path(db, scope, "std::evm::calldata::CallData")
+        .or_else(|| resolve_lib_type_path(db, scope, "std::evm::CallData"))
 }
 
 fn memory_bytes_ty<'db>(

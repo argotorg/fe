@@ -270,6 +270,11 @@ pub enum YBuiltin<'db> {
         addr: YLocalId,
         value: YLocalId,
     },
+    Mcopy {
+        dst: YLocalId,
+        src: YLocalId,
+        len: YLocalId,
+    },
     Msize,
     Sload {
         slot: YLocalId,
@@ -313,6 +318,10 @@ pub enum YBuiltin<'db> {
         lhs: YLocalId,
         rhs: YLocalId,
         modulus: YLocalId,
+    },
+    SignExtend {
+        byte: YLocalId,
+        value: YLocalId,
     },
     IntrinsicArith {
         op: IntrinsicArithBinOp,
@@ -550,6 +559,7 @@ fn builtin_is_statement_only(builtin: &YBuiltin<'_>) -> bool {
         builtin,
         YBuiltin::Mstore { .. }
             | YBuiltin::Mstore8 { .. }
+            | YBuiltin::Mcopy { .. }
             | YBuiltin::Sstore { .. }
             | YBuiltin::ReturnDataCopy { .. }
             | YBuiltin::CallDataCopy { .. }
@@ -3238,6 +3248,11 @@ fn legalize_builtin<'db>(
             addr: YLocalId(addr.as_u32()),
             value: YLocalId(value.as_u32()),
         },
+        RuntimeBuiltin::Mcopy { dst, src, len } => YBuiltin::Mcopy {
+            dst: YLocalId(dst.as_u32()),
+            src: YLocalId(src.as_u32()),
+            len: YLocalId(len.as_u32()),
+        },
         RuntimeBuiltin::Msize => YBuiltin::Msize,
         RuntimeBuiltin::Sload { slot } => YBuiltin::Sload {
             slot: YLocalId(slot.as_u32()),
@@ -3281,6 +3296,10 @@ fn legalize_builtin<'db>(
             lhs: YLocalId(lhs.as_u32()),
             rhs: YLocalId(rhs.as_u32()),
             modulus: YLocalId(modulus.as_u32()),
+        },
+        RuntimeBuiltin::SignExtend { byte, value } => YBuiltin::SignExtend {
+            byte: YLocalId(byte.as_u32()),
+            value: YLocalId(value.as_u32()),
         },
         RuntimeBuiltin::IntrinsicArith {
             op,

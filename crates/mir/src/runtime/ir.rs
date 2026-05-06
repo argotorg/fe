@@ -822,6 +822,7 @@ pub struct ContractRecvAbiPlan<'db> {
     pub contract: Contract<'db>,
     pub selector: Option<u32>,
     pub payable: bool,
+    pub passthrough: bool,
     pub user_recv: RuntimeInstance<'db>,
     pub entry_effect_args: Box<[EntryEffectArgPlan<'db>]>,
     pub input: RuntimeInputPlan<'db>,
@@ -1070,6 +1071,11 @@ pub enum RuntimeBuiltin<'db> {
         addr: RValueId,
         value: RValueId,
     },
+    Mcopy {
+        dst: RValueId,
+        src: RValueId,
+        len: RValueId,
+    },
     Msize,
     Sload {
         slot: RValueId,
@@ -1113,6 +1119,10 @@ pub enum RuntimeBuiltin<'db> {
         lhs: RValueId,
         rhs: RValueId,
         modulus: RValueId,
+    },
+    SignExtend {
+        byte: RValueId,
+        value: RValueId,
     },
     IntrinsicArith {
         op: IntrinsicArithBinOp,

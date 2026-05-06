@@ -15,7 +15,10 @@ use hir::{
             ty_def::{TyData, TyId},
         },
     },
-    hir_def::{Contract, Func, IdentId, InlineHint, ItemKind, ManualContractRootAttr, TopLevelMod},
+    hir_def::{
+        Contract, Expr, ExprId, Func, IdentId, InlineHint, ItemKind, ManualContractRootAttr,
+        Partial, Stmt, TopLevelMod,
+    },
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -747,41 +750,21 @@ fn contract_recv_wrapper<'db>(
     let contract = arm.contract(db);
     let abi_info = arm.abi_info(db, abi_ty);
     let recv = arm.recv(db);
-    let user_recv = runtime_instance_for_semantic(
+    let semantic = semantic_instance_for_root_owner(
         db,
-        semantic_instance_for_root_owner(
-            db,
-            BodyOwner::ContractRecvArm {
-                contract,
-                recv_idx: recv.recv_idx(db),
-                arm_idx: arm.arm_idx(db),
-            },
-        )?,
-    );
+        BodyOwner::ContractRecvArm {
+            contract,
+            recv_idx: recv.recv_idx(db),
+            arm_idx: arm.arm_idx(db),
+        },
+    )?;
+    let user_recv = runtime_instance_for_semantic(db, semantic);
     let entry_effect_args = entry_effect_arg_plans(
         db,
         EntryEffectContext::HighLevelContract { contract },
-        semantic_instance_for_root_owner(
-            db,
-            BodyOwner::ContractRecvArm {
-                contract,
-                recv_idx: recv.recv_idx(db),
-                arm_idx: arm.arm_idx(db),
-            },
-        )?,
+        semantic,
     )?;
-    let projected_fields = visible_recv_arg_fields(
-        db,
-        semantic_instance_for_root_owner(
-            db,
-            BodyOwner::ContractRecvArm {
-                contract,
-                recv_idx: recv.recv_idx(db),
-                arm_idx: arm.arm_idx(db),
-            },
-        )?,
-        arm,
-    );
+    let projected_fields = visible_recv_arg_fields(db, semantic, arm);
     let input = if abi_info.args_ty == TyId::unit(db) {
         RuntimeInputPlan::None
     } else {
@@ -796,6 +779,9 @@ fn contract_recv_wrapper<'db>(
     } else {
         RuntimeReturnPlan::Unit
     };
+    let passthrough = abi_info.ret_ty.is_some_and(|ret_ty| {
+        recv_arm_is_trivial_passthrough(db, semantic, arm, abi_info.args_ty, ret_ty)
+    });
     let wrapper = synthetic_instance(
         db,
         RuntimeSyntheticSpec::ContractRecvAbi {
@@ -806,6 +792,7 @@ fn contract_recv_wrapper<'db>(
                     Some(recv_arm) => recv_arm.is_payable(db),
                     None => false,
                 },
+                passthrough,
                 user_recv,
                 entry_effect_args: entry_effect_args.into_boxed_slice(),
                 input,
@@ -1601,6 +1588,77 @@ fn visible_recv_arg_fields<'db>(
         })
         .collect::<Vec<_>>()
         .into_boxed_slice()
+}
+
+fn recv_arm_is_trivial_passthrough<'db>(
+    db: &'db dyn MirDb,
+    semantic: SemanticInstance<'db>,
+    arm: RecvArmView<'db>,
+    args_ty: TyId<'db>,
+    ret_ty: TyId<'db>,
+) -> bool {
+    if ret_ty == TyId::unit(db) || ret_ty.is_never(db) {
+        return false;
+    }
+
+    let arg_bindings = arm.arg_bindings(db);
+    if arg_bindings.len() != 1 {
+        return false;
+    }
+
+    let arg_binding = &arg_bindings[0];
+    if arg_binding.tuple_index != 0 {
+        return false;
+    }
+
+    let typed_body = semantic.key(db).typed_body(db);
+    let Some(pat_binding) = typed_body.pat_binding(arg_binding.pat) else {
+        return false;
+    };
+    if semantic.binding_ty(db, pat_binding) != ret_ty {
+        return false;
+    }
+
+    let encoded_fields = args_ty
+        .field_types(db)
+        .into_iter()
+        .filter(|ty| *ty != TyId::unit(db))
+        .collect::<Vec<_>>();
+    if encoded_fields.len() != 1 || encoded_fields[0] != ret_ty {
+        return false;
+    }
+
+    let Some(body) = semantic.key(db).owner(db).body(db) else {
+        return false;
+    };
+    let Some(tail_expr) = single_stmt_block_tail_expr(db, body, body.expr(db)) else {
+        return false;
+    };
+
+    typed_body.expr_binding(tail_expr) == Some(pat_binding)
+}
+
+fn single_stmt_block_tail_expr<'db>(
+    db: &'db dyn MirDb,
+    body: hir::hir_def::Body<'db>,
+    root: ExprId,
+) -> Option<ExprId> {
+    match root.data(db, body) {
+        Partial::Present(Expr::Block(stmts)) => {
+            if stmts.len() != 1 {
+                return None;
+            }
+            let stmt = stmts[0];
+            match stmt.data(db, body) {
+                Partial::Present(Stmt::Expr(expr)) | Partial::Present(Stmt::Return(Some(expr))) => {
+                    Some(*expr)
+                }
+                _ => None,
+            }
+        }
+        Partial::Present(Expr::Path(_)) => Some(root),
+        _ => None,
+    }
 }
 
 fn memory_bytes_ty<'db>(

@@ -6,6 +6,8 @@ use core::abi::{
     AbiEncoder,
     AbiSize,
     AbiSpan,
+    AbiValidate,
+    ByteInput,
     Decode,
     Encode,
     encode_alloc,
@@ -88,6 +90,17 @@ impl<A: Abi> Encode<A> for Address {
 
 impl<A: Abi> AbiSpan<A> for Address {
     fn payload_end<I: core::abi::ByteInput>(_: I, base: u256, pos: u256) -> u256 {
+        pos + 32
+    }
+}
+
+impl<A: Abi> AbiValidate<A> for Address {
+    fn validate_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let _ = base
+        let word = input.word_at(pos)
+        if word >> 160 != 0 {
+            ops::revert(offset: 0, len: 0)
+        }
         pos + 32
     }
 }
@@ -413,7 +426,7 @@ impl Evm {
 
     /// Decode the current Solidity call arguments, skipping the 4-byte selector.
     pub fn decode_args<T>(self) -> T
-        where T: Decode<Sol>
+        where T: Decode<Sol> + AbiSize
     {
         decode_input_at(self.input(), size_of<Sol::Selector>())
     }

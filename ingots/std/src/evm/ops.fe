@@ -34,6 +34,7 @@ extern {
     pub(ingot) fn keccak256(offset: u256, len: u256) -> u256
     pub(ingot) const fn addmod(_ a: u256, _ b: u256, m: u256) -> u256
     pub(ingot) const fn mulmod(_ a: u256, _ b: u256, m: u256) -> u256
+    pub(ingot) fn signextend(byte: u256, value: u256) -> u256
 
     // -------------------------------------------------------------------------
     // Environment

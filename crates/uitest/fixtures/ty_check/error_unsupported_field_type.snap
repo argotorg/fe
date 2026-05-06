@@ -1,5 +1,6 @@
 ---
 source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/error_unsupported_field_type.fe
 ---
@@ -21,9 +22,9 @@ error[6-0003]: trait bound is not satisfied
   6 │ │ }
     │ ╰─^ `StorageMap<Address, u256, 0>` doesn't implement `Encode<Sol>`
     │
-    ┌─ src/abi.fe:270:14
+    ┌─ src/abi.fe:298:14
     │
-270 │     where T: Encode<A> + AbiSize, E: AbiEncoder<A>
+298 │     where T: Encode<A> + AbiSize, E: AbiEncoder<A>
     │              --------- required by this bound on `encode_field`
 
 error[6-0003]: trait bound is not satisfied
@@ -35,9 +36,9 @@ error[6-0003]: trait bound is not satisfied
   6 │ │ }
     │ ╰─^ `StorageMap<Address, u256, 0>` doesn't implement `AbiSize`
     │
-    ┌─ src/abi.fe:270:26
+    ┌─ src/abi.fe:298:26
     │
-270 │     where T: Encode<A> + AbiSize, E: AbiEncoder<A>
+298 │     where T: Encode<A> + AbiSize, E: AbiEncoder<A>
     │                          ------- required by this bound on `encode_field`
 
 error[6-0003]: trait bound is not satisfied
@@ -49,7 +50,7 @@ error[6-0003]: trait bound is not satisfied
   6 │ │ }
     │ ╰─^ `StorageMap<Address, u256, 0>` doesn't implement `AbiSize`
     │
-    ┌─ src/abi.fe:208:32
+    ┌─ src/abi.fe:226:32
     │
-208 │ pub fn dynamic_payload_size<T: AbiSize>(_ value: T) -> u256 {
+226 │ pub fn dynamic_payload_size<T: AbiSize>(_ value: T) -> u256 {
     │                                ------- required by this bound on `dynamic_payload_size`

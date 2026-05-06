@@ -1,5 +1,6 @@
 ---
 source: crates/hir/tests/ty_check.rs
+assertion_line: 46
 expression: res
 input_file: test_files/ty_check/contract_effects.fe
 ---
@@ -112,13 +113,13 @@ note:
    ┌─ contract_effects.fe:30:5
    │
 30 │     Deposit { amount: u256 } -> u256,
-   │     ^^^^^^^ () | Deposit | fn decode_field<Sol, u256, D> | fn dynamic_payload_size<u256> | fn encode_field<Sol, u256, E> | mut D | mut E | mut u256 | u256
+   │     ^^^^^^^ () | Deposit | I | bool | fn abi_field_head_size<u256> | fn abi_field_validate_end<Sol, u256, I> | fn decode_field<Sol, u256, D> | fn dynamic_payload_size<u256> | fn encode_field<Sol, u256, E> | mut D | mut E | mut u256 | u256
 
 note:
    ┌─ contract_effects.fe:33:5
    │
 33 │     Withdraw { amount: u256 } -> bool,
-   │     ^^^^^^^^ () | Withdraw | fn decode_field<Sol, u256, D> | fn dynamic_payload_size<u256> | fn encode_field<Sol, u256, E> | mut D | mut E | mut u256 | u256
+   │     ^^^^^^^^ () | I | Withdraw | bool | fn abi_field_head_size<u256> | fn abi_field_validate_end<Sol, u256, I> | fn decode_field<Sol, u256, D> | fn dynamic_payload_size<u256> | fn encode_field<Sol, u256, E> | mut D | mut E | mut u256 | u256
 
 note:
    ┌─ contract_effects.fe:36:5

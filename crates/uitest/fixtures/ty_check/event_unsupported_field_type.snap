@@ -1,5 +1,6 @@
 ---
 source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/event_unsupported_field_type.fe
 ---
@@ -12,9 +13,9 @@ error[6-0003]: trait bound is not satisfied
   6 │ │ }
     │ ╰─^ `StorageMap<Address, u256, 0>` doesn't implement `Encode<Sol>`
     │
-    ┌─ src/evm/effects.fe:344:14
+    ┌─ src/evm/effects.fe:357:14
     │
-344 │     where T: Encode<Sol> + AbiSize
+357 │     where T: Encode<Sol> + AbiSize
     │              ----------- required by this bound on `encode_abi_payload`
 
 error[6-0003]: trait bound is not satisfied
@@ -26,7 +27,7 @@ error[6-0003]: trait bound is not satisfied
   6 │ │ }
     │ ╰─^ `StorageMap<Address, u256, 0>` doesn't implement `AbiSize`
     │
-    ┌─ src/evm/effects.fe:344:28
+    ┌─ src/evm/effects.fe:357:28
     │
-344 │     where T: Encode<Sol> + AbiSize
+357 │     where T: Encode<Sol> + AbiSize
     │                            ------- required by this bound on `encode_abi_payload`

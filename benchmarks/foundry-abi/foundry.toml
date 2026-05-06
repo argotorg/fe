@@ -1,0 +1,6 @@
+[profile.default]
+src = "src"
+test = "test"
+solc = "/usr/bin/solc"
+auto_detect_solc = false
+fs_permissions = [{ access = "read", path = "./fe-out" }]

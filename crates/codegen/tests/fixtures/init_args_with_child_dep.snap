@@ -237,17 +237,11 @@ object "Child" {
       let v6 := t33
       let v23 := 0x20
       let v7 := v23
-      let t34 := add(v6, v7)
-      if lt(t34, v6) {
-        mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-        mstore(4, 0x11)
-        revert(0, 36)
-      }
-      let v24 := t34
+      let v24 := add(v6, v7)
       let v8 := v24
       v2 := v8
-      let t35 := mload(add(p0, 64))
-      let v25 := t35
+      let t34 := mload(add(p0, 64))
+      let v25 := t34
       let v26 := iszero(iszero(lt(v2, v25)))
       let v11 := iszero(iszero(v26))
       if iszero(iszero(v11)) {
@@ -270,8 +264,8 @@ object "Child" {
         }
         if iszero(iszero(iszero(v13))) {
           let v18 := p0
-          let t36 := mload(add(p0, 64))
-          let v19 := t36
+          let t35 := mload(add(p0, 64))
+          let v19 := t35
           let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_2397(v18, v19)
           let v20 := v31
           let v3 := v20
@@ -292,17 +286,11 @@ object "Child" {
       let v6 := t33
       let v23 := 0x20
       let v7 := v23
-      let t34 := add(v6, v7)
-      if lt(t34, v6) {
-        mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-        mstore(4, 0x11)
-        revert(0, 36)
-      }
-      let v24 := t34
+      let v24 := add(v6, v7)
       let v8 := v24
       v2 := v8
-      let t35 := mload(add(p0, 64))
-      let v25 := t35
+      let t34 := mload(add(p0, 64))
+      let v25 := t34
       let v26 := iszero(iszero(lt(v2, v25)))
       let v11 := iszero(iszero(v26))
       if iszero(iszero(v11)) {
@@ -325,8 +313,8 @@ object "Child" {
         }
         if iszero(iszero(iszero(v13))) {
           let v18 := p0
-          let t36 := mload(add(p0, 64))
-          let v19 := t36
+          let t35 := mload(add(p0, 64))
+          let v19 := t35
           let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_5e1a(v18, v19)
           let v20 := v31
           let v3 := v20
@@ -390,9 +378,6 @@ object "Child" {
         let v0 := 0
         v0 := 0
         let v1 := shr(224, calldataload(0))
-        switch and(v1, 0xffffffff)
-        default {
-        }
         revert(v0, v0)
       }
       $contract_runtime_root_Child()
@@ -975,62 +960,71 @@ object "Parent" {
       leave
     }
     function $encode_field(p0, p1, p2) {
-      let v28 := 0
-      let v8 := iszero(iszero(v28))
-      if iszero(iszero(v8)) {
-        let v29 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$base_7dbb_0(p1)
-        let v9 := v29
-        let v3 := v9
+      let v38 := 0
+      let v9 := iszero(iszero(v38))
+      if iszero(iszero(v9)) {
+        let v39 := $std$lib$abi$sol$impl_trait$SolEncoder$19ce$base_7dbb_0(p1)
+        let v10 := v39
+        let v3 := v10
         let v4 := p2
-        let v30 := $core$lib$abi$trait$AbiSize$payload_size$ge513_b316(p0)
-        let v10 := v30
-        let v5 := v10
-        let v11 := v4
-        let t54 := mload(v11)
-        let v31 := t54
-        let t55 := sub(v31, v3)
-        if gt(v3, v31) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v32 := t55
-        let v12 := v32
-        $std$lib$abi$sol$impl_trait$SolEncoder$19ce$write_word_9d70(p1, v12)
-        let v35 := $impl_trait$SolEncoder$pos(p1)
-        let v14 := v35
-        let v6 := v14
-        let t56 := mload(v4)
-        let v37 := t56
-        $impl_trait$SolEncoder$set_base(p1, v37)
-        let t57 := mload(v4)
-        let v40 := t57
-        $impl_trait$SolEncoder$set_pos(p1, v40)
-        let v42 := p1
-        let v17 := v42
-        $encode$g426c(p0, v17)
+        let v40 := $core$lib$abi$trait$AbiSize$payload_size$ge513_b316(p0)
+        let v11 := v40
+        let v5 := v11
+        let v12 := v4
+        let t72 := mload(v12)
+        let v41 := t72
+        let v42 := sub(v41, v3)
+        let v13 := v42
+        $std$lib$abi$sol$impl_trait$SolEncoder$19ce$write_word_9d70(p1, v13)
+        let v45 := $impl_trait$SolEncoder$pos(p1)
+        let v15 := v45
+        let v6 := v15
+        let t73 := mload(v4)
+        let v47 := t73
+        $impl_trait$SolEncoder$set_base(p1, v47)
+        let t74 := mload(v4)
+        let v50 := t74
+        $impl_trait$SolEncoder$set_pos(p1, v50)
+        let v52 := p1
+        let v18 := v52
+        $encode$g426c(p0, v18)
         $impl_trait$SolEncoder$set_base(p1, v3)
         $impl_trait$SolEncoder$set_pos(p1, v6)
-        let v21 := v4
-        let t58 := mload(v21)
-        let v49 := t58
-        let t59 := add(v49, v5)
-        if lt(t59, v49) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
+        let v22 := v4
+        let t75 := mload(v22)
+        let v59 := t75
+        let v60 := add(v59, v5)
+        let v23 := v60
+        mstore(p2, v23)
+        leave
+      }
+      if iszero(iszero(iszero(v9))) {
+        let v61 := 1
+        let v28 := iszero(iszero(v61))
+        if iszero(iszero(v28)) {
+          let v62 := $impl_trait$SolEncoder$pos(p1)
+          let v29 := v62
+          let v7 := v29
+          $encode_to_ptr(p0, v7)
+          let v65 := 0x20
+          let v31 := v65
+          let v66 := add(v7, v31)
+          let v32 := v66
+          $impl_trait$SolEncoder$set_pos(p1, v32)
+          leave
         }
-        let v50 := t59
-        let v22 := v50
-        mstore(p2, v22)
-        leave
+        if iszero(iszero(iszero(v28))) {
+          let v69 := p1
+          let v36 := v69
+          $encode$g426c(p0, v36)
+          leave
+        }
       }
-      if iszero(iszero(iszero(v8))) {
-        let v51 := p1
-        let v26 := v51
-        $encode$g426c(p0, v26)
-        leave
-      }
+    }
+    function $encode_to_ptr(p0, p1) {
+      let v2 := p1
+      $store_word(v2, p0)
+      leave
     }
     function $encoder_new(p0) -> ret {
       let v1 := p0
@@ -1209,17 +1203,11 @@ object "Parent" {
       let v6 := t33
       let v23 := 0x20
       let v7 := v23
-      let t34 := add(v6, v7)
-      if lt(t34, v6) {
-        mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-        mstore(4, 0x11)
-        revert(0, 36)
-      }
-      let v24 := t34
+      let v24 := add(v6, v7)
       let v8 := v24
       v2 := v8
-      let t35 := mload(add(p0, 64))
-      let v25 := t35
+      let t34 := mload(add(p0, 64))
+      let v25 := t34
       let v26 := iszero(iszero(lt(v2, v25)))
       let v11 := iszero(iszero(v26))
       if iszero(iszero(v11)) {
@@ -1242,8 +1230,8 @@ object "Parent" {
         }
         if iszero(iszero(iszero(v13))) {
           let v18 := p0
-          let t36 := mload(add(p0, 64))
-          let v19 := t36
+          let t35 := mload(add(p0, 64))
+          let v19 := t35
           let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_89b0(v18, v19)
           let v20 := v31
           let v3 := v20
@@ -1264,17 +1252,11 @@ object "Parent" {
       let v6 := t33
       let v23 := 0x20
       let v7 := v23
-      let t34 := add(v6, v7)
-      if lt(t34, v6) {
-        mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-        mstore(4, 0x11)
-        revert(0, 36)
-      }
-      let v24 := t34
+      let v24 := add(v6, v7)
       let v8 := v24
       v2 := v8
-      let t35 := mload(add(p0, 64))
-      let v25 := t35
+      let t34 := mload(add(p0, 64))
+      let v25 := t34
       let v26 := iszero(iszero(lt(v2, v25)))
       let v11 := iszero(iszero(v26))
       if iszero(iszero(v11)) {
@@ -1297,8 +1279,8 @@ object "Parent" {
         }
         if iszero(iszero(iszero(v13))) {
           let v18 := p0
-          let t36 := mload(add(p0, 64))
-          let v19 := t36
+          let t35 := mload(add(p0, 64))
+          let v19 := t35
           let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_d08f(v18, v19)
           let v20 := v31
           let v3 := v20
@@ -1326,6 +1308,12 @@ object "Parent" {
     function $impl_trait$SolEncoder$set_pos(p0, p1) {
       let v2 := p1
       mstore(add(p0, 32), v2)
+      leave
+    }
+    function $store_word(p0, p1) {
+      let v2 := p0
+      let v3 := p1
+      mstore(v2, v3)
       leave
     }
     function $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_89b0(p0, p1) -> ret {
@@ -1626,17 +1614,11 @@ object "Parent" {
         let v6 := t33
         let v23 := 0x20
         let v7 := v23
-        let t34 := add(v6, v7)
-        if lt(t34, v6) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v24 := t34
+        let v24 := add(v6, v7)
         let v8 := v24
         v2 := v8
-        let t35 := mload(add(p0, 64))
-        let v25 := t35
+        let t34 := mload(add(p0, 64))
+        let v25 := t34
         let v26 := iszero(iszero(lt(v2, v25)))
         let v11 := iszero(iszero(v26))
         if iszero(iszero(v11)) {
@@ -1659,8 +1641,8 @@ object "Parent" {
           }
           if iszero(iszero(iszero(v13))) {
             let v18 := p0
-            let t36 := mload(add(p0, 64))
-            let v19 := t36
+            let t35 := mload(add(p0, 64))
+            let v19 := t35
             let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_2397(v18, v19)
             let v20 := v31
             let v3 := v20
@@ -1681,17 +1663,11 @@ object "Parent" {
         let v6 := t33
         let v23 := 0x20
         let v7 := v23
-        let t34 := add(v6, v7)
-        if lt(t34, v6) {
-          mstore(0, 0x4e487b7100000000000000000000000000000000000000000000000000000000)
-          mstore(4, 0x11)
-          revert(0, 36)
-        }
-        let v24 := t34
+        let v24 := add(v6, v7)
         let v8 := v24
         v2 := v8
-        let t35 := mload(add(p0, 64))
-        let v25 := t35
+        let t34 := mload(add(p0, 64))
+        let v25 := t34
         let v26 := iszero(iszero(lt(v2, v25)))
         let v11 := iszero(iszero(v26))
         if iszero(iszero(v11)) {
@@ -1714,8 +1690,8 @@ object "Parent" {
           }
           if iszero(iszero(iszero(v13))) {
             let v18 := p0
-            let t36 := mload(add(p0, 64))
-            let v19 := t36
+            let t35 := mload(add(p0, 64))
+            let v19 := t35
             let v31 := $std$lib$evm$memory_input$impl_trait$MemoryBytes$c1cd$word_at_5e1a(v18, v19)
             let v20 := v31
             let v3 := v20
@@ -1779,9 +1755,6 @@ object "Parent" {
           let v0 := 0
           v0 := 0
           let v1 := shr(224, calldataload(0))
-          switch and(v1, 0xffffffff)
-          default {
-          }
           revert(v0, v0)
         }
         $contract_runtime_root_Child()
@@ -1794,9 +1767,6 @@ object "Parent" {
         let v0 := 0
         v0 := 0
         let v1 := shr(224, calldataload(0))
-        switch and(v1, 0xffffffff)
-        default {
-        }
         revert(v0, v0)
       }
       $contract_runtime_root_Parent()

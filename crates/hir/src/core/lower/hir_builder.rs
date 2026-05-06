@@ -5,7 +5,7 @@ use parser::ast::prelude::AstNode;
 use crate::{
     HirDb,
     hir_def::{
-        ArithBinOp, AssocConstDef, AssocTyDef, AttrListId, BinOp, Body, BodyKind,
+        ArithBinOp, AssocConstDef, AssocTyDef, AttrListId, BinOp, Body, BodyKind, Cond,
         EffectParamListId, Expr, ExprId, FieldDefListId, FieldIndex, Func, FuncModifiers,
         FuncParam, FuncParamListId, FuncParamMode, FuncParamName, GenericArg, GenericArgListId,
         GenericParam, GenericParamListId, IdentId, ImplTrait, ItemKind, Mod, Partial, Pat, PatId,
@@ -632,6 +632,89 @@ where
             GenericArgListId::none(self.db()),
             args,
         ))
+    }
+
+    pub(super) fn if_expr(
+        &mut self,
+        cond_expr: ExprId,
+        then_expr: ExprId,
+        else_expr: ExprId,
+    ) -> ExprId {
+        let cond = self.body.push_cond(Cond::Expr(cond_expr));
+        // Fe `if` expressions require block bodies. When constructing these
+        // blocks synthetically, we must also register them with the
+        // `ScopeGraphBuilder` so name resolution has a scope entry.
+        let wrap = |this: &mut Self, expr: ExprId| -> ExprId {
+            this.body.f_ctxt.enter_block_scope();
+            let stmt = this.push_stmt_raw(Stmt::Expr(expr));
+            let block = this.push_expr(Expr::Block(vec![stmt]));
+            this.body.f_ctxt.leave_block_scope(block);
+            block
+        };
+        let then_expr = wrap(self, then_expr);
+        let else_expr = wrap(self, else_expr);
+        self.push_expr(Expr::If(cond, then_expr, Some(else_expr)))
+    }
+
+    pub(super) fn abi_field_head_size_expr(&mut self, ty: TypeId<'db>) -> ExprId {
+        let db = self.db();
+        let args = GenericArgListId::given(
+            db,
+            vec![GenericArg::Type(TypeGenericArg {
+                ty: Partial::Present(ty),
+            })],
+        );
+        let path = PathId::from_ident(db, self.roots.core)
+            .push_str(db, "abi")
+            .push_str_args(db, "abi_field_head_size", args);
+        let callee = self.path_expr(path);
+        self.call_expr(callee, vec![])
+    }
+
+    pub(super) fn abi_field_validate_end_expr(
+        &mut self,
+        field_ty: TypeId<'db>,
+        input_ty: TypeId<'db>,
+        input: ExprId,
+        base: ExprId,
+        pos: ExprId,
+    ) -> ExprId {
+        let db = self.db();
+        let args = GenericArgListId::given(
+            db,
+            vec![
+                GenericArg::Type(TypeGenericArg {
+                    ty: Partial::Present(self.sol_ty()),
+                }),
+                GenericArg::Type(TypeGenericArg {
+                    ty: Partial::Present(field_ty),
+                }),
+                GenericArg::Type(TypeGenericArg {
+                    ty: Partial::Present(input_ty),
+                }),
+            ],
+        );
+        let path = PathId::from_ident(db, self.roots.core)
+            .push_str(db, "abi")
+            .push_str_args(db, "abi_field_validate_end", args);
+        let callee = self.path_expr(path);
+        self.call_expr_with_args(
+            callee,
+            vec![
+                CallArg {
+                    label: None,
+                    expr: input,
+                },
+                CallArg {
+                    label: Some(IdentId::new(db, "base".to_string())),
+                    expr: base,
+                },
+                CallArg {
+                    label: Some(IdentId::new(db, "pos".to_string())),
+                    expr: pos,
+                },
+            ],
+        )
     }
 
     pub(super) fn encode_fields(

@@ -1,0 +1,676 @@
+use std::abi::{sol, DynArray, DynString}
+use std::abi::sol::{Int104, Int112, Int120, Int136, Int144, Int152, Int160, Int168, Int176, Int184, Int192, Int200, Int208, Int216, Int224, Int232, Int24, Int240, Int248, Int40, Int48, Int56, Int72, Int80, Int88, Int96, Uint104, Uint112, Uint120, Uint136, Uint144, Uint152, Uint160, Uint168, Uint176, Uint184, Uint192, Uint200, Uint208, Uint216, Uint224, Uint232, Uint24, Uint240, Uint248, Uint40, Uint48, Uint56, Uint72, Uint80, Uint88, Uint96}
+use std::evm::Address
+
+msg AbiRoundtripMsg {
+    #[selector = sol("echoBool(bool)")]
+    EchoBool { value: bool } -> bool,
+    #[selector = sol("echoAddress(address)")]
+    EchoAddress { value: Address } -> Address,
+    #[selector = sol("echoString(string)")]
+    EchoString { value: DynString } -> DynString,
+    #[selector = sol("echoUint8(uint8)")]
+    EchoUint8 { value: u8 } -> u8,
+    #[selector = sol("echoUint16(uint16)")]
+    EchoUint16 { value: u16 } -> u16,
+    #[selector = sol("echoUint32(uint32)")]
+    EchoUint32 { value: u32 } -> u32,
+    #[selector = sol("echoUint64(uint64)")]
+    EchoUint64 { value: u64 } -> u64,
+    #[selector = sol("echoUint128(uint128)")]
+    EchoUint128 { value: u128 } -> u128,
+    #[selector = sol("echoUint(uint256)")]
+    EchoUint { value: u256 } -> u256,
+    #[selector = sol("echoInt8(int8)")]
+    EchoInt8 { value: i8 } -> i8,
+    #[selector = sol("echoInt16(int16)")]
+    EchoInt16 { value: i16 } -> i16,
+    #[selector = sol("echoInt32(int32)")]
+    EchoInt32 { value: i32 } -> i32,
+    #[selector = sol("echoInt64(int64)")]
+    EchoInt64 { value: i64 } -> i64,
+    #[selector = sol("echoInt128(int128)")]
+    EchoInt128 { value: i128 } -> i128,
+    #[selector = sol("echoInt256(int256)")]
+    EchoInt256 { value: i256 } -> i256,
+    #[selector = sol("echoUint24(uint24)")]
+    EchoUint24 { value: Uint24 } -> Uint24,
+    #[selector = sol("echoUint40(uint40)")]
+    EchoUint40 { value: Uint40 } -> Uint40,
+    #[selector = sol("echoUint48(uint48)")]
+    EchoUint48 { value: Uint48 } -> Uint48,
+    #[selector = sol("echoUint56(uint56)")]
+    EchoUint56 { value: Uint56 } -> Uint56,
+    #[selector = sol("echoUint72(uint72)")]
+    EchoUint72 { value: Uint72 } -> Uint72,
+    #[selector = sol("echoUint80(uint80)")]
+    EchoUint80 { value: Uint80 } -> Uint80,
+    #[selector = sol("echoUint88(uint88)")]
+    EchoUint88 { value: Uint88 } -> Uint88,
+    #[selector = sol("echoUint96(uint96)")]
+    EchoUint96 { value: Uint96 } -> Uint96,
+    #[selector = sol("echoUint104(uint104)")]
+    EchoUint104 { value: Uint104 } -> Uint104,
+    #[selector = sol("echoUint112(uint112)")]
+    EchoUint112 { value: Uint112 } -> Uint112,
+    #[selector = sol("echoUint120(uint120)")]
+    EchoUint120 { value: Uint120 } -> Uint120,
+    #[selector = sol("echoUint136(uint136)")]
+    EchoUint136 { value: Uint136 } -> Uint136,
+    #[selector = sol("echoUint144(uint144)")]
+    EchoUint144 { value: Uint144 } -> Uint144,
+    #[selector = sol("echoUint152(uint152)")]
+    EchoUint152 { value: Uint152 } -> Uint152,
+    #[selector = sol("echoUint160(uint160)")]
+    EchoUint160 { value: Uint160 } -> Uint160,
+    #[selector = sol("echoUint168(uint168)")]
+    EchoUint168 { value: Uint168 } -> Uint168,
+    #[selector = sol("echoUint176(uint176)")]
+    EchoUint176 { value: Uint176 } -> Uint176,
+    #[selector = sol("echoUint184(uint184)")]
+    EchoUint184 { value: Uint184 } -> Uint184,
+    #[selector = sol("echoUint192(uint192)")]
+    EchoUint192 { value: Uint192 } -> Uint192,
+    #[selector = sol("echoUint200(uint200)")]
+    EchoUint200 { value: Uint200 } -> Uint200,
+    #[selector = sol("echoUint208(uint208)")]
+    EchoUint208 { value: Uint208 } -> Uint208,
+    #[selector = sol("echoUint216(uint216)")]
+    EchoUint216 { value: Uint216 } -> Uint216,
+    #[selector = sol("echoUint224(uint224)")]
+    EchoUint224 { value: Uint224 } -> Uint224,
+    #[selector = sol("echoUint232(uint232)")]
+    EchoUint232 { value: Uint232 } -> Uint232,
+    #[selector = sol("echoUint240(uint240)")]
+    EchoUint240 { value: Uint240 } -> Uint240,
+    #[selector = sol("echoUint248(uint248)")]
+    EchoUint248 { value: Uint248 } -> Uint248,
+    #[selector = sol("echoInt24(int24)")]
+    EchoInt24 { value: Int24 } -> Int24,
+    #[selector = sol("echoInt40(int40)")]
+    EchoInt40 { value: Int40 } -> Int40,
+    #[selector = sol("echoInt48(int48)")]
+    EchoInt48 { value: Int48 } -> Int48,
+    #[selector = sol("echoInt56(int56)")]
+    EchoInt56 { value: Int56 } -> Int56,
+    #[selector = sol("echoInt72(int72)")]
+    EchoInt72 { value: Int72 } -> Int72,
+    #[selector = sol("echoInt80(int80)")]
+    EchoInt80 { value: Int80 } -> Int80,
+    #[selector = sol("echoInt88(int88)")]
+    EchoInt88 { value: Int88 } -> Int88,
+    #[selector = sol("echoInt96(int96)")]
+    EchoInt96 { value: Int96 } -> Int96,
+    #[selector = sol("echoInt104(int104)")]
+    EchoInt104 { value: Int104 } -> Int104,
+    #[selector = sol("echoInt112(int112)")]
+    EchoInt112 { value: Int112 } -> Int112,
+    #[selector = sol("echoInt120(int120)")]
+    EchoInt120 { value: Int120 } -> Int120,
+    #[selector = sol("echoInt136(int136)")]
+    EchoInt136 { value: Int136 } -> Int136,
+    #[selector = sol("echoInt144(int144)")]
+    EchoInt144 { value: Int144 } -> Int144,
+    #[selector = sol("echoInt152(int152)")]
+    EchoInt152 { value: Int152 } -> Int152,
+    #[selector = sol("echoInt160(int160)")]
+    EchoInt160 { value: Int160 } -> Int160,
+    #[selector = sol("echoInt168(int168)")]
+    EchoInt168 { value: Int168 } -> Int168,
+    #[selector = sol("echoInt176(int176)")]
+    EchoInt176 { value: Int176 } -> Int176,
+    #[selector = sol("echoInt184(int184)")]
+    EchoInt184 { value: Int184 } -> Int184,
+    #[selector = sol("echoInt192(int192)")]
+    EchoInt192 { value: Int192 } -> Int192,
+    #[selector = sol("echoInt200(int200)")]
+    EchoInt200 { value: Int200 } -> Int200,
+    #[selector = sol("echoInt208(int208)")]
+    EchoInt208 { value: Int208 } -> Int208,
+    #[selector = sol("echoInt216(int216)")]
+    EchoInt216 { value: Int216 } -> Int216,
+    #[selector = sol("echoInt224(int224)")]
+    EchoInt224 { value: Int224 } -> Int224,
+    #[selector = sol("echoInt232(int232)")]
+    EchoInt232 { value: Int232 } -> Int232,
+    #[selector = sol("echoInt240(int240)")]
+    EchoInt240 { value: Int240 } -> Int240,
+    #[selector = sol("echoInt248(int248)")]
+    EchoInt248 { value: Int248 } -> Int248,
+    #[selector = sol("echoBoolArray4(bool[4])")]
+    EchoBoolArray4 { value: [bool; 4] } -> [bool; 4],
+    #[selector = sol("echoAddressArray4(address[4])")]
+    EchoAddressArray4 { value: [Address; 4] } -> [Address; 4],
+    #[selector = sol("echoUint8Array4(uint8[4])")]
+    EchoUint8Array4 { value: [u8; 4] } -> [u8; 4],
+    #[selector = sol("echoUint16Array4(uint16[4])")]
+    EchoUint16Array4 { value: [u16; 4] } -> [u16; 4],
+    #[selector = sol("echoUint32Array4(uint32[4])")]
+    EchoUint32Array4 { value: [u32; 4] } -> [u32; 4],
+    #[selector = sol("echoUint64Array4(uint64[4])")]
+    EchoUint64Array4 { value: [u64; 4] } -> [u64; 4],
+    #[selector = sol("echoUint128Array4(uint128[4])")]
+    EchoUint128Array4 { value: [u128; 4] } -> [u128; 4],
+    #[selector = sol("echoUintArray4(uint256[4])")]
+    EchoUintArray4 { value: [u256; 4] } -> [u256; 4],
+    #[selector = sol("echoInt8Array4(int8[4])")]
+    EchoInt8Array4 { value: [i8; 4] } -> [i8; 4],
+    #[selector = sol("echoInt16Array4(int16[4])")]
+    EchoInt16Array4 { value: [i16; 4] } -> [i16; 4],
+    #[selector = sol("echoInt32Array4(int32[4])")]
+    EchoInt32Array4 { value: [i32; 4] } -> [i32; 4],
+    #[selector = sol("echoInt64Array4(int64[4])")]
+    EchoInt64Array4 { value: [i64; 4] } -> [i64; 4],
+    #[selector = sol("echoInt128Array4(int128[4])")]
+    EchoInt128Array4 { value: [i128; 4] } -> [i128; 4],
+    #[selector = sol("echoInt256Array4(int256[4])")]
+    EchoInt256Array4 { value: [i256; 4] } -> [i256; 4],
+    #[selector = sol("echoUint24Array4(uint24[4])")]
+    EchoUint24Array4 { value: [Uint24; 4] } -> [Uint24; 4],
+    #[selector = sol("echoUint40Array4(uint40[4])")]
+    EchoUint40Array4 { value: [Uint40; 4] } -> [Uint40; 4],
+    #[selector = sol("echoUint96Array4(uint96[4])")]
+    EchoUint96Array4 { value: [Uint96; 4] } -> [Uint96; 4],
+    #[selector = sol("echoUint160Array4(uint160[4])")]
+    EchoUint160Array4 { value: [Uint160; 4] } -> [Uint160; 4],
+    #[selector = sol("echoUint248Array4(uint248[4])")]
+    EchoUint248Array4 { value: [Uint248; 4] } -> [Uint248; 4],
+    #[selector = sol("echoInt24Array4(int24[4])")]
+    EchoInt24Array4 { value: [Int24; 4] } -> [Int24; 4],
+    #[selector = sol("echoInt40Array4(int40[4])")]
+    EchoInt40Array4 { value: [Int40; 4] } -> [Int40; 4],
+    #[selector = sol("echoInt96Array4(int96[4])")]
+    EchoInt96Array4 { value: [Int96; 4] } -> [Int96; 4],
+    #[selector = sol("echoInt160Array4(int160[4])")]
+    EchoInt160Array4 { value: [Int160; 4] } -> [Int160; 4],
+    #[selector = sol("echoInt248Array4(int248[4])")]
+    EchoInt248Array4 { value: [Int248; 4] } -> [Int248; 4],
+    #[selector = sol("echoBoolMatrix2x2(bool[2][2])")]
+    EchoBoolMatrix2x2 { value: [[bool; 2]; 2] } -> [[bool; 2]; 2],
+    #[selector = sol("echoAddressMatrix2x2(address[2][2])")]
+    EchoAddressMatrix2x2 { value: [[Address; 2]; 2] } -> [[Address; 2]; 2],
+    #[selector = sol("echoUintMatrix2x2(uint256[2][2])")]
+    EchoUintMatrix2x2 { value: [[u256; 2]; 2] } -> [[u256; 2]; 2],
+    #[selector = sol("echoInt256Matrix2x2(int256[2][2])")]
+    EchoInt256Matrix2x2 { value: [[i256; 2]; 2] } -> [[i256; 2]; 2],
+    #[selector = sol("echoUint24Matrix2x2(uint24[2][2])")]
+    EchoUint24Matrix2x2 { value: [[Uint24; 2]; 2] } -> [[Uint24; 2]; 2],
+    #[selector = sol("echoInt40Matrix2x2(int40[2][2])")]
+    EchoInt40Matrix2x2 { value: [[Int40; 2]; 2] } -> [[Int40; 2]; 2],
+    #[selector = sol("echoBoolAddressPairArray4((bool,address)[4])")]
+    EchoBoolAddressPairArray4 { value: [(bool, Address); 4] } -> [(bool, Address); 4],
+    #[selector = sol("echoUint24Int40PairArray4((uint24,int40)[4])")]
+    EchoUint24Int40PairArray4 { value: [(Uint24, Int40); 4] } -> [(Uint24, Int40); 4],
+    #[selector = sol("echoBoolAddressU256TripleArray4((bool,address,uint256)[4])")]
+    EchoBoolAddressU256TripleArray4 { value: [(bool, Address, u256); 4] } -> [(bool, Address, u256); 4],
+    #[selector = sol("echoStringArray2(string[2])")]
+    EchoStringArray2 { value: [DynString; 2] } -> [DynString; 2],
+    #[selector = sol("echoStringU64PairArray2((string,uint64)[2])")]
+    EchoStringU64PairArray2 { value: [(DynString, u64); 2] } -> [(DynString, u64); 2],
+    #[selector = sol("echoUintArray(uint256[])")]
+    EchoUintArray { value: DynArray<u256> } -> DynArray<u256>,
+    #[selector = sol("echoBoolAddressPairArray((bool,address)[])")]
+    EchoBoolAddressPairArray { value: DynArray<(bool, Address)> } -> DynArray<(bool, Address)>,
+    #[selector = sol("echoStringArray(string[])")]
+    EchoStringArray { value: DynArray<DynString> } -> DynArray<DynString>,
+    #[selector = sol("echoStringU64PairArray((string,uint64)[])")]
+    EchoStringU64PairArray { value: DynArray<(DynString, u64)> } -> DynArray<(DynString, u64)>,
+    #[selector = sol("echoPair((string,uint64))")]
+    EchoPair { value: (DynString, u64) } -> (DynString, u64),
+    #[selector = sol("echoBoolAddressPair((bool,address))")]
+    EchoBoolAddressPair { value: (bool, Address) } -> (bool, Address),
+    #[selector = sol("echoUint24Int40Pair((uint24,int40))")]
+    EchoUint24Int40Pair { value: (Uint24, Int40) } -> (Uint24, Int40),
+    #[selector = sol("echoBoolAddressU256Triple((bool,address,uint256))")]
+    EchoBoolAddressU256Triple { value: (bool, Address, u256) } -> (bool, Address, u256),
+    #[selector = sol("echoStringBoolU64Triple((string,bool,uint64))")]
+    EchoStringBoolU64Triple { value: (DynString, bool, u64) } -> (DynString, bool, u64),
+}
+
+pub contract AbiRoundtripFe {
+    recv AbiRoundtripMsg {
+        EchoBool { value } -> bool {
+            value
+        }
+
+        EchoAddress { value } -> Address {
+            value
+        }
+
+        EchoString { value } -> DynString {
+            value
+        }
+
+        EchoUint8 { value } -> u8 {
+            value
+        }
+
+        EchoUint16 { value } -> u16 {
+            value
+        }
+
+        EchoUint32 { value } -> u32 {
+            value
+        }
+
+        EchoUint64 { value } -> u64 {
+            value
+        }
+
+        EchoUint128 { value } -> u128 {
+            value
+        }
+
+        EchoUint { value } -> u256 {
+            value
+        }
+
+        EchoInt8 { value } -> i8 {
+            value
+        }
+
+        EchoInt16 { value } -> i16 {
+            value
+        }
+
+        EchoInt32 { value } -> i32 {
+            value
+        }
+
+        EchoInt64 { value } -> i64 {
+            value
+        }
+
+        EchoInt128 { value } -> i128 {
+            value
+        }
+
+        EchoInt256 { value } -> i256 {
+            value
+        }
+
+        EchoUint24 { value } -> Uint24 {
+            value
+        }
+
+        EchoUint40 { value } -> Uint40 {
+            value
+        }
+
+        EchoUint48 { value } -> Uint48 {
+            value
+        }
+
+        EchoUint56 { value } -> Uint56 {
+            value
+        }
+
+        EchoUint72 { value } -> Uint72 {
+            value
+        }
+
+        EchoUint80 { value } -> Uint80 {
+            value
+        }
+
+        EchoUint88 { value } -> Uint88 {
+            value
+        }
+
+        EchoUint96 { value } -> Uint96 {
+            value
+        }
+
+        EchoUint104 { value } -> Uint104 {
+            value
+        }
+
+        EchoUint112 { value } -> Uint112 {
+            value
+        }
+
+        EchoUint120 { value } -> Uint120 {
+            value
+        }
+
+        EchoUint136 { value } -> Uint136 {
+            value
+        }
+
+        EchoUint144 { value } -> Uint144 {
+            value
+        }
+
+        EchoUint152 { value } -> Uint152 {
+            value
+        }
+
+        EchoUint160 { value } -> Uint160 {
+            value
+        }
+
+        EchoUint168 { value } -> Uint168 {
+            value
+        }
+
+        EchoUint176 { value } -> Uint176 {
+            value
+        }
+
+        EchoUint184 { value } -> Uint184 {
+            value
+        }
+
+        EchoUint192 { value } -> Uint192 {
+            value
+        }
+
+        EchoUint200 { value } -> Uint200 {
+            value
+        }
+
+        EchoUint208 { value } -> Uint208 {
+            value
+        }
+
+        EchoUint216 { value } -> Uint216 {
+            value
+        }
+
+        EchoUint224 { value } -> Uint224 {
+            value
+        }
+
+        EchoUint232 { value } -> Uint232 {
+            value
+        }
+
+        EchoUint240 { value } -> Uint240 {
+            value
+        }
+
+        EchoUint248 { value } -> Uint248 {
+            value
+        }
+
+        EchoInt24 { value } -> Int24 {
+            value
+        }
+
+        EchoInt40 { value } -> Int40 {
+            value
+        }
+
+        EchoInt48 { value } -> Int48 {
+            value
+        }
+
+        EchoInt56 { value } -> Int56 {
+            value
+        }
+
+        EchoInt72 { value } -> Int72 {
+            value
+        }
+
+        EchoInt80 { value } -> Int80 {
+            value
+        }
+
+        EchoInt88 { value } -> Int88 {
+            value
+        }
+
+        EchoInt96 { value } -> Int96 {
+            value
+        }
+
+        EchoInt104 { value } -> Int104 {
+            value
+        }
+
+        EchoInt112 { value } -> Int112 {
+            value
+        }
+
+        EchoInt120 { value } -> Int120 {
+            value
+        }
+
+        EchoInt136 { value } -> Int136 {
+            value
+        }
+
+        EchoInt144 { value } -> Int144 {
+            value
+        }
+
+        EchoInt152 { value } -> Int152 {
+            value
+        }
+
+        EchoInt160 { value } -> Int160 {
+            value
+        }
+
+        EchoInt168 { value } -> Int168 {
+            value
+        }
+
+        EchoInt176 { value } -> Int176 {
+            value
+        }
+
+        EchoInt184 { value } -> Int184 {
+            value
+        }
+
+        EchoInt192 { value } -> Int192 {
+            value
+        }
+
+        EchoInt200 { value } -> Int200 {
+            value
+        }
+
+        EchoInt208 { value } -> Int208 {
+            value
+        }
+
+        EchoInt216 { value } -> Int216 {
+            value
+        }
+
+        EchoInt224 { value } -> Int224 {
+            value
+        }
+
+        EchoInt232 { value } -> Int232 {
+            value
+        }
+
+        EchoInt240 { value } -> Int240 {
+            value
+        }
+
+        EchoInt248 { value } -> Int248 {
+            value
+        }
+
+        EchoBoolArray4 { value } -> [bool; 4] {
+            value
+        }
+
+        EchoAddressArray4 { value } -> [Address; 4] {
+            value
+        }
+
+        EchoUint8Array4 { value } -> [u8; 4] {
+            value
+        }
+
+        EchoUint16Array4 { value } -> [u16; 4] {
+            value
+        }
+
+        EchoUint32Array4 { value } -> [u32; 4] {
+            value
+        }
+
+        EchoUint64Array4 { value } -> [u64; 4] {
+            value
+        }
+
+        EchoUint128Array4 { value } -> [u128; 4] {
+            value
+        }
+
+        EchoUintArray4 { value } -> [u256; 4] {
+            value
+        }
+
+        EchoInt8Array4 { value } -> [i8; 4] {
+            value
+        }
+
+        EchoInt16Array4 { value } -> [i16; 4] {
+            value
+        }
+
+        EchoInt32Array4 { value } -> [i32; 4] {
+            value
+        }
+
+        EchoInt64Array4 { value } -> [i64; 4] {
+            value
+        }
+
+        EchoInt128Array4 { value } -> [i128; 4] {
+            value
+        }
+
+        EchoInt256Array4 { value } -> [i256; 4] {
+            value
+        }
+
+        EchoUint24Array4 { value } -> [Uint24; 4] {
+            value
+        }
+
+        EchoUint40Array4 { value } -> [Uint40; 4] {
+            value
+        }
+
+        EchoUint96Array4 { value } -> [Uint96; 4] {
+            value
+        }
+
+        EchoUint160Array4 { value } -> [Uint160; 4] {
+            value
+        }
+
+        EchoUint248Array4 { value } -> [Uint248; 4] {
+            value
+        }
+
+        EchoInt24Array4 { value } -> [Int24; 4] {
+            value
+        }
+
+        EchoInt40Array4 { value } -> [Int40; 4] {
+            value
+        }
+
+        EchoInt96Array4 { value } -> [Int96; 4] {
+            value
+        }
+
+        EchoInt160Array4 { value } -> [Int160; 4] {
+            value
+        }
+
+        EchoInt248Array4 { value } -> [Int248; 4] {
+            value
+        }
+
+        EchoBoolMatrix2x2 { value } -> [[bool; 2]; 2] {
+            value
+        }
+
+        EchoAddressMatrix2x2 { value } -> [[Address; 2]; 2] {
+            value
+        }
+
+        EchoUintMatrix2x2 { value } -> [[u256; 2]; 2] {
+            value
+        }
+
+        EchoInt256Matrix2x2 { value } -> [[i256; 2]; 2] {
+            value
+        }
+
+        EchoUint24Matrix2x2 { value } -> [[Uint24; 2]; 2] {
+            value
+        }
+
+        EchoInt40Matrix2x2 { value } -> [[Int40; 2]; 2] {
+            value
+        }
+
+        EchoBoolAddressPairArray4 { value } -> [(bool, Address); 4] {
+            value
+        }
+
+        EchoUint24Int40PairArray4 { value } -> [(Uint24, Int40); 4] {
+            value
+        }
+
+        EchoBoolAddressU256TripleArray4 { value } -> [(bool, Address, u256); 4] {
+            value
+        }
+
+        EchoStringArray2 { value } -> [DynString; 2] {
+            value
+        }
+
+        EchoStringU64PairArray2 { value } -> [(DynString, u64); 2] {
+            value
+        }
+
+        EchoUintArray { value } -> DynArray<u256> {
+            value
+        }
+
+        EchoBoolAddressPairArray { value } -> DynArray<(bool, Address)> {
+            value
+        }
+
+        EchoStringArray { value } -> DynArray<DynString> {
+            value
+        }
+
+        EchoStringU64PairArray { value } -> DynArray<(DynString, u64)> {
+            value
+        }
+
+        EchoPair { value } -> (DynString, u64) {
+            value
+        }
+
+        EchoBoolAddressPair { value } -> (bool, Address) {
+            value
+        }
+
+        EchoUint24Int40Pair { value } -> (Uint24, Int40) {
+            value
+        }
+
+        EchoBoolAddressU256Triple { value } -> (bool, Address, u256) {
+            value
+        }
+
+        EchoStringBoolU64Triple { value } -> (DynString, bool, u64) {
+            value
+        }
+    }
+}
