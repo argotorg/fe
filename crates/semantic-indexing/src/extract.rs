@@ -1112,4 +1112,44 @@ mod tests {
             "module tree mismatch"
         );
     }
+
+    #[test]
+    fn display_file_is_relative_for_ingot() {
+        let temp = tempfile::tempdir().expect("create temp dir");
+        std::fs::write(
+            temp.path().join("fe.toml"),
+            "[ingot]\nname = \"test_ingot\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        let src_dir = temp.path().join("src");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::write(
+            src_dir.join("lib.fe"),
+            "pub struct Foo {\n    pub x: i32\n}\n",
+        )
+        .unwrap();
+
+        let mut db = DriverDataBase::default();
+        let ingot_url = url::Url::from_directory_path(temp.path()).expect("dir url");
+        driver::init_ingot(&mut db, &ingot_url);
+
+        let ingot = db
+            .workspace()
+            .containing_ingot(&db, ingot_url)
+            .expect("ingot should exist");
+
+        let items = crate::tracked::docs_for_ingot(&db, ingot);
+        assert!(!items.is_empty(), "should extract at least one item");
+
+        for item in items.iter() {
+            if let Some(ref source) = item.source {
+                assert!(
+                    source.display_file.contains("src") || source.display_file.contains("lib.fe"),
+                    "display_file should contain path info, got: {}",
+                    source.display_file
+                );
+                assert_ne!(source.display_file, "", "display_file should not be empty");
+            }
+        }
+    }
 }

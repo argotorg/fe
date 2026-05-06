@@ -7,11 +7,7 @@ mod dependency_diagnostics;
 mod doc;
 #[cfg(feature = "doc-server")]
 mod doc_serve;
-pub(crate) mod extract;
-mod index_util;
-mod lsif;
 mod report;
-mod scip_index;
 mod test;
 #[cfg(not(target_arch = "wasm32"))]
 mod tree;
@@ -738,7 +734,6 @@ pub fn run(opts: &Options) {
 
 #[cfg(feature = "lsp")]
 async fn run_lsp_with_combined_server(resolved_root: Option<Utf8PathBuf>, port: Option<u16>) {
-    use std::sync::Arc;
     use tokio::net::TcpListener;
 
     // Bind the combined server listener
@@ -839,17 +834,10 @@ async fn run_lsp_with_combined_server(resolved_root: Option<Utf8PathBuf>, port: 
         );
     }
 
-    // Create the doc regeneration closure for live reload.
-    // Uses a read-only salsa snapshot — the Backend's db is already initialized
-    // with all ingots/files, so we enumerate from the snapshot's dependency graph
-    // and workspace rather than re-discovering from disk.
-    let doc_regenerate_fn: language_server::DocRegenerateFn = Arc::new(regenerate_doc_data_from_db);
-
     let config = language_server::CombinedServerConfig {
         listener,
         doc_html,
         docs_url: Some(format!("http://127.0.0.1:{actual_port}")),
-        doc_regenerate_fn: Some(doc_regenerate_fn),
     };
 
     language_server::run_stdio_server(Some(config)).await;
@@ -861,7 +849,8 @@ async fn run_lsp_with_combined_server(resolved_root: Option<Utf8PathBuf>, port: 
 /// Initial doc data generation from a workspace root.
 ///
 /// Discovers ingots via `discover_and_init` (requires `&mut`), then delegates
-/// to `build_doc_index` for the actual extraction. Used at LSP startup.
+/// Generate doc + SCIP data for a workspace. Used at LSP startup.
+/// Regenerate doc + SCIP data via salsa-tracked functions.
 #[cfg(feature = "lsp")]
 fn regenerate_doc_data(
     db: &mut driver::DriverDataBase,
@@ -872,185 +861,12 @@ fn regenerate_doc_data(
         .unwrap_or_else(|_| workspace_root.to_owned());
 
     if let Ok(root_url) = url::Url::from_directory_path(&root_path) {
-        let discovered = driver::discover_and_init(db, &root_url);
-        build_doc_index(db, &discovered.ingot_urls, &discovered.standalone_files)
+        let _discovered = driver::discover_and_init(db, &root_url);
+        semantic_indexing::doc::regenerate(db)
     } else {
         let json = serde_json::to_string(&fe_web::model::DocIndex::new()).unwrap();
         (json, None)
     }
-}
-
-/// Regenerate doc data from an already-initialized database snapshot.
-///
-/// Enumerates ingots from the dependency graph and standalone files from the
-/// workspace — no mutation needed. Used for live reload on save.
-#[cfg(feature = "lsp")]
-pub fn regenerate_doc_data_from_db(db: &driver::DriverDataBase) -> (String, Option<String>) {
-    use common::InputDb;
-
-    let builtin_core_url = url::Url::parse(common::stdlib::BUILTIN_CORE_BASE_URL).unwrap();
-    let builtin_std_url = url::Url::parse(common::stdlib::BUILTIN_STD_BASE_URL).unwrap();
-
-    // Get non-builtin ingot URLs from the dependency graph
-    let ingot_urls: Vec<url::Url> = db
-        .dependency_graph()
-        .petgraph(db)
-        .node_weights()
-        .filter(|u| *u != &builtin_core_url && *u != &builtin_std_url)
-        .cloned()
-        .collect();
-
-    // Find standalone files (in workspace but not under any ingot)
-    let standalone_files: Vec<url::Url> = db
-        .workspace()
-        .all_files(db)
-        .iter()
-        .filter_map(|(url, _file)| {
-            if db.workspace().containing_ingot(db, url.clone()).is_none() {
-                Some(url)
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    build_doc_index(db, &ingot_urls, &standalone_files)
-}
-
-/// Core doc extraction logic shared by initial generation and live reload.
-///
-/// Takes a read-only db reference and pre-computed URL lists.
-#[cfg(feature = "lsp")]
-fn build_doc_index(
-    db: &driver::DriverDataBase,
-    ingot_urls: &[url::Url],
-    standalone_file_urls: &[url::Url],
-) -> (String, Option<String>) {
-    use crate::extract::DocExtractor;
-    use common::InputDb;
-    use common::stdlib::{HasBuiltinCore, HasBuiltinStd};
-    use hir::hir_def::HirIngot;
-
-    let mut index = fe_web::model::DocIndex::new();
-    let mut scip_json: Option<String> = None;
-
-    let extractor = DocExtractor::new(db);
-
-    // Extract docs from each ingot
-    for ingot_url in ingot_urls {
-        let Some(ingot) = db.workspace().containing_ingot(db, ingot_url.clone()) else {
-            continue;
-        };
-        for top_mod in ingot.all_modules(db) {
-            for item in top_mod.children_nested(db) {
-                if let Some(doc_item) = extractor.extract_item_for_ingot(item, ingot) {
-                    index.items.push(doc_item);
-                }
-            }
-        }
-        let root_mod = ingot.root_mod(db);
-        index
-            .modules
-            .extend(extractor.build_module_tree_for_ingot(ingot, root_mod));
-        let trait_impl_links = extractor.extract_trait_impl_links(ingot);
-        index.link_trait_impls(trait_impl_links);
-    }
-
-    // Extract docs from standalone .fe files
-    for file_url in standalone_file_urls {
-        if let Some(file) = db.workspace().get(db, file_url) {
-            let top_mod = db.top_mod(file);
-            for item in top_mod.children_nested(db) {
-                if let Some(doc_item) = extractor.extract_item(item) {
-                    index.items.push(doc_item);
-                }
-            }
-            index
-                .modules
-                .push(extractor.build_standalone_module_tree(top_mod));
-        }
-    }
-
-    // Include builtin libraries (core, std)
-    let existing: std::collections::HashSet<_> =
-        index.modules.iter().map(|m| m.name.clone()).collect();
-    for (label, builtin) in [("core", db.builtin_core()), ("std", db.builtin_std())] {
-        if existing.contains(label) {
-            continue;
-        }
-        for top_mod in builtin.all_modules(db) {
-            for item in top_mod.children_nested(db) {
-                if let Some(doc_item) = extractor.extract_item_for_ingot(item, builtin) {
-                    index.items.push(doc_item);
-                }
-            }
-        }
-        let root_mod = builtin.root_mod(db);
-        index
-            .builtin_modules
-            .extend(extractor.build_module_tree_for_ingot(builtin, root_mod));
-        let trait_impl_links = extractor.extract_trait_impl_links(builtin);
-        index.link_trait_impls(trait_impl_links);
-    }
-
-    // Generate SCIP data
-    let mut combined_scip = scip::types::Index::default();
-    let mut combined_doc_urls = std::collections::HashMap::new();
-    let mut any_scip = false;
-
-    let builtin_urls = [
-        url::Url::parse(common::stdlib::BUILTIN_CORE_BASE_URL).unwrap(),
-        url::Url::parse(common::stdlib::BUILTIN_STD_BASE_URL).unwrap(),
-    ];
-    let all_scip_urls: Vec<_> = ingot_urls.iter().chain(builtin_urls.iter()).collect();
-
-    for ingot_url in &all_scip_urls {
-        match crate::scip_index::generate_scip(db, ingot_url) {
-            Ok(mut result) => {
-                if ingot_url.scheme() == "file" {
-                    if let Some(project_root) = ingot_url
-                        .to_file_path()
-                        .ok()
-                        .and_then(|p| camino::Utf8PathBuf::from_path_buf(p).ok())
-                    {
-                        crate::scip_index::enrich_signatures(
-                            db,
-                            &project_root,
-                            &mut index,
-                            &mut result.index,
-                        );
-                    }
-                } else {
-                    crate::scip_index::enrich_signatures_with_base(
-                        db,
-                        camino::Utf8Path::new("/"),
-                        Some(ingot_url),
-                        &mut index,
-                        &mut result.index,
-                    );
-                }
-                combined_scip.documents.extend(result.index.documents);
-                combined_doc_urls.extend(result.doc_urls);
-                any_scip = true;
-            }
-            Err(e) => {
-                eprintln!("Warning: SCIP generation failed for {ingot_url}: {e}");
-            }
-        }
-    }
-    if any_scip {
-        scip_json = Some(crate::scip_index::scip_to_json_data(
-            &combined_scip,
-            &combined_doc_urls,
-        ));
-    }
-
-    // Serialize DocIndex with HTML bodies injected
-    let mut value = serde_json::to_value(&index).expect("serialize DocIndex");
-    fe_web::static_site::inject_html_bodies(&mut value);
-    let json = serde_json::to_string(&value).expect("serialize JSON");
-
-    (json, scip_json)
 }
 
 /// Generate the doc HTML for the combined server.
@@ -1142,11 +958,11 @@ fn run_lsif(path: &Utf8PathBuf, output: Option<&Utf8PathBuf>) {
             }
         };
         let writer = std::io::BufWriter::new(file);
-        lsif::generate_lsif(&mut db, &ingot_url, writer)
+        semantic_indexing::lsif::generate_lsif(&db, &ingot_url, writer)
     } else {
         let stdout = std::io::stdout().lock();
         let writer = std::io::BufWriter::new(stdout);
-        lsif::generate_lsif(&mut db, &ingot_url, writer)
+        semantic_indexing::lsif::generate_lsif(&db, &ingot_url, writer)
     };
 
     if let Err(e) = result {
@@ -1181,15 +997,13 @@ fn run_scip(path: &Utf8PathBuf, output: &Utf8PathBuf) {
         eprintln!("Warning: ingot had initialization diagnostics");
     }
 
-    let index = match scip_index::generate_scip(&db, &ingot_url) {
-        Ok(index) => index,
-        Err(e) => {
+    let result =
+        semantic_indexing::scip_batch::generate_scip(&db, &ingot_url).unwrap_or_else(|e| {
             eprintln!("Error generating SCIP: {e}");
             std::process::exit(1);
-        }
-    };
+        });
 
-    if let Err(e) = scip::write_message_to_file(output.as_std_path(), index.index) {
+    if let Err(e) = scip::write_message_to_file(output.as_std_path(), result.index) {
         eprintln!("Error writing SCIP file: {e}");
         std::process::exit(1);
     }

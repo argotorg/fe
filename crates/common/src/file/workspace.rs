@@ -3,7 +3,7 @@ use radix_immutable::{StringPrefixView, StringTrie, Trie};
 use salsa::Setter;
 use url::Url;
 
-use crate::{InputDb, file::File, indexmap::IndexMap};
+use crate::{InputDb, file::File, indexmap::ArcIndexMap};
 
 #[derive(Debug)]
 pub enum InputIndexError {
@@ -14,13 +14,13 @@ pub enum InputIndexError {
 #[derive(Debug)]
 pub struct Workspace {
     files: StringTrie<Url, File>,
-    paths: IndexMap<File, Url>,
+    paths: ArcIndexMap<File, Url>,
 }
 
 #[salsa::tracked]
 impl Workspace {
     pub fn default(db: &dyn InputDb) -> Self {
-        Workspace::new(db, Trie::new(), IndexMap::default())
+        Workspace::new(db, Trie::new(), ArcIndexMap::default())
     }
     pub(crate) fn set(
         &self,
@@ -28,7 +28,6 @@ impl Workspace {
         url: Url,
         file: File,
     ) -> Result<File, InputIndexError> {
-        // Check if the file is already associated with another URL
         let paths = self.paths(db);
         if let Some(existing_url) = paths.get(&file)
             && existing_url != &url
@@ -55,6 +54,7 @@ impl Workspace {
                 self.set_files(db).to(files);
                 let mut paths = self.paths(db);
                 paths.remove(&file);
+                self.set_paths(db).to(paths);
                 Some(file)
             } else {
                 None
@@ -75,13 +75,10 @@ impl Workspace {
 
     #[salsa::tracked]
     pub fn get_relative_path(self, db: &dyn InputDb, base: Url, file: File) -> Option<Utf8PathBuf> {
-        // Get the file path
         let file_url = match self.paths(db).get(&file) {
             Some(url) => url.clone(),
             None => return None,
         };
-
-        // Get the relative path between the base URL and file URL
         base.make_relative(&file_url).map(Utf8PathBuf::from)
     }
 

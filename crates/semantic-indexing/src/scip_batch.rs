@@ -1,8 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::io;
 
-use rayon::prelude::*;
-
 use camino::{Utf8Path, Utf8PathBuf};
 use common::InputDb;
 use common::diagnostics::Span;
@@ -60,9 +58,14 @@ impl ScipDocumentBuilder {
     }
 }
 
-fn span_to_scip_range(span: &Span, db: &dyn InputDb) -> Option<Vec<i32>> {
-    let text = span.file.text(db);
-    let line_index = LineIndex::new(text);
+fn span_to_scip_range(
+    span: &Span,
+    db: &dyn InputDb,
+    line_index_cache: &mut HashMap<common::file::File, LineIndex>,
+) -> Option<Vec<i32>> {
+    let line_index = line_index_cache
+        .entry(span.file)
+        .or_insert_with(|| LineIndex::new(span.file.text(db)));
 
     let start = line_index.position(span.range.start().into());
     let end = line_index.position(span.range.end().into());
@@ -236,6 +239,8 @@ pub fn generate_scip(db: &driver::DriverDataBase, ingot_url: &url::Url) -> io::R
     generate_scip_with_root(db, ingot_url, &project_root_path)
 }
 
+/// Parallel SCIP generation using Rayon with db clones.
+/// Use this for cold starts (CLI, first LSP gen) where the salsa cache is empty.
 /// Like `generate_scip`, but uses `project_root` for computing relative paths
 /// instead of deriving it from the ingot URL. This ensures SCIP document paths
 /// are relative to the workspace root when generating docs for workspace members.
@@ -246,48 +251,22 @@ pub fn generate_scip_with_root(
 ) -> io::Result<ScipResult> {
     let ctx = index_util::IngotContext::resolve(db, ingot_url)?;
 
-    let project_root_path = project_root.to_path_buf();
-
-    // Pre-compute relative paths for all module files
     let file_relative_paths: HashMap<String, String> = ctx
         .ingot
         .all_modules(db)
         .iter()
         .filter_map(|top_mod| {
             let doc_url = top_mod_url(db, top_mod)?;
-            let relative = relative_path(&project_root_path, &doc_url)?;
+            let relative = relative_path(project_root, &doc_url)?;
             Some((doc_url.to_string(), relative))
-        })
-        .collect();
-
-    // Process modules in parallel using rayon with Salsa DB forks.
-    // Each clone shares cached query results via Arc, making
-    // IngotContext::resolve (incl. ReferenceIndex::build) cheap.
-    // We create one fork per rayon thread (not per module) so each
-    // fork builds the IngotContext once for its chunk of modules.
-    let module_count = ctx.ingot.all_modules(db).len();
-    let fork_count = rayon::current_num_threads().max(1).min(module_count);
-    let db_forks: Vec<driver::DriverDataBase> = (0..fork_count).map(|_| db.clone()).collect();
-
-    let parallel_results: Vec<Vec<ModuleResult>> = db_forks
-        .into_par_iter()
-        .enumerate()
-        .map(|(thread_idx, fork)| {
-            let ctx = index_util::IngotContext::resolve(&fork, ingot_url)
-                .expect("IngotContext::resolve should succeed in forked db");
-            let modules = ctx.ingot.all_modules(&fork);
-            let start = thread_idx * module_count / fork_count;
-            let end = ((thread_idx + 1) * module_count / fork_count).min(module_count);
-            (start..end)
-                .filter_map(|idx| process_module(&fork, modules[idx], &ctx, &file_relative_paths))
-                .collect()
         })
         .collect();
 
     let mut documents: HashMap<String, ScipDocumentBuilder> = HashMap::new();
     let mut all_doc_urls: HashMap<String, String> = HashMap::new();
-    for chunk in parallel_results {
-        for result in chunk {
+
+    for top_mod in ctx.ingot.all_modules(db) {
+        if let Some(result) = process_module(db, *top_mod, &ctx, &file_relative_paths) {
             all_doc_urls.extend(result.doc_urls);
             for (url, builder) in result.documents {
                 match documents.entry(url) {
@@ -302,14 +281,6 @@ pub fn generate_scip_with_root(
         }
     }
 
-    // Emit cross-ingot references.
-    //
-    // The ReferenceIndex tracks all scope references originating from this
-    // ingot's code, including references to items in other ingots (e.g.
-    // `Option` from `core`).  process_module() above only queries for
-    // targets that appear in this ingot's scope graphs.  Here we iterate
-    // remaining targets in foreign ingots and emit reference occurrences
-    // so that cross-ingot type usages are visible in the SCIP data.
     emit_cross_ingot_references(db, &ctx, &file_relative_paths, &mut documents);
 
     let mut index = types::Index::new();
@@ -364,6 +335,7 @@ fn process_module<'db>(
 
     let mut documents: HashMap<String, ScipDocumentBuilder> = HashMap::new();
     let mut doc_urls: HashMap<String, String> = HashMap::new();
+    let mut line_index_cache: HashMap<common::file::File, LineIndex> = HashMap::new();
 
     // Ensure this module's file has a builder
     if let Some(relative) = file_relative_paths.get(&doc_url) {
@@ -397,6 +369,7 @@ fn process_module<'db>(
                 &doc_url,
                 file_relative_paths,
                 &mut documents,
+                &mut line_index_cache,
             );
             continue;
         };
@@ -423,7 +396,7 @@ fn process_module<'db>(
             }
 
             if let Some(name_span) = item.name_span().and_then(|span| span.resolve(db))
-                && let Some(range) = span_to_scip_range(&name_span, db)
+                && let Some(range) = span_to_scip_range(&name_span, db, &mut line_index_cache)
             {
                 push_occurrence(
                     doc,
@@ -449,7 +422,7 @@ fn process_module<'db>(
                         .unwrap_or_default();
                     ScipDocumentBuilder::new(relative)
                 });
-                if let Some(range) = span_to_scip_range(&resolved, db) {
+                if let Some(range) = span_to_scip_range(&resolved, db, &mut line_index_cache) {
                     push_occurrence(ref_doc, range, symbol.clone(), 0);
                 }
             }
@@ -498,7 +471,8 @@ fn process_module<'db>(
                     }
 
                     if let Some(name_span) = child.name_span(db)
-                        && let Some(range) = span_to_scip_range(&name_span, db)
+                        && let Some(range) =
+                            span_to_scip_range(&name_span, db, &mut line_index_cache)
                     {
                         push_occurrence(
                             doc,
@@ -523,7 +497,9 @@ fn process_module<'db>(
                                 .unwrap_or_default();
                             ScipDocumentBuilder::new(relative)
                         });
-                        if let Some(range) = span_to_scip_range(&resolved, db) {
+                        if let Some(range) =
+                            span_to_scip_range(&resolved, db, &mut line_index_cache)
+                        {
                             push_occurrence(ref_doc, range, child_symbol.clone(), 0);
                         }
                     }
@@ -539,6 +515,7 @@ fn process_module<'db>(
                     &doc_url,
                     file_relative_paths,
                     &mut documents,
+                    &mut line_index_cache,
                 );
             }
         } // end if !Mod/TopMod
@@ -553,6 +530,7 @@ fn process_module<'db>(
             &doc_url,
             file_relative_paths,
             &mut documents,
+            &mut line_index_cache,
         );
     }
 
@@ -571,6 +549,7 @@ fn process_module<'db>(
 /// Also indexes generic params of child items (methods) inside unnamed containers,
 /// since the child-indexing path in `process_module` is unreachable when the parent
 /// has no symbol.
+#[allow(clippy::too_many_arguments)]
 fn index_unnamed_item_generic_params<'db>(
     db: &'db driver::DriverDataBase,
     item: ItemKind<'db>,
@@ -579,6 +558,7 @@ fn index_unnamed_item_generic_params<'db>(
     doc_url: &str,
     file_relative_paths: &HashMap<String, String>,
     documents: &mut HashMap<String, ScipDocumentBuilder>,
+    line_index_cache: &mut HashMap<common::file::File, LineIndex>,
 ) {
     // Construct a synthetic parent symbol from the impl's byte offset.
     // The exact string doesn't matter — it just needs to be unique so type param
@@ -599,6 +579,7 @@ fn index_unnamed_item_generic_params<'db>(
         doc_url,
         file_relative_paths,
         documents,
+        line_index_cache,
     );
 
     // Also index generic params of children (methods inside impl blocks).
@@ -619,12 +600,14 @@ fn index_unnamed_item_generic_params<'db>(
             doc_url,
             file_relative_paths,
             documents,
+            line_index_cache,
         );
     }
 }
 
 /// Index generic parameters for a symbol using SymbolView::generic_params().
 /// Shared by both top-level items and child items (trait methods, etc.).
+#[allow(clippy::too_many_arguments)]
 fn index_generic_params_for<'db>(
     db: &'db driver::DriverDataBase,
     sym_view: &SymbolView<'db>,
@@ -633,6 +616,7 @@ fn index_generic_params_for<'db>(
     doc_url: &str,
     file_relative_paths: &HashMap<String, String>,
     documents: &mut HashMap<String, ScipDocumentBuilder>,
+    line_index_cache: &mut HashMap<common::file::File, LineIndex>,
 ) {
     for gp_scope in sym_view.generic_params(db) {
         let Some(gp_name) = gp_scope.name(db) else {
@@ -657,7 +641,7 @@ fn index_generic_params_for<'db>(
 
             if let Some(name_span) = gp_scope.name_span(db)
                 && let Some(resolved) = name_span.resolve(db)
-                && let Some(range) = span_to_scip_range(&resolved, db)
+                && let Some(range) = span_to_scip_range(&resolved, db, line_index_cache)
             {
                 push_occurrence(
                     doc,
@@ -681,7 +665,7 @@ fn index_generic_params_for<'db>(
                         .unwrap_or_default();
                     ScipDocumentBuilder::new(relative)
                 });
-                if let Some(range) = span_to_scip_range(&resolved, db) {
+                if let Some(range) = span_to_scip_range(&resolved, db, line_index_cache) {
                     push_occurrence(ref_doc, range, gp_symbol.clone(), 0);
                 }
             }
@@ -734,6 +718,7 @@ fn emit_cross_ingot_references<'db>(
 ) {
     // Cache target ingot metadata to avoid repeated lookups
     let mut ingot_meta: HashMap<common::ingot::Ingot<'db>, (String, String)> = HashMap::new();
+    let mut line_index_cache: HashMap<common::file::File, LineIndex> = HashMap::new();
 
     for (target_scope, refs) in ctx.ref_index.iter() {
         // Skip targets within the current ingot (already handled by process_module)
@@ -780,7 +765,7 @@ fn emit_cross_ingot_references<'db>(
                         .unwrap_or_default();
                     ScipDocumentBuilder::new(relative)
                 });
-                if let Some(range) = span_to_scip_range(&resolved, db) {
+                if let Some(range) = span_to_scip_range(&resolved, db, &mut line_index_cache) {
                     push_occurrence(ref_doc, range, symbol.clone(), 0);
                 }
 
@@ -1618,7 +1603,6 @@ fn simple_hash(s: &str) -> u32 {
     }
     h
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;

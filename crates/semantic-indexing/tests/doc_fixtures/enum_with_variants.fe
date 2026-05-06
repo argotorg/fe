@@ -1,0 +1,11 @@
+/// Represents a color.
+pub enum Color {
+    /// Red color
+    Red
+    /// Green color
+    Green
+    /// Blue color
+    Blue
+    /// Custom RGB value
+    Custom(u256)
+}

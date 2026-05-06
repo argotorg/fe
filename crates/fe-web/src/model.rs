@@ -20,7 +20,7 @@ pub const SCHEMA_VERSION: u32 = 2;
 // ============================================================================
 
 /// A part of a signature - either plain text or a linkable reference
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct SignaturePart {
     /// The display text
@@ -60,7 +60,7 @@ pub fn plain_signature(s: impl Into<String>) -> RichSignature {
 ///
 /// Byte offsets are exact: `file_text[byte_start..byte_end] == signature_text`.
 /// Skipped during serialization — only used in-memory during doc generation.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignatureSpanData {
     /// Absolute file URL (file:// scheme), used to compute relative path for
     /// matching against SCIP document `relative_path` fields.
@@ -76,7 +76,7 @@ pub struct SignatureSpanData {
 // ============================================================================
 
 /// A documented item in the Fe codebase
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct DocItem {
     /// Unique path identifier (e.g., "std::option::Option")
@@ -120,7 +120,7 @@ pub struct DocItem {
 }
 
 /// A type that implements a trait
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct DocImplementor {
     /// The implementing type name
@@ -271,7 +271,7 @@ pub enum DocVisibility {
 }
 
 /// Parsed documentation content with sections
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct DocContent {
     /// The main summary (first paragraph)
@@ -338,7 +338,7 @@ impl DocContent {
 }
 
 /// A named section within documentation (e.g., "Examples", "Panics")
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct DocSection {
     pub name: String,
@@ -346,7 +346,7 @@ pub struct DocSection {
 }
 
 /// A generic parameter with its bounds
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct DocGenericParam {
     pub name: String,
@@ -355,7 +355,7 @@ pub struct DocGenericParam {
 }
 
 /// A child of a documented item
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct DocChild {
     pub kind: DocChildKind,
@@ -432,7 +432,7 @@ impl DocChildKind {
 }
 
 /// Source location for linking to source code
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct DocSourceLoc {
     /// Absolute file path — used only in-memory by LSP for "goto source".
@@ -446,7 +446,7 @@ pub struct DocSourceLoc {
 }
 
 /// A trait implementation reference (shown on type pages)
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct DocTraitImpl {
     /// The name of the trait being implemented (e.g., "Clone"). Empty for inherent impls.
@@ -470,7 +470,7 @@ pub struct DocTraitImpl {
 }
 
 /// A method in an impl block (for inline display on type pages)
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct DocImplMethod {
     /// Method name
@@ -760,7 +760,7 @@ fn extract_simple_type_name(type_str: &str) -> String {
 }
 
 /// Module tree for navigation sidebar
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct DocModuleTree {
     pub name: String,
@@ -778,7 +778,7 @@ impl DocModuleTree {
 }
 
 /// A reference to an item within a module
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct DocModuleItem {
     pub name: String,

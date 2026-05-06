@@ -1,4 +1,4 @@
-use crate::backend::{Backend, DocRegenerateFn};
+use crate::backend::Backend;
 use crate::fallback::WithFallbackService;
 use crate::functionality::handlers::{
     DocReloadExecute, DocReloadRequest, FileChange, FilesNeedDiagnostics, NeedsDiagnostics,
@@ -44,7 +44,6 @@ pub(crate) fn spawn_backend(
     client: ClientSocket,
     name: String,
     doc_nav_tx: Option<broadcast::Sender<String>>,
-    doc_regenerate_fn: Option<DocRegenerateFn>,
     doc_reload_tx: Option<broadcast::Sender<String>>,
     docs_url: Option<String>,
 ) -> ActorRef<Backend, LspActorKey> {
@@ -57,7 +56,6 @@ pub(crate) fn spawn_backend(
             Ok(Backend::new(
                 client_for_actor,
                 doc_nav_tx,
-                doc_regenerate_fn,
                 doc_reload_tx,
                 docs_url,
             ))
@@ -200,7 +198,7 @@ pub(crate) fn setup(
     client: ClientSocket,
     name: String,
 ) -> WithFallbackService<LspActorService<Backend>, Router<()>> {
-    let actor_ref = spawn_backend(client.clone(), name, None, None, None, None);
+    let actor_ref = spawn_backend(client.clone(), name, None, None, None);
     setup_service(actor_ref, client)
 }
 

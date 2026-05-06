@@ -37,7 +37,6 @@ use tower::ServiceBuilder;
 use tracing::instrument::WithSubscriber;
 use tracing::{error, info};
 
-pub use backend::DocRegenerateFn;
 pub use logging::setup_panic_hook;
 
 /// Configuration for the combined HTTP+WS doc/LSP server.
@@ -47,8 +46,6 @@ pub struct CombinedServerConfig {
     /// Base URL for the documentation server (e.g. "http://127.0.0.1:9000").
     /// Passed to Backend so `fe.openDocs` can construct full URLs.
     pub docs_url: Option<String>,
-    /// Closure for regenerating doc+SCIP data from a db snapshot.
-    pub doc_regenerate_fn: Option<DocRegenerateFn>,
 }
 
 pub async fn run_stdio_server(combined: Option<CombinedServerConfig>) {
@@ -59,9 +56,8 @@ pub async fn run_stdio_server(combined: Option<CombinedServerConfig>) {
     // Doc reload channel: Backend sends reload payloads, combined server forwards to WS clients
     let (doc_reload_tx, _doc_reload_rx) = broadcast::channel::<String>(16);
 
-    // Extract docs_url and doc_regenerate_fn before moving combined config
     let docs_url = combined.as_ref().and_then(|c| c.docs_url.clone());
-    let doc_regenerate_fn = combined.as_ref().and_then(|c| c.doc_regenerate_fn.clone());
+    let has_combined = combined.is_some();
 
     // Start the combined server if configured
     if let Some(config) = combined {
@@ -81,15 +77,18 @@ pub async fn run_stdio_server(combined: Option<CombinedServerConfig>) {
     }
 
     let doc_nav_tx_for_backend = doc_nav_tx.clone();
-    let doc_reload_tx_for_backend = doc_reload_tx.clone();
+    let doc_reload_tx_for_backend = if has_combined {
+        Some(doc_reload_tx.clone())
+    } else {
+        None
+    };
 
     let (server, client) = async_lsp::MainLoop::new_server(|client| {
         let actor_ref = spawn_backend(
             client.clone(),
             "LSP actor".to_string(),
             Some(doc_nav_tx_for_backend.clone()),
-            doc_regenerate_fn.clone(),
-            Some(doc_reload_tx_for_backend.clone()),
+            doc_reload_tx_for_backend.clone(),
             docs_url.clone(),
         );
         // Publish the actor ref so the combined server can use it

@@ -1,0 +1,150 @@
+---
+source: crates/fe/src/extract.rs
+expression: output
+input_file: tests/doc_fixtures/module_tree.fe
+---
+{
+  "items": [
+    {
+      "path": "module_tree",
+      "name": "module_tree",
+      "kind": "module",
+      "visibility": "public",
+      "docs": null,
+      "signature": "/// The root module.\n\n/// An inner module for math operations.\npub mod math {\n    /// Add two numbers.\n    pub fn add(a: u256, b: u256) -> u256 {\n        return a + b\n    }\n\n    /// Multiply two numbers.\n    pub fn mul(a: u256, b: u256) -> u256 {\n        return a * b\n    }\n}\n\n/// A top-level constant.\npub const MAX_VALUE: u256 = 1000",
+      "generics": [],
+      "where_bounds": [],
+      "children": [],
+      "source": {
+        "display_file": "module_tree.fe",
+        "line": 1,
+        "column": 0
+      },
+      "source_text": "/// The root module.\n\n/// An inner module for math operations.\npub mod math {\n    /// Add two numbers.\n    pub fn add(a: u256, b: u256) -> u256 {\n        return a + b\n    }\n\n    /// Multiply two numbers.\n    pub fn mul(a: u256, b: u256) -> u256 {\n        return a * b\n    }\n}\n\n/// A top-level constant.\npub const MAX_VALUE: u256 = 1000\n",
+      "trait_impls": []
+    },
+    {
+      "path": "module_tree::math",
+      "name": "math",
+      "kind": "module",
+      "visibility": "public",
+      "docs": {
+        "summary": "The root module.\n An inner module for math operations.",
+        "body": "The root module.\n An inner module for math operations.",
+        "sections": []
+      },
+      "signature": "pub mod math",
+      "generics": [],
+      "where_bounds": [],
+      "children": [],
+      "source": {
+        "display_file": "module_tree.fe",
+        "line": 1,
+        "column": 0
+      },
+      "source_text": "/// The root module.\n\n/// An inner module for math operations.\npub mod math {\n    /// Add two numbers.\n    pub fn add(a: u256, b: u256) -> u256 {\n        return a + b\n    }\n\n    /// Multiply two numbers.\n    pub fn mul(a: u256, b: u256) -> u256 {\n        return a * b\n    }\n}",
+      "trait_impls": []
+    },
+    {
+      "path": "module_tree::math::add",
+      "name": "add",
+      "kind": "function",
+      "visibility": "public",
+      "docs": {
+        "summary": "Add two numbers.",
+        "body": "Add two numbers.",
+        "sections": []
+      },
+      "signature": "pub fn add(a: u256, b: u256) -> u256",
+      "generics": [],
+      "where_bounds": [],
+      "children": [],
+      "source": {
+        "display_file": "module_tree.fe",
+        "line": 5,
+        "column": 4
+      },
+      "source_text": "/// Add two numbers.\n    pub fn add(a: u256, b: u256) -> u256 {\n        return a + b\n    }",
+      "trait_impls": []
+    },
+    {
+      "path": "module_tree::math::mul",
+      "name": "mul",
+      "kind": "function",
+      "visibility": "public",
+      "docs": {
+        "summary": "Multiply two numbers.",
+        "body": "Multiply two numbers.",
+        "sections": []
+      },
+      "signature": "pub fn mul(a: u256, b: u256) -> u256",
+      "generics": [],
+      "where_bounds": [],
+      "children": [],
+      "source": {
+        "display_file": "module_tree.fe",
+        "line": 10,
+        "column": 4
+      },
+      "source_text": "/// Multiply two numbers.\n    pub fn mul(a: u256, b: u256) -> u256 {\n        return a * b\n    }",
+      "trait_impls": []
+    },
+    {
+      "path": "module_tree::MAX_VALUE",
+      "name": "MAX_VALUE",
+      "kind": "const",
+      "visibility": "public",
+      "docs": {
+        "summary": "A top-level constant.",
+        "body": "A top-level constant.",
+        "sections": []
+      },
+      "signature": "pub const MAX_VALUE: u256 = 1000",
+      "generics": [],
+      "where_bounds": [],
+      "children": [],
+      "source": {
+        "display_file": "module_tree.fe",
+        "line": 16,
+        "column": 0
+      },
+      "source_text": "/// A top-level constant.\npub const MAX_VALUE: u256 = 1000",
+      "trait_impls": []
+    }
+  ],
+  "modules": [
+    {
+      "name": "module_tree",
+      "path": "module_tree",
+      "children": [
+        {
+          "name": "math",
+          "path": "module_tree::math",
+          "children": [],
+          "items": [
+            {
+              "name": "add",
+              "path": "module_tree::math::add",
+              "kind": "function",
+              "summary": "Add two numbers."
+            },
+            {
+              "name": "mul",
+              "path": "module_tree::math::mul",
+              "kind": "function",
+              "summary": "Multiply two numbers."
+            }
+          ]
+        }
+      ],
+      "items": [
+        {
+          "name": "MAX_VALUE",
+          "path": "module_tree::MAX_VALUE",
+          "kind": "const",
+          "summary": "A top-level constant."
+        }
+      ]
+    }
+  ]
+}

@@ -405,8 +405,7 @@ pub async fn handle_did_save_text_document(
     message: async_lsp::lsp_types::DidSaveTextDocumentParams,
 ) -> Result<(), ResponseError> {
     debug!("file saved: {:?}", message.text_document.uri);
-    // Request doc reload on save (debounced by the stream in setup_streams)
-    if backend.doc_regenerate_fn.is_some() {
+    if backend.doc_reload_tx.is_some() {
         let _ = backend.client.clone().emit(DocReloadRequest);
     }
     Ok(())
@@ -557,10 +556,7 @@ pub async fn handle_file_change(
 
     let _ = backend.client.emit(NeedsDiagnostics(message.uri));
 
-    // Request doc reload (debounced by the stream in setup_streams).
-    // Now that regen uses a read-only salsa snapshot of the backend's db,
-    // the snapshot reflects the in-memory changes from didChange above.
-    if backend.doc_regenerate_fn.is_some() {
+    if backend.doc_reload_tx.is_some() {
         let _ = backend.client.emit(DocReloadRequest);
     }
 
@@ -748,9 +744,9 @@ pub async fn handle_doc_reload(
     backend: &Backend,
     _message: DocReloadExecute,
 ) -> Result<(), ResponseError> {
-    let Some(regen_fn) = backend.doc_regenerate_fn.as_ref().cloned() else {
+    if backend.doc_reload_tx.is_none() {
         return Ok(());
-    };
+    }
 
     debug!("regenerating doc data for live reload");
     let t_start = std::time::Instant::now();
@@ -766,7 +762,7 @@ pub async fn handle_doc_reload(
     // query results with the Backend's db, no mutation needed.
     let outcome = backend
         .spawn_on_workers(move |db| {
-            let result = regen_fn(db);
+            let result = semantic_indexing::doc::regenerate(db);
             (result, generation)
         })
         .await;

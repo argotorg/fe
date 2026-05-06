@@ -20,6 +20,7 @@
 //!   `item.rs` and replace call sites by adding only the minimal semantic
 //!   method(s) here.
 
+pub mod index;
 pub mod reference;
 pub mod symbol;
 pub use reference::{

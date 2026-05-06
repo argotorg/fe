@@ -1,0 +1,92 @@
+---
+source: crates/fe/src/extract.rs
+expression: output
+input_file: tests/doc_fixtures/function_docs.fe
+---
+{
+  "items": [
+    {
+      "path": "function_docs",
+      "name": "function_docs",
+      "kind": "module",
+      "visibility": "public",
+      "docs": null,
+      "signature": "/// Compute the sum of two values.\n///\n/// # Examples\n/// ```\n/// let result: u256 = add(1, 2)\n/// ```\npub fn add(a: u256, b: u256) -> u256 {\n    return a + b\n}\n\n/// Check if a value is zero.\npub fn is_zero(val: u256) -> bool {\n    return val == 0\n}",
+      "generics": [],
+      "where_bounds": [],
+      "children": [],
+      "source": {
+        "display_file": "function_docs.fe",
+        "line": 1,
+        "column": 0
+      },
+      "source_text": "/// Compute the sum of two values.\n///\n/// # Examples\n/// ```\n/// let result: u256 = add(1, 2)\n/// ```\npub fn add(a: u256, b: u256) -> u256 {\n    return a + b\n}\n\n/// Check if a value is zero.\npub fn is_zero(val: u256) -> bool {\n    return val == 0\n}\n",
+      "trait_impls": []
+    },
+    {
+      "path": "function_docs::add",
+      "name": "add",
+      "kind": "function",
+      "visibility": "public",
+      "docs": {
+        "summary": "Compute the sum of two values.",
+        "body": "Compute the sum of two values.\n\n # Examples\n ```\n let result: u256 = add(1, 2)\n ```",
+        "sections": []
+      },
+      "signature": "pub fn add(a: u256, b: u256) -> u256",
+      "generics": [],
+      "where_bounds": [],
+      "children": [],
+      "source": {
+        "display_file": "function_docs.fe",
+        "line": 1,
+        "column": 0
+      },
+      "source_text": "/// Compute the sum of two values.\n///\n/// # Examples\n/// ```\n/// let result: u256 = add(1, 2)\n/// ```\npub fn add(a: u256, b: u256) -> u256 {\n    return a + b\n}",
+      "trait_impls": []
+    },
+    {
+      "path": "function_docs::is_zero",
+      "name": "is_zero",
+      "kind": "function",
+      "visibility": "public",
+      "docs": {
+        "summary": "Check if a value is zero.",
+        "body": "Check if a value is zero.",
+        "sections": []
+      },
+      "signature": "pub fn is_zero(val: u256) -> bool",
+      "generics": [],
+      "where_bounds": [],
+      "children": [],
+      "source": {
+        "display_file": "function_docs.fe",
+        "line": 11,
+        "column": 0
+      },
+      "source_text": "/// Check if a value is zero.\npub fn is_zero(val: u256) -> bool {\n    return val == 0\n}",
+      "trait_impls": []
+    }
+  ],
+  "modules": [
+    {
+      "name": "function_docs",
+      "path": "function_docs",
+      "children": [],
+      "items": [
+        {
+          "name": "add",
+          "path": "function_docs::add",
+          "kind": "function",
+          "summary": "Compute the sum of two values."
+        },
+        {
+          "name": "is_zero",
+          "path": "function_docs::is_zero",
+          "kind": "function",
+          "summary": "Check if a value is zero."
+        }
+      ]
+    }
+  ]
+}

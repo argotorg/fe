@@ -6,15 +6,23 @@ edition.workspace = true
 [dev-dependencies]
 criterion = "0.5"
 walkdir = "2.4"
+tempfile = "3.23"
 
 [dependencies]
 driver.workspace = true
 parser.workspace = true
 common.workspace = true
+hir.workspace = true
+semantic-indexing.workspace = true
 camino.workspace = true
 url.workspace = true
 tracing.workspace = true
+tempfile = "3.23"
 
 [[bench]]
 name = "analysis"
+harness = false
+
+[[bench]]
+name = "scip_regen"
 harness = false

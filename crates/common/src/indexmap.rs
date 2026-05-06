@@ -74,6 +74,96 @@ impl<K, V> DerefMut for IndexMap<K, V> {
     }
 }
 
+/// Arc-wrapped IndexMap for use as a salsa input field.
+/// Clone is O(1) (Arc refcount bump). Mutations use Arc::make_mut.
+#[derive(Debug, Clone)]
+pub struct ArcIndexMap<K, V>(pub std::sync::Arc<IndexMap<K, V>>);
+
+impl<K, V> ArcIndexMap<K, V> {
+    pub fn new() -> Self {
+        Self(std::sync::Arc::new(IndexMap::new()))
+    }
+
+    pub fn get<Q>(&self, key: &Q) -> Option<&V>
+    where
+        K: std::borrow::Borrow<Q> + Eq + Hash,
+        Q: Eq + Hash + ?Sized,
+    {
+        self.0.get(key)
+    }
+
+    pub fn insert(&mut self, key: K, value: V)
+    where
+        K: Eq + Hash + Clone,
+        V: Clone,
+    {
+        std::sync::Arc::make_mut(&mut self.0).insert(key, value);
+    }
+
+    pub fn remove<Q>(&mut self, key: &Q)
+    where
+        K: std::borrow::Borrow<Q> + Eq + Hash + Clone,
+        V: Clone,
+        Q: Eq + Hash + ?Sized,
+    {
+        std::sync::Arc::make_mut(&mut self.0).remove(key);
+    }
+}
+
+impl<K, V> Default for ArcIndexMap<K, V> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<K, V> PartialEq for ArcIndexMap<K, V>
+where
+    K: Eq + Hash,
+    V: PartialEq,
+{
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0) || *self.0 == *other.0
+    }
+}
+
+impl<K, V> Eq for ArcIndexMap<K, V>
+where
+    K: Eq + Hash,
+    V: Eq,
+{
+}
+
+impl<K, V> Hash for ArcIndexMap<K, V>
+where
+    K: Hash + Eq,
+    V: Hash,
+{
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        for (k, v) in self.0.as_ref() {
+            k.hash(state);
+            v.hash(state);
+        }
+    }
+}
+
+unsafe impl<K, V> Update for ArcIndexMap<K, V>
+where
+    K: Eq + Hash + Clone,
+    V: Clone + PartialEq,
+{
+    unsafe fn maybe_update(old_pointer: *mut Self, new_value: Self) -> bool {
+        let old = unsafe { &mut *old_pointer };
+        if std::sync::Arc::ptr_eq(&old.0, &new_value.0) {
+            return false;
+        }
+        if *old.0 == *new_value.0 {
+            return false;
+        }
+        *old = new_value;
+        true
+    }
+}
+
 unsafe impl<K, V> Update for IndexMap<K, V>
 where
     K: Update + Eq + Hash,

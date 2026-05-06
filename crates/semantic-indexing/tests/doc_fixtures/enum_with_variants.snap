@@ -1,0 +1,109 @@
+---
+source: crates/fe/src/extract.rs
+expression: output
+input_file: tests/doc_fixtures/enum_with_variants.fe
+---
+{
+  "items": [
+    {
+      "path": "enum_with_variants",
+      "name": "enum_with_variants",
+      "kind": "module",
+      "visibility": "public",
+      "docs": null,
+      "signature": "/// Represents a color.\npub enum Color {\n    /// Red color\n    Red\n    /// Green color\n    Green\n    /// Blue color\n    Blue\n    /// Custom RGB value\n    Custom(u256)\n}",
+      "generics": [],
+      "where_bounds": [],
+      "children": [],
+      "source": {
+        "display_file": "enum_with_variants.fe",
+        "line": 1,
+        "column": 0
+      },
+      "source_text": "/// Represents a color.\npub enum Color {\n    /// Red color\n    Red\n    /// Green color\n    Green\n    /// Blue color\n    Blue\n    /// Custom RGB value\n    Custom(u256)\n}\n",
+      "trait_impls": []
+    },
+    {
+      "path": "enum_with_variants::Color",
+      "name": "Color",
+      "kind": "enum",
+      "visibility": "public",
+      "docs": {
+        "summary": "Represents a color.",
+        "body": "Represents a color.",
+        "sections": []
+      },
+      "signature": "pub enum Color",
+      "generics": [],
+      "where_bounds": [],
+      "children": [
+        {
+          "kind": "variant",
+          "name": "Red",
+          "docs": {
+            "summary": "Red color",
+            "body": "Red color",
+            "sections": []
+          },
+          "signature": "Red",
+          "visibility": "public"
+        },
+        {
+          "kind": "variant",
+          "name": "Green",
+          "docs": {
+            "summary": "Green color",
+            "body": "Green color",
+            "sections": []
+          },
+          "signature": "Green",
+          "visibility": "public"
+        },
+        {
+          "kind": "variant",
+          "name": "Blue",
+          "docs": {
+            "summary": "Blue color",
+            "body": "Blue color",
+            "sections": []
+          },
+          "signature": "Blue",
+          "visibility": "public"
+        },
+        {
+          "kind": "variant",
+          "name": "Custom",
+          "docs": {
+            "summary": "Custom RGB value",
+            "body": "Custom RGB value",
+            "sections": []
+          },
+          "signature": "Custom(u256)",
+          "visibility": "public"
+        }
+      ],
+      "source": {
+        "display_file": "enum_with_variants.fe",
+        "line": 1,
+        "column": 0
+      },
+      "source_text": "/// Represents a color.\npub enum Color {\n    /// Red color\n    Red\n    /// Green color\n    Green\n    /// Blue color\n    Blue\n    /// Custom RGB value\n    Custom(u256)\n}",
+      "trait_impls": []
+    }
+  ],
+  "modules": [
+    {
+      "name": "enum_with_variants",
+      "path": "enum_with_variants",
+      "children": [],
+      "items": [
+        {
+          "name": "Color",
+          "path": "enum_with_variants::Color",
+          "kind": "enum",
+          "summary": "Represents a color."
+        }
+      ]
+    }
+  ]
+}

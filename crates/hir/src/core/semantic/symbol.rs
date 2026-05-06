@@ -7,9 +7,8 @@
 
 use crate::HirDb;
 use crate::SpannedHirDb;
-use crate::analysis::HirAnalysisDb;
 use crate::hir_def::scope_graph::ScopeId;
-use crate::hir_def::{Attr, EnumVariant, FieldParent, HirIngot, ItemKind, TopLevelMod, Visibility};
+use crate::hir_def::{Attr, EnumVariant, FieldParent, ItemKind, TopLevelMod, Visibility};
 use crate::span::{DesugaredOrigin, DynLazySpan, HirOrigin, LazySpan};
 use common::diagnostics::Span;
 use common::file::File;
@@ -575,7 +574,7 @@ pub fn qualify_path_with_ingot_name(db: &dyn SpannedHirDb, path: &str, ingot: In
 // ---------------------------------------------------------------------------
 
 /// A single reference to a symbol, with its span and metadata.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
 pub struct IndexedReference<'db> {
     /// The span of the reference occurrence.
     pub span: DynLazySpan<'db>,
@@ -590,40 +589,26 @@ pub struct IndexedReference<'db> {
 ///
 /// Built once per ingot, eliminates the O(items × modules) scan that SCIP
 /// and LSIF currently perform.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReferenceIndex<'db> {
     /// Target scope → list of references pointing at it.
     index: FxHashMap<ScopeId<'db>, Vec<IndexedReference<'db>>>,
 }
 
-impl<'db> ReferenceIndex<'db> {
-    /// Build the inverted reference index for an entire ingot.
-    ///
-    /// Walks every item in every module once, resolving all scope-level
-    /// references and inverting them into a target → refs map.
-    pub fn build<DB>(db: &'db DB, ingot: impl HirIngot<'db>) -> Self
-    where
-        DB: HirAnalysisDb + SpannedHirDb,
-    {
-        use super::reference::resolver::resolved_item_scope_targets;
-
-        let mut index: FxHashMap<ScopeId<'db>, Vec<IndexedReference<'db>>> = FxHashMap::default();
-
-        for top_mod in ingot.all_modules(db) {
-            let scope_graph = top_mod.scope_graph(db);
-            for item in scope_graph.items_dfs(db) {
-                for resolved in resolved_item_scope_targets(db, item) {
-                    index
-                        .entry(resolved.scope)
-                        .or_default()
-                        .push(IndexedReference {
-                            span: resolved.span.clone(),
-                            is_self_ty: resolved.is_self_ty,
-                            module: *top_mod,
-                        });
-                }
-            }
+unsafe impl<'db> salsa::Update for ReferenceIndex<'db> {
+    unsafe fn maybe_update(old_pointer: *mut Self, new_value: Self) -> bool {
+        let old = unsafe { &mut *old_pointer };
+        if old == &new_value {
+            return false;
         }
+        *old = new_value;
+        true
+    }
+}
 
+impl<'db> ReferenceIndex<'db> {
+    /// Construct from a pre-built map.
+    pub fn from_map(index: FxHashMap<ScopeId<'db>, Vec<IndexedReference<'db>>>) -> Self {
         Self { index }
     }
 

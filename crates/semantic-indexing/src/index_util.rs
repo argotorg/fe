@@ -82,7 +82,7 @@ impl LineIndex {
 }
 
 /// Shared ingot resolution context used by both SCIP and LSIF generators.
-pub(crate) struct IngotContext<'db> {
+pub struct IngotContext<'db> {
     pub ingot: Ingot<'db>,
     pub name: String,
     pub version: String,
@@ -104,7 +104,11 @@ impl<'db> IngotContext<'db> {
             .map(|v| v.to_string())
             .unwrap_or_else(|| "0.0.0".to_string());
 
-        let ref_index = ReferenceIndex::build(db, ingot);
+        // Pre-warm per-module reference resolution in parallel.
+        // This populates salsa's cache before the tracked query reads it.
+        hir::core::semantic::index::pre_warm_module_references(db, ingot);
+
+        let ref_index = crate::tracked::ingot_references(db, ingot).clone();
 
         Ok(Self {
             ingot,

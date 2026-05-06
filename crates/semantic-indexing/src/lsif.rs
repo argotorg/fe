@@ -287,7 +287,7 @@ fn emit_scope_lsif<W: Write>(
 
 /// Run LSIF generation on a project.
 pub fn generate_lsif(
-    db: &mut driver::DriverDataBase,
+    db: &driver::DriverDataBase,
     ingot_url: &url::Url,
     writer: impl Write,
 ) -> io::Result<()> {
@@ -597,7 +597,7 @@ mod tests {
 
         let ingot_url = url::Url::parse("file:///").unwrap();
         let mut output = Vec::new();
-        let _ = generate_lsif(&mut db, &ingot_url, &mut output);
+        let _ = generate_lsif(&db, &ingot_url, &mut output);
         String::from_utf8(output).unwrap()
     }
 

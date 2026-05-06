@@ -25,6 +25,7 @@ rayon = "1"
 mir.workspace = true
 cranelift-entity.workspace = true
 rustc-hash.workspace = true
+semantic-indexing.workspace = true
 codegen = { path = "../codegen", package = "fe-codegen" }
 contract-harness = { path = "../contract-harness", package = "fe-contract-harness" }
 solc-runner = { path = "../solc-runner", package = "fe-solc-runner" }
@@ -51,3 +52,4 @@ axum = { version = "0.8", optional = true }
 dir-test.workspace = true
 test-utils.workspace = true
 tempfile = "3.23"
+semantic-indexing.workspace = true

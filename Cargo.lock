@@ -2049,6 +2049,7 @@ dependencies = [
  "fe-language-server",
  "fe-mir",
  "fe-resolver",
+ "fe-semantic-indexing",
  "fe-solc-runner",
  "fe-test-utils",
  "fe-web",
@@ -2081,7 +2082,10 @@ dependencies = [
  "criterion",
  "fe-common",
  "fe-driver",
+ "fe-hir",
  "fe-parser",
+ "fe-semantic-indexing",
+ "tempfile",
  "tracing",
  "url",
  "walkdir",
@@ -2231,6 +2235,7 @@ dependencies = [
  "camino",
  "clap",
  "codespan-reporting",
+ "criterion",
  "dir-test",
  "fe-codegen",
  "fe-common",
@@ -2240,6 +2245,7 @@ dependencies = [
  "fe-mir",
  "fe-parser",
  "fe-resolver",
+ "fe-semantic-indexing",
  "fe-test-utils",
  "fe-web",
  "futures",
@@ -2316,6 +2322,26 @@ dependencies = [
  "tracing",
  "url",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "fe-semantic-indexing"
+version = "26.1.0"
+dependencies = [
+ "camino",
+ "dir-test",
+ "fe-common",
+ "fe-driver",
+ "fe-hir",
+ "fe-test-utils",
+ "fe-web",
+ "rustc-hash 2.1.1",
+ "salsa",
+ "scip",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "url",
 ]
 
 [[package]]

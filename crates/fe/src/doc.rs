@@ -3,10 +3,13 @@ use common::InputDb;
 use driver::DriverDataBase;
 use fe_web::model::DocIndex;
 use hir::hir_def::HirIngot;
+use semantic_indexing::extract::DocExtractor;
+use semantic_indexing::scip_batch;
+use semantic_indexing::tracked::{
+    docs_for_ingot, module_tree_for_ingot, trait_impl_links_for_ingot,
+};
 use serde::{Deserialize, Serialize};
 use url::Url;
-
-use crate::extract::DocExtractor;
 
 /// Server info written by LSP for discovery
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -213,7 +216,7 @@ pub fn generate_docs(
     let git_root = detect_git_root(path.as_std_path());
 
     let index = if path.is_file() && path.extension() == Some("fe") {
-        extract_single_file(&mut db, path, git_root.as_deref())
+        extract_single_file(&mut db, path)
     } else if path.is_dir() {
         // Check if this is a workspace (fe.toml with [workspace] section)
         let fe_toml = path.join("fe.toml");
@@ -222,15 +225,15 @@ pub fn generate_docs(
                 if let Ok(common::config::Config::Workspace(ws_config)) =
                     common::config::Config::parse(&content)
                 {
-                    extract_workspace(&mut db, path, &ws_config, git_root.as_deref())
+                    extract_workspace(&mut db, path, &ws_config)
                 } else {
-                    extract_ingot(&mut db, path, git_root.as_deref())
+                    extract_ingot(&mut db, path)
                 }
             } else {
-                extract_ingot(&mut db, path, git_root.as_deref())
+                extract_ingot(&mut db, path)
             }
         } else {
-            extract_ingot(&mut db, path, git_root.as_deref())
+            extract_ingot(&mut db, path)
         }
     } else {
         eprintln!("Error: Path must be either a .fe file or a directory containing fe.toml");
@@ -240,6 +243,17 @@ pub fn generate_docs(
     let Some(mut index) = index else {
         std::process::exit(1);
     };
+
+    // Rewrite display_file paths relative to git root (for source links in static docs)
+    if let Some(ref root) = git_root {
+        for item in &mut index.items {
+            if let Some(ref mut source) = item.source
+                && let Ok(rel) = std::path::Path::new(&source.file).strip_prefix(root)
+            {
+                source.display_file = rel.to_string_lossy().to_string();
+            }
+        }
+    }
 
     // Append builtin ingot docs when --builtins is set
     if builtins {
@@ -254,21 +268,13 @@ pub fn generate_docs(
                 continue;
             }
 
-            let extractor = make_extractor(&db, git_root.as_deref());
-            for top_mod in builtin_ingot.all_modules(&db) {
-                for item in top_mod.children_nested(&db) {
-                    if let Some(doc_item) = extractor.extract_item_for_ingot(item, builtin_ingot) {
-                        index.items.push(doc_item);
-                    }
-                }
-            }
-            let root_mod = builtin_ingot.root_mod(&db);
+            index
+                .items
+                .extend(docs_for_ingot(&db, builtin_ingot).clone());
             index
                 .modules
-                .extend(extractor.build_module_tree_for_ingot(builtin_ingot, root_mod));
-
-            let trait_impl_links = extractor.extract_trait_impl_links(builtin_ingot);
-            index.link_trait_impls(trait_impl_links);
+                .extend(module_tree_for_ingot(&db, builtin_ingot).clone());
+            index.link_trait_impls(trait_impl_links_for_ingot(&db, builtin_ingot).clone());
 
             let mod_count = builtin_ingot.all_modules(&db).len();
             println!("  Included builtin '{label}' ({mod_count} modules)");
@@ -410,24 +416,7 @@ pub fn generate_docs(
     }
 }
 
-/// Create a DocExtractor with optional git-root-relative source paths.
-fn make_extractor<'db>(
-    db: &'db dyn hir::SpannedHirDb,
-    git_root: Option<&std::path::Path>,
-) -> DocExtractor<'db> {
-    let extractor = DocExtractor::new(db);
-    if let Some(root) = git_root {
-        extractor.with_root_path(root.to_path_buf())
-    } else {
-        extractor
-    }
-}
-
-fn extract_single_file(
-    db: &mut DriverDataBase,
-    file_path: &Utf8PathBuf,
-    git_root: Option<&std::path::Path>,
-) -> Option<DocIndex> {
+fn extract_single_file(db: &mut DriverDataBase, file_path: &Utf8PathBuf) -> Option<DocIndex> {
     let canonical = file_path.canonicalize_utf8().ok()?;
     let file_url = Url::from_file_path(&canonical).ok()?;
 
@@ -437,14 +426,13 @@ fn extract_single_file(
     let file = db.workspace().get(db, &file_url)?;
     let top_mod = db.top_mod(file);
 
-    // Check for errors first
     let diags = db.run_on_top_mod(top_mod);
     if !diags.is_empty() {
         eprintln!("Warning: File has errors, documentation may be incomplete");
         diags.emit(db);
     }
 
-    let extractor = make_extractor(db, git_root);
+    let extractor = DocExtractor::new(db);
     Some(extractor.extract_module(top_mod))
 }
 
@@ -452,7 +440,6 @@ fn extract_workspace(
     db: &mut DriverDataBase,
     workspace_root: &Utf8PathBuf,
     ws_config: &common::config::WorkspaceConfig,
-    git_root: Option<&std::path::Path>,
 ) -> Option<DocIndex> {
     use common::config::WorkspaceMemberSelection;
 
@@ -525,22 +512,11 @@ fn extract_workspace(
             diags.emit(db);
         }
 
-        let extractor = make_extractor(db, git_root);
-        for top_mod in ingot.all_modules(db) {
-            for item in top_mod.children_nested(db) {
-                if let Some(doc_item) = extractor.extract_item_for_ingot(item, ingot) {
-                    combined.items.push(doc_item);
-                }
-            }
-        }
-
-        let root_mod = ingot.root_mod(db);
+        combined.items.extend(docs_for_ingot(db, ingot).clone());
         combined
             .modules
-            .extend(extractor.build_module_tree_for_ingot(ingot, root_mod));
-
-        let trait_impl_links = extractor.extract_trait_impl_links(ingot);
-        combined.link_trait_impls(trait_impl_links);
+            .extend(module_tree_for_ingot(db, ingot).clone());
+        combined.link_trait_impls(trait_impl_links_for_ingot(db, ingot).clone());
     }
 
     if combined.items.is_empty() && combined.modules.is_empty() {
@@ -551,11 +527,7 @@ fn extract_workspace(
     Some(combined)
 }
 
-fn extract_ingot(
-    db: &mut DriverDataBase,
-    dir_path: &Utf8PathBuf,
-    git_root: Option<&std::path::Path>,
-) -> Option<DocIndex> {
+fn extract_ingot(db: &mut DriverDataBase, dir_path: &Utf8PathBuf) -> Option<DocIndex> {
     let canonical_path = dir_path.canonicalize_utf8().ok()?;
     let ingot_url = Url::from_directory_path(canonical_path.as_str()).ok()?;
 
@@ -573,25 +545,12 @@ fn extract_ingot(
         diags.emit(db);
     }
 
-    let extractor = make_extractor(db, git_root);
     let mut index = DocIndex::new();
-
-    // Extract items from all modules with ingot-qualified paths (like LSP does)
-    for top_mod in ingot.all_modules(db) {
-        for item in top_mod.children_nested(db) {
-            if let Some(doc_item) = extractor.extract_item_for_ingot(item, ingot) {
-                index.items.push(doc_item);
-            }
-        }
-    }
-
-    // Build module tree with ingot-qualified paths
-    let root_mod = ingot.root_mod(db);
-    index.modules = extractor.build_module_tree_for_ingot(ingot, root_mod);
-
-    // Extract and link trait implementations
-    let trait_impl_links = extractor.extract_trait_impl_links(ingot);
-    index.link_trait_impls(trait_impl_links);
+    index.items.extend(docs_for_ingot(db, ingot).clone());
+    index
+        .modules
+        .extend(module_tree_for_ingot(db, ingot).clone());
+    index.link_trait_impls(trait_impl_links_for_ingot(db, ingot).clone());
 
     Some(index)
 }
@@ -650,32 +609,26 @@ fn generate_scip_json_for_doc(
         canonical
     };
 
+    // Generate SCIP per-ingot via salsa-cached path, then enrich signatures
     for ingot_url in &ingot_urls {
-        match crate::scip_index::generate_scip_with_root(db, ingot_url, &workspace_root) {
-            Ok(mut result) => {
-                // For file:// ingots, base_url is None (paths resolve via
-                // workspace_root). For builtin ingots, pass the URL base
-                // so file lookup works for non-file:// schemes.
-                let base_url = if ingot_url.to_file_path().is_ok() {
-                    None
-                } else {
-                    Some(ingot_url)
-                };
-                crate::scip_index::enrich_signatures_with_base(
-                    db,
-                    &workspace_root,
-                    base_url,
-                    doc_index,
-                    &mut result.index,
-                );
+        if let Ok(mut result) = scip_batch::generate_scip_with_root(db, ingot_url, &workspace_root)
+        {
+            let base_url = if ingot_url.to_file_path().is_ok() {
+                None
+            } else {
+                Some(ingot_url)
+            };
+            scip_batch::enrich_signatures_with_base(
+                db,
+                &workspace_root,
+                base_url,
+                doc_index,
+                &mut result.index,
+            );
 
-                combined_index.documents.extend(result.index.documents);
-                combined_doc_urls.extend(result.doc_urls);
-                any_succeeded = true;
-            }
-            Err(e) => {
-                eprintln!("Warning: SCIP generation failed for {}: {e}", ingot_url);
-            }
+            combined_index.documents.extend(result.index.documents);
+            combined_doc_urls.extend(result.doc_urls);
+            any_succeeded = true;
         }
     }
 
@@ -683,7 +636,7 @@ fn generate_scip_json_for_doc(
         return None;
     }
 
-    Some(crate::scip_index::scip_to_json_data(
+    Some(scip_batch::scip_to_json_data(
         &combined_index,
         &combined_doc_urls,
     ))

@@ -1,0 +1,14 @@
+/// Compute the sum of two values.
+///
+/// # Examples
+/// ```
+/// let result: u256 = add(1, 2)
+/// ```
+pub fn add(a: u256, b: u256) -> u256 {
+    return a + b
+}
+
+/// Check if a value is zero.
+pub fn is_zero(val: u256) -> bool {
+    return val == 0
+}
