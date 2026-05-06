@@ -13,6 +13,7 @@ tarpaulin-report.html
 openspec/
 AGENTS.md
 CLAUDE.md
+.codex
 .claude/
 .gemini/
 

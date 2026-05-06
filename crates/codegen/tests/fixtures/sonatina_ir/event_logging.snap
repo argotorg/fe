@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 403
 expression: output
 input_file: crates/codegen/tests/fixtures/event_logging.fe
 ---
@@ -135,6 +136,15 @@ func private %encode(v0.i256, v1.objref<@layout_1>) {
 }
 
 func private %encode_abi_payload(v0.i256) -> @layout_5 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.@layout_5 = call %encode_abi_payload_abi v0;
+        return v2;
+}
+
+func private %encode_abi_payload_abi(v0.i256) -> @layout_5 {
     block0:
         jump block1;
 

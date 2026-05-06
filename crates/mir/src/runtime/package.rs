@@ -3,20 +3,28 @@ use hir::{
     analysis::{
         semantic::{
             GenericSubst, ImplEnv, ManualContractSection, RootSemanticInstanceError,
-            SemanticInstance, SemanticInstanceKey, get_or_build_semantic_instance,
-            owner_effect_bindings, root_semantic_instance_key,
+            SemConstScalar, SemConstValue, SemanticInstance, SemanticInstanceKey,
+            eval_body_owner_const, get_or_build_semantic_instance, owner_effect_bindings,
+            root_semantic_instance_key,
         },
         ty::{
             const_ty::ConstTyData,
             corelib::{resolve_core_trait, resolve_lib_type_path},
-            trait_def::{TraitInstId, resolve_trait_method_instance},
-            trait_resolution::TraitSolveCx,
+            normalize::normalize_ty,
+            trait_def::{
+                TraitInstId, assoc_const_body_for_trait_inst, resolve_trait_method_instance,
+            },
+            trait_resolution::{PredicateListId, TraitSolveCx},
             ty_check::{BodyOwner, LocalBinding},
             ty_def::{TyData, TyId},
         },
     },
-    hir_def::{Contract, Func, IdentId, InlineHint, ItemKind, ManualContractRootAttr, TopLevelMod},
+    hir_def::{
+        Contract, Func, IdentId, InlineHint, IntegerId, ItemKind, ManualContractRootAttr,
+        TopLevelMod,
+    },
 };
+use num_traits::ToPrimitive;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
@@ -38,12 +46,13 @@ use crate::{
         stable_identity_hash, type_identity,
     },
     runtime::{
-        AddressSpaceKind, ConstRegionId, ContractInitAbiPlan, ContractRecvAbiPlan, DispatchArm,
-        DispatchDefault, EntryEffectArgPlan, InitArgsPlan, LayoutId, LayoutKey, RefKind, RefView,
-        ResolvedCodeRegion, RuntimeClass, RuntimeCodeRegion, RuntimeCodeRegionKey, RuntimeFunction,
-        RuntimeFunctionOwner, RuntimeInlineHint, RuntimeInputPlan, RuntimeLinkage, RuntimeObject,
-        RuntimePackage, RuntimePackagePlan, RuntimeReturnPlan, RuntimeSection, RuntimeSectionName,
-        RuntimeSectionRef, RuntimeSyntheticSpec, ScalarClass, ScalarRepr, ScalarRole,
+        AddressSpaceKind, ConstRegionId, ContractAbiPlan, ContractInitAbiPlan, ContractRecvAbiPlan,
+        DispatchArm, DispatchDefault, EntryEffectArgPlan, InitArgsPlan, LayoutId, LayoutKey,
+        RefKind, RefView, ResolvedCodeRegion, RuntimeClass, RuntimeCodeRegion,
+        RuntimeCodeRegionKey, RuntimeFunction, RuntimeFunctionOwner, RuntimeInlineHint,
+        RuntimeInputPlan, RuntimeLinkage, RuntimeObject, RuntimePackage, RuntimePackagePlan,
+        RuntimeReturnPlan, RuntimeSection, RuntimeSectionName, RuntimeSectionRef,
+        RuntimeSyntheticSpec, ScalarClass, ScalarRepr, ScalarRole,
         TargetRootProviderMaterialization,
     },
     verify::verify_runtime_package,
@@ -632,31 +641,43 @@ fn contract_runtime_root<'db>(
     db: &'db dyn MirDb,
     contract: Contract<'db>,
 ) -> Result<RuntimeInstance<'db>, LowerError> {
-    let abi_ty = sol_abi_ty(db, contract.scope())?;
     let mut dispatch = Vec::new();
     let mut default = DispatchDefault::RevertEmpty;
-    for arm in contract.recv_views(db).flat_map(|recv| recv.arms(db)) {
-        let (abi_info, wrapper) = contract_recv_wrapper(db, arm, abi_ty)?;
-        if abi_info.is_fallback {
-            if matches!(default, DispatchDefault::Call { .. }) {
-                return Err(LowerError::Unsupported(format!(
-                    "contract `{}` has multiple fallback recv arms",
-                    contract_name(db, contract)
-                )));
+    for recv in contract.recv_views(db) {
+        let abi = contract_abi_plan(db, contract.scope(), recv.abi_ty(db))?;
+        for arm in recv.arms(db) {
+            let (abi_info, wrapper) = contract_recv_wrapper(db, arm, abi.clone())?;
+            if abi_info.is_fallback {
+                if matches!(default, DispatchDefault::Call { .. }) {
+                    return Err(LowerError::Unsupported(format!(
+                        "contract `{}` has multiple fallback recv arms",
+                        contract_name(db, contract)
+                    )));
+                }
+                default = DispatchDefault::Call { wrapper };
+                continue;
             }
-            default = DispatchDefault::Call { wrapper };
-            continue;
-        }
 
-        let selector = abi_info.selector_value.ok_or_else(|| {
-            LowerError::Unsupported(format!(
-                "recv arm in `{}` is missing a resolved selector",
-                contract_name(db, contract)
-            ))
-        })?;
-        dispatch.push(DispatchArm { selector, wrapper });
+            let selector = abi_info.selector_value.ok_or_else(|| {
+                LowerError::Unsupported(format!(
+                    "recv arm in `{}` is missing a resolved selector",
+                    contract_name(db, contract)
+                ))
+            })?;
+            dispatch.push(DispatchArm {
+                abi: abi.clone(),
+                selector,
+                wrapper,
+            });
+        }
     }
-    dispatch.sort_by_key(|arm| arm.selector);
+    dispatch.sort_by(|left, right| {
+        left.abi
+            .selector_size
+            .cmp(&right.abi.selector_size)
+            .then_with(|| left.selector.data(db).cmp(right.selector.data(db)))
+    });
+    check_dispatch_selector_conflicts(db, contract, &dispatch)?;
     Ok(synthetic_instance(
         db,
         RuntimeSyntheticSpec::ContractRuntimeRoot {
@@ -666,6 +687,59 @@ fn contract_runtime_root<'db>(
         },
         Vec::new(),
     ))
+}
+
+fn check_dispatch_selector_conflicts<'db>(
+    db: &'db dyn MirDb,
+    contract: Contract<'db>,
+    dispatch: &[DispatchArm<'db>],
+) -> Result<(), LowerError> {
+    let mut seen = Vec::<(Vec<u8>, String)>::new();
+    for arm in dispatch {
+        let bytes = dispatch_selector_bytes(db, arm)?;
+        let text = selector_hex(&bytes);
+        for (first_bytes, first_text) in &seen {
+            if selector_prefixes_overlap(first_bytes, &bytes) {
+                return Err(LowerError::Unsupported(format!(
+                    "contract `{}` has overlapping recv selectors: {first_text} overlaps {text}; \
+                     each msg variant in a contract must have a unique, non-overlapping selector prefix",
+                    contract_name(db, contract),
+                )));
+            }
+        }
+        seen.push((bytes, text));
+    }
+    Ok(())
+}
+
+fn dispatch_selector_bytes<'db>(
+    db: &'db dyn MirDb,
+    arm: &DispatchArm<'db>,
+) -> Result<Vec<u8>, LowerError> {
+    let raw = arm.selector.data(db).to_bytes_be();
+    let selector_size = arm.abi.selector_size as usize;
+    if raw.len() > selector_size {
+        return Err(LowerError::Unsupported(format!(
+            "selector {} does not fit in {} byte ABI selector",
+            selector_hex(&raw),
+            arm.abi.selector_size,
+        )));
+    }
+    let mut out = vec![0; selector_size.saturating_sub(raw.len())];
+    out.extend(raw);
+    Ok(out)
+}
+
+fn selector_hex(bytes: &[u8]) -> String {
+    let mut out = String::from("0x");
+    for byte in bytes {
+        out.push_str(&format!("{byte:02x}"));
+    }
+    out
+}
+
+fn selector_prefixes_overlap(left: &[u8], right: &[u8]) -> bool {
+    left.iter().zip(right.iter()).all(|(lhs, rhs)| lhs == rhs)
 }
 
 fn contract_init_root<'db>(
@@ -724,9 +798,15 @@ fn contract_init_abi_plan<'db>(
     let init_args = if contract.init_args_ty(db) == TyId::unit(db) {
         InitArgsPlan::None
     } else {
+        let abi_ty = sol_abi_ty(db, contract.scope())?;
         InitArgsPlan::DecodeInitTail {
             tuple_ty: contract.init_args_ty(db),
-            decode_fn: resolve_decode_instance(db, contract.scope(), contract.init_args_ty(db))?,
+            decode_fn: resolve_decode_instance(
+                db,
+                contract.scope(),
+                abi_ty,
+                contract.init_args_ty(db),
+            )?,
             projected_fields,
         }
     };
@@ -742,10 +822,10 @@ fn contract_init_abi_plan<'db>(
 fn contract_recv_wrapper<'db>(
     db: &'db dyn MirDb,
     arm: RecvArmView<'db>,
-    abi_ty: TyId<'db>,
+    abi: ContractAbiPlan<'db>,
 ) -> Result<(RecvArmAbiInfo<'db>, RuntimeInstance<'db>), LowerError> {
     let contract = arm.contract(db);
-    let abi_info = arm.abi_info(db, abi_ty);
+    let abi_info = arm.abi_info(db, abi.abi_ty);
     let recv = arm.recv(db);
     let user_recv = runtime_instance_for_semantic(
         db,
@@ -787,7 +867,7 @@ fn contract_recv_wrapper<'db>(
     } else {
         RuntimeInputPlan::DecodeCalldataPayload {
             msg_ty: abi_info.args_ty,
-            decode_fn: resolve_decode_instance(db, contract.scope(), abi_info.args_ty)?,
+            decode_fn: resolve_decode_instance(db, contract.scope(), abi.abi_ty, abi_info.args_ty)?,
             projected_fields,
         }
     };
@@ -801,6 +881,7 @@ fn contract_recv_wrapper<'db>(
         RuntimeSyntheticSpec::ContractRecvAbi {
             plan: ContractRecvAbiPlan {
                 contract,
+                abi,
                 selector: abi_info.selector_value,
                 payable: match arm.arm(db) {
                     Some(recv_arm) => recv_arm.is_payable(db),
@@ -1516,17 +1597,129 @@ fn synthetic_instance<'db>(
     get_or_build_runtime_instance(db, key)
 }
 
+fn contract_abi_plan<'db>(
+    db: &'db dyn MirDb,
+    scope: hir::hir_def::scope_graph::ScopeId<'db>,
+    abi_ty: TyId<'db>,
+) -> Result<ContractAbiPlan<'db>, LowerError> {
+    let assumptions = PredicateListId::empty_list(db);
+    let abi_trait = resolve_core_trait(db, scope, &["abi", "Abi"])
+        .ok_or_else(|| LowerError::Unsupported("missing required core::abi::Abi".to_string()))?;
+    let abi_inst = TraitInstId::new_simple(db, abi_trait, vec![abi_ty]);
+
+    let selector_ty = normalize_ty(
+        db,
+        TyId::assoc_ty(db, abi_inst, IdentId::new(db, "Selector".to_string())),
+        scope,
+        assumptions,
+    );
+    let selector_class = crate::runtime::lower::type_info::scalar_class_for_ty_in_env(
+        db,
+        RuntimeTypeEnv::new(Some(scope), assumptions),
+        selector_ty,
+    )
+    .ok_or_else(|| {
+        LowerError::Unsupported(format!(
+            "ABI `{}` selector type `{}` is not a scalar runtime type",
+            abi_ty.pretty_print(db),
+            selector_ty.pretty_print(db),
+        ))
+    })?;
+    if !matches!(selector_class.repr, ScalarRepr::Int { signed: false, .. }) {
+        return Err(LowerError::Unsupported(format!(
+            "ABI `{}` selector type `{}` must lower to an unsigned integer",
+            abi_ty.pretty_print(db),
+            selector_ty.pretty_print(db),
+        )));
+    }
+
+    let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
+    let selector_size_name = IdentId::new(db, "SELECTOR_SIZE".to_string());
+    let selector_size_body =
+        assoc_const_body_for_trait_inst(db, solve_cx, abi_inst, selector_size_name).ok_or_else(
+            || {
+                LowerError::Unsupported(format!(
+                    "missing evaluable associated const `SELECTOR_SIZE` for ABI `{}`",
+                    abi_ty.pretty_print(db),
+                ))
+            },
+        )?;
+    let selector_size = match eval_body_owner_const(
+        db,
+        BodyOwner::AnonConstBody {
+            body: selector_size_body,
+            expected: TyId::u256(db),
+        },
+        Vec::new(),
+    ) {
+        Ok(value) => match value.value(db) {
+            SemConstValue::Scalar {
+                value: SemConstScalar::Int { value },
+                ..
+            } => value.to_u64().ok_or_else(|| {
+                LowerError::Unsupported(format!(
+                    "associated const `SELECTOR_SIZE` for ABI `{}` is too large",
+                    abi_ty.pretty_print(db),
+                ))
+            })?,
+            _ => {
+                return Err(LowerError::Unsupported(format!(
+                    "failed to evaluate associated const `SELECTOR_SIZE` for ABI `{}`",
+                    abi_ty.pretty_print(db),
+                )));
+            }
+        },
+        Err(_) => {
+            return Err(LowerError::Unsupported(format!(
+                "failed to evaluate associated const `SELECTOR_SIZE` for ABI `{}`",
+                abi_ty.pretty_print(db),
+            )));
+        }
+    };
+    if selector_size > 32 {
+        return Err(LowerError::Unsupported(format!(
+            "ABI `{}` selector size {selector_size} exceeds one EVM word",
+            abi_ty.pretty_print(db),
+        )));
+    }
+
+    Ok(ContractAbiPlan {
+        abi_ty,
+        selector_ty,
+        selector_size,
+        selector_class,
+    })
+}
+
 fn resolve_decode_instance<'db>(
     db: &'db dyn MirDb,
     scope: hir::hir_def::scope_graph::ScopeId<'db>,
+    abi_ty: TyId<'db>,
     ty: TyId<'db>,
 ) -> Result<RuntimeInstance<'db>, LowerError> {
-    let abi_ty = sol_abi_ty(db, scope)?;
-    let decoder_ty = sol_decoder_ty(db, scope)?;
+    let decoder_ty = abi_decoder_ty(db, scope, abi_ty)?;
     let decode_trait = resolve_core_trait(db, scope, &["abi", "Decode"])
         .ok_or_else(|| LowerError::Unsupported("missing required core::abi::Decode".to_string()))?;
     let inst = TraitInstId::new_simple(db, decode_trait, vec![ty, abi_ty]);
     resolve_trait_runtime_instance(db, scope, inst, "decode_payload", vec![decoder_ty])
+}
+
+fn abi_decoder_ty<'db>(
+    db: &'db dyn MirDb,
+    scope: hir::hir_def::scope_graph::ScopeId<'db>,
+    abi_ty: TyId<'db>,
+) -> Result<TyId<'db>, LowerError> {
+    let assumptions = PredicateListId::empty_list(db);
+    let abi_trait = resolve_core_trait(db, scope, &["abi", "Abi"])
+        .ok_or_else(|| LowerError::Unsupported("missing required core::abi::Abi".to_string()))?;
+    let abi_inst = TraitInstId::new_simple(db, abi_trait, vec![abi_ty]);
+    let decoder_ctor = normalize_ty(
+        db,
+        TyId::assoc_ty(db, abi_inst, IdentId::new(db, "Decoder".to_string())),
+        scope,
+        assumptions,
+    );
+    Ok(TyId::app(db, decoder_ctor, memory_bytes_ty(db, scope)?))
 }
 
 fn resolve_trait_runtime_instance<'db>(
@@ -1610,15 +1803,6 @@ fn memory_bytes_ty<'db>(
     resolve_lib_type_path(db, scope, "std::evm::memory_input::MemoryBytes").ok_or_else(|| {
         LowerError::Unsupported("missing std::evm::memory_input::MemoryBytes".to_string())
     })
-}
-
-fn sol_decoder_ty<'db>(
-    db: &'db dyn MirDb,
-    scope: hir::hir_def::scope_graph::ScopeId<'db>,
-) -> Result<TyId<'db>, LowerError> {
-    let ctor = resolve_lib_type_path(db, scope, "std::abi::sol::SolDecoder")
-        .ok_or_else(|| LowerError::Unsupported("missing std::abi::sol::SolDecoder".to_string()))?;
-    Ok(TyId::app(db, ctor, memory_bytes_ty(db, scope)?))
 }
 
 fn make_runtime_function<'db>(
@@ -1781,6 +1965,16 @@ fn runtime_instance_sort_key<'db>(db: &'db dyn MirDb, instance: RuntimeInstance<
     runtime_instance_sort_key_query(db, instance)
 }
 
+fn optional_selector_key<'db>(db: &'db dyn MirDb, selector: Option<IntegerId<'db>>) -> String {
+    selector
+        .map(|selector| selector_key(db, selector))
+        .unwrap_or_else(|| "fallback".to_string())
+}
+
+fn selector_key<'db>(db: &'db dyn MirDb, selector: IntegerId<'db>) -> String {
+    selector.data(db).to_str_radix(10)
+}
+
 #[salsa::tracked]
 fn runtime_instance_symbol_key_query<'db>(
     db: &'db dyn MirDb,
@@ -1886,10 +2080,10 @@ fn runtime_synthetic_spec_symbol_key<'db>(
             init_args_plan_symbol_key(db, &plan.init_args)
         ),
         RuntimeSyntheticSpec::ContractRecvAbi { plan } => format!(
-            "__synthetic:contract_recv_abi:{}:{}:{}:{}:{}",
+            "__synthetic:contract_recv_abi:{}:{}:{}:{}:{}:{}",
             item_identity(db, plan.contract.into()),
-            plan.selector
-                .map_or_else(|| "fallback".to_string(), |selector| selector.to_string()),
+            optional_selector_key(db, plan.selector),
+            type_identity(db, plan.abi.abi_ty),
             plan.payable,
             runtime_instance_symbol_key(db, plan.user_recv),
             runtime_input_plan_symbol_key(db, &plan.input)
@@ -1914,8 +2108,9 @@ fn runtime_synthetic_spec_symbol_key<'db>(
             dispatch
                 .iter()
                 .map(|arm| format!(
-                    "{}:{}",
-                    arm.selector,
+                    "{}:{}:{}",
+                    type_identity(db, arm.abi.abi_ty),
+                    selector_key(db, arm.selector),
                     runtime_instance_symbol_key(db, arm.wrapper)
                 ))
                 .collect::<Vec<_>>()
@@ -1973,10 +2168,10 @@ fn runtime_synthetic_spec_sort_key<'db>(
             init_args_plan_sort_key(db, &plan.init_args)
         ),
         RuntimeSyntheticSpec::ContractRecvAbi { plan } => format!(
-            "__synthetic:contract_recv_abi:{}:{}:{}:{}:{}",
+            "__synthetic:contract_recv_abi:{}:{}:{}:{}:{}:{}",
             item_identity(db, plan.contract.into()),
-            plan.selector
-                .map_or_else(|| "fallback".to_string(), |selector| selector.to_string()),
+            optional_selector_key(db, plan.selector),
+            type_identity(db, plan.abi.abi_ty),
             plan.payable,
             runtime_instance_sort_key(db, plan.user_recv),
             runtime_input_plan_sort_key(db, &plan.input)
@@ -2001,8 +2196,9 @@ fn runtime_synthetic_spec_sort_key<'db>(
             dispatch
                 .iter()
                 .map(|arm| format!(
-                    "{}:{}",
-                    arm.selector,
+                    "{}:{}:{}",
+                    type_identity(db, arm.abi.abi_ty),
+                    selector_key(db, arm.selector),
                     runtime_instance_sort_key(db, arm.wrapper)
                 ))
                 .collect::<Vec<_>>()
@@ -2402,8 +2598,7 @@ fn symbol_base_for_runtime_instance<'db>(
         RuntimeSyntheticSpec::ContractRecvAbi { plan } => format!(
             "contract_recv_abi_{}_{}",
             contract_name(db, plan.contract),
-            plan.selector
-                .map_or_else(|| "fallback".to_string(), |selector| selector.to_string()),
+            optional_selector_key(db, plan.selector),
         ),
         RuntimeSyntheticSpec::ContractInitRoot { contract, .. } => {
             format!("contract_init_root_{}", contract_name(db, *contract))
@@ -2510,7 +2705,8 @@ mod tests {
                 arm.abi_info(db, abi_ty).selector_signature.as_deref() == Some(selector_sig)
             })
             .unwrap_or_else(|| panic!("missing recv arm `{selector_sig}`"));
-        let (_, wrapper) = contract_recv_wrapper(db, arm, abi_ty).expect("recv wrapper");
+        let abi = contract_abi_plan(db, contract.scope(), abi_ty).expect("Sol ABI plan");
+        let (_, wrapper) = contract_recv_wrapper(db, arm, abi).expect("recv wrapper");
         let RuntimeInstanceSource::Synthetic(synthetic) = wrapper.key(db).source(db) else {
             panic!("recv wrapper should be synthetic");
         };

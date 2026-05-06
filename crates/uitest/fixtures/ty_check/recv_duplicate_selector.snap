@@ -8,20 +8,20 @@ error[8-0047]: duplicate selector across recv blocks
    ┌─ recv_duplicate_selector.fe:13:5
    │
  5 │     Deposit { amount: u64 } -> u64,
-   │     ------- `Deposit` with selector 0x00000001 declared here
+   │     ------- `Deposit` declared here
    ·
 13 │     Transfer { to: u64, amount: u64 } -> bool,
    │     ^^^^^^^^ `Transfer` has selector 0x00000001 which conflicts with `Deposit`
    │
-   = each msg variant in a contract must have a unique selector
+   = each msg variant in a contract must have a unique, non-overlapping selector prefix
 
 error[8-0047]: duplicate selector across recv blocks
    ┌─ recv_duplicate_selector.fe:56:5
    │
 51 │     Foo { x: u64 } -> u64,
-   │     --- `Foo` with selector 0x00000001 declared here
+   │     --- `Foo` declared here
    ·
 56 │     Foo { y: u64 } -> bool,
    │     ^^^ `Foo` has selector 0x00000001 which conflicts with `Foo`
    │
-   = each msg variant in a contract must have a unique selector
+   = each msg variant in a contract must have a unique, non-overlapping selector prefix

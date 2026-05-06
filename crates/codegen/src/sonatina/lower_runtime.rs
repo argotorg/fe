@@ -1714,13 +1714,14 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 ));
                 zero_for_type(&mut self.fb, Type::Unit)
             }
-            RuntimeBuiltin::CallDataSelector => {
+            RuntimeBuiltin::CallDataSelector { selector_size, .. } => {
                 let zero = self.fb.make_imm_value(I256::zero());
                 let word = self.fb.insert_inst(
                     EvmCalldataLoad::new(self.module.inst_set(), zero),
                     Type::I256,
                 );
-                let shift = self.fb.make_imm_value(I256::from(224u64));
+                let shift_bits = 8u64 * (32u64.saturating_sub(*selector_size));
+                let shift = self.fb.make_imm_value(I256::from(shift_bits));
                 self.fb
                     .insert_inst(Shr::new(self.module.inst_set(), shift, word), Type::I256)
             }

@@ -555,14 +555,14 @@ impl DiagnosticVoucher for crate::SelectorError {
                 4,
                 "duplicate selector in msg block".to_string(),
                 format!(
-                    "`{}` has selector {:#010x} which conflicts with `{}`",
+                    "`{}` has selector {} which conflicts with `{}`",
                     self.variant_name, selector, first_variant_name
                 ),
                 vec!["each variant in a msg block must have a unique selector".to_string()],
                 self.secondary_range.map(|range| SubDiagnostic {
                     style: LabelStyle::Secondary,
                     message: format!(
-                        "`{first_variant_name}` with selector {selector:#010x} declared here"
+                        "`{first_variant_name}` with selector {selector} declared here"
                     ),
                     span: Some(Span::new(self.file, range, SpanKind::Original)),
                 }),
@@ -3974,13 +3974,13 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     SubDiagnostic {
                         style: LabelStyle::Primary,
                         message: format!(
-                            "`{second}` has selector 0x{selector:08x} which conflicts with `{first}`"
+                            "`{second}` has selector {selector} which conflicts with `{first}`"
                         ),
                         span: primary.resolve(db),
                     },
                     SubDiagnostic {
                         style: LabelStyle::Secondary,
-                        message: format!("`{first}` with selector 0x{selector:08x} declared here"),
+                        message: format!("`{first}` declared here"),
                         span: first_use.resolve(db),
                     },
                 ];
@@ -3989,7 +3989,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     message: "duplicate selector across recv blocks".to_string(),
                     sub_diagnostics,
                     notes: vec![
-                        "each msg variant in a contract must have a unique selector".to_string(),
+                        "each msg variant in a contract must have a unique, non-overlapping selector prefix".to_string(),
                     ],
                     error_code,
                 }

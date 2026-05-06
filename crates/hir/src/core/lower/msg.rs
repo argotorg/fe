@@ -33,8 +33,8 @@ use super::body::BodyCtxt;
 /// #[msg]
 /// mod Erc20 {
 ///   pub struct Transfer { pub to: Address, pub amount: u256 }
-///   impl MsgVariant for Transfer {
-///     const SELECTOR: u32 = 0x1234
+///   impl MsgVariant<Sol> for Transfer {
+///     const SELECTOR: <Sol as Abi>::Selector = 0x1234
 ///     type Return = bool
 ///   }
 /// }
@@ -55,10 +55,14 @@ pub(super) fn lower_msg_as_mod<'db>(ctxt: &mut FileLowerCtxt<'db>, ast: ast::Msg
     };
 
     let mut builder = HirBuilder::new(ctxt, msg_desugared);
+    let abi_ty = attributes
+        .abi_path(builder.db())
+        .map(|path| builder.ty_path(path))
+        .unwrap_or_else(|| builder.sol_ty());
     builder.desugared_mod(name, attributes, vis, |builder| {
         if let Some(variants) = ast.variants() {
             for (idx, variant) in variants.into_iter().enumerate() {
-                lower_msg_variant(builder, &ast, idx, variant);
+                lower_msg_variant(builder, &ast, idx, variant, abi_ty);
             }
         }
     })
@@ -70,6 +74,7 @@ fn lower_msg_variant<'db>(
     msg_ast: &ast::Msg,
     variant_idx: usize,
     variant: ast::MsgVariant,
+    abi_ty: TypeId<'db>,
 ) {
     let mut builder = builder.with_desugared(MsgDesugared {
         msg: parser::ast::AstPtr::new(msg_ast),
@@ -81,10 +86,10 @@ fn lower_msg_variant<'db>(
     let struct_ = lower_msg_variant_struct(&mut builder, &variant);
 
     // Create the impl MsgVariant for this variant
-    lower_msg_variant_impl(&mut builder, &variant, struct_);
+    lower_msg_variant_impl(&mut builder, &variant, struct_, abi_ty);
 
-    // Create `impl Encode<Sol> for Variant` and `impl Decode<Sol> for Variant`.
-    lower_msg_variant_encode_decode_impls(&mut builder, &variant, struct_);
+    // Create `impl Encode<Abi> for Variant` and `impl Decode<Abi> for Variant`.
+    lower_msg_variant_encode_decode_impls(&mut builder, &variant, struct_, abi_ty);
 }
 
 fn variant_struct_ty<'db>(db: &'db dyn HirDb, struct_: Struct<'db>) -> TypeId<'db> {
@@ -94,6 +99,29 @@ fn variant_struct_ty<'db>(db: &'db dyn HirDb, struct_: Struct<'db>) -> TypeId<'d
         None => PathId::from_ident(db, IdentId::new(db, "_".to_string())),
     };
     TypeId::new(db, TypeKind::Path(Partial::Present(self_type_path)))
+}
+
+fn abi_selector_type<'db>(
+    db: &'db dyn HirDb,
+    core_root: IdentId<'db>,
+    abi_ty: TypeId<'db>,
+) -> TypeId<'db> {
+    let abi_trait_path = PathId::from_ident(db, core_root)
+        .push_str(db, "abi")
+        .push_str(db, "Abi");
+    let abi_trait_ref = TraitRefId::new(db, Partial::Present(abi_trait_path));
+    let qualified = PathId::new(
+        db,
+        PathKind::QualifiedType {
+            type_: abi_ty,
+            trait_: abi_trait_ref,
+        },
+        None,
+    );
+    TypeId::new(
+        db,
+        TypeKind::Path(Partial::Present(qualified.push_str(db, "Selector"))),
+    )
 }
 
 fn lower_msg_variant_field_specs<'db>(
@@ -120,10 +148,11 @@ fn lower_msg_variant_encode_decode_impls<'db>(
     builder: &mut HirBuilder<'_, 'db, MsgDesugared>,
     variant: &ast::MsgVariant,
     struct_: Struct<'db>,
+    abi_ty: TypeId<'db>,
 ) {
     lower_msg_variant_abi_size_impl(builder, variant, struct_);
-    lower_msg_variant_encode_impl(builder, variant, struct_);
-    lower_msg_variant_decode_trait_impl(builder, variant, struct_);
+    lower_msg_variant_encode_impl(builder, variant, struct_, abi_ty);
+    lower_msg_variant_decode_trait_impl(builder, variant, struct_, abi_ty);
 }
 
 fn lower_msg_variant_abi_size_impl<'db>(
@@ -205,16 +234,18 @@ fn lower_msg_variant_encode_impl<'db>(
     builder: &mut HirBuilder<'_, 'db, MsgDesugared>,
     variant: &ast::MsgVariant,
     struct_: Struct<'db>,
+    abi_ty: TypeId<'db>,
 ) -> ImplTrait<'db> {
     let field_specs = lower_msg_variant_field_specs(builder.ctxt(), variant);
 
     let impl_trait_idx = builder.ctxt().next_impl_trait_idx();
-    let trait_ref = Partial::Present(builder.core_abi_trait_ref_sol("Encode"));
+    let trait_ref = Partial::Present(builder.core_abi_trait_ref("Encode", abi_ty));
     let ty = Partial::Present(variant_struct_ty(builder.db(), struct_));
     builder.with_item_scope(
         TrackedItemVariant::ImplTrait(impl_trait_idx),
         |builder, id| {
-            let direct_encode_const = create_direct_encode_assoc_const(builder, &field_specs);
+            let direct_encode_const =
+                create_direct_encode_assoc_const(builder, &field_specs, abi_ty);
             let impl_trait = builder.new_impl_trait(
                 id,
                 trait_ref,
@@ -224,7 +255,7 @@ fn lower_msg_variant_encode_impl<'db>(
                 builder.origin(),
             );
 
-            let abi_encoder_trait_ref = builder.core_abi_trait_ref_sol("AbiEncoder");
+            let abi_encoder_trait_ref = builder.core_abi_trait_ref("AbiEncoder", abi_ty);
             let (e_generic_params, e_ty) =
                 builder.type_param_with_trait_bound("E", abi_encoder_trait_ref);
 
@@ -241,7 +272,7 @@ fn lower_msg_variant_encode_impl<'db>(
                 None,
                 FuncModifiers::new(Visibility::Private, false, false, false),
                 |body| {
-                    body.encode_fields(&field_specs, encoder_ident, e_ty);
+                    body.encode_fields(&field_specs, abi_ty, encoder_ident, e_ty);
                 },
             );
 
@@ -302,11 +333,12 @@ pub(super) fn create_direct_encode_assoc_const<
 >(
     builder: &mut HirBuilder<'_, 'db, O>,
     fields: &[(IdentId<'db>, TypeId<'db>)],
+    abi_ty: TypeId<'db>,
 ) -> AssocConstDef<'db> {
     let db = builder.db();
     let name = builder.ident("DIRECT_ENCODE");
     let ty = builder.ty_ident(builder.ident("bool"));
-    let encode_trait = builder.core_abi_trait_ref_sol("Encode");
+    let encode_trait = builder.core_abi_trait_ref("Encode", abi_ty);
     let id = builder.ctxt().joined_id(TrackedItemVariant::NamelessBody);
     let origin = builder.origin();
     let mut body_ctxt = BodyCtxt::new(builder.ctxt(), id);
@@ -625,16 +657,17 @@ fn lower_msg_variant_decode_trait_impl<'db>(
     builder: &mut HirBuilder<'_, 'db, MsgDesugared>,
     variant: &ast::MsgVariant,
     struct_: Struct<'db>,
+    abi_ty: TypeId<'db>,
 ) -> ImplTrait<'db> {
     let db = builder.db();
     let fields = lower_msg_variant_field_specs(builder.ctxt(), variant);
     let field_names = fields.iter().map(|(name, _)| *name).collect::<Vec<_>>();
 
-    let trait_ref = builder.core_abi_trait_ref_sol("Decode");
+    let trait_ref = builder.core_abi_trait_ref("Decode", abi_ty);
     let ty = variant_struct_ty(db, struct_);
 
     builder.impl_trait(trait_ref, ty, |builder| {
-        let abi_decoder_trait_ref = builder.core_abi_trait_ref_sol("AbiDecoder");
+        let abi_decoder_trait_ref = builder.core_abi_trait_ref("AbiDecoder", abi_ty);
         let (d_generic_params, d_ty) =
             builder.type_param_with_trait_bound("D", abi_decoder_trait_ref);
 
@@ -649,7 +682,7 @@ fn lower_msg_variant_decode_trait_impl<'db>(
             FuncModifiers::new(Visibility::Private, false, false, false),
             |body| {
                 for (name, ty) in fields.iter().copied() {
-                    body.decode_into(name, ty, d_ty);
+                    body.decode_into(name, ty, abi_ty, d_ty);
                 }
                 body.return_record_self(&field_names);
             },
@@ -703,10 +736,11 @@ fn lower_msg_variant_impl<'db>(
     builder: &mut HirBuilder<'_, 'db, MsgDesugared>,
     variant: &ast::MsgVariant,
     struct_: Struct<'db>,
+    abi_ty: TypeId<'db>,
 ) -> ImplTrait<'db> {
     let db = builder.db();
     let roots = builder.roots();
-    let abi_args = builder.sol_args();
+    let abi_args = builder.abi_args(abi_ty);
 
     let msg_variant_trait_path = PathId::from_ident(db, roots.core)
         .push_str(db, "message")
@@ -730,9 +764,10 @@ fn lower_msg_variant_impl<'db>(
         };
         let types = vec![builder.assoc_ty("Return", return_ty)];
         let consts = vec![create_selector_const(
-            builder.ctxt(),
+            builder,
             variant,
             &variant_name,
+            abi_ty,
         )];
         (types, consts)
     })
@@ -752,22 +787,19 @@ struct ParsedSelector {
 ///
 /// The selector value is lowered as a const expression body, which is evaluated later by CTFE.
 fn create_selector_const<'db>(
-    ctxt: &mut FileLowerCtxt<'db>,
+    builder: &mut HirBuilder<'_, 'db, MsgDesugared>,
     variant: &ast::MsgVariant,
     variant_name: &str,
+    abi_ty: TypeId<'db>,
 ) -> AssocConstDef<'db> {
     use parser::ast::prelude::*;
 
+    let core_root = builder.roots().core;
+    let ctxt = builder.ctxt();
     let db = ctxt.db();
     let file = ctxt.top_mod().file(db);
     let selector_name = IdentId::new(db, "SELECTOR".to_string());
-    let selector_ty = TypeId::new(
-        db,
-        TypeKind::Path(Partial::Present(PathId::from_ident(
-            db,
-            IdentId::new(db, "u32".to_string()),
-        ))),
-    );
+    let selector_ty = abi_selector_type(db, core_root, abi_ty);
 
     let parsed = variant
         .attr_list()
@@ -839,7 +871,6 @@ fn parse_selector_attr<'db>(
     attr_list: ast::AttrList,
 ) -> Option<ParsedSelector> {
     use crate::hir_def::LitKind;
-    use num_bigint::BigUint;
 
     for attr in named_attr_specs(Some(attr_list), "selector") {
         let range = attr.range;
@@ -856,9 +887,14 @@ fn parse_selector_attr<'db>(
                             let lit_kind = LitKind::lower_ast(ctxt, lit);
                             match &lit_kind {
                                 LitKind::Int(int_id) => {
-                                    let u32_max = BigUint::from(u32::MAX);
-                                    let v = int_id.data(ctxt.db());
-                                    (v > &u32_max).then_some(SelectorErrorKind::Overflow)
+                                    // Selectors are 4-byte prefixes in the EVM world. Even when
+                                    // ABIs customize the selector type, we still reject values
+                                    // that don't fit in 32 bits to avoid silent truncation.
+                                    if int_id.data(ctxt.db()) > &BigUint::from(u32::MAX) {
+                                        Some(SelectorErrorKind::Overflow)
+                                    } else {
+                                        None
+                                    }
                                 }
                                 LitKind::String(_) | LitKind::Bool(_) => {
                                     Some(SelectorErrorKind::InvalidType)

@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 403
 expression: output
 input_file: crates/codegen/tests/fixtures/revert.fe
 ---
@@ -14,7 +15,7 @@ func private %standalone_revert__revert__fail__gcd5c_631a(v0.objref<@layout_1>) 
 
     block1:
         call %std__lib__evm__effects__impl_trait_Evm_d0d8__mstore_feb5 v0 0.i256 42.i256;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__revert_8f03_0 0.i256 32.i256;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__revert_8f03 0.i256 32.i256;
         unreachable;
 }
 
@@ -24,7 +25,7 @@ func private %standalone_revert__revert__fail__gcd5c_7451(v0.objref<@layout_1>) 
 
     block1:
         call %std__lib__evm__effects__impl_trait_Evm_d0d8__mstore_feb5_0 v0 0.i256 42.i256;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__revert_8f03 0.i256 32.i256;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__revert_8f03_0 0.i256 32.i256;
         unreachable;
 }
 

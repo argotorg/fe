@@ -137,46 +137,7 @@ fn verify_synthetic_function<'db>(
         RuntimeFunctionOwner::Synthetic(spec) => match spec {
             RuntimeSyntheticSpec::ContractRuntimeRoot {
                 dispatch, default, ..
-            } => {
-                let Some(entry) = body.blocks.first() else {
-                    return Err(VerifyError::InvalidReturnClass);
-                };
-                let RTerminator::SwitchScalar {
-                    cases,
-                    default: default_bb,
-                    ..
-                } = &entry.terminator
-                else {
-                    return Err(VerifyError::InvalidReturnClass);
-                };
-                if cases.len() != dispatch.len() {
-                    return Err(VerifyError::InvalidReturnClass);
-                }
-                for ((_, block), arm) in cases.iter().zip(dispatch.iter()) {
-                    let Some(target) = body.block(*block) else {
-                        return Err(VerifyError::MissingRuntimeBlock(*block));
-                    };
-                    let RTerminator::TerminalCall { callee, args } = &target.terminator else {
-                        return Err(VerifyError::InvalidReturnClass);
-                    };
-                    if *callee != arm.wrapper || !args.is_empty() {
-                        return Err(VerifyError::InvalidReturnClass);
-                    }
-                }
-
-                let Some(default_target) = body.block(*default_bb) else {
-                    return Err(VerifyError::MissingRuntimeBlock(*default_bb));
-                };
-                match (default, &default_target.terminator) {
-                    (DispatchDefault::RevertEmpty, RTerminator::Revert { .. }) => {}
-                    (
-                        DispatchDefault::Call { wrapper },
-                        RTerminator::TerminalCall { callee, args },
-                    ) if *callee == wrapper && args.is_empty() => {}
-                    _ => return Err(VerifyError::InvalidReturnClass),
-                }
-                Ok(())
-            }
+            } => verify_contract_runtime_root(body, &dispatch, default),
             RuntimeSyntheticSpec::ContractInitRoot { .. } => {
                 verify_has_terminator(body, |term| matches!(term, RTerminator::ReturnData { .. }))
             }
@@ -192,6 +153,128 @@ fn verify_synthetic_function<'db>(
             | RuntimeSyntheticSpec::ContractInitAbi { .. }
             | RuntimeSyntheticSpec::CodeRegionRoot { .. } => Ok(()),
         },
+    }
+}
+
+fn verify_contract_runtime_root<'db>(
+    body: &crate::runtime::RuntimeBody<'db>,
+    dispatch: &[crate::runtime::DispatchArm<'db>],
+    default: DispatchDefault<'db>,
+) -> Result<(), VerifyError<'db>> {
+    if body.blocks.is_empty() {
+        return Err(VerifyError::InvalidReturnClass);
+    }
+
+    let mut remaining = dispatch.iter().map(|arm| arm.wrapper).collect::<Vec<_>>();
+    let mut seen_default = false;
+    let mut visited = FxHashSet::default();
+    verify_contract_runtime_block(
+        body,
+        crate::runtime::RBlockId::from_u32(0),
+        &mut remaining,
+        default,
+        &mut seen_default,
+        &mut visited,
+    )?;
+
+    if remaining.is_empty() && seen_default {
+        Ok(())
+    } else {
+        Err(VerifyError::InvalidReturnClass)
+    }
+}
+
+fn verify_contract_runtime_block<'db>(
+    body: &crate::runtime::RuntimeBody<'db>,
+    block: crate::runtime::RBlockId,
+    remaining: &mut Vec<crate::instance::RuntimeInstance<'db>>,
+    default: DispatchDefault<'db>,
+    seen_default: &mut bool,
+    visited: &mut FxHashSet<crate::runtime::RBlockId>,
+) -> Result<(), VerifyError<'db>> {
+    if !visited.insert(block) {
+        return Ok(());
+    }
+    let Some(block_data) = body.block(block) else {
+        return Err(VerifyError::MissingRuntimeBlock(block));
+    };
+
+    match &block_data.terminator {
+        RTerminator::Goto(target) => {
+            verify_contract_runtime_block(body, *target, remaining, default, seen_default, visited)
+        }
+        RTerminator::Branch {
+            then_bb, else_bb, ..
+        } => {
+            verify_contract_runtime_block(
+                body,
+                *then_bb,
+                remaining,
+                default,
+                seen_default,
+                visited,
+            )?;
+            verify_contract_runtime_block(body, *else_bb, remaining, default, seen_default, visited)
+        }
+        RTerminator::SwitchScalar {
+            cases,
+            default: default_bb,
+            ..
+        } => {
+            for (_, case_bb) in cases {
+                verify_contract_dispatch_case(body, *case_bb, remaining)?;
+            }
+            verify_contract_runtime_block(
+                body,
+                *default_bb,
+                remaining,
+                default,
+                seen_default,
+                visited,
+            )
+        }
+        term => verify_contract_default_terminator(term, default, seen_default),
+    }
+}
+
+fn verify_contract_dispatch_case<'db>(
+    body: &crate::runtime::RuntimeBody<'db>,
+    block: crate::runtime::RBlockId,
+    remaining: &mut Vec<crate::instance::RuntimeInstance<'db>>,
+) -> Result<(), VerifyError<'db>> {
+    let Some(block_data) = body.block(block) else {
+        return Err(VerifyError::MissingRuntimeBlock(block));
+    };
+    let RTerminator::TerminalCall { callee, args } = &block_data.terminator else {
+        return Err(VerifyError::InvalidReturnClass);
+    };
+    if !args.is_empty() {
+        return Err(VerifyError::InvalidReturnClass);
+    }
+    let Some(pos) = remaining.iter().position(|wrapper| wrapper == callee) else {
+        return Err(VerifyError::InvalidReturnClass);
+    };
+    remaining.swap_remove(pos);
+    Ok(())
+}
+
+fn verify_contract_default_terminator<'db>(
+    term: &RTerminator<'db>,
+    default: DispatchDefault<'db>,
+    seen_default: &mut bool,
+) -> Result<(), VerifyError<'db>> {
+    match (default, term) {
+        (DispatchDefault::RevertEmpty, RTerminator::Revert { .. }) => {
+            *seen_default = true;
+            Ok(())
+        }
+        (DispatchDefault::Call { wrapper }, RTerminator::TerminalCall { callee, args })
+            if *callee == wrapper && args.is_empty() =>
+        {
+            *seen_default = true;
+            Ok(())
+        }
+        _ => Err(VerifyError::InvalidReturnClass),
     }
 }
 

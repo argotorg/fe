@@ -763,13 +763,9 @@ fn verify_builtin<'db>(
             verify_word_value(body, *topic3)?;
             Ok(None)
         }
-        RuntimeBuiltin::CallDataSelector => Ok(Some(RuntimeClass::Scalar(ScalarClass {
-            repr: ScalarRepr::Int {
-                bits: 32,
-                signed: false,
-            },
-            role: ScalarRole::Plain,
-        }))),
+        RuntimeBuiltin::CallDataSelector { class, .. } => {
+            Ok(Some(RuntimeClass::Scalar(class.clone())))
+        }
         RuntimeBuiltin::MakeContractFieldRef { class, kind, .. } => {
             if let RuntimeClass::Ref {
                 kind: actual_kind,

@@ -39,7 +39,7 @@ pub enum SelectorErrorKind {
     /// Duplicate selector value.
     Duplicate {
         first_variant_name: String,
-        selector: u32,
+        selector: String,
     },
 }
 

@@ -1629,6 +1629,14 @@ pub fn walk_attribute<'db, V>(
                                                     },
                                                 );
                                             }
+                                            Some(AttrArgValue::Path(path)) => {
+                                                ctxt.with_new_ctxt(
+                                                    |span| span.value().path(),
+                                                    |ctxt| {
+                                                        visitor.visit_path(ctxt, path);
+                                                    },
+                                                );
+                                            }
                                             Some(AttrArgValue::Lit(l)) => {
                                                 ctxt.with_new_ctxt(
                                                     |span| span.value().lit(),

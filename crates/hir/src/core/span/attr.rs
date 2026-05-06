@@ -58,6 +58,9 @@ define_lazy_span_node!(
 
 define_lazy_span_node!(LazyAttrArgValueSpan, ast::AttrArgValue);
 impl<'db> LazyAttrArgValueSpan<'db> {
+    pub fn path(self) -> LazyPathSpan<'db> {
+        LazyPathSpan(self.0)
+    }
     pub fn lit(self) -> LazyLitSpan<'db> {
         LazyLitSpan(self.0)
     }

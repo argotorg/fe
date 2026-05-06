@@ -177,7 +177,7 @@ pub(super) fn lower_error_struct<'db>(
         Partial::Present(
             PathId::from_ident(db, builder.roots().core)
                 .push_str(db, "error")
-                .push_str_args(db, "ErrorVariant", builder.sol_args()),
+                .push_str_args(db, "ErrorVariant", builder.abi_args(builder.sol_ty())),
         ),
     );
 
@@ -437,12 +437,14 @@ fn lower_error_encode_impl<'db>(
     let field_specs = field_specs.to_vec();
 
     let impl_trait_idx = builder.ctxt().next_impl_trait_idx();
-    let trait_ref = Partial::Present(builder.core_abi_trait_ref_sol("Encode"));
+    let sol_ty = builder.sol_ty();
+    let trait_ref = Partial::Present(builder.core_abi_trait_ref("Encode", sol_ty));
     let ty = Partial::Present(self_ty);
     builder.with_item_scope(
         TrackedItemVariant::ImplTrait(impl_trait_idx),
         |builder, id| {
-            let direct_encode_const = create_direct_encode_assoc_const(builder, &field_specs);
+            let direct_encode_const =
+                create_direct_encode_assoc_const(builder, &field_specs, sol_ty);
             let impl_trait = builder.new_impl_trait(
                 id,
                 trait_ref,
@@ -453,7 +455,7 @@ fn lower_error_encode_impl<'db>(
             );
 
             // encode<E>() method
-            let abi_encoder_trait_ref = builder.core_abi_trait_ref_sol("AbiEncoder");
+            let abi_encoder_trait_ref = builder.core_abi_trait_ref("AbiEncoder", sol_ty);
             let (e_generic_params, e_ty) =
                 builder.type_param_with_trait_bound("E", abi_encoder_trait_ref);
 
@@ -470,7 +472,7 @@ fn lower_error_encode_impl<'db>(
                 None,
                 FuncModifiers::new(Visibility::Private, false, false, false),
                 |body| {
-                    body.encode_fields(&field_specs, encoder_ident, e_ty);
+                    body.encode_fields(&field_specs, sol_ty, encoder_ident, e_ty);
                 },
             );
 

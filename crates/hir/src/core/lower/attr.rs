@@ -196,7 +196,12 @@ impl<'db> AttrArgValue<'db> {
                 Some(Self::Ident(IdentId::lower_token(ctxt, token)))
             }
             Some(ast::AttrArgValueKind::Lit(lit)) => Some(Self::Lit(LitKind::lower_ast(ctxt, lit))),
-            Some(ast::AttrArgValueKind::Expr(_)) => None,
+            Some(ast::AttrArgValueKind::Expr(expr)) => match expr.kind() {
+                ast::ExprKind::Path(path_expr) => PathId::lower_ast_partial(ctxt, path_expr.path())
+                    .to_opt()
+                    .map(Self::Path),
+                _ => None,
+            },
             None => None,
         }
     }

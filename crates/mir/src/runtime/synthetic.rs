@@ -12,7 +12,7 @@ use hir::{
         },
     },
     hir_def::{
-        IdentId,
+        IdentId, IntegerId,
         expr::{ArithBinOp, BinOp, CompBinOp},
     },
 };
@@ -24,13 +24,13 @@ use crate::{
     },
     layout_size_bytes,
     runtime::{
-        AddressSpaceKind, BorrowAccess, ConstScalar, ContractInitAbiPlan, ContractRecvAbiPlan,
-        DispatchDefault, EntryEffectArgPlan, InitArgsPlan, PlaceElem, PlaceRoot, RBlock, RBlockId,
-        RExpr, RLocal, RLocalId, RStmt, RTerminator, RefKind, RefView, RuntimeBody,
-        RuntimeBoundarySpec, RuntimeBuiltin, RuntimeCarrier, RuntimeClass, RuntimeExitBehavior,
-        RuntimeInputPlan, RuntimeInterfaceSignature, RuntimeLocalRoot, RuntimeParamPlan,
-        RuntimePlace, RuntimeReturnPlan, RuntimeSyntheticSpec, ScalarClass, ScalarRepr, ScalarRole,
-        TargetRootProviderBinding, TargetRootProviderMaterialization,
+        AddressSpaceKind, BorrowAccess, ConstScalar, ContractAbiPlan, ContractInitAbiPlan,
+        ContractRecvAbiPlan, DispatchDefault, EntryEffectArgPlan, InitArgsPlan, PlaceElem,
+        PlaceRoot, RBlock, RBlockId, RExpr, RLocal, RLocalId, RStmt, RTerminator, RefKind, RefView,
+        RuntimeBody, RuntimeBoundarySpec, RuntimeBuiltin, RuntimeCarrier, RuntimeClass,
+        RuntimeExitBehavior, RuntimeInputPlan, RuntimeInterfaceSignature, RuntimeLocalRoot,
+        RuntimeParamPlan, RuntimePlace, RuntimeReturnPlan, RuntimeSyntheticSpec, ScalarClass,
+        ScalarRepr, ScalarRole, TargetRootProviderBinding, TargetRootProviderMaterialization,
         lower::{
             boundary::{RuntimeValueAddress, RuntimeValueSource},
             classify::{ref_class_for_place_result, semantic_return_ty},
@@ -469,7 +469,8 @@ impl<'db> SyntheticBodyBuilder<'db> {
 
     fn build_contract_recv_abi(&mut self, plan: ContractRecvAbiPlan<'db>) {
         let zero = self.push_const_word(RBlockId::from_u32(0), 0);
-        let four = self.push_const_word(RBlockId::from_u32(0), 4);
+        let selector_size =
+            self.push_const_word(RBlockId::from_u32(0), plan.abi.selector_size as u32);
         let cont_bb = if plan.payable {
             RBlockId::from_u32(0)
         } else {
@@ -489,7 +490,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 RuntimeClass::Scalar(word_scalar_class()),
                 RuntimeBuiltin::CallDataSize,
             );
-            let payload_len = self.push_binary_word(cont_bb, ArithBinOp::Sub, size, four);
+            let payload_len = self.push_binary_word(cont_bb, ArithBinOp::Sub, size, selector_size);
             let payload_ptr = self.push_builtin_value(
                 cont_bb,
                 TyId::u256(self.db),
@@ -500,7 +501,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 cont_bb,
                 RuntimeBuiltin::CallDataCopy {
                     dst: payload_ptr,
-                    offset: four,
+                    offset: selector_size,
                     len: payload_len,
                 },
             );
@@ -511,7 +512,8 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 payload_len,
             );
             let decoder_new =
-                resolve_sol_decoder_new(self.db, plan.contract.scope()).expect("decoder_new");
+                resolve_abi_decoder_new(self.db, plan.contract.scope(), plan.abi.abi_ty)
+                    .expect("decoder_new");
             let decoder = self.push_call_result(cont_bb, decoder_new, vec![input]);
             if let Some(decoded) = self.push_call(cont_bb, decode_fn, vec![decoder]) {
                 call_args.extend(self.extract_selected_tuple_fields(
@@ -541,9 +543,10 @@ impl<'db> SyntheticBodyBuilder<'db> {
             RuntimeReturnPlan::Value { .. } => {
                 let ret_value = ret.expect("value-returning recv wrapper should produce a value");
                 let scope = plan.contract.scope();
-                let encode_alloc = resolve_sol_encode_single_root_alloc(
+                let encode_alloc = resolve_abi_encode_single_root_alloc(
                     self.db,
                     scope,
+                    plan.abi.abi_ty,
                     self.locals[ret_value.index()].semantic_ty,
                 )
                 .expect("encode_single_root_alloc");
@@ -605,22 +608,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
         default: DispatchDefault<'db>,
     ) {
         let zero = self.push_const_word(RBlockId::from_u32(0), 0);
-        let selector = self.push_builtin_value(
-            RBlockId::from_u32(0),
-            TyId::u256(self.db),
-            RuntimeClass::Scalar(selector_scalar_class()),
-            RuntimeBuiltin::CallDataSelector,
-        );
         let default_bb = self.new_block();
-        let mut cases = Vec::with_capacity(dispatch.len());
-        for arm in dispatch {
-            let block = self.new_block();
-            cases.push((u32_scalar(arm.selector), block));
-            self.blocks[block.index()].terminator = RTerminator::TerminalCall {
-                callee: arm.wrapper,
-                args: Box::default(),
-            };
-        }
         self.blocks[default_bb.index()].terminator = match default {
             DispatchDefault::RevertEmpty => RTerminator::Revert {
                 offset: zero,
@@ -631,11 +619,73 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 args: Box::default(),
             },
         };
-        self.blocks[0].terminator = RTerminator::SwitchScalar {
-            discr: selector,
-            cases: cases.into_boxed_slice(),
-            default: default_bb,
-        };
+        if dispatch.is_empty() {
+            self.blocks[0].terminator = RTerminator::Goto(default_bb);
+            return;
+        }
+
+        let input_len = self.push_builtin_value(
+            RBlockId::from_u32(0),
+            TyId::u256(self.db),
+            RuntimeClass::Scalar(word_scalar_class()),
+            RuntimeBuiltin::CallDataSize,
+        );
+        let mut groups =
+            Vec::<(ContractAbiPlan<'db>, Vec<&crate::runtime::DispatchArm<'db>>)>::new();
+        for arm in dispatch {
+            if let Some((_, arms)) = groups.iter_mut().find(|(abi, _)| abi == &arm.abi) {
+                arms.push(arm);
+            } else {
+                groups.push((arm.abi.clone(), vec![arm]));
+            }
+        }
+
+        let group_count = groups.len();
+        let mut current_bb = RBlockId::from_u32(0);
+        for (idx, (abi, arms)) in groups.into_iter().enumerate() {
+            let next_group = if idx + 1 == group_count {
+                default_bb
+            } else {
+                self.new_block()
+            };
+            let selector_bb = self.new_block();
+            let selector_size = self.push_const_word(current_bb, abi.selector_size as u32);
+            let is_short =
+                self.push_bool_binary(current_bb, CompBinOp::Lt, input_len, selector_size);
+            self.blocks[current_bb.index()].terminator = RTerminator::Branch {
+                cond: is_short,
+                then_bb: next_group,
+                else_bb: selector_bb,
+            };
+
+            let selector = self.push_builtin_value(
+                selector_bb,
+                abi.selector_ty,
+                RuntimeClass::Scalar(abi.selector_class.clone()),
+                RuntimeBuiltin::CallDataSelector {
+                    selector_size: abi.selector_size,
+                    class: abi.selector_class.clone(),
+                },
+            );
+            let mut cases = Vec::with_capacity(arms.len());
+            for arm in arms {
+                let block = self.new_block();
+                cases.push((
+                    selector_const_scalar(self.db, arm.selector, &abi.selector_class),
+                    block,
+                ));
+                self.blocks[block.index()].terminator = RTerminator::TerminalCall {
+                    callee: arm.wrapper,
+                    args: Box::default(),
+                };
+            }
+            self.blocks[selector_bb.index()].terminator = RTerminator::SwitchScalar {
+                discr: selector,
+                cases: cases.into_boxed_slice(),
+                default: next_group,
+            };
+            current_bb = next_group;
+        }
     }
 
     fn emit_nonpayable_guard(&mut self, zero: RLocalId) -> RBlockId {
@@ -1477,29 +1527,23 @@ fn word_scalar_class<'db>() -> ScalarClass<'db> {
     }
 }
 
-fn selector_scalar_class<'db>() -> ScalarClass<'db> {
-    ScalarClass {
-        repr: ScalarRepr::Int {
-            bits: 32,
-            signed: false,
-        },
-        role: ScalarRole::Plain,
-    }
-}
-
-fn u32_scalar(value: u32) -> ConstScalar {
+fn selector_const_scalar<'db>(
+    db: &'db dyn MirDb,
+    selector: IntegerId<'db>,
+    class: &ScalarClass<'db>,
+) -> ConstScalar {
+    let ScalarRepr::Int { bits, signed } = class.repr else {
+        panic!("ABI selector class should be integer-backed, got {class:?}");
+    };
+    let words = selector.data(db).to_bytes_be();
+    debug_assert!(
+        words.len() <= usize::from(bits.div_ceil(8)),
+        "selector value does not fit selector class {class:?}",
+    );
     ConstScalar::Int {
-        bits: 32,
-        signed: false,
-        words: if value == 0 {
-            Vec::new()
-        } else {
-            value
-                .to_be_bytes()
-                .into_iter()
-                .skip_while(|byte| *byte == 0)
-                .collect()
-        },
+        bits,
+        signed,
+        words,
     }
 }
 
@@ -1508,20 +1552,28 @@ fn resolve_sol_decoder_new<'db>(
     scope: hir::hir_def::scope_graph::ScopeId<'db>,
 ) -> Option<RuntimeInstance<'db>> {
     let abi_ty = sol_abi_ty(db, scope)?;
+    resolve_abi_decoder_new(db, scope, abi_ty)
+}
+
+fn resolve_abi_decoder_new<'db>(
+    db: &'db dyn MirDb,
+    scope: hir::hir_def::scope_graph::ScopeId<'db>,
+    abi_ty: TyId<'db>,
+) -> Option<RuntimeInstance<'db>> {
     let input_ty = memory_bytes_ty(db, scope)?;
     let abi_trait = resolve_core_trait(db, scope, &["abi", "Abi"])?;
     let inst = TraitInstId::new_simple(db, abi_trait, vec![abi_ty]);
     resolve_trait_runtime_instance(db, scope, inst, "decoder_new", vec![input_ty]).ok()
 }
 
-fn resolve_sol_encode_single_root_alloc<'db>(
+fn resolve_abi_encode_single_root_alloc<'db>(
     db: &'db dyn MirDb,
     scope: hir::hir_def::scope_graph::ScopeId<'db>,
+    abi_ty: TyId<'db>,
     ty: TyId<'db>,
 ) -> Option<RuntimeInstance<'db>> {
     let assumptions = PredicateListId::empty_list(db);
     let func = resolve_lib_func_path(db, scope, "core::abi::encode_single_root_alloc")?;
-    let abi_ty = sol_abi_ty(db, scope)?;
     let key = SemanticInstanceKey::new(
         db,
         BodyOwner::Func(func),
