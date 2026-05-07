@@ -89,7 +89,7 @@ func private %child_init(v0.objref<@layout_1>) {
         v1.i256 = sym_size &__Child_runtime;
         v2.i256 = sym_addr &__Child_runtime;
         call %std__lib__evm__effects__impl_trait_Evm_0098__codecopy_48e9_0 v0 0.i256 v2 v1;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_5f25_0 0.i256 v1;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_5f25_1 0.i256 v1;
         unreachable;
 }
 
@@ -99,7 +99,7 @@ func private %child_runtime(v0.objref<@layout_1>) {
 
     block1:
         call %calldatacopy v0 0.i256 0.i256 4.i256;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_5f25_1 0.i256 4.i256;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_5f25_2 0.i256 4.i256;
         unreachable;
 }
 
@@ -178,7 +178,7 @@ func private %init(v0.objref<@layout_1>) {
         v10.i256 = sym_addr &__Foo_runtime;
         v11.i256 = call %allocate v9 v0;
         call %std__lib__evm__effects__impl_trait_Evm_0098__codecopy_48e9 v0 v11 v10 v9;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_5f25_2 v11 v9;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_5f25 v11 v9;
         unreachable;
 }
 
@@ -339,7 +339,7 @@ func private %runtime(v0.objref<@layout_1>) {
         br v4 block3 block6;
 
     block2:
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_5f25 0.i256 0.i256;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_5f25_0 0.i256 0.i256;
         unreachable;
 
     block3:
