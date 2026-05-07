@@ -3,6 +3,12 @@ pub struct Panic {
     pub code: u256
 }
 
+impl Panic {
+    pub fn from(_ code: u256) -> Self {
+        Panic { code: code }
+    }
+}
+
 pub const PANIC_GENERIC: u256 = 0x00
 pub const PANIC_ASSERT: u256 = 0x01
 pub const PANIC_OVERFLOW: u256 = 0x11

@@ -73,3 +73,11 @@ fn test_unwrap_after_ok_or_else_panic_emits_solidity_panic() uses (evm: mut Evm)
     let r: Result<Panic, u256> = opt.ok_or_else(MakePanic{})
     r.unwrap()
 }
+
+#[test(should_revert, panic = 0x31)]
+fn test_panic_from_in_ok_or_chain() uses (evm: mut Evm) {
+    // `Panic::from(code)` is a one-arg shorthand for `Panic { code: code }`,
+    // which keeps the `ok_or` chain readable when picking a specific code.
+    let opt: Option<u256> = Option::None
+    opt.ok_or(Panic::from(0x31)).unwrap()
+}
