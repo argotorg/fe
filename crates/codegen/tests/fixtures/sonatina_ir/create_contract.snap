@@ -1512,7 +1512,7 @@ func private %std__lib__abi__sol__impl_SolDecoder_113c__new__g463e_ff02(v0.@layo
         jump block1;
 
     block1:
-        v2.@layout_6 = call %core__lib__abi__impl_Cursor_1a04__new__g463e_15c7 v0;
+        v2.@layout_6 = call %core__lib__abi__impl_Cursor_1a04__new__g463e_15c7_0 v0;
         v4.objref<@layout_7> = obj.alloc @layout_7;
         v5.objref<@layout_6> = obj.proj v4 0.i256;
         v6.objref<@layout_5> = obj.proj v5 0.i256;
@@ -1537,7 +1537,7 @@ func private %std__lib__abi__sol__impl_SolDecoder_113c__new__g463e_ff02_0(v0.@la
         jump block1;
 
     block1:
-        v2.@layout_6 = call %core__lib__abi__impl_Cursor_1a04__new__g463e_15c7_0 v0;
+        v2.@layout_6 = call %core__lib__abi__impl_Cursor_1a04__new__g463e_15c7 v0;
         v4.objref<@layout_7> = obj.alloc @layout_7;
         v5.objref<@layout_6> = obj.proj v4 0.i256;
         v6.objref<@layout_5> = obj.proj v5 0.i256;

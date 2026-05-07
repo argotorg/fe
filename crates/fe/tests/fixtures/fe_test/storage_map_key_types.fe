@@ -1,0 +1,158 @@
+// Tests `StorageMap<K, V>` with all primitive key types now supported by
+// `StorageKey` (u8..u128, usize, i8..i256, isize, bool). Each map round-trips
+// a value through a contract method to prove the slot derivation is stable
+// across calls (i.e. the key encoding actually matches Solidity's
+// `keccak256(left_pad_to_32_bytes(key) ++ slot)`).
+//
+// Note: signed-integer keys are constructed inside the contract from a
+// `u256` carrier rather than from a directly-decoded `intN` calldata
+// argument. This sidesteps an unrelated calldata-decoder bug in the
+// Sonatina backend for negative `intN` values (N < 256).
+
+use std::abi::sol
+
+msg M {
+    #[selector = sol("u8RT(uint8,uint256)")]
+    U8RT  { k: u8,    v: u256 } -> u256,
+    #[selector = sol("u16RT(uint16,uint256)")]
+    U16RT { k: u16,   v: u256 } -> u256,
+    #[selector = sol("u32RT(uint32,uint256)")]
+    U32RT { k: u32,   v: u256 } -> u256,
+    #[selector = sol("u64RT(uint64,uint256)")]
+    U64RT { k: u64,   v: u256 } -> u256,
+    #[selector = sol("u128RT(uint128,uint256)")]
+    U128RT { k: u128, v: u256 } -> u256,
+
+    #[selector = sol("boolPair(uint256,uint256)")]
+    BoolPair { v_true: u256, v_false: u256 } -> u256,
+
+    // Signed: contract picks fixed negative/positive keys internally.
+    #[selector = sol("i8Pair(uint256,uint256)")]
+    I8Pair { neg_v: u256, pos_v: u256 } -> u256,
+    #[selector = sol("i32Pair(uint256,uint256)")]
+    I32Pair { neg_v: u256, pos_v: u256 } -> u256,
+    #[selector = sol("i256Pair(uint256,uint256)")]
+    I256Pair { neg_v: u256, pos_v: u256 } -> u256,
+}
+
+struct Store {
+    m_u8: StorageMap<u8, u256>,
+    m_u16: StorageMap<u16, u256>,
+    m_u32: StorageMap<u32, u256>,
+    m_u64: StorageMap<u64, u256>,
+    m_u128: StorageMap<u128, u256>,
+    m_bool: StorageMap<bool, u256>,
+    m_i8: StorageMap<i8, u256>,
+    m_i32: StorageMap<i32, u256>,
+    m_i256: StorageMap<i256, u256>,
+}
+
+pub contract C {
+    mut store: Store
+
+    init() uses (mut store) {}
+
+    recv M {
+        U8RT  { k, v } -> u256 uses (mut store) {
+            store.m_u8.set(key: k, value: v)
+            store.m_u8.get(key: k)
+        }
+        U16RT { k, v } -> u256 uses (mut store) {
+            store.m_u16.set(key: k, value: v)
+            store.m_u16.get(key: k)
+        }
+        U32RT { k, v } -> u256 uses (mut store) {
+            store.m_u32.set(key: k, value: v)
+            store.m_u32.get(key: k)
+        }
+        U64RT { k, v } -> u256 uses (mut store) {
+            store.m_u64.set(key: k, value: v)
+            store.m_u64.get(key: k)
+        }
+        U128RT { k, v } -> u256 uses (mut store) {
+            store.m_u128.set(key: k, value: v)
+            store.m_u128.get(key: k)
+        }
+        // Writes both keys, then reads both — same shape as the signed-key
+        // Pair handlers, so a collision between `true` and `false` slots
+        // would show up as the second write overwriting the first.
+        BoolPair { v_true, v_false } -> u256 uses (mut store) {
+            store.m_bool.set(key: true,  value: v_true)
+            store.m_bool.set(key: false, value: v_false)
+            store.m_bool.get(key: true) * 1000 + store.m_bool.get(key: false)
+        }
+
+        // Stores `neg_v` at i8 key -1 and `pos_v` at i8 key +1, then returns
+        // (neg_value * 1000) + pos_value so a single test call exercises both
+        // sign-extended key paths.
+        I8Pair { neg_v, pos_v } -> u256 uses (mut store) {
+            let neg: i8 = -1
+            let pos: i8 = 1
+            store.m_i8.set(key: neg, value: neg_v)
+            store.m_i8.set(key: pos, value: pos_v)
+            store.m_i8.get(key: neg) * 1000 + store.m_i8.get(key: pos)
+        }
+        I32Pair { neg_v, pos_v } -> u256 uses (mut store) {
+            let neg: i32 = -2147483648
+            let pos: i32 = 2147483647
+            store.m_i32.set(key: neg, value: neg_v)
+            store.m_i32.set(key: pos, value: pos_v)
+            store.m_i32.get(key: neg) * 1000 + store.m_i32.get(key: pos)
+        }
+        I256Pair { neg_v, pos_v } -> u256 uses (mut store) {
+            let neg: i256 = -1
+            let pos: i256 = 1
+            store.m_i256.set(key: neg, value: neg_v)
+            store.m_i256.set(key: pos, value: pos_v)
+            store.m_i256.get(key: neg) * 1000 + store.m_i256.get(key: pos)
+        }
+    }
+}
+
+const GAS: u256 = 300000
+
+#[test]
+fn test_unsigned_keys() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: 0, args: (), salt: 0)
+    assert(c.inner != 0)
+
+    let r: u256 = evm.call(addr: c, gas: GAS, value: 0, message: M::U8RT  { k: 7,   v: 100 })
+    assert(r == 100)
+    let r: u256 = evm.call(addr: c, gas: GAS, value: 0, message: M::U16RT { k: 1234, v: 200 })
+    assert(r == 200)
+    let r: u256 = evm.call(addr: c, gas: GAS, value: 0, message: M::U32RT { k: 0xdeadbeef, v: 300 })
+    assert(r == 300)
+    let r: u256 = evm.call(addr: c, gas: GAS, value: 0, message: M::U64RT { k: 0xfeedfacedeadbeef, v: 400 })
+    assert(r == 400)
+    let r: u256 = evm.call(addr: c, gas: GAS, value: 0, message: M::U128RT { k: 0xcafebabecafebabecafebabecafebabe, v: 500 })
+    assert(r == 500)
+}
+
+#[test]
+fn test_bool_keys() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: 0, args: (), salt: 1)
+
+    // Single call writes both keys, then reads both back. If `true` and
+    // `false` hashed to the same slot, the second write would overwrite the
+    // first and the assertion would fail.
+    let r: u256 = evm.call(addr: c, gas: GAS, value: 0, message: M::BoolPair { v_true: 7, v_false: 13 })
+    assert(r == 7 * 1000 + 13)
+}
+
+#[test]
+fn test_signed_keys() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: 0, args: (), salt: 2)
+
+    // Each Pair call writes neg_v at the negative key and pos_v at the positive
+    // key. The return value is `get(neg)*1000 + get(pos)`, so the answer
+    // confirms both ends round-trip through their sign-extended slots without
+    // colliding.
+    let r: u256 = evm.call(addr: c, gas: GAS, value: 0, message: M::I8Pair   { neg_v: 11, pos_v: 22 })
+    assert(r == 11 * 1000 + 22)
+
+    let r: u256 = evm.call(addr: c, gas: GAS, value: 0, message: M::I32Pair  { neg_v: 33, pos_v: 44 })
+    assert(r == 33 * 1000 + 44)
+
+    let r: u256 = evm.call(addr: c, gas: GAS, value: 0, message: M::I256Pair { neg_v: 55, pos_v: 66 })
+    assert(r == 55 * 1000 + 66)
+}

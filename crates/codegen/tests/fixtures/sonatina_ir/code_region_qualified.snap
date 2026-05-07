@@ -34,7 +34,7 @@ func private %init(v0.objref<@layout_1>) {
         v1.i256 = sym_size &__Foo_runtime;
         v2.i256 = sym_addr &__Foo_runtime;
         call %codecopy v0 0.i256 v2 v1;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_cf61 0.i256 v1;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_cf61_0 0.i256 v1;
         unreachable;
 }
 
@@ -91,7 +91,7 @@ func private %runtime(v0.objref<@layout_1>) {
         jump block1;
 
     block1:
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_cf61_0 0.i256 0.i256;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_cf61 0.i256 0.i256;
         unreachable;
 }
 
