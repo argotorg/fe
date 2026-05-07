@@ -128,7 +128,7 @@ func private %standalone_match_fn_call__match_fn_call__read_selector__gcd5c_4179
         jump block1;
 
     block1:
-        v2.i256 = call %std__lib__evm__effects__impl_trait_Evm_0098__calldataload_7969_1 0.i256;
+        v2.i256 = call %std__lib__evm__effects__impl_trait_Evm_0098__calldataload_7969 0.i256;
         v4.i256 = shr 224.i256 v2;
         return v4;
 }
@@ -138,7 +138,7 @@ func private %standalone_match_fn_call__match_fn_call__read_selector__gcd5c_aed9
         jump block1;
 
     block1:
-        v2.i256 = call %std__lib__evm__effects__impl_trait_Evm_0098__calldataload_7969 0.i256;
+        v2.i256 = call %std__lib__evm__effects__impl_trait_Evm_0098__calldataload_7969_0 0.i256;
         v4.i256 = shr 224.i256 v2;
         return v4;
 }
@@ -148,7 +148,7 @@ func private %standalone_match_fn_call__match_fn_call__read_selector__gcd5c_f4a3
         jump block1;
 
     block1:
-        v2.i256 = call %std__lib__evm__effects__impl_trait_Evm_0098__calldataload_7969_0 0.i256;
+        v2.i256 = call %std__lib__evm__effects__impl_trait_Evm_0098__calldataload_7969_1 0.i256;
         v4.i256 = shr 224.i256 v2;
         return v4;
 }
