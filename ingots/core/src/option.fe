@@ -3,6 +3,7 @@ use ingot::Fn
 use ingot::Functor
 use ingot::Applicative
 use ingot::Monad
+use ingot::Result
 use ingot::panic
 
 pub enum Option<T> {
@@ -33,6 +34,13 @@ impl<T> Option<T> {
         match self {
             Self::Some(value) => func.call(value)
             Self::None => Option::None
+        }
+    }
+
+    pub fn ok_or<E>(own self, _ err: own E) -> Result<E, T> {
+        match self {
+            Self::Some(value) => Result::Ok(value)
+            Self::None => Result::Err(err)
         }
     }
 

@@ -1,0 +1,36 @@
+// Tests for `Option::ok_or` — converting Option<T> to Result<E, T>.
+//
+// Behaviour:
+//   Option::Some(v).ok_or(err) → Result::Ok(v)
+//   Option::None.ok_or(err)    → Result::Err(err)
+//
+// When chained with `Result::unwrap()`, an `Err(ErrorVariant)` payload is
+// emitted as a Solidity-compatible custom-error revert via `panic_with_value`.
+
+use core::result::Result::{self, Ok, Err}
+
+#[error]
+struct MyError {
+    pub code: u256,
+}
+
+#[test]
+fn test_some_becomes_ok() {
+    let opt: Option<u256> = Option::Some(42)
+    let r: Result<MyError, u256> = opt.ok_or(MyError { code: 7 })
+    assert(r.unwrap() == 42)
+}
+
+#[test]
+fn test_none_becomes_err() {
+    let opt: Option<u256> = Option::None
+    let r: Result<MyError, u256> = opt.ok_or(MyError { code: 7 })
+    assert(r.unwrap_err().code == 7)
+}
+
+#[test(should_revert, panic = 0x31)]
+fn test_unwrap_after_ok_or_panic_emits_solidity_panic() uses (evm: mut Evm) {
+    let opt: Option<u256> = Option::None
+    let r: Result<Panic, u256> = opt.ok_or(Panic { code: 0x31 })
+    r.unwrap()
+}
