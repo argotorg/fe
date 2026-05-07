@@ -44,6 +44,13 @@ impl<T> Option<T> {
         }
     }
 
+    pub fn ok_or_else<E, F: Fn<(), E>>(own self, _ err_func: F) -> Result<E, T> {
+        match self {
+            Self::Some(value) => Result::Ok(value)
+            Self::None => Result::Err(err_func.call(()))
+        }
+    }
+
     pub fn unwrap(own self) -> T {
         match self {
             Self::Some(t) => t

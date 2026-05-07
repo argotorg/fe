@@ -1,17 +1,35 @@
-// Tests for `Option::ok_or` — converting Option<T> to Result<E, T>.
+// Tests for `Option::ok_or` and `Option::ok_or_else` — converting
+// Option<T> to Result<E, T>.
 //
 // Behaviour:
-//   Option::Some(v).ok_or(err) → Result::Ok(v)
-//   Option::None.ok_or(err)    → Result::Err(err)
+//   Option::Some(v).ok_or(err)         → Result::Ok(v)
+//   Option::None.ok_or(err)            → Result::Err(err)
+//   Option::Some(v).ok_or_else(f)      → Result::Ok(v)         (f not called)
+//   Option::None.ok_or_else(f)         → Result::Err(f())
 //
 // When chained with `Result::unwrap()`, an `Err(ErrorVariant)` payload is
 // emitted as a Solidity-compatible custom-error revert via `panic_with_value`.
 
 use core::result::Result::{self, Ok, Err}
+use core::functional::Fn
 
 #[error]
 struct MyError {
     pub code: u256,
+}
+
+struct MakeMyError {}
+impl Fn<(), MyError> for MakeMyError {
+    fn call(self, _ args: own ()) -> MyError {
+        MyError { code: 7 }
+    }
+}
+
+struct MakePanic {}
+impl Fn<(), Panic> for MakePanic {
+    fn call(self, _ args: own ()) -> Panic {
+        Panic { code: 0x31 }
+    }
 }
 
 #[test]
@@ -32,5 +50,26 @@ fn test_none_becomes_err() {
 fn test_unwrap_after_ok_or_panic_emits_solidity_panic() uses (evm: mut Evm) {
     let opt: Option<u256> = Option::None
     let r: Result<Panic, u256> = opt.ok_or(Panic { code: 0x31 })
+    r.unwrap()
+}
+
+#[test]
+fn test_ok_or_else_some_becomes_ok() {
+    let opt: Option<u256> = Option::Some(42)
+    let r: Result<MyError, u256> = opt.ok_or_else(MakeMyError{})
+    assert(r.unwrap() == 42)
+}
+
+#[test]
+fn test_ok_or_else_none_calls_func() {
+    let opt: Option<u256> = Option::None
+    let r: Result<MyError, u256> = opt.ok_or_else(MakeMyError{})
+    assert(r.unwrap_err().code == 7)
+}
+
+#[test(should_revert, panic = 0x31)]
+fn test_unwrap_after_ok_or_else_panic_emits_solidity_panic() uses (evm: mut Evm) {
+    let opt: Option<u256> = Option::None
+    let r: Result<Panic, u256> = opt.ok_or_else(MakePanic{})
     r.unwrap()
 }
