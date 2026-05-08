@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/def/trait_const_assoc_type_binding_in_type.fe
+---
+error[3-0011]: given type doesn't match the expected const type
+  ┌─ trait_const_assoc_type_binding_in_type.fe:8:48
+  │
+8 │ fn use_in_type<T: BoundConst<X = u32>>(_ slot: Slot<{ T::C }>) {}
+  │                                                ^^^^^^^^^^^^^^ expected `u32` type here, but `T::X` is given

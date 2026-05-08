@@ -1,0 +1,6 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/impl_trait_assoc_const_admission_cycle.fe
+---
+

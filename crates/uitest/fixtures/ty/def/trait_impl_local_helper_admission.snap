@@ -1,0 +1,31 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/def/trait_impl_local_helper_admission.fe
+---
+error[3-0011]: given type doesn't match the expected const type
+    ┌─ trait_impl_local_helper_admission.fe:225:21
+    │
+225 │     fn buf(self) -> [u8; <Self as LenMethodHelper>::N]
+    │                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `usize` type here, but `u32` is given
+
+error[6-0002]: not all trait methods are implemented
+  ┌─ trait_impl_local_helper_admission.fe:9:22
+  │
+9 │ impl SuperMethod for BadMethod {}
+  │                      ^^^^^^^^^ missing implementations: run
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ trait_impl_local_helper_admission.fe:199:22
+    │
+199 │     fn make(self) -> <Self as AssocMethodHelper>::X
+    │                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Self` doesn't implement `AssocMethodHelper`
+
+error[6-0008]: method `run` has incompatible return type
+   ┌─ trait_impl_local_helper_admission.fe:28:8
+   │
+20 │     fn run(self) -> u32
+   │        --- trait requires this return type
+   ·
+28 │     fn run(self) -> bool {
+   │        ^^^ expected `u32`, found `bool`

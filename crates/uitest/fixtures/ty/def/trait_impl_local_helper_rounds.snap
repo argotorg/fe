@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/def/trait_impl_local_helper_rounds.fe
+---
+error[5-0001]: conflicting trait implementations
+   ┌─ trait_impl_local_helper_rounds.fe:49:20
+   │
+49 │ impl BaseRound for ValidRound {
+   │                    ^^^^^^^^^^ this trait implementation
+   ·
+53 │ impl BaseRound for ValidRound {
+   │                    ---------- conflicts with this trait implementation

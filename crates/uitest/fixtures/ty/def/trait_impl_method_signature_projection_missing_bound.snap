@@ -1,0 +1,23 @@
+---
+source: crates/uitest/tests/ty.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty/def/trait_impl_method_signature_projection_missing_bound.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_impl_method_signature_projection_missing_bound.fe:10:21
+   │
+10 │     fn run(self) -> <Self as Bound>::Item
+   │                     ^^^^^^^^^^^^^^^^^^^^^ `Self` doesn't implement `Bound`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_impl_method_signature_projection_missing_bound.fe:16:21
+   │
+16 │     fn run(self) -> <Self as Bound>::Item {
+   │                     ^^^^^^^^^^^^^^^^^^^^^ `S` doesn't implement `Bound`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_impl_method_signature_projection_missing_bound.fe:17:9
+   │
+17 │         todo()
+   │         ^^^^^^ `S` doesn't implement `Bound`

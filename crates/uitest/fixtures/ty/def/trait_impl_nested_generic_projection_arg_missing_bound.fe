@@ -1,0 +1,9 @@
+trait Bound {
+    type Item
+}
+
+trait Foo<T> {}
+
+struct S<T> {}
+
+impl<T> Foo< <T as Bound>::Item > for S<T> {}

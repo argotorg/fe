@@ -1,0 +1,7 @@
+trait Bound {
+    type Item
+}
+
+struct Holder<T> {
+    item: <T as Bound>::Item,
+}

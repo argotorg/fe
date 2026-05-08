@@ -1,0 +1,13 @@
+extern {
+    fn todo() -> !
+}
+
+trait HasN<const N: u32> {
+    const C: u32 = N
+}
+
+struct Slot<const N: u32> {}
+
+fn bad<T: HasN<1>>() {
+    let _: Slot<{ <T as HasN<2>>::C }> = todo()
+}

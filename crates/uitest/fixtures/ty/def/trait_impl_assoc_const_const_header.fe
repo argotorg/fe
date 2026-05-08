@@ -1,0 +1,17 @@
+struct Slot<const N: u32> {}
+
+trait AssocConstConstHeader {
+    const N: u32
+    const M: Slot<{ Self::N }>
+}
+
+struct AssocConstConstHeaderStruct {}
+
+impl AssocConstConstHeader for AssocConstConstHeaderStruct {
+    const N: u32 = 3
+    const M: Slot<{ Self::N }> = Slot {}
+}
+
+fn use_assoc_const_const_header() -> Slot<{ 3 }> {
+    AssocConstConstHeaderStruct::M
+}

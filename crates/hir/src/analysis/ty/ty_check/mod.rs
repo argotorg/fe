@@ -3892,6 +3892,83 @@ pub(super) fn manual_contract_root_ref_from_ty<'db>(
     }
 }
 
+/// Returns true if the trait-const goal's args contain generic params that
+/// are not in scope at `scope`. Such params come from the selected impl's or
+/// trait's own binder and are existentials awaiting inference (e.g.
+/// `GenericForwardStruct<7>::B` selecting through
+/// `impl<const N> GenericForward<N> for GenericForwardStruct<N>`); checking
+/// the goal with them treated as rigid universals produces false
+/// "unsatisfied bound" errors.
+pub(super) fn trait_const_goal_has_foreign_params<'db>(
+    db: &'db dyn HirAnalysisDb,
+    inst: TraitInstId<'db>,
+    scope: crate::hir_def::scope_graph::ScopeId<'db>,
+) -> bool {
+    use crate::analysis::ty::visitor::{TyVisitable, TyVisitor, walk_ty};
+
+    fn is_enclosing_item<'db>(
+        db: &'db dyn HirAnalysisDb,
+        scope: crate::hir_def::scope_graph::ScopeId<'db>,
+        owner: crate::hir_def::scope_graph::ScopeId<'db>,
+    ) -> bool {
+        let owner_item = owner.item();
+        let mut item = Some(scope.item());
+        while let Some(current) = item {
+            if current == owner_item {
+                return true;
+            }
+            item = current.scope().parent_item(db);
+        }
+        false
+    }
+
+    struct ForeignParamFinder<'db> {
+        db: &'db dyn HirAnalysisDb,
+        scope: crate::hir_def::scope_graph::ScopeId<'db>,
+        found: bool,
+    }
+
+    impl<'db> TyVisitor<'db> for ForeignParamFinder<'db> {
+        fn db(&self) -> &'db dyn HirAnalysisDb {
+            self.db
+        }
+
+        fn visit_ty(&mut self, ty: TyId<'db>) {
+            if self.found {
+                return;
+            }
+            let param = match ty.data(self.db) {
+                TyData::TyParam(param) => Some(param),
+                TyData::ConstTy(const_ty) => match const_ty.data(self.db) {
+                    crate::analysis::ty::const_ty::ConstTyData::TyParam(param, _) => Some(param),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(param) = param
+                && !is_enclosing_item(self.db, self.scope, param.owner)
+            {
+                self.found = true;
+                return;
+            }
+            walk_ty(self, ty);
+        }
+    }
+
+    let mut finder = ForeignParamFinder {
+        db,
+        scope,
+        found: false,
+    };
+    for &arg in inst.args(db) {
+        arg.visit_with(&mut finder);
+        if finder.found {
+            return true;
+        }
+    }
+    false
+}
+
 pub(super) fn ty_may_be_code_region_token<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
     let ty = strip_code_region_token_wrapper(db, ty);
     manual_contract_root_ref_from_ty(db, ty).is_some()

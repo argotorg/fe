@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/const_ty/trait_const_requires_impl_const_generic.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_const_requires_impl_const_generic.fe:10:11
+   │
+10 │     slot: Slot<{ <MissingConstArgStruct as MissingConstArg>::N }>
+   │           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `MissingConstArgStruct` doesn't implement `MissingConstArg`

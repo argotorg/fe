@@ -1,0 +1,29 @@
+trait Left {
+    type X
+}
+
+trait Right {
+    type X
+    fn make(self) -> <Self as Left>::X
+}
+
+struct S {}
+
+impl Left for S {
+    type X = u32
+}
+
+impl Right for S {
+    type X = bool
+
+    fn make(self) -> <Self as Left>::X {
+        let value: <Self as Left>::X = 1
+        value
+    }
+}
+
+fn needs_right<T: Right>(_ value: T) {}
+
+fn use_it(value: S) {
+    needs_right(value)
+}

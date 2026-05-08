@@ -1,0 +1,37 @@
+use std::abi::sol
+use std::evm::{Ctx, Log, StorageMap}
+
+msg M {
+    #[selector = sol("transfer(uint256)")]
+    Transfer { amount: u256 } -> bool
+}
+
+struct Store {
+    values: StorageMap<Address, u256>,
+}
+
+pub contract C uses (ctx: Ctx, log: mut Log) {
+    mut store: Store
+
+    recv M {
+        Transfer { amount } -> bool uses (ctx, mut log, mut store) {
+            let caller = ctx.caller()
+            let value = store.values.get(key: caller)
+            if value < amount {
+                return false
+            }
+            store.values.set(key: caller, value: value + amount)
+            emit_transfer(value: amount)
+            true
+        }
+    }
+}
+
+fn emit_transfer(value: u256) uses (log: mut Log) {
+    log.emit(TransferEvent { value })
+}
+
+#[event]
+struct TransferEvent {
+    value: u256,
+}

@@ -1,0 +1,9 @@
+trait HasN {
+    const N: u32
+}
+
+struct Slot<const N: u32> {}
+
+fn ok<T: HasN>() {
+    let _: Slot<{ <T as HasN>::N }>
+}

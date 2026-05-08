@@ -31,7 +31,7 @@ use crate::analysis::ty::{
     corelib::{
         resolve_core_range_types, resolve_core_trait, resolve_lib_func_path, resolve_lib_type_path,
     },
-    diagnostics::{BodyDiag, FuncBodyDiag, MustUseSubject},
+    diagnostics::{BodyDiag, FuncBodyDiag, MustUseSubject, TraitConstraintDiag, TyDiagCollection},
     effect_handle_metadata,
     effects::{
         BarrierReason, EffectBarrier, EffectKeyKind, EffectPatternKey, EffectQuery,
@@ -56,7 +56,9 @@ use crate::analysis::ty::{
     fold::{AssocTySubst, TyFoldable as _, TyFolder},
     provider::{ProviderTransport, provider_semantics_for_specialized_call},
     trait_def::TraitInstId,
-    trait_resolution::{GoalSatisfiability, PredicateListId, TraitGoalSolution, TraitSolveCx},
+    trait_resolution::{
+        GoalSatisfiability, PredicateListId, TraitGoalSolution, TraitSolveCx, is_goal_satisfiable,
+    },
     ty_check::callable::{Callable, EffectProviderProvenance, EffectProviderSpecialization},
     ty_def::{CapabilityKind, PrimTy, TyBase, TyData, prim_int_bits},
     unify::UnificationTable,
@@ -3581,6 +3583,25 @@ impl<'db> TyChecker<'db> {
                         args,
                         inst.assoc_type_bindings(self.db).clone(),
                     );
+
+                    if !super::trait_const_goal_has_foreign_params(self.db, inst, self.env.scope())
+                        && let GoalSatisfiability::UnSat(_) = is_goal_satisfiable(
+                            self.db,
+                            TraitSolveCx::new(self.db, self.env.scope())
+                                .with_assumptions(self.env.assumptions()),
+                            inst,
+                        )
+                    {
+                        self.push_diag(TyDiagCollection::from(
+                            TraitConstraintDiag::TraitBoundNotSat {
+                                span: path_expr_span.clone().into(),
+                                primary_goal: inst,
+                                unsat_subgoal: None,
+                                required_by: None,
+                            },
+                        ));
+                        return ExprProp::invalid(self.db);
+                    }
 
                     self.env.register_const_ref(
                         expr,

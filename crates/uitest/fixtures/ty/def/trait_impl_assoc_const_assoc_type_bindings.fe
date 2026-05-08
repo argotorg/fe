@@ -1,0 +1,95 @@
+trait BoundConst {
+    type X
+    const C: Self::X
+}
+
+struct BoundConstStruct {}
+
+struct ConstSlot<const N: u32> {}
+
+impl BoundConst for BoundConstStruct {
+    type X = u32
+    const C: Self::X = 1
+}
+
+fn use_bound_const() -> u32 {
+    BoundConstStruct::C
+}
+
+fn match_bound_const(value: u32) -> bool {
+    match value {
+        BoundConstStruct::C => true,
+        _ => false,
+    }
+}
+
+fn use_bound_const_in_type<T: BoundConst<X = u32>>(_ slot: ConstSlot<{ T::C }>) {}
+
+trait DefaultBoundConst {
+    type X
+    const C: Self::X = 1
+}
+
+struct DefaultBoundConstStruct {}
+
+impl DefaultBoundConst for DefaultBoundConstStruct {
+    type X = u32
+}
+
+fn use_default_bound_const() -> u32 {
+    DefaultBoundConstStruct::C
+}
+
+fn use_default_bound_const_in_type<T: DefaultBoundConst<X = u32>>(
+    _ slot: ConstSlot<{ T::C }>,
+) {
+}
+
+trait ForwardingBoundConst {
+    type X
+    const A: Self::X = 1
+    const B: Self::X = Self::A
+}
+
+struct ForwardingBoundConstStruct {}
+
+impl ForwardingBoundConst for ForwardingBoundConstStruct {
+    type X = u32
+}
+
+fn use_forwarding_bound_const() -> u32 {
+    ForwardingBoundConstStruct::B
+}
+
+trait ConcreteNamedConst {
+    const A: u32
+    const B: u32 = ConcreteNamedConstStruct::A
+}
+
+struct ConcreteNamedConstStruct {}
+
+impl ConcreteNamedConst for ConcreteNamedConstStruct {
+    const A: u32 = 1
+}
+
+fn use_concrete_named_const() -> u32 {
+    ConcreteNamedConstStruct::B
+}
+
+trait ConcreteNamedAssocTy {
+    type X
+    const C: ConcreteNamedAssocTyStruct::X = 1
+}
+
+struct ConcreteNamedAssocTyStruct {}
+
+impl ConcreteNamedAssocTy for ConcreteNamedAssocTyStruct {
+    type X = u32
+}
+
+fn use_concrete_named_assoc_ty() -> u32 {
+    ConcreteNamedAssocTyStruct::C
+}
+
+// KNOWN GAP: the declared type of `T::C` (`Self::X`) is not normalized under
+// the bound's assoc-type binding `X = u32`, so the const arg mis-types.

@@ -1,0 +1,11 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/return_nested_projection_arg_missing_bound.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ return_nested_projection_arg_missing_bound.fe:20:13
+   │
+20 │ fn bad() -> <Dummy< <Missing as Bound>::Item > as Foo< <Missing as Bound>::Item >>::Out {
+   │             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Missing` doesn't implement `Bound`

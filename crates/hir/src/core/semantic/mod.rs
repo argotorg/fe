@@ -3650,7 +3650,15 @@ impl<'db> WherePredicateBoundView<'db> {
         let owner_item = ItemKind::from(self.pred.clause.owner);
         let assumptions = header_constraints_for(db, owner_item);
         let scope = owner_item.scope();
-        lower_trait_ref(db, subject, self.trait_ref(db), scope, assumptions, None).ok()
+        lower_trait_ref(
+            db,
+            subject,
+            self.trait_ref(db),
+            scope,
+            assumptions,
+            crate::analysis::ty::trait_resolution::constraint::enclosing_trait_self_ty(db, scope),
+        )
+        .ok()
     }
 }
 
@@ -4487,6 +4495,25 @@ impl<'db> ImplTrait<'db> {
                 return (None, vec![diag]);
             }
             return (None, Vec::new());
+        }
+
+        if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(
+            db,
+            TraitSolveCx::new(db, self.scope()).with_assumptions(param_env(db, self.into())),
+            ty,
+        ) {
+            return (
+                None,
+                vec![
+                    TraitConstraintDiag::TraitBoundNotSat {
+                        span: self.span().ty().into(),
+                        primary_goal: goal,
+                        unsat_subgoal: subgoal,
+                        required_by: None,
+                    }
+                    .into(),
+                ],
+            );
         }
 
         match self.lowered_implementor(db) {

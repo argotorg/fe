@@ -1,0 +1,18 @@
+trait HasN {
+    const N: u32
+}
+
+struct Slot<const N: u32> {}
+
+trait Foo<T> {}
+
+struct Missing {}
+struct S {}
+
+impl Foo<Slot<{ <Missing as HasN>::N }>> for S {}
+
+fn needs_foo<T: Foo<Slot<{ <Missing as HasN>::N }>>>(value: T) {}
+
+fn use_it(value: S) {
+    needs_foo(value)
+}

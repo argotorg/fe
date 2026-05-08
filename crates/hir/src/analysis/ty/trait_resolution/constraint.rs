@@ -441,6 +441,33 @@ struct Deferred<'db> {
     scope: ScopeId<'db>,
 }
 
+/// What `Self` denotes in bounds written at `scope`: the nearest enclosing
+/// trait's `Self` parameter, if any.
+///
+/// Bound lowering substitutes `Self` occurrences in trait-ref args with the
+/// bound's subject by default, which is only correct when the subject *is*
+/// `Self` (super-traits, impl headers). For bounds on other subjects inside a
+/// trait (`trait Tr<T: A<Self::Item>>`), `Self` must keep referring to the
+/// enclosing trait's `Self`.
+pub(crate) fn enclosing_trait_self_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+) -> Option<TyId<'db>> {
+    let mut item = Some(scope.item());
+    while let Some(current) = item {
+        match current {
+            ItemKind::Trait(trait_) => {
+                return collect_generic_params(db, trait_.into()).trait_self(db);
+            }
+            // `Self` inside impls resolves to the implementor type directly.
+            ItemKind::Impl(_) | ItemKind::ImplTrait(_) => return None,
+            _ => {}
+        }
+        item = current.scope().parent_item(db);
+    }
+    None
+}
+
 fn try_resolve_type_bound<'db>(
     db: &'db dyn HirAnalysisDb,
     deferred: &Deferred<'db>,
@@ -463,7 +490,7 @@ fn try_resolve_type_bound<'db>(
         deferred.trait_ref,
         deferred.scope,
         assumptions,
-        None,
+        enclosing_trait_self_ty(db, deferred.scope),
     )
     .ok()
 }

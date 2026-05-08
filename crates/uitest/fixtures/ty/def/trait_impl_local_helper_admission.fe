@@ -1,0 +1,384 @@
+trait SuperMethod {
+    fn run(self)
+}
+
+trait ChildMethod: SuperMethod {}
+
+struct BadMethod {}
+
+impl SuperMethod for BadMethod {}
+
+impl ChildMethod for BadMethod {}
+
+fn needs_child_method<T: ChildMethod>(_ value: T) {}
+
+fn use_child_method(value: BadMethod) {
+    needs_child_method(value)
+}
+
+trait SuperSig {
+    fn run(self) -> u32
+}
+
+trait ChildSig: SuperSig {}
+
+struct BadSig {}
+
+impl SuperSig for BadSig {
+    fn run(self) -> bool {
+        true
+    }
+}
+
+impl ChildSig for BadSig {}
+
+fn needs_child_sig<T: ChildSig>(_ value: T) {}
+
+fn use_child_sig(value: BadSig) {
+    needs_child_sig(value)
+}
+
+trait SuperConst {
+    const C: u32
+}
+
+trait ChildConst: SuperConst {}
+
+struct BadConst {}
+
+impl SuperConst for BadConst {
+    const C: u32 = missing()
+}
+
+impl ChildConst for BadConst {}
+
+fn needs_child_const<T: ChildConst>(_ value: T) {}
+
+fn use_child_const(value: BadConst) {
+    needs_child_const(value)
+}
+
+trait Base {}
+
+trait Derived: Base {}
+
+struct Good {}
+
+impl Derived for Good {}
+
+impl Base for Good {}
+
+fn needs_derived<T: Derived>(_ value: T) {}
+
+fn use_derived(value: Good) {
+    needs_derived(value)
+}
+
+trait Foo {}
+
+struct Seed {}
+
+struct Wrap<T: Foo> {
+    item: T,
+}
+
+impl Foo for Wrap<Seed> {}
+
+impl Foo for Seed {}
+
+fn needs_foo<T: Foo>(_ value: T) {}
+
+fn use_wrap(value: Wrap<Seed>) {
+    needs_foo(value)
+}
+
+trait SuperAssoc {
+    type Item
+}
+
+trait ChildAssoc {
+    type Output
+}
+
+struct AssocHelper {}
+
+impl SuperAssoc for AssocHelper {
+    type Item = u32
+}
+
+impl ChildAssoc for AssocHelper {
+    type Output = AssocHelper::Item
+}
+
+fn needs_child_assoc<T: ChildAssoc>(_ value: T) {}
+
+fn use_child_assoc(value: AssocHelper) {
+    needs_child_assoc(value)
+}
+
+trait SuperMethodProjection {
+    type Item
+}
+
+trait ChildMethodProjection {
+    fn run(self, value: u32)
+}
+
+struct MethodHelper {}
+
+impl SuperMethodProjection for MethodHelper {
+    type Item = u32
+}
+
+impl ChildMethodProjection for MethodHelper {
+    fn run(self, value: MethodHelper::Item) {}
+}
+
+fn needs_child_method_projection<T: ChildMethodProjection>(_ value: T) {}
+
+fn use_child_method_projection(value: MethodHelper) {
+    needs_child_method_projection(value)
+}
+
+trait SuperConstValue {
+    const C: u32
+}
+
+trait ChildConstValue {
+    const D: u32
+}
+
+struct ConstHelper {}
+
+impl SuperConstValue for ConstHelper {
+    const C: u32 = 1
+}
+
+impl ChildConstValue for ConstHelper {
+    const D: u32 = ConstHelper::C
+}
+
+fn needs_child_const_value<T: ChildConstValue>(_ value: T) {}
+
+fn use_child_const_value(value: ConstHelper) {
+    needs_child_const_value(value)
+}
+
+trait AssocConstHelper {
+    type X
+    const C: Self::X = 1
+}
+
+trait AssocConstUser {
+    const D: u32 = <Self as AssocConstHelper>::C
+}
+
+struct DefaultHelper {}
+
+impl AssocConstHelper for DefaultHelper {
+    type X = u32
+}
+
+impl AssocConstUser for DefaultHelper {}
+
+fn needs_assoc_const_user<T: AssocConstUser>(_ value: T) {}
+
+fn use_assoc_const_user(value: DefaultHelper) {
+    needs_assoc_const_user(value)
+}
+
+fn use_assoc_const_user_value() -> u32 {
+    DefaultHelper::D
+}
+
+trait AssocMethodHelper {
+    type X
+}
+
+trait UsesAssocMethod {
+    fn make(self) -> <Self as AssocMethodHelper>::X
+}
+
+struct AssocMethodStruct {}
+
+impl AssocMethodHelper for AssocMethodStruct {
+    type X = u32
+}
+
+impl UsesAssocMethod for AssocMethodStruct {
+    fn make(self) -> u32 {
+        1
+    }
+}
+
+fn needs_uses_assoc_method<T: UsesAssocMethod>(_ value: T) {}
+
+fn use_assoc_method(value: AssocMethodStruct) {
+    needs_uses_assoc_method(value)
+}
+
+trait LenMethodHelper {
+    const N: u32
+}
+
+trait UsesLenMethod {
+    fn buf(self) -> [u8; <Self as LenMethodHelper>::N]
+}
+
+struct LenMethodStruct {}
+
+impl LenMethodHelper for LenMethodStruct {
+    const N: u32 = 1
+}
+
+impl UsesLenMethod for LenMethodStruct {
+    fn buf(self) -> [u8; 1] {
+        [0]
+    }
+}
+
+fn needs_uses_len_method<T: UsesLenMethod>(_ value: T) {}
+
+fn use_len_method(value: LenMethodStruct) {
+    needs_uses_len_method(value)
+}
+
+trait SeedElem {}
+
+trait Elem {}
+
+trait HasElem {
+    type X: Elem
+}
+
+struct WrapElem<T> {
+    item: T,
+}
+
+struct HolderElem<T> {
+    item: T,
+}
+
+impl<T: SeedElem> Elem for WrapElem<T> {}
+
+impl<T: SeedElem> HasElem for HolderElem<T> {
+    type X = WrapElem<T>
+}
+
+fn needs_has_elem<T: HasElem>(_ value: T) {}
+
+fn use_has_elem<T: SeedElem>(value: HolderElem<T>) {
+    needs_has_elem(value)
+}
+
+trait SeedShowWrap {}
+
+trait ElemShowWrap {}
+
+trait ShowWrap {}
+
+struct HelperShowWrap<T> {
+    item: T,
+}
+
+struct WrapShowWrap<T: ElemShowWrap> {
+    item: T,
+}
+
+struct ShowWrapSeed {}
+
+impl SeedShowWrap for ShowWrapSeed {}
+
+impl<T: SeedShowWrap> ElemShowWrap for HelperShowWrap<T> {}
+
+impl<T: SeedShowWrap> ShowWrap for WrapShowWrap<HelperShowWrap<T>> {}
+
+fn needs_show_wrap<T: ShowWrap>(_ value: T) {}
+
+fn use_show_wrap(value: WrapShowWrap<HelperShowWrap<ShowWrapSeed>>) {
+    needs_show_wrap(value)
+}
+
+trait SeedUsesWrap {}
+
+trait ElemUsesWrap {}
+
+trait UsesWrap<T: ElemUsesWrap> {}
+
+struct WrapUsesWrap<T> {
+    item: T,
+}
+
+struct HolderUsesWrap<T> {
+    item: T,
+}
+
+struct UsesWrapSeed {}
+
+impl SeedUsesWrap for UsesWrapSeed {}
+
+impl<T: SeedUsesWrap> ElemUsesWrap for WrapUsesWrap<T> {}
+
+impl<T: SeedUsesWrap> UsesWrap<WrapUsesWrap<T>> for HolderUsesWrap<T> {}
+
+fn needs_uses_wrap<T: UsesWrap<WrapUsesWrap<UsesWrapSeed>>>(_ value: T) {}
+
+fn use_uses_wrap(value: HolderUsesWrap<UsesWrapSeed>) {
+    needs_uses_wrap(value)
+}
+
+trait SeedChildWrap {}
+
+trait ElemChildWrap {}
+
+trait SuperChildWrap<T: ElemChildWrap> {}
+
+trait ChildWrap<T: ElemChildWrap>: SuperChildWrap<T> {}
+
+struct WrapChildWrap<T> {
+    item: T,
+}
+
+struct HolderChildWrap<T> {
+    item: T,
+}
+
+struct ChildWrapSeed {}
+
+impl SeedChildWrap for ChildWrapSeed {}
+
+impl<T: SeedChildWrap> ElemChildWrap for WrapChildWrap<T> {}
+
+impl<T: SeedChildWrap> SuperChildWrap<WrapChildWrap<T>> for HolderChildWrap<T> {}
+
+impl<T: SeedChildWrap> ChildWrap<WrapChildWrap<T>> for HolderChildWrap<T> {}
+
+fn needs_child_wrap<T: ChildWrap<WrapChildWrap<ChildWrapSeed>>>(_ value: T) {}
+
+fn use_child_wrap(value: HolderChildWrap<ChildWrapSeed>) {
+    needs_child_wrap(value)
+}
+
+trait SelfHelperCycle {}
+
+trait SelfFooCycle {
+    type X: SelfHelperCycle
+}
+
+struct SelfWrapCycle<T> {
+    item: T,
+}
+
+struct SelfCycle {}
+
+impl<T: SelfFooCycle> SelfHelperCycle for SelfWrapCycle<T> {}
+
+impl SelfFooCycle for SelfCycle {
+    type X = SelfWrapCycle<SelfCycle>
+}
+
+fn needs_self_foo_cycle<T: SelfFooCycle>(_ value: T) {}
+
+fn use_self_foo_cycle(value: SelfCycle) {
+    needs_self_foo_cycle(value)
+}

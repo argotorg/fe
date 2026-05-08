@@ -15,7 +15,7 @@ use super::{
     fold::{AssocTySubst, TyFoldable},
     normalize::normalize_ty,
     trait_def::TraitInstId,
-    trait_resolution::{TraitSolveCx, constraint::collect_constraints},
+    trait_resolution::{TraitSolveCx, constraint::collect_constraints, GoalSatisfiability, is_goal_satisfiable, },
     ty_check::{check_anon_const_body, check_const_body},
     ty_def::{InvalidCause, TyId, TyParam, TyVar},
     ty_lower::{ConstDefaultCompletion, collect_generic_params},
@@ -2153,27 +2153,36 @@ pub(crate) fn const_ty_from_assoc_const_use<'db>(
     const_ty_from_trait_const(db, assoc.solve_cx(db), assoc.inst(), assoc.name())
 }
 
+/// Builds the abstract (unevaluated) form of a trait-const use. Evaluation is
+/// deferred to the use position so the const can be retyped to the position's
+/// expected type (e.g. an integer trait const used as an array length), while
+/// the carried `AssocConstUse` keeps the trait goal visible to
+/// well-formedness checking.
+pub(crate) fn abstract_const_ty_from_assoc_const_use<'db>(
+    db: &'db dyn HirAnalysisDb,
+    assoc: AssocConstUse<'db>,
+    expected_ty: TyId<'db>,
+) -> ConstTyId<'db> {
+    ConstTyId::new(
+        db,
+        ConstTyData::Abstract(
+            ConstExprId::new(db, ConstExpr::TraitConst(assoc)),
+            expected_ty,
+        ),
+    )
+}
+
 pub(crate) fn const_ty_or_abstract_from_assoc_const_use<'db>(
     db: &'db dyn HirAnalysisDb,
     assoc: AssocConstUse<'db>,
     expected_ty: TyId<'db>,
 ) -> Option<ConstTyId<'db>> {
-    let make_abstract = || {
-        ConstTyId::new(
-            db,
-            ConstTyData::Abstract(
-                ConstExprId::new(db, ConstExpr::TraitConst(assoc)),
-                expected_ty,
-            ),
-        )
-    };
-
     let Some(evaluated) = const_ty_from_assoc_const_use(db, assoc) else {
-        return Some(make_abstract());
+        return Some(abstract_const_ty_from_assoc_const_use(db, assoc, expected_ty));
     };
     let evaluated = evaluated.evaluate(db, Some(expected_ty));
     if evaluated.ty(db).has_invalid(db) {
-        return Some(make_abstract());
+        return Some(abstract_const_ty_from_assoc_const_use(db, assoc, expected_ty));
     }
     Some(evaluated)
 }
@@ -2185,16 +2194,22 @@ pub(super) fn const_ty_from_trait_const<'db>(
     name: IdentId<'db>,
 ) -> Option<ConstTyId<'db>> {
     let trait_ = inst.def(db);
-    let (body, generic_args) =
-        crate::analysis::ty::trait_def::assoc_const_body_and_impl_args_for_trait_inst(
-            db, solve_cx, inst, name,
-        )
-        .or_else(|| {
-            trait_
-                .const_(db, name)
-                .and_then(|c| c.default_body(db))
-                .map(|body| (body, inst.args(db).clone()))
-        })?;
+    let selected = crate::analysis::ty::trait_def::assoc_const_body_and_impl_args_for_trait_inst(
+        db, solve_cx, inst, name,
+    );
+    let (body, generic_args) = if let Some(selected) = selected {
+        selected
+    } else if matches!(
+        is_goal_satisfiable(db, solve_cx, inst),
+        GoalSatisfiability::Satisfied(_)
+    ) {
+        trait_
+            .const_(db, name)
+            .and_then(|c| c.default_body(db))
+            .map(|body| (body, inst.args(db).clone()))?
+    } else {
+        return None;
+    };
 
     let declared_ty = trait_
         .const_(db, name)

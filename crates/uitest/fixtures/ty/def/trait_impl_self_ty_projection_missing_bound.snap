@@ -1,0 +1,17 @@
+---
+source: crates/uitest/tests/ty.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty/def/trait_impl_self_ty_projection_missing_bound.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_impl_self_ty_projection_missing_bound.fe:15:14
+   │
+15 │ impl Foo for Holder< <Missing as Bound>::Item > {}
+   │              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Missing` doesn't implement `Bound`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_impl_self_ty_projection_missing_bound.fe:17:14
+   │
+17 │ impl Foo for Holder<Slot<{ <Missing as HasN>::N }>> {}
+   │              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Missing` doesn't implement `HasN`

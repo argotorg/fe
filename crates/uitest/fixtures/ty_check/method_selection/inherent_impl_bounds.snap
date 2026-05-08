@@ -1,0 +1,58 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/method_selection/inherent_impl_bounds.fe
+---
+error[2-0002]: `Item` is not found
+   ┌─ inherent_impl_bounds.fe:29:34
+   │
+29 │ impl<T: AssocStrong> AssocBox<T::Item> {
+   │                                  ^^^^ `Item` is not found
+
+error[2-0002]: `Item` is not found
+   ┌─ inherent_impl_bounds.fe:33:47
+   │
+33 │ fn assoc_ok<T: AssocStrong>(box_: AssocBox<T::Item>) {
+   │                                               ^^^^ `Item` is not found
+
+error[2-0002]: `Item` is not found
+   ┌─ inherent_impl_bounds.fe:37:47
+   │
+37 │ fn assoc_id<T: AssocStrong>(box_: AssocBox<T::Item>) -> AssocBox<T::Item> {
+   │                                               ^^^^ `Item` is not found
+
+error[2-0002]: `Item` is not found
+   ┌─ inherent_impl_bounds.fe:37:69
+   │
+37 │ fn assoc_id<T: AssocStrong>(box_: AssocBox<T::Item>) -> AssocBox<T::Item> {
+   │                                                                     ^^^^ `Item` is not found
+
+error[2-0010]: no method named `touch` found for View `View`
+   ┌─ inherent_impl_bounds.fe:42:10
+   │
+42 │     box_.touch()
+   │          ^^^^^ method not found in `View`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ inherent_impl_bounds.fe:16:10
+   │
+ 7 │ impl<T: DirectBound> DirectBox<T> {
+   │         ----------- required by this bound on `touch`
+   ·
+16 │     box_.touch()
+   │          ^^^^^ `T` doesn't implement `DirectBound`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ inherent_impl_bounds.fe:16:10
+   │
+16 │     box_.touch()
+   │          ^^^^^ `T` doesn't implement `DirectBound`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ inherent_impl_bounds.fe:62:5
+   │
+51 │ impl<T: FactoryInput> Factory<T> {
+   │         ------------ required by this bound on `make`
+   ·
+62 │     Factory::make(item)
+   │     ^^^^^^^^^^^^^ `T` doesn't implement `FactoryInput`

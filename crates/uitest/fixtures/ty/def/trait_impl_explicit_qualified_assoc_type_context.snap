@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/def/trait_impl_explicit_qualified_assoc_type_context.fe
+---
+error[6-0003]: trait bound is not satisfied
+  ┌─ trait_impl_explicit_qualified_assoc_type_context.fe:7:22
+  │
+7 │     fn make(self) -> <Self as Left>::X
+  │                      ^^^^^^^^^^^^^^^^^ `Self` doesn't implement `Left`

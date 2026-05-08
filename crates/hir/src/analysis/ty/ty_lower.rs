@@ -1,6 +1,6 @@
 use crate::core::hir_def::{
-    CallableDef, ConstGenericArgValue, GenericArg, GenericArgListId, GenericParam,
-    GenericParamOwner, GenericParamView, IdentId, KindBound as HirKindBound, Partial, PathId,
+    Body, CallableDef, ConstGenericArgValue, Expr, GenericArg, GenericArgListId, GenericParam,
+    GenericParamOwner, GenericParamView, IdentId, KindBound as HirKindBound, Partial, PathId, Stmt,
     TypeAlias as HirTypeAlias, TypeBound, TypeId as HirTyId, TypeKind as HirTyKind, TypeMode,
     scope_graph::ScopeId,
 };
@@ -96,7 +96,7 @@ fn lower_hir_ty_impl<'db>(
 
         HirTyKind::Array(hir_elem_ty, len) => {
             let elem_ty = lower_child(*hir_elem_ty, 0);
-            let len_ty = ConstTyId::from_opt_body(db, *len);
+            let len_ty = lower_opt_const_body(db, *len, scope, assumptions);
             let len_ty = TyId::const_ty(db, len_ty);
             let array = TyId::array(db, elem_ty);
             TyId::app(db, array, len_ty)
@@ -124,6 +124,95 @@ fn lower_opt_hir_ty_impl<'db>(
     ty.to_opt()
         .map(|hir_ty| lower_hir_ty_impl(db, hir_ty, scope, assumptions))
         .unwrap_or_else(|| TyId::invalid(db, InvalidCause::ParseError))
+}
+
+fn const_body_simple_path<'db>(db: &'db dyn HirAnalysisDb, body: Body<'db>) -> Option<PathId<'db>> {
+    fn expr_simple_path<'db>(
+        db: &'db dyn HirAnalysisDb,
+        body: Body<'db>,
+        expr: &Expr<'db>,
+    ) -> Option<PathId<'db>> {
+        match expr {
+            Expr::Path(path) => path.to_opt(),
+            Expr::Block(stmts) => {
+                let [stmt] = stmts.as_slice() else {
+                    return None;
+                };
+                let Partial::Present(Stmt::Expr(expr)) = stmt.data(db, body) else {
+                    return None;
+                };
+                let Partial::Present(expr) = expr.data(db, body) else {
+                    return None;
+                };
+                expr_simple_path(db, body, expr)
+            }
+            _ => None,
+        }
+    }
+
+    let expr = body.expr(db).data(db, body).clone().to_opt()?;
+    expr_simple_path(db, body, &expr)
+}
+
+fn lower_opt_const_body<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Partial<Body<'db>>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> ConstTyId<'db> {
+    let Some(body) = body.to_opt() else {
+        return ConstTyId::invalid(db, InvalidCause::ParseError);
+    };
+    let Some(path) = const_body_simple_path(db, body) else {
+        return ConstTyId::from_body(db, body, None, None);
+    };
+
+    match resolve_path(db, path, scope, assumptions, true) {
+        Ok(PathRes::Const(const_def, ty)) => {
+            if let Some(body) = const_def.body(db).to_opt() {
+                ConstTyId::from_body(db, body, Some(ty), Some(const_def))
+            } else {
+                ConstTyId::invalid(db, InvalidCause::ParseError)
+            }
+        }
+        Ok(PathRes::TraitConst(recv_ty, inst, name)) => {
+            let mut args = inst.args(db).clone();
+            if let Some(self_arg) = args.first_mut() {
+                *self_arg = recv_ty;
+            }
+            let inst =
+                TraitInstId::new(db, inst.def(db), args, inst.assoc_type_bindings(db).clone());
+
+            if let Some(expected_ty) = inst
+                .def(db)
+                .const_(db, name)
+                .and_then(|v| v.ty_binder(db))
+                .map(|b| b.instantiate(db, inst.args(db)))
+            {
+                // Defer evaluation: the use position's expected type may
+                // differ in integer shape from the const's declared type
+                // (e.g. a `u256` trait const used as an array length).
+                let assoc = AssocConstUse::new(scope, assumptions, inst, name);
+                super::const_ty::abstract_const_ty_from_assoc_const_use(db, assoc, expected_ty)
+            } else {
+                ConstTyId::invalid(db, InvalidCause::Other)
+            }
+        }
+        Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty)) => {
+            if let TyData::ConstTy(const_ty) = ty.data(db) {
+                *const_ty
+            } else {
+                ConstTyId::from_body(db, body, None, None)
+            }
+        }
+        Ok(PathRes::EnumVariant(variant)) if variant.ty.is_unit_variant_only_enum(db) => {
+            ConstTyId::new(
+                db,
+                ConstTyData::Evaluated(EvaluatedConstTy::EnumVariant(variant.variant), variant.ty),
+            )
+        }
+        _ => ConstTyId::from_body(db, body, None, None),
+    }
 }
 
 fn lower_path_impl<'db>(
@@ -961,7 +1050,7 @@ pub(crate) fn lower_generic_arg_list<'db>(
             }
             GenericArg::Const(const_arg) => match const_arg.value {
                 ConstGenericArgValue::Expr(body) => {
-                    let const_ty = ConstTyId::from_opt_body(db, body);
+                    let const_ty = lower_opt_const_body(db, body, scope, assumptions);
                     TyId::const_ty(db, const_ty)
                 }
                 ConstGenericArgValue::Hole => TyId::const_ty(

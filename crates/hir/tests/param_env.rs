@@ -135,6 +135,80 @@ impl<X: A> T for S<X> {
     );
 }
 
+/// An associated type that shares its name with the trait it is bound by
+/// (`type Encoder: Encoder`) lexically shadows the trait; bound lowering must
+/// look through the shadow or the bound silently disappears from elaboration.
+#[test]
+fn param_env_resolves_bound_shadowed_by_assoc_type_name() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("param_env_resolves_bound_shadowed_by_assoc_type_name.fe"),
+        r#"
+trait Encoder {
+    type Output
+}
+
+trait Abi {
+    type Encoder: Encoder
+}
+
+fn f<T: Abi>() {}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let func = find_func(&db, top_mod, "f", |_| true);
+    let preds = param_env_preds(&db, func.into());
+
+    assert!(
+        preds.iter().any(|p| p == "T::Encoder: Encoder"),
+        "bound shadowed by a same-named assoc type was dropped from elaboration: {preds:?}"
+    );
+}
+
+/// `Self` inside a generic-param bound of a trait refers to the trait's
+/// `Self`, not to the bounded parameter; bound lowering used to rewrite it to
+/// the subject, corrupting the collected assumption.
+#[test]
+fn param_env_keeps_trait_self_in_param_bound_args() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from("param_env_keeps_trait_self_in_param_bound_args.fe"),
+        r#"
+trait A<T> {}
+
+trait Tr<T: A<Self::Item>> {
+    type Item
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let tr = top_mod
+        .all_traits(&db)
+        .iter()
+        .copied()
+        .find(|trait_| {
+            trait_
+                .name(&db)
+                .to_opt()
+                .is_some_and(|n| n.data(&db) == "Tr")
+        })
+        .expect("missing `Tr` trait");
+    let preds = param_env_preds(&db, tr.into());
+
+    assert!(
+        preds.iter().any(|p| p == "T: A<Self::Item>"),
+        "`Self` in a param bound was rewritten to the bounded subject: {preds:?}"
+    );
+    assert!(
+        !preds.iter().any(|p| p == "T: A<T::Item>"),
+        "`Self` in a param bound was rewritten to the bounded subject: {preds:?}"
+    );
+}
+
 /// Elaborating `Self: RecursiveSuper` adds assumptions whose self type is a
 /// projection rooted at `Self` (`Self::Item: RecursiveSuper`). Substituting
 /// `Self` inside those predicates used to recurse forever in `AssocTySubst`;

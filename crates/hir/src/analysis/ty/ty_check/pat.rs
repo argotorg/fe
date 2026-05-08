@@ -16,13 +16,14 @@ use crate::analysis::{
     ty::{
         assoc_const::AssocConstUse,
         binder::Binder,
-        diagnostics::BodyDiag,
+        diagnostics::{BodyDiag, TraitConstraintDiag, TyDiagCollection},
         fold::TyFoldable,
         pattern_ir::{
             BindingRef, ConstructorKind, PatternAnalysisStatus, ValidatedPat, ValidatedPatKind,
         },
         pattern_types::pattern_match_expected_ty,
         trait_def::TraitInstId,
+        trait_resolution::{GoalSatisfiability, TraitSolveCx, is_goal_satisfiable},
         ty_def::{InvalidCause, Kind, TyId, TyVarSort},
         ty_lower::lower_hir_ty,
     },
@@ -455,6 +456,30 @@ impl<'db> TyChecker<'db> {
                 );
 
                 let trait_ = inst.def(self.db);
+                if !super::trait_const_goal_has_foreign_params(self.db, inst, self.env.scope())
+                    && let GoalSatisfiability::UnSat(_) = is_goal_satisfiable(
+                        self.db,
+                        TraitSolveCx::new(self.db, self.env.scope())
+                            .with_assumptions(self.env.assumptions()),
+                        inst,
+                    )
+                {
+                    self.push_diag(TyDiagCollection::from(
+                        TraitConstraintDiag::TraitBoundNotSat {
+                            span: span.clone().into(),
+                            primary_goal: inst,
+                            unsat_subgoal: None,
+                            required_by: None,
+                        },
+                    ));
+                    return self.finish_pat_check(
+                        pat,
+                        expected,
+                        TyId::invalid(self.db, InvalidCause::Other),
+                        PatternAnalysisStatus::Invalid,
+                    );
+                }
+
                 if let Some(const_view) = trait_.const_(self.db, name)
                     && let Some(ty_binder) = const_view.ty_binder(self.db)
                 {

@@ -1,0 +1,11 @@
+---
+source: crates/uitest/tests/ty.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty/def/projection_assoc_ty_missing_bound.fe
+---
+error[6-0003]: trait bound is not satisfied
+  ┌─ projection_assoc_ty_missing_bound.fe:6:11
+  │
+6 │     item: <T as Bound>::Item,
+  │           ^^^^^^^^^^^^^^^^^^ `T` doesn't implement `Bound`

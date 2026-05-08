@@ -1,0 +1,130 @@
+trait SelfConst {
+    const C: u32
+}
+
+struct RecursiveConst {}
+
+impl SelfConst for RecursiveConst {
+    const C: u32 = RecursiveConst::C
+}
+
+fn needs_self_const<T: SelfConst>(_ value: T) {}
+
+fn use_self_const(value: RecursiveConst) {
+    needs_self_const(value)
+}
+
+trait PairConst {
+    const A: u32
+    const B: u32
+}
+
+struct OrderedConst {}
+
+impl PairConst for OrderedConst {
+    const A: u32 = OrderedConst::B
+    const B: u32 = 1
+}
+
+fn needs_pair_const<T: PairConst>(_ value: T) {}
+
+fn use_pair_const(value: OrderedConst) {
+    needs_pair_const(value)
+}
+
+trait ForwardConst {
+    const C: u32
+}
+
+struct GenericLeaf {}
+
+impl ForwardConst for GenericLeaf {
+    const C: u32 = 1
+}
+
+struct GenericForwarder<T> {}
+
+impl<T> ForwardConst for GenericForwarder<T>
+    where T: ForwardConst
+{
+    const C: u32 = T::C
+}
+
+fn needs_forward_const<T: ForwardConst>(_ value: T) {}
+
+fn use_forward_const(value: GenericForwarder<GenericLeaf>) {
+    needs_forward_const(value)
+}
+
+trait DefaultCycle {
+    const A: u32 = <Self as DefaultCycle>::B
+    const B: u32 = 1
+}
+
+struct DefaultRecursive {}
+
+impl DefaultCycle for DefaultRecursive {
+    const B: u32 = <DefaultRecursive as DefaultCycle>::A
+}
+
+fn needs_default_cycle<T: DefaultCycle>(_ value: T) {}
+
+fn use_default_cycle(value: DefaultRecursive) {
+    needs_default_cycle(value)
+}
+
+trait LeftCycle {
+    const C: u32
+}
+
+trait RightCycle {
+    const D: u32
+}
+
+struct CrossRecursive {}
+
+impl LeftCycle for CrossRecursive {
+    const C: u32 = <CrossRecursive as RightCycle>::D
+}
+
+impl RightCycle for CrossRecursive {
+    const D: u32 = <CrossRecursive as LeftCycle>::C
+}
+
+fn needs_left_cycle<T: LeftCycle>(_ value: T) {}
+
+fn needs_right_cycle<T: RightCycle>(_ value: T) {}
+
+fn use_cross_cycle(value: CrossRecursive) {
+    needs_left_cycle(value)
+    needs_right_cycle(value)
+}
+
+trait OtherNamedConst {
+    const C: bool
+}
+
+trait CurrentNamedConst {
+    const C: u32
+    const D: u32
+}
+
+struct ShadowedConst {}
+
+impl OtherNamedConst for ShadowedConst {
+    const C: bool = true
+}
+
+impl CurrentNamedConst for ShadowedConst {
+    const C: u32 = 1
+    const D: u32 = ShadowedConst::C
+}
+
+fn needs_current_named_const<T: CurrentNamedConst>(_ value: T) {}
+
+fn use_shadowed_const(value: ShadowedConst) {
+    needs_current_named_const(value)
+}
+
+// KNOWN GAP: cyclic/recursive trait-const definitions evaluate silently; no
+// recursion-limit diagnostic is emitted for `const C: u32 = RecursiveConst::C`.

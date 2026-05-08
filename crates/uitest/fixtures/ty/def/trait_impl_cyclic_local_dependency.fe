@@ -1,0 +1,20 @@
+trait Foo {}
+
+struct Wrap<T: Foo> {
+    item: T,
+}
+
+struct Seed {}
+
+impl Foo for Wrap<Seed> {}
+
+impl Foo for Seed
+where
+    Wrap<Seed>: Foo
+{}
+
+fn needs_foo<T: Foo>(_ value: T) {}
+
+fn use_wrap(value: Wrap<Seed>) {
+    needs_foo(value)
+}

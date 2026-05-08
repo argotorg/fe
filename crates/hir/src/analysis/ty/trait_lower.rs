@@ -23,7 +23,9 @@ use super::{
 };
 use crate::analysis::{
     HirAnalysisDb,
-    name_resolution::{PathRes, PathResError},
+    name_resolution::{
+        NameDomain, NameResKind, PathRes, PathResError, resolve_ident_to_bucket, resolve_name_res,
+    },
     ty::ty_def::{Kind, TyData},
 };
 
@@ -123,7 +125,23 @@ fn lower_trait_ref_inner<'db>(
 
     let self_subst = owner_self.unwrap_or(self_ty);
 
-    match crate::analysis::name_resolution::resolve_path(db, path, scope, assumptions, false) {
+    let resolved = match crate::analysis::name_resolution::resolve_path(
+        db,
+        path,
+        scope,
+        assumptions,
+        false,
+    ) {
+        Ok(res @ PathRes::Ty(_)) => {
+            match resolve_shadowed_trait_ref(db, &res, path, scope, assumptions) {
+                Some(trait_res) => Ok(trait_res),
+                None => Ok(res),
+            }
+        }
+        other => other,
+    };
+
+    match resolved {
         Ok(PathRes::Trait(t)) => {
             let mut args = t.args(db).clone();
 
@@ -159,6 +177,57 @@ fn lower_trait_ref_inner<'db>(
         Ok(res) => Err(TraitRefLowerError::InvalidDomain(res)),
         Err(e) => Err(TraitRefLowerError::PathResError(e)),
     }
+}
+
+/// A trait reference can never resolve to an associated type, but an
+/// associated type of an enclosing trait lexically shadows a same-named trait
+/// (`trait Abi { type Encoder: Encoder }`). When a bare trait-ref ident
+/// resolves to such an associated type, retry the ident lookup from outside
+/// the shadowing trait's scope, while still lowering the path's generic args
+/// in the original scope so they can reference the trait's generic params.
+fn resolve_shadowed_trait_ref<'db>(
+    db: &'db dyn HirAnalysisDb,
+    res: &PathRes<'db>,
+    path: PathId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Option<PathRes<'db>> {
+    if path.parent(db).is_some() {
+        return None;
+    }
+    let ident = path.ident(db).to_opt()?;
+    let PathRes::Ty(ty) = res else {
+        return None;
+    };
+    let TyData::AssocTy(assoc) = ty.data(db) else {
+        return None;
+    };
+    if assoc.name != ident {
+        return None;
+    }
+
+    // The shadow can only come from a trait that encloses the use site.
+    let shadowing_trait = assoc.trait_.def(db);
+    let mut item = Some(scope.item());
+    let enclosing = loop {
+        match item {
+            Some(ItemKind::Trait(trait_)) if trait_ == shadowing_trait => break trait_,
+            Some(current) => item = current.scope().parent_item(db),
+            None => return None,
+        }
+    };
+
+    let retry_scope = enclosing.scope().parent_item(db)?.scope();
+    let bucket = resolve_ident_to_bucket(db, path, retry_scope);
+    let nameres = bucket.pick(NameDomain::TYPE).as_ref().ok()?;
+    if !matches!(
+        nameres.kind,
+        NameResKind::Scope(ScopeId::Item(ItemKind::Trait(_)))
+    ) {
+        return None;
+    }
+
+    resolve_name_res(db, nameres, None, path, scope, assumptions).ok()
 }
 
 fn lower_trait_ref_cycle_initial<'db>(

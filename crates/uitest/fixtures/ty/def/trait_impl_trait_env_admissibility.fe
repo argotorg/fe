@@ -1,0 +1,224 @@
+trait Hashable {}
+
+trait Foo<T: Hashable> {}
+
+struct U {}
+struct Bar {}
+
+impl Foo<U> for Bar {}
+
+fn needs_hashable_foo<T: Foo<U>>(_ value: T) {}
+
+fn use_hashable_foo(value: Bar) {
+    needs_hashable_foo(value)
+}
+
+trait Super {}
+trait Child: Super {}
+
+struct Baz {}
+
+impl Child for Baz {}
+
+fn needs_child<T: Child>(_ value: T) {}
+
+fn use_child(value: Baz) {
+    needs_child(value)
+}
+
+trait WithItem {
+    type Item
+}
+
+struct MissingItem {}
+
+impl WithItem for MissingItem {}
+
+fn needs_item<T: WithItem>(_ value: T) {}
+
+fn use_item(value: MissingItem) {
+    needs_item(value)
+}
+
+trait WithHashableItem {
+    type Item: Hashable
+}
+
+struct BadItem {}
+
+impl WithHashableItem for BadItem {
+    type Item = U
+}
+
+fn needs_hashable_item<T: WithHashableItem>(_ value: T) {}
+
+fn use_hashable_item(value: BadItem) {
+    needs_hashable_item(value)
+}
+
+trait Callable {
+    fn call(self) -> u32
+}
+
+struct BadCallable {}
+
+impl Callable for BadCallable {
+    fn call(self) -> bool {
+        true
+    }
+}
+
+fn needs_callable<T: Callable>(_ value: T) {}
+
+fn use_callable(value: BadCallable) {
+    needs_callable(value)
+}
+
+trait WithConst {
+    const C: u32
+}
+
+struct MissingConst {}
+
+impl WithConst for MissingConst {}
+
+fn needs_const<T: WithConst>(_ value: T) {}
+
+fn use_const(value: MissingConst) {
+    needs_const(value)
+}
+
+trait WithTypedConst {
+    const C: u32
+}
+
+struct WrongConst {}
+
+impl WithTypedConst for WrongConst {
+    const C: u32 = true
+}
+
+fn needs_typed_const<T: WithTypedConst>(_ value: T) {}
+
+fn use_typed_const(value: WrongConst) {
+    needs_typed_const(value)
+}
+
+trait WithHeaderConst {
+    const C: u32
+}
+
+struct WrongHeaderConst {}
+
+impl WithHeaderConst for WrongHeaderConst {
+    const C: bool = 0
+}
+
+fn needs_header_const<T: WithHeaderConst>(_ value: T) {}
+
+fn use_header_const(value: WrongHeaderConst) {
+    needs_header_const(value)
+}
+
+struct MissingHeaderTypeConst {}
+
+impl WithHeaderConst for MissingHeaderTypeConst {
+    const C: MissingType = 0
+}
+
+fn use_missing_header_type_const(value: MissingHeaderTypeConst) {
+    needs_header_const(value)
+}
+
+trait WithDefaultConst {
+    const C: u32 = 1
+}
+
+struct DefaultConst {}
+
+impl WithDefaultConst for DefaultConst {}
+
+fn needs_default_const<T: WithDefaultConst>(_ value: T) {}
+
+fn use_default_const(value: DefaultConst) {
+    needs_default_const(value)
+}
+
+trait WithBodyConst {
+    const C: u32
+}
+
+struct BadBodyConst {}
+
+impl WithBodyConst for BadBodyConst {
+    const C: u32 = missing()
+}
+
+fn needs_body_const<T: WithBodyConst>(_ value: T) {}
+
+fn use_body_const(value: BadBodyConst) {
+    needs_body_const(value)
+}
+
+trait Marker {}
+
+struct ExtraConst {}
+
+impl Marker for ExtraConst {
+    const C: u32 = 1
+}
+
+fn needs_marker<T: Marker>(_ value: T) {}
+
+fn use_marker(value: ExtraConst) {
+    needs_marker(value)
+}
+
+struct GoodItem {}
+
+impl WithItem for GoodItem {
+    type Item = u32
+}
+
+fn use_good_item(value: GoodItem) {
+    needs_item(value)
+}
+
+trait WithDefaultItem {
+    type Item = u32
+}
+
+struct DefaultItem {}
+
+impl WithDefaultItem for DefaultItem {}
+
+fn needs_default_item<T: WithDefaultItem>(_ value: T) {}
+
+fn use_default_item(value: DefaultItem) {
+    needs_default_item(value)
+}
+
+struct ExtraOnlyItem {}
+
+impl WithDefaultItem for ExtraOnlyItem {
+    type Extra = bool
+}
+
+fn use_extra_only_item(value: ExtraOnlyItem) {
+    needs_default_item(value)
+}
+
+struct MixedExtraItem {}
+
+impl WithItem for MixedExtraItem {
+    type Item = u32
+    type Extra = bool
+}
+
+fn use_mixed_extra_item(value: MixedExtraItem) {
+    needs_item(value)
+}
+
+// KNOWN GAP: impl const headers are not validated against the trait's
+// declaration (`const C: bool` where the trait declares `u32`, and an
+// unresolved header type `MissingType`, are accepted silently).

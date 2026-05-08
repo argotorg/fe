@@ -1,0 +1,30 @@
+trait GenericForward<const N: u32> {
+    const A: u32 = N
+    const B: u32 = Self::A
+}
+
+struct GenericForwardStruct<const N: u32> {}
+
+impl<const N: u32> GenericForward<N> for GenericForwardStruct<N> {}
+
+fn use_generic_forward() -> u32 {
+    GenericForwardStruct<7>::B
+}
+
+trait GenericAssoc<const N: u32> {
+    type X
+    const C: Self::X
+}
+
+struct Slot<const N: u32> {}
+
+struct GenericAssocStruct<const N: u32> {}
+
+impl<const N: u32> GenericAssoc<N> for GenericAssocStruct<N> {
+    type X = Slot<N>
+    const C: Self::X = Slot {}
+}
+
+fn use_generic_assoc() -> Slot<1> {
+    GenericAssocStruct<1>::C
+}

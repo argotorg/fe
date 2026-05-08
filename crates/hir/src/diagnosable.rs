@@ -245,7 +245,14 @@ impl<'db> WherePredicateBoundView<'db> {
         let tr = self.trait_ref(db);
         let span = self.trait_ref_span();
 
-        match trait_lower::lower_trait_ref(db, subject, tr, scope, assumptions, None) {
+        match trait_lower::lower_trait_ref(
+            db,
+            subject,
+            tr,
+            scope,
+            assumptions,
+            ty::trait_resolution::constraint::enclosing_trait_self_ty(db, scope),
+        ) {
             Ok(inst) => {
                 let expected = inst.def(db).self_param(db).kind(db);
                 if !expected.does_match(subject.kind(db)) {
@@ -360,6 +367,23 @@ impl<'db> Func<'db> {
                 diags.push(TyLowerDiag::NormalTypeExpected { span, given: ret }.into());
             } else if ty::ty_contains_const_hole(db, ret) {
                 diags.push(TyLowerDiag::ConstHoleInValuePosition { span, ty: ret }.into());
+            } else if let ty::trait_resolution::WellFormedness::IllFormed { goal, subgoal } =
+                ty::trait_resolution::check_ty_wf(
+                    db,
+                    ty::trait_resolution::TraitSolveCx::new(db, self.scope())
+                        .with_assumptions(param_env(db, self.into())),
+                    ret,
+                )
+            {
+                diags.push(
+                    TraitConstraintDiag::TraitBoundNotSat {
+                        span,
+                        primary_goal: goal,
+                        unsat_subgoal: subgoal,
+                        required_by: None,
+                    }
+                    .into(),
+                );
             }
         }
         diags
@@ -757,7 +781,7 @@ impl<'db> ImplTrait<'db> {
     /// Diagnostics for trait-ref WF and satisfiability for this impl-trait.
     pub fn diags_trait_ref_and_wf(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         use ty::trait_lower::lower_impl_trait;
-        use ty::trait_resolution::{self, GoalSatisfiability, constraint::collect_constraints};
+        use ty::trait_resolution::{self, GoalSatisfiability, WellFormedness, check_trait_inst_wf};
 
         let mut diags = Vec::new();
         let Some(implementor) = lower_impl_trait(db, self) else {
@@ -767,11 +791,23 @@ impl<'db> ImplTrait<'db> {
         let trait_inst = implementor.trait_(db);
         let trait_def = implementor.trait_def(db);
 
-        let trait_constraints =
-            collect_constraints(db, trait_def.into()).instantiate(db, trait_inst.args(db));
-
         let solve_cx = trait_resolution::TraitSolveCx::new(db, self.scope())
             .with_assumptions(param_env(db, self.into()));
+
+        if let WellFormedness::IllFormed { goal, subgoal } =
+            check_trait_inst_wf(db, solve_cx, trait_inst)
+        {
+            diags.push(
+                TraitConstraintDiag::TraitBoundNotSat {
+                    span: self.span().trait_ref().into(),
+                    primary_goal: goal,
+                    unsat_subgoal: subgoal,
+                    required_by: None,
+                }
+                .into(),
+            );
+            return diags;
+        }
 
         let is_satisfied = |goal, span: DynLazySpan<'db>, out: &mut Vec<_>| {
             match trait_resolution::is_goal_satisfiable(db, solve_cx, goal) {
@@ -790,11 +826,6 @@ impl<'db> ImplTrait<'db> {
                 }
             }
         };
-
-        let trait_ref_span: DynLazySpan<'db> = self.span().trait_ref().into();
-        for &goal in trait_constraints.list(db) {
-            is_satisfied(goal, trait_ref_span.clone(), &mut diags);
-        }
 
         let target_ty_span: DynLazySpan<'db> = self.span().ty().into();
         for super_trait in trait_def.super_traits(db) {
@@ -1247,7 +1278,14 @@ impl<'db> GenericParamOwner<'db> {
                     .bounds()
                     .bound(i)
                     .trait_bound();
-                match trait_lower::lower_trait_ref(db, subject, *tr, scope, assumptions, None) {
+                match trait_lower::lower_trait_ref(
+                    db,
+                    subject,
+                    *tr,
+                    scope,
+                    assumptions,
+                    ty::trait_resolution::constraint::enclosing_trait_self_ty(db, scope),
+                ) {
                     Ok(inst) => {
                         let expected = inst.def(db).self_param(db).kind(db);
                         if !expected.does_match(subject.kind(db)) {

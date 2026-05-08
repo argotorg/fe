@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/def/tuple_variant_projection_missing_bound.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ tuple_variant_projection_missing_bound.fe:16:7
+   │
+16 │     A(<Dummy< <T as Bound>::Item > as Foo< <T as Bound>::Item >>::Out),
+   │       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `T` doesn't implement `Bound`

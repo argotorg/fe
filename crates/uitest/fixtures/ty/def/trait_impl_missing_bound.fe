@@ -1,0 +1,9 @@
+trait Hashable {}
+
+trait Foo {}
+
+struct Cache<T: Hashable> {
+    item: T,
+}
+
+impl<T> Foo for Cache<T> {}
