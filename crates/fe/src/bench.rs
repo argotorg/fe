@@ -1,8 +1,8 @@
-//! Gas benchmarking: compares Fe (Yul + Sonatina) against Solidity.
+//! Gas benchmarking: compares Fe (Sonatina) against Solidity.
 //!
 //! Discovers paired `.fe` / `.sol` fixture files with a `.toml` manifest,
-//! compiles each through all backends, deploys and calls them, and reports
-//! per-function gas consumption.
+//! compiles each backend, deploys and calls them, and reports per-function
+//! gas consumption.
 
 use std::fmt::Write as _;
 use std::fs;
@@ -36,8 +36,6 @@ struct BenchCall {
 struct BenchResult {
     fixture: String,
     function: String,
-    fe_yul_gas: Option<u64>,
-    fe_yul_opt_gas: Option<u64>,
     fe_sonatina_gas: Option<u64>,
     sol_gas: Option<u64>,
     sol_opt_gas: Option<u64>,
@@ -85,19 +83,10 @@ pub fn run_benchmarks(
         let sol_bytecode = compile_solidity(&fixture.sol_source, &fixture.contract_name, false, solc);
         let sol_opt_bytecode = compile_solidity(&fixture.sol_source, &fixture.contract_name, true, solc);
 
-        // 2. Compile Fe via Yul backend (unoptimized + optimized)
-        let fe_yul = compile_fe_yul(&fixture.fe_source, &fixture.name);
-        let fe_yul_bytecode = fe_yul.as_ref().and_then(|yul| {
-            compile_yul_to_bytecode(yul, &fixture.contract_name, false, solc)
-        });
-        let fe_yul_opt_bytecode = fe_yul.as_ref().and_then(|yul| {
-            compile_yul_to_bytecode(yul, &fixture.contract_name, true, solc)
-        });
-
-        // 3. Compile Fe via Sonatina backend
+        // 2. Compile Fe via Sonatina backend
         let fe_sonatina_bytecode = compile_fe_sonatina(&fixture.fe_source, &fixture.name, &fixture.contract_name);
 
-        // 4. Deploy all variants and measure gas per call
+        // 3. Deploy all variants and measure gas per call
         for call in &fixture.calls {
             let calldata = match encode_calldata(&call.signature, &call.args) {
                 Ok(cd) => cd,
@@ -107,8 +96,6 @@ pub fn run_benchmarks(
                 }
             };
 
-            let fe_yul_gas = measure_call(&fe_yul_bytecode, &calldata);
-            let fe_yul_opt_gas = measure_call(&fe_yul_opt_bytecode, &calldata);
             let fe_sonatina_gas = measure_call_bytes(&fe_sonatina_bytecode, &calldata);
             let sol_gas = measure_call(&sol_bytecode, &calldata);
             let sol_opt_gas = measure_call(&sol_opt_bytecode, &calldata);
@@ -117,8 +104,6 @@ pub fn run_benchmarks(
             all_results.push(BenchResult {
                 fixture: fixture.name.clone(),
                 function: fn_name.to_string(),
-                fe_yul_gas,
-                fe_yul_opt_gas,
                 fe_sonatina_gas,
                 sol_gas,
                 sol_opt_gas,
@@ -285,44 +270,6 @@ fn with_fe_ingot<T>(
     Some(f(&db, ingot))
 }
 
-/// Compile Fe source to Yul IR string.
-pub fn compile_fe_yul(fe_source: &str, name: &str) -> Option<String> {
-    with_fe_ingot(fe_source, name, |db, ingot| {
-        let diags = db.run_on_ingot(ingot);
-        if !diags.is_empty() {
-            eprintln!("  fe/yul diagnostics for {name}:");
-            diags.emit(db);
-            return None;
-        }
-
-        match codegen::emit_ingot_yul(db, ingot) {
-            Ok(yul) => Some(yul),
-            Err(err) => {
-                eprintln!("  fe/yul emit error for {name}: {err}");
-                None
-            }
-        }
-    })
-    .flatten()
-}
-
-/// Compile Yul IR to deploy bytecode hex via solc.
-pub fn compile_yul_to_bytecode(
-    yul: &str,
-    contract_name: &str,
-    optimize: bool,
-    solc_path: Option<&str>,
-) -> Option<String> {
-    match solc_runner::compile_single_contract_with_solc(contract_name, yul, optimize, true, solc_path) {
-        Ok(bc) => Some(bc.bytecode),
-        Err(e) => {
-            let label = if optimize { "fe/yul+opt" } else { "fe/yul" };
-            eprintln!("  {label} solc error: {}", e.0);
-            None
-        }
-    }
-}
-
 /// Compile Fe source to bytecode via Sonatina backend. Returns deploy bytecode as raw bytes.
 pub fn compile_fe_sonatina(fe_source: &str, name: &str, contract_name: &str) -> Option<Vec<u8>> {
     let contract_name = contract_name.to_string();
@@ -438,13 +385,13 @@ fn print_table(results: &[BenchResult]) {
 
     // Header
     println!(
-        "{:<20} {:<12} {:>10} {:>10} {:>10} {:>10} {:>10} {:>10}",
-        "Fixture", "Function", "Fe/Yul", "Fe/Yul+O", "Sonatina", "Sol", "Sol+O", "vs Sol+O"
+        "{:<20} {:<12} {:>10} {:>10} {:>10} {:>10}",
+        "Fixture", "Function", "Sonatina", "Sol", "Sol+O", "vs Sol+O"
     );
-    println!("{}", "-".repeat(94));
+    println!("{}", "-".repeat(74));
 
     for r in results {
-        let delta = match (r.fe_yul_opt_gas, r.sol_opt_gas) {
+        let delta = match (r.fe_sonatina_gas, r.sol_opt_gas) {
             (Some(fe), Some(sol)) if sol > 0 => {
                 let pct = ((fe as f64 - sol as f64) / sol as f64) * 100.0;
                 format!("{:+.1}%", pct)
@@ -452,11 +399,9 @@ fn print_table(results: &[BenchResult]) {
             _ => "-".to_string(),
         };
         println!(
-            "{:<20} {:<12} {:>10} {:>10} {:>10} {:>10} {:>10} {:>10}",
+            "{:<20} {:<12} {:>10} {:>10} {:>10} {:>10}",
             r.fixture,
             r.function,
-            fmt_gas(r.fe_yul_gas),
-            fmt_gas(r.fe_yul_opt_gas),
             fmt_gas(r.fe_sonatina_gas),
             fmt_gas(r.sol_gas),
             fmt_gas(r.sol_opt_gas),
@@ -480,12 +425,12 @@ fn write_csv(results: &[BenchResult], out_dir: &Utf8Path) -> Result<(), String> 
     let mut csv = String::new();
     writeln!(
         csv,
-        "fixture,function,fe_yul,fe_yul_opt,fe_sonatina,sol,sol_opt,delta_fe_yul_opt_vs_sol_opt_pct"
+        "fixture,function,fe_sonatina,sol,sol_opt,delta_fe_sonatina_vs_sol_opt_pct"
     )
     .unwrap();
 
     for r in results {
-        let delta = match (r.fe_yul_opt_gas, r.sol_opt_gas) {
+        let delta = match (r.fe_sonatina_gas, r.sol_opt_gas) {
             (Some(fe), Some(sol)) if sol > 0 => {
                 format!("{:.2}", ((fe as f64 - sol as f64) / sol as f64) * 100.0)
             }
@@ -493,11 +438,9 @@ fn write_csv(results: &[BenchResult], out_dir: &Utf8Path) -> Result<(), String> 
         };
         writeln!(
             csv,
-            "{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{}",
             r.fixture,
             r.function,
-            fmt_gas(r.fe_yul_gas),
-            fmt_gas(r.fe_yul_opt_gas),
             fmt_gas(r.fe_sonatina_gas),
             fmt_gas(r.sol_gas),
             fmt_gas(r.sol_opt_gas),

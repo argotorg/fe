@@ -276,7 +276,7 @@ pub enum Command {
         #[arg(long, default_value = "false")]
         recovery_mode: bool,
     },
-    /// Run gas benchmarks comparing Fe (Yul + Sonatina) against Solidity.
+    /// Run gas benchmarks comparing Fe (Sonatina) against Solidity.
     Bench {
         /// Path to benchmark fixtures directory.
         #[arg(value_name = "PATH", default_value = "bench_fixtures")]

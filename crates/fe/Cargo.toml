@@ -28,6 +28,7 @@ rustc-hash.workspace = true
 semantic-indexing.workspace = true
 codegen = { path = "../codegen", package = "fe-codegen" }
 contract-harness = { path = "../contract-harness", package = "fe-contract-harness" }
+solc-runner = { path = "../solc-runner", package = "fe-solc-runner" }
 # fe-web for model, assets, and static site generation
 fe-web = { path = "../fe-web" }
 serde = { version = "1.0", features = ["derive"] }
@@ -53,5 +54,4 @@ dir-test.workspace = true
 test-utils.workspace = true
 tempfile = "3.23"
 semantic-indexing.workspace = true
-solc-runner = { path = "../solc-runner", package = "fe-solc-runner" }
 sha2 = "0.10"
