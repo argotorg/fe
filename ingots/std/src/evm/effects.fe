@@ -1,5 +1,6 @@
 use core::effect_ref::{EffectHandle, EffectHandleMut, EffectRef, EffectRefMut}
 use core::{size_of}
+use core::num::WordValue
 use core::abi::{
     Abi,
     AbiDecoder,
@@ -8,6 +9,8 @@ use core::abi::{
     AbiSpan,
     Decode,
     Encode,
+    decode_payload_root,
+    decode_single_root,
     encode_alloc,
     encode_single_root_alloc,
 }
@@ -21,7 +24,7 @@ use ingot::evm::intrinsic::{
 }
 use ingot::abi::Sol
 use ingot::abi::Text
-use ingot::abi::sol::{decode_input_at, decode_output}
+use ingot::abi::sol::{SolDecoder, decode_input_at, decode_output}
 use super::calldata::CallData
 use super::contract_field_slot
 use super::panic::Panic
@@ -343,7 +346,13 @@ fn copy_words(dest: u256, src: u256, len: u256) {
 pub fn encode_abi_payload<T>(_ value: own T) -> (u256, u256)
     where T: Encode<Sol> + AbiSize
 {
-    encode_alloc<Sol, T>(value)
+    encode_abi_payload_abi<Sol, T>(value)
+}
+
+pub fn encode_abi_payload_abi<A: Abi, T>(_ value: own T) -> (u256, u256)
+    where T: Encode<A> + AbiSize
+{
+    encode_alloc<A, T>(value)
 }
 
 /// High-level contract calls with ABI encoding/decoding.
@@ -371,22 +380,27 @@ pub trait Call {
         ) != 0
     }
 
-    fn call<M>(mut self, addr: own Address, gas: u256, value: u256, message: own M) -> M::Return
-    where M: MsgVariant<Sol> + Encode<Sol>, M::Return: Decode<Sol> + AbiSize
+    fn call<A: Abi, M>(mut self, addr: own Address, gas: u256, value: u256, message: own M) -> M::Return
+        where M: MsgVariant<A> + Encode<A>,
+              M::Return: Decode<A> + AbiSize
 
-    fn static<M>(mut self, addr: own Address, gas: u256, message: own M) -> M::Return
-    where M: MsgVariant<Sol> + Encode<Sol>, M::Return: Decode<Sol> + AbiSize
+    fn static<A: Abi, M>(mut self, addr: own Address, gas: u256, message: own M) -> M::Return
+        where M: MsgVariant<A> + Encode<A>,
+              M::Return: Decode<A> + AbiSize
 
-    fn delegate<M>(mut self, addr: own Address, gas: u256, message: own M) -> M::Return
-    where M: MsgVariant<Sol> + Encode<Sol>, M::Return: Decode<Sol> + AbiSize
+    fn delegate<A: Abi, M>(mut self, addr: own Address, gas: u256, message: own M) -> M::Return
+        where M: MsgVariant<A> + Encode<A>,
+              M::Return: Decode<A> + AbiSize
 }
 
 impl Address {
     /// Call a contract at this address with a typed message.
     ///
     /// Forwards all available gas and sends no value. Reverts on failure.
-    pub fn call<M>(self, _ message: own M) -> M::Return
-    uses (call: mut Call) where M: MsgVariant<Sol> + Encode<Sol>, M::Return: Decode<Sol> + AbiSize
+    pub fn call<A: Abi, M>(self, _ message: own M) -> M::Return
+    uses (call: mut Call)
+        where M: MsgVariant<A> + Encode<A>,
+              M::Return: Decode<A> + AbiSize
     {
         call.call(addr: self, gas: ops::gas(), value: 0, message)
     }
@@ -406,9 +420,19 @@ impl Evm {
         self.runtime_selector<Sol>()
     }
 
+    /// Return the current selector from raw calldata using ABI `A`.
+    pub fn selector_abi<A: Abi>(self) -> A::Selector {
+        self.runtime_selector<A>()
+    }
+
     /// Return a calldata view over the current Solidity call arguments.
     pub fn args(self) -> CallData {
         CallData::with_base(size_of<Sol::Selector>())
+    }
+
+    /// Return a calldata view over the current call arguments using ABI `A`.
+    pub fn args_abi<A: Abi>(self) -> CallData {
+        CallData::with_base(A::SELECTOR_SIZE)
     }
 
     /// Decode the current Solidity call arguments, skipping the 4-byte selector.
@@ -416,6 +440,14 @@ impl Evm {
         where T: Decode<Sol>
     {
         decode_input_at(self.input(), size_of<Sol::Selector>())
+    }
+
+    /// Decode the current call arguments using ABI `A`, skipping the selector prefix.
+    pub fn decode_args_abi<A: Abi, T>(mut self) -> T
+        where T: Decode<A>
+    {
+        let mut d = SolDecoder<CallData>::with_base(self.input(), A::SELECTOR_SIZE)
+        decode_payload_root<A, T, SolDecoder<CallData>>(mut d)
     }
 }
 
@@ -582,9 +614,26 @@ impl Create for Evm {
 fn encode_calldata<M>(_ selector: u32, _ message: own M) -> (u256, u256)
 where M: Encode<Sol>
 {
-    let selector_size = size_of<Sol::Selector>()
-    let selector_word = (selector as u256) << 224
-    let encoded = encode_abi_payload(message)
+    encode_calldata_abi<Sol, M>(selector, message)
+}
+
+fn encode_calldata_abi<A: Abi, M>(_ selector: A::Selector, _ message: own M) -> (u256, u256)
+    where M: Encode<A>
+{
+    let selector_size = A::SELECTOR_SIZE
+    if selector_size == 0 {
+        return encode_abi_payload_abi<A, M>(message)
+    }
+
+    // EVM CALL data is limited to 32-byte word operations for the prefix word.
+    if selector_size > 32 {
+        ops::revert(offset: 0, len: 0)
+    }
+
+    let shift = (32 - selector_size) * 8
+    let selector_word = selector.to_word() << shift
+
+    let encoded = encode_abi_payload_abi<A, M>(message)
     let ptr = mem::alloc(selector_size + encoded.1)
     ops::mstore(addr: ptr, value: selector_word)
     copy_words(dest: ptr + selector_size, src: encoded.0, len: encoded.1)
@@ -613,7 +662,15 @@ pub fn bubble_last_revert() -> ! {
 pub fn decode_returndata<R>(_ ret: MemoryBytes) -> R
     where R: Decode<Sol> + AbiSize
 {
-    decode_output(ret)
+    decode_returndata_abi<Sol, R>(ret)
+}
+
+/// Decode ABI data from an in-memory returndata buffer using ABI `A`.
+pub fn decode_returndata_abi<A: Abi, R>(_ ret: MemoryBytes) -> R
+    where R: Decode<A> + AbiSize
+{
+    let mut d = SolDecoder<MemoryBytes>::new(ret)
+    decode_single_root<A, R, SolDecoder<MemoryBytes>>(mut d)
 }
 
 /// Perform a raw `STATICCALL` and ABI-decode the returndata on success.
@@ -622,6 +679,13 @@ pub fn decode_returndata<R>(_ ret: MemoryBytes) -> R
 /// decoder, so short or non-canonical returndata also reverts.
 pub fn staticcall_decode<R>(addr: Address, gas: u256, args_offset: u256, args_len: u256) -> R
     where R: Decode<Sol> + AbiSize
+{
+    staticcall_decode_abi<Sol, R>(addr: addr, gas: gas, args_offset: args_offset, args_len: args_len)
+}
+
+/// Perform a raw `STATICCALL` and ABI-decode the returndata on success using ABI `A`.
+pub fn staticcall_decode_abi<A: Abi, R>(addr: Address, gas: u256, args_offset: u256, args_len: u256) -> R
+    where R: Decode<A> + AbiSize
 {
     let ok = ops::staticcall(
         gas: gas,
@@ -636,33 +700,36 @@ pub fn staticcall_decode<R>(addr: Address, gas: u256, args_offset: u256, args_le
         bubble_last_revert()
     }
 
-    decode_returndata(last_returndata())
+    decode_returndata_abi<A, R>(last_returndata())
 }
 
 impl Call for Evm {
-    fn call<M>(mut self, addr: own Address, gas: u256, value: u256, message: own M) -> M::Return
-    where M: MsgVariant<Sol> + Encode<Sol>, M::Return: Decode<Sol> + AbiSize
+    fn call<A: Abi, M>(mut self, addr: own Address, gas: u256, value: u256, message: own M) -> M::Return
+        where M: MsgVariant<A> + Encode<A>,
+              M::Return: Decode<A> + AbiSize
     {
-        let out: (u256, u256) = encode_calldata(<M as MsgVariant<Sol>>::SELECTOR, message)
+        let out: (u256, u256) = encode_calldata_abi<A, M>(<M as MsgVariant<A>>::SELECTOR, message)
 
         if !self.raw_call(addr, gas, value, args_offset: out.0, args_len: out.1) {
             bubble_last_revert()
         }
 
-        decode_returndata(last_returndata())
+        decode_returndata_abi<A, M::Return>(last_returndata())
     }
 
-    fn static<M>(mut self, addr: own Address, gas: u256, message: own M) -> M::Return
-    where M: MsgVariant<Sol> + Encode<Sol>, M::Return: Decode<Sol> + AbiSize
+    fn static<A: Abi, M>(mut self, addr: own Address, gas: u256, message: own M) -> M::Return
+        where M: MsgVariant<A> + Encode<A>,
+              M::Return: Decode<A> + AbiSize
     {
-        let out: (u256, u256) = encode_calldata(<M as MsgVariant<Sol>>::SELECTOR, message)
-        staticcall_decode(addr: addr, gas: gas, args_offset: out.0, args_len: out.1)
+        let out: (u256, u256) = encode_calldata_abi<A, M>(<M as MsgVariant<A>>::SELECTOR, message)
+        staticcall_decode_abi<A, M::Return>(addr: addr, gas: gas, args_offset: out.0, args_len: out.1)
     }
 
-    fn delegate<M>(mut self, addr: own Address, gas: u256, message: own M) -> M::Return
-    where M: MsgVariant<Sol> + Encode<Sol>, M::Return: Decode<Sol> + AbiSize
+    fn delegate<A: Abi, M>(mut self, addr: own Address, gas: u256, message: own M) -> M::Return
+        where M: MsgVariant<A> + Encode<A>,
+              M::Return: Decode<A> + AbiSize
     {
-        let out: (u256, u256) = encode_calldata(<M as MsgVariant<Sol>>::SELECTOR, message)
+        let out: (u256, u256) = encode_calldata_abi<A, M>(<M as MsgVariant<A>>::SELECTOR, message)
         let ok = ops::delegatecall(
             gas: gas,
             addr: addr.inner,
@@ -676,7 +743,7 @@ impl Call for Evm {
             bubble_last_revert()
         }
 
-        decode_returndata(last_returndata())
+        decode_returndata_abi<A, M::Return>(last_returndata())
     }
 }
 

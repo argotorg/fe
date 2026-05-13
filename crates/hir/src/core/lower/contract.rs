@@ -96,12 +96,18 @@ impl<'db> Contract<'db> {
                     r.attr_list(),
                     "recv block",
                 );
+                let recv_attrs = AttrListId::lower_ast_opt(ctxt, r.attr_list());
+                let abi_path = recv_attrs.abi_path(ctxt.db());
                 let msg_path = r.path().map(|p| crate::hir_def::PathId::lower_ast(ctxt, p));
                 let arms = r
                     .arms()
                     .map(|arms| ContractRecvArmListId::lower_ast(ctxt, recv_idx, arms))
                     .unwrap_or_else(|| ContractRecvArmListId::new(ctxt.db(), vec![]));
-                data.push(ContractRecv { msg_path, arms });
+                data.push(ContractRecv {
+                    msg_path,
+                    abi_path,
+                    arms,
+                });
             }
             ContractRecvListId::new(ctxt.db(), data)
         };

@@ -305,12 +305,12 @@ pub fn decode_string_view_at<I>(_ input: own I, base: u256, head_pos: u256) -> S
     StringView { bytes: decode_bytes_view_at(input, base: base, head_pos: head_pos) }
 }
 
-impl<I> AbiDecoder<Sol> for SolDecoder<I>
+impl<A: Abi, I> AbiDecoder<A> for SolDecoder<I>
     where I: ByteInput
 {
     type Input = I
 
-    fn input(self) -> Self::Input {
+    fn input(self) -> I {
         self.cur.input
     }
 
@@ -382,7 +382,7 @@ impl SolEncoder {
     }
 }
 
-impl AbiEncoder<Sol> for SolEncoder {
+impl<A: Abi> AbiEncoder<A> for SolEncoder {
     fn base(self) -> u256 {
         self.base
     }

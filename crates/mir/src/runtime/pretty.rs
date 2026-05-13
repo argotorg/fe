@@ -854,7 +854,9 @@ fn format_builtin<'db>(db: &'db dyn MirDb, builtin: &RuntimeBuiltin<'db>) -> Str
             format_local_id(*topic2),
             format_local_id(*topic3)
         ),
-        RuntimeBuiltin::CallDataSelector => "calldata_selector".to_string(),
+        RuntimeBuiltin::CallDataSelector { selector_size, .. } => {
+            format!("calldata_selector({selector_size})")
+        }
         RuntimeBuiltin::MakeContractFieldRef { slot, class, kind } => format!(
             "make_contract_field_ref slot={slot} {} {}",
             format_class(db, class),

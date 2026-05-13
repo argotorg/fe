@@ -1343,6 +1343,14 @@ impl<'db> RecvView<'db> {
             .and_then(|r| r.msg_path)
     }
 
+    pub fn abi_path(self, db: &'db dyn HirDb) -> Option<PathId<'db>> {
+        self.contract(db)
+            .recvs(db)
+            .data(db)
+            .get(self.recv_idx(db) as usize)
+            .and_then(|r| r.abi_path)
+    }
+
     pub fn arm(self, db: &'db dyn HirDb, arm_idx: u32) -> Option<RecvArmView<'db>> {
         self.contract(db)
             .recv_arm(db, self.recv_idx(db) as usize, arm_idx as usize)
@@ -1358,6 +1366,14 @@ impl<'db> RecvView<'db> {
             .map(|r| r.arms.data(db).len())
             .unwrap_or(0);
         (0..len).map(move |arm_idx| RecvArmView::new(db, self, arm_idx as u32))
+    }
+}
+
+#[salsa::tracked]
+impl<'db> RecvView<'db> {
+    #[salsa::tracked]
+    pub fn abi_ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
+        resolve_recv_abi_ty(db, self).unwrap_or_else(|| TyId::invalid(db, InvalidCause::Other))
     }
 }
 
@@ -1447,7 +1463,7 @@ impl<'db> RecvArmView<'db> {
         let contract = recv.contract(db);
 
         let variant_ty = self.variant_ty(db);
-        let selector_info = get_variant_selector_info(db, variant_ty, contract.scope());
+        let selector_info = get_variant_selector_info(db, variant_ty, abi, contract.scope());
 
         let Some(msg_variant_trait) =
             resolve_core_trait(db, contract.scope(), &["message", "MsgVariant"])
@@ -1493,13 +1509,7 @@ impl<'db> RecvArmView<'db> {
             return Vec::new();
         }
 
-        let assumptions = PredicateListId::empty_list(db);
         let recv = self.recv(db);
-        let contract = recv.contract(db);
-
-        let Some(sol_ty) = resolve_sol_abi_ty(db, contract.scope(), assumptions) else {
-            return Vec::new();
-        };
 
         let variant_ty = self.variant_ty(db);
         let Some(variant_struct) = variant_struct_from_ty(db, variant_ty) else {
@@ -1510,7 +1520,7 @@ impl<'db> RecvArmView<'db> {
             return Vec::new();
         };
 
-        let abi_info = self.abi_info(db, sol_ty);
+        let abi_info = self.abi_info(db, recv.abi_ty(db));
         compute_arg_bindings(
             db,
             variant_struct,
@@ -1760,15 +1770,15 @@ impl<'db> EffectEnvView<'db> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
 pub struct RecvArmAbiInfo<'db> {
     pub is_fallback: bool,
-    pub selector_value: Option<u32>,
+    pub selector_value: Option<IntegerId<'db>>,
     pub selector_signature: Option<String>,
     pub args_ty: TyId<'db>,
     pub ret_ty: Option<TyId<'db>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Update)]
-struct VariantSelectorInfo {
-    value: Option<u32>,
+struct VariantSelectorInfo<'db> {
+    value: Option<IntegerId<'db>>,
     signature: Option<String>,
 }
 
@@ -2691,6 +2701,26 @@ fn resolve_msg_mod<'db>(
     }
 }
 
+fn resolve_recv_abi_ty<'db>(db: &'db dyn HirAnalysisDb, recv: RecvView<'db>) -> Option<TyId<'db>> {
+    let assumptions = PredicateListId::empty_list(db);
+    let contract = recv.contract(db);
+
+    if let Some(path) = recv.abi_path(db) {
+        return resolve_ty_path(db, path, contract.scope(), assumptions);
+    }
+
+    if let Some(msg_mod) = recv
+        .msg_path(db)
+        .and_then(|path| resolve_msg_mod(db, contract, path, assumptions))
+        && let Some(path) = msg_mod.attributes(db).abi_path(db)
+        && let Some(ty) = resolve_ty_path(db, path, msg_mod.scope(), assumptions)
+    {
+        return Some(ty);
+    }
+
+    resolve_sol_abi_ty(db, contract.scope(), assumptions)
+}
+
 fn resolve_recv_variant<'db>(
     db: &'db dyn HirAnalysisDb,
     contract: Contract<'db>,
@@ -2728,12 +2758,25 @@ fn resolve_recv_variant<'db>(
     }
 }
 
+fn resolve_ty_path<'db>(
+    db: &'db dyn HirAnalysisDb,
+    path: PathId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Option<TyId<'db>> {
+    use crate::analysis::name_resolution::{PathRes, resolve_path};
+
+    match resolve_path(db, path, scope, assumptions, false).ok()? {
+        PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => Some(ty),
+        _ => None,
+    }
+}
+
 fn resolve_sol_abi_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> Option<TyId<'db>> {
-    use crate::analysis::name_resolution::{PathRes, resolve_path};
     use common::ingot::IngotKind;
 
     let ingot = scope.ingot(db);
@@ -2747,25 +2790,22 @@ fn resolve_sol_abi_ty<'db>(
         .push_ident(db, IdentId::new(db, "abi".to_string()))
         .push_ident(db, IdentId::new(db, "Sol".to_string()));
 
-    match resolve_path(db, sol_path, scope, assumptions, false).ok()? {
-        PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => Some(ty),
-        _ => None,
-    }
+    resolve_ty_path(db, sol_path, scope, assumptions)
 }
 
 fn get_variant_selector_info<'db>(
     db: &'db dyn HirAnalysisDb,
     variant_ty: TyId<'db>,
+    abi: TyId<'db>,
     scope: ScopeId<'db>,
-) -> VariantSelectorInfo {
-    use crate::analysis::semantic::{SemConstScalar, SemConstValue, eval_body_owner_const};
-    use crate::analysis::ty::{
-        canonical::Canonical,
-        corelib::resolve_core_trait,
-        trait_def::impls_for_ty,
-        ty_def::{PrimTy, TyBase, TyData},
+) -> VariantSelectorInfo<'db> {
+    use crate::analysis::{
+        semantic::{SemConstScalar, SemConstValue, eval_body_owner_const},
+        ty::{
+            corelib::resolve_core_trait, trait_def::assoc_const_body_for_trait_inst,
+            ty_check::BodyOwner,
+        },
     };
-    use num_traits::ToPrimitive;
 
     let Some(msg_variant_trait) = resolve_core_trait(db, scope, &["message", "MsgVariant"]) else {
         return VariantSelectorInfo {
@@ -2773,50 +2813,27 @@ fn get_variant_selector_info<'db>(
             signature: None,
         };
     };
-    let canonical_ty = Canonical::new(db, variant_ty);
-    let scope_ingot = scope.ingot(db);
-    let search_ingots = [
-        Some(scope_ingot),
-        variant_ty.ingot(db).filter(|&ingot| ingot != scope_ingot),
-    ];
-
-    let Some(implementor) = search_ingots.into_iter().flatten().find_map(|ingot| {
-        impls_for_ty(db, ingot, canonical_ty)
-            .iter()
-            .find(|impl_| impl_.skip_binder().trait_def(db).eq(&msg_variant_trait))
-            .copied()
-    }) else {
-        return VariantSelectorInfo {
-            value: None,
-            signature: None,
-        };
-    };
-    let impl_ = implementor.skip_binder();
-
+    let assumptions = PredicateListId::empty_list(db);
+    let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
+    let inst = TraitInstId::new(
+        db,
+        msg_variant_trait,
+        vec![variant_ty, abi],
+        IndexMap::new(),
+    );
     let selector_name = IdentId::new(db, "SELECTOR".to_string());
-    let hir_impl = impl_.hir_impl_trait(db);
-    let Some(selector_const) = hir_impl
-        .hir_consts(db)
-        .iter()
-        .find(|c| c.name.to_opt() == Some(selector_name))
-    else {
+    let Some(body) = assoc_const_body_for_trait_inst(db, solve_cx, inst, selector_name) else {
         return VariantSelectorInfo {
             value: None,
             signature: None,
         };
     };
 
-    let Some(body) = selector_const.value.to_opt() else {
-        return VariantSelectorInfo {
-            value: None,
-            signature: None,
-        };
-    };
-    let signature = selector_signature_from_body(db, body, hir_impl.scope());
-    let expected_ty = TyId::new(db, TyData::TyBase(TyBase::Prim(PrimTy::U32)));
+    let expected_ty = abi_selector_ty(db, abi, scope, assumptions);
+    let signature = selector_signature_from_body(db, body, body.scope(), expected_ty);
     let value = match eval_body_owner_const(
         db,
-        crate::analysis::ty::ty_check::BodyOwner::AnonConstBody {
+        BodyOwner::AnonConstBody {
             body,
             expected: expected_ty,
         },
@@ -2826,7 +2843,7 @@ fn get_variant_selector_info<'db>(
             SemConstValue::Scalar {
                 value: SemConstScalar::Int { value },
                 ..
-            } => value.to_u32(),
+            } => value.to_biguint().map(|value| IntegerId::new(db, value)),
             _ => None,
         },
         Err(_) => None,
@@ -2835,14 +2852,31 @@ fn get_variant_selector_info<'db>(
     VariantSelectorInfo { value, signature }
 }
 
+fn abi_selector_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    abi: TyId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> TyId<'db> {
+    let Some(abi_trait) = resolve_core_trait(db, scope, &["abi", "Abi"]) else {
+        return TyId::invalid(db, InvalidCause::Other);
+    };
+    let inst = TraitInstId::new(db, abi_trait, vec![abi], IndexMap::new());
+    let selector_ident = IdentId::new(db, "Selector".to_string());
+    normalize_ty(
+        db,
+        TyId::assoc_ty(db, inst, selector_ident),
+        scope,
+        assumptions,
+    )
+}
+
 fn selector_signature_from_body<'db>(
     db: &'db dyn HirAnalysisDb,
     body: Body<'db>,
     scope: ScopeId<'db>,
+    expected_ty: TyId<'db>,
 ) -> Option<String> {
-    use crate::analysis::ty::ty_def::{PrimTy, TyBase, TyData};
-
-    let expected_ty = TyId::new(db, TyData::TyBase(TyBase::Prim(PrimTy::U32)));
     let (_, typed_body) =
         crate::analysis::ty::ty_check::check_anon_const_body(db, body, expected_ty);
     let mut visited = SelectorSearchVisited::new();

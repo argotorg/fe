@@ -910,6 +910,7 @@ pub struct ContractRecvListId<'db> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ContractRecv<'db> {
     pub msg_path: Option<PathId<'db>>,
+    pub abi_path: Option<PathId<'db>>,
     pub arms: ContractRecvArmListId<'db>,
 }
 

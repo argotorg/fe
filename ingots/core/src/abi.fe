@@ -83,7 +83,7 @@ impl<I> Cursor<I>
 
 /// ABI definition (selector width/format).
 pub trait Abi {
-    type Selector
+    type Selector: WordValue
     /// Higher-kinded type constructor for a decoder over some `ByteInput`.
     type Decoder: * -> *
     /// ABI encoder type.

@@ -12,25 +12,26 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         name_resolution::{ExpectedPathKind, PathRes, diagnostics::PathResDiag, resolve_path},
-        semantic::{SemConstScalar, SemConstValue, eval_body_owner_const},
+        semantic::{CtfeError, SemConstScalar, SemConstValue, eval_body_owner_const},
         ty::{
             adt_def::AdtRef,
             canonical::Canonical,
             corelib::resolve_core_trait,
             diagnostics::{BodyDiag, FuncBodyDiag, TraitConstraintDiag, TyDiagCollection},
+            normalize::normalize_ty,
             trait_def::TraitInstId,
-            trait_def::impls_for_ty,
+            trait_def::{assoc_const_body_for_trait_inst, impls_for_ty},
             trait_resolution::{
                 GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable,
             },
             ty_check::check_body,
-            ty_def::{PrimTy, TyBase, TyData, TyId},
+            ty_def::TyId,
         },
     },
-    hir_def::{Contract, IdentId, ItemKind, Mod, PathId, Struct, scope_graph::ScopeId},
+    hir_def::{Contract, IdentId, IntegerId, ItemKind, Mod, PathId, Struct, scope_graph::ScopeId},
     span::{DynLazySpan, path::LazyPathSpan},
 };
-use common::{indexmap::IndexMap, ingot::IngotKind};
+use common::indexmap::IndexMap;
 
 #[allow(clippy::enum_variant_names)]
 pub enum VariantResError<'db> {
@@ -61,24 +62,70 @@ fn implements_msg_variant<'db>(db: &'db dyn HirAnalysisDb, struct_: Struct<'db>)
         .any(|impl_| impl_.skip_binder().trait_def(db).eq(&msg_variant_trait))
 }
 
-fn resolve_sol_abi_ty<'db>(
+fn implements_msg_variant_for_abi<'db>(
+    db: &'db dyn HirAnalysisDb,
+    struct_: Struct<'db>,
+    abi_ty: TyId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> bool {
+    let Some(msg_variant_trait) = resolve_core_trait(db, scope, &["message", "MsgVariant"]) else {
+        return false;
+    };
+
+    let adt_def = AdtRef::from(struct_).as_adt(db);
+    let ty = TyId::adt(db, adt_def);
+    let inst = TraitInstId::new(db, msg_variant_trait, vec![ty, abi_ty], IndexMap::new());
+    let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
+    !matches!(
+        is_goal_satisfiable(db, solve_cx, inst),
+        GoalSatisfiability::UnSat(_)
+    )
+}
+
+fn abi_selector_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
+    abi_ty: TyId<'db>,
 ) -> Option<TyId<'db>> {
-    let ingot = scope.ingot(db);
-    let std_root = if ingot.kind(db) == IngotKind::Std {
-        IdentId::make_ingot(db)
-    } else {
-        IdentId::new(db, "std".to_string())
-    };
+    let abi_trait = resolve_core_trait(db, scope, &["abi", "Abi"])?;
+    let inst = TraitInstId::new(db, abi_trait, vec![abi_ty], IndexMap::new());
+    let selector_ident = IdentId::new(db, "Selector".to_string());
+    Some(normalize_ty(
+        db,
+        TyId::assoc_ty(db, inst, selector_ident),
+        scope,
+        assumptions,
+    ))
+}
 
-    let sol_path = PathId::from_ident(db, std_root)
-        .push_ident(db, IdentId::new(db, "abi".to_string()))
-        .push_ident(db, IdentId::new(db, "Sol".to_string()));
-
-    match resolve_path(db, sol_path, scope, assumptions, false).ok()? {
-        PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => Some(ty),
+fn eval_abi_selector_size<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    abi_ty: TyId<'db>,
+) -> Option<usize> {
+    let abi_trait = resolve_core_trait(db, scope, &["abi", "Abi"])?;
+    let inst = TraitInstId::new(db, abi_trait, vec![abi_ty], IndexMap::new());
+    let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
+    let selector_size_name = IdentId::new(db, "SELECTOR_SIZE".to_string());
+    let body = assoc_const_body_for_trait_inst(db, solve_cx, inst, selector_size_name)?;
+    match eval_body_owner_const(
+        db,
+        BodyOwner::AnonConstBody {
+            body,
+            expected: TyId::u256(db),
+        },
+        Vec::new(),
+    ) {
+        Ok(value) => match value.value(db) {
+            SemConstValue::Scalar {
+                value: SemConstScalar::Int { value },
+                ..
+            } => value.to_usize(),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -88,7 +135,7 @@ fn check_ty_decodable<'db>(
     db: &'db dyn HirAnalysisDb,
     solve_cx: TraitSolveCx<'db>,
     decode_trait: crate::hir_def::Trait<'db>,
-    sol_ty: TyId<'db>,
+    abi_ty: TyId<'db>,
     ty: TyId<'db>,
     span: DynLazySpan<'db>,
     diags: &mut Vec<FuncBodyDiag<'db>>,
@@ -103,7 +150,7 @@ fn check_ty_decodable<'db>(
                 db,
                 solve_cx,
                 decode_trait,
-                sol_ty,
+                abi_ty,
                 elem,
                 span.clone(),
                 diags,
@@ -116,7 +163,7 @@ fn check_ty_decodable<'db>(
         return;
     }
 
-    let inst = TraitInstId::new(db, decode_trait, vec![ty, sol_ty], IndexMap::new());
+    let inst = TraitInstId::new(db, decode_trait, vec![ty, abi_ty], IndexMap::new());
     if let GoalSatisfiability::UnSat(_) = is_goal_satisfiable(db, solve_cx, inst) {
         diags.push(
             TyDiagCollection::from(TraitConstraintDiag::TraitBoundNotSat {
@@ -134,13 +181,11 @@ fn check_recv_variant_param_types_decodable<'db>(
     db: &'db dyn HirAnalysisDb,
     contract: Contract<'db>,
     variant: ResolvedRecvVariant<'db>,
+    abi_ty: TyId<'db>,
     span: DynLazySpan<'db>,
     assumptions: PredicateListId<'db>,
     diags: &mut Vec<FuncBodyDiag<'db>>,
 ) {
-    let Some(sol_ty) = resolve_sol_abi_ty(db, contract.scope(), assumptions) else {
-        return;
-    };
     let Some(decode_trait) = resolve_core_trait(db, contract.scope(), &["abi", "Decode"]) else {
         return;
     };
@@ -151,7 +196,7 @@ fn check_recv_variant_param_types_decodable<'db>(
             db,
             solve_cx,
             decode_trait,
-            sol_ty,
+            abi_ty,
             field_ty,
             span.clone(),
             diags,
@@ -171,6 +216,17 @@ fn msg_variants<'db>(
             _ => None,
         })
         .filter(move |s| implements_msg_variant(db, *s))
+}
+
+fn msg_variants_for_abi<'db>(
+    db: &'db dyn HirAnalysisDb,
+    msg_mod: Mod<'db>,
+    abi_ty: TyId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> impl Iterator<Item = Struct<'db>> + 'db {
+    msg_variants(db, msg_mod)
+        .filter(move |s| implements_msg_variant_for_abi(db, *s, abi_ty, scope, assumptions))
 }
 
 /// Resolved msg variant in a recv arm.
@@ -250,6 +306,10 @@ pub fn check_contract_recv_block<'db>(
 
     let recv_span = contract.span().recv(recv_idx as usize);
     let path_span = recv_span.clone().path();
+    let recv_view = contract
+        .recv(db, recv_idx)
+        .expect("recv index was validated above");
+    let abi_ty = recv_view.abi_ty(db);
 
     // Check if this is a named recv block (recv MsgType { ... }) or bare (recv { ... })
     if let Some(msg_mod) = resolve_recv_msg_mod(
@@ -261,10 +321,10 @@ pub fn check_contract_recv_block<'db>(
         true,
     ) {
         // Named recv block - validate against the specific msg module
-        check_named_recv_block(db, contract, recv_idx, msg_mod, &mut diags);
+        check_named_recv_block(db, contract, recv_idx, msg_mod, abi_ty, &mut diags);
     } else if recv.msg_path.is_none() {
         // Bare recv block - no msg module specified
-        check_bare_recv_block(db, contract, recv_idx, &mut diags);
+        check_bare_recv_block(db, contract, recv_idx, abi_ty, &mut diags);
     }
     // If msg_path was Some but didn't resolve, diagnostics were already emitted
 
@@ -278,6 +338,7 @@ fn check_named_recv_block<'db>(
     contract: Contract<'db>,
     recv_idx: u32,
     msg_mod: Mod<'db>,
+    abi_ty: TyId<'db>,
     diags: &mut Vec<FuncBodyDiag<'db>>,
 ) {
     let recv = &contract.recvs(db).data(db)[recv_idx as usize];
@@ -327,6 +388,23 @@ fn check_named_recv_block<'db>(
                     continue;
                 };
 
+                if !implements_msg_variant_for_abi(
+                    db,
+                    resolved.variant_struct,
+                    abi_ty,
+                    contract.scope(),
+                    assumptions,
+                ) {
+                    diags.push(
+                        BodyDiag::RecvArmNotMsgVariantTrait {
+                            primary: pat_span,
+                            given_ty: resolved.ty,
+                        }
+                        .into(),
+                    );
+                    continue;
+                }
+
                 if let Some(first_span) = seen.get(&resolved.ty) {
                     diags.push(
                         BodyDiag::RecvArmDuplicateVariant {
@@ -346,6 +424,7 @@ fn check_named_recv_block<'db>(
                         db,
                         contract,
                         resolved,
+                        abi_ty,
                         pat_span.clone(),
                         assumptions,
                         diags,
@@ -387,7 +466,7 @@ fn check_named_recv_block<'db>(
     }
 
     // Check for missing variants (exhaustiveness)
-    let missing: Vec<_> = msg_variants(db, msg_mod)
+    let missing: Vec<_> = msg_variants_for_abi(db, msg_mod, abi_ty, contract.scope(), assumptions)
         .filter_map(|variant| {
             if !covered.contains(&variant) {
                 variant.name(db).to_opt()
@@ -414,6 +493,7 @@ fn check_bare_recv_block<'db>(
     db: &'db dyn HirAnalysisDb,
     contract: Contract<'db>,
     recv_idx: u32,
+    abi_ty: TyId<'db>,
     diags: &mut Vec<FuncBodyDiag<'db>>,
 ) {
     let recv = &contract.recvs(db).data(db)[recv_idx as usize];
@@ -450,6 +530,23 @@ fn check_bare_recv_block<'db>(
                     continue;
                 };
 
+                if !implements_msg_variant_for_abi(
+                    db,
+                    resolved.variant_struct,
+                    abi_ty,
+                    contract.scope(),
+                    assumptions,
+                ) {
+                    diags.push(
+                        BodyDiag::RecvArmNotMsgVariantTrait {
+                            primary: pat_span,
+                            given_ty: resolved.ty,
+                        }
+                        .into(),
+                    );
+                    continue;
+                }
+
                 if let Some(first_span) = seen.get(&resolved.ty) {
                     diags.push(
                         BodyDiag::RecvArmDuplicateVariant {
@@ -468,6 +565,7 @@ fn check_bare_recv_block<'db>(
                         db,
                         contract,
                         resolved,
+                        abi_ty,
                         pat_span.clone(),
                         assumptions,
                         diags,
@@ -504,14 +602,14 @@ pub fn check_contract_recv_blocks<'db>(
     contract: Contract<'db>,
 ) -> Vec<FuncBodyDiag<'db>> {
     let mut diags = Vec::new();
-    let mut seen_msg_blocks = FxHashMap::<Mod<'db>, (DynLazySpan<'db>, IdentId<'db>)>::default();
+    let mut seen_msg_blocks =
+        FxHashMap::<(Mod<'db>, TyId<'db>), (DynLazySpan<'db>, IdentId<'db>)>::default();
     let mut seen_fallback: Option<DynLazySpan<'db>> = None;
 
-    // Track selectors across ALL recv blocks: selector -> (span, variant_name, struct)
-    // We store the struct to correctly identify duplicates - comparing by name alone fails
-    // when different msg blocks have variants with the same name but different selectors.
-    let mut seen_selectors =
-        FxHashMap::<u32, (DynLazySpan<'db>, IdentId<'db>, Struct<'db>)>::default();
+    // Track selectors across ALL recv blocks. Mixed selector sizes are ambiguous when
+    // one selector is a prefix of another, so conflicts are checked by bytes rather than
+    // by integer value alone.
+    let mut seen_selectors = Vec::<SeenSelector<'db>>::new();
 
     // Track handler types across ALL recv blocks for duplicate detection.
     // We use TyId to handle type aliases correctly.
@@ -522,6 +620,11 @@ pub fn check_contract_recv_blocks<'db>(
     for (idx, recv) in contract.recvs(db).data(db).iter().enumerate() {
         let recv_span = contract.span().recv(idx);
         let path_span = recv_span.clone().path();
+        let recv_view = contract
+            .recv(db, idx as u32)
+            .expect("recv index came from contract recv list");
+        let abi_ty = recv_view.abi_ty(db);
+        let selector_size = eval_abi_selector_size(db, contract.scope(), assumptions, abi_ty);
 
         for (arm_idx, arm) in recv.arms.data(db).iter().enumerate() {
             if !arm.is_fallback(db) {
@@ -556,9 +659,10 @@ pub fn check_contract_recv_blocks<'db>(
             };
 
             let path_span: DynLazySpan<'db> = path_span.into();
-            let is_duplicate_msg_block = seen_msg_blocks.contains_key(&msg_mod);
+            let msg_block_key = (msg_mod, abi_ty);
+            let is_duplicate_msg_block = seen_msg_blocks.contains_key(&msg_block_key);
             if is_duplicate_msg_block {
-                if let Some((first_span, first_name)) = seen_msg_blocks.get(&msg_mod) {
+                if let Some((first_span, first_name)) = seen_msg_blocks.get(&msg_block_key) {
                     diags.push(
                         BodyDiag::RecvDuplicateMsgBlock {
                             primary: path_span.clone(),
@@ -571,11 +675,12 @@ pub fn check_contract_recv_blocks<'db>(
                 // Skip handler/selector conflict checks for duplicate msg blocks
                 continue;
             } else {
-                seen_msg_blocks.insert(msg_mod, (path_span.clone(), msg_name));
+                seen_msg_blocks.insert(msg_block_key, (path_span.clone(), msg_name));
             }
 
             // Check for selector and handler conflicts across all msg variants in this recv block
-            for variant in msg_variants(db, msg_mod) {
+            for variant in msg_variants_for_abi(db, msg_mod, abi_ty, contract.scope(), assumptions)
+            {
                 let Some(variant_name) = variant.name(db).to_opt() else {
                     continue;
                 };
@@ -584,14 +689,19 @@ pub fn check_contract_recv_blocks<'db>(
 
                 // Check selector conflicts
                 let variant_ty = TyId::adt(db, AdtRef::from(variant).as_adt(db));
-                if let Some(selector) =
-                    eval_msg_variant_selector(db, variant_ty, variant.scope(), &mut diags)
-                {
+                if let (Some(selector), Some(selector_size)) = (
+                    eval_msg_variant_selector(db, variant_ty, abi_ty, variant.scope(), &mut diags),
+                    selector_size,
+                ) {
                     check_selector_conflict(
-                        selector,
-                        variant,
-                        variant_name,
-                        variant_span.clone(),
+                        db,
+                        selector_size,
+                        SelectorUse {
+                            selector,
+                            variant,
+                            variant_name,
+                            span: variant_span.clone(),
+                        },
                         &mut seen_selectors,
                         &mut diags,
                     );
@@ -616,19 +726,39 @@ pub fn check_contract_recv_blocks<'db>(
                 };
 
                 if let Ok(resolved) = resolve_variant_bare(db, contract, path, assumptions) {
+                    if !implements_msg_variant_for_abi(
+                        db,
+                        resolved.variant_struct,
+                        abi_ty,
+                        contract.scope(),
+                        assumptions,
+                    ) {
+                        continue;
+                    }
                     let Some(variant_name) = resolved.variant_struct.name(db).to_opt() else {
                         continue;
                     };
 
                     // Check selector conflicts
-                    if let Some(selector) =
-                        eval_msg_variant_selector(db, resolved.ty, contract.scope(), &mut diags)
-                    {
+                    if let (Some(selector), Some(selector_size)) = (
+                        eval_msg_variant_selector(
+                            db,
+                            resolved.ty,
+                            abi_ty,
+                            contract.scope(),
+                            &mut diags,
+                        ),
+                        selector_size,
+                    ) {
                         check_selector_conflict(
-                            selector,
-                            resolved.variant_struct,
-                            variant_name,
-                            pat_span.clone(),
+                            db,
+                            selector_size,
+                            SelectorUse {
+                                selector,
+                                variant: resolved.variant_struct,
+                                variant_name,
+                                span: pat_span.clone(),
+                            },
                             &mut seen_selectors,
                             &mut diags,
                         );
@@ -644,32 +774,89 @@ pub fn check_contract_recv_blocks<'db>(
     diags
 }
 
-/// Check for selector conflicts and emit diagnostics if found.
-fn check_selector_conflict<'db>(
-    selector: u32,
+struct SeenSelector<'db> {
+    bytes: Vec<u8>,
+    text: String,
+    span: DynLazySpan<'db>,
+    variant_name: IdentId<'db>,
+    variant: Struct<'db>,
+}
+
+struct SelectorUse<'db> {
+    selector: IntegerId<'db>,
     variant: Struct<'db>,
     variant_name: IdentId<'db>,
-    variant_span: DynLazySpan<'db>,
-    seen_selectors: &mut FxHashMap<u32, (DynLazySpan<'db>, IdentId<'db>, Struct<'db>)>,
+    span: DynLazySpan<'db>,
+}
+
+fn selector_bytes<'db>(
+    db: &'db dyn HirAnalysisDb,
+    selector: IntegerId<'db>,
+    selector_size: usize,
+) -> Option<Vec<u8>> {
+    let raw = selector.data(db).to_bytes_be();
+    if raw.len() > selector_size {
+        return None;
+    }
+    let mut out = vec![0; selector_size.saturating_sub(raw.len())];
+    out.extend(raw);
+    Some(out)
+}
+
+fn selector_hex(bytes: &[u8]) -> String {
+    let mut out = String::from("0x");
+    for byte in bytes {
+        out.push_str(&format!("{byte:02x}"));
+    }
+    out
+}
+
+fn selector_prefixes_overlap(left: &[u8], right: &[u8]) -> bool {
+    left.iter().zip(right.iter()).all(|(lhs, rhs)| lhs == rhs)
+}
+
+/// Check for selector conflicts and emit diagnostics if found.
+fn check_selector_conflict<'db>(
+    db: &'db dyn HirAnalysisDb,
+    selector_size: usize,
+    use_: SelectorUse<'db>,
+    seen_selectors: &mut Vec<SeenSelector<'db>>,
     diags: &mut Vec<FuncBodyDiag<'db>>,
 ) {
-    if let Some((first_span, first_variant, first_struct)) = seen_selectors.get(&selector) {
+    let Some(bytes) = selector_bytes(db, use_.selector, selector_size) else {
+        return;
+    };
+    let selector_text = selector_hex(&bytes);
+
+    for first in seen_selectors.iter() {
         // Don't report if it's the same variant (duplicate msg block already reported)
-        if *first_struct != variant {
+        if first.variant != use_.variant && selector_prefixes_overlap(&first.bytes, &bytes) {
+            let selector_desc = if first.text == selector_text {
+                selector_text.clone()
+            } else {
+                format!("{selector_text} overlaps {}", first.text)
+            };
             diags.push(
                 BodyDiag::RecvDuplicateSelector {
-                    primary: variant_span,
-                    first_use: first_span.clone(),
-                    selector,
-                    first_variant: *first_variant,
-                    second_variant: variant_name,
+                    primary: use_.span.clone(),
+                    first_use: first.span.clone(),
+                    selector: selector_desc,
+                    first_variant: first.variant_name,
+                    second_variant: use_.variant_name,
                 }
                 .into(),
             );
+            return;
         }
-    } else {
-        seen_selectors.insert(selector, (variant_span, variant_name, variant));
     }
+
+    seen_selectors.push(SeenSelector {
+        bytes,
+        text: selector_text,
+        span: use_.span,
+        variant_name: use_.variant_name,
+        variant: use_.variant,
+    });
 }
 
 /// Check for handler type conflicts and emit diagnostics if found.
@@ -697,33 +884,21 @@ fn check_handler_conflict<'db>(
 pub(crate) fn eval_msg_variant_selector<'db>(
     db: &'db dyn HirAnalysisDb,
     variant_ty: TyId<'db>,
+    abi_ty: TyId<'db>,
     scope: ScopeId<'db>,
     diags: &mut Vec<FuncBodyDiag<'db>>,
-) -> Option<u32> {
+) -> Option<IntegerId<'db>> {
     let msg_variant_trait = resolve_core_trait(db, scope, &["message", "MsgVariant"])?;
-
-    let canonical_ty = Canonical::new(db, variant_ty);
-    let scope_ingot = scope.ingot(db);
-    let search_ingots = [
-        Some(scope_ingot),
-        variant_ty.ingot(db).filter(|&ingot| ingot != scope_ingot),
-    ];
-    let implementor = search_ingots.into_iter().flatten().find_map(|ingot| {
-        impls_for_ty(db, ingot, canonical_ty)
-            .iter()
-            .find(|impl_| impl_.skip_binder().trait_def(db) == msg_variant_trait)
-            .copied()
-    })?;
-    let impl_ = implementor.skip_binder();
-
     let selector_name = IdentId::new(db, "SELECTOR".to_string());
-    let selector_const = impl_
-        .hir_impl_trait(db)
-        .hir_consts(db)
-        .iter()
-        .find(|c| c.name.to_opt() == Some(selector_name))?;
-
-    let body = selector_const.value.to_opt()?;
+    let inst = TraitInstId::new(
+        db,
+        msg_variant_trait,
+        vec![variant_ty, abi_ty],
+        IndexMap::new(),
+    );
+    let assumptions = PredicateListId::empty_list(db);
+    let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
+    let body = assoc_const_body_for_trait_inst(db, solve_cx, inst, selector_name)?;
     if matches!(
         body.expr(db).data(db, body),
         crate::hir_def::Partial::Absent
@@ -731,33 +906,43 @@ pub(crate) fn eval_msg_variant_selector<'db>(
         return None;
     }
 
-    let expected_ty = TyId::new(db, TyData::TyBase(TyBase::Prim(PrimTy::U32)));
+    let expected_ty = abi_selector_ty(db, scope, assumptions, abi_ty)?;
     let result = super::check_anon_const_body(db, body, expected_ty);
     diags.extend(result.0.clone());
     if !result.0.is_empty() {
         return None;
     }
 
-    match eval_body_owner_const(
-        db,
-        BodyOwner::AnonConstBody {
-            body,
-            expected: expected_ty,
-        },
-        Vec::new(),
-    ) {
+    let owner = BodyOwner::AnonConstBody {
+        body,
+        expected: expected_ty,
+    };
+    match eval_body_owner_const(db, owner, Vec::new()) {
         Ok(value) => match value.value(db) {
             SemConstValue::Scalar {
                 value: SemConstScalar::Int { value },
                 ..
-            } => value.to_u32(),
+            } => value
+                .to_biguint()
+                .map(|value| IntegerId::new(db, value))
+                .or_else(|| {
+                    diags.push(BodyDiag::ConstValueMustBeKnown(body.span().into()).into());
+                    None
+                }),
             _ => {
                 diags.push(BodyDiag::ConstValueMustBeKnown(body.span().into()).into());
                 None
             }
         },
-        Err(_) => {
+        Err(CtfeError::NotConstEvaluable { .. }) => {
             diags.push(BodyDiag::ConstValueMustBeKnown(body.span().into()).into());
+            None
+        }
+        Err(err) => {
+            let ty = TyId::invalid(db, super::invalid_cause_from_ctfe_error(db, owner, err));
+            if let Some(diag) = ty.emit_diag(db, body.span().into()) {
+                diags.push(diag.into());
+            }
             None
         }
     }

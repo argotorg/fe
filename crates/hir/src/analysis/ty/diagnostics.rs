@@ -614,7 +614,7 @@ pub enum BodyDiag<'db> {
     RecvDuplicateSelector {
         primary: DynLazySpan<'db>,
         first_use: DynLazySpan<'db>,
-        selector: u32,
+        selector: String,
         first_variant: IdentId<'db>,
         second_variant: IdentId<'db>,
     },

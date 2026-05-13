@@ -227,6 +227,7 @@ impl<'db> AttrArgValue<'db> {
     pub fn pretty_print(&self, db: &'db dyn HirDb) -> String {
         match self {
             AttrArgValue::Ident(ident) => ident.data(db).to_string(),
+            AttrArgValue::Path(path) => path.pretty_print(db),
             AttrArgValue::Lit(lit) => lit.pretty_print(db),
         }
     }

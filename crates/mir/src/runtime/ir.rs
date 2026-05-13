@@ -3,7 +3,7 @@ use hir::analysis::{
     semantic::{FieldIndex, SemanticInstance},
     ty::ty_def::TyId,
 };
-use hir::hir_def::{BinOp, Contract, Func, TopLevelMod, UnOp};
+use hir::hir_def::{BinOp, Contract, Func, IntegerId, TopLevelMod, UnOp};
 use hir::projection::IndexSource;
 use hir::semantic::ProviderBinding;
 use salsa::Update;
@@ -830,12 +830,21 @@ pub struct ContractInitAbiPlan<'db> {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub struct ContractRecvAbiPlan<'db> {
     pub contract: Contract<'db>,
-    pub selector: Option<u32>,
+    pub abi: ContractAbiPlan<'db>,
+    pub selector: Option<IntegerId<'db>>,
     pub payable: bool,
     pub user_recv: RuntimeInstance<'db>,
     pub entry_effect_args: Box<[EntryEffectArgPlan<'db>]>,
     pub input: RuntimeInputPlan<'db>,
     pub ret: RuntimeReturnPlan<'db>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
+pub struct ContractAbiPlan<'db> {
+    pub abi_ty: TyId<'db>,
+    pub selector_ty: TyId<'db>,
+    pub selector_size: u64,
+    pub selector_class: ScalarClass<'db>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
@@ -935,7 +944,8 @@ pub enum RuntimeReturnPlan<'db> {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub struct DispatchArm<'db> {
-    pub selector: u32,
+    pub abi: ContractAbiPlan<'db>,
+    pub selector: IntegerId<'db>,
     pub wrapper: RuntimeInstance<'db>,
 }
 
@@ -1229,7 +1239,10 @@ pub enum RuntimeBuiltin<'db> {
         topic2: RValueId,
         topic3: RValueId,
     },
-    CallDataSelector,
+    CallDataSelector {
+        selector_size: u64,
+        class: ScalarClass<'db>,
+    },
     MakeContractFieldRef {
         slot: u128,
         class: RuntimeClass<'db>,

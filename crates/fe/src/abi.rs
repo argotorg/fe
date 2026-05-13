@@ -190,7 +190,10 @@ fn recv_arm_to_abi_entry(
     let arm = arm_view
         .arm(db)
         .ok_or_else(|| "missing recv arm during ABI generation".to_string())?;
-    if arm_view.is_fallback(db) {
+    let recv_abi_ty = arm_view.recv(db).abi_ty(db);
+    let abi_info = arm_view.abi_info(db, recv_abi_ty);
+
+    if abi_info.is_fallback {
         return Ok(RecvArmAbiEmission::Emit(AbiEntry {
             entry_type: "fallback".to_string(),
             name: None,
@@ -217,6 +220,11 @@ fn recv_arm_to_abi_entry(
         .to_opt()
         .map(|name| name.data(db).to_string())
         .unwrap_or_else(|| "<unknown>".to_string());
+    if recv_abi_ty != sol_ty {
+        return Ok(RecvArmAbiEmission::Skip(format!(
+            "skipping recv arm `{variant_name}`: JSON ABI emission only supports `std::abi::Sol` recv blocks"
+        )));
+    }
     if !variant_has_canonical_json_abi_shape(db, variant_struct) {
         return Ok(RecvArmAbiEmission::Skip(format!(
             "skipping recv arm `{variant_name}`: ABI shape is not compiler-known for manual `MsgVariant` impls; only `msg`-generated variants are emitted"
@@ -249,6 +257,11 @@ fn recv_arm_to_abi_entry(
     let selector_value = abi_info.selector_value.ok_or_else(|| {
         format!(
             "cannot emit JSON ABI for `{selector_signature}`: selector value could not be resolved"
+        )
+    })?;
+    let selector_value = big_endian_bytes_to_u32(&selector_value.data(db).to_bytes_be()).ok_or_else(|| {
+        format!(
+            "cannot emit JSON ABI for `{selector_signature}`: selector value does not fit a 4-byte Sol selector"
         )
     })?;
     let parsed_signature = parse_function_signature(selector_signature)?;
@@ -1032,6 +1045,16 @@ fn selector_for_signature(signature: &str) -> u32 {
     hasher.update(signature.as_bytes());
     hasher.finalize(&mut output);
     u32::from_be_bytes([output[0], output[1], output[2], output[3]])
+}
+
+fn big_endian_bytes_to_u32(bytes: &[u8]) -> Option<u32> {
+    if bytes.len() > 4 {
+        return None;
+    }
+    let mut padded = [0u8; 4];
+    let offset = 4usize.saturating_sub(bytes.len());
+    padded[offset..].copy_from_slice(bytes);
+    Some(u32::from_be_bytes(padded))
 }
 
 fn resolve_sol_abi_ty<'db>(

@@ -87,8 +87,7 @@ pub(super) fn report_payable_attr_on_msg_variant<'db>(
     }
 }
 
-/// Report an error for any non-`#[payable]` normal attribute on an `init` block
-/// or `recv` arm.  Only `#[payable]` (and doc comments) are valid here.
+/// Report an error for unsupported normal attributes on contract entry points.
 pub(super) fn report_unknown_attrs_on_contract_entry<'db>(
     ctxt: &mut FileLowerCtxt<'db>,
     attrs: Option<ast::AttrList>,
@@ -107,7 +106,7 @@ pub(super) fn report_unknown_attrs_on_contract_entry<'db>(
             .path()
             .map(|p| p.text().to_string())
             .unwrap_or_default();
-        if attr_name == "payable" {
+        if attr_name == "payable" || (entry_kind == "recv block" && attr_name == "abi") {
             continue;
         }
 

@@ -295,6 +295,23 @@ impl<'db> AttrListId<'db> {
         })
     }
 
+    /// Returns the ABI path from `#[abi = path::ToAbi]` or `#[abi(path::ToAbi)]`.
+    pub fn abi_path(self, db: &'db dyn HirDb) -> Option<PathId<'db>> {
+        self.data(db)
+            .iter()
+            .filter_map(|attr| {
+                let Attr::Normal(normal_attr) = attr else {
+                    return None;
+                };
+                let path = normal_attr.path.to_opt()?;
+                let ident = path.as_ident(db)?;
+                (ident.data(db) == "abi")
+                    .then(|| normal_attr.path_value(db))
+                    .flatten()
+            })
+            .last()
+    }
+
     pub fn arithmetic_mode(self, db: &'db dyn HirDb) -> Option<ArithmeticMode> {
         self.data(db)
             .iter()
@@ -427,6 +444,32 @@ impl<'db> NormalAttr<'db> {
         ArithmeticMode::parse(mode)
     }
 
+    pub fn path_value(&self, db: &'db dyn HirDb) -> Option<PathId<'db>> {
+        if self.has_value {
+            return match self.value {
+                Some(AttrArgValue::Path(path)) => Some(path),
+                Some(AttrArgValue::Ident(ident)) => Some(PathId::from_ident(db, ident)),
+                Some(AttrArgValue::Lit(_)) | None => None,
+            };
+        }
+
+        if self.has_args {
+            let [arg] = self.args.as_slice() else {
+                return None;
+            };
+            if arg.has_value {
+                return match arg.value {
+                    Some(AttrArgValue::Path(path)) => Some(path),
+                    Some(AttrArgValue::Ident(ident)) => Some(PathId::from_ident(db, ident)),
+                    Some(AttrArgValue::Lit(_)) | None => None,
+                };
+            }
+            return arg.key.to_opt();
+        }
+
+        None
+    }
+
     pub(crate) fn keyword_attr_spec(&self, db: &'db dyn HirDb) -> KeywordAttrSpec {
         KeywordAttrSpec {
             has_value: self.has_value,
@@ -502,5 +545,6 @@ impl<'db> AttrArg<'db> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AttrArgValue<'db> {
     Ident(IdentId<'db>),
+    Path(PathId<'db>),
     Lit(super::LitKind<'db>),
 }

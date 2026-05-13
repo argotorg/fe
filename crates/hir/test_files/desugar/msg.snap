@@ -15,7 +15,7 @@ mod CounterMsg {
 
     impl core::message::MsgVariant<std::abi::Sol> for Increment {
         type Return = ()
-        const SELECTOR: u32 = 1
+        const SELECTOR: <std::abi::Sol as core::abi::Abi>::Selector = 1
     }
 
     impl core::abi::AbiSize for Increment {
@@ -46,7 +46,7 @@ mod CounterMsg {
 
     impl core::message::MsgVariant<std::abi::Sol> for Get {
         type Return = (u64, u64)
-        const SELECTOR: u32 = 2
+        const SELECTOR: <std::abi::Sol as core::abi::Abi>::Selector = 2
     }
 
     impl core::abi::AbiSize for Get {
@@ -79,7 +79,7 @@ mod CounterMsg {
 
     impl core::message::MsgVariant<std::abi::Sol> for Set {
         type Return = u64
-        const SELECTOR: u32 = 3
+        const SELECTOR: <std::abi::Sol as core::abi::Abi>::Selector = 3
     }
 
     impl core::abi::AbiSize for Set {

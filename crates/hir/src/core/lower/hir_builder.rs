@@ -146,15 +146,15 @@ where
         self.ty_path(path)
     }
 
-    pub(super) fn sol_args(&self) -> GenericArgListId<'db> {
-        GenericArgListId::given1_type(self.db(), self.sol_ty())
+    pub(super) fn abi_args(&self, abi_ty: TypeId<'db>) -> GenericArgListId<'db> {
+        GenericArgListId::given1_type(self.db(), abi_ty)
     }
 
-    pub(super) fn core_abi_trait_ref_sol(&self, name: &str) -> TraitRefId<'db> {
+    pub(super) fn core_abi_trait_ref(&self, name: &str, abi_ty: TypeId<'db>) -> TraitRefId<'db> {
         let db = self.db();
         let path = PathId::from_ident(db, self.roots.core)
             .push_str(db, "abi")
-            .push_str_args(db, name, self.sol_args());
+            .push_str_args(db, name, self.abi_args(abi_ty));
         TraitRefId::new(db, Partial::Present(path))
     }
 
@@ -513,13 +513,6 @@ where
         self.body.f_ctxt.db()
     }
 
-    fn sol_ty(&self) -> TypeId<'db> {
-        let path = PathId::from_ident(self.db(), self.roots.std)
-            .push_str(self.db(), "abi")
-            .push_str(self.db(), "Sol");
-        TypeId::new(self.db(), TypeKind::Path(Partial::Present(path)))
-    }
-
     fn abi_size_trait_ref(&self) -> TraitRefId<'db> {
         let path = PathId::from_ident(self.db(), self.roots.core)
             .push_str(self.db(), "abi")
@@ -637,6 +630,7 @@ where
     pub(super) fn encode_fields(
         &mut self,
         fields: &[(IdentId<'db>, TypeId<'db>)],
+        abi_ty: TypeId<'db>,
         encoder_ident: IdentId<'db>,
         encoder_ty: TypeId<'db>,
     ) {
@@ -676,7 +670,7 @@ where
                 db,
                 vec![
                     GenericArg::Type(TypeGenericArg {
-                        ty: Partial::Present(self.sol_ty()),
+                        ty: Partial::Present(abi_ty),
                     }),
                     GenericArg::Type(TypeGenericArg {
                         ty: Partial::Present(field_ty),
@@ -706,6 +700,7 @@ where
         &mut self,
         target_ident: IdentId<'db>,
         ty: TypeId<'db>,
+        abi_ty: TypeId<'db>,
         decoder_ty: TypeId<'db>,
     ) {
         let db = self.db();
@@ -713,7 +708,7 @@ where
             db,
             vec![
                 GenericArg::Type(TypeGenericArg {
-                    ty: Partial::Present(self.sol_ty()),
+                    ty: Partial::Present(abi_ty),
                 }),
                 GenericArg::Type(TypeGenericArg {
                     ty: Partial::Present(ty),
