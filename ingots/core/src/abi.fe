@@ -137,6 +137,13 @@ pub trait AbiDecoder<A: Abi> {
     fn read_word(mut self) -> u256
     fn peek_word(self, _ at: u256) -> u256
 
+    /// Advance the cursor by `bytes` without reading or validating.
+    /// Used to skip over unused fixed-size fields in ABI decoding.
+    #[arithmetic(unchecked)]
+    fn skip_bytes(mut self, _ bytes: u256) {
+        self.set_pos(self.pos() + bytes)
+    }
+
     fn alloc(mut self, _ size: u256) -> u256
 }
 
@@ -259,6 +266,17 @@ pub fn decode_field<A: Abi, T, D>(_ d: mut D) -> T
     }
 
     T::decode_payload(d)
+}
+
+/// Skip past a fixed-size field without decoding it.
+/// Advances the decoder cursor by the field's head size.
+/// For fixed-size types this skips the entire encoding.
+/// For dynamic types this only skips the offset pointer (32 bytes).
+pub fn skip_field<A: Abi, T, D>(_ d: mut D)
+    where T: AbiSize,
+          D: AbiDecoder<A>
+{
+    d.skip_bytes(abi_field_head_size<T>())
 }
 
 fn decode_field_at<A: Abi, T, D>(d: mut D, pos: u256) -> T
@@ -442,6 +460,39 @@ impl<I> StringView<I>
 
     pub fn word_at(self, _ offset: u256) -> u256 {
         self.bytes.word_at(offset)
+    }
+}
+
+/// A zero-copy view over a fixed-size array in ABI-encoded data.
+///
+/// Instead of decoding all N elements into memory, `ArrayView` stores
+/// the byte input source and the offset where the array starts. Elements
+/// are read on demand via `get(index)`, paying only for what you use.
+///
+/// Generic over `ByteInput`, so `ArrayView<u256, 32, CallData>` is a
+/// zero-copy view over calldata, consistent with `BytesView<CallData>`.
+pub struct ArrayView<T, const N: usize, I> {
+    pub input: I,
+    pub start: u256,
+}
+
+impl<T, const N: usize, I> Copy for ArrayView<T, N, I>
+    where I: Copy
+{}
+
+impl<T, const N: usize, I> ArrayView<T, N, I>
+    where T: AbiSize, I: ByteInput
+{
+    pub fn len(self) -> usize {
+        N
+    }
+
+    /// Read element at `index` from the underlying input source.
+    /// Reads directly from calldata/memory — no copy.
+    #[arithmetic(unchecked)]
+    pub fn get(self, _ index: usize) -> u256 {
+        let byte_offset = self.start + (index as u256) * abi_field_head_size<T>()
+        self.input.word_at(byte_offset)
     }
 }
 
@@ -669,6 +720,13 @@ impl<T, const N: usize> AbiSize for [T; N]
         }
         total
     }
+}
+
+impl<T, const N: usize, I> AbiSize for ArrayView<T, N, I>
+    where T: AbiSize
+{
+    const HEAD_SIZE: u256 = (N as u256) * abi_field_head_size<T>()
+    const IS_DYNAMIC: bool = T::IS_DYNAMIC
 }
 
 impl AbiSize for bool {
@@ -2490,5 +2548,43 @@ impl<A: Abi, T, const N: usize> Encode<A> for [T; N]
             at += T::HEAD_SIZE
             i += 1
         }
+    }
+}
+
+/// Decode an ArrayView: captures the decoder's input source and cursor
+/// position, then advances the cursor past the entire array. Zero copy —
+/// elements are read on demand via `view.get(index)`.
+impl<A: Abi, T, const N: usize, I> Decode<A> for ArrayView<T, N, I>
+    where T: AbiSize, I: ByteInput
+{
+    #[arithmetic(unchecked)]
+    fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
+        let start = d.pos()
+        let total_bytes = (N as u256) * abi_field_head_size<T>()
+        d.set_pos(start + total_bytes)
+        ArrayView { input: d.input(), start }
+    }
+}
+
+impl<A: Abi, T, const N: usize, I> AbiSpan<A> for ArrayView<T, N, I>
+    where T: AbiSize, I: ByteInput
+{
+    fn payload_end<I2: ByteInput>(_ input: I2, base: u256, pos: u256) -> u256 {
+        let _ = base
+        pos + (N as u256) * abi_field_head_size<T>()
+    }
+}
+
+impl<A: Abi, T, const N: usize, I> Encode<A> for ArrayView<T, N, I>
+    where T: AbiSize, I: ByteInput
+{
+    const DIRECT_ENCODE: bool = false
+
+    fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
+        super::panic()
+    }
+
+    fn encode_to_ptr(own self, _ ptr: u256) {
+        super::panic()
     }
 }
