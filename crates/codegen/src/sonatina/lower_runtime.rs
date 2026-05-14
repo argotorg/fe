@@ -43,8 +43,8 @@ use sonatina_ir::{
             EvmAddMod, EvmAddress, EvmBaseFee, EvmBlockHash, EvmCall, EvmCallValue,
             EvmCalldataCopy, EvmCalldataLoad, EvmCalldataSize, EvmCaller, EvmChainId, EvmCodeCopy,
             EvmCodeSize, EvmCoinBase, EvmCreate, EvmCreate2, EvmDelegateCall, EvmExp, EvmGas,
-            EvmGasLimit, EvmInvalid, EvmKeccak256, EvmLog0, EvmLog1, EvmLog2, EvmLog3, EvmLog4,
-            EvmMalloc, EvmMcopy, EvmMsize, EvmMstore8, EvmMulMod, EvmNumber, EvmOrigin,
+            EvmGasLimit, EvmGasPrice, EvmInvalid, EvmKeccak256, EvmLog0, EvmLog1, EvmLog2, EvmLog3,
+            EvmLog4, EvmMalloc, EvmMcopy, EvmMsize, EvmMstore8, EvmMulMod, EvmNumber, EvmOrigin,
             EvmPrevRandao, EvmReturn, EvmReturnDataCopy, EvmReturnDataSize, EvmRevert, EvmSdiv,
             EvmSelfBalance, EvmSelfDestruct, EvmSignExtend, EvmSload, EvmSmod, EvmSstore,
             EvmStaticCall, EvmStop, EvmTimestamp, EvmTload, EvmTstore, EvmUdiv, EvmUmod,
@@ -1479,11 +1479,9 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             RuntimeBuiltin::Origin => self
                 .fb
                 .insert_inst(EvmOrigin::new(self.module.inst_set()), Type::I256),
-            RuntimeBuiltin::GasPrice => {
-                return Err(LowerError::Unsupported(
-                    "gasprice is not supported by the Sonatina backend".to_string(),
-                ));
-            }
+            RuntimeBuiltin::GasPrice => self
+                .fb
+                .insert_inst(EvmGasPrice::new(self.module.inst_set()), Type::I256),
             RuntimeBuiltin::CoinBase => self
                 .fb
                 .insert_inst(EvmCoinBase::new(self.module.inst_set()), Type::I256),

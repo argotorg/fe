@@ -6,6 +6,8 @@
 //!
 //! Run: cargo bench -p fe-language-server --bench doc_reload
 
+#![allow(clippy::print_stderr)]
+
 use common::InputDb;
 use criterion::{Criterion, SamplingMode, criterion_group, criterion_main};
 use driver::DriverDataBase;
