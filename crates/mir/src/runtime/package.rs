@@ -12,7 +12,7 @@ use hir::{
             trait_def::{TraitInstId, resolve_trait_method_instance},
             trait_resolution::TraitSolveCx,
             ty_check::{BodyOwner, LocalBinding},
-            ty_def::{TyData, TyId},
+            ty_def::{PrimTy, TyBase, TyData, TyId},
         },
     },
     hir_def::{Contract, Func, IdentId, InlineHint, ItemKind, ManualContractRootAttr, TopLevelMod},
@@ -819,6 +819,12 @@ fn contract_recv_wrapper<'db>(
     );
     let input = if abi_info.args_ty == TyId::unit(db) {
         RuntimeInputPlan::None
+    } else if let Some(field_count) = static_word_field_count(db, abi_info.args_ty) {
+        RuntimeInputPlan::DirectCalldataLoad {
+            msg_ty: abi_info.args_ty,
+            field_count,
+            projected_fields,
+        }
     } else {
         RuntimeInputPlan::DecodeCalldataPayload {
             msg_ty: abi_info.args_ty,
@@ -827,7 +833,11 @@ fn contract_recv_wrapper<'db>(
         }
     };
     let ret = if let Some(ret_ty) = abi_info.ret_ty {
-        RuntimeReturnPlan::Value { ty: ret_ty }
+        if is_direct_return_type(db, ret_ty) {
+            RuntimeReturnPlan::DirectScalarReturn { ty: ret_ty }
+        } else {
+            RuntimeReturnPlan::Value { ty: ret_ty }
+        }
     } else {
         RuntimeReturnPlan::Unit
     };
@@ -2108,6 +2118,61 @@ fn init_args_plan_sort_key<'db>(db: &'db dyn MirDb, plan: &InitArgsPlan<'db>) ->
     }
 }
 
+/// Returns `true` if `ty` encodes as exactly one 32-byte word in ABI encoding.
+///
+/// This covers all primitive integer types (u8..u256, i8..i256), bool, and
+/// single-field struct wrappers around such types (e.g. `Address`).
+fn is_abi_word_type(db: &dyn MirDb, ty: TyId<'_>) -> bool {
+    let base = ty.base_ty(db);
+    match base.data(db) {
+        TyData::TyBase(TyBase::Prim(prim)) => matches!(
+            prim,
+            PrimTy::Bool
+                | PrimTy::U8
+                | PrimTy::U16
+                | PrimTy::U32
+                | PrimTy::U64
+                | PrimTy::U128
+                | PrimTy::U256
+                | PrimTy::Usize
+                | PrimTy::I8
+                | PrimTy::I16
+                | PrimTy::I32
+                | PrimTy::I64
+                | PrimTy::I128
+                | PrimTy::I256
+                | PrimTy::Isize
+        ),
+        TyData::TyBase(TyBase::Adt(_)) => {
+            // Single-field struct wrapping a word type (e.g. Address { inner: u256 })
+            let fields = ty.field_types(db);
+            fields.len() == 1 && is_abi_word_type(db, fields[0])
+        }
+        _ => false,
+    }
+}
+
+/// Returns `true` if `ty` is a single word-scalar type suitable for a direct
+/// `mstore` return path (skipping `encode_single_root_alloc`).
+fn is_direct_return_type(db: &dyn MirDb, ty: TyId<'_>) -> bool {
+    is_abi_word_type(db, ty)
+}
+
+/// Check if all fields of `msg_ty` are ABI-word types, making the type eligible
+/// for the `DirectCalldataLoad` optimization. Returns `Some(field_count)` if
+/// eligible, `None` otherwise.
+fn static_word_field_count(db: &dyn MirDb, msg_ty: TyId<'_>) -> Option<u32> {
+    let fields = msg_ty.field_types(db);
+    if fields.is_empty() {
+        return None;
+    }
+    if fields.iter().all(|&field_ty| is_abi_word_type(db, field_ty)) {
+        Some(fields.len() as u32)
+    } else {
+        None
+    }
+}
+
 fn runtime_input_plan_symbol_key<'db>(db: &'db dyn MirDb, plan: &RuntimeInputPlan<'db>) -> String {
     match plan {
         RuntimeInputPlan::None => "none".to_string(),
@@ -2119,6 +2184,14 @@ fn runtime_input_plan_symbol_key<'db>(db: &'db dyn MirDb, plan: &RuntimeInputPla
             "decode:{}:{}:{projected_fields:?}",
             type_identity(db, *msg_ty),
             runtime_instance_symbol_key(db, *decode_fn)
+        ),
+        RuntimeInputPlan::DirectCalldataLoad {
+            msg_ty,
+            field_count,
+            projected_fields,
+        } => format!(
+            "direct_load:{}:{field_count}:{projected_fields:?}",
+            type_identity(db, *msg_ty),
         ),
     }
 }
@@ -2134,6 +2207,14 @@ fn runtime_input_plan_sort_key<'db>(db: &'db dyn MirDb, plan: &RuntimeInputPlan<
             "decode:{}:{}:{projected_fields:?}",
             type_identity(db, *msg_ty),
             runtime_instance_sort_key(db, *decode_fn)
+        ),
+        RuntimeInputPlan::DirectCalldataLoad {
+            msg_ty,
+            field_count,
+            projected_fields,
+        } => format!(
+            "direct_load:{}:{field_count}:{projected_fields:?}",
+            type_identity(db, *msg_ty),
         ),
     }
 }
@@ -2723,11 +2804,14 @@ pub contract DecodeHarness {
         let top_mod = db.top_mod(file);
 
         let raw_plan = recv_wrapper_plan(&db, top_mod, "raw(uint256)");
-        let RuntimeInputPlan::DecodeCalldataPayload {
-            projected_fields, ..
-        } = raw_plan.input
-        else {
-            panic!("raw(uint256) should decode calldata payload");
+        let projected_fields = match raw_plan.input {
+            RuntimeInputPlan::DirectCalldataLoad {
+                projected_fields, ..
+            } => projected_fields,
+            RuntimeInputPlan::DecodeCalldataPayload {
+                projected_fields, ..
+            } => projected_fields,
+            RuntimeInputPlan::None => panic!("raw(uint256) should have input plan"),
         };
         assert!(
             projected_fields.is_empty(),
@@ -2735,11 +2819,14 @@ pub contract DecodeHarness {
         );
 
         let swap_plan = recv_wrapper_plan(&db, top_mod, "swap(uint64,uint64)");
-        let RuntimeInputPlan::DecodeCalldataPayload {
-            projected_fields, ..
-        } = swap_plan.input
-        else {
-            panic!("swap(uint64,uint64) should decode calldata payload");
+        let projected_fields = match swap_plan.input {
+            RuntimeInputPlan::DirectCalldataLoad {
+                projected_fields, ..
+            } => projected_fields,
+            RuntimeInputPlan::DecodeCalldataPayload {
+                projected_fields, ..
+            } => projected_fields,
+            RuntimeInputPlan::None => panic!("swap(uint64,uint64) should have input plan"),
         };
         assert_eq!(
             projected_fields.as_ref(),

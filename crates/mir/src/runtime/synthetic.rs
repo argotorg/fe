@@ -480,52 +480,87 @@ impl<'db> SyntheticBodyBuilder<'db> {
         };
 
         let mut call_args = Vec::new();
-        if let RuntimeInputPlan::DecodeCalldataPayload {
-            msg_ty,
-            decode_fn,
-            projected_fields,
-        } = plan.input
-        {
-            let size = self.push_builtin_value(
-                cont_bb,
-                TyId::u256(self.db),
-                RuntimeClass::Scalar(word_scalar_class()),
-                RuntimeBuiltin::CallDataSize,
-            );
-            let payload_len = self.push_binary_word(cont_bb, ArithBinOp::Sub, size, four);
-            let payload_ptr = self.push_builtin_value(
-                cont_bb,
-                TyId::u256(self.db),
-                RuntimeClass::Scalar(word_scalar_class()),
-                RuntimeBuiltin::Malloc { size: payload_len },
-            );
-            self.push_side_effect_builtin(
-                cont_bb,
-                RuntimeBuiltin::CallDataCopy {
-                    dst: payload_ptr,
-                    offset: four,
-                    len: payload_len,
-                },
-            );
-            let input = self.push_memory_bytes_value(
-                cont_bb,
-                plan.contract.scope(),
-                payload_ptr,
-                payload_len,
-            );
-            let decoder_new =
-                resolve_sol_decoder_new(self.db, plan.contract.scope()).expect("decoder_new");
-            let decoder = self.push_call_result(cont_bb, decoder_new, vec![input]);
-            if let Some(decoded) = self.push_call(cont_bb, decode_fn, vec![decoder]) {
-                call_args.extend(self.extract_selected_tuple_fields(
+        match plan.input {
+            RuntimeInputPlan::None => {}
+
+            RuntimeInputPlan::DirectCalldataLoad {
+                msg_ty,
+                field_count,
+                projected_fields,
+            } => {
+                // Optimized path: load each field directly from calldata at
+                // known offsets. For all-word-scalar types, field i lives at
+                // calldata offset (4 + i * 32).
+                let field_types = msg_ty.field_types(self.db);
+                let mut loaded_fields = Vec::with_capacity(field_count as usize);
+                for i in 0..field_count {
+                    let offset_val = 4 + i * 32;
+                    let offset = self.push_const_word(cont_bb, offset_val);
+                    let loaded = self.push_builtin_value(
+                        cont_bb,
+                        TyId::u256(self.db),
+                        RuntimeClass::Scalar(word_scalar_class()),
+                        RuntimeBuiltin::CallDataLoad { offset },
+                    );
+                    loaded_fields.push(loaded);
+                }
+                // Select the fields the handler expects, in the order it
+                // expects them (projected_fields maps handler param position
+                // to struct field index).
+                for &field_idx in projected_fields.iter() {
+                    let _ = &field_types; // keep field_types alive for clarity
+                    call_args.push(loaded_fields[field_idx as usize]);
+                }
+            }
+
+            RuntimeInputPlan::DecodeCalldataPayload {
+                msg_ty,
+                decode_fn,
+                projected_fields,
+            } => {
+                // Generic path: malloc + calldatacopy + SolDecoder
+                let size = self.push_builtin_value(
                     cont_bb,
-                    decoded,
-                    msg_ty,
+                    TyId::u256(self.db),
+                    RuntimeClass::Scalar(word_scalar_class()),
+                    RuntimeBuiltin::CallDataSize,
+                );
+                let payload_len = self.push_binary_word(cont_bb, ArithBinOp::Sub, size, four);
+                let payload_ptr = self.push_builtin_value(
+                    cont_bb,
+                    TyId::u256(self.db),
+                    RuntimeClass::Scalar(word_scalar_class()),
+                    RuntimeBuiltin::Malloc { size: payload_len },
+                );
+                self.push_side_effect_builtin(
+                    cont_bb,
+                    RuntimeBuiltin::CallDataCopy {
+                        dst: payload_ptr,
+                        offset: four,
+                        len: payload_len,
+                    },
+                );
+                let input = self.push_memory_bytes_value(
+                    cont_bb,
                     plan.contract.scope(),
-                    &projected_fields,
-                ));
+                    payload_ptr,
+                    payload_len,
+                );
+                let decoder_new =
+                    resolve_sol_decoder_new(self.db, plan.contract.scope()).expect("decoder_new");
+                let decoder = self.push_call_result(cont_bb, decoder_new, vec![input]);
+                if let Some(decoded) = self.push_call(cont_bb, decode_fn, vec![decoder]) {
+                    call_args.extend(self.extract_selected_tuple_fields(
+                        cont_bb,
+                        decoded,
+                        msg_ty,
+                        plan.contract.scope(),
+                        &projected_fields,
+                    ));
+                }
             }
         }
+
         call_args.extend(self.owner_effect_call_args(
             cont_bb,
             plan.user_recv,
@@ -541,7 +576,27 @@ impl<'db> SyntheticBodyBuilder<'db> {
                     len: zero,
                 };
             }
+
+            RuntimeReturnPlan::DirectScalarReturn { .. } => {
+                // Optimized path: mstore the scalar at offset 0, return 32
+                // bytes. Skips the encode_single_root_alloc call entirely.
+                let ret_value = ret.expect("value-returning recv wrapper should produce a value");
+                self.push_side_effect_builtin(
+                    cont_bb,
+                    RuntimeBuiltin::Mstore {
+                        addr: zero,
+                        value: ret_value,
+                    },
+                );
+                let thirty_two = self.push_const_word(cont_bb, 32);
+                self.blocks[cont_bb.index()].terminator = RTerminator::ReturnData {
+                    offset: zero,
+                    len: thirty_two,
+                };
+            }
+
             RuntimeReturnPlan::Value { .. } => {
+                // Generic path: call encode_single_root_alloc
                 let ret_value = ret.expect("value-returning recv wrapper should produce a value");
                 let scope = plan.contract.scope();
                 let encode_alloc = resolve_sol_encode_single_root_alloc(

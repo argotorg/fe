@@ -926,12 +926,28 @@ pub enum RuntimeInputPlan<'db> {
         decode_fn: RuntimeInstance<'db>,
         projected_fields: Box<[u32]>,
     },
+    /// Optimized path for static types whose fields are all ABI-word-sized
+    /// scalars. Each field is loaded directly via `calldataload` at a known
+    /// offset (4 + field_index * 32), skipping malloc / calldatacopy /
+    /// MemoryBytes / SolDecoder entirely.
+    DirectCalldataLoad {
+        msg_ty: TyId<'db>,
+        /// Number of 32-byte word fields to load from calldata.
+        field_count: u32,
+        /// Which of those fields the handler actually uses (same semantics
+        /// as `projected_fields` in `DecodeCalldataPayload`).
+        projected_fields: Box<[u32]>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub enum RuntimeReturnPlan<'db> {
     Unit,
     Value { ty: TyId<'db> },
+    /// Optimized path for a single word-scalar return value: emit a direct
+    /// `mstore` at offset 0 and `return(0, 32)` instead of calling
+    /// `encode_single_root_alloc`.
+    DirectScalarReturn { ty: TyId<'db> },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
