@@ -18,6 +18,23 @@ impl ArithmeticMode {
     }
 }
 
+/// Dispatch strategy requested via `#[dispatch(linear)]` or `#[dispatch(binary_search)]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DispatchAttr {
+    Linear,
+    BinarySearch,
+}
+
+impl DispatchAttr {
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "linear" => Some(Self::Linear),
+            "binary_search" => Some(Self::BinarySearch),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
 pub enum InlineHint {
     Hint,
@@ -311,6 +328,24 @@ impl<'db> AttrListId<'db> {
             })
             .last()
     }
+
+    pub fn dispatch_attr(self, db: &'db dyn HirDb) -> Option<DispatchAttr> {
+        self.data(db)
+            .iter()
+            .filter_map(|attr| {
+                let Attr::Normal(normal_attr) = attr else {
+                    return None;
+                };
+                let path = normal_attr.path.to_opt()?;
+                let ident = path.as_ident(db)?;
+                if ident.data(db) != "dispatch" {
+                    return None;
+                }
+                normal_attr.dispatch_attr_arg(db)
+            })
+            .last()
+    }
+
     pub fn inline_attr(self, db: &'db dyn HirDb) -> Option<InlineAttr> {
         match parse_inline_attr_specs(self.data(db).iter().filter_map(|attr| {
             let Attr::Normal(normal_attr) = attr else {
@@ -425,6 +460,21 @@ impl<'db> NormalAttr<'db> {
             .and_then(|path| path.as_ident(db))
             .map(|ident| ident.data(db).as_str())?;
         ArithmeticMode::parse(mode)
+    }
+
+    pub fn dispatch_attr_arg(&self, db: &'db dyn HirDb) -> Option<DispatchAttr> {
+        let [arg] = self.args.as_slice() else {
+            return None;
+        };
+        if arg.has_value {
+            return None;
+        }
+        let name = arg
+            .key
+            .to_opt()
+            .and_then(|path| path.as_ident(db))
+            .map(|ident| ident.data(db).as_str())?;
+        DispatchAttr::parse(name)
     }
 
     pub(crate) fn keyword_attr_spec(&self, db: &'db dyn HirDb) -> KeywordAttrSpec {

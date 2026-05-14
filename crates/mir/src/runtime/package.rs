@@ -39,11 +39,12 @@ use crate::{
     },
     runtime::{
         AddressSpaceKind, ConstRegionId, ContractInitAbiPlan, ContractRecvAbiPlan, DispatchArm,
-        DispatchDefault, EntryEffectArgPlan, InitArgsPlan, LayoutId, LayoutKey, RefKind, RefView,
-        ResolvedCodeRegion, RuntimeClass, RuntimeCodeRegion, RuntimeCodeRegionKey, RuntimeFunction,
-        RuntimeFunctionOwner, RuntimeInlineHint, RuntimeInputPlan, RuntimeLinkage, RuntimeObject,
-        RuntimePackage, RuntimePackagePlan, RuntimeReturnPlan, RuntimeSection, RuntimeSectionName,
-        RuntimeSectionRef, RuntimeSyntheticSpec, ScalarClass, ScalarRepr, ScalarRole,
+        DispatchDefault, DispatchStrategy, EntryEffectArgPlan, InitArgsPlan, LayoutId, LayoutKey,
+        RefKind, RefView, ResolvedCodeRegion, RuntimeClass, RuntimeCodeRegion,
+        RuntimeCodeRegionKey, RuntimeFunction, RuntimeFunctionOwner, RuntimeInlineHint,
+        RuntimeInputPlan, RuntimeLinkage, RuntimeObject, RuntimePackage, RuntimePackagePlan,
+        RuntimeReturnPlan, RuntimeSection, RuntimeSectionName, RuntimeSectionRef,
+        RuntimeSyntheticSpec, ScalarClass, ScalarRepr, ScalarRole,
         TargetRootProviderMaterialization,
     },
     verify::verify_runtime_package,
@@ -657,15 +658,49 @@ fn contract_runtime_root<'db>(
         dispatch.push(DispatchArm { selector, wrapper });
     }
     dispatch.sort_by_key(|arm| arm.selector);
+
+    let dispatch_strategy = resolve_dispatch_strategy(db, contract, dispatch.len());
+
     Ok(synthetic_instance(
         db,
         RuntimeSyntheticSpec::ContractRuntimeRoot {
             contract,
             dispatch: dispatch.into_boxed_slice(),
             default,
+            dispatch_strategy,
         },
         Vec::new(),
     ))
+}
+
+/// Determine which dispatch strategy to use for a contract.
+///
+/// If the contract has a `#[dispatch(linear)]` or `#[dispatch(binary_search)]` attribute,
+/// that takes precedence. Otherwise, auto-select based on the number of selectors:
+/// linear for 3 or fewer, binary search for 4 or more.
+fn resolve_dispatch_strategy<'db>(
+    db: &'db dyn MirDb,
+    contract: Contract<'db>,
+    selector_count: usize,
+) -> DispatchStrategy {
+    use hir::hir_def::{DispatchAttr, ItemKind};
+
+    if let Some(dispatch_attr) = ItemKind::from(contract)
+        .attrs(db)
+        .and_then(|attrs| attrs.dispatch_attr(db))
+    {
+        return match dispatch_attr {
+            DispatchAttr::Linear => DispatchStrategy::Linear,
+            DispatchAttr::BinarySearch => DispatchStrategy::BinarySearch,
+        };
+    }
+
+    // Auto threshold: binary search is worthwhile at 4+ selectors.
+    if selector_count > 3 {
+        DispatchStrategy::BinarySearch
+    } else {
+        DispatchStrategy::Linear
+    }
 }
 
 fn contract_init_root<'db>(
@@ -1908,8 +1943,9 @@ fn runtime_synthetic_spec_symbol_key<'db>(
             contract,
             dispatch,
             default,
+            dispatch_strategy,
         } => format!(
-            "__synthetic:contract_runtime_root:{}:{}:{}",
+            "__synthetic:contract_runtime_root:{}:{}:{}:{:?}",
             item_identity(db, contract.into()),
             dispatch
                 .iter()
@@ -1920,7 +1956,8 @@ fn runtime_synthetic_spec_symbol_key<'db>(
                 ))
                 .collect::<Vec<_>>()
                 .join(","),
-            dispatch_default_symbol_key(db, &default)
+            dispatch_default_symbol_key(db, &default),
+            dispatch_strategy
         ),
         RuntimeSyntheticSpec::CodeRegionRoot { symbol, callee } => {
             format!(
@@ -1995,8 +2032,9 @@ fn runtime_synthetic_spec_sort_key<'db>(
             contract,
             dispatch,
             default,
+            dispatch_strategy,
         } => format!(
-            "__synthetic:contract_runtime_root:{}:{}:{}",
+            "__synthetic:contract_runtime_root:{}:{}:{}:{:?}",
             item_identity(db, contract.into()),
             dispatch
                 .iter()
@@ -2007,7 +2045,8 @@ fn runtime_synthetic_spec_sort_key<'db>(
                 ))
                 .collect::<Vec<_>>()
                 .join(","),
-            dispatch_default_sort_key(db, &default)
+            dispatch_default_sort_key(db, &default),
+            dispatch_strategy
         ),
         RuntimeSyntheticSpec::CodeRegionRoot { symbol, callee } => {
             format!(

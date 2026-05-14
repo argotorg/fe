@@ -811,6 +811,7 @@ pub enum RuntimeSyntheticSpec<'db> {
         contract: Contract<'db>,
         dispatch: Box<[DispatchArm<'db>]>,
         default: DispatchDefault<'db>,
+        dispatch_strategy: DispatchStrategy,
     },
     CodeRegionRoot {
         symbol: String,
@@ -943,6 +944,15 @@ pub struct DispatchArm<'db> {
 pub enum DispatchDefault<'db> {
     RevertEmpty,
     Call { wrapper: RuntimeInstance<'db> },
+}
+
+/// Strategy used for runtime selector dispatch in a contract.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub enum DispatchStrategy {
+    /// Linear if-else chain (O(n)). Cheap for small selector counts.
+    Linear,
+    /// Binary-search tree (O(log n)). Cheaper for large selector counts.
+    BinarySearch,
 }
 
 #[salsa::interned]

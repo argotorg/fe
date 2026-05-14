@@ -25,12 +25,12 @@ use crate::{
     layout_size_bytes,
     runtime::{
         AddressSpaceKind, BorrowAccess, ConstScalar, ContractInitAbiPlan, ContractRecvAbiPlan,
-        DispatchDefault, EntryEffectArgPlan, InitArgsPlan, PlaceElem, PlaceRoot, RBlock, RBlockId,
-        RExpr, RLocal, RLocalId, RStmt, RTerminator, RefKind, RefView, RuntimeBody,
-        RuntimeBoundarySpec, RuntimeBuiltin, RuntimeCarrier, RuntimeClass, RuntimeExitBehavior,
-        RuntimeInputPlan, RuntimeInterfaceSignature, RuntimeLocalRoot, RuntimeParamPlan,
-        RuntimePlace, RuntimeReturnPlan, RuntimeSyntheticSpec, ScalarClass, ScalarRepr, ScalarRole,
-        TargetRootProviderBinding, TargetRootProviderMaterialization,
+        DispatchDefault, DispatchStrategy, EntryEffectArgPlan, InitArgsPlan, PlaceElem, PlaceRoot,
+        RBlock, RBlockId, RExpr, RLocal, RLocalId, RStmt, RTerminator, RefKind, RefView,
+        RuntimeBody, RuntimeBoundarySpec, RuntimeBuiltin, RuntimeCarrier, RuntimeClass,
+        RuntimeExitBehavior, RuntimeInputPlan, RuntimeInterfaceSignature, RuntimeLocalRoot,
+        RuntimeParamPlan, RuntimePlace, RuntimeReturnPlan, RuntimeSyntheticSpec, ScalarClass,
+        ScalarRepr, ScalarRole, TargetRootProviderBinding, TargetRootProviderMaterialization,
         lower::{
             boundary::{RuntimeValueAddress, RuntimeValueSource},
             classify::{ref_class_for_place_result, semantic_return_ty},
@@ -105,8 +105,11 @@ pub(crate) fn lower_synthetic_runtime_body<'db>(
             ..
         } => builder.build_contract_init_root(init_abi, runtime_region),
         RuntimeSyntheticSpec::ContractRuntimeRoot {
-            dispatch, default, ..
-        } => builder.build_contract_runtime_root(&dispatch, default),
+            dispatch,
+            default,
+            dispatch_strategy,
+            ..
+        } => builder.build_contract_runtime_root(&dispatch, default, dispatch_strategy),
     }
     builder.finish()
 }
@@ -603,6 +606,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
         &mut self,
         dispatch: &[crate::runtime::DispatchArm<'db>],
         default: DispatchDefault<'db>,
+        strategy: DispatchStrategy,
     ) {
         let zero = self.push_const_word(RBlockId::from_u32(0), 0);
         let selector = self.push_builtin_value(
@@ -631,7 +635,18 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 args: Box::default(),
             },
         };
-        self.emit_dispatch_tree(selector, RBlockId::from_u32(0), &cases, default_bb);
+        match strategy {
+            DispatchStrategy::Linear => {
+                self.blocks[0].terminator = RTerminator::SwitchScalar {
+                    discr: selector,
+                    cases: cases.into_boxed_slice(),
+                    default: default_bb,
+                };
+            }
+            DispatchStrategy::BinarySearch => {
+                self.emit_dispatch_tree(selector, RBlockId::from_u32(0), &cases, default_bb);
+            }
+        }
     }
 
     fn emit_dispatch_tree(
