@@ -943,11 +943,15 @@ pub enum RuntimeInputPlan<'db> {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub enum RuntimeReturnPlan<'db> {
     Unit,
-    Value { ty: TyId<'db> },
+    Value {
+        ty: TyId<'db>,
+    },
     /// Optimized path for a single word-scalar return value: emit a direct
     /// `mstore` at offset 0 and `return(0, 32)` instead of calling
     /// `encode_single_root_alloc`.
-    DirectScalarReturn { ty: TyId<'db> },
+    DirectScalarReturn {
+        ty: TyId<'db>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]

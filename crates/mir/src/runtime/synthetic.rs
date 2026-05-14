@@ -491,24 +491,60 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 // Optimized path: load each field directly from calldata at
                 // known offsets. For all-word-scalar types, field i lives at
                 // calldata offset (4 + i * 32).
+                //
+                // calldataload always returns a raw u256 word. If the target
+                // field has a narrower scalar class (u64, bool, etc.) we emit
+                // a Cast to match the handler's expected representation.
                 let field_types = msg_ty.field_types(self.db);
+                let env = self.runtime_type_env(plan.contract.scope());
                 let mut loaded_fields = Vec::with_capacity(field_count as usize);
                 for i in 0..field_count {
                     let offset_val = 4 + i * 32;
                     let offset = self.push_const_word(cont_bb, offset_val);
-                    let loaded = self.push_builtin_value(
+                    // Load as raw u256 (matches calldataload's output class)
+                    let raw = self.push_builtin_value(
                         cont_bb,
                         TyId::u256(self.db),
                         RuntimeClass::Scalar(word_scalar_class()),
                         RuntimeBuiltin::CallDataLoad { offset },
                     );
-                    loaded_fields.push(loaded);
+                    let field_ty = field_types[i as usize];
+                    let field_scalar = match top_level_class_for_ty_in_env(
+                        self.db,
+                        env,
+                        field_ty,
+                        AddressSpaceKind::Memory,
+                    ) {
+                        Some(RuntimeClass::Scalar(sc)) => sc,
+                        _ => word_scalar_class(),
+                    };
+                    // Cast to the field's actual scalar class if needed
+                    let value = if field_scalar == word_scalar_class() {
+                        raw
+                    } else {
+                        let casted = self.push_local(
+                            field_ty,
+                            RuntimeCarrier::Value(RuntimeClass::Scalar(field_scalar.clone())),
+                            RuntimeLocalRoot::None,
+                        );
+                        self.push_stmt(
+                            cont_bb,
+                            RStmt::Assign {
+                                dst: casted,
+                                expr: RExpr::Cast {
+                                    value: raw,
+                                    to: field_scalar,
+                                },
+                            },
+                        );
+                        casted
+                    };
+                    loaded_fields.push(value);
                 }
                 // Select the fields the handler expects, in the order it
                 // expects them (projected_fields maps handler param position
                 // to struct field index).
                 for &field_idx in projected_fields.iter() {
-                    let _ = &field_types; // keep field_types alive for clarity
                     call_args.push(loaded_fields[field_idx as usize]);
                 }
             }

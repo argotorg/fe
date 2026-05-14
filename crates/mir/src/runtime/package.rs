@@ -16,6 +16,7 @@ use hir::{
         },
     },
     hir_def::{Contract, Func, IdentId, InlineHint, ItemKind, ManualContractRootAttr, TopLevelMod},
+    span::{DesugaredOrigin, HirOrigin},
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -833,7 +834,10 @@ fn contract_recv_wrapper<'db>(
         }
     };
     let ret = if let Some(ret_ty) = abi_info.ret_ty {
-        if is_direct_return_type(db, ret_ty) {
+        if is_full_word_scalar(db, ret_ty) {
+            // Only full 256-bit types can skip encode_single_root_alloc.
+            // Smaller types (u8, bool, etc.) need widening before mstore
+            // which we don't handle yet.
             RuntimeReturnPlan::DirectScalarReturn { ty: ret_ty }
         } else {
             RuntimeReturnPlan::Value { ty: ret_ty }
@@ -2118,11 +2122,14 @@ fn init_args_plan_sort_key<'db>(db: &'db dyn MirDb, plan: &InitArgsPlan<'db>) ->
     }
 }
 
-/// Returns `true` if `ty` encodes as exactly one 32-byte word in ABI encoding.
+/// Returns `true` if `ty` is a primitive scalar type that occupies exactly one
+/// 32-byte ABI word AND has a scalar runtime representation (i.e. the runtime
+/// carries it as a plain word, not an aggregate).
 ///
-/// This covers all primitive integer types (u8..u256, i8..i256), bool, and
-/// single-field struct wrappers around such types (e.g. `Address`).
-fn is_abi_word_type(db: &dyn MirDb, ty: TyId<'_>) -> bool {
+/// This is the strict check: only primitive bool and integer types qualify.
+/// ADT wrappers like `Address { inner: u256 }` are ABI-word-sized but have
+/// aggregate runtime representations, so they are excluded.
+fn is_primitive_word_scalar(db: &dyn MirDb, ty: TyId<'_>) -> bool {
     let base = ty.base_ty(db);
     match base.data(db) {
         TyData::TyBase(TyBase::Prim(prim)) => matches!(
@@ -2143,30 +2150,62 @@ fn is_abi_word_type(db: &dyn MirDb, ty: TyId<'_>) -> bool {
                 | PrimTy::I256
                 | PrimTy::Isize
         ),
-        TyData::TyBase(TyBase::Adt(_)) => {
-            // Single-field struct wrapping a word type (e.g. Address { inner: u256 })
-            let fields = ty.field_types(db);
-            fields.len() == 1 && is_abi_word_type(db, fields[0])
+        _ => false,
+    }
+}
+
+/// Returns `true` if `ty` is an unsigned 256-bit integer (u256 or usize) that
+/// needs no widening and can be passed directly to `mstore`. The runtime
+/// verifier requires mstore values to be `ScalarRepr::Int { bits: 256, signed:
+/// false }`, so signed types (i256, isize) are excluded.
+fn is_full_word_scalar(db: &dyn MirDb, ty: TyId<'_>) -> bool {
+    let base = ty.base_ty(db);
+    matches!(
+        base.data(db),
+        TyData::TyBase(TyBase::Prim(PrimTy::U256 | PrimTy::Usize))
+    )
+}
+
+/// Returns `true` if `msg_ty` is a compiler-generated message struct (from a
+/// `msg` declaration). Manual `MsgVariant` impls may reorder fields in their
+/// encode/decode, making direct calldataload unsafe.
+fn is_compiler_generated_msg<'db>(db: &'db dyn MirDb, msg_ty: TyId<'db>) -> bool {
+    let Some(adt_ref) = msg_ty.adt_ref(db) else {
+        return false;
+    };
+    match adt_ref {
+        hir::analysis::ty::adt_def::AdtRef::Struct(struct_) => {
+            matches!(
+                hir::span::struct_ast(db, struct_),
+                HirOrigin::Desugared(DesugaredOrigin::Msg(_))
+            )
         }
         _ => false,
     }
 }
 
-/// Returns `true` if `ty` is a single word-scalar type suitable for a direct
-/// `mstore` return path (skipping `encode_single_root_alloc`).
-fn is_direct_return_type(db: &dyn MirDb, ty: TyId<'_>) -> bool {
-    is_abi_word_type(db, ty)
-}
-
-/// Check if all fields of `msg_ty` are ABI-word types, making the type eligible
-/// for the `DirectCalldataLoad` optimization. Returns `Some(field_count)` if
-/// eligible, `None` otherwise.
+/// Check if all fields of `msg_ty` are primitive word-scalar types AND the type
+/// is a compiler-generated message struct, making it eligible for the
+/// `DirectCalldataLoad` optimization. Returns `Some(field_count)` if eligible,
+/// `None` otherwise.
+///
+/// Each field must be a primitive type with a scalar runtime representation so
+/// that a raw `calldataload` result can be passed directly to the handler
+/// without type coercion. The msg_ty must also be compiler-generated to ensure
+/// the ABI layout matches the canonical field order.
 fn static_word_field_count(db: &dyn MirDb, msg_ty: TyId<'_>) -> Option<u32> {
+    // Only compiler-generated msg structs have canonical ABI field layout.
+    if !is_compiler_generated_msg(db, msg_ty) {
+        return None;
+    }
     let fields = msg_ty.field_types(db);
     if fields.is_empty() {
         return None;
     }
-    if fields.iter().all(|&field_ty| is_abi_word_type(db, field_ty)) {
+    if fields
+        .iter()
+        .all(|&field_ty| is_primitive_word_scalar(db, field_ty))
+    {
         Some(fields.len() as u32)
     } else {
         None
