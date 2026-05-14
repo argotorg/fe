@@ -310,26 +310,32 @@ impl<I> AbiDecoder<Sol> for SolDecoder<I>
 {
     type Input = I
 
+    #[inline(always)]
     fn input(self) -> Self::Input {
         self.cur.input
     }
 
+    #[inline(always)]
     fn base(self) -> u256 {
         self.base
     }
 
+    #[inline(always)]
     fn set_base(mut self, _ new_base: u256) {
         self.base = new_base
     }
 
+    #[inline(always)]
     fn pos(self) -> u256 {
         self.cur.pos
     }
 
+    #[inline(always)]
     fn set_pos(mut self, _ new_pos: u256) {
         self.cur.pos = new_pos
     }
 
+    #[inline(always)]
     fn read_u8(mut self) -> u8 {
         let len = self.cur.input.len()
         let new_pos = self.cur.pos + 1
@@ -341,6 +347,7 @@ impl<I> AbiDecoder<Sol> for SolDecoder<I>
         b
     }
 
+    #[inline(always)]
     fn read_word(mut self) -> u256 {
         let len = self.cur.input.len()
         let new_pos = self.cur.pos + 32
@@ -352,6 +359,7 @@ impl<I> AbiDecoder<Sol> for SolDecoder<I>
         w
     }
 
+    #[inline(always)]
     #[arithmetic(unchecked)]
     fn peek_word(self, _ at: u256) -> u256 {
         let len = self.cur.input.len()
@@ -362,6 +370,7 @@ impl<I> AbiDecoder<Sol> for SolDecoder<I>
         self.cur.input.word_at(at)
     }
 
+    #[inline(always)]
     fn alloc(mut self, _ size: u256) -> u256 {
         mem::alloc(size)
     }
@@ -383,28 +392,34 @@ impl SolEncoder {
 }
 
 impl AbiEncoder<Sol> for SolEncoder {
+    #[inline(always)]
     fn base(self) -> u256 {
         self.base
     }
 
+    #[inline(always)]
     fn set_base(mut self, _ new_base: u256) {
         self.base = new_base
     }
 
+    #[inline(always)]
     fn pos(self) -> u256 {
         self.pos
     }
 
+    #[inline(always)]
     fn set_pos(mut self, _ new_pos: u256) {
         self.pos = new_pos
     }
 
+    #[inline(always)]
     #[arithmetic(unchecked)]
     fn write_u8(mut self, _ v: u8) {
         mstore8(addr: self.pos, value: v)
         self.pos = self.pos + 1
     }
 
+    #[inline(always)]
     #[arithmetic(unchecked)]
     fn write_word(mut self, _ v: u256) {
         let p = self.pos
@@ -412,6 +427,7 @@ impl AbiEncoder<Sol> for SolEncoder {
         self.pos = p + 32
     }
 
+    #[inline(always)]
     fn write_word_at(mut self, at: u256, value: u256) {
         mstore(addr: at, value: value)
     }

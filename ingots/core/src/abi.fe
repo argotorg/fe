@@ -177,6 +177,7 @@ pub trait Encode<A: Abi>: AbiSize {
     fn encode_to_ptr(own self, _ ptr: u256)
 }
 
+#[inline(always)]
 pub fn decode_or_revert<A: Abi, T, D>(d: mut D) -> T
     where T: Decode<A>, D: AbiDecoder<A>
 {
@@ -198,10 +199,12 @@ pub const fn abi_single_root_head_size<T: AbiSize>() -> u256 {
     abi_field_head_size<T>()
 }
 
+#[inline(always)]
 pub fn abi_payload_size<T: AbiSize>(_ value: T) -> u256 {
     value.payload_size()
 }
 
+#[inline(always)]
 pub fn abi_field_size<T: AbiSize>(_ value: T) -> u256 {
     let payload_size = value.payload_size()
     if T::IS_DYNAMIC {
@@ -210,6 +213,7 @@ pub fn abi_field_size<T: AbiSize>(_ value: T) -> u256 {
     payload_size
 }
 
+#[inline(always)]
 pub fn abi_single_root_size<T: AbiSize>(_ value: T) -> u256 {
     abi_field_size(value)
 }
@@ -221,6 +225,7 @@ pub fn dynamic_payload_size<T: AbiSize>(_ value: T) -> u256 {
     0
 }
 
+#[inline(always)]
 pub fn decode_payload_root<A: Abi, T, D>(_ d: mut D) -> T
     where T: Decode<A>,
           D: AbiDecoder<A>
@@ -228,6 +233,7 @@ pub fn decode_payload_root<A: Abi, T, D>(_ d: mut D) -> T
     T::decode_payload(d)
 }
 
+#[inline(always)]
 pub fn decode_single_root<A: Abi, T, D>(_ d: mut D) -> T
     where T: Decode<A> + AbiSize,
           D: AbiDecoder<A>
@@ -235,6 +241,7 @@ pub fn decode_single_root<A: Abi, T, D>(_ d: mut D) -> T
     decode_field<A, T, D>(mut d)
 }
 
+#[inline(always)]
 pub fn decode_field<A: Abi, T, D>(_ d: mut D) -> T
     where T: Decode<A> + AbiSize,
           D: AbiDecoder<A>
@@ -262,6 +269,7 @@ fn decode_field_at<A: Abi, T, D>(d: mut D, pos: u256) -> T
     decode_field<A, T, D>(mut d)
 }
 
+#[inline(always)]
 #[arithmetic(unchecked)]
 pub fn encode_root<A: Abi, T, E>(_ value: own T, _ e: mut E)
     where T: Encode<A>, E: AbiEncoder<A>
@@ -276,6 +284,7 @@ pub fn encode_root<A: Abi, T, E>(_ value: own T, _ e: mut E)
     value.encode(mut e)
 }
 
+#[inline(always)]
 #[arithmetic(unchecked)]
 pub fn encode_single_root<A: Abi, T, E>(_ value: own T, _ e: mut E)
     where T: Encode<A> + AbiSize, E: AbiEncoder<A>
@@ -284,6 +293,7 @@ pub fn encode_single_root<A: Abi, T, E>(_ value: own T, _ e: mut E)
     encode_field<A, T, E>(value, mut e, mut tail)
 }
 
+#[inline(always)]
 #[arithmetic(unchecked)]
 pub fn encode_field<A: Abi, T, E>(_ value: own T, _ e: mut E, _ tail: mut u256)
     where T: Encode<A> + AbiSize, E: AbiEncoder<A>
