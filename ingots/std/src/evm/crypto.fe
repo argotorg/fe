@@ -3,7 +3,6 @@
 /// Safe, typed wrappers around EVM precompiles and modular arithmetic opcodes.
 /// Raw memory and call operations should go through the effects system
 /// (RawMem, RawOps, Ctx traits) instead.
-
 use super::ops
 use super::mem
 
@@ -11,8 +10,12 @@ use super::mem
 /// number of bytes. Reverts if the call failed or returndata is too short
 /// (e.g., calling a non-existent precompile address on a non-standard chain).
 fn assert_precompile_ok(_ ok: u256, _ expected_ret_len: u256) {
-    if ok == 0 { ops::revert(offset: 0, len: 0) }
-    if ops::returndatasize() < expected_ret_len { ops::revert(offset: 0, len: 0) }
+    if ok == 0 {
+        ops::revert(offset: 0, len: 0)
+    }
+    if ops::returndatasize() < expected_ret_len {
+        ops::revert(offset: 0, len: 0)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -38,9 +41,7 @@ pub fn keccak256(_ offset: u256, _ len: u256) -> u256 {
     ops::keccak256(offset, len)
 }
 
-/// SHA256 hash of a memory region (precompile 0x02).
-pub fn sha256(_ offset: u256, _ len: u256) -> u256 {
-    let out: u256 = mem::alloc(32)
+fn sha256_to(offset: u256, len: u256, out: u256) -> u256 {
     let ok: u256 = ops::staticcall(
         gas: ops::gas(),
         addr: 2,
@@ -51,6 +52,19 @@ pub fn sha256(_ offset: u256, _ len: u256) -> u256 {
     )
     assert_precompile_ok(ok, 32)
     ops::mload(out)
+}
+
+/// SHA256 hash of a memory region (precompile 0x02).
+pub fn sha256(_ offset: u256, _ len: u256) -> u256 {
+    sha256_to(offset: offset, len: len, out: mem::alloc(32))
+}
+
+/// SHA256 hash of a memory region, writing the 32-byte digest back to `offset`.
+///
+/// Use this only when the input buffer is disposable: the first 32 bytes of
+/// the input region are overwritten by the digest.
+pub fn sha256_inplace(_ offset: u256, _ len: u256) -> u256 {
+    sha256_to(offset: offset, len: len, out: offset)
 }
 
 // ---------------------------------------------------------------------------

@@ -3,7 +3,17 @@
 // bounds check that keeps a runaway write from clobbering adjacent memory.
 
 use std::evm::{Evm, Packed, RawMem}
-use std::evm::packed::{IntoPacked, PackedValue, to_le_word_top, u64_to_le_word}
+use std::evm::packed::{
+    IntoPacked,
+    PackedValue,
+    sha256_bytes48_zero16,
+    sha256_u64le_zero24_word,
+    sha256_words2,
+    to_le_word_top,
+    u64_le_bytes,
+    u64_to_le_word,
+}
+use std::abi::Bytes
 
 // Hashing identical byte layouts via two different chains must yield the same
 // hash. This indirectly checks that LE/BE methods produce the intended byte
@@ -69,7 +79,7 @@ fn test_u16_le_layout() uses (evm: mut Evm, mem: mut RawMem) {
 fn test_bounds_check_panics_on_overflow() uses (evm: mut Evm, mem: mut RawMem) {
     let mut p = Packed::new(bytes: 8)
     p.u64_be(0x0102030405060708)
-    p.u8(0xff)  // this write pushes us to 9 bytes → must panic
+    p.u8(0xff) // this write pushes us to 9 bytes → must panic
     let _: u256 = p.sha256()
 }
 
@@ -111,20 +121,18 @@ fn test_len_tracks_writes() uses (evm: mut Evm, mem: mut RawMem) {
 // heterogeneous payload as a single array literal. Result must match a
 // hand-written builder sequence.
 #[test]
-fn test_from_heterogeneous_matches_builder() uses (evm: mut Evm, mem: mut RawMem) {
+fn test_from_heterogeneous_matches_builder()
+uses (evm: mut Evm, mem: mut RawMem)
+{
     let a: u256 = 0x1234
     let flag: bool = true
     let ts: u64 = 0xaabbccdd
 
-    let via_from: u256 = Packed::from([
-        a.into(),
-        flag.into(),
-        ts.into(),
-    ]).sha256()
+    let via_from: u256 = Packed::from([a.into(), flag.into(), ts.into()]).sha256()
 
     let mut via_builder_p = Packed::new(bytes: 32 + 1 + 8)
     via_builder_p.u256(a)
-    via_builder_p.u8(1)  // bool true → 1
+    via_builder_p.u8(1) // bool true → 1
     via_builder_p.u64_be(ts)
     let via_builder: u256 = via_builder_p.sha256()
 
@@ -139,11 +147,10 @@ fn test_from_with_explicit_variants() uses (evm: mut Evm, mem: mut RawMem) {
     let amount: u64 = 0x01020304
     let sig_root: u256 = 0xabcdef
 
-    let via_from: u256 = Packed::from([
-        PackedValue::U64Le(amount),
-        PackedValue::ZeroBytes(24),
-        sig_root.into(),
-    ]).sha256()
+    let via_from: u256 = Packed::from(
+        [PackedValue::U64Le(amount), PackedValue::ZeroBytes(24), sig_root.into()],
+    )
+        .sha256()
 
     let mut via_builder_p = Packed::new(bytes: 8 + 24 + 32)
     via_builder_p.u64_le(amount)
@@ -152,6 +159,116 @@ fn test_from_with_explicit_variants() uses (evm: mut Evm, mem: mut RawMem) {
     let via_builder: u256 = via_builder_p.sha256()
 
     assert(via_from == via_builder)
+}
+
+#[test]
+fn test_from_u256_pair_matches_builder() uses (evm: mut Evm, mem: mut RawMem) {
+    let left: u256 = 0x1111
+    let right: u256 = 0x2222
+
+    let via_from: u256 = Packed::from([left.into(), right.into()]).sha256()
+
+    let mut via_builder_p = Packed::new(bytes: 64)
+    via_builder_p.u256(left)
+    via_builder_p.u256(right)
+    let via_builder: u256 = via_builder_p.sha256()
+
+    assert(via_from == via_builder)
+}
+
+fn bytes48(hi: u256, lo: u256) -> Bytes uses (mem: mut RawMem) {
+    let data = std::evm::mem::alloc(96)
+    mem.mstore(addr: data, value: 48)
+    mem.mstore(addr: data + 32, value: hi)
+    mem.mstore(addr: data + 64, value: lo)
+    Bytes { data: data, len: 48, size: 96 }
+}
+
+#[test]
+fn test_from_bytes48_zero16_matches_builder()
+uses (evm: mut Evm, mem: mut RawMem)
+{
+    let b = bytes48(
+        hi: 0x0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20,
+        lo: 0x2122232425262728292a2b2c2d2e2f3000000000000000000000000000000000,
+    )
+
+    let via_from: u256 = Packed::from([b.view().into(), PackedValue::ZeroBytes(16)]).sha256()
+
+    let mut via_builder_p = Packed::new(bytes: 64)
+    via_builder_p.append_mem(ptr: b.data + 32, len: 48)
+    via_builder_p.zero_bytes(16)
+    let via_builder: u256 = via_builder_p.sha256()
+
+    assert(via_from == via_builder)
+}
+
+#[test]
+fn test_sha256_words2_matches_builder() uses (evm: mut Evm, mem: mut RawMem) {
+    let left: u256 = 0xaaaa
+    let right: u256 = 0xbbbb
+
+    let via_fast = sha256_words2(left: left, right: right)
+
+    let mut via_builder_p = Packed::new(bytes: 64)
+    via_builder_p.u256(left)
+    via_builder_p.u256(right)
+    let via_builder: u256 = via_builder_p.sha256()
+
+    assert(via_fast == via_builder)
+}
+
+#[test]
+fn test_sha256_u64le_zero24_word_matches_builder()
+uses (evm: mut Evm, mem: mut RawMem)
+{
+    let amount: u64 = 0x0102030405060708
+    let root: u256 = 0xcccc
+
+    let via_fast = sha256_u64le_zero24_word(value: amount, right: root)
+
+    let mut via_builder_p = Packed::new(bytes: 64)
+    via_builder_p.u64_le(amount)
+    via_builder_p.zero_bytes(24)
+    via_builder_p.u256(root)
+    let via_builder: u256 = via_builder_p.sha256()
+
+    assert(via_fast == via_builder)
+}
+
+#[test]
+fn test_sha256_bytes48_zero16_matches_builder()
+uses (evm: mut Evm, mem: mut RawMem)
+{
+    let b = bytes48(
+        hi: 0x0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20,
+        lo: 0x2122232425262728292a2b2c2d2e2f3000000000000000000000000000000000,
+    )
+
+    let via_fast = sha256_bytes48_zero16(b.view())
+
+    let mut via_builder_p = Packed::new(bytes: 64)
+    via_builder_p.append_mem(ptr: b.data + 32, len: 48)
+    via_builder_p.zero_bytes(16)
+    let via_builder: u256 = via_builder_p.sha256()
+
+    assert(via_fast == via_builder)
+}
+
+#[test]
+fn test_u64_le_bytes_matches_packed_as_bytes()
+uses (evm: mut Evm, mem: mut RawMem)
+{
+    let value: u64 = 0x0102030405060708
+    let via_fast = u64_le_bytes(value)
+    let via_packed = Packed::from([PackedValue::U64Le(value)]).as_bytes()
+
+    assert(via_fast.len == via_packed.len)
+    let mut i: u256 = 0
+    while i < via_fast.len {
+        assert(via_fast.byte_at(i) == via_packed.byte_at(i))
+        i += 1
+    }
 }
 
 // The mutable builder should also work as a generic accumulator in loops, not
@@ -179,15 +296,26 @@ fn test_loop_based_word_packing() uses (evm: mut Evm, mem: mut RawMem) {
 // `to_le_word_top` / `u64_to_le_word`).
 #[test]
 fn test_u64_to_le_word_layout() {
-    assert(u64_to_le_word(0x0102030405060708) == 0x0807060504030201000000000000000000000000000000000000000000000000)
+    assert(
+        u64_to_le_word(0x0102030405060708)
+            == 0x0807060504030201000000000000000000000000000000000000000000000000,
+    )
     assert(u64_to_le_word(0) == 0)
-    assert(u64_to_le_word(1) == 0x0100000000000000000000000000000000000000000000000000000000000000)
+    assert(
+        u64_to_le_word(1) == 0x0100000000000000000000000000000000000000000000000000000000000000,
+    )
 }
 
 #[test]
 fn test_to_le_word_top_width() {
     // 2 bytes of 0x1234 in LE = 0x34 0x12 at the top of the word.
-    assert(to_le_word_top(value: 0x1234, len: 2) == 0x3412000000000000000000000000000000000000000000000000000000000000)
+    assert(
+        to_le_word_top(value: 0x1234, len: 2)
+            == 0x3412000000000000000000000000000000000000000000000000000000000000,
+    )
     // 4 bytes of 0x11223344 LE = 0x44 0x33 0x22 0x11 at the top.
-    assert(to_le_word_top(value: 0x11223344, len: 4) == 0x4433221100000000000000000000000000000000000000000000000000000000)
+    assert(
+        to_le_word_top(value: 0x11223344, len: 4)
+            == 0x4433221100000000000000000000000000000000000000000000000000000000,
+    )
 }

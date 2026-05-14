@@ -35,38 +35,33 @@
 ///     never to touch memory past its declared width. A sibling `mstore` of
 ///     the full word would bleed 24 bytes into whatever `mem::alloc` hands
 ///     out next.
-
 use core::abi::{Bytes, BytesView, MemoryInput}
 use core::num::IntDowncast
 use super::crypto
 use super::effects::{Address, assert, RawMem}
 use super::mem
 
-pub struct Packed {
-    base: u256,
-    cursor: u256,
-    limit: u256,
-}
+pub struct Packed { base: u256, cursor: u256, limit: u256 }
 
 /// A typed value together with the byte layout it should take inside a
 /// `Packed` buffer. Use the `IntoPacked` trait on the value side, or construct
 /// variants directly when you need a non-default encoding (little-endian,
 /// explicit zero padding, ...).
 pub enum PackedValue {
-    U256(u256),
-    U128Be(u128),
-    U128Le(u128),
-    U64Be(u64),
-    U64Le(u64),
-    U32Be(u32),
-    U32Le(u32),
-    U16Be(u16),
-    U16Le(u16),
-    U8(u8),
-    Bool(bool),
-    Address(Address),
+    U256(u256,),
+    U128Be(u128,),
+    U128Le(u128,),
+    U64Be(u64,),
+    U64Le(u64,),
+    U32Be(u32,),
+    U32Le(u32,),
+    U16Be(u16,),
+    U16Le(u16,),
+    U8(u8,),
+    Bool(bool,),
+    Address(Address,),
     /// N zero bytes, for explicit padding inside a packed payload.
-    ZeroBytes(u256),
+    ZeroBytes(u256,),
     /// `(ptr, len)` — raw byte slice of `len` bytes starting at memory `ptr`.
     /// Typically constructed via `.into()` on a `BytesView<MemoryInput>`, so
     /// callers write `pubkey.view().into()` and skip manual word extraction.
@@ -79,40 +74,40 @@ impl PackedValue {
     /// Number of bytes this value contributes to a packed buffer.
     pub fn width(own self) -> u256 {
         match self {
-            PackedValue::U256(_) => 32
-            PackedValue::U128Be(_) => 16
-            PackedValue::U128Le(_) => 16
-            PackedValue::U64Be(_) => 8
-            PackedValue::U64Le(_) => 8
-            PackedValue::U32Be(_) => 4
-            PackedValue::U32Le(_) => 4
-            PackedValue::U16Be(_) => 2
-            PackedValue::U16Le(_) => 2
-            PackedValue::U8(_) => 1
-            PackedValue::Bool(_) => 1
-            PackedValue::Address(_) => 20
-            PackedValue::ZeroBytes(n) => n
-            PackedValue::Bytes(_, n) => n
+            PackedValue::U256(_,) => 32,
+            PackedValue::U128Be(_,) => 16,
+            PackedValue::U128Le(_,) => 16,
+            PackedValue::U64Be(_,) => 8,
+            PackedValue::U64Le(_,) => 8,
+            PackedValue::U32Be(_,) => 4,
+            PackedValue::U32Le(_,) => 4,
+            PackedValue::U16Be(_,) => 2,
+            PackedValue::U16Le(_,) => 2,
+            PackedValue::U8(_,) => 1,
+            PackedValue::Bool(_,) => 1,
+            PackedValue::Address(_,) => 20,
+            PackedValue::ZeroBytes(n,) => n,
+            PackedValue::Bytes(_, n) => n,
         }
     }
 
     /// Append this value to the given builder.
     pub fn write_into(own self, _ p: mut Packed) uses (mem: mut RawMem) {
         match self {
-            PackedValue::U256(v) => p.u256(v)
-            PackedValue::U128Be(v) => p.u128_be(v)
-            PackedValue::U128Le(v) => p.u128_le(v)
-            PackedValue::U64Be(v) => p.u64_be(v)
-            PackedValue::U64Le(v) => p.u64_le(v)
-            PackedValue::U32Be(v) => p.u32_be(v)
-            PackedValue::U32Le(v) => p.u32_le(v)
-            PackedValue::U16Be(v) => p.u16_be(v)
-            PackedValue::U16Le(v) => p.u16_le(v)
-            PackedValue::U8(v) => p.u8(v)
-            PackedValue::Bool(v) => p.u8(if v { 1 } else { 0 })
-            PackedValue::Address(a) => p.address(a)
-            PackedValue::ZeroBytes(n) => p.zero_bytes(n)
-            PackedValue::Bytes(ptr, n) => p.append_mem(ptr: ptr, len: n)
+            PackedValue::U256(v,) => p.u256(v),
+            PackedValue::U128Be(v,) => p.u128_be(v),
+            PackedValue::U128Le(v,) => p.u128_le(v),
+            PackedValue::U64Be(v,) => p.u64_be(v),
+            PackedValue::U64Le(v,) => p.u64_le(v),
+            PackedValue::U32Be(v,) => p.u32_be(v),
+            PackedValue::U32Le(v,) => p.u32_le(v),
+            PackedValue::U16Be(v,) => p.u16_be(v),
+            PackedValue::U16Le(v,) => p.u16_le(v),
+            PackedValue::U8(v,) => p.u8(v),
+            PackedValue::Bool(v,) => p.u8(if v { 1 } else { 0 }),
+            PackedValue::Address(a,) => p.address(a),
+            PackedValue::ZeroBytes(n,) => p.zero_bytes(n),
+            PackedValue::Bytes(ptr, n) => p.append_mem(ptr: ptr, len: n),
         }
     }
 }
@@ -126,28 +121,44 @@ pub trait IntoPacked {
 }
 
 impl IntoPacked for u256 {
-    fn into(self) -> PackedValue { PackedValue::U256(self) }
+    fn into(self) -> PackedValue {
+        PackedValue::U256(self)
+    }
 }
 impl IntoPacked for u128 {
-    fn into(self) -> PackedValue { PackedValue::U128Be(self) }
+    fn into(self) -> PackedValue {
+        PackedValue::U128Be(self)
+    }
 }
 impl IntoPacked for u64 {
-    fn into(self) -> PackedValue { PackedValue::U64Be(self) }
+    fn into(self) -> PackedValue {
+        PackedValue::U64Be(self)
+    }
 }
 impl IntoPacked for u32 {
-    fn into(self) -> PackedValue { PackedValue::U32Be(self) }
+    fn into(self) -> PackedValue {
+        PackedValue::U32Be(self)
+    }
 }
 impl IntoPacked for u16 {
-    fn into(self) -> PackedValue { PackedValue::U16Be(self) }
+    fn into(self) -> PackedValue {
+        PackedValue::U16Be(self)
+    }
 }
 impl IntoPacked for u8 {
-    fn into(self) -> PackedValue { PackedValue::U8(self) }
+    fn into(self) -> PackedValue {
+        PackedValue::U8(self)
+    }
 }
 impl IntoPacked for bool {
-    fn into(self) -> PackedValue { PackedValue::Bool(self) }
+    fn into(self) -> PackedValue {
+        PackedValue::Bool(self)
+    }
 }
 impl IntoPacked for Address {
-    fn into(self) -> PackedValue { PackedValue::Address(self) }
+    fn into(self) -> PackedValue {
+        PackedValue::Address(self)
+    }
 }
 impl IntoPacked for BytesView<MemoryInput> {
     fn into(self) -> PackedValue {
@@ -342,7 +353,9 @@ impl Packed {
     ///     PackedValue::U64Le(timestamp),
     /// ]).sha256()
     /// ```
-    pub fn from<const N: usize>(_ items: [PackedValue; N]) -> Self uses (mem: mut RawMem) {
+    pub fn from<const N: usize>(_ items: [PackedValue; N]) -> Self
+    uses (mem: mut RawMem)
+    {
         let mut total: u256 = 0
         let mut i: usize = 0
         while i < N {
@@ -360,7 +373,7 @@ impl Packed {
 
     /// Hash the accumulated byte range with SHA-256 (precompile 0x02).
     pub fn sha256(self) -> u256 {
-        crypto::sha256(self.base, self.len())
+        crypto::sha256_inplace(self.base, self.len())
     }
 
     /// Hash the accumulated byte range with Keccak-256.
@@ -376,7 +389,6 @@ impl Packed {
         self.cursor = next
     }
 }
-
 
 // Write the low `width` bytes of `value` at `at`, big-endian: the most
 // significant byte lands at `at`, the least at `at + width - 1`.
@@ -423,4 +435,42 @@ pub fn to_le_word_top(value: u256, len: u256) -> u256 {
 /// beacon-chain deposit contract.
 pub fn u64_to_le_word(_ value: u64) -> u256 {
     to_le_word_top(value: value as u256, len: 8)
+}
+
+/// Build a Solidity-compatible `bytes memory` containing one little-endian u64.
+pub fn u64_le_bytes(_ value: u64) -> Bytes uses (mem: mut RawMem) {
+    let out: u256 = mem::alloc(64)
+    mem.mstore(addr: out, value: 8)
+    mem.mstore(addr: out + 32, value: u64_to_le_word(value))
+    Bytes { data: out, len: 8, size: 64 }
+}
+
+/// Hash two full words as `abi.encodePacked(left, right)`.
+pub fn sha256_words2(left: u256, right: u256) -> u256 uses (mem: mut RawMem) {
+    let ptr = mem::alloc(64)
+    mem.mstore(addr: ptr, value: left)
+    mem.mstore(addr: ptr + 32, value: right)
+    crypto::sha256_inplace(ptr, 64)
+}
+
+/// Hash `to_little_endian_64(value) || bytes24(0) || right`.
+pub fn sha256_u64le_zero24_word(value: u64, right: u256) -> u256
+uses (mem: mut RawMem)
+{
+    let ptr = mem::alloc(64)
+    mem.mstore(addr: ptr, value: u64_to_le_word(value))
+    mem.mstore(addr: ptr + 32, value: right)
+    crypto::sha256_inplace(ptr, 64)
+}
+
+/// Hash a 48-byte memory view followed by 16 zero bytes.
+pub fn sha256_bytes48_zero16(_ view: BytesView<MemoryInput>) -> u256
+uses (mem: mut RawMem)
+{
+    assert(view.len == 48)
+    let ptr = mem::alloc(64)
+    mem.mstore(addr: ptr, value: mem.mload(view.input.base + view.start))
+    let tail = mem.mload(view.input.base + view.start + 32)
+    mem.mstore(addr: ptr + 32, value: (tail >> 128) << 128)
+    crypto::sha256_inplace(ptr, 64)
 }
