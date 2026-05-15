@@ -20,6 +20,7 @@ use crate::{
     },
     span::HirOrigin,
 };
+pub use abi_struct::{AbiStructError, AbiStructErrorKind};
 pub use arithmetic::{ArithmeticAttrError, ArithmeticAttrErrorKind};
 pub use error::{ErrorDiagnostic, ErrorDiagnosticKind};
 pub use event::{EventError, EventErrorKind};
@@ -30,6 +31,7 @@ pub use stmt::LoopUnrollAttrError;
 
 pub(crate) mod parse;
 
+mod abi_struct;
 mod arithmetic;
 mod attr;
 mod body;

@@ -1,4 +1,4 @@
-use crate::core::hir_def::{IdentId, Trait, scope_graph::ScopeId};
+use crate::core::hir_def::{HirIngot, IdentId, Trait, scope_graph::ScopeId};
 use common::indexmap::{IndexMap, IndexSet};
 use rustc_hash::FxHashSet;
 use thin_vec::ThinVec;
@@ -168,12 +168,24 @@ impl<'db, 'a> CandidateAssembler<'db, 'a> {
         let receiver_is_ty_param = receiver_is_ty_param_like(self.db, self.receiver.original());
 
         if !receiver_is_ty_param {
+            // The scope ingot's trait env already includes impls from all its
+            // transitive dependencies (resolved_external_ingots). Only search
+            // the receiver type's ingot separately if it is NOT already covered
+            // by the scope ingot's dependency tree. Otherwise the same impl
+            // can appear twice (once from each ingot's trait env), causing
+            // spurious "multiple trait candidates" errors.
+            let receiver_ingot = self.receiver.original().ingot(self.db);
+            let receiver_ingot_is_scope_dep = receiver_ingot.is_some_and(|recv_ingot| {
+                recv_ingot == scope_ingot
+                    || scope_ingot
+                        .resolved_external_ingots(self.db)
+                        .iter()
+                        .any(|(_, dep)| *dep == recv_ingot)
+            });
+
             let search_ingots = [
                 Some(scope_ingot),
-                self.receiver
-                    .original()
-                    .ingot(self.db)
-                    .filter(|&ingot| ingot != scope_ingot),
+                receiver_ingot.filter(|_| !receiver_ingot_is_scope_dep),
             ];
             for ingot in search_ingots.into_iter().flatten() {
                 for &imp in impls_for_ty(self.db, ingot, self.receiver.canonical()) {

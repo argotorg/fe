@@ -712,6 +712,49 @@ impl DiagnosticVoucher for crate::ErrorDiagnostic {
     }
 }
 
+impl DiagnosticVoucher for crate::AbiStructError {
+    fn to_complete(&self, _db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
+        use crate::AbiStructErrorKind;
+
+        let primary_span = Span::new(self.file, self.primary_range, SpanKind::Original);
+
+        let (code, message, label, notes) = match &self.kind {
+            AbiStructErrorKind::AbiAttrOnNonStruct { item_kind } => (
+                1,
+                format!("`#[abi]` is only valid on structs (found on {item_kind})"),
+                "`#[abi]` must be placed on a `struct` item".to_string(),
+                vec!["move `#[abi]` to a struct declaration".to_string()],
+            ),
+            AbiStructErrorKind::InvalidAbiAttrForm => (
+                2,
+                "invalid `#[abi]` attribute form".to_string(),
+                "expected `#[abi]` without arguments".to_string(),
+                vec!["remove arguments and use `#[abi]`".to_string()],
+            ),
+            AbiStructErrorKind::GenericAbiStruct => (
+                3,
+                "`#[abi]` structs must be non-generic".to_string(),
+                "generics are not supported on `#[abi]` structs".to_string(),
+                vec!["remove generic parameters from the abi struct".to_string()],
+            ),
+        };
+
+        let error_code = GlobalErrorCode::new(DiagnosticPass::AbiStructLower, code);
+
+        CompleteDiagnostic::new(
+            Severity::Error,
+            message,
+            vec![SubDiagnostic::new(
+                LabelStyle::Primary,
+                label,
+                Some(primary_span),
+            )],
+            notes,
+            error_code,
+        )
+    }
+}
+
 impl DiagnosticVoucher for crate::InlineAttrError {
     fn to_complete(&self, _db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
         use crate::hir_def::InlineAttrErrorKind;

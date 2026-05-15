@@ -241,6 +241,8 @@ pub enum DesugaredOrigin {
     Event(EventDesugared),
     /// The HIR node is the result of desugaring a `#[error]` struct.
     Error(ErrorDesugared),
+    /// The HIR node is the result of desugaring a `#[abi]` struct.
+    AbiStruct(AbiStructDesugared),
 }
 
 /// Tracks the origin of HIR nodes desugared from a `msg` block.
@@ -278,6 +280,13 @@ pub struct EventDesugared {
 pub struct ErrorDesugared {
     /// The original `struct` AST node annotated with `#[error]`.
     pub error_struct: AstPtr<ast::Struct>,
+}
+
+/// Tracks the origin of HIR nodes desugared from an `#[abi]` struct.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AbiStructDesugared {
+    /// The original `struct` AST node annotated with `#[abi]`.
+    pub abi_struct: AstPtr<ast::Struct>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

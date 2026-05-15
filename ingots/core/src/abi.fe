@@ -411,7 +411,7 @@ fn packed_string_len(_ word: u256) -> u256 {
 ///
 /// `BytesView<CallData>` is a bound zero-copy view over calldata.
 /// `BytesView` (= `BytesView<()>`) is an unbound position.
-pub struct BytesView<I = ()> {
+pub struct BytesView<I> {
     pub input: I,
     pub start: u256,
     pub len: u256,
@@ -420,6 +420,13 @@ pub struct BytesView<I = ()> {
 impl<I> Copy for BytesView<I>
     where I: Copy
 {}
+
+impl<I> BytesView<I> {
+    /// Construct a BytesView with the given input, start offset, and length.
+    fn from_parts(input: I, start: u256, len: u256) -> Self {
+        BytesView { input, start, len }
+    }
+}
 
 impl<I> BytesView<I>
     where I: ByteInput
@@ -443,24 +450,39 @@ impl<I> BytesView<I>
     }
 }
 
-impl BytesView {
+impl BytesView<()> {
+    pub fn len(self) -> u256 {
+        self.len
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.len == 0
+    }
+
     /// Bind a byte source to produce a bound `BytesView` with byte access.
     pub fn over<I: ByteInput>(self, _ input: I) -> BytesView<I> {
-        BytesView { input, start: self.start, len: self.len }
+        BytesView<I>::from_parts(input, self.start, self.len)
     }
 }
 
 /// A zero-copy view over a `string` payload in ABI-encoded data.
 ///
-/// When `I` defaults to `()`, the view is *unbound*. Call `.over(input)`
-/// to bind a byte source for character access.
-pub struct StringView<I = ()> {
+/// `StringView<()>` is an unbound position — call `.over(input)` to bind a
+/// byte source for character access.
+pub struct StringView<I> {
     pub bytes: BytesView<I>,
 }
 
 impl<I> Copy for StringView<I>
     where I: Copy
 {}
+
+impl<I> StringView<I> {
+    /// Construct a StringView from a BytesView.
+    fn from_bytes(bytes: BytesView<I>) -> Self {
+        StringView { bytes }
+    }
+}
 
 impl<I> StringView<I>
     where I: ByteInput
@@ -482,10 +504,18 @@ impl<I> StringView<I>
     }
 }
 
-impl StringView {
+impl StringView<()> {
+    pub fn len(self) -> u256 {
+        self.bytes.len
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.bytes.len == 0
+    }
+
     /// Bind a byte source to produce a bound `StringView` with character access.
     pub fn over<I: ByteInput>(self, _ input: I) -> StringView<I> {
-        StringView { bytes: self.bytes.over(input) }
+        StringView<I>::from_bytes(self.bytes.over(input))
     }
 }
 
@@ -510,6 +540,13 @@ impl<T, const N: usize, I> Copy for ArrayView<T, N, I>
     where I: Copy
 {}
 
+impl<T, const N: usize, I> ArrayView<T, N, I> {
+    /// Construct an ArrayView with the given input and start offset.
+    fn from_parts(input: I, start: u256) -> Self {
+        ArrayView { input, start }
+    }
+}
+
 impl<T, const N: usize, I> ArrayView<T, N, I>
     where T: AbiSize, I: ByteInput
 {
@@ -531,7 +568,7 @@ impl<T, const N: usize> ArrayView<T, N>
 {
     /// Bind a byte source to produce a bound `ArrayView` with element access.
     pub fn over<I: ByteInput>(self, _ input: I) -> ArrayView<T, N, I> {
-        ArrayView { input, start: self.start }
+        ArrayView<T, N, I>::from_parts(input, self.start)
     }
 }
 
@@ -542,7 +579,7 @@ impl<T, const N: usize, I> AbiSize for ArrayView<T, N, I>
     const IS_DYNAMIC: bool = T::IS_DYNAMIC
 }
 
-impl AbiSize for BytesView {
+impl AbiSize for BytesView<()> {
     const HEAD_SIZE: u256 = 32
     const IS_DYNAMIC: bool = true
 
@@ -551,7 +588,7 @@ impl AbiSize for BytesView {
     }
 }
 
-impl AbiSize for StringView {
+impl AbiSize for StringView<()> {
     const HEAD_SIZE: u256 = 32
     const IS_DYNAMIC: bool = true
 
@@ -596,9 +633,7 @@ impl DynString {
     }
 
     pub fn view(self) -> StringView<MemoryInput> {
-        StringView {
-            bytes: self.as_bytes().view(),
-        }
+        StringView<MemoryInput>::from_bytes(self.as_bytes().view())
     }
 
     pub fn byte_at(self, _ index: u256) -> u8 {
@@ -646,11 +681,7 @@ impl Bytes {
             base: self.data + 32,
             len: self.len,
         }
-        BytesView {
-            input,
-            start: 0,
-            len: self.len,
-        }
+        BytesView<MemoryInput>::from_parts(input, 0, self.len)
     }
 
     pub fn byte_at(self, _ index: u256) -> u8 {
@@ -784,13 +815,6 @@ impl<T, const N: usize> AbiSize for [T; N]
         }
         total
     }
-}
-
-impl<T, const N: usize, I> AbiSize for ArrayView<T, N, I>
-    where T: AbiSize
-{
-    const HEAD_SIZE: u256 = (N as u256) * abi_field_head_size<T>()
-    const IS_DYNAMIC: bool = T::IS_DYNAMIC
 }
 
 impl AbiSize for bool {
@@ -2656,25 +2680,25 @@ impl<A: Abi, T, const N: usize> Encode<A> for ArrayView<T, N>
 /// Decode an unbound BytesView: reads the length word and records the data
 /// position, then advances past the padded payload. Zero memory allocation.
 /// Use `.over(input)` to bind a byte source for byte access.
-impl<A: Abi> Decode<A> for BytesView {
+impl<A: Abi> Decode<A> for BytesView<()> {
     #[arithmetic(unchecked)]
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         let data_len = d.read_word()
         let data_start = d.pos()
         let padded = round_up_words(data_len)
         d.set_pos(data_start + padded)
-        BytesView { input: (), start: data_start, len: data_len }
+        BytesView<()>::from_parts((), data_start, data_len)
     }
 }
 
-impl<A: Abi> AbiSpan<A> for BytesView {
+impl<A: Abi> AbiSpan<A> for BytesView<()> {
     fn payload_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
         let data_len = input.word_at(pos)
         pos + 32 + round_up_words(data_len)
     }
 }
 
-impl<A: Abi> Encode<A> for BytesView {
+impl<A: Abi> Encode<A> for BytesView<()> {
     const DIRECT_ENCODE: bool = false
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
@@ -2687,20 +2711,20 @@ impl<A: Abi> Encode<A> for BytesView {
 }
 
 /// Decode an unbound StringView: same zero-copy strategy as BytesView.
-impl<A: Abi> Decode<A> for StringView {
+impl<A: Abi> Decode<A> for StringView<()> {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
-        StringView { bytes: BytesView::decode_payload(d) }
+        StringView<()>::from_bytes(BytesView<()>::decode_payload(d))
     }
 }
 
-impl<A: Abi> AbiSpan<A> for StringView {
+impl<A: Abi> AbiSpan<A> for StringView<()> {
     fn payload_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
         let data_len = input.word_at(pos)
         pos + 32 + round_up_words(data_len)
     }
 }
 
-impl<A: Abi> Encode<A> for StringView {
+impl<A: Abi> Encode<A> for StringView<()> {
     const DIRECT_ENCODE: bool = false
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {

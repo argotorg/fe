@@ -187,6 +187,7 @@ pub enum DiagnosticPass {
     MsgLower,
     EventLower,
     ErrorLower,
+    AbiStructLower,
     ArithmeticAttr,
     PayableAttr,
 
@@ -215,6 +216,7 @@ impl DiagnosticPass {
             Self::MsgLower => 9,
             Self::EventLower => 10,
             Self::ErrorLower => 16,
+            Self::AbiStructLower => 17,
             Self::ArithmeticAttr => 12,
             Self::PayableAttr => 13,
             Self::InlineAttr => 14,
