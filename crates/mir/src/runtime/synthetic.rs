@@ -269,7 +269,9 @@ impl<'db> SyntheticBodyBuilder<'db> {
             locals: Vec::new(),
             blocks: vec![RBlock {
                 stmts: Vec::new(),
+                stmt_sources: Vec::new(),
                 terminator: RTerminator::Stop,
+                terminator_source: common::source_ord::SourceOrd::default(),
             }],
         }
     }
@@ -284,6 +286,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
             provider_bindings: Vec::new(),
             locals: self.locals,
             blocks: self.blocks,
+            source_table: common::source_ord::FunctionSourceTable::new(),
         }
     }
 
@@ -1435,13 +1438,18 @@ impl<'db> SyntheticBodyBuilder<'db> {
 
     fn push_stmt(&mut self, bb: RBlockId, stmt: RStmt<'db>) {
         self.blocks[bb.index()].stmts.push(stmt);
+        self.blocks[bb.index()]
+            .stmt_sources
+            .push(common::source_ord::SourceOrd::default());
     }
 
     fn new_block(&mut self) -> RBlockId {
         let id = RBlockId::from_u32(self.blocks.len() as u32);
         self.blocks.push(RBlock {
             stmts: Vec::new(),
+            stmt_sources: Vec::new(),
             terminator: RTerminator::Trap,
+            terminator_source: common::source_ord::SourceOrd::default(),
         });
         id
     }
