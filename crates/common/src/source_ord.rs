@@ -18,8 +18,16 @@ pub fn byte_offset_to_line_col(text: &str, offset: u32) -> (u32, u32) {
     (line, col)
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Update)]
 pub struct SourceOrd(u32);
+
+const SOURCE_ORD_NONE: u32 = u32::MAX;
+
+impl Default for SourceOrd {
+    fn default() -> Self {
+        Self(SOURCE_ORD_NONE)
+    }
+}
 
 impl SourceOrd {
     pub fn new(index: u32) -> Self {
@@ -27,11 +35,19 @@ impl SourceOrd {
     }
 
     pub fn is_default(self) -> bool {
-        self == Self::default()
+        self.0 == SOURCE_ORD_NONE
     }
 
     pub fn index(self) -> u32 {
         self.0
+    }
+
+    pub fn as_raw(self) -> u32 {
+        self.0
+    }
+
+    pub fn from_raw(raw: u32) -> Self {
+        Self(raw)
     }
 }
 
@@ -76,6 +92,9 @@ impl FunctionSourceTable {
     }
 
     pub fn get(&self, ord: SourceOrd) -> Option<&SourceEntry> {
+        if ord.is_default() {
+            return None;
+        }
         self.entries.get(ord.index() as usize)
     }
 
