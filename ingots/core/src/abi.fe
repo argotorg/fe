@@ -496,6 +496,30 @@ impl<T, const N: usize, I> ArrayView<T, N, I>
     }
 }
 
+/// A decoded array position without a bound byte source.
+/// Created by the ABI decoder when it skips past a fixed-size array.
+/// Call `with_input()` to bind a byte source and get an ArrayView.
+pub struct SkippedArray<T, const N: usize> {
+    pub start: u256,
+}
+
+impl<T, const N: usize> Copy for SkippedArray<T, N> {}
+
+impl<T, const N: usize> SkippedArray<T, N>
+    where T: AbiSize
+{
+    pub fn with_input<I: ByteInput>(self, _ input: I) -> ArrayView<T, N, I> {
+        ArrayView { input, start: self.start }
+    }
+}
+
+impl<T, const N: usize> AbiSize for SkippedArray<T, N>
+    where T: AbiSize
+{
+    const HEAD_SIZE: u256 = (N as u256) * abi_field_head_size<T>()
+    const IS_DYNAMIC: bool = T::IS_DYNAMIC
+}
+
 /// Owned handle to a Solidity ABI `string` payload stored in linear memory.
 ///
 /// `data` points at the ABI tail payload: the length word followed by packed
@@ -2551,23 +2575,23 @@ impl<A: Abi, T, const N: usize> Encode<A> for [T; N]
     }
 }
 
-/// Decode an ArrayView: captures the decoder's input source and cursor
-/// position, then advances the cursor past the entire array. Zero copy —
-/// elements are read on demand via `view.get(index)`.
-impl<A: Abi, T, const N: usize, I> Decode<A> for ArrayView<T, N, I>
-    where T: AbiSize, I: ByteInput
+/// Decode a SkippedArray: captures the cursor position and advances past
+/// the array without copying any elements. Zero cost at decode time.
+/// Use `with_input()` to bind a byte source for element access.
+impl<A: Abi, T, const N: usize> Decode<A> for SkippedArray<T, N>
+    where T: AbiSize
 {
     #[arithmetic(unchecked)]
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         let start = d.pos()
         let total_bytes = (N as u256) * abi_field_head_size<T>()
         d.set_pos(start + total_bytes)
-        ArrayView { input: d.input(), start }
+        SkippedArray { start }
     }
 }
 
-impl<A: Abi, T, const N: usize, I> AbiSpan<A> for ArrayView<T, N, I>
-    where T: AbiSize, I: ByteInput
+impl<A: Abi, T, const N: usize> AbiSpan<A> for SkippedArray<T, N>
+    where T: AbiSize
 {
     fn payload_end<I2: ByteInput>(_ input: I2, base: u256, pos: u256) -> u256 {
         let _ = base
@@ -2575,8 +2599,8 @@ impl<A: Abi, T, const N: usize, I> AbiSpan<A> for ArrayView<T, N, I>
     }
 }
 
-impl<A: Abi, T, const N: usize, I> Encode<A> for ArrayView<T, N, I>
-    where T: AbiSize, I: ByteInput
+impl<A: Abi, T, const N: usize> Encode<A> for SkippedArray<T, N>
+    where T: AbiSize
 {
     const DIRECT_ENCODE: bool = false
 
