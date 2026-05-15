@@ -3174,8 +3174,11 @@ pub contract DecodeHarness {
         let projected_fields = match raw_plan.input {
             RuntimeInputPlan::DirectCalldataLoad {
                 projected_fields, ..
-            } => projected_fields,
-            RuntimeInputPlan::DecodeCalldataPayload {
+            }
+            | RuntimeInputPlan::LazyCalldataLoad {
+                projected_fields, ..
+            }
+            | RuntimeInputPlan::DecodeCalldataPayload {
                 projected_fields, ..
             } => projected_fields,
             RuntimeInputPlan::None => panic!("raw(uint256) should have input plan"),
@@ -3189,8 +3192,11 @@ pub contract DecodeHarness {
         let projected_fields = match swap_plan.input {
             RuntimeInputPlan::DirectCalldataLoad {
                 projected_fields, ..
-            } => projected_fields,
-            RuntimeInputPlan::DecodeCalldataPayload {
+            }
+            | RuntimeInputPlan::LazyCalldataLoad {
+                projected_fields, ..
+            }
+            | RuntimeInputPlan::DecodeCalldataPayload {
                 projected_fields, ..
             } => projected_fields,
             RuntimeInputPlan::None => panic!("swap(uint64,uint64) should have input plan"),

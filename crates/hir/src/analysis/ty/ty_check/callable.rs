@@ -788,5 +788,65 @@ impl<'db> Callable<'db> {
                     span: span.clone(),
                 });
         }
+
+        // Check where-clause const predicates.
+        self.check_const_predicates(tc, span);
+    }
+
+    /// Evaluate where-clause const predicates with the call's concrete generic
+    /// args. If any predicate evaluates to `false`, push a diagnostic.
+    fn check_const_predicates(&self, tc: &mut TyChecker<'db>, span: DynLazySpan<'db>) {
+        use crate::analysis::semantic::{SemConstScalar, SemConstValue, eval_body_owner_const};
+        use crate::hir_def::{CallableDef, WhereClauseOwner};
+
+        let db = tc.db;
+        let func = match self.callable_def {
+            CallableDef::Func(f) => f,
+            CallableDef::VariantCtor(_) => return,
+        };
+
+        let where_clause = WhereClauseOwner::Func(func).where_clause(db);
+        let const_preds = where_clause.const_predicates(db);
+        if const_preds.is_empty() {
+            return;
+        }
+
+        // Skip evaluation if any generic arg still contains inference variables.
+        if self
+            .generic_args
+            .iter()
+            .any(|ty| collect_flags(db, *ty).contains(TyFlags::HAS_VAR))
+        {
+            return;
+        }
+
+        let bool_ty = TyId::bool(db);
+        for body in const_preds {
+            let owner = BodyOwner::AnonConstBody {
+                body: *body,
+                expected: bool_ty,
+            };
+            match eval_body_owner_const(db, owner, self.generic_args.clone()) {
+                Ok(value) => {
+                    let is_false = matches!(
+                        value.value(db),
+                        SemConstValue::Scalar {
+                            value: SemConstScalar::Bool(false),
+                            ..
+                        }
+                    );
+                    if is_false {
+                        tc.push_diag(BodyDiag::WhereConstPredicateFailed {
+                            primary: span.clone(),
+                        });
+                    }
+                }
+                Err(_) => {
+                    // CTFE evaluation failed -- silently skip for the prototype.
+                    // In a production implementation, we'd emit a more specific
+                    // diagnostic here.
+                }
+            }
+        }
     }
 }

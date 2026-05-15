@@ -1,0 +1,20 @@
+fn good<T>() where T: Add, { true }
+{
+}
+
+fn bad<T>() where T: Add, { false }
+{
+}
+
+trait Add {}
+
+struct Foo {}
+impl Add for Foo {}
+
+fn call_good() {
+    good<Foo>()
+}
+
+fn call_bad() {
+    bad<Foo>()
+}

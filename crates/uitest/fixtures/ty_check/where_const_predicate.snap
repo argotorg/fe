@@ -1,0 +1,11 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/where_const_predicate.fe
+---
+error[8-0082]: where clause const predicate failed
+   ┌─ where_const_predicate.fe:19:5
+   │
+19 │     bad<Foo>()
+   │     ^^^^^^^^ const predicate evaluated to `false`

@@ -1,0 +1,25 @@
+trait Sized {
+    const SIZE: u256
+}
+
+struct Small {}
+impl Sized for Small {
+    const SIZE: u256 = 1
+}
+
+struct Big {}
+impl Sized for Big {
+    const SIZE: u256 = 100
+}
+
+fn needs_big<T>() where T: Sized, { T::SIZE >= 50 }
+{
+}
+
+fn ok_call() {
+    needs_big<Big>()
+}
+
+fn bad_call() {
+    needs_big<Small>()
+}

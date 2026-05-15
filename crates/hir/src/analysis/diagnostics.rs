@@ -3045,6 +3045,18 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
 
+            Self::WhereConstPredicateFailed { primary } => CompleteDiagnostic {
+                severity,
+                message: "where clause const predicate failed".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "const predicate evaluated to `false`".to_string(),
+                    span: primary.resolve(db),
+                }],
+                notes: Vec::new(),
+                error_code,
+            },
+
             Self::InvalidCast {
                 primary,
                 from,
