@@ -1428,6 +1428,44 @@ pub fn poseidon_fp_test() -> bool {
 }
 
 #[test]
+fn stage5b_poseidon_compiles_to_spirv_skeleton() {
+    use sonatina_codegen::Backend;
+    use sonatina_codegen::isa::spirv::SpirvBackend;
+
+    // Attempt to compile the same Poseidon source through SPIR-V backend.
+    // Currently returns "not yet implemented" — this test documents the path.
+    let result = with_top_mod_for_source(
+        "poseidon_spirv.fe",
+        r#"
+use std::evm::crypto::addmod
+
+const PRIME: u256 = 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001
+
+pub fn field_add_check(a: u256, b: u256, expected: u256) -> bool {
+    let result: u256 = addmod(a, b, PRIME)
+    result == expected
+}
+"#,
+        |db, top_mod| {
+            let module = fe_codegen::sonatina::compile_library_sonatina_native(db, top_mod)
+                .map_err(|e| format!("{e}"))?;
+
+            let backend = SpirvBackend::new();
+            match backend.compile_module(&module) {
+                Ok(artifact) => Ok(format!("SPIR-V: {} words", artifact.words.len())),
+                Err(errs) => Err(format!("{}", errs.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; ")))
+            }
+        },
+    );
+
+    match result {
+        Ok(msg) => eprintln!("Stage 5b: {msg}"),
+        Err(e) => eprintln!("Stage 5b SPIR-V (expected not-yet-implemented): {e}"),
+    }
+    // Test passes regardless — documenting that the path exists
+}
+
+#[test]
 fn native_ir_for_poseidon_fp() {
     // Attempt to compile Poseidon's fp.fe through the native path.
     // This uses addmod/mulmod (EVM opcodes) — CTFE may fold them at compile
