@@ -62,6 +62,29 @@ impl DispatchStrategy {
     }
 }
 
+/// Storage provider trait for non-EVM targets.
+/// EVM has built-in SLOAD/SSTORE. Other targets need an explicit provider.
+pub trait StorageProvider {
+    fn sload(&self, key: [u8; 32]) -> [u8; 32];
+    fn sstore(&mut self, key: [u8; 32], value: [u8; 32]);
+}
+
+/// In-memory storage for testing non-EVM contract execution.
+#[derive(Default)]
+pub struct InMemoryStorage {
+    slots: std::collections::HashMap<[u8; 32], [u8; 32]>,
+}
+
+impl StorageProvider for InMemoryStorage {
+    fn sload(&self, key: [u8; 32]) -> [u8; 32] {
+        self.slots.get(&key).copied().unwrap_or([0u8; 32])
+    }
+
+    fn sstore(&mut self, key: [u8; 32], value: [u8; 32]) {
+        self.slots.insert(key, value);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -81,5 +104,19 @@ mod tests {
         let native = DispatchStrategy::native();
         assert!(!native.needs_synthetic_root());
         assert!(native.exports_recv_arms_directly());
+    }
+
+    #[test]
+    fn in_memory_storage_round_trip() {
+        let mut storage = InMemoryStorage::default();
+        let key = [1u8; 32];
+        let value = [42u8; 32];
+
+        assert_eq!(storage.sload(key), [0u8; 32]);
+        storage.sstore(key, value);
+        assert_eq!(storage.sload(key), value);
+
+        let key2 = [2u8; 32];
+        assert_eq!(storage.sload(key2), [0u8; 32]);
     }
 }
