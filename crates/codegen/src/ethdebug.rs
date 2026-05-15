@@ -1,7 +1,6 @@
-use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use sonatina_codegen::object::{FrontendProvenanceMap, ObjectArtifact, PcMapEntry};
+use sonatina_codegen::object::{FrontendProvenanceMap, ObjectArtifact};
 
 #[derive(Debug, Clone)]
 pub struct EthdebugInfo {
@@ -133,7 +132,7 @@ impl EthdebugBuilder {
                     name: v.clone(), type_kind: "uint".to_string(), type_bits: Some(8),
                 }).collect(),
             ),
-            FeTypeDesc::Array { elem, len } => (
+            FeTypeDesc::Array { elem: _, len } => (
                 len.map_or("Array".to_string(), |n| format!("Array[{n}]")),
                 "array".to_string(),
                 None,
