@@ -1202,6 +1202,88 @@ pub fn answer() -> u64 {
     eprintln!("Cross-target test passed: same Fe source compiled to both EVM IR and native, native returned {native_result}");
 }
 
+#[cfg(feature = "cranelift")]
+#[test]
+fn poseidon_style_addmod_via_ctfe_jit_execution() {
+    use sonatina_codegen::Backend;
+    use sonatina_codegen::isa::cranelift::CraneliftBackend;
+
+    // Poseidon-style: addmod with constant inputs. Returns bool (native type)
+    // so Cranelift can execute it. CTFE folds the u256 addmod at compile time.
+    let result = with_top_mod_for_source(
+        "poseidon_ctfe.fe",
+        r#"
+pub fn poseidon_check() -> bool {
+    let p: u256 = 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001
+    let a: u256 = 42
+    let b: u256 = 17
+    let result: u256 = std::evm::crypto::addmod(a, b, p)
+    result == 59
+}
+"#,
+        |db, top_mod| {
+            let package = mir::build_runtime_package(db, top_mod).unwrap();
+            let module = fe_codegen::sonatina::compile_runtime_package_sonatina_native(
+                db, &package, fe_codegen::EVM_LAYOUT,
+            ).unwrap();
+
+            let backend = CraneliftBackend::new();
+            let artifact = backend.compile_module(&module).unwrap();
+            let f: fn() -> bool = unsafe {
+                let ptr = artifact.get_func_ptr::<fn() -> bool>("poseidon_check").unwrap();
+                std::mem::transmute(ptr)
+            };
+            f()
+        },
+    );
+
+    assert!(result, "Poseidon-style addmod(42, 17, BN254_PRIME) == 59 should be true");
+}
+
+#[cfg(feature = "wasm")]
+#[test]
+fn poseidon_style_addmod_compiles_to_wasm() {
+    use sonatina_codegen::Backend;
+    use sonatina_codegen::isa::wasm::WasmBackend;
+
+    // Same Poseidon-style function, compiled to WASM
+    let artifact = with_top_mod_for_source(
+        "poseidon_wasm.fe",
+        r#"
+pub fn poseidon_check() -> bool {
+    let p: u256 = 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001
+    let a: u256 = 42
+    let b: u256 = 17
+    let result: u256 = std::evm::crypto::addmod(a, b, p)
+    result == 59
+}
+"#,
+        |db, top_mod| {
+            let package = mir::build_runtime_package(db, top_mod).unwrap();
+            let module = fe_codegen::sonatina::compile_runtime_package_sonatina_native(
+                db, &package, fe_codegen::EVM_LAYOUT,
+            ).unwrap();
+
+            let backend = WasmBackend::new();
+            backend.compile_module(&module)
+        },
+    );
+
+    let artifact = artifact.expect("WASM compilation should succeed");
+    assert!(!artifact.bytes.is_empty(), "WASM output should not be empty");
+    assert!(
+        artifact.func_names.contains(&"poseidon_check".to_string()),
+        "WASM should export poseidon_check function"
+    );
+
+    // Verify WASM magic number (0x00 0x61 0x73 0x6D = "\0asm")
+    assert_eq!(&artifact.bytes[0..4], b"\0asm", "should be valid WASM binary");
+    eprintln!(
+        "Poseidon-style function compiled to {} bytes of WASM",
+        artifact.bytes.len()
+    );
+}
+
 #[test]
 fn native_ir_for_poseidon_fp() {
     // Attempt to compile Poseidon's fp.fe through the native path.

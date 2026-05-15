@@ -5,6 +5,7 @@ edition.workspace = true
 
 [features]
 cranelift = ["sonatina-codegen/cranelift"]
+wasm = ["sonatina-codegen/wasm"]
 
 [dependencies]
 driver = { path = "../driver", package = "fe-driver" }
