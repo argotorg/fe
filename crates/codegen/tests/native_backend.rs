@@ -276,6 +276,51 @@ pub fn field_add_check(a: u256, b: u256, expected: u256) -> bool {
     }
 }
 
+#[cfg(feature = "wasm")]
+#[test]
+fn stage5_poseidon_addmod_variable_inputs_wasm() {
+    use sonatina_codegen::Backend;
+    use sonatina_codegen::isa::wasm::WasmBackend;
+
+    let result: Result<sonatina_codegen::isa::wasm::WasmArtifact, String> =
+        with_top_mod_for_source(
+            "poseidon_wasm_runtime.fe",
+            r#"
+use std::evm::crypto::addmod
+
+const PRIME: u256 = 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001
+
+pub fn field_add_check(a: u256, b: u256, expected: u256) -> bool {
+    let result: u256 = addmod(a, b, PRIME)
+    result == expected
+}
+"#,
+            |db, top_mod| {
+                let module = fe_codegen::sonatina::compile_library_sonatina_native(db, top_mod)
+                    .map_err(|e| format!("{e}"))?;
+
+                let backend = WasmBackend::new();
+                backend
+                    .compile_module(&module)
+                    .map_err(|e| format!("{e:?}"))
+            },
+        );
+
+    let artifact = result.expect("Poseidon WASM compilation should succeed");
+    assert!(!artifact.bytes.is_empty(), "WASM output should not be empty");
+    assert_eq!(&artifact.bytes[0..4], b"\0asm", "should be valid WASM magic");
+    assert!(
+        artifact
+            .func_names
+            .contains(&"field_add_check".to_string()),
+        "WASM should export field_add_check"
+    );
+    eprintln!(
+        "Stage 5: Poseidon field_add_check with variable u256 inputs compiled to {} bytes of WASM",
+        artifact.bytes.len()
+    );
+}
+
 #[cfg(feature = "cranelift")]
 #[test]
 fn stage4_real_fp_struct_addmod_variable_inputs() {
