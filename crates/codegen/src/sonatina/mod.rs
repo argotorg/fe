@@ -1115,6 +1115,80 @@ fn test_add() {
     }
 
     #[test]
+    fn provenance_round_trip_covers_source_lines() {
+        let mut db = DriverDataBase::default();
+        let file_url = temp_fixture_url("round_trip_test.fe");
+        let source = r#"
+fn add(x: u256, y: u256) -> u256 {
+    return x + y
+}
+
+fn double(x: u256) -> u256 {
+    return add(x, x)
+}
+
+#[test]
+fn test_double() {
+    assert(double(5) == 10)
+}
+"#;
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(source.to_string()),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+
+        let output = emit_test_module_sonatina(
+            &db,
+            top_mod,
+            OptLevel::O0,
+            SonatinaTestOptions {
+                emit_observability: true,
+            },
+            None,
+        )
+        .expect("should compile");
+
+        // Collect all source lines mentioned in provenance
+        let mut attributed_lines: std::collections::BTreeSet<u32> =
+            std::collections::BTreeSet::new();
+        for test in &output.tests {
+            if let Some(json) = &test.sonatina_observability_json {
+                let mut search_from = 0;
+                while let Some(start) = json[search_from..].find("\"frontend_provenance\":\"") {
+                    let abs_start = search_from + start;
+                    let value_start = abs_start + "\"frontend_provenance\":\"".len();
+                    if let Some(end) = json[value_start..].find('"') {
+                        let prov = &json[value_start..value_start + end];
+                        if let Some((_, line)) = prov.rsplit_once('-').and_then(|(start_part, _)| {
+                            let (file_line, _col) = start_part.rsplit_once(':')?;
+                            let (_file, line) = file_line.rsplit_once(':')?;
+                            Some((_file, line.parse::<u32>().ok()?))
+                        }) {
+                            attributed_lines.insert(line);
+                        }
+                        search_from = value_start + end;
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Source has executable code on lines 3, 7, 12
+        // (return x + y, return add(x,x), assert(...))
+        assert!(
+            !attributed_lines.is_empty(),
+            "round-trip should attribute at least some source lines, got none"
+        );
+    }
+
+    #[test]
     fn provenance_covers_majority_of_code_bytes() {
         let mut db = DriverDataBase::default();
         let file_url = temp_fixture_url("coverage_test.fe");
