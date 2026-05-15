@@ -1,4 +1,5 @@
 mod backend;
+pub mod dispatch;
 mod function_symbols;
 mod layout;
 mod runtime_package;
