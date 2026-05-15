@@ -1057,9 +1057,86 @@ fn test_add() {
             "expected at least one PcMapEntry with non-null frontend_provenance"
         );
 
-        assert!(
-            sample_provenance.contains(':'),
-            "frontend_provenance should be in file:line:col-line:col format, got: {sample_provenance}"
+        // Validate file:line:col-line:col format
+        let parts: Vec<&str> = sample_provenance.splitn(2, '-').collect();
+        assert_eq!(
+            parts.len(),
+            2,
+            "provenance should have start-end separated by '-', got: {sample_provenance}"
         );
+        let start_parts: Vec<&str> = parts[0].rsplitn(3, ':').collect();
+        assert!(
+            start_parts.len() >= 3,
+            "start should be file:line:col, got: {}",
+            parts[0]
+        );
+        assert!(
+            start_parts[0].parse::<u32>().is_ok(),
+            "start col should be numeric, got: {}",
+            start_parts[0]
+        );
+        assert!(
+            start_parts[1].parse::<u32>().is_ok(),
+            "start line should be numeric, got: {}",
+            start_parts[1]
+        );
+    }
+
+    #[test]
+    fn provenance_covers_majority_of_code_bytes() {
+        let mut db = DriverDataBase::default();
+        let file_url = temp_fixture_url("coverage_test.fe");
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+fn add(x: u256, y: u256) -> u256 {
+    return x + y
+}
+
+#[test]
+fn test_add() {
+    assert(add(1, 2) == 3)
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+
+        let output = emit_test_module_sonatina(
+            &db,
+            top_mod,
+            OptLevel::O0,
+            SonatinaTestOptions {
+                emit_observability: true,
+            },
+            None,
+        )
+        .expect("test module should compile");
+
+        for test in &output.tests {
+            if let Some(json) = &test.sonatina_observability_json {
+                let total_provenance_count = json.matches("\"frontend_provenance\":\"").count();
+                let null_provenance_count =
+                    json.matches("\"frontend_provenance\":null").count();
+                let total = total_provenance_count + null_provenance_count;
+                if total > 0 {
+                    let coverage = total_provenance_count as f64 / total as f64;
+                    assert!(
+                        coverage > 0.3,
+                        "provenance coverage should be >30%, got {:.1}% ({}/{})",
+                        coverage * 100.0,
+                        total_provenance_count,
+                        total
+                    );
+                }
+            }
+        }
     }
 }
