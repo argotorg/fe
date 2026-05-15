@@ -680,6 +680,20 @@ fn semantic_ty_to_abi_desc(db: &DriverDataBase, ty: TyId<'_>) -> Result<AbiTypeD
         return Ok(AbiTypeDesc::simple("bytes"));
     }
 
+    if let Some((elem_ty, len_ty)) = core_skipped_array_parts(db, ty) {
+        let elem_desc = semantic_ty_to_abi_desc(db, elem_ty)?;
+        let len = array_len_to_string(db, len_ty)?;
+        return Ok(elem_desc.array(&len));
+    }
+
+    if is_core_skipped_bytes_ty(db, ty) {
+        return Ok(AbiTypeDesc::simple("bytes"));
+    }
+
+    if is_core_skipped_string_ty(db, ty) {
+        return Ok(AbiTypeDesc::simple("string"));
+    }
+
     if ty.is_string(db) {
         return Ok(AbiTypeDesc::simple("string"));
     }
@@ -806,6 +820,36 @@ fn core_dyn_array_elem_ty<'db>(db: &'db DriverDataBase, ty: TyId<'db>) -> Option
     args.first().copied()
 }
 
+/// Recognise `core::abi::SkippedArray<T, N>` and return `(elem_ty, len_ty)`.
+fn core_skipped_array_parts<'db>(
+    db: &'db DriverDataBase,
+    ty: TyId<'db>,
+) -> Option<(TyId<'db>, TyId<'db>)> {
+    if let Some((_, inner)) = ty.as_capability(db) {
+        return core_skipped_array_parts(db, inner);
+    }
+
+    let (base, args) = ty.decompose_ty_app(db);
+    let TyData::TyBase(TyBase::Adt(adt)) = base.data(db) else {
+        return None;
+    };
+    let adt_ref = adt.adt_ref(db);
+    let name = adt_ref.name(db)?;
+    if name.data(db) != "SkippedArray" {
+        return None;
+    }
+    if !base
+        .ingot(db)
+        .is_some_and(|ingot| ingot.kind(db) == IngotKind::Core)
+    {
+        return None;
+    }
+
+    let elem_ty = args.first().copied()?;
+    let len_ty = args.get(1).copied()?;
+    Some((elem_ty, len_ty))
+}
+
 fn is_core_bytes_ty(db: &DriverDataBase, ty: TyId<'_>) -> bool {
     if let Some((_, inner)) = ty.as_capability(db) {
         return is_core_bytes_ty(db, inner);
@@ -841,6 +885,50 @@ fn is_core_dyn_string_ty(db: &DriverDataBase, ty: TyId<'_>) -> bool {
         return false;
     };
     if name.data(db) != "DynString" {
+        return false;
+    }
+
+    base.ingot(db)
+        .is_some_and(|ingot| ingot.kind(db) == IngotKind::Core)
+}
+
+/// Recognise `core::abi::SkippedBytes`.
+fn is_core_skipped_bytes_ty(db: &DriverDataBase, ty: TyId<'_>) -> bool {
+    if let Some((_, inner)) = ty.as_capability(db) {
+        return is_core_skipped_bytes_ty(db, inner);
+    }
+
+    let base = ty.base_ty(db);
+    let TyData::TyBase(TyBase::Adt(adt)) = base.data(db) else {
+        return false;
+    };
+    let adt_ref = adt.adt_ref(db);
+    let Some(name) = adt_ref.name(db) else {
+        return false;
+    };
+    if name.data(db) != "SkippedBytes" {
+        return false;
+    }
+
+    base.ingot(db)
+        .is_some_and(|ingot| ingot.kind(db) == IngotKind::Core)
+}
+
+/// Recognise `core::abi::SkippedString`.
+fn is_core_skipped_string_ty(db: &DriverDataBase, ty: TyId<'_>) -> bool {
+    if let Some((_, inner)) = ty.as_capability(db) {
+        return is_core_skipped_string_ty(db, inner);
+    }
+
+    let base = ty.base_ty(db);
+    let TyData::TyBase(TyBase::Adt(adt)) = base.data(db) else {
+        return false;
+    };
+    let adt_ref = adt.adt_ref(db);
+    let Some(name) = adt_ref.name(db) else {
+        return false;
+    };
+    if name.data(db) != "SkippedString" {
         return false;
     }
 

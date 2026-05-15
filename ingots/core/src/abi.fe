@@ -520,6 +520,81 @@ impl<T, const N: usize> AbiSize for SkippedArray<T, N>
     const IS_DYNAMIC: bool = T::IS_DYNAMIC
 }
 
+/// A decoded `bytes` position without a bound byte source.
+///
+/// Created by the ABI decoder when a `bytes` field is decoded via
+/// `SkippedBytes` instead of `Bytes`. Records the offset and length of the
+/// data payload without copying anything to memory. Call `with_input()` to
+/// bind a byte source and get a `BytesView` for zero-copy access.
+pub struct SkippedBytes {
+    /// Byte offset of the first data byte (past the length word).
+    pub data_start: u256,
+    /// Number of data bytes.
+    pub data_len: u256,
+}
+
+impl Copy for SkippedBytes {}
+
+impl SkippedBytes {
+    pub fn len(self) -> u256 {
+        self.data_len
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.data_len == 0
+    }
+
+    /// Bind a byte source to produce a zero-copy `BytesView`.
+    pub fn with_input<I: ByteInput>(self, _ input: I) -> BytesView<I> {
+        BytesView { input, start: self.data_start, len: self.data_len }
+    }
+}
+
+impl AbiSize for SkippedBytes {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = true
+
+    fn payload_size(self) -> u256 {
+        32 + round_up_words(self.data_len)
+    }
+}
+
+/// A decoded `string` position without a bound byte source.
+///
+/// Created by the ABI decoder when a `string` field is decoded via
+/// `SkippedString` instead of `DynString`. Records the offset and length of
+/// the string payload without copying anything to memory. Call
+/// `with_input()` to bind a byte source and get a `StringView`.
+pub struct SkippedString {
+    pub bytes: SkippedBytes,
+}
+
+impl Copy for SkippedString {}
+
+impl SkippedString {
+    pub fn len(self) -> u256 {
+        self.bytes.data_len
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.bytes.data_len == 0
+    }
+
+    /// Bind a byte source to produce a zero-copy `StringView`.
+    pub fn with_input<I: ByteInput>(self, _ input: I) -> StringView<I> {
+        StringView { bytes: self.bytes.with_input(input) }
+    }
+}
+
+impl AbiSize for SkippedString {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = true
+
+    fn payload_size(self) -> u256 {
+        self.bytes.payload_size()
+    }
+}
+
 /// Owned handle to a Solidity ABI `string` payload stored in linear memory.
 ///
 /// `data` points at the ABI tail payload: the length word followed by packed
@@ -2602,6 +2677,65 @@ impl<A: Abi, T, const N: usize> AbiSpan<A> for SkippedArray<T, N>
 impl<A: Abi, T, const N: usize> Encode<A> for SkippedArray<T, N>
     where T: AbiSize
 {
+    const DIRECT_ENCODE: bool = false
+
+    fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
+        super::panic()
+    }
+
+    fn encode_to_ptr(own self, _ ptr: u256) {
+        super::panic()
+    }
+}
+
+/// Decode a SkippedBytes: reads the length word and records the data
+/// position, then advances past the padded payload. Zero memory allocation.
+/// Use `with_input()` to bind a byte source for element access.
+impl<A: Abi> Decode<A> for SkippedBytes {
+    #[arithmetic(unchecked)]
+    fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
+        let data_len = d.read_word()
+        let data_start = d.pos()
+        let padded = round_up_words(data_len)
+        d.set_pos(data_start + padded)
+        SkippedBytes { data_start, data_len }
+    }
+}
+
+impl<A: Abi> AbiSpan<A> for SkippedBytes {
+    fn payload_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let data_len = input.word_at(pos)
+        pos + 32 + round_up_words(data_len)
+    }
+}
+
+impl<A: Abi> Encode<A> for SkippedBytes {
+    const DIRECT_ENCODE: bool = false
+
+    fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
+        super::panic()
+    }
+
+    fn encode_to_ptr(own self, _ ptr: u256) {
+        super::panic()
+    }
+}
+
+/// Decode a SkippedString: same zero-copy strategy as SkippedBytes.
+impl<A: Abi> Decode<A> for SkippedString {
+    fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
+        SkippedString { bytes: SkippedBytes::decode_payload(d) }
+    }
+}
+
+impl<A: Abi> AbiSpan<A> for SkippedString {
+    fn payload_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        let data_len = input.word_at(pos)
+        pos + 32 + round_up_words(data_len)
+    }
+}
+
+impl<A: Abi> Encode<A> for SkippedString {
     const DIRECT_ENCODE: bool = false
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
