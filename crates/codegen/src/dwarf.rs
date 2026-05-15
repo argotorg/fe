@@ -21,6 +21,43 @@ pub struct DwarfDebugInfo {
     pub debug_rnglists: Vec<u8>,
 }
 
+impl DwarfDebugInfo {
+    /// Write DWARF sections into an ELF object file.
+    /// The ELF contains only debug sections (no code) and can be read
+    /// by llvm-dwarfdump, readelf, or other DWARF consumers.
+    pub fn to_elf(&self) -> Vec<u8> {
+        use object::write::Object;
+        use object::{Architecture, BinaryFormat, Endianness};
+
+        // Use x86_64 as the nominal architecture for the ELF container.
+        // The ELF contains only DWARF debug sections, no executable code.
+        let mut obj = Object::new(BinaryFormat::Elf, Architecture::X86_64, Endianness::Little);
+
+        let sections: &[(&[u8], &str)] = &[
+            (&self.debug_info, ".debug_info"),
+            (&self.debug_abbrev, ".debug_abbrev"),
+            (&self.debug_line, ".debug_line"),
+            (&self.debug_str, ".debug_str"),
+            (&self.debug_ranges, ".debug_ranges"),
+            (&self.debug_rnglists, ".debug_rnglists"),
+        ];
+
+        for (data, name) in sections {
+            if data.is_empty() {
+                continue;
+            }
+            let section_id = obj.add_section(
+                Vec::new(),
+                name.as_bytes().to_vec(),
+                object::SectionKind::Debug,
+            );
+            obj.set_section_data(section_id, data.to_vec(), 1);
+        }
+
+        obj.write().expect("ELF generation should not fail for debug-only object")
+    }
+}
+
 pub fn generate_dwarf(
     artifacts: &[ObjectArtifact],
     provenance: &sonatina_codegen::object::FrontendProvenanceMap,
@@ -276,6 +313,23 @@ mod tests {
         assert_eq!(resolved.end_col, 15);
         assert_eq!(resolved.pc_start, 0);
         assert_eq!(resolved.pc_end, 4);
+    }
+
+    #[test]
+    fn dwarf_to_elf_produces_valid_elf_header() {
+        let entries = vec![ResolvedProvenanceEntry {
+            pc_start: 0,
+            pc_end: 10,
+            file_path: "test.fe".to_string(),
+            start_line: 1,
+            start_col: 1,
+            end_line: 1,
+            end_col: 10,
+        }];
+        let dwarf = generate_dwarf_from_entries(&entries).unwrap();
+        let elf = dwarf.to_elf();
+        assert!(elf.len() > 52, "ELF should be larger than header");
+        assert_eq!(&elf[..4], b"\x7fELF", "should start with ELF magic");
     }
 
     #[test]

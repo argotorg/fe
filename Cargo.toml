@@ -56,7 +56,6 @@ sonatina-triple = { git = "https://github.com/fe-lang/sonatina", rev = "5987a72"
 sonatina-codegen = { git = "https://github.com/fe-lang/sonatina", rev = "5987a72" }
 sonatina-verifier = { git = "https://github.com/fe-lang/sonatina", rev = "5987a72" }
 
-
 [profile.dev]
 # Set to 0 to make the build faster and debugging more difficult.
 debug = 0
