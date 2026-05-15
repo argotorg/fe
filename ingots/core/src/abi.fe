@@ -499,7 +499,7 @@ impl<I> StringView<I>
 impl StringView<()> {
     /// Bind a byte source to produce a bound `StringView` with character access.
     pub fn over<J: ByteInput>(self, _ input: J) -> StringView<J> {
-        let bound_bytes = self.bytes.over(input)
+        let bound_bytes = BytesView<J>::from_parts(input, self.bytes.start, self.bytes.len)
         StringView<J>::from_bytes(bound_bytes)
     }
 }
