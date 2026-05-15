@@ -11,6 +11,8 @@ common.workspace = true
 hex = "0.4"
 num-bigint.workspace = true
 rustc-hash.workspace = true
+gimli.workspace = true
+object.workspace = true
 sonatina-ir.workspace = true
 sonatina-triple.workspace = true
 sonatina-codegen.workspace = true
@@ -20,6 +22,7 @@ smallvec1.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+cranelift-entity.workspace = true
 dir-test.workspace = true
 test-utils.workspace = true
 url.workspace = true

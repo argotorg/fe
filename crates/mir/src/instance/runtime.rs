@@ -92,6 +92,14 @@ impl<'db> RuntimeInstance<'db> {
     ) -> Vec<crate::runtime::RuntimeCodeRegion<'db>> {
         expect_lowered_runtime_body(db, self).referenced_code_regions(db)
     }
+
+    #[salsa::tracked(return_ref)]
+    pub fn source_table(
+        self,
+        db: &'db dyn MirDb,
+    ) -> common::source_ord::FunctionSourceTable {
+        expect_lowered_runtime_body(db, self).body(db).source_table.clone()
+    }
 }
 
 pub(crate) fn runtime_interface_signature_for_key<'db>(

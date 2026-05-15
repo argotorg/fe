@@ -2094,14 +2094,17 @@ dependencies = [
 name = "fe-codegen"
 version = "26.1.0"
 dependencies = [
+ "cranelift-entity 0.130.1",
  "dir-test",
  "fe-common",
  "fe-driver",
  "fe-hir",
  "fe-mir",
  "fe-test-utils",
+ "gimli",
  "hex",
  "num-bigint",
+ "object",
  "rustc-hash 2.1.1",
  "smallvec 1.15.1",
  "smallvec 2.0.0-alpha.12",
@@ -2635,6 +2638,15 @@ dependencies = [
  "r-efi",
  "wasip2",
  "wasip3",
+]
+
+[[package]]
+name = "gimli"
+version = "0.31.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "07e28edb80900c19c28f1072f2e8aeca7fa06b23cd4169cefe1af5aa3260783f"
+dependencies = [
+ "indexmap 2.13.0",
 ]
 
 [[package]]
@@ -4585,6 +4597,18 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.116",
+]
+
+[[package]]
+name = "object"
+version = "0.36.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "62948e14d923ea95ea2c7c86c71013138b66525b86bdc08d2dcc262bdb497b87"
+dependencies = [
+ "crc32fast",
+ "hashbrown 0.15.5",
+ "indexmap 2.13.0",
+ "memchr",
 ]
 
 [[package]]
