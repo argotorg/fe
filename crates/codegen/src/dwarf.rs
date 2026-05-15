@@ -159,6 +159,42 @@ pub enum FeTypeDesc {
     Array { elem: Box<FeTypeDesc>, len: Option<u64> },
 }
 
+/// A function description for generating DWARF DW_TAG_subprogram DIEs.
+#[derive(Clone, Debug)]
+pub struct FeFuncDesc {
+    pub name: String,
+    pub params: Vec<(String, FeTypeDesc)>,
+    pub return_type: Option<FeTypeDesc>,
+    pub start_line: u32,
+}
+
+pub fn add_subprogram_dies(dwarf: &mut DwarfUnit, functions: &[FeFuncDesc]) {
+    use gimli::{DW_AT_decl_line, DW_TAG_formal_parameter, DW_TAG_subprogram};
+
+    let root = dwarf.unit.root();
+    for func in functions {
+        let id = dwarf.unit.add(root, DW_TAG_subprogram);
+        let name_id = dwarf.strings.add(func.name.as_bytes());
+        dwarf
+            .unit
+            .get_mut(id)
+            .set(DW_AT_name, AttributeValue::StringRef(name_id));
+        dwarf
+            .unit
+            .get_mut(id)
+            .set(DW_AT_decl_line, AttributeValue::Udata(func.start_line as u64));
+
+        for (param_name, _param_ty) in &func.params {
+            let param_id = dwarf.unit.add(id, DW_TAG_formal_parameter);
+            let pname_id = dwarf.strings.add(param_name.as_bytes());
+            dwarf
+                .unit
+                .get_mut(param_id)
+                .set(DW_AT_name, AttributeValue::StringRef(pname_id));
+        }
+    }
+}
+
 pub fn add_type_dies(dwarf: &mut DwarfUnit, types: &[FeTypeDesc]) {
     let root = dwarf.unit.root();
     for ty in types {
