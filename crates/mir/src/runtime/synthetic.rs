@@ -683,6 +683,30 @@ impl<'db> SyntheticBodyBuilder<'db> {
                             loaded_fields[i] = Some(value);
                             accumulated_offset += head_size;
                         }
+                        FieldLoadStrategy::LazyDynamicView { is_string_view } => {
+                            // Read the dynamic offset pointer from the head slot,
+                            // follow it to the tail, read the length word, and
+                            // construct an unbound BytesView/StringView.
+                            let field_ty = field_types[i];
+                            let field_class = top_level_class_for_ty_in_env(
+                                self.db,
+                                env,
+                                field_ty,
+                                AddressSpaceKind::Memory,
+                            )
+                            .expect("LazyDynamicView field should have a runtime class");
+
+                            let value = self.push_dynamic_view_from_calldata(
+                                cont_bb,
+                                accumulated_offset,
+                                field_ty,
+                                &field_class,
+                                is_string_view,
+                            );
+                            loaded_fields[i] = Some(value);
+                            // Dynamic types have a 32-byte head slot (offset pointer).
+                            accumulated_offset += 32;
+                        }
                         FieldLoadStrategy::Decode => {
                             // Track the offset for Decode fields too, if
                             // their static size is known (needed to keep
@@ -701,8 +725,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
 
                 // Phase 2: decode the remaining fields through the full
                 // calldatacopy + SolDecoder pipeline.
-                let has_decode_fields = field_strategies.contains(&FieldLoadStrategy::Decode);
-                if has_decode_fields {
+                if let Some(decode_fn) = decode_fn {
                     let size = self.push_builtin_value(
                         cont_bb,
                         TyId::u256(self.db),
@@ -1601,6 +1624,121 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 src: offset_value,
             },
         );
+        local
+    }
+
+    /// Construct an unbound `BytesView` or `StringView` value by reading the
+    /// dynamic offset pointer and length directly from calldata.
+    ///
+    /// ABI encoding of dynamic types: the head slot at `head_offset` (absolute
+    /// calldata byte position) contains a byte offset relative to the ABI
+    /// payload start (byte 4). Following that offset leads to the tail, which
+    /// starts with a 32-byte length word followed by the padded data.
+    ///
+    /// For BytesView: fields are `(input: (), start: u256, len: u256)`.
+    /// For StringView: field is `(bytes: BytesView<()>)`, so we store into
+    /// nested field paths.
+    fn push_dynamic_view_from_calldata(
+        &mut self,
+        bb: RBlockId,
+        head_offset: u32,
+        semantic_ty: TyId<'db>,
+        class: &RuntimeClass<'db>,
+        is_string_view: bool,
+    ) -> RLocalId {
+        // Step 1: Read the offset pointer from the head slot.
+        // calldataload(head_offset) gives the byte offset relative to payload start.
+        let head_pos = self.push_const_word(bb, head_offset);
+        let rel_offset = self.push_builtin_value(
+            bb,
+            TyId::u256(self.db),
+            RuntimeClass::Scalar(word_scalar_class()),
+            RuntimeBuiltin::CallDataLoad { offset: head_pos },
+        );
+
+        // Step 2: Compute the absolute calldata position of the tail.
+        // tail_abs = 4 + rel_offset (payload starts at byte 4 after selector)
+        let selector_size = self.push_const_word(bb, 4);
+        let tail_abs = self.push_binary_word(bb, ArithBinOp::Add, rel_offset, selector_size);
+
+        // Step 3: Read the length word from the start of the tail.
+        let data_len = self.push_builtin_value(
+            bb,
+            TyId::u256(self.db),
+            RuntimeClass::Scalar(word_scalar_class()),
+            RuntimeBuiltin::CallDataLoad { offset: tail_abs },
+        );
+
+        // Step 4: Compute data_start = tail_abs + 32 (skip the length word).
+        let thirty_two = self.push_const_word(bb, 32);
+        let data_start = self.push_binary_word(bb, ArithBinOp::Add, tail_abs, thirty_two);
+
+        // Step 5: Construct the aggregate value.
+        let local = self.push_local(
+            semantic_ty,
+            RuntimeCarrier::Value(class.clone()),
+            RuntimeLocalRoot::Slot(class.clone()),
+        );
+        let root = PlaceRoot::Slot(local);
+
+        if is_string_view {
+            // StringView has field 0 = bytes: BytesView<()>.
+            // BytesView has field 0 = input: () (zero-sized), field 1 = start, field 2 = len.
+            // Store into nested field paths: [0, 1] for start, [0, 2] for len.
+            self.push_stmt(
+                bb,
+                RStmt::Store {
+                    dst: RuntimePlace {
+                        root: root.clone(),
+                        path: vec![
+                            PlaceElem::Field(hir::analysis::semantic::FieldIndex(0)),
+                            PlaceElem::Field(hir::analysis::semantic::FieldIndex(1)),
+                        ]
+                        .into_boxed_slice(),
+                    },
+                    src: data_start,
+                },
+            );
+            self.push_stmt(
+                bb,
+                RStmt::Store {
+                    dst: RuntimePlace {
+                        root: root.clone(),
+                        path: vec![
+                            PlaceElem::Field(hir::analysis::semantic::FieldIndex(0)),
+                            PlaceElem::Field(hir::analysis::semantic::FieldIndex(2)),
+                        ]
+                        .into_boxed_slice(),
+                    },
+                    src: data_len,
+                },
+            );
+        } else {
+            // BytesView has field 0 = input: () (zero-sized), field 1 = start, field 2 = len.
+            self.push_stmt(
+                bb,
+                RStmt::Store {
+                    dst: RuntimePlace {
+                        root: root.clone(),
+                        path: vec![PlaceElem::Field(hir::analysis::semantic::FieldIndex(1))]
+                            .into_boxed_slice(),
+                    },
+                    src: data_start,
+                },
+            );
+            self.push_stmt(
+                bb,
+                RStmt::Store {
+                    dst: RuntimePlace {
+                        root: root.clone(),
+                        path: vec![PlaceElem::Field(hir::analysis::semantic::FieldIndex(2))]
+                            .into_boxed_slice(),
+                    },
+                    src: data_len,
+                },
+            );
+        }
+
         local
     }
 

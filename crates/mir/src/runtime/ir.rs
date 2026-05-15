@@ -959,8 +959,9 @@ pub enum RuntimeInputPlan<'db> {
     LazyCalldataLoad {
         msg_ty: TyId<'db>,
         /// The decode function for the full message type, used for fields that
-        /// cannot be lazy-loaded.
-        decode_fn: RuntimeInstance<'db>,
+        /// cannot be lazy-loaded. `None` when every field uses a non-Decode
+        /// strategy (Direct, SkipWithOffset, or LazyDynamicView).
+        decode_fn: Option<RuntimeInstance<'db>>,
         /// Per-field load strategy, indexed by the message struct's field order.
         field_strategies: Box<[FieldLoadStrategy]>,
         /// Which fields the handler actually uses (same as `projected_fields`
@@ -992,6 +993,20 @@ pub enum FieldLoadStrategy {
         /// The ABI head-size of this ArrayView field in bytes
         /// (N * element_head_size).
         head_size: u32,
+    },
+    /// Decode a dynamic-typed view (BytesView or StringView) directly from
+    /// calldata without copying the payload into memory.
+    ///
+    /// The ABI head slot at the field's offset contains a byte-offset
+    /// pointer into the tail region. The codegen reads that pointer,
+    /// follows it to the tail, reads the length word, and constructs an
+    /// unbound BytesView/StringView with `start` and `len` set.
+    ///
+    /// `is_string_view` distinguishes StringView (which wraps BytesView in
+    /// an outer struct) from BytesView.
+    LazyDynamicView {
+        /// `true` for StringView fields, `false` for BytesView fields.
+        is_string_view: bool,
     },
 }
 

@@ -830,9 +830,19 @@ fn contract_recv_wrapper<'db>(
             projected_fields,
         }
     } else if let Some(strategies) = lazy_field_strategies(db, abi_info.args_ty, semantic, arm) {
+        let needs_decode = strategies.contains(&FieldLoadStrategy::Decode);
+        let decode_fn = if needs_decode {
+            Some(resolve_decode_instance(
+                db,
+                contract.scope(),
+                abi_info.args_ty,
+            )?)
+        } else {
+            None
+        };
         RuntimeInputPlan::LazyCalldataLoad {
             msg_ty: abi_info.args_ty,
-            decode_fn: resolve_decode_instance(db, contract.scope(), abi_info.args_ty)?,
+            decode_fn,
             field_strategies: strategies,
             projected_fields,
         }
@@ -2415,6 +2425,48 @@ fn array_view_head_size(db: &dyn MirDb, ty: TyId<'_>) -> Option<u32> {
     Some(n * elem_head_size)
 }
 
+/// Returns `true` if `ty` is an unbound `BytesView` (= `BytesView<()>`) from
+/// the core ingot. These are dynamic ABI types whose head slot is a 32-byte
+/// offset pointer into the tail region.
+fn is_bytes_view_ty(db: &dyn MirDb, ty: TyId<'_>) -> bool {
+    use common::ingot::IngotKind;
+
+    let base = ty.base_ty(db);
+    let TyData::TyBase(TyBase::Adt(adt)) = base.data(db) else {
+        return false;
+    };
+    let adt_ref = adt.adt_ref(db);
+    let Some(name) = adt_ref.name(db) else {
+        return false;
+    };
+    if name.data(db) != "BytesView" {
+        return false;
+    }
+    base.ingot(db)
+        .is_some_and(|ingot| ingot.kind(db) == IngotKind::Core)
+}
+
+/// Returns `true` if `ty` is an unbound `StringView` (= `StringView<()>`) from
+/// the core ingot. StringView wraps BytesView and shares the same dynamic ABI
+/// wire format.
+fn is_string_view_ty(db: &dyn MirDb, ty: TyId<'_>) -> bool {
+    use common::ingot::IngotKind;
+
+    let base = ty.base_ty(db);
+    let TyData::TyBase(TyBase::Adt(adt)) = base.data(db) else {
+        return false;
+    };
+    let adt_ref = adt.adt_ref(db);
+    let Some(name) = adt_ref.name(db) else {
+        return false;
+    };
+    if name.data(db) != "StringView" {
+        return false;
+    }
+    base.ingot(db)
+        .is_some_and(|ingot| ingot.kind(db) == IngotKind::Core)
+}
+
 /// Returns the statically-known ABI head size (in bytes) for `ty`, or `None`
 /// if the size is dynamic or cannot be determined at compile time.
 pub(crate) fn static_abi_head_size(db: &dyn MirDb, ty: TyId<'_>) -> Option<u32> {
@@ -2434,6 +2486,11 @@ pub(crate) fn static_abi_head_size(db: &dyn MirDb, ty: TyId<'_>) -> Option<u32> 
     }
     if let Some(size) = array_view_head_size(db, ty) {
         return Some(size);
+    }
+    // BytesView and StringView are dynamic types whose head slot is a
+    // 32-byte offset pointer into the tail region.
+    if is_bytes_view_ty(db, ty) || is_string_view_ty(db, ty) {
+        return Some(32);
     }
     None
 }
@@ -2482,6 +2539,14 @@ fn lazy_field_strategies<'db>(
             } else if !field_is_mut[i] {
                 if let Some(head_size) = array_view_head_size(db, field_ty) {
                     FieldLoadStrategy::SkipWithOffset { head_size }
+                } else if is_bytes_view_ty(db, field_ty) {
+                    FieldLoadStrategy::LazyDynamicView {
+                        is_string_view: false,
+                    }
+                } else if is_string_view_ty(db, field_ty) {
+                    FieldLoadStrategy::LazyDynamicView {
+                        is_string_view: true,
+                    }
                 } else {
                     FieldLoadStrategy::Decode
                 }
@@ -2497,7 +2562,9 @@ fn lazy_field_strategies<'db>(
             all_preceding_static = false;
         }
         match strategies[i] {
-            FieldLoadStrategy::Direct | FieldLoadStrategy::SkipWithOffset { .. } => {
+            FieldLoadStrategy::Direct
+            | FieldLoadStrategy::SkipWithOffset { .. }
+            | FieldLoadStrategy::LazyDynamicView { .. } => {
                 if !all_preceding_static {
                     strategies[i] = FieldLoadStrategy::Decode;
                 }
@@ -2510,10 +2577,19 @@ fn lazy_field_strategies<'db>(
     let has_skip = strategies
         .iter()
         .any(|s| matches!(s, FieldLoadStrategy::SkipWithOffset { .. }));
+    let has_lazy_view = strategies
+        .iter()
+        .any(|s| matches!(s, FieldLoadStrategy::LazyDynamicView { .. }));
     let has_decode = strategies.contains(&FieldLoadStrategy::Decode);
 
-    let distinct_count = has_direct as u8 + has_skip as u8 + has_decode as u8;
-    if distinct_count >= 2 {
+    // Return the strategies if the LazyCalldataLoad plan is beneficial:
+    // - SkipWithOffset or LazyDynamicView fields always need the hybrid
+    //   codegen path (no standalone fast-path exists for them).
+    // - A mix of Direct + Decode benefits from lazy access.
+    // - All-Direct is handled by DirectCalldataLoad (return None).
+    // - All-Decode is handled by DecodeCalldataPayload (return None).
+    let distinct_count = has_direct as u8 + has_skip as u8 + has_lazy_view as u8 + has_decode as u8;
+    if has_skip || has_lazy_view || distinct_count >= 2 {
         Some(strategies.into_boxed_slice())
     } else {
         None
@@ -2545,11 +2621,16 @@ fn runtime_input_plan_symbol_key<'db>(db: &'db dyn MirDb, plan: &RuntimeInputPla
             decode_fn,
             field_strategies,
             projected_fields,
-        } => format!(
-            "lazy:{}:{}:{field_strategies:?}:{projected_fields:?}",
-            type_identity(db, *msg_ty),
-            runtime_instance_symbol_key(db, *decode_fn)
-        ),
+        } => {
+            let decode_key = decode_fn
+                .map(|f| runtime_instance_symbol_key(db, f))
+                .unwrap_or_else(|| "none".to_string());
+            format!(
+                "lazy:{}:{}:{field_strategies:?}:{projected_fields:?}",
+                type_identity(db, *msg_ty),
+                decode_key
+            )
+        }
     }
 }
 
@@ -2578,11 +2659,16 @@ fn runtime_input_plan_sort_key<'db>(db: &'db dyn MirDb, plan: &RuntimeInputPlan<
             decode_fn,
             field_strategies,
             projected_fields,
-        } => format!(
-            "lazy:{}:{}:{field_strategies:?}:{projected_fields:?}",
-            type_identity(db, *msg_ty),
-            runtime_instance_sort_key(db, *decode_fn)
-        ),
+        } => {
+            let decode_key = decode_fn
+                .map(|f| runtime_instance_sort_key(db, f))
+                .unwrap_or_else(|| "none".to_string());
+            format!(
+                "lazy:{}:{}:{field_strategies:?}:{projected_fields:?}",
+                type_identity(db, *msg_ty),
+                decode_key
+            )
+        }
     }
 }
 
@@ -3902,6 +3988,282 @@ pub contract SkipBox {
             }
             other => panic!(
                 "withSkip should use LazyCalldataLoad, got {:?}",
+                std::mem::discriminant(&other)
+            ),
+        }
+    }
+
+    #[test]
+    fn lazy_calldataload_bytes_view_uses_lazy_dynamic_view() {
+        let mut db = DriverDataBase::default();
+        let file_url = Url::parse("file:///lazy_calldataload_bytes_view.fe").unwrap();
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+use std::abi::sol
+use std::abi::BytesView
+
+msg BytesViewMsg {
+    #[selector = sol("withBytes(uint256,bytes)")]
+    WithBytes { id: u256, data: BytesView<()> },
+}
+
+pub contract BytesViewBox {
+    recv BytesViewMsg {
+        WithBytes { id, data } {
+            // id is non-mut scalar -> Direct
+            // data is BytesView (non-mut, dynamic) -> LazyDynamicView
+        }
+    }
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+
+        let plan = recv_wrapper_plan(&db, top_mod, "withBytes(uint256,bytes)");
+        match plan.input {
+            RuntimeInputPlan::LazyCalldataLoad {
+                field_strategies,
+                projected_fields,
+                ..
+            } => {
+                assert_eq!(
+                    field_strategies.len(),
+                    2,
+                    "bytes view msg should have 2 field strategies"
+                );
+                assert_eq!(
+                    field_strategies[0],
+                    FieldLoadStrategy::Direct,
+                    "non-mut u256 `id` should use Direct load"
+                );
+                assert_eq!(
+                    field_strategies[1],
+                    FieldLoadStrategy::LazyDynamicView {
+                        is_string_view: false
+                    },
+                    "non-mut BytesView `data` should use LazyDynamicView"
+                );
+                assert_eq!(
+                    projected_fields.as_ref(),
+                    &[0, 1],
+                    "both fields should be projected"
+                );
+            }
+            other => panic!(
+                "withBytes should use LazyCalldataLoad, got {:?}",
+                std::mem::discriminant(&other)
+            ),
+        }
+    }
+
+    #[test]
+    fn lazy_calldataload_string_view_uses_lazy_dynamic_view() {
+        let mut db = DriverDataBase::default();
+        let file_url = Url::parse("file:///lazy_calldataload_string_view.fe").unwrap();
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+use std::abi::sol
+use std::abi::StringView
+
+msg StringViewMsg {
+    #[selector = sol("withString(uint256,string)")]
+    WithString { id: u256, name: StringView<()> },
+}
+
+pub contract StringViewBox {
+    recv StringViewMsg {
+        WithString { id, name } {
+            // id is non-mut scalar -> Direct
+            // name is StringView (non-mut, dynamic) -> LazyDynamicView
+        }
+    }
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+
+        let plan = recv_wrapper_plan(&db, top_mod, "withString(uint256,string)");
+        match plan.input {
+            RuntimeInputPlan::LazyCalldataLoad {
+                field_strategies,
+                projected_fields,
+                ..
+            } => {
+                assert_eq!(
+                    field_strategies.len(),
+                    2,
+                    "string view msg should have 2 field strategies"
+                );
+                assert_eq!(
+                    field_strategies[0],
+                    FieldLoadStrategy::Direct,
+                    "non-mut u256 `id` should use Direct load"
+                );
+                assert_eq!(
+                    field_strategies[1],
+                    FieldLoadStrategy::LazyDynamicView {
+                        is_string_view: true
+                    },
+                    "non-mut StringView `name` should use LazyDynamicView(is_string_view=true)"
+                );
+                assert_eq!(
+                    projected_fields.as_ref(),
+                    &[0, 1],
+                    "both fields should be projected"
+                );
+            }
+            other => panic!(
+                "withString should use LazyCalldataLoad, got {:?}",
+                std::mem::discriminant(&other)
+            ),
+        }
+    }
+
+    #[test]
+    fn lazy_calldataload_mut_bytes_view_forces_decode() {
+        let mut db = DriverDataBase::default();
+        let file_url = Url::parse("file:///lazy_calldataload_mut_bytes_view.fe").unwrap();
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+use std::abi::sol
+use std::abi::BytesView
+
+msg MutBytesViewMsg {
+    #[selector = sol("mutBytes(uint256,bytes)")]
+    MutBytes { id: u256, data: BytesView<()> },
+}
+
+pub contract MutBytesViewBox {
+    recv MutBytesViewMsg {
+        MutBytes { id, mut data } {
+            // id is non-mut scalar -> Direct
+            // data is mut BytesView -> must Decode (not LazyDynamicView)
+        }
+    }
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+
+        let plan = recv_wrapper_plan(&db, top_mod, "mutBytes(uint256,bytes)");
+        match plan.input {
+            RuntimeInputPlan::LazyCalldataLoad {
+                field_strategies, ..
+            } => {
+                assert_eq!(field_strategies.len(), 2);
+                assert_eq!(
+                    field_strategies[0],
+                    FieldLoadStrategy::Direct,
+                    "non-mut u256 `id` should use Direct"
+                );
+                assert_eq!(
+                    field_strategies[1],
+                    FieldLoadStrategy::Decode,
+                    "mut BytesView `data` must use Decode, not LazyDynamicView"
+                );
+            }
+            other => panic!(
+                "mutBytes should use LazyCalldataLoad, got {:?}",
+                std::mem::discriminant(&other)
+            ),
+        }
+    }
+
+    #[test]
+    fn lazy_calldataload_bytes_view_after_dynamic_field_falls_back_to_decode() {
+        // When a dynamic field precedes a BytesView field, the BytesView's
+        // head offset is not statically known, so it must fall back to Decode.
+        let mut db = DriverDataBase::default();
+        let file_url = Url::parse("file:///lazy_calldataload_bytes_view_after_dynamic.fe").unwrap();
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+use std::abi::sol
+use std::abi::{BytesView, StringView}
+
+msg DynamicFirstMsg {
+    #[selector = sol("dynFirst(bytes,bytes)")]
+    DynFirst { a: BytesView<()>, b: BytesView<()> },
+}
+
+pub contract DynamicFirstBox {
+    recv DynamicFirstMsg {
+        DynFirst { a, b } {}
+    }
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+
+        let plan = recv_wrapper_plan(&db, top_mod, "dynFirst(bytes,bytes)");
+        // Both fields are BytesView. The first one gets LazyDynamicView
+        // (head offset statically known at byte 4), the second one also
+        // gets LazyDynamicView because the first has a static head size of 32.
+        match plan.input {
+            RuntimeInputPlan::LazyCalldataLoad {
+                field_strategies, ..
+            } => {
+                assert_eq!(field_strategies.len(), 2);
+                // Both BytesView fields have HEAD_SIZE=32, so both have
+                // statically known head offsets.
+                assert_eq!(
+                    field_strategies[0],
+                    FieldLoadStrategy::LazyDynamicView {
+                        is_string_view: false
+                    },
+                    "first BytesView should use LazyDynamicView"
+                );
+                assert_eq!(
+                    field_strategies[1],
+                    FieldLoadStrategy::LazyDynamicView {
+                        is_string_view: false
+                    },
+                    "second BytesView should also use LazyDynamicView (head offset is static)"
+                );
+            }
+            RuntimeInputPlan::DecodeCalldataPayload { .. } => {
+                panic!(
+                    "dynFirst(bytes,bytes) should use LazyCalldataLoad \
+                     (both LazyDynamicView), got DecodeCalldataPayload"
+                );
+            }
+            other => panic!(
+                "dynFirst should use LazyCalldataLoad, got {:?}",
                 std::mem::discriminant(&other)
             ),
         }
