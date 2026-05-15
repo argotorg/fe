@@ -1,7 +1,7 @@
 use parser::ast::{self, WhereClauseOwner as _, prelude::*};
 use salsa::Accumulator as _;
 
-use super::{FileLowerCtxt, attr::named_attr_specs};
+use super::{FileLowerCtxt, abi_struct, attr::named_attr_specs};
 use crate::{
     hir_def::{
         AttrListId, Body, BodyKind, CompBinOp, EffectParamListId, FuncParamListId,
@@ -69,11 +69,7 @@ impl<'db> ItemKind<'db> {
                 super::arithmetic::report_invalid_mod_arithmetic_attrs(ctxt, mod_.attr_list());
                 super::event::report_event_attr_on_non_struct_item(ctxt, mod_.attr_list(), "mod");
                 super::error::report_error_attr_on_non_struct_item(ctxt, mod_.attr_list(), "mod");
-                super::abi_struct::report_abi_attr_on_non_struct_item(
-                    ctxt,
-                    mod_.attr_list(),
-                    "mod",
-                );
+                abi_struct::report_abi_attr_on_non_struct_item(ctxt, mod_.attr_list(), "mod");
                 super::payable::report_payable_attr_on_unsupported_item(
                     ctxt,
                     mod_.attr_list(),
@@ -85,7 +81,7 @@ impl<'db> ItemKind<'db> {
                 super::arithmetic::report_invalid_function_arithmetic_attrs(ctxt, &fn_);
                 super::event::report_event_attr_on_non_struct_item(ctxt, fn_.attr_list(), "fn");
                 super::error::report_error_attr_on_non_struct_item(ctxt, fn_.attr_list(), "fn");
-                super::abi_struct::report_abi_attr_on_non_struct_item(ctxt, fn_.attr_list(), "fn");
+                abi_struct::report_abi_attr_on_non_struct_item(ctxt, fn_.attr_list(), "fn");
                 super::payable::report_payable_attr_on_unsupported_item(
                     ctxt,
                     fn_.attr_list(),
@@ -122,7 +118,7 @@ impl<'db> ItemKind<'db> {
                     contract.attr_list(),
                     "contract",
                 );
-                super::abi_struct::report_abi_attr_on_non_struct_item(
+                abi_struct::report_abi_attr_on_non_struct_item(
                     ctxt,
                     contract.attr_list(),
                     "contract",
@@ -142,11 +138,7 @@ impl<'db> ItemKind<'db> {
                 );
                 super::event::report_event_attr_on_non_struct_item(ctxt, enum_.attr_list(), "enum");
                 super::error::report_error_attr_on_non_struct_item(ctxt, enum_.attr_list(), "enum");
-                super::abi_struct::report_abi_attr_on_non_struct_item(
-                    ctxt,
-                    enum_.attr_list(),
-                    "enum",
-                );
+                abi_struct::report_abi_attr_on_non_struct_item(ctxt, enum_.attr_list(), "enum");
                 super::payable::report_payable_attr_on_unsupported_item(
                     ctxt,
                     enum_.attr_list(),
@@ -162,7 +154,7 @@ impl<'db> ItemKind<'db> {
                 );
                 super::event::report_event_attr_on_non_struct_item(ctxt, msg.attr_list(), "msg");
                 super::error::report_error_attr_on_non_struct_item(ctxt, msg.attr_list(), "msg");
-                super::abi_struct::report_abi_attr_on_non_struct_item(ctxt, msg.attr_list(), "msg");
+                abi_struct::report_abi_attr_on_non_struct_item(ctxt, msg.attr_list(), "msg");
                 super::payable::report_payable_attr_on_unsupported_item(
                     ctxt,
                     msg.attr_list(),
@@ -186,7 +178,7 @@ impl<'db> ItemKind<'db> {
                     alias.attr_list(),
                     "type alias",
                 );
-                super::abi_struct::report_abi_attr_on_non_struct_item(
+                abi_struct::report_abi_attr_on_non_struct_item(
                     ctxt,
                     alias.attr_list(),
                     "type alias",
@@ -206,11 +198,7 @@ impl<'db> ItemKind<'db> {
                 );
                 super::event::report_event_attr_on_non_struct_item(ctxt, impl_.attr_list(), "impl");
                 super::error::report_error_attr_on_non_struct_item(ctxt, impl_.attr_list(), "impl");
-                super::abi_struct::report_abi_attr_on_non_struct_item(
-                    ctxt,
-                    impl_.attr_list(),
-                    "impl",
-                );
+                abi_struct::report_abi_attr_on_non_struct_item(ctxt, impl_.attr_list(), "impl");
                 super::payable::report_payable_attr_on_unsupported_item(
                     ctxt,
                     impl_.attr_list(),
@@ -234,11 +222,7 @@ impl<'db> ItemKind<'db> {
                     trait_.attr_list(),
                     "trait",
                 );
-                super::abi_struct::report_abi_attr_on_non_struct_item(
-                    ctxt,
-                    trait_.attr_list(),
-                    "trait",
-                );
+                abi_struct::report_abi_attr_on_non_struct_item(ctxt, trait_.attr_list(), "trait");
                 super::payable::report_payable_attr_on_unsupported_item(
                     ctxt,
                     trait_.attr_list(),
@@ -262,7 +246,7 @@ impl<'db> ItemKind<'db> {
                     impl_trait.attr_list(),
                     "impl trait",
                 );
-                super::abi_struct::report_abi_attr_on_non_struct_item(
+                abi_struct::report_abi_attr_on_non_struct_item(
                     ctxt,
                     impl_trait.attr_list(),
                     "impl trait",
@@ -290,11 +274,7 @@ impl<'db> ItemKind<'db> {
                     const_.attr_list(),
                     "const",
                 );
-                super::abi_struct::report_abi_attr_on_non_struct_item(
-                    ctxt,
-                    const_.attr_list(),
-                    "const",
-                );
+                abi_struct::report_abi_attr_on_non_struct_item(ctxt, const_.attr_list(), "const");
                 super::payable::report_payable_attr_on_unsupported_item(
                     ctxt,
                     const_.attr_list(),
@@ -318,7 +298,7 @@ impl<'db> ItemKind<'db> {
                     assert_.attr_list(),
                     "static assertion",
                 );
-                super::abi_struct::report_abi_attr_on_non_struct_item(
+                abi_struct::report_abi_attr_on_non_struct_item(
                     ctxt,
                     assert_.attr_list(),
                     "static assertion",
@@ -338,11 +318,7 @@ impl<'db> ItemKind<'db> {
                 );
                 super::event::report_event_attr_on_non_struct_item(ctxt, use_.attr_list(), "use");
                 super::error::report_error_attr_on_non_struct_item(ctxt, use_.attr_list(), "use");
-                super::abi_struct::report_abi_attr_on_non_struct_item(
-                    ctxt,
-                    use_.attr_list(),
-                    "use",
-                );
+                abi_struct::report_abi_attr_on_non_struct_item(ctxt, use_.attr_list(), "use");
                 super::payable::report_payable_attr_on_unsupported_item(
                     ctxt,
                     use_.attr_list(),
@@ -366,11 +342,7 @@ impl<'db> ItemKind<'db> {
                     extern_.attr_list(),
                     "extern",
                 );
-                super::abi_struct::report_abi_attr_on_non_struct_item(
-                    ctxt,
-                    extern_.attr_list(),
-                    "extern",
-                );
+                abi_struct::report_abi_attr_on_non_struct_item(ctxt, extern_.attr_list(), "extern");
                 super::payable::report_payable_attr_on_unsupported_item(
                     ctxt,
                     extern_.attr_list(),
@@ -393,7 +365,7 @@ impl<'db> ItemKind<'db> {
                             fn_.attr_list(),
                             "extern fn",
                         );
-                        super::abi_struct::report_abi_attr_on_non_struct_item(
+                        abi_struct::report_abi_attr_on_non_struct_item(
                             ctxt,
                             fn_.attr_list(),
                             "extern fn",
@@ -551,7 +523,7 @@ impl<'db> Struct<'db> {
     pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::Struct) -> Self {
         let is_event_struct = super::event::is_event_struct(&ast);
         let is_error_struct = super::error::is_error_struct(&ast);
-        let is_abi_struct = super::abi_struct::is_abi_struct(&ast);
+        let is_abi_struct = abi_struct::is_abi_struct(&ast);
 
         if is_event_struct && is_error_struct {
             super::error::report_event_error_attr_conflict(ctxt, &ast);

@@ -405,7 +405,7 @@ fn packed_string_len(_ word: u256) -> u256 {
 
 /// A zero-copy view over a `bytes` payload in ABI-encoded data.
 ///
-/// When `I` defaults to `()`, the view is *unbound* — it records only the
+/// When `I` defaults to `()`, the view is *unbound* -- it records only the
 /// data start offset and length. Call `.over(input)` to bind a byte source
 /// and get a `BytesView<I>` with byte/word access.
 ///
@@ -459,7 +459,7 @@ impl BytesView<()> {
 
 /// A zero-copy view over a `string` payload in ABI-encoded data.
 ///
-/// `StringView<()>` is an unbound position — call `.over(input)` to bind a
+/// `StringView<()>` is an unbound position -- call `.over(input)` to bind a
 /// byte source for character access.
 pub struct StringView<I> {
     pub bytes: BytesView<I>,
@@ -510,7 +510,7 @@ impl StringView<()> {
 /// the byte input source and the offset where the array starts. Elements
 /// are read on demand via `get(index)`, paying only for what you use.
 ///
-/// When `I` defaults to `()`, the view is *unbound* — it records only the
+/// When `I` defaults to `()`, the view is *unbound* -- it records only the
 /// byte offset where the array lives. Call `.over(input)` to bind a byte
 /// source and get an `ArrayView<T, N, I>` with element access.
 ///
@@ -540,7 +540,7 @@ impl<T, const N: usize, I> ArrayView<T, N, I>
     }
 
     /// Read element at `index` from the underlying input source.
-    /// Reads directly from calldata/memory — no copy.
+    /// Reads directly from calldata/memory -- no copy.
     #[arithmetic(unchecked)]
     pub fn get(self, _ index: usize) -> u256 {
         let byte_offset = self.start + (index as u256) * abi_field_head_size<T>()
