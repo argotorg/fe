@@ -5,8 +5,10 @@ use gimli::write::{
     Sections,
 };
 use gimli::{
-    DW_AT_comp_dir, DW_AT_language, DW_AT_name, DW_AT_stmt_list, DW_LANG_Rust, Encoding, Format,
-    LineEncoding, RunTimeEndian,
+    DW_AT_byte_size, DW_AT_comp_dir, DW_AT_encoding, DW_AT_language, DW_AT_name,
+    DW_AT_stmt_list, DW_ATE_boolean, DW_ATE_signed, DW_ATE_unsigned, DW_LANG_Rust,
+    DW_TAG_base_type, DW_TAG_member, DW_TAG_structure_type, Encoding, Format, LineEncoding,
+    RunTimeEndian,
 };
 use sonatina_codegen::object::{ObjectArtifact, PcMapEntry};
 
@@ -93,7 +95,9 @@ pub fn generate_dwarf_from_entries(pc_entries: &[ResolvedProvenanceEntry]) -> Op
     dwarf.unit.get_mut(root).set(DW_AT_stmt_list, AttributeValue::LineProgramRef);
 
     let mut sections = Sections::new(EndianVec::new(RunTimeEndian::Little));
-    dwarf.write(&mut sections).ok()?;
+    if let Err(_) = dwarf.write(&mut sections) {
+        return None;
+    }
 
     Some(DwarfDebugInfo {
         debug_info: sections.debug_info.0.into_vec(),
@@ -103,6 +107,88 @@ pub fn generate_dwarf_from_entries(pc_entries: &[ResolvedProvenanceEntry]) -> Op
         debug_ranges: sections.debug_ranges.0.into_vec(),
         debug_rnglists: sections.debug_rnglists.0.into_vec(),
     })
+}
+
+#[derive(Clone, Debug)]
+pub enum FeTypeDesc {
+    UInt { bits: u32 },
+    Int { bits: u32 },
+    Bool,
+    Address,
+    Bytes { len: Option<u32> },
+    String,
+    Struct { name: String, fields: Vec<(String, FeTypeDesc)> },
+    Enum { name: String, variants: Vec<String> },
+    Array { elem: Box<FeTypeDesc>, len: Option<u64> },
+}
+
+pub fn add_type_dies(dwarf: &mut DwarfUnit, types: &[FeTypeDesc]) {
+    let root = dwarf.unit.root();
+    for ty in types {
+        add_type_die(dwarf, root, ty);
+    }
+}
+
+fn add_type_die(
+    dwarf: &mut DwarfUnit,
+    parent: gimli::write::UnitEntryId,
+    ty: &FeTypeDesc,
+) -> gimli::write::UnitEntryId {
+    match ty {
+        FeTypeDesc::UInt { bits } => {
+            let id = dwarf.unit.add(parent, DW_TAG_base_type);
+            let name = dwarf.strings.add(format!("u{bits}").as_bytes());
+            dwarf.unit.get_mut(id).set(DW_AT_name, AttributeValue::StringRef(name));
+            dwarf.unit.get_mut(id).set(DW_AT_byte_size, AttributeValue::Data1((*bits / 8) as u8));
+            dwarf.unit.get_mut(id).set(DW_AT_encoding, AttributeValue::Encoding(DW_ATE_unsigned));
+            id
+        }
+        FeTypeDesc::Int { bits } => {
+            let id = dwarf.unit.add(parent, DW_TAG_base_type);
+            let name = dwarf.strings.add(format!("i{bits}").as_bytes());
+            dwarf.unit.get_mut(id).set(DW_AT_name, AttributeValue::StringRef(name));
+            dwarf.unit.get_mut(id).set(DW_AT_byte_size, AttributeValue::Data1((*bits / 8) as u8));
+            dwarf.unit.get_mut(id).set(DW_AT_encoding, AttributeValue::Encoding(DW_ATE_signed));
+            id
+        }
+        FeTypeDesc::Bool => {
+            let id = dwarf.unit.add(parent, DW_TAG_base_type);
+            let name = dwarf.strings.add(b"bool");
+            dwarf.unit.get_mut(id).set(DW_AT_name, AttributeValue::StringRef(name));
+            dwarf.unit.get_mut(id).set(DW_AT_byte_size, AttributeValue::Data1(1));
+            dwarf.unit.get_mut(id).set(DW_AT_encoding, AttributeValue::Encoding(DW_ATE_boolean));
+            id
+        }
+        FeTypeDesc::Address => {
+            let id = dwarf.unit.add(parent, DW_TAG_base_type);
+            let name = dwarf.strings.add(b"address");
+            dwarf.unit.get_mut(id).set(DW_AT_name, AttributeValue::StringRef(name));
+            dwarf.unit.get_mut(id).set(DW_AT_byte_size, AttributeValue::Data1(20));
+            dwarf.unit.get_mut(id).set(DW_AT_encoding, AttributeValue::Encoding(DW_ATE_unsigned));
+            id
+        }
+        FeTypeDesc::Struct { name, fields } => {
+            let id = dwarf.unit.add(parent, DW_TAG_structure_type);
+            let name_id = dwarf.strings.add(name.as_bytes());
+            dwarf.unit.get_mut(id).set(DW_AT_name, AttributeValue::StringRef(name_id));
+            for (field_name, field_ty) in fields {
+                let field_id = dwarf.unit.add(id, DW_TAG_member);
+                let fname_id = dwarf.strings.add(field_name.as_bytes());
+                dwarf.unit.get_mut(field_id).set(DW_AT_name, AttributeValue::StringRef(fname_id));
+                add_type_die(dwarf, id, field_ty);
+            }
+            id
+        }
+        FeTypeDesc::Bytes { .. }
+        | FeTypeDesc::String
+        | FeTypeDesc::Enum { .. }
+        | FeTypeDesc::Array { .. } => {
+            let id = dwarf.unit.add(parent, DW_TAG_base_type);
+            let name = dwarf.strings.add(format!("{ty:?}").as_bytes());
+            dwarf.unit.get_mut(id).set(DW_AT_name, AttributeValue::StringRef(name));
+            id
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
