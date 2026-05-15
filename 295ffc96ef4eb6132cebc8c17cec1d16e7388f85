@@ -1,0 +1,223 @@
+═══════════════════════════════════════════════════════════════════
+MULTI-BACKEND Fe/Sonatina: Session Synopsis & Design Choices
+═══════════════════════════════════════════════════════════════════
+
+Session Date: 2026-05-15 (extended session, ~8 hours)
+Branch: multi-backend (sonatina: 42 commits, fe: 34 commits)
+Contributors: Micah + Claude Code
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. WHAT WE BUILT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+A unified multi-target compilation pipeline for Fe:
+
+  Fe source code
+      ↓ compile_to_ir(db, top_mod, target)
+  Sonatina IR (shared, target-agnostic)
+      ↓                    ↓                    ↓
+  CraneliftBackend    WasmBackend         SpirvBackend
+  (JIT execution)     (via WAFFLE)        (via Naga)
+      ↓                    ↓                    ↓
+  Native code         .wasm module        SPIR-V shader
+  (executes)          (wasmtime)          (spirv-val ✓)
+
+Proven with parameterized functions:
+  pub fn compute(a: u64, b: u64) -> u64 { a + b + a * b + 42 }
+  → Cranelift: 85 ✓  WASM: 85 ✓  SPIR-V: validated ✓
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+2. KEY DESIGN CHOICES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+A) TARGET-INFORMED SELECTION, NOT INSTRUCTION TRANSLATION
+   Fe's capability/effect system prevents emitting EVM-specific ops
+   when targeting WASM/native. The type system enforces this at
+   compile time, not runtime checks. Storage access is a capability
+   that EVM provides; linear memory is a different capability WASM
+   provides. Generic code uses abstract capabilities.
+
+B) WAFFLE FOR WASM (Bytecode Alliance, Ramsey's algorithm)
+   Instead of hand-rolling a Stackifier for WASM control flow
+   recovery, we target WAFFLE's SSA IR. WAFFLE handles:
+   - Reducification (irreducible CFG → reducible)
+   - Stackification (CFG → structured block/loop/if)
+   - WASM emission
+   Our job: faithful Sonatina IR → WAFFLE IR translation.
+   Phi nodes → block params. Instructions → Operators.
+   Sean recommended this approach.
+
+C) NAGA FOR SPIR-V (Bytecode Alliance, gfx-rs)
+   Instead of raw rspirv SPIR-V binary emission, we target Naga's
+   expression DAG + statement tree IR. Naga handles:
+   - SPIR-V validation and emission
+   - Structured control flow via Statement::Loop/If
+   - Optional WGSL output for debugging
+   Key learning: Naga body/continuing blocks are sibling scopes —
+   expressions emitted in body are NOT visible in continuing.
+   Phi updates must go in body (end), not continuing.
+   Expression scoping: Load/Binary/Unary need Emit statements;
+   LocalVariable/Literal/GlobalVariable are always in scope.
+
+D) ACTOR MODEL FOR CONTRACTS
+   Fe's contract model is secretly an actor model:
+   - recv arms = message handlers
+   - init = constructor
+   - synthetic runtime_root = mailbox dispatcher
+   - effects = capabilities
+   DispatchStrategy enum routes compilation:
+   - EVM: calldata selector-based dispatch (synthetic root)
+   - WASM: each recv arm → named export (no dispatcher)
+   - Native: each recv arm → extern "C" symbol
+
+E) HKT (type Foo<T> IN TRAITS) — Sub-PR 1 landed
+   Parser accepts type Foo<T> in trait declarations.
+   HIR stores generic_params on AssocTyDecl/AssocTyDef.
+   Lowering collects generic params.
+   Formatter, span, semantic view all updated.
+   Kind system (Kind::Abs) already exists — just needs connection.
+   Sub-PR 2 (kind computation + B::Ptr<u32> resolution) is next.
+   Sub-PR 3 (impl conformance checking) follows.
+
+F) UNIFIED COMPILATION ENTRY POINT
+   unified.rs provides CompileTarget enum and compile_to_ir():
+   - CompileTarget::Evm → standard EVM compilation
+   - CompileTarget::Native/Wasm/Spirv → library mode with native ISA
+   Same Sonatina IR module feeds all three non-EVM backends.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+3. ARCHITECTURE: SONATINA'S ROLE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Sonatina is the nimble, faithful translator between Fe and the
+target backends. It does NOT reimpliment what WAFFLE/Naga provide:
+
+  Fe → MIR → Sonatina IR (shared optimizations: SCCP, ADCE, LICM)
+                ↓
+  Backend trait: compile_module(&Module) → Artifact
+                ↓
+  ┌─────────────┼─────────────┐
+  │             │             │
+  Cranelift   WAFFLE        Naga
+  (direct)    (SSA→SSA)     (SSA→DAG)
+
+The Backend trait has one method: compile_module. Each backend owns
+its internal pipeline. Cranelift translates instruction-by-instruction.
+WAFFLE translates block-by-block with phi→blockparam conversion.
+Naga translates to expression DAG with LocalVariable for phi state.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+4. CRANELIFT TRANSLATOR: INSTRUCTION COVERAGE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+40+ Sonatina IR instructions handled:
+  Arithmetic: Add, Sub, Mul, Neg, Udiv, Sdiv, Shl, Shr, Sar
+  Logic: And, Or, Xor, Not
+  Compare: Lt, Gt, Le, Ge, Slt, Sgt, Sle, Sge, Eq, Ne, IsZero
+  Cast: Sext, Zext, Trunc
+  Control: Jump, Br, Return, Call (sret + intrinsic), Unreachable
+  Overflow: Uaddo, Umulo (with safe div-by-zero handling)
+  Data: ObjLoad, ObjStore, ObjAlloc (type-aware sizing), ObjProj,
+        ObjIndex (i256 idx + objref auto-deref), ExtractValue,
+        ConstRef (GvInitializer materialization), ConstIndex, ConstLoad,
+        Alloca, Mstore, Mload
+  EVM: EvmUmod→urem, EvmRevert→trap, EvmStop→return,
+       EvmAddMod/EvmMulMod→u256 runtime intrinsics
+
+Key innovation: resolve_scalar_value() auto-derefs objref<T> values
+in comparisons and array indexing, working around Fe's library mode
+wrapping params as objref pointers.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+5. KNOWN COMPROMISES / FOLLOW-UPS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. HKT Sub-PR 2+3: Kind computation + B::Ptr<u32> type resolution
+   + impl conformance checking. Scoped but not implemented.
+
+2. Overflow semantics differ: EVM wraps, native/WASM check (trap),
+   SPIR-V has no overflow detection.
+
+3. u256 only on Cranelift: WASM/SPIR-V limited to u64.
+   u256 on WASM needs WAFFLE memory ops for limb storage.
+
+4. Subtraction: Fe emits underflow checks that WAFFLE translator
+   doesn't handle yet. Tests use add/mul to avoid this.
+
+5. Storage not unified: EVM has SLOAD/SSTORE, others use
+   InMemoryStorage. Needs Backend trait + HKTs.
+
+6. objref params are value-passthrough on WASM: works for scalars
+   but would break for compound types needing real pointer semantics.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+6. HKT DX RISK ANALYSIS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Fe already ships production HKTs (Abi::Decoder, Functor, Monad).
+The Backend trait pushes HKT errors to contract developers who are
+less type-theory-literate. Top 5 risks identified:
+
+1. Unnormalized projections: "B::Word requires B: Backend" guidance
+2. Kind mismatch: show "takes N type parameters" not "(* -> *)"
+3. Effect/Backend interaction: detect EVM-specific effects in
+   backend-generic code
+4. Nested projection cascades: point at inner failing type
+5. Fully-qualified display: show B::Ptr<u256> not <B as Backend>::Ptr
+
+See fe-hkt-dx-risks.md for details with specific file paths.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+7. TEST COVERAGE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Sonatina backend tests:
+  Cranelift: 8 tests (arithmetic, arrays, ConstRef, Poseidon loop,
+             cross-target known-answer)
+  WASM:     6 tests (arithmetic, loops, Poseidon sigma, cross-target)
+  SPIR-V:   5 tests (constants, arithmetic, Poseidon, loops,
+             three-backend known-answer)
+  EVM:      726 tests (zero regressions)
+
+Fe native backend tests:
+  34 tests including:
+  - Poseidon mock hash with function calls on Cranelift JIT
+  - 4-round while-loop Poseidon with inline sigma
+  - Dynamic array indexing with objref auto-deref
+  - Unified parameterized 3-backend test
+  - DispatchStrategy routing tests
+  - D1 HKT parser test (type Foo<T> syntax)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+8. FILES OF NOTE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Sonatina:
+  crates/codegen/src/backend.rs        — Backend trait
+  crates/codegen/src/isa/cranelift/    — Cranelift JIT backend
+  crates/codegen/src/isa/wasm/         — WAFFLE-based WASM backend
+  crates/codegen/src/isa/spirv/        — Naga-based SPIR-V backend
+  crates/codegen/src/structurize.rs    — Control flow structurizer
+
+Fe:
+  crates/codegen/src/unified.rs        — Unified compilation pipeline
+  crates/codegen/src/dispatch.rs       — DispatchStrategy + StorageProvider
+  crates/codegen/tests/native_backend.rs — 34 multi-backend tests
+  fe-hkt-implementation-plan.md        — D1/D2 HKT implementation plan
+  fe-hkt-dx-risks.md                   — HKT error DX risk analysis
+  COMPROMISES.md                       — Documented compromises
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+9. NEXT STEPS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Priority order:
+1. HKT Sub-PR 2: kind computation from generic params +
+   GenericArg::AssocType resolution (ty_lower.rs:981)
+2. HKT Sub-PR 3: impl conformance checking
+3. Backend trait in Fe core (ingots/core/src/backend.fe)
+4. Subtraction/underflow handling in WAFFLE translator
+5. u256 on WASM via WAFFLE memory operations
+6. Storage unification via Backend trait
+
+═══════════════════════════════════════════════════════════════════
