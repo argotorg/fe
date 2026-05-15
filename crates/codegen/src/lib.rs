@@ -1,5 +1,6 @@
 mod backend;
 pub mod dwarf;
+pub mod ethdebug;
 mod function_symbols;
 mod layout;
 mod runtime_package;
