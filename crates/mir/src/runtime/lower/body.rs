@@ -272,6 +272,8 @@ pub(super) struct RmirEmitter<'db> {
     pub(super) locals: Vec<RLocal<'db>>,
     pub(super) blocks: Vec<RBlock<'db>>,
     pub(super) terminated_blocks: Vec<bool>,
+    pub(super) source_table: common::source_ord::FunctionSourceTable,
+    pub(super) cur_source: common::source_ord::SourceOrd,
 }
 
 enum LoweredBuiltinCall<'db> {
@@ -424,6 +426,8 @@ impl<'db> RmirEmitter<'db> {
             locals,
             blocks,
             terminated_blocks,
+            source_table: common::source_ord::FunctionSourceTable::new(),
+            cur_source: common::source_ord::SourceOrd::default(),
         }
     }
 
@@ -431,7 +435,9 @@ impl<'db> RmirEmitter<'db> {
         while self.blocks.len() < self.semantic_body.blocks.len() {
             self.blocks.push(RBlock {
                 stmts: Vec::new(),
+                stmt_sources: Vec::new(),
                 terminator: RTerminator::Return(None),
+                terminator_source: common::source_ord::SourceOrd::default(),
             });
         }
         RuntimeBody {
@@ -442,7 +448,59 @@ impl<'db> RmirEmitter<'db> {
             provider_bindings: self.provider_bindings,
             locals: self.locals,
             blocks: self.blocks,
+            source_table: self.source_table,
         }
+    }
+
+    fn resolve_sem_origin(
+        &mut self,
+        origin: &hir::analysis::semantic::SemOrigin<'db>,
+    ) -> common::source_ord::SourceOrd {
+        use hir::analysis::semantic::SemOrigin;
+        use hir::span::LazySpan;
+
+        let default = common::source_ord::SourceOrd::default();
+
+        let Some(body) = self.semantic_body.template_owner.body(self.db) else {
+            return default;
+        };
+
+        let span = match origin {
+            SemOrigin::Expr(expr_id) => {
+                hir::span::lazy_spans::LazyExprSpan::new(body, *expr_id)
+                    .resolve(self.db)
+            }
+            SemOrigin::Stmt(stmt_id) => {
+                hir::span::lazy_spans::LazyStmtSpan::new(body, *stmt_id)
+                    .resolve(self.db)
+            }
+            SemOrigin::Body(_) | SemOrigin::Synthetic => {
+                return default;
+            }
+        };
+
+        let Some(span) = span else {
+            return default;
+        };
+
+        let file_path = span
+            .file
+            .path(self.db)
+            .as_ref()
+            .map(|p| p.to_string())
+            .or_else(|| span.file.url(self.db).map(|u| u.to_string()))
+            .unwrap_or_default();
+
+        let text = span.file.text(self.db);
+        let start_offset: u32 = span.range.start().into();
+        let end_offset: u32 = span.range.end().into();
+        let (start_line, start_col) =
+            common::source_ord::byte_offset_to_line_col(text, start_offset);
+        let (end_line, end_col) =
+            common::source_ord::byte_offset_to_line_col(text, end_offset);
+
+        self.source_table
+            .push(file_path, start_line, start_col, end_line, end_col)
     }
 
     fn layout_for_ty(&self, ty: TyId<'db>) -> LayoutId<'db> {
@@ -468,7 +526,9 @@ impl<'db> RmirEmitter<'db> {
         self.blocks = (0..self.semantic_body.blocks.len())
             .map(|_| RBlock {
                 stmts: Vec::new(),
+                stmt_sources: Vec::new(),
                 terminator: RTerminator::Return(None),
+                terminator_source: common::source_ord::SourceOrd::default(),
             })
             .collect();
         self.terminated_blocks = vec![false; self.semantic_body.blocks.len()];
@@ -476,19 +536,24 @@ impl<'db> RmirEmitter<'db> {
         for (idx, block) in blocks.iter().enumerate() {
             let bb = RBlockId::from_u32(idx as u32);
             for (stmt_idx, stmt) in block.stmts.iter().enumerate() {
+                self.cur_source = self.resolve_sem_origin(&stmt.origin);
                 self.lower_stmt(bb, stmt_idx, stmt);
                 if self.terminated_blocks[bb.index()] {
                     break;
                 }
             }
             if !self.terminated_blocks[bb.index()] {
-                self.blocks[bb.index()].terminator = self.lower_terminator(bb, &block.terminator);
+                self.cur_source = self.resolve_sem_origin(&block.terminator.origin);
+                let terminator = self.lower_terminator(bb, &block.terminator);
+                self.blocks[bb.index()].terminator = terminator;
+                self.blocks[bb.index()].terminator_source = self.cur_source;
             }
         }
     }
 
     fn set_terminator(&mut self, bb: RBlockId, terminator: RTerminator<'db>) {
         self.blocks[bb.index()].terminator = terminator;
+        self.blocks[bb.index()].terminator_source = self.cur_source;
         self.terminated_blocks[bb.index()] = true;
     }
 
@@ -4138,6 +4203,7 @@ impl<'db> RmirEmitter<'db> {
             provider_bindings: self.provider_bindings.clone(),
             locals: self.locals.clone(),
             blocks: Vec::new(),
+            source_table: common::source_ord::FunctionSourceTable::new(),
         };
         resolve_runtime_place_address_class(self.db, &program, &body, place)
             .unwrap_or_else(|err| panic!("invalid runtime place address class: {err:?}"))
@@ -4417,6 +4483,9 @@ impl<'db> RmirEmitter<'db> {
     fn push_stmt(&mut self, bb: RBlockId, stmt: RStmt<'db>) {
         if !self.terminated_blocks[bb.index()] {
             self.blocks[bb.index()].stmts.push(stmt);
+            self.blocks[bb.index()]
+                .stmt_sources
+                .push(self.cur_source);
         }
     }
 

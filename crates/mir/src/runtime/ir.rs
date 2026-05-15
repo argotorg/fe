@@ -563,6 +563,7 @@ pub struct RuntimeBody<'db> {
     pub provider_bindings: Vec<RuntimeProviderBinding<'db>>,
     pub locals: Vec<RLocal<'db>>,
     pub blocks: Vec<RBlock<'db>>,
+    pub source_table: common::source_ord::FunctionSourceTable,
 }
 
 impl<'db> RuntimeBody<'db> {
@@ -659,7 +660,9 @@ pub struct RuntimeParam<'db> {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub struct RBlock<'db> {
     pub stmts: Vec<RStmt<'db>>,
+    pub stmt_sources: Vec<common::source_ord::SourceOrd>,
     pub terminator: RTerminator<'db>,
+    pub terminator_source: common::source_ord::SourceOrd,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]

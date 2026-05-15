@@ -10,6 +10,7 @@ pub mod ingot;
 pub mod layout;
 pub mod options;
 pub mod paths;
+pub mod source_ord;
 pub mod stdlib;
 pub mod urlext;
 

@@ -70,7 +70,7 @@ pub(super) fn compile_runtime_package_sonatina(
     db: &DriverDataBase,
     package: &RuntimePackage<'_>,
     layout: TargetDataLayout,
-) -> Result<Module, LowerError> {
+) -> Result<(Module, sonatina_codegen::object::FrontendProvenanceMap), LowerError> {
     let _ = layout;
     let builder = ModuleBuilder::new(create_module_ctx());
     let isa = super::create_evm_isa();
@@ -94,6 +94,7 @@ struct ModuleLowerer<'db, 'a> {
     layout_names: FxHashMap<LayoutId<'db>, String>,
     const_globals: FxHashMap<ConstRegionId<'db>, GlobalVariableRef>,
     const_names: FxHashMap<ConstRegionId<'db>, String>,
+    frontend_provenance: sonatina_codegen::object::FrontendProvenanceMap,
 }
 
 impl<'db, 'a> ModuleLowerer<'db, 'a> {
@@ -115,11 +116,12 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             layout_names: FxHashMap::default(),
             const_globals: FxHashMap::default(),
             const_names: FxHashMap::default(),
+            frontend_provenance: FxHashMap::default(),
         }
     }
 
-    fn finish(self) -> Module {
-        self.builder.build()
+    fn finish(self) -> (Module, sonatina_codegen::object::FrontendProvenanceMap) {
+        (self.builder.build(), self.frontend_provenance)
     }
 
     fn inst_set(&self) -> &'static EvmInstSet {
@@ -292,7 +294,10 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             let body = function.instance(self.db).body(self.db);
             let func_ref = self.func_ref(function.instance(self.db))?;
             let ctx = FunctionLowerer::new(self, body, func_ref)?;
-            ctx.lower()?;
+            let provenance_entries = ctx.lower_and_collect_provenance(func_ref)?;
+            for (func, inst, value) in provenance_entries {
+                self.frontend_provenance.insert((func, inst), value);
+            }
         }
         Ok(())
     }
@@ -794,6 +799,7 @@ struct FunctionLowerer<'ctx, 'db, 'a> {
     empty_revert_block: Option<BlockId>,
     overflow_panic_block: Option<BlockId>,
     division_by_zero_panic_block: Option<BlockId>,
+    inst_provenance: FxHashMap<sonatina_ir::InstId, common::source_ord::SourceOrd>,
 }
 
 #[derive(Clone, Copy)]
@@ -852,10 +858,22 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             empty_revert_block: None,
             overflow_panic_block: None,
             division_by_zero_panic_block: None,
+            inst_provenance: FxHashMap::default(),
         })
     }
 
-    fn lower(mut self) -> Result<(), LowerError> {
+    fn lower_and_collect_provenance(
+        mut self,
+        func_ref: FuncRef,
+    ) -> Result<Vec<(FuncRef, sonatina_ir::InstId, String)>, LowerError> {
+        self.lower_inner()?;
+        let provenance = self.build_frontend_provenance(func_ref);
+        self.fb.seal_all();
+        self.fb.finish();
+        Ok(provenance)
+    }
+
+    fn lower_inner(&mut self) -> Result<(), LowerError> {
         let entry_block = self.block_id(RBlockId::from_u32(0))?;
         self.fb.switch_to_block(self.prologue_block);
         self.initialize_locals().map_err(|err| {
@@ -880,6 +898,12 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 .switch_to_block(self.block_id(RBlockId::from_u32(idx as u32))?);
             let mut terminated = false;
             for (stmt_idx, stmt) in block.stmts.iter().enumerate() {
+                let source_ord = block
+                    .stmt_sources
+                    .get(stmt_idx)
+                    .copied()
+                    .unwrap_or_default();
+                let inst_before = self.fb.last_inst();
                 if matches!(
                     self.lower_stmt(stmt).map_err(|err| {
                         self.with_body_context(
@@ -894,15 +918,19 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     })?,
                     Lowered::Terminated
                 ) {
+                    self.tag_new_insts(inst_before, source_ord);
                     self.pending_enum_proof = None;
                     terminated = true;
                     break;
                 }
+                self.tag_new_insts(inst_before, source_ord);
             }
             if terminated {
                 continue;
             }
             self.pending_enum_proof = None;
+            let term_source = block.terminator_source;
+            let inst_before = self.fb.last_inst();
             self.lower_terminator(&block.terminator).map_err(|err| {
                 self.with_body_context(
                     format!(
@@ -914,10 +942,55 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 )
                 .wrap(err)
             })?;
+            self.tag_new_insts(inst_before, term_source);
         }
-        self.fb.seal_all();
-        self.fb.finish();
         Ok(())
+    }
+
+    fn tag_new_insts(
+        &mut self,
+        inst_before: Option<sonatina_ir::InstId>,
+        source_ord: common::source_ord::SourceOrd,
+    ) {
+        if source_ord.is_default() {
+            return;
+        }
+        let inst_after = self.fb.last_inst();
+        if inst_after == inst_before {
+            return;
+        }
+        if let Some(after) = inst_after {
+            let start = inst_before.map_or(0, |i| i.0 + 1);
+            for id in start..=after.0 {
+                self.inst_provenance
+                    .insert(sonatina_ir::InstId(id), source_ord);
+            }
+        }
+    }
+
+    fn build_frontend_provenance(
+        &self,
+        func_ref: FuncRef,
+    ) -> Vec<(FuncRef, sonatina_ir::InstId, String)> {
+        let source_table = &self.body.source_table;
+        self.inst_provenance
+            .iter()
+            .filter_map(|(&inst_id, &source_ord)| {
+                let entry = source_table.get(source_ord)?;
+                Some((
+                    func_ref,
+                    inst_id,
+                    format!(
+                        "{}:{}:{}-{}:{}",
+                        entry.file_path,
+                        entry.start_line,
+                        entry.start_col,
+                        entry.end_line,
+                        entry.end_col,
+                    ),
+                ))
+            })
+            .collect()
     }
 
     fn block_id(&self, block: RBlockId) -> Result<BlockId, LowerError> {

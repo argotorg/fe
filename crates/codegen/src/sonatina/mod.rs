@@ -171,21 +171,41 @@ fn run_sonatina_optimization_pipeline(module: &mut Module, opt_level: OptLevel) 
 fn compile_all_runtime_objects(
     module: &Module,
     emit_observability: bool,
+    provenance: Option<&sonatina_codegen::object::FrontendProvenanceMap>,
 ) -> Result<Vec<ObjectArtifact>, LowerError> {
     let mut options = CompileOptions::default();
     let mut verifier_cfg = VerifierConfig::for_level(VerificationLevel::Full);
     verifier_cfg.allow_detached_entities = true;
     options.verifier_cfg = verifier_cfg;
     options.emit_observability = emit_observability;
-    compile_all_objects(module, &EvmBackend::new(create_evm_isa()), &options).map_err(|errors| {
-        LowerError::Internal(
-            errors
-                .iter()
-                .map(|error| format!("{error:?}"))
-                .collect::<Vec<_>>()
-                .join("; "),
-        )
-    })
+    let mut artifacts =
+        compile_all_objects(module, &EvmBackend::new(create_evm_isa()), &options).map_err(
+            |errors| {
+                LowerError::Internal(
+                    errors
+                        .iter()
+                        .map(|error| format!("{error:?}"))
+                        .collect::<Vec<_>>()
+                        .join("; "),
+                )
+            },
+        )?;
+    if let Some(provenance) = provenance {
+        for artifact in &mut artifacts {
+            for section in artifact.sections.values_mut() {
+                if let Some(observability) = &mut section.observability {
+                    for entry in &mut observability.pc_map {
+                        if let Some(ir_inst) = entry.ir_inst {
+                            if let Some(value) = provenance.get(&(entry.func, ir_inst)) {
+                                entry.frontend_provenance = Some(value.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(artifacts)
 }
 
 fn section_name_for_runtime(name: &mir::RuntimeSectionName) -> sonatina_ir::SectionName {
@@ -238,6 +258,16 @@ pub fn compile_runtime_package_sonatina(
     package: &RuntimePackage<'_>,
     layout: TargetDataLayout,
 ) -> Result<Module, LowerError> {
+    let (module, _provenance) =
+        lower_runtime::compile_runtime_package_sonatina(db, package, layout)?;
+    Ok(module)
+}
+
+pub fn compile_runtime_package_sonatina_with_provenance(
+    db: &DriverDataBase,
+    package: &RuntimePackage<'_>,
+    layout: TargetDataLayout,
+) -> Result<(Module, sonatina_codegen::object::FrontendProvenanceMap), LowerError> {
     lower_runtime::compile_runtime_package_sonatina(db, package, layout)
 }
 
@@ -503,11 +533,12 @@ pub fn emit_runtime_package_sonatina_bytecode(
     opt_level: OptLevel,
 ) -> Result<BTreeMap<String, SonatinaContractBytecode>, LowerError> {
     ensure_runtime_package_has_roots(db, package, "Sonatina bytecode")?;
-    let mut module = compile_runtime_package_sonatina(db, package, layout)?;
+    let (mut module, provenance) =
+        compile_runtime_package_sonatina_with_provenance(db, package, layout)?;
     ensure_module_sonatina_ir_valid(&module)?;
     run_sonatina_optimization_pipeline(&mut module, opt_level);
     ensure_module_sonatina_ir_valid(&module)?;
-    let artifacts = compile_all_runtime_objects(&module, false)?;
+    let artifacts = compile_all_runtime_objects(&module, false, Some(&provenance))?;
     let artifacts_by_name = artifacts
         .iter()
         .map(|artifact| (artifact.object.0.as_str(), artifact))
@@ -683,11 +714,17 @@ pub fn emit_test_module_sonatina(
     if package.root_objects(db).is_empty() {
         return Ok(TestModuleOutput { tests: Vec::new() });
     }
-    let mut module = compile_runtime_package_sonatina(db, &package, crate::EVM_LAYOUT)?;
+    let (mut module, provenance) =
+        compile_runtime_package_sonatina_with_provenance(db, &package, crate::EVM_LAYOUT)?;
     ensure_module_sonatina_ir_valid(&module)?;
     run_sonatina_optimization_pipeline(&mut module, opt_level);
     ensure_module_sonatina_ir_valid(&module)?;
-    let artifacts = compile_all_runtime_objects(&module, options.emit_observability)?;
+    let prov = if options.emit_observability {
+        Some(&provenance)
+    } else {
+        None
+    };
+    let artifacts = compile_all_runtime_objects(&module, options.emit_observability, prov)?;
     let artifacts_by_name = artifacts
         .iter()
         .map(|artifact| (artifact.object.0.as_str(), artifact))
@@ -851,7 +888,7 @@ mod tests {
         if let Err(err) = ensure_module_sonatina_ir_valid(&module) {
             panic!("post-opt test module should verify: {err}\n\n{dumped}");
         }
-        compile_all_runtime_objects(&module, false).expect("test runtime package should compile");
+        compile_all_runtime_objects(&module, false, None).expect("test runtime package should compile");
     }
 
     #[test]
@@ -883,7 +920,7 @@ mod tests {
         if let Err(err) = ensure_module_sonatina_ir_valid(&module) {
             panic!("post-opt test module should verify: {err}\n\n{dumped}");
         }
-        compile_all_runtime_objects(&module, false).expect("test runtime package should compile");
+        compile_all_runtime_objects(&module, false, None).expect("test runtime package should compile");
     }
 
     #[test]
@@ -915,7 +952,7 @@ mod tests {
         if let Err(err) = ensure_module_sonatina_ir_valid(&module) {
             panic!("post-opt test module should verify: {err}\n\n{dumped}");
         }
-        compile_all_runtime_objects(&module, false).expect("test runtime package should compile");
+        compile_all_runtime_objects(&module, false, None).expect("test runtime package should compile");
     }
 
     #[test]
@@ -959,6 +996,70 @@ fn roundtrip() {
         )
         .expect(
             "if branches that both return should lower without empty unreachable Sonatina blocks",
+        );
+    }
+
+    #[test]
+    fn provenance_populates_frontend_provenance_in_observability() {
+        let mut db = DriverDataBase::default();
+        let file_url = temp_fixture_url("provenance_test.fe");
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+fn add(x: u256, y: u256) -> u256 {
+    return x + y
+}
+
+#[test]
+fn test_add() {
+    assert(add(1, 2) == 3)
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+
+        let output = emit_test_module_sonatina(
+            &db,
+            top_mod,
+            OptLevel::O0,
+            SonatinaTestOptions {
+                emit_observability: true,
+            },
+            None,
+        )
+        .expect("test module should compile with observability");
+
+        let mut found_provenance = false;
+        let mut sample_provenance = String::new();
+        for test in &output.tests {
+            if let Some(json) = &test.sonatina_observability_json {
+                if let Some(start) = json.find("\"frontend_provenance\":\"") {
+                    let value_start = start + "\"frontend_provenance\":\"".len();
+                    if let Some(end) = json[value_start..].find('"') {
+                        sample_provenance = json[value_start..value_start + end].to_string();
+                        found_provenance = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        assert!(
+            found_provenance,
+            "expected at least one PcMapEntry with non-null frontend_provenance"
+        );
+
+        assert!(
+            sample_provenance.contains(':'),
+            "frontend_provenance should be in file:line:col-line:col format, got: {sample_provenance}"
         );
     }
 }
