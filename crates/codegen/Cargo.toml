@@ -6,6 +6,7 @@ edition.workspace = true
 [features]
 cranelift = ["sonatina-codegen/cranelift"]
 wasm = ["sonatina-codegen/wasm"]
+spirv-backend = ["sonatina-codegen/spirv-backend"]
 
 [dependencies]
 driver = { path = "../driver", package = "fe-driver" }
@@ -28,3 +29,5 @@ dir-test.workspace = true
 test-utils.workspace = true
 url.workspace = true
 hir = { workspace = true, features = ["testutils"] }
+wasmtime = "44.0.1"
+wasmparser = "0.248.0"

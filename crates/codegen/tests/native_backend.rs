@@ -1500,6 +1500,70 @@ pub fn field_add() -> u256 {
     }
 }
 
+#[cfg(all(feature = "cranelift", feature = "wasm", feature = "spirv-backend"))]
+#[test]
+fn d4_cross_target_fe_source_three_backends() {
+    use sonatina_codegen::Backend;
+    use sonatina_codegen::isa::{
+        cranelift::CraneliftBackend, spirv::SpirvBackend, wasm::WasmBackend,
+    };
+
+    let results: Result<(u64, u64, bool), String> = with_top_mod_for_source(
+        "cross_target.fe",
+        r#"
+pub fn compute() -> u64 {
+    let a: u64 = 7
+    let b: u64 = 5
+    let sum: u64 = a + b
+    let diff: u64 = a - b
+    sum * diff + 42
+}
+"#,
+        |db, top_mod| {
+            let module = fe_codegen::sonatina::compile_library_sonatina_native(db, top_mod)
+                .map_err(|e| format!("{e}"))?;
+
+            let cl = CraneliftBackend::new();
+            let cl_art = cl.compile_module(&module).map_err(|e| format!("{e:?}"))?;
+            let cl_fn: fn() -> u64 = unsafe {
+                let ptr = cl_art
+                    .get_func_ptr::<fn() -> u64>("compute")
+                    .ok_or("compute not found in cranelift")?;
+                std::mem::transmute(ptr)
+            };
+            let cranelift_result = cl_fn();
+
+            let wasm = WasmBackend::new();
+            let wasm_art = wasm.compile_module(&module).map_err(|e| format!("{e:?}"))?;
+            wasmparser::validate(&wasm_art.bytes).map_err(|e| format!("invalid wasm: {e}"))?;
+            let engine = wasmtime::Engine::default();
+            let wm = wasmtime::Module::new(&engine, &wasm_art.bytes)
+                .map_err(|e| format!("wasm load: {e}"))?;
+            let mut store = wasmtime::Store::new(&engine, ());
+            let inst = wasmtime::Instance::new(&mut store, &wm, &[])
+                .map_err(|e| format!("wasm instantiate: {e}"))?;
+            let wasm_fn = inst
+                .get_typed_func::<(), i64>(&mut store, "compute")
+                .map_err(|e| format!("wasm export: {e}"))?;
+            let wasm_result = wasm_fn
+                .call(&mut store, ())
+                .map_err(|e| format!("wasm call: {e}"))? as u64;
+
+            let spirv = SpirvBackend::new();
+            let spirv_art = spirv.compile_module(&module).map_err(|e| format!("{e:?}"))?;
+            let spirv_valid = spirv_art.words[0] == 0x07230203;
+
+            Ok((cranelift_result, wasm_result, spirv_valid))
+        },
+    );
+
+    let (cl, wasm, spirv_ok) = results.expect("cross-target compilation should succeed");
+    assert_eq!(cl, 66, "Cranelift result");
+    assert_eq!(wasm, 66, "WASM result");
+    assert_eq!(cl, wasm, "Cranelift and WASM should match");
+    assert!(spirv_ok, "SPIR-V should have valid magic number");
+}
+
 /// Verify that the EVM path still works for the same source.
 #[test]
 fn evm_ir_for_simple_contract_still_works() {
