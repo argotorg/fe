@@ -926,14 +926,19 @@ pub enum RuntimeInputPlan<'db> {
         decode_fn: RuntimeInstance<'db>,
         projected_fields: Box<[u32]>,
     },
-    /// Optimized path for static types whose fields are all ABI-word-sized
-    /// scalars. Each field is loaded directly via `calldataload` at a known
-    /// offset (4 + field_index * 32), skipping malloc / calldatacopy /
-    /// MemoryBytes / SolDecoder entirely.
+    /// Optimized path for non-dynamic types whose fields each fit in a single
+    /// ABI head slot. Each field is loaded directly via `calldataload` at a
+    /// known offset, skipping malloc / calldatacopy / MemoryBytes / SolDecoder
+    /// entirely.
+    ///
+    /// Eligibility is determined by querying `AbiSize::IS_DYNAMIC` (must be
+    /// false) and `AbiSize::HEAD_SIZE` on each field (must be exactly 32).
     DirectCalldataLoad {
         msg_ty: TyId<'db>,
-        /// Number of 32-byte word fields to load from calldata.
-        field_count: u32,
+        /// Per-field ABI head sizes (in bytes), as queried from
+        /// `AbiSize::HEAD_SIZE` on each field type. The calldata offset of
+        /// field `i` is `4 + sum(field_head_sizes[..i])`.
+        field_head_sizes: Box<[u32]>,
         /// Which of those fields the handler actually uses (same semantics
         /// as `projected_fields` in `DecodeCalldataPayload`).
         projected_fields: Box<[u32]>,
@@ -949,6 +954,10 @@ pub enum RuntimeReturnPlan<'db> {
     /// Optimized path for a single word-scalar return value: emit a direct
     /// `mstore` at offset 0 and `return(0, 32)` instead of calling
     /// `encode_single_root_alloc`.
+    ///
+    /// Eligibility is determined by querying `Encode::DIRECT_ENCODE` (must
+    /// be true) and verifying the runtime representation is a u256 word
+    /// scalar (so the value can be passed directly to `mstore`).
     DirectScalarReturn {
         ty: TyId<'db>,
     },

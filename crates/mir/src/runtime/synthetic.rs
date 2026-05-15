@@ -485,22 +485,22 @@ impl<'db> SyntheticBodyBuilder<'db> {
 
             RuntimeInputPlan::DirectCalldataLoad {
                 msg_ty,
-                field_count,
+                field_head_sizes,
                 projected_fields,
             } => {
                 // Optimized path: load each field directly from calldata at
-                // known offsets. For all-word-scalar types, field i lives at
-                // calldata offset (4 + i * 32).
+                // known offsets. Offsets are computed from per-field HEAD_SIZE
+                // values queried from the AbiSize trait.
                 //
                 // calldataload always returns a raw u256 word. If the target
                 // field has a narrower scalar class (u64, bool, etc.) we emit
                 // a Cast to match the handler's expected representation.
                 let field_types = msg_ty.field_types(self.db);
                 let env = self.runtime_type_env(plan.contract.scope());
-                let mut loaded_fields = Vec::with_capacity(field_count as usize);
-                for i in 0..field_count {
-                    let offset_val = 4 + i * 32;
-                    let offset = self.push_const_word(cont_bb, offset_val);
+                let mut loaded_fields = Vec::with_capacity(field_head_sizes.len());
+                let mut calldata_offset: u32 = 4; // skip 4-byte selector
+                for (i, &head_size) in field_head_sizes.iter().enumerate() {
+                    let offset = self.push_const_word(cont_bb, calldata_offset);
                     // Load as raw u256 (matches calldataload's output class)
                     let raw = self.push_builtin_value(
                         cont_bb,
@@ -508,7 +508,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
                         RuntimeClass::Scalar(word_scalar_class()),
                         RuntimeBuiltin::CallDataLoad { offset },
                     );
-                    let field_ty = field_types[i as usize];
+                    let field_ty = field_types[i];
                     let field_scalar = match top_level_class_for_ty_in_env(
                         self.db,
                         env,
@@ -540,6 +540,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
                         casted
                     };
                     loaded_fields.push(value);
+                    calldata_offset += head_size;
                 }
                 // Select the fields the handler expects, in the order it
                 // expects them (projected_fields maps handler param position

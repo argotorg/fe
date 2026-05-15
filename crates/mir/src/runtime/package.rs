@@ -2,15 +2,19 @@ use hir::semantic::{RecvArmAbiInfo, RecvArmView};
 use hir::{
     analysis::{
         semantic::{
-            GenericSubst, ImplEnv, ManualContractSection, RootSemanticInstanceError,
-            SemanticInstance, SemanticInstanceKey, get_or_build_semantic_instance,
+            EffectProviderSubst, GenericSubst, ImplEnv, ManualContractSection,
+            RootSemanticInstanceError, SemConstScalar, SemConstValue, SemanticInstance,
+            SemanticInstanceKey, eval_const_instance, get_or_build_semantic_instance,
             owner_effect_bindings, root_semantic_instance_key,
         },
         ty::{
             const_ty::ConstTyData,
             corelib::{resolve_core_trait, resolve_lib_type_path},
-            trait_def::{TraitInstId, resolve_trait_method_instance},
-            trait_resolution::TraitSolveCx,
+            trait_def::{
+                TraitInstId, assoc_const_body_and_impl_args_for_trait_inst,
+                resolve_trait_method_instance,
+            },
+            trait_resolution::{PredicateListId, TraitSolveCx},
             ty_check::{BodyOwner, LocalBinding},
             ty_def::{PrimTy, TyBase, TyData, TyId},
         },
@@ -820,10 +824,12 @@ fn contract_recv_wrapper<'db>(
     );
     let input = if abi_info.args_ty == TyId::unit(db) {
         RuntimeInputPlan::None
-    } else if let Some(field_count) = static_word_field_count(db, abi_info.args_ty) {
+    } else if let Some(field_head_sizes) =
+        direct_calldata_load_info(db, contract.scope(), abi_info.args_ty)
+    {
         RuntimeInputPlan::DirectCalldataLoad {
             msg_ty: abi_info.args_ty,
-            field_count,
+            field_head_sizes,
             projected_fields,
         }
     } else {
@@ -834,10 +840,7 @@ fn contract_recv_wrapper<'db>(
         }
     };
     let ret = if let Some(ret_ty) = abi_info.ret_ty {
-        if is_full_word_scalar(db, ret_ty) {
-            // Only full 256-bit types can skip encode_single_root_alloc.
-            // Smaller types (u8, bool, etc.) need widening before mstore
-            // which we don't handle yet.
+        if is_direct_return_eligible(db, contract.scope(), ret_ty) {
             RuntimeReturnPlan::DirectScalarReturn { ty: ret_ty }
         } else {
             RuntimeReturnPlan::Value { ty: ret_ty }
@@ -2122,48 +2125,126 @@ fn init_args_plan_sort_key<'db>(db: &'db dyn MirDb, plan: &InitArgsPlan<'db>) ->
     }
 }
 
-/// Returns `true` if `ty` is a primitive scalar type that occupies exactly one
-/// 32-byte ABI word AND has a scalar runtime representation (i.e. the runtime
-/// carries it as a plain word, not an aggregate).
+// ---------------------------------------------------------------------------
+// Const trait value queries
+//
+// These functions evaluate ABI trait associated constants (HEAD_SIZE,
+// IS_DYNAMIC, DIRECT_ENCODE) for a concrete type via CTFE, replacing the
+// old type-structure heuristics.
+// ---------------------------------------------------------------------------
+
+/// Evaluate an associated const from a trait impl for a concrete type.
 ///
-/// This is the strict check: only primitive bool and integer types qualify.
-/// ADT wrappers like `Address { inner: u256 }` are ABI-word-sized but have
-/// aggregate runtime representations, so they are excluded.
-fn is_primitive_word_scalar(db: &dyn MirDb, ty: TyId<'_>) -> bool {
-    let base = ty.base_ty(db);
-    match base.data(db) {
-        TyData::TyBase(TyBase::Prim(prim)) => matches!(
-            prim,
-            PrimTy::Bool
-                | PrimTy::U8
-                | PrimTy::U16
-                | PrimTy::U32
-                | PrimTy::U64
-                | PrimTy::U128
-                | PrimTy::U256
-                | PrimTy::Usize
-                | PrimTy::I8
-                | PrimTy::I16
-                | PrimTy::I32
-                | PrimTy::I64
-                | PrimTy::I128
-                | PrimTy::I256
-                | PrimTy::Isize
-        ),
-        _ => false,
+/// Resolves the impl body for `const_name` on the trait instantiated with the
+/// given args, then runs CTFE to produce a `SemConstId`.
+fn eval_trait_assoc_const<'db>(
+    db: &'db dyn MirDb,
+    scope: hir::hir_def::scope_graph::ScopeId<'db>,
+    trait_path: &[&str],
+    trait_args: Vec<TyId<'db>>,
+    const_name: &str,
+) -> Option<hir::analysis::semantic::SemConstId<'db>> {
+    let trait_def = resolve_core_trait(db, scope, trait_path)?;
+    let inst = TraitInstId::new_simple(db, trait_def, trait_args);
+    let assumptions = PredicateListId::empty_list(db);
+    let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
+    let name = IdentId::new(db, const_name.to_string());
+    let (body, impl_args) =
+        assoc_const_body_and_impl_args_for_trait_inst(db, solve_cx, inst, name)?;
+    let key = SemanticInstanceKey::new(
+        db,
+        BodyOwner::AnonConstBody {
+            body,
+            expected: TyId::invalid(db, hir::analysis::ty::ty_def::InvalidCause::Other),
+        },
+        GenericSubst::new(db, impl_args),
+        EffectProviderSubst::empty(db),
+        ImplEnv::new(db, scope, assumptions, vec![inst]),
+    );
+    let instance = get_or_build_semantic_instance(db, key);
+    eval_const_instance(db, instance).ok()
+}
+
+/// Query `AbiSize::HEAD_SIZE` for `ty`, returning the value as a `u32`.
+fn query_head_size<'db>(
+    db: &'db dyn MirDb,
+    scope: hir::hir_def::scope_graph::ScopeId<'db>,
+    ty: TyId<'db>,
+) -> Option<u32> {
+    let const_id = eval_trait_assoc_const(db, scope, &["abi", "AbiSize"], vec![ty], "HEAD_SIZE")?;
+    match const_id.value(db) {
+        SemConstValue::Scalar {
+            value: SemConstScalar::Int { value },
+            ..
+        } => {
+            let v: u64 = value.try_into().ok()?;
+            u32::try_from(v).ok()
+        }
+        _ => None,
     }
 }
 
-/// Returns `true` if `ty` is an unsigned 256-bit integer (u256 or usize) that
-/// needs no widening and can be passed directly to `mstore`. The runtime
-/// verifier requires mstore values to be `ScalarRepr::Int { bits: 256, signed:
-/// false }`, so signed types (i256, isize) are excluded.
-fn is_full_word_scalar(db: &dyn MirDb, ty: TyId<'_>) -> bool {
+/// Query `AbiSize::IS_DYNAMIC` for `ty`, returning `true` if the type is
+/// dynamically-sized in ABI encoding.
+fn query_is_dynamic<'db>(
+    db: &'db dyn MirDb,
+    scope: hir::hir_def::scope_graph::ScopeId<'db>,
+    ty: TyId<'db>,
+) -> Option<bool> {
+    let const_id = eval_trait_assoc_const(db, scope, &["abi", "AbiSize"], vec![ty], "IS_DYNAMIC")?;
+    match const_id.value(db) {
+        SemConstValue::Scalar {
+            value: SemConstScalar::Bool(v),
+            ..
+        } => Some(v),
+        _ => None,
+    }
+}
+
+/// Query `Encode<Sol>::DIRECT_ENCODE` for `ty`, returning `true` if the type
+/// supports direct ABI encoding (single-word store).
+fn query_direct_encode<'db>(
+    db: &'db dyn MirDb,
+    scope: hir::hir_def::scope_graph::ScopeId<'db>,
+    ty: TyId<'db>,
+) -> Option<bool> {
+    let abi_ty = resolve_lib_type_path(db, scope, "std::abi::Sol")?;
+    let const_id = eval_trait_assoc_const(
+        db,
+        scope,
+        &["abi", "Encode"],
+        vec![ty, abi_ty],
+        "DIRECT_ENCODE",
+    )?;
+    match const_id.value(db) {
+        SemConstValue::Scalar {
+            value: SemConstScalar::Bool(v),
+            ..
+        } => Some(v),
+        _ => None,
+    }
+}
+
+/// Returns `true` if `ty` supports `DirectScalarReturn`: the type has
+/// `Encode::DIRECT_ENCODE == true` AND its runtime representation is a full
+/// u256 word scalar (so the value can be passed directly to `mstore` without
+/// widening).
+fn is_direct_return_eligible<'db>(
+    db: &'db dyn MirDb,
+    scope: hir::hir_def::scope_graph::ScopeId<'db>,
+    ty: TyId<'db>,
+) -> bool {
+    // Runtime check: only u256-width unsigned scalars can be mstore'd directly.
     let base = ty.base_ty(db);
-    matches!(
+    let is_word_scalar = matches!(
         base.data(db),
         TyData::TyBase(TyBase::Prim(PrimTy::U256 | PrimTy::Usize))
-    )
+    );
+    if !is_word_scalar {
+        return false;
+    }
+    // Trait query: verify DIRECT_ENCODE is true.
+    query_direct_encode(db, scope, ty).unwrap_or(false)
 }
 
 /// Returns `true` if `msg_ty` is a compiler-generated message struct (from a
@@ -2184,16 +2265,21 @@ fn is_compiler_generated_msg<'db>(db: &'db dyn MirDb, msg_ty: TyId<'db>) -> bool
     }
 }
 
-/// Check if all fields of `msg_ty` are primitive word-scalar types AND the type
-/// is a compiler-generated message struct, making it eligible for the
-/// `DirectCalldataLoad` optimization. Returns `Some(field_count)` if eligible,
-/// `None` otherwise.
+/// Check if `msg_ty` is eligible for the `DirectCalldataLoad` optimization by
+/// querying actual const trait values instead of matching on type structure.
 ///
-/// Each field must be a primitive type with a scalar runtime representation so
-/// that a raw `calldataload` result can be passed directly to the handler
-/// without type coercion. The msg_ty must also be compiler-generated to ensure
-/// the ABI layout matches the canonical field order.
-fn static_word_field_count(db: &dyn MirDb, msg_ty: TyId<'_>) -> Option<u32> {
+/// Returns `Some(field_head_sizes)` if eligible, `None` otherwise.
+///
+/// Eligibility requires:
+/// - The type is a compiler-generated message struct (canonical field order).
+/// - `AbiSize::IS_DYNAMIC` is false on the msg type.
+/// - Each field has `AbiSize::HEAD_SIZE == 32` (one ABI word) and has a scalar
+///   runtime representation that allows direct calldataload.
+fn direct_calldata_load_info<'db>(
+    db: &'db dyn MirDb,
+    scope: hir::hir_def::scope_graph::ScopeId<'db>,
+    msg_ty: TyId<'db>,
+) -> Option<Box<[u32]>> {
     // Only compiler-generated msg structs have canonical ABI field layout.
     if !is_compiler_generated_msg(db, msg_ty) {
         return None;
@@ -2202,14 +2288,48 @@ fn static_word_field_count(db: &dyn MirDb, msg_ty: TyId<'_>) -> Option<u32> {
     if fields.is_empty() {
         return None;
     }
-    if fields
-        .iter()
-        .all(|&field_ty| is_primitive_word_scalar(db, field_ty))
-    {
-        Some(fields.len() as u32)
-    } else {
-        None
+    // The msg type must not be dynamically-sized.
+    if query_is_dynamic(db, scope, msg_ty).unwrap_or(true) {
+        return None;
     }
+    // Each field must have HEAD_SIZE == 32 (one ABI word) and must be a
+    // primitive scalar type so calldataload produces a usable value.
+    let mut head_sizes = Vec::with_capacity(fields.len());
+    for &field_ty in fields.iter() {
+        let head_size = query_head_size(db, scope, field_ty)?;
+        if head_size != 32 {
+            return None;
+        }
+        // Also verify the field has a scalar runtime representation. ADT
+        // wrappers (e.g. Address { inner: u256 }) would have HEAD_SIZE == 32
+        // but use aggregate runtime representation.
+        let base = field_ty.base_ty(db);
+        let is_scalar_prim = matches!(
+            base.data(db),
+            TyData::TyBase(TyBase::Prim(
+                PrimTy::Bool
+                    | PrimTy::U8
+                    | PrimTy::U16
+                    | PrimTy::U32
+                    | PrimTy::U64
+                    | PrimTy::U128
+                    | PrimTy::U256
+                    | PrimTy::Usize
+                    | PrimTy::I8
+                    | PrimTy::I16
+                    | PrimTy::I32
+                    | PrimTy::I64
+                    | PrimTy::I128
+                    | PrimTy::I256
+                    | PrimTy::Isize
+            ))
+        );
+        if !is_scalar_prim {
+            return None;
+        }
+        head_sizes.push(head_size);
+    }
+    Some(head_sizes.into_boxed_slice())
 }
 
 fn runtime_input_plan_symbol_key<'db>(db: &'db dyn MirDb, plan: &RuntimeInputPlan<'db>) -> String {
@@ -2226,10 +2346,10 @@ fn runtime_input_plan_symbol_key<'db>(db: &'db dyn MirDb, plan: &RuntimeInputPla
         ),
         RuntimeInputPlan::DirectCalldataLoad {
             msg_ty,
-            field_count,
+            field_head_sizes,
             projected_fields,
         } => format!(
-            "direct_load:{}:{field_count}:{projected_fields:?}",
+            "direct_load:{}:{field_head_sizes:?}:{projected_fields:?}",
             type_identity(db, *msg_ty),
         ),
     }
@@ -2249,10 +2369,10 @@ fn runtime_input_plan_sort_key<'db>(db: &'db dyn MirDb, plan: &RuntimeInputPlan<
         ),
         RuntimeInputPlan::DirectCalldataLoad {
             msg_ty,
-            field_count,
+            field_head_sizes,
             projected_fields,
         } => format!(
-            "direct_load:{}:{field_count}:{projected_fields:?}",
+            "direct_load:{}:{field_head_sizes:?}:{projected_fields:?}",
             type_identity(db, *msg_ty),
         ),
     }
@@ -2937,6 +3057,147 @@ pub contract NoInitBox {}
         assert_eq!(
             root_init_abi, init_abi,
             "contract init root should always call the synthesized init abi wrapper"
+        );
+    }
+
+    #[test]
+    fn direct_calldataload_uses_trait_queried_head_sizes() {
+        let mut db = DriverDataBase::default();
+        let file_url =
+            Url::parse("file:///direct_calldataload_uses_trait_queried_head_sizes.fe").unwrap();
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+use std::abi::sol
+
+msg QueryMsg {
+    #[selector = sol("lookup(uint256,uint64)")]
+    Lookup { key: u256, flags: u64 } -> u256,
+}
+
+pub contract Store {
+    recv QueryMsg {
+        Lookup { key, flags } -> u256 { key }
+    }
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+
+        let plan = recv_wrapper_plan(&db, top_mod, "lookup(uint256,uint64)");
+        match plan.input {
+            RuntimeInputPlan::DirectCalldataLoad {
+                field_head_sizes,
+                projected_fields,
+                ..
+            } => {
+                // Both u256 and u64 have HEAD_SIZE == 32 in ABI encoding.
+                assert_eq!(
+                    field_head_sizes.as_ref(),
+                    &[32, 32],
+                    "trait-queried field_head_sizes should be [32, 32] for (u256, u64)"
+                );
+                assert_eq!(
+                    projected_fields.as_ref(),
+                    &[0, 1],
+                    "projected fields should be [0, 1] for Lookup {{ key, flags }}"
+                );
+            }
+            other => panic!("expected DirectCalldataLoad for primitive-field msg, got {other:?}"),
+        }
+        // Return plan should be DirectScalarReturn since return type is u256.
+        assert!(
+            matches!(plan.ret, RuntimeReturnPlan::DirectScalarReturn { .. }),
+            "u256 return should use DirectScalarReturn (DIRECT_ENCODE + word scalar): {:?}",
+            plan.ret
+        );
+    }
+
+    #[test]
+    fn direct_calldataload_excluded_for_dynamic_fields() {
+        let mut db = DriverDataBase::default();
+        let file_url =
+            Url::parse("file:///direct_calldataload_excluded_for_dynamic_fields.fe").unwrap();
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+use std::abi::sol
+
+msg StringMsg {
+    #[selector = sol("greet(string)")]
+    Greet { name: String<32> },
+}
+
+pub contract Greeter {
+    recv StringMsg {
+        Greet { name: _ } {}
+    }
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+
+        let plan = recv_wrapper_plan(&db, top_mod, "greet(string)");
+        assert!(
+            matches!(plan.input, RuntimeInputPlan::DecodeCalldataPayload { .. }),
+            "msg with dynamic String field should fall back to decode path: {:?}",
+            plan.input
+        );
+    }
+
+    #[test]
+    fn direct_scalar_return_excluded_for_non_word_types() {
+        let mut db = DriverDataBase::default();
+        let file_url =
+            Url::parse("file:///direct_scalar_return_excluded_for_non_word_types.fe").unwrap();
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+use std::abi::sol
+
+msg NarrowMsg {
+    #[selector = sol("narrow()")]
+    Narrow -> u64,
+}
+
+pub contract NarrowReturn {
+    recv NarrowMsg {
+        Narrow -> u64 { 42 }
+    }
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+
+        let plan = recv_wrapper_plan(&db, top_mod, "narrow()");
+        assert!(
+            matches!(plan.ret, RuntimeReturnPlan::Value { .. }),
+            "u64 return should use Value path (not DirectScalarReturn): {:?}",
+            plan.ret
         );
     }
 }
