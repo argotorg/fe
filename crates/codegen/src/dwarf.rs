@@ -168,6 +168,46 @@ pub struct FeFuncDesc {
     pub start_line: u32,
 }
 
+/// Variable location description for DWARF emission.
+#[derive(Clone, Debug)]
+pub struct FeVarLocation {
+    pub name: String,
+    pub ty: FeTypeDesc,
+    pub storage_slot: Option<u64>,
+    pub memory_offset: Option<u64>,
+    pub stack_depth: Option<u32>,
+}
+
+pub fn add_variable_dies(dwarf: &mut DwarfUnit, parent: gimli::write::UnitEntryId, vars: &[FeVarLocation]) {
+    use gimli::{DW_AT_location, DW_TAG_variable};
+
+    for var in vars {
+        let id = dwarf.unit.add(parent, DW_TAG_variable);
+        let name_id = dwarf.strings.add(var.name.as_bytes());
+        dwarf.unit.get_mut(id).set(DW_AT_name, AttributeValue::StringRef(name_id));
+
+        // Build a DWARF location expression
+        let mut expr = gimli::write::Expression::new();
+        let mut has_loc = false;
+        if let Some(slot) = var.storage_slot {
+            expr.op_constu(slot);
+            has_loc = true;
+        } else if let Some(offset) = var.memory_offset {
+            expr.op_constu(offset);
+            has_loc = true;
+        } else if let Some(depth) = var.stack_depth {
+            expr.op_constu(depth as u64);
+            has_loc = true;
+        }
+        if has_loc {
+            dwarf.unit.get_mut(id).set(
+                DW_AT_location,
+                AttributeValue::Exprloc(expr),
+            );
+        }
+    }
+}
+
 pub fn add_subprogram_dies(dwarf: &mut DwarfUnit, functions: &[FeFuncDesc]) {
     use gimli::{DW_AT_decl_line, DW_TAG_formal_parameter, DW_TAG_subprogram};
 
