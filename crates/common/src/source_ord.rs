@@ -106,6 +106,13 @@ impl FunctionSourceTable {
         self.entries.is_empty()
     }
 
+    pub fn iter(&self) -> impl Iterator<Item = (SourceOrd, &SourceEntry)> {
+        self.entries
+            .iter()
+            .enumerate()
+            .map(|(i, e)| (SourceOrd::new(i as u32), e))
+    }
+
     pub fn entries(&self) -> &[SourceEntry] {
         &self.entries
     }

@@ -44,11 +44,10 @@ use sonatina_ir::{
             EvmCalldataCopy, EvmCalldataLoad, EvmCalldataSize, EvmCaller, EvmChainId, EvmCodeCopy,
             EvmCodeSize, EvmCoinBase, EvmCreate, EvmCreate2, EvmDelegateCall, EvmExp, EvmGas,
             EvmGasLimit, EvmInvalid, EvmKeccak256, EvmLog0, EvmLog1, EvmLog2, EvmLog3, EvmLog4,
-            EvmMalloc, EvmMcopy, EvmMsize, EvmMstore8, EvmMulMod, EvmNumber, EvmOrigin,
-            EvmPrevRandao, EvmReturn, EvmReturnDataCopy, EvmReturnDataSize, EvmRevert, EvmSdiv,
-            EvmSelfBalance, EvmSelfDestruct, EvmSignExtend, EvmSload, EvmSmod, EvmSstore,
-            EvmStaticCall, EvmStop, EvmTimestamp, EvmTload, EvmTstore, EvmUdiv, EvmUmod,
-            inst_set::EvmInstSet,
+            EvmMalloc, EvmMsize, EvmMstore8, EvmMulMod, EvmNumber, EvmOrigin, EvmPrevRandao,
+            EvmReturn, EvmReturnDataCopy, EvmReturnDataSize, EvmRevert, EvmSdiv, EvmSelfBalance,
+            EvmSelfDestruct, EvmSload, EvmSmod, EvmSstore, EvmStaticCall, EvmStop, EvmTimestamp,
+            EvmTload, EvmTstore, EvmUdiv, EvmUmod, inst_set::EvmInstSet,
         },
         logic::{And, Not, Or, Xor},
     },
@@ -57,6 +56,19 @@ use sonatina_ir::{
     object::EmbedSymbol,
     types::{CompoundType, EnumReprHint, EnumVariantRef, VariantData},
 };
+
+pub struct MirToIrEntry {
+    pub func: FuncRef,
+    pub inst: sonatina_ir::InstId,
+    pub mir_block: u32,
+    pub mir_stmt: u32,
+    pub source_ord: common::source_ord::SourceOrd,
+}
+
+pub struct ProvenanceResult {
+    pub provenance_entries: Vec<(FuncRef, sonatina_ir::InstId, String)>,
+    pub mir_origins: Vec<MirToIrEntry>,
+}
 
 use super::{LowerError, create_module_ctx};
 use crate::{
@@ -71,7 +83,8 @@ pub(super) fn compile_runtime_package_sonatina(
     db: &DriverDataBase,
     package: &RuntimePackage<'_>,
     layout: TargetDataLayout,
-) -> Result<Module, LowerError> {
+) -> Result<(Module, sonatina_codegen::object::FrontendProvenanceMap, Vec<MirToIrEntry>), LowerError>
+{
     let _ = layout;
     let builder = ModuleBuilder::new(create_module_ctx());
     let isa = super::create_evm_isa();
@@ -95,6 +108,8 @@ struct ModuleLowerer<'db, 'a> {
     layout_names: FxHashMap<LayoutId<'db>, String>,
     const_globals: FxHashMap<ConstRegionId<'db>, GlobalVariableRef>,
     const_names: FxHashMap<ConstRegionId<'db>, String>,
+    frontend_provenance: sonatina_codegen::object::FrontendProvenanceMap,
+    mir_to_ir: Vec<MirToIrEntry>,
 }
 
 impl<'db, 'a> ModuleLowerer<'db, 'a> {
@@ -116,11 +131,13 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             layout_names: FxHashMap::default(),
             const_globals: FxHashMap::default(),
             const_names: FxHashMap::default(),
+            frontend_provenance: FxHashMap::default(),
+            mir_to_ir: Vec::new(),
         }
     }
 
-    fn finish(self) -> Module {
-        self.builder.build()
+    fn finish(self) -> (Module, sonatina_codegen::object::FrontendProvenanceMap, Vec<MirToIrEntry>) {
+        (self.builder.build(), self.frontend_provenance, self.mir_to_ir)
     }
 
     fn inst_set(&self) -> &'static EvmInstSet {
@@ -293,7 +310,11 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             let body = function.instance(self.db).body(self.db);
             let func_ref = self.func_ref(function.instance(self.db))?;
             let ctx = FunctionLowerer::new(self, body, func_ref)?;
-            ctx.lower()?;
+            let result = ctx.lower_and_collect_provenance(func_ref)?;
+            for (func, inst, value) in result.provenance_entries {
+                self.frontend_provenance.insert((func, inst), value);
+            }
+            self.mir_to_ir.extend(result.mir_origins);
         }
         Ok(())
     }
@@ -795,6 +816,8 @@ struct FunctionLowerer<'ctx, 'db, 'a> {
     empty_revert_block: Option<BlockId>,
     overflow_panic_block: Option<BlockId>,
     division_by_zero_panic_block: Option<BlockId>,
+    inst_provenance: FxHashMap<sonatina_ir::InstId, common::source_ord::SourceOrd>,
+    inst_mir_origin: Vec<(sonatina_ir::InstId, u32, u32, common::source_ord::SourceOrd)>,
 }
 
 #[derive(Clone, Copy)]
@@ -853,10 +876,23 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             empty_revert_block: None,
             overflow_panic_block: None,
             division_by_zero_panic_block: None,
+            inst_provenance: FxHashMap::default(),
+            inst_mir_origin: Vec::new(),
         })
     }
 
-    fn lower(mut self) -> Result<(), LowerError> {
+    fn lower_and_collect_provenance(
+        mut self,
+        func_ref: FuncRef,
+    ) -> Result<ProvenanceResult, LowerError> {
+        self.lower_inner()?;
+        let result = self.build_frontend_provenance(func_ref);
+        self.fb.seal_all();
+        self.fb.finish();
+        Ok(result)
+    }
+
+    fn lower_inner(&mut self) -> Result<(), LowerError> {
         let entry_block = self.block_id(RBlockId::from_u32(0))?;
         self.fb.switch_to_block(self.prologue_block);
         self.initialize_locals().map_err(|err| {
@@ -881,6 +917,12 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 .switch_to_block(self.block_id(RBlockId::from_u32(idx as u32))?);
             let mut terminated = false;
             for (stmt_idx, stmt) in block.stmts.iter().enumerate() {
+                let source_ord = block
+                    .stmt_sources
+                    .get(stmt_idx)
+                    .copied()
+                    .unwrap_or_default();
+                let inst_before = self.fb.last_inst();
                 if matches!(
                     self.lower_stmt(stmt).map_err(|err| {
                         self.with_body_context(
@@ -895,15 +937,20 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     })?,
                     Lowered::Terminated
                 ) {
+                    self.tag_new_insts(inst_before, source_ord, idx as u32, stmt_idx as u32);
                     self.pending_enum_proof = None;
                     terminated = true;
                     break;
                 }
+                self.tag_new_insts(inst_before, source_ord, idx as u32, stmt_idx as u32);
             }
             if terminated {
                 continue;
             }
             self.pending_enum_proof = None;
+            let term_source = block.terminator_source;
+            let term_stmt = block.stmts.len() as u32;
+            let inst_before = self.fb.last_inst();
             self.lower_terminator(&block.terminator).map_err(|err| {
                 self.with_body_context(
                     format!(
@@ -915,10 +962,74 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 )
                 .wrap(err)
             })?;
+            self.tag_new_insts(inst_before, term_source, idx as u32, term_stmt);
         }
-        self.fb.seal_all();
-        self.fb.finish();
         Ok(())
+    }
+
+    fn tag_new_insts(
+        &mut self,
+        inst_before: Option<sonatina_ir::InstId>,
+        source_ord: common::source_ord::SourceOrd,
+        mir_block: u32,
+        mir_stmt: u32,
+    ) {
+        let inst_after = self.fb.last_inst();
+        if inst_after == inst_before {
+            return;
+        }
+        if let Some(after) = inst_after {
+            let start = inst_before.map_or(0, |i| i.0 + 1);
+            for id in start..=after.0 {
+                let inst_id = sonatina_ir::InstId(id);
+                if !source_ord.is_default() {
+                    self.inst_provenance.insert(inst_id, source_ord);
+                }
+                self.inst_mir_origin
+                    .push((inst_id, mir_block, mir_stmt, source_ord));
+            }
+        }
+    }
+
+    fn build_frontend_provenance(
+        &self,
+        func_ref: FuncRef,
+    ) -> ProvenanceResult {
+        let source_table = &self.body.source_table;
+        let provenance_entries = self
+            .inst_provenance
+            .iter()
+            .filter_map(|(&inst_id, &source_ord)| {
+                let entry = source_table.get(source_ord)?;
+                Some((
+                    func_ref,
+                    inst_id,
+                    format!(
+                        "{}:{}:{}-{}:{}",
+                        entry.file_path,
+                        entry.start_line,
+                        entry.start_col,
+                        entry.end_line,
+                        entry.end_col,
+                    ),
+                ))
+            })
+            .collect();
+        let mir_origins = self
+            .inst_mir_origin
+            .iter()
+            .map(|&(inst_id, mir_block, mir_stmt, source_ord)| MirToIrEntry {
+                func: func_ref,
+                inst: inst_id,
+                mir_block,
+                mir_stmt,
+                source_ord,
+            })
+            .collect();
+        ProvenanceResult {
+            provenance_entries,
+            mir_origins,
+        }
     }
 
     fn block_id(&self, block: RBlockId) -> Result<BlockId, LowerError> {
@@ -1111,12 +1222,8 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 self.lower_binary(*op, lhs, rhs, &lhs_class)?
             }
             RExpr::Cast { value, to } => {
-                let signed = self
-                    .body
-                    .value_class(*value)
-                    .is_some_and(RuntimeClass::is_signed_scalar);
                 let value = self.local_value(*value)?;
-                self.cast_scalar_with_signedness(value, scalar_ty(to), signed)?
+                self.cast_scalar(value, scalar_ty(to))?
             }
             RExpr::ConstRef { region, .. } => {
                 let gv = self.module.lower_const_region(*region)?;
@@ -1331,14 +1438,6 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     .insert_inst_no_result(EvmMstore8::new(self.module.inst_set(), addr, value));
                 zero_for_type(&mut self.fb, Type::Unit)
             }
-            RuntimeBuiltin::Mcopy { dst, src, len } => {
-                let dst = self.local_value(*dst)?;
-                let src = self.local_value(*src)?;
-                let len = self.local_value(*len)?;
-                self.fb
-                    .insert_inst_no_result(EvmMcopy::new(self.module.inst_set(), dst, src, len));
-                zero_for_type(&mut self.fb, Type::Unit)
-            }
             RuntimeBuiltin::Msize => self
                 .fb
                 .insert_inst(EvmMsize::new(self.module.inst_set()), Type::I256),
@@ -1435,14 +1534,6 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     Type::I256,
                 )
             }
-            RuntimeBuiltin::SignExtend { byte, value } => {
-                let byte = self.local_value(*byte)?;
-                let value = self.local_value(*value)?;
-                self.fb.insert_inst(
-                    EvmSignExtend::new(self.module.inst_set(), byte, value),
-                    Type::I256,
-                )
-            }
             RuntimeBuiltin::IntrinsicArith {
                 op,
                 checked,
@@ -1460,7 +1551,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 let rhs = self.local_value(*rhs)?;
                 let lhs = self.cast_scalar(lhs, scalar_ty(class))?;
                 let rhs = self.cast_scalar(rhs, scalar_ty(class))?;
-                let signed = class.is_signed_int();
+                let signed = matches!(class.repr, ScalarRepr::Int { signed: true, .. });
                 match (op, signed) {
                     (SaturatingBinOp::Add, true) => self.fb.insert_saddsat(lhs, rhs),
                     (SaturatingBinOp::Add, false) => self.fb.insert_uaddsat(lhs, rhs),
@@ -1813,7 +1904,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             RuntimeIntrinsic::GenericSaturating { op, ty } => {
                 let prim = intrinsic_prim_from_ty(self.module.db, ty)?;
                 let op_ty = intrinsic_value_type(prim);
-                let signed = prim.is_signed_int();
+                let signed = prim_is_signed(prim);
                 let (lhs, rhs) = intrinsic_binary_args(self, args)?;
                 let lhs =
                     lower_intrinsic_operand(&mut self.fb, self.module.inst_set(), lhs, prim, op_ty);
@@ -1842,7 +1933,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         args: &[RLocalId],
     ) -> Result<ValueId, LowerError> {
         let op_ty = intrinsic_value_type(prim);
-        let signed = prim.is_signed_int();
+        let signed = prim_is_signed(prim);
         Ok(match op {
             NumericIntrinsicOp::Eq
             | NumericIntrinsicOp::Ne
@@ -3530,11 +3621,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         src: ValueId,
     ) -> Result<(), LowerError> {
         let value = match class {
-            RuntimeClass::Scalar(scalar) => self.cast_scalar_with_signedness(
-                src,
-                scalar_word_ty(scalar),
-                scalar.is_signed_int(),
-            ),
+            RuntimeClass::Scalar(scalar) => self.cast_scalar(src, scalar_word_ty(scalar)),
             RuntimeClass::Ref {
                 kind:
                     RefKind::Provider {
@@ -3591,23 +3678,29 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
     }
 
     fn cast_scalar(&mut self, value: ValueId, ty: Type) -> Result<ValueId, LowerError> {
-        self.cast_scalar_with_signedness(value, ty, false)
-    }
-
-    fn cast_scalar_with_signedness(
-        &mut self,
-        value: ValueId,
-        ty: Type,
-        signed: bool,
-    ) -> Result<ValueId, LowerError> {
-        if self.fb.type_of(value) == ty {
+        let from = self.fb.type_of(value);
+        if from == ty {
             return Ok(value);
         }
         if ty == Type::I1 {
             return Ok(condition_to_i1(&mut self.fb, value, self.module.inst_set()));
         }
-        let is = self.module.inst_set();
-        Ok(cast_int_value(&mut self.fb, is, value, ty, signed))
+        if from == Type::I1 {
+            return Ok(self
+                .fb
+                .insert_inst(Zext::new(self.module.inst_set(), value, ty), ty));
+        }
+        let from_bits = int_bits(from);
+        let to_bits = int_bits(ty);
+        Ok(match from_bits.cmp(&to_bits) {
+            std::cmp::Ordering::Less => self
+                .fb
+                .insert_inst(Zext::new(self.module.inst_set(), value, ty), ty),
+            std::cmp::Ordering::Equal => value,
+            std::cmp::Ordering::Greater => self
+                .fb
+                .insert_inst(Trunc::new(self.module.inst_set(), value, ty), ty),
+        })
     }
 
     fn coerce_to_dst(
@@ -3740,7 +3833,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         let ty = self.module.ty_for_class(operand)?;
         let lhs = self.cast_scalar(lhs, ty)?;
         let rhs = self.cast_scalar(rhs, ty)?;
-        let signed = operand.is_signed_scalar();
+        let signed = scalar_is_signed(operand);
         Ok(match op {
             ArithBinOp::Add => {
                 let [raw, overflow] = if signed {
@@ -3991,7 +4084,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         let ty = self.module.ty_for_class(operand)?;
         let lhs = self.cast_scalar(lhs, ty)?;
         let rhs = self.cast_scalar(rhs, ty)?;
-        let signed = operand.is_signed_scalar();
+        let signed = scalar_is_signed(operand);
         Ok(match op {
             CompBinOp::Eq => self
                 .fb
@@ -4346,6 +4439,29 @@ fn scalar_word_ty<'db>(scalar: &ScalarClass<'db>) -> Type {
     }
 }
 
+fn scalar_is_signed(class: &RuntimeClass<'_>) -> bool {
+    matches!(
+        class,
+        RuntimeClass::Scalar(ScalarClass {
+            repr: ScalarRepr::Int { signed: true, .. },
+            ..
+        })
+    )
+}
+
+fn prim_is_signed(prim: PrimTy) -> bool {
+    matches!(
+        prim,
+        PrimTy::I8
+            | PrimTy::I16
+            | PrimTy::I32
+            | PrimTy::I64
+            | PrimTy::I128
+            | PrimTy::I256
+            | PrimTy::Isize
+    )
+}
+
 fn intrinsic_prim_from_ty<'db>(
     db: &'db DriverDataBase,
     ty: TyId<'db>,
@@ -4389,7 +4505,7 @@ fn lower_intrinsic_operand(
     if prim == PrimTy::Bool {
         condition_to_i1(fb, value, is)
     } else {
-        cast_int_value(fb, is, value, op_ty, prim.is_signed_int())
+        cast_int_value(fb, is, value, op_ty, prim_is_signed(prim))
     }
 }
 
