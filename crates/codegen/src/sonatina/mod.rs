@@ -258,16 +258,35 @@ pub fn compile_runtime_package_sonatina(
     package: &RuntimePackage<'_>,
     layout: TargetDataLayout,
 ) -> Result<Module, LowerError> {
-    let (module, _provenance) =
+    let (module, _provenance, _mir_to_ir) =
         lower_runtime::compile_runtime_package_sonatina(db, package, layout)?;
     Ok(module)
 }
+
+pub use lower_runtime::MirToIrEntry;
 
 pub fn compile_runtime_package_sonatina_with_provenance(
     db: &DriverDataBase,
     package: &RuntimePackage<'_>,
     layout: TargetDataLayout,
 ) -> Result<(Module, sonatina_codegen::object::FrontendProvenanceMap), LowerError> {
+    let (module, provenance, _mir_to_ir) =
+        lower_runtime::compile_runtime_package_sonatina(db, package, layout)?;
+    Ok((module, provenance))
+}
+
+pub fn compile_runtime_package_sonatina_full(
+    db: &DriverDataBase,
+    package: &RuntimePackage<'_>,
+    layout: TargetDataLayout,
+) -> Result<
+    (
+        Module,
+        sonatina_codegen::object::FrontendProvenanceMap,
+        Vec<MirToIrEntry>,
+    ),
+    LowerError,
+> {
     lower_runtime::compile_runtime_package_sonatina(db, package, layout)
 }
 

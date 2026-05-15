@@ -1,6 +1,9 @@
 use std::fmt::Write as _;
 
+use common::source_ord::FunctionSourceTable;
 use sonatina_codegen::object::{FrontendProvenanceMap, ObjectArtifact};
+
+use crate::sonatina::MirToIrEntry;
 
 pub struct DatalogFacts {
     pub facts: String,
@@ -10,8 +13,60 @@ pub fn generate_datalog_facts(
     artifacts: &[ObjectArtifact],
     provenance: &FrontendProvenanceMap,
 ) -> DatalogFacts {
+    generate_datalog_facts_full(artifacts, provenance, &[], &[])
+}
+
+pub fn generate_datalog_facts_full(
+    artifacts: &[ObjectArtifact],
+    provenance: &FrontendProvenanceMap,
+    mir_to_ir: &[MirToIrEntry],
+    source_tables: &[(u32, &FunctionSourceTable)],
+) -> DatalogFacts {
     let mut out = String::new();
 
+    // MIR-level facts: mir_stmt(func, block, stmt, file, line, col)
+    for (func_id, table) in source_tables {
+        for (ord, entry) in table.iter() {
+            writeln!(
+                &mut out,
+                "mir_source({}, {}, \"{}\", {}, {}, {}, {}).",
+                func_id,
+                ord.index(),
+                entry.file_path,
+                entry.start_line,
+                entry.start_col,
+                entry.end_line,
+                entry.end_col,
+            )
+            .unwrap();
+        }
+    }
+
+    // Cross-level: mir_to_ir(func, ir_inst, mir_block, mir_stmt)
+    for entry in mir_to_ir {
+        writeln!(
+            &mut out,
+            "mir_to_ir({}, {}, {}, {}).",
+            entry.func.as_u32(),
+            entry.inst.0,
+            entry.mir_block,
+            entry.mir_stmt,
+        )
+        .unwrap();
+
+        if !entry.source_ord.is_default() {
+            writeln!(
+                &mut out,
+                "ir_source_ord({}, {}, {}).",
+                entry.func.as_u32(),
+                entry.inst.0,
+                entry.source_ord.index(),
+            )
+            .unwrap();
+        }
+    }
+
+    // Bytecode-level facts from observability
     for artifact in artifacts {
         let object_name = &artifact.object.0;
         for (section_name, section) in &artifact.sections {
@@ -20,7 +75,6 @@ pub fn generate_datalog_facts(
             };
 
             for entry in &observability.pc_map {
-                // bytecode_range(object, section, pc_start, pc_end, func, block)
                 writeln!(
                     &mut out,
                     "bytecode_range(\"{}\", \"{}\", {}, {}, {}, {}).",
@@ -34,10 +88,9 @@ pub fn generate_datalog_facts(
                 .unwrap();
 
                 if let Some(ir_inst) = entry.ir_inst {
-                    // ir_inst_at(func, inst, pc_start, pc_end)
                     writeln!(
                         &mut out,
-                        "ir_inst_at({}, {}, {}, {}).",
+                        "ir_to_pc({}, {}, {}, {}).",
                         entry.func.as_u32(),
                         ir_inst.0,
                         entry.pc_start,
@@ -49,7 +102,6 @@ pub fn generate_datalog_facts(
                         if let Some((file, start_line, start_col, end_line, end_col)) =
                             parse_provenance(prov)
                         {
-                            // source_at(func, inst, file, start_line, start_col, end_line, end_col)
                             writeln!(
                                 &mut out,
                                 "source_at({}, {}, \"{}\", {}, {}, {}, {}).",
@@ -63,7 +115,6 @@ pub fn generate_datalog_facts(
                             )
                             .unwrap();
 
-                            // pc_source(pc_start, pc_end, file, line, col)
                             writeln!(
                                 &mut out,
                                 "pc_source({}, {}, \"{}\", {}, {}).",
@@ -125,5 +176,39 @@ mod tests {
     fn empty_artifacts_produce_empty_facts() {
         let facts = generate_datalog_facts(&[], &Default::default());
         assert!(facts.facts.is_empty());
+    }
+
+    #[test]
+    fn full_facts_include_cross_level_mappings() {
+        let mir_entries = vec![MirToIrEntry {
+            func: sonatina_ir::module::FuncRef::from_u32(1),
+            inst: sonatina_ir::InstId(5),
+            mir_block: 0,
+            mir_stmt: 2,
+            source_ord: common::source_ord::SourceOrd::new(0),
+        }];
+
+        let mut table = FunctionSourceTable::new();
+        table.push("test.fe".to_string(), 10, 5, 10, 20);
+
+        let facts = generate_datalog_facts_full(
+            &[],
+            &Default::default(),
+            &mir_entries,
+            &[(1, &table)],
+        );
+
+        assert!(
+            facts.facts.contains("mir_to_ir(1, 5, 0, 2)."),
+            "should have mir_to_ir fact"
+        );
+        assert!(
+            facts.facts.contains("ir_source_ord(1, 5, 0)."),
+            "should have ir_source_ord fact"
+        );
+        assert!(
+            facts.facts.contains("mir_source(1, 0, \"test.fe\""),
+            "should have mir_source fact"
+        );
     }
 }

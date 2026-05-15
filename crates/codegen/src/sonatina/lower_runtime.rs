@@ -57,6 +57,19 @@ use sonatina_ir::{
     types::{CompoundType, EnumReprHint, EnumVariantRef, VariantData},
 };
 
+pub struct MirToIrEntry {
+    pub func: FuncRef,
+    pub inst: sonatina_ir::InstId,
+    pub mir_block: u32,
+    pub mir_stmt: u32,
+    pub source_ord: common::source_ord::SourceOrd,
+}
+
+pub struct ProvenanceResult {
+    pub provenance_entries: Vec<(FuncRef, sonatina_ir::InstId, String)>,
+    pub mir_origins: Vec<MirToIrEntry>,
+}
+
 use super::{LowerError, create_module_ctx};
 use crate::{
     TargetDataLayout,
@@ -70,7 +83,8 @@ pub(super) fn compile_runtime_package_sonatina(
     db: &DriverDataBase,
     package: &RuntimePackage<'_>,
     layout: TargetDataLayout,
-) -> Result<(Module, sonatina_codegen::object::FrontendProvenanceMap), LowerError> {
+) -> Result<(Module, sonatina_codegen::object::FrontendProvenanceMap, Vec<MirToIrEntry>), LowerError>
+{
     let _ = layout;
     let builder = ModuleBuilder::new(create_module_ctx());
     let isa = super::create_evm_isa();
@@ -95,6 +109,7 @@ struct ModuleLowerer<'db, 'a> {
     const_globals: FxHashMap<ConstRegionId<'db>, GlobalVariableRef>,
     const_names: FxHashMap<ConstRegionId<'db>, String>,
     frontend_provenance: sonatina_codegen::object::FrontendProvenanceMap,
+    mir_to_ir: Vec<MirToIrEntry>,
 }
 
 impl<'db, 'a> ModuleLowerer<'db, 'a> {
@@ -117,11 +132,12 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             const_globals: FxHashMap::default(),
             const_names: FxHashMap::default(),
             frontend_provenance: FxHashMap::default(),
+            mir_to_ir: Vec::new(),
         }
     }
 
-    fn finish(self) -> (Module, sonatina_codegen::object::FrontendProvenanceMap) {
-        (self.builder.build(), self.frontend_provenance)
+    fn finish(self) -> (Module, sonatina_codegen::object::FrontendProvenanceMap, Vec<MirToIrEntry>) {
+        (self.builder.build(), self.frontend_provenance, self.mir_to_ir)
     }
 
     fn inst_set(&self) -> &'static EvmInstSet {
@@ -294,10 +310,11 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             let body = function.instance(self.db).body(self.db);
             let func_ref = self.func_ref(function.instance(self.db))?;
             let ctx = FunctionLowerer::new(self, body, func_ref)?;
-            let provenance_entries = ctx.lower_and_collect_provenance(func_ref)?;
-            for (func, inst, value) in provenance_entries {
+            let result = ctx.lower_and_collect_provenance(func_ref)?;
+            for (func, inst, value) in result.provenance_entries {
                 self.frontend_provenance.insert((func, inst), value);
             }
+            self.mir_to_ir.extend(result.mir_origins);
         }
         Ok(())
     }
@@ -800,6 +817,7 @@ struct FunctionLowerer<'ctx, 'db, 'a> {
     overflow_panic_block: Option<BlockId>,
     division_by_zero_panic_block: Option<BlockId>,
     inst_provenance: FxHashMap<sonatina_ir::InstId, common::source_ord::SourceOrd>,
+    inst_mir_origin: Vec<(sonatina_ir::InstId, u32, u32, common::source_ord::SourceOrd)>,
 }
 
 #[derive(Clone, Copy)]
@@ -859,18 +877,19 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             overflow_panic_block: None,
             division_by_zero_panic_block: None,
             inst_provenance: FxHashMap::default(),
+            inst_mir_origin: Vec::new(),
         })
     }
 
     fn lower_and_collect_provenance(
         mut self,
         func_ref: FuncRef,
-    ) -> Result<Vec<(FuncRef, sonatina_ir::InstId, String)>, LowerError> {
+    ) -> Result<ProvenanceResult, LowerError> {
         self.lower_inner()?;
-        let provenance = self.build_frontend_provenance(func_ref);
+        let result = self.build_frontend_provenance(func_ref);
         self.fb.seal_all();
         self.fb.finish();
-        Ok(provenance)
+        Ok(result)
     }
 
     fn lower_inner(&mut self) -> Result<(), LowerError> {
@@ -918,18 +937,19 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     })?,
                     Lowered::Terminated
                 ) {
-                    self.tag_new_insts(inst_before, source_ord);
+                    self.tag_new_insts(inst_before, source_ord, idx as u32, stmt_idx as u32);
                     self.pending_enum_proof = None;
                     terminated = true;
                     break;
                 }
-                self.tag_new_insts(inst_before, source_ord);
+                self.tag_new_insts(inst_before, source_ord, idx as u32, stmt_idx as u32);
             }
             if terminated {
                 continue;
             }
             self.pending_enum_proof = None;
             let term_source = block.terminator_source;
+            let term_stmt = block.stmts.len() as u32;
             let inst_before = self.fb.last_inst();
             self.lower_terminator(&block.terminator).map_err(|err| {
                 self.with_body_context(
@@ -942,7 +962,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 )
                 .wrap(err)
             })?;
-            self.tag_new_insts(inst_before, term_source);
+            self.tag_new_insts(inst_before, term_source, idx as u32, term_stmt);
         }
         Ok(())
     }
@@ -951,10 +971,9 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         &mut self,
         inst_before: Option<sonatina_ir::InstId>,
         source_ord: common::source_ord::SourceOrd,
+        mir_block: u32,
+        mir_stmt: u32,
     ) {
-        if source_ord.is_default() {
-            return;
-        }
         let inst_after = self.fb.last_inst();
         if inst_after == inst_before {
             return;
@@ -962,8 +981,12 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         if let Some(after) = inst_after {
             let start = inst_before.map_or(0, |i| i.0 + 1);
             for id in start..=after.0 {
-                self.inst_provenance
-                    .insert(sonatina_ir::InstId(id), source_ord);
+                let inst_id = sonatina_ir::InstId(id);
+                if !source_ord.is_default() {
+                    self.inst_provenance.insert(inst_id, source_ord);
+                }
+                self.inst_mir_origin
+                    .push((inst_id, mir_block, mir_stmt, source_ord));
             }
         }
     }
@@ -971,9 +994,10 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
     fn build_frontend_provenance(
         &self,
         func_ref: FuncRef,
-    ) -> Vec<(FuncRef, sonatina_ir::InstId, String)> {
+    ) -> ProvenanceResult {
         let source_table = &self.body.source_table;
-        self.inst_provenance
+        let provenance_entries = self
+            .inst_provenance
             .iter()
             .filter_map(|(&inst_id, &source_ord)| {
                 let entry = source_table.get(source_ord)?;
@@ -990,7 +1014,22 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     ),
                 ))
             })
-            .collect()
+            .collect();
+        let mir_origins = self
+            .inst_mir_origin
+            .iter()
+            .map(|&(inst_id, mir_block, mir_stmt, source_ord)| MirToIrEntry {
+                func: func_ref,
+                inst: inst_id,
+                mir_block,
+                mir_stmt,
+                source_ord,
+            })
+            .collect();
+        ProvenanceResult {
+            provenance_entries,
+            mir_origins,
+        }
     }
 
     fn block_id(&self, block: RBlockId) -> Result<BlockId, LowerError> {
