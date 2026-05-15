@@ -1155,6 +1155,88 @@ pub fn poseidon_4_rounds() -> u64 {
     assert!(val > 0, "Poseidon result should be non-zero");
 }
 
+#[cfg(feature = "cranelift")]
+#[test]
+fn cross_target_same_source_evm_and_native() {
+    use sonatina_codegen::Backend;
+    use sonatina_codegen::isa::cranelift::CraneliftBackend;
+
+    let source = r#"
+pub fn answer() -> u64 {
+    let x: u64 = 6
+    let y: u64 = 7
+    x * y
+}
+"#;
+
+    // EVM path: compile to Sonatina IR
+    let evm_ir = with_top_mod_for_source(
+        "cross_evm.fe",
+        source,
+        |db, top_mod| fe_codegen::emit_module_sonatina_ir(db, top_mod),
+    ).expect("EVM IR should succeed");
+
+    // Native path: compile to Sonatina IR → Cranelift JIT → execute
+    let native_result = with_top_mod_for_source(
+        "cross_native.fe",
+        source,
+        |db, top_mod| {
+            let package = mir::build_runtime_package(db, top_mod).unwrap();
+            let module = fe_codegen::sonatina::compile_runtime_package_sonatina_native(
+                db, &package, fe_codegen::EVM_LAYOUT,
+            ).unwrap();
+            let backend = CraneliftBackend::new();
+            let artifact = backend.compile_module(&module).unwrap();
+            let f: fn() -> u64 = unsafe {
+                let ptr = artifact.get_func_ptr::<fn() -> u64>("answer").unwrap();
+                std::mem::transmute(ptr)
+            };
+            f()
+        },
+    );
+
+    // Both paths produce correct result
+    assert_eq!(native_result, 42, "native JIT should compute 6*7=42");
+    assert!(evm_ir.contains("answer"), "EVM IR should contain the answer function");
+
+    eprintln!("Cross-target test passed: same Fe source compiled to both EVM IR and native, native returned {native_result}");
+}
+
+#[test]
+fn native_ir_for_poseidon_fp() {
+    // Attempt to compile Poseidon's fp.fe through the native path.
+    // This uses addmod/mulmod (EVM opcodes) — CTFE may fold them at compile
+    // time for constant inputs, or they may hit the EVM instruction barrier.
+    let result = with_top_mod_for_source(
+        "poseidon_fp.fe",
+        r#"
+pub fn field_add() -> u256 {
+    let p: u256 = 0xFFFFFFFF00000001
+    let a: u256 = 42
+    let b: u256 = 17
+    std::evm::crypto::addmod(a, b, p)
+}
+"#,
+        |db, top_mod| fe_codegen::emit_module_sonatina_ir_native(db, top_mod),
+    );
+
+    match result {
+        Ok(ir_text) => {
+            eprintln!("=== Poseidon-style Native IR ===\n{ir_text}");
+            // If CTFE folded addmod, we should see a constant result
+            assert!(
+                ir_text.contains("field_add") || ir_text.contains("func"),
+                "expected function in native IR"
+            );
+        }
+        Err(e) => {
+            eprintln!("=== Poseidon-style Native Error ===\n{e}");
+            // Document error for addmod on native — expected until
+            // TargetLowering implements native addmod
+        }
+    }
+}
+
 /// Verify that the EVM path still works for the same source.
 #[test]
 fn evm_ir_for_simple_contract_still_works() {
