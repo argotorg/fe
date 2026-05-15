@@ -982,14 +982,14 @@ pub enum FieldLoadStrategy {
     /// dynamic types, or fields whose ABI encoding is not a simple word.
     Decode,
     /// Skip this field in the decoder and pass the absolute calldata byte
-    /// offset to the handler. The handler receives a `SkippedArray` whose
+    /// offset to the handler. The handler receives an `ArrayView` whose
     /// `start` is the calldata offset, ready for zero-copy element access
     /// via `CallData`.
     ///
     /// `head_size` is the total ABI head size (in bytes) of this field so
     /// the builder can compute offsets for subsequent fields.
     SkipWithOffset {
-        /// The ABI head-size of this SkippedArray field in bytes
+        /// The ABI head-size of this ArrayView field in bytes
         /// (N * element_head_size).
         head_size: u32,
     },

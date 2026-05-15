@@ -680,17 +680,17 @@ fn semantic_ty_to_abi_desc(db: &DriverDataBase, ty: TyId<'_>) -> Result<AbiTypeD
         return Ok(AbiTypeDesc::simple("bytes"));
     }
 
-    if let Some((elem_ty, len_ty)) = core_skipped_array_parts(db, ty) {
+    if let Some((elem_ty, len_ty)) = core_unbound_array_view_parts(db, ty) {
         let elem_desc = semantic_ty_to_abi_desc(db, elem_ty)?;
         let len = array_len_to_string(db, len_ty)?;
         return Ok(elem_desc.array(&len));
     }
 
-    if is_core_skipped_bytes_ty(db, ty) {
+    if is_core_unbound_bytes_view_ty(db, ty) {
         return Ok(AbiTypeDesc::simple("bytes"));
     }
 
-    if is_core_skipped_string_ty(db, ty) {
+    if is_core_unbound_string_view_ty(db, ty) {
         return Ok(AbiTypeDesc::simple("string"));
     }
 
@@ -820,13 +820,14 @@ fn core_dyn_array_elem_ty<'db>(db: &'db DriverDataBase, ty: TyId<'db>) -> Option
     args.first().copied()
 }
 
-/// Recognise `core::abi::SkippedArray<T, N>` and return `(elem_ty, len_ty)`.
-fn core_skipped_array_parts<'db>(
+/// Recognise an unbound `core::abi::ArrayView<T, N>` (I defaulted to `()`)
+/// and return `(elem_ty, len_ty)`.
+fn core_unbound_array_view_parts<'db>(
     db: &'db DriverDataBase,
     ty: TyId<'db>,
 ) -> Option<(TyId<'db>, TyId<'db>)> {
     if let Some((_, inner)) = ty.as_capability(db) {
-        return core_skipped_array_parts(db, inner);
+        return core_unbound_array_view_parts(db, inner);
     }
 
     let (base, args) = ty.decompose_ty_app(db);
@@ -835,7 +836,7 @@ fn core_skipped_array_parts<'db>(
     };
     let adt_ref = adt.adt_ref(db);
     let name = adt_ref.name(db)?;
-    if name.data(db) != "SkippedArray" {
+    if name.data(db) != "ArrayView" {
         return None;
     }
     if !base
@@ -892,10 +893,10 @@ fn is_core_dyn_string_ty(db: &DriverDataBase, ty: TyId<'_>) -> bool {
         .is_some_and(|ingot| ingot.kind(db) == IngotKind::Core)
 }
 
-/// Recognise `core::abi::SkippedBytes`.
-fn is_core_skipped_bytes_ty(db: &DriverDataBase, ty: TyId<'_>) -> bool {
+/// Recognise an unbound `core::abi::BytesView` (I defaulted to `()`).
+fn is_core_unbound_bytes_view_ty(db: &DriverDataBase, ty: TyId<'_>) -> bool {
     if let Some((_, inner)) = ty.as_capability(db) {
-        return is_core_skipped_bytes_ty(db, inner);
+        return is_core_unbound_bytes_view_ty(db, inner);
     }
 
     let base = ty.base_ty(db);
@@ -906,7 +907,7 @@ fn is_core_skipped_bytes_ty(db: &DriverDataBase, ty: TyId<'_>) -> bool {
     let Some(name) = adt_ref.name(db) else {
         return false;
     };
-    if name.data(db) != "SkippedBytes" {
+    if name.data(db) != "BytesView" {
         return false;
     }
 
@@ -914,10 +915,10 @@ fn is_core_skipped_bytes_ty(db: &DriverDataBase, ty: TyId<'_>) -> bool {
         .is_some_and(|ingot| ingot.kind(db) == IngotKind::Core)
 }
 
-/// Recognise `core::abi::SkippedString`.
-fn is_core_skipped_string_ty(db: &DriverDataBase, ty: TyId<'_>) -> bool {
+/// Recognise an unbound `core::abi::StringView` (I defaulted to `()`).
+fn is_core_unbound_string_view_ty(db: &DriverDataBase, ty: TyId<'_>) -> bool {
     if let Some((_, inner)) = ty.as_capability(db) {
-        return is_core_skipped_string_ty(db, inner);
+        return is_core_unbound_string_view_ty(db, inner);
     }
 
     let base = ty.base_ty(db);
@@ -928,7 +929,7 @@ fn is_core_skipped_string_ty(db: &DriverDataBase, ty: TyId<'_>) -> bool {
     let Some(name) = adt_ref.name(db) else {
         return false;
     };
-    if name.data(db) != "SkippedString" {
+    if name.data(db) != "StringView" {
         return false;
     }
 

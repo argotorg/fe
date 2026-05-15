@@ -2368,10 +2368,10 @@ fn is_primitive_word_scalar(db: &dyn MirDb, ty: TyId<'_>) -> bool {
     }
 }
 
-/// If `ty` is `SkippedArray<T, N>` from the core ingot, returns the total ABI
-/// head size in bytes (`N * element_head_size`).  Returns `None` for any other
-/// type.
-fn skipped_array_head_size(db: &dyn MirDb, ty: TyId<'_>) -> Option<u32> {
+/// If `ty` is an unbound `ArrayView<T, N>` (I defaulted to `()`) from the core
+/// ingot, returns the total ABI head size in bytes (`N * element_head_size`).
+/// Returns `None` for any other type.
+fn array_view_head_size(db: &dyn MirDb, ty: TyId<'_>) -> Option<u32> {
     use common::ingot::IngotKind;
     use hir::analysis::ty::const_ty::EvaluatedConstTy;
 
@@ -2381,7 +2381,7 @@ fn skipped_array_head_size(db: &dyn MirDb, ty: TyId<'_>) -> Option<u32> {
     };
     let adt_ref = adt.adt_ref(db);
     let name = adt_ref.name(db)?;
-    if name.data(db) != "SkippedArray" {
+    if name.data(db) != "ArrayView" {
         return None;
     }
     if !base
@@ -2432,7 +2432,7 @@ pub(crate) fn static_abi_head_size(db: &dyn MirDb, ty: TyId<'_>) -> Option<u32> 
         let elem_size = static_abi_head_size(db, elem_ty)?;
         return Some(n * elem_size);
     }
-    if let Some(size) = skipped_array_head_size(db, ty) {
+    if let Some(size) = array_view_head_size(db, ty) {
         return Some(size);
     }
     None
@@ -2480,7 +2480,7 @@ fn lazy_field_strategies<'db>(
             if !field_is_mut[i] && is_primitive_word_scalar(db, field_ty) {
                 FieldLoadStrategy::Direct
             } else if !field_is_mut[i] {
-                if let Some(head_size) = skipped_array_head_size(db, field_ty) {
+                if let Some(head_size) = array_view_head_size(db, field_ty) {
                     FieldLoadStrategy::SkipWithOffset { head_size }
                 } else {
                     FieldLoadStrategy::Decode
@@ -3836,20 +3836,20 @@ pub contract MerkleBox {
     }
 
     #[test]
-    fn lazy_calldataload_skipped_array_uses_skip_with_offset() {
+    fn lazy_calldataload_array_view_uses_skip_with_offset() {
         let mut db = DriverDataBase::default();
-        let file_url = Url::parse("file:///lazy_calldataload_skipped_array.fe").unwrap();
+        let file_url = Url::parse("file:///lazy_calldataload_array_view.fe").unwrap();
         db.workspace().touch(
             &mut db,
             file_url.clone(),
             Some(
                 r#"
 use std::abi::sol
-use std::abi::SkippedArray
+use std::abi::ArrayView
 
 msg SkipMsg {
     #[selector = sol("withSkip(uint256,uint256[32],uint256)")]
-    WithSkip { id: u256, data: SkippedArray<u256, 32>, tail: u256 },
+    WithSkip { id: u256, data: ArrayView<u256, 32>, tail: u256 },
 }
 
 pub contract SkipBox {
@@ -3877,7 +3877,7 @@ pub contract SkipBox {
                 assert_eq!(
                     field_strategies.len(),
                     3,
-                    "skipped-array msg should have 3 field strategies"
+                    "array-view msg should have 3 field strategies"
                 );
                 assert_eq!(
                     field_strategies[0],
@@ -3887,7 +3887,7 @@ pub contract SkipBox {
                 assert_eq!(
                     field_strategies[1],
                     FieldLoadStrategy::SkipWithOffset { head_size: 1024 },
-                    "data (SkippedArray<u256, 32>) should be SkipWithOffset with head_size 1024"
+                    "data (ArrayView<u256, 32>) should be SkipWithOffset with head_size 1024"
                 );
                 assert_eq!(
                     field_strategies[2],

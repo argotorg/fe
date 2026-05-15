@@ -403,7 +403,15 @@ fn packed_string_len(_ word: u256) -> u256 {
     len
 }
 
-pub struct BytesView<I> {
+/// A zero-copy view over a `bytes` payload in ABI-encoded data.
+///
+/// When `I` defaults to `()`, the view is *unbound* — it records only the
+/// data start offset and length. Call `.over(input)` to bind a byte source
+/// and get a `BytesView<I>` with byte/word access.
+///
+/// `BytesView<CallData>` is a bound zero-copy view over calldata.
+/// `BytesView` (= `BytesView<()>`) is an unbound position.
+pub struct BytesView<I = ()> {
     pub input: I,
     pub start: u256,
     pub len: u256,
@@ -435,7 +443,18 @@ impl<I> BytesView<I>
     }
 }
 
-pub struct StringView<I> {
+impl BytesView {
+    /// Bind a byte source to produce a bound `BytesView` with byte access.
+    pub fn over<I: ByteInput>(self, _ input: I) -> BytesView<I> {
+        BytesView { input, start: self.start, len: self.len }
+    }
+}
+
+/// A zero-copy view over a `string` payload in ABI-encoded data.
+///
+/// When `I` defaults to `()`, the view is *unbound*. Call `.over(input)`
+/// to bind a byte source for character access.
+pub struct StringView<I = ()> {
     pub bytes: BytesView<I>,
 }
 
@@ -463,15 +482,26 @@ impl<I> StringView<I>
     }
 }
 
+impl StringView {
+    /// Bind a byte source to produce a bound `StringView` with character access.
+    pub fn over<I: ByteInput>(self, _ input: I) -> StringView<I> {
+        StringView { bytes: self.bytes.over(input) }
+    }
+}
+
 /// A zero-copy view over a fixed-size array in ABI-encoded data.
 ///
 /// Instead of decoding all N elements into memory, `ArrayView` stores
 /// the byte input source and the offset where the array starts. Elements
 /// are read on demand via `get(index)`, paying only for what you use.
 ///
-/// Generic over `ByteInput`, so `ArrayView<u256, 32, CallData>` is a
-/// zero-copy view over calldata, consistent with `BytesView<CallData>`.
-pub struct ArrayView<T, const N: usize, I> {
+/// When `I` defaults to `()`, the view is *unbound* — it records only the
+/// byte offset where the array lives. Call `.over(input)` to bind a byte
+/// source and get an `ArrayView<T, N, I>` with element access.
+///
+/// `ArrayView<u256, 32, CallData>` is a bound zero-copy view over calldata.
+/// `ArrayView<u256, 32>` is an unbound position (I defaults to ()).
+pub struct ArrayView<T, const N: usize, I = ()> {
     pub input: I,
     pub start: u256,
 }
@@ -496,97 +526,32 @@ impl<T, const N: usize, I> ArrayView<T, N, I>
     }
 }
 
-/// A decoded array position without a bound byte source.
-/// Created by the ABI decoder when it skips past a fixed-size array.
-/// Call `with_input()` to bind a byte source and get an ArrayView.
-pub struct SkippedArray<T, const N: usize> {
-    pub start: u256,
-}
-
-impl<T, const N: usize> Copy for SkippedArray<T, N> {}
-
-impl<T, const N: usize> SkippedArray<T, N>
+impl<T, const N: usize> ArrayView<T, N>
     where T: AbiSize
 {
-    pub fn with_input<I: ByteInput>(self, _ input: I) -> ArrayView<T, N, I> {
+    /// Bind a byte source to produce a bound `ArrayView` with element access.
+    pub fn over<I: ByteInput>(self, _ input: I) -> ArrayView<T, N, I> {
         ArrayView { input, start: self.start }
     }
 }
 
-impl<T, const N: usize> AbiSize for SkippedArray<T, N>
+impl<T, const N: usize, I> AbiSize for ArrayView<T, N, I>
     where T: AbiSize
 {
     const HEAD_SIZE: u256 = (N as u256) * abi_field_head_size<T>()
     const IS_DYNAMIC: bool = T::IS_DYNAMIC
 }
 
-/// A decoded `bytes` position without a bound byte source.
-///
-/// Created by the ABI decoder when a `bytes` field is decoded via
-/// `SkippedBytes` instead of `Bytes`. Records the offset and length of the
-/// data payload without copying anything to memory. Call `with_input()` to
-/// bind a byte source and get a `BytesView` for zero-copy access.
-pub struct SkippedBytes {
-    /// Byte offset of the first data byte (past the length word).
-    pub data_start: u256,
-    /// Number of data bytes.
-    pub data_len: u256,
-}
-
-impl Copy for SkippedBytes {}
-
-impl SkippedBytes {
-    pub fn len(self) -> u256 {
-        self.data_len
-    }
-
-    pub fn is_empty(self) -> bool {
-        self.data_len == 0
-    }
-
-    /// Bind a byte source to produce a zero-copy `BytesView`.
-    pub fn with_input<I: ByteInput>(self, _ input: I) -> BytesView<I> {
-        BytesView { input, start: self.data_start, len: self.data_len }
-    }
-}
-
-impl AbiSize for SkippedBytes {
+impl AbiSize for BytesView {
     const HEAD_SIZE: u256 = 32
     const IS_DYNAMIC: bool = true
 
     fn payload_size(self) -> u256 {
-        32 + round_up_words(self.data_len)
+        32 + round_up_words(self.len)
     }
 }
 
-/// A decoded `string` position without a bound byte source.
-///
-/// Created by the ABI decoder when a `string` field is decoded via
-/// `SkippedString` instead of `DynString`. Records the offset and length of
-/// the string payload without copying anything to memory. Call
-/// `with_input()` to bind a byte source and get a `StringView`.
-pub struct SkippedString {
-    pub bytes: SkippedBytes,
-}
-
-impl Copy for SkippedString {}
-
-impl SkippedString {
-    pub fn len(self) -> u256 {
-        self.bytes.data_len
-    }
-
-    pub fn is_empty(self) -> bool {
-        self.bytes.data_len == 0
-    }
-
-    /// Bind a byte source to produce a zero-copy `StringView`.
-    pub fn with_input<I: ByteInput>(self, _ input: I) -> StringView<I> {
-        StringView { bytes: self.bytes.with_input(input) }
-    }
-}
-
-impl AbiSize for SkippedString {
+impl AbiSize for StringView {
     const HEAD_SIZE: u256 = 32
     const IS_DYNAMIC: bool = true
 
@@ -2650,10 +2615,10 @@ impl<A: Abi, T, const N: usize> Encode<A> for [T; N]
     }
 }
 
-/// Decode a SkippedArray: captures the cursor position and advances past
-/// the array without copying any elements. Zero cost at decode time.
-/// Use `with_input()` to bind a byte source for element access.
-impl<A: Abi, T, const N: usize> Decode<A> for SkippedArray<T, N>
+/// Decode an unbound ArrayView: captures the cursor position and advances
+/// past the array without copying any elements. Zero cost at decode time.
+/// Use `.over(input)` to bind a byte source for element access.
+impl<A: Abi, T, const N: usize> Decode<A> for ArrayView<T, N>
     where T: AbiSize
 {
     #[arithmetic(unchecked)]
@@ -2661,11 +2626,11 @@ impl<A: Abi, T, const N: usize> Decode<A> for SkippedArray<T, N>
         let start = d.pos()
         let total_bytes = (N as u256) * abi_field_head_size<T>()
         d.set_pos(start + total_bytes)
-        SkippedArray { start }
+        ArrayView { input: (), start }
     }
 }
 
-impl<A: Abi, T, const N: usize> AbiSpan<A> for SkippedArray<T, N>
+impl<A: Abi, T, const N: usize> AbiSpan<A> for ArrayView<T, N>
     where T: AbiSize
 {
     fn payload_end<I2: ByteInput>(_ input: I2, base: u256, pos: u256) -> u256 {
@@ -2674,7 +2639,7 @@ impl<A: Abi, T, const N: usize> AbiSpan<A> for SkippedArray<T, N>
     }
 }
 
-impl<A: Abi, T, const N: usize> Encode<A> for SkippedArray<T, N>
+impl<A: Abi, T, const N: usize> Encode<A> for ArrayView<T, N>
     where T: AbiSize
 {
     const DIRECT_ENCODE: bool = false
@@ -2688,28 +2653,28 @@ impl<A: Abi, T, const N: usize> Encode<A> for SkippedArray<T, N>
     }
 }
 
-/// Decode a SkippedBytes: reads the length word and records the data
+/// Decode an unbound BytesView: reads the length word and records the data
 /// position, then advances past the padded payload. Zero memory allocation.
-/// Use `with_input()` to bind a byte source for element access.
-impl<A: Abi> Decode<A> for SkippedBytes {
+/// Use `.over(input)` to bind a byte source for byte access.
+impl<A: Abi> Decode<A> for BytesView {
     #[arithmetic(unchecked)]
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
         let data_len = d.read_word()
         let data_start = d.pos()
         let padded = round_up_words(data_len)
         d.set_pos(data_start + padded)
-        SkippedBytes { data_start, data_len }
+        BytesView { input: (), start: data_start, len: data_len }
     }
 }
 
-impl<A: Abi> AbiSpan<A> for SkippedBytes {
+impl<A: Abi> AbiSpan<A> for BytesView {
     fn payload_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
         let data_len = input.word_at(pos)
         pos + 32 + round_up_words(data_len)
     }
 }
 
-impl<A: Abi> Encode<A> for SkippedBytes {
+impl<A: Abi> Encode<A> for BytesView {
     const DIRECT_ENCODE: bool = false
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {
@@ -2721,21 +2686,21 @@ impl<A: Abi> Encode<A> for SkippedBytes {
     }
 }
 
-/// Decode a SkippedString: same zero-copy strategy as SkippedBytes.
-impl<A: Abi> Decode<A> for SkippedString {
+/// Decode an unbound StringView: same zero-copy strategy as BytesView.
+impl<A: Abi> Decode<A> for StringView {
     fn decode_payload<D: AbiDecoder<A>>(_ d: mut D) -> Self {
-        SkippedString { bytes: SkippedBytes::decode_payload(d) }
+        StringView { bytes: BytesView::decode_payload(d) }
     }
 }
 
-impl<A: Abi> AbiSpan<A> for SkippedString {
+impl<A: Abi> AbiSpan<A> for StringView {
     fn payload_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
         let data_len = input.word_at(pos)
         pos + 32 + round_up_words(data_len)
     }
 }
 
-impl<A: Abi> Encode<A> for SkippedString {
+impl<A: Abi> Encode<A> for StringView {
     const DIRECT_ENCODE: bool = false
 
     fn encode<E: AbiEncoder<A>>(own self, _ e: mut E) {

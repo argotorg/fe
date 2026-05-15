@@ -605,7 +605,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 projected_fields,
             } => {
                 // Hybrid path: direct-load non-mut scalar fields via
-                // calldataload, skip SkippedArray fields by passing the
+                // calldataload, skip ArrayView fields by passing the
                 // calldata offset, decode the rest through the standard
                 // pipeline.
                 let field_types = msg_ty.field_types(self.db);
@@ -662,7 +662,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
                             accumulated_offset += 32;
                         }
                         FieldLoadStrategy::SkipWithOffset { head_size } => {
-                            // Construct a SkippedArray value whose `start`
+                            // Construct an ArrayView value whose `start`
                             // field holds the absolute calldata byte offset.
                             let field_ty = field_types[i];
                             let field_class = top_level_class_for_ty_in_env(
@@ -674,7 +674,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
                             .expect("SkipWithOffset field should have a runtime class");
 
                             let offset_val = self.push_const_word(cont_bb, accumulated_offset);
-                            let value = self.push_skipped_array_value(
+                            let value = self.push_array_view_value(
                                 cont_bb,
                                 field_ty,
                                 &field_class,
@@ -1573,11 +1573,11 @@ impl<'db> SyntheticBodyBuilder<'db> {
         local
     }
 
-    /// Construct a `SkippedArray` aggregate value with `start` set to
-    /// `offset_value`. SkippedArray is a single-field struct (`start: u256`)
-    /// so we allocate the aggregate, store the offset into field 0, and
-    /// return the local.
-    fn push_skipped_array_value(
+    /// Construct an unbound `ArrayView` aggregate value with `start` set to
+    /// `offset_value`. The unbound ArrayView has fields `(input: (), start: u256)`;
+    /// field 0 (`input`) is zero-sized and needs no store, field 1 (`start`)
+    /// receives the calldata byte offset.
+    fn push_array_view_value(
         &mut self,
         bb: RBlockId,
         semantic_ty: TyId<'db>,
@@ -1595,7 +1595,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
             RStmt::Store {
                 dst: RuntimePlace {
                     root,
-                    path: vec![PlaceElem::Field(hir::analysis::semantic::FieldIndex(0))]
+                    path: vec![PlaceElem::Field(hir::analysis::semantic::FieldIndex(1))]
                         .into_boxed_slice(),
                 },
                 src: offset_value,
