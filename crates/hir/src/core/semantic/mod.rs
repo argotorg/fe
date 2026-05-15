@@ -1547,6 +1547,7 @@ pub struct ContractFieldInfo<'db> {
     pub index: u32,
     pub name: IdentId<'db>,
     pub declared_ty: TyId<'db>,
+    pub is_mut: bool,
     pub is_provider: bool,
     pub target_ty: TyId<'db>,
 }
@@ -1556,6 +1557,7 @@ pub struct ContractFieldLayoutInfo<'db> {
     pub index: u32,
     pub name: IdentId<'db>,
     pub declared_ty: TyId<'db>,
+    pub is_mut: bool,
     pub is_provider: bool,
     pub target_ty: TyId<'db>,
     /// Semantic address space in which this field is allocated.
@@ -2133,6 +2135,7 @@ impl<'db> Contract<'db> {
                     index: idx as u32,
                     name,
                     declared_ty,
+                    is_mut: field.is_mut,
                     is_provider: plan.is_provider,
                     target_ty,
                     address_space: plan.address_space,
@@ -2159,6 +2162,7 @@ impl<'db> Contract<'db> {
                         index: field.index,
                         name: field.name,
                         declared_ty: strip_derived_adt_layout_args(db, field.declared_ty),
+                        is_mut: field.is_mut,
                         is_provider: field.is_provider,
                         target_ty: strip_derived_adt_layout_args(db, field.target_ty),
                     },
@@ -2493,7 +2497,7 @@ fn contract_provider_bindings_canonical<'db>(
         .map(|(idx, field)| ProviderBinding {
             provider_idx: idx as u32,
             provider_ty: field.target_ty,
-            is_mut: true,
+            is_mut: field.is_mut,
             source: ProviderSource::ContractField {
                 contract,
                 field_idx: field.index,

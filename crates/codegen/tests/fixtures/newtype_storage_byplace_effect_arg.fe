@@ -12,8 +12,8 @@ fn bump() uses (w: mut Wrap) {
 }
 
 pub contract NewtypeByPlaceEffectArg {
-    x: u256
-    w: Wrap
+    mut x: u256
+    mut w: Wrap
 
     init() {}
 

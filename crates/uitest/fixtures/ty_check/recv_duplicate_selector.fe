@@ -16,7 +16,7 @@ msg TokenMsg {
 }
 
 pub contract MultiRecv {
-    data: u64,
+    mut data: u64,
 
     // First recv block with BankMsg
     recv BankMsg {

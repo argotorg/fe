@@ -286,7 +286,7 @@ fn parse_event_fields<'db>(
 
         let vis = super::lower_field_visibility(&field);
 
-        hir_fields.push(FieldDef::new(attrs, name_ident, ty_ref, vis));
+        hir_fields.push(FieldDef::new(attrs, name_ident, ty_ref, vis, false));
 
         let (Some(name_ident), Some(ty)) = (name_ident.to_opt(), ty_ref.to_opt()) else {
             is_valid = false;
