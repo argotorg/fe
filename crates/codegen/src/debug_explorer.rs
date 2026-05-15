@@ -6,148 +6,165 @@ use sonatina_codegen::object::{FrontendProvenanceMap, ObjectArtifact};
 use crate::sonatina::MirToIrEntry;
 use common::source_ord::FunctionSourceTable;
 
-pub fn generate_explorer_payload(
+/// An occurrence of a symbol at a specific location in a representation.
+struct Occurrence {
+    line: u32,
+    col: u32,
+    end_col: u32,
+    symbol: String,
+}
+
+/// A "file" (representation) in the multi-representation SCIP index.
+struct RepFile {
+    contents: String,
+    occurrences: Vec<Occurrence>,
+}
+
+/// Generate a multi-representation SCIP index as JSON.
+///
+/// Each representation (source, MIR, Sonatina IR, bytecode, etc.) is a
+/// virtual "file" with SCIP-style symbol occurrences. Shared symbol
+/// strings across files enable cross-representation hover highlighting.
+pub fn generate_multi_rep_scip(
     source_code: &str,
     source_path: &str,
     mir_dump: &str,
     sonatina_ir_dump: &str,
+    sonatina_ir_opt_dump: &str,
     artifacts: &[ObjectArtifact],
     provenance: &FrontendProvenanceMap,
     mir_to_ir: &[MirToIrEntry],
     source_tables: &[(u32, &FunctionSourceTable)],
+    func_names: &[(u32, &str)],
 ) -> String {
-    let mut groups: Vec<ExplorerGroup> = Vec::new();
-    let mut group_id = 0u32;
+    let mut files: BTreeMap<&str, RepFile> = BTreeMap::new();
 
-    for entry in mir_to_ir {
-        if entry.source_ord.is_default() {
-            continue;
-        }
-        let func_id = entry.func.as_u32();
-
-        let source_entry = source_tables
-            .iter()
-            .find(|(fid, _)| *fid == func_id)
-            .and_then(|(_, table)| table.get(entry.source_ord));
-
-        let source_lines: Vec<u32> = source_entry
-            .map(|e| (e.start_line..=e.end_line).collect())
-            .unwrap_or_default();
-
-        let mut pc_ranges = Vec::new();
-        for artifact in artifacts {
-            for section in artifact.sections.values() {
-                let Some(obs) = &section.observability else { continue };
-                for pc_entry in &obs.pc_map {
-                    if pc_entry.func.as_u32() == func_id
-                        && pc_entry.ir_inst.map(|i| i.0) == Some(entry.inst.0)
-                    {
-                        pc_ranges.push(PcRange {
-                            start: pc_entry.pc_start,
-                            end: pc_entry.pc_end,
-                            func_name: pc_entry.func_name.clone(),
-                        });
-                    }
-                }
+    // Source file — annotate lines with function-level and expression-level symbols
+    let mut source_occs = Vec::new();
+    for (func_id, func_name) in func_names {
+        // Find source lines for this function from source tables
+        if let Some((_, table)) = source_tables.iter().find(|(fid, _)| fid == func_id) {
+            for (ord, entry) in table.iter() {
+                let sym = format!("{}$ord:{}", func_name, ord.index());
+                source_occs.push(Occurrence {
+                    line: entry.start_line,
+                    col: entry.start_col,
+                    end_col: entry.end_col,
+                    symbol: sym,
+                });
             }
         }
+    }
+    files.insert("source", RepFile {
+        contents: source_code.to_string(),
+        occurrences: source_occs,
+    });
 
-        groups.push(ExplorerGroup {
-            id: group_id,
-            source_lines,
-            mir_stmts: vec![MirStmt {
-                func: func_id,
-                block: entry.mir_block,
-                stmt: entry.mir_stmt,
-            }],
-            ir_insts: vec![IrInst {
-                func: func_id,
-                inst: entry.inst.0,
-            }],
-            pc_ranges,
+    // MIR dump — for now just include the text; annotation requires
+    // correlating MIR pretty-print positions with stmt indices
+    files.insert("mir", RepFile {
+        contents: mir_dump.to_string(),
+        occurrences: Vec::new(),
+    });
+
+    // Sonatina IR (pre-opt)
+    files.insert("sonatina_ir", RepFile {
+        contents: sonatina_ir_dump.to_string(),
+        occurrences: Vec::new(),
+    });
+
+    // Sonatina IR (optimized)
+    if !sonatina_ir_opt_dump.is_empty() {
+        files.insert("sonatina_ir_opt", RepFile {
+            contents: sonatina_ir_opt_dump.to_string(),
+            occurrences: Vec::new(),
         });
-        group_id += 1;
     }
 
-    let mut out = String::new();
-    out.push('{');
-    write!(
-        out,
-        "\"source\":{{\"path\":\"{}\",\"code\":{}}},",
-        json_escape(source_path),
-        json_string(source_code)
-    )
-    .unwrap();
-    write!(out, "\"mir\":{},", json_string(mir_dump)).unwrap();
-    write!(out, "\"sonatina_ir\":{},", json_string(sonatina_ir_dump)).unwrap();
-    write!(out, "\"groups\":[").unwrap();
-    for (idx, group) in groups.iter().enumerate() {
-        if idx > 0 {
-            out.push(',');
+    // Bytecode — annotate PC ranges with symbols from provenance
+    let mut bytecode_lines = String::new();
+    let mut bytecode_occs = Vec::new();
+    let mut line_num = 1u32;
+
+    for artifact in artifacts {
+        for (section_name, section) in &artifact.sections {
+            writeln!(&mut bytecode_lines, "--- {} ---", section_name.0).unwrap();
+            line_num += 1;
+
+            let Some(obs) = &section.observability else { continue };
+            let mut entries: Vec<_> = obs.pc_map.iter().collect();
+            entries.sort_by_key(|e| e.pc_start);
+
+            for entry in entries {
+                let prov_str = entry.ir_inst
+                    .and_then(|ir_inst| provenance.get(&(entry.func, ir_inst)));
+
+                let line_text = format!(
+                    "[{:04x}..{:04x}) {}",
+                    entry.pc_start, entry.pc_end, entry.func_name
+                );
+                writeln!(&mut bytecode_lines, "{}", line_text).unwrap();
+
+                // Find matching SourceOrd for this IR inst to get the symbol
+                if let Some(ir_inst) = entry.ir_inst {
+                    let func_id = entry.func.as_u32();
+                    if let Some(mir_entry) = mir_to_ir.iter().find(|m| {
+                        m.func.as_u32() == func_id && m.inst.0 == ir_inst.0
+                    }) {
+                        if !mir_entry.source_ord.is_default() {
+                            let func_name = func_names
+                                .iter()
+                                .find(|(fid, _)| *fid == func_id)
+                                .map(|(_, name)| *name)
+                                .unwrap_or("?");
+                            let sym = format!(
+                                "{}$ord:{}",
+                                func_name,
+                                mir_entry.source_ord.index()
+                            );
+                            bytecode_occs.push(Occurrence {
+                                line: line_num,
+                                col: 1,
+                                end_col: (line_text.len() + 1) as u32,
+                                symbol: sym,
+                            });
+                        }
+                    }
+                }
+                line_num += 1;
+            }
         }
-        write_group(&mut out, group);
     }
-    write!(out, "]}}").unwrap();
+
+    files.insert("bytecode", RepFile {
+        contents: bytecode_lines,
+        occurrences: bytecode_occs,
+    });
+
+    // Serialize as JSON
+    serialize_scip_index(&files)
+}
+
+fn serialize_scip_index(files: &BTreeMap<&str, RepFile>) -> String {
+    let mut out = String::new();
+    out.push_str("{\"files\":{");
+    for (idx, (name, file)) in files.iter().enumerate() {
+        if idx > 0 { out.push(','); }
+        write!(&mut out, "\"{}\":{{", json_escape(name)).unwrap();
+        write!(&mut out, "\"contents\":{}", json_string(&file.contents)).unwrap();
+        write!(&mut out, ",\"occurrences\":[").unwrap();
+        for (oidx, occ) in file.occurrences.iter().enumerate() {
+            if oidx > 0 { out.push(','); }
+            write!(
+                &mut out,
+                "{{\"line\":{},\"col\":{},\"endCol\":{},\"symbol\":\"{}\"}}",
+                occ.line, occ.col, occ.end_col, json_escape(&occ.symbol)
+            ).unwrap();
+        }
+        out.push_str("]}");
+    }
+    out.push_str("}}");
     out
-}
-
-struct ExplorerGroup {
-    id: u32,
-    source_lines: Vec<u32>,
-    mir_stmts: Vec<MirStmt>,
-    ir_insts: Vec<IrInst>,
-    pc_ranges: Vec<PcRange>,
-}
-
-struct MirStmt {
-    func: u32,
-    block: u32,
-    stmt: u32,
-}
-
-struct IrInst {
-    func: u32,
-    inst: u32,
-}
-
-struct PcRange {
-    start: u32,
-    end: u32,
-    func_name: String,
-}
-
-fn write_group(out: &mut String, g: &ExplorerGroup) {
-    write!(out, "{{\"id\":{}", g.id).unwrap();
-    write!(out, ",\"source_lines\":[").unwrap();
-    for (i, line) in g.source_lines.iter().enumerate() {
-        if i > 0 { out.push(','); }
-        write!(out, "{line}").unwrap();
-    }
-    out.push(']');
-    write!(out, ",\"mir_stmts\":[").unwrap();
-    for (i, s) in g.mir_stmts.iter().enumerate() {
-        if i > 0 { out.push(','); }
-        write!(out, "{{\"func\":{},\"block\":{},\"stmt\":{}}}", s.func, s.block, s.stmt).unwrap();
-    }
-    out.push(']');
-    write!(out, ",\"ir_insts\":[").unwrap();
-    for (i, inst) in g.ir_insts.iter().enumerate() {
-        if i > 0 { out.push(','); }
-        write!(out, "{{\"func\":{},\"inst\":{}}}", inst.func, inst.inst).unwrap();
-    }
-    out.push(']');
-    write!(out, ",\"pc_ranges\":[").unwrap();
-    for (i, pc) in g.pc_ranges.iter().enumerate() {
-        if i > 0 { out.push(','); }
-        write!(
-            out,
-            "{{\"start\":{},\"end\":{},\"func_name\":\"{}\"}}",
-            pc.start, pc.end, json_escape(&pc.func_name)
-        )
-        .unwrap();
-    }
-    out.push(']');
-    out.push('}');
 }
 
 fn json_escape(s: &str) -> String {
@@ -175,20 +192,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn payload_is_valid_json_structure() {
-        let payload = generate_explorer_payload(
+    fn multi_rep_scip_generates_valid_json() {
+        let json = generate_multi_rep_scip(
             "fn add(x: u256) -> u256 { return x }",
             "test.fe",
             "bb0: assign v0 = use v1",
             "func %add: block0: v0 = add v1 v2",
+            "",
             &[],
             &Default::default(),
             &[],
             &[],
+            &[],
         );
-        assert!(payload.starts_with('{'));
-        assert!(payload.ends_with('}'));
-        assert!(payload.contains("\"source\""));
-        assert!(payload.contains("\"groups\""));
+        assert!(json.starts_with("{\"files\":{"));
+        assert!(json.contains("\"source\""));
+        assert!(json.contains("\"mir\""));
+        assert!(json.contains("\"bytecode\""));
+        assert!(json.ends_with("}}"));
     }
 }
