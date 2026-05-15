@@ -20,6 +20,7 @@ pub struct EthdebugBuilder {
     compiler_version: String,
     sources: Vec<EthdebugSource>,
     programs: Vec<EthdebugProgram>,
+    types: Vec<EthdebugType>,
 }
 
 struct EthdebugProgram {
@@ -43,6 +44,19 @@ struct EthdebugSourceRange {
     end_col: u32,
 }
 
+pub struct EthdebugType {
+    pub name: String,
+    pub kind: String,
+    pub bits: Option<u32>,
+    pub fields: Vec<EthdebugTypeField>,
+}
+
+pub struct EthdebugTypeField {
+    pub name: String,
+    pub type_kind: String,
+    pub type_bits: Option<u32>,
+}
+
 impl EthdebugBuilder {
     pub fn new(compiler_name: &str, compiler_version: &str) -> Self {
         Self {
@@ -50,7 +64,54 @@ impl EthdebugBuilder {
             compiler_version: compiler_version.to_string(),
             sources: Vec::new(),
             programs: Vec::new(),
+            types: Vec::new(),
         }
+    }
+
+    pub fn add_type_from_desc(&mut self, desc: &crate::dwarf::FeTypeDesc) {
+        use crate::dwarf::FeTypeDesc;
+        let (name, kind, bits, fields) = match desc {
+            FeTypeDesc::UInt { bits } => (format!("u{bits}"), "uint".to_string(), Some(*bits), vec![]),
+            FeTypeDesc::Int { bits } => (format!("i{bits}"), "int".to_string(), Some(*bits), vec![]),
+            FeTypeDesc::Bool => ("bool".to_string(), "bool".to_string(), None, vec![]),
+            FeTypeDesc::Address => ("address".to_string(), "address".to_string(), None, vec![]),
+            FeTypeDesc::String => ("String".to_string(), "string".to_string(), None, vec![]),
+            FeTypeDesc::Bytes { len } => (
+                len.map_or("bytes".to_string(), |n| format!("bytes{n}")),
+                "bytes".to_string(),
+                len.map(|n| n * 8),
+                vec![],
+            ),
+            FeTypeDesc::Struct { name, fields } => (
+                name.clone(),
+                "struct".to_string(),
+                None,
+                fields.iter().map(|(fname, fty)| {
+                    let (fkind, fbits) = match fty {
+                        FeTypeDesc::UInt { bits } => ("uint".to_string(), Some(*bits)),
+                        FeTypeDesc::Int { bits } => ("int".to_string(), Some(*bits)),
+                        FeTypeDesc::Bool => ("bool".to_string(), None),
+                        _ => ("unknown".to_string(), None),
+                    };
+                    EthdebugTypeField { name: fname.clone(), type_kind: fkind, type_bits: fbits }
+                }).collect(),
+            ),
+            FeTypeDesc::Enum { name, variants } => (
+                name.clone(),
+                "enum".to_string(),
+                None,
+                variants.iter().map(|v| EthdebugTypeField {
+                    name: v.clone(), type_kind: "uint".to_string(), type_bits: Some(8),
+                }).collect(),
+            ),
+            FeTypeDesc::Array { elem, len } => (
+                len.map_or("Array".to_string(), |n| format!("Array[{n}]")),
+                "array".to_string(),
+                None,
+                vec![],
+            ),
+        };
+        self.types.push(EthdebugType { name, kind, bits, fields });
     }
 
     pub fn add_source(&mut self, path: &str, contents: Option<&str>) -> usize {
@@ -164,6 +225,48 @@ impl EthdebugBuilder {
             write!(out, ",\"language\":\"Fe\"}}").unwrap();
         }
         write!(out, "]}}").unwrap();
+
+        // types
+        if !self.types.is_empty() {
+            write!(out, ",\"types\":{{").unwrap();
+            for (idx, ty) in self.types.iter().enumerate() {
+                if idx > 0 {
+                    out.push(',');
+                }
+                write!(
+                    out,
+                    "\"{}\":{{\"kind\":\"{}\"",
+                    json_escape(&ty.name),
+                    json_escape(&ty.kind)
+                )
+                .unwrap();
+                if let Some(bits) = ty.bits {
+                    write!(out, ",\"bits\":{bits}").unwrap();
+                }
+                if !ty.fields.is_empty() {
+                    write!(out, ",\"contains\":[").unwrap();
+                    for (fidx, field) in ty.fields.iter().enumerate() {
+                        if fidx > 0 {
+                            out.push(',');
+                        }
+                        write!(
+                            out,
+                            "{{\"name\":\"{}\",\"type\":{{\"kind\":\"{}\"",
+                            json_escape(&field.name),
+                            json_escape(&field.type_kind)
+                        )
+                        .unwrap();
+                        if let Some(bits) = field.type_bits {
+                            write!(out, ",\"bits\":{bits}").unwrap();
+                        }
+                        write!(out, "}}}}").unwrap();
+                    }
+                    write!(out, "]").unwrap();
+                }
+                out.push('}');
+            }
+            write!(out, "}}").unwrap();
+        }
 
         // programs
         write!(out, ",\"programs\":[").unwrap();
