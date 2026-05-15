@@ -1,0 +1,41 @@
+use std::abi::sol
+use std::evm::Evm
+
+#[abi]
+pub struct G1Point {
+    pub x: u256,
+    pub y: u256,
+}
+
+msg PointMsg {
+    #[selector = sol("add((uint256,uint256),(uint256,uint256))")]
+    Add { a: G1Point, b: G1Point } -> (u256, u256),
+}
+
+pub contract PointAdder {
+    init() {}
+    recv PointMsg {
+        Add { a, b } -> (u256, u256) {
+            (a.x + b.x, a.y + b.y)
+        }
+    }
+}
+
+#[test]
+fn test_abi_struct_roundtrip() uses (evm: mut Evm) {
+    let c = evm.create2<PointAdder>(value: 0, args: (), salt: 0)
+    assert(c.inner != 0)
+
+    let (rx, ry): (u256, u256) = evm.call(
+        addr: c,
+        gas: 1000000,
+        value: 0,
+        message: PointMsg::Add {
+            a: G1Point { x: 10, y: 20 },
+            b: G1Point { x: 30, y: 40 },
+        },
+    )
+
+    assert(rx == 40)
+    assert(ry == 60)
+}
