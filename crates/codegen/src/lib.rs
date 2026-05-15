@@ -1,5 +1,6 @@
 mod backend;
 pub mod datalog;
+pub mod debug_explorer;
 pub mod dwarf;
 pub mod ethdebug;
 mod function_symbols;
