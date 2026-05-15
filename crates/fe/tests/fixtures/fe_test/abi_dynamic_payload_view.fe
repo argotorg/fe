@@ -1,0 +1,94 @@
+use std::abi::DynString
+use std::evm::{Evm, encode_abi_payload, mem}
+use core::abi::BytesView
+use std::evm::CallData
+
+/// Test that BytesView (unbound) works as a msg field type for zero-copy
+/// bytes decoding. The handler receives BytesView<()> and binds it to
+/// CallData for zero-copy access.
+///
+/// Uses the same ABI encoding as Bytes, but the receiver decodes without
+/// copying the bytes payload to memory.
+
+msg DynamicPayloadViewMsg {
+    #[selector = 0x02]
+    Check { first: BytesView, marker: u256, second: BytesView } -> u256,
+}
+
+pub contract DynamicPayloadViewReceiver {
+    recv DynamicPayloadViewMsg {
+        Check { first, marker, second } -> u256 {
+            assert(marker == 0xabcdef)
+            assert(first.len == 33)
+            assert(second.len == 1)
+            first.len + second.len
+        }
+    }
+}
+
+/// Test the contract by sending raw ABI-encoded calldata that matches
+/// the Bytes encoding (since BytesView uses the same wire format).
+/// We reuse the DynamicPayloadReceiver from the existing test to
+/// produce the calldata, then call our contract with it.
+
+msg OriginalMsg {
+    #[selector = 0x02]
+    Check { first: Bytes, marker: u256, second: Bytes } -> u256,
+}
+
+fn two_word_bytes() -> Bytes
+uses (evm: mut Evm)
+{
+    let payload_len: u256 = 33
+    let payload_size: u256 = 96
+    let data_ptr = mem::alloc(payload_size)
+
+    evm.mstore(addr: data_ptr, value: payload_len)
+    evm.mstore(
+        addr: data_ptr + 32,
+        value: 0x1111111111111111111111111111111111111111111111111111111111111111,
+    )
+    evm.mstore(
+        addr: data_ptr + 64,
+        value: 0x2200000000000000000000000000000000000000000000000000000000000000,
+    )
+
+    Bytes { data: data_ptr, len: payload_len, size: payload_size }
+}
+
+fn one_byte_bytes() -> Bytes
+uses (evm: mut Evm)
+{
+    let payload_len: u256 = 1
+    let payload_size: u256 = 64
+    let data_ptr = mem::alloc(payload_size)
+
+    evm.mstore(addr: data_ptr, value: payload_len)
+    evm.mstore(
+        addr: data_ptr + 32,
+        value: 0x3300000000000000000000000000000000000000000000000000000000000000,
+    )
+
+    Bytes { data: data_ptr, len: payload_len, size: payload_size }
+}
+
+#[test]
+fn test_msg_dynamic_payload_view_decoding() uses (evm: mut Evm) {
+    let receiver = evm.create2<DynamicPayloadViewReceiver>(value: 0, args: (), salt: 0)
+    assert(receiver.inner != 0)
+
+    // Send using OriginalMsg (which uses Bytes, encodable) to the receiver
+    // that decodes as BytesView. Same ABI wire format.
+    let result: u256 = evm.call(
+        addr: receiver,
+        gas: 1000000,
+        value: 0,
+        message: OriginalMsg::Check {
+            first: two_word_bytes(),
+            marker: 0xabcdef,
+            second: one_byte_bytes(),
+        },
+    )
+
+    assert(result == 34)
+}
