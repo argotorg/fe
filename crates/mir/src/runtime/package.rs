@@ -44,8 +44,8 @@ use crate::{
     },
     runtime::{
         AddressSpaceKind, ConstRegionId, ContractInitAbiPlan, ContractRecvAbiPlan, DispatchArm,
-        DispatchDefault, DispatchStrategy, EntryEffectArgPlan, InitArgsPlan, LayoutId, LayoutKey,
-        RefKind, RefView, ResolvedCodeRegion, RuntimeClass, RuntimeCodeRegion,
+        DispatchDefault, DispatchStrategy, EntryEffectArgPlan, FieldLoadStrategy, InitArgsPlan,
+        LayoutId, LayoutKey, RefKind, RefView, ResolvedCodeRegion, RuntimeClass, RuntimeCodeRegion,
         RuntimeCodeRegionKey, RuntimeFunction, RuntimeFunctionOwner, RuntimeInlineHint,
         RuntimeInputPlan, RuntimeLinkage, RuntimeObject, RuntimePackage, RuntimePackagePlan,
         RuntimeReturnPlan, RuntimeSection, RuntimeSectionName, RuntimeSectionRef,
@@ -810,18 +810,15 @@ fn contract_recv_wrapper<'db>(
             },
         )?,
     )?;
-    let projected_fields = visible_recv_arg_fields(
+    let semantic = semantic_instance_for_root_owner(
         db,
-        semantic_instance_for_root_owner(
-            db,
-            BodyOwner::ContractRecvArm {
-                contract,
-                recv_idx: recv.recv_idx(db),
-                arm_idx: arm.arm_idx(db),
-            },
-        )?,
-        arm,
-    );
+        BodyOwner::ContractRecvArm {
+            contract,
+            recv_idx: recv.recv_idx(db),
+            arm_idx: arm.arm_idx(db),
+        },
+    )?;
+    let projected_fields = visible_recv_arg_fields(db, semantic, arm);
     let input = if abi_info.args_ty == TyId::unit(db) {
         RuntimeInputPlan::None
     } else if let Some(field_head_sizes) =
@@ -830,6 +827,13 @@ fn contract_recv_wrapper<'db>(
         RuntimeInputPlan::DirectCalldataLoad {
             msg_ty: abi_info.args_ty,
             field_head_sizes,
+            projected_fields,
+        }
+    } else if let Some(strategies) = lazy_field_strategies(db, abi_info.args_ty, semantic, arm) {
+        RuntimeInputPlan::LazyCalldataLoad {
+            msg_ty: abi_info.args_ty,
+            decode_fn: resolve_decode_instance(db, contract.scope(), abi_info.args_ty)?,
+            field_strategies: strategies,
             projected_fields,
         }
     } else {
@@ -2332,6 +2336,190 @@ fn direct_calldata_load_info<'db>(
     Some(head_sizes.into_boxed_slice())
 }
 
+/// Returns `true` if `ty` is a primitive scalar type that occupies exactly one
+/// 32-byte ABI word AND has a scalar runtime representation (i.e. the runtime
+/// carries it as a plain word, not an aggregate).
+///
+/// Only primitive bool and integer types qualify. ADT wrappers like
+/// `Address { inner: u256 }` are ABI-word-sized but have aggregate runtime
+/// representations, so they are excluded.
+fn is_primitive_word_scalar(db: &dyn MirDb, ty: TyId<'_>) -> bool {
+    let base = ty.base_ty(db);
+    match base.data(db) {
+        TyData::TyBase(TyBase::Prim(prim)) => matches!(
+            prim,
+            PrimTy::Bool
+                | PrimTy::U8
+                | PrimTy::U16
+                | PrimTy::U32
+                | PrimTy::U64
+                | PrimTy::U128
+                | PrimTy::U256
+                | PrimTy::Usize
+                | PrimTy::I8
+                | PrimTy::I16
+                | PrimTy::I32
+                | PrimTy::I64
+                | PrimTy::I128
+                | PrimTy::I256
+                | PrimTy::Isize
+        ),
+        _ => false,
+    }
+}
+
+/// If `ty` is `SkippedArray<T, N>` from the core ingot, returns the total ABI
+/// head size in bytes (`N * element_head_size`).  Returns `None` for any other
+/// type.
+fn skipped_array_head_size(db: &dyn MirDb, ty: TyId<'_>) -> Option<u32> {
+    use common::ingot::IngotKind;
+    use hir::analysis::ty::const_ty::EvaluatedConstTy;
+
+    let base = ty.base_ty(db);
+    let TyData::TyBase(TyBase::Adt(adt)) = base.data(db) else {
+        return None;
+    };
+    let adt_ref = adt.adt_ref(db);
+    let name = adt_ref.name(db)?;
+    if name.data(db) != "SkippedArray" {
+        return None;
+    }
+    if !base
+        .ingot(db)
+        .is_some_and(|ingot| ingot.kind(db) == IngotKind::Core)
+    {
+        return None;
+    }
+
+    let (_, args) = ty.decompose_ty_app(db);
+    if args.len() < 2 {
+        return None;
+    }
+    let elem_ty = args[0];
+    let len_ty = args[1];
+
+    let TyData::ConstTy(const_ty) = len_ty.data(db) else {
+        return None;
+    };
+    let n: u32 = match const_ty.data(db) {
+        ConstTyData::Evaluated(EvaluatedConstTy::LitInt(int_id), _) => int_id
+            .data(db)
+            .to_u32_digits()
+            .first()
+            .copied()
+            .unwrap_or(0),
+        _ => return None,
+    };
+
+    let elem_head_size = static_abi_head_size(db, elem_ty)?;
+    Some(n * elem_head_size)
+}
+
+/// Returns the statically-known ABI head size (in bytes) for `ty`, or `None`
+/// if the size is dynamic or cannot be determined at compile time.
+pub(crate) fn static_abi_head_size(db: &dyn MirDb, ty: TyId<'_>) -> Option<u32> {
+    if is_primitive_word_scalar(db, ty) {
+        return Some(32);
+    }
+    let fields = ty.field_types(db);
+    if fields.len() == 1 {
+        return static_abi_head_size(db, fields[0]);
+    }
+    if ty.is_array(db) {
+        let n = ty.array_len(db)? as u32;
+        let (_, args) = ty.decompose_ty_app(db);
+        let elem_ty = *args.first()?;
+        let elem_size = static_abi_head_size(db, elem_ty)?;
+        return Some(n * elem_size);
+    }
+    if let Some(size) = skipped_array_head_size(db, ty) {
+        return Some(size);
+    }
+    None
+}
+
+/// Determine the per-field load strategies for a lazy calldata load plan.
+///
+/// Returns `Some(strategies)` if at least one field can use direct load AND
+/// at least one field needs the decode path (genuinely mixed case).
+/// Returns `None` if all fields use the same strategy.
+fn lazy_field_strategies<'db>(
+    db: &'db dyn MirDb,
+    msg_ty: TyId<'db>,
+    semantic: SemanticInstance<'db>,
+    arm: RecvArmView<'db>,
+) -> Option<Box<[FieldLoadStrategy]>> {
+    if !is_compiler_generated_msg(db, msg_ty) {
+        return None;
+    }
+    let field_types = msg_ty.field_types(db);
+    if field_types.is_empty() {
+        return None;
+    }
+
+    let binding_plans = runtime_visible_binding_plans(db, semantic);
+    let arg_bindings = arm.arg_bindings(db);
+    let tuple_index_by_pat: FxHashMap<_, _> = arg_bindings
+        .iter()
+        .map(|b| (b.pat, b.tuple_index))
+        .collect();
+
+    let mut field_is_mut = vec![false; field_types.len()];
+    for entry in binding_plans.iter() {
+        if let LocalBinding::Local { pat, is_mut: true } = entry.binding
+            && let Some(&tuple_idx) = tuple_index_by_pat.get(&pat)
+        {
+            field_is_mut[tuple_idx as usize] = true;
+        }
+    }
+
+    let mut strategies: Vec<FieldLoadStrategy> = field_types
+        .iter()
+        .enumerate()
+        .map(|(i, &field_ty)| {
+            if !field_is_mut[i] && is_primitive_word_scalar(db, field_ty) {
+                FieldLoadStrategy::Direct
+            } else if !field_is_mut[i] {
+                if let Some(head_size) = skipped_array_head_size(db, field_ty) {
+                    FieldLoadStrategy::SkipWithOffset { head_size }
+                } else {
+                    FieldLoadStrategy::Decode
+                }
+            } else {
+                FieldLoadStrategy::Decode
+            }
+        })
+        .collect();
+
+    let mut all_preceding_static = true;
+    for (i, &field_ty) in field_types.iter().enumerate() {
+        if static_abi_head_size(db, field_ty).is_none() {
+            all_preceding_static = false;
+        }
+        match strategies[i] {
+            FieldLoadStrategy::Direct | FieldLoadStrategy::SkipWithOffset { .. } => {
+                if !all_preceding_static {
+                    strategies[i] = FieldLoadStrategy::Decode;
+                }
+            }
+            FieldLoadStrategy::Decode => {}
+        }
+    }
+
+    let has_direct = strategies.contains(&FieldLoadStrategy::Direct);
+    let has_skip = strategies
+        .iter()
+        .any(|s| matches!(s, FieldLoadStrategy::SkipWithOffset { .. }));
+    let has_decode = strategies.contains(&FieldLoadStrategy::Decode);
+
+    let distinct_count = has_direct as u8 + has_skip as u8 + has_decode as u8;
+    if distinct_count >= 2 {
+        Some(strategies.into_boxed_slice())
+    } else {
+        None
+    }
+}
+
 fn runtime_input_plan_symbol_key<'db>(db: &'db dyn MirDb, plan: &RuntimeInputPlan<'db>) -> String {
     match plan {
         RuntimeInputPlan::None => "none".to_string(),
@@ -2351,6 +2539,16 @@ fn runtime_input_plan_symbol_key<'db>(db: &'db dyn MirDb, plan: &RuntimeInputPla
         } => format!(
             "direct_load:{}:{field_head_sizes:?}:{projected_fields:?}",
             type_identity(db, *msg_ty),
+        ),
+        RuntimeInputPlan::LazyCalldataLoad {
+            msg_ty,
+            decode_fn,
+            field_strategies,
+            projected_fields,
+        } => format!(
+            "lazy:{}:{}:{field_strategies:?}:{projected_fields:?}",
+            type_identity(db, *msg_ty),
+            runtime_instance_symbol_key(db, *decode_fn)
         ),
     }
 }
@@ -2374,6 +2572,16 @@ fn runtime_input_plan_sort_key<'db>(db: &'db dyn MirDb, plan: &RuntimeInputPlan<
         } => format!(
             "direct_load:{}:{field_head_sizes:?}:{projected_fields:?}",
             type_identity(db, *msg_ty),
+        ),
+        RuntimeInputPlan::LazyCalldataLoad {
+            msg_ty,
+            decode_fn,
+            field_strategies,
+            projected_fields,
+        } => format!(
+            "lazy:{}:{}:{field_strategies:?}:{projected_fields:?}",
+            type_identity(db, *msg_ty),
+            runtime_instance_sort_key(db, *decode_fn)
         ),
     }
 }
@@ -3199,5 +3407,497 @@ pub contract NarrowReturn {
             "u64 return should use Value path (not DirectScalarReturn): {:?}",
             plan.ret
         );
+    }
+
+    #[test]
+    fn lazy_calldataload_for_mixed_scalar_and_aggregate_params() {
+        let mut db = DriverDataBase::default();
+        let file_url = Url::parse("file:///lazy_calldataload_mixed.fe").unwrap();
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+use std::abi::sol
+use std::evm::Address
+
+msg MixedMsg {
+    #[selector = sol("mixed(uint256,address)")]
+    Mixed { id: u256, addr: Address },
+}
+
+pub contract MixedBox {
+    recv MixedMsg {
+        Mixed { id, addr } {
+            // id is non-mut primitive scalar -> eligible for direct calldataload
+            // addr is Address (struct with aggregate repr) -> needs decode
+        }
+    }
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+
+        let plan = recv_wrapper_plan(&db, top_mod, "mixed(uint256,address)");
+        match plan.input {
+            RuntimeInputPlan::LazyCalldataLoad {
+                field_strategies,
+                projected_fields,
+                ..
+            } => {
+                assert_eq!(
+                    field_strategies.len(),
+                    2,
+                    "mixed msg should have 2 field strategies"
+                );
+                assert_eq!(
+                    field_strategies[0],
+                    FieldLoadStrategy::Direct,
+                    "non-mut u256 `id` should use Direct load"
+                );
+                assert_eq!(
+                    field_strategies[1],
+                    FieldLoadStrategy::Decode,
+                    "Address `addr` (aggregate type) should use Decode"
+                );
+                assert_eq!(
+                    projected_fields.as_ref(),
+                    &[0, 1],
+                    "both fields should be projected in order"
+                );
+            }
+            other => panic!(
+                "mixed(uint256,address) should use LazyCalldataLoad, got {:?}",
+                std::mem::discriminant(&other)
+            ),
+        }
+    }
+
+    #[test]
+    fn lazy_calldataload_not_used_for_all_scalar_params() {
+        let mut db = DriverDataBase::default();
+        let file_url = Url::parse("file:///lazy_calldataload_all_scalar.fe").unwrap();
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+use std::abi::sol
+
+msg AllScalarMsg {
+    #[selector = sol("allscalar(uint256,uint64)")]
+    AllScalar { a: u256, b: u64 } -> u256,
+}
+
+pub contract AllScalarBox {
+    recv AllScalarMsg {
+        AllScalar { a, b } -> u256 { a }
+    }
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+
+        let plan = recv_wrapper_plan(&db, top_mod, "allscalar(uint256,uint64)");
+        // All fields are non-mut scalars, so lazy_field_strategies returns
+        // None (all Direct). The plan should be DirectCalldataLoad.
+        assert!(
+            !matches!(plan.input, RuntimeInputPlan::LazyCalldataLoad { .. }),
+            "all-scalar non-mut msg should not use LazyCalldataLoad, got {:?}",
+            std::mem::discriminant(&plan.input)
+        );
+    }
+
+    #[test]
+    fn lazy_calldataload_mut_scalar_forces_decode() {
+        let mut db = DriverDataBase::default();
+        let file_url = Url::parse("file:///lazy_calldataload_mut_scalar.fe").unwrap();
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+use std::abi::sol
+use std::evm::Address
+
+msg MutMixedMsg {
+    #[selector = sol("mutmixed(uint256,uint256,address)")]
+    MutMixed { id: u256, tag: u256, addr: Address },
+}
+
+pub contract MutMixedBox {
+    recv MutMixedMsg {
+        MutMixed { mut id, tag, addr } {
+            // id is bound with `mut` -> must go through decoder
+            // tag is non-mut scalar -> eligible for direct calldataload
+            // addr is Address (aggregate) -> must go through decoder
+        }
+    }
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+
+        let plan = recv_wrapper_plan(&db, top_mod, "mutmixed(uint256,uint256,address)");
+        match plan.input {
+            RuntimeInputPlan::LazyCalldataLoad {
+                field_strategies, ..
+            } => {
+                assert_eq!(field_strategies.len(), 3);
+                assert_eq!(
+                    field_strategies[0],
+                    FieldLoadStrategy::Decode,
+                    "mut u256 `id` should use Decode"
+                );
+                assert_eq!(
+                    field_strategies[1],
+                    FieldLoadStrategy::Direct,
+                    "non-mut u256 `tag` should use Direct"
+                );
+                assert_eq!(
+                    field_strategies[2],
+                    FieldLoadStrategy::Decode,
+                    "Address `addr` should use Decode"
+                );
+            }
+            other => panic!(
+                "mutmixed should use LazyCalldataLoad, got {:?}",
+                std::mem::discriminant(&other)
+            ),
+        }
+    }
+
+    #[test]
+    fn lazy_calldataload_array_field_uses_decode() {
+        let mut db = DriverDataBase::default();
+        let file_url = Url::parse("file:///lazy_calldataload_array.fe").unwrap();
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+use std::abi::sol
+
+msg ArrayMsg {
+    #[selector = sol("withArray(uint256,uint256[32])")]
+    WithArray { id: u256, data: [u256; 32] },
+}
+
+pub contract ArrayBox {
+    recv ArrayMsg {
+        WithArray { id, data } {
+            // id is non-mut primitive scalar -> Direct
+            // data is [u256; 32] (fixed-size array) -> must use Decode
+        }
+    }
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+
+        let plan = recv_wrapper_plan(&db, top_mod, "withArray(uint256,uint256[32])");
+        match plan.input {
+            RuntimeInputPlan::LazyCalldataLoad {
+                field_strategies, ..
+            } => {
+                assert_eq!(
+                    field_strategies.len(),
+                    2,
+                    "array msg should have 2 field strategies"
+                );
+                assert_eq!(
+                    field_strategies[0],
+                    FieldLoadStrategy::Direct,
+                    "non-mut u256 `id` should use Direct load"
+                );
+                assert_eq!(
+                    field_strategies[1],
+                    FieldLoadStrategy::Decode,
+                    "fixed-size array `data: [u256; 32]` must use Decode, not Direct"
+                );
+            }
+            RuntimeInputPlan::DecodeCalldataPayload { .. } => {
+                panic!(
+                    "withArray(uint256,uint256[32]) should use LazyCalldataLoad (mixed Direct/Decode), \
+                     got DecodeCalldataPayload"
+                );
+            }
+            other => panic!(
+                "withArray should use LazyCalldataLoad, got {:?}",
+                std::mem::discriminant(&other)
+            ),
+        }
+    }
+
+    #[test]
+    fn lazy_calldataload_all_arrays_uses_full_decode() {
+        let mut db = DriverDataBase::default();
+        let file_url = Url::parse("file:///lazy_calldataload_all_arrays.fe").unwrap();
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+use std::abi::sol
+
+msg AllArraysMsg {
+    #[selector = sol("allArrays(uint256[2],uint256[3])")]
+    AllArrays { a: [u256; 2], b: [u256; 3] },
+}
+
+pub contract AllArraysBox {
+    recv AllArraysMsg {
+        AllArrays { a, b } {}
+    }
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+
+        let plan = recv_wrapper_plan(&db, top_mod, "allArrays(uint256[2],uint256[3])");
+        // All fields are arrays (not scalars), so lazy_field_strategies should
+        // return None (all Decode). The plan should remain DecodeCalldataPayload.
+        assert!(
+            matches!(plan.input, RuntimeInputPlan::DecodeCalldataPayload { .. }),
+            "all-array msg should use DecodeCalldataPayload (not LazyCalldataLoad), got {:?}",
+            std::mem::discriminant(&plan.input)
+        );
+    }
+
+    #[test]
+    fn lazy_calldataload_array_before_scalar_uses_accumulated_offsets() {
+        // When a multi-word field (array) with a statically known size
+        // precedes scalar fields, the accumulated offset formula still works.
+        // The array field uses Decode, the trailing scalars use Direct at
+        // their correct accumulated offsets.
+        let mut db = DriverDataBase::default();
+        let file_url = Url::parse("file:///lazy_calldataload_array_before_scalar.fe").unwrap();
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+use std::abi::sol
+
+msg ArrayBeforeScalarMsg {
+    #[selector = sol("arrayFirst(uint256[32],uint256,uint256)")]
+    ArrayFirst { data: [u256; 32], x: u256, y: u256 },
+}
+
+pub contract ArrayBeforeScalarBox {
+    recv ArrayBeforeScalarMsg {
+        ArrayFirst { data, x, y } {}
+    }
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+
+        let plan = recv_wrapper_plan(&db, top_mod, "arrayFirst(uint256[32],uint256,uint256)");
+        // The array [u256; 32] has a known static ABI size (32 * 32 = 1024 bytes),
+        // so accumulated offsets are valid for the trailing scalars.
+        match plan.input {
+            RuntimeInputPlan::LazyCalldataLoad {
+                field_strategies, ..
+            } => {
+                assert_eq!(field_strategies.len(), 3);
+                assert_eq!(
+                    field_strategies[0],
+                    FieldLoadStrategy::Decode,
+                    "[u256; 32] should use Decode"
+                );
+                assert_eq!(
+                    field_strategies[1],
+                    FieldLoadStrategy::Direct,
+                    "x (u256 after array) should use Direct at accumulated offset"
+                );
+                assert_eq!(
+                    field_strategies[2],
+                    FieldLoadStrategy::Direct,
+                    "y (u256 after array) should use Direct at accumulated offset"
+                );
+            }
+            other => panic!(
+                "arrayFirst should use LazyCalldataLoad, got {:?}",
+                std::mem::discriminant(&other)
+            ),
+        }
+    }
+
+    #[test]
+    fn lazy_calldataload_merkle_pattern_scalars_before_array() {
+        let mut db = DriverDataBase::default();
+        let file_url = Url::parse("file:///lazy_calldataload_merkle.fe").unwrap();
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+use std::abi::sol
+
+msg MerkleMsg {
+    #[selector = sol("computeRoot(uint256,uint256,uint256,uint256[32])")]
+    ComputeRoot { leaf: u256, index: u256, siblings_len: u256, siblings: [u256; 32] },
+}
+
+pub contract MerkleBox {
+    recv MerkleMsg {
+        ComputeRoot { leaf, index, siblings_len, siblings } {}
+    }
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+
+        let plan = recv_wrapper_plan(
+            &db,
+            top_mod,
+            "computeRoot(uint256,uint256,uint256,uint256[32])",
+        );
+        match plan.input {
+            RuntimeInputPlan::LazyCalldataLoad {
+                field_strategies, ..
+            } => {
+                assert_eq!(field_strategies.len(), 4);
+                assert_eq!(
+                    field_strategies[0],
+                    FieldLoadStrategy::Direct,
+                    "leaf (u256, position 0) should be Direct"
+                );
+                assert_eq!(
+                    field_strategies[1],
+                    FieldLoadStrategy::Direct,
+                    "index (u256, position 1) should be Direct"
+                );
+                assert_eq!(
+                    field_strategies[2],
+                    FieldLoadStrategy::Direct,
+                    "siblings_len (u256, position 2) should be Direct"
+                );
+                assert_eq!(
+                    field_strategies[3],
+                    FieldLoadStrategy::Decode,
+                    "siblings ([u256; 32]) must use Decode"
+                );
+            }
+            other => panic!(
+                "merkle-pattern msg should use LazyCalldataLoad, got {:?}",
+                std::mem::discriminant(&other)
+            ),
+        }
+    }
+
+    #[test]
+    fn lazy_calldataload_skipped_array_uses_skip_with_offset() {
+        let mut db = DriverDataBase::default();
+        let file_url = Url::parse("file:///lazy_calldataload_skipped_array.fe").unwrap();
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+use std::abi::sol
+use std::abi::SkippedArray
+
+msg SkipMsg {
+    #[selector = sol("withSkip(uint256,uint256[32],uint256)")]
+    WithSkip { id: u256, data: SkippedArray<u256, 32>, tail: u256 },
+}
+
+pub contract SkipBox {
+    recv SkipMsg {
+        WithSkip { id, data, tail } {}
+    }
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+
+        let plan = recv_wrapper_plan(&db, top_mod, "withSkip(uint256,uint256[32],uint256)");
+        match plan.input {
+            RuntimeInputPlan::LazyCalldataLoad {
+                field_strategies,
+                projected_fields,
+                ..
+            } => {
+                assert_eq!(
+                    field_strategies.len(),
+                    3,
+                    "skipped-array msg should have 3 field strategies"
+                );
+                assert_eq!(
+                    field_strategies[0],
+                    FieldLoadStrategy::Direct,
+                    "id (u256, position 0) should be Direct"
+                );
+                assert_eq!(
+                    field_strategies[1],
+                    FieldLoadStrategy::SkipWithOffset { head_size: 1024 },
+                    "data (SkippedArray<u256, 32>) should be SkipWithOffset with head_size 1024"
+                );
+                assert_eq!(
+                    field_strategies[2],
+                    FieldLoadStrategy::Direct,
+                    "tail (u256, position 2) should be Direct"
+                );
+                assert_eq!(
+                    projected_fields.as_ref(),
+                    &[0, 1, 2],
+                    "all three fields should be projected"
+                );
+            }
+            other => panic!(
+                "withSkip should use LazyCalldataLoad, got {:?}",
+                std::mem::discriminant(&other)
+            ),
+        }
     }
 }

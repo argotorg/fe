@@ -943,6 +943,56 @@ pub enum RuntimeInputPlan<'db> {
         /// as `projected_fields` in `DecodeCalldataPayload`).
         projected_fields: Box<[u32]>,
     },
+    /// Hybrid path for message types where some fields are non-mut scalars at
+    /// known ABI offsets and others require the full decode pipeline.
+    ///
+    /// Non-mut scalar fields are loaded directly via `calldataload` at their
+    /// ABI offset (`4 + field_index * 32`), skipping malloc / calldatacopy /
+    /// SolDecoder entirely. The remaining fields go through the standard
+    /// `DecodeCalldataPayload` decode path and are extracted from the decoded
+    /// tuple.
+    ///
+    /// This is the core of the "lazy access" optimization: data stays in
+    /// calldata until mutation forces materialization. Fe's `mut` vs non-`mut`
+    /// gives escape analysis for free -- a non-mut parameter is read-only by
+    /// construction and can safely be kept calldata-backed.
+    LazyCalldataLoad {
+        msg_ty: TyId<'db>,
+        /// The decode function for the full message type, used for fields that
+        /// cannot be lazy-loaded.
+        decode_fn: RuntimeInstance<'db>,
+        /// Per-field load strategy, indexed by the message struct's field order.
+        field_strategies: Box<[FieldLoadStrategy]>,
+        /// Which fields the handler actually uses (same as `projected_fields`
+        /// in `DecodeCalldataPayload`), mapping handler param position to
+        /// struct field index.
+        projected_fields: Box<[u32]>,
+    },
+}
+
+/// Describes how a single field of a message struct should be loaded from
+/// calldata in a `LazyCalldataLoad` plan.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub enum FieldLoadStrategy {
+    /// Load directly via `calldataload` at offset `4 + field_index * 32`.
+    /// Only valid for non-mut primitive scalar fields at known word-aligned
+    /// ABI offsets.
+    Direct,
+    /// Load through the standard SolDecoder pipeline. Used for mut fields,
+    /// dynamic types, or fields whose ABI encoding is not a simple word.
+    Decode,
+    /// Skip this field in the decoder and pass the absolute calldata byte
+    /// offset to the handler. The handler receives a `SkippedArray` whose
+    /// `start` is the calldata offset, ready for zero-copy element access
+    /// via `CallData`.
+    ///
+    /// `head_size` is the total ABI head size (in bytes) of this field so
+    /// the builder can compute offsets for subsequent fields.
+    SkipWithOffset {
+        /// The ABI head-size of this SkippedArray field in bytes
+        /// (N * element_head_size).
+        head_size: u32,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]

@@ -25,12 +25,13 @@ use crate::{
     layout_size_bytes,
     runtime::{
         AddressSpaceKind, BorrowAccess, ConstScalar, ContractInitAbiPlan, ContractRecvAbiPlan,
-        DispatchDefault, DispatchStrategy, EntryEffectArgPlan, InitArgsPlan, PlaceElem, PlaceRoot,
-        RBlock, RBlockId, RExpr, RLocal, RLocalId, RStmt, RTerminator, RefKind, RefView,
-        RuntimeBody, RuntimeBoundarySpec, RuntimeBuiltin, RuntimeCarrier, RuntimeClass,
-        RuntimeExitBehavior, RuntimeInputPlan, RuntimeInterfaceSignature, RuntimeLocalRoot,
-        RuntimeParamPlan, RuntimePlace, RuntimeReturnPlan, RuntimeSyntheticSpec, ScalarClass,
-        ScalarRepr, ScalarRole, TargetRootProviderBinding, TargetRootProviderMaterialization,
+        DispatchDefault, DispatchStrategy, EntryEffectArgPlan, FieldLoadStrategy, InitArgsPlan,
+        PlaceElem, PlaceRoot, RBlock, RBlockId, RExpr, RLocal, RLocalId, RStmt, RTerminator,
+        RefKind, RefView, RuntimeBody, RuntimeBoundarySpec, RuntimeBuiltin, RuntimeCarrier,
+        RuntimeClass, RuntimeExitBehavior, RuntimeInputPlan, RuntimeInterfaceSignature,
+        RuntimeLocalRoot, RuntimeParamPlan, RuntimePlace, RuntimeReturnPlan, RuntimeSyntheticSpec,
+        ScalarClass, ScalarRepr, ScalarRole, TargetRootProviderBinding,
+        TargetRootProviderMaterialization,
         lower::{
             boundary::{RuntimeValueAddress, RuntimeValueSource},
             classify::{ref_class_for_place_result, semantic_return_ty},
@@ -594,6 +595,176 @@ impl<'db> SyntheticBodyBuilder<'db> {
                         plan.contract.scope(),
                         &projected_fields,
                     ));
+                }
+            }
+
+            RuntimeInputPlan::LazyCalldataLoad {
+                msg_ty,
+                decode_fn,
+                field_strategies,
+                projected_fields,
+            } => {
+                // Hybrid path: direct-load non-mut scalar fields via
+                // calldataload, skip SkippedArray fields by passing the
+                // calldata offset, decode the rest through the standard
+                // pipeline.
+                let field_types = msg_ty.field_types(self.db);
+                let env = self.runtime_type_env(plan.contract.scope());
+
+                // Phase 1: direct-load and skip-with-offset fields at known
+                // ABI offsets. Accumulated byte offset starts after the
+                // 4-byte selector.
+                let mut loaded_fields: Vec<Option<RLocalId>> = vec![None; field_strategies.len()];
+                let mut accumulated_offset: u32 = 4;
+                for (i, strategy) in field_strategies.iter().enumerate() {
+                    match *strategy {
+                        FieldLoadStrategy::Direct => {
+                            let offset = self.push_const_word(cont_bb, accumulated_offset);
+                            let raw = self.push_builtin_value(
+                                cont_bb,
+                                TyId::u256(self.db),
+                                RuntimeClass::Scalar(word_scalar_class()),
+                                RuntimeBuiltin::CallDataLoad { offset },
+                            );
+                            let field_ty = field_types[i];
+                            let field_scalar = match top_level_class_for_ty_in_env(
+                                self.db,
+                                env,
+                                field_ty,
+                                AddressSpaceKind::Memory,
+                            ) {
+                                Some(RuntimeClass::Scalar(sc)) => sc,
+                                _ => word_scalar_class(),
+                            };
+                            let value = if field_scalar == word_scalar_class() {
+                                raw
+                            } else {
+                                let casted = self.push_local(
+                                    field_ty,
+                                    RuntimeCarrier::Value(RuntimeClass::Scalar(
+                                        field_scalar.clone(),
+                                    )),
+                                    RuntimeLocalRoot::None,
+                                );
+                                self.push_stmt(
+                                    cont_bb,
+                                    RStmt::Assign {
+                                        dst: casted,
+                                        expr: RExpr::Cast {
+                                            value: raw,
+                                            to: field_scalar,
+                                        },
+                                    },
+                                );
+                                casted
+                            };
+                            loaded_fields[i] = Some(value);
+                            accumulated_offset += 32;
+                        }
+                        FieldLoadStrategy::SkipWithOffset { head_size } => {
+                            // Construct a SkippedArray value whose `start`
+                            // field holds the absolute calldata byte offset.
+                            let field_ty = field_types[i];
+                            let field_class = top_level_class_for_ty_in_env(
+                                self.db,
+                                env,
+                                field_ty,
+                                AddressSpaceKind::Memory,
+                            )
+                            .expect("SkipWithOffset field should have a runtime class");
+
+                            let offset_val = self.push_const_word(cont_bb, accumulated_offset);
+                            let value = self.push_skipped_array_value(
+                                cont_bb,
+                                field_ty,
+                                &field_class,
+                                offset_val,
+                            );
+                            loaded_fields[i] = Some(value);
+                            accumulated_offset += head_size;
+                        }
+                        FieldLoadStrategy::Decode => {
+                            // Track the offset for Decode fields too, if
+                            // their static size is known (needed to keep
+                            // accumulated_offset correct for subsequent
+                            // fields).
+                            if let Some(size) = crate::runtime::package::static_abi_head_size(
+                                self.db,
+                                field_types[i],
+                            ) {
+                                accumulated_offset += size;
+                            }
+                            // The actual value is filled in Phase 2.
+                        }
+                    }
+                }
+
+                // Phase 2: decode the remaining fields through the full
+                // calldatacopy + SolDecoder pipeline.
+                let has_decode_fields = field_strategies.contains(&FieldLoadStrategy::Decode);
+                if has_decode_fields {
+                    let size = self.push_builtin_value(
+                        cont_bb,
+                        TyId::u256(self.db),
+                        RuntimeClass::Scalar(word_scalar_class()),
+                        RuntimeBuiltin::CallDataSize,
+                    );
+                    let payload_len = self.push_binary_word(cont_bb, ArithBinOp::Sub, size, four);
+                    let payload_ptr = self.push_builtin_value(
+                        cont_bb,
+                        TyId::u256(self.db),
+                        RuntimeClass::Scalar(word_scalar_class()),
+                        RuntimeBuiltin::Malloc { size: payload_len },
+                    );
+                    self.push_side_effect_builtin(
+                        cont_bb,
+                        RuntimeBuiltin::CallDataCopy {
+                            dst: payload_ptr,
+                            offset: four,
+                            len: payload_len,
+                        },
+                    );
+                    let input = self.push_memory_bytes_value(
+                        cont_bb,
+                        plan.contract.scope(),
+                        payload_ptr,
+                        payload_len,
+                    );
+                    let decoder_new = resolve_sol_decoder_new(self.db, plan.contract.scope())
+                        .expect("decoder_new");
+                    let decoder = self.push_call_result(cont_bb, decoder_new, vec![input]);
+                    if let Some(decoded) = self.push_call(cont_bb, decode_fn, vec![decoder]) {
+                        // Extract only the Decode fields from the decoded
+                        // tuple, filling them into loaded_fields.
+                        let decode_field_indices: Vec<u32> = field_strategies
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, s)| **s == FieldLoadStrategy::Decode)
+                            .map(|(i, _)| i as u32)
+                            .collect();
+                        let decoded_values = self.extract_selected_tuple_fields(
+                            cont_bb,
+                            decoded,
+                            msg_ty,
+                            plan.contract.scope(),
+                            &decode_field_indices,
+                        );
+                        let mut decode_iter = decoded_values.into_iter();
+                        for (i, strategy) in field_strategies.iter().enumerate() {
+                            if *strategy == FieldLoadStrategy::Decode {
+                                loaded_fields[i] = decode_iter.next();
+                            }
+                        }
+                    }
+                }
+
+                // Phase 3: select the fields the handler expects, in the
+                // order it expects them (projected_fields maps handler param
+                // position to struct field index).
+                for &field_idx in projected_fields.iter() {
+                    if let Some(value) = loaded_fields[field_idx as usize] {
+                        call_args.push(value);
+                    }
                 }
             }
         }
@@ -1397,6 +1568,37 @@ impl<'db> SyntheticBodyBuilder<'db> {
                         .into_boxed_slice(),
                 },
                 src: len,
+            },
+        );
+        local
+    }
+
+    /// Construct a `SkippedArray` aggregate value with `start` set to
+    /// `offset_value`. SkippedArray is a single-field struct (`start: u256`)
+    /// so we allocate the aggregate, store the offset into field 0, and
+    /// return the local.
+    fn push_skipped_array_value(
+        &mut self,
+        bb: RBlockId,
+        semantic_ty: TyId<'db>,
+        class: &RuntimeClass<'db>,
+        offset_value: RLocalId,
+    ) -> RLocalId {
+        let local = self.push_local(
+            semantic_ty,
+            RuntimeCarrier::Value(class.clone()),
+            RuntimeLocalRoot::Slot(class.clone()),
+        );
+        let root = PlaceRoot::Slot(local);
+        self.push_stmt(
+            bb,
+            RStmt::Store {
+                dst: RuntimePlace {
+                    root,
+                    path: vec![PlaceElem::Field(hir::analysis::semantic::FieldIndex(0))]
+                        .into_boxed_slice(),
+                },
+                src: offset_value,
             },
         );
         local
