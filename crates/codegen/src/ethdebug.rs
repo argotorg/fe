@@ -15,12 +15,35 @@ pub struct EthdebugSource {
     pub contents: Option<String>,
 }
 
+pub struct EthdebugPointer {
+    pub name: String,
+    pub location: EthdebugLocation,
+    pub slot: Option<u64>,
+    pub offset: Option<u64>,
+    pub length: Option<u64>,
+}
+
+#[derive(Clone, Debug)]
+pub enum EthdebugLocation {
+    Storage,
+    Memory,
+    Stack,
+    Calldata,
+}
+
+pub struct EthdebugVariable {
+    pub name: String,
+    pub type_name: String,
+    pub pointer: Option<EthdebugPointer>,
+}
+
 pub struct EthdebugBuilder {
     compiler_name: String,
     compiler_version: String,
     sources: Vec<EthdebugSource>,
     programs: Vec<EthdebugProgram>,
     types: Vec<EthdebugType>,
+    pointers: Vec<EthdebugPointer>,
 }
 
 struct EthdebugProgram {
@@ -33,6 +56,7 @@ struct EthdebugInstruction {
     offset: u32,
     opcode: Option<u8>,
     source: Option<EthdebugSourceRange>,
+    variables: Vec<EthdebugVariable>,
 }
 
 #[derive(Clone)]
@@ -65,7 +89,12 @@ impl EthdebugBuilder {
             sources: Vec::new(),
             programs: Vec::new(),
             types: Vec::new(),
+            pointers: Vec::new(),
         }
+    }
+
+    pub fn add_pointer(&mut self, pointer: EthdebugPointer) {
+        self.pointers.push(pointer);
     }
 
     pub fn add_type_from_desc(&mut self, desc: &crate::dwarf::FeTypeDesc) {
@@ -148,6 +177,7 @@ impl EthdebugBuilder {
                     offset: entry.pc_start,
                     opcode: None,
                     source,
+                    variables: Vec::new(),
                 });
             }
         }
@@ -268,6 +298,40 @@ impl EthdebugBuilder {
             write!(out, "}}").unwrap();
         }
 
+        // pointers
+        if !self.pointers.is_empty() {
+            write!(out, ",\"pointers\":{{").unwrap();
+            for (idx, ptr) in self.pointers.iter().enumerate() {
+                if idx > 0 {
+                    out.push(',');
+                }
+                let loc = match &ptr.location {
+                    EthdebugLocation::Storage => "storage",
+                    EthdebugLocation::Memory => "memory",
+                    EthdebugLocation::Stack => "stack",
+                    EthdebugLocation::Calldata => "calldata",
+                };
+                write!(
+                    out,
+                    "\"{}\":{{\"location\":\"{}\"",
+                    json_escape(&ptr.name),
+                    loc
+                )
+                .unwrap();
+                if let Some(slot) = ptr.slot {
+                    write!(out, ",\"slot\":{slot}").unwrap();
+                }
+                if let Some(offset) = ptr.offset {
+                    write!(out, ",\"offset\":{offset}").unwrap();
+                }
+                if let Some(length) = ptr.length {
+                    write!(out, ",\"length\":{length}").unwrap();
+                }
+                out.push('}');
+            }
+            write!(out, "}}").unwrap();
+        }
+
         // programs
         write!(out, ",\"programs\":[").unwrap();
         for (prog_idx, program) in self.programs.iter().enumerate() {
@@ -308,6 +372,36 @@ impl EthdebugBuilder {
                         source.end_col,
                     )
                     .unwrap();
+                }
+                if !inst.variables.is_empty() {
+                    write!(out, ",\"context\":{{\"variables\":[").unwrap();
+                    for (vidx, var) in inst.variables.iter().enumerate() {
+                        if vidx > 0 {
+                            out.push(',');
+                        }
+                        write!(
+                            out,
+                            "{{\"identifier\":\"{}\",\"type\":\"{}\"",
+                            json_escape(&var.name),
+                            json_escape(&var.type_name)
+                        )
+                        .unwrap();
+                        if let Some(ptr) = &var.pointer {
+                            let loc = match &ptr.location {
+                                EthdebugLocation::Storage => "storage",
+                                EthdebugLocation::Memory => "memory",
+                                EthdebugLocation::Stack => "stack",
+                                EthdebugLocation::Calldata => "calldata",
+                            };
+                            write!(out, ",\"pointer\":{{\"location\":\"{loc}\"").unwrap();
+                            if let Some(slot) = ptr.slot {
+                                write!(out, ",\"slot\":{slot}").unwrap();
+                            }
+                            out.push('}');
+                        }
+                        out.push('}');
+                    }
+                    write!(out, "]}}").unwrap();
                 }
                 out.push('}');
             }
@@ -369,11 +463,23 @@ mod tests {
                         end_line: 5,
                         end_col: 20,
                     }),
+                    variables: vec![EthdebugVariable {
+                        name: "count".to_string(),
+                        type_name: "u256".to_string(),
+                        pointer: Some(EthdebugPointer {
+                            name: "count_ptr".to_string(),
+                            location: EthdebugLocation::Storage,
+                            slot: Some(0),
+                            offset: None,
+                            length: Some(32),
+                        }),
+                    }],
                 },
                 EthdebugInstruction {
                     offset: 2,
                     opcode: Some(0x54),
                     source: None,
+                    variables: Vec::new(),
                 },
             ],
         });
