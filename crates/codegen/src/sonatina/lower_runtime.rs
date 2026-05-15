@@ -1832,6 +1832,23 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 self.fb
                     .insert_inst(Shr::new(self.module.inst_set(), shift, word), Type::I256)
             }
+            RuntimeBuiltin::Mcopy { dst, src, len } => {
+                let dst = self.local_value(*dst)?;
+                let src = self.local_value(*src)?;
+                let len = self.local_value(*len)?;
+                self.fb.insert_inst_no_result(
+                    sonatina_ir::inst::evm::EvmMcopy::new(self.module.inst_set(), dst, src, len),
+                );
+                self.fb.make_imm_value(I256::zero())
+            }
+            RuntimeBuiltin::SignExtend { byte, value } => {
+                let byte = self.local_value(*byte)?;
+                let value = self.local_value(*value)?;
+                self.fb.insert_inst(
+                    sonatina_ir::inst::evm::EvmSignExtend::new(self.module.inst_set(), byte, value),
+                    Type::I256,
+                )
+            }
             RuntimeBuiltin::MakeContractFieldRef { slot, class, .. } => {
                 if matches!(
                     class,

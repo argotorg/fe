@@ -164,7 +164,7 @@ fn run_sonatina_optimization_pipeline(module: &mut Module, opt_level: OptLevel) 
     match opt_level {
         OptLevel::O0 => {}
         OptLevel::Os => sonatina_codegen::optim::Pipeline::size().run(module),
-        OptLevel::O2 => sonatina_codegen::optim::Pipeline::speed().run(module),
+        OptLevel::O1 | OptLevel::O2 => sonatina_codegen::optim::Pipeline::speed().run(module),
     }
 }
 
@@ -783,7 +783,6 @@ pub fn emit_test_module_sonatina(
             hir_name: metadata.hir_name,
             symbol_name: section.entry.symbol(db).clone(),
             object_name: object.name(db).clone(),
-            yul: String::new(),
             bytecode: wrap_as_init_code(&runtime.bytes),
             sonatina_observability_json: artifact.observability_json(),
             value_param_count: 0,
