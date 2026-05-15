@@ -1,4 +1,5 @@
 mod backend;
+pub mod dwarf;
 mod function_symbols;
 mod layout;
 mod runtime_package;
