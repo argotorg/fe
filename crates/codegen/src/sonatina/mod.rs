@@ -1083,6 +1083,38 @@ fn test_add() {
     }
 
     #[test]
+    fn provenance_works_with_contract_bytecode() {
+        let mut db = DriverDataBase::default();
+        let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../fe/tests/fixtures/cli_output/build/simple_contract.fe");
+        let fixture_source =
+            fs::read_to_string(&fixture_path).expect("simple_contract fixture should be readable");
+        let file_url = Url::from_file_path(&fixture_path).expect("fixture path should be absolute");
+        db.workspace()
+            .touch(&mut db, file_url.clone(), Some(fixture_source));
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+
+        let bytecodes =
+            emit_module_sonatina_bytecode(&db, top_mod, OptLevel::O0, None)
+                .expect("contract should compile");
+
+        assert!(
+            !bytecodes.is_empty(),
+            "should produce at least one contract bytecode"
+        );
+        for (name, bytecode) in &bytecodes {
+            assert!(
+                !bytecode.runtime.is_empty(),
+                "contract {name} should have runtime bytecode"
+            );
+        }
+    }
+
+    #[test]
     fn provenance_covers_majority_of_code_bytes() {
         let mut db = DriverDataBase::default();
         let file_url = temp_fixture_url("coverage_test.fe");
