@@ -239,6 +239,88 @@ pub struct ResolvedProvenanceEntry {
     pub end_col: u32,
 }
 
+pub fn fe_ty_to_type_desc<'db>(
+    db: &'db dyn hir::analysis::HirAnalysisDb,
+    ty: hir::analysis::ty::ty_def::TyId<'db>,
+) -> FeTypeDesc {
+    use hir::analysis::ty::ty_def::{PrimTy, TyBase, TyData};
+
+    match ty.data(db) {
+        TyData::TyBase(base) => match base {
+            TyBase::Prim(prim) => match prim {
+                PrimTy::Bool => FeTypeDesc::Bool,
+                PrimTy::U8 => FeTypeDesc::UInt { bits: 8 },
+                PrimTy::U16 => FeTypeDesc::UInt { bits: 16 },
+                PrimTy::U32 => FeTypeDesc::UInt { bits: 32 },
+                PrimTy::U64 => FeTypeDesc::UInt { bits: 64 },
+                PrimTy::U128 => FeTypeDesc::UInt { bits: 128 },
+                PrimTy::U256 | PrimTy::Usize => FeTypeDesc::UInt { bits: 256 },
+                PrimTy::I8 => FeTypeDesc::Int { bits: 8 },
+                PrimTy::I16 => FeTypeDesc::Int { bits: 16 },
+                PrimTy::I32 => FeTypeDesc::Int { bits: 32 },
+                PrimTy::I64 => FeTypeDesc::Int { bits: 64 },
+                PrimTy::I128 => FeTypeDesc::Int { bits: 128 },
+                PrimTy::I256 | PrimTy::Isize => FeTypeDesc::Int { bits: 256 },
+                PrimTy::String => FeTypeDesc::String,
+                PrimTy::Array => FeTypeDesc::Array {
+                    elem: Box::new(FeTypeDesc::UInt { bits: 8 }),
+                    len: None,
+                },
+                PrimTy::Tuple(n) => FeTypeDesc::Struct {
+                    name: format!("Tuple{n}"),
+                    fields: (0..*n)
+                        .map(|i| (format!("{i}"), FeTypeDesc::UInt { bits: 256 }))
+                        .collect(),
+                },
+                PrimTy::Ptr | PrimTy::View | PrimTy::BorrowMut | PrimTy::BorrowRef => {
+                    FeTypeDesc::UInt { bits: 256 }
+                }
+            },
+            TyBase::Adt(adt_def) => {
+                use hir::analysis::ty::adt_def::AdtRef;
+                let name = adt_def
+                    .adt_ref(db)
+                    .name(db)
+                    .map(|n| n.data(db).clone())
+                    .unwrap_or_else(|| "<anon>".to_string());
+                match adt_def.adt_ref(db) {
+                    AdtRef::Struct(_) => {
+                        let fields = adt_def
+                            .fields(db)
+                            .iter()
+                            .enumerate()
+                            .flat_map(|(group_idx, field)| {
+                                (0..field.num_types())
+                                    .map(move |i| {
+                                        let fname = format!("field_{group_idx}_{i}");
+                                        let fty = fe_ty_to_type_desc(
+                                            db,
+                                            *field.ty(db, i).skip_binder(),
+                                        );
+                                        (fname, fty)
+                                    })
+                            })
+                            .collect();
+                        FeTypeDesc::Struct { name, fields }
+                    }
+                    AdtRef::Enum(_) => {
+                        let variants = adt_def
+                            .fields(db)
+                            .iter()
+                            .enumerate()
+                            .map(|(i, _)| format!("variant_{i}"))
+                            .collect();
+                        FeTypeDesc::Enum { name, variants }
+                    }
+                }
+            }
+            TyBase::Contract(_) => FeTypeDesc::Address,
+            TyBase::Func(_) => FeTypeDesc::UInt { bits: 256 },
+        },
+        _ => FeTypeDesc::UInt { bits: 256 },
+    }
+}
+
 fn collect_provenance_entries(
     artifacts: &[ObjectArtifact],
     provenance: &sonatina_codegen::object::FrontendProvenanceMap,
