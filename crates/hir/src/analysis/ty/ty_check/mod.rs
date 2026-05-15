@@ -71,7 +71,7 @@ use super::{
         BorrowKind, CapabilityKind, InvalidCause, Kind, MAX_INLINE_STRING_BYTES, StringFallback,
         TyId, TyVarSort,
     },
-    ty_lower::{lower_hir_ty, resolve_callable_input_effect_key},
+    ty_lower::{collect_generic_params, lower_hir_ty, resolve_callable_input_effect_key},
     unify::{InferenceKey, Snapshot, UnificationError, UnificationTable},
 };
 use crate::analysis::semantic::SemanticCodeRegionRef;
@@ -2347,7 +2347,27 @@ impl<'db> TyChecker<'db> {
         receiver_ty: TyId<'db>,
     ) -> TyId<'db> {
         let mut ty = TyId::func(self.db, method);
-        for &arg in receiver_ty.generic_args(self.db) {
+
+        // Only apply generic args from the receiver that correspond to the
+        // parent impl's params. The receiver type may carry additional args
+        // (e.g. defaulted struct params) that must NOT be applied to the
+        // method's own generics -- those get fresh type variables via
+        // instantiate_callable_to_term below.
+        let inherited_count = match method {
+            CallableDef::Func(func) if func.is_associated_func(self.db) => {
+                let parent = GenericParamOwner::Func(func).parent(self.db).unwrap();
+                collect_generic_params(self.db, parent)
+                    .params(self.db)
+                    .len()
+            }
+            _ => receiver_ty.generic_args(self.db).len(),
+        };
+
+        for &arg in receiver_ty
+            .generic_args(self.db)
+            .iter()
+            .take(inherited_count)
+        {
             if ty.applicable_ty(self.db).is_none() {
                 break;
             }
