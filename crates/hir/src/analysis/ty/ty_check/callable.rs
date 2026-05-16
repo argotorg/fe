@@ -797,19 +797,13 @@ impl<'db> Callable<'db> {
     /// args. If any predicate evaluates to `false`, push a diagnostic.
     fn check_const_predicates(&self, tc: &mut TyChecker<'db>, span: DynLazySpan<'db>) {
         use crate::analysis::semantic::{SemConstScalar, SemConstValue, eval_body_owner_const};
-        use crate::hir_def::{CallableDef, WhereClauseOwner};
+        use crate::hir_def::{CallableDef, ItemKind, WhereClauseOwner};
 
         let db = tc.db;
         let func = match self.callable_def {
             CallableDef::Func(f) => f,
             CallableDef::VariantCtor(_) => return,
         };
-
-        let where_clause = WhereClauseOwner::Func(func).where_clause(db);
-        let const_preds = where_clause.const_predicates(db);
-        if const_preds.is_empty() {
-            return;
-        }
 
         // Skip evaluation if any generic arg still contains inference variables.
         if self
@@ -820,8 +814,30 @@ impl<'db> Callable<'db> {
             return;
         }
 
+        // Collect const predicates from the function's where clause and its
+        // parent's where clause (impl, impl-trait, etc.).
+        let mut all_const_preds: Vec<Body<'db>> = Vec::new();
+        let func_wc = WhereClauseOwner::Func(func).where_clause(db);
+        all_const_preds.extend_from_slice(func_wc.const_predicates(db));
+
+        if let Some(parent) = func.scope().parent_item(db) {
+            let parent_wc = match parent {
+                ItemKind::ImplTrait(it) => Some(WhereClauseOwner::ImplTrait(it).where_clause(db)),
+                ItemKind::Impl(i) => Some(WhereClauseOwner::Impl(i).where_clause(db)),
+                ItemKind::Trait(t) => Some(WhereClauseOwner::Trait(t).where_clause(db)),
+                _ => None,
+            };
+            if let Some(wc) = parent_wc {
+                all_const_preds.extend_from_slice(wc.const_predicates(db));
+            }
+        }
+
+        if all_const_preds.is_empty() {
+            return;
+        }
+
         let bool_ty = TyId::bool(db);
-        for body in const_preds {
+        for body in &all_const_preds {
             let owner = BodyOwner::AnonConstBody {
                 body: *body,
                 expected: bool_ty,
