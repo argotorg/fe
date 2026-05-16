@@ -3057,6 +3057,18 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             },
 
+            Self::WhereConstPredicateEvalFailed { primary } => CompleteDiagnostic {
+                severity,
+                message: "where clause const predicate could not be evaluated".to_string(),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "CTFE evaluation failed for this predicate".to_string(),
+                    span: primary.resolve(db),
+                }],
+                notes: Vec::new(),
+                error_code,
+            },
+
             Self::InvalidCast {
                 primary,
                 from,

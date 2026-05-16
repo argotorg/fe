@@ -406,6 +406,9 @@ pub enum BodyDiag<'db> {
     WhereConstPredicateFailed {
         primary: DynLazySpan<'db>,
     },
+    WhereConstPredicateEvalFailed {
+        primary: DynLazySpan<'db>,
+    },
 
     InvalidCast {
         primary: DynLazySpan<'db>,
@@ -782,6 +785,7 @@ impl<'db> BodyDiag<'db> {
             Self::ConstValueMustBeKnown(..) => 64,
             Self::StaticAssertFailed { .. } => 81,
             Self::WhereConstPredicateFailed { .. } => 82,
+            Self::WhereConstPredicateEvalFailed { .. } => 83,
             Self::AccessedFieldNotFound { .. } => 15,
             Self::OpsTraitNotImplemented { .. } => 16,
             Self::UnsupportedUnaryPlus(..) => 52,

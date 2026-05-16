@@ -858,9 +858,9 @@ impl<'db> Callable<'db> {
                     }
                 }
                 Err(_) => {
-                    // CTFE evaluation failed -- silently skip for the prototype.
-                    // In a production implementation, we'd emit a more specific
-                    // diagnostic here.
+                    tc.push_diag(BodyDiag::WhereConstPredicateEvalFailed {
+                        primary: span.clone(),
+                    });
                 }
             }
         }
