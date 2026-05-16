@@ -1496,13 +1496,11 @@ pub fn field_add_check(a: u256, b: u256, expected: u256) -> bool {
             let backend = SpirvBackend::new();
             match backend.compile_module(&module) {
                 Ok(artifact) => Ok(format!("SPIR-V: {} words", artifact.words.len())),
-                Err(errs) => Err(format!(
-                    "{}",
-                    errs.iter()
-                        .map(|e| e.to_string())
-                        .collect::<Vec<_>>()
-                        .join("; ")
-                )),
+                Err(errs) => Err(errs
+                    .iter()
+                    .map(|e| e.to_string())
+                    .collect::<Vec<_>>()
+                    .join("; ")),
             }
         },
     );
@@ -1529,7 +1527,7 @@ pub fn field_add() -> u256 {
     std::evm::crypto::addmod(a, b, p)
 }
 "#,
-        |db, top_mod| fe_codegen::emit_module_sonatina_ir_native(db, top_mod),
+        fe_codegen::emit_module_sonatina_ir_native,
     );
 
     match result {
