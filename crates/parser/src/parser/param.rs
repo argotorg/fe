@@ -565,21 +565,13 @@ impl super::Parse for WhereConstPredicateScope {
 /// Disambiguate `{ expr }` (const predicate) from `{ body }` (function/struct
 /// body).  Uses a dry run: parse the block expression, then check if what
 /// follows looks like more where predicates or the item body `{`.
+///
+/// Only called when `after_comma` is true — the `{` was preceded by a comma in
+/// the where clause, so we already know it's not an item body start (those are
+/// never preceded by a comma). We still need to verify the block parses as a
+/// valid expression.
 fn is_where_const_predicate<S: TokenStream>(parser: &mut Parser<S>) -> bool {
-    parser.dry_run(|p| {
-        if p.parse_ok(BlockExprScope::default()).is_err() {
-            return false;
-        }
-        // After the closing `}`, if another `{` (body), comma, or type start
-        // follows, this block was a const predicate.  At EOF or before a
-        // non-where token, it was the item body.
-        match p.current_kind() {
-            Some(SyntaxKind::Comma) => true,
-            Some(kind) if is_type_start(kind) => true,
-            Some(SyntaxKind::LBrace) => true,
-            _ => false,
-        }
-    })
+    parser.dry_run(|p| p.parse_ok(BlockExprScope::default()).is_ok())
 }
 
 pub(crate) fn parse_where_clause_opt<S: TokenStream>(
