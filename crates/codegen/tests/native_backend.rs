@@ -282,10 +282,9 @@ fn stage5_poseidon_addmod_variable_inputs_wasm() {
     use sonatina_codegen::Backend;
     use sonatina_codegen::isa::wasm::WasmBackend;
 
-    let result: Result<sonatina_codegen::isa::wasm::WasmArtifact, String> =
-        with_top_mod_for_source(
-            "poseidon_wasm_runtime.fe",
-            r#"
+    let result: Result<sonatina_codegen::isa::wasm::WasmArtifact, String> = with_top_mod_for_source(
+        "poseidon_wasm_runtime.fe",
+        r#"
 use std::evm::crypto::addmod
 
 const PRIME: u256 = 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001
@@ -295,24 +294,29 @@ pub fn field_add_check(a: u256, b: u256, expected: u256) -> bool {
     result == expected
 }
 "#,
-            |db, top_mod| {
-                let module = fe_codegen::sonatina::compile_library_sonatina_native(db, top_mod)
-                    .map_err(|e| format!("{e}"))?;
+        |db, top_mod| {
+            let module = fe_codegen::sonatina::compile_library_sonatina_native(db, top_mod)
+                .map_err(|e| format!("{e}"))?;
 
-                let backend = WasmBackend::new();
-                backend
-                    .compile_module(&module)
-                    .map_err(|e| format!("{e:?}"))
-            },
-        );
+            let backend = WasmBackend::new();
+            backend
+                .compile_module(&module)
+                .map_err(|e| format!("{e:?}"))
+        },
+    );
 
     let artifact = result.expect("Poseidon WASM compilation should succeed");
-    assert!(!artifact.bytes.is_empty(), "WASM output should not be empty");
-    assert_eq!(&artifact.bytes[0..4], b"\0asm", "should be valid WASM magic");
     assert!(
-        artifact
-            .func_names
-            .contains(&"field_add_check".to_string()),
+        !artifact.bytes.is_empty(),
+        "WASM output should not be empty"
+    );
+    assert_eq!(
+        &artifact.bytes[0..4],
+        b"\0asm",
+        "should be valid WASM magic"
+    );
+    assert!(
+        artifact.func_names.contains(&"field_add_check".to_string()),
         "WASM should export field_add_check"
     );
     eprintln!(
@@ -1215,36 +1219,39 @@ pub fn answer() -> u64 {
 "#;
 
     // EVM path: compile to Sonatina IR
-    let evm_ir = with_top_mod_for_source(
-        "cross_evm.fe",
-        source,
-        |db, top_mod| fe_codegen::emit_module_sonatina_ir(db, top_mod),
-    ).expect("EVM IR should succeed");
+    let evm_ir = with_top_mod_for_source("cross_evm.fe", source, |db, top_mod| {
+        fe_codegen::emit_module_sonatina_ir(db, top_mod)
+    })
+    .expect("EVM IR should succeed");
 
     // Native path: compile to Sonatina IR → Cranelift JIT → execute
-    let native_result = with_top_mod_for_source(
-        "cross_native.fe",
-        source,
-        |db, top_mod| {
-            let package = mir::build_runtime_package(db, top_mod).unwrap();
-            let module = fe_codegen::sonatina::compile_runtime_package_sonatina_native(
-                db, &package, fe_codegen::EVM_LAYOUT,
-            ).unwrap();
-            let backend = CraneliftBackend::new();
-            let artifact = backend.compile_module(&module).unwrap();
-            let f: fn() -> u64 = unsafe {
-                let ptr = artifact.get_func_ptr::<fn() -> u64>("answer").unwrap();
-                std::mem::transmute(ptr)
-            };
-            f()
-        },
-    );
+    let native_result = with_top_mod_for_source("cross_native.fe", source, |db, top_mod| {
+        let package = mir::build_runtime_package(db, top_mod).unwrap();
+        let module = fe_codegen::sonatina::compile_runtime_package_sonatina_native(
+            db,
+            &package,
+            fe_codegen::EVM_LAYOUT,
+        )
+        .unwrap();
+        let backend = CraneliftBackend::new();
+        let artifact = backend.compile_module(&module).unwrap();
+        let f: fn() -> u64 = unsafe {
+            let ptr = artifact.get_func_ptr::<fn() -> u64>("answer").unwrap();
+            std::mem::transmute(ptr)
+        };
+        f()
+    });
 
     // Both paths produce correct result
     assert_eq!(native_result, 42, "native JIT should compute 6*7=42");
-    assert!(evm_ir.contains("answer"), "EVM IR should contain the answer function");
+    assert!(
+        evm_ir.contains("answer"),
+        "EVM IR should contain the answer function"
+    );
 
-    eprintln!("Cross-target test passed: same Fe source compiled to both EVM IR and native, native returned {native_result}");
+    eprintln!(
+        "Cross-target test passed: same Fe source compiled to both EVM IR and native, native returned {native_result}"
+    );
 }
 
 #[cfg(feature = "cranelift")]
@@ -1269,20 +1276,28 @@ pub fn poseidon_check() -> bool {
         |db, top_mod| {
             let package = mir::build_runtime_package(db, top_mod).unwrap();
             let module = fe_codegen::sonatina::compile_runtime_package_sonatina_native(
-                db, &package, fe_codegen::EVM_LAYOUT,
-            ).unwrap();
+                db,
+                &package,
+                fe_codegen::EVM_LAYOUT,
+            )
+            .unwrap();
 
             let backend = CraneliftBackend::new();
             let artifact = backend.compile_module(&module).unwrap();
             let f: fn() -> bool = unsafe {
-                let ptr = artifact.get_func_ptr::<fn() -> bool>("poseidon_check").unwrap();
+                let ptr = artifact
+                    .get_func_ptr::<fn() -> bool>("poseidon_check")
+                    .unwrap();
                 std::mem::transmute(ptr)
             };
             f()
         },
     );
 
-    assert!(result, "Poseidon-style addmod(42, 17, BN254_PRIME) == 59 should be true");
+    assert!(
+        result,
+        "Poseidon-style addmod(42, 17, BN254_PRIME) == 59 should be true"
+    );
 }
 
 #[cfg(feature = "wasm")]
@@ -1306,8 +1321,11 @@ pub fn poseidon_check() -> bool {
         |db, top_mod| {
             let package = mir::build_runtime_package(db, top_mod).unwrap();
             let module = fe_codegen::sonatina::compile_runtime_package_sonatina_native(
-                db, &package, fe_codegen::EVM_LAYOUT,
-            ).unwrap();
+                db,
+                &package,
+                fe_codegen::EVM_LAYOUT,
+            )
+            .unwrap();
 
             let backend = WasmBackend::new();
             backend.compile_module(&module)
@@ -1315,14 +1333,21 @@ pub fn poseidon_check() -> bool {
     );
 
     let artifact = artifact.expect("WASM compilation should succeed");
-    assert!(!artifact.bytes.is_empty(), "WASM output should not be empty");
+    assert!(
+        !artifact.bytes.is_empty(),
+        "WASM output should not be empty"
+    );
     assert!(
         artifact.func_names.contains(&"poseidon_check".to_string()),
         "WASM should export poseidon_check function"
     );
 
     // Verify WASM magic number (0x00 0x61 0x73 0x6D = "\0asm")
-    assert_eq!(&artifact.bytes[0..4], b"\0asm", "should be valid WASM binary");
+    assert_eq!(
+        &artifact.bytes[0..4],
+        b"\0asm",
+        "should be valid WASM binary"
+    );
     eprintln!(
         "Poseidon-style function compiled to {} bytes of WASM",
         artifact.bytes.len()
@@ -1362,17 +1387,22 @@ pub fn poseidon_fp_test() -> bool {
         |db, top_mod| {
             let package = mir::build_runtime_package(db, top_mod).unwrap();
             let module = fe_codegen::sonatina::compile_runtime_package_sonatina_native(
-                db, &package, fe_codegen::EVM_LAYOUT,
-            ).unwrap();
+                db,
+                &package,
+                fe_codegen::EVM_LAYOUT,
+            )
+            .unwrap();
 
             let ir = sonatina_ir::ir_writer::ModuleWriter::new(&module).dump_string();
             eprintln!("=== Poseidon pow5 IR ===\n{ir}");
 
             let backend = CraneliftBackend::new();
-            let artifact = backend.compile_module(&module)
+            let artifact = backend
+                .compile_module(&module)
                 .map_err(|e| format!("{e:?}"))?;
             let f: fn() -> bool = unsafe {
-                let ptr = artifact.get_func_ptr::<fn() -> bool>("poseidon_fp_test")
+                let ptr = artifact
+                    .get_func_ptr::<fn() -> bool>("poseidon_fp_test")
                     .ok_or("poseidon_fp_test not found")?;
                 std::mem::transmute(ptr)
             };
@@ -1382,7 +1412,10 @@ pub fn poseidon_fp_test() -> bool {
 
     let result: Result<bool, String> = result;
     let val = result.expect("Poseidon pow5 should compile and execute via Cranelift");
-    assert!(val, "mulmod-based pow5(3) over BN254 prime should equal 243");
+    assert!(
+        val,
+        "mulmod-based pow5(3) over BN254 prime should equal 243"
+    );
 }
 
 #[cfg(feature = "wasm")]
@@ -1412,8 +1445,11 @@ pub fn poseidon_fp_test() -> bool {
         |db, top_mod| {
             let package = mir::build_runtime_package(db, top_mod).unwrap();
             let module = fe_codegen::sonatina::compile_runtime_package_sonatina_native(
-                db, &package, fe_codegen::EVM_LAYOUT,
-            ).unwrap();
+                db,
+                &package,
+                fe_codegen::EVM_LAYOUT,
+            )
+            .unwrap();
 
             let backend = WasmBackend::new();
             backend.compile_module(&module)
@@ -1423,8 +1459,15 @@ pub fn poseidon_fp_test() -> bool {
     let artifact = artifact.expect("Poseidon WASM compilation should succeed");
     assert!(!artifact.bytes.is_empty());
     assert_eq!(&artifact.bytes[0..4], b"\0asm");
-    assert!(artifact.func_names.contains(&"poseidon_fp_test".to_string()));
-    eprintln!("Poseidon pow5 (addmod/mulmod) compiled to {} bytes of WASM", artifact.bytes.len());
+    assert!(
+        artifact
+            .func_names
+            .contains(&"poseidon_fp_test".to_string())
+    );
+    eprintln!(
+        "Poseidon pow5 (addmod/mulmod) compiled to {} bytes of WASM",
+        artifact.bytes.len()
+    );
 }
 
 #[test]
@@ -1453,7 +1496,13 @@ pub fn field_add_check(a: u256, b: u256, expected: u256) -> bool {
             let backend = SpirvBackend::new();
             match backend.compile_module(&module) {
                 Ok(artifact) => Ok(format!("SPIR-V: {} words", artifact.words.len())),
-                Err(errs) => Err(format!("{}", errs.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; ")))
+                Err(errs) => Err(format!(
+                    "{}",
+                    errs.iter()
+                        .map(|e| e.to_string())
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                )),
             }
         },
     );
@@ -1550,7 +1599,9 @@ pub fn compute() -> u64 {
                 .map_err(|e| format!("wasm call: {e}"))? as u64;
 
             let spirv = SpirvBackend::new();
-            let spirv_art = spirv.compile_module(&module).map_err(|e| format!("{e:?}"))?;
+            let spirv_art = spirv
+                .compile_module(&module)
+                .map_err(|e| format!("{e:?}"))?;
             let spirv_valid = spirv_art.words[0] == 0x07230203;
 
             Ok((cranelift_result, wasm_result, spirv_valid))

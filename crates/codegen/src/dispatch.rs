@@ -36,7 +36,9 @@ pub enum DispatchStrategy {
 
 impl DispatchStrategy {
     pub fn evm() -> Self {
-        Self::Evm { has_fallback: false }
+        Self::Evm {
+            has_fallback: false,
+        }
     }
 
     pub fn wasm() -> Self {
