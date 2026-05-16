@@ -476,49 +476,44 @@ impl super::Parse for WhereClauseScope {
         parser.bump_expected(SyntaxKind::WhereKw);
 
         let mut pred_count = 0;
-        // Track whether a comma was just consumed. A `{` is only parsed as a
-        // const predicate when preceded by a comma (or as the first predicate
-        // right after `where`).  Without a comma, `{` is the item body.
-        let mut after_comma = true;
 
         loop {
             parser.set_newline_as_trivia(true);
             match parser.current_kind() {
-                Some(SyntaxKind::LBrace) if after_comma && is_where_const_predicate(parser) => {
-                    parser.parse(WhereConstPredicateScope::default())?;
+                Some(kind) if is_type_start(kind) => {
+                    if is_type_bound_predicate(parser) {
+                        parser.parse(WherePredicateScope::default())?;
+                    } else {
+                        parser.parse(WhereConstPredicateScope::default())?;
+                    }
                     pred_count += 1;
                 }
-                Some(kind) if is_type_start(kind) => {
-                    parser.parse(WherePredicateScope::default())?;
+                Some(kind) if is_const_predicate_start(kind) => {
+                    parser.parse(WhereConstPredicateScope::default())?;
                     pred_count += 1;
                 }
                 _ => break,
             }
 
-            after_comma = parser.bump_if(SyntaxKind::Comma);
-            if !after_comma
-                && parser.current_kind().is_some()
-                && is_type_start(parser.current_kind().unwrap())
-            {
-                parser.set_newline_as_trivia(false);
-                let newline = parser.current_kind() == Some(SyntaxKind::Newline);
-                parser.set_newline_as_trivia(true);
+            parser.set_newline_as_trivia(true);
+            if !parser.bump_if(SyntaxKind::Comma) {
+                let next_could_be_predicate = parser
+                    .current_kind()
+                    .is_some_and(|k| is_type_start(k) || is_const_predicate_start(k));
+                if next_could_be_predicate {
+                    parser.set_newline_as_trivia(false);
+                    let newline = parser.current_kind() == Some(SyntaxKind::Newline);
+                    parser.set_newline_as_trivia(true);
 
-                if newline {
-                    parser.add_error(ParseError::expected(
-                        &[SyntaxKind::Comma],
-                        None,
-                        parser.current_pos,
-                    ));
-                } else if parser.find(
-                    SyntaxKind::Comma,
-                    ExpectedKind::Separator {
-                        separator: SyntaxKind::Comma,
-                        element: SyntaxKind::WherePredicate,
-                    },
-                )? {
-                    parser.bump();
-                    after_comma = true;
+                    if newline {
+                        parser.add_error(ParseError::expected(
+                            &[SyntaxKind::Comma],
+                            None,
+                            parser.current_pos,
+                        ));
+                    } else {
+                        break;
+                    }
                 } else {
                     break;
                 }
@@ -557,21 +552,23 @@ impl super::Parse for WhereConstPredicateScope {
     type Error = Recovery<ErrProof>;
 
     fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
-        parser.parse(BlockExprScope::default())?;
+        parse_expr(parser)?;
         Ok(())
     }
 }
 
-/// Disambiguate `{ expr }` (const predicate) from `{ body }` (function/struct
-/// body).  Uses a dry run: parse the block expression, then check if what
-/// follows looks like more where predicates or the item body `{`.
-///
-/// Only called when `after_comma` is true — the `{` was preceded by a comma in
-/// the where clause, so we already know it's not an item body start (those are
-/// never preceded by a comma). We still need to verify the block parses as a
-/// valid expression.
-fn is_where_const_predicate<S: TokenStream>(parser: &mut Parser<S>) -> bool {
-    parser.dry_run(|p| p.parse_ok(BlockExprScope::default()).is_ok())
+/// Dry-run: does this position start a type-bound predicate (`Type: Bounds`)?
+fn is_type_bound_predicate<S: TokenStream>(parser: &mut Parser<S>) -> bool {
+    parser.dry_run(|p| parse_type(p, None).is_ok() && p.current_kind() == Some(SyntaxKind::Colon))
+}
+
+/// Tokens that unambiguously start expressions but never types.
+fn is_const_predicate_start(kind: SyntaxKind) -> bool {
+    use SyntaxKind::*;
+    matches!(
+        kind,
+        Not | Minus | Tilde | Plus | IfKw | MatchKw | Int | String | TrueKw | FalseKw
+    )
 }
 
 pub(crate) fn parse_where_clause_opt<S: TokenStream>(

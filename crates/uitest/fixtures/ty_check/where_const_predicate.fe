@@ -1,8 +1,8 @@
-fn good<T>() where T: Add, { true }
+fn good<T>() where T: Add, true
 {
 }
 
-fn bad<T>() where T: Add, { false }
+fn bad<T>() where T: Add, false
 {
 }
 

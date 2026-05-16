@@ -7,7 +7,7 @@ impl Sized for Zero {
     const SIZE: u256 = 0
 }
 
-fn div_pred<T>() where T: Sized, { 100 / T::SIZE > 0 }
+fn div_pred<T>() where T: Sized, 100 / T::SIZE > 0
 {
 }
 

@@ -1,0 +1,24 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/where_const_predicate_bare.fe
+---
+error[1-0001]: unexpected syntax while parsing item
+   ┌─ where_const_predicate_bare.fe:56:1
+   │
+56 │ ╭ {
+57 │ │ }
+   │ ╰─^ unexpected
+
+error[8-0082]: where clause const predicate failed
+   ┌─ where_const_predicate_bare.fe:83:5
+   │
+83 │     check_range<Big>()
+   │     ^^^^^^^^^^^^^^^^ const predicate evaluated to `false`
+
+error[8-0082]: where clause const predicate failed
+   ┌─ where_const_predicate_bare.fe:87:5
+   │
+87 │     Checker::must_fit<Big>()
+   │     ^^^^^^^^^^^^^^^^^^^^^^ const predicate evaluated to `false`

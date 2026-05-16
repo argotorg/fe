@@ -737,10 +737,7 @@ mod tests {
     #[test]
     #[wasm_bindgen_test]
     fn where_clause_with_const_predicate() {
-        // The const predicate `{ true }` must be followed by something that
-        // shows it is not the item body.  Here a trailing comma + another
-        // type predicate achieves that.
-        let source = r#"where { true }, T: Trait"#;
+        let source = r#"where true, T: Trait"#;
         let wc = parse_where_clause(source);
 
         let type_preds: Vec<_> = wc.iter().collect();
@@ -758,10 +755,7 @@ mod tests {
     #[test]
     #[wasm_bindgen_test]
     fn where_clause_const_predicate_then_body() {
-        // In real code, `fn foo() where T: Trait, { expr } { body }` --
-        // the const predicate is followed by the item body `{`.
-        // Test via a full function parse.
-        let f = parse_func("fn foo<T>() where T: Trait, { true } {}");
+        let f = parse_func("fn foo<T>() where T: Trait, true {}");
         let wc = f.sig().where_clause().expect("missing where clause");
 
         let type_preds: Vec<_> = wc.iter().collect();

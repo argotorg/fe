@@ -5,7 +5,7 @@ expression: diags
 input_file: fixtures/ty_check/where_const_predicate_mandelbrot.fe
 ---
 error[8-0082]: where clause const predicate failed
-   ┌─ where_const_predicate_mandelbrot.fe:67:5
+   ┌─ where_const_predicate_mandelbrot.fe:48:5
    │
-67 │     assert_converges<HalfReal>()
+48 │     assert_converges<HalfReal>()
    │     ^^^^^^^^^^^^^^^^^^^^^^^^^^ const predicate evaluated to `false`
