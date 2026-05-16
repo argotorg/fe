@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Fe Debug Explorer</title>
+<style>
+  body { margin: 0; height: 100vh; background: #11111b; overflow: hidden; }
+  .dropzone {
+    display: flex; align-items: center; justify-content: center;
+    height: 100vh; color: #6c7086; font-family: sans-serif; font-size: 14px;
+    flex-direction: column; gap: 12px;
+  }
+  .dropzone.hidden { display: none; }
+  .dropzone input[type="file"] { display: none; }
+  .dropzone label {
+    padding: 8px 16px; background: #313244; color: #cdd6f4;
+    border-radius: 6px; cursor: pointer; font-size: 13px;
+  }
+  .dropzone label:hover { background: #45475a; }
+  .dropzone p { color: #585b70; font-size: 12px; }
+</style>
+</head>
+<body>
+
+<div class="dropzone" id="dropzone">
+  <div>Load a <code>.debug.json</code> multi-representation SCIP index</div>
+  <label for="file-input">Choose file</label>
+  <input type="file" id="file-input" accept=".json">
+  <p>Or drag &amp; drop a JSON file here</p>
+  <p style="margin-top: 24px; max-width: 400px; text-align: center; line-height: 1.5">
+    Generate with: <code style="background:#313244;padding:2px 6px;border-radius:3px">
+    cargo test -p fe-codegen --lib -- debug_explorer_end_to_end</code>
+    <br>then load <code>/tmp/fe-debug-explorer/debug.json</code>
+  </p>
+</div>
+
+<script src="../assets/fe-debug-explorer.js"></script>
+
+<script>
+var dropzone = document.getElementById("dropzone");
+var fileInput = document.getElementById("file-input");
+
+function loadFile(file) {
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    dropzone.classList.add("hidden");
+    var el = document.createElement("fe-debug-explorer");
+    el.style.width = "100%";
+    el.style.height = "100vh";
+    var script = document.createElement("script");
+    script.type = "application/json";
+    script.textContent = e.target.result;
+    el.appendChild(script);
+    document.body.appendChild(el);
+  };
+  reader.readAsText(file);
+}
+
+fileInput.addEventListener("change", function(e) {
+  if (e.target.files.length > 0) loadFile(e.target.files[0]);
+});
+
+document.body.addEventListener("dragover", function(e) {
+  e.preventDefault();
+  dropzone.style.borderColor = "#89b4fa";
+});
+
+document.body.addEventListener("drop", function(e) {
+  e.preventDefault();
+  if (e.dataTransfer.files.length > 0) loadFile(e.dataTransfer.files[0]);
+});
+
+// Auto-load from URL param: ?src=path/to/debug.json
+var params = new URLSearchParams(window.location.search);
+var src = params.get("src");
+if (src) {
+  dropzone.classList.add("hidden");
+  var el = document.createElement("fe-debug-explorer");
+  el.style.width = "100%";
+  el.style.height = "100vh";
+  el.setAttribute("src", src);
+  document.body.appendChild(el);
+}
+</script>
+
+</body>
+</html>

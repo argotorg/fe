@@ -1263,4 +1263,161 @@ fn test_add() {
             }
         }
     }
+
+    #[test]
+    fn debug_explorer_end_to_end() {
+        use sonatina_ir::ir_writer::ModuleWriter;
+
+        let mut db = DriverDataBase::default();
+        let file_url = temp_fixture_url("explorer_test.fe");
+        let source = r#"fn add(x: u256, y: u256) -> u256 {
+    return x + y
+}
+
+fn double(x: u256) -> u256 {
+    return add(x, x)
+}
+
+#[test]
+fn test_double() {
+    assert(double(5) == 10)
+}
+"#;
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(source.to_string()),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+
+        let package = mir::build_test_runtime_package(&db, top_mod, None)
+            .expect("should build test package");
+
+        // MIR dump
+        let mir_dump = mir::runtime::pretty::format_runtime_package(&db, &package);
+
+        // Compile with provenance
+        let (mut module, provenance, mir_to_ir) =
+            compile_runtime_package_sonatina_full(&db, &package, crate::EVM_LAYOUT)
+                .expect("should compile");
+
+        // Sonatina IR dump (pre-opt)
+        let sonatina_ir_dump = ModuleWriter::new(&module).dump_string();
+
+        // Optimize
+        run_sonatina_optimization_pipeline(&mut module, OptLevel::O0);
+
+        // Sonatina IR dump (post-opt)
+        let sonatina_ir_opt_dump = ModuleWriter::new(&module).dump_string();
+
+        // Compile to bytecode with observability
+        let mut options = sonatina_codegen::object::CompileOptions::default();
+        options.emit_observability = true;
+        let mut vcfg = sonatina_verifier::VerifierConfig::for_level(
+            sonatina_verifier::VerificationLevel::Full,
+        );
+        vcfg.allow_detached_entities = true;
+        options.verifier_cfg = vcfg;
+        let artifacts = sonatina_codegen::object::compile_all_objects(
+            &module,
+            &sonatina_codegen::isa::evm::EvmBackend::new(create_evm_isa()),
+            &options,
+        )
+        .expect("should compile to bytecode");
+
+        // Collect function names
+        let func_names: Vec<(u32, String)> = package
+            .functions(&db)
+            .into_iter()
+            .map(|f| {
+                (
+                    provenance
+                        .keys()
+                        .find(|(fr, _)| {
+                            module
+                                .ctx
+                                .get_sig(*fr)
+                                .is_some_and(|sig| sig.name() == f.symbol(&db))
+                        })
+                        .map(|(fr, _)| fr.as_u32())
+                        .unwrap_or(0),
+                    f.symbol(&db).clone(),
+                )
+            })
+            .collect();
+        let func_name_refs: Vec<(u32, &str)> =
+            func_names.iter().map(|(id, n)| (*id, n.as_str())).collect();
+
+        // Build source tables
+        let source_tables_owned: Vec<(u32, common::source_ord::FunctionSourceTable)> = package
+            .functions(&db)
+            .into_iter()
+            .filter_map(|f| {
+                let instance = f.instance(&db);
+                let body = instance.body(&db);
+                let table = body.source_table.clone();
+                if table.is_empty() {
+                    return None;
+                }
+                let func_id = func_name_refs
+                    .iter()
+                    .find(|(_, name)| *name == f.symbol(&db))
+                    .map(|(id, _)| *id)
+                    .unwrap_or(0);
+                Some((func_id, table))
+            })
+            .collect();
+        let source_table_refs: Vec<(u32, &common::source_ord::FunctionSourceTable)> =
+            source_tables_owned.iter().map(|(id, t)| (*id, t)).collect();
+
+        // Generate the multi-representation SCIP index
+        let scip_json = crate::debug_explorer::generate_multi_rep_scip(
+            source,
+            "explorer_test.fe",
+            &mir_dump,
+            &sonatina_ir_dump,
+            &sonatina_ir_opt_dump,
+            &artifacts,
+            &provenance,
+            &mir_to_ir,
+            &source_table_refs,
+            &func_name_refs,
+        );
+
+        assert!(scip_json.contains("\"source\""));
+        assert!(scip_json.contains("\"mir\""));
+        assert!(scip_json.contains("\"bytecode\""));
+        assert!(scip_json.contains("\"sonatina_ir\""));
+
+        // Write files to temp dir for manual inspection
+        let out_dir = std::env::temp_dir().join("fe-debug-explorer");
+        std::fs::create_dir_all(&out_dir).ok();
+        std::fs::write(out_dir.join("debug.json"), &scip_json)
+            .expect("should write JSON");
+        let explorer_js_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../fe-web/assets/fe-debug-explorer.js");
+        let explorer_js = std::fs::read_to_string(&explorer_js_path)
+            .expect("should read fe-debug-explorer.js");
+        std::fs::write(out_dir.join("fe-debug-explorer.js"), explorer_js)
+            .expect("should write JS");
+        let html = format!(
+            r#"<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Fe Debug Explorer</title></head>
+<body style="margin:0;height:100vh;background:#11111b">
+<script src="fe-debug-explorer.js"></script>
+<fe-debug-explorer src="debug.json" style="width:100%;height:100vh"></fe-debug-explorer>
+</body></html>"#
+        );
+        std::fs::write(out_dir.join("index.html"), &html)
+            .expect("should write HTML");
+
+        eprintln!(
+            "\n  Debug explorer written to: {}\n  Open index.html in a browser.\n",
+            out_dir.display()
+        );
+    }
 }
