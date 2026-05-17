@@ -495,21 +495,14 @@ fn emit_derive_body<'db>(
     let analysis_db: &dyn crate::analysis::HirAnalysisDb =
         (body.db() as &dyn salsa::Database).as_view::<dyn crate::analysis::HirAnalysisDb>();
 
-    if let Some(strategy_func) = find_strategy_func(body.db(), ingot, spec.strategy_name) {
-        if crate::analysis::semantic::ctfe::eval_derive_with_machine(
-            analysis_db,
-            strategy_func,
-            struct_def,
-            &field_names,
-            body,
-        )
-        .is_ok()
-        {
-            return;
-        }
-    }
-
-    // Fallback: pattern-based evaluator (produces identical output)
+    // The CTFE machine path is architecturally complete (instance creation,
+    // symbolic ExprId handling at BinOp/Field/DynField, branch/return emission,
+    // reflect intrinsic interception). It's blocked on SMIR lowering of strategy
+    // bodies — DynField needs a deferred type in the type checker so SMIR
+    // lowering doesn't panic on unresolved paths. Until then, the pattern
+    // evaluator produces identical output.
+    let _strategy_func = find_strategy_func(body.db(), ingot, spec.strategy_name);
+    let _ = analysis_db;
     eval_derive_strategy_into(&field_names, spec.trait_name, body);
 }
 

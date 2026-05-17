@@ -306,11 +306,12 @@ pub fn eval_derive_with_machine<'db>(
         args.push(CtfeValue::Value(CtfeConstValue::unit()));
     }
 
-    // TODO: The machine's BinOp/Branch/Field handlers need to check for
-    // Symbolic values and emit to derive_sink. Until that's wired, fall through
-    // to the pattern-based evaluator.
-    let _result = machine.eval_instance(instance, args, origin);
-    Err(CtfeError::NotConstEvaluable { origin })
+    // Run the machine — it will emit to derive_sink at key points
+    // (BinOp/Field/DynField on Symbolic, Branch on Symbolic, Return)
+    match machine.eval_instance(instance, args, origin) {
+        Ok(_) => Ok(()),
+        Err(_) => Err(CtfeError::NotConstEvaluable { origin }),
+    }
 }
 
 struct CtfeMachine<'db> {
@@ -1104,6 +1105,11 @@ impl<'db> CtfeMachine<'db> {
                 Err(CtfeError::NonConstCall { origin })
             }
             BodyOwner::Func(func) => {
+                // In derive mode, skip blocker check — strategy bodies have
+                // DynField which produces type errors but valid SMIR structure.
+                if self.derive_sink.is_some() {
+                    return Ok(());
+                }
                 let (diags, typed_body) = check_func_body(self.db, func);
                 if !diags.is_empty() && typed_body.has_smir_lowering_blocker(self.db) {
                     Err(CtfeError::InvalidBody { origin })
@@ -1149,9 +1155,54 @@ impl<'db> CtfeMachine<'db> {
                     then_bb,
                     else_bb,
                 } => {
-                    let cond = self.load_value(frame_idx, cond, term_origin)?;
-                    let cond = self.expect_bool(frame_idx, cond, term_origin)?;
-                    self.frames[frame_idx].current = if cond {
+                    let cond_val = self.load_value(frame_idx, cond, term_origin)?;
+                    // Derive mode: branch on symbolic → emit if-guard to sink
+                    if self.derive_sink.is_some() {
+                        if let CtfeConstKind::Symbolic(cond_id) = &cond_val.kind {
+                            let sink = unsafe {
+                                &mut *std::mem::transmute::<
+                                    *mut dyn derive_eval::CodegenSink<'static>,
+                                    *mut dyn derive_eval::CodegenSink<'db>,
+                                >(self.derive_sink.unwrap())
+                            };
+                            // Peek at then_bb: if it returns a bool literal, emit guard
+                            let then_block = &self.frames[frame_idx].body.blocks[then_bb.index()];
+                            let return_val = if let STerminatorKind::Return(Some(ret_op)) =
+                                then_block.terminator.kind.clone()
+                            {
+                                self.read_operand(frame_idx, ret_op, term_origin)
+                                    .ok()
+                                    .and_then(|v| match v {
+                                        CtfeValue::Value(cv) => match cv.kind {
+                                            CtfeConstKind::Bool(b) => Some(b),
+                                            _ => None,
+                                        },
+                                        _ => None,
+                                    })
+                            } else {
+                                None
+                            };
+                            if let Some(ret_bool) = return_val {
+                                let cond_expr =
+                                    sink.push_cond(crate::hir_def::Cond::Expr(*cond_id));
+                                let lit = sink.push_expr(crate::hir_def::Expr::Lit(
+                                    crate::hir_def::LitKind::Bool(ret_bool),
+                                ));
+                                let ret_stmt =
+                                    sink.push_stmt(crate::hir_def::Stmt::Return(Some(lit)));
+                                let blk =
+                                    sink.push_expr(crate::hir_def::Expr::Block(vec![ret_stmt]));
+                                let if_expr =
+                                    sink.push_expr(crate::hir_def::Expr::If(cond_expr, blk, None));
+                                sink.emit_expr_stmt(if_expr);
+                                // Skip the then_bb, continue with else_bb
+                                self.frames[frame_idx].current = else_bb.index();
+                                continue;
+                            }
+                        }
+                    }
+                    let cond_bool = self.expect_bool(frame_idx, cond_val, term_origin)?;
+                    self.frames[frame_idx].current = if cond_bool {
                         then_bb.index()
                     } else {
                         else_bb.index()
@@ -1171,7 +1222,32 @@ impl<'db> CtfeMachine<'db> {
                         .map_or_else(|| default.map_or(0, |bb| bb.index()), |(_, bb)| bb.index());
                 }
                 STerminatorKind::Return(Some(value)) => {
-                    return self.read_operand(frame_idx, value, term_origin);
+                    let ret_val = self.read_operand(frame_idx, value, term_origin)?;
+                    // Derive mode: return with symbolic/bool → emit return to sink
+                    if self.derive_sink.is_some() {
+                        let sink = unsafe {
+                            &mut *std::mem::transmute::<
+                                *mut dyn derive_eval::CodegenSink<'static>,
+                                *mut dyn derive_eval::CodegenSink<'db>,
+                            >(self.derive_sink.unwrap())
+                        };
+                        match &ret_val {
+                            CtfeValue::Value(cv) => match &cv.kind {
+                                CtfeConstKind::Bool(b) => {
+                                    let lit = sink.push_expr(crate::hir_def::Expr::Lit(
+                                        crate::hir_def::LitKind::Bool(*b),
+                                    ));
+                                    sink.emit_stmt(crate::hir_def::Stmt::Return(Some(lit)));
+                                }
+                                CtfeConstKind::Symbolic(expr_id) => {
+                                    sink.emit_stmt(crate::hir_def::Stmt::Return(Some(*expr_id)));
+                                }
+                                _ => {}
+                            },
+                            _ => {}
+                        }
+                    }
+                    return Ok(ret_val);
                 }
                 STerminatorKind::Return(None) => {
                     return Ok(CtfeValue::Value(CtfeConstValue::unit()));
@@ -1363,6 +1439,52 @@ impl<'db> CtfeMachine<'db> {
                 effect_args,
                 ..
             } => {
+                // Derive mode: intercept reflect/builder/hasher capability calls
+                if self.derive_sink.is_some() && !effect_args.is_empty() {
+                    // Effect args indicate this is a capability call — intercept it
+                    let method_name = match callee.key.owner(self.db) {
+                        BodyOwner::Func(f) => f
+                            .name(self.db)
+                            .to_opt()
+                            .map(|n| n.data(self.db).to_string()),
+                        _ => None,
+                    };
+                    if let Some(ref name) = method_name {
+                        let field_names = self.derive_field_names.clone().unwrap_or_default();
+                        match name.as_str() {
+                            "field_count" => {
+                                return Ok(CtfeValue::Value(CtfeConstValue::int(
+                                    self.db,
+                                    result_ty,
+                                    BigInt::from(field_names.len()),
+                                )));
+                            }
+                            "field_name" => {
+                                // Get the index argument
+                                let idx_args = self.eval_args(frame_idx, &args, origin)?;
+                                let idx = idx_args
+                                    .first()
+                                    .and_then(|v| match v {
+                                        CtfeValue::Value(cv) => match &cv.kind {
+                                            CtfeConstKind::Int { value, .. } => {
+                                                value.to_bigint().to_u64().map(|n| n as usize)
+                                            }
+                                            _ => None,
+                                        },
+                                        _ => None,
+                                    })
+                                    .unwrap_or(0);
+                                if let Some(name) = field_names.get(idx) {
+                                    return Ok(CtfeValue::Value(CtfeConstValue {
+                                        kind: CtfeConstKind::Name(*name),
+                                        deferred_origin: None,
+                                    }));
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
                 if !effect_args.is_empty() {
                     return Err(CtfeError::NotConstEvaluable { origin });
                 }
