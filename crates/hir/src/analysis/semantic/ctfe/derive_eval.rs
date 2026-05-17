@@ -84,6 +84,10 @@ struct HirStrategyInterp<'a, 'db> {
     locals: HashMap<PatId, InterpValue<'db>>,
     /// Function params by index
     params: Vec<InterpValue<'db>>,
+    /// Builder accumulator: (field_index, value) pairs from set_field calls
+    builder_fields: Vec<(usize, InterpValue<'db>)>,
+    /// Hasher accumulator: running hash expression
+    hash_accum: Option<ExprId>,
 }
 
 impl<'a, 'db> HirStrategyInterp<'a, 'db> {
@@ -115,6 +119,8 @@ impl<'a, 'db> HirStrategyInterp<'a, 'db> {
                 InterpValue::Unit, // reflect capability
                 InterpValue::Unit, // other capabilities
             ],
+            builder_fields: Vec::new(),
+            hash_accum: None,
         }
     }
 
@@ -158,7 +164,6 @@ impl<'a, 'db> HirStrategyInterp<'a, 'db> {
                 _ => InterpValue::Unit,
             },
             Expr::Path(path) => {
-                // Try to resolve as a param or local
                 if let Partial::Present(path_id) = path {
                     let name_str = path_id.pretty_print(self.db);
                     if name_str == "self" || name_str == "self_val" {
@@ -172,6 +177,15 @@ impl<'a, 'db> HirStrategyInterp<'a, 'db> {
                     }
                     if name_str == "false" {
                         return InterpValue::Bool(false);
+                    }
+                    // Check locals (loop variables, let bindings)
+                    for (pat_id, val) in &self.locals {
+                        let pat = self.body.pats(self.db)[*pat_id].clone();
+                        if let Partial::Present(Pat::Path(Partial::Present(pat_path), _)) = pat {
+                            if pat_path.pretty_print(self.db) == name_str {
+                                return val.clone();
+                            }
+                        }
                     }
                 }
                 InterpValue::Unit
@@ -243,6 +257,94 @@ impl<'a, 'db> HirStrategyInterp<'a, 'db> {
                             InterpValue::Unit
                         }
                     }
+                    Some("set_field") => {
+                        // Builder.set_field(index, value): accumulate field
+                        let idx = args
+                            .first()
+                            .map(|a| self.eval_expr(a.expr))
+                            .and_then(|v| match v {
+                                InterpValue::Int(i) => Some(i),
+                                _ => None,
+                            })
+                            .unwrap_or(0);
+                        let value = args
+                            .get(1)
+                            .map(|a| self.eval_expr(a.expr))
+                            .unwrap_or(InterpValue::Unit);
+                        self.builder_fields.push((idx, value));
+                        InterpValue::Unit
+                    }
+                    Some("finish") => {
+                        if self.hash_accum.is_some() {
+                            // Hasher.finish(): return accumulated hash
+                            return InterpValue::Symbolic(self.hash_accum.take().unwrap());
+                        }
+                        {
+                            // Builder.finish(): emit RecordInit
+                            let db = self.db;
+                            let fields: Vec<_> = self
+                                .builder_fields
+                                .drain(..)
+                                .filter_map(|(idx, val)| {
+                                    let field_name = self.field_names.get(idx)?;
+                                    let expr_id = match val {
+                                        InterpValue::Symbolic(id) => id,
+                                        _ => return None,
+                                    };
+                                    Some(crate::hir_def::Field {
+                                        label: Some(*field_name),
+                                        expr: expr_id,
+                                    })
+                                })
+                                .collect();
+                            let self_path =
+                                Partial::Present(PathId::from_ident(db, IdentId::make_self_ty(db)));
+                            let record = self.sink.push_expr(Expr::RecordInit(self_path, fields));
+                            InterpValue::Symbolic(record)
+                        }
+                    }
+                    Some("feed") => {
+                        // Hasher.feed(value): hash the field and accumulate
+                        if let Some(arg) = args.first() {
+                            let val = self.eval_expr(arg.expr);
+                            if let InterpValue::Symbolic(field_id) = val {
+                                let hash_ident = IdentId::new(self.db, "hash".to_string());
+                                let field_hash = self.sink.push_expr(Expr::MethodCall(
+                                    field_id,
+                                    Partial::Present(hash_ident),
+                                    crate::hir_def::GenericArgListId::none(self.db),
+                                    vec![],
+                                ));
+                                // Accumulate: acc = acc * 31 + field.hash()
+                                let acc = self.hash_accum.unwrap_or_else(|| {
+                                    self.sink.push_expr(Expr::Lit(LitKind::Int(
+                                        crate::hir_def::IntegerId::new(
+                                            self.db,
+                                            num_bigint::BigUint::from(0u64),
+                                        ),
+                                    )))
+                                });
+                                let thirty_one = self.sink.push_expr(Expr::Lit(LitKind::Int(
+                                    crate::hir_def::IntegerId::new(
+                                        self.db,
+                                        num_bigint::BigUint::from(31u64),
+                                    ),
+                                )));
+                                let mul = self.sink.push_expr(Expr::Bin(
+                                    acc,
+                                    thirty_one,
+                                    BinOp::Arith(crate::hir_def::ArithBinOp::Mul),
+                                ));
+                                let add = self.sink.push_expr(Expr::Bin(
+                                    mul,
+                                    field_hash,
+                                    BinOp::Arith(crate::hir_def::ArithBinOp::Add),
+                                ));
+                                self.hash_accum = Some(add);
+                            }
+                        }
+                        InterpValue::Unit
+                    }
                     _ => recv_val,
                 }
             }
@@ -263,6 +365,25 @@ impl<'a, 'db> HirStrategyInterp<'a, 'db> {
                             let _ = cond_id; // guard emitted in stmt handling
                         }
                         _ => {}
+                    }
+                }
+                InterpValue::Unit
+            }
+            Expr::Call(callee, _call_args) => {
+                let callee_e = self.body.exprs(self.db)[callee].clone();
+                if let Partial::Present(Expr::Path(Partial::Present(path))) = callee_e {
+                    let path_str = path.pretty_print(self.db);
+                    if path_str.contains("default") {
+                        let default_path = PathId::from_ident(
+                            self.db,
+                            IdentId::new(self.db, "Default".to_string()),
+                        )
+                        .push_str(self.db, "default");
+                        let callee_id = self
+                            .sink
+                            .push_expr(Expr::Path(Partial::Present(default_path)));
+                        let call_id = self.sink.push_expr(Expr::Call(callee_id, vec![]));
+                        return InterpValue::Symbolic(call_id);
                     }
                 }
                 InterpValue::Unit
