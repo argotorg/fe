@@ -1,0 +1,11 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/where_const_predicate_early.fe
+---
+error[8-0082]: where clause const predicate failed
+   ┌─ where_const_predicate_early.fe:33:5
+   │
+33 │     needs_big<Small>()
+   │     ^^^^^^^^^^^^^^^^ const predicate evaluated to `false`

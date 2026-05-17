@@ -1,4 +1,5 @@
 mod callable;
+mod const_predicate_prover;
 mod contract;
 mod effect_env;
 pub(crate) mod env;
