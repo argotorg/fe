@@ -5,22 +5,19 @@ input_file: crates/codegen/tests/fixtures/keccak_intrinsic.fe
 ---
 target = "evm-ethereum-osaka"
 
-type @layout_0 = {};
-type @layout_1 = {@layout_0};
-
-func private %hash(v0.i256, v1.i256, v2.objref<@layout_1>) -> i256 {
+func private %hash(v0.i256, v1.i256) -> i256 {
     block0:
+        v2.*i256 = alloca i256;
         v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
-        mstore v3 v0 i256;
-        mstore v4 v1 i256;
+        mstore v2 v0 i256;
+        mstore v3 v1 i256;
         jump block1;
 
     block1:
+        v4.i256 = mload v2 i256;
         v5.i256 = mload v3 i256;
-        v6.i256 = mload v4 i256;
-        v7.i256 = call %keccak256 v5 v6;
-        return v7;
+        v6.i256 = call %keccak256 v4 v5;
+        return v6;
 }
 
 func private %keccak256(v0.i256, v1.i256) -> i256 {
@@ -38,13 +35,13 @@ func private %keccak256(v0.i256, v1.i256) -> i256 {
         return v6;
 }
 
-func private %main(v0.objref<@layout_1>) -> i256 {
+func private %main() -> i256 {
     block0:
         jump block1;
 
     block1:
-        v4.i256 = call %hash 0.i256 32.i256 v0;
-        return v4;
+        v2.i256 = call %hash 0.i256 32.i256;
+        return v2;
 }
 
 func private %main_root() {
@@ -52,8 +49,7 @@ func private %main_root() {
         jump block1;
 
     block1:
-        v0.objref<@layout_1> = obj.alloc @layout_1;
-        v1.i256 = call %main v0;
+        v0.i256 = call %main;
         evm_stop;
 }
 

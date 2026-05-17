@@ -666,6 +666,7 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
         plan: &CompiledEffectArgPlan<'db>,
     ) -> Option<SelectedRuntimeArg<'db>> {
         match (EffectArgInput::new(arg), plan) {
+            (_, CompiledEffectArgPlan::Erased) => None,
             (EffectArgInput::Value(value), CompiledEffectArgPlan::Value(plan)) => {
                 self.select_value_effect_arg(value, plan)
             }

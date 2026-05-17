@@ -5,22 +5,20 @@ input_file: crates/codegen/tests/fixtures/enum_variant_contract.fe
 ---
 target = "evm-ethereum-osaka"
 
-type @layout_0 = {};
-type @layout_1 = {@layout_0};
-type @layout_2 = enum {
+type @layout_0 = enum {
     #None,
     #Some(i256),
 };
 
-func private %abi_encode_u256(v0.i256, v1.objref<@layout_1>) {
+func private %abi_encode_u256(v0.i256) {
     block0:
-        v2.*i256 = alloca i256;
-        mstore v2 v0 i256;
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
         jump block1;
 
     block1:
-        v5.i256 = mload v2 i256;
-        call %mstore v1 0.i256 v5;
+        v3.i256 = mload v1 i256;
+        call %mstore 0.i256 v3;
         call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_44fe 0.i256 32.i256;
         unreachable;
 }
@@ -37,35 +35,35 @@ func private %calldataload(v0.i256) -> i256 {
         return v3;
 }
 
-func private %codecopy(v0.objref<@layout_1>, v1.i256, v2.i256, v3.i256) {
+func private %codecopy(v0.i256, v1.i256, v2.i256) {
     block0:
+        v3.*i256 = alloca i256;
         v4.*i256 = alloca i256;
         v5.*i256 = alloca i256;
-        v6.*i256 = alloca i256;
+        mstore v3 v0 i256;
         mstore v4 v1 i256;
         mstore v5 v2 i256;
-        mstore v6 v3 i256;
         jump block1;
 
     block1:
+        v6.i256 = mload v3 i256;
         v7.i256 = mload v4 i256;
         v8.i256 = mload v5 i256;
-        v9.i256 = mload v6 i256;
-        evm_code_copy v7 v8 v9;
+        evm_code_copy v6 v7 v8;
         return;
 }
 
-func private %init(v0.objref<@layout_1>) {
+func private %init() {
     block0:
         jump block1;
 
     block1:
-        v1.i256 = sym_size &__EnumContract_runtime;
-        v2.i256 = sym_addr &__EnumContract_runtime;
-        v3.*i8 = evm_malloc v1;
-        v4.i256 = ptr_to_int v3 i256;
-        call %codecopy v0 v4 v2 v1;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_1461 v4 v1;
+        v0.i256 = sym_size &__EnumContract_runtime;
+        v1.i256 = sym_addr &__EnumContract_runtime;
+        v2.*i8 = evm_malloc v0;
+        v3.i256 = ptr_to_int v2 i256;
+        call %codecopy v3 v1 v0;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_1461 v3 v0;
         unreachable;
 }
 
@@ -74,8 +72,7 @@ func private %manual_contract_init_root_EnumContract() {
         jump block1;
 
     block1:
-        v0.objref<@layout_1> = obj.alloc @layout_1;
-        call %init v0;
+        call %init;
         evm_stop;
 }
 
@@ -84,23 +81,22 @@ func private %manual_contract_runtime_root_EnumContract() {
         jump block1;
 
     block1:
-        v0.objref<@layout_1> = obj.alloc @layout_1;
-        call %runtime v0;
+        call %runtime;
         evm_stop;
 }
 
-func private %mstore(v0.objref<@layout_1>, v1.i256, v2.i256) {
+func private %mstore(v0.i256, v1.i256) {
     block0:
+        v2.*i256 = alloca i256;
         v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
+        mstore v2 v0 i256;
         mstore v3 v1 i256;
-        mstore v4 v2 i256;
         jump block1;
 
     block1:
+        v4.i256 = mload v2 i256;
         v5.i256 = mload v3 i256;
-        v6.i256 = mload v4 i256;
-        mstore v5 v6 i256;
+        mstore v4 v5 i256;
         return;
 }
 
@@ -146,77 +142,77 @@ func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_44fe(v0.i
         evm_return v4 v5;
 }
 
-func private %runtime(v0.objref<@layout_1>) {
+func private %runtime() {
     block0:
-        v1.objref<@layout_2> = obj.alloc @layout_2;
-        v2.objref<@layout_2> = obj.alloc @layout_2;
+        v0.objref<@layout_0> = obj.alloc @layout_0;
+        v1.objref<@layout_0> = obj.alloc @layout_0;
         jump block1;
 
     block1:
-        v4.i256 = call %calldataload 0.i256;
-        v6.i256 = shr 224.i256 v4;
-        v8.i1 = eq v6 1817627404.i256;
-        br v8 block2 block3;
+        v3.i256 = call %calldataload 0.i256;
+        v5.i256 = shr 224.i256 v3;
+        v7.i1 = eq v5 1817627404.i256;
+        br v7 block2 block3;
 
     block2:
-        v10.i256 = call %calldataload 4.i256;
-        v11.@layout_2 = enum.make @layout_2 #Some v10;
-        v12.enumtag(@layout_2) = enum.tag v11;
-        br_table v12 block21 (0.enumtag(@layout_2) block22) (1.enumtag(@layout_2) block23);
+        v9.i256 = call %calldataload 4.i256;
+        v10.@layout_0 = enum.make @layout_0 #Some v9;
+        v11.enumtag(@layout_0) = enum.tag v10;
+        br_table v11 block21 (0.enumtag(@layout_0) block22) (1.enumtag(@layout_0) block23);
 
     block3:
         jump block4;
 
     block4:
-        v21.i1 = eq v6 1163776883.i256;
-        br v21 block8 block9;
+        v20.i1 = eq v5 1163776883.i256;
+        br v20 block8 block9;
 
     block5:
-        v22.i256 = phi (v25 block6) (0.i256 block7);
-        call %abi_encode_u256 v22 v0;
+        v21.i256 = phi (v23 block6) (0.i256 block7);
+        call %abi_encode_u256 v21;
         unreachable;
 
     block6:
-        v24.@layout_2 = obj.load v1;
-        enum.assert_variant v24 #Some;
-        v25.i256 = enum.extract v24 #Some 0.i256;
+        v22.@layout_0 = obj.load v0;
+        enum.assert_variant v22 #Some;
+        v23.i256 = enum.extract v22 #Some 0.i256;
         jump block5;
 
     block7:
         jump block5;
 
     block8:
-        v26.@layout_2 = enum.make @layout_2 #None;
-        v27.@layout_2 = enum.make @layout_2 #None;
-        v28.enumtag(@layout_2) = enum.tag v27;
-        br_table v28 block25 (0.enumtag(@layout_2) block26) (1.enumtag(@layout_2) block27);
+        v24.@layout_0 = enum.make @layout_0 #None;
+        v25.@layout_0 = enum.make @layout_0 #None;
+        v26.enumtag(@layout_0) = enum.tag v25;
+        br_table v26 block25 (0.enumtag(@layout_0) block26) (1.enumtag(@layout_0) block27);
 
     block9:
         jump block10;
 
     block10:
-        v35.i1 = eq v6 3572425762.i256;
-        br v35 block14 block15;
+        v33.i1 = eq v5 3572425762.i256;
+        br v33 block14 block15;
 
     block11:
-        v36.i256 = phi (v39 block12) (0.i256 block13);
-        call %abi_encode_u256 v36 v0;
+        v34.i256 = phi (v36 block12) (0.i256 block13);
+        call %abi_encode_u256 v34;
         unreachable;
 
     block12:
-        v38.@layout_2 = obj.load v2;
-        enum.assert_variant v38 #Some;
-        v39.i256 = enum.extract v38 #Some 0.i256;
+        v35.@layout_0 = obj.load v1;
+        enum.assert_variant v35 #Some;
+        v36.i256 = enum.extract v35 #Some 0.i256;
         jump block11;
 
     block13:
         jump block11;
 
     block14:
-        v40.i256 = call %calldataload 4.i256;
-        v41.@layout_2 = enum.make @layout_2 #Some v40;
-        v42.enumtag(@layout_2) = enum.tag v41;
-        br_table v42 (1.enumtag(@layout_2) block18) (0.enumtag(@layout_2) block19);
+        v37.i256 = call %calldataload 4.i256;
+        v38.@layout_0 = enum.make @layout_0 #Some v37;
+        v39.enumtag(@layout_0) = enum.tag v38;
+        br_table v39 (1.enumtag(@layout_0) block18) (0.enumtag(@layout_0) block19);
 
     block15:
         jump block16;
@@ -226,8 +222,8 @@ func private %runtime(v0.objref<@layout_1>) {
         unreachable;
 
     block17:
-        v43.i256 = phi (1.i256 block18) (0.i256 block19);
-        call %abi_encode_u256 v43 v0;
+        v40.i256 = phi (1.i256 block18) (0.i256 block19);
+        call %abi_encode_u256 v40;
         unreachable;
 
     block18:
@@ -237,43 +233,43 @@ func private %runtime(v0.objref<@layout_1>) {
         jump block17;
 
     block20:
-        v17.@layout_2 = obj.load v1;
-        v18.enumtag(@layout_2) = enum.tag v17;
-        br_table v18 (1.enumtag(@layout_2) block6) (0.enumtag(@layout_2) block7);
+        v16.@layout_0 = obj.load v0;
+        v17.enumtag(@layout_0) = enum.tag v16;
+        br_table v17 (1.enumtag(@layout_0) block6) (0.enumtag(@layout_0) block7);
 
     block21:
         unreachable;
 
     block22:
-        enum.set_tag v1 #None;
+        enum.set_tag v0 #None;
         jump block20;
 
     block23:
-        enum.set_tag v1 #Some;
-        enum.assert_variant v11 #Some;
-        v15.objref<i256> = enum.proj v1 #Some 0.i256;
-        v16.i256 = enum.extract v11 #Some 0.i256;
-        obj.store v15 v16;
+        enum.set_tag v0 #Some;
+        enum.assert_variant v10 #Some;
+        v14.objref<i256> = enum.proj v0 #Some 0.i256;
+        v15.i256 = enum.extract v10 #Some 0.i256;
+        obj.store v14 v15;
         jump block20;
 
     block24:
-        v31.@layout_2 = obj.load v2;
-        v32.enumtag(@layout_2) = enum.tag v31;
-        br_table v32 (1.enumtag(@layout_2) block12) (0.enumtag(@layout_2) block13);
+        v29.@layout_0 = obj.load v1;
+        v30.enumtag(@layout_0) = enum.tag v29;
+        br_table v30 (1.enumtag(@layout_0) block12) (0.enumtag(@layout_0) block13);
 
     block25:
         unreachable;
 
     block26:
-        enum.set_tag v2 #None;
+        enum.set_tag v1 #None;
         jump block24;
 
     block27:
-        enum.set_tag v2 #Some;
-        enum.assert_variant v27 #Some;
-        v29.objref<i256> = enum.proj v2 #Some 0.i256;
-        v30.i256 = enum.extract v27 #Some 0.i256;
-        obj.store v29 v30;
+        enum.set_tag v1 #Some;
+        enum.assert_variant v25 #Some;
+        v27.objref<i256> = enum.proj v1 #Some 0.i256;
+        v28.i256 = enum.extract v25 #Some 0.i256;
+        obj.store v27 v28;
         jump block24;
 }
 

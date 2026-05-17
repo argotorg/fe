@@ -5,38 +5,35 @@ input_file: crates/codegen/tests/fixtures/code_region_qualified.fe
 ---
 target = "evm-ethereum-osaka"
 
-type @layout_0 = {};
-type @layout_1 = {@layout_0};
-
-func private %codecopy(v0.objref<@layout_1>, v1.i256, v2.i256, v3.i256) {
+func private %codecopy(v0.i256, v1.i256, v2.i256) {
     block0:
+        v3.*i256 = alloca i256;
         v4.*i256 = alloca i256;
         v5.*i256 = alloca i256;
-        v6.*i256 = alloca i256;
+        mstore v3 v0 i256;
         mstore v4 v1 i256;
         mstore v5 v2 i256;
-        mstore v6 v3 i256;
         jump block1;
 
     block1:
+        v6.i256 = mload v3 i256;
         v7.i256 = mload v4 i256;
         v8.i256 = mload v5 i256;
-        v9.i256 = mload v6 i256;
-        evm_code_copy v7 v8 v9;
+        evm_code_copy v6 v7 v8;
         return;
 }
 
-func private %init(v0.objref<@layout_1>) {
+func private %init() {
     block0:
         jump block1;
 
     block1:
-        v1.i256 = sym_size &__Foo_runtime;
-        v2.i256 = sym_addr &__Foo_runtime;
-        v3.*i8 = evm_malloc v1;
-        v4.i256 = ptr_to_int v3 i256;
-        call %codecopy v0 v4 v2 v1;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_cf61_0 v4 v1;
+        v0.i256 = sym_size &__Foo_runtime;
+        v1.i256 = sym_addr &__Foo_runtime;
+        v2.*i8 = evm_malloc v0;
+        v3.i256 = ptr_to_int v2 i256;
+        call %codecopy v3 v1 v0;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_cf61 v3 v0;
         unreachable;
 }
 
@@ -45,8 +42,7 @@ func private %manual_contract_init_root_Foo() {
         jump block1;
 
     block1:
-        v0.objref<@layout_1> = obj.alloc @layout_1;
-        call %init v0;
+        call %init;
         evm_stop;
 }
 
@@ -55,8 +51,7 @@ func private %manual_contract_runtime_root_Foo() {
         jump block1;
 
     block1:
-        v0.objref<@layout_1> = obj.alloc @layout_1;
-        call %runtime v0;
+        call %runtime;
         evm_stop;
 }
 
@@ -88,12 +83,12 @@ func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_cf61_0(v0
         evm_return v4 v5;
 }
 
-func private %runtime(v0.objref<@layout_1>) {
+func private %runtime() {
     block0:
         jump block1;
 
     block1:
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_cf61 0.i256 0.i256;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_cf61_0 0.i256 0.i256;
         unreachable;
 }
 

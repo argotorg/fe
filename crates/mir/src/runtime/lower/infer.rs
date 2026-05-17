@@ -30,7 +30,7 @@ use super::{
     classify::{
         AssignmentId, BodyEnv, BodyStaticFacts, InferClassCache, RuntimeBodyCx,
         actual_aggregate_class_from_runtime_source, carrier_value_class,
-        runtime_class_for_direct_value_provider_in_context,
+        provider_erases_runtime_root, runtime_class_for_direct_value_provider_in_context,
         runtime_class_for_effect_binding_provider_in_context, runtime_class_for_provider_binding,
     },
     conversion::RuntimeConversionPlanner,
@@ -231,6 +231,11 @@ pub(crate) fn seed_root_provider_carriers<'a, 'db>(
         if !matches!(carriers[idx], RuntimeCarrier::Erased) {
             continue;
         }
+        if local.facts.origin.root_provider().is_some_and(|provider| {
+            provider_erases_runtime_root(env.db(), provider, env.scope(), env.assumptions())
+        }) {
+            continue;
+        }
         let class = match (&local.facts.interface, &local.facts.origin) {
             (SemanticLocalKind::DirectValue, NLocalOrigin::RootProvider(provider)) => env
                 .actual_runtime_visible_root_provider_class(carriers, provider)
@@ -280,6 +285,9 @@ pub(crate) fn desired_runtime_value_carrier<'db>(
     scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
     assumptions: PredicateListId<'db>,
 ) -> RuntimeCarrier<'db> {
+    if runtime_class_has_zero_sized_payload(db, &class) {
+        return RuntimeCarrier::Erased;
+    }
     if matches!(
         (&local.facts.interface, &local.facts.origin),
         (
@@ -311,6 +319,27 @@ pub(crate) fn desired_runtime_value_carrier<'db>(
     }
 }
 
+fn runtime_class_has_zero_sized_payload<'db>(
+    db: &'db dyn MirDb,
+    class: &RuntimeClass<'db>,
+) -> bool {
+    match class {
+        RuntimeClass::Ref {
+            pointee,
+            kind:
+                RefKind::Provider {
+                    space: AddressSpaceKind::Memory,
+                    ..
+                },
+            ..
+        } => pointee.span_words(db) == 0,
+        RuntimeClass::Scalar(_)
+        | RuntimeClass::AggregateValue { .. }
+        | RuntimeClass::Ref { .. }
+        | RuntimeClass::RawAddr { .. } => class.span_words(db) == 0,
+    }
+}
+
 fn lower_semantic_locals<'db>(
     cx: RuntimeBodyCx<'_, '_, 'db>,
 ) -> (
@@ -325,6 +354,14 @@ fn lower_semantic_locals<'db>(
     let mut provider_bindings = Vec::new();
     for (idx, local) in body.locals.iter().enumerate() {
         let local_id = SLocalId::from_u32(idx as u32);
+        if local
+            .facts
+            .origin
+            .root_provider()
+            .is_some_and(|provider| provider_erases_runtime_root(db, provider, scope, assumptions))
+        {
+            continue;
+        }
         let binding = match (&local.facts.interface, &local.facts.origin) {
             (SemanticLocalKind::DirectValue, NLocalOrigin::RootProvider(provider)) => {
                 let (provider_local, provider_class) = cx
@@ -472,6 +509,11 @@ fn lower_semantic_locals<'db>(
         .enumerate()
         .map(|(idx, local)| match (&local.facts.interface, &local.facts.origin) {
             (SemanticLocalKind::Erased, _) => RuntimeLocalLowering::Erased,
+            (_, NLocalOrigin::RootProvider(provider))
+                if provider_erases_runtime_root(db, provider, scope, assumptions) =>
+            {
+                RuntimeLocalLowering::Erased
+            }
             (SemanticLocalKind::DirectValue, NLocalOrigin::RootProvider(provider)) => {
                 let provider = runtime_provider_binding_id(&provider_bindings, provider)
                     .unwrap_or_else(|| {
@@ -733,6 +775,9 @@ fn infer_runtime_local_root<'db>(
     let Some(place_class) = place_class else {
         return RuntimeLocalRoot::None;
     };
+    if runtime_class_has_zero_sized_payload(cx.env.db(), &place_class) {
+        return RuntimeLocalRoot::None;
+    }
     let Some(transport_class) = transport_class else {
         return RuntimeLocalRoot::Slot(place_class);
     };

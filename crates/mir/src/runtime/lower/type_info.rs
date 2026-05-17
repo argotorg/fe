@@ -328,6 +328,25 @@ pub(super) fn runtime_zero_sized_ty<'db>(
     false
 }
 
+pub(super) fn runtime_zero_sized_transport_ty<'db>(
+    db: &'db dyn MirDb,
+    ty: TyId<'db>,
+    scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
+    assumptions: PredicateListId<'db>,
+) -> bool {
+    let interface_ty = runtime_interface_ty_in_context(db, ty, scope, assumptions);
+    if runtime_zero_sized_ty(db, interface_ty, scope, assumptions) {
+        return true;
+    }
+    if let Some((_, inner)) = interface_ty.as_borrow(db) {
+        return runtime_zero_sized_transport_ty(db, inner, scope, assumptions);
+    }
+    if let Some((_, inner)) = interface_ty.as_capability(db) {
+        return runtime_zero_sized_transport_ty(db, inner, scope, assumptions);
+    }
+    false
+}
+
 pub(crate) fn top_level_class_for_ty_in_env<'db>(
     db: &'db dyn MirDb,
     env: RuntimeTypeEnv<'db>,

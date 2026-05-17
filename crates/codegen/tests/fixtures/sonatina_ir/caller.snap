@@ -6,8 +6,6 @@ input_file: crates/codegen/tests/fixtures/caller.fe
 target = "evm-ethereum-osaka"
 
 type @layout_0 = {i256};
-type @layout_1 = {};
-type @layout_2 = {@layout_1};
 
 func private %std__lib__evm__effects__impl_trait_Evm_a1e8__caller_5fc5() -> @layout_0 {
     block0:
@@ -35,13 +33,13 @@ func private %std__lib__evm__effects__impl_trait_Evm_a1e8__caller_5fc5_0() -> @l
         return v4;
 }
 
-func private %main(v0.objref<@layout_2>) -> @layout_0 {
+func private %main() -> @layout_0 {
     block0:
         jump block1;
 
     block1:
-        v2.@layout_0 = call %standalone_caller__caller__who_called__gcd5c_8e9e v0;
-        return v2;
+        v0.@layout_0 = call %standalone_caller__caller__who_called__gcd5c_8b85;
+        return v0;
 }
 
 func private %main_root() {
@@ -49,27 +47,26 @@ func private %main_root() {
         jump block1;
 
     block1:
-        v0.objref<@layout_2> = obj.alloc @layout_2;
-        v1.@layout_0 = call %main v0;
+        v0.@layout_0 = call %main;
         evm_stop;
 }
 
-func private %standalone_caller__caller__who_called__gcd5c_8e9e(v0.objref<@layout_2>) -> @layout_0 {
+func private %standalone_caller__caller__who_called__gcd5c_4c8a() -> @layout_0 {
     block0:
         jump block1;
 
     block1:
-        v1.@layout_0 = call %std__lib__evm__effects__impl_trait_Evm_a1e8__caller_5fc5;
-        return v1;
+        v0.@layout_0 = call %std__lib__evm__effects__impl_trait_Evm_a1e8__caller_5fc5;
+        return v0;
 }
 
-func private %standalone_caller__caller__who_called__gcd5c_b6e7(v0.objref<@layout_2>) -> @layout_0 {
+func private %standalone_caller__caller__who_called__gcd5c_8b85() -> @layout_0 {
     block0:
         jump block1;
 
     block1:
-        v1.@layout_0 = call %std__lib__evm__effects__impl_trait_Evm_a1e8__caller_5fc5_0;
-        return v1;
+        v0.@layout_0 = call %std__lib__evm__effects__impl_trait_Evm_a1e8__caller_5fc5_0;
+        return v0;
 }
 
 

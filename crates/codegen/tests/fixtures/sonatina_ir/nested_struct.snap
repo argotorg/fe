@@ -5,23 +5,21 @@ input_file: crates/codegen/tests/fixtures/nested_struct.fe
 ---
 target = "evm-ethereum-osaka"
 
-type @layout_0 = {};
+type @layout_0 = {i256};
 type @layout_1 = {@layout_0};
-type @layout_2 = {i256};
-type @layout_3 = {@layout_2};
 
-global private const @layout_2 $const_region_0 = {0};
-global private const @layout_3 $const_region_1 = {{0}};
+global private const @layout_0 $const_region_0 = {0};
+global private const @layout_1 $const_region_1 = {{0}};
 
-func private %abi_encode(v0.i256, v1.objref<@layout_1>) {
+func private %abi_encode(v0.i256) {
     block0:
-        v2.*i256 = alloca i256;
-        mstore v2 v0 i256;
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
         jump block1;
 
     block1:
-        v5.i256 = mload v2 i256;
-        call %mstore v1 0.i256 v5;
+        v3.i256 = mload v1 i256;
+        call %mstore 0.i256 v3;
         call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_8d10 0.i256 32.i256;
         unreachable;
 }
@@ -38,21 +36,21 @@ func private %calldataload(v0.i256) -> i256 {
         return v3;
 }
 
-func private %codecopy(v0.objref<@layout_1>, v1.i256, v2.i256, v3.i256) {
+func private %codecopy(v0.i256, v1.i256, v2.i256) {
     block0:
+        v3.*i256 = alloca i256;
         v4.*i256 = alloca i256;
         v5.*i256 = alloca i256;
-        v6.*i256 = alloca i256;
+        mstore v3 v0 i256;
         mstore v4 v1 i256;
         mstore v5 v2 i256;
-        mstore v6 v3 i256;
         jump block1;
 
     block1:
+        v6.i256 = mload v3 i256;
         v7.i256 = mload v4 i256;
         v8.i256 = mload v5 i256;
-        v9.i256 = mload v6 i256;
-        evm_code_copy v7 v8 v9;
+        evm_code_copy v6 v7 v8;
         return;
 }
 
@@ -67,17 +65,17 @@ func private %from_raw(v0.i256) -> i256 {
         return v2;
 }
 
-func private %init(v0.objref<@layout_1>) {
+func private %init() {
     block0:
         jump block1;
 
     block1:
-        v1.i256 = sym_size &__NestedStruct_runtime;
-        v2.i256 = sym_addr &__NestedStruct_runtime;
-        v3.*i8 = evm_malloc v1;
-        v4.i256 = ptr_to_int v3 i256;
-        call %codecopy v0 v4 v2 v1;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_7adf v4 v1;
+        v0.i256 = sym_size &__NestedStruct_runtime;
+        v1.i256 = sym_addr &__NestedStruct_runtime;
+        v2.*i8 = evm_malloc v0;
+        v3.i256 = ptr_to_int v2 i256;
+        call %codecopy v3 v1 v0;
+        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_7adf v3 v0;
         unreachable;
 }
 
@@ -86,8 +84,7 @@ func private %manual_contract_init_root_NestedStruct() {
         jump block1;
 
     block1:
-        v0.objref<@layout_1> = obj.alloc @layout_1;
-        call %init v0;
+        call %init;
         evm_stop;
 }
 
@@ -96,8 +93,7 @@ func private %manual_contract_runtime_root_NestedStruct() {
         jump block1;
 
     block1:
-        v0.objref<@layout_1> = obj.alloc @layout_1;
-        call %runtime v0;
+        call %runtime;
         evm_stop;
 }
 
@@ -108,39 +104,39 @@ func private %mem_read(v0.i256) -> i256 {
         jump block1;
 
     block1:
-        v3.constref<@layout_2> = const.ref $const_region_0;
-        v4.constref<@layout_3> = const.ref $const_region_1;
-        v5.objref<@layout_2> = obj.alloc @layout_2;
+        v3.constref<@layout_0> = const.ref $const_region_0;
+        v4.constref<@layout_1> = const.ref $const_region_1;
+        v5.objref<@layout_0> = obj.alloc @layout_0;
         v6.objref<i256> = obj.proj v5 0.i256;
         obj.store v6 0.i256;
-        v7.@layout_2 = obj.load v5;
-        v8.objref<@layout_3> = obj.alloc @layout_3;
-        v9.objref<@layout_2> = obj.proj v8 0.i256;
+        v7.@layout_0 = obj.load v5;
+        v8.objref<@layout_1> = obj.alloc @layout_1;
+        v9.objref<@layout_0> = obj.proj v8 0.i256;
         v10.objref<i256> = obj.proj v9 0.i256;
         v11.i256 = extract_value v7 0.i256;
         obj.store v10 v11;
         v12.i256 = mload v1 i256;
-        v13.objref<@layout_2> = obj.proj v8 0.i256;
+        v13.objref<@layout_0> = obj.proj v8 0.i256;
         v14.objref<i256> = obj.proj v13 0.i256;
         obj.store v14 v12;
-        v15.objref<@layout_2> = obj.proj v8 0.i256;
+        v15.objref<@layout_0> = obj.proj v8 0.i256;
         v16.objref<i256> = obj.proj v15 0.i256;
         v17.i256 = obj.load v16;
         return v17;
 }
 
-func private %mstore(v0.objref<@layout_1>, v1.i256, v2.i256) {
+func private %mstore(v0.i256, v1.i256) {
     block0:
+        v2.*i256 = alloca i256;
         v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
+        mstore v2 v0 i256;
         mstore v3 v1 i256;
-        mstore v4 v2 i256;
         jump block1;
 
     block1:
+        v4.i256 = mload v2 i256;
         v5.i256 = mload v3 i256;
-        v6.i256 = mload v4 i256;
-        mstore v5 v6 i256;
+        mstore v4 v5 i256;
         return;
 }
 
@@ -195,32 +191,32 @@ func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_8d10(v0.i
         evm_return v4 v5;
 }
 
-func private %runtime(v0.objref<@layout_1>) {
+func private %runtime() {
     block0:
         jump block1;
 
     block1:
-        v2.i256 = call %stor_ptr 0.i256;
-        v3.i256 = call %calldataload 0.i256;
-        v5.i256 = shr 224.i256 v3;
-        v7.i1 = eq v5 3091856072.i256;
-        br v7 block2 block6;
+        v1.i256 = call %stor_ptr 0.i256;
+        v2.i256 = call %calldataload 0.i256;
+        v4.i256 = shr 224.i256 v2;
+        v6.i1 = eq v4 3091856072.i256;
+        br v6 block2 block6;
 
     block2:
-        v9.i256 = call %calldataload 4.i256;
-        call %write_inner v9 v2;
-        call %abi_encode v9 v0;
+        v8.i256 = call %calldataload 4.i256;
+        call %write_inner v8 v1;
+        call %abi_encode v8;
         unreachable;
 
     block3:
-        v14.i256 = call %read_inner v2;
-        call %abi_encode v14 v0;
+        v12.i256 = call %read_inner v1;
+        call %abi_encode v12;
         unreachable;
 
     block4:
-        v16.i256 = call %calldataload 4.i256;
-        v17.i256 = call %mem_read v16;
-        call %abi_encode v17 v0;
+        v13.i256 = call %calldataload 4.i256;
+        v14.i256 = call %mem_read v13;
+        call %abi_encode v14;
         unreachable;
 
     block5:
@@ -228,12 +224,12 @@ func private %runtime(v0.objref<@layout_1>) {
         unreachable;
 
     block6:
-        v21.i1 = eq v5 3513050253.i256;
-        br v21 block3 block7;
+        v17.i1 = eq v4 3513050253.i256;
+        br v17 block3 block7;
 
     block7:
-        v24.i1 = eq v5 2154770637.i256;
-        br v24 block4 block8;
+        v20.i1 = eq v4 2154770637.i256;
+        br v20 block4 block8;
 
     block8:
         jump block5;

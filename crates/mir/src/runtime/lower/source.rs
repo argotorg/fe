@@ -14,7 +14,7 @@ use hir::projection::{IndexSource, Projection};
 use crate::runtime::{RuntimeCarrier, RuntimeClass, RuntimeLocalRoot};
 
 use super::classify::{
-    BodyEnv, carrier_value_class, nonself_backing_value_place,
+    BodyEnv, carrier_value_class, nonself_backing_value_place, provider_erases_runtime_root,
     runtime_class_for_direct_value_provider_in_context,
     runtime_class_for_effect_binding_provider_in_context, snapshot_source_place,
 };
@@ -112,6 +112,14 @@ impl<'a, 'carriers, 'roots, 'db> RuntimeSourceQuery<'a, 'carriers, 'roots, 'db> 
         &self,
         provider: &hir::semantic::ProviderBinding<'db>,
     ) -> bool {
+        if provider_erases_runtime_root(
+            self.env.db(),
+            provider,
+            self.env.scope(),
+            self.env.assumptions(),
+        ) {
+            return false;
+        }
         self.env
             .actual_runtime_visible_root_provider_class(self.carriers, provider)
             .is_some()
