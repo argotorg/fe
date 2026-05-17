@@ -1,4 +1,5 @@
 mod canonicalize;
+pub(crate) mod derive_eval;
 mod machine;
 
 pub(crate) use canonicalize::canonicalize_provisional_semantic_consts_from_body;

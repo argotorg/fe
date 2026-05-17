@@ -275,6 +275,14 @@ enum CtfeConstKind<'db> {
         variant: VariantIndex,
         fields: Rc<[CtfeConstValue<'db>]>,
     },
+    /// A compile-time name value (IdentId). Produced by reflect.field_name().
+    #[allow(dead_code)]
+    Name(crate::hir_def::IdentId<'db>),
+    /// A symbolic runtime expression already emitted to the BodyBuilder.
+    /// Used during derive strategy evaluation — the ExprId points into the
+    /// generated impl's body being constructed.
+    #[allow(dead_code)]
+    Symbolic(crate::hir_def::ExprId),
 }
 
 #[derive(Clone)]
@@ -546,6 +554,9 @@ impl<'db> CtfeConstValue<'db> {
                     .collect::<Vec<_>>()
                     .into_boxed_slice(),
             ),
+            CtfeConstKind::Name(_) | CtfeConstKind::Symbolic(_) => {
+                panic!("cannot materialize Name/Symbolic values outside derive evaluation")
+            }
         }
     }
 
@@ -560,6 +571,7 @@ impl<'db> CtfeConstValue<'db> {
             | CtfeConstKind::Struct { ty, .. }
             | CtfeConstKind::Array { ty, .. }
             | CtfeConstKind::Enum { ty, .. } => *ty,
+            CtfeConstKind::Name(_) | CtfeConstKind::Symbolic(_) => TyId::unit(db),
         }
     }
 
@@ -575,7 +587,9 @@ impl<'db> CtfeConstValue<'db> {
             | CtfeConstKind::Tuple { .. }
             | CtfeConstKind::Struct { .. }
             | CtfeConstKind::Array { .. }
-            | CtfeConstKind::Enum { .. } => false,
+            | CtfeConstKind::Enum { .. }
+            | CtfeConstKind::Name(_)
+            | CtfeConstKind::Symbolic(_) => false,
         }
     }
 
@@ -591,7 +605,9 @@ impl<'db> CtfeConstValue<'db> {
             CtfeConstKind::Unit
             | CtfeConstKind::Bool(_)
             | CtfeConstKind::Int { .. }
-            | CtfeConstKind::Bytes { .. } => false,
+            | CtfeConstKind::Bytes { .. }
+            | CtfeConstKind::Name(_)
+            | CtfeConstKind::Symbolic(_) => false,
         }
     }
 }
@@ -1313,6 +1329,7 @@ impl<'db> CtfeMachine<'db> {
                     }),
                 }
             }
+            SExpr::DynField { .. } => Err(CtfeError::NotConstEvaluable { origin }),
             SExpr::CodeRegionOffset { .. } | SExpr::CodeRegionLen { .. } => {
                 Err(CtfeError::NotConstEvaluable { origin })
             }
@@ -3227,9 +3244,11 @@ impl<'db> CtfeMachine<'db> {
                 out[offset..].copy_from_slice(&bytes);
                 Ok(out)
             }
-            CtfeConstKind::Unit | CtfeConstKind::Interned(_) | CtfeConstKind::Enum { .. } => {
-                Err(CtfeError::NotConstEvaluable { origin })
-            }
+            CtfeConstKind::Unit
+            | CtfeConstKind::Interned(_)
+            | CtfeConstKind::Enum { .. }
+            | CtfeConstKind::Name(_)
+            | CtfeConstKind::Symbolic(_) => Err(CtfeError::NotConstEvaluable { origin }),
         }
     }
 }

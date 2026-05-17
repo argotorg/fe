@@ -377,9 +377,15 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
         top_mod: TopLevelMod<'db>,
     ) -> Vec<Box<dyn DiagnosticVoucher + 'db>> {
         // Check function and const bodies; contract-specific analysis is handled separately.
+        // Skip #[derive_strategy] functions — they're evaluated by CTFE, not type-checked.
         let mut diags: Vec<Box<dyn DiagnosticVoucher + 'db>> = top_mod
             .all_funcs(db)
             .iter()
+            .filter(|func| {
+                !ItemKind::Func(**func)
+                    .attrs(db)
+                    .is_some_and(|a| a.has_attr(db, "derive_strategy"))
+            })
             .flat_map(|func| &ty_check::check_func_body(db, *func).0)
             .map(|diag| diag.to_voucher())
             .collect();

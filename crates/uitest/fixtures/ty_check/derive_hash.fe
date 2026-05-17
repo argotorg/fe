@@ -1,0 +1,5 @@
+#[derive(Hash)]
+struct Token {
+    id: u256,
+    amount: u256,
+}

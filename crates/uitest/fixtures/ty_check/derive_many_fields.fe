@@ -1,0 +1,16 @@
+#[derive(Eq, Default)]
+struct ManyFields {
+    a: u256,
+    b: u256,
+    c: u256,
+    d: u256,
+    e: u256,
+}
+
+fn test_eq(x: ManyFields, y: ManyFields) -> bool {
+    x.eq(y)
+}
+
+fn test_default() -> ManyFields {
+    ManyFields::default()
+}

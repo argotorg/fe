@@ -21,6 +21,7 @@ use crate::{
     span::HirOrigin,
 };
 pub use arithmetic::{ArithmeticAttrError, ArithmeticAttrErrorKind};
+pub use derive::{DeriveError, DeriveErrorKind};
 pub use error::{ErrorDiagnostic, ErrorDiagnosticKind};
 pub use event::{EventError, EventErrorKind};
 pub use item::{InlineAttrError, SelectorError, SelectorErrorKind};
@@ -34,6 +35,7 @@ mod arithmetic;
 mod attr;
 mod body;
 mod contract;
+pub(crate) mod derive;
 mod error;
 mod event;
 mod expr;

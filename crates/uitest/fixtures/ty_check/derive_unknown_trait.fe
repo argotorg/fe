@@ -1,0 +1,5 @@
+#[derive(Eq, Serialize)]
+struct Point {
+    x: u256,
+    y: u256,
+}

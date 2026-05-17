@@ -1,7 +1,19 @@
 use super::abi::{Bytes, DynArray, DynString}
+use super::reflect::Reflect
+use super::builder::Builder
 
 pub trait Default {
     fn default() -> Self
+}
+
+#[derive_strategy]
+const fn __derive_default<T>() -> T
+    uses (reflect: Reflect<T>, builder: Builder<T>)
+{
+    for i in 0..reflect.field_count() {
+        builder.set_field(i, Default::default())
+    }
+    builder.finish()
 }
 
 impl Default for () {

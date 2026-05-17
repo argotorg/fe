@@ -1,6 +1,7 @@
 use common::InputDb;
 use dir_test::{Fixture, dir_test};
 use driver::DriverDataBase;
+use hir::analysis::HirAnalysisDb;
 use test_utils::snap_test;
 
 #[cfg(target_arch = "wasm32")]
@@ -14,6 +15,7 @@ use url::Url;
 )]
 fn run_ty_check(fixture: Fixture<&str>) {
     let mut db = DriverDataBase::default();
+    HirAnalysisDb::zalsa_register_downcaster(&db);
     let file = db.workspace().touch(
         &mut db,
         Url::from_file_path(fixture.path()).expect("path should be absolute"),
@@ -44,6 +46,7 @@ mod wasm {
     )]
     fn run_ty_check(fixture: Fixture<&str>) {
         let mut db = DriverDataBase::default();
+        HirAnalysisDb::zalsa_register_downcaster(&db);
         let file = db.workspace().touch(
             &mut db,
             <Url as UrlExt>::from_file_path_lossy(fixture.path()),

@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/derive_unknown_trait.fe
+---
+error[17-0003]: unknown derive trait `Serialize`
+  ┌─ derive_unknown_trait.fe:1:1
+  │
+1 │ #[derive(Eq, Serialize)]
+  │ ^^^^^^^^^^^^^^^^^^^^^^^^ `Serialize` is not a recognized derive trait
+  │
+  = recognized traits: Eq, Default, Abi, Hash, Ord, Copy, Event, Error

@@ -101,7 +101,8 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     }
                 }
             }
-            SExpr::CodeRegionRef { .. }
+            SExpr::DynField { .. }
+            | SExpr::CodeRegionRef { .. }
             | SExpr::Const(_)
             | SExpr::Unary { .. }
             | SExpr::Binary { .. }
@@ -146,6 +147,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             | SExpr::Binary { .. }
             | SExpr::Cast { .. }
             | SExpr::EnumMake { .. }
+            | SExpr::DynField { .. }
             | SExpr::GetEnumTag { .. }
             | SExpr::IsEnumVariant { .. }
             | SExpr::CodeRegionOffset { .. }

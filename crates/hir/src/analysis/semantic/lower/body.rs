@@ -582,6 +582,18 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             }
             Expr::Match(scrutinee, arms) => self.lower_match_expr(expr, *scrutinee, arms),
             Expr::With(bindings, body) => self.lower_with_expr(bindings, *body),
+            Expr::DynField(receiver, field_expr) => {
+                let base = self.lower_expr_operand(*receiver);
+                let field_expr_op = self.lower_expr_operand(*field_expr);
+                self.emit_expr_with_origin(
+                    origin,
+                    ty,
+                    SExpr::DynField {
+                        base,
+                        field_expr: field_expr_op,
+                    },
+                )
+            }
         }
     }
 

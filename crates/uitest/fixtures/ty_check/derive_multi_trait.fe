@@ -1,0 +1,17 @@
+#[derive(Eq, Default, Ord)]
+struct Pair {
+    x: u256,
+    y: u256,
+}
+
+fn test_eq(a: Pair, b: Pair) -> bool {
+    a.eq(b)
+}
+
+fn test_default() -> Pair {
+    Pair::default()
+}
+
+fn test_lt(a: Pair, b: Pair) -> bool {
+    a.lt(b)
+}
