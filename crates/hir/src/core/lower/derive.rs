@@ -7,7 +7,7 @@ use super::{
     hir_builder::HirBuilder,
 };
 use crate::{
-    analysis::semantic::ctfe::derive_eval::{CodegenSink, eval_derive_strategy_into},
+    analysis::semantic::ctfe::derive_eval::CodegenSink,
     hir_def::{
         AttrListId, BinOp, CompBinOp, Cond, Expr, ExprId, FieldDef, FieldDefListId, FuncModifiers,
         FuncParam, FuncParamMode, FuncParamName, GenericParamListId, IdentId, Partial, PathId,
@@ -385,7 +385,19 @@ fn generate_ord_impl<'db>(
             lt_params,
             ret_ty,
             FuncModifiers::new(Visibility::Private, false, false, false),
-            |body| eval_derive_strategy_into(&field_names, "Ord", body),
+            |body| {
+                let ord_strategy = find_strategy_func(body.db(), ingot, "__derive_ord")
+                    .expect("__derive_ord not found");
+                assert!(
+                    crate::analysis::semantic::ctfe::derive_eval::eval_strategy_from_hir(
+                        body.db(),
+                        ord_strategy,
+                        &field_names,
+                        body,
+                    ),
+                    "CTFE derive_ord evaluation failed",
+                );
+            },
         );
 
         let le_name = builder.ident("le");

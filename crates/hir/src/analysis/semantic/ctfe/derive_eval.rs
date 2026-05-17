@@ -41,9 +41,9 @@ pub(crate) fn eval_strategy_from_hir<'db>(
     interp.eval_body()
 }
 
-/// Fallback: pattern-based evaluator (same output, hardcoded per trait).
-#[allow(dead_code)]
-pub(crate) fn eval_derive_strategy_into<'db>(
+/// Test-only dispatch: validates CodegenSink output shape for each trait.
+#[cfg(test)]
+fn eval_derive_strategy_into<'db>(
     field_names: &[IdentId<'db>],
     trait_name: &str,
     sink: &mut dyn CodegenSink<'db>,
@@ -484,6 +484,7 @@ impl<'a, 'db> HirStrategyInterp<'a, 'db> {
 
 /// Interprets __derive_eq pattern:
 /// for each field: if self.field != other.field { return false }
+#[cfg(test)]
 /// return true
 fn eval_eq_strategy<'db>(field_names: &[IdentId<'db>], sink: &mut dyn CodegenSink<'db>) {
     let db = sink.db();
@@ -527,6 +528,7 @@ fn eval_eq_strategy<'db>(field_names: &[IdentId<'db>], sink: &mut dyn CodegenSin
 }
 
 /// Interprets __derive_default pattern:
+#[cfg(test)]
 /// Self { field0: Default::default(), field1: Default::default(), ... }
 fn eval_default_strategy<'db>(field_names: &[IdentId<'db>], sink: &mut dyn CodegenSink<'db>) {
     let db = sink.db();
@@ -553,6 +555,7 @@ fn eval_default_strategy<'db>(field_names: &[IdentId<'db>], sink: &mut dyn Codeg
 /// Interprets __derive_ord with Compare capability:
 /// The Fe strategy calls `cmp.less_than(self.field, other.field)`.
 /// The evaluator translates Compare.less_than to the `<` operator
+#[cfg(test)]
 /// on concrete field types (which resolves via Ord trait impls).
 fn eval_ord_strategy<'db>(field_names: &[IdentId<'db>], sink: &mut dyn CodegenSink<'db>) {
     let db = sink.db();
@@ -598,6 +601,7 @@ fn eval_ord_strategy<'db>(field_names: &[IdentId<'db>], sink: &mut dyn CodegenSi
 /// The Fe strategy calls `hasher.feed(self_val.{field})` for each field.
 /// The evaluator translates this to `self.field.hash()` calls on concrete
 /// field types (which resolves fine since fields have concrete Hash impls).
+#[cfg(test)]
 /// Result: ((0 * 31 + field0.hash()) * 31 + field1.hash()) ...
 fn eval_hash_strategy<'db>(field_names: &[IdentId<'db>], sink: &mut dyn CodegenSink<'db>) {
     let db = sink.db();
