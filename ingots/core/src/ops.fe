@@ -172,8 +172,11 @@ const fn __derive_ord<T>(self_val: T, other: T) -> bool
     uses (reflect: Reflect<T>, cmp: Compare<T>)
 {
     for i in 0..reflect.field_count() {
-        if cmp.less_than(self_val.{reflect.field_name(i)}, other.{reflect.field_name(i)}) {
+        if self_val.{reflect.field_name(i)} < other.{reflect.field_name(i)} {
             return true
+        }
+        if self_val.{reflect.field_name(i)} > other.{reflect.field_name(i)} {
+            return false
         }
     }
     false
