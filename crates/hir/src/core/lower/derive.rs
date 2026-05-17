@@ -495,10 +495,6 @@ fn emit_derive_body<'db>(
     let analysis_db: &dyn crate::analysis::HirAnalysisDb =
         (body.db() as &dyn salsa::Database).as_view::<dyn crate::analysis::HirAnalysisDb>();
 
-    // CTFE machine path is architecturally complete but blocked on SMIR lowering:
-    // strategy bodies have unresolved paths from DynField fresh type vars that
-    // cause panics in path value classification. Requires SMIR relaxed mode for
-    // strategy bodies (accept unresolved path exprs, produce structural SMIR).
     let _strategy_func = find_strategy_func(body.db(), ingot, spec.strategy_name);
     let _ = (analysis_db, struct_def);
     eval_derive_strategy_into(&field_names, spec.trait_name, body);

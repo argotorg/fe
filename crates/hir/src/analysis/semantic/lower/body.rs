@@ -734,16 +734,33 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     )
                 }
             }
-            None => panic!(
-                "typed path expression is missing semantic value-path classification: owner={:?} expr={expr:?} data={:?} ty={} ty_data={:?} binding={:?} const_ref={:?} code_region_ref={:?}",
-                self.template_owner,
-                self.body.exprs(self.db)[expr],
-                self.expr_ty(expr).pretty_print(self.db),
-                self.expr_ty(expr).data(self.db),
-                self.typed_body.expr_binding(expr),
-                self.typed_body.expr_const_ref(expr),
-                self.typed_body.expr_code_region_ref(self.db, expr),
-            ),
+            None => {
+                // Unresolved path in strategy body — check if it's a local binding
+                let expr_ty = self.expr_ty(expr);
+                if let Some(binding) = self.typed_body.expr_binding(expr) {
+                    if let Some(&local) = self.binding_locals.get(&binding) {
+                        return self.emit_expr(
+                            expr_ty,
+                            SExpr::ReadPlace {
+                                place: SPlace {
+                                    local,
+                                    path: Default::default(),
+                                },
+                            },
+                        );
+                    }
+                }
+                panic!(
+                    "typed path expression is missing semantic value-path classification: owner={:?} expr={expr:?} data={:?} ty={} ty_data={:?} binding={:?} const_ref={:?} code_region_ref={:?}",
+                    self.template_owner,
+                    self.body.exprs(self.db)[expr],
+                    self.expr_ty(expr).pretty_print(self.db),
+                    self.expr_ty(expr).data(self.db),
+                    self.typed_body.expr_binding(expr),
+                    self.typed_body.expr_const_ref(expr),
+                    self.typed_body.expr_code_region_ref(self.db, expr),
+                )
+            }
         }
     }
 
