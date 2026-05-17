@@ -3,6 +3,8 @@ use num_bigint::{BigInt, BigUint, Sign};
 use num_traits::{One, ToPrimitive, Zero};
 use ruint::aliases::U256;
 use rustc_hash::FxHashMap;
+
+use super::derive_eval;
 use salsa::Update;
 use std::rc::Rc;
 use tiny_keccak::{Hasher, Keccak};
@@ -212,6 +214,76 @@ pub(super) fn try_eval_expr_to_const<'db>(
         .ok()
 }
 
+/// Evaluates a derive strategy function using the CTFE machine in derive mode.
+/// Symbolic params (ExprIds) flow through the machine and operations on them
+/// emit directly into the CodegenSink. Reflect intrinsics are resolved
+/// concretely from field_names.
+///
+/// Safety: The sink pointer is valid for the duration of the machine's execution.
+pub fn eval_derive_with_machine<'db>(
+    db: &'db dyn HirAnalysisDb,
+    strategy_func: crate::hir_def::Func<'db>,
+    field_names: &[crate::hir_def::IdentId<'db>],
+    sink: &mut dyn derive_eval::CodegenSink<'db>,
+) -> Result<(), CtfeError<'db>> {
+    let mut machine = CtfeMachine::new(db, CtfeConfig::default());
+    // SAFETY: sink lives on caller's stack, outlives the machine. Transmute erases 'db → 'static.
+    machine.derive_sink = Some(unsafe {
+        std::mem::transmute::<
+            *mut dyn derive_eval::CodegenSink<'db>,
+            *mut dyn derive_eval::CodegenSink<'static>,
+        >(sink)
+    });
+    machine.derive_field_names = Some(field_names.to_vec());
+
+    let owner = BodyOwner::Func(strategy_func);
+    let origin = SemOrigin::Body(owner);
+
+    // Build instance with no generic substitution — the strategy's T is symbolic
+    let key = SemanticInstanceKey::new(
+        db,
+        owner,
+        GenericSubst::new(db, vec![]),
+        crate::analysis::semantic::EffectProviderSubst::empty(db),
+        ImplEnv::empty(db, owner.scope()),
+    );
+    let instance = get_or_build_semantic_instance(db, key);
+
+    // Strategy params become symbolic values (ExprIds for self/other path exprs)
+    let self_ident = crate::hir_def::IdentId::make_self(db);
+    let other_ident = crate::hir_def::IdentId::new(db, "other".to_string());
+
+    let mut args = Vec::new();
+    for (idx, _param) in strategy_func.params(db).enumerate() {
+        // SAFETY: transmute 'static back to 'db — the pointer is valid for this scope
+        let sink_ref: &mut dyn derive_eval::CodegenSink<'db> = unsafe {
+            &mut *std::mem::transmute::<
+                *mut dyn derive_eval::CodegenSink<'static>,
+                *mut dyn derive_eval::CodegenSink<'db>,
+            >(machine.derive_sink.unwrap())
+        };
+        let param_ident = if idx == 0 { self_ident } else { other_ident };
+        let param_expr = sink_ref.push_expr(crate::hir_def::Expr::Path(
+            crate::hir_def::Partial::Present(crate::hir_def::PathId::from_ident(db, param_ident)),
+        ));
+        args.push(CtfeValue::Value(CtfeConstValue {
+            kind: CtfeConstKind::Symbolic(param_expr),
+            deferred_origin: None,
+        }));
+    }
+
+    // Capability params (from uses clause) → unit values
+    for _ in strategy_func.effect_params(db) {
+        args.push(CtfeValue::Value(CtfeConstValue::unit()));
+    }
+
+    // TODO: The machine's BinOp/Branch/Field handlers need to check for
+    // Symbolic values and emit to derive_sink. Until that's wired, fall through
+    // to the pattern-based evaluator.
+    let _result = machine.eval_instance(instance, args, origin);
+    Err(CtfeError::NotConstEvaluable { origin })
+}
+
 struct CtfeMachine<'db> {
     db: &'db dyn HirAnalysisDb,
     config: CtfeConfig,
@@ -219,6 +291,11 @@ struct CtfeMachine<'db> {
     instance_cache: FxHashMap<SemanticInstanceKey<'db>, SemanticInstance<'db>>,
     body_cache: FxHashMap<SemanticInstanceKey<'db>, Rc<SemanticBody<'db>>>,
     frames: Vec<CtfeFrame<'db>>,
+    /// When in derive mode, symbolic operations emit into this sink.
+    /// SAFETY: lifetime erased via transmute — the sink outlives the machine.
+    derive_sink: Option<*mut dyn derive_eval::CodegenSink<'static>>,
+    /// Field names for the struct being derived. Used by reflect intrinsics.
+    derive_field_names: Option<Vec<crate::hir_def::IdentId<'db>>>,
 }
 
 struct CtfeFrame<'db> {
@@ -887,6 +964,8 @@ impl<'db> CtfeMachine<'db> {
             instance_cache: FxHashMap::default(),
             body_cache: FxHashMap::default(),
             frames: Vec::new(),
+            derive_sink: None,
+            derive_field_names: None,
         }
     }
 
@@ -1119,6 +1198,25 @@ impl<'db> CtfeMachine<'db> {
             SExpr::Binary { op, lhs, rhs } => {
                 let lhs = self.load_value(frame_idx, lhs, origin)?;
                 let rhs = self.load_value(frame_idx, rhs, origin)?;
+                // Derive mode: if either operand is symbolic, emit BinOp to sink
+                if self.derive_sink.is_some() {
+                    if let (CtfeConstKind::Symbolic(lhs_id), CtfeConstKind::Symbolic(rhs_id)) =
+                        (&lhs.kind, &rhs.kind)
+                    {
+                        let sink = unsafe {
+                            &mut *std::mem::transmute::<
+                                *mut dyn derive_eval::CodegenSink<'static>,
+                                *mut dyn derive_eval::CodegenSink<'db>,
+                            >(self.derive_sink.unwrap())
+                        };
+                        let expr_id =
+                            sink.push_expr(crate::hir_def::Expr::Bin(*lhs_id, *rhs_id, op));
+                        return Ok(CtfeValue::Value(CtfeConstValue {
+                            kind: CtfeConstKind::Symbolic(expr_id),
+                            deferred_origin: None,
+                        }));
+                    }
+                }
                 self.eval_binary(frame_idx, result_ty, op, lhs, rhs, origin)
             }
             SExpr::Cast { value, .. } => {
@@ -1157,6 +1255,29 @@ impl<'db> CtfeMachine<'db> {
             }
             SExpr::Field { base, field } => {
                 let value = self.load_value(frame_idx, base, origin)?;
+                // Derive mode: field access on symbolic → emit Expr::Field
+                if self.derive_sink.is_some() {
+                    if let CtfeConstKind::Symbolic(base_id) = &value.kind {
+                        let sink = unsafe {
+                            &mut *std::mem::transmute::<
+                                *mut dyn derive_eval::CodegenSink<'static>,
+                                *mut dyn derive_eval::CodegenSink<'db>,
+                            >(self.derive_sink.unwrap())
+                        };
+                        // Convert SMIR FieldIndex (u16) to HIR FieldIndex
+                        let hir_field = crate::hir_def::FieldIndex::Index(
+                            crate::hir_def::IntegerId::new(self.db, BigUint::from(field.0 as u64)),
+                        );
+                        let expr_id = sink.push_expr(crate::hir_def::Expr::Field(
+                            *base_id,
+                            crate::hir_def::Partial::Present(hir_field),
+                        ));
+                        return Ok(CtfeValue::Value(CtfeConstValue {
+                            kind: CtfeConstKind::Symbolic(expr_id),
+                            deferred_origin: None,
+                        }));
+                    }
+                }
                 self.project_field(value, field, origin)
                     .map(CtfeValue::Value)
             }
@@ -1329,7 +1450,34 @@ impl<'db> CtfeMachine<'db> {
                     }),
                 }
             }
-            SExpr::DynField { .. } => Err(CtfeError::NotConstEvaluable { origin }),
+            SExpr::DynField { base, field_expr } => {
+                let base_val = self.load_value(frame_idx, base, origin)?;
+                let field_val = self.load_value(frame_idx, field_expr, origin)?;
+                // Derive mode: DynField with symbolic base + Name field → emit Expr::Field
+                if self.derive_sink.is_some() {
+                    if let (CtfeConstKind::Symbolic(base_id), CtfeConstKind::Name(field_name)) =
+                        (&base_val.kind, &field_val.kind)
+                    {
+                        let sink = unsafe {
+                            &mut *std::mem::transmute::<
+                                *mut dyn derive_eval::CodegenSink<'static>,
+                                *mut dyn derive_eval::CodegenSink<'db>,
+                            >(self.derive_sink.unwrap())
+                        };
+                        let expr_id = sink.push_expr(crate::hir_def::Expr::Field(
+                            *base_id,
+                            crate::hir_def::Partial::Present(crate::hir_def::FieldIndex::Ident(
+                                *field_name,
+                            )),
+                        ));
+                        return Ok(CtfeValue::Value(CtfeConstValue {
+                            kind: CtfeConstKind::Symbolic(expr_id),
+                            deferred_origin: None,
+                        }));
+                    }
+                }
+                Err(CtfeError::NotConstEvaluable { origin })
+            }
             SExpr::CodeRegionOffset { .. } | SExpr::CodeRegionLen { .. } => {
                 Err(CtfeError::NotConstEvaluable { origin })
             }

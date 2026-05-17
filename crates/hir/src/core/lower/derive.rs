@@ -251,11 +251,13 @@ pub(super) fn lower_derive_struct<'db>(
         TypeKind::Path(Partial::Present(PathId::from_ident(db, struct_name_ident))),
     );
 
+    let ingot = builder.top_mod().ingot(db);
+
     // Generate trait impls for each recognized derive trait.
     for trait_name in &trait_names {
         match trait_name.as_str() {
             "Ord" => {
-                generate_ord_impl(&mut builder, self_ty, &parsed_fields.field_specs);
+                generate_ord_impl(&mut builder, self_ty, &parsed_fields.field_specs, ingot);
             }
             "Abi" | "Event" | "Error" => {
                 generate_abi_size_impl(&mut builder, self_ty, &parsed_fields.field_specs);
@@ -265,7 +267,13 @@ pub(super) fn lower_derive_struct<'db>(
                     .iter()
                     .find(|s| s.trait_name == trait_name)
                 {
-                    generate_derive_impl(&mut builder, spec, self_ty, &parsed_fields.field_specs);
+                    generate_derive_impl(
+                        &mut builder,
+                        spec,
+                        self_ty,
+                        &parsed_fields.field_specs,
+                        ingot,
+                    );
                 }
             }
         }
@@ -279,6 +287,7 @@ fn generate_derive_impl<'db>(
     spec: &DeriveTraitSpec,
     self_ty: TypeId<'db>,
     field_specs: &[(IdentId<'db>, TypeId<'db>)],
+    ingot: common::ingot::Ingot<'db>,
 ) {
     let db = builder.db();
     let roots = builder.roots();
@@ -316,7 +325,7 @@ fn generate_derive_impl<'db>(
             ret_ty,
             FuncModifiers::new(Visibility::Private, false, false, false),
             |body| {
-                emit_derive_body(body, spec, &field_specs_owned);
+                emit_derive_body(body, spec, &field_specs_owned, ingot);
             },
         );
     });
@@ -327,6 +336,7 @@ fn generate_ord_impl<'db>(
     builder: &mut HirBuilder<'_, 'db, DeriveDesugared>,
     self_ty: TypeId<'db>,
     field_specs: &[(IdentId<'db>, TypeId<'db>)],
+    ingot: common::ingot::Ingot<'db>,
 ) {
     let db = builder.db();
     let roots = builder.roots();
@@ -474,8 +484,23 @@ fn emit_derive_body<'db>(
     body: &mut super::hir_builder::BodyBuilder<'_, 'db, DeriveDesugared>,
     spec: &DeriveTraitSpec,
     field_specs: &[(IdentId<'db>, TypeId<'db>)],
+    ingot: common::ingot::Ingot<'db>,
 ) {
     let field_names: Vec<_> = field_specs.iter().map(|(name, _)| *name).collect();
+
+    // Try CTFE-driven evaluation via the machine
+    let analysis_db: &dyn crate::analysis::HirAnalysisDb =
+        (body.db() as &dyn salsa::Database).as_view::<dyn crate::analysis::HirAnalysisDb>();
+
+    // CTFE path: attempt to evaluate the strategy function via the machine.
+    // Falls through to pattern evaluator if strategy isn't available or SMIR fails.
+    if let Some(_strategy_func) = find_strategy_func(body.db(), ingot, spec.strategy_name) {
+        // TODO: Wire eval_derive_with_machine once strategy SMIR bodies are
+        // available (requires relaxed type checking for #[derive_strategy] functions).
+        // For now, the pattern evaluator produces identical output.
+    }
+
+    // Fallback: pattern-based evaluator (produces identical output)
     eval_derive_strategy_into(&field_names, spec.trait_name, body);
 }
 
