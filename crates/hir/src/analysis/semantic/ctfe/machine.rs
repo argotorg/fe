@@ -220,9 +220,45 @@ pub(super) fn try_eval_expr_to_const<'db>(
 /// concretely from field_names.
 ///
 /// Safety: The sink pointer is valid for the duration of the machine's execution.
+/// Build a SemanticInstance for a derive strategy function with the concrete
+/// struct type substituted for T. Pads generic args to include implicit
+/// effect provider params (e.g., Reflect<T> → Reflect<StructTy>).
+fn derive_strategy_instance<'db>(
+    db: &'db dyn HirAnalysisDb,
+    strategy_func: crate::hir_def::Func<'db>,
+    struct_ty: TyId<'db>,
+) -> SemanticInstance<'db> {
+    use crate::analysis::ty::ty_lower::collect_generic_params;
+
+    let owner = BodyOwner::Func(strategy_func);
+    let param_set =
+        collect_generic_params(db, crate::hir_def::GenericParamOwner::Func(strategy_func));
+    let identity_params = param_set.params(db);
+    let offset = param_set.offset_to_explicit_params_position(db);
+
+    // Start with identity params, substitute explicit T → struct_ty
+    let mut args: Vec<TyId<'db>> = identity_params.to_vec();
+    for explicit_slot in args[offset..].iter_mut() {
+        *explicit_slot = struct_ty;
+    }
+    // Substitute T in implicit provider slots (e.g., Reflect<T_param> → Reflect<StructTy>)
+    let subst = args.clone();
+    let args = instantiate_with_generic_args(db, args, &subst);
+
+    let key = SemanticInstanceKey::new(
+        db,
+        owner,
+        GenericSubst::new(db, args),
+        crate::analysis::semantic::EffectProviderSubst::empty(db),
+        ImplEnv::empty(db, owner.scope()),
+    );
+    get_or_build_semantic_instance(db, key)
+}
+
 pub fn eval_derive_with_machine<'db>(
     db: &'db dyn HirAnalysisDb,
     strategy_func: crate::hir_def::Func<'db>,
+    _struct_def: crate::hir_def::Struct<'db>,
     field_names: &[crate::hir_def::IdentId<'db>],
     sink: &mut dyn derive_eval::CodegenSink<'db>,
 ) -> Result<(), CtfeError<'db>> {
@@ -236,18 +272,11 @@ pub fn eval_derive_with_machine<'db>(
     });
     machine.derive_field_names = Some(field_names.to_vec());
 
-    let owner = BodyOwner::Func(strategy_func);
-    let origin = SemOrigin::Body(owner);
-
-    // Build instance with no generic substitution — the strategy's T is symbolic
-    let key = SemanticInstanceKey::new(
-        db,
-        owner,
-        GenericSubst::new(db, vec![]),
-        crate::analysis::semantic::EffectProviderSubst::empty(db),
-        ImplEnv::empty(db, owner.scope()),
-    );
-    let instance = get_or_build_semantic_instance(db, key);
+    // Use unit as placeholder for T — reflect intrinsics use field_names directly,
+    // never actually resolving T's structure through the type system.
+    let struct_ty = TyId::unit(db);
+    let instance = derive_strategy_instance(db, strategy_func, struct_ty);
+    let origin = SemOrigin::Body(BodyOwner::Func(strategy_func));
 
     // Strategy params become symbolic values (ExprIds for self/other path exprs)
     let self_ident = crate::hir_def::IdentId::make_self(db);

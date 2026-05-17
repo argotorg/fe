@@ -273,6 +273,7 @@ pub(super) fn lower_derive_struct<'db>(
                         self_ty,
                         &parsed_fields.field_specs,
                         ingot,
+                        struct_,
                     );
                 }
             }
@@ -288,6 +289,7 @@ fn generate_derive_impl<'db>(
     self_ty: TypeId<'db>,
     field_specs: &[(IdentId<'db>, TypeId<'db>)],
     ingot: common::ingot::Ingot<'db>,
+    struct_def: Struct<'db>,
 ) {
     let db = builder.db();
     let roots = builder.roots();
@@ -325,7 +327,7 @@ fn generate_derive_impl<'db>(
             ret_ty,
             FuncModifiers::new(Visibility::Private, false, false, false),
             |body| {
-                emit_derive_body(body, spec, &field_specs_owned, ingot);
+                emit_derive_body(body, spec, &field_specs_owned, ingot, struct_def);
             },
         );
     });
@@ -485,19 +487,26 @@ fn emit_derive_body<'db>(
     spec: &DeriveTraitSpec,
     field_specs: &[(IdentId<'db>, TypeId<'db>)],
     ingot: common::ingot::Ingot<'db>,
+    struct_def: Struct<'db>,
 ) {
     let field_names: Vec<_> = field_specs.iter().map(|(name, _)| *name).collect();
 
-    // Try CTFE-driven evaluation via the machine
+    // Try CTFE-driven evaluation: get strategy func, build instance, run machine
     let analysis_db: &dyn crate::analysis::HirAnalysisDb =
         (body.db() as &dyn salsa::Database).as_view::<dyn crate::analysis::HirAnalysisDb>();
 
-    // CTFE path: attempt to evaluate the strategy function via the machine.
-    // Falls through to pattern evaluator if strategy isn't available or SMIR fails.
-    if let Some(_strategy_func) = find_strategy_func(body.db(), ingot, spec.strategy_name) {
-        // TODO: Wire eval_derive_with_machine once strategy SMIR bodies are
-        // available (requires relaxed type checking for #[derive_strategy] functions).
-        // For now, the pattern evaluator produces identical output.
+    if let Some(strategy_func) = find_strategy_func(body.db(), ingot, spec.strategy_name) {
+        if crate::analysis::semantic::ctfe::eval_derive_with_machine(
+            analysis_db,
+            strategy_func,
+            struct_def,
+            &field_names,
+            body,
+        )
+        .is_ok()
+        {
+            return;
+        }
     }
 
     // Fallback: pattern-based evaluator (produces identical output)
