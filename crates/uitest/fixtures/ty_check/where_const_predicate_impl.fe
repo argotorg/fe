@@ -1,0 +1,33 @@
+trait Sized {
+    const SIZE: u256
+}
+
+trait Compact {
+    fn pack(self) -> u256
+}
+
+struct Small {}
+impl Sized for Small {
+    const SIZE: u256 = 4
+}
+
+struct Huge {}
+impl Sized for Huge {
+    const SIZE: u256 = 256
+}
+
+impl<T> Compact for T where T: Sized, T::SIZE <= 32 {
+    fn pack(self) -> u256 {
+        0
+    }
+}
+
+fn use_small() {
+    let s = Small{}
+    s.pack()
+}
+
+fn use_huge() {
+    let h = Huge{}
+    h.pack()
+}

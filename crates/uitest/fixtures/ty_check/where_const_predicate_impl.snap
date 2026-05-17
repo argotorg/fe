@@ -1,0 +1,11 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/where_const_predicate_impl.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ where_const_predicate_impl.fe:32:5
+   │
+32 │     h.pack()
+   │     ^^^^^^^^ `Huge` doesn't implement `Compact`
