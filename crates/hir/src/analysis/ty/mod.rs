@@ -377,7 +377,8 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
         top_mod: TopLevelMod<'db>,
     ) -> Vec<Box<dyn DiagnosticVoucher + 'db>> {
         // Check function and const bodies; contract-specific analysis is handled separately.
-        // Skip #[derive_strategy] functions — they're evaluated by CTFE, not type-checked.
+        // Strategy functions ARE type-checked (so SMIR bodies are available for CTFE),
+        // but their diagnostics are suppressed (DynField produces unresolved inference vars).
         let mut diags: Vec<Box<dyn DiagnosticVoucher + 'db>> = top_mod
             .all_funcs(db)
             .iter()
@@ -389,6 +390,14 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
             .flat_map(|func| &ty_check::check_func_body(db, *func).0)
             .map(|diag| diag.to_voucher())
             .collect();
+        // Force type-checking of strategy functions (for SMIR availability) without reporting
+        for func in top_mod.all_funcs(db).iter().filter(|func| {
+            ItemKind::Func(**func)
+                .attrs(db)
+                .is_some_and(|a| a.has_attr(db, "derive_strategy"))
+        }) {
+            let _ = ty_check::check_func_body(db, *func);
+        }
 
         diags.extend(
             top_mod

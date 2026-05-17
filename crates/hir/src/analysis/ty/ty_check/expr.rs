@@ -276,10 +276,11 @@ impl<'db> TyChecker<'db> {
             Expr::Path(..) => self.check_path(expr, expr_data),
             Expr::RecordInit(..) => self.check_record_init(expr, expr_data, expected),
             Expr::Field(..) => self.check_field(expr, expr_data),
-            Expr::DynField(..) => {
-                // DynField is handled by the CTFE machine, not the regular type checker.
-                // Treat it as invalid for now.
-                ExprProp::invalid(self.db)
+            Expr::DynField(receiver, _field_expr) => {
+                // DynField resolution happens at CTFE time. Type-check the receiver
+                // normally, assign a fresh type variable for the field access result.
+                self.check_expr_unknown(*receiver);
+                ExprProp::new(self.fresh_ty(), false)
             }
             Expr::Tuple(..) => self.check_tuple(expr, expr_data, expected),
             Expr::Array(..) => self.check_array(expr, expr_data, expected),

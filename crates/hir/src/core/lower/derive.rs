@@ -495,14 +495,15 @@ fn emit_derive_body<'db>(
     let analysis_db: &dyn crate::analysis::HirAnalysisDb =
         (body.db() as &dyn salsa::Database).as_view::<dyn crate::analysis::HirAnalysisDb>();
 
-    // The CTFE machine path is architecturally complete (instance creation,
-    // symbolic ExprId handling at BinOp/Field/DynField, branch/return emission,
-    // reflect intrinsic interception). It's blocked on SMIR lowering of strategy
-    // bodies — DynField needs a deferred type in the type checker so SMIR
-    // lowering doesn't panic on unresolved paths. Until then, the pattern
-    // evaluator produces identical output.
+    // CTFE machine path: blocked on SMIR lowering of strategy bodies.
+    // DynField gets fresh type vars, but BinOps on fresh vars (e.g., != in __derive_eq)
+    // can't resolve to trait methods, so semantic call lowering is missing.
+    // Fix: teach SMIR lowering to produce deferred call sites for unresolved ops
+    // in #[derive_strategy] context. The CTFE machine handles them symbolically.
+    //
+    // The pattern evaluator implements the same logic the machine would produce.
     let _strategy_func = find_strategy_func(body.db(), ingot, spec.strategy_name);
-    let _ = analysis_db;
+    let _ = (analysis_db, struct_def);
     eval_derive_strategy_into(&field_names, spec.trait_name, body);
 }
 
