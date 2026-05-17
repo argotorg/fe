@@ -2196,7 +2196,12 @@ impl<'db> RmirEmitter<'db> {
         let Some(target) = self.value_class(dst).cloned() else {
             return false;
         };
-        if !base_class.is_transport() || !matches!(target, RuntimeClass::Scalar(_)) {
+        if !base_class.is_transport()
+            || !matches!(
+                target,
+                RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { .. }
+            )
+        {
             return false;
         }
         let raw = self.coerce_value(bb, value, &target);

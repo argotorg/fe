@@ -1578,7 +1578,7 @@ mod tests {
     };
 
     #[test]
-    fn test_roots_materialize_target_root_providers() {
+    fn test_roots_erase_inert_raw_mem_root_providers() {
         let mut db = DriverDataBase::default();
         let file_url = Url::from_file_path(
             std::env::temp_dir().join("synthetic_target_root_provider_test_root.fe"),
@@ -1619,14 +1619,14 @@ fn test_raw_mem_root() uses (mem: mut RawMem) {
             .expect("expected synthetic test root");
         let body = root.instance(&db).body(&db);
         assert!(
-            body.blocks[0].stmts.iter().any(|stmt| matches!(
+            !body.blocks[0].stmts.iter().any(|stmt| matches!(
                 stmt,
                 RStmt::Assign {
                     expr: RExpr::Builtin(RuntimeBuiltin::Malloc { .. }) | RExpr::AllocObject { .. },
                     ..
                 }
             )),
-            "expected synthetic test root to materialize target root providers: {body:#?}"
+            "inert synthetic RawMem roots should erase instead of materializing empty providers: {body:#?}"
         );
         assert!(
             !body.blocks[0].stmts.iter().any(|stmt| matches!(

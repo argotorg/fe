@@ -5,9 +5,6 @@ input_file: crates/codegen/tests/fixtures/match_fn_call.fe
 ---
 target = "evm-ethereum-osaka"
 
-type @layout_0 = {};
-type @layout_1 = {@layout_0};
-
 func private %std__lib__evm__effects__impl_trait_Evm_0098__calldataload_7969(v0.i256) -> i256 {
     block0:
         v1.*i256 = alloca i256;
@@ -44,18 +41,18 @@ func private %std__lib__evm__effects__impl_trait_Evm_0098__calldataload_7969_1(v
         return v3;
 }
 
-func private %standalone_match_fn_call__match_fn_call__example__gcd5c_c018(v0.objref<@layout_1>) -> i256 {
+func private %standalone_match_fn_call__match_fn_call__example__gcd5c_4226() -> i256 {
     block0:
         jump block1;
 
     block1:
-        v2.i256 = call %standalone_match_fn_call__match_fn_call__read_selector__gcd5c_4179 v0;
-        v4.i1 = eq v2 305419896.i256;
-        br v4 block3 block6;
+        v0.i256 = call %standalone_match_fn_call__match_fn_call__read_selector__gcd5c_33d2;
+        v2.i1 = eq v0 305419896.i256;
+        br v2 block3 block6;
 
     block2:
-        v5.i256 = phi (1.i256 block3) (2.i256 block4) (3.i256 block5);
-        return v5;
+        v3.i256 = phi (1.i256 block3) (2.i256 block4) (3.i256 block5);
+        return v3;
 
     block3:
         jump block2;
@@ -67,25 +64,25 @@ func private %standalone_match_fn_call__match_fn_call__example__gcd5c_c018(v0.ob
         jump block2;
 
     block6:
-        v11.i1 = eq v2 591751049.i256;
-        br v11 block4 block7;
+        v9.i1 = eq v0 591751049.i256;
+        br v9 block4 block7;
 
     block7:
         jump block5;
 }
 
-func private %standalone_match_fn_call__match_fn_call__example__gcd5c_cf48(v0.objref<@layout_1>) -> i256 {
+func private %standalone_match_fn_call__match_fn_call__example__gcd5c_96b0() -> i256 {
     block0:
         jump block1;
 
     block1:
-        v2.i256 = call %standalone_match_fn_call__match_fn_call__read_selector__gcd5c_f4a3 v0;
-        v4.i1 = eq v2 305419896.i256;
-        br v4 block3 block6;
+        v0.i256 = call %standalone_match_fn_call__match_fn_call__read_selector__gcd5c_262a;
+        v2.i1 = eq v0 305419896.i256;
+        br v2 block3 block6;
 
     block2:
-        v5.i256 = phi (1.i256 block3) (2.i256 block4) (3.i256 block5);
-        return v5;
+        v3.i256 = phi (1.i256 block3) (2.i256 block4) (3.i256 block5);
+        return v3;
 
     block3:
         jump block2;
@@ -97,20 +94,20 @@ func private %standalone_match_fn_call__match_fn_call__example__gcd5c_cf48(v0.ob
         jump block2;
 
     block6:
-        v11.i1 = eq v2 591751049.i256;
-        br v11 block4 block7;
+        v9.i1 = eq v0 591751049.i256;
+        br v9 block4 block7;
 
     block7:
         jump block5;
 }
 
-func private %main(v0.objref<@layout_1>) -> i256 {
+func private %main() -> i256 {
     block0:
         jump block1;
 
     block1:
-        v2.i256 = call %standalone_match_fn_call__match_fn_call__example__gcd5c_cf48 v0;
-        return v2;
+        v0.i256 = call %standalone_match_fn_call__match_fn_call__example__gcd5c_96b0;
+        return v0;
 }
 
 func private %main_root() {
@@ -118,39 +115,38 @@ func private %main_root() {
         jump block1;
 
     block1:
-        v0.objref<@layout_1> = obj.alloc @layout_1;
-        v1.i256 = call %main v0;
+        v0.i256 = call %main;
         evm_stop;
 }
 
-func private %standalone_match_fn_call__match_fn_call__read_selector__gcd5c_4179(v0.objref<@layout_1>) -> i256 {
+func private %standalone_match_fn_call__match_fn_call__read_selector__gcd5c_044c() -> i256 {
     block0:
         jump block1;
 
     block1:
-        v2.i256 = call %std__lib__evm__effects__impl_trait_Evm_0098__calldataload_7969 0.i256;
-        v4.i256 = shr 224.i256 v2;
-        return v4;
+        v1.i256 = call %std__lib__evm__effects__impl_trait_Evm_0098__calldataload_7969_1 0.i256;
+        v3.i256 = shr 224.i256 v1;
+        return v3;
 }
 
-func private %standalone_match_fn_call__match_fn_call__read_selector__gcd5c_aed9(v0.objref<@layout_1>) -> i256 {
+func private %standalone_match_fn_call__match_fn_call__read_selector__gcd5c_262a() -> i256 {
     block0:
         jump block1;
 
     block1:
-        v2.i256 = call %std__lib__evm__effects__impl_trait_Evm_0098__calldataload_7969_0 0.i256;
-        v4.i256 = shr 224.i256 v2;
-        return v4;
+        v1.i256 = call %std__lib__evm__effects__impl_trait_Evm_0098__calldataload_7969 0.i256;
+        v3.i256 = shr 224.i256 v1;
+        return v3;
 }
 
-func private %standalone_match_fn_call__match_fn_call__read_selector__gcd5c_f4a3(v0.objref<@layout_1>) -> i256 {
+func private %standalone_match_fn_call__match_fn_call__read_selector__gcd5c_33d2() -> i256 {
     block0:
         jump block1;
 
     block1:
-        v2.i256 = call %std__lib__evm__effects__impl_trait_Evm_0098__calldataload_7969_1 0.i256;
-        v4.i256 = shr 224.i256 v2;
-        return v4;
+        v1.i256 = call %std__lib__evm__effects__impl_trait_Evm_0098__calldataload_7969_0 0.i256;
+        v3.i256 = shr 224.i256 v1;
+        return v3;
 }
 
 

@@ -921,6 +921,31 @@ pub fn resolved_provider_binding_for_instance_effect<'db>(
         })
 }
 
+pub(crate) fn resolved_effect_binding_ty_for_instance_effect<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+    binding: LocalBinding<'db>,
+) -> Option<crate::analysis::ty::ty_def::TyId<'db>> {
+    let env = instantiated_effect_env(db, instance)?;
+    let (binding_idx, provider_idx) = match binding {
+        LocalBinding::EffectParam {
+            idx, provider_idx, ..
+        } => (idx, Some(provider_idx)),
+        LocalBinding::Param {
+            site: crate::analysis::ty::ty_check::ParamSite::EffectField(_),
+            idx,
+            ..
+        } => (idx, None),
+        LocalBinding::Local { .. } | LocalBinding::Param { .. } => return None,
+    };
+    Some(effect_binding_ty_from_env(
+        db,
+        Some(env),
+        binding_idx,
+        provider_idx,
+    ))
+}
+
 pub(crate) fn provisional_provider_binding_for_instance_effect<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
@@ -1433,17 +1458,13 @@ fn instantiate_provider_bindings_for_key<'db>(
     canonical: Vec<ProviderBinding<'db>>,
     resolutions: &[ResolvedEffectBinding],
 ) -> Result<Vec<ProviderBinding<'db>>, SemanticEffectEnvInstantiationError<'db>> {
-    let specializations = key
-        .effect_providers(db)
-        .providers(db)
-        .iter()
-        .map(|specialization| {
-            (
-                specialization.provider.provider_idx,
-                specialization.provider.clone(),
-            )
-        })
-        .collect::<FxHashMap<_, _>>();
+    let mut specializations = FxHashMap::default();
+    for specialization in key.effect_providers(db).providers(db) {
+        specializations.insert(
+            specialization.provider.provider_idx,
+            instantiate_provider_binding(db, key, specialization.provider.clone())?,
+        );
+    }
     if matches!(
         site,
         crate::analysis::ty::ty_check::EffectParamSite::Func(_)
@@ -1796,19 +1817,19 @@ fn instantiate_provider_binding<'db>(
         },
         source => source,
     };
-    let semantics = match source {
-        ProviderSource::ContractField { .. } => crate::analysis::ty::provider::ProviderSemantics {
+    let target_ty = provider
+        .semantics
+        .target_ty
+        .map(|ty| instantiate_normalized_ty(db, key, ty))
+        .transpose()?;
+    let semantics = if target_ty.is_some() {
+        crate::analysis::ty::provider::ProviderSemantics {
             provider_ty,
-            target_ty: provider
-                .semantics
-                .target_ty
-                .map(|ty| instantiate_normalized_ty(db, key, ty))
-                .transpose()?,
+            target_ty,
             ..provider.semantics
-        },
-        ProviderSource::UsesParam { .. } | ProviderSource::RootProvider { .. } => {
-            provider_semantics(db, scope, assumptions, provider_ty)
         }
+    } else {
+        provider_semantics(db, scope, assumptions, provider_ty)
     };
     Ok(ProviderBinding {
         provider_ty,

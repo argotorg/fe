@@ -5,9 +5,6 @@ input_file: crates/codegen/tests/fixtures/borrow_storage_field_handle.fe
 ---
 target = "evm-ethereum-osaka"
 
-type @layout_0 = {};
-type @layout_1 = {@layout_0};
-
 func private %borrow_storage_field_handle(v0.i256) -> i256 {
     block0:
         jump block1;
@@ -39,14 +36,14 @@ func private %from_raw(v0.i256) -> i256 {
         return v2;
 }
 
-func private %main(v0.objref<@layout_1>) -> i256 {
+func private %main() -> i256 {
     block0:
         jump block1;
 
     block1:
-        v2.i256 = call %stor_ptr 0.i256;
-        v3.i256 = call %borrow_storage_field_handle v2;
-        return v3;
+        v1.i256 = call %stor_ptr 0.i256;
+        v2.i256 = call %borrow_storage_field_handle v1;
+        return v2;
 }
 
 func private %main_root() {
@@ -54,8 +51,7 @@ func private %main_root() {
         jump block1;
 
     block1:
-        v0.objref<@layout_1> = obj.alloc @layout_1;
-        v1.i256 = call %main v0;
+        v0.i256 = call %main;
         evm_stop;
 }
 

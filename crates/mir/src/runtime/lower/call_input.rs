@@ -12,7 +12,10 @@ use super::{
     boundary::{BoundarySiteAllocator, StagedBoundary, default_by_place_boundary},
     classify::{desired_runtime_effect_arg_boundary, runtime_effect_binding_plan_for_binding_idx},
     place::resolved_effect_arg_address_space,
-    type_info::{RuntimeTypeEnv, provider_class_for_target_in_env},
+    type_info::{
+        RuntimeTypeEnv, provider_class_for_target_in_env, runtime_zero_sized_transport_ty,
+        runtime_zero_sized_ty,
+    },
 };
 
 #[derive(Clone, Debug)]
@@ -40,6 +43,7 @@ pub(super) enum CompiledValuePassPlan<'db> {
 
 #[derive(Clone, Debug)]
 pub(super) enum CompiledEffectArgPlan<'db> {
+    Erased,
     Value(CompiledEffectValuePlan<'db>),
     Place(CompiledEffectPlacePlan<'db>),
 }
@@ -139,6 +143,9 @@ fn compile_effect_arg_plan<'db>(
         runtime_effect_binding_plan_for_binding_idx(db, semantic, arg.binding_idx).as_ref(),
         space,
     );
+    if boundary.is_none() && effect_arg_is_runtime_zst(db, body, type_env, arg) {
+        return CompiledEffectArgPlan::Erased;
+    }
     if boundary.is_none() && arg.provider.is_none() && arg.target_ty.is_none() {
         return match (&arg.pass_mode, &arg.arg) {
             (EffectPassMode::ByValue | EffectPassMode::Unknown, NEffectArgValue::Value(_)) => {
@@ -197,5 +204,24 @@ fn compile_effect_arg_plan<'db>(
                 boundary_sites.stage(boundary),
             ))
         }
+    }
+}
+
+fn effect_arg_is_runtime_zst<'db>(
+    db: &'db dyn MirDb,
+    body: &hir::analysis::semantic::borrowck::NormalizedSemanticBody<'db>,
+    type_env: RuntimeTypeEnv<'db>,
+    arg: &NEffectArg<'db>,
+) -> bool {
+    if arg.target_ty.is_some_and(|target_ty| {
+        runtime_zero_sized_ty(db, target_ty, type_env.scope, type_env.assumptions)
+    }) {
+        return true;
+    }
+    match &arg.arg {
+        NEffectArgValue::Value(value) => body.local(value.local).is_some_and(|local| {
+            runtime_zero_sized_transport_ty(db, local.ty, type_env.scope, type_env.assumptions)
+        }),
+        NEffectArgValue::Place(_) => false,
     }
 }

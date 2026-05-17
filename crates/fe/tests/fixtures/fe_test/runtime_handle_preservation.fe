@@ -1,0 +1,215 @@
+use core::EffectHandle
+use core::contracts::ContractHost
+use std::evm::{Evm, MemPtr, RawMem, RawStorage, StorPtr}
+
+struct Empty {}
+
+fn empty_effect() -> u256
+uses (e: Empty)
+{
+    1
+}
+
+fn mem_handle_raw() -> u256
+uses (p: MemPtr<Empty>)
+{
+    p.raw()
+}
+
+fn stor_handle_raw() -> u256
+uses (p: StorPtr<Empty>)
+{
+    p.raw()
+}
+
+fn host_input_len<H>(_ host: mut H) -> u256
+    where H: ContractHost
+{
+    host.input().len()
+}
+
+fn require_msg(_ evm: mut Evm, condition: bool) {
+    if !condition {
+        evm.revert(offset: 0, len: 0)
+    }
+}
+
+fn check_runtime_value(_ evm: mut Evm, value: u256) -> u256 {
+    require_msg(mut evm, condition: value > 0)
+    value
+}
+
+#[test]
+fn test_zst_target_effect_handles_keep_runtime_carriers() uses (evm: Evm) {
+    let mp: MemPtr<Empty> = evm.mem_ptr(0x120)
+    let sp: StorPtr<Empty> = evm.stor_ptr(7)
+    let mem = with (mp) {
+        empty_effect() + mem_handle_raw()
+    }
+    let storage = with (sp) {
+        stor_handle_raw()
+    }
+
+    assert(mem == 0x121)
+    assert(storage == 7)
+}
+
+#[test]
+fn test_explicit_root_provider_params_keep_runtime_carriers() uses (evm: mut Evm) {
+    let generic_len = host_input_len(mut evm)
+    let direct_len = evm.input().len()
+
+    assert(generic_len == direct_len)
+    assert(generic_len == 0)
+}
+
+#[test]
+fn test_label_disabled_concrete_evm_params_are_zero_width_roots() uses (evm: mut Evm) {
+    assert(check_runtime_value(mut evm, value: 1) == 1)
+}
+
+struct Data {
+    x: u256,
+}
+
+struct View {
+    d: ref Data,
+}
+
+fn read_view(_ view: own View) -> u256 {
+    view.d.x
+}
+
+#[test]
+fn test_object_backed_nested_ref_fields_are_readable() {
+    let data = Data { x: 1 }
+    let view = View { d: ref data }
+
+    assert(read_view(view) == 1)
+}
+
+enum Flag {
+    A(u256),
+    B(u256),
+}
+
+impl Copy for Flag {}
+
+struct Inner {
+    flag: Flag,
+}
+
+struct Wrapper {
+    inner: Inner,
+}
+
+fn repack(wrapper: Wrapper) -> Inner {
+    let flag = wrapper.inner.flag
+    let copy = flag
+    Inner { flag: copy }
+}
+
+#[test]
+fn test_projected_enum_field_snapshots_preserve_payloads() {
+    let inner = repack(wrapper: Wrapper {
+        inner: Inner { flag: Flag::A(42) },
+    })
+
+    match inner.flag {
+        Flag::A(value) => assert(value == 42)
+        Flag::B(value) => assert(value == 0)
+    }
+}
+
+enum Maybe {
+    None,
+    Some(u256),
+}
+
+fn maybe_code(x: Maybe) -> u256 {
+    match x {
+        Maybe::None => 0,
+        Maybe::Some(v) => v,
+    }
+}
+
+#[test]
+fn test_enum_tag_matches_preserve_typed_payloads() {
+    assert(maybe_code(x: Maybe::None) == 0)
+    assert(maybe_code(x: Maybe::Some(1)) == 1)
+}
+
+#[test(should_revert)]
+fn test_checked_overflow_exprs_survive_unused_local_lowering() {
+    let x: u8 = 255
+    let y: u8 = x + 1
+    assert(y == 0)
+}
+
+#[test]
+fn test_unit_branch_mutations_do_not_use_erased_call_results() {
+    let mut x: usize = 0
+    if true {
+        x += 1
+    } else {
+        x += 1
+    }
+
+    assert(x == 1)
+}
+
+fn return_array_after_projection_u8(xs: [u8; 4]) -> [u8; 4] {
+    let ys = xs
+    let _ = ys[2]
+    ys
+}
+
+fn use_returned_array_u8() -> u8 {
+    let mut xs: [u8; 4] = [1, 2, 3, 4]
+    xs = return_array_after_projection_u8(xs)
+    xs[0] + xs[2]
+}
+
+fn return_array_after_projection_u256(xs: [u256; 3]) -> [u256; 3] {
+    let ys = xs
+    let _ = ys[2]
+    ys
+}
+
+fn use_returned_array_u256() -> u256 {
+    let mut xs: [u256; 3] = [1, 2, 3]
+    xs = return_array_after_projection_u256(xs)
+    xs[0] + xs[2]
+}
+
+#[test]
+fn test_by_value_array_returns_remain_usable_after_projection() {
+    assert(use_returned_array_u8() == 4)
+    assert(use_returned_array_u256() == 4)
+}
+
+enum Fieldless {
+    A,
+    B,
+}
+
+struct EnumPair {
+    xs: [u256; 3],
+    e: Fieldless,
+}
+
+fn build_enum_pair(flag: bool) -> EnumPair {
+    let xs: [u256; 3] = [1, 2, 3]
+    let e = if flag { Fieldless::A } else { Fieldless::B }
+    EnumPair { xs, e }
+}
+
+#[test]
+fn test_fieldless_enum_fields_copy_into_object_storage() {
+    let pair = build_enum_pair(flag: true)
+    assert(pair.xs[0] == 1)
+    match pair.e {
+        Fieldless::A => assert(true)
+        Fieldless::B => assert(false)
+    }
+}

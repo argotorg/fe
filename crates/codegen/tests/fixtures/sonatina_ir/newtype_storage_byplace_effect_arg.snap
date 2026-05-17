@@ -204,22 +204,22 @@ func inline(always) private %decode_runtime_args(v0.objref<@layout_5>) {
         jump block1;
 
     block1:
-        v2.@layout_3 = call %runtime_decoder v0;
-        v3.objref<@layout_3> = obj.alloc @layout_3;
-        v5.objref<@layout_2> = obj.proj v3 0.i256;
-        v6.@layout_2 = extract_value v2 0.i256;
-        v7.objref<@layout_1> = obj.proj v5 0.i256;
-        v8.@layout_1 = extract_value v6 0.i256;
-        v9.objref<i256> = obj.proj v7 0.i256;
-        v10.i256 = extract_value v8 0.i256;
-        obj.store v9 v10;
-        v12.objref<i256> = obj.proj v5 1.i256;
-        v13.i256 = extract_value v6 1.i256;
-        obj.store v12 v13;
-        v14.objref<i256> = obj.proj v3 1.i256;
-        v15.i256 = extract_value v2 1.i256;
-        obj.store v14 v15;
-        call %decode_payload v3;
+        v1.@layout_3 = call %runtime_decoder;
+        v2.objref<@layout_3> = obj.alloc @layout_3;
+        v4.objref<@layout_2> = obj.proj v2 0.i256;
+        v5.@layout_2 = extract_value v1 0.i256;
+        v6.objref<@layout_1> = obj.proj v4 0.i256;
+        v7.@layout_1 = extract_value v5 0.i256;
+        v8.objref<i256> = obj.proj v6 0.i256;
+        v9.i256 = extract_value v7 0.i256;
+        obj.store v8 v9;
+        v11.objref<i256> = obj.proj v4 1.i256;
+        v12.i256 = extract_value v5 1.i256;
+        obj.store v11 v12;
+        v13.objref<i256> = obj.proj v2 1.i256;
+        v14.i256 = extract_value v1 1.i256;
+        obj.store v13 v14;
+        call %decode_payload v2;
         return;
 }
 
@@ -472,14 +472,14 @@ func private %pos(v0.objref<@layout_0>) -> i256 {
         return v4;
 }
 
-func inline(always) private %runtime_decoder(v0.objref<@layout_5>) -> @layout_3 {
+func inline(always) private %runtime_decoder() -> @layout_3 {
     block0:
         jump block1;
 
     block1:
-        v1.@layout_1 = call %input;
-        v3.@layout_3 = call %decoder_with_base v1 4.i256;
-        return v3;
+        v0.@layout_1 = call %input;
+        v2.@layout_3 = call %decoder_with_base v0 4.i256;
+        return v2;
 }
 
 func private %set_base(v0.objref<@layout_0>, v1.i256) {

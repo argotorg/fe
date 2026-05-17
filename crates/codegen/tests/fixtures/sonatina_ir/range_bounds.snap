@@ -5,9 +5,6 @@ input_file: crates/codegen/tests/fixtures/range_bounds.fe
 ---
 target = "evm-ethereum-osaka"
 
-type @layout_0 = {};
-type @layout_1 = {@layout_0, @layout_0};
-
 func private %get(v0.i256) -> i256 {
     block0:
         v1.*i256 = alloca i256;

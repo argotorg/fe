@@ -17,7 +17,7 @@ pub use semantic::{
 };
 pub(crate) use semantic::{
     provisional_provider_binding_for_instance_effect, provisional_provider_idx_for_requirement,
-    semantic_instance_base_assumptions_for_key,
+    resolved_effect_binding_ty_for_instance_effect, semantic_instance_base_assumptions_for_key,
 };
 pub use template::{
     EffectProviderSubst, GenericSubst, ImplEnv, TypedBodyTemplate, instantiate_typed_body,

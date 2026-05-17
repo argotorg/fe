@@ -5,35 +5,32 @@ input_file: crates/codegen/tests/fixtures/revert.fe
 ---
 target = "evm-ethereum-osaka"
 
-type @layout_0 = {};
-type @layout_1 = {@layout_0};
-
-func private %standalone_revert__revert__fail__gcd5c_631a(v0.objref<@layout_1>) {
+func private %standalone_revert__revert__fail__gcd5c_ac8c() {
     block0:
         jump block1;
 
     block1:
-        call %std__lib__evm__effects__impl_trait_Evm_d0d8__mstore_feb5 v0 0.i256 42.i256;
+        call %std__lib__evm__effects__impl_trait_Evm_d0d8__mstore_f3cd_0 0.i256 42.i256;
         call %std__lib__evm__effects__impl_trait_Evm_0098__revert_8f03 0.i256 32.i256;
         unreachable;
 }
 
-func private %standalone_revert__revert__fail__gcd5c_7451(v0.objref<@layout_1>) {
+func private %standalone_revert__revert__fail__gcd5c_cdbf() {
     block0:
         jump block1;
 
     block1:
-        call %std__lib__evm__effects__impl_trait_Evm_d0d8__mstore_feb5_0 v0 0.i256 42.i256;
+        call %std__lib__evm__effects__impl_trait_Evm_d0d8__mstore_f3cd 0.i256 42.i256;
         call %std__lib__evm__effects__impl_trait_Evm_0098__revert_8f03_0 0.i256 32.i256;
         unreachable;
 }
 
-func private %main(v0.objref<@layout_1>) {
+func private %main() {
     block0:
         jump block1;
 
     block1:
-        call %standalone_revert__revert__fail__gcd5c_631a v0;
+        call %standalone_revert__revert__fail__gcd5c_ac8c;
         unreachable;
 }
 
@@ -42,38 +39,37 @@ func private %main_root() {
         jump block1;
 
     block1:
-        v0.objref<@layout_1> = obj.alloc @layout_1;
-        call %main v0;
+        call %main;
         evm_stop;
 }
 
-func private %std__lib__evm__effects__impl_trait_Evm_d0d8__mstore_feb5(v0.objref<@layout_1>, v1.i256, v2.i256) {
+func private %std__lib__evm__effects__impl_trait_Evm_d0d8__mstore_f3cd(v0.i256, v1.i256) {
     block0:
+        v2.*i256 = alloca i256;
         v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
+        mstore v2 v0 i256;
         mstore v3 v1 i256;
-        mstore v4 v2 i256;
         jump block1;
 
     block1:
+        v4.i256 = mload v2 i256;
         v5.i256 = mload v3 i256;
-        v6.i256 = mload v4 i256;
-        mstore v5 v6 i256;
+        mstore v4 v5 i256;
         return;
 }
 
-func private %std__lib__evm__effects__impl_trait_Evm_d0d8__mstore_feb5_0(v0.objref<@layout_1>, v1.i256, v2.i256) {
+func private %std__lib__evm__effects__impl_trait_Evm_d0d8__mstore_f3cd_0(v0.i256, v1.i256) {
     block0:
+        v2.*i256 = alloca i256;
         v3.*i256 = alloca i256;
-        v4.*i256 = alloca i256;
+        mstore v2 v0 i256;
         mstore v3 v1 i256;
-        mstore v4 v2 i256;
         jump block1;
 
     block1:
+        v4.i256 = mload v2 i256;
         v5.i256 = mload v3 i256;
-        v6.i256 = mload v4 i256;
-        mstore v5 v6 i256;
+        mstore v4 v5 i256;
         return;
 }
 
