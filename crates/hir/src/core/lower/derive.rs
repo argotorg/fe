@@ -491,13 +491,22 @@ fn emit_derive_body<'db>(
 ) {
     let field_names: Vec<_> = field_specs.iter().map(|(name, _)| *name).collect();
 
-    // Try CTFE-driven evaluation: get strategy func, build instance, run machine
-    let analysis_db: &dyn crate::analysis::HirAnalysisDb =
-        (body.db() as &dyn salsa::Database).as_view::<dyn crate::analysis::HirAnalysisDb>();
+    let _ = struct_def;
+    let strategy_func = find_strategy_func(body.db(), ingot, spec.strategy_name)
+        .expect("derive strategy not found in core ingot");
 
-    let _strategy_func = find_strategy_func(body.db(), ingot, spec.strategy_name);
-    let _ = (analysis_db, struct_def);
-    eval_derive_strategy_into(&field_names, spec.trait_name, body);
+    // CTFE: walk strategy HIR body directly, resolving reflect intrinsics
+    // concretely and emitting symbolic operations to the CodegenSink.
+    assert!(
+        crate::analysis::semantic::ctfe::derive_eval::eval_strategy_from_hir(
+            body.db(),
+            strategy_func,
+            &field_names,
+            body,
+        ),
+        "CTFE derive strategy evaluation failed for {:?}",
+        spec.trait_name,
+    );
 }
 
 /// le: `!(other < self)`

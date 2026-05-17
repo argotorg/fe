@@ -1,0 +1,15 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 29
+expression: diags
+input_file: fixtures/ty_check/derive_hash.fe
+---
+error[8-0000]: type mismatch
+  ┌─ derive_hash.fe:1:1
+  │
+1 │ ╭ #[derive(Hash)]
+2 │ │ struct Token {
+3 │ │     id: u256,
+4 │ │     amount: u256,
+5 │ │ }
+  │ ╰─^ expected `u256`, but `()` is given

@@ -1,0 +1,14 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 29
+expression: diags
+input_file: fixtures/ty_check/derive_single_field.fe
+---
+error[8-0000]: type mismatch
+  ┌─ derive_single_field.fe:1:1
+  │
+1 │ ╭ #[derive(Eq, Default)]
+2 │ │ struct Wrapper {
+3 │ │     value: u256,
+4 │ │ }
+  │ ╰─^ expected `Wrapper`, but `()` is given

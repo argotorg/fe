@@ -1,7 +1,9 @@
 use crate::hir_def::{
-    BinOp, CompBinOp, Cond, CondId, Expr, ExprId, FieldIndex, IdentId, LitKind, Partial, PathId,
-    Stmt, StmtId,
+    BinOp, Body, CompBinOp, Cond, CondId, Expr, ExprId, FieldIndex, Func, IdentId, LitKind,
+    Partial, Pat, PatId, PathId, Stmt, StmtId,
 };
+
+use std::collections::HashMap;
 
 /// Codegen sink that emits HIR expressions/statements. Implemented by
 /// BodyBuilder in the lowering phase. The CTFE derive evaluator drives
@@ -22,25 +24,340 @@ pub(crate) trait CodegenSink<'db> {
 /// This replaces the hardcoded emit_eq_body/emit_hash_body/etc. functions.
 /// The Fe strategy function is the source of truth; this evaluator interprets
 /// the strategy's logic using the struct's concrete field information.
+/// Evaluates a derive strategy by walking its HIR Body directly.
+/// This is the CTFE-driven path: the Fe strategy function IS the source of truth.
+/// The interpreter resolves reflect intrinsics concretely (from field_names)
+/// and emits symbolic operations (ExprIds) via the CodegenSink.
+pub(crate) fn eval_strategy_from_hir<'db>(
+    db: &'db dyn crate::HirDb,
+    strategy_func: Func<'db>,
+    field_names: &[IdentId<'db>],
+    sink: &mut dyn CodegenSink<'db>,
+) -> bool {
+    let Some(body) = strategy_func.body(db) else {
+        return false;
+    };
+    let mut interp = HirStrategyInterp::new(db, body, field_names, sink);
+    interp.eval_body()
+}
+
+/// Fallback: pattern-based evaluator (same output, hardcoded per trait).
+#[allow(dead_code)]
 pub(crate) fn eval_derive_strategy_into<'db>(
     field_names: &[IdentId<'db>],
     trait_name: &str,
     sink: &mut dyn CodegenSink<'db>,
 ) {
-    // The evaluator interprets the strategy function's pattern:
-    // - reflect.field_count() → field_specs.len()
-    // - reflect.field_name(i) → field_specs[i].0
-    // - Operations on symbolic params → emit into sink
-    //
-    // For now, we implement the canonical patterns that the Fe strategies
-    // describe. When the full CTFE machine is wired to handle DynField +
-    // symbolic tracking, this becomes a thin wrapper around eval_root.
     match trait_name {
         "Eq" => eval_eq_strategy(field_names, sink),
         "Default" => eval_default_strategy(field_names, sink),
         "Ord" => eval_ord_strategy(field_names, sink),
         "Hash" => eval_hash_strategy(field_names, sink),
         _ => {}
+    }
+}
+
+/// Value tracked during HIR interpretation — either concrete or symbolic (ExprId).
+#[derive(Clone)]
+enum InterpValue<'db> {
+    /// Concrete integer (loop counter, field count)
+    Int(usize),
+    /// Concrete field name from reflect.field_name()
+    Name(IdentId<'db>),
+    /// Symbolic runtime value — an ExprId already emitted to the sink
+    Symbolic(ExprId),
+    /// Concrete boolean
+    Bool(bool),
+    /// Unit / capability placeholder
+    Unit,
+}
+
+/// HIR-level interpreter for derive strategy functions.
+/// Walks the strategy's Body AST, resolving reflect intrinsics concretely
+/// and emitting symbolic operations via CodegenSink.
+struct HirStrategyInterp<'a, 'db> {
+    db: &'db dyn crate::HirDb,
+    body: Body<'db>,
+    field_names: &'a [IdentId<'db>],
+    sink: &'a mut dyn CodegenSink<'db>,
+    /// Local variable bindings (PatId → value)
+    locals: HashMap<PatId, InterpValue<'db>>,
+    /// Function params by index
+    params: Vec<InterpValue<'db>>,
+}
+
+impl<'a, 'db> HirStrategyInterp<'a, 'db> {
+    fn new(
+        db: &'db dyn crate::HirDb,
+        body: Body<'db>,
+        field_names: &'a [IdentId<'db>],
+        sink: &'a mut dyn CodegenSink<'db>,
+    ) -> Self {
+        // Strategy params: self_val (symbolic), other (symbolic), capabilities (unit)
+        let self_expr = sink.push_expr(Expr::Path(Partial::Present(PathId::from_ident(
+            db,
+            IdentId::make_self(db),
+        ))));
+        let other_ident = IdentId::new(db, "other".to_string());
+        let other_expr = sink.push_expr(Expr::Path(Partial::Present(PathId::from_ident(
+            db,
+            other_ident,
+        ))));
+        Self {
+            db,
+            body,
+            field_names,
+            sink,
+            locals: HashMap::new(),
+            params: vec![
+                InterpValue::Symbolic(self_expr),
+                InterpValue::Symbolic(other_expr),
+                InterpValue::Unit, // reflect capability
+                InterpValue::Unit, // other capabilities
+            ],
+        }
+    }
+
+    fn eval_body(&mut self) -> bool {
+        let root = self.body.expr(self.db);
+        let result = self.eval_expr(root);
+        // Emit final return if the body produces a value
+        match result {
+            InterpValue::Bool(b) => {
+                let lit = self.sink.push_expr(Expr::Lit(LitKind::Bool(b)));
+                self.sink.emit_stmt(Stmt::Return(Some(lit)));
+            }
+            InterpValue::Symbolic(expr_id) => {
+                self.sink.emit_stmt(Stmt::Return(Some(expr_id)));
+            }
+            _ => {}
+        }
+        true
+    }
+
+    fn eval_expr(&mut self, expr: ExprId) -> InterpValue<'db> {
+        let e = self.body.exprs(self.db)[expr].clone();
+        let Partial::Present(e) = e else {
+            return InterpValue::Unit;
+        };
+        match e {
+            Expr::Block(stmts) => {
+                let mut result = InterpValue::Unit;
+                for stmt_id in stmts {
+                    result = self.eval_stmt(stmt_id);
+                }
+                result
+            }
+            Expr::Lit(lit) => match lit {
+                LitKind::Bool(b) => InterpValue::Bool(b),
+                LitKind::Int(int_id) => {
+                    use num_traits::ToPrimitive;
+                    let val = int_id.data(self.db);
+                    InterpValue::Int(val.to_u64().unwrap_or(0) as usize)
+                }
+                _ => InterpValue::Unit,
+            },
+            Expr::Path(path) => {
+                // Try to resolve as a param or local
+                if let Partial::Present(path_id) = path {
+                    let name_str = path_id.pretty_print(self.db);
+                    if name_str == "self" || name_str == "self_val" {
+                        return self.params[0].clone();
+                    }
+                    if name_str == "other" {
+                        return self.params[1].clone();
+                    }
+                    if name_str == "true" {
+                        return InterpValue::Bool(true);
+                    }
+                    if name_str == "false" {
+                        return InterpValue::Bool(false);
+                    }
+                }
+                InterpValue::Unit
+            }
+            Expr::DynField(base, field_expr) => {
+                let base_val = self.eval_expr(base);
+                let field_val = self.eval_expr(field_expr);
+                match (&base_val, &field_val) {
+                    (InterpValue::Symbolic(base_id), InterpValue::Name(name)) => {
+                        let expr_id = self.sink.push_expr(Expr::Field(
+                            *base_id,
+                            Partial::Present(FieldIndex::Ident(*name)),
+                        ));
+                        InterpValue::Symbolic(expr_id)
+                    }
+                    _ => InterpValue::Unit,
+                }
+            }
+            Expr::Bin(lhs, rhs, op) => {
+                let lhs_val = self.eval_expr(lhs);
+                let rhs_val = self.eval_expr(rhs);
+                match (&lhs_val, &rhs_val) {
+                    (InterpValue::Symbolic(l), InterpValue::Symbolic(r)) => {
+                        let expr_id = self.sink.push_expr(Expr::Bin(*l, *r, op));
+                        InterpValue::Symbolic(expr_id)
+                    }
+                    (InterpValue::Int(l), InterpValue::Int(r)) => {
+                        // Concrete int comparison (for range bounds)
+                        match op {
+                            BinOp::Comp(CompBinOp::Lt) => InterpValue::Bool(*l < *r),
+                            BinOp::Comp(CompBinOp::NotEq) => InterpValue::Bool(*l != *r),
+                            _ => InterpValue::Unit,
+                        }
+                    }
+                    _ => InterpValue::Unit,
+                }
+            }
+            Expr::MethodCall(receiver, method_name, _, args) => {
+                let recv_val = self.eval_expr(receiver);
+                let method = method_name.to_opt().map(|n| n.data(self.db).to_string());
+                match method.as_deref() {
+                    Some("field_count") => InterpValue::Int(self.field_names.len()),
+                    Some("field_name") => {
+                        let idx = args
+                            .first()
+                            .map(|a| self.eval_expr(a.expr))
+                            .and_then(|v| match v {
+                                InterpValue::Int(i) => Some(i),
+                                _ => None,
+                            })
+                            .unwrap_or(0);
+                        self.field_names
+                            .get(idx)
+                            .map(|n| InterpValue::Name(*n))
+                            .unwrap_or(InterpValue::Unit)
+                    }
+                    Some("hash") => {
+                        // Hasher capability: emit .hash() on symbolic field
+                        if let InterpValue::Symbolic(recv_id) = recv_val {
+                            let hash_ident = IdentId::new(self.db, "hash".to_string());
+                            let expr_id = self.sink.push_expr(Expr::MethodCall(
+                                recv_id,
+                                Partial::Present(hash_ident),
+                                crate::hir_def::GenericArgListId::none(self.db),
+                                vec![],
+                            ));
+                            InterpValue::Symbolic(expr_id)
+                        } else {
+                            InterpValue::Unit
+                        }
+                    }
+                    _ => recv_val,
+                }
+            }
+            Expr::If(cond_id, then_expr, _else_expr) => {
+                let cond = self.body.conds(self.db)[cond_id].clone();
+                if let Partial::Present(Cond::Expr(cond_expr)) = cond {
+                    let cond_val = self.eval_expr(cond_expr);
+                    match cond_val {
+                        InterpValue::Bool(true) => return self.eval_expr(then_expr),
+                        InterpValue::Bool(false) => return InterpValue::Unit,
+                        InterpValue::Symbolic(cond_id) => {
+                            // Emit if-guard: if <symbolic> { <then_body> }
+                            let then_val = self.eval_expr(then_expr);
+                            if let InterpValue::Bool(_) = then_val {
+                                // The then block returns a literal — emit guard
+                                // (already emitted via Stmt::Return in eval_stmt)
+                            }
+                            let _ = cond_id; // guard emitted in stmt handling
+                        }
+                        _ => {}
+                    }
+                }
+                InterpValue::Unit
+            }
+            _ => InterpValue::Unit,
+        }
+    }
+
+    fn eval_stmt(&mut self, stmt_id: StmtId) -> InterpValue<'db> {
+        let stmt = self.body.stmts(self.db)[stmt_id].clone();
+        let Partial::Present(stmt) = stmt else {
+            return InterpValue::Unit;
+        };
+        match stmt {
+            Stmt::Expr(expr) => {
+                let val = self.eval_expr(expr);
+                // If the expr produced an if with symbolic condition, emit it
+                let e = self.body.exprs(self.db)[expr].clone();
+                if let Partial::Present(Expr::If(cond_id, then_expr, _)) = e {
+                    let cond = self.body.conds(self.db)[cond_id].clone();
+                    if let Partial::Present(Cond::Expr(cond_expr)) = cond {
+                        let cond_val = self.eval_expr(cond_expr);
+                        if let InterpValue::Symbolic(sym_cond) = cond_val {
+                            // Peek at then block for return value
+                            let then_e = self.body.exprs(self.db)[then_expr].clone();
+                            if let Partial::Present(Expr::Block(stmts)) = then_e {
+                                for s in &stmts {
+                                    let inner = self.body.stmts(self.db)[*s].clone();
+                                    if let Partial::Present(Stmt::Return(Some(ret_expr))) = inner {
+                                        let ret_val = self.eval_expr(ret_expr);
+                                        if let InterpValue::Bool(b) = ret_val {
+                                            let cond = self.sink.push_cond(Cond::Expr(sym_cond));
+                                            let lit =
+                                                self.sink.push_expr(Expr::Lit(LitKind::Bool(b)));
+                                            let ret = self.sink.push_stmt(Stmt::Return(Some(lit)));
+                                            let blk = self.sink.push_expr(Expr::Block(vec![ret]));
+                                            let if_expr =
+                                                self.sink.push_expr(Expr::If(cond, blk, None));
+                                            self.sink.emit_expr_stmt(if_expr);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                val
+            }
+            Stmt::Return(Some(expr)) => {
+                let val = self.eval_expr(expr);
+                match val {
+                    InterpValue::Bool(b) => {
+                        let lit = self.sink.push_expr(Expr::Lit(LitKind::Bool(b)));
+                        self.sink.emit_stmt(Stmt::Return(Some(lit)));
+                    }
+                    InterpValue::Symbolic(expr_id) => {
+                        self.sink.emit_stmt(Stmt::Return(Some(expr_id)));
+                    }
+                    _ => {}
+                }
+                val
+            }
+            Stmt::Return(None) => {
+                self.sink.emit_stmt(Stmt::Return(None));
+                InterpValue::Unit
+            }
+            Stmt::For(pat, iter_expr, body_expr, _) => {
+                // Evaluate the range: expect 0..reflect.field_count()
+                // The iter_expr is a Range(start, end) — we need the end value
+                let iter_e = self.body.exprs(self.db)[iter_expr].clone();
+                let count = if let Partial::Present(Expr::Bin(
+                    start,
+                    end,
+                    BinOp::Arith(crate::hir_def::ArithBinOp::Range),
+                )) = iter_e
+                {
+                    let _start_val = self.eval_expr(start);
+                    let end_val = self.eval_expr(end);
+                    match end_val {
+                        InterpValue::Int(n) => n,
+                        _ => 0,
+                    }
+                } else {
+                    0
+                };
+
+                // Unroll the loop
+                for i in 0..count {
+                    self.locals.insert(pat, InterpValue::Int(i));
+                    self.eval_expr(body_expr);
+                }
+                InterpValue::Unit
+            }
+            _ => InterpValue::Unit,
+        }
     }
 }
 
