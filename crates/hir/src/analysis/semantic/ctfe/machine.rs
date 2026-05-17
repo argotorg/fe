@@ -4,7 +4,6 @@ use num_traits::{One, ToPrimitive, Zero};
 use ruint::aliases::U256;
 use rustc_hash::FxHashMap;
 
-use super::derive_eval;
 use salsa::Update;
 use std::rc::Rc;
 use tiny_keccak::{Hasher, Keccak};
@@ -214,106 +213,6 @@ pub(super) fn try_eval_expr_to_const<'db>(
         .ok()
 }
 
-/// Evaluates a derive strategy function using the CTFE machine in derive mode.
-/// Symbolic params (ExprIds) flow through the machine and operations on them
-/// emit directly into the CodegenSink. Reflect intrinsics are resolved
-/// concretely from field_names.
-///
-/// Safety: The sink pointer is valid for the duration of the machine's execution.
-/// Build a SemanticInstance for a derive strategy function with the concrete
-/// struct type substituted for T. Pads generic args to include implicit
-/// effect provider params (e.g., Reflect<T> → Reflect<StructTy>).
-fn derive_strategy_instance<'db>(
-    db: &'db dyn HirAnalysisDb,
-    strategy_func: crate::hir_def::Func<'db>,
-    struct_ty: TyId<'db>,
-) -> SemanticInstance<'db> {
-    use crate::analysis::ty::ty_lower::collect_generic_params;
-
-    let owner = BodyOwner::Func(strategy_func);
-    let param_set =
-        collect_generic_params(db, crate::hir_def::GenericParamOwner::Func(strategy_func));
-    let identity_params = param_set.params(db);
-    let offset = param_set.offset_to_explicit_params_position(db);
-
-    // Start with identity params, substitute explicit T → struct_ty
-    let mut args: Vec<TyId<'db>> = identity_params.to_vec();
-    for explicit_slot in args[offset..].iter_mut() {
-        *explicit_slot = struct_ty;
-    }
-    // Substitute T in implicit provider slots (e.g., Reflect<T_param> → Reflect<StructTy>)
-    let subst = args.clone();
-    let args = instantiate_with_generic_args(db, args, &subst);
-
-    let key = SemanticInstanceKey::new(
-        db,
-        owner,
-        GenericSubst::new(db, args),
-        crate::analysis::semantic::EffectProviderSubst::empty(db),
-        ImplEnv::empty(db, owner.scope()),
-    );
-    get_or_build_semantic_instance(db, key)
-}
-
-pub fn eval_derive_with_machine<'db>(
-    db: &'db dyn HirAnalysisDb,
-    strategy_func: crate::hir_def::Func<'db>,
-    _struct_def: crate::hir_def::Struct<'db>,
-    field_names: &[crate::hir_def::IdentId<'db>],
-    sink: &mut dyn derive_eval::CodegenSink<'db>,
-) -> Result<(), CtfeError<'db>> {
-    let mut machine = CtfeMachine::new(db, CtfeConfig::default());
-    // SAFETY: sink lives on caller's stack, outlives the machine. Transmute erases 'db → 'static.
-    machine.derive_sink = Some(unsafe {
-        std::mem::transmute::<
-            *mut dyn derive_eval::CodegenSink<'db>,
-            *mut dyn derive_eval::CodegenSink<'static>,
-        >(sink)
-    });
-    machine.derive_field_names = Some(field_names.to_vec());
-
-    // Use unit as placeholder for T — reflect intrinsics use field_names directly,
-    // never actually resolving T's structure through the type system.
-    let struct_ty = TyId::unit(db);
-    let instance = derive_strategy_instance(db, strategy_func, struct_ty);
-    let origin = SemOrigin::Body(BodyOwner::Func(strategy_func));
-
-    // Strategy params become symbolic values (ExprIds for self/other path exprs)
-    let self_ident = crate::hir_def::IdentId::make_self(db);
-    let other_ident = crate::hir_def::IdentId::new(db, "other".to_string());
-
-    let mut args = Vec::new();
-    for (idx, _param) in strategy_func.params(db).enumerate() {
-        // SAFETY: transmute 'static back to 'db — the pointer is valid for this scope
-        let sink_ref: &mut dyn derive_eval::CodegenSink<'db> = unsafe {
-            &mut *std::mem::transmute::<
-                *mut dyn derive_eval::CodegenSink<'static>,
-                *mut dyn derive_eval::CodegenSink<'db>,
-            >(machine.derive_sink.unwrap())
-        };
-        let param_ident = if idx == 0 { self_ident } else { other_ident };
-        let param_expr = sink_ref.push_expr(crate::hir_def::Expr::Path(
-            crate::hir_def::Partial::Present(crate::hir_def::PathId::from_ident(db, param_ident)),
-        ));
-        args.push(CtfeValue::Value(CtfeConstValue {
-            kind: CtfeConstKind::Symbolic(param_expr),
-            deferred_origin: None,
-        }));
-    }
-
-    // Capability params (from uses clause) → unit values
-    for _ in strategy_func.effect_params(db) {
-        args.push(CtfeValue::Value(CtfeConstValue::unit()));
-    }
-
-    // Run the machine — it will emit to derive_sink at key points
-    // (BinOp/Field/DynField on Symbolic, Branch on Symbolic, Return)
-    match machine.eval_instance(instance, args, origin) {
-        Ok(_) => Ok(()),
-        Err(_) => Err(CtfeError::NotConstEvaluable { origin }),
-    }
-}
-
 struct CtfeMachine<'db> {
     db: &'db dyn HirAnalysisDb,
     config: CtfeConfig,
@@ -321,11 +220,6 @@ struct CtfeMachine<'db> {
     instance_cache: FxHashMap<SemanticInstanceKey<'db>, SemanticInstance<'db>>,
     body_cache: FxHashMap<SemanticInstanceKey<'db>, Rc<SemanticBody<'db>>>,
     frames: Vec<CtfeFrame<'db>>,
-    /// When in derive mode, symbolic operations emit into this sink.
-    /// SAFETY: lifetime erased via transmute — the sink outlives the machine.
-    derive_sink: Option<*mut dyn derive_eval::CodegenSink<'static>>,
-    /// Field names for the struct being derived. Used by reflect intrinsics.
-    derive_field_names: Option<Vec<crate::hir_def::IdentId<'db>>>,
 }
 
 struct CtfeFrame<'db> {
@@ -997,6 +891,18 @@ impl<'db> CtfeMachine<'db> {
             derive_sink: None,
             derive_field_names: None,
         }
+    }
+
+    /// Get derive sink with correct lifetime. SAFETY: the sink pointer was
+    /// created from a reference that outlives the machine instance.
+    #[allow(dead_code)]
+    unsafe fn derive_sink_ref(&mut self) -> Option<&mut dyn derive_eval::CodegenSink<'db>> {
+        self.derive_sink.map(|ptr| unsafe {
+            &mut *std::mem::transmute::<
+                *mut dyn derive_eval::CodegenSink<'static>,
+                *mut dyn derive_eval::CodegenSink<'db>,
+            >(ptr)
+        })
     }
 
     fn instance_for_key(&mut self, key: SemanticInstanceKey<'db>) -> SemanticInstance<'db> {
