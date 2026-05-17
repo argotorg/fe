@@ -882,4 +882,66 @@ mod tests {
         eval_derive_strategy_into(&fields, "Ord", &mut ord_sink);
         assert_eq!(ord_sink.count_bin_ops(BinOp::Comp(CompBinOp::Lt)), 1);
     }
+
+    #[test]
+    fn strategy_body_drives_output_not_hardcoded() {
+        // This test proves eval_strategy_from_hir reads the actual strategy
+        // function's Body — if the strategy were ignored and output hardcoded,
+        // changing field count would not change the output structure.
+        let db = HirAnalysisTestDb::default();
+
+        // 1 field → 1 guard
+        let one_field = vec![IdentId::new(&db, "x".to_string())];
+        let mut sink1 = MockSink::new(&db);
+        eval_derive_strategy_into(&one_field, "Eq", &mut sink1);
+        let guards_1 = sink1.count_if_exprs();
+
+        // 3 fields → 3 guards (strategy loops over field_count)
+        let three_fields = vec![
+            IdentId::new(&db, "a".to_string()),
+            IdentId::new(&db, "b".to_string()),
+            IdentId::new(&db, "c".to_string()),
+        ];
+        let mut sink3 = MockSink::new(&db);
+        eval_derive_strategy_into(&three_fields, "Eq", &mut sink3);
+        let guards_3 = sink3.count_if_exprs();
+
+        // The output SCALES with field count — proves the strategy's
+        // for-loop over reflect.field_count() is being evaluated, not
+        // a hardcoded pattern that ignores field count.
+        assert_eq!(guards_1, 1);
+        assert_eq!(guards_3, 3);
+        assert_ne!(guards_1, guards_3);
+    }
+
+    #[test]
+    fn different_strategies_produce_different_output() {
+        // Eq produces if-guards with !=, Ord produces if-guards with <
+        // Default produces RecordInit, Hash produces method calls
+        // This proves the strategy NAME selects different code paths.
+        let db = HirAnalysisTestDb::default();
+        let fields = vec![
+            IdentId::new(&db, "x".to_string()),
+            IdentId::new(&db, "y".to_string()),
+        ];
+
+        let mut eq_sink = MockSink::new(&db);
+        eval_derive_strategy_into(&fields, "Eq", &mut eq_sink);
+
+        let mut ord_sink = MockSink::new(&db);
+        eval_derive_strategy_into(&fields, "Ord", &mut ord_sink);
+
+        let mut default_sink = MockSink::new(&db);
+        eval_derive_strategy_into(&fields, "Default", &mut default_sink);
+
+        // Eq uses !=, Ord uses <
+        assert_eq!(eq_sink.count_bin_ops(BinOp::Comp(CompBinOp::NotEq)), 2);
+        assert_eq!(eq_sink.count_bin_ops(BinOp::Comp(CompBinOp::Lt)), 0);
+        assert_eq!(ord_sink.count_bin_ops(BinOp::Comp(CompBinOp::Lt)), 2);
+        assert_eq!(ord_sink.count_bin_ops(BinOp::Comp(CompBinOp::NotEq)), 0);
+
+        // Default produces RecordInit, Eq doesn't
+        assert!(default_sink.has_record_init());
+        assert!(!eq_sink.has_record_init());
+    }
 }
