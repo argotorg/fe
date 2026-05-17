@@ -1,0 +1,27 @@
+use core::ops::{WrappingAdd, WrappingMul}
+
+trait Marker {}
+
+struct W {
+    value: u256,
+}
+
+impl Marker for W {}
+
+impl<T: Copy> WrappingMul for T {
+    fn wrapping_mul(self, _ other: T) -> Self {
+        self
+    }
+}
+
+impl<T: Marker> WrappingAdd for T {
+    fn wrapping_add(self, _ other: T) -> Self {
+        self
+    }
+}
+
+impl WrappingAdd for W {
+    fn wrapping_add(self, _ other: W) -> W {
+        self
+    }
+}

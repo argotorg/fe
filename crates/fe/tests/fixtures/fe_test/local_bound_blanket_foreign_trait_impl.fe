@@ -1,0 +1,25 @@
+use core::ops::WrappingAdd
+
+trait Marker {}
+
+struct W {
+    value: u256,
+}
+
+impl Copy for W {}
+impl Marker for W {}
+
+impl<T: Marker> WrappingAdd for T {
+    fn wrapping_add(self, _ other: T) -> Self {
+        self
+    }
+}
+
+#[test]
+fn local_bound_blanket_foreign_trait_impl() {
+    let a = W { value: 11 }
+    let b = W { value: 31 }
+    let c = a.wrapping_add(b)
+
+    assert(c.value == 11)
+}
