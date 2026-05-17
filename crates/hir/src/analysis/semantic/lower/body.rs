@@ -863,12 +863,30 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         receiver: Option<ExprId>,
         args: &[ExprId],
     ) -> SValueId {
-        let lowering = self
-            .typed_body
-            .semantic_expr_lowering(expr)
-            .unwrap_or_else(|| {
-                panic!("semantic lowering missing for call-like expression {expr:?}")
-            });
+        let Some(lowering) = self.typed_body.semantic_expr_lowering(expr) else {
+            // Unresolved call in a strategy body — operators on DynField-typed
+            // values can't resolve to trait methods. Emit as SExpr::Binary so
+            // the CTFE machine handles them symbolically.
+            let hir_expr = self.body.exprs(self.db)[expr].clone();
+            match hir_expr {
+                crate::hir_def::Partial::Present(crate::hir_def::Expr::Bin(
+                    lhs_expr,
+                    rhs_expr,
+                    op,
+                )) => {
+                    let lhs = self.lower_expr_operand(lhs_expr);
+                    let rhs = self.lower_expr_operand(rhs_expr);
+                    return self.emit_expr(ty, SExpr::Binary { op, lhs, rhs });
+                }
+                _ => {
+                    // Unresolved method/call — emit receiver as-is for CTFE
+                    if let Some(&recv) = args.first() {
+                        return self.lower_expr(recv);
+                    }
+                    panic!("semantic lowering missing for call-like expression {expr:?}")
+                }
+            }
+        };
         match lowering {
             SemanticExprLowering::Call { callable } => {
                 self.lower_callable_expr(expr, ty, receiver, args, callable)
