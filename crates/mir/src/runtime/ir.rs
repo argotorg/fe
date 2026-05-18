@@ -1174,6 +1174,12 @@ pub enum RuntimeBuiltin<'db> {
     CodeRegionLen {
         region: RuntimeCodeRegion<'db>,
     },
+    /// Byte offset (in the code section) of a const region's data, as `u256`.
+    /// Lowered to `SymAddr` of the synthesised data blob; usable as the `offset`
+    /// operand of CODECOPY without going through the `ConstRef` rewrite pass.
+    ConstRegionAddr {
+        region: ConstRegionId<'db>,
+    },
     Malloc {
         size: RValueId,
     },

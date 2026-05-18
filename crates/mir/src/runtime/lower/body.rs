@@ -38,12 +38,12 @@ use crate::{
     instance::{RuntimeInstance, RuntimeInstanceKey, get_or_build_runtime_instance},
     resolve_runtime_place_address_class,
     runtime::{
-        AddressSpaceKind, ConstRegionId, ConstScalar, IntrinsicArithBinOp, LayoutId, PlaceElem,
-        PlaceRoot, RBlock, RBlockId, RExpr, RLocal, RLocalId, RStmt, RTerminator, RefKind, RefView,
-        RuntimeBody, RuntimeCarrier, RuntimeClass, RuntimeCodeRegion, RuntimeExitBehavior,
-        RuntimeInterfaceSignature, RuntimeLocalLowering, RuntimeLocalRoot, RuntimePlace,
-        RuntimeProviderBinding, RuntimeProviderBindingId, ScalarClass, ScalarRepr, ScalarRole,
-        VariantId,
+        AddressSpaceKind, ConstNode, ConstRegionId, ConstScalar, IntrinsicArithBinOp, LayoutId,
+        PlaceElem, PlaceRoot, RBlock, RBlockId, RExpr, RLocal, RLocalId, RStmt, RTerminator,
+        RefKind, RefView, RuntimeBody, RuntimeCarrier, RuntimeClass, RuntimeCodeRegion,
+        RuntimeExitBehavior, RuntimeInterfaceSignature, RuntimeLocalLowering, RuntimeLocalRoot,
+        RuntimePlace, RuntimeProviderBinding, RuntimeProviderBindingId, ScalarClass, ScalarRepr,
+        ScalarRole, VariantId,
         code_region::runtime_code_region_for_semantic_ref,
         package::{LowerError, runtime_instance_for_semantic},
     },
@@ -1278,9 +1278,53 @@ impl<'db> RmirEmitter<'db> {
     }
 
     fn lower_dyn_string_literal(&mut self, bb: RBlockId, ty: TyId<'db>, bytes: &[u8]) -> RLocalId {
-        let len = self.alloc_u256_const(bb, bytes.len());
         let payload_size = 32 + bytes.len().next_multiple_of(32);
+        let total_words = payload_size / 32;
+        let len = self.alloc_u256_const(bb, bytes.len());
         let size = self.alloc_u256_const(bb, payload_size);
+        let copy_len = self.alloc_u256_const(bb, payload_size);
+
+        // Build a `[u256; total_words]` blob whose word-packed layout matches the
+        // runtime `[len_word || padded_data]` payload exactly. The Sonatina
+        // backend emits this as code-section data so the copy below becomes a
+        // single CODECOPY instead of a per-word MSTORE loop.
+        let blob_elem_ty = TyId::u256(self.db);
+        let blob_ty = TyId::array_with_len(self.db, blob_elem_ty, total_words);
+        let blob_layout = self.layout_for_ty(blob_ty);
+
+        let mut fields: Vec<ConstNode<'db>> = Vec::with_capacity(total_words);
+        fields.push(ConstNode::Scalar(ConstScalar::Int {
+            bits: 256,
+            signed: false,
+            words: usize_word_bytes(bytes.len()),
+        }));
+        for chunk in bytes.chunks(32) {
+            fields.push(ConstNode::Scalar(ConstScalar::Int {
+                bits: 256,
+                signed: false,
+                words: padded_word_bytes(chunk),
+            }));
+        }
+        let blob_node = ConstNode::Aggregate {
+            layout: blob_layout,
+            fields: fields.into_boxed_slice(),
+        };
+        let blob_region = ConstRegionId::new(self.db, blob_layout, blob_node);
+
+        let blob_addr = self.alloc_runtime_temp(
+            TyId::u256(self.db),
+            RuntimeCarrier::Value(RuntimeClass::Scalar(word_scalar_class())),
+        );
+        self.push_stmt(
+            bb,
+            RStmt::Assign {
+                dst: blob_addr,
+                expr: RExpr::Builtin(crate::runtime::RuntimeBuiltin::ConstRegionAddr {
+                    region: blob_region,
+                }),
+            },
+        );
+
         let ptr = self.alloc_runtime_temp(
             TyId::u256(self.db),
             RuntimeCarrier::Value(RuntimeClass::Scalar(word_scalar_class())),
@@ -1294,48 +1338,12 @@ impl<'db> RmirEmitter<'db> {
         );
         self.push_ignored_builtin(
             bb,
-            crate::runtime::RuntimeBuiltin::Mstore {
-                addr: ptr,
-                value: len,
+            crate::runtime::RuntimeBuiltin::CodeCopy {
+                dst: ptr,
+                offset: blob_addr,
+                len: copy_len,
             },
         );
-        for (idx, chunk) in bytes.chunks(32).enumerate() {
-            let addr = self.alloc_runtime_temp(
-                TyId::u256(self.db),
-                RuntimeCarrier::Value(RuntimeClass::Scalar(word_scalar_class())),
-            );
-            let offset = self.alloc_u256_const(bb, 32 * (idx + 1));
-            self.push_stmt(
-                bb,
-                RStmt::Assign {
-                    dst: addr,
-                    expr: RExpr::Binary {
-                        op: BinOp::Arith(ArithBinOp::Add),
-                        lhs: ptr,
-                        rhs: offset,
-                    },
-                },
-            );
-            let word = self.alloc_runtime_temp(
-                TyId::u256(self.db),
-                RuntimeCarrier::Value(RuntimeClass::Scalar(word_scalar_class())),
-            );
-            self.push_stmt(
-                bb,
-                RStmt::Assign {
-                    dst: word,
-                    expr: RExpr::ConstScalar(ConstScalar::Int {
-                        bits: 256,
-                        signed: false,
-                        words: padded_word_bytes(chunk),
-                    }),
-                },
-            );
-            self.push_ignored_builtin(
-                bb,
-                crate::runtime::RuntimeBuiltin::Mstore { addr, value: word },
-            );
-        }
 
         let layout = self.layout_for_ty(ty);
         let dst = self.alloc_runtime_temp(
