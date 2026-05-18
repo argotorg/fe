@@ -10,4 +10,4 @@ error[17-0003]: unknown derive trait `Serialize`
 1 │ #[derive(Eq, Serialize)]
   │ ^^^^^^^^^^^^^^^^^^^^^^^^ `Serialize` is not a recognized derive trait
   │
-  = recognized traits: Eq, Default, Abi, Hash, Ord, Copy, Event, Error
+  = recognized traits: Eq, Default, Abi, Hash, Ord, Event, Error

@@ -32,9 +32,7 @@ pub enum DeriveErrorKind {
     UnknownDeriveTrait { name: String },
 }
 
-pub const KNOWN_DERIVE_TRAITS: &[&str] = &[
-    "Eq", "Default", "Abi", "Hash", "Ord", "Copy", "Event", "Error",
-];
+pub const KNOWN_DERIVE_TRAITS: &[&str] = &["Eq", "Default", "Abi", "Hash", "Ord", "Event", "Error"];
 
 pub(super) fn is_derive_struct(ast: &ast::Struct) -> bool {
     has_named_attr(ast.attr_list(), "derive")
@@ -75,7 +73,6 @@ fn parse_derive_trait_names(attrs: Option<ast::AttrList>) -> Vec<String> {
 }
 
 /// Find a `#[derive_strategy]` function in the core ingot by name.
-#[allow(dead_code)]
 pub(crate) fn find_strategy_func<'db>(
     db: &'db dyn crate::HirDb,
     ingot: common::ingot::Ingot<'db>,
@@ -108,7 +105,6 @@ pub(crate) fn find_strategy_func<'db>(
     })
 }
 
-#[allow(dead_code)]
 struct DeriveTraitSpec {
     trait_name: &'static str,
     strategy_name: &'static str,
@@ -386,8 +382,12 @@ fn generate_ord_impl<'db>(
             ret_ty,
             FuncModifiers::new(Visibility::Private, false, false, false),
             |body| {
-                let ord_strategy = find_strategy_func(body.db(), ingot, "__derive_ord")
-                    .expect("__derive_ord not found");
+                let Some(ord_strategy) = find_strategy_func(body.db(), ingot, "__derive_ord")
+                else {
+                    let lit = body.push_expr(Expr::Lit(crate::hir_def::LitKind::Bool(false)));
+                    body.emit_stmt(Stmt::Return(Some(lit)));
+                    return;
+                };
                 assert!(
                     crate::analysis::semantic::ctfe::derive_eval::eval_strategy_from_hir(
                         body.db(),
@@ -489,9 +489,6 @@ impl<'db> CodegenSink<'db> for super::hir_builder::BodyBuilder<'_, 'db, DeriveDe
     fn emit_expr_stmt(&mut self, expr: ExprId) -> StmtId {
         super::hir_builder::BodyBuilder::emit_expr_stmt(self, expr)
     }
-    fn db(&self) -> &'db dyn crate::HirDb {
-        super::hir_builder::BodyBuilder::db(self)
-    }
 }
 
 fn emit_derive_body<'db>(
@@ -499,16 +496,16 @@ fn emit_derive_body<'db>(
     spec: &DeriveTraitSpec,
     field_specs: &[(IdentId<'db>, TypeId<'db>)],
     ingot: common::ingot::Ingot<'db>,
-    struct_def: Struct<'db>,
+    _struct_def: Struct<'db>,
 ) {
     let field_names: Vec<_> = field_specs.iter().map(|(name, _)| *name).collect();
 
-    let _ = struct_def;
-    let strategy_func = find_strategy_func(body.db(), ingot, spec.strategy_name)
-        .expect("derive strategy not found in core ingot");
+    let Some(strategy_func) = find_strategy_func(body.db(), ingot, spec.strategy_name) else {
+        let unit = body.push_expr(Expr::Lit(crate::hir_def::LitKind::Bool(false)));
+        body.emit_stmt(Stmt::Return(Some(unit)));
+        return;
+    };
 
-    // CTFE: walk strategy HIR body directly, resolving reflect intrinsics
-    // concretely and emitting symbolic operations to the CodegenSink.
     assert!(
         crate::analysis::semantic::ctfe::derive_eval::eval_strategy_from_hir(
             body.db(),

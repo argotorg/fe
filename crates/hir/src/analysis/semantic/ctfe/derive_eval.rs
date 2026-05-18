@@ -14,7 +14,6 @@ pub(crate) trait CodegenSink<'db> {
     fn push_stmt(&mut self, stmt: Stmt<'db>) -> StmtId;
     fn emit_stmt(&mut self, stmt: Stmt<'db>) -> StmtId;
     fn emit_expr_stmt(&mut self, expr: ExprId) -> StmtId;
-    fn db(&self) -> &'db dyn crate::HirDb;
 }
 
 /// Evaluates a derive strategy function, emitting HIR directly into the sink.
@@ -39,22 +38,6 @@ pub(crate) fn eval_strategy_from_hir<'db>(
     };
     let mut interp = HirStrategyInterp::new(db, body, field_names, sink);
     interp.eval_body()
-}
-
-/// Test-only dispatch: validates CodegenSink output shape for each trait.
-#[cfg(test)]
-fn eval_derive_strategy_into<'db>(
-    field_names: &[IdentId<'db>],
-    trait_name: &str,
-    sink: &mut dyn CodegenSink<'db>,
-) {
-    match trait_name {
-        "Eq" => eval_eq_strategy(field_names, sink),
-        "Default" => eval_default_strategy(field_names, sink),
-        "Ord" => eval_ord_strategy(field_names, sink),
-        "Hash" => eval_hash_strategy(field_names, sink),
-        _ => {}
-    }
 }
 
 /// Value tracked during HIR interpretation — either concrete or symbolic (ExprId).
@@ -88,6 +71,8 @@ struct HirStrategyInterp<'a, 'db> {
     builder_fields: Vec<(usize, InterpValue<'db>)>,
     /// Hasher accumulator: running hash expression
     hash_accum: Option<ExprId>,
+    /// Whether we're in a hash context (feed() was called)
+    in_hash_context: bool,
 }
 
 impl<'a, 'db> HirStrategyInterp<'a, 'db> {
@@ -121,6 +106,7 @@ impl<'a, 'db> HirStrategyInterp<'a, 'db> {
             ],
             builder_fields: Vec::new(),
             hash_accum: None,
+            in_hash_context: false,
         }
     }
 
@@ -178,13 +164,12 @@ impl<'a, 'db> HirStrategyInterp<'a, 'db> {
                     if name_str == "false" {
                         return InterpValue::Bool(false);
                     }
-                    // Check locals (loop variables, let bindings)
                     for (pat_id, val) in &self.locals {
                         let pat = self.body.pats(self.db)[*pat_id].clone();
-                        if let Partial::Present(Pat::Path(Partial::Present(pat_path), _)) = pat {
-                            if pat_path.pretty_print(self.db) == name_str {
-                                return val.clone();
-                            }
+                        if let Partial::Present(Pat::Path(Partial::Present(pat_path), _)) = pat
+                            && pat_path.pretty_print(self.db) == name_str
+                        {
+                            return val.clone();
                         }
                     }
                 }
@@ -275,11 +260,19 @@ impl<'a, 'db> HirStrategyInterp<'a, 'db> {
                         InterpValue::Unit
                     }
                     Some("finish") => {
-                        if self.hash_accum.is_some() {
-                            // Hasher.finish(): return accumulated hash
-                            return InterpValue::Symbolic(self.hash_accum.take().unwrap());
+                        if let Some(acc) = self.hash_accum.take() {
+                            return InterpValue::Symbolic(acc);
                         }
-                        {
+                        if self.in_hash_context {
+                            // Hash on empty struct: no fields to hash, return 0
+                            let zero = self.sink.push_expr(Expr::Lit(LitKind::Int(
+                                crate::hir_def::IntegerId::new(
+                                    self.db,
+                                    num_bigint::BigUint::from(0u64),
+                                ),
+                            )));
+                            InterpValue::Symbolic(zero)
+                        } else {
                             // Builder.finish(): emit RecordInit
                             let db = self.db;
                             let fields: Vec<_> = self
@@ -304,7 +297,7 @@ impl<'a, 'db> HirStrategyInterp<'a, 'db> {
                         }
                     }
                     Some("feed") => {
-                        // Hasher.feed(value): hash the field and accumulate
+                        self.in_hash_context = true;
                         if let Some(arg) = args.first() {
                             let val = self.eval_expr(arg.expr);
                             if let InterpValue::Symbolic(field_id) = val {
@@ -355,25 +348,40 @@ impl<'a, 'db> HirStrategyInterp<'a, 'db> {
                     match cond_val {
                         InterpValue::Bool(true) => return self.eval_expr(then_expr),
                         InterpValue::Bool(false) => return InterpValue::Unit,
-                        InterpValue::Symbolic(cond_id) => {
-                            // Emit if-guard: if <symbolic> { <then_body> }
-                            let then_val = self.eval_expr(then_expr);
-                            if let InterpValue::Bool(_) = then_val {
-                                // The then block returns a literal — emit guard
-                                // (already emitted via Stmt::Return in eval_stmt)
-                            }
-                            let _ = cond_id; // guard emitted in stmt handling
+                        InterpValue::Symbolic(_) => {
+                            // Symbolic condition: do NOT evaluate the then-block here.
+                            // Stmt::Expr is the sole emission point for if-guards —
+                            // it re-reads this If, evaluates the condition again, peeks
+                            // at the then-block's return value, and emits the complete
+                            // if-guard with proper wrapping.
                         }
                         _ => {}
                     }
                 }
                 InterpValue::Unit
             }
+            Expr::Un(inner, op) => {
+                let val = self.eval_expr(inner);
+                match val {
+                    InterpValue::Bool(b) => match op {
+                        crate::hir_def::UnOp::Not => InterpValue::Bool(!b),
+                        _ => InterpValue::Unit,
+                    },
+                    InterpValue::Symbolic(id) => {
+                        let expr_id = self.sink.push_expr(Expr::Un(id, op));
+                        InterpValue::Symbolic(expr_id)
+                    }
+                    _ => InterpValue::Unit,
+                }
+            }
             Expr::Call(callee, _call_args) => {
                 let callee_e = self.body.exprs(self.db)[callee].clone();
                 if let Partial::Present(Expr::Path(Partial::Present(path))) = callee_e {
-                    let path_str = path.pretty_print(self.db);
-                    if path_str.contains("default") {
+                    let last_ident = path.ident(self.db);
+                    let is_default = last_ident
+                        .to_opt()
+                        .is_some_and(|id| id.data(self.db) == "default");
+                    if is_default {
                         let default_path = PathId::from_ident(
                             self.db,
                             IdentId::new(self.db, "Default".to_string()),
@@ -399,15 +407,13 @@ impl<'a, 'db> HirStrategyInterp<'a, 'db> {
         };
         match stmt {
             Stmt::Expr(expr) => {
-                let val = self.eval_expr(expr);
-                // If the expr produced an if with symbolic condition, emit it
                 let e = self.body.exprs(self.db)[expr].clone();
                 if let Partial::Present(Expr::If(cond_id, then_expr, _)) = e {
                     let cond = self.body.conds(self.db)[cond_id].clone();
                     if let Partial::Present(Cond::Expr(cond_expr)) = cond {
                         let cond_val = self.eval_expr(cond_expr);
                         if let InterpValue::Symbolic(sym_cond) = cond_val {
-                            // Peek at then block for return value
+                            // Peek at then block for return value (don't fully eval it)
                             let then_e = self.body.exprs(self.db)[then_expr].clone();
                             if let Partial::Present(Expr::Block(stmts)) = then_e {
                                 for s in &stmts {
@@ -427,10 +433,14 @@ impl<'a, 'db> HirStrategyInterp<'a, 'db> {
                                     }
                                 }
                             }
+                            return InterpValue::Unit;
+                        } else {
+                            // Concrete condition — evaluate normally
+                            return self.eval_expr(expr);
                         }
                     }
                 }
-                val
+                self.eval_expr(expr)
             }
             Stmt::Return(Some(expr)) => {
                 let val = self.eval_expr(expr);
@@ -451,202 +461,40 @@ impl<'a, 'db> HirStrategyInterp<'a, 'db> {
                 InterpValue::Unit
             }
             Stmt::For(pat, iter_expr, body_expr, _) => {
-                // Evaluate the range: expect 0..reflect.field_count()
-                // The iter_expr is a Range(start, end) — we need the end value
                 let iter_e = self.body.exprs(self.db)[iter_expr].clone();
-                let count = if let Partial::Present(Expr::Bin(
+                let (start_idx, end_idx) = if let Partial::Present(Expr::Bin(
                     start,
                     end,
                     BinOp::Arith(crate::hir_def::ArithBinOp::Range),
                 )) = iter_e
                 {
-                    let _start_val = self.eval_expr(start);
-                    let end_val = self.eval_expr(end);
-                    match end_val {
+                    let start_val = match self.eval_expr(start) {
                         InterpValue::Int(n) => n,
                         _ => 0,
-                    }
+                    };
+                    let end_val = match self.eval_expr(end) {
+                        InterpValue::Int(n) => n,
+                        _ => 0,
+                    };
+                    (start_val, end_val)
                 } else {
-                    0
+                    (0, 0)
                 };
 
-                // Unroll the loop
-                for i in 0..count {
+                for i in start_idx..end_idx {
                     self.locals.insert(pat, InterpValue::Int(i));
                     self.eval_expr(body_expr);
                 }
                 InterpValue::Unit
             }
+            Stmt::Let(pat, _ty, init) => {
+                let val = init.map(|e| self.eval_expr(e)).unwrap_or(InterpValue::Unit);
+                self.locals.insert(pat, val);
+                InterpValue::Unit
+            }
             _ => InterpValue::Unit,
         }
     }
-}
-
-/// Interprets __derive_eq pattern:
-/// for each field: if self.field != other.field { return false }
-#[cfg(test)]
-/// return true
-fn eval_eq_strategy<'db>(field_names: &[IdentId<'db>], sink: &mut dyn CodegenSink<'db>) {
-    let db = sink.db();
-    let self_ident = IdentId::make_self(db);
-    let other_ident = IdentId::new(db, "other".to_string());
-
-    for field_name in field_names {
-        let self_expr = sink.push_expr(Expr::Path(Partial::Present(PathId::from_ident(
-            db, self_ident,
-        ))));
-        let self_field = sink.push_expr(Expr::Field(
-            self_expr,
-            Partial::Present(FieldIndex::Ident(*field_name)),
-        ));
-
-        let other_expr = sink.push_expr(Expr::Path(Partial::Present(PathId::from_ident(
-            db,
-            other_ident,
-        ))));
-        let other_field = sink.push_expr(Expr::Field(
-            other_expr,
-            Partial::Present(FieldIndex::Ident(*field_name)),
-        ));
-
-        let neq = sink.push_expr(Expr::Bin(
-            self_field,
-            other_field,
-            BinOp::Comp(CompBinOp::NotEq),
-        ));
-        let cond = sink.push_cond(Cond::Expr(neq));
-        let false_lit = sink.push_expr(Expr::Lit(LitKind::Bool(false)));
-        let return_false = sink.push_stmt(Stmt::Return(Some(false_lit)));
-        let if_block = sink.push_expr(Expr::Block(vec![return_false]));
-        let if_expr = sink.push_expr(Expr::If(cond, if_block, None));
-        sink.emit_expr_stmt(if_expr);
-    }
-
-    // return true
-    let true_lit = sink.push_expr(Expr::Lit(LitKind::Bool(true)));
-    sink.emit_stmt(Stmt::Return(Some(true_lit)));
-}
-
-/// Interprets __derive_default pattern:
-#[cfg(test)]
-/// Self { field0: Default::default(), field1: Default::default(), ... }
-fn eval_default_strategy<'db>(field_names: &[IdentId<'db>], sink: &mut dyn CodegenSink<'db>) {
-    let db = sink.db();
-    let default_path =
-        PathId::from_ident(db, IdentId::new(db, "Default".to_string())).push_str(db, "default");
-
-    let fields: Vec<_> = field_names
-        .iter()
-        .map(|field_name| {
-            let default_callee = sink.push_expr(Expr::Path(Partial::Present(default_path)));
-            let default_call = sink.push_expr(Expr::Call(default_callee, vec![]));
-            crate::hir_def::Field {
-                label: Some(*field_name),
-                expr: default_call,
-            }
-        })
-        .collect();
-
-    let self_path = Partial::Present(PathId::from_ident(db, IdentId::make_self_ty(db)));
-    let record_expr = sink.push_expr(Expr::RecordInit(self_path, fields));
-    sink.emit_stmt(Stmt::Return(Some(record_expr)));
-}
-
-/// Interprets __derive_ord with Compare capability:
-/// The Fe strategy calls `cmp.less_than(self.field, other.field)`.
-/// The evaluator translates Compare.less_than to the `<` operator
-#[cfg(test)]
-/// on concrete field types (which resolves via Ord trait impls).
-fn eval_ord_strategy<'db>(field_names: &[IdentId<'db>], sink: &mut dyn CodegenSink<'db>) {
-    let db = sink.db();
-    let self_ident = IdentId::make_self(db);
-    let other_ident = IdentId::new(db, "other".to_string());
-
-    for field_name in field_names {
-        let self_expr = sink.push_expr(Expr::Path(Partial::Present(PathId::from_ident(
-            db, self_ident,
-        ))));
-        let self_field = sink.push_expr(Expr::Field(
-            self_expr,
-            Partial::Present(FieldIndex::Ident(*field_name)),
-        ));
-
-        let other_expr = sink.push_expr(Expr::Path(Partial::Present(PathId::from_ident(
-            db,
-            other_ident,
-        ))));
-        let other_field = sink.push_expr(Expr::Field(
-            other_expr,
-            Partial::Present(FieldIndex::Ident(*field_name)),
-        ));
-
-        let lt_cmp = sink.push_expr(Expr::Bin(
-            self_field,
-            other_field,
-            BinOp::Comp(CompBinOp::Lt),
-        ));
-        let cond = sink.push_cond(Cond::Expr(lt_cmp));
-        let true_lit = sink.push_expr(Expr::Lit(LitKind::Bool(true)));
-        let return_true = sink.push_stmt(Stmt::Return(Some(true_lit)));
-        let if_block = sink.push_expr(Expr::Block(vec![return_true]));
-        let if_expr = sink.push_expr(Expr::If(cond, if_block, None));
-        sink.emit_expr_stmt(if_expr);
-    }
-
-    let false_lit = sink.push_expr(Expr::Lit(LitKind::Bool(false)));
-    sink.emit_stmt(Stmt::Return(Some(false_lit)));
-}
-
-/// Interprets __derive_hash with Hasher capability:
-/// The Fe strategy calls `hasher.feed(self_val.{field})` for each field.
-/// The evaluator translates this to `self.field.hash()` calls on concrete
-/// field types (which resolves fine since fields have concrete Hash impls).
-#[cfg(test)]
-/// Result: ((0 * 31 + field0.hash()) * 31 + field1.hash()) ...
-fn eval_hash_strategy<'db>(field_names: &[IdentId<'db>], sink: &mut dyn CodegenSink<'db>) {
-    let db = sink.db();
-    let self_ident = IdentId::make_self(db);
-    let hash_ident = IdentId::new(db, "hash".to_string());
-
-    // Accumulate hash as a single expression chain:
-    // ((0 * 31 + field0.hash()) * 31 + field1.hash()) ...
-    let mut acc = sink.push_expr(Expr::Lit(LitKind::Int(crate::hir_def::IntegerId::new(
-        db,
-        num_bigint::BigUint::from(0u64),
-    ))));
-
-    for field_name in field_names {
-        let self_expr = sink.push_expr(Expr::Path(Partial::Present(PathId::from_ident(
-            db, self_ident,
-        ))));
-        let field_access = sink.push_expr(Expr::Field(
-            self_expr,
-            Partial::Present(FieldIndex::Ident(*field_name)),
-        ));
-        let hash_call = sink.push_expr(Expr::MethodCall(
-            field_access,
-            Partial::Present(hash_ident),
-            crate::hir_def::GenericArgListId::none(db),
-            vec![],
-        ));
-
-        let thirty_one = sink.push_expr(Expr::Lit(LitKind::Int(crate::hir_def::IntegerId::new(
-            db,
-            num_bigint::BigUint::from(31u64),
-        ))));
-        let mul = sink.push_expr(Expr::Bin(
-            acc,
-            thirty_one,
-            BinOp::Arith(crate::hir_def::ArithBinOp::Mul),
-        ));
-        acc = sink.push_expr(Expr::Bin(
-            mul,
-            hash_call,
-            BinOp::Arith(crate::hir_def::ArithBinOp::Add),
-        ));
-    }
-
-    sink.emit_stmt(Stmt::Return(Some(acc)));
 }
 
 #[cfg(test)]
@@ -671,14 +519,6 @@ mod tests {
                 emitted_stmts: Vec::new(),
                 next_expr_id: 0,
             }
-        }
-
-        fn expr_count(&self) -> usize {
-            self.exprs.len()
-        }
-
-        fn emitted_stmt_count(&self) -> usize {
-            self.emitted_stmts.len()
         }
 
         fn has_field_access(&self, field_name: &str) -> bool {
@@ -747,9 +587,151 @@ mod tests {
             self.stmts.push(stmt);
             StmtId::from_u32(0)
         }
-        fn db(&self) -> &'db dyn crate::HirDb {
-            self.db
+    }
+
+    fn eval_eq_strategy<'db>(field_names: &[IdentId<'db>], sink: &mut MockSink<'db>) {
+        let db = sink.db;
+        let self_ident = IdentId::make_self(db);
+        let other_ident = IdentId::new(db, "other".to_string());
+
+        for field_name in field_names {
+            let self_expr = sink.push_expr(Expr::Path(Partial::Present(PathId::from_ident(
+                db, self_ident,
+            ))));
+            let self_field = sink.push_expr(Expr::Field(
+                self_expr,
+                Partial::Present(FieldIndex::Ident(*field_name)),
+            ));
+
+            let other_expr = sink.push_expr(Expr::Path(Partial::Present(PathId::from_ident(
+                db,
+                other_ident,
+            ))));
+            let other_field = sink.push_expr(Expr::Field(
+                other_expr,
+                Partial::Present(FieldIndex::Ident(*field_name)),
+            ));
+
+            let neq = sink.push_expr(Expr::Bin(
+                self_field,
+                other_field,
+                BinOp::Comp(CompBinOp::NotEq),
+            ));
+            let cond = sink.push_cond(Cond::Expr(neq));
+            let false_lit = sink.push_expr(Expr::Lit(LitKind::Bool(false)));
+            let return_false = sink.push_stmt(Stmt::Return(Some(false_lit)));
+            let if_block = sink.push_expr(Expr::Block(vec![return_false]));
+            let if_expr = sink.push_expr(Expr::If(cond, if_block, None));
+            sink.emit_expr_stmt(if_expr);
         }
+
+        let true_lit = sink.push_expr(Expr::Lit(LitKind::Bool(true)));
+        sink.emit_stmt(Stmt::Return(Some(true_lit)));
+    }
+
+    fn eval_default_strategy<'db>(field_names: &[IdentId<'db>], sink: &mut MockSink<'db>) {
+        let db = sink.db;
+        let default_path =
+            PathId::from_ident(db, IdentId::new(db, "Default".to_string())).push_str(db, "default");
+
+        let fields: Vec<_> = field_names
+            .iter()
+            .map(|field_name| {
+                let default_callee = sink.push_expr(Expr::Path(Partial::Present(default_path)));
+                let default_call = sink.push_expr(Expr::Call(default_callee, vec![]));
+                crate::hir_def::Field {
+                    label: Some(*field_name),
+                    expr: default_call,
+                }
+            })
+            .collect();
+
+        let self_path = Partial::Present(PathId::from_ident(db, IdentId::make_self_ty(db)));
+        let record_expr = sink.push_expr(Expr::RecordInit(self_path, fields));
+        sink.emit_stmt(Stmt::Return(Some(record_expr)));
+    }
+
+    fn eval_ord_strategy<'db>(field_names: &[IdentId<'db>], sink: &mut MockSink<'db>) {
+        let db = sink.db;
+        let self_ident = IdentId::make_self(db);
+        let other_ident = IdentId::new(db, "other".to_string());
+
+        for field_name in field_names {
+            let self_expr = sink.push_expr(Expr::Path(Partial::Present(PathId::from_ident(
+                db, self_ident,
+            ))));
+            let self_field = sink.push_expr(Expr::Field(
+                self_expr,
+                Partial::Present(FieldIndex::Ident(*field_name)),
+            ));
+
+            let other_expr = sink.push_expr(Expr::Path(Partial::Present(PathId::from_ident(
+                db,
+                other_ident,
+            ))));
+            let other_field = sink.push_expr(Expr::Field(
+                other_expr,
+                Partial::Present(FieldIndex::Ident(*field_name)),
+            ));
+
+            let lt_cmp = sink.push_expr(Expr::Bin(
+                self_field,
+                other_field,
+                BinOp::Comp(CompBinOp::Lt),
+            ));
+            let cond = sink.push_cond(Cond::Expr(lt_cmp));
+            let true_lit = sink.push_expr(Expr::Lit(LitKind::Bool(true)));
+            let return_true = sink.push_stmt(Stmt::Return(Some(true_lit)));
+            let if_block = sink.push_expr(Expr::Block(vec![return_true]));
+            let if_expr = sink.push_expr(Expr::If(cond, if_block, None));
+            sink.emit_expr_stmt(if_expr);
+        }
+
+        let false_lit = sink.push_expr(Expr::Lit(LitKind::Bool(false)));
+        sink.emit_stmt(Stmt::Return(Some(false_lit)));
+    }
+
+    fn eval_hash_strategy<'db>(field_names: &[IdentId<'db>], sink: &mut MockSink<'db>) {
+        let db = sink.db;
+        let self_ident = IdentId::make_self(db);
+        let hash_ident = IdentId::new(db, "hash".to_string());
+
+        let mut acc = sink.push_expr(Expr::Lit(LitKind::Int(crate::hir_def::IntegerId::new(
+            db,
+            num_bigint::BigUint::from(0u64),
+        ))));
+
+        for field_name in field_names {
+            let self_expr = sink.push_expr(Expr::Path(Partial::Present(PathId::from_ident(
+                db, self_ident,
+            ))));
+            let field_access = sink.push_expr(Expr::Field(
+                self_expr,
+                Partial::Present(FieldIndex::Ident(*field_name)),
+            ));
+            let hash_call = sink.push_expr(Expr::MethodCall(
+                field_access,
+                Partial::Present(hash_ident),
+                crate::hir_def::GenericArgListId::none(db),
+                vec![],
+            ));
+
+            let thirty_one = sink.push_expr(Expr::Lit(LitKind::Int(
+                crate::hir_def::IntegerId::new(db, num_bigint::BigUint::from(31u64)),
+            )));
+            let mul = sink.push_expr(Expr::Bin(
+                acc,
+                thirty_one,
+                BinOp::Arith(crate::hir_def::ArithBinOp::Mul),
+            ));
+            acc = sink.push_expr(Expr::Bin(
+                mul,
+                hash_call,
+                BinOp::Arith(crate::hir_def::ArithBinOp::Add),
+            ));
+        }
+
+        sink.emit_stmt(Stmt::Return(Some(acc)));
     }
 
     #[test]
@@ -757,7 +739,7 @@ mod tests {
         let db = HirAnalysisTestDb::default();
         let fields: Vec<IdentId> = vec![];
         let mut sink = MockSink::new(&db);
-        eval_derive_strategy_into(&fields, "Eq", &mut sink);
+        eval_eq_strategy(&fields, &mut sink);
         // Empty struct: no field accesses, just return true
         assert_eq!(sink.count_if_exprs(), 0);
         assert!(sink.has_return());
@@ -769,7 +751,7 @@ mod tests {
         let field_x = IdentId::new(&db, "x".to_string());
         let fields = vec![field_x];
         let mut sink = MockSink::new(&db);
-        eval_derive_strategy_into(&fields, "Eq", &mut sink);
+        eval_eq_strategy(&fields, &mut sink);
         // Single field: 1 if-guard + return true
         assert_eq!(sink.count_if_exprs(), 1);
         assert!(sink.has_field_access("x"));
@@ -784,7 +766,7 @@ mod tests {
             .map(|n| IdentId::new(&db, n.to_string()))
             .collect();
         let mut sink = MockSink::new(&db);
-        eval_derive_strategy_into(&fields, "Eq", &mut sink);
+        eval_eq_strategy(&fields, &mut sink);
         // 5 fields → 5 if-guards + 5 != comparisons
         assert_eq!(sink.count_if_exprs(), 5);
         assert_eq!(sink.count_bin_ops(BinOp::Comp(CompBinOp::NotEq)), 5);
@@ -799,7 +781,7 @@ mod tests {
         let field_y = IdentId::new(&db, "y".to_string());
         let fields = vec![field_x, field_y];
         let mut sink = MockSink::new(&db);
-        eval_derive_strategy_into(&fields, "Default", &mut sink);
+        eval_default_strategy(&fields, &mut sink);
         // Default produces RecordInit with field labels
         assert!(sink.has_record_init());
         assert!(sink.has_return());
@@ -813,7 +795,7 @@ mod tests {
             .map(|n| IdentId::new(&db, n.to_string()))
             .collect();
         let mut sink = MockSink::new(&db);
-        eval_derive_strategy_into(&fields, "Default", &mut sink);
+        eval_default_strategy(&fields, &mut sink);
         // Builder pattern: set_field for each field, then finish → RecordInit
         assert!(sink.has_record_init());
         // 3 Default::default() calls (one per field)
@@ -833,7 +815,7 @@ mod tests {
         let field_y = IdentId::new(&db, "y".to_string());
         let fields = vec![field_x, field_y];
         let mut sink = MockSink::new(&db);
-        eval_derive_strategy_into(&fields, "Hash", &mut sink);
+        eval_hash_strategy(&fields, &mut sink);
         // Hasher.feed → .hash() on each field, accumulate with * 31 +
         assert_eq!(sink.count_method_calls("hash"), 2);
         assert!(sink.has_field_access("x"));
@@ -848,7 +830,7 @@ mod tests {
         let field_b = IdentId::new(&db, "b".to_string());
         let fields = vec![field_a, field_b];
         let mut sink = MockSink::new(&db);
-        eval_derive_strategy_into(&fields, "Ord", &mut sink);
+        eval_ord_strategy(&fields, &mut sink);
         // Compare.less_than → `<` operator on each field pair
         assert_eq!(sink.count_bin_ops(BinOp::Comp(CompBinOp::Lt)), 2);
         assert_eq!(sink.count_if_exprs(), 2);
@@ -864,22 +846,22 @@ mod tests {
 
         // Reflect alone (Eq only needs Reflect)
         let mut eq_sink = MockSink::new(&db);
-        eval_derive_strategy_into(&fields, "Eq", &mut eq_sink);
+        eval_eq_strategy(&fields, &mut eq_sink);
         assert_eq!(eq_sink.count_if_exprs(), 1);
 
         // Reflect + Builder (Default needs both)
         let mut default_sink = MockSink::new(&db);
-        eval_derive_strategy_into(&fields, "Default", &mut default_sink);
+        eval_default_strategy(&fields, &mut default_sink);
         assert!(default_sink.has_record_init());
 
         // Reflect + Hasher (Hash)
         let mut hash_sink = MockSink::new(&db);
-        eval_derive_strategy_into(&fields, "Hash", &mut hash_sink);
+        eval_hash_strategy(&fields, &mut hash_sink);
         assert_eq!(hash_sink.count_method_calls("hash"), 1);
 
         // Reflect + Compare (Ord)
         let mut ord_sink = MockSink::new(&db);
-        eval_derive_strategy_into(&fields, "Ord", &mut ord_sink);
+        eval_ord_strategy(&fields, &mut ord_sink);
         assert_eq!(ord_sink.count_bin_ops(BinOp::Comp(CompBinOp::Lt)), 1);
     }
 
@@ -893,7 +875,7 @@ mod tests {
         // 1 field → 1 guard
         let one_field = vec![IdentId::new(&db, "x".to_string())];
         let mut sink1 = MockSink::new(&db);
-        eval_derive_strategy_into(&one_field, "Eq", &mut sink1);
+        eval_eq_strategy(&one_field, &mut sink1);
         let guards_1 = sink1.count_if_exprs();
 
         // 3 fields → 3 guards (strategy loops over field_count)
@@ -903,7 +885,7 @@ mod tests {
             IdentId::new(&db, "c".to_string()),
         ];
         let mut sink3 = MockSink::new(&db);
-        eval_derive_strategy_into(&three_fields, "Eq", &mut sink3);
+        eval_eq_strategy(&three_fields, &mut sink3);
         let guards_3 = sink3.count_if_exprs();
 
         // The output SCALES with field count — proves the strategy's
@@ -926,13 +908,13 @@ mod tests {
         ];
 
         let mut eq_sink = MockSink::new(&db);
-        eval_derive_strategy_into(&fields, "Eq", &mut eq_sink);
+        eval_eq_strategy(&fields, &mut eq_sink);
 
         let mut ord_sink = MockSink::new(&db);
-        eval_derive_strategy_into(&fields, "Ord", &mut ord_sink);
+        eval_ord_strategy(&fields, &mut ord_sink);
 
         let mut default_sink = MockSink::new(&db);
-        eval_derive_strategy_into(&fields, "Default", &mut default_sink);
+        eval_default_strategy(&fields, &mut default_sink);
 
         // Eq uses !=, Ord uses <
         assert_eq!(eq_sink.count_bin_ops(BinOp::Comp(CompBinOp::NotEq)), 2);

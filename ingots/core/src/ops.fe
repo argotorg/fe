@@ -163,13 +163,9 @@ const fn __derive_hash<T>(self_val: T) -> u256
     hasher.finish()
 }
 
-pub trait Compare<T> {
-    fn less_than(self, _ a: T, _ b: T) -> bool
-}
-
 #[derive_strategy]
 const fn __derive_ord<T>(self_val: T, other: T) -> bool
-    uses (reflect: Reflect<T>, cmp: Compare<T>)
+    uses (reflect: Reflect<T>)
 {
     for i in 0..reflect.field_count() {
         if self_val.{reflect.field_name(i)} < other.{reflect.field_name(i)} {
