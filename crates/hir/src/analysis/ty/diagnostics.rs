@@ -883,6 +883,7 @@ pub enum TraitConstraintDiag<'db> {
         primary_goal: TraitInstId<'db>,
         unsat_subgoal: Option<TraitInstId<'db>>,
         required_by: Option<CallConstraintDiagInfo<'db>>,
+        const_predicate_failures: Vec<String>,
     },
 
     InfiniteBoundRecursion(DynLazySpan<'db>, String),

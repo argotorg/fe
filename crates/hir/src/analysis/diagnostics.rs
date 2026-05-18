@@ -4354,6 +4354,7 @@ impl DiagnosticVoucher for TraitConstraintDiag<'_> {
                 primary_goal,
                 unsat_subgoal,
                 required_by,
+                const_predicate_failures,
             } => {
                 let msg = format!(
                     "`{}` doesn't implement `{}`",
@@ -4394,7 +4395,7 @@ impl DiagnosticVoucher for TraitConstraintDiag<'_> {
                     severity,
                     message: "trait bound is not satisfied".to_string(),
                     sub_diagnostics,
-                    notes: vec![],
+                    notes: const_predicate_failures.clone(),
                     error_code,
                 }
             }
