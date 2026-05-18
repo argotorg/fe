@@ -51,8 +51,17 @@ enum InterpValue<'db> {
     Symbolic(ExprId),
     /// Concrete boolean
     Bool(bool),
-    /// Unit / capability placeholder
+    /// A typed capability from the strategy's `uses` clause
+    Capability(CapabilityKind),
+    /// Unit
     Unit,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CapabilityKind {
+    Reflect,
+    Builder,
+    Hasher,
 }
 
 /// HIR-level interpreter for derive strategy functions.
@@ -71,8 +80,6 @@ struct HirStrategyInterp<'a, 'db> {
     builder_fields: Vec<(usize, InterpValue<'db>)>,
     /// Hasher accumulator: running hash expression
     hash_accum: Option<ExprId>,
-    /// Whether we're in a hash context (feed() was called)
-    in_hash_context: bool,
 }
 
 impl<'a, 'db> HirStrategyInterp<'a, 'db> {
@@ -101,12 +108,9 @@ impl<'a, 'db> HirStrategyInterp<'a, 'db> {
             params: vec![
                 InterpValue::Symbolic(self_expr),
                 InterpValue::Symbolic(other_expr),
-                InterpValue::Unit, // reflect capability
-                InterpValue::Unit, // other capabilities
             ],
             builder_fields: Vec::new(),
             hash_accum: None,
-            in_hash_context: false,
         }
     }
 
@@ -164,6 +168,15 @@ impl<'a, 'db> HirStrategyInterp<'a, 'db> {
                     if name_str == "false" {
                         return InterpValue::Bool(false);
                     }
+                    if name_str == "reflect" {
+                        return InterpValue::Capability(CapabilityKind::Reflect);
+                    }
+                    if name_str == "builder" {
+                        return InterpValue::Capability(CapabilityKind::Builder);
+                    }
+                    if name_str == "hasher" {
+                        return InterpValue::Capability(CapabilityKind::Hasher);
+                    }
                     for (pat_id, val) in &self.locals {
                         let pat = self.body.pats(self.db)[*pat_id].clone();
                         if let Partial::Present(Pat::Path(Partial::Present(pat_path), _)) = pat
@@ -211,9 +224,15 @@ impl<'a, 'db> HirStrategyInterp<'a, 'db> {
             Expr::MethodCall(receiver, method_name, _, args) => {
                 let recv_val = self.eval_expr(receiver);
                 let method = method_name.to_opt().map(|n| n.data(self.db).to_string());
-                match method.as_deref() {
-                    Some("field_count") => InterpValue::Int(self.field_names.len()),
-                    Some("field_name") => {
+                let method_str = method.as_deref();
+
+                match (&recv_val, method_str) {
+                    // Reflect.field_count() → concrete field count
+                    (InterpValue::Capability(CapabilityKind::Reflect), Some("field_count")) => {
+                        InterpValue::Int(self.field_names.len())
+                    }
+                    // Reflect.field_name(i) → concrete field name
+                    (InterpValue::Capability(CapabilityKind::Reflect), Some("field_name")) => {
                         let idx = args
                             .first()
                             .map(|a| self.eval_expr(a.expr))
@@ -227,23 +246,8 @@ impl<'a, 'db> HirStrategyInterp<'a, 'db> {
                             .map(|n| InterpValue::Name(*n))
                             .unwrap_or(InterpValue::Unit)
                     }
-                    Some("hash") => {
-                        // Hasher capability: emit .hash() on symbolic field
-                        if let InterpValue::Symbolic(recv_id) = recv_val {
-                            let hash_ident = IdentId::new(self.db, "hash".to_string());
-                            let expr_id = self.sink.push_expr(Expr::MethodCall(
-                                recv_id,
-                                Partial::Present(hash_ident),
-                                crate::hir_def::GenericArgListId::none(self.db),
-                                vec![],
-                            ));
-                            InterpValue::Symbolic(expr_id)
-                        } else {
-                            InterpValue::Unit
-                        }
-                    }
-                    Some("set_field") => {
-                        // Builder.set_field(index, value): accumulate field
+                    // Builder.set_field(index, value) → accumulate field
+                    (InterpValue::Capability(CapabilityKind::Builder), Some("set_field")) => {
                         let idx = args
                             .first()
                             .map(|a| self.eval_expr(a.expr))
@@ -259,45 +263,31 @@ impl<'a, 'db> HirStrategyInterp<'a, 'db> {
                         self.builder_fields.push((idx, value));
                         InterpValue::Unit
                     }
-                    Some("finish") => {
-                        if let Some(acc) = self.hash_accum.take() {
-                            return InterpValue::Symbolic(acc);
-                        }
-                        if self.in_hash_context {
-                            // Hash on empty struct: no fields to hash, return 0
-                            let zero = self.sink.push_expr(Expr::Lit(LitKind::Int(
-                                crate::hir_def::IntegerId::new(
-                                    self.db,
-                                    num_bigint::BigUint::from(0u64),
-                                ),
-                            )));
-                            InterpValue::Symbolic(zero)
-                        } else {
-                            // Builder.finish(): emit RecordInit
-                            let db = self.db;
-                            let fields: Vec<_> = self
-                                .builder_fields
-                                .drain(..)
-                                .filter_map(|(idx, val)| {
-                                    let field_name = self.field_names.get(idx)?;
-                                    let expr_id = match val {
-                                        InterpValue::Symbolic(id) => id,
-                                        _ => return None,
-                                    };
-                                    Some(crate::hir_def::Field {
-                                        label: Some(*field_name),
-                                        expr: expr_id,
-                                    })
+                    // Builder.finish() → emit RecordInit
+                    (InterpValue::Capability(CapabilityKind::Builder), Some("finish")) => {
+                        let db = self.db;
+                        let fields: Vec<_> = self
+                            .builder_fields
+                            .drain(..)
+                            .filter_map(|(idx, val)| {
+                                let field_name = self.field_names.get(idx)?;
+                                let expr_id = match val {
+                                    InterpValue::Symbolic(id) => id,
+                                    _ => return None,
+                                };
+                                Some(crate::hir_def::Field {
+                                    label: Some(*field_name),
+                                    expr: expr_id,
                                 })
-                                .collect();
-                            let self_path =
-                                Partial::Present(PathId::from_ident(db, IdentId::make_self_ty(db)));
-                            let record = self.sink.push_expr(Expr::RecordInit(self_path, fields));
-                            InterpValue::Symbolic(record)
-                        }
+                            })
+                            .collect();
+                        let self_path =
+                            Partial::Present(PathId::from_ident(db, IdentId::make_self_ty(db)));
+                        let record = self.sink.push_expr(Expr::RecordInit(self_path, fields));
+                        InterpValue::Symbolic(record)
                     }
-                    Some("feed") => {
-                        self.in_hash_context = true;
+                    // Hasher.feed(value) → hash the field and accumulate
+                    (InterpValue::Capability(CapabilityKind::Hasher), Some("feed")) => {
                         if let Some(arg) = args.first() {
                             let val = self.eval_expr(arg.expr);
                             if let InterpValue::Symbolic(field_id) = val {
@@ -308,7 +298,6 @@ impl<'a, 'db> HirStrategyInterp<'a, 'db> {
                                     crate::hir_def::GenericArgListId::none(self.db),
                                     vec![],
                                 ));
-                                // Accumulate: acc = acc * 31 + field.hash()
                                 let acc = self.hash_accum.unwrap_or_else(|| {
                                     self.sink.push_expr(Expr::Lit(LitKind::Int(
                                         crate::hir_def::IntegerId::new(
@@ -337,6 +326,31 @@ impl<'a, 'db> HirStrategyInterp<'a, 'db> {
                             }
                         }
                         InterpValue::Unit
+                    }
+                    // Hasher.finish() → return accumulated hash (or 0 for empty)
+                    (InterpValue::Capability(CapabilityKind::Hasher), Some("finish")) => {
+                        if let Some(acc) = self.hash_accum.take() {
+                            InterpValue::Symbolic(acc)
+                        } else {
+                            let zero = self.sink.push_expr(Expr::Lit(LitKind::Int(
+                                crate::hir_def::IntegerId::new(
+                                    self.db,
+                                    num_bigint::BigUint::from(0u64),
+                                ),
+                            )));
+                            InterpValue::Symbolic(zero)
+                        }
+                    }
+                    // .hash() on a symbolic field value → emit method call
+                    (InterpValue::Symbolic(recv_id), Some("hash")) => {
+                        let hash_ident = IdentId::new(self.db, "hash".to_string());
+                        let expr_id = self.sink.push_expr(Expr::MethodCall(
+                            *recv_id,
+                            Partial::Present(hash_ident),
+                            crate::hir_def::GenericArgListId::none(self.db),
+                            vec![],
+                        ));
+                        InterpValue::Symbolic(expr_id)
                     }
                     _ => recv_val,
                 }

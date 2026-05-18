@@ -178,6 +178,21 @@ const fn __derive_ord<T>(self_val: T, other: T) -> bool
     false
 }
 
+#[derive_strategy]
+const fn __derive_le<T>(self_val: T, other: T) -> bool {
+    !(other < self_val)
+}
+
+#[derive_strategy]
+const fn __derive_gt<T>(self_val: T, other: T) -> bool {
+    other < self_val
+}
+
+#[derive_strategy]
+const fn __derive_ge<T>(self_val: T, other: T) -> bool {
+    !(self_val < other)
+}
+
 // Indexing operator
 pub trait Index<I> {
     type Output

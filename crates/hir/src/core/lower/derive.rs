@@ -9,9 +9,9 @@ use super::{
 use crate::{
     analysis::semantic::ctfe::derive_eval::CodegenSink,
     hir_def::{
-        AttrListId, BinOp, CompBinOp, Cond, Expr, ExprId, FieldDef, FieldDefListId, FuncModifiers,
-        FuncParam, FuncParamMode, FuncParamName, GenericParamListId, IdentId, Partial, PathId,
-        Stmt, StmtId, Struct, TraitRefId, TypeId, TypeKind, Visibility,
+        AttrListId, Cond, Expr, ExprId, FieldDef, FieldDefListId, FuncModifiers, FuncParam,
+        FuncParamMode, FuncParamName, GenericParamListId, IdentId, Partial, PathId, Stmt, StmtId,
+        Struct, TraitRefId, TypeId, TypeKind, Visibility,
     },
     span::DeriveDesugared,
 };
@@ -329,7 +329,13 @@ fn generate_derive_impl<'db>(
     });
 }
 
-// TODO: replace with CTFE evaluation of __derive_ord strategy
+const ORD_METHODS: &[(&str, &str)] = &[
+    ("lt", "__derive_ord"),
+    ("le", "__derive_le"),
+    ("gt", "__derive_gt"),
+    ("ge", "__derive_ge"),
+];
+
 fn generate_ord_impl<'db>(
     builder: &mut HirBuilder<'_, 'db, DeriveDesugared>,
     self_ty: TypeId<'db>,
@@ -369,69 +375,36 @@ fn generate_ord_impl<'db>(
     let ret_ty = Some(builder.ty_ident(builder.ident("bool")));
 
     let field_specs_owned: Vec<_> = field_specs.to_vec();
-
     let field_names: Vec<_> = field_specs_owned.iter().map(|(name, _)| *name).collect();
 
     builder.impl_trait(trait_ref, self_ty, |builder| {
-        let lt_name = builder.ident("lt");
-        let lt_params = builder.params([self_param.clone(), other_param.clone()]);
-        builder.func_with_body(
-            lt_name,
-            generic_params,
-            lt_params,
-            ret_ty,
-            FuncModifiers::new(Visibility::Private, false, false, false),
-            |body| {
-                let Some(ord_strategy) = find_strategy_func(body.db(), ingot, "__derive_ord")
-                else {
-                    let lit = body.push_expr(Expr::Lit(crate::hir_def::LitKind::Bool(false)));
-                    body.emit_stmt(Stmt::Return(Some(lit)));
-                    return;
-                };
-                assert!(
-                    crate::analysis::semantic::ctfe::derive_eval::eval_strategy_from_hir(
-                        body.db(),
-                        ord_strategy,
-                        &field_names,
-                        body,
-                    ),
-                    "CTFE derive_ord evaluation failed",
-                );
-            },
-        );
-
-        let le_name = builder.ident("le");
-        let le_params = builder.params([self_param.clone(), other_param.clone()]);
-        builder.func_with_body(
-            le_name,
-            generic_params,
-            le_params,
-            ret_ty,
-            FuncModifiers::new(Visibility::Private, false, false, false),
-            emit_ord_le_body,
-        );
-
-        let gt_name = builder.ident("gt");
-        let gt_params = builder.params([self_param.clone(), other_param.clone()]);
-        builder.func_with_body(
-            gt_name,
-            generic_params,
-            gt_params,
-            ret_ty,
-            FuncModifiers::new(Visibility::Private, false, false, false),
-            emit_ord_gt_body,
-        );
-
-        let ge_name = builder.ident("ge");
-        let ge_params = builder.params([self_param, other_param]);
-        builder.func_with_body(
-            ge_name,
-            generic_params,
-            ge_params,
-            ret_ty,
-            FuncModifiers::new(Visibility::Private, false, false, false),
-            emit_ord_ge_body,
-        );
+        for (method, strategy_name) in ORD_METHODS {
+            let name = builder.ident(method);
+            let params = builder.params([self_param.clone(), other_param.clone()]);
+            builder.func_with_body(
+                name,
+                generic_params,
+                params,
+                ret_ty,
+                FuncModifiers::new(Visibility::Private, false, false, false),
+                |body| {
+                    let Some(strategy) = find_strategy_func(body.db(), ingot, strategy_name) else {
+                        let lit = body.push_expr(Expr::Lit(crate::hir_def::LitKind::Bool(false)));
+                        body.emit_stmt(Stmt::Return(Some(lit)));
+                        return;
+                    };
+                    assert!(
+                        crate::analysis::semantic::ctfe::derive_eval::eval_strategy_from_hir(
+                            body.db(),
+                            strategy,
+                            &field_names,
+                            body,
+                        ),
+                        "CTFE derive strategy evaluation failed for Ord::{method}",
+                    );
+                },
+            );
+        }
     });
 }
 
@@ -516,44 +489,6 @@ fn emit_derive_body<'db>(
         "CTFE derive strategy evaluation failed for {:?}",
         spec.trait_name,
     );
-}
-
-/// le: `!(other < self)`
-fn emit_ord_le_body<'db>(body: &mut super::hir_builder::BodyBuilder<'_, 'db, DeriveDesugared>) {
-    let db = body.db();
-    let self_ident = IdentId::make_self(db);
-    let other_ident = IdentId::new(db, "other".to_string());
-
-    let other_expr = body.path_expr(PathId::from_ident(db, other_ident));
-    let self_expr = body.path_expr(PathId::from_ident(db, self_ident));
-    let lt = body.push_expr(Expr::Bin(other_expr, self_expr, BinOp::Comp(CompBinOp::Lt)));
-    let negated = body.push_expr(Expr::Un(lt, crate::hir_def::UnOp::Not));
-    body.emit_return(Some(negated));
-}
-
-/// gt: `other < self`
-fn emit_ord_gt_body<'db>(body: &mut super::hir_builder::BodyBuilder<'_, 'db, DeriveDesugared>) {
-    let db = body.db();
-    let self_ident = IdentId::make_self(db);
-    let other_ident = IdentId::new(db, "other".to_string());
-
-    let other_expr = body.path_expr(PathId::from_ident(db, other_ident));
-    let self_expr = body.path_expr(PathId::from_ident(db, self_ident));
-    let lt = body.push_expr(Expr::Bin(other_expr, self_expr, BinOp::Comp(CompBinOp::Lt)));
-    body.emit_return(Some(lt));
-}
-
-/// ge: `!(self < other)`
-fn emit_ord_ge_body<'db>(body: &mut super::hir_builder::BodyBuilder<'_, 'db, DeriveDesugared>) {
-    let db = body.db();
-    let self_ident = IdentId::make_self(db);
-    let other_ident = IdentId::new(db, "other".to_string());
-
-    let self_expr = body.path_expr(PathId::from_ident(db, self_ident));
-    let other_expr = body.path_expr(PathId::from_ident(db, other_ident));
-    let lt = body.push_expr(Expr::Bin(self_expr, other_expr, BinOp::Comp(CompBinOp::Lt)));
-    let negated = body.push_expr(Expr::Un(lt, crate::hir_def::UnOp::Not));
-    body.emit_return(Some(negated));
 }
 
 /// Generate `impl AbiSize for Struct { const HEAD_SIZE: u256 = ...; const IS_DYNAMIC: bool = ... }`
