@@ -1,0 +1,8 @@
+#[derive(Ord)]
+struct Priority {
+    level: u256,
+}
+
+fn test(a: Priority, b: Priority) -> bool {
+    a.lt(b)
+}

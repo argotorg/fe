@@ -738,6 +738,7 @@ impl<'db> NormalizeCtxt<'db> {
                     place,
                 }
             }
+            SExpr::DynField { base, .. } => NExpr::Use(self.normalize_operand(*base, origin)),
             SExpr::Index { base, index } => {
                 let place = self.project_local_place(
                     base.value,

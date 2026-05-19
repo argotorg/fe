@@ -1,0 +1,12 @@
+#[derive(Eq, Default)]
+struct Wrapper {
+    value: u256,
+}
+
+fn test_eq(a: Wrapper, b: Wrapper) -> bool {
+    a.eq(b)
+}
+
+fn test_default() -> Wrapper {
+    Wrapper::default()
+}

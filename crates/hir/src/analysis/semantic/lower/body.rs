@@ -582,6 +582,18 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             }
             Expr::Match(scrutinee, arms) => self.lower_match_expr(expr, *scrutinee, arms),
             Expr::With(bindings, body) => self.lower_with_expr(bindings, *body),
+            Expr::DynField(receiver, field_expr) => {
+                let base = self.lower_expr_operand(*receiver);
+                let field_expr_op = self.lower_expr_operand(*field_expr);
+                self.emit_expr_with_origin(
+                    origin,
+                    ty,
+                    SExpr::DynField {
+                        base,
+                        field_expr: field_expr_op,
+                    },
+                )
+            }
         }
     }
 
@@ -722,16 +734,33 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     )
                 }
             }
-            None => panic!(
-                "typed path expression is missing semantic value-path classification: owner={:?} expr={expr:?} data={:?} ty={} ty_data={:?} binding={:?} const_ref={:?} code_region_ref={:?}",
-                self.template_owner,
-                self.body.exprs(self.db)[expr],
-                self.expr_ty(expr).pretty_print(self.db),
-                self.expr_ty(expr).data(self.db),
-                self.typed_body.expr_binding(expr),
-                self.typed_body.expr_const_ref(expr),
-                self.typed_body.expr_code_region_ref(self.db, expr),
-            ),
+            None => {
+                // Unresolved path in strategy body — check if it's a local binding
+                let expr_ty = self.expr_ty(expr);
+                if let Some(binding) = self.typed_body.expr_binding(expr) {
+                    if let Some(&local) = self.binding_locals.get(&binding) {
+                        return self.emit_expr(
+                            expr_ty,
+                            SExpr::ReadPlace {
+                                place: SPlace {
+                                    local,
+                                    path: Default::default(),
+                                },
+                            },
+                        );
+                    }
+                }
+                panic!(
+                    "typed path expression is missing semantic value-path classification: owner={:?} expr={expr:?} data={:?} ty={} ty_data={:?} binding={:?} const_ref={:?} code_region_ref={:?}",
+                    self.template_owner,
+                    self.body.exprs(self.db)[expr],
+                    self.expr_ty(expr).pretty_print(self.db),
+                    self.expr_ty(expr).data(self.db),
+                    self.typed_body.expr_binding(expr),
+                    self.typed_body.expr_const_ref(expr),
+                    self.typed_body.expr_code_region_ref(self.db, expr),
+                )
+            }
         }
     }
 
@@ -851,12 +880,30 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         receiver: Option<ExprId>,
         args: &[ExprId],
     ) -> SValueId {
-        let lowering = self
-            .typed_body
-            .semantic_expr_lowering(expr)
-            .unwrap_or_else(|| {
-                panic!("semantic lowering missing for call-like expression {expr:?}")
-            });
+        let Some(lowering) = self.typed_body.semantic_expr_lowering(expr) else {
+            // Unresolved call in a strategy body — operators on DynField-typed
+            // values can't resolve to trait methods. Emit as SExpr::Binary so
+            // the CTFE machine handles them symbolically.
+            let hir_expr = self.body.exprs(self.db)[expr].clone();
+            match hir_expr {
+                crate::hir_def::Partial::Present(crate::hir_def::Expr::Bin(
+                    lhs_expr,
+                    rhs_expr,
+                    op,
+                )) => {
+                    let lhs = self.lower_expr_operand(lhs_expr);
+                    let rhs = self.lower_expr_operand(rhs_expr);
+                    return self.emit_expr(ty, SExpr::Binary { op, lhs, rhs });
+                }
+                _ => {
+                    // Unresolved method/call — emit receiver as-is for CTFE
+                    if let Some(&recv) = args.first() {
+                        return self.lower_expr(recv);
+                    }
+                    panic!("semantic lowering missing for call-like expression {expr:?}")
+                }
+            }
+        };
         match lowering {
             SemanticExprLowering::Call { callable } => {
                 self.lower_callable_expr(expr, ty, receiver, args, callable)

@@ -6,12 +6,12 @@ use crate::{
     HirDb,
     hir_def::{
         ArithBinOp, AssocConstDef, AssocTyDef, Attr, AttrArg, AttrListId, BinOp, Body, BodyKind,
-        EffectParamListId, Expr, ExprId, FieldDefListId, FieldIndex, Func, FuncModifiers,
-        FuncParam, FuncParamListId, FuncParamMode, FuncParamName, GenericArg, GenericArgListId,
-        GenericParam, GenericParamListId, IdentId, ImplTrait, ItemKind, Mod, NormalAttr, Partial,
-        Pat, PatId, PathId, PathKind, Stmt, StmtId, Struct, TopLevelMod, TrackedItemId,
-        TrackedItemVariant, TraitRefId, TypeBound, TypeGenericArg, TypeGenericParam, TypeId,
-        TypeKind, TypeMode, UnOp, Visibility, WhereClauseId, expr::CallArg,
+        Cond, CondId, EffectParamListId, Expr, ExprId, FieldDefListId, FieldIndex, Func,
+        FuncModifiers, FuncParam, FuncParamListId, FuncParamMode, FuncParamName, GenericArg,
+        GenericArgListId, GenericParam, GenericParamListId, IdentId, ImplTrait, ItemKind, Mod,
+        NormalAttr, Partial, Pat, PatId, PathId, PathKind, Stmt, StmtId, Struct, TopLevelMod,
+        TrackedItemId, TrackedItemVariant, TraitRefId, TypeBound, TypeGenericArg, TypeGenericParam,
+        TypeId, TypeKind, TypeMode, UnOp, Visibility, WhereClauseId, expr::CallArg,
     },
     span::{DesugaredOrigin, HirOrigin},
 };
@@ -607,6 +607,10 @@ where
 
     pub(super) fn push_expr(&mut self, expr: Expr<'db>) -> ExprId {
         self.body.push_expr(expr, self.expr_origin())
+    }
+
+    pub(super) fn push_cond(&mut self, cond: Cond) -> CondId {
+        self.body.push_cond(cond)
     }
 
     pub(super) fn push_pat(&mut self, pat: Pat<'db>) -> PatId {

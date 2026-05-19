@@ -1,0 +1,10 @@
+#[derive(Eq, Default)]
+struct Empty {}
+
+fn test_eq(a: Empty, b: Empty) -> bool {
+    a.eq(b)
+}
+
+fn test_default() -> Empty {
+    Empty::default()
+}

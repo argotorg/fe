@@ -1,0 +1,9 @@
+#[derive(Eq)]
+struct Point {
+    x: u256,
+    y: u256,
+}
+
+fn test(a: Point, b: Point) -> bool {
+    a.eq(b)
+}

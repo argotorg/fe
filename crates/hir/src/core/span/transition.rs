@@ -532,6 +532,9 @@ impl DesugaredOrigin {
             Self::Error(super::ErrorDesugared { error_struct }) => {
                 error_struct.to_node(&root).syntax().text_range()
             }
+            Self::Derive(super::DeriveDesugared { derive_struct }) => {
+                derive_struct.to_node(&root).syntax().text_range()
+            }
         };
 
         Span::new(file, range, SpanKind::Original)

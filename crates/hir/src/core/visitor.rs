@@ -1368,6 +1368,11 @@ pub fn walk_expr<'db, V>(
             }
         }
 
+        Expr::DynField(receiver_id, field_expr_id) => {
+            visit_node_in_body!(visitor, ctxt, receiver_id, expr);
+            visit_node_in_body!(visitor, ctxt, field_expr_id, expr);
+        }
+
         Expr::Tuple(elems) => {
             for elem_id in elems {
                 visit_node_in_body!(visitor, ctxt, elem_id, expr);

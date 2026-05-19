@@ -1,0 +1,9 @@
+#[derive(Default)]
+struct Config {
+    value: u256,
+    flag: bool,
+}
+
+fn test() -> Config {
+    Config::default()
+}

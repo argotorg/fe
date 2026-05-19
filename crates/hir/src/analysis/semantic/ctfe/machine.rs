@@ -3,6 +3,7 @@ use num_bigint::{BigInt, BigUint, Sign};
 use num_traits::{One, ToPrimitive, Zero};
 use ruint::aliases::U256;
 use rustc_hash::FxHashMap;
+
 use salsa::Update;
 use std::rc::Rc;
 use tiny_keccak::{Hasher, Keccak};
@@ -1025,9 +1026,9 @@ impl<'db> CtfeMachine<'db> {
                     then_bb,
                     else_bb,
                 } => {
-                    let cond = self.load_value(frame_idx, cond, term_origin)?;
-                    let cond = self.expect_bool(frame_idx, cond, term_origin)?;
-                    self.frames[frame_idx].current = if cond {
+                    let cond_val = self.load_value(frame_idx, cond, term_origin)?;
+                    let cond_bool = self.expect_bool(frame_idx, cond_val, term_origin)?;
+                    self.frames[frame_idx].current = if cond_bool {
                         then_bb.index()
                     } else {
                         else_bb.index()
@@ -1047,7 +1048,8 @@ impl<'db> CtfeMachine<'db> {
                         .map_or_else(|| default.map_or(0, |bb| bb.index()), |(_, bb)| bb.index());
                 }
                 STerminatorKind::Return(Some(value)) => {
-                    return self.read_operand(frame_idx, value, term_origin);
+                    let ret_val = self.read_operand(frame_idx, value, term_origin)?;
+                    return Ok(ret_val);
                 }
                 STerminatorKind::Return(None) => {
                     return Ok(CtfeValue::Value(CtfeConstValue::unit()));
@@ -1312,6 +1314,11 @@ impl<'db> CtfeMachine<'db> {
                         },
                     }),
                 }
+            }
+            SExpr::DynField { base, field_expr } => {
+                let _base_val = self.load_value(frame_idx, base, origin)?;
+                let _field_val = self.load_value(frame_idx, field_expr, origin)?;
+                Err(CtfeError::NotConstEvaluable { origin })
             }
             SExpr::CodeRegionOffset { .. } | SExpr::CodeRegionLen { .. } => {
                 Err(CtfeError::NotConstEvaluable { origin })

@@ -3463,6 +3463,24 @@ impl<'db> TypedBody<'db> {
                     seen,
                 );
             }
+            Expr::DynField(receiver, field_expr) => {
+                self.collect_explicit_return_param_sources_in_expr(
+                    db,
+                    body,
+                    *receiver,
+                    out,
+                    saw_non_param,
+                    seen,
+                );
+                self.collect_explicit_return_param_sources_in_expr(
+                    db,
+                    body,
+                    *field_expr,
+                    out,
+                    saw_non_param,
+                    seen,
+                );
+            }
             Expr::Call(callee, args) => {
                 self.collect_explicit_return_param_sources_in_expr(
                     db,

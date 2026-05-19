@@ -16,6 +16,7 @@ ast_node! {
     | SK::PathExpr
     | SK::RecordInitExpr
     | SK::FieldExpr
+    | SK::ComptimeFieldExpr
     | SK::IndexExpr
     | SK::TupleExpr
     | SK::ArrayExpr
@@ -47,6 +48,9 @@ impl Expr {
                 ExprKind::RecordInit(AstNode::cast(self.syntax().clone()).unwrap())
             }
             SK::FieldExpr => ExprKind::Field(AstNode::cast(self.syntax().clone()).unwrap()),
+            SK::ComptimeFieldExpr => {
+                ExprKind::ComptimeField(AstNode::cast(self.syntax().clone()).unwrap())
+            }
             SK::IndexExpr => ExprKind::Index(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::TupleExpr => ExprKind::Tuple(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::ArrayExpr => ExprKind::Array(AstNode::cast(self.syntax().clone()).unwrap()),
@@ -241,6 +245,21 @@ impl FieldExpr {
     pub fn name_or_index(&self) -> Option<SyntaxToken> {
         self.field_name()
             .or_else(|| self.field_index().map(|i| i.token().clone()))
+    }
+}
+
+ast_node! {
+    /// `expr.{field_expr}` — comptime field access
+    pub struct ComptimeFieldExpr,
+    SK::ComptimeFieldExpr
+}
+impl ComptimeFieldExpr {
+    pub fn receiver(&self) -> Option<Expr> {
+        support::children::<Expr>(self.syntax()).next()
+    }
+
+    pub fn field_expr(&self) -> Option<Expr> {
+        support::children::<Expr>(self.syntax()).nth(1)
     }
 }
 
@@ -482,6 +501,7 @@ pub enum ExprKind {
     Path(PathExpr),
     RecordInit(RecordInitExpr),
     Field(FieldExpr),
+    ComptimeField(ComptimeFieldExpr),
     Index(IndexExpr),
     Tuple(TupleExpr),
     Array(ArrayExpr),

@@ -712,6 +712,52 @@ impl DiagnosticVoucher for crate::ErrorDiagnostic {
     }
 }
 
+impl DiagnosticVoucher for crate::DeriveError {
+    fn to_complete(&self, _db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
+        use crate::DeriveErrorKind;
+
+        let primary_span = Span::new(self.file, self.primary_range, SpanKind::Original);
+
+        let (code, message, label, notes) = match &self.kind {
+            DeriveErrorKind::DeriveOnEnum => (
+                1,
+                "`#[derive]` is only valid on structs".to_string(),
+                "`#[derive]` cannot be applied to enums".to_string(),
+                vec!["move `#[derive]` to a struct declaration".to_string()],
+            ),
+            DeriveErrorKind::DeriveOnGenericStruct { trait_name } => (
+                2,
+                format!("`#[derive({trait_name})]` structs must be non-generic"),
+                "generics are not supported on derived structs".to_string(),
+                vec!["remove generic parameters from the struct".to_string()],
+            ),
+            DeriveErrorKind::UnknownDeriveTrait { name } => (
+                3,
+                format!("unknown derive trait `{name}`"),
+                format!("`{name}` is not a recognized derive trait"),
+                vec![format!(
+                    "recognized traits: {}",
+                    crate::lower::derive::KNOWN_DERIVE_TRAITS.join(", ")
+                )],
+            ),
+        };
+
+        let error_code = GlobalErrorCode::new(DiagnosticPass::DeriveLower, code);
+
+        CompleteDiagnostic::new(
+            Severity::Error,
+            message,
+            vec![SubDiagnostic::new(
+                LabelStyle::Primary,
+                label,
+                Some(primary_span),
+            )],
+            notes,
+            error_code,
+        )
+    }
+}
+
 impl DiagnosticVoucher for crate::InlineAttrError {
     fn to_complete(&self, _db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
         use crate::hir_def::InlineAttrErrorKind;

@@ -264,6 +264,7 @@ fn writable_local_roots<'db>(
             | SExpr::ExtractEnumField { .. }
             | SExpr::CodeRegionOffset { .. }
             | SExpr::CodeRegionLen { .. }
+            | SExpr::DynField { .. }
             | SExpr::Call { .. } => {}
         }
     }
