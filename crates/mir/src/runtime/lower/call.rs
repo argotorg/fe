@@ -35,10 +35,17 @@ pub fn collect_referenced_const_regions<'db>(body: &RuntimeBody<'db>) -> Vec<Con
             let RStmt::Assign { expr, .. } = stmt else {
                 continue;
             };
-            if let RExpr::ConstRef { region, .. } = expr
-                && seen.insert(*region)
+            let region = match expr {
+                RExpr::ConstRef { region, .. } => Some(*region),
+                RExpr::Builtin(crate::runtime::RuntimeBuiltin::ConstRegionAddr { region }) => {
+                    Some(*region)
+                }
+                _ => None,
+            };
+            if let Some(region) = region
+                && seen.insert(region)
             {
-                regions.push(*region);
+                regions.push(region);
             }
         }
     }

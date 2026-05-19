@@ -740,6 +740,7 @@ fn format_builtin<'db>(db: &'db dyn MirDb, builtin: &RuntimeBuiltin<'db>) -> Str
         RuntimeBuiltin::CurrentCodeRegionLen => "current_code_region_len".to_string(),
         RuntimeBuiltin::CodeRegionOffset { region } => format!("code_region_offset {:?}", region),
         RuntimeBuiltin::CodeRegionLen { region } => format!("code_region_len {:?}", region),
+        RuntimeBuiltin::ConstRegionAddr { region } => format!("const_region_addr {:?}", region),
         RuntimeBuiltin::Malloc { size } => format!("malloc {}", format_local_id(*size)),
         RuntimeBuiltin::Call {
             gas,
