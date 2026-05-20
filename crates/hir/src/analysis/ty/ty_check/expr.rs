@@ -508,6 +508,11 @@ impl<'db> TyChecker<'db> {
             inner_expr.data(self.db, self.body())
         {
             let value = int_id.data(self.db);
+            if to.is_string(self.db) && self.int_literal_fits_in_ty(value, TyId::u256(self.db)) {
+                let _ = self.table.unify(from, TyId::u256(self.db));
+                return ExprProp::new(to, true);
+            }
+
             if self.int_literal_fits_in_ty(value, to) {
                 // Unify the literal's type variable with the target leaf type
                 // so it doesn't remain unresolved.

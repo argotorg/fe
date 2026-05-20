@@ -647,7 +647,15 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 int_const(self.db, ty, BigInt::from(int_id.data(self.db).clone()))
             }
             LitKind::String(string_id) => {
-                bytes_const(self.db, ty, string_id.data(self.db).as_bytes().to_vec())
+                let mut bytes = string_id.data(self.db).as_bytes().to_vec();
+                if let Some(capacity) = self.fixed_string_capacity_bytes(ty)
+                    && bytes.len() < capacity
+                {
+                    let mut padded = vec![0u8; capacity - bytes.len()];
+                    padded.extend(bytes);
+                    bytes = padded;
+                }
+                bytes_const(self.db, ty, bytes)
             }
             LitKind::Bool(value) => bool_const(self.db, value),
         };

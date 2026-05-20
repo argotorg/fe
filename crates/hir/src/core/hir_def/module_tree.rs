@@ -183,6 +183,20 @@ pub(crate) fn module_tree_impl<'db>(db: &'db dyn HirDb, ingot: Ingot<'db>) -> Mo
 
     // Collect source modules
     let files = ingot.files(db);
+    // NOTE: `files.iter()` traverses a radix trie in depth-first order, which can vary based on
+    // insertion order. Sort source files by their path so module tree construction is
+    // deterministic across platforms/builds.
+    let mut source_files = files
+        .iter()
+        .filter_map(|(_, file)| match file.kind(db) {
+            Some(IngotFileKind::Source) => Some((
+                file.path(db).as_ref().expect("couldn't get path").clone(),
+                file,
+            )),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    source_files.sort_by(|(lhs, _), (rhs, _)| lhs.cmp(rhs));
 
     // If the ingot has no files at all (e.g. it was deleted during an
     // incremental workspace change), return a degenerate empty tree.
@@ -200,14 +214,11 @@ pub(crate) fn module_tree_impl<'db>(db: &'db dyn HirDb, ingot: Ingot<'db>) -> Mo
         };
     }
 
-    for (_, file) in files.iter() {
-        if let Some(IngotFileKind::Source) = file.kind(db) {
-            let top_mod = map_file_to_mod_impl(db, file);
-            let module_id = module_tree.push(ModuleTreeNode::new(top_mod));
-            let path = file.path(db).as_ref().expect("couldn't get path").clone();
-            path_map.insert(path, module_id);
-            mod_map.insert(top_mod, module_id);
-        }
+    for (path, file) in &source_files {
+        let top_mod = map_file_to_mod_impl(db, *file);
+        let module_id = module_tree.push(ModuleTreeNode::new(top_mod));
+        path_map.insert(path.clone(), module_id);
+        mod_map.insert(top_mod, module_id);
     }
 
     // Find root - if there's no root file, use the first source file as fallback
@@ -216,14 +227,7 @@ pub(crate) fn module_tree_impl<'db>(db: &'db dyn HirDb, ingot: Ingot<'db>) -> Mo
         Err(_) => {
             // No root file found - use first source file as fallback root
             // This handles non-conformant ingots (e.g., directories without src/lib.fe)
-            let first_source = files.iter().find_map(|(_, file)| {
-                if matches!(file.kind(db), Some(IngotFileKind::Source)) {
-                    Some(file)
-                } else {
-                    None
-                }
-            });
-            match first_source {
+            match source_files.first().map(|(_, file)| *file) {
                 Some(file) => file,
                 None => {
                     tracing::warn!(
@@ -257,20 +261,20 @@ pub(crate) fn module_tree_impl<'db>(db: &'db dyn HirDb, ingot: Ingot<'db>) -> Mo
     let root = mod_map[&root_mod];
 
     // Build parent-child relationships
-    for (_, child_file) in files.iter() {
+    for (_, child_file) in &source_files {
+        let child_file = *child_file;
         if child_file == root_file {
             continue;
         }
 
-        if let Some(IngotFileKind::Source) = child_file.kind(db)
-            && let Some(parent_id) = find_parent_module(db, child_file, root_file, &path_map)
-        {
-            let child_mod = map_file_to_mod_impl(db, child_file);
-            let child_id = mod_map[&child_mod];
+        let Some(parent_id) = find_parent_module(db, child_file, root_file, &path_map) else {
+            continue;
+        };
+        let child_mod = map_file_to_mod_impl(db, child_file);
+        let child_id = mod_map[&child_mod];
 
-            module_tree[parent_id].children.push(child_id);
-            module_tree[child_id].parent = Some(parent_id);
-        }
+        module_tree[parent_id].children.push(child_id);
+        module_tree[child_id].parent = Some(parent_id);
     }
 
     ModuleTree {

@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 431
 expression: output
 input_file: crates/codegen/tests/fixtures/erc20.fe
 ---
@@ -138,8 +139,7 @@ func private %__CoolCoin_recv_0_6() -> i256 {
         jump block1;
 
     block1:
-        v1.i256 = zext 4859225033734580590.i64 i256;
-        return v1;
+        return 4859225033734580590.i256;
 }
 
 func private %__CoolCoin_recv_0_7() -> i256 {
@@ -147,7 +147,7 @@ func private %__CoolCoin_recv_0_7() -> i256 {
         jump block1;
 
     block1:
-        v1.i256 = zext 1129271116.i32 i256;
+        v1.i256 = zext 1129271116.i64 i256;
         return v1;
 }
 
@@ -290,16 +290,16 @@ func private %abi_field_size__gda9b(v0.i1) -> i256 {
         return v7;
 }
 
-func private %abi_field_size__g5535(v0.i256) -> i256 {
+func private %abi_field_size__g79ff(v0.i8) -> i256 {
     block0:
-        v1.*i256 = alloca i256;
-        mstore v1 v0 i256;
+        v1.*i8 = alloca i8;
+        mstore v1 v0 i8;
         jump block1;
 
     block1:
-        v2.i256 = mload v1 i256;
-        v3.i256 = call %core__lib__abi__impl_trait_String_c06e__payload_size__g3eb7_dfa6_0 v2;
-        br 1.i1 block2 block3;
+        v2.i8 = mload v1 i8;
+        v3.i256 = call %core__lib__abi__trait_AbiSize__payload_size__g79ff_f3e8_0 v2;
+        br 0.i1 block2 block3;
 
     block2:
         (v7.i256, v8.i1) = uaddo 32.i256 v3;
@@ -328,7 +328,7 @@ func private %abi_field_size__g65da(v0.i256) -> i256 {
 
     block1:
         v2.i256 = mload v1 i256;
-        v3.i256 = call %core__lib__abi__impl_trait_String_c06e__payload_size__gc7cf_9b7d_0 v2;
+        v3.i256 = call %core__lib__abi__impl_trait_String_c06e__payload_size__gc7cf_4aab_0 v2;
         br 1.i1 block2 block3;
 
     block2:
@@ -350,16 +350,16 @@ func private %abi_field_size__g65da(v0.i256) -> i256 {
         return v7;
 }
 
-func private %abi_field_size__g79ff(v0.i8) -> i256 {
+func private %abi_field_size__g5535(v0.i256) -> i256 {
     block0:
-        v1.*i8 = alloca i8;
-        mstore v1 v0 i8;
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
         jump block1;
 
     block1:
-        v2.i8 = mload v1 i8;
-        v3.i256 = call %core__lib__abi__trait_AbiSize__payload_size__g79ff_f3e8_0 v2;
-        br 0.i1 block2 block3;
+        v2.i256 = mload v1 i256;
+        v3.i256 = call %core__lib__abi__impl_trait_String_c06e__payload_size__g3eb7_f656_0 v2;
+        br 1.i1 block2 block3;
 
     block2:
         (v7.i256, v8.i1) = uaddo 32.i256 v3;
@@ -485,18 +485,6 @@ func private %abi_single_root_size__g65da(v0.i256) -> i256 {
         return v3;
 }
 
-func private %abi_single_root_size__g5535(v0.i256) -> i256 {
-    block0:
-        v1.*i256 = alloca i256;
-        mstore v1 v0 i256;
-        jump block1;
-
-    block1:
-        v2.i256 = mload v1 i256;
-        v3.i256 = call %abi_field_size__g5535 v2;
-        return v3;
-}
-
 func private %abi_single_root_size__g79ff(v0.i8) -> i256 {
     block0:
         v1.*i8 = alloca i8;
@@ -518,6 +506,18 @@ func private %abi_single_root_size__ge513(v0.i256) -> i256 {
     block1:
         v2.i256 = mload v1 i256;
         v3.i256 = call %abi_field_size__ge513 v2;
+        return v3;
+}
+
+func private %abi_single_root_size__g5535(v0.i256) -> i256 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        jump block1;
+
+    block1:
+        v2.i256 = mload v1 i256;
+        v3.i256 = call %abi_field_size__g5535 v2;
         return v3;
 }
 
@@ -3956,21 +3956,12 @@ func private %core__lib__abi__impl_trait_u256_d99e__encode__g426c_2015(v0.i256, 
         return;
 }
 
-func private %core__lib__abi__impl_trait_u256_d99e__encode__g426c_2910(v0.i256, v1.objref<@layout_4>) {
-    block0:
-        jump block1;
-
-    block1:
-        call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__write_word_8eda v1 v0;
-        return;
-}
-
 func private %encode__g3cd9(v0.i256, v1.objref<@layout_4>) {
     block0:
         jump block1;
 
     block1:
-        v3.i256 = call %core__lib__num__impl_trait_String_8f88__to_word__g3eb7_e974 v0;
+        v3.i256 = call %core__lib__num__impl_trait_String_8f88__to_word__g3eb7_4283 v0;
         v4.i256 = call %core__lib__abi__packed_string_len_c13a v3;
         call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__write_word_0617 v1 v4;
         v8.i1 = eq v4 0.i256;
@@ -3993,12 +3984,21 @@ func private %encode__g3cd9(v0.i256, v1.objref<@layout_4>) {
         return;
 }
 
+func private %core__lib__abi__impl_trait_u256_d99e__encode__g426c_2910(v0.i256, v1.objref<@layout_4>) {
+    block0:
+        jump block1;
+
+    block1:
+        call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__write_word_8eda v1 v0;
+        return;
+}
+
 func private %encode__gbe21(v0.i256, v1.objref<@layout_4>) {
     block0:
         jump block1;
 
     block1:
-        v3.i256 = call %core__lib__num__impl_trait_String_8f88__to_word__gc7cf_810c v0;
+        v3.i256 = call %core__lib__num__impl_trait_String_8f88__to_word__gc7cf_de49 v0;
         v4.i256 = call %core__lib__abi__packed_string_len_29ef v3;
         call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__write_word_7a95 v1 v4;
         v8.i1 = eq v4 0.i256;
@@ -4659,51 +4659,6 @@ func private %encode_field__ge927(v0.i1, v1.objref<@layout_4>, v2.i256) {
         return;
 }
 
-func private %encode_field__g859f(v0.i256, v1.objref<@layout_4>, v2.i256) {
-    block0:
-        jump block1;
-
-    block1:
-        br 1.i1 block2 block3;
-
-    block2:
-        v5.i256 = call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__base_25d4 v1;
-        v8.i256 = call %core__lib__abi__impl_trait_String_c06e__payload_size__g3eb7_dfa6 v0;
-        v9.i256 = mload v2 i256;
-        v10.i256 = sub v9 v5;
-        call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__write_word_1ad1 v1 v10;
-        v12.i256 = call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__pos_d8ed v1;
-        v13.i256 = mload v2 i256;
-        call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__set_base_c5ff v1 v13;
-        v15.i256 = mload v2 i256;
-        call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__set_pos_7410 v1 v15;
-        call %encode__g3cd9 v0 v1;
-        call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__set_base_c5ff v1 v5;
-        call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__set_pos_7410 v1 v12;
-        v20.i256 = mload v2 i256;
-        v21.i256 = add v20 v8;
-        mstore v2 v21 i256;
-        return;
-
-    block3:
-        jump block4;
-
-    block4:
-        br 0.i1 block5 block6;
-
-    block5:
-        v24.i256 = call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__pos_d8ed v1;
-        call %encode_to_ptr__g4320 v0 v24;
-        unreachable;
-
-    block6:
-        jump block7;
-
-    block7:
-        call %encode__g3cd9 v0 v1;
-        return;
-}
-
 func private %core__lib__abi__encode_field__g2e64_555f(v0.i256, v1.objref<@layout_4>, v2.i256) {
     block0:
         jump block1;
@@ -4760,7 +4715,7 @@ func private %encode_field__g6d7e(v0.i256, v1.objref<@layout_4>, v2.i256) {
 
     block2:
         v5.i256 = call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__base_6030 v1;
-        v8.i256 = call %core__lib__abi__impl_trait_String_c06e__payload_size__gc7cf_9b7d v0;
+        v8.i256 = call %core__lib__abi__impl_trait_String_c06e__payload_size__gc7cf_4aab v0;
         v9.i256 = mload v2 i256;
         v10.i256 = sub v9 v5;
         call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__write_word_406d v1 v10;
@@ -4793,6 +4748,51 @@ func private %encode_field__g6d7e(v0.i256, v1.objref<@layout_4>, v2.i256) {
 
     block7:
         call %encode__gbe21 v0 v1;
+        return;
+}
+
+func private %encode_field__g859f(v0.i256, v1.objref<@layout_4>, v2.i256) {
+    block0:
+        jump block1;
+
+    block1:
+        br 1.i1 block2 block3;
+
+    block2:
+        v5.i256 = call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__base_25d4 v1;
+        v8.i256 = call %core__lib__abi__impl_trait_String_c06e__payload_size__g3eb7_f656 v0;
+        v9.i256 = mload v2 i256;
+        v10.i256 = sub v9 v5;
+        call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__write_word_1ad1 v1 v10;
+        v12.i256 = call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__pos_d8ed v1;
+        v13.i256 = mload v2 i256;
+        call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__set_base_c5ff v1 v13;
+        v15.i256 = mload v2 i256;
+        call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__set_pos_7410 v1 v15;
+        call %encode__g3cd9 v0 v1;
+        call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__set_base_c5ff v1 v5;
+        call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__set_pos_7410 v1 v12;
+        v20.i256 = mload v2 i256;
+        v21.i256 = add v20 v8;
+        mstore v2 v21 i256;
+        return;
+
+    block3:
+        jump block4;
+
+    block4:
+        br 0.i1 block5 block6;
+
+    block5:
+        v24.i256 = call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__pos_d8ed v1;
+        call %encode_to_ptr__g4320 v0 v24;
+        unreachable;
+
+    block6:
+        jump block7;
+
+    block7:
+        call %encode__g3cd9 v0 v1;
         return;
 }
 
@@ -4838,20 +4838,6 @@ func private %encode_single_root__g859f(v0.i256, v1.objref<@layout_4>) {
         return;
 }
 
-func private %encode_single_root__g2e64(v0.i256, v1.objref<@layout_4>) {
-    block0:
-        v2.*i256 = alloca i256;
-        jump block1;
-
-    block1:
-        v4.i256 = call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__base_fd6f v1;
-        v6.i256 = add v4 32.i256;
-        mstore v2 v6 i256;
-        v7.i256 = ptr_to_int v2 i256;
-        call %core__lib__abi__encode_field__g2e64_555f v0 v1 v7;
-        return;
-}
-
 func private %encode_single_root__g6d7e(v0.i256, v1.objref<@layout_4>) {
     block0:
         v2.*i256 = alloca i256;
@@ -4866,54 +4852,18 @@ func private %encode_single_root__g6d7e(v0.i256, v1.objref<@layout_4>) {
         return;
 }
 
-func private %encode_single_root_alloc__g472d(v0.i256) -> @layout_24 {
+func private %encode_single_root__g2e64(v0.i256, v1.objref<@layout_4>) {
     block0:
+        v2.*i256 = alloca i256;
         jump block1;
 
     block1:
-        v2.i256 = call %abi_single_root_size__g5535 v0;
-        v3.@layout_4 = call %std__lib__abi__sol__impl_trait_Sol_1f5f__encoder_new_a948 v2;
-        v4.objref<@layout_4> = obj.alloc @layout_4;
-        v6.objref<i256> = obj.proj v4 0.i256;
-        v7.i256 = extract_value v3 0.i256;
-        obj.store v6 v7;
-        v9.objref<i256> = obj.proj v4 1.i256;
-        v10.i256 = extract_value v3 1.i256;
-        obj.store v9 v10;
-        v11.i256 = call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__base_25d4 v4;
-        call %encode_single_root__g859f v0 v4;
-        v13.objref<@layout_24> = obj.alloc @layout_24;
-        v14.objref<i256> = obj.proj v13 0.i256;
-        obj.store v14 v11;
-        v15.objref<i256> = obj.proj v13 1.i256;
-        obj.store v15 v2;
-        v16.@layout_24 = obj.load v13;
-        return v16;
-}
-
-func private %encode_single_root_alloc__g0c18(v0.i256) -> @layout_24 {
-    block0:
-        jump block1;
-
-    block1:
-        v2.i256 = call %abi_single_root_size__g65da v0;
-        v3.@layout_4 = call %std__lib__abi__sol__impl_trait_Sol_1f5f__encoder_new_30df v2;
-        v4.objref<@layout_4> = obj.alloc @layout_4;
-        v6.objref<i256> = obj.proj v4 0.i256;
-        v7.i256 = extract_value v3 0.i256;
-        obj.store v6 v7;
-        v9.objref<i256> = obj.proj v4 1.i256;
-        v10.i256 = extract_value v3 1.i256;
-        obj.store v9 v10;
-        v11.i256 = call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__base_6030 v4;
-        call %encode_single_root__g6d7e v0 v4;
-        v13.objref<@layout_24> = obj.alloc @layout_24;
-        v14.objref<i256> = obj.proj v13 0.i256;
-        obj.store v14 v11;
-        v15.objref<i256> = obj.proj v13 1.i256;
-        obj.store v15 v2;
-        v16.@layout_24 = obj.load v13;
-        return v16;
+        v4.i256 = call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__base_fd6f v1;
+        v6.i256 = add v4 32.i256;
+        mstore v2 v6 i256;
+        v7.i256 = ptr_to_int v2 i256;
+        call %core__lib__abi__encode_field__g2e64_555f v0 v1 v7;
+        return;
 }
 
 func private %encode_single_root_alloc__gcb0a(v0.i8) -> @layout_24 {
@@ -4966,6 +4916,31 @@ func private %encode_single_root_alloc__gac80(v0.i256) -> @layout_24 {
         return v16;
 }
 
+func private %encode_single_root_alloc__g0c18(v0.i256) -> @layout_24 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i256 = call %abi_single_root_size__g65da v0;
+        v3.@layout_4 = call %std__lib__abi__sol__impl_trait_Sol_1f5f__encoder_new_30df v2;
+        v4.objref<@layout_4> = obj.alloc @layout_4;
+        v6.objref<i256> = obj.proj v4 0.i256;
+        v7.i256 = extract_value v3 0.i256;
+        obj.store v6 v7;
+        v9.objref<i256> = obj.proj v4 1.i256;
+        v10.i256 = extract_value v3 1.i256;
+        obj.store v9 v10;
+        v11.i256 = call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__base_6030 v4;
+        call %encode_single_root__g6d7e v0 v4;
+        v13.objref<@layout_24> = obj.alloc @layout_24;
+        v14.objref<i256> = obj.proj v13 0.i256;
+        obj.store v14 v11;
+        v15.objref<i256> = obj.proj v13 1.i256;
+        obj.store v15 v2;
+        v16.@layout_24 = obj.load v13;
+        return v16;
+}
+
 func private %encode_single_root_alloc__g09ca(v0.i1) -> @layout_24 {
     block0:
         jump block1;
@@ -4991,6 +4966,31 @@ func private %encode_single_root_alloc__g09ca(v0.i1) -> @layout_24 {
         return v16;
 }
 
+func private %encode_single_root_alloc__g472d(v0.i256) -> @layout_24 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i256 = call %abi_single_root_size__g5535 v0;
+        v3.@layout_4 = call %std__lib__abi__sol__impl_trait_Sol_1f5f__encoder_new_a948 v2;
+        v4.objref<@layout_4> = obj.alloc @layout_4;
+        v6.objref<i256> = obj.proj v4 0.i256;
+        v7.i256 = extract_value v3 0.i256;
+        obj.store v6 v7;
+        v9.objref<i256> = obj.proj v4 1.i256;
+        v10.i256 = extract_value v3 1.i256;
+        obj.store v9 v10;
+        v11.i256 = call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__base_25d4 v4;
+        call %encode_single_root__g859f v0 v4;
+        v13.objref<@layout_24> = obj.alloc @layout_24;
+        v14.objref<i256> = obj.proj v13 0.i256;
+        obj.store v14 v11;
+        v15.objref<i256> = obj.proj v13 1.i256;
+        obj.store v15 v2;
+        v16.@layout_24 = obj.load v13;
+        return v16;
+}
+
 func private %core__lib__abi__impl_trait_u256_d99e__encode_to_ptr__gf13e_1b98(v0.i256, v1.i256) {
     block0:
         v2.*i256 = alloca i256;
@@ -5001,6 +5001,16 @@ func private %core__lib__abi__impl_trait_u256_d99e__encode_to_ptr__gf13e_1b98(v0
         v3.i256 = mload v2 i256;
         call %std__lib__abi__sol__impl_trait_Sol_1f5f__store_word_2361 v3 v0;
         return;
+}
+
+func private %encode_to_ptr__g4320(v0.i256, v1.i256) {
+    block0:
+        v2.*i256 = alloca i256;
+        mstore v2 v1 i256;
+        jump block1;
+
+    block1:
+        evm_invalid;
 }
 
 func private %impl_trait_bool__encode_to_ptr__gf13e(v0.i1, v1.i256) {
@@ -5027,16 +5037,6 @@ func private %impl_trait_bool__encode_to_ptr__gf13e(v0.i1, v1.i256) {
 }
 
 func private %encode_to_ptr__g30cc(v0.i256, v1.i256) {
-    block0:
-        v2.*i256 = alloca i256;
-        mstore v2 v1 i256;
-        jump block1;
-
-    block1:
-        evm_invalid;
-}
-
-func private %encode_to_ptr__g4320(v0.i256, v1.i256) {
     block0:
         v2.*i256 = alloca i256;
         mstore v2 v1 i256;
@@ -8380,6 +8380,52 @@ func private %core__lib__abi__trait_AbiSize__payload_size__ge513_3812_1(v0.i256)
         return 32.i256;
 }
 
+func private %core__lib__abi__impl_trait_String_c06e__payload_size__gc7cf_4aab(v0.i256) -> i256 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        jump block1;
+
+    block1:
+        v3.i256 = mload v1 i256;
+        v4.i256 = call %core__lib__num__impl_trait_String_8f88__to_word__gc7cf_518a v3;
+        v5.i256 = call %core__lib__abi__packed_string_len_ecb6 v4;
+        v6.i256 = call %core__lib__abi__round_up_words_a41d v5;
+        (v7.i256, v8.i1) = uaddo 32.i256 v6;
+        br v8 block2 block3;
+
+    block2:
+        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        mstore 4.i256 17.i256 i256;
+        evm_revert 0.i256 36.i256;
+
+    block3:
+        return v7;
+}
+
+func private %core__lib__abi__impl_trait_String_c06e__payload_size__gc7cf_4aab_0(v0.i256) -> i256 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        jump block1;
+
+    block1:
+        v3.i256 = mload v1 i256;
+        v4.i256 = call %core__lib__num__impl_trait_String_8f88__to_word__gc7cf_518a_0 v3;
+        v5.i256 = call %core__lib__abi__packed_string_len_ecb6_0 v4;
+        v6.i256 = call %core__lib__abi__round_up_words_a41d_0 v5;
+        (v7.i256, v8.i1) = uaddo 32.i256 v6;
+        br v8 block2 block3;
+
+    block2:
+        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        mstore 4.i256 17.i256 i256;
+        evm_revert 0.i256 36.i256;
+
+    block3:
+        return v7;
+}
+
 func private %core__lib__abi__trait_AbiSize__payload_size__ge513_77e5(v0.i256) -> i256 {
     block0:
         v1.*i256 = alloca i256;
@@ -8398,52 +8444,6 @@ func private %core__lib__abi__trait_AbiSize__payload_size__ge513_77e5_0(v0.i256)
 
     block1:
         return 32.i256;
-}
-
-func private %core__lib__abi__impl_trait_String_c06e__payload_size__gc7cf_9b7d(v0.i256) -> i256 {
-    block0:
-        v1.*i256 = alloca i256;
-        mstore v1 v0 i256;
-        jump block1;
-
-    block1:
-        v3.i256 = mload v1 i256;
-        v4.i256 = call %core__lib__num__impl_trait_String_8f88__to_word__gc7cf_9de4 v3;
-        v5.i256 = call %core__lib__abi__packed_string_len_ecb6 v4;
-        v6.i256 = call %core__lib__abi__round_up_words_a41d v5;
-        (v7.i256, v8.i1) = uaddo 32.i256 v6;
-        br v8 block2 block3;
-
-    block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
-
-    block3:
-        return v7;
-}
-
-func private %core__lib__abi__impl_trait_String_c06e__payload_size__gc7cf_9b7d_0(v0.i256) -> i256 {
-    block0:
-        v1.*i256 = alloca i256;
-        mstore v1 v0 i256;
-        jump block1;
-
-    block1:
-        v3.i256 = mload v1 i256;
-        v4.i256 = call %core__lib__num__impl_trait_String_8f88__to_word__gc7cf_9de4_0 v3;
-        v5.i256 = call %core__lib__abi__packed_string_len_ecb6_0 v4;
-        v6.i256 = call %core__lib__abi__round_up_words_a41d_0 v5;
-        (v7.i256, v8.i1) = uaddo 32.i256 v6;
-        br v8 block2 block3;
-
-    block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
-
-    block3:
-        return v7;
 }
 
 func private %core__lib__abi__trait_AbiSize__payload_size__ge513_a6ac(v0.i256) -> i256 {
@@ -8504,52 +8504,6 @@ func private %core__lib__abi__trait_AbiSize__payload_size__gda9b_b33d_0(v0.i1) -
 
     block1:
         return 32.i256;
-}
-
-func private %core__lib__abi__impl_trait_String_c06e__payload_size__g3eb7_dfa6(v0.i256) -> i256 {
-    block0:
-        v1.*i256 = alloca i256;
-        mstore v1 v0 i256;
-        jump block1;
-
-    block1:
-        v3.i256 = mload v1 i256;
-        v4.i256 = call %core__lib__num__impl_trait_String_8f88__to_word__g3eb7_2617 v3;
-        v5.i256 = call %core__lib__abi__packed_string_len_225d v4;
-        v6.i256 = call %core__lib__abi__round_up_words_b13c v5;
-        (v7.i256, v8.i1) = uaddo 32.i256 v6;
-        br v8 block2 block3;
-
-    block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
-
-    block3:
-        return v7;
-}
-
-func private %core__lib__abi__impl_trait_String_c06e__payload_size__g3eb7_dfa6_0(v0.i256) -> i256 {
-    block0:
-        v1.*i256 = alloca i256;
-        mstore v1 v0 i256;
-        jump block1;
-
-    block1:
-        v3.i256 = mload v1 i256;
-        v4.i256 = call %core__lib__num__impl_trait_String_8f88__to_word__g3eb7_2617_0 v3;
-        v5.i256 = call %core__lib__abi__packed_string_len_225d_0 v4;
-        v6.i256 = call %core__lib__abi__round_up_words_b13c_0 v5;
-        (v7.i256, v8.i1) = uaddo 32.i256 v6;
-        br v8 block2 block3;
-
-    block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
-
-    block3:
-        return v7;
 }
 
 func private %std__lib__evm__panic__impl_trait_Panic_bf0a__payload_size_ec06(v0.@layout_3) -> i256 {
@@ -8627,6 +8581,52 @@ func private %core__lib__abi__trait_AbiSize__payload_size__g79ff_f3e8_0(v0.i8) -
 
     block1:
         return 32.i256;
+}
+
+func private %core__lib__abi__impl_trait_String_c06e__payload_size__g3eb7_f656(v0.i256) -> i256 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        jump block1;
+
+    block1:
+        v3.i256 = mload v1 i256;
+        v4.i256 = call %core__lib__num__impl_trait_String_8f88__to_word__g3eb7_38b3 v3;
+        v5.i256 = call %core__lib__abi__packed_string_len_225d v4;
+        v6.i256 = call %core__lib__abi__round_up_words_b13c v5;
+        (v7.i256, v8.i1) = uaddo 32.i256 v6;
+        br v8 block2 block3;
+
+    block2:
+        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        mstore 4.i256 17.i256 i256;
+        evm_revert 0.i256 36.i256;
+
+    block3:
+        return v7;
+}
+
+func private %core__lib__abi__impl_trait_String_c06e__payload_size__g3eb7_f656_0(v0.i256) -> i256 {
+    block0:
+        v1.*i256 = alloca i256;
+        mstore v1 v0 i256;
+        jump block1;
+
+    block1:
+        v3.i256 = mload v1 i256;
+        v4.i256 = call %core__lib__num__impl_trait_String_8f88__to_word__g3eb7_38b3_0 v3;
+        v5.i256 = call %core__lib__abi__packed_string_len_225d_0 v4;
+        v6.i256 = call %core__lib__abi__round_up_words_b13c_0 v5;
+        (v7.i256, v8.i1) = uaddo 32.i256 v6;
+        br v8 block2 block3;
+
+    block2:
+        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        mstore 4.i256 17.i256 i256;
+        evm_revert 0.i256 36.i256;
+
+    block3:
+        return v7;
 }
 
 func private %std__lib__abi__sol__impl_trait_SolDecoder_68ab__pos__g8f43_03cc(v0.objref<@layout_7>) -> i256 {
@@ -12971,7 +12971,7 @@ func private %std__lib__evm__word__impl_trait_u256_1f9e__to_word_05d2_0(v0.i256)
         return v0;
 }
 
-func private %core__lib__num__impl_trait_String_8f88__to_word__g3eb7_2617(v0.i256) -> i256 {
+func private %core__lib__num__impl_trait_String_8f88__to_word__g3eb7_38b3(v0.i256) -> i256 {
     block0:
         v1.*i256 = alloca i256;
         mstore v1 v0 i256;
@@ -12979,10 +12979,11 @@ func private %core__lib__num__impl_trait_String_8f88__to_word__g3eb7_2617(v0.i25
 
     block1:
         v2.i256 = mload v1 i256;
-        return v2;
+        v9.i256 = and v2 452312848583266388373324160190187140051835877600158453279131187530910662655.i256;
+        return v9;
 }
 
-func private %core__lib__num__impl_trait_String_8f88__to_word__g3eb7_2617_0(v0.i256) -> i256 {
+func private %core__lib__num__impl_trait_String_8f88__to_word__g3eb7_38b3_0(v0.i256) -> i256 {
     block0:
         v1.*i256 = alloca i256;
         mstore v1 v0 i256;
@@ -12990,7 +12991,8 @@ func private %core__lib__num__impl_trait_String_8f88__to_word__g3eb7_2617_0(v0.i
 
     block1:
         v2.i256 = mload v1 i256;
-        return v2;
+        v9.i256 = and v2 452312848583266388373324160190187140051835877600158453279131187530910662655.i256;
+        return v9;
 }
 
 func private %std__lib__evm__word__impl_trait_u256_1f9e__to_word_3e9f(v0.i256) -> i256 {
@@ -13001,7 +13003,7 @@ func private %std__lib__evm__word__impl_trait_u256_1f9e__to_word_3e9f(v0.i256) -
         return v0;
 }
 
-func private %core__lib__num__impl_trait_String_8f88__to_word__gc7cf_810c(v0.i256) -> i256 {
+func private %core__lib__num__impl_trait_String_8f88__to_word__g3eb7_4283(v0.i256) -> i256 {
     block0:
         v1.*i256 = alloca i256;
         mstore v1 v0 i256;
@@ -13009,10 +13011,11 @@ func private %core__lib__num__impl_trait_String_8f88__to_word__gc7cf_810c(v0.i25
 
     block1:
         v2.i256 = mload v1 i256;
-        return v2;
+        v9.i256 = and v2 452312848583266388373324160190187140051835877600158453279131187530910662655.i256;
+        return v9;
 }
 
-func private %core__lib__num__impl_trait_String_8f88__to_word__gc7cf_9de4(v0.i256) -> i256 {
+func private %core__lib__num__impl_trait_String_8f88__to_word__gc7cf_518a(v0.i256) -> i256 {
     block0:
         v1.*i256 = alloca i256;
         mstore v1 v0 i256;
@@ -13020,10 +13023,11 @@ func private %core__lib__num__impl_trait_String_8f88__to_word__gc7cf_9de4(v0.i25
 
     block1:
         v2.i256 = mload v1 i256;
-        return v2;
+        v8.i256 = and v2 18446744073709551615.i256;
+        return v8;
 }
 
-func private %core__lib__num__impl_trait_String_8f88__to_word__gc7cf_9de4_0(v0.i256) -> i256 {
+func private %core__lib__num__impl_trait_String_8f88__to_word__gc7cf_518a_0(v0.i256) -> i256 {
     block0:
         v1.*i256 = alloca i256;
         mstore v1 v0 i256;
@@ -13031,10 +13035,11 @@ func private %core__lib__num__impl_trait_String_8f88__to_word__gc7cf_9de4_0(v0.i
 
     block1:
         v2.i256 = mload v1 i256;
-        return v2;
+        v8.i256 = and v2 18446744073709551615.i256;
+        return v8;
 }
 
-func private %core__lib__num__impl_trait_String_8f88__to_word__g3eb7_e974(v0.i256) -> i256 {
+func private %core__lib__num__impl_trait_String_8f88__to_word__gc7cf_de49(v0.i256) -> i256 {
     block0:
         v1.*i256 = alloca i256;
         mstore v1 v0 i256;
@@ -13042,7 +13047,8 @@ func private %core__lib__num__impl_trait_String_8f88__to_word__g3eb7_e974(v0.i25
 
     block1:
         v2.i256 = mload v1 i256;
-        return v2;
+        v8.i256 = and v2 18446744073709551615.i256;
+        return v8;
 }
 
 func private %impl_trait_bool__to_word(v0.i1) -> i256 {

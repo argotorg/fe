@@ -1,0 +1,101 @@
+use core::abi::{ByteInput, MemoryInput, encode_alloc}
+use core::concat
+use std::abi::Sol
+
+fn fifth_byte(_ s: String<8>) -> u8 {
+    let bytes: [u8; 8] = s.as_bytes()
+    bytes[4]
+}
+
+#[test]
+fn test_string_len_runtime() {
+    let s: String<8> = "COOL"
+    assert(s.len() == 4)
+}
+
+#[test]
+fn test_string_as_bytes_runtime() {
+    let s: String<8> = "COOL"
+    let bytes: [u8; 8] = s.as_bytes()
+    assert(bytes[0] == 0)
+    assert(bytes[3] == 0)
+    assert(bytes[4] == 67)
+    assert(bytes[7] == 76)
+}
+
+#[test]
+fn test_string_as_bytes_param_runtime() {
+    let encoded: (u256, u256) = encode_alloc<Sol, String<8>>("COOL")
+    let input = MemoryInput {
+        base: encoded.0,
+        len: encoded.1,
+    }
+
+    let mut padded: [u8; 8] = [0; 8]
+    padded[4] = input.byte_at(32)
+    padded[5] = input.byte_at(33)
+    padded[6] = input.byte_at(34)
+    padded[7] = input.byte_at(35)
+
+    let s: String<8> = String::from_bytes(padded)
+    assert(fifth_byte(s) == 67)
+}
+
+#[test]
+fn test_string_roundtrip_bytes_runtime() {
+    let bytes: [u8; 8] = [0, 0, 0, 0, 67, 79, 79, 76]
+    let s: String<8> = String::from_bytes(bytes)
+    assert(s == "COOL")
+}
+
+#[test]
+fn test_string_from_bytes_expression_runtime() {
+    let s: String<8> = String::from_bytes([0, 0, 0, 0, 67, 79, 79, 76])
+    assert(s == "COOL")
+}
+
+#[test]
+fn test_string_concat_runtime() {
+    let a: String<8> = "COOL"
+    let b: String<8> = "COIN"
+    let c: String<8> = concat(a, b)
+    assert(c == "COOLCOIN")
+}
+
+#[test]
+fn test_string_concat_expression_args_runtime() {
+    let left: String<2> = "CO"
+    let right: String<2> = "OL"
+    let c: String<4> = concat((left), (right))
+    assert(c == "COOL")
+}
+
+#[test]
+fn test_string_concat_uses_effective_len_runtime() {
+    let a: String<4> = "C"
+    let b: String<4> = "O"
+    let c: String<4> = concat(a, b)
+    assert(c == "CO")
+}
+
+#[test]
+fn test_string_concat_overflow_truncates() {
+    let a: String<4> = "ABCD"
+    let b: String<4> = "EFGH"
+    let c: String<6> = concat(a, b)
+    assert(c == "ABCDEF")
+}
+
+#[test]
+fn test_string_abi_encoding_ignores_hidden_high_bytes() {
+    let s: String<4> = 0x01000000434f4f4c as String<4>
+    let encoded: (u256, u256) = encode_alloc<Sol, String<4>>(s)
+    let input = MemoryInput {
+        base: encoded.0,
+        len: encoded.1,
+    }
+
+    assert(input.word_at(0) == 4)
+    assert(input.byte_at(32) == 67)
+    assert(input.byte_at(35) == 76)
+}

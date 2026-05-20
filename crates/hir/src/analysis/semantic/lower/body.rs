@@ -1,5 +1,6 @@
 use cranelift_entity::EntityRef;
 use num_bigint::BigInt;
+use num_traits::ToPrimitive;
 use rustc_hash::FxHashMap;
 
 use crate::{
@@ -16,14 +17,14 @@ use crate::{
             runtime_size_bytes, sem_const_from_ty, unit_const,
         },
         ty::{
-            const_ty::const_ty_or_abstract_from_assoc_const_use,
+            const_ty::{ConstTyData, EvaluatedConstTy, const_ty_or_abstract_from_assoc_const_use},
             normalize::normalize_ty,
             ty_check::{
                 BodyOwner, CodeRegionIntrinsicKind, ConstIntrinsicKind, ConstRef, LocalBinding,
                 PathReadSemantics, RecordInitLowering, RecordLike, SemanticExprLowering, TypedBody,
                 ValuePathRef,
             },
-            ty_def::{BorrowKind, TyId},
+            ty_def::{BorrowKind, TyData, TyId},
         },
     },
     hir_def::{
@@ -194,6 +195,23 @@ pub(super) struct LoopScope {
 }
 
 impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
+    pub(super) fn fixed_string_capacity_bytes(&self, ty: TyId<'db>) -> Option<usize> {
+        if !ty.is_string(self.db) {
+            return None;
+        }
+        let (_, args) = ty.decompose_ty_app(self.db);
+        let len_ty = args.first().copied()?;
+        let TyData::ConstTy(const_ty) = len_ty.data(self.db) else {
+            return None;
+        };
+        match const_ty.data(self.db) {
+            ConstTyData::Evaluated(EvaluatedConstTy::LitInt(int_id), _) => {
+                int_id.data(self.db).to_usize()
+            }
+            _ => None,
+        }
+    }
+
     fn new(
         db: &'db dyn HirAnalysisDb,
         instance: SemanticInstance<'db>,
@@ -590,7 +608,15 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         let value = match lit {
             LitKind::Int(int_id) => int_const(self.db, ty, int_id.data(self.db).clone().into()),
             LitKind::String(string_id) => {
-                bytes_const(self.db, ty, string_id.data(self.db).as_bytes().to_vec())
+                let mut bytes = string_id.data(self.db).as_bytes().to_vec();
+                if let Some(capacity) = self.fixed_string_capacity_bytes(ty)
+                    && bytes.len() < capacity
+                {
+                    let mut padded = vec![0u8; capacity - bytes.len()];
+                    padded.extend(bytes);
+                    bytes = padded;
+                }
+                bytes_const(self.db, ty, bytes)
             }
             LitKind::Bool(value) => bool_const(self.db, *value),
         };

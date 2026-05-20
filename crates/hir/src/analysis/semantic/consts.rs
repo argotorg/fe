@@ -8,7 +8,7 @@ use crate::analysis::{
     semantic::{SemanticInstance, instantiate_with_generic_args},
     ty::{
         const_ty::{ConstTyData, EvaluatedConstTy, evaluate_type_level_int_const_expr},
-        ty_def::{PrimTy, TyBase, TyData, TyId, prim_int_bits},
+        ty_def::{PrimTy, TyBase, TyData, TyId, TyVarSort, prim_int_bits},
     },
 };
 
@@ -143,6 +143,31 @@ pub fn sem_const_eq<'db>(
     lhs: SemConstId<'db>,
     rhs: SemConstId<'db>,
 ) -> bool {
+    fn fixed_string_bytes_eq(a: &[u8], b: &[u8]) -> bool {
+        fn trim_leading_zeros(bytes: &[u8]) -> &[u8] {
+            let mut idx = 0usize;
+            while idx < bytes.len() && bytes[idx] == 0 {
+                idx += 1;
+            }
+            &bytes[idx..]
+        }
+
+        trim_leading_zeros(a) == trim_leading_zeros(b)
+    }
+
+    fn is_string_like<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
+        let ty = ty.as_capability(db).map(|(_, inner)| inner).unwrap_or(ty);
+        if ty.is_string(db) {
+            return true;
+        }
+
+        let base = ty.base_ty(db);
+        matches!(
+            base.data(db),
+            TyData::TyVar(var) if matches!(var.sort, TyVarSort::String { .. })
+        )
+    }
+
     if lhs == rhs {
         return true;
     }
@@ -157,7 +182,19 @@ pub fn sem_const_eq<'db>(
                 ty: rhs_ty,
                 value: rhs_value,
             },
-        ) => lhs_ty == rhs_ty && lhs_value == rhs_value,
+        ) => {
+            if is_string_like(db, lhs_ty)
+                && is_string_like(db, rhs_ty)
+                && let (SemConstScalar::Bytes(lhs_bytes), SemConstScalar::Bytes(rhs_bytes)) =
+                    (&lhs_value, &rhs_value)
+            {
+                return fixed_string_bytes_eq(lhs_bytes.as_slice(), rhs_bytes.as_slice());
+            }
+            if lhs_ty != rhs_ty {
+                return false;
+            }
+            lhs_value == rhs_value
+        }
         (
             SemConstValue::TypeLevel {
                 ty: lhs_ty,

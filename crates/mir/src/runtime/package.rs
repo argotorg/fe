@@ -1234,7 +1234,12 @@ fn collect_region_embeds<'db>(
     let mut seen = FxHashSet::default();
     let mut embeds = Vec::new();
     let mut instances = reachable.iter().copied().collect::<Vec<_>>();
-    instances.sort_by_cached_key(|instance| runtime_instance_sort_key(db, *instance));
+    instances.sort_by_cached_key(|instance| {
+        (
+            runtime_instance_sort_key(db, *instance),
+            runtime_instance_symbol_key(db, *instance),
+        )
+    });
     for instance in instances {
         let Some(node) = graph.nodes.get(&instance) else {
             continue;
@@ -1304,7 +1309,12 @@ fn collect_const_regions_for_reachable<'db>(
     let mut seen = FxHashSet::default();
     let mut regions = Vec::new();
     let mut instances = reachable.iter().copied().collect::<Vec<_>>();
-    instances.sort_by_cached_key(|instance| runtime_instance_sort_key(db, *instance));
+    instances.sort_by_cached_key(|instance| {
+        (
+            runtime_instance_sort_key(db, *instance),
+            runtime_instance_symbol_key(db, *instance),
+        )
+    });
     for instance in instances {
         let Some(node) = graph.nodes.get(&instance) else {
             continue;
@@ -1740,7 +1750,12 @@ fn collect_runtime_functions<'db>(
     graph: &RuntimeGraph<'db>,
 ) -> Vec<RuntimeFunction<'db>> {
     let mut instances = graph.nodes.keys().copied().collect::<Vec<_>>();
-    instances.sort_by_cached_key(|instance| runtime_instance_sort_key(db, *instance));
+    instances.sort_by_cached_key(|instance| {
+        (
+            runtime_instance_sort_key(db, *instance),
+            runtime_instance_symbol_key(db, *instance),
+        )
+    });
     let instance_symbols = instances
         .into_iter()
         .map(|instance| {
@@ -2532,7 +2547,12 @@ fn collect_const_regions<'db>(
     let mut seen = FxHashSet::default();
     let mut regions = Vec::new();
     let mut instances = graph.nodes.keys().copied().collect::<Vec<_>>();
-    instances.sort_by_cached_key(|instance| runtime_instance_sort_key(db, *instance));
+    instances.sort_by_cached_key(|instance| {
+        (
+            runtime_instance_sort_key(db, *instance),
+            runtime_instance_symbol_key(db, *instance),
+        )
+    });
     for instance in instances {
         for region in graph
             .nodes

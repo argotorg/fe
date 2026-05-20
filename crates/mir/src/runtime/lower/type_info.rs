@@ -492,7 +492,9 @@ fn scalar_class_from_repr_ty<'db>(db: &'db dyn MirDb, ty: TyId<'db>) -> Option<S
                 signed: true,
             },
             PrimTy::String => ScalarRepr::FixedBytes {
-                len: MAX_INLINE_STRING_BYTES as u16,
+                // Fixed strings have at most 31 payload bytes, but casts and
+                // `to_word` operate on the full EVM word.
+                len: (MAX_INLINE_STRING_BYTES + 1) as u16,
             },
             PrimTy::Array
             | PrimTy::Tuple(_)

@@ -423,7 +423,12 @@ impl<T> WordValue for T
 }
 
 impl<const LEN: usize> WordValue for String<LEN> {
-    fn to_word(self) -> u256 { __bitcast(self) }
+    fn to_word(self) -> u256 {
+        let word: u256 = __bitcast(self)
+        let width_bits: u256 = (LEN * 8) as u256
+        let mask: u256 = (1 << width_bits) - 1
+        word & mask
+    }
 }
 
 impl IntWord for u8 {

@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 403
 expression: output
 input_file: crates/codegen/tests/fixtures/revert.fe
 ---

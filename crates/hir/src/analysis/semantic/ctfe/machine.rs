@@ -1963,13 +1963,41 @@ impl<'db> CtfeMachine<'db> {
         let [value] = args else {
             return Err(CtfeError::NotConstEvaluable { origin });
         };
-        let bytes = self.const_as_bytes(value, origin)?;
+        let mut bytes = self.const_as_bytes(value, origin)?;
         if let Some(len) = array_len(self.db, result_ty)
             && bytes.len() != len
         {
-            return Err(CtfeError::NotConstEvaluable { origin });
+            if let Some(string_bytes) = self.fixed_string_bytes_for_len(value, len) {
+                bytes = string_bytes;
+            } else {
+                return Err(CtfeError::NotConstEvaluable { origin });
+            }
         }
         Ok(CtfeConstValue::bytes(result_ty, bytes))
+    }
+
+    fn fixed_string_bytes_for_len(
+        &self,
+        value: &CtfeConstValue<'db>,
+        len: usize,
+    ) -> Option<Vec<u8>> {
+        let value = self.expand_interned(value.clone());
+        let CtfeConstKind::Bytes { ty, bytes } = &value.kind else {
+            return None;
+        };
+        if !ty.is_string(self.db) {
+            return None;
+        }
+
+        let mut out = vec![0u8; len];
+        let suffix = if bytes.len() > len {
+            &bytes[bytes.len() - len..]
+        } else {
+            bytes.as_ref()
+        };
+        let offset = len - suffix.len();
+        out[offset..].copy_from_slice(suffix);
+        Some(out)
     }
 
     fn eval_intrinsic_keccak(
@@ -2922,6 +2950,26 @@ impl<'db> CtfeMachine<'db> {
         value: CtfeConstValue<'db>,
         origin: SemOrigin<'db>,
     ) -> Result<CtfeValue<'db>, CtfeError<'db>> {
+        fn fixed_string_capacity_bytes<'db>(
+            db: &'db dyn HirAnalysisDb,
+            ty: TyId<'db>,
+        ) -> Option<usize> {
+            if !ty.is_string(db) {
+                return None;
+            }
+            let (_, args) = ty.decompose_ty_app(db);
+            let len_ty = args.first().copied()?;
+            let TyData::ConstTy(const_ty) = len_ty.data(db) else {
+                return None;
+            };
+            match const_ty.data(db) {
+                ConstTyData::Evaluated(EvaluatedConstTy::LitInt(int_id), _) => {
+                    int_id.data(db).to_usize()
+                }
+                _ => None,
+            }
+        }
+
         let value = self.expand_interned(value);
         match &value.kind {
             CtfeConstKind::Bool(value) if int_ty_shape(self.db, result_ty).is_some() => {
@@ -2941,6 +2989,36 @@ impl<'db> CtfeMachine<'db> {
             CtfeConstKind::Int { value, .. } if int_ty_shape(self.db, result_ty).is_some() => Ok(
                 CtfeValue::Value(CtfeConstValue::int(self.db, result_ty, value.to_bigint())),
             ),
+            CtfeConstKind::Int { value, .. } if result_ty.is_string(self.db) => {
+                fixed_string_capacity_bytes(self.db, result_ty)
+                    .ok_or(CtfeError::NotConstEvaluable { origin })?;
+                let word = value.to_u256();
+                Ok(CtfeValue::Value(CtfeConstValue::bytes(
+                    result_ty,
+                    word.to_be_bytes::<32>().to_vec(),
+                )))
+            }
+            CtfeConstKind::Bytes { bytes, .. }
+                if matches!(int_ty_shape(self.db, result_ty), Some((_, false))) =>
+            {
+                let Some((bits, false)) = int_ty_shape(self.db, result_ty) else {
+                    unreachable!("match guard should ensure unsigned int shape");
+                };
+                let width = usize::from(bits / 8);
+                if bytes.len() > width && bytes[..bytes.len() - width].iter().any(|byte| *byte != 0)
+                {
+                    return Err(CtfeError::NotConstEvaluable { origin });
+                }
+                let suffix = if bytes.len() > width {
+                    &bytes[bytes.len() - width..]
+                } else {
+                    bytes.as_ref()
+                };
+                let value = BigInt::from(BigUint::from_bytes_be(suffix));
+                Ok(CtfeValue::Value(CtfeConstValue::int(
+                    self.db, result_ty, value,
+                )))
+            }
             CtfeConstKind::Bytes { bytes, .. } => Ok(CtfeValue::Value(CtfeConstValue::bytes(
                 result_ty,
                 bytes.to_vec(),

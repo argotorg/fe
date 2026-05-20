@@ -6,7 +6,8 @@ use salsa::Update;
 use super::{
     binder::Binder,
     canonical::Canonical,
-    ty_def::{TyBase, TyId, strip_derived_adt_layout_args},
+    const_ty::ConstTyId,
+    ty_def::{InvalidCause, TyBase, TyId, strip_derived_adt_layout_args},
     unify::UnificationTable,
 };
 use crate::analysis::{HirAnalysisDb, ty::ty_def::TyData};
@@ -19,8 +20,10 @@ pub(crate) fn collect_methods<'db>(
 ) -> MethodTable<'db> {
     let mut collector = MethodCollector::new(db, ingot);
 
-    let impls = ingot.all_impls(db);
-    collector.collect_impls(impls);
+    for (_, external) in ingot.resolved_external_ingots(db).iter() {
+        collector.collect_impls(external.all_impls(db));
+    }
+    collector.collect_impls(ingot.all_impls(db));
     collector.finalize()
 }
 
@@ -128,6 +131,7 @@ impl<'db> MethodBucket<'db> {
     ) -> Vec<CallableDef<'db>> {
         let mut methods = vec![];
         let ty = strip_derived_adt_layout_args(table.db, ty);
+        let ty = saturate_ty_for_method_probe(table.db, ty);
         for (&cand_ty, funcs) in self.methods.iter() {
             let snapshot = table.snapshot();
 
@@ -146,6 +150,23 @@ impl<'db> MethodBucket<'db> {
 
         methods
     }
+}
+
+fn saturate_ty_for_method_probe<'db>(db: &'db dyn HirAnalysisDb, mut ty: TyId<'db>) -> TyId<'db> {
+    while !ty.is_star_kind(db) {
+        let Some(prop) = ty.applicable_ty(db) else {
+            break;
+        };
+
+        let arg = if let Some(const_ty) = prop.const_ty {
+            TyId::const_ty(db, ConstTyId::hole_with_ty(db, const_ty))
+        } else {
+            TyId::invalid(db, InvalidCause::Other)
+        };
+
+        ty = TyId::app(db, ty, arg);
+    }
+    ty
 }
 
 struct MethodCollector<'db> {

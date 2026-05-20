@@ -1,0 +1,20 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/fe_test_runner/fixed_string_primitives.fe
+---
+=== STDOUT ===
+PASS  [<time>] test_string_len_runtime
+PASS  [<time>] test_string_as_bytes_runtime
+PASS  [<time>] test_string_as_bytes_param_runtime
+PASS  [<time>] test_string_roundtrip_bytes_runtime
+PASS  [<time>] test_string_from_bytes_expression_runtime
+PASS  [<time>] test_string_concat_runtime
+PASS  [<time>] test_string_concat_expression_args_runtime
+PASS  [<time>] test_string_concat_uses_effective_len_runtime
+PASS  [<time>] test_string_concat_overflow_truncates
+PASS  [<time>] test_string_abi_encoding_ignores_hidden_high_bytes
+
+test result: ok. 10 passed; 0 failed
+
+=== EXIT CODE: 0 ===

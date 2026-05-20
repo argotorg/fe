@@ -22,7 +22,13 @@ fn is_library_file(path: &Utf8Path) -> bool {
 fn initialize_builtin<E: Embed>(db: &mut dyn InputDb, base_url: &str) {
     let base = Url::parse(base_url).unwrap();
 
-    for path in E::iter().map(|path| Utf8PathBuf::from(path.to_string())) {
+    // Ensure deterministic file insertion order across platforms/builds.
+    // This matters because downstream iteration over workspace tries is depth-first.
+    let mut paths = E::iter()
+        .map(|path| Utf8PathBuf::from(path.to_string()))
+        .collect::<Vec<_>>();
+    paths.sort();
+    for path in paths {
         if !is_library_file(&path) {
             continue;
         }
@@ -44,14 +50,22 @@ fn load_library_dir(db: &mut dyn InputDb, base_url: &str, root: &Utf8Path) -> Re
 
     while let Some(dir) = stack.pop() {
         let entries = fs::read_dir(dir.as_std_path())
-            .map_err(|err| format!("Failed to read {}: {err}", dir))?;
-        for entry in entries {
-            let entry = entry.map_err(|err| format!("Failed to read entry: {err}"))?;
-            let path = Utf8PathBuf::from_path_buf(entry.path())
-                .map_err(|_| "Library path is not UTF-8".to_string())?;
-            let file_type = entry
-                .file_type()
-                .map_err(|err| format!("Failed to read file type: {err}"))?;
+            .map_err(|err| format!("Failed to read {}: {err}", dir))?
+            .map(|entry| {
+                let entry = entry.map_err(|err| format!("Failed to read entry: {err}"))?;
+                let path = Utf8PathBuf::from_path_buf(entry.path())
+                    .map_err(|_| "Library path is not UTF-8".to_string())?;
+                let file_type = entry
+                    .file_type()
+                    .map_err(|err| format!("Failed to read file type: {err}"))?;
+                Ok((path, file_type))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+
+        // Ensure deterministic traversal order across platforms/filesystems.
+        let mut entries = entries;
+        entries.sort_by(|(lhs, _), (rhs, _)| lhs.cmp(rhs));
+        for (path, file_type) in entries {
             if file_type.is_dir() {
                 stack.push(path);
                 continue;
