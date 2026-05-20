@@ -1,4 +1,5 @@
 mod callable;
+mod const_predicate_prover;
 mod contract;
 mod effect_env;
 pub(crate) mod env;
@@ -1221,12 +1222,15 @@ impl<'db> TyChecker<'db> {
                         env::TraitObligationOrigin::GenericConfirmation => None,
                     };
                     let unsat = subgoal.map(|goal| query.extract_subgoal(&mut self.table, goal));
+                    let const_predicate_failures =
+                        self.check_const_predicate_failures_for_diag(goal);
                     self.push_diag(TyDiagCollection::from(
                         TraitConstraintDiag::TraitBoundNotSat {
                             span: obligation.span.clone(),
                             primary_goal: goal,
                             unsat_subgoal: unsat,
                             required_by,
+                            const_predicate_failures,
                         },
                     ));
                     TraitObligationOutcome::Discharged
@@ -1238,6 +1242,63 @@ impl<'db> TyChecker<'db> {
             }
             GoalSatisfiability::ContainsInvalid => TraitObligationOutcome::Discharged,
         }
+    }
+
+    fn check_const_predicate_failures_for_diag(&mut self, goal: TraitInstId<'db>) -> Vec<String> {
+        use crate::analysis::semantic::{CtfeError, eval_body_owner_const};
+        use crate::analysis::ty::trait_def::{ImplementorOrigin, impls_for_trait_def};
+        use crate::hir_def::WhereClauseOwner;
+
+        let db = self.db;
+        let mut notes = Vec::new();
+
+        let trait_def = goal.def(db);
+        let ingot = self.env.scope().ingot(db);
+        let impls = impls_for_trait_def(db, ingot, trait_def);
+
+        let bool_ty = TyId::bool(db);
+        for binder_impl in impls.iter() {
+            let impl_id = binder_impl.instantiate_identity();
+            let ImplementorOrigin::Hir(impl_trait) = impl_id.origin(db) else {
+                continue;
+            };
+
+            let const_preds = WhereClauseOwner::ImplTrait(impl_trait)
+                .where_clause(db)
+                .const_predicates(db);
+            if const_preds.is_empty() {
+                continue;
+            }
+
+            let args = goal.args(db).to_vec();
+            for body in const_preds {
+                let owner = BodyOwner::AnonConstBody {
+                    body: *body,
+                    expected: bool_ty,
+                };
+                if let Err(err) = eval_body_owner_const(db, owner, args.clone()) {
+                    let reason = match &err {
+                        CtfeError::DivisionByZero { .. } => "division by zero",
+                        CtfeError::ArithmeticOverflow { .. } => "arithmetic overflow",
+                        CtfeError::NegativeExponent { .. } => "negative exponent",
+                        CtfeError::OutOfBounds { .. } => "out of bounds access",
+                        CtfeError::StepLimitExceeded { .. } => "step limit exceeded",
+                        CtfeError::RecursionLimitExceeded { .. } => "recursion limit exceeded",
+                        _ => "evaluation error",
+                    };
+                    let trait_name = trait_def
+                        .name(db)
+                        .to_opt()
+                        .map(|n| n.data(db).to_string())
+                        .unwrap_or_else(|| "<unknown>".to_string());
+                    notes.push(format!(
+                        "a const predicate on an impl of `{trait_name}` panicked: {reason}",
+                    ));
+                }
+            }
+        }
+
+        notes
     }
 
     fn resolve_deferred(&mut self) {

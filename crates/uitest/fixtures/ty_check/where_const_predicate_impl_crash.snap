@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/where_const_predicate_impl_crash.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ where_const_predicate_impl_crash.fe:22:5
+   │
+22 │     z.safe_div()
+   │     ^^^^^^^^^^^^ `Zero` doesn't implement `SafeDiv`
+   │
+   = a const predicate on an impl of `SafeDiv` panicked: division by zero

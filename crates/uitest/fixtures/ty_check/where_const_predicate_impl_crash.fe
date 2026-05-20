@@ -1,0 +1,23 @@
+trait Sized {
+    const SIZE: u256
+}
+
+trait SafeDiv {
+    fn safe_div(self) -> u256
+}
+
+struct Zero {}
+impl Sized for Zero {
+    const SIZE: u256 = 0
+}
+
+impl<T> SafeDiv for T where T: Sized, 100 / T::SIZE > 0 {
+    fn safe_div(self) -> u256 {
+        0
+    }
+}
+
+fn use_zero() {
+    let z = Zero{}
+    z.safe_div()
+}

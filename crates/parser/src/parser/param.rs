@@ -481,34 +481,39 @@ impl super::Parse for WhereClauseScope {
             parser.set_newline_as_trivia(true);
             match parser.current_kind() {
                 Some(kind) if is_type_start(kind) => {
-                    parser.parse(WherePredicateScope::default())?;
+                    if is_type_bound_predicate(parser) {
+                        parser.parse(WherePredicateScope::default())?;
+                    } else {
+                        parser.parse(WhereConstPredicateScope::default())?;
+                    }
+                    pred_count += 1;
+                }
+                Some(kind) if is_const_predicate_start(kind) => {
+                    parser.parse(WhereConstPredicateScope::default())?;
                     pred_count += 1;
                 }
                 _ => break,
             }
 
-            if !parser.bump_if(SyntaxKind::Comma)
-                && parser.current_kind().is_some()
-                && is_type_start(parser.current_kind().unwrap())
-            {
-                parser.set_newline_as_trivia(false);
-                let newline = parser.current_kind() == Some(SyntaxKind::Newline);
-                parser.set_newline_as_trivia(true);
+            parser.set_newline_as_trivia(true);
+            if !parser.bump_if(SyntaxKind::Comma) {
+                let next_could_be_predicate = parser
+                    .current_kind()
+                    .is_some_and(|k| is_type_start(k) || is_const_predicate_start(k));
+                if next_could_be_predicate {
+                    parser.set_newline_as_trivia(false);
+                    let newline = parser.current_kind() == Some(SyntaxKind::Newline);
+                    parser.set_newline_as_trivia(true);
 
-                if newline {
-                    parser.add_error(ParseError::expected(
-                        &[SyntaxKind::Comma],
-                        None,
-                        parser.current_pos,
-                    ));
-                } else if parser.find(
-                    SyntaxKind::Comma,
-                    ExpectedKind::Separator {
-                        separator: SyntaxKind::Comma,
-                        element: SyntaxKind::WherePredicate,
-                    },
-                )? {
-                    parser.bump();
+                    if newline {
+                        parser.add_error(ParseError::expected(
+                            &[SyntaxKind::Comma],
+                            None,
+                            parser.current_pos,
+                        ));
+                    } else {
+                        break;
+                    }
                 } else {
                     break;
                 }
@@ -540,6 +545,30 @@ impl super::Parse for WherePredicateScope {
         }
         Ok(())
     }
+}
+
+define_scope! { WhereConstPredicateScope, WhereConstPredicate }
+impl super::Parse for WhereConstPredicateScope {
+    type Error = Recovery<ErrProof>;
+
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        parse_expr(parser)?;
+        Ok(())
+    }
+}
+
+/// Dry-run: does this position start a type-bound predicate (`Type: Bounds`)?
+fn is_type_bound_predicate<S: TokenStream>(parser: &mut Parser<S>) -> bool {
+    parser.dry_run(|p| parse_type(p, None).is_ok() && p.current_kind() == Some(SyntaxKind::Colon))
+}
+
+/// Tokens that unambiguously start expressions but never types.
+fn is_const_predicate_start(kind: SyntaxKind) -> bool {
+    use SyntaxKind::*;
+    matches!(
+        kind,
+        Not | Minus | Tilde | Plus | IfKw | MatchKw | Int | String | TrueKw | FalseKw
+    )
 }
 
 pub(crate) fn parse_where_clause_opt<S: TokenStream>(

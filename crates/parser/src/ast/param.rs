@@ -292,12 +292,29 @@ impl WhereClause {
     pub fn where_kw(&self) -> Option<SyntaxToken> {
         support::token(self.syntax(), SK::WhereKw)
     }
+
+    /// Returns an iterator over const predicates `{ expr }` in this where clause.
+    pub fn const_predicates(&self) -> impl Iterator<Item = WhereConstPredicate> {
+        support::children(self.syntax())
+    }
 }
 
 ast_node! {
     /// `T: Trait`
     pub struct WherePredicate,
     SK::WherePredicate,
+}
+
+ast_node! {
+    /// `{ const_expr }` in a where clause
+    pub struct WhereConstPredicate,
+    SK::WhereConstPredicate,
+}
+impl WhereConstPredicate {
+    /// Returns the block expression inside the const predicate.
+    pub fn expr(&self) -> Option<super::Expr> {
+        support::child(self.syntax())
+    }
 }
 impl WherePredicate {
     /// Returns `T` in `T: Trait`.
@@ -715,6 +732,39 @@ mod tests {
             count += 1;
         }
         assert!(count == 3);
+    }
+
+    #[test]
+    #[wasm_bindgen_test]
+    fn where_clause_with_const_predicate() {
+        let source = r#"where true, T: Trait"#;
+        let wc = parse_where_clause(source);
+
+        let type_preds: Vec<_> = wc.iter().collect();
+        assert_eq!(type_preds.len(), 1);
+        assert!(matches!(
+            type_preds[0].ty().unwrap().kind(),
+            TypeKind::Path(_)
+        ));
+
+        let const_preds: Vec<_> = wc.const_predicates().collect();
+        assert_eq!(const_preds.len(), 1);
+        assert!(const_preds[0].expr().is_some());
+    }
+
+    #[test]
+    #[wasm_bindgen_test]
+    fn where_clause_const_predicate_then_body() {
+        let f = parse_func("fn foo<T>() where T: Trait, true {}");
+        let wc = f.sig().where_clause().expect("missing where clause");
+
+        let type_preds: Vec<_> = wc.iter().collect();
+        assert_eq!(type_preds.len(), 1);
+
+        let const_preds: Vec<_> = wc.const_predicates().collect();
+        assert_eq!(const_preds.len(), 1);
+
+        assert!(f.body().is_some(), "function body should still be parsed");
     }
 
     #[test]

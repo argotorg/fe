@@ -108,6 +108,8 @@ pub struct FuncParamListId<'db> {
 pub struct WhereClauseId<'db> {
     #[return_ref]
     pub data: Vec<WherePredicate<'db>>,
+    #[return_ref]
+    pub const_predicates: Vec<Body<'db>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, derive_more::From)]

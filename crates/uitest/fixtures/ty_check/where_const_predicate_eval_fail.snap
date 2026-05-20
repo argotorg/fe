@@ -1,0 +1,11 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 27
+expression: diags
+input_file: fixtures/ty_check/where_const_predicate_eval_fail.fe
+---
+error[8-0083]: where clause const predicate could not be evaluated
+   ┌─ where_const_predicate_eval_fail.fe:15:5
+   │
+15 │     div_pred<Zero>()
+   │     ^^^^^^^^^^^^^^ CTFE evaluation failed for this predicate

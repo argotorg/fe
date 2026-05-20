@@ -1670,6 +1670,7 @@ pub enum TrackedItemVariant<'db> {
     StaticAssertCondition,
     StaticAssertComparisonLhs,
     StaticAssertComparisonRhs,
+    WhereConstPredicate,
     Joined(Box<Self>, Box<Self>),
 }
 impl TrackedItemVariant<'_> {

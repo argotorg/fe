@@ -1,0 +1,53 @@
+trait MandelbrotPoint {
+    const C: u256
+    const MAX_ITER: u256
+}
+
+fn assert_converges<T>()
+    where T: MandelbrotPoint,
+          mandelbrot_converges(T::C, T::MAX_ITER)
+{
+}
+
+const fn mandelbrot_converges(_ c: u256, _ max_iter: u256) -> bool {
+    let mut z: u256 = 0
+    let mut i: u256 = 0
+    while i < max_iter {
+        z = z * z / 1000 + c
+        if z > 2000 {
+            return false
+        }
+        i += 1
+    }
+    true
+}
+
+struct HalfReal {}
+impl MandelbrotPoint for HalfReal {
+    const C: u256 = 500
+    const MAX_ITER: u256 = 10
+}
+
+struct QuarterReal {}
+impl MandelbrotPoint for QuarterReal {
+    const C: u256 = 250
+    const MAX_ITER: u256 = 100
+}
+
+struct HalfRealTooFew {}
+impl MandelbrotPoint for HalfRealTooFew {
+    const C: u256 = 500
+    const MAX_ITER: u256 = 3
+}
+
+fn ok_converges() {
+    assert_converges<QuarterReal>()
+}
+
+fn fail_diverges() {
+    assert_converges<HalfReal>()
+}
+
+fn ok_not_yet_diverged() {
+    assert_converges<HalfRealTooFew>()
+}

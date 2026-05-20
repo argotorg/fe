@@ -1250,6 +1250,7 @@ impl<'db> FuncParamView<'db> {
                     primary_goal: goal,
                     unsat_subgoal: subgoal,
                     required_by: None,
+                    const_predicate_failures: vec![],
                 }
                 .into(),
             );
@@ -3436,6 +3437,7 @@ impl<'db> TypeAlias<'db> {
                     primary_goal: goal,
                     unsat_subgoal: subgoal,
                     required_by: None,
+                    const_predicate_failures: vec![],
                 }
                 .into(),
             ]
@@ -4277,6 +4279,7 @@ impl<'db> ImplAssocTypeView<'db> {
                     primary_goal: goal,
                     unsat_subgoal: subgoal,
                     required_by: None,
+                    const_predicate_failures: vec![],
                 }
                 .into(),
             ];
@@ -4838,6 +4841,7 @@ impl<'db> FieldView<'db> {
                     primary_goal: goal,
                     unsat_subgoal: subgoal,
                     required_by: None,
+                    const_predicate_failures: vec![],
                 }
                 .into(),
             );
