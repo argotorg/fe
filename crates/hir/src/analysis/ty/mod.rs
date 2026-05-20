@@ -503,6 +503,12 @@ impl ModuleAnalysisPass for ContractAnalysisPass {
                     .map(|diag| diag.to_voucher()),
             );
 
+            diags.extend(
+                ty_check::check_contract_immutable_fields_initialized(db, contract)
+                    .iter()
+                    .map(|diag| diag.to_voucher()),
+            );
+
             if contract.init(db).is_some() {
                 diags.extend(
                     ty_check::check_contract_init_body(db, contract)

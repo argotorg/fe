@@ -1742,7 +1742,7 @@ impl<T> EffectHandle for Ptr<T> {
 
 contract C {
     first: Ptr<u256>
-    second: u256
+    mut second: u256
 }
 "#,
     );
@@ -1811,7 +1811,7 @@ impl<const LEFT: u256, const RIGHT: u256> EffectHandle for Wrapper<LEFT, RIGHT> 
 
 contract C {
     first: Wrapper
-    second: u256
+    mut second: u256
 }
 "#,
     );
@@ -1891,7 +1891,7 @@ impl<const ROOT: u256> EffectHandle for Wrapper<ROOT> {
 
 contract C {
     first: Wrapper
-    second: u256
+    mut second: u256
 }
 "#,
     );

@@ -187,5 +187,6 @@ fn address_space_rank(space: ProviderAddressSpace) -> u8 {
         ProviderAddressSpace::Storage => 1,
         ProviderAddressSpace::Transient => 2,
         ProviderAddressSpace::Calldata => 3,
+        ProviderAddressSpace::Code => 4,
     }
 }

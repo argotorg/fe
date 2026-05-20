@@ -18,6 +18,9 @@ pub struct Memory {}
 /// Backends may interpret this as an input byte buffer (e.g. EVM calldata via CALLDATALOAD).
 pub struct Calldata {}
 
+/// Effect provider address-space marker: indicates the provider points into immutable code data.
+pub struct Code {}
+
 /// Effect provider address-space marker: indicates the provider points into the target's persistent
 /// storage/state.
 ///
@@ -51,6 +54,11 @@ pub struct StorPtr<T> {
 
 impl<T> Copy for MemPtr<T> {}
 impl<T> Copy for StorPtr<T> {}
+
+/// Read-only pointer/handle to immutable code data of type `T`.
+pub struct CodePtr<T> {
+    handle: u256
+}
 
 /// Marker: `Self` can satisfy a read-only effect whose domain is `Target`.
 pub trait EffectRef<Target> {}
@@ -112,3 +120,18 @@ impl<T> EffectHandleMut for StorPtr<T> {}
 
 impl<T> EffectRef<T> for StorPtr<T> {}
 impl<T> EffectRefMut<T> for StorPtr<T> {}
+
+impl<T> EffectHandle for CodePtr<T> {
+    type Target = T
+    type AddressSpace = Code
+
+    fn from_raw(_ raw: u256) -> Self {
+        Self { handle: raw }
+    }
+
+    fn raw(self) -> u256 {
+        self.handle
+    }
+}
+
+impl<T> EffectRef<T> for CodePtr<T> {}

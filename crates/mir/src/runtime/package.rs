@@ -2392,6 +2392,7 @@ fn address_space_sort_key(space: AddressSpaceKind) -> &'static str {
         AddressSpaceKind::Storage => "storage",
         AddressSpaceKind::Transient => "transient",
         AddressSpaceKind::Calldata => "calldata",
+        AddressSpaceKind::Code => "code",
     }
 }
 

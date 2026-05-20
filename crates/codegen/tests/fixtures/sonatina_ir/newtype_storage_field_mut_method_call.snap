@@ -1,5 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
+assertion_line: 431
 expression: output
 input_file: crates/codegen/tests/fixtures/newtype_storage_field_mut_method_call.fe
 ---
@@ -118,7 +119,11 @@ func private %contract_init_abi_NewtypeStorageFieldMutMethodCall() {
         evm_revert 0.i256 0.i256;
 
     block3:
+        v6.*i8 = evm_malloc 32.i256;
+        v7.i256 = ptr_to_int v6 i256;
+        mstore 0.i256 v7 i256;
         call %__NewtypeStorageFieldMutMethodCall_init;
+        mstore 0.i256 v7 i256;
         return;
 }
 
@@ -130,8 +135,25 @@ func private %contract_init_root_NewtypeStorageFieldMutMethodCall() {
         call %contract_init_abi_NewtypeStorageFieldMutMethodCall;
         v2.i256 = sym_addr &NewtypeStorageFieldMutMethodCall_runtime;
         v3.i256 = sym_size &NewtypeStorageFieldMutMethodCall_runtime;
-        evm_code_copy 0.i256 v2 v3;
-        evm_return 0.i256 v3;
+        v4.i256 = mload 0.i256 i256;
+        (v6.i256, v7.i1) = uaddo v3 32.i256;
+        br v7 block2 block3;
+
+    block2:
+        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        mstore 4.i256 17.i256 i256;
+        evm_revert 0.i256 36.i256;
+
+    block3:
+        v12.*i8 = evm_malloc v6;
+        v13.i256 = ptr_to_int v12 i256;
+        evm_code_copy v13 v2 v3;
+        (v17.i256, v18.i1) = uaddo v13 v3;
+        br v18 block2 block4;
+
+    block4:
+        evm_mcopy v17 v4 32.i256;
+        evm_return v13 v6;
 }
 
 func private %contract_recv_abi_NewtypeStorageFieldMutMethodCall_1() {
@@ -150,11 +172,11 @@ func private %contract_recv_abi_NewtypeStorageFieldMutMethodCall_1() {
     block3:
         v5.objref<@layout_5> = obj.alloc @layout_5;
         call %decode_runtime_args v5;
-        v8.i256 = call %__NewtypeStorageFieldMutMethodCall_recv_0_0 1.i256;
-        v9.@layout_6 = call %encode_single_root_alloc v8;
-        v10.i256 = extract_value v9 0.i256;
-        v11.i256 = extract_value v9 1.i256;
-        evm_return v10 v11;
+        v7.i256 = call %__NewtypeStorageFieldMutMethodCall_recv_0_0 0.i256;
+        v8.@layout_6 = call %encode_single_root_alloc v7;
+        v9.i256 = extract_value v8 0.i256;
+        v11.i256 = extract_value v8 1.i256;
+        evm_return v9 v11;
 }
 
 func private %contract_runtime_root_NewtypeStorageFieldMutMethodCall() {

@@ -3379,6 +3379,44 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
 
+            Self::ImmutableContractFieldNotInitialized {
+                primary,
+                field,
+                init,
+            } => {
+                let mut sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "`{}` must be assigned in `init` on every successful path",
+                        field.data(db)
+                    ),
+                    span: primary.resolve(db),
+                }];
+
+                if let Some(init) = init {
+                    sub_diagnostics.push(SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format!(
+                            "this init block may finish without assigning `{}`",
+                            field.data(db)
+                        ),
+                        span: init.resolve(db),
+                    });
+                }
+
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "immutable contract field is not initialized".to_string(),
+                    sub_diagnostics,
+                    notes: vec![format!(
+                        "assign `{}` in `init` with `uses (mut {})`, or mark the field `mut` to store it in contract storage",
+                        field.data(db),
+                        field.data(db)
+                    )],
+                    error_code,
+                }
+            }
+
             Self::LoopControlOutsideOfLoop { primary, is_break } => {
                 let stmt = if *is_break { "break" } else { "continue" };
 

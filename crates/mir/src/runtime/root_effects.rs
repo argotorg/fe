@@ -3,7 +3,7 @@ use hir::{
         semantic::{
             SemanticInstance, owner_effect_bindings, resolved_provider_binding_for_instance_effect,
         },
-        ty::{ty_check::LocalBinding, ty_def::TyId},
+        ty::{corelib::resolve_lib_type_path, ty_check::LocalBinding, ty_def::TyId},
     },
     hir_def::{Contract, Func},
     semantic::{ContractFieldLayoutInfo, ProviderSource},
@@ -33,14 +33,33 @@ pub(crate) fn entry_effect_arg_plans<'db>(
     semantic: SemanticInstance<'db>,
 ) -> Result<Vec<EntryEffectArgPlan<'db>>, LowerError> {
     let owner = semantic.key(db).owner(db);
-    let contract_fields = context.contract().map(|contract| {
-        contract
-            .field_layout(db)
-            .values()
-            .cloned()
-            .map(|field| (field.index, field))
-            .collect::<FxHashMap<_, _>>()
-    });
+    let (contract_fields, total_code_slots) = if let Some(contract) = context.contract() {
+        let scope = contract.scope();
+        let code_space = resolve_lib_type_path(db, scope, "core::effect_ref::Code");
+        let layout = contract.field_layout(db);
+        let total_code_slots = code_space
+            .map(|code_space| {
+                layout
+                    .values()
+                    .filter(|field| field.address_space == code_space)
+                    .map(|field| field.slot_offset.saturating_add(field.slot_count))
+                    .max()
+                    .unwrap_or(0)
+            })
+            .unwrap_or(0);
+        (
+            Some(
+                layout
+                    .values()
+                    .cloned()
+                    .map(|field| (field.index, field))
+                    .collect::<FxHashMap<_, _>>(),
+            ),
+            total_code_slots,
+        )
+    } else {
+        (None, 0)
+    };
     owner_effect_bindings(db, owner)
         .into_iter()
         .filter_map(|binding| {
@@ -52,6 +71,7 @@ pub(crate) fn entry_effect_arg_plans<'db>(
                 binding,
                 provider.source.clone(),
                 contract_fields.as_ref(),
+                total_code_slots,
             ))
         })
         .filter_map(|result| result.transpose())
@@ -91,6 +111,7 @@ fn entry_effect_arg_plan_for_binding<'db>(
     binding: LocalBinding<'db>,
     source: ProviderSource<'db>,
     contract_fields: Option<&FxHashMap<u32, ContractFieldLayoutInfo<'db>>>,
+    total_code_slots: usize,
 ) -> Result<Option<EntryEffectArgPlan<'db>>, LowerError> {
     match source {
         ProviderSource::ContractField { field_idx, .. } => {
@@ -109,7 +130,7 @@ fn entry_effect_arg_plan_for_binding<'db>(
                 ))
             })?;
             Ok(Some(EntryEffectArgPlan::ContractField(
-                contract_field_binding(db, context, field, semantic, binding)?,
+                contract_field_binding(db, context, field, semantic, binding, total_code_slots)?,
             )))
         }
         ProviderSource::RootProvider { .. } => {
@@ -154,6 +175,7 @@ fn contract_field_binding<'db>(
     field: &ContractFieldLayoutInfo<'db>,
     semantic: SemanticInstance<'db>,
     binding: LocalBinding<'db>,
+    total_code_slots: usize,
 ) -> Result<ContractFieldBinding<'db>, LowerError> {
     let binding_ty = semantic.binding_ty(db, binding);
     let class = runtime_effect_binding_plan(db, semantic, binding)
@@ -179,8 +201,24 @@ fn contract_field_binding<'db>(
             )));
         }
     };
+    let slot = match &kind {
+        RefKind::Provider {
+            space: AddressSpaceKind::Code,
+            ..
+        } => {
+            let total_bytes = (i128::try_from(total_code_slots)
+                .expect("code-backed slot count fits in i128"))
+            .saturating_mul(32);
+            let field_bytes = (i128::try_from(field.slot_offset)
+                .expect("code-backed slot offset fits in i128"))
+            .saturating_mul(32);
+            let signed = field_bytes.saturating_sub(total_bytes);
+            signed as u128
+        }
+        _ => field.slot_offset as u128,
+    };
     Ok(ContractFieldBinding {
-        slot: field.slot_offset as u128,
+        slot,
         declared_ty: binding_ty,
         class,
         kind,

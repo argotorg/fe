@@ -1,6 +1,6 @@
 
 pub contract Bank {
-    total: u64,
+    mut total: u64,
 
     init(start: u64) uses (mut total) {
         total = start
