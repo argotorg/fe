@@ -684,6 +684,20 @@ fn format_builtin<'db>(db: &'db dyn MirDb, builtin: &RuntimeBuiltin<'db>) -> Str
             format_local_id(*offset),
             format_local_id(*len)
         ),
+        RuntimeBuiltin::ExtCodeSize { addr } => format!("extcodesize {}", format_local_id(*addr)),
+        RuntimeBuiltin::ExtCodeCopy {
+            addr,
+            dst,
+            offset,
+            len,
+        } => format!(
+            "extcodecopy {}, {}, {}, {}",
+            format_local_id(*addr),
+            format_local_id(*dst),
+            format_local_id(*offset),
+            format_local_id(*len)
+        ),
+        RuntimeBuiltin::ExtCodeHash { addr } => format!("extcodehash {}", format_local_id(*addr)),
         RuntimeBuiltin::Keccak256 { offset, len } => format!(
             "keccak256 {}, {}",
             format_local_id(*offset),
@@ -700,6 +714,11 @@ fn format_builtin<'db>(db: &'db dyn MirDb, builtin: &RuntimeBuiltin<'db>) -> Str
             format_local_id(*lhs),
             format_local_id(*rhs),
             format_local_id(*modulus)
+        ),
+        RuntimeBuiltin::Byte { pos, value } => format!(
+            "byte {}, {}",
+            format_local_id(*pos),
+            format_local_id(*value)
         ),
         RuntimeBuiltin::SignExtend { byte, value } => format!(
             "signextend {}, {}",
@@ -728,6 +747,7 @@ fn format_builtin<'db>(db: &'db dyn MirDb, builtin: &RuntimeBuiltin<'db>) -> Str
         RuntimeBuiltin::Origin => "origin".to_string(),
         RuntimeBuiltin::GasPrice => "gasprice".to_string(),
         RuntimeBuiltin::CoinBase => "coinbase".to_string(),
+        RuntimeBuiltin::Balance { addr } => format!("balance {}", format_local_id(*addr)),
         RuntimeBuiltin::Timestamp => "timestamp".to_string(),
         RuntimeBuiltin::Number => "number".to_string(),
         RuntimeBuiltin::PrevRandao => "prevrandao".to_string(),
@@ -736,6 +756,8 @@ fn format_builtin<'db>(db: &'db dyn MirDb, builtin: &RuntimeBuiltin<'db>) -> Str
         RuntimeBuiltin::BaseFee => "basefee".to_string(),
         RuntimeBuiltin::SelfBalance => "selfbalance".to_string(),
         RuntimeBuiltin::BlockHash { block } => format!("blockhash {}", format_local_id(*block)),
+        RuntimeBuiltin::BlobHash { index } => format!("blobhash {}", format_local_id(*index)),
+        RuntimeBuiltin::BlobBaseFee => "blobbasefee".to_string(),
         RuntimeBuiltin::Gas => "gas".to_string(),
         RuntimeBuiltin::CurrentCodeRegionLen => "current_code_region_len".to_string(),
         RuntimeBuiltin::CodeRegionOffset { region } => format!("code_region_offset {:?}", region),

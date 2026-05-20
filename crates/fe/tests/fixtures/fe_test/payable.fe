@@ -1,4 +1,4 @@
-use std::evm::{Evm, Ctx, Address}
+use std::evm::{Evm, Ctx, Address, ops}
 
 pub contract PayableBox uses (ctx: Ctx) {
     #[payable]
@@ -140,4 +140,17 @@ fn test_selfbalance() uses (evm: mut Evm) {
     // Query the balance via ctx.selfbalance()
     let balance: u256 = evm.call(addr: addr, gas: 100000, value: 0, message: PayableMsg::GetBalance {})
     assert(balance == 500)
+}
+
+#[test(balance = 1000000000)]
+fn test_balance() uses (evm: mut Evm) {
+    let addr = evm.create2<PayableBox>(value: 123, args: (), salt: 0)
+    assert(ops::balance(addr) == 123)
+    assert(ops::gasprice() == 0)
+    assert(ops::extcodesize(addr) > 0)
+    assert(ops::extcodehash(addr) != 0)
+    ops::extcodecopy(addr: addr, dest: 0, offset: 0, len: 0)
+    assert(ops::blobhash(0) == 0)
+    let blob_base_fee = ops::blobbasefee()
+    assert(blob_base_fee == blob_base_fee)
 }

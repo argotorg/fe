@@ -40,15 +40,16 @@ use sonatina_ir::{
             ObjLoad, ObjProj, ObjStore, SymAddr, SymSize, SymbolRef,
         },
         evm::{
-            EvmAddMod, EvmAddress, EvmBaseFee, EvmBlockHash, EvmCall, EvmCallValue,
-            EvmCalldataCopy, EvmCalldataLoad, EvmCalldataSize, EvmCaller, EvmChainId, EvmCodeCopy,
-            EvmCodeSize, EvmCoinBase, EvmCreate, EvmCreate2, EvmDelegateCall, EvmExp, EvmGas,
-            EvmGasLimit, EvmGasPrice, EvmInvalid, EvmKeccak256, EvmLog0, EvmLog1, EvmLog2, EvmLog3,
-            EvmLog4, EvmMalloc, EvmMcopy, EvmMsize, EvmMstore8, EvmMulMod, EvmNumber, EvmOrigin,
-            EvmPrevRandao, EvmReturn, EvmReturnDataCopy, EvmReturnDataSize, EvmRevert, EvmSdiv,
-            EvmSelfBalance, EvmSelfDestruct, EvmSignExtend, EvmSload, EvmSmod, EvmSstore,
-            EvmStaticCall, EvmStop, EvmTimestamp, EvmTload, EvmTstore, EvmUdiv, EvmUmod,
-            inst_set::EvmInstSet,
+            EvmAddMod, EvmAddress, EvmBalance, EvmBaseFee, EvmBlobBaseFee, EvmBlobHash,
+            EvmBlockHash, EvmByte, EvmCall, EvmCallValue, EvmCalldataCopy, EvmCalldataLoad,
+            EvmCalldataSize, EvmCaller, EvmChainId, EvmCodeCopy, EvmCodeSize, EvmCoinBase,
+            EvmCreate, EvmCreate2, EvmDelegateCall, EvmExp, EvmExtCodeCopy, EvmExtCodeHash,
+            EvmExtCodeSize, EvmGas, EvmGasLimit, EvmGasPrice, EvmInvalid, EvmKeccak256, EvmLog0,
+            EvmLog1, EvmLog2, EvmLog3, EvmLog4, EvmMalloc, EvmMcopy, EvmMsize, EvmMstore8,
+            EvmMulMod, EvmNumber, EvmOrigin, EvmPrevRandao, EvmReturn, EvmReturnDataCopy,
+            EvmReturnDataSize, EvmRevert, EvmSdiv, EvmSelfBalance, EvmSelfDestruct, EvmSignExtend,
+            EvmSload, EvmSmod, EvmSstore, EvmStaticCall, EvmStop, EvmTimestamp, EvmTload,
+            EvmTstore, EvmUdiv, EvmUmod, inst_set::EvmInstSet,
         },
         logic::{And, Not, Or, Xor},
     },
@@ -1452,6 +1453,39 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 ));
                 zero_for_type(&mut self.fb, Type::Unit)
             }
+            RuntimeBuiltin::ExtCodeSize { addr } => {
+                let addr = self.local_value(*addr)?;
+                self.fb.insert_inst(
+                    EvmExtCodeSize::new(self.module.inst_set(), addr),
+                    Type::I256,
+                )
+            }
+            RuntimeBuiltin::ExtCodeCopy {
+                addr,
+                dst,
+                offset,
+                len,
+            } => {
+                let addr = self.local_value(*addr)?;
+                let dst = self.local_value(*dst)?;
+                let offset = self.local_value(*offset)?;
+                let len = self.local_value(*len)?;
+                self.fb.insert_inst_no_result(EvmExtCodeCopy::new(
+                    self.module.inst_set(),
+                    addr,
+                    dst,
+                    offset,
+                    len,
+                ));
+                zero_for_type(&mut self.fb, Type::Unit)
+            }
+            RuntimeBuiltin::ExtCodeHash { addr } => {
+                let addr = self.local_value(*addr)?;
+                self.fb.insert_inst(
+                    EvmExtCodeHash::new(self.module.inst_set(), addr),
+                    Type::I256,
+                )
+            }
             RuntimeBuiltin::Keccak256 { offset, len } => {
                 let offset = self.local_value(*offset)?;
                 let len = self.local_value(*len)?;
@@ -1477,6 +1511,12 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                     EvmMulMod::new(self.module.inst_set(), lhs, rhs, modulus),
                     Type::I256,
                 )
+            }
+            RuntimeBuiltin::Byte { pos, value } => {
+                let pos = self.local_value(*pos)?;
+                let value = self.local_value(*value)?;
+                self.fb
+                    .insert_inst(EvmByte::new(self.module.inst_set(), pos, value), Type::I256)
             }
             RuntimeBuiltin::SignExtend { byte, value } => {
                 let byte = self.local_value(*byte)?;
@@ -1528,6 +1568,11 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             RuntimeBuiltin::CoinBase => self
                 .fb
                 .insert_inst(EvmCoinBase::new(self.module.inst_set()), Type::I256),
+            RuntimeBuiltin::Balance { addr } => {
+                let addr = self.local_value(*addr)?;
+                self.fb
+                    .insert_inst(EvmBalance::new(self.module.inst_set(), addr), Type::I256)
+            }
             RuntimeBuiltin::Timestamp => self
                 .fb
                 .insert_inst(EvmTimestamp::new(self.module.inst_set()), Type::I256),
@@ -1554,6 +1599,14 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 self.fb
                     .insert_inst(EvmBlockHash::new(self.module.inst_set(), block), Type::I256)
             }
+            RuntimeBuiltin::BlobHash { index } => {
+                let index = self.local_value(*index)?;
+                self.fb
+                    .insert_inst(EvmBlobHash::new(self.module.inst_set(), index), Type::I256)
+            }
+            RuntimeBuiltin::BlobBaseFee => self
+                .fb
+                .insert_inst(EvmBlobBaseFee::new(self.module.inst_set()), Type::I256),
             RuntimeBuiltin::Gas => self
                 .fb
                 .insert_inst(EvmGas::new(self.module.inst_set()), Type::I256),

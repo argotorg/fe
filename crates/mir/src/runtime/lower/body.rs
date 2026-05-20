@@ -3345,6 +3345,34 @@ impl<'db> RmirEmitter<'db> {
                 let [] = args else { return None };
                 builtin(crate::runtime::RuntimeBuiltin::CodeSize, Some(word.clone()))
             }
+            RuntimeBuiltinFuncKind::ExtCodeSize => {
+                let [addr] = args else { return None };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::ExtCodeSize { addr: *addr },
+                    Some(word.clone()),
+                )
+            }
+            RuntimeBuiltinFuncKind::ExtCodeCopy => {
+                let [addr, dst, offset, len] = args else {
+                    return None;
+                };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::ExtCodeCopy {
+                        addr: *addr,
+                        dst: *dst,
+                        offset: *offset,
+                        len: *len,
+                    },
+                    None,
+                )
+            }
+            RuntimeBuiltinFuncKind::ExtCodeHash => {
+                let [addr] = args else { return None };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::ExtCodeHash { addr: *addr },
+                    Some(word.clone()),
+                )
+            }
             RuntimeBuiltinFuncKind::Keccak256 => {
                 let [offset, len] = args else { return None };
                 builtin(
@@ -3377,6 +3405,16 @@ impl<'db> RmirEmitter<'db> {
                         lhs: *lhs,
                         rhs: *rhs,
                         modulus: *modulus,
+                    },
+                    Some(word.clone()),
+                )
+            }
+            RuntimeBuiltinFuncKind::Byte => {
+                let [pos, value] = args else { return None };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::Byte {
+                        pos: *pos,
+                        value: *value,
                     },
                     Some(word.clone()),
                 )
@@ -3417,6 +3455,13 @@ impl<'db> RmirEmitter<'db> {
             RuntimeBuiltinFuncKind::CoinBase => {
                 let [] = args else { return None };
                 builtin(crate::runtime::RuntimeBuiltin::CoinBase, Some(word.clone()))
+            }
+            RuntimeBuiltinFuncKind::Balance => {
+                let [addr] = args else { return None };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::Balance { addr: *addr },
+                    Some(word.clone()),
+                )
             }
             RuntimeBuiltinFuncKind::Timestamp => {
                 let [] = args else { return None };
@@ -3459,6 +3504,20 @@ impl<'db> RmirEmitter<'db> {
                 let [block] = args else { return None };
                 builtin(
                     crate::runtime::RuntimeBuiltin::BlockHash { block: *block },
+                    Some(word.clone()),
+                )
+            }
+            RuntimeBuiltinFuncKind::BlobHash => {
+                let [index] = args else { return None };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::BlobHash { index: *index },
+                    Some(word.clone()),
+                )
+            }
+            RuntimeBuiltinFuncKind::BlobBaseFee => {
+                let [] = args else { return None };
+                builtin(
+                    crate::runtime::RuntimeBuiltin::BlobBaseFee,
                     Some(word.clone()),
                 )
             }

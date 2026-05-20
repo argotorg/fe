@@ -4,6 +4,18 @@ pub use memory_input::{self, *}
 pub use effects::{self, *}
 pub use event::{self, *}
 pub use panic::{self, *}
+pub use ops::{
+    self,
+    balance,
+    blobbasefee,
+    blobhash,
+    byte,
+    extcodecopy,
+    extcodehash,
+    extcodesize,
+    gasprice,
+    signextend,
+}
 pub use target::{self, *}
 pub use intrinsic::{code_region_len, code_region_offset, contract_field_slot}
 pub use mem::{self, *}
