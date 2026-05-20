@@ -1,0 +1,45 @@
+trait ReadCap {
+    fn ping(self) -> i32
+}
+
+trait MutCap {
+    fn bump(mut self) -> i32
+}
+
+struct EmptyRead {}
+struct EmptyMut {}
+
+impl ReadCap for EmptyRead {
+    fn ping(self) -> i32 {
+        11
+    }
+}
+
+impl MutCap for EmptyMut {
+    fn bump(mut self) -> i32 {
+        31
+    }
+}
+
+fn read_uses() -> i32
+uses (c: ReadCap)
+{
+    c.ping()
+}
+
+fn mut_uses() -> i32
+uses (c: mut MutCap)
+{
+    c.bump()
+}
+
+#[test]
+fn test_zero_sized_capability_providers_are_zero_width() {
+    let total = with (ReadCap = EmptyRead {}) {
+        with (MutCap = EmptyMut {}) {
+            read_uses() + mut_uses()
+        }
+    }
+
+    assert(total == 42)
+}

@@ -1,7 +1,7 @@
 use super::{
     EffectProviderSubst, GenericSubst, ImplEnv, SemanticInstance, SemanticInstanceKey,
     provisional_provider_binding_for_instance_effect, provisional_provider_idx_for_requirement,
-    resolved_provider_binding_for_instance_effect,
+    resolved_effect_binding_ty_for_instance_effect, resolved_provider_binding_for_instance_effect,
 };
 use crate::{
     analysis::{
@@ -150,6 +150,16 @@ fn resolve_callable_effect_providers<'db>(
                     ..
                 } => provider_resolution_mode
                     .resolve_binding(db, caller, binding)
+                    .filter(|provider| {
+                        let resolved_target =
+                            provider.semantics.target_ty.unwrap_or(provider.provider_ty);
+                        let specialized_target = specialization
+                            .provider
+                            .semantics
+                            .target_ty
+                            .unwrap_or(specialization.provider.provider_ty);
+                        resolved_target == specialized_target
+                    })
                     .map(|provider| crate::semantic::ProviderBinding {
                         provider_idx,
                         ..provider
@@ -207,11 +217,14 @@ fn resolve_callable_effect_providers<'db>(
             if let Some(slot) = subst_args.get_mut(param_idx) {
                 *slot = provider.provider.provider_ty;
             }
-            let actual_key_ty = provider
-                .provider
-                .semantics
-                .target_ty
-                .unwrap_or(provider.provider.provider_ty);
+            let actual_key_ty =
+                effect_provider_binding_ty(db, caller, provider).unwrap_or_else(|| {
+                    provider
+                        .provider
+                        .semantics
+                        .target_ty
+                        .unwrap_or(provider.provider.provider_ty)
+                });
             instantiate_callable_effect_layout_args(
                 db,
                 func,
@@ -222,6 +235,20 @@ fn resolve_callable_effect_providers<'db>(
         }
     }
     providers
+}
+
+fn effect_provider_binding_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    caller: SemanticInstance<'db>,
+    provider: &EffectProviderSpecialization<'db>,
+) -> Option<TyId<'db>> {
+    let crate::analysis::ty::ty_check::EffectProviderProvenance::Binding { binding, .. } =
+        provider.provenance
+    else {
+        return provider.provider.semantics.target_ty;
+    };
+    resolved_effect_binding_ty_for_instance_effect(db, caller, binding)
+        .or(provider.provider.semantics.target_ty)
 }
 
 impl ProviderResolutionMode {

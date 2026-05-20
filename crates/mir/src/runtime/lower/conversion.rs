@@ -354,6 +354,21 @@ impl<'db> RuntimeConversionPlanner<'db> {
                 });
                 self.convert(loaded, target, steps)
             }
+            (
+                RuntimeClass::Ref {
+                    pointee,
+                    kind: RefKind::Provider { space, .. },
+                    view: RefView::Whole,
+                },
+                RuntimeClass::Scalar(scalar),
+            ) if *space != AddressSpaceKind::Memory && is_plain_word_scalar(scalar) => {
+                let raw = RuntimeClass::RawAddr {
+                    space: *space,
+                    target: pointee.aggregate_layout(),
+                };
+                self.convert(source, raw.clone(), steps)?;
+                self.convert(raw, target, steps)
+            }
             (RuntimeClass::Ref { pointee, .. }, _) if !target.is_transport() => {
                 let loaded = pointee.as_ref().clone();
                 steps.push(RuntimeConversionStep::LoadRef {

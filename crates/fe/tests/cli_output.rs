@@ -267,6 +267,73 @@ fn test_cli_build_sonatina_ir_respects_contract_filter() {
 }
 
 #[test]
+fn test_cli_build_nested_storage_map_effect_forwarding() {
+    let temp = tempdir().expect("tempdir");
+    let fixture = temp.path().join("nested_storage_map_effect_forwarding.fe");
+    fs::write(
+        &fixture,
+        r#"
+use std::evm::StorageMap
+
+msg Msg {
+    #[selector = 1]
+    Check { key: u256, next: u256, initialized: bool },
+}
+
+fn is_set(_ key: u256) -> bool
+    uses (map: StorageMap<u256, u256>)
+{
+    map.get(key: key) != 0
+}
+
+fn nested(_ key: u256) -> bool
+    uses (map: StorageMap<u256, u256>)
+{
+    is_set(key)
+}
+
+struct Store {
+    map: StorageMap<u256, u256>,
+}
+
+pub contract Test {
+    store: Store
+
+    recv Msg {
+        Check { key, next, initialized } uses (store) {
+            let mut cursor = key
+            while cursor > next {
+                assert(!with (store.map) {
+                    nested(cursor)
+                })
+                cursor = cursor - 1
+            }
+            assert(with (store.map) {
+                nested(next)
+            } == initialized)
+        }
+    }
+}
+"#,
+    )
+    .expect("write fixture");
+    let out_dir = temp.path().join("out");
+    let out_dir_str = out_dir.to_string_lossy().to_string();
+    let fixture_str = fixture.to_string_lossy().to_string();
+
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--standalone",
+        "--emit",
+        "bytecode",
+        "--out-dir",
+        out_dir_str.as_str(),
+        fixture_str.as_str(),
+    ]);
+    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
+}
+
+#[test]
 fn test_cli_build_emit_abi_writes_json_artifact() {
     let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/cli_output/emit_abi/abi_contract.fe");

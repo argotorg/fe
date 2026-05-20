@@ -4,7 +4,7 @@ use hir::{
         semantic::{
             GenericSubst, ImplEnv, ManualContractSection, RootSemanticInstanceError,
             SemanticInstance, SemanticInstanceKey, get_or_build_semantic_instance,
-            owner_effect_bindings, root_semantic_instance_key,
+            owner_effect_bindings, root_semantic_instance_key, same_owner_effect_binding,
         },
         ty::{
             const_ty::ConstTyData,
@@ -28,7 +28,8 @@ use crate::{
     },
     runtime::code_region::{code_region_symbol, runtime_code_region_for_manual_root},
     runtime::lower::classify::{
-        runtime_effect_binding_plan, runtime_param_class, runtime_visible_binding_class,
+        RuntimeVisibleBindingPlan, runtime_effect_binding_plan, runtime_param_class,
+        runtime_visible_binding_class,
     },
     runtime::lower::interface::runtime_visible_binding_plans,
     runtime::lower::type_info::{
@@ -1486,6 +1487,14 @@ pub(crate) fn runtime_instance_for_semantic<'db>(
     db: &'db dyn MirDb,
     semantic: SemanticInstance<'db>,
 ) -> RuntimeInstance<'db> {
+    runtime_instance_for_semantic_with_visible_param_overrides(db, semantic, |_| None)
+}
+
+pub(crate) fn runtime_instance_for_semantic_with_visible_param_overrides<'db>(
+    db: &'db dyn MirDb,
+    semantic: SemanticInstance<'db>,
+    mut override_class: impl FnMut(&RuntimeVisibleBindingPlan<'db>) -> Option<RuntimeClass<'db>>,
+) -> RuntimeInstance<'db> {
     let typed_body = semantic.key(db).typed_body(db);
     let owner = semantic.key(db).owner(db);
     if let BodyOwner::Func(func) = owner
@@ -1497,43 +1506,54 @@ pub(crate) fn runtime_instance_for_semantic<'db>(
         );
     }
     let env = RuntimeTypeEnv::for_semantic(db, semantic);
-    let mut params = Vec::new();
-    let mut idx = 0;
-    while let Some(binding) = typed_body.param_binding(idx) {
-        if let Some(class) = runtime_visible_binding_class(db, semantic, binding)
-            .map(|class| runtime_param_class(db, typed_body, binding, env, class))
-        {
-            params.push(class);
-        }
-        idx += 1;
-    }
-    if let BodyOwner::ContractRecvArm {
-        contract,
-        recv_idx,
-        arm_idx,
-    } = owner
-    {
-        let recv = hir::semantic::RecvView::new(db, contract, recv_idx);
-        let arm = RecvArmView::new(db, recv, arm_idx);
-        for arg_binding in arm.arg_bindings(db) {
-            let Some(binding) = typed_body.pat_binding(arg_binding.pat) else {
-                continue;
-            };
-            let ty = semantic.binding_ty(db, binding);
-            if let Some(class) =
-                top_level_class_for_ty_in_env(db, env, ty, AddressSpaceKind::Memory)
-            {
-                params.push(class);
-            }
-        }
-    }
-    for binding in owner_effect_bindings(db, owner) {
-        if let Some(class) = owner_effect_binding_class(db, semantic, binding) {
-            params.push(class);
-        }
-    }
+    let params: Vec<_> = runtime_visible_binding_plans(db, semantic)
+        .iter()
+        .map(|entry| {
+            override_class(entry).unwrap_or_else(|| {
+                runtime_class_for_visible_binding_entry(db, semantic, typed_body, owner, env, entry)
+            })
+        })
+        .collect();
     let key = RuntimeInstanceKey::new(db, RuntimeInstanceSource::Semantic(semantic), params);
     get_or_build_runtime_instance(db, key)
+}
+
+fn runtime_class_for_visible_binding_entry<'db>(
+    db: &'db dyn MirDb,
+    semantic: SemanticInstance<'db>,
+    typed_body: &hir::analysis::ty::ty_check::TypedBody<'db>,
+    owner: BodyOwner<'db>,
+    env: RuntimeTypeEnv<'db>,
+    entry: &RuntimeVisibleBindingPlan<'db>,
+) -> RuntimeClass<'db> {
+    if owner_effect_bindings(db, owner)
+        .into_iter()
+        .any(|binding| same_owner_effect_binding(binding, entry.binding))
+    {
+        return owner_effect_binding_class(db, semantic, entry.binding).unwrap_or_else(|| {
+            panic!(
+                "runtime-visible owner effect binding has no runtime class: {:?}",
+                entry
+            )
+        });
+    }
+    if matches!(entry.binding, LocalBinding::Local { .. }) {
+        return top_level_class_for_ty_in_env(db, env, entry.semantic_ty, AddressSpaceKind::Memory)
+            .unwrap_or_else(|| {
+                panic!(
+                    "runtime-visible recv arg binding has no top-level runtime class: {:?}",
+                    entry
+                )
+            });
+    }
+    runtime_visible_binding_class(db, semantic, entry.binding)
+        .map(|class| runtime_param_class(db, typed_body, entry.binding, env, class))
+        .unwrap_or_else(|| {
+            panic!(
+                "runtime-visible typed binding has no runtime class: {:?}",
+                entry
+            )
+        })
 }
 
 fn owner_effect_binding_class<'db>(
@@ -1590,12 +1610,17 @@ fn resolve_decode_runtime_args_instance<'db>(
         ImplEnv::new(db, scope, assumptions, vec![]),
     );
     let semantic = get_or_build_semantic_instance(db, key);
-    let key = RuntimeInstanceKey::new(
+    Ok(runtime_instance_for_semantic_with_visible_param_overrides(
         db,
-        RuntimeInstanceSource::Semantic(semantic),
-        vec![host_class],
-    );
-    Ok(get_or_build_runtime_instance(db, key))
+        semantic,
+        |entry| {
+            if matches!(entry.binding, LocalBinding::Param { idx: 0, .. }) {
+                Some(host_class.clone())
+            } else {
+                None
+            }
+        },
+    ))
 }
 
 fn resolve_trait_runtime_instance<'db>(

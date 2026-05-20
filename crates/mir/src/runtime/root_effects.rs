@@ -6,7 +6,7 @@ use hir::{
         ty::{ty_check::LocalBinding, ty_def::TyId},
     },
     hir_def::{Contract, Func},
-    semantic::{ContractFieldLayoutInfo, ProviderSource},
+    semantic::{ContractFieldLayoutInfo, ProviderBinding, ProviderSource},
 };
 use rustc_hash::FxHashMap;
 
@@ -15,7 +15,11 @@ use crate::{
     runtime::{
         AddressSpaceKind, ContractFieldBinding, EntryEffectArgPlan, RefKind, RefView, RuntimeClass,
         TargetRootProviderBinding, TargetRootProviderMaterialization,
-        lower::classify::runtime_effect_binding_plan, package::LowerError,
+        lower::{
+            classify::{provider_erases_runtime_root, runtime_effect_binding_plan},
+            type_info::RuntimeTypeEnv,
+        },
+        package::LowerError,
     },
 };
 
@@ -50,7 +54,7 @@ pub(crate) fn entry_effect_arg_plans<'db>(
                 context,
                 semantic,
                 binding,
-                provider.source.clone(),
+                provider,
                 contract_fields.as_ref(),
             ))
         })
@@ -89,10 +93,10 @@ fn entry_effect_arg_plan_for_binding<'db>(
     context: EntryEffectContext<'db>,
     semantic: SemanticInstance<'db>,
     binding: LocalBinding<'db>,
-    source: ProviderSource<'db>,
+    provider: ProviderBinding<'db>,
     contract_fields: Option<&FxHashMap<u32, ContractFieldLayoutInfo<'db>>>,
 ) -> Result<Option<EntryEffectArgPlan<'db>>, LowerError> {
-    match source {
+    match provider.source.clone() {
         ProviderSource::ContractField { field_idx, .. } => {
             let Some(fields) = contract_fields else {
                 return Err(unsupported_entry_effect(
@@ -134,7 +138,10 @@ fn entry_effect_arg_plan_for_binding<'db>(
             )))
         }
         ProviderSource::UsesParam { .. } => {
-            if runtime_effect_binding_plan(db, semantic, binding).is_none() {
+            let env = RuntimeTypeEnv::for_semantic(db, semantic);
+            if runtime_effect_binding_plan(db, semantic, binding).is_none()
+                && provider_erases_runtime_root(db, &provider, env.scope, env.assumptions)
+            {
                 Ok(None)
             } else {
                 Err(unsupported_entry_effect(

@@ -4409,6 +4409,174 @@ fn caller() {
 }
 
 #[test]
+fn nested_storage_map_effect_forwarding_keeps_concrete_hidden_layout_args() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from(
+            "nested_storage_map_effect_forwarding_keeps_concrete_hidden_layout_args.fe",
+        ),
+        r#"
+use std::evm::StorageMap
+
+fn needs(_ addr: u256) -> u256
+    uses (balances: StorageMap<u256, u256>)
+{
+    balances.get(key: addr)
+}
+
+fn nested(_ addr: u256) -> u256
+    uses (balances: StorageMap<u256, u256>)
+{
+    needs(addr)
+}
+
+fn caller() {
+    let mut balances = StorageMap<u256, u256, 0>::new()
+    with (balances) {
+        let _ = nested(1)
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let caller = find_func(&db, top_mod, "caller");
+    let nested_call = find_named_call_expr(&db, caller, "nested");
+    assert_callable_generic_arg(&db, caller, nested_call, 0, "0");
+    assert_callable_provider_arg(&db, caller, nested_call, "StorageMap<u256, u256, 0>");
+
+    let nested = find_func(&db, top_mod, "nested");
+    let root = get_or_build_semantic_instance(
+        &db,
+        root_semantic_instance_key(&db, BodyOwner::Func(caller))
+            .expect("caller should have a root semantic instance"),
+    );
+    let nested_instance = root
+        .callees(&db)
+        .iter()
+        .map(|callee| get_or_build_semantic_instance(&db, callee.key))
+        .find(|callee| callee.key(&db).owner(&db) == BodyOwner::Func(nested))
+        .expect("missing instantiated nested callee");
+    assert_eq!(
+        nested_instance.key(&db).subst(&db).generic_args(&db)[0]
+            .pretty_print(&db)
+            .to_string(),
+        "0"
+    );
+    let env = instantiated_effect_env(&db, nested_instance).expect("missing nested effect env");
+    assert_eq!(
+        env.providers(&db)[0]
+            .provider_ty
+            .pretty_print(&db)
+            .to_string(),
+        "StorageMap<u256, u256, 0>"
+    );
+
+    let needs = find_func(&db, top_mod, "needs");
+    let needs_instance = nested_instance
+        .callees(&db)
+        .iter()
+        .map(|callee| get_or_build_semantic_instance(&db, callee.key))
+        .find(|callee| callee.key(&db).owner(&db) == BodyOwner::Func(needs))
+        .expect("missing instantiated needs callee");
+    assert_eq!(
+        needs_instance.key(&db).subst(&db).generic_args(&db)[0]
+            .pretty_print(&db)
+            .to_string(),
+        "0"
+    );
+}
+
+#[test]
+fn projected_storage_map_effect_forwarding_keeps_concrete_hidden_layout_args() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        Utf8PathBuf::from(
+            "projected_storage_map_effect_forwarding_keeps_concrete_hidden_layout_args.fe",
+        ),
+        r#"
+use std::evm::StorageMap
+
+fn needs(_ addr: u256) -> u256
+    uses (balances: StorageMap<u256, u256>)
+{
+    balances.get(key: addr)
+}
+
+fn nested(_ addr: u256) -> u256
+    uses (balances: StorageMap<u256, u256>)
+{
+    needs(addr)
+}
+
+struct Store {
+    balances: StorageMap<u256, u256>,
+}
+
+msg Msg {
+    #[selector = 1]
+    Get { addr: u256 } -> u256,
+}
+
+pub contract Test {
+    store: Store,
+
+    recv Msg {
+        Get { addr } -> u256 uses (store) {
+            with (store.balances) {
+                nested(addr)
+            }
+        }
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    db.assert_no_diags(top_mod);
+
+    let contract = find_contract(&db, top_mod, "Test");
+    let nested = find_func(&db, top_mod, "nested");
+    let recv = get_or_build_semantic_instance(
+        &db,
+        fe_hir::analysis::semantic::identity_semantic_instance_key(
+            &db,
+            BodyOwner::ContractRecvArm {
+                contract,
+                recv_idx: 0,
+                arm_idx: 0,
+            },
+        ),
+    );
+    let nested_instance = recv
+        .callees(&db)
+        .iter()
+        .map(|callee| get_or_build_semantic_instance(&db, callee.key))
+        .find(|callee| callee.key(&db).owner(&db) == BodyOwner::Func(nested))
+        .expect("missing instantiated nested callee");
+    assert_eq!(
+        nested_instance.key(&db).subst(&db).generic_args(&db)[0]
+            .pretty_print(&db)
+            .to_string(),
+        "0"
+    );
+
+    let needs = find_func(&db, top_mod, "needs");
+    let needs_instance = nested_instance
+        .callees(&db)
+        .iter()
+        .map(|callee| get_or_build_semantic_instance(&db, callee.key))
+        .find(|callee| callee.key(&db).owner(&db) == BodyOwner::Func(needs))
+        .expect("missing instantiated needs callee");
+    assert_eq!(
+        needs_instance.key(&db).subst(&db).generic_args(&db)[0]
+            .pretty_print(&db)
+            .to_string(),
+        "0"
+    );
+}
+
+#[test]
 fn by_ref_trait_provider_storage_bug_fixture_keeps_callables_on_all_typed_calls() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(
