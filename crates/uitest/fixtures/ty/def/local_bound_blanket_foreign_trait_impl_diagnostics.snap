@@ -1,0 +1,23 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/def/local_bound_blanket_foreign_trait_impl_diagnostics.fe
+---
+error[5-0000]: external trait cannot be implemented for external type
+   ┌─ local_bound_blanket_foreign_trait_impl_diagnostics.fe:11:1
+   │
+11 │ ╭ impl<T: Copy> WrappingMul for T {
+12 │ │     fn wrapping_mul(self, _ other: T) -> Self {
+13 │ │         self
+14 │ │     }
+15 │ │ }
+   │ ╰─^ external trait cannot be implemented for external type
+
+error[5-0001]: conflicting trait implementations
+   ┌─ local_bound_blanket_foreign_trait_impl_diagnostics.fe:17:33
+   │
+17 │ impl<T: Marker> WrappingAdd for T {
+   │                                 ^ this trait implementation
+   ·
+23 │ impl WrappingAdd for W {
+   │                      - conflicts with this trait implementation

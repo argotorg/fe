@@ -3940,7 +3940,7 @@ impl<'db> ImplTrait<'db> {
 
         // Conflict check
         let trait_ = implementor.skip_binder().trait_(db);
-        let env = ingot_trait_env(db, trait_.ingot(db));
+        let env = ingot_trait_env(db, self.top_mod(db).ingot(db));
         if let Some(impls) = env.impls.get(&trait_.def(db)) {
             for &cand_view in impls {
                 let cand_impl_trait = cand_view.skip_binder().hir_impl_trait(db);
@@ -4007,17 +4007,35 @@ impl<'db> ImplTrait<'db> {
 
         let trait_inst = lower_trait_ref(db, ty, trait_ref, self.scope(), assumptions, None)?;
 
-        // Preserve ingot check used when lowering impl traits: an impl is
-        // only valid if it lives in the same ingot as either its
-        // implementor type or the trait itself.
-        let impl_trait_ingot = self.top_mod(db).ingot(db);
-        if Some(impl_trait_ingot) != ty.ingot(db)
-            && impl_trait_ingot != trait_inst.def(db).ingot(db)
-        {
+        if !self.trait_impl_is_admissible(db, ty, trait_inst, assumptions) {
             return Err(TraitRefLowerError::Ignored);
         }
 
         Ok(trait_inst)
+    }
+
+    fn trait_impl_is_admissible(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        ty: TyId<'db>,
+        trait_inst: TraitInstId<'db>,
+        assumptions: PredicateListId<'db>,
+    ) -> bool {
+        let impl_trait_ingot = self.top_mod(db).ingot(db);
+        if Some(impl_trait_ingot) == ty.ingot(db)
+            || impl_trait_ingot == trait_inst.def(db).ingot(db)
+        {
+            return true;
+        }
+
+        if !matches!(ty.data(db), TyData::TyParam(_)) {
+            return false;
+        }
+
+        assumptions
+            .list(db)
+            .iter()
+            .any(|pred| pred.self_ty(db) == ty && pred.def(db).ingot(db) == impl_trait_ingot)
     }
 
     /// Semantic generic parameter types for this `impl trait` block, in

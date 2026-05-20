@@ -799,10 +799,6 @@ impl<'db> TraitInstId<'db> {
     pub fn self_ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
         self.args(db)[0]
     }
-
-    pub(crate) fn ingot(self, db: &'db dyn HirAnalysisDb) -> Ingot<'db> {
-        self.def(db).ingot(db)
-    }
 }
 
 // Represents a trait definition.
