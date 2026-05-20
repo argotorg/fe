@@ -1,7 +1,8 @@
 /// Low-level EVM builtins exposed as `extern` functions.
 ///
-/// This module is intended to be internal to `std` (it should not be re-exported
-/// to non-std ingots). Higher-level access is provided via `std::evm::effects`.
+/// Most functions in this module are internal to `std`; higher-level access is
+/// provided via `std::evm::effects`. Public functions expose pure raw EVM
+/// operations for low-level code that needs an exact opcode shape.
 extern {
     // -------------------------------------------------------------------------
     // Memory
@@ -31,10 +32,14 @@ extern {
     // -------------------------------------------------------------------------
     pub(ingot) fn codecopy(dest: u256, offset: u256, len: u256)
     pub(ingot) fn codesize() -> u256
+    pub(ingot) fn extcodecopy(addr: u256, dest: u256, offset: u256, len: u256)
+    pub(ingot) fn extcodesize(_ addr: u256) -> u256
+    pub(ingot) fn extcodehash(_ addr: u256) -> u256
     pub(ingot) fn keccak256(offset: u256, len: u256) -> u256
     pub(ingot) const fn addmod(_ a: u256, _ b: u256, m: u256) -> u256
     pub(ingot) const fn mulmod(_ a: u256, _ b: u256, m: u256) -> u256
-    pub(ingot) fn signextend(byte: u256, value: u256) -> u256
+    pub fn byte(pos: u256, value: u256) -> u256
+    pub fn signextend(byte: u256, value: u256) -> u256
 
     // -------------------------------------------------------------------------
     // Environment
@@ -45,6 +50,7 @@ extern {
     pub(ingot) fn origin() -> u256
     pub(ingot) fn gasprice() -> u256
     pub(ingot) fn coinbase() -> u256
+    pub(ingot) fn balance(_ addr: u256) -> u256
     pub(ingot) fn timestamp() -> u256
     pub(ingot) fn number() -> u256
     pub(ingot) fn prevrandao() -> u256
@@ -53,6 +59,8 @@ extern {
     pub(ingot) fn basefee() -> u256
     pub(ingot) fn selfbalance() -> u256
     pub(ingot) fn blockhash(_: u256) -> u256
+    pub(ingot) fn blobhash(_ index: u256) -> u256
+    pub(ingot) fn blobbasefee() -> u256
     pub(ingot) fn gas() -> u256
 
     // -------------------------------------------------------------------------

@@ -1,0 +1,5 @@
+use std::evm::ops
+
+fn direct_balance() -> u256 {
+    ops::balance(0)
+}

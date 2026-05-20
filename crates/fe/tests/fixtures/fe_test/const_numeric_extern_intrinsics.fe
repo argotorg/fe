@@ -1,5 +1,6 @@
 use core::num::IntWord
 use std::evm::effects::assert
+use std::evm::ops::{byte, signextend}
 
 extern {
     const fn __checked_add<T: IntWord>(_: T, _: T) -> T
@@ -105,4 +106,12 @@ fn const_numeric_extern_intrinsics() {
     assert(false_word == 0)
     assert(true_i32 == 1)
     assert(false_u8 == 0)
+
+    let word: u256 = 0x1234567890abcdef0000000000000000000000000000000000000000000000ff
+    assert(byte(pos: 0, value: word) == 0x12)
+    assert(byte(pos: 1, value: word) == 0x34)
+    assert(byte(pos: 31, value: word) == 0xff)
+    assert(byte(pos: 32, value: word) == 0)
+    assert(signextend(byte: 0, value: 0x7f) == 0x7f)
+    assert(signextend(byte: 0, value: 0xff) == 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff)
 }
