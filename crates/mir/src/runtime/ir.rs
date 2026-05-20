@@ -1120,6 +1120,18 @@ pub enum RuntimeBuiltin<'db> {
         offset: RValueId,
         len: RValueId,
     },
+    ExtCodeSize {
+        addr: RValueId,
+    },
+    ExtCodeCopy {
+        addr: RValueId,
+        dst: RValueId,
+        offset: RValueId,
+        len: RValueId,
+    },
+    ExtCodeHash {
+        addr: RValueId,
+    },
     Keccak256 {
         offset: RValueId,
         len: RValueId,
@@ -1133,6 +1145,10 @@ pub enum RuntimeBuiltin<'db> {
         lhs: RValueId,
         rhs: RValueId,
         modulus: RValueId,
+    },
+    Byte {
+        pos: RValueId,
+        value: RValueId,
     },
     SignExtend {
         byte: RValueId,
@@ -1156,6 +1172,9 @@ pub enum RuntimeBuiltin<'db> {
     Origin,
     GasPrice,
     CoinBase,
+    Balance {
+        addr: RValueId,
+    },
     Timestamp,
     Number,
     PrevRandao,
@@ -1166,6 +1185,10 @@ pub enum RuntimeBuiltin<'db> {
     BlockHash {
         block: RValueId,
     },
+    BlobHash {
+        index: RValueId,
+    },
+    BlobBaseFee,
     Gas,
     CurrentCodeRegionLen,
     CodeRegionOffset {

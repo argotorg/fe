@@ -590,8 +590,21 @@ fn verify_builtin<'db>(
         | RuntimeBuiltin::GasLimit
         | RuntimeBuiltin::ChainId
         | RuntimeBuiltin::BaseFee
+        | RuntimeBuiltin::BlobBaseFee
         | RuntimeBuiltin::SelfBalance
         | RuntimeBuiltin::Gas => Ok(Some(RuntimeClass::Scalar(word_scalar_class()))),
+        RuntimeBuiltin::Balance { addr } => {
+            verify_word_value(body, *addr)?;
+            Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
+        }
+        RuntimeBuiltin::ExtCodeSize { addr } | RuntimeBuiltin::ExtCodeHash { addr } => {
+            verify_word_value(body, *addr)?;
+            Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
+        }
+        RuntimeBuiltin::BlobHash { index } => {
+            verify_word_value(body, *index)?;
+            Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
+        }
         RuntimeBuiltin::Sload { slot } => {
             verify_address_operand(body, *slot, AddressSpaceKind::Storage)?;
             Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
@@ -613,6 +626,18 @@ fn verify_builtin<'db>(
             verify_word_value(body, *len)?;
             Ok(None)
         }
+        RuntimeBuiltin::ExtCodeCopy {
+            addr,
+            dst,
+            offset,
+            len,
+        } => {
+            verify_word_value(body, *addr)?;
+            verify_address_operand(body, *dst, AddressSpaceKind::Memory)?;
+            verify_word_value(body, *offset)?;
+            verify_word_value(body, *len)?;
+            Ok(None)
+        }
         RuntimeBuiltin::Keccak256 { offset, len } => {
             verify_address_operand(body, *offset, AddressSpaceKind::Memory)?;
             verify_word_value(body, *len)?;
@@ -623,6 +648,11 @@ fn verify_builtin<'db>(
             verify_word_value(body, *lhs)?;
             verify_word_value(body, *rhs)?;
             verify_word_value(body, *modulus)?;
+            Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
+        }
+        RuntimeBuiltin::Byte { pos, value } => {
+            verify_word_value(body, *pos)?;
+            verify_word_value(body, *value)?;
             Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
         }
         RuntimeBuiltin::SignExtend { byte, value } => {
