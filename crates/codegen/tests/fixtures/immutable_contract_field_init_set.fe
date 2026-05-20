@@ -1,0 +1,18 @@
+msg Msg {
+    #[selector = 1]
+    Get -> u256
+}
+
+pub contract ImmutableContractFieldInitSet {
+    x: u256
+
+    init(v: u256) uses (mut x) {
+        x = v
+    }
+
+    recv Msg {
+        Get -> u256 uses (x) {
+            x
+        }
+    }
+}

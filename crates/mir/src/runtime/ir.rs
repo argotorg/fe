@@ -19,6 +19,7 @@ pub enum AddressSpaceKind {
     Storage,
     Transient,
     Calldata,
+    Code,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]

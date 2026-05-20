@@ -21,6 +21,7 @@ pub enum ProviderAddressSpace {
     Storage,
     Transient,
     Calldata,
+    Code,
 }
 
 impl ProviderAddressSpace {
@@ -30,6 +31,7 @@ impl ProviderAddressSpace {
             Self::Storage => "storage",
             Self::Transient => "transient storage",
             Self::Calldata => "calldata",
+            Self::Code => "code",
         }
     }
 }
@@ -204,6 +206,7 @@ pub fn address_space_from_ty<'db>(
             ProviderAddressSpace::Transient,
         ),
         ("core::effect_ref::Calldata", ProviderAddressSpace::Calldata),
+        ("core::effect_ref::Code", ProviderAddressSpace::Code),
     ] {
         if ty == resolve_lib_type_path(db, scope, path)? {
             return Some(space);

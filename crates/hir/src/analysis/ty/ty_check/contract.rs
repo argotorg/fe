@@ -4,7 +4,7 @@
 //! recv blocks, and recv arm bodies.
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use super::{TypedBody, owner::BodyOwner};
+use super::{EffectParamSite, LocalBinding, TypedBody, owner::BodyOwner};
 
 use num_traits::ToPrimitive;
 
@@ -18,6 +18,7 @@ use crate::{
             canonical::Canonical,
             corelib::resolve_core_trait,
             diagnostics::{BodyDiag, FuncBodyDiag, TraitConstraintDiag, TyDiagCollection},
+            provider::{ProviderAddressSpace, address_space_from_ty},
             trait_def::TraitInstId,
             trait_def::impls_for_ty,
             trait_resolution::{
@@ -27,7 +28,11 @@ use crate::{
             ty_def::{PrimTy, TyBase, TyData, TyId},
         },
     },
-    hir_def::{Contract, IdentId, ItemKind, Mod, PathId, Struct, scope_graph::ScopeId},
+    hir_def::{
+        Body, Cond, Contract, Expr, ExprId, FieldParent, IdentId, ItemKind, Mod, Partial, PathId,
+        Stmt, Struct, scope_graph::ScopeId,
+    },
+    semantic::{EffectEnvView, FieldView, ProviderSource},
     span::{DynLazySpan, path::LazyPathSpan},
 };
 use common::{indexmap::IndexMap, ingot::IngotKind};
@@ -778,6 +783,403 @@ pub fn check_contract_recv_arm_body<'db>(
             arm_idx,
         },
     )
+}
+
+#[derive(Debug, Clone, Default)]
+struct InitFieldState {
+    fields: FxHashSet<u32>,
+}
+
+impl InitFieldState {
+    fn intersection(lhs: &Self, rhs: &Self) -> Self {
+        Self {
+            fields: lhs.fields.intersection(&rhs.fields).copied().collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct InitFieldFlow {
+    normal: Option<InitFieldState>,
+    returns: Vec<InitFieldState>,
+}
+
+impl InitFieldFlow {
+    fn normal(state: InitFieldState) -> Self {
+        Self {
+            normal: Some(state),
+            returns: Vec::new(),
+        }
+    }
+
+    fn divergent() -> Self {
+        Self {
+            normal: None,
+            returns: Vec::new(),
+        }
+    }
+
+    fn with_returns(mut self, returns: Vec<InitFieldState>) -> Self {
+        self.returns.extend(returns);
+        self
+    }
+}
+
+fn merge_normal_states(
+    states: impl IntoIterator<Item = Option<InitFieldState>>,
+) -> Option<InitFieldState> {
+    states
+        .into_iter()
+        .flatten()
+        .reduce(|lhs, rhs| InitFieldState::intersection(&lhs, &rhs))
+}
+
+struct InitFieldAssignmentCheck<'a, 'db> {
+    db: &'db dyn HirAnalysisDb,
+    contract: Contract<'db>,
+    body: Body<'db>,
+    typed_body: &'a TypedBody<'db>,
+    required: FxHashSet<u32>,
+}
+
+impl<'a, 'db> InitFieldAssignmentCheck<'a, 'db> {
+    fn new(
+        db: &'db dyn HirAnalysisDb,
+        contract: Contract<'db>,
+        body: Body<'db>,
+        typed_body: &'a TypedBody<'db>,
+        required: FxHashSet<u32>,
+    ) -> Self {
+        Self {
+            db,
+            contract,
+            body,
+            typed_body,
+            required,
+        }
+    }
+
+    fn successful_exit_states(&self) -> Vec<InitFieldState> {
+        let flow = self.analyze_expr(self.body.expr(self.db), InitFieldState::default());
+        let mut exits = flow.returns;
+        if let Some(normal) = flow.normal {
+            exits.push(normal);
+        }
+        exits
+    }
+
+    fn analyze_stmt(&self, stmt: Stmt<'db>, state: InitFieldState) -> InitFieldFlow {
+        match stmt {
+            Stmt::Let(_, _, Some(init)) => self.analyze_expr(init, state),
+            Stmt::Let(_, _, None) => InitFieldFlow::normal(state),
+            Stmt::Expr(expr) => self.analyze_expr(expr, state),
+            Stmt::Return(expr) => {
+                let flow = if let Some(expr) = expr {
+                    self.analyze_expr(expr, state)
+                } else {
+                    InitFieldFlow::normal(state)
+                };
+                let returns = flow.normal.into_iter().collect();
+                InitFieldFlow::divergent().with_returns([flow.returns, returns].concat())
+            }
+            Stmt::While(cond, body) => {
+                let cond_flow = self.analyze_cond(cond, state);
+                let mut returns = cond_flow.returns;
+                if let Some(cond_state) = cond_flow.normal.clone() {
+                    returns.extend(self.analyze_expr(body, cond_state).returns);
+                }
+                InitFieldFlow {
+                    // The loop body may execute zero times, so only condition-side effects are
+                    // guaranteed after a normal loop exit.
+                    normal: cond_flow.normal,
+                    returns,
+                }
+            }
+            Stmt::For(_, iter, body, _) => {
+                let iter_flow = self.analyze_expr(iter, state);
+                let mut returns = iter_flow.returns;
+                if let Some(iter_state) = iter_flow.normal.clone() {
+                    returns.extend(self.analyze_expr(body, iter_state).returns);
+                }
+                InitFieldFlow {
+                    // A for loop may execute zero times, so body writes are not definite.
+                    normal: iter_flow.normal,
+                    returns,
+                }
+            }
+            Stmt::Break | Stmt::Continue => InitFieldFlow::divergent(),
+        }
+    }
+
+    fn analyze_cond(&self, cond: crate::hir_def::CondId, state: InitFieldState) -> InitFieldFlow {
+        let Partial::Present(cond) = cond.data(self.db, self.body) else {
+            return InitFieldFlow::normal(state);
+        };
+        match cond {
+            Cond::Expr(expr) | Cond::Let(_, expr) => self.analyze_expr(*expr, state),
+            Cond::Bin(lhs, rhs, _) => {
+                let lhs_flow = self.analyze_cond(*lhs, state);
+                let mut returns = lhs_flow.returns;
+                let normal = lhs_flow.normal.and_then(|lhs_state| {
+                    let rhs_flow = self.analyze_cond(*rhs, lhs_state.clone());
+                    returns.extend(rhs_flow.returns);
+                    // RHS of `&&`/`||` is short-circuited, so only writes that happen with and
+                    // without RHS evaluation are definite after the condition.
+                    merge_normal_states([Some(lhs_state), rhs_flow.normal])
+                });
+                InitFieldFlow { normal, returns }
+            }
+        }
+    }
+
+    fn analyze_expr(&self, expr: ExprId, state: InitFieldState) -> InitFieldFlow {
+        let Partial::Present(expr_data) = expr.data(self.db, self.body) else {
+            return InitFieldFlow::normal(state);
+        };
+
+        let flow = match expr_data {
+            Expr::Lit(_) | Expr::Path(_) => InitFieldFlow::normal(state),
+            Expr::Block(stmts) => self.analyze_block(stmts, state),
+            Expr::Tuple(elems) | Expr::Array(elems) => self.analyze_exprs(elems, state),
+            Expr::ArrayRep(elem, _) | Expr::Un(elem, _) | Expr::Cast(elem, _) => {
+                self.analyze_expr(*elem, state)
+            }
+            Expr::Bin(lhs, rhs, _) => self.analyze_expr_pair(*lhs, *rhs, state),
+            Expr::Call(callee, args) => {
+                let exprs = std::iter::once(*callee)
+                    .chain(args.iter().map(|arg| arg.expr))
+                    .collect::<Vec<_>>();
+                self.analyze_exprs(&exprs, state)
+            }
+            Expr::MethodCall(receiver, _, _, args) => {
+                let exprs = std::iter::once(*receiver)
+                    .chain(args.iter().map(|arg| arg.expr))
+                    .collect::<Vec<_>>();
+                self.analyze_exprs(&exprs, state)
+            }
+            Expr::RecordInit(_, fields) => {
+                let exprs = fields.iter().map(|field| field.expr).collect::<Vec<_>>();
+                self.analyze_exprs(&exprs, state)
+            }
+            Expr::Field(base, _) => self.analyze_expr(*base, state),
+            Expr::If(cond, then_expr, else_expr) => {
+                let cond_flow = self.analyze_cond(*cond, state);
+                let mut returns = cond_flow.returns;
+                let normal = cond_flow.normal.and_then(|cond_state| {
+                    let then_flow = self.analyze_expr(*then_expr, cond_state.clone());
+                    returns.extend(then_flow.returns);
+                    let else_flow = if let Some(else_expr) = else_expr {
+                        self.analyze_expr(*else_expr, cond_state)
+                    } else {
+                        InitFieldFlow::normal(cond_state)
+                    };
+                    returns.extend(else_flow.returns);
+                    merge_normal_states([then_flow.normal, else_flow.normal])
+                });
+                InitFieldFlow { normal, returns }
+            }
+            Expr::Match(scrutinee, arms) => {
+                let scrutinee_flow = self.analyze_expr(*scrutinee, state);
+                let mut returns = scrutinee_flow.returns;
+                let normal = scrutinee_flow.normal.and_then(|scrutinee_state| {
+                    let Partial::Present(arms) = arms else {
+                        return Some(scrutinee_state);
+                    };
+                    let mut normals = Vec::new();
+                    for arm in arms {
+                        let arm_flow = self.analyze_expr(arm.body, scrutinee_state.clone());
+                        returns.extend(arm_flow.returns);
+                        normals.push(arm_flow.normal);
+                    }
+                    merge_normal_states(normals)
+                });
+                InitFieldFlow { normal, returns }
+            }
+            Expr::Assign(lhs, rhs) => {
+                let mut flow = self.analyze_expr(*rhs, state);
+                if let Some(normal) = &mut flow.normal
+                    && let Some(field_idx) = self.assigned_contract_field(*lhs)
+                {
+                    normal.fields.insert(field_idx);
+                }
+                flow
+            }
+            Expr::AugAssign(lhs, rhs, _) => self.analyze_expr_pair(*lhs, *rhs, state),
+            Expr::With(bindings, body) => {
+                let exprs = bindings
+                    .iter()
+                    .map(|binding| binding.value)
+                    .chain(std::iter::once(*body))
+                    .collect::<Vec<_>>();
+                self.analyze_exprs(&exprs, state)
+            }
+        };
+
+        if self.typed_body.expr_ty(self.db, expr).is_never(self.db) {
+            InitFieldFlow {
+                normal: None,
+                returns: flow.returns,
+            }
+        } else {
+            flow
+        }
+    }
+
+    fn analyze_block(
+        &self,
+        stmts: &[crate::hir_def::StmtId],
+        state: InitFieldState,
+    ) -> InitFieldFlow {
+        let mut current = Some(state);
+        let mut returns = Vec::new();
+        for stmt in stmts {
+            let Some(state) = current.take() else {
+                break;
+            };
+            let Partial::Present(stmt_data) = stmt.data(self.db, self.body) else {
+                current = Some(state);
+                continue;
+            };
+            let flow = self.analyze_stmt(stmt_data.clone(), state);
+            returns.extend(flow.returns);
+            current = flow.normal;
+        }
+        InitFieldFlow {
+            normal: current,
+            returns,
+        }
+    }
+
+    fn analyze_expr_pair(&self, lhs: ExprId, rhs: ExprId, state: InitFieldState) -> InitFieldFlow {
+        let lhs_flow = self.analyze_expr(lhs, state);
+        let mut returns = lhs_flow.returns;
+        let normal = lhs_flow.normal.and_then(|lhs_state| {
+            let rhs_flow = self.analyze_expr(rhs, lhs_state);
+            returns.extend(rhs_flow.returns);
+            rhs_flow.normal
+        });
+        InitFieldFlow { normal, returns }
+    }
+
+    fn analyze_exprs(&self, exprs: &[ExprId], state: InitFieldState) -> InitFieldFlow {
+        let mut current = Some(state);
+        let mut returns = Vec::new();
+        for expr in exprs {
+            let Some(state) = current.take() else {
+                break;
+            };
+            let flow = self.analyze_expr(*expr, state);
+            returns.extend(flow.returns);
+            current = flow.normal;
+        }
+        InitFieldFlow {
+            normal: current,
+            returns,
+        }
+    }
+
+    fn assigned_contract_field(&self, lhs: ExprId) -> Option<u32> {
+        let place = self.typed_body.expr_place(lhs)?;
+        if !place.projections.is_empty() {
+            return None;
+        }
+        let crate::analysis::place::PlaceBase::Binding(binding) = place.base;
+        let LocalBinding::EffectParam { site, idx, .. } = binding else {
+            return None;
+        };
+        if site
+            != (EffectParamSite::ContractInit {
+                contract: self.contract,
+            })
+        {
+            return None;
+        }
+        let provider = EffectEnvView::new(site)
+            .resolved_binding(self.db, idx)
+            .map(|binding| binding.provider)?;
+        let ProviderSource::ContractField {
+            contract,
+            field_idx,
+        } = provider.source
+        else {
+            return None;
+        };
+        (contract == self.contract && self.required.contains(&field_idx)).then_some(field_idx)
+    }
+}
+
+#[salsa::tracked(return_ref)]
+pub fn check_contract_immutable_fields_initialized<'db>(
+    db: &'db dyn HirAnalysisDb,
+    contract: Contract<'db>,
+) -> Vec<FuncBodyDiag<'db>> {
+    let required_fields = contract
+        .field_layout(db)
+        .values()
+        .filter(|field| field.slot_count != 0)
+        .filter(|field| {
+            !field.declared_ty.has_invalid(db)
+                && !field.target_ty.has_invalid(db)
+                && !field.address_space.has_invalid(db)
+        })
+        .filter(|field| {
+            FieldView {
+                parent: FieldParent::Contract(contract),
+                idx: field.index as usize,
+            }
+            .ty_diags(db)
+            .is_empty()
+        })
+        .filter(|field| {
+            address_space_from_ty(db, contract.scope(), field.address_space)
+                == Some(ProviderAddressSpace::Code)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if required_fields.is_empty() {
+        return Vec::new();
+    }
+
+    let required = required_fields
+        .iter()
+        .map(|field| field.index)
+        .collect::<FxHashSet<_>>();
+    let init = contract.init(db);
+    let missing = if init.is_some() {
+        let (_, typed_body) = check_contract_init_body(db, contract);
+        if let Some(body) = typed_body.body() {
+            let exits =
+                InitFieldAssignmentCheck::new(db, contract, body, typed_body, required.clone())
+                    .successful_exit_states();
+            if exits.is_empty() {
+                FxHashSet::default()
+            } else {
+                required
+                    .iter()
+                    .copied()
+                    .filter(|field| !exits.iter().all(|state| state.fields.contains(field)))
+                    .collect()
+            }
+        } else {
+            required.clone()
+        }
+    } else {
+        required
+    };
+
+    let init_span = init.map(|_| contract.span().init_block().body().into());
+    required_fields
+        .into_iter()
+        .filter(|field| missing.contains(&field.index))
+        .map(|field| {
+            BodyDiag::ImmutableContractFieldNotInitialized {
+                primary: FieldParent::Contract(contract).field_name_span(field.index as usize),
+                field: field.name,
+                init: init_span.clone(),
+            }
+            .into()
+        })
+        .collect()
 }
 
 #[salsa::tracked(return_ref)]

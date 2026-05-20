@@ -1,0 +1,43 @@
+contract NoInit {
+    x: u256
+}
+
+contract InitDoesNotUseField {
+    x: u256
+
+    init() {}
+}
+
+contract InitUsesButDoesNotAssign {
+    x: u256
+
+    init() uses (mut x) {}
+}
+
+contract InitMissesBranch {
+    x: u256
+
+    init(flag: bool) uses (mut x) {
+        if flag {
+            x = 1
+        }
+    }
+}
+
+contract InitAssignsAllPaths {
+    x: u256
+
+    init(flag: bool) uses (mut x) {
+        if flag {
+            x = 1
+        } else {
+            x = 2
+        }
+    }
+}
+
+contract MutableStorageField {
+    mut x: u256
+
+    init() {}
+}

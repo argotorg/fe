@@ -10,9 +10,9 @@ mod stmt;
 
 pub(crate) use self::contract::eval_msg_variant_selector;
 pub use self::contract::{
-    ResolvedRecvVariant, VariantResError, check_contract_init_body, check_contract_recv_arm_body,
-    check_contract_recv_block, check_contract_recv_blocks, resolve_variant_bare,
-    resolve_variant_in_msg,
+    ResolvedRecvVariant, VariantResError, check_contract_immutable_fields_initialized,
+    check_contract_init_body, check_contract_recv_arm_body, check_contract_recv_block,
+    check_contract_recv_blocks, resolve_variant_bare, resolve_variant_in_msg,
 };
 pub use self::path::RecordLike;
 use crate::analysis::name_resolution::ResolvedVariant;

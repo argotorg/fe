@@ -14,7 +14,7 @@ msg UnknownSelectorMsg {
 }
 
 pub contract Counter {
-    count: u256,
+    mut count: u256,
 
     recv {
         CounterMsg::Ping {} -> u256 {
