@@ -72,6 +72,30 @@ pub fn new_empty() -> Empty {
 }
 
 #[test]
+fn dynamic_string_literal_marks_main_section_for_const_data() {
+    let ir = with_top_mod_for_source(
+        "dynamic_string_literal_marks_main_section_for_const_data.fe",
+        r#"
+use std::evm::assert_msg
+
+pub fn main() {
+    assert_msg(false, "boom")
+}
+"#,
+        |db, top_mod| emit_module_sonatina_ir(db, top_mod).expect("Sonatina IR should emit"),
+    );
+
+    let main_object = ir
+        .split("object @main")
+        .nth(1)
+        .expect("main object should be emitted");
+    assert!(
+        ir.contains("evm_code_copy") && main_object.contains("data $const_region_"),
+        "DynString literals lowered with CODECOPY must embed their const region in main:\n{ir}"
+    );
+}
+
+#[test]
 fn sonatina_function_names_disambiguate_module_conflicts() {
     let ir = with_top_mod_for_source(
         "sonatina_function_names_disambiguate_module_conflicts.fe",

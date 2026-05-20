@@ -95,7 +95,7 @@ struct ModuleLowerer<'db, 'a> {
     layout_names: FxHashMap<LayoutId<'db>, String>,
     const_globals: FxHashMap<ConstRegionId<'db>, GlobalVariableRef>,
     const_names: FxHashMap<ConstRegionId<'db>, String>,
-    explicit_code_region_sections: FxHashSet<(mir::RuntimeObject<'db>, mir::RuntimeSectionName)>,
+    const_data_sections: FxHashSet<(mir::RuntimeObject<'db>, mir::RuntimeSectionName)>,
 }
 
 impl<'db, 'a> ModuleLowerer<'db, 'a> {
@@ -117,7 +117,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             layout_names: FxHashMap::default(),
             const_globals: FxHashMap::default(),
             const_names: FxHashMap::default(),
-            explicit_code_region_sections: FxHashSet::default(),
+            const_data_sections: FxHashSet::default(),
         }
     }
 
@@ -344,8 +344,16 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
     ) -> bool {
         matches!(section, mir::RuntimeSectionName::CodeRegion(_))
             || self
-                .explicit_code_region_sections
+                .const_data_sections
                 .contains(&(object, section.clone()))
+    }
+
+    fn mark_section_for_const_data(&mut self, section_ref: &mir::RuntimeSectionRef<'db>) {
+        let (object, section) = match section_ref {
+            mir::RuntimeSectionRef::Local { object, section }
+            | mir::RuntimeSectionRef::External { object, section } => (*object, section),
+        };
+        self.const_data_sections.insert((object, section.clone()));
     }
 
     fn mark_explicit_code_region(&mut self, region: mir::RuntimeCodeRegion<'db>) {
@@ -360,8 +368,7 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
         match resolved.source(self.db) {
             mir::RuntimeSectionRef::Local { object, section }
             | mir::RuntimeSectionRef::External { object, section } => {
-                self.explicit_code_region_sections
-                    .insert((object, section.clone()));
+                self.const_data_sections.insert((object, section.clone()));
             }
         }
     }
@@ -1570,6 +1577,16 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 let symbol = self.code_region_symbol_ref(*region);
                 self.fb
                     .insert_inst(SymSize::new(self.module.inst_set(), symbol), Type::I256)
+            }
+            RuntimeBuiltin::ConstRegionAddr { region } => {
+                for section in self.current_sections.clone() {
+                    self.module.mark_section_for_const_data(&section);
+                }
+                let gv = self.module.lower_const_region(*region)?;
+                self.fb.insert_inst(
+                    SymAddr::new(self.module.inst_set(), SymbolRef::Global(gv)),
+                    Type::I256,
+                )
             }
             RuntimeBuiltin::Malloc { size } => {
                 let size = self.local_value(*size)?;

@@ -211,7 +211,7 @@ fn verify_assign<'db>(
             _ => Some(RuntimeClass::Scalar(scalar_class_from_const(value))),
         },
         RExpr::Placeholder { class } => Some(class.clone()),
-        RExpr::Builtin(builtin) => verify_builtin(program, body, builtin)?,
+        RExpr::Builtin(builtin) => verify_builtin(db, program, body, builtin)?,
         RExpr::Unary { value, .. } => {
             if !matches!(
                 (runtime_value_class(body, *value)?, &dst_class),
@@ -539,6 +539,7 @@ fn same_block_dominating_enum_assert<'db>(
 }
 
 fn verify_builtin<'db>(
+    db: &'db dyn MirDb,
     program: &impl RuntimeProgramView<'db>,
     body: &RuntimeBody<'db>,
     builtin: &RuntimeBuiltin<'db>,
@@ -659,6 +660,10 @@ fn verify_builtin<'db>(
         RuntimeBuiltin::CurrentCodeRegionLen => Ok(Some(RuntimeClass::Scalar(word_scalar_class()))),
         RuntimeBuiltin::CodeRegionOffset { region } | RuntimeBuiltin::CodeRegionLen { region } => {
             let _ = program.code_region(*region);
+            Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
+        }
+        RuntimeBuiltin::ConstRegionAddr { region } => {
+            verify_const_region(db, program, program.const_region(*region))?;
             Ok(Some(RuntimeClass::Scalar(word_scalar_class())))
         }
         RuntimeBuiltin::Malloc { size } => {

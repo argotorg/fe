@@ -433,6 +433,7 @@ impl Ctx for Evm {
     fn coinbase(self) -> Address {
         Address { inner: ops::coinbase() }
     }
+    #[inline(always)]
     fn value(self) -> u256 {
         ops::callvalue()
     }

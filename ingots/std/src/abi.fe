@@ -16,6 +16,7 @@ use super::evm::{mem, ops}
 /// The returned value owns a memory tail with layout `(len = 32, word)`.
 /// Use this when an ABI `bytes` parameter or event field should contain one
 /// full 32-byte chunk, for example a `bytes`-typed wrapper around a `bytes32`.
+#[inline(always)]
 pub fn bytes_from_word(_ w: u256) -> Bytes uses (mem: mut RawMem) {
     let data = mem::alloc(64)
     mem.mstore(addr: data, value: 32)

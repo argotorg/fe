@@ -405,6 +405,7 @@ impl<I> BytesView<I>
     }
 
     #[arithmetic(unchecked)]
+    #[inline(always)]
     pub fn word_at(self, _ offset: u256) -> u256 {
         self.input.word_at(self.start + offset)
     }
@@ -519,6 +520,7 @@ impl Bytes {
         self.len == 0
     }
 
+    #[inline(always)]
     pub fn view(self) -> BytesView<MemoryInput> {
         let input = MemoryInput {
             base: self.data + 32,
@@ -561,6 +563,7 @@ fn mem_word_store(value: u256) uses (slot: mut u256) {
     slot = value
 }
 
+#[inline(always)]
 fn mem_word_at(base: u256, offset: u256) -> u256 {
     let ptr: MemPtr<u256> = MemPtr::from_raw(base + offset)
     with (ptr) {
@@ -574,6 +577,7 @@ impl ByteInput for MemoryInput {
     }
 
     #[arithmetic(unchecked)]
+    #[inline(always)]
     fn word_at(self, _ byte_offset: u256) -> u256 {
         mem_word_at(base: self.base, offset: byte_offset)
     }

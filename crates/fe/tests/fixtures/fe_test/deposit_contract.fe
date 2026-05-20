@@ -176,6 +176,7 @@ pub contract DepositContract uses (ctx: Ctx, mem: mut RawMem, log: mut Log) {
 
 // Reconstruct the deposit-data SSZ root from its constituent parts. Exposed at
 // module level so tests can precompute a valid `deposit_data_root` to pass in.
+#[inline(always)]
 pub fn compute_deposit_data_root(
     pubkey: BytesView<MemoryInput>,
     withdrawal_credentials: BytesView<MemoryInput>,

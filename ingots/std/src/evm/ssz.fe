@@ -58,6 +58,7 @@ use super::ops
 /// use the higher-level `Merkleize` trait; reach for `hash_pair`
 /// directly when building an incremental tree (the deposit contract's
 /// `branch[]` accumulator is the canonical example).
+#[inline(always)]
 pub fn hash_pair(left: u256, right: u256) -> u256 uses (mem: mut RawMem) {
     let ptr = mem::alloc(64)
     mem.mstore(addr: ptr, value: left)
@@ -84,6 +85,7 @@ pub fn hash_pair(left: u256, right: u256) -> u256 uses (mem: mut RawMem) {
 /// required because the byte-swap relies on wrapping multiplication-
 /// free shifts that the bounds checker can't otherwise prove safe.
 #[arithmetic(unchecked)]
+#[inline(always)]
 pub fn u64_chunk(_ value: u64) -> u256 {
     let mut v = value as u256
     // Swap adjacent byte pairs:  AB CD EF GH  →  BA DC FE HG
@@ -105,6 +107,7 @@ pub fn u64_chunk(_ value: u64) -> u256 {
 ///
 /// Note: the on-wire layout matches `u64_chunk` (LE in the top 8
 /// bytes of a word), wrapped with `len = 8` and `size = 64`.
+#[inline(always)]
 pub fn serialize_u64(_ value: u64) -> Bytes uses (mem: mut RawMem) {
     let out: u256 = mem::alloc(64)
     mem.mstore(addr: out, value: 8)
@@ -137,6 +140,7 @@ pub trait HashTreeRoot {
 ///
 /// Use as `ssz::hash_tree_root<ssz::ByteVector<48>>(view)`. The
 /// turbofish chooses the implementation; the view supplies the bytes.
+#[inline(always)]
 pub fn hash_tree_root<T>(_ view: BytesView<MemoryInput>) -> u256
 uses (mem: mut RawMem) where T: HashTreeRoot
 {
@@ -152,6 +156,7 @@ uses (mem: mut RawMem) where T: HashTreeRoot
 ///
 /// Used for BLS public keys.
 impl HashTreeRoot for ByteVector<48> {
+    #[inline(always)]
     fn hash_tree_root(_ view: BytesView<MemoryInput>) -> u256
     uses (mem: mut RawMem)
     {
@@ -187,6 +192,7 @@ impl HashTreeRoot for ByteVector<48> {
 ///
 /// Used for BLS signatures.
 impl HashTreeRoot for ByteVector<96> {
+    #[inline(always)]
     fn hash_tree_root(_ view: BytesView<MemoryInput>) -> u256
     uses (mem: mut RawMem)
     {
@@ -251,6 +257,7 @@ impl Merkleize for (u256, u256, u256) {
 }
 
 impl Merkleize for (u256, u256, u256, u256) {
+    #[inline(always)]
     fn merkleize(self) -> u256 uses (mem: mut RawMem) {
         merkleize4(self.0, self.1, self.2, self.3)
     }
@@ -373,6 +380,7 @@ impl Merkleize for (
 /// Call this on the merkleized capacity-padded root with the actual
 /// element count to get the canonical `List` root. The deposit
 /// contract uses it on `deposit_count` to finalize `get_deposit_root`.
+#[inline(always)]
 pub fn mix_in_length(root: u256, len: u64) -> u256 uses (mem: mut RawMem) {
     hash_pair(left: root, right: u64_chunk(len))
 }
@@ -386,6 +394,7 @@ pub fn mix_in_length(root: u256, len: u64) -> u256 uses (mem: mut RawMem) {
 // behavior centralized so the public `Merkleize` impls just route a tuple to
 // the right one.
 
+#[inline(always)]
 fn merkleize4(_ a: u256, _ b: u256, _ c: u256, _ d: u256) -> u256
 uses (mem: mut RawMem)
 {
@@ -440,6 +449,7 @@ uses (mem: mut RawMem)
 // then returns it loaded into a u256. Reverts on precompile failure
 // or short return (defensive — sha256 always returns 32 bytes on
 // real EVM, but we don't want to trust silent truncation).
+#[inline(always)]
 fn sha256_64_to(_ offset: u256, _ out: u256) -> u256 {
     let ok: u256 = ops::staticcall(
         gas: ops::gas(),

@@ -328,7 +328,7 @@ impl<'db> TyId<'db> {
         Self::app(db, array, elem)
     }
 
-    pub(super) fn array_with_len(db: &'db dyn HirAnalysisDb, elem: TyId<'db>, len: usize) -> Self {
+    pub fn array_with_len(db: &'db dyn HirAnalysisDb, elem: TyId<'db>, len: usize) -> Self {
         let array = Self::array(db, elem);
 
         let len = EvaluatedConstTy::LitInt(IntegerId::new(db, BigUint::from(len)));
