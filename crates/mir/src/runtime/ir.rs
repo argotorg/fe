@@ -930,12 +930,63 @@ pub enum RuntimeInputPlan<'db> {
         decode_args_fn: RuntimeInstance<'db>,
         projected_fields: Box<[u32]>,
     },
+    /// Optimized path for non-dynamic types whose fields each fit in a single
+    /// ABI head slot. Each field is loaded directly via `calldataload` at a
+    /// known offset, skipping malloc / calldatacopy / MemoryBytes / SolDecoder
+    /// entirely.
+    DirectCalldataLoad {
+        msg_ty: TyId<'db>,
+        /// Per-field ABI head sizes (in bytes). The calldata offset of
+        /// field `i` is `4 + sum(field_head_sizes[..i])`.
+        field_head_sizes: Box<[u32]>,
+        projected_fields: Box<[u32]>,
+    },
+    /// Hybrid path for message types where some fields are non-mut scalars at
+    /// known ABI offsets and others require the full decode pipeline.
+    LazyCalldataLoad {
+        msg_ty: TyId<'db>,
+        /// The decode function for the full message type. `None` when every
+        /// field uses a non-Decode strategy.
+        decode_fn: Option<RuntimeInstance<'db>>,
+        /// Per-field load strategy, indexed by the message struct's field order.
+        field_strategies: Box<[FieldLoadStrategy]>,
+        projected_fields: Box<[u32]>,
+    },
+}
+
+/// Describes how a single field of a message struct should be loaded from
+/// calldata in a `LazyCalldataLoad` plan.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub enum FieldLoadStrategy {
+    /// Load directly via `calldataload` at a known offset.
+    Direct,
+    /// Load through the standard SolDecoder pipeline.
+    Decode,
+    /// Skip this field and pass the absolute calldata byte offset.
+    SkipWithOffset {
+        /// The ABI head-size of this field in bytes.
+        head_size: u32,
+    },
+    /// Decode a dynamic-typed view (BytesView or StringView) directly from
+    /// calldata without copying the payload into memory.
+    LazyDynamicView {
+        /// `true` for StringView fields, `false` for BytesView fields.
+        is_string_view: bool,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub enum RuntimeReturnPlan<'db> {
     Unit,
-    Value { ty: TyId<'db> },
+    Value {
+        ty: TyId<'db>,
+    },
+    /// Optimized path for a single word-scalar return value: emit a direct
+    /// `mstore` at offset 0 and `return(0, 32)` instead of calling
+    /// `encode_single_root_alloc`.
+    DirectScalarReturn {
+        ty: TyId<'db>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
