@@ -27,7 +27,7 @@ func private %abi_field_size(v0.i256) -> i256 {
         jump block1;
 
     block1:
-        v2.i256 = call %core__lib__abi__trait_AbiSize__payload_size__ge513_3135_0 v0;
+        v2.i256 = call %payload_size v0;
         br 0.i1 block2 block3;
 
     block2:
@@ -214,7 +214,7 @@ func private %encode(v0.i256, v1.objref<@layout_0>) {
         jump block1;
 
     block1:
-        call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__write_word_ec9b v1 v0;
+        call %write_word v1 v0;
         return;
 }
 
@@ -227,10 +227,10 @@ func private %encode_field(v0.i256, v1.objref<@layout_0>, v2.i256) {
 
     block2:
         v5.i256 = call %base v1;
-        v8.i256 = call %core__lib__abi__trait_AbiSize__payload_size__ge513_3135 v0;
+        v8.i256 = call %payload_size v0;
         v9.i256 = mload v2 i256;
         v10.i256 = sub v9 v5;
-        call %std__lib__abi__sol__impl_trait_SolEncoder_19ce__write_word_6fcb v1 v10;
+        call %write_word v1 v10;
         v12.i256 = call %pos v1;
         v13.i256 = mload v2 i256;
         call %set_base v1 v13;
@@ -431,15 +431,7 @@ func inline(always) private %impl_CallData__new() -> @layout_1 {
         return v3;
 }
 
-func private %core__lib__abi__trait_AbiSize__payload_size__ge513_3135(v0.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        return 32.i256;
-}
-
-func private %core__lib__abi__trait_AbiSize__payload_size__ge513_3135_0(v0.i256) -> i256 {
+func private %payload_size(v0.i256) -> i256 {
     block0:
         jump block1;
 
@@ -540,7 +532,7 @@ func inline(always) private %std__lib__evm__storage_map__storagemap_storage_slot
     block1:
         v3.*i8 = evm_malloc 0.i256;
         v4.i256 = ptr_to_int v3 i256;
-        v6.i256 = call %std__lib__evm__storage_map__impl_trait_u256_0dfe__write_key_2db6 v4 v0;
+        v6.i256 = call %write_key v4 v0;
         (v7.i256, v8.i1) = uaddo v4 v6;
         br v8 block2 block3;
 
@@ -566,7 +558,7 @@ func inline(always) private %std__lib__evm__storage_map__storagemap_storage_slot
     block1:
         v3.*i8 = evm_malloc 0.i256;
         v4.i256 = ptr_to_int v3 i256;
-        v6.i256 = call %std__lib__evm__storage_map__impl_trait_u256_0dfe__write_key_2db6_0 v4 v0;
+        v6.i256 = call %write_key v4 v0;
         (v7.i256, v8.i1) = uaddo v4 v6;
         br v8 block2 block3;
 
@@ -602,7 +594,7 @@ func private %to_word(v0.i256) -> i256 {
         return v0;
 }
 
-func inline(always) private %std__lib__evm__storage_map__impl_trait_u256_0dfe__write_key_2db6(v0.i256, v1.i256) -> i256 {
+func inline(always) private %write_key(v0.i256, v1.i256) -> i256 {
     block0:
         jump block1;
 
@@ -611,30 +603,7 @@ func inline(always) private %std__lib__evm__storage_map__impl_trait_u256_0dfe__w
         return 32.i256;
 }
 
-func inline(always) private %std__lib__evm__storage_map__impl_trait_u256_0dfe__write_key_2db6_0(v0.i256, v1.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        mstore v0 v1 i256;
-        return 32.i256;
-}
-
-func private %std__lib__abi__sol__impl_trait_SolEncoder_19ce__write_word_6fcb(v0.objref<@layout_0>, v1.i256) {
-    block0:
-        jump block1;
-
-    block1:
-        v4.objref<i256> = obj.proj v0 1.i256;
-        v5.i256 = obj.load v4;
-        mstore v5 v1 i256;
-        v9.i256 = add v5 32.i256;
-        v10.objref<i256> = obj.proj v0 1.i256;
-        obj.store v10 v9;
-        return;
-}
-
-func private %std__lib__abi__sol__impl_trait_SolEncoder_19ce__write_word_ec9b(v0.objref<@layout_0>, v1.i256) {
+func private %write_word(v0.objref<@layout_0>, v1.i256) {
     block0:
         jump block1;
 

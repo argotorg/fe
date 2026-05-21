@@ -16,7 +16,9 @@ use hir::analysis::{
         corelib::runtime_builtin_func_kind,
         normalize::normalize_ty,
         provider::registered_root_providers,
-        trait_def::{TraitInstId, resolve_trait_method_instance},
+        trait_def::{
+            TraitInstId, complete_resolved_trait_method_args, resolve_trait_method_instance,
+        },
         trait_resolution::{PredicateListId, TraitSolveCx},
         ty_check::{BodyOwner, EffectParamSite, EffectPassMode, LocalBinding, ParamSite},
         ty_def::{CapabilityKind, TyData, TyId},
@@ -2279,7 +2281,7 @@ pub(crate) fn resolve_runtime_call_key<'db>(
         original_inst
     };
     let assumptions = runtime_callee_assumptions(db, caller_key, caller_typed_body);
-    let Some((impl_func, mut impl_args)) = resolve_trait_method_instance(
+    let Some((impl_func, impl_args)) = resolve_trait_method_instance(
         db,
         TraitSolveCx::new(db, caller_key.impl_env(db).normalization_scope(db))
             .with_assumptions(assumptions),
@@ -2295,17 +2297,13 @@ pub(crate) fn resolve_runtime_call_key<'db>(
                 .unwrap_or_else(|| "<none>".to_string()),
         )));
     };
-    let trait_arg_len = concrete_inst.args(db).len();
-    let tail = callee_key
-        .subst(db)
-        .generic_args(db)
-        .get(trait_arg_len..)
-        .unwrap_or(callee_key.subst(db).generic_args(db).as_slice());
-    impl_args.extend_from_slice(tail);
-    let mut witnesses = IndexSet::new();
-    witnesses.extend(caller_key.impl_env(db).witnesses(db).iter().copied());
-    witnesses.extend(impl_env.witnesses(db).iter().copied());
-    witnesses.insert(concrete_inst);
+    let impl_args = complete_resolved_trait_method_args(
+        db,
+        impl_func,
+        impl_args,
+        callee_key.subst(db).generic_args(db),
+        concrete_inst.args(db).len(),
+    );
     Ok(SemanticInstanceKey::new(
         db,
         BodyOwner::Func(impl_func),
@@ -2313,9 +2311,9 @@ pub(crate) fn resolve_runtime_call_key<'db>(
         hir::analysis::semantic::EffectProviderSubst::empty(db),
         ImplEnv::new(
             db,
-            caller_key.impl_env(db).normalization_scope(db),
-            assumptions,
-            witnesses.into_iter().collect::<Vec<_>>(),
+            BodyOwner::Func(impl_func).scope(),
+            PredicateListId::empty_list(db),
+            vec![concrete_inst],
         ),
     ))
 }

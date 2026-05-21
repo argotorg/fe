@@ -7,17 +7,7 @@ target = "evm-ethereum-osaka"
 
 type @layout_0 = {i256};
 
-func private %std__lib__evm__effects__impl_trait_Evm_a1e8__caller_efe3() -> @layout_0 {
-    block0:
-        jump block1;
-
-    block1:
-        v0.i256 = evm_caller;
-        v3.@layout_0 = insert_value undef.@layout_0 0.i256 v0;
-        return v3;
-}
-
-func private %std__lib__evm__effects__impl_trait_Evm_a1e8__caller_efe3_0() -> @layout_0 {
+func private %caller() -> @layout_0 {
     block0:
         jump block1;
 
@@ -50,7 +40,7 @@ func private %standalone_caller__caller__who_called__gcd5c_4c8a() -> @layout_0 {
         jump block1;
 
     block1:
-        v0.@layout_0 = call %std__lib__evm__effects__impl_trait_Evm_a1e8__caller_efe3;
+        v0.@layout_0 = call %caller;
         return v0;
 }
 
@@ -59,7 +49,7 @@ func private %standalone_caller__caller__who_called__gcd5c_a9cd() -> @layout_0 {
         jump block1;
 
     block1:
-        v0.@layout_0 = call %std__lib__evm__effects__impl_trait_Evm_a1e8__caller_efe3_0;
+        v0.@layout_0 = call %caller;
         return v0;
 }
 

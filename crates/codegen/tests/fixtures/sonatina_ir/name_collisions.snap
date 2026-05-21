@@ -311,7 +311,7 @@ func private %standalone_name_collisions__name_collisions__ret_param_collision_c
         return v3;
 }
 
-func private %standalone_name_collisions__name_collisions__impl_trait_MultiTraitImpl_5bd8__same_method_0552(v0.constref<@layout_0>) -> i32 {
+func private %impl_trait_MultiTraitImpl_5bd8__same_method(v0.constref<@layout_0>) -> i32 {
     block0:
         jump block1;
 
@@ -330,45 +330,7 @@ func private %standalone_name_collisions__name_collisions__impl_trait_MultiTrait
         return v6;
 }
 
-func private %standalone_name_collisions__name_collisions__impl_trait_MultiTraitImpl_5bd8__same_method_0552_0(v0.constref<@layout_0>) -> i32 {
-    block0:
-        jump block1;
-
-    block1:
-        v3.constref<i32> = const.proj v0 0.i256;
-        v4.i32 = const.load v3;
-        (v6.i32, v7.i1) = uaddo v4 1.i32;
-        br v7 block2 block3;
-
-    block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
-
-    block3:
-        return v6;
-}
-
-func private %standalone_name_collisions__name_collisions__impl_trait_MultiTraitImpl_b140__same_method_480f(v0.constref<@layout_0>) -> i32 {
-    block0:
-        jump block1;
-
-    block1:
-        v3.constref<i32> = const.proj v0 0.i256;
-        v4.i32 = const.load v3;
-        (v6.i32, v7.i1) = uaddo v4 2.i32;
-        br v7 block2 block3;
-
-    block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
-
-    block3:
-        return v6;
-}
-
-func private %standalone_name_collisions__name_collisions__impl_trait_MultiTraitImpl_b140__same_method_480f_0(v0.constref<@layout_0>) -> i32 {
+func private %impl_trait_MultiTraitImpl_b140__same_method(v0.constref<@layout_0>) -> i32 {
     block0:
         jump block1;
 
@@ -554,10 +516,10 @@ func private %standalone_name_collisions__name_collisions__test_trait_method_col
     block1:
         v1.constref<@layout_0> = const.ref $const_region_4;
         v2.constref<@layout_0> = const.ref $const_region_4;
-        v3.i32 = call %standalone_name_collisions__name_collisions__impl_trait_MultiTraitImpl_5bd8__same_method_0552 v2;
+        v3.i32 = call %impl_trait_MultiTraitImpl_5bd8__same_method v2;
         v4.constref<@layout_0> = const.ref $const_region_4;
         v5.constref<@layout_0> = const.ref $const_region_4;
-        v6.i32 = call %standalone_name_collisions__name_collisions__impl_trait_MultiTraitImpl_b140__same_method_480f v5;
+        v6.i32 = call %impl_trait_MultiTraitImpl_b140__same_method v5;
         (v7.i32, v8.i1) = uaddo v3 v6;
         br v8 block2 block3;
 
@@ -577,10 +539,10 @@ func private %standalone_name_collisions__name_collisions__test_trait_method_col
     block1:
         v1.constref<@layout_0> = const.ref $const_region_4;
         v2.constref<@layout_0> = const.ref $const_region_4;
-        v3.i32 = call %standalone_name_collisions__name_collisions__impl_trait_MultiTraitImpl_5bd8__same_method_0552_0 v2;
+        v3.i32 = call %impl_trait_MultiTraitImpl_5bd8__same_method v2;
         v4.constref<@layout_0> = const.ref $const_region_4;
         v5.constref<@layout_0> = const.ref $const_region_4;
-        v6.i32 = call %standalone_name_collisions__name_collisions__impl_trait_MultiTraitImpl_b140__same_method_480f_0 v5;
+        v6.i32 = call %impl_trait_MultiTraitImpl_b140__same_method v5;
         (v7.i32, v8.i1) = uaddo v3 v6;
         br v8 block2 block3;
 

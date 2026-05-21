@@ -18,7 +18,7 @@ func private %abi_encode(v0.i256) {
 
     block1:
         call %mstore 0.i256 v0;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_f28e 0.i256 32.i256;
+        call %return_data 0.i256 32.i256;
         unreachable;
 }
 
@@ -151,7 +151,7 @@ func private %credit_bob(v0.i256, v1.i256, v2.i256) -> i256 {
         return v38;
 }
 
-func private %from_raw__gf198(v0.i256) -> @layout_0 {
+func private %from_raw__g9438(v0.i256) -> @layout_0 {
     block0:
         jump block1;
 
@@ -160,7 +160,7 @@ func private %from_raw__gf198(v0.i256) -> @layout_0 {
         return v4;
 }
 
-func private %from_raw__g9438(v0.i256) -> @layout_0 {
+func private %from_raw__gf198(v0.i256) -> @layout_0 {
     block0:
         jump block1;
 
@@ -179,7 +179,7 @@ func private %init() {
         v2.*i8 = evm_malloc v0;
         v3.i256 = ptr_to_int v2 i256;
         call %codecopy v3 v1 v0;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_e8fc_0 v3 v0;
+        call %return_data v3 v0;
         unreachable;
 }
 
@@ -228,23 +228,7 @@ func private %raw__g9438(v0.@layout_0) -> i256 {
         return v3;
 }
 
-func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_e8fc(v0.i256, v1.i256) {
-    block0:
-        jump block1;
-
-    block1:
-        evm_return v0 v1;
-}
-
-func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_e8fc_0(v0.i256, v1.i256) {
-    block0:
-        jump block1;
-
-    block1:
-        evm_return v0 v1;
-}
-
-func private %std__lib__evm__effects__impl_trait_Evm_0098__return_data_f28e(v0.i256, v1.i256) {
+func private %return_data(v0.i256, v1.i256) {
     block0:
         jump block1;
 
@@ -290,7 +274,7 @@ func private %runtime() {
         unreachable;
 
     block6:
-        call %std__lib__evm__effects__impl_trait_Evm_0098__return_data_e8fc 0.i256 0.i256;
+        call %return_data 0.i256 0.i256;
         unreachable;
 
     block7:
@@ -348,21 +332,21 @@ func private %runtime() {
         jump block17;
 }
 
-func private %stor_ptr__g2c78(v0.i256) -> @layout_0 {
-    block0:
-        jump block1;
-
-    block1:
-        v2.@layout_0 = call %from_raw__g9438 v0;
-        return v2;
-}
-
 func private %stor_ptr__gd216(v0.i256) -> @layout_0 {
     block0:
         jump block1;
 
     block1:
         v2.@layout_0 = call %from_raw__gf198 v0;
+        return v2;
+}
+
+func private %stor_ptr__g2c78(v0.i256) -> @layout_0 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.@layout_0 = call %from_raw__g9438 v0;
         return v2;
 }
 
