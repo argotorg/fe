@@ -2798,28 +2798,7 @@ fn direct_calldata_load_info<'db>(
         if head_size != 32 {
             return None;
         }
-        let base = field_ty.base_ty(db);
-        let is_scalar_prim = matches!(
-            base.data(db),
-            TyData::TyBase(TyBase::Prim(
-                PrimTy::Bool
-                    | PrimTy::U8
-                    | PrimTy::U16
-                    | PrimTy::U32
-                    | PrimTy::U64
-                    | PrimTy::U128
-                    | PrimTy::U256
-                    | PrimTy::Usize
-                    | PrimTy::I8
-                    | PrimTy::I16
-                    | PrimTy::I32
-                    | PrimTy::I64
-                    | PrimTy::I128
-                    | PrimTy::I256
-                    | PrimTy::Isize
-            ))
-        );
-        if !is_scalar_prim {
+        if !is_primitive_word_scalar(db, field_ty) {
             return None;
         }
         head_sizes.push(head_size);
@@ -2933,18 +2912,29 @@ fn is_string_view_ty(db: &dyn MirDb, ty: TyId<'_>) -> bool {
 }
 
 pub(crate) fn static_abi_head_size(db: &dyn MirDb, ty: TyId<'_>) -> Option<u32> {
+    static_abi_head_size_inner(db, ty, 0)
+}
+
+/// Max recursion depth for `static_abi_head_size` to prevent stack overflow
+/// on pathological recursive types.
+const STATIC_ABI_HEAD_SIZE_MAX_DEPTH: u32 = 10;
+
+fn static_abi_head_size_inner(db: &dyn MirDb, ty: TyId<'_>, depth: u32) -> Option<u32> {
+    if depth > STATIC_ABI_HEAD_SIZE_MAX_DEPTH {
+        return None;
+    }
     if is_primitive_word_scalar(db, ty) {
         return Some(32);
     }
     let fields = ty.field_types(db);
     if fields.len() == 1 {
-        return static_abi_head_size(db, fields[0]);
+        return static_abi_head_size_inner(db, fields[0], depth + 1);
     }
     if ty.is_array(db) {
         let n = ty.array_len(db)? as u32;
         let (_, args) = ty.decompose_ty_app(db);
         let elem_ty = *args.first()?;
-        let elem_size = static_abi_head_size(db, elem_ty)?;
+        let elem_size = static_abi_head_size_inner(db, elem_ty, depth + 1)?;
         return Some(n * elem_size);
     }
     if let Some(size) = array_view_head_size(db, ty) {
@@ -3248,16 +3238,12 @@ pub contract DecodeHarness {
 
         let raw_plan = recv_wrapper_plan(&db, top_mod, "raw(uint256)");
         let projected_fields = match raw_plan.input {
-            RuntimeInputPlan::DecodeHostPayload {
-                projected_fields, ..
-            } => projected_fields,
             RuntimeInputPlan::DirectCalldataLoad {
                 projected_fields, ..
             } => projected_fields,
-            RuntimeInputPlan::LazyCalldataLoad {
-                projected_fields, ..
-            } => projected_fields,
-            RuntimeInputPlan::None => panic!("raw(uint256) should have an input plan"),
+            other => panic!(
+                "raw(uint256) with a single u256 field should select DirectCalldataLoad, got {other:?}"
+            ),
         };
         assert!(
             projected_fields.is_empty(),
@@ -3266,16 +3252,12 @@ pub contract DecodeHarness {
 
         let swap_plan = recv_wrapper_plan(&db, top_mod, "swap(uint64,uint64)");
         let projected_fields = match swap_plan.input {
-            RuntimeInputPlan::DecodeHostPayload {
-                projected_fields, ..
-            } => projected_fields,
             RuntimeInputPlan::DirectCalldataLoad {
                 projected_fields, ..
             } => projected_fields,
-            RuntimeInputPlan::LazyCalldataLoad {
-                projected_fields, ..
-            } => projected_fields,
-            RuntimeInputPlan::None => panic!("swap(uint64,uint64) should have an input plan"),
+            other => panic!(
+                "swap(uint64,uint64) with two u64 fields should select DirectCalldataLoad, got {other:?}"
+            ),
         };
         assert_eq!(
             projected_fields.as_ref(),

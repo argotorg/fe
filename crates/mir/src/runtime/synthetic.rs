@@ -470,7 +470,6 @@ impl<'db> SyntheticBodyBuilder<'db> {
 
     fn build_contract_recv_abi(&mut self, plan: ContractRecvAbiPlan<'db>) {
         let zero = self.push_const_word(RBlockId::from_u32(0), 0);
-        let four = self.push_const_word(RBlockId::from_u32(0), 4);
         let cont_bb = if plan.payable {
             RBlockId::from_u32(0)
         } else {
@@ -657,11 +656,40 @@ impl<'db> SyntheticBodyBuilder<'db> {
                             ) {
                                 accumulated_offset += size;
                             }
+                            // When static_abi_head_size returns None we stop advancing
+                            // accumulated_offset. All subsequent strategies must also
+                            // be Decode because Direct/SkipWithOffset/LazyDynamicView
+                            // require a known preceding offset.
                         }
                     }
                 }
 
+                // Invariant: once accumulated_offset becomes stale (a Decode field
+                // had unknown static size), no later field may use a strategy that
+                // depends on a known calldata offset.
+                debug_assert!({
+                    let mut offset_known = true;
+                    let mut ok = true;
+                    for (i, strategy) in field_strategies.iter().enumerate() {
+                        if *strategy == FieldLoadStrategy::Decode
+                            && crate::runtime::package::static_abi_head_size(
+                                self.db,
+                                field_types[i],
+                            )
+                            .is_none()
+                        {
+                            offset_known = false;
+                        }
+                        if !offset_known && *strategy != FieldLoadStrategy::Decode {
+                            ok = false;
+                            break;
+                        }
+                    }
+                    ok
+                }, "Direct/SkipWithOffset/LazyDynamicView strategy appears after a field with unknown static head size");
+
                 if let Some(decode_fn) = decode_fn {
+                    let four = self.push_const_word(cont_bb, 4);
                     let size = self.push_builtin_value(
                         cont_bb,
                         TyId::u256(self.db),
@@ -718,9 +746,9 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 }
 
                 for &field_idx in projected_fields.iter() {
-                    if let Some(value) = loaded_fields[field_idx as usize] {
-                        call_args.push(value);
-                    }
+                    let value = loaded_fields[field_idx as usize]
+                        .expect("projected field must be loaded");
+                    call_args.push(value);
                 }
             }
         }

@@ -214,6 +214,11 @@ fn verify_contract_runtime_switch<'db>(
     verify_contract_runtime_default_target(body, default_bb, default)
 }
 
+/// Walk a dispatch tree rooted at `block`, verifying that every reachable leaf
+/// is either a known dispatch arm or the default action.
+///
+/// Handles Branch, Goto, and SwitchScalar nodes so that future dispatch
+/// patterns (e.g. binary search trees, nested guards) are verified correctly.
 fn verify_contract_runtime_dispatch_block<'db>(
     body: &RuntimeBody<'db>,
     block: RBlockId,

@@ -515,7 +515,10 @@ impl<T, const N: usize, I> ArrayView<T, N, I>
         N
     }
 
-    /// Read element at `index` from the underlying input source.
+    /// Read the raw 32-byte ABI word at `index` from the underlying input source.
+    ///
+    /// Returns the uninterpreted `u256` word; the caller must cast or
+    /// reinterpret the result as the element type `T`.
     #[arithmetic(unchecked)]
     pub fn get(self, _ index: usize) -> u256 {
         let byte_offset = self.start + (index as u256) * abi_field_head_size<T>()
