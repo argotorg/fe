@@ -12,7 +12,8 @@ use crate::{
             const_ty::inherent_const_body_and_impl_args,
             effects::place_effect_provider_param_index_map,
             trait_def::{
-                assoc_const_body_and_impl_args_for_trait_inst, resolve_trait_method_instance,
+                assoc_const_body_and_impl_args_for_trait_inst, complete_resolved_trait_method_args,
+                resolve_trait_method_instance,
             },
             trait_resolution::{PredicateListId, TraitSolveCx},
             ty_check::{
@@ -76,6 +77,7 @@ fn semantic_callee_key_with_assumptions<'db>(
     provider_resolution_mode: ProviderResolutionMode,
 ) -> Option<SemanticInstanceKey<'db>> {
     let impl_env = caller_key.impl_env(db);
+    let mut resolved_trait_witness = None;
     let (owner, mut subst_args) = match callable.callable_def() {
         CallableDef::Func(func) => {
             let mut subst_args = callable.generic_args().to_vec();
@@ -88,13 +90,14 @@ fn semantic_callee_key_with_assumptions<'db>(
                     inst,
                     name,
                 ) {
-                let trait_arg_len = inst.args(db).len();
-                let mut resolved_args = impl_args;
-                let tail = subst_args
-                    .get(trait_arg_len..)
-                    .unwrap_or(subst_args.as_slice());
-                resolved_args.extend_from_slice(tail);
-                subst_args = resolved_args;
+                subst_args = complete_resolved_trait_method_args(
+                    db,
+                    impl_func,
+                    impl_args,
+                    &subst_args,
+                    inst.args(db).len(),
+                );
+                resolved_trait_witness = Some(inst);
                 BodyOwner::Func(impl_func)
             } else {
                 BodyOwner::Func(func)
@@ -112,16 +115,25 @@ fn semantic_callee_key_with_assumptions<'db>(
         provider_resolution_mode,
     );
 
-    let mut witnesses: IndexSet<_> = impl_env.witnesses(db).iter().copied().collect();
-    if let Some(witness) = callable.trait_inst() {
-        witnesses.insert(witness);
-    }
-    let impl_env = ImplEnv::new(
-        db,
-        impl_env.normalization_scope(db),
-        assumptions,
-        witnesses.into_iter().collect::<Vec<_>>(),
-    );
+    let impl_env = if let Some(witness) = resolved_trait_witness {
+        ImplEnv::new(
+            db,
+            owner.scope(),
+            PredicateListId::empty_list(db),
+            vec![witness],
+        )
+    } else {
+        let mut witnesses: IndexSet<_> = impl_env.witnesses(db).iter().copied().collect();
+        if let Some(witness) = callable.trait_inst() {
+            witnesses.insert(witness);
+        }
+        ImplEnv::new(
+            db,
+            impl_env.normalization_scope(db),
+            assumptions,
+            witnesses.into_iter().collect::<Vec<_>>(),
+        )
+    };
 
     Some(SemanticInstanceKey::new(
         db,

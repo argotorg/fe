@@ -10,8 +10,8 @@ func private %standalone_revert__revert__fail__gcd5c_35c3() {
         jump block1;
 
     block1:
-        call %std__lib__evm__effects__impl_trait_Evm_d0d8__mstore_401f 0.i256 42.i256;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__revert_f9bb 0.i256 32.i256;
+        call %mstore 0.i256 42.i256;
+        call %revert 0.i256 32.i256;
         unreachable;
 }
 
@@ -20,8 +20,8 @@ func private %standalone_revert__revert__fail__gcd5c_cdbf() {
         jump block1;
 
     block1:
-        call %std__lib__evm__effects__impl_trait_Evm_d0d8__mstore_401f_0 0.i256 42.i256;
-        call %std__lib__evm__effects__impl_trait_Evm_0098__revert_f9bb_0 0.i256 32.i256;
+        call %mstore 0.i256 42.i256;
+        call %revert 0.i256 32.i256;
         unreachable;
 }
 
@@ -43,7 +43,7 @@ func private %main_root() {
         evm_stop;
 }
 
-func private %std__lib__evm__effects__impl_trait_Evm_d0d8__mstore_401f(v0.i256, v1.i256) {
+func private %mstore(v0.i256, v1.i256) {
     block0:
         jump block1;
 
@@ -52,24 +52,7 @@ func private %std__lib__evm__effects__impl_trait_Evm_d0d8__mstore_401f(v0.i256, 
         return;
 }
 
-func private %std__lib__evm__effects__impl_trait_Evm_d0d8__mstore_401f_0(v0.i256, v1.i256) {
-    block0:
-        jump block1;
-
-    block1:
-        mstore v0 v1 i256;
-        return;
-}
-
-func private %std__lib__evm__effects__impl_trait_Evm_0098__revert_f9bb(v0.i256, v1.i256) {
-    block0:
-        jump block1;
-
-    block1:
-        evm_revert v0 v1;
-}
-
-func private %std__lib__evm__effects__impl_trait_Evm_0098__revert_f9bb_0(v0.i256, v1.i256) {
+func private %revert(v0.i256, v1.i256) {
     block0:
         jump block1;
 
