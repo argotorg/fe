@@ -6,9 +6,9 @@ input_file: crates/codegen/tests/fixtures/match_enum.fe
 target = "evm-ethereum-osaka"
 
 type @layout_0 = enum {
-    #A,
-    #B,
-    #C,
+    #variant_0,
+    #variant_1,
+    #variant_2,
 };
 
 func private %main() -> i8 {
@@ -16,7 +16,7 @@ func private %main() -> i8 {
         jump block1;
 
     block1:
-        v0.@layout_0 = enum.make @layout_0 #B;
+        v0.@layout_0 = enum.make @layout_0 #variant_1;
         v1.i8 = call %match_enum v0;
         return v1;
 }

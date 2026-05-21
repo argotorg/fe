@@ -6,8 +6,8 @@ input_file: crates/codegen/tests/fixtures/storage.fe
 target = "evm-ethereum-osaka"
 
 type @layout_0 = enum {
-    #Ok,
-    #Insufficient,
+    #variant_0,
+    #variant_1,
 };
 
 func private %abi_encode(v0.i256) {
@@ -324,7 +324,7 @@ func private %transfer_from_alice(v0.i256, v1.i256) -> @layout_0 {
         br v5 block2 block3;
 
     block2:
-        v6.@layout_0 = enum.make @layout_0 #Insufficient;
+        v6.@layout_0 = enum.make @layout_0 #variant_1;
         return v6;
 
     block3:
@@ -350,7 +350,7 @@ func private %transfer_from_alice(v0.i256, v1.i256) -> @layout_0 {
     block7:
         v25.i256 = add v1 1.i256;
         evm_sstore v25 v22;
-        v26.@layout_0 = enum.make @layout_0 #Ok;
+        v26.@layout_0 = enum.make @layout_0 #variant_0;
         return v26;
 }
 
@@ -365,7 +365,7 @@ func private %transfer_from_bob(v0.i256, v1.i256) -> @layout_0 {
         br v7 block2 block3;
 
     block2:
-        v8.@layout_0 = enum.make @layout_0 #Insufficient;
+        v8.@layout_0 = enum.make @layout_0 #variant_1;
         return v8;
 
     block3:
@@ -391,7 +391,7 @@ func private %transfer_from_bob(v0.i256, v1.i256) -> @layout_0 {
 
     block7:
         evm_sstore v1 v24;
-        v27.@layout_0 = enum.make @layout_0 #Ok;
+        v27.@layout_0 = enum.make @layout_0 #variant_0;
         return v27;
 }
 

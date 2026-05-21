@@ -8,11 +8,10 @@ target = "evm-ethereum-osaka"
 
 type @layout_0 = {};
 type @layout_1 = {@layout_0, i256};
-type @layout_2 = {@layout_0, i256};
 
 global private const @layout_1 $const_region_0 = {{}, 1};
 global private const @layout_1 $const_region_1 = {{}, 7};
-global private const @layout_2 $const_region_2 = {{}, 5};
+global private const @layout_1 $const_region_2 = {{}, 5};
 
 func private %empty_field_assign() {
     block0:
@@ -58,8 +57,8 @@ func private %tuple_with_empty() -> i256 {
         jump block1;
 
     block1:
-        v1.constref<@layout_2> = const.ref $const_region_2;
-        v2.constref<@layout_2> = const.ref $const_region_2;
+        v1.constref<@layout_1> = const.ref $const_region_2;
+        v2.constref<@layout_1> = const.ref $const_region_2;
         return 5.i256;
 }
 

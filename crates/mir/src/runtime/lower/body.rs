@@ -60,9 +60,9 @@ use super::{
         snapshot_source_place,
     },
     consts::{
-        aggregate_const_ref_class, aggregate_const_ref_region, const_scalar_for_class,
-        const_scalar_from_value, enum_tag_scalar, evaluated_const_ref_value, lower_const_region,
-        reified_const_ref_value_for_ty,
+        aggregate_const_ref_class, aggregate_const_ref_region, collect_const_ref_regions,
+        const_scalar_for_class, const_scalar_from_value, enum_tag_scalar,
+        evaluated_const_ref_value, lower_const_region, reified_const_ref_value_for_ty,
     },
     conversion::{RuntimeConversionEmitter, RuntimeConversionError, emit_runtime_coercion},
     infer::{InferenceResult, LocalStateInferer, merge_runtime_class},
@@ -284,30 +284,6 @@ fn expr_requires_runtime_eval_when_erased(expr: &NExpr<'_>) -> bool {
         | NExpr::CodeRegionOffset { .. }
         | NExpr::CodeRegionLen { .. } => false,
     }
-}
-
-fn collect_const_ref_regions<'db>(
-    db: &'db dyn MirDb,
-    env: RuntimeTypeEnv<'db>,
-    body: &NormalizedSemanticBody<'db>,
-) -> HashSet<ConstRegionId<'db>> {
-    body.blocks
-        .iter()
-        .flat_map(|block| block.stmts.iter())
-        .filter_map(|stmt| {
-            let NSStmtKind::Assign { dst, expr } = &stmt.kind else {
-                return None;
-            };
-            let NExpr::Const(SConst::Ref(cref)) = expr else {
-                return None;
-            };
-            aggregate_const_ref_region(
-                db,
-                env,
-                reified_const_ref_value_for_ty(db, body.owner, *cref, body.locals[dst.index()].ty),
-            )
-        })
-        .collect()
 }
 
 pub(super) struct RmirEmitter<'db> {
@@ -4022,33 +3998,31 @@ impl<'db> RmirEmitter<'db> {
             }
             RuntimeConversionError::Cycle { source, target } => ("cyclic", source, target),
         };
-        let layout_source_ty = |layout: LayoutId<'db>| match layout.data(self.db) {
-            crate::runtime::Layout::Struct(data) => {
-                data.source_ty.pretty_print(self.db).to_string()
-            }
-            crate::runtime::Layout::Array(data) => data.source_ty.pretty_print(self.db).to_string(),
-            crate::runtime::Layout::Enum(data) => data.source_ty.pretty_print(self.db).to_string(),
+        let layout_kind = |layout: LayoutId<'db>| match layout.data(self.db) {
+            crate::runtime::Layout::Struct(data) => format!("struct/{}", data.fields.len()),
+            crate::runtime::Layout::Array(data) => format!("array/{}", data.len),
+            crate::runtime::Layout::Enum(data) => format!("enum/{}", data.variants.len()),
         };
         let source_layout = match &source {
             RuntimeClass::Ref { .. } => source
                 .aggregate_layout()
-                .map(|layout| (layout, layout.data(self.db), layout_source_ty(layout))),
+                .map(|layout| (layout, layout.data(self.db), layout_kind(layout))),
             RuntimeClass::AggregateValue { layout }
             | RuntimeClass::RawAddr {
                 target: Some(layout),
                 ..
-            } => Some((*layout, layout.data(self.db), layout_source_ty(*layout))),
+            } => Some((*layout, layout.data(self.db), layout_kind(*layout))),
             RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { target: None, .. } => None,
         };
         let target_layout = match &target {
             RuntimeClass::Ref { .. } => target
                 .aggregate_layout()
-                .map(|layout| (layout, layout.data(self.db), layout_source_ty(layout))),
+                .map(|layout| (layout, layout.data(self.db), layout_kind(layout))),
             RuntimeClass::AggregateValue { layout }
             | RuntimeClass::RawAddr {
                 target: Some(layout),
                 ..
-            } => Some((*layout, layout.data(self.db), layout_source_ty(*layout))),
+            } => Some((*layout, layout.data(self.db), layout_kind(*layout))),
             RuntimeClass::Scalar(_) | RuntimeClass::RawAddr { target: None, .. } => None,
         };
         let owner = self
@@ -4980,13 +4954,20 @@ impl<'db> RmirEmitter<'db> {
     }
 
     fn const_lowering_ty(&self, fallback: TyId<'db>, target: &RuntimeClass<'db>) -> TyId<'db> {
-        target
-            .aggregate_layout()
-            .map_or(fallback, |layout| match layout.data(self.db) {
-                crate::runtime::Layout::Struct(layout) => layout.source_ty,
-                crate::runtime::Layout::Array(layout) => layout.source_ty,
-                crate::runtime::Layout::Enum(layout) => layout.source_ty,
-            })
+        if target.aggregate_layout().is_none() {
+            return fallback;
+        }
+        let mut ty = fallback;
+        while let Some(inner) = ty.as_view(self.db) {
+            ty = inner;
+        }
+        if let Some((_, inner)) = ty.as_borrow(self.db) {
+            ty = inner;
+            while let Some(inner) = ty.as_view(self.db) {
+                ty = inner;
+            }
+        }
+        ty
     }
 
     fn should_preserve_const_source_class(

@@ -25,9 +25,8 @@ pub(super) fn project_field_class<'db>(
             .cloned()
             .unwrap_or_else(|| {
                 panic!(
-                    "invalid field projection: field={field:?} source_ty={} fields={:?} class={class:?}",
-                    layout.source_ty.pretty_print(db),
-                    layout.fields,
+                    "invalid field projection: field={field:?} fields={:?} class={class:?}",
+                    layout.fields
                 )
             }),
         _ => panic!("invalid field projection layout"),

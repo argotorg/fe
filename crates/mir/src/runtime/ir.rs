@@ -432,7 +432,6 @@ impl<'db> LayoutId<'db> {
             LayoutKey::Struct(layout) => Layout::Struct(layout.clone()),
             LayoutKey::Array(layout) => Layout::Array(layout.clone()),
             LayoutKey::Enum(layout) => Layout::Enum(EnumLayout {
-                source_ty: layout.source_ty,
                 tag: ScalarClass {
                     repr: enum_tag_repr(layout.variants.len()),
                     role: ScalarRole::EnumTag { enum_layout: self },
@@ -459,7 +458,6 @@ pub enum Layout<'db> {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub struct StructLayout<'db> {
-    pub source_ty: TyId<'db>,
     pub fields: Box<[RuntimeClass<'db>]>,
 }
 
@@ -475,27 +473,23 @@ impl<'db> StructLayout<'db> {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub struct ArrayLayout<'db> {
-    pub source_ty: TyId<'db>,
     pub elem: RuntimeClass<'db>,
     pub len: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub struct EnumLayout<'db> {
-    pub source_ty: TyId<'db>,
     pub tag: ScalarClass<'db>,
     pub variants: Box<[EnumVariantLayout<'db>]>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub struct EnumLayoutKey<'db> {
-    pub source_ty: TyId<'db>,
     pub variants: Box<[EnumVariantLayout<'db>]>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub struct EnumVariantLayout<'db> {
-    pub name: String,
     pub fields: Box<[RuntimeClass<'db>]>,
 }
 

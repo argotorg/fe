@@ -7,7 +7,6 @@ target = "evm-ethereum-osaka"
 
 type @layout_0 = {};
 type @layout_1 = {@layout_0};
-type @layout_2 = {@layout_0};
 
 func private %abi_encode(v0.i256) {
     block0:
@@ -314,7 +313,7 @@ func inline(always) private %set__gcbe1(v0.objref<@layout_1>, v1.i256, v2.i256) 
         return;
 }
 
-func inline(always) private %set__g7fdf(v0.objref<@layout_2>, v1.i256, v2.i256) {
+func inline(always) private %set__g7fdf(v0.objref<@layout_1>, v1.i256, v2.i256) {
     block0:
         jump block1;
 
@@ -328,7 +327,7 @@ func private %set_allowance(v0.i256, v1.i256) {
         jump block1;
 
     block1:
-        call %set__g7fdf undef.objref<@layout_2> v0 v1;
+        call %set__g7fdf undef.objref<@layout_1> v0 v1;
         return;
 }
 
@@ -351,7 +350,7 @@ func inline(always) private %set_unchecked__gcbe1(v0.objref<@layout_1>, v1.i256,
         return;
 }
 
-func inline(always) private %set_unchecked__g7fdf(v0.objref<@layout_2>, v1.i256, v2.i256) {
+func inline(always) private %set_unchecked__g7fdf(v0.objref<@layout_1>, v1.i256, v2.i256) {
     block0:
         jump block1;
 

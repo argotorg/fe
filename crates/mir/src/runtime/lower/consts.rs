@@ -1,8 +1,12 @@
+use std::collections::HashSet;
+
+use cranelift_entity::EntityRef;
 use hir::analysis::{
     semantic::{
-        SemConstId, SemConstScalar, SemConstValue, SemanticConstRef, SemanticInstance,
-        VariantIndex, eval_const_ref, normalize_int_to_shape, reify_runtime_const_for_ty,
-        sem_const_ty,
+        NExpr, SConst, SemConstId, SemConstScalar, SemConstValue, SemanticConstRef,
+        SemanticInstance, VariantIndex,
+        borrowck::{NSStmtKind, NormalizedSemanticBody},
+        eval_const_ref, normalize_int_to_shape, reify_runtime_const_for_ty, sem_const_ty,
     },
     ty::const_ty::{ConstTyData, EvaluatedConstTy, evaluate_type_level_int_const_expr},
     ty::ty_def::{TyData, TyId},
@@ -39,6 +43,30 @@ pub(super) fn reified_const_ref_value_for_ty<'db>(
 ) -> SemConstId<'db> {
     let value = evaluated_const_ref_value(db, cref);
     reify_runtime_const_for_ty(db, semantic, expected_ty, value).unwrap_or(value)
+}
+
+pub(super) fn collect_const_ref_regions<'db>(
+    db: &'db dyn MirDb,
+    env: RuntimeTypeEnv<'db>,
+    body: &NormalizedSemanticBody<'db>,
+) -> HashSet<ConstRegionId<'db>> {
+    body.blocks
+        .iter()
+        .flat_map(|block| block.stmts.iter())
+        .filter_map(|stmt| {
+            let NSStmtKind::Assign { dst, expr } = &stmt.kind else {
+                return None;
+            };
+            let NExpr::Const(SConst::Ref(cref)) = expr else {
+                return None;
+            };
+            aggregate_const_ref_region(
+                db,
+                env,
+                reified_const_ref_value_for_ty(db, body.owner, *cref, body.locals[dst.index()].ty),
+            )
+        })
+        .collect()
 }
 
 pub(super) fn runtime_const_value_class<'db>(

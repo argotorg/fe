@@ -97,7 +97,7 @@ func private %std__lib__evm__effects__impl_trait_Evm_d0d8__mstore_c9f4_0(v0.i256
         return;
 }
 
-func private %core__lib__effect_ref__impl_trait_MemPtr_ec03__raw__g4a95_0a9d(v0.i256) -> i256 {
+func private %core__lib__effect_ref__impl_trait_MemPtr_ec03__raw__g4a95_06e3(v0.i256) -> i256 {
     block0:
         jump block1;
 
@@ -105,22 +105,12 @@ func private %core__lib__effect_ref__impl_trait_MemPtr_ec03__raw__g4a95_0a9d(v0.
         return v0;
 }
 
-func private %core__lib__effect_ref__impl_trait_MemPtr_ec03__raw__g4a95_0a9d_0(v0.i256) -> i256 {
+func private %core__lib__effect_ref__impl_trait_MemPtr_ec03__raw__g4a95_06e3_0(v0.i256) -> i256 {
     block0:
         jump block1;
 
     block1:
         return v0;
-}
-
-func private %raw_store__gc18b(v0.i256) {
-    block0:
-        jump block1;
-
-    block1:
-        v2.i256 = call %core__lib__effect_ref__impl_trait_MemPtr_ec03__raw__g4a95_0a9d_0 v0;
-        call %std__lib__evm__effects__impl_trait_Evm_d0d8__mstore_c9f4_0 v2 8.i256;
-        return;
 }
 
 func private %raw_store__g64c6(v0.i256) {
@@ -128,8 +118,18 @@ func private %raw_store__g64c6(v0.i256) {
         jump block1;
 
     block1:
-        v2.i256 = call %core__lib__effect_ref__impl_trait_MemPtr_ec03__raw__g4a95_0a9d v0;
+        v2.i256 = call %core__lib__effect_ref__impl_trait_MemPtr_ec03__raw__g4a95_06e3 v0;
         call %std__lib__evm__effects__impl_trait_Evm_d0d8__mstore_c9f4 v2 8.i256;
+        return;
+}
+
+func private %raw_store__gc18b(v0.i256) {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i256 = call %core__lib__effect_ref__impl_trait_MemPtr_ec03__raw__g4a95_06e3_0 v0;
+        call %std__lib__evm__effects__impl_trait_Evm_d0d8__mstore_c9f4_0 v2 8.i256;
         return;
 }
 

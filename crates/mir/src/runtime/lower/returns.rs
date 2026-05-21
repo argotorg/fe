@@ -977,8 +977,24 @@ pub contract C {
             .copied()
             .find(|function| function.symbol(&db).contains("try_lock"))
             .expect("missing specialized try_lock runtime function");
-        let ret = function
-            .instance(&db)
+        let instance = function.instance(&db);
+        let semantic = instance
+            .key(&db)
+            .semantic(&db)
+            .expect("try_lock should be a semantic runtime instance");
+        let return_ty = semantic.key(&db).typed_body(&db).result_ty();
+        let option_enum = return_ty
+            .as_enum(&db)
+            .expect("try_lock should return Option");
+        let some_variant_idx = option_enum
+            .variants(&db)
+            .position(|variant| {
+                variant
+                    .name(&db)
+                    .is_some_and(|name| name.data(&db) == "Some")
+            })
+            .expect("Option should include Some");
+        let ret = instance
             .interface_signature(&db)
             .ret
             .expect("try_lock should return a runtime-visible Option");
@@ -990,8 +1006,7 @@ pub contract C {
         };
         let some_variant = enum_layout
             .variants
-            .iter()
-            .find(|variant| variant.name == "Some")
+            .get(some_variant_idx)
             .expect("Option layout should include Some");
 
         assert!(

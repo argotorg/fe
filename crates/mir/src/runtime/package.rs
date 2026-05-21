@@ -2395,8 +2395,7 @@ fn layout_sort_key<'db>(db: &'db dyn MirDb, layout: LayoutId<'db>) -> String {
 fn layout_sort_key_query<'db>(db: &'db dyn MirDb, layout: LayoutId<'db>) -> String {
     match layout.key(db) {
         LayoutKey::Struct(layout) => format!(
-            "struct:{}:[{}]",
-            type_identity(db, layout.source_ty),
+            "struct:[{}]",
             layout
                 .fields
                 .iter()
@@ -2405,20 +2404,18 @@ fn layout_sort_key_query<'db>(db: &'db dyn MirDb, layout: LayoutId<'db>) -> Stri
                 .join(",")
         ),
         LayoutKey::Array(layout) => format!(
-            "array:{}:{}:{}",
-            type_identity(db, layout.source_ty),
+            "array:{}:{}",
             runtime_class_sort_key(db, &layout.elem),
             layout.len
         ),
         LayoutKey::Enum(layout) => format!(
-            "enum:{}:[{}]",
-            type_identity(db, layout.source_ty),
+            "enum:[{}]",
             layout
                 .variants
                 .iter()
-                .map(|variant| format!(
-                    "{}:[{}]",
-                    variant.name,
+                .enumerate()
+                .map(|(idx, variant)| format!(
+                    "{idx}:[{}]",
                     variant
                         .fields
                         .iter()

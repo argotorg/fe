@@ -292,7 +292,14 @@ fn provider_root_trait_receivers_preserve_concrete_runtime_layouts() {
             let Layout::Struct(layout_data) = layout.data(&db) else {
                 panic!("storage receiver should use the concrete Pair layout:\n{body:#?}");
             };
-            assert_eq!(layout_data.source_ty.pretty_print(&db).to_string(), "Pair");
+            assert_eq!(layout_data.fields.len(), 2);
+            assert!(
+                layout_data
+                    .fields
+                    .iter()
+                    .all(|field| matches!(field, RuntimeClass::Scalar(_))),
+                "Pair layout should carry two scalar fields:\n{layout_data:#?}",
+            );
 
             let (callee, arg) = body
                 .blocks
@@ -375,7 +382,14 @@ fn view_receiver_with_storage_aggregate_keeps_receiver_runtime_visible() {
             let Layout::Struct(layout_data) = layout.data(&db) else {
                 panic!("view receiver should point at the stored Pair layout:\n{body:#?}");
             };
-            assert_eq!(layout_data.source_ty.pretty_print(&db).to_string(), "Pair");
+            assert_eq!(layout_data.fields.len(), 2);
+            assert!(
+                layout_data
+                    .fields
+                    .iter()
+                    .all(|field| matches!(field, RuntimeClass::Scalar(_))),
+                "Pair layout should carry two scalar fields:\n{layout_data:#?}",
+            );
             assert!(
                 body.blocks
                     .iter()
@@ -1782,9 +1796,9 @@ fn test_readonly_with_provider() {
 }
 
 #[test]
-fn borrow_typed_aggregate_literals_lower_without_const_shape_mismatch() {
+fn borrow_typed_aggregate_literals_can_lower_as_const_refs() {
     with_runtime_package!(
-        "borrow_typed_aggregate_literals_lower_without_const_shape_mismatch.fe",
+        "borrow_typed_aggregate_literals_can_lower_as_const_refs.fe",
         r#"fn first(xs: ref [u256; 2]) -> u256 {
     xs[0]
 }
@@ -1793,34 +1807,61 @@ fn entry() -> u256 {
     first([10, 20])
 }"#,
         |db, package| {
-            let debug = package
+            let first = package
                 .functions(&db)
                 .iter()
-                .map(|function| {
-                    let body = function.instance(&db).body(&db);
-                    format!("{}:\n{body:#?}", function.symbol(&db))
+                .copied()
+                .find(|function| function.symbol(&db) == "first")
+                .expect("first runtime function")
+                .instance(&db);
+            let entry = package
+                .functions(&db)
+                .iter()
+                .copied()
+                .find(|function| function.symbol(&db) == "entry")
+                .expect("entry runtime function");
+            let body = entry.instance(&db).body(&db);
+            let first_args = body
+                .blocks
+                .iter()
+                .flat_map(|block| block.stmts.iter())
+                .filter_map(|stmt| match stmt {
+                    RStmt::Assign {
+                        expr: RExpr::Call { callee, args },
+                        ..
+                    } if *callee == first => Some(args[0]),
+                    _ => None,
                 })
                 .collect::<Vec<_>>();
 
+            assert_eq!(
+                first_args.len(),
+                1,
+                "entry should call first exactly once:\n{body:#?}"
+            );
             assert!(
-                package.functions(&db).iter().any(|function| {
-                    let body = function.instance(&db).body(&db);
-                    body.blocks
-                        .iter()
-                        .flat_map(|block| block.stmts.iter())
-                        .any(|stmt| {
-                            matches!(
-                                stmt,
-                                RStmt::Assign {
-                                    expr: RExpr::MaterializeToObject { .. }
-                                        | RExpr::AllocObject { .. },
-                                    ..
-                                }
-                            )
-                        })
-                }),
-                "borrow-typed aggregate literals should materialize through normal object/value lowering:\n{}",
-                debug.join("\n\n")
+                matches!(
+                    body.value_class(first_args[0]),
+                    Some(RuntimeClass::Ref {
+                        kind: RefKind::Const,
+                        ..
+                    })
+                ),
+                "borrow-typed aggregate literal should be passed as a const ref:\n{body:#?}"
+            );
+            assert!(
+                !body
+                    .blocks
+                    .iter()
+                    .flat_map(|block| block.stmts.iter())
+                    .any(|stmt| matches!(
+                        stmt,
+                        RStmt::Assign {
+                            expr: RExpr::MaterializeToObject { .. } | RExpr::AllocObject { .. },
+                            ..
+                        }
+                    )),
+                "borrow-typed aggregate literal should not materialize before the call:\n{body:#?}"
             );
         }
     );
