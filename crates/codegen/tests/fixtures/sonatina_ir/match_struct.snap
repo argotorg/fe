@@ -6,19 +6,18 @@ input_file: crates/codegen/tests/fixtures/match_struct.fe
 target = "evm-ethereum-osaka"
 
 type @layout_0 = {i8, i8};
-type @layout_1 = {i8, i8};
 
-global private const @layout_1 $const_region_0 = {1, 2};
-global private const @layout_1 $const_region_1 = {0, 1};
+global private const @layout_0 $const_region_0 = {1, 2};
+global private const @layout_0 $const_region_1 = {0, 1};
 
 func private %main() -> @layout_0 {
     block0:
         jump block1;
 
     block1:
-        v2.constref<@layout_1> = const.ref $const_region_0;
+        v2.constref<@layout_0> = const.ref $const_region_0;
         v3.i8 = call %match_struct_fields v2;
-        v5.constref<@layout_1> = const.ref $const_region_1;
+        v5.constref<@layout_0> = const.ref $const_region_1;
         v6.i8 = call %match_struct_wildcard v5;
         v9.@layout_0 = insert_value undef.@layout_0 0.i256 v3;
         v11.@layout_0 = insert_value v9 1.i256 v6;
@@ -34,7 +33,7 @@ func private %main_root() {
         evm_stop;
 }
 
-func private %match_struct_fields(v0.constref<@layout_1>) -> i8 {
+func private %match_struct_fields(v0.constref<@layout_0>) -> i8 {
     block0:
         v1.*i8 = alloca i8;
         v2.*i8 = alloca i8;
@@ -114,7 +113,7 @@ func private %match_struct_fields(v0.constref<@layout_1>) -> i8 {
         jump block2;
 }
 
-func private %match_struct_wildcard(v0.constref<@layout_1>) -> i8 {
+func private %match_struct_wildcard(v0.constref<@layout_0>) -> i8 {
     block0:
         jump block1;
 

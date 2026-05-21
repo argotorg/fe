@@ -132,13 +132,7 @@ pub(crate) fn runtime_abi_plan<'db>(
             .chain(evidence.iter().map(|result| result.class.clone()))
             .collect::<Vec<_>>()
             .into_boxed_slice();
-        let layout = LayoutId::new(
-            db,
-            LayoutKey::Struct(StructLayout {
-                source_ty: semantic.key(db).typed_body(db).result_ty(),
-                fields,
-            }),
-        );
+        let layout = LayoutId::new(db, LayoutKey::Struct(StructLayout { fields }));
         (Some(RuntimeClass::AggregateValue { layout }), Some(layout))
     };
 

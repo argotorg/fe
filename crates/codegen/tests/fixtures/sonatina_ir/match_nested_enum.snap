@@ -1,18 +1,17 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 455
 expression: output
 input_file: crates/codegen/tests/fixtures/match_nested_enum.fe
 ---
 target = "evm-ethereum-osaka"
 
 type @layout_0 = enum {
-    #Unit,
-    #Value(i8),
+    #variant_0,
+    #variant_1(i8),
 };
 type @layout_1 = enum {
-    #First(@layout_0),
-    #Second(i8),
+    #variant_0(@layout_0),
+    #variant_1(i8),
 };
 
 func private %main() -> i8 {
@@ -20,9 +19,9 @@ func private %main() -> i8 {
         jump block1;
 
     block1:
-        v1.@layout_0 = enum.make @layout_0 #Value 7.i8;
-        v2.@layout_0 = enum.make @layout_0 #Value 7.i8;
-        v3.@layout_1 = enum.make @layout_1 #First v2;
+        v1.@layout_0 = enum.make @layout_0 #variant_1 7.i8;
+        v2.@layout_0 = enum.make @layout_0 #variant_1 7.i8;
+        v3.@layout_1 = enum.make @layout_1 #variant_0 v2;
         v4.i8 = call %match_nested_enum v3;
         return v4;
 }
@@ -49,22 +48,22 @@ func private %match_nested_enum(v0.@layout_1) -> i8 {
         return v5;
 
     block3:
-        enum.assert_variant v0 #First;
-        v8.@layout_0 = enum.extract v0 #First 0.i256;
+        enum.assert_variant v0 #variant_0;
+        v8.@layout_0 = enum.extract v0 #variant_0 0.i256;
         v9.enumtag(@layout_0) = enum.tag v8;
         br_table v9 (0.enumtag(@layout_0) block5) (1.enumtag(@layout_0) block6);
 
     block4:
-        enum.assert_variant v0 #Second;
-        v13.i8 = enum.extract v0 #Second 0.i256;
+        enum.assert_variant v0 #variant_1;
+        v13.i8 = enum.extract v0 #variant_1 0.i256;
         jump block2;
 
     block5:
         jump block2;
 
     block6:
-        enum.assert_variant v8 #Value;
-        v16.i8 = enum.extract v8 #Value 0.i256;
+        enum.assert_variant v8 #variant_1;
+        v16.i8 = enum.extract v8 #variant_1 0.i256;
         jump block2;
 }
 

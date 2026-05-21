@@ -474,7 +474,7 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
         boundary: &StagedBoundary<'db>,
     ) -> Option<SelectedRuntimeArg<'db>> {
         let boundary = self.specialized_boundary(local, boundary);
-        self.select_runtime_boundary_compatible_value(local, &boundary)
+        self.select_runtime_boundary_compatible_value_for_places(local, &boundary, true)
     }
 
     fn select_free_boundary_compatible_value(

@@ -6,8 +6,8 @@ input_file: crates/codegen/tests/fixtures/enum_variant_contract.fe
 target = "evm-ethereum-osaka"
 
 type @layout_0 = enum {
-    #None,
-    #Some(i256),
+    #variant_0,
+    #variant_1(i256),
 };
 
 func private %abi_encode_u256(v0.i256) {
@@ -115,7 +115,7 @@ func private %runtime() {
 
     block2:
         v7.i256 = call %calldataload 4.i256;
-        v8.@layout_0 = enum.make @layout_0 #Some v7;
+        v8.@layout_0 = enum.make @layout_0 #variant_1 v7;
         v9.enumtag(@layout_0) = enum.tag v8;
         br_table v9 (1.enumtag(@layout_0) block6) (0.enumtag(@layout_0) block7);
 
@@ -132,16 +132,16 @@ func private %runtime() {
         unreachable;
 
     block6:
-        enum.assert_variant v8 #Some;
-        v17.i256 = enum.extract v8 #Some 0.i256;
+        enum.assert_variant v8 #variant_1;
+        v17.i256 = enum.extract v8 #variant_1 0.i256;
         jump block5;
 
     block7:
         jump block5;
 
     block8:
-        v18.@layout_0 = enum.make @layout_0 #None;
-        v19.@layout_0 = enum.make @layout_0 #None;
+        v18.@layout_0 = enum.make @layout_0 #variant_0;
+        v19.@layout_0 = enum.make @layout_0 #variant_0;
         v20.enumtag(@layout_0) = enum.tag v19;
         br_table v20 (1.enumtag(@layout_0) block12) (0.enumtag(@layout_0) block13);
 
@@ -158,8 +158,8 @@ func private %runtime() {
         unreachable;
 
     block12:
-        enum.assert_variant v19 #Some;
-        v26.i256 = enum.extract v19 #Some 0.i256;
+        enum.assert_variant v19 #variant_1;
+        v26.i256 = enum.extract v19 #variant_1 0.i256;
         jump block11;
 
     block13:
@@ -167,7 +167,7 @@ func private %runtime() {
 
     block14:
         v27.i256 = call %calldataload 4.i256;
-        v28.@layout_0 = enum.make @layout_0 #Some v27;
+        v28.@layout_0 = enum.make @layout_0 #variant_1 v27;
         v29.enumtag(@layout_0) = enum.tag v28;
         br_table v29 (1.enumtag(@layout_0) block18) (0.enumtag(@layout_0) block19);
 

@@ -1037,13 +1037,9 @@ fn format_ref_view<'db>(db: &'db dyn MirDb, view: &RefView<'db>) -> String {
 
 fn format_layout<'db>(db: &'db dyn MirDb, layout: LayoutId<'db>) -> String {
     match layout.data(db) {
-        Layout::Struct(layout) => format!("struct {}", layout.source_ty.pretty_print(db)),
-        Layout::Array(layout) => format!(
-            "array {} x {}",
-            layout.source_ty.pretty_print(db),
-            layout.len
-        ),
-        Layout::Enum(layout) => format!("enum {}", layout.source_ty.pretty_print(db)),
+        Layout::Struct(layout) => format!("struct/{}", layout.fields.len()),
+        Layout::Array(layout) => format!("array/{}", layout.len),
+        Layout::Enum(layout) => format!("enum/{}", layout.variants.len()),
     }
 }
 
@@ -1054,7 +1050,7 @@ fn format_variant<'db>(db: &'db dyn MirDb, variant: VariantId<'db>) -> String {
             layout
                 .variants
                 .get(variant.index as usize)
-                .map(|variant_layout| variant_layout.name.clone())
+                .map(|_| format!("variant_{}", variant.index))
         })
         .unwrap_or_else(|| format!("#{}", variant.index))
 }

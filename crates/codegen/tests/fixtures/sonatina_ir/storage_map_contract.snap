@@ -6,7 +6,6 @@ input_file: crates/codegen/tests/fixtures/storage_map_contract.fe
 target = "evm-ethereum-osaka"
 
 type @layout_0 = {i256};
-type @layout_1 = {i256};
 
 func private %abi_encode(v0.i256) {
     block0:
@@ -187,23 +186,23 @@ func private %new__g219d(v0.i256) -> @layout_0 {
         return v6;
 }
 
-func private %new__g10e6(v0.i256) -> @layout_1 {
+func private %new__g10e6(v0.i256) -> @layout_0 {
     block0:
         jump block1;
 
     block1:
-        v2.@layout_1 = call %new_unchecked__gcbe1 v0;
+        v2.@layout_0 = call %new_unchecked__gcbe1 v0;
         v4.i256 = extract_value v2 0.i256;
-        v6.@layout_1 = insert_value undef.@layout_1 0.i256 v4;
+        v6.@layout_0 = insert_value undef.@layout_0 0.i256 v4;
         return v6;
 }
 
-func private %new_unchecked__gcbe1(v0.i256) -> @layout_1 {
+func private %new_unchecked__gcbe1(v0.i256) -> @layout_0 {
     block0:
         jump block1;
 
     block1:
-        v4.@layout_1 = insert_value undef.@layout_1 0.i256 v0;
+        v4.@layout_0 = insert_value undef.@layout_0 0.i256 v0;
         return v4;
 }
 
@@ -247,7 +246,7 @@ func private %runtime() {
     block1:
         v1.i256 = call %calldataload 0.i256;
         v3.i256 = shr 224.i256 v1;
-        v4.@layout_1 = call %new__g10e6 0.i256;
+        v4.@layout_0 = call %new__g10e6 0.i256;
         v5.i256 = extract_value v4 0.i256;
         v7.@layout_0 = call %new__g219d 1.i256;
         v8.i256 = extract_value v7 0.i256;

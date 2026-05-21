@@ -606,8 +606,7 @@ pub(crate) fn project_field_class<'db>(
     project_field(&program, class.clone(), field).unwrap_or_else(|_| {
         match class.aggregate_layout().map(|layout| layout.data(db)) {
             Some(crate::runtime::Layout::Struct(layout)) => panic!(
-                "invalid field projection: field={field:?} source_ty={} fields={:?} class={class:?}",
-                layout.source_ty.pretty_print(db),
+                "invalid field projection: field={field:?} fields={:?} class={class:?}",
                 layout.fields,
             ),
             _ => panic!("invalid field projection class"),
