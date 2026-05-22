@@ -18,9 +18,16 @@ sonatina-verifier.workspace = true
 smallvec.workspace = true
 smallvec1.workspace = true
 tracing.workspace = true
+gimli.workspace = true
+object.workspace = true
+cozo = { version = "0.7.6", default-features = false, features = ["storage-sqlite", "storage-sqlite-src", "rayon"], optional = true }
+url.workspace = true
+
+[features]
+default = []
+datalog = ["dep:cozo"]
 
 [dev-dependencies]
 dir-test.workspace = true
 test-utils.workspace = true
-url.workspace = true
 hir = { workspace = true, features = ["testutils"] }
