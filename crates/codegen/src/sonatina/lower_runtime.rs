@@ -67,11 +67,13 @@ use crate::{
 const PANIC_OVERFLOW: u64 = 0x11;
 const PANIC_DIVISION_BY_ZERO: u64 = 0x12;
 
+pub type SonatinaOriginMap = Vec<(FuncRef, sonatina_ir::InstId, common::provenance::ProvenanceNodeId)>;
+
 pub(super) fn compile_runtime_package_sonatina(
     db: &DriverDataBase,
     package: &RuntimePackage<'_>,
     layout: TargetDataLayout,
-) -> Result<Module, LowerError> {
+) -> Result<(Module, SonatinaOriginMap), LowerError> {
     let _ = layout;
     let builder = ModuleBuilder::new(create_module_ctx());
     let isa = super::create_evm_isa();
@@ -80,7 +82,8 @@ pub(super) fn compile_runtime_package_sonatina(
     lowerer.lower_const_regions()?;
     lowerer.lower_bodies()?;
     lowerer.declare_objects()?;
-    Ok(lowerer.finish())
+    let (module, origins) = lowerer.finish();
+    Ok((module, origins))
 }
 
 struct ModuleLowerer<'db, 'a> {
@@ -96,6 +99,7 @@ struct ModuleLowerer<'db, 'a> {
     const_globals: FxHashMap<ConstRegionId<'db>, GlobalVariableRef>,
     const_names: FxHashMap<ConstRegionId<'db>, String>,
     explicit_code_region_sections: FxHashSet<(mir::RuntimeObject<'db>, mir::RuntimeSectionName)>,
+    all_inst_origins: Vec<(FuncRef, sonatina_ir::InstId, common::provenance::ProvenanceNodeId)>,
 }
 
 impl<'db, 'a> ModuleLowerer<'db, 'a> {
@@ -118,11 +122,12 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             const_globals: FxHashMap::default(),
             const_names: FxHashMap::default(),
             explicit_code_region_sections: FxHashSet::default(),
+            all_inst_origins: Vec::new(),
         }
     }
 
-    fn finish(self) -> Module {
-        self.builder.build()
+    fn finish(self) -> (Module, Vec<(FuncRef, sonatina_ir::InstId, common::provenance::ProvenanceNodeId)>) {
+        (self.builder.build(), self.all_inst_origins)
     }
 
     fn inst_set(&self) -> &'static EvmInstSet {
@@ -295,7 +300,10 @@ impl<'db, 'a> ModuleLowerer<'db, 'a> {
             let body = function.instance(self.db).body(self.db);
             let func_ref = self.func_ref(function.instance(self.db))?;
             let ctx = FunctionLowerer::new(self, body, func_ref)?;
-            ctx.lower()?;
+            let origins = ctx.lower()?;
+            self.all_inst_origins.extend(origins.into_iter().map(|(inst, origin)| {
+                (func_ref, inst, origin)
+            }));
         }
         Ok(())
     }
@@ -828,6 +836,7 @@ struct FunctionLowerer<'ctx, 'db, 'a> {
     empty_revert_block: Option<BlockId>,
     overflow_panic_block: Option<BlockId>,
     division_by_zero_panic_block: Option<BlockId>,
+    inst_origins: Vec<(sonatina_ir::InstId, common::provenance::ProvenanceNodeId)>,
 }
 
 #[derive(Clone, Copy)]
@@ -886,10 +895,11 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
             empty_revert_block: None,
             overflow_panic_block: None,
             division_by_zero_panic_block: None,
+            inst_origins: Vec::new(),
         })
     }
 
-    fn lower(mut self) -> Result<(), LowerError> {
+    fn lower(mut self) -> Result<Vec<(sonatina_ir::InstId, common::provenance::ProvenanceNodeId)>, LowerError> {
         let entry_block = self.block_id(RBlockId::from_u32(0))?;
         self.fb.switch_to_block(self.prologue_block);
         self.initialize_locals().map_err(|err| {
@@ -914,20 +924,34 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
                 .switch_to_block(self.block_id(RBlockId::from_u32(idx as u32))?);
             let mut terminated = false;
             for (stmt_idx, stmt) in block.stmts.iter().enumerate() {
-                if matches!(
-                    self.lower_stmt(stmt).map_err(|err| {
-                        self.with_body_context(
-                            format!(
-                                "while lowering `{}` at bb{idx}[{stmt_idx}]",
-                                self.module.function_symbol(self.body.owner)
-                            ),
-                            Some(RBlockId::from_u32(idx as u32)),
-                            Some(stmt_idx),
-                        )
-                        .wrap(err)
-                    })?,
-                    Lowered::Terminated
-                ) {
+                let origin = block.stmt_origins.get(stmt_idx).copied()
+                    .unwrap_or(common::provenance::ProvenanceNodeId::new(
+                        common::provenance::IrLevel::Mir, stmt_idx as u32,
+                        common::provenance::TransformTag::MirToSonatina,
+                    ));
+                let inst_count_before = self.fb.func.dfg.insts.len();
+                let lowered = self.lower_stmt(stmt).map_err(|err| {
+                    self.with_body_context(
+                        format!(
+                            "while lowering `{}` at bb{idx}[{stmt_idx}]",
+                            self.module.function_symbol(self.body.owner)
+                        ),
+                        Some(RBlockId::from_u32(idx as u32)),
+                        Some(stmt_idx),
+                    )
+                    .wrap(err)
+                })?;
+
+                // Tag all new instructions with this MIR statement's origin
+                let inst_count_after = self.fb.func.dfg.insts.len();
+                for inst_idx in inst_count_before..inst_count_after {
+                    self.inst_origins.push((
+                        sonatina_ir::InstId(inst_idx as u32),
+                        origin,
+                    ));
+                }
+
+                if matches!(lowered, Lowered::Terminated) {
                     self.pending_enum_proof = None;
                     terminated = true;
                     break;
@@ -951,7 +975,7 @@ impl<'ctx, 'db, 'a> FunctionLowerer<'ctx, 'db, 'a> {
         }
         self.fb.seal_all();
         self.fb.finish();
-        Ok(())
+        Ok(self.inst_origins)
     }
 
     fn block_id(&self, block: RBlockId) -> Result<BlockId, LowerError> {

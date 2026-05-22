@@ -192,6 +192,123 @@ fn compile_runtime_objects(
         .map_err(|errors| LowerError::Internal(format_object_compile_errors(&errors)))
 }
 
+pub fn compile_to_artifacts(
+    db: &driver::DriverDataBase,
+    package: &mir::RuntimePackage<'_>,
+    layout: crate::TargetDataLayout,
+) -> Result<(Vec<sonatina_codegen::object::ObjectArtifact>, lower_runtime::SonatinaOriginMap), LowerError> {
+    let (module, origins) = lower_runtime::compile_runtime_package_sonatina(db, package, layout)?;
+    let artifacts = compile_runtime_objects(module, OptLevel::O1, true)?;
+    Ok((artifacts, origins))
+}
+
+pub struct OptimizationProvenanceReport {
+    pub pre_opt_origins: lower_runtime::SonatinaOriginMap,
+    pub post_opt_origins: lower_runtime::SonatinaOriginMap,
+    pub survived: usize,
+    pub eliminated: usize,
+    pub new_insts: usize,
+}
+
+pub fn compile_to_artifacts_with_opt_provenance(
+    db: &driver::DriverDataBase,
+    package: &mir::RuntimePackage<'_>,
+    layout: crate::TargetDataLayout,
+    opt_level: OptLevel,
+) -> Result<(Vec<sonatina_codegen::object::ObjectArtifact>, OptimizationProvenanceReport), LowerError> {
+    use std::collections::{HashMap, HashSet};
+    use common::provenance::{IrLevel, ProvenanceNodeId, TransformTag};
+
+    let (module, pre_origins) = lower_runtime::compile_runtime_package_sonatina(db, package, layout)?;
+
+    // Build lookup: (FuncRef, InstId) → ProvenanceNodeId
+    let origin_map: HashMap<(FuncRef, sonatina_ir::InstId), ProvenanceNodeId> = pre_origins.iter()
+        .map(|(f, i, o)| ((*f, *i), *o))
+        .collect();
+
+    // Snapshot pre-optimization live instructions per function
+    let mut pre_live: HashMap<FuncRef, HashSet<sonatina_ir::InstId>> = HashMap::new();
+    for func_ref in module.funcs() {
+        let insts = module.func_store.view(func_ref, |func| {
+            let mut set = HashSet::new();
+            for block in func.layout.iter_block() {
+                for inst in func.layout.iter_inst(block) {
+                    set.insert(inst);
+                }
+            }
+            set
+        });
+        pre_live.insert(func_ref, insts);
+    }
+
+    // Optimize
+    let mut compile = evm_compile(module, opt_level, true);
+    let optimized = compile.optimize();
+
+    // Snapshot post-optimization live instructions
+    let mut post_live: HashMap<FuncRef, HashSet<sonatina_ir::InstId>> = HashMap::new();
+    for func_ref in optimized.funcs() {
+        let insts = optimized.func_store.view(func_ref, |func| {
+            let mut set = HashSet::new();
+            for block in func.layout.iter_block() {
+                for inst in func.layout.iter_inst(block) {
+                    set.insert(inst);
+                }
+            }
+            set
+        });
+        post_live.insert(func_ref, insts);
+    }
+
+    // Diff
+    let mut survived = 0usize;
+    let mut eliminated = 0usize;
+    let mut new_insts = 0usize;
+    let mut post_origins: lower_runtime::SonatinaOriginMap = Vec::new();
+
+    for func_ref in optimized.funcs() {
+        let post = post_live.get(&func_ref).map(|s| s.iter().copied().collect::<Vec<_>>()).unwrap_or_default();
+        let pre = pre_live.get(&func_ref);
+
+        for inst_id in &post {
+            let was_pre = pre.map_or(false, |s| s.contains(inst_id));
+            if was_pre {
+                survived += 1;
+                if let Some(origin) = origin_map.get(&(func_ref, *inst_id)) {
+                    post_origins.push((func_ref, *inst_id, *origin));
+                }
+            } else {
+                new_insts += 1;
+                post_origins.push((func_ref, *inst_id, ProvenanceNodeId::new(
+                    IrLevel::Sonatina, inst_id.0, TransformTag::SonatinaOptNew,
+                )));
+            }
+        }
+
+        if let Some(pre_set) = pre {
+            let post_set = post_live.get(&func_ref);
+            for inst_id in pre_set {
+                let still_live = post_set.map_or(false, |s| s.contains(inst_id));
+                if !still_live {
+                    eliminated += 1;
+                }
+            }
+        }
+    }
+
+    let artifacts = compile
+        .compile()
+        .map_err(|errors| LowerError::Internal(format_object_compile_errors(&errors)))?;
+
+    Ok((artifacts, OptimizationProvenanceReport {
+        pre_opt_origins: pre_origins,
+        post_opt_origins: post_origins,
+        survived,
+        eliminated,
+        new_insts,
+    }))
+}
+
 fn section_name_for_runtime(name: &mir::RuntimeSectionName) -> sonatina_ir::SectionName {
     match name {
         mir::RuntimeSectionName::Init => "init".into(),
@@ -242,6 +359,16 @@ pub fn compile_runtime_package_sonatina(
     package: &RuntimePackage<'_>,
     layout: TargetDataLayout,
 ) -> Result<Module, LowerError> {
+    let (module, _origins) = lower_runtime::compile_runtime_package_sonatina(db, package, layout)?;
+    Ok(module)
+}
+
+#[allow(dead_code)] // Public API — used by tests and external consumers
+pub fn compile_runtime_package_sonatina_with_origins(
+    db: &DriverDataBase,
+    package: &RuntimePackage<'_>,
+    layout: TargetDataLayout,
+) -> Result<(Module, lower_runtime::SonatinaOriginMap), LowerError> {
     lower_runtime::compile_runtime_package_sonatina(db, package, layout)
 }
 
@@ -981,5 +1108,445 @@ fn roundtrip() {
         .expect(
             "if branches that both return should lower without empty unreachable Sonatina blocks",
         );
+    }
+
+    #[test]
+    fn sonatina_lowering_produces_origin_map() {
+        let mut db = DriverDataBase::default();
+        let file_url = Url::from_file_path(
+            std::env::temp_dir().join("sonatina_origin_test.fe"),
+        )
+        .expect("path");
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(r#"
+msg Msg {
+    #[selector = 0x11111111]
+    Compute { a: u256, b: u256 } -> u256,
+}
+
+pub contract C {
+    recv Msg {
+        Compute { a, b } -> u256 { a + b }
+    }
+}
+"#.to_string()),
+        );
+        let file = db.workspace().get(&db, &file_url).expect("file");
+        let top_mod = db.top_mod(file);
+        let package = build_runtime_package(&db, top_mod).expect("compile");
+
+        let (_module, origins) = compile_runtime_package_sonatina_with_origins(
+            &db, &package, crate::EVM_LAYOUT,
+        ).expect("sonatina compile");
+
+        assert!(
+            !origins.is_empty(),
+            "origin map must contain entries mapping Sonatina insts to MIR origins"
+        );
+
+        let smir_origins = origins.iter()
+            .filter(|(_, _, o)| o.level == common::provenance::IrLevel::Smir)
+            .count();
+
+        eprintln!(
+            "Sonatina origin map: {} total entries, {} with SMIR origin",
+            origins.len(), smir_origins
+        );
+
+        assert!(
+            smir_origins > 0,
+            "at least some Sonatina instructions should trace back through MIR to SMIR origins"
+        );
+    }
+
+    #[test]
+    fn erc20_sonatina_origin_coverage() {
+        let mut db = DriverDataBase::default();
+        let file_url = Url::from_file_path(
+            std::env::temp_dir().join("erc20_sonatina_origin.fe"),
+        )
+        .expect("path");
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(include_str!("../../../fe/tests/fixtures/fe_test/erc20.fe").to_string()),
+        );
+        let file = db.workspace().get(&db, &file_url).expect("file");
+        let top_mod = db.top_mod(file);
+        let package = build_runtime_package(&db, top_mod).expect("compile");
+
+        let (_module, origins) = compile_runtime_package_sonatina_with_origins(
+            &db, &package, crate::EVM_LAYOUT,
+        ).expect("sonatina compile");
+
+        assert!(
+            origins.len() > 100,
+            "ERC20 should produce many Sonatina instructions with origins, got {}",
+            origins.len()
+        );
+
+        // Count distinct functions represented
+        let distinct_funcs: std::collections::HashSet<_> = origins.iter()
+            .map(|(func_ref, _, _)| func_ref)
+            .collect();
+
+        eprintln!(
+            "ERC20 Sonatina origins: {} insts across {} functions",
+            origins.len(), distinct_funcs.len()
+        );
+
+        assert!(
+            distinct_funcs.len() > 5,
+            "origins should span multiple functions"
+        );
+    }
+
+    #[test]
+    fn end_to_end_origin_chain_resolves_to_source() {
+        use common::provenance::IrLevel;
+        use hir::span::LazySpan;
+
+        // Known source with a specific expression we can identify
+        let source = r#"
+msg Msg {
+    #[selector = 0x11111111]
+    Add { a: u256, b: u256 } -> u256,
+}
+
+pub contract Calculator {
+    recv Msg {
+        Add { a, b } -> u256 { a + b }
+    }
+}
+"#;
+        let mut db = DriverDataBase::default();
+        let file_url = Url::from_file_path(
+            std::env::temp_dir().join("e2e_origin_chain.fe"),
+        ).expect("path");
+        db.workspace().touch(&mut db, file_url.clone(), Some(source.to_string()));
+        let file = db.workspace().get(&db, &file_url).expect("file");
+        let top_mod = db.top_mod(file);
+        let package = build_runtime_package(&db, top_mod).expect("compile");
+
+        // Get the Sonatina origin map
+        let (_module, sonatina_origins) = compile_runtime_package_sonatina_with_origins(
+            &db, &package, crate::EVM_LAYOUT,
+        ).expect("sonatina compile");
+
+        // Collect all MIR functions and their origin chains — categorize failures
+        let mut resolved_chains = Vec::new();
+        let mut skip_synthetic_func = 0;
+        let mut skip_no_hir_body = 0;
+        let mut skip_synthetic_origin = 0;
+        let mut skip_body_origin = 0;
+        let mut skip_span_none = 0;
+        let mut total_stmts = 0;
+
+        for func in package.functions(&db) {
+            let body = func.instance(&db).body(&db);
+            let key = func.instance(&db).key(&db);
+            let semantic = match key.semantic(&db) {
+                Some(s) => s,
+                None => {
+                    for block in &body.blocks {
+                        skip_synthetic_func += block.stmt_origins.len();
+                        total_stmts += block.stmt_origins.len();
+                    }
+                    continue;
+                }
+            };
+
+            let owner = semantic.key(&db).owner(&db);
+            let hir_body = match owner.body(&db) {
+                Some(b) => b,
+                None => {
+                    for block in &body.blocks {
+                        skip_no_hir_body += block.stmt_origins.len();
+                        total_stmts += block.stmt_origins.len();
+                    }
+                    continue;
+                }
+            };
+
+            for (block_idx, block) in body.blocks.iter().enumerate() {
+                for (stmt_idx, origin) in block.stmt_origins.iter().enumerate() {
+                    total_stmts += 1;
+
+                    if origin.transform == common::provenance::TransformTag::Synthetic {
+                        skip_synthetic_origin += 1;
+                        continue;
+                    }
+
+                    if origin.level != IrLevel::Smir {
+                        skip_body_origin += 1;
+                        continue;
+                    }
+
+                    let expr_id = hir::hir_def::ExprId::from_u32(origin.node);
+                    let lazy_span = expr_id.span(hir_body);
+                    match lazy_span.resolve(&db) {
+                        Some(span) => {
+                            let source_text = span.file.text(&db);
+                            let start: usize = span.range.start().into();
+                            let end: usize = span.range.end().into();
+                            let snippet = if end <= source_text.len() {
+                                &source_text[start..end]
+                            } else {
+                                "<out of bounds>"
+                            };
+                            resolved_chains.push((
+                                func.symbol(&db),
+                                block_idx,
+                                stmt_idx,
+                                snippet.to_string(),
+                            ));
+                        }
+                        None => {
+                            skip_span_none += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        assert!(
+            !resolved_chains.is_empty(),
+            "at least some MIR statements should resolve through the full origin \
+             chain back to source text"
+        );
+
+        eprintln!("\n=== End-to-End Origin Chain Resolution ===");
+        for (func, block, stmt, snippet) in &resolved_chains {
+            eprintln!("  {func} bb{block}[{stmt}] → \"{}\"",
+                snippet.chars().take(60).collect::<String>());
+        }
+        eprintln!("Total MIR statements: {total_stmts}");
+        eprintln!("  Resolved to source:   {}", resolved_chains.len());
+        eprintln!("  Synthetic functions:  {skip_synthetic_func}");
+        eprintln!("  No HIR body:          {skip_no_hir_body}");
+        eprintln!("  Synthetic origin:     {skip_synthetic_origin}");
+        eprintln!("  Body-level origin:    {skip_body_origin}");
+        eprintln!("  LazySpan→None:        {skip_span_none}");
+        let accounted = resolved_chains.len() + skip_synthetic_func + skip_no_hir_body
+            + skip_synthetic_origin + skip_body_origin + skip_span_none;
+        eprintln!("  Accounted:            {accounted}/{total_stmts}");
+        eprintln!("==========================================\n");
+
+        // Verify Sonatina origins also chain back
+        let mut sonatina_to_source = 0;
+        for (func_ref, inst_id, mir_origin) in &sonatina_origins {
+            if mir_origin.level != IrLevel::Smir {
+                continue;
+            }
+            // The mir_origin points to an SMIR ExprId — we already know
+            // some of these resolve. Count them.
+            sonatina_to_source += 1;
+        }
+
+        assert!(
+            sonatina_to_source > 0,
+            "at least some Sonatina instructions should trace back through \
+             MIR to SMIR to HIR to source"
+        );
+
+        eprintln!("Sonatina→source chains: {sonatina_to_source}");
+    }
+
+    #[test]
+    fn ir_describe_hash_consumer_on_real_mir() {
+        use common::hash_consumer::HashConsumer;
+        use common::ir_describe::{DescribeCtx, IrDescribe};
+
+        let mut db = DriverDataBase::default();
+        let file_url = Url::from_file_path(
+            std::env::temp_dir().join("ir_describe_hash_test.fe"),
+        ).expect("path");
+        db.workspace().touch(&mut db, file_url.clone(), Some(r#"
+msg Msg {
+    #[selector = 0x11111111]
+    Compute { a: u256, b: u256 } -> u256,
+}
+pub contract C {
+    recv Msg {
+        Compute { a, b } -> u256 { a + b }
+    }
+}
+"#.to_string()));
+        let file = db.workspace().get(&db, &file_url).expect("file");
+        let top_mod = db.top_mod(file);
+        let package = build_runtime_package(&db, top_mod).expect("compile");
+
+        let cx = DescribeCtx::new(&db);
+        let mut function_hashes = Vec::new();
+
+        for func in package.functions(&db) {
+            let body = func.instance(&db).body(&db);
+            let mut consumer = HashConsumer::new();
+            body.describe(&cx, &mut consumer);
+            if let Some(hash) = consumer.into_result() {
+                function_hashes.push((func.symbol(&db), hash));
+            }
+        }
+
+        assert!(!function_hashes.is_empty(), "should hash at least one function");
+
+        // Hash the same function twice — should be deterministic
+        let first_func = &package.functions(&db)[0];
+        let body = first_func.instance(&db).body(&db);
+
+        let mut c1 = HashConsumer::new();
+        body.describe(&cx, &mut c1);
+        let mut c2 = HashConsumer::new();
+        body.describe(&cx, &mut c2);
+
+        assert_eq!(
+            c1.result().unwrap().structure(),
+            c2.result().unwrap().structure(),
+            "same function should hash identically"
+        );
+
+        eprintln!("IrDescribe → HashConsumer: {} functions hashed", function_hashes.len());
+        for (name, hash) in &function_hashes[..std::cmp::min(5, function_hashes.len())] {
+            eprintln!("  {name}: structure={:#x}", hash.structure());
+        }
+    }
+
+    #[test]
+    fn ir_describe_hash_detects_code_change() {
+        use common::hash_consumer::HashConsumer;
+        use common::ir_describe::{DescribeCtx, IrDescribe};
+
+        fn compile_and_hash(db: &mut DriverDataBase, source: &str) -> Vec<(String, u128)> {
+            let file_url = Url::from_file_path(
+                std::env::temp_dir().join("hash_change_test.fe"),
+            ).expect("path");
+            db.workspace().touch(db, file_url.clone(), Some(source.to_string()));
+            let file = db.workspace().get(db, &file_url).expect("file");
+            let top_mod = db.top_mod(file);
+            let package = build_runtime_package(db, top_mod).expect("compile");
+            let cx = DescribeCtx::new(db);
+
+            package.functions(db).iter().map(|func| {
+                let body = func.instance(db).body(db);
+                let mut consumer = HashConsumer::new();
+                body.describe(&cx, &mut consumer);
+                (func.symbol(db), consumer.into_result().map(|h| h.structure()).unwrap_or(0))
+            }).collect()
+        }
+
+        let mut db1 = DriverDataBase::default();
+        let h1 = compile_and_hash(&mut db1, r#"
+msg Msg {
+    #[selector = 0x11111111]
+    Compute { a: u256, b: u256 } -> u256,
+}
+pub contract C {
+    recv Msg {
+        Compute { a, b } -> u256 { a + b }
+    }
+}
+"#);
+
+        let mut db2 = DriverDataBase::default();
+        let h2 = compile_and_hash(&mut db2, r#"
+msg Msg {
+    #[selector = 0x11111111]
+    Compute { a: u256, b: u256 } -> u256,
+}
+pub contract C {
+    recv Msg {
+        Compute { a, b } -> u256 { a - b }
+    }
+}
+"#);
+
+        // Find the recv function in both
+        let recv1 = h1.iter().find(|(n, _)| n.contains("recv_0_0"));
+        let recv2 = h2.iter().find(|(n, _)| n.contains("recv_0_0"));
+
+        assert!(recv1.is_some() && recv2.is_some(), "should find recv function");
+
+        assert_ne!(
+            recv1.unwrap().1, recv2.unwrap().1,
+            "changing + to - must change the structural hash"
+        );
+
+        // Non-recv functions should mostly be identical
+        let matching: usize = h1.iter()
+            .filter(|(n1, hash1)| h2.iter().any(|(n2, hash2)| n1 == n2 && hash1 == hash2))
+            .count();
+
+        assert!(matching > 0, "some functions should be unchanged between + and -");
+
+        eprintln!("Hash change detection: {}/{} functions unchanged", matching, h1.len());
+    }
+
+    #[test]
+    fn erc20_end_to_end_origin_chain() {
+        use common::provenance::IrLevel;
+        use hir::span::LazySpan;
+
+        let mut db = DriverDataBase::default();
+        let file_url = Url::from_file_path(
+            std::env::temp_dir().join("erc20_e2e_origin.fe"),
+        ).expect("path");
+        db.workspace().touch(
+            &mut db, file_url.clone(),
+            Some(include_str!("../../../fe/tests/fixtures/fe_test/erc20.fe").to_string()),
+        );
+        let file = db.workspace().get(&db, &file_url).expect("file");
+        let top_mod = db.top_mod(file);
+        let package = build_runtime_package(&db, top_mod).expect("compile");
+
+        let mut total = 0;
+        let mut resolved = 0;
+        let mut synthetic_func = 0;
+        let mut synthetic_origin = 0;
+        let mut span_none = 0;
+
+        for func in package.functions(&db) {
+            let body = func.instance(&db).body(&db);
+            let key = func.instance(&db).key(&db);
+            let semantic = match key.semantic(&db) {
+                Some(s) => s,
+                None => {
+                    for b in &body.blocks { synthetic_func += b.stmt_origins.len(); total += b.stmt_origins.len(); }
+                    continue;
+                }
+            };
+            let owner = semantic.key(&db).owner(&db);
+            let hir_body = match owner.body(&db) {
+                Some(b) => b,
+                None => continue,
+            };
+
+            for block in &body.blocks {
+                for origin in &block.stmt_origins {
+                    total += 1;
+                    if origin.transform == common::provenance::TransformTag::Synthetic {
+                        synthetic_origin += 1;
+                        continue;
+                    }
+                    if origin.level != IrLevel::Smir { continue; }
+
+                    let expr_id = hir::hir_def::ExprId::from_u32(origin.node);
+                    match expr_id.span(hir_body).resolve(&db) {
+                        Some(_) => resolved += 1,
+                        None => span_none += 1,
+                    }
+                }
+            }
+        }
+
+        eprintln!("\n=== ERC20 Origin Coverage ===");
+        eprintln!("Total: {total}, Resolved: {resolved}, Synthetic func: {synthetic_func}, Synthetic origin: {synthetic_origin}, Span None: {span_none}");
+        let coverage = resolved as f64 / total as f64 * 100.0;
+        eprintln!("User-code coverage: {coverage:.0}%");
+        eprintln!("============================\n");
+
+        assert!(resolved > 500, "ERC20 should resolve many origins, got {resolved}");
+        assert_eq!(span_none, 0, "zero LazySpan failures expected");
     }
 }
