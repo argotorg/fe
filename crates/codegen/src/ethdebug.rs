@@ -1,0 +1,529 @@
+use std::fmt::Write as _;
+
+use sonatina_codegen::object::ObjectArtifact;
+
+
+#[derive(Debug, Clone)]
+pub struct EthdebugInfo {
+    pub json: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct EthdebugSource {
+    pub id: usize,
+    pub path: String,
+    pub contents: Option<String>,
+}
+
+pub struct EthdebugPointer {
+    pub name: String,
+    pub location: EthdebugLocation,
+    pub slot: Option<u64>,
+    pub offset: Option<u64>,
+    pub length: Option<u64>,
+}
+
+#[derive(Clone, Debug)]
+pub enum EthdebugLocation {
+    Storage,
+    Memory,
+    Stack,
+    Calldata,
+}
+
+pub struct EthdebugVariable {
+    pub name: String,
+    pub type_name: String,
+    pub pointer: Option<EthdebugPointer>,
+}
+
+pub struct EthdebugBuilder {
+    compiler_name: String,
+    compiler_version: String,
+    sources: Vec<EthdebugSource>,
+    programs: Vec<EthdebugProgram>,
+    types: Vec<EthdebugType>,
+    pointers: Vec<EthdebugPointer>,
+}
+
+struct EthdebugProgram {
+    contract_name: String,
+    environment: &'static str,
+    instructions: Vec<EthdebugInstruction>,
+}
+
+struct EthdebugInstruction {
+    offset: u32,
+    opcode: Option<u8>,
+    source: Option<EthdebugSourceRange>,
+    variables: Vec<EthdebugVariable>,
+}
+
+#[derive(Clone)]
+struct EthdebugSourceRange {
+    source_id: usize,
+    start_line: u32,
+    start_col: u32,
+    end_line: u32,
+    end_col: u32,
+}
+
+pub struct EthdebugType {
+    pub name: String,
+    pub kind: String,
+    pub bits: Option<u32>,
+    pub fields: Vec<EthdebugTypeField>,
+}
+
+pub struct EthdebugTypeField {
+    pub name: String,
+    pub type_kind: String,
+    pub type_bits: Option<u32>,
+}
+
+impl EthdebugBuilder {
+    pub fn new(compiler_name: &str, compiler_version: &str) -> Self {
+        Self {
+            compiler_name: compiler_name.to_string(),
+            compiler_version: compiler_version.to_string(),
+            sources: Vec::new(),
+            programs: Vec::new(),
+            types: Vec::new(),
+            pointers: Vec::new(),
+        }
+    }
+
+    pub fn add_pointer(&mut self, pointer: EthdebugPointer) {
+        self.pointers.push(pointer);
+    }
+
+    pub fn add_type_from_desc(&mut self, desc: &crate::dwarf::FeTypeDesc) {
+        use crate::dwarf::FeTypeDesc;
+        let (name, kind, bits, fields) = match desc {
+            FeTypeDesc::UInt { bits } => (format!("u{bits}"), "uint".to_string(), Some(*bits), vec![]),
+            FeTypeDesc::Int { bits } => (format!("i{bits}"), "int".to_string(), Some(*bits), vec![]),
+            FeTypeDesc::Bool => ("bool".to_string(), "bool".to_string(), None, vec![]),
+            FeTypeDesc::Address => ("address".to_string(), "address".to_string(), None, vec![]),
+            FeTypeDesc::String => ("String".to_string(), "string".to_string(), None, vec![]),
+            FeTypeDesc::Bytes { len } => (
+                len.map_or("bytes".to_string(), |n| format!("bytes{n}")),
+                "bytes".to_string(),
+                len.map(|n| n * 8),
+                vec![],
+            ),
+            FeTypeDesc::Struct { name, fields } => (
+                name.clone(),
+                "struct".to_string(),
+                None,
+                fields.iter().map(|(fname, fty)| {
+                    let (fkind, fbits) = match fty {
+                        FeTypeDesc::UInt { bits } => ("uint".to_string(), Some(*bits)),
+                        FeTypeDesc::Int { bits } => ("int".to_string(), Some(*bits)),
+                        FeTypeDesc::Bool => ("bool".to_string(), None),
+                        _ => ("unknown".to_string(), None),
+                    };
+                    EthdebugTypeField { name: fname.clone(), type_kind: fkind, type_bits: fbits }
+                }).collect(),
+            ),
+            FeTypeDesc::Enum { name, variants } => (
+                name.clone(),
+                "enum".to_string(),
+                None,
+                variants.iter().map(|v| EthdebugTypeField {
+                    name: v.clone(), type_kind: "uint".to_string(), type_bits: Some(8),
+                }).collect(),
+            ),
+            FeTypeDesc::Array { elem: _, len } => (
+                len.map_or("Array".to_string(), |n| format!("Array[{n}]")),
+                "array".to_string(),
+                None,
+                vec![],
+            ),
+        };
+        self.types.push(EthdebugType { name, kind, bits, fields });
+    }
+
+    pub fn add_source(&mut self, path: &str, contents: Option<&str>) -> usize {
+        let id = self.sources.len();
+        self.sources.push(EthdebugSource {
+            id,
+            path: path.to_string(),
+            contents: contents.map(|s| s.to_string()),
+        });
+        id
+    }
+
+    pub fn add_program_from_origins(
+        &mut self,
+        db: &driver::DriverDataBase,
+        package: &mir::RuntimePackage<'_>,
+        artifacts: &[ObjectArtifact],
+        origins: &[(sonatina_ir::module::FuncRef, sonatina_ir::InstId, common::provenance::ProvenanceNodeId)],
+        contract_name: &str,
+        environment: &'static str,
+    ) {
+        use common::provenance::IrLevel;
+        use std::collections::HashMap;
+
+        let mut inst_to_origin: HashMap<(sonatina_ir::module::FuncRef, sonatina_ir::InstId), common::provenance::ProvenanceNodeId> = HashMap::new();
+        for (func_ref, inst_id, origin) in origins {
+            inst_to_origin.insert((*func_ref, *inst_id), *origin);
+        }
+
+        let bodies: Vec<_> = package.functions(db)
+            .iter()
+            .filter_map(|func| {
+                let key = func.instance(db).key(db);
+                let semantic = key.semantic(db)?;
+                Some(semantic.key(db).owner(db).body(db)?)
+            })
+            .collect();
+
+        let mut origin_cache: HashMap<common::provenance::ProvenanceNodeId, Option<EthdebugSourceRange>> = HashMap::new();
+
+        let mut instructions = Vec::new();
+
+        for artifact in artifacts {
+            for section in artifact.sections.values() {
+                let Some(observability) = &section.observability else { continue };
+
+                for entry in &observability.pc_map {
+                    let Some(ir_inst) = entry.ir_inst else { continue };
+                    let source = inst_to_origin.get(&(entry.func, ir_inst))
+                        .filter(|o| o.level == IrLevel::Smir)
+                        .and_then(|origin| {
+                            if let Some(cached) = origin_cache.get(origin) {
+                                return cached.clone();
+                            }
+                            let result = self.resolve_origin_span(db, &bodies, origin);
+                            origin_cache.insert(*origin, result.clone());
+                            result
+                        });
+
+                    instructions.push(EthdebugInstruction {
+                        offset: entry.pc_start,
+                        opcode: None,
+                        source,
+                        variables: Vec::new(),
+                    });
+                }
+            }
+        }
+
+        instructions.sort_by_key(|i| i.offset);
+        instructions.dedup_by_key(|i| i.offset);
+
+        self.programs.push(EthdebugProgram {
+            contract_name: contract_name.to_string(),
+            environment,
+            instructions,
+        });
+    }
+
+    fn resolve_origin_span(
+        &self,
+        db: &driver::DriverDataBase,
+        bodies: &[hir::hir_def::Body<'_>],
+        origin: &common::provenance::ProvenanceNodeId,
+    ) -> Option<EthdebugSourceRange> {
+        use hir::span::LazySpan;
+
+        let expr_id = hir::hir_def::ExprId::from_u32(origin.node);
+        for &hir_body in bodies {
+            if let Some(span) = expr_id.span(hir_body).resolve(db) {
+                let text = span.file.text(db);
+                let start: usize = span.range.start().into();
+                let end: usize = span.range.end().into();
+                let (sl, sc) = common::byte_offset_to_line_col(text, start);
+                let (el, ec) = common::byte_offset_to_line_col(text, end);
+                let file_path_str = match span.file.path(db) {
+                    Some(p) => p.to_string(),
+                    None => String::new(),
+                };
+                let source_id = self.sources.iter()
+                    .position(|s| s.path == file_path_str)
+                    .unwrap_or(0);
+                return Some(EthdebugSourceRange {
+                    source_id, start_line: sl as u32, start_col: sc as u32,
+                    end_line: el as u32, end_col: ec as u32,
+                });
+            }
+        }
+        None
+    }
+
+
+    pub fn build(&self) -> EthdebugInfo {
+        let mut out = String::new();
+        self.write_json(&mut out);
+        EthdebugInfo { json: out }
+    }
+
+    fn write_json(&self, out: &mut String) {
+        out.push('{');
+
+        // compilation
+        write!(out, "\"compilation\":{{").unwrap();
+        write!(
+            out,
+            "\"compiler\":{{\"name\":\"{}\",\"version\":\"{}\"}}",
+            json_escape(&self.compiler_name),
+            json_escape(&self.compiler_version)
+        )
+        .unwrap();
+        write!(out, ",\"sources\":[").unwrap();
+        for (idx, source) in self.sources.iter().enumerate() {
+            if idx > 0 {
+                out.push(',');
+            }
+            write!(
+                out,
+                "{{\"id\":{},\"path\":\"{}\"",
+                source.id,
+                json_escape(&source.path)
+            )
+            .unwrap();
+            if let Some(contents) = &source.contents {
+                write!(out, ",\"contents\":\"{}\"", json_escape(contents)).unwrap();
+            }
+            write!(out, ",\"language\":\"Fe\"}}").unwrap();
+        }
+        write!(out, "]}}").unwrap();
+
+        // types
+        if !self.types.is_empty() {
+            write!(out, ",\"types\":{{").unwrap();
+            for (idx, ty) in self.types.iter().enumerate() {
+                if idx > 0 {
+                    out.push(',');
+                }
+                write!(
+                    out,
+                    "\"{}\":{{\"kind\":\"{}\"",
+                    json_escape(&ty.name),
+                    json_escape(&ty.kind)
+                )
+                .unwrap();
+                if let Some(bits) = ty.bits {
+                    write!(out, ",\"bits\":{bits}").unwrap();
+                }
+                if !ty.fields.is_empty() {
+                    write!(out, ",\"contains\":[").unwrap();
+                    for (fidx, field) in ty.fields.iter().enumerate() {
+                        if fidx > 0 {
+                            out.push(',');
+                        }
+                        write!(
+                            out,
+                            "{{\"name\":\"{}\",\"type\":{{\"kind\":\"{}\"",
+                            json_escape(&field.name),
+                            json_escape(&field.type_kind)
+                        )
+                        .unwrap();
+                        if let Some(bits) = field.type_bits {
+                            write!(out, ",\"bits\":{bits}").unwrap();
+                        }
+                        write!(out, "}}}}").unwrap();
+                    }
+                    write!(out, "]").unwrap();
+                }
+                out.push('}');
+            }
+            write!(out, "}}").unwrap();
+        }
+
+        // pointers
+        if !self.pointers.is_empty() {
+            write!(out, ",\"pointers\":{{").unwrap();
+            for (idx, ptr) in self.pointers.iter().enumerate() {
+                if idx > 0 {
+                    out.push(',');
+                }
+                let loc = match &ptr.location {
+                    EthdebugLocation::Storage => "storage",
+                    EthdebugLocation::Memory => "memory",
+                    EthdebugLocation::Stack => "stack",
+                    EthdebugLocation::Calldata => "calldata",
+                };
+                write!(
+                    out,
+                    "\"{}\":{{\"location\":\"{}\"",
+                    json_escape(&ptr.name),
+                    loc
+                )
+                .unwrap();
+                if let Some(slot) = ptr.slot {
+                    write!(out, ",\"slot\":{slot}").unwrap();
+                }
+                if let Some(offset) = ptr.offset {
+                    write!(out, ",\"offset\":{offset}").unwrap();
+                }
+                if let Some(length) = ptr.length {
+                    write!(out, ",\"length\":{length}").unwrap();
+                }
+                out.push('}');
+            }
+            write!(out, "}}").unwrap();
+        }
+
+        // programs
+        write!(out, ",\"programs\":[").unwrap();
+        for (prog_idx, program) in self.programs.iter().enumerate() {
+            if prog_idx > 0 {
+                out.push(',');
+            }
+            write!(out, "{{").unwrap();
+            write!(
+                out,
+                "\"contract\":{{\"name\":\"{}\"}}",
+                json_escape(&program.contract_name)
+            )
+            .unwrap();
+            write!(
+                out,
+                ",\"environment\":\"{}\"",
+                program.environment
+            )
+            .unwrap();
+
+            write!(out, ",\"instructions\":[").unwrap();
+            for (inst_idx, inst) in program.instructions.iter().enumerate() {
+                if inst_idx > 0 {
+                    out.push(',');
+                }
+                write!(out, "{{\"offset\":{}", inst.offset).unwrap();
+                if let Some(opcode) = inst.opcode {
+                    write!(out, ",\"operation\":{{\"mnemonic\":\"0x{:02x}\"}}", opcode).unwrap();
+                }
+                if let Some(source) = &inst.source {
+                    write!(
+                        out,
+                        ",\"source\":{{\"id\":{},\"start\":{{\"line\":{},\"column\":{}}},\"end\":{{\"line\":{},\"column\":{}}}}}",
+                        source.source_id,
+                        source.start_line,
+                        source.start_col,
+                        source.end_line,
+                        source.end_col,
+                    )
+                    .unwrap();
+                }
+                if !inst.variables.is_empty() {
+                    write!(out, ",\"context\":{{\"variables\":[").unwrap();
+                    for (vidx, var) in inst.variables.iter().enumerate() {
+                        if vidx > 0 {
+                            out.push(',');
+                        }
+                        write!(
+                            out,
+                            "{{\"identifier\":\"{}\",\"type\":\"{}\"",
+                            json_escape(&var.name),
+                            json_escape(&var.type_name)
+                        )
+                        .unwrap();
+                        if let Some(ptr) = &var.pointer {
+                            let loc = match &ptr.location {
+                                EthdebugLocation::Storage => "storage",
+                                EthdebugLocation::Memory => "memory",
+                                EthdebugLocation::Stack => "stack",
+                                EthdebugLocation::Calldata => "calldata",
+                            };
+                            write!(out, ",\"pointer\":{{\"location\":\"{loc}\"").unwrap();
+                            if let Some(slot) = ptr.slot {
+                                write!(out, ",\"slot\":{slot}").unwrap();
+                            }
+                            out.push('}');
+                        }
+                        out.push('}');
+                    }
+                    write!(out, "]}}").unwrap();
+                }
+                out.push('}');
+            }
+            write!(out, "]}}").unwrap();
+        }
+        write!(out, "]}}").unwrap();
+    }
+}
+
+fn json_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c < '\x20' => write!(out, "\\u{:04x}", c as u32).unwrap(),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ethdebug_builder_produces_valid_json() {
+        let mut builder = EthdebugBuilder::new("fe", "26.1.0");
+        builder.add_source("src/main.fe", Some("fn add(x: u256, y: u256) -> u256 { return x + y }"));
+
+        let info = builder.build();
+        assert!(info.json.starts_with('{'));
+        assert!(info.json.ends_with('}'));
+        assert!(info.json.contains("\"compiler\""));
+        assert!(info.json.contains("\"Fe\""));
+        assert!(info.json.contains("src/main.fe"));
+    }
+
+    #[test]
+    fn ethdebug_builder_with_instructions() {
+        let mut builder = EthdebugBuilder::new("fe", "26.1.0");
+        let source_id = builder.add_source("test.fe", None);
+
+        builder.programs.push(EthdebugProgram {
+            contract_name: "Counter".to_string(),
+            environment: "call",
+            instructions: vec![
+                EthdebugInstruction {
+                    offset: 0,
+                    opcode: Some(0x60),
+                    source: Some(EthdebugSourceRange {
+                        source_id,
+                        start_line: 5,
+                        start_col: 1,
+                        end_line: 5,
+                        end_col: 20,
+                    }),
+                    variables: vec![EthdebugVariable {
+                        name: "count".to_string(),
+                        type_name: "u256".to_string(),
+                        pointer: Some(EthdebugPointer {
+                            name: "count_ptr".to_string(),
+                            location: EthdebugLocation::Storage,
+                            slot: Some(0),
+                            offset: None,
+                            length: Some(32),
+                        }),
+                    }],
+                },
+                EthdebugInstruction {
+                    offset: 2,
+                    opcode: Some(0x54),
+                    source: None,
+                    variables: Vec::new(),
+                },
+            ],
+        });
+
+        let info = builder.build();
+        assert!(info.json.contains("\"Counter\""));
+        assert!(info.json.contains("\"call\""));
+        assert!(info.json.contains("\"offset\":0"));
+        assert!(info.json.contains("\"offset\":2"));
+        assert!(info.json.contains("\"line\":5"));
+        assert!(info.json.contains("\"mnemonic\":\"0x60\""));
+    }
+}
