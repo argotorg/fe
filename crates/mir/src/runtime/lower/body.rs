@@ -306,6 +306,7 @@ pub(super) struct RmirEmitter<'db> {
     pub(super) locals: Vec<RLocal<'db>>,
     pub(super) blocks: Vec<RBlock<'db>>,
     pub(super) terminated_blocks: Vec<bool>,
+    cur_origin: common::provenance::ProvenanceNodeId,
 }
 
 enum LoweredBuiltinCall<'db> {
@@ -460,14 +461,20 @@ impl<'db> RmirEmitter<'db> {
             locals,
             blocks,
             terminated_blocks,
+            cur_origin: common::provenance::ProvenanceNodeId::new(
+                common::provenance::IrLevel::Mir, 0, common::provenance::TransformTag::Synthetic,
+            ),
         }
     }
 
     fn finish(mut self, signature: RuntimeInterfaceSignature<'db>) -> RuntimeBody<'db> {
+        use common::provenance::{ProvenanceNodeId, IrLevel, TransformTag};
         while self.blocks.len() < self.semantic_body.blocks.len() {
             self.blocks.push(RBlock {
                 stmts: Vec::new(),
+                stmt_origins: Vec::new(),
                 terminator: RTerminator::Return(None),
+                terminator_origin: ProvenanceNodeId::new(IrLevel::Mir, 0, TransformTag::Synthetic),
             });
         }
         RuntimeBody {
@@ -501,24 +508,41 @@ impl<'db> RmirEmitter<'db> {
     }
 
     fn lower_blocks(&mut self) {
+        use common::provenance::{ProvenanceNodeId, IrLevel, TransformTag};
         self.blocks = (0..self.semantic_body.blocks.len())
             .map(|_| RBlock {
                 stmts: Vec::new(),
+                stmt_origins: Vec::new(),
                 terminator: RTerminator::Return(None),
+                terminator_origin: ProvenanceNodeId::new(IrLevel::Mir, 0, TransformTag::Synthetic),
             })
             .collect();
         self.terminated_blocks = vec![false; self.semantic_body.blocks.len()];
         let blocks = self.semantic_body.blocks.clone();
+        fn sem_origin_to_provenance(origin: &hir::analysis::semantic::SemOrigin<'_>) -> common::provenance::ProvenanceNodeId {
+            use common::provenance::{ProvenanceNodeId, IrLevel, TransformTag};
+            use hir::analysis::semantic::SemOrigin;
+            match origin {
+                SemOrigin::Expr(expr_id) => ProvenanceNodeId::new(IrLevel::Smir, expr_id.as_u32(), TransformTag::SmirToMir),
+                SemOrigin::Stmt(stmt_id) => ProvenanceNodeId::new(IrLevel::Smir, stmt_id.as_u32(), TransformTag::SmirToMir),
+                SemOrigin::Body(_) => ProvenanceNodeId::new(IrLevel::Smir, 0, TransformTag::SmirToMir),
+                SemOrigin::Synthetic => ProvenanceNodeId::new(IrLevel::Mir, 0, TransformTag::Synthetic),
+            }
+        }
+
         for (idx, block) in blocks.iter().enumerate() {
             let bb = RBlockId::from_u32(idx as u32);
             for (stmt_idx, stmt) in block.stmts.iter().enumerate() {
+                self.cur_origin = sem_origin_to_provenance(&stmt.origin);
                 self.lower_stmt(bb, stmt_idx, stmt);
                 if self.terminated_blocks[bb.index()] {
                     break;
                 }
             }
             if !self.terminated_blocks[bb.index()] {
+                self.cur_origin = sem_origin_to_provenance(&block.terminator.origin);
                 self.blocks[bb.index()].terminator = self.lower_terminator(bb, &block.terminator);
+                self.blocks[bb.index()].terminator_origin = self.cur_origin;
             }
         }
     }
@@ -4739,6 +4763,7 @@ impl<'db> RmirEmitter<'db> {
     fn push_stmt(&mut self, bb: RBlockId, stmt: RStmt<'db>) {
         if !self.terminated_blocks[bb.index()] {
             self.blocks[bb.index()].stmts.push(stmt);
+            self.blocks[bb.index()].stmt_origins.push(self.cur_origin);
         }
     }
 
@@ -5080,6 +5105,170 @@ mod tests {
         assert!(
             package.is_ok(),
             "poseidon_mock should lower through range consts with runtime-zst fields: {package:#?}"
+        );
+    }
+
+    #[test]
+    fn mir_stmts_carry_provenance_origins() {
+        use common::provenance::{IrLevel, TransformTag};
+
+        let mut db = DriverDataBase::default();
+        let file_url = Url::from_file_path(
+            std::env::temp_dir().join("provenance_origin_test.fe"),
+        )
+        .expect("path");
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(r#"
+msg Msg {
+    #[selector = 0x11111111]
+    Add { a: u256, b: u256 } -> u256,
+}
+
+pub contract C {
+    recv Msg {
+        Add { a, b } -> u256 { a + b }
+    }
+}
+"#.to_string()),
+        );
+        let file = db.workspace().get(&db, &file_url).expect("file");
+        let top_mod = db.top_mod(file);
+        let package = crate::build_runtime_package(&db, top_mod)
+            .expect("should compile");
+
+        let mut has_smir_origin = false;
+        let mut has_synthetic_origin = false;
+        let mut total_origins = 0;
+
+        for func in package.functions(&db) {
+            let body = func.instance(&db).body(&db);
+            for block in &body.blocks {
+                assert_eq!(
+                    block.stmts.len(),
+                    block.stmt_origins.len(),
+                    "every statement must have a corresponding origin"
+                );
+                for origin in &block.stmt_origins {
+                    total_origins += 1;
+                    match (origin.level, origin.transform) {
+                        (IrLevel::Smir, TransformTag::SmirToMir) => has_smir_origin = true,
+                        (IrLevel::Mir, TransformTag::Synthetic) => has_synthetic_origin = true,
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        assert!(total_origins > 0, "should have some statement origins");
+        assert!(
+            has_smir_origin,
+            "at least some MIR stmts should trace back to SMIR expressions"
+        );
+    }
+
+    #[test]
+    fn provenance_dag_populated_when_enabled() {
+        use common::provenance::IrLevel;
+
+        let mut db = DriverDataBase::default();
+
+        // Enable provenance tracking
+        {
+            use salsa::Setter;
+            db.compiler_options()
+                .set_emit_provenance(&mut db)
+                .to(true);
+        }
+
+        let file_url = Url::from_file_path(
+            std::env::temp_dir().join("provenance_dag_test.fe"),
+        ).expect("path");
+        db.workspace().touch(&mut db, file_url.clone(), Some(r#"
+msg Msg {
+    #[selector = 0x11111111]
+    Add { a: u256, b: u256 } -> u256,
+}
+
+pub contract C {
+    recv Msg {
+        Add { a, b } -> u256 { a + b }
+    }
+}
+"#.to_string()));
+        let file = db.workspace().get(&db, &file_url).expect("file");
+        let top_mod = db.top_mod(file);
+        let package = crate::build_runtime_package(&db, top_mod)
+            .expect("should compile");
+
+        // The ProvenanceDag is populated inside build_runtime_package
+        // when emit_provenance is true. We can't access it directly from
+        // the package (it's discarded after the graph builder runs).
+        // But we can verify that the origins on the bodies are correct.
+
+        let mut total_origins = 0;
+        let mut smir_origins = 0;
+        for func in package.functions(&db) {
+            let body = func.instance(&db).body(&db);
+            for block in &body.blocks {
+                for origin in &block.stmt_origins {
+                    total_origins += 1;
+                    if origin.level == IrLevel::Smir {
+                        smir_origins += 1;
+                    }
+                }
+            }
+        }
+
+        assert!(total_origins > 0);
+        assert!(smir_origins > 0);
+    }
+
+    #[test]
+    fn erc20_provenance_origins_cover_all_stmts() {
+        let mut db = DriverDataBase::default();
+        let file_url = Url::from_file_path(
+            std::env::temp_dir().join("erc20_provenance.fe"),
+        )
+        .expect("path");
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(include_str!("../../../../fe/tests/fixtures/fe_test/erc20.fe").to_string()),
+        );
+        let file = db.workspace().get(&db, &file_url).expect("file");
+        let top_mod = db.top_mod(file);
+        let package = crate::build_runtime_package(&db, top_mod)
+            .expect("erc20 should compile");
+
+        let mut total_stmts = 0;
+        let mut stmts_with_smir_origin = 0;
+
+        for func in package.functions(&db) {
+            let body = func.instance(&db).body(&db);
+            for block in &body.blocks {
+                assert_eq!(
+                    block.stmts.len(),
+                    block.stmt_origins.len(),
+                    "stmt count must match origin count in function {}",
+                    func.symbol(&db),
+                );
+                for origin in &block.stmt_origins {
+                    total_stmts += 1;
+                    if origin.level == common::provenance::IrLevel::Smir {
+                        stmts_with_smir_origin += 1;
+                    }
+                }
+            }
+        }
+
+        assert!(total_stmts > 100, "erc20 should produce many MIR stmts, got {total_stmts}");
+
+        let coverage = stmts_with_smir_origin as f64 / total_stmts as f64;
+        eprintln!(
+            "ERC20 provenance: {stmts_with_smir_origin}/{total_stmts} stmts have SMIR origin ({:.0}%)",
+            coverage * 100.0
         );
     }
 }

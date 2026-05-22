@@ -114,6 +114,40 @@ struct RuntimeGraph<'db> {
     code_region_roots: Vec<(RuntimeCodeRegion<'db>, RuntimeInstance<'db>)>,
 }
 
+pub struct PackageProvenance {
+    pub dag: common::provenance::ProvenanceDag,
+    next_node_id: u32,
+}
+
+impl PackageProvenance {
+    fn new() -> Self {
+        Self {
+            dag: common::provenance::ProvenanceDag::new(),
+            next_node_id: 0,
+        }
+    }
+
+    fn collect_from_body(&mut self, body: &super::RuntimeBody<'_>, _func_id: u32) {
+        use common::provenance::{ProvenanceNodeId, IrLevel, TransformTag};
+
+        for block in &body.blocks {
+            for origin in &block.stmt_origins {
+                if origin.transform == TransformTag::Synthetic {
+                    continue;
+                }
+                // Flat encoding: unique per (func, block, stmt) triple
+                let mir_node = ProvenanceNodeId::new(
+                    IrLevel::Mir,
+                    self.next_node_id,
+                    TransformTag::SmirToMir,
+                );
+                self.next_node_id += 1;
+                self.dag.add_edge(*origin, mir_node);
+            }
+        }
+    }
+}
+
 struct RuntimeGraphBuilder<'db> {
     db: &'db dyn MirDb,
     queue: Vec<RuntimeInstance<'db>>,
@@ -156,7 +190,11 @@ impl<'db> RuntimeGraphBuilder<'db> {
         builder
     }
 
-    fn build(mut self) -> Result<RuntimeGraph<'db>, LowerError> {
+    fn build(mut self) -> Result<(RuntimeGraph<'db>, PackageProvenance), LowerError> {
+        let emit_provenance = self.db.compiler_options().emit_provenance(self.db);
+        let mut provenance = PackageProvenance::new();
+        let mut func_counter: u32 = 0;
+
         while let Some(instance) = self.queue.pop() {
             self.queued.remove(&instance);
             if self.nodes.contains_key(&instance) {
@@ -165,6 +203,13 @@ impl<'db> RuntimeGraphBuilder<'db> {
 
             let lowered = runtime_instance_lowered_body(self.db, instance)
                 .map_err(|err| wrap_runtime_lowering_error(self.db, instance, err))?;
+
+            if emit_provenance {
+                let body = lowered.body(self.db);
+                provenance.collect_from_body(&body, func_counter);
+                func_counter += 1;
+            }
+
             let direct_callees = lowered
                 .direct_callees(self.db)
                 .into_iter()
@@ -191,11 +236,11 @@ impl<'db> RuntimeGraphBuilder<'db> {
         self.object_specs.extend(self.discovered_contract_specs);
         self.code_region_roots
             .sort_by_key(|(region, _)| code_region_symbol(self.db, *region));
-        Ok(RuntimeGraph {
+        Ok((RuntimeGraph {
             nodes: self.nodes,
             object_specs: self.object_specs,
             code_region_roots: self.code_region_roots,
-        })
+        }, provenance))
     }
 
     fn enqueue(&mut self, instance: RuntimeInstance<'db>) {
@@ -277,6 +322,18 @@ impl<'db> RuntimeGraphBuilder<'db> {
         }
         Ok(())
     }
+}
+
+pub fn collect_provenance<'db>(
+    db: &'db dyn MirDb,
+    package: &RuntimePackage<'db>,
+) -> PackageProvenance {
+    let mut provenance = PackageProvenance::new();
+    for (func_counter, func) in package.functions(db).iter().enumerate() {
+        let body = func.instance(db).body(db);
+        provenance.collect_from_body(&body, func_counter as u32);
+    }
+    provenance
 }
 
 pub fn build_runtime_package<'db>(
@@ -885,7 +942,7 @@ fn build_sectioned_package<'db>(
         .iter()
         .map(|(name, _)| name.clone())
         .collect::<FxHashSet<_>>();
-    let mut graph = RuntimeGraphBuilder::new(db, roots, object_specs).build()?;
+    let (mut graph, _provenance) = RuntimeGraphBuilder::new(db, roots, object_specs).build()?;
     let functions = collect_runtime_functions(db, &graph);
     let functions_by_instance = functions
         .iter()

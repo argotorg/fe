@@ -21,7 +21,7 @@ pub use runtime::{
     enum_variant_field_offset_bytes, format_runtime_body, format_runtime_body_excerpt,
     format_runtime_package, format_runtime_verify_failure, layout_size_bytes,
     runtime_instance_stable_key, runtime_instance_symbol_key, serialize_const_region_bytes,
-    struct_field_offset_bytes,
+    struct_field_offset_bytes, PackageProvenance, collect_provenance,
 };
 pub use verify::{
     VerifyError, resolve_runtime_place, resolve_runtime_place_address_class, verify_const_region,

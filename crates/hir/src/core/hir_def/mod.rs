@@ -1,5 +1,6 @@
 pub mod attr;
 pub mod body;
+pub mod describe;
 pub mod effects;
 pub mod expr;
 pub mod ident;

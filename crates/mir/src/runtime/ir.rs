@@ -1,4 +1,5 @@
 use cranelift_entity::{EntityRef, entity_impl};
+use common::ir_describe::{DescribeCtx, Dim, IrConsumer, IrDescribe};
 use hir::analysis::{
     semantic::{FieldIndex, SemanticInstance},
     ty::ty_def::TyId,
@@ -10,7 +11,7 @@ use salsa::Update;
 
 use crate::{
     db::MirDb,
-    instance::{RuntimeInstance, RuntimeInstanceKey},
+    instance::{RuntimeInstance, RuntimeInstanceKey, runtime::RuntimeInstanceSource},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
@@ -554,6 +555,34 @@ pub enum ConstScalar {
     },
 }
 
+impl IrDescribe for ConstScalar {
+    fn describe<C: IrConsumer>(&self, _cx: &DescribeCtx<'_>, c: &mut C) {
+        c.enter_node("ConstScalar");
+        match self {
+            ConstScalar::Bool(b) => {
+                c.field_u64(Dim::Structure, 0);
+                c.field_bool(Dim::Constants, *b);
+            }
+            ConstScalar::Int { bits, signed, words } => {
+                c.field_u64(Dim::Structure, 1);
+                c.field_u64(Dim::Types, *bits as u64);
+                c.field_bool(Dim::Types, *signed);
+                c.field_bytes(Dim::Constants, words);
+            }
+            ConstScalar::FixedBytes(b) => {
+                c.field_u64(Dim::Structure, 2);
+                c.field_bytes(Dim::Constants, b);
+            }
+            ConstScalar::Address { bits, bytes } => {
+                c.field_u64(Dim::Structure, 3);
+                c.field_u64(Dim::Types, *bits as u64);
+                c.field_bytes(Dim::Constants, bytes);
+            }
+        }
+        c.exit_node();
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Update)]
 pub struct RLocalId(u32);
 entity_impl!(RLocalId);
@@ -669,7 +698,9 @@ pub struct RuntimeParam<'db> {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub struct RBlock<'db> {
     pub stmts: Vec<RStmt<'db>>,
+    pub stmt_origins: Vec<common::provenance::ProvenanceNodeId>,
     pub terminator: RTerminator<'db>,
+    pub terminator_origin: common::provenance::ProvenanceNodeId,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
@@ -1021,6 +1052,57 @@ pub enum PlaceElem<'db> {
     Deref,
 }
 
+impl<'db> IrDescribe for RuntimePlace<'db> {
+    fn describe<C: IrConsumer>(&self, cx: &DescribeCtx<'_>, c: &mut C) {
+        c.enter_node("Place");
+        match &self.root {
+            PlaceRoot::Slot(local) => {
+                c.field_u64(Dim::Structure, 0);
+                c.field_u64(Dim::Structure, local.as_u32() as u64);
+            }
+            PlaceRoot::Ref(value) => {
+                c.field_u64(Dim::Structure, 1);
+                c.field_u64(Dim::Structure, value.as_u32() as u64);
+            }
+            PlaceRoot::Provider(binding) => {
+                c.field_u64(Dim::Structure, 2);
+                c.field_u64(Dim::Structure, binding.as_u32() as u64);
+            }
+            PlaceRoot::Ptr { addr, space, class } => {
+                c.field_u64(Dim::Structure, 3);
+                c.field_u64(Dim::Structure, addr.as_u32() as u64);
+                c.field_u64(Dim::Structure, *space as u64);
+                describe_class(cx, c, class);
+            }
+        }
+        c.field_u64(Dim::Structure, self.path.len() as u64);
+        for elem in self.path.iter() {
+            match elem {
+                PlaceElem::Field(idx) => {
+                    c.field_u64(Dim::Structure, 0);
+                    c.field_u64(Dim::Structure, idx.0 as u64);
+                }
+                PlaceElem::Index(idx_src) => {
+                    c.field_u64(Dim::Structure, 1);
+                    match idx_src {
+                        IndexSource::Constant(n) => c.field_u64(Dim::Structure, *n as u64),
+                        IndexSource::Dynamic(v) => c.field_u64(Dim::Structure, v.as_u32() as u64),
+                    }
+                }
+                PlaceElem::VariantField { variant, field } => {
+                    c.field_u64(Dim::Structure, 2);
+                    c.field_u64(Dim::Structure, variant.index as u64);
+                    c.field_u64(Dim::Structure, field.0 as u64);
+                }
+                PlaceElem::Deref => {
+                    c.field_u64(Dim::Structure, 3);
+                }
+            }
+        }
+        c.exit_node();
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub struct ResolvedRuntimePlace<'db> {
     pub root_kind: ResolvedPlaceRootKind<'db>,
@@ -1268,6 +1350,116 @@ pub enum IntrinsicArithBinOp {
     Pow,
 }
 
+impl<'db> IrDescribe for RuntimeBuiltin<'db> {
+    fn describe<C: IrConsumer>(&self, cx: &DescribeCtx<'_>, c: &mut C) {
+        use RuntimeBuiltin::*;
+        match self {
+            IntrinsicArith { op, checked, lhs, rhs, class } => {
+                c.enter_node("IntrinsicArith");
+                c.field_u64(Dim::Structure, *op as u64);
+                c.field_bool(Dim::Structure, *checked);
+                c.field_u64(Dim::Structure, lhs.as_u32() as u64);
+                c.field_u64(Dim::Structure, rhs.as_u32() as u64);
+                describe_scalar_class(c, class);
+                c.exit_node();
+            }
+            Saturating { op, lhs, rhs, class } => {
+                c.enter_node("Saturating");
+                c.field_u64(Dim::Structure, *op as u64);
+                c.field_u64(Dim::Structure, lhs.as_u32() as u64);
+                c.field_u64(Dim::Structure, rhs.as_u32() as u64);
+                describe_scalar_class(c, class);
+                c.exit_node();
+            }
+            Mload { addr } => { c.enter_node("Mload"); c.field_u64(Dim::Structure, addr.as_u32() as u64); c.exit_node(); }
+            Mstore { addr, value } => { c.enter_node("Mstore"); c.field_u64(Dim::Structure, addr.as_u32() as u64); c.field_u64(Dim::Structure, value.as_u32() as u64); c.exit_node(); }
+            Mstore8 { addr, value } => { c.enter_node("Mstore8"); c.field_u64(Dim::Structure, addr.as_u32() as u64); c.field_u64(Dim::Structure, value.as_u32() as u64); c.exit_node(); }
+            Mcopy { dst, src, len } => { c.enter_node("Mcopy"); c.field_u64(Dim::Structure, dst.as_u32() as u64); c.field_u64(Dim::Structure, src.as_u32() as u64); c.field_u64(Dim::Structure, len.as_u32() as u64); c.exit_node(); }
+            Sload { slot } => { c.enter_node("Sload"); c.effect("storage_read"); c.field_u64(Dim::Structure, slot.as_u32() as u64); c.exit_node(); }
+            Sstore { slot, value } => { c.enter_node("Sstore"); c.effect("storage_write"); c.field_u64(Dim::Structure, slot.as_u32() as u64); c.field_u64(Dim::Structure, value.as_u32() as u64); c.exit_node(); }
+            SignExtend { byte, value } => { c.enter_node("SignExtend"); c.field_u64(Dim::Structure, byte.as_u32() as u64); c.field_u64(Dim::Structure, value.as_u32() as u64); c.exit_node(); }
+            Keccak256 { offset, len } => { c.enter_node("Keccak256"); c.effect("keccak256"); c.field_u64(Dim::Structure, offset.as_u32() as u64); c.field_u64(Dim::Structure, len.as_u32() as u64); c.exit_node(); }
+            AddMod { lhs, rhs, modulus } => { c.enter_node("AddMod"); c.field_u64(Dim::Structure, lhs.as_u32() as u64); c.field_u64(Dim::Structure, rhs.as_u32() as u64); c.field_u64(Dim::Structure, modulus.as_u32() as u64); c.exit_node(); }
+            MulMod { lhs, rhs, modulus } => { c.enter_node("MulMod"); c.field_u64(Dim::Structure, lhs.as_u32() as u64); c.field_u64(Dim::Structure, rhs.as_u32() as u64); c.field_u64(Dim::Structure, modulus.as_u32() as u64); c.exit_node(); }
+            CallDataLoad { offset } => { c.enter_node("CallDataLoad"); c.effect("calldata_read"); c.field_u64(Dim::Structure, offset.as_u32() as u64); c.exit_node(); }
+            CallDataCopy { dst, offset, len } => { c.enter_node("CallDataCopy"); c.effect("calldata_read"); c.field_u64(Dim::Structure, dst.as_u32() as u64); c.field_u64(Dim::Structure, offset.as_u32() as u64); c.field_u64(Dim::Structure, len.as_u32() as u64); c.exit_node(); }
+            ReturnDataCopy { dst, offset, len } => { c.enter_node("ReturnDataCopy"); c.effect("returndata_read"); c.field_u64(Dim::Structure, dst.as_u32() as u64); c.field_u64(Dim::Structure, offset.as_u32() as u64); c.field_u64(Dim::Structure, len.as_u32() as u64); c.exit_node(); }
+            CodeCopy { dst, offset, len } => { c.enter_node("CodeCopy"); c.field_u64(Dim::Structure, dst.as_u32() as u64); c.field_u64(Dim::Structure, offset.as_u32() as u64); c.field_u64(Dim::Structure, len.as_u32() as u64); c.exit_node(); }
+            BlockHash { block } => { c.enter_node("BlockHash"); c.field_u64(Dim::Structure, block.as_u32() as u64); c.exit_node(); }
+            Malloc { size } => { c.enter_node("Malloc"); c.field_u64(Dim::Structure, size.as_u32() as u64); c.exit_node(); }
+            Call { gas, addr, value, args_offset, args_len, ret_offset, ret_len } => {
+                c.enter_node("EvmCall");
+                c.effect("external_call");
+                for v in [gas, addr, value, args_offset, args_len, ret_offset, ret_len] {
+                    c.field_u64(Dim::Structure, v.as_u32() as u64);
+                }
+                c.exit_node();
+            }
+            StaticCall { gas, addr, args_offset, args_len, ret_offset, ret_len } => {
+                c.enter_node("StaticCall");
+                c.effect("external_call");
+                for v in [gas, addr, args_offset, args_len, ret_offset, ret_len] {
+                    c.field_u64(Dim::Structure, v.as_u32() as u64);
+                }
+                c.exit_node();
+            }
+            DelegateCall { gas, addr, args_offset, args_len, ret_offset, ret_len } => {
+                c.enter_node("DelegateCall");
+                c.effect("external_call");
+                for v in [gas, addr, args_offset, args_len, ret_offset, ret_len] {
+                    c.field_u64(Dim::Structure, v.as_u32() as u64);
+                }
+                c.exit_node();
+            }
+            Create { value, offset, len } => { c.enter_node("Create"); c.effect("external_call"); c.field_u64(Dim::Structure, value.as_u32() as u64); c.field_u64(Dim::Structure, offset.as_u32() as u64); c.field_u64(Dim::Structure, len.as_u32() as u64); c.exit_node(); }
+            Create2 { value, offset, len, salt } => { c.enter_node("Create2"); c.effect("external_call"); c.field_u64(Dim::Structure, value.as_u32() as u64); c.field_u64(Dim::Structure, offset.as_u32() as u64); c.field_u64(Dim::Structure, len.as_u32() as u64); c.field_u64(Dim::Structure, salt.as_u32() as u64); c.exit_node(); }
+            Log0 { offset, len } => { c.enter_node("Log0"); c.effect("event_emit"); c.field_u64(Dim::Structure, offset.as_u32() as u64); c.field_u64(Dim::Structure, len.as_u32() as u64); c.exit_node(); }
+            Log1 { offset, len, topic0 } => { c.enter_node("Log1"); c.effect("event_emit"); c.field_u64(Dim::Structure, offset.as_u32() as u64); c.field_u64(Dim::Structure, len.as_u32() as u64); c.field_u64(Dim::Structure, topic0.as_u32() as u64); c.exit_node(); }
+            Log2 { offset, len, topic0, topic1 } => { c.enter_node("Log2"); c.effect("event_emit"); c.field_u64(Dim::Structure, offset.as_u32() as u64); c.field_u64(Dim::Structure, len.as_u32() as u64); c.field_u64(Dim::Structure, topic0.as_u32() as u64); c.field_u64(Dim::Structure, topic1.as_u32() as u64); c.exit_node(); }
+            Log3 { offset, len, topic0, topic1, topic2 } => { c.enter_node("Log3"); c.effect("event_emit"); c.field_u64(Dim::Structure, offset.as_u32() as u64); c.field_u64(Dim::Structure, len.as_u32() as u64); c.field_u64(Dim::Structure, topic0.as_u32() as u64); c.field_u64(Dim::Structure, topic1.as_u32() as u64); c.field_u64(Dim::Structure, topic2.as_u32() as u64); c.exit_node(); }
+            Log4 { offset, len, topic0, topic1, topic2, topic3 } => { c.enter_node("Log4"); c.effect("event_emit"); c.field_u64(Dim::Structure, offset.as_u32() as u64); c.field_u64(Dim::Structure, len.as_u32() as u64); c.field_u64(Dim::Structure, topic0.as_u32() as u64); c.field_u64(Dim::Structure, topic1.as_u32() as u64); c.field_u64(Dim::Structure, topic2.as_u32() as u64); c.field_u64(Dim::Structure, topic3.as_u32() as u64); c.exit_node(); }
+            Msize => { c.enter_node("Msize"); c.exit_node(); }
+            CallValue => { c.enter_node("CallValue"); c.effect("msg_value_read"); c.exit_node(); }
+            ReturnDataSize => { c.enter_node("ReturnDataSize"); c.exit_node(); }
+            CallDataSize => { c.enter_node("CallDataSize"); c.effect("calldata_read"); c.exit_node(); }
+            CodeSize => { c.enter_node("CodeSize"); c.exit_node(); }
+            Address => { c.enter_node("Address"); c.exit_node(); }
+            Caller => { c.enter_node("Caller"); c.effect("msg_sender_read"); c.exit_node(); }
+            Origin => { c.enter_node("Origin"); c.effect("tx_origin_read"); c.exit_node(); }
+            GasPrice => { c.enter_node("GasPrice"); c.exit_node(); }
+            CoinBase => { c.enter_node("CoinBase"); c.exit_node(); }
+            Timestamp => { c.enter_node("Timestamp"); c.exit_node(); }
+            Number => { c.enter_node("Number"); c.exit_node(); }
+            PrevRandao => { c.enter_node("PrevRandao"); c.exit_node(); }
+            GasLimit => { c.enter_node("GasLimit"); c.exit_node(); }
+            ChainId => { c.enter_node("ChainId"); c.exit_node(); }
+            BaseFee => { c.enter_node("BaseFee"); c.exit_node(); }
+            SelfBalance => { c.enter_node("SelfBalance"); c.exit_node(); }
+            Gas => { c.enter_node("Gas"); c.exit_node(); }
+            CurrentCodeRegionLen => { c.enter_node("CurrentCodeRegionLen"); c.exit_node(); }
+            CodeRegionOffset { region } => {
+                c.enter_node("CodeRegionOffset");
+                describe_code_region(cx, c, region);
+                c.exit_node();
+            }
+            CodeRegionLen { region } => {
+                c.enter_node("CodeRegionLen");
+                describe_code_region(cx, c, region);
+                c.exit_node();
+            }
+            CallDataSelector => { c.enter_node("CallDataSelector"); c.exit_node(); }
+            MakeContractFieldRef { slot, class, kind } => {
+                c.enter_node("MakeContractFieldRef");
+                c.effect("storage_ref");
+                c.field_u64(Dim::Structure, *slot as u64);
+                describe_class(cx, c, class);
+                describe_ref_kind(cx, c, kind);
+                c.exit_node();
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub enum RExpr<'db> {
     Use(RValueId),
@@ -1359,6 +1551,162 @@ pub enum RExpr<'db> {
     },
 }
 
+impl<'db> IrDescribe for RExpr<'db> {
+    fn describe<C: IrConsumer>(&self, cx: &DescribeCtx<'_>, c: &mut C) {
+        match self {
+            RExpr::Use(v) => {
+                c.enter_node("Use");
+                c.field_u64(Dim::Structure, v.as_u32() as u64);
+                c.exit_node();
+            }
+            RExpr::ConstScalar(s) => {
+                c.enter_node("Const");
+                c.child(cx, s);
+                c.exit_node();
+            }
+            RExpr::Binary { op, lhs, rhs } => {
+                c.enter_node("Binary");
+                c.field_u64(Dim::Structure, binop_tag(op));
+                c.field_u64(Dim::Structure, lhs.as_u32() as u64);
+                c.field_u64(Dim::Structure, rhs.as_u32() as u64);
+                c.exit_node();
+            }
+            RExpr::Unary { op, value } => {
+                c.enter_node("Unary");
+                c.field_u64(Dim::Structure, *op as u64);
+                c.field_u64(Dim::Structure, value.as_u32() as u64);
+                c.exit_node();
+            }
+            RExpr::Call { callee, args } => {
+                c.enter_node("Call");
+                describe_runtime_instance(cx, c, callee);
+                for arg in args.iter() {
+                    c.field_u64(Dim::Structure, arg.as_u32() as u64);
+                }
+                c.exit_node();
+            }
+            RExpr::Load { place } => {
+                c.enter_node("Load");
+                c.child(cx, place);
+                c.exit_node();
+            }
+            RExpr::AggregateExtract { value, index } => {
+                c.enter_node("AggregateExtract");
+                c.field_u64(Dim::Structure, value.as_u32() as u64);
+                c.field_u64(Dim::Structure, *index as u64);
+                c.exit_node();
+            }
+            RExpr::Builtin(b) => {
+                c.enter_node("Builtin");
+                c.child(cx, b);
+                c.exit_node();
+            }
+            RExpr::Placeholder { class } => {
+                c.enter_node("Placeholder");
+                describe_class(cx, c, class);
+                c.exit_node();
+            }
+            RExpr::Cast { value, to } => {
+                c.enter_node("Cast");
+                c.field_u64(Dim::Structure, value.as_u32() as u64);
+                describe_scalar_class(c, to);
+                c.exit_node();
+            }
+            RExpr::ConstRef { region: _, layout } => {
+                c.enter_node("ConstRef");
+                describe_layout_id(cx, c, layout);
+                c.exit_node();
+            }
+            RExpr::AllocObject { layout } => {
+                c.enter_node("AllocObject");
+                describe_layout_id(cx, c, layout);
+                c.exit_node();
+            }
+            RExpr::MaterializeToObject { src } => {
+                c.enter_node("Materialize");
+                c.field_u64(Dim::Structure, src.as_u32() as u64);
+                c.exit_node();
+            }
+            RExpr::MaterializePlaceToObject { place } => {
+                c.enter_node("MaterializePlace");
+                c.child(cx, place);
+                c.exit_node();
+            }
+            RExpr::ProviderFromRaw { raw, provider_ty: _, space, target } => {
+                c.enter_node("ProviderFromRaw");
+                c.field_u64(Dim::Structure, raw.as_u32() as u64);
+                c.field_u64(Dim::Structure, *space as u64);
+                if let Some(layout) = target {
+                    describe_layout_id(cx, c, layout);
+                }
+                c.exit_node();
+            }
+            RExpr::WordToRawAddr { value, space, target } => {
+                c.enter_node("WordToRawAddr");
+                c.field_u64(Dim::Structure, value.as_u32() as u64);
+                c.field_u64(Dim::Structure, *space as u64);
+                if let Some(layout) = target {
+                    describe_layout_id(cx, c, layout);
+                }
+                c.exit_node();
+            }
+            RExpr::ProviderToRaw { value } => {
+                c.enter_node("ProviderToRaw");
+                c.field_u64(Dim::Structure, value.as_u32() as u64);
+                c.exit_node();
+            }
+            RExpr::RetagRef { value } => {
+                c.enter_node("RetagRef");
+                c.field_u64(Dim::Structure, value.as_u32() as u64);
+                c.exit_node();
+            }
+            RExpr::AddrOf { place } => {
+                c.enter_node("AddrOf");
+                c.child(cx, place);
+                c.exit_node();
+            }
+            RExpr::EnumMake { layout, variant, fields } => {
+                c.enter_node("EnumMake");
+                describe_layout_id(cx, c, layout);
+                c.field_u64(Dim::Structure, variant.index as u64);
+                for f in fields.iter() {
+                    c.field_u64(Dim::Structure, f.as_u32() as u64);
+                }
+                c.exit_node();
+            }
+            RExpr::EnumTagOfValue { value } => {
+                c.enter_node("EnumTagOfValue");
+                c.field_u64(Dim::Structure, value.as_u32() as u64);
+                c.exit_node();
+            }
+            RExpr::EnumIsVariant { value, variant } => {
+                c.enter_node("EnumIsVariant");
+                c.field_u64(Dim::Structure, value.as_u32() as u64);
+                c.field_u64(Dim::Structure, variant.index as u64);
+                c.exit_node();
+            }
+            RExpr::EnumExtract { value, variant, field } => {
+                c.enter_node("EnumExtract");
+                c.field_u64(Dim::Structure, value.as_u32() as u64);
+                c.field_u64(Dim::Structure, variant.index as u64);
+                c.field_u64(Dim::Structure, field.0 as u64);
+                c.exit_node();
+            }
+            RExpr::EnumGetTag { root } => {
+                c.enter_node("EnumGetTag");
+                c.field_u64(Dim::Structure, root.as_u32() as u64);
+                c.exit_node();
+            }
+            RExpr::EnumAssertVariantRef { root, variant } => {
+                c.enter_node("EnumAssertVariantRef");
+                c.field_u64(Dim::Structure, root.as_u32() as u64);
+                c.field_u64(Dim::Structure, variant.index as u64);
+                c.exit_node();
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
 pub enum RStmt<'db> {
     Assign {
@@ -1386,6 +1734,52 @@ pub enum RStmt<'db> {
         variant: VariantId<'db>,
         fields: Box<[RValueId]>,
     },
+}
+
+impl<'db> IrDescribe for RStmt<'db> {
+    fn describe<C: IrConsumer>(&self, cx: &DescribeCtx<'_>, c: &mut C) {
+        match self {
+            RStmt::Assign { dst, expr } => {
+                c.enter_node("Assign");
+                c.field_u64(Dim::Structure, dst.as_u32() as u64);
+                c.child(cx, expr);
+                c.exit_node();
+            }
+            RStmt::EnumAssertVariant { value, variant } => {
+                c.enter_node("EnumAssertVariant");
+                c.field_u64(Dim::Structure, value.as_u32() as u64);
+                c.field_u64(Dim::Structure, variant.index as u64);
+                c.exit_node();
+            }
+            RStmt::Store { dst, src } => {
+                c.enter_node("Store");
+                c.child(cx, dst);
+                c.field_u64(Dim::Structure, src.as_u32() as u64);
+                c.exit_node();
+            }
+            RStmt::CopyInto { dst, src } => {
+                c.enter_node("CopyInto");
+                c.child(cx, dst);
+                c.field_u64(Dim::Structure, src.as_u32() as u64);
+                c.exit_node();
+            }
+            RStmt::EnumSetTag { root, variant } => {
+                c.enter_node("EnumSetTag");
+                c.field_u64(Dim::Structure, root.as_u32() as u64);
+                c.field_u64(Dim::Structure, variant.index as u64);
+                c.exit_node();
+            }
+            RStmt::EnumWriteVariant { root, variant, fields } => {
+                c.enter_node("EnumWriteVariant");
+                c.field_u64(Dim::Structure, root.as_u32() as u64);
+                c.field_u64(Dim::Structure, variant.index as u64);
+                for f in fields.iter() {
+                    c.field_u64(Dim::Structure, f.as_u32() as u64);
+                }
+                c.exit_node();
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Update)]
@@ -1425,6 +1819,285 @@ pub enum RTerminator<'db> {
     Trap,
     Return(Option<RValueId>),
     Stop,
+}
+
+impl<'db> IrDescribe for RTerminator<'db> {
+    fn describe<C: IrConsumer>(&self, cx: &DescribeCtx<'_>, c: &mut C) {
+        match self {
+            RTerminator::Goto(target) => {
+                c.enter_node("Goto");
+                c.field_u64(Dim::Structure, target.as_u32() as u64);
+                c.exit_node();
+            }
+            RTerminator::Branch { cond, then_bb, else_bb } => {
+                c.enter_node("Branch");
+                c.field_u64(Dim::Structure, cond.as_u32() as u64);
+                c.field_u64(Dim::Structure, then_bb.as_u32() as u64);
+                c.field_u64(Dim::Structure, else_bb.as_u32() as u64);
+                c.exit_node();
+            }
+            RTerminator::Return(v) => {
+                c.enter_node("Return");
+                if let Some(v) = v {
+                    c.field_u64(Dim::Structure, v.as_u32() as u64);
+                }
+                c.exit_node();
+            }
+            RTerminator::Trap => { c.enter_node("Trap"); c.effect("revert"); c.exit_node(); }
+            RTerminator::Stop => { c.enter_node("Stop"); c.exit_node(); }
+            RTerminator::SelfDestruct { beneficiary } => {
+                c.enter_node("SelfDestruct");
+                c.effect("selfdestruct");
+                c.field_u64(Dim::Structure, beneficiary.as_u32() as u64);
+                c.exit_node();
+            }
+            RTerminator::ReturnData { offset, len } => {
+                c.enter_node("ReturnData");
+                c.field_u64(Dim::Structure, offset.as_u32() as u64);
+                c.field_u64(Dim::Structure, len.as_u32() as u64);
+                c.exit_node();
+            }
+            RTerminator::Revert { offset, len } => {
+                c.enter_node("Revert");
+                c.effect("revert");
+                c.field_u64(Dim::Structure, offset.as_u32() as u64);
+                c.field_u64(Dim::Structure, len.as_u32() as u64);
+                c.exit_node();
+            }
+            RTerminator::TerminalCall { callee, args } => {
+                c.enter_node("TerminalCall");
+                describe_runtime_instance(cx, c, callee);
+                for arg in args.iter() {
+                    c.field_u64(Dim::Structure, arg.as_u32() as u64);
+                }
+                c.exit_node();
+            }
+            RTerminator::SwitchScalar { discr, cases, default } => {
+                c.enter_node("SwitchScalar");
+                c.field_u64(Dim::Structure, discr.as_u32() as u64);
+                c.field_u64(Dim::Structure, cases.len() as u64);
+                for (scalar, target) in cases.iter() {
+                    c.child(cx, scalar);
+                    c.field_u64(Dim::Structure, target.as_u32() as u64);
+                }
+                c.field_u64(Dim::Structure, default.as_u32() as u64);
+                c.exit_node();
+            }
+            RTerminator::MatchEnumTag { tag, enum_layout, cases, default } => {
+                c.enter_node("MatchEnumTag");
+                c.field_u64(Dim::Structure, tag.as_u32() as u64);
+                describe_layout_id(cx, c, enum_layout);
+                c.field_u64(Dim::Structure, cases.len() as u64);
+                for (variant, target) in cases.iter() {
+                    c.field_u64(Dim::Structure, variant.index as u64);
+                    c.field_u64(Dim::Structure, target.as_u32() as u64);
+                }
+                if let Some(d) = default {
+                    c.field_u64(Dim::Structure, d.as_u32() as u64);
+                }
+                c.exit_node();
+            }
+        }
+    }
+}
+
+pub(crate) fn terminator_successors(term: &RTerminator<'_>) -> Vec<(&'static str, RBlockId)> {
+    match term {
+        RTerminator::Goto(target) => vec![("goto", *target)],
+        RTerminator::Branch { then_bb, else_bb, .. } => {
+            vec![("then", *then_bb), ("else", *else_bb)]
+        }
+        RTerminator::SwitchScalar { cases, default, .. } => {
+            let mut succs: Vec<_> = cases.iter().map(|(_, t)| ("case", *t)).collect();
+            succs.push(("default", *default));
+            succs
+        }
+        RTerminator::MatchEnumTag { cases, default, .. } => {
+            let mut succs: Vec<_> = cases.iter().map(|(_, t)| ("case", *t)).collect();
+            if let Some(d) = default {
+                succs.push(("default", *d));
+            }
+            succs
+        }
+        RTerminator::TerminalCall { .. }
+        | RTerminator::ReturnData { .. }
+        | RTerminator::Revert { .. }
+        | RTerminator::SelfDestruct { .. }
+        | RTerminator::Trap
+        | RTerminator::Return(_)
+        | RTerminator::Stop => vec![],
+    }
+}
+
+pub(crate) fn describe_class(cx: &DescribeCtx<'_>, c: &mut impl IrConsumer, class: &RuntimeClass<'_>) {
+    match class {
+        RuntimeClass::Scalar(scalar) => {
+            c.field_u64(Dim::Types, 0);
+            describe_scalar_class(c, scalar);
+        }
+        RuntimeClass::AggregateValue { layout } => {
+            c.field_u64(Dim::Types, 1);
+            describe_layout_id(cx, c, layout);
+        }
+        RuntimeClass::Ref { pointee, kind, view } => {
+            c.field_u64(Dim::Types, 2);
+            describe_ref_kind(cx, c, kind);
+            match view {
+                RefView::Whole => c.field_u64(Dim::Types, 0),
+                RefView::EnumVariant(v) => {
+                    c.field_u64(Dim::Types, 1);
+                    c.field_u64(Dim::Types, v.index as u64);
+                }
+            }
+            describe_class(cx, c, pointee);
+        }
+        RuntimeClass::RawAddr { space, target } => {
+            c.field_u64(Dim::Types, 3);
+            c.field_u64(Dim::Types, *space as u64);
+            if let Some(layout) = target {
+                describe_layout_id(cx, c, layout);
+            }
+        }
+    }
+}
+
+fn binop_tag(op: &BinOp) -> u64 {
+    match op {
+        BinOp::Arith(a) => *a as u64,
+        BinOp::Comp(c) => 100 + *c as u64,
+        BinOp::Logical(l) => 200 + *l as u64,
+        BinOp::Index => 300,
+    }
+}
+
+fn describe_ref_kind(_cx: &DescribeCtx<'_>, c: &mut impl IrConsumer, kind: &RefKind<'_>) {
+    match kind {
+        RefKind::Const => c.field_u64(Dim::Types, 0),
+        RefKind::Object => c.field_u64(Dim::Types, 1),
+        RefKind::Provider { provider_ty, space } => {
+            c.field_u64(Dim::Types, 2);
+            c.field_u64(Dim::Types, *space as u64);
+            let ty_str = format!("{provider_ty:?}");
+            c.field_str(Dim::Types, &ty_str);
+        }
+    }
+}
+
+fn describe_code_region(cx: &DescribeCtx<'_>, c: &mut impl IrConsumer, region: &RuntimeCodeRegion<'_>) {
+    let db: &dyn MirDb = cx.db();
+    match &region.key(db) {
+        RuntimeCodeRegionKey::ContractInit { contract } => {
+            c.field_u64(Dim::Structure, 0);
+            let hir_db: &dyn hir::HirDb = db.as_dyn_database().as_view();
+            if let hir::hir_def::Partial::Present(name) = contract.name(hir_db) {
+                c.field_str(Dim::Names, name.data(hir_db));
+            }
+        }
+        RuntimeCodeRegionKey::ContractRuntime { contract } => {
+            c.field_u64(Dim::Structure, 1);
+            let hir_db: &dyn hir::HirDb = db.as_dyn_database().as_view();
+            if let hir::hir_def::Partial::Present(name) = contract.name(hir_db) {
+                c.field_str(Dim::Names, name.data(hir_db));
+            }
+        }
+        RuntimeCodeRegionKey::ManualContractRoot { func } => {
+            c.field_u64(Dim::Structure, 2);
+            let hir_db: &dyn hir::HirDb = db.as_dyn_database().as_view();
+            if let hir::hir_def::Partial::Present(name) = func.name(hir_db) {
+                c.field_str(Dim::Names, name.data(hir_db));
+            }
+        }
+        RuntimeCodeRegionKey::FunctionRoot { symbol, callee } => {
+            c.field_u64(Dim::Structure, 3);
+            c.field_str(Dim::Names, symbol);
+            describe_runtime_instance(cx, c, callee);
+        }
+    }
+}
+
+fn describe_scalar_class(c: &mut impl IrConsumer, sc: &ScalarClass<'_>) {
+    match sc.repr {
+        ScalarRepr::Bool => c.field_u64(Dim::Types, 0),
+        ScalarRepr::Int { bits, signed } => {
+            c.field_u64(Dim::Types, 1);
+            c.field_u64(Dim::Types, bits as u64);
+            c.field_bool(Dim::Types, signed);
+        }
+        ScalarRepr::FixedBytes { len } => {
+            c.field_u64(Dim::Types, 2);
+            c.field_u64(Dim::Types, len as u64);
+        }
+        ScalarRepr::Address { bits } => {
+            c.field_u64(Dim::Types, 3);
+            c.field_u64(Dim::Types, bits as u64);
+        }
+    }
+}
+
+fn describe_runtime_instance(cx: &DescribeCtx<'_>, c: &mut impl IrConsumer, instance: &RuntimeInstance<'_>) {
+    let db: &dyn MirDb = cx.db();
+    let key = instance.key(db);
+    let params = key.params(db);
+    match key.source(db) {
+        RuntimeInstanceSource::Semantic(semantic) => {
+            c.field_u64(Dim::Structure, 0);
+            let sem_key = semantic.key(db);
+            let owner = sem_key.owner(db);
+            let hir_db: &dyn hir::HirDb = db.as_dyn_database().as_view();
+            // Extract name from the BodyOwner variant -- only Func and Const
+            // have names; contract init/recv arms are identified structurally.
+            match owner {
+                hir::analysis::ty::ty_check::BodyOwner::Func(func) => {
+                    if let hir::hir_def::Partial::Present(name) = func.name(hir_db) {
+                        c.field_str(Dim::Names, name.data(hir_db));
+                    }
+                }
+                hir::analysis::ty::ty_check::BodyOwner::Const(const_) => {
+                    if let hir::hir_def::Partial::Present(name) = const_.name(hir_db) {
+                        c.field_str(Dim::Names, name.data(hir_db));
+                    }
+                }
+                _ => {}
+            }
+        }
+        RuntimeInstanceSource::Synthetic(synth) => {
+            c.field_u64(Dim::Structure, 1);
+            c.field_str(Dim::Structure, &format!("{:?}", synth.spec(db)));
+        }
+    }
+    c.field_u64(Dim::Structure, params.len() as u64);
+    for param in params {
+        describe_class(cx, c, param);
+    }
+}
+
+fn describe_layout_id(cx: &DescribeCtx<'_>, c: &mut impl IrConsumer, layout: &LayoutId<'_>) {
+    let db: &dyn MirDb = cx.db();
+    match layout.key(db) {
+        LayoutKey::Struct(s) => {
+            c.field_u64(Dim::Types, 0);
+            c.field_u64(Dim::Types, s.fields.len() as u64);
+            for field in s.fields.iter() {
+                describe_class(cx, c, field);
+            }
+        }
+        LayoutKey::Array(a) => {
+            c.field_u64(Dim::Types, 1);
+            describe_class(cx, c, &a.elem);
+            c.field_u64(Dim::Types, a.len);
+        }
+        LayoutKey::Enum(e) => {
+            c.field_u64(Dim::Types, 2);
+            c.field_u64(Dim::Types, e.variants.len() as u64);
+            for v in e.variants.iter() {
+                c.field_str(Dim::Names, &v.name);
+                c.field_u64(Dim::Types, v.fields.len() as u64);
+                for f in v.fields.iter() {
+                    describe_class(cx, c, f);
+                }
+            }
+        }
+    }
 }
 
 pub trait RuntimeProgramView<'db> {
