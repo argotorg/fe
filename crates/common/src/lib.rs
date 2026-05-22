@@ -5,11 +5,27 @@ pub mod config;
 pub mod dependencies;
 pub mod diagnostics;
 pub mod file;
+pub mod ast_describe;
+
+pub fn byte_offset_to_line_col(text: &str, offset: usize) -> (usize, usize) {
+    let mut line = 1;
+    let mut col = 1;
+    for (i, ch) in text.char_indices() {
+        if i >= offset { break; }
+        if ch == '\n' { line += 1; col = 1; } else { col += 1; }
+    }
+    (line, col)
+}
+pub mod debug_consumer;
+pub mod fact_consumer;
+pub mod hash_consumer;
 pub mod indexmap;
 pub mod ingot;
+pub mod ir_describe;
 pub mod layout;
 pub mod options;
 pub mod paths;
+pub mod provenance;
 pub mod stdlib;
 pub mod urlext;
 

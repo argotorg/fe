@@ -26,3 +26,6 @@ typed-path.workspace = true
 ordermap = "0.5.5"
 rustc-hash.workspace = true
 radix_immutable = "0.1"
+indexmap = "2.0"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+ir-describe-derive = { path = "../ir-describe-derive" }
