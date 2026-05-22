@@ -49,6 +49,8 @@ tracing-tree = "0.4.0"
 wasm-bindgen-test = "0.3"
 semver = "1.0.26"
 petgraph = "0.8"
+gimli = { version = "0.31", default-features = false, features = ["write"] }
+object = { version = "0.36", default-features = false, features = ["write"] }
 sonatina-ir = { git = "https://github.com/fe-lang/sonatina", rev = "ed7c4f1" }
 sonatina-triple = { git = "https://github.com/fe-lang/sonatina", rev = "ed7c4f1" }
 sonatina-codegen = { git = "https://github.com/fe-lang/sonatina", rev = "ed7c4f1" }
