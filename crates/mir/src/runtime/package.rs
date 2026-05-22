@@ -128,7 +128,7 @@ impl PackageProvenance {
     }
 
     fn collect_from_body(&mut self, body: &super::RuntimeBody<'_>, _func_id: u32) {
-        use common::provenance::{ProvenanceNodeId, IrLevel, TransformTag};
+        use common::provenance::{IrLevel, ProvenanceNodeId, TransformTag};
 
         for block in &body.blocks {
             for origin in &block.stmt_origins {
@@ -136,11 +136,8 @@ impl PackageProvenance {
                     continue;
                 }
                 // Flat encoding: unique per (func, block, stmt) triple
-                let mir_node = ProvenanceNodeId::new(
-                    IrLevel::Mir,
-                    self.next_node_id,
-                    TransformTag::SmirToMir,
-                );
+                let mir_node =
+                    ProvenanceNodeId::new(IrLevel::Mir, self.next_node_id, TransformTag::SmirToMir);
                 self.next_node_id += 1;
                 self.dag.add_edge(*origin, mir_node);
             }
@@ -236,11 +233,14 @@ impl<'db> RuntimeGraphBuilder<'db> {
         self.object_specs.extend(self.discovered_contract_specs);
         self.code_region_roots
             .sort_by_key(|(region, _)| code_region_symbol(self.db, *region));
-        Ok((RuntimeGraph {
-            nodes: self.nodes,
-            object_specs: self.object_specs,
-            code_region_roots: self.code_region_roots,
-        }, provenance))
+        Ok((
+            RuntimeGraph {
+                nodes: self.nodes,
+                object_specs: self.object_specs,
+                code_region_roots: self.code_region_roots,
+            },
+            provenance,
+        ))
     }
 
     fn enqueue(&mut self, instance: RuntimeInstance<'db>) {

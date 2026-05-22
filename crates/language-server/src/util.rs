@@ -176,7 +176,7 @@ pub fn diag_to_lsp(
             (
                 primary_location.clone(),
                 Some(NumberOrString::String(diag.error_code.to_string())),
-                diag.message.to_string() + "\n" + &sub.message,
+                diag.message.to_string() + "\n" + sub.message.as_str(),
                 None,
             )
         } else {

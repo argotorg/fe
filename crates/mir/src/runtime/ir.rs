@@ -1,5 +1,5 @@
-use cranelift_entity::{EntityRef, entity_impl};
 use common::ir_describe::{DescribeCtx, Dim, IrConsumer, IrDescribe};
+use cranelift_entity::{EntityRef, entity_impl};
 use hir::analysis::{
     semantic::{FieldIndex, SemanticInstance},
     ty::ty_def::TyId,
@@ -563,7 +563,11 @@ impl IrDescribe for ConstScalar {
                 c.field_u64(Dim::Structure, 0);
                 c.field_bool(Dim::Constants, *b);
             }
-            ConstScalar::Int { bits, signed, words } => {
+            ConstScalar::Int {
+                bits,
+                signed,
+                words,
+            } => {
                 c.field_u64(Dim::Structure, 1);
                 c.field_u64(Dim::Types, *bits as u64);
                 c.field_bool(Dim::Types, *signed);
@@ -1354,7 +1358,13 @@ impl<'db> IrDescribe for RuntimeBuiltin<'db> {
     fn describe<C: IrConsumer>(&self, cx: &DescribeCtx<'_>, c: &mut C) {
         use RuntimeBuiltin::*;
         match self {
-            IntrinsicArith { op, checked, lhs, rhs, class } => {
+            IntrinsicArith {
+                op,
+                checked,
+                lhs,
+                rhs,
+                class,
+            } => {
                 c.enter_node("IntrinsicArith");
                 c.field_u64(Dim::Structure, *op as u64);
                 c.field_bool(Dim::Structure, *checked);
@@ -1363,7 +1373,12 @@ impl<'db> IrDescribe for RuntimeBuiltin<'db> {
                 describe_scalar_class(c, class);
                 c.exit_node();
             }
-            Saturating { op, lhs, rhs, class } => {
+            Saturating {
+                op,
+                lhs,
+                rhs,
+                class,
+            } => {
                 c.enter_node("Saturating");
                 c.field_u64(Dim::Structure, *op as u64);
                 c.field_u64(Dim::Structure, lhs.as_u32() as u64);
@@ -1371,23 +1386,118 @@ impl<'db> IrDescribe for RuntimeBuiltin<'db> {
                 describe_scalar_class(c, class);
                 c.exit_node();
             }
-            Mload { addr } => { c.enter_node("Mload"); c.field_u64(Dim::Structure, addr.as_u32() as u64); c.exit_node(); }
-            Mstore { addr, value } => { c.enter_node("Mstore"); c.field_u64(Dim::Structure, addr.as_u32() as u64); c.field_u64(Dim::Structure, value.as_u32() as u64); c.exit_node(); }
-            Mstore8 { addr, value } => { c.enter_node("Mstore8"); c.field_u64(Dim::Structure, addr.as_u32() as u64); c.field_u64(Dim::Structure, value.as_u32() as u64); c.exit_node(); }
-            Mcopy { dst, src, len } => { c.enter_node("Mcopy"); c.field_u64(Dim::Structure, dst.as_u32() as u64); c.field_u64(Dim::Structure, src.as_u32() as u64); c.field_u64(Dim::Structure, len.as_u32() as u64); c.exit_node(); }
-            Sload { slot } => { c.enter_node("Sload"); c.effect("storage_read"); c.field_u64(Dim::Structure, slot.as_u32() as u64); c.exit_node(); }
-            Sstore { slot, value } => { c.enter_node("Sstore"); c.effect("storage_write"); c.field_u64(Dim::Structure, slot.as_u32() as u64); c.field_u64(Dim::Structure, value.as_u32() as u64); c.exit_node(); }
-            SignExtend { byte, value } => { c.enter_node("SignExtend"); c.field_u64(Dim::Structure, byte.as_u32() as u64); c.field_u64(Dim::Structure, value.as_u32() as u64); c.exit_node(); }
-            Keccak256 { offset, len } => { c.enter_node("Keccak256"); c.effect("keccak256"); c.field_u64(Dim::Structure, offset.as_u32() as u64); c.field_u64(Dim::Structure, len.as_u32() as u64); c.exit_node(); }
-            AddMod { lhs, rhs, modulus } => { c.enter_node("AddMod"); c.field_u64(Dim::Structure, lhs.as_u32() as u64); c.field_u64(Dim::Structure, rhs.as_u32() as u64); c.field_u64(Dim::Structure, modulus.as_u32() as u64); c.exit_node(); }
-            MulMod { lhs, rhs, modulus } => { c.enter_node("MulMod"); c.field_u64(Dim::Structure, lhs.as_u32() as u64); c.field_u64(Dim::Structure, rhs.as_u32() as u64); c.field_u64(Dim::Structure, modulus.as_u32() as u64); c.exit_node(); }
-            CallDataLoad { offset } => { c.enter_node("CallDataLoad"); c.effect("calldata_read"); c.field_u64(Dim::Structure, offset.as_u32() as u64); c.exit_node(); }
-            CallDataCopy { dst, offset, len } => { c.enter_node("CallDataCopy"); c.effect("calldata_read"); c.field_u64(Dim::Structure, dst.as_u32() as u64); c.field_u64(Dim::Structure, offset.as_u32() as u64); c.field_u64(Dim::Structure, len.as_u32() as u64); c.exit_node(); }
-            ReturnDataCopy { dst, offset, len } => { c.enter_node("ReturnDataCopy"); c.effect("returndata_read"); c.field_u64(Dim::Structure, dst.as_u32() as u64); c.field_u64(Dim::Structure, offset.as_u32() as u64); c.field_u64(Dim::Structure, len.as_u32() as u64); c.exit_node(); }
-            CodeCopy { dst, offset, len } => { c.enter_node("CodeCopy"); c.field_u64(Dim::Structure, dst.as_u32() as u64); c.field_u64(Dim::Structure, offset.as_u32() as u64); c.field_u64(Dim::Structure, len.as_u32() as u64); c.exit_node(); }
-            BlockHash { block } => { c.enter_node("BlockHash"); c.field_u64(Dim::Structure, block.as_u32() as u64); c.exit_node(); }
-            Malloc { size } => { c.enter_node("Malloc"); c.field_u64(Dim::Structure, size.as_u32() as u64); c.exit_node(); }
-            Call { gas, addr, value, args_offset, args_len, ret_offset, ret_len } => {
+            Mload { addr } => {
+                c.enter_node("Mload");
+                c.field_u64(Dim::Structure, addr.as_u32() as u64);
+                c.exit_node();
+            }
+            Mstore { addr, value } => {
+                c.enter_node("Mstore");
+                c.field_u64(Dim::Structure, addr.as_u32() as u64);
+                c.field_u64(Dim::Structure, value.as_u32() as u64);
+                c.exit_node();
+            }
+            Mstore8 { addr, value } => {
+                c.enter_node("Mstore8");
+                c.field_u64(Dim::Structure, addr.as_u32() as u64);
+                c.field_u64(Dim::Structure, value.as_u32() as u64);
+                c.exit_node();
+            }
+            Mcopy { dst, src, len } => {
+                c.enter_node("Mcopy");
+                c.field_u64(Dim::Structure, dst.as_u32() as u64);
+                c.field_u64(Dim::Structure, src.as_u32() as u64);
+                c.field_u64(Dim::Structure, len.as_u32() as u64);
+                c.exit_node();
+            }
+            Sload { slot } => {
+                c.enter_node("Sload");
+                c.effect("storage_read");
+                c.field_u64(Dim::Structure, slot.as_u32() as u64);
+                c.exit_node();
+            }
+            Sstore { slot, value } => {
+                c.enter_node("Sstore");
+                c.effect("storage_write");
+                c.field_u64(Dim::Structure, slot.as_u32() as u64);
+                c.field_u64(Dim::Structure, value.as_u32() as u64);
+                c.exit_node();
+            }
+            SignExtend { byte, value } => {
+                c.enter_node("SignExtend");
+                c.field_u64(Dim::Structure, byte.as_u32() as u64);
+                c.field_u64(Dim::Structure, value.as_u32() as u64);
+                c.exit_node();
+            }
+            Keccak256 { offset, len } => {
+                c.enter_node("Keccak256");
+                c.effect("keccak256");
+                c.field_u64(Dim::Structure, offset.as_u32() as u64);
+                c.field_u64(Dim::Structure, len.as_u32() as u64);
+                c.exit_node();
+            }
+            AddMod { lhs, rhs, modulus } => {
+                c.enter_node("AddMod");
+                c.field_u64(Dim::Structure, lhs.as_u32() as u64);
+                c.field_u64(Dim::Structure, rhs.as_u32() as u64);
+                c.field_u64(Dim::Structure, modulus.as_u32() as u64);
+                c.exit_node();
+            }
+            MulMod { lhs, rhs, modulus } => {
+                c.enter_node("MulMod");
+                c.field_u64(Dim::Structure, lhs.as_u32() as u64);
+                c.field_u64(Dim::Structure, rhs.as_u32() as u64);
+                c.field_u64(Dim::Structure, modulus.as_u32() as u64);
+                c.exit_node();
+            }
+            CallDataLoad { offset } => {
+                c.enter_node("CallDataLoad");
+                c.effect("calldata_read");
+                c.field_u64(Dim::Structure, offset.as_u32() as u64);
+                c.exit_node();
+            }
+            CallDataCopy { dst, offset, len } => {
+                c.enter_node("CallDataCopy");
+                c.effect("calldata_read");
+                c.field_u64(Dim::Structure, dst.as_u32() as u64);
+                c.field_u64(Dim::Structure, offset.as_u32() as u64);
+                c.field_u64(Dim::Structure, len.as_u32() as u64);
+                c.exit_node();
+            }
+            ReturnDataCopy { dst, offset, len } => {
+                c.enter_node("ReturnDataCopy");
+                c.effect("returndata_read");
+                c.field_u64(Dim::Structure, dst.as_u32() as u64);
+                c.field_u64(Dim::Structure, offset.as_u32() as u64);
+                c.field_u64(Dim::Structure, len.as_u32() as u64);
+                c.exit_node();
+            }
+            CodeCopy { dst, offset, len } => {
+                c.enter_node("CodeCopy");
+                c.field_u64(Dim::Structure, dst.as_u32() as u64);
+                c.field_u64(Dim::Structure, offset.as_u32() as u64);
+                c.field_u64(Dim::Structure, len.as_u32() as u64);
+                c.exit_node();
+            }
+            BlockHash { block } => {
+                c.enter_node("BlockHash");
+                c.field_u64(Dim::Structure, block.as_u32() as u64);
+                c.exit_node();
+            }
+            Malloc { size } => {
+                c.enter_node("Malloc");
+                c.field_u64(Dim::Structure, size.as_u32() as u64);
+                c.exit_node();
+            }
+            Call {
+                gas,
+                addr,
+                value,
+                args_offset,
+                args_len,
+                ret_offset,
+                ret_len,
+            } => {
                 c.enter_node("EvmCall");
                 c.effect("external_call");
                 for v in [gas, addr, value, args_offset, args_len, ret_offset, ret_len] {
@@ -1395,7 +1505,14 @@ impl<'db> IrDescribe for RuntimeBuiltin<'db> {
                 }
                 c.exit_node();
             }
-            StaticCall { gas, addr, args_offset, args_len, ret_offset, ret_len } => {
+            StaticCall {
+                gas,
+                addr,
+                args_offset,
+                args_len,
+                ret_offset,
+                ret_len,
+            } => {
                 c.enter_node("StaticCall");
                 c.effect("external_call");
                 for v in [gas, addr, args_offset, args_len, ret_offset, ret_len] {
@@ -1403,7 +1520,14 @@ impl<'db> IrDescribe for RuntimeBuiltin<'db> {
                 }
                 c.exit_node();
             }
-            DelegateCall { gas, addr, args_offset, args_len, ret_offset, ret_len } => {
+            DelegateCall {
+                gas,
+                addr,
+                args_offset,
+                args_len,
+                ret_offset,
+                ret_len,
+            } => {
                 c.enter_node("DelegateCall");
                 c.effect("external_call");
                 for v in [gas, addr, args_offset, args_len, ret_offset, ret_len] {
@@ -1411,32 +1535,175 @@ impl<'db> IrDescribe for RuntimeBuiltin<'db> {
                 }
                 c.exit_node();
             }
-            Create { value, offset, len } => { c.enter_node("Create"); c.effect("external_call"); c.field_u64(Dim::Structure, value.as_u32() as u64); c.field_u64(Dim::Structure, offset.as_u32() as u64); c.field_u64(Dim::Structure, len.as_u32() as u64); c.exit_node(); }
-            Create2 { value, offset, len, salt } => { c.enter_node("Create2"); c.effect("external_call"); c.field_u64(Dim::Structure, value.as_u32() as u64); c.field_u64(Dim::Structure, offset.as_u32() as u64); c.field_u64(Dim::Structure, len.as_u32() as u64); c.field_u64(Dim::Structure, salt.as_u32() as u64); c.exit_node(); }
-            Log0 { offset, len } => { c.enter_node("Log0"); c.effect("event_emit"); c.field_u64(Dim::Structure, offset.as_u32() as u64); c.field_u64(Dim::Structure, len.as_u32() as u64); c.exit_node(); }
-            Log1 { offset, len, topic0 } => { c.enter_node("Log1"); c.effect("event_emit"); c.field_u64(Dim::Structure, offset.as_u32() as u64); c.field_u64(Dim::Structure, len.as_u32() as u64); c.field_u64(Dim::Structure, topic0.as_u32() as u64); c.exit_node(); }
-            Log2 { offset, len, topic0, topic1 } => { c.enter_node("Log2"); c.effect("event_emit"); c.field_u64(Dim::Structure, offset.as_u32() as u64); c.field_u64(Dim::Structure, len.as_u32() as u64); c.field_u64(Dim::Structure, topic0.as_u32() as u64); c.field_u64(Dim::Structure, topic1.as_u32() as u64); c.exit_node(); }
-            Log3 { offset, len, topic0, topic1, topic2 } => { c.enter_node("Log3"); c.effect("event_emit"); c.field_u64(Dim::Structure, offset.as_u32() as u64); c.field_u64(Dim::Structure, len.as_u32() as u64); c.field_u64(Dim::Structure, topic0.as_u32() as u64); c.field_u64(Dim::Structure, topic1.as_u32() as u64); c.field_u64(Dim::Structure, topic2.as_u32() as u64); c.exit_node(); }
-            Log4 { offset, len, topic0, topic1, topic2, topic3 } => { c.enter_node("Log4"); c.effect("event_emit"); c.field_u64(Dim::Structure, offset.as_u32() as u64); c.field_u64(Dim::Structure, len.as_u32() as u64); c.field_u64(Dim::Structure, topic0.as_u32() as u64); c.field_u64(Dim::Structure, topic1.as_u32() as u64); c.field_u64(Dim::Structure, topic2.as_u32() as u64); c.field_u64(Dim::Structure, topic3.as_u32() as u64); c.exit_node(); }
-            Msize => { c.enter_node("Msize"); c.exit_node(); }
-            CallValue => { c.enter_node("CallValue"); c.effect("msg_value_read"); c.exit_node(); }
-            ReturnDataSize => { c.enter_node("ReturnDataSize"); c.exit_node(); }
-            CallDataSize => { c.enter_node("CallDataSize"); c.effect("calldata_read"); c.exit_node(); }
-            CodeSize => { c.enter_node("CodeSize"); c.exit_node(); }
-            Address => { c.enter_node("Address"); c.exit_node(); }
-            Caller => { c.enter_node("Caller"); c.effect("msg_sender_read"); c.exit_node(); }
-            Origin => { c.enter_node("Origin"); c.effect("tx_origin_read"); c.exit_node(); }
-            GasPrice => { c.enter_node("GasPrice"); c.exit_node(); }
-            CoinBase => { c.enter_node("CoinBase"); c.exit_node(); }
-            Timestamp => { c.enter_node("Timestamp"); c.exit_node(); }
-            Number => { c.enter_node("Number"); c.exit_node(); }
-            PrevRandao => { c.enter_node("PrevRandao"); c.exit_node(); }
-            GasLimit => { c.enter_node("GasLimit"); c.exit_node(); }
-            ChainId => { c.enter_node("ChainId"); c.exit_node(); }
-            BaseFee => { c.enter_node("BaseFee"); c.exit_node(); }
-            SelfBalance => { c.enter_node("SelfBalance"); c.exit_node(); }
-            Gas => { c.enter_node("Gas"); c.exit_node(); }
-            CurrentCodeRegionLen => { c.enter_node("CurrentCodeRegionLen"); c.exit_node(); }
+            Create { value, offset, len } => {
+                c.enter_node("Create");
+                c.effect("external_call");
+                c.field_u64(Dim::Structure, value.as_u32() as u64);
+                c.field_u64(Dim::Structure, offset.as_u32() as u64);
+                c.field_u64(Dim::Structure, len.as_u32() as u64);
+                c.exit_node();
+            }
+            Create2 {
+                value,
+                offset,
+                len,
+                salt,
+            } => {
+                c.enter_node("Create2");
+                c.effect("external_call");
+                c.field_u64(Dim::Structure, value.as_u32() as u64);
+                c.field_u64(Dim::Structure, offset.as_u32() as u64);
+                c.field_u64(Dim::Structure, len.as_u32() as u64);
+                c.field_u64(Dim::Structure, salt.as_u32() as u64);
+                c.exit_node();
+            }
+            Log0 { offset, len } => {
+                c.enter_node("Log0");
+                c.effect("event_emit");
+                c.field_u64(Dim::Structure, offset.as_u32() as u64);
+                c.field_u64(Dim::Structure, len.as_u32() as u64);
+                c.exit_node();
+            }
+            Log1 {
+                offset,
+                len,
+                topic0,
+            } => {
+                c.enter_node("Log1");
+                c.effect("event_emit");
+                c.field_u64(Dim::Structure, offset.as_u32() as u64);
+                c.field_u64(Dim::Structure, len.as_u32() as u64);
+                c.field_u64(Dim::Structure, topic0.as_u32() as u64);
+                c.exit_node();
+            }
+            Log2 {
+                offset,
+                len,
+                topic0,
+                topic1,
+            } => {
+                c.enter_node("Log2");
+                c.effect("event_emit");
+                c.field_u64(Dim::Structure, offset.as_u32() as u64);
+                c.field_u64(Dim::Structure, len.as_u32() as u64);
+                c.field_u64(Dim::Structure, topic0.as_u32() as u64);
+                c.field_u64(Dim::Structure, topic1.as_u32() as u64);
+                c.exit_node();
+            }
+            Log3 {
+                offset,
+                len,
+                topic0,
+                topic1,
+                topic2,
+            } => {
+                c.enter_node("Log3");
+                c.effect("event_emit");
+                c.field_u64(Dim::Structure, offset.as_u32() as u64);
+                c.field_u64(Dim::Structure, len.as_u32() as u64);
+                c.field_u64(Dim::Structure, topic0.as_u32() as u64);
+                c.field_u64(Dim::Structure, topic1.as_u32() as u64);
+                c.field_u64(Dim::Structure, topic2.as_u32() as u64);
+                c.exit_node();
+            }
+            Log4 {
+                offset,
+                len,
+                topic0,
+                topic1,
+                topic2,
+                topic3,
+            } => {
+                c.enter_node("Log4");
+                c.effect("event_emit");
+                c.field_u64(Dim::Structure, offset.as_u32() as u64);
+                c.field_u64(Dim::Structure, len.as_u32() as u64);
+                c.field_u64(Dim::Structure, topic0.as_u32() as u64);
+                c.field_u64(Dim::Structure, topic1.as_u32() as u64);
+                c.field_u64(Dim::Structure, topic2.as_u32() as u64);
+                c.field_u64(Dim::Structure, topic3.as_u32() as u64);
+                c.exit_node();
+            }
+            Msize => {
+                c.enter_node("Msize");
+                c.exit_node();
+            }
+            CallValue => {
+                c.enter_node("CallValue");
+                c.effect("msg_value_read");
+                c.exit_node();
+            }
+            ReturnDataSize => {
+                c.enter_node("ReturnDataSize");
+                c.exit_node();
+            }
+            CallDataSize => {
+                c.enter_node("CallDataSize");
+                c.effect("calldata_read");
+                c.exit_node();
+            }
+            CodeSize => {
+                c.enter_node("CodeSize");
+                c.exit_node();
+            }
+            Address => {
+                c.enter_node("Address");
+                c.exit_node();
+            }
+            Caller => {
+                c.enter_node("Caller");
+                c.effect("msg_sender_read");
+                c.exit_node();
+            }
+            Origin => {
+                c.enter_node("Origin");
+                c.effect("tx_origin_read");
+                c.exit_node();
+            }
+            GasPrice => {
+                c.enter_node("GasPrice");
+                c.exit_node();
+            }
+            CoinBase => {
+                c.enter_node("CoinBase");
+                c.exit_node();
+            }
+            Timestamp => {
+                c.enter_node("Timestamp");
+                c.exit_node();
+            }
+            Number => {
+                c.enter_node("Number");
+                c.exit_node();
+            }
+            PrevRandao => {
+                c.enter_node("PrevRandao");
+                c.exit_node();
+            }
+            GasLimit => {
+                c.enter_node("GasLimit");
+                c.exit_node();
+            }
+            ChainId => {
+                c.enter_node("ChainId");
+                c.exit_node();
+            }
+            BaseFee => {
+                c.enter_node("BaseFee");
+                c.exit_node();
+            }
+            SelfBalance => {
+                c.enter_node("SelfBalance");
+                c.exit_node();
+            }
+            Gas => {
+                c.enter_node("Gas");
+                c.exit_node();
+            }
+            CurrentCodeRegionLen => {
+                c.enter_node("CurrentCodeRegionLen");
+                c.exit_node();
+            }
             CodeRegionOffset { region } => {
                 c.enter_node("CodeRegionOffset");
                 describe_code_region(cx, c, region);
@@ -1447,7 +1714,10 @@ impl<'db> IrDescribe for RuntimeBuiltin<'db> {
                 describe_code_region(cx, c, region);
                 c.exit_node();
             }
-            CallDataSelector => { c.enter_node("CallDataSelector"); c.exit_node(); }
+            CallDataSelector => {
+                c.enter_node("CallDataSelector");
+                c.exit_node();
+            }
             MakeContractFieldRef { slot, class, kind } => {
                 c.enter_node("MakeContractFieldRef");
                 c.effect("storage_ref");
@@ -1632,7 +1902,12 @@ impl<'db> IrDescribe for RExpr<'db> {
                 c.child(cx, place);
                 c.exit_node();
             }
-            RExpr::ProviderFromRaw { raw, provider_ty: _, space, target } => {
+            RExpr::ProviderFromRaw {
+                raw,
+                provider_ty: _,
+                space,
+                target,
+            } => {
                 c.enter_node("ProviderFromRaw");
                 c.field_u64(Dim::Structure, raw.as_u32() as u64);
                 c.field_u64(Dim::Structure, *space as u64);
@@ -1641,7 +1916,11 @@ impl<'db> IrDescribe for RExpr<'db> {
                 }
                 c.exit_node();
             }
-            RExpr::WordToRawAddr { value, space, target } => {
+            RExpr::WordToRawAddr {
+                value,
+                space,
+                target,
+            } => {
                 c.enter_node("WordToRawAddr");
                 c.field_u64(Dim::Structure, value.as_u32() as u64);
                 c.field_u64(Dim::Structure, *space as u64);
@@ -1665,7 +1944,11 @@ impl<'db> IrDescribe for RExpr<'db> {
                 c.child(cx, place);
                 c.exit_node();
             }
-            RExpr::EnumMake { layout, variant, fields } => {
+            RExpr::EnumMake {
+                layout,
+                variant,
+                fields,
+            } => {
                 c.enter_node("EnumMake");
                 describe_layout_id(cx, c, layout);
                 c.field_u64(Dim::Structure, variant.index as u64);
@@ -1685,7 +1968,11 @@ impl<'db> IrDescribe for RExpr<'db> {
                 c.field_u64(Dim::Structure, variant.index as u64);
                 c.exit_node();
             }
-            RExpr::EnumExtract { value, variant, field } => {
+            RExpr::EnumExtract {
+                value,
+                variant,
+                field,
+            } => {
                 c.enter_node("EnumExtract");
                 c.field_u64(Dim::Structure, value.as_u32() as u64);
                 c.field_u64(Dim::Structure, variant.index as u64);
@@ -1769,7 +2056,11 @@ impl<'db> IrDescribe for RStmt<'db> {
                 c.field_u64(Dim::Structure, variant.index as u64);
                 c.exit_node();
             }
-            RStmt::EnumWriteVariant { root, variant, fields } => {
+            RStmt::EnumWriteVariant {
+                root,
+                variant,
+                fields,
+            } => {
                 c.enter_node("EnumWriteVariant");
                 c.field_u64(Dim::Structure, root.as_u32() as u64);
                 c.field_u64(Dim::Structure, variant.index as u64);
@@ -1829,7 +2120,11 @@ impl<'db> IrDescribe for RTerminator<'db> {
                 c.field_u64(Dim::Structure, target.as_u32() as u64);
                 c.exit_node();
             }
-            RTerminator::Branch { cond, then_bb, else_bb } => {
+            RTerminator::Branch {
+                cond,
+                then_bb,
+                else_bb,
+            } => {
                 c.enter_node("Branch");
                 c.field_u64(Dim::Structure, cond.as_u32() as u64);
                 c.field_u64(Dim::Structure, then_bb.as_u32() as u64);
@@ -1843,8 +2138,15 @@ impl<'db> IrDescribe for RTerminator<'db> {
                 }
                 c.exit_node();
             }
-            RTerminator::Trap => { c.enter_node("Trap"); c.effect("revert"); c.exit_node(); }
-            RTerminator::Stop => { c.enter_node("Stop"); c.exit_node(); }
+            RTerminator::Trap => {
+                c.enter_node("Trap");
+                c.effect("revert");
+                c.exit_node();
+            }
+            RTerminator::Stop => {
+                c.enter_node("Stop");
+                c.exit_node();
+            }
             RTerminator::SelfDestruct { beneficiary } => {
                 c.enter_node("SelfDestruct");
                 c.effect("selfdestruct");
@@ -1872,7 +2174,11 @@ impl<'db> IrDescribe for RTerminator<'db> {
                 }
                 c.exit_node();
             }
-            RTerminator::SwitchScalar { discr, cases, default } => {
+            RTerminator::SwitchScalar {
+                discr,
+                cases,
+                default,
+            } => {
                 c.enter_node("SwitchScalar");
                 c.field_u64(Dim::Structure, discr.as_u32() as u64);
                 c.field_u64(Dim::Structure, cases.len() as u64);
@@ -1883,7 +2189,12 @@ impl<'db> IrDescribe for RTerminator<'db> {
                 c.field_u64(Dim::Structure, default.as_u32() as u64);
                 c.exit_node();
             }
-            RTerminator::MatchEnumTag { tag, enum_layout, cases, default } => {
+            RTerminator::MatchEnumTag {
+                tag,
+                enum_layout,
+                cases,
+                default,
+            } => {
                 c.enter_node("MatchEnumTag");
                 c.field_u64(Dim::Structure, tag.as_u32() as u64);
                 describe_layout_id(cx, c, enum_layout);
@@ -1904,7 +2215,9 @@ impl<'db> IrDescribe for RTerminator<'db> {
 pub(crate) fn terminator_successors(term: &RTerminator<'_>) -> Vec<(&'static str, RBlockId)> {
     match term {
         RTerminator::Goto(target) => vec![("goto", *target)],
-        RTerminator::Branch { then_bb, else_bb, .. } => {
+        RTerminator::Branch {
+            then_bb, else_bb, ..
+        } => {
             vec![("then", *then_bb), ("else", *else_bb)]
         }
         RTerminator::SwitchScalar { cases, default, .. } => {
@@ -1929,7 +2242,11 @@ pub(crate) fn terminator_successors(term: &RTerminator<'_>) -> Vec<(&'static str
     }
 }
 
-pub(crate) fn describe_class(cx: &DescribeCtx<'_>, c: &mut impl IrConsumer, class: &RuntimeClass<'_>) {
+pub(crate) fn describe_class(
+    cx: &DescribeCtx<'_>,
+    c: &mut impl IrConsumer,
+    class: &RuntimeClass<'_>,
+) {
     match class {
         RuntimeClass::Scalar(scalar) => {
             c.field_u64(Dim::Types, 0);
@@ -1939,7 +2256,11 @@ pub(crate) fn describe_class(cx: &DescribeCtx<'_>, c: &mut impl IrConsumer, clas
             c.field_u64(Dim::Types, 1);
             describe_layout_id(cx, c, layout);
         }
-        RuntimeClass::Ref { pointee, kind, view } => {
+        RuntimeClass::Ref {
+            pointee,
+            kind,
+            view,
+        } => {
             c.field_u64(Dim::Types, 2);
             describe_ref_kind(cx, c, kind);
             match view {
@@ -1983,7 +2304,11 @@ fn describe_ref_kind(_cx: &DescribeCtx<'_>, c: &mut impl IrConsumer, kind: &RefK
     }
 }
 
-fn describe_code_region(cx: &DescribeCtx<'_>, c: &mut impl IrConsumer, region: &RuntimeCodeRegion<'_>) {
+fn describe_code_region(
+    cx: &DescribeCtx<'_>,
+    c: &mut impl IrConsumer,
+    region: &RuntimeCodeRegion<'_>,
+) {
     let db: &dyn MirDb = cx.db();
     match &region.key(db) {
         RuntimeCodeRegionKey::ContractInit { contract } => {
@@ -2034,7 +2359,11 @@ fn describe_scalar_class(c: &mut impl IrConsumer, sc: &ScalarClass<'_>) {
     }
 }
 
-fn describe_runtime_instance(cx: &DescribeCtx<'_>, c: &mut impl IrConsumer, instance: &RuntimeInstance<'_>) {
+fn describe_runtime_instance(
+    cx: &DescribeCtx<'_>,
+    c: &mut impl IrConsumer,
+    instance: &RuntimeInstance<'_>,
+) {
     let db: &dyn MirDb = cx.db();
     let key = instance.key(db);
     let params = key.params(db);

@@ -25,6 +25,12 @@ pub struct DebugConsumer {
     current_source: Option<SourceLocation>,
 }
 
+impl Default for DebugConsumer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DebugConsumer {
     pub fn new() -> Self {
         Self {
@@ -115,7 +121,8 @@ mod tests {
         let mut c = DebugConsumer::new();
 
         c.origin(&ProvenanceNodeId::new(
-            crate::provenance::IrLevel::Smir, 5,
+            crate::provenance::IrLevel::Smir,
+            5,
             crate::provenance::TransformTag::SmirToMir,
         ));
         c.source_span("test.fe", 10, 5, 10, 15);
@@ -138,7 +145,8 @@ mod tests {
         let mut composite = (HashConsumer::new(), DebugConsumer::new());
 
         composite.origin(&ProvenanceNodeId::new(
-            crate::provenance::IrLevel::Smir, 1,
+            crate::provenance::IrLevel::Smir,
+            1,
             crate::provenance::TransformTag::SmirToMir,
         ));
         composite.enter_node("Stmt");

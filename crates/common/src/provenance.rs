@@ -35,19 +35,35 @@ pub enum TransformTag {
 
 impl ProvenanceNodeId {
     pub fn new(level: IrLevel, node: u32, transform: TransformTag) -> Self {
-        Self { level, node, transform }
+        Self {
+            level,
+            node,
+            transform,
+        }
     }
 
     pub fn mir(node: u32, transform: TransformTag) -> Self {
-        Self { level: IrLevel::Mir, node, transform }
+        Self {
+            level: IrLevel::Mir,
+            node,
+            transform,
+        }
     }
 
     pub fn sonatina(node: u32, transform: TransformTag) -> Self {
-        Self { level: IrLevel::Sonatina, node, transform }
+        Self {
+            level: IrLevel::Sonatina,
+            node,
+            transform,
+        }
     }
 
     pub fn hir(node: u32, transform: TransformTag) -> Self {
-        Self { level: IrLevel::Hir, node, transform }
+        Self {
+            level: IrLevel::Hir,
+            node,
+            transform,
+        }
     }
 }
 
@@ -58,11 +74,15 @@ pub struct ProvenanceDag {
 
 impl ProvenanceDag {
     pub fn new() -> Self {
-        Self { edges: IndexSet::new() }
+        Self {
+            edges: IndexSet::new(),
+        }
     }
 
     pub fn with_capacity(cap: usize) -> Self {
-        Self { edges: IndexSet::with_capacity(cap) }
+        Self {
+            edges: IndexSet::with_capacity(cap),
+        }
     }
 
     pub fn add_edge(&mut self, from: ProvenanceNodeId, to: ProvenanceNodeId) {

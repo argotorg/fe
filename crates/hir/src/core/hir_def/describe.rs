@@ -4,8 +4,8 @@ use super::{
     Body, Partial,
     expr::{Expr, ExprId},
     item::{
-        Contract, Enum, Func, Impl, ImplTrait, Struct, TopLevelMod, Trait, TypeAlias, Const,
-        ItemKind,
+        Const, Contract, Enum, Func, Impl, ImplTrait, ItemKind, Struct, TopLevelMod, Trait,
+        TypeAlias,
     },
     stmt::Stmt,
 };
@@ -17,7 +17,7 @@ impl<'db> IrDescribe for TopLevelMod<'db> {
         c.enter_node("TopLevelMod");
         c.field_str(Dim::Names, self.name(db).data(db));
         for item in self.all_items(db) {
-            describe_item(cx, c, &item);
+            describe_item(cx, c, item);
         }
         c.exit_node();
     }
@@ -130,7 +130,10 @@ impl<'db> IrDescribe for Trait<'db> {
         if let Partial::Present(name) = &self.name(db) {
             c.field_str(Dim::Names, name.data(db));
         }
-        c.field_u64(Dim::Structure, self.generic_params(db).data(db).len() as u64);
+        c.field_u64(
+            Dim::Structure,
+            self.generic_params(db).data(db).len() as u64,
+        );
         c.exit_node();
     }
 }
@@ -139,7 +142,10 @@ impl<'db> IrDescribe for Impl<'db> {
     fn describe<C: IrConsumer>(&self, cx: &DescribeCtx<'_>, c: &mut C) {
         let db: &dyn HirDb = cx.db();
         c.enter_node("Impl");
-        c.field_u64(Dim::Structure, self.generic_params(db).data(db).len() as u64);
+        c.field_u64(
+            Dim::Structure,
+            self.generic_params(db).data(db).len() as u64,
+        );
         c.exit_node();
     }
 }
@@ -148,7 +154,10 @@ impl<'db> IrDescribe for ImplTrait<'db> {
     fn describe<C: IrConsumer>(&self, cx: &DescribeCtx<'_>, c: &mut C) {
         let db: &dyn HirDb = cx.db();
         c.enter_node("ImplTrait");
-        c.field_u64(Dim::Structure, self.generic_params(db).data(db).len() as u64);
+        c.field_u64(
+            Dim::Structure,
+            self.generic_params(db).data(db).len() as u64,
+        );
         c.exit_node();
     }
 }
@@ -194,8 +203,11 @@ impl<'db> IrDescribe for BodyDescriptor<'db> {
 }
 
 fn describe_expr<'db, C: IrConsumer>(
-    cx: &DescribeCtx<'_>, c: &mut C, db: &'db dyn HirDb,
-    body: Body<'db>, expr: &Expr<'db>,
+    cx: &DescribeCtx<'_>,
+    c: &mut C,
+    db: &'db dyn HirDb,
+    body: Body<'db>,
+    expr: &Expr<'db>,
 ) {
     use super::expr::*;
     match expr {
@@ -331,13 +343,17 @@ fn describe_expr<'db, C: IrConsumer>(
         Expr::Tuple(exprs) => {
             c.enter_node("Tuple");
             c.field_u64(Dim::Structure, exprs.len() as u64);
-            for &e in exprs { describe_expr_id(cx, c, db, body, e); }
+            for &e in exprs {
+                describe_expr_id(cx, c, db, body, e);
+            }
             c.exit_node();
         }
         Expr::Array(exprs) => {
             c.enter_node("Array");
             c.field_u64(Dim::Structure, exprs.len() as u64);
-            for &e in exprs { describe_expr_id(cx, c, db, body, e); }
+            for &e in exprs {
+                describe_expr_id(cx, c, db, body, e);
+            }
             c.exit_node();
         }
         Expr::ArrayRep(expr, size) => {
@@ -372,8 +388,11 @@ fn describe_expr<'db, C: IrConsumer>(
 }
 
 fn describe_expr_id<'db, C: IrConsumer>(
-    cx: &DescribeCtx<'_>, c: &mut C, db: &'db dyn HirDb,
-    body: Body<'db>, expr_id: ExprId,
+    cx: &DescribeCtx<'_>,
+    c: &mut C,
+    db: &'db dyn HirDb,
+    body: Body<'db>,
+    expr_id: ExprId,
 ) {
     if let Partial::Present(expr) = &body.exprs(db)[expr_id] {
         describe_expr(cx, c, db, body, expr);
@@ -381,8 +400,11 @@ fn describe_expr_id<'db, C: IrConsumer>(
 }
 
 fn describe_stmt<'db, C: IrConsumer>(
-    cx: &DescribeCtx<'_>, c: &mut C, db: &'db dyn HirDb,
-    body: Body<'db>, stmt: &Stmt<'db>,
+    cx: &DescribeCtx<'_>,
+    c: &mut C,
+    db: &'db dyn HirDb,
+    body: Body<'db>,
+    stmt: &Stmt<'db>,
 ) {
     use super::stmt::*;
     match stmt {
@@ -413,8 +435,14 @@ fn describe_stmt<'db, C: IrConsumer>(
             describe_expr_id(cx, c, db, body, *body_expr);
             c.exit_node();
         }
-        Stmt::Continue => { c.enter_node("Continue"); c.exit_node(); }
-        Stmt::Break => { c.enter_node("Break"); c.exit_node(); }
+        Stmt::Continue => {
+            c.enter_node("Continue");
+            c.exit_node();
+        }
+        Stmt::Break => {
+            c.enter_node("Break");
+            c.exit_node();
+        }
         Stmt::Return(expr) => {
             c.enter_node("Return");
             if let Some(e) = expr {
@@ -431,11 +459,16 @@ fn describe_stmt<'db, C: IrConsumer>(
 }
 
 fn describe_pat<'db, C: IrConsumer>(
-    cx: &DescribeCtx<'_>, c: &mut C, db: &'db dyn HirDb,
-    body: Body<'db>, pat_id: super::PatId,
+    cx: &DescribeCtx<'_>,
+    c: &mut C,
+    db: &'db dyn HirDb,
+    body: Body<'db>,
+    pat_id: super::PatId,
 ) {
     use super::pat::Pat;
-    let Partial::Present(pat) = &body.pats(db)[pat_id] else { return };
+    let Partial::Present(pat) = &body.pats(db)[pat_id] else {
+        return;
+    };
     match pat {
         Pat::WildCard => {
             c.enter_node("WildCard");
@@ -459,7 +492,9 @@ fn describe_pat<'db, C: IrConsumer>(
         Pat::Tuple(pats) => {
             c.enter_node("PatTuple");
             c.field_u64(Dim::Structure, pats.len() as u64);
-            for &p in pats { describe_pat(cx, c, db, body, p); }
+            for &p in pats {
+                describe_pat(cx, c, db, body, p);
+            }
             c.exit_node();
         }
         Pat::Path(path, is_mut) => {
@@ -475,7 +510,9 @@ fn describe_pat<'db, C: IrConsumer>(
             if let Partial::Present(path_id) = path {
                 describe_path(cx, c, db, *path_id);
             }
-            for &p in pats { describe_pat(cx, c, db, body, p); }
+            for &p in pats {
+                describe_pat(cx, c, db, body, p);
+            }
             c.exit_node();
         }
         Pat::Record(path, fields) => {
@@ -501,10 +538,15 @@ fn describe_pat<'db, C: IrConsumer>(
 }
 
 fn describe_cond<'db, C: IrConsumer>(
-    cx: &DescribeCtx<'_>, c: &mut C, db: &'db dyn HirDb,
-    body: Body<'db>, cond_id: super::expr::CondId,
+    cx: &DescribeCtx<'_>,
+    c: &mut C,
+    db: &'db dyn HirDb,
+    body: Body<'db>,
+    cond_id: super::expr::CondId,
 ) {
-    let Partial::Present(cond) = &body.conds(db)[cond_id] else { return };
+    let Partial::Present(cond) = &body.conds(db)[cond_id] else {
+        return;
+    };
     match cond {
         super::expr::Cond::Expr(e) => describe_expr_id(cx, c, db, body, *e),
         super::expr::Cond::Let(pat, e) => {
@@ -522,7 +564,9 @@ fn describe_cond<'db, C: IrConsumer>(
 }
 
 fn describe_path<'db, C: IrConsumer>(
-    cx: &DescribeCtx<'_>, c: &mut C, db: &'db dyn HirDb,
+    cx: &DescribeCtx<'_>,
+    c: &mut C,
+    db: &'db dyn HirDb,
     path: super::PathId<'db>,
 ) {
     use super::path::PathKind;
@@ -542,7 +586,9 @@ fn describe_path<'db, C: IrConsumer>(
 }
 
 fn describe_type<'db, C: IrConsumer>(
-    cx: &DescribeCtx<'_>, c: &mut C, db: &'db dyn HirDb,
+    cx: &DescribeCtx<'_>,
+    c: &mut C,
+    db: &'db dyn HirDb,
     type_id: super::TypeId<'db>,
 ) {
     use super::types::TypeKind;

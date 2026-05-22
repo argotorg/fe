@@ -34,9 +34,14 @@ struct VariantAttrs {
 }
 
 fn parse_variant_attrs(attrs: &[syn::Attribute]) -> syn::Result<VariantAttrs> {
-    let mut result = VariantAttrs { effect: None, node_name: None };
+    let mut result = VariantAttrs {
+        effect: None,
+        node_name: None,
+    };
     for attr in attrs {
-        if !attr.path().is_ident("describe") { continue; }
+        if !attr.path().is_ident("describe") {
+            continue;
+        }
         attr.parse_nested_meta(|meta| {
             if meta.path.is_ident("effect") {
                 let value = meta.value()?;
@@ -67,7 +72,9 @@ fn parse_field_attrs(field: &syn::Field) -> syn::Result<FieldAttrs> {
     let mut has_describe_attr = false;
 
     for attr in &field.attrs {
-        if !attr.path().is_ident("describe") { continue; }
+        if !attr.path().is_ident("describe") {
+            continue;
+        }
         has_describe_attr = true;
 
         attr.parse_nested_meta(|meta| {
@@ -100,7 +107,9 @@ fn parse_field_attrs(field: &syn::Field) -> syn::Result<FieldAttrs> {
     }
 
     if !has_describe_attr {
-        let field_name = field.ident.as_ref()
+        let field_name = field
+            .ident
+            .as_ref()
             .map(|i| i.to_string())
             .unwrap_or_else(|| "unnamed".to_string());
         return Err(syn::Error::new_spanned(
@@ -113,30 +122,45 @@ fn parse_field_attrs(field: &syn::Field) -> syn::Result<FieldAttrs> {
     }
 
     if skip {
-        return Ok(FieldAttrs { mode: FieldMode::Skip });
+        return Ok(FieldAttrs {
+            mode: FieldMode::Skip,
+        });
     }
     if child {
-        return Ok(FieldAttrs { mode: FieldMode::Child });
+        return Ok(FieldAttrs {
+            mode: FieldMode::Child,
+        });
     }
     if let Some(path) = with {
-        return Ok(FieldAttrs { mode: FieldMode::With(path) });
+        return Ok(FieldAttrs {
+            mode: FieldMode::With(path),
+        });
     }
     if as_u32 {
-        let dim = dim.ok_or_else(|| syn::Error::new_spanned(
-            field, "#[describe(as_u32)] requires dim = ... to be specified",
-        ))?;
-        return Ok(FieldAttrs { mode: FieldMode::AsU32(dim) });
+        let dim = dim.ok_or_else(|| {
+            syn::Error::new_spanned(
+                field,
+                "#[describe(as_u32)] requires dim = ... to be specified",
+            )
+        })?;
+        return Ok(FieldAttrs {
+            mode: FieldMode::AsU32(dim),
+        });
     }
     if iter_u32 {
-        let dim = dim.ok_or_else(|| syn::Error::new_spanned(
-            field, "#[describe(iter_u32)] requires dim = ... to be specified",
-        ))?;
-        return Ok(FieldAttrs { mode: FieldMode::IterU32(dim) });
+        let dim = dim.ok_or_else(|| {
+            syn::Error::new_spanned(
+                field,
+                "#[describe(iter_u32)] requires dim = ... to be specified",
+            )
+        })?;
+        return Ok(FieldAttrs {
+            mode: FieldMode::IterU32(dim),
+        });
     }
 
-    let dim = dim.ok_or_else(|| syn::Error::new_spanned(
-        field, "missing dim = ... in #[describe(...)]",
-    ))?;
+    let dim =
+        dim.ok_or_else(|| syn::Error::new_spanned(field, "missing dim = ... in #[describe(...)]"))?;
 
     let ty = &field.ty;
     let ty_str = quote!(#ty).to_string();
@@ -172,20 +196,20 @@ fn emit_field(access: &TokenStream2, attrs: &FieldAttrs, is_ref: bool) -> TokenS
             } else {
                 quote! { __c.field_u64(#dim, #access as u64); }
             }
-        },
+        }
         FieldMode::FieldBool(dim) => {
             if is_ref {
                 quote! { __c.field_bool(#dim, *#access); }
             } else {
                 quote! { __c.field_bool(#dim, #access); }
             }
-        },
+        }
         FieldMode::FieldStr(dim) => {
             quote! { __c.field_str(#dim, AsRef::<str>::as_ref(&#access)); }
-        },
+        }
         FieldMode::FieldBytes(dim) => {
             quote! { __c.field_bytes(#dim, AsRef::<[u8]>::as_ref(&#access)); }
-        },
+        }
     }
 }
 
@@ -199,7 +223,8 @@ fn derive_impl(input: DeriveInput) -> syn::Result<TokenStream2> {
         Data::Enum(data) => derive_enum_body(data)?,
         Data::Union(_) => {
             return Err(syn::Error::new_spanned(
-                name, "IrDescribe cannot be derived for unions",
+                name,
+                "IrDescribe cannot be derived for unions",
             ));
         }
     };
@@ -256,7 +281,8 @@ fn derive_enum_body(data: &syn::DataEnum) -> syn::Result<TokenStream2> {
     for variant in &data.variants {
         let variant_name = &variant.ident;
         let variant_attrs = parse_variant_attrs(&variant.attrs)?;
-        let node_name = variant_attrs.node_name
+        let node_name = variant_attrs
+            .node_name
             .unwrap_or_else(|| variant_name.to_string());
 
         let effect_emit = variant_attrs.effect.map(|e| {
@@ -284,9 +310,8 @@ fn derive_enum_body(data: &syn::DataEnum) -> syn::Result<TokenStream2> {
                 let mut emissions = Vec::new();
 
                 for (i, field) in fields.unnamed.iter().enumerate() {
-                    let binding = syn::Ident::new(
-                        &format!("__f{i}"), proc_macro2::Span::call_site(),
-                    );
+                    let binding =
+                        syn::Ident::new(&format!("__f{i}"), proc_macro2::Span::call_site());
                     bindings.push(binding.clone());
                     let attrs = parse_field_attrs(field)?;
                     let access = quote! { #binding };

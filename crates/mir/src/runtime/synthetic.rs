@@ -272,7 +272,9 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 stmt_origins: Vec::new(),
                 terminator: RTerminator::Stop,
                 terminator_origin: common::provenance::ProvenanceNodeId::new(
-                    common::provenance::IrLevel::Mir, 0, common::provenance::TransformTag::Synthetic,
+                    common::provenance::IrLevel::Mir,
+                    0,
+                    common::provenance::TransformTag::Synthetic,
                 ),
             }],
         }
@@ -1426,11 +1428,13 @@ impl<'db> SyntheticBodyBuilder<'db> {
 
     fn push_stmt(&mut self, bb: RBlockId, stmt: RStmt<'db>) {
         self.blocks[bb.index()].stmts.push(stmt);
-        self.blocks[bb.index()].stmt_origins.push(
-            common::provenance::ProvenanceNodeId::new(
-                common::provenance::IrLevel::Mir, 0, common::provenance::TransformTag::Synthetic,
-            ),
-        );
+        self.blocks[bb.index()]
+            .stmt_origins
+            .push(common::provenance::ProvenanceNodeId::new(
+                common::provenance::IrLevel::Mir,
+                0,
+                common::provenance::TransformTag::Synthetic,
+            ));
     }
 
     fn new_block(&mut self) -> RBlockId {
@@ -1440,7 +1444,9 @@ impl<'db> SyntheticBodyBuilder<'db> {
             stmt_origins: Vec::new(),
             terminator: RTerminator::Trap,
             terminator_origin: common::provenance::ProvenanceNodeId::new(
-                common::provenance::IrLevel::Mir, 0, common::provenance::TransformTag::Synthetic,
+                common::provenance::IrLevel::Mir,
+                0,
+                common::provenance::TransformTag::Synthetic,
             ),
         });
         id

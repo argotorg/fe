@@ -1,9 +1,11 @@
+#![allow(clippy::print_stderr)]
+
 mod test_helpers;
 use test_helpers::*;
 
+use common::InputDb;
 use common::hash_consumer::HashConsumer;
 use common::ir_describe::{DescribeCtx, IrDescribe};
-use common::InputDb;
 
 // --- Test 1: Hash + provenance consistency ---
 // Modify source, verify hash changes AND origin chain still resolves
@@ -47,13 +49,19 @@ fn hash_changes_when_operator_changes_and_origins_still_resolve() {
         for func in package.functions(&a.db) {
             let body = func.instance(&a.db).body(&a.db);
             let key = func.instance(&a.db).key(&a.db);
-            let Some(semantic) = key.semantic(&a.db) else { continue };
-            let Some(hir_body) = semantic.key(&a.db).owner(&a.db).body(&a.db) else { continue };
+            let Some(semantic) = key.semantic(&a.db) else {
+                continue;
+            };
+            let Some(hir_body) = semantic.key(&a.db).owner(&a.db).body(&a.db) else {
+                continue;
+            };
 
             for block in &body.blocks {
                 for origin in &block.stmt_origins {
                     total += 1;
-                    if origin.level != IrLevel::Smir { continue; }
+                    if origin.level != IrLevel::Smir {
+                        continue;
+                    }
                     let expr_id = hir::hir_def::ExprId::from_u32(origin.node);
                     if expr_id.span(hir_body).resolve(&a.db).is_some() {
                         resolved += 1;
@@ -91,12 +99,18 @@ fn origin_chain_resolves_to_correct_source_text() {
         }
         let body = func.instance(&a.db).body(&a.db);
         let key = func.instance(&a.db).key(&a.db);
-        let Some(semantic) = key.semantic(&a.db) else { continue };
-        let Some(hir_body) = semantic.key(&a.db).owner(&a.db).body(&a.db) else { continue };
+        let Some(semantic) = key.semantic(&a.db) else {
+            continue;
+        };
+        let Some(hir_body) = semantic.key(&a.db).owner(&a.db).body(&a.db) else {
+            continue;
+        };
 
         for block in &body.blocks {
             for origin in &block.stmt_origins {
-                if origin.level != IrLevel::Smir { continue; }
+                if origin.level != IrLevel::Smir {
+                    continue;
+                }
                 let expr_id = hir::hir_def::ExprId::from_u32(origin.node);
                 if let Some(span) = expr_id.span(hir_body).resolve(&a.db) {
                     let text = span.file.text(&a.db);
@@ -110,14 +124,21 @@ fn origin_chain_resolves_to_correct_source_text() {
         }
     }
 
-    assert!(!snippets.is_empty(), "should resolve at least some snippets");
+    assert!(
+        !snippets.is_empty(),
+        "should resolve at least some snippets"
+    );
 
     // The Transfer function does `bal < amount`, `bal - amount`, `+ amount`
     // At least one snippet should contain recognizable source text
     let has_arithmetic = snippets.iter().any(|s| {
-        s.contains('+') || s.contains('-') || s.contains('<')
-            || s.contains("bal") || s.contains("amount")
-            || s.contains("sender") || s.contains("store")
+        s.contains('+')
+            || s.contains('-')
+            || s.contains('<')
+            || s.contains("bal")
+            || s.contains("amount")
+            || s.contains("sender")
+            || s.contains("store")
     });
 
     assert!(
@@ -185,7 +206,11 @@ fn hashing_is_deterministic_within_session() {
         })
         .collect();
 
-    assert_eq!(h1.len(), h2.len(), "same source should produce same number of functions");
+    assert_eq!(
+        h1.len(),
+        h2.len(),
+        "same source should produce same number of functions"
+    );
 
     for ((n1, hash1), (n2, hash2)) in h1.iter().zip(h2.iter()) {
         assert_eq!(n1, n2, "function names should match");
@@ -219,7 +244,11 @@ fn hashing_is_deterministic_across_sessions() {
     }
 
     if !mismatches.is_empty() {
-        eprintln!("Cross-session determinism issues ({}/{}):", mismatches.len(), h1.len());
+        eprintln!(
+            "Cross-session determinism issues ({}/{}):",
+            mismatches.len(),
+            h1.len()
+        );
         for m in &mismatches[..std::cmp::min(5, mismatches.len())] {
             eprintln!("  {m}");
         }
@@ -229,7 +258,8 @@ fn hashing_is_deterministic_across_sessions() {
     // depends on salsa assigning the same internal IDs for the same input.
     // If it fails, we need to hash value content instead of positional IDs.
     assert_eq!(
-        mismatches.len(), 0,
+        mismatches.len(),
+        0,
         "cross-session hashing should be deterministic for the same source"
     );
 }
@@ -273,7 +303,8 @@ fn provenance_levels_are_monotonic() {
         assert!(
             (source.level as u16) <= (target.level as u16),
             "provenance edge should go from lower level to higher: {:?} → {:?}",
-            source, target
+            source,
+            target
         );
     }
 }
@@ -302,18 +333,23 @@ fn every_function_hash_is_self_consistent() {
         let h2 = c2.into_result().expect("hash should exist");
 
         assert_eq!(
-            h1.structure(), h2.structure(),
+            h1.structure(),
+            h2.structure(),
             "function {} must hash identically on repeated describe",
             func.symbol(&a.db)
         );
         assert_eq!(
-            h1.names(), h2.names(),
+            h1.names(),
+            h2.names(),
             "function {} names must hash identically",
             func.symbol(&a.db)
         );
     }
 
-    eprintln!("Self-consistency: {} functions all hash deterministically", functions.len());
+    eprintln!(
+        "Self-consistency: {} functions all hash deterministically",
+        functions.len()
+    );
 }
 
 // --- Test 11: Origin coverage completeness ---
@@ -353,9 +389,16 @@ fn callee_discrimination_different_functions_different_hashes() {
         let sym = func.symbol(&a.db);
         for block in &body.blocks {
             for stmt in &block.stmts {
-                if let mir::runtime::ir::RStmt::Assign { expr: mir::runtime::ir::RExpr::Call { callee, .. }, .. } = stmt {
+                if let mir::runtime::ir::RStmt::Assign {
+                    expr: mir::runtime::ir::RExpr::Call { callee, .. },
+                    ..
+                } = stmt
+                {
                     let callee_sym = format!("{:?}", callee.key(&a.db).source(&a.db));
-                    callee_to_func.entry(callee_sym).or_default().push(sym.clone());
+                    callee_to_func
+                        .entry(callee_sym)
+                        .or_default()
+                        .push(sym.clone());
                 }
             }
         }
@@ -379,16 +422,38 @@ fn callee_discrimination_different_functions_different_hashes() {
             let b1 = f1.instance(&a.db).body(&a.db);
             let b2 = f2.instance(&a.db).body(&a.db);
 
-            let calls1: Vec<_> = b1.blocks.iter().flat_map(|b| b.stmts.iter()).filter_map(|s| {
-                if let mir::runtime::ir::RStmt::Assign { expr: mir::runtime::ir::RExpr::Call { callee, .. }, .. } = s {
-                    Some(format!("{:?}", callee.key(&a.db).source(&a.db)))
-                } else { None }
-            }).collect();
-            let calls2: Vec<_> = b2.blocks.iter().flat_map(|b| b.stmts.iter()).filter_map(|s| {
-                if let mir::runtime::ir::RStmt::Assign { expr: mir::runtime::ir::RExpr::Call { callee, .. }, .. } = s {
-                    Some(format!("{:?}", callee.key(&a.db).source(&a.db)))
-                } else { None }
-            }).collect();
+            let calls1: Vec<_> = b1
+                .blocks
+                .iter()
+                .flat_map(|b| b.stmts.iter())
+                .filter_map(|s| {
+                    if let mir::runtime::ir::RStmt::Assign {
+                        expr: mir::runtime::ir::RExpr::Call { callee, .. },
+                        ..
+                    } = s
+                    {
+                        Some(format!("{:?}", callee.key(&a.db).source(&a.db)))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            let calls2: Vec<_> = b2
+                .blocks
+                .iter()
+                .flat_map(|b| b.stmts.iter())
+                .filter_map(|s| {
+                    if let mir::runtime::ir::RStmt::Assign {
+                        expr: mir::runtime::ir::RExpr::Call { callee, .. },
+                        ..
+                    } = s
+                    {
+                        Some(format!("{:?}", callee.key(&a.db).source(&a.db)))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
 
             if !calls1.is_empty() && !calls2.is_empty() && calls1 != calls2 {
                 let mut h1 = HashConsumer::new();
@@ -408,14 +473,23 @@ fn callee_discrimination_different_functions_different_hashes() {
                      func2={} calls {:?}\n\
                      hash={:#x}\n\
                      This means RExpr::Call is not hashing the callee identity.",
-                    f1.symbol(&a.db), calls1, f2.symbol(&a.db), calls2, r1.structure()
+                    f1.symbol(&a.db),
+                    calls1,
+                    f2.symbol(&a.db),
+                    calls2,
+                    r1.structure()
                 );
             }
         }
-        if found_different { break; }
+        if found_different {
+            break;
+        }
     }
 
-    assert!(found_different, "should find at least one pair of functions with different callees");
+    assert!(
+        found_different,
+        "should find at least one pair of functions with different callees"
+    );
 }
 
 // T2: Cast type discrimination — cast to different target types must hash differently.
@@ -475,7 +549,8 @@ pub contract Dup uses (ctx: Ctx) {
     let get_a = find_hash(&hashes, "recv_0_0").expect("GetA");
     let get_b = find_hash(&hashes, "recv_0_1").expect("GetB");
     assert_eq!(
-        get_a.structure(), get_b.structure(),
+        get_a.structure(),
+        get_b.structure(),
         "GetA and GetB have identical logic — structural hashes must match"
     );
 
@@ -484,15 +559,16 @@ pub contract Dup uses (ctx: Ctx) {
     let top_mod = a.db.top_mod(file);
     let package = mir::build_runtime_package(&a.db, top_mod).expect("compile");
 
-    let ir_text = fe_codegen::emit_runtime_package_sonatina_ir(
-        &a.db, &package, fe_codegen::EVM_LAYOUT,
-    ).expect("sonatina IR");
+    let ir_text =
+        fe_codegen::emit_runtime_package_sonatina_ir(&a.db, &package, fe_codegen::EVM_LAYOUT)
+            .expect("sonatina IR");
 
     // Extract individual function bodies from the IR text.
     let func_bodies: Vec<(String, String)> = extract_sonatina_functions(&ir_text);
 
     // Find the two getter function bodies
-    let getter_bodies: Vec<_> = func_bodies.iter()
+    let getter_bodies: Vec<_> = func_bodies
+        .iter()
         .filter(|(name, _)| name.contains("recv_0_0") || name.contains("recv_0_1"))
         .collect();
 
@@ -529,7 +605,8 @@ fn structural_change_isolation() {
     let balance1 = find_hash(&h1, "recv_0_1").expect("Balance original");
     let balance2 = find_hash(&h2, "recv_0_1").expect("Balance modified");
     assert_ne!(
-        balance1.structure(), balance2.structure(),
+        balance1.structure(),
+        balance2.structure(),
         "adding +1 to Balance must change its structural hash"
     );
 
@@ -537,7 +614,8 @@ fn structural_change_isolation() {
     let transfer1 = find_hash(&h1, "recv_0_0").expect("Transfer original");
     let transfer2 = find_hash(&h2, "recv_0_0").expect("Transfer modified");
     assert_eq!(
-        transfer1.structure(), transfer2.structure(),
+        transfer1.structure(),
+        transfer2.structure(),
         "modifying Balance must not affect Transfer's structural hash"
     );
 }
@@ -558,12 +636,16 @@ fn composite_consumer_produces_hashes_debug_and_facts_from_one_describe() {
 
     // Pick the Transfer function
     let functions = package.functions(&a.db);
-    let func = functions.iter()
+    let func = functions
+        .iter()
         .find(|f| f.symbol(&a.db).contains("recv_0_0"))
         .expect("find Transfer");
 
     let body = func.instance(&a.db).body(&a.db);
-    let mut composite = (HashConsumer::new(), (DebugConsumer::new(), FactConsumer::new()));
+    let mut composite = (
+        HashConsumer::new(),
+        (DebugConsumer::new(), FactConsumer::new()),
+    );
     body.describe(&cx, &mut composite);
 
     // HashConsumer produced a hash
@@ -572,7 +654,10 @@ fn composite_consumer_produces_hashes_debug_and_facts_from_one_describe() {
 
     // DebugConsumer collected entries
     let debug_entries = composite.1.0.entries();
-    assert!(!debug_entries.is_empty(), "debug consumer should collect entries");
+    assert!(
+        !debug_entries.is_empty(),
+        "debug consumer should collect entries"
+    );
 
     let with_origin = composite.1.0.entries_with_origin().count();
     assert!(with_origin > 0, "some entries should have origins");
@@ -585,22 +670,32 @@ fn composite_consumer_produces_hashes_debug_and_facts_from_one_describe() {
     let facts = composite.1.1.facts();
     assert!(!facts.is_empty(), "fact consumer should produce facts");
 
-    let node_hashes = facts.iter()
+    let node_hashes = facts
+        .iter()
         .filter(|f| matches!(f, common::fact_consumer::Fact::NodeHash { .. }))
         .count();
     assert!(node_hashes > 0, "should have NodeHash facts");
 
-    let origins = facts.iter()
+    let origins = facts
+        .iter()
         .filter(|f| matches!(f, common::fact_consumer::Fact::Origin { .. }))
         .count();
     assert!(origins > 0, "should have Origin facts");
 
     eprintln!("Composite consumer on Transfer function:");
     eprintln!("  Hash: structure={:#x}", hash.structure());
-    eprintln!("  Debug entries: {}, with origin: {}, with source: {}",
-        debug_entries.len(), with_origin, with_source);
-    eprintln!("  Facts: {}, NodeHash: {}, Origin: {}",
-        facts.len(), node_hashes, origins);
+    eprintln!(
+        "  Debug entries: {}, with origin: {}, with source: {}",
+        debug_entries.len(),
+        with_origin,
+        with_source
+    );
+    eprintln!(
+        "  Facts: {}, NodeHash: {}, Origin: {}",
+        facts.len(),
+        node_hashes,
+        origins
+    );
 }
 
 // --- Test 12: End-to-end DWARF from real compiled code ---
@@ -612,21 +707,26 @@ fn dwarf_from_origins_on_real_contract() {
     let top_mod = a.db.top_mod(file);
     let package = mir::build_runtime_package(&a.db, top_mod).expect("compile");
 
-    let (artifacts, origins) = fe_codegen::compile_to_artifacts(
-        &a.db, &package, fe_codegen::EVM_LAYOUT,
-    ).expect("compile to artifacts");
+    let (artifacts, origins) =
+        fe_codegen::compile_to_artifacts(&a.db, &package, fe_codegen::EVM_LAYOUT)
+            .expect("compile to artifacts");
 
-    let dwarf = fe_codegen::dwarf::generate_dwarf_from_origins(
-        &a.db, &package, &artifacts, &origins,
+    let dwarf =
+        fe_codegen::dwarf::generate_dwarf_from_origins(&a.db, &package, &artifacts, &origins);
+
+    assert!(
+        dwarf.is_some(),
+        "DWARF generation from origins should produce output"
     );
-
-    assert!(dwarf.is_some(), "DWARF generation from origins should produce output");
     let dwarf = dwarf.unwrap();
     assert!(!dwarf.debug_line.is_empty(), "debug_line should have data");
     assert!(!dwarf.debug_info.is_empty(), "debug_info should have data");
 
-    eprintln!("DWARF from origins: debug_line={} bytes, debug_info={} bytes",
-        dwarf.debug_line.len(), dwarf.debug_info.len());
+    eprintln!(
+        "DWARF from origins: debug_line={} bytes, debug_info={} bytes",
+        dwarf.debug_line.len(),
+        dwarf.debug_info.len()
+    );
 }
 
 // --- Test: Sonatina optimization provenance ---
@@ -639,8 +739,12 @@ fn optimization_provenance_survives_o1() {
     let package = a.package();
 
     let (_artifacts, report) = fe_codegen::compile_to_artifacts_with_opt_provenance(
-        &a.db, &package, fe_codegen::EVM_LAYOUT, fe_codegen::OptLevel::O1,
-    ).expect("compile with opt provenance");
+        &a.db,
+        &package,
+        fe_codegen::EVM_LAYOUT,
+        fe_codegen::OptLevel::O1,
+    )
+    .expect("compile with opt provenance");
 
     eprintln!("Optimization provenance at O1:");
     eprintln!("  Pre-opt origins: {}", report.pre_opt_origins.len());
@@ -649,14 +753,19 @@ fn optimization_provenance_survives_o1() {
     eprintln!("  Eliminated: {}", report.eliminated);
     eprintln!("  New (opt-created): {}", report.new_insts);
 
-    assert!(report.survived > 0, "some instructions must survive optimization");
     assert!(
-        report.pre_opt_origins.len() > 0,
+        report.survived > 0,
+        "some instructions must survive optimization"
+    );
+    assert!(
+        !report.pre_opt_origins.is_empty(),
         "pre-optimization origin map must be non-empty"
     );
 
     // Survived instructions should retain their original origin
-    let survived_with_origin = report.post_opt_origins.iter()
+    let survived_with_origin = report
+        .post_opt_origins
+        .iter()
         .filter(|(_, _, o)| o.transform != TransformTag::SonatinaOptNew)
         .count();
     eprintln!("  Survived with original origin: {survived_with_origin}");
@@ -677,7 +786,9 @@ fn optimization_provenance_survives_o1() {
     );
 
     // New instructions should have the SonatinaOptNew tag
-    let new_tagged = report.post_opt_origins.iter()
+    let new_tagged = report
+        .post_opt_origins
+        .iter()
         .filter(|(_, _, o)| o.transform == TransformTag::SonatinaOptNew)
         .count();
     eprintln!("  New with SonatinaOptNew tag: {new_tagged}");
@@ -690,11 +801,17 @@ fn optimization_provenance_survives_o1() {
     // trace it back to source
     let mut resolved_through_opt = 0;
     for (_func_ref, _inst_id, origin) in &report.post_opt_origins {
-        if origin.level != IrLevel::Smir { continue; }
+        if origin.level != IrLevel::Smir {
+            continue;
+        }
         for func in package.functions(&a.db) {
             let key = func.instance(&a.db).key(&a.db);
-            let Some(semantic) = key.semantic(&a.db) else { continue };
-            let Some(hir_body) = semantic.key(&a.db).owner(&a.db).body(&a.db) else { continue };
+            let Some(semantic) = key.semantic(&a.db) else {
+                continue;
+            };
+            let Some(hir_body) = semantic.key(&a.db).owner(&a.db).body(&a.db) else {
+                continue;
+            };
             let expr_id = hir::hir_def::ExprId::from_u32(origin.node);
             use hir::span::LazySpan;
             if expr_id.span(hir_body).resolve(&a.db).is_some() {
@@ -702,7 +819,9 @@ fn optimization_provenance_survives_o1() {
                 break;
             }
         }
-        if resolved_through_opt >= 10 { break; }
+        if resolved_through_opt >= 10 {
+            break;
+        }
     }
     eprintln!("  Origins resolved through optimization: {resolved_through_opt}");
     assert!(
@@ -710,7 +829,7 @@ fn optimization_provenance_survives_o1() {
         "at least some post-optimization origins must resolve back to source"
     );
 
-    let survival_rate = report.survived as f64
-        / (report.survived + report.eliminated) as f64 * 100.0;
+    let survival_rate =
+        report.survived as f64 / (report.survived + report.eliminated) as f64 * 100.0;
     eprintln!("  Survival rate: {survival_rate:.1}%");
 }

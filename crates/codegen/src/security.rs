@@ -85,12 +85,16 @@ impl SecurityAnalyzer {
         extract_ids: impl Fn(&[cozo::DataValue]) -> Vec<u32>,
     ) -> Vec<Finding> {
         match self.trace.query(query) {
-            Ok(rows) => rows.rows.iter().map(|row| Finding {
-                detector,
-                severity,
-                description,
-                node_ids: extract_ids(row),
-            }).collect(),
+            Ok(rows) => rows
+                .rows
+                .iter()
+                .map(|row| Finding {
+                    detector,
+                    severity,
+                    description,
+                    node_ids: extract_ids(row),
+                })
+                .collect(),
             Err(e) => {
                 tracing::warn!("security query failed: {e}");
                 Vec::new()

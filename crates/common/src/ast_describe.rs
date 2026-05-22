@@ -1,4 +1,4 @@
-use parser::{SyntaxKind, SyntaxNode, NodeOrToken};
+use parser::{NodeOrToken, SyntaxKind, SyntaxNode};
 
 use crate::ir_describe::{DescribeCtx, Dim, IrConsumer, IrDescribe};
 
@@ -93,14 +93,22 @@ mod tests {
     fn whitespace_doesnt_affect_hash() {
         let h1 = hash_ast("pub fn add(a:u256,b:u256)->u256{return a+b}");
         let h2 = hash_ast("pub fn add( a : u256 , b : u256 ) -> u256 { return a + b }");
-        assert_eq!(h1.structure(), h2.structure(), "whitespace should not affect structural hash");
+        assert_eq!(
+            h1.structure(),
+            h2.structure(),
+            "whitespace should not affect structural hash"
+        );
     }
 
     #[test]
     fn rename_changes_names_not_structure() {
         let h1 = hash_ast("pub fn add(a: u256, b: u256) -> u256 { return a + b }");
         let h2 = hash_ast("pub fn add(x: u256, y: u256) -> u256 { return x + y }");
-        assert_eq!(h1.structure(), h2.structure(), "rename should not affect structure");
+        assert_eq!(
+            h1.structure(),
+            h2.structure(),
+            "rename should not affect structure"
+        );
         assert_ne!(h1.names(), h2.names(), "rename should change names hash");
     }
 
@@ -108,6 +116,10 @@ mod tests {
     fn operator_change_detected() {
         let h1 = hash_ast("pub fn f(a: u256, b: u256) -> u256 { return a + b }");
         let h2 = hash_ast("pub fn f(a: u256, b: u256) -> u256 { return a - b }");
-        assert_ne!(h1.structure(), h2.structure(), "changing + to - should change structure");
+        assert_ne!(
+            h1.structure(),
+            h2.structure(),
+            "changing + to - should change structure"
+        );
     }
 }

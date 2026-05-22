@@ -1,8 +1,8 @@
 #![allow(dead_code, unused_imports)]
 
+use common::InputDb;
 use common::hash_consumer::{DimHashes, HashConsumer};
 use common::ir_describe::{DescribeCtx, IrDescribe};
-use common::InputDb;
 use driver::DriverDataBase;
 use fe_codegen::analyze::SourceAnalysis;
 
@@ -12,12 +12,19 @@ pub fn analyze(source: &str) -> SourceAnalysis {
 
 pub fn compile_mir_hashes(source: &str) -> (SourceAnalysis, Vec<(String, DimHashes)>) {
     let a = analyze(source);
-    let hashes = a.functions.iter().map(|f| (f.symbol.clone(), f.hashes.clone())).collect();
+    let hashes = a
+        .functions
+        .iter()
+        .map(|f| (f.symbol.clone(), f.hashes.clone()))
+        .collect();
     (a, hashes)
 }
 
 pub fn find_hash<'a>(hashes: &'a [(String, DimHashes)], substr: &str) -> Option<&'a DimHashes> {
-    hashes.iter().find(|(n, _)| n.contains(substr)).map(|(_, h)| h)
+    hashes
+        .iter()
+        .find(|(n, _)| n.contains(substr))
+        .map(|(_, h)| h)
 }
 
 pub const BASE_CONTRACT: &str = r#"
@@ -106,10 +113,14 @@ pub fn normalize_sonatina_body(body: &str) -> String {
 
     for line in body.lines() {
         let trimmed = line.trim();
-        if trimmed.is_empty() { continue; }
+        if trimmed.is_empty() {
+            continue;
+        }
 
         // Skip the func declaration line — it contains the unique function name
-        if trimmed.starts_with("func ") { continue; }
+        if trimmed.starts_with("func ") {
+            continue;
+        }
 
         let mut normalized = trimmed.to_string();
 
@@ -119,7 +130,11 @@ pub fn normalize_sonatina_body(body: &str) -> String {
             if label.starts_with("block_") || label.starts_with("bb") {
                 let canonical = block_map
                     .entry(label.to_string())
-                    .or_insert_with(|| { let b = format!("BB{block_counter}"); block_counter += 1; b })
+                    .or_insert_with(|| {
+                        let b = format!("BB{block_counter}");
+                        block_counter += 1;
+                        b
+                    })
                     .clone();
                 normalized = format!("{canonical}:{}", &trimmed[colon_pos + 1..]);
             }
@@ -129,29 +144,38 @@ pub fn normalize_sonatina_body(body: &str) -> String {
         let mut out = String::new();
         let mut chars = normalized.chars().peekable();
         while let Some(ch) = chars.next() {
-            if ch == 'v' && chars.peek().map_or(false, |c| c.is_ascii_digit()) {
+            if ch == 'v' && chars.peek().is_some_and(|c| c.is_ascii_digit()) {
                 let mut num = String::new();
-                while chars.peek().map_or(false, |c| c.is_ascii_digit()) {
+                while chars.peek().is_some_and(|c| c.is_ascii_digit()) {
                     num.push(chars.next().unwrap());
                 }
                 let key = format!("v{num}");
                 let canonical = val_map
                     .entry(key)
-                    .or_insert_with(|| { let v = format!("V{val_counter}"); val_counter += 1; v })
+                    .or_insert_with(|| {
+                        let v = format!("V{val_counter}");
+                        val_counter += 1;
+                        v
+                    })
                     .clone();
                 out.push_str(&canonical);
-            } else if (ch == 'b' && chars.peek() == Some(&'l'))
-                || (ch == 'b' && chars.peek() == Some(&'b'))
-            {
+            } else if ch == 'b' && matches!(chars.peek(), Some(&'l') | Some(&'b')) {
                 // Potential block reference in jumps
                 let mut label = String::from(ch);
-                while chars.peek().map_or(false, |c| c.is_alphanumeric() || *c == '_') {
+                while chars
+                    .peek()
+                    .is_some_and(|c| c.is_alphanumeric() || *c == '_')
+                {
                     label.push(chars.next().unwrap());
                 }
                 if label.starts_with("block_") || label.starts_with("bb") {
                     let canonical = block_map
                         .entry(label)
-                        .or_insert_with(|| { let b = format!("BB{block_counter}"); block_counter += 1; b })
+                        .or_insert_with(|| {
+                            let b = format!("BB{block_counter}");
+                            block_counter += 1;
+                            b
+                        })
                         .clone();
                     out.push_str(&canonical);
                 } else {
@@ -168,7 +192,9 @@ pub fn normalize_sonatina_body(body: &str) -> String {
     result
 }
 
-pub struct SimpleLeaf { pub tag: u64 }
+pub struct SimpleLeaf {
+    pub tag: u64,
+}
 
 impl IrDescribe for SimpleLeaf {
     fn describe<C: common::ir_describe::IrConsumer>(&self, _cx: &DescribeCtx<'_>, c: &mut C) {
@@ -185,22 +211,36 @@ pub struct FieldCounter {
 }
 
 impl common::ir_describe::IrConsumer for FieldCounter {
-    fn enter_node(&mut self, _kind: &str) { self.nodes += 1; }
+    fn enter_node(&mut self, _kind: &str) {
+        self.nodes += 1;
+    }
     fn exit_node(&mut self) {}
-    fn field_u64(&mut self, _dim: common::ir_describe::Dim, _value: u64) { self.fields += 1; }
-    fn field_bytes(&mut self, _dim: common::ir_describe::Dim, _value: &[u8]) { self.fields += 1; }
-    fn field_str(&mut self, _dim: common::ir_describe::Dim, _value: &str) { self.fields += 1; }
-    fn field_bool(&mut self, _dim: common::ir_describe::Dim, _value: bool) { self.fields += 1; }
+    fn field_u64(&mut self, _dim: common::ir_describe::Dim, _value: u64) {
+        self.fields += 1;
+    }
+    fn field_bytes(&mut self, _dim: common::ir_describe::Dim, _value: &[u8]) {
+        self.fields += 1;
+    }
+    fn field_str(&mut self, _dim: common::ir_describe::Dim, _value: &str) {
+        self.fields += 1;
+    }
+    fn field_bool(&mut self, _dim: common::ir_describe::Dim, _value: bool) {
+        self.fields += 1;
+    }
     fn child<T: IrDescribe>(&mut self, cx: &DescribeCtx<'_>, child: &T) {
         child.describe(cx, self);
     }
     fn children_ordered<T: IrDescribe>(&mut self, cx: &DescribeCtx<'_>, children: &[T]) {
-        for child in children { child.describe(cx, self); }
+        for child in children {
+            child.describe(cx, self);
+        }
     }
     fn children_unordered<T: IrDescribe>(&mut self, cx: &DescribeCtx<'_>, children: &[T]) {
         self.children_ordered(cx, children);
     }
-    fn graph_edge(&mut self, _label: &str, _target_id: u64) { self.fields += 1; }
+    fn graph_edge(&mut self, _label: &str, _target_id: u64) {
+        self.fields += 1;
+    }
     fn origin(&mut self, _origin: &common::provenance::ProvenanceNodeId) {}
     fn source_span(&mut self, _file: &str, _line: u32, _col: u32, _end_line: u32, _end_col: u32) {}
 }

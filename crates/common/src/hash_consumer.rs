@@ -11,10 +11,18 @@ pub struct DimHashes {
 }
 
 impl DimHashes {
-    pub fn structure(&self) -> u128 { self.values[Dim::Structure as usize] }
-    pub fn names(&self) -> u128 { self.values[Dim::Names as usize] }
-    pub fn constants(&self) -> u128 { self.values[Dim::Constants as usize] }
-    pub fn types(&self) -> u128 { self.values[Dim::Types as usize] }
+    pub fn structure(&self) -> u128 {
+        self.values[Dim::Structure as usize]
+    }
+    pub fn names(&self) -> u128 {
+        self.values[Dim::Names as usize]
+    }
+    pub fn constants(&self) -> u128 {
+        self.values[Dim::Constants as usize]
+    }
+    pub fn types(&self) -> u128 {
+        self.values[Dim::Types as usize]
+    }
 
     pub fn projected(&self, dims: crate::ir_describe::DimSet) -> u128 {
         use xxhash_rust::xxh3::xxh3_128;
@@ -70,6 +78,12 @@ pub struct HashConsumer {
     has_graph_edges: bool,
 }
 
+impl Default for HashConsumer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HashConsumer {
     pub fn new() -> Self {
         Self {
@@ -117,7 +131,10 @@ impl IrConsumer for HashConsumer {
     }
 
     fn exit_node(&mut self) {
-        let state = self.stack.pop().expect("exit_node without matching enter_node");
+        let state = self
+            .stack
+            .pop()
+            .expect("exit_node without matching enter_node");
         let id = state.id;
         let hashes = state.finish();
 
@@ -198,7 +215,8 @@ impl IrConsumer for HashConsumer {
         self.has_graph_edges = true;
         let source_internal = self.stack.last().map(|s| s.id).unwrap_or(0);
         // Store source internal ID + target EXTERNAL ID — resolve in run_helbling
-        self.pending_edges.push((source_internal, label.to_string(), target_external_id));
+        self.pending_edges
+            .push((source_internal, label.to_string(), target_external_id));
     }
 
     fn origin(&mut self, _origin: &ProvenanceNodeId) {
@@ -212,10 +230,10 @@ impl IrConsumer for HashConsumer {
 
 impl HashConsumer {
     fn run_helbling(&self) -> DimHashes {
+        use petgraph::Direction;
         use petgraph::algo::tarjan_scc;
         use petgraph::graph::{DiGraph, NodeIndex};
         use petgraph::visit::EdgeRef;
-        use petgraph::Direction;
 
         // Build petgraph from collected nodes + edges
         let mut graph = DiGraph::new();
@@ -227,11 +245,14 @@ impl HashConsumer {
         }
 
         for (src_internal, label, dst_external) in &self.pending_edges {
-            let dst_internal = self.external_to_internal
+            let dst_internal = self
+                .external_to_internal
                 .get(dst_external)
                 .copied()
                 .unwrap_or(*dst_external);
-            if let (Some(&src_idx), Some(&dst_idx)) = (id_to_idx.get(src_internal), id_to_idx.get(&dst_internal)) {
+            if let (Some(&src_idx), Some(&dst_idx)) =
+                (id_to_idx.get(src_internal), id_to_idx.get(&dst_internal))
+            {
                 let mut label_hasher = Xxh3::new();
                 label_hasher.update(label.as_bytes());
                 let edge_label = (label_hasher.digest128() & 0xFF) as u8;
@@ -262,10 +283,10 @@ impl HashConsumer {
                 let mut ext_edges: Vec<(u8, [u128; Dim::COUNT])> = Vec::new();
                 for edge in graph.edges_directed(node, Direction::Outgoing) {
                     let target_scc = node_to_scc[&edge.target()];
-                    if target_scc != my_scc {
-                        if let Some(h) = final_node_hashes.get(&edge.target()) {
-                            ext_edges.push((*edge.weight(), h.values));
-                        }
+                    if target_scc != my_scc
+                        && let Some(h) = final_node_hashes.get(&edge.target())
+                    {
+                        ext_edges.push((*edge.weight(), h.values));
                     }
                 }
                 ext_edges.sort();
@@ -278,13 +299,16 @@ impl HashConsumer {
                         hashers[dim as usize].update(&ext_hash[dim as usize].to_le_bytes());
                     }
                 }
-                let aug = DimHashes { values: std::array::from_fn(|i| hashers[i].digest128()) };
+                let aug = DimHashes {
+                    values: std::array::from_fn(|i| hashers[i].digest128()),
+                };
                 augmented.push((node, aug));
             }
 
             augmented.sort_by_key(|(_, h)| h.values);
 
-            let canon_pos: BTreeMap<NodeIndex, usize> = augmented.iter()
+            let canon_pos: BTreeMap<NodeIndex, usize> = augmented
+                .iter()
                 .enumerate()
                 .map(|(pos, (node, _))| (*node, pos))
                 .collect();
@@ -311,7 +335,9 @@ impl HashConsumer {
                     scc_hashers[dim as usize].update(&to.to_le_bytes());
                 }
             }
-            let scc_hash = DimHashes { values: std::array::from_fn(|i| scc_hashers[i].digest128()) };
+            let scc_hash = DimHashes {
+                values: std::array::from_fn(|i| scc_hashers[i].digest128()),
+            };
             scc_hashes.push(scc_hash.clone());
 
             for (pos, (node, _)) in augmented.iter().enumerate() {
@@ -320,7 +346,9 @@ impl HashConsumer {
                     nh[dim as usize].update(&pos.to_le_bytes());
                     nh[dim as usize].update(&scc_hash.values[dim as usize].to_le_bytes());
                 }
-                let node_hash = DimHashes { values: std::array::from_fn(|i| nh[i].digest128()) };
+                let node_hash = DimHashes {
+                    values: std::array::from_fn(|i| nh[i].digest128()),
+                };
                 final_node_hashes.insert(*node, node_hash);
             }
         }
@@ -332,16 +360,21 @@ impl HashConsumer {
                 final_hashers[dim as usize].update(&scc_hash.values[dim as usize].to_le_bytes());
             }
         }
-        DimHashes { values: std::array::from_fn(|i| final_hashers[i].digest128()) }
+        DimHashes {
+            values: std::array::from_fn(|i| final_hashers[i].digest128()),
+        }
     }
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 mod tests {
     use super::*;
     use crate::ir_describe::{DescribeCtx, Dim, IrConsumer, IrDescribe};
 
-    struct Leaf { value: u64 }
+    struct Leaf {
+        value: u64,
+    }
     impl IrDescribe for Leaf {
         fn describe<C: IrConsumer>(&self, _cx: &DescribeCtx<'_>, c: &mut C) {
             c.enter_node("Leaf");
@@ -350,7 +383,10 @@ mod tests {
         }
     }
 
-    struct NamedLeaf { name: &'static str, value: u64 }
+    struct NamedLeaf {
+        name: &'static str,
+        value: u64,
+    }
     impl IrDescribe for NamedLeaf {
         fn describe<C: IrConsumer>(&self, _cx: &DescribeCtx<'_>, c: &mut C) {
             c.enter_node("NamedLeaf");
@@ -360,7 +396,10 @@ mod tests {
         }
     }
 
-    struct Tree { kind: &'static str, children: Vec<Tree> }
+    struct Tree {
+        kind: &'static str,
+        children: Vec<Tree>,
+    }
     impl IrDescribe for Tree {
         fn describe<C: IrConsumer>(&self, cx: &DescribeCtx<'_>, c: &mut C) {
             c.enter_node(self.kind);
@@ -399,7 +438,10 @@ mod tests {
         c2.field_u64(Dim::Structure, 99);
         c2.exit_node();
 
-        assert_ne!(c1.result().unwrap().structure(), c2.result().unwrap().structure());
+        assert_ne!(
+            c1.result().unwrap().structure(),
+            c2.result().unwrap().structure()
+        );
     }
 
     #[test]
@@ -419,7 +461,11 @@ mod tests {
         let h1 = c1.result().unwrap();
         let h2 = c2.result().unwrap();
 
-        assert_eq!(h1.structure(), h2.structure(), "structure unchanged by rename");
+        assert_eq!(
+            h1.structure(),
+            h2.structure(),
+            "structure unchanged by rename"
+        );
         assert_ne!(h1.names(), h2.names(), "names changed by rename");
     }
 
@@ -474,8 +520,8 @@ mod tests {
         c.exit_node();
 
         // Cycle: Block0 → Block1, Block1 → Block0
-        c.graph_edge("goto", 1);      // 0 → 1
-        c.graph_edge("back", 0);      // 1 → 0 (back-edge)
+        c.graph_edge("goto", 1); // 0 → 1
+        c.graph_edge("back", 0); // 1 → 0 (back-edge)
 
         c.exit_node();
 
@@ -487,23 +533,48 @@ mod tests {
         // Graph A: 3 blocks in a cycle A→B→C→A
         let mut c1 = HashConsumer::new();
         c1.enter_node("Body");
-        c1.set_node_id(0); c1.enter_node("Block"); c1.field_u64(Dim::Structure, 1); c1.graph_edge("goto", 1); c1.exit_node();
-        c1.set_node_id(1); c1.enter_node("Block"); c1.field_u64(Dim::Structure, 2); c1.graph_edge("goto", 2); c1.exit_node();
-        c1.set_node_id(2); c1.enter_node("Block"); c1.field_u64(Dim::Structure, 3); c1.graph_edge("goto", 0); c1.exit_node();
+        c1.set_node_id(0);
+        c1.enter_node("Block");
+        c1.field_u64(Dim::Structure, 1);
+        c1.graph_edge("goto", 1);
+        c1.exit_node();
+        c1.set_node_id(1);
+        c1.enter_node("Block");
+        c1.field_u64(Dim::Structure, 2);
+        c1.graph_edge("goto", 2);
+        c1.exit_node();
+        c1.set_node_id(2);
+        c1.enter_node("Block");
+        c1.field_u64(Dim::Structure, 3);
+        c1.graph_edge("goto", 0);
+        c1.exit_node();
         c1.exit_node();
 
         // Graph B: same 3 blocks, but cycle A→C→B→A (different wiring, same nodes)
         let mut c2 = HashConsumer::new();
         c2.enter_node("Body");
-        c2.set_node_id(0); c2.enter_node("Block"); c2.field_u64(Dim::Structure, 1); c2.graph_edge("goto", 2); c2.exit_node();
-        c2.set_node_id(1); c2.enter_node("Block"); c2.field_u64(Dim::Structure, 2); c2.graph_edge("goto", 0); c2.exit_node();
-        c2.set_node_id(2); c2.enter_node("Block"); c2.field_u64(Dim::Structure, 3); c2.graph_edge("goto", 1); c2.exit_node();
+        c2.set_node_id(0);
+        c2.enter_node("Block");
+        c2.field_u64(Dim::Structure, 1);
+        c2.graph_edge("goto", 2);
+        c2.exit_node();
+        c2.set_node_id(1);
+        c2.enter_node("Block");
+        c2.field_u64(Dim::Structure, 2);
+        c2.graph_edge("goto", 0);
+        c2.exit_node();
+        c2.set_node_id(2);
+        c2.enter_node("Block");
+        c2.field_u64(Dim::Structure, 3);
+        c2.graph_edge("goto", 1);
+        c2.exit_node();
         c2.exit_node();
 
         let h1 = c1.into_result().expect("graph A");
         let h2 = c2.into_result().expect("graph B");
         assert_ne!(
-            h1.structure(), h2.structure(),
+            h1.structure(),
+            h2.structure(),
             "cycles with same nodes but different wiring must produce different hashes"
         );
     }
@@ -513,21 +584,38 @@ mod tests {
         // Graph A: blocks entered in order 0,1 — cycle 0→1→0
         let mut c1 = HashConsumer::new();
         c1.enter_node("Body");
-        c1.set_node_id(0); c1.enter_node("Block"); c1.field_u64(Dim::Structure, 10); c1.graph_edge("goto", 1); c1.exit_node();
-        c1.set_node_id(1); c1.enter_node("Block"); c1.field_u64(Dim::Structure, 20); c1.graph_edge("goto", 0); c1.exit_node();
+        c1.set_node_id(0);
+        c1.enter_node("Block");
+        c1.field_u64(Dim::Structure, 10);
+        c1.graph_edge("goto", 1);
+        c1.exit_node();
+        c1.set_node_id(1);
+        c1.enter_node("Block");
+        c1.field_u64(Dim::Structure, 20);
+        c1.graph_edge("goto", 0);
+        c1.exit_node();
         c1.exit_node();
 
         // Graph B: same cycle, blocks entered in order 1,0
         let mut c2 = HashConsumer::new();
         c2.enter_node("Body");
-        c2.set_node_id(1); c2.enter_node("Block"); c2.field_u64(Dim::Structure, 20); c2.graph_edge("goto", 0); c2.exit_node();
-        c2.set_node_id(0); c2.enter_node("Block"); c2.field_u64(Dim::Structure, 10); c2.graph_edge("goto", 1); c2.exit_node();
+        c2.set_node_id(1);
+        c2.enter_node("Block");
+        c2.field_u64(Dim::Structure, 20);
+        c2.graph_edge("goto", 0);
+        c2.exit_node();
+        c2.set_node_id(0);
+        c2.enter_node("Block");
+        c2.field_u64(Dim::Structure, 10);
+        c2.graph_edge("goto", 1);
+        c2.exit_node();
         c2.exit_node();
 
         let h1 = c1.into_result().expect("order A");
         let h2 = c2.into_result().expect("order B");
         assert_eq!(
-            h1.structure(), h2.structure(),
+            h1.structure(),
+            h2.structure(),
             "same cycle with blocks in different traversal order must produce identical hashes"
         );
     }

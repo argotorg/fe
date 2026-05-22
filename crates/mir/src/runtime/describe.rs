@@ -1,10 +1,9 @@
-use std::collections::HashMap;
 use common::ir_describe::{DescribeCtx, Dim, IrConsumer, IrDescribe};
+use std::collections::HashMap;
 
 use crate::runtime::ir::{
-    RExpr, RStmt, RTerminator, RuntimeBody,
-    RuntimePlace, PlaceRoot, PlaceElem,
-    describe_class, terminator_successors,
+    PlaceElem, PlaceRoot, RExpr, RStmt, RTerminator, RuntimeBody, RuntimePlace, describe_class,
+    terminator_successors,
 };
 
 impl<'db> IrDescribe for RuntimeBody<'db> {
@@ -111,9 +110,16 @@ impl<'db> SpanResolver<'db> {
                 None => String::new(),
             };
             let source_text = span.file.text(db);
-            let (start_line, start_col) = common::byte_offset_to_line_col(source_text, start_offset);
+            let (start_line, start_col) =
+                common::byte_offset_to_line_col(source_text, start_offset);
             let (end_line, end_col) = common::byte_offset_to_line_col(source_text, end_offset);
-            c.source_span(&file_path, start_line as u32, start_col as u32, end_line as u32, end_col as u32);
+            c.source_span(
+                &file_path,
+                start_line as u32,
+                start_col as u32,
+                end_line as u32,
+                end_col as u32,
+            );
         }
     }
 }
@@ -183,7 +189,9 @@ fn stmt_used_locals(stmt: &RStmt<'_>) -> Vec<u32> {
         RStmt::EnumSetTag { root, .. } => locals.push(root.as_u32()),
         RStmt::EnumWriteVariant { root, fields, .. } => {
             locals.push(root.as_u32());
-            for f in fields.iter() { locals.push(f.as_u32()); }
+            for f in fields.iter() {
+                locals.push(f.as_u32());
+            }
         }
     }
     locals
@@ -192,12 +200,21 @@ fn stmt_used_locals(stmt: &RStmt<'_>) -> Vec<u32> {
 fn expr_used_locals(expr: &RExpr<'_>, out: &mut Vec<u32>) {
     match expr {
         RExpr::Use(v) => out.push(v.as_u32()),
-        RExpr::ConstScalar(_) | RExpr::Placeholder { .. }
-        | RExpr::ConstRef { .. } | RExpr::AllocObject { .. } => {}
-        RExpr::Binary { lhs, rhs, .. } => { out.push(lhs.as_u32()); out.push(rhs.as_u32()); }
+        RExpr::ConstScalar(_)
+        | RExpr::Placeholder { .. }
+        | RExpr::ConstRef { .. }
+        | RExpr::AllocObject { .. } => {}
+        RExpr::Binary { lhs, rhs, .. } => {
+            out.push(lhs.as_u32());
+            out.push(rhs.as_u32());
+        }
         RExpr::Unary { value, .. } => out.push(value.as_u32()),
         RExpr::Cast { value, .. } => out.push(value.as_u32()),
-        RExpr::Call { args, .. } => { for a in args.iter() { out.push(a.as_u32()); } }
+        RExpr::Call { args, .. } => {
+            for a in args.iter() {
+                out.push(a.as_u32());
+            }
+        }
         RExpr::Load { place } => place_used_locals(place, out),
         RExpr::AggregateExtract { value, .. } => out.push(value.as_u32()),
         RExpr::Builtin(b) => builtin_used_locals(b, out),
@@ -208,7 +225,11 @@ fn expr_used_locals(expr: &RExpr<'_>, out: &mut Vec<u32>) {
         RExpr::ProviderToRaw { value } => out.push(value.as_u32()),
         RExpr::RetagRef { value } => out.push(value.as_u32()),
         RExpr::AddrOf { place } => place_used_locals(place, out),
-        RExpr::EnumMake { fields, .. } => { for f in fields.iter() { out.push(f.as_u32()); } }
+        RExpr::EnumMake { fields, .. } => {
+            for f in fields.iter() {
+                out.push(f.as_u32());
+            }
+        }
         RExpr::EnumTagOfValue { value } => out.push(value.as_u32()),
         RExpr::EnumIsVariant { value, .. } => out.push(value.as_u32()),
         RExpr::EnumExtract { value, .. } => out.push(value.as_u32()),
@@ -235,56 +256,174 @@ fn builtin_used_locals(b: &crate::runtime::ir::RuntimeBuiltin<'_>, out: &mut Vec
     use crate::runtime::ir::RuntimeBuiltin::*;
     match b {
         IntrinsicArith { lhs, rhs, .. } | Saturating { lhs, rhs, .. } => {
-            out.push(lhs.as_u32()); out.push(rhs.as_u32());
+            out.push(lhs.as_u32());
+            out.push(rhs.as_u32());
         }
-        Mload { addr } | CallDataLoad { offset: addr } | BlockHash { block: addr }
-        | Malloc { size: addr } | Sload { slot: addr } => out.push(addr.as_u32()),
-        Mstore { addr, value } | Mstore8 { addr, value } | Sstore { slot: addr, value }
-        | SignExtend { byte: addr, value } => { out.push(addr.as_u32()); out.push(value.as_u32()); }
-        Mcopy { dst, src, len } | CallDataCopy { dst, offset: src, len }
-        | ReturnDataCopy { dst, offset: src, len } | CodeCopy { dst, offset: src, len }
-        | AddMod { lhs: dst, rhs: src, modulus: len } | MulMod { lhs: dst, rhs: src, modulus: len }
-        | Create { value: dst, offset: src, len } => {
-            out.push(dst.as_u32()); out.push(src.as_u32()); out.push(len.as_u32());
+        Mload { addr }
+        | CallDataLoad { offset: addr }
+        | BlockHash { block: addr }
+        | Malloc { size: addr }
+        | Sload { slot: addr } => out.push(addr.as_u32()),
+        Mstore { addr, value }
+        | Mstore8 { addr, value }
+        | Sstore { slot: addr, value }
+        | SignExtend { byte: addr, value } => {
+            out.push(addr.as_u32());
+            out.push(value.as_u32());
         }
-        Create2 { value, offset, len, salt } => {
-            out.push(value.as_u32()); out.push(offset.as_u32());
-            out.push(len.as_u32()); out.push(salt.as_u32());
+        Mcopy { dst, src, len }
+        | CallDataCopy {
+            dst,
+            offset: src,
+            len,
+        }
+        | ReturnDataCopy {
+            dst,
+            offset: src,
+            len,
+        }
+        | CodeCopy {
+            dst,
+            offset: src,
+            len,
+        }
+        | AddMod {
+            lhs: dst,
+            rhs: src,
+            modulus: len,
+        }
+        | MulMod {
+            lhs: dst,
+            rhs: src,
+            modulus: len,
+        }
+        | Create {
+            value: dst,
+            offset: src,
+            len,
+        } => {
+            out.push(dst.as_u32());
+            out.push(src.as_u32());
+            out.push(len.as_u32());
+        }
+        Create2 {
+            value,
+            offset,
+            len,
+            salt,
+        } => {
+            out.push(value.as_u32());
+            out.push(offset.as_u32());
+            out.push(len.as_u32());
+            out.push(salt.as_u32());
         }
         Keccak256 { offset, len } | Log0 { offset, len } => {
-            out.push(offset.as_u32()); out.push(len.as_u32());
+            out.push(offset.as_u32());
+            out.push(len.as_u32());
         }
-        Log1 { offset, len, topic0 } => {
-            out.push(offset.as_u32()); out.push(len.as_u32()); out.push(topic0.as_u32());
+        Log1 {
+            offset,
+            len,
+            topic0,
+        } => {
+            out.push(offset.as_u32());
+            out.push(len.as_u32());
+            out.push(topic0.as_u32());
         }
-        Log2 { offset, len, topic0, topic1 } => {
-            out.push(offset.as_u32()); out.push(len.as_u32());
-            out.push(topic0.as_u32()); out.push(topic1.as_u32());
+        Log2 {
+            offset,
+            len,
+            topic0,
+            topic1,
+        } => {
+            out.push(offset.as_u32());
+            out.push(len.as_u32());
+            out.push(topic0.as_u32());
+            out.push(topic1.as_u32());
         }
-        Log3 { offset, len, topic0, topic1, topic2 } => {
-            out.push(offset.as_u32()); out.push(len.as_u32());
-            out.push(topic0.as_u32()); out.push(topic1.as_u32()); out.push(topic2.as_u32());
+        Log3 {
+            offset,
+            len,
+            topic0,
+            topic1,
+            topic2,
+        } => {
+            out.push(offset.as_u32());
+            out.push(len.as_u32());
+            out.push(topic0.as_u32());
+            out.push(topic1.as_u32());
+            out.push(topic2.as_u32());
         }
-        Log4 { offset, len, topic0, topic1, topic2, topic3 } => {
-            out.push(offset.as_u32()); out.push(len.as_u32());
-            out.push(topic0.as_u32()); out.push(topic1.as_u32());
-            out.push(topic2.as_u32()); out.push(topic3.as_u32());
+        Log4 {
+            offset,
+            len,
+            topic0,
+            topic1,
+            topic2,
+            topic3,
+        } => {
+            out.push(offset.as_u32());
+            out.push(len.as_u32());
+            out.push(topic0.as_u32());
+            out.push(topic1.as_u32());
+            out.push(topic2.as_u32());
+            out.push(topic3.as_u32());
         }
-        Call { gas, addr, value, args_offset, args_len, ret_offset, ret_len } => {
+        Call {
+            gas,
+            addr,
+            value,
+            args_offset,
+            args_len,
+            ret_offset,
+            ret_len,
+        } => {
             for v in [gas, addr, value, args_offset, args_len, ret_offset, ret_len] {
                 out.push(v.as_u32());
             }
         }
-        StaticCall { gas, addr, args_offset, args_len, ret_offset, ret_len }
-        | DelegateCall { gas, addr, args_offset, args_len, ret_offset, ret_len } => {
+        StaticCall {
+            gas,
+            addr,
+            args_offset,
+            args_len,
+            ret_offset,
+            ret_len,
+        }
+        | DelegateCall {
+            gas,
+            addr,
+            args_offset,
+            args_len,
+            ret_offset,
+            ret_len,
+        } => {
             for v in [gas, addr, args_offset, args_len, ret_offset, ret_len] {
                 out.push(v.as_u32());
             }
         }
-        MakeContractFieldRef { .. } | Msize | CallValue | ReturnDataSize | CallDataSize
-        | CodeSize | Address | Caller | Origin | GasPrice | CoinBase | Timestamp | Number
-        | PrevRandao | GasLimit | ChainId | BaseFee | SelfBalance | Gas
-        | CurrentCodeRegionLen | CodeRegionOffset { .. } | CodeRegionLen { .. }
+        MakeContractFieldRef { .. }
+        | Msize
+        | CallValue
+        | ReturnDataSize
+        | CallDataSize
+        | CodeSize
+        | Address
+        | Caller
+        | Origin
+        | GasPrice
+        | CoinBase
+        | Timestamp
+        | Number
+        | PrevRandao
+        | GasLimit
+        | ChainId
+        | BaseFee
+        | SelfBalance
+        | Gas
+        | CurrentCodeRegionLen
+        | CodeRegionOffset { .. }
+        | CodeRegionLen { .. }
         | CallDataSelector => {}
     }
 }
@@ -294,13 +433,20 @@ fn terminator_used_locals(term: &RTerminator<'_>) -> Vec<u32> {
     match term {
         RTerminator::Goto(_) | RTerminator::Trap | RTerminator::Stop => {}
         RTerminator::Branch { cond, .. } => locals.push(cond.as_u32()),
-        RTerminator::Return(v) => { if let Some(v) = v { locals.push(v.as_u32()); } }
+        RTerminator::Return(v) => {
+            if let Some(v) = v {
+                locals.push(v.as_u32());
+            }
+        }
         RTerminator::SelfDestruct { beneficiary } => locals.push(beneficiary.as_u32()),
         RTerminator::ReturnData { offset, len } | RTerminator::Revert { offset, len } => {
-            locals.push(offset.as_u32()); locals.push(len.as_u32());
+            locals.push(offset.as_u32());
+            locals.push(len.as_u32());
         }
         RTerminator::TerminalCall { args, .. } => {
-            for a in args.iter() { locals.push(a.as_u32()); }
+            for a in args.iter() {
+                locals.push(a.as_u32());
+            }
         }
         RTerminator::SwitchScalar { discr, .. } => locals.push(discr.as_u32()),
         RTerminator::MatchEnumTag { tag, .. } => locals.push(tag.as_u32()),

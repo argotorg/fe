@@ -1,3 +1,5 @@
+#![allow(clippy::print_stderr)]
+
 mod test_helpers;
 use test_helpers::*;
 
@@ -51,7 +53,10 @@ fn rename_changes_names_hash_but_not_structure() {
 #[test]
 fn whitespace_immunity_at_mir() {
     let spaced = BASE_CONTRACT
-        .replace("let sender = ctx.caller()", "let sender    =   ctx.caller()")
+        .replace(
+            "let sender = ctx.caller()",
+            "let sender    =   ctx.caller()",
+        )
         .replace("return true", "return   true")
         .replace("return false", "return    false");
 
@@ -63,7 +68,8 @@ fn whitespace_immunity_at_mir() {
     for (name1, hash1) in &h1 {
         if let Some((_, hash2)) = h2.iter().find(|(n, _)| n == name1) {
             assert_eq!(
-                hash1.structure(), hash2.structure(),
+                hash1.structure(),
+                hash2.structure(),
                 "whitespace changes must not affect MIR structural hash for {name1}"
             );
         }
@@ -76,7 +82,10 @@ fn whitespace_immunity_at_mir() {
 #[test]
 fn dimension_orthogonality_rename_preserves_structure() {
     let renamed = BASE_CONTRACT
-        .replace("let sender = ctx.caller()", "let origin_addr = ctx.caller()")
+        .replace(
+            "let sender = ctx.caller()",
+            "let origin_addr = ctx.caller()",
+        )
         .replace("key: sender", "key: origin_addr");
 
     let (_a1, h1) = compile_mir_hashes(BASE_CONTRACT);
@@ -88,10 +97,10 @@ fn dimension_orthogonality_rename_preserves_structure() {
     let mut structure_matches = 0;
     let total = h1.len().min(h2.len());
     for (name1, hash1) in &h1 {
-        if let Some((_, hash2)) = h2.iter().find(|(n, _)| n == name1) {
-            if hash1.structure() == hash2.structure() {
-                structure_matches += 1;
-            }
+        if let Some((_, hash2)) = h2.iter().find(|(n, _)| n == name1)
+            && hash1.structure() == hash2.structure()
+        {
+            structure_matches += 1;
         }
     }
 
@@ -112,20 +121,26 @@ fn composite_children_unordered_is_order_independent() {
 
     let mut c1 = (HashConsumer::new(), NullConsumer);
     c1.enter_node("Root");
-    c1.children_unordered::<SimpleLeaf>(&cx, &[
-        SimpleLeaf { tag: 10 },
-        SimpleLeaf { tag: 20 },
-        SimpleLeaf { tag: 30 },
-    ]);
+    c1.children_unordered::<SimpleLeaf>(
+        &cx,
+        &[
+            SimpleLeaf { tag: 10 },
+            SimpleLeaf { tag: 20 },
+            SimpleLeaf { tag: 30 },
+        ],
+    );
     c1.exit_node();
 
     let mut c2 = (HashConsumer::new(), NullConsumer);
     c2.enter_node("Root");
-    c2.children_unordered::<SimpleLeaf>(&cx, &[
-        SimpleLeaf { tag: 30 },
-        SimpleLeaf { tag: 10 },
-        SimpleLeaf { tag: 20 },
-    ]);
+    c2.children_unordered::<SimpleLeaf>(
+        &cx,
+        &[
+            SimpleLeaf { tag: 30 },
+            SimpleLeaf { tag: 10 },
+            SimpleLeaf { tag: 20 },
+        ],
+    );
     c2.exit_node();
 
     let h1 = c1.0.into_result().unwrap();
@@ -200,11 +215,28 @@ pub contract C uses (ctx: Ctx) {
     );
 
     eprintln!("T10 dimension projection:");
-    eprintln!("  GetA structure={:#x} constants={:#x}", get_a.structure(), get_a.constants());
-    eprintln!("  GetB structure={:#x} constants={:#x}", get_b.structure(), get_b.constants());
-    eprintln!("  ALGORITHM match: {}", get_a.projected(DimSet::ALGORITHM) == get_b.projected(DimSet::ALGORITHM));
-    eprintln!("  TEMPLATE match:  {}", get_a.projected(DimSet::TEMPLATE) == get_b.projected(DimSet::TEMPLATE));
-    eprintln!("  EXACT match:     {}", get_a.projected(DimSet::EXACT) == get_b.projected(DimSet::EXACT));
+    eprintln!(
+        "  GetA structure={:#x} constants={:#x}",
+        get_a.structure(),
+        get_a.constants()
+    );
+    eprintln!(
+        "  GetB structure={:#x} constants={:#x}",
+        get_b.structure(),
+        get_b.constants()
+    );
+    eprintln!(
+        "  ALGORITHM match: {}",
+        get_a.projected(DimSet::ALGORITHM) == get_b.projected(DimSet::ALGORITHM)
+    );
+    eprintln!(
+        "  TEMPLATE match:  {}",
+        get_a.projected(DimSet::TEMPLATE) == get_b.projected(DimSet::TEMPLATE)
+    );
+    eprintln!(
+        "  EXACT match:     {}",
+        get_a.projected(DimSet::EXACT) == get_b.projected(DimSet::EXACT)
+    );
 }
 
 // T9: Field coverage metric — verify all describe impls close every field
@@ -236,8 +268,14 @@ fn field_coverage_no_remaining_dotdot_in_describes() {
     }
 
     eprintln!("Field coverage: {total_nodes} nodes, {total_fields} fields described");
-    assert!(total_nodes > 100, "should describe >100 nodes across all functions");
-    assert!(total_fields > total_nodes, "should describe more fields than nodes (avg >1 field/node)");
+    assert!(
+        total_nodes > 100,
+        "should describe >100 nodes across all functions"
+    );
+    assert!(
+        total_fields > total_nodes,
+        "should describe more fields than nodes (avg >1 field/node)"
+    );
 }
 
 // T5: Source-level field coverage assertion — verify no .. patterns remain
@@ -245,9 +283,11 @@ fn field_coverage_no_remaining_dotdot_in_describes() {
 // every field of every variant is explicitly mentioned in the describe impl.
 #[test]
 fn no_dotdot_patterns_in_describe_impls() {
-    let ir_source = std::fs::read_to_string(
-        concat!(env!("CARGO_MANIFEST_DIR"), "/../mir/src/runtime/ir.rs")
-    ).expect("read ir.rs");
+    let ir_source = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../mir/src/runtime/ir.rs"
+    ))
+    .expect("read ir.rs");
 
     // Find all lines within IrDescribe impl blocks that use ..
     // We scan for match arms inside `impl ... IrDescribe for ...` blocks
@@ -281,7 +321,8 @@ fn no_dotdot_patterns_in_describe_impls() {
     assert!(
         dotdot_lines.is_empty(),
         "Found .. patterns in IrDescribe match arms in ir.rs — fields are being dropped:\n{}",
-        dotdot_lines.iter()
+        dotdot_lines
+            .iter()
             .map(|(n, l)| format!("  line {n}: {l}"))
             .collect::<Vec<_>>()
             .join("\n")
@@ -295,10 +336,16 @@ fn category_breakdown_on_erc20() {
     let a = analyze(BASE_CONTRACT);
     let cats = a.category_breakdown();
 
-    eprintln!("{:<12} {:>6} {:>8} {:>6}", "Category", "Funcs", "Stmts", "%");
+    eprintln!(
+        "{:<12} {:>6} {:>8} {:>6}",
+        "Category", "Funcs", "Stmts", "%"
+    );
     eprintln!("{}", "-".repeat(36));
     for c in &cats {
-        eprintln!("{:<12} {:>6} {:>8} {:>5.1}%", c.name, c.count, c.stmts, c.pct);
+        eprintln!(
+            "{:<12} {:>6} {:>8} {:>5.1}%",
+            c.name, c.count, c.stmts, c.pct
+        );
     }
 
     assert!(cats.len() >= 2, "should have at least 2 categories");
@@ -312,12 +359,21 @@ fn dedup_report_on_erc20() {
     let dedup = a.dedup_report();
 
     if !dedup.entries.is_empty() {
-        eprintln!("{:<30} {:>6} {:>8} {:>8}", "Function", "Copies", "Stmts", "Wasted");
+        eprintln!(
+            "{:<30} {:>6} {:>8} {:>8}",
+            "Function", "Copies", "Stmts", "Wasted"
+        );
         eprintln!("{}", "-".repeat(56));
         for e in dedup.entries.iter().take(10) {
-            eprintln!("{:<30} {:>6} {:>8} {:>8}", e.representative, e.copies, e.stmts_per_copy, e.wasted);
+            eprintln!(
+                "{:<30} {:>6} {:>8} {:>8}",
+                e.representative, e.copies, e.stmts_per_copy, e.wasted
+            );
         }
-        eprintln!("\nTotal wasted: {} stmts ({:.1}%)", dedup.total_wasted, dedup.pct_wasted);
+        eprintln!(
+            "\nTotal wasted: {} stmts ({:.1}%)",
+            dedup.total_wasted, dedup.pct_wasted
+        );
     } else {
         eprintln!("No duplicates found in ERC20 contract");
     }
@@ -327,9 +383,14 @@ fn dedup_report_on_erc20() {
 fn overview_on_erc20() {
     let a = analyze(BASE_CONTRACT);
     let ov = a.overview();
-    eprintln!("Functions: {} ({} unique, {:.1}% duplication)",
-        ov.total_functions, ov.unique_structures, ov.dup_pct);
-    eprintln!("Total stmts: {}, origin coverage: {:.1}%", ov.total_stmts, ov.origin_coverage_pct);
+    eprintln!(
+        "Functions: {} ({} unique, {:.1}% duplication)",
+        ov.total_functions, ov.unique_structures, ov.dup_pct
+    );
+    eprintln!(
+        "Total stmts: {}, origin coverage: {:.1}%",
+        ov.total_stmts, ov.origin_coverage_pct
+    );
     assert!(ov.total_functions > 10);
     assert!(ov.unique_structures > 0);
 }

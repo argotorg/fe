@@ -2,7 +2,6 @@ use std::fmt::Write as _;
 
 use sonatina_codegen::object::ObjectArtifact;
 
-
 #[derive(Debug, Clone)]
 pub struct EthdebugInfo {
     pub json: String,
@@ -100,8 +99,12 @@ impl EthdebugBuilder {
     pub fn add_type_from_desc(&mut self, desc: &crate::dwarf::FeTypeDesc) {
         use crate::dwarf::FeTypeDesc;
         let (name, kind, bits, fields) = match desc {
-            FeTypeDesc::UInt { bits } => (format!("u{bits}"), "uint".to_string(), Some(*bits), vec![]),
-            FeTypeDesc::Int { bits } => (format!("i{bits}"), "int".to_string(), Some(*bits), vec![]),
+            FeTypeDesc::UInt { bits } => {
+                (format!("u{bits}"), "uint".to_string(), Some(*bits), vec![])
+            }
+            FeTypeDesc::Int { bits } => {
+                (format!("i{bits}"), "int".to_string(), Some(*bits), vec![])
+            }
             FeTypeDesc::Bool => ("bool".to_string(), "bool".to_string(), None, vec![]),
             FeTypeDesc::Address => ("address".to_string(), "address".to_string(), None, vec![]),
             FeTypeDesc::String => ("String".to_string(), "string".to_string(), None, vec![]),
@@ -115,23 +118,35 @@ impl EthdebugBuilder {
                 name.clone(),
                 "struct".to_string(),
                 None,
-                fields.iter().map(|(fname, fty)| {
-                    let (fkind, fbits) = match fty {
-                        FeTypeDesc::UInt { bits } => ("uint".to_string(), Some(*bits)),
-                        FeTypeDesc::Int { bits } => ("int".to_string(), Some(*bits)),
-                        FeTypeDesc::Bool => ("bool".to_string(), None),
-                        _ => ("unknown".to_string(), None),
-                    };
-                    EthdebugTypeField { name: fname.clone(), type_kind: fkind, type_bits: fbits }
-                }).collect(),
+                fields
+                    .iter()
+                    .map(|(fname, fty)| {
+                        let (fkind, fbits) = match fty {
+                            FeTypeDesc::UInt { bits } => ("uint".to_string(), Some(*bits)),
+                            FeTypeDesc::Int { bits } => ("int".to_string(), Some(*bits)),
+                            FeTypeDesc::Bool => ("bool".to_string(), None),
+                            _ => ("unknown".to_string(), None),
+                        };
+                        EthdebugTypeField {
+                            name: fname.clone(),
+                            type_kind: fkind,
+                            type_bits: fbits,
+                        }
+                    })
+                    .collect(),
             ),
             FeTypeDesc::Enum { name, variants } => (
                 name.clone(),
                 "enum".to_string(),
                 None,
-                variants.iter().map(|v| EthdebugTypeField {
-                    name: v.clone(), type_kind: "uint".to_string(), type_bits: Some(8),
-                }).collect(),
+                variants
+                    .iter()
+                    .map(|v| EthdebugTypeField {
+                        name: v.clone(),
+                        type_kind: "uint".to_string(),
+                        type_bits: Some(8),
+                    })
+                    .collect(),
             ),
             FeTypeDesc::Array { elem: _, len } => (
                 len.map_or("Array".to_string(), |n| format!("Array[{n}]")),
@@ -140,7 +155,12 @@ impl EthdebugBuilder {
                 vec![],
             ),
         };
-        self.types.push(EthdebugType { name, kind, bits, fields });
+        self.types.push(EthdebugType {
+            name,
+            kind,
+            bits,
+            fields,
+        });
     }
 
     pub fn add_source(&mut self, path: &str, contents: Option<&str>) -> usize {
@@ -158,38 +178,54 @@ impl EthdebugBuilder {
         db: &driver::DriverDataBase,
         package: &mir::RuntimePackage<'_>,
         artifacts: &[ObjectArtifact],
-        origins: &[(sonatina_ir::module::FuncRef, sonatina_ir::InstId, common::provenance::ProvenanceNodeId)],
+        origins: &[(
+            sonatina_ir::module::FuncRef,
+            sonatina_ir::InstId,
+            common::provenance::ProvenanceNodeId,
+        )],
         contract_name: &str,
         environment: &'static str,
     ) {
         use common::provenance::IrLevel;
         use std::collections::HashMap;
 
-        let mut inst_to_origin: HashMap<(sonatina_ir::module::FuncRef, sonatina_ir::InstId), common::provenance::ProvenanceNodeId> = HashMap::new();
+        let mut inst_to_origin: HashMap<
+            (sonatina_ir::module::FuncRef, sonatina_ir::InstId),
+            common::provenance::ProvenanceNodeId,
+        > = HashMap::new();
         for (func_ref, inst_id, origin) in origins {
             inst_to_origin.insert((*func_ref, *inst_id), *origin);
         }
 
-        let bodies: Vec<_> = package.functions(db)
+        let bodies: Vec<_> = package
+            .functions(db)
             .iter()
             .filter_map(|func| {
                 let key = func.instance(db).key(db);
                 let semantic = key.semantic(db)?;
-                Some(semantic.key(db).owner(db).body(db)?)
+                semantic.key(db).owner(db).body(db)
             })
             .collect();
 
-        let mut origin_cache: HashMap<common::provenance::ProvenanceNodeId, Option<EthdebugSourceRange>> = HashMap::new();
+        let mut origin_cache: HashMap<
+            common::provenance::ProvenanceNodeId,
+            Option<EthdebugSourceRange>,
+        > = HashMap::new();
 
         let mut instructions = Vec::new();
 
         for artifact in artifacts {
             for section in artifact.sections.values() {
-                let Some(observability) = &section.observability else { continue };
+                let Some(observability) = &section.observability else {
+                    continue;
+                };
 
                 for entry in &observability.pc_map {
-                    let Some(ir_inst) = entry.ir_inst else { continue };
-                    let source = inst_to_origin.get(&(entry.func, ir_inst))
+                    let Some(ir_inst) = entry.ir_inst else {
+                        continue;
+                    };
+                    let source = inst_to_origin
+                        .get(&(entry.func, ir_inst))
                         .filter(|o| o.level == IrLevel::Smir)
                         .and_then(|origin| {
                             if let Some(cached) = origin_cache.get(origin) {
@@ -240,18 +276,22 @@ impl EthdebugBuilder {
                     Some(p) => p.to_string(),
                     None => String::new(),
                 };
-                let source_id = self.sources.iter()
+                let source_id = self
+                    .sources
+                    .iter()
                     .position(|s| s.path == file_path_str)
                     .unwrap_or(0);
                 return Some(EthdebugSourceRange {
-                    source_id, start_line: sl as u32, start_col: sc as u32,
-                    end_line: el as u32, end_col: ec as u32,
+                    source_id,
+                    start_line: sl as u32,
+                    start_col: sc as u32,
+                    end_line: el as u32,
+                    end_col: ec as u32,
                 });
             }
         }
         None
     }
-
 
     pub fn build(&self) -> EthdebugInfo {
         let mut out = String::new();
@@ -379,12 +419,7 @@ impl EthdebugBuilder {
                 json_escape(&program.contract_name)
             )
             .unwrap();
-            write!(
-                out,
-                ",\"environment\":\"{}\"",
-                program.environment
-            )
-            .unwrap();
+            write!(out, ",\"environment\":\"{}\"", program.environment).unwrap();
 
             write!(out, ",\"instructions\":[").unwrap();
             for (inst_idx, inst) in program.instructions.iter().enumerate() {
@@ -468,7 +503,10 @@ mod tests {
     #[test]
     fn ethdebug_builder_produces_valid_json() {
         let mut builder = EthdebugBuilder::new("fe", "26.1.0");
-        builder.add_source("src/main.fe", Some("fn add(x: u256, y: u256) -> u256 { return x + y }"));
+        builder.add_source(
+            "src/main.fe",
+            Some("fn add(x: u256, y: u256) -> u256 { return x + y }"),
+        );
 
         let info = builder.build();
         assert!(info.json.starts_with('{'));

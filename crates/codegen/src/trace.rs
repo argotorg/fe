@@ -1,5 +1,5 @@
-use cozo::{DataValue, DbInstance, NamedRows, ScriptMutability};
 use common::fact_consumer::Fact;
+use cozo::{DataValue, DbInstance, NamedRows, ScriptMutability};
 
 pub struct CompilationTrace {
     db: DbInstance,
@@ -103,10 +103,15 @@ fact_tables! {
         };
 }
 
+impl Default for CompilationTrace {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CompilationTrace {
     pub fn new() -> Self {
-        let db = DbInstance::new("mem", "", Default::default())
-            .expect("in-memory cozo instance");
+        let db = DbInstance::new("mem", "", Default::default()).expect("in-memory cozo instance");
 
         for schema in SCHEMAS {
             db.run_script(schema, Default::default(), ScriptMutability::Mutable)
@@ -123,20 +128,33 @@ impl CompilationTrace {
     }
 
     pub fn query(&self, script: &str) -> Result<NamedRows, String> {
-        self.db.run_script(script, Default::default(), ScriptMutability::Immutable)
+        self.db
+            .run_script(script, Default::default(), ScriptMutability::Immutable)
             .map_err(|e| format!("{e}"))
     }
 
-    fn put(&self, table: &str, cols: &[&str], params: std::collections::BTreeMap<String, DataValue>) {
+    fn put(
+        &self,
+        table: &str,
+        cols: &[&str],
+        params: std::collections::BTreeMap<String, DataValue>,
+    ) {
         let col_list = cols.join(", ");
-        let placeholders = cols.iter().map(|c| format!("${c}")).collect::<Vec<_>>().join(", ");
+        let placeholders = cols
+            .iter()
+            .map(|c| format!("${c}"))
+            .collect::<Vec<_>>()
+            .join(", ");
         let script = format!("?[{col_list}] <- [[{placeholders}]] :put {table} {{ {col_list} }}");
-        self.db.run_script(&script, params, ScriptMutability::Mutable)
+        self.db
+            .run_script(&script, params, ScriptMutability::Mutable)
             .unwrap_or_else(|e| panic!("insert {table}: {e}"));
     }
 }
 
-fn btree(pairs: impl IntoIterator<Item = (&'static str, DataValue)>) -> std::collections::BTreeMap<String, DataValue> {
+fn btree(
+    pairs: impl IntoIterator<Item = (&'static str, DataValue)>,
+) -> std::collections::BTreeMap<String, DataValue> {
     pairs.into_iter().map(|(k, v)| (k.to_string(), v)).collect()
 }
 
@@ -159,7 +177,8 @@ mod tests {
         let trace = CompilationTrace::new();
         trace.ingest(fc.facts());
 
-        let result = trace.query("?[node_id, kind] := *node_hash[node_id, kind, _, _, _]")
+        let result = trace
+            .query("?[node_id, kind] := *node_hash[node_id, kind, _, _, _]")
             .expect("query");
         assert_eq!(result.rows.len(), 2, "should have 2 node_hash entries");
     }
@@ -169,7 +188,8 @@ mod tests {
         let mut fc = FactConsumer::new();
 
         fc.origin(&common::provenance::ProvenanceNodeId::new(
-            common::provenance::IrLevel::Smir, 5,
+            common::provenance::IrLevel::Smir,
+            5,
             common::provenance::TransformTag::SmirToMir,
         ));
         fc.enter_node("Assign");
@@ -179,7 +199,8 @@ mod tests {
         let trace = CompilationTrace::new();
         trace.ingest(fc.facts());
 
-        let origins = trace.query("?[node_id, level, node] := *origin[node_id, level, node, _]")
+        let origins = trace
+            .query("?[node_id, level, node] := *origin[node_id, level, node, _]")
             .expect("query origins");
         assert_eq!(origins.rows.len(), 1, "should have 1 origin entry");
     }

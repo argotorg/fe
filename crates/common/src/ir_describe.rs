@@ -12,13 +12,14 @@ pub struct DescribeCtx<'db> {
 
 impl<'db> DescribeCtx<'db> {
     pub fn new(db: &'db (impl salsa::Database + ?Sized)) -> Self {
-        Self { db: db.as_dyn_database() }
+        Self {
+            db: db.as_dyn_database(),
+        }
     }
 
     pub fn db<T: ?Sized + salsa::Database>(&self) -> &'db T {
         self.db.as_view::<T>()
     }
-
 }
 
 pub trait IrConsumer {
@@ -87,13 +88,9 @@ impl DimSet {
 
     pub const ALGORITHM: DimSet = DimSet::from(Dim::Structure);
 
-    pub const TEMPLATE: DimSet = DimSet(
-        DimSet::ALL.0 & !(1 << Dim::Constants as u8)
-    );
+    pub const TEMPLATE: DimSet = DimSet(DimSet::ALL.0 & !(1 << Dim::Constants as u8));
 
-    pub const PORTABLE: DimSet = DimSet(
-        DimSet::ALL.0 & !(1 << Dim::Types as u8)
-    );
+    pub const PORTABLE: DimSet = DimSet(DimSet::ALL.0 & !(1 << Dim::Types as u8));
 
     pub const SIGNATURE: DimSet = DimSet::from(Dim::Names);
 
@@ -209,6 +206,7 @@ impl salsa::Database for TestDb {
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 mod tests {
     use super::*;
     use crate as common;
@@ -222,29 +220,58 @@ mod tests {
 
     impl CountingConsumer {
         fn new() -> Self {
-            Self { nodes: 0, fields: 0, edges: 0, origins: 0 }
+            Self {
+                nodes: 0,
+                fields: 0,
+                edges: 0,
+                origins: 0,
+            }
         }
     }
 
     impl IrConsumer for CountingConsumer {
-        fn enter_node(&mut self, _kind: &str) { self.nodes += 1; }
+        fn enter_node(&mut self, _kind: &str) {
+            self.nodes += 1;
+        }
         fn exit_node(&mut self) {}
-        fn field_u64(&mut self, _dim: Dim, _value: u64) { self.fields += 1; }
-        fn field_bytes(&mut self, _dim: Dim, _value: &[u8]) { self.fields += 1; }
-        fn field_str(&mut self, _dim: Dim, _value: &str) { self.fields += 1; }
-        fn field_bool(&mut self, _dim: Dim, _value: bool) { self.fields += 1; }
+        fn field_u64(&mut self, _dim: Dim, _value: u64) {
+            self.fields += 1;
+        }
+        fn field_bytes(&mut self, _dim: Dim, _value: &[u8]) {
+            self.fields += 1;
+        }
+        fn field_str(&mut self, _dim: Dim, _value: &str) {
+            self.fields += 1;
+        }
+        fn field_bool(&mut self, _dim: Dim, _value: bool) {
+            self.fields += 1;
+        }
         fn child<T: IrDescribe>(&mut self, cx: &DescribeCtx<'_>, child: &T) {
             child.describe(cx, self);
         }
         fn children_ordered<T: IrDescribe>(&mut self, cx: &DescribeCtx<'_>, children: &[T]) {
-            for child in children { child.describe(cx, self); }
+            for child in children {
+                child.describe(cx, self);
+            }
         }
         fn children_unordered<T: IrDescribe>(&mut self, cx: &DescribeCtx<'_>, children: &[T]) {
             self.children_ordered(cx, children);
         }
-        fn graph_edge(&mut self, _label: &str, _target_id: u64) { self.edges += 1; }
-        fn origin(&mut self, _origin: &ProvenanceNodeId) { self.origins += 1; }
-        fn source_span(&mut self, _file: &str, _line: u32, _col: u32, _end_line: u32, _end_col: u32) {}
+        fn graph_edge(&mut self, _label: &str, _target_id: u64) {
+            self.edges += 1;
+        }
+        fn origin(&mut self, _origin: &ProvenanceNodeId) {
+            self.origins += 1;
+        }
+        fn source_span(
+            &mut self,
+            _file: &str,
+            _line: u32,
+            _col: u32,
+            _end_line: u32,
+            _end_col: u32,
+        ) {
+        }
     }
 
     struct SimpleNode {
@@ -292,8 +319,11 @@ mod tests {
 
     #[test]
     fn counting_consumer_on_simple_node() {
-        let node = SimpleNode { kind: "Lit", value: 42 };
-        let mut consumer = CountingConsumer::new();
+        let _node = SimpleNode {
+            kind: "Lit",
+            value: 42,
+        };
+        let _consumer = CountingConsumer::new();
         // DescribeCtx needs a db — use a mock-free approach
         // Since SimpleNode doesn't use cx.db(), we can use a null db
         // But we need a real InputDb... skip cx for now in the test
@@ -361,7 +391,10 @@ mod tests {
     fn derive_enum_with_effect() {
         let db = TestDb::default();
         let cx = DescribeCtx::new(&db);
-        let val = TestEnum::WithEffect { x: 10, name: "hello".to_string() };
+        let val = TestEnum::WithEffect {
+            x: 10,
+            name: "hello".to_string(),
+        };
         let mut c = CountingConsumer::new();
         val.describe(&cx, &mut c);
         assert_eq!(c.nodes, 1);
@@ -372,7 +405,11 @@ mod tests {
     fn derive_struct_skips_field() {
         let db = TestDb::default();
         let cx = DescribeCtx::new(&db);
-        let s = TestStruct { kind: 1, label: "test".to_string(), _internal: 0 };
+        let s = TestStruct {
+            kind: 1,
+            label: "test".to_string(),
+            _internal: 0,
+        };
         let mut c = CountingConsumer::new();
         s.describe(&cx, &mut c);
         assert_eq!(c.nodes, 1);

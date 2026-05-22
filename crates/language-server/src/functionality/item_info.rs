@@ -16,7 +16,7 @@ pub fn get_docstring(db: &dyn HirDb, scope: ScopeId) -> Option<String> {
                 None
             }
         })
-        .reduce(|a, b| a + "\n" + &b)
+        .reduce(|a, b| a + "\n" + b.as_str())
 }
 
 pub fn get_item_path_markdown(db: &dyn SpannedHirDb, item: ItemKind) -> Option<String> {

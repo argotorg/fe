@@ -462,13 +462,15 @@ impl<'db> RmirEmitter<'db> {
             blocks,
             terminated_blocks,
             cur_origin: common::provenance::ProvenanceNodeId::new(
-                common::provenance::IrLevel::Mir, 0, common::provenance::TransformTag::Synthetic,
+                common::provenance::IrLevel::Mir,
+                0,
+                common::provenance::TransformTag::Synthetic,
             ),
         }
     }
 
     fn finish(mut self, signature: RuntimeInterfaceSignature<'db>) -> RuntimeBody<'db> {
-        use common::provenance::{ProvenanceNodeId, IrLevel, TransformTag};
+        use common::provenance::{IrLevel, ProvenanceNodeId, TransformTag};
         while self.blocks.len() < self.semantic_body.blocks.len() {
             self.blocks.push(RBlock {
                 stmts: Vec::new(),
@@ -508,7 +510,7 @@ impl<'db> RmirEmitter<'db> {
     }
 
     fn lower_blocks(&mut self) {
-        use common::provenance::{ProvenanceNodeId, IrLevel, TransformTag};
+        use common::provenance::{IrLevel, ProvenanceNodeId, TransformTag};
         self.blocks = (0..self.semantic_body.blocks.len())
             .map(|_| RBlock {
                 stmts: Vec::new(),
@@ -519,14 +521,24 @@ impl<'db> RmirEmitter<'db> {
             .collect();
         self.terminated_blocks = vec![false; self.semantic_body.blocks.len()];
         let blocks = self.semantic_body.blocks.clone();
-        fn sem_origin_to_provenance(origin: &hir::analysis::semantic::SemOrigin<'_>) -> common::provenance::ProvenanceNodeId {
-            use common::provenance::{ProvenanceNodeId, IrLevel, TransformTag};
+        fn sem_origin_to_provenance(
+            origin: &hir::analysis::semantic::SemOrigin<'_>,
+        ) -> common::provenance::ProvenanceNodeId {
+            use common::provenance::{IrLevel, ProvenanceNodeId, TransformTag};
             use hir::analysis::semantic::SemOrigin;
             match origin {
-                SemOrigin::Expr(expr_id) => ProvenanceNodeId::new(IrLevel::Smir, expr_id.as_u32(), TransformTag::SmirToMir),
-                SemOrigin::Stmt(stmt_id) => ProvenanceNodeId::new(IrLevel::Smir, stmt_id.as_u32(), TransformTag::SmirToMir),
-                SemOrigin::Body(_) => ProvenanceNodeId::new(IrLevel::Smir, 0, TransformTag::SmirToMir),
-                SemOrigin::Synthetic => ProvenanceNodeId::new(IrLevel::Mir, 0, TransformTag::Synthetic),
+                SemOrigin::Expr(expr_id) => {
+                    ProvenanceNodeId::new(IrLevel::Smir, expr_id.as_u32(), TransformTag::SmirToMir)
+                }
+                SemOrigin::Stmt(stmt_id) => {
+                    ProvenanceNodeId::new(IrLevel::Smir, stmt_id.as_u32(), TransformTag::SmirToMir)
+                }
+                SemOrigin::Body(_) => {
+                    ProvenanceNodeId::new(IrLevel::Smir, 0, TransformTag::SmirToMir)
+                }
+                SemOrigin::Synthetic => {
+                    ProvenanceNodeId::new(IrLevel::Mir, 0, TransformTag::Synthetic)
+                }
             }
         }
 
@@ -5113,14 +5125,13 @@ mod tests {
         use common::provenance::{IrLevel, TransformTag};
 
         let mut db = DriverDataBase::default();
-        let file_url = Url::from_file_path(
-            std::env::temp_dir().join("provenance_origin_test.fe"),
-        )
-        .expect("path");
+        let file_url = Url::from_file_path(std::env::temp_dir().join("provenance_origin_test.fe"))
+            .expect("path");
         db.workspace().touch(
             &mut db,
             file_url.clone(),
-            Some(r#"
+            Some(
+                r#"
 msg Msg {
     #[selector = 0x11111111]
     Add { a: u256, b: u256 } -> u256,
@@ -5131,15 +5142,15 @@ pub contract C {
         Add { a, b } -> u256 { a + b }
     }
 }
-"#.to_string()),
+"#
+                .to_string(),
+            ),
         );
         let file = db.workspace().get(&db, &file_url).expect("file");
         let top_mod = db.top_mod(file);
-        let package = crate::build_runtime_package(&db, top_mod)
-            .expect("should compile");
+        let package = crate::build_runtime_package(&db, top_mod).expect("should compile");
 
         let mut has_smir_origin = false;
-        let mut has_synthetic_origin = false;
         let mut total_origins = 0;
 
         for func in package.functions(&db) {
@@ -5152,10 +5163,11 @@ pub contract C {
                 );
                 for origin in &block.stmt_origins {
                     total_origins += 1;
-                    match (origin.level, origin.transform) {
-                        (IrLevel::Smir, TransformTag::SmirToMir) => has_smir_origin = true,
-                        (IrLevel::Mir, TransformTag::Synthetic) => has_synthetic_origin = true,
-                        _ => {}
+                    if matches!(
+                        (origin.level, origin.transform),
+                        (IrLevel::Smir, TransformTag::SmirToMir)
+                    ) {
+                        has_smir_origin = true;
                     }
                 }
             }
@@ -5177,15 +5189,16 @@ pub contract C {
         // Enable provenance tracking
         {
             use salsa::Setter;
-            db.compiler_options()
-                .set_emit_provenance(&mut db)
-                .to(true);
+            db.compiler_options().set_emit_provenance(&mut db).to(true);
         }
 
-        let file_url = Url::from_file_path(
-            std::env::temp_dir().join("provenance_dag_test.fe"),
-        ).expect("path");
-        db.workspace().touch(&mut db, file_url.clone(), Some(r#"
+        let file_url =
+            Url::from_file_path(std::env::temp_dir().join("provenance_dag_test.fe")).expect("path");
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
 msg Msg {
     #[selector = 0x11111111]
     Add { a: u256, b: u256 } -> u256,
@@ -5196,11 +5209,13 @@ pub contract C {
         Add { a, b } -> u256 { a + b }
     }
 }
-"#.to_string()));
+"#
+                .to_string(),
+            ),
+        );
         let file = db.workspace().get(&db, &file_url).expect("file");
         let top_mod = db.top_mod(file);
-        let package = crate::build_runtime_package(&db, top_mod)
-            .expect("should compile");
+        let package = crate::build_runtime_package(&db, top_mod).expect("should compile");
 
         // The ProvenanceDag is populated inside build_runtime_package
         // when emit_provenance is true. We can't access it directly from
@@ -5228,10 +5243,8 @@ pub contract C {
     #[test]
     fn erc20_provenance_origins_cover_all_stmts() {
         let mut db = DriverDataBase::default();
-        let file_url = Url::from_file_path(
-            std::env::temp_dir().join("erc20_provenance.fe"),
-        )
-        .expect("path");
+        let file_url =
+            Url::from_file_path(std::env::temp_dir().join("erc20_provenance.fe")).expect("path");
         db.workspace().touch(
             &mut db,
             file_url.clone(),
@@ -5239,8 +5252,7 @@ pub contract C {
         );
         let file = db.workspace().get(&db, &file_url).expect("file");
         let top_mod = db.top_mod(file);
-        let package = crate::build_runtime_package(&db, top_mod)
-            .expect("erc20 should compile");
+        let package = crate::build_runtime_package(&db, top_mod).expect("erc20 should compile");
 
         let mut total_stmts = 0;
         let mut stmts_with_smir_origin = 0;
@@ -5263,10 +5275,14 @@ pub contract C {
             }
         }
 
-        assert!(total_stmts > 100, "erc20 should produce many MIR stmts, got {total_stmts}");
+        assert!(
+            total_stmts > 100,
+            "erc20 should produce many MIR stmts, got {total_stmts}"
+        );
 
         let coverage = stmts_with_smir_origin as f64 / total_stmts as f64;
-        eprintln!(
+        assert!(
+            coverage > 0.0,
             "ERC20 provenance: {stmts_with_smir_origin}/{total_stmts} stmts have SMIR origin ({:.0}%)",
             coverage * 100.0
         );

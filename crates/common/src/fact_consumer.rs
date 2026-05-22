@@ -47,6 +47,12 @@ pub struct FactConsumer {
     hash_stack: Vec<[xxhash_rust::xxh3::Xxh3; Dim::COUNT]>,
 }
 
+impl Default for FactConsumer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FactConsumer {
     pub fn new() -> Self {
         Self::with_starting_id(0)
@@ -108,10 +114,20 @@ impl IrConsumer for FactConsumer {
 
         // Emit pending origin/source for this node
         if let Some(origin) = self.pending_origin.take() {
-            self.facts.push(Fact::Origin { node_id: id, origin });
+            self.facts.push(Fact::Origin {
+                node_id: id,
+                origin,
+            });
         }
         if let Some((file, line, col, end_line, end_col)) = self.pending_source.take() {
-            self.facts.push(Fact::SourceSpan { node_id: id, file, line, col, end_line, end_col });
+            self.facts.push(Fact::SourceSpan {
+                node_id: id,
+                file,
+                line,
+                col,
+                end_line,
+                end_col,
+            });
         }
 
         // Store the index of this NodeHash fact for O(1) backpatch on exit
@@ -133,7 +149,12 @@ impl IrConsumer for FactConsumer {
 
         let dim_hashes: [u128; Dim::COUNT] = std::array::from_fn(|i| hashers[i].digest128());
 
-        if let Fact::NodeHash { structure_hash: sh, names_hash: nh, .. } = &mut self.facts[fact_idx] {
+        if let Fact::NodeHash {
+            structure_hash: sh,
+            names_hash: nh,
+            ..
+        } = &mut self.facts[fact_idx]
+        {
             *sh = dim_hashes[Dim::Structure as usize];
             *nh = dim_hashes[Dim::Names as usize];
         }
@@ -240,23 +261,40 @@ mod tests {
 
         let facts = c.into_facts();
 
-        let node_hashes: Vec<_> = facts.iter()
+        let node_hashes: Vec<_> = facts
+            .iter()
             .filter(|f| matches!(f, Fact::NodeHash { .. }))
             .collect();
 
-        assert_eq!(node_hashes.len(), 2, "should have 2 NodeHash facts (Root + Child)");
+        assert_eq!(
+            node_hashes.len(),
+            2,
+            "should have 2 NodeHash facts (Root + Child)"
+        );
 
         // Verify hashes are non-zero (computed, not placeholders)
         for f in &node_hashes {
             if let Fact::NodeHash { structure_hash, .. } = f {
-                assert_ne!(*structure_hash, 0, "hash should be computed, not placeholder");
+                assert_ne!(
+                    *structure_hash, 0,
+                    "hash should be computed, not placeholder"
+                );
             }
         }
 
         // Verify parent-child relationship
-        if let (Fact::NodeHash { node_id: root_id, parent_id: root_parent, .. },
-                Fact::NodeHash { node_id: child_id, parent_id: child_parent, .. }) =
-            (&node_hashes[0], &node_hashes[1])
+        if let (
+            Fact::NodeHash {
+                node_id: root_id,
+                parent_id: root_parent,
+                ..
+            },
+            Fact::NodeHash {
+                node_id: _child_id,
+                parent_id: child_parent,
+                ..
+            },
+        ) = (&node_hashes[0], &node_hashes[1])
         {
             assert_eq!(*root_parent, None);
             assert_eq!(*child_parent, Some(*root_id));
@@ -268,7 +306,8 @@ mod tests {
         let mut c = FactConsumer::new();
 
         c.origin(&ProvenanceNodeId::new(
-            crate::provenance::IrLevel::Smir, 7,
+            crate::provenance::IrLevel::Smir,
+            7,
             crate::provenance::TransformTag::SmirToMir,
         ));
         c.source_span("test.fe", 42, 5, 42, 20);
@@ -277,12 +316,14 @@ mod tests {
 
         let facts = c.into_facts();
 
-        let origins: Vec<_> = facts.iter()
+        let origins: Vec<_> = facts
+            .iter()
             .filter(|f| matches!(f, Fact::Origin { .. }))
             .collect();
         assert_eq!(origins.len(), 1);
 
-        let spans: Vec<_> = facts.iter()
+        let spans: Vec<_> = facts
+            .iter()
             .filter(|f| matches!(f, Fact::SourceSpan { .. }))
             .collect();
         assert_eq!(spans.len(), 1);
@@ -302,7 +343,9 @@ mod tests {
         c.graph_edge("successor", 3);
         c.exit_node();
 
-        let edges: Vec<_> = c.facts().iter()
+        let edges: Vec<_> = c
+            .facts()
+            .iter()
             .filter(|f| matches!(f, Fact::GraphEdge { .. }))
             .collect();
         assert_eq!(edges.len(), 1);
@@ -310,13 +353,17 @@ mod tests {
 
     #[test]
     fn triple_composite_consumer() {
-        use crate::hash_consumer::HashConsumer;
         use crate::debug_consumer::DebugConsumer;
+        use crate::hash_consumer::HashConsumer;
 
-        let mut composite = (HashConsumer::new(), (DebugConsumer::new(), FactConsumer::new()));
+        let mut composite = (
+            HashConsumer::new(),
+            (DebugConsumer::new(), FactConsumer::new()),
+        );
 
         composite.origin(&ProvenanceNodeId::new(
-            crate::provenance::IrLevel::Smir, 1,
+            crate::provenance::IrLevel::Smir,
+            1,
             crate::provenance::TransformTag::SmirToMir,
         ));
         composite.source_span("test.fe", 10, 1, 10, 20);

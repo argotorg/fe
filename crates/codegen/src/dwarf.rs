@@ -1,14 +1,12 @@
 use std::collections::BTreeMap;
 
 use gimli::write::{
-    Address, AttributeValue, DwarfUnit, EndianVec, LineProgram, LineString,
-    Sections,
+    Address, AttributeValue, DwarfUnit, EndianVec, LineProgram, LineString, Sections,
 };
 use gimli::{
-    DW_AT_byte_size, DW_AT_comp_dir, DW_AT_encoding, DW_AT_language, DW_AT_name,
-    DW_AT_stmt_list, DW_ATE_boolean, DW_ATE_signed, DW_ATE_unsigned, DW_LANG_Rust,
-    DW_TAG_base_type, DW_TAG_member, DW_TAG_structure_type, Encoding, Format, LineEncoding,
-    RunTimeEndian,
+    DW_AT_byte_size, DW_AT_comp_dir, DW_AT_encoding, DW_AT_language, DW_AT_name, DW_AT_stmt_list,
+    DW_ATE_boolean, DW_ATE_signed, DW_ATE_unsigned, DW_LANG_Rust, DW_TAG_base_type, DW_TAG_member,
+    DW_TAG_structure_type, Encoding, Format, LineEncoding, RunTimeEndian,
 };
 use sonatina_codegen::object::ObjectArtifact;
 
@@ -54,11 +52,14 @@ impl DwarfDebugInfo {
             obj.set_section_data(section_id, data.to_vec(), 1);
         }
 
-        obj.write().expect("ELF generation should not fail for debug-only object")
+        obj.write()
+            .expect("ELF generation should not fail for debug-only object")
     }
 }
 
-pub fn generate_dwarf_from_entries(pc_entries: &[ResolvedProvenanceEntry]) -> Option<DwarfDebugInfo> {
+pub fn generate_dwarf_from_entries(
+    pc_entries: &[ResolvedProvenanceEntry],
+) -> Option<DwarfDebugInfo> {
     if pc_entries.is_empty() {
         return None;
     }
@@ -118,13 +119,25 @@ pub fn generate_dwarf_from_entries(pc_entries: &[ResolvedProvenanceEntry]) -> Op
     let root = dwarf.unit.root();
     let name_id = dwarf.strings.add(b"<fe-compilation>");
     let dir_id = dwarf.strings.add(b"/");
-    dwarf.unit.get_mut(root).set(DW_AT_name, AttributeValue::StringRef(name_id));
-    dwarf.unit.get_mut(root).set(DW_AT_comp_dir, AttributeValue::StringRef(dir_id));
-    dwarf.unit.get_mut(root).set(DW_AT_language, AttributeValue::Language(DW_LANG_Rust));
-    dwarf.unit.get_mut(root).set(DW_AT_stmt_list, AttributeValue::LineProgramRef);
+    dwarf
+        .unit
+        .get_mut(root)
+        .set(DW_AT_name, AttributeValue::StringRef(name_id));
+    dwarf
+        .unit
+        .get_mut(root)
+        .set(DW_AT_comp_dir, AttributeValue::StringRef(dir_id));
+    dwarf
+        .unit
+        .get_mut(root)
+        .set(DW_AT_language, AttributeValue::Language(DW_LANG_Rust));
+    dwarf
+        .unit
+        .get_mut(root)
+        .set(DW_AT_stmt_list, AttributeValue::LineProgramRef);
 
     let mut sections = Sections::new(EndianVec::new(RunTimeEndian::Little));
-    if let Err(_) = dwarf.write(&mut sections) {
+    if dwarf.write(&mut sections).is_err() {
         return None;
     }
 
@@ -140,15 +153,30 @@ pub fn generate_dwarf_from_entries(pc_entries: &[ResolvedProvenanceEntry]) -> Op
 
 #[derive(Clone, Debug)]
 pub enum FeTypeDesc {
-    UInt { bits: u32 },
-    Int { bits: u32 },
+    UInt {
+        bits: u32,
+    },
+    Int {
+        bits: u32,
+    },
     Bool,
     Address,
-    Bytes { len: Option<u32> },
+    Bytes {
+        len: Option<u32>,
+    },
     String,
-    Struct { name: String, fields: Vec<(String, FeTypeDesc)> },
-    Enum { name: String, variants: Vec<String> },
-    Array { elem: Box<FeTypeDesc>, len: Option<u64> },
+    Struct {
+        name: String,
+        fields: Vec<(String, FeTypeDesc)>,
+    },
+    Enum {
+        name: String,
+        variants: Vec<String>,
+    },
+    Array {
+        elem: Box<FeTypeDesc>,
+        len: Option<u64>,
+    },
 }
 
 /// A function description for generating DWARF DW_TAG_subprogram DIEs.
@@ -170,13 +198,20 @@ pub struct FeVarLocation {
     pub stack_depth: Option<u32>,
 }
 
-pub fn add_variable_dies(dwarf: &mut DwarfUnit, parent: gimli::write::UnitEntryId, vars: &[FeVarLocation]) {
+pub fn add_variable_dies(
+    dwarf: &mut DwarfUnit,
+    parent: gimli::write::UnitEntryId,
+    vars: &[FeVarLocation],
+) {
     use gimli::{DW_AT_location, DW_TAG_variable};
 
     for var in vars {
         let id = dwarf.unit.add(parent, DW_TAG_variable);
         let name_id = dwarf.strings.add(var.name.as_bytes());
-        dwarf.unit.get_mut(id).set(DW_AT_name, AttributeValue::StringRef(name_id));
+        dwarf
+            .unit
+            .get_mut(id)
+            .set(DW_AT_name, AttributeValue::StringRef(name_id));
 
         // Build a DWARF location expression
         let mut expr = gimli::write::Expression::new();
@@ -192,10 +227,10 @@ pub fn add_variable_dies(dwarf: &mut DwarfUnit, parent: gimli::write::UnitEntryI
             has_loc = true;
         }
         if has_loc {
-            dwarf.unit.get_mut(id).set(
-                DW_AT_location,
-                AttributeValue::Exprloc(expr),
-            );
+            dwarf
+                .unit
+                .get_mut(id)
+                .set(DW_AT_location, AttributeValue::Exprloc(expr));
         }
     }
 }
@@ -211,10 +246,10 @@ pub fn add_subprogram_dies(dwarf: &mut DwarfUnit, functions: &[FeFuncDesc]) {
             .unit
             .get_mut(id)
             .set(DW_AT_name, AttributeValue::StringRef(name_id));
-        dwarf
-            .unit
-            .get_mut(id)
-            .set(DW_AT_decl_line, AttributeValue::Udata(func.start_line as u64));
+        dwarf.unit.get_mut(id).set(
+            DW_AT_decl_line,
+            AttributeValue::Udata(func.start_line as u64),
+        );
 
         for (param_name, _param_ty) in &func.params {
             let param_id = dwarf.unit.add(id, DW_TAG_formal_parameter);
@@ -243,43 +278,85 @@ fn add_type_die(
         FeTypeDesc::UInt { bits } => {
             let id = dwarf.unit.add(parent, DW_TAG_base_type);
             let name = dwarf.strings.add(format!("u{bits}").as_bytes());
-            dwarf.unit.get_mut(id).set(DW_AT_name, AttributeValue::StringRef(name));
-            dwarf.unit.get_mut(id).set(DW_AT_byte_size, AttributeValue::Data1((*bits / 8) as u8));
-            dwarf.unit.get_mut(id).set(DW_AT_encoding, AttributeValue::Encoding(DW_ATE_unsigned));
+            dwarf
+                .unit
+                .get_mut(id)
+                .set(DW_AT_name, AttributeValue::StringRef(name));
+            dwarf
+                .unit
+                .get_mut(id)
+                .set(DW_AT_byte_size, AttributeValue::Data1((*bits / 8) as u8));
+            dwarf
+                .unit
+                .get_mut(id)
+                .set(DW_AT_encoding, AttributeValue::Encoding(DW_ATE_unsigned));
             id
         }
         FeTypeDesc::Int { bits } => {
             let id = dwarf.unit.add(parent, DW_TAG_base_type);
             let name = dwarf.strings.add(format!("i{bits}").as_bytes());
-            dwarf.unit.get_mut(id).set(DW_AT_name, AttributeValue::StringRef(name));
-            dwarf.unit.get_mut(id).set(DW_AT_byte_size, AttributeValue::Data1((*bits / 8) as u8));
-            dwarf.unit.get_mut(id).set(DW_AT_encoding, AttributeValue::Encoding(DW_ATE_signed));
+            dwarf
+                .unit
+                .get_mut(id)
+                .set(DW_AT_name, AttributeValue::StringRef(name));
+            dwarf
+                .unit
+                .get_mut(id)
+                .set(DW_AT_byte_size, AttributeValue::Data1((*bits / 8) as u8));
+            dwarf
+                .unit
+                .get_mut(id)
+                .set(DW_AT_encoding, AttributeValue::Encoding(DW_ATE_signed));
             id
         }
         FeTypeDesc::Bool => {
             let id = dwarf.unit.add(parent, DW_TAG_base_type);
             let name = dwarf.strings.add(b"bool");
-            dwarf.unit.get_mut(id).set(DW_AT_name, AttributeValue::StringRef(name));
-            dwarf.unit.get_mut(id).set(DW_AT_byte_size, AttributeValue::Data1(1));
-            dwarf.unit.get_mut(id).set(DW_AT_encoding, AttributeValue::Encoding(DW_ATE_boolean));
+            dwarf
+                .unit
+                .get_mut(id)
+                .set(DW_AT_name, AttributeValue::StringRef(name));
+            dwarf
+                .unit
+                .get_mut(id)
+                .set(DW_AT_byte_size, AttributeValue::Data1(1));
+            dwarf
+                .unit
+                .get_mut(id)
+                .set(DW_AT_encoding, AttributeValue::Encoding(DW_ATE_boolean));
             id
         }
         FeTypeDesc::Address => {
             let id = dwarf.unit.add(parent, DW_TAG_base_type);
             let name = dwarf.strings.add(b"address");
-            dwarf.unit.get_mut(id).set(DW_AT_name, AttributeValue::StringRef(name));
-            dwarf.unit.get_mut(id).set(DW_AT_byte_size, AttributeValue::Data1(20));
-            dwarf.unit.get_mut(id).set(DW_AT_encoding, AttributeValue::Encoding(DW_ATE_unsigned));
+            dwarf
+                .unit
+                .get_mut(id)
+                .set(DW_AT_name, AttributeValue::StringRef(name));
+            dwarf
+                .unit
+                .get_mut(id)
+                .set(DW_AT_byte_size, AttributeValue::Data1(20));
+            dwarf
+                .unit
+                .get_mut(id)
+                .set(DW_AT_encoding, AttributeValue::Encoding(DW_ATE_unsigned));
             id
         }
         FeTypeDesc::Struct { name, fields } => {
             let id = dwarf.unit.add(parent, DW_TAG_structure_type);
             let name_id = dwarf.strings.add(name.as_bytes());
-            dwarf.unit.get_mut(id).set(DW_AT_name, AttributeValue::StringRef(name_id));
+            dwarf
+                .unit
+                .get_mut(id)
+                .set(DW_AT_name, AttributeValue::StringRef(name_id));
             for (field_name, field_ty) in fields {
                 let field_id = dwarf.unit.add(id, DW_TAG_member);
                 let fname_id = dwarf.strings.add(field_name.as_bytes());
-                dwarf.unit.get_mut(field_id).set(DW_AT_name, AttributeValue::StringRef(fname_id));
+                dwarf
+                    .unit
+                    .get_mut(field_id)
+                    .set(DW_AT_name, AttributeValue::StringRef(fname_id));
                 add_type_die(dwarf, id, field_ty);
             }
             id
@@ -290,7 +367,10 @@ fn add_type_die(
         | FeTypeDesc::Array { .. } => {
             let id = dwarf.unit.add(parent, DW_TAG_base_type);
             let name = dwarf.strings.add(format!("{ty:?}").as_bytes());
-            dwarf.unit.get_mut(id).set(DW_AT_name, AttributeValue::StringRef(name));
+            dwarf
+                .unit
+                .get_mut(id)
+                .set(DW_AT_name, AttributeValue::StringRef(name));
             id
         }
     }
@@ -358,15 +438,12 @@ pub fn fe_ty_to_type_desc<'db>(
                             .iter()
                             .enumerate()
                             .flat_map(|(group_idx, field)| {
-                                (0..field.num_types())
-                                    .map(move |i| {
-                                        let fname = format!("field_{group_idx}_{i}");
-                                        let fty = fe_ty_to_type_desc(
-                                            db,
-                                            *field.ty(db, i).skip_binder(),
-                                        );
-                                        (fname, fty)
-                                    })
+                                (0..field.num_types()).map(move |i| {
+                                    let fname = format!("field_{group_idx}_{i}");
+                                    let fty =
+                                        fe_ty_to_type_desc(db, *field.ty(db, i).skip_binder());
+                                    (fname, fty)
+                                })
                             })
                             .collect();
                         FeTypeDesc::Struct { name, fields }
@@ -396,14 +473,21 @@ pub fn generate_dwarf_from_origins(
     db: &driver::DriverDataBase,
     package: &mir::RuntimePackage<'_>,
     artifacts: &[ObjectArtifact],
-    sonatina_origins: &[(sonatina_ir::module::FuncRef, sonatina_ir::InstId, common::provenance::ProvenanceNodeId)],
+    sonatina_origins: &[(
+        sonatina_ir::module::FuncRef,
+        sonatina_ir::InstId,
+        common::provenance::ProvenanceNodeId,
+    )],
 ) -> Option<DwarfDebugInfo> {
     use common::provenance::IrLevel;
     use hir::span::LazySpan;
     use std::collections::HashMap;
 
     // Build a lookup: (FuncRef, InstId) → ProvenanceNodeId
-    let mut inst_to_origin: HashMap<(sonatina_ir::module::FuncRef, sonatina_ir::InstId), common::provenance::ProvenanceNodeId> = HashMap::new();
+    let mut inst_to_origin: HashMap<
+        (sonatina_ir::module::FuncRef, sonatina_ir::InstId),
+        common::provenance::ProvenanceNodeId,
+    > = HashMap::new();
     for (func_ref, inst_id, origin) in sonatina_origins {
         inst_to_origin.insert((*func_ref, *inst_id), *origin);
     }
@@ -412,12 +496,18 @@ pub fn generate_dwarf_from_origins(
 
     for artifact in artifacts {
         for section in artifact.sections.values() {
-            let Some(observability) = &section.observability else { continue };
+            let Some(observability) = &section.observability else {
+                continue;
+            };
             for pc_entry in &observability.pc_map {
-                let Some(ir_inst) = pc_entry.ir_inst else { continue };
+                let Some(ir_inst) = pc_entry.ir_inst else {
+                    continue;
+                };
 
                 // Look up the origin for this instruction
-                let Some(origin) = inst_to_origin.get(&(pc_entry.func, ir_inst)) else { continue };
+                let Some(origin) = inst_to_origin.get(&(pc_entry.func, ir_inst)) else {
+                    continue;
+                };
 
                 if origin.level != IrLevel::Smir {
                     continue;
@@ -428,8 +518,12 @@ pub fn generate_dwarf_from_origins(
                 // Walk package functions to find the one with matching sonatina FuncRef.
                 for func in package.functions(db) {
                     let key = func.instance(db).key(db);
-                    let Some(semantic) = key.semantic(db) else { continue };
-                    let Some(hir_body) = semantic.key(db).owner(db).body(db) else { continue };
+                    let Some(semantic) = key.semantic(db) else {
+                        continue;
+                    };
+                    let Some(hir_body) = semantic.key(db).owner(db).body(db) else {
+                        continue;
+                    };
 
                     let expr_id = hir::hir_def::ExprId::from_u32(origin.node);
                     if let Some(span) = expr_id.span(hir_body).resolve(db) {
@@ -437,8 +531,10 @@ pub fn generate_dwarf_from_origins(
                         let source_text = src_file.text(db);
                         let start_offset: usize = span.range.start().into();
                         let end_offset: usize = span.range.end().into();
-                        let (start_line, start_col) = common::byte_offset_to_line_col(source_text, start_offset);
-                        let (end_line, end_col) = common::byte_offset_to_line_col(source_text, end_offset);
+                        let (start_line, start_col) =
+                            common::byte_offset_to_line_col(source_text, start_offset);
+                        let (end_line, end_col) =
+                            common::byte_offset_to_line_col(source_text, end_offset);
                         let file_path = match src_file.path(db) {
                             Some(p) => p.to_string(),
                             None => String::new(),
@@ -462,7 +558,6 @@ pub fn generate_dwarf_from_origins(
 
     generate_dwarf_from_entries(&entries)
 }
-
 
 #[cfg(test)]
 mod tests {
