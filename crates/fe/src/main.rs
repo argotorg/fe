@@ -1,5 +1,6 @@
 #![allow(clippy::print_stderr, clippy::print_stdout)]
 mod abi;
+mod analyze;
 mod build;
 mod check;
 mod cli;
@@ -170,6 +171,14 @@ pub enum Command {
         /// Use recovery mode when parsing.
         #[arg(long, default_value = "false")]
         recovery_mode: bool,
+    },
+    /// Analyze a Fe contract's compilation landscape.
+    Analyze {
+        /// Path to a .fe source file.
+        path: Utf8PathBuf,
+        /// Emphasize ABI/business split and dedup savings.
+        #[arg(long)]
+        gas_focus: bool,
     },
     /// Generate documentation for a Fe project
     Doc {
@@ -485,6 +494,9 @@ pub fn run(opts: &Options) {
                     std::process::exit(1);
                 }
             }
+        }
+        Command::Analyze { path, gas_focus } => {
+            analyze::analyze_command(path, *gas_focus);
         }
         Command::Doc {
             path,
