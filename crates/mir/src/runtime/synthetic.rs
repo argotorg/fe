@@ -25,12 +25,12 @@ use crate::{
     layout_size_bytes,
     runtime::{
         AddressSpaceKind, BorrowAccess, ConstScalar, ContractInitAbiPlan, ContractRecvAbiPlan,
-        DispatchDefault, EntryEffectArgPlan, InitArgsPlan, PlaceElem, PlaceRoot, RBlock, RBlockId,
-        RExpr, RLocal, RLocalId, RStmt, RTerminator, RefKind, RefView, RuntimeBody,
-        RuntimeBoundarySpec, RuntimeBuiltin, RuntimeCarrier, RuntimeClass, RuntimeExitBehavior,
-        RuntimeInputPlan, RuntimeInterfaceSignature, RuntimeLocalRoot, RuntimeParamPlan,
-        RuntimePlace, RuntimeReturnPlan, RuntimeSyntheticSpec, ScalarClass, ScalarRepr, ScalarRole,
-        TargetRootProviderBinding, TargetRootProviderMaterialization,
+        DispatchDefault, EntryEffectArgPlan, FieldLoadStrategy, InitArgsPlan, PlaceElem, PlaceRoot,
+        RBlock, RBlockId, RExpr, RLocal, RLocalId, RStmt, RTerminator, RefKind, RefView,
+        RuntimeBody, RuntimeBoundarySpec, RuntimeBuiltin, RuntimeCarrier, RuntimeClass,
+        RuntimeExitBehavior, RuntimeInputPlan, RuntimeInterfaceSignature, RuntimeLocalRoot,
+        RuntimeParamPlan, RuntimePlace, RuntimeReturnPlan, RuntimeSyntheticSpec, ScalarClass,
+        ScalarRepr, ScalarRole, TargetRootProviderBinding, TargetRootProviderMaterialization,
         lower::{
             boundary::{RuntimeValueAddress, RuntimeValueSource},
             classify::{ref_class_for_place_result, semantic_return_ty},
@@ -470,31 +470,303 @@ impl<'db> SyntheticBodyBuilder<'db> {
 
     fn build_contract_recv_abi(&mut self, plan: ContractRecvAbiPlan<'db>) {
         let zero = self.push_const_word(RBlockId::from_u32(0), 0);
-        let cont_bb = if plan.payable {
+        let mut cont_bb = if plan.payable {
             RBlockId::from_u32(0)
         } else {
             self.emit_nonpayable_guard(zero)
         };
 
         let mut call_args = Vec::new();
-        if let RuntimeInputPlan::DecodeHostPayload {
-            msg_ty,
-            host,
-            decode_args_fn,
-            projected_fields,
-        } = plan.input
-        {
-            let host = self.emit_target_root_provider(cont_bb, &host);
-            if let Some(decoded) = self.push_call(cont_bb, decode_args_fn, vec![host]) {
-                call_args.extend(self.extract_selected_tuple_fields(
-                    cont_bb,
-                    decoded,
-                    msg_ty,
-                    plan.contract.scope(),
-                    &projected_fields,
-                ));
+        match plan.input {
+            RuntimeInputPlan::None => {}
+
+            RuntimeInputPlan::DirectCalldataLoad {
+                msg_ty,
+                field_head_sizes,
+                projected_fields,
+            } => {
+                let total_head: u32 = field_head_sizes.iter().sum();
+                let min_calldata = 4 + total_head;
+                cont_bb = self.emit_calldata_length_guard(cont_bb, zero, min_calldata);
+
+                let field_types = msg_ty.field_types(self.db);
+                let env = self.runtime_type_env(plan.contract.scope());
+                let mut loaded_fields = Vec::with_capacity(field_head_sizes.len());
+                let mut calldata_offset: u32 = 4;
+                for (i, &head_size) in field_head_sizes.iter().enumerate() {
+                    let offset = self.push_const_word(cont_bb, calldata_offset);
+                    let raw = self.push_builtin_value(
+                        cont_bb,
+                        TyId::u256(self.db),
+                        RuntimeClass::Scalar(word_scalar_class()),
+                        RuntimeBuiltin::CallDataLoad { offset },
+                    );
+                    let field_ty = field_types[i];
+                    let field_scalar = match top_level_class_for_ty_in_env(
+                        self.db,
+                        env,
+                        field_ty,
+                        AddressSpaceKind::Memory,
+                    ) {
+                        Some(RuntimeClass::Scalar(sc)) => sc,
+                        _ => word_scalar_class(),
+                    };
+                    let value = if field_scalar == word_scalar_class() {
+                        raw
+                    } else {
+                        let casted = self.push_local(
+                            field_ty,
+                            RuntimeCarrier::Value(RuntimeClass::Scalar(field_scalar.clone())),
+                            RuntimeLocalRoot::None,
+                        );
+                        self.push_stmt(
+                            cont_bb,
+                            RStmt::Assign {
+                                dst: casted,
+                                expr: RExpr::Cast {
+                                    value: raw,
+                                    to: field_scalar,
+                                },
+                            },
+                        );
+                        casted
+                    };
+                    loaded_fields.push(value);
+                    calldata_offset += head_size;
+                }
+                for &field_idx in projected_fields.iter() {
+                    call_args.push(loaded_fields[field_idx as usize]);
+                }
+            }
+
+            RuntimeInputPlan::DecodeHostPayload {
+                msg_ty,
+                host,
+                decode_args_fn,
+                projected_fields,
+            } => {
+                let host = self.emit_target_root_provider(cont_bb, &host);
+                if let Some(decoded) = self.push_call(cont_bb, decode_args_fn, vec![host]) {
+                    call_args.extend(self.extract_selected_tuple_fields(
+                        cont_bb,
+                        decoded,
+                        msg_ty,
+                        plan.contract.scope(),
+                        &projected_fields,
+                    ));
+                }
+            }
+
+            RuntimeInputPlan::LazyCalldataLoad {
+                msg_ty,
+                decode_fn,
+                field_strategies,
+                projected_fields,
+            } => {
+                let field_types = msg_ty.field_types(self.db);
+                let env = self.runtime_type_env(plan.contract.scope());
+
+                let total_static_head: u32 = field_types
+                    .iter()
+                    .filter_map(|ty| crate::runtime::package::static_abi_head_size(self.db, *ty))
+                    .sum();
+                let min_calldata = 4 + total_static_head;
+                cont_bb = self.emit_calldata_length_guard(cont_bb, zero, min_calldata);
+
+                let mut loaded_fields: Vec<Option<RLocalId>> = vec![None; field_strategies.len()];
+                let mut accumulated_offset: u32 = 4;
+                for (i, strategy) in field_strategies.iter().enumerate() {
+                    match *strategy {
+                        FieldLoadStrategy::Direct => {
+                            let offset = self.push_const_word(cont_bb, accumulated_offset);
+                            let raw = self.push_builtin_value(
+                                cont_bb,
+                                TyId::u256(self.db),
+                                RuntimeClass::Scalar(word_scalar_class()),
+                                RuntimeBuiltin::CallDataLoad { offset },
+                            );
+                            let field_ty = field_types[i];
+                            let field_scalar = match top_level_class_for_ty_in_env(
+                                self.db,
+                                env,
+                                field_ty,
+                                AddressSpaceKind::Memory,
+                            ) {
+                                Some(RuntimeClass::Scalar(sc)) => sc,
+                                _ => word_scalar_class(),
+                            };
+                            let value = if field_scalar == word_scalar_class() {
+                                raw
+                            } else {
+                                let casted = self.push_local(
+                                    field_ty,
+                                    RuntimeCarrier::Value(RuntimeClass::Scalar(
+                                        field_scalar.clone(),
+                                    )),
+                                    RuntimeLocalRoot::None,
+                                );
+                                self.push_stmt(
+                                    cont_bb,
+                                    RStmt::Assign {
+                                        dst: casted,
+                                        expr: RExpr::Cast {
+                                            value: raw,
+                                            to: field_scalar,
+                                        },
+                                    },
+                                );
+                                casted
+                            };
+                            loaded_fields[i] = Some(value);
+                            accumulated_offset += 32;
+                        }
+                        FieldLoadStrategy::SkipWithOffset { head_size } => {
+                            let field_ty = field_types[i];
+                            let field_class = top_level_class_for_ty_in_env(
+                                self.db,
+                                env,
+                                field_ty,
+                                AddressSpaceKind::Memory,
+                            )
+                            .expect("SkipWithOffset field should have a runtime class");
+
+                            let offset_val = self.push_const_word(cont_bb, accumulated_offset);
+                            let value = self.push_array_view_value(
+                                cont_bb,
+                                field_ty,
+                                &field_class,
+                                offset_val,
+                            );
+                            loaded_fields[i] = Some(value);
+                            accumulated_offset += head_size;
+                        }
+                        FieldLoadStrategy::LazyDynamicView { is_string_view } => {
+                            let field_ty = field_types[i];
+                            let field_class = top_level_class_for_ty_in_env(
+                                self.db,
+                                env,
+                                field_ty,
+                                AddressSpaceKind::Memory,
+                            )
+                            .expect("LazyDynamicView field should have a runtime class");
+
+                            let value = self.push_dynamic_view_from_calldata(
+                                cont_bb,
+                                accumulated_offset,
+                                field_ty,
+                                &field_class,
+                                is_string_view,
+                            );
+                            loaded_fields[i] = Some(value);
+                            accumulated_offset += 32;
+                        }
+                        FieldLoadStrategy::Decode => {
+                            if let Some(size) = crate::runtime::package::static_abi_head_size(
+                                self.db,
+                                field_types[i],
+                            ) {
+                                accumulated_offset += size;
+                            }
+                            // When static_abi_head_size returns None we stop advancing
+                            // accumulated_offset. All subsequent strategies must also
+                            // be Decode because Direct/SkipWithOffset/LazyDynamicView
+                            // require a known preceding offset.
+                        }
+                    }
+                }
+
+                // Invariant: once accumulated_offset becomes stale (a Decode field
+                // had unknown static size), no later field may use a strategy that
+                // depends on a known calldata offset.
+                assert!(
+                    {
+                        let mut offset_known = true;
+                        let mut ok = true;
+                        for (i, strategy) in field_strategies.iter().enumerate() {
+                            if *strategy == FieldLoadStrategy::Decode
+                                && crate::runtime::package::static_abi_head_size(
+                                    self.db,
+                                    field_types[i],
+                                )
+                                .is_none()
+                            {
+                                offset_known = false;
+                            }
+                            if !offset_known && *strategy != FieldLoadStrategy::Decode {
+                                ok = false;
+                                break;
+                            }
+                        }
+                        ok
+                    },
+                    "Direct/SkipWithOffset/LazyDynamicView strategy appears after a field with unknown static head size"
+                );
+
+                if let Some(decode_fn) = decode_fn {
+                    let four = self.push_const_word(cont_bb, 4);
+                    let size = self.push_builtin_value(
+                        cont_bb,
+                        TyId::u256(self.db),
+                        RuntimeClass::Scalar(word_scalar_class()),
+                        RuntimeBuiltin::CallDataSize,
+                    );
+                    let payload_len = self.push_binary_word(cont_bb, ArithBinOp::Sub, size, four);
+                    let payload_ptr = self.push_builtin_value(
+                        cont_bb,
+                        TyId::u256(self.db),
+                        RuntimeClass::Scalar(word_scalar_class()),
+                        RuntimeBuiltin::Malloc { size: payload_len },
+                    );
+                    self.push_side_effect_builtin(
+                        cont_bb,
+                        RuntimeBuiltin::CallDataCopy {
+                            dst: payload_ptr,
+                            offset: four,
+                            len: payload_len,
+                        },
+                    );
+                    let input = self.push_memory_bytes_value(
+                        cont_bb,
+                        plan.contract.scope(),
+                        payload_ptr,
+                        payload_len,
+                    );
+                    let input_ty = self.locals[input.index()].semantic_ty;
+                    let decoder_new =
+                        resolve_sol_decoder_new(self.db, plan.contract.scope(), input_ty)
+                            .expect("decoder_new");
+                    let decoder = self.push_call_result(cont_bb, decoder_new, vec![input]);
+                    if let Some(decoded) = self.push_call(cont_bb, decode_fn, vec![decoder]) {
+                        let decode_field_indices: Vec<u32> = field_strategies
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, s)| **s == FieldLoadStrategy::Decode)
+                            .map(|(i, _)| i as u32)
+                            .collect();
+                        let decoded_values = self.extract_selected_tuple_fields(
+                            cont_bb,
+                            decoded,
+                            msg_ty,
+                            plan.contract.scope(),
+                            &decode_field_indices,
+                        );
+                        let mut decode_iter = decoded_values.into_iter();
+                        for (i, strategy) in field_strategies.iter().enumerate() {
+                            if *strategy == FieldLoadStrategy::Decode {
+                                loaded_fields[i] = decode_iter.next();
+                            }
+                        }
+                    }
+                }
+
+                for &field_idx in projected_fields.iter() {
+                    let value =
+                        loaded_fields[field_idx as usize].expect("projected field must be loaded");
+                    call_args.push(value);
+                }
             }
         }
+
         call_args.extend(self.owner_effect_call_args(
             cont_bb,
             plan.user_recv,
@@ -510,6 +782,23 @@ impl<'db> SyntheticBodyBuilder<'db> {
                     len: zero,
                 };
             }
+
+            RuntimeReturnPlan::DirectScalarReturn { .. } => {
+                let ret_value = ret.expect("value-returning recv wrapper should produce a value");
+                self.push_side_effect_builtin(
+                    cont_bb,
+                    RuntimeBuiltin::Mstore {
+                        addr: zero,
+                        value: ret_value,
+                    },
+                );
+                let thirty_two = self.push_const_word(cont_bb, 32);
+                self.blocks[cont_bb.index()].terminator = RTerminator::ReturnData {
+                    offset: zero,
+                    len: thirty_two,
+                };
+            }
+
             RuntimeReturnPlan::Value { .. } => {
                 let ret_value = ret.expect("value-returning recv wrapper should produce a value");
                 let scope = plan.contract.scope();
@@ -646,6 +935,34 @@ impl<'db> SyntheticBodyBuilder<'db> {
             len: zero,
         };
         cont_bb
+    }
+
+    fn emit_calldata_length_guard(
+        &mut self,
+        bb: RBlockId,
+        zero: RLocalId,
+        min_bytes: u32,
+    ) -> RBlockId {
+        let min_size = self.push_const_word(bb, min_bytes);
+        let calldata_size = self.push_builtin_value(
+            bb,
+            TyId::u256(self.db),
+            RuntimeClass::Scalar(word_scalar_class()),
+            RuntimeBuiltin::CallDataSize,
+        );
+        let too_short = self.push_bool_binary(bb, CompBinOp::Lt, calldata_size, min_size);
+        let revert_bb = self.new_block();
+        let ok_bb = self.new_block();
+        self.blocks[bb.index()].terminator = RTerminator::Branch {
+            cond: too_short,
+            then_bb: revert_bb,
+            else_bb: ok_bb,
+        };
+        self.blocks[revert_bb.index()].terminator = RTerminator::Revert {
+            offset: zero,
+            len: zero,
+        };
+        ok_bb
     }
 
     fn emit_entry_effect_args(
@@ -1223,6 +1540,182 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 src: len,
             },
         );
+        local
+    }
+
+    /// Construct an unbound `ArrayView` aggregate value with `start` set to
+    /// `offset_value`.
+    fn push_array_view_value(
+        &mut self,
+        bb: RBlockId,
+        semantic_ty: TyId<'db>,
+        class: &RuntimeClass<'db>,
+        offset_value: RLocalId,
+    ) -> RLocalId {
+        let local = self.push_local(
+            semantic_ty,
+            RuntimeCarrier::Value(class.clone()),
+            RuntimeLocalRoot::Slot(class.clone()),
+        );
+        let root = PlaceRoot::Slot(local);
+        self.push_stmt(
+            bb,
+            RStmt::Store {
+                dst: RuntimePlace {
+                    root,
+                    path: vec![PlaceElem::Field(hir::analysis::semantic::FieldIndex(1))]
+                        .into_boxed_slice(),
+                },
+                src: offset_value,
+            },
+        );
+        local
+    }
+
+    /// Construct an unbound `BytesView` or `StringView` value by reading the
+    /// dynamic offset pointer and length directly from calldata.
+    fn push_dynamic_view_from_calldata(
+        &mut self,
+        bb: RBlockId,
+        head_offset: u32,
+        semantic_ty: TyId<'db>,
+        class: &RuntimeClass<'db>,
+        is_string_view: bool,
+    ) -> RLocalId {
+        let head_pos = self.push_const_word(bb, head_offset);
+        let rel_offset = self.push_builtin_value(
+            bb,
+            TyId::u256(self.db),
+            RuntimeClass::Scalar(word_scalar_class()),
+            RuntimeBuiltin::CallDataLoad { offset: head_pos },
+        );
+
+        let selector_size = self.push_const_word(bb, 4);
+        let tail_abs = self.push_binary_word(bb, ArithBinOp::Add, rel_offset, selector_size);
+
+        let revert_bb = self.new_block();
+        let zero_lit = self.push_const_word(bb, 0);
+        self.blocks[revert_bb.index()].terminator = RTerminator::Revert {
+            offset: zero_lit,
+            len: zero_lit,
+        };
+
+        // Check 1: overflow in rel_offset + 4
+        let tail_overflow = self.push_bool_binary(bb, CompBinOp::Lt, tail_abs, rel_offset);
+        let check2_bb = self.new_block();
+        self.blocks[bb.index()].terminator = RTerminator::Branch {
+            cond: tail_overflow,
+            then_bb: revert_bb,
+            else_bb: check2_bb,
+        };
+
+        let data_len = self.push_builtin_value(
+            check2_bb,
+            TyId::u256(self.db),
+            RuntimeClass::Scalar(word_scalar_class()),
+            RuntimeBuiltin::CallDataLoad { offset: tail_abs },
+        );
+
+        let thirty_two = self.push_const_word(check2_bb, 32);
+        let data_start = self.push_binary_word(check2_bb, ArithBinOp::Add, tail_abs, thirty_two);
+
+        // Check 2: overflow in tail_abs + 32
+        let start_overflow = self.push_bool_binary(check2_bb, CompBinOp::Lt, data_start, tail_abs);
+        let check3_bb = self.new_block();
+        self.blocks[check2_bb.index()].terminator = RTerminator::Branch {
+            cond: start_overflow,
+            then_bb: revert_bb,
+            else_bb: check3_bb,
+        };
+
+        let data_end = self.push_binary_word(check3_bb, ArithBinOp::Add, data_start, data_len);
+
+        // Check 3: overflow in data_start + data_len
+        let end_overflow = self.push_bool_binary(check3_bb, CompBinOp::Lt, data_end, data_start);
+        let check4_bb = self.new_block();
+        self.blocks[check3_bb.index()].terminator = RTerminator::Branch {
+            cond: end_overflow,
+            then_bb: revert_bb,
+            else_bb: check4_bb,
+        };
+
+        // Check 4: data_end > calldatasize
+        let calldata_size = self.push_builtin_value(
+            check4_bb,
+            TyId::u256(self.db),
+            RuntimeClass::Scalar(word_scalar_class()),
+            RuntimeBuiltin::CallDataSize,
+        );
+        let oob = self.push_bool_binary(check4_bb, CompBinOp::Gt, data_end, calldata_size);
+        let ok_bb = self.new_block();
+        self.blocks[check4_bb.index()].terminator = RTerminator::Branch {
+            cond: oob,
+            then_bb: revert_bb,
+            else_bb: ok_bb,
+        };
+        let bb = ok_bb;
+
+        let local = self.push_local(
+            semantic_ty,
+            RuntimeCarrier::Value(class.clone()),
+            RuntimeLocalRoot::Slot(class.clone()),
+        );
+        let root = PlaceRoot::Slot(local);
+
+        if is_string_view {
+            self.push_stmt(
+                bb,
+                RStmt::Store {
+                    dst: RuntimePlace {
+                        root: root.clone(),
+                        path: vec![
+                            PlaceElem::Field(hir::analysis::semantic::FieldIndex(0)),
+                            PlaceElem::Field(hir::analysis::semantic::FieldIndex(1)),
+                        ]
+                        .into_boxed_slice(),
+                    },
+                    src: data_start,
+                },
+            );
+            self.push_stmt(
+                bb,
+                RStmt::Store {
+                    dst: RuntimePlace {
+                        root: root.clone(),
+                        path: vec![
+                            PlaceElem::Field(hir::analysis::semantic::FieldIndex(0)),
+                            PlaceElem::Field(hir::analysis::semantic::FieldIndex(2)),
+                        ]
+                        .into_boxed_slice(),
+                    },
+                    src: data_len,
+                },
+            );
+        } else {
+            self.push_stmt(
+                bb,
+                RStmt::Store {
+                    dst: RuntimePlace {
+                        root: root.clone(),
+                        path: vec![PlaceElem::Field(hir::analysis::semantic::FieldIndex(1))]
+                            .into_boxed_slice(),
+                    },
+                    src: data_start,
+                },
+            );
+            self.push_stmt(
+                bb,
+                RStmt::Store {
+                    dst: RuntimePlace {
+                        root: root.clone(),
+                        path: vec![PlaceElem::Field(hir::analysis::semantic::FieldIndex(2))]
+                            .into_boxed_slice(),
+                    },
+                    src: data_len,
+                },
+            );
+        }
+
         local
     }
 

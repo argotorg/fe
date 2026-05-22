@@ -140,6 +140,13 @@ pub trait AbiDecoder<A: Abi> {
     fn peek_word(self, _ at: u256) -> u256
 
     fn alloc(mut self, _ size: u256) -> u256
+
+    /// Advance the cursor by `bytes` without reading or validating.
+    /// Used to skip over unused fixed-size fields in ABI decoding.
+    #[arithmetic(unchecked)]
+    fn skip_bytes(mut self, _ bytes: u256) {
+        self.set_pos(self.pos() + bytes)
+    }
 }
 
 /// ABI encoder with cursor state over a fixed output buffer.
@@ -265,6 +272,15 @@ fn decode_field_at<A: Abi, T, D>(d: mut D, pos: u256) -> T
     decode_field<A, T, D>(mut d)
 }
 
+/// Skip past a fixed-size field without decoding it.
+/// Advances the decoder cursor by the field's head size.
+pub fn skip_field<A: Abi, T, D>(_ d: mut D)
+    where T: AbiSize,
+          D: AbiDecoder<A>
+{
+    d.skip_bytes(abi_field_head_size<T>())
+}
+
 #[arithmetic(unchecked)]
 pub fn encode_root<A: Abi, T, E>(_ value: own T, _ e: mut E)
     where T: Encode<A>, E: AbiEncoder<A>
@@ -388,9 +404,12 @@ impl<I> Copy for BytesView<I>
     where I: Copy
 {}
 
-impl<I> BytesView<I>
-    where I: ByteInput
-{
+impl<I> BytesView<I> {
+    /// Construct a BytesView with the given input, start offset, and length.
+    fn from_parts(_ input: I, _ start: u256, _ len: u256) -> Self {
+        BytesView { input, start, len }
+    }
+
     pub fn len(self) -> u256 {
         self.len
     }
@@ -398,7 +417,11 @@ impl<I> BytesView<I>
     pub fn is_empty(self) -> bool {
         self.len == 0
     }
+}
 
+impl<I> BytesView<I>
+    where I: ByteInput
+{
     #[arithmetic(unchecked)]
     pub fn byte_at(self, _ offset: u256) -> u8 {
         self.input.byte_at(self.start + offset)
@@ -410,6 +433,13 @@ impl<I> BytesView<I>
     }
 }
 
+impl BytesView<()> {
+    /// Bind a byte source to produce a bound `BytesView` with byte access.
+    pub fn over<I: ByteInput>(self, _ input: I) -> BytesView<I> {
+        BytesView<I>::from_parts(input, self.start, self.len)
+    }
+}
+
 pub struct StringView<I> {
     pub bytes: BytesView<I>,
 }
@@ -418,23 +448,115 @@ impl<I> Copy for StringView<I>
     where I: Copy
 {}
 
-impl<I> StringView<I>
-    where I: ByteInput
-{
+impl<I> StringView<I> {
+    /// Construct a StringView from a BytesView.
+    fn from_bytes(_ bytes: BytesView<I>) -> Self {
+        StringView { bytes }
+    }
+
     pub fn len(self) -> u256 {
-        self.bytes.len()
+        self.bytes.len
     }
 
     pub fn is_empty(self) -> bool {
-        self.bytes.is_empty()
+        self.bytes.len == 0
     }
+}
 
+impl<I> StringView<I>
+    where I: ByteInput
+{
     pub fn byte_at(self, _ offset: u256) -> u8 {
         self.bytes.byte_at(offset)
     }
 
     pub fn word_at(self, _ offset: u256) -> u256 {
         self.bytes.word_at(offset)
+    }
+}
+
+impl StringView<()> {
+    /// Bind a byte source to produce a bound `StringView` with character access.
+    pub fn over<J: ByteInput>(self, _ input: J) -> StringView<J> {
+        let bound_bytes = BytesView<J>::from_parts(input, self.bytes.start, self.bytes.len)
+        StringView<J>::from_bytes(bound_bytes)
+    }
+}
+
+/// A zero-copy view over a fixed-size array in ABI-encoded data.
+///
+/// Instead of decoding all N elements into memory, `ArrayView` stores
+/// the byte input source and the offset where the array starts. Elements
+/// are read on demand via `get(index)`, paying only for what you use.
+///
+/// When `I` defaults to `()`, the view is *unbound* -- it records only the
+/// byte offset where the array lives. Call `.over(input)` to bind a byte
+/// source and get an `ArrayView<T, N, I>` with element access.
+pub struct ArrayView<T, const N: usize, I = ()> {
+    pub input: I,
+    pub start: u256,
+}
+
+impl<T, const N: usize, I> Copy for ArrayView<T, N, I>
+    where I: Copy
+{}
+
+impl<T, const N: usize, I> ArrayView<T, N, I> {
+    /// Construct an ArrayView with the given input and start offset.
+    fn from_parts(_ input: I, _ start: u256) -> Self {
+        ArrayView { input, start }
+    }
+}
+
+impl<T, const N: usize, I> ArrayView<T, N, I>
+    where T: AbiSize, I: ByteInput
+{
+    pub fn len(self) -> usize {
+        N
+    }
+
+    /// Read the raw 32-byte ABI word at `index` from the underlying input source.
+    ///
+    /// Returns the uninterpreted `u256` word; the caller must cast or
+    /// reinterpret the result as the element type `T`.
+    #[arithmetic(unchecked)]
+    pub fn get(self, _ index: usize) -> u256 {
+        let byte_offset = self.start + (index as u256) * abi_field_head_size<T>()
+        self.input.word_at(byte_offset)
+    }
+}
+
+impl<T, const N: usize> ArrayView<T, N>
+    where T: AbiSize
+{
+    /// Bind a byte source to produce a bound `ArrayView` with element access.
+    pub fn over<I: ByteInput>(self, _ input: I) -> ArrayView<T, N, I> {
+        ArrayView<T, N, I>::from_parts(input, self.start)
+    }
+}
+
+impl<T, const N: usize, I> AbiSize for ArrayView<T, N, I>
+    where T: AbiSize
+{
+    const HEAD_SIZE: u256 = (N as u256) * abi_field_head_size<T>()
+    const IS_DYNAMIC: bool = T::IS_DYNAMIC
+}
+
+impl AbiSize for BytesView<()> {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = true
+
+    fn payload_size(self) -> u256 {
+        32 + round_up_words(self.len)
+    }
+}
+
+impl AbiSize for StringView<()> {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = true
+
+    fn payload_size(self) -> u256 {
+        self.bytes.payload_size()
     }
 }
 
@@ -474,9 +596,7 @@ impl DynString {
     }
 
     pub fn view(self) -> StringView<MemoryInput> {
-        StringView {
-            bytes: self.as_bytes().view(),
-        }
+        StringView<MemoryInput>::from_bytes(self.as_bytes().view())
     }
 
     pub fn byte_at(self, _ index: u256) -> u8 {
@@ -524,11 +644,7 @@ impl Bytes {
             base: self.data + 32,
             len: self.len,
         }
-        BytesView {
-            input,
-            start: 0,
-            len: self.len,
-        }
+        BytesView<MemoryInput>::from_parts(input, 0, self.len)
     }
 
     pub fn byte_at(self, _ index: u256) -> u8 {

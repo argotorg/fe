@@ -3,20 +3,25 @@ use hir::semantic::{RecvArmAbiInfo, RecvArmView};
 use hir::{
     analysis::{
         semantic::{
-            GenericSubst, ImplEnv, ManualContractSection, RootSemanticInstanceError,
-            SemanticInstance, SemanticInstanceKey, get_or_build_semantic_instance,
+            EffectProviderSubst, GenericSubst, ImplEnv, ManualContractSection,
+            RootSemanticInstanceError, SemConstScalar, SemConstValue, SemanticInstance,
+            SemanticInstanceKey, eval_const_instance, get_or_build_semantic_instance,
             owner_effect_bindings, root_semantic_instance_key,
         },
         ty::{
             const_ty::ConstTyData,
             corelib::{resolve_core_trait, resolve_lib_func_path, resolve_lib_type_path},
-            trait_def::{TraitInstId, resolve_trait_method_instance},
-            trait_resolution::TraitSolveCx,
+            trait_def::{
+                TraitInstId, assoc_const_body_and_impl_args_for_trait_inst,
+                resolve_trait_method_instance,
+            },
+            trait_resolution::{PredicateListId, TraitSolveCx},
             ty_check::{BodyOwner, EffectParamSite, LocalBinding},
-            ty_def::{TyData, TyId},
+            ty_def::{PrimTy, TyBase, TyData, TyId},
         },
     },
     hir_def::{Contract, Func, IdentId, InlineHint, ItemKind, ManualContractRootAttr, TopLevelMod},
+    span::{DesugaredOrigin, HirOrigin},
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -44,12 +49,13 @@ use crate::{
     },
     runtime::{
         AddressSpaceKind, ConstRegionId, ContractInitAbiPlan, ContractRecvAbiPlan, DispatchArm,
-        DispatchDefault, EntryEffectArgPlan, InitArgsPlan, LayoutId, LayoutKey, RefKind, RefView,
-        ResolvedCodeRegion, RuntimeClass, RuntimeCodeRegion, RuntimeCodeRegionKey, RuntimeFunction,
-        RuntimeFunctionOwner, RuntimeInlineHint, RuntimeInputPlan, RuntimeLinkage, RuntimeObject,
-        RuntimePackage, RuntimePackagePlan, RuntimeReturnPlan, RuntimeSection, RuntimeSectionName,
-        RuntimeSectionRef, RuntimeSyntheticSpec, ScalarClass, ScalarRepr, ScalarRole,
-        TargetRootProviderBinding, TargetRootProviderMaterialization,
+        DispatchDefault, EntryEffectArgPlan, FieldLoadStrategy, InitArgsPlan, LayoutId, LayoutKey,
+        RefKind, RefView, ResolvedCodeRegion, RuntimeClass, RuntimeCodeRegion,
+        RuntimeCodeRegionKey, RuntimeFunction, RuntimeFunctionOwner, RuntimeInlineHint,
+        RuntimeInputPlan, RuntimeLinkage, RuntimeObject, RuntimePackage, RuntimePackagePlan,
+        RuntimeReturnPlan, RuntimeSection, RuntimeSectionName, RuntimeSectionRef,
+        RuntimeSyntheticSpec, ScalarClass, ScalarRepr, ScalarRole, TargetRootProviderBinding,
+        TargetRootProviderMaterialization,
     },
     verify::verify_runtime_package,
 };
@@ -775,7 +781,34 @@ fn contract_recv_wrapper<'db>(
     let projected_fields = visible_recv_arg_fields(db, semantic, arm);
     let input = if abi_info.args_ty == TyId::unit(db) {
         RuntimeInputPlan::None
+    } else if let Some(field_head_sizes) =
+        direct_calldata_load_info(db, contract.scope(), abi_info.args_ty)
+    {
+        RuntimeInputPlan::DirectCalldataLoad {
+            msg_ty: abi_info.args_ty,
+            field_head_sizes,
+            projected_fields,
+        }
+    } else if let Some(strategies) = lazy_field_strategies(db, abi_info.args_ty, semantic, arm) {
+        let needs_decode = strategies.contains(&FieldLoadStrategy::Decode);
+        let decode_fn = if needs_decode {
+            Some(resolve_decode_instance(
+                db,
+                contract.scope(),
+                abi_info.args_ty,
+                memory_bytes_ty(db, contract.scope())?,
+            )?)
+        } else {
+            None
+        };
+        RuntimeInputPlan::LazyCalldataLoad {
+            msg_ty: abi_info.args_ty,
+            decode_fn,
+            field_strategies: strategies,
+            projected_fields,
+        }
     } else {
+        // Fallback: existing host-binding decode path
         let host = contract_recv_host_binding(db, contract, recv.recv_idx(db), arm.arm_idx(db))?;
         RuntimeInputPlan::DecodeHostPayload {
             msg_ty: abi_info.args_ty,
@@ -791,7 +824,11 @@ fn contract_recv_wrapper<'db>(
         }
     };
     let ret = if let Some(ret_ty) = abi_info.ret_ty {
-        RuntimeReturnPlan::Value { ty: ret_ty }
+        if is_direct_return_eligible(db, contract.scope(), ret_ty) {
+            RuntimeReturnPlan::DirectScalarReturn { ty: ret_ty }
+        } else {
+            RuntimeReturnPlan::Value { ty: ret_ty }
+        }
     } else {
         RuntimeReturnPlan::Unit
     };
@@ -2157,6 +2194,29 @@ fn runtime_input_plan_symbol_key<'db>(db: &'db dyn MirDb, plan: &RuntimeInputPla
             target_root_provider_binding_sort_key(db, host),
             runtime_instance_symbol_key(db, *decode_args_fn)
         ),
+        RuntimeInputPlan::DirectCalldataLoad {
+            msg_ty,
+            field_head_sizes,
+            projected_fields,
+        } => format!(
+            "direct_load:{}:{field_head_sizes:?}:{projected_fields:?}",
+            type_identity(db, *msg_ty),
+        ),
+        RuntimeInputPlan::LazyCalldataLoad {
+            msg_ty,
+            decode_fn,
+            field_strategies,
+            projected_fields,
+        } => {
+            let decode_key = decode_fn
+                .map(|f| runtime_instance_symbol_key(db, f))
+                .unwrap_or_else(|| "none".to_string());
+            format!(
+                "lazy:{}:{}:{field_strategies:?}:{projected_fields:?}",
+                type_identity(db, *msg_ty),
+                decode_key
+            )
+        }
     }
 }
 
@@ -2174,6 +2234,29 @@ fn runtime_input_plan_sort_key<'db>(db: &'db dyn MirDb, plan: &RuntimeInputPlan<
             target_root_provider_binding_sort_key(db, host),
             runtime_instance_sort_key(db, *decode_args_fn)
         ),
+        RuntimeInputPlan::DirectCalldataLoad {
+            msg_ty,
+            field_head_sizes,
+            projected_fields,
+        } => format!(
+            "direct_load:{}:{field_head_sizes:?}:{projected_fields:?}",
+            type_identity(db, *msg_ty),
+        ),
+        RuntimeInputPlan::LazyCalldataLoad {
+            msg_ty,
+            decode_fn,
+            field_strategies,
+            projected_fields,
+        } => {
+            let decode_key = decode_fn
+                .map(|f| runtime_instance_sort_key(db, f))
+                .unwrap_or_else(|| "none".to_string());
+            format!(
+                "lazy:{}:{}:{field_strategies:?}:{projected_fields:?}",
+                type_identity(db, *msg_ty),
+                decode_key
+            )
+        }
     }
 }
 
@@ -2574,6 +2657,376 @@ fn sanitize_object_name(value: &str) -> String {
     }
 }
 
+fn eval_trait_assoc_const<'db>(
+    db: &'db dyn MirDb,
+    scope: hir::hir_def::scope_graph::ScopeId<'db>,
+    trait_path: &[&str],
+    trait_args: Vec<TyId<'db>>,
+    const_name: &str,
+) -> Option<hir::analysis::semantic::SemConstId<'db>> {
+    let trait_def = resolve_core_trait(db, scope, trait_path)?;
+    let inst = TraitInstId::new_simple(db, trait_def, trait_args);
+    let assumptions = PredicateListId::empty_list(db);
+    let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
+    let name = IdentId::new(db, const_name.to_string());
+    let (body, impl_args) =
+        assoc_const_body_and_impl_args_for_trait_inst(db, solve_cx, inst, name)?;
+    let key = SemanticInstanceKey::new(
+        db,
+        BodyOwner::AnonConstBody {
+            body,
+            expected: TyId::invalid(db, hir::analysis::ty::ty_def::InvalidCause::Other),
+        },
+        GenericSubst::new(db, impl_args),
+        EffectProviderSubst::empty(db),
+        ImplEnv::new(db, scope, assumptions, vec![inst]),
+    );
+    let instance = get_or_build_semantic_instance(db, key);
+    eval_const_instance(db, instance).ok()
+}
+
+/// Query `AbiSize::HEAD_SIZE` for `ty`, returning the value as a `u32`.
+fn query_head_size<'db>(
+    db: &'db dyn MirDb,
+    scope: hir::hir_def::scope_graph::ScopeId<'db>,
+    ty: TyId<'db>,
+) -> Option<u32> {
+    let const_id = eval_trait_assoc_const(db, scope, &["abi", "AbiSize"], vec![ty], "HEAD_SIZE")?;
+    match const_id.value(db) {
+        SemConstValue::Scalar {
+            value: SemConstScalar::Int { value },
+            ..
+        } => {
+            let v: u64 = value.try_into().ok()?;
+            u32::try_from(v).ok()
+        }
+        _ => None,
+    }
+}
+
+/// Query `AbiSize::IS_DYNAMIC` for `ty`.
+fn query_is_dynamic<'db>(
+    db: &'db dyn MirDb,
+    scope: hir::hir_def::scope_graph::ScopeId<'db>,
+    ty: TyId<'db>,
+) -> Option<bool> {
+    let const_id = eval_trait_assoc_const(db, scope, &["abi", "AbiSize"], vec![ty], "IS_DYNAMIC")?;
+    match const_id.value(db) {
+        SemConstValue::Scalar {
+            value: SemConstScalar::Bool(v),
+            ..
+        } => Some(v),
+        _ => None,
+    }
+}
+
+/// Query `Encode<Sol>::DIRECT_ENCODE` for `ty`.
+fn query_direct_encode<'db>(
+    db: &'db dyn MirDb,
+    scope: hir::hir_def::scope_graph::ScopeId<'db>,
+    ty: TyId<'db>,
+) -> Option<bool> {
+    let abi_ty = resolve_lib_type_path(db, scope, "std::abi::Sol")?;
+    let const_id = eval_trait_assoc_const(
+        db,
+        scope,
+        &["abi", "Encode"],
+        vec![ty, abi_ty],
+        "DIRECT_ENCODE",
+    )?;
+    match const_id.value(db) {
+        SemConstValue::Scalar {
+            value: SemConstScalar::Bool(v),
+            ..
+        } => Some(v),
+        _ => None,
+    }
+}
+
+/// Returns `true` if `ty` supports `DirectScalarReturn`.
+fn is_direct_return_eligible<'db>(
+    db: &'db dyn MirDb,
+    scope: hir::hir_def::scope_graph::ScopeId<'db>,
+    ty: TyId<'db>,
+) -> bool {
+    let base = ty.base_ty(db);
+    let is_word_scalar = matches!(
+        base.data(db),
+        TyData::TyBase(TyBase::Prim(PrimTy::U256 | PrimTy::Usize))
+    );
+    if !is_word_scalar {
+        return false;
+    }
+    query_direct_encode(db, scope, ty).unwrap_or(false)
+}
+
+/// Returns `true` if `msg_ty` is a compiler-generated message struct.
+fn is_compiler_generated_msg<'db>(db: &'db dyn MirDb, msg_ty: TyId<'db>) -> bool {
+    let Some(adt_ref) = msg_ty.adt_ref(db) else {
+        return false;
+    };
+    match adt_ref {
+        hir::analysis::ty::adt_def::AdtRef::Struct(struct_) => {
+            matches!(
+                hir::span::struct_ast(db, struct_),
+                HirOrigin::Desugared(DesugaredOrigin::Msg(_))
+            )
+        }
+        _ => false,
+    }
+}
+
+/// Check if `msg_ty` is eligible for `DirectCalldataLoad`.
+fn direct_calldata_load_info<'db>(
+    db: &'db dyn MirDb,
+    scope: hir::hir_def::scope_graph::ScopeId<'db>,
+    msg_ty: TyId<'db>,
+) -> Option<Box<[u32]>> {
+    if !is_compiler_generated_msg(db, msg_ty) {
+        return None;
+    }
+    let fields = msg_ty.field_types(db);
+    if fields.is_empty() {
+        return None;
+    }
+    if query_is_dynamic(db, scope, msg_ty).unwrap_or(true) {
+        return None;
+    }
+    let mut head_sizes = Vec::with_capacity(fields.len());
+    for &field_ty in fields.iter() {
+        let head_size = query_head_size(db, scope, field_ty)?;
+        if head_size != 32 {
+            return None;
+        }
+        if !is_primitive_word_scalar(db, field_ty) {
+            return None;
+        }
+        head_sizes.push(head_size);
+    }
+    Some(head_sizes.into_boxed_slice())
+}
+
+fn is_primitive_word_scalar(db: &dyn MirDb, ty: TyId<'_>) -> bool {
+    let base = ty.base_ty(db);
+    match base.data(db) {
+        // Only full-word types are safe for raw calldataload without ABI
+        // canonicality validation. Narrow types (bool, u8, i8, etc.) require
+        // the decoder to check that high bits are zero (unsigned) or properly
+        // sign-extended (signed), so they must go through the decode path.
+        TyData::TyBase(TyBase::Prim(prim)) => {
+            matches!(prim, PrimTy::U256 | PrimTy::I256 | PrimTy::Usize)
+        }
+        _ => false,
+    }
+}
+
+fn array_view_head_size(db: &dyn MirDb, ty: TyId<'_>) -> Option<u32> {
+    use common::ingot::IngotKind;
+    use hir::analysis::ty::const_ty::EvaluatedConstTy;
+
+    let base = ty.base_ty(db);
+    let TyData::TyBase(TyBase::Adt(adt)) = base.data(db) else {
+        return None;
+    };
+    let adt_ref = adt.adt_ref(db);
+    let name = adt_ref.name(db)?;
+    if name.data(db) != "ArrayView" {
+        return None;
+    }
+    if !base
+        .ingot(db)
+        .is_some_and(|ingot| ingot.kind(db) == IngotKind::Core)
+    {
+        return None;
+    }
+
+    let (_, args) = ty.decompose_ty_app(db);
+    if args.len() < 2 {
+        return None;
+    }
+    let elem_ty = args[0];
+    let len_ty = args[1];
+
+    let TyData::ConstTy(const_ty) = len_ty.data(db) else {
+        return None;
+    };
+    let n: u32 = match const_ty.data(db) {
+        ConstTyData::Evaluated(EvaluatedConstTy::LitInt(int_id), _) => {
+            let digits = int_id.data(db).to_u32_digits();
+            if digits.len() > 1 {
+                return None;
+            }
+            digits.first().copied().unwrap_or(0)
+        }
+        _ => return None,
+    };
+
+    let elem_head_size = static_abi_head_size(db, elem_ty)?;
+    n.checked_mul(elem_head_size)
+}
+
+fn is_bytes_view_ty(db: &dyn MirDb, ty: TyId<'_>) -> bool {
+    use common::ingot::IngotKind;
+
+    let base = ty.base_ty(db);
+    let TyData::TyBase(TyBase::Adt(adt)) = base.data(db) else {
+        return false;
+    };
+    let adt_ref = adt.adt_ref(db);
+    let Some(name) = adt_ref.name(db) else {
+        return false;
+    };
+    if name.data(db) != "BytesView" {
+        return false;
+    }
+    base.ingot(db)
+        .is_some_and(|ingot| ingot.kind(db) == IngotKind::Core)
+}
+
+fn is_string_view_ty(db: &dyn MirDb, ty: TyId<'_>) -> bool {
+    use common::ingot::IngotKind;
+
+    let base = ty.base_ty(db);
+    let TyData::TyBase(TyBase::Adt(adt)) = base.data(db) else {
+        return false;
+    };
+    let adt_ref = adt.adt_ref(db);
+    let Some(name) = adt_ref.name(db) else {
+        return false;
+    };
+    if name.data(db) != "StringView" {
+        return false;
+    }
+    base.ingot(db)
+        .is_some_and(|ingot| ingot.kind(db) == IngotKind::Core)
+}
+
+pub(crate) fn static_abi_head_size(db: &dyn MirDb, ty: TyId<'_>) -> Option<u32> {
+    static_abi_head_size_inner(db, ty, 0)
+}
+
+/// Max recursion depth for `static_abi_head_size` to prevent stack overflow
+/// on pathological recursive types.
+const STATIC_ABI_HEAD_SIZE_MAX_DEPTH: u32 = 10;
+
+fn static_abi_head_size_inner(db: &dyn MirDb, ty: TyId<'_>, depth: u32) -> Option<u32> {
+    if depth > STATIC_ABI_HEAD_SIZE_MAX_DEPTH {
+        return None;
+    }
+    if is_primitive_word_scalar(db, ty) {
+        return Some(32);
+    }
+    let fields = ty.field_types(db);
+    if fields.len() == 1 {
+        return static_abi_head_size_inner(db, fields[0], depth + 1);
+    }
+    if ty.is_array(db) {
+        let n = ty.array_len(db)? as u32;
+        let (_, args) = ty.decompose_ty_app(db);
+        let elem_ty = *args.first()?;
+        let elem_size = static_abi_head_size_inner(db, elem_ty, depth + 1)?;
+        return n.checked_mul(elem_size);
+    }
+    if let Some(size) = array_view_head_size(db, ty) {
+        return Some(size);
+    }
+    if is_bytes_view_ty(db, ty) || is_string_view_ty(db, ty) {
+        return Some(32);
+    }
+    None
+}
+
+/// Determine the per-field load strategies for a lazy calldata load plan.
+fn lazy_field_strategies<'db>(
+    db: &'db dyn MirDb,
+    msg_ty: TyId<'db>,
+    semantic: SemanticInstance<'db>,
+    arm: RecvArmView<'db>,
+) -> Option<Box<[FieldLoadStrategy]>> {
+    if !is_compiler_generated_msg(db, msg_ty) {
+        return None;
+    }
+    let field_types = msg_ty.field_types(db);
+    if field_types.is_empty() {
+        return None;
+    }
+
+    let binding_plans = runtime_visible_binding_plans(db, semantic);
+    let arg_bindings = arm.arg_bindings(db);
+    let tuple_index_by_pat: FxHashMap<_, _> = arg_bindings
+        .iter()
+        .map(|b| (b.pat, b.tuple_index))
+        .collect();
+
+    let mut field_is_mut = vec![false; field_types.len()];
+    for entry in binding_plans.iter() {
+        if let LocalBinding::Local { pat, is_mut: true } = entry.binding
+            && let Some(&tuple_idx) = tuple_index_by_pat.get(&pat)
+        {
+            field_is_mut[tuple_idx as usize] = true;
+        }
+    }
+
+    let mut strategies: Vec<FieldLoadStrategy> = field_types
+        .iter()
+        .enumerate()
+        .map(|(i, &field_ty)| {
+            if !field_is_mut[i] && is_primitive_word_scalar(db, field_ty) {
+                FieldLoadStrategy::Direct
+            } else if !field_is_mut[i] {
+                if let Some(head_size) = array_view_head_size(db, field_ty) {
+                    FieldLoadStrategy::SkipWithOffset { head_size }
+                } else if is_bytes_view_ty(db, field_ty) {
+                    FieldLoadStrategy::LazyDynamicView {
+                        is_string_view: false,
+                    }
+                } else if is_string_view_ty(db, field_ty) {
+                    FieldLoadStrategy::LazyDynamicView {
+                        is_string_view: true,
+                    }
+                } else {
+                    FieldLoadStrategy::Decode
+                }
+            } else {
+                FieldLoadStrategy::Decode
+            }
+        })
+        .collect();
+
+    let mut all_preceding_static = true;
+    for (i, &field_ty) in field_types.iter().enumerate() {
+        if static_abi_head_size(db, field_ty).is_none() {
+            all_preceding_static = false;
+        }
+        match strategies[i] {
+            FieldLoadStrategy::Direct
+            | FieldLoadStrategy::SkipWithOffset { .. }
+            | FieldLoadStrategy::LazyDynamicView { .. } => {
+                if !all_preceding_static {
+                    strategies[i] = FieldLoadStrategy::Decode;
+                }
+            }
+            FieldLoadStrategy::Decode => {}
+        }
+    }
+
+    let has_direct = strategies.contains(&FieldLoadStrategy::Direct);
+    let has_skip = strategies
+        .iter()
+        .any(|s| matches!(s, FieldLoadStrategy::SkipWithOffset { .. }));
+    let has_lazy_view = strategies
+        .iter()
+        .any(|s| matches!(s, FieldLoadStrategy::LazyDynamicView { .. }));
+    let has_decode = strategies.contains(&FieldLoadStrategy::Decode);
+
+    let distinct_count = has_direct as u8 + has_skip as u8 + has_lazy_view as u8 + has_decode as u8;
+    if has_skip || has_lazy_view || distinct_count >= 2 {
+        Some(strategies.into_boxed_slice())
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use common::InputDb;
@@ -2774,11 +3227,13 @@ pub contract DecodeHarness {
         let top_mod = db.top_mod(file);
 
         let raw_plan = recv_wrapper_plan(&db, top_mod, "raw(uint256)");
-        let RuntimeInputPlan::DecodeHostPayload {
-            projected_fields, ..
-        } = raw_plan.input
-        else {
-            panic!("raw(uint256) should decode host payload");
+        let projected_fields = match raw_plan.input {
+            RuntimeInputPlan::DirectCalldataLoad {
+                projected_fields, ..
+            } => projected_fields,
+            other => panic!(
+                "raw(uint256) with a single u256 field should select DirectCalldataLoad, got {other:?}"
+            ),
         };
         assert!(
             projected_fields.is_empty(),
@@ -2786,11 +3241,13 @@ pub contract DecodeHarness {
         );
 
         let swap_plan = recv_wrapper_plan(&db, top_mod, "swap(uint64,uint64)");
-        let RuntimeInputPlan::DecodeHostPayload {
-            projected_fields, ..
-        } = swap_plan.input
-        else {
-            panic!("swap(uint64,uint64) should decode host payload");
+        let projected_fields = match swap_plan.input {
+            RuntimeInputPlan::DecodeHostPayload {
+                projected_fields, ..
+            } => projected_fields,
+            other => panic!(
+                "swap(uint64,uint64) with narrow u64 fields should fall back to DecodeHostPayload, got {other:?}"
+            ),
         };
         assert_eq!(
             projected_fields.as_ref(),
