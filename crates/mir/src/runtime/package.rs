@@ -2809,24 +2809,13 @@ fn direct_calldata_load_info<'db>(
 fn is_primitive_word_scalar(db: &dyn MirDb, ty: TyId<'_>) -> bool {
     let base = ty.base_ty(db);
     match base.data(db) {
-        TyData::TyBase(TyBase::Prim(prim)) => matches!(
-            prim,
-            PrimTy::Bool
-                | PrimTy::U8
-                | PrimTy::U16
-                | PrimTy::U32
-                | PrimTy::U64
-                | PrimTy::U128
-                | PrimTy::U256
-                | PrimTy::Usize
-                | PrimTy::I8
-                | PrimTy::I16
-                | PrimTy::I32
-                | PrimTy::I64
-                | PrimTy::I128
-                | PrimTy::I256
-                | PrimTy::Isize
-        ),
+        // Only full-word types are safe for raw calldataload without ABI
+        // canonicality validation. Narrow types (bool, u8, i8, etc.) require
+        // the decoder to check that high bits are zero (unsigned) or properly
+        // sign-extended (signed), so they must go through the decode path.
+        TyData::TyBase(TyBase::Prim(prim)) => {
+            matches!(prim, PrimTy::U256 | PrimTy::I256 | PrimTy::Usize)
+        }
         _ => false,
     }
 }
@@ -2862,17 +2851,18 @@ fn array_view_head_size(db: &dyn MirDb, ty: TyId<'_>) -> Option<u32> {
         return None;
     };
     let n: u32 = match const_ty.data(db) {
-        ConstTyData::Evaluated(EvaluatedConstTy::LitInt(int_id), _) => int_id
-            .data(db)
-            .to_u32_digits()
-            .first()
-            .copied()
-            .unwrap_or(0),
+        ConstTyData::Evaluated(EvaluatedConstTy::LitInt(int_id), _) => {
+            let digits = int_id.data(db).to_u32_digits();
+            if digits.len() > 1 {
+                return None;
+            }
+            digits.first().copied().unwrap_or(0)
+        }
         _ => return None,
     };
 
     let elem_head_size = static_abi_head_size(db, elem_ty)?;
-    Some(n * elem_head_size)
+    n.checked_mul(elem_head_size)
 }
 
 fn is_bytes_view_ty(db: &dyn MirDb, ty: TyId<'_>) -> bool {
@@ -2935,7 +2925,7 @@ fn static_abi_head_size_inner(db: &dyn MirDb, ty: TyId<'_>, depth: u32) -> Optio
         let (_, args) = ty.decompose_ty_app(db);
         let elem_ty = *args.first()?;
         let elem_size = static_abi_head_size_inner(db, elem_ty, depth + 1)?;
-        return Some(n * elem_size);
+        return n.checked_mul(elem_size);
     }
     if let Some(size) = array_view_head_size(db, ty) {
         return Some(size);
@@ -3252,11 +3242,11 @@ pub contract DecodeHarness {
 
         let swap_plan = recv_wrapper_plan(&db, top_mod, "swap(uint64,uint64)");
         let projected_fields = match swap_plan.input {
-            RuntimeInputPlan::DirectCalldataLoad {
+            RuntimeInputPlan::DecodeHostPayload {
                 projected_fields, ..
             } => projected_fields,
             other => panic!(
-                "swap(uint64,uint64) with two u64 fields should select DirectCalldataLoad, got {other:?}"
+                "swap(uint64,uint64) with narrow u64 fields should fall back to DecodeHostPayload, got {other:?}"
             ),
         };
         assert_eq!(

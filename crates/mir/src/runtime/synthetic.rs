@@ -470,7 +470,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
 
     fn build_contract_recv_abi(&mut self, plan: ContractRecvAbiPlan<'db>) {
         let zero = self.push_const_word(RBlockId::from_u32(0), 0);
-        let cont_bb = if plan.payable {
+        let mut cont_bb = if plan.payable {
             RBlockId::from_u32(0)
         } else {
             self.emit_nonpayable_guard(zero)
@@ -485,6 +485,10 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 field_head_sizes,
                 projected_fields,
             } => {
+                let total_head: u32 = field_head_sizes.iter().sum();
+                let min_calldata = 4 + total_head;
+                cont_bb = self.emit_calldata_length_guard(cont_bb, zero, min_calldata);
+
                 let field_types = msg_ty.field_types(self.db);
                 let env = self.runtime_type_env(plan.contract.scope());
                 let mut loaded_fields = Vec::with_capacity(field_head_sizes.len());
@@ -561,6 +565,13 @@ impl<'db> SyntheticBodyBuilder<'db> {
             } => {
                 let field_types = msg_ty.field_types(self.db);
                 let env = self.runtime_type_env(plan.contract.scope());
+
+                let total_static_head: u32 = field_types
+                    .iter()
+                    .filter_map(|ty| crate::runtime::package::static_abi_head_size(self.db, *ty))
+                    .sum();
+                let min_calldata = 4 + total_static_head;
+                cont_bb = self.emit_calldata_length_guard(cont_bb, zero, min_calldata);
 
                 let mut loaded_fields: Vec<Option<RLocalId>> = vec![None; field_strategies.len()];
                 let mut accumulated_offset: u32 = 4;
@@ -667,7 +678,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 // Invariant: once accumulated_offset becomes stale (a Decode field
                 // had unknown static size), no later field may use a strategy that
                 // depends on a known calldata offset.
-                debug_assert!(
+                assert!(
                     {
                         let mut offset_known = true;
                         let mut ok = true;
@@ -924,6 +935,34 @@ impl<'db> SyntheticBodyBuilder<'db> {
             len: zero,
         };
         cont_bb
+    }
+
+    fn emit_calldata_length_guard(
+        &mut self,
+        bb: RBlockId,
+        zero: RLocalId,
+        min_bytes: u32,
+    ) -> RBlockId {
+        let min_size = self.push_const_word(bb, min_bytes);
+        let calldata_size = self.push_builtin_value(
+            bb,
+            TyId::u256(self.db),
+            RuntimeClass::Scalar(word_scalar_class()),
+            RuntimeBuiltin::CallDataSize,
+        );
+        let too_short = self.push_bool_binary(bb, CompBinOp::Lt, calldata_size, min_size);
+        let revert_bb = self.new_block();
+        let ok_bb = self.new_block();
+        self.blocks[bb.index()].terminator = RTerminator::Branch {
+            cond: too_short,
+            then_bb: revert_bb,
+            else_bb: ok_bb,
+        };
+        self.blocks[revert_bb.index()].terminator = RTerminator::Revert {
+            offset: zero,
+            len: zero,
+        };
+        ok_bb
     }
 
     fn emit_entry_effect_args(
@@ -1554,15 +1593,67 @@ impl<'db> SyntheticBodyBuilder<'db> {
         let selector_size = self.push_const_word(bb, 4);
         let tail_abs = self.push_binary_word(bb, ArithBinOp::Add, rel_offset, selector_size);
 
+        let revert_bb = self.new_block();
+        let zero_lit = self.push_const_word(bb, 0);
+        self.blocks[revert_bb.index()].terminator = RTerminator::Revert {
+            offset: zero_lit,
+            len: zero_lit,
+        };
+
+        // Check 1: overflow in rel_offset + 4
+        let tail_overflow = self.push_bool_binary(bb, CompBinOp::Lt, tail_abs, rel_offset);
+        let check2_bb = self.new_block();
+        self.blocks[bb.index()].terminator = RTerminator::Branch {
+            cond: tail_overflow,
+            then_bb: revert_bb,
+            else_bb: check2_bb,
+        };
+
         let data_len = self.push_builtin_value(
-            bb,
+            check2_bb,
             TyId::u256(self.db),
             RuntimeClass::Scalar(word_scalar_class()),
             RuntimeBuiltin::CallDataLoad { offset: tail_abs },
         );
 
-        let thirty_two = self.push_const_word(bb, 32);
-        let data_start = self.push_binary_word(bb, ArithBinOp::Add, tail_abs, thirty_two);
+        let thirty_two = self.push_const_word(check2_bb, 32);
+        let data_start = self.push_binary_word(check2_bb, ArithBinOp::Add, tail_abs, thirty_two);
+
+        // Check 2: overflow in tail_abs + 32
+        let start_overflow = self.push_bool_binary(check2_bb, CompBinOp::Lt, data_start, tail_abs);
+        let check3_bb = self.new_block();
+        self.blocks[check2_bb.index()].terminator = RTerminator::Branch {
+            cond: start_overflow,
+            then_bb: revert_bb,
+            else_bb: check3_bb,
+        };
+
+        let data_end = self.push_binary_word(check3_bb, ArithBinOp::Add, data_start, data_len);
+
+        // Check 3: overflow in data_start + data_len
+        let end_overflow = self.push_bool_binary(check3_bb, CompBinOp::Lt, data_end, data_start);
+        let check4_bb = self.new_block();
+        self.blocks[check3_bb.index()].terminator = RTerminator::Branch {
+            cond: end_overflow,
+            then_bb: revert_bb,
+            else_bb: check4_bb,
+        };
+
+        // Check 4: data_end > calldatasize
+        let calldata_size = self.push_builtin_value(
+            check4_bb,
+            TyId::u256(self.db),
+            RuntimeClass::Scalar(word_scalar_class()),
+            RuntimeBuiltin::CallDataSize,
+        );
+        let oob = self.push_bool_binary(check4_bb, CompBinOp::Gt, data_end, calldata_size);
+        let ok_bb = self.new_block();
+        self.blocks[check4_bb.index()].terminator = RTerminator::Branch {
+            cond: oob,
+            then_bb: revert_bb,
+            else_bb: ok_bb,
+        };
+        let bb = ok_bb;
 
         let local = self.push_local(
             semantic_ty,
