@@ -700,6 +700,7 @@ pub fn hash_acyclic_shape_graph(
         });
     }
     graph.validate()?;
+    ensure_recursive_edges_acyclic(graph)?;
 
     let children_by_parent = children_by_parent(graph);
     let mut local = BTreeMap::new();
@@ -747,6 +748,140 @@ pub fn hash_acyclic_shape_graph(
         policy_id: policy.policy_id(),
         nodes,
         components: Vec::new(),
+        graph: graph_digests,
+    })
+}
+
+pub fn hash_shape_graph(
+    policy: &ShapeHashPolicy,
+    graph: &ShapeGraph,
+) -> Result<ShapeGraphHashes, ShapeError> {
+    match policy.cycle_policy {
+        ShapeCyclePolicy::CondenseScc => hash_condensed_shape_graph(policy, graph),
+        ShapeCyclePolicy::Reject | ShapeCyclePolicy::NonRecursiveGraphEdges => {
+            hash_acyclic_shape_graph(policy, graph)
+        }
+    }
+}
+
+fn hash_condensed_shape_graph(
+    policy: &ShapeHashPolicy,
+    graph: &ShapeGraph,
+) -> Result<ShapeGraphHashes, ShapeError> {
+    if policy.algorithm != ShapeDigestAlgorithm::Blake3_256 {
+        return Err(ShapeError::UnsupportedDigestAlgorithm {
+            algorithm: policy.algorithm.as_str(),
+        });
+    }
+    graph.validate()?;
+
+    let mut local = BTreeMap::new();
+    for (key, node) in &graph.nodes {
+        local.insert(key.clone(), local_node_digests(policy, node)?);
+    }
+
+    let recursive_edges = recursive_edges(graph);
+    let components = strongly_connected_components(graph, &recursive_edges);
+    let mut component_by_node = BTreeMap::new();
+    for (component_index, members) in components.iter().enumerate() {
+        for member in members {
+            component_by_node.insert(member.clone(), component_index);
+        }
+    }
+
+    let component_local = component_local_digests(
+        policy,
+        &components,
+        &component_by_node,
+        &recursive_edges,
+        &local,
+    )?;
+    let component_tree = component_tree_digests(
+        policy,
+        &components,
+        &component_by_node,
+        &recursive_edges,
+        &component_local,
+    )?;
+
+    let mut node_tree = BTreeMap::new();
+    for key in graph.nodes.keys() {
+        let component_index = component_by_node
+            .get(key)
+            .copied()
+            .expect("component exists for every node");
+        let mut digests = DimensionDigests::default();
+        for dimension in &policy.dimensions {
+            digests.insert(
+                *dimension,
+                digest_record(policy, *dimension, "node.component_context", |bytes| {
+                    if policy.view_mode == ShapeViewMode::IdentityBound {
+                        push_node_key(bytes, key);
+                    }
+                    push_digest(
+                        bytes,
+                        local
+                            .get(key)
+                            .and_then(|digests| digests.get(*dimension))
+                            .expect("local digest was computed"),
+                    );
+                    push_u32(bytes, component_index as u32);
+                    push_digest(
+                        bytes,
+                        component_tree[component_index]
+                            .get(*dimension)
+                            .expect("component tree digest was computed"),
+                    );
+                })?,
+            );
+        }
+        node_tree.insert(key.clone(), digests);
+    }
+
+    let mut graph_digests = DimensionDigests::default();
+    for dimension in &policy.dimensions {
+        graph_digests.insert(
+            *dimension,
+            graph_digest_for_dimension(policy, graph, &node_tree, *dimension)?,
+        );
+    }
+
+    let nodes = graph
+        .nodes
+        .keys()
+        .map(|key| {
+            (
+                key.clone(),
+                ShapeNodeHashes {
+                    local: local.get(key).expect("local digest was computed").clone(),
+                    tree: node_tree
+                        .get(key)
+                        .expect("node tree digest was computed")
+                        .clone(),
+                    component: Some(
+                        component_tree[*component_by_node
+                            .get(key)
+                            .expect("component exists for every node")]
+                        .clone(),
+                    ),
+                },
+            )
+        })
+        .collect();
+    let components = components
+        .into_iter()
+        .enumerate()
+        .map(|(component_index, members)| ShapeComponentHash {
+            component_index: component_index as u32,
+            members,
+            digests: component_tree[component_index].clone(),
+        })
+        .collect();
+
+    Ok(ShapeGraphHashes {
+        policy_id: policy.policy_id(),
+        nodes,
+        components,
         graph: graph_digests,
     })
 }
@@ -849,6 +984,381 @@ fn children_by_parent(graph: &ShapeGraph) -> BTreeMap<ShapeNodeKey, Vec<&ShapeCh
         });
     }
     children_by_parent
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RecursiveEdgeRecord {
+    source: ShapeNodeKey,
+    target: ShapeNodeKey,
+    label: String,
+    role: &'static str,
+}
+
+fn recursive_edges(graph: &ShapeGraph) -> Vec<RecursiveEdgeRecord> {
+    let mut edges = Vec::new();
+    for child in &graph.children {
+        edges.push(RecursiveEdgeRecord {
+            source: child.parent.clone(),
+            target: child.child.clone(),
+            label: child.label.as_str().to_string(),
+            role: "child",
+        });
+    }
+    for edge in &graph.edges {
+        if edge.role.is_recursive() {
+            edges.push(RecursiveEdgeRecord {
+                source: edge.source.clone(),
+                target: edge.target.clone(),
+                label: edge.label.as_str().to_string(),
+                role: edge.role.as_str(),
+            });
+        }
+    }
+    edges.sort_by(|left, right| {
+        (
+            left.source.canonical_key(),
+            left.role,
+            left.label.as_str(),
+            left.target.canonical_key(),
+        )
+            .cmp(&(
+                right.source.canonical_key(),
+                right.role,
+                right.label.as_str(),
+                right.target.canonical_key(),
+            ))
+    });
+    edges
+}
+
+fn recursive_successors(
+    edges: &[RecursiveEdgeRecord],
+) -> BTreeMap<ShapeNodeKey, Vec<ShapeNodeKey>> {
+    let mut successors: BTreeMap<ShapeNodeKey, Vec<ShapeNodeKey>> = BTreeMap::new();
+    for edge in edges {
+        successors
+            .entry(edge.source.clone())
+            .or_default()
+            .push(edge.target.clone());
+    }
+    for targets in successors.values_mut() {
+        targets.sort_by_key(ShapeNodeKey::canonical_key);
+        targets.dedup();
+    }
+    successors
+}
+
+fn ensure_recursive_edges_acyclic(graph: &ShapeGraph) -> Result<(), ShapeError> {
+    let successors = recursive_successors(&recursive_edges(graph));
+    let mut marks = BTreeMap::new();
+    for key in graph.nodes.keys() {
+        ensure_recursive_node_acyclic(key, &successors, &mut marks)?;
+    }
+    Ok(())
+}
+
+fn ensure_recursive_node_acyclic(
+    key: &ShapeNodeKey,
+    successors: &BTreeMap<ShapeNodeKey, Vec<ShapeNodeKey>>,
+    marks: &mut BTreeMap<ShapeNodeKey, VisitMark>,
+) -> Result<(), ShapeError> {
+    match marks.get(key) {
+        Some(VisitMark::Done) => return Ok(()),
+        Some(VisitMark::Visiting) => {
+            return Err(ShapeError::CycleDetected {
+                key: key.canonical_key(),
+            });
+        }
+        None => {}
+    }
+    marks.insert(key.clone(), VisitMark::Visiting);
+    if let Some(targets) = successors.get(key) {
+        for target in targets {
+            ensure_recursive_node_acyclic(target, successors, marks)?;
+        }
+    }
+    marks.insert(key.clone(), VisitMark::Done);
+    Ok(())
+}
+
+fn strongly_connected_components(
+    graph: &ShapeGraph,
+    edges: &[RecursiveEdgeRecord],
+) -> Vec<Vec<ShapeNodeKey>> {
+    struct Tarjan<'a> {
+        next_index: usize,
+        stack: Vec<ShapeNodeKey>,
+        on_stack: BTreeSet<ShapeNodeKey>,
+        indices: BTreeMap<ShapeNodeKey, usize>,
+        lowlinks: BTreeMap<ShapeNodeKey, usize>,
+        successors: BTreeMap<ShapeNodeKey, Vec<ShapeNodeKey>>,
+        components: Vec<Vec<ShapeNodeKey>>,
+        graph: &'a ShapeGraph,
+    }
+
+    impl Tarjan<'_> {
+        fn visit(&mut self, node: ShapeNodeKey) {
+            self.indices.insert(node.clone(), self.next_index);
+            self.lowlinks.insert(node.clone(), self.next_index);
+            self.next_index += 1;
+            self.stack.push(node.clone());
+            self.on_stack.insert(node.clone());
+
+            for successor in self.successors.get(&node).cloned().unwrap_or_default() {
+                if !self.graph.nodes.contains_key(&successor) {
+                    continue;
+                }
+                if !self.indices.contains_key(&successor) {
+                    self.visit(successor.clone());
+                    let successor_lowlink = self.lowlinks[&successor];
+                    let node_lowlink = self.lowlinks[&node];
+                    self.lowlinks
+                        .insert(node.clone(), node_lowlink.min(successor_lowlink));
+                } else if self.on_stack.contains(&successor) {
+                    let successor_index = self.indices[&successor];
+                    let node_lowlink = self.lowlinks[&node];
+                    self.lowlinks
+                        .insert(node.clone(), node_lowlink.min(successor_index));
+                }
+            }
+
+            if self.lowlinks[&node] == self.indices[&node] {
+                let mut component = Vec::new();
+                loop {
+                    let member = self.stack.pop().expect("tarjan stack contains node");
+                    self.on_stack.remove(&member);
+                    component.push(member.clone());
+                    if member == node {
+                        break;
+                    }
+                }
+                component.sort_by_key(ShapeNodeKey::canonical_key);
+                self.components.push(component);
+            }
+        }
+    }
+
+    let mut tarjan = Tarjan {
+        next_index: 0,
+        stack: Vec::new(),
+        on_stack: BTreeSet::new(),
+        indices: BTreeMap::new(),
+        lowlinks: BTreeMap::new(),
+        successors: recursive_successors(edges),
+        components: Vec::new(),
+        graph,
+    };
+    for key in graph.nodes.keys() {
+        if !tarjan.indices.contains_key(key) {
+            tarjan.visit(key.clone());
+        }
+    }
+    tarjan
+        .components
+        .sort_by_key(|component| component[0].canonical_key());
+    tarjan.components
+}
+
+fn component_local_digests(
+    policy: &ShapeHashPolicy,
+    components: &[Vec<ShapeNodeKey>],
+    component_by_node: &BTreeMap<ShapeNodeKey, usize>,
+    recursive_edges: &[RecursiveEdgeRecord],
+    local: &BTreeMap<ShapeNodeKey, DimensionDigests>,
+) -> Result<Vec<DimensionDigests>, ShapeError> {
+    let mut result = Vec::new();
+    for (component_index, members) in components.iter().enumerate() {
+        let internal_edges = recursive_edges
+            .iter()
+            .filter(|edge| {
+                component_by_node.get(&edge.source) == Some(&component_index)
+                    && component_by_node.get(&edge.target) == Some(&component_index)
+            })
+            .collect::<Vec<_>>();
+        let mut digests = DimensionDigests::default();
+        for dimension in &policy.dimensions {
+            digests.insert(
+                *dimension,
+                digest_record(policy, *dimension, "component.local", |bytes| {
+                    push_u32(bytes, members.len() as u32);
+                    for member in members {
+                        if policy.view_mode == ShapeViewMode::IdentityBound {
+                            push_node_key(bytes, member);
+                        }
+                        push_digest(
+                            bytes,
+                            local
+                                .get(member)
+                                .and_then(|digests| digests.get(*dimension))
+                                .expect("member local digest was computed"),
+                        );
+                    }
+                    if *dimension == ShapeDimension::Structure {
+                        push_u32(bytes, internal_edges.len() as u32);
+                        for edge in &internal_edges {
+                            if policy.view_mode == ShapeViewMode::IdentityBound {
+                                push_node_key(bytes, &edge.source);
+                                push_node_key(bytes, &edge.target);
+                            }
+                            push_str(bytes, edge.role);
+                            push_str(bytes, &edge.label);
+                            push_digest(
+                                bytes,
+                                local
+                                    .get(&edge.source)
+                                    .and_then(|digests| digests.get(*dimension))
+                                    .expect("source local digest was computed"),
+                            );
+                            push_digest(
+                                bytes,
+                                local
+                                    .get(&edge.target)
+                                    .and_then(|digests| digests.get(*dimension))
+                                    .expect("target local digest was computed"),
+                            );
+                        }
+                    } else {
+                        push_u32(bytes, 0);
+                    }
+                })?,
+            );
+        }
+        result.push(digests);
+    }
+    Ok(result)
+}
+
+fn component_tree_digests(
+    policy: &ShapeHashPolicy,
+    components: &[Vec<ShapeNodeKey>],
+    component_by_node: &BTreeMap<ShapeNodeKey, usize>,
+    recursive_edges: &[RecursiveEdgeRecord],
+    component_local: &[DimensionDigests],
+) -> Result<Vec<DimensionDigests>, ShapeError> {
+    let mut outgoing: BTreeMap<usize, Vec<(usize, RecursiveEdgeRecord)>> = BTreeMap::new();
+    for edge in recursive_edges {
+        let Some(source_component) = component_by_node.get(&edge.source).copied() else {
+            continue;
+        };
+        let Some(target_component) = component_by_node.get(&edge.target).copied() else {
+            continue;
+        };
+        if source_component != target_component {
+            outgoing
+                .entry(source_component)
+                .or_default()
+                .push((target_component, edge.clone()));
+        }
+    }
+    for edges in outgoing.values_mut() {
+        edges.sort_by(|left, right| {
+            (
+                left.0,
+                left.1.role,
+                left.1.label.as_str(),
+                left.1.source.canonical_key(),
+                left.1.target.canonical_key(),
+            )
+                .cmp(&(
+                    right.0,
+                    right.1.role,
+                    right.1.label.as_str(),
+                    right.1.source.canonical_key(),
+                    right.1.target.canonical_key(),
+                ))
+        });
+    }
+
+    let mut cache = BTreeMap::new();
+    let mut marks = BTreeMap::new();
+    for index in 0..components.len() {
+        component_tree_digest_for_index(
+            policy,
+            index,
+            &outgoing,
+            component_local,
+            &mut cache,
+            &mut marks,
+        )?;
+    }
+    Ok((0..components.len())
+        .map(|index| {
+            cache
+                .get(&index)
+                .expect("component digest was computed")
+                .clone()
+        })
+        .collect())
+}
+
+fn component_tree_digest_for_index(
+    policy: &ShapeHashPolicy,
+    index: usize,
+    outgoing: &BTreeMap<usize, Vec<(usize, RecursiveEdgeRecord)>>,
+    component_local: &[DimensionDigests],
+    cache: &mut BTreeMap<usize, DimensionDigests>,
+    marks: &mut BTreeMap<usize, VisitMark>,
+) -> Result<DimensionDigests, ShapeError> {
+    if let Some(cached) = cache.get(&index) {
+        return Ok(cached.clone());
+    }
+    if marks.get(&index) == Some(&VisitMark::Visiting) {
+        return Err(ShapeError::CycleDetected {
+            key: format!("component:{index}"),
+        });
+    }
+    marks.insert(index, VisitMark::Visiting);
+    let child_trees = outgoing
+        .get(&index)
+        .map(|edges| {
+            edges
+                .iter()
+                .map(|(target, edge)| {
+                    component_tree_digest_for_index(
+                        policy,
+                        *target,
+                        outgoing,
+                        component_local,
+                        cache,
+                        marks,
+                    )
+                    .map(|digests| (*target, edge, digests))
+                })
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .transpose()?
+        .unwrap_or_default();
+
+    let mut digests = DimensionDigests::default();
+    for dimension in &policy.dimensions {
+        digests.insert(
+            *dimension,
+            digest_record(policy, *dimension, "component.tree", |bytes| {
+                push_digest(
+                    bytes,
+                    component_local[index]
+                        .get(*dimension)
+                        .expect("component local digest was computed"),
+                );
+                push_u32(bytes, child_trees.len() as u32);
+                for (_target, edge, child_digests) in &child_trees {
+                    if *dimension == ShapeDimension::Structure {
+                        push_str(bytes, edge.role);
+                        push_str(bytes, &edge.label);
+                    }
+                    push_digest(
+                        bytes,
+                        child_digests
+                            .get(*dimension)
+                            .expect("component child digest was computed"),
+                    );
+                }
+            })?,
+        );
+    }
+    marks.insert(index, VisitMark::Done);
+    cache.insert(index, digests.clone());
+    Ok(digests)
 }
 
 fn graph_digest_for_dimension(
@@ -1270,6 +1780,104 @@ mod tests {
             hash_acyclic_shape_graph(&policy(ShapeViewMode::IdentityBound), &graph),
             Err(ShapeError::CycleDetected { .. })
         ));
+    }
+
+    #[test]
+    fn dependency_cycles_are_rejected_in_reject_mode() {
+        let mut graph = graph();
+        let a = ShapeNodeKey::entity(origin("mir.block", "demo", "block:a"));
+        let b = ShapeNodeKey::entity(origin("mir.block", "demo", "block:b"));
+        graph.add_node(a.clone(), "block").unwrap();
+        graph.add_node(b.clone(), "block").unwrap();
+        graph
+            .add_edge(&a, "cfg:next", &b, ShapeEdgeRole::Dependency)
+            .unwrap();
+        graph
+            .add_edge(&b, "cfg:back", &a, ShapeEdgeRole::Dependency)
+            .unwrap();
+
+        assert!(matches!(
+            hash_acyclic_shape_graph(&policy(ShapeViewMode::IdentityBound), &graph),
+            Err(ShapeError::CycleDetected { .. })
+        ));
+    }
+
+    #[test]
+    fn condense_scc_hashes_dependency_cycle_deterministically() {
+        let mut first = graph();
+        let mut second = graph();
+        let a = ShapeNodeKey::entity(origin("mir.block", "demo", "block:a"));
+        let b = ShapeNodeKey::entity(origin("mir.block", "demo", "block:b"));
+        for graph in [&mut first, &mut second] {
+            graph.add_node(a.clone(), "block").unwrap();
+            graph.add_node(b.clone(), "block").unwrap();
+        }
+        first
+            .add_edge(&a, "cfg:next", &b, ShapeEdgeRole::Dependency)
+            .unwrap();
+        first
+            .add_edge(&b, "cfg:back", &a, ShapeEdgeRole::Dependency)
+            .unwrap();
+        second
+            .add_edge(&b, "cfg:back", &a, ShapeEdgeRole::Dependency)
+            .unwrap();
+        second
+            .add_edge(&a, "cfg:next", &b, ShapeEdgeRole::Dependency)
+            .unwrap();
+
+        let policy = ShapeHashPolicy::new(
+            "mir",
+            ShapeViewMode::IdentityBound,
+            ShapeCyclePolicy::CondenseScc,
+        )
+        .unwrap();
+        let first_hashes = hash_shape_graph(&policy, &first).unwrap();
+        let second_hashes = hash_shape_graph(&policy, &second).unwrap();
+
+        assert_eq!(first_hashes.components.len(), 1);
+        assert_eq!(
+            first_hashes.graph.get(ShapeDimension::Structure),
+            second_hashes.graph.get(ShapeDimension::Structure)
+        );
+    }
+
+    #[test]
+    fn condense_scc_edge_labels_and_direction_are_hash_sensitive() {
+        let mut base = graph();
+        let mut relabeled = graph();
+        let a = ShapeNodeKey::entity(origin("mir.block", "demo", "block:a"));
+        let b = ShapeNodeKey::entity(origin("mir.block", "demo", "block:b"));
+        for graph in [&mut base, &mut relabeled] {
+            graph.add_node(a.clone(), "block").unwrap();
+            graph.add_node(b.clone(), "block").unwrap();
+        }
+        base.add_edge(&a, "cfg:next", &b, ShapeEdgeRole::Dependency)
+            .unwrap();
+        base.add_edge(&b, "cfg:back", &a, ShapeEdgeRole::Dependency)
+            .unwrap();
+        relabeled
+            .add_edge(&a, "cfg:else", &b, ShapeEdgeRole::Dependency)
+            .unwrap();
+        relabeled
+            .add_edge(&b, "cfg:back", &a, ShapeEdgeRole::Dependency)
+            .unwrap();
+
+        let policy = ShapeHashPolicy::new(
+            "mir",
+            ShapeViewMode::IdentityBound,
+            ShapeCyclePolicy::CondenseScc,
+        )
+        .unwrap();
+        assert_ne!(
+            hash_shape_graph(&policy, &base)
+                .unwrap()
+                .graph
+                .get(ShapeDimension::Structure),
+            hash_shape_graph(&policy, &relabeled)
+                .unwrap()
+                .graph
+                .get(ShapeDimension::Structure)
+        );
     }
 
     #[test]
