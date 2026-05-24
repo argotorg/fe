@@ -12,6 +12,7 @@ pub mod layout;
 pub mod options;
 pub mod origin;
 pub mod paths;
+pub mod shape;
 pub mod stdlib;
 pub mod urlext;
 
