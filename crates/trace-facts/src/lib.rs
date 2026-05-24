@@ -13,4 +13,7 @@ pub use jsonl::{
     TraceDataSource, TraceJsonlRecord, TraceMetadata, read_trace_bundle_jsonl,
     read_trace_facts_jsonl,
 };
-pub use validate::{TraceValidationError, TraceValidationSummary, TraceValidator};
+pub use validate::{
+    TraceValidationDiagnostic, TraceValidationError, TraceValidationInfo, TraceValidationLevel,
+    TraceValidationReport, TraceValidationSummary, TraceValidationWarning, TraceValidator,
+};

@@ -9,7 +9,7 @@ use trace_facts::{
     InstructionCategory, InstructionCategoryFact, InstructionFact, JsonlTraceReader,
     JsonlTraceSink, LoopDerivation, LoopMembershipFact, OriginEdgeFact, OriginEdgeLabel,
     OriginNodeFact, OriginNodeKind, StorageFact, StorageLocation, StorageReason, TraceBundle,
-    TraceDataSource, TraceFact, TraceMetadata, TraceValidationSummary, TraceValidator,
+    TraceDataSource, TraceFact, TraceMetadata, TraceValidationReport, TraceValidator,
 };
 
 use crate::{
@@ -71,9 +71,11 @@ fn run_fixture_explain_local(args: &TraceFixtureExplainLocalArgs) -> Result<Stri
 
 fn run_trace_validate(args: &DevTraceInputArgs) -> Result<String, String> {
     let bundle = read_trace_bundle_jsonl_from_path(&args.from)?;
-    let summary = TraceValidator::validate(&bundle.facts)
-        .map_err(|err| format!("trace validation failed: {err}"))?;
-    Ok(render_validation_summary(&bundle, &summary))
+    let report = TraceValidator::check(&bundle.facts);
+    if let Some(error) = report.first_error() {
+        return Err(format!("trace validation failed: {error}"));
+    }
+    Ok(render_validation_summary(&bundle, &report))
 }
 
 fn run_trace_loop_cost(args: &DevTraceInputArgs) -> Result<String, String> {
@@ -134,7 +136,7 @@ fn write_trace_bundle_jsonl(path: &Utf8PathBuf, bundle: &TraceBundle) -> Result<
         .map_err(|err| format!("failed to flush trace JSONL {path}: {err}"))
 }
 
-fn render_validation_summary(bundle: &TraceBundle, summary: &TraceValidationSummary) -> String {
+fn render_validation_summary(bundle: &TraceBundle, report: &TraceValidationReport) -> String {
     format!(
         "Trace validation: passed\n\
          Data source: {}\n\
@@ -145,16 +147,20 @@ fn render_validation_summary(bundle: &TraceBundle, summary: &TraceValidationSumm
          Facts: {}\n\
          Origin nodes: {}\n\
          Origin edges: {}\n\
-         Instructions: {}\n",
+         Instructions: {}\n\
+         Diagnostics: {} error, {} warning, {} info\n",
         format_data_source(&bundle.metadata),
         bundle.metadata.schema_version,
         bundle.metadata.compiler_commit,
         bundle.metadata.target,
         bundle.metadata.input_path,
-        summary.fact_count,
-        summary.node_count,
-        summary.edge_count,
-        summary.instruction_count
+        report.summary.fact_count,
+        report.summary.node_count,
+        report.summary.edge_count,
+        report.summary.instruction_count,
+        report.error_count(),
+        report.warning_count(),
+        report.info_count()
     )
 }
 

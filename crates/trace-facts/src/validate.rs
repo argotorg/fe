@@ -3,7 +3,11 @@ use std::fmt;
 
 use common::origin::OriginExportKey;
 
-use crate::fact::{InlineContextFact, LoopMembershipFact, OriginEdgeFact, StorageFact, TraceFact};
+use crate::fact::{
+    CategorySource, CompilerEventFact, CompilerPhase, InlineContextFact, InstructionCategoryFact,
+    InstructionFact, LoopDerivation, LoopMembershipFact, OriginEdgeFact, OriginNodeFact,
+    StorageFact, StorageLocation, TraceFact,
+};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TraceValidationSummary {
@@ -13,10 +17,96 @@ pub struct TraceValidationSummary {
     pub instruction_count: usize,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TraceValidationReport {
+    pub summary: TraceValidationSummary,
+    pub diagnostics: Vec<TraceValidationDiagnostic>,
+}
+
+impl TraceValidationReport {
+    pub fn first_error(&self) -> Option<&TraceValidationError> {
+        self.diagnostics.iter().find_map(|diagnostic| {
+            if let TraceValidationDiagnostic::Error(error) = diagnostic {
+                Some(error)
+            } else {
+                None
+            }
+        })
+    }
+
+    pub fn error_count(&self) -> usize {
+        self.diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.level() == TraceValidationLevel::Error)
+            .count()
+    }
+
+    pub fn warning_count(&self) -> usize {
+        self.diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.level() == TraceValidationLevel::Warning)
+            .count()
+    }
+
+    pub fn info_count(&self) -> usize {
+        self.diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.level() == TraceValidationLevel::Info)
+            .count()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TraceValidationLevel {
+    Error,
+    Warning,
+    Info,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TraceValidationDiagnostic {
+    Error(TraceValidationError),
+    Warning(TraceValidationWarning),
+    Info(TraceValidationInfo),
+}
+
+impl TraceValidationDiagnostic {
+    pub const fn level(&self) -> TraceValidationLevel {
+        match self {
+            Self::Error(_) => TraceValidationLevel::Error,
+            Self::Warning(_) => TraceValidationLevel::Warning,
+            Self::Info(_) => TraceValidationLevel::Info,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TraceValidationWarning {
+    UnknownInstructionCategory { instruction: OriginExportKey },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TraceValidationInfo {
+    PosthocInstructionCategory {
+        instruction: OriginExportKey,
+        version: String,
+    },
+}
+
 pub struct TraceValidator;
 
 impl TraceValidator {
     pub fn validate(facts: &[TraceFact]) -> Result<TraceValidationSummary, TraceValidationError> {
+        let report = Self::check(facts);
+        if let Some(error) = report.first_error() {
+            Err(error.clone())
+        } else {
+            Ok(report.summary)
+        }
+    }
+
+    pub fn check(facts: &[TraceFact]) -> TraceValidationReport {
+        let mut diagnostics = Vec::new();
         let mut nodes = BTreeSet::new();
         let mut edges = Vec::new();
         let mut storage = Vec::new();
@@ -29,153 +119,362 @@ impl TraceValidator {
         for fact in facts {
             match fact {
                 TraceFact::OriginNode(node) => {
+                    validate_origin_node(node, &mut diagnostics);
                     if !nodes.insert(node.key.clone()) {
-                        return Err(TraceValidationError::DuplicateOriginNode {
-                            key: node.key.clone(),
-                        });
+                        push_error(
+                            &mut diagnostics,
+                            TraceValidationError::DuplicateOriginNode {
+                                key: node.key.clone(),
+                            },
+                        );
                     }
                 }
                 TraceFact::OriginEdge(edge) => edges.push(edge),
                 TraceFact::CompilerEvent(event) => compiler_events.push(event),
                 TraceFact::Storage(storage_fact) => storage.push(storage_fact),
                 TraceFact::Instruction(instruction) => instructions.push(instruction),
-                TraceFact::InstructionCategory(category) => {
-                    instruction_categories.push(&category.instruction)
-                }
+                TraceFact::InstructionCategory(category) => instruction_categories.push(category),
                 TraceFact::LoopMembership(membership) => loop_memberships.push(membership),
                 TraceFact::InlineContext(context) => inline_contexts.push(context),
             }
         }
 
         let mut instruction_owners = BTreeMap::new();
+        let mut instruction_sites = BTreeMap::new();
+        let mut instruction_keys = BTreeSet::new();
         for instruction in &instructions {
-            require_node(&nodes, &instruction.instruction, "instruction")?;
-            require_node(&nodes, &instruction.function, "instruction.function")?;
+            validate_instruction(instruction, &mut diagnostics);
+            require_node(
+                &nodes,
+                &instruction.instruction,
+                "instruction",
+                &mut diagnostics,
+            );
+            require_node(
+                &nodes,
+                &instruction.function,
+                "instruction.function",
+                &mut diagnostics,
+            );
+            if !instruction_keys.insert(instruction.instruction.clone()) {
+                push_error(
+                    &mut diagnostics,
+                    TraceValidationError::DuplicateInstruction {
+                        instruction: instruction.instruction.clone(),
+                    },
+                );
+            }
             match instruction_owners.insert(
                 instruction.instruction.clone(),
                 instruction.function.clone(),
             ) {
                 Some(existing) if existing != instruction.function => {
-                    return Err(TraceValidationError::InstructionHasMultipleFunctions {
-                        instruction: instruction.instruction.clone(),
-                        first_function: existing,
-                        second_function: instruction.function.clone(),
-                    });
+                    push_error(
+                        &mut diagnostics,
+                        TraceValidationError::InstructionHasMultipleFunctions {
+                            instruction: instruction.instruction.clone(),
+                            first_function: existing,
+                            second_function: instruction.function.clone(),
+                        },
+                    );
                 }
                 _ => {}
             }
-        }
-
-        for edge in &edges {
-            validate_edge(edge, &nodes)?;
-        }
-        for storage_fact in storage {
-            validate_storage(storage_fact, &nodes)?;
-        }
-        for event in compiler_events {
-            require_node(&nodes, &event.event, "compiler_event.event")?;
-            for input in &event.inputs {
-                require_node(&nodes, input, "compiler_event.input")?;
-            }
-            for output in &event.outputs {
-                require_node(&nodes, output, "compiler_event.output")?;
-            }
-        }
-        for instruction in instruction_categories {
-            require_node(&nodes, instruction, "instruction_category.instruction")?;
-            if !instruction_owners.contains_key(instruction) {
-                return Err(
-                    TraceValidationError::InstructionCategoryWithoutInstruction {
-                        instruction: instruction.clone(),
+            let site = (instruction.function.clone(), instruction.index);
+            if let Some(first_instruction) =
+                instruction_sites.insert(site, instruction.instruction.clone())
+            {
+                push_error(
+                    &mut diagnostics,
+                    TraceValidationError::DuplicateInstructionSite {
+                        function: instruction.function.clone(),
+                        index: instruction.index,
+                        first_instruction,
+                        second_instruction: instruction.instruction.clone(),
                     },
                 );
             }
         }
+
+        for edge in &edges {
+            validate_edge(edge, &nodes, &mut diagnostics);
+        }
+        for storage_fact in storage {
+            validate_storage(storage_fact, &nodes, &mut diagnostics);
+        }
+        for event in compiler_events {
+            validate_compiler_event(event, &nodes, &mut diagnostics);
+        }
+        for category in instruction_categories {
+            validate_instruction_category(category, &nodes, &instruction_owners, &mut diagnostics);
+        }
         for membership in loop_memberships {
-            validate_loop_membership(membership, &nodes, &instruction_owners)?;
+            validate_loop_membership(membership, &nodes, &instruction_owners, &mut diagnostics);
         }
         for context in inline_contexts {
-            validate_inline_context(context, &nodes)?;
+            validate_inline_context(context, &nodes, &mut diagnostics);
         }
 
-        Ok(TraceValidationSummary {
-            fact_count: facts.len(),
-            node_count: nodes.len(),
-            edge_count: edges.len(),
-            instruction_count: instructions.len(),
-        })
+        TraceValidationReport {
+            summary: TraceValidationSummary {
+                fact_count: facts.len(),
+                node_count: nodes.len(),
+                edge_count: edges.len(),
+                instruction_count: instructions.len(),
+            },
+            diagnostics,
+        }
+    }
+}
+
+fn validate_origin_node(node: &OriginNodeFact, diagnostics: &mut Vec<TraceValidationDiagnostic>) {
+    if node.kind.as_str().trim().is_empty() {
+        push_error(
+            diagnostics,
+            TraceValidationError::EmptyOriginNodeKind {
+                key: node.key.clone(),
+            },
+        );
+    }
+}
+
+fn validate_instruction(
+    instruction: &InstructionFact,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    if instruction.mnemonic.trim().is_empty() {
+        push_error(
+            diagnostics,
+            TraceValidationError::EmptyInstructionMnemonic {
+                instruction: instruction.instruction.clone(),
+            },
+        );
     }
 }
 
 fn validate_edge(
     edge: &OriginEdgeFact,
     nodes: &BTreeSet<OriginExportKey>,
-) -> Result<(), TraceValidationError> {
-    require_node(nodes, &edge.from, "origin_edge.from")?;
-    require_node(nodes, &edge.to, "origin_edge.to")
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    require_node(nodes, &edge.from, "origin_edge.from", diagnostics);
+    require_node(nodes, &edge.to, "origin_edge.to", diagnostics);
 }
 
 fn validate_storage(
     storage: &StorageFact,
     nodes: &BTreeSet<OriginExportKey>,
-) -> Result<(), TraceValidationError> {
-    require_node(nodes, &storage.subject, "storage.subject")
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    require_node(nodes, &storage.subject, "storage.subject", diagnostics);
+    match &storage.location {
+        StorageLocation::VirtualRegister(name) if name.trim().is_empty() => {
+            push_error(
+                diagnostics,
+                TraceValidationError::EmptyRegisterName {
+                    subject: storage.subject.clone(),
+                    location_kind: "virtual_register",
+                },
+            );
+        }
+        StorageLocation::PhysicalRegister(name) if name.trim().is_empty() => {
+            push_error(
+                diagnostics,
+                TraceValidationError::EmptyRegisterName {
+                    subject: storage.subject.clone(),
+                    location_kind: "physical_register",
+                },
+            );
+        }
+        _ => {}
+    }
+    if !valid_storage_phase_location(storage.phase, &storage.location) {
+        push_error(
+            diagnostics,
+            TraceValidationError::InvalidStoragePhaseLocation {
+                subject: storage.subject.clone(),
+                phase: storage.phase,
+                location: storage.location.clone(),
+            },
+        );
+    }
+}
+
+fn validate_compiler_event(
+    event: &CompilerEventFact,
+    nodes: &BTreeSet<OriginExportKey>,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    require_node(nodes, &event.event, "compiler_event.event", diagnostics);
+    for input in &event.inputs {
+        require_node(nodes, input, "compiler_event.input", diagnostics);
+    }
+    for output in &event.outputs {
+        require_node(nodes, output, "compiler_event.output", diagnostics);
+    }
+    if let Some(reason) = &event.reason
+        && reason.as_str().trim().is_empty()
+    {
+        push_error(
+            diagnostics,
+            TraceValidationError::EmptyCompilerReason {
+                event: event.event.clone(),
+            },
+        );
+    }
+}
+
+fn validate_instruction_category(
+    category: &InstructionCategoryFact,
+    nodes: &BTreeSet<OriginExportKey>,
+    instruction_owners: &BTreeMap<OriginExportKey, OriginExportKey>,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    require_node(
+        nodes,
+        &category.instruction,
+        "instruction_category.instruction",
+        diagnostics,
+    );
+    if !instruction_owners.contains_key(&category.instruction) {
+        push_error(
+            diagnostics,
+            TraceValidationError::InstructionCategoryWithoutInstruction {
+                instruction: category.instruction.clone(),
+            },
+        );
+    }
+    match &category.source {
+        CategorySource::PosthocClassifier { version } if version.trim().is_empty() => {
+            push_error(
+                diagnostics,
+                TraceValidationError::EmptyPosthocClassifierVersion {
+                    instruction: category.instruction.clone(),
+                },
+            );
+        }
+        CategorySource::PosthocClassifier { version } => {
+            diagnostics.push(TraceValidationDiagnostic::Info(
+                TraceValidationInfo::PosthocInstructionCategory {
+                    instruction: category.instruction.clone(),
+                    version: version.clone(),
+                },
+            ));
+        }
+        _ => {}
+    }
 }
 
 fn validate_loop_membership(
     membership: &LoopMembershipFact,
     nodes: &BTreeSet<OriginExportKey>,
     instruction_owners: &BTreeMap<OriginExportKey, OriginExportKey>,
-) -> Result<(), TraceValidationError> {
-    require_node(nodes, &membership.loop_key, "loop_membership.loop_key")?;
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    require_node(
+        nodes,
+        &membership.loop_key,
+        "loop_membership.loop_key",
+        diagnostics,
+    );
     require_node(
         nodes,
         &membership.instruction,
         "loop_membership.instruction",
-    )?;
+        diagnostics,
+    );
     if !instruction_owners.contains_key(&membership.instruction) {
-        return Err(TraceValidationError::LoopMembershipWithoutInstruction {
-            instruction: membership.instruction.clone(),
-        });
+        push_error(
+            diagnostics,
+            TraceValidationError::LoopMembershipWithoutInstruction {
+                instruction: membership.instruction.clone(),
+            },
+        );
     }
-    Ok(())
+    if let LoopDerivation::NaturalLoopAnalysis { cfg_hash } = &membership.derived_from
+        && cfg_hash.trim().is_empty()
+    {
+        push_error(
+            diagnostics,
+            TraceValidationError::EmptyLoopCfgHash {
+                loop_key: membership.loop_key.clone(),
+            },
+        );
+    }
 }
 
 fn validate_inline_context(
     context: &InlineContextFact,
     nodes: &BTreeSet<OriginExportKey>,
-) -> Result<(), TraceValidationError> {
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
     require_node(
         nodes,
         &context.inline_instance,
         "inline_context.inline_instance",
-    )?;
+        diagnostics,
+    );
     require_node(
         nodes,
         &context.caller_function,
         "inline_context.caller_function",
-    )?;
+        diagnostics,
+    );
     require_node(
         nodes,
         &context.callee_function,
         "inline_context.callee_function",
-    )?;
-    require_node(nodes, &context.callsite, "inline_context.callsite")
+        diagnostics,
+    );
+    require_node(
+        nodes,
+        &context.callsite,
+        "inline_context.callsite",
+        diagnostics,
+    );
+}
+
+fn valid_storage_phase_location(phase: CompilerPhase, location: &StorageLocation) -> bool {
+    match location {
+        StorageLocation::SsaValue => matches!(
+            phase,
+            CompilerPhase::Mir | CompilerPhase::SonatinaPreOpt | CompilerPhase::SonatinaPostOpt
+        ),
+        StorageLocation::MemoryPlace => phase == CompilerPhase::Mir,
+        StorageLocation::StackSlot { .. } => {
+            matches!(
+                phase,
+                CompilerPhase::Backend | CompilerPhase::BytecodeEmission
+            )
+        }
+        StorageLocation::VirtualRegister(_) => matches!(
+            phase,
+            CompilerPhase::SonatinaPreOpt | CompilerPhase::SonatinaPostOpt | CompilerPhase::Backend
+        ),
+        StorageLocation::PhysicalRegister(_) => phase == CompilerPhase::Backend,
+        StorageLocation::Unknown => true,
+    }
 }
 
 fn require_node(
     nodes: &BTreeSet<OriginExportKey>,
     key: &OriginExportKey,
     role: &'static str,
-) -> Result<(), TraceValidationError> {
-    if nodes.contains(key) {
-        Ok(())
-    } else {
-        Err(TraceValidationError::MissingOriginNode {
-            role,
-            key: key.clone(),
-        })
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    if !nodes.contains(key) {
+        push_error(
+            diagnostics,
+            TraceValidationError::MissingOriginNode {
+                role,
+                key: key.clone(),
+            },
+        );
     }
+}
+
+fn push_error(diagnostics: &mut Vec<TraceValidationDiagnostic>, error: TraceValidationError) {
+    diagnostics.push(TraceValidationDiagnostic::Error(error));
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -183,20 +482,53 @@ pub enum TraceValidationError {
     DuplicateOriginNode {
         key: OriginExportKey,
     },
+    EmptyOriginNodeKind {
+        key: OriginExportKey,
+    },
     MissingOriginNode {
         role: &'static str,
         key: OriginExportKey,
+    },
+    DuplicateInstruction {
+        instruction: OriginExportKey,
+    },
+    DuplicateInstructionSite {
+        function: OriginExportKey,
+        index: u32,
+        first_instruction: OriginExportKey,
+        second_instruction: OriginExportKey,
+    },
+    EmptyInstructionMnemonic {
+        instruction: OriginExportKey,
     },
     InstructionHasMultipleFunctions {
         instruction: OriginExportKey,
         first_function: OriginExportKey,
         second_function: OriginExportKey,
     },
+    EmptyPosthocClassifierVersion {
+        instruction: OriginExportKey,
+    },
     InstructionCategoryWithoutInstruction {
         instruction: OriginExportKey,
     },
     LoopMembershipWithoutInstruction {
         instruction: OriginExportKey,
+    },
+    EmptyLoopCfgHash {
+        loop_key: OriginExportKey,
+    },
+    EmptyCompilerReason {
+        event: OriginExportKey,
+    },
+    EmptyRegisterName {
+        subject: OriginExportKey,
+        location_kind: &'static str,
+    },
+    InvalidStoragePhaseLocation {
+        subject: OriginExportKey,
+        phase: CompilerPhase,
+        location: StorageLocation,
     },
 }
 
@@ -206,6 +538,9 @@ impl fmt::Display for TraceValidationError {
             Self::DuplicateOriginNode { key } => {
                 write!(f, "duplicate origin node {}", key.display_label())
             }
+            Self::EmptyOriginNodeKind { key } => {
+                write!(f, "origin node {} has an empty kind", key.display_label())
+            }
             Self::MissingOriginNode { role, key } => {
                 write!(
                     f,
@@ -213,6 +548,26 @@ impl fmt::Display for TraceValidationError {
                     key.display_label()
                 )
             }
+            Self::DuplicateInstruction { instruction } => {
+                write!(f, "duplicate instruction {}", instruction.display_label())
+            }
+            Self::DuplicateInstructionSite {
+                function,
+                index,
+                first_instruction,
+                second_instruction,
+            } => write!(
+                f,
+                "function {} has multiple instructions at index {index}: {} and {}",
+                function.display_label(),
+                first_instruction.display_label(),
+                second_instruction.display_label()
+            ),
+            Self::EmptyInstructionMnemonic { instruction } => write!(
+                f,
+                "instruction {} has an empty mnemonic",
+                instruction.display_label()
+            ),
             Self::InstructionHasMultipleFunctions {
                 instruction,
                 first_function,
@@ -224,6 +579,11 @@ impl fmt::Display for TraceValidationError {
                 first_function.display_label(),
                 second_function.display_label()
             ),
+            Self::EmptyPosthocClassifierVersion { instruction } => write!(
+                f,
+                "instruction {} has an empty posthoc classifier version",
+                instruction.display_label()
+            ),
             Self::InstructionCategoryWithoutInstruction { instruction } => write!(
                 f,
                 "instruction category references {} but no instruction fact defines it",
@@ -233,6 +593,33 @@ impl fmt::Display for TraceValidationError {
                 f,
                 "loop membership references {} but no instruction fact defines it",
                 instruction.display_label()
+            ),
+            Self::EmptyLoopCfgHash { loop_key } => write!(
+                f,
+                "loop membership for {} has an empty CFG hash",
+                loop_key.display_label()
+            ),
+            Self::EmptyCompilerReason { event } => write!(
+                f,
+                "compiler event {} has an empty reason",
+                event.display_label()
+            ),
+            Self::EmptyRegisterName {
+                subject,
+                location_kind,
+            } => write!(
+                f,
+                "storage fact for {} has an empty {location_kind} name",
+                subject.display_label()
+            ),
+            Self::InvalidStoragePhaseLocation {
+                subject,
+                phase,
+                location,
+            } => write!(
+                f,
+                "storage fact for {} has invalid phase/location combination: {phase:?} with {location:?}",
+                subject.display_label()
             ),
         }
     }
@@ -248,7 +635,8 @@ mod tests {
         CategorySource, CompilerPhase, InlineContextFact, InstructionCategory,
         InstructionCategoryFact, InstructionFact, LoopDerivation, LoopMembershipFact,
         OriginEdgeFact, OriginEdgeLabel, OriginNodeFact, OriginNodeKind, StorageFact,
-        StorageLocation, StorageReason, TraceFact, TraceValidationError, TraceValidator,
+        StorageLocation, StorageReason, TraceFact, TraceValidationError, TraceValidationLevel,
+        TraceValidator,
     };
 
     fn key(kind: &str, owner: &str, local: &str) -> OriginExportKey {
@@ -362,5 +750,124 @@ mod tests {
             TraceValidator::validate(&facts),
             Err(TraceValidationError::InstructionCategoryWithoutInstruction { instruction })
         );
+    }
+
+    #[test]
+    fn validator_rejects_empty_instruction_mnemonic() {
+        let function = key("function", "fib", "recv");
+        let instruction = key("asm.inst", "fib", "inst:0");
+        let facts = vec![
+            node("function", "fib", "recv"),
+            node("asm.inst", "fib", "inst:0"),
+            TraceFact::Instruction(InstructionFact::new(instruction.clone(), function, 0, " ")),
+        ];
+
+        assert_eq!(
+            TraceValidator::validate(&facts),
+            Err(TraceValidationError::EmptyInstructionMnemonic { instruction })
+        );
+    }
+
+    #[test]
+    fn validator_rejects_duplicate_instruction_keys() {
+        let function = key("function", "fib", "recv");
+        let instruction = key("asm.inst", "fib", "inst:0");
+        let facts = vec![
+            node("function", "fib", "recv"),
+            node("asm.inst", "fib", "inst:0"),
+            TraceFact::Instruction(InstructionFact::new(
+                instruction.clone(),
+                function.clone(),
+                0,
+                "lw",
+            )),
+            TraceFact::Instruction(InstructionFact::new(instruction.clone(), function, 0, "lw")),
+        ];
+
+        assert_eq!(
+            TraceValidator::validate(&facts),
+            Err(TraceValidationError::DuplicateInstruction { instruction })
+        );
+    }
+
+    #[test]
+    fn validator_rejects_duplicate_function_instruction_indexes() {
+        let function = key("function", "fib", "recv");
+        let first = key("asm.inst", "fib", "inst:0");
+        let second = key("asm.inst", "fib", "inst:1");
+        let facts = vec![
+            node("function", "fib", "recv"),
+            node("asm.inst", "fib", "inst:0"),
+            node("asm.inst", "fib", "inst:1"),
+            TraceFact::Instruction(InstructionFact::new(
+                first.clone(),
+                function.clone(),
+                0,
+                "lw",
+            )),
+            TraceFact::Instruction(InstructionFact::new(
+                second.clone(),
+                function.clone(),
+                0,
+                "sw",
+            )),
+        ];
+
+        assert_eq!(
+            TraceValidator::validate(&facts),
+            Err(TraceValidationError::DuplicateInstructionSite {
+                function,
+                index: 0,
+                first_instruction: first,
+                second_instruction: second,
+            })
+        );
+    }
+
+    #[test]
+    fn validator_rejects_bad_storage_phase_location_pairs() {
+        let local = key("runtime.local", "fib", "local:b");
+        let facts = vec![
+            node("runtime.local", "fib", "local:b"),
+            TraceFact::Storage(StorageFact::new(
+                local.clone(),
+                CompilerPhase::Hir,
+                StorageLocation::StackSlot { offset: 0 },
+                StorageReason::FrameSlot,
+            )),
+        ];
+
+        assert_eq!(
+            TraceValidator::validate(&facts),
+            Err(TraceValidationError::InvalidStoragePhaseLocation {
+                subject: local,
+                phase: CompilerPhase::Hir,
+                location: StorageLocation::StackSlot { offset: 0 },
+            })
+        );
+    }
+
+    #[test]
+    fn validator_reports_info_for_posthoc_classification() {
+        let function = key("function", "fib", "recv");
+        let instruction = key("asm.inst", "fib", "inst:0");
+        let facts = vec![
+            node("function", "fib", "recv"),
+            node("asm.inst", "fib", "inst:0"),
+            TraceFact::Instruction(InstructionFact::new(instruction.clone(), function, 0, "lw")),
+            TraceFact::InstructionCategory(InstructionCategoryFact::new(
+                instruction,
+                InstructionCategory::StackLoad,
+                CategorySource::PosthocClassifier {
+                    version: "test-classifier".to_string(),
+                },
+            )),
+        ];
+
+        let report = TraceValidator::check(&facts);
+        assert_eq!(report.error_count(), 0);
+        assert_eq!(report.warning_count(), 0);
+        assert_eq!(report.info_count(), 1);
+        assert_eq!(report.diagnostics[0].level(), TraceValidationLevel::Info);
     }
 }
