@@ -318,11 +318,15 @@ pub fn emit_sonatina_trace_view_facts(
 
 /// Emit transitional Sonatina-surface CFG and lowering bridge facts from MIR.
 ///
-/// This predates the frontend-neutral Sonatina trace-view adapter and is kept as
-/// a compatibility bridge for tests that still exercise the MIR-derived
-/// projection. New real trace emission should prefer `emit_sonatina_trace_view_facts`.
-/// It must not be read as actual pass-level Sonatina instrumentation or as a
-/// target bytecode membership proof.
+/// Deprecated/test-only: this predates the frontend-neutral Sonatina
+/// `SonatinaTraceView` adapter and is kept only as a compatibility bridge for
+/// tests that still exercise the MIR-derived projection. Real trace emission
+/// uses `emit_sonatina_trace_view_facts`. This must not be read as actual
+/// pass-level Sonatina instrumentation or as a target bytecode membership proof.
+#[deprecated(
+    since = "26.1.0",
+    note = "use emit_sonatina_trace_view_facts; this MIR-derived Sonatina bridge is transitional/test-only"
+)]
 pub fn emit_sonatina_cfg_facts<'db>(
     db: &'db dyn mir::MirDb,
     package: mir::RuntimePackage<'db>,
@@ -1477,8 +1481,7 @@ mod tests {
         BytecodePcRange, BytecodeSourceMapEntry,
         trace::{
             bytecode_runtime_owner_key, emit_bytecode_instruction_facts, emit_codegen_facts,
-            emit_sonatina_cfg_facts, emit_sonatina_trace_view_facts,
-            frontend_origin_record_for_export_key,
+            emit_sonatina_trace_view_facts, frontend_origin_record_for_export_key,
         },
     };
 
@@ -1747,7 +1750,10 @@ fn main() -> u32 {
         let top_mod = db.top_mod(file);
         let package = mir::build_runtime_package(&db, top_mod).expect("runtime package");
         let mut facts = mir::trace::emit_mir_facts(&db, package);
-        facts.extend(emit_sonatina_cfg_facts(&db, package));
+        #[allow(deprecated)]
+        {
+            facts.extend(super::emit_sonatina_cfg_facts(&db, package));
+        }
 
         TraceValidator::validate(&facts).unwrap();
         assert!(facts.iter().any(|fact| matches!(
