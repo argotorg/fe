@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "policy": {
+    "algorithm": "blake3-256",
+    "dimensions": ["structure", "names", "constants", "types", "trace_events"],
+    "view_modes": ["identity_bound", "anonymous_shape"],
+    "cycle_policies": ["reject", "non_recursive_graph_edges", "condense_scc"]
+  },
+  "fixtures": [
+    {
+      "name": "rename_only",
+      "mutation": "local name b -> c",
+      "changed_dimensions": ["names"],
+      "unchanged_dimensions": ["structure", "constants", "types", "trace_events"],
+      "identity_bound_changes": true,
+      "anonymous_structure_changes": false
+    },
+    {
+      "name": "literal_only",
+      "mutation": "integer literal 1 -> 2",
+      "changed_dimensions": ["constants"],
+      "unchanged_dimensions": ["structure", "names", "types", "trace_events"],
+      "identity_bound_changes": false,
+      "anonymous_structure_changes": false
+    },
+    {
+      "name": "type_only",
+      "mutation": "u32 -> u64",
+      "changed_dimensions": ["types"],
+      "unchanged_dimensions": ["names", "constants", "trace_events"],
+      "structure_change_policy": "adapter_declared",
+      "identity_bound_changes": false,
+      "anonymous_structure_changes": false
+    },
+    {
+      "name": "child_order",
+      "mutation": "swap ordered child expressions",
+      "changed_dimensions": ["structure"],
+      "unchanged_dimensions": ["names", "constants", "types", "trace_events"],
+      "identity_bound_changes": true,
+      "anonymous_structure_changes": true
+    },
+    {
+      "name": "child_label",
+      "mutation": "child label then -> else",
+      "changed_dimensions": ["structure"],
+      "unchanged_dimensions": ["names", "constants", "types", "trace_events"],
+      "identity_bound_changes": true,
+      "anonymous_structure_changes": true
+    },
+    {
+      "name": "graph_edge_order",
+      "mutation": "insert graph edges in reverse order",
+      "changed_dimensions": [],
+      "unchanged_dimensions": ["structure", "names", "constants", "types", "trace_events"],
+      "identity_bound_changes": false,
+      "anonymous_structure_changes": false
+    },
+    {
+      "name": "graph_edge_label",
+      "mutation": "cfg:then -> cfg:else",
+      "changed_dimensions": ["structure"],
+      "unchanged_dimensions": ["names", "constants", "types", "trace_events"],
+      "identity_bound_changes": true,
+      "anonymous_structure_changes": true
+    },
+    {
+      "name": "stable_key_only",
+      "mutation": "OriginExportKey owner changes with identical node content",
+      "changed_dimensions": [],
+      "unchanged_dimensions": ["structure", "names", "constants", "types", "trace_events"],
+      "identity_bound_changes": true,
+      "anonymous_structure_changes": false
+    },
+    {
+      "name": "recursive_cycle",
+      "mutation": "dependency edge introduces a loop backedge",
+      "reject_policy": "error",
+      "condense_scc_policy": "deterministic_hash",
+      "changed_dimensions": ["structure"],
+      "unchanged_dimensions": ["names", "constants", "types", "trace_events"]
+    }
+  ]
+}
