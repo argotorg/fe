@@ -1,8 +1,9 @@
 use trace_facts::{TraceBundle, TraceMetadata, TraceSnapshot, TraceValidationReport};
 use trace_query::{
     DynamicGasBySourceReport, DynamicGasBySourceRequest, ExplainLocalReport, ExplainLocalRequest,
-    ExplainPcReport, ExplainPcRequest, GasBreakdownReport, GasBreakdownRequest, GasBySourceReport,
-    GasBySourceRequest, IntrospectionService, LoopCostReport, LoopCostRequest, SourceAttribution,
+    ExplainPcReport, ExplainPcRequest, GasAttributionPolicy, GasBreakdownReport,
+    GasBreakdownRequest, GasBySourceReport, GasBySourceRequest, GasToSourceReport,
+    GasToSourceRequest, IntrospectionService, LoopCostReport, LoopCostRequest, SourceAttribution,
     TraceIntrospectionService, VariablesAtPcReport, VariablesAtPcRequest,
 };
 
@@ -101,11 +102,13 @@ pub(super) fn render_explain_pc_snapshot(
 pub(super) fn render_gas_by_source_snapshot(
     snapshot: TraceSnapshot,
     schedule: &str,
+    policy: &str,
 ) -> Result<String, String> {
     let service = TraceIntrospectionService::new(snapshot);
     let report = service
         .gas_by_source(GasBySourceRequest {
             schedule: schedule.to_string(),
+            policy: parse_gas_policy(policy)?,
         })
         .map_err(|err| err.to_string())?;
     Ok(render_gas_by_source_report(&report))
@@ -114,12 +117,33 @@ pub(super) fn render_gas_by_source_snapshot(
 pub(super) fn render_dynamic_gas_by_source_snapshot(
     snapshot: TraceSnapshot,
     trace_id: Option<String>,
+    policy: &str,
 ) -> Result<String, String> {
     let service = TraceIntrospectionService::new(snapshot);
     let report = service
-        .dynamic_gas_by_source(DynamicGasBySourceRequest { trace_id })
+        .dynamic_gas_by_source(DynamicGasBySourceRequest {
+            trace_id,
+            policy: parse_gas_policy(policy)?,
+        })
         .map_err(|err| err.to_string())?;
     Ok(render_dynamic_gas_by_source_report(&report))
+}
+
+pub(super) fn render_gas_to_source_snapshot(
+    snapshot: TraceSnapshot,
+    schedule: &str,
+    trace_id: Option<String>,
+    policy: &str,
+) -> Result<String, String> {
+    let service = TraceIntrospectionService::new(snapshot);
+    let report = service
+        .gas_to_source(GasToSourceRequest {
+            schedule: schedule.to_string(),
+            trace_id,
+            policy: parse_gas_policy(policy)?,
+        })
+        .map_err(|err| err.to_string())?;
+    Ok(render_gas_to_source_report(&report))
 }
 
 pub(super) fn render_variables_at_pc_snapshot(
@@ -358,6 +382,8 @@ fn render_gas_breakdown_report(report: &GasBreakdownReport) -> String {
     out.push_str(&format!("Target: {}\n", report.metadata.target));
     out.push_str(&format!("Input: {}\n", report.metadata.input_path));
     out.push_str(&format!("Schedule: {}\n", report.schedule));
+    out.push_str(&format!("Attribution policy: {}\n", report.policy));
+    out.push_str(&format!("Confidence: {:?}\n", report.confidence));
     out.push_str(
         "Mode: static opcode-table estimate; runtime gas depends on path and EVM state.\n\n",
     );
@@ -436,7 +462,8 @@ fn render_gas_by_source_report(report: &GasBySourceReport) -> String {
     out.push_str(&format!("Target: {}\n", report.metadata.target));
     out.push_str(&format!("Input: {}\n", report.metadata.input_path));
     out.push_str(&format!("Schedule: {}\n", report.schedule));
-    out.push_str(&format!("Attribution policy: {}\n\n", report.policy));
+    out.push_str(&format!("Attribution policy: {}\n", report.policy));
+    out.push_str(&format!("Confidence: {:?}\n\n", report.confidence));
     out.push_str(&format!("Total static opcode gas: {}\n", report.total_gas));
 
     if report.rows.is_empty() {
@@ -489,6 +516,39 @@ fn render_dynamic_gas_by_source_report(report: &DynamicGasBySourceReport) -> Str
     out
 }
 
+fn render_gas_to_source_report(report: &GasToSourceReport) -> String {
+    let mut out = String::new();
+    out.push_str("Fe dev trace gas-to-source\n\n");
+    out.push_str(&format!("Data source: {}\n", report.metadata.data_source));
+    out.push_str("Trace validation: passed\n");
+    out.push_str(&format!("Target: {}\n", report.metadata.target));
+    out.push_str(&format!("Input: {}\n", report.metadata.input_path));
+    out.push_str(&format!("Target schedule: {}\n", report.schedule));
+    out.push_str(&format!("Attribution policy: {}\n", report.policy));
+    out.push_str(&format!("Confidence: {:?}\n", report.confidence));
+    if let Some(trace_id) = &report.trace_id {
+        out.push_str(&format!("Trace id: {trace_id}\n"));
+    }
+    out.push('\n');
+    out.push_str(&format!("Static gas: {}\n", report.static_gas));
+    out.push_str(&format!("Dynamic gas: {}\n", report.dynamic_gas));
+    out.push_str(&format!("Combined gas: {}\n", report.total_gas));
+
+    if report.rows.is_empty() {
+        out.push_str("No gas rows were present in this trace.\n");
+        return out;
+    }
+
+    out.push_str("Source contributors:\n");
+    for row in report.rows.iter().take(20) {
+        out.push_str(&format!(
+            "  {:>4} total  {:>4} static  {:>4} dynamic  {:<8?} {}\n",
+            row.total_gas, row.static_gas, row.dynamic_gas, row.confidence, row.label
+        ));
+    }
+    out
+}
+
 fn render_variables_at_pc_report(report: &VariablesAtPcReport) -> String {
     let mut out = String::new();
     out.push_str("Fe dev trace variables-at-pc\n\n");
@@ -515,4 +575,10 @@ fn render_variables_at_pc_report(report: &VariablesAtPcReport) -> String {
 
 fn format_source(source: &SourceAttribution) -> String {
     format!("{} ({})", source.label, source.origin.display_label())
+}
+
+fn parse_gas_policy(policy: &str) -> Result<GasAttributionPolicy, String> {
+    policy
+        .parse()
+        .map_err(|err: trace_query::QueryError| err.to_string())
 }

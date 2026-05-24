@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::str::FromStr;
 
 pub mod datalog_emit;
 
@@ -25,6 +26,7 @@ pub trait IntrospectionService {
         &self,
         request: DynamicGasBySourceRequest,
     ) -> QueryResult<DynamicGasBySourceReport>;
+    fn gas_to_source(&self, request: GasToSourceRequest) -> QueryResult<GasToSourceReport>;
     fn variables_at_pc(&self, request: VariablesAtPcRequest) -> QueryResult<VariablesAtPcReport>;
 }
 
@@ -194,6 +196,7 @@ impl IntrospectionService for TraceIntrospectionService {
         Ok(GasBreakdownReport {
             metadata: ReportMetadata::from_snapshot(&self.snapshot),
             schedule: request.schedule,
+            policy: "opcode-table-static".to_string(),
             available,
             total_gas: available.then_some(total_gas),
             rows,
@@ -259,40 +262,19 @@ impl IntrospectionService for TraceIntrospectionService {
 
         for gas in index.static_gas_rows(&request.schedule) {
             total_gas += gas.gas;
-            let sources = index.source_candidates_for_instruction(&gas.subject);
-            if sources.is_empty() {
+            for bucket in index.gas_attribution_buckets(&gas.subject, request.policy) {
                 let row = rows
-                    .entry("<unmapped>".to_string())
+                    .entry(bucket.key.clone())
                     .or_insert_with(|| GasBySourceRow {
-                        source: None,
-                        label: "<unmapped>".to_string(),
+                        label: bucket.label.clone(),
+                        source: bucket.source.clone(),
                         gas: 0,
                         instruction_count: 0,
-                        confidence: Confidence::Unknown,
+                        confidence: bucket.confidence,
                     });
                 row.gas += gas.gas;
                 row.instruction_count += 1;
-                continue;
-            }
-
-            let confidence = if sources.len() == 1 {
-                Confidence::Medium
-            } else {
-                Confidence::Low
-            };
-            for source in sources {
-                let row = rows
-                    .entry(source.origin.canonical_storage_key())
-                    .or_insert_with(|| GasBySourceRow {
-                        label: source.label.clone(),
-                        source: Some(source.origin.clone()),
-                        gas: 0,
-                        instruction_count: 0,
-                        confidence,
-                    });
-                row.gas += gas.gas;
-                row.instruction_count += 1;
-                if confidence == Confidence::Low {
+                if bucket.confidence == Confidence::Low {
                     row.confidence = Confidence::Low;
                 }
             }
@@ -303,7 +285,7 @@ impl IntrospectionService for TraceIntrospectionService {
         Ok(GasBySourceReport {
             metadata: ReportMetadata::from_snapshot(&self.snapshot),
             schedule: request.schedule,
-            policy: "exclusive-primary-if-unique; inclusive-for-ambiguous".to_string(),
+            policy: request.policy.to_string(),
             total_gas,
             rows,
             confidence: if total_gas > 0 {
@@ -326,44 +308,26 @@ impl IntrospectionService for TraceIntrospectionService {
         for step in index.dynamic_gas_steps(request.trace_id.as_deref()) {
             total_gas += step.gas_cost;
             let instruction = index.instruction_for_dynamic_step(step);
-            let sources = instruction
+            let buckets = instruction
                 .as_ref()
-                .map(|instruction| index.source_candidates_for_instruction(&instruction.key))
-                .unwrap_or_default();
-            if sources.is_empty() {
+                .map(|instruction| index.gas_attribution_buckets(&instruction.key, request.policy))
+                .unwrap_or_else(|| vec![GasAttributionBucket::unmapped()]);
+            if buckets.iter().all(|bucket| bucket.source.is_none()) {
                 unattributed_steps += 1;
-                let row = rows
-                    .entry("<unmapped>".to_string())
-                    .or_insert_with(|| GasBySourceRow {
-                        source: None,
-                        label: "<unmapped>".to_string(),
-                        gas: 0,
-                        instruction_count: 0,
-                        confidence: Confidence::Unknown,
-                    });
-                row.gas += step.gas_cost;
-                row.instruction_count += 1;
-                continue;
             }
-
-            let confidence = if sources.len() == 1 {
-                Confidence::Medium
-            } else {
-                Confidence::Low
-            };
-            for source in sources {
+            for bucket in buckets {
                 let row = rows
-                    .entry(source.origin.canonical_storage_key())
+                    .entry(bucket.key.clone())
                     .or_insert_with(|| GasBySourceRow {
-                        label: source.label.clone(),
-                        source: Some(source.origin.clone()),
+                        label: bucket.label.clone(),
+                        source: bucket.source.clone(),
                         gas: 0,
                         instruction_count: 0,
-                        confidence,
+                        confidence: bucket.confidence,
                     });
                 row.gas += step.gas_cost;
                 row.instruction_count += 1;
-                if confidence == Confidence::Low {
+                if bucket.confidence == Confidence::Low {
                     row.confidence = Confidence::Low;
                 }
             }
@@ -375,11 +339,64 @@ impl IntrospectionService for TraceIntrospectionService {
             metadata: ReportMetadata::from_snapshot(&self.snapshot),
             trace_id: request.trace_id,
             target_schedule: "runtime-measured".to_string(),
-            policy: "exclusive-primary-if-unique; inclusive-for-ambiguous".to_string(),
+            policy: request.policy.to_string(),
             total_gas,
             unattributed_steps,
             rows,
             confidence: if total_gas > 0 {
+                Confidence::Medium
+            } else {
+                Confidence::Unknown
+            },
+        })
+    }
+
+    fn gas_to_source(&self, request: GasToSourceRequest) -> QueryResult<GasToSourceReport> {
+        let index = TraceIndex::new(&self.snapshot);
+        let mut rows: BTreeMap<String, GasToSourceRow> = BTreeMap::new();
+        let mut static_gas_total = 0;
+        let mut dynamic_gas_total = 0;
+
+        for gas in index.static_gas_rows(&request.schedule) {
+            static_gas_total += gas.gas;
+            for bucket in index.gas_attribution_buckets(&gas.subject, request.policy) {
+                let row = gas_to_source_row(&mut rows, &bucket);
+                row.static_gas += gas.gas;
+                row.total_gas += gas.gas;
+                row.instruction_count += 1;
+            }
+        }
+
+        for step in index.dynamic_gas_steps(request.trace_id.as_deref()) {
+            dynamic_gas_total += step.gas_cost;
+            let buckets = index
+                .instruction_for_dynamic_step(step)
+                .map(|instruction| index.gas_attribution_buckets(&instruction.key, request.policy))
+                .unwrap_or_else(|| vec![GasAttributionBucket::unmapped()]);
+            for bucket in buckets {
+                let row = gas_to_source_row(&mut rows, &bucket);
+                row.dynamic_gas += step.gas_cost;
+                row.total_gas += step.gas_cost;
+                row.instruction_count += 1;
+            }
+        }
+
+        let mut rows = rows.into_values().collect::<Vec<_>>();
+        rows.sort_by(|a, b| {
+            b.total_gas
+                .cmp(&a.total_gas)
+                .then_with(|| a.label.cmp(&b.label))
+        });
+        Ok(GasToSourceReport {
+            metadata: ReportMetadata::from_snapshot(&self.snapshot),
+            schedule: request.schedule,
+            trace_id: request.trace_id,
+            policy: request.policy.to_string(),
+            static_gas: static_gas_total,
+            dynamic_gas: dynamic_gas_total,
+            total_gas: static_gas_total + dynamic_gas_total,
+            rows,
+            confidence: if static_gas_total + dynamic_gas_total > 0 {
                 Confidence::Medium
             } else {
                 Confidence::Unknown
@@ -441,12 +458,14 @@ pub struct ExplainPcRequest {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GasBySourceRequest {
     pub schedule: String,
+    pub policy: GasAttributionPolicy,
 }
 
 impl Default for GasBySourceRequest {
     fn default() -> Self {
         Self {
             schedule: "cancun".to_string(),
+            policy: GasAttributionPolicy::default(),
         }
     }
 }
@@ -455,6 +474,73 @@ impl Default for GasBySourceRequest {
 pub struct DynamicGasBySourceRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trace_id: Option<String>,
+    #[serde(default)]
+    pub policy: GasAttributionPolicy,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GasToSourceRequest {
+    pub schedule: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace_id: Option<String>,
+    #[serde(default)]
+    pub policy: GasAttributionPolicy,
+}
+
+impl Default for GasToSourceRequest {
+    fn default() -> Self {
+        Self {
+            schedule: "cancun".to_string(),
+            trace_id: None,
+            policy: GasAttributionPolicy::default(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum GasAttributionPolicy {
+    #[default]
+    ExclusivePrimary,
+    Inclusive,
+    SyntheticOverhead,
+    CallInclusive,
+    CallExclusive,
+}
+
+impl GasAttributionPolicy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ExclusivePrimary => "exclusive-primary",
+            Self::Inclusive => "inclusive",
+            Self::SyntheticOverhead => "synthetic-overhead",
+            Self::CallInclusive => "call-inclusive",
+            Self::CallExclusive => "call-exclusive",
+        }
+    }
+}
+
+impl fmt::Display for GasAttributionPolicy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for GasAttributionPolicy {
+    type Err = QueryError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "exclusive-primary" => Ok(Self::ExclusivePrimary),
+            "inclusive" => Ok(Self::Inclusive),
+            "synthetic-overhead" => Ok(Self::SyntheticOverhead),
+            "call-inclusive" => Ok(Self::CallInclusive),
+            "call-exclusive" => Ok(Self::CallExclusive),
+            _ => Err(QueryError::InvalidRequest(format!(
+                "unknown gas attribution policy {value:?}"
+            ))),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -494,10 +580,22 @@ pub enum TraceQueryRequest {
     GasBySource {
         #[serde(default = "default_gas_schedule")]
         schedule: String,
+        #[serde(default)]
+        policy: GasAttributionPolicy,
     },
     DynamicGasBySource {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         trace_id: Option<String>,
+        #[serde(default)]
+        policy: GasAttributionPolicy,
+    },
+    GasToSource {
+        #[serde(default = "default_gas_schedule")]
+        schedule: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        trace_id: Option<String>,
+        #[serde(default)]
+        policy: GasAttributionPolicy,
     },
     VariablesAtPc {
         pc: u32,
@@ -530,11 +628,23 @@ impl TraceQueryRequest {
     pub fn gas_by_source(schedule: impl Into<String>) -> Self {
         Self::GasBySource {
             schedule: schedule.into(),
+            policy: GasAttributionPolicy::default(),
         }
     }
 
     pub fn dynamic_gas_by_source() -> Self {
-        Self::DynamicGasBySource { trace_id: None }
+        Self::DynamicGasBySource {
+            trace_id: None,
+            policy: GasAttributionPolicy::default(),
+        }
+    }
+
+    pub fn gas_to_source(schedule: impl Into<String>) -> Self {
+        Self::GasToSource {
+            schedule: schedule.into(),
+            trace_id: None,
+            policy: GasAttributionPolicy::default(),
+        }
     }
 
     pub fn variables_at_pc(pc: u32) -> Self {
@@ -566,6 +676,7 @@ pub enum TraceQueryReport {
     ExplainPc(ExplainPcReport),
     GasBySource(GasBySourceReport),
     DynamicGasBySource(DynamicGasBySourceReport),
+    GasToSource(GasToSourceReport),
     VariablesAtPc(VariablesAtPcReport),
 }
 
@@ -586,12 +697,23 @@ pub fn run_trace_query(
         TraceQueryRequest::ExplainPc { pc } => service
             .explain_pc(ExplainPcRequest { pc })
             .map(TraceQueryReport::ExplainPc),
-        TraceQueryRequest::GasBySource { schedule } => service
-            .gas_by_source(GasBySourceRequest { schedule })
+        TraceQueryRequest::GasBySource { schedule, policy } => service
+            .gas_by_source(GasBySourceRequest { schedule, policy })
             .map(TraceQueryReport::GasBySource),
-        TraceQueryRequest::DynamicGasBySource { trace_id } => service
-            .dynamic_gas_by_source(DynamicGasBySourceRequest { trace_id })
+        TraceQueryRequest::DynamicGasBySource { trace_id, policy } => service
+            .dynamic_gas_by_source(DynamicGasBySourceRequest { trace_id, policy })
             .map(TraceQueryReport::DynamicGasBySource),
+        TraceQueryRequest::GasToSource {
+            schedule,
+            trace_id,
+            policy,
+        } => service
+            .gas_to_source(GasToSourceRequest {
+                schedule,
+                trace_id,
+                policy,
+            })
+            .map(TraceQueryReport::GasToSource),
         TraceQueryRequest::VariablesAtPc { pc, code_object } => service
             .variables_at_pc(VariablesAtPcRequest { pc, code_object })
             .map(TraceQueryReport::VariablesAtPc),
@@ -631,6 +753,7 @@ pub struct ExplainLocalReport {
 pub struct GasBreakdownReport {
     pub metadata: ReportMetadata,
     pub schedule: String,
+    pub policy: String,
     pub available: bool,
     pub total_gas: Option<u64>,
     pub rows: Vec<GasBreakdownRow>,
@@ -671,6 +794,30 @@ pub struct DynamicGasBySourceReport {
     pub total_gas: u64,
     pub unattributed_steps: usize,
     pub rows: Vec<GasBySourceRow>,
+    pub confidence: Confidence,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GasToSourceReport {
+    pub metadata: ReportMetadata,
+    pub schedule: String,
+    pub trace_id: Option<String>,
+    pub policy: String,
+    pub static_gas: u64,
+    pub dynamic_gas: u64,
+    pub total_gas: u64,
+    pub rows: Vec<GasToSourceRow>,
+    pub confidence: Confidence,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GasToSourceRow {
+    pub source: Option<OriginExportKey>,
+    pub label: String,
+    pub static_gas: u64,
+    pub dynamic_gas: u64,
+    pub total_gas: u64,
+    pub instruction_count: usize,
     pub confidence: Confidence,
 }
 
@@ -1241,6 +1388,69 @@ impl<'a> TraceIndex<'a> {
             .or_else(|| self.instruction_at_pc(step.pc))
     }
 
+    fn gas_attribution_buckets(
+        &self,
+        instruction: &OriginExportKey,
+        policy: GasAttributionPolicy,
+    ) -> Vec<GasAttributionBucket> {
+        let sources = self.source_candidates_for_instruction(instruction);
+        if sources.is_empty() {
+            return vec![GasAttributionBucket::unmapped()];
+        }
+        match policy {
+            GasAttributionPolicy::Inclusive | GasAttributionPolicy::CallInclusive => sources
+                .into_iter()
+                .map(|source| GasAttributionBucket::source(source, policy, false))
+                .collect(),
+            GasAttributionPolicy::SyntheticOverhead if self.synthetic_edge_labels(instruction) => {
+                if sources.len() == 1 {
+                    vec![GasAttributionBucket::source(
+                        sources[0].clone(),
+                        policy,
+                        true,
+                    )]
+                } else {
+                    vec![GasAttributionBucket {
+                        key: "<synthetic-overhead:ambiguous>".to_string(),
+                        source: None,
+                        label: "<synthetic-overhead:ambiguous>".to_string(),
+                        confidence: Confidence::Low,
+                    }]
+                }
+            }
+            GasAttributionPolicy::ExclusivePrimary
+            | GasAttributionPolicy::SyntheticOverhead
+            | GasAttributionPolicy::CallExclusive => {
+                if sources.len() == 1 {
+                    vec![GasAttributionBucket::source(
+                        sources[0].clone(),
+                        policy,
+                        false,
+                    )]
+                } else {
+                    vec![GasAttributionBucket {
+                        key: "<ambiguous>".to_string(),
+                        source: None,
+                        label: "<ambiguous>".to_string(),
+                        confidence: Confidence::Low,
+                    }]
+                }
+            }
+        }
+    }
+
+    fn synthetic_edge_labels(&self, instruction: &OriginExportKey) -> bool {
+        self.snapshot.facts().iter().any(|fact| match fact {
+            TraceFact::OriginEdge(edge) if &edge.from == instruction => matches!(
+                edge.label,
+                OriginEdgeLabel::SyntheticFor
+                    | OriginEdgeLabel::BackendPrepared
+                    | OriginEdgeLabel::Unmapped
+            ),
+            _ => false,
+        })
+    }
+
     fn source_candidates_for_instruction(
         &self,
         instruction: &OriginExportKey,
@@ -1372,6 +1582,62 @@ fn storage_step(storage: &StorageFact) -> StorageStep {
     }
 }
 
+#[derive(Clone, Debug)]
+struct GasAttributionBucket {
+    key: String,
+    source: Option<OriginExportKey>,
+    label: String,
+    confidence: Confidence,
+}
+
+impl GasAttributionBucket {
+    fn source(source: SourceAttribution, policy: GasAttributionPolicy, synthetic: bool) -> Self {
+        let label = if synthetic {
+            format!("<synthetic-overhead> {}", source.label)
+        } else {
+            source.label.clone()
+        };
+        let confidence = match policy {
+            GasAttributionPolicy::Inclusive | GasAttributionPolicy::CallInclusive => {
+                Confidence::Low
+            }
+            GasAttributionPolicy::SyntheticOverhead if synthetic => Confidence::Medium,
+            _ => Confidence::Medium,
+        };
+        Self {
+            key: source.origin.canonical_storage_key(),
+            source: Some(source.origin),
+            label,
+            confidence,
+        }
+    }
+
+    fn unmapped() -> Self {
+        Self {
+            key: "<unmapped>".to_string(),
+            source: None,
+            label: "<unmapped>".to_string(),
+            confidence: Confidence::Unknown,
+        }
+    }
+}
+
+fn gas_to_source_row<'a>(
+    rows: &'a mut BTreeMap<String, GasToSourceRow>,
+    bucket: &GasAttributionBucket,
+) -> &'a mut GasToSourceRow {
+    rows.entry(bucket.key.clone())
+        .or_insert_with(|| GasToSourceRow {
+            source: bucket.source.clone(),
+            label: bucket.label.clone(),
+            static_gas: 0,
+            dynamic_gas: 0,
+            total_gas: 0,
+            instruction_count: 0,
+            confidence: bucket.confidence,
+        })
+}
+
 fn loop_cost_findings(
     available: bool,
     summary: &InstructionSummary,
@@ -1458,8 +1724,9 @@ mod tests {
 
     use super::{
         DynamicGasBySourceRequest, ExplainLocalRequest, ExplainPcRequest, GasBySourceRequest,
-        IntrospectionService, LoopCostRequest, TraceIntrospectionService, TraceQueryHttpRequest,
-        TraceQueryReport, TraceQueryRequest, VariablesAtPcRequest, run_trace_query,
+        GasToSourceRequest, IntrospectionService, LoopCostRequest, TraceIntrospectionService,
+        TraceQueryHttpRequest, TraceQueryReport, TraceQueryRequest, VariablesAtPcRequest,
+        run_trace_query,
     };
 
     fn key(kind: &str, owner: &str, local: &str) -> OriginExportKey {
@@ -1752,6 +2019,7 @@ mod tests {
         let report = demo_service()
             .dynamic_gas_by_source(DynamicGasBySourceRequest {
                 trace_id: Some("tx:1".to_string()),
+                ..Default::default()
             })
             .unwrap();
 
@@ -1760,6 +2028,24 @@ mod tests {
         assert_eq!(report.rows.len(), 1);
         assert_eq!(report.rows[0].label, "fib.fe:2:8-2:9");
         assert_eq!(report.rows[0].gas, 10);
+    }
+
+    #[test]
+    fn gas_to_source_combines_static_and_dynamic_attribution() {
+        let report = demo_service()
+            .gas_to_source(GasToSourceRequest {
+                trace_id: Some("tx:1".to_string()),
+                ..Default::default()
+            })
+            .unwrap();
+
+        assert_eq!(report.static_gas, 6);
+        assert_eq!(report.dynamic_gas, 10);
+        assert_eq!(report.total_gas, 16);
+        assert_eq!(report.policy, "exclusive-primary");
+        assert_eq!(report.schedule, "cancun");
+        assert_eq!(report.rows.len(), 1);
+        assert_eq!(report.rows[0].total_gas, 16);
     }
 
     #[test]
@@ -1818,6 +2104,10 @@ mod tests {
         assert!(matches!(
             run_trace_query(&service, TraceQueryRequest::dynamic_gas_by_source()).unwrap(),
             TraceQueryReport::DynamicGasBySource(_)
+        ));
+        assert!(matches!(
+            run_trace_query(&service, TraceQueryRequest::gas_to_source("cancun")).unwrap(),
+            TraceQueryReport::GasToSource(_)
         ));
         assert!(matches!(
             run_trace_query(&service, TraceQueryRequest::variables_at_pc(0)).unwrap(),

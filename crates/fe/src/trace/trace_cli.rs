@@ -50,6 +50,7 @@ fn run_trace_query_command(command: &DevTraceQueryCommand) -> Result<String, Str
         DevTraceQueryCommand::DynamicGasBySource(args) => {
             super::trace_emit::run_trace_dynamic_gas_by_source(args)
         }
+        DevTraceQueryCommand::GasToSource(args) => super::trace_emit::run_trace_gas_to_source(args),
         DevTraceQueryCommand::VariablesAtPc(args) => {
             super::trace_emit::run_trace_variables_at_pc(args)
         }

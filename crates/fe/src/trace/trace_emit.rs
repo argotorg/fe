@@ -13,7 +13,7 @@ use url::Url;
 
 use crate::{
     DevTraceDynamicGasArgs, DevTraceEmitArgs, DevTraceExplainLocalArgs, DevTraceGasArgs,
-    DevTraceInputArgs, DevTracePcArgs,
+    DevTraceGasToSourceArgs, DevTraceInputArgs, DevTracePcArgs,
 };
 
 pub(super) fn run_trace_emit(args: &DevTraceEmitArgs) -> Result<String, String> {
@@ -69,6 +69,7 @@ pub(super) fn run_trace_gas_by_source(args: &DevTraceGasArgs) -> Result<String, 
     super::trace_render::render_gas_by_source_snapshot(
         read_trace_snapshot_jsonl_from_path(&args.from)?,
         &args.schedule,
+        &args.policy,
     )
 }
 
@@ -78,6 +79,16 @@ pub(super) fn run_trace_dynamic_gas_by_source(
     super::trace_render::render_dynamic_gas_by_source_snapshot(
         read_trace_snapshot_jsonl_from_path(&args.from)?,
         args.trace_id.clone(),
+        &args.policy,
+    )
+}
+
+pub(super) fn run_trace_gas_to_source(args: &DevTraceGasToSourceArgs) -> Result<String, String> {
+    super::trace_render::render_gas_to_source_snapshot(
+        read_trace_snapshot_jsonl_from_path(&args.from)?,
+        &args.schedule,
+        args.trace_id.clone(),
+        &args.policy,
     )
 }
 

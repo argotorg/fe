@@ -543,6 +543,8 @@ pub enum DevTraceQueryCommand {
     GasBySource(DevTraceGasArgs),
     /// Summarize measured runtime gas by source attribution.
     DynamicGasBySource(DevTraceDynamicGasArgs),
+    /// Combine static opcode gas and measured runtime gas by source attribution.
+    GasToSource(DevTraceGasToSourceArgs),
     /// Show variable locations active at a bytecode PC.
     VariablesAtPc(DevTracePcArgs),
 }
@@ -626,6 +628,9 @@ pub struct DevTraceGasArgs {
     /// Named EVM gas schedule.
     #[arg(long, default_value = "cancun")]
     pub schedule: String,
+    /// Source-attribution policy.
+    #[arg(long, default_value = "exclusive-primary")]
+    pub policy: String,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -636,6 +641,25 @@ pub struct DevTraceDynamicGasArgs {
     /// Optional dynamic execution trace id to filter.
     #[arg(long)]
     pub trace_id: Option<String>,
+    /// Source-attribution policy.
+    #[arg(long, default_value = "exclusive-primary")]
+    pub policy: String,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct DevTraceGasToSourceArgs {
+    /// Trace JSONL bundle to read.
+    #[arg(long = "from", value_name = "TRACE_JSONL")]
+    pub from: Utf8PathBuf,
+    /// Named EVM gas schedule for static opcode gas.
+    #[arg(long, default_value = "cancun")]
+    pub schedule: String,
+    /// Optional dynamic execution trace id to filter.
+    #[arg(long)]
+    pub trace_id: Option<String>,
+    /// Source-attribution policy.
+    #[arg(long, default_value = "exclusive-primary")]
+    pub policy: String,
 }
 
 #[derive(Debug, Clone, Args)]
