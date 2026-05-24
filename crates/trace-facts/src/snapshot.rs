@@ -87,16 +87,7 @@ impl From<JsonlTraceReadError> for TraceSnapshotReadError {
 
 fn snapshot_hash(bundle: &TraceBundle) -> String {
     let json = serde_json::to_vec(bundle).expect("trace bundle should serialize");
-    format!("fnv64:{:016x}", fnv1a64(&json))
-}
-
-fn fnv1a64(bytes: &[u8]) -> u64 {
-    let mut hash = 0xcbf29ce484222325u64;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    hash
+    format!("blake3:{}", blake3::hash(&json).to_hex())
 }
 
 #[cfg(test)]
@@ -148,7 +139,14 @@ mod tests {
             TraceDataSource::CompilerEmitted
         );
         assert_eq!(snapshot.validation().summary.instruction_count, 1);
-        assert!(snapshot.trace_hash().starts_with("fnv64:"));
+        assert_content_digest(snapshot.trace_hash());
+    }
+
+    fn assert_content_digest(value: &str) {
+        let digest = value.strip_prefix("blake3:").unwrap_or(value);
+        assert_eq!(digest.len(), 64);
+        assert!(digest.chars().all(|ch| ch.is_ascii_hexdigit()));
+        assert!(!value.starts_with("fnv64:"));
     }
 
     #[test]

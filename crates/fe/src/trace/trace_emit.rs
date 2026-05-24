@@ -297,12 +297,7 @@ fn source_end_position(content: &str) -> (u32, u32) {
 }
 
 fn trace_content_hash(bytes: &[u8]) -> String {
-    let mut hash = 0xcbf29ce484222325u64;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    format!("fnv64:{hash:016x}")
+    format!("blake3:{}", blake3::hash(bytes).to_hex())
 }
 
 fn standalone_file_input(file_path: &Utf8PathBuf) -> Result<(Url, String), String> {
@@ -380,6 +375,14 @@ mod tests {
             "real Fibonacci trace should include derived shape hashes"
         );
         assert!(
+            bundle.facts.iter().any(|fact| matches!(
+                fact,
+                trace_facts::TraceFact::SourceFile(source)
+                    if is_content_digest(&source.content_hash)
+            )),
+            "source file content hashes should be cryptographic digests"
+        );
+        assert!(
             bundle
                 .facts
                 .iter()
@@ -430,5 +433,12 @@ mod tests {
         assert!(explain.contains("Why b is memory-backed in MIR"));
         assert!(explain.contains("Mir: memory place (MutableLocalLowering)"));
         assert!(!explain.contains("stack slot sp+24"));
+    }
+
+    fn is_content_digest(value: &str) -> bool {
+        let digest = value.strip_prefix("blake3:").unwrap_or(value);
+        digest.len() == 64
+            && digest.chars().all(|ch| ch.is_ascii_hexdigit())
+            && !value.starts_with("fnv64:")
     }
 }

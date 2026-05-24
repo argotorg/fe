@@ -569,18 +569,18 @@ fn dominators(block_count: usize, predecessors: &[Vec<RBlockId>]) -> Vec<BTreeSe
 }
 
 fn runtime_cfg_hash(block_count: usize, edges: &[RuntimeCfgEdge]) -> String {
-    let mut hash = 0xcbf29ce484222325u64;
-    hash_u32(&mut hash, block_count as u32);
+    let mut hasher = blake3::Hasher::new();
+    hash_u32(&mut hasher, block_count as u32);
     for edge in edges {
-        hash_u32(&mut hash, edge.from.index() as u32);
-        hash_u32(&mut hash, edge.to.index() as u32);
-        hash_bytes(&mut hash, cfg_edge_kind_name(edge.kind).as_bytes());
+        hash_u32(&mut hasher, edge.from.index() as u32);
+        hash_u32(&mut hasher, edge.to.index() as u32);
+        hash_bytes(&mut hasher, cfg_edge_kind_name(edge.kind).as_bytes());
         match edge.condition {
-            Some(condition) => hash_u32(&mut hash, condition.index() as u32),
-            None => hash_bytes(&mut hash, b"none"),
+            Some(condition) => hash_u32(&mut hasher, condition.index() as u32),
+            None => hash_bytes(&mut hasher, b"none"),
         }
     }
-    format!("fnv64:{hash:016x}")
+    format!("blake3:{}", hasher.finalize().to_hex())
 }
 
 fn cfg_edge_kind_name(kind: CfgEdgeKind) -> &'static str {
@@ -596,15 +596,13 @@ fn cfg_edge_kind_name(kind: CfgEdgeKind) -> &'static str {
     }
 }
 
-fn hash_u32(hash: &mut u64, value: u32) {
-    hash_bytes(hash, &value.to_le_bytes());
+fn hash_u32(hasher: &mut blake3::Hasher, value: u32) {
+    hasher.update(&value.to_le_bytes());
 }
 
-fn hash_bytes(hash: &mut u64, bytes: &[u8]) {
-    for byte in bytes {
-        *hash ^= u64::from(*byte);
-        *hash = hash.wrapping_mul(0x100000001b3);
-    }
+fn hash_bytes(hasher: &mut blake3::Hasher, bytes: &[u8]) {
+    hash_u32(hasher, bytes.len() as u32);
+    hasher.update(bytes);
 }
 
 fn mir_storage_location(local: &crate::runtime::RLocal<'_>) -> StorageLocation {

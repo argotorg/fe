@@ -704,7 +704,7 @@ mod tests {
                 source_file.clone(),
                 "file:///src/main.fe",
                 "src/main.fe",
-                "fnv64:1234",
+                "blake3:0000000000000000000000000000000000000000000000000000000000001234",
                 Some(0),
             )),
             TraceFact::SourceSpan(SourceSpanFact::new(
@@ -738,7 +738,7 @@ mod tests {
                 source_file.clone(),
                 "file:///src/main.fe",
                 "src/main.fe",
-                "fnv64:1234",
+                "blake3:0000000000000000000000000000000000000000000000000000000000001234",
                 Some(0),
             )),
             TraceFact::SourceSpan(SourceSpanFact::new(
@@ -756,7 +756,10 @@ mod tests {
                 CodeObjectKind::EvmRuntimeBytecode,
                 Some(function.clone()),
                 "evm/sonatina",
-                Some("fnv64:beef".to_string()),
+                Some(
+                    "blake3:000000000000000000000000000000000000000000000000000000000000beef"
+                        .to_string(),
+                ),
             )),
             TraceFact::Function(FunctionFact::new(
                 function.clone(),
@@ -857,7 +860,10 @@ mod tests {
                 CodeObjectKind::EvmRuntimeBytecode,
                 Some(function.clone()),
                 "evm/sonatina",
-                Some("fnv64:beef".to_string()),
+                Some(
+                    "blake3:000000000000000000000000000000000000000000000000000000000000beef"
+                        .to_string(),
+                ),
             )),
             TraceFact::Function(FunctionFact::new(
                 function.clone(),

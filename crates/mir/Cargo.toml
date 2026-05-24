@@ -17,6 +17,7 @@ shape-address.workspace = true
 trace-facts.workspace = true
 cranelift-entity.workspace = true
 rustc-hash.workspace = true
+blake3.workspace = true
 salsa.workspace = true
 num-bigint.workspace = true
 num-traits.workspace = true

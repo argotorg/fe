@@ -179,7 +179,8 @@ mod tests {
         let expr = key("hir.expr", "demo", "expr:add");
         let function = key("function", "demo", "runtime");
         DebugBundle {
-            trace_hash: "trace:1".to_string(),
+            trace_hash: "blake3:0000000000000000000000000000000000000000000000000000000000000001"
+                .to_string(),
             compiler: CompilerInfo {
                 commit: "abc123".to_string(),
                 target: "evm/sonatina".to_string(),
@@ -192,7 +193,9 @@ mod tests {
                 file_key: file.clone(),
                 uri: "file:///src/main.fe".to_string(),
                 display_name: "src/main.fe".to_string(),
-                content_hash: "fnv64:1234".to_string(),
+                content_hash:
+                    "blake3:0000000000000000000000000000000000000000000000000000000000001234"
+                        .to_string(),
                 source_id: Some(0),
             }],
             source_spans: vec![DebugSourceSpan {

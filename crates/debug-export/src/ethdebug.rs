@@ -391,7 +391,8 @@ mod tests {
         let code_object = key("code.object", "demo", "runtime");
         let function = key("function", "demo", "runtime");
         DebugBundle {
-            trace_hash: "trace:ethdebug".to_string(),
+            trace_hash: "blake3:00000000000000000000000000000000000000000000000000000000e7deb060"
+                .to_string(),
             compiler: CompilerInfo {
                 commit: "abc123".to_string(),
                 target: "evm/sonatina".to_string(),
@@ -404,7 +405,9 @@ mod tests {
                 file_key: source_file.clone(),
                 uri: "file:///src/main.fe".to_string(),
                 display_name: "src/main.fe".to_string(),
-                content_hash: "fnv64:1234".to_string(),
+                content_hash:
+                    "blake3:0000000000000000000000000000000000000000000000000000000000001234"
+                        .to_string(),
                 source_id: Some(7),
             }],
             source_spans: vec![DebugSourceSpan {
@@ -422,7 +425,10 @@ mod tests {
                 kind: "EvmRuntimeBytecode".to_string(),
                 owner_function_or_contract: Some(contract),
                 target: "evm/sonatina".to_string(),
-                code_hash: Some("fnv64:beef".to_string()),
+                code_hash: Some(
+                    "blake3:000000000000000000000000000000000000000000000000000000000000beef"
+                        .to_string(),
+                ),
             }],
             functions: vec![],
             scopes: vec![],

@@ -138,7 +138,7 @@ mod tests {
         let snapshot = snapshot();
         let export = emit_base_relations(&snapshot);
 
-        assert!(export.trace_hash.starts_with("fnv64:"));
+        assert_content_digest(&export.trace_hash);
         assert!(
             export
                 .schemas
@@ -161,5 +161,12 @@ mod tests {
         let hir = key("hir.expr", "demo", "expr:0");
 
         assert!(origin_reaches(&snapshot).contains(&(instruction, hir)));
+    }
+
+    fn assert_content_digest(value: &str) {
+        let digest = value.strip_prefix("blake3:").unwrap_or(value);
+        assert_eq!(digest.len(), 64);
+        assert!(digest.chars().all(|ch| ch.is_ascii_hexdigit()));
+        assert!(!value.starts_with("fnv64:"));
     }
 }

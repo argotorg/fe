@@ -94,13 +94,13 @@ pub fn semantic_owner_context_identity<'db>(
         let impl_identity = format!("{trait_identity}${}", type_identity(db, impl_trait.ty(db)));
         return Some(format!(
             "impl_trait${}",
-            stable_identity_hash(&impl_identity)
+            stable_identity_fingerprint(&impl_identity)
         ));
     }
     func.containing_impl(db).map(|impl_| {
         format!(
             "impl${}",
-            stable_identity_hash(&type_identity(db, impl_.ty(db)))
+            stable_identity_fingerprint(&type_identity(db, impl_.ty(db)))
         )
     })
 }
@@ -497,13 +497,16 @@ pub fn type_identity<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> String {
         TyData::ConstTy(const_ty) => {
             format!(
                 "const_ty${}",
-                stable_identity_hash(&const_ty.pretty_print_concrete(db))
+                stable_identity_fingerprint(&const_ty.pretty_print_concrete(db))
             )
         }
         TyData::Never => "never".to_string(),
-        TyData::TyVar(_) => format!("var${}", stable_identity_hash(ty.pretty_print(db))),
+        TyData::TyVar(_) => format!("var${}", stable_identity_fingerprint(ty.pretty_print(db))),
         TyData::Invalid(cause) => {
-            format!("invalid${}", stable_identity_hash(&cause.pretty_print(db)))
+            format!(
+                "invalid${}",
+                stable_identity_fingerprint(&cause.pretty_print(db))
+            )
         }
         TyData::TyApp(..) => unreachable!("TyApp handled before data match"),
     }
@@ -606,11 +609,11 @@ fn ingot_logical_name<'db>(
         })
 }
 
-pub fn stable_identity_hash(value: &str) -> String {
-    let mut hash = 0xcbf29ce484222325u64;
+pub fn stable_identity_fingerprint(value: &str) -> String {
+    let mut fingerprint = 0xcbf29ce484222325u64;
     for byte in value.bytes() {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(0x100000001b3);
+        fingerprint ^= u64::from(byte);
+        fingerprint = fingerprint.wrapping_mul(0x100000001b3);
     }
-    format!("{hash:016x}")
+    format!("{fingerprint:016x}")
 }

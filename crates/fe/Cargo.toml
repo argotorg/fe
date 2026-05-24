@@ -29,6 +29,7 @@ trace-facts.workspace = true
 trace-query.workspace = true
 cranelift-entity.workspace = true
 rustc-hash.workspace = true
+blake3.workspace = true
 semantic-indexing.workspace = true
 codegen = { path = "../codegen", package = "fe-codegen" }
 contract-harness = { path = "../contract-harness", package = "fe-contract-harness" }

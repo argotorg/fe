@@ -2259,7 +2259,7 @@ mod tests {
                 source_file.clone(),
                 "file:///demo/fib.fe",
                 "fib.fe",
-                "fnv64:abcd",
+                "blake3:000000000000000000000000000000000000000000000000000000000000abcd",
                 Some(0),
             )),
             TraceFact::SourceSpan(SourceSpanFact::new(
@@ -2287,7 +2287,10 @@ mod tests {
                 CodeObjectKind::EvmRuntimeBytecode,
                 Some(function.clone()),
                 "evm/sonatina",
-                Some("fnv64:beef".to_string()),
+                Some(
+                    "blake3:000000000000000000000000000000000000000000000000000000000000beef"
+                        .to_string(),
+                ),
             )),
             TraceFact::Function(trace_facts::FunctionFact::new(
                 function.clone(),

@@ -50,7 +50,7 @@ impl FeToolingConfig {
 
     pub fn stable_hash(&self) -> String {
         let json = serde_json::to_vec(self).expect("tooling config should serialize");
-        format!("fnv64:{:016x}", fnv1a64(&json))
+        format!("blake3:{}", blake3::hash(&json).to_hex())
     }
 }
 
@@ -618,15 +618,6 @@ where
     })
 }
 
-fn fnv1a64(bytes: &[u8]) -> u64 {
-    let mut hash = 0xcbf29ce484222325u64;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    hash
-}
-
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -731,8 +722,18 @@ types = false
     fn stable_hash_changes_with_config() {
         let mut config = FeToolingConfig::default();
         let original = config.stable_hash();
+        assert_content_digest(&original);
         config.lsp.max_hints_per_file += 1;
-        assert_ne!(original, config.stable_hash());
+        let changed = config.stable_hash();
+        assert_content_digest(&changed);
+        assert_ne!(original, changed);
+    }
+
+    fn assert_content_digest(value: &str) {
+        let digest = value.strip_prefix("blake3:").unwrap_or(value);
+        assert_eq!(digest.len(), 64);
+        assert!(digest.chars().all(|ch| ch.is_ascii_hexdigit()));
+        assert!(!value.starts_with("fnv64:"));
     }
 
     fn tempfile_dir() -> std::path::PathBuf {
@@ -740,7 +741,7 @@ types = false
         path.push(format!(
             "fe-introspection-config-test-{}-{}",
             std::process::id(),
-            fnv1a64(
+            blake3::hash(
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()
@@ -748,6 +749,7 @@ types = false
                     .to_string()
                     .as_bytes()
             )
+            .to_hex()
         ));
         fs::create_dir_all(&path).unwrap();
         path

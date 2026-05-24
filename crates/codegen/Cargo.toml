@@ -10,6 +10,7 @@ hir.workspace = true
 common.workspace = true
 shape-address.workspace = true
 trace-facts.workspace = true
+blake3.workspace = true
 hex = "0.4"
 num-bigint.workspace = true
 rustc-hash.workspace = true
