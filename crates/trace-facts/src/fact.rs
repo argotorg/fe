@@ -16,6 +16,12 @@ pub enum TraceFact {
     Storage(StorageFact),
     Instruction(InstructionFact),
     InstructionCategory(InstructionCategoryFact),
+    Block(BlockFact),
+    CfgEdge(CfgEdgeFact),
+    Loop(LoopFact),
+    LoopBlock(LoopBlockFact),
+    InstructionBlock(InstructionBlockFact),
+    InstructionExtent(InstructionExtentFact),
     LoopMembership(LoopMembershipFact),
     InlineContext(InlineContextFact),
     Opcode(OpcodeFact),
@@ -47,6 +53,12 @@ impl TraceFact {
             Self::Storage(_) => "storage",
             Self::Instruction(_) => "instruction",
             Self::InstructionCategory(_) => "instruction_category",
+            Self::Block(_) => "block",
+            Self::CfgEdge(_) => "cfg_edge",
+            Self::Loop(_) => "loop",
+            Self::LoopBlock(_) => "loop_block",
+            Self::InstructionBlock(_) => "instruction_block",
+            Self::InstructionExtent(_) => "instruction_extent",
             Self::LoopMembership(_) => "loop_membership",
             Self::InlineContext(_) => "inline_context",
             Self::Opcode(_) => "opcode",
@@ -460,6 +472,189 @@ pub enum CategorySource {
     BackendEmissionReason,
     PosthocClassifier { version: String },
     ManualAnnotation,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BlockFact {
+    pub block: OriginExportKey,
+    pub function: OriginExportKey,
+    pub phase: CompilerPhase,
+    pub ordinal: u32,
+    pub name: Option<String>,
+}
+
+impl BlockFact {
+    pub fn new(
+        block: OriginExportKey,
+        function: OriginExportKey,
+        phase: CompilerPhase,
+        ordinal: u32,
+        name: Option<String>,
+    ) -> Self {
+        Self {
+            block,
+            function,
+            phase,
+            ordinal,
+            name,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CfgEdgeFact {
+    pub function: OriginExportKey,
+    pub from_block: OriginExportKey,
+    pub to_block: OriginExportKey,
+    pub kind: CfgEdgeKind,
+    pub condition_origin: Option<OriginExportKey>,
+}
+
+impl CfgEdgeFact {
+    pub fn new(
+        function: OriginExportKey,
+        from_block: OriginExportKey,
+        to_block: OriginExportKey,
+        kind: CfgEdgeKind,
+        condition_origin: Option<OriginExportKey>,
+    ) -> Self {
+        Self {
+            function,
+            from_block,
+            to_block,
+            kind,
+            condition_origin,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CfgEdgeKind {
+    Fallthrough,
+    BranchTrue,
+    BranchFalse,
+    Jump,
+    Backedge,
+    Return,
+    Unwind,
+    Unknown,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LoopFact {
+    pub loop_key: OriginExportKey,
+    pub function: OriginExportKey,
+    pub phase: CompilerPhase,
+    pub header_block: OriginExportKey,
+    pub derivation: LoopDerivation,
+    pub confidence: LoopConfidence,
+}
+
+impl LoopFact {
+    pub fn new(
+        loop_key: OriginExportKey,
+        function: OriginExportKey,
+        phase: CompilerPhase,
+        header_block: OriginExportKey,
+        derivation: LoopDerivation,
+        confidence: LoopConfidence,
+    ) -> Self {
+        Self {
+            loop_key,
+            function,
+            phase,
+            header_block,
+            derivation,
+            confidence,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LoopConfidence {
+    MirCfg,
+    SonatinaCfg,
+    BackendBlockMapping,
+    CrossPhaseWitness,
+    Fixture,
+    PosthocDisassembly,
+    Unknown,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LoopBlockFact {
+    pub loop_key: OriginExportKey,
+    pub block: OriginExportKey,
+    pub role: LoopBlockRole,
+}
+
+impl LoopBlockFact {
+    pub fn new(loop_key: OriginExportKey, block: OriginExportKey, role: LoopBlockRole) -> Self {
+        Self {
+            loop_key,
+            block,
+            role,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LoopBlockRole {
+    Header,
+    Body,
+    Latch,
+    Preheader,
+    Exit,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InstructionBlockFact {
+    pub instruction: OriginExportKey,
+    pub block: OriginExportKey,
+    pub phase: CompilerPhase,
+}
+
+impl InstructionBlockFact {
+    pub fn new(instruction: OriginExportKey, block: OriginExportKey, phase: CompilerPhase) -> Self {
+        Self {
+            instruction,
+            block,
+            phase,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InstructionExtentFact {
+    pub instruction: OriginExportKey,
+    pub code_object: OriginExportKey,
+    pub pc_range: PcRange,
+    pub byte_len: u32,
+}
+
+impl InstructionExtentFact {
+    pub fn new(
+        instruction: OriginExportKey,
+        code_object: OriginExportKey,
+        pc_range: PcRange,
+        byte_len: u32,
+    ) -> Self {
+        Self {
+            instruction,
+            code_object,
+            pc_range,
+            byte_len,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

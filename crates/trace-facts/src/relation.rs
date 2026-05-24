@@ -3,9 +3,10 @@ use serde::{Deserialize, Serialize};
 use shape_address::{DimensionDigests, ShapeDimension};
 
 use crate::fact::{
-    CodeObjectFact, CompilerEventFact, DisplayNameFact, DynamicGasStepFact, FunctionFact,
-    GasCostFact, InlineContextFact, InstructionCategoryFact, InstructionFact, LexicalScopeFact,
-    LocationRangeFact, LoopMembershipFact, OpcodeFact, OriginEdgeFact, OriginNodeFact,
+    BlockFact, CfgEdgeFact, CodeObjectFact, CompilerEventFact, DisplayNameFact, DynamicGasStepFact,
+    FunctionFact, GasCostFact, InlineContextFact, InstructionBlockFact, InstructionCategoryFact,
+    InstructionExtentFact, InstructionFact, LexicalScopeFact, LocationRangeFact, LoopBlockFact,
+    LoopFact, LoopMembershipFact, OpcodeFact, OriginEdgeFact, OriginNodeFact,
     ShapeComponentHashFact, ShapeGraphHashFact, ShapeNodeHashFact, ShapePolicyFact, SourceFileFact,
     SourceSpanFact, StaticGasFact, StorageFact, TraceFact, TypeFact, ValuePropertyFact,
     VariableFact,
@@ -58,6 +59,12 @@ impl TraceFact {
             Self::Storage(_) => StorageFact::NAME,
             Self::Instruction(_) => InstructionFact::NAME,
             Self::InstructionCategory(_) => InstructionCategoryFact::NAME,
+            Self::Block(_) => BlockFact::NAME,
+            Self::CfgEdge(_) => CfgEdgeFact::NAME,
+            Self::Loop(_) => LoopFact::NAME,
+            Self::LoopBlock(_) => LoopBlockFact::NAME,
+            Self::InstructionBlock(_) => InstructionBlockFact::NAME,
+            Self::InstructionExtent(_) => InstructionExtentFact::NAME,
             Self::LoopMembership(_) => LoopMembershipFact::NAME,
             Self::InlineContext(_) => InlineContextFact::NAME,
             Self::Opcode(_) => OpcodeFact::NAME,
@@ -89,6 +96,12 @@ impl TraceFact {
             Self::Storage(_) => StorageFact::schema(),
             Self::Instruction(_) => InstructionFact::schema(),
             Self::InstructionCategory(_) => InstructionCategoryFact::schema(),
+            Self::Block(_) => BlockFact::schema(),
+            Self::CfgEdge(_) => CfgEdgeFact::schema(),
+            Self::Loop(_) => LoopFact::schema(),
+            Self::LoopBlock(_) => LoopBlockFact::schema(),
+            Self::InstructionBlock(_) => InstructionBlockFact::schema(),
+            Self::InstructionExtent(_) => InstructionExtentFact::schema(),
             Self::LoopMembership(_) => LoopMembershipFact::schema(),
             Self::InlineContext(_) => InlineContextFact::schema(),
             Self::Opcode(_) => OpcodeFact::schema(),
@@ -120,6 +133,12 @@ impl TraceFact {
             Self::Storage(fact) => fact.row(),
             Self::Instruction(fact) => fact.row(),
             Self::InstructionCategory(fact) => fact.row(),
+            Self::Block(fact) => fact.row(),
+            Self::CfgEdge(fact) => fact.row(),
+            Self::Loop(fact) => fact.row(),
+            Self::LoopBlock(fact) => fact.row(),
+            Self::InstructionBlock(fact) => fact.row(),
+            Self::InstructionExtent(fact) => fact.row(),
             Self::LoopMembership(fact) => fact.row(),
             Self::InlineContext(fact) => fact.row(),
             Self::Opcode(fact) => fact.row(),
@@ -305,6 +324,161 @@ impl TraceRelation for InstructionCategoryFact {
                 key(&self.instruction),
                 value(&self.category),
                 value(&self.source),
+            ]
+        )
+    }
+}
+
+impl TraceRelation for BlockFact {
+    const NAME: &'static str = "base_block";
+
+    fn schema() -> RelationSchema {
+        schema!(
+            Self::NAME,
+            [
+                "block": Key,
+                "function": Key,
+                "phase": Text,
+                "ordinal": U32,
+                "name": OptionalText,
+            ]
+        )
+    }
+
+    fn row(&self) -> RelationRow {
+        row!(
+            Self::NAME,
+            [
+                key(&self.block),
+                key(&self.function),
+                value(&self.phase),
+                self.ordinal.to_string(),
+                self.name.clone().unwrap_or_default(),
+            ]
+        )
+    }
+}
+
+impl TraceRelation for CfgEdgeFact {
+    const NAME: &'static str = "base_cfg_edge";
+
+    fn schema() -> RelationSchema {
+        schema!(
+            Self::NAME,
+            [
+                "function": Key,
+                "from_block": Key,
+                "to_block": Key,
+                "kind": Text,
+                "condition_origin": OptionalKey,
+            ]
+        )
+    }
+
+    fn row(&self) -> RelationRow {
+        row!(
+            Self::NAME,
+            [
+                key(&self.function),
+                key(&self.from_block),
+                key(&self.to_block),
+                value(&self.kind),
+                opt_key(self.condition_origin.as_ref()),
+            ]
+        )
+    }
+}
+
+impl TraceRelation for LoopFact {
+    const NAME: &'static str = "base_loop";
+
+    fn schema() -> RelationSchema {
+        schema!(
+            Self::NAME,
+            [
+                "loop": Key,
+                "function": Key,
+                "phase": Text,
+                "header_block": Key,
+                "derivation": Text,
+                "confidence": Text,
+            ]
+        )
+    }
+
+    fn row(&self) -> RelationRow {
+        row!(
+            Self::NAME,
+            [
+                key(&self.loop_key),
+                key(&self.function),
+                value(&self.phase),
+                key(&self.header_block),
+                value(&self.derivation),
+                value(&self.confidence),
+            ]
+        )
+    }
+}
+
+impl TraceRelation for LoopBlockFact {
+    const NAME: &'static str = "base_loop_block";
+
+    fn schema() -> RelationSchema {
+        schema!(Self::NAME, ["loop": Key, "block": Key, "role": Text])
+    }
+
+    fn row(&self) -> RelationRow {
+        row!(
+            Self::NAME,
+            [key(&self.loop_key), key(&self.block), value(&self.role),]
+        )
+    }
+}
+
+impl TraceRelation for InstructionBlockFact {
+    const NAME: &'static str = "base_instruction_block";
+
+    fn schema() -> RelationSchema {
+        schema!(
+            Self::NAME,
+            ["instruction": Key, "block": Key, "phase": Text]
+        )
+    }
+
+    fn row(&self) -> RelationRow {
+        row!(
+            Self::NAME,
+            [key(&self.instruction), key(&self.block), value(&self.phase),]
+        )
+    }
+}
+
+impl TraceRelation for InstructionExtentFact {
+    const NAME: &'static str = "base_instruction_extent";
+
+    fn schema() -> RelationSchema {
+        schema!(
+            Self::NAME,
+            [
+                "instruction": Key,
+                "code_object": Key,
+                "pc_start": U32,
+                "pc_end": U32,
+                "byte_len": U32,
+            ]
+        )
+    }
+
+    fn row(&self) -> RelationRow {
+        row!(
+            Self::NAME,
+            [
+                key(&self.instruction),
+                key(&self.code_object),
+                self.pc_range.start.to_string(),
+                self.pc_range.end.to_string(),
+                self.byte_len.to_string(),
             ]
         )
     }

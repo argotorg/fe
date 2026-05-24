@@ -9,16 +9,18 @@ pub use evm_trace::{
     EvmExecutionStep, EvmExecutionTrace, EvmExecutionTraceError, dynamic_gas_facts_from_evm_trace,
 };
 pub use fact::{
-    CategorySource, CodeObjectFact, CodeObjectKind, CompilerEventFact, CompilerEventKind,
-    CompilerPhase, CompilerReason, DisplayNameFact, DisplayNameKind, DynamicGasKind,
-    DynamicGasStepFact, EvmSchedule, FunctionFact, GasConfidence, GasCostFact, GasKind, GasSource,
-    InlineContextFact, InstructionCategory, InstructionCategoryFact, InstructionFact,
-    LexicalScopeFact, LocationConfidence, LocationExpr, LocationRangeFact, LoopDerivation,
-    LoopMembershipFact, OpcodeCategory, OpcodeFact, OriginEdgeFact, OriginEdgeLabel,
-    OriginNodeFact, OriginNodeKind, PcRange, ShapeComponentHashFact, ShapeGraphHashFact,
-    ShapeNodeHashFact, ShapePolicyFact, SourceFileFact, SourceSpanFact, StaticGasFact, StorageFact,
-    StorageLocation, StorageReason, TraceFact, TraceFactTextError, TypeFact, TypeField, TypeKind,
-    ValueLocation, ValueProperty, ValuePropertyFact, VariableFact, VariableStorageClass,
+    BlockFact, CategorySource, CfgEdgeFact, CfgEdgeKind, CodeObjectFact, CodeObjectKind,
+    CompilerEventFact, CompilerEventKind, CompilerPhase, CompilerReason, DisplayNameFact,
+    DisplayNameKind, DynamicGasKind, DynamicGasStepFact, EvmSchedule, FunctionFact, GasConfidence,
+    GasCostFact, GasKind, GasSource, InlineContextFact, InstructionBlockFact, InstructionCategory,
+    InstructionCategoryFact, InstructionExtentFact, InstructionFact, LexicalScopeFact,
+    LocationConfidence, LocationExpr, LocationRangeFact, LoopBlockFact, LoopBlockRole,
+    LoopConfidence, LoopDerivation, LoopFact, LoopMembershipFact, OpcodeCategory, OpcodeFact,
+    OriginEdgeFact, OriginEdgeLabel, OriginNodeFact, OriginNodeKind, PcRange,
+    ShapeComponentHashFact, ShapeGraphHashFact, ShapeNodeHashFact, ShapePolicyFact, SourceFileFact,
+    SourceSpanFact, StaticGasFact, StorageFact, StorageLocation, StorageReason, TraceFact,
+    TraceFactTextError, TypeFact, TypeField, TypeKind, ValueLocation, ValueProperty,
+    ValuePropertyFact, VariableFact, VariableStorageClass,
 };
 pub use jsonl::{
     JsonlTraceReadError, JsonlTraceReader, JsonlTraceSink, TRACE_SCHEMA_VERSION, TraceBundle,

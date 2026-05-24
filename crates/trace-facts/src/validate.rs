@@ -5,13 +5,14 @@ use common::origin::OriginExportKey;
 use shape_address::{DimensionDigests, ShapePolicyId};
 
 use crate::fact::{
-    CategorySource, CodeObjectFact, CompilerEventFact, CompilerPhase, DisplayNameFact,
-    DynamicGasStepFact, FunctionFact, InlineContextFact, InstructionCategoryFact, InstructionFact,
-    LexicalScopeFact, LocationExpr, LocationRangeFact, LoopDerivation, LoopMembershipFact,
-    OpcodeFact, OriginEdgeFact, OriginNodeFact, ShapeComponentHashFact, ShapeGraphHashFact,
-    ShapeNodeHashFact, ShapePolicyFact, SourceFileFact, SourceSpanFact, StaticGasFact, StorageFact,
-    StorageLocation, TraceFact, TypeFact, ValueLocation, ValueProperty, ValuePropertyFact,
-    VariableFact,
+    BlockFact, CategorySource, CfgEdgeFact, CodeObjectFact, CompilerEventFact, CompilerPhase,
+    DisplayNameFact, DynamicGasStepFact, FunctionFact, InlineContextFact, InstructionBlockFact,
+    InstructionCategoryFact, InstructionExtentFact, InstructionFact, LexicalScopeFact,
+    LocationExpr, LocationRangeFact, LoopBlockFact, LoopBlockRole, LoopDerivation, LoopFact,
+    LoopMembershipFact, OpcodeFact, OriginEdgeFact, OriginNodeFact, ShapeComponentHashFact,
+    ShapeGraphHashFact, ShapeNodeHashFact, ShapePolicyFact, SourceFileFact, SourceSpanFact,
+    StaticGasFact, StorageFact, StorageLocation, TraceFact, TypeFact, ValueLocation, ValueProperty,
+    ValuePropertyFact, VariableFact,
 };
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -117,6 +118,12 @@ impl TraceValidator {
         let mut storage = Vec::new();
         let mut instructions = Vec::new();
         let mut instruction_categories = Vec::new();
+        let mut blocks = Vec::new();
+        let mut cfg_edges = Vec::new();
+        let mut loops = Vec::new();
+        let mut loop_blocks = Vec::new();
+        let mut instruction_blocks = Vec::new();
+        let mut instruction_extents = Vec::new();
         let mut loop_memberships = Vec::new();
         let mut inline_contexts = Vec::new();
         let mut compiler_events = Vec::new();
@@ -157,6 +164,12 @@ impl TraceValidator {
                 TraceFact::Storage(storage_fact) => storage.push(storage_fact),
                 TraceFact::Instruction(instruction) => instructions.push(instruction),
                 TraceFact::InstructionCategory(category) => instruction_categories.push(category),
+                TraceFact::Block(block) => blocks.push(block),
+                TraceFact::CfgEdge(edge) => cfg_edges.push(edge),
+                TraceFact::Loop(loop_fact) => loops.push(loop_fact),
+                TraceFact::LoopBlock(block) => loop_blocks.push(block),
+                TraceFact::InstructionBlock(block) => instruction_blocks.push(block),
+                TraceFact::InstructionExtent(extent) => instruction_extents.push(extent),
                 TraceFact::LoopMembership(membership) => loop_memberships.push(membership),
                 TraceFact::InlineContext(context) => inline_contexts.push(context),
                 TraceFact::Opcode(opcode) => opcodes.push(opcode),
@@ -235,6 +248,123 @@ impl TraceValidator {
                     },
                 );
             }
+        }
+
+        let mut block_functions = BTreeMap::new();
+        let mut block_ordinals = BTreeMap::new();
+        for block in blocks {
+            validate_block(block, &nodes, &mut diagnostics);
+            if let Some(existing_function) =
+                block_functions.insert(block.block.clone(), block.function.clone())
+                && existing_function != block.function
+            {
+                push_error(
+                    &mut diagnostics,
+                    TraceValidationError::BlockHasMultipleFunctions {
+                        block: block.block.clone(),
+                        first_function: existing_function,
+                        second_function: block.function.clone(),
+                    },
+                );
+            }
+            let site = (block.function.clone(), block.ordinal);
+            if let Some(first_block) = block_ordinals.insert(site, block.block.clone()) {
+                push_error(
+                    &mut diagnostics,
+                    TraceValidationError::DuplicateBlockOrdinal {
+                        function: block.function.clone(),
+                        ordinal: block.ordinal,
+                        first_block,
+                        second_block: block.block.clone(),
+                    },
+                );
+            }
+        }
+
+        for cfg_edge in cfg_edges {
+            validate_cfg_edge(cfg_edge, &nodes, &block_functions, &mut diagnostics);
+        }
+
+        let mut loop_functions = BTreeMap::new();
+        let mut loop_headers = BTreeMap::new();
+        for loop_fact in loops {
+            validate_loop_fact(loop_fact, &nodes, &block_functions, &mut diagnostics);
+            loop_functions.insert(loop_fact.loop_key.clone(), loop_fact.function.clone());
+            loop_headers.insert(loop_fact.loop_key.clone(), loop_fact.header_block.clone());
+        }
+
+        let mut loop_header_role_counts = BTreeMap::<OriginExportKey, usize>::new();
+        let mut loop_block_sites = BTreeSet::new();
+        for loop_block in loop_blocks {
+            validate_loop_block(
+                loop_block,
+                &nodes,
+                &block_functions,
+                &loop_functions,
+                &loop_headers,
+                &mut diagnostics,
+            );
+            if !loop_block_sites.insert((loop_block.loop_key.clone(), loop_block.block.clone())) {
+                push_error(
+                    &mut diagnostics,
+                    TraceValidationError::DuplicateLoopBlock {
+                        loop_key: loop_block.loop_key.clone(),
+                        block: loop_block.block.clone(),
+                    },
+                );
+            }
+            if loop_block.role == LoopBlockRole::Header {
+                *loop_header_role_counts
+                    .entry(loop_block.loop_key.clone())
+                    .or_default() += 1;
+            }
+        }
+        for loop_key in loop_functions.keys() {
+            match loop_header_role_counts.get(loop_key).copied().unwrap_or(0) {
+                1 => {}
+                0 => push_error(
+                    &mut diagnostics,
+                    TraceValidationError::InvalidLoopBlockRoles {
+                        loop_key: loop_key.clone(),
+                        reason: "loop must have exactly one header block role",
+                    },
+                ),
+                _ => push_error(
+                    &mut diagnostics,
+                    TraceValidationError::InvalidLoopBlockRoles {
+                        loop_key: loop_key.clone(),
+                        reason: "loop must not have multiple header block roles",
+                    },
+                ),
+            }
+        }
+
+        let mut instruction_block_sites = BTreeMap::new();
+        for instruction_block in instruction_blocks {
+            validate_instruction_block(
+                instruction_block,
+                &nodes,
+                &instruction_owners,
+                &block_functions,
+                &mut diagnostics,
+            );
+            if let Some(first_block) = instruction_block_sites.insert(
+                instruction_block.instruction.clone(),
+                instruction_block.block.clone(),
+            ) {
+                push_error(
+                    &mut diagnostics,
+                    TraceValidationError::DuplicateInstructionBlock {
+                        instruction: instruction_block.instruction.clone(),
+                        first_block,
+                        second_block: instruction_block.block.clone(),
+                    },
+                );
+            }
+        }
+
+        for extent in instruction_extents {
+            validate_instruction_extent(extent, &nodes, &instruction_owners, &mut diagnostics);
         }
 
         for edge in &edges {
@@ -483,6 +613,218 @@ fn validate_instruction_category(
     }
 }
 
+fn validate_block(
+    block: &BlockFact,
+    nodes: &BTreeSet<OriginExportKey>,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    require_node(nodes, &block.block, "block.block", diagnostics);
+    require_node(nodes, &block.function, "block.function", diagnostics);
+    if block
+        .name
+        .as_deref()
+        .is_some_and(|name| name.trim().is_empty())
+    {
+        push_error(
+            diagnostics,
+            TraceValidationError::EmptyBlockName {
+                block: block.block.clone(),
+            },
+        );
+    }
+}
+
+fn validate_cfg_edge(
+    edge: &CfgEdgeFact,
+    nodes: &BTreeSet<OriginExportKey>,
+    block_functions: &BTreeMap<OriginExportKey, OriginExportKey>,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    require_node(nodes, &edge.function, "cfg_edge.function", diagnostics);
+    require_node(nodes, &edge.from_block, "cfg_edge.from_block", diagnostics);
+    require_node(nodes, &edge.to_block, "cfg_edge.to_block", diagnostics);
+    if let Some(condition) = &edge.condition_origin {
+        require_node(nodes, condition, "cfg_edge.condition_origin", diagnostics);
+    }
+    validate_block_owner(
+        "cfg_edge.from_block",
+        &edge.function,
+        &edge.from_block,
+        block_functions,
+        diagnostics,
+    );
+    validate_block_owner(
+        "cfg_edge.to_block",
+        &edge.function,
+        &edge.to_block,
+        block_functions,
+        diagnostics,
+    );
+}
+
+fn validate_loop_fact(
+    loop_fact: &LoopFact,
+    nodes: &BTreeSet<OriginExportKey>,
+    block_functions: &BTreeMap<OriginExportKey, OriginExportKey>,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    require_node(nodes, &loop_fact.loop_key, "loop.loop_key", diagnostics);
+    require_node(nodes, &loop_fact.function, "loop.function", diagnostics);
+    require_node(
+        nodes,
+        &loop_fact.header_block,
+        "loop.header_block",
+        diagnostics,
+    );
+    validate_block_owner(
+        "loop.header_block",
+        &loop_fact.function,
+        &loop_fact.header_block,
+        block_functions,
+        diagnostics,
+    );
+    validate_loop_derivation(&loop_fact.loop_key, &loop_fact.derivation, diagnostics);
+}
+
+fn validate_loop_block(
+    loop_block: &LoopBlockFact,
+    nodes: &BTreeSet<OriginExportKey>,
+    block_functions: &BTreeMap<OriginExportKey, OriginExportKey>,
+    loop_functions: &BTreeMap<OriginExportKey, OriginExportKey>,
+    loop_headers: &BTreeMap<OriginExportKey, OriginExportKey>,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    require_node(
+        nodes,
+        &loop_block.loop_key,
+        "loop_block.loop_key",
+        diagnostics,
+    );
+    require_node(nodes, &loop_block.block, "loop_block.block", diagnostics);
+    let Some(loop_function) = loop_functions.get(&loop_block.loop_key) else {
+        push_error(
+            diagnostics,
+            TraceValidationError::LoopBlockWithoutLoop {
+                loop_key: loop_block.loop_key.clone(),
+            },
+        );
+        return;
+    };
+    validate_block_owner(
+        "loop_block.block",
+        loop_function,
+        &loop_block.block,
+        block_functions,
+        diagnostics,
+    );
+    if loop_block.role == LoopBlockRole::Header
+        && let Some(header_block) = loop_headers.get(&loop_block.loop_key)
+        && header_block != &loop_block.block
+    {
+        push_error(
+            diagnostics,
+            TraceValidationError::LoopHeaderRoleMismatch {
+                loop_key: loop_block.loop_key.clone(),
+                header_block: header_block.clone(),
+                role_block: loop_block.block.clone(),
+            },
+        );
+    }
+}
+
+fn validate_instruction_block(
+    instruction_block: &InstructionBlockFact,
+    nodes: &BTreeSet<OriginExportKey>,
+    instruction_owners: &BTreeMap<OriginExportKey, OriginExportKey>,
+    block_functions: &BTreeMap<OriginExportKey, OriginExportKey>,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    require_node(
+        nodes,
+        &instruction_block.instruction,
+        "instruction_block.instruction",
+        diagnostics,
+    );
+    require_node(
+        nodes,
+        &instruction_block.block,
+        "instruction_block.block",
+        diagnostics,
+    );
+    let Some(instruction_function) = instruction_owners.get(&instruction_block.instruction) else {
+        push_error(
+            diagnostics,
+            TraceValidationError::InstructionBlockWithoutInstruction {
+                instruction: instruction_block.instruction.clone(),
+            },
+        );
+        return;
+    };
+    validate_block_owner(
+        "instruction_block.block",
+        instruction_function,
+        &instruction_block.block,
+        block_functions,
+        diagnostics,
+    );
+}
+
+fn validate_instruction_extent(
+    extent: &InstructionExtentFact,
+    nodes: &BTreeSet<OriginExportKey>,
+    instruction_owners: &BTreeMap<OriginExportKey, OriginExportKey>,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    require_node(
+        nodes,
+        &extent.instruction,
+        "instruction_extent.instruction",
+        diagnostics,
+    );
+    require_node(
+        nodes,
+        &extent.code_object,
+        "instruction_extent.code_object",
+        diagnostics,
+    );
+    if !instruction_owners.contains_key(&extent.instruction) {
+        push_error(
+            diagnostics,
+            TraceValidationError::InstructionExtentWithoutInstruction {
+                instruction: extent.instruction.clone(),
+            },
+        );
+    }
+    if !extent.pc_range.is_valid() {
+        push_error(
+            diagnostics,
+            TraceValidationError::InvalidInstructionExtent {
+                instruction: extent.instruction.clone(),
+                reason: "PC range must be non-empty and ordered",
+            },
+        );
+        return;
+    }
+    if extent.byte_len == 0 {
+        push_error(
+            diagnostics,
+            TraceValidationError::InvalidInstructionExtent {
+                instruction: extent.instruction.clone(),
+                reason: "byte_len must be non-zero",
+            },
+        );
+    }
+    if extent.pc_range.end - extent.pc_range.start != extent.byte_len {
+        push_error(
+            diagnostics,
+            TraceValidationError::InvalidInstructionExtent {
+                instruction: extent.instruction.clone(),
+                reason: "byte_len must equal pc_range length",
+            },
+        );
+    }
+}
+
 fn validate_loop_membership(
     membership: &LoopMembershipFact,
     nodes: &BTreeSet<OriginExportKey>,
@@ -509,15 +851,51 @@ fn validate_loop_membership(
             },
         );
     }
-    if let LoopDerivation::NaturalLoopAnalysis { cfg_hash } = &membership.derived_from
+    validate_loop_derivation(&membership.loop_key, &membership.derived_from, diagnostics);
+}
+
+fn validate_loop_derivation(
+    loop_key: &OriginExportKey,
+    derivation: &LoopDerivation,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    if let LoopDerivation::NaturalLoopAnalysis { cfg_hash } = derivation
         && cfg_hash.trim().is_empty()
     {
         push_error(
             diagnostics,
             TraceValidationError::EmptyLoopCfgHash {
-                loop_key: membership.loop_key.clone(),
+                loop_key: loop_key.clone(),
             },
         );
+    }
+}
+
+fn validate_block_owner(
+    role: &'static str,
+    function: &OriginExportKey,
+    block: &OriginExportKey,
+    block_functions: &BTreeMap<OriginExportKey, OriginExportKey>,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    match block_functions.get(block) {
+        Some(block_function) if block_function == function => {}
+        Some(block_function) => push_error(
+            diagnostics,
+            TraceValidationError::BlockFunctionMismatch {
+                role,
+                function: function.clone(),
+                block: block.clone(),
+                block_function: block_function.clone(),
+            },
+        ),
+        None => push_error(
+            diagnostics,
+            TraceValidationError::BlockFactMissing {
+                role,
+                block: block.clone(),
+            },
+        ),
     }
 }
 
@@ -1323,6 +1701,61 @@ pub enum TraceValidationError {
     InstructionCategoryWithoutInstruction {
         instruction: OriginExportKey,
     },
+    EmptyBlockName {
+        block: OriginExportKey,
+    },
+    BlockHasMultipleFunctions {
+        block: OriginExportKey,
+        first_function: OriginExportKey,
+        second_function: OriginExportKey,
+    },
+    DuplicateBlockOrdinal {
+        function: OriginExportKey,
+        ordinal: u32,
+        first_block: OriginExportKey,
+        second_block: OriginExportKey,
+    },
+    BlockFactMissing {
+        role: &'static str,
+        block: OriginExportKey,
+    },
+    BlockFunctionMismatch {
+        role: &'static str,
+        function: OriginExportKey,
+        block: OriginExportKey,
+        block_function: OriginExportKey,
+    },
+    LoopBlockWithoutLoop {
+        loop_key: OriginExportKey,
+    },
+    DuplicateLoopBlock {
+        loop_key: OriginExportKey,
+        block: OriginExportKey,
+    },
+    LoopHeaderRoleMismatch {
+        loop_key: OriginExportKey,
+        header_block: OriginExportKey,
+        role_block: OriginExportKey,
+    },
+    InvalidLoopBlockRoles {
+        loop_key: OriginExportKey,
+        reason: &'static str,
+    },
+    InstructionBlockWithoutInstruction {
+        instruction: OriginExportKey,
+    },
+    DuplicateInstructionBlock {
+        instruction: OriginExportKey,
+        first_block: OriginExportKey,
+        second_block: OriginExportKey,
+    },
+    InstructionExtentWithoutInstruction {
+        instruction: OriginExportKey,
+    },
+    InvalidInstructionExtent {
+        instruction: OriginExportKey,
+        reason: &'static str,
+    },
     LoopMembershipWithoutInstruction {
         instruction: OriginExportKey,
     },
@@ -1496,6 +1929,105 @@ impl fmt::Display for TraceValidationError {
                 "instruction category references {} but no instruction fact defines it",
                 instruction.display_label()
             ),
+            Self::EmptyBlockName { block } => {
+                write!(f, "block {} has an empty name", block.display_label())
+            }
+            Self::BlockHasMultipleFunctions {
+                block,
+                first_function,
+                second_function,
+            } => write!(
+                f,
+                "block {} belongs to multiple functions: {} and {}",
+                block.display_label(),
+                first_function.display_label(),
+                second_function.display_label()
+            ),
+            Self::DuplicateBlockOrdinal {
+                function,
+                ordinal,
+                first_block,
+                second_block,
+            } => write!(
+                f,
+                "function {} has multiple blocks at ordinal {ordinal}: {} and {}",
+                function.display_label(),
+                first_block.display_label(),
+                second_block.display_label()
+            ),
+            Self::BlockFactMissing { role, block } => write!(
+                f,
+                "{role} references {} but no block fact defines it",
+                block.display_label()
+            ),
+            Self::BlockFunctionMismatch {
+                role,
+                function,
+                block,
+                block_function,
+            } => write!(
+                f,
+                "{role} references block {} owned by {}, not {}",
+                block.display_label(),
+                block_function.display_label(),
+                function.display_label()
+            ),
+            Self::LoopBlockWithoutLoop { loop_key } => write!(
+                f,
+                "loop block references {} but no loop fact defines it",
+                loop_key.display_label()
+            ),
+            Self::DuplicateLoopBlock { loop_key, block } => write!(
+                f,
+                "loop {} contains duplicate block {}",
+                loop_key.display_label(),
+                block.display_label()
+            ),
+            Self::LoopHeaderRoleMismatch {
+                loop_key,
+                header_block,
+                role_block,
+            } => write!(
+                f,
+                "loop {} declares header {} but assigns header role to {}",
+                loop_key.display_label(),
+                header_block.display_label(),
+                role_block.display_label()
+            ),
+            Self::InvalidLoopBlockRoles { loop_key, reason } => write!(
+                f,
+                "loop {} has invalid block roles: {reason}",
+                loop_key.display_label()
+            ),
+            Self::InstructionBlockWithoutInstruction { instruction } => write!(
+                f,
+                "instruction block references {} but no instruction fact defines it",
+                instruction.display_label()
+            ),
+            Self::DuplicateInstructionBlock {
+                instruction,
+                first_block,
+                second_block,
+            } => write!(
+                f,
+                "instruction {} belongs to multiple blocks: {} and {}",
+                instruction.display_label(),
+                first_block.display_label(),
+                second_block.display_label()
+            ),
+            Self::InstructionExtentWithoutInstruction { instruction } => write!(
+                f,
+                "instruction extent references {} but no instruction fact defines it",
+                instruction.display_label()
+            ),
+            Self::InvalidInstructionExtent {
+                instruction,
+                reason,
+            } => write!(
+                f,
+                "instruction extent for {} is invalid: {reason}",
+                instruction.display_label()
+            ),
             Self::LoopMembershipWithoutInstruction { instruction } => write!(
                 f,
                 "loop membership references {} but no instruction fact defines it",
@@ -1657,14 +2189,15 @@ mod tests {
     };
 
     use crate::{
-        CategorySource, CodeObjectFact, CodeObjectKind, CompilerPhase, EvmSchedule, FunctionFact,
-        GasConfidence, GasCostFact, GasKind, GasSource, InlineContextFact, InstructionCategory,
-        InstructionCategoryFact, InstructionFact, LoopDerivation, LoopMembershipFact,
-        OpcodeCategory, OpcodeFact, OriginEdgeFact, OriginEdgeLabel, OriginNodeFact,
-        OriginNodeKind, ShapeComponentHashFact, ShapeGraphHashFact, ShapeNodeHashFact,
-        ShapePolicyFact, SourceFileFact, SourceSpanFact, StaticGasFact, StorageFact,
-        StorageLocation, StorageReason, TraceFact, TraceValidationError, TraceValidationLevel,
-        TraceValidator,
+        BlockFact, CategorySource, CfgEdgeFact, CfgEdgeKind, CodeObjectFact, CodeObjectKind,
+        CompilerPhase, EvmSchedule, FunctionFact, GasConfidence, GasCostFact, GasKind, GasSource,
+        InlineContextFact, InstructionBlockFact, InstructionCategory, InstructionCategoryFact,
+        InstructionExtentFact, InstructionFact, LoopBlockFact, LoopBlockRole, LoopConfidence,
+        LoopDerivation, LoopFact, LoopMembershipFact, OpcodeCategory, OpcodeFact, OriginEdgeFact,
+        OriginEdgeLabel, OriginNodeFact, OriginNodeKind, PcRange, ShapeComponentHashFact,
+        ShapeGraphHashFact, ShapeNodeHashFact, ShapePolicyFact, SourceFileFact, SourceSpanFact,
+        StaticGasFact, StorageFact, StorageLocation, StorageReason, TraceFact,
+        TraceValidationError, TraceValidationLevel, TraceValidator,
     };
 
     fn key(kind: &str, owner: &str, local: &str) -> OriginExportKey {
@@ -1756,6 +2289,231 @@ mod tests {
         let summary = TraceValidator::validate(&facts).unwrap();
         assert_eq!(summary.node_count, 7);
         assert_eq!(summary.instruction_count, 1);
+    }
+
+    #[test]
+    fn validator_accepts_cfg_loop_block_and_extent_facts() {
+        let function = key("mir.function", "fib", "recv");
+        let code_object = key("code.object", "fib", "runtime");
+        let header = key("mir.block", "fib", "block:0");
+        let latch = key("mir.block", "fib", "block:1");
+        let loop_key = key("mir.loop", "fib", "loop:0");
+        let instruction = key("mir.inst", "fib", "inst:0");
+
+        let facts = vec![
+            node("mir.function", "fib", "recv"),
+            node("code.object", "fib", "runtime"),
+            node("mir.block", "fib", "block:0"),
+            node("mir.block", "fib", "block:1"),
+            node("mir.loop", "fib", "loop:0"),
+            node("mir.inst", "fib", "inst:0"),
+            TraceFact::Block(BlockFact::new(
+                header.clone(),
+                function.clone(),
+                CompilerPhase::Mir,
+                0,
+                Some("loop_header".to_string()),
+            )),
+            TraceFact::Block(BlockFact::new(
+                latch.clone(),
+                function.clone(),
+                CompilerPhase::Mir,
+                1,
+                Some("loop_latch".to_string()),
+            )),
+            TraceFact::CfgEdge(CfgEdgeFact::new(
+                function.clone(),
+                header.clone(),
+                latch.clone(),
+                CfgEdgeKind::Fallthrough,
+                None,
+            )),
+            TraceFact::CfgEdge(CfgEdgeFact::new(
+                function.clone(),
+                latch.clone(),
+                header.clone(),
+                CfgEdgeKind::Backedge,
+                None,
+            )),
+            TraceFact::Loop(LoopFact::new(
+                loop_key.clone(),
+                function.clone(),
+                CompilerPhase::Mir,
+                header.clone(),
+                LoopDerivation::NaturalLoopAnalysis {
+                    cfg_hash: "cfg:abc".to_string(),
+                },
+                LoopConfidence::MirCfg,
+            )),
+            TraceFact::LoopBlock(LoopBlockFact::new(
+                loop_key.clone(),
+                header,
+                LoopBlockRole::Header,
+            )),
+            TraceFact::LoopBlock(LoopBlockFact::new(
+                loop_key,
+                latch.clone(),
+                LoopBlockRole::Latch,
+            )),
+            TraceFact::Instruction(InstructionFact::new(instruction.clone(), function, 0, "br")),
+            TraceFact::InstructionBlock(InstructionBlockFact::new(
+                instruction.clone(),
+                latch,
+                CompilerPhase::Mir,
+            )),
+            TraceFact::InstructionExtent(InstructionExtentFact::new(
+                instruction,
+                code_object,
+                PcRange::new(4, 5),
+                1,
+            )),
+        ];
+
+        assert!(TraceValidator::validate(&facts).is_ok());
+    }
+
+    #[test]
+    fn validator_rejects_duplicate_block_ordinals() {
+        let function = key("mir.function", "fib", "recv");
+        let first = key("mir.block", "fib", "block:0");
+        let second = key("mir.block", "fib", "block:1");
+        let facts = vec![
+            node("mir.function", "fib", "recv"),
+            node("mir.block", "fib", "block:0"),
+            node("mir.block", "fib", "block:1"),
+            TraceFact::Block(BlockFact::new(
+                first.clone(),
+                function.clone(),
+                CompilerPhase::Mir,
+                0,
+                None,
+            )),
+            TraceFact::Block(BlockFact::new(
+                second.clone(),
+                function.clone(),
+                CompilerPhase::Mir,
+                0,
+                None,
+            )),
+        ];
+
+        assert_eq!(
+            TraceValidator::validate(&facts),
+            Err(TraceValidationError::DuplicateBlockOrdinal {
+                function,
+                ordinal: 0,
+                first_block: first,
+                second_block: second,
+            })
+        );
+    }
+
+    #[test]
+    fn validator_rejects_loop_without_header_role() {
+        let function = key("mir.function", "fib", "recv");
+        let block = key("mir.block", "fib", "block:0");
+        let loop_key = key("mir.loop", "fib", "loop:0");
+        let facts = vec![
+            node("mir.function", "fib", "recv"),
+            node("mir.block", "fib", "block:0"),
+            node("mir.loop", "fib", "loop:0"),
+            TraceFact::Block(BlockFact::new(
+                block.clone(),
+                function.clone(),
+                CompilerPhase::Mir,
+                0,
+                None,
+            )),
+            TraceFact::Loop(LoopFact::new(
+                loop_key.clone(),
+                function,
+                CompilerPhase::Mir,
+                block.clone(),
+                LoopDerivation::NaturalLoopAnalysis {
+                    cfg_hash: "cfg:abc".to_string(),
+                },
+                LoopConfidence::MirCfg,
+            )),
+            TraceFact::LoopBlock(LoopBlockFact::new(
+                loop_key.clone(),
+                block,
+                LoopBlockRole::Body,
+            )),
+        ];
+
+        assert_eq!(
+            TraceValidator::validate(&facts),
+            Err(TraceValidationError::InvalidLoopBlockRoles {
+                loop_key,
+                reason: "loop must have exactly one header block role",
+            })
+        );
+    }
+
+    #[test]
+    fn validator_rejects_instruction_extent_mismatch() {
+        let function = key("bytecode.function", "fib", "runtime");
+        let code_object = key("code.object", "fib", "runtime");
+        let instruction = key("bytecode.pc", "fib", "pc:0");
+        let facts = vec![
+            node("bytecode.function", "fib", "runtime"),
+            node("code.object", "fib", "runtime"),
+            node("bytecode.pc", "fib", "pc:0"),
+            TraceFact::Instruction(InstructionFact::new(
+                instruction.clone(),
+                function,
+                0,
+                "PUSH1",
+            )),
+            TraceFact::InstructionExtent(InstructionExtentFact::new(
+                instruction.clone(),
+                code_object,
+                PcRange::new(0, 2),
+                1,
+            )),
+        ];
+
+        assert_eq!(
+            TraceValidator::validate(&facts),
+            Err(TraceValidationError::InvalidInstructionExtent {
+                instruction,
+                reason: "byte_len must equal pc_range length",
+            })
+        );
+    }
+
+    #[test]
+    fn validator_rejects_bad_loop_cfg_hash() {
+        let function = key("mir.function", "fib", "recv");
+        let block = key("mir.block", "fib", "block:0");
+        let loop_key = key("mir.loop", "fib", "loop:0");
+        let facts = vec![
+            node("mir.function", "fib", "recv"),
+            node("mir.block", "fib", "block:0"),
+            node("mir.loop", "fib", "loop:0"),
+            TraceFact::Block(BlockFact::new(
+                block.clone(),
+                function.clone(),
+                CompilerPhase::Mir,
+                0,
+                None,
+            )),
+            TraceFact::Loop(LoopFact::new(
+                loop_key.clone(),
+                function,
+                CompilerPhase::Mir,
+                block,
+                LoopDerivation::NaturalLoopAnalysis {
+                    cfg_hash: " ".to_string(),
+                },
+                LoopConfidence::MirCfg,
+            )),
+        ];
+
+        assert_eq!(
+            TraceValidator::validate(&facts),
+            Err(TraceValidationError::EmptyLoopCfgHash { loop_key })
+        );
     }
 
     #[test]
