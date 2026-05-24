@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+pub mod datalog_emit;
+
 use common::origin::OriginExportKey;
 use introspection_config::FeToolingConfig;
 use serde::{Deserialize, Serialize};

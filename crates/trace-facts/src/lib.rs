@@ -1,5 +1,6 @@
 pub mod fact;
 pub mod jsonl;
+pub mod relation;
 pub mod snapshot;
 pub mod validate;
 
@@ -19,6 +20,9 @@ pub use jsonl::{
     JsonlTraceReadError, JsonlTraceReader, JsonlTraceSink, TRACE_SCHEMA_VERSION, TraceBundle,
     TraceDataSource, TraceJsonlRecord, TraceMetadata, TraceMetadataError, read_trace_bundle_jsonl,
     read_trace_facts_jsonl,
+};
+pub use relation::{
+    RelationColumn, RelationColumnKind, RelationRow, RelationSchema, TraceRelation,
 };
 pub use snapshot::{TraceSnapshot, TraceSnapshotReadError};
 pub use validate::{
