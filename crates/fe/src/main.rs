@@ -489,9 +489,22 @@ pub enum DevTraceCommand {
     Emit(DevTraceEmitArgs),
     /// Validate a trace JSONL bundle before running reports.
     Validate(DevTraceInputArgs),
+    /// Run a report query against a validated trace snapshot.
+    Query {
+        #[command(subcommand)]
+        command: DevTraceQueryCommand,
+    },
     /// Summarize static per-iteration loop cost from a validated trace JSONL bundle.
     LoopCost(DevTraceInputArgs),
     /// Explain one local from a validated trace JSONL bundle.
+    ExplainLocal(DevTraceExplainLocalArgs),
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum DevTraceQueryCommand {
+    /// Summarize static per-iteration loop cost from a validated trace snapshot.
+    LoopCost(DevTraceInputArgs),
+    /// Explain one local from a validated trace snapshot.
     ExplainLocal(DevTraceExplainLocalArgs),
 }
 

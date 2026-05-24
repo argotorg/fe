@@ -14,13 +14,14 @@ use trace_facts::{
     InstructionCategory, InstructionCategoryFact, InstructionFact, JsonlTraceReader,
     JsonlTraceSink, LoopDerivation, LoopMembershipFact, OriginEdgeFact, OriginEdgeLabel,
     OriginNodeFact, OriginNodeKind, StorageFact, StorageLocation, StorageReason, TraceBundle,
-    TraceDataSource, TraceFact, TraceMetadata, TraceValidationReport, TraceValidator,
+    TraceDataSource, TraceFact, TraceMetadata, TraceSnapshot, TraceValidationReport,
+    TraceValidator,
 };
 use url::Url;
 
 use crate::{
     DevCommand, DevTraceCommand, DevTraceEmitArgs, DevTraceExplainLocalArgs, DevTraceInputArgs,
-    TraceFixtureCommand, TraceFixtureEmitArgs, TraceFixtureExplainLocalArgs,
+    DevTraceQueryCommand, TraceFixtureCommand, TraceFixtureEmitArgs, TraceFixtureExplainLocalArgs,
     TraceFixtureLoopCostArgs,
 };
 
@@ -52,8 +53,16 @@ fn run_dev_trace_command(command: &DevTraceCommand) -> Result<String, String> {
         ),
         DevTraceCommand::Emit(args) => run_trace_emit(args),
         DevTraceCommand::Validate(args) => run_trace_validate(args),
+        DevTraceCommand::Query { command } => run_trace_query_command(command),
         DevTraceCommand::LoopCost(args) => run_trace_loop_cost(args),
         DevTraceCommand::ExplainLocal(args) => run_trace_explain_local(args),
+    }
+}
+
+fn run_trace_query_command(command: &DevTraceQueryCommand) -> Result<String, String> {
+    match command {
+        DevTraceQueryCommand::LoopCost(args) => run_trace_loop_cost(args),
+        DevTraceQueryCommand::ExplainLocal(args) => run_trace_explain_local(args),
     }
 }
 
@@ -95,20 +104,22 @@ fn run_trace_emit(args: &DevTraceEmitArgs) -> Result<String, String> {
 }
 
 fn run_trace_validate(args: &DevTraceInputArgs) -> Result<String, String> {
-    let bundle = read_trace_bundle_jsonl_from_path(&args.from)?;
-    let report = TraceValidator::check(&bundle.facts);
-    if let Some(error) = report.first_error() {
-        return Err(format!("trace validation failed: {error}"));
-    }
-    Ok(render_validation_summary(&bundle, &report))
+    let snapshot = read_trace_snapshot_jsonl_from_path(&args.from)?;
+    Ok(render_validation_summary(
+        snapshot.metadata(),
+        snapshot.validation(),
+    ))
 }
 
 fn run_trace_loop_cost(args: &DevTraceInputArgs) -> Result<String, String> {
-    render_loop_cost_bundle(read_trace_bundle_jsonl_from_path(&args.from)?)
+    render_loop_cost_snapshot(read_trace_snapshot_jsonl_from_path(&args.from)?)
 }
 
 fn run_trace_explain_local(args: &DevTraceExplainLocalArgs) -> Result<String, String> {
-    render_explain_local_bundle(read_trace_bundle_jsonl_from_path(&args.from)?, &args.local)
+    render_explain_local_snapshot(
+        read_trace_snapshot_jsonl_from_path(&args.from)?,
+        &args.local,
+    )
 }
 
 fn build_fib_fixture_bundle_from_path(
@@ -218,6 +229,11 @@ fn read_trace_bundle_jsonl_from_path(path: &Utf8PathBuf) -> Result<TraceBundle, 
         .map_err(|err| format!("failed to read trace JSONL {path}: {err}"))
 }
 
+fn read_trace_snapshot_jsonl_from_path(path: &Utf8PathBuf) -> Result<TraceSnapshot, String> {
+    TraceSnapshot::new(read_trace_bundle_jsonl_from_path(path)?)
+        .map_err(|err| format!("trace validation failed for {path}: {err}"))
+}
+
 fn write_trace_bundle_jsonl(path: &Utf8PathBuf, bundle: &TraceBundle) -> Result<(), String> {
     if let Some(parent) = path.parent()
         && !parent.as_str().is_empty()
@@ -234,7 +250,7 @@ fn write_trace_bundle_jsonl(path: &Utf8PathBuf, bundle: &TraceBundle) -> Result<
         .map_err(|err| format!("failed to flush trace JSONL {path}: {err}"))
 }
 
-fn render_validation_summary(bundle: &TraceBundle, report: &TraceValidationReport) -> String {
+fn render_validation_summary(metadata: &TraceMetadata, report: &TraceValidationReport) -> String {
     format!(
         "Trace validation: passed\n\
          Data source: {}\n\
@@ -247,11 +263,11 @@ fn render_validation_summary(bundle: &TraceBundle, report: &TraceValidationRepor
          Origin edges: {}\n\
          Instructions: {}\n\
          Diagnostics: {} error, {} warning, {} info\n",
-        format_data_source(&bundle.metadata),
-        bundle.metadata.schema_version,
-        bundle.metadata.compiler_commit,
-        bundle.metadata.target,
-        bundle.metadata.input_path,
+        format_data_source(metadata),
+        metadata.schema_version,
+        metadata.compiler_commit,
+        metadata.target,
+        metadata.input_path,
         report.summary.fact_count,
         report.summary.node_count,
         report.summary.edge_count,
@@ -263,23 +279,20 @@ fn render_validation_summary(bundle: &TraceBundle, report: &TraceValidationRepor
 }
 
 #[derive(Clone, Debug)]
-struct TraceReport {
-    metadata: TraceMetadata,
+struct TraceReportView {
+    snapshot: TraceSnapshot,
     loop_key: Option<OriginExportKey>,
-    facts: Vec<TraceFact>,
     locals: BTreeMap<String, OriginExportKey>,
 }
 
-impl TraceReport {
-    fn from_bundle(bundle: TraceBundle) -> Result<Self, String> {
-        TraceValidator::validate(&bundle.facts)
-            .map_err(|err| format!("trace validation failed: {err}"))?;
-        let loop_key = bundle.facts.iter().find_map(|fact| match fact {
+impl TraceReportView {
+    fn from_snapshot(snapshot: TraceSnapshot) -> Self {
+        let loop_key = snapshot.facts().iter().find_map(|fact| match fact {
             TraceFact::LoopMembership(membership) => Some(membership.loop_key.clone()),
             _ => None,
         });
-        let locals = bundle
-            .facts
+        let locals = snapshot
+            .facts()
             .iter()
             .filter_map(|fact| match fact {
                 TraceFact::OriginNode(node) if node.key.kind() == "runtime.local" => {
@@ -289,16 +302,23 @@ impl TraceReport {
             })
             .collect();
 
-        Ok(Self {
-            metadata: bundle.metadata,
+        Self {
+            snapshot,
             loop_key,
-            facts: bundle.facts,
             locals,
-        })
+        }
+    }
+
+    fn metadata(&self) -> &TraceMetadata {
+        self.snapshot.metadata()
+    }
+
+    fn facts(&self) -> &[TraceFact] {
+        self.snapshot.facts()
     }
 
     fn instruction(&self, key: &OriginExportKey) -> Option<&InstructionFact> {
-        self.facts.iter().find_map(|fact| match fact {
+        self.facts().iter().find_map(|fact| match fact {
             TraceFact::Instruction(instruction) if &instruction.instruction == key => {
                 Some(instruction)
             }
@@ -307,7 +327,7 @@ impl TraceReport {
     }
 
     fn storage_for(&self, key: &OriginExportKey) -> Vec<&StorageFact> {
-        self.facts
+        self.facts()
             .iter()
             .filter_map(|fact| match fact {
                 TraceFact::Storage(storage) if &storage.subject == key => Some(storage),
@@ -572,16 +592,32 @@ fn zext_reason(local_name: &str) -> &'static str {
 }
 
 fn render_loop_cost_bundle(bundle: TraceBundle) -> Result<String, String> {
-    let trace = TraceReport::from_bundle(bundle)?;
+    render_loop_cost_snapshot(
+        TraceSnapshot::new(bundle).map_err(|err| format!("trace validation failed: {err}"))?,
+    )
+}
+
+fn render_loop_cost_snapshot(snapshot: TraceSnapshot) -> Result<String, String> {
+    let trace = TraceReportView::from_snapshot(snapshot);
     render_loop_cost(&trace)
 }
 
 fn render_explain_local_bundle(bundle: TraceBundle, local_name: &str) -> Result<String, String> {
-    let trace = TraceReport::from_bundle(bundle)?;
+    render_explain_local_snapshot(
+        TraceSnapshot::new(bundle).map_err(|err| format!("trace validation failed: {err}"))?,
+        local_name,
+    )
+}
+
+fn render_explain_local_snapshot(
+    snapshot: TraceSnapshot,
+    local_name: &str,
+) -> Result<String, String> {
+    let trace = TraceReportView::from_snapshot(snapshot);
     render_explain_local(&trace, local_name)
 }
 
-fn render_loop_cost(trace: &TraceReport) -> Result<String, String> {
+fn render_loop_cost(trace: &TraceReportView) -> Result<String, String> {
     if trace.loop_key.is_none() {
         return Ok(render_loop_cost_unavailable(trace));
     }
@@ -595,13 +631,13 @@ fn render_loop_cost(trace: &TraceReport) -> Result<String, String> {
     out.push_str("Fe dev trace loop-cost\n\n");
     out.push_str(&format!(
         "Data source: {}\n",
-        format_data_source(&trace.metadata)
+        format_data_source(trace.metadata())
     ));
     out.push_str("Trace validation: passed\n");
-    out.push_str(&format!("Target: {}\n", trace.metadata.target));
-    out.push_str(&format!("Input: {}\n", trace.metadata.input_path));
+    out.push_str(&format!("Target: {}\n", trace.metadata().target));
+    out.push_str(&format!("Input: {}\n", trace.metadata().input_path));
     if let Some(function_label) = trace
-        .metadata
+        .metadata()
         .flags
         .iter()
         .find_map(|flag| flag.strip_prefix("function="))
@@ -673,18 +709,18 @@ fn render_loop_cost(trace: &TraceReport) -> Result<String, String> {
     Ok(out)
 }
 
-fn render_loop_cost_unavailable(trace: &TraceReport) -> String {
+fn render_loop_cost_unavailable(trace: &TraceReportView) -> String {
     let instructions = all_instruction_keys(trace);
     let counts = category_counts(trace, &instructions);
     let mut out = String::new();
     out.push_str("Fe dev trace loop-cost\n\n");
     out.push_str(&format!(
         "Data source: {}\n",
-        format_data_source(&trace.metadata)
+        format_data_source(trace.metadata())
     ));
     out.push_str("Trace validation: passed\n");
-    out.push_str(&format!("Target: {}\n", trace.metadata.target));
-    out.push_str(&format!("Input: {}\n\n", trace.metadata.input_path));
+    out.push_str(&format!("Target: {}\n", trace.metadata().target));
+    out.push_str(&format!("Input: {}\n\n", trace.metadata().input_path));
     out.push_str("Loop cost unavailable from this trace.\n");
     out.push_str(
         "Reason: compiler-derived LoopMembershipFact rows are not emitted yet, so the report cannot truthfully isolate the hot loop.\n\n",
@@ -703,7 +739,7 @@ fn render_loop_cost_unavailable(trace: &TraceReport) -> String {
     out
 }
 
-fn render_explain_local(trace: &TraceReport, local_name: &str) -> Result<String, String> {
+fn render_explain_local(trace: &TraceReportView, local_name: &str) -> Result<String, String> {
     let Some(local_key) = trace.locals.get(local_name) else {
         return Ok(render_local_unavailable(trace, local_name));
     };
@@ -714,13 +750,13 @@ fn render_explain_local(trace: &TraceReport, local_name: &str) -> Result<String,
     out.push_str("Fe dev trace explain-local\n\n");
     out.push_str(&format!(
         "Data source: {}\n",
-        format_data_source(&trace.metadata)
+        format_data_source(trace.metadata())
     ));
     out.push_str("Trace validation: passed\n");
-    out.push_str(&format!("Target: {}\n", trace.metadata.target));
-    out.push_str(&format!("Input: {}\n", trace.metadata.input_path));
+    out.push_str(&format!("Target: {}\n", trace.metadata().target));
+    out.push_str(&format!("Input: {}\n", trace.metadata().input_path));
     if let Some(function_label) = trace
-        .metadata
+        .metadata()
         .flags
         .iter()
         .find_map(|flag| flag.strip_prefix("function="))
@@ -776,16 +812,16 @@ fn render_explain_local(trace: &TraceReport, local_name: &str) -> Result<String,
     Ok(out)
 }
 
-fn render_local_unavailable(trace: &TraceReport, local_name: &str) -> String {
+fn render_local_unavailable(trace: &TraceReportView, local_name: &str) -> String {
     let mut out = String::new();
     out.push_str("Fe dev trace explain-local\n\n");
     out.push_str(&format!(
         "Data source: {}\n",
-        format_data_source(&trace.metadata)
+        format_data_source(trace.metadata())
     ));
     out.push_str("Trace validation: passed\n");
-    out.push_str(&format!("Target: {}\n", trace.metadata.target));
-    out.push_str(&format!("Input: {}\n", trace.metadata.input_path));
+    out.push_str(&format!("Target: {}\n", trace.metadata().target));
+    out.push_str(&format!("Input: {}\n", trace.metadata().input_path));
     out.push_str(&format!("Local: {local_name}\n\n"));
     out.push_str("Local explanation unavailable from this trace.\n");
     out.push_str("Reason: compiler-derived source-local display facts and MIR-to-codegen origin edges are not emitted yet.\n");
@@ -806,12 +842,12 @@ fn render_local_unavailable(trace: &TraceReport, local_name: &str) -> String {
     out
 }
 
-fn loop_instructions(trace: &TraceReport) -> BTreeSet<OriginExportKey> {
+fn loop_instructions(trace: &TraceReportView) -> BTreeSet<OriginExportKey> {
     let Some(loop_key) = &trace.loop_key else {
         return BTreeSet::new();
     };
     trace
-        .facts
+        .facts()
         .iter()
         .filter_map(|fact| match fact {
             TraceFact::LoopMembership(membership) if &membership.loop_key == loop_key => {
@@ -822,9 +858,9 @@ fn loop_instructions(trace: &TraceReport) -> BTreeSet<OriginExportKey> {
         .collect()
 }
 
-fn all_instruction_keys(trace: &TraceReport) -> BTreeSet<OriginExportKey> {
+fn all_instruction_keys(trace: &TraceReportView) -> BTreeSet<OriginExportKey> {
     trace
-        .facts
+        .facts()
         .iter()
         .filter_map(|fact| match fact {
             TraceFact::Instruction(instruction) => Some(instruction.instruction.clone()),
@@ -847,11 +883,11 @@ struct CategoryCounts {
 }
 
 fn category_counts(
-    trace: &TraceReport,
+    trace: &TraceReportView,
     instructions: &BTreeSet<OriginExportKey>,
 ) -> CategoryCounts {
     let mut counts = CategoryCounts::default();
-    for fact in &trace.facts {
+    for fact in trace.facts() {
         let TraceFact::InstructionCategory(category) = fact else {
             continue;
         };
@@ -875,7 +911,7 @@ fn category_counts(
 }
 
 fn zero_extends_by_local(
-    trace: &TraceReport,
+    trace: &TraceReportView,
     instructions: &BTreeSet<OriginExportKey>,
 ) -> BTreeMap<String, Vec<OriginExportKey>> {
     let mut result: BTreeMap<String, Vec<OriginExportKey>> = BTreeMap::new();
@@ -886,11 +922,11 @@ fn zero_extends_by_local(
 }
 
 fn related_zext_edges(
-    trace: &TraceReport,
+    trace: &TraceReportView,
     instructions: &BTreeSet<OriginExportKey>,
 ) -> Vec<(OriginExportKey, String)> {
     trace
-        .facts
+        .facts()
         .iter()
         .filter_map(|fact| match fact {
             TraceFact::OriginEdge(edge)
@@ -905,12 +941,12 @@ fn related_zext_edges(
 }
 
 fn related_instruction_edges<'a>(
-    trace: &'a TraceReport,
+    trace: &'a TraceReportView,
     local_key: &OriginExportKey,
     instructions: &BTreeSet<OriginExportKey>,
 ) -> Vec<(&'a InstructionFact, OriginEdgeLabel)> {
     trace
-        .facts
+        .facts()
         .iter()
         .filter_map(|fact| match fact {
             TraceFact::OriginEdge(edge)
@@ -924,10 +960,10 @@ fn related_instruction_edges<'a>(
 }
 
 fn compiler_event_reason_for_output(
-    trace: &TraceReport,
+    trace: &TraceReportView,
     output: &OriginExportKey,
 ) -> Option<String> {
-    trace.facts.iter().find_map(|fact| match fact {
+    trace.facts().iter().find_map(|fact| match fact {
         TraceFact::CompilerEvent(event)
             if event.kind == CompilerEventKind::InsertIntegerZeroExtend
                 && event.outputs.iter().any(|candidate| candidate == output) =>
