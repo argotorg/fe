@@ -1,6 +1,6 @@
 use common::{InputDb, facts::OriginFactIndex};
 use driver::DriverDataBase;
-use fe_mir::{RuntimePackage, build_runtime_package, runtime_package_origin_facts};
+use fe_mir::{RuntimePackage, build_runtime_package, legacy_runtime_package_origin_facts};
 use hir::hir_def::{Func, TopLevelMod};
 use url::Url;
 
@@ -35,7 +35,7 @@ fn package_statement_and_terminator_count<'db>(
 }
 
 #[test]
-fn runtime_package_origin_facts_cover_statements_and_terminators() {
+fn legacy_runtime_package_origin_facts_cover_statements_and_terminators() {
     let mut db = DriverDataBase::default();
     let file_url = Url::parse("file:///runtime_origin_facts.fe").unwrap();
     let file = db.workspace().touch(
@@ -54,7 +54,7 @@ fn main() -> u256 {
     let top_mod = db.top_mod(file);
     let _ = find_func(&db, top_mod, "main");
     let package = build_runtime_package(&db, top_mod).expect("runtime package should build");
-    let facts = runtime_package_origin_facts(&db, package);
+    let facts = legacy_runtime_package_origin_facts(&db, package);
     let index = OriginFactIndex::from_facts(&facts);
 
     assert_eq!(

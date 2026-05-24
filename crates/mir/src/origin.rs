@@ -162,7 +162,11 @@ impl<'db> RuntimeTerminatorOrigin<'db> {
     }
 }
 
-pub fn runtime_package_origin_facts<'db>(
+/// Legacy analyze-only origin projection.
+///
+/// New compiler trace emission must use `mir::trace` plus `fe-trace-facts`
+/// instead of returning `common::facts` from MIR.
+pub fn legacy_runtime_package_origin_facts<'db>(
     db: &'db dyn MirDb,
     package: RuntimePackage<'db>,
 ) -> TypedFactSet {

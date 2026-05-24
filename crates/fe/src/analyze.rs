@@ -13,7 +13,8 @@ use driver::{
 };
 use hir::hir_def::{HirIngot, TopLevelMod};
 use mir::{
-    RuntimePackage, build_runtime_package, build_test_runtime_package, runtime_package_origin_facts,
+    RuntimePackage, build_runtime_package, build_test_runtime_package,
+    legacy_runtime_package_origin_facts,
 };
 use salsa::Setter;
 use serde::{Deserialize, Serialize};
@@ -411,7 +412,7 @@ fn analyze_top_mod(
     };
     let origin_facts = options
         .include_origin_facts
-        .then(|| runtime_package_origin_facts(db, package));
+        .then(|| legacy_runtime_package_origin_facts(db, package));
     report.targets.push(summarize_package(
         db,
         label,

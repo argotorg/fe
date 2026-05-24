@@ -1,6 +1,6 @@
 use std::fmt;
 
-use common::{facts::SourceLocation, origin::OriginExportKey};
+use common::{origin::OriginExportKey, source::SourceLocation};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -86,7 +86,7 @@ impl std::error::Error for BytecodeDebugError {}
 #[cfg(test)]
 mod tests {
     use super::{BytecodePcRange, BytecodeSourceMapEntry};
-    use common::{facts::SourceLocation, origin::OriginExportKey};
+    use common::{origin::OriginExportKey, source::SourceLocation};
 
     fn origin_key() -> OriginExportKey {
         OriginExportKey::try_from_raw_parts("bytecode.pc", "runtime:main", "pc:0..2").unwrap()
