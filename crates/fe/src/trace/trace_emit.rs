@@ -57,6 +57,7 @@ pub(super) fn run_trace_explain_local(args: &DevTraceExplainLocalArgs) -> Result
     super::trace_render::render_explain_local_snapshot(
         read_trace_snapshot_jsonl_from_path(&args.from)?,
         &args.local,
+        args.local_key.as_deref(),
     )
 }
 

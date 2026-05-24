@@ -170,29 +170,49 @@ impl IntrospectionService for TraceIntrospectionService {
 
     fn explain_local(&self, request: ExplainLocalRequest) -> QueryResult<ExplainLocalReport> {
         let index = TraceIndex::new(&self.snapshot);
-        let local_key = index.locals.get(&request.local).cloned();
+        let local_key = if let Some(local_key) = request.local_key {
+            if index.local_keys.contains(&local_key) {
+                Some(local_key)
+            } else {
+                return Ok(explain_local_unavailable(
+                    &self.snapshot,
+                    request.local,
+                    Some("requested local_key is not present in this trace".to_string()),
+                    index.local_choices(),
+                    vec![local_key],
+                ));
+            }
+        } else {
+            let candidates = index.local_candidates(&request.local);
+            match candidates.as_slice() {
+                [local_key] => Some(local_key.clone()),
+                [] => None,
+                _ => {
+                    return Ok(explain_local_unavailable(
+                        &self.snapshot,
+                        request.local,
+                        Some(
+                            "local display name is ambiguous; pass an exact local_key".to_string(),
+                        ),
+                        index.local_choices(),
+                        candidates,
+                    ));
+                }
+            }
+        };
         let loop_instructions = index.active_loop_instructions();
-        let available_locals = index.locals.keys().take(20).cloned().collect::<Vec<_>>();
+        let available_locals = index.local_choices();
 
         let Some(local_key) = local_key else {
-            return Ok(ExplainLocalReport {
-                metadata: ReportMetadata::from_snapshot(&self.snapshot),
-                local: request.local,
-                local_key: None,
-                storage_history: Vec::new(),
-                related_instructions: Vec::new(),
-                zero_extends: Vec::new(),
-                findings: vec![Insight::info(
-                    "Local explanation unavailable",
-                    "compiler-derived source-local display facts and MIR-to-codegen origin edges are not emitted yet",
-                )],
-                available: false,
-                unavailable_reason: Some(
+            return Ok(explain_local_unavailable(
+                &self.snapshot,
+                request.local,
+                Some(
                     "source-local display facts or matching local identity are missing".to_string(),
                 ),
                 available_locals,
-                confidence: Confidence::Unknown,
-            });
+                Vec::new(),
+            ));
         };
 
         let storage_history = index.storage_for(&local_key);
@@ -230,7 +250,7 @@ impl IntrospectionService for TraceIntrospectionService {
         Ok(ExplainLocalReport {
             metadata: ReportMetadata::from_snapshot(&self.snapshot),
             local: request.local,
-            local_key: Some(local_key),
+            local_key: Some(local_key.clone()),
             storage_history,
             related_instructions,
             zero_extends,
@@ -238,6 +258,7 @@ impl IntrospectionService for TraceIntrospectionService {
             available: true,
             unavailable_reason: None,
             available_locals,
+            candidate_local_keys: vec![local_key],
             confidence: Confidence::High,
         })
     }
@@ -298,8 +319,7 @@ impl IntrospectionService for TraceIntrospectionService {
             static_gas,
             available,
             unavailable_reason: (!available).then(|| {
-                "no InstructionFact with this bytecode PC or instruction index exists in the trace"
-                    .to_string()
+                "no bytecode.pc InstructionFact with this PC exists in the trace".to_string()
             }),
             confidence: if available {
                 Confidence::Medium
@@ -310,6 +330,7 @@ impl IntrospectionService for TraceIntrospectionService {
     }
 
     fn gas_by_source(&self, request: GasBySourceRequest) -> QueryResult<GasBySourceReport> {
+        reject_call_policy(request.policy)?;
         let index = TraceIndex::new(&self.snapshot);
         let mut rows: BTreeMap<String, GasBySourceRow> = BTreeMap::new();
         let mut total_gas = 0;
@@ -360,6 +381,7 @@ impl IntrospectionService for TraceIntrospectionService {
         &self,
         request: BytecodeSizeBySourceRequest,
     ) -> QueryResult<BytecodeSizeBySourceReport> {
+        reject_call_policy(request.policy)?;
         let index = TraceIndex::new(&self.snapshot);
         let mut rows: BTreeMap<String, BytecodeSizeBySourceRow> = BTreeMap::new();
         let mut total_bytes = 0;
@@ -409,6 +431,7 @@ impl IntrospectionService for TraceIntrospectionService {
         &self,
         request: DynamicGasBySourceRequest,
     ) -> QueryResult<DynamicGasBySourceReport> {
+        reject_call_policy(request.policy)?;
         let index = TraceIndex::new(&self.snapshot);
         let mut rows: BTreeMap<String, GasBySourceRow> = BTreeMap::new();
         let mut total_gas = 0;
@@ -461,6 +484,7 @@ impl IntrospectionService for TraceIntrospectionService {
     }
 
     fn gas_to_source(&self, request: GasToSourceRequest) -> QueryResult<GasToSourceReport> {
+        reject_call_policy(request.policy)?;
         let index = TraceIndex::new(&self.snapshot);
         let mut rows: BTreeMap<String, GasToSourceRow> = BTreeMap::new();
         let mut static_gas_total = 0;
@@ -613,6 +637,8 @@ pub struct LoopContentsRequest {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExplainLocalRequest {
     pub local: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_key: Option<OriginExportKey>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -763,6 +789,8 @@ pub enum TraceQueryRequest {
     },
     ExplainLocal {
         local: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        local_key: Option<OriginExportKey>,
     },
     GasBreakdown {
         #[serde(default = "default_gas_schedule")]
@@ -818,6 +846,7 @@ impl TraceQueryRequest {
     pub fn explain_local(local: impl Into<String>) -> Self {
         Self::ExplainLocal {
             local: local.into(),
+            local_key: None,
         }
     }
 
@@ -910,8 +939,8 @@ pub fn run_trace_query(
         TraceQueryRequest::LoopContents { loop_key } => service
             .loop_contents(LoopContentsRequest { loop_key })
             .map(TraceQueryReport::LoopContents),
-        TraceQueryRequest::ExplainLocal { local } => service
-            .explain_local(ExplainLocalRequest { local })
+        TraceQueryRequest::ExplainLocal { local, local_key } => service
+            .explain_local(ExplainLocalRequest { local, local_key })
             .map(TraceQueryReport::ExplainLocal),
         TraceQueryRequest::GasBreakdown { schedule } => service
             .gas_breakdown(GasBreakdownRequest { schedule })
@@ -987,6 +1016,7 @@ pub struct ExplainLocalReport {
     pub metadata: ReportMetadata,
     pub local: String,
     pub local_key: Option<OriginExportKey>,
+    pub candidate_local_keys: Vec<OriginExportKey>,
     pub storage_history: Vec<StorageStep>,
     pub related_instructions: Vec<RelatedInstruction>,
     pub zero_extends: Vec<RelatedInstruction>,
@@ -1308,12 +1338,51 @@ impl fmt::Display for QueryError {
 
 impl std::error::Error for QueryError {}
 
+fn explain_local_unavailable(
+    snapshot: &TraceSnapshot,
+    local: String,
+    reason: Option<String>,
+    available_locals: Vec<String>,
+    candidate_local_keys: Vec<OriginExportKey>,
+) -> ExplainLocalReport {
+    ExplainLocalReport {
+        metadata: ReportMetadata::from_snapshot(snapshot),
+        local,
+        local_key: None,
+        candidate_local_keys,
+        storage_history: Vec::new(),
+        related_instructions: Vec::new(),
+        zero_extends: Vec::new(),
+        findings: vec![Insight::info(
+            "Local explanation unavailable",
+            "compiler-derived local identity must be selected unambiguously before storage or instruction facts are queried",
+        )],
+        available: false,
+        unavailable_reason: reason,
+        available_locals,
+        confidence: Confidence::Unknown,
+    }
+}
+
+fn reject_call_policy(policy: GasAttributionPolicy) -> QueryResult<()> {
+    if matches!(
+        policy,
+        GasAttributionPolicy::CallInclusive | GasAttributionPolicy::CallExclusive
+    ) {
+        return Err(QueryError::InvalidRequest(format!(
+            "{policy} attribution requires call graph and inline context facts, which are not emitted yet"
+        )));
+    }
+    Ok(())
+}
+
 struct TraceIndex<'a> {
     snapshot: &'a TraceSnapshot,
     loop_key: Option<OriginExportKey>,
     loop_members: BTreeMap<OriginExportKey, BTreeSet<OriginExportKey>>,
     loop_blocks: BTreeMap<OriginExportKey, Vec<(OriginExportKey, LoopBlockRole)>>,
-    locals: BTreeMap<String, OriginExportKey>,
+    locals: BTreeMap<String, Vec<OriginExportKey>>,
+    local_keys: BTreeSet<OriginExportKey>,
     display_names: BTreeMap<OriginExportKey, String>,
     instructions: BTreeMap<OriginExportKey, &'a InstructionFact>,
     instruction_blocks: BTreeMap<OriginExportKey, OriginExportKey>,
@@ -1328,7 +1397,8 @@ impl<'a> TraceIndex<'a> {
             BTreeMap::new();
         let mut loop_blocks: BTreeMap<OriginExportKey, Vec<(OriginExportKey, LoopBlockRole)>> =
             BTreeMap::new();
-        let mut locals = BTreeMap::new();
+        let mut locals: BTreeMap<String, Vec<OriginExportKey>> = BTreeMap::new();
+        let mut local_keys = BTreeSet::new();
         let mut display_names = BTreeMap::new();
         let mut instructions = BTreeMap::new();
         let mut instruction_blocks = BTreeMap::new();
@@ -1357,13 +1427,12 @@ impl<'a> TraceIndex<'a> {
                         .push((loop_block.block.clone(), loop_block.role));
                 }
                 TraceFact::OriginNode(node) if node.key.kind() == "runtime.local" => {
-                    locals.insert(
-                        display_names
-                            .get(&node.key)
-                            .cloned()
-                            .unwrap_or_else(|| local_display_name(&node.key)),
-                        node.key.clone(),
-                    );
+                    local_keys.insert(node.key.clone());
+                    let name = display_names
+                        .get(&node.key)
+                        .cloned()
+                        .unwrap_or_else(|| local_display_name(&node.key));
+                    locals.entry(name).or_default().push(node.key.clone());
                 }
                 TraceFact::Instruction(instruction) => {
                     instructions.insert(instruction.instruction.clone(), instruction);
@@ -1393,6 +1462,7 @@ impl<'a> TraceIndex<'a> {
             loop_members,
             loop_blocks,
             locals,
+            local_keys,
             display_names,
             instructions,
             instruction_blocks,
@@ -1411,6 +1481,27 @@ impl<'a> TraceIndex<'a> {
 
     fn all_instruction_keys(&self) -> BTreeSet<OriginExportKey> {
         self.instructions.keys().cloned().collect()
+    }
+
+    fn local_candidates(&self, query: &str) -> Vec<OriginExportKey> {
+        if let Some(candidates) = self.locals.get(query) {
+            return candidates.clone();
+        }
+        self.local_keys
+            .iter()
+            .filter(|key| key.display_label() == query || key.canonical_storage_key() == query)
+            .cloned()
+            .collect()
+    }
+
+    fn local_choices(&self) -> Vec<String> {
+        let mut choices = Vec::new();
+        for (name, keys) in &self.locals {
+            for key in keys {
+                choices.push(format!("{name} => {}", key.display_label()));
+            }
+        }
+        choices.into_iter().take(20).collect()
     }
 
     fn sorted_instruction_rows(&self, keys: &BTreeSet<OriginExportKey>) -> Vec<InstructionRow> {
@@ -1696,11 +1787,6 @@ impl<'a> TraceIndex<'a> {
             .find(|instruction| {
                 instruction.instruction.kind() == "bytecode.pc"
                     && instruction.instruction.local_key() == exact_pc
-            })
-            .or_else(|| {
-                self.instructions
-                    .values()
-                    .find(|instruction| instruction.index == pc)
             })
             .map(|instruction| InstructionRow {
                 key: instruction.instruction.clone(),
@@ -2135,14 +2221,15 @@ mod tests {
     use common::origin::OriginExportKey;
     use trace_facts::{
         BlockFact, CategorySource, CodeObjectFact, CodeObjectKind, CompilerEventFact,
-        CompilerEventKind, CompilerPhase, CompilerReason, DynamicGasStepFact, EvmSchedule,
-        GasConfidence, GasCostFact, GasKind, GasSource, InstructionBlockFact, InstructionCategory,
-        InstructionCategoryFact, InstructionExtentFact, InstructionFact, LocationConfidence,
-        LocationRangeFact, LoopBlockFact, LoopBlockRole, LoopConfidence, LoopDerivation, LoopFact,
-        LoopMembershipFact, OriginEdgeFact, OriginEdgeLabel, OriginNodeFact, OriginNodeKind,
-        PcRange, SourceFileFact, SourceSpanFact, StaticGasFact, StorageFact, StorageLocation,
-        StorageReason, TraceBundle, TraceFact, TraceMetadata, TraceSnapshot, TypeFact, TypeKind,
-        ValueLocation, VariableFact, VariableStorageClass,
+        CompilerEventKind, CompilerPhase, CompilerReason, DisplayNameFact, DisplayNameKind,
+        DynamicGasStepFact, EvmSchedule, GasConfidence, GasCostFact, GasKind, GasSource,
+        InstructionBlockFact, InstructionCategory, InstructionCategoryFact, InstructionExtentFact,
+        InstructionFact, LocationConfidence, LocationRangeFact, LoopBlockFact, LoopBlockRole,
+        LoopConfidence, LoopDerivation, LoopFact, LoopMembershipFact, OriginEdgeFact,
+        OriginEdgeLabel, OriginNodeFact, OriginNodeKind, PcRange, SourceFileFact, SourceSpanFact,
+        StaticGasFact, StorageFact, StorageLocation, StorageReason, TraceBundle, TraceFact,
+        TraceMetadata, TraceSnapshot, TypeFact, TypeKind, ValueLocation, VariableFact,
+        VariableStorageClass,
     };
 
     use super::{
@@ -2471,6 +2558,67 @@ mod tests {
         TraceIntrospectionService::new(snapshot)
     }
 
+    fn ambiguous_local_service() -> (TraceIntrospectionService, OriginExportKey, OriginExportKey) {
+        let first = key("runtime.local", "demo:func_a", "body:0:local:b");
+        let second = key("runtime.local", "demo:func_b", "body:0:local:b");
+        let facts = vec![
+            node(first.clone()),
+            node(second.clone()),
+            TraceFact::DisplayName(DisplayNameFact::new(
+                first.clone(),
+                DisplayNameKind::SourceLocal,
+                "b",
+            )),
+            TraceFact::DisplayName(DisplayNameFact::new(
+                second.clone(),
+                DisplayNameKind::SourceLocal,
+                "b",
+            )),
+            TraceFact::Storage(StorageFact::new(
+                second.clone(),
+                CompilerPhase::Backend,
+                StorageLocation::StackSlot { offset: 32 },
+                StorageReason::FrameSlot,
+            )),
+        ];
+        let snapshot = TraceSnapshot::new(TraceBundle::new(
+            TraceMetadata::fixture(
+                "abc123",
+                "riscv64-demo",
+                vec!["fe".to_string()],
+                "fib_demo.fe",
+                vec!["function=Fib.recv".to_string()],
+                "ambiguous-local-query-test",
+            ),
+            facts,
+        ))
+        .unwrap();
+        (TraceIntrospectionService::new(snapshot), first, second)
+    }
+
+    fn index_only_instruction_service() -> TraceIntrospectionService {
+        let function = key("function", "demo", "recv");
+        let inst = key("bytecode.inst", "demo", "inst:7");
+        let facts = vec![
+            node(function.clone()),
+            node(inst.clone()),
+            TraceFact::Instruction(InstructionFact::new(inst, function, 7, "add")),
+        ];
+        let snapshot = TraceSnapshot::new(TraceBundle::new(
+            TraceMetadata::fixture(
+                "abc123",
+                "evm-demo",
+                vec!["fe".to_string()],
+                "fib_demo.fe",
+                vec!["function=Fib.recv".to_string()],
+                "index-only-pc-query-test",
+            ),
+            facts,
+        ))
+        .unwrap();
+        TraceIntrospectionService::new(snapshot)
+    }
+
     #[test]
     fn loop_cost_report_counts_categories_and_evidence() {
         let report = demo_service()
@@ -2505,6 +2653,7 @@ mod tests {
         let report = demo_service()
             .explain_local(ExplainLocalRequest {
                 local: "b".to_string(),
+                local_key: None,
             })
             .unwrap();
 
@@ -2512,6 +2661,42 @@ mod tests {
         assert_eq!(report.storage_history.len(), 2);
         assert_eq!(report.related_instructions.len(), 2);
         assert_eq!(report.zero_extends.len(), 1);
+    }
+
+    #[test]
+    fn explain_local_display_name_ambiguity_fails_closed() {
+        let (service, first, second) = ambiguous_local_service();
+        let report = service
+            .explain_local(ExplainLocalRequest {
+                local: "b".to_string(),
+                local_key: None,
+            })
+            .unwrap();
+
+        assert!(!report.available);
+        assert_eq!(report.candidate_local_keys, vec![first, second]);
+        assert!(
+            report
+                .unavailable_reason
+                .as_deref()
+                .unwrap()
+                .contains("ambiguous")
+        );
+    }
+
+    #[test]
+    fn explain_local_exact_key_disambiguates_display_name() {
+        let (service, _first, second) = ambiguous_local_service();
+        let report = service
+            .explain_local(ExplainLocalRequest {
+                local: "b".to_string(),
+                local_key: Some(second.clone()),
+            })
+            .unwrap();
+
+        assert!(report.available);
+        assert_eq!(report.local_key, Some(second));
+        assert_eq!(report.storage_history.len(), 1);
     }
 
     #[test]
@@ -2539,6 +2724,23 @@ mod tests {
     }
 
     #[test]
+    fn explain_pc_does_not_fallback_to_instruction_index() {
+        let report = index_only_instruction_service()
+            .explain_pc(ExplainPcRequest { pc: 7 })
+            .unwrap();
+
+        assert!(!report.available);
+        assert_eq!(report.instruction, None);
+        assert!(
+            report
+                .unavailable_reason
+                .as_deref()
+                .unwrap()
+                .contains("bytecode.pc")
+        );
+    }
+
+    #[test]
     fn gas_by_source_groups_static_gas_by_source_span() {
         let report = demo_service()
             .gas_by_source(GasBySourceRequest::default())
@@ -2548,6 +2750,26 @@ mod tests {
         assert_eq!(report.rows[0].label, "fib.fe:2:8-2:9");
         assert_eq!(report.rows[0].gas, 6);
         assert_eq!(report.rows[0].instruction_count, 2);
+    }
+
+    #[test]
+    fn call_attribution_policies_are_gated_until_call_facts_exist() {
+        for policy in [
+            super::GasAttributionPolicy::CallInclusive,
+            super::GasAttributionPolicy::CallExclusive,
+        ] {
+            let err = demo_service()
+                .gas_by_source(GasBySourceRequest {
+                    policy,
+                    ..Default::default()
+                })
+                .unwrap_err();
+
+            assert!(
+                err.to_string()
+                    .contains("requires call graph and inline context facts")
+            );
+        }
     }
 
     #[test]

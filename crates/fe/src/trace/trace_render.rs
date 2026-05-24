@@ -71,17 +71,23 @@ pub(super) fn render_explain_local_bundle(
     render_explain_local_snapshot(
         TraceSnapshot::new(bundle).map_err(|err| format!("trace validation failed: {err}"))?,
         local_name,
+        None,
     )
 }
 
 pub(super) fn render_explain_local_snapshot(
     snapshot: TraceSnapshot,
     local_name: &str,
+    local_key_arg: Option<&str>,
 ) -> Result<String, String> {
+    let local_key = local_key_arg
+        .map(|key| resolve_origin_key_argument(&snapshot, key))
+        .transpose()?;
     let service = TraceIntrospectionService::new(snapshot);
     let report = service
         .explain_local(ExplainLocalRequest {
             local: local_name.to_string(),
+            local_key,
         })
         .map_err(|err| err.to_string())?;
     Ok(render_explain_local_report(&report))
@@ -395,6 +401,12 @@ fn render_explain_local_report(report: &ExplainLocalReport) -> String {
             ));
             for local in &report.available_locals {
                 out.push_str(&format!("  {local}\n"));
+            }
+        }
+        if !report.candidate_local_keys.is_empty() {
+            out.push_str("Candidate local keys:\n");
+            for key in &report.candidate_local_keys {
+                out.push_str(&format!("  {}\n", key.display_label()));
             }
         }
         return out;
@@ -814,6 +826,32 @@ fn attribution_route_from_keys<'a>(
         "code_object_whole_file_fallback (low confidence)"
     } else {
         "direct_source"
+    }
+}
+
+fn resolve_origin_key_argument(
+    snapshot: &TraceSnapshot,
+    value: &str,
+) -> Result<OriginExportKey, String> {
+    let matches = snapshot
+        .facts()
+        .iter()
+        .filter_map(|fact| match fact {
+            trace_facts::TraceFact::OriginNode(node)
+                if node.key.display_label() == value
+                    || node.key.canonical_storage_key() == value =>
+            {
+                Some(node.key.clone())
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [key] => Ok(key.clone()),
+        [] => Err(format!("--local-key did not match any origin key: {value}")),
+        _ => Err(format!(
+            "--local-key matched multiple origin keys; use the exact canonical key: {value}"
+        )),
     }
 }
 

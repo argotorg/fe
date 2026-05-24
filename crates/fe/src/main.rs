@@ -747,6 +747,9 @@ pub struct DevTraceExplainLocalArgs {
     /// Source local to explain.
     #[arg(long)]
     pub local: String,
+    /// Exact origin key display label for ambiguous locals.
+    #[arg(long)]
+    pub local_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]

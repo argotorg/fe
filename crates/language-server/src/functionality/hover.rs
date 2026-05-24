@@ -319,6 +319,7 @@ fn trace_hover_markdown<'db>(
     let report = trace_service
         .explain_local(ExplainLocalRequest {
             local: local.clone(),
+            local_key: None,
         })
         .ok()?;
     let mut out = String::new();
