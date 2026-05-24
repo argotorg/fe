@@ -15,7 +15,7 @@ mod trace;
 mod tree;
 mod workspace_ingot;
 
-use std::fs;
+use std::{fs, io::Read};
 
 use build::build;
 use camino::Utf8PathBuf;
@@ -446,6 +446,12 @@ pub enum DocAction {
 #[cfg(feature = "lsp")]
 #[derive(Debug, Clone, Subcommand)]
 pub enum LspMode {
+    /// Show discovered live LSP endpoint status.
+    Status,
+    /// Diagnose stale or malformed LSP endpoint discovery files.
+    Doctor,
+    /// Ask the discovered LSP process to stop.
+    Stop,
     /// Print effective shared tooling config and exit.
     Config {
         /// Print the fully merged config as JSON.
@@ -465,6 +471,24 @@ pub enum LspMode {
 
 fn default_project_path() -> Utf8PathBuf {
     Utf8PathBuf::from(".")
+}
+
+fn unix_time_ms() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default()
+}
+
+fn lsp_auth_token(pid: u32) -> String {
+    let mut bytes = [0u8; 32];
+    if fs::File::open("/dev/urandom")
+        .and_then(|mut file| file.read_exact(&mut bytes))
+        .is_ok()
+    {
+        return hex::encode(bytes);
+    }
+    format!("{pid:x}{:x}", unix_time_ms())
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -494,6 +518,11 @@ pub enum DevTraceCommand {
         #[command(subcommand)]
         command: DevTraceQueryCommand,
     },
+    /// Query a live LSP introspection endpoint discovered from .fe-lsp.json.
+    Live {
+        #[command(subcommand)]
+        command: DevTraceLiveCommand,
+    },
     /// Summarize static per-iteration loop cost from a validated trace JSONL bundle.
     LoopCost(DevTraceInputArgs),
     /// Explain one local from a validated trace JSONL bundle.
@@ -506,6 +535,20 @@ pub enum DevTraceQueryCommand {
     LoopCost(DevTraceInputArgs),
     /// Explain one local from a validated trace snapshot.
     ExplainLocal(DevTraceExplainLocalArgs),
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum DevTraceLiveCommand {
+    /// Ask the live LSP endpoint for loop-cost status.
+    LoopCost,
+    /// Ask the live LSP endpoint to explain a local.
+    ExplainLocal {
+        /// Source local to explain.
+        #[arg(long)]
+        local: String,
+    },
+    /// Ask the live LSP endpoint for static gas status.
+    GasBreakdown,
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -879,6 +922,27 @@ pub fn run(opts: &Options) {
                 }
                 language_server::setup_panic_hook();
                 match mode {
+                    Some(LspMode::Status) => match lsp_status(resolved_root.as_ref()) {
+                        Ok(output) => println!("{output}"),
+                        Err(err) => {
+                            eprintln!("Error: {err}");
+                            std::process::exit(1);
+                        }
+                    },
+                    Some(LspMode::Doctor) => match lsp_doctor(resolved_root.as_ref()) {
+                        Ok(output) => println!("{output}"),
+                        Err(err) => {
+                            eprintln!("Error: {err}");
+                            std::process::exit(1);
+                        }
+                    },
+                    Some(LspMode::Stop) => match lsp_stop(resolved_root.as_ref()) {
+                        Ok(output) => println!("{output}"),
+                        Err(err) => {
+                            eprintln!("Error: {err}");
+                            std::process::exit(1);
+                        }
+                    },
                     Some(LspMode::Config { effective: _ }) => {
                         let root = resolved_root
                             .as_ref()
@@ -953,6 +1017,13 @@ async fn run_lsp_with_combined_server(resolved_root: Option<Utf8PathBuf>, port: 
             }
         };
     eprintln!("Tooling config hash: {}", tooling_config.stable_hash());
+    let config_hash = tooling_config.stable_hash();
+    let capabilities = vec![
+        "trace.query".to_string(),
+        "ir.view".to_string(),
+        "gas.static".to_string(),
+        "graph.origin".to_string(),
+    ];
 
     // Inspect any existing .fe-lsp.json. This is purely diagnostic: we
     // always proceed with writing our own, since the file is a discovery
@@ -1017,16 +1088,42 @@ async fn run_lsp_with_combined_server(resolved_root: Option<Utf8PathBuf>, port: 
         }
     }
 
-    let server_info = doc::LspServerInfo {
-        pid: our_pid,
-        port: Some(actual_port),
-        workspace_root: Some(workspace_root_path.display().to_string()),
-        docs_url: Some(format!("http://127.0.0.1:{actual_port}")),
-    };
-    if let Err(e) = server_info.write_to_workspace(&workspace_root_path) {
-        eprintln!(
-            "fe-language-server: could not write .fe-lsp.json at {workspace_root_display}: {e}"
-        );
+    if tooling_config.lsp.live.write_server_info {
+        let token_file = ".fe-lsp.token";
+        let token = lsp_auth_token(our_pid);
+        if let Err(err) = fs::write(workspace_root_path.join(token_file), token) {
+            eprintln!("fe-language-server: could not write {token_file}: {err}");
+        }
+        let docs_url = format!("http://127.0.0.1:{actual_port}");
+        let server_info = doc::LspServerInfo {
+            schema_version: 1,
+            pid: our_pid,
+            started_at_ms: Some(unix_time_ms()),
+            port: Some(actual_port),
+            workspace_root: Some(workspace_root_path.display().to_string()),
+            docs_url: Some(docs_url.clone()),
+            lsp: Some(doc::LspEndpointInfo {
+                transport: "websocket".to_string(),
+                port: Some(actual_port),
+                ws_url: Some(format!("ws://127.0.0.1:{actual_port}/lsp")),
+            }),
+            http: Some(doc::HttpEndpointInfo {
+                base_url: docs_url.clone(),
+                docs_url,
+                trace_api_url: format!("http://127.0.0.1:{actual_port}/trace"),
+            }),
+            capabilities: capabilities.clone(),
+            config_hash: Some(config_hash.clone()),
+            auth: Some(doc::LspAuthInfo {
+                mode: "localhost-token".to_string(),
+                token_file: token_file.to_string(),
+            }),
+        };
+        if let Err(e) = server_info.write_to_workspace(&workspace_root_path) {
+            eprintln!(
+                "fe-language-server: could not write .fe-lsp.json at {workspace_root_display}: {e}"
+            );
+        }
     }
 
     let config = language_server::CombinedServerConfig {
@@ -1034,12 +1131,180 @@ async fn run_lsp_with_combined_server(resolved_root: Option<Utf8PathBuf>, port: 
         doc_html,
         docs_url: Some(format!("http://127.0.0.1:{actual_port}")),
         tooling_config,
+        config_hash,
+        workspace_root: Some(workspace_root_path.display().to_string()),
+        capabilities,
     };
 
     language_server::run_stdio_server(Some(config)).await;
 
     // Cleanup on exit
     doc::LspServerInfo::remove_from_workspace(&workspace_root_path);
+}
+
+#[cfg(feature = "lsp")]
+fn lsp_status(resolved_root: Option<&Utf8PathBuf>) -> Result<String, String> {
+    let root = lsp_discovery_root(resolved_root)?;
+    let info = doc::LspServerInfo::read_from_workspace(root.as_std_path())
+        .ok_or_else(|| format!("no .fe-lsp.json found at {root}"))?;
+    let mut out = String::new();
+    out.push_str("Fe LSP status\n\n");
+    out.push_str(&format!("schema_version: {}\n", info.schema_version));
+    out.push_str(&format!("pid: {}\n", info.pid));
+    out.push_str(&format!("alive: {}\n", info.is_alive()));
+    out.push_str(&format!(
+        "workspace_root: {}\n",
+        info.workspace_root.as_deref().unwrap_or("<unknown>")
+    ));
+    if let Some(hash) = &info.config_hash {
+        out.push_str(&format!("config_hash: {hash}\n"));
+    }
+    if let Some(http) = &info.http {
+        out.push_str(&format!("http: {}\n", http.base_url));
+        match http_get_text(&format!("{}/health", http.base_url.trim_end_matches('/'))) {
+            Ok(body) => out.push_str(&format!("health: {body}\n")),
+            Err(err) => out.push_str(&format!("health: unavailable ({err})\n")),
+        }
+    } else if let Some(docs_url) = &info.docs_url {
+        out.push_str(&format!("docs_url: {docs_url}\n"));
+    }
+    Ok(out)
+}
+
+#[cfg(feature = "lsp")]
+fn lsp_doctor(resolved_root: Option<&Utf8PathBuf>) -> Result<String, String> {
+    let root = lsp_discovery_root(resolved_root)?;
+    let check = doc::ExistingInstanceCheck::inspect(root.as_std_path());
+    let mut out = String::new();
+    out.push_str("Fe LSP doctor\n\n");
+    out.push_str(&format!("workspace_root: {root}\n"));
+    match check {
+        doc::ExistingInstanceCheck::None => out.push_str("status: no server info file found\n"),
+        doc::ExistingInstanceCheck::StaleFound {
+            stale_pid,
+            recorded_workspace_root,
+        } => out.push_str(&format!(
+            "status: stale server info (pid {stale_pid}, recorded workspace_root={recorded_workspace_root:?})\n"
+        )),
+        doc::ExistingInstanceCheck::SiblingLive {
+            sibling_pid,
+            sibling_docs_url,
+        } => out.push_str(&format!(
+            "status: live server discovered (pid {sibling_pid}, docs_url={sibling_docs_url:?})\n"
+        )),
+        doc::ExistingInstanceCheck::RootMismatch {
+            other_pid,
+            other_workspace_root,
+            our_workspace_root,
+        } => out.push_str(&format!(
+            "status: root mismatch (pid {other_pid}, recorded={other_workspace_root:?}, detected={our_workspace_root})\n"
+        )),
+        doc::ExistingInstanceCheck::Malformed => {
+            out.push_str("status: malformed .fe-lsp.json\n")
+        }
+    }
+    Ok(out)
+}
+
+#[cfg(feature = "lsp")]
+fn lsp_stop(resolved_root: Option<&Utf8PathBuf>) -> Result<String, String> {
+    let root = lsp_discovery_root(resolved_root)?;
+    let info = doc::LspServerInfo::read_from_workspace(root.as_std_path())
+        .ok_or_else(|| format!("no .fe-lsp.json found at {root}"))?;
+    if !info.is_alive() {
+        doc::LspServerInfo::remove_from_workspace(root.as_std_path());
+        return Ok(format!(
+            "removed stale .fe-lsp.json for non-live pid {}\n",
+            info.pid
+        ));
+    }
+    terminate_process(info.pid)?;
+    Ok(format!("sent stop signal to Fe LSP pid {}\n", info.pid))
+}
+
+#[cfg(feature = "lsp")]
+fn lsp_discovery_root(resolved_root: Option<&Utf8PathBuf>) -> Result<Utf8PathBuf, String> {
+    if let Some(root) = resolved_root {
+        return Ok(root.clone());
+    }
+    Utf8PathBuf::from_path_buf(std::env::current_dir().map_err(|err| err.to_string())?)
+        .map_err(|path| format!("current directory is not UTF-8: {}", path.display()))
+}
+
+#[cfg(feature = "lsp")]
+fn terminate_process(pid: u32) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        let status = std::process::Command::new("kill")
+            .arg(pid.to_string())
+            .status()
+            .map_err(|err| format!("failed to run kill: {err}"))?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!("kill exited with status {status}"))
+        }
+    }
+    #[cfg(windows)]
+    {
+        let status = std::process::Command::new("taskkill")
+            .args(["/PID", &pid.to_string()])
+            .status()
+            .map_err(|err| format!("failed to run taskkill: {err}"))?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!("taskkill exited with status {status}"))
+        }
+    }
+}
+
+fn http_get_text(url: &str) -> Result<String, String> {
+    http_request("GET", url, None)
+}
+
+pub(crate) fn http_post_json(url: &str, body: &serde_json::Value) -> Result<String, String> {
+    http_request("POST", url, Some(body.to_string()))
+}
+
+fn http_request(method: &str, url: &str, body: Option<String>) -> Result<String, String> {
+    use std::io::Write;
+    use std::net::TcpStream;
+
+    let url = url::Url::parse(url).map_err(|err| format!("invalid URL {url}: {err}"))?;
+    if url.scheme() != "http" {
+        return Err(format!("unsupported URL scheme: {}", url.scheme()));
+    }
+    let host = url
+        .host_str()
+        .ok_or_else(|| format!("URL has no host: {url}"))?;
+    let port = url.port_or_known_default().unwrap_or(80);
+    let path = if let Some(query) = url.query() {
+        format!("{}?{query}", url.path())
+    } else {
+        url.path().to_string()
+    };
+    let mut stream = TcpStream::connect((host, port))
+        .map_err(|err| format!("failed to connect to {host}:{port}: {err}"))?;
+    let body = body.unwrap_or_default();
+    let request = format!(
+        "{method} {path} HTTP/1.1\r\nHost: {host}:{port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|err| format!("failed to write HTTP request: {err}"))?;
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .map_err(|err| format!("failed to read HTTP response: {err}"))?;
+    let Some((headers, body)) = response.split_once("\r\n\r\n") else {
+        return Err("malformed HTTP response".to_string());
+    };
+    if !headers.starts_with("HTTP/1.1 200") && !headers.starts_with("HTTP/1.0 200") {
+        return Err(headers.lines().next().unwrap_or(headers).to_string());
+    }
+    Ok(body.to_string())
 }
 
 /// Initial doc data generation from a workspace root.

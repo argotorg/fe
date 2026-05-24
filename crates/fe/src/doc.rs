@@ -14,11 +14,51 @@ use url::Url;
 /// Server info written by LSP for discovery
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct LspServerInfo {
+    #[serde(default = "default_lsp_server_info_schema_version")]
+    pub schema_version: u32,
     pub pid: u32,
+    #[serde(default)]
+    pub started_at_ms: Option<u128>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub port: Option<u16>,
     pub workspace_root: Option<String>,
     pub docs_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lsp: Option<LspEndpointInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http: Option<HttpEndpointInfo>,
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth: Option<LspAuthInfo>,
+}
+
+fn default_lsp_server_info_schema_version() -> u32 {
+    0
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct LspEndpointInfo {
+    pub transport: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ws_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct HttpEndpointInfo {
+    pub base_url: String,
+    pub docs_url: String,
+    pub trace_api_url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct LspAuthInfo {
+    pub mode: String,
+    pub token_file: String,
 }
 
 impl LspServerInfo {
@@ -36,7 +76,9 @@ impl LspServerInfo {
     ) -> std::io::Result<()> {
         let info_path = workspace_root.join(".fe-lsp.json");
         let json = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
-        std::fs::write(&info_path, json)
+        let temp_path = workspace_root.join(".fe-lsp.json.tmp");
+        std::fs::write(&temp_path, json)?;
+        std::fs::rename(temp_path, info_path)
     }
 
     /// Remove the .fe-lsp.json file from a workspace.

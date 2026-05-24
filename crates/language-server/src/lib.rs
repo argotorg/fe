@@ -49,6 +49,9 @@ pub struct CombinedServerConfig {
     /// Passed to Backend so `fe.openDocs` can construct full URLs.
     pub docs_url: Option<String>,
     pub tooling_config: FeToolingConfig,
+    pub config_hash: String,
+    pub workspace_root: Option<String>,
+    pub capabilities: Vec<String>,
 }
 
 pub async fn run_stdio_server(combined: Option<CombinedServerConfig>) {
@@ -78,6 +81,10 @@ pub async fn run_stdio_server(combined: Option<CombinedServerConfig>) {
                 combined_actor_rx,
                 combined_nav_tx,
                 combined_reload_tx,
+                config.tooling_config.clone(),
+                config.config_hash.clone(),
+                config.workspace_root.clone(),
+                config.capabilities.clone(),
             )
             .await;
         });

@@ -13,11 +13,12 @@ use async_lsp::client_monitor::ClientProcessMonitorLayer;
 use async_lsp::concurrency::ConcurrencyLayer;
 use async_lsp::panic::CatchUnwindLayer;
 use async_lsp::server::LifecycleLayer;
+use axum::Json;
 use axum::Router;
 use axum::extract::WebSocketUpgrade;
 use axum::extract::ws::{Message as AxumMessage, WebSocket};
 use axum::response::Html;
-use axum::routing::get;
+use axum::routing::{get, post};
 use futures::io::{AsyncRead, AsyncWrite};
 use futures::{SinkExt, StreamExt};
 use tokio::sync::{Mutex, broadcast, watch};
@@ -43,8 +44,13 @@ pub async fn run(
     actor_rx: watch::Receiver<Option<SharedActor>>,
     doc_nav_tx: broadcast::Sender<String>,
     doc_reload_tx: broadcast::Sender<String>,
+    tooling_config: introspection_config::FeToolingConfig,
+    config_hash: String,
+    workspace_root: Option<String>,
+    capabilities: Vec<String>,
 ) {
     let html = Arc::new(tokio::sync::RwLock::new(doc_html));
+    let local_addr = listener.local_addr().ok().map(|addr| addr.to_string());
 
     // Spawn a task to rebuild the served HTML when doc data changes
     let html_for_reload = Arc::clone(&html);
@@ -99,7 +105,48 @@ pub async fn run(
     });
 
     let html_for_fallback = Arc::clone(&html);
+    let health_payload = Arc::new(serde_json::json!({
+        "status": "ok",
+        "workspace_root": workspace_root,
+        "server_addr": local_addr,
+        "capabilities": capabilities.clone(),
+        "config_hash": config_hash.clone(),
+    }));
+    let config_payload = Arc::new(serde_json::json!({
+        "config_hash": config_hash,
+        "config": tooling_config,
+    }));
     let app = Router::new()
+        .route(
+            "/health",
+            get({
+                let payload = Arc::clone(&health_payload);
+                move || {
+                    let payload = Arc::clone(&payload);
+                    async move { Json((*payload).clone()) }
+                }
+            }),
+        )
+        .route(
+            "/config/effective",
+            get({
+                let payload = Arc::clone(&config_payload);
+                move || {
+                    let payload = Arc::clone(&payload);
+                    async move { Json((*payload).clone()) }
+                }
+            }),
+        )
+        .route(
+            "/trace/query",
+            post(|Json(request): Json<serde_json::Value>| async move {
+                Json(serde_json::json!({
+                    "status": "unavailable",
+                    "reason": "live trace HTTP query execution is not wired to the backend actor yet",
+                    "request": request,
+                }))
+            }),
+        )
         .route(
             "/lsp",
             get({
