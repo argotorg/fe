@@ -24,7 +24,8 @@ fn run_dev_trace_command(command: &DevTraceCommand) -> Result<String, String> {
              Fixture-backed Fibonacci diagnostics remain under fe dev trace-fixture.\n\
              compiler-emitted: phase-owned MIR facts, source-local display names, MIR storage reasons, MIR lowering events, value properties, and actual EVM bytecode/gas facts.\n\
              posthoc: fixture instruction categories and demo loop membership are accepted only when metadata says fixture.\n\
-             unavailable: real loop membership, MIR-to-bytecode origin edges, backend storage allocation, and zext causality hooks are still incomplete.\n\
+             available: real Sonatina CFG loop membership when Sonatina trace-view facts are present.\n\
+             unavailable: MIR-to-bytecode origin edges, backend storage allocation, and zext causality hooks are still incomplete.\n\
              zext-report is intentionally unavailable until InsertIntegerZeroExtend events and value properties are emitted by compiler phases.\n"
                 .to_string(),
         ),
@@ -33,6 +34,7 @@ fn run_dev_trace_command(command: &DevTraceCommand) -> Result<String, String> {
         DevTraceCommand::Query { command } => run_trace_query_command(command),
         DevTraceCommand::Live { command } => super::trace_live::run_trace_live_command(command),
         DevTraceCommand::LoopCost(args) => super::trace_emit::run_trace_loop_cost(args),
+        DevTraceCommand::LoopContents(args) => super::trace_emit::run_trace_loop_contents(args),
         DevTraceCommand::ExplainLocal(args) => super::trace_emit::run_trace_explain_local(args),
     }
 }
@@ -40,6 +42,9 @@ fn run_dev_trace_command(command: &DevTraceCommand) -> Result<String, String> {
 fn run_trace_query_command(command: &DevTraceQueryCommand) -> Result<String, String> {
     match command {
         DevTraceQueryCommand::LoopCost(args) => super::trace_emit::run_trace_loop_cost(args),
+        DevTraceQueryCommand::LoopContents(args) => {
+            super::trace_emit::run_trace_loop_contents(args)
+        }
         DevTraceQueryCommand::ExplainLocal(args) => {
             super::trace_emit::run_trace_explain_local(args)
         }
@@ -75,7 +80,7 @@ mod tests {
         assert!(output.contains("Fixture-backed Fibonacci diagnostics"));
         assert!(output.contains("compiler-emitted: phase-owned MIR facts"));
         assert!(output.contains("posthoc: fixture instruction categories"));
-        assert!(output.contains("unavailable: real loop membership"));
+        assert!(output.contains("available: real Sonatina CFG loop membership"));
         assert!(output.contains("zext-report is intentionally unavailable"));
         assert!(output.contains("InsertIntegerZeroExtend events"));
     }

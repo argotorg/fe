@@ -13,8 +13,8 @@ use trace_facts::{
     CompilerPhase, EvmSchedule, FunctionFact, GasConfidence, GasCostFact, GasKind, GasSource,
     InstructionBlockFact, InstructionCategory, InstructionCategoryFact, InstructionExtentFact,
     InstructionFact, LoopBlockFact, LoopBlockRole, LoopConfidence, LoopDerivation, LoopFact,
-    OpcodeCategory, OpcodeFact, OriginEdgeFact, OriginEdgeLabel, OriginNodeFact, OriginNodeKind,
-    PcRange, StaticGasFact, TraceFact,
+    LoopMembershipFact, OpcodeCategory, OpcodeFact, OriginEdgeFact, OriginEdgeLabel,
+    OriginNodeFact, OriginNodeKind, PcRange, StaticGasFact, TraceFact,
 };
 
 use crate::debug::BytecodeSourceMapEntry;
@@ -193,6 +193,9 @@ pub fn emit_sonatina_trace_view_facts(
         )));
 
         let blocks = module.trace_blocks(function_ref);
+        let cfg_edges = sonatina_trace_cfg_edges(module, function_ref, &blocks);
+        let predecessors = indexed_predecessors(blocks.len(), &cfg_edges);
+        let dominators = indexed_dominators(blocks.len(), &predecessors);
         for (block_ordinal, block) in blocks.iter().copied().enumerate() {
             let block_key = sonatina_trace_block_key(block_kind, owner_key, function_ref, block);
             push_node(&mut facts, block_key.clone());
@@ -206,16 +209,17 @@ pub fn emit_sonatina_trace_view_facts(
         }
 
         let mut instruction_index = 0u32;
-        for block in blocks {
+        let mut block_instruction_keys = vec![Vec::new(); blocks.len()];
+        for (block_index, block) in blocks.iter().copied().enumerate() {
             let block_key = sonatina_trace_block_key(block_kind, owner_key, function_ref, block);
-            for edge in module.trace_block_successors(function_ref, block) {
+            for edge in cfg_edges.iter().filter(|edge| edge.from == block_index) {
                 let to_block =
-                    sonatina_trace_block_key(block_kind, owner_key, function_ref, edge.to);
+                    sonatina_trace_block_key(block_kind, owner_key, function_ref, blocks[edge.to]);
                 facts.push(TraceFact::CfgEdge(CfgEdgeFact::new(
                     function_key.clone(),
                     block_key.clone(),
                     to_block,
-                    sonatina_trace_edge_kind(edge.kind, edge.ordinal),
+                    indexed_cfg_edge_kind(edge, &dominators),
                     None,
                 )));
             }
@@ -238,6 +242,7 @@ pub fn emit_sonatina_trace_view_facts(
                     block_key.clone(),
                     phase,
                 )));
+                block_instruction_keys[block_index].push(inst_key.clone());
                 instruction_index += 1;
 
                 if let Some(frontend_origin) =
@@ -248,6 +253,61 @@ pub fn emit_sonatina_trace_view_facts(
                         frontend_origin,
                         OriginEdgeLabel::LoweredFrom,
                         Some(phase),
+                    )));
+                }
+            }
+        }
+
+        let Some(loop_kind) = sonatina_loop_kind_for_phase(phase) else {
+            continue;
+        };
+        let cfg_hash = indexed_cfg_hash(blocks.len(), &cfg_edges, &dominators);
+        for natural_loop in indexed_natural_loops(blocks.len(), &predecessors, &cfg_edges) {
+            let loop_key = sonatina_trace_loop_key(
+                loop_kind,
+                owner_key,
+                function_ref,
+                blocks[natural_loop.header],
+                blocks[natural_loop.latch],
+            );
+            push_node(&mut facts, loop_key.clone());
+            let header_block = sonatina_trace_block_key(
+                block_kind,
+                owner_key,
+                function_ref,
+                blocks[natural_loop.header],
+            );
+            let derivation = LoopDerivation::NaturalLoopAnalysis {
+                cfg_hash: cfg_hash.clone(),
+            };
+            facts.push(TraceFact::Loop(LoopFact::new(
+                loop_key.clone(),
+                function_key.clone(),
+                phase,
+                header_block,
+                derivation.clone(),
+                LoopConfidence::SonatinaCfg,
+            )));
+            for member in &natural_loop.members {
+                let role = if *member == natural_loop.header {
+                    LoopBlockRole::Header
+                } else if *member == natural_loop.latch {
+                    LoopBlockRole::Latch
+                } else {
+                    LoopBlockRole::Body
+                };
+                let block_key =
+                    sonatina_trace_block_key(block_kind, owner_key, function_ref, blocks[*member]);
+                facts.push(TraceFact::LoopBlock(LoopBlockFact::new(
+                    loop_key.clone(),
+                    block_key,
+                    role,
+                )));
+                for instruction in &block_instruction_keys[*member] {
+                    facts.push(TraceFact::LoopMembership(LoopMembershipFact::new(
+                        loop_key.clone(),
+                        instruction.clone(),
+                        derivation.clone(),
                     )));
                 }
             }
@@ -1024,6 +1084,14 @@ fn sonatina_phase_kinds(
     }
 }
 
+fn sonatina_loop_kind_for_phase(phase: CompilerPhase) -> Option<&'static str> {
+    match phase {
+        CompilerPhase::SonatinaPreOpt => Some(SONATINA_PREOPT_LOOP_KIND),
+        CompilerPhase::SonatinaPostOpt => Some(SONATINA_POSTOPT_LOOP_KIND),
+        _ => None,
+    }
+}
+
 fn sonatina_function_key(
     kind: &str,
     owner_key: &str,
@@ -1061,6 +1129,21 @@ fn sonatina_trace_inst_key(
     .expect("Sonatina instruction trace key must be valid")
 }
 
+fn sonatina_trace_loop_key(
+    kind: &str,
+    owner_key: &str,
+    function: sonatina_ir::module::FuncRef,
+    header: sonatina_ir::BlockId,
+    latch: sonatina_ir::BlockId,
+) -> OriginExportKey {
+    OriginExportKey::try_from_raw_parts(
+        kind,
+        owner_key,
+        format!("function:{function:?}:loop:header:{header:?}:latch:{latch:?}"),
+    )
+    .expect("Sonatina loop trace key must be valid")
+}
+
 fn sonatina_trace_edge_kind(kind: SonatinaCfgEdgeKind, ordinal: usize) -> CfgEdgeKind {
     match kind {
         SonatinaCfgEdgeKind::Jump => CfgEdgeKind::Jump,
@@ -1085,6 +1168,166 @@ fn sonatina_frontend_origin_for_inst(
         let external_key = origin.external_key.as_deref()?;
         serde_json::from_str(external_key).ok()
     })?
+}
+
+#[derive(Clone, Copy, Debug)]
+struct IndexedCfgEdge {
+    from: usize,
+    to: usize,
+    kind: CfgEdgeKind,
+}
+
+#[derive(Clone, Debug)]
+struct IndexedNaturalLoop {
+    header: usize,
+    latch: usize,
+    members: Vec<usize>,
+}
+
+fn sonatina_trace_cfg_edges(
+    module: &sonatina_ir::Module,
+    function_ref: sonatina_ir::module::FuncRef,
+    blocks: &[sonatina_ir::BlockId],
+) -> Vec<IndexedCfgEdge> {
+    let mut edges = Vec::new();
+    for (from, block) in blocks.iter().copied().enumerate() {
+        for edge in module.trace_block_successors(function_ref, block) {
+            let Some(to) = blocks.iter().position(|candidate| *candidate == edge.to) else {
+                continue;
+            };
+            edges.push(IndexedCfgEdge {
+                from,
+                to,
+                kind: sonatina_trace_edge_kind(edge.kind, edge.ordinal),
+            });
+        }
+    }
+    edges
+}
+
+fn indexed_predecessors(block_count: usize, edges: &[IndexedCfgEdge]) -> Vec<Vec<usize>> {
+    let mut predecessors = vec![Vec::new(); block_count];
+    for edge in edges {
+        if edge.from < block_count && edge.to < block_count {
+            predecessors[edge.to].push(edge.from);
+        }
+    }
+    predecessors
+}
+
+fn indexed_cfg_edge_kind(edge: &IndexedCfgEdge, dominators: &[BTreeSet<usize>]) -> CfgEdgeKind {
+    if dominators
+        .get(edge.from)
+        .is_some_and(|dominator_set| dominator_set.contains(&edge.to))
+    {
+        CfgEdgeKind::Backedge
+    } else {
+        edge.kind
+    }
+}
+
+fn indexed_natural_loops(
+    block_count: usize,
+    predecessors: &[Vec<usize>],
+    edges: &[IndexedCfgEdge],
+) -> Vec<IndexedNaturalLoop> {
+    let dominators = indexed_dominators(block_count, predecessors);
+    let mut seen = BTreeSet::new();
+    let mut loops = Vec::new();
+    for edge in edges {
+        if edge.from >= block_count || edge.to >= block_count {
+            continue;
+        }
+        if !dominators[edge.from].contains(&edge.to) || !seen.insert((edge.to, edge.from)) {
+            continue;
+        }
+        loops.push(IndexedNaturalLoop {
+            header: edge.to,
+            latch: edge.from,
+            members: indexed_natural_loop_members(block_count, predecessors, edge.to, edge.from),
+        });
+    }
+    loops
+}
+
+fn indexed_natural_loop_members(
+    block_count: usize,
+    predecessors: &[Vec<usize>],
+    header: usize,
+    latch: usize,
+) -> Vec<usize> {
+    let mut members = BTreeSet::from([header, latch]);
+    let mut stack = vec![latch];
+    while let Some(block) = stack.pop() {
+        for predecessor in predecessors.get(block).into_iter().flatten().copied() {
+            if predecessor >= block_count || !members.insert(predecessor) {
+                continue;
+            }
+            if predecessor != header {
+                stack.push(predecessor);
+            }
+        }
+    }
+    members.into_iter().collect()
+}
+
+fn indexed_dominators(block_count: usize, predecessors: &[Vec<usize>]) -> Vec<BTreeSet<usize>> {
+    if block_count == 0 {
+        return Vec::new();
+    }
+    let all_blocks = (0..block_count).collect::<BTreeSet<_>>();
+    let mut dominators = vec![all_blocks.clone(); block_count];
+    dominators[0] = BTreeSet::from([0]);
+
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for block in 1..block_count {
+            let preds = predecessors
+                .get(block)
+                .into_iter()
+                .flatten()
+                .copied()
+                .filter(|pred| *pred < block_count)
+                .collect::<Vec<_>>();
+            let mut next = if let Some((first, rest)) = preds.split_first() {
+                let mut intersection = dominators[*first].clone();
+                for pred in rest {
+                    intersection = intersection
+                        .intersection(&dominators[*pred])
+                        .copied()
+                        .collect();
+                }
+                intersection
+            } else {
+                BTreeSet::new()
+            };
+            next.insert(block);
+            if next != dominators[block] {
+                dominators[block] = next;
+                changed = true;
+            }
+        }
+    }
+    dominators
+}
+
+fn indexed_cfg_hash(
+    block_count: usize,
+    edges: &[IndexedCfgEdge],
+    dominators: &[BTreeSet<usize>],
+) -> String {
+    let mut hash = 0xcbf29ce484222325u64;
+    hash_u32(&mut hash, block_count as u32);
+    for edge in edges {
+        hash_u32(&mut hash, edge.from as u32);
+        hash_u32(&mut hash, edge.to as u32);
+        hash_bytes(
+            &mut hash,
+            cfg_edge_kind_name(indexed_cfg_edge_kind(edge, dominators)).as_bytes(),
+        );
+    }
+    format!("fnv64:{hash:016x}")
 }
 
 fn sonatina_loop_key(
@@ -1391,6 +1634,80 @@ mod tests {
                         && edge.label == trace_facts::OriginEdgeLabel::LoweredFrom
                         && edge.introduced_by == Some(CompilerPhase::SonatinaPreOpt)
             )
+        }));
+    }
+
+    #[test]
+    fn sonatina_trace_view_adapter_emits_natural_loop_membership() {
+        use sonatina_ir::{
+            Linkage, Signature, Type,
+            builder::ModuleBuilder,
+            func_cursor::InstInserter,
+            inst::{
+                arith::Add,
+                control_flow::{Br, Jump, Return},
+            },
+            isa::Isa,
+            isa::evm::Evm,
+            module::ModuleCtx,
+        };
+        use sonatina_triple::{Architecture, EvmVersion, OperatingSystem, TargetTriple, Vendor};
+
+        let evm = Evm::new(TargetTriple::new(
+            Architecture::Evm,
+            Vendor::Ethereum,
+            OperatingSystem::Evm(EvmVersion::London),
+        ));
+        let mb = ModuleBuilder::new(ModuleCtx::new(&evm));
+        let func_ref = mb
+            .declare_function(Signature::new_unit(
+                "trace_loop",
+                Linkage::Public,
+                &[Type::I1],
+            ))
+            .unwrap();
+        let is = evm.inst_set();
+        let mut builder = mb.func_builder::<InstInserter>(func_ref);
+        let entry = builder.append_block();
+        let header = builder.append_block();
+        let body = builder.append_block();
+        let exit = builder.append_block();
+        let cond = builder.args()[0];
+
+        builder.switch_to_block(entry);
+        builder.insert_inst_no_result(Jump::new(is, header));
+
+        builder.switch_to_block(header);
+        builder.insert_inst_no_result(Br::new(is, cond, body, exit));
+
+        builder.switch_to_block(body);
+        let lhs = builder.make_imm_value(1i32);
+        let rhs = builder.make_imm_value(2i32);
+        builder.insert_inst(Add::new(is, lhs, rhs), Type::I32);
+        builder.insert_inst_no_result(Jump::new(is, header));
+
+        builder.switch_to_block(exit);
+        builder.insert_inst_no_result(Return::new_unit(is));
+        builder.seal_all();
+        builder.finish();
+        let module = mb.build();
+
+        let facts =
+            emit_sonatina_trace_view_facts("owner:test", &module, CompilerPhase::SonatinaPreOpt);
+        TraceValidator::validate(&facts).unwrap();
+
+        assert!(
+            facts
+                .iter()
+                .any(|fact| matches!(fact, TraceFact::Loop(loop_fact)
+                    if loop_fact.confidence == trace_facts::LoopConfidence::SonatinaCfg))
+        );
+        assert!(facts.iter().any(|fact| {
+            matches!(fact, TraceFact::LoopMembership(membership)
+                    if membership.instruction.kind() == super::SONATINA_PREOPT_INST_KIND)
+        }));
+        assert!(facts.iter().any(|fact| {
+            matches!(fact, TraceFact::CfgEdge(edge) if edge.kind == trace_facts::CfgEdgeKind::Backedge)
         }));
     }
 

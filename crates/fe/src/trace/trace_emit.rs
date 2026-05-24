@@ -47,6 +47,12 @@ pub(super) fn run_trace_loop_cost(args: &DevTraceInputArgs) -> Result<String, St
     super::trace_render::render_loop_cost_snapshot(read_trace_snapshot_jsonl_from_path(&args.from)?)
 }
 
+pub(super) fn run_trace_loop_contents(args: &DevTraceInputArgs) -> Result<String, String> {
+    super::trace_render::render_loop_contents_snapshot(read_trace_snapshot_jsonl_from_path(
+        &args.from,
+    )?)
+}
+
 pub(super) fn run_trace_explain_local(args: &DevTraceExplainLocalArgs) -> Result<String, String> {
     super::trace_render::render_explain_local_snapshot(
         read_trace_snapshot_jsonl_from_path(&args.from)?,
@@ -359,20 +365,25 @@ mod tests {
             "real Fibonacci trace should include derived shape hashes"
         );
         assert!(
-            !bundle
+            bundle
                 .facts
                 .iter()
                 .any(|fact| matches!(fact, trace_facts::TraceFact::LoopMembership(_))),
-            "real Fibonacci trace must not silently invent loop membership"
+            "real Fibonacci trace should include Sonatina CFG-derived loop membership"
         );
         let loop_cost =
             super::super::trace_render::render_loop_cost_bundle(bundle.clone()).unwrap();
         assert!(loop_cost.contains("Data source: compiler_emitted"));
-        assert!(loop_cost.contains("Loop cost unavailable from this trace"));
-        assert!(loop_cost.contains("compiler-derived LoopMembershipFact rows are not emitted yet"));
-        assert!(loop_cost.contains("Available compiler-derived bytecode summary"));
-        assert!(loop_cost.contains("Required next facts: loop membership"));
-        assert!(!loop_cost.contains("Static per-iteration cost"));
+        assert!(loop_cost.contains("Static per-iteration cost"));
+        assert!(!loop_cost.contains("Loop cost unavailable from this trace"));
+
+        let loop_contents = super::super::trace_render::render_loop_contents_snapshot(
+            TraceSnapshot::new(bundle.clone()).unwrap(),
+        )
+        .unwrap();
+        assert!(loop_contents.contains("Fe dev trace loop-contents"));
+        assert!(loop_contents.contains("Membership source: compiler-emitted Sonatina CFG"));
+        assert!(loop_contents.contains("Loop blocks:"));
 
         let gas_by_source = super::super::trace_render::render_gas_by_source_snapshot(
             TraceSnapshot::new(bundle.clone()).unwrap(),

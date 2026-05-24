@@ -4,9 +4,9 @@ use trace_query::{
     DynamicGasBySourceRequest, ExplainLocalReport, ExplainLocalRequest, ExplainPcReport,
     ExplainPcRequest, GasAttributionPolicy, GasBreakdownReport, GasBreakdownRequest,
     GasBySourceReport, GasBySourceRequest, GasToSourceReport, GasToSourceRequest,
-    IntrospectionService, LoopCostReport, LoopCostRequest, OptimizedCodeHonestyReport,
-    OptimizedCodeHonestyRequest, SourceAttribution, TraceIntrospectionService, VariablesAtPcReport,
-    VariablesAtPcRequest,
+    IntrospectionService, LoopContentsReport, LoopContentsRequest, LoopCostReport, LoopCostRequest,
+    OptimizedCodeHonestyReport, OptimizedCodeHonestyRequest, SourceAttribution,
+    TraceIntrospectionService, VariablesAtPcReport, VariablesAtPcRequest,
 };
 
 pub(super) fn render_validation_summary(
@@ -52,6 +52,14 @@ pub(super) fn render_loop_cost_snapshot(snapshot: TraceSnapshot) -> Result<Strin
         .loop_cost(LoopCostRequest::default())
         .map_err(|err| err.to_string())?;
     Ok(render_loop_cost_report(&report))
+}
+
+pub(super) fn render_loop_contents_snapshot(snapshot: TraceSnapshot) -> Result<String, String> {
+    let service = TraceIntrospectionService::new(snapshot);
+    let report = service
+        .loop_contents(LoopContentsRequest::default())
+        .map_err(|err| err.to_string())?;
+    Ok(render_loop_contents_report(&report))
 }
 
 pub(super) fn render_explain_local_bundle(
@@ -302,6 +310,58 @@ fn render_loop_cost_report(report: &LoopCostReport) -> String {
             report.summary.zero_extends,
             report.summary.stack_loads + report.summary.stack_stores
         ));
+    }
+    out
+}
+
+fn render_loop_contents_report(report: &LoopContentsReport) -> String {
+    let mut out = String::new();
+    out.push_str("Fe dev trace loop-contents\n\n");
+    out.push_str(&format!("Data source: {}\n", report.metadata.data_source));
+    out.push_str("Trace validation: passed\n");
+    out.push_str(&format!("Target: {}\n", report.metadata.target));
+    out.push_str(&format!("Input: {}\n", report.metadata.input_path));
+    if let Some(function_label) = report.metadata.function_label() {
+        out.push_str(&format!("Function: {function_label}\n"));
+    }
+
+    if !report.available {
+        out.push('\n');
+        out.push_str("Loop contents unavailable from this trace.\n");
+        if let Some(reason) = &report.unavailable_reason {
+            out.push_str(&format!("Reason: {reason}.\n"));
+        }
+        out.push_str("Required facts: LoopFact, LoopBlockFact, and LoopMembershipFact from a phase-owned CFG analysis.\n");
+        return out;
+    }
+
+    if let Some(loop_label) = &report.loop_label {
+        out.push_str(&format!("Loop: {loop_label}\n"));
+    }
+    out.push_str("Membership source: compiler-emitted Sonatina CFG natural-loop analysis\n");
+    out.push_str(&format!("Blocks: {}\n", report.blocks.len()));
+    out.push_str(&format!("Instructions: {}\n\n", report.instructions.len()));
+    out.push_str("Loop blocks:\n");
+    for block in &report.blocks {
+        out.push_str(&format!(
+            "  {} [{}]\n",
+            block.block.display_label(),
+            block.role
+        ));
+        if block.instructions.is_empty() {
+            out.push_str("    <no instructions>\n");
+        }
+        for instruction in &block.instructions {
+            out.push_str(&format!(
+                "    ir[{}] {}\n",
+                instruction.index, instruction.mnemonic
+            ));
+        }
+    }
+
+    out.push_str("\nFindings:\n");
+    for finding in &report.findings {
+        out.push_str(&format!("  {}: {}\n", finding.title, finding.summary));
     }
     out
 }

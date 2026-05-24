@@ -8,8 +8,9 @@ use common::origin::OriginExportKey;
 use introspection_config::FeToolingConfig;
 use serde::{Deserialize, Serialize};
 use trace_facts::{
-    CompilerEventKind, GasKind, InstructionCategory, InstructionFact, OriginEdgeLabel, StorageFact,
-    StorageLocation, TraceDataSource, TraceFact, TraceMetadata, TraceSnapshot,
+    CompilerEventKind, GasKind, InstructionCategory, InstructionFact, LoopBlockRole,
+    OriginEdgeLabel, StorageFact, StorageLocation, TraceDataSource, TraceFact, TraceMetadata,
+    TraceSnapshot,
 };
 
 pub type QueryResult<T> = Result<T, QueryError>;
@@ -18,6 +19,7 @@ pub trait IntrospectionService {
     fn status(&self) -> IntrospectionStatus;
     fn effective_config(&self) -> FeToolingConfig;
     fn loop_cost(&self, request: LoopCostRequest) -> QueryResult<LoopCostReport>;
+    fn loop_contents(&self, request: LoopContentsRequest) -> QueryResult<LoopContentsReport>;
     fn explain_local(&self, request: ExplainLocalRequest) -> QueryResult<ExplainLocalReport>;
     fn gas_breakdown(&self, request: GasBreakdownRequest) -> QueryResult<GasBreakdownReport>;
     fn explain_pc(&self, request: ExplainPcRequest) -> QueryResult<ExplainPcReport>;
@@ -114,6 +116,50 @@ impl IntrospectionService for TraceIntrospectionService {
             repeated_zero_extends,
             storage_impacts,
             findings,
+            confidence: if available {
+                Confidence::High
+            } else {
+                Confidence::Unknown
+            },
+        })
+    }
+
+    fn loop_contents(&self, request: LoopContentsRequest) -> QueryResult<LoopContentsReport> {
+        let index = TraceIndex::new(&self.snapshot);
+        let loop_key = request.loop_key.or_else(|| index.loop_key.clone());
+        let instructions = loop_key
+            .as_ref()
+            .and_then(|key| index.loop_members.get(key))
+            .cloned()
+            .unwrap_or_default();
+        let available = !instructions.is_empty();
+        let instruction_rows = index.sorted_instruction_rows(&instructions);
+        let blocks = loop_key
+            .as_ref()
+            .map(|key| index.loop_block_contents(key, &instructions))
+            .unwrap_or_default();
+
+        Ok(LoopContentsReport {
+            metadata: ReportMetadata::from_snapshot(&self.snapshot),
+            available,
+            unavailable_reason: (!available).then(|| {
+                "compiler-derived LoopMembershipFact rows are missing for this trace".to_string()
+            }),
+            loop_key: loop_key.clone(),
+            loop_label: loop_key.as_ref().map(|key| index.label(key)),
+            blocks,
+            instructions: instruction_rows,
+            findings: if available {
+                vec![Insight::info(
+                    "CFG-derived loop membership",
+                    "loop contents come from compiler-emitted LoopFact, LoopBlockFact, and LoopMembershipFact rows",
+                )]
+            } else {
+                vec![Insight::info(
+                    "Loop contents unavailable",
+                    "no phase-owned loop membership facts were emitted for this trace",
+                )]
+            },
             confidence: if available {
                 Confidence::High
             } else {
@@ -559,6 +605,11 @@ pub struct LoopCostRequest {
     pub loop_key: Option<OriginExportKey>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LoopContentsRequest {
+    pub loop_key: Option<OriginExportKey>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExplainLocalRequest {
     pub local: String,
@@ -706,6 +757,10 @@ pub enum TraceQueryRequest {
         #[serde(default)]
         loop_key: Option<OriginExportKey>,
     },
+    LoopContents {
+        #[serde(default)]
+        loop_key: Option<OriginExportKey>,
+    },
     ExplainLocal {
         local: String,
     },
@@ -754,6 +809,10 @@ pub enum TraceQueryRequest {
 impl TraceQueryRequest {
     pub fn loop_cost() -> Self {
         Self::LoopCost { loop_key: None }
+    }
+
+    pub fn loop_contents() -> Self {
+        Self::LoopContents { loop_key: None }
     }
 
     pub fn explain_local(local: impl Into<String>) -> Self {
@@ -828,6 +887,7 @@ pub enum TraceQueryHttpResponse {
 #[serde(tag = "kind", content = "report", rename_all = "snake_case")]
 pub enum TraceQueryReport {
     LoopCost(LoopCostReport),
+    LoopContents(LoopContentsReport),
     ExplainLocal(ExplainLocalReport),
     GasBreakdown(GasBreakdownReport),
     ExplainPc(ExplainPcReport),
@@ -847,6 +907,9 @@ pub fn run_trace_query(
         TraceQueryRequest::LoopCost { loop_key } => service
             .loop_cost(LoopCostRequest { loop_key })
             .map(TraceQueryReport::LoopCost),
+        TraceQueryRequest::LoopContents { loop_key } => service
+            .loop_contents(LoopContentsRequest { loop_key })
+            .map(TraceQueryReport::LoopContents),
         TraceQueryRequest::ExplainLocal { local } => service
             .explain_local(ExplainLocalRequest { local })
             .map(TraceQueryReport::ExplainLocal),
@@ -897,6 +960,26 @@ pub struct LoopCostReport {
     pub storage_impacts: Vec<StorageImpact>,
     pub findings: Vec<Insight>,
     pub confidence: Confidence,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LoopContentsReport {
+    pub metadata: ReportMetadata,
+    pub available: bool,
+    pub unavailable_reason: Option<String>,
+    pub loop_key: Option<OriginExportKey>,
+    pub loop_label: Option<String>,
+    pub blocks: Vec<LoopBlockContents>,
+    pub instructions: Vec<InstructionRow>,
+    pub findings: Vec<Insight>,
+    pub confidence: Confidence,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LoopBlockContents {
+    pub block: OriginExportKey,
+    pub role: String,
+    pub instructions: Vec<InstructionRow>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1229,9 +1312,11 @@ struct TraceIndex<'a> {
     snapshot: &'a TraceSnapshot,
     loop_key: Option<OriginExportKey>,
     loop_members: BTreeMap<OriginExportKey, BTreeSet<OriginExportKey>>,
+    loop_blocks: BTreeMap<OriginExportKey, Vec<(OriginExportKey, LoopBlockRole)>>,
     locals: BTreeMap<String, OriginExportKey>,
     display_names: BTreeMap<OriginExportKey, String>,
     instructions: BTreeMap<OriginExportKey, &'a InstructionFact>,
+    instruction_blocks: BTreeMap<OriginExportKey, OriginExportKey>,
     instruction_extents: BTreeMap<OriginExportKey, &'a trace_facts::InstructionExtentFact>,
     function_code_objects: BTreeMap<OriginExportKey, OriginExportKey>,
 }
@@ -1241,9 +1326,12 @@ impl<'a> TraceIndex<'a> {
         let mut loop_key = None;
         let mut loop_members: BTreeMap<OriginExportKey, BTreeSet<OriginExportKey>> =
             BTreeMap::new();
+        let mut loop_blocks: BTreeMap<OriginExportKey, Vec<(OriginExportKey, LoopBlockRole)>> =
+            BTreeMap::new();
         let mut locals = BTreeMap::new();
         let mut display_names = BTreeMap::new();
         let mut instructions = BTreeMap::new();
+        let mut instruction_blocks = BTreeMap::new();
         let mut instruction_extents = BTreeMap::new();
         let mut function_code_objects = BTreeMap::new();
 
@@ -1262,6 +1350,12 @@ impl<'a> TraceIndex<'a> {
                         .or_default()
                         .insert(membership.instruction.clone());
                 }
+                TraceFact::LoopBlock(loop_block) => {
+                    loop_blocks
+                        .entry(loop_block.loop_key.clone())
+                        .or_default()
+                        .push((loop_block.block.clone(), loop_block.role));
+                }
                 TraceFact::OriginNode(node) if node.key.kind() == "runtime.local" => {
                     locals.insert(
                         display_names
@@ -1273,6 +1367,12 @@ impl<'a> TraceIndex<'a> {
                 }
                 TraceFact::Instruction(instruction) => {
                     instructions.insert(instruction.instruction.clone(), instruction);
+                }
+                TraceFact::InstructionBlock(instruction_block) => {
+                    instruction_blocks.insert(
+                        instruction_block.instruction.clone(),
+                        instruction_block.block.clone(),
+                    );
                 }
                 TraceFact::InstructionExtent(extent) => {
                     instruction_extents.insert(extent.instruction.clone(), extent);
@@ -1291,9 +1391,11 @@ impl<'a> TraceIndex<'a> {
             snapshot,
             loop_key,
             loop_members,
+            loop_blocks,
             locals,
             display_names,
             instructions,
+            instruction_blocks,
             instruction_extents,
             function_code_objects,
         }
@@ -1309,6 +1411,58 @@ impl<'a> TraceIndex<'a> {
 
     fn all_instruction_keys(&self) -> BTreeSet<OriginExportKey> {
         self.instructions.keys().cloned().collect()
+    }
+
+    fn sorted_instruction_rows(&self, keys: &BTreeSet<OriginExportKey>) -> Vec<InstructionRow> {
+        let mut rows = keys
+            .iter()
+            .filter_map(|key| self.instruction_row(key))
+            .collect::<Vec<_>>();
+        rows.sort_by(|a, b| {
+            a.index
+                .cmp(&b.index)
+                .then_with(|| a.key.display_label().cmp(&b.key.display_label()))
+        });
+        rows
+    }
+
+    fn loop_block_contents(
+        &self,
+        loop_key: &OriginExportKey,
+        instructions: &BTreeSet<OriginExportKey>,
+    ) -> Vec<LoopBlockContents> {
+        let mut instructions_by_block =
+            BTreeMap::<OriginExportKey, BTreeSet<OriginExportKey>>::new();
+        for instruction in instructions {
+            if let Some(block) = self.instruction_blocks.get(instruction) {
+                instructions_by_block
+                    .entry(block.clone())
+                    .or_default()
+                    .insert(instruction.clone());
+            }
+        }
+
+        let mut rows = Vec::new();
+        if let Some(blocks) = self.loop_blocks.get(loop_key) {
+            for (block, role) in blocks {
+                rows.push(LoopBlockContents {
+                    block: block.clone(),
+                    role: loop_block_role_label(*role).to_string(),
+                    instructions: instructions_by_block
+                        .remove(block)
+                        .map(|keys| self.sorted_instruction_rows(&keys))
+                        .unwrap_or_default(),
+                });
+            }
+        }
+        for (block, keys) in instructions_by_block {
+            rows.push(LoopBlockContents {
+                block,
+                role: "unknown".to_string(),
+                instructions: self.sorted_instruction_rows(&keys),
+            });
+        }
+        rows
     }
 
     fn instruction_row(&self, key: &OriginExportKey) -> Option<InstructionRow> {
@@ -1839,6 +1993,16 @@ fn storage_step(storage: &StorageFact) -> StorageStep {
     }
 }
 
+fn loop_block_role_label(role: LoopBlockRole) -> &'static str {
+    match role {
+        LoopBlockRole::Header => "header",
+        LoopBlockRole::Body => "body",
+        LoopBlockRole::Latch => "latch",
+        LoopBlockRole::Preheader => "preheader",
+        LoopBlockRole::Exit => "exit",
+    }
+}
+
 #[derive(Clone, Debug)]
 struct GasAttributionBucket {
     key: String,
@@ -1970,21 +2134,22 @@ fn format_storage_location(location: &StorageLocation) -> String {
 mod tests {
     use common::origin::OriginExportKey;
     use trace_facts::{
-        CategorySource, CodeObjectFact, CodeObjectKind, CompilerEventFact, CompilerEventKind,
-        CompilerPhase, CompilerReason, DynamicGasStepFact, EvmSchedule, GasConfidence, GasCostFact,
-        GasKind, GasSource, InstructionCategory, InstructionCategoryFact, InstructionExtentFact,
-        InstructionFact, LocationConfidence, LocationRangeFact, LoopDerivation, LoopMembershipFact,
-        OriginEdgeFact, OriginEdgeLabel, OriginNodeFact, OriginNodeKind, PcRange, SourceFileFact,
-        SourceSpanFact, StaticGasFact, StorageFact, StorageLocation, StorageReason, TraceBundle,
-        TraceFact, TraceMetadata, TraceSnapshot, TypeFact, TypeKind, ValueLocation, VariableFact,
-        VariableStorageClass,
+        BlockFact, CategorySource, CodeObjectFact, CodeObjectKind, CompilerEventFact,
+        CompilerEventKind, CompilerPhase, CompilerReason, DynamicGasStepFact, EvmSchedule,
+        GasConfidence, GasCostFact, GasKind, GasSource, InstructionBlockFact, InstructionCategory,
+        InstructionCategoryFact, InstructionExtentFact, InstructionFact, LocationConfidence,
+        LocationRangeFact, LoopBlockFact, LoopBlockRole, LoopConfidence, LoopDerivation, LoopFact,
+        LoopMembershipFact, OriginEdgeFact, OriginEdgeLabel, OriginNodeFact, OriginNodeKind,
+        PcRange, SourceFileFact, SourceSpanFact, StaticGasFact, StorageFact, StorageLocation,
+        StorageReason, TraceBundle, TraceFact, TraceMetadata, TraceSnapshot, TypeFact, TypeKind,
+        ValueLocation, VariableFact, VariableStorageClass,
     };
 
     use super::{
         DynamicGasBySourceRequest, ExplainLocalRequest, ExplainPcRequest, GasBySourceRequest,
-        GasToSourceRequest, IntrospectionService, LoopCostRequest, OptimizedCodeHonestyRequest,
-        TraceIntrospectionService, TraceQueryHttpRequest, TraceQueryReport, TraceQueryRequest,
-        VariablesAtPcRequest, run_trace_query,
+        GasToSourceRequest, IntrospectionService, LoopContentsRequest, LoopCostRequest,
+        OptimizedCodeHonestyRequest, TraceIntrospectionService, TraceQueryHttpRequest,
+        TraceQueryReport, TraceQueryRequest, VariablesAtPcRequest, run_trace_query,
     };
 
     fn key(kind: &str, owner: &str, local: &str) -> OriginExportKey {
@@ -2005,6 +2170,7 @@ mod tests {
         let code_object = key("code.object", "demo", "runtime");
         let function = key("function", "demo", "recv");
         let loop_key = key("loop", "demo", "while:i<n");
+        let block = key("block", "demo", "loop-body");
         let local = key("runtime.local", "demo", "local:b");
         let ty = key("type", "demo", "u32");
         let inst = key("bytecode.pc", "demo", "pc:0");
@@ -2019,6 +2185,7 @@ mod tests {
             node(code_object.clone()),
             node(function.clone()),
             node(loop_key.clone()),
+            node(block.clone()),
             node(local.clone()),
             node(ty.clone()),
             node(inst.clone()),
@@ -2065,6 +2232,26 @@ mod tests {
                 "recv",
                 Some(source_expr.clone()),
                 Some(code_object.clone()),
+            )),
+            TraceFact::Block(BlockFact::new(
+                block.clone(),
+                function.clone(),
+                CompilerPhase::Backend,
+                0,
+                Some("loop-body".to_string()),
+            )),
+            TraceFact::Loop(LoopFact::new(
+                loop_key.clone(),
+                function.clone(),
+                CompilerPhase::Backend,
+                block.clone(),
+                LoopDerivation::BackendBlockMapping,
+                LoopConfidence::BackendBlockMapping,
+            )),
+            TraceFact::LoopBlock(LoopBlockFact::new(
+                loop_key.clone(),
+                block.clone(),
+                LoopBlockRole::Header,
             )),
             TraceFact::Type(TypeFact::new(
                 ty.clone(),
@@ -2113,6 +2300,11 @@ mod tests {
                 PcRange::new(0, 1),
                 1,
             )),
+            TraceFact::InstructionBlock(InstructionBlockFact::new(
+                inst.clone(),
+                block.clone(),
+                CompilerPhase::Backend,
+            )),
             TraceFact::Instruction(InstructionFact::new(
                 zext.clone(),
                 function.clone(),
@@ -2124,6 +2316,11 @@ mod tests {
                 code_object.clone(),
                 PcRange::new(1, 3),
                 2,
+            )),
+            TraceFact::InstructionBlock(InstructionBlockFact::new(
+                zext.clone(),
+                block,
+                CompilerPhase::Backend,
             )),
             TraceFact::Instruction(InstructionFact::new(
                 ambiguous.clone(),
@@ -2291,6 +2488,19 @@ mod tests {
     }
 
     #[test]
+    fn loop_contents_report_groups_instructions_by_loop_block() {
+        let report = demo_service()
+            .loop_contents(LoopContentsRequest::default())
+            .unwrap();
+
+        assert!(report.available);
+        assert_eq!(report.instructions.len(), 2);
+        assert_eq!(report.blocks.len(), 1);
+        assert_eq!(report.blocks[0].role, "header");
+        assert_eq!(report.blocks[0].instructions.len(), 2);
+    }
+
+    #[test]
     fn explain_local_report_uses_storage_and_instruction_edges() {
         let report = demo_service()
             .explain_local(ExplainLocalRequest {
@@ -2452,6 +2662,10 @@ mod tests {
         assert!(matches!(
             run_trace_query(&service, TraceQueryRequest::explain_pc(0)).unwrap(),
             TraceQueryReport::ExplainPc(_)
+        ));
+        assert!(matches!(
+            run_trace_query(&service, TraceQueryRequest::loop_contents()).unwrap(),
+            TraceQueryReport::LoopContents(_)
         ));
         assert!(matches!(
             run_trace_query(&service, TraceQueryRequest::gas_by_source("cancun")).unwrap(),
