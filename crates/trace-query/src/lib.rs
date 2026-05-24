@@ -19,6 +19,9 @@ pub trait IntrospectionService {
     fn loop_cost(&self, request: LoopCostRequest) -> QueryResult<LoopCostReport>;
     fn explain_local(&self, request: ExplainLocalRequest) -> QueryResult<ExplainLocalReport>;
     fn gas_breakdown(&self, request: GasBreakdownRequest) -> QueryResult<GasBreakdownReport>;
+    fn explain_pc(&self, request: ExplainPcRequest) -> QueryResult<ExplainPcReport>;
+    fn gas_by_source(&self, request: GasBySourceRequest) -> QueryResult<GasBySourceReport>;
+    fn variables_at_pc(&self, request: VariablesAtPcRequest) -> QueryResult<VariablesAtPcReport>;
 }
 
 #[derive(Clone, Debug)]
@@ -208,6 +211,116 @@ impl IntrospectionService for TraceIntrospectionService {
             },
         })
     }
+
+    fn explain_pc(&self, request: ExplainPcRequest) -> QueryResult<ExplainPcReport> {
+        let index = TraceIndex::new(&self.snapshot);
+        let instruction = index.instruction_at_pc(request.pc);
+        let source_candidates = instruction
+            .as_ref()
+            .map(|instruction| index.source_candidates_for_instruction(&instruction.key))
+            .unwrap_or_default();
+        let static_gas = instruction
+            .as_ref()
+            .and_then(|instruction| index.static_gas_for_instruction(&instruction.key, "cancun"));
+        let category = instruction
+            .as_ref()
+            .and_then(|instruction| index.category_for_instruction(&instruction.key));
+        let available = instruction.is_some();
+
+        Ok(ExplainPcReport {
+            metadata: ReportMetadata::from_snapshot(&self.snapshot),
+            pc: request.pc,
+            instruction,
+            primary_source: primary_source(&source_candidates),
+            source_candidates,
+            category,
+            static_gas,
+            available,
+            unavailable_reason: (!available).then(|| {
+                "no InstructionFact with this bytecode PC or instruction index exists in the trace"
+                    .to_string()
+            }),
+            confidence: if available {
+                Confidence::Medium
+            } else {
+                Confidence::Unknown
+            },
+        })
+    }
+
+    fn gas_by_source(&self, request: GasBySourceRequest) -> QueryResult<GasBySourceReport> {
+        let index = TraceIndex::new(&self.snapshot);
+        let mut rows: BTreeMap<String, GasBySourceRow> = BTreeMap::new();
+        let mut total_gas = 0;
+
+        for gas in index.static_gas_rows(&request.schedule) {
+            total_gas += gas.gas;
+            let sources = index.source_candidates_for_instruction(&gas.subject);
+            if sources.is_empty() {
+                let row = rows
+                    .entry("<unmapped>".to_string())
+                    .or_insert_with(|| GasBySourceRow {
+                        source: None,
+                        label: "<unmapped>".to_string(),
+                        gas: 0,
+                        instruction_count: 0,
+                        confidence: Confidence::Unknown,
+                    });
+                row.gas += gas.gas;
+                row.instruction_count += 1;
+                continue;
+            }
+
+            let confidence = if sources.len() == 1 {
+                Confidence::Medium
+            } else {
+                Confidence::Low
+            };
+            for source in sources {
+                let row = rows
+                    .entry(source.origin.canonical_storage_key())
+                    .or_insert_with(|| GasBySourceRow {
+                        label: source.label.clone(),
+                        source: Some(source.origin.clone()),
+                        gas: 0,
+                        instruction_count: 0,
+                        confidence,
+                    });
+                row.gas += gas.gas;
+                row.instruction_count += 1;
+                if confidence == Confidence::Low {
+                    row.confidence = Confidence::Low;
+                }
+            }
+        }
+
+        let mut rows = rows.into_values().collect::<Vec<_>>();
+        rows.sort_by(|a, b| b.gas.cmp(&a.gas).then_with(|| a.label.cmp(&b.label)));
+        Ok(GasBySourceReport {
+            metadata: ReportMetadata::from_snapshot(&self.snapshot),
+            schedule: request.schedule,
+            policy: "exclusive-primary-if-unique; inclusive-for-ambiguous".to_string(),
+            total_gas,
+            rows,
+            confidence: if total_gas > 0 {
+                Confidence::Medium
+            } else {
+                Confidence::Unknown
+            },
+        })
+    }
+
+    fn variables_at_pc(&self, request: VariablesAtPcRequest) -> QueryResult<VariablesAtPcReport> {
+        let index = TraceIndex::new(&self.snapshot);
+        let variables = index.variables_at_pc(request.pc, request.code_object.as_ref());
+        Ok(VariablesAtPcReport {
+            metadata: ReportMetadata::from_snapshot(&self.snapshot),
+            pc: request.pc,
+            code_object: request.code_object,
+            variables,
+            confidence: Confidence::Medium,
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -244,6 +357,31 @@ impl Default for GasBreakdownRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExplainPcRequest {
+    pub pc: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GasBySourceRequest {
+    pub schedule: String,
+}
+
+impl Default for GasBySourceRequest {
+    fn default() -> Self {
+        Self {
+            schedule: "cancun".to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VariablesAtPcRequest {
+    pub pc: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code_object: Option<OriginExportKey>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TraceQueryHttpRequest {
     pub auth_token: String,
     pub uri: String,
@@ -267,6 +405,18 @@ pub enum TraceQueryRequest {
         #[serde(default = "default_gas_schedule")]
         schedule: String,
     },
+    ExplainPc {
+        pc: u32,
+    },
+    GasBySource {
+        #[serde(default = "default_gas_schedule")]
+        schedule: String,
+    },
+    VariablesAtPc {
+        pc: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        code_object: Option<OriginExportKey>,
+    },
 }
 
 impl TraceQueryRequest {
@@ -283,6 +433,23 @@ impl TraceQueryRequest {
     pub fn gas_breakdown(schedule: impl Into<String>) -> Self {
         Self::GasBreakdown {
             schedule: schedule.into(),
+        }
+    }
+
+    pub fn explain_pc(pc: u32) -> Self {
+        Self::ExplainPc { pc }
+    }
+
+    pub fn gas_by_source(schedule: impl Into<String>) -> Self {
+        Self::GasBySource {
+            schedule: schedule.into(),
+        }
+    }
+
+    pub fn variables_at_pc(pc: u32) -> Self {
+        Self::VariablesAtPc {
+            pc,
+            code_object: None,
         }
     }
 }
@@ -305,6 +472,9 @@ pub enum TraceQueryReport {
     LoopCost(LoopCostReport),
     ExplainLocal(ExplainLocalReport),
     GasBreakdown(GasBreakdownReport),
+    ExplainPc(ExplainPcReport),
+    GasBySource(GasBySourceReport),
+    VariablesAtPc(VariablesAtPcReport),
 }
 
 pub fn run_trace_query(
@@ -321,6 +491,15 @@ pub fn run_trace_query(
         TraceQueryRequest::GasBreakdown { schedule } => service
             .gas_breakdown(GasBreakdownRequest { schedule })
             .map(TraceQueryReport::GasBreakdown),
+        TraceQueryRequest::ExplainPc { pc } => service
+            .explain_pc(ExplainPcRequest { pc })
+            .map(TraceQueryReport::ExplainPc),
+        TraceQueryRequest::GasBySource { schedule } => service
+            .gas_by_source(GasBySourceRequest { schedule })
+            .map(TraceQueryReport::GasBySource),
+        TraceQueryRequest::VariablesAtPc { pc, code_object } => service
+            .variables_at_pc(VariablesAtPcRequest { pc, code_object })
+            .map(TraceQueryReport::VariablesAtPc),
     }
 }
 
@@ -361,6 +540,39 @@ pub struct GasBreakdownReport {
     pub total_gas: Option<u64>,
     pub rows: Vec<GasBreakdownRow>,
     pub findings: Vec<Insight>,
+    pub confidence: Confidence,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExplainPcReport {
+    pub metadata: ReportMetadata,
+    pub pc: u32,
+    pub instruction: Option<InstructionRow>,
+    pub primary_source: Option<SourceAttribution>,
+    pub source_candidates: Vec<SourceAttribution>,
+    pub category: Option<InstructionCategory>,
+    pub static_gas: Option<u64>,
+    pub available: bool,
+    pub unavailable_reason: Option<String>,
+    pub confidence: Confidence,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GasBySourceReport {
+    pub metadata: ReportMetadata,
+    pub schedule: String,
+    pub policy: String,
+    pub total_gas: u64,
+    pub rows: Vec<GasBySourceRow>,
+    pub confidence: Confidence,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VariablesAtPcReport {
+    pub metadata: ReportMetadata,
+    pub pc: u32,
+    pub code_object: Option<OriginExportKey>,
+    pub variables: Vec<VariableAtPcRow>,
     pub confidence: Confidence,
 }
 
@@ -457,6 +669,35 @@ pub struct GasBreakdownRow {
     pub label: String,
     pub confidence: String,
     pub source: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceAttribution {
+    pub origin: OriginExportKey,
+    pub file: OriginExportKey,
+    pub label: String,
+    pub start_line: u32,
+    pub start_column: u32,
+    pub end_line: u32,
+    pub end_column: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GasBySourceRow {
+    pub source: Option<OriginExportKey>,
+    pub label: String,
+    pub gas: u64,
+    pub instruction_count: usize,
+    pub confidence: Confidence,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VariableAtPcRow {
+    pub variable: OriginExportKey,
+    pub name: String,
+    pub location: String,
+    pub reason: String,
+    pub confidence: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -748,6 +989,186 @@ impl<'a> TraceIndex<'a> {
             .collect()
     }
 
+    fn static_gas_rows(&self, schedule: &str) -> Vec<GasBreakdownRow> {
+        let mut rows = BTreeMap::new();
+        for fact in self.snapshot.facts() {
+            match fact {
+                TraceFact::StaticGas(gas) if gas.schedule.as_str() == schedule => {
+                    rows.insert(
+                        gas.instruction.clone(),
+                        GasBreakdownRow {
+                            subject: gas.instruction.clone(),
+                            gas: gas.base_cost,
+                            label: self
+                                .instruction_row(&gas.instruction)
+                                .map(|row| format!("pc[{}] {}", row.index, row.mnemonic))
+                                .unwrap_or_else(|| self.label(&gas.instruction)),
+                            confidence: "ConservativeStatic".to_string(),
+                            source: "StaticGasFact".to_string(),
+                        },
+                    );
+                }
+                TraceFact::GasCost(gas)
+                    if gas.schedule.as_str() == schedule
+                        && gas.gas_kind == GasKind::OpcodeStatic =>
+                {
+                    rows.entry(gas.subject.clone())
+                        .or_insert_with(|| GasBreakdownRow {
+                            subject: gas.subject.clone(),
+                            gas: gas.gas,
+                            label: self
+                                .instruction_row(&gas.subject)
+                                .map(|row| format!("pc[{}] {}", row.index, row.mnemonic))
+                                .unwrap_or_else(|| self.label(&gas.subject)),
+                            confidence: format!("{:?}", gas.confidence),
+                            source: format!("{:?}", gas.source),
+                        });
+                }
+                _ => {}
+            }
+        }
+        rows.into_values().collect()
+    }
+
+    fn static_gas_for_instruction(
+        &self,
+        instruction: &OriginExportKey,
+        schedule: &str,
+    ) -> Option<u64> {
+        self.static_gas_rows(schedule)
+            .into_iter()
+            .find(|row| &row.subject == instruction)
+            .map(|row| row.gas)
+    }
+
+    fn category_for_instruction(
+        &self,
+        instruction: &OriginExportKey,
+    ) -> Option<InstructionCategory> {
+        self.snapshot.facts().iter().find_map(|fact| match fact {
+            TraceFact::InstructionCategory(category) if &category.instruction == instruction => {
+                Some(category.category)
+            }
+            _ => None,
+        })
+    }
+
+    fn instruction_at_pc(&self, pc: u32) -> Option<InstructionRow> {
+        let exact_pc = format!("pc:{pc}");
+        self.instructions
+            .values()
+            .find(|instruction| {
+                instruction.instruction.kind() == "bytecode.pc"
+                    && instruction.instruction.local_key() == exact_pc
+            })
+            .or_else(|| {
+                self.instructions
+                    .values()
+                    .find(|instruction| instruction.index == pc)
+            })
+            .map(|instruction| InstructionRow {
+                key: instruction.instruction.clone(),
+                index: instruction.index,
+                mnemonic: instruction.mnemonic.clone(),
+            })
+    }
+
+    fn source_candidates_for_instruction(
+        &self,
+        instruction: &OriginExportKey,
+    ) -> Vec<SourceAttribution> {
+        let reaches = datalog_emit::origin_reaches(self.snapshot);
+        let mut candidates = BTreeSet::new();
+        if self.source_attribution(instruction).is_some() {
+            candidates.insert(instruction.clone());
+        }
+        for (from, to) in reaches {
+            if &from == instruction && self.source_attribution(&to).is_some() {
+                candidates.insert(to);
+            }
+        }
+        candidates
+            .into_iter()
+            .filter_map(|origin| self.source_attribution(&origin))
+            .collect()
+    }
+
+    fn source_attribution(&self, origin: &OriginExportKey) -> Option<SourceAttribution> {
+        let span = self.snapshot.facts().iter().find_map(|fact| match fact {
+            TraceFact::SourceSpan(span) if &span.origin == origin => Some(span),
+            _ => None,
+        })?;
+        Some(SourceAttribution {
+            origin: span.origin.clone(),
+            file: span.file.clone(),
+            label: self.source_span_label(span),
+            start_line: span.start_line,
+            start_column: span.start_column,
+            end_line: span.end_line,
+            end_column: span.end_column,
+        })
+    }
+
+    fn source_span_label(&self, span: &trace_facts::SourceSpanFact) -> String {
+        let file = self
+            .snapshot
+            .facts()
+            .iter()
+            .find_map(|fact| match fact {
+                TraceFact::SourceFile(file) if file.file_key == span.file => {
+                    Some(file.display_name.as_str())
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| span.file.local_key());
+        format!(
+            "{file}:{}:{}-{}:{}",
+            span.start_line, span.start_column, span.end_line, span.end_column
+        )
+    }
+
+    fn variables_at_pc(
+        &self,
+        pc: u32,
+        code_object_filter: Option<&OriginExportKey>,
+    ) -> Vec<VariableAtPcRow> {
+        self.snapshot
+            .facts()
+            .iter()
+            .filter_map(|fact| match fact {
+                TraceFact::LocationRange(location)
+                    if location.pc_range.start <= pc
+                        && pc < location.pc_range.end
+                        && code_object_filter
+                            .is_none_or(|code_object| code_object == &location.code_object) =>
+                {
+                    Some(VariableAtPcRow {
+                        variable: location.subject.clone(),
+                        name: self.variable_name(&location.subject),
+                        location: format!("{:?}", location.location),
+                        reason: format!("{:?}", location.reason),
+                        confidence: format!("{:?}", location.confidence),
+                    })
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn variable_name(&self, variable: &OriginExportKey) -> String {
+        self.snapshot
+            .facts()
+            .iter()
+            .find_map(|fact| match fact {
+                TraceFact::Variable(var) if &var.variable == variable => Some(var.name.clone()),
+                TraceFact::DisplayName(name) if &name.subject == variable => {
+                    Some(name.name.clone())
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| self.label(variable))
+    }
+
     fn compiler_event_reason_for_output(&self, output: &OriginExportKey) -> Option<String> {
         self.snapshot.facts().iter().find_map(|fact| match fact {
             TraceFact::CompilerEvent(event)
@@ -819,6 +1240,10 @@ fn loop_cost_findings(
     findings
 }
 
+fn primary_source(candidates: &[SourceAttribution]) -> Option<SourceAttribution> {
+    (candidates.len() == 1).then(|| candidates[0].clone())
+}
+
 pub fn data_source_label(metadata: &TraceMetadata) -> String {
     match metadata.data_source {
         TraceDataSource::Fixture => {
@@ -853,16 +1278,19 @@ fn format_storage_location(location: &StorageLocation) -> String {
 mod tests {
     use common::origin::OriginExportKey;
     use trace_facts::{
-        CategorySource, CompilerEventFact, CompilerEventKind, CompilerPhase, CompilerReason,
-        EvmSchedule, GasConfidence, GasCostFact, GasKind, GasSource, InstructionCategory,
-        InstructionCategoryFact, InstructionFact, LoopDerivation, LoopMembershipFact,
-        OriginEdgeFact, OriginEdgeLabel, OriginNodeFact, OriginNodeKind, StorageFact,
-        StorageLocation, StorageReason, TraceBundle, TraceFact, TraceMetadata, TraceSnapshot,
+        CategorySource, CodeObjectFact, CodeObjectKind, CompilerEventFact, CompilerEventKind,
+        CompilerPhase, CompilerReason, EvmSchedule, GasConfidence, GasCostFact, GasKind, GasSource,
+        InstructionCategory, InstructionCategoryFact, InstructionFact, LocationConfidence,
+        LocationRangeFact, LoopDerivation, LoopMembershipFact, OriginEdgeFact, OriginEdgeLabel,
+        OriginNodeFact, OriginNodeKind, PcRange, SourceFileFact, SourceSpanFact, StaticGasFact,
+        StorageFact, StorageLocation, StorageReason, TraceBundle, TraceFact, TraceMetadata,
+        TraceSnapshot, TypeFact, TypeKind, ValueLocation, VariableFact, VariableStorageClass,
     };
 
     use super::{
-        ExplainLocalRequest, IntrospectionService, LoopCostRequest, TraceIntrospectionService,
-        TraceQueryHttpRequest, TraceQueryReport, TraceQueryRequest, run_trace_query,
+        ExplainLocalRequest, ExplainPcRequest, GasBySourceRequest, IntrospectionService,
+        LoopCostRequest, TraceIntrospectionService, TraceQueryHttpRequest, TraceQueryReport,
+        TraceQueryRequest, VariablesAtPcRequest, run_trace_query,
     };
 
     fn key(kind: &str, owner: &str, local: &str) -> OriginExportKey {
@@ -877,19 +1305,80 @@ mod tests {
     }
 
     fn demo_service() -> TraceIntrospectionService {
+        let source_file = key("source.file", "demo", "fib.fe");
+        let source_expr = key("hir.expr", "demo", "expr:b");
+        let code_object = key("code.object", "demo", "runtime");
         let function = key("function", "demo", "recv");
         let loop_key = key("loop", "demo", "while:i<n");
         let local = key("runtime.local", "demo", "local:b");
+        let ty = key("type", "demo", "u32");
         let inst = key("bytecode.pc", "demo", "pc:0");
         let zext = key("bytecode.pc", "demo", "pc:1");
         let event = key("compiler.event", "demo", "event:0");
         let facts = vec![
+            node(source_file.clone()),
+            node(source_expr.clone()),
+            node(code_object.clone()),
             node(function.clone()),
             node(loop_key.clone()),
             node(local.clone()),
+            node(ty.clone()),
             node(inst.clone()),
             node(zext.clone()),
             node(event.clone()),
+            TraceFact::SourceFile(SourceFileFact::new(
+                source_file.clone(),
+                "file:///demo/fib.fe",
+                "fib.fe",
+                "fnv64:abcd",
+                Some(0),
+            )),
+            TraceFact::SourceSpan(SourceSpanFact::new(
+                source_expr.clone(),
+                source_file,
+                10,
+                11,
+                2,
+                8,
+                2,
+                9,
+            )),
+            TraceFact::CodeObject(CodeObjectFact::new(
+                code_object.clone(),
+                CodeObjectKind::EvmRuntimeBytecode,
+                Some(function.clone()),
+                "evm/sonatina",
+                Some("fnv64:beef".to_string()),
+            )),
+            TraceFact::Function(trace_facts::FunctionFact::new(
+                function.clone(),
+                "recv",
+                Some(source_expr.clone()),
+                Some(code_object.clone()),
+            )),
+            TraceFact::Type(TypeFact::new(
+                ty.clone(),
+                TypeKind::UnsignedInteger,
+                Some("u32".to_string()),
+                Some(32),
+                Vec::new(),
+            )),
+            TraceFact::Variable(VariableFact::new(
+                local.clone(),
+                "b",
+                ty,
+                source_expr.clone(),
+                None,
+                VariableStorageClass::Local,
+            )),
+            TraceFact::LocationRange(LocationRangeFact::new(
+                local.clone(),
+                code_object,
+                PcRange::new(0, 2),
+                ValueLocation::StackSlot { offset: 24 },
+                StorageReason::FrameSlot,
+                LocationConfidence::Conservative,
+            )),
             TraceFact::Storage(StorageFact::new(
                 local.clone(),
                 CompilerPhase::Mir,
@@ -940,6 +1429,12 @@ mod tests {
                 Some(CompilerPhase::Backend),
             )),
             TraceFact::OriginEdge(OriginEdgeFact::new(
+                local.clone(),
+                source_expr,
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::Mir),
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
                 zext.clone(),
                 local.clone(),
                 OriginEdgeLabel::IntegerLegalizationFor,
@@ -961,6 +1456,12 @@ mod tests {
                 GasConfidence::ConservativeStatic,
                 GasSource::OpcodeTable,
             )),
+            TraceFact::StaticGas(StaticGasFact::new(
+                inst.clone(),
+                EvmSchedule::new("cancun"),
+                3,
+                None,
+            )),
             TraceFact::GasCost(GasCostFact::new(
                 zext,
                 GasKind::OpcodeStatic,
@@ -968,6 +1469,12 @@ mod tests {
                 EvmSchedule::new("cancun"),
                 GasConfidence::ConservativeStatic,
                 GasSource::OpcodeTable,
+            )),
+            TraceFact::StaticGas(StaticGasFact::new(
+                key("bytecode.pc", "demo", "pc:1"),
+                EvmSchedule::new("cancun"),
+                3,
+                None,
             )),
         ];
         let snapshot = TraceSnapshot::new(TraceBundle::new(
@@ -1028,6 +1535,44 @@ mod tests {
     }
 
     #[test]
+    fn explain_pc_reports_instruction_source_and_gas() {
+        let report = demo_service()
+            .explain_pc(ExplainPcRequest { pc: 0 })
+            .unwrap();
+
+        assert!(report.available);
+        assert_eq!(report.instruction.unwrap().mnemonic, "lw");
+        assert_eq!(report.static_gas, Some(3));
+        assert_eq!(report.primary_source.unwrap().label, "fib.fe:2:8-2:9");
+    }
+
+    #[test]
+    fn gas_by_source_groups_static_gas_by_source_span() {
+        let report = demo_service()
+            .gas_by_source(GasBySourceRequest::default())
+            .unwrap();
+
+        assert_eq!(report.total_gas, 6);
+        assert_eq!(report.rows[0].label, "fib.fe:2:8-2:9");
+        assert_eq!(report.rows[0].gas, 6);
+        assert_eq!(report.rows[0].instruction_count, 2);
+    }
+
+    #[test]
+    fn variables_at_pc_reports_location_ranges() {
+        let report = demo_service()
+            .variables_at_pc(VariablesAtPcRequest {
+                pc: 1,
+                code_object: None,
+            })
+            .unwrap();
+
+        assert_eq!(report.variables.len(), 1);
+        assert_eq!(report.variables[0].name, "b");
+        assert!(report.variables[0].location.contains("StackSlot"));
+    }
+
+    #[test]
     fn live_http_request_is_typed_and_defaults_gas_schedule() {
         let request: TraceQueryHttpRequest = serde_json::from_str(
             r#"{
@@ -1052,5 +1597,23 @@ mod tests {
         let report = run_trace_query(&service, TraceQueryRequest::loop_cost()).unwrap();
 
         assert!(matches!(report, TraceQueryReport::LoopCost(_)));
+    }
+
+    #[test]
+    fn typed_query_dispatch_returns_new_report_variants() {
+        let service = demo_service();
+
+        assert!(matches!(
+            run_trace_query(&service, TraceQueryRequest::explain_pc(0)).unwrap(),
+            TraceQueryReport::ExplainPc(_)
+        ));
+        assert!(matches!(
+            run_trace_query(&service, TraceQueryRequest::gas_by_source("cancun")).unwrap(),
+            TraceQueryReport::GasBySource(_)
+        ));
+        assert!(matches!(
+            run_trace_query(&service, TraceQueryRequest::variables_at_pc(0)).unwrap(),
+            TraceQueryReport::VariablesAtPc(_)
+        ));
     }
 }

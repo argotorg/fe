@@ -11,7 +11,9 @@ use salsa::Setter;
 use trace_facts::{JsonlTraceReader, JsonlTraceSink, TraceBundle, TraceSnapshot, TraceValidator};
 use url::Url;
 
-use crate::{DevTraceEmitArgs, DevTraceExplainLocalArgs, DevTraceGasArgs, DevTraceInputArgs};
+use crate::{
+    DevTraceEmitArgs, DevTraceExplainLocalArgs, DevTraceGasArgs, DevTraceInputArgs, DevTracePcArgs,
+};
 
 pub(super) fn run_trace_emit(args: &DevTraceEmitArgs) -> Result<String, String> {
     let opt_level = args.optimize.parse::<codegen::OptLevel>()?;
@@ -52,6 +54,27 @@ pub(super) fn run_trace_gas_breakdown(args: &DevTraceGasArgs) -> Result<String, 
     super::trace_render::render_gas_breakdown_snapshot(
         read_trace_snapshot_jsonl_from_path(&args.from)?,
         &args.schedule,
+    )
+}
+
+pub(super) fn run_trace_explain_pc(args: &DevTracePcArgs) -> Result<String, String> {
+    super::trace_render::render_explain_pc_snapshot(
+        read_trace_snapshot_jsonl_from_path(&args.from)?,
+        args.pc,
+    )
+}
+
+pub(super) fn run_trace_gas_by_source(args: &DevTraceGasArgs) -> Result<String, String> {
+    super::trace_render::render_gas_by_source_snapshot(
+        read_trace_snapshot_jsonl_from_path(&args.from)?,
+        &args.schedule,
+    )
+}
+
+pub(super) fn run_trace_variables_at_pc(args: &DevTracePcArgs) -> Result<String, String> {
+    super::trace_render::render_variables_at_pc_snapshot(
+        read_trace_snapshot_jsonl_from_path(&args.from)?,
+        args.pc,
     )
 }
 

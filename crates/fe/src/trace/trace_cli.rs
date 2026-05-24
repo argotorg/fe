@@ -45,6 +45,11 @@ fn run_trace_query_command(command: &DevTraceQueryCommand) -> Result<String, Str
         DevTraceQueryCommand::GasBreakdown(args) => {
             super::trace_emit::run_trace_gas_breakdown(args)
         }
+        DevTraceQueryCommand::ExplainPc(args) => super::trace_emit::run_trace_explain_pc(args),
+        DevTraceQueryCommand::GasBySource(args) => super::trace_emit::run_trace_gas_by_source(args),
+        DevTraceQueryCommand::VariablesAtPc(args) => {
+            super::trace_emit::run_trace_variables_at_pc(args)
+        }
     }
 }
 

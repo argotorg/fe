@@ -1,7 +1,9 @@
 use trace_facts::{TraceBundle, TraceMetadata, TraceSnapshot, TraceValidationReport};
 use trace_query::{
-    ExplainLocalReport, ExplainLocalRequest, GasBreakdownReport, GasBreakdownRequest,
-    IntrospectionService, LoopCostReport, LoopCostRequest, TraceIntrospectionService,
+    ExplainLocalReport, ExplainLocalRequest, ExplainPcReport, ExplainPcRequest, GasBreakdownReport,
+    GasBreakdownRequest, GasBySourceReport, GasBySourceRequest, IntrospectionService,
+    LoopCostReport, LoopCostRequest, SourceAttribution, TraceIntrospectionService,
+    VariablesAtPcReport, VariablesAtPcRequest,
 };
 
 pub(super) fn render_validation_summary(
@@ -83,6 +85,44 @@ pub(super) fn render_gas_breakdown_snapshot(
         })
         .map_err(|err| err.to_string())?;
     Ok(render_gas_breakdown_report(&report))
+}
+
+pub(super) fn render_explain_pc_snapshot(
+    snapshot: TraceSnapshot,
+    pc: u32,
+) -> Result<String, String> {
+    let service = TraceIntrospectionService::new(snapshot);
+    let report = service
+        .explain_pc(ExplainPcRequest { pc })
+        .map_err(|err| err.to_string())?;
+    Ok(render_explain_pc_report(&report))
+}
+
+pub(super) fn render_gas_by_source_snapshot(
+    snapshot: TraceSnapshot,
+    schedule: &str,
+) -> Result<String, String> {
+    let service = TraceIntrospectionService::new(snapshot);
+    let report = service
+        .gas_by_source(GasBySourceRequest {
+            schedule: schedule.to_string(),
+        })
+        .map_err(|err| err.to_string())?;
+    Ok(render_gas_by_source_report(&report))
+}
+
+pub(super) fn render_variables_at_pc_snapshot(
+    snapshot: TraceSnapshot,
+    pc: u32,
+) -> Result<String, String> {
+    let service = TraceIntrospectionService::new(snapshot);
+    let report = service
+        .variables_at_pc(VariablesAtPcRequest {
+            pc,
+            code_object: None,
+        })
+        .map_err(|err| err.to_string())?;
+    Ok(render_variables_at_pc_report(&report))
 }
 
 fn render_loop_cost_report(report: &LoopCostReport) -> String {
@@ -331,4 +371,102 @@ fn render_gas_breakdown_report(report: &GasBreakdownReport) -> String {
         ));
     }
     out
+}
+
+fn render_explain_pc_report(report: &ExplainPcReport) -> String {
+    let mut out = String::new();
+    out.push_str("Fe dev trace explain-pc\n\n");
+    out.push_str(&format!("Data source: {}\n", report.metadata.data_source));
+    out.push_str("Trace validation: passed\n");
+    out.push_str(&format!("Target: {}\n", report.metadata.target));
+    out.push_str(&format!("Input: {}\n", report.metadata.input_path));
+    out.push_str(&format!("PC: {}\n", report.pc));
+
+    let Some(instruction) = &report.instruction else {
+        out.push('\n');
+        out.push_str("PC explanation unavailable from this trace.\n");
+        if let Some(reason) = &report.unavailable_reason {
+            out.push_str(&format!("Reason: {reason}.\n"));
+        }
+        return out;
+    };
+
+    out.push_str(&format!(
+        "Instruction: asm[{}] {}\n",
+        instruction.index, instruction.mnemonic
+    ));
+    if let Some(category) = report.category {
+        out.push_str(&format!("Category: {category:?}\n"));
+    }
+    if let Some(gas) = report.static_gas {
+        out.push_str(&format!("Static gas (cancun): {gas}\n"));
+    }
+
+    out.push('\n');
+    out.push_str("Source attribution:\n");
+    if let Some(source) = &report.primary_source {
+        out.push_str(&format!("  primary: {}\n", format_source(source)));
+    } else if report.source_candidates.is_empty() {
+        out.push_str("  none emitted\n");
+    } else {
+        out.push_str("  ambiguous; no single primary source\n");
+    }
+    for source in &report.source_candidates {
+        out.push_str(&format!("  candidate: {}\n", format_source(source)));
+    }
+    out
+}
+
+fn render_gas_by_source_report(report: &GasBySourceReport) -> String {
+    let mut out = String::new();
+    out.push_str("Fe dev trace gas-by-source\n\n");
+    out.push_str(&format!("Data source: {}\n", report.metadata.data_source));
+    out.push_str("Trace validation: passed\n");
+    out.push_str(&format!("Target: {}\n", report.metadata.target));
+    out.push_str(&format!("Input: {}\n", report.metadata.input_path));
+    out.push_str(&format!("Schedule: {}\n", report.schedule));
+    out.push_str(&format!("Attribution policy: {}\n\n", report.policy));
+    out.push_str(&format!("Total static opcode gas: {}\n", report.total_gas));
+
+    if report.rows.is_empty() {
+        out.push_str("No static gas rows were present in this trace.\n");
+        return out;
+    }
+
+    out.push_str("Source contributors:\n");
+    for row in report.rows.iter().take(20) {
+        out.push_str(&format!(
+            "  {:>4} gas  {:>3} inst  {:<8?} {}\n",
+            row.gas, row.instruction_count, row.confidence, row.label
+        ));
+    }
+    out
+}
+
+fn render_variables_at_pc_report(report: &VariablesAtPcReport) -> String {
+    let mut out = String::new();
+    out.push_str("Fe dev trace variables-at-pc\n\n");
+    out.push_str(&format!("Data source: {}\n", report.metadata.data_source));
+    out.push_str("Trace validation: passed\n");
+    out.push_str(&format!("Target: {}\n", report.metadata.target));
+    out.push_str(&format!("Input: {}\n", report.metadata.input_path));
+    out.push_str(&format!("PC: {}\n\n", report.pc));
+
+    if report.variables.is_empty() {
+        out.push_str("No variable location ranges cover this PC.\n");
+        return out;
+    }
+
+    out.push_str("Variables in scope:\n");
+    for variable in &report.variables {
+        out.push_str(&format!(
+            "  {:<20} {:<24} {} ({})\n",
+            variable.name, variable.location, variable.reason, variable.confidence
+        ));
+    }
+    out
+}
+
+fn format_source(source: &SourceAttribution) -> String {
+    format!("{} ({})", source.label, source.origin.display_label())
 }
