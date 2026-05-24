@@ -1,5 +1,6 @@
 #![allow(clippy::print_stderr, clippy::print_stdout)]
 mod abi;
+mod analyze;
 mod build;
 mod check;
 mod cli;
@@ -45,6 +46,12 @@ pub enum BuildEmit {
 pub enum TestEmit {
     Ir,
     Rmir,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum AnalyzeFormat {
+    Text,
+    Json,
 }
 
 #[derive(Debug, Clone, Parser)]
@@ -167,6 +174,32 @@ pub enum Command {
         /// Only write the report if `fe check` fails.
         #[arg(long, requires = "report")]
         report_failed_only: bool,
+        /// Use recovery mode when parsing.
+        #[arg(long, default_value = "false")]
+        recovery_mode: bool,
+    },
+    /// Analyze a Fe target using normal compiler target resolution.
+    Analyze {
+        /// Path to an ingot/workspace directory, a workspace member name, or a .fe file.
+        #[arg(default_value_t = default_project_path())]
+        path: Utf8PathBuf,
+        /// Analyze a single workspace ingot by member name.
+        ///
+        /// This requires targeting a workspace root path.
+        #[arg(short = 'i', long = "ingot", value_name = "INGOT")]
+        ingot: Option<String>,
+        /// Treat a `.fe` file target as standalone, even if it is inside an ingot.
+        #[arg(long)]
+        standalone: bool,
+        /// Compilation profile to use when resolving profile-aware config.
+        #[arg(long, default_value = "dev", value_name = "PROFILE")]
+        profile: String,
+        /// Output format.
+        #[arg(long, value_enum, default_value = "text")]
+        format: AnalyzeFormat,
+        /// Analyze generated test entrypoints instead of runtime entrypoints.
+        #[arg(long)]
+        tests: bool,
         /// Use recovery mode when parsing.
         #[arg(long, default_value = "false")]
         recovery_mode: bool,
@@ -501,6 +534,33 @@ pub fn run(opts: &Options) {
                 }
             }
         }
+        Command::Analyze {
+            path,
+            ingot,
+            standalone,
+            profile,
+            format,
+            tests,
+            recovery_mode,
+        } => match analyze::analyze(
+            path,
+            ingot.as_deref(),
+            *standalone,
+            profile,
+            *format,
+            *tests,
+            *recovery_mode,
+        ) {
+            Ok(has_errors) => {
+                if has_errors {
+                    std::process::exit(1);
+                }
+            }
+            Err(err) => {
+                eprintln!("Error: {err}");
+                std::process::exit(1);
+            }
+        },
         Command::Doc {
             path,
             output,
