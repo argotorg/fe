@@ -31,6 +31,7 @@ use async_lsp::server::LifecycleLayer;
 use async_std::net::TcpListener;
 use futures::StreamExt;
 use futures::io::AsyncReadExt;
+use introspection_config::FeToolingConfig;
 use server::{setup, setup_service, spawn_backend};
 use tokio::sync::{broadcast, watch};
 use tower::ServiceBuilder;
@@ -46,6 +47,7 @@ pub struct CombinedServerConfig {
     /// Base URL for the documentation server (e.g. "http://127.0.0.1:9000").
     /// Passed to Backend so `fe.openDocs` can construct full URLs.
     pub docs_url: Option<String>,
+    pub tooling_config: FeToolingConfig,
 }
 
 pub async fn run_stdio_server(combined: Option<CombinedServerConfig>) {
@@ -57,6 +59,10 @@ pub async fn run_stdio_server(combined: Option<CombinedServerConfig>) {
     let (doc_reload_tx, _doc_reload_rx) = broadcast::channel::<String>(16);
 
     let docs_url = combined.as_ref().and_then(|c| c.docs_url.clone());
+    let tooling_config = combined
+        .as_ref()
+        .map(|c| c.tooling_config.clone())
+        .unwrap_or_default();
     let has_combined = combined.is_some();
 
     // Start the combined server if configured
@@ -90,6 +96,7 @@ pub async fn run_stdio_server(combined: Option<CombinedServerConfig>) {
             Some(doc_nav_tx_for_backend.clone()),
             doc_reload_tx_for_backend.clone(),
             docs_url.clone(),
+            tooling_config.clone(),
         );
         // Publish the actor ref so the combined server can use it
         let _ = actor_tx.send(Some(actor_ref.clone()));

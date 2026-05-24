@@ -446,6 +446,12 @@ pub enum DocAction {
 #[cfg(feature = "lsp")]
 #[derive(Debug, Clone, Subcommand)]
 pub enum LspMode {
+    /// Print effective shared tooling config and exit.
+    Config {
+        /// Print the fully merged config as JSON.
+        #[arg(long)]
+        effective: bool,
+    },
     /// Start with TCP transport instead of stdio.
     Tcp {
         /// Port to listen on.
@@ -860,6 +866,23 @@ pub fn run(opts: &Options) {
                 }
                 language_server::setup_panic_hook();
                 match mode {
+                    Some(LspMode::Config { effective: _ }) => {
+                        let root = resolved_root
+                            .as_ref()
+                            .map(|root| root.as_std_path())
+                            .unwrap_or_else(|| std::path::Path::new("."));
+                        let config =
+                            introspection_config::FeToolingConfig::load_from_workspace(root)
+                                .unwrap_or_else(|err| {
+                                    eprintln!("Error: {err}");
+                                    std::process::exit(1);
+                                });
+                        let output = serde_json::json!({
+                            "config_hash": config.stable_hash(),
+                            "config": config,
+                        });
+                        println!("{}", serde_json::to_string_pretty(&output).unwrap());
+                    }
                     Some(LspMode::Tcp { port, timeout }) => {
                         language_server::run_tcp_server(
                             *port,
@@ -908,6 +931,15 @@ async fn run_lsp_with_combined_server(resolved_root: Option<Utf8PathBuf>, port: 
         .as_ref()
         .map(|r| r.as_std_path().to_path_buf())
         .unwrap_or_else(|| std::env::current_dir().unwrap());
+    let tooling_config =
+        match introspection_config::FeToolingConfig::load_from_workspace(&workspace_root_path) {
+            Ok(config) => config,
+            Err(err) => {
+                eprintln!("Warning: could not load tooling config: {err}");
+                introspection_config::FeToolingConfig::default()
+            }
+        };
+    eprintln!("Tooling config hash: {}", tooling_config.stable_hash());
 
     // Inspect any existing .fe-lsp.json. This is purely diagnostic: we
     // always proceed with writing our own, since the file is a discovery
@@ -988,6 +1020,7 @@ async fn run_lsp_with_combined_server(resolved_root: Option<Utf8PathBuf>, port: 
         listener,
         doc_html,
         docs_url: Some(format!("http://127.0.0.1:{actual_port}")),
+        tooling_config,
     };
 
     language_server::run_stdio_server(Some(config)).await;

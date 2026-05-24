@@ -38,6 +38,7 @@ use crate::functionality::{
 };
 use async_lsp::lsp_types::request::Initialize;
 use async_lsp::router::Router;
+use introspection_config::FeToolingConfig;
 
 /// Spawn the Backend actor. Call once per LS process.
 pub(crate) fn spawn_backend(
@@ -46,6 +47,7 @@ pub(crate) fn spawn_backend(
     doc_nav_tx: Option<broadcast::Sender<String>>,
     doc_reload_tx: Option<broadcast::Sender<String>>,
     docs_url: Option<String>,
+    tooling_config: FeToolingConfig,
 ) -> ActorRef<Backend, LspActorKey> {
     info!("Spawning backend actor");
     let client_for_actor = client.clone();
@@ -58,6 +60,7 @@ pub(crate) fn spawn_backend(
                 doc_nav_tx,
                 doc_reload_tx,
                 docs_url,
+                tooling_config,
             ))
         })
         .with_subscriber_init(logging::init_fn(client_for_logging))
@@ -198,7 +201,14 @@ pub(crate) fn setup(
     client: ClientSocket,
     name: String,
 ) -> WithFallbackService<LspActorService<Backend>, Router<()>> {
-    let actor_ref = spawn_backend(client.clone(), name, None, None, None);
+    let actor_ref = spawn_backend(
+        client.clone(),
+        name,
+        None,
+        None,
+        None,
+        FeToolingConfig::default(),
+    );
     setup_service(actor_ref, client)
 }
 

@@ -21,6 +21,7 @@ url.workspace = true
 salsa.workspace = true
 smol_str.workspace = true
 hir.workspace = true
+introspection-config.workspace = true
 rayon = "1"
 mir.workspace = true
 trace-facts.workspace = true

@@ -2047,6 +2047,7 @@ dependencies = [
  "fe-driver",
  "fe-fmt",
  "fe-hir",
+ "fe-introspection-config",
  "fe-language-server",
  "fe-mir",
  "fe-resolver",
@@ -2233,6 +2234,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe-introspection-config"
+version = "26.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "toml 0.8.23",
+]
+
+[[package]]
 name = "fe-language-server"
 version = "26.1.0"
 dependencies = [
@@ -2252,6 +2262,7 @@ dependencies = [
  "fe-driver",
  "fe-fmt",
  "fe-hir",
+ "fe-introspection-config",
  "fe-mir",
  "fe-parser",
  "fe-resolver",

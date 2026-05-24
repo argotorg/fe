@@ -29,9 +29,13 @@ pub async fn handle_inlay_hints(
 
     let top_mod = map_file_to_mod(&backend.db, file);
     let mut hints = Vec::new();
+    let config = &backend.tooling_config().lsp.inlay_hints;
 
     // Collect hints from all function bodies in the module
-    collect_hints_from_mod(&backend.db, top_mod, &mut hints);
+    if config.types {
+        collect_hints_from_mod(&backend.db, top_mod, &mut hints);
+    }
+    hints.truncate(backend.tooling_config().lsp.max_hints_per_file);
 
     Ok(Some(hints))
 }

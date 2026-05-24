@@ -46,6 +46,7 @@ fe-web.workspace = true
 mir.workspace = true
 fmt.workspace = true
 hir.workspace = true
+introspection-config.workspace = true
 parser.workspace = true
 resolver.workspace = true
 semantic-indexing.workspace = true

@@ -1,5 +1,6 @@
 use async_lsp::ClientSocket;
 use driver::DriverDataBase;
+use introspection_config::FeToolingConfig;
 use rustc_hash::FxHashSet;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::PathBuf;
@@ -51,6 +52,7 @@ pub struct Backend {
     pub(super) doc_reload_generation: Arc<AtomicU64>,
     pub(super) docs_url: Option<String>,
     pub(super) lsp_workspace_root: Option<PathBuf>,
+    pub(super) tooling_config: FeToolingConfig,
 }
 
 impl Backend {
@@ -59,6 +61,7 @@ impl Backend {
         doc_nav_tx: Option<broadcast::Sender<String>>,
         doc_reload_tx: Option<broadcast::Sender<String>>,
         docs_url: Option<String>,
+        tooling_config: FeToolingConfig,
     ) -> Self {
         let db = DriverDataBase::default();
         let mut virtual_files = VirtualFiles::new("fe-language-server-").ok();
@@ -86,7 +89,12 @@ impl Backend {
             doc_reload_generation: Arc::new(AtomicU64::new(0)),
             docs_url,
             lsp_workspace_root: None,
+            tooling_config,
         }
+    }
+
+    pub fn tooling_config(&self) -> &FeToolingConfig {
+        &self.tooling_config
     }
 
     /// Broadcast a doc-navigate event (path like "mylib::Foo/struct").
@@ -237,7 +245,7 @@ mod tests {
     /// these tests.
     fn test_backend() -> Backend {
         let (_main_loop, client_socket) = MainLoop::new_server(|_client| Router::<()>::new(()));
-        Backend::new(client_socket, None, None, None)
+        Backend::new(client_socket, None, None, None, FeToolingConfig::default())
     }
 
     /// Regression test: `spawn_on_workers` must `catch_unwind` inside the
