@@ -4,9 +4,10 @@ use std::fmt;
 use common::origin::OriginExportKey;
 
 use crate::fact::{
-    CategorySource, CompilerEventFact, CompilerPhase, InlineContextFact, InstructionCategoryFact,
-    InstructionFact, LoopDerivation, LoopMembershipFact, OpcodeFact, OriginEdgeFact,
-    OriginNodeFact, StorageFact, StorageLocation, TraceFact,
+    CategorySource, CompilerEventFact, CompilerPhase, DisplayNameFact, InlineContextFact,
+    InstructionCategoryFact, InstructionFact, LoopDerivation, LoopMembershipFact, OpcodeFact,
+    OriginEdgeFact, OriginNodeFact, StorageFact, StorageLocation, TraceFact, ValueProperty,
+    ValuePropertyFact,
 };
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -117,6 +118,8 @@ impl TraceValidator {
         let mut compiler_events = Vec::new();
         let mut opcodes = Vec::new();
         let mut gas_costs = Vec::new();
+        let mut display_names = Vec::new();
+        let mut value_properties = Vec::new();
 
         for fact in facts {
             match fact {
@@ -140,6 +143,8 @@ impl TraceValidator {
                 TraceFact::InlineContext(context) => inline_contexts.push(context),
                 TraceFact::Opcode(opcode) => opcodes.push(opcode),
                 TraceFact::GasCost(gas_cost) => gas_costs.push(gas_cost),
+                TraceFact::DisplayName(display_name) => display_names.push(display_name),
+                TraceFact::ValueProperty(value_property) => value_properties.push(value_property),
             }
         }
 
@@ -248,6 +253,12 @@ impl TraceValidator {
         }
         for gas_cost in gas_costs {
             validate_gas_cost(gas_cost, &nodes, &mut diagnostics);
+        }
+        for display_name in display_names {
+            validate_display_name(display_name, &nodes, &mut diagnostics);
+        }
+        for value_property in value_properties {
+            validate_value_property(value_property, &nodes, &mut diagnostics);
         }
 
         TraceValidationReport {
@@ -519,6 +530,62 @@ fn validate_gas_cost(
     }
 }
 
+fn validate_display_name(
+    display_name: &DisplayNameFact,
+    nodes: &BTreeSet<OriginExportKey>,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    require_node(
+        nodes,
+        &display_name.subject,
+        "display_name.subject",
+        diagnostics,
+    );
+    if display_name.name.trim().is_empty() {
+        push_error(
+            diagnostics,
+            TraceValidationError::EmptyDisplayName {
+                subject: display_name.subject.clone(),
+            },
+        );
+    }
+}
+
+fn validate_value_property(
+    value_property: &ValuePropertyFact,
+    nodes: &BTreeSet<OriginExportKey>,
+    diagnostics: &mut Vec<TraceValidationDiagnostic>,
+) {
+    require_node(
+        nodes,
+        &value_property.subject,
+        "value_property.subject",
+        diagnostics,
+    );
+    if matches!(
+        &value_property.property,
+        ValueProperty::KnownUnsignedWidth { bits: 0 }
+    ) {
+        push_error(
+            diagnostics,
+            TraceValidationError::InvalidValueProperty {
+                subject: value_property.subject.clone(),
+                reason: "known unsigned width must be non-zero",
+            },
+        );
+    }
+    if let Some(reason) = &value_property.reason
+        && reason.as_str().trim().is_empty()
+    {
+        push_error(
+            diagnostics,
+            TraceValidationError::EmptyValuePropertyReason {
+                subject: value_property.subject.clone(),
+            },
+        );
+    }
+}
+
 fn valid_storage_phase_location(phase: CompilerPhase, location: &StorageLocation) -> bool {
     match location {
         StorageLocation::SsaValue => matches!(
@@ -634,6 +701,16 @@ pub enum TraceValidationError {
         subject: OriginExportKey,
     },
     InvalidOpcodeGasSubjectKind {
+        subject: OriginExportKey,
+    },
+    EmptyDisplayName {
+        subject: OriginExportKey,
+    },
+    InvalidValueProperty {
+        subject: OriginExportKey,
+        reason: &'static str,
+    },
+    EmptyValuePropertyReason {
         subject: OriginExportKey,
     },
 }
@@ -764,6 +841,19 @@ impl fmt::Display for TraceValidationError {
             Self::InvalidOpcodeGasSubjectKind { subject } => write!(
                 f,
                 "opcode static gas subject {} is not a bytecode PC origin",
+                subject.display_label()
+            ),
+            Self::EmptyDisplayName { subject } => {
+                write!(f, "display name for {} is empty", subject.display_label())
+            }
+            Self::InvalidValueProperty { subject, reason } => write!(
+                f,
+                "value property for {} is invalid: {reason}",
+                subject.display_label()
+            ),
+            Self::EmptyValuePropertyReason { subject } => write!(
+                f,
+                "value property for {} has an empty reason",
                 subject.display_label()
             ),
         }

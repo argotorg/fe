@@ -5,7 +5,7 @@ use fe_mir::{
     trace::emit_mir_facts,
 };
 use hir::hir_def::{Func, TopLevelMod};
-use trace_facts::TraceValidator;
+use trace_facts::{TraceFact, TraceValidator};
 use url::Url;
 
 fn find_func<'db>(db: &'db DriverDataBase, top_mod: TopLevelMod<'db>, name: &str) -> Func<'db> {
@@ -114,6 +114,19 @@ fn main() -> u256 {
         summary.node_count,
         package_statement_and_terminator_count(&db, package)
             + package_runtime_local_count(&db, package)
+            + package_runtime_local_count(&db, package)
     );
     assert_eq!(summary.edge_count, 0);
+    assert!(
+        facts
+            .iter()
+            .any(|fact| matches!(fact, TraceFact::DisplayName(display) if display.name == "x")),
+        "MIR trace should preserve source-local display names for semantic locals"
+    );
+    assert!(
+        facts
+            .iter()
+            .any(|fact| matches!(fact, TraceFact::CompilerEvent(event) if event.phase == trace_facts::CompilerPhase::Mir)),
+        "MIR trace should include causal MIR compiler events"
+    );
 }

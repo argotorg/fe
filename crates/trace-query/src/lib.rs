@@ -512,6 +512,7 @@ struct TraceIndex<'a> {
     loop_key: Option<OriginExportKey>,
     loop_members: BTreeMap<OriginExportKey, BTreeSet<OriginExportKey>>,
     locals: BTreeMap<String, OriginExportKey>,
+    display_names: BTreeMap<OriginExportKey, String>,
     instructions: BTreeMap<OriginExportKey, &'a InstructionFact>,
 }
 
@@ -521,7 +522,14 @@ impl<'a> TraceIndex<'a> {
         let mut loop_members: BTreeMap<OriginExportKey, BTreeSet<OriginExportKey>> =
             BTreeMap::new();
         let mut locals = BTreeMap::new();
+        let mut display_names = BTreeMap::new();
         let mut instructions = BTreeMap::new();
+
+        for fact in snapshot.facts() {
+            if let TraceFact::DisplayName(display_name) = fact {
+                display_names.insert(display_name.subject.clone(), display_name.name.clone());
+            }
+        }
 
         for fact in snapshot.facts() {
             match fact {
@@ -533,7 +541,13 @@ impl<'a> TraceIndex<'a> {
                         .insert(membership.instruction.clone());
                 }
                 TraceFact::OriginNode(node) if node.key.kind() == "runtime.local" => {
-                    locals.insert(local_display_name(&node.key), node.key.clone());
+                    locals.insert(
+                        display_names
+                            .get(&node.key)
+                            .cloned()
+                            .unwrap_or_else(|| local_display_name(&node.key)),
+                        node.key.clone(),
+                    );
                 }
                 TraceFact::Instruction(instruction) => {
                     instructions.insert(instruction.instruction.clone(), instruction);
@@ -547,6 +561,7 @@ impl<'a> TraceIndex<'a> {
             loop_key,
             loop_members,
             locals,
+            display_names,
             instructions,
         }
     }
@@ -739,6 +754,9 @@ impl<'a> TraceIndex<'a> {
     }
 
     fn label(&self, key: &OriginExportKey) -> String {
+        if let Some(name) = self.display_names.get(key) {
+            return name.clone();
+        }
         match key.kind() {
             "runtime.local" => local_display_name(key),
             "loop" => key.local_key().replace(':', " "),

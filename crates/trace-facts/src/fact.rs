@@ -16,6 +16,8 @@ pub enum TraceFact {
     InlineContext(InlineContextFact),
     Opcode(OpcodeFact),
     GasCost(GasCostFact),
+    DisplayName(DisplayNameFact),
+    ValueProperty(ValuePropertyFact),
 }
 
 impl TraceFact {
@@ -31,6 +33,8 @@ impl TraceFact {
             Self::InlineContext(_) => "inline_context",
             Self::Opcode(_) => "opcode",
             Self::GasCost(_) => "gas_cost",
+            Self::DisplayName(_) => "display_name",
+            Self::ValueProperty(_) => "value_property",
         }
     }
 }
@@ -602,6 +606,68 @@ pub enum GasSource {
     OpcodeTable,
     EvmTrace,
     ManualFixture,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DisplayNameFact {
+    pub subject: OriginExportKey,
+    pub kind: DisplayNameKind,
+    pub name: String,
+}
+
+impl DisplayNameFact {
+    pub fn new(subject: OriginExportKey, kind: DisplayNameKind, name: impl Into<String>) -> Self {
+        Self {
+            subject,
+            kind,
+            name: name.into(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DisplayNameKind {
+    SourceLocal,
+    RuntimeSymbol,
+    BytecodeFunction,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ValuePropertyFact {
+    pub subject: OriginExportKey,
+    pub phase: CompilerPhase,
+    pub property: ValueProperty,
+    pub reason: Option<CompilerReason>,
+}
+
+impl ValuePropertyFact {
+    pub fn new(
+        subject: OriginExportKey,
+        phase: CompilerPhase,
+        property: ValueProperty,
+        reason: Option<CompilerReason>,
+    ) -> Self {
+        Self {
+            subject,
+            phase,
+            property,
+            reason,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ValueProperty {
+    SourceMutable,
+    MemoryBacked,
+    SsaValue,
+    KnownUnsignedWidth { bits: u16 },
+    ZeroExtended,
+    LoopInvariantCandidate,
 }
 
 impl InlineContextFact {
