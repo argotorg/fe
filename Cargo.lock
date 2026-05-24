@@ -2053,6 +2053,7 @@ dependencies = [
  "fe-semantic-indexing",
  "fe-solc-runner",
  "fe-test-utils",
+ "fe-trace-facts",
  "fe-web",
  "glob",
  "hex",

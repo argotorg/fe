@@ -10,6 +10,7 @@ mod doc;
 mod doc_serve;
 mod report;
 mod test;
+mod trace;
 #[cfg(not(target_arch = "wasm32"))]
 mod tree;
 mod workspace_ingot;
@@ -209,6 +210,11 @@ pub enum Command {
         /// Use recovery mode when parsing.
         #[arg(long, default_value = "false")]
         recovery_mode: bool,
+    },
+    /// Run unstable developer trace diagnostics.
+    Trace {
+        #[command(subcommand)]
+        command: TraceCommand,
     },
     /// Generate documentation for a Fe project
     Doc {
@@ -437,6 +443,37 @@ pub enum DocAction {
     },
 }
 
+#[derive(Debug, Clone, Subcommand)]
+pub enum TraceCommand {
+    /// Summarize static per-iteration loop cost for the Fibonacci trace fixture.
+    LoopCost(TraceLoopCostArgs),
+    /// Explain storage and codegen symptoms for one local in the Fibonacci trace fixture.
+    ExplainLocal(TraceExplainLocalArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct TraceLoopCostArgs {
+    /// Path to fib_demo.fe.
+    #[arg(default_value_t = default_project_path())]
+    pub path: Utf8PathBuf,
+    /// Function label to display in the report.
+    #[arg(long, default_value = "Fib.recv Compute handler")]
+    pub function: String,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct TraceExplainLocalArgs {
+    /// Path to fib_demo.fe.
+    #[arg(default_value_t = default_project_path())]
+    pub path: Utf8PathBuf,
+    /// Source local to explain.
+    #[arg(long)]
+    pub local: String,
+    /// Function label to display in the report.
+    #[arg(long, default_value = "Fib.recv Compute handler")]
+    pub function: String,
+}
+
 #[cfg(feature = "lsp")]
 #[derive(Debug, Clone, Subcommand)]
 pub enum LspMode {
@@ -566,6 +603,13 @@ pub fn run(opts: &Options) {
                     std::process::exit(1);
                 }
             }
+            Err(err) => {
+                eprintln!("Error: {err}");
+                std::process::exit(1);
+            }
+        },
+        Command::Trace { command } => match trace::run_trace_command(command) {
+            Ok(output) => print!("{output}"),
             Err(err) => {
                 eprintln!("Error: {err}");
                 std::process::exit(1);
