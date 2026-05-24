@@ -4,7 +4,8 @@ use fe_mir::{
     RBlockId, RuntimeInstanceKey,
     instance::{RuntimeInstanceSource, get_or_build_runtime_instance},
     origin::{
-        RuntimeInstanceOwnerKey, RuntimeStmtIndex, RuntimeStmtOrigin, RuntimeStmtSite,
+        RuntimeBlockOrigin, RuntimeFunctionOrigin, RuntimeInstanceOwnerKey, RuntimeLoopOrigin,
+        RuntimeLoopSite, RuntimeStmtIndex, RuntimeStmtOrigin, RuntimeStmtSite,
         RuntimeTerminatorOrigin, RuntimeTerminatorSite,
     },
 };
@@ -67,13 +68,27 @@ fn test_origin_keys() -> u256 {
     let block = RBlockId::from_u32(3);
     let stmt_site = RuntimeStmtSite::new(block, RuntimeStmtIndex::from_u32(5));
     let terminator_site = RuntimeTerminatorSite::new(block);
+    let loop_site = RuntimeLoopSite::new(RBlockId::from_u32(1), block);
     let owner_key = RuntimeInstanceOwnerKey::new("runtime:test");
 
+    let function_key = RuntimeFunctionOrigin::new(instance).export_key(&owner_key);
+    let block_key = RuntimeBlockOrigin::new(instance, block).export_key(&owner_key);
     let stmt_key = RuntimeStmtOrigin::new(instance, stmt_site).export_key(&owner_key);
     let terminator_key =
         RuntimeTerminatorOrigin::new(instance, terminator_site).export_key(&owner_key);
+    let loop_key = RuntimeLoopOrigin::new(instance, loop_site).export_key(&owner_key);
 
+    assert_ne!(function_key, block_key);
+    assert_ne!(block_key, stmt_key);
     assert_ne!(stmt_key, terminator_key);
+    assert_eq!(
+        function_key,
+        origin_key("runtime.function", "runtime:test", "function")
+    );
+    assert_eq!(
+        block_key,
+        origin_key("runtime.block", "runtime:test", "block:3")
+    );
     assert_eq!(
         stmt_key,
         origin_key("runtime.stmt", "runtime:test", "block:3:stmt:5")
@@ -81,6 +96,10 @@ fn test_origin_keys() -> u256 {
     assert_eq!(
         terminator_key,
         origin_key("runtime.terminator", "runtime:test", "block:3:terminator")
+    );
+    assert_eq!(
+        loop_key,
+        origin_key("runtime.loop", "runtime:test", "loop:header:1:latch:3")
     );
 }
 

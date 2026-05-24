@@ -11,6 +11,10 @@ use crate::{MirDb, RuntimeInstance, RuntimePackage, runtime::RBlockId, runtime::
 pub const RUNTIME_LOCAL_EXPORT_KIND: &str = "runtime.local";
 pub const RUNTIME_STMT_EXPORT_KIND: &str = "runtime.stmt";
 pub const RUNTIME_TERMINATOR_EXPORT_KIND: &str = "runtime.terminator";
+pub const RUNTIME_FUNCTION_EXPORT_KIND: &str = "runtime.function";
+pub const RUNTIME_BLOCK_EXPORT_KIND: &str = "runtime.block";
+pub const RUNTIME_LOOP_EXPORT_KIND: &str = "runtime.loop";
+pub const RUNTIME_TYPE_EXPORT_KIND: &str = "runtime.type";
 
 /// Stable export owner key for a runtime MIR instance.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Update)]
@@ -95,6 +99,134 @@ struct RuntimeLocalOriginLocalKey(RLocalId);
 impl OriginExportLocalKey for RuntimeLocalOriginLocalKey {
     fn to_export_local_key(&self) -> String {
         format!("local:{}", self.0.index())
+    }
+}
+
+struct RuntimeFunctionOriginLocalKey;
+
+impl OriginExportLocalKey for RuntimeFunctionOriginLocalKey {
+    fn to_export_local_key(&self) -> String {
+        "function".to_string()
+    }
+}
+
+/// Origin key for a runtime MIR function instance.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub struct RuntimeFunctionOrigin<'db> {
+    instance: RuntimeInstance<'db>,
+}
+
+impl<'db> RuntimeFunctionOrigin<'db> {
+    pub const fn new(instance: RuntimeInstance<'db>) -> Self {
+        Self { instance }
+    }
+
+    pub const fn instance(self) -> RuntimeInstance<'db> {
+        self.instance
+    }
+
+    pub fn export_key(self, stable_instance_key: &RuntimeInstanceOwnerKey) -> OriginExportKey {
+        OriginExportKey::new(
+            RUNTIME_FUNCTION_EXPORT_KIND,
+            stable_instance_key,
+            &RuntimeFunctionOriginLocalKey,
+        )
+    }
+}
+
+struct RuntimeBlockOriginLocalKey(RBlockId);
+
+impl OriginExportLocalKey for RuntimeBlockOriginLocalKey {
+    fn to_export_local_key(&self) -> String {
+        format!("block:{}", self.0.index())
+    }
+}
+
+/// Origin key for a runtime MIR block. Block IDs are scoped to the runtime
+/// function instance and must not escape without the owner key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub struct RuntimeBlockOrigin<'db> {
+    key: OriginKey<RuntimeInstance<'db>, RBlockId>,
+}
+
+impl<'db> RuntimeBlockOrigin<'db> {
+    pub const fn new(instance: RuntimeInstance<'db>, block: RBlockId) -> Self {
+        Self {
+            key: OriginKey::new(instance, block),
+        }
+    }
+
+    pub fn instance(self) -> RuntimeInstance<'db> {
+        self.key.into_parts().0
+    }
+
+    pub fn block(self) -> RBlockId {
+        self.key.into_parts().1
+    }
+
+    pub fn export_key(self, stable_instance_key: &RuntimeInstanceOwnerKey) -> OriginExportKey {
+        OriginExportKey::new(
+            RUNTIME_BLOCK_EXPORT_KIND,
+            stable_instance_key,
+            &RuntimeBlockOriginLocalKey(self.block()),
+        )
+    }
+}
+
+/// One natural-loop candidate produced from a MIR CFG backedge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Update)]
+pub struct RuntimeLoopSite {
+    header: RBlockId,
+    latch: RBlockId,
+}
+
+impl RuntimeLoopSite {
+    pub const fn new(header: RBlockId, latch: RBlockId) -> Self {
+        Self { header, latch }
+    }
+
+    pub const fn header(self) -> RBlockId {
+        self.header
+    }
+
+    pub const fn latch(self) -> RBlockId {
+        self.latch
+    }
+}
+
+impl OriginExportLocalKey for RuntimeLoopSite {
+    fn to_export_local_key(&self) -> String {
+        format!(
+            "loop:header:{}:latch:{}",
+            self.header.index(),
+            self.latch.index()
+        )
+    }
+}
+
+/// Origin key for a compiler-derived MIR natural loop.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub struct RuntimeLoopOrigin<'db> {
+    key: OriginKey<RuntimeInstance<'db>, RuntimeLoopSite>,
+}
+
+impl<'db> RuntimeLoopOrigin<'db> {
+    pub const fn new(instance: RuntimeInstance<'db>, site: RuntimeLoopSite) -> Self {
+        Self {
+            key: OriginKey::new(instance, site),
+        }
+    }
+
+    pub fn instance(self) -> RuntimeInstance<'db> {
+        self.key.into_parts().0
+    }
+
+    pub fn site(self) -> RuntimeLoopSite {
+        self.key.into_parts().1
+    }
+
+    pub fn export_key(self, stable_instance_key: &RuntimeInstanceOwnerKey) -> OriginExportKey {
+        OriginExportKey::new(RUNTIME_LOOP_EXPORT_KIND, stable_instance_key, &self.site())
     }
 }
 

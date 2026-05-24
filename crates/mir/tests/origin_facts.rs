@@ -49,6 +49,21 @@ fn package_runtime_local_count<'db>(
         .sum()
 }
 
+fn package_block_count<'db>(db: &'db DriverDataBase, package: RuntimePackage<'db>) -> usize {
+    package
+        .functions(db)
+        .iter()
+        .map(|function| function.instance(db).body(db).blocks.len())
+        .sum()
+}
+
+fn origin_node_kind_count(facts: &[TraceFact], kind: &str) -> usize {
+    facts
+        .iter()
+        .filter(|fact| matches!(fact, TraceFact::OriginNode(node) if node.key.kind() == kind))
+        .count()
+}
+
 #[test]
 fn legacy_runtime_package_origin_facts_cover_statements_and_terminators() {
     let mut db = DriverDataBase::default();
@@ -111,10 +126,21 @@ fn main() -> u256 {
         }
     }
     assert_eq!(
-        summary.node_count,
+        origin_node_kind_count(&facts, "runtime.stmt")
+            + origin_node_kind_count(&facts, "runtime.terminator"),
         package_statement_and_terminator_count(&db, package)
-            + package_runtime_local_count(&db, package)
-            + package_runtime_local_count(&db, package)
+    );
+    assert_eq!(
+        origin_node_kind_count(&facts, "runtime.local"),
+        package_runtime_local_count(&db, package)
+    );
+    assert_eq!(
+        origin_node_kind_count(&facts, "runtime.block"),
+        package_block_count(&db, package)
+    );
+    assert_eq!(
+        origin_node_kind_count(&facts, "runtime.function"),
+        package.functions(&db).len()
     );
     assert_eq!(summary.edge_count, 0);
     assert!(
@@ -128,5 +154,70 @@ fn main() -> u256 {
             .iter()
             .any(|fact| matches!(fact, TraceFact::CompilerEvent(event) if event.phase == trace_facts::CompilerPhase::Mir)),
         "MIR trace should include causal MIR compiler events"
+    );
+    assert!(
+        facts
+            .iter()
+            .any(|fact| matches!(fact, TraceFact::Variable(variable) if variable.name == "x")),
+        "MIR trace should include source-local variable facts for semantic locals"
+    );
+    assert!(
+        facts
+            .iter()
+            .any(|fact| matches!(fact, TraceFact::Storage(_))),
+        "MIR trace should include storage facts for runtime locals"
+    );
+}
+
+#[test]
+fn mir_trace_emits_cfg_and_natural_loop_facts() {
+    let mut db = DriverDataBase::default();
+    let file_url = Url::parse("file:///runtime_trace_loop_facts.fe").unwrap();
+    let file = db.workspace().touch(
+        &mut db,
+        file_url,
+        Some(
+            r#"
+fn main() -> u32 {
+    let mut i: u32 = 0
+    while i < 4 {
+        i = i + 1
+    }
+    i
+}
+"#
+            .to_string(),
+        ),
+    );
+    let top_mod = db.top_mod(file);
+    let _ = find_func(&db, top_mod, "main");
+    let package = build_runtime_package(&db, top_mod).expect("runtime package should build");
+    let facts = emit_mir_facts(&db, package);
+
+    TraceValidator::validate(&facts).unwrap();
+    assert!(
+        facts.iter().any(|fact| matches!(fact, TraceFact::Block(_))),
+        "MIR trace should emit target-neutral block facts"
+    );
+    assert!(
+        facts
+            .iter()
+            .any(|fact| matches!(fact, TraceFact::CfgEdge(_))),
+        "MIR trace should emit CFG edges from MIR terminators"
+    );
+    assert!(
+        facts.iter().any(|fact| matches!(
+            fact,
+            TraceFact::Loop(loop_fact)
+                if loop_fact.phase == trace_facts::CompilerPhase::Mir
+        )),
+        "MIR trace should derive natural loops from the MIR CFG"
+    );
+    assert!(
+        facts.iter().any(|fact| matches!(
+            fact,
+            TraceFact::LoopBlock(block) if block.role == trace_facts::LoopBlockRole::Header
+        )),
+        "MIR loop facts should identify a header block"
     );
 }

@@ -1,17 +1,28 @@
+use std::collections::BTreeSet;
+
+use cranelift_entity::EntityRef;
 use trace_facts::{
-    CompilerEventFact, CompilerEventKind, CompilerPhase, CompilerReason, DisplayNameFact,
-    DisplayNameKind, OriginNodeFact, OriginNodeKind, StorageFact, StorageLocation, StorageReason,
-    TraceFact, ValueProperty, ValuePropertyFact,
+    BlockFact, CfgEdgeFact, CfgEdgeKind, CompilerEventFact, CompilerEventKind, CompilerPhase,
+    CompilerReason, DisplayNameFact, DisplayNameKind, FunctionFact, LoopBlockFact, LoopBlockRole,
+    LoopConfidence, LoopDerivation, LoopFact, OriginNodeFact, OriginNodeKind, StorageFact,
+    StorageLocation, StorageReason, TraceFact, TypeFact, TypeKind, ValueProperty,
+    ValuePropertyFact, VariableFact, VariableStorageClass,
 };
 
 use crate::{
     MirDb, RuntimePackage,
     origin::{
-        RUNTIME_LOCAL_EXPORT_KIND, RUNTIME_STMT_EXPORT_KIND, RUNTIME_TERMINATOR_EXPORT_KIND,
-        RuntimeInstanceOwnerKey, RuntimeLocalOrigin, RuntimeStmtIndex, RuntimeStmtOrigin,
-        RuntimeStmtSite, RuntimeTerminatorOrigin, RuntimeTerminatorSite,
+        RUNTIME_BLOCK_EXPORT_KIND, RUNTIME_FUNCTION_EXPORT_KIND, RUNTIME_LOCAL_EXPORT_KIND,
+        RUNTIME_LOOP_EXPORT_KIND, RUNTIME_STMT_EXPORT_KIND, RUNTIME_TERMINATOR_EXPORT_KIND,
+        RUNTIME_TYPE_EXPORT_KIND, RuntimeBlockOrigin, RuntimeFunctionOrigin,
+        RuntimeInstanceOwnerKey, RuntimeLocalOrigin, RuntimeLoopOrigin, RuntimeLoopSite,
+        RuntimeStmtIndex, RuntimeStmtOrigin, RuntimeStmtSite, RuntimeTerminatorOrigin,
+        RuntimeTerminatorSite,
     },
-    runtime::{RBlockId, RuntimeCarrier, RuntimeLocalLowering, RuntimeLocalRoot},
+    runtime::{
+        RBlockId, RLocalId, RTerminator, RuntimeBody, RuntimeCarrier, RuntimeLocalLowering,
+        RuntimeLocalRoot,
+    },
 };
 use hir::{
     analysis::{semantic::borrowck::normalize_semantic_body, ty::ty_check::LocalBinding},
@@ -28,6 +39,17 @@ pub fn emit_mir_facts<'db>(db: &'db dyn MirDb, package: RuntimePackage<'db>) -> 
         let instance = function.instance(db);
         let owner_key = RuntimeInstanceOwnerKey::for_instance(db, instance);
         let body = instance.body(db);
+        let function_key = RuntimeFunctionOrigin::new(instance).export_key(&owner_key);
+        facts.push(origin_node(
+            function_key.clone(),
+            RUNTIME_FUNCTION_EXPORT_KIND,
+        ));
+        facts.push(TraceFact::Function(FunctionFact::new(
+            function_key.clone(),
+            function.symbol(db),
+            None,
+            None,
+        )));
         let semantic_local_info = semantic_local_trace_info(db, instance);
         for (local_index, local) in body.locals.iter().enumerate() {
             let local_key = RuntimeLocalOrigin::new(
@@ -45,6 +67,23 @@ pub fn emit_mir_facts<'db>(db: &'db dyn MirDb, package: RuntimePackage<'db>) -> 
                     local_key.clone(),
                     DisplayNameKind::SourceLocal,
                     info.name.clone(),
+                )));
+                let type_key = runtime_type_key(&owner_key, local_index);
+                facts.push(origin_node(type_key.clone(), RUNTIME_TYPE_EXPORT_KIND));
+                facts.push(TraceFact::Type(TypeFact::new(
+                    type_key.clone(),
+                    TypeKind::Unknown,
+                    None,
+                    None,
+                    Vec::new(),
+                )));
+                facts.push(TraceFact::Variable(VariableFact::new(
+                    local_key.clone(),
+                    info.name.clone(),
+                    type_key,
+                    local_key.clone(),
+                    None,
+                    info.storage_class,
                 )));
                 if info.is_mut {
                     facts.push(TraceFact::ValueProperty(ValuePropertyFact::new(
@@ -95,8 +134,19 @@ pub fn emit_mir_facts<'db>(db: &'db dyn MirDb, package: RuntimePackage<'db>) -> 
                 ))),
             )));
         }
+        let cfg = runtime_cfg(&body);
+        let dominators = dominators(body.blocks.len(), &cfg.predecessors);
         for (block_index, runtime_block) in body.blocks.iter().enumerate() {
             let block = RBlockId::from_u32(block_index as u32);
+            let block_key = RuntimeBlockOrigin::new(instance, block).export_key(&owner_key);
+            facts.push(origin_node(block_key.clone(), RUNTIME_BLOCK_EXPORT_KIND));
+            facts.push(TraceFact::Block(BlockFact::new(
+                block_key,
+                function_key.clone(),
+                CompilerPhase::Mir,
+                block_index as u32,
+                Some(format!("bb{block_index}")),
+            )));
             for (stmt_index, _) in runtime_block.stmts.iter().enumerate() {
                 let site =
                     RuntimeStmtSite::new(block, RuntimeStmtIndex::from_u32(stmt_index as u32));
@@ -111,8 +161,331 @@ pub fn emit_mir_facts<'db>(db: &'db dyn MirDb, package: RuntimePackage<'db>) -> 
                 RUNTIME_TERMINATOR_EXPORT_KIND,
             ));
         }
+        for edge in &cfg.edges {
+            let from_key = RuntimeBlockOrigin::new(instance, edge.from).export_key(&owner_key);
+            let to_key = RuntimeBlockOrigin::new(instance, edge.to).export_key(&owner_key);
+            let condition_origin = edge
+                .condition
+                .map(|local| RuntimeLocalOrigin::new(instance, local).export_key(&owner_key));
+            facts.push(TraceFact::CfgEdge(CfgEdgeFact::new(
+                function_key.clone(),
+                from_key,
+                to_key,
+                cfg_edge_kind(edge, &dominators),
+                condition_origin,
+            )));
+        }
+        let cfg_hash = runtime_cfg_hash(body.blocks.len(), &cfg.edges);
+        for natural_loop in natural_loops(body.blocks.len(), &cfg.predecessors, &cfg.edges) {
+            let loop_key = RuntimeLoopOrigin::new(
+                instance,
+                RuntimeLoopSite::new(natural_loop.header, natural_loop.latch),
+            )
+            .export_key(&owner_key);
+            let header_key =
+                RuntimeBlockOrigin::new(instance, natural_loop.header).export_key(&owner_key);
+            facts.push(origin_node(loop_key.clone(), RUNTIME_LOOP_EXPORT_KIND));
+            facts.push(TraceFact::Loop(LoopFact::new(
+                loop_key.clone(),
+                function_key.clone(),
+                CompilerPhase::Mir,
+                header_key.clone(),
+                LoopDerivation::NaturalLoopAnalysis {
+                    cfg_hash: cfg_hash.clone(),
+                },
+                LoopConfidence::MirCfg,
+            )));
+            facts.push(TraceFact::LoopBlock(LoopBlockFact::new(
+                loop_key.clone(),
+                header_key,
+                LoopBlockRole::Header,
+            )));
+            for block in natural_loop.members {
+                if block == natural_loop.header {
+                    continue;
+                }
+                let role = if block == natural_loop.latch {
+                    LoopBlockRole::Latch
+                } else {
+                    LoopBlockRole::Body
+                };
+                facts.push(TraceFact::LoopBlock(LoopBlockFact::new(
+                    loop_key.clone(),
+                    RuntimeBlockOrigin::new(instance, block).export_key(&owner_key),
+                    role,
+                )));
+            }
+        }
     }
     facts
+}
+
+#[derive(Clone, Debug)]
+struct RuntimeCfg {
+    edges: Vec<RuntimeCfgEdge>,
+    predecessors: Vec<Vec<RBlockId>>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RuntimeCfgEdge {
+    from: RBlockId,
+    to: RBlockId,
+    kind: CfgEdgeKind,
+    condition: Option<RLocalId>,
+}
+
+#[derive(Clone, Debug)]
+struct NaturalLoop {
+    header: RBlockId,
+    latch: RBlockId,
+    members: Vec<RBlockId>,
+}
+
+fn runtime_cfg(body: &RuntimeBody<'_>) -> RuntimeCfg {
+    let mut edges = Vec::new();
+    let mut predecessors = vec![Vec::new(); body.blocks.len()];
+    for (block_index, block) in body.blocks.iter().enumerate() {
+        let from = RBlockId::from_u32(block_index as u32);
+        for edge in terminator_edges(from, &block.terminator) {
+            if let Some(preds) = predecessors.get_mut(edge.to.index()) {
+                preds.push(edge.from);
+            }
+            edges.push(edge);
+        }
+    }
+    RuntimeCfg {
+        edges,
+        predecessors,
+    }
+}
+
+fn terminator_edges(from: RBlockId, terminator: &RTerminator<'_>) -> Vec<RuntimeCfgEdge> {
+    match terminator {
+        RTerminator::Goto(to) => vec![RuntimeCfgEdge {
+            from,
+            to: *to,
+            kind: CfgEdgeKind::Jump,
+            condition: None,
+        }],
+        RTerminator::Branch {
+            cond,
+            then_bb,
+            else_bb,
+        } => vec![
+            RuntimeCfgEdge {
+                from,
+                to: *then_bb,
+                kind: CfgEdgeKind::BranchTrue,
+                condition: Some(*cond),
+            },
+            RuntimeCfgEdge {
+                from,
+                to: *else_bb,
+                kind: CfgEdgeKind::BranchFalse,
+                condition: Some(*cond),
+            },
+        ],
+        RTerminator::SwitchScalar {
+            discr,
+            cases,
+            default,
+        } => {
+            let mut edges = cases
+                .iter()
+                .map(|(_, to)| RuntimeCfgEdge {
+                    from,
+                    to: *to,
+                    kind: CfgEdgeKind::BranchTrue,
+                    condition: Some(*discr),
+                })
+                .collect::<Vec<_>>();
+            edges.push(RuntimeCfgEdge {
+                from,
+                to: *default,
+                kind: CfgEdgeKind::BranchFalse,
+                condition: Some(*discr),
+            });
+            edges
+        }
+        RTerminator::MatchEnumTag {
+            tag,
+            cases,
+            default,
+            ..
+        } => {
+            let mut edges = cases
+                .iter()
+                .map(|(_, to)| RuntimeCfgEdge {
+                    from,
+                    to: *to,
+                    kind: CfgEdgeKind::BranchTrue,
+                    condition: Some(*tag),
+                })
+                .collect::<Vec<_>>();
+            if let Some(default) = default {
+                edges.push(RuntimeCfgEdge {
+                    from,
+                    to: *default,
+                    kind: CfgEdgeKind::BranchFalse,
+                    condition: Some(*tag),
+                });
+            }
+            edges
+        }
+        RTerminator::TerminalCall { .. }
+        | RTerminator::ReturnData { .. }
+        | RTerminator::Revert { .. }
+        | RTerminator::SelfDestruct { .. }
+        | RTerminator::Trap
+        | RTerminator::Return(_)
+        | RTerminator::Stop => Vec::new(),
+    }
+}
+
+fn cfg_edge_kind(edge: &RuntimeCfgEdge, dominators: &[BTreeSet<usize>]) -> CfgEdgeKind {
+    let from = edge.from.index();
+    let to = edge.to.index();
+    if dominators
+        .get(from)
+        .is_some_and(|dominator_set| dominator_set.contains(&to))
+    {
+        CfgEdgeKind::Backedge
+    } else {
+        edge.kind
+    }
+}
+
+fn natural_loops(
+    block_count: usize,
+    predecessors: &[Vec<RBlockId>],
+    edges: &[RuntimeCfgEdge],
+) -> Vec<NaturalLoop> {
+    let dominators = dominators(block_count, predecessors);
+    let mut seen = BTreeSet::new();
+    let mut loops = Vec::new();
+    for edge in edges {
+        let from = edge.from.index();
+        let to = edge.to.index();
+        if from >= block_count || to >= block_count {
+            continue;
+        }
+        if !dominators[from].contains(&to) || !seen.insert((to, from)) {
+            continue;
+        }
+        loops.push(NaturalLoop {
+            header: edge.to,
+            latch: edge.from,
+            members: natural_loop_members(block_count, predecessors, edge.to, edge.from),
+        });
+    }
+    loops
+}
+
+fn natural_loop_members(
+    block_count: usize,
+    predecessors: &[Vec<RBlockId>],
+    header: RBlockId,
+    latch: RBlockId,
+) -> Vec<RBlockId> {
+    let header_index = header.index();
+    let latch_index = latch.index();
+    let mut members = BTreeSet::from([header_index, latch_index]);
+    let mut stack = vec![latch_index];
+    while let Some(block) = stack.pop() {
+        for predecessor in predecessors.get(block).into_iter().flatten() {
+            let predecessor = predecessor.index();
+            if predecessor >= block_count || !members.insert(predecessor) {
+                continue;
+            }
+            if predecessor != header_index {
+                stack.push(predecessor);
+            }
+        }
+    }
+    members
+        .into_iter()
+        .map(|block| RBlockId::from_u32(block as u32))
+        .collect()
+}
+
+fn dominators(block_count: usize, predecessors: &[Vec<RBlockId>]) -> Vec<BTreeSet<usize>> {
+    if block_count == 0 {
+        return Vec::new();
+    }
+    let all_blocks = (0..block_count).collect::<BTreeSet<_>>();
+    let mut dominators = vec![all_blocks.clone(); block_count];
+    dominators[0] = BTreeSet::from([0]);
+
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for block in 1..block_count {
+            let preds = predecessors
+                .get(block)
+                .into_iter()
+                .flatten()
+                .map(|pred| pred.index())
+                .filter(|pred| *pred < block_count)
+                .collect::<Vec<_>>();
+            let mut next = if let Some((first, rest)) = preds.split_first() {
+                let mut intersection = dominators[*first].clone();
+                for pred in rest {
+                    intersection = intersection
+                        .intersection(&dominators[*pred])
+                        .copied()
+                        .collect();
+                }
+                intersection
+            } else {
+                BTreeSet::new()
+            };
+            next.insert(block);
+            if next != dominators[block] {
+                dominators[block] = next;
+                changed = true;
+            }
+        }
+    }
+    dominators
+}
+
+fn runtime_cfg_hash(block_count: usize, edges: &[RuntimeCfgEdge]) -> String {
+    let mut hash = 0xcbf29ce484222325u64;
+    hash_u32(&mut hash, block_count as u32);
+    for edge in edges {
+        hash_u32(&mut hash, edge.from.index() as u32);
+        hash_u32(&mut hash, edge.to.index() as u32);
+        hash_bytes(&mut hash, cfg_edge_kind_name(edge.kind).as_bytes());
+        match edge.condition {
+            Some(condition) => hash_u32(&mut hash, condition.index() as u32),
+            None => hash_bytes(&mut hash, b"none"),
+        }
+    }
+    format!("fnv64:{hash:016x}")
+}
+
+fn cfg_edge_kind_name(kind: CfgEdgeKind) -> &'static str {
+    match kind {
+        CfgEdgeKind::Fallthrough => "fallthrough",
+        CfgEdgeKind::BranchTrue => "branch_true",
+        CfgEdgeKind::BranchFalse => "branch_false",
+        CfgEdgeKind::Jump => "jump",
+        CfgEdgeKind::Backedge => "backedge",
+        CfgEdgeKind::Return => "return",
+        CfgEdgeKind::Unwind => "unwind",
+        CfgEdgeKind::Unknown => "unknown",
+    }
+}
+
+fn hash_u32(hash: &mut u64, value: u32) {
+    hash_bytes(hash, &value.to_le_bytes());
+}
+
+fn hash_bytes(hash: &mut u64, bytes: &[u8]) {
+    for byte in bytes {
+        *hash ^= u64::from(*byte);
+        *hash = hash.wrapping_mul(0x100000001b3);
+    }
 }
 
 fn mir_storage_location(local: &crate::runtime::RLocal<'_>) -> StorageLocation {
@@ -158,6 +531,7 @@ fn mir_storage_event_reason(location: &StorageLocation, reason: StorageReason) -
 struct SemanticLocalTraceInfo {
     name: String,
     is_mut: bool,
+    storage_class: VariableStorageClass,
 }
 
 fn semantic_local_trace_info<'db>(
@@ -193,6 +567,12 @@ fn local_binding_trace_info<'db>(
     SemanticLocalTraceInfo {
         name: local_binding_name(db, body, binding),
         is_mut: binding.is_mut(),
+        storage_class: match binding {
+            LocalBinding::Local { .. } => VariableStorageClass::Local,
+            LocalBinding::Param { .. } | LocalBinding::EffectParam { .. } => {
+                VariableStorageClass::Parameter
+            }
+        },
     }
 }
 
@@ -232,6 +612,18 @@ fn compiler_event_key(
         local_key.as_ref(),
     )
     .expect("MIR compiler event key must be valid")
+}
+
+fn runtime_type_key(
+    owner_key: &RuntimeInstanceOwnerKey,
+    local_index: usize,
+) -> common::origin::OriginExportKey {
+    common::origin::OriginExportKey::try_from_raw_parts(
+        RUNTIME_TYPE_EXPORT_KIND,
+        owner_key.as_str(),
+        format!("local:{local_index}:type"),
+    )
+    .expect("MIR runtime type key must be valid")
 }
 
 fn origin_node(key: common::origin::OriginExportKey, kind: &str) -> TraceFact {
