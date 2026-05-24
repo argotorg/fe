@@ -103,6 +103,13 @@ fn main() -> u256 {
     let facts = emit_mir_facts(&db, package);
     let summary = TraceValidator::validate(&facts).unwrap();
 
+    for fact in &facts {
+        if let trace_facts::TraceFact::OriginNode(node) = fact
+            && node.key.kind().starts_with("runtime.")
+        {
+            assert!(node.key.owner_key().starts_with("runtime-instance:"));
+        }
+    }
     assert_eq!(
         summary.node_count,
         package_statement_and_terminator_count(&db, package)

@@ -19,10 +19,13 @@ pub(crate) fn service_for_file(
     let mut facts = mir::trace::emit_mir_facts(db, package);
     let bytecode = codegen::emit_module_sonatina_bytecode(db, top_mod, codegen::OptLevel::O1, None)
         .map_err(|err| format!("bytecode emission for trace: {err}"))?;
+    let module_key = top_mod.name(db).data(db).to_string();
     for (contract_name, artifact) in bytecode {
+        let owner_key =
+            codegen::trace::bytecode_runtime_owner_key(uri.as_str(), &module_key, &contract_name);
         facts.extend(codegen::trace::emit_bytecode_instruction_facts(
-            &format!("contract:{contract_name}:runtime"),
-            "runtime",
+            &owner_key,
+            "function:runtime",
             &artifact.runtime,
         ));
     }

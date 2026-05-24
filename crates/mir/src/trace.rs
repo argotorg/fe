@@ -20,8 +20,8 @@ use crate::{
 pub fn emit_mir_facts<'db>(db: &'db dyn MirDb, package: RuntimePackage<'db>) -> Vec<TraceFact> {
     let mut facts = Vec::new();
     for function in package.functions(db) {
-        let owner_key = RuntimeInstanceOwnerKey::new(format!("runtime:{}", function.symbol(db)));
         let instance = function.instance(db);
+        let owner_key = RuntimeInstanceOwnerKey::for_instance(db, instance);
         let body = instance.body(db);
         for (local_index, local) in body.locals.iter().enumerate() {
             let local_key = RuntimeLocalOrigin::new(

@@ -21,6 +21,13 @@ impl RuntimeInstanceOwnerKey {
         Self::try_new(value).unwrap_or_else(|err| panic!("{err}"))
     }
 
+    pub fn for_instance<'db>(db: &'db dyn MirDb, instance: RuntimeInstance<'db>) -> Self {
+        Self::new(format!(
+            "runtime-instance:{}",
+            crate::runtime_instance_stable_key(db, instance)
+        ))
+    }
+
     pub fn try_new(value: impl Into<String>) -> Result<Self, OriginKeyTextError> {
         let value = value.into();
         validate_origin_key_text("runtime instance owner key", &value)?;
@@ -212,8 +219,8 @@ pub fn legacy_runtime_package_origin_facts<'db>(
 ) -> TypedFactSet {
     let mut facts = TypedFactSet::new();
     for function in package.functions(db) {
-        let owner_key = RuntimeInstanceOwnerKey::new(format!("runtime:{}", function.symbol(db)));
         let instance = function.instance(db);
+        let owner_key = RuntimeInstanceOwnerKey::for_instance(db, instance);
         let body = instance.body(db);
         for (block_index, runtime_block) in body.blocks.iter().enumerate() {
             let block = RBlockId::from_u32(block_index as u32);

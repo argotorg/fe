@@ -89,3 +89,46 @@ fn runtime_instance_owner_key_rejects_invalid_text() {
     assert!(RuntimeInstanceOwnerKey::try_new("").is_err());
     assert!(RuntimeInstanceOwnerKey::try_new("runtime\u{1f}test").is_err());
 }
+
+#[test]
+fn runtime_instance_owner_keys_distinguish_same_function_name_in_different_modules() {
+    let mut db = DriverDataBase::default();
+    let file_url = Url::parse("file:///runtime_owner_collision.fe").unwrap();
+    let file = db.workspace().touch(
+        &mut db,
+        file_url,
+        Some(
+            r#"
+mod a {
+    pub fn dup() -> u256 { 1 }
+}
+
+mod b {
+    pub fn dup() -> u256 { 2 }
+}
+"#
+            .to_string(),
+        ),
+    );
+    let top_mod = db.top_mod(file);
+    let funcs = top_mod
+        .all_funcs(&db)
+        .iter()
+        .copied()
+        .filter(|func| {
+            func.name(&db)
+                .to_opt()
+                .is_some_and(|ident| ident.data(&db) == "dup")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(funcs.len(), 2);
+
+    let first =
+        RuntimeInstanceOwnerKey::for_instance(&db, runtime_instance_for_func(&db, funcs[0]));
+    let second =
+        RuntimeInstanceOwnerKey::for_instance(&db, runtime_instance_for_func(&db, funcs[1]));
+
+    assert_ne!(first, second);
+    assert!(first.as_str().starts_with("runtime-instance:"));
+    assert!(second.as_str().starts_with("runtime-instance:"));
+}

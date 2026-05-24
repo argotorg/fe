@@ -83,6 +83,14 @@ pub fn emit_bytecode_instruction_facts(
     facts
 }
 
+pub fn bytecode_runtime_owner_key(
+    package_key: &str,
+    module_key: &str,
+    contract_name: &str,
+) -> String {
+    format!("package:{package_key}:module:{module_key}:contract:{contract_name}:section:runtime")
+}
+
 fn origin_node(key: OriginExportKey, kind: &str) -> TraceFact {
     TraceFact::OriginNode(OriginNodeFact::new(key, OriginNodeKind::new(kind)))
 }
@@ -188,7 +196,7 @@ mod tests {
 
     use crate::{
         BytecodePcRange, BytecodeSourceMapEntry,
-        trace::{emit_bytecode_instruction_facts, emit_codegen_facts},
+        trace::{bytecode_runtime_owner_key, emit_bytecode_instruction_facts, emit_codegen_facts},
     };
 
     #[test]
@@ -229,5 +237,19 @@ mod tests {
             fact,
             TraceFact::GasCost(gas) if gas.gas > 0
         )));
+    }
+
+    #[test]
+    fn bytecode_owner_key_includes_package_module_contract_and_section() {
+        let first = bytecode_runtime_owner_key("pkg:a", "mod:fib", "Fib");
+        let same_contract_other_module = bytecode_runtime_owner_key("pkg:a", "mod:other", "Fib");
+        let same_module_other_package = bytecode_runtime_owner_key("pkg:b", "mod:fib", "Fib");
+
+        assert_ne!(first, same_contract_other_module);
+        assert_ne!(first, same_module_other_package);
+        assert!(first.contains("package:pkg:a"));
+        assert!(first.contains("module:mod:fib"));
+        assert!(first.contains("contract:Fib"));
+        assert!(first.contains("section:runtime"));
     }
 }

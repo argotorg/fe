@@ -91,10 +91,16 @@ pub(super) fn emit_real_trace_bundle(
     let mut facts = mir::trace::emit_mir_facts(&db, package);
     let bytecode = codegen::emit_module_sonatina_bytecode(&db, top_mod, opt_level, None)
         .map_err(|err| format!("failed to compile bytecode for trace: {err}"))?;
+    let module_key = top_mod.name(&db).data(&db).to_string();
     for (contract_name, artifact) in bytecode {
+        let owner_key = codegen::trace::bytecode_runtime_owner_key(
+            input_path.as_str(),
+            &module_key,
+            &contract_name,
+        );
         facts.extend(codegen::trace::emit_bytecode_instruction_facts(
-            &format!("contract:{contract_name}:runtime"),
-            "runtime",
+            &owner_key,
+            "function:runtime",
             &artifact.runtime,
         ));
     }
