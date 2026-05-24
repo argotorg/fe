@@ -316,13 +316,13 @@ pub fn emit_sonatina_trace_view_facts(
     facts
 }
 
-/// Emit Sonatina-owned CFG and lowering bridge facts from the runtime package.
+/// Emit transitional Sonatina-surface CFG and lowering bridge facts from MIR.
 ///
-/// This is intentionally a lowering-unit trace: it identifies which MIR
-/// statement or terminator each Sonatina pre-opt unit came from. Exact
-/// pass-level post-opt instruction preservation still needs Sonatina pass hooks,
-/// so post-opt facts are marked as snapshot-preserved projections instead of
-/// pretending to know optimizer rewrites.
+/// This predates the frontend-neutral Sonatina trace-view adapter and is kept as
+/// a compatibility bridge for tests that still exercise the MIR-derived
+/// projection. New real trace emission should prefer `emit_sonatina_trace_view_facts`.
+/// It must not be read as actual pass-level Sonatina instrumentation or as a
+/// target bytecode membership proof.
 pub fn emit_sonatina_cfg_facts<'db>(
     db: &'db dyn mir::MirDb,
     package: mir::RuntimePackage<'db>,

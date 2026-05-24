@@ -13,7 +13,7 @@ It is not a stability guarantee.
 
 `fe dev trace-fixture ...` is a fixture-backed UX prototype for Fibonacci diagnostics. It emits trace JSONL with fixture metadata derived from `fib_demo.fe` markers and must not be read as compiler-derived instrumentation.
 
-`fe dev trace ...` reads validated trace JSONL bundles. `fe dev trace emit` produces compiler-derived JSONL with phase-owned MIR facts and actual EVM bytecode instruction facts. Loop membership, source-local labels, storage allocation, and zext causality are still explicit gaps.
+`fe dev trace ...` reads validated trace JSONL bundles. `fe dev trace emit` produces compiler-derived JSONL with phase-owned MIR facts, source-local display names, MIR storage decisions, Sonatina trace-view CFG/loop facts through a Fe adapter, and actual EVM bytecode instruction/gas facts. Backend storage allocation, target bytecode loop membership, MIR-to-bytecode origin edges, and zext causality are still explicit gaps. Whole-file code-object source attribution is coarse and should be read as low confidence.
 `fe dev trace zext-report` is intentionally absent until compiler phases emit `InsertIntegerZeroExtend` events and value-property facts.
 
 Current fixture and JSONL report commands:

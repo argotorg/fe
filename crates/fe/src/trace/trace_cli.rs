@@ -22,10 +22,11 @@ fn run_dev_trace_command(command: &DevTraceCommand) -> Result<String, String> {
         DevTraceCommand::Status => Ok(
             "fe dev trace is reserved for compiler-derived validated trace JSONL.\n\
              Fixture-backed Fibonacci diagnostics remain under fe dev trace-fixture.\n\
-             compiler-emitted: phase-owned MIR facts, source-local display names, MIR storage reasons, MIR lowering events, value properties, and actual EVM bytecode/gas facts.\n\
+             compiler-emitted: phase-owned MIR facts, source-local display names, MIR storage reasons, MIR lowering events, value properties, Sonatina trace-view CFG/loop facts through the Fe adapter, and actual EVM bytecode/gas facts.\n\
+             coarse: source attribution may fall back to whole-file code-object spans when per-node source edges are missing.\n\
              posthoc: fixture instruction categories and demo loop membership are accepted only when metadata says fixture.\n\
-             available: real Sonatina CFG loop membership when Sonatina trace-view facts are present.\n\
-             unavailable: MIR-to-bytecode origin edges, backend storage allocation, and zext causality hooks are still incomplete.\n\
+             available: real Sonatina CFG loop membership when Sonatina trace-view facts are present, but not target bytecode loop membership.\n\
+             unavailable: MIR-to-bytecode origin edges, backend storage allocation, target bytecode loop membership, and zext causality hooks are still incomplete.\n\
              zext-report is intentionally unavailable until InsertIntegerZeroExtend events and value properties are emitted by compiler phases.\n"
                 .to_string(),
         ),
@@ -79,8 +80,10 @@ mod tests {
 
         assert!(output.contains("Fixture-backed Fibonacci diagnostics"));
         assert!(output.contains("compiler-emitted: phase-owned MIR facts"));
+        assert!(output.contains("coarse: source attribution"));
         assert!(output.contains("posthoc: fixture instruction categories"));
         assert!(output.contains("available: real Sonatina CFG loop membership"));
+        assert!(output.contains("target bytecode loop membership"));
         assert!(output.contains("zext-report is intentionally unavailable"));
         assert!(output.contains("InsertIntegerZeroExtend events"));
     }

@@ -374,7 +374,8 @@ mod tests {
         let loop_cost =
             super::super::trace_render::render_loop_cost_bundle(bundle.clone()).unwrap();
         assert!(loop_cost.contains("Data source: compiler_emitted"));
-        assert!(loop_cost.contains("Static per-iteration cost"));
+        assert!(loop_cost.contains("Compiler-derived loop instruction summary"));
+        assert!(loop_cost.contains("target bytecode loop membership"));
         assert!(!loop_cost.contains("Loop cost unavailable from this trace"));
 
         let loop_contents = super::super::trace_render::render_loop_contents_snapshot(
@@ -382,7 +383,13 @@ mod tests {
         )
         .unwrap();
         assert!(loop_contents.contains("Fe dev trace loop-contents"));
-        assert!(loop_contents.contains("Membership source: compiler-emitted Sonatina CFG"));
+        assert!(
+            loop_contents.contains("Membership source: compiler-emitted Sonatina trace-view CFG")
+        );
+        assert!(
+            loop_contents
+                .contains("target bytecode loop membership requires Sonatina-to-bytecode edges")
+        );
         assert!(loop_contents.contains("Loop blocks:"));
 
         let gas_by_source = super::super::trace_render::render_gas_by_source_snapshot(

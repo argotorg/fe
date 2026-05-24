@@ -1,11 +1,12 @@
+use common::origin::OriginExportKey;
 use trace_facts::{TraceBundle, TraceMetadata, TraceSnapshot, TraceValidationReport};
 use trace_query::{
-    BytecodeSizeBySourceReport, BytecodeSizeBySourceRequest, DynamicGasBySourceReport,
+    BytecodeSizeBySourceReport, BytecodeSizeBySourceRequest, Confidence, DynamicGasBySourceReport,
     DynamicGasBySourceRequest, ExplainLocalReport, ExplainLocalRequest, ExplainPcReport,
     ExplainPcRequest, GasAttributionPolicy, GasBreakdownReport, GasBreakdownRequest,
     GasBySourceReport, GasBySourceRequest, GasToSourceReport, GasToSourceRequest,
     IntrospectionService, LoopContentsReport, LoopContentsRequest, LoopCostReport, LoopCostRequest,
-    OptimizedCodeHonestyReport, OptimizedCodeHonestyRequest, SourceAttribution,
+    OptimizedCodeHonestyReport, OptimizedCodeHonestyRequest, ReportMetadata, SourceAttribution,
     TraceIntrospectionService, VariablesAtPcReport, VariablesAtPcRequest,
 };
 
@@ -24,6 +25,7 @@ pub(super) fn render_validation_summary(
          Origin nodes: {}\n\
          Origin edges: {}\n\
          Instructions: {}\n\
+         Confidence: n/a (schema validation)\n\
          Diagnostics: {} error, {} warning, {} info\n",
         super::format_data_source(metadata),
         metadata.schema_version,
@@ -196,10 +198,7 @@ pub(super) fn render_variables_at_pc_snapshot(
 fn render_loop_cost_report(report: &LoopCostReport) -> String {
     let mut out = String::new();
     out.push_str("Fe dev trace loop-cost\n\n");
-    out.push_str(&format!("Data source: {}\n", report.metadata.data_source));
-    out.push_str("Trace validation: passed\n");
-    out.push_str(&format!("Target: {}\n", report.metadata.target));
-    out.push_str(&format!("Input: {}\n", report.metadata.input_path));
+    push_report_header(&mut out, &report.metadata, report.confidence);
     if let Some(function_label) = report.metadata.function_label() {
         out.push_str(&format!("Function: {function_label}\n"));
     }
@@ -212,7 +211,12 @@ fn render_loop_cost_report(report: &LoopCostReport) -> String {
         out.push_str("Available compiler-derived bytecode summary:\n");
     } else if let Some(loop_label) = &report.loop_label {
         out.push_str(&format!("Loop: {loop_label}\n\n"));
-        out.push_str("Static per-iteration cost:\n");
+        if is_fixture_report(&report.metadata) {
+            out.push_str("Static per-iteration cost (fixture target UX):\n");
+        } else {
+            out.push_str("Compiler-derived loop instruction summary:\n");
+            out.push_str("  cost basis: Sonatina loop membership only; target bytecode loop membership and per-iteration gas require Sonatina-to-bytecode edges.\n");
+        }
     }
 
     out.push_str(&format!(
@@ -310,6 +314,7 @@ fn render_loop_cost_report(report: &LoopCostReport) -> String {
             report.summary.zero_extends,
             report.summary.stack_loads + report.summary.stack_stores
         ));
+        out.push_str("  Target bytecode loop membership is not proven until Sonatina-to-bytecode edges exist.\n");
     }
     out
 }
@@ -317,10 +322,7 @@ fn render_loop_cost_report(report: &LoopCostReport) -> String {
 fn render_loop_contents_report(report: &LoopContentsReport) -> String {
     let mut out = String::new();
     out.push_str("Fe dev trace loop-contents\n\n");
-    out.push_str(&format!("Data source: {}\n", report.metadata.data_source));
-    out.push_str("Trace validation: passed\n");
-    out.push_str(&format!("Target: {}\n", report.metadata.target));
-    out.push_str(&format!("Input: {}\n", report.metadata.input_path));
+    push_report_header(&mut out, &report.metadata, report.confidence);
     if let Some(function_label) = report.metadata.function_label() {
         out.push_str(&format!("Function: {function_label}\n"));
     }
@@ -338,7 +340,10 @@ fn render_loop_contents_report(report: &LoopContentsReport) -> String {
     if let Some(loop_label) = &report.loop_label {
         out.push_str(&format!("Loop: {loop_label}\n"));
     }
-    out.push_str("Membership source: compiler-emitted Sonatina CFG natural-loop analysis\n");
+    out.push_str(
+        "Membership source: compiler-emitted Sonatina trace-view CFG natural-loop analysis\n",
+    );
+    out.push_str("Scope: Sonatina loop membership only; target bytecode loop membership requires Sonatina-to-bytecode edges.\n");
     out.push_str(&format!("Blocks: {}\n", report.blocks.len()));
     out.push_str(&format!("Instructions: {}\n\n", report.instructions.len()));
     out.push_str("Loop blocks:\n");
@@ -369,10 +374,7 @@ fn render_loop_contents_report(report: &LoopContentsReport) -> String {
 fn render_explain_local_report(report: &ExplainLocalReport) -> String {
     let mut out = String::new();
     out.push_str("Fe dev trace explain-local\n\n");
-    out.push_str(&format!("Data source: {}\n", report.metadata.data_source));
-    out.push_str("Trace validation: passed\n");
-    out.push_str(&format!("Target: {}\n", report.metadata.target));
-    out.push_str(&format!("Input: {}\n", report.metadata.input_path));
+    push_report_header(&mut out, &report.metadata, report.confidence);
     if let Some(function_label) = report.metadata.function_label() {
         out.push_str(&format!("Function: {function_label}\n"));
     }
@@ -462,13 +464,9 @@ fn render_explain_local_report(report: &ExplainLocalReport) -> String {
 fn render_gas_breakdown_report(report: &GasBreakdownReport) -> String {
     let mut out = String::new();
     out.push_str("Fe dev trace gas-breakdown\n\n");
-    out.push_str(&format!("Data source: {}\n", report.metadata.data_source));
-    out.push_str("Trace validation: passed\n");
-    out.push_str(&format!("Target: {}\n", report.metadata.target));
-    out.push_str(&format!("Input: {}\n", report.metadata.input_path));
+    push_report_header(&mut out, &report.metadata, report.confidence);
     out.push_str(&format!("Schedule: {}\n", report.schedule));
     out.push_str(&format!("Attribution policy: {}\n", report.policy));
-    out.push_str(&format!("Confidence: {:?}\n", report.confidence));
     out.push_str(
         "Mode: static opcode-table estimate; runtime gas depends on path and EVM state.\n\n",
     );
@@ -498,10 +496,16 @@ fn render_gas_breakdown_report(report: &GasBreakdownReport) -> String {
 fn render_explain_pc_report(report: &ExplainPcReport) -> String {
     let mut out = String::new();
     out.push_str("Fe dev trace explain-pc\n\n");
-    out.push_str(&format!("Data source: {}\n", report.metadata.data_source));
-    out.push_str("Trace validation: passed\n");
-    out.push_str(&format!("Target: {}\n", report.metadata.target));
-    out.push_str(&format!("Input: {}\n", report.metadata.input_path));
+    push_report_header(&mut out, &report.metadata, report.confidence);
+    out.push_str(&format!(
+        "Attribution route: {}\n",
+        attribution_route_from_keys(
+            report
+                .source_candidates
+                .iter()
+                .map(|source| Some(&source.origin))
+        )
+    ));
     out.push_str(&format!("PC: {}\n", report.pc));
 
     let Some(instruction) = &report.instruction else {
@@ -542,13 +546,13 @@ fn render_explain_pc_report(report: &ExplainPcReport) -> String {
 fn render_gas_by_source_report(report: &GasBySourceReport) -> String {
     let mut out = String::new();
     out.push_str("Fe dev trace gas-by-source\n\n");
-    out.push_str(&format!("Data source: {}\n", report.metadata.data_source));
-    out.push_str("Trace validation: passed\n");
-    out.push_str(&format!("Target: {}\n", report.metadata.target));
-    out.push_str(&format!("Input: {}\n", report.metadata.input_path));
+    push_report_header(&mut out, &report.metadata, report.confidence);
     out.push_str(&format!("Schedule: {}\n", report.schedule));
     out.push_str(&format!("Attribution policy: {}\n", report.policy));
-    out.push_str(&format!("Confidence: {:?}\n\n", report.confidence));
+    out.push_str(&format!(
+        "Attribution route: {}\n\n",
+        attribution_route_from_keys(report.rows.iter().map(|row| row.source.as_ref()))
+    ));
     out.push_str(&format!("Total static opcode gas: {}\n", report.total_gas));
 
     if report.rows.is_empty() {
@@ -569,13 +573,13 @@ fn render_gas_by_source_report(report: &GasBySourceReport) -> String {
 fn render_dynamic_gas_by_source_report(report: &DynamicGasBySourceReport) -> String {
     let mut out = String::new();
     out.push_str("Fe dev trace dynamic-gas-by-source\n\n");
-    out.push_str(&format!("Data source: {}\n", report.metadata.data_source));
-    out.push_str("Trace validation: passed\n");
-    out.push_str(&format!("Target: {}\n", report.metadata.target));
-    out.push_str(&format!("Input: {}\n", report.metadata.input_path));
+    push_report_header(&mut out, &report.metadata, report.confidence);
     out.push_str(&format!("Target schedule: {}\n", report.target_schedule));
     out.push_str(&format!("Attribution policy: {}\n", report.policy));
-    out.push_str(&format!("Confidence: {:?}\n", report.confidence));
+    out.push_str(&format!(
+        "Attribution route: {}\n",
+        attribution_route_from_keys(report.rows.iter().map(|row| row.source.as_ref()))
+    ));
     if let Some(trace_id) = &report.trace_id {
         out.push_str(&format!("Trace id: {trace_id}\n"));
     }
@@ -604,12 +608,12 @@ fn render_dynamic_gas_by_source_report(report: &DynamicGasBySourceReport) -> Str
 fn render_bytecode_size_by_source_report(report: &BytecodeSizeBySourceReport) -> String {
     let mut out = String::new();
     out.push_str("Fe dev trace bytecode-size-by-source\n\n");
-    out.push_str(&format!("Data source: {}\n", report.metadata.data_source));
-    out.push_str("Trace validation: passed\n");
-    out.push_str(&format!("Target: {}\n", report.metadata.target));
-    out.push_str(&format!("Input: {}\n", report.metadata.input_path));
+    push_report_header(&mut out, &report.metadata, report.confidence);
     out.push_str(&format!("Attribution policy: {}\n", report.policy));
-    out.push_str(&format!("Confidence: {:?}\n\n", report.confidence));
+    out.push_str(&format!(
+        "Attribution route: {}\n\n",
+        attribution_route_from_keys(report.rows.iter().map(|row| row.source.as_ref()))
+    ));
     out.push_str(&format!(
         "Total emitted bytecode bytes: {}\n",
         report.total_bytes
@@ -633,13 +637,13 @@ fn render_bytecode_size_by_source_report(report: &BytecodeSizeBySourceReport) ->
 fn render_gas_to_source_report(report: &GasToSourceReport) -> String {
     let mut out = String::new();
     out.push_str("Fe dev trace gas-to-source\n\n");
-    out.push_str(&format!("Data source: {}\n", report.metadata.data_source));
-    out.push_str("Trace validation: passed\n");
-    out.push_str(&format!("Target: {}\n", report.metadata.target));
-    out.push_str(&format!("Input: {}\n", report.metadata.input_path));
+    push_report_header(&mut out, &report.metadata, report.confidence);
     out.push_str(&format!("Target schedule: {}\n", report.schedule));
     out.push_str(&format!("Attribution policy: {}\n", report.policy));
-    out.push_str(&format!("Confidence: {:?}\n", report.confidence));
+    out.push_str(&format!(
+        "Attribution route: {}\n",
+        attribution_route_from_keys(report.rows.iter().map(|row| row.source.as_ref()))
+    ));
     if let Some(trace_id) = &report.trace_id {
         out.push_str(&format!("Trace id: {trace_id}\n"));
     }
@@ -666,13 +670,10 @@ fn render_gas_to_source_report(report: &GasToSourceReport) -> String {
 fn render_optimized_code_honesty_report(report: &OptimizedCodeHonestyReport) -> String {
     let mut out = String::new();
     out.push_str("Fe dev trace optimized-code-honesty\n\n");
-    out.push_str(&format!("Data source: {}\n", report.metadata.data_source));
-    out.push_str("Trace validation: passed\n");
-    out.push_str(&format!("Target: {}\n", report.metadata.target));
-    out.push_str(&format!("Input: {}\n", report.metadata.input_path));
+    push_report_header(&mut out, &report.metadata, report.confidence);
     out.push_str(&format!("Target schedule: {}\n", report.schedule));
     out.push_str(&format!("Attribution policy: {}\n", report.policy));
-    out.push_str(&format!("Confidence: {:?}\n\n", report.confidence));
+    out.push('\n');
 
     out.push_str(&format!(
         "Ambiguous instructions: {}\n",
@@ -761,10 +762,7 @@ fn render_optimized_code_honesty_report(report: &OptimizedCodeHonestyReport) -> 
 fn render_variables_at_pc_report(report: &VariablesAtPcReport) -> String {
     let mut out = String::new();
     out.push_str("Fe dev trace variables-at-pc\n\n");
-    out.push_str(&format!("Data source: {}\n", report.metadata.data_source));
-    out.push_str("Trace validation: passed\n");
-    out.push_str(&format!("Target: {}\n", report.metadata.target));
-    out.push_str(&format!("Input: {}\n", report.metadata.input_path));
+    push_report_header(&mut out, &report.metadata, report.confidence);
     out.push_str(&format!("PC: {}\n\n", report.pc));
 
     if report.variables.is_empty() {
@@ -780,6 +778,43 @@ fn render_variables_at_pc_report(report: &VariablesAtPcReport) -> String {
         ));
     }
     out
+}
+
+fn push_report_header(out: &mut String, metadata: &ReportMetadata, confidence: Confidence) {
+    out.push_str(&format!("Data source: {}\n", metadata.data_source));
+    out.push_str("Trace validation: passed\n");
+    out.push_str(&format!("Target: {}\n", metadata.target));
+    out.push_str(&format!("Input: {}\n", metadata.input_path));
+    out.push_str(&format!("Confidence: {confidence:?}\n"));
+}
+
+fn is_fixture_report(metadata: &ReportMetadata) -> bool {
+    metadata.data_source.starts_with("fixture ")
+}
+
+fn attribution_route_from_keys<'a>(
+    keys: impl IntoIterator<Item = Option<&'a OriginExportKey>>,
+) -> &'static str {
+    let mut saw_any = false;
+    let mut saw_unmapped = false;
+    let mut saw_whole_file = false;
+    for key in keys {
+        saw_any = true;
+        match key {
+            Some(key) if key.kind() == "code.object" => saw_whole_file = true,
+            Some(_) => {}
+            None => saw_unmapped = true,
+        }
+    }
+    if !saw_any {
+        "unmapped"
+    } else if saw_unmapped {
+        "mixed_with_unmapped"
+    } else if saw_whole_file {
+        "code_object_whole_file_fallback (low confidence)"
+    } else {
+        "direct_source"
+    }
 }
 
 fn format_source(source: &SourceAttribution) -> String {
