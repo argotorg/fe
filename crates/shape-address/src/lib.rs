@@ -720,27 +720,11 @@ pub fn hash_acyclic_shape_graph(
         )?;
     }
 
-    let roots = root_node_keys(graph);
     let mut graph_digests = DimensionDigests::default();
     for dimension in &policy.dimensions {
         graph_digests.insert(
             *dimension,
-            digest_record(policy, *dimension, "graph.acyclic_roots", |bytes| {
-                if policy.view_mode == ShapeViewMode::IdentityBound {
-                    push_str(bytes, &graph.graph_key.canonical_key());
-                }
-                push_u32(bytes, roots.len() as u32);
-                for root in &roots {
-                    if policy.view_mode == ShapeViewMode::IdentityBound {
-                        push_node_key(bytes, root);
-                    }
-                    let digest = tree
-                        .get(root)
-                        .and_then(|digests| digests.get(*dimension))
-                        .expect("root tree digest was computed");
-                    push_digest(bytes, digest);
-                }
-            })?,
+            graph_digest_for_dimension(policy, graph, &tree, *dimension)?,
         );
     }
 
@@ -867,18 +851,108 @@ fn children_by_parent(graph: &ShapeGraph) -> BTreeMap<ShapeNodeKey, Vec<&ShapeCh
     children_by_parent
 }
 
-fn root_node_keys(graph: &ShapeGraph) -> Vec<ShapeNodeKey> {
-    let child_keys = graph
-        .children
-        .iter()
-        .map(|child| child.child.clone())
-        .collect::<BTreeSet<_>>();
-    graph
+fn graph_digest_for_dimension(
+    policy: &ShapeHashPolicy,
+    graph: &ShapeGraph,
+    tree: &BTreeMap<ShapeNodeKey, DimensionDigests>,
+    dimension: ShapeDimension,
+) -> Result<ShapeDigest, ShapeError> {
+    let mut node_records = graph
         .nodes
         .keys()
-        .filter(|key| !child_keys.contains(*key))
-        .cloned()
-        .collect()
+        .map(|key| {
+            let digest = tree
+                .get(key)
+                .and_then(|digests| digests.get(dimension))
+                .expect("tree digest was computed");
+            (key, digest)
+        })
+        .collect::<Vec<_>>();
+    node_records.sort_by(|left, right| match policy.view_mode {
+        ShapeViewMode::IdentityBound => left.0.canonical_key().cmp(&right.0.canonical_key()),
+        ShapeViewMode::AnonymousShape => left
+            .1
+            .as_str()
+            .cmp(right.1.as_str())
+            .then_with(|| left.0.owner().kind().cmp(right.0.owner().kind())),
+    });
+
+    let mut edge_records = graph
+        .edges
+        .iter()
+        .filter(|edge| edge.role != ShapeEdgeRole::Origin)
+        .map(|edge| {
+            let source_digest = tree
+                .get(&edge.source)
+                .and_then(|digests| digests.get(dimension))
+                .expect("source tree digest was computed");
+            let target_digest = tree
+                .get(&edge.target)
+                .and_then(|digests| digests.get(dimension))
+                .expect("target tree digest was computed");
+            (edge, source_digest, target_digest)
+        })
+        .collect::<Vec<_>>();
+    edge_records.sort_by(|left, right| match policy.view_mode {
+        ShapeViewMode::IdentityBound => (
+            left.0.source.canonical_key(),
+            left.0.role,
+            left.0.label.as_str(),
+            left.0.target.canonical_key(),
+            left.1.as_str(),
+            left.2.as_str(),
+        )
+            .cmp(&(
+                right.0.source.canonical_key(),
+                right.0.role,
+                right.0.label.as_str(),
+                right.0.target.canonical_key(),
+                right.1.as_str(),
+                right.2.as_str(),
+            )),
+        ShapeViewMode::AnonymousShape => (
+            left.1.as_str(),
+            left.0.role,
+            left.0.label.as_str(),
+            left.2.as_str(),
+        )
+            .cmp(&(
+                right.1.as_str(),
+                right.0.role,
+                right.0.label.as_str(),
+                right.2.as_str(),
+            )),
+    });
+
+    digest_record(policy, dimension, "graph.full", |bytes| {
+        if policy.view_mode == ShapeViewMode::IdentityBound {
+            push_str(bytes, &graph.graph_key.canonical_key());
+        }
+
+        push_u32(bytes, node_records.len() as u32);
+        for (key, digest) in &node_records {
+            if policy.view_mode == ShapeViewMode::IdentityBound {
+                push_node_key(bytes, key);
+            }
+            push_digest(bytes, digest);
+        }
+
+        if dimension == ShapeDimension::Structure {
+            push_u32(bytes, edge_records.len() as u32);
+            for (edge, source_digest, target_digest) in &edge_records {
+                if policy.view_mode == ShapeViewMode::IdentityBound {
+                    push_node_key(bytes, &edge.source);
+                    push_node_key(bytes, &edge.target);
+                }
+                push_str(bytes, edge.role.as_str());
+                push_str(bytes, edge.label.as_str());
+                push_digest(bytes, source_digest);
+                push_digest(bytes, target_digest);
+            }
+        } else {
+            push_u32(bytes, 0);
+        }
+    })
 }
 
 fn digest_record(
@@ -1196,5 +1270,112 @@ mod tests {
             hash_acyclic_shape_graph(&policy(ShapeViewMode::IdentityBound), &graph),
             Err(ShapeError::CycleDetected { .. })
         ));
+    }
+
+    #[test]
+    fn graph_edges_are_insertion_order_independent_and_label_sensitive() {
+        let mut first = literal_graph(1);
+        let mut second = literal_graph(1);
+        let body = ShapeNodeKey::entity(origin("hir.body", "demo", "body:0"));
+        let expr = ShapeNodeKey::entity(origin("hir.expr", "demo", "expr:0"));
+        first
+            .add_edge(&body, "cfg:then", &expr, ShapeEdgeRole::Control)
+            .unwrap();
+        first
+            .add_edge(&expr, "data:use", &body, ShapeEdgeRole::Data)
+            .unwrap();
+        second
+            .add_edge(&expr, "data:use", &body, ShapeEdgeRole::Data)
+            .unwrap();
+        second
+            .add_edge(&body, "cfg:then", &expr, ShapeEdgeRole::Control)
+            .unwrap();
+
+        let policy = policy(ShapeViewMode::IdentityBound);
+        assert_eq!(
+            hash_acyclic_shape_graph(&policy, &first)
+                .unwrap()
+                .graph
+                .get(ShapeDimension::Structure),
+            hash_acyclic_shape_graph(&policy, &second)
+                .unwrap()
+                .graph
+                .get(ShapeDimension::Structure)
+        );
+
+        let mut relabeled = literal_graph(1);
+        relabeled
+            .add_edge(&body, "cfg:else", &expr, ShapeEdgeRole::Control)
+            .unwrap();
+        assert_ne!(
+            hash_acyclic_shape_graph(&policy, &first)
+                .unwrap()
+                .graph
+                .get(ShapeDimension::Structure),
+            hash_acyclic_shape_graph(&policy, &relabeled)
+                .unwrap()
+                .graph
+                .get(ShapeDimension::Structure)
+        );
+    }
+
+    #[test]
+    fn graph_edges_do_not_suppress_child_content() {
+        let left = literal_graph(1);
+        let mut right = literal_graph(1);
+        let expr = ShapeNodeKey::entity(origin("hir.expr", "demo", "expr:0"));
+        right.nodes.get_mut(&expr).unwrap().kind =
+            ShapeKind::new("name", "shape node kind").unwrap();
+
+        let policy = policy(ShapeViewMode::AnonymousShape);
+        assert_ne!(
+            hash_acyclic_shape_graph(&policy, &left)
+                .unwrap()
+                .graph
+                .get(ShapeDimension::Structure),
+            hash_acyclic_shape_graph(&policy, &right)
+                .unwrap()
+                .graph
+                .get(ShapeDimension::Structure)
+        );
+    }
+
+    #[test]
+    fn identity_bound_and_anonymous_modes_are_separate() {
+        let left = literal_graph(1);
+        let mut right = ShapeGraph::new(
+            ShapeGraphKey::new(origin("hir.body", "other-owner", "body:0"), "body").unwrap(),
+        );
+        let body = ShapeNodeKey::entity(origin("hir.body", "other-owner", "body:0"));
+        let expr = ShapeNodeKey::entity(origin("hir.expr", "other-owner", "expr:0"));
+        right.add_node(body.clone(), "body").unwrap();
+        right.add_node(expr.clone(), "literal").unwrap();
+        right
+            .add_field(&expr, ShapeDimension::Constants, "value", 1_u64)
+            .unwrap();
+        right.add_child(&body, "expr", 0, &expr).unwrap();
+
+        let identity_policy = policy(ShapeViewMode::IdentityBound);
+        let anonymous_policy = policy(ShapeViewMode::AnonymousShape);
+        assert_ne!(
+            hash_acyclic_shape_graph(&identity_policy, &left)
+                .unwrap()
+                .graph
+                .get(ShapeDimension::Structure),
+            hash_acyclic_shape_graph(&identity_policy, &right)
+                .unwrap()
+                .graph
+                .get(ShapeDimension::Structure)
+        );
+        assert_eq!(
+            hash_acyclic_shape_graph(&anonymous_policy, &left)
+                .unwrap()
+                .graph
+                .get(ShapeDimension::Structure),
+            hash_acyclic_shape_graph(&anonymous_policy, &right)
+                .unwrap()
+                .graph
+                .get(ShapeDimension::Structure)
+        );
     }
 }
