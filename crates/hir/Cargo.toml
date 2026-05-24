@@ -35,6 +35,7 @@ common.workspace = true
 dataflow.workspace = true
 parser.workspace = true
 test-utils.workspace = true
+trybuild = "1.0"
 url.workspace = true
 codespan-reporting.workspace = true
 

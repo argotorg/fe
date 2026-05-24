@@ -9,6 +9,7 @@ pub mod indexmap;
 pub mod ingot;
 pub mod layout;
 pub mod options;
+pub mod origin;
 pub mod paths;
 pub mod stdlib;
 pub mod urlext;
