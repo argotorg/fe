@@ -2116,6 +2116,7 @@ dependencies = [
  "fe-resolver",
  "fe-semantic-indexing",
  "fe-solc-runner",
+ "fe-shape-address",
  "fe-test-utils",
  "fe-trace-facts",
  "fe-trace-query",

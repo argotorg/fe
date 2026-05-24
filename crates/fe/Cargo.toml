@@ -24,6 +24,7 @@ hir.workspace = true
 introspection-config.workspace = true
 rayon = "1"
 mir.workspace = true
+shape-address.workspace = true
 trace-facts.workspace = true
 trace-query.workspace = true
 cranelift-entity.workspace = true
