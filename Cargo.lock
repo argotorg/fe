@@ -2175,6 +2175,7 @@ version = "26.1.0"
 dependencies = [
  "fe-common",
  "fe-trace-facts",
+ "gimli",
  "serde",
 ]
 
@@ -2701,6 +2702,17 @@ dependencies = [
  "r-efi",
  "wasip2",
  "wasip3",
+]
+
+[[package]]
+name = "gimli"
+version = "0.33.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0bf7f043f89559805f8c7cacc432749b2fa0d0a0a9ee46ce47164ed5ba7f126c"
+dependencies = [
+ "fnv",
+ "hashbrown 0.16.1",
+ "indexmap 2.13.0",
 ]
 
 [[package]]
