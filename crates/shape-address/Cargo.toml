@@ -1,0 +1,15 @@
+[package]
+name = "fe-shape-address"
+version = "26.1.0"
+edition.workspace = true
+license = "Apache-2.0"
+repository = "https://github.com/argotorg/fe"
+description = "Derived multi-dimensional shape content addresses for Fe compiler traces."
+
+[lib]
+doctest = false
+
+[dependencies]
+common.workspace = true
+serde = { version = "1.0", features = ["derive"] }
+
