@@ -3,6 +3,7 @@ pub mod cli;
 pub mod combined_server;
 mod fallback;
 mod functionality;
+mod introspection;
 pub mod logging;
 mod lsp_actor;
 mod lsp_diagnostics;

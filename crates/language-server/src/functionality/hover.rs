@@ -16,6 +16,7 @@ use hir::{
     lower::map_file_to_mod,
     span::LazySpan,
 };
+use trace_query::{ExplainLocalRequest, IntrospectionService, TraceIntrospectionService};
 use tracing::debug;
 
 use super::{
@@ -212,6 +213,7 @@ pub fn hover_helper(
     db: &DriverDataBase,
     file: File,
     params: async_lsp::lsp_types::HoverParams,
+    trace_service: Option<&TraceIntrospectionService>,
 ) -> Result<(Option<Hover>, Option<String>), Error> {
     debug!("handling hover");
     let file_text = file.text(db);
@@ -261,7 +263,7 @@ pub fn hover_helper(
     };
 
     // Build hover content
-    let info = if resolution.is_ambiguous() {
+    let mut info = if resolution.is_ambiguous() {
         let mut sections = vec!["**Multiple definitions**\n\n".to_string()];
 
         for (i, target) in resolution.as_slice().iter().enumerate() {
@@ -284,6 +286,10 @@ pub fn hover_helper(
         };
         info
     };
+    if let Some(trace_markdown) = trace_hover_markdown(db, trace_service, r, resolution.first()) {
+        info.push_str("\n---\n");
+        info.push_str(&trace_markdown);
+    }
 
     let result = async_lsp::lsp_types::Hover {
         contents: async_lsp::lsp_types::HoverContents::Markup(
@@ -295,4 +301,53 @@ pub fn hover_helper(
         range: hover_range,
     };
     Ok((Some(result), doc_path))
+}
+
+fn trace_hover_markdown<'db>(
+    db: &'db DriverDataBase,
+    trace_service: Option<&TraceIntrospectionService>,
+    reference: &ReferenceView<'db>,
+    target: Option<&Target<'db>>,
+) -> Option<String> {
+    let trace_service = trace_service?;
+    let Target::Local { .. } = target? else {
+        return None;
+    };
+    let local = local_name_from_reference(db, reference)?;
+    let report = trace_service
+        .explain_local(ExplainLocalRequest {
+            local: local.clone(),
+        })
+        .ok()?;
+    let mut out = String::new();
+    out.push_str("**Trace**\n\n");
+    out.push_str(&format!(
+        "data source: `{}`\n\n",
+        report.metadata.data_source
+    ));
+    if !report.available {
+        out.push_str(
+            report
+                .unavailable_reason
+                .as_deref()
+                .unwrap_or("trace facts do not include enough local attribution for this symbol"),
+        );
+        return Some(out);
+    }
+    if !report.storage_history.is_empty() {
+        out.push_str("Storage history:\n");
+        for storage in report.storage_history.iter().take(4) {
+            out.push_str(&format!(
+                "- {}: {} ({})\n",
+                storage.phase, storage.location, storage.reason
+            ));
+        }
+    }
+    if !report.zero_extends.is_empty() {
+        out.push_str(&format!(
+            "\nZero-extends attributed to `{local}`: {}\n",
+            report.zero_extends.len()
+        ));
+    }
+    Some(out)
 }

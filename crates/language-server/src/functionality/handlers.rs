@@ -806,10 +806,35 @@ pub async fn handle_hover_request(
     };
 
     debug!("handling hover request in file: {:?}", file);
-    let (response, doc_path) = hover_helper(&backend.db, file, message).unwrap_or_else(|e| {
-        error!("Error handling hover: {:?}", e);
-        (None, None)
-    });
+    let trace_service = if backend.tooling_config().lsp.trace.emit_jsonl
+        && backend.tooling_config().lsp.hover.storage_history
+    {
+        let config = backend.tooling_config().clone();
+        let url_for_trace = url.clone();
+        match backend
+            .spawn_on_workers(move |db| {
+                crate::introspection::service_for_file(db, &url_for_trace, config)
+            })
+            .await
+        {
+            Ok(Ok(service)) => service,
+            Ok(Err(err)) => {
+                debug!("hover trace service unavailable: {err}");
+                None
+            }
+            Err(err) => {
+                debug!("hover trace worker failed: {err}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let (response, doc_path) = hover_helper(&backend.db, file, message, trace_service.as_ref())
+        .unwrap_or_else(|e| {
+            error!("Error handling hover: {:?}", e);
+            (None, None)
+        });
 
     if let Some(path) = doc_path {
         backend.notify_doc_navigate(path);

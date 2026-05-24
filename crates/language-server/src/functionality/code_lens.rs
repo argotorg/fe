@@ -99,7 +99,7 @@ pub async fn handle_code_lens(
         }
     }
 
-    // Add codegen view lenses (static, no computation needed)
+    // Add codegen and trace entry-point lenses (static, no computation needed).
     let codegen_range = async_lsp::lsp_types::Range {
         start: async_lsp::lsp_types::Position {
             line: 0,
@@ -111,7 +111,19 @@ pub async fn handle_code_lens(
         },
     };
     let uri_string = params.text_document.uri.to_string();
-    for (label, cmd) in [("MIR", "fe.viewMir"), ("Sonatina IR", "fe.viewSonatinaIr")] {
+    let mut static_lenses = vec![("MIR", "fe.viewMir"), ("Sonatina IR", "fe.viewSonatinaIr")];
+    let code_lens = &backend.tooling_config().lsp.code_lens;
+    if code_lens.trace_loop {
+        static_lenses.push(("Trace loop", "fe.traceLoop"));
+        static_lenses.push(("Explain local", "fe.explainLocal"));
+    }
+    if code_lens.gas_breakdown {
+        static_lenses.push(("Gas breakdown", "fe.gasBreakdown"));
+    }
+    if code_lens.open_graph {
+        static_lenses.push(("Open origin graph", "fe.openOriginGraph"));
+    }
+    for (label, cmd) in static_lenses {
         lenses.push(CodeLens {
             range: codegen_range,
             command: Some(Command {

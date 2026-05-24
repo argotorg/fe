@@ -245,7 +245,13 @@ mod tests {
     /// these tests.
     fn test_backend() -> Backend {
         let (_main_loop, client_socket) = MainLoop::new_server(|_client| Router::<()>::new(()));
-        Backend::new(client_socket, None, None, None, FeToolingConfig::default())
+        Backend::new(
+            client_socket,
+            None,
+            None,
+            None,
+            introspection_config::FeToolingConfig::default(),
+        )
     }
 
     /// Regression test: `spawn_on_workers` must `catch_unwind` inside the

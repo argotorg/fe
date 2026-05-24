@@ -83,6 +83,10 @@ pub(crate) fn server_capabilities() -> ServerCapabilities {
                 "fe.viewMir".into(),
                 "fe.viewSonatinaIr".into(),
                 "fe.openDocs".into(),
+                "fe.traceLoop".into(),
+                "fe.explainLocal".into(),
+                "fe.gasBreakdown".into(),
+                "fe.openOriginGraph".into(),
             ],
             ..Default::default()
         }),

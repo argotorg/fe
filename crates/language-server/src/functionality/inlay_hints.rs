@@ -9,6 +9,8 @@ use hir::{
     lower::map_file_to_mod,
     visitor::prelude::*,
 };
+use introspection_config::{HintMode, LoopHintMode};
+use trace_query::{GasBreakdownRequest, IntrospectionService, LoopCostRequest};
 
 pub async fn handle_inlay_hints(
     backend: &Backend,
@@ -35,9 +37,91 @@ pub async fn handle_inlay_hints(
     if config.types {
         collect_hints_from_mod(&backend.db, top_mod, &mut hints);
     }
+    collect_trace_hints(backend, &url, params.range.start, &mut hints).await;
     hints.truncate(backend.tooling_config().lsp.max_hints_per_file);
 
     Ok(Some(hints))
+}
+
+async fn collect_trace_hints(
+    backend: &Backend,
+    url: &url::Url,
+    position: async_lsp::lsp_types::Position,
+    hints: &mut Vec<InlayHint>,
+) {
+    let config = backend.tooling_config().clone();
+    let inlay = &config.lsp.inlay_hints;
+    let wants_loop = inlay.loop_cost != LoopHintMode::Off;
+    let wants_gas = config.lsp.gas.enabled && inlay.gas != HintMode::Off;
+    if !wants_loop && !wants_gas {
+        return;
+    }
+
+    let url = url.clone();
+    let gas_schedule = config.lsp.gas.schedule.clone();
+    let service_config = config.clone();
+    let service = match backend
+        .spawn_on_workers(move |db| {
+            crate::introspection::service_for_file(db, &url, service_config)
+        })
+        .await
+    {
+        Ok(Ok(Some(service))) => service,
+        Ok(Ok(None)) => return,
+        Ok(Err(err)) => {
+            tracing::debug!("trace inlay service unavailable: {err}");
+            return;
+        }
+        Err(err) => {
+            tracing::debug!("trace inlay worker failed: {err}");
+            return;
+        }
+    };
+
+    if wants_loop
+        && let Ok(report) = service.loop_cost(LoopCostRequest::default())
+        && report.available
+    {
+        hints.push(InlayHint {
+            position,
+            label: InlayHintLabel::String(format!(
+                " trace: {} inst/iter",
+                report.summary.total_instructions
+            )),
+            kind: Some(InlayHintKind::PARAMETER),
+            text_edits: None,
+            tooltip: Some(async_lsp::lsp_types::InlayHintTooltip::String(format!(
+                "Trace-backed loop cost from {} ({})",
+                report.metadata.data_source,
+                format!("{:?}", report.confidence)
+            ))),
+            padding_left: Some(true),
+            padding_right: None,
+            data: None,
+        });
+    }
+
+    if wants_gas
+        && let Ok(report) = service.gas_breakdown(GasBreakdownRequest {
+            schedule: gas_schedule,
+        })
+        && report.available
+        && let Some(total_gas) = report.total_gas
+    {
+        hints.push(InlayHint {
+            position,
+            label: InlayHintLabel::String(format!(" ~{total_gas} gas static")),
+            kind: Some(InlayHintKind::PARAMETER),
+            text_edits: None,
+            tooltip: Some(async_lsp::lsp_types::InlayHintTooltip::String(format!(
+                "Static gas estimate under {} schedule",
+                report.schedule
+            ))),
+            padding_left: Some(true),
+            padding_right: None,
+            data: None,
+        });
+    }
 }
 
 fn collect_hints_from_mod(db: &DriverDataBase, top_mod: TopLevelMod, hints: &mut Vec<InlayHint>) {

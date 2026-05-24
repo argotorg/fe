@@ -60,6 +60,16 @@ pub async fn handle_execute_command(
     if params.command == "fe.openDocs" {
         return handle_open_docs(backend, &params.arguments).await;
     }
+    if matches!(
+        params.command.as_str(),
+        "fe.traceLoop" | "fe.explainLocal" | "fe.gasBreakdown" | "fe.openOriginGraph"
+    ) {
+        return Ok(Some(serde_json::json!({
+            "status": "trace command accepted",
+            "command": params.command,
+            "note": "live CLI/LSP HTTP execution is wired in the next phase; reports are served by trace-query"
+        })));
+    }
 
     let kind = match params.command.as_str() {
         "fe.viewMir" => CodegenKind::Mir,
