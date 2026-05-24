@@ -545,6 +545,8 @@ pub enum DevTraceQueryCommand {
     DynamicGasBySource(DevTraceDynamicGasArgs),
     /// Combine static opcode gas and measured runtime gas by source attribution.
     GasToSource(DevTraceGasToSourceArgs),
+    /// Report ambiguous, synthetic, and unmapped optimized-code attribution.
+    OptimizedCodeHonesty(DevTraceInputArgs),
     /// Show variable locations active at a bytecode PC.
     VariablesAtPc(DevTracePcArgs),
 }

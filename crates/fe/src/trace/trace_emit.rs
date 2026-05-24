@@ -92,6 +92,12 @@ pub(super) fn run_trace_gas_to_source(args: &DevTraceGasToSourceArgs) -> Result<
     )
 }
 
+pub(super) fn run_trace_optimized_code_honesty(args: &DevTraceInputArgs) -> Result<String, String> {
+    super::trace_render::render_optimized_code_honesty_snapshot(
+        read_trace_snapshot_jsonl_from_path(&args.from)?,
+    )
+}
+
 pub(super) fn run_trace_variables_at_pc(args: &DevTracePcArgs) -> Result<String, String> {
     super::trace_render::render_variables_at_pc_snapshot(
         read_trace_snapshot_jsonl_from_path(&args.from)?,

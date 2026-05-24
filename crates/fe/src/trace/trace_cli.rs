@@ -51,6 +51,9 @@ fn run_trace_query_command(command: &DevTraceQueryCommand) -> Result<String, Str
             super::trace_emit::run_trace_dynamic_gas_by_source(args)
         }
         DevTraceQueryCommand::GasToSource(args) => super::trace_emit::run_trace_gas_to_source(args),
+        DevTraceQueryCommand::OptimizedCodeHonesty(args) => {
+            super::trace_emit::run_trace_optimized_code_honesty(args)
+        }
         DevTraceQueryCommand::VariablesAtPc(args) => {
             super::trace_emit::run_trace_variables_at_pc(args)
         }

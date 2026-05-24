@@ -27,6 +27,10 @@ pub trait IntrospectionService {
         request: DynamicGasBySourceRequest,
     ) -> QueryResult<DynamicGasBySourceReport>;
     fn gas_to_source(&self, request: GasToSourceRequest) -> QueryResult<GasToSourceReport>;
+    fn optimized_code_honesty(
+        &self,
+        request: OptimizedCodeHonestyRequest,
+    ) -> QueryResult<OptimizedCodeHonestyReport>;
     fn variables_at_pc(&self, request: VariablesAtPcRequest) -> QueryResult<VariablesAtPcReport>;
 }
 
@@ -404,6 +408,70 @@ impl IntrospectionService for TraceIntrospectionService {
         })
     }
 
+    fn optimized_code_honesty(
+        &self,
+        request: OptimizedCodeHonestyRequest,
+    ) -> QueryResult<OptimizedCodeHonestyReport> {
+        let index = TraceIndex::new(&self.snapshot);
+        let schedule = request.schedule.unwrap_or_else(default_gas_schedule);
+        let mut ambiguous_instructions = Vec::new();
+        let mut synthetic_overheads = Vec::new();
+        let mut unmapped_instructions = Vec::new();
+
+        for instruction_key in index.all_instruction_keys() {
+            let Some(instruction) = index.instruction_row(&instruction_key) else {
+                continue;
+            };
+            let source_candidates = index.source_candidates_for_instruction(&instruction_key);
+            let static_gas = index.static_gas_for_instruction(&instruction_key, &schedule);
+            let dynamic_gas = index.dynamic_gas_for_instruction(&instruction_key);
+
+            if source_candidates.len() > 1 {
+                ambiguous_instructions.push(AmbiguousInstructionOriginRow {
+                    instruction: instruction.clone(),
+                    source_candidates,
+                    static_gas,
+                    dynamic_gas,
+                    confidence: Confidence::Low,
+                });
+                continue;
+            }
+
+            let synthetic_edges = index.synthetic_edges_from(&instruction_key);
+            if !synthetic_edges.is_empty() {
+                let cause_sources = synthetic_edges
+                    .iter()
+                    .flat_map(|edge| index.source_candidates_for_instruction(&edge.to))
+                    .collect::<Vec<_>>();
+                if !cause_sources.is_empty() {
+                    synthetic_overheads.push(SyntheticOverheadRow {
+                        instruction: instruction.clone(),
+                        cause_sources,
+                        edge_labels: synthetic_edges.iter().map(|edge| edge.label).collect(),
+                        static_gas,
+                        dynamic_gas,
+                        confidence: Confidence::Medium,
+                    });
+                    continue;
+                }
+            }
+
+            if source_candidates.is_empty() {
+                unmapped_instructions.push(instruction);
+            }
+        }
+
+        Ok(OptimizedCodeHonestyReport {
+            metadata: ReportMetadata::from_snapshot(&self.snapshot),
+            schedule,
+            policy: "precision-honest-v1".to_string(),
+            ambiguous_instructions,
+            synthetic_overheads,
+            unmapped_instructions,
+            confidence: Confidence::Medium,
+        })
+    }
+
     fn variables_at_pc(&self, request: VariablesAtPcRequest) -> QueryResult<VariablesAtPcReport> {
         let index = TraceIndex::new(&self.snapshot);
         let variables = index.variables_at_pc(request.pc, request.code_object.as_ref());
@@ -495,6 +563,12 @@ impl Default for GasToSourceRequest {
             policy: GasAttributionPolicy::default(),
         }
     }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OptimizedCodeHonestyRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schedule: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -597,6 +671,10 @@ pub enum TraceQueryRequest {
         #[serde(default)]
         policy: GasAttributionPolicy,
     },
+    OptimizedCodeHonesty {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        schedule: Option<String>,
+    },
     VariablesAtPc {
         pc: u32,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -647,6 +725,10 @@ impl TraceQueryRequest {
         }
     }
 
+    pub fn optimized_code_honesty() -> Self {
+        Self::OptimizedCodeHonesty { schedule: None }
+    }
+
     pub fn variables_at_pc(pc: u32) -> Self {
         Self::VariablesAtPc {
             pc,
@@ -677,6 +759,7 @@ pub enum TraceQueryReport {
     GasBySource(GasBySourceReport),
     DynamicGasBySource(DynamicGasBySourceReport),
     GasToSource(GasToSourceReport),
+    OptimizedCodeHonesty(OptimizedCodeHonestyReport),
     VariablesAtPc(VariablesAtPcReport),
 }
 
@@ -714,6 +797,9 @@ pub fn run_trace_query(
                 policy,
             })
             .map(TraceQueryReport::GasToSource),
+        TraceQueryRequest::OptimizedCodeHonesty { schedule } => service
+            .optimized_code_honesty(OptimizedCodeHonestyRequest { schedule })
+            .map(TraceQueryReport::OptimizedCodeHonesty),
         TraceQueryRequest::VariablesAtPc { pc, code_object } => service
             .variables_at_pc(VariablesAtPcRequest { pc, code_object })
             .map(TraceQueryReport::VariablesAtPc),
@@ -818,6 +904,36 @@ pub struct GasToSourceRow {
     pub dynamic_gas: u64,
     pub total_gas: u64,
     pub instruction_count: usize,
+    pub confidence: Confidence,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OptimizedCodeHonestyReport {
+    pub metadata: ReportMetadata,
+    pub schedule: String,
+    pub policy: String,
+    pub ambiguous_instructions: Vec<AmbiguousInstructionOriginRow>,
+    pub synthetic_overheads: Vec<SyntheticOverheadRow>,
+    pub unmapped_instructions: Vec<InstructionRow>,
+    pub confidence: Confidence,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AmbiguousInstructionOriginRow {
+    pub instruction: InstructionRow,
+    pub source_candidates: Vec<SourceAttribution>,
+    pub static_gas: Option<u64>,
+    pub dynamic_gas: u64,
+    pub confidence: Confidence,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyntheticOverheadRow {
+    pub instruction: InstructionRow,
+    pub cause_sources: Vec<SourceAttribution>,
+    pub edge_labels: Vec<OriginEdgeLabel>,
+    pub static_gas: Option<u64>,
+    pub dynamic_gas: u64,
     pub confidence: Confidence,
 }
 
@@ -1451,6 +1567,44 @@ impl<'a> TraceIndex<'a> {
         })
     }
 
+    fn synthetic_edges_from(
+        &self,
+        instruction: &OriginExportKey,
+    ) -> Vec<&'a trace_facts::OriginEdgeFact> {
+        self.snapshot
+            .facts()
+            .iter()
+            .filter_map(|fact| match fact {
+                TraceFact::OriginEdge(edge)
+                    if &edge.from == instruction
+                        && matches!(
+                            edge.label,
+                            OriginEdgeLabel::SyntheticFor
+                                | OriginEdgeLabel::BackendPrepared
+                                | OriginEdgeLabel::Unmapped
+                        ) =>
+                {
+                    Some(edge)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn dynamic_gas_for_instruction(&self, instruction: &OriginExportKey) -> u64 {
+        self.dynamic_gas_steps(None)
+            .into_iter()
+            .filter(|step| {
+                step.instruction.as_ref() == Some(instruction)
+                    || step.instruction.is_none()
+                        && self
+                            .instruction_for_dynamic_step(step)
+                            .is_some_and(|row| &row.key == instruction)
+            })
+            .map(|step| step.gas_cost)
+            .sum()
+    }
+
     fn source_candidates_for_instruction(
         &self,
         instruction: &OriginExportKey,
@@ -1724,9 +1878,9 @@ mod tests {
 
     use super::{
         DynamicGasBySourceRequest, ExplainLocalRequest, ExplainPcRequest, GasBySourceRequest,
-        GasToSourceRequest, IntrospectionService, LoopCostRequest, TraceIntrospectionService,
-        TraceQueryHttpRequest, TraceQueryReport, TraceQueryRequest, VariablesAtPcRequest,
-        run_trace_query,
+        GasToSourceRequest, IntrospectionService, LoopCostRequest, OptimizedCodeHonestyRequest,
+        TraceIntrospectionService, TraceQueryHttpRequest, TraceQueryReport, TraceQueryRequest,
+        VariablesAtPcRequest, run_trace_query,
     };
 
     fn key(kind: &str, owner: &str, local: &str) -> OriginExportKey {
@@ -1743,6 +1897,7 @@ mod tests {
     fn demo_service() -> TraceIntrospectionService {
         let source_file = key("source.file", "demo", "fib.fe");
         let source_expr = key("hir.expr", "demo", "expr:b");
+        let source_expr_alt = key("hir.expr", "demo", "expr:c");
         let code_object = key("code.object", "demo", "runtime");
         let function = key("function", "demo", "recv");
         let loop_key = key("loop", "demo", "while:i<n");
@@ -1750,10 +1905,13 @@ mod tests {
         let ty = key("type", "demo", "u32");
         let inst = key("bytecode.pc", "demo", "pc:0");
         let zext = key("bytecode.pc", "demo", "pc:1");
+        let ambiguous = key("bytecode.pc", "demo", "pc:2");
+        let synthetic = key("bytecode.pc", "demo", "pc:3");
         let event = key("compiler.event", "demo", "event:0");
         let facts = vec![
             node(source_file.clone()),
             node(source_expr.clone()),
+            node(source_expr_alt.clone()),
             node(code_object.clone()),
             node(function.clone()),
             node(loop_key.clone()),
@@ -1761,6 +1919,8 @@ mod tests {
             node(ty.clone()),
             node(inst.clone()),
             node(zext.clone()),
+            node(ambiguous.clone()),
+            node(synthetic.clone()),
             node(event.clone()),
             TraceFact::SourceFile(SourceFileFact::new(
                 source_file.clone(),
@@ -1771,13 +1931,23 @@ mod tests {
             )),
             TraceFact::SourceSpan(SourceSpanFact::new(
                 source_expr.clone(),
-                source_file,
+                source_file.clone(),
                 10,
                 11,
                 2,
                 8,
                 2,
                 9,
+            )),
+            TraceFact::SourceSpan(SourceSpanFact::new(
+                source_expr_alt.clone(),
+                source_file,
+                12,
+                13,
+                2,
+                10,
+                2,
+                11,
             )),
             TraceFact::CodeObject(CodeObjectFact::new(
                 code_object.clone(),
@@ -1833,7 +2003,19 @@ mod tests {
                 0,
                 "lw",
             )),
-            TraceFact::Instruction(InstructionFact::new(zext.clone(), function, 1, "slli")),
+            TraceFact::Instruction(InstructionFact::new(
+                zext.clone(),
+                function.clone(),
+                1,
+                "slli",
+            )),
+            TraceFact::Instruction(InstructionFact::new(
+                ambiguous.clone(),
+                function.clone(),
+                2,
+                "add",
+            )),
+            TraceFact::Instruction(InstructionFact::new(synthetic.clone(), function, 3, "dup")),
             TraceFact::InstructionCategory(InstructionCategoryFact::new(
                 inst.clone(),
                 InstructionCategory::StackLoad,
@@ -1866,7 +2048,7 @@ mod tests {
             )),
             TraceFact::OriginEdge(OriginEdgeFact::new(
                 local.clone(),
-                source_expr,
+                source_expr.clone(),
                 OriginEdgeLabel::LoweredFrom,
                 Some(CompilerPhase::Mir),
             )),
@@ -1874,6 +2056,24 @@ mod tests {
                 zext.clone(),
                 local.clone(),
                 OriginEdgeLabel::IntegerLegalizationFor,
+                Some(CompilerPhase::Backend),
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                ambiguous.clone(),
+                source_expr.clone(),
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::Backend),
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                ambiguous,
+                source_expr_alt,
+                OriginEdgeLabel::LoweredFrom,
+                Some(CompilerPhase::Backend),
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                synthetic.clone(),
+                source_expr.clone(),
+                OriginEdgeLabel::SyntheticFor,
                 Some(CompilerPhase::Backend),
             )),
             TraceFact::CompilerEvent(CompilerEventFact::new(
@@ -1925,12 +2125,22 @@ mod tests {
             TraceFact::DynamicGasStep(DynamicGasStepFact::new(
                 "tx:1",
                 1,
-                code_object,
+                code_object.clone(),
                 1,
                 None,
                 93,
                 90,
                 3,
+            )),
+            TraceFact::DynamicGasStep(DynamicGasStepFact::new(
+                "tx:synthetic",
+                0,
+                code_object,
+                3,
+                Some(synthetic),
+                90,
+                85,
+                5,
             )),
         ];
         let snapshot = TraceSnapshot::new(TraceBundle::new(
@@ -2049,6 +2259,23 @@ mod tests {
     }
 
     #[test]
+    fn optimized_code_honesty_reports_ambiguous_and_synthetic_work() {
+        let report = demo_service()
+            .optimized_code_honesty(OptimizedCodeHonestyRequest::default())
+            .unwrap();
+
+        assert_eq!(report.policy, "precision-honest-v1");
+        assert_eq!(report.ambiguous_instructions.len(), 1);
+        assert_eq!(report.ambiguous_instructions[0].source_candidates.len(), 2);
+        assert_eq!(report.synthetic_overheads.len(), 1);
+        assert_eq!(report.synthetic_overheads[0].dynamic_gas, 5);
+        assert_eq!(
+            report.synthetic_overheads[0].cause_sources[0].label,
+            "fib.fe:2:8-2:9"
+        );
+    }
+
+    #[test]
     fn variables_at_pc_reports_location_ranges() {
         let report = demo_service()
             .variables_at_pc(VariablesAtPcRequest {
@@ -2108,6 +2335,10 @@ mod tests {
         assert!(matches!(
             run_trace_query(&service, TraceQueryRequest::gas_to_source("cancun")).unwrap(),
             TraceQueryReport::GasToSource(_)
+        ));
+        assert!(matches!(
+            run_trace_query(&service, TraceQueryRequest::optimized_code_honesty()).unwrap(),
+            TraceQueryReport::OptimizedCodeHonesty(_)
         ));
         assert!(matches!(
             run_trace_query(&service, TraceQueryRequest::variables_at_pc(0)).unwrap(),

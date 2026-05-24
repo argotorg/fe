@@ -3,7 +3,8 @@ use trace_query::{
     DynamicGasBySourceReport, DynamicGasBySourceRequest, ExplainLocalReport, ExplainLocalRequest,
     ExplainPcReport, ExplainPcRequest, GasAttributionPolicy, GasBreakdownReport,
     GasBreakdownRequest, GasBySourceReport, GasBySourceRequest, GasToSourceReport,
-    GasToSourceRequest, IntrospectionService, LoopCostReport, LoopCostRequest, SourceAttribution,
+    GasToSourceRequest, IntrospectionService, LoopCostReport, LoopCostRequest,
+    OptimizedCodeHonestyReport, OptimizedCodeHonestyRequest, SourceAttribution,
     TraceIntrospectionService, VariablesAtPcReport, VariablesAtPcRequest,
 };
 
@@ -144,6 +145,16 @@ pub(super) fn render_gas_to_source_snapshot(
         })
         .map_err(|err| err.to_string())?;
     Ok(render_gas_to_source_report(&report))
+}
+
+pub(super) fn render_optimized_code_honesty_snapshot(
+    snapshot: TraceSnapshot,
+) -> Result<String, String> {
+    let service = TraceIntrospectionService::new(snapshot);
+    let report = service
+        .optimized_code_honesty(OptimizedCodeHonestyRequest::default())
+        .map_err(|err| err.to_string())?;
+    Ok(render_optimized_code_honesty_report(&report))
 }
 
 pub(super) fn render_variables_at_pc_snapshot(
@@ -545,6 +556,101 @@ fn render_gas_to_source_report(report: &GasToSourceReport) -> String {
             "  {:>4} total  {:>4} static  {:>4} dynamic  {:<8?} {}\n",
             row.total_gas, row.static_gas, row.dynamic_gas, row.confidence, row.label
         ));
+    }
+    out
+}
+
+fn render_optimized_code_honesty_report(report: &OptimizedCodeHonestyReport) -> String {
+    let mut out = String::new();
+    out.push_str("Fe dev trace optimized-code-honesty\n\n");
+    out.push_str(&format!("Data source: {}\n", report.metadata.data_source));
+    out.push_str("Trace validation: passed\n");
+    out.push_str(&format!("Target: {}\n", report.metadata.target));
+    out.push_str(&format!("Input: {}\n", report.metadata.input_path));
+    out.push_str(&format!("Target schedule: {}\n", report.schedule));
+    out.push_str(&format!("Attribution policy: {}\n", report.policy));
+    out.push_str(&format!("Confidence: {:?}\n\n", report.confidence));
+
+    out.push_str(&format!(
+        "Ambiguous instructions: {}\n",
+        report.ambiguous_instructions.len()
+    ));
+    out.push_str(&format!(
+        "Synthetic overhead instructions: {}\n",
+        report.synthetic_overheads.len()
+    ));
+    out.push_str(&format!(
+        "Unmapped instructions: {}\n",
+        report.unmapped_instructions.len()
+    ));
+
+    if !report.ambiguous_instructions.is_empty() {
+        out.push_str("\nAmbiguous source candidates:\n");
+        for row in report.ambiguous_instructions.iter().take(12) {
+            out.push_str(&format!(
+                "  asm[{}] {}: {} candidate source(s)",
+                row.instruction.index,
+                row.instruction.mnemonic,
+                row.source_candidates.len()
+            ));
+            if let Some(gas) = row.static_gas {
+                out.push_str(&format!(", static gas {gas}"));
+            }
+            if row.dynamic_gas > 0 {
+                out.push_str(&format!(", dynamic gas {}", row.dynamic_gas));
+            }
+            out.push('\n');
+            for source in &row.source_candidates {
+                out.push_str(&format!("    candidate: {}\n", format_source(source)));
+            }
+        }
+    }
+
+    if !report.synthetic_overheads.is_empty() {
+        out.push_str("\nSynthetic compiler overhead:\n");
+        for row in report.synthetic_overheads.iter().take(12) {
+            let labels = row
+                .edge_labels
+                .iter()
+                .map(|label| format!("{label:?}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            out.push_str(&format!(
+                "  asm[{}] {} ({labels})",
+                row.instruction.index, row.instruction.mnemonic
+            ));
+            if let Some(gas) = row.static_gas {
+                out.push_str(&format!(", static gas {gas}"));
+            }
+            if row.dynamic_gas > 0 {
+                out.push_str(&format!(", dynamic gas {}", row.dynamic_gas));
+            }
+            out.push('\n');
+            for source in &row.cause_sources {
+                out.push_str(&format!("    caused by: {}\n", format_source(source)));
+            }
+        }
+    }
+
+    if !report.unmapped_instructions.is_empty() {
+        out.push_str("\nUnmapped instructions:\n");
+        for instruction in report.unmapped_instructions.iter().take(20) {
+            out.push_str(&format!(
+                "  asm[{}] {} has no recorded source or synthetic-cause edge\n",
+                instruction.index, instruction.mnemonic
+            ));
+        }
+    }
+
+    if report.ambiguous_instructions.is_empty()
+        && report.synthetic_overheads.is_empty()
+        && report.unmapped_instructions.is_empty()
+    {
+        out.push_str("\nNo attribution ambiguity, synthetic overhead, or unmapped instructions were reported.\n");
+    } else {
+        out.push_str(
+            "\nHonesty note: this report preserves ambiguity instead of selecting a source the compiler did not record.\n",
+        );
     }
     out
 }
