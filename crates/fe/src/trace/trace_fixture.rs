@@ -278,6 +278,11 @@ mod tests {
         )
         .unwrap();
 
+        assert!(
+            report.contains("Data source: fixture (fib_demo_codegen_ux_v1; not compiler-derived)")
+        );
+        assert!(!report.contains("Data source: compiler_emitted"));
+        assert!(report.contains("Static per-iteration cost"));
         assert!(report.contains("total instructions: 13"));
         assert!(report.contains("zero-extends: 4"));
         assert!(report.contains("i: 2 zero-extend instructions"));

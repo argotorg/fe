@@ -22,8 +22,9 @@ fn run_dev_trace_command(command: &DevTraceCommand) -> Result<String, String> {
         DevTraceCommand::Status => Ok(
             "fe dev trace is reserved for compiler-derived validated trace JSONL.\n\
              Fixture-backed Fibonacci diagnostics remain under fe dev trace-fixture.\n\
-             Real trace emission currently includes phase-owned MIR facts, source-local display names, MIR storage reasons, MIR lowering events, value properties, and actual EVM bytecode/gas facts.\n\
-             Loop membership, MIR-to-bytecode origin edges, backend storage allocation, and zext causality hooks are still incomplete.\n\
+             compiler-emitted: phase-owned MIR facts, source-local display names, MIR storage reasons, MIR lowering events, value properties, and actual EVM bytecode/gas facts.\n\
+             posthoc: fixture instruction categories and demo loop membership are accepted only when metadata says fixture.\n\
+             unavailable: real loop membership, MIR-to-bytecode origin edges, backend storage allocation, and zext causality hooks are still incomplete.\n\
              zext-report is intentionally unavailable until InsertIntegerZeroExtend events and value properties are emitted by compiler phases.\n"
                 .to_string(),
         ),
@@ -68,6 +69,10 @@ mod tests {
     fn status_keeps_zext_report_gated_on_compiler_facts() {
         let output = run_dev_trace_command(&DevTraceCommand::Status).unwrap();
 
+        assert!(output.contains("Fixture-backed Fibonacci diagnostics"));
+        assert!(output.contains("compiler-emitted: phase-owned MIR facts"));
+        assert!(output.contains("posthoc: fixture instruction categories"));
+        assert!(output.contains("unavailable: real loop membership"));
         assert!(output.contains("zext-report is intentionally unavailable"));
         assert!(output.contains("InsertIntegerZeroExtend events"));
     }

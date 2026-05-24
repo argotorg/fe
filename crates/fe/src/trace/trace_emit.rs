@@ -241,10 +241,20 @@ mod tests {
         );
         assert!(summary.instruction_count > 0);
         assert!(
-            super::super::trace_render::render_loop_cost_bundle(bundle.clone())
-                .unwrap()
-                .contains("Loop cost unavailable from this trace")
+            !bundle
+                .facts
+                .iter()
+                .any(|fact| matches!(fact, trace_facts::TraceFact::LoopMembership(_))),
+            "real Fibonacci trace must not silently invent loop membership"
         );
+        let loop_cost =
+            super::super::trace_render::render_loop_cost_bundle(bundle.clone()).unwrap();
+        assert!(loop_cost.contains("Data source: compiler_emitted"));
+        assert!(loop_cost.contains("Loop cost unavailable from this trace"));
+        assert!(loop_cost.contains("compiler-derived LoopMembershipFact rows are not emitted yet"));
+        assert!(loop_cost.contains("Available compiler-derived bytecode summary"));
+        assert!(loop_cost.contains("Required next facts: loop membership"));
+        assert!(!loop_cost.contains("Static per-iteration cost"));
 
         let explain = super::super::trace_render::render_explain_local_bundle(bundle, "b").unwrap();
         assert!(explain.contains("Why b is memory-backed in MIR"));
