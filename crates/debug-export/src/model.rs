@@ -1,11 +1,14 @@
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::{
+    cell::{Cell, RefCell},
+    collections::{BTreeMap, BTreeSet, VecDeque},
+};
 
 use common::origin::OriginExportKey;
 use serde::{Deserialize, Serialize};
 use trace_facts::{
-    CodeObjectFact, FunctionFact, GasCostFact, GasKind, InstructionCategory, InstructionFact,
-    LocationRangeFact, OpcodeFact, OriginEdgeFact, OriginEdgeLabel, PcRange, SourceSpanFact,
-    StaticGasFact, TraceDataSource, TraceFact, TraceSnapshot,
+    CodeObjectFact, FunctionFact, GasCostFact, GasKind, InstructionCategory, InstructionExtentFact,
+    InstructionFact, LocationRangeFact, OpcodeFact, OriginEdgeFact, OriginEdgeLabel, PcRange,
+    SourceSpanFact, StaticGasFact, TraceDataSource, TraceFact, TraceSnapshot,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -154,6 +157,7 @@ pub struct DebugInstruction {
     pub primary_source: Option<OriginExportKey>,
     pub all_origins: Vec<OriginExportKey>,
     pub classification: InstructionClassification,
+    pub classification_reason: Option<String>,
     pub category: Option<InstructionCategory>,
     pub confidence: AttributionConfidence,
 }
@@ -205,9 +209,12 @@ struct DebugFactIndex<'a> {
     source_spans: BTreeMap<OriginExportKey, &'a SourceSpanFact>,
     outgoing_edges: BTreeMap<OriginExportKey, Vec<&'a OriginEdgeFact>>,
     opcodes: BTreeMap<OriginExportKey, &'a OpcodeFact>,
+    instruction_extents: BTreeMap<OriginExportKey, &'a InstructionExtentFact>,
     function_facts: BTreeMap<OriginExportKey, &'a FunctionFact>,
     function_code_objects: BTreeMap<OriginExportKey, OriginExportKey>,
     categories: BTreeMap<OriginExportKey, InstructionCategory>,
+    source_candidate_cache: RefCell<BTreeMap<OriginExportKey, SourceCandidateResult>>,
+    source_candidate_walks: Cell<usize>,
 }
 
 impl<'a> DebugFactIndex<'a> {
@@ -215,6 +222,7 @@ impl<'a> DebugFactIndex<'a> {
         let mut source_spans = BTreeMap::new();
         let mut outgoing_edges: BTreeMap<OriginExportKey, Vec<&OriginEdgeFact>> = BTreeMap::new();
         let mut opcodes = BTreeMap::new();
+        let mut instruction_extents = BTreeMap::new();
         let mut function_facts = BTreeMap::new();
         let mut function_code_objects = BTreeMap::new();
         let mut categories = BTreeMap::new();
@@ -232,6 +240,9 @@ impl<'a> DebugFactIndex<'a> {
                 }
                 TraceFact::Opcode(opcode) => {
                     opcodes.insert(opcode.pc.clone(), opcode);
+                }
+                TraceFact::InstructionExtent(extent) => {
+                    instruction_extents.insert(extent.instruction.clone(), extent);
                 }
                 TraceFact::Function(function) => {
                     if let Some(code_object) = &function.code_object {
@@ -252,9 +263,12 @@ impl<'a> DebugFactIndex<'a> {
             source_spans,
             outgoing_edges,
             opcodes,
+            instruction_extents,
             function_facts,
             function_code_objects,
             categories,
+            source_candidate_cache: RefCell::new(BTreeMap::new()),
+            source_candidate_walks: Cell::new(0),
         }
     }
 
@@ -423,10 +437,11 @@ impl<'a> DebugFactIndex<'a> {
 
     fn debug_instruction(&self, instruction: &InstructionFact) -> DebugInstruction {
         let source_candidates = self.source_candidates(&instruction.instruction);
-        let primary_source = (source_candidates.len() == 1)
-            .then(|| source_candidates.iter().next().cloned())
+        let (classification, classification_reason) = self.classification(&source_candidates);
+        let primary_source = (classification == InstructionClassification::SourceMapped
+            && source_candidates.origins.len() == 1)
+            .then(|| source_candidates.origins.iter().next().cloned())
             .flatten();
-        let classification = self.classification(&instruction.instruction, source_candidates.len());
         let confidence = match classification {
             InstructionClassification::SourceMapped => AttributionConfidence::High,
             InstructionClassification::Ambiguous => AttributionConfidence::Ambiguous,
@@ -445,14 +460,22 @@ impl<'a> DebugFactIndex<'a> {
             pc_range: self.instruction_pc_range(instruction),
             opcode_or_mnemonic: instruction.mnemonic.clone(),
             primary_source,
-            all_origins: source_candidates.into_iter().collect(),
+            all_origins: source_candidates.origins.into_iter().collect(),
             classification,
+            classification_reason,
             category: self.categories.get(&instruction.instruction).copied(),
             confidence,
         }
     }
 
     fn instruction_pc_range(&self, instruction: &InstructionFact) -> PcRange {
+        if let Some(extent) = self.instruction_extents.get(&instruction.instruction) {
+            return extent.pc_range;
+        }
+        self.legacy_instruction_pc_range(instruction)
+    }
+
+    fn legacy_instruction_pc_range(&self, instruction: &InstructionFact) -> PcRange {
         if instruction.instruction.kind() == "bytecode.pc"
             && let Some(start) = instruction
                 .instruction
@@ -469,52 +492,72 @@ impl<'a> DebugFactIndex<'a> {
         PcRange::new(instruction.index, instruction.index.saturating_add(1))
     }
 
-    fn source_candidates(&self, instruction: &OriginExportKey) -> BTreeSet<OriginExportKey> {
+    fn source_candidates(&self, instruction: &OriginExportKey) -> SourceCandidateResult {
+        if let Some(cached) = self
+            .source_candidate_cache
+            .borrow()
+            .get(instruction)
+            .cloned()
+        {
+            return cached;
+        }
+        self.source_candidate_walks
+            .set(self.source_candidate_walks.get() + 1);
         let mut visited = BTreeSet::new();
-        let mut candidates = BTreeSet::new();
+        let mut result = SourceCandidateResult::default();
         let mut queue = VecDeque::from([instruction.clone()]);
 
         while let Some(current) = queue.pop_front() {
             if !visited.insert(current.clone()) {
                 continue;
             }
-            if self.source_spans.contains_key(&current) {
-                candidates.insert(current.clone());
+            if current != *instruction && self.source_spans.contains_key(&current) {
+                result.origins.insert(current.clone());
             }
             for edge in self.outgoing_edges.get(&current).into_iter().flatten() {
-                queue.push_back(edge.to.clone());
+                match edge.label {
+                    OriginEdgeLabel::LoweredFrom | OriginEdgeLabel::EmittedFrom => {
+                        queue.push_back(edge.to.clone());
+                    }
+                    OriginEdgeLabel::SyntheticFor => {
+                        result.synthetic_reasons.insert("SyntheticFor".to_string());
+                        queue.push_back(edge.to.clone());
+                    }
+                    OriginEdgeLabel::BackendPrepared => {
+                        result
+                            .synthetic_reasons
+                            .insert("BackendPrepared".to_string());
+                    }
+                    OriginEdgeLabel::Unmapped => {
+                        result.saw_unmapped = true;
+                    }
+                    _ => {}
+                }
             }
         }
 
-        candidates
+        self.source_candidate_cache
+            .borrow_mut()
+            .insert(instruction.clone(), result.clone());
+        result
     }
 
     fn classification(
         &self,
-        instruction: &OriginExportKey,
-        source_count: usize,
-    ) -> InstructionClassification {
-        match source_count {
-            1 => InstructionClassification::SourceMapped,
-            n if n > 1 => InstructionClassification::Ambiguous,
-            _ if self.synthetic_edge_labels(instruction) => InstructionClassification::Synthetic,
-            _ => InstructionClassification::Unmapped,
+        source_candidates: &SourceCandidateResult,
+    ) -> (InstructionClassification, Option<String>) {
+        if let Some(reason) = source_candidates.synthetic_reasons.iter().next() {
+            return (InstructionClassification::Synthetic, Some(reason.clone()));
         }
-    }
-
-    fn synthetic_edge_labels(&self, instruction: &OriginExportKey) -> bool {
-        self.outgoing_edges
-            .get(instruction)
-            .into_iter()
-            .flatten()
-            .any(|edge| {
-                matches!(
-                    edge.label,
-                    OriginEdgeLabel::SyntheticFor
-                        | OriginEdgeLabel::BackendPrepared
-                        | OriginEdgeLabel::Unmapped
-                )
-            })
+        match source_candidates.origins.len() {
+            1 => (InstructionClassification::SourceMapped, None),
+            n if n > 1 => (InstructionClassification::Ambiguous, None),
+            _ if source_candidates.saw_unmapped => (
+                InstructionClassification::Unmapped,
+                Some("Unmapped".to_string()),
+            ),
+            _ => (InstructionClassification::Unmapped, None),
+        }
     }
 
     fn locations(&self) -> Vec<DebugLocationRange> {
@@ -543,6 +586,13 @@ impl<'a> DebugFactIndex<'a> {
         }
         gas
     }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct SourceCandidateResult {
+    origins: BTreeSet<OriginExportKey>,
+    synthetic_reasons: BTreeSet<String>,
+    saw_unmapped: bool,
 }
 
 fn debug_code_object(code_object: &CodeObjectFact) -> DebugCodeObject {
@@ -599,11 +649,11 @@ mod tests {
     use common::origin::OriginExportKey;
     use trace_facts::{
         CodeObjectKind, EvmSchedule, FunctionFact, InstructionFact, OriginEdgeFact,
-        OriginEdgeLabel, OriginNodeFact, OriginNodeKind, SourceFileFact, SourceSpanFact,
+        OriginEdgeLabel, OriginNodeFact, OriginNodeKind, PcRange, SourceFileFact, SourceSpanFact,
         StaticGasFact, TraceBundle, TraceFact, TraceMetadata, TraceSnapshot, TraceValidator,
     };
 
-    use super::{AttributionConfidence, DebugBundle, InstructionClassification};
+    use super::{AttributionConfidence, DebugBundle, DebugFactIndex, InstructionClassification};
 
     fn key(kind: &str, owner: &str, local: &str) -> OriginExportKey {
         OriginExportKey::try_from_raw_parts(kind, owner, local).unwrap()
@@ -612,6 +662,47 @@ mod tests {
     fn node(key: OriginExportKey) -> TraceFact {
         let kind = OriginNodeKind::new(key.kind());
         TraceFact::OriginNode(OriginNodeFact::new(key, kind))
+    }
+
+    fn snapshot(facts: Vec<TraceFact>) -> TraceSnapshot {
+        TraceSnapshot::new(TraceBundle::new(
+            TraceMetadata::compiler_emitted(
+                "abc123",
+                "evm/sonatina",
+                vec!["fe".to_string(), "dev".to_string(), "trace".to_string()],
+                "src/main.fe",
+                vec![],
+            ),
+            facts,
+        ))
+        .unwrap()
+    }
+
+    fn source_file_and_span(
+        source_file: OriginExportKey,
+        source_expr: OriginExportKey,
+    ) -> Vec<TraceFact> {
+        vec![
+            node(source_file.clone()),
+            node(source_expr.clone()),
+            TraceFact::SourceFile(SourceFileFact::new(
+                source_file.clone(),
+                "file:///src/main.fe",
+                "src/main.fe",
+                "fnv64:1234",
+                Some(0),
+            )),
+            TraceFact::SourceSpan(SourceSpanFact::new(
+                source_expr,
+                source_file,
+                10,
+                13,
+                1,
+                10,
+                1,
+                13,
+            )),
+        ]
     }
 
     #[test]
@@ -735,5 +826,153 @@ mod tests {
             InstructionClassification::Unmapped
         );
         assert_eq!(bundle.instructions[0].primary_source, None);
+    }
+
+    #[test]
+    fn instruction_extent_wins_over_legacy_local_key_pc_parsing() {
+        let code_object = key("code.object", "demo", "runtime");
+        let function = key("bytecode.function", "demo", "runtime");
+        let instruction = key("bytecode.pc", "demo", "pc:4");
+        let facts = vec![
+            node(code_object.clone()),
+            node(function.clone()),
+            node(instruction.clone()),
+            TraceFact::CodeObject(trace_facts::CodeObjectFact::new(
+                code_object.clone(),
+                CodeObjectKind::EvmRuntimeBytecode,
+                Some(function.clone()),
+                "evm/sonatina",
+                Some("fnv64:beef".to_string()),
+            )),
+            TraceFact::Function(FunctionFact::new(
+                function.clone(),
+                "runtime",
+                None,
+                Some(code_object.clone()),
+            )),
+            TraceFact::Instruction(InstructionFact::new(
+                instruction.clone(),
+                function,
+                0,
+                "PUSH4",
+            )),
+            TraceFact::InstructionExtent(trace_facts::InstructionExtentFact::new(
+                instruction,
+                code_object,
+                PcRange::new(99, 104),
+                5,
+            )),
+        ];
+        let bundle = DebugBundle::from_snapshot(&snapshot(facts));
+
+        assert_eq!(bundle.instructions[0].pc_range, PcRange::new(99, 104));
+    }
+
+    #[test]
+    fn unmapped_edge_stays_unmapped_without_source_attribution() {
+        let source_file = key("source.file", "demo", "src/main.fe");
+        let source_expr = key("hir.expr", "demo", "expr:add");
+        let function = key("bytecode.function", "demo", "runtime");
+        let instruction = key("bytecode.pc", "demo", "pc:4");
+        let mut facts = source_file_and_span(source_file, source_expr.clone());
+        facts.extend([
+            node(function.clone()),
+            node(instruction.clone()),
+            TraceFact::Instruction(InstructionFact::new(
+                instruction.clone(),
+                function,
+                0,
+                "ADD",
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                instruction,
+                source_expr,
+                OriginEdgeLabel::Unmapped,
+                None,
+            )),
+        ]);
+        let bundle = DebugBundle::from_snapshot(&snapshot(facts));
+
+        assert_eq!(
+            bundle.instructions[0].classification,
+            InstructionClassification::Unmapped
+        );
+        assert_eq!(
+            bundle.instructions[0].classification_reason.as_deref(),
+            Some("Unmapped")
+        );
+        assert_eq!(bundle.instructions[0].primary_source, None);
+        assert!(bundle.instructions[0].all_origins.is_empty());
+    }
+
+    #[test]
+    fn synthetic_edge_is_synthetic_with_reason_and_source_cause() {
+        let source_file = key("source.file", "demo", "src/main.fe");
+        let source_expr = key("hir.expr", "demo", "expr:add");
+        let function = key("bytecode.function", "demo", "runtime");
+        let instruction = key("bytecode.pc", "demo", "pc:4");
+        let mut facts = source_file_and_span(source_file, source_expr.clone());
+        facts.extend([
+            node(function.clone()),
+            node(instruction.clone()),
+            TraceFact::Instruction(InstructionFact::new(
+                instruction.clone(),
+                function,
+                0,
+                "DUP1",
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                instruction,
+                source_expr.clone(),
+                OriginEdgeLabel::SyntheticFor,
+                None,
+            )),
+        ]);
+        let bundle = DebugBundle::from_snapshot(&snapshot(facts));
+
+        assert_eq!(
+            bundle.instructions[0].classification,
+            InstructionClassification::Synthetic
+        );
+        assert_eq!(
+            bundle.instructions[0].classification_reason.as_deref(),
+            Some("SyntheticFor")
+        );
+        assert_eq!(bundle.instructions[0].primary_source, None);
+        assert_eq!(bundle.instructions[0].all_origins, vec![source_expr]);
+    }
+
+    #[test]
+    fn repeated_source_candidate_query_hits_cache() {
+        let source_file = key("source.file", "demo", "src/main.fe");
+        let source_expr = key("hir.expr", "demo", "expr:add");
+        let function = key("bytecode.function", "demo", "runtime");
+        let instruction = key("bytecode.pc", "demo", "pc:4");
+        let mut facts = source_file_and_span(source_file, source_expr.clone());
+        facts.extend([
+            node(function.clone()),
+            node(instruction.clone()),
+            TraceFact::Instruction(InstructionFact::new(
+                instruction.clone(),
+                function,
+                0,
+                "ADD",
+            )),
+            TraceFact::OriginEdge(OriginEdgeFact::new(
+                instruction.clone(),
+                source_expr,
+                OriginEdgeLabel::LoweredFrom,
+                None,
+            )),
+        ]);
+        let snapshot = snapshot(facts);
+        let index = DebugFactIndex::new(&snapshot);
+
+        assert_eq!(index.source_candidate_walks.get(), 0);
+        assert_eq!(index.source_candidates(&instruction).origins.len(), 1);
+        assert_eq!(index.source_candidate_walks.get(), 1);
+        assert_eq!(index.source_candidates(&instruction).origins.len(), 1);
+        assert_eq!(index.source_candidate_walks.get(), 1);
+        assert_eq!(index.source_candidate_cache.borrow().len(), 1);
     }
 }
