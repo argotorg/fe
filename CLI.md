@@ -11,13 +11,17 @@ It is not a stability guarantee.
 
 ### Unstable developer tracing
 
-`fe dev trace-fixture ...` is a fixture-backed UX prototype for Fibonacci diagnostics. It uses hard-coded facts derived from `fib_demo.fe` markers and must not be read as compiler-derived instrumentation.
+`fe dev trace-fixture ...` is a fixture-backed UX prototype for Fibonacci diagnostics. It emits trace JSONL with fixture metadata derived from `fib_demo.fe` markers and must not be read as compiler-derived instrumentation.
 
-`fe dev trace ...` is reserved for validated compiler-emitted trace JSONL. In this branch state, `fe dev trace status` reports that boundary instead of pretending real tracing is wired.
+`fe dev trace ...` reads validated trace JSONL bundles. In this branch state, `trace-fixture emit` is the only producer; real compiler-derived emission is still reserved.
 
-Current fixture commands:
+Current fixture and JSONL report commands:
 
 ```
+fe dev trace-fixture emit fib_demo.fe --out target/fib.fixture.trace.jsonl
+fe dev trace validate --from target/fib.fixture.trace.jsonl
+fe dev trace loop-cost --from target/fib.fixture.trace.jsonl
+fe dev trace explain-local --from target/fib.fixture.trace.jsonl --local b
 fe dev trace-fixture loop-cost fib_demo.fe
 fe dev trace-fixture explain-local fib_demo.fe --local b
 fe dev trace status

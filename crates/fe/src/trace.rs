@@ -1,18 +1,20 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
+use std::fs::{self, File};
+use std::io::{BufReader, BufWriter, Cursor};
 
 use camino::Utf8PathBuf;
 use common::origin::OriginExportKey;
 use trace_facts::{
     CategorySource, CompilerEventFact, CompilerEventKind, CompilerPhase, CompilerReason,
-    InstructionCategory, InstructionCategoryFact, InstructionFact, LoopDerivation,
-    LoopMembershipFact, OriginEdgeFact, OriginEdgeLabel, OriginNodeFact, OriginNodeKind,
-    StorageFact, StorageLocation, StorageReason, TraceFact, TraceValidator,
+    InstructionCategory, InstructionCategoryFact, InstructionFact, JsonlTraceReader,
+    JsonlTraceSink, LoopDerivation, LoopMembershipFact, OriginEdgeFact, OriginEdgeLabel,
+    OriginNodeFact, OriginNodeKind, StorageFact, StorageLocation, StorageReason, TraceBundle,
+    TraceDataSource, TraceFact, TraceMetadata, TraceValidationSummary, TraceValidator,
 };
 
 use crate::{
-    DevCommand, DevTraceCommand, TraceFixtureCommand, TraceFixtureExplainLocalArgs,
-    TraceFixtureLoopCostArgs,
+    DevCommand, DevTraceCommand, DevTraceExplainLocalArgs, DevTraceInputArgs, TraceFixtureCommand,
+    TraceFixtureEmitArgs, TraceFixtureExplainLocalArgs, TraceFixtureLoopCostArgs,
 };
 
 const FIB_OWNER: &str = "fixture:fib_demo";
@@ -26,6 +28,7 @@ pub(crate) fn run_dev_command(command: &DevCommand) -> Result<String, String> {
 
 fn run_trace_fixture_command(command: &TraceFixtureCommand) -> Result<String, String> {
     match command {
+        TraceFixtureCommand::Emit(args) => run_fixture_emit(args),
         TraceFixtureCommand::LoopCost(args) => run_fixture_loop_cost(args),
         TraceFixtureCommand::ExplainLocal(args) => run_fixture_explain_local(args),
     }
@@ -35,39 +38,165 @@ fn run_dev_trace_command(command: &DevTraceCommand) -> Result<String, String> {
     match command {
         DevTraceCommand::Status => Ok(
             "fe dev trace is reserved for compiler-derived validated trace JSONL.\n\
-             Current Fibonacci diagnostics are fixture-backed and live under fe dev trace-fixture.\n"
+             Current Fibonacci diagnostics are fixture-backed and live under fe dev trace-fixture.\n\
+             JSONL reports can be exercised with fe dev trace-fixture emit followed by fe dev trace validate/loop-cost/explain-local --from.\n"
                 .to_string(),
         ),
+        DevTraceCommand::Validate(args) => run_trace_validate(args),
+        DevTraceCommand::LoopCost(args) => run_trace_loop_cost(args),
+        DevTraceCommand::ExplainLocal(args) => run_trace_explain_local(args),
     }
 }
 
+fn run_fixture_emit(args: &TraceFixtureEmitArgs) -> Result<String, String> {
+    let bundle = build_fib_fixture_bundle_from_path(&args.path, &args.function)?;
+    write_trace_bundle_jsonl(&args.out, &bundle)?;
+    Ok(format!(
+        "wrote fixture trace JSONL: {}\nData source: {}\nFacts: {}\n",
+        args.out,
+        format_data_source(&bundle.metadata),
+        bundle.facts.len()
+    ))
+}
+
 fn run_fixture_loop_cost(args: &TraceFixtureLoopCostArgs) -> Result<String, String> {
-    let trace = load_fib_trace(&args.path, &args.function)?;
-    render_loop_cost(&trace)
+    let bundle = build_and_roundtrip_fib_fixture_bundle(&args.path, &args.function)?;
+    render_loop_cost_bundle(bundle)
 }
 
 fn run_fixture_explain_local(args: &TraceFixtureExplainLocalArgs) -> Result<String, String> {
-    let trace = load_fib_trace(&args.path, &args.function)?;
-    render_explain_local(&trace, &args.local)
+    let bundle = build_and_roundtrip_fib_fixture_bundle(&args.path, &args.function)?;
+    render_explain_local_bundle(bundle, &args.local)
 }
 
-fn load_fib_trace(path: &Utf8PathBuf, function_label: &str) -> Result<FibTrace, String> {
+fn run_trace_validate(args: &DevTraceInputArgs) -> Result<String, String> {
+    let bundle = read_trace_bundle_jsonl_from_path(&args.from)?;
+    let summary = TraceValidator::validate(&bundle.facts)
+        .map_err(|err| format!("trace validation failed: {err}"))?;
+    Ok(render_validation_summary(&bundle, &summary))
+}
+
+fn run_trace_loop_cost(args: &DevTraceInputArgs) -> Result<String, String> {
+    render_loop_cost_bundle(read_trace_bundle_jsonl_from_path(&args.from)?)
+}
+
+fn run_trace_explain_local(args: &DevTraceExplainLocalArgs) -> Result<String, String> {
+    render_explain_local_bundle(read_trace_bundle_jsonl_from_path(&args.from)?, &args.local)
+}
+
+fn build_fib_fixture_bundle_from_path(
+    path: &Utf8PathBuf,
+    function_label: &str,
+) -> Result<TraceBundle, String> {
     let source = fs::read_to_string(path.as_std_path())
         .map_err(|err| format!("failed to read {path}: {err}"))?;
-    build_fib_trace(&source, path.as_str(), function_label)
+    build_fib_fixture_bundle(&source, path.as_str(), function_label)
+}
+
+fn build_and_roundtrip_fib_fixture_bundle(
+    path: &Utf8PathBuf,
+    function_label: &str,
+) -> Result<TraceBundle, String> {
+    let bundle = build_fib_fixture_bundle_from_path(path, function_label)?;
+    roundtrip_trace_bundle_jsonl(&bundle)
+}
+
+fn roundtrip_trace_bundle_jsonl(bundle: &TraceBundle) -> Result<TraceBundle, String> {
+    let mut sink = JsonlTraceSink::new(Vec::new());
+    sink.write_bundle(bundle)
+        .map_err(|err| format!("failed to write in-memory trace JSONL: {err}"))?;
+    JsonlTraceReader::new(Cursor::new(sink.into_inner()))
+        .read_bundle()
+        .map_err(|err| format!("failed to read in-memory trace JSONL: {err}"))
+}
+
+fn read_trace_bundle_jsonl_from_path(path: &Utf8PathBuf) -> Result<TraceBundle, String> {
+    let file =
+        File::open(path.as_std_path()).map_err(|err| format!("failed to open {path}: {err}"))?;
+    JsonlTraceReader::new(BufReader::new(file))
+        .read_bundle()
+        .map_err(|err| format!("failed to read trace JSONL {path}: {err}"))
+}
+
+fn write_trace_bundle_jsonl(path: &Utf8PathBuf, bundle: &TraceBundle) -> Result<(), String> {
+    if let Some(parent) = path.parent()
+        && !parent.as_str().is_empty()
+    {
+        fs::create_dir_all(parent.as_std_path())
+            .map_err(|err| format!("failed to create {parent}: {err}"))?;
+    }
+    let file = File::create(path.as_std_path())
+        .map_err(|err| format!("failed to create trace JSONL {path}: {err}"))?;
+    let mut sink = JsonlTraceSink::new(BufWriter::new(file));
+    sink.write_bundle(bundle)
+        .map_err(|err| format!("failed to write trace JSONL {path}: {err}"))?;
+    sink.flush()
+        .map_err(|err| format!("failed to flush trace JSONL {path}: {err}"))
+}
+
+fn render_validation_summary(bundle: &TraceBundle, summary: &TraceValidationSummary) -> String {
+    format!(
+        "Trace validation: passed\n\
+         Data source: {}\n\
+         Schema version: {}\n\
+         Compiler commit: {}\n\
+         Target: {}\n\
+         Input: {}\n\
+         Facts: {}\n\
+         Origin nodes: {}\n\
+         Origin edges: {}\n\
+         Instructions: {}\n",
+        format_data_source(&bundle.metadata),
+        bundle.metadata.schema_version,
+        bundle.metadata.compiler_commit,
+        bundle.metadata.target,
+        bundle.metadata.input_path,
+        summary.fact_count,
+        summary.node_count,
+        summary.edge_count,
+        summary.instruction_count
+    )
 }
 
 #[derive(Clone, Debug)]
-struct FibTrace {
-    path: String,
-    function_label: String,
+struct TraceReport {
+    metadata: TraceMetadata,
     loop_key: OriginExportKey,
     facts: Vec<TraceFact>,
     locals: BTreeMap<String, OriginExportKey>,
-    labels: BTreeMap<OriginExportKey, String>,
 }
 
-impl FibTrace {
+impl TraceReport {
+    fn from_bundle(bundle: TraceBundle) -> Result<Self, String> {
+        TraceValidator::validate(&bundle.facts)
+            .map_err(|err| format!("trace validation failed: {err}"))?;
+        let loop_key = bundle
+            .facts
+            .iter()
+            .find_map(|fact| match fact {
+                TraceFact::LoopMembership(membership) => Some(membership.loop_key.clone()),
+                _ => None,
+            })
+            .ok_or_else(|| "trace has no loop membership facts".to_string())?;
+        let locals = bundle
+            .facts
+            .iter()
+            .filter_map(|fact| match fact {
+                TraceFact::OriginNode(node) if node.key.kind() == "runtime.local" => {
+                    Some((local_display_name(&node.key), node.key.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+
+        Ok(Self {
+            metadata: bundle.metadata,
+            loop_key,
+            facts: bundle.facts,
+            locals,
+        })
+    }
+
     fn instruction(&self, key: &OriginExportKey) -> Option<&InstructionFact> {
         self.facts.iter().find_map(|fact| match fact {
             TraceFact::Instruction(instruction) if &instruction.instruction == key => {
@@ -88,51 +217,39 @@ impl FibTrace {
     }
 
     fn label(&self, key: &OriginExportKey) -> String {
-        self.labels
-            .get(key)
-            .cloned()
-            .unwrap_or_else(|| key.display_label())
+        match key.kind() {
+            "runtime.local" => local_display_name(key),
+            "loop" => key.local_key().replace(':', " "),
+            _ => key.display_label(),
+        }
     }
 }
 
-fn build_fib_trace(
+fn build_fib_fixture_bundle(
     source: &str,
     path_label: &str,
     function_label: &str,
-) -> Result<FibTrace, String> {
+) -> Result<TraceBundle, String> {
     require_fib_fixture(source)?;
 
     let function = key("function", FIB_OWNER, "contract:Fib.recv:Compute");
-    let loop_key = key("loop", FIB_OWNER, "while:0");
+    let loop_key = key("loop", FIB_OWNER, "while:i<n");
     let mut facts = Vec::new();
-    let mut labels = BTreeMap::new();
 
-    push_node(
-        &mut facts,
-        &mut labels,
-        function.clone(),
-        "function",
-        function_label,
-    );
-    push_node(
-        &mut facts,
-        &mut labels,
-        loop_key.clone(),
-        "loop",
-        "while i < n",
-    );
+    push_node(&mut facts, function.clone(), "function");
+    push_node(&mut facts, loop_key.clone(), "loop");
 
     let locals = [
-        ("n", "runtime-local:0"),
-        ("a", "runtime-local:1"),
-        ("b", "runtime-local:2"),
-        ("i", "runtime-local:3"),
-        ("next", "runtime-local:4"),
+        ("n", "local:n"),
+        ("a", "local:a"),
+        ("b", "local:b"),
+        ("i", "local:i"),
+        ("next", "local:next"),
     ]
     .into_iter()
     .map(|(name, local)| {
         let key = key("runtime.local", FIB_OWNER, local);
-        push_node(&mut facts, &mut labels, key.clone(), "runtime.local", name);
+        push_node(&mut facts, key.clone(), "runtime.local");
         (name.to_string(), key)
     })
     .collect::<BTreeMap<_, _>>();
@@ -205,13 +322,7 @@ fn build_fib_trace(
     let mut zext_event_index = 0;
     for (index, (mnemonic, category, edge)) in insts.iter().enumerate() {
         let instruction = key("asm.inst", FIB_OWNER, &format!("inst:{index}"));
-        push_node(
-            &mut facts,
-            &mut labels,
-            instruction.clone(),
-            "asm.inst",
-            &format!("asm[{index}] {mnemonic}"),
-        );
+        push_node(&mut facts, instruction.clone(), "asm.inst");
         facts.push(TraceFact::Instruction(InstructionFact::new(
             instruction.clone(),
             function.clone(),
@@ -246,13 +357,7 @@ fn build_fib_trace(
                     &format!("event:{zext_event_index}"),
                 );
                 zext_event_index += 1;
-                push_node(
-                    &mut facts,
-                    &mut labels,
-                    event.clone(),
-                    "compiler.event",
-                    &format!("insert zero-extend for {local_name}"),
-                );
+                push_node(&mut facts, event.clone(), "compiler.event");
                 facts.push(TraceFact::CompilerEvent(CompilerEventFact::new(
                     event,
                     CompilerPhase::Backend,
@@ -266,28 +371,66 @@ fn build_fib_trace(
     }
 
     TraceValidator::validate(&facts).map_err(|err| format!("invalid Fibonacci trace: {err}"))?;
-    Ok(FibTrace {
-        path: path_label.to_string(),
-        function_label: function_label.to_string(),
-        loop_key,
-        facts,
-        locals,
-        labels,
-    })
+    let metadata = TraceMetadata::fixture(
+        compiler_commit(),
+        "riscv64-fib-demo",
+        vec![
+            "fe".to_string(),
+            "dev".to_string(),
+            "trace-fixture".to_string(),
+            "emit".to_string(),
+        ],
+        path_label,
+        vec![format!("function={function_label}")],
+        "fib_demo_codegen_ux_v1",
+    );
+    Ok(TraceBundle::new(metadata, facts))
 }
 
-fn push_node(
-    facts: &mut Vec<TraceFact>,
-    labels: &mut BTreeMap<OriginExportKey, String>,
-    key: OriginExportKey,
-    kind: &str,
-    label: &str,
-) {
-    labels.insert(key.clone(), label.to_string());
+fn push_node(facts: &mut Vec<TraceFact>, key: OriginExportKey, kind: &str) {
     facts.push(TraceFact::OriginNode(OriginNodeFact::new(
         key,
         OriginNodeKind::new(kind),
     )));
+}
+
+fn compiler_commit() -> String {
+    runtime_git_commit()
+        .or_else(|| option_env!("FE_GIT_COMMIT").map(str::to_string))
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn runtime_git_commit() -> Option<String> {
+    let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(repo_root)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let commit = String::from_utf8(output.stdout).ok()?.trim().to_string();
+    (!commit.is_empty()).then_some(commit)
+}
+
+fn format_data_source(metadata: &TraceMetadata) -> String {
+    match metadata.data_source {
+        TraceDataSource::Fixture => {
+            let marker = metadata.fixture_marker.as_deref().unwrap_or("unspecified");
+            format!("fixture ({marker}; not compiler-derived)")
+        }
+        TraceDataSource::CompilerEmitted => "compiler_emitted".to_string(),
+    }
+}
+
+fn local_display_name(key: &OriginExportKey) -> String {
+    let local = key.local_key();
+    local
+        .strip_prefix("local:")
+        .or_else(|| local.rsplit_once(':').map(|(_, name)| name))
+        .unwrap_or(local)
+        .to_string()
 }
 
 fn key(kind: &str, owner: &str, local: &str) -> OriginExportKey {
@@ -328,7 +471,17 @@ fn zext_reason(local_name: &str) -> &'static str {
     }
 }
 
-fn render_loop_cost(trace: &FibTrace) -> Result<String, String> {
+fn render_loop_cost_bundle(bundle: TraceBundle) -> Result<String, String> {
+    let trace = TraceReport::from_bundle(bundle)?;
+    render_loop_cost(&trace)
+}
+
+fn render_explain_local_bundle(bundle: TraceBundle, local_name: &str) -> Result<String, String> {
+    let trace = TraceReport::from_bundle(bundle)?;
+    render_explain_local(&trace, local_name)
+}
+
+fn render_loop_cost(trace: &TraceReport) -> Result<String, String> {
     let loop_instructions = loop_instructions(trace);
     let counts = category_counts(trace, &loop_instructions);
     let zexts = zero_extends_by_local(trace, &loop_instructions);
@@ -336,12 +489,22 @@ fn render_loop_cost(trace: &FibTrace) -> Result<String, String> {
     let b_storage = trace.storage_for(&b_key);
 
     let mut out = String::new();
-    out.push_str("Fe trace-fixture loop-cost: Fibonacci codegen UX prototype\n\n");
-    out.push_str(
-        "Data source: fixture (hard-coded facts in the CLI, not compiler-derived trace emission)\n",
-    );
-    out.push_str(&format!("Target: {}\n", trace.path));
-    out.push_str(&format!("Function: {}\n", trace.function_label));
+    out.push_str("Fe dev trace loop-cost\n\n");
+    out.push_str(&format!(
+        "Data source: {}\n",
+        format_data_source(&trace.metadata)
+    ));
+    out.push_str("Trace validation: passed\n");
+    out.push_str(&format!("Target: {}\n", trace.metadata.target));
+    out.push_str(&format!("Input: {}\n", trace.metadata.input_path));
+    if let Some(function_label) = trace
+        .metadata
+        .flags
+        .iter()
+        .find_map(|flag| flag.strip_prefix("function="))
+    {
+        out.push_str(&format!("Function: {function_label}\n"));
+    }
     out.push_str(&format!("Loop: {}\n\n", trace.label(&trace.loop_key)));
     out.push_str("Static per-iteration cost:\n");
     out.push_str(&format!(
@@ -404,7 +567,7 @@ fn render_loop_cost(trace: &FibTrace) -> Result<String, String> {
     Ok(out)
 }
 
-fn render_explain_local(trace: &FibTrace, local_name: &str) -> Result<String, String> {
+fn render_explain_local(trace: &TraceReport, local_name: &str) -> Result<String, String> {
     let Some(local_key) = trace.locals.get(local_name) else {
         return Err(format!(
             "unknown local `{local_name}`; expected one of: {}",
@@ -415,12 +578,22 @@ fn render_explain_local(trace: &FibTrace, local_name: &str) -> Result<String, St
     let related_edges = related_instruction_edges(trace, local_key, &loop_instructions);
 
     let mut out = String::new();
-    out.push_str("Fe trace-fixture explain-local: Fibonacci codegen UX prototype\n\n");
-    out.push_str(
-        "Data source: fixture (hard-coded facts in the CLI, not compiler-derived trace emission)\n",
-    );
-    out.push_str(&format!("Target: {}\n", trace.path));
-    out.push_str(&format!("Function: {}\n", trace.function_label));
+    out.push_str("Fe dev trace explain-local\n\n");
+    out.push_str(&format!(
+        "Data source: {}\n",
+        format_data_source(&trace.metadata)
+    ));
+    out.push_str("Trace validation: passed\n");
+    out.push_str(&format!("Target: {}\n", trace.metadata.target));
+    out.push_str(&format!("Input: {}\n", trace.metadata.input_path));
+    if let Some(function_label) = trace
+        .metadata
+        .flags
+        .iter()
+        .find_map(|flag| flag.strip_prefix("function="))
+    {
+        out.push_str(&format!("Function: {function_label}\n"));
+    }
     out.push_str(&format!("Local: {local_name}\n"));
     out.push_str(&format!("Identity: {}\n\n", local_key.display_label()));
 
@@ -470,7 +643,7 @@ fn render_explain_local(trace: &FibTrace, local_name: &str) -> Result<String, St
     Ok(out)
 }
 
-fn loop_instructions(trace: &FibTrace) -> BTreeSet<OriginExportKey> {
+fn loop_instructions(trace: &TraceReport) -> BTreeSet<OriginExportKey> {
     trace
         .facts
         .iter()
@@ -494,7 +667,10 @@ struct CategoryCounts {
     arithmetic: usize,
 }
 
-fn category_counts(trace: &FibTrace, instructions: &BTreeSet<OriginExportKey>) -> CategoryCounts {
+fn category_counts(
+    trace: &TraceReport,
+    instructions: &BTreeSet<OriginExportKey>,
+) -> CategoryCounts {
     let mut counts = CategoryCounts::default();
     for fact in &trace.facts {
         let TraceFact::InstructionCategory(category) = fact else {
@@ -518,7 +694,7 @@ fn category_counts(trace: &FibTrace, instructions: &BTreeSet<OriginExportKey>) -
 }
 
 fn zero_extends_by_local(
-    trace: &FibTrace,
+    trace: &TraceReport,
     instructions: &BTreeSet<OriginExportKey>,
 ) -> BTreeMap<String, Vec<OriginExportKey>> {
     let mut result: BTreeMap<String, Vec<OriginExportKey>> = BTreeMap::new();
@@ -529,7 +705,7 @@ fn zero_extends_by_local(
 }
 
 fn related_zext_edges(
-    trace: &FibTrace,
+    trace: &TraceReport,
     instructions: &BTreeSet<OriginExportKey>,
 ) -> Vec<(OriginExportKey, String)> {
     trace
@@ -548,7 +724,7 @@ fn related_zext_edges(
 }
 
 fn related_instruction_edges<'a>(
-    trace: &'a FibTrace,
+    trace: &'a TraceReport,
     local_key: &OriginExportKey,
     instructions: &BTreeSet<OriginExportKey>,
 ) -> Vec<(&'a InstructionFact, OriginEdgeLabel)> {
@@ -566,7 +742,10 @@ fn related_instruction_edges<'a>(
         .collect()
 }
 
-fn compiler_event_reason_for_output(trace: &FibTrace, output: &OriginExportKey) -> Option<String> {
+fn compiler_event_reason_for_output(
+    trace: &TraceReport,
+    output: &OriginExportKey,
+) -> Option<String> {
     trace.facts.iter().find_map(|fact| match fact {
         TraceFact::CompilerEvent(event)
             if event.kind == CompilerEventKind::InsertIntegerZeroExtend
@@ -600,8 +779,11 @@ mod tests {
 
     #[test]
     fn loop_cost_report_identifies_fib_codegen_findings() {
-        let trace = build_fib_trace(FIB_SOURCE, "fib_demo.fe", "Fib.recv Compute handler").unwrap();
-        let report = render_loop_cost(&trace).unwrap();
+        let bundle =
+            build_fib_fixture_bundle(FIB_SOURCE, "fib_demo.fe", "Fib.recv Compute handler")
+                .unwrap();
+        let report =
+            render_loop_cost_bundle(roundtrip_trace_bundle_jsonl(&bundle).unwrap()).unwrap();
 
         assert!(report.contains("total instructions: 13"));
         assert!(report.contains("zero-extends: 4"));
@@ -613,8 +795,12 @@ mod tests {
 
     #[test]
     fn explain_local_report_explains_b_stack_residency() {
-        let trace = build_fib_trace(FIB_SOURCE, "fib_demo.fe", "Fib.recv Compute handler").unwrap();
-        let report = render_explain_local(&trace, "b").unwrap();
+        let bundle =
+            build_fib_fixture_bundle(FIB_SOURCE, "fib_demo.fe", "Fib.recv Compute handler")
+                .unwrap();
+        let report =
+            render_explain_local_bundle(roundtrip_trace_bundle_jsonl(&bundle).unwrap(), "b")
+                .unwrap();
 
         assert!(report.contains("earliest memory-like phase: MIR"));
         assert!(report.contains("MIR mutable-local lowering"));
@@ -624,10 +810,29 @@ mod tests {
 
     #[test]
     fn explain_local_report_identifies_i_zero_extends() {
-        let trace = build_fib_trace(FIB_SOURCE, "fib_demo.fe", "Fib.recv Compute handler").unwrap();
-        let report = render_explain_local(&trace, "i").unwrap();
+        let bundle =
+            build_fib_fixture_bundle(FIB_SOURCE, "fib_demo.fe", "Fib.recv Compute handler")
+                .unwrap();
+        let report =
+            render_explain_local_bundle(roundtrip_trace_bundle_jsonl(&bundle).unwrap(), "i")
+                .unwrap();
 
         assert!(report.contains("repeated zero-extensions for i: 2"));
         assert!(report.contains("known-width facts are not preserved after addiw"));
+    }
+
+    #[test]
+    fn fixture_trace_emits_jsonl_bundle_before_reports() {
+        let bundle =
+            build_fib_fixture_bundle(FIB_SOURCE, "fib_demo.fe", "Fib.recv Compute handler")
+                .unwrap();
+        let roundtripped = roundtrip_trace_bundle_jsonl(&bundle).unwrap();
+
+        assert_eq!(
+            roundtripped.metadata.fixture_marker.as_deref(),
+            Some("fib_demo_codegen_ux_v1")
+        );
+        assert_eq!(roundtripped.metadata.data_source, TraceDataSource::Fixture);
+        assert!(TraceValidator::validate(&roundtripped.facts).is_ok());
     }
 }

@@ -479,14 +479,52 @@ pub enum DevCommand {
 pub enum DevTraceCommand {
     /// Explain that real compiler-derived tracing is reserved but not wired yet.
     Status,
+    /// Validate a trace JSONL bundle before running reports.
+    Validate(DevTraceInputArgs),
+    /// Summarize static per-iteration loop cost from a validated trace JSONL bundle.
+    LoopCost(DevTraceInputArgs),
+    /// Explain one local from a validated trace JSONL bundle.
+    ExplainLocal(DevTraceExplainLocalArgs),
 }
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum TraceFixtureCommand {
+    /// Emit fixture-backed Fibonacci facts as trace JSONL.
+    Emit(TraceFixtureEmitArgs),
     /// Summarize static per-iteration loop cost using hard-coded Fibonacci fixture facts.
     LoopCost(TraceFixtureLoopCostArgs),
     /// Explain one local using hard-coded Fibonacci fixture facts.
     ExplainLocal(TraceFixtureExplainLocalArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct DevTraceInputArgs {
+    /// Trace JSONL bundle to read.
+    #[arg(long = "from", value_name = "TRACE_JSONL")]
+    pub from: Utf8PathBuf,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct DevTraceExplainLocalArgs {
+    /// Trace JSONL bundle to read.
+    #[arg(long = "from", value_name = "TRACE_JSONL")]
+    pub from: Utf8PathBuf,
+    /// Source local to explain.
+    #[arg(long)]
+    pub local: String,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct TraceFixtureEmitArgs {
+    /// Path to fib_demo.fe.
+    #[arg(default_value_t = default_project_path())]
+    pub path: Utf8PathBuf,
+    /// Output trace JSONL bundle path.
+    #[arg(long)]
+    pub out: Utf8PathBuf,
+    /// Function label to record in trace metadata.
+    #[arg(long, default_value = "Fib.recv Compute handler")]
+    pub function: String,
 }
 
 #[derive(Debug, Clone, Args)]
