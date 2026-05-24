@@ -21,6 +21,10 @@ pub trait IntrospectionService {
     fn gas_breakdown(&self, request: GasBreakdownRequest) -> QueryResult<GasBreakdownReport>;
     fn explain_pc(&self, request: ExplainPcRequest) -> QueryResult<ExplainPcReport>;
     fn gas_by_source(&self, request: GasBySourceRequest) -> QueryResult<GasBySourceReport>;
+    fn dynamic_gas_by_source(
+        &self,
+        request: DynamicGasBySourceRequest,
+    ) -> QueryResult<DynamicGasBySourceReport>;
     fn variables_at_pc(&self, request: VariablesAtPcRequest) -> QueryResult<VariablesAtPcReport>;
 }
 
@@ -310,6 +314,79 @@ impl IntrospectionService for TraceIntrospectionService {
         })
     }
 
+    fn dynamic_gas_by_source(
+        &self,
+        request: DynamicGasBySourceRequest,
+    ) -> QueryResult<DynamicGasBySourceReport> {
+        let index = TraceIndex::new(&self.snapshot);
+        let mut rows: BTreeMap<String, GasBySourceRow> = BTreeMap::new();
+        let mut total_gas = 0;
+        let mut unattributed_steps = 0;
+
+        for step in index.dynamic_gas_steps(request.trace_id.as_deref()) {
+            total_gas += step.gas_cost;
+            let instruction = index.instruction_for_dynamic_step(step);
+            let sources = instruction
+                .as_ref()
+                .map(|instruction| index.source_candidates_for_instruction(&instruction.key))
+                .unwrap_or_default();
+            if sources.is_empty() {
+                unattributed_steps += 1;
+                let row = rows
+                    .entry("<unmapped>".to_string())
+                    .or_insert_with(|| GasBySourceRow {
+                        source: None,
+                        label: "<unmapped>".to_string(),
+                        gas: 0,
+                        instruction_count: 0,
+                        confidence: Confidence::Unknown,
+                    });
+                row.gas += step.gas_cost;
+                row.instruction_count += 1;
+                continue;
+            }
+
+            let confidence = if sources.len() == 1 {
+                Confidence::Medium
+            } else {
+                Confidence::Low
+            };
+            for source in sources {
+                let row = rows
+                    .entry(source.origin.canonical_storage_key())
+                    .or_insert_with(|| GasBySourceRow {
+                        label: source.label.clone(),
+                        source: Some(source.origin.clone()),
+                        gas: 0,
+                        instruction_count: 0,
+                        confidence,
+                    });
+                row.gas += step.gas_cost;
+                row.instruction_count += 1;
+                if confidence == Confidence::Low {
+                    row.confidence = Confidence::Low;
+                }
+            }
+        }
+
+        let mut rows = rows.into_values().collect::<Vec<_>>();
+        rows.sort_by(|a, b| b.gas.cmp(&a.gas).then_with(|| a.label.cmp(&b.label)));
+        Ok(DynamicGasBySourceReport {
+            metadata: ReportMetadata::from_snapshot(&self.snapshot),
+            trace_id: request.trace_id,
+            target_schedule: "runtime-measured".to_string(),
+            policy: "exclusive-primary-if-unique; inclusive-for-ambiguous".to_string(),
+            total_gas,
+            unattributed_steps,
+            rows,
+            confidence: if total_gas > 0 {
+                Confidence::Medium
+            } else {
+                Confidence::Unknown
+            },
+        })
+    }
+
     fn variables_at_pc(&self, request: VariablesAtPcRequest) -> QueryResult<VariablesAtPcReport> {
         let index = TraceIndex::new(&self.snapshot);
         let variables = index.variables_at_pc(request.pc, request.code_object.as_ref());
@@ -374,6 +451,12 @@ impl Default for GasBySourceRequest {
     }
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DynamicGasBySourceRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace_id: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VariablesAtPcRequest {
     pub pc: u32,
@@ -412,6 +495,10 @@ pub enum TraceQueryRequest {
         #[serde(default = "default_gas_schedule")]
         schedule: String,
     },
+    DynamicGasBySource {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        trace_id: Option<String>,
+    },
     VariablesAtPc {
         pc: u32,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -446,6 +533,10 @@ impl TraceQueryRequest {
         }
     }
 
+    pub fn dynamic_gas_by_source() -> Self {
+        Self::DynamicGasBySource { trace_id: None }
+    }
+
     pub fn variables_at_pc(pc: u32) -> Self {
         Self::VariablesAtPc {
             pc,
@@ -474,6 +565,7 @@ pub enum TraceQueryReport {
     GasBreakdown(GasBreakdownReport),
     ExplainPc(ExplainPcReport),
     GasBySource(GasBySourceReport),
+    DynamicGasBySource(DynamicGasBySourceReport),
     VariablesAtPc(VariablesAtPcReport),
 }
 
@@ -497,6 +589,9 @@ pub fn run_trace_query(
         TraceQueryRequest::GasBySource { schedule } => service
             .gas_by_source(GasBySourceRequest { schedule })
             .map(TraceQueryReport::GasBySource),
+        TraceQueryRequest::DynamicGasBySource { trace_id } => service
+            .dynamic_gas_by_source(DynamicGasBySourceRequest { trace_id })
+            .map(TraceQueryReport::DynamicGasBySource),
         TraceQueryRequest::VariablesAtPc { pc, code_object } => service
             .variables_at_pc(VariablesAtPcRequest { pc, code_object })
             .map(TraceQueryReport::VariablesAtPc),
@@ -563,6 +658,18 @@ pub struct GasBySourceReport {
     pub schedule: String,
     pub policy: String,
     pub total_gas: u64,
+    pub rows: Vec<GasBySourceRow>,
+    pub confidence: Confidence,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DynamicGasBySourceReport {
+    pub metadata: ReportMetadata,
+    pub trace_id: Option<String>,
+    pub target_schedule: String,
+    pub policy: String,
+    pub total_gas: u64,
+    pub unattributed_steps: usize,
     pub rows: Vec<GasBySourceRow>,
     pub confidence: Confidence,
 }
@@ -765,6 +872,7 @@ struct TraceIndex<'a> {
     locals: BTreeMap<String, OriginExportKey>,
     display_names: BTreeMap<OriginExportKey, String>,
     instructions: BTreeMap<OriginExportKey, &'a InstructionFact>,
+    function_code_objects: BTreeMap<OriginExportKey, OriginExportKey>,
 }
 
 impl<'a> TraceIndex<'a> {
@@ -775,6 +883,7 @@ impl<'a> TraceIndex<'a> {
         let mut locals = BTreeMap::new();
         let mut display_names = BTreeMap::new();
         let mut instructions = BTreeMap::new();
+        let mut function_code_objects = BTreeMap::new();
 
         for fact in snapshot.facts() {
             if let TraceFact::DisplayName(display_name) = fact {
@@ -803,6 +912,12 @@ impl<'a> TraceIndex<'a> {
                 TraceFact::Instruction(instruction) => {
                     instructions.insert(instruction.instruction.clone(), instruction);
                 }
+                TraceFact::Function(function) => {
+                    if let Some(code_object) = &function.code_object {
+                        function_code_objects
+                            .insert(function.function.clone(), code_object.clone());
+                    }
+                }
                 _ => {}
             }
         }
@@ -814,6 +929,7 @@ impl<'a> TraceIndex<'a> {
             locals,
             display_names,
             instructions,
+            function_code_objects,
         }
     }
 
@@ -1073,6 +1189,58 @@ impl<'a> TraceIndex<'a> {
             })
     }
 
+    fn instruction_at_pc_in_code_object(
+        &self,
+        pc: u32,
+        code_object: &OriginExportKey,
+    ) -> Option<InstructionRow> {
+        let exact_pc = format!("pc:{pc}");
+        self.instructions
+            .values()
+            .find(|instruction| {
+                instruction.instruction.kind() == "bytecode.pc"
+                    && instruction.instruction.local_key() == exact_pc
+                    && self
+                        .function_code_objects
+                        .get(&instruction.function)
+                        .is_none_or(|candidate| candidate == code_object)
+            })
+            .map(|instruction| InstructionRow {
+                key: instruction.instruction.clone(),
+                index: instruction.index,
+                mnemonic: instruction.mnemonic.clone(),
+            })
+    }
+
+    fn dynamic_gas_steps(
+        &self,
+        trace_id: Option<&str>,
+    ) -> Vec<&'a trace_facts::DynamicGasStepFact> {
+        self.snapshot
+            .facts()
+            .iter()
+            .filter_map(|fact| match fact {
+                TraceFact::DynamicGasStep(step)
+                    if trace_id.is_none_or(|trace_id| trace_id == step.trace_id) =>
+                {
+                    Some(step)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn instruction_for_dynamic_step(
+        &self,
+        step: &trace_facts::DynamicGasStepFact,
+    ) -> Option<InstructionRow> {
+        step.instruction
+            .as_ref()
+            .and_then(|instruction| self.instruction_row(instruction))
+            .or_else(|| self.instruction_at_pc_in_code_object(step.pc, &step.code_object))
+            .or_else(|| self.instruction_at_pc(step.pc))
+    }
+
     fn source_candidates_for_instruction(
         &self,
         instruction: &OriginExportKey,
@@ -1279,18 +1447,19 @@ mod tests {
     use common::origin::OriginExportKey;
     use trace_facts::{
         CategorySource, CodeObjectFact, CodeObjectKind, CompilerEventFact, CompilerEventKind,
-        CompilerPhase, CompilerReason, EvmSchedule, GasConfidence, GasCostFact, GasKind, GasSource,
-        InstructionCategory, InstructionCategoryFact, InstructionFact, LocationConfidence,
-        LocationRangeFact, LoopDerivation, LoopMembershipFact, OriginEdgeFact, OriginEdgeLabel,
-        OriginNodeFact, OriginNodeKind, PcRange, SourceFileFact, SourceSpanFact, StaticGasFact,
-        StorageFact, StorageLocation, StorageReason, TraceBundle, TraceFact, TraceMetadata,
-        TraceSnapshot, TypeFact, TypeKind, ValueLocation, VariableFact, VariableStorageClass,
+        CompilerPhase, CompilerReason, DynamicGasStepFact, EvmSchedule, GasConfidence, GasCostFact,
+        GasKind, GasSource, InstructionCategory, InstructionCategoryFact, InstructionFact,
+        LocationConfidence, LocationRangeFact, LoopDerivation, LoopMembershipFact, OriginEdgeFact,
+        OriginEdgeLabel, OriginNodeFact, OriginNodeKind, PcRange, SourceFileFact, SourceSpanFact,
+        StaticGasFact, StorageFact, StorageLocation, StorageReason, TraceBundle, TraceFact,
+        TraceMetadata, TraceSnapshot, TypeFact, TypeKind, ValueLocation, VariableFact,
+        VariableStorageClass,
     };
 
     use super::{
-        ExplainLocalRequest, ExplainPcRequest, GasBySourceRequest, IntrospectionService,
-        LoopCostRequest, TraceIntrospectionService, TraceQueryHttpRequest, TraceQueryReport,
-        TraceQueryRequest, VariablesAtPcRequest, run_trace_query,
+        DynamicGasBySourceRequest, ExplainLocalRequest, ExplainPcRequest, GasBySourceRequest,
+        IntrospectionService, LoopCostRequest, TraceIntrospectionService, TraceQueryHttpRequest,
+        TraceQueryReport, TraceQueryRequest, VariablesAtPcRequest, run_trace_query,
     };
 
     fn key(kind: &str, owner: &str, local: &str) -> OriginExportKey {
@@ -1373,7 +1542,7 @@ mod tests {
             )),
             TraceFact::LocationRange(LocationRangeFact::new(
                 local.clone(),
-                code_object,
+                code_object.clone(),
                 PcRange::new(0, 2),
                 ValueLocation::StackSlot { offset: 24 },
                 StorageReason::FrameSlot,
@@ -1476,6 +1645,26 @@ mod tests {
                 3,
                 None,
             )),
+            TraceFact::DynamicGasStep(DynamicGasStepFact::new(
+                "tx:1",
+                0,
+                code_object.clone(),
+                0,
+                Some(inst.clone()),
+                100,
+                93,
+                7,
+            )),
+            TraceFact::DynamicGasStep(DynamicGasStepFact::new(
+                "tx:1",
+                1,
+                code_object,
+                1,
+                None,
+                93,
+                90,
+                3,
+            )),
         ];
         let snapshot = TraceSnapshot::new(TraceBundle::new(
             TraceMetadata::fixture(
@@ -1559,6 +1748,21 @@ mod tests {
     }
 
     #[test]
+    fn dynamic_gas_by_source_joins_steps_to_instruction_sources() {
+        let report = demo_service()
+            .dynamic_gas_by_source(DynamicGasBySourceRequest {
+                trace_id: Some("tx:1".to_string()),
+            })
+            .unwrap();
+
+        assert_eq!(report.total_gas, 10);
+        assert_eq!(report.unattributed_steps, 0);
+        assert_eq!(report.rows.len(), 1);
+        assert_eq!(report.rows[0].label, "fib.fe:2:8-2:9");
+        assert_eq!(report.rows[0].gas, 10);
+    }
+
+    #[test]
     fn variables_at_pc_reports_location_ranges() {
         let report = demo_service()
             .variables_at_pc(VariablesAtPcRequest {
@@ -1610,6 +1814,10 @@ mod tests {
         assert!(matches!(
             run_trace_query(&service, TraceQueryRequest::gas_by_source("cancun")).unwrap(),
             TraceQueryReport::GasBySource(_)
+        ));
+        assert!(matches!(
+            run_trace_query(&service, TraceQueryRequest::dynamic_gas_by_source()).unwrap(),
+            TraceQueryReport::DynamicGasBySource(_)
         ));
         assert!(matches!(
             run_trace_query(&service, TraceQueryRequest::variables_at_pc(0)).unwrap(),

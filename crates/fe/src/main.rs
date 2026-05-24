@@ -541,6 +541,8 @@ pub enum DevTraceQueryCommand {
     ExplainPc(DevTracePcArgs),
     /// Summarize conservative static gas by source attribution.
     GasBySource(DevTraceGasArgs),
+    /// Summarize measured runtime gas by source attribution.
+    DynamicGasBySource(DevTraceDynamicGasArgs),
     /// Show variable locations active at a bytecode PC.
     VariablesAtPc(DevTracePcArgs),
 }
@@ -624,6 +626,16 @@ pub struct DevTraceGasArgs {
     /// Named EVM gas schedule.
     #[arg(long, default_value = "cancun")]
     pub schedule: String,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct DevTraceDynamicGasArgs {
+    /// Trace JSONL bundle to read.
+    #[arg(long = "from", value_name = "TRACE_JSONL")]
+    pub from: Utf8PathBuf,
+    /// Optional dynamic execution trace id to filter.
+    #[arg(long)]
+    pub trace_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]

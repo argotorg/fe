@@ -1,9 +1,13 @@
+pub mod evm_trace;
 pub mod fact;
 pub mod jsonl;
 pub mod relation;
 pub mod snapshot;
 pub mod validate;
 
+pub use evm_trace::{
+    EvmExecutionStep, EvmExecutionTrace, EvmExecutionTraceError, dynamic_gas_facts_from_evm_trace,
+};
 pub use fact::{
     CategorySource, CodeObjectFact, CodeObjectKind, CompilerEventFact, CompilerEventKind,
     CompilerPhase, CompilerReason, DisplayNameFact, DisplayNameKind, DynamicGasKind,
