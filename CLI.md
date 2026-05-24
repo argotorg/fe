@@ -13,11 +13,15 @@ It is not a stability guarantee.
 
 `fe dev trace-fixture ...` is a fixture-backed UX prototype for Fibonacci diagnostics. It emits trace JSONL with fixture metadata derived from `fib_demo.fe` markers and must not be read as compiler-derived instrumentation.
 
-`fe dev trace ...` reads validated trace JSONL bundles. In this branch state, `trace-fixture emit` is the only producer; real compiler-derived emission is still reserved.
+`fe dev trace ...` reads validated trace JSONL bundles. `fe dev trace emit` produces compiler-derived JSONL with phase-owned MIR facts and actual EVM bytecode instruction facts. Loop membership, source-local labels, storage allocation, and zext causality are still explicit gaps.
 
 Current fixture and JSONL report commands:
 
 ```
+fe dev trace emit fib_demo.fe --out target/fib.trace.jsonl
+fe dev trace validate --from target/fib.trace.jsonl
+fe dev trace loop-cost --from target/fib.trace.jsonl
+fe dev trace explain-local --from target/fib.trace.jsonl --local b
 fe dev trace-fixture emit fib_demo.fe --out target/fib.fixture.trace.jsonl
 fe dev trace validate --from target/fib.fixture.trace.jsonl
 fe dev trace loop-cost --from target/fib.fixture.trace.jsonl

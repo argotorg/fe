@@ -479,6 +479,8 @@ pub enum DevCommand {
 pub enum DevTraceCommand {
     /// Explain that real compiler-derived tracing is reserved but not wired yet.
     Status,
+    /// Emit compiler-derived trace JSONL for a Fe target.
+    Emit(DevTraceEmitArgs),
     /// Validate a trace JSONL bundle before running reports.
     Validate(DevTraceInputArgs),
     /// Summarize static per-iteration loop cost from a validated trace JSONL bundle.
@@ -495,6 +497,25 @@ pub enum TraceFixtureCommand {
     LoopCost(TraceFixtureLoopCostArgs),
     /// Explain one local using hard-coded Fibonacci fixture facts.
     ExplainLocal(TraceFixtureExplainLocalArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct DevTraceEmitArgs {
+    /// Path to an ingot/workspace directory, a workspace member name, or a .fe file.
+    #[arg(default_value_t = default_project_path())]
+    pub path: Utf8PathBuf,
+    /// Output trace JSONL bundle path.
+    #[arg(long)]
+    pub out: Utf8PathBuf,
+    /// Treat a `.fe` file target as standalone, even if it is inside an ingot.
+    #[arg(long)]
+    pub standalone: bool,
+    /// Compilation profile to use when resolving profile-aware config.
+    #[arg(long, default_value = "dev", value_name = "PROFILE")]
+    pub profile: String,
+    /// Optimization level for emitted bytecode facts.
+    #[arg(long = "optimize", short = 'O', default_value = "1", value_parser = ["0", "1", "2", "s"])]
+    pub optimize: String,
 }
 
 #[derive(Debug, Clone, Args)]

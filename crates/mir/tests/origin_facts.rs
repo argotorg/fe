@@ -38,6 +38,17 @@ fn package_statement_and_terminator_count<'db>(
         .sum()
 }
 
+fn package_runtime_local_count<'db>(
+    db: &'db DriverDataBase,
+    package: RuntimePackage<'db>,
+) -> usize {
+    package
+        .functions(db)
+        .iter()
+        .map(|function| function.instance(db).body(db).locals.len())
+        .sum()
+}
+
 #[test]
 fn legacy_runtime_package_origin_facts_cover_statements_and_terminators() {
     let mut db = DriverDataBase::default();
@@ -95,6 +106,7 @@ fn main() -> u256 {
     assert_eq!(
         summary.node_count,
         package_statement_and_terminator_count(&db, package)
+            + package_runtime_local_count(&db, package)
     );
     assert_eq!(summary.edge_count, 0);
 }

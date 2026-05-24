@@ -3,7 +3,12 @@ use std::fs::{self, File};
 use std::io::{BufReader, BufWriter, Cursor};
 
 use camino::Utf8PathBuf;
-use common::origin::OriginExportKey;
+use common::{InputDb, origin::OriginExportKey};
+use driver::{
+    DriverDataBase,
+    cli_target::{CliTarget, resolve_cli_target},
+};
+use salsa::Setter;
 use trace_facts::{
     CategorySource, CompilerEventFact, CompilerEventKind, CompilerPhase, CompilerReason,
     InstructionCategory, InstructionCategoryFact, InstructionFact, JsonlTraceReader,
@@ -11,10 +16,12 @@ use trace_facts::{
     OriginNodeFact, OriginNodeKind, StorageFact, StorageLocation, StorageReason, TraceBundle,
     TraceDataSource, TraceFact, TraceMetadata, TraceValidationReport, TraceValidator,
 };
+use url::Url;
 
 use crate::{
-    DevCommand, DevTraceCommand, DevTraceExplainLocalArgs, DevTraceInputArgs, TraceFixtureCommand,
-    TraceFixtureEmitArgs, TraceFixtureExplainLocalArgs, TraceFixtureLoopCostArgs,
+    DevCommand, DevTraceCommand, DevTraceEmitArgs, DevTraceExplainLocalArgs, DevTraceInputArgs,
+    TraceFixtureCommand, TraceFixtureEmitArgs, TraceFixtureExplainLocalArgs,
+    TraceFixtureLoopCostArgs,
 };
 
 const FIB_OWNER: &str = "fixture:fib_demo";
@@ -39,9 +46,10 @@ fn run_dev_trace_command(command: &DevTraceCommand) -> Result<String, String> {
         DevTraceCommand::Status => Ok(
             "fe dev trace is reserved for compiler-derived validated trace JSONL.\n\
              Current Fibonacci diagnostics are fixture-backed and live under fe dev trace-fixture.\n\
-             JSONL reports can be exercised with fe dev trace-fixture emit followed by fe dev trace validate/loop-cost/explain-local --from.\n"
+             Real trace emission currently includes phase-owned MIR facts and actual EVM bytecode instruction facts; loop/storage/zext causality hooks are still incomplete.\n"
                 .to_string(),
         ),
+        DevTraceCommand::Emit(args) => run_trace_emit(args),
         DevTraceCommand::Validate(args) => run_trace_validate(args),
         DevTraceCommand::LoopCost(args) => run_trace_loop_cost(args),
         DevTraceCommand::ExplainLocal(args) => run_trace_explain_local(args),
@@ -69,6 +77,22 @@ fn run_fixture_explain_local(args: &TraceFixtureExplainLocalArgs) -> Result<Stri
     render_explain_local_bundle(bundle, &args.local)
 }
 
+fn run_trace_emit(args: &DevTraceEmitArgs) -> Result<String, String> {
+    let opt_level = args.optimize.parse::<codegen::OptLevel>()?;
+    let bundle = emit_real_trace_bundle(&args.path, args.standalone, &args.profile, opt_level)?;
+    let summary = TraceValidator::validate(&bundle.facts)
+        .map_err(|err| format!("compiler trace emission produced invalid facts: {err}"))?;
+    write_trace_bundle_jsonl(&args.out, &bundle)?;
+    Ok(format!(
+        "wrote compiler trace JSONL: {}\nData source: {}\nFacts: {}\nOrigin nodes: {}\nInstructions: {}\n",
+        args.out,
+        format_data_source(&bundle.metadata),
+        summary.fact_count,
+        summary.node_count,
+        summary.instruction_count
+    ))
+}
+
 fn run_trace_validate(args: &DevTraceInputArgs) -> Result<String, String> {
     let bundle = read_trace_bundle_jsonl_from_path(&args.from)?;
     let report = TraceValidator::check(&bundle.facts);
@@ -93,6 +117,79 @@ fn build_fib_fixture_bundle_from_path(
     let source = fs::read_to_string(path.as_std_path())
         .map_err(|err| format!("failed to read {path}: {err}"))?;
     build_fib_fixture_bundle(&source, path.as_str(), function_label)
+}
+
+fn emit_real_trace_bundle(
+    path: &Utf8PathBuf,
+    force_standalone: bool,
+    profile: &str,
+    opt_level: codegen::OptLevel,
+) -> Result<TraceBundle, String> {
+    let mut db = DriverDataBase::default();
+    db.compilation_settings()
+        .set_profile(&mut db)
+        .to(profile.into());
+    let target = resolve_cli_target(&mut db, path, force_standalone)?;
+    let (top_mod, input_path) = match target {
+        CliTarget::StandaloneFile(file_path) => {
+            let (file_url, content) = standalone_file_input(&file_path)?;
+            db.workspace()
+                .touch(&mut db, file_url.clone(), Some(content));
+            let file = db
+                .workspace()
+                .get(&db, &file_url)
+                .ok_or_else(|| format!("could not process trace input {file_path}"))?;
+            let top_mod = db.top_mod(file);
+            (top_mod, file_path)
+        }
+        CliTarget::Directory(_) => {
+            return Err(
+                "fe dev trace emit currently supports standalone .fe files; ingot tracing is not wired yet"
+                    .to_string(),
+            );
+        }
+    };
+
+    let package = mir::build_runtime_package(&db, top_mod)
+        .map_err(|err| format!("failed to build runtime package for trace: {err}"))?;
+    let mut facts = mir::trace::emit_mir_facts(&db, package);
+    let bytecode = codegen::emit_module_sonatina_bytecode(&db, top_mod, opt_level, None)
+        .map_err(|err| format!("failed to compile bytecode for trace: {err}"))?;
+    for (contract_name, artifact) in bytecode {
+        facts.extend(codegen::trace::emit_bytecode_instruction_facts(
+            &format!("contract:{contract_name}:runtime"),
+            "runtime",
+            &artifact.runtime,
+        ));
+    }
+
+    let metadata = TraceMetadata::compiler_emitted(
+        compiler_commit(),
+        "evm/sonatina",
+        vec![
+            "fe".to_string(),
+            "dev".to_string(),
+            "trace".to_string(),
+            "emit".to_string(),
+        ],
+        input_path.as_str(),
+        vec![
+            format!("profile={profile}"),
+            format!("optimize={opt_level}"),
+        ],
+    );
+    Ok(TraceBundle::new(metadata, facts))
+}
+
+fn standalone_file_input(file_path: &Utf8PathBuf) -> Result<(Url, String), String> {
+    let canonical = file_path
+        .canonicalize_utf8()
+        .map_err(|err| format!("cannot canonicalize {file_path}: {err}"))?;
+    let file_url = Url::from_file_path(&canonical)
+        .map_err(|_| format!("invalid trace input path: {file_path}"))?;
+    let content = fs::read_to_string(file_path)
+        .map_err(|err| format!("failed to read trace input {file_path}: {err}"))?;
+    Ok((file_url, content))
 }
 
 fn build_and_roundtrip_fib_fixture_bundle(
@@ -167,7 +264,7 @@ fn render_validation_summary(bundle: &TraceBundle, report: &TraceValidationRepor
 #[derive(Clone, Debug)]
 struct TraceReport {
     metadata: TraceMetadata,
-    loop_key: OriginExportKey,
+    loop_key: Option<OriginExportKey>,
     facts: Vec<TraceFact>,
     locals: BTreeMap<String, OriginExportKey>,
 }
@@ -176,14 +273,10 @@ impl TraceReport {
     fn from_bundle(bundle: TraceBundle) -> Result<Self, String> {
         TraceValidator::validate(&bundle.facts)
             .map_err(|err| format!("trace validation failed: {err}"))?;
-        let loop_key = bundle
-            .facts
-            .iter()
-            .find_map(|fact| match fact {
-                TraceFact::LoopMembership(membership) => Some(membership.loop_key.clone()),
-                _ => None,
-            })
-            .ok_or_else(|| "trace has no loop membership facts".to_string())?;
+        let loop_key = bundle.facts.iter().find_map(|fact| match fact {
+            TraceFact::LoopMembership(membership) => Some(membership.loop_key.clone()),
+            _ => None,
+        });
         let locals = bundle
             .facts
             .iter()
@@ -488,6 +581,9 @@ fn render_explain_local_bundle(bundle: TraceBundle, local_name: &str) -> Result<
 }
 
 fn render_loop_cost(trace: &TraceReport) -> Result<String, String> {
+    if trace.loop_key.is_none() {
+        return Ok(render_loop_cost_unavailable(trace));
+    }
     let loop_instructions = loop_instructions(trace);
     let counts = category_counts(trace, &loop_instructions);
     let zexts = zero_extends_by_local(trace, &loop_instructions);
@@ -511,7 +607,10 @@ fn render_loop_cost(trace: &TraceReport) -> Result<String, String> {
     {
         out.push_str(&format!("Function: {function_label}\n"));
     }
-    out.push_str(&format!("Loop: {}\n\n", trace.label(&trace.loop_key)));
+    out.push_str(&format!(
+        "Loop: {}\n\n",
+        trace.label(trace.loop_key.as_ref().expect("loop checked above"))
+    ));
     out.push_str("Static per-iteration cost:\n");
     out.push_str(&format!(
         "  total instructions: {}\n",
@@ -573,12 +672,39 @@ fn render_loop_cost(trace: &TraceReport) -> Result<String, String> {
     Ok(out)
 }
 
+fn render_loop_cost_unavailable(trace: &TraceReport) -> String {
+    let instructions = all_instruction_keys(trace);
+    let counts = category_counts(trace, &instructions);
+    let mut out = String::new();
+    out.push_str("Fe dev trace loop-cost\n\n");
+    out.push_str(&format!(
+        "Data source: {}\n",
+        format_data_source(&trace.metadata)
+    ));
+    out.push_str("Trace validation: passed\n");
+    out.push_str(&format!("Target: {}\n", trace.metadata.target));
+    out.push_str(&format!("Input: {}\n\n", trace.metadata.input_path));
+    out.push_str("Loop cost unavailable from this trace.\n");
+    out.push_str(
+        "Reason: compiler-derived LoopMembershipFact rows are not emitted yet, so the report cannot truthfully isolate the hot loop.\n\n",
+    );
+    out.push_str("Available compiler-derived bytecode summary:\n");
+    out.push_str(&format!("  total instructions: {}\n", instructions.len()));
+    out.push_str(&format!("  loads: {}\n", counts.loads));
+    out.push_str(&format!("  stores: {}\n", counts.stores));
+    out.push_str(&format!("  moves: {}\n", counts.moves));
+    out.push_str(&format!(
+        "  branches/jumps: {}\n",
+        counts.branches + counts.jumps
+    ));
+    out.push_str(&format!("  arithmetic: {}\n\n", counts.arithmetic));
+    out.push_str("Required next facts: loop membership, source-local display facts, MIR-to-codegen origin edges, and backend storage/zext compiler events.\n");
+    out
+}
+
 fn render_explain_local(trace: &TraceReport, local_name: &str) -> Result<String, String> {
     let Some(local_key) = trace.locals.get(local_name) else {
-        return Err(format!(
-            "unknown local `{local_name}`; expected one of: {}",
-            trace.locals.keys().cloned().collect::<Vec<_>>().join(", ")
-        ));
+        return Ok(render_local_unavailable(trace, local_name));
     };
     let loop_instructions = loop_instructions(trace);
     let related_edges = related_instruction_edges(trace, local_key, &loop_instructions);
@@ -649,12 +775,45 @@ fn render_explain_local(trace: &TraceReport, local_name: &str) -> Result<String,
     Ok(out)
 }
 
+fn render_local_unavailable(trace: &TraceReport, local_name: &str) -> String {
+    let mut out = String::new();
+    out.push_str("Fe dev trace explain-local\n\n");
+    out.push_str(&format!(
+        "Data source: {}\n",
+        format_data_source(&trace.metadata)
+    ));
+    out.push_str("Trace validation: passed\n");
+    out.push_str(&format!("Target: {}\n", trace.metadata.target));
+    out.push_str(&format!("Input: {}\n", trace.metadata.input_path));
+    out.push_str(&format!("Local: {local_name}\n\n"));
+    out.push_str("Local explanation unavailable from this trace.\n");
+    out.push_str("Reason: compiler-derived source-local display facts and MIR-to-codegen origin edges are not emitted yet.\n");
+    if trace.locals.is_empty() {
+        out.push_str("Available runtime local identities: none emitted.\n");
+    } else {
+        out.push_str(&format!(
+            "Available runtime local identities: {} emitted; showing first 20.\n",
+            trace.locals.len()
+        ));
+        for key in trace.locals.values().take(20) {
+            out.push_str(&format!("  {}\n", key.display_label()));
+        }
+        if trace.locals.len() > 20 {
+            out.push_str(&format!("  ... {} more\n", trace.locals.len() - 20));
+        }
+    }
+    out
+}
+
 fn loop_instructions(trace: &TraceReport) -> BTreeSet<OriginExportKey> {
+    let Some(loop_key) = &trace.loop_key else {
+        return BTreeSet::new();
+    };
     trace
         .facts
         .iter()
         .filter_map(|fact| match fact {
-            TraceFact::LoopMembership(membership) if membership.loop_key == trace.loop_key => {
+            TraceFact::LoopMembership(membership) if &membership.loop_key == loop_key => {
                 Some(membership.instruction.clone())
             }
             _ => None,
@@ -662,8 +821,21 @@ fn loop_instructions(trace: &TraceReport) -> BTreeSet<OriginExportKey> {
         .collect()
 }
 
+fn all_instruction_keys(trace: &TraceReport) -> BTreeSet<OriginExportKey> {
+    trace
+        .facts
+        .iter()
+        .filter_map(|fact| match fact {
+            TraceFact::Instruction(instruction) => Some(instruction.instruction.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
 #[derive(Default)]
 struct CategoryCounts {
+    loads: usize,
+    stores: usize,
     zero_extends: usize,
     stack_loads: usize,
     stack_stores: usize,
@@ -686,6 +858,8 @@ fn category_counts(
             continue;
         }
         match category.category {
+            InstructionCategory::Load => counts.loads += 1,
+            InstructionCategory::Store => counts.stores += 1,
             InstructionCategory::ZeroExtend => counts.zero_extends += 1,
             InstructionCategory::StackLoad => counts.stack_loads += 1,
             InstructionCategory::StackStore => counts.stack_stores += 1,
@@ -840,5 +1014,23 @@ mod tests {
         );
         assert_eq!(roundtripped.metadata.data_source, TraceDataSource::Fixture);
         assert!(TraceValidator::validate(&roundtripped.facts).is_ok());
+    }
+
+    #[test]
+    fn real_trace_bundle_compiles_fib_demo_without_fixture_claims() {
+        let path = Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fib_demo.fe");
+        let bundle = emit_real_trace_bundle(&path, false, "dev", codegen::OptLevel::O1).unwrap();
+        let summary = TraceValidator::validate(&bundle.facts).unwrap();
+
+        assert_eq!(
+            bundle.metadata.data_source,
+            TraceDataSource::CompilerEmitted
+        );
+        assert!(summary.instruction_count > 0);
+        assert!(
+            render_loop_cost_bundle(bundle)
+                .unwrap()
+                .contains("Loop cost unavailable from this trace")
+        );
     }
 }

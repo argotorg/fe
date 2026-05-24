@@ -6,8 +6,9 @@ use common::origin::{
 use cranelift_entity::EntityRef;
 use salsa::Update;
 
-use crate::{MirDb, RuntimeInstance, RuntimePackage, runtime::RBlockId};
+use crate::{MirDb, RuntimeInstance, RuntimePackage, runtime::RBlockId, runtime::RLocalId};
 
+pub const RUNTIME_LOCAL_EXPORT_KIND: &str = "runtime.local";
 pub const RUNTIME_STMT_EXPORT_KIND: &str = "runtime.stmt";
 pub const RUNTIME_TERMINATOR_EXPORT_KIND: &str = "runtime.terminator";
 
@@ -79,6 +80,45 @@ impl RuntimeStmtSite {
 impl OriginExportLocalKey for RuntimeStmtSite {
     fn to_export_local_key(&self) -> String {
         format!("block:{}:stmt:{}", self.block.index(), self.stmt.index())
+    }
+}
+
+struct RuntimeLocalOriginLocalKey(RLocalId);
+
+impl OriginExportLocalKey for RuntimeLocalOriginLocalKey {
+    fn to_export_local_key(&self) -> String {
+        format!("local:{}", self.0.index())
+    }
+}
+
+/// Origin key for a runtime MIR local. Local IDs are scoped to a runtime
+/// instance and are not stable without the owner key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Update)]
+pub struct RuntimeLocalOrigin<'db> {
+    key: OriginKey<RuntimeInstance<'db>, RLocalId>,
+}
+
+impl<'db> RuntimeLocalOrigin<'db> {
+    pub const fn new(instance: RuntimeInstance<'db>, local: RLocalId) -> Self {
+        Self {
+            key: OriginKey::new(instance, local),
+        }
+    }
+
+    pub fn instance(self) -> RuntimeInstance<'db> {
+        self.key.into_parts().0
+    }
+
+    pub fn local(self) -> RLocalId {
+        self.key.into_parts().1
+    }
+
+    pub fn export_key(self, stable_instance_key: &RuntimeInstanceOwnerKey) -> OriginExportKey {
+        OriginExportKey::new(
+            RUNTIME_LOCAL_EXPORT_KIND,
+            stable_instance_key,
+            &RuntimeLocalOriginLocalKey(self.local()),
+        )
     }
 }
 

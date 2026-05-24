@@ -8,8 +8,9 @@ pub mod verify;
 pub use db::MirDb;
 pub use instance::{RuntimeInstance, RuntimeInstanceKey, get_or_build_runtime_instance};
 pub use origin::{
-    RuntimeInstanceOwnerKey, RuntimeStmtIndex, RuntimeStmtOrigin, RuntimeStmtSite,
-    RuntimeTerminatorOrigin, RuntimeTerminatorSite, legacy_runtime_package_origin_facts,
+    RuntimeInstanceOwnerKey, RuntimeLocalOrigin, RuntimeStmtIndex, RuntimeStmtOrigin,
+    RuntimeStmtSite, RuntimeTerminatorOrigin, RuntimeTerminatorSite,
+    legacy_runtime_package_origin_facts,
 };
 pub use runtime::{
     AddressSpaceKind, ArrayLayout, BorrowAccess, BorrowTransportSet, ConstNode, ConstRegion,
