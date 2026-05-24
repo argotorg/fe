@@ -172,6 +172,11 @@ pub(super) fn emit_real_trace_bundle(
             "function:runtime",
             &artifact.runtime,
         ));
+        facts.extend(codegen::trace::emit_bytecode_shape_facts(
+            &owner_key,
+            "function:runtime",
+            &artifact.runtime,
+        ));
         let code_object = codegen::trace::bytecode_code_object_key(&owner_key);
         if let Some(span) = whole_file_source_span(code_object, source_file.clone(), &input_content)
         {
@@ -337,6 +342,13 @@ mod tests {
             trace_facts::TraceDataSource::CompilerEmitted
         );
         assert!(summary.instruction_count > 0);
+        assert!(
+            bundle
+                .facts
+                .iter()
+                .any(|fact| matches!(fact, trace_facts::TraceFact::ShapeGraphHash(_))),
+            "real Fibonacci trace should include derived shape hashes"
+        );
         assert!(
             !bundle
                 .facts

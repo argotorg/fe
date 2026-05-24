@@ -20,7 +20,7 @@ pub use fact::{
     ShapeComponentHashFact, ShapeGraphHashFact, ShapeNodeHashFact, ShapePolicyFact, SourceFileFact,
     SourceSpanFact, StaticGasFact, StorageFact, StorageLocation, StorageReason, TraceFact,
     TraceFactTextError, TypeFact, TypeField, TypeKind, ValueLocation, ValueProperty,
-    ValuePropertyFact, VariableFact, VariableStorageClass,
+    ValuePropertyFact, VariableFact, VariableStorageClass, shape_hash_facts,
 };
 pub use jsonl::{
     JsonlTraceReadError, JsonlTraceReader, JsonlTraceSink, TRACE_SCHEMA_VERSION, TraceBundle,

@@ -1,6 +1,10 @@
 use std::collections::BTreeSet;
 
 use cranelift_entity::EntityRef;
+use shape_address::{
+    ShapeCyclePolicy, ShapeDimension, ShapeGraph, ShapeGraphKey, ShapeHashPolicy, ShapeNodeKey,
+    ShapeViewMode, hash_shape_graph,
+};
 use trace_facts::{
     BlockFact, CfgEdgeFact, CfgEdgeKind, CompilerEventFact, CompilerEventKind, CompilerPhase,
     CompilerReason, DisplayNameFact, DisplayNameKind, FunctionFact, LoopBlockFact, LoopBlockRole,
@@ -20,7 +24,7 @@ use crate::{
         RuntimeTerminatorSite,
     },
     runtime::{
-        RBlockId, RLocalId, RTerminator, RuntimeBody, RuntimeCarrier, RuntimeLocalLowering,
+        RBlockId, RLocalId, RStmt, RTerminator, RuntimeBody, RuntimeCarrier, RuntimeLocalLowering,
         RuntimeLocalRoot,
     },
 };
@@ -200,24 +204,139 @@ pub fn emit_mir_facts<'db>(db: &'db dyn MirDb, package: RuntimePackage<'db>) -> 
                 header_key,
                 LoopBlockRole::Header,
             )));
-            for block in natural_loop.members {
-                if block == natural_loop.header {
+            for block in &natural_loop.members {
+                if *block == natural_loop.header {
                     continue;
                 }
-                let role = if block == natural_loop.latch {
+                let role = if *block == natural_loop.latch {
                     LoopBlockRole::Latch
                 } else {
                     LoopBlockRole::Body
                 };
                 facts.push(TraceFact::LoopBlock(LoopBlockFact::new(
                     loop_key.clone(),
-                    RuntimeBlockOrigin::new(instance, block).export_key(&owner_key),
+                    RuntimeBlockOrigin::new(instance, *block).export_key(&owner_key),
                     role,
                 )));
             }
+            push_runtime_loop_shape_facts(
+                &mut facts,
+                &loop_key,
+                instance,
+                &owner_key,
+                &body,
+                &natural_loop.members,
+            );
         }
     }
     facts
+}
+
+fn push_runtime_loop_shape_facts<'db>(
+    facts: &mut Vec<TraceFact>,
+    loop_key: &common::origin::OriginExportKey,
+    instance: crate::RuntimeInstance<'db>,
+    owner_key: &RuntimeInstanceOwnerKey,
+    body: &RuntimeBody<'db>,
+    blocks: &[RBlockId],
+) {
+    let Ok(graph) = runtime_loop_shape_graph(loop_key, instance, owner_key, body, blocks) else {
+        return;
+    };
+    let Ok(policy) = loop_shape_policy("mir.loop") else {
+        return;
+    };
+    let Ok(hashes) = hash_shape_graph(&policy, &graph) else {
+        return;
+    };
+    facts.extend(trace_facts::shape_hash_facts(&graph, &policy, &hashes));
+}
+
+fn runtime_loop_shape_graph<'db>(
+    loop_key: &common::origin::OriginExportKey,
+    instance: crate::RuntimeInstance<'db>,
+    owner_key: &RuntimeInstanceOwnerKey,
+    body: &RuntimeBody<'db>,
+    blocks: &[RBlockId],
+) -> Result<ShapeGraph, shape_address::ShapeError> {
+    let loop_node = ShapeNodeKey::entity(loop_key.clone());
+    let mut graph = ShapeGraph::new(ShapeGraphKey::new(loop_key.clone(), "mir-loop-shape")?);
+    graph.add_node(loop_node.clone(), RUNTIME_LOOP_EXPORT_KIND)?;
+    graph.add_field(&loop_node, ShapeDimension::Structure, "phase", "mir")?;
+    for (block_ordinal, block_id) in blocks.iter().enumerate() {
+        let Some(block) = body.blocks.get(block_id.index()) else {
+            continue;
+        };
+        let block_key = RuntimeBlockOrigin::new(instance, *block_id).export_key(owner_key);
+        let block_node = ShapeNodeKey::entity(block_key.clone());
+        graph.add_node(block_node.clone(), RUNTIME_BLOCK_EXPORT_KIND)?;
+        graph.add_child(&loop_node, "block", block_ordinal as u32, &block_node)?;
+        for (stmt_index, stmt) in block.stmts.iter().enumerate() {
+            let stmt_key = RuntimeStmtOrigin::new(
+                instance,
+                RuntimeStmtSite::new(*block_id, RuntimeStmtIndex::from_u32(stmt_index as u32)),
+            )
+            .export_key(owner_key);
+            let stmt_node = ShapeNodeKey::entity(stmt_key);
+            graph.add_node(stmt_node.clone(), RUNTIME_STMT_EXPORT_KIND)?;
+            graph.add_field(
+                &stmt_node,
+                ShapeDimension::Structure,
+                "kind",
+                runtime_stmt_kind(stmt),
+            )?;
+            graph.add_child(&block_node, "stmt", stmt_index as u32, &stmt_node)?;
+        }
+        let term_key =
+            RuntimeTerminatorOrigin::new(instance, RuntimeTerminatorSite::new(*block_id))
+                .export_key(owner_key);
+        let term_node = ShapeNodeKey::entity(term_key);
+        graph.add_node(term_node.clone(), RUNTIME_TERMINATOR_EXPORT_KIND)?;
+        graph.add_field(
+            &term_node,
+            ShapeDimension::Structure,
+            "kind",
+            runtime_terminator_kind(&block.terminator),
+        )?;
+        graph.add_child(&block_node, "terminator", 0, &term_node)?;
+    }
+    Ok(graph)
+}
+
+fn loop_shape_policy(level: &str) -> Result<ShapeHashPolicy, shape_address::ShapeError> {
+    ShapeHashPolicy::with_dimensions(
+        level,
+        [ShapeDimension::Structure, ShapeDimension::Constants],
+        ShapeViewMode::AnonymousShape,
+        ShapeCyclePolicy::Reject,
+    )
+}
+
+fn runtime_stmt_kind(stmt: &RStmt<'_>) -> &'static str {
+    match stmt {
+        RStmt::Assign { .. } => "assign",
+        RStmt::EnumAssertVariant { .. } => "enum_assert_variant",
+        RStmt::Store { .. } => "store",
+        RStmt::CopyInto { .. } => "copy_into",
+        RStmt::EnumSetTag { .. } => "enum_set_tag",
+        RStmt::EnumWriteVariant { .. } => "enum_write_variant",
+    }
+}
+
+fn runtime_terminator_kind(terminator: &RTerminator<'_>) -> &'static str {
+    match terminator {
+        RTerminator::Goto(_) => "goto",
+        RTerminator::Branch { .. } => "branch",
+        RTerminator::SwitchScalar { .. } => "switch_scalar",
+        RTerminator::MatchEnumTag { .. } => "match_enum_tag",
+        RTerminator::TerminalCall { .. } => "terminal_call",
+        RTerminator::ReturnData { .. } => "return_data",
+        RTerminator::Revert { .. } => "revert",
+        RTerminator::SelfDestruct { .. } => "self_destruct",
+        RTerminator::Trap => "trap",
+        RTerminator::Return(_) => "return",
+        RTerminator::Stop => "stop",
+    }
 }
 
 #[derive(Clone, Debug)]

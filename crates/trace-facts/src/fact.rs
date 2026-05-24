@@ -3,8 +3,8 @@ use std::fmt;
 use common::origin::{OriginExportKey, validate_origin_key_text};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use shape_address::{
-    DimensionDigests, ShapeCyclePolicy, ShapeDigestAlgorithm, ShapeDimension, ShapeGraphKey,
-    ShapeHashPolicy, ShapePolicyId, ShapeViewMode,
+    DimensionDigests, ShapeCyclePolicy, ShapeDigestAlgorithm, ShapeDimension, ShapeGraph,
+    ShapeGraphHashes, ShapeGraphKey, ShapeHashPolicy, ShapeNodeKey, ShapePolicyId, ShapeViewMode,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1453,6 +1453,55 @@ impl ShapeGraphHashFact {
             digests,
         }
     }
+}
+
+pub fn shape_hash_facts(
+    graph: &ShapeGraph,
+    policy: &ShapeHashPolicy,
+    hashes: &ShapeGraphHashes,
+) -> Vec<TraceFact> {
+    let mut facts = vec![
+        TraceFact::ShapePolicy(ShapePolicyFact::from_policy(policy)),
+        TraceFact::ShapeGraphHash(ShapeGraphHashFact::new(
+            graph.graph_key.clone(),
+            hashes.policy_id.clone(),
+            hashes.graph.clone(),
+        )),
+    ];
+    for (node, node_hashes) in &hashes.nodes {
+        let ShapeNodeKey::Entity(node) = node else {
+            continue;
+        };
+        facts.push(TraceFact::ShapeNodeHash(ShapeNodeHashFact::new(
+            node.clone(),
+            graph.graph_key.clone(),
+            hashes.policy_id.clone(),
+            node_hashes.local.clone(),
+            node_hashes.tree.clone(),
+            node_hashes.component.clone(),
+        )));
+    }
+    for component in &hashes.components {
+        let members = component
+            .members
+            .iter()
+            .filter_map(|member| match member {
+                ShapeNodeKey::Entity(node) => Some(node.clone()),
+                ShapeNodeKey::Derived { .. } => None,
+            })
+            .collect::<Vec<_>>();
+        if members.is_empty() {
+            continue;
+        }
+        facts.push(TraceFact::ShapeComponentHash(ShapeComponentHashFact::new(
+            graph.graph_key.clone(),
+            hashes.policy_id.clone(),
+            component.component_index,
+            members,
+            component.digests.clone(),
+        )));
+    }
+    facts
 }
 
 impl InlineContextFact {

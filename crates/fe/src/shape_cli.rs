@@ -16,6 +16,8 @@ pub(crate) fn run_shape_command(command: &ShapeCommand) -> Result<String, String
         ShapeCommand::Explain(args) => run_shape_explain(args),
         ShapeCommand::Diff(args) => run_shape_diff(args),
         ShapeCommand::Bucket(args) => run_shape_bucket(args),
+        ShapeCommand::LoopDiff(args) => run_loop_shape_diff(args),
+        ShapeCommand::LoopBucket(args) => run_loop_shape_bucket(args),
     }
 }
 
@@ -69,6 +71,20 @@ fn run_shape_explain(args: &ShapeExplainArgs) -> Result<String, String> {
 }
 
 fn run_shape_diff(args: &ShapeDiffArgs) -> Result<String, String> {
+    render_diff("Shape diff", None, args)
+}
+
+fn run_loop_shape_diff(args: &ShapeDiffArgs) -> Result<String, String> {
+    render_diff(
+        "Loop shape diff",
+        Some(
+            "Scope: bytecode loop-region candidate supplied by the caller; this is a derived content view, not loop identity.",
+        ),
+        args,
+    )
+}
+
+fn render_diff(title: &str, note: Option<&str>, args: &ShapeDiffArgs) -> Result<String, String> {
     let left = build_view(&ShapeBytecodeArgs {
         owner: args.owner.clone(),
         function: args.function.clone(),
@@ -81,8 +97,12 @@ fn run_shape_diff(args: &ShapeDiffArgs) -> Result<String, String> {
         bytecode_hex: args.right_bytecode_hex.clone(),
         policy: args.policy.clone(),
     })?;
-    let mut out = String::from("Shape diff\n");
+    let mut out = format!("{title}\n");
     out.push_str("Only hash equality is reported; this is not semantic equivalence.\n\n");
+    if let Some(note) = note {
+        out.push_str(note);
+        out.push_str("\n\n");
+    }
     for dimension in &left.policy.dimensions {
         let left_digest = left.hashes.graph.get(*dimension);
         let right_digest = right.hashes.graph.get(*dimension);
@@ -102,6 +122,24 @@ fn run_shape_diff(args: &ShapeDiffArgs) -> Result<String, String> {
 }
 
 fn run_shape_bucket(args: &ShapeBucketArgs) -> Result<String, String> {
+    render_bucket("Shape bucket", None, args)
+}
+
+fn run_loop_shape_bucket(args: &ShapeBucketArgs) -> Result<String, String> {
+    render_bucket(
+        "Loop shape bucket",
+        Some(
+            "Scope: bytecode loop-region candidates supplied by the caller; buckets are derived content views, not compiler identity.",
+        ),
+        args,
+    )
+}
+
+fn render_bucket(
+    title: &str,
+    note: Option<&str>,
+    args: &ShapeBucketArgs,
+) -> Result<String, String> {
     let dimension = shape_dimension(args.dimension);
     let mut buckets = BTreeMap::<String, Vec<String>>::new();
     let policy_args = ShapePolicyArgs {
@@ -126,11 +164,15 @@ fn run_shape_bucket(args: &ShapeBucketArgs) -> Result<String, String> {
     }
 
     let mut out = format!(
-        "Shape bucket\nDimension: {}\nVariants: {}\nBuckets: {}\n\n",
+        "{title}\nDimension: {}\nVariants: {}\nBuckets: {}\n\n",
         dimension.as_str(),
         args.bytecode_hex.len(),
         buckets.len(),
     );
+    if let Some(note) = note {
+        out.push_str(note);
+        out.push_str("\n\n");
+    }
     for (digest, variants) in buckets {
         out.push_str(&format!("  {} [{}]\n", &digest[..16], variants.join(", ")));
     }
@@ -301,6 +343,31 @@ mod tests {
 
         assert!(output.contains("Variants: 3"));
         assert!(output.contains("Buckets: 2"));
+    }
+
+    #[test]
+    fn loop_shape_commands_are_labeled_as_candidate_views() {
+        let diff = run_loop_shape_diff(&ShapeDiffArgs {
+            owner: "contract:demo".to_string(),
+            function: "function:runtime".to_string(),
+            left_bytecode_hex: "6001".to_string(),
+            right_bytecode_hex: "6002".to_string(),
+            policy: policy(),
+        })
+        .unwrap();
+        assert!(diff.contains("Loop shape diff"));
+        assert!(diff.contains("loop-region candidate"));
+
+        let bucket = run_loop_shape_bucket(&ShapeBucketArgs {
+            owner: "contract:demo".to_string(),
+            function: "function:runtime".to_string(),
+            bytecode_hex: vec!["6001".to_string(), "6002".to_string()],
+            dimension: ShapeDimensionArg::Structure,
+            policy: policy(),
+        })
+        .unwrap();
+        assert!(bucket.contains("Loop shape bucket"));
+        assert!(bucket.contains("derived content views"));
     }
 
     #[test]

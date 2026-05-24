@@ -1,6 +1,10 @@
 use std::collections::BTreeSet;
 
 use common::origin::OriginExportKey;
+use shape_address::{
+    ShapeCyclePolicy, ShapeDimension, ShapeGraph, ShapeGraphKey, ShapeHashPolicy, ShapeNodeKey,
+    ShapeViewMode, hash_shape_graph,
+};
 use trace_facts::{
     BlockFact, CategorySource, CfgEdgeFact, CfgEdgeKind, CodeObjectFact, CodeObjectKind,
     CompilerPhase, EvmSchedule, FunctionFact, GasConfidence, GasCostFact, GasKind, GasSource,
@@ -129,6 +133,24 @@ pub fn emit_bytecode_instruction_facts(
         index += 1;
     }
     facts
+}
+
+pub fn emit_bytecode_shape_facts(
+    owner_key: &str,
+    function_local_key: &str,
+    bytecode: &[u8],
+) -> Vec<TraceFact> {
+    let Ok(graph) = crate::shape::describe_bytecode_shape(owner_key, function_local_key, bytecode)
+    else {
+        return Vec::new();
+    };
+    let Ok(policy) = loop_shape_policy("bytecode.code-object") else {
+        return Vec::new();
+    };
+    let Ok(hashes) = hash_shape_graph(&policy, &graph) else {
+        return Vec::new();
+    };
+    trace_facts::shape_hash_facts(&graph, &policy, &hashes)
 }
 
 /// Emit Sonatina-owned CFG and lowering bridge facts from the runtime package.
@@ -311,6 +333,26 @@ pub fn emit_sonatina_cfg_facts<'db>(
                 natural_loop.header,
                 natural_loop.latch,
                 &natural_loop.members,
+            );
+            push_sonatina_loop_shape_facts(
+                &mut facts,
+                &pre_loop,
+                SONATINA_PREOPT_BLOCK_KIND,
+                SONATINA_PREOPT_INST_KIND,
+                "sonatina.preopt.loop",
+                &owner,
+                &body,
+                &natural_loop,
+            );
+            push_sonatina_loop_shape_facts(
+                &mut facts,
+                &post_loop,
+                SONATINA_POSTOPT_BLOCK_KIND,
+                SONATINA_POSTOPT_INST_KIND,
+                "sonatina.postopt.loop",
+                &owner,
+                &body,
+                &natural_loop,
             );
         }
 
@@ -652,6 +694,115 @@ fn push_loop_blocks(
 }
 
 #[allow(clippy::too_many_arguments)]
+fn push_sonatina_loop_shape_facts(
+    facts: &mut Vec<TraceFact>,
+    loop_key: &OriginExportKey,
+    block_kind: &str,
+    instruction_kind: &str,
+    level: &str,
+    owner: &mir::RuntimeInstanceOwnerKey,
+    body: &mir::RuntimeBody<'_>,
+    natural_loop: &NaturalLoop,
+) {
+    let Ok(graph) = sonatina_loop_shape_graph(
+        loop_key,
+        block_kind,
+        instruction_kind,
+        owner,
+        body,
+        natural_loop,
+    ) else {
+        return;
+    };
+    let Ok(policy) = loop_shape_policy(level) else {
+        return;
+    };
+    let Ok(hashes) = hash_shape_graph(&policy, &graph) else {
+        return;
+    };
+    facts.extend(trace_facts::shape_hash_facts(&graph, &policy, &hashes));
+}
+
+fn sonatina_loop_shape_graph(
+    loop_key: &OriginExportKey,
+    block_kind: &str,
+    instruction_kind: &str,
+    owner: &mir::RuntimeInstanceOwnerKey,
+    body: &mir::RuntimeBody<'_>,
+    natural_loop: &NaturalLoop,
+) -> Result<ShapeGraph, shape_address::ShapeError> {
+    let loop_node = ShapeNodeKey::entity(loop_key.clone());
+    let mut graph = ShapeGraph::new(ShapeGraphKey::new(loop_key.clone(), "sonatina-loop-shape")?);
+    graph.add_node(loop_node.clone(), loop_key.kind())?;
+    graph.add_field(
+        &loop_node,
+        ShapeDimension::Structure,
+        "phase",
+        loop_key.kind(),
+    )?;
+    for (block_ordinal, block_id) in natural_loop.members.iter().enumerate() {
+        let Some(block) = body.blocks.get(block_id.as_u32() as usize) else {
+            continue;
+        };
+        let block_index = block_id.as_u32() as usize;
+        let block_key = sonatina_block_key(block_kind, owner, block_index);
+        let block_node = ShapeNodeKey::entity(block_key);
+        graph.add_node(block_node.clone(), block_kind)?;
+        graph.add_child(&loop_node, "block", block_ordinal as u32, &block_node)?;
+        for (stmt_index, stmt) in block.stmts.iter().enumerate() {
+            let instruction = sonatina_key(
+                instruction_kind,
+                owner,
+                format!("block:{block_index}:stmt:{stmt_index}"),
+            );
+            let instruction_node = ShapeNodeKey::entity(instruction);
+            graph.add_node(instruction_node.clone(), instruction_kind)?;
+            graph.add_field(
+                &instruction_node,
+                ShapeDimension::Structure,
+                "mnemonic",
+                rmir_stmt_mnemonic(stmt),
+            )?;
+            graph.add_child(
+                &block_node,
+                "instruction",
+                stmt_index as u32,
+                &instruction_node,
+            )?;
+        }
+        let terminator = sonatina_key(
+            instruction_kind,
+            owner,
+            format!("block:{block_index}:terminator"),
+        );
+        let terminator_node = ShapeNodeKey::entity(terminator);
+        graph.add_node(terminator_node.clone(), instruction_kind)?;
+        graph.add_field(
+            &terminator_node,
+            ShapeDimension::Structure,
+            "mnemonic",
+            rmir_terminator_mnemonic(&block.terminator),
+        )?;
+        graph.add_child(
+            &block_node,
+            "instruction",
+            block.stmts.len() as u32,
+            &terminator_node,
+        )?;
+    }
+    Ok(graph)
+}
+
+fn loop_shape_policy(level: &str) -> Result<ShapeHashPolicy, shape_address::ShapeError> {
+    ShapeHashPolicy::with_dimensions(
+        level,
+        [ShapeDimension::Structure, ShapeDimension::Constants],
+        ShapeViewMode::AnonymousShape,
+        ShapeCyclePolicy::Reject,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
 fn push_sonatina_instruction_pair(
     facts: &mut Vec<TraceFact>,
     owner: &mir::RuntimeInstanceOwnerKey,
@@ -969,6 +1120,12 @@ mod tests {
                     && edge.label == trace_facts::OriginEdgeLabel::EmittedFrom
                     && edge.introduced_by == Some(trace_facts::CompilerPhase::BytecodeEmission)
         )));
+        let shape_facts =
+            super::emit_bytecode_shape_facts("contract:Fib", "runtime", &[0x5f, 0x60, 0x01, 0x01]);
+        assert!(shape_facts.iter().any(|fact| matches!(
+            fact,
+            TraceFact::ShapeGraphHash(hash) if hash.graph.local.as_str() == "bytecode-shape"
+        )));
     }
 
     #[test]
@@ -1037,6 +1194,10 @@ fn main() -> u32 {
             TraceFact::OriginEdge(edge)
                 if edge.from.kind() == super::SONATINA_PREOPT_INST_KIND
                     && matches!(edge.to.kind(), "runtime.stmt" | "runtime.terminator")
+        )));
+        assert!(facts.iter().any(|fact| matches!(
+            fact,
+            TraceFact::ShapeGraphHash(hash) if hash.graph.local.as_str() == "sonatina-loop-shape"
         )));
     }
 }

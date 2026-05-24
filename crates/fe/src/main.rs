@@ -521,6 +521,10 @@ pub enum ShapeCommand {
     Diff(ShapeDiffArgs),
     /// Bucket EVM bytecode variants by a selected shape dimension.
     Bucket(ShapeBucketArgs),
+    /// Compare two loop-region bytecode shape candidates by dimension.
+    LoopDiff(ShapeDiffArgs),
+    /// Bucket loop-region bytecode shape candidates by a selected dimension.
+    LoopBucket(ShapeBucketArgs),
 }
 
 #[derive(Debug, Clone, Args)]

@@ -220,4 +220,11 @@ fn main() -> u32 {
         )),
         "MIR loop facts should identify a header block"
     );
+    assert!(
+        facts.iter().any(|fact| matches!(
+            fact,
+            TraceFact::ShapeGraphHash(hash) if hash.graph.local.as_str() == "mir-loop-shape"
+        )),
+        "MIR loop facts should emit a derived content-addressed loop shape"
+    );
 }
