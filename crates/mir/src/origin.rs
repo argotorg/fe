@@ -1,3 +1,4 @@
+use common::facts::TypedFactSet;
 use common::origin::{
     OriginExportKey, OriginExportLocalKey, OriginExportOwnerKey, OriginKey, OriginKeyTextError,
     validate_origin_key_text,
@@ -5,7 +6,7 @@ use common::origin::{
 use cranelift_entity::EntityRef;
 use salsa::Update;
 
-use crate::{RuntimeInstance, runtime::RBlockId};
+use crate::{MirDb, RuntimeInstance, RuntimePackage, runtime::RBlockId};
 
 pub const RUNTIME_STMT_EXPORT_KIND: &str = "runtime.stmt";
 pub const RUNTIME_TERMINATOR_EXPORT_KIND: &str = "runtime.terminator";
@@ -159,4 +160,31 @@ impl<'db> RuntimeTerminatorOrigin<'db> {
             &self.site(),
         )
     }
+}
+
+pub fn runtime_package_origin_facts<'db>(
+    db: &'db dyn MirDb,
+    package: RuntimePackage<'db>,
+) -> TypedFactSet {
+    let mut facts = TypedFactSet::new();
+    for function in package.functions(db) {
+        let owner_key = RuntimeInstanceOwnerKey::new(format!("runtime:{}", function.symbol(db)));
+        let instance = function.instance(db);
+        let body = instance.body(db);
+        for (block_index, runtime_block) in body.blocks.iter().enumerate() {
+            let block = RBlockId::from_u32(block_index as u32);
+            for (stmt_index, _) in runtime_block.stmts.iter().enumerate() {
+                let site =
+                    RuntimeStmtSite::new(block, RuntimeStmtIndex::from_u32(stmt_index as u32));
+                facts.push_origin_node(
+                    RuntimeStmtOrigin::new(instance, site).export_key(&owner_key),
+                );
+            }
+            let terminator_site = RuntimeTerminatorSite::new(block);
+            facts.push_origin_node(
+                RuntimeTerminatorOrigin::new(instance, terminator_site).export_key(&owner_key),
+            );
+        }
+    }
+    facts
 }

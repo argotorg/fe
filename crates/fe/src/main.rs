@@ -200,6 +200,12 @@ pub enum Command {
         /// Analyze generated test entrypoints instead of runtime entrypoints.
         #[arg(long)]
         tests: bool,
+        /// Include typed origin facts in the report.
+        #[arg(long)]
+        origin_facts: bool,
+        /// Include relation-table projections generated from typed facts.
+        #[arg(long, requires = "origin_facts")]
+        fact_relation_tables: bool,
         /// Use recovery mode when parsing.
         #[arg(long, default_value = "false")]
         recovery_mode: bool,
@@ -541,6 +547,8 @@ pub fn run(opts: &Options) {
             profile,
             format,
             tests,
+            origin_facts,
+            fact_relation_tables,
             recovery_mode,
         } => match analyze::analyze(
             path,
@@ -549,6 +557,8 @@ pub fn run(opts: &Options) {
             profile,
             *format,
             *tests,
+            *origin_facts,
+            *fact_relation_tables,
             *recovery_mode,
         ) {
             Ok(has_errors) => {

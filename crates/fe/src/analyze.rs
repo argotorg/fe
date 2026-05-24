@@ -4,6 +4,7 @@ use camino::Utf8PathBuf;
 use common::{
     InputDb,
     config::{Config, WorkspaceConfig},
+    facts::{OwnedTypedFactSetExport, TypedFactRelationCount, TypedFactRelationSet, TypedFactSet},
     file::IngotFileKind,
 };
 use driver::{
@@ -11,7 +12,9 @@ use driver::{
     cli_target::{CliTarget, resolve_cli_target},
 };
 use hir::hir_def::{HirIngot, TopLevelMod};
-use mir::{RuntimePackage, build_runtime_package, build_test_runtime_package};
+use mir::{
+    RuntimePackage, build_runtime_package, build_test_runtime_package, runtime_package_origin_facts,
+};
 use salsa::Setter;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -37,6 +40,8 @@ pub(crate) struct AnalyzeOptions<'a> {
     profile: &'a str,
     format: AnalyzeFormat,
     include_tests: bool,
+    include_origin_facts: bool,
+    include_fact_relation_tables: bool,
     recovery_mode: bool,
 }
 
@@ -45,14 +50,26 @@ impl<'a> AnalyzeOptions<'a> {
         profile: &'a str,
         format: AnalyzeFormat,
         include_tests: bool,
+        include_origin_facts: bool,
+        include_fact_relation_tables: bool,
         recovery_mode: bool,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, String> {
+        if include_fact_relation_tables && !include_origin_facts {
+            return Err(
+                "`fe analyze --fact-relation-tables` requires `--origin-facts`".to_string(),
+            );
+        }
+        if include_fact_relation_tables && format != AnalyzeFormat::Json {
+            return Err("`fe analyze --fact-relation-tables` requires `--format json`".to_string());
+        }
+        Ok(Self {
             profile,
             format,
             include_tests,
+            include_origin_facts,
+            include_fact_relation_tables,
             recovery_mode,
-        }
+        })
     }
 }
 
@@ -70,6 +87,17 @@ pub(crate) struct AnalyzeTargetReport {
     runtime_blocks: usize,
     runtime_statements: usize,
     runtime_terminators: usize,
+    origin_facts: Option<AnalyzeOriginFactReport>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct AnalyzeOriginFactReport {
+    total: usize,
+    origin_nodes: usize,
+    origin_links: usize,
+    relation_counts: Vec<TypedFactRelationCount>,
+    relation_tables: Option<TypedFactRelationSet>,
+    facts: OwnedTypedFactSetExport,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -88,14 +116,19 @@ pub fn analyze(
     profile: &str,
     format: AnalyzeFormat,
     include_tests: bool,
+    include_origin_facts: bool,
+    include_fact_relation_tables: bool,
     recovery_mode: bool,
 ) -> Result<bool, String> {
-    let outcome = analyze_to_string(
-        path,
-        ingot,
-        force_standalone,
-        AnalyzeOptions::new(profile, format, include_tests, recovery_mode),
+    let options = AnalyzeOptions::new(
+        profile,
+        format,
+        include_tests,
+        include_origin_facts,
+        include_fact_relation_tables,
+        recovery_mode,
     )?;
+    let outcome = analyze_to_string(path, ingot, force_standalone, options)?;
     if !outcome.output.is_empty() {
         print!("{}", outcome.output);
     }
@@ -376,7 +409,16 @@ fn analyze_top_mod(
             return true;
         }
     };
-    report.targets.push(summarize_package(db, label, package));
+    let origin_facts = options
+        .include_origin_facts
+        .then(|| runtime_package_origin_facts(db, package));
+    report.targets.push(summarize_package(
+        db,
+        label,
+        package,
+        origin_facts,
+        options.include_fact_relation_tables,
+    ));
     false
 }
 
@@ -432,6 +474,8 @@ fn summarize_package(
     db: &DriverDataBase,
     label: &str,
     package: RuntimePackage<'_>,
+    origin_facts: Option<TypedFactSet>,
+    include_fact_relation_tables: bool,
 ) -> AnalyzeTargetReport {
     let mut runtime_blocks = 0;
     let mut runtime_statements = 0;
@@ -453,6 +497,14 @@ fn summarize_package(
         runtime_blocks,
         runtime_statements,
         runtime_terminators,
+        origin_facts: origin_facts.map(|facts| AnalyzeOriginFactReport {
+            total: facts.len(),
+            origin_nodes: facts.origin_node_count(),
+            origin_links: facts.origin_link_count(),
+            relation_counts: facts.relation_counts(),
+            relation_tables: include_fact_relation_tables.then(|| facts.relation_tables()),
+            facts: facts.export(),
+        }),
     }
 }
 
@@ -482,6 +534,11 @@ fn render_report(report: &AnalyzeReport, format: AnalyzeFormat) -> Result<String
                     "  runtime terminators: {}\n",
                     target.runtime_terminators
                 ));
+                if let Some(origin_facts) = &target.origin_facts {
+                    out.push_str(&format!("  origin facts: {}\n", origin_facts.total));
+                    out.push_str(&format!("  origin nodes: {}\n", origin_facts.origin_nodes));
+                    out.push_str(&format!("  origin links: {}\n", origin_facts.origin_links));
+                }
             }
             Ok(out)
         }
@@ -530,7 +587,27 @@ mod tests {
     use tempfile::tempdir;
 
     fn json_options(include_tests: bool) -> AnalyzeOptions<'static> {
-        AnalyzeOptions::new("dev", AnalyzeFormat::Json, include_tests, false)
+        AnalyzeOptions::new(
+            "dev",
+            AnalyzeFormat::Json,
+            include_tests,
+            false,
+            false,
+            false,
+        )
+        .unwrap()
+    }
+
+    fn json_options_with_origin_facts(include_relation_tables: bool) -> AnalyzeOptions<'static> {
+        AnalyzeOptions::new(
+            "dev",
+            AnalyzeFormat::Json,
+            false,
+            true,
+            include_relation_tables,
+            false,
+        )
+        .unwrap()
     }
 
     fn analyze_report(output: &str) -> AnalyzeReport {
@@ -621,5 +698,35 @@ fn test_sample() {
         let report = analyze_report(&outcome.output);
         assert_eq!(report.package_kind, AnalyzePackageKind::Tests);
         assert!(report.targets[0].runtime_functions > 0);
+    }
+
+    #[test]
+    fn analyze_origin_facts_are_report_views_over_typed_fact_set() {
+        let temp = tempdir().expect("tempdir");
+        let file_path = Utf8PathBuf::from_path_buf(temp.path().join("sample.fe")).unwrap();
+        fs::write(
+            file_path.as_std_path(),
+            r#"
+fn main() -> u256 {
+    let x: u256 = 1
+    x
+}
+"#,
+        )
+        .expect("write fixture");
+
+        let outcome =
+            analyze_to_string(&file_path, None, true, json_options_with_origin_facts(true))
+                .expect("analyze");
+
+        assert!(!outcome.has_errors);
+        let report = analyze_report(&outcome.output);
+        let origin_facts = report.targets[0]
+            .origin_facts
+            .as_ref()
+            .expect("origin facts should be reported");
+        assert!(origin_facts.origin_nodes > 0);
+        assert_eq!(origin_facts.origin_nodes, origin_facts.facts.len());
+        assert!(origin_facts.relation_tables.is_some());
     }
 }
