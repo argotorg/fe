@@ -9,6 +9,9 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use act_locally::actor::ActorRef;
+use act_locally::dispatcher::Dispatcher;
+use act_locally::message::{Message, MessageDowncast, MessageKey, Response};
+use act_locally::types::ActorError;
 use async_lsp::client_monitor::ClientProcessMonitorLayer;
 use async_lsp::concurrency::ConcurrencyLayer;
 use async_lsp::panic::CatchUnwindLayer;
@@ -17,15 +20,18 @@ use axum::Json;
 use axum::Router;
 use axum::extract::WebSocketUpgrade;
 use axum::extract::ws::{Message as AxumMessage, WebSocket};
-use axum::response::Html;
+use axum::http::StatusCode;
+use axum::response::{Html, IntoResponse};
 use axum::routing::{get, post};
 use futures::io::{AsyncRead, AsyncWrite};
 use futures::{SinkExt, StreamExt};
 use tokio::sync::{Mutex, broadcast, watch};
 use tower::ServiceBuilder;
+use trace_query::{TraceQueryHttpRequest, TraceQueryHttpResponse};
 use tracing::{info, warn};
 
 use crate::backend::Backend;
+use crate::introspection::TraceBackendQueryRequest;
 use crate::lsp_actor::service::LspActorKey;
 use crate::server::setup_ws_service;
 
@@ -105,9 +111,10 @@ pub async fn run(
     });
 
     let html_for_fallback = Arc::clone(&html);
+    let workspace_root_for_health = workspace_root.clone();
     let health_payload = Arc::new(serde_json::json!({
         "status": "ok",
-        "workspace_root": workspace_root,
+        "workspace_root": workspace_root_for_health,
         "server_addr": local_addr,
         "capabilities": capabilities.clone(),
         "config_hash": config_hash.clone(),
@@ -139,12 +146,14 @@ pub async fn run(
         )
         .route(
             "/trace/query",
-            post(|Json(request): Json<serde_json::Value>| async move {
-                Json(serde_json::json!({
-                    "status": "unavailable",
-                    "reason": "live trace HTTP query execution is not wired to the backend actor yet",
-                    "request": request,
-                }))
+            post({
+                let actor_rx = actor_rx.clone();
+                let workspace_root = workspace_root.clone();
+                move |Json(request): Json<TraceQueryHttpRequest>| {
+                    let actor_rx = actor_rx.clone();
+                    let workspace_root = workspace_root.clone();
+                    async move { handle_trace_query_http(request, actor_rx, workspace_root).await }
+                }
             }),
         )
         .route(
@@ -177,6 +186,136 @@ pub async fn run(
 
     if let Err(e) = axum::serve(listener, app).await {
         warn!("Combined server error: {e}");
+    }
+}
+
+async fn handle_trace_query_http(
+    request: TraceQueryHttpRequest,
+    actor_rx: watch::Receiver<Option<SharedActor>>,
+    workspace_root: Option<String>,
+) -> impl IntoResponse {
+    if let Err(reason) = validate_trace_auth(workspace_root.as_deref(), &request.auth_token) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(TraceQueryHttpResponse::Unauthorized { reason }),
+        );
+    }
+
+    let actor_ref = match ready_actor(actor_rx).await {
+        Ok(actor_ref) => actor_ref,
+        Err(reason) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(TraceQueryHttpResponse::Error { reason }),
+            );
+        }
+    };
+    actor_ref.register_handler_async(
+        MessageKey(LspActorKey::of::<TraceBackendQueryRequest>()),
+        crate::introspection::handle_trace_query,
+    );
+
+    let backend_request = TraceBackendQueryRequest {
+        uri: request.uri,
+        config_hash: request.config_hash,
+        query: request.query,
+    };
+    let dispatcher = TraceQueryDispatcher;
+    match actor_ref
+        .ask::<_, TraceQueryHttpResponse, _>(&dispatcher, backend_request)
+        .await
+    {
+        Ok(response) => (StatusCode::OK, Json(response)),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(TraceQueryHttpResponse::Error {
+                reason: format!("live trace backend query failed: {err:?}"),
+            }),
+        ),
+    }
+}
+
+async fn ready_actor(
+    mut actor_rx: watch::Receiver<Option<SharedActor>>,
+) -> Result<SharedActor, String> {
+    if actor_rx.borrow().is_none() {
+        let wait = actor_rx.wait_for(|actor| actor.is_some());
+        tokio::time::timeout(std::time::Duration::from_secs(30), wait)
+            .await
+            .map_err(|_| "backend actor was not ready within 30s".to_string())?
+            .map_err(|_| "backend actor channel closed".to_string())?;
+    }
+    actor_rx
+        .borrow()
+        .clone()
+        .ok_or_else(|| "backend actor is unavailable".to_string())
+}
+
+fn validate_trace_auth(workspace_root: Option<&str>, token: &str) -> Result<(), String> {
+    let root = workspace_root.ok_or_else(|| {
+        "live trace endpoint has no workspace root, refusing authenticated query".to_string()
+    })?;
+    let token_path = std::path::Path::new(root).join(".fe-lsp.token");
+    let expected = std::fs::read_to_string(&token_path).map_err(|err| {
+        format!(
+            "failed to read LSP auth token {}: {err}",
+            token_path.display()
+        )
+    })?;
+    let expected = expected.trim();
+    let token = token.trim();
+    if expected.is_empty() {
+        return Err("LSP auth token file is empty".to_string());
+    }
+    if token.is_empty() {
+        return Err("missing LSP auth token".to_string());
+    }
+    if token != expected {
+        return Err("invalid LSP auth token".to_string());
+    }
+    Ok(())
+}
+
+struct TraceQueryDispatcher;
+
+impl Dispatcher<LspActorKey> for TraceQueryDispatcher {
+    fn message_key(&self, message: &dyn Message) -> Result<MessageKey<LspActorKey>, ActorError> {
+        if message.is::<TraceBackendQueryRequest>() {
+            Ok(MessageKey(LspActorKey::of::<TraceBackendQueryRequest>()))
+        } else {
+            Err(ActorError::DispatchError)
+        }
+    }
+
+    fn wrap(
+        &self,
+        message: Box<dyn Message>,
+        _key: MessageKey<LspActorKey>,
+    ) -> Result<Box<dyn Message>, ActorError> {
+        Ok(message)
+    }
+
+    fn unwrap(
+        &self,
+        message: Box<dyn Response>,
+        _key: MessageKey<LspActorKey>,
+    ) -> Result<Box<dyn Response>, ActorError> {
+        Ok(message)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_trace_auth;
+
+    #[test]
+    fn trace_query_auth_validates_workspace_token_file() {
+        let tempdir = tempfile::tempdir().unwrap();
+        std::fs::write(tempdir.path().join(".fe-lsp.token"), "secret\n").unwrap();
+
+        assert!(validate_trace_auth(tempdir.path().to_str(), "secret").is_ok());
+        assert!(validate_trace_auth(tempdir.path().to_str(), "wrong").is_err());
+        assert!(validate_trace_auth(None, "secret").is_err());
     }
 }
 

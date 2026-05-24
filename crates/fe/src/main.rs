@@ -542,15 +542,26 @@ pub enum DevTraceQueryCommand {
 #[derive(Debug, Clone, Subcommand)]
 pub enum DevTraceLiveCommand {
     /// Ask the live LSP endpoint for loop-cost status.
-    LoopCost,
+    LoopCost {
+        /// Source file URI or path to query.
+        #[arg(long)]
+        uri: Option<String>,
+    },
     /// Ask the live LSP endpoint to explain a local.
     ExplainLocal {
         /// Source local to explain.
         #[arg(long)]
         local: String,
+        /// Source file URI or path to query.
+        #[arg(long)]
+        uri: Option<String>,
     },
     /// Ask the live LSP endpoint for static gas status.
-    GasBreakdown,
+    GasBreakdown {
+        /// Source file URI or path to query.
+        #[arg(long)]
+        uri: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Subcommand)]

@@ -11,3 +11,6 @@ common.workspace = true
 introspection-config.workspace = true
 serde = { version = "1.0", features = ["derive"] }
 trace-facts.workspace = true
+
+[dev-dependencies]
+serde_json = "1.0"

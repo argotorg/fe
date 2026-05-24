@@ -234,6 +234,87 @@ impl Default for GasBreakdownRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TraceQueryHttpRequest {
+    pub auth_token: String,
+    pub uri: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_hash: Option<String>,
+    #[serde(flatten)]
+    pub query: TraceQueryRequest,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TraceQueryRequest {
+    LoopCost {
+        #[serde(default)]
+        loop_key: Option<OriginExportKey>,
+    },
+    ExplainLocal {
+        local: String,
+    },
+    GasBreakdown {
+        #[serde(default = "default_gas_schedule")]
+        schedule: String,
+    },
+}
+
+impl TraceQueryRequest {
+    pub fn loop_cost() -> Self {
+        Self::LoopCost { loop_key: None }
+    }
+
+    pub fn explain_local(local: impl Into<String>) -> Self {
+        Self::ExplainLocal {
+            local: local.into(),
+        }
+    }
+
+    pub fn gas_breakdown(schedule: impl Into<String>) -> Self {
+        Self::GasBreakdown {
+            schedule: schedule.into(),
+        }
+    }
+}
+
+fn default_gas_schedule() -> String {
+    GasBreakdownRequest::default().schedule
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum TraceQueryHttpResponse {
+    Ok { report: TraceQueryReport },
+    Error { reason: String },
+    Unauthorized { reason: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "report", rename_all = "snake_case")]
+pub enum TraceQueryReport {
+    LoopCost(LoopCostReport),
+    ExplainLocal(ExplainLocalReport),
+    GasBreakdown(GasBreakdownReport),
+}
+
+pub fn run_trace_query(
+    service: &impl IntrospectionService,
+    request: TraceQueryRequest,
+) -> QueryResult<TraceQueryReport> {
+    match request {
+        TraceQueryRequest::LoopCost { loop_key } => service
+            .loop_cost(LoopCostRequest { loop_key })
+            .map(TraceQueryReport::LoopCost),
+        TraceQueryRequest::ExplainLocal { local } => service
+            .explain_local(ExplainLocalRequest { local })
+            .map(TraceQueryReport::ExplainLocal),
+        TraceQueryRequest::GasBreakdown { schedule } => service
+            .gas_breakdown(GasBreakdownRequest { schedule })
+            .map(TraceQueryReport::GasBreakdown),
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LoopCostReport {
     pub metadata: ReportMetadata,
     pub available: bool,
@@ -753,6 +834,7 @@ mod tests {
 
     use super::{
         ExplainLocalRequest, IntrospectionService, LoopCostRequest, TraceIntrospectionService,
+        TraceQueryHttpRequest, TraceQueryReport, TraceQueryRequest, run_trace_query,
     };
 
     fn key(kind: &str, owner: &str, local: &str) -> OriginExportKey {
@@ -915,5 +997,32 @@ mod tests {
         assert_eq!(report.total_gas, Some(6));
         assert_eq!(report.schedule, "cancun");
         assert_eq!(report.rows.len(), 2);
+    }
+
+    #[test]
+    fn live_http_request_is_typed_and_defaults_gas_schedule() {
+        let request: TraceQueryHttpRequest = serde_json::from_str(
+            r#"{
+                "auth_token": "token",
+                "uri": "file:///tmp/fib.fe",
+                "kind": "gas_breakdown"
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(request.auth_token, "token");
+        assert_eq!(request.uri, "file:///tmp/fib.fe");
+        assert!(matches!(
+            request.query,
+            TraceQueryRequest::GasBreakdown { ref schedule } if schedule == "cancun"
+        ));
+    }
+
+    #[test]
+    fn typed_query_dispatch_returns_matching_report_variant() {
+        let service = demo_service();
+        let report = run_trace_query(&service, TraceQueryRequest::loop_cost()).unwrap();
+
+        assert!(matches!(report, TraceQueryReport::LoopCost(_)));
     }
 }
